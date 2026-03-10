@@ -31,6 +31,7 @@ import { InspectImageTool } from "./inspect-image";
 import { NotebookTool } from "./notebook";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { PythonTool } from "./python";
+import { QmlTool } from "./qml";
 import { ReadTool } from "./read";
 import { RenderMermaidTool } from "./render-mermaid";
 import { ResolveTool } from "./resolve";
@@ -67,6 +68,7 @@ export * from "./inspect-image";
 export * from "./notebook";
 export * from "./pending-action";
 export * from "./python";
+export * from "./qml";
 export * from "./read";
 export * from "./render-mermaid";
 export * from "./resolve";
@@ -183,6 +185,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	fetch: s => new FetchTool(s),
 	web_search: s => new SearchTool(s),
 	write: s => new WriteTool(s),
+	qml: s => new QmlTool(s),
 };
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
