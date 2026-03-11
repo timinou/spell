@@ -5,7 +5,7 @@
 	"description": "Swarm orchestration extension for omp",
 	"homepage": "https://github.com/can1357/oh-my-pi",
 	"author": "Derek Rynd",
-	"license": "MIT",
+	"license": "GPL-3.0-only",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/can1357/oh-my-pi.git",
