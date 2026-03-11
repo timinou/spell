@@ -40,22 +40,22 @@
 
 * Phase 4: Wire into QmlTool
 
-** DOING Integrate ensureSpellConnection into qml.ts
+** DONE Integrate ensureSpellConnection into qml.ts
 :PROPERTIES:
 :TASK_ID: task-6
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
 * Phase 5: Cleanup
 
-** ITEM Update scripts and USAGE.md
+** DONE Update scripts and USAGE.md
 :PROPERTIES:
 :TASK_ID: task-7
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Run bun check:ts and verify
+** DOING Run bun check:ts and verify
 :PROPERTIES:
 :TASK_ID: task-8
-:STATUS: pending
+:STATUS: in_progress
 :END:
