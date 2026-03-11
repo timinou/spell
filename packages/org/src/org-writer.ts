@@ -52,16 +52,16 @@ export function serializeFileItem(
 		lines.push(`#+${key}: ${value}`);
 	}
 
-	if (body) {
-		lines.push("");
-		lines.push(body.trimEnd());
-	}
-
 	if (session?.systemPrompt) {
 		lines.push("");
 		lines.push("* Initial Prompt");
 		lines.push("");
 		lines.push(session.systemPrompt.trimEnd());
+	}
+
+	if (body) {
+		lines.push("");
+		lines.push(body.trimEnd());
 	}
 
 	lines.push("");

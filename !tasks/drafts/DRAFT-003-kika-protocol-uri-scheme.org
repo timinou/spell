@@ -1,0 +1,97 @@
+#+TITLE: kika:// URI scheme for internal resource resolution
+#+STATE: DRAFT
+#+CUSTOM_ID: DRAFT-003-kika-protocol-uri-scheme
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: core
+
+* Problem
+
+Agents frequently need to reference kika's own source files, docs, and packages
+— both to read them and to pass paths to tools. Today they either hard-code
+absolute paths (fragile, machine-specific) or grep for files and hope they found
+the right one.
+
+The existing internal URI schemes (=skill://=, =memory://=, =agent://=,
+=artifact://=, =local://=) establish a clear precedent: named, stable addresses
+for internal resources, resolved transparently by the tool layer. kika's own
+codebase has no such scheme.
+
+* Idea
+
+Add a =kika://= URI scheme that resolves to paths within the kika repository
+root, with sub-path addressing for packages, docs, and source files:
+
+#+begin_example
+kika://docs/qml-tool.md             → <kika-root>/docs/qml-tool.md
+kika://packages/qml/src/bridge.ts   → <kika-root>/packages/qml/src/bridge.ts
+kika://crates/natives/src/lib.rs    → <kika-root>/crates/natives/src/lib.rs
+#+end_example
+
+Tools that already resolve internal URIs (=read=, =bash=, =grep=, =find=)
+would transparently expand =kika://= before acting, the same way =skill://= is
+expanded today.
+
+* Why this is useful
+
+- **Stable references in agent prompts.** System prompts and AGENTS.md files can
+  cite =kika://docs/qml-tool.md= without caring where kika is checked out.
+- **Portable handoffs.** A handoff that says "see =kika://packages/qml/src/=..."
+  works on any machine where kika is installed.
+- **Self-documenting bugs and tasks.** The bug draft for the =qml listen= hang
+  could cite =kika://packages/qml/src/= directly rather than a relative path
+  the reader has to mentally resolve.
+- **Consistency with the existing URI family.** Agents already know how to think
+  in terms of =skill://=, =memory://=, etc. Adding =kika://= extends a pattern
+  they already use rather than introducing a new one.
+
+* Approach
+
+** Resolution
+
+The kika root is already known at runtime (it is the process's own install
+location). Resolution is: =kika_root + "/" + path_after_scheme=.
+
+No registry, no config — purely structural. The same way =skill://name/path=
+resolves to =<skills_dir>/name/path=.
+
+** Scope
+
+Only read-access resolution is needed (tools that read or search files). Write
+tools should resolve the path too but are unchanged in behavior — an agent
+writing to =kika://= is editing kika's own source, which is legitimate for
+self-modification tasks.
+
+** Implementation surface
+
+Wherever =skill://= resolution is implemented (URI expander / tool preprocessor),
+add a =kika://= case that prepends the kika root. Should be a one-liner alongside
+the existing cases.
+
+* Files to modify
+
+- URI resolution module (wherever =skill://= → fs path expansion lives) — add
+  =kika://= case
+- Docs: =docs/sdk.md= or equivalent — document the new scheme alongside existing
+  internal URIs
+- System prompt / AGENTS injection — mention =kika://= in the Internal URLs
+  section so agents know it exists
+
+* Edge cases
+
+- Path traversal: reject or sanitize =kika://../../etc/passwd= — same policy as
+  other internal schemes.
+- Missing path: return a clear "not found" rather than silently resolving to the
+  kika root directory.
+- =kika://= with no path (bare scheme): resolve to the kika root directory
+  listing, consistent with how =read= handles directory paths.
+
+* Verification
+
+- =read(path="kika://docs/qml-tool.md")= returns the file contents
+- =grep(pattern="listen", path="kika://packages/qml/src/")= finds matches within
+  that package
+- =bash= with =cat kika://packages/qml/src/bridge.ts= expands correctly before
+  shell execution
+- Bare =kika://= resolves to the kika root directory listing
+- =kika://../../etc/passwd= is rejected with a clear error

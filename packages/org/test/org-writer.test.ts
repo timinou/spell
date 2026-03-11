@@ -79,14 +79,14 @@ describe("serializeFileItem", () => {
 		expect(result).toContain("You are a helpful agent.");
 	});
 
-	test("Initial Prompt section appears after user body", () => {
+	test("Initial Prompt section appears before user body", () => {
 		const result = serializeFileItem("Task", "ITEM", {}, "user body", {
 			systemPrompt: "sys prompt",
 		});
 		const bodyIdx = result.indexOf("user body");
 		const promptIdx = result.indexOf("* Initial Prompt");
-		expect(bodyIdx).toBeGreaterThan(0);
-		expect(promptIdx).toBeGreaterThan(bodyIdx);
+		expect(promptIdx).toBeGreaterThan(0);
+		expect(bodyIdx).toBeGreaterThan(promptIdx);
 	});
 
 	test("omits session fields when no session context provided", () => {
