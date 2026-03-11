@@ -3,13 +3,20 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
+import { resolvePlanDraftItem } from "../plan-mode/org-plan";
 import exitPlanModeDescription from "../prompts/tools/exit-plan-mode.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { resolvePlanPath } from "./plan-mode-guard";
 import { ToolError } from "./tool-errors";
 
 const exitPlanModeSchema = Type.Object({
-	title: Type.String({ description: "Final plan title, e.g. WP_MIGRATION_PLAN" }),
+	title: Type.String({ description: "Final plan name in SCREAMING_SNAKE_CASE, e.g. WP_MIGRATION_PLAN" }),
+	itemId: Type.Optional(
+		Type.String({
+			description:
+				"CUSTOM_ID of the org draft item you created via `org create` (e.g. DRAFT-003-auth-refactor). Required when org is enabled.",
+		}),
+	),
 });
 
 type ExitPlanModeParams = Static<typeof exitPlanModeSchema>;
@@ -38,6 +45,12 @@ export interface ExitPlanModeDetails {
 	planExists: boolean;
 	title: string;
 	finalPlanFilePath: string;
+	/** CUSTOM_ID of the org item the agent created for the plan. */
+	itemId?: string;
+	/** Absolute path to the .org file containing the plan item. */
+	orgItemFile?: string;
+	/** Body text of the org item — used as plan content for display and finalization. */
+	planContent?: string;
 }
 
 export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, ExitPlanModeDetails> {
@@ -67,6 +80,30 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 		const finalPlanFilePath = `local://${normalized.fileName}`;
 		const resolvedPlanPath = resolvePlanPath(this.session, state.planFilePath);
 		resolvePlanPath(this.session, finalPlanFilePath);
+
+		// Org-backed plan: resolve item and return its body as the plan content.
+		if (params.itemId) {
+			const item = await resolvePlanDraftItem(this.session.settings, this.session.cwd, params.itemId);
+			if (!item) {
+				throw new ToolError(
+					`Org item "${params.itemId}" not found. Make sure you created it via \`org create\` before calling this tool.`,
+				);
+			}
+			return {
+				content: [{ type: "text", text: "Plan ready for approval." }],
+				details: {
+					planFilePath: state.planFilePath,
+					planExists: true,
+					title: normalized.title,
+					finalPlanFilePath,
+					itemId: params.itemId,
+					orgItemFile: item.file,
+					planContent: item.body,
+				},
+			};
+		}
+
+		// File-backed plan (fallback / org disabled): read from plan file.
 		let planExists = false;
 		try {
 			const stat = await fs.stat(resolvedPlanPath);

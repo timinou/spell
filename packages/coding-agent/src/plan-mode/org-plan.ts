@@ -1,10 +1,8 @@
 /**
  * Org integration for plan mode.
  *
- * Creates and finalizes org items that mirror the plan mode lifecycle:
- *   - On plan mode entry: a draft item is created for tracking/audit.
- *   - On approval: the draft is marked DONE and a new active item is created
- *     in the configured active category with the final plan content as body.
+ * On plan approval: the draft item is marked DONE and a new active item is
+ * created in the configured active category with the plan content as body.
  *
  * Operations throw on failure; callers are responsible for surfacing errors.
  */
@@ -14,6 +12,7 @@ import {
 	appendItemToFile,
 	DEFAULT_ORG_CONFIG,
 	findCategory,
+	findItemById,
 	generateId,
 	initCategoryDir,
 	resolveCategories,
@@ -31,46 +30,10 @@ export interface OrgPlanDraft {
  * Build a minimal OrgConfig from the settings object. Mirrors the logic in
  * `src/tools/org.ts` `loadOrgConfig()` but without a full ToolSession.
  */
-function buildOrgConfig(settings: Settings) {
+export function buildOrgConfig(settings: Settings) {
 	const rawKeywords = settings.get("org.todoKeywords") as readonly string[] | string[] | undefined;
 	const todoKeywords = rawKeywords && rawKeywords.length > 0 ? [...rawKeywords] : [...DEFAULT_ORG_CONFIG.todoKeywords];
 	return { ...DEFAULT_ORG_CONFIG, todoKeywords };
-}
-
-/**
- * Create a draft org item at plan mode entry.
- *
- * Returns the id + file path so `PlanModeState` can store them, or null if
- * org is disabled / the draft category is not found / any error occurs.
- */
-export async function createPlanDraft(
-	settings: Settings,
-	projectRoot: string,
-	planTitle: string,
-): Promise<OrgPlanDraft | null> {
-	if (!settings.get("org.enabled")) return null;
-
-	const draftCategory = (settings.get("org.planDraftCategory") as string | undefined) ?? "drafts";
-	const draftState = (settings.get("org.planDraftState") as string | undefined) ?? "ITEM";
-
-	const config = buildOrgConfig(settings);
-	const categories = resolveCategories(config, projectRoot);
-	const cat = findCategory(categories, draftCategory);
-	if (!cat) {
-		throw new Error(
-			`org.planDraftCategory "${draftCategory}" not found. Known categories: ${categories.map(c => c.name).join(", ")}`,
-		);
-	}
-
-	// Ensure the directory exists before generating an ID (generateId scans it).
-	await initCategoryDir(cat.absPath, cat.prefix, config.todoKeywords);
-
-	const id = await generateId(cat.absPath, cat.prefix, planTitle);
-	const filePath = path.join(cat.absPath, `${id}.org`);
-	await appendItemToFile(filePath, { title: planTitle, category: cat.name, id }, draftState);
-
-	logger.debug("org-plan: created draft item", { id, filePath });
-	return { id, file: filePath };
 }
 
 /**
@@ -89,7 +52,7 @@ export async function finalizePlanDraft(
 ): Promise<string | null> {
 	if (!settings.get("org.enabled")) return null;
 
-	const activeCategory = (settings.get("org.planActiveCategory") as string | undefined) ?? "projects";
+	const activeCategory = (settings.get("org.planActiveCategory") as string | undefined) ?? "plans";
 	const activeState = (settings.get("org.planActiveState") as string | undefined) ?? "DOING";
 
 	const config = buildOrgConfig(settings);
@@ -117,4 +80,25 @@ export async function finalizePlanDraft(
 
 	logger.debug("org-plan: finalized plan", { draftId: draft.id, activeId, activeFilePath });
 	return activeId;
+}
+
+/**
+ * Resolve a plan draft item by its CUSTOM_ID across all configured categories.
+ * Returns the item (with body) or null if not found / org disabled.
+ */
+export async function resolvePlanDraftItem(
+	settings: Settings,
+	projectRoot: string,
+	itemId: string,
+): Promise<{ id: string; file: string; body: string } | null> {
+	if (!settings.get("org.enabled")) return null;
+
+	const config = buildOrgConfig(settings);
+	const categories = resolveCategories(config, projectRoot);
+	const catDirs = categories.map(c => ({ absPath: c.absPath, name: c.name, dir: c.dirName }));
+
+	const item = await findItemById(catDirs, itemId, config.todoKeywords);
+	if (!item) return null;
+
+	return { id: item.id, file: item.file, body: item.body ?? "" };
 }

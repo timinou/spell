@@ -5,6 +5,7 @@
 import * as path from "node:path";
 import { type Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
+import { NiriOverviewController } from "@oh-my-pi/pi-niri";
 import type { Component, SlashCommand } from "@oh-my-pi/pi-tui";
 import { Container, Loader, Markdown, ProcessTerminal, Spacer, Text, TUI } from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, hsvToRgb, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
@@ -17,7 +18,7 @@ import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
-import { createPlanDraft, finalizePlanDraft, type OrgPlanDraft } from "../plan-mode/org-plan";
+import { finalizePlanDraft, type OrgPlanDraft } from "../plan-mode/org-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
@@ -158,6 +159,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #inputController: InputController;
 	readonly #selectorController: SelectorController;
 	readonly #uiHelpers: UiHelpers;
+	#niriController: NiriOverviewController | undefined = undefined;
 	#sttController: STTController | undefined;
 	#voiceAnimationInterval: NodeJS.Timeout | undefined;
 	#voiceHue = 0;
@@ -377,6 +379,34 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.updateEditorTopBorder();
 			this.ui.requestRender();
 		});
+
+		// Connect to Niri compositor IPC (if running inside Niri)
+		const niriSocket = Bun.env.NIRI_SOCKET;
+		if (niriSocket) {
+			const ctx = this;
+			this.#niriController = new NiriOverviewController(niriSocket, {
+				ui: this.ui,
+				session: {
+					get isStreaming() {
+						return ctx.session.isStreaming;
+					},
+					get messages() {
+						return ctx.session.messages;
+					},
+					get state() {
+						return ctx.session.state;
+					},
+				},
+				get onInputCallback() {
+					return ctx.onInputCallback;
+				},
+				sessionManager: this.sessionManager,
+				get todoPhases() {
+					return ctx.todoPhases;
+				},
+				subscribe: listener => ctx.session.subscribe(listener),
+			});
+		}
 
 		// Initial top border update
 		this.updateEditorTopBorder();
@@ -661,18 +691,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.planModeEnabled = true;
 
 		await this.session.setActiveToolsByName(uniquePlanTools);
-		let draft: OrgPlanDraft | null = null;
-		try {
-			draft = await createPlanDraft(this.settings, this.sessionManager.getCwd(), "Untitled plan");
-		} catch (err) {
-			this.showWarning(`Org draft creation failed: ${err instanceof Error ? err.message : String(err)}`);
-		}
 		this.session.setPlanModeState({
 			enabled: true,
 			planFilePath,
 			workflow: options?.workflow ?? "parallel",
 			reentry: this.#planModeHasEntered,
-			...(draft ? { orgItemId: draft.id, orgItemFile: draft.file } : {}),
 		});
 		if (this.session.isStreaming) {
 			await this.session.sendPlanModeContext({ deliverAs: "steer" });
@@ -681,7 +704,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#applyPlanModeModel();
 		this.#updatePlanModeStatus();
 		this.sessionManager.appendModeChange("plan", { planFilePath });
-		this.showStatus(`Plan mode enabled. Plan file: ${planFilePath}`);
+		this.showStatus("Plan mode enabled.");
 	}
 
 	async #exitPlanMode(options?: { silent?: boolean; paused?: boolean }): Promise<void> {
@@ -739,21 +762,25 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #approvePlan(
 		planContent: string,
-		options: { planFilePath: string; finalPlanFilePath: string },
+		options: { planFilePath: string; finalPlanFilePath: string; orgItem?: { id: string; file: string } },
 	): Promise<void> {
-		// Capture org draft info before exitPlanMode clears the state.
+		// Org item from exit_plan_mode details takes precedence over pre-created state (backward compat).
 		const planModeState = this.session.getPlanModeState();
-		const orgDraft =
-			planModeState?.orgItemId && planModeState.orgItemFile
+		const orgDraft: OrgPlanDraft | null =
+			options.orgItem ??
+			(planModeState?.orgItemId && planModeState.orgItemFile
 				? { id: planModeState.orgItemId, file: planModeState.orgItemFile }
-				: null;
+				: null);
 		const planTitle = options.finalPlanFilePath.replace(/^local:\/\//, "").replace(/\.md$/, "");
-		await renameApprovedPlanFile({
-			planFilePath: options.planFilePath,
-			finalPlanFilePath: options.finalPlanFilePath,
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
+		// Only rename the markdown plan file for file-backed plans.
+		if (!options.orgItem) {
+			await renameApprovedPlanFile({
+				planFilePath: options.planFilePath,
+				finalPlanFilePath: options.finalPlanFilePath,
+				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+				getSessionId: () => this.sessionManager.getSessionId(),
+			});
+		}
 		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
 		await this.#exitPlanMode({ silent: true, paused: false });
 		await this.handleClearCommand();
@@ -820,11 +847,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		// ready for approval." and immediately calls exit_plan_mode in a loop.
 		await this.session.abort();
 
+		// Org-backed plan: content comes from the resolved item body.
+		// File-backed plan (org disabled): read from the plan file.
 		const planFilePath = details.planFilePath || this.planModePlanFilePath || (await this.#getPlanFilePath());
 		this.planModePlanFilePath = planFilePath;
-		const planContent = await this.#readPlanFile(planFilePath);
+		const planContent =
+			details.planContent !== undefined ? details.planContent : await this.#readPlanFile(planFilePath);
 		if (!planContent) {
-			this.showError(`Plan file not found at ${planFilePath}`);
+			this.showError("Plan has no content.");
 			return;
 		}
 
@@ -838,7 +868,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (choice === "Approve and execute") {
 			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
 			try {
-				await this.#approvePlan(planContent, { planFilePath, finalPlanFilePath });
+				const orgItem =
+					details.itemId && details.orgItemFile ? { id: details.itemId, file: details.orgItemFile } : undefined;
+				await this.#approvePlan(planContent, { planFilePath, finalPlanFilePath, orgItem });
 			} catch (error) {
 				this.showError(
 					`Failed to finalize approved plan: ${error instanceof Error ? error.message : String(error)}`,
@@ -876,6 +908,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#cleanupUnsubscribe) {
 			this.#cleanupUnsubscribe();
 		}
+		this.#niriController?.destroy();
 		if (this.isInitialized) {
 			this.ui.stop();
 			this.isInitialized = false;

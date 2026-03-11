@@ -21,6 +21,8 @@ export function titleToSlug(title: string): string {
 	return (
 		title
 			.toLowerCase()
+			// treat underscores, dots, and slashes as word separators
+			.replace(/[_.\\/]+/g, " ")
 			// keep alphanumeric and spaces/hyphens
 			.replace(/[^a-z0-9\s-]/g, "")
 			.trim()
