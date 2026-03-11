@@ -49,7 +49,7 @@ export class WelcomeComponent implements Component {
 		}
 		const dualContentWidth = boxWidth - 3; // 3 = │ + │ + │
 		const preferredLeftCol = 26;
-		const minLeftCol = 14; // logo width
+		const minLeftCol = 12; // logo width
 		const minRightCol = 20;
 		const leftMinContentWidth = Math.max(
 			minLeftCol,
@@ -67,9 +67,9 @@ export class WelcomeComponent implements Component {
 		const leftCol = showRightColumn ? dualLeftCol : boxWidth - 2;
 		const rightCol = showRightColumn ? dualRightCol : 0;
 
-		// Block-based OMP logo (gradient: magenta → cyan)
+		// Pie-slice logo (gradient: pink → cream)
 		// biome-ignore format: preserve ASCII art layout
-		const piLogo = ["▀████████████▀", " ╘███    ███  ", "  ███    ███  ", "  ███    ███  ", " ▄███▄  ▄███▄ "];
+		const piLogo = ["     /\\", "    /  \\", "   /░░░░\\", "  /░░░░░░\\", " /~~~~~~~~\\", "/══════════\\"];
 
 		// Apply gradient to logo
 		const logoColored = piLogo.map(line => this.#gradientLine(line));
@@ -191,15 +191,15 @@ export class WelcomeComponent implements Component {
 		return padding(leftPad) + text + padding(rightPad);
 	}
 
-	/** Apply magenta→cyan gradient to a string */
+	/** Apply pink→cream gradient to a string */
 	#gradientLine(line: string): string {
 		const colors = [
-			"\x1b[38;5;199m", // bright magenta
-			"\x1b[38;5;171m", // magenta-purple
-			"\x1b[38;5;135m", // purple
-			"\x1b[38;5;99m", // purple-blue
-			"\x1b[38;5;75m", // cyan-blue
-			"\x1b[38;5;51m", // bright cyan
+			"\x1b[38;5;213m", // bright pink
+			"\x1b[38;5;211m", // pink
+			"\x1b[38;5;209m", // peach
+			"\x1b[38;5;215m", // light orange
+			"\x1b[38;5;221m", // yellow
+			"\x1b[38;5;229m", // cream
 		];
 		const reset = "\x1b[0m";
 
