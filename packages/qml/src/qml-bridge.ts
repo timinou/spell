@@ -140,6 +140,43 @@ export class QmlBridge {
 		return events;
 	}
 
+	/**
+	 * Wait for the next event(s) from a window using the push listener — no polling.
+	 * Resolves as soon as any event (or closed) arrives, or after timeoutMs (default 10min).
+	 * Returns all events that were queued at resolution time.
+	 */
+	waitForEvent(id: string, timeoutMs = 600_000): Promise<WindowInfo["events"]> {
+		const win = this.#windows.get(id);
+		if (!win) return Promise.reject(new Error(`Window not found: ${id}`));
+
+		const { promise, resolve } = Promise.withResolvers<WindowInfo["events"]>();
+		let timer: NodeJS.Timeout | undefined;
+
+		const done = (events: WindowInfo["events"]) => {
+			clearTimeout(timer);
+			remove();
+			resolve(events);
+		};
+
+		// Register listener first to avoid the race between checking and subscribing.
+		const remove = this.#process.addListener(event => {
+			if ((event.type === "event" || event.type === "closed") && event.id === id) {
+				done(win.events.splice(0));
+			}
+		});
+
+		// Flush any events that arrived before we registered.
+		if (win.events.length > 0) {
+			done(win.events.splice(0));
+			return promise;
+		}
+
+		// Timeout resolves with empty array — caller re-arms if still alive.
+		timer = setTimeout(() => done([]), timeoutMs);
+
+		return promise;
+	}
+
 	/** Dispose the bridge — kills process and stops watchers. */
 	async dispose(): Promise<void> {
 		this.#removeListener?.();

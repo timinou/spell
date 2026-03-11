@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { bridgeBinaryPath, isBridgeAvailable, QmlBridge } from "@oh-my-pi/pi-qml";
-import { logger } from "@oh-my-pi/pi-utils";
+
 import { type Static, Type } from "@sinclair/typebox";
 import qmlDescription from "../prompts/tools/qml.md" with { type: "text" };
 import type { ToolSession } from ".";
@@ -16,6 +16,7 @@ const qmlSchema = Type.Object({
 			Type.Literal("launch"),
 			Type.Literal("close"),
 			Type.Literal("send_message"),
+			Type.Literal("listen"),
 			Type.Literal("list_windows"),
 		],
 		{ description: "Action to perform" },
@@ -36,7 +37,7 @@ const qmlSchema = Type.Object({
 	),
 	// send_message
 	payload: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "JSON payload (send_message)" })),
-	wait_for_event: Type.Optional(Type.Boolean({ description: "Block until window emits an event (send_message)" })),
+	// listen: no extra fields needed
 });
 
 type QmlToolInput = Static<typeof qmlSchema>;
@@ -108,15 +109,10 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 					props: params.props as Record<string, unknown> | undefined,
 				});
 				const events = bridge.drainEvents(id);
-				const details: QmlToolDetails = {
-					action: "launch",
-					windowId: id,
-					events,
-				};
-				const text = `Window '${id}' launched (state: ${win.state})${events.length ? `\n${events.length} pending event(s)` : ""}`;
+				const details: QmlToolDetails = { action: "launch", windowId: id, events };
+				const text = `Window '${id}' launched (state: ${win.state})${events.length ? `\n${events.length} event(s) received` : ""}`;
 				return toolResult(details).text(text).done();
 			}
-
 			case "close": {
 				const id = params.id;
 				if (!id) throw new ToolError("close action requires 'id'");
@@ -132,27 +128,30 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				if (!params.payload) throw new ToolError("send_message action requires 'payload'");
 				const bridge = this.#ensureBridge();
 				await bridge.sendMessage(id, params.payload as Record<string, unknown>);
-				if (params.wait_for_event) {
-					// Poll for up to 30s for an event from this window
-					const deadline = Date.now() + 30_000;
-					while (Date.now() < deadline) {
-						const pending = bridge.drainEvents(id);
-						if (pending.length > 0) {
-							// Put them back so the result below can drain them
-							const win = bridge.getWindow(id);
-							if (win) win.events.push(...pending);
-							break;
-						}
-						await Bun.sleep(100);
-					}
-					if (Date.now() >= deadline) {
-						logger.warn("QmlTool: timed out waiting for event", { id });
+				const details: QmlToolDetails = { action: "send_message", windowId: id };
+				return toolResult(details).text(`Message sent to '${id}'`).done();
+			}
+
+			case "listen": {
+				const id = params.id;
+				if (!id) throw new ToolError("listen action requires 'id'");
+				const bridge = this.#ensureBridge();
+				// Push-based: resolves immediately when any event arrives, no polling.
+				const events = await bridge.waitForEvent(id);
+				const win = bridge.getWindow(id);
+				const details: QmlToolDetails = { action: "listen", windowId: id, events };
+				const closed =
+					win?.state === "closed" || events.some(e => (e.payload as { action?: string }).action === "close");
+				const lines: string[] = [];
+				if (events.length === 0) {
+					lines.push(`Listen timeout on '${id}' — window ${win?.state ?? "unknown"}`);
+				} else {
+					lines.push(`${events.length} event(s) from '${id}'${closed ? " [closed]" : ""}:`);
+					for (const e of events) {
+						lines.push(JSON.stringify(e.payload));
 					}
 				}
-				const events = bridge.drainEvents(id);
-				const details: QmlToolDetails = { action: "send_message", windowId: id, events };
-				const text = `Message sent to '${id}'${events.length ? `\n${events.length} event(s) received` : ""}`;
-				return toolResult(details).text(text).done();
+				return toolResult(details).text(lines.join("\n")).done();
 			}
 
 			case "list_windows": {
