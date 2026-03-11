@@ -1,5 +1,6 @@
 #include "windowmanager.h"
 #include <QJsonDocument>
+#include <QQmlContext>
 #include <QUrl>
 #include <cstdio>
 
