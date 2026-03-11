@@ -10,6 +10,7 @@ import type { ToolSession } from ".";
 import type { OutputMeta } from "./output-meta";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
+import { ensureSpellConnection } from "./spell/connect";
 
 const qmlSchema = Type.Object({
 	action: Type.Union(
@@ -149,9 +150,15 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 		params: QmlToolInput,
 		_signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback<QmlToolDetails>,
-		_context?: AgentToolContext,
+		context?: AgentToolContext,
 	): Promise<AgentToolResult<QmlToolDetails>> {
 		const { action } = params;
+
+		// For actions that can use a remote Android device, ensure Spell is connected.
+		// write and screenshot are local-only; all others can route to Android.
+		if (action !== "write" && action !== "screenshot" && context) {
+			await ensureSpellConnection(this.session, context);
+		}
 
 		switch (action) {
 			case "write": {
