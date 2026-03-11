@@ -62,6 +62,7 @@ function makeCtx(
 		isStreaming: boolean;
 		error: string | undefined;
 		hasInputCallback: boolean;
+		isAwaitingHookInput: boolean;
 		todoPhases: NiriOverviewContext["todoPhases"];
 		sessionName: string;
 	}> = {},
@@ -93,6 +94,9 @@ function makeCtx(
 		},
 		get onInputCallback() {
 			return overrides.hasInputCallback ? () => {} : undefined;
+		},
+		get isAwaitingHookInput() {
+			return overrides.isAwaitingHookInput ?? false;
 		},
 		sessionManager: {
 			getCwd: () => "/projects/myapp",
@@ -218,6 +222,17 @@ describe("NiriOverviewController", () => {
 			["error over needs_input", { hasInputCallback: true, error: "oops" }, "error"],
 			// error takes precedence over running
 			["error over running", { error: "oops", isStreaming: true }, "error"],
+			// hook input: LLM is streaming but paused awaiting user answer (ask tool,
+			// plan approval, etc.) — must show needs_input, not running.
+			["needs_input when hook active mid-stream", { isStreaming: true, isAwaitingHookInput: true }, "needs_input"],
+			// hook without streaming (tool already returned, main loop called getUserInput)
+			[
+				"needs_input when hook active not streaming",
+				{ isStreaming: false, isAwaitingHookInput: true },
+				"needs_input",
+			],
+			// error beats hook
+			["error over hook input", { isStreaming: true, isAwaitingHookInput: true, error: "oops" }, "error"],
 		];
 
 		for (const [label, ctxOverrides, expectedStatus] of cases) {

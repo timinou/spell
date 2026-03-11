@@ -40,8 +40,14 @@ export interface NiriOverviewContext {
 		messages: unknown[];
 		state: { error?: string };
 	};
-	/** True when user input is awaited. */
+	/** True when user input is awaited (main-loop callback). */
 	onInputCallback?: unknown;
+	/**
+	 * True when the agent is mid-stream but paused waiting for user interaction
+	 * via a hook UI (ask selector, hook input, etc.). Distinct from onInputCallback:
+	 * this can be true while isStreaming is still true.
+	 */
+	isAwaitingHookInput?: boolean;
 	/** Current working directory (for project name). */
 	sessionManager: {
 		getCwd(): string;
@@ -163,11 +169,12 @@ export class NiriOverviewController {
 
 	#deriveStatus(): AgentStatus {
 		const ctx = this.#context;
-		// Streaming takes priority over onInputCallback. The callback can be set
-		// concurrently while the session is already streaming again (exit_plan_mode
-		// race: abort() unblocks the main loop → getUserInput() sets the callback,
-		// then the tool handler fires session.prompt() for the synthetic execution).
 		if (ctx.session.state.error) return "error";
+		// Hook input takes priority over plain streaming: the LLM is paused mid-run
+		// waiting for the user to answer a question (ask tool, plan approval, etc.).
+		if (ctx.isAwaitingHookInput) return "needs_input";
+		// Streaming beats onInputCallback: the session is actively running even if
+		// the callback was set concurrently (exit_plan_mode race).
 		if (ctx.session.isStreaming) return "running";
 		if (ctx.onInputCallback !== undefined) return "needs_input";
 		return "idle";
