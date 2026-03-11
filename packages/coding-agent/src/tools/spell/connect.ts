@@ -153,11 +153,28 @@ class TuiSetupDisplay implements SetupDisplay {
 
 // ── shared helpers ────────────────────────────────────────────────────────────
 
-async function waitForDevice(signal: AbortSignal): Promise<{ id: string } | null> {
+async function waitForDevice(signal: AbortSignal, onStatus: (text: string) => void): Promise<{ id: string } | null> {
 	const deadline = Date.now() + DEVICE_WAIT_TIMEOUT_MS;
+	let lastStatus = "";
+
+	const update = (text: string) => {
+		if (text !== lastStatus) {
+			lastStatus = text;
+			onStatus(text);
+		}
+	};
+
 	while (Date.now() < deadline && !signal.aborted) {
 		const devices = await getConnectedDevices();
-		if (devices.length > 0) return devices[0]!;
+		const ready = devices.find(d => d.type === "device" || d.type === "emulator");
+		if (ready) return ready;
+
+		const unauthorized = devices.find(d => d.type === "unauthorized");
+		if (unauthorized) {
+			update('Tap "Allow USB debugging" on your phone...');
+		} else {
+			update("Connect your Android phone via USB...");
+		}
 		await Bun.sleep(DEVICE_POLL_INTERVAL_MS);
 	}
 	return null;
@@ -199,9 +216,8 @@ async function runSetupFlow(session: ToolSession, display: SetupDisplay): Promis
 	}
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
-	// 2. Wait for device (shows immediately so the user sees the prompt)
-	display.showPhase("Connect your Android phone via USB...");
-	const device = await waitForDevice(signal);
+	// 2. Wait for device — phase text updates live as status changes
+	const device = await waitForDevice(signal, text => display.showPhase(text));
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 	if (!device) {
 		throw new ToolError("No Android device connected (timed out after 120s)");

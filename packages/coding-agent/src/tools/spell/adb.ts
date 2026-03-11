@@ -34,10 +34,8 @@ export async function getConnectedDevices(): Promise<AdbDevice[]> {
 				type = "unauthorized";
 			}
 
-			// Only include usable devices
-			if (type === "device" || type === "emulator") {
-				devices.push({ id, type });
-			}
+			// Include all devices — callers handle unauthorized state
+			devices.push({ id, type });
 		}
 
 		return devices;
