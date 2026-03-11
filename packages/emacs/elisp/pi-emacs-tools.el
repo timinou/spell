@@ -44,8 +44,20 @@
   "Handle code-outline tool call with ARGS."
   (condition-case err
       (let* ((file (alist-get 'file args))
-             (depth (alist-get 'depth args)))
-        (pi-outline-get file depth))
+             (depth (alist-get 'depth args))
+             (entries (pi-outline-get file depth)))
+        (if entries
+            entries
+          ;; Return a structured warning so the agent sees a real explanation
+          ;; instead of the opaque "nil" that falls through format-result.
+          (json-encode
+           `((result . [])
+             (warning . "no-outline")
+             (message . ,(format
+                          "No recognized top-level declarations in '%s'. \
+                          "The outline extractor only supports TS/JS/Rust/Go/Python. \
+                          "Use `emacs_code read` (resolution 1-2) as an alternative."
+                          (file-name-nondirectory file)))))))
     (error (json-encode `((error . t) (message . ,(error-message-string err)))))))
 
 (mcp-server-register-tool

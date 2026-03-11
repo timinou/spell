@@ -45,23 +45,26 @@ look for installation details."
 
 (defun pi-treesit--mode-for-file (file)
   "Return the appropriate treesit major mode for FILE based on extension.
+Checks the project-local mode map (from treesitter.json) before the built-in table.
 Returns nil for file types without a treesit mode (e.g. .el)."
-  (let ((ext (file-name-extension file)))
-    (cond
-     ((member ext '("ts"))              'typescript-ts-mode)
-     ((member ext '("tsx"))             'tsx-ts-mode)
-     ((member ext '("js" "jsx" "mjs")) 'js-ts-mode)
-     ((member ext '("py"))             'python-ts-mode)
-     ((member ext '("rs"))             'rust-ts-mode)
-     ((member ext '("go"))             'go-ts-mode)
-     ((member ext '("json"))           'json-ts-mode)
-     ((member ext '("css"))            'css-ts-mode)
-     ((member ext '("html" "htm"))     'html-ts-mode)
-     ((member ext '("yaml" "yml"))     'yaml-ts-mode)
-     ((member ext '("toml"))           'toml-ts-mode)
-     ((member ext '("bash" "sh"))      'bash-ts-mode)
-     ((member ext '("el"))             'emacs-lisp-mode)
-     (t nil))))
+  (let* ((ext (file-name-extension file))
+         (project-mode (cdr (assoc ext pi-treesit--project-mode-map))))
+    (or project-mode
+        (cond
+         ((member ext '("ts"))              'typescript-ts-mode)
+         ((member ext '("tsx"))             'tsx-ts-mode)
+         ((member ext '("js" "jsx" "mjs")) 'js-ts-mode)
+         ((member ext '("py"))             'python-ts-mode)
+         ((member ext '("rs"))             'rust-ts-mode)
+         ((member ext '("go"))             'go-ts-mode)
+         ((member ext '("json"))           'json-ts-mode)
+         ((member ext '("css"))            'css-ts-mode)
+         ((member ext '("html" "htm"))     'html-ts-mode)
+         ((member ext '("yaml" "yml"))     'yaml-ts-mode)
+         ((member ext '("toml"))           'toml-ts-mode)
+         ((member ext '("bash" "sh"))      'bash-ts-mode)
+         ((member ext '("el"))             'emacs-lisp-mode)
+         (t nil)))))
 
 (defun pi-treesit--activate-parser (file)
   "Try to activate an appropriate treesit parser for FILE."
@@ -70,22 +73,25 @@ Returns nil for file types without a treesit mode (e.g. .el)."
       (treesit-parser-create lang))))
 
 (defun pi-treesit--lang-for-file (file)
-  "Return the treesit language symbol for FILE, or nil if not a treesit language."
-  (let ((ext (file-name-extension file)))
-    (cond
-     ((member ext '("ts"))              'typescript)
-     ((member ext '("tsx"))             'tsx)
-     ((member ext '("js" "jsx" "mjs")) 'javascript)
-     ((member ext '("py"))             'python)
-     ((member ext '("rs"))             'rust)
-     ((member ext '("go"))             'go)
-     ((member ext '("json"))           'json)
-     ((member ext '("css"))            'css)
-     ((member ext '("html" "htm"))     'html)
-     ((member ext '("yaml" "yml"))     'yaml)
-     ((member ext '("toml"))           'toml)
-     ((member ext '("bash" "sh"))      'bash)
-     (t nil))))
+  "Return the treesit language symbol for FILE, or nil if not a treesit language.
+Checks the project-local lang map (from treesitter.json) before the built-in table."
+  (let* ((ext (file-name-extension file))
+         (project-lang (cdr (assoc ext pi-treesit--project-lang-map))))
+    (or project-lang
+        (cond
+         ((member ext '("ts"))              'typescript)
+         ((member ext '("tsx"))             'tsx)
+         ((member ext '("js" "jsx" "mjs")) 'javascript)
+         ((member ext '("py"))             'python)
+         ((member ext '("rs"))             'rust)
+         ((member ext '("go"))             'go)
+         ((member ext '("json"))           'json)
+         ((member ext '("css"))            'css)
+         ((member ext '("html" "htm"))     'html)
+         ((member ext '("yaml" "yml"))     'yaml)
+         ((member ext '("toml"))           'toml)
+         ((member ext '("bash" "sh"))      'bash)
+         (t nil)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Node helpers — treesit positions are 1-indexed buffer positions
@@ -143,7 +149,7 @@ Returns nil for file types without a treesit mode (e.g. .el)."
   "Return the declared name of NODE, or nil if not a named declaration."
   (let ((type (treesit-node-type node)))
     (cond
-     ;; function_declaration, class_declaration, interface_declaration
+     ;; TypeScript / JavaScript top-level declarations
      ((member type '("function_declaration" "class_declaration"
                      "interface_declaration" "type_alias_declaration"
                      "enum_declaration" "abstract_class_declaration"))
@@ -159,12 +165,40 @@ Returns nil for file types without a treesit mode (e.g. .el)."
         (when declarator
           (let ((name (treesit-node-child-by-field-name declarator "name")))
             (when name (treesit-node-text name t))))))
+     ;; Rust: fn, struct, enum, impl, trait, mod, type, const, static
+     ((member type '("function_item" "struct_item" "enum_item"
+                     "trait_item" "mod_item" "type_item"
+                     "const_item" "static_item"))
+      (let ((name-node (treesit-node-child-by-field-name node "name")))
+        (when name-node (treesit-node-text name-node t))))
+     ;; impl_item: show the implementing type name (no "name" field in tree-sitter-rust)
+     ((string= type "impl_item")
+      (let ((type-node (treesit-node-child-by-field-name node "type")))
+        (when type-node (treesit-node-text type-node t))))
+     ;; Python: function_definition, class_definition, decorated_definition
+     ((member type '("function_definition" "class_definition"))
+      (let ((name-node (treesit-node-child-by-field-name node "name")))
+        (when name-node (treesit-node-text name-node t))))
+     ((string= type "decorated_definition")
+      (let ((def (treesit-node-child-by-field-name node "definition")))
+        (when def (pi-treesit-declaration-name def))))
+     ;; Go: function_declaration, method_declaration, type_declaration
+     ((member type '("function_declaration" "method_declaration"))
+      (let ((name-node (treesit-node-child-by-field-name node "name")))
+        (when name-node (treesit-node-text name-node t))))
+     ((string= type "type_declaration")
+      ;; Go type_declaration contains type_spec children; first child holds the name.
+      (let ((spec (treesit-node-child node 0)))
+        (when spec
+          (let ((name (treesit-node-child-by-field-name spec "name")))
+            (when name (treesit-node-text name t))))))
      (t nil))))
 
 (defun pi-treesit-declaration-kind (node)
   "Return a short kind string for NODE: function, class, interface, type, const, etc."
   (let ((type (treesit-node-type node)))
     (cond
+     ;; TypeScript / JavaScript
      ((string= type "export_statement")
       (let ((decl (treesit-node-child-by-field-name node "declaration")))
         (if decl (pi-treesit-declaration-kind decl) "export")))
@@ -175,6 +209,24 @@ Returns nil for file types without a treesit mode (e.g. .el)."
      ((string= type "enum_declaration") "enum")
      ((string= type "lexical_declaration") "const")
      ((string= type "method_definition") "method")
+     ;; Rust
+     ((string= type "function_item") "fn")
+     ((string= type "struct_item") "struct")
+     ((string= type "enum_item") "enum")
+     ((string= type "impl_item") "impl")
+     ((string= type "trait_item") "trait")
+     ((string= type "mod_item") "mod")
+     ((string= type "type_item") "type")
+     ((string= type "const_item") "const")
+     ((string= type "static_item") "static")
+     ;; Python
+     ((string= type "function_definition") "def")
+     ((string= type "class_definition") "class")
+     ((string= type "decorated_definition") "decorated")
+     ;; Go
+     ((string= type "function_declaration") "func")
+     ((string= type "method_declaration") "method")
+     ((string= type "type_declaration") "type")
      (t type))))
 
 (provide 'pi-treesit)

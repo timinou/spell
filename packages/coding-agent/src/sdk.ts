@@ -25,6 +25,7 @@ import {
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import "./discovery";
+import { type EmacsWarmupResult, warmupEmacs } from "@oh-my-pi/pi-emacs";
 import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
 import { TtsrManager } from "./export/ttsr";
@@ -205,6 +206,8 @@ export interface CreateAgentSessionResult {
 	modelFallbackMessage?: string;
 	/** LSP servers that were warmed up at startup */
 	lspServers?: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>;
+	/** Emacs daemon warmup result (undefined when Emacs is disabled or not attempted). */
+	emacsResult?: EmacsWarmupResult;
 }
 
 // Re-exports
@@ -910,6 +913,24 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		options.parentTaskPrefix ? { parentPrefix: options.parentTaskPrefix } : undefined,
 	);
 
+	// Fire Emacs daemon startup now so it runs in the background during MCP/Gemini/Exa init.
+	// It will be awaited alongside the LSP warmup before the session is returned.
+	const shouldStartEmacs =
+		toolSession.emacsSession === undefined &&
+		(options.toolNames === undefined || options.toolNames.includes("emacs_code"));
+	const emacsWarmupPromise: Promise<EmacsWarmupResult | undefined> = shouldStartEmacs
+		? logger.timeAsync("warmupEmacs", () =>
+				warmupEmacs(cwd, sessionId, {
+					emacsPath: settings.get("emacs.path") as string | undefined,
+					onConnecting: name => {
+						if (options.hasUI) {
+							process.stderr.write(chalk.gray(`Starting ${name}…\n`));
+						}
+					},
+				}),
+			)
+		: Promise.resolve(undefined);
+
 	// Create built-in tools (already wrapped with meta notice formatting)
 	const builtinTools = await logger.timeAsync("createAllTools", () => createTools(toolSession, options.toolNames));
 
@@ -1485,6 +1506,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	}
 
+	// Collect Emacs warmup result (daemon may have already started during the above async work).
+	let emacsResult: EmacsWarmupResult | undefined;
+	if (shouldStartEmacs) {
+		emacsResult = await emacsWarmupPromise;
+		if (emacsResult) {
+			toolSession.emacsSession = emacsResult.session;
+			if (emacsResult.status === "error") {
+				logger.warn("[emacs-warmup] daemon startup failed", { error: emacsResult.error });
+			} else if (emacsResult.status === "ready") {
+				logger.debug("[emacs-warmup] daemon ready", { version: emacsResult.version });
+			}
+		}
+	}
+
 	startMemoryStartupTask({
 		session,
 		settings,
@@ -1538,5 +1573,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		mcpManager,
 		modelFallbackMessage,
 		lspServers,
+		emacsResult,
 	};
 }

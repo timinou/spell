@@ -124,3 +124,79 @@ export function makeEmacsSessionFactory(
 ): () => Promise<EmacsSession | null> {
 	return () => startEmacsDaemon(emacsPath, projectRoot, sessionId);
 }
+
+// =============================================================================
+// Warmup pipeline — mirrors warmupLspServers in packages/coding-agent/src/lsp
+// =============================================================================
+
+export interface EmacsWarmupOptions {
+	/**
+	 * Called immediately before the daemon is started, so the caller can display
+	 * a progress message without waiting for the full startup.
+	 */
+	onConnecting?: (daemonName: string) => void;
+	/** Explicit path to the emacs binary (falls back to PATH + common locations). */
+	emacsPath?: string;
+}
+
+export interface EmacsWarmupResult {
+	/** "ready"   — daemon started and socket is live.
+	 *  "error"    — daemon was attempted but failed; details in `error`.
+	 *  "unavailable" — Emacs / socat / treesit prerequisites are missing.
+	 */
+	status: "ready" | "error" | "unavailable";
+	/** Human-readable failure detail (present when status !== "ready"). */
+	error?: string;
+	/** Detected Emacs version string, when known. */
+	version?: string;
+	/** The started session (present when status === "ready"). */
+	session: EmacsSession | null;
+}
+
+/**
+ * Detect prerequisites, start the Emacs daemon, and return a structured result.
+ *
+ * Mirrors warmupLspServers: fires `onConnecting` before blocking on startup,
+ * always resolves (never rejects), and returns a typed status so callers can
+ * surface diagnostics to the UI.
+ *
+ * @param projectRoot - Absolute path to the project root.
+ * @param sessionId   - Opaque session identifier (e.g. Pi session UUID).
+ * @param options     - Optional callbacks and overrides.
+ */
+export async function warmupEmacs(
+	projectRoot: string,
+	sessionId: string,
+	options?: EmacsWarmupOptions,
+): Promise<EmacsWarmupResult> {
+	const detection = await detectEmacs(options?.emacsPath);
+
+	// Surface detection failures as "unavailable" — these are environment issues,
+	// not daemon crashes, so they should not be logged as warnings.
+	if (!detection.found || !detection.meetsMinimum || !detection.socatFound || !detection.treesitAvailable) {
+		const reasons = detection.errors.length > 0 ? detection.errors : ["Emacs or treesit unavailable"];
+		if (!detection.treesitAvailable && detection.found && detection.meetsMinimum) {
+			reasons.push(`Emacs ${detection.version} is missing treesit support (built without --with-tree-sitter)`);
+		}
+		logger.debug("[emacs-warmup] prerequisites not met", { reasons });
+		return {
+			status: "unavailable",
+			error: reasons.join("; "),
+			version: detection.version ?? undefined,
+			session: null,
+		};
+	}
+
+	// Notify caller before blocking — same contract as warmupLspServers onConnecting.
+	options?.onConnecting?.("emacs-code");
+
+	try {
+		const session = await startEmacsSession(detection.path!, projectRoot, sessionId, EMACS_ELISP_DIR);
+		logger.debug("[emacs-warmup] daemon ready", { version: detection.version, projectRoot });
+		return { status: "ready", version: detection.version ?? undefined, session };
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		logger.warn("[emacs-warmup] daemon startup failed", { error: msg, projectRoot });
+		return { status: "error", error: msg, version: detection.version ?? undefined, session: null };
+	}
+}
