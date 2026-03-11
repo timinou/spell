@@ -20,6 +20,10 @@ You **MUST** create a plan at `{{planFilePath}}`.
 
 You **MUST** use `{{editToolName}}` for incremental updates; use `{{writeToolName}}` only for create/full replace.
 
+{{#if orgItemId}}
+An org draft item `{{orgItemId}}` has been created for tracking. You do not need to interact with it — it will be finalized automatically on plan approval.
+{{/if}}
+
 <caution>
 Plan execution runs in fresh context (session cleared). You **MUST** make the plan file self-contained: include requirements, decisions, key findings, remaining todos needed to continue without prior session history.
 </caution>

@@ -17,6 +17,7 @@ import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
+import { createPlanDraft, finalizePlanDraft } from "../plan-mode/org-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
@@ -660,11 +661,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.planModeEnabled = true;
 
 		await this.session.setActiveToolsByName(uniquePlanTools);
+		const draft = await createPlanDraft(this.settings, this.sessionManager.getCwd(), "Untitled plan");
 		this.session.setPlanModeState({
 			enabled: true,
 			planFilePath,
 			workflow: options?.workflow ?? "parallel",
 			reentry: this.#planModeHasEntered,
+			...(draft ? { orgItemId: draft.id, orgItemFile: draft.file } : {}),
 		});
 		if (this.session.isStreaming) {
 			await this.session.sendPlanModeContext({ deliverAs: "steer" });
@@ -733,6 +736,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		planContent: string,
 		options: { planFilePath: string; finalPlanFilePath: string },
 	): Promise<void> {
+		// Capture org draft info before exitPlanMode clears the state.
+		const planModeState = this.session.getPlanModeState();
+		const orgDraft =
+			planModeState?.orgItemId && planModeState.orgItemFile
+				? { id: planModeState.orgItemId, file: planModeState.orgItemFile }
+				: null;
+		const planTitle = options.finalPlanFilePath.replace(/^local:\/\//, "").replace(/\.md$/, "");
 		await renameApprovedPlanFile({
 			planFilePath: options.planFilePath,
 			finalPlanFilePath: options.finalPlanFilePath,
@@ -749,6 +759,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			getSessionId: () => this.sessionManager.getSessionId(),
 		});
 		await Bun.write(newLocalPath, planContent);
+		// Finalize the org draft (best-effort — failure must not block approval).
+		let activeOrgItemId: string | null = null;
+		if (orgDraft) {
+			activeOrgItemId = await finalizePlanDraft(
+				this.settings,
+				this.sessionManager.getCwd(),
+				orgDraft,
+				planTitle,
+				planContent,
+			);
+		}
 		if (previousTools.length > 0) {
 			await this.session.setActiveToolsByName(previousTools);
 		}
@@ -757,6 +778,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const prompt = renderPromptTemplate(planModeApprovedPrompt, {
 			planContent,
 			finalPlanFilePath: options.finalPlanFilePath,
+			orgItemId: activeOrgItemId ?? "",
 		});
 		await this.session.prompt(prompt, { synthetic: true });
 	}

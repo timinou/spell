@@ -1263,6 +1263,22 @@ export const SETTINGS_SCHEMA = {
 		type: "array",
 		default: ["ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"],
 	},
+	"org.planDraftCategory": {
+		type: "string",
+		default: "drafts",
+	},
+	"org.planActiveCategory": {
+		type: "string",
+		default: "projects",
+	},
+	"org.planDraftState": {
+		type: "string",
+		default: "ITEM",
+	},
+	"org.planActiveState": {
+		type: "string",
+		default: "DOING",
+	},
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
