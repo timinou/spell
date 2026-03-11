@@ -28,6 +28,7 @@ const SETUP_QML_PATH = "/tmp/omp-qml/spell-setup.qml";
 interface SetupDisplay {
 	readonly signal: AbortSignal;
 	showPhase(text: string): void;
+	showStep(index: number): void;
 	showDevice(name: string): void;
 	showSuccess(text: string): void;
 	showError(text: string): void;
@@ -84,8 +85,13 @@ class QmlSetupDisplay implements SetupDisplay {
 		})();
 	}
 
-	showPhase(text: string): void {
-		this.#send({ type: "phase", text });
+	// QML path drives all feedback via the step list; phase text is for TUI only.
+	showPhase(_text: string): void {
+		/* no-op */
+	}
+
+	showStep(index: number): void {
+		this.#send({ type: "step", index });
 	}
 
 	showDevice(name: string): void {
@@ -136,6 +142,10 @@ class TuiSetupDisplay implements SetupDisplay {
 		this.#dialog.showPhase(text);
 	}
 
+	showStep(_index: number): void {
+		/* no-op — TUI uses phase text */
+	}
+
 	showDevice(name: string): void {
 		// In TUI mode the device name is already embedded in the phase text;
 		// update the phase to show it as part of the next phase message.
@@ -153,7 +163,11 @@ class TuiSetupDisplay implements SetupDisplay {
 
 // ── shared helpers ────────────────────────────────────────────────────────────
 
-async function waitForDevice(signal: AbortSignal, onStatus: (text: string) => void): Promise<{ id: string } | null> {
+async function waitForDevice(
+	signal: AbortSignal,
+	onStatus: (text: string) => void,
+	onStep: (index: number) => void,
+): Promise<{ id: string } | null> {
 	const deadline = Date.now() + DEVICE_WAIT_TIMEOUT_MS;
 	let lastStatus = "";
 
@@ -171,8 +185,10 @@ async function waitForDevice(signal: AbortSignal, onStatus: (text: string) => vo
 
 		const unauthorized = devices.find(d => d.type === "unauthorized");
 		if (unauthorized) {
+			onStep(1);
 			update('Tap "Allow USB debugging" on your phone...');
 		} else {
+			onStep(0);
 			update("Connect your Android phone via USB...");
 		}
 		await Bun.sleep(DEVICE_POLL_INTERVAL_MS);
@@ -216,8 +232,12 @@ async function runSetupFlow(session: ToolSession, display: SetupDisplay): Promis
 	}
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
-	// 2. Wait for device — phase text updates live as status changes
-	const device = await waitForDevice(signal, text => display.showPhase(text));
+	// 2. Wait for device — step + phase text update live
+	const device = await waitForDevice(
+		signal,
+		text => display.showPhase(text),
+		idx => display.showStep(idx),
+	);
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 	if (!device) {
 		throw new ToolError("No Android device connected (timed out after 120s)");
@@ -225,11 +245,11 @@ async function runSetupFlow(session: ToolSession, display: SetupDisplay): Promis
 
 	const deviceId = device.id;
 	display.showDevice(deviceId);
-	display.showPhase(`Device found: ${deviceId}`);
-	await Bun.sleep(400);
+	display.showStep(2);
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
 	// 3. Install Spell if not already present
+	display.showStep(2);
 	const installed = await isSpellInstalled(deviceId);
 	if (!installed) {
 		display.showPhase("Locating Spell APK...");
@@ -244,26 +264,22 @@ async function runSetupFlow(session: ToolSession, display: SetupDisplay): Promis
 			await Bun.sleep(3_000);
 			throw new ToolError("adb install failed");
 		}
-	} else {
-		display.showPhase("Spell already installed");
-		await Bun.sleep(400);
 	}
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
-	// 4. Port forwarding
+	// 4. Port forward + server + launch — all drive step 3
+	display.showStep(3);
 	display.showPhase("Setting up port forwarding...");
 	await setupPortForward(SPELL_PORT, deviceId);
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
-	// 5. Start QmlRemoteServer before launching so it's ready for the first connect
-	display.showPhase("Starting connection server...");
 	const server = new QmlRemoteServer({ port: SPELL_PORT });
 	server.start();
 
-	// 6. Launch Spell
 	display.showPhase("Launching Spell...");
 	await launchSpell(deviceId);
 	if (signal.aborted) {
+		display.showStep(4);
 		server.stop();
 		throw new ToolError("Spell setup cancelled");
 	}
