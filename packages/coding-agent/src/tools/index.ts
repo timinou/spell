@@ -23,6 +23,7 @@ import { BrowserTool } from "./browser";
 import { CalculatorTool } from "./calculator";
 import { CancelJobTool } from "./cancel-job";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
+import { EmacsTool } from "./emacs";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
 import { FindTool } from "./find";
@@ -60,6 +61,7 @@ export * from "./browser";
 export * from "./calculator";
 export * from "./cancel-job";
 export * from "./checkpoint";
+export * from "./emacs";
 export * from "./exit-plan-mode";
 export * from "./fetch";
 export * from "./find";
@@ -184,6 +186,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	await: AwaitTool.createIf,
 	todo_write: s => new TodoWriteTool(s),
 	org: s => (s.settings.get("org.enabled") ? new OrgTool(s) : null),
+	emacs_code: s => new EmacsTool(s),
 	fetch: s => new FetchTool(s),
 	web_search: s => new SearchTool(s),
 	write: s => new WriteTool(s),

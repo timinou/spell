@@ -54,3 +54,11 @@ pi-*.html
 
 # Generated files
 packages/coding-agent/src/internal-urls/docs-index.generated.ts
+
+# Org-mode agent scratch space (keep !journal)
+.local/*
+!.local/!journal
+
+# QML bridge build artifacts
+packages/qml/build/
+packages/qml/native/omp-qml-bridge

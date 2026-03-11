@@ -1255,6 +1255,10 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: { tab: "tools", label: "Enable Org", description: "Enable the org tool for project management" },
 	},
+	"emacs.path": {
+		type: "string",
+		default: undefined,
+	},
 	"org.emacsPath": {
 		type: "string",
 		default: undefined,

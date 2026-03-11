@@ -1,0 +1,57 @@
+#+TITLE: Reference
+#+DESCRIPTION: Schema contract for this org directory.
+#+TODO: ITEM | DOING | REVIEW | DONE | BLOCKED
+
+* Schema
+
+** Task ID Format
+
+Task IDs follow the pattern: PROJ-NNN-kebab-title
+Example: PROJ-001-implement-feature
+
+** TODO Keywords
+
+| Keyword | Meaning                            |
+|---------+------------------------------------|
+| ITEM    | Not started                        |
+| DOING   | Actively being worked on           |
+| REVIEW  | Work done, awaiting review         |
+| DONE    | Complete                           |
+| BLOCKED | Waiting on external dependency     |
+
+** Required Properties
+
+Every task heading MUST have:
+- CUSTOM_ID: Unique task ID (e.g. PROJ-001-example)
+- EFFORT: Time estimate (e.g. 2h, 30m)
+- PRIORITY: #A (high), #B (medium), #C (low)
+
+** Recommended Properties
+
+- DEPENDS: IDs this task depends on (space-separated)
+- BLOCKS: IDs this task blocks
+- FILES: Relevant files (paths)
+- TEST_PLAN: How to verify completion
+- LAYER: backend | frontend | data | prompt | infra | test | docs
+
+** Optional Properties
+
+- BLAST_RADIUS: Scope of impact
+- FEATURE_FLAG: Associated feature flag
+- RESEARCH_REF: Link to research or spike
+- AGENT: Override default agent for this item
+
+** Example Item
+
+* ITEM PROJ-001-example-task
+:PROPERTIES:
+:CUSTOM_ID: PROJ-001-example-task
+:EFFORT: 2h
+:PRIORITY: #B
+:LAYER: backend
+:END:
+
+Description of what needs to be done and why.
+
+- Specific step 1
+- Specific step 2

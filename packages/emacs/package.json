@@ -1,0 +1,47 @@
+{
+	"type": "module",
+	"name": "@oh-my-pi/pi-emacs",
+	"version": "0.1.0",
+	"description": "Emacs code intelligence backend for Pi (treesit + combobulate)",
+	"homepage": "https://github.com/can1357/oh-my-pi",
+	"author": "Can Boluk",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/can1357/oh-my-pi.git",
+		"directory": "packages/emacs"
+	},
+	"bugs": {
+		"url": "https://github.com/can1357/oh-my-pi/issues"
+	},
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"scripts": {
+		"check": "tsgo -p tsconfig.json",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@oh-my-pi/pi-utils": "workspace:*",
+		"@sinclair/typebox": "^0.34"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.3"
+	},
+	"engines": {
+		"bun": ">=1.3.7"
+	},
+	"files": [
+		"src",
+		"elisp"
+	],
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts"
+		},
+		"./*": {
+			"types": "./src/*.ts",
+			"import": "./src/*.ts"
+		}
+	}
+}

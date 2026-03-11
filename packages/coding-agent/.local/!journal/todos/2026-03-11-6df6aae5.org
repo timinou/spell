@@ -1,0 +1,73 @@
+#+TITLE: Session 148de88567849fc9 Todos
+#+DATE: 2026-03-11
+#+TODO: ITEM DOING | DONE
+
+* Phase 1: Config + State
+
+** DONE Add org.plan* settings to settings-schema.ts
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Extend PlanModeState with orgItemId?, orgItemFile?
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+* Phase 2: Org Library
+
+** DONE Check org-writer.ts for body update capability, add updateItemBody() if needed
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+* Phase 3: Plan Mode Integration
+
+** DONE Modify #enterPlanMode() to create draft org item
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Modify #approvePlan() to mark draft DONE, create active item
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+** DONE Guard all org operations behind org.enabled check
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+** DONE Update plan-mode-active.md and plan-mode-approved.md prompts
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:END:
+
+* Phase 4: ERT Tests
+
+** DONE Create packages/org/elisp/test/org-tasks-test.el with ERT tests
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:END:
+
+* Phase 5: Verification
+
+** DONE Run bun check:ts
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: completed
+:END:
+
+** DONE Run bun test packages/org/
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: completed
+:END:
