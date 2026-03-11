@@ -17,7 +17,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { DEFAULT_TODO_KEYWORDS } from "./schema/defaults";
-import type { OrgCreateParams } from "./types";
+import type { OrgCreateParams, OrgSessionContext } from "./types";
 
 // =============================================================================
 // Serialization helpers
@@ -27,15 +27,27 @@ import type { OrgCreateParams } from "./types";
  * Serialize file-level `#+KEY: value` frontmatter for a document item.
  *
  * The resulting file has metadata at the top and free-form body content below.
- * Headings within the body can optionally carry TODO keywords to mark
- * actionable sub-tasks.
+ * When `session` is provided, `#+SESSION_ID:` and `#+TRANSCRIPT_PATH:` are
+ * written into the frontmatter and an `* Initial Prompt` section is appended.
  */
-export function serializeFileItem(title: string, state: string, props: Record<string, string>, body?: string): string {
+export function serializeFileItem(
+	title: string,
+	state: string,
+	props: Record<string, string>,
+	body?: string,
+	session?: OrgSessionContext,
+): string {
 	const fileTitle = title.replace(/[^\w\s-]/g, "").trim();
 	const lines: string[] = [];
 
 	lines.push(`#+TITLE: ${fileTitle}`);
 	lines.push(`#+STATE: ${state}`);
+	if (session?.sessionId) {
+		lines.push(`#+SESSION_ID: ${session.sessionId}`);
+	}
+	if (session?.transcriptPath) {
+		lines.push(`#+TRANSCRIPT_PATH: [[file:${session.transcriptPath}]]`);
+	}
 	for (const [key, value] of Object.entries(props)) {
 		lines.push(`#+${key}: ${value}`);
 	}
@@ -43,6 +55,13 @@ export function serializeFileItem(title: string, state: string, props: Record<st
 	if (body) {
 		lines.push("");
 		lines.push(body.trimEnd());
+	}
+
+	if (session?.systemPrompt) {
+		lines.push("");
+		lines.push("* Initial Prompt");
+		lines.push("");
+		lines.push(session.systemPrompt.trimEnd());
 	}
 
 	lines.push("");
@@ -92,7 +111,10 @@ export function serializeHeading(
  * Create or append an item to an org file.
  *
  * - **New file**: writes file-level `#+` properties (document item).
- * - **Existing file**: appends a heading-level item (sub-task).
+ *   If `session` is provided, session metadata and the initial prompt are
+ *   embedded (see `serializeFileItem`).
+ * - **Existing file**: appends a heading-level item. Session context is not
+ *   written — it belongs to the file, not individual headings.
  *
  * Returns the absolute path of the written file.
  */
@@ -100,6 +122,7 @@ export async function appendItemToFile(
 	filePath: string,
 	params: OrgCreateParams & { id: string },
 	state: string,
+	session?: OrgSessionContext,
 ): Promise<string> {
 	const props: Record<string, string> = {
 		CUSTOM_ID: params.id,
@@ -110,13 +133,13 @@ export async function appendItemToFile(
 	try {
 		existing = await Bun.file(filePath).text();
 	} catch {
-		// New file — use file-level properties
-		const content = serializeFileItem(params.title, state, props, params.body);
+		// New file — use file-level properties with optional session context
+		const content = serializeFileItem(params.title, state, props, params.body, session);
 		await Bun.write(filePath, content);
 		return filePath;
 	}
 
-	// Existing file — append as heading-level item
+	// Existing file — append as heading-level item; session context stays with the file
 	const heading = serializeHeading(1, state, params.title, props, params.body);
 	const separator = existing.endsWith("\n") ? "" : "\n";
 	await Bun.write(filePath, existing + separator + heading);

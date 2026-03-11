@@ -19,6 +19,12 @@ export interface OrgCategoryConfig {
 	path: string;
 	/** Default agent for items in this category (overrides dir default). */
 	agent?: string;
+	/**
+	 * When true (default), newly created .org files in this category embed the
+	 * agent system prompt in an `* Initial Prompt` section, plus `#+SESSION_ID:`
+	 * and `#+TRANSCRIPT_PATH:` in the file frontmatter.
+	 */
+	writeInitialPrompt?: boolean;
 }
 
 export interface OrgDirConfig {
@@ -58,6 +64,24 @@ export interface OrgCategory {
 	dirAbsPath: string;
 	/** Default agent. */
 	agent?: string;
+	/**
+	 * When true (default), newly created .org files in this category embed the
+	 * agent system prompt plus session metadata.
+	 */
+	writeInitialPrompt: boolean;
+}
+
+/**
+ * Session metadata passed into `appendItemToFile` when creating a new file.
+ * Each field is optional; only present fields are written.
+ */
+export interface OrgSessionContext {
+	/** Agent session identifier written as `#+SESSION_ID:`. */
+	sessionId?: string;
+	/** Absolute path to the JSONL session transcript, written as an org-mode file link. */
+	transcriptPath?: string;
+	/** Full agent system prompt written into an `* Initial Prompt` heading. */
+	systemPrompt?: string;
 }
 
 // =============================================================================

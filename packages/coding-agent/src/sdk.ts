@@ -848,6 +848,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		taskDepth: options.taskDepth ?? 0,
 		getSessionFile: () => sessionManager.getSessionFile() ?? null,
 		getSessionId: () => sessionManager.getSessionId?.() ?? null,
+		getSystemPrompt: () => session.systemPrompt,
 		getSessionSpawns: () => options.spawns ?? "*",
 		getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 		getActiveModelString: () => {

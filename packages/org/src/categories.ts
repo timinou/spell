@@ -26,6 +26,7 @@ export function resolveCategories(config: OrgConfig, projectRoot: string): OrgCa
 				absPath: path.resolve(dirAbsPath, catConfig.path),
 				dirAbsPath,
 				agent: catConfig.agent ?? dirConfig.agent,
+				writeInitialPrompt: catConfig.writeInitialPrompt ?? true,
 			});
 		}
 	}

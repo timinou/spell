@@ -26,6 +26,7 @@ import type {
 	OrgDashboard,
 	OrgItem,
 	OrgQueryFilter,
+	OrgSessionContext,
 	ValidationIssue,
 } from "./types";
 
@@ -38,6 +39,8 @@ interface OrgContext {
 	projectRoot: string;
 	/** Lazily started Emacs session (null if Emacs unavailable or not yet started). */
 	getEmacsSession(): Promise<EmacsSession | null>;
+	/** Optional session metadata injected into newly created org files. */
+	getSessionContext?(): OrgSessionContext;
 }
 
 // =============================================================================
@@ -116,7 +119,8 @@ async function cmdCreate(
 		file: args.file,
 	};
 
-	await appendItemToFile(filePath, params, state);
+	const sessionCtx = cat.writeInitialPrompt ? ctx.getSessionContext?.() : undefined;
+	await appendItemToFile(filePath, params, state, sessionCtx);
 
 	logger.debug("org:create", { id, filePath, category: cat.name });
 
@@ -431,6 +435,8 @@ export function createOrgTool(
 	config: OrgConfig = DEFAULT_ORG_CONFIG,
 	/** Optional factory for an Emacs session (provided by the Emacs bridge). */
 	emacsSessionFactory?: () => Promise<EmacsSession | null>,
+	/** Optional factory for session context written into newly created org files. */
+	getSessionContext?: () => OrgSessionContext,
 ): OrgToolDefinition {
 	// Lazy Emacs session — started only on first advanced query
 	let emacsSessionPromise: Promise<EmacsSession | null> | null = null;
@@ -448,6 +454,7 @@ export function createOrgTool(
 			}
 			return emacsSessionPromise;
 		},
+		getSessionContext,
 	};
 
 	return {
