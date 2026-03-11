@@ -9,33 +9,58 @@
 ;; ---------------------------------------------------------------------------
 
 (defun pi-treesit-open-file (file)
-  "Open FILE in a buffer with treesit parsing, return buffer.
-Always reads fresh from disk to avoid stale cached buffers."
+  "Open FILE in a buffer with treesit parsing enabled, return buffer.
+Always reads fresh from disk to avoid stale cached content.
+Signals an error with an actionable message if no tree-sitter parser is
+available for the file's language — listing the grammar name and where to
+look for installation details."
   (let ((buf (generate-new-buffer (format " *pi-emacs:%s*" (file-name-nondirectory file)))))
     (with-current-buffer buf
       (insert-file-contents file)
       (let ((mode (pi-treesit--mode-for-file file)))
         (when mode (funcall mode)))
-      ;; Ensure treesit parser is active.
       (unless (treesit-parser-list)
-        (pi-treesit--activate-parser file)))
+        (pi-treesit--activate-parser file))
+      ;; After best-effort activation, check whether a parser is actually running.
+      ;; If not, produce an explicit error so callers get a useful message rather
+      ;; than a cryptic "no parser" or "killed buffer" failure later.
+      (unless (treesit-parser-list)
+        (kill-buffer buf)
+        (let* ((lang (pi-treesit--lang-for-file file))
+               (reason (and lang
+                            (fboundp 'pi-prelude-grammar-unavailable-p)
+                            (pi-prelude-grammar-unavailable-p lang))))
+          (if lang
+              (error "Tree-sitter grammar '%s' is not available for %s.%s\
+  Run `M-x pi-prelude-install-grammar RET %s' or restart the daemon. \
+  Check ~/.omp/logs/ for compilation errors."
+                     lang
+                     (file-name-nondirectory file)
+                     (if reason (format " Compile error: %s." reason) "")
+                     lang)
+            (error "No tree-sitter parser available for %s (extension .%s not recognised)."
+                   (file-name-nondirectory file)
+                   (or (file-name-extension file) "?"))))))
     buf))
 
 (defun pi-treesit--mode-for-file (file)
-  "Return appropriate major mode for FILE based on extension."
+  "Return the appropriate treesit major mode for FILE based on extension.
+Returns nil for file types without a treesit mode (e.g. .el)."
   (let ((ext (file-name-extension file)))
     (cond
-     ((member ext '("ts" "tsx")) 'typescript-ts-mode)
+     ((member ext '("ts"))              'typescript-ts-mode)
+     ((member ext '("tsx"))             'tsx-ts-mode)
      ((member ext '("js" "jsx" "mjs")) 'js-ts-mode)
-     ((member ext '("py")) 'python-ts-mode)
-     ((member ext '("rs")) 'rust-ts-mode)
-     ((member ext '("go")) 'go-ts-mode)
-     ((member ext '("json")) 'json-ts-mode)
-     ((member ext '("css")) 'css-ts-mode)
-     ((member ext '("html" "htm")) 'html-ts-mode)
-     ((member ext '("yaml" "yml")) 'yaml-ts-mode)
-     ((member ext '("toml")) 'toml-ts-mode)
-     ((member ext '("el")) 'emacs-lisp-mode)
+     ((member ext '("py"))             'python-ts-mode)
+     ((member ext '("rs"))             'rust-ts-mode)
+     ((member ext '("go"))             'go-ts-mode)
+     ((member ext '("json"))           'json-ts-mode)
+     ((member ext '("css"))            'css-ts-mode)
+     ((member ext '("html" "htm"))     'html-ts-mode)
+     ((member ext '("yaml" "yml"))     'yaml-ts-mode)
+     ((member ext '("toml"))           'toml-ts-mode)
+     ((member ext '("bash" "sh"))      'bash-ts-mode)
+     ((member ext '("el"))             'emacs-lisp-mode)
      (t nil))))
 
 (defun pi-treesit--activate-parser (file)
@@ -45,18 +70,21 @@ Always reads fresh from disk to avoid stale cached buffers."
       (treesit-parser-create lang))))
 
 (defun pi-treesit--lang-for-file (file)
-  "Return treesit language symbol for FILE."
+  "Return the treesit language symbol for FILE, or nil if not a treesit language."
   (let ((ext (file-name-extension file)))
     (cond
-     ((member ext '("ts" "tsx")) 'typescript)
+     ((member ext '("ts"))              'typescript)
+     ((member ext '("tsx"))             'tsx)
      ((member ext '("js" "jsx" "mjs")) 'javascript)
-     ((member ext '("py")) 'python)
-     ((member ext '("rs")) 'rust)
-     ((member ext '("go")) 'go)
-     ((member ext '("json")) 'json)
-     ((member ext '("css")) 'css)
-     ((member ext '("html" "htm")) 'html)
-     ((member ext '("yaml" "yml")) 'yaml)
+     ((member ext '("py"))             'python)
+     ((member ext '("rs"))             'rust)
+     ((member ext '("go"))             'go)
+     ((member ext '("json"))           'json)
+     ((member ext '("css"))            'css)
+     ((member ext '("html" "htm"))     'html)
+     ((member ext '("yaml" "yml"))     'yaml)
+     ((member ext '("toml"))           'toml)
+     ((member ext '("bash" "sh"))      'bash)
      (t nil))))
 
 ;; ---------------------------------------------------------------------------

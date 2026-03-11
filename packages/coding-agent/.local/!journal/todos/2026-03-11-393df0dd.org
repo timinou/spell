@@ -1,0 +1,47 @@
+#+TITLE: Session 148e4e1918b85ee3 Todos
+#+DATE: 2026-03-11
+#+TODO: ITEM DOING | DONE
+
+* Setup
+
+** DONE Read existing package structures and interactive-mode.ts for context
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Create packages/niri/ with package.json, tsconfig.json
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Create types.ts, ipc.ts, font-scaling.ts, overview-component.ts, controller.ts, index.ts
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Update tsconfig.base.json path mappings
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Update coding-agent package.json dependency
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+** DONE Integrate NiriOverviewController in interactive-mode.ts
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+** DONE Run bun check:ts and fix errors
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:END:

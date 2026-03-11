@@ -1,0 +1,6 @@
+#+TITLE: Untitled plan
+
+* DONE Untitled plan
+:PROPERTIES:
+:CUSTOM_ID: DRAFT-001-untitled-plan
+:END:

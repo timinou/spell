@@ -1,0 +1,49 @@
+#+TITLE: Session 148e708e12bc4cc7 Todos
+#+DATE: 2026-03-11
+#+TODO: ITEM DOING | DONE
+
+* Writer
+
+** DONE Rewrite org-writer.ts: new files use #+KEY file-level properties, heading items stay as-is for sub-tasks
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+* Reader
+
+** DONE Update org-reader.ts: parse #+KEY file-level properties as a file-level OrgItem, body = everything after frontmatter
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Update updateItemStateInFile and setPropertyInFile to handle file-level items (#+STATE: vs heading keyword)
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Handled in writer rewrite - tryUpdateFileLevelState/trySetFileLevelProperty
+
+* Plan integration
+
+** DONE Simplify resolvePlanDraftItem to use the new file-level body from the reader
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Update exit-plan-mode prompt / org tool instructions to describe new structure
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+* Verify
+
+** DONE Type-check and format
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:

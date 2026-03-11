@@ -32,7 +32,6 @@ export async function startEmacsSession(
 	emacsPath: string,
 	projectRoot: string,
 	sessionId: string,
-	orgElispDir: string,
 	elispDir: string,
 ): Promise<EmacsSession> {
 	const key = sessionKey(projectRoot, sessionId);
@@ -45,7 +44,7 @@ export async function startEmacsSession(
 	// Stale entry — remove before relaunching.
 	if (cached) sessions.delete(key);
 
-	const session = await launchDaemon(emacsPath, projectRoot, sessionId, orgElispDir, elispDir, key);
+	const session = await launchDaemon(emacsPath, projectRoot, sessionId, elispDir, key);
 	sessions.set(key, session);
 	return session;
 }
@@ -105,7 +104,6 @@ async function launchDaemon(
 	emacsPath: string,
 	_projectRoot: string,
 	_sessionId: string,
-	orgElispDir: string,
 	elispDir: string,
 	key: string,
 ): Promise<EmacsSession> {
@@ -121,21 +119,24 @@ async function launchDaemon(
 		}
 	}
 
-	// Both elisp dirs must be on load-path before requiring pi-emacs-mcp.
-	// orgElispDir provides the MCP server infrastructure; elispDir provides pi-emacs tools.
+	// -Q skips the user's init file and all site files.
+	// pi-prelude.el bootstraps tree-sitter grammars into Pi's own directory,
+	// compiling any that are missing (first run only, then instant).
+	// pi-emacs-mcp.el is self-contained: it vendors the MCP infrastructure.
 	const args = [
+		"-Q",
 		`--daemon=${daemonName}`,
 		"--eval",
-		`(add-to-list 'load-path "${orgElispDir}")`,
-		"--eval",
 		`(add-to-list 'load-path "${elispDir}")`,
+		"--eval",
+		`(require 'pi-prelude)`,
 		"--eval",
 		`(require 'pi-emacs-mcp)`,
 		"--eval",
 		`(mcp-server-start-unix nil "${sock}")`,
 	];
 
-	logger.debug("[emacs-daemon] Spawning daemon", { daemonName, sock, orgElispDir, elispDir });
+	logger.debug("[emacs-daemon] Spawning daemon", { daemonName, sock, elispDir });
 
 	// Detached: the child outlives the parent process.
 	const proc = Bun.spawn([emacsPath, ...args], {

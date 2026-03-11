@@ -1,0 +1,160 @@
+#+TITLE: NIRI_OVERVIEW_OVERLAY
+
+* DOING NIRI_OVERVIEW_OVERLAY
+:PROPERTIES:
+:CUSTOM_ID: PROJ-002-nirioverviewoverlay
+:END:
+
+# Niri Overview Overlay Package
+
+## Goal
+
+Create `packages/niri/` — a new package that connects to the Niri compositor IPC, detects overview mode, and overlays the TUI with a summary screen showing session status at a glance. Includes OSC 50 font scaling (best-effort).
+
+## Architecture
+
+### New Package: `@oh-my-pi/pi-niri`
+
+**Location:** `packages/niri/`
+
+The package has two responsibilities:
+1. **Niri IPC client** — connect to `$NIRI_SOCKET`, subscribe to `EventStream`, emit `OverviewOpenedOrClosed` events
+2. **Overview overlay component** — a TUI `Component` that renders the summary screen
+
+### Integration Point
+
+Inside `packages/coding-agent/src/modes/interactive-mode.ts`, after TUI initialization:
+- Import and start the Niri listener (only if `$NIRI_SOCKET` is set)
+- On overview open: show overlay via `ui.showOverlay()`, send OSC 50 to increase font
+- On overview close: hide overlay via handle, send OSC 50 to restore font
+- On agent state change: re-render overlay with current state
+
+## Niri IPC Protocol
+
+- Socket: `$NIRI_SOCKET` (Unix domain socket, set by Niri for child processes)
+- Send `"EventStream"\n` (JSON string + newline)
+- First response: `{"Ok":"Handled"}` — confirms subscription
+- Subsequent lines: JSON events, e.g. `{"OverviewOpenedOrClosed":{"is_open":true}}`
+- Reconnect on socket close (Niri restarts, etc.)
+
+## Overlay Component Design
+
+Full-screen overlay (`width: "100%"`, `maxHeight: "100%"`, `anchor: "center"`).
+
+### Content Layout
+
+```
+┌──────────────────────────────────────┐
+│                                      │
+│           PROJECT NAME               │  ← basename of cwd (e.g. "backdesk")
+│           Session Title              │  ← session name
+│                                      │
+│           ■ 42 messages              │  ← message count
+│                                      │
+│           Todo List                  │
+│           ✓ Phase 1                  │
+│             ✓ Task A                 │
+│             → Task B (in progress)   │
+│             ○ Task C                 │
+│           ○ Phase 2                  │
+│             ○ Task D                 │
+│                                      │
+└──────────────────────────────────────┘
+```
+
+### State-Based Colors
+
+Derive agent state from `InteractiveModeContext`:
+
+| State | Condition | Background | Text |
+|---|---|---|---|
+| **Needs Input** | `ctx.onInputCallback` is set | `warning` bg | `warning` text |
+| **Running** | `session.isStreaming === true` | `accent` bg | `accent` text |
+| **Error** | `session.state.error` is set | `error` bg | `error` text |
+| **Done/Idle** | not streaming, no error, no input needed | `success` bg | `success` text |
+
+Use `theme.bg()` / `theme.fg()` from `src/modes/theme/theme.ts`. The overlay background fill and title/subtitle text color change based on state. The ThemeBg type doesn't have exact matches for all states, so we'll use ANSI escape sequences directly via the theme's color utilities (the theme exposes raw RGB values for truecolor terminals).
+
+### Font Scaling (OSC 50)
+
+Best-effort — may not work in all terminals:
+- On overview open: query current font via `OSC 50 ; ? ST`, then send `OSC 50 ; <font-with-larger-size> ST`
+- On overview close: restore original font via `OSC 50 ; <original-font> ST`
+- Timeout the query (200ms) — if no response, skip font scaling entirely
+- Parse response from stdin (terminal echoes back `OSC 50 ; <current-font> ST`)
+
+Since OSC 50 support is spotty (xterm yes, Ghostty/kitty uncertain), this is wrapped in a try/catch with graceful degradation.
+
+## Files to Create
+
+### `packages/niri/package.json`
+Standard package boilerplate (see template from `packages/utils/package.json`). Dependencies: `@oh-my-pi/pi-tui`.
+
+### `packages/niri/tsconfig.json`
+Extends `../../tsconfig.base.json`.
+
+### `packages/niri/src/index.ts`
+Barrel exports.
+
+### `packages/niri/src/ipc.ts`
+Niri IPC client:
+- `NiriEventStream` class
+- Connects to `$NIRI_SOCKET` via `net.createConnection()`
+- Sends `"EventStream"\n`
+- Parses newline-delimited JSON
+- Emits typed events via callback
+- Auto-reconnect with backoff on socket close
+- `destroy()` for cleanup
+
+### `packages/niri/src/overview-component.ts`
+TUI component for the overview overlay:
+- Implements `Component` from `@oh-my-pi/pi-tui`
+- `render(width): string[]` — renders the summary screen
+- Takes a state snapshot: `{ projectName, sessionTitle, messageCount, todoPhases, agentStatus }`
+- `update(state)` method to refresh data + call `invalidate()`
+- Uses theme colors for state-based styling
+
+### `packages/niri/src/font-scaling.ts`
+OSC 50 font query/set utilities:
+- `queryCurrentFont(): Promise<string | null>` — sends OSC 50 query, reads response with timeout
+- `setFont(font: string): void` — sends OSC 50 set
+- `withLargerFont(scaleFactor: number)` — parses font string, increases size, returns restore function
+
+### `packages/niri/src/types.ts`
+Shared types: `NiriEvent`, `OverviewState`, `AgentStatus` enum.
+
+## Files to Modify
+
+### `tsconfig.base.json`
+Add path mappings:
+```json
+"@oh-my-pi/pi-niri": ["./packages/niri/src/index.ts"],
+"@oh-my-pi/pi-niri/*": ["./packages/niri/src/*"]
+```
+
+### `packages/coding-agent/package.json`
+Add dependency: `"@oh-my-pi/pi-niri": "workspace:*"`
+
+### `packages/coding-agent/src/modes/interactive-mode.ts`
+Add Niri overview controller initialization:
+- Import `NiriOverviewController` from `@oh-my-pi/pi-niri`
+- In the constructor or `start()`, if `$NIRI_SOCKET` is set:
+  - Create controller, passing `this` (InteractiveModeContext) 
+  - Store handle for cleanup in `destroy()`
+- The controller internally:
+  - Creates `NiriEventStream`
+  - Creates `OverviewComponent`
+  - On overview open: `ui.showOverlay(component, fullscreenOpts)`, scale font
+  - On overview close: `handle.hide()`, restore font
+  - Subscribes to session events to update overlay content
+
+Alternatively, this wiring could live in a new controller file `src/modes/controllers/niri-controller.ts` within coding-agent itself, with only the IPC + component in the niri package. But since the user wants a standalone package, the controller logic lives in `packages/niri/src/controller.ts` and interactive-mode just instantiates it.
+
+## Verification
+
+1. `bun check:ts` — type check passes with new package
+2. Manual test: run omp inside Niri, toggle overview (Super key), confirm overlay appears/disappears
+3. Confirm overlay renders project name, session title, message count, todo list
+4. Confirm colors change based on agent state (start a task, interrupt, let it complete)
+5. Test graceful degradation: run outside Niri (`$NIRI_SOCKET` not set) — no errors, no overlay
+6. Test OSC 50 font scaling (may be no-op depending on terminal)

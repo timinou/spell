@@ -1,0 +1,23 @@
+#+TITLE: Session 148e86b88c34a03d Todos
+#+DATE: 2026-03-11
+#+TODO: ITEM DOING | DONE
+
+* Fix
+
+** DONE Add isAwaitingHookInput to NiriOverviewContext + derive needs_input when streaming + hook active
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Wire hookSelector/hookInput state from interactive-mode into context
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Add tests for streaming-but-awaiting-hook-input scenario
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

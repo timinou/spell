@@ -1,0 +1,136 @@
+#+TITLE: MATUGEN_OMP_THEME_INTEGRATION
+
+* DOING MATUGEN_OMP_THEME_INTEGRATION
+:PROPERTIES:
+:CUSTOM_ID: PROJ-001-matugenompthemeintegration
+:END:
+
+# Single Source of Truth for Theming: Matugen -> OMP
+
+## Problem
+
+OMP's theme (`dark.json`/`light.json`) uses hardcoded hex colors, completely disconnected from the system-wide Material 3 palette that matugen generates for every other app (ghostty, kitty, foot, gtk, hyprland, etc.).
+
+## Solution
+
+Add OMP as another matugen target — exactly the same pattern as ghostty, kitty, and every other app in `~/.dotfiles/wm/quickshell/dms/matugen/`. Two new files, zero OMP source changes.
+
+OMP already supports custom themes at `~/.omp/agent/themes/{name}.json` with file-watch hot-reload. Matugen writes to that path; OMP picks it up.
+
+### Flow After
+```
+Wallpaper -> Matugen -> ghostty, kitty, foot, gtk, ...
+                     \-> ~/.omp/agent/themes/dankcolors.json  (NEW)
+                     
+OMP file watcher detects change -> hot-reloads theme
+```
+
+## Files to Create
+
+### 1. `~/.dotfiles/wm/quickshell/dms/matugen/configs/omp.toml`
+
+```toml
+[templates.dmsomp]
+input_path = 'SHELL_DIR/matugen/templates/omp.json'
+output_path = 'HOME_DIR/.omp/agent/themes/dankcolors.json'
+```
+
+### 2. `~/.dotfiles/wm/quickshell/dms/matugen/templates/omp.json`
+
+A Handlebars template outputting valid OMP theme JSON. Uses `{{colors.X.default.hex}}` (resolves to current dark/light mode, same as ghostty/foot templates).
+
+**Color mapping — Material 3 to OMP:**
+
+| OMP key | Source | Rationale |
+|---|---|---|
+| **Core UI** | | |
+| `accent` | `colors.primary` | Primary action color |
+| `border` | `colors.outline` | Standard border |
+| `borderAccent` | `colors.primary` | Highlighted border |
+| `borderMuted` | `colors.outline_variant` | Subtle border |
+| `success` | `dank16.color2` | Green from ANSI palette |
+| `error` | `colors.error` | Material error token |
+| `warning` | `dank16.color3` | Yellow from ANSI palette |
+| `muted` | `colors.on_surface_variant` | Secondary text |
+| `dim` | `colors.outline` | Tertiary text |
+| `text` | `""` | Terminal default |
+| **Backgrounds** | | |
+| `selectedBg` | `colors.surface_container` | Elevated surface |
+| `userMessageBg` | `colors.surface_container_low` | Slight elevation |
+| `toolPendingBg` | `colors.surface_container_lowest` | Minimal elevation |
+| `toolSuccessBg` | `colors.surface_container_lowest` | Minimal elevation |
+| `toolErrorBg` | `colors.error_container` | Material error surface |
+| `customMessageBg` | `colors.surface_container` | Mid elevation |
+| `statusLineBg` | `colors.surface_container_lowest` | Deepest surface |
+| **Markdown** | | |
+| `mdHeading` | `colors.primary` | Accent for headings |
+| `mdLink` | `colors.primary` | Links = primary |
+| `mdLinkUrl` | `colors.outline` | Dimmed URL |
+| `mdCode` | `colors.tertiary` | Distinct from primary |
+| `mdCodeBlock` | `colors.on_surface` | Readable code text |
+| `mdCodeBlockBorder` | `colors.outline_variant` | Subtle fence |
+| `mdQuote` | `colors.on_surface_variant` | Muted quote |
+| `mdQuoteBorder` | `colors.outline_variant` | Subtle border |
+| `mdHr` | `colors.outline_variant` | Subtle rule |
+| `mdListBullet` | `colors.primary` | Accent bullets |
+| **Diffs** | | |
+| `toolDiffAdded` | `dank16.color2` | Green |
+| `toolDiffRemoved` | `dank16.color1` | Red |
+| `toolDiffContext` | `colors.on_surface_variant` | Muted |
+| **Syntax (M3-derived, HSV-shifted for variety)** | | |
+| `syntaxKeyword` | `colors.primary` | Primary = keywords |
+| `syntaxFunction` | `colors.secondary` | Secondary = functions |
+| `syntaxString` | `colors.tertiary` | Tertiary = strings |
+| `syntaxType` | `colors.tertiary` | Tertiary variant = types |
+| `syntaxVariable` | `colors.on_surface` | Default text = vars |
+| `syntaxNumber` | `dank16.color2` | Green-ish = numbers |
+| `syntaxComment` | `colors.outline` | Dimmed = comments |
+| `syntaxOperator` | `colors.on_surface` | Neutral |
+| `syntaxPunctuation` | `colors.on_surface_variant` | Slightly muted |
+| **Thinking levels** | | |
+| `thinkingOff` | `colors.outline_variant` | |
+| `thinkingMinimal` | `colors.outline` | |
+| `thinkingLow` | `colors.secondary` | |
+| `thinkingMedium` | `colors.primary` | |
+| `thinkingHigh` | `colors.tertiary` | |
+| `thinkingXhigh` | `colors.tertiary_container` (or lighter variant) | |
+| **Status line** | | |
+| `statusLineSep` | `colors.outline_variant` | |
+| `statusLineModel` | `colors.tertiary` | |
+| `statusLinePath` | `colors.secondary` | |
+| `statusLineGitClean` | `dank16.color2` | Green |
+| `statusLineGitDirty` | `dank16.color3` | Yellow |
+| `statusLineContext` | `colors.secondary` | |
+| `statusLineSpend` | `colors.secondary` | |
+| `statusLineStaged` | `dank16.color2` | Green |
+| `statusLineDirty` | `dank16.color3` | Yellow |
+| `statusLineUntracked` | `colors.primary` | Blue-ish |
+| `statusLineOutput` | `colors.tertiary` | |
+| `statusLineCost` | `colors.tertiary` | |
+| `statusLineSubagents` | `colors.primary` | |
+| **Modes** | | |
+| `bashMode` | `colors.primary` | |
+| `pythonMode` | `dank16.color3` | Yellow |
+| `thinkingText` | `colors.on_surface_variant` | |
+| **Messages** | | |
+| `userMessageText` | `""` | Terminal default |
+| `customMessageText` | `""` | Terminal default |
+| `customMessageLabel` | `colors.tertiary` | |
+| `toolTitle` | `""` | Terminal default |
+| `toolOutput` | `colors.on_surface_variant` | |
+
+Note: Syntax highlighting with pure M3 tokens gives only 3 hue families (primary/secondary/tertiary). This is less varied than the current VSCode Dark+ palette (7+ distinct hues). The tradeoff is cohesion with the system palette at the cost of some syntax distinguishability. If readability suffers, we can mix in dank16 ANSI colors for more variety in a follow-up.
+
+## Verification
+
+1. Run matugen — check `~/.omp/agent/themes/dankcolors.json` is valid JSON matching OMP schema
+2. Start OMP with theme `dankcolors` — visually confirm colors match system palette
+3. Change wallpaper, re-run matugen — confirm OMP hot-reloads new colors
+4. Toggle dark/light via darkman — confirm matugen regenerates and OMP picks up the mode change
+
+## Notes
+
+- Template uses `{{X.default.hex}}` — resolves to current mode (dark or light), same as ghostty/foot templates
+- OMP theme schema requires ~65 color keys; all will be mapped in the template
+- The `vars` section in OMP themes allows indirection; we can use it to define M3 token aliases and reference them in `colors` for readability
+- `export` section (`pageBg`, `cardBg`, `infoBg`) is optional and used for the stats dashboard — will derive from surface tokens

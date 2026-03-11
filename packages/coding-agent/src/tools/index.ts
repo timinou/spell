@@ -1,5 +1,7 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { $env, logger } from "@oh-my-pi/pi-utils";
+import type { EmacsSession } from "@oh-my-pi/pi-emacs";
+import { startEmacsDaemon } from "@oh-my-pi/pi-emacs";
+import { $env, getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
@@ -90,7 +92,6 @@ export type ContextFileEntry = {
 	depth?: number;
 };
 
-/** Session context for tool factories */
 export interface ToolSession {
 	/** Current working directory */
 	cwd: string;
@@ -158,6 +159,8 @@ export interface ToolSession {
 	getCheckpointState?: () => CheckpointState | undefined;
 	/** Set or clear active checkpoint state. */
 	setCheckpointState?: (state: CheckpointState | null) => void;
+	/** Pre-started Emacs daemon session; null if Emacs is unavailable; undefined if not yet initialized. */
+	emacsSession?: EmacsSession | null;
 }
 
 type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
@@ -252,6 +255,20 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		(requestedTools === undefined || requestedTools.includes("python"));
 	const isTestEnv = Bun.env.BUN_ENV === "test" || Bun.env.NODE_ENV === "test";
 	const skipPythonWarm = isTestEnv || $env.PI_PYTHON_SKIP_CHECK === "1";
+
+	// Fire Emacs daemon startup early so it runs in the background during Python preflight.
+	// Only start if not already initialized on the session (supports pre-wired sessions in tests).
+	const shouldStartEmacs =
+		session.emacsSession === undefined && (requestedTools === undefined || requestedTools.includes("emacs_code"));
+	const emacsPromise = shouldStartEmacs
+		? logger.timeAsync("createTools:emacsStart", () => {
+				const emacsPath = session.settings.get("emacs.path") as string | undefined;
+				const sessionId = session.getSessionId?.() ?? "default";
+				const projectRoot = session.cwd ?? getProjectDir();
+				return startEmacsDaemon(emacsPath, projectRoot, sessionId);
+			})
+		: Promise.resolve(undefined);
+
 	if (shouldCheckPython) {
 		const availability = await logger.timeAsync(
 			"createTools:pythonCheck",
@@ -280,6 +297,12 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 				});
 			}
 		}
+	}
+
+	// Await the Emacs daemon startup (may have already completed during Python preflight).
+	const emacsSessionResult = await emacsPromise;
+	if (emacsSessionResult !== undefined) {
+		session.emacsSession = emacsSessionResult;
 	}
 
 	const effectiveMode = pythonAvailable ? pythonMode : "bash-only";
