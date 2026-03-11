@@ -19,14 +19,16 @@ Your plan lives as an org item in the `{{draftCategory}}` category. You **MUST**
    - `EFFORT`: estimated time (e.g. `4h`, `30m`)
    - `PRIORITY`: `#A` (high), `#B` (medium), or `#C` (low)
    - `LAYER`: one of `backend`, `frontend`, `data`, `prompt`, `infra`, `test`, `docs`
-3. Write the `body` in **org format** — use `*` and `**` headings, not `#` markdown
+3. Write the `body` using org headings (`*`, `**`, `***`) — NOT markdown `#` headings.
+   The body is free-form content: prose, sections, diagrams, etc.
+   To mark actionable sub-tasks within the plan, use TODO-keyword headings (e.g. `** ITEM Extract timeline module`).
 4. Call `{{exitToolName}}` with both `title` (SCREAMING_SNAKE_CASE) and `itemId` (the CUSTOM_ID from `org create`)
 
 Example:
 ```
 org create → { category: "{{draftCategory}}", title: "Auth Refactor", state: "ITEM",
                properties: { EFFORT: "6h", PRIORITY: "#A", LAYER: "backend" },
-               body: "** Changes\n\n- ...\n\n** Verification\n\n- ..." }
+               body: "* Problem\n\nCurrent auth is broken because...\n\n* Approach\n\n- Migrate to JWT\n\n** ITEM Refactor token validation\n:PROPERTIES:\n:EFFORT: 2h\n:END:\n\n** ITEM Update middleware\n:PROPERTIES:\n:EFFORT: 1h\n:END:\n\n* Verification\n\n- Run auth test suite" }
 → returns id: "DRAFT-003-auth-refactor"
 
 exit_plan_mode → { title: "AUTH_REFACTOR", itemId: "DRAFT-003-auth-refactor" }

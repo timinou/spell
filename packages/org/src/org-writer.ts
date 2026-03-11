@@ -1,8 +1,14 @@
 /**
  * Raw org file writer — no Emacs required.
  *
- * Writes well-formed org headings with PROPERTIES drawers. This handles the
- * common create/update paths that do not need org-element AST intelligence.
+ * Two item representations:
+ *
+ *   1. **File-level items** — metadata lives in `#+KEY: value` lines at the top
+ *      of the file. The body is free-form content (headings, prose, etc.) below
+ *      the frontmatter block. Used when creating a new file for a single item.
+ *
+ *   2. **Heading-level items** — `* STATE title` with a `:PROPERTIES:` drawer.
+ *      Used for sub-tasks within a file or when appending to an existing file.
  *
  * All file mutations go through atomic write (write to temp, rename). This
  * avoids partial writes if the process is killed mid-write.
@@ -14,8 +20,34 @@ import { DEFAULT_TODO_KEYWORDS } from "./schema/defaults";
 import type { OrgCreateParams } from "./types";
 
 // =============================================================================
-// Heading serialization
+// Serialization helpers
 // =============================================================================
+
+/**
+ * Serialize file-level `#+KEY: value` frontmatter for a document item.
+ *
+ * The resulting file has metadata at the top and free-form body content below.
+ * Headings within the body can optionally carry TODO keywords to mark
+ * actionable sub-tasks.
+ */
+export function serializeFileItem(title: string, state: string, props: Record<string, string>, body?: string): string {
+	const fileTitle = title.replace(/[^\w\s-]/g, "").trim();
+	const lines: string[] = [];
+
+	lines.push(`#+TITLE: ${fileTitle}`);
+	lines.push(`#+STATE: ${state}`);
+	for (const [key, value] of Object.entries(props)) {
+		lines.push(`#+${key}: ${value}`);
+	}
+
+	if (body) {
+		lines.push("");
+		lines.push(body.trimEnd());
+	}
+
+	lines.push("");
+	return lines.join("\n");
+}
 
 /**
  * Serialize an org heading with a PROPERTIES drawer.
@@ -52,21 +84,15 @@ export function serializeHeading(
 	return lines.join("\n");
 }
 
-/**
- * Build the content for a new org file containing a single top-level heading.
- */
-export function buildNewFile(title: string, heading: string): string {
-	const fileTitle = title.replace(/[^\w\s-]/g, "").trim();
-	return `#+TITLE: ${fileTitle}\n\n${heading}`;
-}
-
 // =============================================================================
 // File-level operations
 // =============================================================================
 
 /**
- * Append a new heading to an existing org file, or create the file if it does
- * not exist.
+ * Create or append an item to an org file.
+ *
+ * - **New file**: writes file-level `#+` properties (document item).
+ * - **Existing file**: appends a heading-level item (sub-task).
  *
  * Returns the absolute path of the written file.
  */
@@ -80,29 +106,28 @@ export async function appendItemToFile(
 		...params.properties,
 	};
 
-	const heading = serializeHeading(1, state, params.title, props, params.body);
-
 	let existing: string;
 	try {
 		existing = await Bun.file(filePath).text();
 	} catch {
-		existing = buildNewFile(params.title, heading);
-		await Bun.write(filePath, existing);
+		// New file — use file-level properties
+		const content = serializeFileItem(params.title, state, props, params.body);
+		await Bun.write(filePath, content);
 		return filePath;
 	}
 
-	// Append to existing file with separator
+	// Existing file — append as heading-level item
+	const heading = serializeHeading(1, state, params.title, props, params.body);
 	const separator = existing.endsWith("\n") ? "" : "\n";
 	await Bun.write(filePath, existing + separator + heading);
 	return filePath;
 }
 
 /**
- * Update the TODO state of an item identified by CUSTOM_ID in a file.
+ * Update the state of an item identified by CUSTOM_ID in a file.
  *
- * Strategy: regex-based line replacement targeting the heading that has the
- * CUSTOM_ID in its PROPERTIES drawer. When Emacs is available the caller
- * should prefer the Emacs-backed path which uses org-element for accuracy.
+ * Handles both file-level items (`#+STATE:` / `#+CUSTOM_ID:`) and
+ * heading-level items (`* STATE title` with `:PROPERTIES:` drawer).
  *
  * Returns true if the item was found and updated, false otherwise.
  */
@@ -116,6 +141,58 @@ export async function updateItemStateInFile(
 	const content = await Bun.file(filePath).text();
 	const lines = content.split("\n");
 
+	// Try file-level item first: #+CUSTOM_ID: matches AND #+STATE: exists
+	if (tryUpdateFileLevelState(lines, customId, newState, note)) {
+		await Bun.write(filePath, lines.join("\n"));
+		return true;
+	}
+
+	// Fall back to heading-level item
+	if (tryUpdateHeadingLevelState(lines, customId, newState, todoKeywords, note)) {
+		await Bun.write(filePath, lines.join("\n"));
+		return true;
+	}
+
+	return false;
+}
+
+function tryUpdateFileLevelState(lines: string[], customId: string, newState: string, note?: string): boolean {
+	let hasCustomId = false;
+	let stateLineIdx = -1;
+	let lastFrontmatterIdx = -1;
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (!line.startsWith("#+")) break;
+
+		if (line.startsWith("#+CUSTOM_ID:") && line.slice("#+CUSTOM_ID:".length).trim() === customId) {
+			hasCustomId = true;
+		}
+		if (line.startsWith("#+STATE:")) {
+			stateLineIdx = i;
+		}
+		lastFrontmatterIdx = i;
+	}
+
+	if (!hasCustomId || stateLineIdx === -1) return false;
+
+	lines[stateLineIdx] = `#+STATE: ${newState}`;
+
+	if (note) {
+		const insertIdx = lastFrontmatterIdx + 1;
+		lines.splice(insertIdx, 0, "", `NOTE [${new Date().toISOString().slice(0, 10)}]: ${note}`);
+	}
+
+	return true;
+}
+
+function tryUpdateHeadingLevelState(
+	lines: string[],
+	customId: string,
+	newState: string,
+	todoKeywords: string[],
+	note?: string,
+): boolean {
 	// Find the PROPERTIES drawer that contains our CUSTOM_ID
 	let headingLineIdx = -1;
 	for (let i = 0; i < lines.length; i++) {
@@ -135,32 +212,29 @@ export async function updateItemStateInFile(
 	if (headingLineIdx === -1) return false;
 
 	const headingLine = lines[headingLineIdx];
-	// Replace the TODO keyword on the heading line
 	const keywordsPattern = todoKeywords.join("|");
 	const replaced = headingLine.replace(new RegExp(`^(\\*+)\\s+(${keywordsPattern})\\s+`), `$1 ${newState} `);
 
-	if (replaced === headingLine) return false; // no change made
+	if (replaced === headingLine) return false;
 
 	lines[headingLineIdx] = replaced;
 
 	if (note) {
-		// Find :END: after the heading (end of PROPERTIES drawer)
 		let endIdx = headingLineIdx + 1;
 		while (endIdx < lines.length && lines[endIdx].trim() !== ":END:") {
 			endIdx++;
 		}
-		// Insert note after the drawer
-		const noteLines = [``, `  NOTE [${new Date().toISOString().slice(0, 10)}]: ${note}`];
-		lines.splice(endIdx + 1, 0, ...noteLines);
+		lines.splice(endIdx + 1, 0, ``, `  NOTE [${new Date().toISOString().slice(0, 10)}]: ${note}`);
 	}
 
-	await Bun.write(filePath, lines.join("\n"));
 	return true;
 }
 
 /**
- * Set or update a single property in the PROPERTIES drawer of the item with
- * the given CUSTOM_ID.
+ * Set or update a property on an item identified by CUSTOM_ID.
+ *
+ * Handles both file-level items (`#+KEY: value`) and heading-level items
+ * (`:KEY: value` inside `:PROPERTIES:` drawer).
  *
  * Returns true on success, false if item not found.
  */
@@ -173,12 +247,59 @@ export async function setPropertyInFile(
 	const content = await Bun.file(filePath).text();
 	const lines = content.split("\n");
 
-	// Find the drawer for this CUSTOM_ID
+	// Try file-level item first
+	if (trySetFileLevelProperty(lines, customId, property, value)) {
+		await Bun.write(filePath, lines.join("\n"));
+		return true;
+	}
+
+	// Fall back to heading-level item
+	if (trySetHeadingLevelProperty(lines, customId, property, value)) {
+		await Bun.write(filePath, lines.join("\n"));
+		return true;
+	}
+
+	return false;
+}
+
+function trySetFileLevelProperty(lines: string[], customId: string, property: string, value: string): boolean {
+	let hasCustomId = false;
+	let lastFrontmatterIdx = -1;
+	let existingPropIdx = -1;
+	const prefix = `#+${property}:`;
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (!line.startsWith("#+")) break;
+
+		if (line.startsWith("#+CUSTOM_ID:") && line.slice("#+CUSTOM_ID:".length).trim() === customId) {
+			hasCustomId = true;
+		}
+		if (line.startsWith(prefix)) {
+			existingPropIdx = i;
+		}
+		lastFrontmatterIdx = i;
+	}
+
+	if (!hasCustomId) return false;
+
+	const propLine = `#+${property}: ${value}`;
+	if (existingPropIdx !== -1) {
+		lines[existingPropIdx] = propLine;
+	} else {
+		// Insert after the last frontmatter line
+		lines.splice(lastFrontmatterIdx + 1, 0, propLine);
+	}
+
+	return true;
+}
+
+function trySetHeadingLevelProperty(lines: string[], customId: string, property: string, value: string): boolean {
 	let drawerStart = -1;
 	let drawerEnd = -1;
+
 	for (let i = 0; i < lines.length; i++) {
 		if (lines[i].trim() === `:CUSTOM_ID: ${customId}`) {
-			// Walk backwards to :PROPERTIES:
 			for (let j = i - 1; j >= 0; j--) {
 				if (lines[j].trim() === ":PROPERTIES:") {
 					drawerStart = j;
@@ -186,7 +307,6 @@ export async function setPropertyInFile(
 				}
 				if (lines[j].startsWith("*")) break;
 			}
-			// Walk forward to :END:
 			for (let j = i + 1; j < lines.length; j++) {
 				if (lines[j].trim() === ":END:") {
 					drawerEnd = j;
@@ -205,11 +325,9 @@ export async function setPropertyInFile(
 	if (existingIdx !== -1) {
 		lines[drawerStart + existingIdx] = propLine;
 	} else {
-		// Insert before :END:
 		lines.splice(drawerEnd, 0, propLine);
 	}
 
-	await Bun.write(filePath, lines.join("\n"));
 	return true;
 }
 
@@ -262,12 +380,29 @@ Example: ${prefix}-001-implement-feature
 | DONE    | Complete                           |
 | BLOCKED | Waiting on external dependency     |
 
-** Required Properties
+** File Structure
 
-Every task heading MUST have:
-- CUSTOM_ID: Unique task ID (e.g. ${prefix}-001-example)
-- EFFORT: Time estimate (e.g. 2h, 30m)
-- PRIORITY: #A (high), #B (medium), #C (low)
+Each item is one file. File-level properties define the item:
+
+#+TITLE: Example Task
+#+STATE: ITEM
+#+CUSTOM_ID: ${prefix}-001-example-task
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: backend
+
+Description of what needs to be done and why.
+
+* Sub-section (free-form heading)
+Prose, diagrams, notes — whatever the item needs.
+
+** ITEM ${prefix}-002-sub-task
+:PROPERTIES:
+:CUSTOM_ID: ${prefix}-002-sub-task
+:EFFORT: 1h
+:END:
+
+Headings with TODO keywords are actionable sub-tasks.
 
 ** Recommended Properties
 
@@ -283,20 +418,5 @@ Every task heading MUST have:
 - FEATURE_FLAG: Associated feature flag
 - RESEARCH_REF: Link to research or spike
 - AGENT: Override default agent for this item
-
-** Example Item
-
-* ITEM ${prefix}-001-example-task
-:PROPERTIES:
-:CUSTOM_ID: ${prefix}-001-example-task
-:EFFORT: 2h
-:PRIORITY: #B
-:LAYER: backend
-:END:
-
-Description of what needs to be done and why.
-
-- Specific step 1
-- Specific step 2
 `;
 }

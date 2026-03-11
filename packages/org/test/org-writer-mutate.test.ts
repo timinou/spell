@@ -230,8 +230,9 @@ describe("appendItemToFile", () => {
 		);
 
 		const content = await readFile(p);
-		expect(content).toContain("* ITEM New task");
-		expect(content).toContain(":CUSTOM_ID: PROJ-001-new-task");
+		expect(content).toContain("#+STATE: ITEM");
+		expect(content).toContain("#+TITLE: New task");
+		expect(content).toContain("#+CUSTOM_ID: PROJ-001-new-task");
 	});
 
 	test("appends to existing file", async () => {
@@ -274,10 +275,10 @@ describe("appendItemToFile", () => {
 		);
 
 		const content = await readFile(p);
-		expect(content).toContain(":EFFORT: 4h");
-		expect(content).toContain(":PRIORITY: #A");
-		expect(content).toContain(":LAYER: backend");
-		expect(content).toContain("* DOING Task with props");
+		expect(content).toContain("#+EFFORT: 4h");
+		expect(content).toContain("#+PRIORITY: #A");
+		expect(content).toContain("#+LAYER: backend");
+		expect(content).toContain("#+STATE: DOING");
 	});
 
 	test("includes body text when provided", async () => {
@@ -305,6 +306,6 @@ describe("appendItemToFile", () => {
 		await appendItemToFile(p, { title: "Auth refactor", category: "projects", id }, "ITEM");
 
 		const content = await readFile(p);
-		expect(content).toContain(`:CUSTOM_ID: ${id}`);
+		expect(content).toContain(`#+CUSTOM_ID: ${id}`);
 	});
 });
