@@ -1,0 +1,80 @@
+#+TITLE: ENRICH_OUTLINE_ENTRY
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-enrich-outline-entry
+
+* Problem
+
+=OutlineEntry= currently returns only ={ name, type, line, children? }=. Missing:
+- =end_line= — can't determine declaration span/size
+- =column= — can't pinpoint the name token for LSP goto-definition
+- =exported= — can't distinguish exported vs module-private
+- =signature= — know a function exists but not its params/return type without a follow-up read
+
+* Approach
+
+Enrich both the elisp extraction (=pi-outline.el=) and the TypeScript type (=types.ts=). All data is available from treesit nodes with no new dependencies.
+
+** Strategy
+
+All new fields are extracted from the same treesit node already visited in =pi-outline--entry= and =pi-outline--class-members=:
+- =end_line=: =(line-number-at-pos (treesit-node-end node))=
+- =column=: =(current-column)= at the name node's start position (1-indexed)
+- =exported=: check if parent is =export_statement= or node itself is =export_statement=
+- =signature=: reuse =pi-treesit-stub-body= with empty stub (just the header text before the body)
+
+* Files to modify
+
+** =packages/emacs/src/types.ts= — OutlineEntry interface
+Add optional fields:
+#+begin_src typescript
+export interface OutlineEntry {
+  name: string;
+  type: string;
+  line: number;
+  end_line?: number;
+  column?: number;
+  exported?: boolean;
+  signature?: string;
+  children?: OutlineEntry[];
+}
+#+end_src
+
+All new fields are optional so existing consumers remain compatible.
+
+** =packages/emacs/elisp/pi-outline.el= — extraction logic
+
+*** =pi-outline--node-end-line= helper
+Returns 1-indexed end line: =(line-number-at-pos (treesit-node-end node))=.
+
+*** =pi-outline--node-column= helper
+Returns 1-indexed column of the name node start.
+
+*** =pi-outline--node-exported-p= helper
+Check if the treesit node type is =export_statement=, or if walking up one parent yields =export_statement=. For class members, always nil.
+
+*** =pi-outline--node-signature= helper
+Use =pi-treesit-stub-body node ""= to get header text (everything before the body). Trim trailing whitespace. For nodes without a body (type aliases, interfaces, const declarations), use the full node text truncated at a reasonable length (200 chars).
+
+*** Update =pi-outline--entry=
+Add =end_line=, =column=, =exported=, =signature= to the alist.
+
+*** Update =pi-outline--class-members=
+Add =end_line=, =column=, =signature= to member entries. No =exported= for members (always inherited from class).
+
+** =packages/emacs/elisp/pi-treesit.el= — no changes needed
+=pi-treesit-stub-body= already supports getting header-only text. =pi-treesit-declaration-name= already returns the name node text, but we need the name /node/ for column — adjust =pi-outline.el= to call =treesit-node-child-by-field-name= directly (it already does this for class members; replicate for top-level).
+
+* Edge cases
+
+- Nodes without a body (type aliases, const without arrow function): =signature= = full text, capped at 200 chars
+- Nodes without a name node (unnamed exports, expression statements): =column= = nil
+- =export default class { ... }=: =exported= = true, =name= = nil (already filtered out by existing =when name= guard)
+- Rust =impl_item=: type field used for name, column from type node position
+- Python decorated definitions: =exported= is always nil (Python has no export keyword); =signature= from the inner definition
+- Go methods: signature includes receiver
+
+* Verification
+
+- =bun check:ts= passes (type changes are backward-compatible, all optional)
+- Manual test: =emacs_code outline file=packages/emacs/src/types.ts= should return entries with all new fields populated
+- Existing outline consumers remain unaffected (fields are additive)

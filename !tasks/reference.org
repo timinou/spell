@@ -1,0 +1,59 @@
+#+TITLE: Reference
+#+DESCRIPTION: Schema contract for this org directory.
+#+TODO: ITEM | DOING | REVIEW | DONE | BLOCKED
+
+* Schema
+
+** Task ID Format
+
+Task IDs follow the pattern: PLAN-NNN-kebab-title
+Example: PLAN-001-implement-feature
+
+** TODO Keywords
+
+| Keyword | Meaning                            |
+|---------+------------------------------------|
+| ITEM    | Not started                        |
+| DOING   | Actively being worked on           |
+| REVIEW  | Work done, awaiting review         |
+| DONE    | Complete                           |
+| BLOCKED | Waiting on external dependency     |
+
+** File Structure
+
+Each item is one file. File-level properties define the item:
+
+#+TITLE: Example Task
+#+STATE: ITEM
+#+CUSTOM_ID: PLAN-001-example-task
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: backend
+
+Description of what needs to be done and why.
+
+* Sub-section (free-form heading)
+Prose, diagrams, notes — whatever the item needs.
+
+** ITEM PLAN-002-sub-task
+:PROPERTIES:
+:CUSTOM_ID: PLAN-002-sub-task
+:EFFORT: 1h
+:END:
+
+Headings with TODO keywords are actionable sub-tasks.
+
+** Recommended Properties
+
+- DEPENDS: IDs this task depends on (space-separated)
+- BLOCKS: IDs this task blocks
+- FILES: Relevant files (paths)
+- TEST_PLAN: How to verify completion
+- LAYER: backend | frontend | data | prompt | infra | test | docs
+
+** Optional Properties
+
+- BLAST_RADIUS: Scope of impact
+- FEATURE_FLAG: Associated feature flag
+- RESEARCH_REF: Link to research or spike
+- AGENT: Override default agent for this item

@@ -1,0 +1,47 @@
+#+TITLE: qml listen hangs indefinitely when window is in error state
+#+STATE: DRAFT
+#+CUSTOM_ID: DRAFT-002-qml-listen-hangs-on-error-state-window
+#+PRIORITY: #A
+#+LAYER: qml-tool
+
+* Problem
+
+When a QML window fails to launch (=state: error= returned from =launch=), a
+subsequent =listen= call on that window ID blocks indefinitely. There is no
+timeout, no error event, and no way for the agent to recover without manual
+intervention.
+
+Concretely: a =launch= that returns =state: error= and a =listen= that never
+returns is a silent hang. The agent has no path out.
+
+* Reproduction
+
+1. Write a QML file that imports a module that fails to load at runtime (e.g.
+   =QtWebEngine= when =libicui18n.so.76= is missing but ICU 78 is installed).
+2. Call =qml launch= — returns =state: error=.
+3. Call =qml listen= on the same window ID.
+4. Observe: =listen= blocks forever.
+
+The underlying QML error (visible when running =qml file.qml= directly):
+
+#+begin_example
+plugin cannot be loaded for module "QtWebEngine":
+Cannot load library .../libqtwebengineplugin.so:
+(libicui18n.so.76: cannot open shared object file: No such file or directory)
+#+end_example
+
+* Expected Behavior
+
+- =listen= on a window in =error= state should return immediately with a
+  structured error event, e.g.:
+  #+begin_src json
+  { "name": "error", "reason": "window failed to launch" }
+  #+end_src
+- Alternatively, =launch= itself should surface the QML runtime's stderr so the
+  failure reason is visible before the agent proceeds to =listen=.
+
+* Impact
+
+Agent cannot self-recover. The only escape is a timeout at a higher level or
+manual cancellation. Any workflow that hits a QML module loading failure on a
+given machine silently stalls.
