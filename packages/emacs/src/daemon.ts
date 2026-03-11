@@ -70,11 +70,15 @@ const HEALTH_INTERVAL_MS = 5_000;
 // tree-sitter grammars rather than hanging.
 const FIRST_RUN_WARN_MS = 8_000;
 
-/** Stable hash key derived from project root + session ID. */
-function sessionKey(projectRoot: string, sessionId: string): string {
-	// Bun.hash returns a 64-bit unsigned integer (as a number or bigint depending on runtime).
-	// We stringify it and take the first 12 hex chars.
-	const raw = Bun.hash(projectRoot + sessionId);
+/**
+ * Stable hash key derived from projectRoot only.
+ *
+ * The daemon is shared across all Pi sessions for the same project — using
+ * a per-session key would spawn a redundant daemon (and redundant grammar
+ * compilation) every time `omp` starts.
+ */
+function sessionKey(projectRoot: string, _sessionId: string): string {
+	const raw = Bun.hash(projectRoot);
 	return BigInt(raw).toString(16).slice(0, 12).padStart(12, "0");
 }
 
@@ -94,6 +98,83 @@ async function socketExists(p: string): Promise<boolean> {
 		// Permission errors or other unexpected errors: treat as absent to avoid hanging.
 		return false;
 	}
+}
+
+const PROBE_TIMEOUT_MS = 2_000;
+
+/**
+ * Attempt a minimal JSON-RPC handshake over the Unix socket to verify the
+ * daemon is actually alive and accepting connections. Returns true if the
+ * daemon responds within PROBE_TIMEOUT_MS.
+ */
+async function probeSocket(sock: string): Promise<boolean> {
+	const socat = Bun.which("socat");
+	if (!socat) return false;
+
+	try {
+		// Send a minimal tools/list request. We don't care about the response
+		// content — any valid JSON-RPC reply means the daemon is alive.
+		const req = JSON.stringify({ jsonrpc: "2.0", id: 0, method: "tools/list", params: {} });
+		const proc = Bun.spawn([socat, "STDIO", `UNIX-CONNECT:${sock}`], {
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		proc.stdin.write(`${req}\n`);
+		proc.stdin.end();
+
+		const exited = await Promise.race([proc.exited, Bun.sleep(PROBE_TIMEOUT_MS).then(() => null as number | null)]);
+		if (exited === null) {
+			proc.kill();
+			return false;
+		}
+		return exited === 0;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Wrap an already-running daemon socket as an EmacsSession without launching
+ * a new process. Sets up the same health-check timer as a fresh launch.
+ */
+function wrapExistingSocket(sock: string, key: string, daemonName: string): EmacsSession {
+	let alive = true;
+	const healthTimer = setInterval(async () => {
+		if (!(await socketExists(sock))) {
+			logger.warn("[emacs-daemon] Socket disappeared — daemon may have crashed", { daemonName, sock });
+			alive = false;
+			sessions.delete(key);
+			clearInterval(healthTimer);
+		}
+	}, HEALTH_INTERVAL_MS);
+	healthTimer.unref();
+
+	return {
+		socketPath: sock,
+		isAlive: () => alive,
+		async stop() {
+			clearInterval(healthTimer);
+			alive = false;
+			sessions.delete(key);
+			logger.debug("[emacs-daemon] Stopping daemon", { daemonName });
+			try {
+				await Bun.$`emacsclient --socket-name=${daemonName} --eval "(kill-emacs)"`.quiet().nothrow();
+			} catch (err) {
+				logger.warn("[emacs-daemon] emacsclient kill failed", {
+					daemonName,
+					err: err instanceof Error ? err.message : String(err),
+				});
+			}
+			try {
+				await fs.unlink(sock);
+			} catch (err) {
+				if (!isEnoent(err)) {
+					logger.warn("[emacs-daemon] Could not remove socket after stop", { sock });
+				}
+			}
+		},
+	};
 }
 
 /** Poll until the socket appears or the deadline passes. */
@@ -129,12 +210,21 @@ async function launchDaemon(
 	const daemonName = `omp-emacs-${key}`;
 	const sock = socketPath(key);
 
-	// Remove stale socket file if it was left by a previous crashed daemon.
-	try {
-		await fs.unlink(sock);
-	} catch (err) {
-		if (!isEnoent(err)) {
-			logger.warn("[emacs-daemon] Could not remove stale socket", { sock, err: String(err) });
+	// Check whether a daemon from a previous omp session left a live socket.
+	// If so, skip launching entirely — reuse the existing daemon.
+	if (await socketExists(sock)) {
+		if (await probeSocket(sock)) {
+			logger.debug("[emacs-daemon] Reusing existing daemon", { daemonName, sock });
+			return wrapExistingSocket(sock, key, daemonName);
+		}
+		// Socket exists but daemon is dead — clean up.
+		logger.debug("[emacs-daemon] Removing stale socket from previous session", { sock });
+		try {
+			await fs.unlink(sock);
+		} catch (err) {
+			if (!isEnoent(err)) {
+				logger.warn("[emacs-daemon] Could not remove stale socket", { sock, err: String(err) });
+			}
 		}
 	}
 
