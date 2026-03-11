@@ -12,7 +12,7 @@ ApplicationWindow {
     minimumWidth: 460
     maximumWidth: 460
     // height is driven by the content column; give it a sensible default
-    height: Math.max(220, body.implicitHeight + 48)
+    height: body.implicitHeight + root.spXL * 2
     visible: true
     title: "Spell"
     color: clrBg
@@ -79,9 +79,9 @@ ApplicationWindow {
         ColumnLayout {
             id: body
             anchors {
-                left:  parent.left
-                right: parent.right
-                top:   parent.top
+                left:   parent.left
+                right:  parent.right
+                top:    parent.top
                 margins: root.spXL
             }
             spacing: root.spL
