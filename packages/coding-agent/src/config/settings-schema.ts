@@ -1247,6 +1247,22 @@ export const SETTINGS_SCHEMA = {
 			submenu: true,
 		},
 	},
+	// ─────────────────────────────────────────────────────────────────────────
+	// Org system
+	// ─────────────────────────────────────────────────────────────────────────
+	"org.enabled": {
+		type: "boolean",
+		default: true,
+		ui: { tab: "tools", label: "Enable Org", description: "Enable the org tool for project management" },
+	},
+	"org.emacsPath": {
+		type: "string",
+		default: undefined,
+	},
+	"org.todoKeywords": {
+		type: "array",
+		default: ["ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"],
+	},
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════════════

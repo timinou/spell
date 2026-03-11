@@ -29,6 +29,7 @@ import { FindTool } from "./find";
 import { GrepTool } from "./grep";
 import { InspectImageTool } from "./inspect-image";
 import { NotebookTool } from "./notebook";
+import { OrgTool } from "./org";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { PythonTool } from "./python";
 import { QmlTool } from "./qml";
@@ -182,6 +183,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	cancel_job: CancelJobTool.createIf,
 	await: AwaitTool.createIf,
 	todo_write: s => new TodoWriteTool(s),
+	org: s => (s.settings.get("org.enabled") ? new OrgTool(s) : null),
 	fetch: s => new FetchTool(s),
 	web_search: s => new SearchTool(s),
 	write: s => new WriteTool(s),

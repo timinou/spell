@@ -1,7 +1,9 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { StringEnum } from "@oh-my-pi/pi-ai";
+import { writeJournal } from "@oh-my-pi/pi-org";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
+import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import chalk from "chalk";
 import { renderPromptTemplate } from "../config/prompt-templates";
@@ -343,6 +345,11 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 		const { file: updated, errors } = applyOps(current, params.ops);
 		this.session.setTodoPhases?.(updated.phases);
 		const storage = this.session.getSessionFile() ? "session" : "memory";
+
+		// Best-effort journal write to .local/!journal/todos/
+		const sessionId = this.session.getSessionId?.() ?? "default";
+		const projectRoot = this.session.cwd ?? getProjectDir();
+		void writeJournal(projectRoot, sessionId, updated.phases);
 
 		return {
 			content: [{ type: "text", text: formatSummary(updated.phases, errors) }],
