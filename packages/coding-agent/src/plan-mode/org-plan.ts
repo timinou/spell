@@ -49,8 +49,6 @@ export async function finalizePlanDraft(
 	draft: OrgPlanDraft,
 	planTitle: string,
 	planContent: string,
-	/** Task description to use as the plans item body. Falls back to planContent when absent. */
-	taskDescription?: string,
 ): Promise<string | null> {
 	if (!settings.get("org.enabled")) return null;
 
@@ -76,7 +74,7 @@ export async function finalizePlanDraft(
 	const activeFilePath = path.join(activeCat.absPath, `${activeId}.org`);
 	await appendItemToFile(
 		activeFilePath,
-		{ title: planTitle, category: activeCat.name, id: activeId, body: taskDescription ?? planContent },
+		{ title: planTitle, category: activeCat.name, id: activeId, body: planContent },
 		activeState,
 	);
 

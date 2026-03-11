@@ -1886,9 +1886,6 @@ export class AgentSession {
 			iterative: state.workflow === "iterative",
 			orgItemId: state.orgItemId ?? "",
 			orgEnabled,
-			// True when the agent is responsible for creating the org draft via `org create`.
-			// False when the draft is pre-created by the system (file-backed plan writing).
-			orgCreateMode: orgEnabled && !state.orgItemId,
 			draftCategory,
 		});
 
