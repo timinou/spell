@@ -792,7 +792,12 @@ export class Agent {
 					}
 
 					case "turn_end":
-						if (event.message.role === "assistant" && (event.message as any).errorMessage) {
+						// Only surface errorMessage as state.error for real errors, not intentional aborts.
+						if (
+							event.message.role === "assistant" &&
+							(event.message as any).errorMessage &&
+							!this.#abortController?.signal.aborted
+						) {
 							this.#state.error = (event.message as any).errorMessage;
 						}
 						break;
@@ -844,7 +849,11 @@ export class Agent {
 			} as AgentMessage;
 
 			this.appendMessage(errorMsg);
-			this.#state.error = err?.message || String(err);
+			// Intentional aborts are not errors — don't surface them in state so
+			// consumers (e.g. the niri overlay) don't flash an error badge.
+			if (!this.#abortController?.signal.aborted) {
+				this.#state.error = err?.message || String(err);
+			}
 			this.#emit({ type: "agent_end", messages: [errorMsg] });
 		} finally {
 			this.#state.isStreaming = false;
