@@ -7,7 +7,7 @@
  */
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { EmacsSession, OrgConfig } from "@oh-my-pi/pi-org";
+import type { EmacsSession, OrgConfig, OrgSessionContext } from "@oh-my-pi/pi-org";
 import { createOrgTool, DEFAULT_ORG_CONFIG, detectEmacs, startEmacsSession } from "@oh-my-pi/pi-org";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
@@ -71,7 +71,9 @@ export class OrgTool implements AgentTool<typeof orgSchema> {
 		const emacsPath = emacsPathSetting || undefined;
 		const sessionId = session.getSessionId?.() ?? "default";
 
-		this.#inner = createOrgTool(projectRoot, config, makeEmacsFactory(emacsPath, projectRoot, sessionId));
+		this.#inner = createOrgTool(projectRoot, config, makeEmacsFactory(emacsPath, projectRoot, sessionId), () =>
+			buildSessionContext(session),
+		);
 		this.description = this.#inner.description;
 	}
 
@@ -147,5 +149,17 @@ function loadOrgConfig(session: ToolSession): OrgConfig {
 	return {
 		...DEFAULT_ORG_CONFIG,
 		todoKeywords: todoKeywords && todoKeywords.length > 0 ? todoKeywords : [...DEFAULT_ORG_CONFIG.todoKeywords],
+	};
+}
+
+// =============================================================================
+// Session context builder
+// =============================================================================
+
+function buildSessionContext(session: ToolSession): OrgSessionContext {
+	return {
+		sessionId: session.getSessionId?.() ?? undefined,
+		transcriptPath: session.getSessionFile() ?? undefined,
+		systemPrompt: session.getSystemPrompt?.() ?? undefined,
 	};
 }

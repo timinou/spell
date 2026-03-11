@@ -120,6 +120,8 @@ export interface ToolSession {
 	getSessionFile: () => string | null;
 	/** Get session ID */
 	getSessionId?: () => string | null;
+	/** Get the active agent system prompt (empty string before agent starts). */
+	getSystemPrompt?: () => string;
 	/** Get artifacts directory for artifact:// URLs */
 	getArtifactsDir?: () => string | null;
 	/** Allocate a new artifact path and ID for session-scoped truncated output. */
