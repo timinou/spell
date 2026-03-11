@@ -206,10 +206,16 @@ describe("NiriOverviewController", () => {
 			["running when session is streaming", { isStreaming: true }, "running"],
 			["error when session has error", { error: "oops" }, "error"],
 			["needs_input when onInputCallback is set", { hasInputCallback: true }, "needs_input"],
-			// needs_input takes precedence over running
-			["needs_input over running", { hasInputCallback: true, isStreaming: true }, "needs_input"],
-			// needs_input takes precedence over error
-			["needs_input over error", { hasInputCallback: true, error: "oops" }, "needs_input"],
+			// running takes precedence over needs_input: if the session is streaming, it wins
+			// even if onInputCallback is set. This covers the exit_plan_mode race: abort()
+			// causes prompt() to return, the main loop calls getUserInput() (sets the
+			// callback), then the tool handler fires session.prompt(syntheticPrompt) —
+			// isStreaming becomes true again while the callback is still set.
+			["running over needs_input", { hasInputCallback: true, isStreaming: true }, "running"],
+			// needs_input only applies when NOT streaming
+			["needs_input when not streaming", { hasInputCallback: true, isStreaming: false }, "needs_input"],
+			// error takes precedence over needs_input
+			["error over needs_input", { hasInputCallback: true, error: "oops" }, "error"],
 			// error takes precedence over running
 			["error over running", { error: "oops", isStreaming: true }, "error"],
 		];

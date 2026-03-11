@@ -163,9 +163,13 @@ export class NiriOverviewController {
 
 	#deriveStatus(): AgentStatus {
 		const ctx = this.#context;
-		if (ctx.onInputCallback !== undefined) return "needs_input";
+		// Streaming takes priority over onInputCallback. The callback can be set
+		// concurrently while the session is already streaming again (exit_plan_mode
+		// race: abort() unblocks the main loop → getUserInput() sets the callback,
+		// then the tool handler fires session.prompt() for the synthetic execution).
 		if (ctx.session.state.error) return "error";
 		if (ctx.session.isStreaming) return "running";
+		if (ctx.onInputCallback !== undefined) return "needs_input";
 		return "idle";
 	}
 }
