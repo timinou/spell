@@ -27,7 +27,7 @@
 		"bench:gen-fixtures": "bun --cwd=packages/react-edit-benchmark run src/generate.ts --react-dir /tmp/react-source --count-per-type 8",
 		"bench:edit": "bun --cwd=packages/react-edit-benchmark run start",
 		"prepublishOnly": "bun run check",
-		"prepare": "husky",
+		"prepare": "husky && bun --cwd=packages/coding-agent run generate-docs-index",
 		"publish": "bun run prepublishOnly && npm publish -ws --access public",
 		"publish:dry": "bun run prepublishOnly && npm publish -ws --access public --dry-run",
 		"release": "bun scripts/release.ts",
