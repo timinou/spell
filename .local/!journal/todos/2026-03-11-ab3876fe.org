@@ -1,0 +1,29 @@
+#+TITLE: Session 148ed81038c96fc3 Todos
+#+DATE: 2026-03-11
+#+TODO: ITEM DOING | DONE
+
+* Revert+Implement
+
+** DONE Revert writeCategory; add writeInitialPrompt + SessionContext to org package (types, categories, org-writer, tool)
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Wire ToolSession.getSystemPrompt in tools/index.ts + sdk.ts, update OrgTool adapter
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Write tests for new behavior
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Run check:ts, run tests, commit
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

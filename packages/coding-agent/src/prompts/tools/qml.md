@@ -2,9 +2,8 @@ Launch Qt 6 QML desktop windows for rich domain-specific UI interactions.
 
 <actions>
 - `write`: Write a `.qml` file to disk (path + content). Use absolute paths under `/tmp/omp-qml/`. Returns confirmation.
-- `launch`: Spawn a QML window from a file path. Optional: `title`, `width`, `height`, `props` (JSON object passed as `bridge.props` in QML). Returns window state and any events queued before return.
-- `listen`: Block until the window emits one or more events (push-based, no polling, 10-min timeout). Returns all events received. Re-call immediately after handling to keep the listener alive.
-- `send_message`: Send a JSON payload to a running window (`bridge.messageReceived` signal fires in QML). Does not wait for events — use `listen` for that.
+- `launch`: Spawn a QML window from a file path. Optional: `title`, `width`, `height`, `props` (JSON object passed as `bridge.props` in QML). Events from the window are delivered automatically as follow-up turns — no manual listen loop required.
+- `send_message`: Send a JSON payload to a running window (`bridge.messageReceived` signal fires in QML).
 - `close`: Close a window by id.
 - `list_windows`: List all tracked windows with their state.
 </actions>
@@ -36,11 +35,10 @@ ApplicationWindow {
 
 <workflow>
 1. `write` the QML file
-2. `launch` with the file path
-3. **Immediately** call `listen` — do not yield to the user first.
-4. Handle each event batch (generate images, send replies via `send_message`, etc.)
-5. Re-call `listen` immediately after handling — there must always be a listener in flight.
-6. Stop looping when `listen` returns a `close` event or the window state is `closed`.
+2. `launch` with the file path — the window opens and a background event loop starts automatically
+3. Events from the window arrive as follow-up turns (no manual listen calls needed)
+4. Handle each event batch: send replies via `send_message`, spawn tasks, generate images, etc.
+5. Call `close` when done, or detect a close event in the follow-up and stop handling
 </workflow>
 
 <note>
