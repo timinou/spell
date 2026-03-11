@@ -18,7 +18,6 @@ const qmlSchema = Type.Object({
 			Type.Literal("launch"),
 			Type.Literal("close"),
 			Type.Literal("send_message"),
-			Type.Literal("listen"),
 			Type.Literal("list_windows"),
 		],
 		{ description: "Action to perform" },
@@ -39,7 +38,6 @@ const qmlSchema = Type.Object({
 	),
 	// send_message
 	payload: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "JSON payload (send_message)" })),
-	// listen: no extra fields needed
 });
 
 type QmlToolInput = Static<typeof qmlSchema>;
@@ -53,6 +51,17 @@ export interface QmlToolDetails {
 	meta?: OutputMeta;
 }
 
+/** Channel name for QML window events emitted to the EventBus. */
+export const QML_EVENTS_CHANNEL = "qml:window:events";
+
+/** Payload emitted on QML_EVENTS_CHANNEL. */
+export interface QmlWindowEventsPayload {
+	windowId: string;
+	events: WindowInfo["events"];
+	/** True when the window closed and the event loop has terminated. */
+	closed: boolean;
+}
+
 export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 	readonly name = "qml";
 	readonly label = "QML";
@@ -61,6 +70,8 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 	readonly strict = false;
 
 	#bridge: QmlBridge | null = null;
+	/** Per-window abort controllers for background event loops. */
+	#eventLoops = new Map<string, AbortController>();
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -80,6 +91,56 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 			this.#bridge = new QmlBridge();
 		}
 		return this.#bridge;
+	}
+
+	/**
+	 * Start a background event loop for a window. Events are delivered to the agent
+	 * via EventBus rather than requiring explicit `listen` calls. The loop runs until
+	 * the window closes or `#stopEventLoop` is called (e.g., on explicit close/dispose).
+	 */
+	#startEventLoop(id: string, getBridge: () => QmlBridge | RemoteQmlBridge): void {
+		// Stop any existing loop for this window before starting a new one.
+		this.#stopEventLoop(id);
+
+		const ac = new AbortController();
+		this.#eventLoops.set(id, ac);
+		const { signal } = ac;
+
+		const eventBus = this.session.eventBus;
+
+		// Fire-and-forget: errors are logged, not thrown, since there's no caller to propagate to.
+		void (async () => {
+			try {
+				while (!signal.aborted) {
+					const bridge = getBridge();
+					// waitForEvent resolves when events arrive or on timeout (10 min default).
+					const events = await bridge.waitForEvent(id);
+
+					if (signal.aborted) break;
+
+					const closed =
+						bridge.getWindow(id)?.state === "closed" ||
+						events.some(e => (e.payload as { action?: string }).action === "close");
+
+					const payload: QmlWindowEventsPayload = { windowId: id, events, closed };
+					eventBus?.emit(QML_EVENTS_CHANNEL, payload);
+
+					if (closed) break;
+				}
+			} catch {
+				// Window gone or bridge disposed — loop terminates silently.
+			} finally {
+				this.#eventLoops.delete(id);
+			}
+		})();
+	}
+
+	#stopEventLoop(id: string): void {
+		const ac = this.#eventLoops.get(id);
+		if (ac) {
+			ac.abort();
+			this.#eventLoops.delete(id);
+		}
 	}
 
 	async execute(
@@ -121,6 +182,8 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 						props: params.props as Record<string, unknown> | undefined,
 					});
 					const events = remote.drainEvents(id);
+					// Start background event loop so events arrive as follow-ups.
+					this.#startEventLoop(id, () => this.#remoteBridge()!);
 					const details: QmlToolDetails = { action: "launch", windowId: id, events };
 					const text = `Panel '${id}' pushed to Android (state: ${win.state})${events.length ? `\n${events.length} event(s) received` : ""}`;
 					return toolResult(details).text(text).done();
@@ -135,6 +198,8 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 					props: params.props as Record<string, unknown> | undefined,
 				});
 				const events = bridge.drainEvents(id);
+				// Start background event loop so events arrive as follow-ups.
+				this.#startEventLoop(id, () => this.#ensureBridge());
 				const details: QmlToolDetails = { action: "launch", windowId: id, events };
 				const text = `Window '${id}' launched (state: ${win.state})${events.length ? `\n${events.length} event(s) received` : ""}`;
 				return toolResult(details).text(text).done();
@@ -143,6 +208,8 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 			case "close": {
 				const id = params.id;
 				if (!id) throw new ToolError("close action requires 'id'");
+				// Stop the event loop before closing so we don't race with the close event.
+				this.#stopEventLoop(id);
 
 				const remote = this.#remoteBridge();
 				if (remote) {
@@ -175,39 +242,6 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				return toolResult(details).text(`Message sent to '${id}'`).done();
 			}
 
-			case "listen": {
-				const id = params.id;
-				if (!id) throw new ToolError("listen action requires 'id'");
-
-				let events: WindowInfo["events"];
-				let win: WindowInfo | undefined;
-
-				const remote = this.#remoteBridge();
-				if (remote) {
-					events = await remote.waitForEvent(id);
-					win = remote.getWindow(id);
-				} else {
-					const bridge = this.#ensureBridge();
-					// Push-based: resolves immediately when any event arrives, no polling.
-					events = await bridge.waitForEvent(id);
-					win = bridge.getWindow(id);
-				}
-
-				const details: QmlToolDetails = { action: "listen", windowId: id, events };
-				const closed =
-					win?.state === "closed" || events.some(e => (e.payload as { action?: string }).action === "close");
-				const lines: string[] = [];
-				if (events.length === 0) {
-					lines.push(`Listen timeout on '${id}' — window ${win?.state ?? "unknown"}`);
-				} else {
-					lines.push(`${events.length} event(s) from '${id}'${closed ? " [closed]" : ""}:`);
-					for (const e of events) {
-						lines.push(JSON.stringify(e.payload));
-					}
-				}
-				return toolResult(details).text(lines.join("\n")).done();
-			}
-
 			case "list_windows": {
 				const remote = this.#remoteBridge();
 				const windows = remote ? remote.listWindows() : this.#bridge ? this.#bridge.listWindows() : [];
@@ -235,6 +269,11 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 	}
 
 	async dispose(): Promise<void> {
+		// Abort all background event loops before disposing the bridge.
+		for (const ac of this.#eventLoops.values()) {
+			ac.abort();
+		}
+		this.#eventLoops.clear();
 		await this.#bridge?.dispose();
 		this.#bridge = null;
 	}

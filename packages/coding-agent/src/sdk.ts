@@ -105,6 +105,7 @@ import { ToolContextStore } from "./tools/context";
 import { getGeminiImageTools } from "./tools/gemini-image";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { PendingActionStore } from "./tools/pending-action";
+import { QML_EVENTS_CHANNEL, type QmlWindowEventsPayload } from "./tools/qml";
 import { EventBus } from "./utils/event-bus";
 
 // Types
@@ -1566,6 +1567,27 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			);
 		});
 	}
+
+	// Wire QML event loop follow-ups: events from background loops arrive as automatic follow-up turns.
+	eventBus.on(QML_EVENTS_CHANNEL, async (raw: unknown) => {
+		if (!session) return;
+		const { windowId, events, closed } = raw as QmlWindowEventsPayload;
+		if (events.length === 0 && !closed) return;
+		const lines: string[] = [`${events.length} event(s) from QML window '${windowId}'${closed ? " [closed]" : ""}:`];
+		for (const e of events) {
+			lines.push(JSON.stringify(e.payload));
+		}
+		await session.sendCustomMessage(
+			{
+				customType: "qml-events",
+				content: lines.join("\n"),
+				display: true,
+				attribution: "agent",
+				details: { windowId, events, closed },
+			},
+			{ deliverAs: "followUp", triggerTurn: true },
+		);
+	});
 
 	return {
 		session,

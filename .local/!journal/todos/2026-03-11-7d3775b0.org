@@ -24,14 +24,16 @@
 :STATUS: completed
 :END:
 
-** DOING Fix committed pi-treesit.el parse error (need to amend/commit)
+** DONE Fix committed pi-treesit.el parse error (need to amend/commit)
 :PROPERTIES:
 :TASK_ID: task-4
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
-** ITEM Verify daemon starts and stops correctly
+** DONE Verify daemon starts and stops correctly
 :PROPERTIES:
 :TASK_ID: task-5
-:STATUS: pending
+:STATUS: completed
 :END:
+
+Type check passes, elisp loads in 0.3s, all changes committed

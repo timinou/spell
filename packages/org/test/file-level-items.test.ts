@@ -34,13 +34,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { readOrgFile } from "../src/org-reader";
-import {
-	appendItemToFile,
-	serializeFileItem,
-	serializeHeading,
-	setPropertyInFile,
-	updateItemStateInFile,
-} from "../src/org-writer";
+import { appendItemToFile, serializeFileItem, setPropertyInFile, updateItemStateInFile } from "../src/org-writer";
 
 const TODO_KEYWORDS = ["ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"];
 

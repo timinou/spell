@@ -1,0 +1,63 @@
+#+TITLE: Session 148ee555fa40d196 Todos
+#+DATE: 2026-03-11
+#+TODO: ITEM DOING | DONE
+
+* Phase 1: qml-remote server package
+
+** DONE Create packages/qml-remote/ with protocol types, WebSocket server, remote QmlBridge adapter
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Add panel push protocol types extending packages/qml/src/protocol.ts
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+* Phase 2: Android Qt app
+
+** DONE Create apps/omp-remote/ CMakeLists.txt with Qt Android project skeleton
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Implement RemoteClient C++ (QWebSocket connection + dispatch)
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Implement PanelManager C++ (dynamic QML loading + Bridge injection)
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+** DONE Build base chat QML UI (ChatView, PanelLoader, Main)
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+** DONE Android manifest and build config
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:END:
+
+* Phase 3: Integration
+
+** DONE Wire QML tool remote mode in coding-agent (detect remote client, route launch/message/close over WS)
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:END:
+
+** DONE ADB port-forward helper script + documentation
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: completed
+:END:
