@@ -31,23 +31,19 @@ look for installation details."
                             (fboundp 'pi-prelude-grammar-unavailable-p)
                             (pi-prelude-grammar-unavailable-p lang))))
           (if lang
-              (error "Tree-sitter grammar '%s' is not available for %s.%s \
-\
-To install: (1) Restart the Emacs daemon (it auto-compiles missing grammars), or \
-(2) Create .omp/treesitter.json with: \
-{\"sources\": {\"<lang>\": \"https://github.com/<org>/tree-sitter-<lang>\"}} \
-then restart. Check ~/.omp/logs/ for compilation errors."
-                     lang
-                     (file-name-nondirectory file)
-                     (if reason (format " Compile error: %s." reason) ""))
-            (error "No tree-sitter parser for %s (extension .%s not in built-in table). \
-\
-To add support for this language: create .omp/treesitter.json in the project root with: \
-{\"sources\": {\"<lang>\": \"https://github.com/<org>/tree-sitter-<lang>\"}, \
-\"extensions\": {\"<ext>\": \"<lang>\"}} \
-then restart the Emacs daemon. The grammar will be auto-compiled on next startup."
-                   (file-name-nondirectory file)
-                   (or (file-name-extension file) "?"))))))
+              (error (concat
+                     (format "Tree-sitter grammar '%s' is not available for %s.%s "
+                             lang (file-name-nondirectory file)
+                             (if reason (format " Compile error: %s." reason) ""))
+                     "To fix: restart the Emacs daemon (it auto-compiles missing grammars), "
+                     "or add a .omp/treesitter.json with grammar sources and restart. "
+                     "See ~/.omp/logs/ for compilation errors."))
+            (error (concat
+                   (format "No tree-sitter parser for %s (extension .%s not in built-in table). "
+                           (file-name-nondirectory file)
+                           (or (file-name-extension file) "?"))
+                   "To add support: create .omp/treesitter.json with grammar sources "
+                   "and extension mappings, then restart the Emacs daemon."))))))
     buf))
 
 (defun pi-treesit--mode-for-file (file)
@@ -72,7 +68,7 @@ Returns nil for file types without a treesit mode (e.g. .el)."
          ((member ext '("bash" "sh"))      'bash-ts-mode)
          ((member ext '("el"))             'emacs-lisp-mode)
          ;; Elm: no built-in treesit mode, but parser activates via lang-for-file.
-         (t nil))))
+         (t nil)))))
 
 (defun pi-treesit--activate-parser (file)
   "Try to activate an appropriate treesit parser for FILE."
@@ -100,7 +96,7 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
          ((member ext '("toml"))           'toml)
          ((member ext '("bash" "sh"))      'bash)
          ((member ext '("elm"))            'elm)
-         (t nil))))
+         (t nil)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Node helpers — treesit positions are 1-indexed buffer positions
@@ -250,7 +246,7 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
      ((string= type "value_declaration") "def")
      ((string= type "type_alias_declaration") "type alias")
      ((string= type "port_annotation") "port")
-     (t type))
+     (t type))))
 
 (provide 'pi-treesit)
 ;;; pi-treesit.el ends here
