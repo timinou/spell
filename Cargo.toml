@@ -6,7 +6,7 @@ resolver = "3"
 [workspace.package]
 version = "13.10.1"
 edition = "2024"
-license = "MIT"
+license = "GPL-3.0-only"
 authors = ["Can Boluk"]
 repository = "https://github.com/can1357/oh-my-pi"
 

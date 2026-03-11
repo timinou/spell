@@ -5,7 +5,7 @@
 	"version": "0.0.1",
 	"description": "Edit benchmark suite using React source code mutations",
 	"author": "Can Boluk",
-	"license": "MIT",
+	"license": "GPL-3.0-only",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/can1357/oh-my-pi.git",
