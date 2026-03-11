@@ -763,22 +763,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	/** Extract text from the first user-attributed message in the current session. */
-	#getFirstUserMessageText(): string {
-		for (const msg of this.session.messages) {
-			if (msg.role !== "user" || msg.attribution !== "user") continue;
-			const { content } = msg;
-			if (typeof content === "string") return content;
-			if (Array.isArray(content)) {
-				return content
-					.filter((b): b is { type: "text"; text: string } => b.type === "text")
-					.map(b => b.text)
-					.join(" ");
-			}
-		}
-		return "";
-	}
-
 	async #approvePlan(
 		planContent: string,
 		options: { planFilePath: string; finalPlanFilePath: string; orgItem?: { id: string; file: string } },
@@ -811,9 +795,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 		await Bun.write(newLocalPath, planContent);
 		// Finalize the org draft — non-fatal, errors are shown as warnings.
-		// The first user message is used as the plans item body so the plans category
-		// tracks what was requested rather than duplicating the full plan markdown.
-		const taskDescription = this.#getFirstUserMessageText() || undefined;
 		let activeOrgItemId: string | null = null;
 		if (orgDraft) {
 			try {
@@ -823,7 +804,6 @@ export class InteractiveMode implements InteractiveModeContext {
 					orgDraft,
 					planTitle,
 					planContent,
-					taskDescription,
 				);
 			} catch (err) {
 				this.showWarning(`Org plan finalization failed: ${err instanceof Error ? err.message : String(err)}`);
