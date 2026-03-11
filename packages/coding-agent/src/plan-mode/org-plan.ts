@@ -49,6 +49,8 @@ export async function finalizePlanDraft(
 	draft: OrgPlanDraft,
 	planTitle: string,
 	planContent: string,
+	/** When provided, prepended as an "* Initial message" section at the top of the plans item body. */
+	initialMessage?: string,
 ): Promise<string | null> {
 	if (!settings.get("org.enabled")) return null;
 
@@ -72,9 +74,10 @@ export async function finalizePlanDraft(
 	await initCategoryDir(activeCat.absPath, activeCat.prefix, config.todoKeywords);
 	const activeId = await generateId(activeCat.absPath, activeCat.prefix, planTitle);
 	const activeFilePath = path.join(activeCat.absPath, `${activeId}.org`);
+	const body = initialMessage ? `* Initial message\n\n${initialMessage}\n\n${planContent}` : planContent;
 	await appendItemToFile(
 		activeFilePath,
-		{ title: planTitle, category: activeCat.name, id: activeId, body: planContent },
+		{ title: planTitle, category: activeCat.name, id: activeId, body },
 		activeState,
 	);
 
