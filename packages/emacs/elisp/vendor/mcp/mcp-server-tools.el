@@ -229,23 +229,37 @@ Respects `mcp-server-tools-filter' - disabled tools cannot be called."
 (defun mcp-server-tools--format-result (result)
   "Format RESULT into MCP content format."
   (cond
-   ;; If result is already in MCP format (vector of content items)
+   ;; Already in MCP format (vector of content items).
    ((vectorp result)
     result)
    
-   ;; If result is a single content item
-   ((and (listp result) (alist-get 'type result))
+   ;; Single content item alist with a 'type key.
+   ((and (listp result) (not (null result)) (alist-get 'type result))
     (vector result))
    
-   ;; If result is a string, wrap it as text content
+   ;; String — wrap as text.
    ((stringp result)
     (vector `((type . "text")
               (text . ,result))))
    
-   ;; If result is any other value, convert to string
+   ;; nil — no results; return an explicit diagnostic rather than the
+   ;; inscrutable Emacs-printed string "nil".
+   ((null result)
+    (vector '((type . "text")
+              (text . "{\"result\":null,\"warning\":\"Tool returned nil — no data, unsupported language, or empty result set.\"}"))))
+   
+   ;; Any other list (e.g. outline entries, buffer list) — JSON-encode it
+   ;; so callers receive valid JSON, not the Emacs printed representation.
+   ((listp result)
+    (vector `((type . "text")
+              (text . ,(json-encode result)))))
+   
+   ;; Fallback: format with %S so the value is at least readable, but
+   ;; wrap it in a JSON object so callers see a parse error rather than
+   ;; silently consuming garbage.
    (t
     (vector `((type . "text")
-              (text . ,(format "%S" result)))))))
+              (text . ,(json-encode `((result . ,(format "%S" result))))))))))
 
 ;;; Initialization and Cleanup
 

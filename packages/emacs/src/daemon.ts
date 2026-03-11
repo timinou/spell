@@ -61,8 +61,14 @@ const sessions = new Map<string, EmacsSession>();
 // ---------------------------------------------------------------------------
 
 const POLL_INTERVAL_MS = 500;
-const STARTUP_TIMEOUT_MS = 30_000;
+// First-run startup compiles all tree-sitter grammars (git clone + cc per language).
+// At ~3-5s per grammar × 15 languages = ~75s worst case on a slow connection.
+// Subsequent starts use cached .so files and take ~900ms.
+const STARTUP_TIMEOUT_MS = 120_000;
 const HEALTH_INTERVAL_MS = 5_000;
+// Show a first-run warning after this many ms so users know kika is compiling
+// tree-sitter grammars rather than hanging.
+const FIRST_RUN_WARN_MS = 8_000;
 
 /** Stable hash key derived from project root + session ID. */
 function sessionKey(projectRoot: string, sessionId: string): string {
@@ -91,10 +97,23 @@ async function socketExists(p: string): Promise<boolean> {
 }
 
 /** Poll until the socket appears or the deadline passes. */
-async function waitForSocket(p: string): Promise<void> {
-	const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+/** Poll until the socket appears or the deadline passes.
+ *
+ * Emits a one-time progress line to stderr after FIRST_RUN_WARN_MS so users
+ * know kika is compiling tree-sitter grammars, not hanging.
+ */
+async function waitForSocket(p: string, daemonName: string): Promise<void> {
+	const start = Date.now();
+	const deadline = start + STARTUP_TIMEOUT_MS;
+	let warned = false;
 	while (Date.now() < deadline) {
 		if (await socketExists(p)) return;
+		if (!warned && Date.now() - start >= FIRST_RUN_WARN_MS) {
+			warned = true;
+			process.stderr.write(
+				`  Emacs (${daemonName}): installing tree-sitter grammars on first run, may take ~60s...\n`,
+			);
+		}
 		await Bun.sleep(POLL_INTERVAL_MS);
 	}
 	throw new Error(`Emacs daemon did not create socket within ${STARTUP_TIMEOUT_MS}ms: ${p}`);
@@ -102,7 +121,7 @@ async function waitForSocket(p: string): Promise<void> {
 
 async function launchDaemon(
 	emacsPath: string,
-	_projectRoot: string,
+	projectRoot: string,
 	_sessionId: string,
 	elispDir: string,
 	key: string,
@@ -129,6 +148,9 @@ async function launchDaemon(
 		"--eval",
 		`(add-to-list 'load-path "${elispDir}")`,
 		"--eval",
+		// pi-project-root is read by pi-prelude to locate per-project treesitter.json.
+		`(setq pi-project-root "${projectRoot}")`,
+		"--eval",
 		`(require 'pi-prelude)`,
 		"--eval",
 		`(require 'pi-emacs-mcp)`,
@@ -139,16 +161,28 @@ async function launchDaemon(
 	logger.debug("[emacs-daemon] Spawning daemon", { daemonName, sock, elispDir });
 
 	// Detached: the child outlives the parent process.
+	// Pipe stderr so grammar compilation progress is forwarded to the Pi log.
 	const proc = Bun.spawn([emacsPath, ...args], {
-		stdio: ["ignore", "ignore", "ignore"],
+		stdio: ["ignore", "ignore", "pipe"],
 		detached: true,
 	});
+	// Consume stderr in a background task — logs each line, never blocks process exit.
+	if (proc.stderr) {
+		(async () => {
+			const decoder = new TextDecoder();
+			for await (const chunk of proc.stderr as ReadableStream<Uint8Array>) {
+				for (const line of decoder.decode(chunk).split("\n")) {
+					if (line.trim()) logger.debug(`[emacs-daemon] ${line.trim()}`, { daemonName });
+				}
+			}
+		})().catch(() => {});
+	}
 	// Detach Bun's reference so it doesn't block process exit.
 	proc.unref();
 
 	// Wait for the daemon to signal readiness by writing the socket.
 	try {
-		await waitForSocket(sock);
+		await waitForSocket(sock, daemonName);
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		logger.error("[emacs-daemon] Daemon startup timed out", { daemonName, sock, err: msg });
