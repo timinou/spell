@@ -19,6 +19,7 @@ const qmlSchema = Type.Object({
 			Type.Literal("close"),
 			Type.Literal("send_message"),
 			Type.Literal("list_windows"),
+			Type.Literal("screenshot"),
 		],
 		{ description: "Action to perform" },
 	),
@@ -260,6 +261,22 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				const rows = windows.map(w => `${w.id}\t${w.state}\t${w.events.length} events\t${w.path}`);
 				return toolResult(details)
 					.text(["id\tstate\tevents\tpath", ...rows].join("\n"))
+					.done();
+			}
+			case "screenshot": {
+				const id = params.id;
+				if (!id) throw new ToolError("screenshot action requires 'id'");
+				const savePath = params.path ?? `/tmp/omp-qml/screenshot-${id}-${Date.now()}.png`;
+				const bridge = this.#ensureBridge();
+				const resultPath = await bridge.screenshot(id, savePath);
+				const pngBuffer = await Bun.file(resultPath).arrayBuffer();
+				const data = Buffer.from(pngBuffer).toString("base64");
+				const details: QmlToolDetails = { action: "screenshot", windowId: id };
+				return toolResult(details)
+					.content([
+						{ type: "text", text: `Screenshot saved: ${resultPath}` },
+						{ type: "image", data, mimeType: "image/png" },
+					])
 					.done();
 			}
 

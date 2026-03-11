@@ -52,6 +52,9 @@ export class QmlBridge {
 				// Keep event buffer bounded
 				if (win.events.length > 100) win.events.shift();
 				break;
+			case "screenshot":
+				// Handled by the waitFor predicate in screenshot(); nothing to store.
+				break;
 		}
 	}
 
@@ -120,6 +123,20 @@ export class QmlBridge {
 		if (!win) throw new Error(`Window not found: ${id}`);
 		await this.#process.ensure();
 		this.#process.send({ type: "message", id, payload });
+	}
+
+	/** Capture a screenshot of a running window and save it as PNG. Returns the save path. */
+	async screenshot(id: string, savePath: string): Promise<string> {
+		const win = this.#windows.get(id);
+		if (!win) throw new Error(`Window not found: ${id}`);
+		await this.#process.ensure();
+		this.#process.send({ type: "screenshot", id, path: savePath });
+		const event = await this.#process.waitFor(
+			e => (e.type === "screenshot" || e.type === "error") && e.id === id,
+			10_000,
+		);
+		if (event.type === "error") throw new Error(event.message);
+		return (event as { type: "screenshot"; id: string; path: string }).path;
 	}
 
 	/** List all tracked windows and their current state. */

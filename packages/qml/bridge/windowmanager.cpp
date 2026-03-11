@@ -1,4 +1,5 @@
 #include "windowmanager.h"
+#include <QImage>
 #include <QJsonDocument>
 #include <QQmlContext>
 #include <QUrl>
@@ -41,6 +42,8 @@ void WindowManager::dispatch(const QByteArray &jsonLine) {
         closeWindow(id);
     } else if (type == "message") {
         sendMessage(id, msg["payload"].toObject());
+    } else if (type == "screenshot") {
+        screenshotWindow(id, msg["path"].toString());
     }
 }
 
@@ -151,4 +154,51 @@ void WindowManager::writeEvent(const QJsonObject &event) {
     const QByteArray line = QJsonDocument(event).toJson(QJsonDocument::Compact) + '\n';
     fwrite(line.constData(), 1, line.size(), stdout);
     fflush(stdout);
+}
+
+void WindowManager::screenshotWindow(const QString &id, const QString &savePath) {
+    const auto it = m_windows.constFind(id);
+    if (it == m_windows.constEnd()) {
+        QJsonObject ev;
+        ev["type"] = "error";
+        ev["id"] = id;
+        ev["message"] = "Window not found: " + id;
+        writeEvent(ev);
+        return;
+    }
+
+    auto *root = qobject_cast<QQuickWindow *>(it->engine->rootObjects().first());
+    if (!root) {
+        QJsonObject ev;
+        ev["type"] = "error";
+        ev["id"] = id;
+        ev["message"] = "Root object is not a QQuickWindow";
+        writeEvent(ev);
+        return;
+    }
+
+    const QImage image = root->grabWindow();
+    if (image.isNull()) {
+        QJsonObject ev;
+        ev["type"] = "error";
+        ev["id"] = id;
+        ev["message"] = "grabWindow() returned null image";
+        writeEvent(ev);
+        return;
+    }
+
+    if (!image.save(savePath, "PNG")) {
+        QJsonObject ev;
+        ev["type"] = "error";
+        ev["id"] = id;
+        ev["message"] = "Failed to save screenshot to: " + savePath;
+        writeEvent(ev);
+        return;
+    }
+
+    QJsonObject ev;
+    ev["type"] = "screenshot";
+    ev["id"] = id;
+    ev["path"] = savePath;
+    writeEvent(ev);
 }
