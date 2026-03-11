@@ -254,7 +254,20 @@ async function runSetupFlow(session: ToolSession, display: SetupDisplay): Promis
 	if (!installed) {
 		display.showPhase("Locating Spell APK...");
 		const manager = new SpellManager();
-		const apkPath = await manager.ensureApk(signal);
+		let apkPath: string;
+		try {
+			apkPath = await manager.ensureApk(signal);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			const hint =
+				"Spell APK not available. Place a built APK at\n" +
+				"  ~/.omp/tools/spell.apk\n" +
+				"Build: install Qt6 for Android arm64-v8a via Qt Online Installer,\n" +
+				"then: cd apps/spell && qt-cmake -DANDROID_ABI=arm64-v8a . && make apk";
+			display.showError(hint);
+			await Bun.sleep(6_000);
+			throw new ToolError(`Spell APK unavailable: ${msg}`);
+		}
 		if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
 		display.showPhase("Installing Spell...");
