@@ -4,6 +4,10 @@ export interface OutlineEntry {
 	name: string;
 	type: string; // "function" | "class" | "method" | "interface" | "type" | "const" | "variable"
 	line: number;
+	end_line?: number;
+	column?: number;
+	exported?: boolean;
+	signature?: string;
 	children?: OutlineEntry[];
 }
 
