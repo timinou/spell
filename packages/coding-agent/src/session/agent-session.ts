@@ -1873,6 +1873,8 @@ export class AgentSession {
 				: sessionPlanUrl;
 
 		const planExists = fs.existsSync(resolvedPlanPath);
+		const orgEnabled = (this.settings.get("org.enabled") as boolean | undefined) ?? false;
+		const draftCategory = (this.settings.get("org.planDraftCategory") as string | undefined) ?? "drafts";
 		const content = renderPromptTemplate(planModeActivePrompt, {
 			planFilePath: displayPlanPath,
 			planExists,
@@ -1883,6 +1885,8 @@ export class AgentSession {
 			reentry: state.reentry ?? false,
 			iterative: state.workflow === "iterative",
 			orgItemId: state.orgItemId ?? "",
+			orgEnabled,
+			draftCategory,
 		});
 
 		return {

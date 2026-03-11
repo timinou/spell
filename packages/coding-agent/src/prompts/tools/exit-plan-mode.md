@@ -2,26 +2,25 @@ Signals plan completion, requests user approval, and provides the final plan tit
 
 <conditions>
 Use when:
-- Plan written to `local://PLAN.md`
+- Plan written as org item via `org create` (itemId required)
 - No unresolved questions about requirements or approach
 - Ready for user review and approval
 </conditions>
 
 <instruction>
-- You **MUST** write plan to plan file BEFORE calling this tool
-- Tool reads plan from file—does not take plan content as parameter
-- You **MUST** provide a `title` argument for the final plan artifact (example: `WP_MIGRATION_PLAN`)
-- `.md` is optional in `title`; it is appended automatically when omitted
+- You **MUST** create the plan as an org item (via `org create`) BEFORE calling this tool
+- You **MUST** provide `title`: final plan name in SCREAMING_SNAKE_CASE (e.g. `AUTH_REFACTOR`)
+- You **MUST** provide `itemId`: the CUSTOM_ID returned from `org create` (e.g. `DRAFT-003-auth-refactor`)
 - User sees plan contents when reviewing
 </instruction>
 
 <output>
-Presents plan to user for approval. If approved, plan mode exits with full tool access restored and the plan is renamed to `local://<title>.md`.
+Presents plan to user for approval. If approved, plan mode exits with full tool access restored and the approved plan is accessible at `local://<title>.md` in the execution session.
 </output>
 
 <example name="ready">
-Plan complete at local://PLAN.md, no open questions.
-→ Call `exit_plan_mode` with `{ "title": "WP_MIGRATION_PLAN" }`
+Plan item DRAFT-003-auth-refactor created, no open questions.
+→ Call `exit_plan_mode` with `{ "title": "AUTH_REFACTOR", "itemId": "DRAFT-003-auth-refactor" }`
 </example>
 
 <example name="unclear">
@@ -30,8 +29,8 @@ Unsure about auth method (OAuth vs JWT).
 </example>
 
 <avoid>
-- **MUST NOT** call before plan is written to file
-- **MUST NOT** omit `title`
+- **MUST NOT** call before creating the plan org item
+- **MUST NOT** omit `title` or `itemId`
 - **MUST NOT** use `ask` to request plan approval (this tool does that)
 - **MUST NOT** call after pure research tasks (no implementation planned)
 </avoid>

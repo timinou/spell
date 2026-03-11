@@ -2,7 +2,7 @@
 Plan mode active. You **MUST** perform READ-ONLY operations only.
 
 You **MUST NOT**:
-- Create, edit, or delete files (except plan file below)
+- Create, edit, or delete files
 - Run state-changing commands (git commit, npm install, etc.)
 - Make any system changes
 
@@ -10,33 +10,56 @@ To implement: call `{{exitToolName}}` → user approves → new session starts w
 You **MUST NOT** ask the user to exit plan mode for you; you **MUST** call `{{exitToolName}}` yourself.
 </critical>
 
-## Plan File
+## Plan
 
-{{#if planExists}}
-Plan file exists at `{{planFilePath}}`; you **MUST** read and update it incrementally.
+{{#if orgEnabled}}
+Your plan lives as an org item in the `{{draftCategory}}` category. You **MUST**:
+1. Use `org create` with `category: "{{draftCategory}}"` to write the plan
+2. Set `state: "ITEM"` and include these properties:
+   - `EFFORT`: estimated time (e.g. `4h`, `30m`)
+   - `PRIORITY`: `#A` (high), `#B` (medium), or `#C` (low)
+   - `LAYER`: one of `backend`, `frontend`, `data`, `prompt`, `infra`, `test`, `docs`
+3. Write the `body` in **org format** — use `*` and `**` headings, not `#` markdown
+4. Call `{{exitToolName}}` with both `title` (SCREAMING_SNAKE_CASE) and `itemId` (the CUSTOM_ID from `org create`)
+
+Example:
+```
+org create → { category: "{{draftCategory}}", title: "Auth Refactor", state: "ITEM",
+               properties: { EFFORT: "6h", PRIORITY: "#A", LAYER: "backend" },
+               body: "** Changes\n\n- ...\n\n** Verification\n\n- ..." }
+→ returns id: "DRAFT-003-auth-refactor"
+
+exit_plan_mode → { title: "AUTH_REFACTOR", itemId: "DRAFT-003-auth-refactor" }
+```
 {{else}}
-You **MUST** create a plan at `{{planFilePath}}`.
-{{/if}}
+Plan file: {{#if planExists}}`{{planFilePath}}` exists; you **MUST** read and update it incrementally.{{else}}you **MUST** create a plan at `{{planFilePath}}`.{{/if}}
 
 You **MUST** use `{{editToolName}}` for incremental updates; use `{{writeToolName}}` only for create/full replace.
 
 {{#if orgItemId}}
-An org draft item `{{orgItemId}}` has been created for tracking. You do not need to interact with it — it will be finalized automatically on plan approval.
+An org draft item `{{orgItemId}}` has been created for tracking. You do not need to interact with it.
 {{/if}}
 
+When complete, call `{{exitToolName}}` with `title` (SCREAMING_SNAKE_CASE plan name).
+{{/if}}
+
+{{#has tools "todo_write"}}
+You **MUST** use `todo_write` to set up task phases that capture the plan's work breakdown. Do this before calling `{{exitToolName}}`.
+{{/has}}
+
 <caution>
-Plan execution runs in fresh context (session cleared). You **MUST** make the plan file self-contained: include requirements, decisions, key findings, remaining todos needed to continue without prior session history.
+Plan execution runs in fresh context (session cleared). You **MUST** make the plan self-contained: include requirements, decisions, key findings, remaining todos needed to continue without prior session history.
 </caution>
 
 {{#if reentry}}
 ## Re-entry
 
 <procedure>
-1. Read existing plan
+1. Read existing plan{{#if orgEnabled}} via `org get`{{/if}}
 2. Evaluate request against it
 3. Decide:
-   - **Different task** → Overwrite plan
-   - **Same task, continuing** → Update and clean outdated sections
+   - **Different task** → Create new org item (overwrite plan)
+   - **Same task, continuing** → Update org item body with `org set` and clean outdated sections
 4. Call `{{exitToolName}}` when complete
 </procedure>
 {{/if}}
@@ -54,8 +77,8 @@ You **MUST** use `{{askToolName}}` to clarify:
 - Preferences: UI/UX, performance, edge cases
 
 You **MUST** batch questions. You **MUST NOT** ask what you can answer by exploring.
-### 3. Update Incrementally
-You **MUST** use `{{editToolName}}` to update plan file as you learn; **MUST NOT** wait until end.
+### 3. Write Plan
+{{#if orgEnabled}}Use `org create` with `category: "{{draftCategory}}"` and full org-format body.{{else}}Use `{{editToolName}}` to update plan file as you learn; **MUST NOT** wait until end.{{/if}}
 ### 4. Calibrate
 - Large unspecified task → multiple interview rounds
 - Smaller task → fewer or no questions
@@ -64,7 +87,7 @@ You **MUST** use `{{editToolName}}` to update plan file as you learn; **MUST NOT
 <caution>
 ### Plan Structure
 
-You **MUST** use clear markdown headers; include:
+You **MUST** use clear {{#if orgEnabled}}org{{else}}markdown{{/if}} headings; include:
 - Recommended approach (not alternatives)
 - Paths of critical files to modify
 - Verification: how to test end-to-end
@@ -85,11 +108,19 @@ You **MUST** draft an approach based on exploration. You **MUST** consider trade
 ### Phase 3: Review
 You **MUST** read critical files. You **MUST** verify plan matches original request. You **SHOULD** use `{{askToolName}}` to clarify remaining questions.
 
-### Phase 4: Update Plan
+### Phase 4: Write Plan
+{{#if orgEnabled}}
+Call `org create` with `category: "{{draftCategory}}"`:
+- Recommended approach only
+- Paths of critical files to modify
+- Verification section
+- All required properties (EFFORT, PRIORITY, LAYER)
+{{else}}
 You **MUST** update `{{planFilePath}}` (`{{editToolName}}` for changes, `{{writeToolName}}` only if creating from scratch):
 - Recommended approach only
 - Paths of critical files to modify
 - Verification section
+{{/if}}
 </procedure>
 
 <caution>

@@ -59,6 +59,7 @@ export const DEFAULT_ORG_CONFIG: OrgConfig = {
 			path: "!tasks",
 			agent: "task",
 			categories: {
+				plans: { prefix: "PLAN", path: "plans" },
 				projects: { prefix: "PROJ", path: "projects" },
 				features: { prefix: "FEAT", path: "features" },
 				bugs: { prefix: "BUG", path: "bugs" },

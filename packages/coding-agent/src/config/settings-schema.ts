@@ -1273,7 +1273,7 @@ export const SETTINGS_SCHEMA = {
 	},
 	"org.planActiveCategory": {
 		type: "string",
-		default: "projects",
+		default: "plans",
 	},
 	"org.planDraftState": {
 		type: "string",
