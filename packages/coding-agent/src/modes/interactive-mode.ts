@@ -6,7 +6,6 @@ import * as path from "node:path";
 import { type Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { NiriOverviewController } from "@oh-my-pi/pi-niri";
-import { appendItemToFile, findCategory, generateId, initCategoryDir, resolveCategories } from "@oh-my-pi/pi-org";
 import type { Component, SlashCommand } from "@oh-my-pi/pi-tui";
 import { Container, Loader, Markdown, ProcessTerminal, Spacer, Text, TUI } from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, hsvToRgb, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
@@ -19,7 +18,7 @@ import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
-import { buildOrgConfig, finalizePlanDraft, type OrgPlanDraft } from "../plan-mode/org-plan";
+import { finalizePlanDraft, type OrgPlanDraft } from "../plan-mode/org-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
@@ -669,10 +668,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const sessionContext = this.sessionManager.buildSessionContext();
 		if (sessionContext.mode === "plan") {
 			const planFilePath = sessionContext.modeData?.planFilePath as string | undefined;
-			const orgItemId = sessionContext.modeData?.orgItemId as string | undefined;
-			const orgItemFile = sessionContext.modeData?.orgItemFile as string | undefined;
-			const task = sessionContext.modeData?.task as string | undefined;
-			await this.#enterPlanMode({ planFilePath, orgItemId, orgItemFile, task });
+			await this.#enterPlanMode({ planFilePath });
 		} else if (sessionContext.mode === "plan_paused") {
 			this.planModePaused = true;
 			this.#planModeHasEntered = true;
@@ -680,39 +676,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	/**
-	 * Pre-create an org draft item to track this plan session.
-	 * Returns the item id and file path, or null if org is disabled / category not found.
-	 */
-	async #createPlanDraft(task: string): Promise<{ id: string; file: string } | null> {
-		const orgEnabled = (this.settings.get("org.enabled") as boolean | undefined) ?? false;
-		if (!orgEnabled) return null;
-
-		const draftCategory = (this.settings.get("org.planDraftCategory") as string | undefined) ?? "drafts";
-		const draftState = (this.settings.get("org.planDraftState") as string | undefined) ?? "ITEM";
-		const config = buildOrgConfig(this.settings);
-		const categories = resolveCategories(config, this.sessionManager.getCwd());
-		const cat = findCategory(categories, draftCategory);
-		if (!cat) return null;
-
-		const titleText = task.replace(/\n/g, " ").trim().slice(0, 60) || "Plan Draft";
-		await initCategoryDir(cat.absPath, cat.prefix, config.todoKeywords);
-		const id = await generateId(cat.absPath, cat.prefix, titleText);
-		const file = `${cat.absPath}/${id}.org`;
-		await appendItemToFile(file, { title: titleText, category: cat.name, id, body: task }, draftState);
-		return { id, file };
-	}
-
-	async #enterPlanMode(options?: {
-		planFilePath?: string;
-		workflow?: "parallel" | "iterative";
-		/** First user message used as the org draft body. When provided and org is enabled, pre-creates a draft. */
-		task?: string;
-		/** Restored org item id (session resume — skip creation). */
-		orgItemId?: string;
-		/** Restored org item file (session resume — skip creation). */
-		orgItemFile?: string;
-	}): Promise<void> {
+	async #enterPlanMode(options?: { planFilePath?: string; workflow?: "parallel" | "iterative" }): Promise<void> {
 		if (this.planModeEnabled) {
 			return;
 		}
@@ -725,22 +689,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		const planTools = hasExitTool ? [...previousTools, "exit_plan_mode"] : previousTools;
 		const uniquePlanTools = [...new Set(planTools)];
 
-		// Pre-create an org draft item with the task as body, unless restoring from a session.
-		let orgItemId = options?.orgItemId;
-		let orgItemFile = options?.orgItemFile;
-		const task = options?.task ?? "";
-		if (!orgItemId && task) {
-			try {
-				const created = await this.#createPlanDraft(task);
-				if (created) {
-					orgItemId = created.id;
-					orgItemFile = created.file;
-				}
-			} catch (err) {
-				logger.warn("plan-mode: failed to pre-create org draft", { err });
-			}
-		}
-
 		this.#planModePreviousTools = previousTools;
 		this.planModePlanFilePath = planFilePath;
 		this.planModeEnabled = true;
@@ -751,9 +699,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			planFilePath,
 			workflow: options?.workflow ?? "parallel",
 			reentry: this.#planModeHasEntered,
-			orgItemId,
-			orgItemFile,
-			task,
 		});
 		if (this.session.isStreaming) {
 			await this.session.sendPlanModeContext({ deliverAs: "steer" });
@@ -761,7 +706,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#planModeHasEntered = true;
 		await this.#applyPlanModeModel();
 		this.#updatePlanModeStatus();
-		this.sessionManager.appendModeChange("plan", { planFilePath, orgItemId, orgItemFile, task });
+		this.sessionManager.appendModeChange("plan", { planFilePath });
 		this.showStatus("Plan mode enabled.");
 	}
 
@@ -829,8 +774,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			(planModeState?.orgItemId && planModeState.orgItemFile
 				? { id: planModeState.orgItemId, file: planModeState.orgItemFile }
 				: null);
-		// Use the pre-created draft's task description as the plans item body.
-		const taskDescription = planModeState?.task || undefined;
 		const planTitle = options.finalPlanFilePath.replace(/^local:\/\//, "").replace(/\.md$/, "");
 		// Only rename the markdown plan file for file-backed plans.
 		if (!options.orgItem) {
@@ -861,7 +804,6 @@ export class InteractiveMode implements InteractiveModeContext {
 					orgDraft,
 					planTitle,
 					planContent,
-					taskDescription,
 				);
 			} catch (err) {
 				this.showWarning(`Org plan finalization failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -880,25 +822,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.session.prompt(prompt, { synthetic: true });
 	}
 
-	/**
-	 * Extract text from the first user-attributed message in the current session.
-	 * Returns an empty string when no user message exists yet.
-	 */
-	#getFirstUserMessageText(): string {
-		for (const msg of this.session.messages) {
-			if (msg.role !== "user" || msg.attribution !== "user") continue;
-			const { content } = msg;
-			if (typeof content === "string") return content;
-			if (Array.isArray(content)) {
-				return content
-					.filter((b): b is { type: "text"; text: string } => b.type === "text")
-					.map(b => b.text)
-					.join(" ");
-			}
-		}
-		return "";
-	}
-
 	async handlePlanModeCommand(initialPrompt?: string): Promise<void> {
 		if (this.planModeEnabled) {
 			const confirmed = await this.showHookConfirm(
@@ -909,9 +832,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#exitPlanMode({ paused: true });
 			return;
 		}
-		// Derive the task description from the prompt or the first user-originated session message.
-		const task = initialPrompt ?? this.#getFirstUserMessageText();
-		await this.#enterPlanMode({ task });
+		await this.#enterPlanMode();
 		if (initialPrompt && this.onInputCallback) {
 			this.onInputCallback(this.startPendingSubmission({ text: initialPrompt }));
 		}
