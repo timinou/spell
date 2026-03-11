@@ -4,46 +4,46 @@
 
 * Phase 1: Rename
 
-** DOING Rename apps/omp-remote to apps/spell, update package/manifest/QML/CMake
+** DONE Rename apps/omp-remote to apps/spell, update package/manifest/QML/CMake
 :PROPERTIES:
 :TASK_ID: task-1
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
 * Phase 2: ADB + Manager
 
-** ITEM Create packages/coding-agent/src/tools/spell/adb.ts
+** DONE Create packages/coding-agent/src/tools/spell/adb.ts
 :PROPERTIES:
 :TASK_ID: task-2
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Create packages/coding-agent/src/tools/spell/manager.ts
+** DONE Create packages/coding-agent/src/tools/spell/manager.ts
 :PROPERTIES:
 :TASK_ID: task-3
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Phase 3: Dialog + Connect
 
-** ITEM Create packages/coding-agent/src/tools/spell/setup-dialog.ts
+** DONE Create packages/coding-agent/src/tools/spell/setup-dialog.ts
 :PROPERTIES:
 :TASK_ID: task-4
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Create packages/coding-agent/src/tools/spell/connect.ts
+** DONE Create packages/coding-agent/src/tools/spell/connect.ts
 :PROPERTIES:
 :TASK_ID: task-5
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Phase 4: Wire into QmlTool
 
-** ITEM Integrate ensureSpellConnection into qml.ts
+** DOING Integrate ensureSpellConnection into qml.ts
 :PROPERTIES:
 :TASK_ID: task-6
-:STATUS: pending
+:STATUS: in_progress
 :END:
 
 * Phase 5: Cleanup
