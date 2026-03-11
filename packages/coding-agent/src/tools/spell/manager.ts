@@ -61,7 +61,8 @@ export class SpellManager {
 			const asset = release.assets.find(a => a.name === SPELL_ASSET);
 
 			if (!asset) {
-				throw new Error("spell.apk not found in latest GitHub release");
+				const available = release.assets.map((a: ReleaseAsset) => a.name).join(", ") || "(none)";
+				throw new Error(`${SPELL_ASSET} not found in latest release. Assets: ${available}`);
 			}
 
 			// Download the APK.
@@ -81,7 +82,9 @@ export class SpellManager {
 
 			return cachedApkPath;
 		} catch (error) {
-			logger.error("SpellManager download failed", { error });
+			logger.error("SpellManager download failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 			throw error;
 		}
 	}
