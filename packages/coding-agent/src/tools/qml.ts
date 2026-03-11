@@ -8,9 +8,9 @@ import { type Static, Type } from "@sinclair/typebox";
 import qmlDescription from "../prompts/tools/qml.md" with { type: "text" };
 import type { ToolSession } from ".";
 import type { OutputMeta } from "./output-meta";
+import { ensureSpellConnection } from "./spell/connect";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
-import { ensureSpellConnection } from "./spell/connect";
 
 const qmlSchema = Type.Object({
 	action: Type.Union(
@@ -120,13 +120,27 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 
 					if (signal.aborted) break;
 
-					const closed =
-						bridge.getWindow(id)?.state === "closed" ||
-						events.some(e => (e.payload as { action?: string }).action === "close");
-
-					const payload: QmlWindowEventsPayload = { windowId: id, events, closed };
-					eventBus?.emit(QML_EVENTS_CHANNEL, payload);
-
+					// A close is "user-initiated" when the QML side explicitly sent
+					// { action: "close" } before Qt.quit(). A window-manager kill
+					// (Alt+F4, clicking X) produces only the bridge "closed" event
+					// with an empty events array — that must NOT abort the current
+					// agent turn, so we suppress the bus emit in that case.
+					const userInitiatedClose = events.some(
+						e => (e.payload as { action?: string }).action === "close",
+					);
+					const wmClose =
+						bridge.getWindow(id)?.state === "closed" && !userInitiatedClose;
+					const closed = userInitiatedClose || wmClose;
+				
+					// Only emit to the bus when there is meaningful content for the
+					// agent: user events, or a user-initiated close. A bare WM
+					// close with no events would abort an in-progress turn for no
+					// reason.
+					if (events.length > 0 || userInitiatedClose) {
+						const payload: QmlWindowEventsPayload = { windowId: id, events, closed };
+						eventBus?.emit(QML_EVENTS_CHANNEL, payload);
+					}
+				
 					if (closed) break;
 				}
 			} catch {
