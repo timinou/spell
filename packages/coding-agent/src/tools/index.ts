@@ -162,6 +162,8 @@ export interface ToolSession {
 	setCheckpointState?: (state: CheckpointState | null) => void;
 	/** Pre-started Emacs daemon session; null if Emacs is unavailable; undefined if not yet initialized. */
 	emacsSession?: EmacsSession | null;
+	/** Active QML remote server; when set, QmlTool routes panels to the Android client. */
+	qmlRemoteServer?: import("@oh-my-pi/pi-qml-remote").QmlRemoteServer;
 }
 
 type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;

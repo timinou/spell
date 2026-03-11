@@ -1,0 +1,19 @@
+{
+  "type": "module",
+  "name": "@oh-my-pi/pi-qml-remote",
+  "version": "0.1.0",
+  "description": "WebSocket server bridging coding-agent RPC and QML panels to Android",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "check": "biome check . && tsgo -p tsconfig.json"
+  },
+  "dependencies": {
+    "@oh-my-pi/pi-utils": "workspace:*",
+    "@oh-my-pi/pi-qml": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3"
+  },
+  "files": ["src"]
+}

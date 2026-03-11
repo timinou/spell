@@ -1,6 +1,8 @@
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { WindowInfo } from "@oh-my-pi/pi-qml";
 import { bridgeBinaryPath, isBridgeAvailable, QmlBridge } from "@oh-my-pi/pi-qml";
+import type { RemoteQmlBridge } from "@oh-my-pi/pi-qml-remote";
 
 import { type Static, Type } from "@sinclair/typebox";
 import qmlDescription from "../prompts/tools/qml.md" with { type: "text" };
@@ -62,6 +64,12 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 
 	constructor(private readonly session: ToolSession) {}
 
+	/** Returns the remote bridge if an Android client is connected, null otherwise. */
+	#remoteBridge(): RemoteQmlBridge | null {
+		const server = this.session.qmlRemoteServer;
+		return server?.bridge ?? null;
+	}
+
 	#ensureBridge(): QmlBridge {
 		if (!this.#bridge) {
 			if (!isBridgeAvailable()) {
@@ -100,6 +108,24 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				const filePath = params.path;
 				if (!id) throw new ToolError("launch action requires 'id'");
 				if (!filePath) throw new ToolError("launch action requires 'path'");
+
+				const remote = this.#remoteBridge();
+				if (remote) {
+					// Remote mode: read the local QML file and push its content to Android.
+					const abs = path.isAbsolute(filePath) ? filePath : path.join(this.session.cwd, filePath);
+					const content = await Bun.file(abs).text();
+					const win = remote.launch(id, content, {
+						title: params.title,
+						width: params.width,
+						height: params.height,
+						props: params.props as Record<string, unknown> | undefined,
+					});
+					const events = remote.drainEvents(id);
+					const details: QmlToolDetails = { action: "launch", windowId: id, events };
+					const text = `Panel '${id}' pushed to Android (state: ${win.state})${events.length ? `\n${events.length} event(s) received` : ""}`;
+					return toolResult(details).text(text).done();
+				}
+
 				const abs = path.isAbsolute(filePath) ? filePath : path.join(this.session.cwd, filePath);
 				const bridge = this.#ensureBridge();
 				const win = await bridge.launch(id, abs, {
@@ -113,9 +139,18 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				const text = `Window '${id}' launched (state: ${win.state})${events.length ? `\n${events.length} event(s) received` : ""}`;
 				return toolResult(details).text(text).done();
 			}
+
 			case "close": {
 				const id = params.id;
 				if (!id) throw new ToolError("close action requires 'id'");
+
+				const remote = this.#remoteBridge();
+				if (remote) {
+					remote.close(id);
+					const details: QmlToolDetails = { action: "close", windowId: id };
+					return toolResult(details).text(`Panel '${id}' closed on Android`).done();
+				}
+
 				const bridge = this.#ensureBridge();
 				await bridge.close(id);
 				const details: QmlToolDetails = { action: "close", windowId: id };
@@ -126,6 +161,14 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				const id = params.id;
 				if (!id) throw new ToolError("send_message action requires 'id'");
 				if (!params.payload) throw new ToolError("send_message action requires 'payload'");
+
+				const remote = this.#remoteBridge();
+				if (remote) {
+					remote.sendMessage(id, params.payload as Record<string, unknown>);
+					const details: QmlToolDetails = { action: "send_message", windowId: id };
+					return toolResult(details).text(`Message sent to panel '${id}' on Android`).done();
+				}
+
 				const bridge = this.#ensureBridge();
 				await bridge.sendMessage(id, params.payload as Record<string, unknown>);
 				const details: QmlToolDetails = { action: "send_message", windowId: id };
@@ -135,10 +178,21 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 			case "listen": {
 				const id = params.id;
 				if (!id) throw new ToolError("listen action requires 'id'");
-				const bridge = this.#ensureBridge();
-				// Push-based: resolves immediately when any event arrives, no polling.
-				const events = await bridge.waitForEvent(id);
-				const win = bridge.getWindow(id);
+
+				let events: WindowInfo["events"];
+				let win: WindowInfo | undefined;
+
+				const remote = this.#remoteBridge();
+				if (remote) {
+					events = await remote.waitForEvent(id);
+					win = remote.getWindow(id);
+				} else {
+					const bridge = this.#ensureBridge();
+					// Push-based: resolves immediately when any event arrives, no polling.
+					events = await bridge.waitForEvent(id);
+					win = bridge.getWindow(id);
+				}
+
 				const details: QmlToolDetails = { action: "listen", windowId: id, events };
 				const closed =
 					win?.state === "closed" || events.some(e => (e.payload as { action?: string }).action === "close");
@@ -155,8 +209,8 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 			}
 
 			case "list_windows": {
-				const bridge = this.#bridge;
-				const windows = bridge ? bridge.listWindows() : [];
+				const remote = this.#remoteBridge();
+				const windows = remote ? remote.listWindows() : this.#bridge ? this.#bridge.listWindows() : [];
 				const details: QmlToolDetails = {
 					action: "list_windows",
 					windows: windows.map(w => ({
