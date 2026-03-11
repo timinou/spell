@@ -23,9 +23,7 @@ const WS_CONNECT_TIMEOUT_MS = 30_000;
  * Wait for an Android device to appear via ADB.
  * Returns the first device seen, or null if the deadline or signal fires first.
  */
-async function waitForDevice(
-	signal: AbortSignal,
-): Promise<{ id: string } | null> {
+async function waitForDevice(signal: AbortSignal): Promise<{ id: string } | null> {
 	const deadline = Date.now() + DEVICE_WAIT_TIMEOUT_MS;
 	while (Date.now() < deadline && !signal.aborted) {
 		const devices = await getConnectedDevices();
@@ -40,10 +38,7 @@ async function waitForDevice(
  * Uses the server's "connected" event rather than polling a bridge reference,
  * because `server.bridge` is always non-null (constructed eagerly).
  */
-async function waitForConnection(
-	server: QmlRemoteServer,
-	signal: AbortSignal,
-): Promise<boolean> {
+async function waitForConnection(server: QmlRemoteServer, signal: AbortSignal): Promise<boolean> {
 	const { promise, resolve } = Promise.withResolvers<boolean>();
 
 	const deadline = Date.now() + WS_CONNECT_TIMEOUT_MS;
@@ -72,22 +67,15 @@ async function waitForConnection(
  * Core setup flow. Throws ToolError on any failure or cancellation.
  * Caller is responsible for wiring the result into the UI lifecycle.
  */
-async function runSetupFlow(
-	session: ToolSession,
-	dialog: SpellSetupDialog,
-): Promise<void> {
+async function runSetupFlow(session: ToolSession, dialog: SpellSetupDialog): Promise<void> {
 	const { signal } = dialog;
 
 	// 1. Check ADB availability
 	dialog.showPhase("Checking ADB...");
 	if (!isAdbAvailable()) {
-		dialog.showError(
-			"ADB not found. Install Android SDK Platform Tools and ensure adb is in PATH.",
-		);
+		dialog.showError("ADB not found. Install Android SDK Platform Tools and ensure adb is in PATH.");
 		await Bun.sleep(3_000);
-		throw new ToolError(
-			"ADB not found in PATH. Install Android SDK Platform Tools.",
-		);
+		throw new ToolError("ADB not found in PATH. Install Android SDK Platform Tools.");
 	}
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
@@ -95,9 +83,7 @@ async function runSetupFlow(
 	dialog.showPhase("Waiting for Android device... (connect via USB)");
 	const device = await waitForDevice(signal);
 	if (!device) {
-		throw new ToolError(
-			"No Android device connected (timed out after 120s)",
-		);
+		throw new ToolError("No Android device connected (timed out after 120s)");
 	}
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
@@ -171,21 +157,17 @@ async function runSetupFlow(
  *
  * Throws `ToolError` if setup fails or the user cancels.
  */
-export async function ensureSpellConnection(
-	session: ToolSession,
-	context: AgentToolContext,
-): Promise<void> {
+export async function ensureSpellConnection(session: ToolSession, context: AgentToolContext): Promise<void> {
 	// Already connected — nothing to do.
 	if (session.qmlRemoteServer) return;
-	// Headless mode — skip; QmlTool falls back to the local bridge.
-	if (!context.hasUI) return;
+	// Headless mode or no UI context — skip; QmlTool falls back to the local bridge.
+	if (!context.hasUI || !context.ui) return;
 
 	// Bridge the fire-and-forget UI lifecycle with the async setup outcome.
-	const { promise: setupDone, resolve: onSuccess, reject: onFailure } =
-		Promise.withResolvers<void>();
+	const { promise: setupDone, resolve: onSuccess, reject: onFailure } = Promise.withResolvers<void>();
 
-	await context.ui.custom((tui, _theme, done) => {
-		const dialog = new SpellSetupDialog(tui);
+	await context.ui.custom((_tui, _theme, _kb, done) => {
+		const dialog = new SpellSetupDialog(_tui);
 
 		// Abort signal fires when user presses Escape inside the dialog.
 		dialog.signal.addEventListener(

@@ -1,4 +1,4 @@
-import { Container, Loader, Spacer, Text, getEditorKeybindings, type TUI } from "@oh-my-pi/pi-tui";
+import { Container, getEditorKeybindings, Loader, Spacer, Text, type TUI } from "@oh-my-pi/pi-tui";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { theme } from "../../modes/theme/theme";
 
@@ -35,8 +35,8 @@ export class SpellSetupDialog extends Container {
 
 		this.#loader = new Loader(
 			this.#tui,
-			(s) => theme.fg("accent", s),
-			(s) => theme.fg("text", s),
+			s => theme.fg("accent", s),
+			s => theme.fg("text", s),
 			message,
 		);
 		this.#contentContainer.addChild(this.#loader);
