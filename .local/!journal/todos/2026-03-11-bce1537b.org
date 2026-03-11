@@ -1,0 +1,41 @@
+#+TITLE: Session 148ef81b9387e1aa Todos
+#+DATE: 2026-03-11
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE Update PlanModeState to add task field
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Update finalizePlanDraft to use taskDescription for plans item body
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Update plan-mode-active.md for pre-created org draft branch
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Update interactive-mode.ts: enterPlanMode creates draft, handlePlanModeCommand extracts task
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Update agent-session.ts: pass task to plan mode context / update buildPlanModeMessage
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+** DONE Run bun check:ts to verify
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:

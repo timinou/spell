@@ -1,4 +1,5 @@
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { isBridgeAvailable, QmlBridge } from "@oh-my-pi/pi-qml";
 import { QmlRemoteServer } from "@oh-my-pi/pi-qml-remote";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "..";
@@ -12,17 +13,146 @@ import {
 	setupPortForward,
 } from "./adb";
 import { SpellManager } from "./manager";
+import setupQml from "./setup.qml" with { type: "text" };
 import { SpellSetupDialog } from "./setup-dialog";
 
 const SPELL_PORT = 9473;
 const DEVICE_POLL_INTERVAL_MS = 2_000;
 const DEVICE_WAIT_TIMEOUT_MS = 120_000;
 const WS_CONNECT_TIMEOUT_MS = 30_000;
+const SETUP_QML_PATH = "/tmp/omp-qml/spell-setup.qml";
+
+// ── display abstraction ───────────────────────────────────────────────────────
+
+/** Common interface for the onboarding UI — QML window or TUI dialog. */
+interface SetupDisplay {
+	readonly signal: AbortSignal;
+	showPhase(text: string): void;
+	showDevice(name: string): void;
+	showSuccess(text: string): void;
+	showError(text: string): void;
+}
+
+// ── QML window display ────────────────────────────────────────────────────────
 
 /**
- * Wait for an Android device to appear via ADB.
- * Returns the first device seen, or null if the deadline or signal fires first.
+ * Desktop QML window display. Launches setup.qml via QmlBridge and drives it
+ * with bridge messages. Cancel button / Escape in the window aborts the signal.
  */
+class QmlSetupDisplay implements SetupDisplay {
+	#bridge: QmlBridge;
+	#ac = new AbortController();
+	readonly signal = this.#ac.signal;
+
+	constructor(bridge: QmlBridge) {
+		this.#bridge = bridge;
+	}
+
+	/** Write the QML file and launch the window. */
+	async launch(): Promise<void> {
+		await Bun.write(SETUP_QML_PATH, setupQml);
+		await this.#bridge.launch("spell-setup", SETUP_QML_PATH, {
+			title: "Spell",
+			width: 460,
+			height: 240,
+		});
+		this.#watchCancel();
+	}
+
+	/**
+	 * Background event loop: resolve the abort controller if the user clicks
+	 * Cancel / presses Escape, or closes the window.
+	 */
+	#watchCancel(): void {
+		void (async () => {
+			while (!this.#ac.signal.aborted) {
+				try {
+					const events = await this.#bridge.waitForEvent("spell-setup", 5_000);
+					const cancelled = events.some(e => (e.payload as { action?: string }).action === "cancel");
+					const closed =
+						this.#bridge.getWindow("spell-setup")?.state === "closed" ||
+						events.some(e => (e.payload as { action?: string }).action === "close");
+					if (cancelled || closed) {
+						this.#ac.abort();
+						break;
+					}
+				} catch {
+					// timeout or bridge gone — stop watching
+					break;
+				}
+			}
+		})();
+	}
+
+	showPhase(text: string): void {
+		this.#send({ type: "phase", text });
+	}
+
+	showDevice(name: string): void {
+		this.#send({ type: "device", name });
+	}
+
+	showSuccess(text: string): void {
+		this.#send({ type: "success", text });
+	}
+
+	showError(text: string): void {
+		this.#send({ type: "error", text });
+	}
+
+	#send(payload: Record<string, unknown>): void {
+		try {
+			void this.#bridge.sendMessage("spell-setup", payload);
+		} catch {
+			// window already closed — ignore
+		}
+	}
+
+	async dispose(): Promise<void> {
+		this.#ac.abort();
+		this.#send({ type: "close" });
+		try {
+			await this.#bridge.close("spell-setup");
+		} catch {
+			// already closed
+		}
+		await this.#bridge.dispose();
+	}
+}
+
+// ── TUI dialog display ────────────────────────────────────────────────────────
+
+/** Thin adapter so SpellSetupDialog satisfies SetupDisplay. */
+class TuiSetupDisplay implements SetupDisplay {
+	readonly signal: AbortSignal;
+	#dialog: SpellSetupDialog;
+
+	constructor(dialog: SpellSetupDialog) {
+		this.#dialog = dialog;
+		this.signal = dialog.signal;
+	}
+
+	showPhase(text: string): void {
+		this.#dialog.showPhase(text);
+	}
+
+	showDevice(name: string): void {
+		// In TUI mode the device name is already embedded in the phase text;
+		// update the phase to show it as part of the next phase message.
+		this.#dialog.showPhase(`Device found: ${name}`);
+	}
+
+	showSuccess(text: string): void {
+		this.#dialog.showSuccess(text);
+	}
+
+	showError(text: string): void {
+		this.#dialog.showError(text);
+	}
+}
+
+// ── shared helpers ────────────────────────────────────────────────────────────
+
 async function waitForDevice(signal: AbortSignal): Promise<{ id: string } | null> {
 	const deadline = Date.now() + DEVICE_WAIT_TIMEOUT_MS;
 	while (Date.now() < deadline && !signal.aborted) {
@@ -33,99 +163,89 @@ async function waitForDevice(signal: AbortSignal): Promise<{ id: string } | null
 	return null;
 }
 
-/**
- * Wait for a WebSocket client to connect to the QmlRemoteServer.
- * Uses the server's "connected" event rather than polling a bridge reference,
- * because `server.bridge` is always non-null (constructed eagerly).
- */
 async function waitForConnection(server: QmlRemoteServer, signal: AbortSignal): Promise<boolean> {
 	const { promise, resolve } = Promise.withResolvers<boolean>();
-
 	const deadline = Date.now() + WS_CONNECT_TIMEOUT_MS;
 
-	// Listen for the first connection event.
-	const removeListener = server.addListener("connected", () => {
-		resolve(true);
-	});
+	const removeListener = server.addListener("connected", () => resolve(true));
 
-	// Set a deadline timer — Bun.sleep is not cancellable, so drive it with a
-	// recursive polling loop that defers to the event above when it fires.
-	const pollDeadline = async (): Promise<void> => {
+	void (async () => {
 		while (Date.now() < deadline && !signal.aborted) {
 			await Bun.sleep(500);
 		}
 		resolve(false);
-	};
-	void pollDeadline();
+	})();
 
 	const connected = await promise;
 	removeListener();
 	return connected;
 }
 
-/**
- * Core setup flow. Throws ToolError on any failure or cancellation.
- * Caller is responsible for wiring the result into the UI lifecycle.
- */
-async function runSetupFlow(session: ToolSession, dialog: SpellSetupDialog): Promise<void> {
-	const { signal } = dialog;
+// ── core setup flow ───────────────────────────────────────────────────────────
 
-	// 1. Check ADB availability
-	dialog.showPhase("Checking ADB...");
+/**
+ * Runs the full onboarding sequence. Throws ToolError on any failure or
+ * cancellation. Display-agnostic — works with both QML and TUI surfaces.
+ */
+async function runSetupFlow(session: ToolSession, display: SetupDisplay): Promise<void> {
+	const { signal } = display;
+
+	// 1. ADB availability
+	display.showPhase("Checking ADB...");
 	if (!isAdbAvailable()) {
-		dialog.showError("ADB not found. Install Android SDK Platform Tools and ensure adb is in PATH.");
+		display.showError("ADB not found. Install Android SDK Platform Tools and add adb to PATH.");
 		await Bun.sleep(3_000);
 		throw new ToolError("ADB not found in PATH. Install Android SDK Platform Tools.");
 	}
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
-	// 2. Wait for device
-	dialog.showPhase("Waiting for Android device... (connect via USB)");
+	// 2. Wait for device (shows immediately so the user sees the prompt)
+	display.showPhase("Connect your Android phone via USB...");
 	const device = await waitForDevice(signal);
+	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 	if (!device) {
 		throw new ToolError("No Android device connected (timed out after 120s)");
 	}
-	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
 	const deviceId = device.id;
-	dialog.showPhase(`Device found: ${deviceId}`);
-	await Bun.sleep(500);
+	display.showDevice(deviceId);
+	display.showPhase(`Device found: ${deviceId}`);
+	await Bun.sleep(400);
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
 	// 3. Install Spell if not already present
 	const installed = await isSpellInstalled(deviceId);
 	if (!installed) {
-		dialog.showPhase("Locating Spell APK...");
+		display.showPhase("Locating Spell APK...");
 		const manager = new SpellManager();
 		const apkPath = await manager.ensureApk(signal);
 		if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
-		dialog.showPhase("Installing Spell...");
+		display.showPhase("Installing Spell...");
 		const ok = await installApk(apkPath, deviceId);
 		if (!ok) {
-			dialog.showError("Failed to install Spell APK.");
+			display.showError("Failed to install Spell APK.");
 			await Bun.sleep(3_000);
 			throw new ToolError("adb install failed");
 		}
 	} else {
-		dialog.showPhase("Spell already installed");
-		await Bun.sleep(500);
+		display.showPhase("Spell already installed");
+		await Bun.sleep(400);
 	}
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
 	// 4. Port forwarding
-	dialog.showPhase("Setting up port forwarding...");
+	display.showPhase("Setting up port forwarding...");
 	await setupPortForward(SPELL_PORT, deviceId);
 	if (signal.aborted) throw new ToolError("Spell setup cancelled");
 
-	// 5. Start QmlRemoteServer before launching Spell so the server is ready
-	//    the moment Spell attempts its first connection.
-	dialog.showPhase("Starting connection server...");
+	// 5. Start QmlRemoteServer before launching so it's ready for the first connect
+	display.showPhase("Starting connection server...");
 	const server = new QmlRemoteServer({ port: SPELL_PORT });
 	server.start();
 
 	// 6. Launch Spell
-	dialog.showPhase("Launching Spell...");
+	display.showPhase("Launching Spell...");
 	await launchSpell(deviceId);
 	if (signal.aborted) {
 		server.stop();
@@ -133,43 +253,47 @@ async function runSetupFlow(session: ToolSession, dialog: SpellSetupDialog): Pro
 	}
 
 	// 7. Wait for WebSocket connection
-	dialog.showPhase("Waiting for Spell to connect...");
+	display.showPhase("Waiting for Spell to connect...");
 	const connected = await waitForConnection(server, signal);
 	if (!connected) {
 		server.stop();
-		dialog.showError("Spell did not connect (timed out after 30s)");
+		display.showError("Spell did not connect (timed out after 30s)");
 		await Bun.sleep(3_000);
 		throw new ToolError("Spell did not connect within 30 seconds");
 	}
 
-	// 8. Attach server to session — visible to callers after this function returns
+	// 8. Attach to session
 	session.qmlRemoteServer = server;
 
-	// 9. Brief success display before dismissing the dialog
-	dialog.showSuccess("Connected!");
+	// 9. Brief success moment before the caller tears down the display
+	display.showSuccess("Connected!");
 	await Bun.sleep(1_000);
 }
 
-/**
- * Ensure Spell is installed, reachable, and a QmlRemoteServer is attached to
- * the session. Idempotent — returns immediately if already connected or in
- * headless mode.
- *
- * Throws `ToolError` if setup fails or the user cancels.
- */
-export async function ensureSpellConnection(session: ToolSession, context: AgentToolContext): Promise<void> {
-	// Already connected — nothing to do.
-	if (session.qmlRemoteServer) return;
-	// Headless mode or no UI context — skip; QmlTool falls back to the local bridge.
-	if (!context.hasUI || !context.ui) return;
+// ── QML path ──────────────────────────────────────────────────────────────────
 
-	// Bridge the fire-and-forget UI lifecycle with the async setup outcome.
+async function runWithQmlDisplay(session: ToolSession): Promise<void> {
+	const bridge = new QmlBridge();
+	const display = new QmlSetupDisplay(bridge);
+
+	try {
+		await display.launch();
+		await runSetupFlow(session, display);
+	} finally {
+		await display.dispose();
+	}
+}
+
+// ── TUI path ──────────────────────────────────────────────────────────────────
+
+async function runWithTuiDisplay(session: ToolSession, ui: NonNullable<AgentToolContext["ui"]>): Promise<void> {
 	const { promise: setupDone, resolve: onSuccess, reject: onFailure } = Promise.withResolvers<void>();
 
-	await context.ui.custom((_tui, _theme, _kb, done) => {
+	await ui.custom((_tui, _theme, _kb, done) => {
 		const dialog = new SpellSetupDialog(_tui);
+		const display = new TuiSetupDisplay(dialog);
 
-		// Abort signal fires when user presses Escape inside the dialog.
+		// Escape in dialog → abort
 		dialog.signal.addEventListener(
 			"abort",
 			() => {
@@ -179,13 +303,12 @@ export async function ensureSpellConnection(session: ToolSession, context: Agent
 			{ once: true },
 		);
 
-		void runSetupFlow(session, dialog)
+		void runSetupFlow(session, display)
 			.then(() => {
 				onSuccess();
 				done(undefined);
 			})
 			.catch((err: unknown) => {
-				// signal.abort path already handled above; avoid double-rejection.
 				if (!dialog.signal.aborted) {
 					logger.error("Spell setup failed", { error: err });
 					onFailure(err);
@@ -196,6 +319,34 @@ export async function ensureSpellConnection(session: ToolSession, context: Agent
 		return dialog;
 	});
 
-	// Re-throw any ToolError (or unexpected error) from the setup flow.
 	await setupDone;
+}
+
+// ── public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Ensure Spell is installed, reachable, and a QmlRemoteServer is attached to
+ * the session. Idempotent — returns immediately if already connected.
+ *
+ * Display strategy (first that applies):
+ *   1. Desktop QML window  — when omp-qml-bridge is available
+ *   2. TUI modal           — when a TUI context is present but no bridge
+ *   3. Headless skip       — no UI at all; QmlTool falls back to local bridge
+ *
+ * Throws `ToolError` if setup fails or the user cancels.
+ */
+export async function ensureSpellConnection(session: ToolSession, context: AgentToolContext): Promise<void> {
+	if (session.qmlRemoteServer) return;
+
+	if (isBridgeAvailable()) {
+		await runWithQmlDisplay(session);
+		return;
+	}
+
+	if (context.hasUI && context.ui) {
+		await runWithTuiDisplay(session, context.ui);
+		return;
+	}
+
+	// Headless — nothing to display; QmlTool falls back to local bridge.
 }

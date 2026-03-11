@@ -20,3 +20,9 @@ declare module "*.py" {
 	const content: string;
 	export default content;
 }
+
+// QML files imported as text
+declare module "*.qml" {
+	const content: string;
+	export default content;
+}
