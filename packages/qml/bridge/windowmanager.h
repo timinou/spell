@@ -3,6 +3,7 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QQmlApplicationEngine>
+#include <QQuickWindow>
 #include <QString>
 #include "bridge.h"
 
@@ -26,6 +27,7 @@ private:
     void reloadWindow(const QString &id);
     void closeWindow(const QString &id);
     void sendMessage(const QString &id, const QJsonObject &payload);
+    void screenshotWindow(const QString &id, const QString &savePath);
     void writeEvent(const QJsonObject &event);
 
     struct WindowEntry {

@@ -1,0 +1,41 @@
+#+TITLE: Session 148ef6c9b7e5dc16 Todos
+#+DATE: 2026-03-11
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE C++ bridge: add screenshotWindow to windowmanager.h/.cpp
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Protocol: add screenshot command/event types
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE QmlBridge: add screenshot method
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE QML tool: add screenshot action
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Prompt: add screenshot action doc
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+** DONE Build bridge and type-check
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:

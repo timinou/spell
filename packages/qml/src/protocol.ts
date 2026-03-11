@@ -11,14 +11,16 @@ export type BridgeCommand =
 	  }
 	| { type: "reload"; id: string }
 	| { type: "message"; id: string; payload: Record<string, unknown> }
-	| { type: "close"; id: string };
+	| { type: "close"; id: string }
+	| { type: "screenshot"; id: string; path: string };
 
 /** Events emitted by bridge process → omp (stdout) */
 export type BridgeEvent =
 	| { type: "ready"; id: string }
 	| { type: "event"; id: string; name?: string; payload: Record<string, unknown> }
 	| { type: "error"; id: string; message: string }
-	| { type: "closed"; id: string };
+	| { type: "closed"; id: string }
+	| { type: "screenshot"; id: string; path: string };
 
 /** State of a managed window */
 export type WindowState = "loading" | "ready" | "closed" | "error";

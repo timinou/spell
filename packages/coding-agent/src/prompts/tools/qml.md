@@ -6,6 +6,7 @@ Launch Qt 6 QML desktop windows for rich domain-specific UI interactions.
 - `send_message`: Send a JSON payload to a running window (`bridge.messageReceived` signal fires in QML).
 - `close`: Close a window by id.
 - `list_windows`: List all tracked windows with their state.
+- `screenshot`: Capture a window's content as PNG. Requires `id`. Optional `path` sets the save location (default: `/tmp/omp-qml/screenshot-{id}-{timestamp}.png`). Returns the saved image inline.
 </actions>
 
 <qml-bridge-api>
