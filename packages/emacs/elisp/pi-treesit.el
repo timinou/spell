@@ -31,14 +31,21 @@ look for installation details."
                             (fboundp 'pi-prelude-grammar-unavailable-p)
                             (pi-prelude-grammar-unavailable-p lang))))
           (if lang
-              (error "Tree-sitter grammar '%s' is not available for %s.%s\
-  Run `M-x pi-prelude-install-grammar RET %s' or restart the daemon. \
-  Check ~/.omp/logs/ for compilation errors."
+              (error "Tree-sitter grammar '%s' is not available for %s.%s \
+\
+To install: (1) Restart the Emacs daemon (it auto-compiles missing grammars), or \
+(2) Create .omp/treesitter.json with: \
+{\"sources\": {\"<lang>\": \"https://github.com/<org>/tree-sitter-<lang>\"}} \
+then restart. Check ~/.omp/logs/ for compilation errors."
                      lang
                      (file-name-nondirectory file)
-                     (if reason (format " Compile error: %s." reason) "")
-                     lang)
-            (error "No tree-sitter parser available for %s (extension .%s not recognised)."
+                     (if reason (format " Compile error: %s." reason) ""))
+            (error "No tree-sitter parser for %s (extension .%s not in built-in table). \
+\
+To add support for this language: create .omp/treesitter.json in the project root with: \
+{\"sources\": {\"<lang>\": \"https://github.com/<org>/tree-sitter-<lang>\"}, \
+\"extensions\": {\"<ext>\": \"<lang>\"}} \
+then restart the Emacs daemon. The grammar will be auto-compiled on next startup."
                    (file-name-nondirectory file)
                    (or (file-name-extension file) "?"))))))
     buf))
@@ -64,7 +71,8 @@ Returns nil for file types without a treesit mode (e.g. .el)."
          ((member ext '("toml"))           'toml-ts-mode)
          ((member ext '("bash" "sh"))      'bash-ts-mode)
          ((member ext '("el"))             'emacs-lisp-mode)
-         (t nil)))))
+         ;; Elm: no built-in treesit mode, but parser activates via lang-for-file.
+         (t nil))))
 
 (defun pi-treesit--activate-parser (file)
   "Try to activate an appropriate treesit parser for FILE."
@@ -91,7 +99,8 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
          ((member ext '("yaml" "yml"))     'yaml)
          ((member ext '("toml"))           'toml)
          ((member ext '("bash" "sh"))      'bash)
-         (t nil)))))
+         ((member ext '("elm"))            'elm)
+         (t nil))))
 
 ;; ---------------------------------------------------------------------------
 ;; Node helpers — treesit positions are 1-indexed buffer positions
@@ -192,6 +201,16 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
         (when spec
           (let ((name (treesit-node-child-by-field-name spec "name")))
             (when name (treesit-node-text name t))))))
+     ;; Elm: value_declaration, type_alias_declaration, type_declaration, port_annotation
+     ((member type '("type_alias_declaration" "type_declaration" "port_annotation"))
+      (let ((name-node (treesit-node-child-by-field-name node "name")))
+        (when name-node (treesit-node-text name-node t))))
+     ((string= type "value_declaration")
+      ;; value_declaration → functionDeclarationLeft → lower_case_identifier (child)
+      (let ((fdl (treesit-node-child-by-field-name node "functionDeclarationLeft")))
+        (when fdl
+          (let ((id (treesit-search-subtree fdl "lower_case_identifier" nil nil 1)))
+            (when id (treesit-node-text id t))))))
      (t nil))))
 
 (defun pi-treesit-declaration-kind (node)
@@ -227,7 +246,11 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
      ((string= type "function_declaration") "func")
      ((string= type "method_declaration") "method")
      ((string= type "type_declaration") "type")
-     (t type))))
+     ;; Elm
+     ((string= type "value_declaration") "def")
+     ((string= type "type_alias_declaration") "type alias")
+     ((string= type "port_annotation") "port")
+     (t type))
 
 (provide 'pi-treesit)
 ;;; pi-treesit.el ends here
