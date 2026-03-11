@@ -400,6 +400,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				get onInputCallback() {
 					return ctx.onInputCallback;
 				},
+				get isAwaitingHookInput() {
+					return ctx.hookSelector !== undefined || ctx.hookInput !== undefined;
+				},
 				sessionManager: this.sessionManager,
 				get todoPhases() {
 					return ctx.todoPhases;
