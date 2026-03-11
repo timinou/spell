@@ -45,6 +45,7 @@
 		"@oh-my-pi/pi-agent-core": "workspace:*",
 		"@oh-my-pi/pi-ai": "workspace:*",
 		"@oh-my-pi/pi-emacs": "workspace:*",
+		"@oh-my-pi/pi-niri": "workspace:*",
 		"@oh-my-pi/pi-natives": "workspace:*",
 		"@oh-my-pi/pi-org": "workspace:*",
 		"@oh-my-pi/pi-qml": "workspace:*",
