@@ -3,6 +3,9 @@ Plan approved. You **MUST** execute it now.
 </critical>
 
 Finalized plan artifact: `{{finalPlanFilePath}}`
+{{#if orgItemId}}
+Active org item: `{{orgItemId}}`
+{{/if}}
 
 ## Plan
 
