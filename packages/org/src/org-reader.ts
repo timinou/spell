@@ -9,12 +9,17 @@
  * For full org-element AST fidelity (wave, validate, dependency graphs),
  * the Emacs-backed client supersedes this.
  *
+ * Two item representations are supported:
+ *
+ *   1. **File-level items** — metadata in `#+KEY: value` frontmatter lines.
+ *      Body is everything after the frontmatter block. Recognized when the
+ *      file has a `#+CUSTOM_ID:` line. Produces a level-0 item.
+ *
+ *   2. **Heading-level items** — `* STATE title` with `:PROPERTIES:` drawer.
+ *      Body is text between `:END:` and the next heading at same or higher
+ *      level.
+ *
  * Parsing approach: line-by-line state machine, no regex backtracking.
- * Handles:
- *   - Headings at any level (*, **, ***)
- *   - PROPERTIES drawers immediately following headings
- *   - Nested headings (children)
- *   - Body text (lines between drawer :END: and next heading at same/higher level)
  */
 
 import * as fs from "node:fs/promises";
@@ -23,7 +28,56 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import type { OrgItem, OrgQueryFilter } from "./types";
 
 // =============================================================================
-// Line parsing helpers
+// Frontmatter parser
+// =============================================================================
+
+interface FileLevelItem {
+	properties: Record<string, string>;
+	state: string | null;
+	title: string;
+	/** 0-indexed line where body content starts (after frontmatter + blank lines). */
+	bodyStartIdx: number;
+}
+
+/**
+ * Parse `#+KEY: value` lines at the top of the file.
+ *
+ * Returns null if no `#+CUSTOM_ID:` is found (not a file-level item).
+ */
+function parseFileFrontmatter(lines: string[], todoKeywords: Set<string>): FileLevelItem | null {
+	const properties: Record<string, string> = {};
+	let state: string | null = null;
+	let title = "";
+	let i = 0;
+
+	// Consume all leading #+KEY: lines
+	while (i < lines.length && lines[i].startsWith("#+")) {
+		const match = /^#\+([A-Za-z_]+):\s*(.*)$/.exec(lines[i]);
+		if (match) {
+			const key = match[1].toUpperCase();
+			const value = match[2].trim();
+
+			if (key === "TITLE") {
+				title = value;
+			} else if (key === "STATE") {
+				state = todoKeywords.has(value) ? value : null;
+			} else {
+				properties[key] = value;
+			}
+		}
+		i++;
+	}
+
+	if (!properties.CUSTOM_ID) return null;
+
+	// Skip blank lines between frontmatter and body
+	while (i < lines.length && lines[i].trim() === "") i++;
+
+	return { properties, state, title, bodyStartIdx: i };
+}
+
+// =============================================================================
+// Heading-level parser
 // =============================================================================
 
 interface HeadingLine {
@@ -59,7 +113,7 @@ function parseHeadingLine(line: string, lineNum: number, todoKeywords: Set<strin
 		}
 	}
 
-	// No TODO keyword — not a task item (still parse as structural heading)
+	// No TODO keyword — structural heading, not a task item
 	return {
 		level,
 		state: null,
@@ -84,17 +138,62 @@ interface ParsedItem {
 }
 
 /**
- * Parse all headings with TODO states from a single org file.
+ * Parse all items from a single org file.
+ *
  * Returns a flat list; caller can reconstruct hierarchy via childIndices.
+ * Includes both file-level items (level 0) and heading-level items.
  */
 function parseOrgFile(content: string, todoKeywords: Set<string>): ParsedItem[] {
 	const lines = content.split("\n");
 	const items: ParsedItem[] = [];
 
-	// Stack tracks open (ancestor) headings for hierarchy building
+	// Try to parse file-level item from frontmatter
+	const fileLevelItem = parseFileFrontmatter(lines, todoKeywords);
+
+	let headingScanStart = 0;
+
+	if (fileLevelItem) {
+		// File-level item at level 0 — body is everything from bodyStartIdx
+		// to the first heading-level TODO item (or end of file).
+		const bodyLines: string[] = [];
+		let j = fileLevelItem.bodyStartIdx;
+
+		// Collect all body content. Heading-level TODO items found below will
+		// be parsed separately and registered as children; they are NOT part
+		// of the file-level body.
+		//
+		// We do a first pass to find where body ends (first heading-level TODO
+		// item), then a second pass in the heading parser to collect those items.
+		// Actually, it's simpler to collect the entire remaining content as the
+		// body and let callers decide. The heading-level items also appear in
+		// the items list for query/dashboard purposes.
+		while (j < lines.length) {
+			bodyLines.push(lines[j]);
+			j++;
+		}
+
+		// Trim trailing blank lines
+		while (bodyLines.length > 0 && bodyLines[bodyLines.length - 1].trim() === "") {
+			bodyLines.pop();
+		}
+
+		items.push({
+			level: 0,
+			state: fileLevelItem.state,
+			title: fileLevelItem.title,
+			lineNum: 1,
+			properties: fileLevelItem.properties,
+			bodyLines,
+			childIndices: [],
+		});
+
+		headingScanStart = fileLevelItem.bodyStartIdx;
+	}
+
+	// Parse heading-level items
 	const stack: Array<{ item: ParsedItem; index: number }> = [];
 
-	let i = 0;
+	let i = headingScanStart;
 	while (i < lines.length) {
 		const line = lines[i];
 		const heading = parseHeadingLine(line, i + 1, todoKeywords);
@@ -145,12 +244,14 @@ function parseOrgFile(content: string, todoKeywords: Set<string>): ParsedItem[] 
 				items.push(item);
 
 				// Update hierarchy
-				// Pop stack entries that are at same or deeper level
 				while (stack.length > 0 && stack[stack.length - 1].item.level >= heading.level) {
 					stack.pop();
 				}
 				if (stack.length > 0) {
 					stack[stack.length - 1].item.childIndices.push(itemIndex);
+				} else if (fileLevelItem && items.length > 1) {
+					// Top-level heading items are children of the file-level item
+					items[0].childIndices.push(itemIndex);
 				}
 				stack.push({ item, index: itemIndex });
 
@@ -161,7 +262,6 @@ function parseOrgFile(content: string, todoKeywords: Set<string>): ParsedItem[] 
 				while (stack.length > 0 && stack[stack.length - 1].item.level >= heading.level) {
 					stack.pop();
 				}
-				// Don't push onto stack — non-task headings don't own task children
 			}
 		}
 
