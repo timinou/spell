@@ -1,0 +1,71 @@
+#+TITLE: Session 148e4d98a7722719 Todos
+#+DATE: 2026-03-11
+#+TODO: ITEM DOING | DONE
+
+* org/packages
+
+** DONE Fix titleToSlug — treat _ as word separator (id-generator.ts)
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Add plans category to DEFAULT_ORG_CONFIG (schema/defaults.ts)
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+* settings + prompts
+
+** DONE Change org.planActiveCategory default to plans (settings-schema.ts)
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Update exit-plan-mode tool description (tools/exit-plan-mode.md)
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Update plan-mode-active.md — org create instructions + todo_write
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+* core wiring
+
+** DONE export buildOrgConfig from org-plan.ts; remove createPlanDraft
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+** DONE Add itemId param to exit-plan-mode.ts; resolve org item + return planContent
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:END:
+
+** DONE Remove createPlanDraft call from interactive-mode.ts; wire itemId through approvePlan
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:END:
+
+** DONE Pass orgEnabled + draftCategory to plan-mode-active template in agent-session.ts
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: completed
+:END:
+
+* verify
+
+** DONE bun check:ts
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: completed
+:END:

@@ -62,3 +62,6 @@ packages/coding-agent/src/internal-urls/docs-index.generated.ts
 # QML bridge build artifacts
 packages/qml/build/
 packages/qml/native/omp-qml-bridge
+
+# Tree-sitter compiled grammars (platform-specific, managed by pi-prelude)
+packages/emacs/elisp/vendor/tree-sitter/*.so

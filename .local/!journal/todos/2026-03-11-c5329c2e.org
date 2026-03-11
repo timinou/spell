@@ -1,0 +1,45 @@
+#+TITLE: Session 148e88271864ed6a Todos
+#+DATE: 2026-03-11
+#+TODO: ITEM DOING | DONE
+
+* Core
+
+** DONE Add startEmacsDaemon to packages/emacs/src/tool.ts + fix dynamic import
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Export startEmacsDaemon from packages/emacs/src/index.ts
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Add emacsSession to ToolSession + preflight in createTools
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Wire EmacsTool to read session.emacsSession
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+* Tests
+
+** DONE Write packages/emacs/test/startEmacsDaemon.test.ts
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+* Verify
+
+** DONE bun check:ts
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:

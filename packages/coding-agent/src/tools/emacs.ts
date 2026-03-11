@@ -7,7 +7,7 @@
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { EmacsToolDefinition } from "@oh-my-pi/pi-emacs";
-import { createEmacsTool, makeEmacsSessionFactory } from "@oh-my-pi/pi-emacs";
+import { createEmacsTool } from "@oh-my-pi/pi-emacs";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
@@ -64,11 +64,9 @@ export class EmacsTool implements AgentTool<typeof emacsSchema> {
 
 	constructor(session: ToolSession) {
 		const projectRoot = session.cwd ?? getProjectDir();
-		const emacsPathSetting = session.settings.get("emacs.path") as string | undefined;
-		const sessionId = session.getSessionId?.() ?? "default";
-
+		// Use the pre-started session owned by Pi — detection already ran during createTools preflight.
 		this.#inner = createEmacsTool(projectRoot, {
-			getSession: makeEmacsSessionFactory(emacsPathSetting, projectRoot, sessionId),
+			getSession: () => Promise.resolve(session.emacsSession ?? null),
 		});
 		this.description = this.#inner.description;
 	}
