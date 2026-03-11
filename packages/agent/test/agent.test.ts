@@ -146,6 +146,52 @@ describe("Agent", () => {
 		expect(() => agent.abort()).not.toThrow();
 	});
 
+	it("abort() during a run does not set state.error", async () => {
+		// Simulates exit_plan_mode: the tool handler calls session.abort() to stop
+		// the current run before launching a fresh synthetic session.prompt().
+		// The niri overlay must NOT see an error during this transition.
+		const agent = new Agent({
+			streamFn: (_model, _context, options) => {
+				const stream = new MockAssistantStream();
+				// When aborted, push a terminal event so the for-await loop unblocks.
+				// The real API client does the same (terminates the network request).
+				options?.signal?.addEventListener("abort", () => {
+					stream.push({
+						type: "error",
+						reason: "aborted",
+						error: {
+							role: "assistant",
+							content: [],
+							api: "openai-responses",
+							provider: "openai",
+							model: "mock",
+							usage: createUsage(),
+							stopReason: "aborted",
+							errorMessage: "Request was aborted",
+							timestamp: Date.now(),
+						},
+					});
+				});
+				return stream;
+			},
+		});
+
+		const promptPromise = agent.prompt("do work");
+		// Give the stream a tick to start
+		await Bun.sleep(0);
+		expect(agent.state.isStreaming).toBe(true);
+
+		agent.abort();
+		await promptPromise;
+
+		// The abort is intentional — must not surface as an error.
+		expect(agent.state.error).toBeUndefined();
+		// stopReason on the injected message should still be 'aborted'.
+		const last = agent.state.messages.at(-1)!;
+		expect(last.role).toBe("assistant");
+		expect((last as any).stopReason).toBe("aborted");
+	});
+
 	it("continue() should process queued follow-up messages after an assistant turn", async () => {
 		const agent = new Agent({
 			streamFn: () => {
