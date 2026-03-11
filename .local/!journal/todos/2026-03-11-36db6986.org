@@ -2,60 +2,16 @@
 #+DATE: 2026-03-11
 #+TODO: ITEM DOING | DONE
 
-* Phase 1: Rename
+* QML Setup Window
 
-** DONE Rename apps/omp-remote to apps/spell, update package/manifest/QML/CMake
+** DONE Write spell/setup.qml — polished DMS-style desktop window
 :PROPERTIES:
 :TASK_ID: task-1
 :STATUS: completed
 :END:
 
-* Phase 2: ADB + Manager
-
-** DONE Create packages/coding-agent/src/tools/spell/adb.ts
+** DOING Refactor connect.ts: SetupDisplay interface + QmlSetupDisplay + branch logic
 :PROPERTIES:
 :TASK_ID: task-2
-:STATUS: completed
-:END:
-
-** DONE Create packages/coding-agent/src/tools/spell/manager.ts
-:PROPERTIES:
-:TASK_ID: task-3
-:STATUS: completed
-:END:
-
-* Phase 3: Dialog + Connect
-
-** DONE Create packages/coding-agent/src/tools/spell/setup-dialog.ts
-:PROPERTIES:
-:TASK_ID: task-4
-:STATUS: completed
-:END:
-
-** DONE Create packages/coding-agent/src/tools/spell/connect.ts
-:PROPERTIES:
-:TASK_ID: task-5
-:STATUS: completed
-:END:
-
-* Phase 4: Wire into QmlTool
-
-** DONE Integrate ensureSpellConnection into qml.ts
-:PROPERTIES:
-:TASK_ID: task-6
-:STATUS: completed
-:END:
-
-* Phase 5: Cleanup
-
-** DONE Update scripts and USAGE.md
-:PROPERTIES:
-:TASK_ID: task-7
-:STATUS: completed
-:END:
-
-** DOING Run bun check:ts and verify
-:PROPERTIES:
-:TASK_ID: task-8
 :STATUS: in_progress
 :END:
