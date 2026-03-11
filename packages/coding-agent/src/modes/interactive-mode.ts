@@ -17,7 +17,7 @@ import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
-import { createPlanDraft, finalizePlanDraft } from "../plan-mode/org-plan";
+import { createPlanDraft, finalizePlanDraft, type OrgPlanDraft } from "../plan-mode/org-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
@@ -661,7 +661,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.planModeEnabled = true;
 
 		await this.session.setActiveToolsByName(uniquePlanTools);
-		const draft = await createPlanDraft(this.settings, this.sessionManager.getCwd(), "Untitled plan");
+		let draft: OrgPlanDraft | null = null;
+		try {
+			draft = await createPlanDraft(this.settings, this.sessionManager.getCwd(), "Untitled plan");
+		} catch (err) {
+			this.showWarning(`Org draft creation failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 		this.session.setPlanModeState({
 			enabled: true,
 			planFilePath,
@@ -759,16 +764,20 @@ export class InteractiveMode implements InteractiveModeContext {
 			getSessionId: () => this.sessionManager.getSessionId(),
 		});
 		await Bun.write(newLocalPath, planContent);
-		// Finalize the org draft (best-effort — failure must not block approval).
+		// Finalize the org draft — non-fatal, errors are shown as warnings.
 		let activeOrgItemId: string | null = null;
 		if (orgDraft) {
-			activeOrgItemId = await finalizePlanDraft(
-				this.settings,
-				this.sessionManager.getCwd(),
-				orgDraft,
-				planTitle,
-				planContent,
-			);
+			try {
+				activeOrgItemId = await finalizePlanDraft(
+					this.settings,
+					this.sessionManager.getCwd(),
+					orgDraft,
+					planTitle,
+					planContent,
+				);
+			} catch (err) {
+				this.showWarning(`Org plan finalization failed: ${err instanceof Error ? err.message : String(err)}`);
+			}
 		}
 		if (previousTools.length > 0) {
 			await this.session.setActiveToolsByName(previousTools);

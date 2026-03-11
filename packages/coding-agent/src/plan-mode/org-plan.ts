@@ -6,8 +6,7 @@
  *   - On approval: the draft is marked DONE and a new active item is created
  *     in the configured active category with the final plan content as body.
  *
- * All operations are best-effort — failures are logged but never bubble up to
- * break the plan mode flow itself.
+ * Operations throw on failure; callers are responsible for surfacing errors.
  */
 
 import * as path from "node:path";
@@ -54,28 +53,24 @@ export async function createPlanDraft(
 	const draftCategory = (settings.get("org.planDraftCategory") as string | undefined) ?? "drafts";
 	const draftState = (settings.get("org.planDraftState") as string | undefined) ?? "ITEM";
 
-	try {
-		const config = buildOrgConfig(settings);
-		const categories = resolveCategories(config, projectRoot);
-		const cat = findCategory(categories, draftCategory);
-		if (!cat) {
-			logger.debug("org-plan: draft category not found, skipping", { draftCategory });
-			return null;
-		}
-
-		// Ensure the directory exists before generating an ID (generateId scans it).
-		await initCategoryDir(cat.absPath, cat.prefix, config.todoKeywords);
-
-		const id = await generateId(cat.absPath, cat.prefix, planTitle);
-		const filePath = path.join(cat.absPath, `${id}.org`);
-		await appendItemToFile(filePath, { title: planTitle, category: cat.name, id }, draftState);
-
-		logger.debug("org-plan: created draft item", { id, filePath });
-		return { id, file: filePath };
-	} catch (err) {
-		logger.warn("org-plan: failed to create draft item", { error: String(err) });
-		return null;
+	const config = buildOrgConfig(settings);
+	const categories = resolveCategories(config, projectRoot);
+	const cat = findCategory(categories, draftCategory);
+	if (!cat) {
+		throw new Error(
+			`org.planDraftCategory "${draftCategory}" not found. Known categories: ${categories.map(c => c.name).join(", ")}`,
+		);
 	}
+
+	// Ensure the directory exists before generating an ID (generateId scans it).
+	await initCategoryDir(cat.absPath, cat.prefix, config.todoKeywords);
+
+	const id = await generateId(cat.absPath, cat.prefix, planTitle);
+	const filePath = path.join(cat.absPath, `${id}.org`);
+	await appendItemToFile(filePath, { title: planTitle, category: cat.name, id }, draftState);
+
+	logger.debug("org-plan: created draft item", { id, filePath });
+	return { id, file: filePath };
 }
 
 /**
@@ -97,33 +92,29 @@ export async function finalizePlanDraft(
 	const activeCategory = (settings.get("org.planActiveCategory") as string | undefined) ?? "projects";
 	const activeState = (settings.get("org.planActiveState") as string | undefined) ?? "DOING";
 
-	try {
-		const config = buildOrgConfig(settings);
-		const categories = resolveCategories(config, projectRoot);
+	const config = buildOrgConfig(settings);
+	const categories = resolveCategories(config, projectRoot);
 
-		// 1. Mark draft DONE
-		await updateItemStateInFile(draft.file, draft.id, "DONE", config.todoKeywords);
+	// 1. Mark draft DONE
+	await updateItemStateInFile(draft.file, draft.id, "DONE", config.todoKeywords);
 
-		// 2. Create active item
-		const activeCat = findCategory(categories, activeCategory);
-		if (!activeCat) {
-			logger.warn("org-plan: active category not found", { activeCategory });
-			return null;
-		}
-
-		await initCategoryDir(activeCat.absPath, activeCat.prefix, config.todoKeywords);
-		const activeId = await generateId(activeCat.absPath, activeCat.prefix, planTitle);
-		const activeFilePath = path.join(activeCat.absPath, `${activeId}.org`);
-		await appendItemToFile(
-			activeFilePath,
-			{ title: planTitle, category: activeCat.name, id: activeId, body: planContent },
-			activeState,
+	// 2. Create active item
+	const activeCat = findCategory(categories, activeCategory);
+	if (!activeCat) {
+		throw new Error(
+			`org.planActiveCategory "${activeCategory}" not found. Known categories: ${categories.map(c => c.name).join(", ")}`,
 		);
-
-		logger.debug("org-plan: finalized plan", { draftId: draft.id, activeId, activeFilePath });
-		return activeId;
-	} catch (err) {
-		logger.warn("org-plan: failed to finalize plan draft", { error: String(err) });
-		return null;
 	}
+
+	await initCategoryDir(activeCat.absPath, activeCat.prefix, config.todoKeywords);
+	const activeId = await generateId(activeCat.absPath, activeCat.prefix, planTitle);
+	const activeFilePath = path.join(activeCat.absPath, `${activeId}.org`);
+	await appendItemToFile(
+		activeFilePath,
+		{ title: planTitle, category: activeCat.name, id: activeId, body: planContent },
+		activeState,
+	);
+
+	logger.debug("org-plan: finalized plan", { draftId: draft.id, activeId, activeFilePath });
+	return activeId;
 }
