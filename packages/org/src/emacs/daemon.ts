@@ -63,11 +63,14 @@ const POLL_INTERVAL_MS = 500;
 const STARTUP_TIMEOUT_MS = 30_000;
 const HEALTH_INTERVAL_MS = 5_000;
 
-/** Stable hash key derived from project root + session ID. */
-function sessionKey(projectRoot: string, sessionId: string): string {
-	// Bun.hash returns a 64-bit unsigned integer (as a number or bigint depending on runtime).
-	// We stringify it and take the first 12 hex chars.
-	const raw = Bun.hash(projectRoot + sessionId);
+/**
+ * Stable hash key derived from projectRoot only.
+ *
+ * The daemon is shared across all Pi sessions for the same project — using
+ * a per-session key would spawn a redundant daemon every time `omp` starts.
+ */
+function sessionKey(projectRoot: string, _sessionId: string): string {
+	const raw = Bun.hash(projectRoot);
 	return BigInt(raw).toString(16).slice(0, 12).padStart(12, "0");
 }
 
@@ -87,6 +90,75 @@ async function socketExists(p: string): Promise<boolean> {
 		// Permission errors or other unexpected errors: treat as absent to avoid hanging.
 		return false;
 	}
+}
+
+const PROBE_TIMEOUT_MS = 2_000;
+
+/**
+ * Probe a Unix socket to see if the daemon is alive and responding.
+ */
+async function probeSocket(sock: string): Promise<boolean> {
+	const socat = Bun.which("socat");
+	if (!socat) return false;
+	try {
+		const req = JSON.stringify({ jsonrpc: "2.0", id: 0, method: "tools/list", params: {} });
+		const proc = Bun.spawn([socat, "STDIO", `UNIX-CONNECT:${sock}`], {
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		proc.stdin.write(`${req}\n`);
+		proc.stdin.end();
+		const exited = await Promise.race([proc.exited, Bun.sleep(PROBE_TIMEOUT_MS).then(() => null as number | null)]);
+		if (exited === null) {
+			proc.kill();
+			return false;
+		}
+		return exited === 0;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Wrap an already-running daemon socket as an EmacsSession.
+ */
+function wrapExistingSocket(sock: string, key: string, daemonName: string): EmacsSession {
+	let alive = true;
+	const healthTimer = setInterval(async () => {
+		if (!(await socketExists(sock))) {
+			logger.warn("[emacs-daemon] Socket disappeared", { daemonName, sock });
+			alive = false;
+			sessions.delete(key);
+			clearInterval(healthTimer);
+		}
+	}, HEALTH_INTERVAL_MS);
+	healthTimer.unref();
+	return {
+		socketPath: sock,
+		isAlive: () => alive,
+		async stop() {
+			clearInterval(healthTimer);
+			alive = false;
+			sessions.delete(key);
+			logger.debug("[emacs-daemon] Stopping daemon", { daemonName });
+			try {
+				await Bun.$`emacsclient --socket-name=${daemonName} --eval "(kill-emacs)"`.quiet().nothrow();
+			} catch (err) {
+				logger.warn("[emacs-daemon] emacsclient kill failed", {
+					daemonName,
+					err: err instanceof Error ? err.message : String(err),
+				});
+			}
+			try {
+				await fs.unlink(sock);
+			} catch (err) {
+				if (!isEnoent(err)) {
+					logger.warn("[emacs-daemon] Could not remove socket after stop", { sock });
+				}
+			}
+		},
+	};
 }
 
 /** Poll until the socket appears or the deadline passes. */
