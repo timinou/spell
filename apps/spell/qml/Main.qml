@@ -7,7 +7,7 @@ ApplicationWindow {
     visible: true
     width: 400
     height: 800
-    title: "omp remote"
+    title: "Spell"
 
     // Determine server URL: first command-line arg, else default.
     readonly property string defaultServerUrl: "ws://localhost:9473"
@@ -40,7 +40,7 @@ ApplicationWindow {
                 onClicked: panelDrawer.open()
             }
             Label {
-                text: "omp remote"
+                text: "Spell"
                 elide: Label.ElideRight
                 Layout.fillWidth: true
             }

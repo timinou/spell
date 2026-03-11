@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# omp-remote-adb.sh
+# spell-adb.sh
 #
-# Set up ADB reverse port-forwarding so the Android omp-remote app can reach
+# Set up ADB reverse port-forwarding so the Android Spell app can reach
 # the coding-agent WebSocket server running on the dev machine.
 #
 # Usage:
-#   ./scripts/omp-remote-adb.sh [PORT]
+#   ./scripts/spell-adb.sh [PORT]
 #
 # PORT defaults to 9473 (the default QmlRemoteServer port).
 #
@@ -17,7 +17,7 @@
 #   Run the server, find your machine's LAN IP, and point the app at:
 #     ws://<LAN_IP>:PORT/ws
 #   via: adb shell am start -a android.intent.action.MAIN \
-#           -n io.ohmypi.remote/.MainActivity \
+#           -n io.ohmypi.spell/.MainActivity \
 #           --es url ws://192.168.x.x:9473/ws
 
 set -euo pipefail
@@ -37,4 +37,4 @@ fi
 
 echo "Setting up reverse port-forward: device:${PORT} -> host:${PORT}"
 adb reverse "tcp:${PORT}" "tcp:${PORT}"
-echo "Done. Start the omp-remote app — it will connect to ws://localhost:${PORT}/ws"
+echo "Done. Start the Spell app — it will connect to ws://localhost:${PORT}/ws"

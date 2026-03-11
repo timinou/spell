@@ -1,0 +1,220 @@
+#+TITLE: SPELL_ONBOARDING_FLOW
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-spell-onboarding-flow
+
+* Problem
+
+When the QML tool is used in remote mode for the first time, there is no guided setup.
+The user must manually build the Android app, install it, run ADB commands, configure the
+server, and hope it all connects. The USAGE.md documents 6+ manual steps.
+
+* Goal
+
+First-time use of the QML tool with a connected Android device triggers a blocking TUI
+modal ("Spell Setup") that:
+
+1. Detects ADB and a connected device
+2. Installs the pre-built Spell APK onto the phone (auto-built locally or downloaded from GitHub Releases)
+3. Sets up ADB reverse port-forwarding
+4. Launches the app on the phone
+5. Waits for the WebSocket connection from Spell
+6. Dismisses the modal and lets the agent proceed
+
+The user's experience: plug in phone, see a setup modal, wait ~15 seconds, done.
+
+* Rename
+
+The Android app is renamed from "omp-remote" to "Spell" everywhere:
+- Package: io.ohmypi.spell
+- App name: Spell
+- Directory: apps/spell/ (rename apps/omp-remote/)
+- Binary/APK: spell.apk
+
+* Architecture
+
+** Flow diagram
+
+#+begin_example
+QmlTool.execute("launch", ...)
+  |
+  +-- session.qmlRemoteServer exists? --> yes --> use it, done
+  |
+  +-- no --> #ensureRemoteConnection(context)
+              |
+              +-- Is ADB available? (Bun.which("adb"))
+              |     no --> throw ToolError with install instructions
+              |
+              +-- Is a device connected? (adb devices)
+              |     no --> show modal: "Connect your Android phone via USB"
+              |            poll until device appears (2s interval, 120s timeout)
+              |
+              +-- Is Spell installed? (adb shell pm list packages io.ohmypi.spell)
+              |     no --> locate or acquire APK:
+              |            1. Check local build: apps/spell/build/.../spell.apk
+              |            2. Check toolsDir: ~/.omp/tools/spell.apk
+              |            3. Try auto-build (if Qt Android toolchain detected)
+              |            4. Download from GitHub Releases (like tools-manager)
+              |            Then: adb install spell.apk
+              |
+              +-- Set up port forwarding: adb reverse tcp:9473 tcp:9473
+              |
+              +-- Start QmlRemoteServer on port 9473
+              |
+              +-- Launch Spell: adb shell am start io.ohmypi.spell/...
+              |
+              +-- Wait for WebSocket connection (30s timeout)
+              |     modal: "Waiting for Spell to connect..."
+              |     connection arrives --> modal: "Connected!" (auto-dismiss after 1s)
+              |
+              +-- Attach server to session.qmlRemoteServer
+              |
+              +-- Return, proceed with original tool call
+#+end_example
+
+** Blocking modal
+
+Uses the existing ~context.ui.custom()~ factory (same mechanism as the login dialog and
+ask tool). The factory returns a Container with DynamicBorder top/bottom, title, and a
+dynamic content area that updates through each phase:
+
+1. "Checking ADB..." -> "Device found: Pixel 7"
+2. "Installing Spell..." (or "Spell already installed")
+3. "Setting up connection..."
+4. "Waiting for Spell to connect..."  (with a Loader spinner)
+5. "Connected!" (green, auto-dismiss)
+
+The user can press Escape at any point to cancel (returns ToolError to agent).
+
+** APK acquisition (SpellManager)
+
+New file: ~packages/coding-agent/src/tools/spell/manager.ts~
+
+Follows the tools-manager.ts pattern:
+- Checks ~/.omp/tools/spell.apk for a cached copy
+- If not found, checks for a local build at apps/spell/build output
+- If not found, attempts auto-build if Qt Android toolchain is detected (cmake + Qt6 + NDK)
+- If not found, downloads from GitHub Releases (timinou/kika releases, asset "spell-arm64-v8a.apk")
+- Stores downloaded/built APK in ~/.omp/tools/spell.apk
+
+** ADB utilities
+
+New file: ~packages/coding-agent/src/tools/spell/adb.ts~
+
+Pure functions wrapping ADB commands via Bun shell ($``):
+- ~isAdbAvailable()~: Bun.which("adb") !== null
+- ~getConnectedDevices()~: parse `adb devices` output
+- ~isSpellInstalled(deviceId?)~: `adb shell pm list packages io.ohmypi.spell`
+- ~installApk(apkPath, deviceId?)~: `adb install <path>`
+- ~setupPortForward(port, deviceId?)~: `adb reverse tcp:PORT tcp:PORT`
+- ~launchSpell(deviceId?)~: `adb shell am start -n io.ohmypi.spell/.MainActivity`
+- ~uninstallSpell(deviceId?)~: for updates
+
+* Implementation Phases
+
+** Phase 1: Rename + restructure
+
+** ITEM Rename apps/omp-remote to apps/spell
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+- git mv apps/omp-remote apps/spell
+- Update CMakeLists.txt: project name, target name
+- Update AndroidManifest.xml: package io.ohmypi.spell
+- Update strings.xml: app_name "Spell"
+- Update Main.qml: title "Spell"
+- Update scripts/omp-remote-adb.sh references
+
+** Phase 2: APK management + ADB utilities
+
+** ITEM Create packages/coding-agent/src/tools/spell/adb.ts
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+- ADB wrapper functions using Bun shell ($`...`)
+- Device detection, app install, port-forward, app launch
+- All functions return typed results, never throw on expected failures (return null/false)
+
+** ITEM Create packages/coding-agent/src/tools/spell/manager.ts
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+- SpellManager class: locateApk(), ensureApk(), buildApk(), downloadApk()
+- Follows tools-manager.ts download pattern (GitHub Releases, temp dir, rename)
+- Auto-build: detect Qt6 cmake toolchain via Bun.which("cmake") + check for Qt6 Android dirs
+- Cache in ~/.omp/tools/spell.apk
+
+** Phase 3: Onboarding modal + connection flow
+
+** ITEM Create packages/coding-agent/src/tools/spell/setup-dialog.ts
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+- SpellSetupDialog extends Container (like LoginDialogComponent)
+- DynamicBorder top/bottom, "Spell Setup" title
+- Dynamic content area with phase-specific text + Loader spinner
+- Methods: showPhase(text), showSuccess(text), showError(text)
+- Escape handler cancels via AbortController
+- Implements Focusable for handleInput
+
+** ITEM Create packages/coding-agent/src/tools/spell/connect.ts
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+- ~ensureSpellConnection(session, context)~: the main orchestrator
+- Checks if session.qmlRemoteServer already exists (early return)
+- Creates SpellSetupDialog via context.ui.custom()
+- Runs through the flow: ADB check -> device detect -> APK install -> port-forward -> server start -> app launch -> wait for WS connection
+- Each step updates the dialog
+- On success: sets session.qmlRemoteServer, dialog auto-dismisses
+- On cancel/timeout: rejects with ToolError
+
+** Phase 4: QmlTool integration
+
+** ITEM Wire ensureSpellConnection into QmlTool.execute()
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Key files to modify:
+- ~packages/coding-agent/src/tools/qml.ts~: before any remote-capable action (launch, close, sendMessage, listen), call ensureSpellConnection() if no remote server exists and context.hasUI is true
+- The call is idempotent: once connected, subsequent calls are no-ops
+- If no UI (headless/subagent), fall back to local bridge as before
+
+** Phase 5: Cleanup
+
+** ITEM Update USAGE.md and scripts
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+- Simplify USAGE.md: the ADB onboarding is now automatic
+- Update scripts/omp-remote-adb.sh to reference "spell"
+- Add note about manual setup for non-interactive (RPC) mode
+
+* Key Files
+
+| File | Action |
+|------|--------|
+| apps/omp-remote/ -> apps/spell/ | rename, update package/manifest/QML |
+| packages/coding-agent/src/tools/spell/adb.ts | new - ADB wrapper utilities |
+| packages/coding-agent/src/tools/spell/manager.ts | new - APK acquisition/cache |
+| packages/coding-agent/src/tools/spell/setup-dialog.ts | new - TUI blocking dialog |
+| packages/coding-agent/src/tools/spell/connect.ts | new - orchestrator |
+| packages/coding-agent/src/tools/qml.ts | modify - call ensureSpellConnection |
+| scripts/omp-remote-adb.sh | modify - rename references |
+| USAGE.md | modify - simplify |
+
+* Key Decisions
+
+1. *Blocking modal via context.ui.custom()* — same proven pattern as LoginDialogComponent and ask tool. Agent execution pauses until connected or cancelled.
+2. *APK in ~/.omp/tools/* — follows tools-manager convention for cached binaries.
+3. *Auto-build + download fallback* — source builds preferred when toolchain available; GitHub Releases as fallback for packaged installs.
+4. *Idempotent connection* — ensureSpellConnection is safe to call on every QML tool invocation; returns immediately if already connected.
+5. *Escape to cancel* — every phase is cancellable; returns ToolError so the agent can report the failure.
+
+* Verification
+
+- Type check: bun check:ts passes
+- Manual test: with an Android device connected via USB, trigger a QML tool call; verify modal appears, APK installs, Spell opens, connection established, modal dismisses, panel renders on phone
+- Headless test: without UI context, QML tool falls back to local bridge (existing behavior unchanged)
+- Cancel test: pressing Escape during any phase returns ToolError to agent
+
