@@ -55,8 +55,9 @@
              (warning . "no-outline")
              (message . ,(format
                           "No recognized top-level declarations in '%s'. \
-                          "The outline extractor only supports TS/JS/Rust/Go/Python. \
-                          "Use `emacs_code read` (resolution 1-2) as an alternative."
+The outline extractor supports TS/JS/Rust/Go/Python/Elm. \
+If this language is unsupported, use `emacs_code read` (resolution 1-2) as a fallback, \
+or add a tree-sitter grammar via .omp/treesitter.json."
                           (file-name-nondirectory file)))))))
     (error (json-encode `((error . t) (message . ,(error-message-string err)))))))
 
