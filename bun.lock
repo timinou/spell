@@ -63,6 +63,7 @@
         "@oh-my-pi/pi-ai": "workspace:*",
         "@oh-my-pi/pi-emacs": "workspace:*",
         "@oh-my-pi/pi-natives": "workspace:*",
+        "@oh-my-pi/pi-niri": "workspace:*",
         "@oh-my-pi/pi-org": "workspace:*",
         "@oh-my-pi/pi-qml": "workspace:*",
         "@oh-my-pi/pi-tui": "workspace:*",
@@ -95,6 +96,17 @@
       "name": "@oh-my-pi/pi-natives",
       "version": "13.10.1",
       "dependencies": {
+        "@oh-my-pi/pi-utils": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.3",
+      },
+    },
+    "packages/niri": {
+      "name": "@oh-my-pi/pi-niri",
+      "version": "0.1.0",
+      "dependencies": {
+        "@oh-my-pi/pi-tui": "workspace:*",
         "@oh-my-pi/pi-utils": "workspace:*",
       },
       "devDependencies": {
@@ -356,6 +368,8 @@
     "@oh-my-pi/pi-emacs": ["@oh-my-pi/pi-emacs@workspace:packages/emacs"],
 
     "@oh-my-pi/pi-natives": ["@oh-my-pi/pi-natives@workspace:packages/natives"],
+
+    "@oh-my-pi/pi-niri": ["@oh-my-pi/pi-niri@workspace:packages/niri"],
 
     "@oh-my-pi/pi-org": ["@oh-my-pi/pi-org@workspace:packages/org"],
 
