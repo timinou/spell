@@ -173,7 +173,7 @@ Item {
                         text: "Type a message..."
                         font.family: SpellUI.SpellTheme.fontFamily
                         font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                        color: SpellUI.SpellTheme.onSurfaceFaint
+                        color: SpellUI.SpellTheme.textTertiary
                         verticalAlignment: Text.AlignVCenter
                         visible: inputField.text.length === 0 && !inputField.activeFocus
                     }
@@ -198,7 +198,7 @@ Item {
                             width: inputFlick.width
                             font.family: SpellUI.SpellTheme.fontFamily
                             font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                            color: SpellUI.SpellTheme.onSurface
+                            color: SpellUI.SpellTheme.textPrimary
                             selectionColor: SpellUI.SpellTheme.primaryContainer
                             wrapMode: TextEdit.Wrap
                             onCursorRectangleChanged: inputFlick.ensureVisible(cursorRectangle)
@@ -227,7 +227,7 @@ Item {
                         text: "↑"
                         font.pixelSize: SpellUI.SpellTheme.fontSizeLarge
                         font.bold: true
-                        color: SpellUI.SpellTheme.onPrimary
+                        color: SpellUI.SpellTheme.primaryText
                     }
 
                     SpellUI.StateLayer {
@@ -248,7 +248,7 @@ Item {
                         anchors.centerIn: parent
                         text: "■"
                         font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                        color: SpellUI.SpellTheme.onPrimary
+                        color: SpellUI.SpellTheme.primaryText
                     }
 
                     SpellUI.StateLayer {
@@ -274,7 +274,7 @@ Item {
                     text: chatPanel.modelName || "—"
                     font.family: SpellUI.SpellTheme.monoFontFamily
                     font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                    color: SpellUI.SpellTheme.onSurfaceDim
+                    color: SpellUI.SpellTheme.textSecondary
                 }
 
                 Item { Layout.fillWidth: true }
@@ -283,7 +283,7 @@ Item {
                     text: chatPanel.tokenCount > 0 ? chatPanel.tokenCount + " tokens" : ""
                     font.family: SpellUI.SpellTheme.monoFontFamily
                     font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                    color: SpellUI.SpellTheme.onSurfaceDim
+                    color: SpellUI.SpellTheme.textSecondary
                 }
             }
         }
@@ -307,7 +307,7 @@ Item {
                 text: model.text
                 font.family: SpellUI.SpellTheme.fontFamily
                 font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                color: SpellUI.SpellTheme.onSurface
+                color: SpellUI.SpellTheme.textPrimary
                 wrapMode: Text.Wrap
                 textFormat: Text.PlainText
             }
@@ -336,7 +336,7 @@ Item {
                     text: model.text
                     font.family: SpellUI.SpellTheme.fontFamily
                     font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                    color: SpellUI.SpellTheme.onSurface
+                    color: SpellUI.SpellTheme.textPrimary
                     wrapMode: Text.Wrap
                     textFormat: Text.PlainText
                 }
@@ -375,7 +375,7 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             text: "⚙"
                             font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                            color: SpellUI.SpellTheme.onSurfaceDim
+                            color: SpellUI.SpellTheme.textSecondary
                         }
 
                         Text {
@@ -383,7 +383,7 @@ Item {
                             text: model.name
                             font.family: SpellUI.SpellTheme.monoFontFamily
                             font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                            color: SpellUI.SpellTheme.onSurfaceDim
+                            color: SpellUI.SpellTheme.textSecondary
                         }
 
                         Item { width: 1; height: 1; Layout.fillWidth: true }
@@ -411,7 +411,7 @@ Item {
                     text: model.text
                     font.family: SpellUI.SpellTheme.monoFontFamily
                     font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                    color: SpellUI.SpellTheme.onSurfaceDim
+                    color: SpellUI.SpellTheme.textSecondary
                     wrapMode: Text.Wrap
                     textFormat: Text.PlainText
                 }

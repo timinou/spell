@@ -77,14 +77,13 @@ export class QmlProcess {
 			);
 		}
 
-		// Spawn daemon process (detached — it manages its own lifecycle)
-		const proc = Bun.spawn([binary, "--daemon"], {
-			stdin: "pipe",
-			stdout: "pipe",
-			stderr: "pipe",
+		// Spawn daemon process — stdio ignored since it communicates via socket.
+		// Use "ignore" to prevent pipe buffer blocking on daemon stderr output.
+		Bun.spawn([binary, "--daemon"], {
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
 		});
-		// Close stdin immediately — daemon reads from socket, not stdin
-		proc.stdin.end();
 
 		// Retry connect with exponential backoff
 		const delays = [100, 200, 400, 500];
@@ -98,8 +97,7 @@ export class QmlProcess {
 				lastError = err instanceof Error ? err : new Error(String(err));
 			}
 		}
-		// Failed to connect after all retries — kill the process we spawned
-		proc.kill();
+		// Failed to connect after all retries
 		throw new Error(`Failed to connect to daemon socket after spawn: ${lastError?.message ?? "unknown error"}`);
 	}
 

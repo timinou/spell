@@ -22,7 +22,7 @@ Rectangle {
             when: root.pressed
             PropertyChanges {
                 target: root
-                color: SpellUI.SpellTheme.withAlpha(SpellUI.SpellTheme.onSurface, SpellUI.SpellTheme.pressOpacity)
+                color: SpellUI.SpellTheme.withAlpha(SpellUI.SpellTheme.textPrimary, SpellUI.SpellTheme.pressOpacity)
             }
         },
         State {
@@ -30,7 +30,7 @@ Rectangle {
             when: root.hovered
             PropertyChanges {
                 target: root
-                color: SpellUI.SpellTheme.withAlpha(SpellUI.SpellTheme.onSurface, SpellUI.SpellTheme.hoverOpacity)
+                color: SpellUI.SpellTheme.withAlpha(SpellUI.SpellTheme.textPrimary, SpellUI.SpellTheme.hoverOpacity)
             }
         }
     ]

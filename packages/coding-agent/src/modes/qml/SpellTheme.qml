@@ -11,13 +11,13 @@ QtObject {
     readonly property color outlineVariant: "#21262d"
 
     // Content
-    readonly property color onSurface: "#e6edf3"
-    readonly property color onSurfaceDim: "#8b949e"
-    readonly property color onSurfaceFaint: "#484f58"
+    readonly property color textPrimary: "#e6edf3"
+    readonly property color textSecondary: "#8b949e"
+    readonly property color textTertiary: "#484f58"
 
     // Primary accent
     readonly property color primary: "#7c3aed"
-    readonly property color onPrimary: "#ffffff"
+    readonly property color primaryText: "#ffffff"
     readonly property color primaryContainer: "#2d1b69"
 
     // Semantic
