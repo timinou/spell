@@ -1,0 +1,35 @@
+#+TITLE: Session 14905f662099cf69 Todos
+#+DATE: 2026-03-12
+#+TODO: ITEM DOING | DONE
+
+* Rename field in org package
+
+** DOING Rename systemPrompt→initialMessage in types.ts, org-writer.ts, test
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: in_progress
+:END:
+
+* Add getFirstUserMessage to ToolSession
+
+** ITEM Add getFirstUserMessage to ToolSession interface and wire in org.ts
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: pending
+:END:
+
+* Wire getFirstUserMessage in all construction sites
+
+** ITEM Implement getFirstUserMessage in AgentSession and all ToolSession sites
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: pending
+:END:
+
+* Verify
+
+** ITEM bun check:ts + org-writer tests
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: pending
+:END:

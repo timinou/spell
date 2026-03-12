@@ -1,0 +1,206 @@
+#+TITLE: QML Mode Self-Modifying Agent UI
+#+STATE: ITEM
+#+SESSION_ID: 14905a4a8893eeb2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-12T22-38-49-378Z_14905a4a8893eeb2.jsonl]]
+#+CUSTOM_ID: DRAFT-001-qml-mode-self-modifying-agent-ui
+#+EFFORT: 16h
+#+PRIORITY: #A
+#+LAYER: frontend
+
+* Initial Prompt
+* Problem
+
+The TUI is a fixed interface. The user wants Spell to boot into a QML-based desktop UI where:
+1. The agent can modify the QML files that compose the UI it's running in (self-modifying)
+2. QML hot-reloads without restarting the session
+3. Skills can ship saved QML interfaces (panels) that appear as presets
+4. The shell QML (MQML) manages loading/unloading child QML views safely
+5. Bad QML written by the agent must not crash Spell
+
+Design inspiration: Quickshell (~/.config/quickshell) — modular QML composition.
+
+* Architecture
+
+** Two-layer QML structure
+
+*** Shell QML (MQML)
+A root ApplicationWindow that acts as a compositor/shell. It:
+- Provides a sidebar/drawer listing available panels (from skills, agent-created, or user-saved)
+- Loads child QML views into a StackView or Loader
+- Has a built-in chat panel (always available) for prompting the agent
+- Catches QML load errors from child panels and shows an error view instead of crashing
+- Receives all AgentSessionEvents via bridge.messageReceived and dispatches to active panels
+
+*** Panel QML (views)
+Individual .qml files that render specific UIs — chat, file diffs, brand gallery, etc.
+Loaded dynamically by the shell via Loader { source: panelPath }.
+If a panel fails to load, the shell catches the error and shows fallback UI.
+
+** Process model
+
+#+begin_src
+spell --qml [initial-message]
+    │
+    ├── createAgentSession()  (same as today)
+    ├── new QmlMode()
+    │     ├── QmlBridge.launch("shell", mqml.qml)
+    │     ├── subscribe(session) → bridge.sendMessage(events)
+    │     └── bridge events → session.prompt() / session.abort() / etc.
+    └── agent loop
+          ├── tool calls (edit, bash, etc.)
+          └── qml tool writes .qml files → hot-reload
+#+end_src
+
+** Key integration points
+
+- ~packages/coding-agent/src/main.ts~ — Add mode="qml" branch alongside rpc/interactive/print
+- ~packages/coding-agent/src/modes/qml-mode.ts~ — New mode driver (peer to interactive-mode.ts)
+- ~packages/coding-agent/src/modes/qml/~ — Shell QML, default panels, event mapping
+- ~packages/qml/bridge/windowmanager.cpp~ — May need error isolation for Loader-based child QML
+
+** Error isolation for agent-written QML
+
+The C++ bridge currently crashes or emits error when QML fails to load.
+For self-modifying UI, we need:
+1. The MQML shell uses QML Loader with error handling (Loader.status === Loader.Error)
+2. On error: show the error message in a panel, keep the shell alive
+3. The agent sees the error via bridge events and can fix the QML
+4. This is handled entirely in QML-land (no C++ changes needed) — Loader already supports this
+
+** Skill QML discovery
+
+Skills already live in .spell/skills/<name>/. Discovery adds:
+- Glob for *.qml in each skill directory
+- Expose found panels as { skillName, qmlPath, title } to the MQML shell via bridge.props
+- Example: brand-asset-gallery/gallery.qml becomes a launchable panel
+
+* Implementation Plan
+
+** ITEM Create qml-mode.ts
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+New mode driver at ~packages/coding-agent/src/modes/qml-mode.ts~.
+
+Pattern follows print-mode.ts (simplest existing mode):
+- Accept AgentSession
+- Launch QML shell via QmlBridge
+- Subscribe to AgentSession events, forward as JSON to QML via bridge.sendMessage
+- Listen for bridge events from QML, dispatch to session.prompt/abort/steer
+- Handle graceful shutdown
+
+Event mapping (AgentSessionEvent → QML message):
+- message_start/update/end → streaming text chunks
+- tool_execution_start/update/end → tool call status + results
+- agent_start/end → busy indicator
+- auto_compaction → compaction notice
+
+QML → Agent mapping (bridge.send → session method):
+- { type: "prompt", text } → session.prompt(text)
+- { type: "abort" } → session.abort()
+- { type: "steer", text } → agent.steer(text)
+
+** ITEM Write the MQML shell
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+Root QML file at ~packages/coding-agent/src/modes/qml/shell.qml~.
+
+Structure:
+- SplitView with sidebar (panel list) + main area (Loader for active panel)
+- Built-in chat panel as the default/fallback view
+- Panel registry populated from bridge.props.panels (discovered skill QMLs + saved)
+- Loader with error handling: on Loader.Error, show error text + "Retry" button
+- bridge.messageReceived handler that routes events to active panel
+
+Chat panel (built into shell or as default panel):
+- TextArea for input, Enter to send via bridge.send({type:"prompt"})
+- ScrollView with message list, streaming text updates
+- Tool call cards (collapsible, show name + status + result summary)
+- Status bar (model name, thinking level, streaming indicator)
+
+** ITEM Wire mode into CLI
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+- Add --qml flag to args.ts
+- Add mode="qml" to mode detection in main.ts
+- Import and call runQmlMode() in the dispatch block
+- Export from modes/index.ts
+
+** ITEM Skill QML discovery
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+In sdk.ts or a new utility, after skills are loaded:
+- For each skill, glob for *.qml files in the skill directory
+- Build panel manifest: { id, title (from filename), path, skillName }
+- Pass manifest to QmlMode, which injects it as bridge.props.panels
+
+** ITEM Agent self-modification safety
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+When agent edits a .qml file that's currently loaded:
+1. QmlWatcher triggers reload (already works)
+2. If reload fails, MQML Loader catches the error, shows it
+3. Agent receives error event via bridge → can fix the QML
+4. Need: a "validate QML" step before reload — either:
+   a. Use QQmlEngine::loadFromData in a try-catch in C++ (heavyweight)
+   b. Just let it fail and show the error (simpler, sufficient)
+   
+Choose (b): fail-and-show. The agent is fast enough to iterate.
+
+Add to the qml tool: when writing a .qml file, if a window is using it, the tool result should include any reload errors so the agent sees them without polling.
+
+** ITEM Default panels
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+Ship minimal panels:
+- ChatPanel.qml — the core chat interface
+- ToolApprovalPanel.qml — shows pending tool calls requiring approval (if/when approval is added)
+- FilePreviewPanel.qml — shows file diffs from edit/write tools
+
+These live in packages/coding-agent/src/modes/qml/panels/.
+
+* Out of Scope (Future Work)
+
+** Agent/tool code hot-reload
+
+Bun does not support module hot-reload. Options for later:
+1. Process restart with session restore: kill Spell, reboot, reload session from persistence
+
+Session persistence already exists, so it is viable today — the QML UI would survive (it's in a separate C++ process) and reconnect to the restarted Spell.
+
+** Full TUI parity
+
+Todo management, session switching, multi-model cycling — deferred until the chat+tool-approval baseline proves out.
+
+* Verification
+
+- spell --qml launches the MQML shell with a chat panel
+- Typing a message sends it to the agent, streaming response appears
+- Agent writing a .qml file that the shell loads → panel appears
+- Agent writing broken QML → error shown in panel, shell survives
+- skill QML files appear in panel sidebar
+- Hot-reload: editing a .qml file externally updates the panel live
+
+* Key Files
+
+| File | Action |
+|------|--------|
+| packages/coding-agent/src/cli/args.ts | Add --qml flag |
+| packages/coding-agent/src/main.ts | Add mode dispatch |
+| packages/coding-agent/src/modes/qml-mode.ts | NEW — mode driver |
+| packages/coding-agent/src/modes/qml/shell.qml | NEW — MQML shell |
+| packages/coding-agent/src/modes/qml/panels/ChatPanel.qml | NEW — default chat |
+| packages/coding-agent/src/modes/index.ts | Export new mode |
+| packages/coding-agent/src/sdk.ts | Skill QML discovery |
+| packages/qml/src/qml-bridge.ts | Minor: expose reload errors |
