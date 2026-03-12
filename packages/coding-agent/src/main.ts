@@ -24,7 +24,7 @@ import { Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
 import { exportFromFile } from "./export/html";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
-import { InteractiveMode, runPrintMode, runRpcMode } from "./modes";
+import { InteractiveMode, runPrintMode, runQmlMode, runRpcMode } from "./modes";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
 import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "./sdk";
@@ -707,6 +707,16 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		process.stderr.write("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n");
 		process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
 		process.exit(1);
+	}
+
+	if (parsedArgs.qml) {
+		await runQmlMode(session, {
+			initialMessage: initialMessage ?? parsedArgs.messages[0],
+			sessionFile: session.sessionManager.getSessionFile(),
+		});
+		await session.dispose();
+		stopThemeWatcher();
+		await postmortem.quit(0);
 	}
 
 	if (mode === "rpc") {

@@ -41,6 +41,10 @@ export class QmlBridge {
 			return;
 		}
 
+		// State event: used by reconnect() via waitFor, but also handle here
+		// in case it arrives outside a reconnect flow.
+		if (event.type === "state") return;
+
 		const win = this.#windows.get(event.id);
 		if (!win) {
 			logger.debug("QmlBridge: event for unknown window", { event });
@@ -210,10 +214,46 @@ export class QmlBridge {
 		return promise;
 	}
 
-	/** Dispose the bridge — kills process and stops watchers. */
+	/**
+	 * Reconnect to an existing daemon and rebuild window state.
+	 * Connects to the daemon socket, waits for the state event,
+	 * then rebuilds the internal windows map from the daemon's state.
+	 */
+	async reconnect(): Promise<void> {
+		await this.#process.ensure();
+		const stateEvent = await this.#process.waitFor(e => e.type === "state", 10_000);
+		if (stateEvent.type !== "state") return;
+
+		for (const win of stateEvent.windows) {
+			if (this.#windows.has(win.id)) continue; // don't double-track
+			const info: WindowInfo = {
+				id: win.id,
+				path: win.path,
+				state: win.state as WindowState,
+				events: [],
+			};
+			this.#windows.set(win.id, info);
+
+			// Set up hot-reload watcher for recovered windows
+			if (info.state === "ready") {
+				this.#watcher.watch(win.id, win.path, () => {
+					if (info.state === "ready") this.reload(win.id).catch(() => {});
+				});
+			}
+		}
+	}
+
+	/** Dispose the bridge — disconnects (daemon) or kills process, stops watchers. */
 	async dispose(): Promise<void> {
 		this.#removeListener?.();
 		this.#watcher.dispose();
 		await this.#process.dispose();
+	}
+
+	/** Explicitly shut down the daemon process. */
+	async killDaemon(): Promise<void> {
+		this.#removeListener?.();
+		this.#watcher.dispose();
+		await this.#process.kill();
 	}
 }
