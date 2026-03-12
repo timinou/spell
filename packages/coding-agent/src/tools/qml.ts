@@ -167,7 +167,9 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 
 		// For actions that can use a remote Android device, ensure Spell is connected.
 		// write and screenshot are local-only; all others can route to Android.
-		if (action !== "write" && action !== "screenshot" && context) {
+		// But only attempt Spell setup if there's already a remote server configured —
+		// otherwise we'd block a local desktop launch waiting for Android.
+		if (action !== "write" && action !== "screenshot" && context && this.#remoteBridge()) {
 			await ensureSpellConnection(this.session, context);
 		}
 
