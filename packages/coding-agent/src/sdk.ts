@@ -1571,9 +1571,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Wire QML event loop follow-ups: events from background loops arrive as automatic follow-up turns.
 	eventBus.on(QML_EVENTS_CHANNEL, async (raw: unknown) => {
 		if (!session) return;
-		const { windowId, events, closed } = raw as QmlWindowEventsPayload;
+		const { windowId, events, closed, silent, silentSummary } = raw as QmlWindowEventsPayload;
 		if (events.length === 0 && !closed) return;
-		const lines: string[] = [`${events.length} event(s) from QML window '${windowId}'${closed ? " [closed]" : ""}:`];
+
+		if (silent) {
+			// Silent events: record in transcript for debugging but don't trigger a turn.
+			const lines: string[] = [`${events.length} silent event(s) from QML window '${windowId}':`];
+			for (const e of events) {
+				lines.push(JSON.stringify(e.payload));
+			}
+			await session.sendCustomMessage({
+				customType: "qml-events",
+				content: lines.join("\n"),
+				display: false,
+				attribution: "agent",
+				details: { windowId, events, closed },
+			});
+			return;
+		}
+
+		const lines: string[] = [];
+		if (silentSummary) lines.push(silentSummary);
+		lines.push(`${events.length} event(s) from QML window '${windowId}'${closed ? " [closed]" : ""}:`);
 		for (const e of events) {
 			lines.push(JSON.stringify(e.payload));
 		}

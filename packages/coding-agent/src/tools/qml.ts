@@ -62,6 +62,13 @@ export interface QmlWindowEventsPayload {
 	events: WindowInfo["events"];
 	/** True when the window closed and the event loop has terminated. */
 	closed: boolean;
+	/**
+	 * True when all events in this batch are low-value noise (url_changed,
+	 * harmless stderr, etc.). The SDK delivers these without triggering a turn.
+	 */
+	silent: boolean;
+	/** Human-readable summary of accumulated silent events before this batch. */
+	silentSummary?: string;
 }
 
 export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
@@ -100,6 +107,81 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 	 * via EventBus rather than requiring explicit `listen` calls. The loop runs until
 	 * the window closes or `#stopEventLoop` is called (e.g., on explicit close/dispose).
 	 */
+	/**
+	 * Classify an event as silent (noise) or loud (agent-visible).
+	 *
+	 * Silent: url_changed, harmless stderr (fontconfig, CSP frame-ancestors,
+	 * dev-mode warnings), or any event with payload.silent === true.
+	 * Loud: close, JS errors in stderr, user interactions, unknown types.
+	 */
+	#classifyEvent(event: WindowInfo["events"][number]): "silent" | "loud" {
+		const name = event.name ?? "";
+		const payload = event.payload as Record<string, unknown>;
+
+		// QML-side opt-in silence.
+		if (payload.silent === true) return "silent";
+
+		// close is always loud.
+		if (name === "close" || payload.action === "close") return "loud";
+
+		// Navigation noise.
+		if (name === "url_changed") return "silent";
+
+		// Stderr events: JS errors stay loud; harmless system messages are silent.
+		if (name === "stderr") {
+			const text = String(payload.text ?? payload.message ?? payload.data ?? "");
+			// JS/runtime errors must surface to the agent.
+			if (/TypeError|SyntaxError|ReferenceError|RangeError|URIError|EvalError/.test(text)) {
+				return "loud";
+			}
+			// Known harmless patterns.
+			if (/fontconfig|frame-ancestors|Content Security Policy|dev mode|Lit is in/i.test(text)) {
+				return "silent";
+			}
+			// Unknown stderr — surface it.
+			return "loud";
+		}
+
+		// Default: loud (fail-open for visibility).
+		return "loud";
+	}
+
+	/**
+	 * Collapse adjacent events with identical name+payload into a single entry
+	 * with a 'count' field in the payload to avoid redundant noise.
+	 */
+	#deduplicateEvents(events: WindowInfo["events"]): Array<WindowInfo["events"][number] & { count?: number }> {
+		const out: Array<WindowInfo["events"][number] & { count?: number }> = [];
+		for (const ev of events) {
+			const prev = out.at(-1);
+			if (prev && prev.name === ev.name && JSON.stringify(prev.payload) === JSON.stringify(ev.payload)) {
+				prev.count = (prev.count ?? 1) + 1;
+			} else {
+				out.push({ ...ev });
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Build a one-line summary of accumulated silent events, e.g.:
+	 * "6 silent events suppressed (3x url_changed, 2x stderr, 1x heartbeat)"
+	 */
+	#buildSilentSummary(silentEvents: WindowInfo["events"]): string {
+		const counts = new Map<string, number>();
+		for (const ev of silentEvents) {
+			const key = ev.name ?? "unknown";
+			counts.set(key, (counts.get(key) ?? 0) + 1);
+		}
+		const breakdown = [...counts.entries()].map(([k, n]) => `${n}x ${k}`).join(", ");
+		return `${silentEvents.length} silent event(s) suppressed (${breakdown})`;
+	}
+
+	/**
+	 * Start a background event loop for a window. Events are delivered to the agent
+	 * via EventBus rather than requiring explicit `listen` calls. The loop runs until
+	 * the window closes or `#stopEventLoop` is called (e.g., on explicit close/dispose).
+	 */
 	#startEventLoop(id: string, getBridge: () => QmlBridge | RemoteQmlBridge): void {
 		// Stop any existing loop for this window before starting a new one.
 		this.#stopEventLoop(id);
@@ -110,13 +192,16 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 
 		const eventBus = this.session.eventBus;
 
+		// Accumulates silent events between loud batches.
+		let pendingSilent: WindowInfo["events"] = [];
+
 		// Fire-and-forget: errors are logged, not thrown, since there's no caller to propagate to.
 		void (async () => {
 			try {
 				while (!signal.aborted) {
 					const bridge = getBridge();
 					// waitForEvent resolves when events arrive or on timeout (10 min default).
-					const events = await bridge.waitForEvent(id);
+					const raw = await bridge.waitForEvent(id);
 
 					if (signal.aborted) break;
 
@@ -125,17 +210,53 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 					// (Alt+F4, clicking X) produces only the bridge "closed" event
 					// with an empty events array — that must NOT abort the current
 					// agent turn, so we suppress the bus emit in that case.
-					const userInitiatedClose = events.some(e => (e.payload as { action?: string }).action === "close");
+					const userInitiatedClose = raw.some(e => (e.payload as { action?: string }).action === "close");
 					const wmClose = bridge.getWindow(id)?.state === "closed" && !userInitiatedClose;
 					const closed = userInitiatedClose || wmClose;
 
-					// Only emit to the bus when there is meaningful content for the
-					// agent: user events, or a user-initiated close. A bare WM
-					// close with no events would abort an in-progress turn for no
-					// reason.
-					if (events.length > 0 || userInitiatedClose) {
-						const payload: QmlWindowEventsPayload = { windowId: id, events, closed };
+					if (raw.length === 0 && !userInitiatedClose) {
+						if (closed) break;
+						continue;
+					}
+
+					const events = this.#deduplicateEvents(raw);
+					const silentBatch = events.filter(e => this.#classifyEvent(e) === "silent");
+					const loudBatch = events.filter(e => this.#classifyEvent(e) === "loud");
+
+					// Accumulate silents from this batch.
+					pendingSilent = [...pendingSilent, ...silentBatch];
+
+					if (loudBatch.length > 0 || userInitiatedClose) {
+						// Emit accumulated silent events as a non-turn message before the loud batch.
+						if (pendingSilent.length > 0 && eventBus) {
+							const silentPayload: QmlWindowEventsPayload = {
+								windowId: id,
+								events: pendingSilent,
+								closed: false,
+								silent: true,
+							};
+							eventBus.emit(QML_EVENTS_CHANNEL, silentPayload);
+						}
+						const silentSummary = pendingSilent.length > 0 ? this.#buildSilentSummary(pendingSilent) : undefined;
+						pendingSilent = [];
+
+						const payload: QmlWindowEventsPayload = {
+							windowId: id,
+							events: loudBatch,
+							closed,
+							silent: false,
+							silentSummary,
+						};
 						eventBus?.emit(QML_EVENTS_CHANNEL, payload);
+					} else if (silentBatch.length > 0 && eventBus) {
+						// All events in this batch are silent — emit quietly, no turn.
+						const silentPayload: QmlWindowEventsPayload = {
+							windowId: id,
+							events: silentBatch,
+							closed: false,
+							silent: true,
+						};
+						eventBus.emit(QML_EVENTS_CHANNEL, silentPayload);
 					}
 
 					if (closed) break;
