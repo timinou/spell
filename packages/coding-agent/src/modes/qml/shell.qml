@@ -41,7 +41,7 @@ ApplicationWindow {
                         font.family: SpellUI.SpellTheme.fontFamily
                         font.pixelSize: SpellUI.SpellTheme.fontSizeTitle
                         font.bold: true
-                        color: SpellUI.SpellTheme.onSurface
+                        color: SpellUI.SpellTheme.textPrimary
                     }
                 }
 
@@ -73,7 +73,7 @@ ApplicationWindow {
                                 font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
                                 color: index === root.activePanelIndex
                                     ? SpellUI.SpellTheme.primary
-                                    : SpellUI.SpellTheme.onSurfaceDim
+                                    : SpellUI.SpellTheme.textSecondary
                             }
 
                             Text {
@@ -82,8 +82,8 @@ ApplicationWindow {
                                 font.family: SpellUI.SpellTheme.fontFamily
                                 font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
                                 color: index === root.activePanelIndex
-                                    ? SpellUI.SpellTheme.onSurface
-                                    : SpellUI.SpellTheme.onSurfaceDim
+                                    ? SpellUI.SpellTheme.textPrimary
+                                    : SpellUI.SpellTheme.textSecondary
                             }
                         }
 
@@ -109,7 +109,7 @@ ApplicationWindow {
                             text: bridge.props.model || "No model"
                             font.family: SpellUI.SpellTheme.monoFontFamily
                             font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                            color: SpellUI.SpellTheme.onSurfaceDim
+                            color: SpellUI.SpellTheme.textSecondary
                             elide: Text.ElideRight
                         }
 
@@ -124,7 +124,7 @@ ApplicationWindow {
                                 text: "Restart Agent"
                                 font.family: SpellUI.SpellTheme.fontFamily
                                 font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                                color: SpellUI.SpellTheme.onSurfaceDim
+                                color: SpellUI.SpellTheme.textSecondary
                             }
 
                             SpellUI.StateLayer {
@@ -175,7 +175,7 @@ ApplicationWindow {
                         text: panelLoader.sourceComponent ? "" : (panelLoader.source + "")
                         font.family: SpellUI.SpellTheme.monoFontFamily
                         font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                        color: SpellUI.SpellTheme.onSurfaceDim
+                        color: SpellUI.SpellTheme.textSecondary
                         wrapMode: Text.WrapAnywhere
                     }
 
@@ -191,7 +191,7 @@ ApplicationWindow {
                             text: "Retry"
                             font.family: SpellUI.SpellTheme.fontFamily
                             font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                            color: SpellUI.SpellTheme.onSurface
+                            color: SpellUI.SpellTheme.textPrimary
                         }
 
                         SpellUI.StateLayer {
