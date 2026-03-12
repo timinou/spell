@@ -29,6 +29,18 @@ export class QmlBridge {
 	}
 
 	#handleEvent(event: BridgeEvent): void {
+		// Stderr events from the bridge process aren't tied to a specific window.
+		// Forward them as "stderr" events to all active windows so the agent sees them.
+		if (event.type === "error" && event.id === "__stderr__") {
+			for (const win of this.#windows.values()) {
+				if (win.state !== "closed") {
+					win.events.push({ name: "stderr", payload: { message: event.message } });
+					if (win.events.length > 100) win.events.shift();
+				}
+			}
+			return;
+		}
+
 		const win = this.#windows.get(event.id);
 		if (!win) {
 			logger.debug("QmlBridge: event for unknown window", { event });
@@ -178,6 +190,10 @@ export class QmlBridge {
 		// Register listener first to avoid the race between checking and subscribing.
 		const remove = this.#process.addListener(event => {
 			if ((event.type === "event" || event.type === "closed") && event.id === id) {
+				done(win.events.splice(0));
+			}
+			// Also wake when stderr events are pushed into this window's queue
+			if (event.type === "error" && event.id === "__stderr__" && win.events.length > 0) {
 				done(win.events.splice(0));
 			}
 		});
