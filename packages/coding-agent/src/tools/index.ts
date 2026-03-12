@@ -321,6 +321,11 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	}
 	const allTools: Record<string, ToolFactory> = { ...BUILTIN_TOOLS, ...HIDDEN_TOOLS };
 	const isToolAllowed = (name: string) => {
+		const inPlanMode = session.getPlanModeState?.()?.enabled === true;
+		// Plan mode mandates org and todo_write in its context prompt — force them on
+		// regardless of settings toggles so the instructions are satisfiable.
+		if (name === "org" && inPlanMode) return true;
+		if (name === "todo_write" && inPlanMode) return !includeSubmitResult;
 		if (name === "lsp") return enableLsp;
 		if (name === "bash") return allowBash;
 		if (name === "python") return allowPython;
