@@ -82,6 +82,7 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				shutdown: () => {},
 				getContextUsage: () => session.getContextUsage(),
 				getSystemPrompt: () => session.systemPrompt,
+				getFirstUserMessage: () => session.getFirstUserMessage(),
 				compact: async instructionsOrOptions => {
 					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
 					const options =

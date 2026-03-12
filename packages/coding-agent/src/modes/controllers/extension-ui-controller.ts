@@ -129,6 +129,7 @@ export class ExtensionUiController {
 				await this.ctx.session.compact(instructions, options);
 			},
 			getSystemPrompt: () => this.ctx.session.systemPrompt,
+			getFirstUserMessage: () => this.ctx.session.getFirstUserMessage(),
 		};
 		const commandActions: ExtensionCommandContextActions = {
 			getContextUsage: () => this.ctx.session.getContextUsage(),
@@ -318,6 +319,7 @@ export class ExtensionUiController {
 				await this.ctx.session.compact(instructions, options);
 			},
 			getSystemPrompt: () => this.ctx.session.systemPrompt,
+			getFirstUserMessage: () => this.ctx.session.getFirstUserMessage(),
 		};
 		const commandActions: ExtensionCommandContextActions = {
 			getContextUsage: () => this.ctx.session.getContextUsage(),
@@ -509,6 +511,7 @@ export class ExtensionUiController {
 							// Signal shutdown request
 						},
 						getSystemPrompt: () => this.ctx.session.systemPrompt,
+						getFirstUserMessage: () => this.ctx.session.getFirstUserMessage(),
 					});
 				} catch (err) {
 					this.showToolError(registeredTool.definition.name, err instanceof Error ? err.message : String(err));

@@ -851,6 +851,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		getSessionFile: () => sessionManager.getSessionFile() ?? null,
 		getSessionId: () => sessionManager.getSessionId?.() ?? null,
 		getSystemPrompt: () => session.systemPrompt,
+		getFirstUserMessage: () => session.getFirstUserMessage(),
 		getSessionSpawns: () => options.spawns ?? "*",
 		getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 		getActiveModelString: () => {

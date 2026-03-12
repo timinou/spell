@@ -4,32 +4,32 @@
 
 * Rename field in org package
 
-** DOING Rename systemPrompt→initialMessage in types.ts, org-writer.ts, test
+** DONE Rename systemPrompt→initialMessage in types.ts, org-writer.ts, test
 :PROPERTIES:
 :TASK_ID: task-1
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
 * Add getFirstUserMessage to ToolSession
 
-** ITEM Add getFirstUserMessage to ToolSession interface and wire in org.ts
+** DONE Add getFirstUserMessage to ToolSession interface and wire in org.ts
 :PROPERTIES:
 :TASK_ID: task-2
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Wire getFirstUserMessage in all construction sites
 
-** ITEM Implement getFirstUserMessage in AgentSession and all ToolSession sites
+** DONE Implement getFirstUserMessage in AgentSession and all ToolSession sites
 :PROPERTIES:
 :TASK_ID: task-3
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Verify
 
-** ITEM bun check:ts + org-writer tests
+** DONE bun check:ts + org-writer tests
 :PROPERTIES:
 :TASK_ID: task-4
-:STATUS: pending
+:STATUS: completed
 :END:

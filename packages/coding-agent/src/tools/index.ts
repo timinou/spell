@@ -122,6 +122,8 @@ export interface ToolSession {
 	getSessionId?: () => string | null;
 	/** Get the active agent system prompt (empty string before agent starts). */
 	getSystemPrompt?: () => string;
+	/** Get the first user message that initiated the session. */
+	getFirstUserMessage?: () => string | undefined;
 	/** Get artifacts directory for artifact:// URLs */
 	getArtifactsDir?: () => string | null;
 	/** Allocate a new artifact path and ID for session-scoped truncated output. */

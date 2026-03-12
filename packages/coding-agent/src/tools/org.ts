@@ -160,6 +160,6 @@ function buildSessionContext(session: ToolSession): OrgSessionContext {
 	return {
 		sessionId: session.getSessionId?.() ?? undefined,
 		transcriptPath: session.getSessionFile() ?? undefined,
-		systemPrompt: session.getSystemPrompt?.() ?? undefined,
+		initialMessage: session.getFirstUserMessage?.() ?? undefined,
 	};
 }

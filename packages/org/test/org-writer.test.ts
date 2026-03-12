@@ -71,20 +71,20 @@ describe("serializeFileItem", () => {
 		expect(result).toContain("#+TRANSCRIPT_PATH: [[file:/home/user/.spell/sessions/abc.jsonl]]");
 	});
 
-	test("writes Initial Prompt section when system prompt provided", () => {
+	test("writes Initial Message section when initial message provided", () => {
 		const result = serializeFileItem("Task", "ITEM", {}, undefined, {
-			systemPrompt: "You are a helpful agent.",
+			initialMessage: "You are a helpful agent.",
 		});
-		expect(result).toContain("* Initial Prompt");
+		expect(result).toContain("* Initial Message");
 		expect(result).toContain("You are a helpful agent.");
 	});
 
-	test("Initial Prompt section appears before user body", () => {
+	test("Initial Message section appears before user body", () => {
 		const result = serializeFileItem("Task", "ITEM", {}, "user body", {
-			systemPrompt: "sys prompt",
+			initialMessage: "sys prompt",
 		});
 		const bodyIdx = result.indexOf("user body");
-		const promptIdx = result.indexOf("* Initial Prompt");
+		const promptIdx = result.indexOf("* Initial Message");
 		expect(promptIdx).toBeGreaterThan(0);
 		expect(bodyIdx).toBeGreaterThan(promptIdx);
 	});
@@ -93,7 +93,7 @@ describe("serializeFileItem", () => {
 		const result = serializeFileItem("Task", "ITEM", {});
 		expect(result).not.toContain("#+SESSION_ID");
 		expect(result).not.toContain("#+TRANSCRIPT_PATH");
-		expect(result).not.toContain("* Initial Prompt");
+		expect(result).not.toContain("* Initial Message");
 	});
 
 	test("partial session context writes only present fields", () => {
