@@ -67,9 +67,9 @@ export class WelcomeComponent implements Component {
 		const leftCol = showRightColumn ? dualLeftCol : boxWidth - 2;
 		const rightCol = showRightColumn ? dualRightCol : 0;
 
-		// Pie-slice logo (gradient: pink → cream)
+		// Magic wand logo
 		// biome-ignore format: preserve ASCII art layout
-		const piLogo = ["     /\\", "    /  \\", "   /░░░░\\", "  /░░░░░░\\", " /~~~~~~~~\\", "/══════════\\"];
+		const piLogo = ["       \u00b7\u2726\u00b7", "      \u2727 \u2726 \u2727", "       \u00b7\u2726\u00b7", "      \u2571\u2571", "     \u2571\u2571", "    \u2571\u2571", "   \u2571\u2571", "  \u2571\u2571"];
 
 		// Apply gradient to logo
 		const logoColored = piLogo.map(line => this.#gradientLine(line));

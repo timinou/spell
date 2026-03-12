@@ -322,7 +322,7 @@ export class InputController {
 					.then(async title => {
 						if (title) {
 							await this.ctx.sessionManager.setSessionName(title);
-							setTerminalTitle(`π: ${title}`);
+							setTerminalTitle(`✦: ${title}`);
 						}
 					})
 					.catch(() => {});
