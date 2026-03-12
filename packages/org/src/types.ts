@@ -80,8 +80,8 @@ export interface OrgSessionContext {
 	sessionId?: string;
 	/** Absolute path to the JSONL session transcript, written as an org-mode file link. */
 	transcriptPath?: string;
-	/** Full agent system prompt written into an `* Initial Prompt` heading. */
-	systemPrompt?: string;
+	/** First user message that triggered the session, written into an `* Initial Message` heading. */
+	initialMessage?: string;
 }
 
 // =============================================================================

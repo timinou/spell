@@ -1,0 +1,455 @@
+#+TITLE: QML_MODE_DAEMON_BRIDGE
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-qml-mode-daemon-bridge
+
+* Problem
+
+The TUI is a fixed, terminal-bound interface. The user wants Spell to boot into a QML desktop UI where:
+1. The agent can modify the QML files composing its own UI (self-modifying)
+2. QML hot-reloads without restarting the session
+3. Skills ship saved QML interfaces as discoverable panels
+4. A shell QML (MQML) manages loading child QML views safely
+5. Bad QML from the agent must not crash Spell
+6. Agent/tool code hot-reload via process restart — the QML bridge runs as a *daemon* that survives Spell restarts
+7. Visual style inspired by DankMaterialShell's Material Design 3 approach
+
+* Existing Infrastructure
+
+** Agent runtime is decoupled from TUI
+
+~AgentSession~ exposes: ~subscribe(listener)~ for events, ~prompt(text)~ for input, ~abort()~, ~steer()~. The TUI (~interactive-mode.ts~) is just one consumer. ~print-mode.ts~ (150 lines) shows the minimal driver pattern. ~rpc-mode.ts~ shows full programmatic control via JSON-lines.
+
+** QML bridge is production-ready (but not daemonized)
+
+~packages/qml/~ provides:
+- C++ subprocess (~spell-qml-bridge~) using stdio (JSON-newline on stdin/stdout)
+- ~QmlBridge~ TS class: launch/reload/close/sendMessage/screenshot
+- ~QmlWatcher~: fs.watch with 150ms debounce for hot-reload
+- Error events forwarded to TS when QML fails to load
+
+Current limitation: ~QmlProcess~ spawns the bridge as a child process via ~Bun.spawn~. It dies when Spell dies. For persistent UI across agent restarts, this must become a daemon that listens on a Unix domain socket.
+
+** Session persistence exists
+
+~SessionManager~ persists entries as JSONL files. ~--resume~ / ~--session~ flags restore sessions via ~setSessionFile()~ which loads entries and rebuilds state. This is the continuity mechanism across restarts.
+
+** Mode dispatch in main.ts
+
+Lines 712-757: branches on mode — \"rpc\", interactive, print. Adding \"qml\" follows the same pattern.
+
+** Existing skill QML
+
+~.spell/skills/brand-asset-gallery/gallery.qml~ (402 lines) shows the current pattern — a full ApplicationWindow with bridge.props for data and bridge.send for events.
+
+* Architecture
+
+** Two-layer QML structure
+
+*** Shell QML (MQML)
+
+Root ApplicationWindow acting as compositor/shell:
+- Sidebar/drawer listing available panels (skills, agent-created, user-saved)
+- Loads child panels into a ~Loader~ component
+- Built-in chat panel (always available) for prompting the agent
+- Catches child panel load errors via ~Loader.status === Loader.Error~ — shows error text + Retry, keeps running
+- Routes ~bridge.messageReceived~ events to active panel
+- \"Restart Agent\" button to trigger Spell process restart while keeping QML alive
+
+*** Panel QML (views)
+
+Individual .qml files loaded by the shell via ~Loader { source: panelPath }~. Not full ApplicationWindows — they are Items loaded into the shell's content area.
+
+** Daemon QML bridge
+
+#+begin_example
+                    Unix Domain Socket
+                    /tmp/spell-qml-$UID.sock
+                         |
+    spell --qml  <------>|<------->  spell-qml-bridge (daemon)
+    (may restart)        |           (persistent, owns all windows)
+                         |
+    spell --qml  <------>|  (reconnects after restart)
+    (new process)
+#+end_example
+
+*** C++ changes to spell-qml-bridge
+
+Replace stdin/stdout with ~QLocalServer~ listening on a Unix domain socket:
+- Socket path: ~/tmp/spell-qml-bridge-$UID.sock~ (or ~$XDG_RUNTIME_DIR/spell-qml-bridge.sock~)
+- Accept one connection at a time (single-client model)
+- On client disconnect: keep windows alive, wait for reconnection
+- On reconnect: send ~{type: \"state\", windows: [...]}~ listing all active windows so the new Spell process can rebuild its ~QmlBridge~ window map
+- ~writeEvent()~ writes to connected socket instead of stdout
+- ~dispatch()~ reads from socket instead of stdin
+- Startup: if socket already exists and a bridge is running, the new bridge exits (only one daemon)
+- Shutdown: explicit ~{type: \"quit\"}~ command, or when no client has connected for a configurable timeout
+
+*** TypeScript changes to QmlProcess
+
+- ~ensure()~: try connecting to existing socket first (~Bun.connect~ or ~net.createConnection~). If no daemon running, spawn it, then connect.
+- ~dispose()~: disconnect from socket but do NOT kill the daemon
+- Add ~kill()~ method for explicit daemon shutdown
+- Read/write via socket instead of process stdio
+- On connection loss (daemon died): respawn and reconnect, same as current respawn logic
+
+** Process restart flow
+
+#+begin_example
+User clicks \"Restart Agent\" in QML shell
+    |
+    v
+QML: bridge.send({type: \"restart\"})
+    |
+    v
+qml-mode.ts:
+    1. Records current session file path
+    2. session.dispose() — flushes JSONL, does NOT kill QML daemon
+    3. Spawns new Spell: Bun.spawn([\"spell\", \"--qml\", \"--resume\", sessionFile])
+    4. Current process exits
+    |
+    v
+New Spell process:
+    1. QmlProcess.ensure() → connects to existing daemon socket
+    2. Daemon sends state snapshot (active windows)
+    3. QmlMode rebuilds window map from snapshot
+    4. createAgentSession() with --resume → restores messages
+    5. Subscribes to session events → resumes forwarding to QML
+    6. Session continues seamlessly — QML shell never flickered
+#+end_example
+
+** Event protocol (QML <-> Agent)
+
+AgentSessionEvent -> QML (via bridge.sendMessage):
+- ~message_start~ → ~{ type: \"message_start\", id }~
+- ~message_update~ → ~{ type: \"message_update\", id, text, thinking }~
+- ~message_end~ → ~{ type: \"message_end\", id }~
+- ~tool_execution_start~ → ~{ type: \"tool_start\", id, name, input }~
+- ~tool_execution_update~ → ~{ type: \"tool_update\", id, partialResult }~
+- ~tool_execution_end~ → ~{ type: \"tool_end\", id, result, error }~
+- ~agent_start/end~ → ~{ type: \"agent_busy\", busy: bool }~
+
+QML -> Agent (via bridge.send):
+- ~{ type: \"prompt\", text }~ → ~session.prompt(text)~
+- ~{ type: \"abort\" }~ → ~session.abort()~
+- ~{ type: \"steer\", text }~ → ~agent.steer(text)~
+- ~{ type: \"restart\" }~ → re-exec Spell (daemon stays alive)
+
+* Style Direction (DMS-Inspired)
+
+** Design philosophy
+
+Take inspiration from DankMaterialShell's approach to Material Design 3:
+- *Semantic color tokens* not raw hex — components reference roles (~surface~, ~onSurface~, ~primary~, ~container~, ~outline~) not literal colors
+- *State layers* — hover (0.08 opacity), pressed (0.12 opacity), disabled (0.38 opacity) applied as overlays, exactly as DMS's ~StateLayer.qml~
+- *Smooth transitions* — all color/opacity changes animated with standard easing curves and short durations (~150-200ms~)
+- *Elevation through tonal surfaces* — not box-shadows. Surface1 < Surface2 < Surface3 each slightly brighter/lighter to convey depth
+- *Generous spacing* — DMS uses a spacing scale (~spacingXS~, ~spacingS~, ~spacingM~, ~spacingL~, ~spacingXL~). Do the same.
+- *Consistent corner radii* — single ~cornerRadius~ token, larger for containers, smaller for chips/badges
+- *Typography scale* — ~fontSizeSmall~, ~fontSizeMedium~, ~fontSizeLarge~; mono font for code blocks; \"Inter\" or similar variable font for UI text
+
+** Theme singleton
+
+Ship a ~SpellTheme.qml~ singleton (not using Quickshell's Singleton — use a regular QtObject imported via qmldir):
+
+#+begin_example
+QtObject {
+    // Surface tonal palette (dark mode default)
+    readonly property color background:    \"#0e1117\"
+    readonly property color surface:       \"#161b22\"
+    readonly property color surfaceHigh:   \"#1c2129\"
+    readonly property color surfaceHigher: \"#242a33\"
+    readonly property color outline:       \"#30363d\"
+    readonly property color outlineVariant:\"#21262d\"
+
+    // Content on surfaces
+    readonly property color onSurface:     \"#e6edf3\"
+    readonly property color onSurfaceDim:  \"#8b949e\"
+    readonly property color onSurfaceFaint:\"#484f58\"
+
+    // Primary accent
+    readonly property color primary:       \"#7c3aed\"  // violet
+    readonly property color onPrimary:     \"#ffffff\"
+    readonly property color primaryContainer: \"#2d1b69\"
+
+    // Semantic
+    readonly property color error:         \"#f85149\"
+    readonly property color success:       \"#3fb950\"
+    readonly property color warning:       \"#d29922\"
+
+    // Interaction state opacities
+    readonly property real hoverOpacity:   0.08
+    readonly property real pressOpacity:   0.12
+    readonly property real disabledOpacity:0.38
+
+    // Spacing scale
+    readonly property int spacingXS: 4
+    readonly property int spacingS:  8
+    readonly property int spacingM:  12
+    readonly property int spacingL:  16
+    readonly property int spacingXL: 24
+
+    // Typography
+    readonly property string fontFamily:     \"Inter\"
+    readonly property string monoFontFamily: \"Fira Code\"
+    readonly property int fontSizeSmall:  12
+    readonly property int fontSizeMedium: 14
+    readonly property int fontSizeLarge:  16
+    readonly property int fontSizeTitle:  20
+
+    // Corner radii
+    readonly property int cornerRadius:      8
+    readonly property int cornerRadiusLarge: 16
+    readonly property int cornerRadiusSmall: 4
+
+    // Animation
+    readonly property int shortDuration:   150
+    readonly property int mediumDuration:   250
+
+    // Helper
+    function withAlpha(color, alpha) {
+        return Qt.rgba(color.r, color.g, color.b, alpha)
+    }
+}
+#+end_example
+
+** Component patterns (inspired by DMS widgets)
+
+*** StateLayer
+
+Copy DMS's pattern exactly — a MouseArea that fills parent, applies tonal overlay on hover/press:
+
+#+begin_example
+Rectangle {
+    anchors.fill: parent
+    radius: parent.radius
+    color: SpellTheme.withAlpha(
+        SpellTheme.onSurface,
+        pressed ? SpellTheme.pressOpacity
+                : hovered ? SpellTheme.hoverOpacity : 0
+    )
+    Behavior on color { ColorAnimation { duration: SpellTheme.shortDuration } }
+}
+#+end_example
+
+*** Cards / containers
+
+DMS-style: no border by default, tonal surface differentiation, subtle outline only on focus/active:
+
+#+begin_example
+Rectangle {
+    color: SpellTheme.surface
+    radius: SpellTheme.cornerRadius
+    border.width: isActive ? 1 : 0
+    border.color: SpellTheme.outline
+}
+#+end_example
+
+*** Chat bubbles
+
+Agent messages: ~surfaceHigh~ background, full width
+User messages: ~primaryContainer~ background, right-aligned, rounded
+
+*** Tool call cards
+
+Collapsible, with icon + tool name header in ~onSurfaceDim~, expand to show input/output.
+Status indicator: spinning for active, checkmark for complete, X for error.
+
+*** Code blocks
+
+~surfaceHigher~ background, ~monoFontFamily~, ~cornerRadiusSmall~ radius, left border accent in ~primary~.
+
+*** Scrollbar
+
+Thin, rounded, ~onSurfaceFaint~ colored, auto-hide with opacity animation. DMS's ~DankScrollbar.qml~ pattern.
+
+** What NOT to copy from DMS
+
+- No matugen/dynamic wallpaper theming — Spell is not a desktop shell
+- No Quickshell-specific imports (~Singleton~, ~Variants~, ~PanelWindow~) — we use plain Qt6
+- No system service singletons — our data comes from bridge.props/messageReceived
+- Keep it simpler — DMS is 100K+ lines of QML. Our shell should be <2000 lines initially.
+
+* Implementation Plan
+
+** ITEM Daemon mode for QML bridge (C++)
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+File: ~packages/qml/bridge/main.cpp~
+
+Changes:
+- Add ~QLocalServer~ listening on ~$XDG_RUNTIME_DIR/spell-qml-bridge.sock~ (fallback ~/tmp/spell-qml-$UID.sock~)
+- Accept single client connection; read JSON lines from socket, dispatch to WindowManager
+- ~writeEvent()~ writes to connected ~QLocalSocket~ instead of stdout
+- On client disconnect: keep event loop + windows alive, wait for reconnection
+- On reconnect: emit ~{type: \"state\", windows: [{id, path, state},...]}~ listing active windows
+- Add ~--daemon~ flag: if set, don't read stdin at all, only socket. Default behavior (no flag) preserves current stdin mode for backward compat.
+- Clean up stale socket file on startup
+- New ~{type: \"quit\"}~ command to shut down the daemon
+
+New file: ~packages/qml/bridge/socketserver.h~ / ~.cpp~ — encapsulates QLocalServer logic, same dispatch/writeEvent interface as current stdin path.
+
+** ITEM Update QmlProcess for socket connection (TS)
+:PROPERTIES:
+:EFFORT: 3h
+:END:
+
+File: ~packages/qml/src/qml-process.ts~
+
+Changes:
+- ~ensure()~: try ~net.createConnection(socketPath)~ first. If ECONNREFUSED/ENOENT, spawn bridge with ~--daemon~, then connect.
+- Replace stdin write with socket write
+- Replace stdout read loop with socket read loop
+- ~dispose()~: close socket, do NOT kill daemon
+- Add ~kill()~: send ~{type: \"quit\"}~ then close socket
+- On reconnect, parse the ~{type: \"state\"}~ event to rebuild window state
+
+File: ~packages/qml/src/qml-bridge.ts~
+- ~dispose()~: disconnect only (existing windows survive)
+- Add ~reconnect()~: connect to daemon, receive state snapshot, rebuild ~#windows~ map
+- Keep ~QmlWatcher~ — it still works (watches files, triggers reload via socket)
+
+** ITEM Create qml-mode.ts
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+New file: ~packages/coding-agent/src/modes/qml-mode.ts~
+
+Follows ~print-mode.ts~ pattern:
+- Accept ~AgentSession~ + session options
+- Call ~QmlBridge.ensure()~ (connects to daemon or spawns it)
+- If reconnecting (windows already exist), skip shell launch
+- If fresh, launch shell: ~bridge.launch(\"shell\", shellQmlPath, { props: { panels } })~
+- Subscribe to ~AgentSessionEvent~, forward to QML via ~bridge.sendMessage(\"shell\", event)~
+- Listen for bridge events, dispatch to session
+- Handle ~{type: \"restart\"}~: flush session, disconnect from daemon, re-exec spell with ~--resume~
+
+Restart implementation:
+#+begin_src typescript
+async restart(): Promise<never> {
+  const sessionFile = this.sessionManager.sessionFile;
+  await this.session.dispose(); // flushes JSONL, disconnects from daemon
+  const args = process.argv.slice(1).filter(a => a !== \"--resume\" && !a.startsWith(\"--session\"));
+  args.push(\"--resume\", sessionFile);
+  const proc = Bun.spawn([process.argv[0], ...args], {
+    stdio: [\"inherit\", \"inherit\", \"inherit\"],
+    env: process.env,
+  });
+  process.exit(await proc.exited);
+}
+#+end_src
+
+** ITEM Write the MQML shell + SpellTheme
+:PROPERTIES:
+:EFFORT: 5h
+:END:
+
+New files:
+- ~packages/coding-agent/src/modes/qml/shell.qml~ — root MQML
+- ~packages/coding-agent/src/modes/qml/SpellTheme.qml~ — theme singleton
+- ~packages/coding-agent/src/modes/qml/StateLayer.qml~ — DMS-style interaction overlay
+- ~packages/coding-agent/src/modes/qml/qmldir~ — module registration
+
+Shell structure:
+- ~SplitView~ with sidebar (~240px~, ~surfaceHigh~ bg) + main content (~Loader~)
+- Sidebar: panel list as ~ListView~ with DMS-style delegates (icon + title + StateLayer)
+- Sidebar footer: model indicator, \"Restart Agent\" button
+- Main area: ~Loader { source: activePanelPath }~ with error handling
+- ~Connections { target: bridge }~ to route ~messageReceived~ to active panel
+
+** ITEM Default ChatPanel
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+New file: ~packages/coding-agent/src/modes/qml/panels/ChatPanel.qml~
+
+Components:
+- Message list (~ListView~ with ~DankFlickable~-style smooth scrolling)
+  - Agent messages: full-width, ~surface~ bg, markdown rendered (basic: bold, code, links)
+  - User messages: right-aligned, ~primaryContainer~ bg
+  - Tool call cards: collapsible, ~surfaceHigh~ bg, icon + name header
+  - Streaming indicator: pulsing dot in ~primary~ color
+- Input area at bottom:
+  - Multi-line ~TextEdit~ with ~surfaceHigh~ bg and ~outline~ border
+  - Send button (filled ~primary~), abort button (visible when streaming, ~error~ color)
+  - Subtle placeholder text in ~onSurfaceFaint~
+- Status bar: model name, thinking level, token count in ~onSurfaceDim~
+
+** ITEM Wire mode into CLI
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+Files:
+- ~packages/coding-agent/src/cli/args.ts~ — add ~qml?: boolean~ to Args, parse ~--qml~ flag
+- ~packages/coding-agent/src/main.ts~ — add ~mode === \"qml\"~ branch at line 712, call ~runQmlMode()~
+- ~packages/coding-agent/src/modes/index.ts~ — export ~runQmlMode~
+
+** ITEM Skill QML discovery
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+After skills load in ~sdk.ts~ or utility called from ~qml-mode.ts~:
+- For each skill, glob ~*.qml~ in skill directory
+- Build panel manifest: ~{ id, title, path, skillName }~
+- Pass to QmlMode, injected as ~bridge.props.panels~
+- Example: ~brand-asset-gallery/gallery.qml~ appears in sidebar
+
+** ITEM Agent self-modification safety
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+When agent edits a .qml file currently loaded as a panel:
+1. ~QmlWatcher~ triggers reload (already works)
+2. MQML shell's ~Loader~ catches error (~Loader.status === Loader.Error~), shows error text
+3. Agent sees error via bridge event, can fix and retry
+4. Strategy: fail-and-show, no pre-validation
+
+Change in ~packages/qml/src/qml-bridge.ts~: on reload error, include error message in the event payload so the qml tool result surfaces it to the agent.
+
+* Key Files
+
+| File | Action |
+|------|--------|
+| ~packages/qml/bridge/main.cpp~ | Add QLocalServer daemon mode |
+| ~packages/qml/bridge/socketserver.h/.cpp~ | NEW — socket server encapsulation |
+| ~packages/qml/bridge/CMakeLists.txt~ | Add QNetwork dependency, new sources |
+| ~packages/qml/src/qml-process.ts~ | Socket connection instead of stdio |
+| ~packages/qml/src/qml-bridge.ts~ | Reconnect support, state snapshot handling |
+| ~packages/qml/src/protocol.ts~ | Add ~state~ event type, ~quit~ command |
+| ~packages/coding-agent/src/cli/args.ts~ | Add --qml flag |
+| ~packages/coding-agent/src/main.ts~ | Add mode dispatch |
+| ~packages/coding-agent/src/modes/qml-mode.ts~ | NEW — mode driver + restart |
+| ~packages/coding-agent/src/modes/qml/shell.qml~ | NEW — MQML shell |
+| ~packages/coding-agent/src/modes/qml/SpellTheme.qml~ | NEW — theme singleton |
+| ~packages/coding-agent/src/modes/qml/StateLayer.qml~ | NEW — interaction overlay |
+| ~packages/coding-agent/src/modes/qml/qmldir~ | NEW — module registration |
+| ~packages/coding-agent/src/modes/qml/panels/ChatPanel.qml~ | NEW — default chat |
+| ~packages/coding-agent/src/modes/index.ts~ | Export runQmlMode |
+| ~packages/coding-agent/src/sdk.ts~ | Skill QML discovery |
+
+* Verification
+
+- ~spell --qml~ launches MQML shell with chat panel via daemon bridge
+- Typing a message sends it to agent, streaming response appears with proper styling
+- Agent edits a .qml file -> panel hot-reloads in shell
+- Agent writes broken QML -> error shown in panel, shell survives
+- Skill QML files appear in sidebar panel list
+- ~spell --qml --resume <session>~ restores previous conversation
+- \"Restart Agent\" -> Spell process restarts, QML shell stays alive, reconnects seamlessly
+- Kill Spell (Ctrl+C) -> QML shell stays alive. Run ~spell --qml --resume~ -> reconnects, windows intact
+- Second ~spell-qml-bridge~ instance detects existing daemon and exits
+- ~spell --qml~ when no daemon running -> spawns daemon, connects, launches shell
+
+* Dependencies
+
+- Qt 6 with QtQuick + QtNetwork (for QLocalServer) must be installed
+- ~spell-qml-bridge~ binary: ~cd packages/qml && bun run build:bridge~
+- CMakeLists.txt must add ~Qt6::Network~ to ~target_link_libraries~
+- No new npm/bun dependencies
+- Fonts: Inter (UI text), Fira Code (monospace) — recommended but not required

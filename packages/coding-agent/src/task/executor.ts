@@ -1058,6 +1058,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						shutdown: () => {},
 						getContextUsage: () => session.getContextUsage(),
 						getSystemPrompt: () => session.systemPrompt,
+						getFirstUserMessage: () => session.getFirstUserMessage(),
 						compact: async instructionsOrOptions => {
 							const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
 							const options =

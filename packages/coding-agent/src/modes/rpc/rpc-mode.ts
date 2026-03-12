@@ -359,6 +359,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				},
 				getContextUsage: () => session.getContextUsage(),
 				getSystemPrompt: () => session.systemPrompt,
+				getFirstUserMessage: () => session.getFirstUserMessage(),
 				compact: async instructionsOrOptions => {
 					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
 					const options =

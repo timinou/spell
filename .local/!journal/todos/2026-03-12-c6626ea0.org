@@ -1,0 +1,71 @@
+#+TITLE: Session 149062dc19d50faf Todos
+#+DATE: 2026-03-12
+#+TODO: ITEM DOING | DONE
+
+* Foundation
+
+** DOING Daemon mode for QML bridge (C++)
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: in_progress
+:END:
+
+** ITEM Update QmlProcess for socket connection (TS)
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: pending
+:END:
+
+** ITEM Update protocol.ts with new event types
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: pending
+:END:
+
+* Mode & Shell
+
+** ITEM Create qml-mode.ts
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: pending
+:END:
+
+** ITEM Write MQML shell + SpellTheme + StateLayer + qmldir
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: pending
+:END:
+
+** ITEM Write ChatPanel.qml
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: pending
+:END:
+
+* Integration
+
+** ITEM Wire mode into CLI (args.ts, main.ts, modes/index.ts)
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: pending
+:END:
+
+** ITEM Skill QML discovery
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: pending
+:END:
+
+** ITEM Agent self-modification safety (error forwarding)
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: pending
+:END:
+
+* Verification
+
+** ITEM Build bridge, type-check, smoke test
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: pending
+:END:

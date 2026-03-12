@@ -225,6 +225,8 @@ export interface ExtensionContext {
 	shutdown(): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
+	/** Get the first user message that initiated the session. */
+	getFirstUserMessage(): string | undefined;
 	/** @deprecated Use hasPendingMessages() instead */
 	hasQueuedMessages(): boolean;
 }
@@ -1268,6 +1270,7 @@ export interface ExtensionContextActions {
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
 	getSystemPrompt: () => string;
+	getFirstUserMessage: () => string | undefined;
 }
 
 /** Actions for ExtensionCommandContext (ctx.* in command handlers). */

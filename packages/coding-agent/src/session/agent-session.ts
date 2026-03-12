@@ -1580,6 +1580,19 @@ export class AgentSession {
 		return this.agent.state.systemPrompt;
 	}
 
+	/** Extract text content from the first user message in the conversation. */
+	getFirstUserMessage(): string | undefined {
+		for (const msg of this.messages) {
+			if (msg.role !== "user") continue;
+			if (typeof msg.content === "string") return msg.content || undefined;
+			const textPart = msg.content.find((c: { type: string }) => c.type === "text");
+			if (textPart && "text" in textPart && typeof textPart.text === "string") {
+				return textPart.text || undefined;
+			}
+		}
+		return undefined;
+	}
+
 	/** Current retry attempt (0 if not retrying) */
 	get retryAttempt(): number {
 		return this.#retryAttempt;
@@ -2214,6 +2227,7 @@ export class AgentSession {
 				await this.reload();
 			},
 			getSystemPrompt: () => this.systemPrompt,
+			getFirstUserMessage: () => this.getFirstUserMessage(),
 		};
 	}
 
