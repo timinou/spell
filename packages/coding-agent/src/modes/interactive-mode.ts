@@ -349,7 +349,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender(true);
 
 		// Set initial terminal title (will be updated when session title is generated)
-		this.ui.terminal.setTitle("π");
+		this.ui.terminal.setTitle("✦");
 
 		// Initialize hooks with TUI-based UI context
 		await this.initHooksAndCustomTools();
