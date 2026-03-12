@@ -859,7 +859,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (model) return formatModelString(model);
 			return undefined;
 		},
-		getPlanModeState: () => session.getPlanModeState(),
+		getPlanModeState: () => session?.getPlanModeState(),
 		getCompactContext: () => session.formatCompactContext(),
 		getTodoPhases: () => session.getTodoPhases(),
 		setTodoPhases: phases => session.setTodoPhases(phases),
