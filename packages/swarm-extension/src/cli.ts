@@ -18,7 +18,7 @@ import { StateTracker } from "./swarm/state";
 
 const yamlPath = process.argv[2];
 if (!yamlPath) {
-	console.error("Usage: omp-swarm <path-to-yaml>");
+	console.error("Usage: spell-swarm <path-to-yaml>");
 	process.exit(1);
 }
 

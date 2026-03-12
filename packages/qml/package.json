@@ -2,7 +2,7 @@
   "type": "module",
   "name": "@oh-my-pi/pi-qml",
   "version": "0.1.0",
-  "description": "Qt 6 QML desktop window bridge for omp agents",
+  "description": "Qt 6 QML desktop window bridge for spell agents",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {

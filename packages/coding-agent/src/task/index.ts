@@ -2,9 +2,9 @@
  * Task tool - Delegate tasks to specialized agents.
  *
  * Discovers agent definitions from:
- *   - Bundled agents (shipped with omp-coding-agent)
- *   - ~/.omp/agent/agents/*.md (user-level)
- *   - .omp/agents/*.md (project-level)
+ *   - Bundled agents (shipped with spell-coding-agent)
+ *   - ~/.spell/agent/agents/*.md (user-level)
+ *   - .spell/agents/*.md (project-level)
  *
  * Supports:
  *   - Single agent execution
@@ -634,7 +634,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		// Derive artifacts directory
 		const sessionFile = this.session.getSessionFile();
 		const artifactsDir = sessionFile ? sessionFile.slice(0, -6) : null;
-		const tempArtifactsDir = artifactsDir ? null : path.join(os.tmpdir(), `omp-task-${Snowflake.next()}`);
+		const tempArtifactsDir = artifactsDir ? null : path.join(os.tmpdir(), `spell-task-${Snowflake.next()}`);
 		const effectiveArtifactsDir = artifactsDir || tempArtifactsDir!;
 
 		// Initialize progress tracking
@@ -856,7 +856,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							};
 						} catch (mergeErr) {
 							// Agent succeeded but branch commit failed — clean up stale branch
-							const branchName = `omp/task/${task.id}`;
+							const branchName = `spell/task/${task.id}`;
 							await $`git branch -D ${branchName}`.cwd(repoRoot).quiet().nothrow();
 							const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
 							return { ...result, error: `Merge failed: ${msg}` };
@@ -1022,7 +1022,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							if (!combinedPatch.trim()) {
 								changesApplied = true;
 							} else {
-								const combinedPatchPath = path.join(os.tmpdir(), `omp-task-combined-${Snowflake.next()}.patch`);
+								const combinedPatchPath = path.join(
+									os.tmpdir(),
+									`spell-task-combined-${Snowflake.next()}.patch`,
+								);
 								try {
 									await Bun.write(combinedPatchPath, combinedPatch);
 									const checkResult = await $`git apply --check --binary ${combinedPatchPath}`

@@ -199,7 +199,7 @@ async function downloadTool(tool: ToolName, signal?: AbortSignal): Promise<strin
 	await downloadFile(downloadUrl, archivePath, signal);
 
 	// Extract
-	const tmp = await TempDir.create("@omp-tools-extract-");
+	const tmp = await TempDir.create("@spell-tools-extract-");
 
 	try {
 		if (!assetName.endsWith(".tar.gz") && !assetName.endsWith(".zip")) {

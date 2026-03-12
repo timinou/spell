@@ -90,10 +90,10 @@ async function main(): Promise<void> {
 
 	if (values.help) {
 		console.log(`
-omp-stats - AI Usage Statistics Dashboard
+spell-stats - AI Usage Statistics Dashboard
 
 Usage:
-  omp-stats [options]
+  spell-stats [options]
 
 Options:
   -p, --port <port>  Port for the dashboard server (default: 3847)
@@ -102,10 +102,10 @@ Options:
   -h, --help         Show this help message
 
 Examples:
-  omp-stats              # Start dashboard server
-  omp-stats --json       # Print stats as JSON
-  omp-stats --port 8080  # Start on custom port
-  omp-stats --sync       # Sync and show summary
+  spell-stats              # Start dashboard server
+  spell-stats --json       # Print stats as JSON
+  spell-stats --port 8080  # Start on custom port
+  spell-stats --sync       # Sync and show summary
 `);
 		return;
 	}

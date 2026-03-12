@@ -76,7 +76,7 @@ AI-powered conventional commit generation with intelligent change analysis:
 - **Changelog generation**: Proposes and applies changelog entries to `CHANGELOG.md` files
 - **Commit validation**: Detects filler words, meta phrases, and enforces conventional commit format
 - **Legacy mode**: `--legacy` flag for deterministic pipeline when preferred
-- Run via `omp commit` with options: `--push`, `--dry-run`, `--no-changelog`, `--context`
+- Run via `spell commit` with options: `--push`, `--dry-run`, `--no-changelog`, `--context`
 
 ### + Python Tool (IPython Kernel)
 
@@ -90,11 +90,11 @@ Execute Python code with a persistent IPython kernel and rich helper prelude:
 - **Prelude helpers**: File I/O, search, find/replace, line operations, shell, and text utilities built into the kernel
 - **Line operations**: `lines()`, `insert_at()`, `delete_lines()`, `delete_matching()` and related helpers for precise edits
 - **Shared gateway**: Resource-efficient kernel reuse across sessions (`python.sharedGateway` setting)
-- **Custom modules**: Load extensions from `.omp/modules/` and `~/.omp/agent/modules/`
+- **Custom modules**: Load extensions from `.spell/modules/` and `~/.spell/agent/modules/`
 - **Rich output**: Supports `display()` for HTML, Markdown, images, and interactive JSON trees
 - **Markdown rendering**: Python cell output with Markdown content renders inline
 - **Mermaid diagrams**: Renders mermaid code blocks as inline graphics in iTerm2/Kitty terminals
-- Install dependencies via `omp setup python`
+- Install dependencies via `spell setup python`
 
 ### + LSP Integration (Language Server Protocol)
 
@@ -158,7 +158,7 @@ Parallel execution framework with specialized agents and real-time streaming:
 - **Agent Control Center**: `/agents` dashboard for managing and creating custom agents
 - **AI-powered agent creation**: Generate custom agent definitions with the architect model
 - **Per-agent model overrides**: Assign specific models to individual agents via swarm extension
-- User-level (`~/.omp/agent/agents/`) and project-level (`.omp/agents/`) custom agents
+- User-level (`~/.spell/agent/agents/`) and project-level (`.spell/agents/`) custom agents
 
 ### + Model Roles
 
@@ -206,7 +206,7 @@ Structured user interaction with typed options:
 
 Programmable commands with full API access:
 
-- Create at `~/.omp/agent/commands/[name]/index.ts` or `.omp/commands/[name]/index.ts`
+- Create at `~/.spell/agent/commands/[name]/index.ts` or `.spell/commands/[name]/index.ts`
 - Export factory returning `{ name, description, execute(args, ctx) }`
 - Full access to `HookCommandContext` for UI dialogs, session control, shell execution
 - Return string to send as LLM prompt, or void for fire-and-forget actions
@@ -225,7 +225,7 @@ Unified capability-based discovery that loads configuration from 8 AI coding too
 - **Native format support**: Cursor MDC frontmatter, Windsurf rules, Cline `.clinerules`, Copilot `applyTo` globs, Gemini `system.md`, Codex `AGENTS.md`
 - **Provider attribution**: See which tool contributed each configuration item
 - **Discovery settings**: Enable/disable individual providers via `/extensions` interactive dashboard
-- **Priority ordering**: Multi-path resolution across `.omp`, `.claude`, `.codex`, and `.gemini` directories
+- **Priority ordering**: Multi-path resolution across `.spell`, `.claude`, `.codex`, and `.gemini` directories
 
 ### + MCP & Plugin System
 
@@ -238,8 +238,8 @@ Full Model Context Protocol support with external tool integration:
 - Stdio and HTTP transports for connecting to MCP servers
 - **OAuth support**: Explicit `clientId` and `callbackPort` in MCP server config, manual OAuth callbacks via slash commands
 - **Browser server filtering**: Automatically filters browser-type MCP servers to prevent conflicts with built-in browser tool
-- Plugin CLI (`omp plugin install/enable/configure/doctor`)
-- Hot-loadable plugins from `~/.omp/plugins/` with npm/bun integration
+- Plugin CLI (`spell plugin install/enable/configure/doctor`)
+- Hot-loadable plugins from `~/.spell/plugins/` with npm/bun integration
 - Automatic Exa MCP server filtering with API key extraction
 - `disabledServers` works on both project-level and user-level third-party servers
 
@@ -262,7 +262,7 @@ Multi-provider search and full-page scraping with specialized handlers:
 Remote command execution with persistent connections:
 
 - **Project discovery**: Reads SSH hosts from `ssh.json` / `.ssh.json` in your project
-- **Host management**: Add, remove, and list hosts via `omp ssh` CLI or `/ssh` slash command
+- **Host management**: Add, remove, and list hosts via `spell ssh` CLI or `/ssh` slash command
 - **Persistent connections**: Reuses SSH connections across commands for faster execution
 - **OS/shell detection**: Automatically detects remote OS and shell type
 - **SSHFS mounts**: Optional automatic mounting of remote directories
@@ -285,7 +285,7 @@ Headless browser automation with 14 stealth scripts to evade bot detection:
 Use your Cursor Pro subscription for AI completions:
 
 - **Browser-based OAuth**: Authenticate through Cursor's OAuth flow
-- **Tool execution bridge**: Maps Cursor's native tools to omp equivalents (read, write, shell, diagnostics)
+- **Tool execution bridge**: Maps Cursor's native tools to spell equivalents (read, write, shell, diagnostics)
 - **Conversation caching**: Persists context across requests in the same session
 - **Shell streaming**: Real-time stdout/stderr during command execution
 
@@ -359,9 +359,9 @@ Supported platforms: `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, `
 
 ### ... and many more
 
-- **`omp config` subcommand**: Manage settings from CLI (`list`, `get`, `set`, `reset`, `path`)
-- **`omp setup` subcommand**: Install optional dependencies (e.g., `omp setup python` for Jupyter kernel)
-- **`omp stats` subcommand**: Local observability dashboard for AI usage (requests, cost, cache rate, tokens/s)
+- **`spell config` subcommand**: Manage settings from CLI (`list`, `get`, `set`, `reset`, `path`)
+- **`spell setup` subcommand**: Install optional dependencies (e.g., `spell setup python` for Jupyter kernel)
+- **`spell stats` subcommand**: Local observability dashboard for AI usage (requests, cost, cache rate, tokens/s)
 - **`xhigh` thinking level**: Extended reasoning for Anthropic models with increased token budgets
 - **Background mode**: `/background` detaches UI and continues agent execution
 - **Completion notifications**: Configurable bell/OSC99/OSC9 when agent finishes
@@ -370,7 +370,7 @@ Supported platforms: `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, `
 - **Auto environment detection**: OS, distro, kernel, CPU, GPU, shell, terminal, DE in system prompt
 - **Git context**: System prompt includes branch, status, recent commits
 - **Bun runtime**: Native TypeScript execution, faster startup, all packages migrated
-- **Centralized file logging**: Debug logs with daily rotation to `~/.omp/logs/`
+- **Centralized file logging**: Debug logs with daily rotation to `~/.spell/logs/`
 - **Bash interceptor**: Optionally block shell commands that have dedicated tools
 - **Per-command PTY control**: Bash tool supports `pty: true` for commands requiring a real terminal (sudo, ssh)
 - **@file auto-read**: Type `@path/to/file` in prompts to inject file contents inline
@@ -547,10 +547,10 @@ For `vllm`, paste your key in `/login` (or use `VLLM_API_KEY`). For local no-aut
 For `nanogpt`, `/login nanogpt` opens `https://nano-gpt.com/api` and prompts for your `sk-...` key (or set `NANO_GPT_API_KEY`). Login validates the key via NanoGPT's models endpoint (not a fixed model entitlement).
 For `cloudflare-ai-gateway`, set provider base URL to
 `https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>/anthropic`
-(for example in `~/.omp/agent/models.yml`).
+(for example in `~/.spell/agent/models.yml`).
 
 ```bash
-omp
+spell
 /login
 ```
 
@@ -558,7 +558,7 @@ omp
 
 - `/login` appends credentials for the provider (it does not wipe existing entries)
 - `/logout` clears saved credentials for the selected provider
-- Credentials are stored in `~/.omp/agent/agent.db`
+- Credentials are stored in `~/.spell/agent/agent.db`
 - For the same provider, saved API key credentials are selected before OAuth credentials
 
 ### First 15 Minutes (Recommended)
@@ -736,19 +736,19 @@ See [docs/session.md](docs/session.md) for the file format and API.
 
 ### Session Management
 
-Sessions auto-save to `~/.omp/agent/sessions/` (grouped by working directory).
+Sessions auto-save to `~/.spell/agent/sessions/` (grouped by working directory).
 
 ```bash
-omp --continue             # Continue most recent session
-omp -c
+spell --continue             # Continue most recent session
+spell -c
 
-omp --resume               # Open session picker
-omp -r
+spell --resume               # Open session picker
+spell -r
 
-omp --resume <id-prefix>   # Resume by session ID prefix
-omp --resume <path>        # Resume by explicit .jsonl path
-omp --session <value>      # Alias of --resume
-omp --no-session    # Ephemeral mode (don't save)
+spell --resume <id-prefix>   # Resume by session ID prefix
+spell --resume <path>        # Resume by explicit .jsonl path
+spell --session <value>      # Alias of --resume
+spell --no-session    # Ephemeral mode (don't save)
 ```
 
 Session IDs are Snowflake-style hex IDs (not UUIDs).
@@ -764,7 +764,7 @@ Long sessions can exhaust context windows. Compaction summarizes older messages 
 - **Overflow recovery**: model returns context overflow; compact and retry.
 - **Threshold maintenance**: context exceeds configured headroom after a successful turn.
 
-**Configuration** (`~/.omp/agent/config.yml`):
+**Configuration** (`~/.spell/agent/config.yml`):
 
 ```yaml
 compaction:
@@ -790,7 +790,7 @@ See [docs/compaction.md](docs/compaction.md) for internals and hook integration.
 
 When enabled, the agent extracts durable knowledge from past sessions and injects it at startup. The pipeline runs in the background and never blocks the active session.
 
-Memory is isolated per project (working directory) and stored under `~/.omp/agent/memories/`. At session start, a compact summary is injected into the system prompt. The agent can read deeper context via `memory://root/MEMORY.md` and `memory://root/skills/<name>/SKILL.md`.
+Memory is isolated per project (working directory) and stored under `~/.spell/agent/memories/`. At session start, a compact summary is injected into the system prompt. The agent can read deeper context via `memory://root/MEMORY.md` and `memory://root/skills/<name>/SKILL.md`.
 
 Manage via the `/memory` slash command:
 
@@ -806,7 +806,7 @@ Manage via the `/memory` slash command:
 
 ### Project Context Files
 
-omp discovers project context from supported config directories (for example `.omp`, `.claude`, `.codex`, `.gemini`).
+spell discovers project context from supported config directories (for example `.spell`, `.claude`, `.codex`, `.gemini`).
 
 Common files:
 
@@ -824,13 +824,13 @@ Use these for:
 
 Replace the default system prompt by creating `SYSTEM.md`:
 
-1. **Project-local:** `.omp/SYSTEM.md` (takes precedence)
-2. **Global:** `~/.omp/agent/SYSTEM.md` (fallback)
+1. **Project-local:** `.spell/SYSTEM.md` (takes precedence)
+2. **Global:** `~/.spell/agent/SYSTEM.md` (fallback)
    `--system-prompt` overrides both files. Use `--append-system-prompt` to append additional instructions.
 
 ### Custom Models and Providers
 
-Add custom providers/models via `~/.omp/agent/models.yml`.
+Add custom providers/models via `~/.spell/agent/models.yml`.
 
 `models.json` is still supported for legacy configs, but `models.yml` is the modern format.
 
@@ -862,9 +862,9 @@ providers:
 
 Global settings are stored in:
 
-- `~/.omp/agent/config.yml`
+- `~/.spell/agent/config.yml`
 
-Project overrides are loaded from discovered project settings files (commonly `.omp/settings.json`).
+Project overrides are loaded from discovered project settings files (commonly `.spell/settings.json`).
 
 Global `config.yml` example:
 
@@ -942,9 +942,9 @@ Legacy migration notes:
 
 Built-in themes include `dark`, `light`, and many bundled variants.
 
-**Automatic dark/light switching**: omp detects terminal appearance via Mode 2031, native macOS CoreFoundation FFI, or `COLORFGBG` fallback, and switches between `theme.dark` and `theme.light` automatically.
+**Automatic dark/light switching**: spell detects terminal appearance via Mode 2031, native macOS CoreFoundation FFI, or `COLORFGBG` fallback, and switches between `theme.dark` and `theme.light` automatically.
 
-Select theme via `/settings` or set in `~/.omp/agent/config.yml`:
+Select theme via `/settings` or set in `~/.spell/agent/config.yml`:
 
 ```yaml
 theme:
@@ -952,7 +952,7 @@ theme:
   light: light
 ```
 
-**Custom themes:** create `~/.omp/agent/themes/*.json`.
+**Custom themes:** create `~/.spell/agent/themes/*.json`.
 
 > See [Theme Documentation](docs/theme.md).
 
@@ -960,8 +960,8 @@ theme:
 
 Define reusable prompt commands as Markdown files:
 
-- Global: `~/.omp/agent/commands/*.md`
-- Project: `.omp/commands/*.md`
+- Global: `~/.spell/agent/commands/*.md`
+- Project: `.spell/commands/*.md`
 
 ```markdown
 ---
@@ -984,8 +984,8 @@ Argument placeholders:
 
 TypeScript custom commands are also supported:
 
-- `~/.omp/agent/commands/<name>/index.ts`
-- `.omp/commands/<name>/index.ts`
+- `~/.spell/agent/commands/<name>/index.ts`
+- `.spell/commands/<name>/index.ts`
 
 Bundled TypeScript command: `/review`.
 
@@ -995,8 +995,8 @@ Skills are capability packages loaded on-demand.
 
 Common locations:
 
-- `~/.omp/agent/skills/*/SKILL.md`
-- `.omp/skills/*/SKILL.md`
+- `~/.spell/agent/skills/*/SKILL.md`
+- `.spell/skills/*/SKILL.md`
 - `~/.claude/skills/*/SKILL.md`, `.claude/skills/*/SKILL.md`
 - `~/.codex/skills/*/SKILL.md`, `.codex/skills/*/SKILL.md`
 
@@ -1011,7 +1011,7 @@ description: Web search via Brave Search API.
 
 `description` drives matching; `name` defaults to the folder name when omitted.
 
-Disable skills with `omp --no-skills` or `skills.enabled: false`.
+Disable skills with `spell --no-skills` or `skills.enabled: false`.
 
 > See [Skills Documentation](docs/skills.md).
 
@@ -1021,15 +1021,15 @@ Hooks are TypeScript modules that subscribe to lifecycle events.
 
 Hook locations:
 
-- Global: `~/.omp/agent/hooks/pre/*.ts`, `~/.omp/agent/hooks/post/*.ts`
-- Project: `.omp/hooks/pre/*.ts`, `.omp/hooks/post/*.ts`
+- Global: `~/.spell/agent/hooks/pre/*.ts`, `~/.spell/agent/hooks/post/*.ts`
+- Project: `.spell/hooks/pre/*.ts`, `.spell/hooks/post/*.ts`
 - CLI: `--hook <path>`
 
 ```typescript
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/hooks";
 
-export default function (omp: HookAPI) {
-  omp.on("tool_call", async (event, ctx) => {
+export default function (spell: HookAPI) {
+  spell.on("tool_call", async (event, ctx) => {
     if (
       event.toolName === "bash" &&
       /sudo/.test(event.input.command as string)
@@ -1048,7 +1048,7 @@ export default function (omp: HookAPI) {
 Inject messages from hooks with:
 
 ```ts
-omp.sendMessage(message, { triggerTurn: true });
+spell.sendMessage(message, { triggerTurn: true });
 ```
 
 > See [Hooks Documentation](docs/hooks.md) and [examples/hooks/](packages/coding-agent/examples/hooks/).
@@ -1059,8 +1059,8 @@ Custom tools extend the built-in toolset and are callable by the model.
 
 Auto-discovered locations:
 
-- Global: `~/.omp/agent/tools/*/index.ts`
-- Project: `.omp/tools/*/index.ts`
+- Global: `~/.spell/agent/tools/*/index.ts`
+- Project: `.spell/tools/*/index.ts`
 
 ```typescript
 import { Type } from "@sinclair/typebox";
@@ -1087,8 +1087,8 @@ export default factory;
 ## CLI Reference
 
 ```bash
-omp [options] [@files...] [messages...]
-omp <command> [args] [flags]
+spell [options] [@files...] [messages...]
+spell <command> [args] [flags]
 ```
 
 ### Options
@@ -1131,7 +1131,7 @@ omp <command> [args] [flags]
 
 ### Subcommands
 
-`omp` also ships dedicated subcommands:
+`spell` also ships dedicated subcommands:
 
 - `commit`
 - `config`
@@ -1150,9 +1150,9 @@ omp <command> [args] [flags]
 Include files with `@` prefix:
 
 ```bash
-omp @prompt.md "Answer this"
-omp @screenshot.png "What's in this image?"
-omp @requirements.md @design.png "Implement this"
+spell @prompt.md "Answer this"
+spell @screenshot.png "What's in this image?"
+spell @requirements.md @design.png "Implement this"
 ```
 
 Text files are wrapped in `<file ...>` blocks. Images are attached.
@@ -1161,20 +1161,20 @@ Text files are wrapped in `<file ...>` blocks. Images are attached.
 
 ```bash
 # Interactive mode
-omp
+spell
 # Non-interactive
-omp -p "List all .ts files in src/"
-omp -c "What did we discuss?"
+spell -p "List all .ts files in src/"
+spell -c "What did we discuss?"
 # Resume by ID prefix
-omp -r abc123
+spell -r abc123
 
 # Model cycling with patterns
-omp --models "sonnet:high,haiku:low"
+spell --models "sonnet:high,haiku:low"
 
 # Restrict toolset for read-only review
-omp --tools read,grep,find -p "Review the architecture"
+spell --tools read,grep,find -p "Review the architecture"
 # Export session
-omp --export session.jsonl output.html
+spell --export session.jsonl output.html
 ```
 
 ### Environment Variables
@@ -1182,7 +1182,7 @@ omp --export session.jsonl output.html
 | Variable                                          | Description                                             |
 | ------------------------------------------------- | ------------------------------------------------------- |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.       | Provider credentials                                    |
-| `PI_CODING_AGENT_DIR`                             | Override agent data directory (default: `~/.omp/agent`) |
+| `PI_CODING_AGENT_DIR`                             | Override agent data directory (default: `~/.spell/agent`) |
 | `PI_PACKAGE_DIR`                                  | Override package directory resolution                   |
 | `PI_SMOL_MODEL`, `PI_SLOW_MODEL`, `PI_PLAN_MODEL` | Role-model overrides                                    |
 | `PI_NO_PTY`                                       | Disable PTY-based bash execution                        |
@@ -1232,7 +1232,7 @@ Notes:
 
 Example:
 
-`omp --tools read,grep,find -p "Review this codebase"`
+`spell --tools read,grep,find -p "Review this codebase"`
 
 For adding new tools, see [Custom Tools](#custom-tools).
 
@@ -1242,7 +1242,7 @@ For adding new tools, see [Custom Tools](#custom-tools).
 
 ### SDK
 
-For embedding omp in Node.js/TypeScript applications, use the SDK:
+For embedding spell in Node.js/TypeScript applications, use the SDK:
 
 ```typescript
 import {
@@ -1287,7 +1287,7 @@ The SDK provides control over:
 For embedding from other languages or process isolation:
 
 ```bash
-omp --mode rpc --no-session
+spell --mode rpc --no-session
 ```
 
 Send JSON commands on stdin:
@@ -1304,8 +1304,8 @@ Responses are emitted as `type: "response"`; session events stream on stdout as 
 ### HTML Export
 
 ```bash
-omp --export session.jsonl              # Auto-generated filename
-omp --export session.jsonl output.html  # Custom filename
+spell --export session.jsonl              # Auto-generated filename
+spell --export session.jsonl output.html  # Custom filename
 ```
 
 Works with session files and JSON event logs from `--mode json`.
@@ -1314,7 +1314,7 @@ Works with session files and JSON event logs from `--mode json`.
 
 ## Philosophy
 
-omp is a fork of [pi-mono](https://github.com/badlogic/pi-mono) by [Mario Zechner](https://github.com/mariozechner), extended with a batteries-included coding workflow.
+spell is a fork of [pi-mono](https://github.com/badlogic/pi-mono) by [Mario Zechner](https://github.com/mariozechner), extended with a batteries-included coding workflow.
 
 Key ideas:
 
@@ -1343,7 +1343,7 @@ For architecture and contribution guidelines, see [packages/coding-agent/DEVELOP
 | **[@oh-my-pi/pi-coding-agent](packages/coding-agent)**    | Interactive coding agent CLI and SDK                                       |
 | **[@oh-my-pi/pi-tui](packages/tui)**                      | Terminal UI library with differential rendering                            |
 | **[@oh-my-pi/pi-natives](packages/natives)**              | N-API bindings for grep, shell, image, text, syntax highlighting, and more |
-| **[@oh-my-pi/omp-stats](packages/stats)**                 | Local observability dashboard for AI usage statistics                      |
+| **[@oh-my-pi/spell-stats](packages/stats)**                 | Local observability dashboard for AI usage statistics                      |
 | **[@oh-my-pi/pi-utils](packages/utils)**                  | Shared utilities (logging, streams, dirs/env/process helpers)              |
 | **[@oh-my-pi/swarm-extension](packages/swarm-extension)** | Swarm orchestration extension package                                      |
 

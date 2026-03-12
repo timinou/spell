@@ -30,7 +30,7 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("AgentSession compaction e2e", 
 
 	beforeEach(() => {
 		// Create temp directory for session files
-		tempDir = path.join(os.tmpdir(), `omp-compaction-test-${Snowflake.next()}`);
+		tempDir = path.join(os.tmpdir(), `spell-compaction-test-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
 
 		// Track events

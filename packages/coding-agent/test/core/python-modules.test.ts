@@ -25,12 +25,12 @@ describe("python modules", () => {
 	});
 
 	it("loads modules in sorted order with silent execution", async () => {
-		tempRoot = TempDir.createSync("@omp-python-modules-");
+		tempRoot = TempDir.createSync("@spell-python-modules-");
 		const agentDir = path.join(tempRoot.path(), "agent");
 		const cwd = path.join(tempRoot.path(), "project");
 
-		await writeModule(getAgentModulesDir(agentDir), "beta.py", "user-omp");
-		await writeModule(getAgentModulesDir(agentDir), "alpha.py", "user-omp");
+		await writeModule(getAgentModulesDir(agentDir), "beta.py", "user-spell");
+		await writeModule(getAgentModulesDir(agentDir), "alpha.py", "user-spell");
 
 		const calls: Array<{ name: string; options?: { silent?: boolean; storeHistory?: boolean } }> = [];
 		const executor: PythonModuleExecutor = {
@@ -49,12 +49,12 @@ describe("python modules", () => {
 	});
 
 	it("fails fast when a module fails to execute", async () => {
-		tempRoot = TempDir.createSync("@omp-python-modules-");
+		tempRoot = TempDir.createSync("@spell-python-modules-");
 		const agentDir = path.join(tempRoot.path(), "agent");
 		const cwd = path.join(tempRoot.path(), "project");
 
-		await writeModule(getAgentModulesDir(agentDir), "alpha.py", "user-omp");
-		await writeModule(getProjectModulesDir(cwd), "beta.py", "project-omp");
+		await writeModule(getAgentModulesDir(agentDir), "alpha.py", "user-spell");
+		await writeModule(getProjectModulesDir(cwd), "beta.py", "project-spell");
 
 		const executor: PythonModuleExecutor = {
 			execute: async (code: string) => {

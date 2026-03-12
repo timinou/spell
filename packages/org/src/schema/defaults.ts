@@ -2,7 +2,7 @@
  * Default schema values for the org system.
  *
  * These are the out-of-box settings applied when the user has not configured
- * an org section in .omp/config.yml.
+ * an org section in .spell/config.yml.
  */
 
 import type { OrgConfig } from "../types";
@@ -52,7 +52,7 @@ export const CUSTOM_ID_REGEXP = /^[A-Z]+-\d+(-[a-z0-9-]+)?$/;
 /** Valid LAYER values. */
 export const VALID_LAYERS = ["backend", "frontend", "data", "prompt", "infra", "test", "docs"] as const;
 
-/** Default org configuration used when none is present in .omp/config.yml. */
+/** Default org configuration used when none is present in .spell/config.yml. */
 export const DEFAULT_ORG_CONFIG: OrgConfig = {
 	dirs: {
 		tasks: {

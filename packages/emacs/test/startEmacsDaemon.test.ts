@@ -26,7 +26,7 @@ const AVAILABLE_DETECTION = {
 };
 
 const mockSession = {
-	socketPath: "/run/user/1000/omp-emacs-abc123.sock",
+	socketPath: "/run/user/1000/spell-emacs-abc123.sock",
 	isAlive: () => true,
 	stop: async () => {},
 };

@@ -29,7 +29,7 @@ describe("lsp regressions", () => {
 	});
 
 	it("limits glob collection to avoid large diagnostic stalls", async () => {
-		const tempDir = TempDir.createSync("@omp-lsp-glob-");
+		const tempDir = TempDir.createSync("@spell-lsp-glob-");
 		try {
 			await Promise.all([
 				Bun.write(`${tempDir.path()}/a.ts`, "export const a = 1;\n"),
@@ -45,7 +45,7 @@ describe("lsp regressions", () => {
 	});
 
 	it("resolves the requested symbol occurrence on a line", async () => {
-		const tempDir = TempDir.createSync("@omp-lsp-regression-");
+		const tempDir = TempDir.createSync("@spell-lsp-regression-");
 		try {
 			const filePath = `${tempDir.path()}/symbol.ts`;
 			await Bun.write(filePath, "foo(bar(foo));\n");
@@ -58,7 +58,7 @@ describe("lsp regressions", () => {
 	});
 
 	it("throws when symbol does not exist on the target line", async () => {
-		const tempDir = TempDir.createSync("@omp-lsp-missing-symbol-");
+		const tempDir = TempDir.createSync("@spell-lsp-missing-symbol-");
 		try {
 			const filePath = `${tempDir.path()}/symbol.ts`;
 			await Bun.write(filePath, "winston.info('x');\n");
@@ -72,7 +72,7 @@ describe("lsp regressions", () => {
 	});
 
 	it("throws when occurrence is out of bounds", async () => {
-		const tempDir = TempDir.createSync("@omp-lsp-occurrence-");
+		const tempDir = TempDir.createSync("@spell-lsp-occurrence-");
 		try {
 			const filePath = `${tempDir.path()}/symbol.ts`;
 			await Bun.write(filePath, "foo();\n");

@@ -1,12 +1,12 @@
 Launch Qt 6 QML desktop windows for rich domain-specific UI interactions.
 
 <actions>
-- `write`: Write a `.qml` file to disk (path + content). Use absolute paths under `/tmp/omp-qml/`. Returns confirmation.
+- `write`: Write a `.qml` file to disk (path + content). Use absolute paths under `/tmp/spell-qml/`. Returns confirmation.
 - `launch`: Spawn a QML window from a file path. Optional: `title`, `width`, `height`, `props` (JSON object passed as `bridge.props` in QML). Events from the window are delivered automatically as follow-up turns — no manual listen loop required.
 - `send_message`: Send a JSON payload to a running window (`bridge.messageReceived` signal fires in QML).
 - `close`: Close a window by id.
 - `list_windows`: List all tracked windows with their state.
-- `screenshot`: Capture a window's content as PNG. Requires `id`. Optional `path` sets the save location (default: `/tmp/omp-qml/screenshot-{id}-{timestamp}.png`). Returns the saved image inline.
+- `screenshot`: Capture a window's content as PNG. Requires `id`. Optional `path` sets the save location (default: `/tmp/spell-qml/screenshot-{id}-{timestamp}.png`). Returns the saved image inline.
 </actions>
 
 <qml-bridge-api>

@@ -1,7 +1,7 @@
 /**
  * Plugin CLI command handlers.
  *
- * Handles `omp plugin <command>` subcommands for plugin lifecycle management.
+ * Handles `spell plugin <command>` subcommands for plugin lifecycle management.
  */
 
 import { APP_NAME } from "@oh-my-pi/pi-utils";

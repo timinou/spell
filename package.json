@@ -1,5 +1,5 @@
 {
-	"name": "omp-monorepo",
+	"name": "spell-monorepo",
 	"private": true,
 	"type": "module",
 	"workspaces": [

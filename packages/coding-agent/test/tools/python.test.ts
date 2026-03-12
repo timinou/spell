@@ -8,7 +8,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 let previousSkipCheck: string | undefined;
 let tempDir: TempDir;
 beforeAll(() => {
-	tempDir = TempDir.createSync("@omp-python-test-");
+	tempDir = TempDir.createSync("@spell-python-test-");
 	previousSkipCheck = Bun.env.PI_PYTHON_SKIP_CHECK;
 	Bun.env.PI_PYTHON_SKIP_CHECK = "1";
 });

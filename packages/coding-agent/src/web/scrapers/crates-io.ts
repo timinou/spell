@@ -39,7 +39,7 @@ export const handleCratesIo: SpecialHandler = async (
 		const result = await loadPage(apiUrl, {
 			timeout,
 			signal,
-			headers: { "User-Agent": "omp-web-fetch/1.0 (https://github.com/anthropics)" },
+			headers: { "User-Agent": "spell-web-fetch/1.0 (https://github.com/anthropics)" },
 		});
 
 		if (!result.ok) return null;

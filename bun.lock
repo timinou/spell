@@ -54,11 +54,10 @@
       "name": "@oh-my-pi/pi-coding-agent",
       "version": "13.10.1",
       "bin": {
-        "kika": "src/cli.ts",
+        "spell": "src/cli.ts",
       },
       "dependencies": {
         "@mozilla/readability": "^0.6",
-        "@oh-my-pi/omp-stats": "workspace:*",
         "@oh-my-pi/pi-agent-core": "workspace:*",
         "@oh-my-pi/pi-ai": "workspace:*",
         "@oh-my-pi/pi-emacs": "workspace:*",
@@ -69,6 +68,7 @@
         "@oh-my-pi/pi-qml-remote": "workspace:*",
         "@oh-my-pi/pi-tui": "workspace:*",
         "@oh-my-pi/pi-utils": "workspace:*",
+        "@oh-my-pi/spell-stats": "workspace:*",
         "@sinclair/typebox": "^0.34",
         "@xterm/headless": "^6.0",
         "ajv": "^8.18",
@@ -171,10 +171,10 @@
       },
     },
     "packages/stats": {
-      "name": "@oh-my-pi/omp-stats",
+      "name": "@oh-my-pi/spell-stats",
       "version": "13.10.1",
       "bin": {
-        "omp-stats": "./src/index.ts",
+        "spell-stats": "./src/index.ts",
       },
       "dependencies": {
         "@oh-my-pi/pi-ai": "workspace:*",
@@ -369,8 +369,6 @@
 
     "@mozilla/readability": ["@mozilla/readability@0.6.0", "", {}, "sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ=="],
 
-    "@oh-my-pi/omp-stats": ["@oh-my-pi/omp-stats@workspace:packages/stats"],
-
     "@oh-my-pi/pi-agent-core": ["@oh-my-pi/pi-agent-core@workspace:packages/agent"],
 
     "@oh-my-pi/pi-ai": ["@oh-my-pi/pi-ai@workspace:packages/ai"],
@@ -394,6 +392,8 @@
     "@oh-my-pi/pi-utils": ["@oh-my-pi/pi-utils@workspace:packages/utils"],
 
     "@oh-my-pi/react-edit-benchmark": ["@oh-my-pi/react-edit-benchmark@workspace:packages/react-edit-benchmark"],
+
+    "@oh-my-pi/spell-stats": ["@oh-my-pi/spell-stats@workspace:packages/stats"],
 
     "@oh-my-pi/swarm-extension": ["@oh-my-pi/swarm-extension@workspace:packages/swarm-extension"],
 

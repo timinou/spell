@@ -74,7 +74,7 @@ function sessionKey(projectRoot: string, sessionId: string): string {
 /** Absolute path to the Unix socket for a given hash key. */
 function socketPath(hashHex: string): string {
 	const dir = process.env.XDG_RUNTIME_DIR ?? "/tmp";
-	return path.join(dir, `omp-org-${hashHex}.sock`);
+	return path.join(dir, `spell-org-${hashHex}.sock`);
 }
 
 /** Returns true when the socket file is present on disk. */
@@ -106,7 +106,7 @@ async function launchDaemon(
 	elispDir: string,
 	key: string,
 ): Promise<EmacsSession> {
-	const daemonName = `omp-org-${key}`;
+	const daemonName = `spell-org-${key}`;
 	const sock = socketPath(key);
 
 	// Remove stale socket file if it was left by a previous crashed daemon.

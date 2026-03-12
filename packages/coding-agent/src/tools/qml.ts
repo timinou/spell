@@ -94,7 +94,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 		if (!this.#bridge) {
 			if (!isBridgeAvailable()) {
 				throw new ToolError(
-					`omp-qml-bridge binary not found at ${bridgeBinaryPath()}.\nBuild it first: cd packages/qml && bun run build:bridge`,
+					`spell-qml-bridge binary not found at ${bridgeBinaryPath()}.\nBuild it first: cd packages/qml && bun run build:bridge`,
 				);
 			}
 			this.#bridge = new QmlBridge();
@@ -407,7 +407,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 			case "screenshot": {
 				const id = params.id;
 				if (!id) throw new ToolError("screenshot action requires 'id'");
-				const savePath = params.path ?? `/tmp/omp-qml/screenshot-${id}-${Date.now()}.png`;
+				const savePath = params.path ?? `/tmp/spell-qml/screenshot-${id}-${Date.now()}.png`;
 				const bridge = this.#ensureBridge();
 				const resultPath = await bridge.screenshot(id, savePath);
 				const pngBuffer = await Bun.file(resultPath).arrayBuffer();

@@ -74,7 +74,7 @@ export interface TestSessionContext {
  * Use this for e2e tests that need real LLM calls.
  */
 export async function createTestSession(options: TestSessionOptions = {}): Promise<TestSessionContext> {
-	const tempDir = path.join(os.tmpdir(), `omp-test-${Snowflake.next()}`);
+	const tempDir = path.join(os.tmpdir(), `spell-test-${Snowflake.next()}`);
 	fs.mkdirSync(tempDir, { recursive: true });
 
 	const toolSession: ToolSession = {

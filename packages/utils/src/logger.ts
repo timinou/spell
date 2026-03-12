@@ -1,7 +1,7 @@
 /**
- * Centralized file logger for omp.
+ * Centralized file logger for spell.
  *
- * Logs to ~/.omp/logs/ with size-based rotation, supporting concurrent omp instances.
+ * Logs to ~/.spell/logs/ with size-based rotation, supporting concurrent spell instances.
  * Each log entry includes process.pid for traceability.
  */
 import * as fs from "node:fs";
@@ -42,7 +42,7 @@ const logFormat = winston.format.combine(
 /** Size-based rotating file transport */
 const fileTransport = new DailyRotateFile({
 	dirname: ensureLogsDir(),
-	filename: "omp.%DATE%.log",
+	filename: "spell.%DATE%.log",
 	datePattern: "YYYY-MM-DD",
 	maxSize: "10m",
 	maxFiles: 5,
@@ -59,10 +59,10 @@ const winstonLogger = winston.createLogger({
 });
 
 /**
- * Centralized logger for omp.
+ * Centralized logger for spell.
  *
- * Logs to ~/.omp/logs/omp.YYYY-MM-DD.log with size-based rotation.
- * Safe for concurrent access from multiple omp instances.
+ * Logs to ~/.spell/logs/spell.YYYY-MM-DD.log with size-based rotation.
+ * Safe for concurrent access from multiple spell instances.
  *
  * @example
  * ```typescript

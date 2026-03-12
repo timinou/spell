@@ -65,10 +65,10 @@ describe("serializeFileItem", () => {
 	test("writes SESSION_ID and TRANSCRIPT_PATH when session provided", () => {
 		const result = serializeFileItem("Task", "ITEM", {}, undefined, {
 			sessionId: "abc123",
-			transcriptPath: "/home/user/.omp/sessions/abc.jsonl",
+			transcriptPath: "/home/user/.spell/sessions/abc.jsonl",
 		});
 		expect(result).toContain("#+SESSION_ID: abc123");
-		expect(result).toContain("#+TRANSCRIPT_PATH: [[file:/home/user/.omp/sessions/abc.jsonl]]");
+		expect(result).toContain("#+TRANSCRIPT_PATH: [[file:/home/user/.spell/sessions/abc.jsonl]]");
 	});
 
 	test("writes Initial Prompt section when system prompt provided", () => {

@@ -8,7 +8,7 @@ export function bridgeBinaryPath(): string {
 	// Resolve relative to this file at runtime
 	const dir = path.dirname(import.meta.path);
 	const packageRoot = path.resolve(dir, "..");
-	return path.join(packageRoot, "native", "omp-qml-bridge");
+	return path.join(packageRoot, "native", "spell-qml-bridge");
 }
 
 /** Returns true if the bridge binary exists and is executable. */
@@ -46,7 +46,7 @@ export class QmlProcess {
 		const binary = bridgeBinaryPath();
 		if (!isBridgeAvailable()) {
 			throw new Error(
-				`omp-qml-bridge binary not found at ${binary}.\n` +
+				`spell-qml-bridge binary not found at ${binary}.\n` +
 					`Build it first: cd packages/qml && bun run build:bridge`,
 			);
 		}
@@ -72,11 +72,11 @@ export class QmlProcess {
 		// Respawn on unexpected exit
 		this.#proc.exited.then(code => {
 			if (!this.#stopping) {
-				logger.warn("omp-qml-bridge exited unexpectedly", { code });
+				logger.warn("spell-qml-bridge exited unexpectedly", { code });
 			}
 		});
 
-		logger.debug("omp-qml-bridge spawned", { binary });
+		logger.debug("spell-qml-bridge spawned", { binary });
 	}
 
 	async #readLoop(stream: ReadableStream<Uint8Array>): Promise<void> {
@@ -140,7 +140,7 @@ export class QmlProcess {
 		try {
 			event = JSON.parse(line) as BridgeEvent;
 		} catch {
-			logger.warn("omp-qml-bridge: invalid JSON line", { line });
+			logger.warn("spell-qml-bridge: invalid JSON line", { line });
 			return;
 		}
 		for (const listener of this.#listeners) {

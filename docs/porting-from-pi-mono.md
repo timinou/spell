@@ -358,7 +358,7 @@ Our fork has architectural decisions that differ from upstream. **Do not port th
 | Upstream                      | Our Fork                                   |
 | ----------------------------- | ------------------------------------------ |
 | `jiti` for TypeScript loading | Native Bun `import()`                      |
-| `pkg.pi` manifest field       | `pkg.omp ?? pkg.pi` (prefer our namespace) |
+| `pkg.pi` manifest field       | `pkg.spell ?? pkg.pi` (prefer our namespace) |
 
 ### Skip These Upstream Features
 

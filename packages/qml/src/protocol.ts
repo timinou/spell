@@ -1,4 +1,4 @@
-/** Commands sent from omp → bridge process (stdin) */
+/** Commands sent from spell → bridge process (stdin) */
 export type BridgeCommand =
 	| {
 			type: "load";
@@ -14,7 +14,7 @@ export type BridgeCommand =
 	| { type: "close"; id: string }
 	| { type: "screenshot"; id: string; path: string };
 
-/** Events emitted by bridge process → omp (stdout) */
+/** Events emitted by bridge process → spell (stdout) */
 export type BridgeEvent =
 	| { type: "ready"; id: string }
 	| { type: "event"; id: string; name?: string; payload: Record<string, unknown> }

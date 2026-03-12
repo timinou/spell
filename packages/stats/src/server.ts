@@ -26,7 +26,7 @@ const IS_BUN_COMPILED =
 	import.meta.url.includes("~BUN") ||
 	import.meta.url.includes("%7EBUN");
 
-const COMPILED_CLIENT_DIR_ROOT = path.join(os.tmpdir(), "omp-stats-client");
+const COMPILED_CLIENT_DIR_ROOT = path.join(os.tmpdir(), "spell-stats-client");
 let compiledClientDirPromise: Promise<string> | null = null;
 
 function sanitizeArchivePath(archivePath: string): string | null {

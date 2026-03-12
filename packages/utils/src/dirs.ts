@@ -1,7 +1,7 @@
 /**
- * Centralized path helpers for omp config directories.
+ * Centralized path helpers for spell config directories.
  *
- * Uses PI_CONFIG_DIR (default ".omp") for the config root and
+ * Uses PI_CONFIG_DIR (default ".spell") for the config root and
  * PI_CODING_AGENT_DIR to override the agent directory.
  */
 
@@ -10,11 +10,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { engines, version } from "../package.json" with { type: "json" };
 
-/** App name (e.g. "omp") */
-export const APP_NAME: string = "omp";
+/** App name (e.g. "spell") */
+export const APP_NAME: string = "spell";
 
-/** Config directory name (e.g. ".omp") */
-export const CONFIG_DIR_NAME: string = ".omp";
+/** Config directory name (e.g. ".spell") */
+export const CONFIG_DIR_NAME: string = ".spell";
 
 /** Version (e.g. "1.0.0") */
 export const VERSION: string = version;
@@ -54,7 +54,7 @@ export function setProjectDir(dir: string): void {
 	process.chdir(projectDir);
 }
 
-/** Get the config root directory (~/.omp). */
+/** Get the config root directory (~/.spell). */
 export function getConfigRootDir(): string {
 	return path.join(os.homedir(), process.env.PI_CONFIG_DIR || CONFIG_DIR_NAME);
 }
@@ -68,12 +68,12 @@ export function setAgentDir(dir: string): void {
 	process.env.PI_CODING_AGENT_DIR = dir;
 }
 
-/** Get the agent config directory (~/.omp/agent). */
+/** Get the agent config directory (~/.spell/agent). */
 export function getAgentDir(): string {
 	return agentDir;
 }
 
-/** Get the project-local config directory (.omp). */
+/** Get the project-local config directory (.spell). */
 export function getProjectAgentDir(cwd: string = getProjectDir()): string {
 	return path.join(cwd, CONFIG_DIR_NAME);
 }
@@ -110,96 +110,96 @@ function getAgentSubdir(userAgentDir: string | undefined, subdir: string): strin
 }
 
 // =============================================================================
-// Config-root subdirectories (~/.omp/*)
+// Config-root subdirectories (~/.spell/*)
 // =============================================================================
 
-/** Get the reports directory (~/.omp/reports). */
+/** Get the reports directory (~/.spell/reports). */
 export function getReportsDir(): string {
 	return getRootSubdir("reports");
 }
 
-/** Get the logs directory (~/.omp/logs). */
+/** Get the logs directory (~/.spell/logs). */
 export function getLogsDir(): string {
 	return getRootSubdir("logs");
 }
 
-/** Get the path to a dated log file (~/.omp/logs/omp.YYYY-MM-DD.log). */
+/** Get the path to a dated log file (~/.spell/logs/spell.YYYY-MM-DD.log). */
 export function getLogPath(date = new Date()): string {
 	return path.join(getLogsDir(), `${APP_NAME}.${date.toISOString().slice(0, 10)}.log`);
 }
 
-/** Get the plugins directory (~/.omp/plugins). */
+/** Get the plugins directory (~/.spell/plugins). */
 export function getPluginsDir(): string {
 	return getRootSubdir("plugins");
 }
 
-/** Where npm installs packages (~/.omp/plugins/node_modules). */
+/** Where npm installs packages (~/.spell/plugins/node_modules). */
 export function getPluginsNodeModules(): string {
 	return getRootSubdir("plugins/node_modules");
 }
 
-/** Plugin manifest (~/.omp/plugins/package.json). */
+/** Plugin manifest (~/.spell/plugins/package.json). */
 export function getPluginsPackageJson(): string {
 	return getRootSubdir("plugins/package.json");
 }
 
-/** Plugin lock file (~/.omp/plugins/omp-plugins.lock.json). */
+/** Plugin lock file (~/.spell/plugins/spell-plugins.lock.json). */
 export function getPluginsLockfile(): string {
-	return getRootSubdir("plugins/omp-plugins.lock.json");
+	return getRootSubdir("plugins/spell-plugins.lock.json");
 }
 
-/** Get the remote mount directory (~/.omp/remote). */
+/** Get the remote mount directory (~/.spell/remote). */
 export function getRemoteDir(): string {
 	return getRootSubdir("remote");
 }
 
-/** Get the SSH control socket directory (~/.omp/ssh-control). */
+/** Get the SSH control socket directory (~/.spell/ssh-control). */
 export function getSshControlDir(): string {
 	return getRootSubdir("ssh-control");
 }
 
-/** Get the remote host info directory (~/.omp/remote-host). */
+/** Get the remote host info directory (~/.spell/remote-host). */
 export function getRemoteHostDir(): string {
 	return getRootSubdir("remote-host");
 }
 
-/** Get the managed Python venv directory (~/.omp/python-env). */
+/** Get the managed Python venv directory (~/.spell/python-env). */
 export function getPythonEnvDir(): string {
 	return getRootSubdir("python-env");
 }
 
-/** Get the puppeteer sandbox directory (~/.omp/puppeteer). */
+/** Get the puppeteer sandbox directory (~/.spell/puppeteer). */
 export function getPuppeteerDir(): string {
 	return getRootSubdir("puppeteer");
 }
 
-/** Get the worktree base directory (~/.omp/wt). */
+/** Get the worktree base directory (~/.spell/wt). */
 export function getWorktreeBaseDir(): string {
 	return getRootSubdir("wt");
 }
 
-/** Get the path to a worktree directory (~/.omp/wt/<project>/<id>). */
+/** Get the path to a worktree directory (~/.spell/wt/<project>/<id>). */
 export function getWorktreeDir(encodedProject: string, id: string): string {
 	return path.join(getWorktreeBaseDir(), encodedProject, id);
 }
 
-/** Get the GPU cache path (~/.omp/gpu_cache.json). */
+/** Get the GPU cache path (~/.spell/gpu_cache.json). */
 export function getGpuCachePath(): string {
 	return getRootSubdir("gpu_cache.json");
 }
 
-/** Get the natives directory (~/.omp/natives). */
+/** Get the natives directory (~/.spell/natives). */
 export function getNativesDir(): string {
 	return getRootSubdir("natives");
 }
 
-/** Get the stats database path (~/.omp/stats.db). */
+/** Get the stats database path (~/.spell/stats.db). */
 export function getStatsDbPath(): string {
 	return getRootSubdir("stats.db");
 }
 
 // =============================================================================
-// Agent subdirectories (~/.omp/agent/*)
+// Agent subdirectories (~/.spell/agent/*)
 // =============================================================================
 
 /** Get the path to agent.db (SQLite database for settings and auth storage). */
@@ -207,71 +207,71 @@ export function getAgentDbPath(agentDir?: string): string {
 	return getAgentSubdir(agentDir, "agent.db");
 }
 
-/** Get the sessions directory (~/.omp/agent/sessions). */
+/** Get the sessions directory (~/.spell/agent/sessions). */
 export function getSessionsDir(agentDir?: string): string {
 	return getAgentSubdir(agentDir, "sessions");
 }
 
-/** Get the content-addressed blob store directory (~/.omp/agent/blobs). */
+/** Get the content-addressed blob store directory (~/.spell/agent/blobs). */
 export function getBlobsDir(agentDir?: string): string {
 	return getAgentSubdir(agentDir, "blobs");
 }
 
-/** Get the custom themes directory (~/.omp/agent/themes). */
+/** Get the custom themes directory (~/.spell/agent/themes). */
 export function getCustomThemesDir(agentDir?: string): string {
 	return getAgentSubdir(agentDir, "themes");
 }
 
-/** Get the tools directory (~/.omp/agent/tools). */
+/** Get the tools directory (~/.spell/agent/tools). */
 export function getToolsDir(agentDir?: string): string {
 	return getAgentSubdir(agentDir, "tools");
 }
 
-/** Get the slash commands directory (~/.omp/agent/commands). */
+/** Get the slash commands directory (~/.spell/agent/commands). */
 export function getCommandsDir(agentDir?: string): string {
 	return getAgentSubdir(agentDir, "commands");
 }
 
-/** Get the prompts directory (~/.omp/agent/prompts). */
+/** Get the prompts directory (~/.spell/agent/prompts). */
 export function getPromptsDir(agentDir?: string): string {
 	return getAgentSubdir(agentDir, "prompts");
 }
 
-/** Get the user-level Python modules directory (~/.omp/agent/modules). */
+/** Get the user-level Python modules directory (~/.spell/agent/modules). */
 export function getAgentModulesDir(agentDir?: string): string {
 	return getAgentSubdir(agentDir, "modules");
 }
 
-/** Get the test auth database path (~/.omp/agent/testauth.db). */
+/** Get the test auth database path (~/.spell/agent/testauth.db). */
 export function getTestAuthPath(agentDir?: string): string {
 	return getAgentSubdir(agentDir, "testauth.db");
 }
 
-/** Get the crash log path (~/.omp/agent/omp-crash.log). */
+/** Get the crash log path (~/.spell/agent/spell-crash.log). */
 export function getCrashLogPath(agentDir?: string): string {
-	return getAgentSubdir(agentDir, "omp-crash.log");
+	return getAgentSubdir(agentDir, "spell-crash.log");
 }
 
-/** Get the debug log path (~/.omp/agent/omp-debug.log). */
+/** Get the debug log path (~/.spell/agent/spell-debug.log). */
 export function getDebugLogPath(agentDir?: string): string {
 	return getAgentSubdir(agentDir, `${APP_NAME}-debug.log`);
 }
 
 // =============================================================================
-// Project subdirectories (.omp/*)
+// Project subdirectories (.spell/*)
 // =============================================================================
 
-/** Get the project-level Python modules directory (.omp/modules). */
+/** Get the project-level Python modules directory (.spell/modules). */
 export function getProjectModulesDir(cwd: string = getProjectDir()): string {
 	return path.join(getProjectAgentDir(cwd), "modules");
 }
 
-/** Get the project-level prompts directory (.omp/prompts). */
+/** Get the project-level prompts directory (.spell/prompts). */
 export function getProjectPromptsDir(cwd: string = getProjectDir()): string {
 	return path.join(getProjectAgentDir(cwd), "prompts");
 }
 
-/** Get the project-level plugin overrides path (.omp/plugin-overrides.json). */
+/** Get the project-level plugin overrides path (.spell/plugin-overrides.json). */
 export function getProjectPluginOverridesPath(cwd: string = getProjectDir()): string {
 	return path.join(getProjectAgentDir(cwd), "plugin-overrides.json");
 }

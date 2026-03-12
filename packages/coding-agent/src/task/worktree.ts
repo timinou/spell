@@ -132,7 +132,7 @@ export async function captureBaseline(repoRoot: string): Promise<WorktreeBaselin
 }
 
 async function writeTempPatchFile(patch: string): Promise<string> {
-	const tempPath = path.join(os.tmpdir(), `omp-task-patch-${Snowflake.next()}.patch`);
+	const tempPath = path.join(os.tmpdir(), `spell-task-patch-${Snowflake.next()}.patch`);
 	await Bun.write(tempPath, patch);
 	return tempPath;
 }
@@ -198,7 +198,7 @@ export async function applyBaseline(worktreeDir: string, baseline: WorktreeBasel
 		).trim();
 		if (hasChanges) {
 			await $`git add -A`.cwd(nestedDir).quiet();
-			await $`git commit -m omp-baseline --allow-empty`.cwd(nestedDir).quiet();
+			await $`git commit -m spell-baseline --allow-empty`.cwd(nestedDir).quiet();
 			// Update baseline to reflect the committed state — prevents double-apply
 			// in captureRepoDeltaPatch's temp-index path
 			entry.baseline.headCommit = (await $`git rev-parse HEAD`.cwd(nestedDir).quiet().text()).trim();
@@ -273,7 +273,7 @@ async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline): Promise
 	}
 
 	// HEAD unchanged: use temp index approach (subtracts baseline from delta)
-	const tempIndex = path.join(os.tmpdir(), `omp-task-index-${Snowflake.next()}`);
+	const tempIndex = path.join(os.tmpdir(), `spell-task-index-${Snowflake.next()}`);
 	try {
 		await $`git read-tree ${rb.headCommit}`.cwd(repoDir).env({ GIT_INDEX_FILE: tempIndex });
 		await applyPatchToIndex(repoDir, rb.staged, tempIndex);
@@ -513,16 +513,16 @@ export async function commitToBranch(
 	if (!rootPatch.trim() && nestedPatches.length === 0) return null;
 
 	const repoRoot = baseline.root.repoRoot;
-	const branchName = `omp/task/${taskId}`;
+	const branchName = `spell/task/${taskId}`;
 	const fallbackMessage = description || taskId;
 
 	// Only create a branch if the root repo has changes
 	if (rootPatch.trim()) {
 		await $`git branch ${branchName} HEAD`.cwd(repoRoot).quiet();
-		const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
+		const tmpDir = path.join(os.tmpdir(), `spell-branch-${Snowflake.next()}`);
 		try {
 			await $`git worktree add ${tmpDir} ${branchName}`.cwd(repoRoot).quiet();
-			const patchPath = path.join(os.tmpdir(), `omp-branch-patch-${Snowflake.next()}.patch`);
+			const patchPath = path.join(os.tmpdir(), `spell-branch-patch-${Snowflake.next()}.patch`);
 			try {
 				await Bun.write(patchPath, rootPatch);
 				const applyResult = await $`git apply --binary ${patchPath}`.cwd(tmpDir).quiet().nothrow();

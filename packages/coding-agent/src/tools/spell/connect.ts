@@ -20,7 +20,7 @@ const SPELL_PORT = 9473;
 const DEVICE_POLL_INTERVAL_MS = 2_000;
 const DEVICE_WAIT_TIMEOUT_MS = 120_000;
 const WS_CONNECT_TIMEOUT_MS = 30_000;
-const SETUP_QML_PATH = "/tmp/omp-qml/spell-setup.qml";
+const SETUP_QML_PATH = "/tmp/spell-qml/spell-setup.qml";
 
 // ── display abstraction ───────────────────────────────────────────────────────
 
@@ -261,7 +261,7 @@ async function runSetupFlow(session: ToolSession, display: SetupDisplay): Promis
 			const msg = err instanceof Error ? err.message : String(err);
 			const hint =
 				"Spell APK not available. Place a built APK at\n" +
-				"  ~/.omp/tools/spell.apk\n" +
+				"  ~/.spell/tools/spell.apk\n" +
 				"Build: install Qt6 for Android arm64-v8a via Qt Online Installer,\n" +
 				"then: cd apps/spell && qt-cmake -DANDROID_ABI=arm64-v8a . && make apk";
 			display.showError(hint);
@@ -374,7 +374,7 @@ async function runWithTuiDisplay(session: ToolSession, ui: NonNullable<AgentTool
  * the session. Idempotent — returns immediately if already connected.
  *
  * Display strategy (first that applies):
- *   1. Desktop QML window  — when omp-qml-bridge is available
+ *   1. Desktop QML window  — when spell-qml-bridge is available
  *   2. TUI modal           — when a TUI context is present but no bridge
  *   3. Headless skip       — no UI at all; QmlTool falls back to local bridge
  *

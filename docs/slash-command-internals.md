@@ -28,7 +28,7 @@ The capability registry loads all registered providers, sorted by provider prior
 
 Current slash-command providers and priorities:
 
-1. `native` (OMP) — priority `100`
+1. `native` (Spell) — priority `100`
 2. `claude` — priority `80`
 3. `claude-plugins` — priority `70`
 4. `codex` — priority `70`
@@ -58,10 +58,10 @@ So hidden files/directories are not loaded, and ignored paths are skipped.
 
 ## `native` provider (`builtin.ts`)
 
-Search roots come from `.omp` directories:
+Search roots come from `.spell` directories:
 
-- project: `<cwd>/.omp/commands/*.md`
-- user: `~/.omp/agent/commands/*.md`
+- project: `<cwd>/.spell/commands/*.md`
+- user: `~/.spell/agent/commands/*.md`
 
 `getConfigDirs()` returns project first, then user, so **project native commands beat user native commands** when names collide.
 
