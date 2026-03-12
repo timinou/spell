@@ -32,6 +32,7 @@ export class QmlProcess {
 	#stdin: Bun.FileSink | null = null;
 	#listeners: Set<EventListener> = new Set();
 	#buffer = "";
+	#stderrBuffer = "";
 	#stopping = false;
 
 	/** Spawn the bridge if not already running. */
