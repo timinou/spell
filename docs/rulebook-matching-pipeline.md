@@ -54,10 +54,10 @@ Consequence: precedence and deduplication are **name-based only**. Two different
 
 ### Native provider (`builtin.ts`)
 
-Loads `.omp` rules from:
+Loads `.spell` rules from:
 
-- project: `<cwd>/.omp/rules/*.{md,mdc}`
-- user: `~/.omp/agent/rules/*.{md,mdc}`
+- project: `<cwd>/.spell/rules/*.{md,mdc}`
+- user: `~/.spell/agent/rules/*.{md,mdc}`
 
 Normalization:
 

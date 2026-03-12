@@ -1230,7 +1230,7 @@
 - Simplified SSE stream parsing using readLines utility
 - Updated test framework from vitest to bun:test
 - Replaced temp directory creation with TempDir API
-- Changed credential storage from auth.json to ~/.omp/agent/agent.db
+- Changed credential storage from auth.json to ~/.spell/agent/agent.db
 - Changed CLI command examples from npx to bunx
 - Refactored OAuth flows to use common callback server base class
 - Updated OAuth provider interfaces to use controller pattern
@@ -1272,8 +1272,8 @@
 
 ### Changed
 
-- Updated environment variable prefix from PI* to OMP* for better consistency
-- Added automatic migration for legacy PI* environment variables to OMP* equivalents
+- Updated environment variable prefix from PI* to Spell* for better consistency
+- Added automatic migration for legacy PI* environment variables to Spell* equivalents
 - Adjusted Bedrock Claude thinking budgets to reserve output tokens when maxTokens is too low
 
 ### Fixed

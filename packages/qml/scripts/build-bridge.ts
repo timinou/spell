@@ -7,10 +7,10 @@ const isDev = Bun.argv.includes("--dev");
 const packageDir = path.resolve(import.meta.dir, "..");
 const buildDir = path.join(packageDir, "build");
 const nativeDir = path.join(packageDir, "native");
-const binaryName = "omp-qml-bridge";
+const binaryName = "spell-qml-bridge";
 const outputPath = path.join(nativeDir, binaryName);
 
-console.log(`Building omp-qml-bridge (${isDev ? "debug" : "release"})...`);
+console.log(`Building spell-qml-bridge (${isDev ? "debug" : "release"})...`);
 
 // Configure
 const configArgs = ["-S", packageDir, "-B", buildDir];

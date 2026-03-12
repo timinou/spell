@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { APP_NAME, getProjectDir, getToolsDir, logger } from "@oh-my-pi/pi-utils";
 
-const SPELL_REPO = "timinou/kika";
+const SPELL_REPO = "timinou/spell";
 const SPELL_ASSET = "spell-arm64-v8a.apk";
 const DOWNLOAD_TIMEOUT_MS = 60_000;
 const METADATA_TIMEOUT_MS = 5_000;

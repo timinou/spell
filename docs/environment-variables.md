@@ -249,7 +249,7 @@ Extra conditional behavior:
 | `PI_NO_TITLE` | If set (any non-empty value), disables auto session title generation on first user message |
 | `NULL_PROMPT` | If `true`, system prompt builder returns empty string |
 | `PI_BLOCKED_AGENT` | Blocks a specific subagent type in task tool |
-| `PI_SUBPROCESS_CMD` | Overrides subagent spawn command (`omp` / `omp.cmd` resolution bypass) |
+| `PI_SUBPROCESS_CMD` | Overrides subagent spawn command (`spell` / `spell.cmd` resolution bypass) |
 | `PI_TASK_MAX_OUTPUT_BYTES` | Max captured output bytes per subagent (default `500000`) |
 | `PI_TASK_MAX_OUTPUT_LINES` | Max captured output lines per subagent (default `5000`) |
 | `PI_TIMING` | If `1`, enables startup/tool timing instrumentation logs |
@@ -271,8 +271,8 @@ These are consumed via `@oh-my-pi/pi-utils/dirs` and affect where coding-agent s
 
 | Variable | Default / behavior |
 |---|---|
-| `PI_CONFIG_DIR` | Config root dirname under home (default `.omp`) |
-| `PI_CODING_AGENT_DIR` | Full override for agent directory (default `~/<PI_CONFIG_DIR or .omp>/agent`) |
+| `PI_CONFIG_DIR` | Config root dirname under home (default `.spell`) |
+| `PI_CODING_AGENT_DIR` | Full override for agent directory (default `~/<PI_CONFIG_DIR or .spell>/agent`) |
 | `PWD` | Used when matching canonical current working directory in path helpers |
 
 ---

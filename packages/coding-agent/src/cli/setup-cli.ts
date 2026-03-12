@@ -1,7 +1,7 @@
 /**
  * Setup CLI command handler.
  *
- * Handles `omp setup <component>` to install dependencies for optional features.
+ * Handles `spell setup <component>` to install dependencies for optional features.
  */
 import * as path from "node:path";
 import { APP_NAME, getPythonEnvDir } from "@oh-my-pi/pi-utils";

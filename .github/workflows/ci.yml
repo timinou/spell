@@ -220,11 +220,11 @@ jobs:
             TARGET_PLATFORM="$PLATFORM" TARGET_ARCH="$ARCH" bun --cwd=packages/natives run embed:native
             bun build --compile $DEFINES --target="$TARGET" "$ENTRYPOINT" --outfile "$OUTFILE"
           }
-          build_binary darwin arm64 bun-darwin-arm64 packages/coding-agent/binaries/omp-darwin-arm64
-          build_binary darwin x64 bun-darwin-x64 packages/coding-agent/binaries/omp-darwin-x64
-          build_binary linux x64 bun-linux-x64-modern packages/coding-agent/binaries/omp-linux-x64
-          build_binary linux arm64 bun-linux-arm64 packages/coding-agent/binaries/omp-linux-arm64
-          build_binary win32 x64 bun-windows-x64-modern packages/coding-agent/binaries/omp-windows-x64.exe
+          build_binary darwin arm64 bun-darwin-arm64 packages/coding-agent/binaries/spell-darwin-arm64
+          build_binary darwin x64 bun-darwin-x64 packages/coding-agent/binaries/spell-darwin-x64
+          build_binary linux x64 bun-linux-x64-modern packages/coding-agent/binaries/spell-linux-x64
+          build_binary linux arm64 bun-linux-arm64 packages/coding-agent/binaries/spell-linux-arm64
+          build_binary win32 x64 bun-windows-x64-modern packages/coding-agent/binaries/spell-windows-x64.exe
           bun --cwd=packages/natives run embed:native --reset
           bun --cwd=packages/stats scripts/generate-client-bundle.ts --reset
       - name: Stage native addons for release

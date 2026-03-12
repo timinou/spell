@@ -19,10 +19,10 @@ bun install
 
 ```bash
 # Foreground — runs until complete, no timeout:
-omp-swarm path/to/swarm.yaml
+spell-swarm path/to/swarm.yaml
 
 # Background — survives terminal close:
-nohup omp-swarm path/to/swarm.yaml \
+nohup spell-swarm path/to/swarm.yaml \
   > pipeline.log 2>&1 & disown
 ```
 
@@ -30,7 +30,7 @@ The standalone runner has no timeout. It runs iteration after iteration until th
 
 ### Inside oh-my-pi (TUI)
 
-Register the extension in your config (`~/.omp/config.json` or `.omp/config.json`):
+Register the extension in your config (`~/.spell/config.json` or `.spell/config.json`):
 
 ```json
 {
@@ -436,7 +436,7 @@ tracking/status.json      -> Cumulative state
 
 ## Models
 
-Any model configured in omp works. Set a swarm default and optionally override per agent:
+Any model configured in spell works. Set a swarm default and optionally override per agent:
 
 ```yaml
 swarm:

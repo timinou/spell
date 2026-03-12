@@ -112,7 +112,7 @@ import { EventBus } from "./utils/event-bus";
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: getProjectDir() */
 	cwd?: string;
-	/** Global config directory. Default: ~/.omp/agent */
+	/** Global config directory. Default: ~/.spell/agent */
 	agentDir?: string;
 	/** Spawns to allow. Default: "*" */
 	spawns?: string;
@@ -158,7 +158,7 @@ export interface CreateAgentSessionOptions {
 	rules?: Rule[];
 	/** Context files (AGENTS.md content). Default: discovered walking up from cwd */
 	contextFiles?: Array<{ path: string; content: string }>;
-	/** Prompt templates. Default: discovered from cwd/.omp/prompts/ + agentDir/prompts/ */
+	/** Prompt templates. Default: discovered from cwd/.spell/prompts/ + agentDir/prompts/ */
 	promptTemplates?: PromptTemplate[];
 	/** File-based slash commands. Default: discovered from commands/ directories */
 	slashCommands?: FileSlashCommand[];
@@ -999,7 +999,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	}
 
-	// Discover and load custom tools from .omp/tools/, .claude/tools/, etc.
+	// Discover and load custom tools from .spell/tools/, .claude/tools/, etc.
 	const builtInToolNames = builtinTools.map(t => t.name);
 	const discoveredCustomTools = await logger.timeAsync(
 		"discoverAndLoadCustomTools",

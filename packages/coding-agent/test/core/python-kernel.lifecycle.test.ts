@@ -87,7 +87,7 @@ describe("PythonKernel gateway lifecycle", () => {
 	let env: MockEnvironment;
 
 	beforeEach(() => {
-		tempDir = TempDir.createSync("@omp-python-kernel-");
+		tempDir = TempDir.createSync("@spell-python-kernel-");
 		env = { fetchCalls: [], spawnCalls: [] };
 
 		Bun.env.BUN_ENV = "test";

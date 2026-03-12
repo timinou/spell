@@ -20,11 +20,11 @@ User asks to:
 
 Use `gemini_image` to produce N variations (default 4, max 8). Vary prompts to explore the design space:
 - Vary composition, color palette, style, or weight
-- Save all images to `/tmp/omp-gallery/<session-id>/` where `session-id` is a short random slug (e.g. `brand-1a2b`)
-- Track each image as `{ id: "img-1", path: "/tmp/omp-gallery/<session>/img-1.png", prompt: "...", rating: 0, selected: false }`
+- Save all images to `/tmp/spell-gallery/<session-id>/` where `session-id` is a short random slug (e.g. `brand-1a2b`)
+- Track each image as `{ id: "img-1", path: "/tmp/spell-gallery/<session>/img-1.png", prompt: "...", rating: 0, selected: false }`
 
 ```
-gemini_image subject="minimalist tech startup logo, lightning bolt, dark navy background" style="flat vector, clean edges" path="/tmp/omp-gallery/brand-1a2b/img-1.png"
+gemini_image subject="minimalist tech startup logo, lightning bolt, dark navy background" style="flat vector, clean edges" path="/tmp/spell-gallery/brand-1a2b/img-1.png"
 ```
 
 ### 2. Write and launch the QML gallery
@@ -32,8 +32,8 @@ gemini_image subject="minimalist tech startup logo, lightning bolt, dark navy ba
 Write the gallery QML file using `qml write`, then launch it with the image list as props:
 
 ```
-qml write path="/tmp/omp-gallery/brand-1a2b/gallery.qml" content=<contents of skill://brand-asset-gallery/gallery.qml>
-qml launch id="brand-1a2b" path="/tmp/omp-gallery/brand-1a2b/gallery.qml" props={ "images": [ { "id": "img-1", "path": "/tmp/omp-gallery/brand-1a2b/img-1.png", "prompt": "...", "rating": 0 }, ... ] }
+qml write path="/tmp/spell-gallery/brand-1a2b/gallery.qml" content=<contents of skill://brand-asset-gallery/gallery.qml>
+qml launch id="brand-1a2b" path="/tmp/spell-gallery/brand-1a2b/gallery.qml" props={ "images": [ { "id": "img-1", "path": "/tmp/spell-gallery/brand-1a2b/img-1.png", "prompt": "...", "rating": 0 }, ... ] }
 ```
 
 The `id` you use for `qml launch` becomes the session handle for all subsequent `qml send_message` calls.
@@ -118,7 +118,7 @@ interface SessionState {
 
 - If `gemini_image` fails for one variation, continue with the rest and note the failure
 - If the QML window closes unexpectedly (`closed` event), offer to relaunch with the current image set
-- If `/tmp/omp-gallery/` does not exist, create it before writing images
+- If `/tmp/spell-gallery/` does not exist, create it before writing images
 
 ## Example session
 

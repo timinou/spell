@@ -1,7 +1,7 @@
 /**
  * Jupyter CLI command handlers.
  *
- * Handles `omp jupyter` subcommand for managing the shared Python gateway.
+ * Handles `spell jupyter` subcommand for managing the shared Python gateway.
  */
 
 import { APP_NAME } from "@oh-my-pi/pi-utils";

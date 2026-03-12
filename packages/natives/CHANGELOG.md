@@ -190,7 +190,7 @@
 
 ### Added
 
-- Added automatic extraction of embedded native addon to `~/.omp/natives/<version>` on first run for compiled binaries
+- Added automatic extraction of embedded native addon to `~/.spell/natives/<version>` on first run for compiled binaries
 - Added `embed:native` build script to embed platform-specific native addon payloads into compiled binaries
 - Exported `Shell` class for creating persistent shell sessions with `run()` method and session options
 - Exported `ShellOptions`, `ShellRunOptions`, and `ShellRunResult` types for shell session management
@@ -216,7 +216,7 @@
 - Refactored module exports to use direct destructuring from native bindings instead of wrapper functions
 - Changed `PhotonImage` API to use instance methods (`resize()`, `encode()`) instead of standalone functions
 - Changed `PhotonImage` to use property accessors for `width` and `height` instead of getter methods
-- Embedded native addon payload for compiled binaries and extract to `~/.omp/natives/<version>` on first run
+- Embedded native addon payload for compiled binaries and extract to `~/.spell/natives/<version>` on first run
 
 ## [9.7.0] - 2026-02-01
 

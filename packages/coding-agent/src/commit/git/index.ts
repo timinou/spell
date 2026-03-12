@@ -133,7 +133,7 @@ export class ControlledGit {
 
 		const patch = joinPatch(patchParts);
 		if (!patch.trim()) return;
-		const tempPath = path.join(os.tmpdir(), `omp-hunks-${Snowflake.next()}.patch`);
+		const tempPath = path.join(os.tmpdir(), `spell-hunks-${Snowflake.next()}.patch`);
 		try {
 			await Bun.write(tempPath, patch);
 			const result = await runGitCommand(this.cwd, ["apply", "--cached", "--binary", tempPath]);

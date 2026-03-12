@@ -66,7 +66,7 @@ const POLL_INTERVAL_MS = 500;
 // Subsequent starts use cached .so files and take ~900ms.
 const STARTUP_TIMEOUT_MS = 120_000;
 const HEALTH_INTERVAL_MS = 5_000;
-// Show a first-run warning after this many ms so users know kika is compiling
+// Show a first-run warning after this many ms so users know spell is compiling
 // tree-sitter grammars rather than hanging.
 const FIRST_RUN_WARN_MS = 8_000;
 
@@ -81,7 +81,7 @@ function sessionKey(projectRoot: string, sessionId: string): string {
 /** Absolute path to the Unix socket for a given hash key. */
 function socketPath(hashHex: string): string {
 	const dir = process.env.XDG_RUNTIME_DIR ?? "/tmp";
-	return path.join(dir, `omp-emacs-${hashHex}.sock`);
+	return path.join(dir, `spell-emacs-${hashHex}.sock`);
 }
 
 /** Returns true when the socket file is present on disk. */
@@ -100,7 +100,7 @@ async function socketExists(p: string): Promise<boolean> {
 /** Poll until the socket appears or the deadline passes.
  *
  * Emits a one-time progress line to stderr after FIRST_RUN_WARN_MS so users
- * know kika is compiling tree-sitter grammars, not hanging.
+ * know spell is compiling tree-sitter grammars, not hanging.
  */
 async function waitForSocket(p: string, daemonName: string): Promise<void> {
 	const start = Date.now();
@@ -126,7 +126,7 @@ async function launchDaemon(
 	elispDir: string,
 	key: string,
 ): Promise<EmacsSession> {
-	const daemonName = `omp-emacs-${key}`;
+	const daemonName = `spell-emacs-${key}`;
 	const sock = socketPath(key);
 
 	// Remove stale socket file if it was left by a previous crashed daemon.

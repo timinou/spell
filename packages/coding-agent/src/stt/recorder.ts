@@ -214,7 +214,7 @@ if (Test-Path $outPath) {
 
 async function startPowerShellRecording(outputPath: string): Promise<RecordingHandle> {
 	// Write script to temp file — avoids quoting/escaping issues with -Command
-	const scriptPath = path.join(os.tmpdir(), `omp-stt-record-${Snowflake.next()}.ps1`);
+	const scriptPath = path.join(os.tmpdir(), `spell-stt-record-${Snowflake.next()}.ps1`);
 	await Bun.write(scriptPath, PS_RECORD_SCRIPT);
 
 	const proc = Bun.spawn(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, outputPath], {

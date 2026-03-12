@@ -46,7 +46,7 @@ interface Instance {
 
 /** Check if stdout contains the TUI (success indicator) */
 function hasLaunched(stdout: string): boolean {
-	return stdout.includes("omp v") || stdout.includes("▀█") || stdout.includes("Welcome back");
+	return stdout.includes("spell v") || stdout.includes("▀█") || stdout.includes("Welcome back");
 }
 
 /** Non-blocking drain of a stream */

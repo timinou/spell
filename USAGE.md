@@ -1,4 +1,4 @@
-# kika — additions over upstream
+# spell — additions over upstream
 
 This is a fork of [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi). The following features are specific to this fork:
 
@@ -50,7 +50,7 @@ Press Escape during the setup modal to cancel and fall back to local rendering.
 - Bun >= 1.1
 - `adb` in PATH
 
-The agent downloads `spell.apk` from GitHub Releases and caches it in `~/.omp/tools/spell.apk` on first use.
+The agent downloads `spell.apk` from GitHub Releases and caches it in `~/.spell/tools/spell.apk` on first use.
 To build from source instead:
 
 ```bash
@@ -69,7 +69,7 @@ cmake -S apps/spell \
 cmake --build build/spell-android --target apk
 ```
 
-Copy the built APK to `~/.omp/tools/spell.apk` so the agent uses it instead of downloading.
+Copy the built APK to `~/.spell/tools/spell.apk` so the agent uses it instead of downloading.
 
 For RPC mode (headless), set up port-forwarding manually:
 

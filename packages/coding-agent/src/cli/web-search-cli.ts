@@ -1,7 +1,7 @@
 /**
  * Web search CLI command handlers.
  *
- * Handles `omp q`/`omp web-search` subcommands for testing web search providers.
+ * Handles `spell q`/`spell web-search` subcommands for testing web search providers.
  */
 
 import { APP_NAME } from "@oh-my-pi/pi-utils";

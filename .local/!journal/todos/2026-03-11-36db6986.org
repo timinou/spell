@@ -4,14 +4,20 @@
 
 * QML Setup Window
 
-** DONE Write spell/setup.qml — polished DMS-style desktop window
+** DONE Refactor connect.ts: SetupDisplay interface + QmlSetupDisplay + branch logic
 :PROPERTIES:
 :TASK_ID: task-1
 :STATUS: completed
 :END:
 
-** DOING Refactor connect.ts: SetupDisplay interface + QmlSetupDisplay + branch logic
+** DONE Fix ADB unauthorized device detection and live phase text
 :PROPERTIES:
 :TASK_ID: task-2
-:STATUS: in_progress
+:STATUS: completed
+:END:
+
+** DONE Tighten setup.qml height to content
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
 :END:

@@ -12,7 +12,7 @@ const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
 
 beforeEach(async () => {
 	_resetSettingsForTest();
-	testAgentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-config-cli-"));
+	testAgentDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-config-cli-"));
 	setAgentDir(testAgentDir);
 });
 

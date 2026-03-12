@@ -1,7 +1,7 @@
 /**
  * Org tool adapter — wraps the @oh-my-pi/pi-org tool for use in coding-agent.
  *
- * Reads org config from settings + project-local .omp/config.yml, resolves
+ * Reads org config from settings + project-local .spell/config.yml, resolves
  * categories relative to the project root, and optionally starts an Emacs
  * daemon for advanced operations.
  */

@@ -114,7 +114,7 @@ async function buildPreludeCacheState(cwd: string): Promise<PreludeCacheState> {
 		.map(module => ({ path: module.path, hash: hashPreludeContent(module.content) }))
 		.sort((a, b) => a.path.localeCompare(b.path));
 	const sources: PreludeCacheSource[] = [
-		{ path: "omp:prelude", hash: hashPreludeContent(PYTHON_PRELUDE) },
+		{ path: "spell:prelude", hash: hashPreludeContent(PYTHON_PRELUDE) },
 		...moduleSources,
 	];
 	const composite = sources.map(source => `${source.path}:${source.hash}`).join("|");

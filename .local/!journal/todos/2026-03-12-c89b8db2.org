@@ -1,0 +1,35 @@
+#+TITLE: Session 149006cd64643132 Todos
+#+DATE: 2026-03-12
+#+TODO: ITEM DOING | DONE
+
+* Execution
+
+** DONE Bulk sed replacement across .ts .tsx .json .md .toml .sh .yml .yaml .rs files
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Rename omp-command.ts to spell-command.ts
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Rename omp-qml-bridge binary and update refs
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Rename org draft file with kika in filename
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Verify: grep for remaining omp/OMP/kika, run bun check:ts
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
