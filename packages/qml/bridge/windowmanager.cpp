@@ -1,4 +1,5 @@
 #include "windowmanager.h"
+#include <QGuiApplication>
 #include <QImage>
 #include <QJsonDocument>
 #include <QQmlContext>
@@ -11,6 +12,22 @@ WindowManager::~WindowManager() {
     for (auto &entry : m_windows) {
         delete entry.engine;
     }
+}
+
+void WindowManager::setEventWriter(std::function<void(const QJsonObject&)> writer) {
+    m_eventWriter = std::move(writer);
+}
+
+QJsonArray WindowManager::getWindowStates() const {
+    QJsonArray arr;
+    for (auto it = m_windows.constBegin(); it != m_windows.constEnd(); ++it) {
+        QJsonObject obj;
+        obj["id"] = it.key();
+        obj["path"] = it->path;
+        obj["state"] = it->state;
+        arr.append(obj);
+    }
+    return arr;
 }
 
 void WindowManager::dispatch(const QByteArray &jsonLine) {
@@ -44,6 +61,8 @@ void WindowManager::dispatch(const QByteArray &jsonLine) {
         sendMessage(id, msg["payload"].toObject());
     } else if (type == "screenshot") {
         screenshotWindow(id, msg["path"].toString());
+    } else if (type == "quit") {
+        QGuiApplication::quit();
     }
 }
 
@@ -65,7 +84,7 @@ void WindowManager::loadWindow(const QString &id, const QString &path,
     engine->rootContext()->setContextProperty("windowWidth", width);
     engine->rootContext()->setContextProperty("windowHeight", height);
 
-    // Forward bridge events to stdout
+    // Forward bridge events to the event writer
     connect(bridge, &Bridge::eventEmitted, this, [this](const QString &wid, const QJsonObject &payload) {
         QJsonObject ev;
         ev["type"] = "event";
@@ -76,6 +95,9 @@ void WindowManager::loadWindow(const QString &id, const QString &path,
 
     // Emit error if engine fails to load
     connect(engine, &QQmlApplicationEngine::objectCreationFailed, this, [this, id]() {
+        if (m_windows.contains(id)) {
+            m_windows[id].state = "error";
+        }
         QJsonObject ev;
         ev["type"] = "error";
         ev["id"] = id;
@@ -83,7 +105,7 @@ void WindowManager::loadWindow(const QString &id, const QString &path,
         writeEvent(ev);
     });
 
-    m_windows[id] = { engine, bridge, path };
+    m_windows[id] = { engine, bridge, path, "loading" };
     engine->load(QUrl::fromLocalFile(path));
 
     if (engine->rootObjects().isEmpty()) {
@@ -97,6 +119,8 @@ void WindowManager::loadWindow(const QString &id, const QString &path,
         writeEvent(ev);
         return;
     }
+
+    m_windows[id].state = "ready";
 
     QJsonObject ev;
     ev["type"] = "ready";
@@ -151,6 +175,11 @@ void WindowManager::sendMessage(const QString &id, const QJsonObject &payload) {
 }
 
 void WindowManager::writeEvent(const QJsonObject &event) {
+    if (m_eventWriter) {
+        m_eventWriter(event);
+        return;
+    }
+    // Default: write to stdout (backward compat for non-daemon mode)
     const QByteArray line = QJsonDocument(event).toJson(QJsonDocument::Compact) + '\n';
     fwrite(line.constData(), 1, line.size(), stdout);
     fflush(stdout);

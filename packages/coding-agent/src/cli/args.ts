@@ -37,6 +37,7 @@ export interface Args {
 	extensions?: string[];
 	noExtensions?: boolean;
 	print?: boolean;
+	qml?: boolean;
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
@@ -137,6 +138,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			}
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
+		} else if (arg === "--qml") {
+			result.qml = true;
 		} else if (arg === "--export" && i + 1 < args.length) {
 			result.export = args[++i];
 		} else if (arg === "--hook" && i + 1 < args.length) {

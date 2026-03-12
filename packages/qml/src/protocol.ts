@@ -12,7 +12,8 @@ export type BridgeCommand =
 	| { type: "reload"; id: string }
 	| { type: "message"; id: string; payload: Record<string, unknown> }
 	| { type: "close"; id: string }
-	| { type: "screenshot"; id: string; path: string };
+	| { type: "screenshot"; id: string; path: string }
+	| { type: "quit" };
 
 /** Events emitted by bridge process → spell (stdout) */
 export type BridgeEvent =
@@ -20,7 +21,8 @@ export type BridgeEvent =
 	| { type: "event"; id: string; name?: string; payload: Record<string, unknown> }
 	| { type: "error"; id: string; message: string }
 	| { type: "closed"; id: string }
-	| { type: "screenshot"; id: string; path: string };
+	| { type: "screenshot"; id: string; path: string }
+	| { type: "state"; windows: Array<{ id: string; path: string; state: string }> };
 
 /** State of a managed window */
 export type WindowState = "loading" | "ready" | "closed" | "error";

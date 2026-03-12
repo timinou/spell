@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
+import type { Subprocess } from "bun";
 import type { BridgeCommand, BridgeEvent } from "./protocol";
 
 /** Resolves the path to the compiled bridge binary. */
@@ -25,24 +27,87 @@ export type EventListener = (event: BridgeEvent) => void;
 
 /**
  * Manages a single long-lived bridge subprocess.
- * Spawns on demand, respawns if it dies unexpectedly.
+ * Supports two modes:
+ * - stdio: spawns child process, communicates via stdin/stdout (used by QML tool)
+ * - socket: connects to a daemon via unix domain socket (used by desktop mode)
  */
 export class QmlProcess {
-	#proc: ReturnType<typeof Bun.spawn> | null = null;
+	#proc: Subprocess<"pipe", "pipe", "pipe"> | null = null;
 	#stdin: Bun.FileSink | null = null;
+	#socket: net.Socket | null = null;
+	#socketBuffer = "";
 	#listeners: Set<EventListener> = new Set();
 	#buffer = "";
 	#stderrBuffer = "";
 	#stopping = false;
 
-	/** Spawn the bridge if not already running. */
-	async ensure(): Promise<void> {
-		if (this.#proc && this.#proc.exitCode === null) return;
-		if (this.#stopping) throw new Error("QmlProcess is shutting down");
-		await this.#spawn();
+	/** Returns the unix socket path for daemon mode. */
+	static socketPath(): string {
+		const runtime = process.env.XDG_RUNTIME_DIR;
+		if (runtime) return path.join(runtime, "spell-qml-bridge.sock");
+		return `/tmp/spell-qml-bridge-${process.getuid?.() ?? 0}.sock`;
 	}
 
-	async #spawn(): Promise<void> {
+	/** Spawn or connect to the bridge. */
+	async ensure(): Promise<void> {
+		// Already connected via socket
+		if (this.#socket && !this.#socket.destroyed) return;
+		// Already running as child process
+		if (this.#proc && this.#proc.exitCode === null) return;
+		if (this.#stopping) throw new Error("QmlProcess is shutting down");
+
+		// Try daemon socket first, fall back to spawning
+		try {
+			await this.#connectSocket();
+			return;
+		} catch {
+			// Socket not available — try spawning daemon then connecting
+		}
+
+		await this.#spawnDaemon();
+	}
+
+	/** Spawn the bridge in daemon mode, then connect via socket. */
+	async #spawnDaemon(): Promise<void> {
+		const binary = bridgeBinaryPath();
+		if (!isBridgeAvailable()) {
+			throw new Error(
+				`spell-qml-bridge binary not found at ${binary}.\n` +
+					`Build it first: cd packages/qml && bun run build:bridge`,
+			);
+		}
+
+		// Spawn daemon process (detached — it manages its own lifecycle)
+		const proc = Bun.spawn([binary, "--daemon"], {
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		// Close stdin immediately — daemon reads from socket, not stdin
+		proc.stdin.end();
+
+		// Retry connect with exponential backoff
+		const delays = [100, 200, 400, 500];
+		let lastError: Error | undefined;
+		for (const delay of delays) {
+			await Bun.sleep(delay);
+			try {
+				await this.#connectSocket();
+				return;
+			} catch (err) {
+				lastError = err instanceof Error ? err : new Error(String(err));
+			}
+		}
+		// Failed to connect after all retries — kill the process we spawned
+		proc.kill();
+		throw new Error(`Failed to connect to daemon socket after spawn: ${lastError?.message ?? "unknown error"}`);
+	}
+
+	/** Spawn the bridge as a child process with stdio pipes (legacy mode). */
+	async spawnStdio(): Promise<void> {
+		if (this.#proc && this.#proc.exitCode === null) return;
+		if (this.#stopping) throw new Error("QmlProcess is shutting down");
+
 		const binary = bridgeBinaryPath();
 		if (!isBridgeAvailable()) {
 			throw new Error(
@@ -69,14 +134,63 @@ export class QmlProcess {
 			logger.error("QmlProcess stderr read error", { error: String(err) });
 		});
 
-		// Respawn on unexpected exit
+		// Log unexpected exit
 		this.#proc.exited.then(code => {
 			if (!this.#stopping) {
 				logger.warn("spell-qml-bridge exited unexpectedly", { code });
 			}
 		});
 
-		logger.debug("spell-qml-bridge spawned", { binary });
+		logger.debug("spell-qml-bridge spawned (stdio mode)", { binary });
+	}
+
+	/**
+	 * Connect to the daemon's unix domain socket.
+	 * Rejects if connection fails within 5 seconds.
+	 */
+	#connectSocket(): Promise<void> {
+		const socketPath = QmlProcess.socketPath();
+		const { promise, resolve, reject } = Promise.withResolvers<void>();
+
+		const socket = net.createConnection(socketPath);
+		const timeout = setTimeout(() => {
+			socket.destroy();
+			reject(new Error("Socket connection timed out (5s)"));
+		}, 5000);
+
+		socket.on("connect", () => {
+			clearTimeout(timeout);
+			this.#socket = socket;
+			this.#socketBuffer = "";
+			logger.debug("Connected to spell-qml-bridge daemon", { socketPath });
+			resolve();
+		});
+
+		socket.on("error", (err: NodeJS.ErrnoException) => {
+			clearTimeout(timeout);
+			socket.destroy();
+			reject(err);
+		});
+
+		socket.on("data", (chunk: Buffer) => {
+			this.#socketBuffer += chunk.toString("utf8");
+			for (;;) {
+				const nl = this.#socketBuffer.indexOf("\n");
+				if (nl < 0) break;
+				const line = this.#socketBuffer.slice(0, nl).trim();
+				this.#socketBuffer = this.#socketBuffer.slice(nl + 1);
+				if (line) this.#dispatch(line);
+			}
+		});
+
+		socket.on("close", () => {
+			if (!this.#stopping) {
+				logger.warn("Daemon socket closed unexpectedly");
+			}
+			this.#socket = null;
+		});
+
+		return promise;
 	}
 
 	async #readLoop(stream: ReadableStream<Uint8Array>): Promise<void> {
@@ -154,8 +268,17 @@ export class QmlProcess {
 
 	/** Send a command to the bridge. Caller must have called ensure() first. */
 	send(command: BridgeCommand): void {
-		if (!this.#stdin) throw new Error("Bridge not running");
 		const line = `${JSON.stringify(command)}\n`;
+
+		if (this.#socket) {
+			if (!this.#socket.writable) {
+				throw new Error("Daemon socket is not writable");
+			}
+			this.#socket.write(line);
+			return;
+		}
+
+		if (!this.#stdin) throw new Error("Bridge not running");
 		this.#stdin.write(line);
 		this.#stdin.flush();
 	}
@@ -182,9 +305,16 @@ export class QmlProcess {
 		return promise;
 	}
 
-	/** Gracefully shut down the bridge process. */
+	/** Gracefully shut down the bridge process (stdio mode) or disconnect (daemon mode). */
 	async dispose(): Promise<void> {
 		this.#stopping = true;
+
+		if (this.#socket) {
+			this.#socket.destroy();
+			this.#socket = null;
+			return;
+		}
+
 		if (this.#proc) {
 			try {
 				this.#stdin?.end();
@@ -201,7 +331,27 @@ export class QmlProcess {
 		}
 	}
 
+	/** Send quit command to daemon and disconnect. */
+	async kill(): Promise<void> {
+		if (this.#socket?.writable) {
+			this.send({ type: "quit" });
+			// Brief delay to let the quit flush
+			await Bun.sleep(100);
+		}
+		this.#stopping = true;
+		if (this.#socket) {
+			this.#socket.destroy();
+			this.#socket = null;
+		}
+	}
+
+	/** True if connected via unix domain socket (daemon mode). */
+	get isDaemon(): boolean {
+		return this.#socket !== null && !this.#socket.destroyed;
+	}
+
 	get isRunning(): boolean {
+		if (this.#socket && !this.#socket.destroyed) return true;
 		return this.#proc !== null && this.#proc.exitCode === null;
 	}
 }

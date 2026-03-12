@@ -4,68 +4,68 @@
 
 * Foundation
 
-** DOING Daemon mode for QML bridge (C++)
+** DONE Daemon mode for QML bridge (C++)
 :PROPERTIES:
 :TASK_ID: task-1
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
-** ITEM Update QmlProcess for socket connection (TS)
+** DONE Update QmlProcess for socket connection (TS)
 :PROPERTIES:
 :TASK_ID: task-2
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Update protocol.ts with new event types
+** DONE Update protocol.ts with new event types
 :PROPERTIES:
 :TASK_ID: task-3
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Mode & Shell
 
-** ITEM Create qml-mode.ts
+** DONE Create qml-mode.ts
 :PROPERTIES:
 :TASK_ID: task-4
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Write MQML shell + SpellTheme + StateLayer + qmldir
+** DONE Write MQML shell + SpellTheme + StateLayer + qmldir
 :PROPERTIES:
 :TASK_ID: task-5
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Write ChatPanel.qml
+** DONE Write ChatPanel.qml
 :PROPERTIES:
 :TASK_ID: task-6
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Integration
 
-** ITEM Wire mode into CLI (args.ts, main.ts, modes/index.ts)
+** DONE Wire mode into CLI (args.ts, main.ts, modes/index.ts)
 :PROPERTIES:
 :TASK_ID: task-7
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Skill QML discovery
+** DONE Skill QML discovery
 :PROPERTIES:
 :TASK_ID: task-8
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Agent self-modification safety (error forwarding)
+** DONE Agent self-modification safety (error forwarding)
 :PROPERTIES:
 :TASK_ID: task-9
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Verification
 
-** ITEM Build bridge, type-check, smoke test
+** DONE Build bridge, type-check, smoke test
 :PROPERTIES:
 :TASK_ID: task-10
-:STATUS: pending
+:STATUS: completed
 :END:

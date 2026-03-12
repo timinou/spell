@@ -1,0 +1,3 @@
+module SpellUI
+singleton SpellTheme 1.0 SpellTheme.qml
+StateLayer 1.0 StateLayer.qml
