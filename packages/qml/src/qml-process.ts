@@ -53,14 +53,19 @@ export class QmlProcess {
 		const proc = Bun.spawn([binary], {
 			stdin: "pipe",
 			stdout: "pipe",
-			stderr: "inherit",
+			stderr: "pipe",
 		});
 		this.#proc = proc;
 		this.#stdin = proc.stdin;
 
-		// Read stdout line by line
+		// Read stdout line by line (bridge JSON protocol)
 		this.#readLoop(this.#proc.stdout as ReadableStream<Uint8Array>).catch(err => {
 			logger.error("QmlProcess stdout read error", { error: String(err) });
+		});
+
+		// Read stderr and forward as synthetic error events
+		this.#readStderr(this.#proc.stderr as ReadableStream<Uint8Array>).catch(err => {
+			logger.error("QmlProcess stderr read error", { error: String(err) });
 		});
 
 		// Respawn on unexpected exit
@@ -87,6 +92,41 @@ export class QmlProcess {
 					const line = this.#buffer.slice(0, nl).trim();
 					this.#buffer = this.#buffer.slice(nl + 1);
 					if (line) this.#dispatch(line);
+				}
+			}
+		} finally {
+			reader.releaseLock();
+		}
+	}
+
+	/**
+	 * Read stderr line-by-line and dispatch as synthetic error events.
+	 * Lines are broadcast to all listeners as `{ type: "error", id: "__stderr__", message }`,
+	 * allowing the QmlBridge to forward them to the agent.
+	 */
+	async #readStderr(stream: ReadableStream<Uint8Array>): Promise<void> {
+		const decoder = new TextDecoder();
+		const reader = stream.getReader();
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				this.#stderrBuffer += decoder.decode(value, { stream: true });
+				for (;;) {
+					const nl = this.#stderrBuffer.indexOf("\n");
+					if (nl < 0) break;
+					const line = this.#stderrBuffer.slice(0, nl).trim();
+					this.#stderrBuffer = this.#stderrBuffer.slice(nl + 1);
+					if (line) {
+						const event: BridgeEvent = { type: "error", id: "__stderr__", message: line };
+						for (const listener of this.#listeners) {
+							try {
+								listener(event);
+							} catch (err) {
+								logger.error("QmlProcess stderr listener threw", { error: String(err) });
+							}
+						}
+					}
 				}
 			}
 		} finally {
