@@ -87,6 +87,7 @@ import { resolveLocalUrlToPath } from "../internal-urls";
 import { executePython as executePythonCommand, type PythonResult } from "../ipy/executor";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../patch";
+import { resolvePlanDraftItem } from "../plan-mode/org-plan";
 import type { PlanModeState } from "../plan-mode/state";
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
 import handoffDocumentPrompt from "../prompts/system/handoff-document.md" with { type: "text" };
@@ -1822,18 +1823,25 @@ export class AgentSession {
 		if (this.#planReferenceSent) return null;
 
 		const planFilePath = this.#planReferencePath;
-		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
 		let planContent: string;
-		try {
-			planContent = await Bun.file(resolvedPlanPath).text();
-		} catch (error) {
-			if (isEnoent(error)) {
-				return null;
+		if (planFilePath.startsWith("org://")) {
+			// Resolve via org infrastructure: read the item body directly.
+			const itemId = planFilePath.slice("org://".length);
+			const item = await resolvePlanDraftItem(this.settings, this.sessionManager.getCwd(), itemId);
+			if (!item) return null;
+			planContent = item.body;
+		} else {
+			// File-backed plan: resolve local:// to filesystem path and read.
+			const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+				getSessionId: () => this.sessionManager.getSessionId(),
+			});
+			try {
+				planContent = await Bun.file(resolvedPlanPath).text();
+			} catch (error) {
+				if (isEnoent(error)) return null;
+				throw error;
 			}
-			throw error;
 		}
 
 		const content = renderPromptTemplate(planModeReferencePrompt, {

@@ -27,6 +27,7 @@ export * from "./json-query";
 export * from "./local-protocol";
 export * from "./mcp-protocol";
 export * from "./memory-protocol";
+export * from "./org-protocol";
 export * from "./pi-protocol";
 export * from "./router";
 export * from "./rule-protocol";

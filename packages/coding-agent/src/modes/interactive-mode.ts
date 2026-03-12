@@ -803,14 +803,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
 		await this.#exitPlanMode({ silent: true, paused: false });
 		await this.handleClearCommand();
-		// The new session has a fresh local:// root — persist the approved plan there
-		// so `local://<title>.md` resolves correctly in the execution session.
-		const newLocalPath = resolveLocalUrlToPath(options.finalPlanFilePath, {
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
-		await Bun.write(newLocalPath, planContent);
-		// Finalize the org draft — non-fatal, errors are shown as warnings.
+		// Finalize the org draft first — if it succeeds, use org:// reference and skip local copy.
+		// Non-fatal: errors fall back to the file-backed local:// flow.
 		let activeOrgItemId: string | null = null;
 		if (orgDraft) {
 			try {
@@ -826,14 +820,24 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.showWarning(`Org plan finalization failed: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		}
+		// For file-backed plans (org disabled or finalization failed), persist the approved plan
+		// in the new session's local:// root so `local://<title>.md` resolves correctly.
+		const planReferencePath = activeOrgItemId ? `org://${activeOrgItemId}` : options.finalPlanFilePath;
+		if (!activeOrgItemId) {
+			const newLocalPath = resolveLocalUrlToPath(options.finalPlanFilePath, {
+				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+				getSessionId: () => this.sessionManager.getSessionId(),
+			});
+			await Bun.write(newLocalPath, planContent);
+		}
 		if (previousTools.length > 0) {
 			await this.session.setActiveToolsByName(previousTools);
 		}
-		this.session.setPlanReferencePath(options.finalPlanFilePath);
+		this.session.setPlanReferencePath(planReferencePath);
 		this.session.markPlanReferenceSent();
 		const prompt = renderPromptTemplate(planModeApprovedPrompt, {
 			planContent,
-			finalPlanFilePath: options.finalPlanFilePath,
+			finalPlanFilePath: planReferencePath,
 			orgItemId: activeOrgItemId ?? "",
 		});
 		await this.session.prompt(prompt, { synthetic: true });

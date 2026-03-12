@@ -60,6 +60,7 @@ import {
 	LocalProtocolHandler,
 	McpProtocolHandler,
 	MemoryProtocolHandler,
+	OrgProtocolHandler,
 	PiProtocolHandler,
 	RuleProtocolHandler,
 	SkillProtocolHandler,
@@ -908,6 +909,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	internalRouter.register(new PiProtocolHandler());
 	internalRouter.register(new JobsProtocolHandler({ getAsyncJobManager: () => asyncJobManager }));
 	internalRouter.register(new McpProtocolHandler({ getMcpManager: () => mcpManager }));
+	internalRouter.register(
+		new OrgProtocolHandler({
+			getSettings: () => settings,
+			getCwd: () => sessionManager.getCwd(),
+		}),
+	);
 	toolSession.internalRouter = internalRouter;
 	toolSession.getArtifactsDir = getArtifactsDir;
 	toolSession.agentOutputManager = new AgentOutputManager(
