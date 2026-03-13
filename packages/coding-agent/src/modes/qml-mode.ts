@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { QmlBridge } from "@oh-my-pi/pi-qml";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import { SessionEventMapper } from "./qml-event-mapper";
 
 export interface QmlModeOptions {
 	initialMessage?: string;
@@ -31,8 +32,9 @@ export async function runQmlMode(session: AgentSession, options: QmlModeOptions 
 	});
 
 	// Forward agent events to QML
+	const mapper = new SessionEventMapper();
 	session.subscribe((event: AgentSessionEvent) => {
-		const qmlEvent = mapSessionEvent(event);
+		const qmlEvent = mapper.map(event);
 		if (qmlEvent) {
 			bridge.sendMessage("shell", qmlEvent).catch(err => {
 				logger.error("Failed to send event to QML", { error: String(err) });
@@ -83,90 +85,6 @@ async function processQmlEvents(session: AgentSession, bridge: QmlBridge): Promi
 	}
 
 	await bridge.dispose();
-}
-
-/**
- * Map an AgentSessionEvent to a simplified payload for the QML shell.
- * Returns null for event types the QML UI doesn't need.
- */
-function mapSessionEvent(event: AgentSessionEvent): Record<string, unknown> | null {
-	switch (event.type) {
-		case "message_start":
-			return { type: "message_start", role: getRoleIfPresent(event.message) };
-		case "message_update": {
-			const msg = event.message;
-			if (!hasContent(msg)) return null;
-			return {
-				type: "message_update",
-				role: msg.role,
-				text: getMessageText(msg.content),
-				thinking: getThinkingText(msg.content),
-			};
-		}
-		case "message_end":
-			return { type: "message_end", role: getRoleIfPresent(event.message) };
-		case "tool_execution_start":
-			return {
-				type: "tool_start",
-				toolCallId: event.toolCallId,
-				toolName: event.toolName,
-				intent: event.intent,
-			};
-		case "tool_execution_update":
-			return {
-				type: "tool_update",
-				toolCallId: event.toolCallId,
-				toolName: event.toolName,
-			};
-		case "tool_execution_end":
-			return {
-				type: "tool_end",
-				toolCallId: event.toolCallId,
-				toolName: event.toolName,
-				isError: event.isError,
-			};
-		case "agent_start":
-			return { type: "agent_busy", busy: true };
-		case "agent_end":
-			return { type: "agent_busy", busy: false };
-		default:
-			return null;
-	}
-}
-
-/** Narrow to messages that carry a standard content array (excludes custom messages like BashExecutionMessage). */
-function hasContent(msg: unknown): msg is { role: string; content: ReadonlyArray<{ type: string }> } {
-	return (
-		typeof msg === "object" &&
-		msg !== null &&
-		"content" in msg &&
-		Array.isArray((msg as Record<string, unknown>).content)
-	);
-}
-
-function getRoleIfPresent(msg: unknown): string | undefined {
-	if (typeof msg === "object" && msg !== null && "role" in msg) {
-		return (msg as { role: string }).role;
-	}
-	return undefined;
-}
-
-/** Extract concatenated text content from a message's content array. */
-function getMessageText(content: ReadonlyArray<{ type: string; text?: string }>): string {
-	return content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text" && typeof c.text === "string")
-		.map(c => c.text)
-		.join("");
-}
-
-/** Extract concatenated thinking content from a message's content array. */
-function getThinkingText(content: ReadonlyArray<{ type: string; thinking?: string }>): string {
-	return content
-		.filter(
-			(c): c is { type: "thinking"; thinking: string } => c.type === "thinking" && typeof c.thinking === "string",
-		)
-		.map(c => c.thinking)
-		.join("");
 }
 
 /**
