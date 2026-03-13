@@ -443,3 +443,238 @@ Headings with TODO keywords are actionable sub-tasks.
 - AGENT: Override default agent for this item
 `;
 }
+
+// =============================================================================
+// Body / title mutation helpers
+// =============================================================================
+
+/**
+ * Replace the body text of an item identified by CUSTOM_ID.
+ *
+ * Handles both file-level items (body = everything after frontmatter) and
+ * heading-level items (body = lines between :END: and the next heading).
+ *
+ * Pass `null` to clear the body entirely.
+ * Returns true if the item was found and updated, false otherwise.
+ */
+export async function updateItemBodyInFile(
+	filePath: string,
+	customId: string,
+	newBody: string | null,
+	todoKeywords: string[],
+): Promise<boolean> {
+	const content = await Bun.file(filePath).text();
+	const lines = content.split("\n");
+
+	if (tryMutateFileLevelBody(lines, customId, newBody)) {
+		await Bun.write(filePath, lines.join("\n"));
+		return true;
+	}
+
+	if (tryMutateHeadingBody(lines, customId, newBody, todoKeywords)) {
+		await Bun.write(filePath, lines.join("\n"));
+		return true;
+	}
+
+	return false;
+}
+
+/**
+ * Append text to the end of an item's body.
+ *
+ * Handles both file-level and heading-level items.
+ * Returns true if the item was found, false otherwise.
+ */
+export async function appendToItemBodyInFile(
+	filePath: string,
+	customId: string,
+	text: string,
+	todoKeywords: string[],
+): Promise<boolean> {
+	const content = await Bun.file(filePath).text();
+	const lines = content.split("\n");
+
+	// Read existing body and append
+	const bodyRange = findFileLevelBodyRange(lines, customId);
+	if (bodyRange !== null) {
+		const existing = lines.slice(bodyRange.start, bodyRange.end).join("\n").trimEnd();
+		const combined = existing ? `${existing}\n\n${text.trimEnd()}` : text.trimEnd();
+		if (tryMutateFileLevelBody(lines, customId, combined)) {
+			await Bun.write(filePath, lines.join("\n"));
+			return true;
+		}
+	}
+
+	const hRange = findHeadingBodyRange(lines, customId);
+	if (hRange !== null) {
+		const existing = lines.slice(hRange.start, hRange.end).join("\n").trimEnd();
+		const combined = existing ? `${existing}\n\n${text.trimEnd()}` : text.trimEnd();
+		if (tryMutateHeadingBody(lines, customId, combined, todoKeywords)) {
+			await Bun.write(filePath, lines.join("\n"));
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Update the title of an item identified by CUSTOM_ID.
+ *
+ * - File-level item: rewrites the `#+TITLE:` line.
+ * - Heading-level item: rewrites the `* STATE title` line.
+ *
+ * Returns true if found and updated, false otherwise.
+ */
+export async function updateItemTitleInFile(
+	filePath: string,
+	customId: string,
+	newTitle: string,
+	todoKeywords: string[],
+): Promise<boolean> {
+	const content = await Bun.file(filePath).text();
+	const lines = content.split("\n");
+
+	if (tryUpdateFileLevelTitle(lines, customId, newTitle)) {
+		await Bun.write(filePath, lines.join("\n"));
+		return true;
+	}
+
+	if (tryUpdateHeadingTitle(lines, customId, newTitle, todoKeywords)) {
+		await Bun.write(filePath, lines.join("\n"));
+		return true;
+	}
+
+	return false;
+}
+
+// =============================================================================
+// Internal mutation helpers
+// =============================================================================
+
+interface BodyRange {
+	/** Inclusive start index into lines[]. */
+	start: number;
+	/** Exclusive end index into lines[]. */
+	end: number;
+}
+
+/**
+ * Locate the body range of a file-level item.
+ * Returns null if this file does not contain the given CUSTOM_ID as a file-level item.
+ */
+function findFileLevelBodyRange(lines: string[], customId: string): BodyRange | null {
+	let hasCustomId = false;
+	let i = 0;
+	while (i < lines.length && lines[i].startsWith("#+")) {
+		if (lines[i].startsWith("#+CUSTOM_ID:") && lines[i].slice("#+CUSTOM_ID:".length).trim() === customId) {
+			hasCustomId = true;
+		}
+		i++;
+	}
+	if (!hasCustomId) return null;
+	// Skip blank lines between frontmatter and body
+	const bodyStart = i;
+	return { start: bodyStart, end: lines.length };
+}
+
+/**
+ * Locate the body range of a heading-level item.
+ * Body = lines from after :END: up to (not including) the next heading.
+ * Returns null if the CUSTOM_ID is not found in a heading's properties drawer.
+ */
+function findHeadingBodyRange(lines: string[], customId: string): BodyRange | null {
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i].trim() === `:CUSTOM_ID: ${customId}`) {
+			// Find :END: of the drawer
+			for (let j = i + 1; j < lines.length; j++) {
+				if (lines[j].trim() === ":END:") {
+					const bodyStart = j + 1;
+					let bodyEnd = lines.length;
+					for (let k = bodyStart; k < lines.length; k++) {
+						if (lines[k].startsWith("*")) {
+							bodyEnd = k;
+							break;
+						}
+					}
+					return { start: bodyStart, end: bodyEnd };
+				}
+			}
+			return null; // malformed: no :END:
+		}
+	}
+	return null;
+}
+
+function tryMutateFileLevelBody(lines: string[], customId: string, newBody: string | null): boolean {
+	const range = findFileLevelBodyRange(lines, customId);
+	if (!range) return false;
+
+	// Body starts after any blank lines following the frontmatter
+	let bodyStart = range.start;
+	while (bodyStart < range.end && lines[bodyStart].trim() === "") bodyStart++;
+
+	const replacement = newBody ? newBody.trimEnd().split("\n") : [];
+	// Always leave one trailing blank line for clean formatting
+	replacement.push("");
+	lines.splice(bodyStart, range.end - bodyStart, ...replacement);
+	return true;
+}
+
+function tryMutateHeadingBody(
+	lines: string[],
+	customId: string,
+	newBody: string | null,
+	_todoKeywords: string[],
+): boolean {
+	const range = findHeadingBodyRange(lines, customId);
+	if (!range) return false;
+
+	const replacement: string[] = newBody ? ["", ...newBody.trimEnd().split("\n"), ""] : [""];
+	lines.splice(range.start, range.end - range.start, ...replacement);
+	return true;
+}
+
+function tryUpdateFileLevelTitle(lines: string[], customId: string, newTitle: string): boolean {
+	let hasCustomId = false;
+	let titleLineIdx = -1;
+
+	for (let i = 0; i < lines.length; i++) {
+		if (!lines[i].startsWith("#+")) break;
+		if (lines[i].startsWith("#+CUSTOM_ID:") && lines[i].slice("#+CUSTOM_ID:".length).trim() === customId) {
+			hasCustomId = true;
+		}
+		if (lines[i].startsWith("#+TITLE:")) {
+			titleLineIdx = i;
+		}
+	}
+
+	if (!hasCustomId || titleLineIdx === -1) return false;
+	lines[titleLineIdx] = `#+TITLE: ${newTitle}`;
+	return true;
+}
+
+function tryUpdateHeadingTitle(lines: string[], customId: string, newTitle: string, todoKeywords: string[]): boolean {
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i].trim() !== `:CUSTOM_ID: ${customId}`) continue;
+		// Walk backwards to find the heading
+		for (let j = i - 1; j >= 0; j--) {
+			if (!lines[j].startsWith("*")) continue;
+			const match = /^(\*+)\s+(.+)$/.exec(lines[j]);
+			if (!match) return false;
+			const stars = match[1];
+			const rest = match[2].trim();
+			const spaceIdx = rest.indexOf(" ");
+			const keyword = spaceIdx !== -1 ? rest.slice(0, spaceIdx) : "";
+			if (todoKeywords.includes(keyword)) {
+				lines[j] = `${stars} ${keyword} ${newTitle}`;
+			} else {
+				// No TODO keyword — bare heading
+				lines[j] = `${stars} ${newTitle}`;
+			}
+			return true;
+		}
+		return false;
+	}
+	return false;
+}
