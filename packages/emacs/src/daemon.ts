@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as net from "node:net";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
@@ -43,6 +44,14 @@ export async function startEmacsSession(
 	}
 	// Stale entry — remove before relaunching.
 	if (cached) sessions.delete(key);
+
+	// Try to reattach to a daemon from a previous process.
+	const attached = await tryAttachExisting(key);
+	if (attached) {
+		sessions.set(key, attached);
+		logger.debug("[emacs-daemon] Reattached to existing daemon", { key, socketPath: attached.socketPath });
+		return attached;
+	}
 
 	const session = await launchDaemon(emacsPath, projectRoot, sessionId, elispDir, key);
 	sessions.set(key, session);
@@ -119,6 +128,89 @@ async function waitForSocket(p: string, daemonName: string): Promise<void> {
 	throw new Error(`Emacs daemon did not create socket within ${STARTUP_TIMEOUT_MS}ms: ${p}`);
 }
 
+/**
+ * Probe for a daemon left behind by a previous process at the known socket path.
+ * Returns a reattached EmacsSession if the daemon is still live, null otherwise.
+ */
+async function tryAttachExisting(key: string): Promise<EmacsSession | null> {
+	const sock = socketPath(key);
+	const daemonName = `spell-emacs-${key}`;
+
+	// If the socket file doesn't exist, there's nothing to attach to.
+	try {
+		await fs.access(sock);
+	} catch (err) {
+		if (isEnoent(err)) return null;
+		return null;
+	}
+
+	// Probe the socket to see if the daemon is still listening.
+	const alive = await new Promise<boolean>(resolve => {
+		const conn = net.createConnection(sock);
+		const timeout = setTimeout(() => {
+			conn.destroy();
+			resolve(false);
+		}, 1000);
+		conn.on("connect", () => {
+			clearTimeout(timeout);
+			conn.destroy();
+			resolve(true);
+		});
+		conn.on("error", () => {
+			clearTimeout(timeout);
+			conn.destroy();
+			resolve(false);
+		});
+	});
+
+	if (!alive) return null;
+
+	// Daemon is live — build a session around it.
+	let isAlive = true;
+	const healthTimer = setInterval(async () => {
+		if (!(await socketExists(sock))) {
+			logger.warn("[emacs-daemon] Socket disappeared — reattached daemon may have crashed", { daemonName, sock });
+			isAlive = false;
+			sessions.delete(key);
+			clearInterval(healthTimer);
+		}
+	}, HEALTH_INTERVAL_MS);
+	healthTimer.unref();
+
+	return {
+		socketPath: sock,
+
+		isAlive(): boolean {
+			return isAlive;
+		},
+
+		async stop(): Promise<void> {
+			clearInterval(healthTimer);
+			isAlive = false;
+			sessions.delete(key);
+
+			logger.debug("[emacs-daemon] Stopping reattached daemon", { daemonName });
+
+			try {
+				await Bun.$`emacsclient --socket-name=${daemonName} --eval "(kill-emacs)"`.quiet().nothrow();
+			} catch (err) {
+				logger.warn("[emacs-daemon] emacsclient kill failed", {
+					daemonName,
+					err: err instanceof Error ? err.message : String(err),
+				});
+			}
+
+			try {
+				await fs.unlink(sock);
+			} catch (err) {
+				if (!isEnoent(err)) {
+					logger.warn("[emacs-daemon] Could not remove socket after stop", { sock });
+				}
+			}
+		},
+	};
+}
+
 async function launchDaemon(
 	emacsPath: string,
 	projectRoot: string,
@@ -129,7 +221,7 @@ async function launchDaemon(
 	const daemonName = `spell-emacs-${key}`;
 	const sock = socketPath(key);
 
-	// Remove stale socket file if it was left by a previous crashed daemon.
+	// Socket is stale (tryAttachExisting already confirmed it's dead) — remove before spawning.
 	try {
 		await fs.unlink(sock);
 	} catch (err) {
@@ -160,7 +252,6 @@ async function launchDaemon(
 
 	logger.debug("[emacs-daemon] Spawning daemon", { daemonName, sock, elispDir });
 
-	// NOT detached: daemon is owned by this process and dies with it.
 	const proc = Bun.spawn([emacsPath, ...args], {
 		stdio: ["ignore", "ignore", "pipe"],
 	});
@@ -175,18 +266,6 @@ async function launchDaemon(
 			}
 		})().catch(() => {});
 	}
-
-	// Ensure daemon is killed when the parent process exits.
-	const cleanup = () => {
-		try {
-			proc.kill();
-		} catch {
-			// Already dead — fine.
-		}
-	};
-	process.on("exit", cleanup);
-	process.on("SIGINT", cleanup);
-	process.on("SIGTERM", cleanup);
 
 	// Wait for the daemon to signal readiness by writing the socket.
 	try {
@@ -223,9 +302,6 @@ async function launchDaemon(
 			clearInterval(healthTimer);
 			alive = false;
 			sessions.delete(key);
-			process.removeListener("exit", cleanup);
-			process.removeListener("SIGINT", cleanup);
-			process.removeListener("SIGTERM", cleanup);
 
 			logger.debug("[emacs-daemon] Stopping daemon", { daemonName });
 
