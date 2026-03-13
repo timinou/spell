@@ -144,13 +144,25 @@ console.log(`Building pi-natives for ${targetPlatform}-${targetArch}${variantSuf
 
 // Resolve the nightly cargo binary. On machines with Homebrew cargo alongside rustup,
 // PATH ordering is unreliable and env vars like RUSTUP_TOOLCHAIN are ignored by
-// non-rustup cargo. We resolve the absolute path to the rustup-managed nightly cargo.
+// non-rustup cargo. Try multiple strategies in order of reliability.
 const home = Bun.env.HOME ?? Bun.env.USERPROFILE ?? "";
 const rustupCargo = path.join(home, ".cargo", "bin", "cargo");
-const hasRustup = fsSync.existsSync(path.join(home, ".rustup"));
-const cargoCmd = hasRustup ? rustupCargo : "cargo";
-if (hasRustup) Bun.env.RUSTUP_TOOLCHAIN = "nightly";
-console.log(`Using cargo: ${cargoCmd} (nightly: ${hasRustup})`);
+let cargoCmd: string;
+if (fsSync.existsSync(rustupCargo)) {
+	// Best: use rustup's cargo proxy directly + env override
+	cargoCmd = rustupCargo;
+	Bun.env.RUSTUP_TOOLCHAIN = "nightly";
+} else if ((await $`which rustup`.nothrow().quiet()).exitCode === 0) {
+	// Rustup on PATH but cargo proxy missing — use `rustup run`
+	cargoCmd = "rustup";
+	cargoArgs.unshift("run", "nightly", "cargo");
+} else {
+	// No rustup at all — plain cargo, set env in case it's a rustup proxy elsewhere
+	cargoCmd = "cargo";
+	Bun.env.RUSTUP_TOOLCHAIN = "nightly";
+	console.warn("Warning: rustup not found. Nightly Rust is required — build may fail.");
+}
+console.log(`Using: ${cargoCmd} ${cargoArgs.join(" ")}`);
 const buildResult = await $`${cargoCmd} ${cargoArgs}`.cwd(rustDir).nothrow();
 if (buildResult.exitCode !== 0) {
 	const stderr = buildResult.stderr?.toString("utf-8") ?? "";
