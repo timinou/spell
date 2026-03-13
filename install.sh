@@ -48,13 +48,13 @@ header "Checking system dependencies"
 install_system_deps() {
   case "$OS" in
     arch)
-      ok "Installing base-devel git curl via pacman (sudo required)"
-      sudo pacman -S --needed --noconfirm base-devel git curl
+      ok "Installing base-devel git curl cmake via pacman (sudo required)"
+      sudo pacman -S --needed --noconfirm base-devel git curl cmake
       ;;
     ubuntu)
-      ok "Installing build-essential git curl via apt (sudo required)"
+      ok "Installing build-essential git curl cmake via apt (sudo required)"
       sudo apt-get update -qq
-      sudo apt-get install -y build-essential git curl pkg-config libssl-dev
+      sudo apt-get install -y build-essential git curl cmake pkg-config libssl-dev
       ;;
     macos)
       if ! xcode-select -p &>/dev/null; then
@@ -66,8 +66,9 @@ install_system_deps() {
 }
 
 need_sys_deps=false
-command -v git  &>/dev/null || need_sys_deps=true
-command -v curl &>/dev/null || need_sys_deps=true
+command -v git    &>/dev/null || need_sys_deps=true
+command -v curl   &>/dev/null || need_sys_deps=true
+command -v cmake  &>/dev/null || need_sys_deps=true
 if [ "$OS" = "ubuntu" ]; then
   command -v pkg-config &>/dev/null || need_sys_deps=true
 fi
@@ -108,6 +109,58 @@ fi
 
 command -v cargo &>/dev/null || die "cargo not found on PATH after install. Open a new shell and re-run."
 
+# ── 5. Qt 6 ──────────────────────────────────────────────────────────────────
+header "Checking Qt 6"
+
+install_qt6() {
+  case "$OS" in
+    arch)
+      ok "Installing qt6-base qt6-declarative via pacman (sudo required)"
+      sudo pacman -S --needed --noconfirm qt6-base qt6-declarative
+      ;;
+    ubuntu)
+      ok "Installing Qt 6 via apt (sudo required)"
+      sudo apt-get install -y qt6-base-dev qt6-declarative-dev libqt6network6
+      ;;
+    macos)
+      if ! command -v brew &>/dev/null; then
+        ok "Installing Homebrew"
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        # Add brew to PATH for Apple Silicon
+        [ -f /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
+      fi
+      ok "Installing qt via Homebrew"
+      brew install qt
+      # Tell CMake where to find Qt
+      QT_PREFIX="$(brew --prefix qt)"
+      export CMAKE_PREFIX_PATH="$QT_PREFIX:${CMAKE_PREFIX_PATH:-}"
+      export PATH="$QT_PREFIX/bin:$PATH"
+      ;;
+  esac
+}
+
+# Check for qmake6 / qmake as a proxy for Qt 6 presence.
+# On macOS also set CMAKE_PREFIX_PATH so CMake can find a brew-installed Qt.
+QT6_FOUND=false
+if command -v qmake6 &>/dev/null; then
+  QT6_FOUND=true
+elif command -v qmake &>/dev/null && qmake --version 2>&1 | grep -q 'Qt version 6'; then
+  QT6_FOUND=true
+fi
+
+if [ "$OS" = "macos" ] && command -v brew &>/dev/null && brew --prefix qt &>/dev/null 2>&1; then
+  QT_PREFIX="$(brew --prefix qt)"
+  export CMAKE_PREFIX_PATH="$QT_PREFIX:${CMAKE_PREFIX_PATH:-}"
+  export PATH="$QT_PREFIX/bin:$PATH"
+  QT6_FOUND=true
+fi
+
+if ! $QT6_FOUND; then
+  install_qt6
+else
+  ok "Qt 6 already installed"
+fi
+
 # ── 5. Clone or update repo ───────────────────────────────────────────────────
 header "Fetching Spell source"
 
@@ -129,6 +182,9 @@ bun install --frozen-lockfile
 
 ok "Building native extensions (Rust)"
 bun run build:native
+
+ok "Building QML bridge (requires Qt 6 + cmake)"
+bun --cwd=packages/qml run build:bridge
 
 ok "Linking spell CLI"
 bun run install:dev
