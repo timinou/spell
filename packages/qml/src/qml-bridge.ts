@@ -22,6 +22,7 @@ export class QmlBridge {
 	readonly #watcher = new QmlWatcher();
 	readonly #windows = new Map<string, WindowInfo>();
 	#removeListener: (() => void) | null = null;
+	#reconnected = false;
 
 	constructor() {
 		// Register event listener immediately — process may not be up yet
@@ -81,7 +82,14 @@ export class QmlBridge {
 
 	/** Launch a QML window. Returns the window id. */
 	async launch(id: string, filePath: string, options: LaunchOptions = {}): Promise<WindowInfo> {
-		await this.#process.ensure();
+		// On first launch, auto-restore windows from an existing daemon.
+		if (!this.#reconnected) {
+			this.#reconnected = true;
+			const kind = await this.#process.ensure();
+			if (kind === "existing") await this.reconnect();
+		} else {
+			await this.#process.ensure();
+		}
 
 		const info: WindowInfo = {
 			id,
@@ -221,7 +229,10 @@ export class QmlBridge {
 	 */
 	async reconnect(): Promise<void> {
 		await this.#process.ensure();
-		const stateEvent = await this.#process.waitFor(e => e.type === "state", 10_000);
+		// Use the state event buffered during connect to avoid the race where
+		// the daemon sends state before waitFor is registered.
+		const stateEvent =
+			this.#process.takeReconnectState() ?? (await this.#process.waitFor(e => e.type === "state", 10_000));
 		if (stateEvent.type !== "state") return;
 
 		for (const win of stateEvent.windows) {

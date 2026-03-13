@@ -37,6 +37,7 @@ export class QmlProcess {
 	#socket: net.Socket | null = null;
 	#socketBuffer = "";
 	#listeners: Set<EventListener> = new Set();
+	#pendingReconnectState: BridgeEvent | null = null;
 	#buffer = "";
 	#stderrBuffer = "";
 	#stopping = false;
@@ -49,22 +50,23 @@ export class QmlProcess {
 	}
 
 	/** Spawn or connect to the bridge. */
-	async ensure(): Promise<void> {
+	async ensure(): Promise<"existing" | "new"> {
 		// Already connected via socket
-		if (this.#socket && !this.#socket.destroyed) return;
+		if (this.#socket && !this.#socket.destroyed) return "existing";
 		// Already running as child process
-		if (this.#proc && this.#proc.exitCode === null) return;
+		if (this.#proc && this.#proc.exitCode === null) return "new";
 		if (this.#stopping) throw new Error("QmlProcess is shutting down");
 
 		// Try daemon socket first, fall back to spawning
 		try {
 			await this.#connectSocket();
-			return;
+			return "existing";
 		} catch {
 			// Socket not available — try spawning daemon then connecting
 		}
 
 		await this.#spawnDaemon();
+		return "new";
 	}
 
 	/** Spawn the bridge in daemon mode, then connect via socket. */
@@ -160,6 +162,18 @@ export class QmlProcess {
 			clearTimeout(timeout);
 			this.#socket = socket;
 			this.#socketBuffer = "";
+
+			// Buffer the first state event so reconnect() can consume it
+			// without racing against #dispatch delivering it to other listeners.
+			this.#pendingReconnectState = null;
+			const captureState = (event: BridgeEvent) => {
+				if (event.type === "state") {
+					this.#pendingReconnectState = event;
+					this.#listeners.delete(captureState);
+				}
+			};
+			this.#listeners.add(captureState);
+
 			logger.debug("Connected to spell-qml-bridge daemon", { socketPath });
 			resolve();
 		});
@@ -262,6 +276,13 @@ export class QmlProcess {
 				logger.error("QmlProcess event listener threw", { error: String(err) });
 			}
 		}
+	}
+
+	/** Consume the state event buffered during socket connect. Returns null if none buffered. */
+	takeReconnectState(): BridgeEvent | null {
+		const state = this.#pendingReconnectState;
+		this.#pendingReconnectState = null;
+		return state;
 	}
 
 	/** Send a command to the bridge. Caller must have called ensure() first. */
