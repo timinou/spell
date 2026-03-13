@@ -30,7 +30,9 @@ grep-matcher = "0.1"
 globset = "0.4"
 ignore = "0.4"
 rayon = "1.10"
-ast-grep-core = { version = "0.39", default-features = false, features = ["tree-sitter"] }
+ast-grep-core = { version = "0.39", default-features = false, features = [
+   "tree-sitter",
+] }
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25"
 tree-sitter-c = "0.24"
@@ -91,7 +93,6 @@ smallvec = { version = "1.15.1", features = [
    "serde",
    "write",
    "union",
-   "specialization",
    "const_new",
 ] }
 
