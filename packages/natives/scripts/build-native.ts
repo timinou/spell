@@ -141,13 +141,16 @@ if (!isDev) cargoArgs.push("--release");
 if (crossTarget) cargoArgs.push("--target", crossTarget);
 
 console.log(`Building pi-natives for ${targetPlatform}-${targetArch}${variantSuffix}${isDev ? " (debug)" : ""}…`);
-// Use `rustup run nightly cargo` so nightly is guaranteed regardless of which
-// cargo binary is first on PATH (e.g. Homebrew cargo on macOS).
-// Falls back to plain `cargo` if rustup is not installed.
-const cargoCmd =
-	(await $`rustup which --toolchain nightly cargo`.nothrow().quiet()).exitCode === 0
-		? await $`rustup which --toolchain nightly cargo`.text().then(p => p.trim())
-		: "cargo";
+
+// Resolve the nightly cargo binary. On machines with Homebrew cargo alongside rustup,
+// PATH ordering is unreliable and env vars like RUSTUP_TOOLCHAIN are ignored by
+// non-rustup cargo. We resolve the absolute path to the rustup-managed nightly cargo.
+const home = Bun.env.HOME ?? Bun.env.USERPROFILE ?? "";
+const rustupCargo = path.join(home, ".cargo", "bin", "cargo");
+const hasRustup = fsSync.existsSync(path.join(home, ".rustup"));
+const cargoCmd = hasRustup ? rustupCargo : "cargo";
+if (hasRustup) Bun.env.RUSTUP_TOOLCHAIN = "nightly";
+console.log(`Using cargo: ${cargoCmd} (nightly: ${hasRustup})`);
 const buildResult = await $`${cargoCmd} ${cargoArgs}`.cwd(rustDir).nothrow();
 if (buildResult.exitCode !== 0) {
 	const stderr = buildResult.stderr?.toString("utf-8") ?? "";
