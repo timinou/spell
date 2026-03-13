@@ -1,0 +1,45 @@
+#+TITLE: Session 1490eb6901180e71 Todos
+#+DATE: 2026-03-13
+#+TODO: ITEM DOING | DONE
+
+* Refactor org-writer.ts
+
+** DONE Extract shared frontmatter/heading parsers to eliminate 4x duplication
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Fix applyItemMutations: null vs empty array contract, body+append ordering, unused params
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Rewrite try* helpers to use shared parsers
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+* Tests
+
+** DONE Write comprehensive tests for applyItemMutations edge cases
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Write tool-layer tests for file hint, includeBody, default category
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+* Verify
+
+** DONE Run full test suite + type check
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:

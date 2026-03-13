@@ -1,0 +1,121 @@
+#+TITLE: Extract SessionEventMapper class and add unit tests
+#+STATE: DONE
+#+SESSION_ID: 1490d698e9ece256
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-13T07-41-55-496Z_1490d698e9ece256.jsonl]]
+#+CUSTOM_ID: DRAFT-001-extract-sessioneventmapper-class-and-add
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: test
+
+* Initial Message
+
+/tmp/tmp.JolSUEcFPM.png
+
+
+How can you TDD test it?
+
+* Problem
+
+=mapSessionEvent= in =qml-mode.ts= uses module-level mutable state (=currentMessageId=, =messageCounter=, =lastTextLength=). This makes it:
+1. Untestable in isolation — tests share state, ordering matters
+2. Broken if multiple QML sessions ran concurrently (unlikely today, but latent bug)
+
+* Approach
+
+Extract into a =SessionEventMapper= class with instance state. Export from a new file so tests import it directly without pulling in QML bridge dependencies.
+
+** ITEM Extract SessionEventMapper class
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+Create =packages/coding-agent/src/modes/qml-event-mapper.ts=:
+
+#+begin_src typescript
+import type { AgentSessionEvent } from "../session/agent-session";
+
+export class SessionEventMapper {
+  #messageCounter = 0;
+  #currentMessageId = "";
+  #lastTextLength = 0;
+
+  map(event: AgentSessionEvent): Record<string, unknown> | null {
+    // Move switch body here verbatim
+  }
+}
+#+end_src
+
+Move helper functions (=hasContent=, =getRoleIfPresent=, =getMessageText=, =getThinkingText=) into the same file as module-private functions (they're pure, no need to be methods).
+
+** ITEM Update qml-mode.ts to use SessionEventMapper
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+- Import =SessionEventMapper= from =./qml-event-mapper=
+- In =runQmlMode=, instantiate: =const mapper = new SessionEventMapper()=
+- Replace =mapSessionEvent(event)= call with =mapper.map(event)=
+- Delete the old function, helpers, and module-level state variables from =qml-mode.ts=
+
+** ITEM Write unit tests
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+Create =packages/coding-agent/test/modes/qml-event-mapper.test.ts=.
+
+Test file uses =bun:test= (=describe=, =it=, =expect=, =beforeEach=). Each test gets a fresh =new SessionEventMapper()=.
+
+Contracts to test (each is one =it= block):
+
+*** Message ID threading
+- =message_start= returns an object with a non-empty =id=
+- =message_update= and =message_end= return the same =id= as the preceding =message_start=
+
+*** Delta text accumulation
+- First =message_update= with ="hello"= → =text: "hello"=
+- Second =message_update= with ="hello world"= → =text: " world"= (delta only)
+
+*** Delta reset on new message
+- After a full start/update/end cycle, a new =message_start= resets the cursor
+- First update of the new message returns full text, not delta from previous message
+
+*** Suppression of empty deltas
+- =message_update= with same full text as last time → returns =null=
+
+*** Tool field mapping
+- =tool_execution_start= maps =toolCallId= → =id=, =toolName= → =name=, =intent= → =details=
+- =tool_execution_end= maps =toolCallId= → =id=, =toolName= → =name=, =isError= preserved
+
+*** Agent busy events
+- =agent_start= → ={ type: "agent_busy", busy: true }=
+- =agent_end= → ={ type: "agent_busy", busy: false }=
+
+*** Unrecognized events return null
+- =auto_compaction_start= or any non-UI event → =null=
+
+Test helpers (defined in the test file):
+#+begin_src typescript
+function assistantMsg(content: Array<{ type: string; text?: string }> = []) {
+  return { role: "assistant" as const, content };
+}
+
+function textBlock(text: string) {
+  return { type: "text" as const, text };
+}
+#+end_src
+
+These construct minimal =AgentMessage=-shaped objects. The mapper uses duck typing (=hasContent=) so full =AgentMessage= instances aren't needed.
+
+* Files
+
+| File | Action |
+|------|--------|
+| =packages/coding-agent/src/modes/qml-event-mapper.ts= | Create (class + helpers) |
+| =packages/coding-agent/src/modes/qml-mode.ts= | Trim (remove mapper logic, import class) |
+| =packages/coding-agent/test/modes/qml-event-mapper.test.ts= | Create (unit tests) |
+
+* Verification
+
+Run: =bun test packages/coding-agent/test/modes/qml-event-mapper.test.ts=
+Run: =bun check:ts= (no regressions)

@@ -1,0 +1,47 @@
+#+TITLE: Session 1490d9ebecb20147 Todos
+#+DATE: 2026-03-13
+#+TODO: ITEM DOING | DONE
+
+* org-writer.ts — add body/title mutation functions
+
+** DONE Add updateItemBodyInFile, appendToItemBodyInFile, updateItemTitleInFile
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+* tool.ts — extend update + add note subcommand
+
+** DONE Extend cmdUpdate with body/title/append params
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Add cmdNote subcommand + wire into execute switch
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Update description and parameters schema
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+* types.ts — extend OrgUpdateParams
+
+** DONE Add body/title/append/note to OrgUpdateParams
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+* coding-agent org.ts — extend schema
+
+** DONE Add append param + note subcommand to schema + description
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:

@@ -1,0 +1,193 @@
+#+TITLE: Install script and README
+#+STATE: ITEM
+#+SESSION_ID: 14911080f650e2c1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-13T11-54-55-321Z_14911080f650e2c1.jsonl]]
+#+CUSTOM_ID: DRAFT-001-install-script-and-readme
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: infra
+
+* Initial Message
+
+create a simple install script I can send people to install spell easily. They have either arch, ubuntu, or mac os x. It should be sexy to use and simple and whatnot. Create a README that looks at the changs since Tuesday and that also explains the install script. Explain the way the scirpt will work befroe you write that. the location of the repo is timinou/spell on github
+
+* Overview
+
+Create two files at repo root:
+- =install.sh= — one-liner curl-pipe-bash installer for Arch, Ubuntu, macOS
+- =README.md= — changelog since Tuesday 2026-03-10 + install instructions
+
+Repo: =timinou/spell= on GitHub.
+
+* Install Script Design (install.sh)
+
+The script works in 5 phases:
+
+1. *Detect environment* — OS (macOS/Ubuntu/Arch via =/etc/os-release= or =uname=), architecture (x64/arm64). Bail with clear error on unsupported platforms.
+
+2. *Install system dependencies* — only what's needed to build the Rust native crate and run Bun:
+   - *Arch*: =pacman -S --needed base-devel git curl= (most Arch users already have these)
+   - *Ubuntu*: =apt-get install -y build-essential git curl pkg-config libssl-dev=
+   - *macOS*: ensure Xcode CLT (=xcode-select --install=), no Homebrew requirement
+
+3. *Install toolchains* — Bun and Rust, only if not already present:
+   - Bun: =curl -fsSL https://bun.sh/install | bash=
+   - Rust: =curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y=
+
+4. *Clone and build*:
+   - =git clone https://github.com/timinou/spell ~/.spell-src= (or update if exists)
+   - =cd ~/.spell-src && bun install=
+   - =bun run build:native= (compiles the Rust pi-natives crate)
+   - =cd packages/coding-agent && bun link= (makes =spell= available on PATH)
+
+5. *Verify* — run =spell --version= or similar, print success message with next steps.
+
+** UX
+
+- Colored output: green checkmarks for success, red X for failure, cyan headers for phases
+- No wall of text — each phase is one line with a spinner or status icon
+- Idempotent — re-running updates instead of failing
+- Asks for sudo only when needed (package manager installs), explains why
+- Usage: =curl -fsSL https://raw.githubusercontent.com/timinou/spell/main/install.sh | bash=
+
+* README.md
+
+** Section 1: What is Spell
+
+One paragraph: AI coding agent CLI with TUI, multi-provider LLM support, tool calling.
+
+** Section 2: Install
+
+The one-liner curl command + manual install steps for people who don't trust curl-pipe-bash.
+
+** Section 3: Changes Since Tuesday (2026-03-10)
+
+Grouped changelog from commits:
+
+*** Features
+- QML desktop mode with daemon bridge and onboarding flow
+- Org protocol handler for plan references (=org://=)
+- QML window screenshot capture
+- Automatic background event delivery for QML (no manual listen loop)
+- QML Android remote bridge
+- Spell onboarding flow with automatic ADB setup
+- Emacs outline enrichment (end_line, column, exported, signature)
+
+*** Fixes
+- QML bridge timeout and theme property naming
+- Plan mode: org/todo_write forced available, session guard, draft finalization
+- ADB unauthorized device guidance and filtering
+- QML window close no longer aborts agent turn
+- Error log serialization fix
+
+*** Other
+- Renamed OMP/omp/kika -> Spell/spell across codebase
+- Relicensed to GPL-3.0-only
+
+** Section 4: Development
+
+Brief: =bun install=, =bun run build:native=, =bun check=, =bun dev=.
+
+* Files to Create
+
+- =/home/user/code/ora/spell/install.sh=
+- =/home/user/code/ora/spell/README.md=
+
+* Verification
+
+- =bash install.sh= on current machine (Arch) — should detect OS, skip already-installed deps, build, link
+- =shellcheck install.sh= if available
+- README renders correctly (check with GitHub preview or similar)
+* ITEM Install script and README
+:PROPERTIES:
+:CUSTOM_ID: DRAFT-001-install-script-and-readme
+:EFFORT: 1h
+:PRIORITY: #B
+:LAYER: infra
+:END:
+
+* Context
+
+Co-founder-facing install script + README. Target audience knows their way around a terminal but shouldn't have to think about dependencies. Repo: =timinou/spell= on GitHub. Final build step is =bun run install:dev= (runs =bun install= + =bun link= in coding-agent and ai packages).
+
+* Install Script (install.sh)
+
+Located at repo root. Invoked via:
+=curl -fsSL https://raw.githubusercontent.com/timinou/spell/main/install.sh | bash=
+
+** How it works
+
+5 phases, each printed as a single styled line with status icon:
+
+1. *Detect* — OS via =uname= + =/etc/os-release=, arch via =uname -m=. Supported: macOS (arm64/x64), Ubuntu, Arch. Bail clearly on anything else.
+
+2. *System deps* — install build toolchain only if missing:
+   - *Arch*: =sudo pacman -S --needed base-devel git curl=
+   - *Ubuntu*: =sudo apt-get update && sudo apt-get install -y build-essential git curl pkg-config libssl-dev=
+   - *macOS*: ensure Xcode CLT via =xcode-select -p= check, prompt install if missing
+
+3. *Toolchains* — Bun and Rust, skip if already on PATH:
+   - Bun: =curl -fsSL https://bun.sh/install | bash=
+   - Rust: =curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y=
+   - Source relevant env files after install so they're available for next steps
+
+4. *Clone/update* — =git clone https://github.com/timinou/spell ~/.spell= or =git -C ~/.spell pull --ff-only= if exists
+
+5. *Build* — =cd ~/.spell && bun run build:native && bun run install:dev=. This compiles the Rust native crate and links the =spell= CLI onto PATH.
+
+Final message: print =spell= is ready, suggest =spell --help=.
+
+** UX details
+
+- Colored output: bold cyan phase headers, green =✓= / red =✗= per step
+- Idempotent — safe to re-run (updates repo, skips installed deps)
+- Asks for sudo only for package manager, explains why
+- No spinners (curl-pipe-bash doesn't have a tty reliably) — just clean status lines
+- =set -euo pipefail= for safety
+
+* README.md
+
+At repo root. Sections:
+
+** What is Spell
+One paragraph. AI coding agent CLI, multi-provider LLM, TUI, tool calling.
+
+** Install
+The one-liner curl command. Then a "Manual install" expandable with the 5 steps spelled out for people who prefer that.
+
+** What's New (since 2026-03-10)
+
+Grouped from commits:
+
+*** Features
+- QML desktop mode with daemon bridge and onboarding flow
+- Org-mode project management: org:// protocol, body/title/append mutations, note subcommand
+- QML window screenshot capture
+- Automatic background event delivery for QML windows
+- QML Android remote bridge with ADB setup
+- Emacs treesit outline enrichment (end_line, column, exported, signature)
+
+*** Fixes
+- QML bridge timeout and theme property naming
+- Plan mode: org/todo_write availability, session guard, draft finalization flow
+- ADB unauthorized device guidance and filtering
+- QML window close no longer aborts agent turn
+- Error log serialization
+
+*** Other
+- Full rename: OMP/omp/kika → Spell/spell
+- Relicensed to GPL-3.0-only
+
+** Development
+Brief: =bun install=, =bun run build:native=, =bun run install:dev=, =bun check=, =bun dev=.
+
+* Files to Create
+
+- =/home/user/code/ora/spell/install.sh=
+- =/home/user/code/ora/spell/README.md=
+
+* Verification
+
+- Run =bash install.sh= on current machine (Arch) — should detect OS, skip installed deps, build, link
+- =shellcheck install.sh= if available
+- Eyeball README rendering

@@ -1,0 +1,114 @@
+#+TITLE: ORG_TOOL_DELIGHT
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-org-tool-delight
+
+* Problem
+
+The org tool works but has four friction points when called by an LLM agent:
+
+1. *Multi-field update does N separate read-parse-write cycles* — `cmdUpdate` with state+body+title does 3 independent file I/O rounds, each re-reading and re-writing the same file.
+2. *Mutations return success but not the item* — after updating, the caller must issue a separate `get` to verify what was written. No opt-in way to get the item back in the same call.
+3. *No file path hint* — every `update`/`note`/`set` call scans all categories and all .org files to locate an item by CUSTOM_ID, even when the caller just created it and knows the path.
+4. *`create` always requires category* — the agent almost always creates in "drafts" but must specify it every time.
+
+* Approach
+
+** ITEM Consolidate update into single read-write pass
+:PROPERTIES:
+:EFFORT: 1h30m
+:END:
+
+Replace the current `cmdUpdate` approach (calling separate `updateItemStateInFile`, `updateItemBodyInFile`, `appendToItemBodyInFile`, `updateItemTitleInFile` functions — each of which reads, parses, mutates, and writes the file independently) with a single-pass approach:
+
+*** Writer layer (`org-writer.ts`)
+
+Add a new function `applyItemMutations`:
+
+#+begin_src typescript
+interface ItemMutation {
+  state?: string;
+  title?: string;
+  body?: string;      // full replacement (null = clear)
+  append?: string;    // append to body
+  note?: string;      // only on state change
+}
+
+export async function applyItemMutations(
+  filePath: string,
+  customId: string,
+  mutations: ItemMutation,
+  todoKeywords: string[],
+): Promise<string[] | null>  // returns list of applied fields, or null if ID not found
+#+end_src
+
+Internally: one `Bun.file(path).text()`, one `lines = content.split("\n")`, apply all mutations to the lines array in order (state → title → body/append), one `Bun.write()`. Return which fields were actually changed.
+
+Keep the individual `updateItemStateInFile`, `updateItemBodyInFile`, etc. as thin wrappers over this for backwards compatibility — they call `applyItemMutations` with a single field set.
+
+*** Tool layer (`tool.ts`)
+
+Rewrite `cmdUpdate` to call `applyItemMutations` once instead of 4 separate functions. Same for `cmdNote` — call `applyItemMutations({ append: dated })`.
+
+** ITEM Opt-in item echo via includeBody flag
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Add an `includeBody` parameter to `update`, `note`, and `set` responses. When `includeBody: true` is passed, re-read the item after mutation and include it in the response:
+
+#+begin_src json
+{
+  "success": true,
+  "id": "DRAFT-003-foo",
+  "updated": ["state", "body"],
+  "file": "/abs/path/to/file.org",
+  "item": { "id": "...", "title": "...", "state": "...", "body": "..." }
+}
+#+end_src
+
+When `includeBody` is omitted or false (the default), the response stays lean — just `success`, `id`, `updated`, `file`. No wasted tokens when the caller doesn't need verification.
+
+The `includeBody` param already exists in the schema (used by `query`), so this reuses the same flag name consistently.
+
+Apply to: `cmdUpdate`, `cmdNote`, `cmdSet`.
+
+** ITEM Accept file path hint to skip category scan
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Add an optional `file` parameter to `update`, `note`, and `set` subcommands. When provided, skip the readdir scan across all categories and operate directly on the given file path:
+
+- Schema: add `file` to the parameters (it already exists but is documented as "create only")
+- Update the description to note it works for update/note/set too
+- In `cmdUpdate`/`cmdNote`/`cmdSet`: if `args.file` is set, try that file first; only fall back to full scan if not found
+
+Since `create` already returns `file` in its response, callers can chain: create → get the file path → update with file hint.
+
+** ITEM Default category for create
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+When `category` is omitted on `create`, fall back to the first configured category (which is "drafts" by default). This matches the 90% use case — plan drafts.
+
+In `cmdCreate` in `tool.ts`:
+- Change from `if (!cat) return error` to `const cat = args.category ?? categories[0]?.name`
+- Only error if categories list is empty
+
+In schema descriptions: update `category` description to note it defaults to the first configured category.
+
+* Files to modify
+
+| File | Changes |
+|------+---------|
+| =packages/org/src/org-writer.ts= | Add `applyItemMutations`, refactor existing functions as wrappers |
+| =packages/org/src/tool.ts= | Rewrite cmdUpdate/cmdNote/cmdSet to use single-pass + includeBody echo + file hint + default category |
+| =packages/org/src/types.ts= | Add `ItemMutation` interface if exported |
+| =packages/coding-agent/src/tools/org.ts= | Update schema descriptions for file/category params |
+
+* Verification
+
+- Run =bun test packages/org/test/= — all existing tests must pass
+- Run =bun check:ts= — no new type errors (pre-existing qml-event-mapper errors are expected)
+- Manual verification: create an item, update body+state in one call with includeBody=true, confirm response includes full item with body
