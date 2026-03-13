@@ -110,7 +110,22 @@ export class QmlBridge {
 		});
 
 		// Wait until ready or error (max 10s)
-		await this.#process.waitFor(e => (e.type === "ready" || e.type === "error") && e.id === id, 10_000);
+		try {
+			await this.#process.waitFor(e => (e.type === "ready" || e.type === "error") && e.id === id, 10_000);
+		} catch (err) {
+			const stderrLines = info.events
+				.filter(e => e.name === "stderr")
+				.map(e => (e.payload as { message?: string }).message ?? "")
+				.join("\n");
+			const detail = stderrLines
+				? `QML load timed out. Run qmllint on the file to check syntax. Accumulated stderr:\n${stderrLines}`
+				: `QML load timed out. Run qmllint on the file to check syntax.`;
+			throw new Error(detail);
+		}
+
+		if (info.state === "error") {
+			throw new Error(info.lastError ?? "QML failed to load");
+		}
 
 		// Set up hot-reload watcher
 		if (options.watch !== false) {
