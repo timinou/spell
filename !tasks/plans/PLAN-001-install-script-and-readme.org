@@ -1,0 +1,59 @@
+#+TITLE: INSTALL_SCRIPT_AND_README
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-install-script-and-readme
+
+* Initial Message
+
+create a simple install script I can send people to install spell easily. They have either arch, ubuntu, or mac os x. It should be sexy to use and simple and whatnot. Create a README that looks at the changs since Tuesday and that also explains the install script. Explain the way the scirpt will work befroe you write that. the location of the repo is timinou/spell on github
+
+* Context
+
+Co-founder-facing install script + README. Repo: =timinou/spell= on GitHub. Clone destination: =~/.local/spell=. Final build step: =bun run install:dev=.
+
+* Install Script (install.sh) — repo root
+
+Usage: =curl -fsSL https://raw.githubusercontent.com/timinou/spell/main/install.sh | bash=
+
+** Phases
+
+1. *Detect* — OS (macOS/Ubuntu/Arch via =uname= + =/etc/os-release=), arch (=uname -m=). Bail on unsupported.
+
+2. *System deps* (skip if present):
+   - Arch: =sudo pacman -S --needed base-devel git curl=
+   - Ubuntu: =sudo apt-get update && sudo apt-get install -y build-essential git curl pkg-config libssl-dev=
+   - macOS: ensure Xcode CLT (=xcode-select -p=), prompt if missing
+
+3. *Toolchains* (skip if on PATH):
+   - Bun: =curl -fsSL https://bun.sh/install | bash=
+   - Rust: =curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y=
+   - Source env files after install
+
+4. *Clone/update*: =git clone https://github.com/timinou/spell ~/.local/spell= or =git -C ~/.local/spell pull --ff-only=
+
+5. *Build*: =cd ~/.local/spell && bun run build:native && bun run install:dev=
+
+Print success + =spell --help= suggestion.
+
+** UX
+- =set -euo pipefail=, colored status lines (cyan headers, green ✓ / red ✗)
+- Idempotent, sudo only for package manager with explanation
+- No spinners (unreliable in pipe)
+
+* README.md — repo root
+
+Sections:
+1. *What is Spell* — one paragraph
+2. *Install* — curl one-liner + manual steps in =<details>=
+3. *What's New (week of 2026-03-10)* — grouped from git log:
+   - Features: QML desktop mode + daemon bridge + onboarding, org-mode management (org://, mutations, notes), QML screenshot, auto event delivery, Android remote bridge + ADB setup, emacs outline enrichment
+   - Fixes: QML bridge timeout/theme props, plan mode availability/session/finalization, ADB device guidance, QML close abort, error log serialization
+   - Other: OMP/omp/kika → Spell rename, GPL-3.0-only relicense
+4. *Development* — =bun install=, =bun run build:native=, =bun run install:dev=, =bun check=, =bun dev=
+
+* Files
+- =/home/user/code/ora/spell/install.sh=
+- =/home/user/code/ora/spell/README.md=
+
+* Verification
+- =bash install.sh= on current Arch machine
+- =shellcheck install.sh= if available

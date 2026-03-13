@@ -1,0 +1,102 @@
+#+TITLE: Fix QML chat panel blank messages
+#+STATE: DONE
+#+SESSION_ID: 149070b493ece255
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-13T00-16-45-135Z_149070b493ece255.jsonl]]
+#+CUSTOM_ID: DRAFT-001-fix-qml-chat-panel-blank-messages
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: frontend
+
+* Initial Message
+
+/tmp/tmp.0st1grCsxo.png
+∙ spell --qml
+Starting emacs-code…
+Starting LSP servers: rust-analyzer, yamlls, taplo…
+
+* Problem
+
+After sending a message in =spell --qml= mode, assistant/tool responses appear as blank dark rows. Text never renders.
+
+* Root Cause
+
+=mapSessionEvent()= in =packages/coding-agent/src/modes/qml-mode.ts= does not include an =id= field in any events it sends to QML. The =ChatPanel.qml= uses =msg.id= to correlate =message_update= and =message_end= events back to the row created by =message_start=.
+
+Specifically:
+- =message_start= creates a ListModel row with =msgId: msg.id || ""= → becomes =""=
+- =message_update= searches for a row where =msgId === msg.id= → =msg.id= is =undefined= → ="" === undefined= is =false= → match never found → text never set
+- Tool events: QML reads =msg.id= but TS sends =toolCallId= instead
+
+=AssistantMessage= in =packages/ai/src/types.ts= has no =id= field, so we must generate one in =mapSessionEvent=.
+
+* Fix
+
+** ITEM Add message IDs to mapSessionEvent in qml-mode.ts
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: =packages/coding-agent/src/modes/qml-mode.ts=
+
+1. Add state tracking for the current assistant message ID (a counter or =crypto.randomUUID()=):
+   #+begin_src typescript
+   let messageCounter = 0;
+   let currentMessageId = "";
+   #+end_src
+
+2. In =mapSessionEvent=:
+   - =message_start=: generate =currentMessageId = "msg-" + (++messageCounter)=, include as =id=
+   - =message_update=: include =id: currentMessageId=
+   - =message_end=: include =id: currentMessageId=
+   - =tool_execution_start=: map =toolCallId= → =id= (so QML sees =msg.id=)
+   - =tool_execution_update=: map =toolCallId= → =id=
+   - =tool_execution_end=: map =toolCallId= → =id=
+
+** ITEM Fix ChatPanel.qml tool event field names
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+File: =packages/coding-agent/src/modes/qml/panels/ChatPanel.qml=
+
+The =tool_start= handler reads =msg.name= and =msg.details= but =mapSessionEvent= sends =toolName= and =intent=. Fix:
+- =msg.name= → already sent as =toolName=, but QML reads =msg.name=. Either fix QML to read =msg.toolName= or fix TS to send =name=. Prefer fixing TS to send =name= for consistency with QML expectations: send =name: event.toolName=, =details: event.intent=.
+- Similarly =tool_end= sends =toolName= but QML reads =msg.name=. Send =name: event.toolName=, =details: result summary=.
+
+** ITEM Fix message_update to send incremental text, not full content
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+File: =packages/coding-agent/src/modes/qml-mode.ts=
+
+The QML concatenates: =current + (msg.text || "")=. But =getMessageText= returns the FULL accumulated text each time, not a delta. This means text would be duplicated on each update.
+
+Fix: track the last-sent text length and send only the delta:
+#+begin_src typescript
+let lastTextLength = 0;
+// In message_update:
+const fullText = getMessageText(msg.content);
+const delta = fullText.slice(lastTextLength);
+lastTextLength = fullText.length;
+return { type: "message_update", id: currentMessageId, text: delta };
+#+end_src
+
+Or: change QML to replace instead of append (simpler, but less efficient for streaming).
+
+Simplest correct fix: change QML to SET text rather than concatenate. Replace line ~35:
+#+begin_src qml
+messagesModel.setProperty(i, "text", msg.text || "")
+#+end_src
+instead of =current + (msg.text || "")=. Then TS can keep sending full text.
+
+* Files to modify
+
+- =packages/coding-agent/src/modes/qml-mode.ts= — add =id= fields, fix field names
+- =packages/coding-agent/src/modes/qml/panels/ChatPanel.qml= — fix text update to replace not append (since TS sends full text)
+
+* Verification
+
+- Run =spell --qml=, send a message, confirm assistant text appears in the chat bubble
+- Confirm tool execution rows show tool name and details
+- Confirm streaming indicator works during response

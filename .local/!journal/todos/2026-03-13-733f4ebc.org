@@ -1,0 +1,39 @@
+#+TITLE: Session 14906c019e4f245a Todos
+#+DATE: 2026-03-13
+#+TODO: ITEM DOING | DONE
+
+* Tests (red)
+
+** DONE Write emacs daemon survival tests
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Write QML reconnect state buffering tests
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+* Implementation (green)
+
+** DONE Fix emacs daemon: tryAttach path + remove exit kill handlers
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Fix QML: buffer reconnect state event, wire auto-reconnect
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+* Verify
+
+** DONE Run new tests, bun check:ts
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
