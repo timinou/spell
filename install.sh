@@ -101,23 +101,13 @@ command -v bun &>/dev/null || die "Bun not found on PATH after install. Open a n
 # ── 4. Rust ───────────────────────────────────────────────────────────────────
 header "Checking Rust"
 
-# Spell requires nightly Rust. We need rustup specifically — Homebrew cargo
-# doesn't support toolchain switching. Install rustup regardless if it's missing,
-# and also if cargo exists but rustup doesn't (e.g. Homebrew rust install).
-if ! command -v rustup &>/dev/null; then
-  if command -v cargo &>/dev/null; then
-    ok "cargo found but rustup is missing (likely Homebrew install) — installing rustup alongside"
-  else
-    ok "Installing Rust via rustup"
-  fi
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain nightly
+if ! command -v cargo &>/dev/null; then
+  ok "Installing Rust via rustup"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
   source "$HOME/.cargo/env"
   export PATH="$HOME/.cargo/bin:$PATH"
 else
-  ok "rustup found — ensuring nightly toolchain"
-  rustup toolchain install nightly --no-self-update
-  # Prefer rustup-managed cargo over any system cargo
-  export PATH="$HOME/.cargo/bin:$PATH"
+  ok "Rust $(rustc --version) already installed"
 fi
 
 command -v cargo &>/dev/null || die "cargo not found on PATH after install. Open a new shell and re-run."
@@ -190,10 +180,6 @@ header "Building Spell"
 
 cd "$DEST"
 
-# Force nightly for the entire build — smallvec 1.15+ requires it.
-# rust-toolchain.toml in the repo sets this too, but env var wins if
-# the user has a directory-level override or an old rustup default.
-export RUSTUP_TOOLCHAIN=nightly
 
 ok "Installing JS dependencies"
 bun install --frozen-lockfile
