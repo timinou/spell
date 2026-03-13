@@ -100,11 +100,12 @@ header "Checking Rust"
 
 if ! command -v cargo &>/dev/null; then
   ok "Installing Rust via rustup"
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain nightly
   source "$HOME/.cargo/env"
   export PATH="$HOME/.cargo/bin:$PATH"
 else
-  ok "Rust $(rustc --version) already installed"
+  ok "Rust $(rustc --version) already installed — ensuring nightly toolchain"
+  rustup toolchain install nightly --no-self-update
 fi
 
 command -v cargo &>/dev/null || die "cargo not found on PATH after install. Open a new shell and re-run."
