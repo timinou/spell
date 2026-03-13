@@ -216,3 +216,15 @@ export interface OrgSetPropertyParams {
 	/** New value. */
 	value: string;
 }
+
+/** Mutations to apply to an item in a single read-write pass. */
+export interface ItemMutation {
+	state?: string;
+	title?: string;
+	/** Full body replacement. `null` clears the body. */
+	body?: string | null;
+	/** Append text to the end of the existing body. */
+	append?: string;
+	/** Dated note — only written when state also changes (heading-level) or appended after frontmatter (file-level). */
+	note?: string;
+}
