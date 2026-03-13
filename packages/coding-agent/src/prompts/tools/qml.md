@@ -1,7 +1,7 @@
 Launch Qt 6 QML desktop windows for rich domain-specific UI interactions.
 
 <actions>
-- `write`: Write a `.qml` file to disk (path + content). Use absolute paths under `/tmp/spell-qml/`. Returns confirmation.
+- `write`: Write a `.qml` file to disk (path + content). Use a path inside the current project, not `/tmp` — e.g. `.spell/skills/{skill}/foo.qml` or a project subfolder. Returns confirmation.
 - `launch`: Spawn a QML window from a file path. Optional: `title`, `width`, `height`, `props` (JSON object passed as `bridge.props` in QML). Events from the window are delivered automatically as follow-up turns — no manual listen loop required.
 - `send_message`: Send a JSON payload to a running window (`bridge.messageReceived` signal fires in QML).
 - `close`: Close a window by id.
