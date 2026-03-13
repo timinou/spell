@@ -48,19 +48,22 @@ header "Checking system dependencies"
 install_system_deps() {
   case "$OS" in
     arch)
-      ok "Installing base-devel git curl cmake via pacman (sudo required)"
-      sudo pacman -S --needed --noconfirm base-devel git curl cmake
+      ok "Installing base-devel git curl cmake emacs via pacman (sudo required)"
+      sudo pacman -S --needed --noconfirm base-devel git curl cmake emacs
       ;;
     ubuntu)
-      ok "Installing build-essential git curl cmake via apt (sudo required)"
+      ok "Installing build-essential git curl cmake emacs via apt (sudo required)"
       sudo apt-get update -qq
-      sudo apt-get install -y build-essential git curl cmake pkg-config libssl-dev
+      sudo apt-get install -y build-essential git curl cmake pkg-config libssl-dev emacs
       ;;
     macos)
       if ! xcode-select -p &>/dev/null; then
         die "Xcode Command Line Tools required. Run: xcode-select --install  then re-run this script."
       fi
       ok "Xcode CLT present"
+      # Emacs on macOS via Homebrew (installed later in the Qt step if brew is present)
+      # We install it explicitly here using brew if available, otherwise defer to the Qt step.
+      :  # handled in Qt section where brew is already set up
       ;;
   esac
 }
