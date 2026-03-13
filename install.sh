@@ -160,6 +160,12 @@ fi
 
 if ! $QT6_FOUND; then
   install_qt6
+  # Set CMAKE_PREFIX_PATH for freshly installed Qt on macOS
+  if [ "$OS" = "macos" ] && command -v brew &>/dev/null; then
+    QT_PREFIX="$(brew --prefix qt)"
+    export CMAKE_PREFIX_PATH="$QT_PREFIX:${CMAKE_PREFIX_PATH:-}"
+    export PATH="$QT_PREFIX/bin:$PATH"
+  fi
 else
   ok "Qt 6 already installed"
 fi
