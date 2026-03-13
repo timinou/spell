@@ -141,7 +141,10 @@ if (!isDev) cargoArgs.push("--release");
 if (crossTarget) cargoArgs.push("--target", crossTarget);
 
 console.log(`Building pi-natives for ${targetPlatform}-${targetArch}${variantSuffix}${isDev ? " (debug)" : ""}…`);
-const buildResult = await $`cargo +nightly ${cargoArgs}`.cwd(rustDir).nothrow();
+// RUSTUP_TOOLCHAIN is the env-var form of `+nightly`; works with both rustup-managed
+// and direct cargo installs, and takes priority over rust-toolchain.toml.
+if (!Bun.env.RUSTUP_TOOLCHAIN) Bun.env.RUSTUP_TOOLCHAIN = "nightly";
+const buildResult = await $`cargo ${cargoArgs}`.cwd(rustDir).nothrow();
 if (buildResult.exitCode !== 0) {
 	const stderr = buildResult.stderr?.toString("utf-8") ?? "";
 	throw new Error(`cargo build --release failed${stderr ? `:\n${stderr}` : ""}`);
