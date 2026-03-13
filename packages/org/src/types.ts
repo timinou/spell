@@ -197,8 +197,14 @@ export interface OrgUpdateParams {
 	/** Task ID (CUSTOM_ID) to update. */
 	id: string;
 	/** New TODO state. */
-	state: string;
-	/** Optional note appended to the item body. */
+	state?: string;
+	/** Replace the full body text. Pass empty string to clear. */
+	body?: string;
+	/** Append text to the body (logged below existing content). */
+	append?: string;
+	/** Update the item's title. */
+	title?: string;
+	/** Optional note appended on state change. */
 	note?: string;
 }
 

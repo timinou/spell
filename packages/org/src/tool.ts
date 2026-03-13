@@ -17,7 +17,15 @@ import { findCategory, findCategoryForId, resolveCategories } from "./categories
 import type { EmacsSession } from "./emacs/daemon";
 import { generateId } from "./id-generator";
 import { applyFilter, findItemById, readCategory } from "./org-reader";
-import { appendItemToFile, initCategoryDir, setPropertyInFile, updateItemStateInFile } from "./org-writer";
+import {
+	appendItemToFile,
+	appendToItemBodyInFile,
+	initCategoryDir,
+	setPropertyInFile,
+	updateItemBodyInFile,
+	updateItemStateInFile,
+	updateItemTitleInFile,
+} from "./org-writer";
 import { DEFAULT_ORG_CONFIG, EFFORT_REGEXP, PRIORITY_REGEXP, REQUIRED_PROPERTIES } from "./schema/defaults";
 import type {
 	CategoryMetrics,
@@ -194,20 +202,30 @@ async function cmdGet(ctx: OrgContext, args: { id: string }): Promise<unknown> {
 	return { item };
 }
 
-async function cmdUpdate(ctx: OrgContext, args: { id: string; state: string; note?: string }): Promise<unknown> {
+async function cmdUpdate(
+	ctx: OrgContext,
+	args: {
+		id: string;
+		state?: string;
+		note?: string;
+		body?: string;
+		append?: string;
+		title?: string;
+	},
+): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 
-	if (!ctx.config.todoKeywords.includes(args.state)) {
+	if (args.state && !ctx.config.todoKeywords.includes(args.state)) {
 		return { error: true, message: `Unknown state: "${args.state}". Valid: ${ctx.config.todoKeywords.join(", ")}` };
 	}
 
-	// Try Emacs for state machine enforcement
-	const session = await ctx.getEmacsSession();
-	if (session) {
-		// Emacs-backed update path not yet wired; falls through to TS path
+	// At least one mutation must be specified
+	if (!args.state && args.body === undefined && args.append === undefined && !args.title) {
+		return { error: true, message: "update requires at least one of: state, body, append, title" };
 	}
 
-	// TS-based path: scan category files to find the item
+	const results: string[] = [];
+
 	for (const cat of categories) {
 		let entries: string[];
 		try {
@@ -218,10 +236,38 @@ async function cmdUpdate(ctx: OrgContext, args: { id: string; state: string; not
 
 		for (const file of entries.filter(e => e.endsWith(".org"))) {
 			const filePath = path.join(cat.absPath, file);
-			const updated = await updateItemStateInFile(filePath, args.id, args.state, ctx.config.todoKeywords, args.note);
-			if (updated) {
-				logger.debug("org:update", { id: args.id, state: args.state });
-				return { success: true, id: args.id, state: args.state, file: filePath };
+
+			if (args.state) {
+				const updated = await updateItemStateInFile(
+					filePath,
+					args.id,
+					args.state,
+					ctx.config.todoKeywords,
+					args.note,
+				);
+				if (updated) results.push("state");
+			}
+
+			if (args.body !== undefined) {
+				// Empty string clears the body; non-empty replaces it
+				const updated = await updateItemBodyInFile(filePath, args.id, args.body || null, ctx.config.todoKeywords);
+				if (updated) results.push("body");
+			}
+
+			if (args.append !== undefined) {
+				const updated = await appendToItemBodyInFile(filePath, args.id, args.append, ctx.config.todoKeywords);
+				if (updated) results.push("append");
+			}
+
+			if (args.title) {
+				const updated = await updateItemTitleInFile(filePath, args.id, args.title, ctx.config.todoKeywords);
+				if (updated) results.push("title");
+			}
+
+			// If any mutation succeeded on this file we're done — item IDs are unique
+			if (results.length > 0) {
+				logger.debug("org:update", { id: args.id, updated: results });
+				return { success: true, id: args.id, updated: results, file: filePath };
 			}
 		}
 	}
@@ -249,6 +295,35 @@ async function cmdSet(ctx: OrgContext, args: { id: string; property: string; val
 		}
 	}
 
+	return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
+}
+
+/**
+ * Append a dated NOTE entry to an item's body without changing its state.
+ *
+ * Produces: `NOTE [YYYY-MM-DD]: {text}`
+ * This is sugar for `update { append: ... }` with a standard format.
+ */
+async function cmdNote(ctx: OrgContext, args: { id: string; note: string }): Promise<unknown> {
+	const categories = resolveCategories(ctx.config, ctx.projectRoot);
+	const dated = `NOTE [${new Date().toISOString().slice(0, 10)}]: ${args.note}`;
+
+	for (const cat of categories) {
+		let entries: string[];
+		try {
+			entries = await fs.readdir(cat.absPath);
+		} catch {
+			continue;
+		}
+		for (const file of entries.filter(e => e.endsWith(".org"))) {
+			const filePath = path.join(cat.absPath, file);
+			const updated = await appendToItemBodyInFile(filePath, args.id, dated, ctx.config.todoKeywords);
+			if (updated) {
+				logger.debug("org:note", { id: args.id });
+				return { success: true, id: args.id, note: dated, file: filePath };
+			}
+		}
+	}
 	return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
 }
 
@@ -464,15 +539,17 @@ export function createOrgTool(
   create      Create a new task item (ID auto-generated)
   query       List/filter items (state, category, priority, layer)
   get         Get single item by ID with full body
-  update      Change item TODO state
-  set         Set a property on an item
+  update      Change state, body, title, or append text (any combo in one call)
+  note        Append a dated NOTE entry to an item (no state change)
+  set         Set a single PROPERTIES drawer value
   validate    Validate items (requires Emacs for full AST validation)
   dashboard   Project metrics and in-progress/blocked summary
   wave        Next wave of ready items by priority (requires Emacs)
   graph       Dependency graph (requires Emacs)
   archive     Archive DONE items
 
-Task IDs are auto-generated: PREFIX-NNN-kebab-title (e.g. PROJ-042-auth-refactor)`,
+Task IDs are auto-generated: PREFIX-NNN-kebab-title (e.g. PROJ-042-auth-refactor)
+update accepts any combination of: state, body (full replace), append (add to end), title, note (dated note on state change)`,
 		parameters: {
 			type: "object",
 			properties: {
@@ -484,6 +561,7 @@ Task IDs are auto-generated: PREFIX-NNN-kebab-title (e.g. PROJ-042-auth-refactor
 						"query",
 						"get",
 						"update",
+						"note",
 						"set",
 						"validate",
 						"dashboard",
@@ -493,24 +571,25 @@ Task IDs are auto-generated: PREFIX-NNN-kebab-title (e.g. PROJ-042-auth-refactor
 					],
 					description: "Subcommand to execute",
 				},
-				// create params
-				title: { type: "string", description: "Item title (for create)" },
+				// create/update params
+				title: { type: "string", description: "Item title (create, or update to rename)" },
 				category: { type: "string", description: "Category name or prefix" },
-				state: { type: "string", description: "TODO state" },
-				properties: { type: "object", description: "Properties map" },
-				body: { type: "string", description: "Item body text" },
-				file: { type: "string", description: "Target file basename (optional)" },
+				state: { type: "string", description: "TODO state (create default, or update target)" },
+				properties: { type: "object", description: "Properties map (create)" },
+				body: { type: "string", description: "Body text — create: initial body; update: full replacement" },
+				append: { type: "string", description: "Text to append to the end of an item's body (update)" },
+				file: { type: "string", description: "Target file basename (create)" },
 				// query params
 				dir: { type: "string", description: "Org dir filter" },
 				priority: { type: "string", description: "Priority filter (#A/#B/#C)" },
 				layer: { type: "string", description: "Layer filter" },
 				agent: { type: "string", description: "Agent filter" },
 				includeBody: { type: "boolean", description: "Include body text in query results" },
-				// get/update/set params
+				// get/update/set/note params
 				id: { type: "string", description: "Task CUSTOM_ID" },
-				note: { type: "string", description: "Note to append on state change" },
-				property: { type: "string", description: "Property name (for set)" },
-				value: { type: "string", description: "Property value (for set)" },
+				note: { type: "string", description: "Dated note text (note cmd, or appended on state change)" },
+				property: { type: "string", description: "Property name (set)" },
+				value: { type: "string", description: "Property value (set)" },
 			},
 			required: ["command"],
 		},
@@ -555,10 +634,23 @@ Task IDs are auto-generated: PREFIX-NNN-kebab-title (e.g. PROJ-042-auth-refactor
 
 				case "update": {
 					const id = args.id as string | undefined;
-					const state = args.state as string | undefined;
 					if (!id) return { error: true, message: "update requires id" };
-					if (!state) return { error: true, message: "update requires state" };
-					return cmdUpdate(ctx, { id, state, note: args.note as string | undefined });
+					return cmdUpdate(ctx, {
+						id,
+						state: args.state as string | undefined,
+						note: args.note as string | undefined,
+						body: args.body as string | undefined,
+						append: args.append as string | undefined,
+						title: args.title as string | undefined,
+					});
+				}
+
+				case "note": {
+					const id = args.id as string | undefined;
+					const note = args.note as string | undefined;
+					if (!id) return { error: true, message: "note requires id" };
+					if (!note) return { error: true, message: "note requires note" };
+					return cmdNote(ctx, { id, note });
 				}
 
 				case "set": {

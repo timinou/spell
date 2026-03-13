@@ -7,7 +7,7 @@
  */
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { EmacsSession, OrgConfig, OrgSessionContext } from "@oh-my-pi/pi-org";
+import type { EmacsSession, OrgConfig, OrgSessionContext, OrgToolDefinition } from "@oh-my-pi/pi-org";
 import { createOrgTool, DEFAULT_ORG_CONFIG, detectEmacs, startEmacsSession } from "@oh-my-pi/pi-org";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
@@ -26,26 +26,27 @@ const ELISP_DIR = new URL("../../../org/elisp", import.meta.url).pathname;
 const orgSchema = Type.Object({
 	command: Type.String({
 		description:
-			"Subcommand: init | create | query | get | update | set | validate | dashboard | wave | graph | archive",
+			"Subcommand: init | create | query | get | update | note | set | validate | dashboard | wave | graph | archive",
 	}),
-	// create params
-	title: Type.Optional(Type.String({ description: "Item title (for create)" })),
+	// create/update params
+	title: Type.Optional(Type.String({ description: "Item title (create, or update to rename)" })),
 	category: Type.Optional(Type.String({ description: "Category name or prefix" })),
 	state: Type.Optional(Type.String({ description: "TODO state" })),
 	properties: Type.Optional(Type.Record(Type.String(), Type.String(), { description: "Properties map" })),
-	body: Type.Optional(Type.String({ description: "Item body text" })),
-	file: Type.Optional(Type.String({ description: "Target file basename (optional)" })),
+	body: Type.Optional(Type.String({ description: "Body text -- create: initial body; update: full replacement" })),
+	append: Type.Optional(Type.String({ description: "Text to append to item body (update)" })),
+	file: Type.Optional(Type.String({ description: "Target file basename (create)" })),
 	// query params
 	dir: Type.Optional(Type.String({ description: "Org dir filter" })),
 	priority: Type.Optional(Type.String({ description: "Priority filter (#A/#B/#C)" })),
 	layer: Type.Optional(Type.String({ description: "Layer filter" })),
 	agent: Type.Optional(Type.String({ description: "Agent filter" })),
 	includeBody: Type.Optional(Type.Boolean({ description: "Include body text in query results" })),
-	// get/update/set params
+	// get/update/set/note params
 	id: Type.Optional(Type.String({ description: "Task CUSTOM_ID" })),
-	note: Type.Optional(Type.String({ description: "Note to append on state change" })),
-	property: Type.Optional(Type.String({ description: "Property name (for set)" })),
-	value: Type.Optional(Type.String({ description: "Property value (for set)" })),
+	note: Type.Optional(Type.String({ description: "Dated note text (note cmd, or appended on state change)" })),
+	property: Type.Optional(Type.String({ description: "Property name (set)" })),
+	value: Type.Optional(Type.String({ description: "Property value (set)" })),
 });
 
 type OrgParams = Static<typeof orgSchema>;
@@ -61,7 +62,7 @@ export class OrgTool implements AgentTool<typeof orgSchema> {
 	readonly parameters = orgSchema;
 	readonly lenientArgValidation = true;
 
-	#inner: ReturnType<typeof createOrgTool>;
+	#inner: OrgToolDefinition;
 
 	constructor(session: ToolSession) {
 		const projectRoot = session.cwd ?? getProjectDir();
