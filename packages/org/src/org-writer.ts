@@ -17,7 +17,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { DEFAULT_TODO_KEYWORDS } from "./schema/defaults";
-import type { OrgCreateParams, OrgSessionContext } from "./types";
+import type { ItemMutation, OrgCreateParams, OrgSessionContext } from "./types";
 
 // =============================================================================
 // Serialization helpers
@@ -147,11 +147,261 @@ export async function appendItemToFile(
 }
 
 /**
+ * Apply multiple mutations to an item in a single read-write pass.
+ *
+ * Reads the file once, locates the item (file-level or heading-level),
+ * applies state → title → body/append mutations in order, writes once.
+ *
+ * Returns the list of fields actually changed, or `null` if the item
+ * was not found in this file.
+ */
+export async function applyItemMutations(
+	filePath: string,
+	customId: string,
+	mutations: ItemMutation,
+	todoKeywords: string[],
+): Promise<string[] | null> {
+	let content: string;
+	try {
+		content = await Bun.file(filePath).text();
+	} catch {
+		return null; // file does not exist — item not found
+	}
+	const lines = content.split("\n");
+
+	const ctx = locateItem(lines, customId);
+	if (!ctx) return null;
+
+	const applied: string[] = [];
+
+	// 1. State
+	if (mutations.state) {
+		const ok =
+			ctx.kind === "file"
+				? mutateFileLevelState(lines, ctx, mutations.state, mutations.note)
+				: mutateHeadingState(lines, ctx, mutations.state, todoKeywords, mutations.note);
+		if (ok) {
+			applied.push("state");
+			if (mutations.note) applied.push("note");
+		}
+	}
+
+	// 2. Title
+	if (mutations.title) {
+		const ok =
+			ctx.kind === "file"
+				? mutateFileLevelTitle(lines, ctx, mutations.title)
+				: mutateHeadingTitle(lines, ctx, mutations.title, todoKeywords);
+		if (ok) applied.push("title");
+	}
+
+	// 3. Body replace and/or append
+	//    Body replace runs first. If both body and append are set,
+	//    append applies on top of the replaced body (fresh range lookup).
+	if (mutations.body !== undefined) {
+		const ok =
+			ctx.kind === "file"
+				? spliceFileLevelBody(lines, ctx, mutations.body)
+				: spliceHeadingBody(lines, ctx, mutations.body);
+		if (ok) applied.push("body");
+	}
+
+	if (mutations.append !== undefined) {
+		// Re-locate the body range — earlier mutations (state note, body replace)
+		// may have shifted line indices via splice.
+		const freshCtx = locateItem(lines, customId);
+		if (freshCtx) {
+			const range =
+				freshCtx.kind === "file"
+					? { start: freshCtx.bodyStart, end: lines.length }
+					: { start: freshCtx.bodyStart, end: freshCtx.bodyEnd };
+			const existing = lines.slice(range.start, range.end).join("\n").trimEnd();
+			const combined = existing ? `${existing}\n\n${mutations.append.trimEnd()}` : mutations.append.trimEnd();
+			const ok =
+				freshCtx.kind === "file"
+					? spliceFileLevelBody(lines, freshCtx, combined)
+					: spliceHeadingBody(lines, freshCtx, combined);
+			if (ok) applied.push("append");
+		}
+	}
+
+	if (applied.length === 0) return applied;
+
+	await Bun.write(filePath, lines.join("\n"));
+	return applied;
+}
+
+// =============================================================================
+// Item location — single-pass parsers
+// =============================================================================
+
+/** Parsed frontmatter context for a file-level item. */
+interface FileLevelContext {
+	kind: "file";
+	stateLineIdx: number; // -1 if no #+STATE: line
+	titleLineIdx: number; // -1 if no #+TITLE: line
+	lastFrontmatterIdx: number;
+	bodyStart: number; // first line after frontmatter
+}
+
+/** Parsed context for a heading-level item. */
+interface HeadingContext {
+	kind: "heading";
+	headingLineIdx: number;
+	drawerEnd: number; // line index of :END:
+	bodyStart: number; // first line after :END:
+	bodyEnd: number; // exclusive — next heading or EOF
+}
+
+type ItemContext = FileLevelContext | HeadingContext;
+
+/**
+ * Locate an item by CUSTOM_ID in a parsed line array.
+ *
+ * Tries file-level first (frontmatter `#+CUSTOM_ID:`), then heading-level
+ * (`:CUSTOM_ID:` in a PROPERTIES drawer). Returns a context struct with
+ * pre-computed line indices for all mutation operations, or `null` if not found.
+ */
+function locateItem(lines: string[], customId: string): ItemContext | null {
+	// 1. Try file-level: scan #+KEY: frontmatter block
+	let foundInFrontmatter = false;
+	let stateLineIdx = -1;
+	let titleLineIdx = -1;
+	let lastFrontmatterIdx = -1;
+	let i = 0;
+	while (i < lines.length && lines[i].startsWith("#+")) {
+		const line = lines[i];
+		if (line.startsWith("#+CUSTOM_ID:") && line.slice("#+CUSTOM_ID:".length).trim() === customId) {
+			foundInFrontmatter = true;
+		}
+		if (line.startsWith("#+STATE:")) stateLineIdx = i;
+		if (line.startsWith("#+TITLE:")) titleLineIdx = i;
+		lastFrontmatterIdx = i;
+		i++;
+	}
+	if (foundInFrontmatter) {
+		return { kind: "file", stateLineIdx, titleLineIdx, lastFrontmatterIdx, bodyStart: i };
+	}
+
+	// 2. Try heading-level: find :CUSTOM_ID: in a PROPERTIES drawer
+	const needle = `:CUSTOM_ID: ${customId}`;
+	for (let idx = 0; idx < lines.length; idx++) {
+		if (lines[idx].trim() !== needle) continue;
+
+		// Walk backwards to find the heading line
+		let headingLineIdx = -1;
+		for (let j = idx - 1; j >= 0; j--) {
+			if (lines[j].startsWith("*")) {
+				headingLineIdx = j;
+				break;
+			}
+		}
+		if (headingLineIdx === -1) continue;
+
+		// Walk forward to find :END:
+		let drawerEnd = -1;
+		for (let j = idx + 1; j < lines.length; j++) {
+			if (lines[j].trim() === ":END:") {
+				drawerEnd = j;
+				break;
+			}
+		}
+		if (drawerEnd === -1) continue; // malformed drawer, skip
+
+		// Body runs from after :END: to the next heading or EOF
+		const bodyStart = drawerEnd + 1;
+		let bodyEnd = lines.length;
+		for (let k = bodyStart; k < lines.length; k++) {
+			if (lines[k].startsWith("*")) {
+				bodyEnd = k;
+				break;
+			}
+		}
+
+		return { kind: "heading", headingLineIdx, drawerEnd, bodyStart, bodyEnd };
+	}
+
+	return null;
+}
+
+// =============================================================================
+// Mutation helpers — operate on pre-located contexts, mutate lines in place
+// =============================================================================
+
+function mutateFileLevelState(lines: string[], ctx: FileLevelContext, newState: string, note?: string): boolean {
+	if (ctx.stateLineIdx === -1) return false;
+	lines[ctx.stateLineIdx] = `#+STATE: ${newState}`;
+	if (note) {
+		const insertIdx = ctx.lastFrontmatterIdx + 1;
+		lines.splice(insertIdx, 0, "", `NOTE [${new Date().toISOString().slice(0, 10)}]: ${note}`);
+	}
+	return true;
+}
+
+function mutateHeadingState(
+	lines: string[],
+	ctx: HeadingContext,
+	newState: string,
+	todoKeywords: string[],
+	note?: string,
+): boolean {
+	const headingLine = lines[ctx.headingLineIdx];
+	const keywordsPattern = todoKeywords.join("|");
+	const replaced = headingLine.replace(new RegExp(`^(\\*+)\\s+(${keywordsPattern})\\s+`), `$1 ${newState} `);
+	if (replaced === headingLine) return false;
+	lines[ctx.headingLineIdx] = replaced;
+	if (note) {
+		lines.splice(ctx.drawerEnd + 1, 0, "", `  NOTE [${new Date().toISOString().slice(0, 10)}]: ${note}`);
+	}
+	return true;
+}
+
+function mutateFileLevelTitle(lines: string[], ctx: FileLevelContext, newTitle: string): boolean {
+	if (ctx.titleLineIdx === -1) return false;
+	lines[ctx.titleLineIdx] = `#+TITLE: ${newTitle}`;
+	return true;
+}
+
+function mutateHeadingTitle(lines: string[], ctx: HeadingContext, newTitle: string, todoKeywords: string[]): boolean {
+	const line = lines[ctx.headingLineIdx];
+	const match = /^(\*+)\s+(.+)$/.exec(line);
+	if (!match) return false;
+	const stars = match[1];
+	const rest = match[2].trim();
+	const spaceIdx = rest.indexOf(" ");
+	const keyword = spaceIdx !== -1 ? rest.slice(0, spaceIdx) : "";
+	if (todoKeywords.includes(keyword)) {
+		lines[ctx.headingLineIdx] = `${stars} ${keyword} ${newTitle}`;
+	} else {
+		lines[ctx.headingLineIdx] = `${stars} ${newTitle}`;
+	}
+	return true;
+}
+
+function spliceFileLevelBody(lines: string[], ctx: FileLevelContext, newBody: string | null): boolean {
+	// Skip leading blank lines between frontmatter and body content
+	let bodyStart = ctx.bodyStart;
+	const bodyEnd = lines.length;
+	while (bodyStart < bodyEnd && lines[bodyStart].trim() === "") bodyStart++;
+
+	const replacement = newBody ? newBody.trimEnd().split("\n") : [];
+	replacement.push(""); // trailing blank line for clean formatting
+	lines.splice(bodyStart, bodyEnd - bodyStart, ...replacement);
+	return true;
+}
+
+function spliceHeadingBody(lines: string[], ctx: HeadingContext, newBody: string | null): boolean {
+	const replacement: string[] = newBody ? ["", ...newBody.trimEnd().split("\n"), ""] : [""];
+	lines.splice(ctx.bodyStart, ctx.bodyEnd - ctx.bodyStart, ...replacement);
+	return true;
+}
+
+// =============================================================================
+// Public thin wrappers — single-mutation convenience functions
+// =============================================================================
+
+/**
  * Update the state of an item identified by CUSTOM_ID in a file.
- *
- * Handles both file-level items (`#+STATE:` / `#+CUSTOM_ID:`) and
- * heading-level items (`* STATE title` with `:PROPERTIES:` drawer).
- *
  * Returns true if the item was found and updated, false otherwise.
  */
 export async function updateItemStateInFile(
@@ -161,97 +411,55 @@ export async function updateItemStateInFile(
 	todoKeywords: string[],
 	note?: string,
 ): Promise<boolean> {
-	const content = await Bun.file(filePath).text();
-	const lines = content.split("\n");
-
-	// Try file-level item first: #+CUSTOM_ID: matches AND #+STATE: exists
-	if (tryUpdateFileLevelState(lines, customId, newState, note)) {
-		await Bun.write(filePath, lines.join("\n"));
-		return true;
-	}
-
-	// Fall back to heading-level item
-	if (tryUpdateHeadingLevelState(lines, customId, newState, todoKeywords, note)) {
-		await Bun.write(filePath, lines.join("\n"));
-		return true;
-	}
-
-	return false;
+	const result = await applyItemMutations(filePath, customId, { state: newState, note }, todoKeywords);
+	return result !== null && result.length > 0;
 }
 
-function tryUpdateFileLevelState(lines: string[], customId: string, newState: string, note?: string): boolean {
-	let hasCustomId = false;
-	let stateLineIdx = -1;
-	let lastFrontmatterIdx = -1;
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		if (!line.startsWith("#+")) break;
-
-		if (line.startsWith("#+CUSTOM_ID:") && line.slice("#+CUSTOM_ID:".length).trim() === customId) {
-			hasCustomId = true;
-		}
-		if (line.startsWith("#+STATE:")) {
-			stateLineIdx = i;
-		}
-		lastFrontmatterIdx = i;
-	}
-
-	if (!hasCustomId || stateLineIdx === -1) return false;
-
-	lines[stateLineIdx] = `#+STATE: ${newState}`;
-
-	if (note) {
-		const insertIdx = lastFrontmatterIdx + 1;
-		lines.splice(insertIdx, 0, "", `NOTE [${new Date().toISOString().slice(0, 10)}]: ${note}`);
-	}
-
-	return true;
-}
-
-function tryUpdateHeadingLevelState(
-	lines: string[],
+/**
+ * Replace the body text of an item identified by CUSTOM_ID.
+ * Pass `null` to clear the body. Returns true if found and updated.
+ */
+export async function updateItemBodyInFile(
+	filePath: string,
 	customId: string,
-	newState: string,
+	newBody: string | null,
 	todoKeywords: string[],
-	note?: string,
-): boolean {
-	// Find the PROPERTIES drawer that contains our CUSTOM_ID
-	let headingLineIdx = -1;
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		if (line.trim() === `:CUSTOM_ID: ${customId}`) {
-			// Walk backwards to find the heading line
-			for (let j = i - 1; j >= 0; j--) {
-				if (lines[j].startsWith("*")) {
-					headingLineIdx = j;
-					break;
-				}
-			}
-			break;
-		}
-	}
-
-	if (headingLineIdx === -1) return false;
-
-	const headingLine = lines[headingLineIdx];
-	const keywordsPattern = todoKeywords.join("|");
-	const replaced = headingLine.replace(new RegExp(`^(\\*+)\\s+(${keywordsPattern})\\s+`), `$1 ${newState} `);
-
-	if (replaced === headingLine) return false;
-
-	lines[headingLineIdx] = replaced;
-
-	if (note) {
-		let endIdx = headingLineIdx + 1;
-		while (endIdx < lines.length && lines[endIdx].trim() !== ":END:") {
-			endIdx++;
-		}
-		lines.splice(endIdx + 1, 0, ``, `  NOTE [${new Date().toISOString().slice(0, 10)}]: ${note}`);
-	}
-
-	return true;
+): Promise<boolean> {
+	const result = await applyItemMutations(filePath, customId, { body: newBody }, todoKeywords);
+	return result !== null && result.length > 0;
 }
+
+/**
+ * Append text to the end of an item's body.
+ * Returns true if the item was found, false otherwise.
+ */
+export async function appendToItemBodyInFile(
+	filePath: string,
+	customId: string,
+	text: string,
+	todoKeywords: string[],
+): Promise<boolean> {
+	const result = await applyItemMutations(filePath, customId, { append: text }, todoKeywords);
+	return result !== null && result.length > 0;
+}
+
+/**
+ * Update the title of an item identified by CUSTOM_ID.
+ * Returns true if found and updated, false otherwise.
+ */
+export async function updateItemTitleInFile(
+	filePath: string,
+	customId: string,
+	newTitle: string,
+	todoKeywords: string[],
+): Promise<boolean> {
+	const result = await applyItemMutations(filePath, customId, { title: newTitle }, todoKeywords);
+	return result !== null && result.length > 0;
+}
+
+// =============================================================================
+// Property mutation (separate from applyItemMutations — different domain)
+// =============================================================================
 
 /**
  * Set or update a property on an item identified by CUSTOM_ID.
@@ -267,90 +475,83 @@ export async function setPropertyInFile(
 	property: string,
 	value: string,
 ): Promise<boolean> {
-	const content = await Bun.file(filePath).text();
+	let content: string;
+	try {
+		content = await Bun.file(filePath).text();
+	} catch {
+		return false;
+	}
 	const lines = content.split("\n");
+	const ctx = locateItem(lines, customId);
+	if (!ctx) return false;
 
-	// Try file-level item first
-	if (trySetFileLevelProperty(lines, customId, property, value)) {
-		await Bun.write(filePath, lines.join("\n"));
-		return true;
-	}
+	const ok =
+		ctx.kind === "file"
+			? setFileLevelProperty(lines, ctx, property, value)
+			: setHeadingProperty(lines, ctx, customId, property, value);
+	if (!ok) return false;
 
-	// Fall back to heading-level item
-	if (trySetHeadingLevelProperty(lines, customId, property, value)) {
-		await Bun.write(filePath, lines.join("\n"));
-		return true;
-	}
-
-	return false;
+	await Bun.write(filePath, lines.join("\n"));
+	return true;
 }
 
-function trySetFileLevelProperty(lines: string[], customId: string, property: string, value: string): boolean {
-	let hasCustomId = false;
-	let lastFrontmatterIdx = -1;
-	let existingPropIdx = -1;
+function setFileLevelProperty(lines: string[], ctx: FileLevelContext, property: string, value: string): boolean {
 	const prefix = `#+${property}:`;
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		if (!line.startsWith("#+")) break;
-
-		if (line.startsWith("#+CUSTOM_ID:") && line.slice("#+CUSTOM_ID:".length).trim() === customId) {
-			hasCustomId = true;
-		}
-		if (line.startsWith(prefix)) {
+	let existingPropIdx = -1;
+	for (let i = 0; i <= ctx.lastFrontmatterIdx; i++) {
+		if (lines[i].startsWith(prefix)) {
 			existingPropIdx = i;
 		}
-		lastFrontmatterIdx = i;
 	}
-
-	if (!hasCustomId) return false;
 
 	const propLine = `#+${property}: ${value}`;
 	if (existingPropIdx !== -1) {
 		lines[existingPropIdx] = propLine;
 	} else {
-		// Insert after the last frontmatter line
-		lines.splice(lastFrontmatterIdx + 1, 0, propLine);
+		lines.splice(ctx.lastFrontmatterIdx + 1, 0, propLine);
 	}
-
 	return true;
 }
 
-function trySetHeadingLevelProperty(lines: string[], customId: string, property: string, value: string): boolean {
+function setHeadingProperty(
+	lines: string[],
+	_ctx: HeadingContext,
+	customId: string,
+	property: string,
+	value: string,
+): boolean {
+	// Re-locate the drawer boundaries for property insertion
+	const needle = `:CUSTOM_ID: ${customId}`;
 	let drawerStart = -1;
 	let drawerEnd = -1;
 
 	for (let i = 0; i < lines.length; i++) {
-		if (lines[i].trim() === `:CUSTOM_ID: ${customId}`) {
-			for (let j = i - 1; j >= 0; j--) {
-				if (lines[j].trim() === ":PROPERTIES:") {
-					drawerStart = j;
-					break;
-				}
-				if (lines[j].startsWith("*")) break;
+		if (lines[i].trim() !== needle) continue;
+		for (let j = i - 1; j >= 0; j--) {
+			if (lines[j].trim() === ":PROPERTIES:") {
+				drawerStart = j;
+				break;
 			}
-			for (let j = i + 1; j < lines.length; j++) {
-				if (lines[j].trim() === ":END:") {
-					drawerEnd = j;
-					break;
-				}
-			}
-			break;
+			if (lines[j].startsWith("*")) break;
 		}
+		for (let j = i + 1; j < lines.length; j++) {
+			if (lines[j].trim() === ":END:") {
+				drawerEnd = j;
+				break;
+			}
+		}
+		break;
 	}
 
 	if (drawerStart === -1 || drawerEnd === -1) return false;
 
 	const propLine = `:${property}: ${value}`;
 	const existingIdx = lines.slice(drawerStart, drawerEnd).findIndex(l => l.trimStart().startsWith(`:${property}:`));
-
 	if (existingIdx !== -1) {
 		lines[drawerStart + existingIdx] = propLine;
 	} else {
 		lines.splice(drawerEnd, 0, propLine);
 	}
-
 	return true;
 }
 
@@ -442,239 +643,4 @@ Headings with TODO keywords are actionable sub-tasks.
 - RESEARCH_REF: Link to research or spike
 - AGENT: Override default agent for this item
 `;
-}
-
-// =============================================================================
-// Body / title mutation helpers
-// =============================================================================
-
-/**
- * Replace the body text of an item identified by CUSTOM_ID.
- *
- * Handles both file-level items (body = everything after frontmatter) and
- * heading-level items (body = lines between :END: and the next heading).
- *
- * Pass `null` to clear the body entirely.
- * Returns true if the item was found and updated, false otherwise.
- */
-export async function updateItemBodyInFile(
-	filePath: string,
-	customId: string,
-	newBody: string | null,
-	todoKeywords: string[],
-): Promise<boolean> {
-	const content = await Bun.file(filePath).text();
-	const lines = content.split("\n");
-
-	if (tryMutateFileLevelBody(lines, customId, newBody)) {
-		await Bun.write(filePath, lines.join("\n"));
-		return true;
-	}
-
-	if (tryMutateHeadingBody(lines, customId, newBody, todoKeywords)) {
-		await Bun.write(filePath, lines.join("\n"));
-		return true;
-	}
-
-	return false;
-}
-
-/**
- * Append text to the end of an item's body.
- *
- * Handles both file-level and heading-level items.
- * Returns true if the item was found, false otherwise.
- */
-export async function appendToItemBodyInFile(
-	filePath: string,
-	customId: string,
-	text: string,
-	todoKeywords: string[],
-): Promise<boolean> {
-	const content = await Bun.file(filePath).text();
-	const lines = content.split("\n");
-
-	// Read existing body and append
-	const bodyRange = findFileLevelBodyRange(lines, customId);
-	if (bodyRange !== null) {
-		const existing = lines.slice(bodyRange.start, bodyRange.end).join("\n").trimEnd();
-		const combined = existing ? `${existing}\n\n${text.trimEnd()}` : text.trimEnd();
-		if (tryMutateFileLevelBody(lines, customId, combined)) {
-			await Bun.write(filePath, lines.join("\n"));
-			return true;
-		}
-	}
-
-	const hRange = findHeadingBodyRange(lines, customId);
-	if (hRange !== null) {
-		const existing = lines.slice(hRange.start, hRange.end).join("\n").trimEnd();
-		const combined = existing ? `${existing}\n\n${text.trimEnd()}` : text.trimEnd();
-		if (tryMutateHeadingBody(lines, customId, combined, todoKeywords)) {
-			await Bun.write(filePath, lines.join("\n"));
-			return true;
-		}
-	}
-
-	return false;
-}
-
-/**
- * Update the title of an item identified by CUSTOM_ID.
- *
- * - File-level item: rewrites the `#+TITLE:` line.
- * - Heading-level item: rewrites the `* STATE title` line.
- *
- * Returns true if found and updated, false otherwise.
- */
-export async function updateItemTitleInFile(
-	filePath: string,
-	customId: string,
-	newTitle: string,
-	todoKeywords: string[],
-): Promise<boolean> {
-	const content = await Bun.file(filePath).text();
-	const lines = content.split("\n");
-
-	if (tryUpdateFileLevelTitle(lines, customId, newTitle)) {
-		await Bun.write(filePath, lines.join("\n"));
-		return true;
-	}
-
-	if (tryUpdateHeadingTitle(lines, customId, newTitle, todoKeywords)) {
-		await Bun.write(filePath, lines.join("\n"));
-		return true;
-	}
-
-	return false;
-}
-
-// =============================================================================
-// Internal mutation helpers
-// =============================================================================
-
-interface BodyRange {
-	/** Inclusive start index into lines[]. */
-	start: number;
-	/** Exclusive end index into lines[]. */
-	end: number;
-}
-
-/**
- * Locate the body range of a file-level item.
- * Returns null if this file does not contain the given CUSTOM_ID as a file-level item.
- */
-function findFileLevelBodyRange(lines: string[], customId: string): BodyRange | null {
-	let hasCustomId = false;
-	let i = 0;
-	while (i < lines.length && lines[i].startsWith("#+")) {
-		if (lines[i].startsWith("#+CUSTOM_ID:") && lines[i].slice("#+CUSTOM_ID:".length).trim() === customId) {
-			hasCustomId = true;
-		}
-		i++;
-	}
-	if (!hasCustomId) return null;
-	// Skip blank lines between frontmatter and body
-	const bodyStart = i;
-	return { start: bodyStart, end: lines.length };
-}
-
-/**
- * Locate the body range of a heading-level item.
- * Body = lines from after :END: up to (not including) the next heading.
- * Returns null if the CUSTOM_ID is not found in a heading's properties drawer.
- */
-function findHeadingBodyRange(lines: string[], customId: string): BodyRange | null {
-	for (let i = 0; i < lines.length; i++) {
-		if (lines[i].trim() === `:CUSTOM_ID: ${customId}`) {
-			// Find :END: of the drawer
-			for (let j = i + 1; j < lines.length; j++) {
-				if (lines[j].trim() === ":END:") {
-					const bodyStart = j + 1;
-					let bodyEnd = lines.length;
-					for (let k = bodyStart; k < lines.length; k++) {
-						if (lines[k].startsWith("*")) {
-							bodyEnd = k;
-							break;
-						}
-					}
-					return { start: bodyStart, end: bodyEnd };
-				}
-			}
-			return null; // malformed: no :END:
-		}
-	}
-	return null;
-}
-
-function tryMutateFileLevelBody(lines: string[], customId: string, newBody: string | null): boolean {
-	const range = findFileLevelBodyRange(lines, customId);
-	if (!range) return false;
-
-	// Body starts after any blank lines following the frontmatter
-	let bodyStart = range.start;
-	while (bodyStart < range.end && lines[bodyStart].trim() === "") bodyStart++;
-
-	const replacement = newBody ? newBody.trimEnd().split("\n") : [];
-	// Always leave one trailing blank line for clean formatting
-	replacement.push("");
-	lines.splice(bodyStart, range.end - bodyStart, ...replacement);
-	return true;
-}
-
-function tryMutateHeadingBody(
-	lines: string[],
-	customId: string,
-	newBody: string | null,
-	_todoKeywords: string[],
-): boolean {
-	const range = findHeadingBodyRange(lines, customId);
-	if (!range) return false;
-
-	const replacement: string[] = newBody ? ["", ...newBody.trimEnd().split("\n"), ""] : [""];
-	lines.splice(range.start, range.end - range.start, ...replacement);
-	return true;
-}
-
-function tryUpdateFileLevelTitle(lines: string[], customId: string, newTitle: string): boolean {
-	let hasCustomId = false;
-	let titleLineIdx = -1;
-
-	for (let i = 0; i < lines.length; i++) {
-		if (!lines[i].startsWith("#+")) break;
-		if (lines[i].startsWith("#+CUSTOM_ID:") && lines[i].slice("#+CUSTOM_ID:".length).trim() === customId) {
-			hasCustomId = true;
-		}
-		if (lines[i].startsWith("#+TITLE:")) {
-			titleLineIdx = i;
-		}
-	}
-
-	if (!hasCustomId || titleLineIdx === -1) return false;
-	lines[titleLineIdx] = `#+TITLE: ${newTitle}`;
-	return true;
-}
-
-function tryUpdateHeadingTitle(lines: string[], customId: string, newTitle: string, todoKeywords: string[]): boolean {
-	for (let i = 0; i < lines.length; i++) {
-		if (lines[i].trim() !== `:CUSTOM_ID: ${customId}`) continue;
-		// Walk backwards to find the heading
-		for (let j = i - 1; j >= 0; j--) {
-			if (!lines[j].startsWith("*")) continue;
-			const match = /^(\*+)\s+(.+)$/.exec(lines[j]);
-			if (!match) return false;
-			const stars = match[1];
-			const rest = match[2].trim();
-			const spaceIdx = rest.indexOf(" ");
-			const keyword = spaceIdx !== -1 ? rest.slice(0, spaceIdx) : "";
-			if (todoKeywords.includes(keyword)) {
-				lines[j] = `${stars} ${keyword} ${newTitle}`;
-			} else {
-				// No TODO keyword — bare heading
-				lines[j] = `${stars} ${newTitle}`;
-			}
-			return true;
-		}
-		return false;
-	}
-	return false;
 }

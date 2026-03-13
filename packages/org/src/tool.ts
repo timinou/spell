@@ -17,15 +17,7 @@ import { findCategory, findCategoryForId, resolveCategories } from "./categories
 import type { EmacsSession } from "./emacs/daemon";
 import { generateId } from "./id-generator";
 import { applyFilter, findItemById, readCategory } from "./org-reader";
-import {
-	appendItemToFile,
-	appendToItemBodyInFile,
-	initCategoryDir,
-	setPropertyInFile,
-	updateItemBodyInFile,
-	updateItemStateInFile,
-	updateItemTitleInFile,
-} from "./org-writer";
+import { appendItemToFile, applyItemMutations, initCategoryDir, setPropertyInFile } from "./org-writer";
 import { DEFAULT_ORG_CONFIG, EFFORT_REGEXP, PRIORITY_REGEXP, REQUIRED_PROPERTIES } from "./schema/defaults";
 import type {
 	CategoryMetrics,
@@ -54,6 +46,32 @@ interface OrgContext {
 // =============================================================================
 // Command implementations
 // =============================================================================
+
+/** Fetch a single item by ID for includeBody echo responses. */
+async function fetchItem(ctx: OrgContext, id: string): Promise<OrgItem | undefined> {
+	const categories = resolveCategories(ctx.config, ctx.projectRoot);
+	return findItemById(
+		categories.map(c => ({ absPath: c.absPath, name: c.name, dir: c.dirName })),
+		id,
+		ctx.config.todoKeywords,
+	);
+}
+
+/** Build a standard mutation response, optionally including the full item. */
+async function buildMutationResponse(
+	id: string,
+	updated: string[],
+	file: string,
+	includeBody: boolean | undefined,
+	ctx: OrgContext,
+	extra?: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+	const response: Record<string, unknown> = { success: true, id, updated, file, ...extra };
+	if (includeBody) {
+		response.item = await fetchItem(ctx, id);
+	}
+	return response;
+}
 
 async function cmdInit(ctx: OrgContext, args: { category?: string }): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
@@ -84,7 +102,7 @@ async function cmdCreate(
 	ctx: OrgContext,
 	args: {
 		title: string;
-		category: string;
+		category?: string;
 		state?: string;
 		properties?: Record<string, string>;
 		body?: string;
@@ -92,12 +110,16 @@ async function cmdCreate(
 	},
 ): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
-	const cat = findCategory(categories, args.category);
+	const catName = args.category ?? categories[0]?.name;
+	if (!catName) {
+		return { error: true, message: "No categories configured" };
+	}
+	const cat = findCategory(categories, catName);
 
 	if (!cat) {
 		return {
 			error: true,
-			message: `Category not found: "${args.category}". Known: ${categories.map(c => c.name).join(", ")}`,
+			message: `Category not found: "${catName}". Known: ${categories.map(c => c.name).join(", ")}`,
 		};
 	}
 
@@ -119,7 +141,7 @@ async function cmdCreate(
 
 	const params: OrgCreateParams & { id: string } = {
 		title: args.title,
-		category: args.category,
+		category: catName,
 		state,
 		id,
 		properties: args.properties,
@@ -211,6 +233,8 @@ async function cmdUpdate(
 		body?: string;
 		append?: string;
 		title?: string;
+		file?: string;
+		includeBody?: boolean;
 	},
 ): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
@@ -224,8 +248,24 @@ async function cmdUpdate(
 		return { error: true, message: "update requires at least one of: state, body, append, title" };
 	}
 
-	const results: string[] = [];
+	const mutations = {
+		state: args.state,
+		title: args.title,
+		body: args.body,
+		append: args.append,
+		note: args.note,
+	};
 
+	// If file hint is provided, try it first
+	if (args.file) {
+		const result = await applyItemMutations(args.file, args.id, mutations, ctx.config.todoKeywords);
+		if (result !== null) {
+			logger.debug("org:update", { id: args.id, updated: result });
+			return buildMutationResponse(args.id, result, args.file, args.includeBody, ctx);
+		}
+	}
+
+	// Scan all categories
 	for (const cat of categories) {
 		let entries: string[];
 		try {
@@ -236,38 +276,10 @@ async function cmdUpdate(
 
 		for (const file of entries.filter(e => e.endsWith(".org"))) {
 			const filePath = path.join(cat.absPath, file);
-
-			if (args.state) {
-				const updated = await updateItemStateInFile(
-					filePath,
-					args.id,
-					args.state,
-					ctx.config.todoKeywords,
-					args.note,
-				);
-				if (updated) results.push("state");
-			}
-
-			if (args.body !== undefined) {
-				// Empty string clears the body; non-empty replaces it
-				const updated = await updateItemBodyInFile(filePath, args.id, args.body || null, ctx.config.todoKeywords);
-				if (updated) results.push("body");
-			}
-
-			if (args.append !== undefined) {
-				const updated = await appendToItemBodyInFile(filePath, args.id, args.append, ctx.config.todoKeywords);
-				if (updated) results.push("append");
-			}
-
-			if (args.title) {
-				const updated = await updateItemTitleInFile(filePath, args.id, args.title, ctx.config.todoKeywords);
-				if (updated) results.push("title");
-			}
-
-			// If any mutation succeeded on this file we're done — item IDs are unique
-			if (results.length > 0) {
-				logger.debug("org:update", { id: args.id, updated: results });
-				return { success: true, id: args.id, updated: results, file: filePath };
+			const result = await applyItemMutations(filePath, args.id, mutations, ctx.config.todoKeywords);
+			if (result !== null && result.length > 0) {
+				logger.debug("org:update", { id: args.id, updated: result });
+				return buildMutationResponse(args.id, result, filePath, args.includeBody, ctx);
 			}
 		}
 	}
@@ -275,8 +287,29 @@ async function cmdUpdate(
 	return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
 }
 
-async function cmdSet(ctx: OrgContext, args: { id: string; property: string; value: string }): Promise<unknown> {
+async function cmdSet(
+	ctx: OrgContext,
+	args: { id: string; property: string; value: string; file?: string; includeBody?: boolean },
+): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
+
+	// If file hint is provided, try it first
+	if (args.file) {
+		const updated = await setPropertyInFile(args.file, args.id, args.property, args.value);
+		if (updated) {
+			const response: Record<string, unknown> = {
+				success: true,
+				id: args.id,
+				property: args.property,
+				value: args.value,
+				file: args.file,
+			};
+			if (args.includeBody) {
+				response.item = await fetchItem(ctx, args.id);
+			}
+			return response;
+		}
+	}
 
 	for (const cat of categories) {
 		let entries: string[];
@@ -290,7 +323,17 @@ async function cmdSet(ctx: OrgContext, args: { id: string; property: string; val
 			const filePath = path.join(cat.absPath, file);
 			const updated = await setPropertyInFile(filePath, args.id, args.property, args.value);
 			if (updated) {
-				return { success: true, id: args.id, property: args.property, value: args.value };
+				const response: Record<string, unknown> = {
+					success: true,
+					id: args.id,
+					property: args.property,
+					value: args.value,
+					file: filePath,
+				};
+				if (args.includeBody) {
+					response.item = await fetchItem(ctx, args.id);
+				}
+				return response;
 			}
 		}
 	}
@@ -304,9 +347,21 @@ async function cmdSet(ctx: OrgContext, args: { id: string; property: string; val
  * Produces: `NOTE [YYYY-MM-DD]: {text}`
  * This is sugar for `update { append: ... }` with a standard format.
  */
-async function cmdNote(ctx: OrgContext, args: { id: string; note: string }): Promise<unknown> {
+async function cmdNote(
+	ctx: OrgContext,
+	args: { id: string; note: string; file?: string; includeBody?: boolean },
+): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 	const dated = `NOTE [${new Date().toISOString().slice(0, 10)}]: ${args.note}`;
+
+	// If file hint is provided, try it first
+	if (args.file) {
+		const result = await applyItemMutations(args.file, args.id, { append: dated }, ctx.config.todoKeywords);
+		if (result !== null && result.length > 0) {
+			logger.debug("org:note", { id: args.id });
+			return buildMutationResponse(args.id, ["note"], args.file, args.includeBody, ctx, { note: dated });
+		}
+	}
 
 	for (const cat of categories) {
 		let entries: string[];
@@ -317,10 +372,10 @@ async function cmdNote(ctx: OrgContext, args: { id: string; note: string }): Pro
 		}
 		for (const file of entries.filter(e => e.endsWith(".org"))) {
 			const filePath = path.join(cat.absPath, file);
-			const updated = await appendToItemBodyInFile(filePath, args.id, dated, ctx.config.todoKeywords);
-			if (updated) {
+			const result = await applyItemMutations(filePath, args.id, { append: dated }, ctx.config.todoKeywords);
+			if (result !== null && result.length > 0) {
 				logger.debug("org:note", { id: args.id });
-				return { success: true, id: args.id, note: dated, file: filePath };
+				return buildMutationResponse(args.id, ["note"], filePath, args.includeBody, ctx, { note: dated });
 			}
 		}
 	}
@@ -573,18 +628,24 @@ update accepts any combination of: state, body (full replace), append (add to en
 				},
 				// create/update params
 				title: { type: "string", description: "Item title (create, or update to rename)" },
-				category: { type: "string", description: "Category name or prefix" },
+				category: {
+					type: "string",
+					description: "Category name or prefix (defaults to first configured category on create)",
+				},
 				state: { type: "string", description: "TODO state (create default, or update target)" },
 				properties: { type: "object", description: "Properties map (create)" },
 				body: { type: "string", description: "Body text — create: initial body; update: full replacement" },
 				append: { type: "string", description: "Text to append to the end of an item's body (update)" },
-				file: { type: "string", description: "Target file basename (create)" },
+				file: {
+					type: "string",
+					description: "Target file basename (create), or absolute path hint to skip scan (update/note/set)",
+				},
 				// query params
 				dir: { type: "string", description: "Org dir filter" },
 				priority: { type: "string", description: "Priority filter (#A/#B/#C)" },
 				layer: { type: "string", description: "Layer filter" },
 				agent: { type: "string", description: "Agent filter" },
-				includeBody: { type: "boolean", description: "Include body text in query results" },
+				includeBody: { type: "boolean", description: "Include body text in results (query, update, note, set)" },
 				// get/update/set/note params
 				id: { type: "string", description: "Task CUSTOM_ID" },
 				note: { type: "string", description: "Dated note text (note cmd, or appended on state change)" },
@@ -604,7 +665,6 @@ update accepts any combination of: state, body (full replace), append (add to en
 					const title = args.title as string | undefined;
 					if (!title) return { error: true, message: "create requires title" };
 					const cat = args.category as string | undefined;
-					if (!cat) return { error: true, message: "create requires category" };
 					return cmdCreate(ctx, {
 						title,
 						category: cat,
@@ -642,6 +702,8 @@ update accepts any combination of: state, body (full replace), append (add to en
 						body: args.body as string | undefined,
 						append: args.append as string | undefined,
 						title: args.title as string | undefined,
+						file: args.file as string | undefined,
+						includeBody: args.includeBody as boolean | undefined,
 					});
 				}
 
@@ -650,7 +712,12 @@ update accepts any combination of: state, body (full replace), append (add to en
 					const note = args.note as string | undefined;
 					if (!id) return { error: true, message: "note requires id" };
 					if (!note) return { error: true, message: "note requires note" };
-					return cmdNote(ctx, { id, note });
+					return cmdNote(ctx, {
+						id,
+						note,
+						file: args.file as string | undefined,
+						includeBody: args.includeBody as boolean | undefined,
+					});
 				}
 
 				case "set": {
@@ -660,7 +727,13 @@ update accepts any combination of: state, body (full replace), append (add to en
 					if (!id) return { error: true, message: "set requires id" };
 					if (!property) return { error: true, message: "set requires property" };
 					if (value === undefined) return { error: true, message: "set requires value" };
-					return cmdSet(ctx, { id, property, value });
+					return cmdSet(ctx, {
+						id,
+						property,
+						value,
+						file: args.file as string | undefined,
+						includeBody: args.includeBody as boolean | undefined,
+					});
 				}
 
 				case "validate":

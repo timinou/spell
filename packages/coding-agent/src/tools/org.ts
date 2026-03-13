@@ -30,12 +30,18 @@ const orgSchema = Type.Object({
 	}),
 	// create/update params
 	title: Type.Optional(Type.String({ description: "Item title (create, or update to rename)" })),
-	category: Type.Optional(Type.String({ description: "Category name or prefix" })),
+	category: Type.Optional(
+		Type.String({ description: "Category name or prefix (defaults to first configured category on create)" }),
+	),
 	state: Type.Optional(Type.String({ description: "TODO state" })),
 	properties: Type.Optional(Type.Record(Type.String(), Type.String(), { description: "Properties map" })),
 	body: Type.Optional(Type.String({ description: "Body text -- create: initial body; update: full replacement" })),
 	append: Type.Optional(Type.String({ description: "Text to append to item body (update)" })),
-	file: Type.Optional(Type.String({ description: "Target file basename (create)" })),
+	file: Type.Optional(
+		Type.String({
+			description: "Target file basename (create), or absolute path hint to skip scan (update/note/set)",
+		}),
+	),
 	// query params
 	dir: Type.Optional(Type.String({ description: "Org dir filter" })),
 	priority: Type.Optional(Type.String({ description: "Priority filter (#A/#B/#C)" })),
