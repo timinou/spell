@@ -178,6 +178,11 @@ header "Building Spell"
 
 cd "$DEST"
 
+# Force nightly for the entire build — smallvec 1.15+ requires it.
+# rust-toolchain.toml in the repo sets this too, but env var wins if
+# the user has a directory-level override or an old rustup default.
+export RUSTUP_TOOLCHAIN=nightly
+
 ok "Installing JS dependencies"
 bun install --frozen-lockfile
 
