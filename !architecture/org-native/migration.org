@@ -1,0 +1,206 @@
+#+TITLE: Spell Org-Native Migration Plan
+#+CREATED: [2026-03-14]
+#+AUTHOR: Spell Engineering
+
+* Overview
+
+Six phases. Each phase is independently deliverable and leaves the system in a
+coherent state. No phase requires the next one to be complete before it ships.
+
+Phase 0 and 1 are prerequisites for everything else: they establish the type
+contract and the parse layer that all later work builds on.
+
+Phases 2–5 are additive. They expand what org-native enables without changing
+what earlier phases established.
+
+* ITEM Phase 0: Architecture + org-ql Vendoring [1d]
+:PROPERTIES:
+:EFFORT:    1d
+:PHASE:     0
+:BLOCKS:    phase-1
+:END:
+
+** Scope
+
+- Write architecture documentation (this file, vision.org, query-language.org)
+- Audit existing org tooling in the codebase: what parses, what queries, what
+  assumes markdown
+- Evaluate uniorg vs remark-org vs hand-rolled parser for the TS facade
+- Vendor or pin org-ql version used by Emacs integration
+- Define the OrgNode type hierarchy (see query-language.org)
+- Establish the dual-path contract: when TS handles it, when Emacs handles it
+
+** Deliverables
+
+- [ ] Architecture docs in =!architecture/org-native/=
+- [ ] =packages/org/src/types.ts= with honest OrgNode types
+- [ ] =packages/org/src/parse.ts= stub with documented interface
+- [ ] org-ql version pinned in Emacs config
+
+** Non-Goals
+
+Does not change any runtime behavior. Documentation and type stubs only.
+
+* ITEM Phase 1: uniorg Facade + Honest Types [4h]
+:PROPERTIES:
+:EFFORT:    4h
+:PHASE:     1
+:DEPENDS:   phase-0
+:BLOCKS:    phase-2 phase-3
+:END:
+
+** Scope
+
+- Implement =packages/org/src/parse.ts= using uniorg
+- OrgDocument, OrgSection, OrgItem, OrgProperties types — no optionals where
+  the spec requires a value, no =any=
+- Round-trip test: parse then re-serialize, diff must be empty for canonical files
+- Property drawer extraction with type coercion (timestamps, durations, numbers)
+- Test suite covering: headlines, PROPERTIES, LOGBOOK, SCHEDULED, DEADLINE,
+  nested subtrees, tags, state keywords
+
+** Deliverables
+
+- [ ] =packages/org/src/parse.ts= — uniorg wrapper with typed output
+- [ ] =packages/org/src/properties.ts= — PROPERTIES drawer parser with coercion
+- [ ] =packages/org/test/org-parse.test.ts= — Bun test suite (Phase 1 tests)
+- [ ] =packages/org/test/fixtures/= — canonical .org fixtures for round-trip tests
+
+** Failure Modes to Handle
+
+- Malformed PROPERTIES drawer (unclosed =:END:=)
+- Headline with no body
+- Nested drawers (LOGBOOK inside PROPERTIES — invalid but seen in the wild)
+- Timestamps with and without repeaters
+- Unicode in headlines and property values
+
+* ITEM Phase 2: Session-as-Org-Item [1d]
+:PROPERTIES:
+:EFFORT:    1d
+:PHASE:     2
+:DEPENDS:   phase-1
+:BLOCKS:    phase-4
+:END:
+
+** Scope
+
+- Define session org schema: state machine, required properties, LOGBOOK format
+- Migrate session creation to emit org items instead of markdown blobs
+- Session state transitions write LOGBOOK entries
+- =org tool= creates/reads/updates session items
+- Old markdown session log format: read-only compatibility, no new writes
+
+** Schema
+
+#+BEGIN_EXAMPLE
+* TODO Session [2026-03-14T12:42]
+:PROPERTIES:
+:ID:        <uuid>
+:SESSION:   2026-03-14T12:42:49
+:AGENT:     <agent-type>
+:TAGS:      <domain-tags>
+:END:
+:LOGBOOK:
+- State "ACTIVE"    from ""         [2026-03-14 Sat 12:42]
+- State "SUSPENDED" from "ACTIVE"   [2026-03-14 Sat 14:20]
+:END:
+#+END_EXAMPLE
+
+** Deliverables
+
+- [ ] Session schema documented and enforced at write time
+- [ ] =packages/org/src/session.ts= — session lifecycle management
+- [ ] Existing session tool updated to use org items
+- [ ] Tests: session creation, state transition, LOGBOOK integrity
+
+* ITEM Phase 3: Queryable Memory with Confidence Decay [2d]
+:PROPERTIES:
+:EFFORT:    2d
+:PHASE:     3
+:DEPENDS:   phase-1
+:BLOCKS:    phase-5
+:END:
+
+** Scope
+
+- Define memory item schema (FACT, PREFERENCE, OBSERVATION, CONSTRAINT)
+- CONFIDENCE property: float 0.0–1.0
+- DECAYS_AT property: inactive timestamp, org agenda picks it up automatically
+- Source provenance: SESSION property pointing to originating session ID
+- TS-side query for simple confidence-filtered recall
+- org-ql query path for compound memory queries
+
+** Schema
+
+#+BEGIN_EXAMPLE
+* FACT <headline>
+:PROPERTIES:
+:ID:         <uuid>
+:CONFIDENCE: 0.85
+:OBSERVED:   [2026-03-14]
+:DECAYS_AT:  [2026-09-14]
+:SOURCE:     session:<session-id>
+:DOMAIN:     <tag>
+:END:
+#+END_EXAMPLE
+
+** Deliverables
+
+- [ ] Memory schema with validation
+- [ ] =packages/org/src/memory.ts= — memory CRUD + decay scheduling
+- [ ] org-ql query templates for common recall patterns
+- [ ] Tests: write, recall, decay expiry, confidence filtering
+
+** Note on Decay
+
+Expired items are NOT deleted. State transitions to STALE. This preserves
+audit history and allows re-observation to resurrect a fact with new confidence.
+
+* ITEM Phase 4: Effort Tracking + Cross-Session Aggregation [1d]
+:PROPERTIES:
+:EFFORT:    1d
+:PHASE:     4
+:DEPENDS:   phase-2
+:END:
+
+** Scope
+
+- Every tool invocation emits an EFFORT-stamped org item
+- Session EFFORT is the sum of child items (org-ql column view)
+- Aggregation query: total effort per agent type, per domain tag, per week
+- Burndown: scheduled work vs. actual CLOSED timestamps
+
+** Deliverables
+
+- [ ] EFFORT property written on all agent invocations
+- [ ] =packages/org/src/effort.ts= — aggregation queries
+- [ ] org-agenda custom command for burndown view
+- [ ] Tests: aggregation correctness, edge cases (missing EFFORT, partial sessions)
+
+* ITEM Phase 5: Cross-Session Knowledge Graph [2d]
+:PROPERTIES:
+:EFFORT:    2d
+:PHASE:     5
+:DEPENDS:   phase-3
+:END:
+
+** Scope
+
+- All org items get globally unique IDs (already in schema, now enforced)
+- Backlink index: when item A references =[[id:B]]=, B's backlink list grows
+- High-connectivity items surface in memory recall (degree-weighted confidence)
+- org-roam compatibility: users with org-roam get backlink UI for free
+- TS-side: backlink count as confidence multiplier
+
+** Deliverables
+
+- [ ] ID generation enforced at item creation time
+- [ ] =packages/org/src/graph.ts= — backlink index build + query
+- [ ] Confidence scoring: base confidence × log(1 + backlink_count)
+- [ ] Tests: graph construction, backlink queries, confidence weighting
+
+** Note on org-roam
+
+Spell does not depend on org-roam. The ID format is compatible, so users who
+have org-roam get enhanced UI without any work on Spell's side. This is a
+free benefit of using standard org IDs, not a feature we build.
