@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { type Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { NiriOverviewController } from "@oh-my-pi/pi-niri";
-import type { Component, SlashCommand } from "@oh-my-pi/pi-tui";
+import type { Component, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
 import { Container, Loader, Markdown, ProcessTerminal, Spacer, Text, TUI } from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, hsvToRgb, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
@@ -34,6 +34,7 @@ import { DynamicBorder } from "./components/dynamic-border";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
+import { PlanModeOverlay } from "./components/plan-mode-overlay";
 import type { PythonExecutionComponent } from "./components/python-execution";
 import { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
@@ -149,6 +150,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#planModePreviousModel: Model | undefined;
 	#pendingModelSwitch: Model | undefined;
 	#planModeHasEntered = false;
+	#planModeOverlay: PlanModeOverlay | undefined;
+	#planModeOverlayHandle: OverlayHandle | undefined;
 	readonly lspServers:
 		| Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>
 		| undefined = undefined;
@@ -530,6 +533,31 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
+	#showPlanModeOverlay(ultraplan: boolean, paused: boolean): void {
+		if (!this.#planModeOverlay) {
+			this.#planModeOverlay = new PlanModeOverlay(ultraplan, paused);
+		} else {
+			this.#planModeOverlay.update(ultraplan, paused);
+		}
+		if (!this.#planModeOverlayHandle) {
+			const w = this.#planModeOverlay.measuredWidth();
+			this.#planModeOverlayHandle = this.ui.showOverlay(this.#planModeOverlay, {
+				anchor: "top-right",
+				width: w,
+				margin: 1,
+			});
+		}
+		this.#planModeOverlayHandle.setHidden(false);
+	}
+
+	#hidePlanModeOverlay(): void {
+		if (this.#planModeOverlayHandle) {
+			this.#planModeOverlayHandle.hide();
+			this.#planModeOverlayHandle = undefined;
+			this.#planModeOverlay = undefined;
+		}
+	}
+
 	updateEditorTopBorder(): void {
 		const availableWidth = this.editor.getTopBorderAvailableWidth(this.ui.terminal.columns);
 		const topBorder = this.statusLine.getTopBorder(availableWidth);
@@ -726,6 +754,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#updatePlanModeStatus();
 		this.sessionManager.appendModeChange("plan", { planFilePath });
 		this.updateEditorBorderColor();
+		this.#showPlanModeOverlay(options?.ultraplan ?? false, false);
 		this.showStatus(options?.ultraplan ? "Ultraplan mode enabled." : "Plan mode enabled.");
 	}
 
@@ -756,6 +785,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		const paused = options?.paused ?? false;
 		this.sessionManager.appendModeChange(paused ? "plan_paused" : "none");
 		this.updateEditorBorderColor();
+		if (paused) {
+			// Keep overlay but flip to paused label
+			this.#planModeOverlay?.update(this.planModeUltraplan, true);
+			this.ui.requestRender();
+		} else {
+			this.#hidePlanModeOverlay();
+		}
 		if (!options?.silent) {
 			this.showStatus(paused ? "Plan mode paused." : "Plan mode disabled.");
 		}
