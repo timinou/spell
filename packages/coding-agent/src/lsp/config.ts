@@ -390,3 +390,24 @@ export function hasCapability(
 ): boolean {
 	return config.capabilities?.[capability] === true;
 }
+
+/**
+ * Find servers defined in config that match a file's extension but whose binary
+ * is not available on PATH. Used to surface install hints at "no server found" sites.
+ */
+export function getMissingServersForFile(filePath: string, cwd: string): Array<{ name: string; installHint: string }> {
+	const ext = path.extname(filePath).toLowerCase();
+	const fileName = path.basename(filePath).toLowerCase();
+	const allServers = coerceServerConfigs(DEFAULTS as Record<string, Partial<ServerConfig>>);
+	const results: Array<{ name: string; installHint: string }> = [];
+	for (const [name, config] of Object.entries(allServers)) {
+		const matches = config.fileTypes.some(ft => {
+			const normalized = ft.toLowerCase();
+			return normalized === ext || normalized === fileName;
+		});
+		if (!matches) continue;
+		if (resolveCommand(config.command, cwd)) continue; // binary present, not missing
+		if (config.installHint) results.push({ name, installHint: config.installHint });
+	}
+	return results;
+}

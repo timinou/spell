@@ -358,6 +358,11 @@ export interface ServerConfig {
 	 * The client handles format/lint operations. Useful for tools with buggy LSP implementations.
 	 */
 	createClient?: LinterClientFactory;
+	/**
+	 * Install hint shown when this server's binary is not found on PATH.
+	 * Should name the package and common install commands.
+	 */
+	installHint?: string;
 }
 
 // =============================================================================
