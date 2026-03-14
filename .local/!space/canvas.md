@@ -28,40 +28,14 @@ The agent spawns the canvas automatically when it decides visual output would he
 - Hierarchical data
 - Multi-step decisions with tradeoffs
 
-No manual intervention needed — the agent writes a launcher QML, spawns it, and populates it via the message protocol.
+No manual intervention needed — the agent launches CanvasLauncher.qml and populates it via the message protocol.
 
 ### Manual / development use
 
-Write a launcher QML that wraps Canvas.qml:
-
-```qml
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-
-ApplicationWindow {
-    visible: true
-    width: 900; height: 600
-    title: "My Canvas"
-
-    Canvas {
-        id: canvas
-        anchors.fill: parent
-    }
-
-    Connections {
-        target: bridge
-        function onMessageReceived(payload) {
-            canvas.handleMessage(payload)
-        }
-    }
-}
-```
-
-Then from the agent (or a test):
+Use the built-in launcher:
 
 ```
-qml write  path="canvas-launcher.qml"  content="<the QML above>"
-qml launch id="canvas-demo" path="canvas-launcher.qml"
+qml launch id="canvas-demo" path="packages/coding-agent/src/modes/qml/canvas/CanvasLauncher.qml"
 qml send_message id="canvas-demo" payload={
   "action": "set",
   "content": [
@@ -107,6 +81,7 @@ bun test packages/coding-agent/test/modes/qml-canvas*.test.ts packages/coding-ag
 | `set` | agent->canvas | Replace all content blocks |
 | `append` | agent->canvas | Add blocks to existing content |
 | `remove` | agent->canvas | Remove a block by id |
+| `update` | agent->canvas | Update a single block's data by id |
 | `sync` | agent->canvas | Request full state dump |
 | `state` | canvas->agent | State dump response |
 | `prompt` | agent->canvas | Present a choice/input |
@@ -127,9 +102,10 @@ bun test packages/coding-agent/test/modes/qml-canvas*.test.ts packages/coding-ag
 
 ```
 packages/coding-agent/src/modes/qml/canvas/
-  Canvas.qml                 -- core runtime (Item, not ApplicationWindow)
+  AgentCanvas.qml              -- core runtime (Item, not ApplicationWindow)
   ContentBlock.qml           -- polymorphic block renderer
   CanvasTestHarness.qml      -- test harness
+  CanvasLauncher.qml         -- standalone launcher (ApplicationWindow)
   components/
     DataTable.qml             -- sortable table
     DataTableTestHarness.qml
