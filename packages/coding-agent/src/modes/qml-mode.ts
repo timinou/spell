@@ -42,8 +42,13 @@ export async function runQmlMode(session: AgentSession, options: QmlModeOptions 
 		}
 	});
 
-	// Send initial message if provided
+	// Send initial message if provided — emit a user bubble so the prompt is visible,
+	// then forward it to the session.
 	if (options.initialMessage) {
+		await bridge.sendMessage("shell", {
+			type: "user_message",
+			text: options.initialMessage,
+		});
 		await session.prompt(options.initialMessage);
 	}
 

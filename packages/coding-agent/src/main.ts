@@ -710,12 +710,17 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	}
 
 	if (parsedArgs.qml) {
+		const qmlSessionId = session.sessionManager.getSessionId();
+		const qmlSessionFile = session.sessionManager.getSessionFile();
 		await runQmlMode(session, {
 			initialMessage: initialMessage ?? parsedArgs.messages[0],
-			sessionFile: session.sessionManager.getSessionFile(),
+			sessionFile: qmlSessionFile,
 		});
 		await session.dispose();
 		stopThemeWatcher();
+		if (qmlSessionId && qmlSessionFile) {
+			process.stderr.write(`\n${chalk.dim(`Resume this session with spell --resume ${qmlSessionId}`)}\n`);
+		}
 		await postmortem.quit(0);
 	}
 
