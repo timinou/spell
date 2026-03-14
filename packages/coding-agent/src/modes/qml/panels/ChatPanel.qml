@@ -20,7 +20,7 @@ Item {
         if (msg.type === "message_start") {
             messagesModel.append({
                 msgId: msg.id || "",
-                role: "assistant",
+                role: msg.role || "assistant",
                 text: "",
                 name: "",
                 isStreaming: true,
@@ -68,6 +68,16 @@ Item {
             chatPanel.isStreaming = !!msg.busy
         } else if (msg.type === "model_info") {
             chatPanel.modelName = msg.model || ""
+        } else if (msg.type === "user_message") {
+            messagesModel.append({
+                msgId: "user-" + Date.now(),
+                role: "user",
+                text: msg.text || "",
+                name: "",
+                isStreaming: false,
+                isExpanded: false
+            })
+            messageList.positionViewAtEnd()
         }
     }
 

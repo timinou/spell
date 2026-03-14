@@ -44,14 +44,29 @@ export class SessionEventMapper {
 	#messageCounter = 0;
 	#currentMessageId = "";
 	#lastTextLength = 0;
+	// Track whether the current message is an assistant message.
+	// Non-assistant messages (user echoes, tool results) are handled elsewhere
+	// and must not produce ghost assistant bubbles.
+	#inAssistantMessage = false;
 
 	map(event: AgentSessionEvent): Record<string, unknown> | null {
 		switch (event.type) {
-			case "message_start":
+			case "message_start": {
+				const role = getRoleIfPresent(event.message);
+				if (role !== "assistant") {
+					// Reset state so stray updates don't corrupt delta tracking.
+					this.#inAssistantMessage = false;
+					this.#currentMessageId = "";
+					this.#lastTextLength = 0;
+					return null;
+				}
+				this.#inAssistantMessage = true;
 				this.#currentMessageId = `msg-${++this.#messageCounter}`;
 				this.#lastTextLength = 0;
-				return { type: "message_start", id: this.#currentMessageId, role: getRoleIfPresent(event.message) };
+				return { type: "message_start", id: this.#currentMessageId, role };
+			}
 			case "message_update": {
+				if (!this.#inAssistantMessage) return null;
 				const msg = event.message;
 				if (!hasContent(msg)) return null;
 				const fullText = getMessageText(msg.content);
@@ -67,6 +82,8 @@ export class SessionEventMapper {
 				};
 			}
 			case "message_end":
+				if (!this.#inAssistantMessage) return null;
+				this.#inAssistantMessage = false;
 				return { type: "message_end", id: this.#currentMessageId, role: getRoleIfPresent(event.message) };
 			case "tool_execution_start":
 				return {
@@ -87,6 +104,11 @@ export class SessionEventMapper {
 					id: event.toolCallId,
 					name: event.toolName,
 					isError: event.isError,
+					// Include truncated result text so the tool entry can show a summary.
+					details: getMessageText(
+						(event.result as { content?: ReadonlyArray<{ type: string; text?: string }> } | undefined)?.content ??
+							[],
+					).slice(0, 2000),
 				};
 			case "agent_start":
 				return { type: "agent_busy", busy: true };
