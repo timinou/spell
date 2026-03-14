@@ -211,7 +211,7 @@ export interface InteractiveModeContext {
 	toggleThinkingBlockVisibility(): void;
 	openExternalEditor(): void;
 	registerExtensionShortcuts(): void;
-	handlePlanModeCommand(initialPrompt?: string): Promise<void>;
+	handlePlanModeCommand(initialPrompt?: string, options?: { ultraplan?: boolean }): Promise<void>;
 	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;
 
 	// Hook UI methods

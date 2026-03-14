@@ -1,0 +1,57 @@
+#+TITLE: Session 149241f309b9067b Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* Research
+
+** DONE Explore existing agent definitions and plan mode code
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+* Implementation
+
+** DONE Create metis.md bundled agent
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Create momus.md bundled agent
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Add ultraplan field to PlanModeState
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Register /ultraplan slash command and extend interactive-mode.ts
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+** DONE Wire ultraplan flag through agent-session.ts
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+** DONE Extend plan-mode-active.md with ultraplan orchestration
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:END:
+
+* Verification
+
+** DONE Run bun check:ts and bun lint:ts
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:END:

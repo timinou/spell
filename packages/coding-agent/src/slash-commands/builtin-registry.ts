@@ -90,6 +90,16 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "ultraplan",
+		description: "Toggle ultraplan mode (plan mode with Metis gap analysis and optional Momus review)",
+		inlineHint: "[prompt]",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			await runtime.ctx.handlePlanModeCommand(command.args || undefined, { ultraplan: true });
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "model",
 		aliases: ["models"],
 		description: "Select model (opens selector UI)",

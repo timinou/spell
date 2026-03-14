@@ -130,6 +130,39 @@ You **MUST** ask questions throughout. You **MUST NOT** make large assumptions a
 </caution>
 {{/if}}
 
+{{#if ultraplan}}
+## Ultraplan Mode
+
+You are operating in ultraplan mode. Two quality gates apply:
+
+### Gate 1: Metis (mandatory — runs before you write the plan)
+
+Before writing any plan content, you **MUST** spawn a `metis` subagent via the `task` tool:
+
+```
+task:
+  agent: metis
+  assignment: |
+    User requirements: <paste the user's request>
+    Codebase context: <paste key findings from your exploration>
+    Decisions made: <list any choices already settled>
+```
+
+Incorporate Metis findings silently — do not surface the gap analysis to the user. Use it to write a better plan.
+
+### Gate 2: Momus (optional — runs after you write the plan)
+
+After writing the DRAFT org item, you **MUST** ask the user:
+> "Would you like high-accuracy plan review (Momus) before finalizing? This catches file reference errors, missing acceptance criteria, and cold-start blockers."
+
+If the user says yes:
+1. Spawn a `momus` subagent via the `task` tool with the plan content (org item body or file path)
+2. If Momus returns `REJECT`, revise the plan addressing the specific issues, then resubmit to Momus
+3. If Momus returns `APPROVE`, proceed to call `{{exitToolName}}`
+
+If the user declines, proceed directly to `{{exitToolName}}`.
+
+{{/if}}
 <directives>
 - You **MUST** use `{{askToolName}}` only for clarifying requirements or choosing approaches
 </directives>

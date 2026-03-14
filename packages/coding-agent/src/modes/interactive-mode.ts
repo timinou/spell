@@ -103,6 +103,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	planModeEnabled = false;
 	planModePaused = false;
 	planModePlanFilePath: string | undefined = undefined;
+	planModeUltraplan = false;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
@@ -621,6 +622,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				? {
 						enabled: this.planModeEnabled,
 						paused: this.planModePaused,
+						ultraplan: this.planModeUltraplan,
 					}
 				: undefined;
 		this.statusLine.setPlanModeStatus(status);
@@ -668,7 +670,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		const sessionContext = this.sessionManager.buildSessionContext();
 		if (sessionContext.mode === "plan") {
 			const planFilePath = sessionContext.modeData?.planFilePath as string | undefined;
-			await this.#enterPlanMode({ planFilePath });
+			const ultraplan = sessionContext.modeData?.ultraplan as boolean | undefined;
+			await this.#enterPlanMode({ planFilePath, ultraplan });
 		} else if (sessionContext.mode === "plan_paused") {
 			this.planModePaused = true;
 			this.#planModeHasEntered = true;
@@ -676,7 +679,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	async #enterPlanMode(options?: { planFilePath?: string; workflow?: "parallel" | "iterative" }): Promise<void> {
+	async #enterPlanMode(options?: {
+		planFilePath?: string;
+		workflow?: "parallel" | "iterative";
+		ultraplan?: boolean;
+	}): Promise<void> {
 		if (this.planModeEnabled) {
 			return;
 		}
@@ -699,15 +706,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			planFilePath,
 			workflow: options?.workflow ?? "parallel",
 			reentry: this.#planModeHasEntered,
+			ultraplan: options?.ultraplan ?? false,
 		});
 		if (this.session.isStreaming) {
 			await this.session.sendPlanModeContext({ deliverAs: "steer" });
 		}
 		this.#planModeHasEntered = true;
 		await this.#applyPlanModeModel();
+		this.planModeUltraplan = options?.ultraplan ?? false;
 		this.#updatePlanModeStatus();
 		this.sessionManager.appendModeChange("plan", { planFilePath });
-		this.showStatus("Plan mode enabled.");
+		this.showStatus(options?.ultraplan ? "Ultraplan mode enabled." : "Plan mode enabled.");
 	}
 
 	async #exitPlanMode(options?: { silent?: boolean; paused?: boolean }): Promise<void> {
@@ -843,7 +852,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.session.prompt(prompt, { synthetic: true });
 	}
 
-	async handlePlanModeCommand(initialPrompt?: string): Promise<void> {
+	async handlePlanModeCommand(initialPrompt?: string, options?: { ultraplan?: boolean }): Promise<void> {
 		if (this.planModeEnabled) {
 			const confirmed = await this.showHookConfirm(
 				"Exit plan mode?",
@@ -853,7 +862,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#exitPlanMode({ paused: true });
 			return;
 		}
-		await this.#enterPlanMode();
+		await this.#enterPlanMode({ ultraplan: options?.ultraplan });
 		if (initialPrompt && this.onInputCallback) {
 			this.onInputCallback(this.startPendingSubmission({ text: initialPrompt }));
 		}
