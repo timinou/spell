@@ -50,7 +50,7 @@ export class OrgProtocolHandler implements ProtocolHandler {
 		return {
 			url: url.href,
 			content,
-			contentType: "text/markdown",
+			contentType: "text/x-org",
 			size: Buffer.byteLength(content, "utf-8"),
 			sourcePath: item.file,
 			notes: [`Org item: ${item.title ?? itemId} (${itemId})`],

@@ -13,8 +13,8 @@ export interface InternalResource {
 	url: string;
 	/** Resolved text content */
 	content: string;
-	/** MIME type: text/markdown, application/json, or text/plain */
-	contentType: "text/markdown" | "application/json" | "text/plain";
+	/** MIME type: text/markdown, application/json, text/plain, or text/x-org */
+	contentType: "text/markdown" | "application/json" | "text/plain" | "text/x-org";
 	/** Content size in bytes */
 	size?: number;
 	/** Underlying filesystem path (for debugging, not exposed to agent) */

@@ -1,0 +1,621 @@
+#+TITLE: Bridge DOM introspection and QML testing skill
+#+STATE: DONE
+#+SESSION_ID: 14925ccc4712c72b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-14T12-06-44-252Z_14925ccc4712c72b.jsonl]]
+#+CUSTOM_ID: DRAFT-003-bridge-dom-introspection-and-qml-testing
+#+EFFORT: 8h
+#+PRIORITY: #A
+#+LAYER: test
+
+* Initial Message
+
+commit
+
+* Problem
+
+The QML bridge (=spell-qml-bridge=) has no DOM introspection capability. The only way to observe QML state from the TS side is through =bridge.send()= messages that QML must explicitly handle — this requires every test wrapper to manually implement query protocols. There's no way to:
+
+- Walk the visual tree to find rendered elements
+- Read arbitrary QML properties from C++
+- Verify element geometry, visibility, opacity, or layout
+- Simulate user input (click, type, scroll)
+- Evaluate arbitrary JS expressions in the QML context
+
+The ChatPanel integration tests query the =ListModel= data layer but cannot detect rendering failures: broken delegate bindings, collapsed layouts, invisible elements, missing theme properties.
+
+The QML testing documentation should live in a skill that's surfaced only when the agent is working on QML.
+
+* Architecture
+
+Two additions to the bridge C++ process, exposed through the existing JSON protocol:
+
+#+begin_example
+                    spell (TS)
+                       │
+            ┌──────────┴──────────┐
+            │  BridgeCommand      │
+            │  { type: "query" }  │──────── NEW
+            │  { type: "eval" }   │──────── NEW
+            └──────────┬──────────┘
+                       │ stdin/socket
+            ┌──────────┴──────────┐
+            │  WindowManager      │
+            │  queryItems()       │──────── NEW
+            │  evalInWindow()     │──────── NEW
+            └──────────┬──────────┘
+                       │ QQuickItem tree
+            ┌──────────┴──────────┐
+            │  QML Visual Tree    │
+            │  QQuickText         │
+            │  QQuickRectangle    │
+            │  QQuickListView     │
+            └─────────────────────┘
+#+end_example
+
+** New bridge commands
+
+*** =query= — DOM tree introspection
+
+Walks the QQuickItem tree from the window root and returns matching items with their properties.
+
+#+begin_src json
+{
+  "type": "query",
+  "id": "test",
+  "selector": {
+    "type": "QQuickText",
+    "objectName": "assistantText",
+    "visible": true
+  },
+  "properties": ["text", "color", "font.pixelSize", "opacity"],
+  "includeGeometry": true,
+  "recursive": true,
+  "maxDepth": 20
+}
+#+end_src
+
+Response:
+
+#+begin_src json
+{
+  "type": "query_result",
+  "id": "test",
+  "items": [
+    {
+      "className": "QQuickText",
+      "objectName": "assistantText",
+      "geometry": { "x": 24, "y": 48, "width": 752, "height": 36 },
+      "scenePosition": { "x": 24, "y": 48 },
+      "visible": true,
+      "opacity": 1.0,
+      "enabled": true,
+      "clip": false,
+      "properties": {
+        "text": "Hello world",
+        "color": "#e6edf3",
+        "font.pixelSize": 14,
+        "opacity": 1.0
+      },
+      "childCount": 0,
+      "path": "ApplicationWindow/ChatPanel/ColumnLayout/ListView/Item[0]/Loader/Rectangle/Text"
+    }
+  ]
+}
+#+end_src
+
+Selector fields (all optional — empty selector matches root):
+- =type=: QObject className prefix match (=QQuickText= matches =QQuickText=, =QQuickText_QML_xxxx=)
+- =objectName=: exact match on QObject objectName (set via =id:= in QML)
+- =visible=: filter by isVisible()
+- =property=: ={name, value}= — match items where property equals value
+- =text=: shorthand for ={property: {name: "text", value: ...}}= — matches substring
+
+The =properties= array lists QObject property names to read. Dotted paths (=font.pixelSize=) resolve through sub-objects.
+
+*** =eval= — JS expression evaluation
+
+Evaluates a JavaScript expression in the QML engine context with access to the root object.
+
+#+begin_src json
+{
+  "type": "eval",
+  "id": "test",
+  "expression": "root.chatPanel.messagesModel.count"
+}
+#+end_src
+
+Response:
+
+#+begin_src json
+{
+  "type": "eval_result",
+  "id": "test",
+  "value": 3,
+  "error": null
+}
+#+end_src
+
+The root object is available as =root= in the expression context. This is the escape hatch for anything the structured query can't express.
+
+** Why both query and eval
+
+=query= handles the common case with structured, typed results and doesn't require the test author to know QML internal IDs. It returns geometry, visibility, and properties in a predictable shape.
+
+=eval= is the escape hatch for:
+- Calling QML functions (=chatPanel.messagesModel.clear()=)
+- Reading complex nested state
+- Triggering interactions (=chatPanel.sendMessage()=)
+- Anything the structured query can't express
+
+Both return JSON — no special handling needed on the TS side.
+
+* Implementation
+
+** ITEM Add =query= command to C++ bridge
+:PROPERTIES:
+:EFFORT: 2h30m
+:END:
+
+File: =packages/qml/bridge/windowmanager.h=
+
+Add declarations:
+
+#+begin_src cpp
+void queryItems(const QString &id, const QJsonObject &params);
+
+// Tree-walking helpers (private)
+struct QuerySelector {
+    QString type;        // className prefix match
+    QString objectName;  // exact objectName match
+    std::optional<bool> visible;
+    QString textContains; // substring match on "text" property
+};
+
+static QuerySelector parseSelector(const QJsonObject &sel);
+static bool matchesSelector(const QQuickItem *item, const QuerySelector &sel);
+static QJsonObject serializeItem(const QQuickItem *item, const QJsonArray &props, bool includeGeometry, const QString &path);
+static QJsonValue readProperty(const QObject *obj, const QString &name);
+static void walkTree(const QQuickItem *item, const QuerySelector &sel,
+                     const QJsonArray &props, bool includeGeometry,
+                     int maxDepth, int depth, const QString &path,
+                     QJsonArray &results);
+#+end_src
+
+File: =packages/qml/bridge/windowmanager.cpp=
+
+Implementation approach:
+
+1. =dispatch()= adds: =else if (type == "query") { queryItems(id, msg); }=
+
+2. =queryItems()= implementation:
+   - Get root object via =engine->rootObjects().first()=
+   - Cast to =QQuickItem*= (=qobject_cast=)
+   - Parse selector from =msg["selector"]=
+   - Walk tree recursively via =childItems()=
+   - For each matching item, serialize requested properties
+   - Emit =query_result= event
+
+3. =walkTree()= recurses through =item->childItems()= (QQuickItem visual tree, not QObject children — the visual tree is what matters for rendering):
+
+#+begin_src cpp
+void WindowManager::walkTree(const QQuickItem *item, const QuerySelector &sel,
+                             const QJsonArray &props, bool includeGeometry,
+                             int maxDepth, int depth, const QString &path,
+                             QJsonArray &results) {
+    if (depth > maxDepth) return;
+
+    if (matchesSelector(item, sel)) {
+        results.append(serializeItem(item, props, includeGeometry, path));
+    }
+
+    const auto children = item->childItems();
+    for (int i = 0; i < children.size(); ++i) {
+        const auto *child = children[i];
+        QString childPath = path + "/" + child->metaObject()->className();
+        // Disambiguate siblings of the same type
+        int sameTypeCount = 0;
+        for (int j = 0; j < i; ++j) {
+            if (strcmp(children[j]->metaObject()->className(),
+                       child->metaObject()->className()) == 0)
+                ++sameTypeCount;
+        }
+        if (sameTypeCount > 0)
+            childPath += "[" + QString::number(sameTypeCount) + "]";
+        walkTree(child, sel, props, includeGeometry, maxDepth, depth + 1,
+                 childPath, results);
+    }
+}
+#+end_src
+
+4. =matchesSelector()= checks:
+   - =type=: =QString(item->metaObject()->className()).startsWith(sel.type)=
+   - =objectName=: =item->objectName() == sel.objectName=
+   - =visible=: =item->isVisible() == *sel.visible=
+   - =textContains=: =item->property("text").toString().contains(sel.textContains)=
+
+5. =serializeItem()= builds a JSON object with:
+   - =className=: from metaObject
+   - =objectName=: from QObject
+   - =geometry=: =x, y, width, height= from QQuickItem
+   - =scenePosition=: =mapToScene(QPointF(0,0))=
+   - =visible=, =opacity=, =enabled=, =clip= from QQuickItem
+   - =properties=: each requested property read via =readProperty()=
+   - =childCount=: =childItems().size()=
+   - =path=: the tree path string
+
+6. =readProperty()= handles dotted paths:
+   - Split on =.=
+   - First segment: =obj->property(name)=
+   - If QVariant wraps a QObject*, recurse to next segment
+   - If QVariant wraps a QFont/QColor, use specific extraction
+
+** ITEM Add =eval= command to C++ bridge
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+File: =packages/qml/bridge/windowmanager.cpp=
+
+1. =dispatch()= adds: =else if (type == "eval") { evalInWindow(id, msg["expression"].toString()); }=
+
+2. =evalInWindow()= implementation:
+
+#+begin_src cpp
+void WindowManager::evalInWindow(const QString &id, const QString &expression) {
+    auto it = m_windows.find(id);
+    if (it == m_windows.end()) { /* error event */ return; }
+
+    QObject *root = it->engine->rootObjects().first();
+    // Create a QJSValue for 'root' and evaluate expression with it
+    QJSEngine *jsEngine = it->engine;  // QQmlApplicationEngine IS-A QJSEngine
+    QJSValue rootVal = jsEngine->newQObject(root);
+    QJSValue globalObj = jsEngine->globalObject();
+    globalObj.setProperty("root", rootVal);
+
+    QJSValue result = jsEngine->evaluate(expression);
+    globalObj.deleteProperty("root"); // cleanup
+
+    QJsonObject ev;
+    ev["type"] = "eval_result";
+    ev["id"] = id;
+    if (result.isError()) {
+        ev["error"] = result.toString();
+        ev["value"] = QJsonValue::Null;
+    } else {
+        ev["error"] = QJsonValue::Null;
+        ev["value"] = result.toVariant().toJsonValue();
+    }
+    writeEvent(ev);
+}
+#+end_src
+
+Notes:
+- =QQmlApplicationEngine= inherits =QJSEngine= so we can evaluate JS directly
+- We inject =root= into the global object temporarily, then clean up
+- Result serializes through =QJSValue::toVariant().toJsonValue()= — handles numbers, strings, booleans, arrays, objects
+- QObject references in results would serialize as empty objects; this is acceptable since the primary use is reading values, not references
+
+** ITEM Update protocol types and QmlProcess
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/qml/src/protocol.ts=
+
+Add to =BridgeCommand=:
+
+#+begin_src typescript
+| {
+    type: "query";
+    id: string;
+    selector?: {
+        type?: string;
+        objectName?: string;
+        visible?: boolean;
+        textContains?: string;
+    };
+    properties?: string[];
+    includeGeometry?: boolean;
+    recursive?: boolean;
+    maxDepth?: number;
+  }
+| { type: "eval"; id: string; expression: string }
+#+end_src
+
+Add to =BridgeEvent=:
+
+#+begin_src typescript
+| {
+    type: "query_result";
+    id: string;
+    items: Array<{
+        className: string;
+        objectName: string;
+        geometry?: { x: number; y: number; width: number; height: number };
+        scenePosition?: { x: number; y: number };
+        visible: boolean;
+        opacity: number;
+        enabled: boolean;
+        clip: boolean;
+        properties: Record<string, unknown>;
+        childCount: number;
+        path: string;
+    }>;
+  }
+| {
+    type: "eval_result";
+    id: string;
+    value: unknown;
+    error: string | null;
+  }
+#+end_src
+
+** ITEM Add DOM query methods to QmlTestHarness
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+File: =packages/qml/src/test-harness.ts=
+
+Add typed methods that wrap the new bridge commands:
+
+#+begin_src typescript
+export interface QuerySelector {
+    type?: string;
+    objectName?: string;
+    visible?: boolean;
+    textContains?: string;
+}
+
+export interface QueryItem {
+    className: string;
+    objectName: string;
+    geometry?: { x: number; y: number; width: number; height: number };
+    scenePosition?: { x: number; y: number };
+    visible: boolean;
+    opacity: number;
+    enabled: boolean;
+    clip: boolean;
+    properties: Record<string, unknown>;
+    childCount: number;
+    path: string;
+}
+
+/** Find elements in the visual tree matching a selector. */
+async findItems(selector?: QuerySelector, options?: {
+    properties?: string[];
+    includeGeometry?: boolean;
+    maxDepth?: number;
+}): Promise<QueryItem[]>;
+
+/** Find all visible Text elements and return their content. */
+async findVisibleText(): Promise<string[]>;
+
+/** Assert an element matching the selector exists, is visible, and has positive dimensions. */
+async assertVisible(selector: QuerySelector): Promise<QueryItem>;
+
+/** Assert no element matches the selector. */
+async assertNotFound(selector: QuerySelector): Promise<void>;
+
+/** Evaluate a JS expression in the QML engine context. */
+async evaluate<T = unknown>(expression: string): Promise<T>;
+#+end_src
+
+Implementation:
+- =findItems()= sends =query= command, waits for =query_result= event
+- =findVisibleText()= is =findItems({type:"QQuickText", visible:true}, {properties:["text"]})= then extracts =properties.text=
+- =assertVisible()= calls =findItems()=, throws if empty or first item has zero dimensions
+- =evaluate()= sends =eval= command, waits for =eval_result= event, throws if error
+
+** ITEM Rewrite ChatPanel tests with visual assertions
+:PROPERTIES:
+:EFFORT: 1h30m
+:END:
+
+File: =packages/coding-agent/test/modes/qml-chat-panel.test.ts=
+
+Rewrite existing tests to verify rendering, not just model state. Key changes:
+
+1. *Remove model-only queries* — the =messagesModel= alias and QML-side query protocol in =ChatPanelTestHarness.qml= remain for convenience (e.g., checking =isStreaming=), but assertions about message content must go through visual tree queries.
+
+2. *User message renders in bubble:*
+
+#+begin_src typescript
+it("renders user message text in a visible bubble", async () => {
+    await harness.sendMessage({ type: "user_message", text: "hello world" });
+    // Verify the text is actually rendered, not just in the model
+    const texts = await harness.findVisibleText();
+    expect(texts).toContain("hello world");
+    // Verify the user bubble delegate has positive dimensions
+    const userTexts = await harness.findItems(
+        { type: "QQuickText", textContains: "hello world", visible: true },
+        { includeGeometry: true },
+    );
+    expect(userTexts.length).toBeGreaterThanOrEqual(1);
+    expect(userTexts[0].geometry!.height).toBeGreaterThan(0);
+    expect(userTexts[0].geometry!.width).toBeGreaterThan(0);
+});
+#+end_src
+
+3. *Assistant message renders after streaming:*
+
+#+begin_src typescript
+it("renders assistant message text after streaming completes", async () => {
+    await harness.sendMessage({ type: "message_start", id: "msg-1", role: "assistant" });
+    await harness.sendMessage({ type: "message_update", id: "msg-1", text: "Hello world" });
+    await harness.sendMessage({ type: "message_end", id: "msg-1" });
+
+    const texts = await harness.findVisibleText();
+    expect(texts).toContain("Hello world");
+});
+#+end_src
+
+4. *Tool header renders tool name:*
+
+#+begin_src typescript
+it("renders tool name in tool delegate header", async () => {
+    await harness.sendMessage({ type: "tool_start", id: "t-1", name: "bash", details: "build" });
+    // Tool name is always visible in the header
+    const nameItems = await harness.findItems(
+        { type: "QQuickText", textContains: "bash", visible: true },
+    );
+    expect(nameItems.length).toBeGreaterThanOrEqual(1);
+});
+#+end_src
+
+5. *Empty message has visible delegate (streaming indicator):*
+
+#+begin_src typescript
+it("renders assistant delegate with positive height even before text arrives", async () => {
+    await harness.sendMessage({ type: "message_start", id: "msg-1", role: "assistant" });
+    // The delegate should exist and be visible (empty text but non-zero height)
+    const items = await harness.findItems(
+        { type: "QQuickRectangle", visible: true },
+        { includeGeometry: true, maxDepth: 6 },
+    );
+    // At minimum the assistant bubble rectangle should have height
+    const nonZero = items.filter(i => (i.geometry?.height ?? 0) > 0);
+    expect(nonZero.length).toBeGreaterThan(0);
+});
+#+end_src
+
+6. *Layout doesn't collapse — messages stack vertically:*
+
+#+begin_src typescript
+it("stacks multiple messages vertically without overlap", async () => {
+    await harness.sendMessage({ type: "user_message", text: "first" });
+    await harness.sendMessage({ type: "user_message", text: "second" });
+
+    const items = await harness.findItems(
+        { type: "QQuickText", visible: true },
+        { includeGeometry: true },
+    );
+    const msgTexts = items.filter(i => ["first", "second"].includes(String(i.properties["text"])));
+    expect(msgTexts.length).toBe(2);
+    // Second message should be below first (greater Y)
+    const firstY = msgTexts.find(i => i.properties["text"] === "first")!.scenePosition!.y;
+    const secondY = msgTexts.find(i => i.properties["text"] === "second")!.scenePosition!.y;
+    expect(secondY).toBeGreaterThan(firstY);
+});
+#+end_src
+
+7. *Keep model-level assertions for non-visual state:* =isStreaming=, =tokenCount=, =messageCount= are ChatPanel properties, not visual tree properties. These correctly use the existing =query()= method through =ChatPanelTestHarness.qml=.
+
+** ITEM Simplify ChatPanelTestHarness.qml
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: =packages/coding-agent/src/modes/qml/panels/ChatPanelTestHarness.qml=
+
+With =eval= and =query= commands available at the bridge level, the QML test harness no longer needs to implement its own query protocol for model introspection. Simplify to only handle:
+- =reset= messages (clearing model state between tests)
+- Forwarding all other messages to =chatPanel.handleMessage()=
+
+The =query= handler can be removed or kept as a convenience (it provides higher-level abstractions like "messageCount" that map to specific ChatPanel properties). Keep it for now — it's a clean API layer that avoids coupling tests to internal QML IDs.
+
+The =messagesModel= alias on ChatPanel.qml remains — it enables the QML-side query handler.
+
+** ITEM Create =qml-testing= skill
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+File: =.spell/skills/qml-testing/SKILL.md=
+
+This skill is surfaced by name+description in the system prompt. The agent reads the full content via =skill://qml-testing= only when working on QML tests.
+
+Frontmatter:
+
+#+begin_src yaml
+---
+name: qml-testing
+description: Headless QML integration testing using the bridge's DOM introspection, JS evaluation, and screenshot APIs. Use when writing or debugging QML UI tests.
+---
+#+end_src
+
+Content covers:
+1. *Test harness setup* — =QmlTestHarness= class, offscreen mode, =beforeAll/afterAll/beforeEach= pattern
+2. *Bridge commands* — full reference for =query= and =eval= commands
+3. *DOM query patterns* — how to find text elements, verify visibility, check geometry, assert layout
+4. *Selector reference* — =type=, =objectName=, =visible=, =textContains= with examples
+5. *Property reading* — dotted paths, font/color extraction
+6. *JS eval patterns* — reading model data, calling QML functions, resetting state
+7. *Screenshot usage* — when to use screenshots vs DOM queries (screenshots for visual regression, DOM queries for correctness)
+8. *Writing test wrapper QML files* — =ApplicationWindow= root requirement, message handling pattern, reset protocol, co-location requirements for module imports
+9. *Anti-patterns* — model-only assertions, pixel comparison in CI, hardcoded tree paths
+10. *ChatPanel example* — full working example test showing the recommended pattern
+
+The skill does NOT duplicate the =QmlTestHarness= API docs — it teaches patterns and provides the protocol reference.
+
+** ITEM Build bridge and verify
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+1. Build bridge: =cd packages/qml && bun run build:bridge=
+2. =bun check:ts= — no type errors
+3. =bun test packages/coding-agent/test/modes/qml-event-mapper.test.ts= — existing mapper tests pass
+4. =bun test packages/coding-agent/test/modes/qml-chat-panel.test.ts= — integration tests pass with visual assertions
+5. Intentional breakage test (manual): change =model.text= to empty string in assistant delegate → visual tests fail, model tests pass → proves the visual assertions catch rendering bugs
+
+* Key Design Decisions
+
+** Bridge-level, not QML-level
+
+DOM introspection lives in C++ (=windowmanager.cpp=), not in per-test QML wrappers. Advantages:
+- Every QML window gets it for free — no test wrapper boilerplate
+- Structured query language instead of ad-hoc QML functions
+- Property reading works for any QQuickItem subclass without QML-side code
+- The =eval= escape hatch covers anything the structured query misses
+
+** =query= for structure, =eval= for escape
+
+The =query= command handles the 90% case (find elements, read properties, check geometry) with a structured selector+response format. The =eval= command handles everything else by running arbitrary JS in the QML engine. Tests should prefer =query= for readability and type safety, using =eval= only when needed.
+
+** Prefix matching for type selectors
+
+QML-generated types have mangled names (=QQuickText= vs =QQuickText_QMLTYPE_42=). Using =className().startsWith(sel.type)= handles both. The caller writes =QQuickText=, it matches all variants.
+
+** Skill for documentation, not code
+
+The =qml-testing= skill is a documentation artifact, not code. It teaches the agent how to use the bridge's test capabilities. The description is concise enough to appear in every system prompt without waste, but detailed enough that the agent knows when to read the full content.
+
+** No QML-side =objectName= requirements
+
+The query command works without =objectName= by using type + property matching. Tests shouldn't require modifying production QML to add objectNames — the tree structure and property values are sufficient for assertions.
+
+* Key Files
+
+|File|Action|Description|
+|---|---|---|
+|=packages/qml/bridge/windowmanager.h=|Modify|Add queryItems, evalInWindow, helper declarations|
+|=packages/qml/bridge/windowmanager.cpp=|Modify|Implement query tree walk, eval, selector matching|
+|=packages/qml/src/protocol.ts=|Modify|Add query/eval command + result event types|
+|=packages/qml/src/test-harness.ts=|Modify|Add findItems, findVisibleText, assertVisible, evaluate methods|
+|=packages/coding-agent/test/modes/qml-chat-panel.test.ts=|Modify|Rewrite with visual rendering assertions|
+|=packages/coding-agent/src/modes/qml/panels/ChatPanelTestHarness.qml=|Modify|Simplify (optional)|
+|=packages/coding-agent/src/modes/qml/panels/ChatPanel.qml=|Modify|Add messageList alias|
+|=.spell/skills/qml-testing/SKILL.md=|Create|QML testing skill documentation|
+
+* Risk Mitigation
+
+** Qt version compatibility
+
+=QQuickItem::childItems()= and =QObject::property()= exist since Qt 5.0. =itemAtIndex()= (on ListView) is Qt 5.13+. The query command uses =childItems()= which is universally available. No version risk.
+
+** Performance of tree walk
+
+A typical ChatPanel with 20 messages has ~200 items in the visual tree. Walking this is sub-millisecond. The =maxDepth= parameter prevents runaway recursion on pathological trees. No performance risk.
+
+** eval security
+
+The =eval= command runs in the QML engine's JS context, which is sandboxed from the filesystem. It can only access what the QML context exposes. Since the bridge is already a local process controlled by spell, there's no privilege escalation concern.
+
+* Verification
+
+1. =cd packages/qml && bun run build:bridge= — C++ compiles
+2. =bun check:ts= — no type errors
+3. =bun test packages/coding-agent/test/modes/qml-chat-panel.test.ts= — visual tests pass
+4. Manual: break a delegate binding (=text: ""= instead of =text: model.text=) → visual tests fail, model-only tests pass
+5. Manual: hide a delegate (=visible: false=) → =assertVisible= fails

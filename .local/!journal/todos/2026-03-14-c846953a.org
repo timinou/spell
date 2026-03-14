@@ -1,0 +1,203 @@
+#+TITLE: Session 1492650f0a84b838 Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* Phase 0: Architecture + org-ql Vendoring
+
+** DONE Explore current org package structure
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Vendor org-ql minimal elisp files
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Create org-ql MCP tool handler elisp
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Wire orgQlQuery into TS client
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DOING Write architecture .org files
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: in_progress
+:END:
+
+* Phase 1: uniorg Facade + Honest Types
+
+** ITEM Install uniorg dependencies
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: pending
+:END:
+
+** ITEM Create packages/org/src/org-parse.ts facade
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: pending
+:END:
+
+** ITEM Add text/x-org to InternalResource contentType
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: pending
+:END:
+
+** ITEM Fix org-protocol.ts to return text/x-org
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: pending
+:END:
+
+** ITEM Update contentType consumers for org rendering
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: pending
+:END:
+
+** ITEM Write org-parse tests
+:PROPERTIES:
+:TASK_ID: task-11
+:STATUS: pending
+:END:
+
+* Phase 2: Memory System
+
+** ITEM 2a: Org-writer memory serialization
+:PROPERTIES:
+:TASK_ID: task-12
+:STATUS: pending
+:END:
+
+** ITEM 2b: Consolidation prompt rewrite
+:PROPERTIES:
+:TASK_ID: task-13
+:STATUS: pending
+:END:
+
+** ITEM 2c: Memory protocol org-awareness
+:PROPERTIES:
+:TASK_ID: task-14
+:STATUS: pending
+:END:
+
+** ITEM 2d: Incremental consolidation
+:PROPERTIES:
+:TASK_ID: task-15
+:STATUS: pending
+:END:
+
+** ITEM 2e: Injection path
+:PROPERTIES:
+:TASK_ID: task-16
+:STATUS: pending
+:END:
+
+* Phase 3: Plan Unification + Query Builder
+
+** ITEM 3a: Remove markdown plan fallback
+:PROPERTIES:
+:TASK_ID: task-17
+:STATUS: pending
+:END:
+
+** ITEM 3b: TS query builder
+:PROPERTIES:
+:TASK_ID: task-18
+:STATUS: pending
+:END:
+
+** ITEM 3c: Wire session clocking
+:PROPERTIES:
+:TASK_ID: task-19
+:STATUS: pending
+:END:
+
+** ITEM 3d: Plan dashboard effort-vs-actual
+:PROPERTIES:
+:TASK_ID: task-20
+:STATUS: pending
+:END:
+
+* Phase 4: Skill Migration
+
+** ITEM 4a: Support SKILL.org discovery
+:PROPERTIES:
+:TASK_ID: task-21
+:STATUS: pending
+:END:
+
+** ITEM 4b: Update skill-protocol.ts
+:PROPERTIES:
+:TASK_ID: task-22
+:STATUS: pending
+:END:
+
+** ITEM 4c: Generate SKILL.org from consolidation
+:PROPERTIES:
+:TASK_ID: task-23
+:STATUS: pending
+:END:
+
+* Phase 5: Session Tracking
+
+** ITEM 5a: Session org item creation
+:PROPERTIES:
+:TASK_ID: task-24
+:STATUS: pending
+:END:
+
+** ITEM 5b: Auto-clocking
+:PROPERTIES:
+:TASK_ID: task-25
+:STATUS: pending
+:END:
+
+** ITEM 5c: Session tagging and linking
+:PROPERTIES:
+:TASK_ID: task-26
+:STATUS: pending
+:END:
+
+** ITEM 5d: Session state transitions
+:PROPERTIES:
+:TASK_ID: task-27
+:STATUS: pending
+:END:
+
+* Phase 6: Unified Query Layer
+
+** ITEM 6a: Extend org tool query subcommand
+:PROPERTIES:
+:TASK_ID: task-28
+:STATUS: pending
+:END:
+
+** ITEM 6b: Cross-entity queries
+:PROPERTIES:
+:TASK_ID: task-29
+:STATUS: pending
+:END:
+
+** ITEM 6c: Protocol delegation
+:PROPERTIES:
+:TASK_ID: task-30
+:STATUS: pending
+:END:
+
+** ITEM 6d: Cross-reference navigation
+:PROPERTIES:
+:TASK_ID: task-31
+:STATUS: pending
+:END:

@@ -1,0 +1,23 @@
+#+TITLE: Session 14925f7b117c885b Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE Fix 1: Guard setActiveToolsByName
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Fix 2: Org factory respects plan-mode
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Verify
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

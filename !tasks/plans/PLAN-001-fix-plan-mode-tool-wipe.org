@@ -1,11 +1,6 @@
-#+TITLE: Fix plan-mode tool-wipe bug
-#+STATE: DONE
-#+SESSION_ID: 149259f8d5685b85
-#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-14T11-54-23-445Z_149259f8d5685b85.jsonl]]
-#+CUSTOM_ID: DRAFT-003-fix-plan-mode-tool-wipe-bug
-#+EFFORT: 2h
-#+PRIORITY: #A
-#+LAYER: backend
+#+TITLE: FIX_PLAN_MODE_TOOL_WIPE
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-fix-plan-mode-tool-wipe
 
 * Initial Message
 

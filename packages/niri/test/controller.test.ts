@@ -239,7 +239,11 @@ describe("NiriOverviewController", () => {
 			// pending_approval: isPendingApproval=true (set while showing plan selector)
 			["pending_approval when isPendingApproval is set", { isPendingApproval: true }, "pending_approval"],
 			// pending_approval beats hook input
-			["pending_approval over hook input", { isPendingApproval: true, isAwaitingHookInput: true }, "pending_approval"],
+			[
+				"pending_approval over hook input",
+				{ isPendingApproval: true, isAwaitingHookInput: true },
+				"pending_approval",
+			],
 			// completed: all todos done + onInputCallback set (agent awaiting next message)
 			[
 				"completed when all todos done and awaiting next message",
