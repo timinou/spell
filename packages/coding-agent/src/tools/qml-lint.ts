@@ -3,7 +3,34 @@ import { $ } from "bun";
 /** Context properties injected by the C++ bridge at runtime — qmllint cannot see them. */
 const BRIDGE_CONTEXT_IDENTIFIERS = new Set(["bridge", "windowWidth", "windowHeight", "windowTitle"]);
 
-const QMLLINT_BIN = "/usr/lib/qt6/bin/qmllint";
+/**
+ * Candidate qmllint binary locations, checked in order.
+ * - Linux: Qt6 from distro packages
+ * - macOS Apple Silicon: Homebrew default prefix
+ * - macOS Intel: Homebrew legacy prefix
+ * - Fallback: PATH lookup via `which qmllint` (covers custom installs)
+ */
+const QMLLINT_CANDIDATES = [
+	"/usr/lib/qt6/bin/qmllint", // Linux distro Qt6
+	"/opt/homebrew/bin/qmllint", // macOS Apple Silicon (Homebrew)
+	"/usr/local/bin/qmllint", // macOS Intel (Homebrew)
+];
+
+let resolvedBin: string | null | undefined; // undefined = not yet probed
+
+async function findQmllint(): Promise<string | null> {
+	if (resolvedBin !== undefined) return resolvedBin;
+	for (const candidate of QMLLINT_CANDIDATES) {
+		if (await Bun.file(candidate).exists()) {
+			resolvedBin = candidate;
+			return resolvedBin;
+		}
+	}
+	// Last resort: PATH lookup (e.g. Qt installed via aqtinstall or custom prefix)
+	const fromPath = Bun.which("qmllint");
+	resolvedBin = fromPath ?? null;
+	return resolvedBin;
+}
 
 export interface QmlLintWarning {
 	line: number;
@@ -45,13 +72,13 @@ function isBridgeFalsePositive(warning: QmllintFileEntry["warnings"][number], so
 }
 
 export async function lintQmlFile(filePath: string): Promise<QmlLintResult> {
-	// Check for qmllint by direct stat — it's an absolute path, not a PATH lookup.
-	const available = await Bun.file(QMLLINT_BIN).exists();
-	if (!available) {
+	// Probe candidate locations once; result is cached in module scope.
+	const bin = await findQmllint();
+	if (!bin) {
 		return { available: false, warnings: [], errors: [] };
 	}
 
-	const result = await $`${QMLLINT_BIN} --json - ${filePath}`.quiet().nothrow();
+	const result = await $`${bin} --json - ${filePath}`.quiet().nothrow();
 	const raw = result.stdout.toString();
 	if (!raw.trim()) {
 		return { available: true, warnings: [], errors: [] };
