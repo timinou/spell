@@ -1,0 +1,230 @@
+#+TITLE: CANVAS_V1_1_WIRE_COMPONENTS
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-canvas-v1-1-wire-components
+
+* Initial Message
+
+how do I run it? write that in @!space/ thanks.
+
+* Problem
+
+Canvas v1 shipped the full infrastructure — Canvas.qml, ContentBlock.qml, DataTable/DiffView/TreeView components, message protocol, skill, tests — but has three functional gaps that prevent daily use:
+
+1. *ContentBlock doesn't route to components.* The switch in ContentBlock.qml only handles =markdown= and =image=. The =table=, =diff=, =tree= types fall through to a JSON dump fallback. The actual component QML files exist and are tested, but the integration layer skips them.
+
+2. *SKILL.md documents wrong data shapes.* The skill examples show flat arrays for table columns (e.g. =["Col A", "Col B"]=) when DataTable.qml expects =[{key, label, width?}]= objects. Diff shows ={left, right}= when DiffView expects ={hunks: [{header, lines}]}=. Tree shows a bare node when TreeView expects ={nodes: [...]}.= An agent following the docs will generate data the components silently render as empty.
+
+3. *No reusable launcher.* Canvas.qml is an Item, not a window. Every session the agent must write a ~25-line ApplicationWindow wrapper — identical boilerplate every time. The test harness IS this wrapper plus test-only query/reset handlers.
+
+Secondary gaps (can ship after):
+4. Component events (rowClicked, lineClicked, nodeClicked) don't propagate to the bridge — interactive features silently discarded
+5. No =update= action to modify a single block — must re-send all via =set=
+6. Canvas.qml name shadows QtQuick's built-in Canvas type
+
+* Approach
+
+** Phase 1: Critical fixes (parallelizable)
+
+*** ITEM Wire table/diff/tree in ContentBlock.qml
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+File: =packages/coding-agent/src/modes/qml/canvas/ContentBlock.qml=
+
+Add =import "components"= at the top. Add three Component blocks that instantiate the real components. Update the Loader switch:
+
+#+begin_src
+case "table": return tableComponent
+case "diff": return diffComponent
+case "tree": return treeComponent
+#+end_src
+
+Each Component binds =root.blockData= to the component's required property:
+- =DataTable { tableData: root.blockData; width: parent.width }=
+- =DiffView { diffData: root.blockData; width: parent.width }=
+- =TreeView { treeData: root.blockData; width: parent.width }=
+
+Note: QML Loader sourceComponent delegates can reference Components that use types from file-level imports. Verify at runtime.
+
+*** ITEM Fix SKILL.md data shapes
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =.spell/skills/canvas/SKILL.md=
+
+Replace all component data examples with the correct shapes:
+
+*table:*
+#+begin_src json
+{
+  "id": "t1", "type": "table",
+  "data": {
+    "columns": [{"key": "name", "label": "Name", "width": 200}, {"key": "score", "label": "Score"}],
+    "rows": [{"name": "Alice", "score": 95}, {"name": "Bob", "score": 87}],
+    "sortable": true,
+    "highlightRow": 0
+  }
+}
+#+end_src
+
+*diff:*
+#+begin_src json
+{
+  "id": "d1", "type": "diff",
+  "data": {
+    "filename": "src/main.ts",
+    "hunks": [{
+      "header": "@@ -1,3 +1,4 @@",
+      "lines": [
+        {"type": "context", "text": "import foo"},
+        {"type": "remove", "text": "old line"},
+        {"type": "add", "text": "new line"}
+      ]
+    }]
+  }
+}
+#+end_src
+
+*tree:*
+#+begin_src json
+{
+  "id": "tr1", "type": "tree",
+  "data": {
+    "nodes": [{
+      "id": "src", "label": "src", "icon": "folder", "expanded": true,
+      "children": [{"id": "main", "label": "main.ts", "icon": "file"}]
+    }]
+  }
+}
+#+end_src
+
+Also fix the =set= example near the top of the skill that inlines a wrong table shape.
+
+*** ITEM Ship CanvasLauncher.qml
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Create: =packages/coding-agent/src/modes/qml/canvas/CanvasLauncher.qml=
+
+This is CanvasTestHarness.qml minus the test query/reset handlers:
+
+#+begin_src qml
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import ".." as SpellUI
+
+ApplicationWindow {
+    visible: true
+    width: windowWidth || 900
+    height: windowHeight || 600
+    title: windowTitle || "Canvas"
+    color: SpellUI.SpellTheme.background
+
+    Canvas {
+        id: canvas
+        anchors.fill: parent
+    }
+
+    Connections {
+        target: bridge
+        function onMessageReceived(payload) {
+            canvas.handleMessage(payload)
+        }
+    }
+
+    onClosing: function(close) {
+        bridge.send({ action: "close" })
+    }
+}
+#+end_src
+
+Update SKILL.md workflow section: remove "write a thin wrapper" instructions, replace with:
+#+begin_quote
+Use the built-in launcher at =packages/coding-agent/src/modes/qml/canvas/CanvasLauncher.qml=. Launch directly:
+=qml launch id="canvas-<topic>" path="packages/coding-agent/src/modes/qml/canvas/CanvasLauncher.qml"=
+#+end_quote
+
+Update =.local/!space/canvas.md= accordingly.
+
+** Phase 2: Event propagation
+
+*** ITEM Propagate component events to bridge
+:PROPERTIES:
+:EFFORT: 1.5h
+:END:
+
+1. Add a generic signal to ContentBlock: =signal componentEvent(string eventType, var eventData)=
+
+2. When wiring components in ContentBlock Loader, connect their signals:
+   - =DataTable.onRowClicked: root.componentEvent("row_click", {blockId: root.blockId, rowIndex: idx, rowData: data})=
+   - =DiffView.onLineClicked: root.componentEvent("line_click", {blockId: root.blockId, ...})=
+   - =TreeView.onNodeClicked: root.componentEvent("node_click", {blockId: root.blockId, ...})=
+
+   Problem: signals from Loader items can't be connected declaratively (the items don't exist until the Loader loads them). Use =Connections { target: contentLoader.item }= with guards.
+
+3. In Canvas.qml, connect each ContentBlock delegate's =componentEvent= signal to =bridge.send({action: "event", ...})=.
+
+** Phase 3: Polish
+
+*** ITEM Add =update= action to Canvas.qml
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+In =Canvas.qml handleMessage()=, add:
+
+#+begin_src javascript
+} else if (action === "update") {
+    var uid = payload.id
+    var newData = payload.data
+    if (!uid || !newData) return
+    var list = blocksModel.slice()
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].id === uid) {
+            list[i] = { id: uid, type: list[i].type, data: newData }
+            break
+        }
+    }
+    blocksModel = list
+}
+#+end_src
+
+Document in SKILL.md.
+
+*** ITEM Rename Canvas.qml to AgentCanvas.qml
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+Rename =Canvas.qml= -> =AgentCanvas.qml=. Update all references:
+- =CanvasTestHarness.qml= (uses =Canvas {id: canvas}= -> =AgentCanvas {id: canvas}=)
+- =CanvasLauncher.qml= (same)
+- =SKILL.md=
+- =.local/!space/canvas.md=
+
+* Verification
+
+- =bun check:ts= passes (only pre-existing qml-chat-panel errors)
+- All existing unit tests still pass (34 tests)
+- Integration tests: send a =set= with =type: "table"= and verify via findItems that DataTable column headers appear (not fallback JSON dump)
+- Skill examples: copy-paste each JSON example from SKILL.md into a test or manual session and verify it renders correctly
+- Agent can =qml launch= the CanvasLauncher.qml directly without writing a wrapper first
+- Component events (row click, line click, node click) arrive as bridge events when event propagation is wired
+
+* Build Order
+
+1. Phase 1 — all three tasks in parallel (~1h)
+2. Phase 2 — event propagation (depends on ContentBlock routing from Phase 1) (~1.5h)
+3. Phase 3 — update action + rename (~40m, parallel with each other)
+
+Total: ~3-4h
+
+* What's NOT changing
+
+- No new component types
+- No session persistence
+- No changes to QmlTool infrastructure (event debouncing, WM-close surfacing already done)
+- Test harness QML files unchanged (they test components directly, not through ContentBlock)

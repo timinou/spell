@@ -22,6 +22,15 @@ export interface QmlBridgeOptions {
 	env?: Record<string, string>;
 }
 
+/**
+ * Returns true when a graphical display is available for rendering QML windows.
+ * On Linux, checks DISPLAY (X11) and WAYLAND_DISPLAY. Always true on macOS/Windows.
+ */
+export function isDisplayAvailable(): boolean {
+	if (process.platform !== "linux") return true;
+	return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+}
+
 export class QmlBridge {
 	readonly #process: QmlProcess;
 	readonly #watcher = new QmlWatcher();

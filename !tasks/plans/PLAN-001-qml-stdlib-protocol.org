@@ -1,0 +1,117 @@
+#+TITLE: QML_STDLIB_PROTOCOL
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-qml-stdlib-protocol
+
+* Initial Message
+
++qml launch id="canvas-demo" path="packages/coding-agent/src/modes/qml/canvas/CanvasLauncher.qml"
+
+To make thsi tool cal work in external packages, can you have a qml://stdlib/ protocol & folder to get all the default .qml files?
+
+* Problem
+
+The QML tool's =launch= action requires an absolute or cwd-relative filesystem path. Built-in QML files (CanvasLauncher.qml, shell.qml, etc.) live at =packages/coding-agent/src/modes/qml/=, which is an internal implementation path. External packages and tool calls must know this path to reference stdlib QML files.
+
+A =qml://stdlib/= protocol would let callers write =qml://stdlib/canvas/CanvasLauncher.qml= instead.
+
+* Approach
+
+Add =qml://= as a new internal URL protocol following the established ProtocolHandler pattern.
+
+The stdlib root is statically derivable: =path.resolve(import.meta.dir, "../modes/qml/")= relative to the handler file (placed in =internal-urls/=), or more robustly, relative to =qml-mode.ts= which already uses =import.meta.dir + "qml/"=. Since handlers live in =internal-urls/=, pass the root as a constructor option.
+
+Only the =stdlib= namespace is supported initially. Future namespaces (e.g. =qml://skill-name/=) can be added later.
+
+** ITEM Create =qml-protocol.ts= in =packages/coding-agent/src/internal-urls/=
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+Implement =QmlProtocolHandler= following =local-protocol.ts= pattern:
+- =scheme: "qml"=
+- Constructor takes ={ getStdlibRoot: () => string }= (returns absolute path to =modes/qml/=)
+- =resolve()=: parse URL, validate host is ="stdlib"=, extract relative path, use =validateRelativePath()= from =skill-protocol.ts=, containment check, read file content, return =InternalResource= with both =content= and =sourcePath=
+- Error if host is not "stdlib": ="Unknown qml:// namespace: ${host}. Available: stdlib"=
+
+** ITEM Register handler in =sdk.ts=
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+In =packages/coding-agent/src/sdk.ts= alongside other =internalRouter.register()= calls (~line 920):
+#+begin_src typescript
+internalRouter.register(new QmlProtocolHandler({
+  getStdlibRoot: () => path.resolve(import.meta.dir, "modes/qml"),
+}));
+#+end_src
+
+The =sdk.ts= file is in =packages/coding-agent/src/=, so =import.meta.dir + "modes/qml"= resolves to =packages/coding-agent/src/modes/qml/=.
+
+** ITEM Add qml:// resolution to =qml.ts= tool
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+File: =packages/coding-agent/src/tools/qml.ts=
+
+In both =launch= branches (local ~line 423, remote ~line 394) and the =write= branch (~line 374), before the =path.isAbsolute()= check, add internal URL resolution:
+
+#+begin_src typescript
+if (this.session.internalRouter?.canHandle(filePath)) {
+  const resource = await this.session.internalRouter.resolve(filePath);
+  if (!resource.sourcePath) throw new ToolError("qml:// URL has no filesystem path");
+  abs = resource.sourcePath;
+} else {
+  abs = path.isAbsolute(filePath) ? filePath : path.join(this.session.cwd, filePath);
+}
+#+end_src
+
+This matches the pattern in =ast-grep.ts=, =ast-edit.ts=, =grep.ts=.
+
+** ITEM Add =qml= to bash URL expansion
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+File: =packages/coding-agent/src/tools/bash-skill-urls.ts=
+
+1. Add ="qml"= to =SUPPORTED_INTERNAL_SCHEMES= array (line 16)
+2. Add =qml= to the alternation in =INTERNAL_URL_PATTERN= regex (line 14)
+
+The generic router fallback in =resolveInternalUrlToPath()= (lines 134-148) will handle =qml://= automatically via the registered ProtocolHandler.
+
+** ITEM Add =qml://= to =path-utils.ts= prefix list
+:PROPERTIES:
+:EFFORT: 2m
+:END:
+
+File: =packages/coding-agent/src/tools/path-utils.ts=
+
+Add ="qml://"= to =TOP_LEVEL_INTERNAL_URL_PREFIXES= so path parsing treats =qml://= tokens as internal URLs.
+
+** ITEM Export from =internal-urls/index.ts=
+:PROPERTIES:
+:EFFORT: 1m
+:END:
+
+Add =export * from "./qml-protocol"= to =packages/coding-agent/src/internal-urls/index.ts=.
+
+* Key Files
+
+| File | Change |
+|---+---|
+| =packages/coding-agent/src/internal-urls/qml-protocol.ts= | New: QmlProtocolHandler |
+| =packages/coding-agent/src/internal-urls/index.ts= | Add export |
+| =packages/coding-agent/src/sdk.ts= | Register handler |
+| =packages/coding-agent/src/tools/qml.ts= | Resolve qml:// before path resolution |
+| =packages/coding-agent/src/tools/bash-skill-urls.ts= | Add qml to schemes + regex |
+| =packages/coding-agent/src/tools/path-utils.ts= | Add qml:// prefix |
+
+* Verification
+
+- =bun check:ts= passes
+- =read qml://stdlib/canvas/CanvasLauncher.qml= resolves to file content
+- =+qml launch path="qml://stdlib/canvas/CanvasLauncher.qml"= resolves and launches
+- Bash commands with =qml://stdlib/...= expand to absolute paths
+- Path traversal (=qml://stdlib/../../etc/passwd=) is rejected
+- Unknown namespace (=qml://foo/bar.qml=) gives clear error

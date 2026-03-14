@@ -59,6 +59,7 @@ packages/coding-agent/src/internal-urls/docs-index.generated.ts
 .local/*
 !.local/!journal
 !.local/!space
+\!tasks/drafts
 
 # QML bridge build artifacts
 packages/qml/build/

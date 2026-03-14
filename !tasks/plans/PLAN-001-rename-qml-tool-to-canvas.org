@@ -1,0 +1,120 @@
+#+TITLE: RENAME_QML_TOOL_TO_CANVAS
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-rename-qml-tool-to-canvas
+
+* Scope
+
+Rename the agent tool AND the internal URL protocol from "qml" to "canvas". Covers: tool class, types, file names, prompt, protocol handler, all imports/references. The underlying QML runtime (=@oh-my-pi/pi-qml= bridge, =qml-mode=, =.qml= files) is NOT renamed — only the tool and protocol the LLM/agent sees.
+
+* What stays unchanged
+- =@oh-my-pi/pi-qml= package (QmlBridge, isBridgeAvailable, etc.)
+- =qml-mode.ts= / =qml-event-mapper.ts= (desktop mode infrastructure)
+- All =.qml= files (UI definitions)
+- =packages/qml/= package
+- =tools/spell/connect.ts= (uses QmlBridge directly, not the tool)
+- =bun-imports.d.ts= =*.qml= module declaration (file extension, not tool name)
+
+* File renames
+
+| Old path | New path |
+|----------|----------|
+| =src/tools/qml.ts= | =src/tools/canvas.ts= |
+| =src/tools/qml-event-utils.ts= | =src/tools/canvas-event-utils.ts= |
+| =src/tools/qml-lint.ts= | =src/tools/canvas-lint.ts= |
+| =src/prompts/tools/qml.md= | =src/prompts/tools/canvas.md= |
+| =src/internal-urls/qml-protocol.ts= | =src/internal-urls/canvas-protocol.ts= |
+| =test/tools/qml-event-classification.test.ts= | =test/tools/canvas-event-classification.test.ts= |
+| =test/tools/qml-event-deduplication.test.ts= | =test/tools/canvas-event-deduplication.test.ts= |
+| =test/tools/qml-wm-close.test.ts= | =test/tools/canvas-wm-close.test.ts= |
+
+* Symbol renames
+
+** Tool symbols (=src/tools/canvas.ts=)
+| Old | New |
+|-----|-----|
+| =QmlTool= | =CanvasTool= |
+| =QmlToolDetails= | =CanvasToolDetails= |
+| =QmlToolInput= | =CanvasToolInput= |
+| =QmlWindowEventsPayload= | =CanvasWindowEventsPayload= |
+| =QmlToolInvokePayload= | =CanvasToolInvokePayload= |
+| =QML_EVENTS_CHANNEL= | =CANVAS_EVENTS_CHANNEL= |
+| =QML_TOOL_INVOKE_CHANNEL= | =CANVAS_TOOL_INVOKE_CHANNEL= |
+| =QML_ARMED_DENYLIST= | =CANVAS_ARMED_DENYLIST= |
+| =qmlSchema= | =canvasSchema= |
+| =qmlDescription= | =canvasDescription= |
+| =readonly name = "qml"= | =readonly name = "canvas"= |
+| =readonly label = "QML"= | =readonly label = "Canvas"= |
+
+** Channel string values
+| Old | New |
+|-----|-----|
+| ="qml:window:events"= | ="canvas:window:events"= |
+| ="qml:tool:invoke"= | ="canvas:tool:invoke"= |
+
+** Protocol symbols (=src/internal-urls/canvas-protocol.ts=)
+| Old | New |
+|-----|-----|
+| =QmlProtocolHandler= | =CanvasProtocolHandler= |
+| =QmlProtocolOptions= | =CanvasProtocolOptions= |
+| =readonly scheme = "qml"= | =readonly scheme = "canvas"= |
+| All ="qml://"= strings in error messages | ="canvas://"= |
+
+** Path-utils (=src/tools/path-utils.ts=)
+| Old | New |
+|-----|-----|
+| ="qml://"= in INTERNAL_URL_PREFIXES | ="canvas://"= |
+
+** Bash-skill-urls (=src/tools/bash-skill-urls.ts=)
+| Old | New |
+|-----|-----|
+| ="qml"= in SUPPORTED_INTERNAL_SCHEMES | ="canvas"= |
+
+* Files to modify (after renames)
+
+** ITEM =src/tools/canvas.ts= — bulk symbol renames + update imports
+Rename all symbols per table. Update imports:
+- =./qml-event-utils= → =./canvas-event-utils=
+- =./qml-lint= → =./canvas-lint=
+- =../prompts/tools/qml.md= → =../prompts/tools/canvas.md=
+Update =name=, =label=, channel strings, error messages referencing =qml://=.
+
+** ITEM =src/tools/index.ts= — update import and registration
+- =import { QmlTool } from "./qml"= → =import { CanvasTool } from "./canvas"=
+- =export * from "./qml"= → =export * from "./canvas"=
+- =qml: s => new QmlTool(s)= → =canvas: s => new CanvasTool(s)=
+- Update JSDoc comment
+
+** ITEM =src/sdk.ts= — update imports and type references
+- Import from =./tools/qml= → =./tools/canvas=
+- =QmlProtocolHandler= → =CanvasProtocolHandler= (from =./internal-urls=)
+- All channel/type references
+
+** ITEM =src/internal-urls/canvas-protocol.ts= — rename class and scheme
+- =QmlProtocolHandler= → =CanvasProtocolHandler=
+- =QmlProtocolOptions= → =CanvasProtocolOptions=
+- =scheme = "qml"= → =scheme = "canvas"=
+- Update all error message strings
+
+** ITEM =src/internal-urls/index.ts= — update re-export
+- =export * from "./qml-protocol"= → =export * from "./canvas-protocol"=
+
+** ITEM =src/tools/path-utils.ts= — ="qml://"= → ="canvas://"=
+
+** ITEM =src/tools/bash-skill-urls.ts= — ="qml"= → ="canvas"=
+
+** ITEM Test files — update imports from =../../src/tools/qml-event-utils= → =../../src/tools/canvas-event-utils=
+
+* Approach
+
+1. Rename files using =edit= tool's =move= option
+2. Use =ast_edit= for bulk TypeScript symbol renames
+3. Manual =edit= for string literals (channel names, scheme, error messages)
+4. Parallelize via task agents: tool files vs protocol files vs test files (independent)
+
+* Verification
+
+- =bun check:ts= — type-check passes
+- =bun lint:ts= — no lint errors
+- Grep for remaining =QmlTool=, =QmlToolDetails=, =QML_EVENTS_CHANNEL=, =QmlProtocolHandler= in =src/= — zero hits
+- Grep for =from.*"./qml"= in =src/tools/= and =src/internal-urls/= — zero hits
+- Grep for ="qml://"= in =src/tools/= — zero hits (only =@oh-my-pi/pi-qml= package refs remain)
