@@ -1,6 +1,9 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { OverlayHandle } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
+import { $ } from "bun";
 import { withLargerFont } from "./font-scaling";
 import { NiriEventStream } from "./ipc";
 import { OverviewComponent } from "./overview-component";
@@ -48,6 +51,8 @@ export interface NiriOverviewContext {
 	 * this can be true while isStreaming is still true.
 	 */
 	isAwaitingHookInput?: boolean;
+	/** True when plan approval is pending. */
+	isPendingApproval?: boolean;
 	/** Current working directory (for project name). */
 	sessionManager: {
 		getCwd(): string;
@@ -85,7 +90,9 @@ export class NiriOverviewController {
 	#restoreFont: (() => void) | null = null;
 	#unsubscribeSession: (() => void) | null = null;
 	#destroyed = false;
-
+	#niriWindowId: number | null = null;
+	#lastWrittenStatus: AgentStatus | null = null;
+	readonly #statusDir = path.join(os.homedir(), ".spell", "status");
 	constructor(socketPath: string, context: NiriOverviewContext) {
 		this.#context = context;
 		this.#component = new OverviewComponent(this.#buildSnapshot());
@@ -93,13 +100,16 @@ export class NiriOverviewController {
 
 		// Keep overlay content fresh when the agent state changes
 		this.#unsubscribeSession = context.subscribe(() => {
+			this.#writeStatusIfChanged();
 			if (this.#overlayHandle) {
 				this.#component.update(this.#buildSnapshot());
 				this.#context.ui.requestRender();
 			}
 		});
+		// Discover niri window ID asynchronously so the constructor stays synchronous.
+		// Fire-and-forget: failures are silent (niri may not be running in tests).
+		void this.#initWindowId();
 	}
-
 	destroy(): void {
 		if (this.#destroyed) return;
 		this.#destroyed = true;
@@ -109,9 +119,52 @@ export class NiriOverviewController {
 		this.#overlayHandle = null;
 		this.#restoreFont?.();
 		this.#restoreFont = null;
+		if (this.#niriWindowId !== null) {
+			const filePath = path.join(this.#statusDir, `${this.#niriWindowId}.json`);
+			fs.rm(filePath, { force: true }).catch(() => {});
+			this.#niriWindowId = null;
+		}
 	}
 
 	// ── Private ───────────────────────────────────────────────────────────────
+
+	/** One-shot async init: discovers the niri window ID and writes the first status file. */
+	async #initWindowId(): Promise<void> {
+		try {
+			await fs.mkdir(this.#statusDir, { recursive: true });
+		} catch {
+			// ignore — may already exist
+		}
+		try {
+			const result = await $`niri msg -j focused-window`.quiet().nothrow();
+			if (result.exitCode === 0) {
+				const win = JSON.parse(result.text()) as { id?: unknown };
+				if (typeof win.id === "number") {
+					this.#niriWindowId = win.id;
+					// Write initial status now that we have the window ID.
+					this.#writeStatusIfChanged();
+				}
+			}
+		} catch {
+			// niri not available or JSON parse failure — status file disabled
+		}
+	}
+
+	/** Write status file if status changed since last write. No-op if no window ID. */
+	#writeStatusIfChanged(): void {
+		if (this.#destroyed || this.#niriWindowId === null) return;
+		const status = this.#deriveStatus();
+		if (status === this.#lastWrittenStatus) return;
+		this.#lastWrittenStatus = status;
+		const payload = JSON.stringify({
+			status,
+			windowId: this.#niriWindowId,
+			pid: process.pid,
+			updatedAt: Date.now(),
+		});
+		const filePath = path.join(this.#statusDir, `${this.#niriWindowId}.json`);
+		Bun.write(filePath, payload).catch(() => {});
+	}
 
 	#handleNiriEvent(event: object): void {
 		if ("OverviewOpenedOrClosed" in event) {

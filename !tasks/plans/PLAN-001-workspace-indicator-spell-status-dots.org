@@ -1,11 +1,6 @@
-#+TITLE: Workspace indicator spell status dots
-#+STATE: DONE
-#+SESSION_ID: 14925a9eea242121
-#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-14T11-57-13-512Z_14925a9eea242121.jsonl]]
-#+CUSTOM_ID: DRAFT-003-workspace-indicator-spell-status-dots
-#+EFFORT: 3h
-#+PRIORITY: #B
-#+LAYER: frontend
+#+TITLE: WORKSPACE_INDICATOR_SPELL_STATUS_DOTS
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-workspace-indicator-spell-status-dots
 
 * Initial Message
 

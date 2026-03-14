@@ -14,7 +14,7 @@
  * The NiriEventStream is mocked so tests run without a real socket.
  */
 
-import { describe, expect, it, mock } from "bun:test";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
 import type { NiriOverviewContext } from "../src/controller";
 import { NiriOverviewController } from "../src/controller";
 import type { OverviewComponent } from "../src/overview-component";
@@ -38,6 +38,55 @@ mock.module("../src/ipc.ts", () => ({
 			streamDestroyed = true;
 		}
 	},
+}));
+
+// ─── Mock Bun.write and node:fs/promises ────────────────────────────────────
+
+// Track Bun.write calls
+const writtenFiles: Record<string, string> = {};
+const removedFiles: string[] = [];
+
+// Patch global Bun.write to capture writes
+// @ts-expect-error — patching global Bun.write to capture writes in tests
+Bun.write = (path: string, content: string) => {
+	writtenFiles[path] = content;
+	return Promise.resolve(content.length);
+};
+
+// Mock node:fs/promises to capture rm calls and stub mkdir
+mock.module("node:fs/promises", () => ({
+	mkdir: () => Promise.resolve(),
+	rm: (path: string) => {
+		removedFiles.push(path);
+		return Promise.resolve();
+	},
+}));
+
+// Mock bun shell $ to return a fake focused-window response
+let fakeWindowId: number | null = 42;
+mock.module("bun", () => ({
+	$: Object.assign(
+		(strings: TemplateStringsArray, ..._values: unknown[]) => {
+			const cmd = strings.join("");
+			if (cmd.includes("focused-window") && fakeWindowId !== null) {
+				return {
+					quiet: () => ({
+						nothrow: () =>
+							Promise.resolve({
+								exitCode: 0,
+								text: () => JSON.stringify({ id: fakeWindowId }),
+							}),
+					}),
+				};
+			}
+			return {
+				quiet: () => ({
+					nothrow: () => Promise.resolve({ exitCode: 1, text: () => "" }),
+				}),
+			};
+		},
+		{ call: undefined },
+	),
 }));
 
 // ─── Factory helpers ──────────────────────────────────────────────────────────
@@ -350,5 +399,80 @@ describe("NiriOverviewController", () => {
 		expect(renderMock.mock.calls.length).toBeGreaterThan(callsBefore);
 
 		ctrl.destroy();
+	});
+
+	describe("status file writing", () => {
+		beforeEach(() => {
+			// Reset tracking state between tests
+			for (const k of Object.keys(writtenFiles)) delete writtenFiles[k];
+			removedFiles.length = 0;
+			fakeWindowId = 42;
+		});
+
+		it("writes a status file after window ID is discovered", async () => {
+			const { ctx } = makeCtx();
+			const ctrl = new NiriOverviewController("/fake.sock", ctx);
+			// Allow the async #initWindowId to complete
+			await Bun.sleep(10);
+			const keys = Object.keys(writtenFiles);
+			expect(keys.some(k => k.includes("42.json"))).toBe(true);
+			const content = JSON.parse(writtenFiles[keys.find(k => k.includes("42.json"))!]);
+			expect(content.windowId).toBe(42);
+			expect(content.status).toBe("idle");
+			expect(typeof content.pid).toBe("number");
+			expect(typeof content.updatedAt).toBe("number");
+			ctrl.destroy();
+		});
+
+		it("writes updated status when session state changes", async () => {
+			const overrides = { isStreaming: false, hasInputCallback: false };
+			const { ctx, sessionListeners } = makeCtx(overrides);
+			const ctrl = new NiriOverviewController("/fake.sock", ctx);
+			await Bun.sleep(10);
+
+			// Trigger a session event that changes status to needs_input
+			// by simulating the context having a callback
+			overrides.hasInputCallback = true;
+			for (const k of Object.keys(writtenFiles)) delete writtenFiles[k];
+			sessionListeners[0]?.();
+			await Bun.sleep(10);
+
+			const key = Object.keys(writtenFiles).find(k => k.includes("42.json"));
+			expect(key).toBeDefined();
+			const content = JSON.parse(writtenFiles[key!]);
+			expect(content.status).toBe("needs_input");
+			ctrl.destroy();
+		});
+
+		it("does not write file again when status is unchanged", async () => {
+			const { ctx, sessionListeners } = makeCtx();
+			const ctrl = new NiriOverviewController("/fake.sock", ctx);
+			await Bun.sleep(10);
+
+			const writesBefore = Object.keys(writtenFiles).length;
+			// Fire session event with same (idle) status
+			sessionListeners[0]?.();
+			await Bun.sleep(10);
+			// Write count must not have grown (dedup)
+			expect(Object.keys(writtenFiles).length).toBe(writesBefore);
+			ctrl.destroy();
+		});
+
+		it("deletes status file on destroy()", async () => {
+			const { ctx } = makeCtx();
+			const ctrl = new NiriOverviewController("/fake.sock", ctx);
+			await Bun.sleep(10);
+			ctrl.destroy();
+			expect(removedFiles.some(f => f.includes("42.json"))).toBe(true);
+		});
+
+		it("skips status file when niri is not available", async () => {
+			fakeWindowId = null; // simulate niri query failure
+			const { ctx } = makeCtx();
+			const ctrl = new NiriOverviewController("/fake.sock", ctx);
+			await Bun.sleep(10);
+			expect(Object.keys(writtenFiles).length).toBe(0);
+			ctrl.destroy();
+		});
 	});
 });

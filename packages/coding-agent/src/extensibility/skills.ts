@@ -54,7 +54,7 @@ export async function loadSkillsFromDir(options: LoadSkillsFromDirOptions): Prom
 			name: capSkill.name,
 			description: typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
 			filePath: capSkill.path,
-			baseDir: capSkill.path.replace(/\/SKILL\.md$/, ""),
+			baseDir: capSkill.path.replace(/\/SKILL\.(md|org)$/, ""),
 			source: options.source,
 			_source: capSkill._source,
 		})),
@@ -163,7 +163,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 				name: capSkill.name,
 				description: typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
 				filePath: capSkill.path,
-				baseDir: capSkill.path.replace(/\/SKILL\.md$/, ""),
+				baseDir: capSkill.path.replace(/\/SKILL\.(md|org)$/, ""),
 				source: `${capSkill._source.provider}:${capSkill.level}`,
 				_source: capSkill._source,
 			});
@@ -198,7 +198,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 					description:
 						typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
 					filePath: capSkill.path,
-					baseDir: capSkill.path.replace(/\/SKILL\.md$/, ""),
+					baseDir: capSkill.path.replace(/\/SKILL\.(md|org)$/, ""),
 					source: "custom:user",
 					_source: { ...capSkill._source, providerName: "Custom" },
 				},

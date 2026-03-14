@@ -123,14 +123,22 @@ Item {
                 width: messageList.width - messageList.leftMargin - messageList.rightMargin
                 height: delegateLoader.item ? delegateLoader.item.height : 0
 
-                Loader {
-                    id: delegateLoader
-                    width: parent.width
-                    sourceComponent: {
-                        if (model.role === "user") return userDelegate
-                        if (model.role === "tool") return toolDelegate
-                        return assistantDelegate
-                    }
+				Loader {
+					id: delegateLoader
+					width: parent.width
+					// Capture ListView model roles as Loader properties so that
+					// Component delegates (defined at chatPanel scope, not inside
+					// the delegate) can access them via `parent.delegateXxx`.
+					property string delegateText: model.text
+					property string delegateName: model.name
+					property bool delegateIsStreaming: model.isStreaming
+					property bool delegateIsExpanded: model.isExpanded
+					property int delegateIndex: model.index
+					sourceComponent: {
+						if (model.role === "user") return userDelegate
+						if (model.role === "tool") return toolDelegate
+						return assistantDelegate
+					}
                 }
             }
 
@@ -303,21 +311,28 @@ Item {
     }
 
     // --- Delegate components ---
+    //
+    // Components defined at this scope do NOT inherit the ListView delegate context
+    // (model.xxx). Instead, the Loader captures model roles as named properties, and
+    // each Component root item aliases them so descendants can use `rootId.delegateXxx`.
 
     Component {
         id: assistantDelegate
 
         Rectangle {
+            id: assistantRoot
+            // parent = delegateLoader, which has delegateText bound to model.text
+            readonly property string delegateText: parent ? parent.delegateText : ""
             width: parent ? parent.width : 0
-            height: assistantText.paintedHeight + SpellUI.SpellTheme.spacingL * 2
+            height: assistantTextItem.paintedHeight + SpellUI.SpellTheme.spacingL * 2
             color: SpellUI.SpellTheme.surfaceHigh
             radius: SpellUI.SpellTheme.cornerRadius
 
             Text {
-                id: assistantText
+                id: assistantTextItem
                 anchors.fill: parent
                 anchors.margins: SpellUI.SpellTheme.spacingL
-                text: model.text
+                text: assistantRoot.delegateText
                 font.family: SpellUI.SpellTheme.fontFamily
                 font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
                 color: SpellUI.SpellTheme.textPrimary
@@ -331,6 +346,8 @@ Item {
         id: userDelegate
 
         Item {
+            id: userDelegateRoot
+            readonly property string delegateText: parent ? parent.delegateText : ""
             width: parent ? parent.width : 0
             height: userBubble.height
 
@@ -346,7 +363,7 @@ Item {
                     id: userText
                     anchors.fill: parent
                     anchors.margins: SpellUI.SpellTheme.spacingL
-                    text: model.text
+                    text: userDelegateRoot.delegateText
                     font.family: SpellUI.SpellTheme.fontFamily
                     font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
                     color: SpellUI.SpellTheme.textPrimary
@@ -361,6 +378,12 @@ Item {
         id: toolDelegate
 
         Rectangle {
+            id: toolDelegateRoot
+            readonly property string delegateText: parent ? parent.delegateText : ""
+            readonly property string delegateName: parent ? parent.delegateName : ""
+            readonly property bool delegateIsStreaming: parent ? parent.delegateIsStreaming : false
+            readonly property bool delegateIsExpanded: parent ? parent.delegateIsExpanded : false
+            readonly property int delegateIndex: parent ? parent.delegateIndex : 0
             width: parent ? parent.width : 0
             height: toolColumn.height + SpellUI.SpellTheme.spacingM * 2
             color: SpellUI.SpellTheme.surfaceHigher
@@ -393,7 +416,7 @@ Item {
 
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: model.name
+                            text: toolDelegateRoot.delegateName
                             font.family: SpellUI.SpellTheme.monoFontFamily
                             font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
                             color: SpellUI.SpellTheme.textSecondary
@@ -403,15 +426,15 @@ Item {
 
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: model.isStreaming ? "⟳" : "✓"
+                            text: toolDelegateRoot.delegateIsStreaming ? "⟳" : "✓"
                             font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                            color: model.isStreaming ? SpellUI.SpellTheme.warning : SpellUI.SpellTheme.success
+                            color: toolDelegateRoot.delegateIsStreaming ? SpellUI.SpellTheme.warning : SpellUI.SpellTheme.success
                         }
                     }
 
                     SpellUI.StateLayer {
                         onClicked: {
-                            var idx = model.index
+                            var idx = toolDelegateRoot.delegateIndex
                             messagesModel.setProperty(idx, "isExpanded", !messagesModel.get(idx).isExpanded)
                         }
                     }
@@ -420,8 +443,8 @@ Item {
                 // Tool details (collapsible)
                 Text {
                     Layout.fillWidth: true
-                    visible: model.isExpanded && model.text.length > 0
-                    text: model.text
+                    visible: toolDelegateRoot.delegateIsExpanded && toolDelegateRoot.delegateText.length > 0
+                    text: toolDelegateRoot.delegateText
                     font.family: SpellUI.SpellTheme.monoFontFamily
                     font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
                     color: SpellUI.SpellTheme.textSecondary

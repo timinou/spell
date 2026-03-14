@@ -7,6 +7,7 @@ export * from "./journal";
 export * from "./org-parse";
 export * from "./org-reader";
 export * from "./org-writer";
+export * from "./query-builder";
 export * from "./schema/defaults";
 export { createOrgTool, type OrgToolDefinition } from "./tool";
 export * from "./types";

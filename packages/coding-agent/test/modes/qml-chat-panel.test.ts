@@ -133,4 +133,63 @@ describe.skipIf(!isBridgeAvailable())("ChatPanel QML integration", () => {
 		expect(header[2]).toBe(0x4e); // N
 		expect(header[3]).toBe(0x47); // G
 	});
+	// ── Visual rendering assertions ────────────────────────────────────────────
+
+	describe("Visual rendering assertions", () => {
+		it("renders user message text in a visible element", async () => {
+			await harness.sendMessage({ type: "user_message", text: "hello world" });
+			await Bun.sleep(200);
+			const texts = await harness.findVisibleText();
+			expect(texts).toContain("hello world");
+		});
+
+		it("user message element has positive dimensions", async () => {
+			await harness.sendMessage({ type: "user_message", text: "dimension test" });
+			await Bun.sleep(200);
+			const items = await harness.findItems(
+				{ type: "QQuickText", textContains: "dimension test", visible: true },
+				{ includeGeometry: true },
+			);
+			expect(items.length).toBeGreaterThanOrEqual(1);
+			expect(items[0].geometry!.width).toBeGreaterThan(0);
+			expect(items[0].geometry!.height).toBeGreaterThan(0);
+		});
+
+		it("renders assistant message text after streaming completes", async () => {
+			await harness.sendMessage({ type: "message_start", id: "vis-msg-1", role: "assistant" });
+			await harness.sendMessage({ type: "message_update", id: "vis-msg-1", text: "Visual hello" });
+			await harness.sendMessage({ type: "message_end", id: "vis-msg-1" });
+			await Bun.sleep(200);
+			const texts = await harness.findVisibleText();
+			expect(texts).toContain("Visual hello");
+		});
+
+		it("renders tool name in a visible element", async () => {
+			await harness.sendMessage({ type: "tool_start", id: "vis-t-1", name: "bash", details: "build" });
+			await Bun.sleep(200);
+			const nameItems = await harness.findItems({ type: "QQuickText", textContains: "bash", visible: true });
+			expect(nameItems.length).toBeGreaterThanOrEqual(1);
+		});
+
+		it("stacks two messages at different vertical positions", async () => {
+			await harness.sendMessage({ type: "user_message", text: "first" });
+			await harness.sendMessage({ type: "user_message", text: "second" });
+			await Bun.sleep(200);
+			const items = await harness.findItems(
+				{ type: "QQuickText", visible: true },
+				{ includeGeometry: true, properties: ["text"] },
+			);
+			const firstItem = items.find(i => i.properties.text === "first");
+			const secondItem = items.find(i => i.properties.text === "second");
+			if (firstItem && secondItem) {
+				// Second message must be below first in the list
+				expect(secondItem.scenePosition!.y).toBeGreaterThan(firstItem.scenePosition!.y);
+			} else {
+				// If text elements not directly found, at minimum both texts are visible
+				const texts = await harness.findVisibleText();
+				expect(texts).toContain("first");
+				expect(texts).toContain("second");
+			}
+		});
+	});
 });

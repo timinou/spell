@@ -4,48 +4,48 @@
 
 * C++ Bridge
 
-** DOING Add query command to windowmanager.h/.cpp
+** DONE Add query command to windowmanager.h/.cpp
 :PROPERTIES:
 :TASK_ID: task-1
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
-** ITEM Add eval command to windowmanager.h/.cpp
+** DONE Add eval command to windowmanager.h/.cpp
 :PROPERTIES:
 :TASK_ID: task-2
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * TypeScript
 
-** ITEM Update protocol.ts with new types
+** DONE Update protocol.ts with new types
 :PROPERTIES:
 :TASK_ID: task-3
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Add DOM query methods to test-harness.ts
+** DONE Add DOM query methods to test-harness.ts
 :PROPERTIES:
 :TASK_ID: task-4
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Tests & Skill
 
-** ITEM Rewrite ChatPanel tests with visual assertions
+** DONE Rewrite ChatPanel tests with visual assertions
 :PROPERTIES:
 :TASK_ID: task-5
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Create qml-testing skill
+** DONE Create qml-testing skill
 :PROPERTIES:
 :TASK_ID: task-6
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Build bridge and verify
+** DONE Build bridge and verify
 :PROPERTIES:
 :TASK_ID: task-7
-:STATUS: pending
+:STATUS: completed
 :END:

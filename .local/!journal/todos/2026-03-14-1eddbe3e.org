@@ -1,0 +1,57 @@
+#+TITLE: Session 14926a10edd280d7 Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* Spell side
+
+** DONE Read controller.ts and types.ts to understand current structure
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Write status files from NiriOverviewController
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DOING Add status file write tests
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: in_progress
+:END:
+
+* Quickshell side
+
+** ITEM Read NiriService.qml and WorkspaceSwitcher.qml for structure
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: pending
+:END:
+
+** ITEM Create SpellStatusService.qml
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: pending
+:END:
+
+** ITEM Add status dots to WorkspaceSwitcher delegate
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: pending
+:END:
+
+** ITEM Register SpellStatusService in DMSShell.qml
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: pending
+:END:
+
+* Verification
+
+** ITEM Run bun test in packages/niri
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: pending
+:END:
