@@ -1,0 +1,472 @@
+#+TITLE: AGENT_CANVAS
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-agent-canvas
+
+* Initial Message
+
+Look, I just want you to be able to design your own interface when we discuss. Form of being to form of being, how do we make that happen?
+
+* Problem
+
+The agent has full QML infrastructure (bridge, armed tools, event loops, daemon mode) but never uses it during normal conversations. Visual communication — tables, diffs, architecture sketches, decision matrices — stays trapped in text. The agent can't design its own interface on the fly, despite having the rendering engine.
+
+The gap isn't capability. It's vocabulary: no reusable components, no standard protocol, no skill teaching the agent when to reach for visual UI.
+
+* Design
+
+Three layers, built bottom-up:
+
+** Layer 1: Canvas Runtime
+
+A persistent QML window the agent spawns and updates incrementally via =send_message=.
+
+*** Message Protocol
+
+Standard message shapes between agent and canvas:
+
+| Action    | Direction    | Purpose                                  |
+|-----------+--------------+------------------------------------------|
+| =set=     | Agent → QML  | Replace all content with new blocks      |
+| =append=  | Agent → QML  | Add content blocks to existing canvas    |
+| =remove=  | Agent → QML  | Remove a content block by id             |
+| =prompt=  | Agent → QML  | Present a choice/input to the user       |
+| =respond= | QML → Agent  | User's structured response to a prompt   |
+| =sync=    | Agent → QML  | Request current canvas state             |
+| =state=   | QML → Agent  | Canvas dumps its full content model      |
+
+Content blocks are typed: ={ id, type, data }= where type maps to a component (=table=, =diff=, =tree=, =markdown=, =image=, =choice=).
+
+*** Key Files
+- =packages/coding-agent/src/modes/qml/canvas/Canvas.qml= — persistent canvas window, content block renderer, message dispatcher
+- =packages/coding-agent/src/modes/qml/canvas/ContentBlock.qml= — polymorphic block that delegates to typed components
+
+*** Infrastructure Fixes
+
+**** ITEM Add display-availability detection
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Add =isDisplayAvailable()= to =packages/qml/src/qml-bridge.ts= checking =DISPLAY= / =WAYLAND_DISPLAY= / =XDG_SESSION_TYPE= env vars (Linux), always-true on macOS/Windows. Expose alongside =isBridgeAvailable=.
+
+**** ITEM Surface WM-close events for canvas windows
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+In =packages/coding-agent/src/tools/qml.ts=, the event loop currently suppresses WM close (~line 244-245). For canvas windows, emit an informational close event so the agent knows the canvas died. Don't trigger a turn — just update internal state and log it. Agent can query window state before sending.
+
+**** ITEM Add event debouncing for canvas interactions
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+Rapid-fire canvas events (drags, rapid clicks) currently each trigger a turn. Add a 100ms debounce window that batches canvas events into a single turn. Scoped to canvas window IDs only — gallery/chat behavior unchanged.
+
+**** ITEM Extract classifyEvent and deduplicateEvents as exported functions
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Currently private methods on =QmlTool= in =packages/coding-agent/src/tools/qml.ts=. Both are pure functions with no instance state dependency. Extract to =packages/coding-agent/src/tools/qml-event-utils.ts= so they can be unit-tested directly. =QmlTool= delegates to these.
+
+** Layer 2: Component Kit
+
+Three initial components — enough to cover the most common conversation patterns. Each is a standalone QML file that accepts typed data and emits standard events.
+
+*** ITEM DataTable component
+:PROPERTIES:
+:EFFORT: 1.5d
+:END:
+
+=packages/coding-agent/src/modes/qml/canvas/components/DataTable.qml=
+
+Accepts: ={ columns: [{key, label, width?}], rows: [{...}], sortable?, highlightRow? }=
+Renders: Sortable table with Material Design 3 styling. Supports scoring mode (weighted columns with auto-highlight on winner) which covers the DecisionMatrix use case.
+Events: =row_click=, =sort_change=, =cell_select=
+
+*** ITEM DiffView component
+:PROPERTIES:
+:EFFORT: 1.5d
+:END:
+
+=packages/coding-agent/src/modes/qml/canvas/components/DiffView.qml=
+
+Accepts: ={ hunks: [{header, lines: [{type: add|remove|context, text}]}], filename?, language? }=
+Also accepts raw unified diff string (=--- a/ +++ b/= format) — parsed in QML or via a TS helper.
+Renders: Unified diff with syntax highlighting (reuse existing =CodeBlock.qml= for syntax coloring). Line numbers, +/- gutter marks.
+Events: =line_click=, =hunk_approve=, =hunk_reject=
+
+*** ITEM TreeView component
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+=packages/coding-agent/src/modes/qml/canvas/components/TreeView.qml=
+
+Accepts: ={ nodes: [{id, label, children?, icon?, expanded?}] }=
+Renders: Collapsible tree with indentation. Qt has native TreeView — wrap it with Material Design 3 styling.
+Events: =node_click=, =node_expand=, =node_collapse=
+
+*** Non-components (deliberate exclusions)
+
+- *ArchitectureDiagram*: Generate PNG via mermaid-cli or graphviz, display as image block. Not worth a custom QML renderer.
+- *PropertyEditor*: Too form-specific. Use =prompt= blocks with typed inputs instead.
+- *Timeline*: DataTable with a date column + sort. Not a separate component.
+
+** Layer 3: Canvas Skill + Activation Rule
+
+*** ITEM Canvas skill
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+=.spell/skills/canvas/SKILL.md=
+
+Documents:
+- Available components and their data shapes
+- Message protocol (set/append/remove/prompt/respond/sync/state)
+- Workflow: check display → write Canvas.qml (or reuse) → launch → send content → handle responses → close when done
+- Fallback: when QML unavailable, render as markdown (tables as code blocks, diffs as unified diff, trees as indented text)
+- Teardown triggers: close canvas after user decides, after switching topic, after 5 min idle
+
+*** ITEM Activation rule
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Add to agent system prompt (or as a rule file):
+
+#+begin_quote
+When presenting structured comparisons (>3 options), tabular data (>5 rows), large diffs (>50 lines), hierarchical data, or multi-step decisions — spawn a canvas if the display is available. Don't ask permission; spawn it and say what you showed. If the display is unavailable, render the equivalent in markdown.
+#+end_quote
+
+** Layer 4: Structured Input Protocol
+
+*** ITEM Choice/input prompts via canvas
+:PROPERTIES:
+:EFFORT: 3h
+:END:
+
+The canvas =prompt= message presents choices to the user:
+
+#+begin_src json
+{
+  "action": "prompt",
+  "promptId": "arch-choice-1",
+  "type": "radio",
+  "question": "Which architecture?",
+  "options": [
+    {"value": "monolith", "label": "Monolith", "description": "..."},
+    {"value": "microservices", "label": "Microservices", "description": "..."}
+  ]
+}
+#+end_src
+
+User response comes back as:
+#+begin_src json
+{"action": "respond", "promptId": "arch-choice-1", "value": "monolith"}
+#+end_src
+
+Supported prompt types: =radio= (single select), =checkbox= (multi), =rank= (drag to reorder), =text= (free input).
+
+* Test Specifications
+
+** Test Infrastructure
+
+All QML integration tests use =QmlTestHarness= from =packages/qml/src/test-harness.ts=. Each component gets a =*TestHarness.qml= wrapper that handles query/reset messages and proxies content messages to the component under test — same pattern as =ChatPanelTestHarness.qml=.
+
+Test guard: =describe.skipIf(!isBridgeAvailable())= — tests skip cleanly when bridge binary is missing (CI without Qt).
+
+Click/interaction simulation: use =harness.evaluate()= to call QML handlers directly for v1. Adding bridge-level mouse event simulation is deferred.
+
+*** CanvasTestHarness.qml design
+
+Must expose these queries:
+- =blockCount= — number of content blocks
+- =blocks= — full content model as JSON array (id, type, data per block)
+- =blockById(id)= — single block by id
+- =promptCount= — number of active prompts
+- =promptById(promptId)= — prompt state by id
+
+Must handle =reset= by clearing all blocks and prompts.
+
+** ITEM Unit tests: display detection
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/qml/test/display-detection.test.ts=
+Pure TS, no bridge needed, no skip guard.
+
+Contracts:
+- Returns =true= on macOS (always has display)
+- Returns =true= on Linux when =DISPLAY= is set (e.g. =:0=)
+- Returns =true= on Linux when =WAYLAND_DISPLAY= is set
+- Returns =false= on Linux when neither =DISPLAY= nor =WAYLAND_DISPLAY= is set
+- Returns =true= on Windows
+
+Edge cases:
+- =DISPLAY=''= (empty string) → =false= (some CI sets empty rather than unsetting)
+- =DISPLAY=':0'= → =true= (standard local X11)
+
+Test via mocking =process.platform= and =process.env=. Function should be a pure check: =const hasDisplay = process.platform !== 'linux' || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)=.
+
+** ITEM Unit tests: event classification
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/test/tools/qml-event-classification.test.ts=
+Prerequisite: extract =classifyEvent= from =QmlTool= to =qml-event-utils.ts=.
+
+Contracts:
+- =close= events → always loud
+- =url_changed= events → always silent
+- Events with =payload.silent === true= → silent
+- stderr containing =TypeError= / =SyntaxError= / =ReferenceError= → loud
+- stderr with fontconfig / CSP warnings → silent
+- Unknown event types → loud (fail-open for visibility)
+
+Edge cases:
+- stderr with mixed content (fontconfig warning + TypeError in same string) → loud (error takes precedence)
+- Event with no name and no special payload fields → loud (unknown must surface)
+
+** ITEM Unit tests: event deduplication
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/test/tools/qml-event-deduplication.test.ts=
+Prerequisite: extract =deduplicateEvents= from =QmlTool= to =qml-event-utils.ts=.
+
+Contracts:
+- Single event passes through unchanged (no count field)
+- Two identical adjacent events collapse to one with =count: 2=
+- Three identical adjacent events collapse to one with =count: 3=
+- Non-adjacent identical events are NOT collapsed (order preserved)
+- Events with same name but different payload are NOT collapsed
+
+Edge cases:
+- Empty array → empty array
+- Events with nested object payloads — deep equality via =JSON.stringify= (document key-order dependency as known limitation)
+
+** ITEM Integration tests: canvas runtime protocol
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+File: =packages/coding-agent/test/modes/qml-canvas-runtime.test.ts=
+Harness: =packages/coding-agent/src/modes/qml/canvas/CanvasTestHarness.qml=
+Skip: =describe.skipIf(!isBridgeAvailable())=
+
+*** Protocol contracts
+
+- Canvas starts with empty content model (=blockCount === 0=)
+- =set= replaces entire content model — old blocks gone, new blocks visible via =blocks= query
+- =append= adds blocks without disturbing existing ones (query =blockCount= before and after)
+- =remove= by blockId deletes exactly that block, others survive
+- =set= with empty content array clears all blocks
+
+*** Ordering and idempotency
+
+- Multiple rapid =set= calls — last one wins, no stale renders (send 3 sets within 10ms, query, verify last state)
+- =set= with identical data is idempotent (no visual glitch, blockCount unchanged)
+- =append= after =set= appends to the new content, not the old
+
+*** Error resilience
+
+- =remove= with nonexistent blockId is a no-op (no error, blockCount unchanged)
+- =set= with unknown component type renders a fallback/error block (not crash). Query block, verify it exists with type indicator.
+- Malformed payload (missing =action= field) does not crash canvas — stays in prior state
+- Payload with action but wrong data shape (e.g. =set= without =content=) degrades gracefully
+
+*** State sync
+
+- =sync= action → canvas emits =state= event with full content model via bridge
+- After =set= with 3 blocks, =get_state= returns exactly those 3 blocks with their types, ids, and data
+- =get_state= after =remove= reflects the removal
+
+** ITEM Integration tests: DataTable component
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+File: =packages/coding-agent/test/modes/qml-canvas-data-table.test.ts=
+Harness: =packages/coding-agent/src/modes/qml/canvas/components/DataTableTestHarness.qml=
+Skip: =describe.skipIf(!isBridgeAvailable())=
+
+*** Rendering contracts
+
+- Column headers from =columns= array are visible text elements
+- Row count matches data array length (=findItems= with row objectName)
+- Cell text matches data values for each column key
+- Empty data array renders headers but zero rows
+
+*** Data edge cases
+
+- Data with more fields than columns — extra fields ignored, no crash
+- Data with fewer fields than columns — missing cells render as empty string, not ="undefined"=
+- Column header with special characters (=<script>=, =&amp;=) renders literally (no injection)
+- Large table (50+ rows) — screenshot completes within 5s (performance smoke test)
+- =highlightRow= property causes visible style difference (compare background color of highlighted vs normal row via =findItems= with =includeGeometry=)
+
+*** Events
+
+- Row click emits bridge event with row index and row data (use =evaluate()= to trigger click handler)
+- Sort column header click emits sort event with column key and direction
+
+** ITEM Integration tests: DiffView component
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+File: =packages/coding-agent/test/modes/qml-canvas-diff-view.test.ts=
+Harness: =packages/coding-agent/src/modes/qml/canvas/components/DiffViewTestHarness.qml=
+Skip: =describe.skipIf(!isBridgeAvailable())=
+
+*** Rendering contracts
+
+- Filename/path renders in a visible header element
+- Added lines (+) render with distinct background color (findItems with objectName =addedLine=, check properties)
+- Removed lines (-) render with distinct background color (objectName =removedLine=)
+- Context lines render with neutral background
+- Line numbers are visible and sequential
+
+*** Edge cases
+
+- Empty diff (no hunks) shows "no changes" indicator, not blank
+- Diff with only additions (new file) — all lines render as added
+- Diff with only deletions (file removal) — all lines render as removed
+- Very long line wraps or truncates — screenshot does not show horizontal overflow
+- Non-UTF8 / binary content shows fallback message
+
+*** Input formats
+
+- Accepts structured hunks array as primary input
+- Accepts unified diff string (=--- a/ +++ b/= format) and parses correctly (if supported)
+
+** ITEM Integration tests: TreeView component
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+File: =packages/coding-agent/test/modes/qml-canvas-tree-view.test.ts=
+Harness: =packages/coding-agent/src/modes/qml/canvas/components/TreeViewTestHarness.qml=
+Skip: =describe.skipIf(!isBridgeAvailable())=
+
+*** Rendering contracts
+
+- Root nodes render as visible items
+- Child nodes of collapsed parent are not visible (=assertNotFound= for child text)
+- Expanding a node makes children visible (use =evaluate()= to toggle expand)
+- Collapsing hides children recursively (grandchildren also hidden)
+- Leaf nodes have no expand/collapse indicator (=assertNotFound= for toggle on leaf)
+
+*** Edge cases
+
+- Empty tree (no nodes) shows placeholder text, not blank
+- Deeply nested tree (10+ levels) renders without stack overflow or layout break
+- Node with =icon= property renders the icon (=findItems= with objectName =treeNodeIcon=)
+- Node label with special characters (dots, slashes, brackets) renders literally
+
+*** Events
+
+- Node click emits event with node id and path
+- Double-click or activate emits a separate "activate" event
+
+** ITEM Integration tests: structured input protocol
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+File: =packages/coding-agent/test/modes/qml-canvas-structured-input.test.ts=
+Skip: =describe.skipIf(!isBridgeAvailable())=
+
+*** Prompt/respond contracts
+
+- Agent sends =prompt= with promptId and options → canvas renders selection widget (=findItems= with objectName =promptWidget=)
+- User selects option → bridge event carries ={ action: 'respond', promptId, value }= (use =evaluate()= to select, =waitForBridgeEvent= to capture)
+- Multiple concurrent prompts (different promptIds) track independently (send 2 prompts, respond to second, first still visible)
+- Responding to a prompt disables the input widget (=findItems= after response, check =enabled= property)
+
+*** Edge cases
+
+- Prompt with single option still renders and is selectable (confirmation dialog)
+- Prompt with no options renders a free-text input
+- Second prompt with same promptId replaces the first (not duplicate)
+
+*** Prompt types
+
+- =radio= — single selection from options
+- =checkbox= — multiple selections (value is array)
+- =text= — free-text input, response carries typed text
+
+*** Armed tool round-trip
+
+- QML emits ={ _tool: 'write', _rid: 'r-1', path: '/tmp/test', content: 'x' }= → response arrives back in QML via =bridge.messageReceived= with matching =_rid=
+
+Use =harness.waitForBridgeEvent()= to capture the =_tool= event, then =harness.simulateToolResponse()= with the =_rid=, then =harness.evaluate()= to verify the QML received the response.
+
+** ITEM Integration test: WM-close detection
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/test/tools/qml-wm-close.test.ts=
+Skip: =describe.skipIf(!isBridgeAvailable())=
+
+Contracts:
+- User-initiated close (QML sends ={ action: 'close' }= then =Qt.quit()=) emits event with =closed: true=
+- WM close (bridge reports =closed= state without prior close event) is surfaced to the agent — not silently swallowed
+
+Simulate WM close via =harness.evaluate("Qt.quit()")= without sending a close action first.
+
+Edge case:
+- Rapid open → WM close → reopen with same window id works without stale state
+
+* Build Order
+
+1. Extract =classifyEvent= / =deduplicateEvents= + unit tests (files 6, 7) — 1h
+2. Display detection + unit test (file 5) — 1h
+3. Infrastructure fixes: WM-close surfacing, event debouncing — 2h
+4. Canvas runtime + =CanvasTestHarness.qml= + integration tests (file 1) — 2d
+5. DataTable component + test harness + tests (file 2) — 1.5d
+6. DiffView component + test harness + tests (file 3) — 1.5d (parallel with 5)
+7. TreeView component + test harness + tests (file 4) — 4h (parallel with 5, 6)
+8. Structured input protocol + tests (file 9) — 4h
+9. WM-close integration test (file 8) — 30m (parallel with 5-7)
+10. Canvas skill + activation rule — 2.5h
+
+* Verification
+
+- =bun check:ts= passes
+- All unit tests pass without bridge binary (pure TS logic)
+- All integration tests pass with bridge binary (offscreen mode)
+- All integration tests skip cleanly without bridge binary
+- Agent can spawn a canvas showing a DataTable when comparing options
+- Agent can show a DiffView for proposed code changes
+- User can click to approve/reject diff hunks, response arrives as structured event
+- Canvas survives across turns (persistent window, incremental updates)
+- Graceful degradation: headless/SSH sessions get markdown fallback
+- WM close is detected; agent doesn't send messages to dead windows
+
+* Risks and Mitigations
+
+| Risk                                  | Mitigation                                           |
+|---------------------------------------+------------------------------------------------------|
+| Agent doesn't naturally use canvas    | Activation rule in system prompt + skill examples     |
+| Component kit grows unbounded         | Start with 3, expand only after daily use validates   |
+| Event storms from rapid interaction   | Debounce + armed tools for sync operations            |
+| Session compaction loses canvas state | Accept for v1; sync protocol recovers from QML side   |
+| No display available                  | Display detection + markdown fallback in skill        |
+| Click simulation coupling             | Use evaluate() for v1; bridge mouse events deferred   |
+| JSON.stringify key-order in dedup     | Document as known limitation; deep-equal adds weight  |
+
+* Not In Scope (v1)
+
+- Persistent canvas across session restarts (daemon handles window, conversation history handles state)
+- Image generation in canvas (use existing =generate_image= tool, display as image block)
+- Custom user-defined components (skill-provided components cover common cases)
+- Collaborative canvas (multi-user) — single-agent, single-user only
+- Bridge-level mouse event simulation for tests (use evaluate() workaround)

@@ -1,0 +1,57 @@
+#+TITLE: Session 1492bd604bd083c2 Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* File Renames
+
+** DONE Move/rename all affected source files
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Move/rename test files
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+* Symbol & String Updates
+
+** DONE Update tool symbols, imports, channel strings in canvas.ts, canvas-event-utils.ts, canvas-lint.ts
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Update protocol symbols in canvas-protocol.ts and internal-urls/index.ts
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Update src/tools/index.ts, path-utils.ts, bash-skill-urls.ts
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+** DONE Update src/sdk.ts
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+** DONE Update test imports
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:END:
+
+* Verification
+
+** DONE Run bun check:ts and grep for stale references
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:END:

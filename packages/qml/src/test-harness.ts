@@ -1,6 +1,6 @@
-import type { BridgeEvent } from "./protocol";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { BridgeEvent } from "./protocol";
 import { isBridgeAvailable, QmlProcess } from "./qml-process";
 
 export interface QuerySelector {

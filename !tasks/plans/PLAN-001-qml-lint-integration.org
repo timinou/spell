@@ -1,0 +1,102 @@
+#+TITLE: QML_LINT_INTEGRATION
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-qml-lint-integration
+
+* Initial Message
+
+does qml have linting and static typing? can you add that feature automatically to the relevant parts of the qml tool?
+
+* Context
+
+QML has official linting and static type analysis via Qt 6's =qmllint= tool. It is available on the system at =/usr/lib/qt6/bin/qmllint= (v6.10.1) and supports:
+- Syntax validation
+- Type checking (incompatible assignments, missing properties)
+- Unqualified access detection
+- Deprecated API warnings
+- ~50 other checks
+- Structured JSON output via =--json -=
+
+The Qt 5 binary at =/usr/bin/qmllint= is syntax-only and must NOT be used.
+
+* Problem
+
+The QML tool's =write= action (=packages/coding-agent/src/tools/qml.ts= line 366-375) writes files to disk and returns a bare success message with no quality feedback. The agent has no way to catch QML errors before launching a window.
+
+* Known Issue: Bridge Context Property False Positives
+
+Every agent-written QML file uses =bridge=, =windowWidth=, =windowHeight=, =windowTitle= — runtime context properties injected by the C++ bridge. qmllint flags all of these as =unqualified= warnings. We must filter these from results.
+
+JSON output shape from qmllint:
+#+begin_src json
+{"files":[{"filename":"...","success":true|false,"warnings":[{"charOffset":N,"column":N,"id":"check-id","length":N,"line":N,"message":"...","suggestions":[...],"type":"warning|critical"}]}],"revision":4}
+#+end_src
+
+Strategy: Parse JSON output, filter warnings where =id === "unqualified"= and the unqualified identifier (extractable from source at charOffset/length) is in a known set: =bridge=, =windowWidth=, =windowHeight=, =windowTitle=.
+
+* Approach
+
+** ITEM Add qmllint runner utility
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+Create =packages/coding-agent/src/tools/qml-lint.ts= with:
+
+1. A function =lintQmlFile(filePath: string): Promise<QmlLintResult>= that:
+   - Checks =Bun.which("/usr/lib/qt6/bin/qmllint")= (graceful no-op if not installed)
+   - Runs =/usr/lib/qt6/bin/qmllint --json - <file>= via Bun shell (=$`...`.quiet().nothrow()=)
+   - Parses JSON stdout
+   - Filters out known false-positive unqualified identifiers (=bridge=, =windowWidth=, =windowHeight=, =windowTitle=)
+   - Returns typed result: ={ warnings: QmlLintWarning[], errors: QmlLintWarning[], raw: string }=
+
+2. A function =formatLintOutput(result: QmlLintResult): string= that formats remaining issues as a human-readable block for the tool result text.
+
+The known-identifier set should be a =const= at the top of the file so it's easy to extend.
+
+** ITEM Integrate lint into write action
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+In =packages/coding-agent/src/tools/qml.ts=, after =Bun.write(abs, content)= in the =write= case:
+
+1. Call =lintQmlFile(abs)=
+2. If there are warnings/errors, append formatted lint output to the tool result text
+3. The write always succeeds (file is on disk) — lint issues are informational, not blocking
+4. Add lint summary to =QmlToolDetails= (e.g., =lintWarnings?: number=, =lintErrors?: number=)
+
+Result text example:
+#+begin_example
+Written: /path/to/file.qml
+
+qmllint: 2 warnings
+  Line 15: Cannot assign literal of type string to int [incompatible-type]
+  Line 23: Property "oldProp" is deprecated [deprecated]
+#+end_example
+
+** ITEM Update tool prompt with type annotation guidance
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+In =packages/coding-agent/src/prompts/tools/qml.md=, add a short section noting:
+- QML files are automatically linted after write
+- Use type annotations on function parameters and return types
+- Use =pragma FunctionSignatureBehavior: Enforced= for strict typing
+- Inline suppression syntax: =// qmllint disable <check-id>= if needed
+
+* Files to Modify
+
+| File | Change |
+|------+--------|
+| =packages/coding-agent/src/tools/qml-lint.ts= | NEW — lint runner + formatter |
+| =packages/coding-agent/src/tools/qml.ts= | Integrate lint into write action |
+| =packages/coding-agent/src/prompts/tools/qml.md= | Add type annotation guidance |
+
+* Verification
+
+- Write a QML file with a type error via the tool → confirm lint warnings appear in result
+- Write a valid QML file using bridge properties → confirm no false positives
+- Test with qmllint not installed → confirm graceful no-op (just writes, no error)
+- =bun check:ts= passes
+- =bun lint:ts= passes

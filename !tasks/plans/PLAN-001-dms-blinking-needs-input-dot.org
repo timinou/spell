@@ -1,0 +1,58 @@
+#+TITLE: DMS_BLINKING_NEEDS_INPUT_DOT
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-dms-blinking-needs-input-dot
+
+* Initial Message
+
+in dank material shell, the current orange indicator for workspaces with an instance needing my input should be shown as pleasantly blinking
+
+* Problem
+
+The spell session status dot for =needs_input= in the DankBar WorkspaceSwitcher is a static orange circle. User wants it to blink pleasantly to draw attention.
+
+* File
+
+=/home/user/.config/quickshell/dms/Modules/DankBar/Widgets/WorkspaceSwitcher.qml=
+
+* Approach
+
+Add an opacity animation to the =Rectangle= at line 1430 that renders each status dot. The animation should only activate when =modelData === "needs_input"=.
+
+Specifically, replace the static =Rectangle= (lines 1430-1444) with one that includes:
+
+#+begin_src qml
+Rectangle {
+    required property string modelData
+    width: spellStatusDots.dotSize
+    height: spellStatusDots.dotSize
+    radius: width / 2
+    color: {
+        switch (modelData) {
+        case "needs_input":    return Theme.withAlpha(Theme.warning, 0.85);
+        case "pending_approval": return Theme.withAlpha(Theme.secondary, 0.85);
+        case "completed":     return Theme.withAlpha(Theme.success, 0.85);
+        case "error":         return Theme.withAlpha(Theme.error, 0.85);
+        default: return "transparent";
+        }
+    }
+    SequentialAnimation on opacity {
+        running: modelData === "needs_input"
+        loops: Animation.Infinite
+        NumberAnimation { from: 1.0; to: 0.35; duration: 1200; easing.type: Easing.InOutSine }
+        NumberAnimation { from: 0.35; to: 1.0; duration: 1200; easing.type: Easing.InOutSine }
+    }
+}
+#+end_src
+
+Key decisions:
+- Opacity pulse (1.0 → 0.35 → 1.0) over 2.4s total cycle — slow enough to be pleasant, not urgent
+- =Easing.InOutSine= for smooth breathing feel
+- Only =needs_input= blinks; other statuses remain static
+- No structural changes to other code
+
+* Verification
+
+- Reload quickshell (=quickshell --reload= or restart)
+- Have a spell session in =needs_input= state on a workspace
+- Confirm the orange dot pulses smoothly
+- Confirm other status dots (completed, error, pending_approval) remain static

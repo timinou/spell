@@ -1,0 +1,61 @@
+#+TITLE: QML_LSP_INTEGRATION
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-qml-lsp-integration
+
+* Initial Message
+
+does QML have an LSP or a tree sitter? PLease integrate it to spell's capabilities
+
+* Context
+
+Spell already has a QML tool for writing/launching QML files (with qmllint integration), but the LSP tool doesn't support QML files. Qt ships an official LSP server called =qmlls= (binary =qmlls6= on Arch). Adding support requires two small changes to the LSP subsystem.
+
+Tree-sitter/ast-grep: ast-grep does not natively support QML. Custom tree-sitter grammars exist (tree-sitter-qmljs) but ast-grep requires recompilation to add languages. This is out of scope — LSP provides the high-value integration (diagnostics, hover, go-to-definition, completions).
+
+* Changes
+
+** ITEM Add qmlls to defaults.json
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+File: =packages/coding-agent/src/lsp/defaults.json=
+
+Add entry:
+#+begin_src json
+"qmlls": {
+    "command": "qmlls6",
+    "args": [],
+    "fileTypes": [".qml", ".qmltypes"],
+    "rootMarkers": ["CMakeLists.txt", ".qmlls.ini", "qmldir"]
+}
+#+end_src
+
+Notes:
+- Binary is =qmlls6= on Arch (qt6-declarative package), may be =qmlls= on other systems. The LSP config system resolves commands via PATH — if the user has a different binary name, they override in project/user config.
+- Root markers: =CMakeLists.txt= (most Qt projects), =.qmlls.ini= (qmlls config file), =qmldir= (QML module definition).
+
+** ITEM Add QML to LANGUAGE_MAP in utils.ts
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+File: =packages/coding-agent/src/lsp/utils.ts=
+
+Add to =LANGUAGE_MAP=:
+#+begin_src typescript
+".qml": "qml",
+#+end_src
+
+This maps the =.qml= extension to the LSP language ID ="qml"= so diagnostics, hover, definition etc. work for QML files.
+
+* Verification
+
+1. =bun check:ts= passes
+2. Open a QML file, confirm =lsp hover= / =lsp diagnostics= routes to qmlls6
+3. Manually verify: =which qmlls6= exists on the system (it does — installed via qt6-declarative)
+
+* Out of Scope
+
+- ast-grep/tree-sitter QML support (requires custom ast-grep build with tree-sitter-qmljs grammar — significant effort, low value given LSP covers the main use cases)
+- qmllint as a separate linter client (already integrated in the QML tool itself via =qml-lint.ts=)

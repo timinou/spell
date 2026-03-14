@@ -184,17 +184,21 @@ work with directly.
 
 * What's not here yet
 
-| Capability               | What it would enable                              | Effort |
-|--------------------------+---------------------------------------------------+--------|
-| Confidence decay         | Memories fade when not reinforced across sessions  | 4h     |
-| Incremental memory merge | Consolidation updates entries in-place, not overwrite | 1d  |
-| Session auto-clocking    | Sessions clock in/out automatically at boundaries  | 3h     |
-| Plan-session linking     | Every plan traces to the session that created it   | 1h     |
-| Inspector org rendering  | TUI panel renders org as markdown for human eyes   | 2h     |
-| Consolidation prompt     | LLM explicitly asked to emit structured entries    | 1h     |
+| Capability               | What it would enable                                  | Effort |
+|--------------------------+-------------------------------------------------------+--------|
+| Confidence decay         | Memories fade when not reinforced across sessions     | 4h     |
+| Incremental memory merge | Consolidation updates entries in-place, not overwrite | 1d     |
+| Session auto-clocking    | Sessions clock in/out automatically at boundaries     | 3h     |
+| Plan-session linking     | Every plan traces to the session that created it      | 1h     |
+| Inspector org rendering  | TUI panel renders org as markdown for human eyes      | 2h     |
+| Consolidation prompt     | LLM explicitly asked to emit structured entries       | 1h     |
+|                          |                                                       |        |
+|                          |                                                       |        |
 
 These are incremental — the foundation (queryable org items, property-based
 metadata, cross-entity references, dual-path query routing) is in place.
+
+#+HUMAN_NOTE:  Do this work once there is a natural way to explore memories in the spell canvas
 
 * Design Rationale
 

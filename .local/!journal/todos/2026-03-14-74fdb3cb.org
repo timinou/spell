@@ -1,0 +1,85 @@
+#+TITLE: Session 1492a5facd436e04 Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* Infrastructure
+
+** DONE Extract classifyEvent/deduplicateEvents to qml-event-utils.ts + unit tests
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Add isDisplayAvailable() to qml-bridge.ts + unit tests
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Surface WM-close events for canvas windows
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Add event debouncing for canvas interactions
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+* Canvas Runtime
+
+** DONE Build Canvas.qml + ContentBlock.qml + CanvasTestHarness.qml
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+** DONE Integration tests: canvas runtime protocol
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+* Components
+
+** DONE DataTable.qml + DataTableTestHarness.qml + integration tests
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:END:
+
+** DONE DiffView.qml + DiffViewTestHarness.qml + integration tests
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:END:
+
+** DONE TreeView.qml + TreeViewTestHarness.qml + integration tests
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: completed
+:END:
+
+* Structured Input
+
+** DONE Structured input protocol (prompt/respond) + integration tests
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: completed
+:END:
+
+** DONE WM-close integration test
+:PROPERTIES:
+:TASK_ID: task-11
+:STATUS: completed
+:END:
+
+* Skill & Activation
+
+** DONE Canvas skill SKILL.md + activation rule
+:PROPERTIES:
+:TASK_ID: task-12
+:STATUS: completed
+:END:

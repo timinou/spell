@@ -3,9 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { OverlayHandle } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
-import { queryNiriFocusedWindowId } from "./niri-query";
 import { withLargerFont } from "./font-scaling";
 import { NiriEventStream } from "./ipc";
+import { queryNiriFocusedWindowId } from "./niri-query";
 import { OverviewComponent } from "./overview-component";
 import type { AgentStatus, TodoItemSnapshot, TodoPhaseSnapshot } from "./types";
 
