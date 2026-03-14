@@ -25,6 +25,11 @@ export function isBridgeAvailable(): boolean {
 
 export type EventListener = (event: BridgeEvent) => void;
 
+export interface QmlProcessOptions {
+	/** Extra environment variables merged with process.env for the bridge process. */
+	env?: Record<string, string>;
+}
+
 /**
  * Manages a single long-lived bridge subprocess.
  * Supports two modes:
@@ -32,6 +37,7 @@ export type EventListener = (event: BridgeEvent) => void;
  * - socket: connects to a daemon via unix domain socket (used by desktop mode)
  */
 export class QmlProcess {
+	#env: Record<string, string> | undefined;
 	#proc: Subprocess<"pipe", "pipe", "pipe"> | null = null;
 	#stdin: Bun.FileSink | null = null;
 	#socket: net.Socket | null = null;
@@ -41,6 +47,10 @@ export class QmlProcess {
 	#buffer = "";
 	#stderrBuffer = "";
 	#stopping = false;
+
+	constructor(options?: QmlProcessOptions) {
+		this.#env = options?.env;
+	}
 
 	/** Returns the unix socket path for daemon mode. */
 	static socketPath(): string {
@@ -85,6 +95,7 @@ export class QmlProcess {
 			stdin: "ignore",
 			stdout: "ignore",
 			stderr: "ignore",
+			env: this.#env ? { ...process.env, ...this.#env } : undefined,
 		});
 
 		// Retry connect with exponential backoff
@@ -120,6 +131,7 @@ export class QmlProcess {
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
+			env: this.#env ? { ...process.env, ...this.#env } : undefined,
 		});
 		this.#proc = proc;
 		this.#stdin = proc.stdin;

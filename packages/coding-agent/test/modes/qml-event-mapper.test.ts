@@ -128,6 +128,7 @@ describe("SessionEventMapper", () => {
 				id: "call-123",
 				name: "bash",
 				isError: true,
+				details: "",
 			});
 		});
 	});
@@ -141,6 +142,85 @@ describe("SessionEventMapper", () => {
 
 		it("agent_end → { type: 'agent_busy', busy: false }", () => {
 			expect(mapper.map(ev({ type: "agent_end" }))).toEqual({ type: "agent_busy", busy: false });
+		});
+	});
+
+	// ── Non-assistant message filtering ──────────────────────────────────────
+
+	describe("non-assistant message filtering", () => {
+		it("returns null for message_start with role 'user'", () => {
+			const result = mapper.map(ev({ type: "message_start", message: { role: "user", content: [] } }));
+			expect(result).toBeNull();
+		});
+
+		it("returns null for message_start with role 'toolResult'", () => {
+			const result = mapper.map(ev({ type: "message_start", message: { role: "toolResult", content: [] } }));
+			expect(result).toBeNull();
+		});
+
+		it("suppresses message_update when current message is not assistant", () => {
+			mapper.map(ev({ type: "message_start", message: { role: "user", content: [] } }));
+			const result = mapper.map(
+				ev({ type: "message_update", message: { role: "user", content: [{ type: "text", text: "hello" }] } }),
+			);
+			expect(result).toBeNull();
+		});
+
+		it("suppresses message_end when current message is not assistant", () => {
+			mapper.map(ev({ type: "message_start", message: { role: "user", content: [] } }));
+			const result = mapper.map(ev({ type: "message_end", message: { role: "user", content: [] } }));
+			expect(result).toBeNull();
+		});
+
+		it("non-assistant message does not corrupt delta tracking for next assistant message", () => {
+			// First assistant cycle
+			mapper.map(ev({ type: "message_start", message: assistantMsg() }));
+			mapper.map(ev({ type: "message_update", message: assistantMsg([textBlock("hello")]) }));
+			mapper.map(ev({ type: "message_end", message: assistantMsg() }));
+
+			// Non-assistant message in between
+			mapper.map(ev({ type: "message_start", message: { role: "user", content: [] } }));
+			mapper.map(ev({ type: "message_end", message: { role: "user", content: [] } }));
+
+			// New assistant message — delta must start fresh
+			mapper.map(ev({ type: "message_start", message: assistantMsg() }));
+			const result = mapper.map(ev({ type: "message_update", message: assistantMsg([textBlock("hi")]) }));
+			expect((result as Record<string, unknown>).text).toBe("hi");
+		});
+	});
+
+	// ── tool_execution_end details field ─────────────────────────────────────
+
+	describe("tool_execution_end details", () => {
+		it("extracts text content into details field", () => {
+			const result = mapper.map(
+				ev({
+					type: "tool_execution_end",
+					toolCallId: "call-1",
+					toolName: "read",
+					isError: false,
+					result: { content: [{ type: "text", text: "file contents here" }] },
+				}),
+			);
+			expect(result).toMatchObject({
+				type: "tool_end",
+				details: "file contents here",
+			});
+		});
+
+		it("returns empty details when result is absent", () => {
+			const result = mapper.map(
+				ev({
+					type: "tool_execution_end",
+					toolCallId: "call-1",
+					toolName: "bash",
+					isError: true,
+				}),
+			);
+			expect(result).toMatchObject({
+				type: "tool_end",
+				details: "",
+			});
 		});
 	});
 

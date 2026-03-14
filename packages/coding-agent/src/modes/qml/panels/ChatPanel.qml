@@ -10,6 +10,9 @@ Item {
     property int tokenCount: 0
     property string modelName: ""
 
+
+    // Exposed for test introspection — not used by production code.
+    readonly property alias messagesModel: messagesModel
     ListModel {
         id: messagesModel
     }
