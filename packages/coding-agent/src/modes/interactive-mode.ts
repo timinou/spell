@@ -697,7 +697,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		const planFilePath = options?.planFilePath ?? (await this.#getPlanFilePath());
 		const previousTools = this.session.getActiveToolNames();
 		const hasExitTool = this.session.getToolByName("exit_plan_mode") !== undefined;
-		const planTools = hasExitTool ? [...previousTools, "exit_plan_mode"] : previousTools;
+		const planTools = [...previousTools];
+		if (hasExitTool) planTools.push("exit_plan_mode");
+		// Plan mode mandates org — ensure it's in the active set even if org.enabled is off
+		if (this.session.getToolByName("org") && !previousTools.includes("org")) planTools.push("org");
 		const uniquePlanTools = [...new Set(planTools)];
 
 		this.#planModePreviousTools = previousTools;
