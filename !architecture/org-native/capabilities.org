@@ -1,0 +1,496 @@
+#+TITLE: Org-Native Capabilities
+#+AUTHOR: Spell
+#+DATE: 2026-03-14
+#+STARTUP: showall
+
+* Overview
+
+This document describes the org-native capabilities shipped in the Phase 0–6
+migration.  It is intended for both contributors extending the org package and
+for the agent runtime, which reads ~!architecture/~ as part of its context.
+
+Each section names the capability, its location in the codebase, the public
+API surface, and any concrete next steps that remain.
+
+* Capabilities
+
+** DONE text/x-org Content Type
+:PROPERTIES:
+:EFFORT:   30min
+:FILES:    packages/coding-agent/src/internal-urls/types.ts, org-protocol.ts, local-protocol.ts, skill-protocol.ts, memory-protocol.ts
+:END:
+
+Org files served through any internal URL protocol now carry
+~contentType: "text/x-org"~ instead of being misidentified as markdown.
+
+*** Affected protocols
+
+| Protocol    | Extension trigger | Returns        |
+|-------------+-------------------+----------------|
+| ~org://~    | (always)          | ~text/x-org~   |
+| ~local://~  | ~.org~            | ~text/x-org~   |
+| ~skill://~  | ~.org~            | ~text/x-org~   |
+| ~memory://~ | ~.org~            | ~text/x-org~   |
+
+*** Type definition
+
+#+begin_src typescript
+// packages/coding-agent/src/internal-urls/types.ts
+contentType: "text/plain" | "text/markdown" | "text/x-org" | "application/json";
+#+end_src
+
+*** Deferred
+
+Inspector panel (~inspector-panel.ts~) does not yet branch on ~text/x-org~ to
+render a converted view.  The LLM receives raw org directly, which it handles
+well; a rendered panel view is a UI-only improvement.
+
+** DONE uniorg TypeScript Facade
+:PROPERTIES:
+:EFFORT:   2h
+:FILES:    packages/org/src/org-parse.ts, packages/org/test/org-parse.test.ts
+:END:
+
+A pure-TS facade over ~uniorg~ + ~uniorg-rehype~ + ~mdast-util-to-markdown~.
+No uniorg types leak through the public API of ~@oh-my-pi/pi-org~.
+
+*** Exports
+
+#+begin_src typescript
+// packages/org/src/org-parse.ts
+
+/** Convert org-mode source to GitHub-Flavored Markdown. */
+export function orgToMarkdown(org: string): string;
+
+/** Extract plain text, stripping all markup. */
+export function orgToPlainText(org: string): string;
+
+/** Extract #+KEY: value pairs from file-level preamble. */
+export function extractOrgKeywords(org: string): Record<string, string>;
+
+export interface OrgHeading {
+  level: number;       // 1 = *, 2 = **, …
+  title: string;       // clean text, no markup
+  tags: string[];      // :tag1:tag2: → ["tag1", "tag2"]
+  children: OrgHeading[];
+}
+
+/** Build a heading tree from an org document. */
+export function parseOrgHeadings(org: string): OrgHeading[];
+#+end_src
+
+*** Example
+
+#+begin_src typescript
+import { extractOrgKeywords, parseOrgHeadings } from "@oh-my-pi/pi-org";
+
+const kw = extractOrgKeywords("#+title: Foo\n#+globs: src/**\n* Heading");
+// kw.title === "Foo", kw.globs === "src/**"
+
+const tree = parseOrgHeadings("* A\n** B\n* C");
+// [{ level:1, title:"A", children:[{ level:2, title:"B", children:[] }] },
+//  { level:1, title:"C", children:[] }]
+#+end_src
+
+*** Tests
+
+17 tests in ~packages/org/test/org-parse.test.ts~ covering all four
+functions, including empty input, PROPERTIES drawers, link syntax, and tag
+extraction.
+
+** DONE Keyword Query Syntax + Query Builder
+:PROPERTIES:
+:EFFORT:   3h
+:FILES:    packages/org/src/query-builder.ts
+:END:
+
+A lightweight query language parsed entirely in TypeScript.  No Emacs required
+for common predicates.  When Emacs is available, the filter compiles to an
+org-ql s-expression.
+
+*** Keyword syntax
+
+#+begin_example
+todo:DOING tags:auth priority:>=B confidence:>0.7
+#+end_example
+
+Supported tokens:
+
+| Token              | Meaning                                |
+|--------------------+----------------------------------------|
+| ~todo:STATE~       | Match ~TODO~ keyword                   |
+| ~tags:t1+t2~       | All listed tags present (~+~ separator)|
+| ~priority:>=B~     | Priority comparison (A/B/C)            |
+| ~confidence:>N~    | CONFIDENCE property (memory entries)   |
+| ~category:NAME~    | Category prefix filter                 |
+
+*** API
+
+#+begin_src typescript
+// packages/org/src/query-builder.ts
+
+export interface OrgQlFilter {
+  states?: string[];
+  tags?: string[];
+  priority?: { op: ">=" | "<=" | "=" | ">" | "<"; value: string };
+  confidence?: { op: ">=" | "<=" | "=" | ">" | "<"; value: number };
+  category?: string;
+  raw?: string;  // pass-through sexp for Emacs-only predicates
+}
+
+/** Compile filter to an org-ql s-expression string. */
+export function buildOrgQlSexp(filter: OrgQlFilter): string;
+
+/** True when the filter requires Emacs (contains raw or unsupported predicates). */
+export function requiresEmacs(filter: OrgQlFilter): boolean;
+
+/** Parse "todo:DOING tags:auth priority:>=B" → OrgQlFilter. */
+export function parseKeywordQuery(input: string): OrgQlFilter;
+#+end_src
+
+*** Routing contract
+
+~requiresEmacs(filter) === false~ → ~applyFilter~ in ~org-reader.ts~ handles
+it in-process.
+
+~requiresEmacs(filter) === true~ → dispatch to ~org-ql-query~ MCP tool (Emacs
+bridge).  Falls back to in-process with degraded fidelity if Emacs is
+unavailable.
+
+** DONE org-ql MCP Tool (Emacs Bridge)
+:PROPERTIES:
+:EFFORT:   2h
+:FILES:    packages/org/elisp/vendor/org-ql/, packages/org/elisp/tools/org-ql-query.el, packages/org/elisp/mcp-server-emacs-tools.el
+:END:
+
+Vendored minimal org-ql dependencies into the repo; no external package manager
+required at runtime.
+
+*** Vendored files
+
+| File                                      | Source           |
+|-------------------------------------------+------------------|
+| ~elisp/vendor/org-ql/org-ql.el~           | org-ql upstream  |
+| ~elisp/vendor/org-ql/dash.el~             | dash.el upstream |
+| ~elisp/vendor/org-ql/ts.el~               | ts.el upstream   |
+| ~elisp/vendor/org-ql/compat.el~           | compat upstream  |
+| ~elisp/vendor/org-ql/load-org-ql.el~      | hand-written     |
+
+Built-in to Emacs 30.2 (no vendoring needed): ~peg~, ~map~, ~seq~, ~cl-lib~,
+~subr-x~.
+
+*** Custom predicate
+
+#+begin_src emacs-lisp
+;; packages/org/elisp/tools/org-ql-query.el
+(org-ql-defpred confidence-above (threshold)
+  "Match entries whose CONFIDENCE property exceeds THRESHOLD."
+  :body (when-let ((v (org-entry-get nil "CONFIDENCE")))
+          (> (string-to-number v) threshold)))
+#+end_src
+
+Usage in keyword query: ~confidence:>0.8~ compiles to ~(confidence-above 0.8)~.
+
+** DONE Memory System: MEMORY.org
+:PROPERTIES:
+:EFFORT:   4h
+:FILES:    packages/org/src/org-writer.ts, packages/org/src/types.ts, packages/coding-agent/src/memories/index.ts
+:END:
+
+When the consolidation LLM returns structured ~memory_entries~, a ~MEMORY.org~
+is written alongside the existing ~MEMORY.md~.  Memories become queryable by
+confidence, scope, recency, and tag.
+
+*** MemoryEntry data shape
+
+#+begin_src typescript
+// packages/org/src/types.ts
+export interface MemoryEntry {
+  title: string;
+  confidence: number;   // 0.0–1.0
+  scope: string;        // "project" | "global" | custom
+  sourceSession: string;
+  tags?: string[];
+  body?: string;
+}
+#+end_src
+
+*** Serialized format
+
+#+begin_example
+* Entry title                              :tag1:tag2:
+:PROPERTIES:
+:CONFIDENCE:     0.87
+:SCOPE:          project
+:SOURCE_SESSION: sess-abc123
+:LAST_VALIDATED: [2026-03-14]
+:END:
+
+Body text describing the memory in detail.
+#+end_example
+
+*** API
+
+#+begin_src typescript
+// packages/org/src/org-writer.ts
+export function serializeMemoryEntry(entry: MemoryEntry): string;
+export function serializeMemoryFile(entries: MemoryEntry[], session: string): string;
+#+end_src
+
+~serializeMemoryFile~ prepends a file header with ~#+TITLE~, ~#+SESSION~, and
+~#+CREATED~ keywords before the entry list.
+
+*** Consolidation schema extension
+
+#+begin_src typescript
+// packages/coding-agent/src/memories/index.ts (schema excerpt)
+interface ConsolidationMemoryEntrySchema {
+  title: string;
+  confidence: number;
+  scope: string;
+  tags?: string[];
+  body?: string;
+}
+// Added to ConsolidationOutputSchema:
+memory_entries?: ConsolidationMemoryEntrySchema[];
+#+end_src
+
+The field is optional.  If the LLM omits it, only ~MEMORY.md~ is written
+(backward-compatible).
+
+*** Next steps
+
+- Incremental merge: current path overwrites ~MEMORY.org~ on each
+  consolidation.  A proper merge would match existing entries by title and
+  update confidence in-place.  [EFFORT: 1d]
+- Confidence decay: entries not seen in N sessions should have confidence
+  reduced automatically.  [EFFORT: 4h]
+- Prompt update: ~consolidation.md~ should explicitly instruct the LLM to
+  emit ~memory_entries~ with confidence scores.  [EFFORT: 1h]
+
+** DONE SKILL.org Discovery
+:PROPERTIES:
+:EFFORT:   1h
+:FILES:    packages/coding-agent/src/discovery/helpers.ts, packages/coding-agent/src/extensibility/skills.ts
+:END:
+
+Skills can now be defined as ~SKILL.org~ files using ~#+KEY: value~ frontmatter
+instead of YAML.  ~SKILL.org~ takes precedence over ~SKILL.md~ when both exist.
+
+*** Frontmatter mapping
+
+| Org keyword      | Skill field    |
+|------------------+----------------|
+| ~#+name:~        | ~name~         |
+| ~#+description:~ | ~description~  |
+| ~#+globs:~       | ~globs~        |
+| ~#+always-apply:~| ~alwaysApply~  |
+
+The skill body (everything after the first ~* ~ heading) is used as the content.
+
+*** baseDir regex
+
+#+begin_src typescript
+// Both extensions handled everywhere baseDir is derived:
+capSkill.path.replace(/\/SKILL\.(md|org)$/, "")
+#+end_src
+
+** DONE Sessions Category
+:PROPERTIES:
+:EFFORT:   30min
+:FILES:    packages/org/src/schema/defaults.ts
+:END:
+
+A ~sessions~ category is now included in ~DEFAULT_ORG_CONFIG~.
+
+#+begin_src typescript
+{
+  id: "sessions",
+  prefix: "SESS",
+  path: "!sessions/sessions",
+  writeInitialPrompt: false,
+}
+#+end_src
+
+Session items can carry ~CLOCK~ entries for effort vs. actual reporting and be
+tagged by project or agent instance.
+
+*** Next steps
+
+- Auto-create a ~SESS-NNN~ item at session start and clock it in.  [EFFORT: 2h]
+- Clock out + set state to ~DONE~ on session end.  [EFFORT: 1h]
+- Link plan items to the session that created them.  [EFFORT: 1h]
+
+** DONE Unified Query Layer (org tool)
+:PROPERTIES:
+:EFFORT:   1h
+:FILES:    packages/org/src/tool.ts
+:END:
+
+The ~org query~ subcommand now accepts an optional ~query~ string in keyword
+syntax in addition to the existing structured filter parameters.
+
+*** Tool schema addition
+
+#+begin_src typescript
+query: {
+  type: "string",
+  description: "Keyword query: 'todo:DOING tags:auth priority:>=B confidence:>0.7'",
+}
+#+end_src
+
+*** Dispatch
+
+1. ~query~ string is parsed via ~parseKeywordQuery~ → ~OrgQlFilter~
+2. ~requiresEmacs(filter)~ → Emacs bridge if true, ~applyFilter~ if false
+3. Omitting ~category~ scans all categories (cross-entity query)
+
+* Implementation Status Summary
+
+| Capability           | Status | Remaining effort |
+|----------------------+--------+------------------|
+| text/x-org type      | DONE   | —                |
+| uniorg facade        | DONE   | —                |
+| Keyword query        | DONE   | —                |
+| org-ql MCP tool      | DONE   | —                |
+| MEMORY.org           | DONE   | Incremental merge [1d], decay [4h], prompt [1h] |
+| SKILL.org discovery  | DONE   | —                |
+| Sessions category    | DONE   | Auto-clock [3h], plan linking [1h] |
+| Unified query layer  | DONE   | —                |
+
+
+* Design Rationale and Tradeoffs
+
+** Why dual MEMORY.md + MEMORY.org
+
+The markdown file is the established contract: prompts, consolidation output,
+and the memory protocol all assume it exists.  Replacing it outright would
+break every running session that hasn't upgraded.  The org file is additive —
+it carries structured metadata (confidence, scope, session linkage) that
+markdown cannot express without fragile conventions like YAML frontmatter
+inside fenced blocks.
+
+The cost is two files representing overlapping content.  The exit condition is:
+once the consolidation prompt reliably emits ~memory_entries~, ~MEMORY.md~
+becomes derivable from ~MEMORY.org~ (render org to markdown) and can be
+generated on demand rather than stored.
+
+** Why vendor org-ql instead of depending on user's Emacs packages
+
+Spell targets machines where Emacs is installed but not necessarily configured
+as a package-managed environment.  Requiring ~(package-install 'org-ql)~ or
+~use-package~ declarations would create a brittle runtime dependency on the
+user's ~init.el~.  Vendoring a minimal subset (~org-ql.el~ + 3 deps) keeps
+the Emacs bridge self-contained.
+
+The tradeoff: vendored copies can drift from upstream.  Mitigation is that
+org-ql's core query engine is stable; the vendored subset excludes the UI
+modules (~org-ql-view~, ~org-ql-search~, ~helm-org-ql~) where churn happens.
+
+** Why a TS query builder instead of always delegating to Emacs
+
+Not every deployment has Emacs.  The agent runs on CI machines, containers,
+and remote servers where only the Node/Bun runtime is guaranteed.  The TS
+query path (~applyFilter~ in ~org-reader.ts~) covers the common predicates
+(state, tags, priority, property comparisons) without spawning a subprocess.
+
+Emacs delegation is the high-fidelity path: it handles date math, deadline
+warnings, inherited tags, and custom predicates that the TS path cannot.
+~requiresEmacs()~ exists precisely to make this routing decision explicit —
+callers never silently get degraded results.
+
+The gap: the TS path and Emacs path can disagree on edge cases (tag
+inheritance, priority cookie parsing).  The ~query-language.org~ architecture
+doc has a predicate fidelity table tracking where they diverge.
+
+** Why text/x-org instead of converting at the protocol boundary
+
+Early design considered converting org → markdown at read time so consumers
+wouldn't need to know about org.  This was rejected because:
+
+1. The LLM handles org syntax natively — it's trained on enough org-mode
+   content that no conversion is needed for comprehension.
+2. Conversion is lossy: PROPERTIES drawers, CLOCK entries, tags, and
+   timestamps have no clean markdown equivalent.
+3. Converting eagerly would prevent the agent from round-tripping org
+   content (read → reason → edit) without accumulating format drift.
+
+The one place conversion matters is the TUI inspector panel, which renders
+for human eyes.  That path can call ~orgToMarkdown~ on demand.
+
+** Why SKILL.org takes precedence over SKILL.md
+
+Org frontmatter (~#+KEY: value~) is the native metadata format for org files.
+When a skill is authored in org, extracting metadata from org keywords is
+more reliable than parsing markdown YAML frontmatter.  Precedence avoids
+ambiguity when both files exist (e.g., during migration).
+
+The fallback to ~SKILL.md~ is permanent, not transitional — markdown skills
+are a valid authoring choice.  The preference order only applies when both
+formats coexist in the same skill directory.
+
+** Why a sessions category with writeInitialPrompt: false
+
+Session items track runtime metadata (start time, duration, agent model,
+project context).  Embedding the full system prompt in every session item
+would bloat the org files with kilobytes of repeated boilerplate that has
+no query value.  ~writeInitialPrompt: false~ keeps session items lean.
+
+The session's system prompt is recoverable from the session log if needed
+for debugging; it doesn't need to live in the org item.
+
+* Future Work
+
+** Confidence decay
+
+Memories that are never reinforced should fade.  The proposed mechanism:
+on each consolidation pass, entries not referenced in ~raw_memories.md~ since
+their ~LAST_VALIDATED~ date have their ~CONFIDENCE~ reduced by a configurable
+decay factor.  Entries below a threshold (e.g., 0.1) are archived.
+
+This requires incremental merge (below) as a prerequisite — you can't decay
+entries you're overwriting wholesale.
+
+Effort: 4h (after incremental merge).
+
+** Incremental MEMORY.org merge
+
+Current behavior: ~applyConsolidation~ overwrites ~MEMORY.org~ entirely.
+Correct behavior: match incoming entries to existing ones by title (or a
+stable ~CUSTOM_ID~), update confidence and body, preserve ~CLOCK~ history
+and manual edits the user may have made.
+
+This is the single highest-value improvement remaining.  Without it, any
+manual curation of ~MEMORY.org~ is lost on the next consolidation.
+
+Effort: 1d.
+
+** Session auto-clocking
+
+On session start: create ~SESS-NNN-<slug>~ item, clock in.  On session end:
+clock out, set state to ~DONE~, record final token counts and model info as
+properties.  This gives effort-vs-actual tracking for free via org's built-in
+~org-clock-report~.
+
+Requires: the agent session lifecycle (~agent-session.ts~) to call the org
+tool at start/end boundaries.
+
+Effort: 3h.
+
+** Plan-to-session linking
+
+When ~exit_plan_mode~ creates/approves a plan, the plan's org item should
+carry a ~SESSION~ property pointing to the current ~SESS-NNN~ item.  This
+enables queries like "show me all plans created in today's sessions" and
+builds the cross-reference graph described in ~vision.org~.
+
+Effort: 1h.
+
+** Inspector panel org rendering
+
+The TUI inspector panel (~inspector-panel.ts~) currently does not branch on
+~text/x-org~.  When it does, it should call ~orgToMarkdown~ for display
+and render the result as markdown.  Low priority — the LLM-facing path
+works fine with raw org.
+
+Effort: 2h.
