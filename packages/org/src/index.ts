@@ -4,6 +4,7 @@ export * from "./emacs/daemon";
 export * from "./emacs/detection";
 export * from "./id-generator";
 export * from "./journal";
+export * from "./org-parse";
 export * from "./org-reader";
 export * from "./org-writer";
 export * from "./schema/defaults";

@@ -49,8 +49,18 @@ names (symbols) to enable selectively."
     (org-get-property . org-property)
     (org-set-property . org-property)
     (org-archive-item . org-archive-tool)
-    (org-capture . org-capture-tool))
+    (org-capture . org-capture-tool)
+    ;; org-ql query tool
+    (org-ql-query . org-ql-query))
   "Alist mapping tool names (symbols) to their feature names.")
+
+;; Add vendor/org-ql directory to load-path for org-ql and its dependencies
+(let* ((this-file (or load-file-name buffer-file-name))
+       (vendor-dir (and this-file
+                        (expand-file-name "vendor/org-ql" (file-name-directory this-file)))))
+  (when vendor-dir
+    (add-to-list 'load-path vendor-dir)))
+
 
 (let* ((this-file (or load-file-name buffer-file-name))
        (tools-dir (and this-file
@@ -92,6 +102,7 @@ names (symbols) to enable selectively."
 (require 'org-property)
 (require 'org-archive-tool)
 (require 'org-capture-tool)
+(require 'org-ql-query)
 
 (defun mcp-server-emacs-tools--tool-enabled-p (tool-name)
   "Return non-nil if TOOL-NAME is enabled."

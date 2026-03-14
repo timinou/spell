@@ -1,0 +1,227 @@
+#+TITLE: ChatPanel visual rendering tests
+#+STATE: DONE
+#+SESSION_ID: 14925ccc4712c72b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-14T12-06-44-252Z_14925ccc4712c72b.jsonl]]
+#+CUSTOM_ID: DRAFT-003-chatpanel-visual-rendering-tests
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: test
+
+NOTE [2026-03-14]: Superseded by comprehensive bridge-level plan
+
+* Initial Message
+
+commit
+
+* Problem
+
+The ChatPanel integration tests (=qml-chat-panel.test.ts=) only query the =ListModel= data layer via =messagesModel.get(i)=. They verify model fields (role, text, isStreaming) but never verify that QML delegates actually render those fields into visible =Text= elements.
+
+A bug where:
+- =SpellUI.SpellTheme= fails to load (singleton resolution error)
+- Delegate =Loader.sourceComponent= selects the wrong =Component= by role
+- =model.text= binding breaks inside a delegate context
+- Delegate height collapses to zero (=parent= is null guard: =parent ? parent.width : 0=)
+
+...would pass all current tests while producing blank or missing chat bubbles.
+
+The current test architecture has the right layering — a QML test harness wrapper that intercepts bridge messages and supports query/reset protocols. What's missing is queries that walk the visual tree to extract rendered content.
+
+* Approach
+
+Add a =renderedMessages= query to =ChatPanelTestHarness.qml= that walks the =ListView='s instantiated delegate items, finds =Text= children, and returns what's actually rendered. Then add tests that assert rendered text matches expected content.
+
+** How the delegate tree works
+
+#+begin_example
+ListView (id: messageList)
+  └── delegate: Item
+        └── Loader (id: delegateLoader)
+              └── sourceComponent: assistantDelegate | userDelegate | toolDelegate
+                    └── Rectangle
+                          └── Text { text: model.text }  (or ColumnLayout for tool)
+#+end_example
+
+The =ListView= exposes =itemAtIndex(index)= (Qt 5.13+) to get the instantiated delegate =Item= at a given model index. From there we walk children recursively to find =Text= elements and extract their =text= property.
+
+QML's =contentItem.children= provides access to all instantiated delegates. However, =ListView= virtualizes — only visible delegates exist. For tests with a few messages this isn't an issue since all items fit in the viewport.
+
+** Visual tree walk function (QML-side)
+
+Add to =ChatPanelTestHarness.qml=:
+
+#+begin_src qml
+function collectTexts(item) {
+    var texts = []
+    if (item.toString().indexOf("QQuickText") !== -1 && item.text !== undefined) {
+        texts.push(item.text)
+    }
+    for (var i = 0; i < item.children.length; i++) {
+        texts = texts.concat(collectTexts(item.children[i]))
+    }
+    return texts
+}
+#+end_src
+
+The =renderedMessages= query uses this to walk each delegate and extract visible text:
+
+#+begin_src qml
+} else if (queryName === "renderedMessages") {
+    var rendered = []
+    // Force ListView to lay out all items synchronously
+    chatPanel.forceLayout()
+    var listView = chatPanel.findListView()
+    for (var i = 0; i < chatPanel.messagesModel.count; i++) {
+        var delegateItem = listView.itemAtIndex(i)
+        var entry = {
+            index: i,
+            exists: delegateItem !== null,
+            texts: delegateItem ? collectTexts(delegateItem) : [],
+            height: delegateItem ? delegateItem.height : 0,
+            visible: delegateItem ? delegateItem.visible : false
+        }
+        rendered.push(entry)
+    }
+    result = rendered
+}
+#+end_src
+
+** ChatPanel.qml needs a findListView() accessor
+
+The =ListView= (=messageList=) is an internal child. The test harness needs access. Options:
+
+1. Add =readonly property alias messageList: messageList= to ChatPanel.qml (matches =messagesModel= pattern)
+2. Use =chatPanel.children[0].children[0]= (fragile)
+
+Option 1 is clean and consistent with the existing =messagesModel= alias.
+
+File: =packages/coding-agent/src/modes/qml/panels/ChatPanel.qml=, add after the =messagesModel= alias:
+#+begin_src qml
+    // Exposed for test introspection — not used by production code.
+    readonly property alias messageList: messageList
+#+end_src
+
+With the alias, the query accesses =chatPanel.messageList.itemAtIndex(i)= directly.
+
+** ITEM Add messageList alias to ChatPanel.qml
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+File: =packages/coding-agent/src/modes/qml/panels/ChatPanel.qml=
+
+Add =readonly property alias messageList: messageList= after the existing =messagesModel= alias (line ~15).
+
+** ITEM Add visual tree walk + renderedMessages query to ChatPanelTestHarness.qml
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/src/modes/qml/panels/ChatPanelTestHarness.qml=
+
+1. Add =collectTexts(item)= helper function that recursively walks children, collects =text= property from QQuickText items
+2. Add =renderedMessages= query handler that:
+   - Calls =chatPanel.messageList.forceLayout()= to ensure delegates are instantiated
+   - Iterates model indices 0..count-1
+   - For each, calls =chatPanel.messageList.itemAtIndex(i)=
+   - Runs =collectTexts= on the delegate item
+   - Returns array of ={index, exists, texts, height, visible}=
+3. Add =renderedMessage= (singular) query that returns the same info for just the last message, for convenience
+
+** ITEM Add visual rendering assertions to qml-chat-panel.test.ts
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+File: =packages/coding-agent/test/modes/qml-chat-panel.test.ts=
+
+Add new test cases that use the =renderedMessages= query to verify actually-rendered content:
+
+1. *User message bubble renders text:*
+   - Send ={type:"user_message", text:"hello world"}=
+   - Query =renderedMessages=
+   - Assert =rendered[0].exists === true=
+   - Assert =rendered[0].height > 0=
+   - Assert =rendered[0].texts= contains ="hello world"=
+
+2. *Assistant message bubble renders streamed text:*
+   - Send message_start + message_update("Hello world") + message_end
+   - Query =renderedMessages=
+   - Assert rendered delegate exists, has positive height, =texts= contains ="Hello world"=
+
+3. *Tool delegate renders tool name and details:*
+   - Send tool_start with name="bash", details="Running build"
+   - Query =renderedMessages=
+   - Assert =texts= contains ="bash"= and ="Running build"=
+   - Note: tool details are only visible when =isExpanded= is true. Either send a follow-up to expand, or verify the tool name in the header which is always visible.
+
+4. *Multiple messages all render:*
+   - Send user message, tool, assistant message
+   - Query =renderedMessages=
+   - Assert all 3 delegates exist, all have height > 0
+   - Assert each delegate's =texts= contains its respective content
+
+5. *Empty assistant bubble has zero-length text but still renders (delegate exists):*
+   - Send message_start only (no update)
+   - Assert delegate exists and has height > 0 (the streaming dot or empty bubble should render)
+
+** ITEM Add QmlTestHarness.queryRendered convenience method
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: =packages/qml/src/test-harness.ts=
+
+Add typed helper:
+
+#+begin_src typescript
+interface RenderedMessage {
+    index: number;
+    exists: boolean;
+    texts: string[];
+    height: number;
+    visible: boolean;
+}
+
+/** Query the visual tree for rendered message content. */
+async queryRendered(): Promise<RenderedMessage[]> {
+    return this.query<RenderedMessage[]>("renderedMessages");
+}
+#+end_src
+
+* Key Design Decisions
+
+** QML-side visual tree walk, not screenshot comparison
+
+Screenshot pixel comparison is fragile across platforms (font rendering differences, Qt software rasterizer variance). Walking the QML visual tree from QML code gives us structural assertions: does the Text element exist, does it contain the expected string, is the delegate instantiated and visible.
+
+** itemAtIndex vs contentItem.children
+
+=ListView.itemAtIndex(index)= (available since Qt 5.13) returns the delegate for a specific model index. This is more reliable than walking =contentItem.children= which includes header/footer items and where ordering doesn't match model indices due to virtualization recycling.
+
+** forceLayout before querying
+
+=ListView= lays out items lazily. After sending messages, the layout may not have updated yet. Calling =forceLayout()= ensures all pending delegate creations and property bindings have completed before we walk the tree.
+
+** Tool details visibility
+
+The tool delegate's detail text (=model.text=) is gated by =model.isExpanded=. The test must either:
+- Toggle =isExpanded= before querying (via a new =expandMessage= command)
+- Or only assert the tool header (name) which is always visible, and assert the detail text separately via model query
+
+The plan uses option 2 for simplicity: assert the tool name renders in the header, and verify detail text exists in the model. A dedicated =expandMessage= command can be added later if needed.
+
+* Key Files
+
+|File|Action|Description|
+|---|---|---|
+|=packages/coding-agent/src/modes/qml/panels/ChatPanel.qml=|Modify|Add messageList alias|
+|=packages/coding-agent/src/modes/qml/panels/ChatPanelTestHarness.qml=|Modify|Add collectTexts + renderedMessages query|
+|=packages/qml/src/test-harness.ts=|Modify|Add RenderedMessage type + queryRendered() method|
+|=packages/coding-agent/test/modes/qml-chat-panel.test.ts=|Modify|Add visual rendering assertion tests|
+
+* Verification
+
+1. =bun check:ts= — no type errors
+2. =bun test packages/coding-agent/test/modes/qml-chat-panel.test.ts= — all tests pass including new visual assertions
+3. *Intentional breakage test* (manual, not automated): temporarily change =model.text= to a hardcoded empty string in the assistant delegate, run tests — the new visual tests must fail while the old model-only tests still pass. This proves the visual tests catch rendering bugs the model tests miss.

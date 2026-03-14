@@ -2,6 +2,27 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isBridgeAvailable, QmlProcess } from "./qml-process";
 
+export interface QuerySelector {
+	type?: string;
+	objectName?: string;
+	visible?: boolean;
+	textContains?: string;
+}
+
+export interface QueryItem {
+	className: string;
+	objectName: string;
+	geometry?: { x: number; y: number; width: number; height: number };
+	scenePosition?: { x: number; y: number };
+	visible: boolean;
+	opacity: number;
+	enabled: boolean;
+	clip: boolean;
+	properties: Record<string, unknown>;
+	childCount: number;
+	path: string;
+}
+
 export interface QmlTestHarnessOptions {
 	/** Additional env vars beyond QT_QPA_PLATFORM=offscreen */
 	env?: Record<string, string>;
@@ -95,6 +116,84 @@ export class QmlTestHarness {
 	 * Returns the path to the saved PNG file.
 	 * If savePath is omitted, a temp file is used.
 	 */
+	/**
+	 * Find elements in the visual tree matching a selector.
+	 * Returns all matching items with their requested properties.
+	 */
+	async findItems(
+		selector?: QuerySelector,
+		options?: {
+			properties?: string[];
+			includeGeometry?: boolean;
+			maxDepth?: number;
+		},
+	): Promise<QueryItem[]> {
+		if (!this.#process) throw new Error("QmlTestHarness not set up — call setup() first");
+		this.#process.send({
+			type: "query",
+			id: TEST_WINDOW_ID,
+			selector: selector ?? {},
+			properties: options?.properties ?? [],
+			includeGeometry: options?.includeGeometry ?? false,
+			maxDepth: options?.maxDepth ?? 20,
+		});
+		const event = await this.#process.waitFor(e => e.type === "query_result" && e.id === TEST_WINDOW_ID, 10_000);
+		return (event as { type: "query_result"; id: string; items: QueryItem[] }).items;
+	}
+
+	/** Find all visible Text elements and return their text content. */
+	async findVisibleText(): Promise<string[]> {
+		const items = await this.findItems({ type: "QQuickText", visible: true }, { properties: ["text"] });
+		return items.map(i => String(i.properties.text ?? "")).filter(t => t.length > 0);
+	}
+
+	/**
+	 * Assert an element matching the selector exists, is visible, and has positive dimensions.
+	 * Throws if not found or dimensions are zero.
+	 */
+	async assertVisible(selector: QuerySelector): Promise<QueryItem> {
+		const items = await this.findItems(selector, { includeGeometry: true });
+		if (items.length === 0) {
+			throw new Error(`assertVisible: no element found matching ${JSON.stringify(selector)}`);
+		}
+		const item = items[0];
+		if (!item.visible) {
+			throw new Error(`assertVisible: element is not visible: ${item.path}`);
+		}
+		if ((item.geometry?.width ?? 0) <= 0 || (item.geometry?.height ?? 0) <= 0) {
+			throw new Error(
+				`assertVisible: element has zero dimensions at ${item.path}: ` +
+					`${item.geometry?.width}x${item.geometry?.height}`,
+			);
+		}
+		return item;
+	}
+
+	/** Assert no element matches the selector. Throws if any match is found. */
+	async assertNotFound(selector: QuerySelector): Promise<void> {
+		const items = await this.findItems(selector);
+		if (items.length > 0) {
+			throw new Error(
+				`assertNotFound: expected no elements matching ${JSON.stringify(selector)}, found ${items.length}`,
+			);
+		}
+	}
+
+	/**
+	 * Evaluate a JS expression in the QML engine context.
+	 * The root QML object is available as `root`.
+	 */
+	async evaluate<T = unknown>(expression: string): Promise<T> {
+		if (!this.#process) throw new Error("QmlTestHarness not set up — call setup() first");
+		this.#process.send({ type: "eval", id: TEST_WINDOW_ID, expression });
+		const event = await this.#process.waitFor(e => e.type === "eval_result" && e.id === TEST_WINDOW_ID, 10_000);
+		const result = event as { type: "eval_result"; id: string; value: unknown; error: string | null };
+		if (result.error !== null) {
+			throw new Error(`QML eval error: ${result.error}`);
+		}
+		return result.value as T;
+	}
+
 	async screenshot(savePath?: string): Promise<string> {
 		if (!this.#process) throw new Error("QmlTestHarness not set up — call setup() first");
 		const dest = savePath ?? path.join(os.tmpdir(), `spell-qml-test-${Date.now()}.png`);

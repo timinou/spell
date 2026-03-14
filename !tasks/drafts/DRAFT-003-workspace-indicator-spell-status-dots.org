@@ -1,0 +1,125 @@
+#+TITLE: Workspace indicator spell status dots
+#+STATE: ITEM
+#+SESSION_ID: 14925a9eea242121
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-14T11-57-13-512Z_14925a9eea242121.jsonl]]
+#+CUSTOM_ID: DRAFT-003-workspace-indicator-spell-status-dots
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: frontend
+
+* Initial Message
+
+continue
+
+* Problem
+
+When spell sessions need input, approval, or have completed, the only signal is the niri overview overlay (which requires opening the overview). The workspace switcher in the DankBar shows no indication of which workspaces have sessions needing attention.
+
+* Architecture
+
+Two-part solution: spell writes status files, Quickshell reads and renders them.
+
+** Communication protocol
+
+Spell writes JSON status files to =~/.spell/status/<session-id>.json= on every status change. Format:
+
+#+begin_src json
+{
+  "status": "running",
+  "title": "Auth Refactor",
+  "pid": 12345,
+  "updatedAt": 1710000000000
+}
+#+end_src
+
+Status values: ="idle"=, ="running"=, ="needs_input"=, ="error"=, ="completed"=, ="pending_approval"=.
+
+=title= is the terminal window title set via OSC 0 (e.g. "Auth Refactor"). Quickshell matches this against niri window titles to determine which workspace each session is on.
+
+The file is deleted on controller destroy (session exit). A stale-file reaper (>60s since updatedAt with no matching PID alive) handles crashes.
+
+** Why title-based matching
+
+All Ghostty windows share a single PID (4644 in the compositor's view), so PID-based workspace association doesn't work. Window titles are unique per tab/session and already set by spell. Quickshell's NiriService tracks =title= and =workspace_id= for every window.
+
+* Approach
+
+** ITEM Write status files from NiriOverviewController
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+Files:
+- =packages/niri/src/controller.ts=
+
+Changes:
+- Add a =#statusFilePath= field set to =~/.spell/status/<sessionId>.json= (derive sessionId from =sessionManager.getSessionName()= or fall back to PID)
+- In =#buildSnapshot()= (called on every state change), after deriving =agentStatus=, write the status file via =Bun.write()= (fire-and-forget, non-blocking)
+- In =destroy()=, delete the status file (=fs.rm= with =force: true=)
+- Add =title= to =NiriOverviewContext= (expose the terminal title or session name so it can be written to the status file)
+- Ensure =~/.spell/status/= directory is created once on controller init
+
+Status file write is debounced or deduped: only write when status actually changes (compare against last written status). This avoids disk churn on every session event.
+
+** ITEM Create SpellStatusService for Quickshell
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+File: =~/.config/quickshell/dms/Services/SpellStatusService.qml=
+
+A singleton service that:
+1. Uses a =Timer= (2s interval) + =Process= to run =ls ~/.spell/status/= and =cat= each file
+2. Exposes a =property var sessionsByTitle: ({})= mapping window title -> status string
+3. Provides a helper function =getWorkspaceStatuses(workspaceId)= that cross-references =NiriService.windows= (filtering by =workspace_id=) against =sessionsByTitle= (matching by title substring) and returns an array of status strings for that workspace
+
+Also reaps stale files (updatedAt > 60s old, PID not alive).
+
+Register in =DMSShell.qml= alongside other services.
+
+** ITEM Add status dots to WorkspaceSwitcher delegate
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+File: =~/.config/quickshell/dms/Modules/DankBar/Widgets/WorkspaceSwitcher.qml=
+
+In the delegate (=delegateRoot=, around line 752):
+1. Query =SpellStatusService.getWorkspaceStatuses(workspaceId)= for the current workspace
+2. If non-empty, render a small =Row= of colored circles (4px diameter) positioned at the bottom-right corner of the workspace button (=visualContent= Rectangle, line 1052)
+3. Color mapping:
+   - =needs_input=: =#f9e2af= (yellow, Catppuccin)
+   - =pending_approval=: =#94e2d5= (teal, Catppuccin)
+   - =completed=: =#a6e3a1= (green, Catppuccin)
+   - =error=: =#f38ba8= (red, Catppuccin)
+   - =running=: no dot (that's the normal state)
+   - =idle=: no dot
+4. Only show dots for actionable states (needs_input, pending_approval, completed, error) — not running/idle
+
+The dots are tiny (4px) and positioned to not obscure the workspace number/icon. Multiple sessions = multiple dots in a row.
+
+** ITEM Add status file write tests
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/niri/test/controller.test.ts=
+
+- Test that status file is written on overlay show with correct status
+- Test that status file is deleted on destroy
+- Test that status file content updates when session state changes
+- Test deduplication: same status doesn't trigger a write
+
+* Key decisions
+
+1. *File-based IPC* over Unix socket: simpler, Quickshell has =FileView=/=Process= but no easy Unix socket client for custom protocols. Polling at 2s is acceptable for a status indicator.
+2. *Title matching* over PID matching: Ghostty multiplexes windows under one PID. Window titles are unique and already set by spell.
+3. *Dots not badges*: Tiny colored circles are unobtrusive. No text labels — color alone communicates state. This matches the visual language of workspace "urgent" indicators.
+4. *Only actionable states*: Running/idle don't get dots. The point is to surface states that need the user's attention.
+
+* Verification
+
+- Run =cd packages/niri && bun test= — status file tests pass
+- Start a spell session, trigger plan mode, verify teal dot appears on the workspace button
+- Complete all todos, verify green dot appears
+- Kill spell, verify status file is cleaned up and dot disappears within 2s

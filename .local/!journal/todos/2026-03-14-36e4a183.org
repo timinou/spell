@@ -4,38 +4,38 @@
 
 * QML Test Harness
 
-** DOING Add env option to QmlProcess and QmlBridge
+** DONE Add env option to QmlProcess and QmlBridge
 :PROPERTIES:
 :TASK_ID: task-1
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
-** ITEM Create QmlTestHarness class
+** DONE Create QmlTestHarness class
 :PROPERTIES:
 :TASK_ID: task-2
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Create ChatPanelTestHarness.qml + expose messagesModel alias
+** DONE Create ChatPanelTestHarness.qml + expose messagesModel alias
 :PROPERTIES:
 :TASK_ID: task-3
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Write integration tests (qml-chat-panel.test.ts)
+** DONE Write integration tests (qml-chat-panel.test.ts)
 :PROPERTIES:
 :TASK_ID: task-4
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Update event mapper unit tests
+** DONE Update event mapper unit tests
 :PROPERTIES:
 :TASK_ID: task-5
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Verify: bun check:ts + run tests
+** DONE Verify: bun check:ts + run tests
 :PROPERTIES:
 :TASK_ID: task-6
-:STATUS: pending
+:STATUS: completed
 :END:

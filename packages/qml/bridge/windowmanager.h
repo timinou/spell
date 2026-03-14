@@ -9,6 +9,8 @@
 #include <QQuickWindow>
 #include <QString>
 #include "bridge.h"
+#include <QQuickItem>
+#include <optional>
 
 /**
  * Owns all active QML windows (one QQmlApplicationEngine per window).
@@ -46,7 +48,26 @@ private:
     void closeWindow(const QString &id);
     void sendMessage(const QString &id, const QJsonObject &payload);
     void screenshotWindow(const QString &id, const QString &savePath);
+    void queryItems(const QString &id, const QJsonObject &msg);
+    void evalInWindow(const QString &id, const QString &expression);
     void writeEvent(const QJsonObject &event);
+
+    struct QuerySelector {
+        QString type;
+        QString objectName;
+        std::optional<bool> visible;
+        QString textContains;
+    };
+
+    static QuerySelector parseSelector(const QJsonObject &sel);
+    static bool matchesSelector(const QQuickItem *item, const QuerySelector &sel);
+    static QJsonObject serializeItem(const QQuickItem *item, const QJsonArray &props,
+                                     bool includeGeometry, const QString &path);
+    static QJsonValue readProperty(const QObject *obj, const QString &name);
+    static void walkTree(const QQuickItem *item, const QuerySelector &sel,
+                         const QJsonArray &props, bool includeGeometry,
+                         int maxDepth, int depth, const QString &path,
+                         QJsonArray &results);
 
     std::function<void(const QJsonObject&)> m_eventWriter;
     QHash<QString, WindowEntry> m_windows;

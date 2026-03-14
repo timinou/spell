@@ -46,6 +46,7 @@ function toLocalValidationError(error: unknown): Error {
 function getContentType(filePath: string): InternalResource["contentType"] {
 	const ext = path.extname(filePath).toLowerCase();
 	if (ext === ".md") return "text/markdown";
+	if (ext === ".org") return "text/x-org";
 	if (ext === ".json") return "application/json";
 	return "text/plain";
 }

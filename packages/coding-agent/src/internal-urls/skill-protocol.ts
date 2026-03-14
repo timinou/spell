@@ -24,6 +24,7 @@ export interface SkillProtocolOptions {
 function getContentType(filePath: string): InternalResource["contentType"] {
 	const ext = path.extname(filePath).toLowerCase();
 	if (ext === ".md") return "text/markdown";
+	if (ext === ".org") return "text/x-org";
 	return "text/plain";
 }
 
