@@ -892,11 +892,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		this.#renderPlanPreview(planContent);
-		const choice = await this.showHookSelector("Plan mode - next step", [
-			"Approve and execute",
-			"Refine plan",
-			"Stay in plan mode",
-		]);
+		const selectorOptions = ["Approve and execute", "Refine plan", "Stay in plan mode"];
+		if (this.planModeUltraplan) {
+			selectorOptions.splice(1, 0, "Review with Momus");
+		}
+		const choice = await this.showHookSelector("Plan mode - next step", selectorOptions);
 
 		if (choice === "Approve and execute") {
 			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
@@ -909,6 +909,13 @@ export class InteractiveMode implements InteractiveModeContext {
 					`Failed to finalize approved plan: ${error instanceof Error ? error.message : String(error)}`,
 				);
 			}
+			return;
+		}
+		if (choice === "Review with Momus") {
+			await this.#enterPlanMode({ ultraplan: true });
+			await this.session.prompt(`Run Momus review on this plan and address any issues:\n\n${planContent}`, {
+				synthetic: true,
+			});
 			return;
 		}
 		if (choice === "Refine plan") {
