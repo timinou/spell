@@ -1,0 +1,79 @@
+#+TITLE: PLAN_MODE_VISUAL_INDICATOR
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-plan-mode-visual-indicator
+
+* Initial Message
+
+give me a tint or a hint or something in the overlay mode to know that I'm in plan mode.
+
+* Problem
+
+When plan mode is active, the only visual indicator is a small "Plan" label in the status line segment. The editor border — the most prominent visual element — stays unchanged. Users want an obvious, at-a-glance cue that they're in plan mode.
+
+* Approach
+
+Add a plan mode border color to the editor and a whimsical label. Two changes:
+
+1. *Editor border tint* — When plan mode is active, tint the editor border using a dedicated =planMode= color (similar to =bashMode= / =pythonMode=). This makes the entire input area visually distinct.
+
+2. *Whimsical status segment* — Change the plan mode status label to something playful, e.g. a crystal ball or blueprint metaphor: =Scheming= or =Plotting= instead of plain "Plan". The icon already has some personality (=◈= / =🗺=), so the label can match.
+
+* Key files
+
+| File | Change |
+|------|--------|
+| =src/modes/theme/theme.ts= | Add =planMode= to =ColorsSchema=, =ThemeColor= union, and add =getPlanModeBorderColor()= method |
+| =src/modes/theme/defaults/*.json= (99 files) | Add ="planMode"= color to every theme — use a soft purple/lavender tint as default, adapt per theme palette |
+| =src/modes/interactive-mode.ts= | Update =updateEditorBorderColor()= to check =planModeEnabled= before bash/python/thinking checks |
+| =src/modes/components/status-line/segments.ts= | Change plan mode label from "Plan" to something whimsical like "Plotting" |
+| =src/modes/interactive-mode.ts= | Call =updateEditorBorderColor()= from =#enterPlanMode()= and =#exitPlanMode()= |
+
+* Implementation details
+
+** ITEM Add =planMode= color to theme system
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+- Add =planMode: ColorValueSchema= to =ColorsSchema= after =pythonMode=
+- Add ="planMode"= to the =ThemeColor= union
+- Add =getPlanModeBorderColor()= method (one-liner like =getBashModeBorderColor=)
+- Update all 99 theme JSON files — use a soft distinctive color per palette (lavender/purple family works well as "thinking/planning" metaphor)
+- Use a =quick_task= agent cluster to parallelize the theme file updates
+
+** ITEM Wire plan mode border into editor
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+In =updateEditorBorderColor()= (interactive-mode.ts L518), add plan mode check:
+
+#+begin_src typescript
+updateEditorBorderColor(): void {
+    if (this.planModeEnabled) {
+        this.editor.borderColor = theme.getPlanModeBorderColor();
+    } else if (this.isBashMode) {
+        // ... existing logic
+#+end_src
+
+Also call =updateEditorBorderColor()= at the end of =#enterPlanMode()= and =#exitPlanMode()= so the border updates immediately on toggle.
+
+** ITEM Add whimsical plan mode label
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+In =segments.ts= plan mode segment, change:
+- "Plan" → "Plotting" (or "Scheming")
+- "Ultraplan" → "Grand Scheme" (or "Master Plan")
+
+This pairs well with the map/crystal-ball icons already in the theme.
+
+* Verification
+
+- Toggle plan mode with Alt+Shift+P — editor border should change color
+- Status line should show whimsical label
+- Exit plan mode — border should revert
+- Paused plan mode should show warning-colored border or revert
+- =bun check:ts= passes
+- =bun lint:ts= passes

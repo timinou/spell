@@ -516,7 +516,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	updateEditorBorderColor(): void {
-		if (this.isBashMode) {
+		if (this.planModeEnabled) {
+			this.editor.borderColor = theme.getPlanModeBorderColor();
+		} else if (this.isBashMode) {
 			this.editor.borderColor = theme.getBashModeBorderColor();
 		} else if (this.isPythonMode) {
 			this.editor.borderColor = theme.getPythonModeBorderColor();
@@ -723,6 +725,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.planModeUltraplan = options?.ultraplan ?? false;
 		this.#updatePlanModeStatus();
 		this.sessionManager.appendModeChange("plan", { planFilePath });
+		this.updateEditorBorderColor();
 		this.showStatus(options?.ultraplan ? "Ultraplan mode enabled." : "Plan mode enabled.");
 	}
 
@@ -752,6 +755,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#updatePlanModeStatus();
 		const paused = options?.paused ?? false;
 		this.sessionManager.appendModeChange(paused ? "plan_paused" : "none");
+		this.updateEditorBorderColor();
 		if (!options?.silent) {
 			this.showStatus(paused ? "Plan mode paused." : "Plan mode disabled.");
 		}

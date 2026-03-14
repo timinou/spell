@@ -73,7 +73,7 @@ const planModeSegment: StatusLineSegment = {
 			return { content: "", visible: false };
 		}
 
-		const baseLabel = status.ultraplan ? "Ultraplan" : "Plan";
+		const baseLabel = status.ultraplan ? "Grand Scheme" : "Plotting";
 		const label = status.paused ? `${baseLabel} ⏸` : baseLabel;
 		const content = withIcon(theme.icon.plan, label);
 		const color = status.paused ? "warning" : "accent";

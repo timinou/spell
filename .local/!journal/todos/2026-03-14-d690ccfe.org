@@ -1,0 +1,39 @@
+#+TITLE: Session 1492c9f46090a6e2 Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* Theme system
+
+** DONE Add planMode to theme.ts (ColorsSchema, ThemeColor, getter)
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Update all theme JSON files with planMode color
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+* Wiring
+
+** DONE Wire planMode border in interactive-mode.ts
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Add whimsical label in segments.ts
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+* Verification
+
+** DONE Run bun check:ts and bun lint:ts
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:

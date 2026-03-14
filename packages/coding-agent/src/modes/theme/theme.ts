@@ -871,6 +871,8 @@ const ThemeJsonSchema = Type.Object({
 		bashMode: ColorValueSchema,
 		// Python Mode (1 color)
 		pythonMode: ColorValueSchema,
+		// Plan Mode (1 color)
+		planMode: ColorValueSchema,
 		// Footer Status Line
 		statusLineBg: ColorValueSchema,
 		statusLineSep: ColorValueSchema,
@@ -949,6 +951,7 @@ export type ThemeColor =
 	| "thinkingXhigh"
 	| "bashMode"
 	| "pythonMode"
+	| "planMode"
 	| "statusLineSep"
 	| "statusLineModel"
 	| "statusLinePath"
@@ -1250,6 +1253,10 @@ export class Theme {
 
 	getPythonModeBorderColor(): (str: string) => string {
 		return (str: string) => this.fg("pythonMode", str);
+	}
+
+	getPlanModeBorderColor(): (str: string) => string {
+		return (str: string) => this.fg("planMode", str);
 	}
 
 	// ============================================================================
