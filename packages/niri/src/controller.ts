@@ -170,13 +170,21 @@ export class NiriOverviewController {
 	#deriveStatus(): AgentStatus {
 		const ctx = this.#context;
 		if (ctx.session.state.error) return "error";
-		// Hook input takes priority over plain streaming: the LLM is paused mid-run
-		// waiting for the user to answer a question (ask tool, plan approval, etc.).
+		// Plan approval takes highest priority after errors: the agent is stopped
+		// and waiting for the user to approve/reject the plan.
+		if (ctx.isPendingApproval) return "pending_approval";
+		// Hook input pauses LLM mid-run for a user question (ask tool, etc.).
 		if (ctx.isAwaitingHookInput) return "needs_input";
-		// Streaming beats onInputCallback: the session is actively running even if
-		// the callback was set concurrently (exit_plan_mode race).
+		// Streaming beats onInputCallback: the session is actively running.
 		if (ctx.session.isStreaming) return "running";
-		if (ctx.onInputCallback !== undefined) return "needs_input";
+		if (ctx.onInputCallback !== undefined) {
+			// If every todo is resolved the agent is done, not waiting for new work.
+			const allDone =
+				ctx.todoPhases.length > 0 &&
+				ctx.todoPhases.every(p => p.tasks.every(t => t.status === "completed" || t.status === "abandoned"));
+			if (allDone) return "completed";
+			return "needs_input";
+		}
 		return "idle";
 	}
 }
