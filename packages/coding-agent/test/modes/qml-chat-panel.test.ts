@@ -191,5 +191,160 @@ describe.skipIf(!isBridgeAvailable())("ChatPanel QML integration", () => {
 				expect(texts).toContain("second");
 			}
 		});
+
+		// ── Markdown rendering ────────────────────────────────────────────────
+
+		describe("Markdown rendering", () => {
+			it("renders plain text as visible text through markdown pipeline", async () => {
+				await harness.sendMessage({ type: "message_start", id: "md-1", role: "assistant" });
+				await harness.sendMessage({ type: "message_update", id: "md-1", text: "Plain text" });
+				await harness.sendMessage({ type: "message_end", id: "md-1" });
+				await Bun.sleep(200);
+				const texts = await harness.findVisibleText();
+				expect(texts).toContain("Plain text");
+			});
+
+			it("renders code block with codeBlock objectName", async () => {
+				await harness.sendMessage({ type: "message_start", id: "md-2", role: "assistant" });
+				await harness.sendMessage({
+					type: "message_update",
+					id: "md-2",
+					text: "before\n```js\nconst x = 1\n```\nafter",
+				});
+				await harness.sendMessage({ type: "message_end", id: "md-2" });
+				await Bun.sleep(200);
+				const codeBlocks = await harness.findItems({ objectName: "codeBlock", visible: true });
+				expect(codeBlocks.length).toBeGreaterThanOrEqual(1);
+			});
+
+			it("renders both prose and code in mixed content", async () => {
+				await harness.sendMessage({ type: "message_start", id: "md-3", role: "assistant" });
+				await harness.sendMessage({
+					type: "message_update",
+					id: "md-3",
+					text: "Hello\n```py\nprint('hi')\n```\nGoodbye",
+				});
+				await harness.sendMessage({ type: "message_end", id: "md-3" });
+				await Bun.sleep(200);
+				const texts = await harness.findVisibleText();
+				expect(texts.some(t => t.includes("Hello"))).toBe(true);
+				expect(texts.some(t => t.includes("print"))).toBe(true);
+				expect(texts.some(t => t.includes("Goodbye"))).toBe(true);
+			});
+
+			it("shows language label on code block header", async () => {
+				await harness.sendMessage({ type: "message_start", id: "md-4", role: "assistant" });
+				await harness.sendMessage({
+					type: "message_update",
+					id: "md-4",
+					text: "```typescript\nconst y = 2\n```",
+				});
+				await harness.sendMessage({ type: "message_end", id: "md-4" });
+				await Bun.sleep(200);
+				const langItems = await harness.findItems({
+					type: "QQuickText",
+					textContains: "typescript",
+					visible: true,
+				});
+				expect(langItems.length).toBeGreaterThanOrEqual(1);
+			});
+
+			it("handles streaming with incremental updates", async () => {
+				await harness.sendMessage({ type: "message_start", id: "md-5", role: "assistant" });
+				await harness.sendMessage({ type: "message_update", id: "md-5", text: "First " });
+				await harness.sendMessage({ type: "message_update", id: "md-5", text: "Second " });
+				await harness.sendMessage({ type: "message_update", id: "md-5", text: "Third" });
+				await harness.sendMessage({ type: "message_end", id: "md-5" });
+				await Bun.sleep(200);
+				const texts = await harness.findVisibleText();
+				expect(texts.some(t => t.includes("First Second Third"))).toBe(true);
+			});
+		});
+
+		// ── Tool updates ─────────────────────────────────────────────────────────
+
+		describe("Tool card behavior", () => {
+			it("tool_update updates tool card text", async () => {
+				await harness.sendMessage({
+					type: "tool_start",
+					id: "tu-1",
+					name: "bash",
+					details: "building",
+				});
+				await harness.sendMessage({
+					type: "tool_update",
+					id: "tu-1",
+					name: "bash",
+					details: "50% complete",
+				});
+				const msg = await harness.query<Record<string, unknown>>("lastMessage");
+				expect(msg.text).toBe("50% complete");
+			});
+
+			it("shows progress indicator during tool streaming", async () => {
+				await harness.sendMessage({
+					type: "tool_start",
+					id: "tp-1",
+					name: "bash",
+					details: "running",
+				});
+				await Bun.sleep(200);
+				const progress = await harness.findItems({
+					objectName: "toolProgress",
+					visible: true,
+				});
+				expect(progress.length).toBeGreaterThanOrEqual(1);
+
+				await harness.sendMessage({
+					type: "tool_end",
+					id: "tp-1",
+					name: "bash",
+					isError: false,
+					details: "done",
+				});
+				await Bun.sleep(200);
+				await harness.assertNotFound({ objectName: "toolProgress", visible: true });
+			});
+
+			it("tool card tracks isError from tool_end", async () => {
+				await harness.sendMessage({
+					type: "tool_start",
+					id: "te-1",
+					name: "bash",
+					details: "running",
+				});
+				await harness.sendMessage({
+					type: "tool_end",
+					id: "te-1",
+					name: "bash",
+					isError: true,
+					details: "failed",
+				});
+				const msg = await harness.query<Record<string, unknown>>("lastMessage");
+				expect(msg.isError).toBe(true);
+				expect(msg.isStreaming).toBe(false);
+			});
+		});
+
+		// ── Code block buttons ──────────────────────────────────────────────────
+
+		describe("Code block interactions", () => {
+			it("shows copy and save buttons on code blocks", async () => {
+				await harness.sendMessage({ type: "message_start", id: "cb-1", role: "assistant" });
+				await harness.sendMessage({
+					type: "message_update",
+					id: "cb-1",
+					text: "```js\nconst x = 1\n```",
+				});
+				await harness.sendMessage({ type: "message_end", id: "cb-1" });
+				await Bun.sleep(200);
+
+				const copyBtns = await harness.findItems({ objectName: "copyButton", visible: true });
+				expect(copyBtns.length).toBeGreaterThanOrEqual(1);
+
+				const saveBtns = await harness.findItems({ objectName: "saveButton", visible: true });
+				expect(saveBtns.length).toBeGreaterThanOrEqual(1);
+			});
+		});
 	});
 });

@@ -2,6 +2,7 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import ".." as SpellUI
+import "delegates" as Delegates
 
 Item {
     id: chatPanel
@@ -10,28 +11,30 @@ Item {
     property int tokenCount: 0
     property string modelName: ""
 
-
     // Exposed for test introspection — not used by production code.
     readonly property alias messagesModel: messagesModel
     ListModel {
         id: messagesModel
     }
 
-    function handleMessage(msg) {
-        if (!msg || !msg.type) return
+    // --- Message handler dispatch ---
 
-        if (msg.type === "message_start") {
+    property var handlers: ({
+        message_start: function(msg) {
             messagesModel.append({
                 msgId: msg.id || "",
                 role: msg.role || "assistant",
                 text: "",
                 name: "",
                 isStreaming: true,
-                isExpanded: false
+                isExpanded: false,
+                isError: false
             })
             chatPanel.isStreaming = true
             messageList.positionViewAtEnd()
-        } else if (msg.type === "message_update") {
+        },
+
+        message_update: function(msg) {
             for (var i = messagesModel.count - 1; i >= 0; i--) {
                 if (messagesModel.get(i).msgId === msg.id) {
                     var current = messagesModel.get(i).text
@@ -40,7 +43,9 @@ Item {
                 }
             }
             messageList.positionViewAtEnd()
-        } else if (msg.type === "message_end") {
+        },
+
+        message_end: function(msg) {
             for (var i = messagesModel.count - 1; i >= 0; i--) {
                 if (messagesModel.get(i).msgId === msg.id) {
                     messagesModel.setProperty(i, "isStreaming", false)
@@ -49,54 +54,93 @@ Item {
             }
             chatPanel.isStreaming = false
             if (msg.tokens) chatPanel.tokenCount = msg.tokens
-        } else if (msg.type === "tool_start") {
+        },
+
+        tool_start: function(msg) {
             messagesModel.append({
                 msgId: msg.id || "",
                 role: "tool",
                 text: msg.details || "",
                 name: msg.name || "tool",
                 isStreaming: true,
-                isExpanded: false
+                isExpanded: false,
+                isError: false
             })
             messageList.positionViewAtEnd()
-        } else if (msg.type === "tool_end") {
+        },
+
+        tool_update: function(msg) {
             for (var i = messagesModel.count - 1; i >= 0; i--) {
                 if (messagesModel.get(i).msgId === msg.id) {
-                    messagesModel.setProperty(i, "isStreaming", false)
                     if (msg.details) messagesModel.setProperty(i, "text", msg.details)
                     break
                 }
             }
-        } else if (msg.type === "agent_busy") {
+            messageList.positionViewAtEnd()
+        },
+
+        tool_end: function(msg) {
+            for (var i = messagesModel.count - 1; i >= 0; i--) {
+                if (messagesModel.get(i).msgId === msg.id) {
+                    messagesModel.setProperty(i, "isStreaming", false)
+                    messagesModel.setProperty(i, "isError", !!msg.isError)
+                    if (msg.details) messagesModel.setProperty(i, "text", msg.details)
+                    break
+                }
+            }
+        },
+
+        agent_busy: function(msg) {
             chatPanel.isStreaming = !!msg.busy
-        } else if (msg.type === "model_info") {
+        },
+
+        model_info: function(msg) {
             chatPanel.modelName = msg.model || ""
-        } else if (msg.type === "user_message") {
+        },
+
+        user_message: function(msg) {
             messagesModel.append({
                 msgId: "user-" + Date.now(),
                 role: "user",
                 text: msg.text || "",
                 name: "",
                 isStreaming: false,
-                isExpanded: false
+                isExpanded: false,
+                isError: false
+            })
+            messageList.positionViewAtEnd()
+        },
+
+        image_result: function(msg) {
+            messagesModel.append({
+                msgId: msg.id || "img-" + Date.now(),
+                role: "image",
+                text: msg.data || "",
+                name: msg.mimeType || "image/png",
+                isStreaming: false,
+                isExpanded: false,
+                isError: false
             })
             messageList.positionViewAtEnd()
         }
+    })
+
+    function handleMessage(msg) {
+        if (!msg || !msg.type) return
+        var handler = handlers[msg.type]
+        if (handler) handler(msg)
     }
 
-    function sendMessage() {
-        var text = inputField.text.trim()
-        if (text.length === 0) return
-
+    function sendUserMessage(text) {
         messagesModel.append({
             msgId: "user-" + Date.now(),
             role: "user",
             text: text,
             name: "",
             isStreaming: false,
-            isExpanded: false
+            isExpanded: false,
+            isError: false
         })
-        inputField.text = ""
         messageList.positionViewAtEnd()
         bridge.send({ type: "prompt", text: text })
     }
@@ -119,26 +163,9 @@ Item {
 
             model: messagesModel
 
-            delegate: Item {
-                width: messageList.width - messageList.leftMargin - messageList.rightMargin
-                height: delegateLoader.item ? delegateLoader.item.height : 0
-
-				Loader {
-					id: delegateLoader
-					width: parent.width
-					// Capture ListView model roles as Loader properties so that
-					// Component delegates (defined at chatPanel scope, not inside
-					// the delegate) can access them via `parent.delegateXxx`.
-					property string delegateText: model.text
-					property string delegateName: model.name
-					property bool delegateIsStreaming: model.isStreaming
-					property bool delegateIsExpanded: model.isExpanded
-					property int delegateIndex: model.index
-					sourceComponent: {
-						if (model.role === "user") return userDelegate
-						if (model.role === "tool") return toolDelegate
-						return assistantDelegate
-					}
+            delegate: Delegates.MessageDelegate {
+                onToggleExpanded: function(index) {
+                    messagesModel.setProperty(index, "isExpanded", !messagesModel.get(index).isExpanded)
                 }
             }
 
@@ -166,292 +193,18 @@ Item {
             }
         }
 
-        // Input area
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(52, inputField.contentHeight + SpellUI.SpellTheme.spacingL * 2)
-            Layout.maximumHeight: 200
-            color: SpellUI.SpellTheme.surface
-            border.color: SpellUI.SpellTheme.outline
-            border.width: 1
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: SpellUI.SpellTheme.spacingS
-                spacing: SpellUI.SpellTheme.spacingS
-
-                // Input field container
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    radius: SpellUI.SpellTheme.cornerRadius
-                    color: SpellUI.SpellTheme.surfaceHigh
-
-                    // Placeholder
-                    Text {
-                        anchors.fill: parent
-                        anchors.margins: SpellUI.SpellTheme.spacingS
-                        text: "Type a message..."
-                        font.family: SpellUI.SpellTheme.fontFamily
-                        font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                        color: SpellUI.SpellTheme.textTertiary
-                        verticalAlignment: Text.AlignVCenter
-                        visible: inputField.text.length === 0 && !inputField.activeFocus
-                    }
-
-                    Flickable {
-                        id: inputFlick
-                        anchors.fill: parent
-                        anchors.margins: SpellUI.SpellTheme.spacingS
-                        contentWidth: inputField.paintedWidth
-                        contentHeight: inputField.paintedHeight
-                        clip: true
-
-                        function ensureVisible(r) {
-                            if (contentX >= r.x) contentX = r.x
-                            else if (contentX + width <= r.x + r.width) contentX = r.x + r.width - width
-                            if (contentY >= r.y) contentY = r.y
-                            else if (contentY + height <= r.y + r.height) contentY = r.y + r.height - height
-                        }
-
-                        TextEdit {
-                            id: inputField
-                            width: inputFlick.width
-                            font.family: SpellUI.SpellTheme.fontFamily
-                            font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                            color: SpellUI.SpellTheme.textPrimary
-                            selectionColor: SpellUI.SpellTheme.primaryContainer
-                            wrapMode: TextEdit.Wrap
-                            onCursorRectangleChanged: inputFlick.ensureVisible(cursorRectangle)
-
-                            Keys.onPressed: function(event) {
-                                if (event.key === Qt.Key_Return && !(event.modifiers & Qt.ShiftModifier)) {
-                                    event.accepted = true
-                                    chatPanel.sendMessage()
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Send button
-                Rectangle {
-                    Layout.preferredWidth: 36
-                    Layout.preferredHeight: 36
-                    Layout.alignment: Qt.AlignBottom
-                    radius: SpellUI.SpellTheme.cornerRadius
-                    color: SpellUI.SpellTheme.primary
-                    visible: !chatPanel.isStreaming
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: "↑"
-                        font.pixelSize: SpellUI.SpellTheme.fontSizeLarge
-                        font.bold: true
-                        color: SpellUI.SpellTheme.primaryText
-                    }
-
-                    SpellUI.StateLayer {
-                        onClicked: chatPanel.sendMessage()
-                    }
-                }
-
-                // Abort button
-                Rectangle {
-                    Layout.preferredWidth: 36
-                    Layout.preferredHeight: 36
-                    Layout.alignment: Qt.AlignBottom
-                    radius: SpellUI.SpellTheme.cornerRadius
-                    color: SpellUI.SpellTheme.error
-                    visible: chatPanel.isStreaming
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: "■"
-                        font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                        color: SpellUI.SpellTheme.primaryText
-                    }
-
-                    SpellUI.StateLayer {
-                        onClicked: bridge.send({ type: "abort" })
-                    }
-                }
+        InputBar {
+            id: inputBar
+            isStreaming: chatPanel.isStreaming
+            onMessageSent: function(text) {
+                chatPanel.sendUserMessage(text)
             }
+            onAbortRequested: bridge.send({ type: "abort" })
         }
 
-        // Status bar
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 28
-            color: SpellUI.SpellTheme.surface
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: SpellUI.SpellTheme.spacingL
-                anchors.rightMargin: SpellUI.SpellTheme.spacingL
-                spacing: SpellUI.SpellTheme.spacingL
-
-                Text {
-                    text: chatPanel.modelName || "—"
-                    font.family: SpellUI.SpellTheme.monoFontFamily
-                    font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                    color: SpellUI.SpellTheme.textSecondary
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Text {
-                    text: chatPanel.tokenCount > 0 ? chatPanel.tokenCount + " tokens" : ""
-                    font.family: SpellUI.SpellTheme.monoFontFamily
-                    font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                    color: SpellUI.SpellTheme.textSecondary
-                }
-            }
-        }
-    }
-
-    // --- Delegate components ---
-    //
-    // Components defined at this scope do NOT inherit the ListView delegate context
-    // (model.xxx). Instead, the Loader captures model roles as named properties, and
-    // each Component root item aliases them so descendants can use `rootId.delegateXxx`.
-
-    Component {
-        id: assistantDelegate
-
-        Rectangle {
-            id: assistantRoot
-            // parent = delegateLoader, which has delegateText bound to model.text
-            readonly property string delegateText: parent ? parent.delegateText : ""
-            width: parent ? parent.width : 0
-            height: assistantTextItem.paintedHeight + SpellUI.SpellTheme.spacingL * 2
-            color: SpellUI.SpellTheme.surfaceHigh
-            radius: SpellUI.SpellTheme.cornerRadius
-
-            Text {
-                id: assistantTextItem
-                anchors.fill: parent
-                anchors.margins: SpellUI.SpellTheme.spacingL
-                text: assistantRoot.delegateText
-                font.family: SpellUI.SpellTheme.fontFamily
-                font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                color: SpellUI.SpellTheme.textPrimary
-                wrapMode: Text.Wrap
-                textFormat: Text.PlainText
-            }
-        }
-    }
-
-    Component {
-        id: userDelegate
-
-        Item {
-            id: userDelegateRoot
-            readonly property string delegateText: parent ? parent.delegateText : ""
-            width: parent ? parent.width : 0
-            height: userBubble.height
-
-            Rectangle {
-                id: userBubble
-                anchors.right: parent.right
-                width: Math.min(userText.implicitWidth + SpellUI.SpellTheme.spacingL * 2, parent.width * 0.75)
-                height: userText.paintedHeight + SpellUI.SpellTheme.spacingL * 2
-                color: SpellUI.SpellTheme.primaryContainer
-                radius: SpellUI.SpellTheme.cornerRadius
-
-                Text {
-                    id: userText
-                    anchors.fill: parent
-                    anchors.margins: SpellUI.SpellTheme.spacingL
-                    text: userDelegateRoot.delegateText
-                    font.family: SpellUI.SpellTheme.fontFamily
-                    font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                    color: SpellUI.SpellTheme.textPrimary
-                    wrapMode: Text.Wrap
-                    textFormat: Text.PlainText
-                }
-            }
-        }
-    }
-
-    Component {
-        id: toolDelegate
-
-        Rectangle {
-            id: toolDelegateRoot
-            readonly property string delegateText: parent ? parent.delegateText : ""
-            readonly property string delegateName: parent ? parent.delegateName : ""
-            readonly property bool delegateIsStreaming: parent ? parent.delegateIsStreaming : false
-            readonly property bool delegateIsExpanded: parent ? parent.delegateIsExpanded : false
-            readonly property int delegateIndex: parent ? parent.delegateIndex : 0
-            width: parent ? parent.width : 0
-            height: toolColumn.height + SpellUI.SpellTheme.spacingM * 2
-            color: SpellUI.SpellTheme.surfaceHigher
-            radius: SpellUI.SpellTheme.cornerRadius
-
-            ColumnLayout {
-                id: toolColumn
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: SpellUI.SpellTheme.spacingM
-                spacing: SpellUI.SpellTheme.spacingS
-
-                // Tool header
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 28
-                    color: "transparent"
-
-                    Row {
-                        anchors.fill: parent
-                        spacing: SpellUI.SpellTheme.spacingS
-
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: "⚙"
-                            font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                            color: SpellUI.SpellTheme.textSecondary
-                        }
-
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: toolDelegateRoot.delegateName
-                            font.family: SpellUI.SpellTheme.monoFontFamily
-                            font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                            color: SpellUI.SpellTheme.textSecondary
-                        }
-
-                        Item { width: 1; height: 1; Layout.fillWidth: true }
-
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: toolDelegateRoot.delegateIsStreaming ? "⟳" : "✓"
-                            font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                            color: toolDelegateRoot.delegateIsStreaming ? SpellUI.SpellTheme.warning : SpellUI.SpellTheme.success
-                        }
-                    }
-
-                    SpellUI.StateLayer {
-                        onClicked: {
-                            var idx = toolDelegateRoot.delegateIndex
-                            messagesModel.setProperty(idx, "isExpanded", !messagesModel.get(idx).isExpanded)
-                        }
-                    }
-                }
-
-                // Tool details (collapsible)
-                Text {
-                    Layout.fillWidth: true
-                    visible: toolDelegateRoot.delegateIsExpanded && toolDelegateRoot.delegateText.length > 0
-                    text: toolDelegateRoot.delegateText
-                    font.family: SpellUI.SpellTheme.monoFontFamily
-                    font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                    color: SpellUI.SpellTheme.textSecondary
-                    wrapMode: Text.Wrap
-                    textFormat: Text.PlainText
-                }
-            }
+        StatusBar {
+            modelName: chatPanel.modelName
+            tokenCount: chatPanel.tokenCount
         }
     }
 }
