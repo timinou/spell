@@ -6,7 +6,7 @@ import "../markdown" as Markdown
 Rectangle {
     id: root
     required property string text
-    required property string thinking
+    property string thinking: ""
     required property string name
     required property bool isStreaming
     required property bool isExpanded
@@ -54,7 +54,7 @@ Rectangle {
         Markdown.MarkdownContent {
             id: markdownContent
             Layout.fillWidth: true
-            visible: root.text.length > 0
+            visible: true
             text: root.text
             isStreaming: root.isStreaming
             onCodeSaveRequested: function(content, lang) {

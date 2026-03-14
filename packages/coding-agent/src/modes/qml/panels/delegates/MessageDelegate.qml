@@ -6,7 +6,7 @@ Item {
     required property string msgId
     required property string role
     required property string text
-    required property string thinking
+    property string thinking: ""
     required property string name
     required property bool isStreaming
     required property bool isExpanded
