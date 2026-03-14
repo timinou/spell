@@ -1,0 +1,169 @@
+#+TITLE: Spell Org-Native Vision
+#+CREATED: [2026-03-14]
+#+AUTHOR: Spell Engineering
+
+* The Problem
+
+Spell currently runs two parallel systems that never converge.
+
+Markdown is everywhere: session context, agent outputs, skill files, user-facing
+documentation. It is a rendering format masquerading as a knowledge format.
+Markdown has no queryable structure, no first-class metadata, no state machine.
+Every piece of memory is a blob the LLM must parse back out at inference time.
+
+Org is an island: the task tracking layer uses org-mode files, but only for
+TODOs. The rest of the system treats them as opaque. No query engine crosses the
+boundary. Emacs integration exists but is bolted on, not designed in.
+
+The result: two formats, neither authoritative, constant conversion overhead,
+memory that degrades silently, and no single view of what the system knows.
+
+** The Hidden Cost
+
+When an agent answers a question it answered last week, it pays full inference
+cost to rediscover the same fact. There is no confidence-weighted recall, no
+decay model, no "I already know this" path. Every session starts cold.
+
+When a user asks "what were the blockers on the auth refactor?", the system
+scans markdown blobs. When the answer is wrong, there is no provenance to audit.
+
+** Why This Is a Design Problem, Not a Feature Gap
+
+The issue is not missing features. It is a representation mismatch. Markdown
+encodes presentation; org encodes semantics. Trying to add queryable memory on
+top of markdown is retrofitting a database onto a word processor.
+
+* The Insight: Org Is Already a Knowledge Graph
+
+An org file is a tree of nodes, each node carrying:
+- A headline with optional state (TODO, DONE, IN_PROGRESS)
+- A PROPERTIES drawer: typed key-value metadata
+- Timestamps: CREATED, SCHEDULED, DEADLINE, CLOSED
+- Tags: faceted classification
+- Body: free-form text, code blocks, tables
+- Children: recursive structure enabling graphs via ID links
+
+This is not a coincidence. org-mode was designed as a plain-text database.
+org-ql is the query engine that proves it. Emacs is the first-class UI that
+proves it has been production-grade for decades.
+
+Spell should stop reinventing this and dogfood it.
+
+* What Org Enables
+
+** Queryable Memory with Confidence Decay
+
+Every fact the system learns can be stored as an org item with:
+
+#+BEGIN_EXAMPLE
+* FACT User prefers TypeScript strict mode
+:PROPERTIES:
+:CONFIDENCE: 0.9
+:OBSERVED:  [2026-03-14]
+:DECAYS_AT: [2026-09-14]
+:SOURCE:    session:abc123
+:END:
+#+END_EXAMPLE
+
+org-ql then answers: "what do we know about this user with confidence > 0.7?"
+
+#+BEGIN_EXAMPLE
+(org-ql-select "memory.org"
+  '(and (heading "FACT")
+        (property "CONFIDENCE" :predicate (lambda (v) (> (string-to-number v) 0.7)))
+        (not (ts-inactive :from today))))
+#+END_EXAMPLE
+
+Decay is a scheduled timestamp. Expired facts are not deleted — they are
+reclassified, preserving audit history while removing them from active recall.
+
+** Effort Tracking
+
+Every agent session, tool invocation, and task transition carries an EFFORT
+property. Aggregation is a single org-ql query. Burndown charts come from the
+data, not from a separate metrics system.
+
+#+BEGIN_EXAMPLE
+:PROPERTIES:
+:EFFORT:    45m
+:SESSION:   2026-03-14T12:42
+:AGENT:     task/code-review
+:END:
+#+END_EXAMPLE
+
+** Session as Org Item
+
+A session is not a log file. It is an org subtree:
+- State: ACTIVE → SUSPENDED → CLOSED
+- SCHEDULED and DEADLINE timestamps for resumption windows
+- Child items for each agent invocation
+- LOGBOOK drawer for state transition history
+- Tags for domain classification
+
+This makes sessions queryable. "Show me all sessions tagged :auth: that went
+SUSPENDED in the last 30 days" is a two-line org-ql expression.
+
+** Cross-Session Knowledge Graphs
+
+Org IDs + org-roam-style backlinks give the system a graph layer without a
+separate database. A fact referenced in three sessions accumulates backlinks.
+High-connectivity nodes surface as high-confidence knowledge.
+
+Every item has a globally unique ID:
+
+#+BEGIN_EXAMPLE
+:PROPERTIES:
+:ID: 7f3a2b1c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
+:END:
+#+END_EXAMPLE
+
+Cross-file references: =[[id:7f3a2b1c-...]]=. No foreign key management, no
+migration scripts. Plain text, version-controllable, diff-readable.
+
+** Emacs as First-Class UI
+
+Emacs is not a nice-to-have. It is the reference implementation of the query
+engine. org-agenda, org-ql, org-roam, and org-babel are mature, battle-tested
+tools with decades of real-world use.
+
+Spell's Emacs integration should not be a bridge to a parallel system. It should
+be a thin shell around the canonical data format. The TUI, the web UI, and the
+CLI are projections of the org files — not their own data stores.
+
+* Design Principles
+
+** One Representation
+
+A session is an org item. A memory is an org item. A task is an org item. A
+fact is an org item. There is no "convert to org for querying" step because
+everything is already org.
+
+** Query at the Source
+
+org-ql runs against the files. No intermediate index to keep in sync, no cache
+invalidation problem. Stale results are impossible by construction.
+
+** Types Flow from Structure
+
+The TypeScript layer does not define what a session is. The org file structure
+defines it. The TS types are derived from the schema, not the reverse. When the
+schema changes, the types change with it — in one place, not two.
+
+** Emacs Is Not Optional Infrastructure
+
+Emacs being available is not an assumption the system can quietly drop at
+runtime. Advanced queries require org-ql. Design the system to declare this
+dependency honestly, degrade gracefully when Emacs is absent, and never pretend
+the degraded path is equivalent.
+
+* What This Is Not
+
+- Not a rewrite of Emacs org-mode in TypeScript. The TS layer handles parsing
+  and simple structural queries. Complex queries route to Emacs/org-ql. The
+  boundary is explicit, not emergent.
+
+- Not org-roam. Cross-session linking is a side effect of using IDs correctly,
+  not a separate feature to build.
+
+- Not a database. Org files are files. They live in git. They diff cleanly.
+  They survive without a running database process.
