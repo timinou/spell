@@ -25,6 +25,7 @@ Item {
                 msgId: msg.id || "",
                 role: msg.role || "assistant",
                 text: "",
+                thinking: "",
                 name: "",
                 isStreaming: true,
                 isExpanded: false,
@@ -39,6 +40,7 @@ Item {
                 if (messagesModel.get(i).msgId === msg.id) {
                     var current = messagesModel.get(i).text
                     messagesModel.setProperty(i, "text", current + (msg.text || ""))
+                    if (msg.thinking !== undefined) messagesModel.setProperty(i, "thinking", msg.thinking)
                     break
                 }
             }
@@ -61,6 +63,7 @@ Item {
                 msgId: msg.id || "",
                 role: "tool",
                 text: msg.details || "",
+                thinking: "",
                 name: msg.name || "tool",
                 isStreaming: true,
                 isExpanded: false,
@@ -103,6 +106,7 @@ Item {
                 msgId: "user-" + Date.now(),
                 role: "user",
                 text: msg.text || "",
+                thinking: "",
                 name: "",
                 isStreaming: false,
                 isExpanded: false,
@@ -116,6 +120,7 @@ Item {
                 msgId: msg.id || "img-" + Date.now(),
                 role: "image",
                 text: msg.data || "",
+                thinking: "",
                 name: msg.mimeType || "image/png",
                 isStreaming: false,
                 isExpanded: false,

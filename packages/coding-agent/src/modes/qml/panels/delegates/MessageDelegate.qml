@@ -6,6 +6,7 @@ Item {
     required property string msgId
     required property string role
     required property string text
+    required property string thinking
     required property string name
     required property bool isStreaming
     required property bool isExpanded
@@ -27,6 +28,7 @@ Item {
                     : "AssistantBubble.qml"
             setSource(Qt.resolvedUrl(url), {
                 text: Qt.binding(function() { return root.text }),
+                thinking: Qt.binding(function() { return root.thinking }),
                 name: Qt.binding(function() { return root.name }),
                 isStreaming: Qt.binding(function() { return root.isStreaming }),
                 isExpanded: Qt.binding(function() { return root.isExpanded }),
