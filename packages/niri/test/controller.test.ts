@@ -98,6 +98,9 @@ function makeCtx(
 		get isAwaitingHookInput() {
 			return overrides.isAwaitingHookInput ?? false;
 		},
+		get isPendingApproval() {
+			return overrides.isPendingApproval ?? false;
+		},
 		sessionManager: {
 			getCwd: () => "/projects/myapp",
 			getSessionName: () => overrides.sessionName ?? "test-session",
@@ -233,6 +236,46 @@ describe("NiriOverviewController", () => {
 			],
 			// error beats hook
 			["error over hook input", { isStreaming: true, isAwaitingHookInput: true, error: "oops" }, "error"],
+			// pending_approval: isPendingApproval=true (set while showing plan selector)
+			["pending_approval when isPendingApproval is set", { isPendingApproval: true }, "pending_approval"],
+			// pending_approval beats hook input
+			["pending_approval over hook input", { isPendingApproval: true, isAwaitingHookInput: true }, "pending_approval"],
+			// completed: all todos done + onInputCallback set (agent awaiting next message)
+			[
+				"completed when all todos done and awaiting next message",
+				{
+					hasInputCallback: true,
+					todoPhases: [
+						{
+							name: "Phase 1",
+							tasks: [
+								{ content: "Task A", status: "completed" },
+								{ content: "Task B", status: "completed" },
+							],
+						},
+					],
+				},
+				"completed",
+			],
+			// needs_input when todos exist but not all done
+			[
+				"needs_input when some todos still pending",
+				{
+					hasInputCallback: true,
+					todoPhases: [
+						{
+							name: "Phase 1",
+							tasks: [
+								{ content: "Task A", status: "completed" },
+								{ content: "Task B", status: "pending" },
+							],
+						},
+					],
+				},
+				"needs_input",
+			],
+			// needs_input when no todos — can't infer completion, stay cautious
+			["needs_input when no todos and callback set", { hasInputCallback: true, todoPhases: [] }, "needs_input"],
 		];
 
 		for (const [label, ctxOverrides, expectedStatus] of cases) {
@@ -260,6 +303,8 @@ describe("NiriOverviewController", () => {
 					running: "Running",
 					needs_input: "Needs Input",
 					error: "Error",
+					completed: "Completed",
+					pending_approval: "Pending Approval",
 				};
 				expect(plain).toContain(statusLabels[expectedStatus]);
 

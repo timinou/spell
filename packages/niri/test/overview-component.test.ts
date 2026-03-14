@@ -42,7 +42,7 @@ function renderPlain(component: OverviewComponent, width = 80): string {
 
 describe("OverviewComponent", () => {
 	it("renders at least one line for every agent status", () => {
-		const statuses: AgentStatus[] = ["idle", "running", "needs_input", "error"];
+		const statuses: AgentStatus[] = ["idle", "running", "needs_input", "error", "completed", "pending_approval"];
 		for (const status of statuses) {
 			const comp = new OverviewComponent(makeSnapshot({ agentStatus: status }));
 			const lines = comp.render(80);
@@ -81,6 +81,8 @@ describe("OverviewComponent", () => {
 			running: "Running",
 			needs_input: "Needs Input",
 			error: "Error",
+			completed: "Completed",
+			pending_approval: "Pending Approval",
 		};
 		for (const [status, label] of Object.entries(expected) as [AgentStatus, string][]) {
 			const comp = new OverviewComponent(makeSnapshot({ agentStatus: status }));

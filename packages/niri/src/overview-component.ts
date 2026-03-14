@@ -38,6 +38,20 @@ const STATUS_COLORS: Record<AgentStatus, { bg: string; resetBg: string; fg: stri
 			resetFg: "\x1b[39m",
 			label: "Error",
 		},
+		completed: {
+			bg: "\x1b[48;2;166;227;161m", // green bg (same hue as idle, signals success)
+			resetBg: "\x1b[49m",
+			fg: "\x1b[38;2;30;30;30m",
+			resetFg: "\x1b[39m",
+			label: "Completed",
+		},
+		pending_approval: {
+			bg: "\x1b[48;2;148;226;213m", // Catppuccin teal
+			resetBg: "\x1b[49m",
+			fg: "\x1b[38;2;10;10;10m",
+			resetFg: "\x1b[39m",
+			label: "Pending Approval",
+		},
 	};
 
 const BOLD = "\x1b[1m";

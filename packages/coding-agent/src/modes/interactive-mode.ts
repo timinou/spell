@@ -125,6 +125,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	retryEscapeHandler?: () => void;
 	unsubscribe?: () => void;
 	onInputCallback?: (input: SubmittedUserInput) => void;
+	isPendingApproval = false;
 	optimisticUserMessageSignature: string | undefined = undefined;
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
 	lastSigintTime = 0;
@@ -403,6 +404,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				},
 				get isAwaitingHookInput() {
 					return ctx.hookSelector !== undefined || ctx.hookInput !== undefined;
+				},
+				get isPendingApproval() {
+					return ctx.isPendingApproval;
 				},
 				sessionManager: this.sessionManager,
 				get todoPhases() {
@@ -896,7 +900,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.planModeUltraplan) {
 			selectorOptions.splice(1, 0, "Review with Momus");
 		}
+		this.isPendingApproval = true;
 		const choice = await this.showHookSelector("Plan mode - next step", selectorOptions);
+		this.isPendingApproval = false;
 
 		if (choice === "Approve and execute") {
 			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
