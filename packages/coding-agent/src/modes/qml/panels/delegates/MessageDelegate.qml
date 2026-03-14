@@ -26,15 +26,17 @@ Item {
                     : root.role === "tool" ? "ToolCard.qml"
                     : root.role === "image" ? "ImageBubble.qml"
                     : "AssistantBubble.qml"
-            setSource(Qt.resolvedUrl(url), {
+            var props = {
                 text: Qt.binding(function() { return root.text }),
-                thinking: Qt.binding(function() { return root.thinking }),
                 name: Qt.binding(function() { return root.name }),
                 isStreaming: Qt.binding(function() { return root.isStreaming }),
                 isExpanded: Qt.binding(function() { return root.isExpanded }),
                 isError: Qt.binding(function() { return root.isError }),
                 messageIndex: root.index
-            })
+            }
+            if (root.role === "assistant")
+                props.thinking = Qt.binding(function() { return root.thinking })
+            setSource(Qt.resolvedUrl(url), props)
         }
 
         // Forward toggleExpanded from ToolCard
