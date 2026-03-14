@@ -58,6 +58,7 @@ packages/coding-agent/src/internal-urls/docs-index.generated.ts
 # Org-mode agent scratch space (keep !journal)
 .local/*
 !.local/!journal
+!.local/!space
 
 # QML bridge build artifacts
 packages/qml/build/
