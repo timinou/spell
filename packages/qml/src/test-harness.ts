@@ -1,3 +1,4 @@
+import type { BridgeEvent } from "./protocol";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isBridgeAvailable, QmlProcess } from "./qml-process";
@@ -222,6 +223,17 @@ export class QmlTestHarness {
 				(e as { type: "event"; payload: Record<string, unknown> }).payload.type === "reset_done",
 			5_000,
 		);
+	}
+
+	/** Wait for a raw bridge event matching a predicate. Used to capture outgoing _tool invocations. */
+	async waitForBridgeEvent(predicate: (event: BridgeEvent) => boolean, timeout = 5_000): Promise<BridgeEvent> {
+		if (!this.#process) throw new Error("QmlTestHarness not set up — call setup() first");
+		return this.#process.waitFor(predicate, timeout);
+	}
+
+	/** Convenience for simulating the _rid response round-trip from armed tools. */
+	async simulateToolResponse(rid: string, payload: Record<string, unknown>): Promise<void> {
+		await this.sendMessage({ _rid: rid, ...payload });
 	}
 
 	/** Kill the bridge process. */

@@ -9,6 +9,8 @@ ApplicationWindow {
     title: windowTitle || "Test"
     color: SpellUI.SpellTheme.background
 
+    property var spellArmedTools: ["write", "read", "generate_image"]
+
     ChatPanel {
         id: chatPanel
         anchors.fill: parent
