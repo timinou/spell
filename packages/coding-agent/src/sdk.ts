@@ -1,3 +1,5 @@
+import * as path from "node:path";
+
 import {
 	Agent,
 	type AgentEvent,
@@ -63,6 +65,7 @@ import {
 	MemoryProtocolHandler,
 	OrgProtocolHandler,
 	PiProtocolHandler,
+	QmlProtocolHandler,
 	RuleProtocolHandler,
 	SkillProtocolHandler,
 } from "./internal-urls";
@@ -920,6 +923,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		new OrgProtocolHandler({
 			getSettings: () => settings,
 			getCwd: () => sessionManager.getCwd(),
+		}),
+	);
+	internalRouter.register(
+		new QmlProtocolHandler({
+			getStdlibRoot: () => path.resolve(import.meta.dir, "modes/qml"),
 		}),
 	);
 	toolSession.internalRouter = internalRouter;

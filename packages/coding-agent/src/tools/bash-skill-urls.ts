@@ -11,9 +11,19 @@ const SKILL_URL_PATTERN = /'skill:\/\/[^'\s")`\\]+'|"skill:\/\/[^"\s')`\\]+"|ski
 
 /** Regex to find supported internal URL tokens in command text. */
 const INTERNAL_URL_PATTERN =
-	/'(?:skill|agent|artifact|plan|memory|rule|local|org):\/\/[^'\s")`\\]+'|"(?:skill|agent|artifact|plan|memory|rule|local|org):\/\/[^"\s')`\\]+"|(?:skill|agent|artifact|plan|memory|rule|local|org):\/\/[^\s'")`\\]+/g;
+	/'(?:skill|agent|artifact|plan|memory|rule|local|org|qml):\/\/[^'\s")`\\]+'|"(?:skill|agent|artifact|plan|memory|rule|local|org|qml):\/\/[^"\s')`\\]+"|(?:skill|agent|artifact|plan|memory|rule|local|org|qml):\/\/[^\s'"`)\\]+/g;
 
-const SUPPORTED_INTERNAL_SCHEMES = ["skill", "agent", "artifact", "plan", "memory", "rule", "local", "org"] as const;
+const SUPPORTED_INTERNAL_SCHEMES = [
+	"skill",
+	"agent",
+	"artifact",
+	"plan",
+	"memory",
+	"rule",
+	"local",
+	"org",
+	"qml",
+] as const;
 
 type SupportedInternalScheme = (typeof SUPPORTED_INTERNAL_SCHEMES)[number];
 

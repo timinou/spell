@@ -29,6 +29,7 @@ export * from "./mcp-protocol";
 export * from "./memory-protocol";
 export * from "./org-protocol";
 export * from "./pi-protocol";
+export * from "./qml-protocol";
 export * from "./router";
 export * from "./rule-protocol";
 export * from "./skill-protocol";
