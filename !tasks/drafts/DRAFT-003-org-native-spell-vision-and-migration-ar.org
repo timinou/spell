@@ -7,14 +7,6 @@
 #+PRIORITY: #B
 #+LAYER: backend
 
-* Initial Message
-
-https://github.com/rasendubi/uniorg
-
-
-
-Bro please, think deeply about the org-mode tool and the rest of Spell's management of files that is assumed to be markdown-centric. Can you tell me what making Spell more natively manage Org-mode would enable? Go wild, go free.
-
 * The Insight
 
 Spell already has two parallel document systems running side by side. The org subsystem (packages/org/) is surprisingly mature — 12 subcommands, Emacs daemon bridge with clocking/agenda/dependency graphs, plan-mode integration, journal serialization. But it's walled off. Every other system — memory, skills, artifacts, plans, protocol handlers — speaks markdown exclusively. The org tool creates structured data that immediately gets labeled =text/markdown= and rendered through =marked.lexer()=.
@@ -77,9 +69,29 @@ This is the knowledge graph the memory system approximates with prose but cannot
 
 If all Spell state lives in org files, Emacs users interact with state directly: view plans in org-agenda, modify tasks, add notes. Changes immediately visible to Spell. Spell becomes a "headless org-mode agent" that Emacs users supervise natively — without the TUI.
 
-** Unified Query Across All Spell State
+** Unified Query Across All Spell State (via org-ql)
 
-Plans, memories, skills, sessions, tasks — all org items queryable through the same =org query= tool. Instead of separate =memory://=, =skill://=, =local://= protocols with different capabilities, a single org query with property/tag/state filters covers everything.
+org-ql ([[https://github.com/alphapapa/org-ql]]) provides a full query language for Org files — both Lisp sexps and keyword syntax. Vendored into the Emacs daemon, it gives Spell:
+
+- *Property queries*: =(property "CONFIDENCE" "0.9")=, =(property "SCOPE" "backend/auth")=
+- *Date predicates*: =(ts :from -7 :to today)=, =(deadline :to +7)=, =(clocked :on today)=
+- *Boolean combinators*: =(and (todo "DOING") (tags "auth") (priority >= "B"))=
+- *Ancestor/descendant*: =(ancestors (tags "project"))=, =(descendants (todo "DOING"))=
+- *Effort matching*: =(effort <= "4h")= — native org effort comparison
+- *Per-buffer caching* for repeated queries
+
+Plans, memories, skills, sessions, tasks — all org items queryable through one language. Instead of separate =memory://=, =skill://=, =local://= protocols with different capabilities, a single org query with property/tag/state filters covers everything.
+
+*** org-ql Predicate Map to Spell Domains
+
+| Spell Domain | org-ql Predicates |
+|--------------+-------------------|
+| Memories     | =(property "SCOPE" "backend/auth")=, =(ts :from -30)=, custom =confidence-above= predicate |
+| Plans        | =(todo "DOING" "ITEM")=, =(priority >= "B")=, =(effort <= "4h")=, =(clocked :on today)= |
+| Sessions     | =(clocked :on today)=, =(ts :from -7)=, =(property "PROJECT" "spell")=, =(tags "auth")= |
+| Skills       | =(property "DOMAIN" "typescript")=, =(tags "testing")= |
+
+Note: org-ql's =(property)= predicate does string matching only. Numeric comparison on CONFIDENCE requires a custom Emacs-side predicate or TS-side post-filter.
 
 ** Tags and Agenda Views
 
@@ -101,6 +113,7 @@ What exists today:
 - Journal serializes todo phases to =.org= files
 - Emacs bridge has clock-in/out, agenda, dependency graph, validation
 - =org://= protocol handler (returns org content labeled as =text/markdown= — a type lie)
+- Emacs vendoring pattern established: =packages/emacs/elisp/vendor/= already has combobulate/, mcp/, tree-sitter/
 
 What's broken or incomplete:
 - =contentType= union type excludes org (=text/markdown | application/json | text/plain= only)
@@ -108,6 +121,7 @@ What's broken or incomplete:
 - TS parser handles headings and PROPERTIES only — no timestamps, links, tables, emphasis
 - Plan mode still enforces =.md= extension via regex
 - Memory, skills, artifacts all hardcoded to markdown
+- =applyFilter= in =org-reader.ts:360= is a flat 6-field predicate — no dates, no boolean combinators, no full-text search
 
 * Risks
 
@@ -126,100 +140,725 @@ Current TS parser handles headings and PROPERTIES only. Full org needs timestamp
 
 Mitigation: Adopt [[https://github.com/rasendubi/uniorg][uniorg]] for the TS parsing path. It's a full org-element.el-equivalent parser in TypeScript, unified-ecosystem compatible, producing unist ASTs bridgeable to rehype. Reserve Emacs bridge for stateful features (clocking, agenda, babel). uniorg Bun compatibility and maintenance status need verification.
 
+** org-ql Dependency Tree
+org-ql requires dash, f, s, ts, ov, peg, compat, map, transient, org-super-agenda — ~10 third-party elisp packages. However, the MCP daemon only needs =org-ql-select= (the query engine), not the interactive UI (org-ql-view, helm-org-ql, org-super-agenda, transient, ov). Vendor the minimal set: =org-ql.el= + =peg.el= + =s.el= + =dash.el= + =f.el= + =ts.el= + =map.el= + =compat.el=. Strip all UI code.
+
 * Migration Phases
+
+** ITEM Phase 0: Architecture Documentation and org-ql Vendoring
+:PROPERTIES:
+:EFFORT: 1d
+:END:
+
+Write the vision and architecture as org files in =!architecture/=. Vendor org-ql into the Emacs daemon. This phase produces no behavioral changes to Spell — it's documentation and infrastructure.
+
+*** Architecture Documentation
+
+Create =!architecture/= directory hierarchy:
+
+#+begin_example
+!architecture/
+  org-native/
+    vision.org          -- This plan's vision sections (The Insight, What Org Enables, Risks)
+    migration.org       -- Phase-by-phase migration plan with dependency graph
+    query-language.org  -- org-ql integration design, predicate mapping, TS query builder spec
+#+end_example
+
+Each file uses org headings, PROPERTIES drawers, and cross-references via CUSTOM_ID — dogfooding the format.
+
+*** org-ql Vendoring
+
+Vendor the minimal org-ql dependency set into =packages/org/elisp/vendor/org-ql/=:
+
+**** ITEM Identify minimal org-ql .el files needed for org-ql-select
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+Clone [[https://github.com/alphapapa/org-ql]], trace =org-ql-select= requires. Expected minimal set:
+- =org-ql.el= (core query engine)
+- =peg.el= (parser for non-sexp syntax)
+- =s.el=, =dash.el=, =f.el= (string/list/file utilities)
+- =ts.el= (timestamp library — different from TypeScript!)
+- =map.el=, =compat.el= (compatibility layers)
+
+Strip entirely: =org-ql-view.el=, =org-ql-search.el=, =org-ql-find.el=, =helm-org-ql.el=, =org-ql-completing-read.el=, =org-super-agenda= (all interactive UI).
+
+**** ITEM Create vendor bootstrap elisp
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+Create =packages/org/elisp/vendor/org-ql/load-org-ql.el= — a bootstrap file that:
+1. Adds each vendored subdirectory to =load-path=
+2. Requires =org-ql= core
+3. Follows the pattern in =packages/emacs/elisp/pi-emacs-mcp.el= (=let= + =expand-file-name= + =add-to-list=)
+
+Update =packages/org/elisp/mcp-server-emacs-tools.el= to require the bootstrap.
+
+**** ITEM Create org-ql MCP tool handler
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+Create =packages/org/elisp/tools/org-ql-query.el=:
+- Registers an =org-ql-query= MCP tool
+- Accepts: =files= (list of .org paths), =query= (sexp string), =sort= (optional)
+- Calls =(org-ql-select files query :action #'element-with-markers :sort sort)=
+- Returns JSON array of matching items with id/title/state/properties/tags/file/line
+
+Also register a custom predicate for numeric property comparison:
+#+begin_src emacs-lisp
+(org-ql-defpred confidence-above (threshold)
+  "Match entries with CONFIDENCE property above THRESHOLD."
+  :body (when-let ((val (org-entry-get (point) "CONFIDENCE")))
+          (> (string-to-number val) (string-to-number threshold))))
+#+end_src
+
+**** ITEM Wire org-ql-query into TS client
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+Add =orgQlQuery= method to =packages/org/src/emacs/client.ts= (or the tool.ts dispatch) that calls the new MCP tool. Parse the JSON response into =OrgItem[]= compatible with existing types.
+
+**** ITEM Write architecture .org files
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+Write the three architecture files from the vision sections of this plan. Each file should:
+- Use =#+TITLE:=, =#+DESCRIPTION:=, =#+CREATED:= frontmatter
+- Have =:PROPERTIES:= drawers on actionable headings
+- Cross-reference each other via =[[file:../query-language.org][query language design]]=
+
+*** Test Suite: Phase 0
+
+File: =packages/org/test/org-ql-vendor.test.ts=
+
+| Test | Assertion |
+|------+-----------|
+| org-ql vendor bootstrap loads without error | Emacs daemon starts, =(featurep 'org-ql)= returns t |
+| org-ql-select runs a simple todo query | Query =(todo "ITEM")= against fixture .org returns expected items |
+| custom confidence-above predicate works | =(confidence-above "0.7")= matches entries with CONFIDENCE 0.9, not 0.5 |
+| org-ql-query MCP tool returns valid JSON | Call via socat bridge, parse response, verify item shape |
+
+Note: These tests require Emacs. Mark them with a =skipIf(!emacsAvailable)= guard following the existing pattern in the org test suite.
+
+*** Acceptance Criteria: Phase 0
+- [ ] =!architecture/org-native/vision.org= exists with all vision sections from this plan
+- [ ] =!architecture/org-native/migration.org= exists with phase dependency graph
+- [ ] =!architecture/org-native/query-language.org= exists with org-ql predicate mapping
+- [ ] =packages/org/elisp/vendor/org-ql/= contains minimal vendored .el files
+- [ ] =packages/org/elisp/vendor/org-ql/load-org-ql.el= bootstrap exists
+- [ ] Emacs daemon starts successfully with org-ql loaded (=(featurep 'org-ql)= → t)
+- [ ] =org-ql-query= MCP tool responds to a simple query via socat bridge
+- [ ] =confidence-above= custom predicate registered and functional
 
 ** ITEM Phase 1: Honest Types (< 1h)
 :PROPERTIES:
 :EFFORT: 1h
 :END:
 
-Fix the type system to stop lying:
-- Add =text/x-org= to =InternalResource.contentType= union (=packages/coding-agent/src/internal-urls/types.ts=)
-- Fix =org-protocol.ts= to return =text/x-org= instead of =text/markdown=
-- Add org-to-markdown passthrough in TUI rendering dispatch (convert before =marked.lexer()=)
-- Zero behavioral change. Infrastructure for everything else.
+Fix the type system to stop lying about content types.
 
-** ITEM Phase 2: Memory System (1-2d)
+*** ITEM Add =text/x-org= to InternalResource contentType union
 :PROPERTIES:
-:EFFORT: 2d
+:EFFORT: 15m
 :END:
 
-Highest ROI. Memory benefits most from structured properties.
-- Replace =MEMORY.md= with =MEMORY.org= using org headings + PROPERTIES drawers
-- Update consolidation prompt to produce structured memory entries (title + properties + body)
-- Serialize via =org-writer.ts= (already exists), not LLM-generated org syntax
-- Make =memory://= handler org-aware with property-based query support
-- Implement incremental consolidation: append new, archive stale, adjust confidence scores — no full corpus rewrite
-- Add confidence decay: age-based score reduction on unvalidated memories
+File: =packages/coding-agent/src/internal-urls/types.ts=
+- Add ='text/x-org'= to the =contentType= union type
+- Update =getContentType()= helper (if it exists as a shared function) to map =.org= → =text/x-org=
 
-Key files:
-- =packages/coding-agent/src/memories/index.ts=
-- =packages/coding-agent/src/internal-urls/memory-protocol.ts=
-- =packages/org/src/org-reader.ts= (extend for property queries)
-- =packages/org/src/org-writer.ts= (already handles serialization)
+*** ITEM Fix org-protocol.ts to return =text/x-org=
+:PROPERTIES:
+:EFFORT: 10m
+:END:
 
-** ITEM Phase 3: Plan Unification (4h)
+File: =packages/coding-agent/src/internal-urls/org-protocol.ts=
+- Line 53: change =contentType: "text/markdown"= → =contentType: "text/x-org"=
+
+*** ITEM Add org-to-markdown converter for TUI rendering
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+The TUI renders everything through =marked.lexer()=. Rather than building a parallel org renderer, add a lightweight org-to-markdown converter upstream:
+
+File: =packages/org/src/org-to-markdown.ts= (new)
+- Convert org headings (=*=, =**=) → markdown headings (=#=, =##=)
+- Convert =~code~= → =`code`=, =/italic/= → =*italic*=, =*bold*= → =**bold**=
+- Convert =#+begin_src= → =```=, =#+begin_example= → =```=
+- Convert =[[url][text]]= → =[text](url)=
+- Pass-through PROPERTIES drawers as fenced code blocks (for visibility)
+- Strip =#+= keywords except TITLE (convert to =# Title=)
+
+This is a best-effort converter for display — not a full org→md transpiler. Use uniorg if higher fidelity is needed later.
+
+*** ITEM Update contentType consumers
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+Find every switch/if on =contentType= that handles =text/markdown= and ensure =text/x-org= routes through the org-to-markdown converter first, then into the markdown path.
+
+Key files to check:
+- TUI resource rendering (wherever =InternalResource= content is displayed)
+- =packages/coding-agent/src/internal-urls/= — any handler that reads another handler's output
+
+*** Test Suite: Phase 1
+
+File: =packages/org/test/org-to-markdown.test.ts= (new)
+
+| Test | Input | Expected Output |
+|------+-------+-----------------|
+| headings convert | =* H1\n** H2= | =# H1\n## H2= |
+| inline markup | =~code~ /italic/ *bold*= | =`code` *italic* **bold**= |
+| src blocks | =#+begin_src ts\ncode\n#+end_src= | =```ts\ncode\n```= |
+| links | =[[https://x.com][text]]= | =[text](https://x.com)= |
+| properties passthrough | =:PROPERTIES:\n:KEY: val\n:END:= | =```\n:PROPERTIES:\n:KEY: val\n:END:\n```= |
+
+File: =packages/coding-agent/test/internal-urls/org-protocol.test.ts= (update existing)
+
+| Test | Assertion |
+|------+-----------|
+| org:// returns text/x-org contentType | =expect(result.contentType).toBe("text/x-org")= |
+
+*** Acceptance Criteria: Phase 1
+- [ ] =InternalResource.contentType= type includes ='text/x-org'=
+- [ ] =org://ITEM-ID= returns =contentType: "text/x-org"=
+- [ ] TUI renders org:// content without crashing (org→md→marked pipeline)
+- [ ] No =text/markdown= label on org content anywhere in codebase
+- [ ] =bun check:ts= passes
+
+** ITEM Phase 2: Memory System (4-5d)
+:PROPERTIES:
+:EFFORT: 5d
+:END:
+
+Highest ROI. Memory benefits most from structured properties. This is the most complex phase — broken into sub-phases.
+
+*** ITEM 2a: Org-writer memory serialization
+:PROPERTIES:
+:EFFORT: 1d
+:END:
+
+Extend =packages/org/src/org-writer.ts= to serialize memory entries as org headings with PROPERTIES drawers.
+
+New function: =serializeMemoryEntry(entry: MemoryEntry): string=
+
+#+begin_example
+,* JWT token validation                              :backend:auth:
+:PROPERTIES:
+:CUSTOM_ID: MEM-042-jwt-token-validation
+:CONFIDENCE: 0.9
+:LAST_VALIDATED: [2026-03-10 Mon]
+:SCOPE: backend/auth
+:SOURCE_SESSION: abc123
+:END:
+Use RS256 not HS256. Validation middleware at src/auth/validate.ts.
+#+end_example
+
+Define =MemoryEntry= type in =packages/org/src/types.ts=:
+#+begin_src typescript
+interface MemoryEntry {
+  title: string;
+  confidence: number;
+  scope: string;
+  sourceSession: string;
+  tags?: string[];
+  body: string;
+}
+#+end_src
+
+*** ITEM 2b: Consolidation prompt rewrite
+:PROPERTIES:
+:EFFORT: 1d
+:END:
+
+Update =packages/coding-agent/src/prompts/memories/consolidation.md=:
+- LLM still outputs JSON (not raw org) — the JSON schema changes
+- New output shape: =memory_entries: Array<{title, confidence, scope, tags, body}>=, =memory_summary= (unchanged), =skills= (unchanged)
+- The TS code in =index.ts= calls =serializeMemoryEntry()= for each entry, writes =MEMORY.org=
+
+Update =packages/coding-agent/src/memories/index.ts=:
+- =parseConsolidationOutputSchema=: add =memory_entries= array field
+- =applyConsolidation=: serialize via =org-writer= → =MEMORY.org= instead of writing =MEMORY.md= directly
+- =syncPhase2Artifacts=: update file paths from =.md= to =.org=
+
+Key concern: =storage.ts= stores =raw_memory= as TEXT in SQLite. This stays as-is — raw memories are intermediate blobs consumed by the consolidation prompt, not the final org output.
+
+*** ITEM 2c: Memory protocol org-awareness
 :PROPERTIES:
 :EFFORT: 4h
 :END:
 
-Complete the partially-done org plan integration:
-- Remove markdown fallback path entirely from plan mode
-- Delete =normalizePlanTitle()= .md enforcement (=exit-plan-mode.ts:34-36=)
-- Wire session clocking into lifecycle: clock-in on session start, clock-out on session end/suspend
-- Plan dashboard shows effort-vs-actual via LOGBOOK entries
+Update =packages/coding-agent/src/internal-urls/memory-protocol.ts=:
+- =DEFAULT_MEMORY_FILE= → =memory_summary.md= (unchanged — the summary is still markdown for LLM injection)
+- Add =memory://root/memories.org= route that returns the full =MEMORY.org=
+- Add =memory://root/query?scope=X&confidence_min=Y= route that:
+  - Uses =org-reader= to load =MEMORY.org=
+  - Filters by property values (scope match, confidence threshold)
+  - Returns matching entries as org text (=text/x-org= content type)
 
-Key files:
-- =packages/coding-agent/src/tools/exit-plan-mode.ts=
-- =packages/coding-agent/src/plan-mode/state.ts=
-- =packages/coding-agent/src/modes/interactive-mode.ts=
-- =packages/coding-agent/src/plan-mode/org-plan.ts=
+When Emacs is available, the query route can delegate to org-ql for richer predicates.
 
-** ITEM Phase 4: Skill Migration (1-2d)
+*** ITEM 2d: Incremental consolidation
+:PROPERTIES:
+:EFFORT: 1d
+:END:
+
+Current consolidation rewrites the entire corpus. With org, we can be incremental:
+
+1. =MEMORY.org= is the canonical store (one heading per memory)
+2. New consolidation appends new entries, updates confidence on existing entries, archives stale ones
+3. "Stale" = LAST_VALIDATED older than 30 days AND not confirmed by recent stage1 output
+4. Archive = move heading to =MEMORY_ARCHIVE.org= (org-archive convention)
+
+Implementation:
+- Read existing =MEMORY.org= headings via =org-reader.ts=
+- Compare with consolidation output: match by CUSTOM_ID or title similarity
+- Merge: new entries appended, existing entries have LAST_VALIDATED bumped, missing entries have CONFIDENCE decremented
+- Write back via =org-writer.ts=
+
+*** ITEM 2e: Injection path org→md conversion
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+The =read-path.md= prompt template injects ={{memory_summary}}= into the live session. The memory summary stays markdown (it's LLM-consumed). But the full =MEMORY.org= needs to be readable if the agent accesses =memory://root/memories.org=.
+
+- Use the org-to-markdown converter from Phase 1 when serving org content to the agent
+- Or: serve raw org and trust the agent can read it (org is human-readable)
+
+Decision: serve raw org with =text/x-org= content type. The agent system prompt already contains org examples (from the org tool docs). No conversion needed for agent consumption.
+
+*** Test Suite: Phase 2
+
+File: =packages/org/test/memory-serialization.test.ts= (new)
+
+| Test | Assertion |
+|------+-----------|
+| serializeMemoryEntry produces valid org | Output has =* Title=, =:PROPERTIES:=, =:CONFIDENCE:=, =:END:=, body |
+| tags serialize as org tags | =:backend:auth:= after heading |
+| CUSTOM_ID auto-generated if not provided | MEM-NNN-kebab-title format |
+| roundtrip: serialize → parse → compare | readOrgFile on serialized output returns equivalent data |
+
+File: =packages/coding-agent/test/memories-runtime.test.ts= (update existing)
+
+| Test | Assertion |
+|------+-----------|
+| phase2 writes MEMORY.org not MEMORY.md | =expect(await Bun.file(memoryOrg).exists()).toBe(true)= |
+| consolidation output parsed with new schema | =memory_entries= array extracted correctly |
+| incremental consolidation preserves existing | Before: 3 entries. Consolidate with 2 new. After: 5 entries, originals intact |
+| stale entries get confidence decremented | Entry with LAST_VALIDATED 60d ago has lower CONFIDENCE after consolidation |
+| archived entries moved to MEMORY_ARCHIVE.org | Entries with CONFIDENCE < 0.3 archived |
+
+File: =packages/coding-agent/test/internal-urls/memory-protocol.test.ts= (update existing)
+
+| Test | Assertion |
+|------+-----------|
+| memory://root/memories.org returns text/x-org | contentType check |
+| memory://root/query?scope=auth filters | Only auth-scoped memories returned |
+| memory://root/query?confidence_min=0.7 filters | Low-confidence entries excluded |
+
+*** Acceptance Criteria: Phase 2
+- [ ] =MEMORY.org= written with org headings + PROPERTIES drawers after consolidation
+- [ ] =memory://root/memories.org= returns full org content with =text/x-org=
+- [ ] =memory://root/query?scope=X= returns filtered results
+- [ ] Incremental consolidation: existing memories preserved, new ones appended
+- [ ] Stale memories (>30d unvalidated) have CONFIDENCE decremented
+- [ ] memory_summary.md still generated and injected at prompt time (unchanged)
+- [ ] =bun check:ts= passes
+- [ ] =bun test packages/coding-agent/test/memories-runtime.test.ts= passes
+- [ ] =bun test packages/org/test/memory-serialization.test.ts= passes
+
+** ITEM Phase 3: Plan Unification + Query Builder (1.5d)
+:PROPERTIES:
+:EFFORT: 1.5d
+:END:
+
+Complete the partially-done org plan integration and build the TS→org-ql query bridge.
+
+*** ITEM 3a: Remove markdown plan fallback
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+- =packages/coding-agent/src/tools/exit-plan-mode.ts=: delete =normalizePlanTitle()= .md enforcement (line 37 regex). Accept any =SCREAMING_SNAKE_CASE= title without extension — plans are always org items.
+- =packages/coding-agent/src/plan-mode/state.ts=: remove =planFilePath= (always use =orgItemId=)
+- =packages/coding-agent/src/modes/interactive-mode.ts=: remove =#getPlanFilePath()= fallback to =local://PLAN.md=. Always use =org://ITEM-ID=.
+- =packages/coding-agent/src/plan-mode/approved-plan.ts=: =renameApprovedPlanFile()= becomes dead code — delete it. Org plans don't rename; they transition state.
+
+*** ITEM 3b: Build TS query builder (packages/org/src/query-builder.ts)
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+New module: translates structured TS filter objects into org-ql sexp strings.
+
+#+begin_src typescript
+interface OrgQlFilter {
+  todo?: string[];              // (todo "DOING" "ITEM")
+  tags?: string[];              // (tags "auth" "backend")
+  priority?: { op: ">=" | "<=" | "="; value: string }; // (priority >= "B")
+  properties?: Array<{ key: string; value: string; op?: "=" | ">" | "<" }>;
+  dateRange?: { from?: string; to?: string }; // (ts :from -7 :to today)
+  clocked?: { on?: string; from?: string };   // (clocked :on today)
+  effort?: { op: "<=" | ">=" | "="; value: string }; // (effort <= "4h")
+  text?: string;                // plain text search
+  and?: OrgQlFilter[];
+  or?: OrgQlFilter[];
+  not?: OrgQlFilter;
+}
+
+function buildOrgQlSexp(filter: OrgQlFilter): string;
+function parseKeywordQuery(input: string): OrgQlFilter;  // "todo:DOING tags:auth"
+#+end_src
+
+Also: extend =OrgQueryFilter= in =packages/org/src/types.ts= to optionally include the richer predicates, and have the TS-side =applyFilter= in =org-reader.ts= handle the subset it can (state, category, priority, tags, text). When Emacs is available and filter uses advanced predicates (date, clocked, effort, property comparison), delegate to org-ql via the Emacs bridge.
+
+*** ITEM 3c: Wire session clocking into lifecycle
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+When a plan is approved and execution begins:
+- If Emacs available: call =org-clock-in= on the plan's org item
+- On session end/suspend: call =org-clock-out=
+- Clock entries accumulate in the item's =:LOGBOOK:= drawer
+
+Files:
+- =packages/coding-agent/src/modes/interactive-mode.ts= (session lifecycle hooks)
+- =packages/org/src/tool.ts= (clock-in/out already wired in Emacs bridge)
+
+Graceful degradation: if no Emacs, clocking is a no-op. Plan still works, just without time tracking.
+
+*** ITEM 3d: Plan dashboard effort-vs-actual
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+Extend the =dashboard= org subcommand to include:
+- For each plan: EFFORT property (estimate) vs sum of LOGBOOK CLOCK entries (actual)
+- Format: =PLAN-042: estimated 6h, actual 9h15m (4 sessions)=
+
+File: =packages/org/src/tool.ts= (dashboard handler) or =packages/org/elisp/tools/org-dashboard.el=
+
+*** Test Suite: Phase 3
+
+File: =packages/coding-agent/test/tools/exit-plan-mode.test.ts= (update existing)
+
+| Test | Assertion |
+|------+-----------|
+| title without .md accepted | =normalizePlanTitle("AUTH_REFACTOR")= succeeds |
+| org item resolved for plan | =resolvePlanDraftItem= returns body |
+| markdown fallback path removed | No =local://PLAN.md= reference in plan flow |
+
+File: =packages/org/test/query-builder.test.ts= (new)
+
+| Test | Assertion |
+|------+-----------|
+| simple todo filter | =buildOrgQlSexp({todo: ["DOING"]})= → =(todo "DOING")= |
+| compound and filter | =buildOrgQlSexp({todo: ["ITEM"], tags: ["auth"], priority: {op: ">=", value: "B"}})= → =(and (todo "ITEM") (tags "auth") (priority >= "B"))= |
+| property filter | =buildOrgQlSexp({properties: [{key: "SCOPE", value: "backend"}]})= → =(property "SCOPE" "backend")= |
+| keyword syntax parsing | =parseKeywordQuery("todo:DOING tags:auth")= → ={todo: ["DOING"], tags: ["auth"]}= |
+| effort filter | =buildOrgQlSexp({effort: {op: "<=", value: "4h"}})= → =(effort <= "4h")= |
+| nested boolean | =buildOrgQlSexp({or: [{todo: ["DOING"]}, {tags: ["urgent"]}]})= → =(or (todo "DOING") (tags "urgent"))= |
+| date range | =buildOrgQlSexp({dateRange: {from: "-7", to: "today"}})= → =(ts :from -7 :to today)= |
+
+File: =packages/org/test/query-dual-path.test.ts= (new)
+
+| Test | Assertion |
+|------+-----------|
+| simple filter uses TS path | state+priority filter doesn't call Emacs |
+| date filter delegates to org-ql | dateRange filter calls Emacs bridge |
+| Emacs unavailable with advanced filter → error | Clear error message listing what's unsupported |
+
+*** Acceptance Criteria: Phase 3
+- [ ] =exit_plan_mode= accepts titles without =.md= extension
+- [ ] No =local://PLAN.md= or =renameApprovedPlanFile= in codebase
+- [ ] =buildOrgQlSexp= produces valid sexp strings for all filter types
+- [ ] =parseKeywordQuery= parses org-ql keyword syntax
+- [ ] TS fallback handles simple queries; Emacs handles advanced queries
+- [ ] Clock-in fires on plan execution start (when Emacs available)
+- [ ] Clock-out fires on session end
+- [ ] Dashboard shows effort-vs-actual for clocked plans
+- [ ] =bun check:ts= passes
+- [ ] =bun test packages/org/test/query-builder.test.ts= passes
+
+** ITEM Phase 4: Skill Migration (1.5d)
+:PROPERTIES:
+:EFFORT: 1.5d
+:END:
+
+*** ITEM 4a: Support SKILL.org discovery
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+Update =packages/coding-agent/src/discovery/helpers.ts= → =scanSkillsFromDir()=:
+- Check for =SKILL.org= alongside =SKILL.md= (prefer .org if both exist)
+- Parse org frontmatter (=#+PROPERTY:= lines) using a new =parseOrgFrontmatter()= helper
+
+New function in =packages/coding-agent/src/utils/frontmatter.ts= (or separate file):
+#+begin_src typescript
+function parseOrgFrontmatter(content: string): Record<string, string> {
+  // Parse #+KEY: value lines at top of file (before first heading)
+  // Convert kebab-case keys to camelCase to match YAML frontmatter output
+}
+#+end_src
+
+*** ITEM 4b: Update skill-protocol.ts
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+Update =packages/coding-agent/src/internal-urls/skill-protocol.ts=:
+- =skill://<name>= resolves to =SKILL.org= or =SKILL.md= (check both, prefer .org)
+- Return =text/x-org= content type for .org skills
+- The org-to-markdown converter from Phase 1 converts for agent consumption
+
+*** ITEM 4c: Generate SKILL.org from consolidation
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+Update =packages/coding-agent/src/memories/index.ts= → =applyConsolidation()=:
+- Write =SKILL.org= instead of =SKILL.md= for new auto-generated skills
+- Use org frontmatter format:
+#+begin_example
+#+TITLE: Skill Name
+#+DESCRIPTION: What this skill does
+#+GLOBS: *.ts, src/**/*.tsx
+#+ALWAYS_APPLY: false
+
+Skill body content...
+#+end_example
+
+Existing =SKILL.md= files are NOT auto-migrated — they continue to work. Only newly generated skills use .org.
+
+*** Test Suite: Phase 4
+
+File: =packages/coding-agent/test/skills.test.ts= (update existing)
+
+| Test | Assertion |
+|------+-----------|
+| SKILL.org discovered by scanSkillsFromDir | Fixture with SKILL.org found |
+| SKILL.org frontmatter parsed correctly | name, description, globs, alwaysApply extracted |
+| SKILL.org preferred over SKILL.md when both exist | .org wins |
+| SKILL.md still works (backward compat) | Existing .md fixtures pass |
+
+File: =packages/coding-agent/test/utils/org-frontmatter.test.ts= (new)
+
+| Test | Assertion |
+|------+-----------|
+| basic #+KEY: value parsing | ={title: "Foo", description: "bar"}= |
+| kebab-case → camelCase | =#+ALWAYS-APPLY: true= → ={alwaysApply: "true"}= |
+| stops at first heading | Lines after =* heading= not parsed as frontmatter |
+| empty/missing values handled | =#+TITLE:= (empty) → ={title: ""}= |
+
+File: =packages/coding-agent/test/internal-urls/skill-protocol.test.ts= (update)
+
+| Test | Assertion |
+|------+-----------|
+| skill:// resolves SKILL.org | Returns text/x-org for .org skill |
+| skill:// falls back to SKILL.md | Still works when only .md exists |
+
+*** Acceptance Criteria: Phase 4
+- [ ] =scanSkillsFromDir= discovers =SKILL.org= files
+- [ ] Org frontmatter parsed with same output shape as YAML frontmatter
+- [ ] =skill://<name>= resolves =.org= skills with =text/x-org=
+- [ ] New auto-generated skills written as =SKILL.org=
+- [ ] Existing =SKILL.md= files continue to work unchanged
+- [ ] =bun check:ts= passes
+- [ ] =bun test packages/coding-agent/test/skills.test.ts= passes
+
+** ITEM Phase 5: Session Tracking (2d)
 :PROPERTIES:
 :EFFORT: 2d
 :END:
 
-- Support =SKILL.org= alongside =SKILL.md= in skill discovery
-- Parse org frontmatter (=#+PROPERTY:= lines) as alternative to YAML frontmatter
-- Migrate generated skills from consolidation to org format
-- Eliminate YAML parser dependency for skills
-
-Key files:
-- =packages/coding-agent/src/internal-urls/skill-protocol.ts=
-- =packages/coding-agent/src/memories/index.ts= (skill generation)
-- =packages/coding-agent/src/config/prompt-templates.ts= (template loading)
-
-** ITEM Phase 5: Session Tracking (1-2d)
+*** ITEM 5a: Session org item creation
 :PROPERTIES:
-:EFFORT: 2d
+:EFFORT: 4h
 :END:
 
-- Create session org items on session start (with PROPERTIES: SESSION_ID, START_TIME, PROJECT, BRANCH)
-- Clock in/out automatically via Emacs bridge
-- Link sessions to plans via org cross-references
-- Tag sessions by domain/scope
-- Session handoff becomes a section in the session's org subtree
+On session start, create an org item in a new =sessions= category:
+
+#+begin_example
+#+TITLE: Session 2026-03-14T11:23
+#+STATE: DOING
+#+CUSTOM_ID: SESS-001-2026-03-14
+#+SESSION_ID: abc123
+#+START_TIME: [2026-03-14 Fri 11:23]
+#+PROJECT: spell
+#+BRANCH: feat/org-native
+#+PLAN_REF: [[org://PLAN-042-auth-refactor]]
+#+end_example
+
+Files:
+- =packages/org/src/defaults.ts=: add =sessions= to default category list
+- =packages/coding-agent/src/session/agent-session.ts=: create org item on session init
+- =packages/org/src/types.ts=: add session-specific properties to OrgCreateParams
+
+*** ITEM 5b: Auto-clocking
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+When session starts:
+1. Create session org item (5a)
+2. If Emacs available: =org-clock-in= on the session item
+3. On session end: =org-clock-out=
+4. On session suspend/resume: clock-out/clock-in
+
+If linked to a plan (via =PLAN_REF=), also clock-in on the plan item (so plan accumulates time from all its sessions).
+
+*** ITEM 5c: Session tagging and linking
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+- Auto-tag sessions based on files touched (=:backend:=, =:frontend:=, =:test:= based on paths)
+- Link sessions to plans via =PLAN_REF= property with org cross-reference
+- On session end, append a summary section to the session org item body
+
+*** ITEM 5d: Session state transitions
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+- Session start → =DOING=
+- Session end (normal) → =DONE=, append completion summary
+- Session end (suspended) → =REVIEW=, append handoff notes
+- Session end (error) → =BLOCKED=, append error context
+
+*** Test Suite: Phase 5
+
+File: =packages/coding-agent/test/session-tracking.test.ts= (new)
+
+| Test | Assertion |
+|------+-----------|
+| session start creates org item | Item exists with SESSION_ID, START_TIME properties |
+| session end transitions to DONE | State changed, LOGBOOK has clock entry (if Emacs) |
+| session linked to plan | PLAN_REF property contains plan CUSTOM_ID |
+| session auto-tagged from touched files | Tags include domain inferred from file paths |
+| multiple sessions for same plan | Each creates separate session item, plan accumulates clock time |
+| no Emacs: session item created without clock | Graceful degradation |
+
+*** Acceptance Criteria: Phase 5
+- [ ] Session org item created on session start with correct properties
+- [ ] =org query --category sessions= returns session items
+- [ ] Clock entries appear in session item LOGBOOK (when Emacs available)
+- [ ] Sessions linked to plans via PLAN_REF
+- [ ] Session state transitions on end/suspend/error
+- [ ] =bun check:ts= passes
 
 ** ITEM Phase 6: Unified Query Layer (3d)
 :PROPERTIES:
 :EFFORT: 3d
 :END:
 
-- Extend org query to cover memories, skills, sessions — not just tasks
-- Add property filter syntax to org tool (e.g., =CONFIDENCE>0.7 SCOPE=backend/auth=)
-- Consider whether =memory://=, =skill://= protocols should delegate to org query internally
-- Cross-reference navigation: follow links between plans → sessions → memories
+*** ITEM 6a: Extend org tool query subcommand
+:PROPERTIES:
+:EFFORT: 1d
+:END:
 
-* Verification
+The =org query= tool currently accepts flat filters (state, category, priority, layer, agent). Extend it with:
 
-Each phase has concrete observables:
-- Phase 1: =org://= items render correctly in TUI; no =text/markdown= type for org content
-- Phase 2: =memory://root= returns structured org with queryable properties; consolidation is incremental
-- Phase 3: Plan creation never produces .md files; session clock entries appear in plan LOGBOOK
-- Phase 4: Skills discoverable as .org files; no YAML parsing for org-format skills
-- Phase 5: =org query --category sessions --tag auth= returns session history
-- Phase 6: Single query spanning plans, memories, skills returns cross-linked results
+- =query= parameter: org-ql keyword syntax string (e.g., =todo:DOING tags:auth priority:B=)
+- When =query= is provided: parse via =parseKeywordQuery()= → =buildOrgQlSexp()= → send to Emacs bridge
+- TS fallback: =parseKeywordQuery()= → =OrgQlFilter= → =applyFilter()= for the subset TS can handle
+- Return clear error listing unsupported predicates when TS can't handle a query and Emacs unavailable
+
+File: =packages/org/src/tool.ts= (query handler)
+
+*** ITEM 6b: Cross-entity queries
+:PROPERTIES:
+:EFFORT: 1d
+:END:
+
+When querying without a =--category= filter, search across ALL categories (plans, drafts, sessions, memories, skills). This is the "unified query" — one query spanning all Spell state.
+
+Implementation:
+- =resolveCategories()= already returns all categories
+- Pass all category directories to org-ql-select
+- Results include =category= field so the agent knows what type each result is
+
+*** ITEM 6c: Protocol delegation to org query
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+Consider whether =memory://root/query?scope=auth= should internally delegate to =org query=:
+- Yes for simple property queries (avoid duplicating filter logic)
+- No for the injection path (memory_summary.md) — that stays direct file read
+- =skill://= stays as-is (discovery-based, not query-based)
+
+*** ITEM 6d: Cross-reference navigation
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+When an org item has links (=[[org://PLAN-042][plan]]=), the query result includes a =links= field:
+#+begin_src typescript
+interface OrgItemLink {
+  targetId: string;
+  label: string;
+  type: "plan" | "session" | "memory" | "unknown";
+}
+#+end_src
+
+This enables the agent to follow knowledge trails: plan → sessions → memories → next plan.
+
+*** Test Suite: Phase 6
+
+File: =packages/org/test/unified-query.test.ts= (new)
+
+| Test | Assertion |
+|------+-----------|
+| keyword syntax query via org tool | =todo:DOING tags:auth= returns matching items |
+| cross-entity query spans all categories | Query without category returns plans + sessions + memories |
+| results include category field | Each result has =category: "plans"= or =category: "sessions"= etc. |
+| TS fallback for simple queries | state+priority filter works without Emacs |
+| advanced query without Emacs → error | Clear message: "Date predicates require Emacs" |
+| cross-reference links in results | Item with =[[org://X]]= link has =links: [{targetId: "X", ...}]= |
+| org-ql sexp passthrough | Direct sexp string accepted and forwarded to Emacs bridge |
+
+File: =packages/org/test/org-ql-integration.test.ts= (new, requires Emacs)
+
+| Test | Assertion |
+|------+-----------|
+| org-ql-select via MCP tool | Complex query returns correct results from fixture files |
+| property query on memory entries | =(property "SCOPE" "backend")= matches correctly |
+| confidence-above custom predicate | =(confidence-above "0.7")= filters correctly |
+| date predicate | =(ts :from -7 :to today)= matches recent entries |
+| cross-file query | Single query spans multiple .org files |
+
+*** Acceptance Criteria: Phase 6
+- [ ] =org query= accepts org-ql keyword syntax via =query= parameter
+- [ ] Cross-entity query returns results from all categories
+- [ ] TS fallback handles simple queries correctly
+- [ ] Advanced queries delegate to org-ql via Emacs bridge
+- [ ] Clear error when Emacs unavailable for advanced predicates
+- [ ] Cross-reference links included in query results
+- [ ] =bun check:ts= passes
+- [ ] All Phase 6 tests pass
+
+* Verification (End-to-End)
+
+After all phases complete, the following should be demonstrable:
+
+1. Create a plan via =org create= → plan has EFFORT property
+2. Approve plan → session starts, clock-in fires
+3. Agent works on plan → memories generated during consolidation
+4. =org query "todo:DOING tags:auth"= → returns plan + session
+5. Session ends → clock-out, LOGBOOK shows duration
+6. Next session: =org query --category memories "property:SCOPE backend/auth"= → returns relevant memories with confidence scores
+7. =org dashboard= → shows plan effort-vs-actual
+8. All Spell state queryable through one language. No more flat markdown blobs.
 
 * uniorg Integration Notes
 
@@ -233,3 +872,5 @@ The [[https://github.com/rasendubi/uniorg][uniorg]] library provides:
 This would replace/augment the current line-by-line parser in =org-reader.ts= for operations that need full org understanding (rendering, link resolution, table computation). The existing parser remains sufficient for CRUD operations on headings + PROPERTIES.
 
 The rehype bridge is particularly valuable: it means the TUI's markdown rendering pipeline (=marked= → HTML) can be paralleled by an org rendering pipeline (=uniorg-parse= → =uniorg-rehype= → =rehype-stringify=) without building a custom org renderer.
+
+Consider uniorg as a future replacement for the Phase 1 org-to-markdown converter when higher fidelity is needed.

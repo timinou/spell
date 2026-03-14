@@ -49,6 +49,9 @@ export class RemoteQmlBridge {
 		switch (msg.type) {
 			case "panel_ready":
 				win.state = "ready";
+				if (Array.isArray(msg.armedTools)) {
+					win.armedTools = msg.armedTools;
+				}
 				break;
 			case "panel_closed":
 				win.state = "closed";

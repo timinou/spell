@@ -31,7 +31,7 @@ export type ServerPanelMessage =
 
 export type ClientPanelMessage =
 	/** Android reports panel is ready */
-	| { type: "panel_ready"; id: string }
+	| { type: "panel_ready"; id: string; armedTools?: string[] }
 	/** Android forwards a panel-emitted event */
 	| { type: "panel_event"; id: string; name?: string; payload: Record<string, unknown> }
 	/** Android reports a panel render error */
