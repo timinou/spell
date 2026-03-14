@@ -1,0 +1,163 @@
+#+TITLE: Fix plan-mode tool-wipe bug
+#+STATE: ITEM
+#+SESSION_ID: 149259f8d5685b85
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-14T11-54-23-445Z_149259f8d5685b85.jsonl]]
+#+CUSTOM_ID: DRAFT-003-fix-plan-mode-tool-wipe-bug
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+14924ed3df6b6219
+
+
+this session had its org tool crash. Please explain why
+
+* Problem
+
+When plan mode activates mid-session, the entire tool set can be wiped. Every tool call returns ~"Tool X not found"~. The session becomes completely non-functional — only ~ask~ continues working (special-cased in plan-mode enforcement).
+
+Observed in session ~14924ed3df6b6219~ (crm-dsl project): lines 1-234 had working tools, plan mode activated at line 235, and from line 239 onward every tool (bash, read, grep, find, write, org, qml, emacs_code, resolve) returned "not found".
+
+There are two distinct bugs.
+
+** Bug 1: ~setActiveToolsByName~ silently produces an empty tool set
+
+~#enterPlanMode()~ at ~interactive-mode.ts:698-707~:
+#+begin_src typescript
+const previousTools = this.session.getActiveToolNames();
+const planTools = hasExitTool ? [...previousTools, "exit_plan_mode"] : previousTools;
+const uniquePlanTools = [...new Set(planTools)];
+await this.session.setActiveToolsByName(uniquePlanTools);
+#+end_src
+
+~setActiveToolsByName~ at ~agent-session.ts:1634-1651~ looks up each name in ~#toolRegistry~:
+#+begin_src typescript
+async setActiveToolsByName(toolNames: string[]): Promise<void> {
+    const tools: AgentTool[] = [];
+    for (const name of toolNames) {
+        const tool = this.#toolRegistry.get(name);
+        if (tool) { tools.push(tool); }
+    }
+    this.agent.setTools(tools); // Can set to [] if all lookups fail!
+}
+#+end_src
+
+If lookups fail (registry transiently empty, name mismatch, or race condition), ~agent.setTools([])~ wipes the tool set. There is zero validation or logging when this happens.
+
+Additionally, the plan-mode enforcement mechanism at ~agent-session.ts:3500-3509~ saves and restores the (now-empty) tool set, cementing the damage:
+#+begin_src typescript
+const previousTools = this.agent.state.tools; // already []
+this.agent.setTools(forcedTools); // [ask, exit_plan_mode]
+try { await this.prompt(reminder, { toolChoice: "required" }); }
+finally { this.agent.setTools(previousTools); } // restores []
+#+end_src
+
+** Bug 2: Org tool factory ignores plan-mode force-on
+
+At ~tools/index.ts:196~:
+#+begin_src typescript
+org: s => (s.settings.get("org.enabled") ? new OrgTool(s) : null),
+#+end_src
+
+At ~tools/index.ts:329~:
+#+begin_src typescript
+if (name === "org" && inPlanMode) return true; // isToolAllowed gate
+#+end_src
+
+Two gates, inconsistent: ~isToolAllowed~ says yes for plan mode, but the factory independently checks ~org.enabled~ and returns ~null~ when the setting is off. The org tool is never instantiated, so it's never in ~#toolRegistry~. Plan mode promises org in its context prompt but the tool doesn't exist.
+
+This is a secondary issue — in the observed session ALL tools were missing (Bug 1), so org would have failed regardless. But even with Bug 1 fixed, org will still fail in plan mode when ~org.enabled~ is false (e.g. projects without ~.spell/~ config).
+
+* Approach
+
+** ITEM Fix 1: Guard setActiveToolsByName against empty results
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+In ~packages/coding-agent/src/session/agent-session.ts~, method ~setActiveToolsByName~:
+
+1. Log warnings for missing tools so the problem is diagnosable
+2. Refuse to wipe all tools when the input was non-empty — keep current set instead
+
+#+begin_src typescript
+async setActiveToolsByName(toolNames: string[]): Promise<void> {
+    const tools: AgentTool[] = [];
+    const validToolNames: string[] = [];
+    for (const name of toolNames) {
+        const tool = this.#toolRegistry.get(name);
+        if (tool) {
+            tools.push(tool);
+            validToolNames.push(name);
+        } else {
+            logger.warn("setActiveToolsByName: tool not in registry", { name });
+        }
+    }
+    if (tools.length === 0 && toolNames.length > 0) {
+        logger.error("setActiveToolsByName: all requested tools missing from registry, keeping current set", {
+            requested: toolNames,
+            registrySize: this.#toolRegistry.size,
+        });
+        return;
+    }
+    this.agent.setTools(tools);
+    // ... rebuild system prompt as before
+}
+#+end_src
+
+*** Key file
+- ~packages/coding-agent/src/session/agent-session.ts~ — ~setActiveToolsByName~
+
+** ITEM Fix 2: Org factory respects plan-mode state
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+The factory runs at session init, before plan mode is enabled, so we can't fix it at factory time. Instead, when plan mode activates and needs org, create it on demand.
+
+In ~#enterPlanMode~ at ~interactive-mode.ts~, before calling ~setActiveToolsByName~:
+
+1. Check if "org" is missing from the tool registry
+2. If so, instantiate OrgTool and register it
+
+This requires either:
+- (a) Exposing a ~registerTool(name, tool)~ method on AgentSession, OR
+- (b) Having ~#enterPlanMode~ call into the tool creation infrastructure
+
+Option (a) is simpler. Add to ~AgentSession~:
+#+begin_src typescript
+registerTool(name: string, tool: AgentTool): void {
+    this.#toolRegistry.set(name, tool);
+}
+#+end_src
+
+Then in ~#enterPlanMode~:
+#+begin_src typescript
+// Ensure org tool exists for plan mode (factory skips it when org.enabled is false)
+if (!this.session.getToolByName("org")) {
+    const orgTool = new OrgTool(this.session as ToolSession);
+    this.session.registerTool("org", orgTool);
+}
+#+end_src
+
+*** Key files
+- ~packages/coding-agent/src/session/agent-session.ts~ — add ~registerTool~
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ — ~#enterPlanMode~
+
+** ITEM Verify fixes
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+1. ~bun check~ — no type errors
+2. ~bun lint~ — no lint issues
+3. Manual test: start a session in a project without ~.spell/~ config, toggle plan mode, confirm all tools still work and org tool is available
+
+* Files Summary
+
+| File | Change |
+|------|--------|
+| ~packages/coding-agent/src/session/agent-session.ts~ | Guard in ~setActiveToolsByName~, add ~registerTool~ |
+| ~packages/coding-agent/src/modes/interactive-mode.ts~ | ~#enterPlanMode~ ensures org tool exists |

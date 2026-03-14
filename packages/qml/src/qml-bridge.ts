@@ -17,14 +17,20 @@ export interface LaunchOptions {
  * Maintains one bridge process and one watcher per QmlBridge instance.
  * Intended to be held per tool-session and disposed when the session ends.
  */
+export interface QmlBridgeOptions {
+	/** Extra environment variables for the bridge process. */
+	env?: Record<string, string>;
+}
+
 export class QmlBridge {
-	readonly #process = new QmlProcess();
+	readonly #process: QmlProcess;
 	readonly #watcher = new QmlWatcher();
 	readonly #windows = new Map<string, WindowInfo>();
 	#removeListener: (() => void) | null = null;
 	#reconnected = false;
 
-	constructor() {
+	constructor(options?: QmlBridgeOptions) {
+		this.#process = new QmlProcess(options);
 		// Register event listener immediately — process may not be up yet
 		this.#removeListener = this.#process.addListener(event => this.#handleEvent(event));
 	}
