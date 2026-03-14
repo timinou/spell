@@ -121,6 +121,17 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 	constructor(private readonly session: ToolSession) {}
 
 	/** Returns the remote bridge if an Android client is connected, null otherwise. */
+	/** Resolve a QML file path, honoring qml:// internal URLs. */
+	async #resolveFilePath(filePath: string): Promise<string> {
+		const internalRouter = this.session.internalRouter;
+		if (internalRouter?.canHandle(filePath)) {
+			const resource = await internalRouter.resolve(filePath);
+			if (!resource.sourcePath) throw new ToolError("qml:// URL has no filesystem path");
+			return resource.sourcePath;
+		}
+		return path.isAbsolute(filePath) ? filePath : path.join(this.session.cwd, filePath);
+	}
+
 	#remoteBridge(): RemoteQmlBridge | null {
 		const server = this.session.qmlRemoteServer;
 		return server?.bridge ?? null;
@@ -371,7 +382,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				const content = params.content;
 				if (!filePath) throw new ToolError("write action requires 'path'");
 				if (content === undefined) throw new ToolError("write action requires 'content'");
-				const abs = path.isAbsolute(filePath) ? filePath : path.join(this.session.cwd, filePath);
+				const abs = await this.#resolveFilePath(filePath);
 				await Bun.write(abs, content);
 				const lint = await lintQmlFile(abs);
 				const lintText = formatLintOutput(lint);
@@ -391,7 +402,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				const remote = this.#remoteBridge();
 				if (remote) {
 					// Remote mode: read the local QML file and push its content to Android.
-					const abs = path.isAbsolute(filePath) ? filePath : path.join(this.session.cwd, filePath);
+					const abs = await this.#resolveFilePath(filePath);
 					const content = await Bun.file(abs).text();
 					const win = remote.launch(id, content, {
 						title: params.title,
@@ -420,7 +431,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 					return toolResult(details).text(text).done();
 				}
 
-				const abs = path.isAbsolute(filePath) ? filePath : path.join(this.session.cwd, filePath);
+				const abs = await this.#resolveFilePath(filePath);
 				const bridge = this.#ensureBridge();
 				const win = await bridge.launch(id, abs, {
 					title: params.title,

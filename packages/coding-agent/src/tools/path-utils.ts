@@ -11,6 +11,7 @@ const TOP_LEVEL_INTERNAL_URL_PREFIXES = [
 	"rule://",
 	"local://",
 	"mcp://",
+	"qml://",
 ] as const;
 
 function normalizeUnicodeSpaces(str: string): string {
