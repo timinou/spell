@@ -54,6 +54,9 @@ export class QmlBridge {
 		switch (event.type) {
 			case "ready":
 				win.state = "ready";
+				if (Array.isArray(event.armedTools)) {
+					win.armedTools = event.armedTools;
+				}
 				break;
 			case "closed":
 				win.state = "closed";
@@ -112,7 +115,7 @@ export class QmlBridge {
 		// Wait until ready or error (max 10s)
 		try {
 			await this.#process.waitFor(e => (e.type === "ready" || e.type === "error") && e.id === id, 10_000);
-		} catch (err) {
+		} catch (_err) {
 			const stderrLines = info.events
 				.filter(e => e.name === "stderr")
 				.map(e => (e.payload as { message?: string }).message ?? "")
@@ -256,6 +259,7 @@ export class QmlBridge {
 				id: win.id,
 				path: win.path,
 				state: win.state as WindowState,
+				armedTools: Array.isArray(win.armedTools) ? win.armedTools : undefined,
 				events: [],
 			};
 			this.#windows.set(win.id, info);

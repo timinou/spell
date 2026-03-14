@@ -59,6 +59,9 @@ export const QML_EVENTS_CHANNEL = "qml:window:events";
 /** Channel name for armed tool invocations emitted by the QML event loop. */
 export const QML_TOOL_INVOKE_CHANNEL = "qml:tool:invoke";
 
+/** Tools that cannot be armed from QML file declarations (only from explicit agent props). */
+const QML_ARMED_DENYLIST = new Set(["bash", "python", "task"]);
+
 /** Payload emitted on QML_EVENTS_CHANNEL. */
 export interface QmlWindowEventsPayload {
 	windowId: string;
@@ -385,13 +388,18 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 						props: params.props as Record<string, unknown> | undefined,
 					});
 					const events = remote.drainEvents(id);
-					// Populate armed tool allowlist from props._armedTools (if agent provided one).
-					const armedList = params.props?.["_armedTools"];
-					if (Array.isArray(armedList)) {
-						this.#armedTools.set(
-							id,
-							armedList.filter((t): t is string => typeof t === "string"),
-						);
+					// Merge armed tools: explicit props override; remote has no file-declared tools yet.
+					const propsArmed = params.props?._armedTools;
+					let armedList: string[];
+					if (Array.isArray(propsArmed)) {
+						armedList = propsArmed.filter((t): t is string => typeof t === "string");
+					} else if (Array.isArray(win.armedTools)) {
+						armedList = win.armedTools.filter(t => !QML_ARMED_DENYLIST.has(t));
+					} else {
+						armedList = [];
+					}
+					if (armedList.length > 0) {
+						this.#armedTools.set(id, armedList);
 					}
 					// Start background event loop so events arrive as follow-ups.
 					this.#startEventLoop(id, () => this.#remoteBridge()!);
@@ -409,13 +417,18 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 					props: params.props as Record<string, unknown> | undefined,
 				});
 				const events = bridge.drainEvents(id);
-				// Populate armed tool allowlist from props._armedTools (if agent provided one).
-				const armedList = params.props?.["_armedTools"];
-				if (Array.isArray(armedList)) {
-					this.#armedTools.set(
-						id,
-						armedList.filter((t): t is string => typeof t === "string"),
-					);
+				// Merge armed tools: explicit props override, then file-declared (with denylist).
+				const propsArmed = params.props?._armedTools;
+				let armedList: string[];
+				if (Array.isArray(propsArmed)) {
+					armedList = propsArmed.filter((t): t is string => typeof t === "string");
+				} else if (Array.isArray(win.armedTools)) {
+					armedList = win.armedTools.filter(t => !QML_ARMED_DENYLIST.has(t));
+				} else {
+					armedList = [];
+				}
+				if (armedList.length > 0) {
+					this.#armedTools.set(id, armedList);
 				}
 				// Start background event loop so events arrive as follow-ups.
 				this.#startEventLoop(id, () => this.#ensureBridge());

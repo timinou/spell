@@ -38,14 +38,12 @@ You will receive a plan — either as an org item body or a file path. Read it i
 - Edge cases relevant to execution are addressed
 
 ## Quality thresholds
-
 - **File references**: 100% of referenced files must exist in the codebase (verify with tools)
-- **Reference sources**: >=80% of tasks must have clear patterns, APIs, or examples to follow
-- **Acceptance criteria**: >=90% of tasks must have concrete, agent-executable verification
+- **Reference sources**: ≥80% of tasks must have clear patterns, APIs, or examples to follow
+- **Acceptance criteria**: ≥90% of tasks must have concrete, agent-executable verification
 - **Business logic assumptions**: zero allowed — no "the user probably wants X" or "this likely means Y"
 
 ## How to evaluate
-
 1. Read the plan fully
 2. Check file references against the codebase (use `find`, `grep`, `read` to verify)
 3. Evaluate each task against the four criteria

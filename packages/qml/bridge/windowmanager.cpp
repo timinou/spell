@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include <QQmlContext>
 #include <QUrl>
+#include <QJSValue>
 #include <cstdio>
 
 WindowManager::WindowManager(QObject *parent) : QObject(parent) {}
@@ -25,6 +26,11 @@ QJsonArray WindowManager::getWindowStates() const {
         obj["id"] = it.key();
         obj["path"] = it->path;
         obj["state"] = it->state;
+        if (!it->armedTools.isEmpty()) {
+            QJsonArray toolsArr;
+            for (const auto &t : it->armedTools) toolsArr.append(t);
+            obj["armedTools"] = toolsArr;
+        }
         arr.append(obj);
     }
     return arr;
@@ -122,9 +128,27 @@ void WindowManager::loadWindow(const QString &id, const QString &path,
 
     m_windows[id].state = "ready";
 
+    // Read declarative armed tools from root QML property
+    QStringList armedToolsList;
+    QObject *root = engine->rootObjects().first();
+    QJSValue jsVal = root->property("spellArmedTools").value<QJSValue>();
+    if (jsVal.isArray()) {
+        int len = jsVal.property("length").toInt();
+        for (int i = 0; i < len; ++i) {
+            QString s = jsVal.property(i).toString();
+            if (!s.isEmpty()) armedToolsList.append(s);
+        }
+    }
+    m_windows[id].armedTools = armedToolsList;
+
     QJsonObject ev;
     ev["type"] = "ready";
     ev["id"] = id;
+    if (!armedToolsList.isEmpty()) {
+        QJsonArray toolsArr;
+        for (const auto &t : armedToolsList) toolsArr.append(t);
+        ev["armedTools"] = toolsArr;
+    }
     writeEvent(ev);
 }
 

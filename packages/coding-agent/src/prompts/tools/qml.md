@@ -34,6 +34,28 @@ ApplicationWindow {
 ```
 </qml-bridge-api>
 
+<armed-tools>
+QML files can declare which tools they need via a root-level property:
+```qml
+ApplicationWindow {
+    visible: true
+    property var spellArmedTools: ["write", "read", "generate_image"]
+    // ...
+}
+```
+
+When a QML file declares `spellArmedTools`, those tools are automatically armed for the window without needing `props._armedTools` at launch time.
+
+**Merge semantics:**
+- Explicit `props._armedTools` at launch overrides file-declared tools
+- File-declared tools are filtered through a denylist: `bash`, `python`, `task` cannot be armed from QML declarations
+- If neither is present, no tools are armed (safe default)
+
+**Tool invocation protocol** (from QML side):
+- `bridge.send({ _tool: "write", path: "/tmp/out.txt", content: "hello" })` — fire-and-forget
+- `bridge.send({ _tool: "read", _rid: "req1", path: "file.txt" })` — with reply; result delivered via `bridge.messageReceived` with matching `_rid`
+</armed-tools>
+
 <workflow>
 1. `write` the QML file
 2. `launch` with the file path — the window opens and a background event loop starts automatically

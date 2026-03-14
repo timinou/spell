@@ -2,6 +2,7 @@
 #include <functional>
 #include <QHash>
 #include <QJsonArray>
+#include <QStringList>
 #include <QJsonObject>
 #include <QObject>
 #include <QQmlApplicationEngine>
@@ -35,6 +36,7 @@ public:
         Bridge *bridge;
         QString path;
         QString state; // "loading", "ready", "error", "closed"
+        QStringList armedTools;
     };
 
 private:
