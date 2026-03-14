@@ -23,6 +23,7 @@ import { BashTool } from "./bash";
 import { BrowserTool } from "./browser";
 import { CalculatorTool } from "./calculator";
 import { CancelJobTool } from "./cancel-job";
+import { CanvasTool } from "./canvas";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { EmacsTool } from "./emacs";
 import { ExitPlanModeTool } from "./exit-plan-mode";
@@ -34,7 +35,6 @@ import { NotebookTool } from "./notebook";
 import { OrgTool } from "./org";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { PythonTool } from "./python";
-import { QmlTool } from "./qml";
 import { ReadTool } from "./read";
 import { RenderMermaidTool } from "./render-mermaid";
 import { ResolveTool } from "./resolve";
@@ -61,6 +61,7 @@ export * from "./bash";
 export * from "./browser";
 export * from "./calculator";
 export * from "./cancel-job";
+export * from "./canvas";
 export * from "./checkpoint";
 export * from "./emacs";
 export * from "./exit-plan-mode";
@@ -72,7 +73,6 @@ export * from "./inspect-image";
 export * from "./notebook";
 export * from "./pending-action";
 export * from "./python";
-export * from "./qml";
 export * from "./read";
 export * from "./render-mermaid";
 export * from "./resolve";
@@ -164,7 +164,7 @@ export interface ToolSession {
 	setCheckpointState?: (state: CheckpointState | null) => void;
 	/** Pre-started Emacs daemon session; null if Emacs is unavailable; undefined if not yet initialized. */
 	emacsSession?: EmacsSession | null;
-	/** Active QML remote server; when set, QmlTool routes panels to the Android client. */
+	/** Active QML remote server; when set, CanvasTool routes panels to the Android client. */
 	qmlRemoteServer?: import("@oh-my-pi/pi-qml-remote").QmlRemoteServer;
 }
 
@@ -198,7 +198,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	fetch: s => new FetchTool(s),
 	web_search: s => new SearchTool(s),
 	write: s => new WriteTool(s),
-	qml: s => new QmlTool(s),
+	canvas: s => new CanvasTool(s),
 };
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {

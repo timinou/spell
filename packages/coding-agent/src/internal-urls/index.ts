@@ -22,6 +22,7 @@
 
 export * from "./agent-protocol";
 export * from "./artifact-protocol";
+export * from "./canvas-protocol";
 export * from "./jobs-protocol";
 export * from "./json-query";
 export * from "./local-protocol";
@@ -29,7 +30,6 @@ export * from "./mcp-protocol";
 export * from "./memory-protocol";
 export * from "./org-protocol";
 export * from "./pi-protocol";
-export * from "./qml-protocol";
 export * from "./router";
 export * from "./rule-protocol";
 export * from "./skill-protocol";
