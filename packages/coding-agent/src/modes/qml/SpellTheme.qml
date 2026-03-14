@@ -15,10 +15,10 @@ QtObject {
     readonly property color textSecondary: "#8b949e"
     readonly property color textTertiary: "#484f58"
 
-    // Primary accent
-    readonly property color primary: "#7c3aed"
+    // Primary accent — changed from purple to amber
+    readonly property color primary: "#e8a040"
     readonly property color primaryText: "#ffffff"
-    readonly property color primaryContainer: "#2d1b69"
+    readonly property color primaryContainer: "#3d2800"
 
     // Semantic
     readonly property color error: "#f85149"

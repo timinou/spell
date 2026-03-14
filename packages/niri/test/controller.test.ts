@@ -40,20 +40,19 @@ mock.module("../src/ipc.ts", () => ({
 	},
 }));
 
-// ─── Mock Bun.write and node:fs/promises ────────────────────────────────────
+// ─── Mock Bun.write, node:fs/promises, and niri-query ─────────────────────────────
 
-// Track Bun.write calls
+// Track Bun.write and fs.rm calls to verify status file behavior.
 const writtenFiles: Record<string, string> = {};
 const removedFiles: string[] = [];
 
-// Patch global Bun.write to capture writes
 // @ts-expect-error — patching global Bun.write to capture writes in tests
 Bun.write = (path: string, content: string) => {
 	writtenFiles[path] = content;
 	return Promise.resolve(content.length);
 };
 
-// Mock node:fs/promises to capture rm calls and stub mkdir
+// Stub fs.mkdir (no-op) and capture fs.rm calls.
 mock.module("node:fs/promises", () => ({
 	mkdir: () => Promise.resolve(),
 	rm: (path: string) => {
@@ -62,31 +61,10 @@ mock.module("node:fs/promises", () => ({
 	},
 }));
 
-// Mock bun shell $ to return a fake focused-window response
+// Stub niri-query so tests don't require a running niri compositor.
 let fakeWindowId: number | null = 42;
-mock.module("bun", () => ({
-	$: Object.assign(
-		(strings: TemplateStringsArray, ..._values: unknown[]) => {
-			const cmd = strings.join("");
-			if (cmd.includes("focused-window") && fakeWindowId !== null) {
-				return {
-					quiet: () => ({
-						nothrow: () =>
-							Promise.resolve({
-								exitCode: 0,
-								text: () => JSON.stringify({ id: fakeWindowId }),
-							}),
-					}),
-				};
-			}
-			return {
-				quiet: () => ({
-					nothrow: () => Promise.resolve({ exitCode: 1, text: () => "" }),
-				}),
-			};
-		},
-		{ call: undefined },
-	),
+mock.module("../src/niri-query.ts", () => ({
+	queryNiriFocusedWindowId: () => Promise.resolve(fakeWindowId),
 }));
 
 // ─── Factory helpers ──────────────────────────────────────────────────────────
@@ -112,6 +90,7 @@ function makeCtx(
 		error: string | undefined;
 		hasInputCallback: boolean;
 		isAwaitingHookInput: boolean;
+		isPendingApproval: boolean;
 		todoPhases: NiriOverviewContext["todoPhases"];
 		sessionName: string;
 	}> = {},

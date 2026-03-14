@@ -1,0 +1,111 @@
+#+TITLE: Session 14926ff34176000f Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* Phase 5: Test harness extension
+
+** DONE Add waitForBridgeEvent and simulateToolResponse to QmlTestHarness
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Verify harness compiles
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+* Phase 1: Extract delegates (structural refactor)
+
+** DONE Explore current ChatPanel.qml and test harness
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Already explored in initial reads
+
+** DONE Extract MessageDelegate.qml, UserBubble.qml, AssistantBubble.qml, ToolCard.qml
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Extract InputBar.qml
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+** DONE Extract StatusBar.qml
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+** DONE Refactor handleMessage to handler map
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:END:
+
+** DONE Run all 14 existing tests - must pass unchanged
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:END:
+
+* Phase 2: Markdown renderer
+
+** DONE Create MarkdownParser.mjs with TDD
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: completed
+:END:
+
+** DONE Create CodeBlock.qml
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: completed
+:END:
+
+** DONE Create MarkdownContent.qml
+:PROPERTIES:
+:TASK_ID: task-11
+:STATUS: completed
+:END:
+
+** DONE Swap into AssistantBubble, run all tests
+:PROPERTIES:
+:TASK_ID: task-12
+:STATUS: completed
+:END:
+
+* Phase 3: Armed tools integration
+
+** DONE Declare spellArmedTools, CodeBlock save button armed write
+:PROPERTIES:
+:TASK_ID: task-13
+:STATUS: completed
+:END:
+
+** DONE File preview via armed read tool
+:PROPERTIES:
+:TASK_ID: task-14
+:STATUS: completed
+:END:
+
+** DONE Inline image display
+:PROPERTIES:
+:TASK_ID: task-15
+:STATUS: completed
+:END:
+
+* Phase 4: Tool card improvements
+
+** DONE Handle tool_update, progress indicator, error styling
+:PROPERTIES:
+:TASK_ID: task-16
+:STATUS: completed
+:END:

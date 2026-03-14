@@ -735,7 +735,7 @@ export const SETTINGS_SCHEMA = {
 	// ─────────────────────────────────────────────────────────────────────────
 	"ask.timeout": {
 		type: "number",
-		default: 30,
+		default: 0,
 		ui: {
 			tab: "input",
 			label: "Ask tool timeout",

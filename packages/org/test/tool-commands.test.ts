@@ -57,7 +57,9 @@ function makeConfig(): OrgConfig {
 }
 
 function makeTool(config?: OrgConfig): OrgToolDefinition {
-	return createOrgTool(tmpDir, config ?? makeConfig());
+	// None of the tested commands call getEmacsSession; a rejecting factory is fine.
+	const stubEmacs = (): Promise<never> => Promise.reject(new Error("Emacs not available in tests"));
+	return createOrgTool(tmpDir, config ?? makeConfig(), stubEmacs);
 }
 
 /** Seed a file-level org item into a category directory. */

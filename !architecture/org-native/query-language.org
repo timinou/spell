@@ -4,21 +4,19 @@
 
 * Overview
 
-Spell's query layer has a hard problem: org-ql is the right query engine, but
-it requires Emacs. Not every execution context has Emacs available, and not
-every query warrants the overhead of spawning an Emacs subprocess.
+Spell's query layer has two execution paths. The choice is transparent to the
+caller — routing is automatic based on query complexity.
 
-The design solution is an explicit dual-path with a declared boundary:
+- *TS path*: structural queries over parsed org items. No IPC overhead.
+  Handles state, tags, property equality, priority, text search.
 
-- *TS path*: structural queries over parsed org ASTs, no Emacs required.
-  Handles simple filters: state, tags, property equality, date ranges.
+- *Emacs/org-ql path*: full org-ql expressiveness, arbitrary Lisp predicates.
+  Required for date ranges, clocked time, effort filters, and numeric property
+  comparisons. The Emacs bridge is always available; these queries run via the
+  MCP JSON-RPC socket.
 
-- *Emacs/org-ql path*: full org-ql expressiveness, arbitrary Lisp predicates,
-  column view aggregation, agenda integration. Required for compound queries,
-  confidence predicates, and cross-file graph traversal.
-
-The boundary is not an implementation detail. It is a contract. Callers must
-know which path their query will take. Routing is explicit, not emergent.
+Routing rule: =requiresEmacs(filter)= returns true → Emacs path. Otherwise
+TS path. No caller configuration needed.
 
 * org-ql Query Language
 
@@ -50,6 +48,8 @@ nodes), not strings.
 | =(ts-inactive ...)=    | Inactive timestamp in range                    |
 | =(deadline ...)=       | DEADLINE timestamp predicate                   |
 | =(scheduled ...)=      | SCHEDULED timestamp predicate                  |
+| =(effort >= "2h")=     | Effort property comparison                     |
+| =(clocked :on D)=      | Clocked time on a specific date                |
 | =(level N)=            | Match items at outline depth N                 |
 | =(children ...)=       | Match items with children matching predicate   |
 | =(ancestors ...)=      | Match items with ancestors matching predicate  |
@@ -101,270 +101,91 @@ Usage: =(session-agent "code-.*")=
 
 ** OrgQlFilter Interface
 
-The TS query builder produces two outputs: a TS-side predicate function (for
-the fast path) and an org-ql S-expression string (for the Emacs path). The
-caller decides which to use based on context.
-
 #+BEGIN_SRC typescript
-// A filter that can be evaluated both TS-side and as org-ql
 export interface OrgQlFilter {
-  // Human-readable label for debugging and logging
-  label: string;
-
-  // Which path this filter requires
-  // "ts"    — evaluable without Emacs
-  // "emacs" — requires org-ql / Emacs subprocess
-  // "both"  — has both implementations; caller chooses
-  path: "ts" | "emacs" | "both";
-
-  // TS-side predicate. Present when path is "ts" or "both".
-  // node: the parsed OrgItem to test
-  tsPredicate?: (node: OrgItem) => boolean;
-
-  // org-ql S-expression. Present when path is "emacs" or "both".
-  // Stringified Lisp, ready for (org-ql-select file EXPR)
-  orgQlExpr?: string;
+  todo?: string[];
+  tags?: string[];
+  priority?: { op: ">=" | "<=" | "="; value: string };
+  properties?: Array<{ key: string; value: string; op?: "=" | ">" | "<" }>;
+  dateRange?: { from?: string; to?: string };
+  clocked?: { on?: string; from?: string };
+  effort?: { op: "<=" | ">=" | "="; value: string };
+  text?: string;
+  and?: OrgQlFilter[];
+  or?: OrgQlFilter[];
+  not?: OrgQlFilter;
 }
 #+END_SRC
 
-** OrgItem Type
+** requiresEmacs
 
 #+BEGIN_SRC typescript
-export interface OrgItem {
-  id: string | null;            // :ID: property, null if absent
-  state: string | null;         // TODO keyword or null
-  headline: string;             // headline text, no tags
-  tags: string[];               // org tags
-  level: number;                // 1-indexed outline depth
-  properties: OrgProperties;    // parsed PROPERTIES drawer
-  scheduled: OrgTimestamp | null;
-  deadline: OrgTimestamp | null;
-  created: OrgTimestamp | null; // :CREATED: or :PROPERTIES: CREATED
-  closed: OrgTimestamp | null;
-  logbook: OrgLogEntry[];
-  body: string;                 // text content, excluding drawers
-  children: OrgItem[];
-  file: string;                 // source file path
-  begin: number;                // byte offset in file (for org-ql compat)
-}
-
-export type OrgProperties = Record<string, string>;
-
-export interface OrgTimestamp {
-  date: Date;
-  active: boolean;              // <date> vs [date]
-  repeater: string | null;      // "+1w" etc
-  warning: string | null;       // "-3d" etc
-}
-
-export interface OrgLogEntry {
-  state: string;
-  previousState: string | null;
-  timestamp: OrgTimestamp;
-  note: string | null;
+// Returns true when the filter needs org-ql via Emacs.
+// Simple fields (todo, tags, text, priority, property equality) are TS-side.
+// dateRange, clocked, effort, and numeric property ops require Emacs.
+export function requiresEmacs(filter: OrgQlFilter): boolean {
+  if (filter.dateRange || filter.clocked || filter.effort) return true;
+  if (filter.properties?.some(p => p.op && p.op !== "=")) return true;
+  if (filter.and?.some(requiresEmacs)) return true;
+  if (filter.or?.some(requiresEmacs)) return true;
+  if (filter.not && requiresEmacs(filter.not)) return true;
+  return false;
 }
 #+END_SRC
 
-** Filter Builders
+** Keyword Syntax
+
+The =query= parameter accepts keyword syntax for common filters:
+
+| Keyword             | Example               | Maps to                     |
+|---------------------+-----------------------+-----------------------------|
+| =todo:STATE=        | =todo:DOING=          | filter.state                |
+| =tags:t1,t2=        | =tags:auth,backend=   | org-ql =(tags ...)= via TS  |
+| =priority:>=B=      | =priority:>=B=        | filter.priority             |
+| =property:K=V=      | =property:LAYER=api=  | filter.properties           |
+
+Advanced predicates (=effort:>=2h=) are not yet in keyword syntax. Use the
+=ql= parameter for those.
+
+** Raw org-ql Passthrough
+
+The optional =ql= parameter accepts a raw org-ql sexp string. It bypasses
+keyword parsing entirely and goes straight to the Emacs org-ql-query tool.
+Intended for internal subsystems (memory consolidation, planning) that need
+precise org-ql queries without going through keyword syntax.
 
 #+BEGIN_SRC typescript
-// State filter — TS and Emacs paths available
-export function withState(state: string): OrgQlFilter {
-  return {
-    label: `state=${state}`,
-    path: "both",
-    tsPredicate: (item) => item.state === state,
-    orgQlExpr: `(todo "${state}")`,
-  };
-}
-
-// Tag filter — TS and Emacs paths available
-export function withTag(...tags: string[]): OrgQlFilter {
-  const tagList = tags.map((t) => `"${t}"`).join(" ");
-  return {
-    label: `tags=[${tags.join(",")}]`,
-    path: "both",
-    tsPredicate: (item) => tags.every((t) => item.tags.includes(t)),
-    orgQlExpr: `(tags ${tagList})`,
-  };
-}
-
-// Property equality — TS and Emacs paths available
-export function withProperty(key: string, value: string): OrgQlFilter {
-  return {
-    label: `property:${key}=${value}`,
-    path: "both",
-    tsPredicate: (item) => item.properties[key] === value,
-    orgQlExpr: `(property "${key}" "${value}")`,
-  };
-}
-
-// Confidence threshold — Emacs path required for full semantics,
-// TS path available for the simple equality-free case
-export function confidenceAbove(threshold: number): OrgQlFilter {
-  return {
-    label: `confidence>${threshold}`,
-    path: "both",
-    tsPredicate: (item) => {
-      const raw = item.properties["CONFIDENCE"];
-      if (!raw) return false;
-      const val = parseFloat(raw);
-      return !isNaN(val) && val > threshold;
-    },
-    orgQlExpr: `(confidence-above ${threshold})`,
-  };
-}
-
-// Compound AND — path is "emacs" if any child requires Emacs
-export function and(...filters: OrgQlFilter[]): OrgQlFilter {
-  const requiresEmacs = filters.some((f) => f.path === "emacs");
-  const exprs = filters.map((f) => f.orgQlExpr).filter(Boolean);
-  return {
-    label: `and(${filters.map((f) => f.label).join(",")})`,
-    path: requiresEmacs ? "emacs" : "both",
-    tsPredicate: (item) => filters.every((f) => f.tsPredicate?.(item) ?? true),
-    orgQlExpr: exprs.length > 0 ? `(and ${exprs.join(" ")})` : undefined,
-  };
-}
-
-// Compound OR
-export function or(...filters: OrgQlFilter[]): OrgQlFilter {
-  const requiresEmacs = filters.some((f) => f.path === "emacs");
-  const exprs = filters.map((f) => f.orgQlExpr).filter(Boolean);
-  return {
-    label: `or(${filters.map((f) => f.label).join(",")})`,
-    path: requiresEmacs ? "emacs" : "both",
-    tsPredicate: (item) => filters.some((f) => f.tsPredicate?.(item) ?? false),
-    orgQlExpr: exprs.length > 0 ? `(or ${exprs.join(" ")})` : undefined,
-  };
-}
-
-// Negation
-export function not(filter: OrgQlFilter): OrgQlFilter {
-  return {
-    label: `not(${filter.label})`,
-    path: filter.path,
-    tsPredicate: filter.tsPredicate
-      ? (item) => !filter.tsPredicate!(item)
-      : undefined,
-    orgQlExpr: filter.orgQlExpr ? `(not ${filter.orgQlExpr})` : undefined,
-  };
-}
+// Example: find items clocked today with effort >= 1h
+tool.execute({
+  command: "query",
+  ql: "(and (clocked :on today) (effort >= \"1h\"))",
+});
 #+END_SRC
 
-* Dual-Path Routing
+* Routing
 
-** Routing Contract
-
-The router makes the path choice explicit at the call site, not hidden inside
-the query engine. Callers must know which path they are on.
-
-#+BEGIN_SRC typescript
-export interface OrgQueryOptions {
-  // Prefer TS path even if Emacs is available.
-  // Use when latency matters more than query power.
-  preferTs?: boolean;
-
-  // File paths to query. Required for Emacs path.
-  files: string[];
-}
-
-export async function queryOrg(
-  filter: OrgQlFilter,
-  opts: OrgQueryOptions,
-): Promise<OrgItem[]> {
-  const emacsAvailable = await isEmacsAvailable();
-
-  if (filter.path === "emacs" && !emacsAvailable) {
-    throw new Error(
-      `Filter '${filter.label}' requires Emacs/org-ql but Emacs is not available. ` +
-      `Run 'emacs --version' to check. Install Emacs and org-ql to enable this query.`
-    );
-  }
-
-  const useTs =
-    !emacsAvailable ||
-    opts.preferTs ||
-    filter.path === "ts" ||
-    (filter.path === "both" && (opts.preferTs ?? false));
-
-  if (useTs) {
-    if (!filter.tsPredicate) {
-      throw new Error(`Filter '${filter.label}' has no TS implementation`);
-    }
-    const items = await parseOrgFiles(opts.files);
-    return items.filter(filter.tsPredicate);
-  } else {
-    if (!filter.orgQlExpr) {
-      throw new Error(`Filter '${filter.label}' has no org-ql expression`);
-    }
-    return runOrgQlQuery(filter.orgQlExpr, opts.files);
-  }
-}
+#+BEGIN_SRC
+query(filter)
+  │
+  ├── filter.ql present?
+  │     └── YES → org-ql via Emacs (raw sexp passthrough)
+  │
+  ├── filter.query present?
+  │     └── parseKeywordQuery → OrgQlFilter
+  │           └── requiresEmacs?
+  │                 ├── YES → buildOrgQlSexp → org-ql via Emacs
+  │                 └── NO  → applyFilter (TS)
+  │
+  └── structural filter only → applyFilter (TS)
 #+END_SRC
-
-** Predicate Mapping Table
-
-Maps every OrgQlFilter builder to its org-ql equivalent and notes whether the
-TS implementation is exact (same semantics) or approximate (subset of org-ql
-semantics).
-
-| Builder              | org-ql predicate          | TS fidelity | Notes                              |
-|----------------------+---------------------------+-------------+------------------------------------|
-| withState(s)         | (todo "S")                | exact       |                                    |
-| withTag(t...)        | (tags "t"...)             | exact       |                                    |
-| withProperty(k, v)   | (property "K" "V")        | exact       | equality only                      |
-| confidenceAbove(n)   | (confidence-above N)      | exact       | parseFloat semantics match         |
-| decaysAfter(d)       | (decays-after "D")        | approximate | org date arithmetic vs JS Date     |
-| withinLevel(n)       | (level N)                 | exact       |                                    |
-| hasChildren(f)       | (children PRED)           | exact       | recursive TS predicate             |
-| hasAncestor(f)       | (ancestors PRED)          | exact       | walk parent chain in TS            |
-| and(...filters)      | (and ...)                 | exact       | short-circuits same as org-ql      |
-| or(...filters)       | (or ...)                  | exact       |                                    |
-| not(filter)          | (not ...)                 | exact       |                                    |
-| sessionAgent(p)      | (session-agent "P")       | approximate | JS regex vs Emacs string-match-p   |
-| scheduledBefore(d)   | (scheduled :to D)         | approximate | org date arithmetic vs JS Date     |
-| deadlineBefore(d)    | (deadline :to D)          | approximate | same                               |
-| headingMatches(re)   | (heading "text")          | approximate | org-ql does substring; TS uses regex |
-
-Approximate fidelity means the TS path may return a superset or subset of what
-org-ql returns for the same input. When exactness matters, use the Emacs path.
 
 * Emacs Integration Protocol
 
-** Subprocess Interface
+** Transport
 
-org-ql queries are executed by spawning Emacs in batch mode with a Lisp script.
-The script writes JSON to stdout; Spell reads and parses it.
-
-#+BEGIN_SRC typescript
-async function runOrgQlQuery(
-  expr: string,
-  files: string[],
-): Promise<OrgItem[]> {
-  const lisp = buildOrgQlLisp(expr, files);
-  const result = await spawnEmacs(lisp);
-  return parseEmacsJson(result);
-}
-
-function buildOrgQlLisp(expr: string, files: string[]): string {
-  const fileList = files.map((f) => `"${f}"`).join(" ");
-  return `
-(require 'org-ql)
-(require 'json)
-(let* ((files (list ${fileList}))
-       (results (org-ql-select files '${expr}
-                  :action (lambda ()
-                    (list
-                      :id       (org-entry-get nil "ID")
-                      :state    (org-get-todo-state)
-                      :headline (org-get-heading t t t t)
-                      :tags     (org-get-tags)
-                      :props    (org-entry-properties nil 'standard))))))
-  (princ (json-encode results)))
-`;
-}
-#+END_SRC
+org-ql queries are executed via the Emacs MCP JSON-RPC socket (Unix domain
+socket, socat bridge). Each call opens a fresh connection. The tool name is
+=org-ql-query=; arguments are ={ files: string[], query: string }=.
 
 ** Error Handling
 
@@ -373,10 +194,9 @@ query must not return an empty result set — it must throw. Empty set and
 failure are not the same thing.
 
 Failure modes:
-- Emacs not on PATH → throw with installation instructions
-- org-ql not loaded → throw with package installation instructions
-- Malformed org-ql expression → throw with expression and Emacs stderr
-- File not found → throw with file path
-- Emacs timeout (> 10s) → throw with partial output if any
+- socat not on PATH → throw from =createOrgClient=
+- org-ql expression rejected by Emacs → throw from JSON-RPC error response
+- Socket connection refused → throw from Bun.spawn
+- Emacs timeout (> 30s) → throw with timeout message
 
 None of these should silently degrade to an empty result.

@@ -21,7 +21,7 @@ can ask "what do I know about authentication with confidence above 0.7?" and
 get a filtered, ranked answer — not a blob of markdown to re-read.
 
 #+begin_example
-* Auth uses JWT with RS256 signing               :auth:security:
+\* Auth uses JWT with RS256 signing               :auth:security:
 :PROPERTIES:
 :CONFIDENCE:     0.92
 :SCOPE:          project
@@ -98,7 +98,7 @@ Skills can be authored as ~SKILL.org~ files with org-native metadata:
 #+description: Kubernetes deployment patterns for this project
 #+globs: k8s/** helm/**
 
-* Deployment skill content here...
+\* Deployment skill content here...
 #+end_example
 
 What this enables:

@@ -1,0 +1,531 @@
+#+TITLE: CHATPANEL_TDD_MODULAR_REFACTOR
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-chatpanel-tdd-modular-refactor
+
+* Initial Message
+
+commit
+
+* Problem
+
+ChatPanel.qml is a 435-line monolith: three inline Component delegates, an
+if/else-if message dispatcher, a plain-text renderer that will never grow
+into markdown, and no armed-tool integration. The user wants a *chef's kiss*
+modular architecture that anticipates the markdown renderer growing richer
+over time — every rendering concern in its own file, composable, testable
+in isolation.
+
+The QML test harness (QmlTestHarness) now has deep capabilities:
+~findItems()~ with type/objectName/textContains selectors, ~findVisibleText()~,
+~assertVisible()~, ~assertNotFound()~, ~evaluate()~ for arbitrary JS in QML
+context, plus the existing ~query()~/~sendMessage()~/~screenshot()~ protocol.
+These must be leveraged throughout.
+
+* Architecture: Component Tree
+
+The target structure for ~packages/coding-agent/src/modes/qml/panels/~:
+
+#+begin_src
+panels/
+  ChatPanel.qml              — orchestrator: ListView + InputBar + StatusBar
+  InputBar.qml               — text input + send/abort buttons
+  StatusBar.qml              — model name + token count
+  delegates/
+    MessageDelegate.qml      — Loader dispatcher: role → component
+    AssistantBubble.qml       — wraps MarkdownContent
+    UserBubble.qml            — right-aligned bubble, plain text
+    ToolCard.qml              — header (name + status icon) + collapsible body + progress
+  markdown/
+    MarkdownContent.qml       — Column: RichText prose + CodeBlock items
+    CodeBlock.qml             — fenced code: language header + monospace body + copy/save buttons
+    MarkdownParser.mjs        — JS module: markdownToSegments(text) → [{type, content, lang?}]
+  ChatPanelTestHarness.qml   — test wrapper (extended for new queries)
+#+end_src
+
+Key design principles:
+- *One component, one concern.* Each .qml file does exactly one thing.
+- *Data flows down via required properties.* Components declare what they need;
+  the Loader passes it via ~setSource(url, {props})~. No reaching up via ~parent~.
+- *Events flow up via signals/bridge.send.* Components never reference siblings.
+- *MarkdownParser is pure JS.* No QML imports — testable from TS via ~evaluate()~.
+- *Markdown rendering is a Column with O(code_blocks) children, not O(all_blocks).*
+  Prose is a single RichText Text item; only code blocks get their own Rectangle
+  (for the copy/save button). This scales during streaming.
+
+* Approach: Strict TDD Phases
+
+Each phase is green-to-green: all existing tests pass before AND after.
+New behavior requires a failing test first.
+
+** ITEM Phase 1: Extract delegates (pure structural refactor)
+:PROPERTIES:
+:EFFORT: 3h
+:END:
+
+No behavior change. All 14 existing tests must pass unchanged.
+
+*** Step 1a: Extract MessageDelegate.qml
+
+Current pattern: inline ~delegate: Item { Loader { sourceComponent: ... } }~
+Target pattern: ~delegate: MessageDelegate { ... }~
+
+MessageDelegate.qml becomes the dispatcher file. It receives model data via
+required properties from the ListView delegate context and uses
+~Loader.setSource()~ to instantiate the right sub-component.
+
+#+begin_src qml
+// MessageDelegate.qml
+Item {
+    id: root
+    required property string msgId
+    required property string role
+    required property string text
+    required property string name
+    required property bool isStreaming
+    required property bool isExpanded
+    required property int index
+
+    width: ListView.view ? ListView.view.width - ListView.view.leftMargin - ListView.view.rightMargin : 0
+    height: delegateLoader.item ? delegateLoader.item.height : 0
+
+    Loader {
+        id: delegateLoader
+        width: parent.width
+        Component.onCompleted: {
+            var url = role === "user" ? "delegates/UserBubble.qml"
+                    : role === "tool" ? "delegates/ToolCard.qml"
+                    : "delegates/AssistantBubble.qml"
+            setSource(Qt.resolvedUrl(url), {
+                text: Qt.binding(function() { return root.text }),
+                name: Qt.binding(function() { return root.name }),
+                isStreaming: Qt.binding(function() { return root.isStreaming }),
+                isExpanded: Qt.binding(function() { return root.isExpanded }),
+                messageIndex: root.index
+            })
+        }
+    }
+}
+#+end_src
+
+*** Test strategy (Phase 1)
+
+- Run all 14 existing tests — must pass with zero changes.
+- Add visual tree assertion: ~findItems({objectName: "messageDelegate"})~ returns
+  correct count after messages. (Uses new ~objectName~ selector.)
+- Use ~evaluate()~ to verify delegate instantiation:
+  ~root.chatPanel.messagesModel.get(0).role === "user"~ after a user message.
+
+*** Step 1b: Extract InputBar.qml
+
+Pull the input area (lines 162-272) into InputBar.qml.
+Signals: ~messageSent(string text)~, ~abortRequested()~.
+Properties: ~isStreaming: bool~ (controls send vs abort button visibility).
+
+*** Step 1c: Extract StatusBar.qml
+
+Pull the status bar (lines 274-302) into StatusBar.qml.
+Properties: ~modelName: string~, ~tokenCount: int~.
+
+*** Step 1d: Refactor handleMessage to handler map
+
+Replace the if/else-if chain with a JS object dispatch:
+
+#+begin_src js
+property var handlers: ({
+    message_start: function(msg) { ... },
+    message_update: function(msg) { ... },
+    // ...
+})
+function handleMessage(msg) {
+    var handler = handlers[msg.type]
+    if (handler) handler(msg)
+}
+#+end_src
+
+This makes adding new handlers (tool_update, armed tool responses) trivial.
+
+** ITEM Phase 2: Markdown renderer
+:PROPERTIES:
+:EFFORT: 2d
+:END:
+
+*** Step 2a: MarkdownParser.mjs — pure JS, TDD via evaluate()
+
+A JS module that converts markdown text to a segment array:
+
+#+begin_src js
+// Input: "Hello **bold** and\n```js\nconst x = 1\n```\nMore text"
+// Output:
+[
+  { type: "rich", html: "Hello <b>bold</b> and" },
+  { type: "code", lang: "js", content: "const x = 1" },
+  { type: "rich", html: "More text" }
+]
+#+end_src
+
+Supported markdown (maps to Qt RichText HTML subset):
+- Bold (**text**) → ~<b>~
+- Italic (*text*) → ~<i>~
+- Inline code (`text`) → ~<code>~ with monospace font styling
+- Fenced code blocks (```lang ... ```) → separate ~code~ segments
+- Unordered lists (- item) → ~<ul><li>~
+- Ordered lists (1. item) → ~<ol><li>~
+- Headers (# ## ###) → styled ~<span>~ with size
+- Links [text](url) → ~<a href>~
+- Line breaks → ~<br>~
+- Horizontal rules (---) → separate ~hr~ segment
+
+*Streaming edge case*: unclosed code fences treated as open code block
+(the fence will close on the next update). The parser is stateless and
+re-invoked on every text change — this is cheap since it produces a flat
+segment array, not QML items.
+
+*Tests* (all via harness.evaluate(), no QML rendering needed):
+
+#+begin_src typescript
+it("parses plain text as single rich segment", async () => {
+    const result = await harness.evaluate<Segment[]>(
+        `Qt.include("markdown/MarkdownParser.mjs"); markdownToSegments("Hello world")`
+    );
+    expect(result).toEqual([{ type: "rich", html: "Hello world" }]);
+});
+
+it("extracts fenced code block with language", async () => {
+    const result = await harness.evaluate<Segment[]>(
+        `markdownToSegments("before\\n\`\`\`js\\nconst x = 1\\n\`\`\`\\nafter")`
+    );
+    expect(result).toHaveLength(3);
+    expect(result[1]).toEqual({ type: "code", lang: "js", content: "const x = 1" });
+});
+
+it("handles unclosed code fence during streaming", async () => {
+    const result = await harness.evaluate<Segment[]>(
+        `markdownToSegments("text\\n\`\`\`python\\nprint('hi')")`
+    );
+    expect(result[1].type).toBe("code");
+    expect(result[1].content).toBe("print('hi')");
+});
+
+it("converts bold and italic", async () => { ... });
+it("converts inline code", async () => { ... });
+it("converts unordered list", async () => { ... });
+it("converts ordered list", async () => { ... });
+it("converts headers to sized spans", async () => { ... });
+it("converts links to anchor tags", async () => { ... });
+it("handles nested formatting", async () => { ... });
+it("handles empty input", async () => { ... });
+it("handles horizontal rule", async () => { ... });
+#+end_src
+
+*** Step 2b: CodeBlock.qml
+
+#+begin_src qml
+Rectangle {
+    required property string content
+    required property string lang
+    // Header: language label + copy button + save button
+    // Body: monospace Text with content
+    // Signals: copyRequested(), saveRequested(string content, string lang)
+}
+#+end_src
+
+*Tests*:
+- ~findItems({objectName: "codeBlockHeader"})~ visible when code block present
+- ~findItems({type: "QQuickText", textContains: "js"})~ shows language label
+- Copy button visible: ~assertVisible({objectName: "copyButton"})~
+- Save button visible: ~assertVisible({objectName: "saveButton"})~
+
+*** Step 2c: MarkdownContent.qml
+
+#+begin_src qml
+Item {
+    required property string text
+    required property bool isStreaming
+    // Internally: parses text → segments, renders Column of:
+    //   - Text { textFormat: Text.RichText } for "rich" segments
+    //   - CodeBlock {} for "code" segments
+    //   - Rectangle (thin line) for "hr" segments
+}
+#+end_src
+
+Key implementation detail: uses a JS ~property var segments: []~ that updates
+when ~text~ changes via ~onTextChanged~. The Repeater iterates segments.
+During streaming, only the last segment changes (appending text), so the
+Repeater doesn't destroy/recreate earlier items.
+
+*Tests*:
+- Plain text renders as visible text: ~findVisibleText()~ contains the text
+- Code block renders with objectName "codeBlock": ~findItems({objectName: "codeBlock"})~
+- Mixed content: both prose and code visible simultaneously
+- Streaming: send incremental updates, verify final text matches accumulated content
+
+*** Step 2d: Swap into AssistantBubble
+
+Replace the plain ~Text~ in AssistantBubble with ~MarkdownContent~.
+All existing streaming tests must pass (they send plain text, which the
+parser treats as a single rich segment — backward compatible).
+
+*Regression tests*: all 14 existing tests plus new visual assertions.
+
+** ITEM Phase 3: Armed tools integration
+:PROPERTIES:
+:EFFORT: 1.5d
+:END:
+
+*** Step 3a: Declare spellArmedTools on ChatPanelTestHarness
+
+The test harness QML gets the root property:
+
+#+begin_src qml
+ApplicationWindow {
+    property var spellArmedTools: ["write", "read", "generate_image"]
+    // ...
+}
+#+end_src
+
+The production shell.qml does NOT declare it (the agent passes props._armedTools
+or a future mechanism). The test harness declares it so tests exercise the
+declarative path.
+
+*** Step 3b: CodeBlock save button → armed write tool
+
+When user clicks "Save" on a code block, it fires:
+
+#+begin_src js
+bridge.send({
+    _tool: "write",
+    path: "/tmp/spell-code-" + Date.now() + "." + lang,
+    content: codeContent
+})
+#+end_src
+
+*Test* (captures outgoing bridge event):
+
+#+begin_src typescript
+it("code block save emits _tool write via bridge", async () => {
+    // Send a message with a code block
+    await harness.sendMessage({
+        type: "message_start", id: "armed-1", role: "assistant"
+    });
+    await harness.sendMessage({
+        type: "message_update", id: "armed-1",
+        text: "```js\nconst x = 1\n```"
+    });
+    await harness.sendMessage({ type: "message_end", id: "armed-1" });
+    await Bun.sleep(200);
+
+    // Click the save button via evaluate
+    await harness.evaluate(
+        `root.findChild("saveButton").clicked()`
+    );
+
+    // The bridge event should contain _tool: "write"
+    // Capture via the QmlProcess event stream
+    const event = await harness.waitForBridgeEvent(
+        e => e.type === "event" && e.payload._tool === "write"
+    );
+    expect(event.payload.content).toBe("const x = 1");
+});
+#+end_src
+
+Note: ~waitForBridgeEvent~ needs to be added to QmlTestHarness — a thin wrapper
+over ~#process.waitFor()~ that filters for bridge events. This is a 15-minute
+addition.
+
+*** Step 3c: File preview via armed read tool (with _rid round-trip)
+
+When user clicks a file path in assistant text, ChatPanel fires:
+
+#+begin_src js
+bridge.send({
+    _tool: "read",
+    _rid: "preview-" + Date.now(),
+    path: filePath
+})
+#+end_src
+
+The response arrives via ~bridge.messageReceived~ with matching ~_rid~.
+A FilePreview component (or modal) renders the content.
+
+*Test* (simulates the round-trip):
+
+#+begin_src typescript
+it("file path click triggers read tool and displays preview", async () => {
+    // Setup: message with a file path (link in markdown)
+    await harness.sendMessage({
+        type: "message_start", id: "fp-1", role: "assistant"
+    });
+    await harness.sendMessage({
+        type: "message_update", id: "fp-1",
+        text: "See [config.ts](file:///config.ts) for details"
+    });
+    await harness.sendMessage({ type: "message_end", id: "fp-1" });
+    await Bun.sleep(200);
+
+    // Trigger link click via evaluate
+    // (MarkdownContent uses Text.onLinkActivated)
+    await harness.evaluate(
+        `root.findChild("markdownContent").linkActivated("file:///config.ts")`
+    );
+
+    // Capture the outgoing _tool read request
+    // Then simulate the response
+    await harness.sendMessage({
+        _rid: /* captured from event */, 
+        content: "export const config = { ... }",
+        path: "config.ts"
+    });
+
+    await Bun.sleep(200);
+    // Verify preview is visible
+    await harness.assertVisible({ objectName: "filePreview" });
+    const texts = await harness.findVisibleText();
+    expect(texts).toContain("export const config = { ... }");
+});
+#+end_src
+
+*** Step 3d: Inline image display
+
+When a message contains an image result (from generate_image armed tool),
+display it inline. This uses the bridge message protocol — the TS side
+delivers the image data as base64 in a message payload.
+
+*Test*:
+
+#+begin_src typescript
+it("displays inline image from armed tool response", async () => {
+    // Send message with image data
+    await harness.sendMessage({
+        type: "image_result",
+        id: "img-1",
+        data: "iVBOR...", // base64 PNG stub
+        mimeType: "image/png"
+    });
+    await Bun.sleep(200);
+    await harness.assertVisible({ type: "QQuickImage", objectName: "inlineImage" });
+});
+#+end_src
+
+** ITEM Phase 4: Tool card improvements
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+*** Step 4a: Handle tool_update in ChatPanel
+
+The SessionEventMapper already emits ~{type: "tool_update", id, name}~ but
+ChatPanel drops it. Add handler to update a ~status~ field on the model entry.
+
+*Test*:
+
+#+begin_src typescript
+it("tool_update updates tool card status", async () => {
+    await harness.sendMessage({ type: "tool_start", id: "tu-1", name: "bash", details: "building" });
+    await harness.sendMessage({ type: "tool_update", id: "tu-1", name: "bash", details: "50% complete" });
+    const msg = await harness.query<Record<string, unknown>>("lastMessage");
+    expect(msg.text).toBe("50% complete");
+});
+#+end_src
+
+*** Step 4b: Progress indicator in ToolCard
+
+Add a pulsing bar or spinner during ~isStreaming~. Visual test:
+
+#+begin_src typescript
+it("shows progress indicator during tool streaming", async () => {
+    await harness.sendMessage({ type: "tool_start", id: "tp-1", name: "bash", details: "running" });
+    await Bun.sleep(200);
+    await harness.assertVisible({ objectName: "toolProgress" });
+    
+    await harness.sendMessage({ type: "tool_end", id: "tp-1", name: "bash", isError: false, details: "done" });
+    await Bun.sleep(200);
+    await harness.assertNotFound({ objectName: "toolProgress", visible: true });
+});
+#+end_src
+
+*** Step 4c: Error state styling
+
+Tool cards with ~isError: true~ get error-colored border.
+
+*Test*:
+
+#+begin_src typescript
+it("tool card shows error styling when isError", async () => {
+    await harness.sendMessage({ type: "tool_start", id: "te-1", name: "bash", details: "running" });
+    await harness.sendMessage({ type: "tool_end", id: "te-1", name: "bash", isError: true, details: "failed" });
+    await Bun.sleep(200);
+    const items = await harness.findItems(
+        { objectName: "toolCard" },
+        { properties: ["border.color"] }
+    );
+    // Error color from SpellTheme
+    expect(items[0].properties["border.color"]).toBeTruthy();
+});
+#+end_src
+
+** ITEM Phase 5: Test harness extension
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+Small additions to QmlTestHarness to support armed tool testing:
+
+*** waitForBridgeEvent(predicate, timeout)
+
+Thin wrapper over ~#process.waitFor()~ that waits for a raw bridge event
+matching a predicate. Used to capture outgoing ~_tool~ invocations from QML.
+
+#+begin_src typescript
+async waitForBridgeEvent(
+    predicate: (event: BridgeEvent) => boolean,
+    timeout = 5_000
+): Promise<BridgeEvent> {
+    if (!this.#process) throw new Error("not set up");
+    return this.#process.waitFor(predicate, timeout);
+}
+#+end_src
+
+*** simulateToolResponse(rid, payload)
+
+Convenience for simulating the _rid response round-trip:
+
+#+begin_src typescript
+async simulateToolResponse(rid: string, payload: Record<string, unknown>): Promise<void> {
+    await this.sendMessage({ _rid: rid, ...payload });
+}
+#+end_src
+
+* Files to Modify
+
+| File | Change |
+|---|---|
+| ~panels/ChatPanel.qml~ | Gut to orchestrator: ListView + InputBar + StatusBar + handler map |
+| ~panels/InputBar.qml~ | NEW — extracted input area |
+| ~panels/StatusBar.qml~ | NEW — extracted status bar |
+| ~panels/delegates/MessageDelegate.qml~ | NEW — role-based dispatcher |
+| ~panels/delegates/AssistantBubble.qml~ | NEW — wraps MarkdownContent |
+| ~panels/delegates/UserBubble.qml~ | NEW — right-aligned plain text bubble |
+| ~panels/delegates/ToolCard.qml~ | NEW — tool header + collapsible body + progress |
+| ~panels/markdown/MarkdownContent.qml~ | NEW — Column of RichText + CodeBlocks |
+| ~panels/markdown/CodeBlock.qml~ | NEW — fenced code with copy/save buttons |
+| ~panels/markdown/MarkdownParser.mjs~ | NEW — pure JS markdown → segments |
+| ~panels/ChatPanelTestHarness.qml~ | Extend: spellArmedTools, new queries |
+| ~packages/qml/src/test-harness.ts~ | Add waitForBridgeEvent, simulateToolResponse |
+| ~test/modes/qml-chat-panel.test.ts~ | Extend with markdown, visual, armed tool tests |
+
+* Verification
+
+1. All 14 existing tests pass after Phase 1 with zero modifications
+2. ~bun check:ts~ clean throughout
+3. New markdown parser tests pass via ~evaluate()~
+4. Visual assertions prove component rendering (findItems, findVisibleText)
+5. Armed tool tests verify bridge.send protocol for write/read/generate_image
+6. Screenshot comparison: before/after Phase 1 should be visually identical
+7. Streaming performance: send 50 rapid message_update deltas, verify final text matches
+8. Run: ~bun test packages/coding-agent/test/modes/qml-chat-panel.test.ts~
+
+* Execution Order
+
+Phase 5 (harness extension) first — it's a dependency for later phases.
+Then Phase 1 (extraction), Phase 2 (markdown), Phase 3 (armed tools),
+Phase 4 (tool card polish). Phases 1 and 5 can be parallelized.

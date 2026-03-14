@@ -16,42 +16,42 @@
 :STATUS: completed
 :END:
 
-** DOING Add status file write tests
+** DONE Add status file write tests
 :PROPERTIES:
 :TASK_ID: task-3
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
 * Quickshell side
 
-** ITEM Read NiriService.qml and WorkspaceSwitcher.qml for structure
+** DONE Read NiriService.qml and WorkspaceSwitcher.qml for structure
 :PROPERTIES:
 :TASK_ID: task-4
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Create SpellStatusService.qml
+** DONE Create SpellStatusService.qml
 :PROPERTIES:
 :TASK_ID: task-5
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Add status dots to WorkspaceSwitcher delegate
+** DONE Add status dots to WorkspaceSwitcher delegate
 :PROPERTIES:
 :TASK_ID: task-6
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Register SpellStatusService in DMSShell.qml
+** DONE Register SpellStatusService in DMSShell.qml
 :PROPERTIES:
 :TASK_ID: task-7
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Verification
 
-** ITEM Run bun test in packages/niri
+** DONE Run bun test in packages/niri
 :PROPERTIES:
 :TASK_ID: task-8
-:STATUS: pending
+:STATUS: completed
 :END:

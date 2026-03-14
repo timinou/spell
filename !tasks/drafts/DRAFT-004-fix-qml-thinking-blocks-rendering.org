@@ -1,0 +1,53 @@
+#+TITLE: Fix QML thinking blocks rendering
+#+STATE: DONE
+#+SESSION_ID: 1492729fdbc99a3e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-14T13-42-05-935Z_1492729fdbc99a3e.jsonl]]
+#+CUSTOM_ID: DRAFT-004-fix-qml-thinking-blocks-rendering
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: frontend
+
+* Initial Message
+
+/tmp/tmp.1JOLjLSaJv.png
+
+
+
+okk dude no. thinking blocks are still hidden in the chat interface
+
+* Problem
+
+After commits 1d6eda605 and 554bccb5e, the QML chat panel shows no messages at all (completely empty). The streaming dot from =agent_busy= works, confirming the panel loads and event dispatch functions, but no delegate items render.
+
+The original issue was that thinking blocks weren't shown. The fix added =thinking= as a =required property= on =MessageDelegate= and =AssistantBubble=, added the field to all =ListModel.append()= calls, and conditionally passed it via =setSource= only for assistant role delegates.
+
+Tests pass (21/21) because the test harness exercises the same =ChatPanel.qml= with the updated model. The production shell uses the same path but loads via =Loader= in =shell.qml=.
+
+* Root cause hypothesis
+
+Most likely: Qt 6 strictness with =required property= on delegates loaded via =Loader.setSource()=. When =AssistantBubble= has =required property string thinking= but it's passed conditionally, OR when the =ListModel= role binding to =required property string thinking= on =MessageDelegate= has an edge case in Qt 6, the delegate instantiation silently fails and no items render.
+
+* Approach — make thinking non-required
+
+The fix is minimal and defensive:
+
+1. In =AssistantBubble.qml=: change =required property string thinking= to =property string thinking: ""= (non-required with default)
+2. In =MessageDelegate.qml=: change =required property string thinking= to =property string thinking: ""= (non-required with default) — this avoids any model role binding strictness issues in Qt 6
+3. Keep =thinking= in the =setSource= props unconditionally (remove the =if (root.role === "assistant")= guard) since non-required properties with defaults tolerate being set on components that don't declare them (the property just gets ignored)
+4. Actually — other delegates (=UserBubble=, =ToolCard=, =ImageBubble=) still don't declare =thinking=, so passing it via =setSource= would set a dynamic property. Safer to keep the conditional guard.
+5. Keep the =visible: root.text.length > 0= on =MarkdownContent= in =AssistantBubble= but also ensure the bubble doesn't collapse to zero height — add a minimum streaming placeholder when both =thinking= and =text= are empty
+6. Revert =visible: root.text.length > 0= on =MarkdownContent= — original had it always visible, and MarkdownContent handles empty text gracefully (empty segments, zero-height column). Removing this avoids layout collapse issues.
+
+* Files to modify
+
+- =packages/coding-agent/src/modes/qml/panels/delegates/AssistantBubble.qml=
+  - Change =required property string thinking= -> =property string thinking: ""=
+  - Remove =visible: root.text.length > 0= from MarkdownContent (match original behavior)
+- =packages/coding-agent/src/modes/qml/panels/delegates/MessageDelegate.qml=
+  - Change =required property string thinking= -> =property string thinking: ""=
+
+* Verification
+
+- Run =bun test test/modes/qml-chat-panel.test.ts= — all 21 tests pass
+- Launch QML mode and confirm: messages appear, tool cards render, user bubbles render
+- With a thinking-capable model, confirm thinking text appears above response text in muted italic style with divider
