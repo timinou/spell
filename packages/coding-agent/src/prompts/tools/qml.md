@@ -67,3 +67,13 @@ When a QML file declares `spellArmedTools`, those tools are automatically armed 
 <note>
 Bridge binary must be built first: `cd packages/qml && bun run build:bridge`. If the binary is missing, the tool will report the build command.
 </note>
+
+<lint>
+QML files are automatically linted with `qmllint` after every `write`. Lint results appear in the tool response.
+
+Write type-safe QML:
+- Annotate function parameters and return types: `function foo(x: int): string { ... }`
+- Use `pragma FunctionSignatureBehavior: Enforced` at the top of QML files where strict function typing is needed
+- To suppress a false positive inline: `// qmllint disable <check-id>` on the offending line
+- The context properties `bridge`, `windowWidth`, `windowHeight`, and `windowTitle` are injected at runtime and are always safe to use — they are not reported as errors
+</lint>
