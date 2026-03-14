@@ -5,16 +5,16 @@ import { bridgeBinaryPath, isBridgeAvailable, QmlBridge } from "@oh-my-pi/pi-qml
 import type { RemoteQmlBridge } from "@oh-my-pi/pi-qml-remote";
 
 import { type Static, Type } from "@sinclair/typebox";
-import qmlDescription from "../prompts/tools/qml.md" with { type: "text" };
+import canvasDescription from "../prompts/tools/canvas.md" with { type: "text" };
 import type { ToolSession } from ".";
+import { classifyEvent, deduplicateEvents } from "./canvas-event-utils";
+import { formatLintOutput, lintQmlFile } from "./canvas-lint";
 import type { OutputMeta } from "./output-meta";
-import { classifyEvent, deduplicateEvents } from "./qml-event-utils";
-import { formatLintOutput, lintQmlFile } from "./qml-lint";
 import { ensureSpellConnection } from "./spell/connect";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const qmlSchema = Type.Object({
+const canvasSchema = Type.Object({
 	action: Type.Union(
 		[
 			Type.Literal("write"),
@@ -44,9 +44,9 @@ const qmlSchema = Type.Object({
 	payload: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "JSON payload (send_message)" })),
 });
 
-type QmlToolInput = Static<typeof qmlSchema>;
+type CanvasToolInput = Static<typeof canvasSchema>;
 
-export interface QmlToolDetails {
+export interface CanvasToolDetails {
 	action: string;
 	windowId?: string;
 	windows?: Array<{ id: string; state: string; path: string; eventCount: number }>;
@@ -58,16 +58,16 @@ export interface QmlToolDetails {
 }
 
 /** Channel name for QML window events emitted to the EventBus. */
-export const QML_EVENTS_CHANNEL = "qml:window:events";
+export const CANVAS_EVENTS_CHANNEL = "canvas:window:events";
 
 /** Channel name for armed tool invocations emitted by the QML event loop. */
-export const QML_TOOL_INVOKE_CHANNEL = "qml:tool:invoke";
+export const CANVAS_TOOL_INVOKE_CHANNEL = "canvas:tool:invoke";
 
 /** Tools that cannot be armed from QML file declarations (only from explicit agent props). */
-const QML_ARMED_DENYLIST = new Set(["bash", "python", "task"]);
+const CANVAS_ARMED_DENYLIST = new Set();
 
-/** Payload emitted on QML_EVENTS_CHANNEL. */
-export interface QmlWindowEventsPayload {
+/** Payload emitted on CANVAS_EVENTS_CHANNEL. */
+export interface CanvasWindowEventsPayload {
 	windowId: string;
 	events: WindowInfo["events"];
 	/** True when the window closed and the event loop has terminated. */
@@ -82,12 +82,12 @@ export interface QmlWindowEventsPayload {
 }
 
 /**
- * Payload emitted on QML_TOOL_INVOKE_CHANNEL.
+ * Payload emitted on CANVAS_TOOL_INVOKE_CHANNEL.
  *
  * The event loop constructs `reply` as a closure that calls bridge.sendMessage
  * back to the originating window. It is undefined when no _rid was supplied.
  */
-export interface QmlToolInvokePayload {
+export interface CanvasToolInvokePayload {
 	/** Window that sent the invocation. */
 	windowId: string;
 	/** Tool name requested by QML (e.g. "write"). */
@@ -103,11 +103,11 @@ export interface QmlToolInvokePayload {
 	reply?: (result: Record<string, unknown>) => void;
 }
 
-export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
-	readonly name = "qml";
-	readonly label = "QML";
-	readonly description = qmlDescription;
-	readonly parameters = qmlSchema;
+export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDetails> {
+	readonly name = "canvas";
+	readonly label = "Canvas";
+	readonly description = canvasDescription;
+	readonly parameters = canvasSchema;
 	readonly strict = false;
 
 	#bridge: QmlBridge | null = null;
@@ -121,12 +121,12 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 	constructor(private readonly session: ToolSession) {}
 
 	/** Returns the remote bridge if an Android client is connected, null otherwise. */
-	/** Resolve a QML file path, honoring qml:// internal URLs. */
+	/** Resolve a canvas file path, honoring canvas:// internal URLs. */
 	async #resolveFilePath(filePath: string): Promise<string> {
 		const internalRouter = this.session.internalRouter;
 		if (internalRouter?.canHandle(filePath)) {
 			const resource = await internalRouter.resolve(filePath);
-			if (!resource.sourcePath) throw new ToolError("qml:// URL has no filesystem path");
+			if (!resource.sourcePath) throw new ToolError("canvas:// URL has no filesystem path");
 			return resource.sourcePath;
 		}
 		return path.isAbsolute(filePath) ? filePath : path.join(this.session.cwd, filePath);
@@ -203,13 +203,13 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 
 					if (raw.length === 0 && wmClose) {
 						// WM killed the window — surface a close event so the agent knows.
-						const payload: QmlWindowEventsPayload = {
+						const payload: CanvasWindowEventsPayload = {
 							windowId: id,
 							events: [{ name: "close", payload: { action: "close", wmClose: true } }],
 							closed: true,
 							silent: false,
 						};
-						eventBus?.emit(QML_EVENTS_CHANNEL, payload);
+						eventBus?.emit(CANVAS_EVENTS_CHANNEL, payload);
 						break;
 					}
 					if (raw.length === 0) continue;
@@ -295,7 +295,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 					if (k !== "_tool" && k !== "_rid") args[k] = v;
 				}
 				const invokeBridge = getBridge();
-				const invokePayload: QmlToolInvokePayload = {
+				const invokePayload: CanvasToolInvokePayload = {
 					windowId: id,
 					tool: toolName,
 					args,
@@ -306,7 +306,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 							}
 						: undefined,
 				};
-				eventBus.emit(QML_TOOL_INVOKE_CHANNEL, invokePayload);
+				eventBus.emit(CANVAS_TOOL_INVOKE_CHANNEL, invokePayload);
 			} else {
 				regularEvents.push(ev);
 			}
@@ -319,33 +319,33 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 
 		if (loudBatch.length > 0 || userInitiatedClose) {
 			if (accumulated.length > 0 && eventBus) {
-				const silentPayload: QmlWindowEventsPayload = {
+				const silentPayload: CanvasWindowEventsPayload = {
 					windowId: id,
 					events: accumulated,
 					closed: false,
 					silent: true,
 				};
-				eventBus.emit(QML_EVENTS_CHANNEL, silentPayload);
+				eventBus.emit(CANVAS_EVENTS_CHANNEL, silentPayload);
 			}
 			const silentSummary = accumulated.length > 0 ? this.#buildSilentSummary(accumulated) : undefined;
 
-			const payload: QmlWindowEventsPayload = {
+			const payload: CanvasWindowEventsPayload = {
 				windowId: id,
 				events: loudBatch,
 				closed,
 				silent: false,
 				silentSummary,
 			};
-			eventBus?.emit(QML_EVENTS_CHANNEL, payload);
+			eventBus?.emit(CANVAS_EVENTS_CHANNEL, payload);
 			return [];
 		} else if (silentBatch.length > 0 && eventBus) {
-			const silentPayload: QmlWindowEventsPayload = {
+			const silentPayload: CanvasWindowEventsPayload = {
 				windowId: id,
 				events: silentBatch,
 				closed: false,
 				silent: true,
 			};
-			eventBus.emit(QML_EVENTS_CHANNEL, silentPayload);
+			eventBus.emit(CANVAS_EVENTS_CHANNEL, silentPayload);
 		}
 
 		return accumulated;
@@ -361,11 +361,11 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 
 	async execute(
 		_toolCallId: string,
-		params: QmlToolInput,
+		params: CanvasToolInput,
 		_signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<QmlToolDetails>,
+		_onUpdate?: AgentToolUpdateCallback<CanvasToolDetails>,
 		context?: AgentToolContext,
-	): Promise<AgentToolResult<QmlToolDetails>> {
+	): Promise<AgentToolResult<CanvasToolDetails>> {
 		const { action } = params;
 
 		// For actions that can use a remote Android device, ensure Spell is connected.
@@ -386,7 +386,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				await Bun.write(abs, content);
 				const lint = await lintQmlFile(abs);
 				const lintText = formatLintOutput(lint);
-				const details: QmlToolDetails = {
+				const details: CanvasToolDetails = {
 					action: "write",
 					...(lint.available && { lintWarnings: lint.warnings.length, lintErrors: lint.errors.length }),
 				};
@@ -417,7 +417,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 					if (Array.isArray(propsArmed)) {
 						armedList = propsArmed.filter((t): t is string => typeof t === "string");
 					} else if (Array.isArray(win.armedTools)) {
-						armedList = win.armedTools.filter(t => !QML_ARMED_DENYLIST.has(t));
+						armedList = win.armedTools.filter(t => !CANVAS_ARMED_DENYLIST.has(t));
 					} else {
 						armedList = [];
 					}
@@ -426,7 +426,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 					}
 					// Start background event loop so events arrive as follow-ups.
 					this.#startEventLoop(id, () => this.#remoteBridge()!);
-					const details: QmlToolDetails = { action: "launch", windowId: id, events };
+					const details: CanvasToolDetails = { action: "launch", windowId: id, events };
 					const text = `Panel '${id}' pushed to Android (state: ${win.state})${events.length ? `\n${events.length} event(s) received` : ""}`;
 					return toolResult(details).text(text).done();
 				}
@@ -446,7 +446,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				if (Array.isArray(propsArmed)) {
 					armedList = propsArmed.filter((t): t is string => typeof t === "string");
 				} else if (Array.isArray(win.armedTools)) {
-					armedList = win.armedTools.filter(t => !QML_ARMED_DENYLIST.has(t));
+					armedList = win.armedTools.filter(t => !CANVAS_ARMED_DENYLIST.has(t));
 				} else {
 					armedList = [];
 				}
@@ -455,7 +455,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				}
 				// Start background event loop so events arrive as follow-ups.
 				this.#startEventLoop(id, () => this.#ensureBridge());
-				const details: QmlToolDetails = { action: "launch", windowId: id, events };
+				const details: CanvasToolDetails = { action: "launch", windowId: id, events };
 				const text = `Window '${id}' launched (state: ${win.state})${events.length ? `\n${events.length} event(s) received` : ""}`;
 				return toolResult(details).text(text).done();
 			}
@@ -470,13 +470,13 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				const remote = this.#remoteBridge();
 				if (remote) {
 					remote.close(id);
-					const details: QmlToolDetails = { action: "close", windowId: id };
+					const details: CanvasToolDetails = { action: "close", windowId: id };
 					return toolResult(details).text(`Panel '${id}' closed on Android`).done();
 				}
 
 				const bridge = this.#ensureBridge();
 				await bridge.close(id);
-				const details: QmlToolDetails = { action: "close", windowId: id };
+				const details: CanvasToolDetails = { action: "close", windowId: id };
 				return toolResult(details).text(`Window '${id}' closed`).done();
 			}
 
@@ -488,20 +488,20 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				const remote = this.#remoteBridge();
 				if (remote) {
 					remote.sendMessage(id, params.payload as Record<string, unknown>);
-					const details: QmlToolDetails = { action: "send_message", windowId: id };
+					const details: CanvasToolDetails = { action: "send_message", windowId: id };
 					return toolResult(details).text(`Message sent to panel '${id}' on Android`).done();
 				}
 
 				const bridge = this.#ensureBridge();
 				await bridge.sendMessage(id, params.payload as Record<string, unknown>);
-				const details: QmlToolDetails = { action: "send_message", windowId: id };
+				const details: CanvasToolDetails = { action: "send_message", windowId: id };
 				return toolResult(details).text(`Message sent to '${id}'`).done();
 			}
 
 			case "list_windows": {
 				const remote = this.#remoteBridge();
 				const windows = remote ? remote.listWindows() : this.#bridge ? this.#bridge.listWindows() : [];
-				const details: QmlToolDetails = {
+				const details: CanvasToolDetails = {
 					action: "list_windows",
 					windows: windows.map(w => ({
 						id: w.id,
@@ -526,7 +526,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				const resultPath = await bridge.screenshot(id, savePath);
 				const pngBuffer = await Bun.file(resultPath).arrayBuffer();
 				const data = Buffer.from(pngBuffer).toString("base64");
-				const details: QmlToolDetails = { action: "screenshot", windowId: id };
+				const details: CanvasToolDetails = { action: "screenshot", windowId: id };
 				return toolResult(details)
 					.content([
 						{ type: "text", text: `Screenshot saved: ${resultPath}` },

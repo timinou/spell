@@ -376,7 +376,7 @@ async function runWithTuiDisplay(session: ToolSession, ui: NonNullable<AgentTool
  * Display strategy (first that applies):
  *   1. Desktop QML window  — when spell-qml-bridge is available
  *   2. TUI modal           — when a TUI context is present but no bridge
- *   3. Headless skip       — no UI at all; QmlTool falls back to local bridge
+ *   3. Headless skip       — no UI at all; CanvasTool falls back to local bridge
  *
  * Throws `ToolError` if setup fails or the user cancels.
  */
@@ -393,5 +393,5 @@ export async function ensureSpellConnection(session: ToolSession, context: Agent
 		return;
 	}
 
-	// Headless — nothing to display; QmlTool falls back to local bridge.
+	// Headless — nothing to display; CanvasTool falls back to local bridge.
 }

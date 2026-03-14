@@ -58,6 +58,7 @@ import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal }
 import {
 	AgentProtocolHandler,
 	ArtifactProtocolHandler,
+	CanvasProtocolHandler,
 	InternalUrlRouter,
 	JobsProtocolHandler,
 	LocalProtocolHandler,
@@ -65,7 +66,6 @@ import {
 	MemoryProtocolHandler,
 	OrgProtocolHandler,
 	PiProtocolHandler,
-	QmlProtocolHandler,
 	RuleProtocolHandler,
 	SkillProtocolHandler,
 } from "./internal-urls";
@@ -106,16 +106,16 @@ import {
 	WriteTool,
 	warmupLspServers,
 } from "./tools";
+import {
+	CANVAS_EVENTS_CHANNEL,
+	CANVAS_TOOL_INVOKE_CHANNEL,
+	type CanvasToolInvokePayload,
+	type CanvasWindowEventsPayload,
+} from "./tools/canvas";
 import { ToolContextStore } from "./tools/context";
 import { getGeminiImageTools } from "./tools/gemini-image";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { PendingActionStore } from "./tools/pending-action";
-import {
-	QML_EVENTS_CHANNEL,
-	QML_TOOL_INVOKE_CHANNEL,
-	type QmlToolInvokePayload,
-	type QmlWindowEventsPayload,
-} from "./tools/qml";
 import { EventBus } from "./utils/event-bus";
 
 // Types
@@ -926,7 +926,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}),
 	);
 	internalRouter.register(
-		new QmlProtocolHandler({
+		new CanvasProtocolHandler({
 			getStdlibRoot: () => path.resolve(import.meta.dir, "modes/qml"),
 		}),
 	);
@@ -1591,19 +1591,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// Wire QML event loop follow-ups: events from background loops arrive as automatic follow-up turns.
-	eventBus.on(QML_EVENTS_CHANNEL, async (raw: unknown) => {
+	eventBus.on(CANVAS_EVENTS_CHANNEL, async (raw: unknown) => {
 		if (!session) return;
-		const { windowId, events, closed, silent, silentSummary } = raw as QmlWindowEventsPayload;
+		const { windowId, events, closed, silent, silentSummary } = raw as CanvasWindowEventsPayload;
 		if (events.length === 0 && !closed) return;
 
 		if (silent) {
 			// Silent events: record in transcript for debugging but don't trigger a turn.
-			const lines: string[] = [`${events.length} silent event(s) from QML window '${windowId}':`];
+			const lines: string[] = [`${events.length} silent event(s) from canvas window '${windowId}':`];
 			for (const e of events) {
 				lines.push(JSON.stringify(e.payload));
 			}
 			await session.sendCustomMessage({
-				customType: "qml-events",
+				customType: "canvas-events",
 				content: lines.join("\n"),
 				display: false,
 				attribution: "agent",
@@ -1614,13 +1614,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		const lines: string[] = [];
 		if (silentSummary) lines.push(silentSummary);
-		lines.push(`${events.length} event(s) from QML window '${windowId}'${closed ? " [closed]" : ""}:`);
+		lines.push(`${events.length} event(s) from canvas window '${windowId}'${closed ? " [closed]" : ""}:`);
 		for (const e of events) {
 			lines.push(JSON.stringify(e.payload));
 		}
 		await session.sendCustomMessage(
 			{
-				customType: "qml-events",
+				customType: "canvas-events",
 				content: lines.join("\n"),
 				display: true,
 				attribution: "agent",
@@ -1631,18 +1631,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	});
 
 	// Wire QML armed tool invocations: short-circuit tool execution without an agent turn.
-	eventBus.on(QML_TOOL_INVOKE_CHANNEL, async (raw: unknown) => {
+	eventBus.on(CANVAS_TOOL_INVOKE_CHANNEL, async (raw: unknown) => {
 		if (!session) return;
-		const { windowId, tool, args, allowedTools, reply } = raw as QmlToolInvokePayload;
+		const { windowId, tool, args, allowedTools, reply } = raw as CanvasToolInvokePayload;
 
 		// Validate against the per-window allowlist declared at launch time.
 		if (!allowedTools.includes(tool)) {
 			const errMsg = `Armed tool "${tool}" not in allowed list for window "${windowId}". Allowed: [${allowedTools.join(", ")}]`;
-			logger.warn("QML armed tool rejected", { windowId, tool, allowedTools });
+			logger.warn("canvas armed tool rejected", { windowId, tool, allowedTools });
 			reply?.({ error: errMsg });
 			// Log rejection to transcript so the agent can see it if reviewing.
 			await session.sendCustomMessage({
-				customType: "qml-tool-invoke",
+				customType: "canvas-tool-invoke",
 				content: `Armed tool rejected: ${tool} (window: ${windowId}) — not in allowlist`,
 				display: false,
 				attribution: "agent",
@@ -1654,10 +1654,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const agentTool = toolRegistry.get(tool);
 		if (!agentTool) {
 			const errMsg = `Armed tool "${tool}" is not registered in this session`;
-			logger.warn("QML armed tool not found", { windowId, tool });
+			logger.warn("canvas armed tool not found", { windowId, tool });
 			reply?.({ error: errMsg });
 			await session.sendCustomMessage({
-				customType: "qml-tool-invoke",
+				customType: "canvas-tool-invoke",
 				content: `Armed tool not found: ${tool} (window: ${windowId})`,
 				display: false,
 				attribution: "agent",
@@ -1670,7 +1670,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		let invokeError: string | undefined;
 		try {
 			result = await agentTool.execute(
-				`qml-armed-${windowId}-${Date.now()}`,
+				`canvas-armed-${windowId}-${Date.now()}`,
 				args as Record<string, unknown>,
 				undefined,
 				undefined,
@@ -1692,7 +1692,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		// Log all armed invocations silently so the agent can review them.
 		await session.sendCustomMessage({
-			customType: "qml-tool-invoke",
+			customType: "canvas-tool-invoke",
 			content: invokeError
 				? `Armed tool failed: ${tool} (window: ${windowId}) — ${invokeError}`
 				: `Armed tool: ${tool} (window: ${windowId})`,

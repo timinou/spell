@@ -1,16 +1,16 @@
 /**
- * Protocol handler for qml:// URLs.
+ * Protocol handler for canvas:// URLs.
  *
- * Resolves built-in QML files from the stdlib root.
+ * Resolves built-in Canvas (QML) files from the stdlib root.
  *
  * URL forms:
- * - qml://stdlib/<path> - Reads a QML file from the stdlib root (modes/qml/)
+ * - canvas://stdlib/<path> - Reads a Canvas file from the stdlib root (modes/qml/)
  */
 import * as path from "node:path";
 import { validateRelativePath } from "./skill-protocol";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
-export interface QmlProtocolOptions {
+export interface CanvasProtocolOptions {
 	/**
 	 * Returns the absolute path to the QML stdlib root directory (modes/qml/).
 	 */
@@ -20,27 +20,27 @@ export interface QmlProtocolOptions {
 const SUPPORTED_NAMESPACES = ["stdlib"] as const;
 
 /**
- * Handler for qml:// URLs.
+ * Handler for canvas:// URLs.
  *
  * Only the "stdlib" namespace is supported. Future namespaces (e.g. skill-specific
- * QML bundles) can be added by extending this handler.
+ * Canvas bundles) can be added by extending this handler.
  */
-export class QmlProtocolHandler implements ProtocolHandler {
-	readonly scheme = "qml";
+export class CanvasProtocolHandler implements ProtocolHandler {
+	readonly scheme = "canvas";
 
-	constructor(private readonly options: QmlProtocolOptions) {}
+	constructor(private readonly options: CanvasProtocolOptions) {}
 
 	async resolve(url: InternalUrl): Promise<InternalResource> {
 		const namespace = url.rawHost || url.hostname;
 		if (namespace !== "stdlib") {
 			const available = SUPPORTED_NAMESPACES.join(", ");
-			throw new Error(`Unknown qml:// namespace: ${namespace}. Available: ${available}`);
+			throw new Error(`Unknown canvas:// namespace: ${namespace}. Available: ${available}`);
 		}
 
 		const urlPath = url.pathname;
 		const hasPath = urlPath && urlPath !== "/" && urlPath !== "";
 		if (!hasPath) {
-			throw new Error("qml://stdlib requires a file path: qml://stdlib/<path>");
+			throw new Error("canvas://stdlib requires a file path: canvas://stdlib/<path>");
 		}
 
 		const relativePath = decodeURIComponent(urlPath.slice(1)); // remove leading /
@@ -51,12 +51,12 @@ export class QmlProtocolHandler implements ProtocolHandler {
 
 		// Containment check — must stay within stdlib root
 		if (targetPath !== stdlibRoot && !targetPath.startsWith(stdlibRoot + path.sep)) {
-			throw new Error("Path traversal is not allowed in qml:// URLs");
+			throw new Error("Path traversal is not allowed in canvas:// URLs");
 		}
 
 		const file = Bun.file(targetPath);
 		if (!(await file.exists())) {
-			throw new Error(`QML stdlib file not found: ${targetPath}`);
+			throw new Error(`Canvas stdlib file not found: ${targetPath}`);
 		}
 
 		const content = await file.text();
