@@ -66,6 +66,12 @@ export const DEFAULT_ORG_CONFIG: OrgConfig = {
 				drafts: { prefix: "DRAFT", path: "drafts" },
 			},
 		},
+		sessions: {
+			path: "!sessions",
+			categories: {
+				sessions: { prefix: "SESS", path: "sessions", writeInitialPrompt: false },
+			},
+		},
 	},
 	todoKeywords: [...DEFAULT_TODO_KEYWORDS],
 	requiredProperties: [...REQUIRED_PROPERTIES],

@@ -28,56 +28,56 @@
 :STATUS: completed
 :END:
 
-** DOING Write architecture .org files
+** DONE Write architecture .org files
 :PROPERTIES:
 :TASK_ID: task-5
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
 * Phase 1: uniorg Facade + Honest Types
 
-** ITEM Install uniorg dependencies
+** DONE Install uniorg dependencies
 :PROPERTIES:
 :TASK_ID: task-6
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Create packages/org/src/org-parse.ts facade
+** DONE Create packages/org/src/org-parse.ts facade
 :PROPERTIES:
 :TASK_ID: task-7
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Add text/x-org to InternalResource contentType
+** DONE Add text/x-org to InternalResource contentType
 :PROPERTIES:
 :TASK_ID: task-8
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Fix org-protocol.ts to return text/x-org
+** DONE Fix org-protocol.ts to return text/x-org
 :PROPERTIES:
 :TASK_ID: task-9
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Update contentType consumers for org rendering
+** DONE Update contentType consumers for org rendering
 :PROPERTIES:
 :TASK_ID: task-10
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Write org-parse tests
+** DONE Write org-parse tests
 :PROPERTIES:
 :TASK_ID: task-11
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Phase 2: Memory System
 
-** ITEM 2a: Org-writer memory serialization
+** DOING 2a: Org-writer memory serialization
 :PROPERTIES:
 :TASK_ID: task-12
-:STATUS: pending
+:STATUS: in_progress
 :END:
 
 ** ITEM 2b: Consolidation prompt rewrite

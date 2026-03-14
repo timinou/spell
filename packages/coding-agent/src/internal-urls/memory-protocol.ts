@@ -119,7 +119,8 @@ export class MemoryProtocolHandler implements ProtocolHandler {
 
 		const content = await Bun.file(realTargetPath).text();
 		const ext = path.extname(realTargetPath).toLowerCase();
-		const contentType: InternalResource["contentType"] = ext === ".md" ? "text/markdown" : "text/plain";
+		const contentType: InternalResource["contentType"] =
+			ext === ".md" ? "text/markdown" : ext === ".org" ? "text/x-org" : "text/plain";
 
 		return {
 			url: url.href,

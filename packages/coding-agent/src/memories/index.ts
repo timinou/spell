@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { serializeMemoryFile } from "@oh-my-pi/pi-org";
 import { getAgentDbPath, logger, parseJsonlLenient } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { parseModelString } from "../config/model-resolver";
@@ -104,10 +105,19 @@ interface ConsolidationSkillSchema {
 	templates?: ConsolidationSkillFileSchema[];
 	examples?: ConsolidationSkillFileSchema[];
 }
+interface ConsolidationMemoryEntrySchema {
+	title: string;
+	confidence: number;
+	scope: string;
+	tags?: string[];
+	body: string;
+}
 interface ConsolidationOutputSchema {
 	memory_md: string;
 	memory_summary: string;
 	skills: ConsolidationSkillSchema[];
+	/** Optional structured entries for MEMORY.org output. */
+	memory_entries?: ConsolidationMemoryEntrySchema[];
 }
 
 /**
@@ -414,6 +424,7 @@ async function runPhase2(options: {
 				memoryRoot,
 				model: phase2Model,
 				apiKey: phase2ApiKey,
+				sourceSession: session.sessionManager.getSessionId() ?? "unknown",
 			});
 			await applyConsolidation(memoryRoot, consolidated);
 			if (heartbeatLostOwnership) {
@@ -689,9 +700,16 @@ async function readRolloutSummaries(memoryRoot: string): Promise<string> {
 	return blocks.join("\n\n");
 }
 
-async function runConsolidationModel(options: { memoryRoot: string; model: Model; apiKey: string }): Promise<{
+async function runConsolidationModel(options: {
+	memoryRoot: string;
+	model: Model;
+	apiKey: string;
+	sourceSession: string;
+}): Promise<{
 	memoryMd: string;
 	memorySummary: string;
+	memoryEntries?: ConsolidationMemoryEntrySchema[];
+	sourceSession: string;
 	skills: Array<{
 		name: string;
 		content: string;
@@ -700,7 +718,7 @@ async function runConsolidationModel(options: { memoryRoot: string; model: Model
 		examples: ConsolidationSkillFileSchema[];
 	}>;
 }> {
-	const { memoryRoot, model, apiKey } = options;
+	const { memoryRoot, model, apiKey, sourceSession } = options;
 	const rawMemories = await Bun.file(path.join(memoryRoot, "raw_memories.md")).text();
 	const rolloutSummaries = await readRolloutSummaries(memoryRoot);
 	const input = renderPromptTemplate(consolidationTemplate, {
@@ -756,7 +774,7 @@ async function runConsolidationModel(options: { memoryRoot: string; model: Model
 	if (!memoryMd || !memorySummary) {
 		throw new Error("phase2 returned empty consolidated memory");
 	}
-	return { memoryMd, memorySummary, skills };
+	return { memoryMd, memorySummary, skills, sourceSession, memoryEntries: schemaOutput.memory_entries };
 }
 
 async function applyConsolidation(
@@ -764,6 +782,8 @@ async function applyConsolidation(
 	consolidated: {
 		memoryMd: string;
 		memorySummary: string;
+		memoryEntries?: ConsolidationMemoryEntrySchema[];
+		sourceSession: string;
 		skills: Array<{
 			name: string;
 			content: string;
@@ -775,6 +795,21 @@ async function applyConsolidation(
 ): Promise<void> {
 	await Bun.write(path.join(memoryRoot, "MEMORY.md"), `${consolidated.memoryMd.trim()}\n`);
 	await Bun.write(path.join(memoryRoot, "memory_summary.md"), `${consolidated.memorySummary.trim()}\n`);
+
+	// Write MEMORY.org when the LLM provided structured memory_entries.
+	// TODO: implement incremental merge — currently overwrites on each consolidation.
+	if (consolidated.memoryEntries && consolidated.memoryEntries.length > 0) {
+		const orgEntries = consolidated.memoryEntries.map(e => ({
+			title: e.title,
+			confidence: e.confidence,
+			scope: e.scope,
+			sourceSession: consolidated.sourceSession,
+			tags: e.tags,
+			body: e.body,
+		}));
+		const orgContent = serializeMemoryFile(orgEntries, consolidated.sourceSession);
+		await Bun.write(path.join(memoryRoot, "MEMORY.org"), orgContent);
+	}
 	const skillsDir = path.join(memoryRoot, "skills");
 	await fs.mkdir(skillsDir, { recursive: true });
 	const keep = new Set<string>();
@@ -892,7 +927,12 @@ function parseStage1OutputSchema(value: Record<string, unknown>): Stage1OutputSc
 }
 
 function parseConsolidationOutputSchema(value: Record<string, unknown>): ConsolidationOutputSchema | undefined {
-	if (!hasExactKeys(value, ["memory_md", "memory_summary", "skills"])) return undefined;
+	// Allow memory_entries as an optional extra key
+	if (!hasExactKeys(value, ["memory_md", "memory_summary", "skills"], true)) return undefined;
+	const requiredKeys = ["memory_md", "memory_summary", "skills"];
+	for (const key of Object.keys(value)) {
+		if (!requiredKeys.includes(key) && key !== "memory_entries") return undefined;
+	}
 	if (typeof value.memory_md !== "string") return undefined;
 	if (typeof value.memory_summary !== "string") return undefined;
 	if (!Array.isArray(value.skills)) return undefined;
@@ -915,10 +955,33 @@ function parseConsolidationOutputSchema(value: Record<string, unknown>): Consoli
 			examples,
 		});
 	}
+	let memoryEntries: ConsolidationMemoryEntrySchema[] | undefined;
+	if (Array.isArray(value.memory_entries)) {
+		const entries: ConsolidationMemoryEntrySchema[] = [];
+		for (const item of value.memory_entries) {
+			if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+			const e = item as Record<string, unknown>;
+			if (typeof e.title !== "string") return undefined;
+			if (typeof e.confidence !== "number") return undefined;
+			if (typeof e.scope !== "string") return undefined;
+			if (typeof e.body !== "string") return undefined;
+			if (e.tags !== undefined && !Array.isArray(e.tags)) return undefined;
+			if (Array.isArray(e.tags) && !e.tags.every(t => typeof t === "string")) return undefined;
+			entries.push({
+				title: e.title,
+				confidence: e.confidence,
+				scope: e.scope,
+				body: e.body,
+				tags: e.tags as string[] | undefined,
+			});
+		}
+		memoryEntries = entries;
+	}
 	return {
 		memory_md: value.memory_md,
 		memory_summary: value.memory_summary,
 		skills,
+		memory_entries: memoryEntries,
 	};
 }
 

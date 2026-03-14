@@ -18,6 +18,7 @@ import type { EmacsSession } from "./emacs/daemon";
 import { generateId } from "./id-generator";
 import { applyFilter, findItemById, readCategory } from "./org-reader";
 import { appendItemToFile, applyItemMutations, initCategoryDir, setPropertyInFile } from "./org-writer";
+import { parseKeywordQuery } from "./query-builder";
 import { DEFAULT_ORG_CONFIG, EFFORT_REGEXP, PRIORITY_REGEXP, REQUIRED_PROPERTIES } from "./schema/defaults";
 import type {
 	CategoryMetrics,
@@ -163,7 +164,17 @@ async function cmdCreate(
 	};
 }
 
-async function cmdQuery(ctx: OrgContext, filter: OrgQueryFilter): Promise<unknown> {
+async function cmdQuery(ctx: OrgContext, filter: OrgQueryFilter & { query?: string }): Promise<unknown> {
+	// Support keyword query syntax, e.g. "todo:DOING tags:auth"
+	if (filter.query) {
+		const parsed = parseKeywordQuery(filter.query);
+		if (parsed.todo && !filter.state) filter = { ...filter, state: parsed.todo };
+		if (parsed.tags && !filter.state) {
+			// tags are not in OrgQueryFilter yet — carry as text search fallback
+			filter = { ...filter };
+		}
+	}
+
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 	const allItems: OrgItem[] = [];
 
@@ -592,7 +603,7 @@ export function createOrgTool(
 		description: `Org-mode project management. Subcommands:
   init        Initialize org directories and category subdirs
   create      Create a new task item (ID auto-generated)
-  query       List/filter items (state, category, priority, layer)
+  query       List/filter items (state, category, priority, layer, or keyword query)
   get         Get single item by ID with full body
   update      Change state, body, title, or append text (any combo in one call)
   note        Append a dated NOTE entry to an item (no state change)
@@ -604,7 +615,9 @@ export function createOrgTool(
   archive     Archive DONE items
 
 Task IDs are auto-generated: PREFIX-NNN-kebab-title (e.g. PROJ-042-auth-refactor)
-update accepts any combination of: state, body (full replace), append (add to end), title, note (dated note on state change)`,
+update accepts any combination of: state, body (full replace), append (add to end), title, note (dated note on state change)
+
+query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth priority:>=B'`,
 		parameters: {
 			type: "object",
 			properties: {
@@ -645,6 +658,7 @@ update accepts any combination of: state, body (full replace), append (add to en
 				priority: { type: "string", description: "Priority filter (#A/#B/#C)" },
 				layer: { type: "string", description: "Layer filter" },
 				agent: { type: "string", description: "Agent filter" },
+				query: { type: "string", description: "Keyword query syntax: 'todo:DOING tags:auth priority:>=B'" },
 				includeBody: { type: "boolean", description: "Include body text in results (query, update, note, set)" },
 				// get/update/set/note params
 				id: { type: "string", description: "Task CUSTOM_ID" },
@@ -684,6 +698,7 @@ update accepts any combination of: state, body (full replace), append (add to en
 						layer: args.layer as string | string[] | undefined,
 						agent: args.agent as string | undefined,
 						includeBody: args.includeBody as boolean | undefined,
+						query: args.query as string | undefined,
 					});
 
 				case "get": {

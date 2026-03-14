@@ -17,7 +17,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { DEFAULT_TODO_KEYWORDS } from "./schema/defaults";
-import type { ItemMutation, OrgCreateParams, OrgSessionContext } from "./types";
+import type { ItemMutation, MemoryEntry, OrgCreateParams, OrgSessionContext } from "./types";
 
 // =============================================================================
 // Serialization helpers
@@ -643,4 +643,65 @@ Headings with TODO keywords are actionable sub-tasks.
 - RESEARCH_REF: Link to research or spike
 - AGENT: Override default agent for this item
 `;
+}
+
+// =============================================================================
+// Memory entry serialization
+// =============================================================================
+
+/**
+ * Serialize a single MemoryEntry to an org heading block.
+ *
+ * The CUSTOM_ID is derived from the title slug with a "MEM-" prefix.
+ * Tags are built from scope path segments plus any explicit extra tags.
+ */
+export function serializeMemoryEntry(entry: MemoryEntry): string {
+	// Tags: deduplicated scope segments + caller-supplied extras
+	const scopeParts = entry.scope.split("/").filter(Boolean);
+	const allTags = [...new Set([...scopeParts, ...(entry.tags ?? [])])];
+	const tagStr = allTags.length > 0 ? `  :${allTags.join(":")}:` : "";
+
+	// CUSTOM_ID: "MEM-" + kebab slug from title (max 40 chars)
+	const slug = entry.title
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-|-$/g, "")
+		.slice(0, 40);
+	const id = `MEM-${slug}`;
+
+	// Org inactive timestamp for today
+	const now = new Date();
+	const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+	const dateStr = `[${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${days[now.getDay()]}]`;
+
+	const lines: string[] = [
+		`* ${entry.title}${tagStr}`,
+		":PROPERTIES:",
+		`:CUSTOM_ID: ${id}`,
+		`:CONFIDENCE: ${entry.confidence.toFixed(2)}`,
+		`:LAST_VALIDATED: ${dateStr}`,
+		`:SCOPE: ${entry.scope}`,
+		`:SOURCE_SESSION: ${entry.sourceSession}`,
+		":END:",
+		"",
+		entry.body.trimEnd(),
+		"",
+	];
+	return lines.join("\n");
+}
+
+/**
+ * Wrap multiple MemoryEntry values into a complete org file with file-level
+ * header metadata.
+ */
+export function serializeMemoryFile(entries: MemoryEntry[], sourceSession: string): string {
+	const now = new Date();
+	const dateStr = now.toISOString().split("T")[0];
+	const header = [
+		`#+TITLE: Spell Long-Term Memory`,
+		`#+LAST_UPDATED: ${dateStr}`,
+		`#+SOURCE_SESSION: ${sourceSession}`,
+		"",
+	].join("\n");
+	return header + entries.map(serializeMemoryEntry).join("");
 }

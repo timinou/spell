@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { FileType, glob } from "@oh-my-pi/pi-natives";
+import { extractOrgKeywords } from "@oh-my-pi/pi-org";
 import { CONFIG_DIR_NAME, tryParseJson } from "@oh-my-pi/pi-utils";
 import { readFile } from "../capability/fs";
 import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "../capability/rule";
@@ -299,7 +300,29 @@ export async function scanSkillsFromDir(
 		try {
 			const content = await readFile(skillPath);
 			if (!content) return;
-			const { frontmatter, body } = parseFrontmatter(content, { source: skillPath });
+
+			let frontmatter: Record<string, unknown>;
+			let body: string;
+
+			if (skillPath.endsWith(".org")) {
+				// Org frontmatter: #+KEY: value lines before first heading
+				const kw = extractOrgKeywords(content);
+				frontmatter = {
+					name: kw.name,
+					description: kw.description,
+					globs: kw.globs,
+					alwaysApply: kw["always-apply"] === "true" || kw.alwaysapply === "true",
+				};
+				// Body is content from the first heading onward
+				const lines = content.split("\n");
+				const firstHeadingIdx = lines.findIndex(l => l.startsWith("* "));
+				body = firstHeadingIdx >= 0 ? lines.slice(firstHeadingIdx).join("\n") : content;
+			} else {
+				const parsed = parseFrontmatter(content, { source: skillPath });
+				frontmatter = parsed.frontmatter;
+				body = parsed.body;
+			}
+
 			if (requireDescription && !frontmatter.description) {
 				return;
 			}
@@ -323,8 +346,11 @@ export async function scanSkillsFromDir(
 	for (const entry of entries) {
 		if (entry.name.startsWith(".")) continue;
 		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-		const skillPath = path.join(dir, entry.name, "SKILL.md");
-		if (fs.existsSync(skillPath)) {
+		// Prefer SKILL.org over SKILL.md when both exist
+		const orgSkillPath = path.join(dir, entry.name, "SKILL.org");
+		const mdSkillPath = path.join(dir, entry.name, "SKILL.md");
+		const skillPath = fs.existsSync(orgSkillPath) ? orgSkillPath : fs.existsSync(mdSkillPath) ? mdSkillPath : null;
+		if (skillPath) {
 			work.push(loadSkill(skillPath));
 		}
 	}

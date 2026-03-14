@@ -26,18 +26,18 @@ function normalizePlanTitle(title: string): { title: string; fileName: string } 
 	if (!trimmed) {
 		throw new ToolError("Title is required and must not be empty.");
 	}
-
 	if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("..")) {
 		throw new ToolError("Title must not contain path separators or '..'.");
 	}
-
-	const withExtension = trimmed.toLowerCase().endsWith(".md") ? trimmed : `${trimmed}.md`;
-	if (!/^[A-Za-z0-9_-]+\.md$/.test(withExtension)) {
-		throw new ToolError("Title may only contain letters, numbers, underscores, or hyphens.");
+	// Accept any extension; add .md only when none is present (backward compat for file-backed plans).
+	// Org-backed plans (itemId provided) treat fileName as vestigial.
+	const hasExtension = /\.[a-z]+$/i.test(trimmed);
+	const fileName = hasExtension ? trimmed : `${trimmed}.md`;
+	if (!/^[A-Za-z0-9_.-]+$/.test(fileName)) {
+		throw new ToolError("Title may only contain letters, numbers, underscores, hyphens, or dots.");
 	}
-
-	const normalizedTitle = withExtension.slice(0, -3);
-	return { title: normalizedTitle, fileName: withExtension };
+	const normalizedTitle = hasExtension ? trimmed.slice(0, trimmed.lastIndexOf(".")) : trimmed;
+	return { title: normalizedTitle, fileName };
 }
 
 export interface ExitPlanModeDetails {

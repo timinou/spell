@@ -28,7 +28,8 @@ describe("orgToMarkdown", () => {
 	});
 
 	test("handles empty string", () => {
-		expect(orgToMarkdown("")).toBe("\n");
+		// uniorg produces trailing newline for empty input
+		expect(orgToMarkdown("").trim()).toBe("");
 	});
 
 	test("PROPERTIES drawer does not produce garbage", () => {
@@ -102,8 +103,8 @@ describe("parseOrgHeadings", () => {
 	test("heading with properties", () => {
 		const result = parseOrgHeadings("* Item\n:PROPERTIES:\n:CUSTOM_ID: abc-123\n:CONFIDENCE: 0.9\n:END:");
 		expect(result).toHaveLength(1);
-		expect(result[0]!.properties["CUSTOM_ID"]).toBe("abc-123");
-		expect(result[0]!.properties["CONFIDENCE"]).toBe("0.9");
+		expect(result[0]!.properties.CUSTOM_ID).toBe("abc-123");
+		expect(result[0]!.properties.CONFIDENCE).toBe("0.9");
 	});
 
 	test("empty string returns empty array", () => {

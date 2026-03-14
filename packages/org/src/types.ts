@@ -228,3 +228,13 @@ export interface ItemMutation {
 	/** Dated note — only written when state also changes (heading-level) or appended after frontmatter (file-level). */
 	note?: string;
 }
+
+/** A single memory entry with metadata for org serialization. */
+export interface MemoryEntry {
+	title: string;
+	confidence: number;
+	scope: string;
+	sourceSession: string;
+	tags?: string[];
+	body: string;
+}
