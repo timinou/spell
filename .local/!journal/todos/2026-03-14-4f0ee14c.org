@@ -1,0 +1,47 @@
+#+TITLE: Session 149259c8510d2a5a Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE C++: Read spellArmedTools from root object in loadWindow
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE TS protocol: Add armedTools to event types and WindowInfo
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE TS QmlBridge: Extract armedTools from ready + state events
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE QmlTool: Merge logic with denylist
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Update QML tool prompt documentation
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+** DONE Remote protocol: Add armedTools to panel_ready
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+** DONE Verification: bun check:ts + build C++
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:END:

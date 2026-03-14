@@ -1,0 +1,86 @@
+#+TITLE: MOMUS_APPROVAL_GATE
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-momus-approval-gate
+
+* Initial Message
+
+commit
+
+* Problem
+
+Momus (plan quality reviewer) is currently prompt-driven: the =plan-mode-active.md= template tells the agent to ask the user if they want Momus review. This is fragile — the agent may skip the ask or phrase it poorly. It should be a code-driven option in the plan approval UI.
+
+* Approach
+
+When =exit_plan_mode= fires and the approval selector appears, add a 4th option "Review with Momus" (only when =planModeUltraplan= is true). Selecting it re-enters plan mode and injects a synthetic message instructing the agent to spawn Momus and act on results. After revision, the agent calls =exit_plan_mode= again, re-triggering the selector — creating a natural review loop.
+
+* Changes
+
+** ITEM Add "Review with Momus" option to approval selector
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/src/modes/interactive-mode.ts=, method =handleExitPlanModeTool= (~line 871).
+
+Current selector options:
+#+begin_example
+["Approve and execute", "Refine plan", "Stay in plan mode"]
+#+end_example
+
+Change: conditionally add "Review with Momus" when =this.planModeUltraplan= is true:
+#+begin_example
+const options = ["Approve and execute", "Refine plan", "Stay in plan mode"];
+if (this.planModeUltraplan) {
+    options.splice(1, 0, "Review with Momus");
+}
+#+end_example
+
+When "Review with Momus" is selected:
+1. Re-enter plan mode (=this.#enterPlanMode({ ultraplan: true })=) — this restores plan mode tools and state
+2. Send a synthetic prompt to the agent with the plan content and instructions to run Momus:
+   =await this.session.prompt(`Run Momus review on this plan and address any issues:\n\n${planContent}`, { synthetic: true })=
+
+The agent, guided by the ultraplan prompt section, spawns Momus via =task= tool, incorporates feedback, and calls =exit_plan_mode= again — re-showing the selector.
+
+** ITEM Update plan-mode-active.md ultraplan section
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+File: =packages/coding-agent/src/prompts/system/plan-mode-active.md=
+
+Remove Gate 2 entirely (the "ask user about Momus" block). Replace with instructions for handling a Momus review request:
+
+#+begin_example
+{{#if ultraplan}}
+## Ultraplan Mode
+
+### Gate 1: Metis (mandatory — runs before you write the plan)
+
+[keep existing Metis instructions unchanged]
+
+### Gate 2: Momus (triggered by user from approval UI)
+
+If you receive a message asking you to run Momus review on a plan:
+1. Spawn a =momus= subagent via the =task= tool with the plan content
+2. If Momus returns =REJECT=, revise the plan addressing the specific issues
+3. Call =exit_plan_mode= again when done (whether APPROVE or after revision)
+
+You **MUST NOT** ask the user about Momus review yourself — the approval UI handles this.
+{{/if}}
+#+end_example
+
+* Verification
+
+1. =bun check:ts= passes
+2. =/ultraplan some feature= enters ultraplan mode
+3. When agent calls =exit_plan_mode=, selector shows 4 options (including "Review with Momus")
+4. =/plan some feature= (non-ultraplan) shows only the original 3 options
+5. Selecting "Review with Momus" re-enters plan mode and sends the agent a synthetic Momus review message
+6. Agent spawns Momus, revises if needed, calls =exit_plan_mode= again (loop works)
+
+* Critical Files
+
+- =packages/coding-agent/src/modes/interactive-mode.ts= — approval selector and plan mode entry/exit
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — ultraplan prompt instructions

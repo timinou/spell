@@ -1,0 +1,267 @@
+#+TITLE: FIX_QML_SESSION_NAME_AND_TEXT
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-fix-qml-session-name-and-text
+
+* Initial Message
+
+`spell --qml` does not give me the session name afterwards, so it's hard to debug, and then on top of that, it still has the issue of not showing the actual text:
+
+/tmp/tmp.LHJ3QGuFOe.png
+
+* Problem
+
+Two bugs with =spell --qml=:
+
+1. *No session name on exit.* Interactive mode prints =Resume this session with spell --resume <sessionId>= but QML mode exits with no hint. Makes debugging hard.
+
+2. *Assistant text not visible.* The QML chat panel accumulates text via =message_update= deltas and binds via =model.text= in a Component loaded through a Loader. The Loader→Component context chain may not propagate ListModel =setProperty()= change notifications, so the assistant bubble stays empty. Tool results are also never shown because the mapper omits =result= from =tool_end= events.
+
+Additionally, the mapper forwards =message_start= for ALL roles (user, toolResult, assistant), but ChatPanel hardcodes =role: "assistant"= for every =message_start=, creating ghost empty assistant bubbles.
+
+* Approach
+
+** ITEM Print session name after QML mode exits
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: =packages/coding-agent/src/main.ts= (lines 712-720)
+
+Before =session.dispose()=, capture =session.sessionManager.getSessionId()= and =getSessionFile()=. After dispose/cleanup, before =postmortem.quit(0)=, print the resume hint to stderr using the same pattern as interactive-mode.ts:986:
+
+#+begin_src typescript
+const sessionId = session.sessionManager.getSessionId();
+const sessionFile = session.sessionManager.getSessionFile();
+// ... existing dispose/cleanup ...
+if (sessionId && sessionFile) {
+    process.stderr.write(`\n${chalk.dim(`Resume this session with spell --resume ${sessionId}`)}\n`);
+}
+await postmortem.quit(0);
+#+end_src
+
+Import =chalk= and =APP_NAME= if not already in scope (check existing imports).
+
+** ITEM Fix event mapper to filter non-assistant messages and include tool results
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/src/modes/qml-event-mapper.ts=
+
+Changes:
+1. In =message_start= case: only emit when role is ="assistant"=. User messages are handled client-side by =sendMessage()=. Tool result messages create ghost assistant bubbles.
+2. In =message_update= case: already filters by =hasContent= which is fine, but add role check for safety.
+3. In =message_end= case: only emit when role matches current assistant message.
+4. In =tool_execution_end= case: extract text content from =event.result.content= (same pattern as =getMessageText=) and include as =details= field. The ChatPanel already checks =msg.details= on tool_end (line 63).
+
+For the result extraction, =event.result= has shape ={ content: Array<{type: string, text?: string}>, details?: object }=. Use =getMessageText(event.result.content)= to extract text, truncate to reasonable length for display.
+
+** ITEM Fix QML delegate binding propagation
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+File: =packages/coding-agent/src/modes/qml/panels/ChatPanel.qml=
+
+The Loader→Component pattern may break model property change notification propagation. Two options:
+
+*Option A (preferred):* Instead of Components loaded via Loader, use inline delegates or use a =DelegateChooser= (Qt 5.12+). Simplest fix: replace the Loader+Component pattern with a single delegate that shows/hides sections based on =model.role=:
+
+#+begin_src qml
+delegate: Item {
+    width: messageList.width - messageList.leftMargin - messageList.rightMargin
+    height: childrenRect.height
+
+    // Assistant bubble
+    Rectangle {
+        visible: model.role === "assistant"
+        width: parent.width
+        height: visible ? aText.paintedHeight + SpellUI.SpellTheme.spacingL * 2 : 0
+        color: SpellUI.SpellTheme.surfaceHigh
+        radius: SpellUI.SpellTheme.cornerRadius
+
+        Text {
+            id: aText
+            anchors.fill: parent
+            anchors.margins: SpellUI.SpellTheme.spacingL
+            text: model.text
+            // ... font/color/wrap properties
+        }
+    }
+
+    // User bubble (right-aligned)
+    Item {
+        visible: model.role === "user"
+        // ... same structure as current userDelegate
+    }
+
+    // Tool entry
+    Rectangle {
+        visible: model.role === "tool"
+        // ... same structure as current toolDelegate
+    }
+}
+#+end_src
+
+This ensures =model.text= binding is direct within the ListView delegate context, where ListModel change notifications always propagate.
+
+*Also:* Add =tool_update= handler (currently silently dropped) to update tool details text during execution.
+
+** ITEM Handle initial message display
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: =packages/coding-agent/src/modes/qml-mode.ts=
+
+When =options.initialMessage= is provided, send a synthetic user message event to QML before calling =session.prompt()=, so the user can see what prompt started the session:
+
+#+begin_src typescript
+if (options.initialMessage) {
+    await bridge.sendMessage("shell", {
+        type: "user_message",
+        text: options.initialMessage,
+    });
+    await session.prompt(options.initialMessage);
+}
+#+end_src
+
+And handle =user_message= in ChatPanel's =handleMessage()= to append a user bubble.
+
+* Key Files
+
+- =packages/coding-agent/src/main.ts= — QML exit path (lines 712-720)
+- =packages/coding-agent/src/modes/qml-event-mapper.ts= — event mapping (all)
+- =packages/coding-agent/src/modes/qml/panels/ChatPanel.qml= — chat UI (all)
+- =packages/coding-agent/src/modes/qml-mode.ts= — QML mode orchestrator (all)
+- =packages/coding-agent/src/modes/interactive-mode.ts= — reference for session name print (line 986)
+
+* Verification
+
+- Launch =spell --qml=, send a message, close window. Confirm session ID is printed to stderr.
+- Launch =spell --qml=, send a prompt. Confirm assistant text streams visibly in the chat bubble.
+- Confirm tool executions show name/intent during execution and result summary after completion.
+- Confirm no ghost empty assistant bubbles appear for user or tool_result messages.
+- Run =bun check:ts= to verify no type errors.
+* ITEM Fix QML mode session name and text rendering
+:PROPERTIES:
+:CUSTOM_ID: DRAFT-002-fix-qml-mode-session-name-and-text-rende
+:EFFORT: 1h
+:PRIORITY: #A
+:LAYER: frontend
+:END:
+
+* Problem
+
+Two bugs with =spell --qml=:
+
+1. *No session name on exit.* Interactive mode prints =Resume this session with spell --resume <sessionId>= but QML mode exits with no hint.
+
+2. *Assistant text obscured by ghost bubbles.* The mapper forwards =message_start= for ALL roles (user, toolResult, assistant), but ChatPanel hardcodes =role: "assistant"= for every =message_start= (line 22). This creates empty assistant-styled bubbles for user echoes and tool result messages, making the real assistant text appear invisible among empty entries. Tool results are also never shown because the mapper omits =result= from =tool_end= events.
+
+Note: The Loader→Component binding chain is NOT the problem — Qt 5.15/6.x correctly propagates =model= context properties and =ListModel.setProperty()= change notifications through Loader context chains. The ghost bubbles from unfiltered message events are the root cause.
+
+* Approach
+
+** ITEM Print session name after QML mode exits
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: =packages/coding-agent/src/main.ts= (lines 712-720)
+
+Before =session.dispose()=, capture =session.sessionManager.getSessionId()= and =getSessionFile()=. After dispose/cleanup but before =postmortem.quit(0)=, print the resume hint to stderr using the same pattern as interactive-mode.ts:986:
+
+#+begin_src typescript
+const sessionId = session.sessionManager.getSessionId();
+const sessionFile = session.sessionManager.getSessionFile();
+await runQmlMode(session, { ... });
+await session.dispose();
+stopThemeWatcher();
+if (sessionId && sessionFile) {
+    process.stderr.write(`\\n${chalk.dim(`Resume this session with spell --resume ${sessionId}`)}\\n`);
+}
+await postmortem.quit(0);
+#+end_src
+
+Check existing imports in =main.ts= — =chalk= and =APP_NAME= may already be imported. Use =APP_NAME= if available, else hardcode =spell=.
+
+** ITEM Fix event mapper to filter non-assistant messages and include tool results
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/src/modes/qml-event-mapper.ts=
+
+This is the core fix. The mapper's =#lastTextLength= state is shared across all message types, so unfiltered non-assistant messages also corrupt the delta calculation.
+
+Changes:
+1. *Filter =message_start= to assistant only.* Extract role via =getRoleIfPresent(event.message)=. Return =null= if role is not ="assistant"=. User messages are handled client-side by ChatPanel's =sendMessage()=. Tool result messages go through =tool_start/tool_end=.
+
+2. *Filter =message_update= and =message_end= similarly.* Only emit when the current message is an assistant message. Track whether we're in an assistant message via a boolean flag set in =message_start=.
+
+3. *Include tool result content in =tool_execution_end=.* Add =details= field:
+#+begin_src typescript
+case "tool_execution_end":
+    return {
+        type: "tool_end",
+        id: event.toolCallId,
+        name: event.toolName,
+        isError: event.isError,
+        details: getMessageText(event.result?.content ?? []),
+    };
+#+end_src
+Guard defensively: =event.result= is typed =any= but is actually =AgentToolResult= with =content: (TextContent | ImageContent)[]=. Use =event.result?.content ?? []= to avoid throwing on unexpected shapes.
+
+** ITEM Handle initial message display
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: =packages/coding-agent/src/modes/qml-mode.ts=
+
+When =options.initialMessage= is provided, send a synthetic user message event to QML before calling =session.prompt()=:
+
+#+begin_src typescript
+if (options.initialMessage) {
+    await bridge.sendMessage("shell", {
+        type: "user_message",
+        text: options.initialMessage,
+    });
+    await session.prompt(options.initialMessage);
+}
+#+end_src
+
+File: =packages/coding-agent/src/modes/qml/panels/ChatPanel.qml=
+
+Add handler for =user_message= type in =handleMessage()=:
+
+#+begin_src qml
+} else if (msg.type === "user_message") {
+    messagesModel.append({
+        msgId: "user-" + Date.now(),
+        role: "user",
+        text: msg.text || "",
+        name: "",
+        isStreaming: false,
+        isExpanded: false
+    })
+    messageList.positionViewAtEnd()
+}
+#+end_src
+
+* Key Files
+
+- =packages/coding-agent/src/main.ts= — QML exit path (lines 712-720)
+- =packages/coding-agent/src/modes/qml-event-mapper.ts= — event mapping (entire file, ~100 lines)
+- =packages/coding-agent/src/modes/qml/panels/ChatPanel.qml= — chat UI (entire file, ~422 lines)
+- =packages/coding-agent/src/modes/qml-mode.ts= — QML mode orchestrator (lines 46-48, initial message)
+- =packages/coding-agent/src/modes/interactive-mode.ts= — reference for session name print (line 986)
+
+* Verification
+
+- Launch =spell --qml=, send a message, close window. Confirm session ID is printed to stderr.
+- Launch =spell --qml=, send a prompt. Confirm assistant text streams visibly — no ghost empty bubbles.
+- Confirm tool executions show result summary after completion (expand tool entry to see details).
+- Confirm initial message appears as user bubble when =spell --qml "do something"= is used.
+- Run =bun check:ts= to verify no type errors.

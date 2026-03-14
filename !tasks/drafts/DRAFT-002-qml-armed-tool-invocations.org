@@ -1,0 +1,151 @@
+#+TITLE: QML Armed Tool Invocations
+#+STATE: DONE
+#+SESSION_ID: 14924d54d9f93957
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-14T10-59-09-799Z_14924d54d9f93957.jsonl]]
+#+CUSTOM_ID: DRAFT-002-qml-armed-tool-invocations
+#+EFFORT: 6h
+#+PRIORITY: #B
+#+LAYER: backend
+
+* Initial Message
+
+Right now, the QML tool still requires the agent to always do the intermediary between the interfaces the bridge creates and the final touch. This works for non-deterministic flows, where you actually want the agent to think. But other bindings are deterministic, such as saving new metadata you just edited, for example. What is the most QML-native and Spell-native way to 'arm' Spell tools to certain QML bindings so that they don't need to go through the agent? (unless the agent wants to see the log of those 'armed actions', in which case it's a specific tool). Do you see it? And how would you test it btw?
+
+
+* Problem
+
+QML windows currently round-trip every event through the agent LLM. For deterministic
+actions (save edited metadata, persist a rating, write a file), this costs ~2-5s latency
+and hundreds of tokens per action. The agent adds zero value in these cases.
+
+* Design: Armed Tool Bindings
+
+The approach is *TS-only* (no C++ bridge changes). The existing ~bridge.send()~ already
+carries arbitrary JSON — we add a convention + TS-side handler that short-circuits tool
+execution without triggering an LLM turn.
+
+** QML-side API
+
+QML calls ~bridge.send()~ with a reserved payload shape:
+
+#+begin_src javascript
+// Fire-and-forget (no result needed)
+bridge.send({ _tool: "write", path: "/tmp/meta.json", content: JSON.stringify(data) })
+
+// With correlation ID (result delivered via bridge.messageReceived)
+bridge.send({ _tool: "write", _rid: "save-1", path: "/tmp/meta.json", content: JSON.stringify(data) })
+#+end_src
+
+The ~_tool~ field is the discriminator. If present, the event is an armed tool invocation,
+not a regular event. ~_rid~ (request ID) is optional — if present, the result is sent back
+to the QML window via ~bridge.messageReceived~.
+
+Why ~_tool~ (underscore prefix): avoids collision with any user payload field, and signals
+this is a protocol-level field, not application data.
+
+** Arming: Allowlist at Launch Time
+
+The agent declares which tools a window may invoke via launch props:
+
+#+begin_src typescript
+qml.launch({ id: "gallery", path: "gallery.qml", props: {
+  _armedTools: ["write", "read"],
+  images: [...],
+}})
+#+end_src
+
+~_armedTools~ is a string array in props. The TS handler validates every ~_tool~ invocation
+against this list. Missing or empty list = no armed tools allowed (safe default).
+
+** TS-side Flow
+
+1. ~QmlTool.#startEventLoop~ inspects each event. If ~event.payload._tool~ exists, it's
+   extracted before the silent/loud classification — it never reaches ~QML_EVENTS_CHANNEL~.
+2. Extracted events are emitted on a new ~QML_TOOL_INVOKE_CHANNEL~.
+3. A new handler in ~sdk.ts~ on that channel:
+   a. Validates tool name against the window's armed list
+   b. Looks up the tool instance from the session's tools Map
+   c. Calls ~tool.execute()~ directly (same pattern as ~CursorExecHandlers~)
+   d. If ~_rid~ present, sends result back to QML via ~bridge.sendMessage(id, { _rid, result, error? })~
+   e. Logs to transcript as a silent custom message (agent can review but no turn triggered)
+4. On validation failure or tool error: sends error back to QML (if ~_rid~), logs to transcript.
+
+** Agent Visibility
+
+All armed invocations are logged to the transcript as silent custom messages:
+
+#+begin_src typescript
+await session.sendCustomMessage({
+  customType: "qml-tool-invoke",
+  content: `Armed tool: write → ${resultPath}`,
+  display: false,
+  attribution: "system",
+  details: { windowId, tool, args, result },
+});
+#+end_src
+
+The agent never sees these unless it asks. A future ~list_armed_log~ QML action could
+surface the log on demand (not in this PR).
+
+** Per-Window Armed Tools Registry
+
+~QmlTool~ gains a ~#armedTools = new Map<string, string[]>()~ keyed by window ID.
+Populated at launch from ~props._armedTools~. Cleared on close.
+
+The ~sdk.ts~ handler needs access to this registry — either via a getter on QmlTool,
+or by including the armed list in the channel payload (simpler, no coupling).
+
+Decision: include the allowed list in the channel payload. The event loop already knows
+the window ID and can look up the armed list. This way sdk.ts doesn't need a reference
+to QmlTool internals.
+
+* Files to Modify
+
+| File | Change |
+|------+--------|
+| ~packages/coding-agent/src/tools/qml.ts~ | New channel, armed registry, event extraction in #startEventLoop |
+| ~packages/coding-agent/src/sdk.ts~ | New EventBus handler for QML_TOOL_INVOKE_CHANNEL |
+| ~packages/coding-agent/src/tools/index.ts~ | Expose tools Map to the sdk handler (may already be accessible) |
+
+No changes to:
+- ~packages/qml/~ (C++ bridge, TS bridge, protocol) — the existing protocol is sufficient
+- ~packages/agent/~ — tool execution interface unchanged
+
+* Security
+
+- Armed allowlist per window (validated in TS, not QML)
+- Invocations of non-armed tools are rejected + logged
+- Argument validation uses the tool's existing TypeBox schema
+- Rate concern: armed tools should be fast operations; slow tools (bash) should not be armed.
+  Consider rejecting tools with ~concurrency: "exclusive"~ from arming, or document the expectation.
+- The threat model is the same as today: the agent writes the QML file, so it controls what
+  gets sent. A compromised QML file already has ~bridge.send()~ with arbitrary payloads.
+
+* Testing Strategy
+
+** ITEM Unit: event classification
+Test that events with ~_tool~ in payload are routed to ~QML_TOOL_INVOKE_CHANNEL~, not ~QML_EVENTS_CHANNEL~. Test that events without ~_tool~ are unaffected.
+
+** ITEM Unit: allowlist enforcement
+Mock a tools Map. Emit an invoke event for a tool not in the armed list. Assert rejection + error event sent back.
+
+** ITEM Unit: tool execution + result delivery
+Mock a tool with a known execute() result. Emit an invoke event with ~_rid~. Assert:
+- tool.execute() called with correct args
+- bridge.sendMessage() called with ~{ _rid, result }~
+- silent custom message logged to transcript
+
+** ITEM Integration: end-to-end with real QML window
+Launch a window with ~_armedTools: ["write"]~. The QML file does:
+~bridge.send({ _tool: "write", _rid: "test", path: "/tmp/armed-test.txt", content: "hello" })~
+Assert the file exists and contains "hello". Assert the result arrives via ~messageReceived~.
+
+Use the existing ~packages/qml/test/reconnect.test.ts~ as a template for QmlBridge integration tests.
+
+* Future Extensions (not in this PR)
+
+- ~bridge.invoke(tool, args)~ C++ method returning a Promise to QML (approach B) — nicer API
+  but requires C++ changes and Qt promise integration
+- ~list_armed_log~ QML tool action to surface invocation history to the agent on demand
+- Schema-constrained arming (not just tool name, but argument constraints per window)
+- Rate limiting per window
