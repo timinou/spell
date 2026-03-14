@@ -1,0 +1,204 @@
+#+TITLE: Ultraplan Metis  Momus quality gates for plan mode
+#+STATE: DONE
+#+SESSION_ID: 14923984b5b90674
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-14T09-32-35-926Z_14923984b5b90674.jsonl]]
+#+CUSTOM_ID: DRAFT-002-ultraplan-metis-momus-quality-gates-for
+#+EFFORT: 6h
+#+PRIORITY: #B
+#+LAYER: prompt
+
+* Initial Message
+
+my friend, go look at org-my-opencode and find the "Prometheus" planning step. Especially "Metis" and
+ "Momos". I would like you to tell me what makes sense to implement within Spell. The way it would work is
+ multi-file: non-PLAN files for the actual stuff, and DRAFT->PLAN that I approve for the actual
+ orchestration. Do you understand? Ask me questions and look up online about alignment and coding agent
+ orchestration
+
+* Problem
+
+=/plan= works well but produces plans without quality gates. The agent writes a draft, calls =exit_plan_mode=, and the user approves. There's no automated gap analysis (did the agent miss requirements?) or validation (is the plan concrete enough to execute without guessing?).
+
+Inspired by oh-my-opencode's Planning Triad (Prometheus/Metis/Momus), we want =/ultraplan= — an enhanced planning mode where:
+- *Metis* (mandatory): read-only gap analysis subagent runs before the plan is written, catching implicit assumptions, missing edge cases, AI-slop patterns, and ambiguous requirements
+- *Momus* (optional, agent asks user): read-only plan reviewer that validates the written draft against quality thresholds (file references verified, acceptance criteria concrete, zero business logic assumptions)
+
+=/plan= stays unchanged. =/ultraplan= adds these quality gates.
+
+* Design
+
+** Architecture
+
+The implementation is prompt-layer + wiring. No new tool types, no new agent runtime features. We add:
+1. Two new bundled agent definitions (=metis.md=, =momus.md=)
+2. A new slash command =/ultraplan=
+3. Extended =PlanModeState= with an =ultraplan= flag
+4. Updated =plan-mode-active.md= prompt template to instruct the agent on the Metis/Momus workflow when ultraplan is active
+
+The key insight: Metis and Momus don't need special runtime support. They're just =task= tool subagents the planning agent invokes during its work, guided by the system prompt. The system prompt for ultraplan mode instructs the agent:
+1. Spawn Metis subagent with the user's requirements + codebase context
+2. Incorporate Metis findings silently into the plan
+3. Write the DRAFT org item
+4. Ask the user if they want high-accuracy review (Momus)
+5. If yes, spawn Momus subagent with the draft item path
+6. If Momus rejects, revise and resubmit (loop)
+7. Call =exit_plan_mode=
+
+** Key Decision: Prompt-driven vs Code-driven orchestration
+
+Prompt-driven. The agent already has =task= tool access in plan mode (for spawning =explore= agents). We add Metis/Momus as agent definitions the planning agent can spawn. The =plan-mode-active.md= template gets an ={{#if ultraplan}}= section with the orchestration instructions.
+
+This avoids new code paths in =interactive-mode.ts= or =agent-session.ts=. The orchestration lives entirely in prompt + agent definitions.
+
+* Implementation
+
+** ITEM Create =metis.md= bundled agent
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+File: =packages/coding-agent/src/prompts/agents/metis.md=
+
+Frontmatter:
+- name: metis
+- description: Pre-planning gap analyzer. Identifies missing requirements, implicit assumptions, edge cases, and AI-slop patterns before plan generation.
+- tools: read, grep, find, bash, lsp, fetch, web_search, ast_grep
+- spawns: explore
+- model: pi/slow
+- thinking-level: high
+- blocking: true
+
+Prompt body instructs Metis to:
+- Analyze the user's requirements and codebase context provided as input
+- Identify hidden intentions, ambiguities, missing acceptance criteria, edge cases
+- Flag AI-slop patterns: over-engineering, scope creep, unnecessary abstractions
+- Ensure all acceptance criteria are agent-executable (no manual testing required)
+- Return structured output: gaps found, risks, recommendations, missing context
+
+Key principle: Metis is read-only. It cannot write files or delegate to other task agents.
+
+** ITEM Create =momus.md= bundled agent
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+File: =packages/coding-agent/src/prompts/agents/momus.md=
+
+Frontmatter:
+- name: momus
+- description: Plan quality reviewer. Validates plans against clarity, verification, context, and completeness criteria. Returns APPROVE or REJECT with specific issues.
+- tools: read, grep, find, bash, lsp, ast_grep
+- model: pi/slow
+- thinking-level: high
+- blocking: true
+
+Prompt body instructs Momus to:
+- Read the plan (provided as input — org item body or file path)
+- Validate against four criteria:
+  1. *Clarity*: each task specifies WHERE (file paths, patterns, line ranges)
+  2. *Verification*: acceptance criteria are concrete, measurable, agent-executable
+  3. *Context*: sufficient context to proceed with <10% guesswork
+  4. *Completeness*: purpose, background, workflow documented
+- Quality thresholds:
+  - File references: 100% must exist in codebase
+  - Reference sources: >=80% of tasks have clear patterns/APIs/examples
+  - Acceptance criteria: >=90% of tasks have concrete verification
+  - Business logic assumptions: zero allowed
+- Return APPROVE or REJECT with specific issues
+- Approval bias: reject only for true blockers, not perfectionism
+
+Key principle: Momus is read-only. Named after the Greek god of criticism — ruthless but fair.
+
+** ITEM Register =/ultraplan= slash command
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Files:
+- =packages/coding-agent/src/slash-commands/builtin-registry.ts= — add =/ultraplan= entry
+- =packages/coding-agent/src/modes/interactive-mode.ts= — extend =handlePlanModeCommand= or add =handleUltraPlanModeCommand=
+- =packages/coding-agent/src/plan-mode/state.ts= — add =ultraplan?: boolean= to =PlanModeState=
+
+The =/ultraplan= command:
+- Calls =#enterPlanMode= with an =ultraplan: true= option
+- Sets =PlanModeState.ultraplan = true=
+- Everything else (tool injection, plan file path, model selection) stays the same as =/plan=
+
+The =ultraplan= flag propagates through to the system prompt template.
+
+** ITEM Extend =plan-mode-active.md= with ultraplan orchestration
+:PROPERTIES:
+:EFFORT: 1.5h
+:END:
+
+File: =packages/coding-agent/src/prompts/system/plan-mode-active.md=
+
+Add a Handlebars ={{#if ultraplan}}= section that instructs the agent:
+
+#+begin_example
+## Ultraplan Mode
+
+Before writing the plan, you MUST run a gap analysis:
+1. Spawn a `metis` subagent via the `task` tool with:
+   - The user's requirements
+   - Key codebase findings from your exploration
+   - Any decisions made during discussion
+2. Incorporate Metis findings into your plan silently (do not ask the user about Metis output)
+
+After writing the DRAFT org item:
+3. Ask the user: "Would you like high-accuracy review (Momus) before finalizing?"
+4. If yes, spawn a `momus` subagent with the plan content
+5. If Momus returns REJECT, revise the plan and resubmit to Momus
+6. If Momus returns APPROVE (or user declined review), call exit_plan_mode
+#+end_example
+
+Also pass =ultraplan= template variable from =agent-session.ts= (line ~1899) where =renderPromptTemplate= is called.
+
+** ITEM Wire ultraplan flag through session
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Files:
+- =packages/coding-agent/src/session/agent-session.ts= (~line 1899): pass =ultraplan: state.ultraplan ?? false= to =renderPromptTemplate=
+- =packages/coding-agent/src/modes/interactive-mode.ts= (=#enterPlanMode=): accept =ultraplan= option, set on state
+- =packages/coding-agent/src/plan-mode/state.ts=: add =ultraplan?: boolean= field
+
+** ITEM Ensure metis/momus are spawnable from plan mode
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Verify that the plan mode tool set includes =task= tool access. Currently =#enterPlanMode= preserves the previous tool set. The =plan.md= agent definition has =spawns: explore= — for ultraplan, the system prompt needs to tell the agent it can spawn =metis= and =momus= via the =task= tool.
+
+Since the planning agent in plan mode is the main session agent (not a subagent), it has =task= tool access by default. The =metis= and =momus= agents are bundled, so they'll be discoverable. No special wiring needed — just confirm the =task= tool is in the active tool set during plan mode.
+
+* Files Modified (summary)
+
+| File | Change |
+|------|--------|
+| =packages/coding-agent/src/prompts/agents/metis.md= | NEW — bundled agent definition |
+| =packages/coding-agent/src/prompts/agents/momus.md= | NEW — bundled agent definition |
+| =packages/coding-agent/src/slash-commands/builtin-registry.ts= | Add =/ultraplan= command |
+| =packages/coding-agent/src/modes/interactive-mode.ts= | Extend =#enterPlanMode= for ultraplan option |
+| =packages/coding-agent/src/plan-mode/state.ts= | Add =ultraplan= field |
+| =packages/coding-agent/src/session/agent-session.ts= | Pass =ultraplan= to template |
+| =packages/coding-agent/src/prompts/system/plan-mode-active.md= | Add ultraplan orchestration section |
+
+* Verification
+
+1. =/plan= works exactly as before (regression)
+2. =/ultraplan some feature= enters plan mode with ultraplan flag
+3. Agent spawns Metis before writing plan
+4. Agent asks user about Momus after writing draft
+5. If Momus enabled, agent spawns Momus and handles APPROVE/REJECT loop
+6. =exit_plan_mode= works the same as =/plan=
+7. Status line shows "Ultraplan" instead of "Plan" when ultraplan active
+8. =bun check:ts= passes
+9. =bun lint:ts= passes
+
+* Risks
+
+- *Token cost*: Metis + Momus are expensive subagent calls (high thinking, slow model). The user should understand =/ultraplan= costs ~2-3x a normal =/plan=.
+- *Prompt compliance*: The orchestration is prompt-driven. If the agent doesn't follow the instructions (skips Metis, forgets to ask about Momus), there's no code enforcement. This is acceptable — the same pattern works in oh-my-opencode.
+- *Momus loop*: No maximum retry limit. If Momus keeps rejecting, the agent loops. The user can always exit plan mode manually (=Alt+Shift+P= or =/plan= to toggle off).

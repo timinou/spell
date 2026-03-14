@@ -7,4 +7,6 @@ export interface PlanModeState {
 	orgItemId?: string;
 	/** Absolute path to the .org file containing the draft item. */
 	orgItemFile?: string;
+	/** When true, ultraplan mode is active (runs Metis gap analysis and optional Momus review). */
+	ultraplan?: boolean;
 }

@@ -1908,6 +1908,7 @@ export class AgentSession {
 			orgItemId: state.orgItemId ?? "",
 			orgEnabled,
 			draftCategory,
+			ultraplan: state.ultraplan ?? false,
 		});
 
 		return {
