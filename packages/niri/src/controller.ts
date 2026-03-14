@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { OverlayHandle } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { queryNiriFocusedWindowId } from "./niri-query";
 import { withLargerFont } from "./font-scaling";
 import { NiriEventStream } from "./ipc";
 import { OverviewComponent } from "./overview-component";
@@ -135,18 +135,10 @@ export class NiriOverviewController {
 		} catch {
 			// ignore — may already exist
 		}
-		try {
-			const result = await $`niri msg -j focused-window`.quiet().nothrow();
-			if (result.exitCode === 0) {
-				const win = JSON.parse(result.text()) as { id?: unknown };
-				if (typeof win.id === "number") {
-					this.#niriWindowId = win.id;
-					// Write initial status now that we have the window ID.
-					this.#writeStatusIfChanged();
-				}
-			}
-		} catch {
-			// niri not available or JSON parse failure — status file disabled
+		const id = await queryNiriFocusedWindowId();
+		if (id !== null && !this.#destroyed) {
+			this.#niriWindowId = id;
+			this.#writeStatusIfChanged();
 		}
 	}
 

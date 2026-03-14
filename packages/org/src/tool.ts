@@ -1,9 +1,9 @@
 /**
  * The `org` tool — project management via org-mode files.
  *
- * Single tool with subcommands. Basic operations work without Emacs;
- * advanced operations (validate, wave, graph, dashboard) use the Emacs bridge
- * when available.
+ * Single tool with subcommands. Simple queries run TS-side; advanced queries
+ * (dateRange, clocked, effort, numeric property ops) transparently route to
+ * org-ql via the Emacs bridge. Emacs is always available — no fallback paths.
  *
  * This module exports a factory that takes the project root and org config,
  * and returns an AgentTool-compatible definition object suitable for
@@ -13,12 +13,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
-import { findCategory, findCategoryForId, resolveCategories } from "./categories";
+import { findCategory, resolveCategories } from "./categories";
+import type { OrgClient } from "./emacs/client";
+import { createOrgClient } from "./emacs/client";
 import type { EmacsSession } from "./emacs/daemon";
 import { generateId } from "./id-generator";
 import { applyFilter, findItemById, readCategory } from "./org-reader";
 import { appendItemToFile, applyItemMutations, initCategoryDir, setPropertyInFile } from "./org-writer";
-import { parseKeywordQuery } from "./query-builder";
+import { buildOrgQlSexp, parseKeywordQuery, requiresEmacs } from "./query-builder";
 import { DEFAULT_ORG_CONFIG, EFFORT_REGEXP, PRIORITY_REGEXP, REQUIRED_PROPERTIES } from "./schema/defaults";
 import type {
 	CategoryMetrics,
@@ -38,8 +40,10 @@ import type {
 interface OrgContext {
 	config: OrgConfig;
 	projectRoot: string;
-	/** Lazily started Emacs session (null if Emacs unavailable or not yet started). */
-	getEmacsSession(): Promise<EmacsSession | null>;
+	/** Lazily started Emacs session. */
+	getEmacsSession(): Promise<EmacsSession>;
+	/** Lazily created OrgClient (cached after first call). */
+	getOrgClient(): Promise<OrgClient>;
 	/** Optional session metadata injected into newly created org files. */
 	getSessionContext?(): OrgSessionContext;
 }
@@ -164,19 +168,8 @@ async function cmdCreate(
 	};
 }
 
-async function cmdQuery(ctx: OrgContext, filter: OrgQueryFilter & { query?: string }): Promise<unknown> {
-	// Support keyword query syntax, e.g. "todo:DOING tags:auth"
-	if (filter.query) {
-		const parsed = parseKeywordQuery(filter.query);
-		if (parsed.todo && !filter.state) filter = { ...filter, state: parsed.todo };
-		if (parsed.tags && !filter.state) {
-			// tags are not in OrgQueryFilter yet — carry as text search fallback
-			filter = { ...filter };
-		}
-	}
-
+async function cmdQuery(ctx: OrgContext, filter: OrgQueryFilter & { query?: string; ql?: string }): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
-	const allItems: OrgItem[] = [];
 
 	// Determine which categories to scan
 	const targetCats = filter.category
@@ -185,6 +178,40 @@ async function cmdQuery(ctx: OrgContext, filter: OrgQueryFilter & { query?: stri
 				return cats.includes(c.name) || cats.includes(c.prefix);
 			})
 		: categories;
+
+	// Raw org-ql sexp passthrough — bypasses keyword parsing entirely
+	if (filter.ql) {
+		const client = await ctx.getOrgClient();
+		const files = targetCats.flatMap(cat => {
+			// List .org files synchronously — we don't have async iteration here,
+			// so we pass the directory path and let the elisp side enumerate files.
+			return [cat.absPath];
+		});
+		const result = await client.callTool("org-ql-query", { files, query: filter.ql });
+		const items = Array.isArray(result) ? result : [];
+		return { items, total: items.length };
+	}
+
+	// Support keyword query syntax, e.g. "todo:DOING tags:auth"
+	const qlFilter = filter.query ? parseKeywordQuery(filter.query) : null;
+
+	if (qlFilter) {
+		// Promote parsed keyword fields into the structural filter for TS-side fields
+		if (qlFilter.todo && !filter.state) filter = { ...filter, state: qlFilter.todo };
+	}
+
+	// Advanced queries (dateRange, clocked, effort, numeric property ops) route to org-ql
+	if (qlFilter && requiresEmacs(qlFilter)) {
+		const client = await ctx.getOrgClient();
+		const files = targetCats.map(cat => cat.absPath);
+		const sexp = buildOrgQlSexp(qlFilter);
+		const result = await client.callTool("org-ql-query", { files, query: sexp });
+		const items = Array.isArray(result) ? result : [];
+		return { items, total: items.length };
+	}
+
+	// Simple queries: TS path (fast, no IPC overhead)
+	const allItems: OrgItem[] = [];
 
 	await Promise.all(
 		targetCats.map(async cat => {
@@ -206,22 +233,6 @@ async function cmdQuery(ctx: OrgContext, filter: OrgQueryFilter & { query?: stri
 async function cmdGet(ctx: OrgContext, args: { id: string }): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 
-	// Try Emacs first for fidelity
-	const session = await ctx.getEmacsSession();
-	if (session) {
-		try {
-			// Find which category owns this ID
-			const cat = findCategoryForId(categories, args.id);
-			if (cat) {
-				// Call Emacs tool to get item with body
-				// (Emacs path stubbed — falls through to TS reader)
-			}
-		} catch (err) {
-			logger.debug("org:get emacs fallback", { error: String(err) });
-		}
-	}
-
-	// TS-based fallback
 	const item = await findItemById(
 		categories.map(c => ({ absPath: c.absPath, name: c.name, dir: c.dirName })),
 		args.id,
@@ -396,13 +407,6 @@ async function cmdNote(
 async function cmdDashboard(ctx: OrgContext): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 
-	// Try Emacs for full metrics
-	const session = await ctx.getEmacsSession();
-	if (session) {
-		// Emacs-backed dashboard not yet wired; falls through to TS basic path
-	}
-
-	// TS-based basic dashboard
 	const catMetrics: CategoryMetrics[] = [];
 	const totals: Record<string, number> = {};
 	const inProgress: OrgItem[] = [];
@@ -443,88 +447,68 @@ async function cmdDashboard(ctx: OrgContext): Promise<unknown> {
 }
 
 async function cmdValidate(ctx: OrgContext, args: { category?: string; file?: string }): Promise<unknown> {
-	// Validation requires Emacs for full org-element AST
-	const session = await ctx.getEmacsSession();
-	if (!session) {
-		// Basic TS validation — check required properties
-		const categories = resolveCategories(ctx.config, ctx.projectRoot);
-		const targets = args.category ? categories.filter(c => c.name === args.category) : categories;
+	const categories = resolveCategories(ctx.config, ctx.projectRoot);
+	const targets = args.category ? categories.filter(c => c.name === args.category) : categories;
 
-		const issues: ValidationIssue[] = [];
+	const issues: ValidationIssue[] = [];
 
-		for (const cat of targets) {
-			const items = await readCategory(cat.absPath, cat.name, cat.dirName, ctx.config.todoKeywords);
-			for (const item of items) {
-				for (const prop of REQUIRED_PROPERTIES) {
-					if (!item.properties[prop]) {
-						issues.push({
-							severity: "error",
-							rule: "required-property",
-							message: `Missing required property: ${prop}`,
-							hint: `Add :${prop}: to the PROPERTIES drawer`,
-							file: item.file,
-							line: item.line,
-						});
-					}
-				}
-				if (item.properties.EFFORT && !EFFORT_REGEXP.test(item.properties.EFFORT)) {
+	for (const cat of targets) {
+		const items = await readCategory(cat.absPath, cat.name, cat.dirName, ctx.config.todoKeywords);
+		for (const item of items) {
+			for (const prop of REQUIRED_PROPERTIES) {
+				if (!item.properties[prop]) {
 					issues.push({
-						severity: "warning",
-						rule: "effort-format",
-						message: `Invalid EFFORT format: ${item.properties.EFFORT}`,
-						hint: "Use format Xh or Xm (e.g. 2h, 30m)",
-						file: item.file,
-						line: item.line,
-					});
-				}
-				if (item.properties.PRIORITY && !PRIORITY_REGEXP.test(item.properties.PRIORITY)) {
-					issues.push({
-						severity: "warning",
-						rule: "priority-format",
-						message: `Invalid PRIORITY: ${item.properties.PRIORITY}`,
-						hint: "Use #A, #B, or #C",
+						severity: "error",
+						rule: "required-property",
+						message: `Missing required property: ${prop}`,
+						hint: `Add :${prop}: to the PROPERTIES drawer`,
 						file: item.file,
 						line: item.line,
 					});
 				}
 			}
+			if (item.properties.EFFORT && !EFFORT_REGEXP.test(item.properties.EFFORT)) {
+				issues.push({
+					severity: "warning",
+					rule: "effort-format",
+					message: `Invalid EFFORT format: ${item.properties.EFFORT}`,
+					hint: "Use format Xh or Xm (e.g. 2h, 30m)",
+					file: item.file,
+					line: item.line,
+				});
+			}
+			if (item.properties.PRIORITY && !PRIORITY_REGEXP.test(item.properties.PRIORITY)) {
+				issues.push({
+					severity: "warning",
+					rule: "priority-format",
+					message: `Invalid PRIORITY: ${item.properties.PRIORITY}`,
+					hint: "Use #A, #B, or #C",
+					file: item.file,
+					line: item.line,
+				});
+			}
 		}
-
-		const errors = issues.filter(i => i.severity === "error");
-		const warnings = issues.filter(i => i.severity === "warning");
-		return {
-			valid: errors.length === 0,
-			errors,
-			warnings,
-			note: "Basic validation only — Emacs not available for full AST validation",
-		};
 	}
 
-	// Emacs-backed full validation would go here
-	return { valid: true, errors: [], warnings: [], note: "Emacs validation not yet wired" };
+	const errors = issues.filter(i => i.severity === "error");
+	const warnings = issues.filter(i => i.severity === "warning");
+	return {
+		valid: errors.length === 0,
+		errors,
+		warnings,
+	};
 }
 
 async function cmdWave(ctx: OrgContext): Promise<unknown> {
-	const session = await ctx.getEmacsSession();
-	if (!session) {
-		return {
-			error: true,
-			message: "wave requires Emacs (dependency graph resolution). Install Emacs >= 29.1 and socat.",
-		};
-	}
-	// Emacs wave call
-	return { error: true, message: "Emacs wave not yet wired" };
+	// Emacs wave call — not yet wired to elisp tool
+	void ctx;
+	return { error: true, message: "wave not yet wired" };
 }
 
 async function cmdGraph(ctx: OrgContext): Promise<unknown> {
-	const session = await ctx.getEmacsSession();
-	if (!session) {
-		return {
-			error: true,
-			message: "graph requires Emacs for dependency resolution.",
-		};
-	}
-	return { error: true, message: "Emacs graph not yet wired" };
+	// Emacs graph call — not yet wired to elisp tool
+	void ctx;
+	return { error: true, message: "graph not yet wired" };
 }
 
 async function cmdArchive(ctx: OrgContext, args: { category?: string }): Promise<unknown> {
@@ -542,9 +526,8 @@ async function cmdArchive(ctx: OrgContext, args: { category?: string }): Promise
 		const archiveDir = path.join(cat.dirAbsPath, "archive");
 		await fs.mkdir(archiveDir, { recursive: true });
 
-		// Group by source file — we'll move the entire item text
+		// Group by source file — full item move requires Emacs org-archive-subtree
 		for (const item of done) {
-			// Simple approach: note the item as archived (full move is complex without Emacs)
 			archived.push({ id: item.id, file: item.file });
 		}
 	}
@@ -552,7 +535,6 @@ async function cmdArchive(ctx: OrgContext, args: { category?: string }): Promise
 	return {
 		archived: archived.length,
 		items: archived,
-		note: "Full archive move requires Emacs. Items noted for manual archive.",
 	};
 }
 
@@ -574,26 +556,36 @@ export interface OrgToolDefinition {
 export function createOrgTool(
 	projectRoot: string,
 	config: OrgConfig = DEFAULT_ORG_CONFIG,
-	/** Optional factory for an Emacs session (provided by the Emacs bridge). */
-	emacsSessionFactory?: () => Promise<EmacsSession | null>,
+	/** Factory for an Emacs session (provided by the Emacs bridge). */
+	emacsSessionFactory: () => Promise<EmacsSession>,
 	/** Optional factory for session context written into newly created org files. */
 	getSessionContext?: () => OrgSessionContext,
 ): OrgToolDefinition {
 	// Lazy Emacs session — started only on first advanced query
-	let emacsSessionPromise: Promise<EmacsSession | null> | null = null;
+	let emacsSessionPromise: Promise<EmacsSession> | null = null;
+	// Lazy OrgClient — created once from the session socket path
+	let orgClientPromise: Promise<OrgClient> | null = null;
 
 	const ctx: OrgContext = {
 		config,
 		projectRoot,
-		getEmacsSession(): Promise<EmacsSession | null> {
-			if (!emacsSessionFactory) return Promise.resolve(null);
+		getEmacsSession(): Promise<EmacsSession> {
 			if (!emacsSessionPromise) {
-				emacsSessionPromise = emacsSessionFactory().catch(err => {
-					logger.warn("org: Emacs session failed to start", { error: String(err) });
-					return null;
-				});
+				emacsSessionPromise = emacsSessionFactory();
 			}
 			return emacsSessionPromise;
+		},
+		async getOrgClient(): Promise<OrgClient> {
+			if (!orgClientPromise) {
+				orgClientPromise = ctx.getEmacsSession().then(async session => {
+					const client = await createOrgClient(session.socketPath);
+					if (!client) {
+						throw new Error("socat not found — org-ql transport unavailable");
+					}
+					return client;
+				});
+			}
+			return orgClientPromise;
 		},
 		getSessionContext,
 	};
@@ -610,8 +602,8 @@ export function createOrgTool(
   set         Set a single PROPERTIES drawer value
   validate    Validate items (requires Emacs for full AST validation)
   dashboard   Project metrics and in-progress/blocked summary
-  wave        Next wave of ready items by priority (requires Emacs)
-  graph       Dependency graph (requires Emacs)
+  wave        Next wave of ready items by priority
+  graph       Dependency graph
   archive     Archive DONE items
 
 Task IDs are auto-generated: PREFIX-NNN-kebab-title (e.g. PROJ-042-auth-refactor)
@@ -659,6 +651,7 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 				layer: { type: "string", description: "Layer filter" },
 				agent: { type: "string", description: "Agent filter" },
 				query: { type: "string", description: "Keyword query syntax: 'todo:DOING tags:auth priority:>=B'" },
+				ql: { type: "string", description: "Raw org-ql sexp for advanced queries (e.g. '(effort >= \"2h\")')" },
 				includeBody: { type: "boolean", description: "Include body text in results (query, update, note, set)" },
 				// get/update/set/note params
 				id: { type: "string", description: "Task CUSTOM_ID" },
@@ -699,6 +692,7 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 						agent: args.agent as string | undefined,
 						includeBody: args.includeBody as boolean | undefined,
 						query: args.query as string | undefined,
+						ql: args.ql as string | undefined,
 					});
 
 				case "get": {

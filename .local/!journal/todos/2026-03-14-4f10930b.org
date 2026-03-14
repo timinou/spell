@@ -1,0 +1,23 @@
+#+TITLE: Session 1492729fdbc99a3e Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* Fix thinking blocks in QML
+
+** DONE ChatPanel.qml: add thinking field to model, set on message_update
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE MessageDelegate.qml: pass thinking to AssistantBubble
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE AssistantBubble.qml: render thinking block above main text
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

@@ -1,0 +1,137 @@
+#+TITLE: REMOVE_EMACS_FALLBACK_WIRE_ORGQL
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-remove-emacs-fallback-wire-orgql
+
+* Problem
+
+Two issues:
+
+1. The org tool treats Emacs as optional — every command that needs Emacs has a TS fallback or a null-guard. Emacs is always available, so this is dead code.
+
+2. The ~query~ command always uses the TS-side ~applyFilter~ path. The org-ql query engine exists (elisp tool registered, sexp builder implemented, ~requiresEmacs~ classifier ready) but is never called. The agent already uses keyword syntax (~todo:DOING tags:auth priority:>=B~) which ~parseKeywordQuery~ converts to ~OrgQlFilter~, and ~buildOrgQlSexp~ can convert that to org-ql sexps. The wiring is missing.
+
+* Scope
+
+| File | Change |
+|------|--------|
+| ~packages/org/src/tool.ts~ | Remove fallbacks; wire org-ql into ~cmdQuery~ |
+| ~packages/org/src/emacs/client.ts~ | Already has ~createOrgClient~ — no changes needed |
+| ~packages/coding-agent/src/tools/org.ts~ | ~makeEmacsFactory~ throws instead of returning null |
+| ~packages/org/test/tool-commands.test.ts~ | Provide stub emacs factory |
+| ~!architecture/org-native/query-language.org~ | Remove dual-path framing |
+
+* Part 1: Remove Emacs fallbacks
+
+** ITEM Make emacsSessionFactory required (~packages/org/src/tool.ts~)
+
+- ~createOrgTool~ parameter: ~emacsSessionFactory: () => Promise<EmacsSession>~ — required, non-optional, no null return
+- ~OrgContext.getEmacsSession~: return type ~Promise<EmacsSession>~ (drop ~| null~)
+- Remove ~if (!emacsSessionFactory) return Promise.resolve(null)~ guard
+- Remove ~.catch(() => null)~ from lazy init — let errors propagate
+
+** ITEM Remove fallback branches from all commands (~packages/org/src/tool.ts~)
+
+- ~cmdGet~ (lines 209-224): Remove dead Emacs try/catch wrapper and "TS-based fallback" comment. Keep TS reader as the implementation (the Emacs path was stubbed/empty).
+- ~cmdDashboard~ (lines 399-403): Remove dead ~if (session) { /* not yet wired */ }~ block
+- ~cmdValidate~ (lines 448-504): Remove ~if (!session)~ guard. TS validation IS the implementation. Remove "Basic validation only" note from response.
+- ~cmdWave~ (lines 507-516): Remove session null check. Keep "not yet wired" return.
+- ~cmdGraph~ (lines 519-527): Same as wave.
+- ~cmdArchive~ (line 555): Remove "Full archive move requires Emacs" note.
+- Tool description string (lines 611-614): Remove "(requires Emacs)" annotations.
+
+** ITEM Update caller and tests
+
+- ~packages/coding-agent/src/tools/org.ts~: ~makeEmacsFactory~ — throw on detection failure instead of returning null. Return type becomes ~() => Promise<EmacsSession>~.
+- ~packages/org/test/tool-commands.test.ts~: ~makeTool~ must pass a stub emacs factory (a function that rejects — none of the tested commands actually call ~getEmacsSession~).
+
+* Part 2: Wire org-ql into query path
+
+** ITEM Add OrgClient to OrgContext (~packages/org/src/tool.ts~)
+
+~OrgContext~ gains a lazy ~getOrgClient()~ method that creates an ~OrgClient~ from the session's socket path (via ~createOrgClient~). Created once, cached.
+
+#+begin_src typescript
+interface OrgContext {
+  config: OrgConfig;
+  projectRoot: string;
+  getEmacsSession(): Promise<EmacsSession>;
+  getOrgClient(): Promise<OrgClient>;
+  getSessionContext?(): OrgSessionContext;
+}
+#+end_src
+
+In ~createOrgTool~, wire it:
+#+begin_src typescript
+let orgClientPromise: Promise<OrgClient> | null = null;
+const ctx: OrgContext = {
+  // ...
+  async getOrgClient() {
+    if (!orgClientPromise) {
+      orgClientPromise = ctx.getEmacsSession().then(s =>
+        createOrgClient(s.socketPath)
+      );
+    }
+    return orgClientPromise;
+  },
+};
+#+end_src
+
+Note: ~createOrgClient~ currently returns ~OrgClient | null~ (null if socat missing). Since Emacs is always available, this should also be made non-nullable (socat is checked during detection).
+
+** ITEM Enhance cmdQuery to use org-ql for advanced queries (~packages/org/src/tool.ts~)
+
+When ~parseKeywordQuery~ produces a filter where ~requiresEmacs(filter)~ is true, route through org-ql instead of the TS ~applyFilter~ path.
+
+#+begin_src typescript
+async function cmdQuery(ctx: OrgContext, filter: OrgQueryFilter & { query?: string }) {
+  let qlFilter: OrgQlFilter | null = null;
+
+  if (filter.query) {
+    qlFilter = parseKeywordQuery(filter.query);
+    // Merge parsed keywords into the structural filter for TS-side fields
+    if (qlFilter.todo && !filter.state) filter = { ...filter, state: qlFilter.todo };
+  }
+
+  const categories = resolveCategories(ctx.config, ctx.projectRoot);
+  const targetCats = /* same category filtering as now */;
+
+  // If the keyword query requires org-ql, use Emacs path
+  if (qlFilter && requiresEmacs(qlFilter)) {
+    const client = await ctx.getOrgClient();
+    const files = targetCats.flatMap(cat => /* list .org files in cat.absPath */);
+    const sexp = buildOrgQlSexp(qlFilter);
+    const result = await client.callTool("org-ql-query", { files, query: sexp });
+    // Parse and return result
+    return { items: result, total: Array.isArray(result) ? result.length : 0 };
+  }
+
+  // Simple queries: TS path (current behavior, unchanged)
+  const allItems: OrgItem[] = [];
+  // ... readCategory + applyFilter as before
+}
+#+end_src
+
+The agent uses the same keyword syntax. Simple queries (~todo:DOING priority:>=B~) stay TS-side. Advanced queries (~clocked~, ~dateRange~, ~effort~, numeric property ops) transparently route to org-ql. No org-ql syntax exposed to the agent.
+
+** ITEM Add org-ql sexp passthrough parameter (optional, for power users)
+
+Add an optional ~ql~ parameter to the query schema — a raw org-ql sexp string. When provided, it bypasses keyword parsing and goes straight to the Emacs org-ql-query tool. This is for internal/advanced use only; the tool description doesn't advertise it prominently.
+
+This keeps the door open for internal subsystems (memory consolidation, planning) to issue precise org-ql queries without going through keyword syntax.
+
+* Part 3: Clean up architecture docs
+
+** ITEM Update query-language.org
+
+Remove the "dual-path" framing that assumes Emacs may not be available. The TS path is a fast path for simple queries, not a fallback. Reframe:
+- Simple queries: TS-side (fast, no IPC overhead)
+- Advanced queries: org-ql via Emacs (automatic, transparent)
+- Raw org-ql: optional ~ql~ parameter for power users / internal subsystems
+
+* Verification
+
+- ~bun check:ts~ passes
+- ~bun test packages/org/test/tool-commands.test.ts~ passes
+- Grep for ~"Emacs not available\|requires Emacs\|fallback"~ in ~packages/org/src/tool.ts~ returns nothing
+- ~cmdQuery~ with ~query: "todo:DOING"~ still works (TS path)
+- ~cmdQuery~ with ~query: "effort:>=2h"~ routes to org-ql (new behavior)

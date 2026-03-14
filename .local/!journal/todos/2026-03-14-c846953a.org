@@ -74,130 +74,130 @@
 
 * Phase 2: Memory System
 
-** DOING 2a: Org-writer memory serialization
+** DONE 2a: Org-writer memory serialization
 :PROPERTIES:
 :TASK_ID: task-12
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
-** ITEM 2b: Consolidation prompt rewrite
+** DONE 2b: Consolidation prompt rewrite
 :PROPERTIES:
 :TASK_ID: task-13
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 2c: Memory protocol org-awareness
+** DONE 2c: Memory protocol org-awareness
 :PROPERTIES:
 :TASK_ID: task-14
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 2d: Incremental consolidation
+** DONE 2d: Incremental consolidation
 :PROPERTIES:
 :TASK_ID: task-15
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 2e: Injection path
+** DONE 2e: Injection path
 :PROPERTIES:
 :TASK_ID: task-16
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Phase 3: Plan Unification + Query Builder
 
-** ITEM 3a: Remove markdown plan fallback
+** DONE 3a: Remove markdown plan fallback
 :PROPERTIES:
 :TASK_ID: task-17
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 3b: TS query builder
+** DONE 3b: TS query builder
 :PROPERTIES:
 :TASK_ID: task-18
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 3c: Wire session clocking
+** DONE 3c: Wire session clocking
 :PROPERTIES:
 :TASK_ID: task-19
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 3d: Plan dashboard effort-vs-actual
+** DONE 3d: Plan dashboard effort-vs-actual
 :PROPERTIES:
 :TASK_ID: task-20
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Phase 4: Skill Migration
 
-** ITEM 4a: Support SKILL.org discovery
+** DONE 4a: Support SKILL.org discovery
 :PROPERTIES:
 :TASK_ID: task-21
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 4b: Update skill-protocol.ts
+** DONE 4b: Update skill-protocol.ts
 :PROPERTIES:
 :TASK_ID: task-22
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 4c: Generate SKILL.org from consolidation
+** DONE 4c: Generate SKILL.org from consolidation
 :PROPERTIES:
 :TASK_ID: task-23
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Phase 5: Session Tracking
 
-** ITEM 5a: Session org item creation
+** DONE 5a: Session org item creation
 :PROPERTIES:
 :TASK_ID: task-24
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 5b: Auto-clocking
+** DONE 5b: Auto-clocking
 :PROPERTIES:
 :TASK_ID: task-25
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 5c: Session tagging and linking
+** DONE 5c: Session tagging and linking
 :PROPERTIES:
 :TASK_ID: task-26
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 5d: Session state transitions
+** DONE 5d: Session state transitions
 :PROPERTIES:
 :TASK_ID: task-27
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Phase 6: Unified Query Layer
 
-** ITEM 6a: Extend org tool query subcommand
+** DONE 6a: Extend org tool query subcommand
 :PROPERTIES:
 :TASK_ID: task-28
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 6b: Cross-entity queries
+** DONE 6b: Cross-entity queries
 :PROPERTIES:
 :TASK_ID: task-29
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 6c: Protocol delegation
+** DONE 6c: Protocol delegation
 :PROPERTIES:
 :TASK_ID: task-30
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM 6d: Cross-reference navigation
+** DONE 6d: Cross-reference navigation
 :PROPERTIES:
 :TASK_ID: task-31
-:STATUS: pending
+:STATUS: completed
 :END:

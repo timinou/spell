@@ -131,21 +131,17 @@ function makeEmacsFactory(
 	emacsPath: string | undefined,
 	projectRoot: string,
 	sessionId: string,
-): () => Promise<EmacsSession | null> {
+): () => Promise<EmacsSession> {
 	return async () => {
 		const detection = await detectEmacs(emacsPath);
 		if (!detection.found || !detection.meetsMinimum || !detection.socatFound) {
-			if (detection.errors.length > 0) {
-				logger.debug("org: Emacs not available", { errors: detection.errors });
-			}
-			return null;
+			const errors =
+				detection.errors.length > 0
+					? detection.errors.join("; ")
+					: "Emacs not found or does not meet minimum version";
+			throw new Error(`org: Emacs not available — ${errors}`);
 		}
-		try {
-			return await startEmacsSession(detection.path!, projectRoot, sessionId, ELISP_DIR);
-		} catch (err) {
-			logger.warn("org: Failed to start Emacs session", { error: String(err) });
-			return null;
-		}
+		return startEmacsSession(detection.path!, projectRoot, sessionId, ELISP_DIR);
 	};
 }
 
