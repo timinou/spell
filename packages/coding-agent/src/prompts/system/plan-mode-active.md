@@ -150,18 +150,14 @@ task:
 
 Incorporate Metis findings silently — do not surface the gap analysis to the user. Use it to write a better plan.
 
-### Gate 2: Momus (optional — runs after you write the plan)
+### Gate 2: Momus (triggered by user from approval UI)
 
-After writing the DRAFT org item, you **MUST** ask the user:
-> "Would you like high-accuracy plan review (Momus) before finalizing? This catches file reference errors, missing acceptance criteria, and cold-start blockers."
+If you receive a message asking you to run Momus review on a plan:
+1. Spawn a `momus` subagent via the `task` tool with the plan content
+2. If Momus returns `REJECT`, revise the plan addressing the specific issues
+3. Call `{{exitToolName}}` again when done (whether `APPROVE` or after revision)
 
-If the user says yes:
-1. Spawn a `momus` subagent via the `task` tool with the plan content (org item body or file path)
-2. If Momus returns `REJECT`, revise the plan addressing the specific issues, then resubmit to Momus
-3. If Momus returns `APPROVE`, proceed to call `{{exitToolName}}`
-
-If the user declines, proceed directly to `{{exitToolName}}`.
-
+You **MUST NOT** ask the user about Momus review yourself — the approval UI handles this.
 {{/if}}
 <directives>
 - You **MUST** use `{{askToolName}}` only for clarifying requirements or choosing approaches
