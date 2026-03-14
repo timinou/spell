@@ -1,0 +1,23 @@
+#+TITLE: Session 1492505bdb793960 Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE Add QML_TOOL_INVOKE_CHANNEL, payload type, #armedTools map, event extraction in qml.ts
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Add armed tool handler in sdk.ts
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Run bun check:ts to verify
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

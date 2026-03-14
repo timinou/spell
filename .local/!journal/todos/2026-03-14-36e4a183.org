@@ -1,0 +1,41 @@
+#+TITLE: Session 14925ccc4712c72b Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* QML Test Harness
+
+** DOING Add env option to QmlProcess and QmlBridge
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: in_progress
+:END:
+
+** ITEM Create QmlTestHarness class
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: pending
+:END:
+
+** ITEM Create ChatPanelTestHarness.qml + expose messagesModel alias
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: pending
+:END:
+
+** ITEM Write integration tests (qml-chat-panel.test.ts)
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: pending
+:END:
+
+** ITEM Update event mapper unit tests
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: pending
+:END:
+
+** ITEM Verify: bun check:ts + run tests
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: pending
+:END:

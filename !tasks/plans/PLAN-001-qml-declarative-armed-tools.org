@@ -1,0 +1,314 @@
+#+TITLE: QML_DECLARATIVE_ARMED_TOOLS
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-qml-declarative-armed-tools
+
+* Problem
+
+Armed tool bindings (implemented in ec095fb63) require the agent to pass
+~props._armedTools~ at launch time. For skill-shipped QML files, the skill author
+knows what tools the file needs but has no deterministic way to declare them ---
+it relies on the agent reading SKILL.md and remembering to pass the right props.
+
+* Approach: QML Root Property
+
+QML files declare armed tools as a root-level property:
+
+#+begin_src qml
+ApplicationWindow {
+    visible: true
+    property var spellArmedTools: ["write", "read"]
+    // ...
+}
+#+end_src
+
+The C++ bridge reads this property after ~engine->load()~ succeeds and includes it
+in the ~ready~ event. TS extracts it and populates ~#armedTools~ automatically.
+
+Why this approach:
+- Most QML-native: uses QML's own property system, discoverable by IDE
+- No file parsing, no comment conventions
+- Works for any QML file regardless of how it was created
+- Timing is clean: property exists before TS event loop starts
+
+** Timing analysis (no race condition)
+
+In ~loadWindow()~ (windowmanager.cpp), after ~engine->load(path)~ returns:
+1. Root objects are fully constructed (Component.onCompleted already fired)
+2. ~rootObjects().first()~ has all properties including ~spellArmedTools~
+3. C++ reads the property, includes in ~ready~ event
+4. TS receives ~ready~, ~launch()~ returns
+5. TS populates ~#armedTools~ from ready event
+6. ~drainEvents()~ returns buffered events
+7. ~#startEventLoop()~ begins --- armed tools already populated
+
+Edge case: if QML fires ~bridge.send({ _tool: \"write\", ... })~ in
+~Component.onCompleted~, those events land in the drain buffer (step 6) and
+are returned to the agent, not processed by the event loop. This is the same
+for both paths. Load-time tool invocations should use ~bridge.props~ instead.
+
+** Merge semantics
+
+Explicit ~props._armedTools~ overrides the file-declared property. If neither
+is present, no armed tools (safe default). Precedence:
+
+1. ~props._armedTools~ (agent explicit override) --- if present, use this
+2. ~spellArmedTools~ QML root property (file-declared) --- fallback
+3. Empty (no armed tools)
+
+** Security: denylist for file-declared armed tools
+
+When armed tools come from QML file declaration (not agent explicit), they
+pass through a denylist before being stored. The agent writes the QML file
+so the threat model is the same, but defense-in-depth prevents accidental
+or copy-paste escalation.
+
+Denylist (never armable from QML declaration alone):
+- ~bash~ --- arbitrary shell execution
+- ~python~ --- arbitrary code execution
+- ~task~ --- spawns subagents with full capabilities
+
+These can still be armed via explicit ~props._armedTools~ (agent-controlled).
+The denylist lives in ~qml.ts~ as a const.
+
+Safe-to-arm tools (typical use): ~write~, ~read~, ~find~, ~grep~,
+~generate_image~, ~web_search~, ~fetch~.
+
+** Remote mode
+
+Remote mode falls back to ~props._armedTools~ only. The Android app does
+not read QML root properties (would require Android-side changes). The TS
+merge logic handles this naturally: ~win.armedTools~ is undefined for remote
+windows, so the fallback to ~props._armedTools~ applies.
+
+** Reconnect path
+
+When TS reconnects to an existing daemon (e.g. after a crash/restart),
+~getWindowStates()~ provides a snapshot. Armed tools must survive this:
+
+- C++: Store ~armedTools~ in ~WindowEntry~ struct, include in ~getWindowStates()~
+- TS: ~reconnect()~ in qml-bridge.ts extracts ~armedTools~ from state snapshot
+- coding-agent: ~#armedTools~ map is repopulated from restored WindowInfo
+
+Without this, armed tools break for windows that survived a daemon reconnect.
+
+** QJSValue conversion (C++ detail)
+
+~property var~ in QML creates a ~QVariant~ holding a ~QJSValue~, NOT a
+~QVariantList~. Direct ~val.canConvert<QVariantList>()~ may fail. Must use
+~QJSValue~ API explicitly:
+
+#+begin_src cpp
+#include <QJSValue>
+
+QJSValue jsVal = root->property("spellArmedTools").value<QJSValue>();
+if (jsVal.isArray()) {
+    int len = jsVal.property("length").toInt();
+    QJsonArray arr;
+    for (int i = 0; i < len; ++i) {
+        QString s = jsVal.property(i).toString();
+        if (!s.isEmpty()) arr.append(s);
+    }
+    if (!arr.isEmpty()) ev["armedTools"] = arr;
+}
+#+end_src
+
+If the property doesn't exist, ~root->property()~ returns invalid QVariant,
+~value<QJSValue>()~ returns undefined QJSValue, ~isArray()~ returns false.
+Safe default: omit the field from the ready event.
+
+* Files to Modify
+
+** ITEM C++: Read spellArmedTools from root object in loadWindow
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Files:
+- ~packages/qml/bridge/windowmanager.cpp~ --- read property, include in ready event
+- ~packages/qml/bridge/windowmanager.h~ --- add ~QStringList armedTools~ to WindowEntry
+
+In ~loadWindow()~, after ~engine->load()~ succeeds and before emitting ~ready~:
+
+#+begin_src cpp
+#include <QJSValue>
+
+// After rootObjects() check passes:
+QStringList armedToolsList;
+QObject *root = engine->rootObjects().first();
+QJSValue jsVal = root->property("spellArmedTools").value<QJSValue>();
+if (jsVal.isArray()) {
+    int len = jsVal.property("length").toInt();
+    for (int i = 0; i < len; ++i) {
+        QString s = jsVal.property(i).toString();
+        if (!s.isEmpty()) armedToolsList.append(s);
+    }
+}
+
+m_windows[id].armedTools = armedToolsList;
+m_windows[id].state = "ready";
+
+QJsonObject ev;
+ev["type"] = "ready";
+ev["id"] = id;
+if (!armedToolsList.isEmpty()) {
+    QJsonArray arr;
+    for (const auto &t : armedToolsList) arr.append(t);
+    ev["armedTools"] = arr;
+}
+writeEvent(ev);
+#+end_src
+
+Update ~getWindowStates()~ to include armedTools:
+
+#+begin_src cpp
+QJsonObject obj;
+obj["id"] = it.key();
+obj["path"] = it->path;
+obj["state"] = it->state;
+if (!it->armedTools.isEmpty()) {
+    QJsonArray arr;
+    for (const auto &t : it->armedTools) arr.append(t);
+    obj["armedTools"] = arr;
+}
+arr.append(obj);
+#+end_src
+
+** ITEM TS protocol: Add armedTools to event types and WindowInfo
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+File: ~packages/qml/src/protocol.ts~
+
+#+begin_src typescript
+// Update BridgeEvent ready variant:
+| { type: "ready"; id: string; armedTools?: string[] }
+
+// Update state variant windows element:
+| { type: "state"; windows: Array<{ id: string; path: string; state: string; armedTools?: string[] }> }
+
+// Add armedTools to WindowInfo:
+export interface WindowInfo {
+    id: string;
+    path: string;
+    state: WindowState;
+    lastError?: string;
+    /** Armed tools declared by the QML root property (spellArmedTools). */
+    armedTools?: string[];
+    events: Array<{ name?: string; payload: Record<string, unknown> }>;
+}
+#+end_src
+
+** ITEM TS QmlBridge: Extract armedTools from ready + state events
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: ~packages/qml/src/qml-bridge.ts~
+
+In ~#handleEvent~, case ~"ready"~:
+
+#+begin_src typescript
+case "ready":
+    win.state = "ready";
+    if (Array.isArray(event.armedTools)) {
+        win.armedTools = event.armedTools;
+    }
+    break;
+#+end_src
+
+In ~reconnect()~ (around line 245), when rebuilding WindowInfo from state snapshot:
+
+#+begin_src typescript
+const info: WindowInfo = {
+    id: w.id,
+    path: w.path,
+    state: w.state as WindowState,
+    armedTools: Array.isArray(w.armedTools) ? w.armedTools : undefined,
+    events: [],
+};
+#+end_src
+
+** ITEM QmlTool: Merge logic with denylist
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+File: ~packages/coding-agent/src/tools/qml.ts~
+
+Add a constant denylist:
+
+#+begin_src typescript
+/** Tools that cannot be armed from QML file declarations (only from explicit agent props). */
+const QML_ARMED_DENYLIST = new Set(["bash", "python", "task"]);
+#+end_src
+
+In both local and remote launch paths, replace current ~props._armedTools~
+extraction with merged logic:
+
+#+begin_src typescript
+// Merge armed tools: explicit props override, then file-declared (with denylist), then empty.
+const propsArmed = params.props?.["_armedTools"];
+let armedList: string[];
+if (Array.isArray(propsArmed)) {
+    // Agent explicit: no denylist (agent is trusted).
+    armedList = propsArmed.filter((t): t is string => typeof t === "string");
+} else if (Array.isArray(win.armedTools)) {
+    // File-declared: filter through denylist.
+    armedList = win.armedTools.filter(t => !QML_ARMED_DENYLIST.has(t));
+} else {
+    armedList = [];
+}
+if (armedList.length > 0) {
+    this.#armedTools.set(id, armedList);
+}
+#+end_src
+
+This replaces the two duplicate blocks currently in local and remote launch paths.
+
+Also: in ~#startEventLoop~, when a window reconnects and WindowInfo has armedTools,
+repopulate ~#armedTools~ map. This handles the daemon reconnect case.
+
+** ITEM Update QML tool prompt documentation
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+File: ~packages/coding-agent/src/prompts/tools/qml.md~
+
+Add documentation of:
+- ~spellArmedTools~ QML root property for declarative armed tool binding
+- The ~_tool~ / ~_rid~ protocol for QML-side usage
+- Merge semantics (explicit props override file declaration)
+- Denylist: bash, python, task cannot be armed from QML declarations
+
+** ITEM Remote protocol: Add armedTools to panel_ready (stub)
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+File: ~packages/qml-remote/src/protocol.ts~
+
+Update ~ClientPanelMessage~ panel_ready variant:
+
+#+begin_src typescript
+| { type: "panel_ready"; id: string; armedTools?: string[] }
+#+end_src
+
+File: ~packages/qml-remote/src/remote-bridge.ts~
+
+In ~panel_ready~ handler, extract and store ~armedTools~ on the window info
+if present. The Android app doesn't send it yet (future work), but the TS
+side is ready for when it does.
+
+* Verification
+
+1. ~bun check:ts~ passes (TS)
+2. ~bun check:rs~ or cmake build passes (C++)
+3. Write a test QML file with ~property var spellArmedTools: ["write"]~
+4. Launch it locally without ~_armedTools~ in props
+5. Verify armed tools are populated from the file-declared property
+6. Launch with ~_armedTools: ["read"]~ --- verify props override file declaration
+7. Launch without the property --- verify empty armed tools (safe default)
+8. QML declares ~spellArmedTools: ["bash"]~ --- verify bash is filtered by denylist
+9. Reconnect test: launch window, simulate daemon reconnect, verify armed tools survive

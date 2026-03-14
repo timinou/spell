@@ -1,0 +1,457 @@
+#+TITLE: QML_TEST_HARNESS
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-qml-test-harness
+
+* Initial Message
+
+tested?
+
+* Problem
+
+=spell --qml= has no automated tests for the QML UI layer. The recent ChatPanel fixes (ghost bubble filtering, tool result display, user_message handling) have no verification beyond =bun check:ts=. The QML bridge already supports bidirectional messaging and screenshots, but there's no headless test infrastructure to leverage these capabilities from =bun:test=.
+
+* Architecture
+
+Two-layer test approach:
+
+1. *Pure TS unit tests* for =SessionEventMapper= (extend existing =qml-event-mapper.test.ts= with new filter behavior tests)
+2. *Integration tests* using the real C++ bridge binary (=spell-qml-bridge=) in offscreen mode, exercising the full JS→bridge→QML→bridge→JS event loop
+
+#+begin_example
+bun:test
+  └── QmlTestHarness (packages/qml/src/test-harness.ts)
+        ├── wraps QmlProcess in stdio mode (NOT daemon — avoids socket collisions)
+        ├── injects QT_QPA_PLATFORM=offscreen via env option
+        ├── provides: sendMessage(), query(), screenshot(), reset(), teardown()
+        └── communicates via bridge JSON protocol over stdin/stdout
+  └── ChatPanelTestHarness.qml (co-located in panels/ directory)
+        ├── ApplicationWindow root (required for grabWindow() screenshots)
+        ├── loads ChatPanel as child, wires bridge.messageReceived → handleMessage
+        ├── handles "query" messages for model introspection
+        └── handles "reset" messages to clear model between tests
+#+end_example
+
+* Key Design Decisions
+
+** stdio mode, not daemon mode
+
+Daemon mode uses a singleton Unix socket path (=$XDG_RUNTIME_DIR/spell-qml-bridge.sock=). Concurrent test files would collide. Stdio mode gives each test file its own isolated process with stdin/stdout pipes.
+
+** Test wrapper co-located in panels/ directory
+
+ChatPanel.qml imports =".." as SpellUI= — relative import. The test wrapper must be in the same directory (or a subdirectory) for Qt's QML import resolver to find SpellUI. Place =ChatPanelTestHarness.qml= in =packages/coding-agent/src/modes/qml/panels/=.
+
+** ApplicationWindow root for screenshots
+
+=windowmanager.cpp= line 223: =screenshotWindow= does =qobject_cast<QQuickWindow*>(rootObjects().first())=. A plain Item root fails. The test wrapper must use =ApplicationWindow= (or =Window=).
+
+** One bridge per test file, reset between tests
+
+Spawning a Qt process takes ~500ms. Per-file (=beforeAll/afterAll=) amortizes the cost. Between tests, send a "reset" message to clear the ListModel. The =QmlTestHarness.reset()= sends ={type:'reset'}=, wrapper calls =messagesModel.clear()= and resets properties.
+
+** Graceful skip when binary is absent
+
+Not all machines have Qt6 dev headers. Tests check =isBridgeAvailable()= in =beforeAll= and skip the suite with a warning if the binary isn't built. This prevents CI failures on machines without Qt.
+
+** Structural assertions over screenshot assertions for CI
+
+Offscreen rendering uses Qt's software rasterizer — font metrics differ across distros. Use model introspection (message count, text content, role, isStreaming) for correctness assertions. Screenshots are a development aid, not CI gates. If used, set pixelmatch threshold ≥5%.
+
+* Approach
+
+** ITEM Add env option to QmlProcess spawn calls
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/qml/src/qml-process.ts=
+
+Add an =env= option to the =QmlProcess= constructor that gets spread into both =Bun.spawn= calls (==#spawnDaemon()= line 84 and =spawnStdio()= line 119).
+
+#+begin_src typescript
+export interface QmlProcessOptions {
+    /** Extra environment variables for the bridge process. Merged with process.env. */
+    env?: Record<string, string>;
+}
+
+export class QmlProcess {
+    #env: Record<string, string> | undefined;
+
+    constructor(options?: QmlProcessOptions) {
+        this.#env = options?.env;
+    }
+
+    // In both spawn calls:
+    Bun.spawn([binary, "--daemon"], {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+        env: this.#env ? { ...process.env, ...this.#env } : undefined,
+    });
+#+end_src
+
+The =QmlBridge= constructor also needs to accept and forward this option:
+
+File: =packages/qml/src/qml-bridge.ts=
+
+#+begin_src typescript
+export interface QmlBridgeOptions {
+    /** Extra environment variables for the bridge process. */
+    env?: Record<string, string>;
+}
+
+export class QmlBridge {
+    constructor(options?: QmlBridgeOptions) {
+        this.#process = new QmlProcess(options);
+        // ...
+    }
+}
+#+end_src
+
+This changes the =readonly #process= initialization — move it from field initializer to constructor body.
+
+** ITEM Create QmlTestHarness class
+:PROPERTIES:
+:EFFORT: 1h30m
+:END:
+
+File: =packages/qml/src/test-harness.ts=
+
+High-level test helper that wraps =QmlProcess= in stdio mode with offscreen rendering.
+
+API:
+
+#+begin_src typescript
+export interface QmlTestHarnessOptions {
+    /** Additional env vars beyond QT_QPA_PLATFORM=offscreen */
+    env?: Record<string, string>;
+    width?: number;
+    height?: number;
+}
+
+export class QmlTestHarness {
+    /** Spawn bridge in stdio mode, load the given QML file. */
+    async setup(qmlPath: string, props?: Record<string, unknown>): Promise<void>;
+
+    /** Send a message to the QML window. */
+    async sendMessage(payload: Record<string, unknown>): Promise<void>;
+
+    /**
+     * Query QML state via introspection protocol.
+     * Sends {type:'query', query:queryName}, waits for
+     * {type:'query_response', query:queryName, result:...} event.
+     * The test wrapper QML must handle "query" messages.
+     */
+    async query<T = unknown>(queryName: string): Promise<T>;
+
+    /** Capture screenshot, return the file path. */
+    async screenshot(savePath?: string): Promise<string>;
+
+    /** Reset QML state between tests. Sends {type:'reset'}. */
+    async reset(): Promise<void>;
+
+    /** Kill bridge process. */
+    async teardown(): Promise<void>;
+}
+#+end_src
+
+Implementation details:
+- Uses =QmlProcess.spawnStdio()= (not =ensure()= which tries daemon first)
+- Injects =QT_QPA_PLATFORM=offscreen= into env
+- Sends a =load= command after spawn (same as =QmlBridge.launch()=)
+- =query()= sends message, then waits for matching event using =QmlProcess.waitFor()= with a 5s timeout
+- =screenshot()= sends screenshot command, waits for screenshot event, returns path
+- Window ID is fixed to ="test"= for simplicity
+
+Also export =isBridgeAvailable= from the package so test files can check.
+
+** ITEM Create ChatPanelTestHarness.qml
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+File: =packages/coding-agent/src/modes/qml/panels/ChatPanelTestHarness.qml=
+
+Must be co-located with ChatPanel.qml for SpellUI import resolution.
+
+#+begin_src qml
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import ".." as SpellUI
+
+ApplicationWindow {
+    visible: true
+    width: windowWidth || 800
+    height: windowHeight || 600
+    title: windowTitle || "Test"
+    color: SpellUI.SpellTheme.background
+
+    ChatPanel {
+        id: chatPanel
+        anchors.fill: parent
+    }
+
+    Connections {
+        target: bridge
+        function onMessageReceived(payload) {
+            if (payload.type === "query") {
+                handleQuery(payload)
+            } else if (payload.type === "reset") {
+                handleReset()
+            } else {
+                chatPanel.handleMessage(payload)
+            }
+        }
+    }
+
+    function handleQuery(payload) {
+        var queryName = payload.query
+        var result = null
+
+        if (queryName === "messages") {
+            // Serialize the full ListModel as an array
+            var msgs = []
+            for (var i = 0; i < chatPanel.messagesModel.count; i++) {
+                msgs.push(chatPanel.messagesModel.get(i))
+            }
+            result = msgs
+        } else if (queryName === "messageCount") {
+            result = chatPanel.messagesModel.count
+        } else if (queryName === "isStreaming") {
+            result = chatPanel.isStreaming
+        } else if (queryName === "lastMessage") {
+            var count = chatPanel.messagesModel.count
+            result = count > 0 ? chatPanel.messagesModel.get(count - 1) : null
+        }
+
+        bridge.send({
+            type: "query_response",
+            query: queryName,
+            result: result
+        })
+    }
+
+    function handleReset() {
+        chatPanel.messagesModel.clear()
+        chatPanel.isStreaming = false
+        chatPanel.tokenCount = 0
+        chatPanel.modelName = ""
+        bridge.send({ type: "reset_done" })
+    }
+}
+#+end_src
+
+*Note:* =messagesModel= is currently declared inside ChatPanel without a property alias. The test wrapper needs access. Options:
+- Add =property alias messagesModel: messagesModel= to ChatPanel.qml (clean)
+- Or reference =chatPanel.children[0]...= (fragile — avoid)
+
+Choose option 1: add a =readonly property alias= to ChatPanel.qml's root Item. This is a non-breaking addition — no existing consumer uses it.
+
+** ITEM Update ChatPanel.qml: expose messagesModel alias
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: =packages/coding-agent/src/modes/qml/panels/ChatPanel.qml=
+
+Add after line 11 (=property string modelName=):
+
+#+begin_src qml
+    // Exposed for test introspection — not used by production code.
+    readonly property alias messagesModel: messagesModel
+#+end_src
+
+** ITEM Write ChatPanel integration tests
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+File: =packages/coding-agent/test/modes/qml-chat-panel.test.ts=
+
+Contracts to verify:
+
+*** Ghost bubble filtering
+
+Send =message_start= with role "user" → query messageCount → expect 0 (mapper blocks it, but this test sends directly to QML, so we test the ChatPanel handler). Actually, the mapper test covers the filtering. The integration test should verify the end-to-end: if a =message_start= arrives with role "user" (bypassing mapper), ChatPanel appends it with role "user" not "assistant" (using =msg.role || "assistant"=). Verify via model query that the role field is "user".
+
+*** Assistant message streaming lifecycle
+
+1. Send =message_start {id:"msg-1", role:"assistant"}=
+2. Query: messageCount === 1, last message role === "assistant", isStreaming === true, text === ""
+3. Send =message_update {id:"msg-1", text:"Hello"}=
+4. Query: last message text === "Hello"
+5. Send =message_update {id:"msg-1", text:" world"}=
+6. Query: last message text === "Hello world"
+7. Send =message_end {id:"msg-1"}=
+8. Query: last message isStreaming === false, chatPanel.isStreaming === false
+
+*** Tool execution lifecycle
+
+1. Send =tool_start {id:"t-1", name:"bash", details:"Running build"}=
+2. Query: messageCount === 1, last message role === "tool", name === "bash", text === "Running build", isStreaming === true
+3. Send =tool_end {id:"t-1", name:"bash", isError:false, details:"Build succeeded"}=
+4. Query: last message isStreaming === false, text === "Build succeeded"
+
+*** user_message handling
+
+1. Send ={type:"user_message", text:"hello world"}=
+2. Query: messageCount === 1, last message role === "user", text === "hello world"
+
+*** agent_busy state
+
+1. Send =agent_busy {busy:true}= → query isStreaming === true
+2. Send =agent_busy {busy:false}= → query isStreaming === false
+
+*** Screenshot smoke test (optional, platform-dependent)
+
+1. Send a sequence of messages (user, assistant, tool)
+2. Take screenshot → verify file exists and is a valid PNG (check magic bytes)
+3. Do NOT do pixel comparison in CI — just verify the screenshot mechanism works
+
+Test structure:
+
+#+begin_src typescript
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import { isBridgeAvailable, QmlTestHarness } from "@oh-my-pi/pi-qml/test-harness";
+
+const HARNESS_QML = path.resolve(
+    import.meta.dir,
+    "../../src/modes/qml/panels/ChatPanelTestHarness.qml",
+);
+
+describe.skipIf(!isBridgeAvailable())("ChatPanel QML integration", () => {
+    const harness = new QmlTestHarness();
+
+    beforeAll(async () => {
+        await harness.setup(HARNESS_QML);
+    });
+
+    afterAll(async () => {
+        await harness.teardown();
+    });
+
+    beforeEach(async () => {
+        await harness.reset();
+    });
+
+    it("streams assistant message text", async () => {
+        await harness.sendMessage({ type: "message_start", id: "msg-1", role: "assistant" });
+        expect(await harness.query("messageCount")).toBe(1);
+
+        await harness.sendMessage({ type: "message_update", id: "msg-1", text: "Hello" });
+        const msg = await harness.query<{text: string}>("lastMessage");
+        expect(msg.text).toBe("Hello");
+
+        await harness.sendMessage({ type: "message_end", id: "msg-1" });
+        expect(await harness.query("isStreaming")).toBe(false);
+    });
+
+    // ... more tests
+});
+#+end_src
+
+** ITEM Update event mapper unit tests for new behavior
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/test/modes/qml-event-mapper.test.ts=
+
+Add tests for:
+
+1. *Non-assistant message_start returns null:*
+   #+begin_src typescript
+   it("returns null for message_start with role 'user'", () => {
+       const result = mapper.map(ev({ type: "message_start", message: { role: "user", content: [] } }));
+       expect(result).toBeNull();
+   });
+
+   it("returns null for message_start with role 'toolResult'", () => {
+       const result = mapper.map(ev({ type: "message_start", message: { role: "toolResult", content: [] } }));
+       expect(result).toBeNull();
+   });
+   #+end_src
+
+2. *Non-assistant message_update and message_end suppressed:*
+   #+begin_src typescript
+   it("suppresses message_update when current message is not assistant", () => {
+       mapper.map(ev({ type: "message_start", message: { role: "user", content: [] } }));
+       const result = mapper.map(ev({
+           type: "message_update",
+           message: { role: "user", content: [{ type: "text", text: "hello" }] }
+       }));
+       expect(result).toBeNull();
+   });
+   #+end_src
+
+3. *Delta state not corrupted by non-assistant messages:*
+   #+begin_src typescript
+   it("non-assistant message does not corrupt delta tracking for next assistant message", () => {
+       // Start assistant message, accumulate some text
+       mapper.map(ev({ type: "message_start", message: assistantMsg() }));
+       mapper.map(ev({ type: "message_update", message: assistantMsg([textBlock("hello")]) }));
+       mapper.map(ev({ type: "message_end", message: assistantMsg() }));
+
+       // Non-assistant message in between
+       mapper.map(ev({ type: "message_start", message: { role: "user", content: [] } }));
+       mapper.map(ev({ type: "message_end", message: { role: "user", content: [] } }));
+
+       // New assistant message — delta should start fresh
+       mapper.map(ev({ type: "message_start", message: assistantMsg() }));
+       const result = mapper.map(ev({ type: "message_update", message: assistantMsg([textBlock("hi")]) }));
+       expect((result as Record<string, unknown>).text).toBe("hi");
+   });
+   #+end_src
+
+4. *tool_execution_end includes details field:*
+   #+begin_src typescript
+   it("tool_execution_end extracts text content into details field", () => {
+       const result = mapper.map(ev({
+           type: "tool_execution_end",
+           toolCallId: "call-1",
+           toolName: "read",
+           isError: false,
+           result: { content: [{ type: "text", text: "file contents here" }] },
+       }));
+       expect(result).toMatchObject({
+           type: "tool_end",
+           details: "file contents here",
+       });
+   });
+
+   it("tool_execution_end handles missing result gracefully", () => {
+       const result = mapper.map(ev({
+           type: "tool_execution_end",
+           toolCallId: "call-1",
+           toolName: "bash",
+           isError: true,
+       }));
+       expect(result).toMatchObject({
+           type: "tool_end",
+           details: "",
+       });
+   });
+   #+end_src
+
+5. *Update existing tool_execution_end test* that asserts exact =toEqual= — it now has a =details= field.
+
+* Key Files
+
+| File | Action | Description |
+|---|---|---|
+| =packages/qml/src/qml-process.ts= | Modify | Add env option to constructor, spread into Bun.spawn calls |
+| =packages/qml/src/qml-bridge.ts= | Modify | Accept and forward env option |
+| =packages/qml/src/test-harness.ts= | Create | QmlTestHarness class |
+| =packages/qml/src/index.ts= | Modify | Re-export test-harness |
+| =packages/coding-agent/src/modes/qml/panels/ChatPanel.qml= | Modify | Add messagesModel alias |
+| =packages/coding-agent/src/modes/qml/panels/ChatPanelTestHarness.qml= | Create | Test wrapper QML |
+| =packages/coding-agent/test/modes/qml-chat-panel.test.ts= | Create | Integration tests |
+| =packages/coding-agent/test/modes/qml-event-mapper.test.ts= | Modify | Add filter + details tests |
+
+* Verification
+
+1. =bun check:ts= — no type errors
+2. =bun test packages/coding-agent/test/modes/qml-event-mapper.test.ts= — all mapper tests pass (including new filter tests)
+3. =bun test packages/coding-agent/test/modes/qml-chat-panel.test.ts= — integration tests pass (or skip gracefully if binary absent)
+4. Manual: =QT_QPA_PLATFORM=offscreen= verify the harness can take a screenshot that produces a valid PNG

@@ -1,0 +1,235 @@
+#+TITLE: Org-Native Spell Vision and Migration Architecture
+#+STATE: ITEM
+#+SESSION_ID: 149252f65704b815
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-14T11-23-45-884Z_149252f65704b815.jsonl]]
+#+CUSTOM_ID: DRAFT-003-org-native-spell-vision-and-migration-ar
+#+EFFORT: 5d
+#+PRIORITY: #B
+#+LAYER: backend
+
+* Initial Message
+
+https://github.com/rasendubi/uniorg
+
+
+
+Bro please, think deeply about the org-mode tool and the rest of Spell's management of files that is assumed to be markdown-centric. Can you tell me what making Spell more natively manage Org-mode would enable? Go wild, go free.
+
+* The Insight
+
+Spell already has two parallel document systems running side by side. The org subsystem (packages/org/) is surprisingly mature — 12 subcommands, Emacs daemon bridge with clocking/agenda/dependency graphs, plan-mode integration, journal serialization. But it's walled off. Every other system — memory, skills, artifacts, plans, protocol handlers — speaks markdown exclusively. The org tool creates structured data that immediately gets labeled =text/markdown= and rendered through =marked.lexer()=.
+
+The result: Spell's knowledge management is a flat bag of prose. Memories have no queryable metadata. Plans can't track actual effort. Skills can't be filtered by domain. Sessions leave no structured trace. The org tool is an island of structure in an ocean of unstructured text.
+
+Making Spell org-native isn't about file format preference. It's about giving the agent structured, queryable state that survives across sessions.
+
+* What Org Enables That Markdown Cannot
+
+** Queryable Memory with Confidence Decay
+
+Current memory: free-form markdown blobs. No structure, no metadata, no way to ask "what do I know about auth with high confidence?" Consolidation rewrites the entire corpus each time.
+
+Org-native memory: each memory is a heading with a PROPERTIES drawer.
+
+#+begin_example
+,* JWT token validation
+:PROPERTIES:
+:CONFIDENCE: 0.9
+:LAST_VALIDATED: [2026-03-10]
+:SCOPE: backend/auth
+:SOURCE_SESSION: abc123
+:END:
+Use RS256 not HS256. Validation middleware at src/auth/validate.ts.
+#+end_example
+
+This enables:
+- *Property-based filtering at read time*: inject only memories with CONFIDENCE > 0.7 relevant to current scope
+- *Incremental consolidation*: append new memories, archive stale ones, adjust scores — no full rewrite
+- *Confidence decay*: memories unvalidated for 30 days get lower injection priority. Consolidation re-validates stale memories against actual codebase
+- *Source tracing*: every memory links to the session that produced it
+
+** Automatic Effort Tracking on Plans
+
+The Emacs bridge already has =org-clock-in= / =org-clock-out= wired. If sessions clock in on start and out on end, every plan accumulates a LOGBOOK:
+
+#+begin_example
+:LOGBOOK:
+CLOCK: [2026-03-12 Wed 14:30]--[2026-03-12 Wed 16:45] =>  2:15
+CLOCK: [2026-03-13 Thu 09:00]--[2026-03-13 Thu 11:30] =>  2:30
+:END:
+#+end_example
+
+"Estimated 6h, actual 9h across 4 sessions" — tracked automatically. Plan dashboard shows effort-vs-actual. Sub-tasks inherit clocking. No manual time tracking needed.
+
+** Session-as-Org-Item
+
+Every coding session becomes a queryable org item. Sessions tagged by domain, linked to plans, accumulating clock entries. "All sessions touching auth in the last week" becomes an org-query, not a grep through markdown blobs. Session handoff is a section in the session's org tree, not a separate markdown file.
+
+** Cross-Session Knowledge Graphs
+
+Emacs bridge has =org-dependency-graph.el=. If plans, sessions, and memories are all org items with cross-links via CUSTOM_ID:
+
+: Plan spawned sessions → sessions produced memories → memories informed next plan
+
+This is the knowledge graph the memory system approximates with prose but cannot query. With org links it's navigable structure.
+
+** Emacs as First-Class Spell UI
+
+If all Spell state lives in org files, Emacs users interact with state directly: view plans in org-agenda, modify tasks, add notes. Changes immediately visible to Spell. Spell becomes a "headless org-mode agent" that Emacs users supervise natively — without the TUI.
+
+** Unified Query Across All Spell State
+
+Plans, memories, skills, sessions, tasks — all org items queryable through the same =org query= tool. Instead of separate =memory://=, =skill://=, =local://= protocols with different capabilities, a single org query with property/tag/state filters covers everything.
+
+** Tags and Agenda Views
+
+Org tags (=:backend:auth:urgent:=) enable cross-cutting views. Agenda shows "all items tagged :perf: across categories" without grep. SCHEDULED/DEADLINE timestamps surface "tasks due this week" at session startup.
+
+* What NOT to Change
+
+- *System prompt templates (.md)*: These are for LLM consumption. Markdown is the right format — LLMs are trained overwhelmingly on markdown. Prompts stay .md.
+- *Subagent artifact output*: LLMs produce markdown. Agent output stays .md.
+- *TUI core rendering*: Keep =marked.lexer()=. Add an org-to-markdown upstream converter rather than building a parallel org renderer.
+
+The principle: *org for structured data with queryable metadata; markdown for prose consumed by LLMs*. The boundary question is: "does this content have metadata I want to query?" Yes → org. Just text → markdown.
+
+* Current State of Org in Spell
+
+What exists today:
+- =packages/org/= — pure-TS parser (heading + PROPERTIES CRUD), Emacs daemon bridge (13 elisp tools), categories, ID generation
+- Plan mode branches on =orgEnabled= — creates org items with EFFORT/PRIORITY/LAYER
+- Journal serializes todo phases to =.org= files
+- Emacs bridge has clock-in/out, agenda, dependency graph, validation
+- =org://= protocol handler (returns org content labeled as =text/markdown= — a type lie)
+
+What's broken or incomplete:
+- =contentType= union type excludes org (=text/markdown | application/json | text/plain= only)
+- =org://= returns org body as =text/markdown= — consumers parse it wrong
+- TS parser handles headings and PROPERTIES only — no timestamps, links, tables, emphasis
+- Plan mode still enforces =.md= extension via regex
+- Memory, skills, artifacts all hardcoded to markdown
+
+* Risks
+
+** LLM Output Quality for Org Syntax
+LLMs produce worse org than markdown. Every org-producing prompt needs explicit format instructions and examples. This is ongoing cost.
+
+Mitigation: LLM-facing content stays markdown. Only agent-internal structured state is org. The LLM never needs to produce org syntax directly — the org tool handles serialization.
+
+** Ecosystem Friction
+GitHub, CI, docs generators expect markdown. Org artifacts are opaque externally.
+
+Mitigation: Offer org-to-md export at ecosystem boundaries. Canonical format is org; generate .md where external tools need it.
+
+** Parser Fidelity
+Current TS parser handles headings and PROPERTIES only. Full org needs timestamps, links, tables, emphasis, lists.
+
+Mitigation: Adopt [[https://github.com/rasendubi/uniorg][uniorg]] for the TS parsing path. It's a full org-element.el-equivalent parser in TypeScript, unified-ecosystem compatible, producing unist ASTs bridgeable to rehype. Reserve Emacs bridge for stateful features (clocking, agenda, babel). uniorg Bun compatibility and maintenance status need verification.
+
+* Migration Phases
+
+** ITEM Phase 1: Honest Types (< 1h)
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+Fix the type system to stop lying:
+- Add =text/x-org= to =InternalResource.contentType= union (=packages/coding-agent/src/internal-urls/types.ts=)
+- Fix =org-protocol.ts= to return =text/x-org= instead of =text/markdown=
+- Add org-to-markdown passthrough in TUI rendering dispatch (convert before =marked.lexer()=)
+- Zero behavioral change. Infrastructure for everything else.
+
+** ITEM Phase 2: Memory System (1-2d)
+:PROPERTIES:
+:EFFORT: 2d
+:END:
+
+Highest ROI. Memory benefits most from structured properties.
+- Replace =MEMORY.md= with =MEMORY.org= using org headings + PROPERTIES drawers
+- Update consolidation prompt to produce structured memory entries (title + properties + body)
+- Serialize via =org-writer.ts= (already exists), not LLM-generated org syntax
+- Make =memory://= handler org-aware with property-based query support
+- Implement incremental consolidation: append new, archive stale, adjust confidence scores — no full corpus rewrite
+- Add confidence decay: age-based score reduction on unvalidated memories
+
+Key files:
+- =packages/coding-agent/src/memories/index.ts=
+- =packages/coding-agent/src/internal-urls/memory-protocol.ts=
+- =packages/org/src/org-reader.ts= (extend for property queries)
+- =packages/org/src/org-writer.ts= (already handles serialization)
+
+** ITEM Phase 3: Plan Unification (4h)
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+Complete the partially-done org plan integration:
+- Remove markdown fallback path entirely from plan mode
+- Delete =normalizePlanTitle()= .md enforcement (=exit-plan-mode.ts:34-36=)
+- Wire session clocking into lifecycle: clock-in on session start, clock-out on session end/suspend
+- Plan dashboard shows effort-vs-actual via LOGBOOK entries
+
+Key files:
+- =packages/coding-agent/src/tools/exit-plan-mode.ts=
+- =packages/coding-agent/src/plan-mode/state.ts=
+- =packages/coding-agent/src/modes/interactive-mode.ts=
+- =packages/coding-agent/src/plan-mode/org-plan.ts=
+
+** ITEM Phase 4: Skill Migration (1-2d)
+:PROPERTIES:
+:EFFORT: 2d
+:END:
+
+- Support =SKILL.org= alongside =SKILL.md= in skill discovery
+- Parse org frontmatter (=#+PROPERTY:= lines) as alternative to YAML frontmatter
+- Migrate generated skills from consolidation to org format
+- Eliminate YAML parser dependency for skills
+
+Key files:
+- =packages/coding-agent/src/internal-urls/skill-protocol.ts=
+- =packages/coding-agent/src/memories/index.ts= (skill generation)
+- =packages/coding-agent/src/config/prompt-templates.ts= (template loading)
+
+** ITEM Phase 5: Session Tracking (1-2d)
+:PROPERTIES:
+:EFFORT: 2d
+:END:
+
+- Create session org items on session start (with PROPERTIES: SESSION_ID, START_TIME, PROJECT, BRANCH)
+- Clock in/out automatically via Emacs bridge
+- Link sessions to plans via org cross-references
+- Tag sessions by domain/scope
+- Session handoff becomes a section in the session's org subtree
+
+** ITEM Phase 6: Unified Query Layer (3d)
+:PROPERTIES:
+:EFFORT: 3d
+:END:
+
+- Extend org query to cover memories, skills, sessions — not just tasks
+- Add property filter syntax to org tool (e.g., =CONFIDENCE>0.7 SCOPE=backend/auth=)
+- Consider whether =memory://=, =skill://= protocols should delegate to org query internally
+- Cross-reference navigation: follow links between plans → sessions → memories
+
+* Verification
+
+Each phase has concrete observables:
+- Phase 1: =org://= items render correctly in TUI; no =text/markdown= type for org content
+- Phase 2: =memory://root= returns structured org with queryable properties; consolidation is incremental
+- Phase 3: Plan creation never produces .md files; session clock entries appear in plan LOGBOOK
+- Phase 4: Skills discoverable as .org files; no YAML parsing for org-format skills
+- Phase 5: =org query --category sessions --tag auth= returns session history
+- Phase 6: Single query spanning plans, memories, skills returns cross-linked results
+
+* uniorg Integration Notes
+
+The [[https://github.com/rasendubi/uniorg][uniorg]] library provides:
+- =uniorg-parse=: Full org parser → unist-compatible AST (orgast)
+- =uniorg-stringify=: AST → org text roundtrip
+- =uniorg-rehype=: Bridge to rehype ecosystem (org AST → HTML AST)
+- =uniorg-extract-keywords=: Hoist #+TITLE, #+DATE etc. into vfile.data
+- =orgast-util-to-string=: Plain text extraction from any org node
+
+This would replace/augment the current line-by-line parser in =org-reader.ts= for operations that need full org understanding (rendering, link resolution, table computation). The existing parser remains sufficient for CRUD operations on headings + PROPERTIES.
+
+The rehype bridge is particularly valuable: it means the TUI's markdown rendering pipeline (=marked= → HTML) can be paralleled by an org rendering pipeline (=uniorg-parse= → =uniorg-rehype= → =rehype-stringify=) without building a custom org renderer.
