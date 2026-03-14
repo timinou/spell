@@ -1619,6 +1619,13 @@ export class AgentSession {
 	}
 
 	/**
+	 * Register a tool in the registry, making it available for activation.
+	 */
+	registerTool(name: string, tool: AgentTool): void {
+		this.#toolRegistry.set(name, tool);
+	}
+
+	/**
 	 * Get all configured tool names (built-in via --tools or default, plus custom tools).
 	 */
 	getAllToolNames(): string[] {
@@ -1639,7 +1646,16 @@ export class AgentSession {
 			if (tool) {
 				tools.push(tool);
 				validToolNames.push(name);
+			} else {
+				logger.warn("setActiveToolsByName: tool not in registry", { name });
 			}
+		}
+		if (tools.length === 0 && toolNames.length > 0) {
+			logger.error("setActiveToolsByName: all requested tools missing from registry, keeping current set", {
+				requested: toolNames,
+				registrySize: this.#toolRegistry.size,
+			});
+			return;
 		}
 		this.agent.setTools(tools);
 

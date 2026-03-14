@@ -193,7 +193,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	cancel_job: CancelJobTool.createIf,
 	await: AwaitTool.createIf,
 	todo_write: s => new TodoWriteTool(s),
-	org: s => (s.settings.get("org.enabled") ? new OrgTool(s) : null),
+	org: s => new OrgTool(s),
 	emacs_code: s => new EmacsTool(s),
 	fetch: s => new FetchTool(s),
 	web_search: s => new SearchTool(s),
@@ -327,6 +327,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		// Plan mode mandates org and todo_write in its context prompt — force them on
 		// regardless of settings toggles so the instructions are satisfiable.
 		if (name === "org" && inPlanMode) return true;
+		if (name === "org") return !!session.settings.get("org.enabled");
 		if (name === "todo_write" && inPlanMode) return !includeSubmitResult;
 		if (name === "lsp") return enableLsp;
 		if (name === "bash") return allowBash;
