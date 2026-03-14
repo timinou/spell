@@ -8,6 +8,8 @@ import { type Static, Type } from "@sinclair/typebox";
 import qmlDescription from "../prompts/tools/qml.md" with { type: "text" };
 import type { ToolSession } from ".";
 import type { OutputMeta } from "./output-meta";
+import { classifyEvent, deduplicateEvents } from "./qml-event-utils";
+import { formatLintOutput, lintQmlFile } from "./qml-lint";
 import { ensureSpellConnection } from "./spell/connect";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -50,6 +52,8 @@ export interface QmlToolDetails {
 	windows?: Array<{ id: string; state: string; path: string; eventCount: number }>;
 	events?: Array<{ name?: string; payload: Record<string, unknown> }>;
 	error?: string;
+	lintWarnings?: number;
+	lintErrors?: number;
 	meta?: OutputMeta;
 }
 
@@ -111,6 +115,8 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 	#eventLoops = new Map<string, AbortController>();
 	/** Per-window list of tools allowed to be arm-invoked without an agent turn. */
 	#armedTools = new Map<string, string[]>();
+	/** Per-window debounce accumulator for canvas event batching. */
+	#pendingCanvasEvents = new Map<string, { events: WindowInfo["events"]; timer: NodeJS.Timeout }>();
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -137,61 +143,6 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 	 * via EventBus rather than requiring explicit `listen` calls. The loop runs until
 	 * the window closes or `#stopEventLoop` is called (e.g., on explicit close/dispose).
 	 */
-	/**
-	 * Classify an event as silent (noise) or loud (agent-visible).
-	 *
-	 * Silent: url_changed, harmless stderr (fontconfig, CSP frame-ancestors,
-	 * dev-mode warnings), or any event with payload.silent === true.
-	 * Loud: close, JS errors in stderr, user interactions, unknown types.
-	 */
-	#classifyEvent(event: WindowInfo["events"][number]): "silent" | "loud" {
-		const name = event.name ?? "";
-		const payload = event.payload as Record<string, unknown>;
-
-		// QML-side opt-in silence.
-		if (payload.silent === true) return "silent";
-
-		// close is always loud.
-		if (name === "close" || payload.action === "close") return "loud";
-
-		// Navigation noise.
-		if (name === "url_changed") return "silent";
-
-		// Stderr events: JS errors stay loud; harmless system messages are silent.
-		if (name === "stderr") {
-			const text = String(payload.text ?? payload.message ?? payload.data ?? "");
-			// JS/runtime errors must surface to the agent.
-			if (/TypeError|SyntaxError|ReferenceError|RangeError|URIError|EvalError/.test(text)) {
-				return "loud";
-			}
-			// Known harmless patterns.
-			if (/fontconfig|frame-ancestors|Content Security Policy|dev mode|Lit is in/i.test(text)) {
-				return "silent";
-			}
-			// Unknown stderr — surface it.
-			return "loud";
-		}
-
-		// Default: loud (fail-open for visibility).
-		return "loud";
-	}
-
-	/**
-	 * Collapse adjacent events with identical name+payload into a single entry
-	 * with a 'count' field in the payload to avoid redundant noise.
-	 */
-	#deduplicateEvents(events: WindowInfo["events"]): Array<WindowInfo["events"][number] & { count?: number }> {
-		const out: Array<WindowInfo["events"][number] & { count?: number }> = [];
-		for (const ev of events) {
-			const prev = out.at(-1);
-			if (prev && prev.name === ev.name && JSON.stringify(prev.payload) === JSON.stringify(ev.payload)) {
-				prev.count = (prev.count ?? 1) + 1;
-			} else {
-				out.push({ ...ev });
-			}
-		}
-		return out;
-	}
 
 	/**
 	 * Build a one-line summary of accumulated silent events, e.g.:
@@ -235,95 +186,66 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 
 					if (signal.aborted) break;
 
-					// A close is "user-initiated" when the QML side explicitly sent
-					// { action: "close" } before Qt.quit(). A window-manager kill
-					// (Alt+F4, clicking X) produces only the bridge "closed" event
-					// with an empty events array — that must NOT abort the current
-					// agent turn, so we suppress the bus emit in that case.
 					const userInitiatedClose = raw.some(e => (e.payload as { action?: string }).action === "close");
 					const wmClose = bridge.getWindow(id)?.state === "closed" && !userInitiatedClose;
 					const closed = userInitiatedClose || wmClose;
 
-					if (raw.length === 0 && !userInitiatedClose) {
-						if (closed) break;
-						continue;
-					}
-
-					const events = this.#deduplicateEvents(raw);
-
-					// Extract armed tool invocations before regular event classification.
-					// A payload with a `_tool` string field is a protocol message, not a
-					// user-visible event. It never enters the loud/silent pipeline.
-					const allowedTools = this.#armedTools.get(id) ?? [];
-					const regularEvents: typeof events = [];
-					for (const ev of events) {
-						const p = ev.payload as Record<string, unknown>;
-						if (typeof p._tool === "string" && eventBus) {
-							const toolName = p._tool;
-							const rid = typeof p._rid === "string" ? p._rid : undefined;
-							// Build args: everything except the protocol fields.
-							const args: Record<string, unknown> = {};
-							for (const [k, v] of Object.entries(p)) {
-								if (k !== "_tool" && k !== "_rid") args[k] = v;
-							}
-							const invokeBridge = getBridge();
-							const invokePayload: QmlToolInvokePayload = {
-								windowId: id,
-								tool: toolName,
-								args,
-								allowedTools,
-								reply: rid
-									? result => {
-											void invokeBridge.sendMessage(id, { _rid: rid, ...result });
-										}
-									: undefined,
-							};
-							eventBus.emit(QML_TOOL_INVOKE_CHANNEL, invokePayload);
-						} else {
-							regularEvents.push(ev);
-						}
-					}
-
-					const silentBatch = regularEvents.filter(e => this.#classifyEvent(e) === "silent");
-					const loudBatch = regularEvents.filter(e => this.#classifyEvent(e) === "loud");
-
-					// Accumulate silents from this batch.
-					pendingSilent = [...pendingSilent, ...silentBatch];
-
-					if (loudBatch.length > 0 || userInitiatedClose) {
-						// Emit accumulated silent events as a non-turn message before the loud batch.
-						if (pendingSilent.length > 0 && eventBus) {
-							const silentPayload: QmlWindowEventsPayload = {
-								windowId: id,
-								events: pendingSilent,
-								closed: false,
-								silent: true,
-							};
-							eventBus.emit(QML_EVENTS_CHANNEL, silentPayload);
-						}
-						const silentSummary = pendingSilent.length > 0 ? this.#buildSilentSummary(pendingSilent) : undefined;
-						pendingSilent = [];
-
+					if (raw.length === 0 && wmClose) {
+						// WM killed the window — surface a close event so the agent knows.
 						const payload: QmlWindowEventsPayload = {
 							windowId: id,
-							events: loudBatch,
-							closed,
+							events: [{ name: "close", payload: { action: "close", wmClose: true } }],
+							closed: true,
 							silent: false,
-							silentSummary,
 						};
 						eventBus?.emit(QML_EVENTS_CHANNEL, payload);
-					} else if (silentBatch.length > 0 && eventBus) {
-						// All events in this batch are silent — emit quietly, no turn.
-						const silentPayload: QmlWindowEventsPayload = {
-							windowId: id,
-							events: silentBatch,
-							closed: false,
-							silent: true,
-						};
-						eventBus.emit(QML_EVENTS_CHANNEL, silentPayload);
+						break;
+					}
+					if (raw.length === 0) continue;
+
+					// For canvas windows, debounce events with a 100ms timer.
+					if (id.startsWith("canvas")) {
+						const existing = this.#pendingCanvasEvents.get(id);
+						if (existing) {
+							existing.events.push(...raw);
+							clearTimeout(existing.timer);
+						} else {
+							this.#pendingCanvasEvents.set(id, { events: [...raw], timer: undefined! });
+						}
+						const entry = this.#pendingCanvasEvents.get(id)!;
+						const capturedPendingSilent = pendingSilent;
+						entry.timer = setTimeout(() => {
+							const accumulated = entry.events;
+							this.#pendingCanvasEvents.delete(id);
+							this.#flushEvents(
+								id,
+								accumulated,
+								userInitiatedClose,
+								capturedPendingSilent,
+								closed,
+								getBridge,
+								eventBus,
+							);
+							if (closed) {
+								// Cannot break from setTimeout callback; abort the loop instead.
+								ac.abort();
+							}
+						}, 100);
+						// Reset pending silent since it will be consumed by the timer callback.
+						pendingSilent = [];
+					} else {
+						pendingSilent = this.#flushEvents(
+							id,
+							raw,
+							userInitiatedClose,
+							pendingSilent,
+							closed,
+							getBridge,
+							eventBus,
+						);
 					}
 
-					if (closed) break;
+					if (closed && !id.startsWith("canvas")) break;
 				}
 			} catch {
 				// Window gone or bridge disposed — loop terminates silently.
@@ -331,6 +253,91 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				this.#eventLoops.delete(id);
 			}
 		})();
+	}
+
+	/**
+	 * Process raw events through deduplication, armed-tool extraction, and
+	 * classification. Emits payloads on the event bus. Returns the updated
+	 * pendingSilent accumulator (caller must reassign).
+	 */
+	#flushEvents(
+		id: string,
+		raw: WindowInfo["events"],
+		userInitiatedClose: boolean,
+		pendingSilent: WindowInfo["events"],
+		closed: boolean,
+		getBridge: () => QmlBridge | RemoteQmlBridge,
+		eventBus: typeof this.session.eventBus,
+	): WindowInfo["events"] {
+		const events = deduplicateEvents(raw);
+
+		// Extract armed tool invocations before regular event classification.
+		const allowedTools = this.#armedTools.get(id) ?? [];
+		const regularEvents: typeof events = [];
+		for (const ev of events) {
+			const p = ev.payload as Record<string, unknown>;
+			if (typeof p._tool === "string" && eventBus) {
+				const toolName = p._tool;
+				const rid = typeof p._rid === "string" ? p._rid : undefined;
+				const args: Record<string, unknown> = {};
+				for (const [k, v] of Object.entries(p)) {
+					if (k !== "_tool" && k !== "_rid") args[k] = v;
+				}
+				const invokeBridge = getBridge();
+				const invokePayload: QmlToolInvokePayload = {
+					windowId: id,
+					tool: toolName,
+					args,
+					allowedTools,
+					reply: rid
+						? result => {
+								void invokeBridge.sendMessage(id, { _rid: rid, ...result });
+							}
+						: undefined,
+				};
+				eventBus.emit(QML_TOOL_INVOKE_CHANNEL, invokePayload);
+			} else {
+				regularEvents.push(ev);
+			}
+		}
+
+		const silentBatch = regularEvents.filter(e => classifyEvent(e) === "silent");
+		const loudBatch = regularEvents.filter(e => classifyEvent(e) === "loud");
+
+		const accumulated = [...pendingSilent, ...silentBatch];
+
+		if (loudBatch.length > 0 || userInitiatedClose) {
+			if (accumulated.length > 0 && eventBus) {
+				const silentPayload: QmlWindowEventsPayload = {
+					windowId: id,
+					events: accumulated,
+					closed: false,
+					silent: true,
+				};
+				eventBus.emit(QML_EVENTS_CHANNEL, silentPayload);
+			}
+			const silentSummary = accumulated.length > 0 ? this.#buildSilentSummary(accumulated) : undefined;
+
+			const payload: QmlWindowEventsPayload = {
+				windowId: id,
+				events: loudBatch,
+				closed,
+				silent: false,
+				silentSummary,
+			};
+			eventBus?.emit(QML_EVENTS_CHANNEL, payload);
+			return [];
+		} else if (silentBatch.length > 0 && eventBus) {
+			const silentPayload: QmlWindowEventsPayload = {
+				windowId: id,
+				events: silentBatch,
+				closed: false,
+				silent: true,
+			};
+			eventBus.emit(QML_EVENTS_CHANNEL, silentPayload);
+		}
+
+		return accumulated;
 	}
 
 	#stopEventLoop(id: string): void {
@@ -366,8 +373,13 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				if (content === undefined) throw new ToolError("write action requires 'content'");
 				const abs = path.isAbsolute(filePath) ? filePath : path.join(this.session.cwd, filePath);
 				await Bun.write(abs, content);
-				const details: QmlToolDetails = { action: "write" };
-				return toolResult(details).text(`Written: ${abs}`).done();
+				const lint = await lintQmlFile(abs);
+				const lintText = formatLintOutput(lint);
+				const details: QmlToolDetails = {
+					action: "write",
+					...(lint.available && { lintWarnings: lint.warnings.length, lintErrors: lint.errors.length }),
+				};
+				return toolResult(details).text(`Written: ${abs}${lintText}`).done();
 			}
 
 			case "launch": {
@@ -524,6 +536,11 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 		}
 		this.#eventLoops.clear();
 		this.#armedTools.clear();
+		// Cancel all pending canvas debounce timers to avoid use-after-dispose.
+		for (const entry of this.#pendingCanvasEvents.values()) {
+			clearTimeout(entry.timer);
+		}
+		this.#pendingCanvasEvents.clear();
 		await this.#bridge?.dispose();
 		this.#bridge = null;
 	}
