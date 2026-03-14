@@ -23,7 +23,7 @@ import {
 	WARMUP_TIMEOUT_MS,
 } from "./client";
 import { getLinterClient } from "./clients";
-import { getServersForFile, type LspConfig, loadConfig } from "./config";
+import { getMissingServersForFile, getServersForFile, type LspConfig, loadConfig } from "./config";
 import { applyTextEditsToString, applyWorkspaceEdit } from "./edits";
 import { detectLspmux } from "./lspmux";
 import { renderCall, renderResult } from "./render";
@@ -1021,7 +1021,12 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 				const resolved = resolveToCwd(target, this.session.cwd);
 				const servers = getServersForFile(config, resolved);
 				if (servers.length === 0) {
-					results.push(`${theme.status.error} ${target}: No language server found`);
+					const missing = getMissingServersForFile(resolved, this.session.cwd);
+					const hint = missing.map(m => m.installHint).join(" ");
+					const msg = hint
+						? `${theme.status.error} ${target}: No language server found. ${hint}`
+						: `${theme.status.error} ${target}: No language server found`;
+					results.push(msg);
 					continue;
 				}
 
@@ -1218,8 +1223,13 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 		const serverInfo = resolvedFile ? getLspServerForFile(config, resolvedFile) : null;
 		if (!serverInfo) {
+			const missing = resolvedFile ? getMissingServersForFile(resolvedFile, this.session.cwd) : [];
+			const hint = missing.map(m => m.installHint).join(" ");
+			const text = hint
+				? `No language server found for this action. ${hint}`
+				: "No language server found for this action";
 			return {
-				content: [{ type: "text", text: "No language server found for this action" }],
+				content: [{ type: "text", text }],
 				details: { action, success: false },
 			};
 		}
