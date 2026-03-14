@@ -3,6 +3,7 @@ import {
 	type AgentEvent,
 	type AgentMessage,
 	type AgentTool,
+	type AgentToolResult,
 	INTENT_FIELD,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
@@ -106,7 +107,12 @@ import { ToolContextStore } from "./tools/context";
 import { getGeminiImageTools } from "./tools/gemini-image";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { PendingActionStore } from "./tools/pending-action";
-import { QML_EVENTS_CHANNEL, type QmlWindowEventsPayload } from "./tools/qml";
+import {
+	QML_EVENTS_CHANNEL,
+	QML_TOOL_INVOKE_CHANNEL,
+	type QmlToolInvokePayload,
+	type QmlWindowEventsPayload,
+} from "./tools/qml";
 import { EventBus } from "./utils/event-bus";
 
 // Types
@@ -1614,6 +1620,78 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			},
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
+	});
+
+	// Wire QML armed tool invocations: short-circuit tool execution without an agent turn.
+	eventBus.on(QML_TOOL_INVOKE_CHANNEL, async (raw: unknown) => {
+		if (!session) return;
+		const { windowId, tool, args, allowedTools, reply } = raw as QmlToolInvokePayload;
+
+		// Validate against the per-window allowlist declared at launch time.
+		if (!allowedTools.includes(tool)) {
+			const errMsg = `Armed tool "${tool}" not in allowed list for window "${windowId}". Allowed: [${allowedTools.join(", ")}]`;
+			logger.warn("QML armed tool rejected", { windowId, tool, allowedTools });
+			reply?.({ error: errMsg });
+			// Log rejection to transcript so the agent can see it if reviewing.
+			await session.sendCustomMessage({
+				customType: "qml-tool-invoke",
+				content: `Armed tool rejected: ${tool} (window: ${windowId}) — not in allowlist`,
+				display: false,
+				attribution: "agent",
+				details: { windowId, tool, args, error: errMsg },
+			});
+			return;
+		}
+
+		const agentTool = toolRegistry.get(tool);
+		if (!agentTool) {
+			const errMsg = `Armed tool "${tool}" is not registered in this session`;
+			logger.warn("QML armed tool not found", { windowId, tool });
+			reply?.({ error: errMsg });
+			await session.sendCustomMessage({
+				customType: "qml-tool-invoke",
+				content: `Armed tool not found: ${tool} (window: ${windowId})`,
+				display: false,
+				attribution: "agent",
+				details: { windowId, tool, args, error: errMsg },
+			});
+			return;
+		}
+
+		let result: AgentToolResult<unknown>;
+		let invokeError: string | undefined;
+		try {
+			result = await agentTool.execute(
+				`qml-armed-${windowId}-${Date.now()}`,
+				args as Record<string, unknown>,
+				undefined,
+				undefined,
+				toolContextStore.getContext(),
+			);
+		} catch (err) {
+			invokeError = err instanceof Error ? err.message : String(err);
+			result = { content: [{ type: "text", text: invokeError }], details: {} };
+		}
+
+		// Deliver result back to the QML window (fire-and-forget).
+		if (reply) {
+			const text = result.content
+				.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.map(c => c.text)
+				.join("");
+			reply(invokeError ? { error: invokeError } : { result: text });
+		}
+
+		// Log all armed invocations silently so the agent can review them.
+		await session.sendCustomMessage({
+			customType: "qml-tool-invoke",
+			content: invokeError
+				? `Armed tool failed: ${tool} (window: ${windowId}) — ${invokeError}`
+				: `Armed tool: ${tool} (window: ${windowId})`,
+			display: false,
+			attribution: "agent",
+			details: { windowId, tool, args, error: invokeError },
+		});
 	});
 
 	return {

@@ -56,6 +56,9 @@ export interface QmlToolDetails {
 /** Channel name for QML window events emitted to the EventBus. */
 export const QML_EVENTS_CHANNEL = "qml:window:events";
 
+/** Channel name for armed tool invocations emitted by the QML event loop. */
+export const QML_TOOL_INVOKE_CHANNEL = "qml:tool:invoke";
+
 /** Payload emitted on QML_EVENTS_CHANNEL. */
 export interface QmlWindowEventsPayload {
 	windowId: string;
@@ -71,6 +74,28 @@ export interface QmlWindowEventsPayload {
 	silentSummary?: string;
 }
 
+/**
+ * Payload emitted on QML_TOOL_INVOKE_CHANNEL.
+ *
+ * The event loop constructs `reply` as a closure that calls bridge.sendMessage
+ * back to the originating window. It is undefined when no _rid was supplied.
+ */
+export interface QmlToolInvokePayload {
+	/** Window that sent the invocation. */
+	windowId: string;
+	/** Tool name requested by QML (e.g. "write"). */
+	tool: string;
+	/** Arguments extracted from the QML payload (minus the protocol fields). */
+	args: Record<string, unknown>;
+	/** Tools this window is allowed to arm-invoke. Validated by the sdk handler. */
+	allowedTools: string[];
+	/**
+	 * Optional callback to deliver the tool result back to the QML window.
+	 * Present only when the QML payload included a `_rid` field.
+	 */
+	reply?: (result: Record<string, unknown>) => void;
+}
+
 export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 	readonly name = "qml";
 	readonly label = "QML";
@@ -81,6 +106,8 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 	#bridge: QmlBridge | null = null;
 	/** Per-window abort controllers for background event loops. */
 	#eventLoops = new Map<string, AbortController>();
+	/** Per-window list of tools allowed to be arm-invoked without an agent turn. */
+	#armedTools = new Map<string, string[]>();
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -220,8 +247,42 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 					}
 
 					const events = this.#deduplicateEvents(raw);
-					const silentBatch = events.filter(e => this.#classifyEvent(e) === "silent");
-					const loudBatch = events.filter(e => this.#classifyEvent(e) === "loud");
+
+					// Extract armed tool invocations before regular event classification.
+					// A payload with a `_tool` string field is a protocol message, not a
+					// user-visible event. It never enters the loud/silent pipeline.
+					const allowedTools = this.#armedTools.get(id) ?? [];
+					const regularEvents: typeof events = [];
+					for (const ev of events) {
+						const p = ev.payload as Record<string, unknown>;
+						if (typeof p._tool === "string" && eventBus) {
+							const toolName = p._tool;
+							const rid = typeof p._rid === "string" ? p._rid : undefined;
+							// Build args: everything except the protocol fields.
+							const args: Record<string, unknown> = {};
+							for (const [k, v] of Object.entries(p)) {
+								if (k !== "_tool" && k !== "_rid") args[k] = v;
+							}
+							const invokeBridge = getBridge();
+							const invokePayload: QmlToolInvokePayload = {
+								windowId: id,
+								tool: toolName,
+								args,
+								allowedTools,
+								reply: rid
+									? result => {
+											void invokeBridge.sendMessage(id, { _rid: rid, ...result });
+										}
+									: undefined,
+							};
+							eventBus.emit(QML_TOOL_INVOKE_CHANNEL, invokePayload);
+						} else {
+							regularEvents.push(ev);
+						}
+					}
+
+					const silentBatch = regularEvents.filter(e => this.#classifyEvent(e) === "silent");
+					const loudBatch = regularEvents.filter(e => this.#classifyEvent(e) === "loud");
 
 					// Accumulate silents from this batch.
 					pendingSilent = [...pendingSilent, ...silentBatch];
@@ -324,6 +385,14 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 						props: params.props as Record<string, unknown> | undefined,
 					});
 					const events = remote.drainEvents(id);
+					// Populate armed tool allowlist from props._armedTools (if agent provided one).
+					const armedList = params.props?.["_armedTools"];
+					if (Array.isArray(armedList)) {
+						this.#armedTools.set(
+							id,
+							armedList.filter((t): t is string => typeof t === "string"),
+						);
+					}
 					// Start background event loop so events arrive as follow-ups.
 					this.#startEventLoop(id, () => this.#remoteBridge()!);
 					const details: QmlToolDetails = { action: "launch", windowId: id, events };
@@ -340,6 +409,14 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 					props: params.props as Record<string, unknown> | undefined,
 				});
 				const events = bridge.drainEvents(id);
+				// Populate armed tool allowlist from props._armedTools (if agent provided one).
+				const armedList = params.props?.["_armedTools"];
+				if (Array.isArray(armedList)) {
+					this.#armedTools.set(
+						id,
+						armedList.filter((t): t is string => typeof t === "string"),
+					);
+				}
 				// Start background event loop so events arrive as follow-ups.
 				this.#startEventLoop(id, () => this.#ensureBridge());
 				const details: QmlToolDetails = { action: "launch", windowId: id, events };
@@ -352,6 +429,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 				if (!id) throw new ToolError("close action requires 'id'");
 				// Stop the event loop before closing so we don't race with the close event.
 				this.#stopEventLoop(id);
+				this.#armedTools.delete(id);
 
 				const remote = this.#remoteBridge();
 				if (remote) {
@@ -432,6 +510,7 @@ export class QmlTool implements AgentTool<typeof qmlSchema, QmlToolDetails> {
 			ac.abort();
 		}
 		this.#eventLoops.clear();
+		this.#armedTools.clear();
 		await this.#bridge?.dispose();
 		this.#bridge = null;
 	}
