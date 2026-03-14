@@ -416,6 +416,12 @@ export class InteractiveMode implements InteractiveModeContext {
 					return ctx.todoPhases;
 				},
 				subscribe: listener => ctx.session.subscribe(listener),
+				onOverviewChanged(isOpen, bg, resetBg) {
+					if (ctx.#planModeOverlay) {
+						ctx.#planModeOverlay.setBackground(isOpen ? (bg ?? null) : null, isOpen ? (resetBg ?? null) : null);
+						ctx.ui.requestRender();
+					}
+				},
 			});
 		}
 
@@ -545,6 +551,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				anchor: "top-right",
 				width: w,
 				margin: 1,
+				focusable: false,
+				layer: 1,
 			});
 		}
 		this.#planModeOverlayHandle.setHidden(false);

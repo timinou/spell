@@ -1,0 +1,23 @@
+#+TITLE: Session 1492d44a164cea95 Todos
+#+DATE: 2026-03-14
+#+TODO: ITEM DOING | DONE
+
+* Fix
+
+** DONE Fix overlay focus stealing for non-interactive overlays
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Add overlay layering so badge renders on top of niri overview
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Verify with type check
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

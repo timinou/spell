@@ -146,6 +146,14 @@ export interface OverlayOptions {
 	 * Called each render cycle with current terminal dimensions.
 	 */
 	visible?: (termWidth: number, termHeight: number) => boolean;
+
+	// === Focus ===
+	/** If false, the overlay does not steal focus from the current component. Default: true. */
+	focusable?: boolean;
+
+	// === Layering ===
+	/** Higher layers render on top during compositing. Default: 0. */
+	layer?: number;
 }
 
 /**
@@ -293,8 +301,8 @@ export class TUI extends Container {
 	showOverlay(component: Component, options?: OverlayOptions): OverlayHandle {
 		const entry = { component, options, preFocus: this.#focusedComponent, hidden: false };
 		this.overlayStack.push(entry);
-		// Only focus if overlay is actually visible
-		if (this.#isOverlayVisible(entry)) {
+		// Only focus if overlay is actually visible and focusable (default: true)
+		if ((options?.focusable ?? true) && this.#isOverlayVisible(entry)) {
 			this.setFocus(component);
 		}
 		this.terminal.hideCursor();
@@ -308,7 +316,7 @@ export class TUI extends Container {
 					this.overlayStack.splice(index, 1);
 					// Restore focus if this overlay had focus
 					if (this.#focusedComponent === component) {
-						const topVisible = this.#getTopmostVisibleOverlay();
+						const topVisible = this.#getTopmostFocusableOverlay();
 						this.setFocus(topVisible?.component ?? entry.preFocus);
 					}
 					if (this.overlayStack.length === 0) this.terminal.hideCursor();
@@ -322,10 +330,10 @@ export class TUI extends Container {
 				if (hidden) {
 					// If this overlay had focus, move focus to next visible or preFocus
 					if (this.#focusedComponent === component) {
-						const topVisible = this.#getTopmostVisibleOverlay();
+						const topVisible = this.#getTopmostFocusableOverlay();
 						this.setFocus(topVisible?.component ?? entry.preFocus);
 					}
-				} else {
+				} else if (options?.focusable ?? true) {
 					// Restore focus to this overlay when showing (if it's actually visible)
 					if (this.#isOverlayVisible(entry)) {
 						this.setFocus(component);
@@ -342,7 +350,7 @@ export class TUI extends Container {
 		const overlay = this.overlayStack.pop();
 		if (!overlay) return;
 		// Find topmost visible overlay, or fall back to preFocus
-		const topVisible = this.#getTopmostVisibleOverlay();
+		const topVisible = this.#getTopmostFocusableOverlay();
 		this.setFocus(topVisible?.component ?? overlay.preFocus);
 		if (this.overlayStack.length === 0) this.terminal.hideCursor();
 		this.requestRender();
@@ -362,11 +370,12 @@ export class TUI extends Container {
 		return true;
 	}
 
-	/** Find the topmost visible overlay, if any */
-	#getTopmostVisibleOverlay(): (typeof this.overlayStack)[number] | undefined {
+	/** Find the topmost visible and focusable overlay for focus restoration. */
+	#getTopmostFocusableOverlay(): (typeof this.overlayStack)[number] | undefined {
 		for (let i = this.overlayStack.length - 1; i >= 0; i--) {
-			if (this.#isOverlayVisible(this.overlayStack[i])) {
-				return this.overlayStack[i];
+			const entry = this.overlayStack[i];
+			if (this.#isOverlayVisible(entry) && (entry.options?.focusable ?? true)) {
+				return entry;
 			}
 		}
 		return undefined;
@@ -609,7 +618,7 @@ export class TUI extends Container {
 		const focusedOverlay = this.overlayStack.find(o => o.component === this.#focusedComponent);
 		if (focusedOverlay && !this.#isOverlayVisible(focusedOverlay)) {
 			// Focused overlay is no longer visible, redirect to topmost visible overlay
-			const topVisible = this.#getTopmostVisibleOverlay();
+			const topVisible = this.#getTopmostFocusableOverlay();
 			if (topVisible) {
 				this.setFocus(topVisible.component);
 			} else {
@@ -819,7 +828,10 @@ export class TUI extends Container {
 		const rendered: { overlayLines: string[]; row: number; col: number; w: number }[] = [];
 		let minLinesNeeded = result.length;
 
-		for (const entry of this.overlayStack) {
+		// Sort by layer so higher-layer overlays render on top
+		const sorted = [...this.overlayStack].sort((a, b) => (a.options?.layer ?? 0) - (b.options?.layer ?? 0));
+
+		for (const entry of sorted) {
 			// Skip invisible overlays (hidden or visible() returns false)
 			if (!this.#isOverlayVisible(entry)) continue;
 

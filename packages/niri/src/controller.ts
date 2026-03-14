@@ -6,7 +6,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { withLargerFont } from "./font-scaling";
 import { NiriEventStream } from "./ipc";
 import { queryNiriFocusedWindowId } from "./niri-query";
-import { OverviewComponent } from "./overview-component";
+import { OverviewComponent, STATUS_COLORS } from "./overview-component";
 import type { AgentStatus, TodoItemSnapshot, TodoPhaseSnapshot } from "./types";
 
 export type { TodoItemSnapshot, TodoPhaseSnapshot };
@@ -62,6 +62,8 @@ export interface NiriOverviewContext {
 	todoPhases: TodoPhaseView[];
 	/** Subscribe to session events; returns unsubscribe. */
 	subscribe(listener: () => void): () => void;
+	/** Called when the niri overview opens/closes, or when the status color changes while open. */
+	onOverviewChanged?: (isOpen: boolean, bg?: string, resetBg?: string) => void;
 }
 
 // ─── Controller ──────────────────────────────────────────────────────────────
@@ -104,6 +106,9 @@ export class NiriOverviewController {
 			if (this.#overlayHandle) {
 				this.#component.update(this.#buildSnapshot());
 				this.#context.ui.requestRender();
+				// Notify about bg color changes (status may have changed)
+				const colors = STATUS_COLORS[this.#deriveStatus()];
+				this.#context.onOverviewChanged?.(true, colors.bg, colors.resetBg);
 			}
 		});
 		// Discover niri window ID asynchronously so the constructor stays synchronous.
@@ -184,6 +189,8 @@ export class NiriOverviewController {
 			.catch(err => {
 				logger.debug("NiriOverviewController: font scaling failed", { err: String(err) });
 			});
+		const colors = STATUS_COLORS[this.#deriveStatus()];
+		this.#context.onOverviewChanged?.(true, colors.bg, colors.resetBg);
 	}
 
 	#hideOverview(): void {
@@ -195,6 +202,7 @@ export class NiriOverviewController {
 
 		this.#restoreFont?.();
 		this.#restoreFont = null;
+		this.#context.onOverviewChanged?.(false);
 	}
 
 	#buildSnapshot() {

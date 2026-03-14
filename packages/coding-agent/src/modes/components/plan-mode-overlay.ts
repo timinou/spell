@@ -14,6 +14,8 @@ import { theme } from "../theme/theme";
 export class PlanModeOverlay implements Component {
 	#ultraplan: boolean;
 	#paused: boolean;
+	#bg: string | null = null;
+	#resetBg: string | null = null;
 
 	constructor(ultraplan = false, paused = false) {
 		this.#ultraplan = ultraplan;
@@ -23,6 +25,12 @@ export class PlanModeOverlay implements Component {
 	update(ultraplan: boolean, paused: boolean): void {
 		this.#ultraplan = ultraplan;
 		this.#paused = paused;
+	}
+
+	/** Set a background color to apply behind the badge (e.g. when composited over the niri overview). */
+	setBackground(bg: string | null, resetBg: string | null): void {
+		this.#bg = bg;
+		this.#resetBg = resetBg;
 	}
 
 	invalidate(): void {}
@@ -42,9 +50,15 @@ export class PlanModeOverlay implements Component {
 		const innerWidth = visibleWidth(inner);
 
 		const h = theme.boxSharp.horizontal.repeat(innerWidth);
-		const top = colorize(`╭${h}╮`);
-		const mid = colorize("│") + theme.fg("planMode", inner) + colorize("│");
-		const bot = colorize(`╰${h}╯`);
+		let top = colorize(`╭${h}╮`);
+		let mid = colorize("│") + theme.fg("planMode", inner) + colorize("│");
+		let bot = colorize(`╰${h}╯`);
+
+		if (this.#bg && this.#resetBg) {
+			top = `${this.#bg}${top}${this.#resetBg}`;
+			mid = `${this.#bg}${mid}${this.#resetBg}`;
+			bot = `${this.#bg}${bot}${this.#resetBg}`;
+		}
 
 		return [top, mid, bot];
 	}

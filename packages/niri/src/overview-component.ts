@@ -8,51 +8,53 @@ import type { AgentStatus, OverviewSnapshot, TodoItemSnapshot, TodoPhaseSnapshot
 // independent of the coding-agent Theme singleton so the niri package stays
 // free of that dependency. Colors were chosen to match the intent: we use
 // Catppuccin-inspired tones that work in both dark/light contexts.
-const STATUS_COLORS: Record<AgentStatus, { bg: string; resetBg: string; fg: string; resetFg: string; label: string }> =
-	{
-		idle: {
-			bg: "\x1b[48;2;166;227;161m", // green-ish bg
-			resetBg: "\x1b[49m",
-			fg: "\x1b[38;2;30;30;30m",
-			resetFg: "\x1b[39m",
-			label: "Idle",
-		},
-		running: {
-			bg: "\x1b[48;2;137;180;250m", // blue bg
-			resetBg: "\x1b[49m",
-			fg: "\x1b[38;2;10;10;10m",
-			resetFg: "\x1b[39m",
-			label: "Running",
-		},
-		needs_input: {
-			bg: "\x1b[48;2;249;226;175m", // yellow bg
-			resetBg: "\x1b[49m",
-			fg: "\x1b[38;2;20;20;20m",
-			resetFg: "\x1b[39m",
-			label: "Needs Input",
-		},
-		error: {
-			bg: "\x1b[48;2;243;139;168m", // red bg
-			resetBg: "\x1b[49m",
-			fg: "\x1b[38;2;10;10;10m",
-			resetFg: "\x1b[39m",
-			label: "Error",
-		},
-		completed: {
-			bg: "\x1b[48;2;166;227;161m", // green bg (same hue as idle, signals success)
-			resetBg: "\x1b[49m",
-			fg: "\x1b[38;2;30;30;30m",
-			resetFg: "\x1b[39m",
-			label: "Completed",
-		},
-		pending_approval: {
-			bg: "\x1b[48;2;148;226;213m", // Catppuccin teal
-			resetBg: "\x1b[49m",
-			fg: "\x1b[38;2;10;10;10m",
-			resetFg: "\x1b[39m",
-			label: "Pending Approval",
-		},
-	};
+export const STATUS_COLORS: Record<
+	AgentStatus,
+	{ bg: string; resetBg: string; fg: string; resetFg: string; label: string }
+> = {
+	idle: {
+		bg: "\x1b[48;2;166;227;161m", // green-ish bg
+		resetBg: "\x1b[49m",
+		fg: "\x1b[38;2;30;30;30m",
+		resetFg: "\x1b[39m",
+		label: "Idle",
+	},
+	running: {
+		bg: "\x1b[48;2;137;180;250m", // blue bg
+		resetBg: "\x1b[49m",
+		fg: "\x1b[38;2;10;10;10m",
+		resetFg: "\x1b[39m",
+		label: "Running",
+	},
+	needs_input: {
+		bg: "\x1b[48;2;249;226;175m", // yellow bg
+		resetBg: "\x1b[49m",
+		fg: "\x1b[38;2;20;20;20m",
+		resetFg: "\x1b[39m",
+		label: "Needs Input",
+	},
+	error: {
+		bg: "\x1b[48;2;243;139;168m", // red bg
+		resetBg: "\x1b[49m",
+		fg: "\x1b[38;2;10;10;10m",
+		resetFg: "\x1b[39m",
+		label: "Error",
+	},
+	completed: {
+		bg: "\x1b[48;2;166;227;161m", // green bg (same hue as idle, signals success)
+		resetBg: "\x1b[49m",
+		fg: "\x1b[38;2;30;30;30m",
+		resetFg: "\x1b[39m",
+		label: "Completed",
+	},
+	pending_approval: {
+		bg: "\x1b[48;2;148;226;213m", // Catppuccin teal
+		resetBg: "\x1b[49m",
+		fg: "\x1b[38;2;10;10;10m",
+		resetFg: "\x1b[39m",
+		label: "Pending Approval",
+	},
+};
 
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";
