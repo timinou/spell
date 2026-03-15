@@ -66,7 +66,9 @@ Plan execution runs in fresh context (session cleared). You **MUST** make the pl
 </procedure>
 {{/if}}
 
-{{#if iterative}}
+{{#if designFlavor}}
+{{{planModeUiuxPrompt}}}
+{{else if iterative}}
 ## Iterative Planning
 
 <procedure>

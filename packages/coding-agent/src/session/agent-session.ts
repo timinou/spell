@@ -96,6 +96,7 @@ import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" w
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
 	type: "text",
 };
+import planModeUiuxPrompt from "../prompts/system/plan-mode-uiux.md" with { type: "text" };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
@@ -1912,6 +1913,35 @@ export class AgentSession {
 		const planExists = fs.existsSync(resolvedPlanPath);
 		const orgEnabled = (this.settings.get("org.enabled") as boolean | undefined) ?? false;
 		const draftCategory = (this.settings.get("org.planDraftCategory") as string | undefined) ?? "drafts";
+		// Read design history for anti-convergence injection when in design flavor
+		let designHistory = "";
+		if (state.flavor === "design") {
+			try {
+				const historyPath = path.join(this.sessionManager.getCwd(), ".spell", "design-history.jsonl");
+				const raw = await Bun.file(historyPath).text();
+				const entries = Bun.JSONL.parse(raw) as Array<{
+					ts: string;
+					direction: string;
+					fonts?: string[];
+					palette?: string;
+					memorable?: string;
+				}>;
+				const last5 = entries.slice(-5);
+				if (last5.length > 0) {
+					designHistory = last5
+						.map(e => {
+							const parts = [e.direction];
+							if (e.fonts?.length) parts.push(e.fonts.join(" + "));
+							if (e.palette) parts.push(e.palette);
+							if (e.memorable) parts.push(`"${e.memorable}"`);
+							return `- [${e.ts.slice(0, 10)}] ${parts.join(", ")}`;
+						})
+						.join("\n");
+				}
+			} catch {
+				// No history file yet — fine
+			}
+		}
 		const content = renderPromptTemplate(planModeActivePrompt, {
 			planFilePath: displayPlanPath,
 			planExists,
@@ -1925,6 +1955,9 @@ export class AgentSession {
 			orgEnabled,
 			draftCategory,
 			ultraplan: state.ultraplan ?? false,
+			designFlavor: state.flavor === "design",
+			designHistory,
+			planModeUiuxPrompt,
 		});
 
 		return {

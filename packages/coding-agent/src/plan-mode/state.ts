@@ -9,4 +9,6 @@ export interface PlanModeState {
 	orgItemFile?: string;
 	/** When true, ultraplan mode is active (runs Metis gap analysis and optional Momus review). */
 	ultraplan?: boolean;
+	/** When set to "design", activates the UI/UX design planning workflow with Aphrodite/Athena gates. */
+	flavor?: "design";
 }

@@ -1,0 +1,653 @@
+#+TITLE: DESIGN_PLAN_MODE
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-design-plan-mode
+
+* Initial Message
+
+I'm still not happy with spell's visual excellence abilities. Please find pi extensions onlien that claim to  improve the frontend/visual excellence of the output and explain what they did that's different. I'm focused on better planning the actions btw btw
+
+* Goal
+
+Add a =/design= slash command that enters a UI/UX-specific plan mode. The agent produces a Design Direction Brief + concrete token definitions (adapted to codebase conventions) before any implementation begins. On approval, the designer agent executes against the brief.
+
+Informed by Anthropic's frontend-design skill (277K installs), elite-frontend-ux (gist), and ui-ux-pro-max (110K weekly installs). The key insight from all three: the agent must COMMIT to a design direction before writing code, and that commitment must be structured.
+
+* Decisions Made
+
+- Slash command: =/design [prompt]= — standalone, not a subcommand of /plan
+- State: new =PlanModeState.flavor= field (=undefined | "design"=) — controls which plan-mode prompt template is injected
+- Anti-convergence: =<project>/.spell/design-history.jsonl= — append-only, last N entries injected at plan mode entry
+- Quality gates: Aphrodite (aesthetic quality) and Athena (design standards/a11y) — both as agent .md files, triggered like Metis/Momus via ultraplan-style flags in =plan-mode-uiux.md=
+- Token discovery: the /design plan mode prompt instructs the agent to grep for existing design tokens (CSS vars, tailwind config, oklch usage, spacing scales) BEFORE committing to token values
+- Plan output: Design Direction Brief + concrete token definitions adapted to codebase conventions
+- On execution: designer agent receives the approved brief as context and executes against it
+- Coding skill: updated to mention design planning framework
+
+* Architecture
+
+The plan mode system already supports variant behavior via template variables (=iterative=, =ultraplan=, =reentry=). Adding =flavor= follows the same pattern:
+
+1. =PlanModeState= gets =flavor?: "design"=
+2. =agent-session.ts #buildPlanModeMessage()= checks flavor and renders =plan-mode-uiux.md= instead of the generic planning workflow section
+3. The template is a SEPARATE file (=plan-mode-uiux.md=) — not a conditional branch in =plan-mode-active.md= — because the design planning workflow is substantially different from the generic one
+4. =plan-mode-active.md= gets a ={{#if designFlavor}}= block that includes =plan-mode-uiux.md= content OR the existing planning workflow
+
+** ITEM Add =flavor= to PlanModeState and wire /design command
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+*** Files to modify
+
+- =packages/coding-agent/src/plan-mode/state.ts= — add =flavor?: "design"= to =PlanModeState=
+- =packages/coding-agent/src/slash-commands/builtin-registry.ts= — add =/design= command entry that calls =handlePlanModeCommand(args, { flavor: "design" })=
+- =packages/coding-agent/src/modes/interactive-mode.ts= — extend =handlePlanModeCommand= to accept =flavor= option, pass it through to =#enterPlanMode=, store in =PlanModeState=
+- =packages/coding-agent/src/modes/types.ts= — update =InteractiveModeContext.planModeEnabled= or add =planModeFlavor= if needed for status display
+- =packages/coding-agent/src/session/agent-session.ts= — in =#buildPlanModeMessage()=, pass =designFlavor: state.flavor === "design"= to the template render context
+
+*** Behavior
+
+=/design build a settings dashboard= enters plan mode with flavor="design". Status line shows "Design" instead of "Plan". The plan-mode-active.md template detects =designFlavor= and renders the UI/UX planning workflow instead of the generic one.
+
+** ITEM Create plan-mode-uiux.md prompt template
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+This is the core deliverable. Located at =packages/coding-agent/src/prompts/system/plan-mode-uiux.md=.
+
+*** Template structure
+
+The template replaces the "Planning Workflow" section of =plan-mode-active.md= when =designFlavor= is true. It keeps the same outer structure (read-only constraints, org integration, exit_plan_mode mechanics) but replaces the planning phases with:
+
+**** Phase 1: Context Discovery
+- WHO uses this interface, on what devices, at what expertise level
+- WHAT is the primary action / goal
+- Grep for existing design conventions in codebase:
+  - CSS custom properties / design tokens (=grep --include="*.css" --include="*.ts" "var(--"=)
+  - Tailwind config (=tailwind.config.*=)
+  - Color format conventions (oklch, hsl, hex — adapt to what exists)
+  - Spacing system (4px, 8px base, modular scale)
+  - Existing font imports / typography
+  - Component library in use (shadcn, radix, etc.)
+
+**** Phase 2: Design Direction Brief
+Produce a structured brief with these REQUIRED sections:
+
+1. *Aesthetic Direction*: Choose from curated list (brutally minimal, maximalist editorial, retro-futuristic, organic/natural, luxury/refined, playful, neo-brutalist, art deco, soft/pastel, industrial/utilitarian, editorial/magazine, or a custom direction). COMMIT — do not hedge.
+
+2. *Memorability Test*: Name the ONE thing someone will remember about this interface. If you can't name it, the design lacks focus.
+
+3. *Typography*: Specific font pairing (display + body). NEVER use: Inter, Roboto, Arial, Open Sans, Lato, system defaults. Curated suggestion list embedded in prompt.
+
+4. *Color Strategy*: Dominant color + accent. 60-30-10 ratio. Dark or light. Adapted to codebase's color format convention. NEVER purple-gradient-on-white.
+
+5. *Motion Rules*: What animates, what doesn't. Timing tokens. CSS-only vs library. =prefers-reduced-motion= respect.
+
+6. *Spatial Composition*: Layout approach — grid-breaking? asymmetric? generous negative space? controlled density?
+
+**** Phase 3: Token Definitions
+Concrete values adapted to codebase conventions (discovered in Phase 1):
+- Typography scale (rem values)
+- Spacing scale
+- Color tokens (semantic: primary, secondary, accent, surface, error, success)
+- Border radius scale
+- Shadow/elevation scale
+- Animation duration/easing tokens
+
+Format: if codebase uses CSS custom properties, output as =:root { --token: value }=. If Tailwind, output as =theme.extend= config. If neither, output as CSS custom properties.
+
+**** Phase 4: Implementation Sub-tasks
+Standard org sub-tasks with file paths, but each task references the brief's decisions. The designer agent receives the approved brief + tokens as execution context.
+
+*** Anti-convergence injection
+
+If =.spell/design-history.jsonl= exists, read last 5 entries and inject as:
+
+#+begin_example
+Recent design directions used in this project (AVOID repeating these):
+- [timestamp] brutally minimal, Instrument Serif + IBM Plex Sans, deep navy + coral accent
+- [timestamp] editorial/magazine, Fraunces + Work Sans, warm cream + charcoal
+#+end_example
+
+*** Anti-patterns section (CRITICAL directives)
+
+Embed the AI slop avoidance from the existing designer.md, PLUS Anthropic's additions:
+- NEVER converge on common choices across generations
+- NEVER use generic AI aesthetics (Inter, purple gradients, identical card grids)
+- NEVER glassmorphism as decoration
+- NEVER bounce/elastic easing (use exponential)
+- Match implementation complexity to aesthetic vision
+
+*** Quality gates
+
+Include Aphrodite and Athena gates, triggered the same way ultraplan triggers Metis:
+
+#+begin_example
+{{#if designFlavor}}
+### Gate 1: Athena (mandatory before writing plan)
+Spawn an =athena= subagent to validate design decisions against accessibility and platform standards.
+
+### Gate 2: Aphrodite (triggered by user from approval UI)
+Spawn an =aphrodite= subagent to review aesthetic quality, coherence, and anti-slop compliance.
+{{/if}}
+#+end_example
+
+** ITEM Create Athena agent prompt
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/src/prompts/agents/athena.md=
+
+Athena validates design DECISIONS (not code) against standards. Pre-planning gate (like Metis). Receives the Design Direction Brief and checks:
+
+- Accessibility: will the chosen color contrast meet 4.5:1? Are touch targets planned at 44x44px min?
+- Platform conventions: does the layout respect platform idioms (iOS HIG, Material)?
+- Typography: is the font pairing accessible (min 16px body)? Will it load performantly?
+- Motion: does the plan respect =prefers-reduced-motion=? Are durations in 150-300ms range?
+- Token completeness: are all required token categories defined?
+
+Output format: same as Metis (GAPS/RISKS/RECOMMENDATIONS/MISSING CONTEXT).
+
+Frontmatter: =model: pi/slow=, =thinking-level: high=, =blocking: true=, =tools: read, grep, find=.
+
+** ITEM Create Aphrodite agent prompt
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/src/prompts/agents/aphrodite.md=
+
+Aphrodite reviews aesthetic quality of a design plan. Post-planning gate (like Momus). Receives the full plan and checks:
+
+- Coherence: does every decision reinforce the stated aesthetic direction?
+- Distinctiveness: would this be mistaken for generic AI output? Run the "which AI made this?" test
+- Anti-convergence: does this repeat patterns from design-history.jsonl?
+- Memorability: is the stated "one memorable thing" actually memorable?
+- Completeness: are there visual gaps (missing hover states, empty states, error states)?
+
+Output format: APPROVE or REJECT with specific issues (same as Momus).
+
+Frontmatter: =model: pi/slow=, =thinking-level: high=, =blocking: true=, =tools: read, grep, find=.
+
+** ITEM Enhance designer.md with reference lists
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+File: =packages/coding-agent/src/prompts/agents/designer.md=
+
+Add compact reference sections that give the designer concrete options instead of generating from nothing:
+
+*** Font pairing suggestions (10 + 10)
+Display: Fraunces, Instrument Serif, Playfair Display, Space Grotesk, Clash Display, Cabinet Grotesk, Satoshi, Plus Jakarta Sans, General Sans, Bricolage Grotesque
+Body: Source Serif Pro, IBM Plex Sans, Libre Franklin, Work Sans, JetBrains Mono (code), Geist, Geist Mono, Söhne, Untitled Sans, Switzer
+
+*** Aesthetic direction menu (12 named)
+Each with 1-line description and example brand reference. Same list as in plan-mode-uiux.md.
+
+*** Priority checklist (compressed from ui-ux-pro-max)
+Top 5 categories only, must-have checks only (not full rule descriptions):
+1. Accessibility (contrast 4.5:1, focus rings, alt text, keyboard nav)
+2. Touch & Interaction (44x44px targets, loading feedback, no hover-only)
+3. Style Selection (match product type, consistency, SVG icons not emoji)
+4. Layout & Responsive (mobile-first, viewport meta, no horizontal scroll)
+5. Typography & Color (16px min body, line-height 1.5, semantic color tokens)
+
+*** Add to procedure section
+After "Identify aesthetic direction" — add: "Reference the Design Direction Brief from /design plan mode if one exists. Execute against its decisions, do not re-decide."
+
+** ITEM Implement design-history.jsonl tracking
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+*** Write path
+When a /design plan is approved (in =handleExitPlanModeTool= or =finalizePlanDraft=), append a JSONL entry to =<project>/.spell/design-history.jsonl=:
+
+#+begin_src json
+{"ts":"2026-03-15T12:00:00Z","direction":"brutally minimal","fonts":["Instrument Serif","IBM Plex Sans"],"palette":"deep navy + coral accent","memorable":"floating navigation that morphs on scroll"}
+#+end_src
+
+Extract these fields from the approved plan org item body by simple regex/string matching on the structured brief sections.
+
+*** Read path
+In =#buildPlanModeMessage()= (or in the plan-mode-uiux.md template rendering), when =flavor === "design"=:
+1. Try to read =<cwd>/.spell/design-history.jsonl=
+2. Parse last 5 entries
+3. Inject as template variable =designHistory= into plan-mode-uiux.md
+
+*** Files to modify
+- =packages/coding-agent/src/session/agent-session.ts= — read history in =#buildPlanModeMessage= when design flavor
+- =packages/coding-agent/src/modes/interactive-mode.ts= — append history entry in =handleExitPlanModeTool= when flavor is design
+
+** ITEM Update coding skill
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: =.spell/skills/coding/SKILL.md=
+
+Add a section:
+
+#+begin_example
+When a task involves UI/frontend work:
+- Use /design to enter design plan mode before implementation
+- The Design Direction Brief produced by /design becomes the contract the designer agent executes against
+- The brief includes concrete token definitions adapted to codebase conventions
+- Do not re-decide aesthetic direction during implementation — execute the approved brief
+#+end_example
+
+* Integration with plan-mode-active.md
+
+The =plan-mode-active.md= Handlebars template needs a conditional block. Where the existing template has:
+
+#+begin_example
+{{#if iterative}}
+## Iterative Planning
+...
+{{else}}
+## Planning Workflow
+...
+{{/if}}
+#+end_example
+
+Add a =designFlavor= branch that includes the UI/UX planning content from =plan-mode-uiux.md=. The simplest approach: import plan-mode-uiux.md as a text module in =agent-session.ts= and concatenate it when rendering, similar to how =planModeSubagentPrompt= is handled. The template variable =designFlavor= controls which workflow section renders.
+
+* Verification
+
+1. =bun check:ts= passes
+2. =/design build a settings dashboard= enters plan mode with "Design" status indicator
+3. The agent produces a structured Design Direction Brief with all required sections
+4. The agent greps for existing design tokens before committing to values
+5. Anti-convergence: second =/design= invocation shows "avoid these" with prior directions
+6. Athena gate runs before plan writing (validates a11y + standards)
+7. Aphrodite gate available from approval UI (validates aesthetic quality)
+8. On approval, JSONL entry appended to =.spell/design-history.jsonl=
+9. Designer agent references the approved brief during execution
+
+* Critical Files
+
+- =packages/coding-agent/src/plan-mode/state.ts= — PlanModeState.flavor
+- =packages/coding-agent/src/slash-commands/builtin-registry.ts= — /design command
+- =packages/coding-agent/src/modes/interactive-mode.ts= — handlePlanModeCommand flavor support + history append
+- =packages/coding-agent/src/session/agent-session.ts= — #buildPlanModeMessage design flavor rendering + history read
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — designFlavor conditional
+- =packages/coding-agent/src/prompts/system/plan-mode-uiux.md= — NEW, core design planning template
+- =packages/coding-agent/src/prompts/agents/athena.md= — NEW, design standards gate
+- =packages/coding-agent/src/prompts/agents/aphrodite.md= — NEW, aesthetic quality gate
+- =packages/coding-agent/src/prompts/agents/designer.md= — reference lists + brief execution
+- =.spell/skills/coding/SKILL.md= — design planning mention
+* ITEM Design Plan Mode
+:PROPERTIES:
+:CUSTOM_ID: DRAFT-004-design-plan-mode
+:EFFORT: 6h
+:PRIORITY: #A
+:LAYER: prompt
+:END:
+
+* Goal
+
+Add a =/design= slash command that enters a UI/UX-specific plan mode. The agent produces a Design Direction Brief + concrete token definitions (adapted to codebase conventions) before any implementation begins. On approval, the designer agent executes against the brief, then a relentless visual testing phase validates the result.
+
+Informed by Anthropic's frontend-design skill (277K installs), elite-frontend-ux (gist by majidmanzarpour), and ui-ux-pro-max (110K weekly installs). Core insight: the agent must COMMIT to a design direction before writing code, and that commitment must be structured.
+
+* Decisions Made
+
+- Slash command: =/design [prompt]= — standalone, not a subcommand of /plan
+- State: new =PlanModeState.flavor= field (=undefined | "design"=) — controls which plan-mode prompt template is injected
+- Anti-convergence: =<project>/.spell/design-history.jsonl= — append-only, last N entries injected at plan mode entry
+- Quality gates (SWAPPED order per user request):
+  - Gate 1: *Aphrodite* (mandatory, pre-plan) — UI quality: visual coherence, distinctiveness, anti-slop, memorability
+  - Gate 2: *Athena* (user-triggered from approval UI) — UX quality: interaction design, information architecture, state coverage, flow logic
+  - Both care about accessibility and platform standards, but through their respective lenses
+- Token discovery: the /design plan mode prompt instructs the agent to grep for existing design tokens before committing to values
+- Plan output: Design Direction Brief + concrete token definitions adapted to codebase conventions
+- Visual testing: plan includes a mandatory visual verification phase — screenshot-driven, comparing rendered output against the brief's intent
+- Coding skill: updated to mention design planning framework
+
+* Architecture
+
+The plan mode system already supports variant behavior via template variables (=iterative=, =ultraplan=, =reentry=). Adding =flavor= follows the same pattern:
+
+1. =PlanModeState= gets =flavor?: "design"=
+2. =agent-session.ts #buildPlanModeMessage()= checks flavor and renders =plan-mode-uiux.md= instead of the generic planning workflow section
+3. The template is a SEPARATE file (=plan-mode-uiux.md=) — not a conditional branch in =plan-mode-active.md= — because the design planning workflow is substantially different
+4. =plan-mode-active.md= gets a ={{#if designFlavor}}= block that includes =plan-mode-uiux.md= content OR the existing planning workflow
+
+** ITEM Add =flavor= to PlanModeState and wire /design command
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+*** Files to modify
+
+- =packages/coding-agent/src/plan-mode/state.ts= — add =flavor?: "design"= to =PlanModeState=
+- =packages/coding-agent/src/slash-commands/builtin-registry.ts= — add =/design= command entry that calls =handlePlanModeCommand(args, { flavor: "design" })=
+- =packages/coding-agent/src/modes/interactive-mode.ts= — extend =handlePlanModeCommand= to accept =flavor= option, pass through to =#enterPlanMode=, store in =PlanModeState=. In =handleExitPlanModeTool=, when flavor is "design", offer "Review with Aphrodite" (gate 2 maps to Athena here, following the swapped gate order — Aphrodite is gate 1/mandatory, Athena is gate 2/user-triggered from approval UI)
+- =packages/coding-agent/src/modes/types.ts= — update type if needed for status display
+- =packages/coding-agent/src/session/agent-session.ts= — in =#buildPlanModeMessage()=, pass =designFlavor: state.flavor === "design"= to the template render context. Read design-history.jsonl and pass as =designHistory= variable.
+
+*** Behavior
+
+=/design build a settings dashboard= enters plan mode with flavor="design". Status line shows "Design" instead of "Plan". The plan-mode-active.md template detects =designFlavor= and renders the UI/UX planning workflow instead of the generic one.
+
+** ITEM Create plan-mode-uiux.md prompt template
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+This is the core deliverable. Located at =packages/coding-agent/src/prompts/system/plan-mode-uiux.md=.
+
+*** Template structure
+
+Replaces the "Planning Workflow" section of =plan-mode-active.md= when =designFlavor= is true. Keeps same outer structure (read-only constraints, org integration, exit_plan_mode mechanics) but replaces planning phases with:
+
+**** Phase 1: Context Discovery
+- WHO uses this interface, on what devices, at what expertise level
+- WHAT is the primary action / goal
+- Grep for existing design conventions in codebase:
+  - CSS custom properties / design tokens (=grep "var(--"= in css/ts files)
+  - Tailwind config (=tailwind.config.*=)
+  - Color format conventions (oklch, hsl, hex — adapt to what exists)
+  - Spacing system (4px, 8px base, modular scale)
+  - Existing font imports / typography
+  - Component library in use (shadcn, radix, etc.)
+
+**** Phase 2: Design Direction Brief
+Produce a structured brief with these REQUIRED sections:
+
+1. *Aesthetic Direction*: Choose from curated list (brutally minimal, maximalist editorial, retro-futuristic, organic/natural, luxury/refined, playful, neo-brutalist, art deco, soft/pastel, industrial/utilitarian, editorial/magazine, or custom). COMMIT — do not hedge.
+
+2. *Memorability Test*: Name the ONE thing someone will remember about this interface. If you can't name it, the design lacks focus.
+
+3. *Typography*: Specific font pairing (display + body). NEVER use: Inter, Roboto, Arial, Open Sans, Lato, system defaults. Curated suggestion list embedded in prompt.
+
+4. *Color Strategy*: Dominant color + accent. 60-30-10 ratio. Dark or light. Adapted to codebase's color format convention. NEVER purple-gradient-on-white.
+
+5. *Motion Rules*: What animates, what doesn't. Timing tokens. CSS-only vs library. =prefers-reduced-motion= respect.
+
+6. *Spatial Composition*: Layout approach — grid-breaking? asymmetric? generous negative space? controlled density?
+
+7. *Interaction States*: Every interactive element must have: default, hover, focus, active, disabled, loading, error, empty. Plan which states matter for which elements.
+
+8. *Visual Testing Plan*: Enumerate the screenshots/viewport sizes/states that MUST be visually verified after implementation.
+
+**** Phase 3: Token Definitions
+Concrete values adapted to codebase conventions (discovered in Phase 1):
+- Typography scale (rem values)
+- Spacing scale
+- Color tokens (semantic: primary, secondary, accent, surface, error, success)
+- Border radius scale
+- Shadow/elevation scale
+- Animation duration/easing tokens
+
+Format: if codebase uses CSS custom properties, output as =:root { --token: value }=. If Tailwind, output as =theme.extend= config. If neither, output as CSS custom properties.
+
+**** Phase 4: Implementation Sub-tasks
+Standard org sub-tasks with file paths, each referencing the brief's decisions.
+
+**** Phase 5: Visual Verification (MANDATORY)
+Every design plan MUST end with a visual testing phase. The implementation sub-tasks MUST include:
+
+1. *Screenshot-driven review*: After implementation, take screenshots at key breakpoints (mobile 375px, tablet 768px, desktop 1440px) and of every interaction state (hover, focus, error, empty, loading).
+2. *Brief compliance check*: Compare each screenshot against the Design Direction Brief — does the rendered output match the stated aesthetic direction, color strategy, typography choice, and spatial composition?
+3. *Anti-slop audit*: Review screenshots for AI slop patterns (identical card grids, center-aligned everything, purple gradients, glassmorphism decoration, bounce easing).
+4. *Iteration loop*: If any screenshot fails the brief compliance check or anti-slop audit, fix and re-screenshot. Do not stop at "it compiles." Stop when it looks RIGHT.
+
+*** Anti-convergence injection
+
+If =.spell/design-history.jsonl= exists, read last 5 entries and inject as:
+
+#+begin_example
+Recent design directions used in this project (AVOID repeating these — commit to something DIFFERENT):
+- [timestamp] brutally minimal, Instrument Serif + IBM Plex Sans, deep navy + coral accent
+- [timestamp] editorial/magazine, Fraunces + Work Sans, warm cream + charcoal
+#+end_example
+
+*** Anti-patterns section (CRITICAL directives)
+
+Embed from existing designer.md + Anthropic's frontend-design skill:
+- NEVER converge on common choices across generations
+- NEVER use generic AI aesthetics (Inter, purple gradients, identical card grids, cards-in-cards)
+- NEVER glassmorphism as decoration
+- NEVER bounce/elastic easing (use exponential: ease-out-quart/expo)
+- NEVER center-align everything (left-align with asymmetry feels more designed)
+- NEVER same spacing everywhere (create rhythm)
+- Match implementation complexity to aesthetic vision
+- Every interface should prompt "how was this made?" not "which AI made this?"
+
+*** Quality gates
+
+#+begin_example
+### Gate 1: Aphrodite (mandatory — runs before you write the plan)
+
+Before writing any plan content, you MUST spawn an =aphrodite= subagent:
+
+task:
+  agent: aphrodite
+  assignment: |
+    User requirements: <paste the user's request>
+    Codebase context: <paste key findings from exploration>
+    Design direction so far: <paste any aesthetic choices>
+
+Incorporate Aphrodite's findings silently — do not surface the analysis to the user. Use it to write a more visually distinctive plan.
+
+### Gate 2: Athena (triggered by user from approval UI)
+
+If you receive a message asking you to run Athena review on a plan:
+1. Spawn an =athena= subagent with the plan content
+2. If Athena returns REJECT, revise the plan addressing the specific issues
+3. Call exit_plan_mode again when done
+
+You MUST NOT ask the user about Athena review yourself — the approval UI handles this.
+#+end_example
+
+** ITEM Create Aphrodite agent prompt
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/src/prompts/agents/aphrodite.md=
+
+Aphrodite is the UI eye — she sees surfaces, aesthetics, visual impact. She's the one who looks at a design plan and knows whether it will produce something beautiful or something forgettable.
+
+Frontmatter: =model: pi/slow=, =thinking-level: high=, =blocking: true=, =tools: read, grep, find=. Pre-planning gate (runs BEFORE the plan is written).
+
+*** What Aphrodite evaluates
+
+*Visual Identity & Distinctiveness*
+- Would this design be mistaken for generic AI output? Run the "which AI made this?" test.
+- Does the aesthetic direction have genuine personality, or is it playing it safe?
+- Are typography choices distinctive? (Flag Inter, Roboto, Arial, system fonts)
+- Is the color strategy bold enough? (Flag purple-on-white, evenly-distributed palettes, gray-on-gray)
+- Are there unexpected visual details that create delight? (gradient meshes, noise textures, geometric patterns, custom cursors, grain overlays — when appropriate to the direction)
+
+*Visual Coherence*
+- Does every decision reinforce the stated aesthetic direction?
+- Are there conflicting visual signals? (e.g., brutalist typography with soft pastel colors)
+- Is the visual hierarchy clear — can you tell what's most important without reading?
+- Does the spatial composition have rhythm, or is everything evenly spaced?
+
+*Memorability*
+- Is the stated "one memorable thing" actually memorable?
+- Would someone screenshot this? Would a designer ask "how was this made?"
+- Does it have a clear point-of-view, or is it committee-designed?
+
+*Anti-convergence*
+- Does this repeat patterns from recent design-history.jsonl entries?
+- Are there enough differences from previous designs in this project?
+
+*Accessibility through a visual lens*
+- Will the color choices meet contrast requirements while still being beautiful?
+- Can focus states be styled distinctively within the aesthetic direction?
+- Will the chosen typography be legible at the planned sizes?
+
+*** Output format
+
+Same as Metis: GAPS / RISKS / RECOMMENDATIONS / MISSING CONTEXT.
+- GAPS: visual identity weaknesses, coherence breaks, forgettable choices
+- RISKS: aesthetic choices that will collapse into AI slop during implementation
+- RECOMMENDATIONS: specific alternatives that would be more distinctive
+- MISSING CONTEXT: visual references, brand guidelines, or codebase patterns not yet examined
+
+** ITEM Create Athena agent prompt
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/src/prompts/agents/athena.md=
+
+Athena is the UX strategist — she sees flows, states, interactions, information architecture. She's the one who knows whether a beautiful interface actually WORKS: whether users can navigate it, whether error states are handled, whether the interaction model is learnable.
+
+Frontmatter: =model: pi/slow=, =thinking-level: high=, =blocking: true=, =tools: read, grep, find=. Post-planning gate (triggered from approval UI, like Momus).
+
+*** What Athena evaluates
+
+*Interaction Design*
+- Are ALL interaction states planned? (default, hover, focus, active, disabled, loading, error, empty)
+- Do interactive elements have appropriate feedback? (button press: 100-150ms, loading states after 300ms)
+- Is touch target sizing planned? (44x44px min, 8px spacing between targets)
+- Are there hover-only interactions that would fail on mobile?
+- Do animations convey meaning, or are they decoration? (Every animation must express cause-effect)
+- Is motion interruptible? Can users tap/gesture to cancel in-progress animations?
+
+*Information Architecture*
+- Is the content hierarchy clear? What's primary, secondary, tertiary?
+- Does progressive disclosure work? (Summary → detail on demand, don't overwhelm upfront)
+- Are navigation patterns appropriate for the depth? (3-6 sections: top nav; 10+: sidebar; deep: breadcrumbs)
+- Is the primary CTA obvious? (One primary per viewport, secondary actions visually subordinate)
+
+*State Coverage*
+- Empty states: do they guide the user toward action, or just say "nothing here"?
+- Error states: do error messages state cause + how to fix? (Not just "Invalid input")
+- Loading states: skeleton/shimmer vs spinner? (Skeletons for >1s operations)
+- Confirmation flows: destructive actions require explicit confirmation?
+
+*Flow Logic*
+- Can the user always go back? Is back-navigation predictable?
+- Are there dead ends? Can the user always reach primary navigation?
+- Multi-step flows: is there a progress indicator? Can you go back?
+- Form validation: on blur, not keystroke? Error placement near field?
+
+*Responsive Strategy*
+- Is there a mobile-first approach with clear breakpoint behavior?
+- Does content priority shift appropriately on mobile? (Core content first, fold secondary)
+- Are there layout decisions that would cause horizontal scroll on mobile?
+
+*Accessibility through a UX lens*
+- Is tab order logical?
+- Do forms have visible labels (not placeholder-only)?
+- Are screen reader announcements planned for dynamic content?
+- Does the plan respect =prefers-reduced-motion=?
+
+*** Output format
+
+APPROVE or REJECT with specific issues (same as Momus):
+- [INTERACTION] missing state, broken feedback loop
+- [ARCHITECTURE] unclear hierarchy, dead-end flow
+- [STATE_COVERAGE] missing empty/error/loading state
+- [FLOW] broken back-navigation, no progress indicator
+- [RESPONSIVE] layout break at specific breakpoint
+- [ACCESSIBILITY] missing label, broken tab order
+
+Approval bias: reject only for true UX blockers. A plan with beautiful UI but one missing empty state is APPROVE with a note.
+
+** ITEM Enhance designer.md with reference lists
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+File: =packages/coding-agent/src/prompts/agents/designer.md=
+
+*** Font pairing suggestions (10 + 10)
+Display: Fraunces, Instrument Serif, Playfair Display, Space Grotesk, Clash Display, Cabinet Grotesk, Satoshi, Plus Jakarta Sans, General Sans, Bricolage Grotesque
+Body: Source Serif Pro, IBM Plex Sans, Libre Franklin, Work Sans, JetBrains Mono (code), Geist, Geist Mono, Söhne, Untitled Sans, Switzer
+
+*** Aesthetic direction menu (12 named)
+Each with 1-line description and example brand reference. Same list as in plan-mode-uiux.md.
+
+*** Priority checklist (compressed from ui-ux-pro-max)
+Top 5 categories only, must-have checks only:
+1. Accessibility (contrast 4.5:1, focus rings, alt text, keyboard nav)
+2. Touch & Interaction (44x44px targets, loading feedback, no hover-only)
+3. Style Selection (match product type, consistency, SVG icons not emoji)
+4. Layout & Responsive (mobile-first, viewport meta, no horizontal scroll)
+5. Typography & Color (16px min body, line-height 1.5, semantic color tokens)
+
+*** Add to procedure section
+After "Identify aesthetic direction" — add: "Reference the Design Direction Brief from /design plan mode if one exists. Execute against its decisions, do not re-decide."
+
+*** Add visual testing mandate
+Add to Implementation procedure: "After implementation, you MUST take screenshots at key breakpoints and interaction states. Compare rendered output against the Design Direction Brief. If the result doesn't match the brief's aesthetic direction, iterate. You are not done when it compiles — you are done when it looks RIGHT."
+
+** ITEM Implement design-history.jsonl tracking
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+*** Write path
+When a /design plan is approved (in =handleExitPlanModeTool=), append a JSONL entry to =<cwd>/.spell/design-history.jsonl=:
+
+#+begin_src json
+{"ts":"2026-03-15T12:00:00Z","direction":"brutally minimal","fonts":["Instrument Serif","IBM Plex Sans"],"palette":"deep navy + coral accent","memorable":"floating navigation that morphs on scroll"}
+#+end_src
+
+Extract fields from the approved plan org item body by regex on the structured brief sections.
+
+*** Read path
+In =#buildPlanModeMessage()= when =flavor === "design"=:
+1. Try to read =<cwd>/.spell/design-history.jsonl=
+2. Parse last 5 entries via =Bun.JSONL.parse()=
+3. Inject as =designHistory= template variable into plan-mode-uiux.md
+
+*** Files to modify
+- =packages/coding-agent/src/session/agent-session.ts= — read history in =#buildPlanModeMessage=
+- =packages/coding-agent/src/modes/interactive-mode.ts= — append history entry on plan approval when flavor is design
+
+** ITEM Update coding skill
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: =.spell/skills/coding/SKILL.md=
+
+Add a section on design planning:
+- When task involves UI/frontend: use =/design= to enter design plan mode before implementation
+- The Design Direction Brief is the contract the designer agent executes against
+- Brief includes concrete token definitions adapted to codebase conventions
+- Do not re-decide aesthetic direction during implementation — execute the approved brief
+- After implementation: visual testing phase is mandatory, not optional
+
+* Integration with plan-mode-active.md
+
+=plan-mode-active.md= Handlebars template needs a conditional block. Where the existing template has the iterative/parallel workflow branch, add a =designFlavor= branch that renders the UI/UX planning content. Implementation: import =plan-mode-uiux.md= as a text module in =agent-session.ts= and concatenate when rendering. The =designFlavor= template variable controls which workflow section renders.
+
+The approval UI in =handleExitPlanModeTool= needs to show "Review with Athena" (instead of "Review with Momus") when =flavor === "design"=. Same mechanism as ultraplan's Momus review.
+
+* Verification
+
+1. =bun check:ts= passes
+2. =/design build a settings dashboard= enters plan mode with "Design" status indicator
+3. Agent produces a structured Design Direction Brief with all required sections (aesthetic direction, memorability test, typography, color, motion, spatial, interaction states, visual testing plan)
+4. Agent greps for existing design tokens before committing to values
+5. Aphrodite gate runs before plan writing (validates visual quality)
+6. Athena gate available from approval UI (validates UX quality)
+7. Second =/design= invocation shows "avoid these" with prior directions from JSONL
+8. On approval, JSONL entry appended to =.spell/design-history.jsonl=
+9. Designer agent references the approved brief during execution
+10. Implementation sub-tasks include visual testing phase with screenshot verification
+
+* Critical Files
+
+- =packages/coding-agent/src/plan-mode/state.ts= — PlanModeState.flavor
+- =packages/coding-agent/src/slash-commands/builtin-registry.ts= — /design command
+- =packages/coding-agent/src/modes/interactive-mode.ts= — flavor support + history append + Athena in approval UI
+- =packages/coding-agent/src/session/agent-session.ts= — design flavor rendering + history read
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — designFlavor conditional
+- =packages/coding-agent/src/prompts/system/plan-mode-uiux.md= — NEW, core design planning template
+- =packages/coding-agent/src/prompts/agents/aphrodite.md= — NEW, UI quality gate (Gate 1, mandatory)
+- =packages/coding-agent/src/prompts/agents/athena.md= — NEW, UX quality gate (Gate 2, user-triggered)
+- =packages/coding-agent/src/prompts/agents/designer.md= — reference lists + brief execution + visual testing mandate
+- =.spell/skills/coding/SKILL.md= — design planning mention

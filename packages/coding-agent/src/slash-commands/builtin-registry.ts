@@ -100,6 +100,16 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "design",
+		description: "Enter design plan mode (UI/UX planning with Aphrodite/Athena quality gates)",
+		inlineHint: "[prompt]",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			await runtime.ctx.handlePlanModeCommand(command.args || undefined, { flavor: "design" });
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "model",
 		aliases: ["models"],
 		description: "Select model (opens selector UI)",

@@ -60,6 +60,39 @@ import {
 import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoItem, TodoPhase } from "./types";
 import { UiHelpers } from "./utils/ui-helpers";
 
+/**
+ * Extract key design decisions from an approved plan's text for design-history.jsonl.
+ * Uses simple regex matching on the structured Design Direction Brief sections.
+ */
+function extractDesignBriefEntry(planContent: string): {
+	ts: string;
+	direction: string;
+	fonts: string[];
+	palette: string;
+	memorable: string;
+} {
+	const direction =
+		/aesthetic direction[:\s]+([^\n]+)/i.exec(planContent)?.[1]?.trim() ??
+		/direction[:\s]+([^\n]+)/i.exec(planContent)?.[1]?.trim() ??
+		"unknown";
+	const typographyMatch = /typography[:\s]+([^\n]+)/i.exec(planContent);
+	const fonts = typographyMatch
+		? typographyMatch[1]
+				.split(/[+,]|\band\b/i)
+				.map(f => f.trim())
+				.filter(Boolean)
+		: [];
+	const palette =
+		/color strategy[:\s]+([^\n]+)/i.exec(planContent)?.[1]?.trim() ??
+		/palette[:\s]+([^\n]+)/i.exec(planContent)?.[1]?.trim() ??
+		"";
+	const memorable =
+		/memorability test[:\s]+([^\n]+)/i.exec(planContent)?.[1]?.trim() ??
+		/memorable[:\s]+([^\n]+)/i.exec(planContent)?.[1]?.trim() ??
+		"";
+	return { ts: new Date().toISOString(), direction, fonts, palette, memorable };
+}
+
 const EDITOR_MAX_HEIGHT_MIN = 6;
 const EDITOR_MAX_HEIGHT_MAX = 18;
 const EDITOR_RESERVED_ROWS = 12;
@@ -105,6 +138,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	planModePaused = false;
 	planModePlanFilePath: string | undefined = undefined;
 	planModeUltraplan = false;
+	planModeFlavor: "design" | undefined = undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
@@ -725,6 +759,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		planFilePath?: string;
 		workflow?: "parallel" | "iterative";
 		ultraplan?: boolean;
+		flavor?: "design";
 	}): Promise<void> {
 		if (this.planModeEnabled) {
 			return;
@@ -752,6 +787,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			workflow: options?.workflow ?? "parallel",
 			reentry: this.#planModeHasEntered,
 			ultraplan: options?.ultraplan ?? false,
+			flavor: options?.flavor,
 		});
 		if (this.session.isStreaming) {
 			await this.session.sendPlanModeContext({ deliverAs: "steer" });
@@ -759,11 +795,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#planModeHasEntered = true;
 		await this.#applyPlanModeModel();
 		this.planModeUltraplan = options?.ultraplan ?? false;
+		this.planModeFlavor = options?.flavor;
 		this.#updatePlanModeStatus();
 		this.sessionManager.appendModeChange("plan", { planFilePath });
 		this.updateEditorBorderColor();
 		this.#showPlanModeOverlay(options?.ultraplan ?? false, false);
-		this.showStatus(options?.ultraplan ? "Ultraplan mode enabled." : "Plan mode enabled.");
+		this.showStatus(
+			options?.ultraplan
+				? "Ultraplan mode enabled."
+				: options?.flavor === "design"
+					? "Design plan mode enabled."
+					: "Plan mode enabled.",
+		);
 	}
 
 	async #exitPlanMode(options?: { silent?: boolean; paused?: boolean }): Promise<void> {
@@ -787,6 +830,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.planModeEnabled = false;
 		this.planModePaused = options?.paused ?? false;
 		this.planModePlanFilePath = undefined;
+		this.planModeFlavor = undefined;
 		this.#planModePreviousTools = undefined;
 		this.#planModePreviousModel = undefined;
 		this.#updatePlanModeStatus();
@@ -865,6 +909,19 @@ export class InteractiveMode implements InteractiveModeContext {
 			});
 		}
 		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
+		// Append design history entry when approving a design-flavored plan
+		if (this.planModeFlavor === "design") {
+			try {
+				const historyPath = path.join(this.sessionManager.getCwd(), ".spell", "design-history.jsonl");
+				const entry = extractDesignBriefEntry(planContent);
+				const existing = await Bun.file(historyPath)
+					.text()
+					.catch(() => "");
+				await Bun.write(historyPath, `${existing + JSON.stringify(entry)}\n`);
+			} catch {
+				// Non-fatal
+			}
+		}
 		await this.#exitPlanMode({ silent: true, paused: false });
 		await this.handleClearCommand();
 		// Finalize the org draft first — if it succeeds, use org:// reference and skip local copy.
@@ -907,7 +964,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.session.prompt(prompt, { synthetic: true });
 	}
 
-	async handlePlanModeCommand(initialPrompt?: string, options?: { ultraplan?: boolean }): Promise<void> {
+	async handlePlanModeCommand(
+		initialPrompt?: string,
+		options?: { ultraplan?: boolean; flavor?: "design" },
+	): Promise<void> {
 		if (this.planModeEnabled) {
 			const confirmed = await this.showHookConfirm(
 				"Exit plan mode?",
@@ -917,7 +977,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#exitPlanMode({ paused: true });
 			return;
 		}
-		await this.#enterPlanMode({ ultraplan: options?.ultraplan });
+		await this.#enterPlanMode({ ultraplan: options?.ultraplan, flavor: options?.flavor });
 		if (initialPrompt && this.onInputCallback) {
 			this.onInputCallback(this.startPendingSubmission({ text: initialPrompt }));
 		}
@@ -950,6 +1010,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		const selectorOptions = ["Approve and execute", "Refine plan", "Stay in plan mode"];
 		if (this.planModeUltraplan) {
 			selectorOptions.splice(1, 0, "Review with Momus");
+		} else if (this.planModeFlavor === "design") {
+			selectorOptions.splice(1, 0, "Review with Athena");
 		}
 		this.isPendingApproval = true;
 		const choice = await this.showHookSelector("Plan mode - next step", selectorOptions);
@@ -971,6 +1033,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (choice === "Review with Momus") {
 			await this.#enterPlanMode({ ultraplan: true });
 			await this.session.prompt(`Run Momus review on this plan and address any issues:\n\n${planContent}`, {
+				synthetic: true,
+			});
+			return;
+		}
+		if (choice === "Review with Athena") {
+			await this.#enterPlanMode({ flavor: "design" });
+			await this.session.prompt(`Run Athena review on this plan and address any issues:\n\n${planContent}`, {
 				synthetic: true,
 			});
 			return;
