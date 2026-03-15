@@ -147,6 +147,22 @@ void WindowManager::loadWindow(const QString &id, const QString &path,
     }
     m_windows[id].armedTools = armedToolsList;
 
+    // Detect user/WM-initiated window close
+    auto *rootWin = qobject_cast<QQuickWindow *>(engine->rootObjects().first());
+    if (rootWin) {
+        connect(rootWin, &QQuickWindow::closing, this, [this, id](QQuickCloseEvent *) {
+            // Guard against double-close (e.g. TS side already sent close command)
+            if (!m_windows.contains(id)) return;
+            delete m_windows[id].engine;
+            m_windows.remove(id);
+            QJsonObject ev;
+            ev["type"] = "closed";
+            ev["id"] = id;
+            ev["wmClose"] = true;
+            writeEvent(ev);
+        });
+    }
+
     QJsonObject ev;
     ev["type"] = "ready";
     ev["id"] = id;
