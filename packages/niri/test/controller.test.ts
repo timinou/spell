@@ -453,5 +453,34 @@ describe("NiriOverviewController", () => {
 			expect(Object.keys(writtenFiles).length).toBe(0);
 			ctrl.destroy();
 		});
+
+		it("includes projectName and sessionTitle in status file", async () => {
+			const { ctx } = makeCtx({ sessionName: "my-session" });
+			const ctrl = new NiriOverviewController("/fake.sock", ctx);
+			await Bun.sleep(10);
+			const key = Object.keys(writtenFiles).find(k => k.includes("42.json"));
+			expect(key).toBeDefined();
+			const content = JSON.parse(writtenFiles[key!]);
+			expect(content.projectName).toBe("myapp");
+			expect(content.sessionTitle).toBe("my-session");
+			ctrl.destroy();
+		});
+
+		it("updates status file when session title changes", async () => {
+			const overrides = { sessionName: "first-title" };
+			const { ctx, sessionListeners } = makeCtx(overrides);
+			const ctrl = new NiriOverviewController("/fake.sock", ctx);
+			await Bun.sleep(10);
+			// Clear and change title
+			for (const k of Object.keys(writtenFiles)) delete writtenFiles[k];
+			overrides.sessionName = "second-title";
+			sessionListeners[0]?.();
+			await Bun.sleep(10);
+			const key = Object.keys(writtenFiles).find(k => k.includes("42.json"));
+			expect(key).toBeDefined();
+			const content = JSON.parse(writtenFiles[key!]);
+			expect(content.sessionTitle).toBe("second-title");
+			ctrl.destroy();
+		});
 	});
 });

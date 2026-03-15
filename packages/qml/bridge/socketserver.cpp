@@ -11,14 +11,12 @@
 
 SocketServer::SocketServer(QObject *parent) : QObject(parent) {
     m_server = new QLocalServer(this);
-    // Accept only one connection at a time
-    m_server->setMaxPendingConnections(1);
     connect(m_server, &QLocalServer::newConnection, this, &SocketServer::onNewConnection);
 }
 
 SocketServer::~SocketServer() {
-    if (m_client) {
-        m_client->disconnectFromServer();
+    for (QLocalSocket *client : std::as_const(m_clients)) {
+        client->disconnectFromServer();
     }
     if (m_server->isListening()) {
         m_server->close();
@@ -68,18 +66,17 @@ bool SocketServer::listen() {
     return true;
 }
 
-void SocketServer::writeEvent(const QJsonObject &event) {
-    if (!m_client || m_client->state() != QLocalSocket::ConnectedState) {
+void SocketServer::writeEvent(QLocalSocket *client, const QJsonObject &event) {
+    if (!client || client->state() != QLocalSocket::ConnectedState) {
         return;
     }
     const QByteArray line = QJsonDocument(event).toJson(QJsonDocument::Compact) + '\n';
-    const qint64 written = m_client->write(line);
+    const qint64 written = client->write(line);
     if (written < 0) {
-        // Write failed — client is gone
         fprintf(stderr, "Write to client failed, disconnecting\n");
-        m_client->disconnectFromServer();
+        client->disconnectFromServer();
     } else {
-        m_client->flush();
+        client->flush();
     }
 }
 
@@ -95,48 +92,45 @@ void SocketServer::onNewConnection() {
     QLocalSocket *incoming = m_server->nextPendingConnection();
     if (!incoming) return;
 
-    // If there's an existing client, disconnect it
-    if (m_client) {
-        m_client->disconnectFromServer();
-        m_client->deleteLater();
-        m_client = nullptr;
-        m_readBuffer.clear();
-    }
+    m_clients.append(incoming);
+    m_readBuffers[incoming] = QByteArray();
+    connect(incoming, &QLocalSocket::readyRead, this, &SocketServer::onClientReadyRead);
+    connect(incoming, &QLocalSocket::disconnected, this, &SocketServer::onClientDisconnected);
 
-    m_client = incoming;
-    connect(m_client, &QLocalSocket::readyRead, this, &SocketServer::onClientReadyRead);
-    connect(m_client, &QLocalSocket::disconnected, this, &SocketServer::onClientDisconnected);
+    fprintf(stderr, "Client connected (%d total)\n", m_clients.size());
 
-    fprintf(stderr, "Client connected\n");
-
-    // Notify so WindowManager can send a state snapshot
+    // Notify so WindowManager can send a state snapshot for this client
     if (m_reconnect) {
-        m_reconnect();
+        m_reconnect(incoming);
     }
 }
 
 void SocketServer::onClientReadyRead() {
-    if (!m_client) return;
+    auto *client = qobject_cast<QLocalSocket *>(sender());
+    if (!client) return;
 
-    m_readBuffer.append(m_client->readAll());
+    m_readBuffers[client].append(client->readAll());
 
+    QByteArray &buf = m_readBuffers[client];
     while (true) {
-        const int idx = m_readBuffer.indexOf('\n');
+        const int idx = buf.indexOf('\n');
         if (idx < 0) break;
-        const QByteArray line = m_readBuffer.left(idx).trimmed();
-        m_readBuffer.remove(0, idx + 1);
+        const QByteArray line = buf.left(idx).trimmed();
+        buf.remove(0, idx + 1);
         if (!line.isEmpty() && m_dispatch) {
-            m_dispatch(line);
+            m_dispatch(client, line);
         }
     }
 }
 
 void SocketServer::onClientDisconnected() {
-    fprintf(stderr, "Client disconnected, waiting for reconnection\n");
-    if (m_client) {
-        m_client->deleteLater();
-        m_client = nullptr;
-    }
-    m_readBuffer.clear();
-    // Server keeps running — windows stay alive
+    auto *client = qobject_cast<QLocalSocket *>(sender());
+    if (!client) return;
+
+    m_clients.removeOne(client);
+    m_readBuffers.remove(client);
+    client->deleteLater();
+
+    fprintf(stderr, "Client disconnected (%d remaining)\n", m_clients.size());
+    // Server keeps running — windows stay alive for reconnect
 }

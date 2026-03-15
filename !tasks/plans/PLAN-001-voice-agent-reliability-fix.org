@@ -1,0 +1,86 @@
+#+TITLE: VOICE_AGENT_RELIABILITY_FIX
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-voice-agent-reliability-fix
+
+* Initial Message
+
+run the agent, let's try it
+
+* Problem
+
+The voice agent skill (`.spell/skills/voice-agent/`) was created and the pipeline connects successfully (ffmpeg captures audio, Deepgram WebSocket opens), but during live use the async bash jobs silently failed — the user saw "Listening..." with empty transcript indefinitely.
+
+Root causes:
+1. Pipeline jobs died silently — no way to tell from QML that the backend is dead
+2. ffmpeg stderr was set to "ignore", swallowing error diagnostics
+3. No heartbeat/liveness signal — QML shows stale "listening" state from initial writeState() even when the pipeline process has exited
+
+* Confirmed Working
+
+- ffmpeg pulse capture: tested, records successfully from default device (Mic1)
+- Deepgram WebSocket: connects, prints "Deepgram connected" to stderr
+- State file: written correctly on startup
+- QML: polls state file, shows device selector, sends events correctly
+- Audio device env var: AUDIO_DEVICE properly configurable
+
+* Approach
+
+** ITEM Add heartbeat timestamp to state file
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+In `voice-pipeline.ts`:
+- Add `lastUpdate: number` (epoch ms) field to VoiceState
+- Set it in every `writeState()` call: `state.lastUpdate = Date.now()`
+
+In `voice-ui.qml`:
+- On each poll, check if `lastUpdate` is older than 3 seconds
+- If stale, show "Pipeline disconnected" warning in red
+- This tells the user the backend died even though the state file still exists
+
+** ITEM Change ffmpeg stderr to pipe and log errors
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+In `voice-pipeline.ts`:
+- Change `stderr: "ignore"` to `stderr: "pipe"` on the ffmpeg spawn
+- Drain stderr and log to console.error so async job output captures diagnostics
+- This makes failures visible when running `read jobs://<id>`
+
+** ITEM Add error field to state file for QML display
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+In `voice-pipeline.ts`:
+- Add `error: string | null` to VoiceState
+- On Deepgram close/error, set `state.error = "Deepgram disconnected, reconnecting..."`
+- On ffmpeg exit, set `state.error = "Audio capture failed"` and write state before exiting
+- Clear error on successful Deepgram reconnect
+
+In `voice-ui.qml`:
+- Show error text in red below the status indicator when `error` is non-null
+
+** ITEM Update SKILL.md with troubleshooting for async job failures
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+Add note that the pipeline async job should be checked with `read jobs://<id>` if transcript stays empty.
+
+* Files to Modify
+
+| File | Change |
+|---|---|
+| `.spell/skills/voice-agent/voice-pipeline.ts` | Add lastUpdate, error fields; stderr to pipe; log ffmpeg stderr |
+| `.spell/skills/voice-agent/voice-ui.qml` | Show stale/error states; check lastUpdate age |
+| `.spell/skills/voice-agent/SKILL.md` | Troubleshooting additions |
+
+* Verification
+
+1. Launch pipeline, confirm lastUpdate increments on each poll
+2. Kill pipeline manually, confirm QML shows "Pipeline disconnected" within 3s
+3. Set bad DEEPGRAM_API_KEY, confirm error field propagates to QML
+4. Normal operation: speak into mic, confirm transcript appears

@@ -1,0 +1,187 @@
+#+TITLE: QUICKSHELL_SPELL_SESSION_DASHBOARD
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-quickshell-spell-session-dashboard
+
+* Initial Message
+
+at this point, sessions provide enough to make Quickshell able to do cool stuff, like clearly show me which windows need my input or need me to accept a plan versus which ones are done, quickly, form the DMS workspace, or in its own extension
+
+* Problem
+
+Spell sessions currently show tiny status dots on DankBar workspace buttons. This is enough to know /something/ needs attention on a workspace, but not /what/. The user wants:
+
+1. A DankBar widget with a popout panel listing all active sessions with status, project name, click-to-focus
+2. Tooltips on workspace status dots showing session details
+3. Toast notifications when a session transitions to =needs_input= or =pending_approval=
+
+* Current State
+
+** Already implemented (spell side)
+- =packages/niri/src/controller.ts= writes status files to =~/.spell/status/<windowId>.json= on every status change
+- Status file format: ={ status, windowId, pid, updatedAt }=
+- Status values: =idle=, =running=, =needs_input=, =error=, =completed=, =pending_approval=
+- File deleted on controller destroy
+
+** Already implemented (Quickshell side)
+- =~/.config/quickshell/dms/Services/SpellStatusService.qml= — polls =~/.spell/status/= every 2s, maintains =statusByWindowId= map, provides =getWorkspaceStatuses(workspaceId)=
+- =WorkspaceSwitcher.qml= — colored dots (lines 1407-1450) with pulsing animation for =needs_input=
+
+** Missing
+- Status files lack project name and session title — needed for any richer display
+- No DankBar widget or popout panel
+- No tooltips on workspace dots
+- No toast notifications on status transitions
+
+* Architecture
+
+Three-layer approach: enrich status data → build dashboard widget → add notifications + tooltips.
+
+** Data flow
+1. Spell writes enriched JSON to =~/.spell/status/<windowId>.json=
+2. SpellStatusService polls every 2s, exposes full session objects (not just status strings)
+3. DankBar widget reads from SpellStatusService, renders list
+4. WorkspaceSwitcher dots get tooltips from the same data
+5. SpellStatusService detects transitions → fires ToastService notifications
+6. Click on session → =NiriService.focusWindow(windowId)= to jump to that terminal
+
+* Approach
+
+** ITEM Enrich status file payload (spell side)
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/niri/src/controller.ts=
+
+Add =projectName= and =sessionTitle= to the status JSON payload in =#writeStatusIfChanged()=. These are already available via the =NiriOverviewContext=:
+- =context.sessionManager.getCwd()= → =path.basename(cwd)= for project name
+- =context.sessionManager.getSessionName()= for session title
+
+Also write on /every/ status change (currently deduped by status value). The dedup should compare the full payload or at minimum =status + sessionTitle= since the title can change mid-session (generated after first message).
+
+New payload:
+#+begin_src json
+{
+  "status": "needs_input",
+  "windowId": 430,
+  "pid": 3823429,
+  "projectName": "spell",
+  "sessionTitle": "Auth Refactor",
+  "updatedAt": 1710000000000
+}
+#+end_src
+
+** ITEM Upgrade SpellStatusService to expose full session objects
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =~/.config/quickshell/dms/Services/SpellStatusService.qml=
+
+Changes:
+1. Change =statusByWindowId= from =windowId → status string= to =windowId → full session object= (={ status, windowId, pid, projectName, sessionTitle, updatedAt }=)
+2. Add =property var sessions: []= — flat array of all active session objects (for the dashboard widget)
+3. Add transition detection: before updating the map, compare old status to new status. If transitioning to =needs_input= or =pending_approval=, fire =ToastService.showInfo()= with project name and status label
+4. Keep =getWorkspaceStatuses()= backward-compatible (still returns array of status strings) but also add =getWorkspaceSessions(workspaceId)= returning full objects
+5. Add =function focusSession(windowId)= that calls =NiriService.focusWindow(windowId)=
+
+** ITEM Create SpellSessions DankBar widget + popout
+:PROPERTIES:
+:EFFORT: 1h30m
+:END:
+
+*** Bar widget
+File: =~/.config/quickshell/dms/Modules/DankBar/Widgets/SpellSessions.qml=
+
+A =BasePill= widget showing a small spell icon (or just a ◆ glyph) with a badge count of actionable sessions. Hidden when no active sessions. Emits a toggle signal on click.
+
+*** Popout panel
+File: =~/.config/quickshell/dms/Modules/DankBar/Popouts/SpellSessionsPopout.qml=
+
+Extends =DankPopout=. Content is a list of active sessions:
+- Each row: colored status dot + project name + session title (truncated) + workspace number
+- Click a row → =SpellStatusService.focusSession(windowId)= → focus that terminal window
+- Group by status priority: =needs_input= and =pending_approval= first (these need attention), then =error=, =running=, =completed=, =idle=
+- Each row has subtle background tint matching status color (same Catppuccin palette)
+- Empty state: "No active sessions"
+
+*** Registration
+- Add =SpellSessions= component definition in =DankBarContent.qml= (around line 1040 where other widgets are defined)
+- Add =LazyLoader= for =SpellSessionsPopout= in =DMSShell.qml= (around line 410)
+- Register popout ref in =PopoutService.qml=
+
+** ITEM Add tooltips to workspace status dots
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =~/.config/quickshell/dms/Modules/DankBar/Widgets/WorkspaceSwitcher.qml=
+
+Add a =MouseArea= with =hoverEnabled= on the =spellStatusDots= Row (or wrap existing dots). On hover, show a =DankTooltip= listing sessions on that workspace:
+- Format per session: =● ProjectName — SessionTitle (Status Label)=
+- Use the =DankTooltip= pattern from =Vpn.qml= / =FocusedApp.qml= (tooltipLoader, show/hide on enter/exit)
+- Query =SpellStatusService.getWorkspaceSessions(wsData.id)= for full data
+
+** ITEM Add toast notifications on status transitions
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =~/.config/quickshell/dms/Services/SpellStatusService.qml=
+
+In the =onStreamFinished= handler, before replacing =statusByWindowId=:
+1. Compare old map vs new map
+2. For each window that transitioned /to/ =needs_input= or =pending_approval= (and wasn't already that status):
+   - =ToastService.showInfo("Spell: " + projectName, "Session needs " + (status === "needs_input" ? "input" : "approval"), "", "spell-" + windowId)=
+3. Use the =category= param (="spell-" + windowId=) to deduplicate — same session won't spam toasts
+
+** ITEM Add status file write tests
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/niri/test/controller.test.ts=
+
+- Test that status file includes =projectName= and =sessionTitle= fields
+- Test that status file updates when session title changes (not just status)
+- Existing tests for write/delete/dedup should still pass
+
+* Key files
+
+Spell side (=~/code/ora/spell=):
+- =packages/niri/src/controller.ts= — status file write (lines 150-164)
+- =packages/niri/src/types.ts= — AgentStatus type
+- =packages/niri/test/controller.test.ts= — tests
+
+Quickshell side (=~/.config/quickshell/dms=):
+- =Services/SpellStatusService.qml= — polling + data
+- =Services/PopoutService.qml= — popout registration
+- =Services/BarWidgetService.qml= — widget registration
+- =Services/ToastService.qml= — toast API: =showInfo(message, level, details, command, category)=
+- =Services/NiriService.qml= — =focusWindow(windowId)= at line 766, =windows= array with =.id=, =.workspace_id=
+- =Modules/DankBar/Widgets/WorkspaceSwitcher.qml= — dots at lines 1407-1450
+- =Modules/DankBar/Widgets/SpellSessions.qml= — NEW
+- =Modules/DankBar/Popouts/SpellSessionsPopout.qml= — NEW
+- =Modules/DankBar/DankBarContent.qml= — widget component defs (~line 1040)
+- =DMSShell.qml= — LazyLoader registration (~line 410)
+- =Modules/DankBar/Widgets/Battery.qml= — reference for BasePill pattern
+- =Modules/DankBar/Popouts/BatteryPopout.qml= — reference for DankPopout pattern
+- =Modules/DankBar/Widgets/Vpn.qml= — reference for DankTooltip pattern
+
+* Key decisions
+
+1. *File-based IPC stays*: polling at 2s is fine for status indicators. No need for sockets.
+2. *Enrich status files* rather than adding a second data channel. Two extra string fields per file is negligible.
+3. *Click-to-focus via NiriService.focusWindow()*: already exists, stable, handles workspace switching automatically.
+4. *Toast on transition only*: compare old→new status map to avoid firing on every poll cycle.
+5. *Sort by urgency in popout*: needs_input/pending_approval first — the whole point is surfacing what needs attention.
+
+* Verification
+
+- =cd packages/niri && bun test= — enriched status file tests pass
+- Start spell session, check =cat ~/.spell/status/*.json= includes =projectName= and =sessionTitle=
+- Trigger plan mode → toast appears saying session needs approval
+- Open DankBar spell widget → popout shows session with teal "Pending Approval" row
+- Click session row → terminal with that spell session gets focused
+- Hover workspace dot → tooltip shows "● spell — Auth Refactor (Pending Approval)"
+- Kill spell → session disappears from popout within 2s

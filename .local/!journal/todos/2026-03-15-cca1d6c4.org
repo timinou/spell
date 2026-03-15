@@ -1,0 +1,39 @@
+#+TITLE: Session 1494153725293331 Todos
+#+DATE: 2026-03-15
+#+TODO: ITEM DOING | DONE
+
+* C++ changes
+
+** DONE Multi-client socket server (socketserver.cpp/.h)
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Window ownership in WindowManager (windowmanager.cpp/.h)
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+* TypeScript changes
+
+** DONE TypeScript-side reconnect adjustment (qml-process.ts, qml-bridge.ts)
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+* Tests & verification
+
+** DONE Update reconnect test
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Build bridge and run tests
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:

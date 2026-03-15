@@ -1,0 +1,90 @@
+#+TITLE: MULTI_SESSION_QML_BRIDGE
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-multi-session-qml-bridge
+
+* Initial Message
+
+can several sessions be launched from the same bridge? it seems like I can only open windows from one session at the same time
+
+* Problem
+
+The QML bridge daemon only supports one connected client (session) at a time. Two hard constraints enforce this:
+
+1. =socketserver.cpp= line 15: ~m_server->setMaxPendingConnections(1)~
+2. =socketserver.cpp= lines 98-104: ~onNewConnection()~ disconnects any existing client when a new one connects
+
+When a second spell session launches a QML window, the first session's socket is disconnected. Its windows remain visible but become unresponsive (no events flow back).
+
+* Approach
+
+Make the bridge daemon support multiple concurrent socket clients. Each client independently sends commands and receives events for windows it owns.
+
+** Key design decisions
+
+- Window ownership is per-client: a window belongs to the client that loaded it
+- Events are routed only to the owning client (not broadcast)
+- The =state= event on connect reports only windows owned by that client (empty for new clients, populated for reconnecting clients that match existing windows)
+- =quit= command is removed or restricted (one client should not kill another's windows)
+- When a client disconnects, its windows stay alive (current behavior) so it can reconnect
+
+** ITEM Multi-client socket server (C++)
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+Files: =packages/qml/bridge/socketserver.cpp=, =packages/qml/bridge/socketserver.h=
+
+- Remove ~setMaxPendingConnections(1)~
+- Replace ~m_client~ (single pointer) with ~QList<QLocalSocket*> m_clients~
+- ~onNewConnection()~: add new socket to list, don't disconnect existing ones
+- ~writeEvent()~ becomes ~writeEvent(QLocalSocket *client, const QJsonObject &event)~ — targeted delivery
+- Add ~broadcastEvent()~ for events that go to all clients (if any — probably none)
+- ~onClientDisconnected()~: remove from list, keep windows alive
+- ~setDispatchCallback~ needs to pass the originating client so WindowManager can track ownership
+- Dispatch callback signature: ~std::function<void(QLocalSocket*, const QByteArray&)>~
+- Reconnect callback signature: ~std::function<void(QLocalSocket*)>~
+
+** ITEM Window ownership in WindowManager (C++)
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+Files: =packages/qml/bridge/windowmanager.cpp=, =packages/qml/bridge/windowmanager.h=
+
+- Add ~QLocalSocket* owner~ field to ~WindowEntry~ struct
+- ~dispatch()~ receives the originating client socket and passes it to ~loadWindow()~ etc.
+- ~loadWindow()~: stores owner in the window entry
+- ~writeEvent()~ in WindowManager: route events to the owning client via ~SocketServer::writeEvent(client, event)~
+- ~getWindowStates()~: takes a client pointer, returns only windows owned by that client
+- On reconnect (new client connect): send =state= event with empty windows list (client hasn't claimed any yet)
+- =quit= command: close only windows owned by that client; quit the daemon only if no windows remain
+- Window close events from WM (user closes window): route to owner
+
+** ITEM TypeScript-side reconnect adjustment
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Files: =packages/qml/src/qml-process.ts=, =packages/qml/src/qml-bridge.ts=
+
+- No protocol changes needed — the TS side already handles the =state= event containing a windows array
+- On reconnect, the daemon now sends only windows belonging to this client (which may be empty if this is a fresh session)
+- Remove assumption that reconnect always gets all daemon windows
+- Verify ~waitForEvent~ and event routing still work when multiple clients are connected (they should — events are per-window-id and routed by the daemon)
+
+** ITEM Update reconnect test
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/qml/test/reconnect.test.ts=
+
+- Add test case: two clients connect simultaneously, both receive their own state events
+- Verify first client is NOT disconnected when second connects
+
+* Verification
+
+- Build bridge: ~cd packages/qml && bun run build:bridge~
+- Run existing tests: ~cd packages/qml && bun test~
+- Manual test: launch two spell sessions, open a canvas window from each, verify both remain responsive
+- ~bun check:ts~ passes

@@ -147,6 +147,103 @@ describe("QmlProcess - reconnect state buffering", () => {
 	});
 });
 
+describe("QmlProcess - multi-client isolation", () => {
+	let tmpDir: string;
+	let sockPath: string;
+	let server: net.Server | null = null;
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-qml-multi-"));
+		sockPath = path.join(tmpDir, "bridge.sock");
+	});
+
+	afterEach(async () => {
+		if (server) {
+			server.close();
+			server = null;
+		}
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it("second client connection does not disconnect the first", async () => {
+		// Fake daemon that tracks connected sockets and sends per-client state.
+		const connectedSockets: net.Socket[] = [];
+		const { promise: twoConnected, resolve: resolveTwoConnected } = Promise.withResolvers<void>();
+
+		server = net.createServer(socket => {
+			connectedSockets.push(socket);
+			// Each client gets an empty state event (no windows owned yet).
+			socket.write(`${JSON.stringify({ type: "state", windows: [] })}\n`);
+			if (connectedSockets.length === 2) resolveTwoConnected();
+		});
+		await new Promise<void>(r => server!.listen(sockPath, r));
+
+		const origSocketPath = QmlProcess.socketPath;
+		QmlProcess.socketPath = () => sockPath;
+
+		const proc1 = new QmlProcess();
+		const proc2 = new QmlProcess();
+		try {
+			await proc1.ensure();
+			await proc2.ensure();
+			await twoConnected;
+
+			// Both clients should be connected — server tracks two sockets.
+			expect(connectedSockets).toHaveLength(2);
+
+			// First client must still be alive (not disconnected by second connect).
+			expect(connectedSockets[0].destroyed).toBe(false);
+			expect(connectedSockets[1].destroyed).toBe(false);
+		} finally {
+			QmlProcess.socketPath = origSocketPath;
+			await proc1.dispose();
+			await proc2.dispose();
+		}
+	});
+
+	it("each client receives only its own state on connect", async () => {
+		// Daemon sends a different state to each client based on connection order.
+		let connectionCount = 0;
+		server = net.createServer(socket => {
+			const clientIndex = connectionCount++;
+			// First client owns window-A, second owns window-B.
+			const ownedWindows =
+				clientIndex === 0
+					? [{ id: "window-A", path: "/tmp/a.qml", state: "ready" }]
+					: [{ id: "window-B", path: "/tmp/b.qml", state: "ready" }];
+			socket.write(`${JSON.stringify({ type: "state", windows: ownedWindows })}\n`);
+		});
+		await new Promise<void>(r => server!.listen(sockPath, r));
+
+		const origSocketPath = QmlProcess.socketPath;
+		QmlProcess.socketPath = () => sockPath;
+
+		const proc1 = new QmlProcess();
+		const proc2 = new QmlProcess();
+		try {
+			await proc1.ensure();
+			await proc2.ensure();
+			await Bun.sleep(30); // let state events deliver
+
+			const state1 = proc1.takeReconnectState();
+			const state2 = proc2.takeReconnectState();
+
+			expect(state1?.type).toBe("state");
+			expect(state2?.type).toBe("state");
+			if (state1?.type === "state") {
+				expect(state1.windows.map(w => w.id)).toEqual(["window-A"]);
+			}
+			if (state2?.type === "state") {
+				expect(state2.windows.map(w => w.id)).toEqual(["window-B"]);
+			}
+		} finally {
+			QmlProcess.socketPath = origSocketPath;
+			await proc1.dispose();
+			await proc2.dispose();
+		}
+	});
+});
+
 describe("QmlBridge - reconnect restores window state", () => {
 	let tmpDir: string;
 	let sockPath: string;

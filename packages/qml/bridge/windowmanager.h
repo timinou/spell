@@ -10,12 +10,16 @@
 #include <QString>
 #include "bridge.h"
 #include <QQuickItem>
+#include <QLocalSocket>
 #include <optional>
 
 /**
  * Owns all active QML windows (one QQmlApplicationEngine per window).
  * Dispatches JSON commands from stdin or socket, writes JSON events
  * to stdout or via an injected event writer.
+ *
+ * In daemon (multi-client) mode each window has an owner client socket.
+ * Events are routed only to the owning client, not broadcast.
  */
 class WindowManager : public QObject {
     Q_OBJECT
@@ -24,14 +28,18 @@ public:
     explicit WindowManager(QObject *parent = nullptr);
     ~WindowManager() override;
 
-    /// Dispatch a JSON line received from stdin or socket.
-    void dispatch(const QByteArray &jsonLine);
+    /// Dispatch a JSON line received from a specific client socket (nullptr = stdin mode).
+    void dispatch(QLocalSocket *client, const QByteArray &jsonLine);
 
-    /// Set an external event writer. If unset, events go to stdout.
-    void setEventWriter(std::function<void(const QJsonObject&)> writer);
+    /**
+     * Set an external event writer.
+     * client is the owning socket of the target window (nullptr = stdout mode).
+     * If unset, events go to stdout.
+     */
+    void setEventWriter(std::function<void(QLocalSocket *, const QJsonObject &)> writer);
 
-    /// Returns state of all windows as a JSON array of {id, path, state}.
-    QJsonArray getWindowStates() const;
+    /// Returns state of windows owned by the given client (nullptr = all windows).
+    QJsonArray getWindowStates(QLocalSocket *client) const;
 
     struct WindowEntry {
         QQmlApplicationEngine *engine;
@@ -39,18 +47,23 @@ public:
         QString path;
         QString state; // "loading", "ready", "error", "closed"
         QStringList armedTools;
+        QLocalSocket *owner = nullptr; // nullptr in stdio mode
     };
 
 private:
-    void loadWindow(const QString &id, const QString &path, const QJsonObject &props,
-                    int width, int height, const QString &title);
-    void reloadWindow(const QString &id);
-    void closeWindow(const QString &id);
-    void sendMessage(const QString &id, const QJsonObject &payload);
-    void screenshotWindow(const QString &id, const QString &savePath);
-    void queryItems(const QString &id, const QJsonObject &msg);
-    void evalInWindow(const QString &id, const QString &expression);
-    void writeEvent(const QJsonObject &event);
+    void loadWindow(QLocalSocket *client, const QString &id, const QString &path,
+                    const QJsonObject &props, int width, int height, const QString &title);
+    void reloadWindow(QLocalSocket *client, const QString &id);
+    void closeWindow(QLocalSocket *client, const QString &id);
+    void sendMessage(QLocalSocket *client, const QString &id, const QJsonObject &payload);
+    void screenshotWindow(QLocalSocket *client, const QString &id, const QString &savePath);
+    void queryItems(QLocalSocket *client, const QString &id, const QJsonObject &msg);
+    void evalInWindow(QLocalSocket *client, const QString &id, const QString &expression);
+
+    /// Write an event to a specific client (or stdout when client is nullptr).
+    void writeEvent(QLocalSocket *client, const QJsonObject &event);
+    /// Write an event to the owner of the named window. No-op if window unknown.
+    void writeEventToOwner(const QString &windowId, const QJsonObject &event);
 
     struct QuerySelector {
         QString type;
@@ -69,6 +82,6 @@ private:
                          int maxDepth, int depth, const QString &path,
                          QJsonArray &results);
 
-    std::function<void(const QJsonObject&)> m_eventWriter;
+    std::function<void(QLocalSocket *, const QJsonObject &)> m_eventWriter;
     QHash<QString, WindowEntry> m_windows;
 };

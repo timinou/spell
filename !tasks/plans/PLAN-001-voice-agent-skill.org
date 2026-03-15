@@ -1,0 +1,150 @@
+#+TITLE: VOICE_AGENT_SKILL
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-voice-agent-skill
+
+* Initial Message
+
+ok my friend add an extension to spell that uses the canvas + auto-mounting of tools to reliably let me:
+1. start a recording
+2. gets the live transcript
+3. when it hears spell, it knows to send the request to the agent for processing (turn detection and whatnot)
+
+
+* Problem
+
+The user wants a voice-to-agent flow: start recording, see live transcript, and when the wake word "spell" is spoken, the following utterance is sent to the agent as a command for processing.
+
+* Architecture
+
+Three components inside `.spell/skills/voice-agent/`:
+
+** Voice Pipeline Script — `voice-pipeline.ts`
+
+A standalone Bun script (run via `bun run`) that:
+1. Spawns `sox` in streaming mode (`sox -d -t raw -r 16000 -e signed -b 16 -c 1 -`) to pipe raw PCM to stdout
+2. Opens a WebSocket to Deepgram's streaming API (`wss://api.deepgram.com/v1/listen`) with params: `encoding=linear16&sample_rate=16000&channels=1&interim_results=true&utterance_end_ms=1500&vad_events=true`
+3. Pipes sox stdout audio chunks to the Deepgram WebSocket
+4. Receives transcript events from Deepgram (interim + final + utterance_end)
+5. Writes current state to a well-known temp file (`/tmp/spell-voice-state.json`) as a JSON object
+6. Detects wake word: when a `is_final` transcript contains "spell" as a prefix, enters "accumulating" mode. Collects subsequent words until Deepgram sends `utterance_end`, then writes the accumulated command to the state file with `status: "command_detected"`.
+7. Runs indefinitely until killed (SIGTERM cleanup: close WebSocket, kill sox)
+
+State file shape:
+#+begin_src json
+{
+  "status": "listening" | "accumulating" | "command_detected",
+  "transcript": "full running transcript",
+  "partial": "current interim text",
+  "command": null | "create a file called foo.ts",
+  "commandId": 0
+}
+#+end_src
+
+`commandId` increments on each new command so QML can distinguish new commands from already-processed ones.
+
+DEEPGRAM_API_KEY is read from process.env (loaded from .env by the agent's bash).
+
+** QML Window — `voice-ui.qml`
+
+Display-only window with armed tools: `["read"]`
+
+- Shows recording state indicator (dot + "Listening..." / "Accumulating..." / "Processing...")
+- Shows live transcript text
+- Shows partial (interim) text in lighter color
+- Uses a QML `Timer` (interval: 400ms) to invoke armed `read` tool on `/tmp/spell-voice-state.json`
+- On `bridge.messageReceived` with `_rid` matching the poll request, parses the JSON and updates display
+- When `status === "command_detected"` and `commandId` is new (track last seen), fires `bridge.send({ type: "voice_command", text: command })` — this is a loud canvas event that triggers an agent turn
+- Has a "Stop" button that sends `bridge.send({ type: "voice_stop" })`
+
+** Skill Instructions — `SKILL.md`
+
+Tells the agent:
+1. Check `isDisplayAvailable()` and that sox is installed (`Bun.which("sox")`)
+2. Launch the QML window via `canvas launch`
+3. Start the voice pipeline via `bash` (async): `bun run skill://voice-agent/voice-pipeline.ts`
+4. Handle canvas events:
+   - `voice_command`: process the `text` field as if the user typed it — relay it as a follow-up user message
+   - `voice_stop`: kill the pipeline process, close the QML window
+
+* Key Design Decisions
+
+** Why file-based IPC (not WebSocket/socket between script and QML)
+
+QML bridge links Qt6::Quick + Qt6::Network only. No Qt6::WebSockets, no Qt6::Multimedia. QML cannot capture audio or connect to Deepgram directly. QML CAN use armed tools though — so polling a state file via armed `read` is the simplest reliable mechanism with zero C++ changes.
+
+** Why armed tools `read` for polling (not a custom bridge extension)
+
+Armed tools already exist and work. Using `read` to poll a JSON file is 10 lines of QML Timer code. No new bridge protocol, no C++ changes, no new armed tool types.
+
+** Why canvas events for command delivery (not armed tools)
+
+Per Metis analysis: armed tools short-circuit tool execution without triggering agent reasoning turns. The voice command needs to arrive as a follow-up message with `triggerTurn:true` so the LLM processes it. Canvas loud events already do this via `sendCustomMessage`.
+
+** Wake word detection: only on `is_final` transcripts
+
+Deepgram interim results are speculative and may revise. "spell" might appear in interim then disappear in final. Only trigger on `is_final: true` results. Use Deepgram's `utterance_end` event (after ~1500ms silence) as the turn boundary, not client-side timers.
+
+* Files to Create
+
+| File | Description |
+|---|---|
+| `.spell/skills/voice-agent/SKILL.md` | Skill instructions with frontmatter |
+| `.spell/skills/voice-agent/voice-pipeline.ts` | Bun script: sox capture + Deepgram WebSocket + wake word detection + state file writer |
+| `.spell/skills/voice-agent/voice-ui.qml` | QML window: transcript display + armed read polling + command event firing |
+
+* Implementation Steps
+
+** ITEM Create voice-pipeline.ts
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+- Sox spawning in streaming mode (raw PCM to stdout pipe)
+- Deepgram WebSocket client (native Bun WebSocket)
+- Audio chunk forwarding (sox stdout → Deepgram WS)
+- Transcript accumulation from Deepgram events
+- Wake word detection state machine: idle → accumulating → command_detected → idle
+- State file writing (atomic via write-to-temp + rename)
+- Graceful shutdown on SIGTERM
+- Error handling: Deepgram reconnection on disconnect, sox crash recovery
+
+** ITEM Create voice-ui.qml
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+- ApplicationWindow with spellArmedTools: ["read"]
+- Timer-based polling of state file via armed read
+- State display: recording indicator, transcript, partial text
+- Command detection and bridge.send() for agent turn trigger
+- Stop button
+- Clean visual design matching existing canvas aesthetics
+
+** ITEM Create SKILL.md
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+- Frontmatter: name, description, globs (none — manual activation)
+- Agent instructions for launch sequence
+- Event handling guide (voice_command, voice_stop)
+- Prerequisite checks (sox, DEEPGRAM_API_KEY)
+- Troubleshooting section
+
+** ITEM Test end-to-end flow
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+- Verify sox streaming works
+- Verify Deepgram connection with API key from .env
+- Verify QML window displays transcript
+- Verify wake word triggers agent turn
+- Verify stop button cleans up
+
+* Risks
+
+1. *Deepgram WebSocket keepalive*: Deepgram closes connections after ~10s of no audio. Sox should produce continuous audio (silence = zero bytes still sent), but need to verify.
+2. *File polling latency*: 400ms poll interval means up to 400ms lag on transcript display. Acceptable for a v1.
+3. *Sox availability*: Linux only concern — need sox + ALSA/PulseAudio. The existing STT module already handles this detection.
+4. *Atomic file writes*: Must write to temp file then rename to avoid QML reading partial JSON. Use `Bun.write()` which handles this.

@@ -28,20 +28,21 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        server->setDispatchCallback([&manager](const QByteArray &line) {
-            manager.dispatch(line);
+        server->setDispatchCallback([&manager](QLocalSocket *client, const QByteArray &line) {
+            manager.dispatch(client, line);
         });
 
-        manager.setEventWriter([server](const QJsonObject &event) {
-            server->writeEvent(event);
+        manager.setEventWriter([server](QLocalSocket *client, const QJsonObject &event) {
+            server->writeEvent(client, event);
         });
 
-        server->setReconnectCallback([server, &manager]() {
-            // Send state snapshot to the newly connected client
+        server->setReconnectCallback([server, &manager](QLocalSocket *client) {
+            // Send state snapshot containing only windows owned by this client.
+            // A brand-new client will receive an empty list.
             QJsonObject snapshot;
             snapshot["type"] = "state";
-            snapshot["windows"] = manager.getWindowStates();
-            server->writeEvent(snapshot);
+            snapshot["windows"] = manager.getWindowStates(client);
+            server->writeEvent(client, snapshot);
         });
     } else {
         // Stdio mode: read JSON lines from stdin (backward compat)
@@ -63,7 +64,7 @@ int main(int argc, char *argv[]) {
                 const QByteArray line = buffer.left(idx).trimmed();
                 buffer.remove(0, idx + 1);
                 if (!line.isEmpty()) {
-                    manager.dispatch(line);
+                    manager.dispatch(nullptr, line);
                 }
             }
         });

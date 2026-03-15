@@ -93,7 +93,7 @@ export class NiriOverviewController {
 	#unsubscribeSession: (() => void) | null = null;
 	#destroyed = false;
 	#niriWindowId: number | null = null;
-	#lastWrittenStatus: AgentStatus | null = null;
+	#lastWrittenStatus: string | null = null;
 	readonly #statusDir = path.join(os.homedir(), ".spell", "status");
 	constructor(socketPath: string, context: NiriOverviewContext) {
 		this.#context = context;
@@ -151,12 +151,18 @@ export class NiriOverviewController {
 	#writeStatusIfChanged(): void {
 		if (this.#destroyed || this.#niriWindowId === null) return;
 		const status = this.#deriveStatus();
-		if (status === this.#lastWrittenStatus) return;
-		this.#lastWrittenStatus = status;
+		const cwd = this.#context.sessionManager.getCwd();
+		const projectName = path.basename(cwd);
+		const sessionTitle = this.#context.sessionManager.getSessionName() ?? "";
+		const dedup = `${status}\0${sessionTitle}`;
+		if (dedup === this.#lastWrittenStatus) return;
+		this.#lastWrittenStatus = dedup;
 		const payload = JSON.stringify({
 			status,
 			windowId: this.#niriWindowId,
 			pid: process.pid,
+			projectName,
+			sessionTitle,
 			updatedAt: Date.now(),
 		});
 		const filePath = path.join(this.#statusDir, `${this.#niriWindowId}.json`);

@@ -1,0 +1,35 @@
+#+TITLE: Session 149413a12067c330 Todos
+#+DATE: 2026-03-15
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE Add lastUpdate + error fields to VoiceState and writeState in voice-pipeline.ts
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Change ffmpeg stderr to pipe, drain and log
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Set error field on Deepgram close/error and ffmpeg exit
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Update voice-ui.qml to show stale/error states
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Update SKILL.md troubleshooting
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:

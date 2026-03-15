@@ -1,0 +1,43 @@
+#+TITLE: Session 1494139eb1385124 Todos
+#+DATE: 2026-03-15
+#+TODO: ITEM DOING | DONE
+
+* Spell Side
+
+** DONE Enrich status file payload in controller.ts
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Add status file write tests
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+* Quickshell Side
+
+** DONE Upgrade SpellStatusService to expose full session objects + toast transitions
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Create SpellSessions DankBar widget + popout
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Register widget and popout in DankBarContent + DMSShell + PopoutService
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+** DONE Add tooltips to workspace status dots
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:

@@ -1,0 +1,86 @@
+#+TITLE: CANVAS_WINDOW_CLOSE_EVENT
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-canvas-window-close-event
+
+* Initial Message
+
+the canvas tool does not transmit to the agent that a window of id xx close. please make it
+
+* Problem
+
+When a user closes a QML window by clicking the X button (or the OS window manager kills it), the C++ ~WindowManager~ never detects it. The ~closing~ signal from ~QQuickWindow~ is not connected to anything. As a result:
+
+- The window disappears visually but the TypeScript side never learns about it
+- The agent never receives a close event
+- The event loop in ~canvas.ts~ keeps polling a dead window indefinitely
+
+The existing ~closeWindow()~ method only fires when the TypeScript side sends an explicit "close" command. User-initiated (WM) closes are a dead path.
+
+* Root Cause
+
+In ~windowmanager.cpp~ ~loadWindow()~, after creating the ~QQmlApplicationEngine~ and loading the QML file, no signal connection is made to the root ~QQuickWindow~'s ~closing~ signal. Qt emits this signal when the user clicks X or the WM requests close.
+
+* Fix
+
+** ITEM Connect QQuickWindow::closing signal in loadWindow
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: ~packages/qml/bridge/windowmanager.cpp~
+
+After the root objects are verified (around line 133, after ~engine->load()~ succeeds), the code already accesses root objects. Add a connection to the root window's ~closing~ signal:
+
+#+begin_src cpp
+// Detect user/WM-initiated window close
+auto *rootWin = qobject_cast<QQuickWindow *>(engine->rootObjects().first());
+if (rootWin) {
+    connect(rootWin, &QQuickWindow::closing, this, [this, id](QQuickCloseEvent *) {
+        // Only act if window is still tracked (not already closed via command)
+        if (!m_windows.contains(id)) return;
+        delete m_windows[id].engine;
+        m_windows.remove(id);
+
+        QJsonObject ev;
+        ev["type"] = "closed";
+        ev["id"] = id;
+        ev["wmClose"] = true;  // distinguish from command-initiated close
+        writeEvent(ev);
+    });
+}
+#+end_src
+
+Key details:
+- Guard with ~m_windows.contains(id)~ to avoid double-close if the TS side sends a close command while the window is already closing
+- Add ~wmClose: true~ field so the TS side can distinguish WM-initiated from command-initiated closes
+- ~QQuickCloseEvent~ needs ~#include <QQuickCloseEvent>~ or it may already be included via ~QQuickWindow~
+
+** ITEM Verify TypeScript side handles the new event correctly
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+Files to check (read-only verification, likely no changes needed):
+- ~packages/qml/src/qml-bridge.ts~ — ~handleEvent()~ already handles type=closed events and sets state to "closed"
+- ~packages/coding-agent/src/tools/canvas.ts~ — lines 200-214 already detect ~wmClose~ by checking ~bridge.getWindow(id)?.state === "closed"~. The polling loop will pick up the state change and emit the synthetic close event to the agent.
+
+The existing TS code should work as-is because:
+1. The C++ bridge emits a ~closed~ event → ~QmlProcess~ parses it → ~QmlBridge.handleEvent()~ sets ~window.state = "closed"~
+2. Next ~waitForEvent()~ iteration in canvas.ts detects ~state === "closed"~ and surfaces the close event
+
+However: verify that ~waitForEvent()~ actually returns/resolves when a ~closed~ event arrives (not just user events). Check ~qml-bridge.ts~ event buffering.
+
+** ITEM Add/update test for native window close
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+File: ~packages/coding-agent/test/tools/canvas-wm-close.test.ts~
+
+The existing test at line 51 uses ~bridge.close()~ which sends a command. This simulates command-close, not WM-close. Consider adding a note that true WM-close requires a real display. The offscreen platform may not emit ~closing~ signals, so the test may need to stay as-is with the command-close simulation.
+
+* Verification
+
+1. ~bun check~ passes (C++ compiles, TS types check)
+2. Run the existing wm-close test: ~bun test packages/coding-agent/test/tools/canvas-wm-close.test.ts~
+3. Manual verification: launch a canvas window on a real display, close it with X, confirm agent receives the close event

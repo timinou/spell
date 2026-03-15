@@ -17,13 +17,17 @@ WindowManager::~WindowManager() {
     }
 }
 
-void WindowManager::setEventWriter(std::function<void(const QJsonObject&)> writer) {
+void WindowManager::setEventWriter(std::function<void(QLocalSocket *, const QJsonObject &)> writer) {
     m_eventWriter = std::move(writer);
 }
 
-QJsonArray WindowManager::getWindowStates() const {
+QJsonArray WindowManager::getWindowStates(QLocalSocket *client) const {
     QJsonArray arr;
     for (auto it = m_windows.constBegin(); it != m_windows.constEnd(); ++it) {
+        // In daemon mode, only return windows belonging to this client.
+        // In stdio mode (client == nullptr), return all windows.
+        if (client != nullptr && it->owner != client) continue;
+
         QJsonObject obj;
         obj["id"] = it.key();
         obj["path"] = it->path;
@@ -38,7 +42,7 @@ QJsonArray WindowManager::getWindowStates() const {
     return arr;
 }
 
-void WindowManager::dispatch(const QByteArray &jsonLine) {
+void WindowManager::dispatch(QLocalSocket *client, const QByteArray &jsonLine) {
     QJsonParseError err;
     const QJsonDocument doc = QJsonDocument::fromJson(jsonLine, &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject()) {
@@ -46,7 +50,7 @@ void WindowManager::dispatch(const QByteArray &jsonLine) {
         errObj["type"] = "error";
         errObj["id"] = "";
         errObj["message"] = "Invalid JSON: " + err.errorString();
-        writeEvent(errObj);
+        writeEvent(client, errObj);
         return;
     }
 
@@ -60,30 +64,40 @@ void WindowManager::dispatch(const QByteArray &jsonLine) {
         const int width = msg["width"].toInt(800);
         const int height = msg["height"].toInt(600);
         const QString title = msg["title"].toString("omp");
-        loadWindow(id, path, props, width, height, title);
+        loadWindow(client, id, path, props, width, height, title);
     } else if (type == "reload") {
-        reloadWindow(id);
+        reloadWindow(client, id);
     } else if (type == "close") {
-        closeWindow(id);
+        closeWindow(client, id);
     } else if (type == "message") {
-        sendMessage(id, msg["payload"].toObject());
+        sendMessage(client, id, msg["payload"].toObject());
     } else if (type == "screenshot") {
-        screenshotWindow(id, msg["path"].toString());
+        screenshotWindow(client, id, msg["path"].toString());
     } else if (type == "query") {
-        queryItems(id, msg);
+        queryItems(client, id, msg);
     } else if (type == "eval") {
-        evalInWindow(id, msg["expression"].toString());
+        evalInWindow(client, id, msg["expression"].toString());
     } else if (type == "quit") {
-        QGuiApplication::quit();
+        // Close only windows owned by this client, then quit if none remain.
+        QStringList ownedIds;
+        for (auto it = m_windows.constBegin(); it != m_windows.constEnd(); ++it) {
+            if (it->owner == client) ownedIds.append(it.key());
+        }
+        for (const QString &wid : std::as_const(ownedIds)) {
+            closeWindow(client, wid);
+        }
+        if (m_windows.isEmpty()) {
+            QGuiApplication::quit();
+        }
     }
 }
 
-void WindowManager::loadWindow(const QString &id, const QString &path,
+void WindowManager::loadWindow(QLocalSocket *client, const QString &id, const QString &path,
                                const QJsonObject &props, int width, int height,
                                const QString &title) {
     // Close existing window with same id first
     if (m_windows.contains(id)) {
-        closeWindow(id);
+        closeWindow(client, id);
     }
 
     auto *engine = new QQmlApplicationEngine(this);
@@ -96,13 +110,13 @@ void WindowManager::loadWindow(const QString &id, const QString &path,
     engine->rootContext()->setContextProperty("windowWidth", width);
     engine->rootContext()->setContextProperty("windowHeight", height);
 
-    // Forward bridge events to the event writer
+    // Forward bridge events to the owning client
     connect(bridge, &Bridge::eventEmitted, this, [this](const QString &wid, const QJsonObject &payload) {
         QJsonObject ev;
         ev["type"] = "event";
         ev["id"] = wid;
         ev["payload"] = payload;
-        writeEvent(ev);
+        writeEventToOwner(wid, ev);
     });
 
     // Emit error if engine fails to load
@@ -114,10 +128,10 @@ void WindowManager::loadWindow(const QString &id, const QString &path,
         ev["type"] = "error";
         ev["id"] = id;
         ev["message"] = "QML object creation failed";
-        writeEvent(ev);
+        writeEventToOwner(id, ev);
     });
 
-    m_windows[id] = { engine, bridge, path, "loading" };
+    m_windows[id] = { engine, bridge, path, "loading", {}, client };
     engine->load(QUrl::fromLocalFile(path));
 
     if (engine->rootObjects().isEmpty()) {
@@ -128,7 +142,7 @@ void WindowManager::loadWindow(const QString &id, const QString &path,
         ev["type"] = "error";
         ev["id"] = id;
         ev["message"] = "Failed to load QML file: " + path;
-        writeEvent(ev);
+        writeEvent(client, ev);
         return;
     }
 
@@ -153,13 +167,14 @@ void WindowManager::loadWindow(const QString &id, const QString &path,
         connect(rootWin, &QQuickWindow::closing, this, [this, id](QQuickCloseEvent *) {
             // Guard against double-close (e.g. TS side already sent close command)
             if (!m_windows.contains(id)) return;
+            QLocalSocket *owner = m_windows[id].owner; // capture before removal
             delete m_windows[id].engine;
             m_windows.remove(id);
             QJsonObject ev;
             ev["type"] = "closed";
             ev["id"] = id;
             ev["wmClose"] = true;
-            writeEvent(ev);
+            writeEvent(owner, ev);
         });
     }
 
@@ -171,17 +186,17 @@ void WindowManager::loadWindow(const QString &id, const QString &path,
         for (const auto &t : armedToolsList) toolsArr.append(t);
         ev["armedTools"] = toolsArr;
     }
-    writeEvent(ev);
+    writeEventToOwner(id, ev);
 }
 
-void WindowManager::reloadWindow(const QString &id) {
+void WindowManager::reloadWindow(QLocalSocket *client, const QString &id) {
     auto it = m_windows.find(id);
     if (it == m_windows.end()) {
         QJsonObject ev;
         ev["type"] = "error";
         ev["id"] = id;
         ev["message"] = "Window not found: " + id;
-        writeEvent(ev);
+        writeEvent(client, ev);
         return;
     }
 
@@ -191,38 +206,40 @@ void WindowManager::reloadWindow(const QString &id) {
     delete it->engine;
     m_windows.remove(id);
 
-    loadWindow(id, path, props, 800, 600, "omp");
+    loadWindow(client, id, path, props, 800, 600, "omp");
 }
 
-void WindowManager::closeWindow(const QString &id) {
+void WindowManager::closeWindow(QLocalSocket *client, const QString &id) {
     auto it = m_windows.find(id);
     if (it == m_windows.end()) return;
 
+    QLocalSocket *owner = it->owner;
     delete it->engine;
     m_windows.remove(id);
 
     QJsonObject ev;
     ev["type"] = "closed";
     ev["id"] = id;
-    writeEvent(ev);
+    // Route closed event to owner; fall back to requesting client if no owner recorded
+    writeEvent(owner ? owner : client, ev);
 }
 
-void WindowManager::sendMessage(const QString &id, const QJsonObject &payload) {
+void WindowManager::sendMessage(QLocalSocket *client, const QString &id, const QJsonObject &payload) {
     auto it = m_windows.find(id);
     if (it == m_windows.end()) {
         QJsonObject ev;
         ev["type"] = "error";
         ev["id"] = id;
         ev["message"] = "Window not found: " + id;
-        writeEvent(ev);
+        writeEvent(client, ev);
         return;
     }
     it->bridge->deliverMessage(payload);
 }
 
-void WindowManager::writeEvent(const QJsonObject &event) {
+void WindowManager::writeEvent(QLocalSocket *client, const QJsonObject &event) {
     if (m_eventWriter) {
-        m_eventWriter(event);
+        m_eventWriter(client, event);
         return;
     }
     // Default: write to stdout (backward compat for non-daemon mode)
@@ -231,14 +248,20 @@ void WindowManager::writeEvent(const QJsonObject &event) {
     fflush(stdout);
 }
 
-void WindowManager::screenshotWindow(const QString &id, const QString &savePath) {
+void WindowManager::writeEventToOwner(const QString &windowId, const QJsonObject &event) {
+    auto it = m_windows.constFind(windowId);
+    if (it == m_windows.constEnd()) return;
+    writeEvent(it->owner, event);
+}
+
+void WindowManager::screenshotWindow(QLocalSocket *client, const QString &id, const QString &savePath) {
     const auto it = m_windows.constFind(id);
     if (it == m_windows.constEnd()) {
         QJsonObject ev;
         ev["type"] = "error";
         ev["id"] = id;
         ev["message"] = "Window not found: " + id;
-        writeEvent(ev);
+        writeEvent(client, ev);
         return;
     }
 
@@ -248,7 +271,7 @@ void WindowManager::screenshotWindow(const QString &id, const QString &savePath)
         ev["type"] = "error";
         ev["id"] = id;
         ev["message"] = "Root object is not a QQuickWindow";
-        writeEvent(ev);
+        writeEventToOwner(id, ev);
         return;
     }
 
@@ -258,7 +281,7 @@ void WindowManager::screenshotWindow(const QString &id, const QString &savePath)
         ev["type"] = "error";
         ev["id"] = id;
         ev["message"] = "grabWindow() returned null image";
-        writeEvent(ev);
+        writeEventToOwner(id, ev);
         return;
     }
 
@@ -267,7 +290,7 @@ void WindowManager::screenshotWindow(const QString &id, const QString &savePath)
         ev["type"] = "error";
         ev["id"] = id;
         ev["message"] = "Failed to save screenshot to: " + savePath;
-        writeEvent(ev);
+        writeEventToOwner(id, ev);
         return;
     }
 
@@ -275,7 +298,7 @@ void WindowManager::screenshotWindow(const QString &id, const QString &savePath)
     ev["type"] = "screenshot";
     ev["id"] = id;
     ev["path"] = savePath;
-    writeEvent(ev);
+    writeEventToOwner(id, ev);
 }
 
 
@@ -388,14 +411,14 @@ void WindowManager::walkTree(const QQuickItem *item, const QuerySelector &sel,
     }
 }
 
-void WindowManager::queryItems(const QString &id, const QJsonObject &msg) {
+void WindowManager::queryItems(QLocalSocket *client, const QString &id, const QJsonObject &msg) {
     const auto it = m_windows.constFind(id);
     if (it == m_windows.constEnd()) {
         QJsonObject ev;
         ev["type"] = "error";
         ev["id"] = id;
         ev["message"] = "Window not found: " + id;
-        writeEvent(ev);
+        writeEvent(client, ev);
         return;
     }
 
@@ -411,7 +434,7 @@ void WindowManager::queryItems(const QString &id, const QJsonObject &msg) {
         ev["type"] = "error";
         ev["id"] = id;
         ev["message"] = "Root object is not a QQuickItem";
-        writeEvent(ev);
+        writeEventToOwner(id, ev);
         return;
     }
 
@@ -428,17 +451,17 @@ void WindowManager::queryItems(const QString &id, const QJsonObject &msg) {
     ev["type"] = "query_result";
     ev["id"] = id;
     ev["items"] = items;
-    writeEvent(ev);
+    writeEventToOwner(id, ev);
 }
 
-void WindowManager::evalInWindow(const QString &id, const QString &expression) {
+void WindowManager::evalInWindow(QLocalSocket *client, const QString &id, const QString &expression) {
     const auto it = m_windows.constFind(id);
     if (it == m_windows.constEnd()) {
         QJsonObject ev;
         ev["type"] = "error";
         ev["id"] = id;
         ev["message"] = "Window not found: " + id;
-        writeEvent(ev);
+        writeEvent(client, ev);
         return;
     }
 
@@ -462,5 +485,5 @@ void WindowManager::evalInWindow(const QString &id, const QString &expression) {
         ev["error"] = QJsonValue::Null;
         ev["value"] = QJsonValue::fromVariant(result.toVariant());
     }
-    writeEvent(ev);
+    writeEventToOwner(id, ev);
 }

@@ -1,6 +1,7 @@
 #pragma once
 #include <QHash>
 #include <QJsonObject>
+#include <QList>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QObject>
@@ -8,15 +9,16 @@
 
 /**
  * Unix domain socket server for daemon mode.
- * Accepts a single client at a time. On disconnect, windows stay alive
- * and the server waits for a new client to reconnect.
+ * Supports multiple concurrent clients. Each client gets its own event stream;
+ * events are routed to the client that owns the target window.
+ * On client disconnect, windows stay alive so the client can reconnect.
  */
 class SocketServer : public QObject {
     Q_OBJECT
 
 public:
-    using DispatchCallback = std::function<void(const QByteArray &)>;
-    using ReconnectCallback = std::function<void()>;
+    using DispatchCallback = std::function<void(QLocalSocket *, const QByteArray &)>;
+    using ReconnectCallback = std::function<void(QLocalSocket *)>;
 
     explicit SocketServer(QObject *parent = nullptr);
     ~SocketServer() override;
@@ -24,8 +26,8 @@ public:
     /// Start listening. Returns false on fatal error (e.g. another daemon running).
     bool listen();
 
-    /// Write a JSON event to the connected client. No-op if no client.
-    void writeEvent(const QJsonObject &event);
+    /// Write a JSON event to a specific client. No-op if client is null or disconnected.
+    void writeEvent(QLocalSocket *client, const QJsonObject &event);
 
     void setDispatchCallback(DispatchCallback cb);
     void setReconnectCallback(ReconnectCallback cb);
@@ -41,8 +43,8 @@ private:
     static bool isSocketLive(const QString &path);
 
     QLocalServer *m_server = nullptr;
-    QLocalSocket *m_client = nullptr;
-    QByteArray m_readBuffer;
+    QList<QLocalSocket *> m_clients;
+    QHash<QLocalSocket *, QByteArray> m_readBuffers;
     DispatchCallback m_dispatch;
     ReconnectCallback m_reconnect;
 };
