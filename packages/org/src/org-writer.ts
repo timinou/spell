@@ -16,6 +16,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { atomicWrite } from "./atomic-write";
 import { DEFAULT_TODO_KEYWORDS } from "./schema/defaults";
 import type { ItemMutation, MemoryEntry, OrgCreateParams, OrgSessionContext } from "./types";
 
@@ -135,14 +136,14 @@ export async function appendItemToFile(
 	} catch {
 		// New file — use file-level properties with optional session context
 		const content = serializeFileItem(params.title, state, props, params.body, session);
-		await Bun.write(filePath, content);
+		await atomicWrite(filePath, content);
 		return filePath;
 	}
 
 	// Existing file — append as heading-level item; session context stays with the file
 	const heading = serializeHeading(1, state, params.title, props, params.body);
 	const separator = existing.endsWith("\n") ? "" : "\n";
-	await Bun.write(filePath, existing + separator + heading);
+	await atomicWrite(filePath, existing + separator + heading);
 	return filePath;
 }
 
@@ -227,7 +228,7 @@ export async function applyItemMutations(
 
 	if (applied.length === 0) return applied;
 
-	await Bun.write(filePath, lines.join("\n"));
+	await atomicWrite(filePath, lines.join("\n"));
 	return applied;
 }
 
@@ -491,7 +492,7 @@ export async function setPropertyInFile(
 			: setHeadingProperty(lines, ctx, customId, property, value);
 	if (!ok) return false;
 
-	await Bun.write(filePath, lines.join("\n"));
+	await atomicWrite(filePath, lines.join("\n"));
 	return true;
 }
 
@@ -577,7 +578,7 @@ export async function initCategoryDir(
 		await Bun.file(refPath).text();
 	} catch {
 		const referenceContent = buildReferenceOrg(prefix, todoKeywords);
-		await Bun.write(refPath, referenceContent);
+		await atomicWrite(refPath, referenceContent);
 	}
 }
 

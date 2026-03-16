@@ -17,6 +17,7 @@
 
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
+import { atomicWrite } from "./atomic-write";
 
 // =============================================================================
 // Types (mirrored from coding-agent to avoid circular imports)
@@ -107,7 +108,7 @@ export async function writeJournal(projectRoot: string, sessionId: string, phase
 
 	try {
 		const content = serializeJournalOrg(phases, sessionId, date);
-		await Bun.write(filePath, content);
+		await atomicWrite(filePath, content);
 		logger.debug("org:journal written", { filePath, phases: phases.length });
 	} catch (err) {
 		// Non-fatal — journal writes fail silently to avoid disrupting todo_write
