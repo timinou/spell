@@ -505,6 +505,10 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		this.#userAgentOverride = null;
 	}
 
+	async dispose(): Promise<void> {
+		await this.#closeBrowser();
+	}
+
 	async #resetBrowser(params?: BrowserParams): Promise<Page> {
 		await this.#closeBrowser();
 		this.#currentHeadless = this.session.settings.get("browser.headless");

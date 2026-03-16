@@ -236,6 +236,8 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	concurrency?: "shared" | "exclusive";
 	/** If true, argument validation errors are non-fatal: raw args are passed to execute() instead of returning an error to the LLM. */
 	lenientArgValidation?: boolean;
+	/** Optional cleanup when session is disposed or switched. Called once; must be idempotent. */
+	dispose?(): Promise<void> | void;
 	execute: AgentToolExecFn<TParameters, TDetails, TTheme>;
 
 	/** Optional custom rendering for tool call display (returns UI component) */

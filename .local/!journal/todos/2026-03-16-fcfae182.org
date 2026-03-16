@@ -1,0 +1,39 @@
+#+TITLE: Session 1494f4cd14fcd1ba Todos
+#+DATE: 2026-03-16
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE Add dispose to AgentTool interface
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Implement dispose on BrowserTool
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Call tool dispose in AgentSession lifecycle
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Audit other stateful tools
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+CanvasTool already has dispose(), BashInteractiveTool has dispose(), ConnectTool has dispose() - all will be called by #disposeTools automatically
+
+** DONE Verify with bun check:ts
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+Type check passes for all changed files. Pre-existing errors in qml-chat-panel.test.ts are unrelated.

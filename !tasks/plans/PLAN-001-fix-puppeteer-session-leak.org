@@ -1,0 +1,85 @@
+#+TITLE: FIX_PUPPETEER_SESSION_LEAK
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-fix-puppeteer-session-leak
+
+* Initial Message
+
+Spell session 1494ec626455e109 got a puppeteer session leaked from another session. Please investigate and find the root cause and whatnto
+
+* Problem
+
+When a user switches sessions (newSession/switchSession/fork), the same BrowserTool instance (and its open Chrome process + page state) carries over. The new session inherits stale frames, cookies, and navigation state from the previous session. This causes \"Attempted to use detached Frame\" errors and leaks browsing context across trust boundaries.
+
+Same issue affects CanvasTool (QML bridge).
+
+* Root Cause
+
+1. AgentTool interface (packages/agent/src/types.ts line 221) has no dispose lifecycle method.
+2. AgentSession.#toolRegistry (packages/coding-agent/src/session/agent-session.ts line 382) is set once at construction, never recreated or cleaned up.
+3. AgentSession.dispose() (line 1503) does NOT iterate tools to release resources.
+4. AgentSession.newSession() (line 2602), switchSession() (line 4640), and fork() (line 2662) all reuse the same tool instances without resetting stateful resources.
+5. BrowserTool has #closeBrowser() but it is only called on explicit agent close/open actions. It does not listen for session_switch or session_shutdown events.
+
+* Approach
+
+Add an optional dispose method to AgentTool, and call it at the right lifecycle points.
+
+** ITEM Add optional dispose to AgentTool interface
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+File: packages/agent/src/types.ts
+
+Add to AgentTool interface (line 221):
+
+dispose?(): Promise<void> | void;
+
+** ITEM Implement dispose on BrowserTool
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: packages/coding-agent/src/tools/browser.ts
+
+Add a dispose method to BrowserTool class (line 475) that calls this.#closeBrowser().
+
+CanvasTool (packages/coding-agent/src/tools/canvas.ts) already has dispose() at line 543 -- it just needs the interface contract so it gets called.
+
+** ITEM Call tool dispose in AgentSession lifecycle
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+File: packages/coding-agent/src/session/agent-session.ts
+
+Add a #disposeTools() helper that iterates #toolRegistry and calls dispose() on each tool that has it. Use Promise.allSettled so one failure does not block others. Log failures via logger.warn.
+
+Call #disposeTools() in:
+- dispose() (line 1503) -- session shutdown, before existing cleanup
+- newSession() (line 2602) -- after abort, before agent.reset()
+- switchSession() (line 4640) -- after abort, before loading new session
+- fork() (line 2662) -- NOT here; fork preserves state
+
+** ITEM Audit other stateful tools
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+Files to check:
+- packages/coding-agent/src/tools/canvas.ts -- already has dispose()
+- packages/coding-agent/src/tools/bash-interactive.ts -- has dispose() at line 279
+- packages/coding-agent/src/tools/spell/connect.ts -- has dispose() at line 117
+- Grep for other private resources in tools that need cleanup
+
+* Edge Cases
+
+- dispose called twice (idempotent): BrowserTool.#closeBrowser already handles null checks
+- dispose during active tool execution: abort() in newSession/switchSession cancels in-flight tool calls before dispose
+- Chrome process outlives dispose: #closeBrowser calls browser.close() via CDP; if Chrome hangs, process leak remains -- acceptable, could add kill timeout later
+
+* Verification
+
+- bun check:ts passes
+- Manual test: open browser in session A, switch to new session, verify browser is closed (no detached frame error)
+- Verify CanvasTool QML bridge is also cleaned up on session switch

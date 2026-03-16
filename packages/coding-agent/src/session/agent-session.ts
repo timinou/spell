@@ -1497,11 +1497,29 @@ export class AgentSession {
 	}
 
 	/**
+	 * Dispose all tools that have a dispose method.
+	 */
+	async #disposeTools(): Promise<void> {
+		const disposables = Array.from(this.#toolRegistry.values()).filter(
+			(tool): tool is typeof tool & { dispose(): Promise<void> | void } =>
+				tool != null && typeof tool.dispose === "function",
+		);
+		if (disposables.length === 0) return;
+		const results = await Promise.allSettled(disposables.map(t => t.dispose()));
+		for (const r of results) {
+			if (r.status === "rejected") {
+				logger.warn("Tool dispose failed", { error: String(r.reason) });
+			}
+		}
+	}
+
+	/**
 	 * Remove all listeners, flush pending writes, and disconnect from agent.
 	 * Call this when completely done with the session.
 	 */
 	async dispose(): Promise<void> {
 		try {
+			await this.#disposeTools();
 			if (this.#extensionRunner?.hasHandlers("session_shutdown")) {
 				await this.#extensionRunner.emit({ type: "session_shutdown" });
 			}
@@ -2616,6 +2634,7 @@ export class AgentSession {
 
 		this.#disconnectFromAgent();
 		await this.abort();
+		await this.#disposeTools();
 		this.#asyncJobManager?.cancelAll();
 		this.agent.reset();
 		await this.sessionManager.flush();
@@ -4655,6 +4674,7 @@ export class AgentSession {
 
 		this.#disconnectFromAgent();
 		await this.abort();
+		await this.#disposeTools();
 		this.#steeringMessages = [];
 		this.#followUpMessages = [];
 		this.#pendingNextTurnMessages = [];

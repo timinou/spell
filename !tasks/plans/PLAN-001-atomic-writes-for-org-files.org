@@ -1,0 +1,59 @@
+#+TITLE: ATOMIC_WRITES_FOR_ORG_FILES
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-atomic-writes-for-org-files
+
+* Problem
+
+=!tasks/drafts/DRAFT-005-fix-puppeteer-session-leak-across-sessio.org= has 4,954 null bytes prepended. Caused by process abort during =Bun.write()= — file allocated but content write interrupted.
+
+The doc comment in =org-writer.ts= (lines 13-14) claims "All file mutations go through atomic write (write to temp, rename)" but all 6 =Bun.write()= calls write directly to the target path. The comment is fiction.
+
+* Approach
+
+Extract an =atomicWrite(filePath, content)= helper that writes to a =.tmp= sibling then renames. Apply it to all write sites.
+
+Existing pattern in codebase: =packages/coding-agent/src/mcp/config-writer.ts= lines 41-47.
+
+** ITEM Fix the corrupted file
+:PROPERTIES:
+:EFFORT: 1m
+:END:
+
+Strip null bytes from =!tasks/drafts/DRAFT-005-fix-puppeteer-session-leak-across-sessio.org=.
+
+** ITEM Add atomicWrite helper and apply to all write sites
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+Create =packages/org/src/atomic-write.ts= with:
+
+#+begin_src typescript
+import * as fs from "node:fs/promises";
+
+export async function atomicWrite(filePath: string, content: string): Promise<void> {
+    const tmpPath = `${filePath}.tmp`;
+    await Bun.write(tmpPath, content);
+    await fs.rename(tmpPath, filePath);
+}
+#+end_src
+
+Replace all =Bun.write()= calls in:
+- =packages/org/src/org-writer.ts= (lines 138, 145, 230, 494, 580)
+- =packages/org/src/journal.ts= (line 110)
+
+The doc comment on lines 13-14 of org-writer.ts will become truthful.
+
+* Files to modify
+
+- =!tasks/drafts/DRAFT-005-fix-puppeteer-session-leak-across-sessio.org= — strip nulls
+- =packages/org/src/atomic-write.ts= — new file
+- =packages/org/src/org-writer.ts= — replace 5 Bun.write calls
+- =packages/org/src/journal.ts= — replace 1 Bun.write call
+
+* Verification
+
+- =xxd= on the fixed file shows no leading nulls
+- =bun check:ts= passes
+- =bun test packages/org/= passes
+- Manually verify org create/update still works
