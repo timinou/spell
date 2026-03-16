@@ -547,6 +547,7 @@ export interface OrgToolDefinition {
 	description: string;
 	parameters: object;
 	execute(args: Record<string, unknown>): Promise<unknown>;
+	dispose?(): Promise<void> | void;
 }
 
 /**
@@ -766,6 +767,10 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 				default:
 					return { error: true, message: `Unknown command: ${command}` };
 			}
+		},
+		async dispose() {
+			emacsSessionPromise = null;
+			orgClientPromise = null;
 		},
 	};
 }

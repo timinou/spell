@@ -1494,6 +1494,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		obfuscator,
 		asyncJobManager,
 		pendingActionStore,
+		toolSession,
 	});
 
 	if (model?.api === "openai-codex-responses") {
@@ -1543,6 +1544,26 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 	}
+
+	toolSession.dispose = async () => {
+		if (toolSession.emacsSession) {
+			try {
+				await toolSession.emacsSession.stop();
+			} catch (err) {
+				logger.warn("emacsSession stop failed", { error: String(err) });
+			}
+			toolSession.emacsSession = null;
+		}
+		if (toolSession.qmlRemoteServer) {
+			try {
+				const server = toolSession.qmlRemoteServer;
+				toolSession.qmlRemoteServer = undefined;
+				server.stop();
+			} catch (err) {
+				logger.warn("qmlRemoteServer stop failed", { error: String(err) });
+			}
+		}
+	};
 
 	startMemoryStartupTask({
 		session,

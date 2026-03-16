@@ -166,6 +166,8 @@ export interface ToolSession {
 	emacsSession?: EmacsSession | null;
 	/** Active QML remote server; when set, CanvasTool routes panels to the Android client. */
 	qmlRemoteServer?: import("@oh-my-pi/pi-qml-remote").QmlRemoteServer;
+	/** Dispose session-owned resources (emacs daemon, QML remote server). */
+	dispose?(): Promise<void> | void;
 }
 
 type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;

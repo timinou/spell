@@ -201,6 +201,8 @@ export interface AgentSessionConfig {
 	obfuscator?: SecretObfuscator;
 	/** Pending action store for preview/apply workflows */
 	pendingActionStore?: PendingActionStore;
+	/** ToolSession for session-owned resource cleanup */
+	toolSession?: { dispose?(): Promise<void> | void };
 }
 
 /** Options for AgentSession.prompt() */
@@ -403,6 +405,7 @@ export class AgentSession {
 	#promptInFlightCount = 0;
 	#obfuscator: SecretObfuscator | undefined;
 	#pendingActionStore: PendingActionStore | undefined;
+	#toolSession?: { dispose?(): Promise<void> | void };
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
 	#promptGeneration = 0;
@@ -431,6 +434,7 @@ export class AgentSession {
 		this.#obfuscator = config.obfuscator;
 		this.agent.providerSessionState = this.#providerSessionState;
 		this.#pendingActionStore = config.pendingActionStore;
+		this.#toolSession = config.toolSession;
 		this.#unsubscribePendingActionPush = this.#pendingActionStore?.subscribePush(action => {
 			const reminderText = [
 				"<system-reminder>",
@@ -1504,12 +1508,18 @@ export class AgentSession {
 			(tool): tool is typeof tool & { dispose(): Promise<void> | void } =>
 				tool != null && typeof tool.dispose === "function",
 		);
-		if (disposables.length === 0) return;
-		const results = await Promise.allSettled(disposables.map(t => t.dispose()));
-		for (const r of results) {
-			if (r.status === "rejected") {
-				logger.warn("Tool dispose failed", { error: String(r.reason) });
+		if (disposables.length > 0) {
+			const results = await Promise.allSettled(disposables.map(t => t.dispose()));
+			for (const r of results) {
+				if (r.status === "rejected") {
+					logger.warn("Tool dispose failed", { error: String(r.reason) });
+				}
 			}
+		}
+		try {
+			await this.#toolSession?.dispose?.();
+		} catch (err) {
+			logger.warn("ToolSession dispose failed", { error: String(err) });
 		}
 	}
 
@@ -2732,6 +2742,8 @@ export class AgentSession {
 				previousSessionFile,
 			});
 		}
+
+		await this.#disposeTools();
 
 		return true;
 	}

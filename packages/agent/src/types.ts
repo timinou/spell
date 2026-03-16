@@ -236,7 +236,12 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	concurrency?: "shared" | "exclusive";
 	/** If true, argument validation errors are non-fatal: raw args are passed to execute() instead of returning an error to the LLM. */
 	lenientArgValidation?: boolean;
-	/** Optional cleanup when session is disposed or switched. Called once; must be idempotent. */
+	/**
+	 * Optional cleanup when session is disposed, switched, or forked.
+	 * Called by AgentSession at lifecycle boundaries. Must be idempotent —
+	 * may be called multiple times (e.g. switchSession then dispose).
+	 * After dispose, the tool must support lazy reinit on next execute().
+	 */
 	dispose?(): Promise<void> | void;
 	execute: AgentToolExecFn<TParameters, TDetails, TTheme>;
 

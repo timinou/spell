@@ -187,4 +187,8 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		}
 		return result;
 	}
+
+	async dispose(): Promise<void> {
+		await this.tool.dispose?.();
+	}
 }

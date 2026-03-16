@@ -122,6 +122,10 @@ export class OrgTool implements AgentTool<typeof orgSchema> {
 			.join("");
 		return new Text(text.slice(0, 500), 0, 0);
 	}
+
+	async dispose(): Promise<void> {
+		await this.#inner.dispose?.();
+	}
 }
 
 // =============================================================================

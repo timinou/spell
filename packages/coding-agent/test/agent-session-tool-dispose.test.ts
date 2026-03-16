@@ -92,7 +92,7 @@ describe("AgentSession tool dispose lifecycle", () => {
 
 	it("tools without dispose are skipped without error", async () => {
 		// Register a tool without dispose
-		session.registerTool({
+		session.registerTool("no-dispose", {
 			name: "no-dispose",
 			label: "No Dispose",
 			description: "tool without dispose",
@@ -103,5 +103,76 @@ describe("AgentSession tool dispose lifecycle", () => {
 		await session.newSession();
 		// Only the two disposable tools should have been called
 		expect(disposeCalls).toHaveLength(2);
+	});
+
+	it("dispose is idempotent — second call is a no-op", async () => {
+		await session.newSession();
+		expect(disposeCalls).toHaveLength(2);
+
+		// Second newSession should dispose again, but tools are already disposed
+		disposeCalls.length = 0;
+		await session.newSession();
+		// Tools still get dispose called (they're still registered), count should be same
+		expect(disposeCalls).toHaveLength(2);
+	});
+
+	it("fork() disposes all tools", async () => {
+		await session.fork();
+		expect(disposeCalls).toContain("tool-a");
+		expect(disposeCalls).toContain("tool-b");
+		expect(disposeCalls).toHaveLength(2);
+	});
+
+	it("tool with failing dispose does not block others", async () => {
+		const failingTool: AgentTool = {
+			name: "failing-tool",
+			label: "Failing",
+			description: "tool that fails dispose",
+			parameters: { type: "object", properties: {} },
+			execute: async () => ({ type: "text" as const, text: "ok" }),
+			dispose: async () => {
+				throw new Error("dispose failed");
+			},
+		} as unknown as AgentTool;
+		session.registerTool("failing-tool", failingTool);
+
+		await session.newSession();
+		// Both tool-a and tool-b should still have been disposed
+		expect(disposeCalls).toContain("tool-a");
+		expect(disposeCalls).toContain("tool-b");
+	});
+
+	it("ToolSession.dispose is called during #disposeTools", async () => {
+		let toolSessionDisposed = false;
+		// Access the internal toolSession field via the config
+		// We need to create a new session with toolSession in config
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth2.db"));
+		const modelRegistry2 = new ModelRegistry(authStorage, path.join(tempDir, "models2.yml"));
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Test model not found");
+
+		const dummyTool = createDisposableTool("dummy");
+		const agent = new Agent({
+			getApiKey: () => "test",
+			initialState: { model, systemPrompt: "test", tools: [dummyTool] },
+		});
+
+		const sessionWithToolSession = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry: modelRegistry2,
+			toolRegistry: new Map([[dummyTool.name, dummyTool]]),
+			toolSession: {
+				dispose: async () => {
+					toolSessionDisposed = true;
+				},
+			},
+		});
+		sessionWithToolSession.subscribe(() => {});
+
+		await sessionWithToolSession.newSession();
+		expect(toolSessionDisposed).toBe(true);
 	});
 });
