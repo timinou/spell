@@ -4,20 +4,20 @@
 
 * Execute
 
-** DOING Fix corrupted file
+** DONE Fix corrupted file
 :PROPERTIES:
 :TASK_ID: task-1
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
-** ITEM Add atomicWrite helper and apply to all write sites
+** DONE Add atomicWrite helper and apply to all write sites
 :PROPERTIES:
 :TASK_ID: task-2
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM Verify
+** DONE Verify
 :PROPERTIES:
 :TASK_ID: task-3
-:STATUS: pending
+:STATUS: completed
 :END:

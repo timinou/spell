@@ -1,5 +1,5 @@
 #+TITLE: FIX_PUPPETEER_SESSION_LEAK
-#+STATE: DOING
+#+STATE: DONE
 #+CUSTOM_ID: PLAN-001-fix-puppeteer-session-leak
 
 * Initial Message

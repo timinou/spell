@@ -1,6 +1,8 @@
 #+TITLE: ATOMIC_WRITES_FOR_ORG_FILES
-#+STATE: DOING
+#+STATE: DONE
 #+CUSTOM_ID: PLAN-001-atomic-writes-for-org-files
+
+NOTE [2026-03-16]: Implemented. Corrupted file fixed. atomicWrite helper created and applied to all 6 write sites (5 in org-writer.ts, 1 in journal.ts). All 165 org tests pass.
 
 * Problem
 
