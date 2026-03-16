@@ -7,13 +7,14 @@
  */
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { EmacsSession, OrgConfig, OrgSessionContext, OrgToolDefinition } from "@oh-my-pi/pi-org";
+import type { EmacsSession, OrgConfig, OrgItem, OrgSessionContext, OrgToolDefinition } from "@oh-my-pi/pi-org";
 import { createOrgTool, DEFAULT_ORG_CONFIG, detectEmacs, startEmacsSession } from "@oh-my-pi/pi-org";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { ToolSession } from ".";
+import { formatOrgQueryResult, renderItemOrg } from "./org-format";
 
 // Path to the elisp directory shipped with the pi-org package.
 // import.meta.dir = packages/coding-agent/src/tools — navigate to workspace root then pi-org
@@ -94,7 +95,7 @@ export class OrgTool implements AgentTool<typeof orgSchema> {
 		const args = params as Record<string, unknown>;
 		try {
 			const result = await this.#inner.execute(args);
-			const text = JSON.stringify(result, null, 2);
+			const text = formatOrgResult(result);
 			const isError =
 				typeof result === "object" &&
 				result !== null &&
@@ -165,4 +166,39 @@ function buildSessionContext(session: ToolSession): OrgSessionContext {
 		transcriptPath: session.getSessionFile() ?? undefined,
 		initialMessage: session.getFirstUserMessage?.() ?? undefined,
 	};
+}
+
+// =============================================================================
+// Output formatter
+// =============================================================================
+
+/**
+ * Convert an inner org tool result to a string suitable for the LLM.
+ *
+ * - Query results ({ items, total }): org-mode text with byte budget.
+ * - Single-item get results ({ item }): org-mode text, no budget.
+ * - Everything else (create, update, dashboard, etc.): JSON.
+ */
+function formatOrgResult(result: unknown): string {
+	if (
+		typeof result === "object" &&
+		result !== null &&
+		"items" in result &&
+		Array.isArray((result as Record<string, unknown>).items)
+	) {
+		const r = result as { items: OrgItem[]; total: number };
+		return formatOrgQueryResult(r.items, r.total ?? r.items.length);
+	}
+
+	if (
+		typeof result === "object" &&
+		result !== null &&
+		"item" in result &&
+		typeof (result as Record<string, unknown>).item === "object"
+	) {
+		const item = (result as { item: OrgItem }).item;
+		return renderItemOrg(item, true, Infinity);
+	}
+
+	return JSON.stringify(result, null, 2);
 }
