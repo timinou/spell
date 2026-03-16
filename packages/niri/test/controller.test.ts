@@ -337,6 +337,7 @@ describe("NiriOverviewController", () => {
 					error: "Error",
 					completed: "Completed",
 					pending_approval: "Pending Approval",
+					user_paused: "Paused",
 				};
 				expect(plain).toContain(statusLabels[expectedStatus]);
 

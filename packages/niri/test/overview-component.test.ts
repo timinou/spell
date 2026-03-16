@@ -83,6 +83,7 @@ describe("OverviewComponent", () => {
 			error: "Error",
 			completed: "Completed",
 			pending_approval: "Pending Approval",
+			user_paused: "Paused",
 		};
 		for (const [status, label] of Object.entries(expected) as [AgentStatus, string][]) {
 			const comp = new OverviewComponent(makeSnapshot({ agentStatus: status }));

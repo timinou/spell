@@ -137,6 +137,9 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("toggleSTT")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleSTTToggle());
 		}
+		for (const key of this.ctx.keybindings.getKeys("toggleUserPause")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleToggleUserPause());
+		}
 		for (const key of this.ctx.keybindings.getKeys("copyLine")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.handleCopyCurrentLine());
 		}

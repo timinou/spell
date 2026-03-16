@@ -12,7 +12,14 @@ export interface OverviewState {
 }
 
 /** Snapshot of agent state used by the overview overlay */
-export type AgentStatus = "idle" | "running" | "needs_input" | "error" | "completed" | "pending_approval";
+export type AgentStatus =
+	| "idle"
+	| "running"
+	| "needs_input"
+	| "user_paused"
+	| "error"
+	| "completed"
+	| "pending_approval";
 
 /** Data snapshot passed to the overlay component for rendering */
 export interface OverviewSnapshot {

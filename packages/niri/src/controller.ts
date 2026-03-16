@@ -53,6 +53,8 @@ export interface NiriOverviewContext {
 	isAwaitingHookInput?: boolean;
 	/** True when plan approval is pending. */
 	isPendingApproval?: boolean;
+	/** True when the user has acknowledged the needs_input state and wants to be left alone. */
+	isUserPaused?: boolean;
 	/** Current working directory (for project name). */
 	sessionManager: {
 		getCwd(): string;
@@ -233,7 +235,7 @@ export class NiriOverviewController {
 		// and waiting for the user to approve/reject the plan.
 		if (ctx.isPendingApproval) return "pending_approval";
 		// Hook input pauses LLM mid-run for a user question (ask tool, etc.).
-		if (ctx.isAwaitingHookInput) return "needs_input";
+		if (ctx.isAwaitingHookInput) return ctx.isUserPaused ? "user_paused" : "needs_input";
 		// Streaming beats onInputCallback: the session is actively running.
 		if (ctx.session.isStreaming) return "running";
 		if (ctx.onInputCallback !== undefined) {
@@ -242,7 +244,7 @@ export class NiriOverviewController {
 				ctx.todoPhases.length > 0 &&
 				ctx.todoPhases.every(p => p.tasks.every(t => t.status === "completed" || t.status === "abandoned"));
 			if (allDone) return "completed";
-			return "needs_input";
+			return ctx.isUserPaused ? "user_paused" : "needs_input";
 		}
 		return "idle";
 	}

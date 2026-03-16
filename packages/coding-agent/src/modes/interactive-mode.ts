@@ -161,6 +161,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	unsubscribe?: () => void;
 	onInputCallback?: (input: SubmittedUserInput) => void;
 	isPendingApproval = false;
+	/** Set when user explicitly acknowledged needs_input; silences the actionable indicator. */
+	#isUserPaused = false;
 	optimisticUserMessageSignature: string | undefined = undefined;
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
 	lastSigintTime = 0;
@@ -445,11 +447,22 @@ export class InteractiveMode implements InteractiveModeContext {
 				get isPendingApproval() {
 					return ctx.isPendingApproval;
 				},
+				get isUserPaused() {
+					return ctx.#isUserPaused;
+				},
 				sessionManager: this.sessionManager,
 				get todoPhases() {
 					return ctx.todoPhases;
 				},
-				subscribe: listener => ctx.session.subscribe(listener),
+				subscribe: listener => {
+					// Auto-clear user_paused whenever the session starts a new agent run.
+					// This ensures needs_input resurfaces after the user pauses, the
+					// agent runs, and returns waiting for input again.
+					return ctx.session.subscribe(event => {
+						if ("type" in event && event.type === "agent_start") ctx.#isUserPaused = false;
+						listener();
+					});
+				},
 				onOverviewChanged(isOpen, bg, resetBg) {
 					if (ctx.#planModeOverlay) {
 						ctx.#planModeOverlay.setBackground(isOpen ? (bg ?? null) : null, isOpen ? (resetBg ?? null) : null);
@@ -1481,6 +1494,16 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleCtrlZ(): void {
 		this.#inputController.handleCtrlZ();
+	}
+
+	/** Toggle the user_paused acknowledgement. Only valid when status is needs_input or user_paused. */
+	handleToggleUserPause(): void {
+		// Determine if we are currently in a needs_input-derivable state.
+		const hasInputCallback = this.onInputCallback !== undefined;
+		const isHookAwaiting = this.hookSelector !== undefined || this.hookInput !== undefined;
+		if (!hasInputCallback && !isHookAwaiting) return; // not in needs_input territory — no-op
+		this.#isUserPaused = !this.#isUserPaused;
+		this.ui.requestRender();
 	}
 
 	handleDequeue(): void {

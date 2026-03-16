@@ -54,6 +54,13 @@ export const STATUS_COLORS: Record<
 		resetFg: "\x1b[39m",
 		label: "Pending Approval",
 	},
+	user_paused: {
+		bg: "\x1b[48;2;203;166;247m", // Catppuccin Mauve — distinct purple, clearly not blue
+		resetBg: "\x1b[49m",
+		fg: "\x1b[38;2;30;30;30m",
+		resetFg: "\x1b[39m",
+		label: "Paused",
+	},
 };
 
 const BOLD = "\x1b[1m";
