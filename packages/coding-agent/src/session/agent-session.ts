@@ -3784,14 +3784,24 @@ export class AgentSession {
 		}
 
 		const askTool = this.#toolRegistry.get("ask");
-		const exitPlanModeTool = this.#toolRegistry.get("exit_plan_mode");
-		if (!askTool || !exitPlanModeTool) {
-			logger.warn("Plan mode enforcement skipped because ask/exit tools are unavailable", {
+		if (!askTool) {
+			logger.warn("Plan mode enforcement skipped because ask tool is unavailable", {
 				activeToolNames: this.agent.state.tools.map(tool => tool.name),
 			});
 			return;
 		}
-		const forcedTools = [askTool, exitPlanModeTool];
+
+		// Keep all plan mode tools available — the bug was restricting to only ask/exit_plan_mode,
+		// which trapped the model after an ask call completed and the loop continued.
+		// toolChoice: "required" forces a tool call; the reminder prompt guides which one.
+		const forcedTools = [...this.agent.state.tools];
+		if (!forcedTools.some(t => t.name === "ask")) {
+			forcedTools.push(askTool);
+		}
+		const exitPlanModeTool = this.#toolRegistry.get("exit_plan_mode");
+		if (exitPlanModeTool && !forcedTools.some(t => t.name === "exit_plan_mode")) {
+			forcedTools.push(exitPlanModeTool);
+		}
 
 		const reminder = renderPromptTemplate(planModeToolDecisionReminderPrompt, {
 			askToolName: "ask",
