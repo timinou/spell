@@ -5,6 +5,7 @@ import { bridgeBinaryPath, isBridgeAvailable, QmlBridge } from "@oh-my-pi/pi-qml
 import type { RemoteQmlBridge } from "@oh-my-pi/pi-qml-remote";
 
 import { type Static, Type } from "@sinclair/typebox";
+import { resolveCanvasUrlToPath } from "../internal-urls";
 import canvasDescription from "../prompts/tools/canvas.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { classifyEvent, deduplicateEvents } from "./canvas-event-utils";
@@ -120,15 +121,42 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 
 	constructor(private readonly session: ToolSession) {}
 
-	/** Returns the remote bridge if an Android client is connected, null otherwise. */
-	/** Resolve a canvas file path, honoring canvas:// internal URLs. */
-	async #resolveFilePath(filePath: string): Promise<string> {
+	#isCanvasInternalUrl(filePath: string): boolean {
+		return filePath.startsWith("canvas://");
+	}
+
+	/** Resolve a file path for read/launch operations (must exist for internal URLs). */
+	async #resolveLaunchPath(filePath: string): Promise<string> {
 		const internalRouter = this.session.internalRouter;
 		if (internalRouter?.canHandle(filePath)) {
 			const resource = await internalRouter.resolve(filePath);
 			if (!resource.sourcePath) throw new ToolError("canvas:// URL has no filesystem path");
 			return resource.sourcePath;
 		}
+		return path.isAbsolute(filePath) ? filePath : path.join(this.session.cwd, filePath);
+	}
+
+	/** Resolve a file path for writes. canvas://session/... may not exist yet. */
+	async #resolveWritePath(filePath: string): Promise<string> {
+		if (this.#isCanvasInternalUrl(filePath)) {
+			return resolveCanvasUrlToPath(
+				filePath,
+				{
+					getStdlibRoot: () => path.resolve(import.meta.dir, "../modes/qml"),
+					getArtifactsDir: this.session.getArtifactsDir,
+					getSessionId: this.session.getSessionId,
+				},
+				"write",
+			);
+		}
+
+		const internalRouter = this.session.internalRouter;
+		if (internalRouter?.canHandle(filePath)) {
+			const resource = await internalRouter.resolve(filePath);
+			if (!resource.sourcePath) throw new ToolError("Internal URL has no filesystem path");
+			return resource.sourcePath;
+		}
+
 		return path.isAbsolute(filePath) ? filePath : path.join(this.session.cwd, filePath);
 	}
 
@@ -382,7 +410,7 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 				const content = params.content;
 				if (!filePath) throw new ToolError("write action requires 'path'");
 				if (content === undefined) throw new ToolError("write action requires 'content'");
-				const abs = await this.#resolveFilePath(filePath);
+				const abs = await this.#resolveWritePath(filePath);
 				await Bun.write(abs, content);
 				const lint = await lintQmlFile(abs);
 				const lintText = formatLintOutput(lint);
@@ -402,7 +430,7 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 				const remote = this.#remoteBridge();
 				if (remote) {
 					// Remote mode: read the local QML file and push its content to Android.
-					const abs = await this.#resolveFilePath(filePath);
+					const abs = await this.#resolveLaunchPath(filePath);
 					const content = await Bun.file(abs).text();
 					const win = remote.launch(id, content, {
 						title: params.title,
@@ -431,7 +459,7 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 					return toolResult(details).text(text).done();
 				}
 
-				const abs = await this.#resolveFilePath(filePath);
+				const abs = await this.#resolveLaunchPath(filePath);
 				const bridge = this.#ensureBridge();
 				const win = await bridge.launch(id, abs, {
 					title: params.title,

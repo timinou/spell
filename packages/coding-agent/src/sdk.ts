@@ -928,6 +928,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	internalRouter.register(
 		new CanvasProtocolHandler({
 			getStdlibRoot: () => path.resolve(import.meta.dir, "modes/qml"),
+			getArtifactsDir,
+			getSessionId: () => sessionManager.getSessionId(),
 		}),
 	);
 	toolSession.internalRouter = internalRouter;
