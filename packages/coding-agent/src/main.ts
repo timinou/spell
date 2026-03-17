@@ -655,10 +655,8 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		}
 	}
 
-	const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager } = await logger.timeAsync(
-		"createAgentSession",
-		() => createAgentSession(sessionOptions),
-	);
+	const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager, eventBus, orchestratorManager } =
+		await logger.timeAsync("createAgentSession", () => createAgentSession(sessionOptions));
 	if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 		authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
 	}
@@ -715,6 +713,8 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		await runQmlMode(session, {
 			initialMessage: initialMessage ?? parsedArgs.messages[0],
 			sessionFile: qmlSessionFile,
+			eventBus,
+			orchestratorManager,
 		});
 		await session.dispose();
 		stopThemeWatcher();

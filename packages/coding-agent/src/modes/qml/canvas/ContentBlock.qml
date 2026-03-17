@@ -31,6 +31,9 @@ Rectangle {
                 case "table": return tableComponent
                 case "diff": return diffComponent
                 case "tree": return treeComponent
+                case "layout": return layoutComponent
+                case "status": return statusComponent
+                case "log": return logComponent
                 default: return fallbackComponent
             }
         }
@@ -71,6 +74,11 @@ Rectangle {
         }
         function onNodeCollapsed(nodeId) {
             root.componentEvent("node_collapse", {blockId: root.blockId, nodeId: nodeId})
+        }
+
+        // StatusIndicator signals
+        function onStatusClicked() {
+            root.componentEvent("status_click", {blockId: root.blockId})
         }
     }
 
@@ -116,6 +124,30 @@ Rectangle {
         id: treeComponent
         Components.TreeView {
             treeData: root.blockData
+            width: parent ? parent.width : 0
+        }
+    }
+
+    Component {
+        id: layoutComponent
+        Components.LayoutContainer {
+            layoutData: root.blockData
+            width: parent ? parent.width : 0
+        }
+    }
+
+    Component {
+        id: statusComponent
+        Components.StatusIndicator {
+            statusData: root.blockData
+            width: parent ? parent.width : 0
+        }
+    }
+
+    Component {
+        id: logComponent
+        Components.LogStream {
+            logData: root.blockData
             width: parent ? parent.width : 0
         }
     }

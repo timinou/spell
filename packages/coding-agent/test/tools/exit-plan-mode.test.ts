@@ -73,7 +73,7 @@ describe("ExitPlanModeTool", () => {
 			"Title must not contain path separators or '..'.",
 		);
 		await expect(tool.execute("call-4", { title: "bad name" })).rejects.toThrow(
-			"Title may only contain letters, numbers, underscores, or hyphens.",
+			"Title may only contain letters, numbers, underscores, hyphens, or dots.",
 		);
 	});
 });

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as tls from "node:tls";
 import Anthropic, { type ClientOptions as AnthropicSdkClientOptions } from "@anthropic-ai/sdk";
 import type {
+	CacheControlEphemeral,
 	ContentBlockParam,
 	MessageCreateParamsStreaming,
 	MessageParam,
@@ -146,12 +147,7 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 	return headers;
 }
 
-type AnthropicCacheControl = { type: "ephemeral"; ttl?: "1h" | "5m" };
-
-type AnthropicSamplingParams = MessageCreateParamsStreaming & {
-	top_p?: number;
-	top_k?: number;
-};
+type AnthropicCacheControl = CacheControlEphemeral;
 function getCacheControl(
 	baseUrl: string,
 	cacheRetention?: CacheRetention,
@@ -1254,7 +1250,7 @@ function buildParams(
 	options?: AnthropicOptions,
 ): MessageCreateParamsStreaming {
 	const { cacheControl } = getCacheControl(baseUrl, options?.cacheRetention);
-	const params: AnthropicSamplingParams = {
+	const params: MessageCreateParamsStreaming = {
 		model: model.id,
 		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
 		max_tokens: options?.maxTokens || (model.maxTokens / 3) | 0,

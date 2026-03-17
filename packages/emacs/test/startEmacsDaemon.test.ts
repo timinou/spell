@@ -1,17 +1,6 @@
-import { mock, vi } from "bun:test";
-
-// Mock detection BEFORE importing any module that uses it.
-// Each describe block gets its own mock factory via mock.module hoisting.
-const mockDetectEmacs = vi.fn();
-mock.module("../src/detection", () => ({ detectEmacs: mockDetectEmacs }));
-
-// Mock daemon startup so tests never spawn real processes.
-const mockStartEmacsSession = vi.fn();
-mock.module("../src/daemon", () => ({
-	startEmacsSession: mockStartEmacsSession,
-}));
-
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
+import * as daemonModule from "../src/daemon";
+import * as detectionModule from "../src/detection";
 import { startEmacsDaemon } from "../src/tool";
 
 const AVAILABLE_DETECTION = {
@@ -31,14 +20,21 @@ const mockSession = {
 	stop: async () => {},
 };
 
+let detectEmacsSpy: ReturnType<typeof spyOn>;
+let startEmacsSessionSpy: ReturnType<typeof spyOn>;
+
+beforeEach(() => {
+	detectEmacsSpy = spyOn(detectionModule, "detectEmacs");
+	startEmacsSessionSpy = spyOn(daemonModule, "startEmacsSession");
+});
+
 afterEach(() => {
-	mockDetectEmacs.mockReset();
-	mockStartEmacsSession.mockReset();
+	vi.restoreAllMocks();
 });
 
 describe("startEmacsDaemon", () => {
 	it("returns null when emacs binary is not found", async () => {
-		mockDetectEmacs.mockResolvedValue({
+		detectEmacsSpy.mockResolvedValue({
 			...AVAILABLE_DETECTION,
 			found: false,
 			path: null,
@@ -52,11 +48,11 @@ describe("startEmacsDaemon", () => {
 		const result = await startEmacsDaemon(undefined, "/tmp/proj", "s1");
 
 		expect(result).toBeNull();
-		expect(mockStartEmacsSession).not.toHaveBeenCalled();
+		expect(startEmacsSessionSpy).not.toHaveBeenCalled();
 	});
 
 	it("returns null when emacs version is below minimum", async () => {
-		mockDetectEmacs.mockResolvedValue({
+		detectEmacsSpy.mockResolvedValue({
 			...AVAILABLE_DETECTION,
 			meetsMinimum: false,
 			errors: ["Emacs 28.1 is below minimum 29.1"],
@@ -65,11 +61,11 @@ describe("startEmacsDaemon", () => {
 		const result = await startEmacsDaemon(undefined, "/tmp/proj", "s1");
 
 		expect(result).toBeNull();
-		expect(mockStartEmacsSession).not.toHaveBeenCalled();
+		expect(startEmacsSessionSpy).not.toHaveBeenCalled();
 	});
 
 	it("returns null when socat is missing", async () => {
-		mockDetectEmacs.mockResolvedValue({
+		detectEmacsSpy.mockResolvedValue({
 			...AVAILABLE_DETECTION,
 			socatFound: false,
 			socatPath: null,
@@ -79,21 +75,21 @@ describe("startEmacsDaemon", () => {
 		const result = await startEmacsDaemon(undefined, "/tmp/proj", "s1");
 
 		expect(result).toBeNull();
-		expect(mockStartEmacsSession).not.toHaveBeenCalled();
+		expect(startEmacsSessionSpy).not.toHaveBeenCalled();
 	});
 
 	it("returns null when treesit is not compiled into this Emacs build", async () => {
-		mockDetectEmacs.mockResolvedValue({ ...AVAILABLE_DETECTION, treesitAvailable: false });
+		detectEmacsSpy.mockResolvedValue({ ...AVAILABLE_DETECTION, treesitAvailable: false });
 
 		const result = await startEmacsDaemon(undefined, "/tmp/proj", "s1");
 
 		expect(result).toBeNull();
-		expect(mockStartEmacsSession).not.toHaveBeenCalled();
+		expect(startEmacsSessionSpy).not.toHaveBeenCalled();
 	});
 
 	it("returns null without throwing when startEmacsSession throws", async () => {
-		mockDetectEmacs.mockResolvedValue(AVAILABLE_DETECTION);
-		mockStartEmacsSession.mockRejectedValue(new Error("socket timeout"));
+		detectEmacsSpy.mockResolvedValue(AVAILABLE_DETECTION);
+		startEmacsSessionSpy.mockRejectedValue(new Error("socket timeout"));
 
 		const result = await startEmacsDaemon(undefined, "/tmp/proj", "s1");
 
@@ -101,21 +97,21 @@ describe("startEmacsDaemon", () => {
 	});
 
 	it("returns the EmacsSession on success", async () => {
-		mockDetectEmacs.mockResolvedValue(AVAILABLE_DETECTION);
-		mockStartEmacsSession.mockResolvedValue(mockSession);
+		detectEmacsSpy.mockResolvedValue(AVAILABLE_DETECTION);
+		startEmacsSessionSpy.mockResolvedValue(mockSession);
 
 		const result = await startEmacsDaemon(undefined, "/tmp/proj", "s1");
 
 		expect(result).toBe(mockSession);
-		expect(mockStartEmacsSession).toHaveBeenCalledTimes(1);
+		expect(startEmacsSessionSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it("passes the configured emacs path to detectEmacs", async () => {
-		mockDetectEmacs.mockResolvedValue(AVAILABLE_DETECTION);
-		mockStartEmacsSession.mockResolvedValue(mockSession);
+		detectEmacsSpy.mockResolvedValue(AVAILABLE_DETECTION);
+		startEmacsSessionSpy.mockResolvedValue(mockSession);
 
 		await startEmacsDaemon("/opt/emacs/bin/emacs", "/tmp/proj", "s1");
 
-		expect(mockDetectEmacs).toHaveBeenCalledWith("/opt/emacs/bin/emacs");
+		expect(detectEmacsSpy).toHaveBeenCalledWith("/opt/emacs/bin/emacs");
 	});
 });

@@ -1,12 +1,12 @@
 ---
 name: canvas
 description: Spawn a native QML canvas window to display structured data (tables, diffs, trees, markdown, images) and collect user input via prompts. Use when presenting comparisons, tabular data, large diffs, or multi-step decisions.
-version: 1.0.0
+version: 2.0.0
 ---
 
 # Canvas
 
-Rich structured-data display and interactive prompts in a native QML window.
+Rich structured-data display, interactive prompts, and tiered agent dispatch in native QML windows.
 
 ## When to use
 
@@ -16,6 +16,8 @@ Spawn a canvas when presenting:
 - Large diffs (>50 lines)
 - Hierarchical / tree data
 - Multi-step decisions requiring user input
+- Dashboard or monitoring surfaces
+- Side-by-side layouts (use layout blocks)
 
 Don't ask permission — spawn it and describe what you showed. If the display is unavailable, fall back to markdown in the chat.
 
@@ -179,16 +181,114 @@ Rendered by the TreeView component. Hierarchical data display.
 }
 ```
 
+### `layout`
+Rendered by the LayoutContainer component. Arranges child blocks in rows, columns, or grids.
+```json
+{
+  "id": "l1", "type": "layout",
+  "data": {
+    "direction": "row",
+    "spacing": 8,
+    "children": [
+      { "id": "left", "type": "markdown", "data": { "text": "Left pane" } },
+      { "id": "right", "type": "table", "data": { "columns": [...], "rows": [...] } }
+    ]
+  }
+}
+```
+Direction options: `row` (horizontal), `column` (vertical, default), `grid` (wrapping grid). For grid, set `columns` to control wrap count. Supports nested layouts.
+
+### `status`
+Rendered by the StatusIndicator component. Compact agent state visualization.
+```json
+{
+  "id": "s1", "type": "status",
+  "data": { "state": "working", "label": "Processing files...", "elapsed": "2m 30s", "detail": "Reading src/main.ts" }
+}
+```
+States: `idle` (gray dot), `thinking` (amber, pulsing), `working` (green, pulsing), `blocked` (yellow), `error` (red). Missing `label` defaults to capitalized state name.
+
+### `log`
+Rendered by the LogStream component. Append-only scrolling text with auto-follow.
+```json
+{
+  "id": "lg1", "type": "log",
+  "data": {
+    "title": "Agent Log",
+    "lines": [
+      { "text": "[10:30:01] Agent started", "level": "info" },
+      { "text": "[10:30:05] Warning: large file", "level": "warn" },
+      { "text": "[10:30:10] Error: parse failed", "level": "error" }
+    ],
+    "maxLines": 500,
+    "autoFollow": true
+  }
+}
+```
+Line levels: `info` (white), `warn` (yellow), `error` (red), `debug` (gray). Auto-follow scrolls to bottom on new data unless user has scrolled up. Line numbers shown in gutter.
+
 ### Other types
 Unrecognized types render as a fallback showing the type label and a JSON dump of the data.
+
+## Tiered event dispatch
+
+Canvas events support three dispatch tiers, declared in the event payload:
+
+### Tier 0: Armed tools (existing, direct)
+```javascript
+bridge.send({ _tool: "write", path: "foo.txt", content: "bar" })
+// With reply correlation:
+bridge.send({ _tool: "read", _rid: "req1", path: "file.txt" })
+```
+Synchronous execution, no agent turn. Result delivered via `bridge.messageReceived` with matching `_rid`.
+
+### Tier 1: Scoped orchestrator (new)
+```javascript
+bridge.send({
+  _tier: "orchestrator",
+  _scope: "Review this diff and suggest improvements",
+  _tools: ["read", "grep", "lsp"],  // optional tool restriction
+  context: { diffId: "d1", files: ["src/main.ts"] }
+})
+```
+Spawns a lightweight agent session bound to this canvas window. The orchestrator has restricted tools and a fixed scope. Results appear on the canvas. If the task exceeds scope, the orchestrator can escalate to a full agent.
+
+### Tier 2: Full agent
+```javascript
+bridge.send({
+  _tier: "agent",
+  _assignment: "Refactor this module to use the new event bus",
+  context: { files: ["src/utils/event-bus.ts"] }
+})
+```
+Routes to the main agent session as a follow-up prompt.
+
+## Meta-interface (--qml mode)
+
+When running `spell --qml`, the shell provides:
+
+### Dashboard panel
+Second panel in the shell sidebar. Shows:
+- Agent busy/idle/blocked status with animated indicator
+- Priority queue depth (P1/P2/P3)
+- Active orchestrators with scope
+- Active canvas windows
+- Session token count
+
+### Dynamic panel management
+The agent can add/remove panels at runtime via bridge messages:
+```json
+{ "type": "add_panel", "id": "custom", "title": "My Panel", "path": "path/to/Panel.qml" }
+{ "type": "remove_panel", "id": "custom" }
+```
 
 ## Fallback
 
 When `isDisplayAvailable()` returns false, render content as markdown in the chat:
-- Tables → markdown tables
-- Diffs → fenced code blocks with `diff` language
-- Trees → indented lists
-- Prompts → numbered lists with "reply with the number" instruction
+- Tables -> markdown tables
+- Diffs -> fenced code blocks with `diff` language
+- Trees -> indented lists
+- Prompts -> numbered lists with "reply with the number" instruction
 
 ## WM close handling
 

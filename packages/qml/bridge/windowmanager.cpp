@@ -5,6 +5,7 @@
 #include <QQmlContext>
 #include <QUrl>
 #include <QJSValue>
+#include <QQmlExpression>
 #include <cstdio>
 #include <QQuickItem>
 #include <QPointF>
@@ -214,7 +215,7 @@ void WindowManager::closeWindow(QLocalSocket *client, const QString &id) {
     if (it == m_windows.end()) return;
 
     QLocalSocket *owner = it->owner;
-    delete it->engine;
+    QQmlApplicationEngine *engine = it->engine;
     m_windows.remove(id);
 
     QJsonObject ev;
@@ -222,6 +223,8 @@ void WindowManager::closeWindow(QLocalSocket *client, const QString &id) {
     ev["id"] = id;
     // Route closed event to owner; fall back to requesting client if no owner recorded
     writeEvent(owner ? owner : client, ev);
+
+    engine->deleteLater();  // deferred cleanup
 }
 
 void WindowManager::sendMessage(QLocalSocket *client, const QString &id, const QJsonObject &payload) {
@@ -465,25 +468,24 @@ void WindowManager::evalInWindow(QLocalSocket *client, const QString &id, const 
         return;
     }
 
-    QJSEngine *jsEngine = it->engine; // QQmlApplicationEngine IS-A QJSEngine
     QObject *root = it->engine->rootObjects().first();
-    QJSValue rootVal = jsEngine->newQObject(root);
-    QJSValue globalObj = jsEngine->globalObject();
-    globalObj.setProperty("root", rootVal);
-
-    QJSValue result = jsEngine->evaluate(expression);
-    // Clean up injected global
-    globalObj.deleteProperty("root");
+    // Use the object's creation context so QML component-local ids (e.g. "canvas")
+    // and context properties (e.g. "bridge") are both resolvable.
+    QQmlContext *ctx = QQmlEngine::contextForObject(root);
+    if (!ctx) ctx = it->engine->rootContext();
+    QQmlExpression expr(ctx, root, expression);
+    bool valueIsUndefined = false;
+    QVariant resultVariant = expr.evaluate(&valueIsUndefined);
 
     QJsonObject ev;
     ev["type"] = "eval_result";
     ev["id"] = id;
-    if (result.isError()) {
-        ev["error"] = result.toString();
+    if (expr.hasError()) {
+        ev["error"] = expr.error().toString();
         ev["value"] = QJsonValue::Null;
     } else {
         ev["error"] = QJsonValue::Null;
-        ev["value"] = QJsonValue::fromVariant(result.toVariant());
+        ev["value"] = QJsonValue::fromVariant(resultVariant);
     }
     writeEventToOwner(id, ev);
 }

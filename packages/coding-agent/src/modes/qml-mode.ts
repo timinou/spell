@@ -6,11 +6,15 @@ import * as path from "node:path";
 import { QmlBridge } from "@oh-my-pi/pi-qml";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import type { EventBus } from "../utils/event-bus";
+import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import { SessionEventMapper } from "./qml-event-mapper";
 
 export interface QmlModeOptions {
 	initialMessage?: string;
 	sessionFile?: string;
+	eventBus?: EventBus;
+	orchestratorManager?: CanvasOrchestratorManager;
 }
 
 export async function runQmlMode(session: AgentSession, options: QmlModeOptions = {}): Promise<void> {
@@ -22,7 +26,12 @@ export async function runQmlMode(session: AgentSession, options: QmlModeOptions 
 	// Build panel list with Chat always first
 	const shellPath = path.resolve(import.meta.dir, "qml/shell.qml");
 	const chatPanelPath = path.resolve(import.meta.dir, "qml/panels/ChatPanel.qml");
-	const allPanels = [{ id: "chat", title: "Chat", path: chatPanelPath }, ...panels];
+	const dashboardPanelPath = path.resolve(import.meta.dir, "qml/panels/DashboardPanel.qml");
+	const allPanels = [
+		{ id: "chat", title: "Chat", icon: "\u25cf", path: chatPanelPath },
+		{ id: "dashboard", title: "Dashboard", icon: "\u25a0", path: dashboardPanelPath },
+		...panels,
+	];
 
 	await bridge.launch("shell", shellPath, {
 		title: "Spell",
@@ -52,7 +61,11 @@ export async function runQmlMode(session: AgentSession, options: QmlModeOptions 
 		await session.prompt(options.initialMessage);
 	}
 
+	// Start periodic dashboard updates if eventBus is available.
+	const dashboardInterval = startDashboardUpdater(bridge, session, options);
+
 	await processQmlEvents(session, bridge);
+	clearInterval(dashboardInterval);
 }
 
 /**
@@ -98,6 +111,63 @@ async function processQmlEvents(session: AgentSession, bridge: QmlBridge): Promi
  */
 function discoverSkillPanels(_session: AgentSession): Array<{ id: string; title: string; path: string }> {
 	return [];
+}
+
+/**
+ * Start periodic dashboard updates sent to the shell.
+ * Collects agent status, queue depth, orchestrators, and token count.
+ * Returns the interval handle for cleanup.
+ */
+function startDashboardUpdater(bridge: QmlBridge, session: AgentSession, options: QmlModeOptions): NodeJS.Timeout {
+	let lastAgentBusy = false;
+	let busySince = 0;
+	let tokenCount = 0;
+
+	session.subscribe((event: AgentSessionEvent) => {
+		if (event.type === "agent_start") {
+			lastAgentBusy = true;
+			busySince = Date.now();
+		} else if (event.type === "agent_end") {
+			lastAgentBusy = false;
+		} else if (event.type === "message_end" && event.message) {
+			const usage = (event.message as { usage?: { total_tokens?: number } }).usage;
+			if (usage?.total_tokens) tokenCount = usage.total_tokens;
+		}
+	});
+
+	return setInterval(() => {
+		const queue = options.eventBus?.depth() ?? { p1: 0, p2: 0, p3: 0 };
+		const orchestrators = options.orchestratorManager?.getActive() ?? [];
+		const elapsed = lastAgentBusy ? formatElapsed(Date.now() - busySince) : "";
+
+		const payload = {
+			type: "dashboard_update",
+			agent: {
+				status: lastAgentBusy ? "busy" : "idle",
+				elapsed,
+			},
+			queue,
+			orchestrators: orchestrators.map(o => ({
+				windowId: o.windowId,
+				scope: o.scope,
+			})),
+			windows: bridge
+				.listWindows()
+				.filter(w => w.id !== "shell")
+				.map(w => ({ id: w.id, title: w.id, state: w.state })),
+			tokens: tokenCount,
+		};
+
+		bridge.sendMessage("shell", payload).catch(() => {});
+	}, 1000);
+}
+
+function formatElapsed(ms: number): string {
+	const seconds = Math.floor(ms / 1000);
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	const remainingSeconds = seconds % 60;
+	return `${minutes}m ${remainingSeconds}s`;
 }
 
 /**

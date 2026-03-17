@@ -77,13 +77,15 @@ describe.skipIf(!isBridgeAvailable())("Canvas Structured Input Integration", () 
 			options: ["monolith", "microservices"],
 		});
 
-		// submitPromptResponse(promptId, value, promptIndex) — single prompt is at index 0
-		await harness.evaluate("canvas.submitPromptResponse('arch-1', 'monolith', 0)");
-
-		const ev = await harness.waitForBridgeEvent(
+		// Set up event listener BEFORE evaluate — the bridge event fires synchronously
+		// during QQmlExpression::evaluate, so it arrives before eval_result.
+		const eventPromise = harness.waitForBridgeEvent(
 			e => e.type === "event" && (e as any).payload?.action === "respond",
 			3000,
 		);
+		await harness.evaluate("canvas.submitPromptResponse('arch-1', 'monolith', 0)");
+
+		const ev = await eventPromise;
 		const payload = (ev as any).payload as { action: string; promptId: string; value: string };
 		expect(payload.action).toBe("respond");
 		expect(payload.promptId).toBe("arch-1");
@@ -99,10 +101,13 @@ describe.skipIf(!isBridgeAvailable())("Canvas Structured Input Integration", () 
 			options: ["X"],
 		});
 
+		// Listen before evaluate to catch the synchronous bridge event
+		const respondPromise = harness.waitForBridgeEvent(
+			e => e.type === "event" && (e as any).payload?.action === "respond",
+			3000,
+		);
 		await harness.evaluate("canvas.submitPromptResponse('p1', 'X', 0)");
-
-		// Drain the bridge event
-		await harness.waitForBridgeEvent(e => e.type === "event" && (e as any).payload?.action === "respond", 3000);
+		await respondPromise;
 
 		const p = await harness.query<Record<string, unknown>>("promptById?p1");
 		expect(p.answered).toBe(true);
@@ -111,15 +116,16 @@ describe.skipIf(!isBridgeAvailable())("Canvas Structured Input Integration", () 
 	// ── Armed tool protocol ──────────────────────────────────────────────────
 
 	it("QML _tool invocation round-trip", async () => {
-		// Emit a _tool event from QML via bridge.send and verify it arrives as a bridge event
+		// Set up listener before evaluate — bridge event fires during expression evaluation
+		const eventPromise = harness.waitForBridgeEvent(
+			e => e.type === "event" && typeof (e as any).payload?._tool === "string",
+			3000,
+		);
 		await harness.evaluate(
 			"bridge.send({ _tool: 'write', _rid: 'r-1', path: '/tmp/canvas-test.txt', content: 'hello' })",
 		);
 
-		const ev = await harness.waitForBridgeEvent(
-			e => e.type === "event" && typeof (e as any).payload?._tool === "string",
-			3000,
-		);
+		const ev = await eventPromise;
 		expect((ev as any).payload._tool).toBe("write");
 		expect((ev as any).payload._rid).toBe("r-1");
 	});

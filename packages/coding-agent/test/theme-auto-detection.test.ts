@@ -11,7 +11,7 @@ describe("theme auto-detection", () => {
 		Object.defineProperty(process, "platform", { value: "darwin", configurable: true, writable: true });
 		delete Bun.env.COLORFGBG;
 		delete Bun.env.ZELLIJ;
-		themeModule.stopThemeWatcher();
+		themeModule._resetThemeStateForTest();
 		vi.restoreAllMocks();
 	});
 

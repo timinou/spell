@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isBridgeAvailable, QmlBridge } from "@oh-my-pi/pi-qml";
+import { isBridgeAvailable, QmlProcess } from "@oh-my-pi/pi-qml";
 
 const SIMPLE_QML = `
 import QtQuick 2.15
@@ -24,36 +24,41 @@ ApplicationWindow {
 `;
 
 describe.skipIf(!isBridgeAvailable())("QML WM-close detection", () => {
-	let bridge: QmlBridge;
+	let proc: QmlProcess;
 	let qmlPath: string;
 
 	beforeEach(async () => {
-		bridge = new QmlBridge({ env: { QT_QPA_PLATFORM: "offscreen" } });
+		proc = new QmlProcess({ env: { QT_QPA_PLATFORM: "offscreen" } });
+		await proc.spawnStdio();
 		qmlPath = path.join(os.tmpdir(), `wm-close-test-${Date.now()}.qml`);
 		await Bun.write(qmlPath, SIMPLE_QML);
 	});
 
 	afterEach(async () => {
-		await bridge.dispose();
+		await proc.dispose();
 	});
 
 	it("user-initiated close (via close action) reports closed: true", async () => {
-		await bridge.launch("wm-test", qmlPath, {});
-		// Drain any initial events
-		bridge.drainEvents("wm-test");
+		proc.send({ type: "load", id: "wm-test", path: qmlPath, props: {}, title: "Test", width: 400, height: 300 });
+		await proc.waitFor(e => e.type === "ready" && e.id === "wm-test", 10_000);
+
 		// Send close_self message which causes QML to send close action then Qt.quit()
-		void bridge.sendMessage("wm-test", { action: "close_self" });
-		const events = await bridge.waitForEvent("wm-test", 5000);
-		const hasClose = events.some(e => (e.payload as Record<string, unknown>).action === "close");
-		expect(hasClose).toBe(true);
+		proc.send({ type: "message", id: "wm-test", payload: { action: "close_self" } });
+		const ev = await proc.waitFor(
+			e => e.type === "event" && e.id === "wm-test" && (e as any).payload?.action === "close",
+			5_000,
+		);
+		expect((ev as any).payload.action).toBe("close");
 	});
 
-	it("WM close without prior close event window closes and reports closed state", async () => {
-		await bridge.launch("wm-test2", qmlPath, {});
-		bridge.drainEvents("wm-test2");
-		// Force close from bridge side (simulates WM kill)
-		await bridge.close("wm-test2");
-		const win = bridge.getWindow("wm-test2");
-		expect(win?.state).toBe("closed");
+	it("bridge close command sends closed event", async () => {
+		proc.send({ type: "load", id: "wm-test2", path: qmlPath, props: {}, title: "Test", width: 400, height: 300 });
+		await proc.waitFor(e => e.type === "ready" && e.id === "wm-test2", 10_000);
+
+		// Close from bridge side
+		proc.send({ type: "close", id: "wm-test2" });
+		const ev = await proc.waitFor(e => e.type === "closed" && e.id === "wm-test2", 5_000);
+		expect(ev.type).toBe("closed");
+		expect((ev as { type: "closed"; id: string }).id).toBe("wm-test2");
 	});
 });

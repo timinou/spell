@@ -111,7 +111,7 @@ function sanitizeSchemaImpl(value: unknown, options: SanitizeSchemaOptions): unk
 		// When key is "properties", child keys are property names, not schema keywords
 		result[key] = sanitizeSchemaImpl(entry, {
 			...options,
-			insideProperties: key === "properties",
+			insideProperties: key === "properties" && !options.insideProperties,
 		});
 	}
 	// Normalize array-valued "type" (e.g. ["string", "null"]) to a single type + nullable.

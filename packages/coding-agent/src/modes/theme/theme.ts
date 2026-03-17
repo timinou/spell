@@ -2038,6 +2038,14 @@ export function stopThemeWatcher(): void {
 	terminalReportedAppearance = undefined;
 }
 
+/** @internal Reset all module-level theme state for test isolation. */
+export function _resetThemeStateForTest(): void {
+	stopThemeWatcher();
+	autoDetectedTheme = false;
+	macOSReportedAppearance = undefined;
+	currentThemeName = undefined;
+}
+
 // ============================================================================
 // HTML Export Helpers
 // ============================================================================

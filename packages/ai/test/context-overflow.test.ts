@@ -569,10 +569,12 @@ describe("Context overflow error handling", () => {
 	// llama.cpp server (local) - Skip if not running
 	// =============================================================================
 
+	const llamaCppBaseUrl = process.env.LLAMA_CPP_BASE_URL ?? "http://localhost:8081/v1";
 	let llamaCppRunning = false;
 	try {
-		execSync("curl -s --max-time 1 http://localhost:8081/health > /dev/null", { stdio: "ignore" });
-		llamaCppRunning = true;
+		const response = execSync(`curl -s --max-time 2 ${llamaCppBaseUrl}/models`, { encoding: "utf-8" });
+		const parsed = JSON.parse(response);
+		llamaCppRunning = Array.isArray(parsed?.data);
 	} catch {
 		llamaCppRunning = false;
 	}
@@ -584,7 +586,7 @@ describe("Context overflow error handling", () => {
 				id: "local-model",
 				api: "openai-completions",
 				provider: "llama.cpp",
-				baseUrl: "http://localhost:8081/v1",
+				baseUrl: llamaCppBaseUrl,
 				reasoning: false,
 				input: ["text"],
 				contextWindow: 4096,

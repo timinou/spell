@@ -117,11 +117,14 @@ import {
 	warmupLspServers,
 } from "./tools";
 import {
+	CANVAS_AGENT_CHANNEL,
 	CANVAS_EVENTS_CHANNEL,
 	CANVAS_TOOL_INVOKE_CHANNEL,
+	type CanvasAgentPayload,
 	type CanvasToolInvokePayload,
 	type CanvasWindowEventsPayload,
 } from "./tools/canvas";
+import { CanvasOrchestratorManager } from "./orchestrators/canvas-orchestrator";
 import { ToolContextStore } from "./tools/context";
 import { getGeminiImageTools } from "./tools/gemini-image";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
@@ -229,6 +232,10 @@ export interface CreateAgentSessionResult {
 	lspServers?: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>;
 	/** Emacs daemon warmup result (undefined when Emacs is disabled or not attempted). */
 	emacsResult?: EmacsWarmupResult;
+	/** EventBus instance for inter-module communication */
+	eventBus?: EventBus;
+	/** Canvas orchestrator manager (undefined if no canvas support) */
+	orchestratorManager?: CanvasOrchestratorManager;
 }
 
 // Re-exports
@@ -1649,7 +1656,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// Wire QML event loop follow-ups: events from background loops arrive as automatic follow-up turns.
-	eventBus.on(CANVAS_EVENTS_CHANNEL, async (raw: unknown) => {
+	eventBus.subscribe(CANVAS_EVENTS_CHANNEL, async (raw: unknown) => {
 		if (!session) return;
 		const { windowId, events, closed, silent, silentSummary } = raw as CanvasWindowEventsPayload;
 		if (events.length === 0 && !closed) return;
@@ -1689,7 +1696,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	});
 
 	// Wire QML armed tool invocations: short-circuit tool execution without an agent turn.
-	eventBus.on(CANVAS_TOOL_INVOKE_CHANNEL, async (raw: unknown) => {
+	eventBus.subscribe(CANVAS_TOOL_INVOKE_CHANNEL, async (raw: unknown) => {
 		if (!session) return;
 		const { windowId, tool, args, allowedTools, reply } = raw as CanvasToolInvokePayload;
 
@@ -1760,6 +1767,40 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 	});
 
+	// Drain queued events between agent turns.
+	// P1-P3 events accumulate in the PriorityEventBus queue and are processed
+	// when the agent loop reaches a natural pause point (turn_end, agent_end).
+	session.subscribe(event => {
+		if (event.type === "turn_end" || event.type === "agent_end") {
+			eventBus.drain().catch(err => {
+				logger.error("EventBus drain failed", { error: String(err) });
+			});
+		}
+	});
+
+	// Wire scoped orchestrator lifecycle manager.
+	// Orchestrators are lightweight agent sessions bound to canvas windows.
+	const orchestratorManager = new CanvasOrchestratorManager({
+		eventBus,
+		cwd: cwd ?? process.cwd(),
+		getBridge: () => undefined, // Bridge delivery wired in PROJ-E (meta-interface)
+		executorDefaults: {
+			settings: options.settings,
+			modelRegistry,
+		},
+	});
+	orchestratorManager.start();
+
+	// Wire full agent requests from canvas: route to session.followUp()
+	eventBus.subscribe(CANVAS_AGENT_CHANNEL, async (raw: unknown) => {
+		if (!session) return;
+		const payload = raw as CanvasAgentPayload;
+		const prompt = payload.context
+			? `${payload.assignment}\n\nContext: ${JSON.stringify(payload.context)}`
+			: payload.assignment;
+		await session.followUp(`[Canvas agent request from window ${payload.windowId}]\n\n${prompt}`);
+	});
+
 	return {
 		session,
 		extensionsResult,
@@ -1768,5 +1809,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelFallbackMessage,
 		lspServers,
 		emacsResult,
+		eventBus,
+		orchestratorManager,
 	};
 }

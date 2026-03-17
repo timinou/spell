@@ -9,6 +9,7 @@ import { resolveCanvasUrlToPath } from "../internal-urls";
 import canvasDescription from "../prompts/tools/canvas.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { classifyEvent, deduplicateEvents } from "./canvas-event-utils";
+import { Priority } from "../utils/event-bus";
 import { formatLintOutput, lintQmlFile } from "./canvas-lint";
 import type { OutputMeta } from "./output-meta";
 import { ensureSpellConnection } from "./spell/connect";
@@ -64,6 +65,12 @@ export const CANVAS_EVENTS_CHANNEL = "canvas:window:events";
 /** Channel name for armed tool invocations emitted by the QML event loop. */
 export const CANVAS_TOOL_INVOKE_CHANNEL = "canvas:tool:invoke";
 
+/** Channel name for scoped orchestrator requests from QML. */
+export const CANVAS_ORCHESTRATOR_CHANNEL = "canvas:orchestrator:request";
+
+/** Channel name for full agent requests from QML. */
+export const CANVAS_AGENT_CHANNEL = "canvas:agent:request";
+
 /** Tools that cannot be armed from QML file declarations (only from explicit agent props). */
 const CANVAS_ARMED_DENYLIST = new Set();
 
@@ -102,6 +109,21 @@ export interface CanvasToolInvokePayload {
 	 * Present only when the QML payload included a `_rid` field.
 	 */
 	reply?: (result: Record<string, unknown>) => void;
+}
+
+/** Payload emitted on CANVAS_ORCHESTRATOR_CHANNEL when QML sends _tier: 'orchestrator'. */
+export interface CanvasOrchestratorPayload {
+	windowId: string;
+	scope: string;
+	tools?: string[];
+	context?: Record<string, unknown>;
+}
+
+/** Payload emitted on CANVAS_AGENT_CHANNEL when QML sends _tier: 'agent'. */
+export interface CanvasAgentPayload {
+	windowId: string;
+	assignment: string;
+	context?: Record<string, unknown>;
 }
 
 export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDetails> {
@@ -335,6 +357,34 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 						: undefined,
 				};
 				eventBus.emit(CANVAS_TOOL_INVOKE_CHANNEL, invokePayload);
+			} else if (typeof p._tier === "string" && eventBus) {
+				// Tier dispatch: route to orchestrator or full agent channel.
+				const tier = p._tier;
+				if (tier === "orchestrator" && typeof p._scope === "string") {
+					const payload: CanvasOrchestratorPayload = {
+						windowId: id,
+						scope: p._scope,
+						tools: Array.isArray(p._tools) ? (p._tools as string[]) : undefined,
+						context:
+							typeof p.context === "object" && p.context !== null
+								? (p.context as Record<string, unknown>)
+								: undefined,
+					};
+					eventBus.enqueue(CANVAS_ORCHESTRATOR_CHANNEL, payload, Priority.P1);
+				} else if (tier === "agent" && typeof p._assignment === "string") {
+					const payload: CanvasAgentPayload = {
+						windowId: id,
+						assignment: p._assignment,
+						context:
+							typeof p.context === "object" && p.context !== null
+								? (p.context as Record<string, unknown>)
+								: undefined,
+					};
+					eventBus.enqueue(CANVAS_AGENT_CHANNEL, payload, Priority.P1);
+				} else {
+					// Unknown tier or missing required fields — treat as regular event.
+					regularEvents.push(ev);
+				}
 			} else {
 				regularEvents.push(ev);
 			}

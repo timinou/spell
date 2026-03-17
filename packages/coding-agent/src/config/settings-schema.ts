@@ -273,26 +273,6 @@ export const SETTINGS_SCHEMA = {
 
 	"statusLine.segmentOptions": { type: "record", default: {} as Record<string, unknown> },
 
-	// ─────────────────────────────────────────────────────────────────────────
-	// Ask settings
-	// ─────────────────────────────────────────────────────────────────────────
-	"ask.timeout": {
-		type: "number",
-		default: 0,
-		ui: {
-			tab: "input",
-			label: "Ask tool timeout",
-			description: "Auto-select recommended option after timeout (0 to disable)",
-			submenu: true,
-		},
-	},
-	"ask.notify": {
-		type: "enum",
-		values: ["on", "off"] as const,
-		default: "on",
-		ui: { tab: "input", label: "Ask notification", description: "Notify when ask tool is waiting for input" },
-	},
-
 	// Images and terminal
 	"terminal.showImages": {
 		type: "boolean",
@@ -389,85 +369,6 @@ export const SETTINGS_SCHEMA = {
 			tab: "model",
 			label: "Repeat Tool Descriptions",
 			description: "Render full tool descriptions in the system prompt instead of a tool name list",
-		},
-	},
-
-	// Sampling
-	temperature: {
-		type: "number",
-		default: -1,
-		ui: {
-			tab: "model",
-			label: "Temperature",
-			description: "Sampling temperature (0 = deterministic, 1 = creative, -1 = provider default)",
-			submenu: true,
-		},
-	},
-
-	topP: {
-		type: "number",
-		default: -1,
-		ui: {
-			tab: "model",
-			label: "Top P",
-			description: "Nucleus sampling cutoff (0-1, -1 = provider default)",
-			submenu: true,
-		},
-	},
-
-	topK: {
-		type: "number",
-		default: -1,
-		ui: {
-			tab: "model",
-			label: "Top K",
-			description: "Sample from top-K tokens (-1 = provider default)",
-			submenu: true,
-		},
-	},
-
-	minP: {
-		type: "number",
-		default: -1,
-		ui: {
-			tab: "model",
-			label: "Min P",
-			description: "Minimum probability threshold (0-1, -1 = provider default)",
-			submenu: true,
-		},
-	},
-
-	presencePenalty: {
-		type: "number",
-		default: -1,
-		ui: {
-			tab: "model",
-			label: "Presence Penalty",
-			description: "Penalty for introducing already-present tokens (-1 = provider default)",
-			submenu: true,
-		},
-	},
-
-	repetitionPenalty: {
-		type: "number",
-		default: -1,
-		ui: {
-			tab: "model",
-			label: "Repetition Penalty",
-			description: "Penalty for repeated tokens (-1 = provider default)",
-			submenu: true,
-		},
-	},
-
-	serviceTier: {
-		type: "enum",
-		values: ["none", "auto", "default", "flex", "scale", "priority"] as const,
-		default: "none",
-		ui: {
-			tab: "model",
-			label: "Service Tier",
-			description: "OpenAI processing priority (none = omit parameter)",
-			submenu: true,
 		},
 	},
 
@@ -582,6 +483,10 @@ export const SETTINGS_SCHEMA = {
 		default: "on",
 		ui: { tab: "interaction", label: "Completion Notification", description: "Notify when the agent completes" },
 	},
+
+	// ─────────────────────────────────────────────────────────────────────────
+	// Ask settings
+	// ─────────────────────────────────────────────────────────────────────────
 
 	"ask.timeout": {
 		type: "number",
@@ -1506,6 +1411,8 @@ export const SETTINGS_SCHEMA = {
 	"commit.changelogMaxDiffChars": { type: "number", default: 120000 },
 
 	"thinkingBudgets.minimal": { type: "number", default: 1024 },
+
+	// Sampling
 
 	temperature: {
 		type: "number",

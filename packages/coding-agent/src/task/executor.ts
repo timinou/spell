@@ -26,7 +26,7 @@ import { SessionManager } from "../session/session-manager";
 import { type ContextFileEntry, truncateTail } from "../tools";
 import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
 import { ToolAbortError } from "../tools/tool-errors";
-import type { EventBus } from "../utils/event-bus";
+import { type EventBus, Priority } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
@@ -621,14 +621,19 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		progress.durationMs = Date.now() - startTime;
 		onProgress?.({ ...progress });
 		if (options.eventBus) {
-			options.eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
-				index,
-				agent: agent.name,
-				agentSource: agent.source,
-				task,
-				assignment,
-				progress: { ...progress },
-			});
+			options.eventBus.enqueue(
+				TASK_SUBAGENT_PROGRESS_CHANNEL,
+				{
+					index,
+					agent: agent.name,
+					agentSource: agent.source,
+					task,
+					assignment,
+					progress: { ...progress },
+				},
+				Priority.P2,
+				`task-progress-${index}`,
+			);
 		}
 		lastProgressEmitMs = Date.now();
 	};
@@ -711,14 +716,18 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		if (resolved) return;
 
 		if (options.eventBus) {
-			options.eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, {
-				index,
-				agent: agent.name,
-				agentSource: agent.source,
-				task,
-				assignment,
-				event,
-			});
+			options.eventBus.enqueue(
+				TASK_SUBAGENT_EVENT_CHANNEL,
+				{
+					index,
+					agent: agent.name,
+					agentSource: agent.source,
+					task,
+					assignment,
+					event,
+				},
+				Priority.P1,
+			);
 		}
 
 		const now = Date.now();
