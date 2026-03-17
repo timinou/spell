@@ -39,6 +39,7 @@ import type { PythonExecutionComponent } from "./components/python-execution";
 import { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent } from "./components/welcome";
+import { BtwController } from "./controllers/btw-controller";
 import { CommandController } from "./controllers/command-controller";
 import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
@@ -125,6 +126,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	pendingMessagesContainer: Container;
 	statusContainer: Container;
 	todoContainer: Container;
+	btwContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	statusLine: StatusLineComponent;
@@ -194,6 +196,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	mcpManager?: import("../mcp").MCPManager;
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 
+	readonly #btwController: BtwController;
 	readonly #commandController: CommandController;
 	readonly #eventController: EventController;
 	readonly #extensionUiController: ExtensionUiController;
@@ -236,6 +239,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
 		this.todoContainer = new Container();
+		this.btwContainer = new Container();
 		this.editor = new CustomEditor(getEditorTheme());
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setAutocompleteMaxVisible(settings.get("autocompleteMaxVisible"));
@@ -292,6 +296,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#pendingSlashCommands = [...BUILTIN_SLASH_COMMANDS, ...hookCommands, ...customCommands, ...skillCommandList];
 
 		this.#uiHelpers = new UiHelpers(this);
+		this.#btwController = new BtwController(this);
 		this.#extensionUiController = new ExtensionUiController(this);
 		this.#eventController = new EventController(this);
 		this.#commandController = new CommandController(this);
@@ -372,6 +377,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
 		this.ui.addChild(this.todoContainer);
+		this.ui.addChild(this.btwContainer);
 		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
 		this.ui.addChild(new Spacer(1));
 		this.ui.addChild(this.editorContainer);
@@ -408,9 +414,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender();
 		});
 
-		// Subscribe to terminal Mode 2031 dark/light appearance change notifications.
-		// When the OS or terminal switches between dark and light mode, the terminal
-		// sends a DSR and we re-evaluate which theme to use.
+		// Subscribe to terminal dark/light appearance changes.
+		// The terminal queries background color via OSC 11 at startup and on
+		// Mode 2031 notifications, computing luminance to detect dark/light.
 		this.ui.terminal.onAppearanceChange(mode => {
 			onTerminalAppearanceChange(mode);
 		});
@@ -630,8 +636,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		switch (todo.status) {
 			case "completed":
 				return theme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(todo.content)}`);
-			case "in_progress":
-				return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`);
+			case "in_progress": {
+				const main = theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`);
+				if (!todo.details) return main;
+				const detailLines = todo.details.split("\n").map(line => theme.fg("dim", `${prefix}  ${line}`));
+				return [main, ...detailLines].join("\n");
+			}
 			case "abandoned":
 				return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`);
 			default:
@@ -656,7 +666,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		const indent = "  ";
 		const hook = theme.tree.hook;
-		const lines = [indent + theme.bold(theme.fg("accent", "Todos"))];
+		const lines = ["", indent + theme.bold(theme.fg("accent", "Todos"))];
 
 		if (!this.todoExpanded) {
 			const activePhase = this.#getActivePhase(phases);
@@ -1100,6 +1110,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Flush pending session writes before shutdown
 		await this.sessionManager.flush();
+		this.#btwController.dispose();
 
 		// Emit shutdown event to hooks
 		await this.session.dispose();
@@ -1287,8 +1298,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleShareCommand();
 	}
 
-	handleCopyCommand() {
-		return this.#commandController.handleCopyCommand();
+	handleCopyCommand(sub?: string) {
+		return this.#commandController.handleCopyCommand(sub);
 	}
 
 	handleSessionCommand(): Promise<void> {
@@ -1312,11 +1323,13 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	handleClearCommand(): Promise<void> {
+		this.#btwController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		return this.#commandController.handleClearCommand();
 	}
 
 	handleForkCommand(): Promise<void> {
+		this.#btwController.dispose();
 		return this.#commandController.handleForkCommand();
 	}
 
@@ -1472,6 +1485,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	handleResumeSession(sessionPath: string): Promise<void> {
+		this.#btwController.dispose();
 		return this.#selectorController.handleResumeSession(sessionPath);
 	}
 
@@ -1516,6 +1530,18 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleImagePaste(): Promise<boolean> {
 		return this.#inputController.handleImagePaste();
+	}
+
+	handleBtwCommand(question: string): Promise<void> {
+		return this.#btwController.start(question);
+	}
+
+	hasActiveBtw(): boolean {
+		return this.#btwController.hasActiveRequest();
+	}
+
+	handleBtwEscape(): boolean {
+		return this.#btwController.handleEscape();
 	}
 
 	cycleThinkingLevel(): void {

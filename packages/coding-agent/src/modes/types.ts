@@ -40,6 +40,7 @@ export type TodoItem = {
 	id: string;
 	content: string;
 	status: TodoStatus;
+	details?: string;
 };
 
 export type TodoPhase = {
@@ -55,6 +56,7 @@ export interface InteractiveModeContext {
 	pendingMessagesContainer: Container;
 	statusContainer: Container;
 	todoContainer: Container;
+	btwContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
 	statusLine: StatusLineComponent;
@@ -160,7 +162,7 @@ export interface InteractiveModeContext {
 	// Command handling
 	handleExportCommand(text: string): Promise<void>;
 	handleShareCommand(): Promise<void>;
-	handleCopyCommand(): void;
+	handleCopyCommand(sub?: string): void;
 	handleSessionCommand(): Promise<void>;
 	handleJobsCommand(): Promise<void>;
 	handleUsageCommand(reports?: UsageReport[] | null): Promise<void>;
@@ -205,6 +207,9 @@ export interface InteractiveModeContext {
 	handleDequeue(): void;
 	handleBackgroundCommand(): void;
 	handleImagePaste(): Promise<boolean>;
+	handleBtwCommand(question: string): Promise<void>;
+	hasActiveBtw(): boolean;
+	handleBtwEscape(): boolean;
 	cycleThinkingLevel(): void;
 	cycleRoleModel(options?: { temporary?: boolean }): Promise<void>;
 	toggleToolOutputExpansion(): void;

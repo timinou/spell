@@ -84,6 +84,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	brave: "BRAVE_API_KEY",
 	perplexity: "PERPLEXITY_API_KEY",
 	tavily: "TAVILY_API_KEY",
+	parallel: "PARALLEL_API_KEY",
 	kagi: "KAGI_API_KEY",
 	// GitHub Copilot uses GitHub personal access token
 	"github-copilot": () => $pickenv("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
@@ -134,6 +135,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	nanogpt: "NANO_GPT_API_KEY",
 	"lm-studio": "LM_STUDIO_API_KEY",
 	ollama: "OLLAMA_API_KEY",
+	"llama.cpp": "LLAMA_CPP_API_KEY",
 	qianfan: "QIANFAN_API_KEY",
 	"qwen-portal": () => $pickenv("QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"),
 	together: "TOGETHER_API_KEY",
@@ -416,6 +418,7 @@ function mapOptionsForApi<TApi extends Api>(
 		apiKey: apiKey || options?.apiKey,
 		cacheRetention: options?.cacheRetention,
 		headers: options?.headers,
+		initiatorOverride: options?.initiatorOverride,
 		maxRetryDelayMs: options?.maxRetryDelayMs,
 		metadata: options?.metadata,
 		sessionId: options?.sessionId,

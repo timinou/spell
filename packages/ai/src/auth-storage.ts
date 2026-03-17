@@ -10,7 +10,7 @@
 import { Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, logger } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
 import { getEnvApiKey } from "./stream";
 import type { Provider } from "./types";
 import type {
@@ -53,6 +53,7 @@ import { loginNvidia } from "./utils/oauth/nvidia";
 import { loginOllama } from "./utils/oauth/ollama";
 import { loginOpenAICodex } from "./utils/oauth/openai-codex";
 import { loginOpenCode } from "./utils/oauth/opencode";
+import { loginParallel } from "./utils/oauth/parallel";
 import { loginPerplexity } from "./utils/oauth/perplexity";
 import { loginQianfan } from "./utils/oauth/qianfan";
 import { loginQwenPortal } from "./utils/oauth/qwen-portal";
@@ -291,6 +292,7 @@ export class AuthStorage {
 	#fallbackResolver?: (provider: string) => string | undefined;
 	#store: AuthCredentialStore;
 	#configValueResolver: (config: string) => Promise<string | undefined>;
+	#closed = false;
 
 	constructor(store: AuthCredentialStore, options: AuthStorageOptions = {}) {
 		this.#store = store;
@@ -316,6 +318,17 @@ export class AuthStorage {
 	static async create(dbPath: string, options: AuthStorageOptions = {}): Promise<AuthStorage> {
 		const store = await AuthCredentialStore.open(dbPath);
 		return new AuthStorage(store, options);
+	}
+
+	/**
+	 * Close the underlying credential store.
+	 *
+	 * After calling this, the instance must not be reused.
+	 */
+	close(): void {
+		if (this.#closed) return;
+		this.#closed = true;
+		this.#store.close();
 	}
 
 	/**
@@ -883,6 +896,11 @@ export class AuthStorage {
 			}
 			case "vllm": {
 				const apiKey = await loginVllm(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "parallel": {
+				const apiKey = await loginParallel(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
@@ -2100,14 +2118,6 @@ function extractOAuthTokenIdentifiers(token: string | undefined): string[] | und
 		return undefined;
 	}
 }
-
-/**
- * Get default path to agent.db
- */
-function getAgentDbPath(): string {
-	return path.join(getAgentDir(), "agent.db");
-}
-
 /**
  * Standalone SQLite-backed implementation of AuthCredentialStore interface.
  * Used by the pi-ai CLI and as the default store for AuthStorage.create().
@@ -2126,6 +2136,7 @@ export class AuthCredentialStore {
 	#getCacheStmt: Statement;
 	#upsertCacheStmt: Statement;
 	#deleteExpiredCacheStmt: Statement;
+	#closed = false;
 
 	constructor(db: Database) {
 		this.#db = db;
@@ -2285,6 +2296,9 @@ export class AuthCredentialStore {
 
 	#migrateAuthSchemaV0ToV1(): void {
 		const migrate = this.#db.transaction(() => {
+			const v0Cols = this.#db.prepare("PRAGMA table_info(auth_credentials)").all() as Array<{ name?: string }>;
+			const hasDisabled = v0Cols.some(col => col.name === "disabled");
+
 			this.#db.exec("ALTER TABLE auth_credentials RENAME TO auth_credentials_v0");
 			this.#db.exec(`
 				CREATE TABLE auth_credentials (
@@ -2304,7 +2318,7 @@ export class AuthCredentialStore {
 					provider,
 					credential_type,
 					data,
-					CASE WHEN disabled = 1 THEN 'disabled' ELSE NULL END,
+					${hasDisabled ? "CASE WHEN disabled = 1 THEN 'disabled' ELSE NULL END" : "NULL"},
 					created_at,
 					updated_at
 				FROM auth_credentials_v0
@@ -2569,6 +2583,19 @@ export class AuthCredentialStore {
 	}
 
 	close(): void {
+		if (this.#closed) return;
+		this.#closed = true;
+		this.#listActiveStmt.finalize();
+		this.#listActiveByProviderStmt.finalize();
+		this.#listDisabledByProviderStmt.finalize();
+		this.#insertStmt.finalize();
+		this.#updateStmt.finalize();
+		this.#deleteStmt.finalize();
+		this.#deleteByProviderStmt.finalize();
+		this.#hardDeleteStmt.finalize();
+		this.#getCacheStmt.finalize();
+		this.#upsertCacheStmt.finalize();
+		this.#deleteExpiredCacheStmt.finalize();
 		this.#db.close();
 	}
 }

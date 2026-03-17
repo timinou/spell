@@ -5,6 +5,7 @@ import {
 	getEnvApiKey,
 	getProviderDetails,
 	type ProviderDetails,
+	type ToolCall,
 	type UsageLimit,
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
@@ -23,10 +24,11 @@ import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { PythonExecutionComponent } from "../../modes/components/python-execution";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
+import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { AuthStorage } from "../../session/auth-storage";
 import { outputMeta } from "../../tools/output-meta";
-import { resolveToCwd } from "../../tools/path-utils";
+import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
 import { replaceTabs } from "../../tools/render-utils";
 import { getChangelogPath, parseChangelog } from "../../utils/changelog";
 import { openPath } from "../../utils/open";
@@ -213,16 +215,87 @@ export class CommandController {
 		}
 	}
 
-	handleCopyCommand() {
+	handleCopyCommand(sub?: string) {
+		switch (sub) {
+			case "code":
+				return this.#copyCode();
+			case "all":
+				return this.#copyAllCode();
+			case "cmd":
+				return this.#copyLastCommand();
+			case "last":
+			case undefined:
+				return this.#copyLastMessage();
+			default:
+				this.ctx.showError(`Unknown subcommand: ${sub}. Use code, all, cmd, or last.`);
+		}
+	}
+
+	#copyLastMessage() {
 		const text = this.ctx.session.getLastAssistantText();
 		if (!text) {
 			this.ctx.showError("No agent messages to copy yet.");
 			return;
 		}
+		this.#doCopy(text, "Copied last agent message to clipboard");
+	}
 
+	#copyCode() {
+		const text = this.ctx.session.getLastAssistantText();
+		if (!text) {
+			this.ctx.showError("No agent messages to copy yet.");
+			return;
+		}
+		const matches = [...text.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)];
+		const lastMatch = matches.at(-1);
+		if (!lastMatch) {
+			this.ctx.showWarning("No code block found in the last agent message.");
+			return;
+		}
+		this.#doCopy(lastMatch[1].replace(/\n$/, ""), "Copied last code block to clipboard");
+	}
+
+	#copyAllCode() {
+		const text = this.ctx.session.getLastAssistantText();
+		if (!text) {
+			this.ctx.showError("No agent messages to copy yet.");
+			return;
+		}
+		const matches = [...text.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)];
+		if (matches.length === 0) {
+			this.ctx.showWarning("No code blocks found in the last agent message.");
+			return;
+		}
+		const combined = matches.map(m => m[1].replace(/\n$/, "")).join("\n\n");
+		this.#doCopy(combined, `Copied ${matches.length} code block${matches.length > 1 ? "s" : ""} to clipboard`);
+	}
+
+	#copyLastCommand() {
+		const messages = this.ctx.session.messages;
+		// Walk backwards to find the last bash/python tool call
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const msg = messages[i];
+			if (msg.role !== "assistant") continue;
+			const toolCalls = msg.content.filter((c): c is ToolCall => c.type === "toolCall");
+			for (let j = toolCalls.length - 1; j >= 0; j--) {
+				const tc = toolCalls[j];
+				if (tc.name === "bash" && typeof tc.arguments.command === "string") {
+					this.#doCopy(tc.arguments.command, "Copied last bash command to clipboard");
+					return;
+				}
+				if (tc.name === "python" && typeof tc.arguments.code === "string") {
+					this.#doCopy(tc.arguments.code, "Copied last python code to clipboard");
+					return;
+				}
+			}
+		}
+		this.ctx.showWarning("No bash or python command found in the conversation.");
+	}
+
+	#doCopy(content: string, label: string) {
 		try {
-			copyToClipboard(text);
-			this.ctx.showStatus("Copied last agent message to clipboard");
+			copyToClipboard(content);
+			this.ctx.showStatus(label);
 		} catch (error) {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}
@@ -437,52 +510,13 @@ export class CommandController {
 		const sttKey = this.ctx.keybindings.getDisplayString("toggleSTT") || "Alt+H";
 		const copyLineKey = this.ctx.keybindings.getDisplayString("copyLine") || "Alt+Shift+L";
 		const copyPromptKey = this.ctx.keybindings.getDisplayString("copyPrompt") || "Alt+Shift+C";
-		const hotkeys = `
-		**Navigation**
-		| Key | Action |
-		|-----|--------|
-		| \`Arrow keys\` | Move cursor / browse history (Up when empty) |
-		| \`Option+Left/Right\` | Move by word |
-		| \`Ctrl+A\` / \`Home\` / \`Cmd+Left\` | Start of line |
-		| \`Ctrl+E\` / \`End\` / \`Cmd+Right\` | End of line |
-		
-		**Editing**
-		| Key | Action |
-		|-----|--------|
-		| \`Enter\` | Send message |
-		| \`Shift+Enter\` / \`Alt+Enter\` | New line |
-		| \`Ctrl+W\` / \`Option+Backspace\` | Delete word backwards |
-		| \`Ctrl+U\` | Delete to start of line |
-		| \`Ctrl+K\` | Delete to end of line |
-		| \`${copyLineKey}\` | Copy current line |
-		| \`${copyPromptKey}\` | Copy whole prompt |
-		
-		**Other**
-		| Key | Action |
-		|-----|--------|
-		| \`Tab\` | Path completion / accept autocomplete |
-		| \`Escape\` | Cancel autocomplete / abort streaming |
-		| \`Ctrl+C\` | Clear editor (first) / exit (second) |
-		| \`Ctrl+D\` | Exit (when editor is empty) |
-		| \`Ctrl+Z\` | Suspend to background |
-		| \`Shift+Tab\` | Cycle thinking level |
-		| \`Ctrl+P\` | Cycle role models (slow/default/smol) |
-		| \`Shift+Ctrl+P\` | Cycle role models (temporary) |
-		| \`Alt+P\` | Select model (temporary) |
-		| \`Ctrl+L\` | Select model (set roles) |
-		| \`${planModeKey}\` | Toggle plan mode |
-		| \`Ctrl+R\` | Search prompt history |
-		| \`${expandToolsKey}\` | Toggle tool output expansion |
-		| \`Ctrl+T\` | Toggle todo list expansion |
-		| \`Ctrl+G\` | Edit message in external editor |
-		| \`${sttKey}\` | Toggle speech-to-text recording |
-		| \`#\` | Open prompt actions |
-		| \`/\` | Slash commands |
-		| \`!\` | Run bash command |
-		| \`!!\` | Run bash command (excluded from context) |
-		| \`$\` | Run Python in shared kernel |
-		| \`$$\` | Run Python (excluded from context) |
-		`;
+		const hotkeys = buildHotkeysMarkdown({
+			expandToolsKey,
+			planModeKey,
+			sttKey,
+			copyLineKey,
+			copyPromptKey,
+		});
 		this.ctx.chatContainer.addChild(new Spacer(1));
 		this.ctx.chatContainer.addChild(new DynamicBorder());
 		this.ctx.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Keyboard Shortcuts")), 1, 0));
@@ -526,7 +560,7 @@ export class CommandController {
 
 		if (action === "enqueue" || action === "rebuild") {
 			try {
-				enqueueMemoryConsolidation(agentDir);
+				enqueueMemoryConsolidation(agentDir, this.ctx.sessionManager.getCwd());
 				this.ctx.showStatus("Memory consolidation enqueued.");
 			} catch (error) {
 				this.ctx.showError(`Memory enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -553,7 +587,9 @@ export class CommandController {
 		await this.ctx.session.newSession();
 
 		this.ctx.statusLine.invalidate();
+		this.ctx.statusLine.setSessionStartTime(Date.now());
 		this.ctx.updateEditorTopBorder();
+		this.ctx.ui.requestRender();
 
 		this.ctx.chatContainer.clear();
 		this.ctx.pendingMessagesContainer.clear();
@@ -605,8 +641,14 @@ export class CommandController {
 			return;
 		}
 
+		const unquoted = stripOuterDoubleQuotes(targetPath);
+		if (!unquoted) {
+			this.ctx.showError("Usage: /move <path>");
+			return;
+		}
+
 		const cwd = this.ctx.sessionManager.getCwd();
-		const resolvedPath = resolveToCwd(targetPath, cwd);
+		const resolvedPath = resolveToCwd(unquoted, cwd);
 
 		try {
 			const stat = await fs.stat(resolvedPath);

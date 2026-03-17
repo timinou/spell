@@ -177,16 +177,14 @@ export type SymbolKey =
 	| "lang.archive"
 	| "lang.binary"
 	// Settings tab icons
-	| "tab.display"
-	| "tab.agent"
-	| "tab.input"
+	| "tab.appearance"
+	| "tab.model"
+	| "tab.interaction"
+	| "tab.context"
+	| "tab.editing"
 	| "tab.tools"
-	| "tab.config"
-	| "tab.services"
-	| "tab.bash"
-	| "tab.lsp"
-	| "tab.ttsr"
-	| "tab.status";
+	| "tab.tasks"
+	| "tab.providers";
 
 type SymbolMap = Record<SymbolKey, string>;
 
@@ -338,16 +336,14 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"lang.archive": "🗜",
 	"lang.binary": "⚙",
 	// Settings tabs
-	"tab.display": "🎨",
-	"tab.agent": "🤖",
-	"tab.input": "⌨",
+	"tab.appearance": "🎨",
+	"tab.model": "🤖",
+	"tab.interaction": "⌨",
+	"tab.context": "📋",
+	"tab.editing": "💻",
 	"tab.tools": "🔧",
-	"tab.config": "⚙",
-	"tab.services": "🌐",
-	"tab.bash": "💻",
-	"tab.lsp": "📝",
-	"tab.ttsr": "⏱",
-	"tab.status": "📊",
+	"tab.tasks": "📦",
+	"tab.providers": "🌐",
 };
 
 const NERD_SYMBOLS: SymbolMap = {
@@ -591,16 +587,14 @@ const NERD_SYMBOLS: SymbolMap = {
 	"lang.archive": "\u{F187}",
 	"lang.binary": "\u{F019A}",
 	// Settings tab icons
-	"tab.display": "󰃣",
-	"tab.agent": "󰚩",
-	"tab.input": "󰌌",
+	"tab.appearance": "󰃣",
+	"tab.model": "󰚩",
+	"tab.interaction": "󰌌",
+	"tab.context": "󰘸",
+	"tab.editing": "",
 	"tab.tools": "󰠭",
-	"tab.config": "󰒓",
-	"tab.services": "󰖟",
-	"tab.bash": "",
-	"tab.lsp": "󰌌",
-	"tab.ttsr": "󱎫",
-	"tab.status": "󰄪",
+	"tab.tasks": "󰐱",
+	"tab.providers": "󰖟",
 };
 
 const ASCII_SYMBOLS: SymbolMap = {
@@ -750,16 +744,14 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"lang.archive": "zip",
 	"lang.binary": "bin",
 	// Settings tab icons
-	"tab.display": "[D]",
-	"tab.agent": "[A]",
-	"tab.input": "[I]",
+	"tab.appearance": "[A]",
+	"tab.model": "[M]",
+	"tab.interaction": "[I]",
+	"tab.context": "[X]",
+	"tab.editing": "[E]",
 	"tab.tools": "[T]",
-	"tab.config": "[C]",
-	"tab.services": "[S]",
-	"tab.bash": "[B]",
-	"tab.lsp": "[L]",
-	"tab.ttsr": "[R]",
-	"tab.status": "[=]",
+	"tab.tasks": "[K]",
+	"tab.providers": "[P]",
 };
 
 const SYMBOL_PRESETS: Record<SymbolPreset, SymbolMap> = {
@@ -1637,37 +1629,41 @@ export async function getThemeByName(name: string): Promise<Theme | undefined> {
 	}
 }
 
-/** Appearance reported by Mode 2031 (terminal DSR), or undefined if not (yet) available. */
+/** Appearance detected via OSC 11 background color query, or undefined if not yet available. */
 var terminalReportedAppearance: "dark" | "light" | undefined;
 
-/** Appearance reported by native macOS observer, or undefined if not (yet) available. */
+/** Appearance reported by the macOS fallback observer, or undefined if not yet available. */
 var macOSReportedAppearance: "dark" | "light" | undefined;
 
+function shouldUseMacOSAppearanceFallback(): boolean {
+	// Zellij currently breaks OSC 11 passthrough on macOS, so terminal-derived
+	// appearance cannot be trusted there. Fall back to host macOS appearance
+	// without letting it override valid terminal signals elsewhere.
+	return process.platform === "darwin" && !!Bun.env.ZELLIJ;
+}
+
 function detectTerminalBackground(): "dark" | "light" {
-	// Prefer terminal-reported appearance from Mode 2031 (CSI ? 997 ; {1,2} n)
-	if (terminalReportedAppearance) {
+	// Tier 1: terminal-reported appearance from OSC 11 luminance.
+	if (!shouldUseMacOSAppearanceFallback() && terminalReportedAppearance) {
 		return terminalReportedAppearance;
 	}
-	// COLORFGBG is set by the terminal emulator to reflect the actual profile colors.
-	// Check it before macOS system appearance because the terminal profile may differ
-	// from the OS-level dark/light setting (e.g. dark terminal on macOS light mode).
+
+	// Tier 2: COLORFGBG env var (static at process start, but still terminal-derived).
 	const colorfgbg = Bun.env.COLORFGBG || "";
 	if (colorfgbg) {
 		const parts = colorfgbg.split(";");
 		if (parts.length >= 2) {
 			const bg = parseInt(parts[1], 10);
-			if (!Number.isNaN(bg)) {
-				return bg < 8 ? "dark" : "light";
-			}
+			if (!Number.isNaN(bg)) return bg < 8 ? "dark" : "light";
 		}
 	}
-	// macOS: query system appearance via CoreFoundation (native, no shell).
-	// Uses cached observer value, or falls back to CFPreferencesCopyAppValue.
-	// Works on all terminals including Warp which lacks Mode 2031 / OSC 11.
-	const macAppearance = macOSReportedAppearance ?? detectMacOSAppearance();
-	if (macAppearance) {
-		return macAppearance;
+
+	// Tier 3: host macOS appearance for known-broken terminal paths only.
+	if (shouldUseMacOSAppearanceFallback()) {
+		const macAppearance = macOSReportedAppearance ?? detectMacOSAppearance();
+		if (macAppearance) return macAppearance;
 	}
+
 	return "dark";
 }
 
@@ -1809,15 +1805,14 @@ export function setAutoThemeMapping(mode: "dark" | "light", themeName: string): 
 }
 
 /**
- * Called when the terminal reports a dark/light appearance change via Mode 2031.
- * Updates the cached appearance and triggers auto-theme re-evaluation.
- * This is the cross-platform mechanism supported by Ghostty, Kitty, Contour,
- * VTE (GNOME Terminal), and tmux 3.6+.
+ * Called when the terminal detects a dark/light appearance change.
+ * The terminal layer queries OSC 11 (background color) and computes luminance;
+ * Mode 2031 notifications trigger re-queries rather than providing the value directly.
  */
 export function onTerminalAppearanceChange(mode: "dark" | "light"): void {
 	if (terminalReportedAppearance === mode) return;
 	terminalReportedAppearance = mode;
-	reevaluateAutoTheme("Mode 2031");
+	reevaluateAutoTheme("terminal appearance");
 }
 
 export function setThemeInstance(themeInstance: Theme): void {
@@ -1965,7 +1960,7 @@ async function startThemeWatcher(): Promise<void> {
 
 /**
  * Shared logic for re-evaluating the auto-detected theme.
- * Called from SIGWINCH, macOS observer, and Mode 2031 handler.
+ * Called from SIGWINCH, terminal appearance change handler, and macOS fallback observer.
  */
 function reevaluateAutoTheme(debugLabel: string): void {
 	if (!autoDetectedTheme) return;
@@ -1985,19 +1980,19 @@ function reevaluateAutoTheme(debugLabel: string): void {
 }
 
 // ============================================================================
-// macOS Appearance Observer
+// macOS Appearance Fallback Observer
 // ============================================================================
 
 var macObserver: { stop(): void } | undefined;
 
-/** Start the native macOS appearance observer (CFDistributedNotificationCenter). */
 function startMacAppearanceObserver(): void {
 	stopMacAppearanceObserver();
-	if (process.platform !== "darwin") return;
+	if (!shouldUseMacOSAppearanceFallback()) return;
 	try {
+		macOSReportedAppearance = detectMacOSAppearance();
 		macObserver = startNativeMacObserver(appearance => {
 			macOSReportedAppearance = appearance;
-			if (!terminalReportedAppearance) reevaluateAutoTheme("macOS observer");
+			reevaluateAutoTheme("macOS fallback");
 		});
 	} catch (err) {
 		logger.warn("Failed to start macOS appearance observer", { err });
@@ -2023,7 +2018,6 @@ function startSigwinchListener(): void {
 		reevaluateAutoTheme("SIGWINCH");
 	};
 	process.on("SIGWINCH", sigwinchHandler);
-	// Start macOS appearance observer alongside SIGWINCH listener.
 	startMacAppearanceObserver();
 }
 
@@ -2041,6 +2035,7 @@ export function stopThemeWatcher(): void {
 		themeWatcher = undefined;
 	}
 	stopSigwinchListener();
+	terminalReportedAppearance = undefined;
 }
 
 // ============================================================================

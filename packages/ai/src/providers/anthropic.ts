@@ -546,8 +546,9 @@ export function isProviderRetryableError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
 	const msg = error.message;
 	return (
-		/rate.?limit|too many requests|overloaded|service.?unavailable|1302/i.test(msg) ||
-		isTransientStreamParseError(error)
+		/rate.?limit|too many requests|overloaded|service.?unavailable|internal_error|stream error.*received from peer|1302/i.test(
+			msg,
+		) || isTransientStreamParseError(error)
 	);
 }
 
@@ -569,6 +570,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						hasImages: hasCopilotVisionInput(context.messages),
 						premiumMultiplier: model.premiumMultiplier,
 						headers: { ...(model.headers ?? {}), ...(options?.headers ?? {}) },
+						initiatorOverride: options?.initiatorOverride,
 					})
 				: undefined;
 		const output: AssistantMessage = {

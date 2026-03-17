@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { serializeMemoryFile } from "@oh-my-pi/pi-org";
-import { getAgentDbPath, logger, parseJsonlLenient } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, getMemoriesDir, logger, parseJsonlLenient } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { parseModelString } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
@@ -197,10 +197,10 @@ export async function clearMemoryData(agentDir: string, cwd: string): Promise<vo
 /**
  * Force-enqueue global consolidation maintenance work.
  */
-export function enqueueMemoryConsolidation(agentDir: string, sourceUpdatedAt = unixNow()): void {
+export function enqueueMemoryConsolidation(agentDir: string, cwd: string, sourceUpdatedAt = unixNow()): void {
 	const db = openMemoryDb(getAgentDbPath(agentDir));
 	try {
-		enqueueGlobalWatermark(db, sourceUpdatedAt, { forceDirtyWhenNotAdvanced: true });
+		enqueueGlobalWatermark(db, sourceUpdatedAt, cwd, { forceDirtyWhenNotAdvanced: true });
 	} finally {
 		closeMemoryDb(db);
 	}
@@ -303,6 +303,7 @@ async function runPhase1(options: {
 					ownershipToken: claim.ownershipToken,
 					sourceUpdatedAt: claim.sourceUpdatedAt,
 					nowSec: unixNow(),
+					cwd: claim.cwd,
 				});
 				stats.succeededNoOutput += 1;
 				return;
@@ -316,6 +317,7 @@ async function runPhase1(options: {
 				rolloutSummary: result.output.rolloutSummary,
 				rolloutSlug: result.output.rolloutSlug,
 				nowSec: unixNow(),
+				cwd: claim.cwd,
 			});
 			stats.succeeded += 1;
 			stats.produced += 1;
@@ -350,21 +352,23 @@ async function runPhase2(options: {
 	config: MemoryRuntimeConfig;
 }): Promise<void> {
 	const { session, modelRegistry, agentDir, config } = options;
+	const cwd = session.sessionManager.getCwd();
 	const db = openMemoryDb(getAgentDbPath(agentDir));
 	const nowSec = unixNow();
 	const workerId = `memory-${process.pid}`;
-	const memoryRoot = getMemoryRoot(agentDir, session.sessionManager.getCwd());
+	const memoryRoot = getMemoryRoot(agentDir, cwd);
 
 	try {
 		const claimResult = tryClaimGlobalPhase2Job(db, {
 			workerId,
 			leaseSeconds: config.phase2LeaseSeconds,
 			nowSec,
+			cwd,
 		});
 		if (claimResult.kind !== "claimed") return;
 
 		const claim = claimResult.claim;
-		const outputs = listStage1OutputsForGlobal(db, config.maxRawMemoriesForGlobal);
+		const outputs = listStage1OutputsForGlobal(db, config.maxRawMemoriesForGlobal, cwd);
 		const newWatermark = computeCompletionWatermark(claim.inputWatermark, outputs);
 
 		await syncPhase2Artifacts(memoryRoot, outputs);
@@ -374,6 +378,7 @@ async function runPhase2(options: {
 				ownershipToken: claim.ownershipToken,
 				newWatermark,
 				nowSec: unixNow(),
+				cwd,
 			});
 			if (!marked) {
 				logger.warn("Phase2 empty-input completion lost ownership", { memoryRoot });
@@ -392,6 +397,7 @@ async function runPhase2(options: {
 				retryDelaySeconds: config.phase2RetryDelaySeconds,
 				reason: "No model available for phase2",
 				memoryRoot,
+				cwd,
 			});
 			return;
 		}
@@ -402,6 +408,7 @@ async function runPhase2(options: {
 				retryDelaySeconds: config.phase2RetryDelaySeconds,
 				reason: "No API key available for phase2",
 				memoryRoot,
+				cwd,
 			});
 			return;
 		}
@@ -412,6 +419,7 @@ async function runPhase2(options: {
 				ownershipToken: claim.ownershipToken,
 				leaseSeconds: config.phase2LeaseSeconds,
 				nowSec: unixNow(),
+				cwd,
 			});
 			if (!ok) {
 				heartbeatLostOwnership = true;
@@ -434,6 +442,7 @@ async function runPhase2(options: {
 				ownershipToken: claim.ownershipToken,
 				newWatermark,
 				nowSec: unixNow(),
+				cwd,
 			});
 			if (!marked) {
 				throw new Error("Phase2 could not mark success: ownership lost");
@@ -444,6 +453,7 @@ async function runPhase2(options: {
 				retryDelaySeconds: config.phase2RetryDelaySeconds,
 				reason: String(error),
 				memoryRoot,
+				cwd,
 				error,
 			});
 		} finally {
@@ -461,16 +471,18 @@ function markPhase2FailureWithFallback(
 		retryDelaySeconds: number;
 		reason: string;
 		memoryRoot: string;
+		cwd: string;
 		error?: unknown;
 	},
 ): void {
-	const { claim, retryDelaySeconds, reason, memoryRoot, error } = params;
+	const { claim, retryDelaySeconds, reason, memoryRoot, cwd, error } = params;
 	const nowSec = unixNow();
 	const strictFailed = markGlobalPhase2Failed(db, {
 		ownershipToken: claim.ownershipToken,
 		retryDelaySeconds,
 		reason,
 		nowSec,
+		cwd,
 	});
 	if (strictFailed) return;
 
@@ -478,6 +490,7 @@ function markPhase2FailureWithFallback(
 		retryDelaySeconds,
 		reason,
 		nowSec,
+		cwd,
 	});
 	if (!unownedFailed) {
 		logger.warn("Phase2 could not mark failure (ownership lost and unowned fallback skipped)", {
@@ -1137,7 +1150,7 @@ function loadMemoryConfig(settings: Settings): MemoryRuntimeConfig {
 }
 
 export function getMemoryRoot(agentDir: string, cwd: string): string {
-	return path.join(agentDir, "memories", encodeProjectPath(cwd));
+	return path.join(getMemoriesDir(agentDir), encodeProjectPath(cwd));
 }
 
 function encodeProjectPath(cwd: string): string {
