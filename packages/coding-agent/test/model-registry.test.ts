@@ -211,7 +211,7 @@ describe("ModelRegistry", () => {
 			writeRawModelsJson({
 				demo: {
 					baseUrl: "https://example.com/v1",
-					apiKey: "DEMO_KEY",
+					apiKey: "DEMO_KEY", // pragma: allowlist secret
 					api: "openai-completions",
 					compat: {
 						supportsUsageInStreaming: false,
@@ -240,7 +240,7 @@ describe("ModelRegistry", () => {
 			writeRawModelsJson({
 				demo: {
 					baseUrl: "https://example.com/v1",
-					apiKey: "DEMO_KEY",
+					apiKey: "DEMO_KEY", // pragma: allowlist secret
 					api: "openai-completions",
 					compat: {
 						supportsUsageInStreaming: false,
@@ -1176,6 +1176,106 @@ describe("ModelRegistry", () => {
 			expect(llama?.contextWindow).toBe(262144);
 			expect(llama?.maxTokens).toBe(8192);
 			expect(llama?.input).toEqual(["text", "image"]);
+		});
+	});
+	describe("proxy config", () => {
+		// Use a custom provider name with no env var mapping to avoid interference from real env vars.
+		// Custom provider names not in serviceProviderMap have no tier-4 env key resolution.
+		const PROXY_PROVIDER = "my-proxy-test-provider";
+		const PLAIN_PROVIDER = "my-plain-test-provider";
+
+		test("proxy:true injects OAuth marker as runtime override (tier 1)", async () => {
+			writeRawModelsJson({
+				[PROXY_PROVIDER]: {
+					baseUrl: "https://my-proxy.example.com/v1",
+					apiKey: "sk-real-key", // pragma: allowlist secret
+					api: "anthropic-messages",
+					proxy: true,
+					models: [
+						{
+							id: "test-model",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 1000,
+							maxTokens: 100,
+						},
+					],
+				},
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			// Runtime override (tier 1) must return the OAuth marker regardless of the configured apiKey
+			const key = await registry.getApiKeyForProvider(PROXY_PROVIDER);
+			expect(key).toBe("sk-ant-oat");
+		});
+
+		test("removing proxy:true on refresh clears the runtime override", async () => {
+			const modelDef = {
+				id: "test-model",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1000,
+				maxTokens: 100,
+			};
+			writeRawModelsJson({
+				[PROXY_PROVIDER]: {
+					baseUrl: "https://my-proxy.example.com/v1",
+					apiKey: "sk-real-key", // pragma: allowlist secret
+					api: "anthropic-messages",
+					proxy: true,
+					models: [modelDef],
+				},
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(await registry.getApiKeyForProvider(PROXY_PROVIDER)).toBe("sk-ant-oat");
+
+			// Update config: remove proxy flag
+			writeRawModelsJson({
+				[PROXY_PROVIDER]: {
+					baseUrl: "https://my-proxy.example.com/v1",
+					apiKey: "sk-real-key", // pragma: allowlist secret
+					api: "anthropic-messages",
+					models: [modelDef],
+				},
+			});
+			await registry.refresh("offline");
+			// Runtime override cleared; custom provider has no env var, so falls back to models.json apiKey
+			const key = await registry.getApiKeyForProvider(PROXY_PROVIDER);
+			expect(key).toBe("sk-real-key");
+		});
+
+		test("proxy:true does not inject marker for non-proxy providers", async () => {
+			const modelDef = {
+				id: "test-model",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1000,
+				maxTokens: 100,
+			};
+			writeRawModelsJson({
+				[PROXY_PROVIDER]: {
+					baseUrl: "https://my-proxy.example.com/v1",
+					apiKey: "sk-real-key", // pragma: allowlist secret
+					api: "anthropic-messages",
+					proxy: true,
+					models: [modelDef],
+				},
+				[PLAIN_PROVIDER]: {
+					baseUrl: "https://other-proxy.example.com/v1",
+					apiKey: "or-normal-key", // pragma: allowlist secret
+					api: "anthropic-messages",
+					models: [modelDef],
+				},
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const proxyKey = await registry.getApiKeyForProvider(PROXY_PROVIDER);
+			const plainKey = await registry.getApiKeyForProvider(PLAIN_PROVIDER);
+			// Only the proxy provider gets the OAuth marker
+			expect(proxyKey).toBe("sk-ant-oat");
+			// Non-proxy provider uses its plain apiKey from models.json
+			expect(plainKey).toBe("or-normal-key");
 		});
 	});
 });

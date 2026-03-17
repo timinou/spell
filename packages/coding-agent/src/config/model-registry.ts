@@ -206,6 +206,7 @@ const ProviderConfigSchema = Type.Object({
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(OpenAICompatSchema),
 	authHeader: Type.Optional(Type.Boolean()),
+	proxy: Type.Optional(Type.Boolean()),
 	auth: Type.Optional(ProviderAuthSchema),
 	discovery: Type.Optional(ProviderDiscoverySchema),
 	models: Type.Optional(Type.Array(ModelDefinitionSchema)),
@@ -362,6 +363,7 @@ interface CustomModelsResult {
 	keylessProviders?: Set<string>;
 	discoverableProviders?: DiscoveryProviderConfig[];
 	configuredProviders?: Set<string>;
+	proxyProviders?: Set<string>;
 	error?: ConfigError;
 	found: boolean;
 }
@@ -618,6 +620,7 @@ export class ModelRegistry {
 	#cacheDbPath?: string;
 	#backgroundRefresh?: Promise<void>;
 	#lastDiscoveryWarnings: Map<string, string> = new Map();
+	#proxyProviders: Set<string> = new Set();
 
 	/**
 	 * @param authStorage - Auth storage for API key resolution
@@ -679,6 +682,11 @@ export class ModelRegistry {
 		this.#modelOverrides.clear();
 		this.#configError = undefined;
 		this.#providerDiscoveryStates.clear();
+		// Clear proxy runtime overrides; they'll be re-applied by #loadModels if still configured
+		for (const provider of this.#proxyProviders) {
+			this.authStorage.removeRuntimeApiKey(provider);
+		}
+		this.#proxyProviders.clear();
 		this.#loadModels();
 	}
 
@@ -698,12 +706,23 @@ export class ModelRegistry {
 			keylessProviders = new Set(),
 			discoverableProviders = [],
 			configuredProviders = new Set(),
+			proxyProviders = new Set(),
 			error: configError,
 		} = this.#loadCustomModels();
 		this.#configError = configError;
 		this.#keylessProviders = keylessProviders;
 		this.#discoverableProviders = discoverableProviders;
 		this.#modelOverrides = modelOverrides;
+
+		// Clear old proxy runtime overrides (those not already removed in #reloadStaticModels)
+		for (const provider of this.#proxyProviders) {
+			this.authStorage.removeRuntimeApiKey(provider);
+		}
+		this.#proxyProviders = proxyProviders;
+		// Inject proxy marker at runtime override priority (tier 1) so it wins over env vars
+		for (const provider of this.#proxyProviders) {
+			this.authStorage.setRuntimeApiKey(provider, "sk-ant-oat");
+		}
 
 		this.#addImplicitDiscoverableProviders(configuredProviders);
 		const builtInModels = this.#loadBuiltInModels(overrides, modelOverrides);
@@ -857,6 +876,7 @@ export class ModelRegistry {
 		const overrides = new Map<string, ProviderOverride>();
 		const allModelOverrides = new Map<string, Map<string, ModelOverride>>();
 		const keylessProviders = new Set<string>();
+		const proxyProviders = new Set<string>();
 		const discoverableProviders: DiscoveryProviderConfig[] = [];
 		const configuredProviders = new Set(Object.keys(value.providers));
 
@@ -893,6 +913,11 @@ export class ModelRegistry {
 				this.#customProviderApiKeys.set(providerName, providerConfig.apiKey);
 			}
 
+			// Proxy providers get a runtime override so the OAuth marker wins over env vars
+			if (providerConfig.proxy === true) {
+				proxyProviders.add(providerName);
+			}
+
 			// Parse per-model overrides
 			if (providerConfig.modelOverrides) {
 				const perModel = new Map<string, ModelOverride>();
@@ -908,6 +933,7 @@ export class ModelRegistry {
 			overrides,
 			modelOverrides: allModelOverrides,
 			keylessProviders,
+			proxyProviders,
 			discoverableProviders,
 			configuredProviders,
 			found: true,
