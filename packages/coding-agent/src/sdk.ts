@@ -1783,7 +1783,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const orchestratorManager = new CanvasOrchestratorManager({
 		eventBus,
 		cwd: cwd ?? process.cwd(),
-		getBridge: () => undefined, // Bridge delivery wired in PROJ-E (meta-interface)
 		executorDefaults: {
 			settings: options.settings,
 			modelRegistry,

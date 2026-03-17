@@ -24,6 +24,17 @@ export interface QueryItem {
 	path: string;
 }
 
+export interface ObservationEntry {
+	id: number;
+	className: string;
+	objectName: string;
+	text?: string;
+	geometry: { x: number; y: number; width: number; height: number };
+	scenePosition: { x: number; y: number };
+	enabled: boolean;
+	visible: boolean;
+}
+
 export interface QmlTestHarnessOptions {
 	/** Additional env vars beyond QT_QPA_PLATFORM=offscreen */
 	env?: Record<string, string>;
@@ -48,9 +59,14 @@ const TEST_WINDOW_ID = "test";
 export class QmlTestHarness {
 	#process: QmlProcess | null = null;
 	#options: QmlTestHarnessOptions;
+	#lastObservation: ObservationEntry[] | null = null;
 
 	constructor(options: QmlTestHarnessOptions = {}) {
 		this.#options = options;
+	}
+
+	#ensureProcess(): void {
+		if (!this.#process) throw new Error("QmlTestHarness not set up — call setup() first");
 	}
 
 	/** Spawn bridge in stdio+offscreen mode and load the given QML file. */
@@ -86,8 +102,8 @@ export class QmlTestHarness {
 
 	/** Send a message to the QML window via bridge.messageReceived. */
 	async sendMessage(payload: Record<string, unknown>): Promise<void> {
-		if (!this.#process) throw new Error("QmlTestHarness not set up — call setup() first");
-		this.#process.send({ type: "message", id: TEST_WINDOW_ID, payload });
+		this.#ensureProcess();
+		this.#process!.send({ type: "message", id: TEST_WINDOW_ID, payload });
 	}
 
 	/**
@@ -99,9 +115,9 @@ export class QmlTestHarness {
 	 * {type:'query_response', query:queryName, result:...}.
 	 */
 	async query<T = unknown>(queryName: string): Promise<T> {
-		if (!this.#process) throw new Error("QmlTestHarness not set up — call setup() first");
-		this.#process.send({ type: "message", id: TEST_WINDOW_ID, payload: { type: "query", query: queryName } });
-		const event = await this.#process.waitFor(
+		this.#ensureProcess();
+		this.#process!.send({ type: "message", id: TEST_WINDOW_ID, payload: { type: "query", query: queryName } });
+		const event = await this.#process!.waitFor(
 			e =>
 				e.type === "event" &&
 				e.id === TEST_WINDOW_ID &&
@@ -129,8 +145,8 @@ export class QmlTestHarness {
 			maxDepth?: number;
 		},
 	): Promise<QueryItem[]> {
-		if (!this.#process) throw new Error("QmlTestHarness not set up — call setup() first");
-		this.#process.send({
+		this.#ensureProcess();
+		this.#process!.send({
 			type: "query",
 			id: TEST_WINDOW_ID,
 			selector: selector ?? {},
@@ -138,7 +154,7 @@ export class QmlTestHarness {
 			includeGeometry: options?.includeGeometry ?? false,
 			maxDepth: options?.maxDepth ?? 20,
 		});
-		const event = await this.#process.waitFor(e => e.type === "query_result" && e.id === TEST_WINDOW_ID, 10_000);
+		const event = await this.#process!.waitFor(e => e.type === "query_result" && e.id === TEST_WINDOW_ID, 10_000);
 		return (event as { type: "query_result"; id: string; items: QueryItem[] }).items;
 	}
 
@@ -180,14 +196,122 @@ export class QmlTestHarness {
 		}
 	}
 
+	async click(selector: QuerySelector): Promise<void> {
+		this.#ensureProcess();
+		this.#process!.send({
+			type: "click",
+			id: TEST_WINDOW_ID,
+			selector: selector ?? {},
+		});
+		const event = await this.#process!.waitFor(
+			e =>
+				e.type === "input_result" && e.id === TEST_WINDOW_ID && (e as Record<string, unknown>).command === "click",
+			10_000,
+		);
+		const result = event as { success: boolean; error?: string };
+		if (!result.success) throw new Error(`click failed: ${result.error}`);
+	}
+
+	async clickAt(x: number, y: number): Promise<void> {
+		this.#ensureProcess();
+		this.#process!.send({ type: "click", id: TEST_WINDOW_ID, x, y });
+		const event = await this.#process!.waitFor(
+			e =>
+				e.type === "input_result" && e.id === TEST_WINDOW_ID && (e as Record<string, unknown>).command === "click",
+			10_000,
+		);
+		const result = event as { success: boolean; error?: string };
+		if (!result.success) throw new Error(`click failed: ${result.error}`);
+	}
+
+	async type(text: string, selector?: QuerySelector): Promise<void> {
+		if (selector) await this.click(selector);
+		this.#ensureProcess();
+		this.#process!.send({ type: "type", id: TEST_WINDOW_ID, text });
+		const event = await this.#process!.waitFor(
+			e => e.type === "input_result" && e.id === TEST_WINDOW_ID && (e as Record<string, unknown>).command === "type",
+			10_000,
+		);
+		const result = event as { success: boolean; error?: string };
+		if (!result.success) throw new Error(`type failed: ${result.error}`);
+	}
+
+	async press(key: string, modifiers?: string): Promise<void> {
+		this.#ensureProcess();
+		this.#process!.send({ type: "press", id: TEST_WINDOW_ID, key, modifiers });
+		const event = await this.#process!.waitFor(
+			e =>
+				e.type === "input_result" && e.id === TEST_WINDOW_ID && (e as Record<string, unknown>).command === "press",
+			10_000,
+		);
+		const result = event as { success: boolean; error?: string };
+		if (!result.success) throw new Error(`press failed: ${result.error}`);
+	}
+
+	async scroll(x: number, y: number, deltaY: number, deltaX?: number): Promise<void> {
+		this.#ensureProcess();
+		this.#process!.send({ type: "scroll", id: TEST_WINDOW_ID, x, y, deltaY, deltaX });
+		const event = await this.#process!.waitFor(
+			e =>
+				e.type === "input_result" && e.id === TEST_WINDOW_ID && (e as Record<string, unknown>).command === "scroll",
+			10_000,
+		);
+		const result = event as { success: boolean; error?: string };
+		if (!result.success) throw new Error(`scroll failed: ${result.error}`);
+	}
+
+	async settle(delayMs = 50): Promise<void> {
+		// Force a round-trip through the C++ event loop
+		await this.evaluate("true");
+		if (delayMs > 0) await Bun.sleep(delayMs);
+	}
+
+	async observe(): Promise<ObservationEntry[]> {
+		const interactiveTypes = ["QQuickMouseArea", "QQuickTextEdit", "QQuickTextInput", "QQuickFlickable"];
+		const allItems: ObservationEntry[] = [];
+		let nextId = 1;
+
+		for (const typeName of interactiveTypes) {
+			const items = await this.findItems(
+				{ type: typeName, visible: true },
+				{ includeGeometry: true, properties: ["text", "objectName"] },
+			);
+			for (const item of items) {
+				if (!item.geometry || item.geometry.width <= 0 || item.geometry.height <= 0) continue;
+				allItems.push({
+					id: nextId++,
+					className: item.className,
+					objectName: item.objectName,
+					text: item.properties.text as string | undefined,
+					geometry: item.geometry,
+					scenePosition: item.scenePosition ?? { x: item.geometry.x, y: item.geometry.y },
+					enabled: item.enabled,
+					visible: item.visible,
+				});
+			}
+		}
+
+		this.#lastObservation = allItems;
+		return allItems;
+	}
+
+	async clickId(id: number): Promise<void> {
+		if (!this.#lastObservation) throw new Error("Call observe() before clickId()");
+		const entry = this.#lastObservation.find(e => e.id === id);
+		if (!entry) throw new Error(`No observed element with id ${id}`);
+		const x = entry.scenePosition.x + entry.geometry.width / 2;
+		const y = entry.scenePosition.y + entry.geometry.height / 2;
+		await this.clickAt(x, y);
+	}
+
 	/**
 	 * Evaluate a JS expression in the QML engine context.
 	 * The root QML object is available as `root`.
 	 */
 	async evaluate<T = unknown>(expression: string): Promise<T> {
-		if (!this.#process) throw new Error("QmlTestHarness not set up — call setup() first");
-		this.#process.send({ type: "eval", id: TEST_WINDOW_ID, expression });
-		const event = await this.#process.waitFor(e => e.type === "eval_result" && e.id === TEST_WINDOW_ID, 10_000);
+		this.#ensureProcess();
+		this.#process!.send({ type: "eval", id: TEST_WINDOW_ID, expression });
+		const event = await this.#process!.waitFor(e => e.type === "eval_result" && e.id === TEST_WINDOW_ID, 10_000);
 		const result = event as { type: "eval_result"; id: string; value: unknown; error: string | null };
 		if (result.error !== null) {
 			throw new Error(`QML eval error: ${result.error}`);
@@ -196,10 +320,10 @@ export class QmlTestHarness {
 	}
 
 	async screenshot(savePath?: string): Promise<string> {
-		if (!this.#process) throw new Error("QmlTestHarness not set up — call setup() first");
+		this.#ensureProcess();
 		const dest = savePath ?? path.join(os.tmpdir(), `spell-qml-test-${Date.now()}.png`);
-		this.#process.send({ type: "screenshot", id: TEST_WINDOW_ID, path: dest });
-		const event = await this.#process.waitFor(
+		this.#process!.send({ type: "screenshot", id: TEST_WINDOW_ID, path: dest });
+		const event = await this.#process!.waitFor(
 			e => (e.type === "screenshot" || e.type === "error") && e.id === TEST_WINDOW_ID,
 			10_000,
 		);
@@ -214,9 +338,9 @@ export class QmlTestHarness {
 	 * Sends {type:'reset'} and waits for the test harness to confirm.
 	 */
 	async reset(): Promise<void> {
-		if (!this.#process) throw new Error("QmlTestHarness not set up — call setup() first");
-		this.#process.send({ type: "message", id: TEST_WINDOW_ID, payload: { type: "reset" } });
-		await this.#process.waitFor(
+		this.#ensureProcess();
+		this.#process!.send({ type: "message", id: TEST_WINDOW_ID, payload: { type: "reset" } });
+		await this.#process!.waitFor(
 			e =>
 				e.type === "event" &&
 				e.id === TEST_WINDOW_ID &&
@@ -227,8 +351,8 @@ export class QmlTestHarness {
 
 	/** Wait for a raw bridge event matching a predicate. Used to capture outgoing _tool invocations. */
 	async waitForBridgeEvent(predicate: (event: BridgeEvent) => boolean, timeout = 5_000): Promise<BridgeEvent> {
-		if (!this.#process) throw new Error("QmlTestHarness not set up — call setup() first");
-		return this.#process.waitFor(predicate, timeout);
+		this.#ensureProcess();
+		return this.#process!.waitFor(predicate, timeout);
 	}
 
 	/** Convenience for simulating the _rid response round-trip from armed tools. */

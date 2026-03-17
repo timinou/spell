@@ -5,9 +5,9 @@
 import * as path from "node:path";
 import { QmlBridge } from "@oh-my-pi/pi-qml";
 import { logger } from "@oh-my-pi/pi-utils";
+import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { EventBus } from "../utils/event-bus";
-import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import { SessionEventMapper } from "./qml-event-mapper";
 
 export interface QmlModeOptions {
@@ -19,6 +19,7 @@ export interface QmlModeOptions {
 
 export async function runQmlMode(session: AgentSession, options: QmlModeOptions = {}): Promise<void> {
 	const bridge = new QmlBridge();
+	options.orchestratorManager?.setBridge(bridge);
 
 	// Discover skill QML panels (if any skills expose them)
 	const panels = discoverSkillPanels(session);
@@ -64,7 +65,7 @@ export async function runQmlMode(session: AgentSession, options: QmlModeOptions 
 	// Start periodic dashboard updates if eventBus is available.
 	const dashboardInterval = startDashboardUpdater(bridge, session, options);
 
-	await processQmlEvents(session, bridge);
+	await processQmlEvents(session, bridge, options.orchestratorManager);
 	clearInterval(dashboardInterval);
 }
 
@@ -72,7 +73,11 @@ export async function runQmlMode(session: AgentSession, options: QmlModeOptions 
  * Event loop: wait for QML user actions and dispatch them to the session.
  * Exits when the shell window closes.
  */
-async function processQmlEvents(session: AgentSession, bridge: QmlBridge): Promise<void> {
+async function processQmlEvents(
+	session: AgentSession,
+	bridge: QmlBridge,
+	orchestratorManager?: CanvasOrchestratorManager,
+): Promise<void> {
 	while (true) {
 		const events = await bridge.waitForEvent("shell", 600_000);
 		for (const event of events) {
@@ -102,6 +107,7 @@ async function processQmlEvents(session: AgentSession, bridge: QmlBridge): Promi
 		}
 	}
 
+	orchestratorManager?.setBridge(undefined);
 	await bridge.dispose();
 }
 

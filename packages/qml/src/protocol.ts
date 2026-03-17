@@ -28,6 +28,32 @@ export type BridgeCommand =
 			maxDepth?: number;
 	  }
 	| { type: "eval"; id: string; expression: string }
+	| {
+			type: "click";
+			id: string;
+			/** Coordinate-based click */
+			x?: number;
+			y?: number;
+			/** Selector-based click (finds element, clicks center) */
+			selector?: {
+				type?: string;
+				objectName?: string;
+				visible?: boolean;
+				textContains?: string;
+			};
+	  }
+	| { type: "type"; id: string; text: string }
+	| { type: "press"; id: string; key: string; modifiers?: string }
+	| {
+			type: "scroll";
+			id: string;
+			x: number;
+			y: number;
+			/** Positive = scroll up (Qt convention). */
+			deltaX?: number;
+			/** Positive = scroll up (Qt convention). */
+			deltaY: number;
+	  }
 	| { type: "quit" };
 
 /** Events emitted by bridge process → spell (stdout) */
@@ -59,6 +85,18 @@ export type BridgeEvent =
 			id: string;
 			value: unknown;
 			error: string | null;
+	  }
+	| {
+			type: "input_result";
+			id: string;
+			command: "click" | "type" | "press" | "scroll";
+			success: boolean;
+			error?: string;
+			/** Click coordinates (for click commands) */
+			x?: number;
+			y?: number;
+			/** Characters typed (for type commands) */
+			length?: number;
 	  }
 	| { type: "state"; windows: Array<{ id: string; path: string; state: string; armedTools?: string[] }> };
 

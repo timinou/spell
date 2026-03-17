@@ -9,6 +9,9 @@
 #include <cstdio>
 #include <QQuickItem>
 #include <QPointF>
+#include <QMouseEvent>
+#include <QKeyEvent>
+#include <QWheelEvent>
 
 WindowManager::WindowManager(QObject *parent) : QObject(parent) {}
 
@@ -78,6 +81,14 @@ void WindowManager::dispatch(QLocalSocket *client, const QByteArray &jsonLine) {
         queryItems(client, id, msg);
     } else if (type == "eval") {
         evalInWindow(client, id, msg["expression"].toString());
+    } else if (type == "click") {
+        clickInWindow(client, id, msg);
+    } else if (type == "type") {
+        typeInWindow(client, id, msg["text"].toString());
+    } else if (type == "press") {
+        pressKeyInWindow(client, id, msg["key"].toString(), msg["modifiers"].toString());
+    } else if (type == "scroll") {
+        scrollInWindow(client, id, msg);
     } else if (type == "quit") {
         // Close only windows owned by this client, then quit if none remain.
         QStringList ownedIds;
@@ -487,5 +498,252 @@ void WindowManager::evalInWindow(QLocalSocket *client, const QString &id, const 
         ev["error"] = QJsonValue::Null;
         ev["value"] = QJsonValue::fromVariant(resultVariant);
     }
+    writeEventToOwner(id, ev);
+}
+
+static QHash<QString, int> buildKeyMap() {
+    QHash<QString, int> m;
+    m["Return"] = Qt::Key_Return;
+    m["Enter"] = Qt::Key_Enter;
+    m["Escape"] = Qt::Key_Escape;
+    m["Tab"] = Qt::Key_Tab;
+    m["Backspace"] = Qt::Key_Backspace;
+    m["Delete"] = Qt::Key_Delete;
+    m["Up"] = Qt::Key_Up;
+    m["Down"] = Qt::Key_Down;
+    m["Left"] = Qt::Key_Left;
+    m["Right"] = Qt::Key_Right;
+    m["Space"] = Qt::Key_Space;
+    m["Home"] = Qt::Key_Home;
+    m["End"] = Qt::Key_End;
+    m["PageUp"] = Qt::Key_PageUp;
+    m["PageDown"] = Qt::Key_PageDown;
+    return m;
+}
+
+void WindowManager::clickInWindow(QLocalSocket *client, const QString &id, const QJsonObject &msg) {
+    auto it = m_windows.find(id);
+    if (it == m_windows.end()) {
+        QJsonObject ev;
+        ev["type"] = "error";
+        ev["id"] = id;
+        ev["message"] = "Window not found: " + id;
+        writeEvent(client, ev);
+        return;
+    }
+
+    auto *rootWin = qobject_cast<QQuickWindow *>(it->engine->rootObjects().first());
+    if (!rootWin) {
+        QJsonObject ev;
+        ev["type"] = "input_result";
+        ev["id"] = id;
+        ev["command"] = "click";
+        ev["success"] = false;
+        ev["error"] = "Root object is not a QQuickWindow";
+        writeEventToOwner(id, ev);
+        return;
+    }
+
+    double x, y;
+
+    if (msg.contains("selector")) {
+        // Selector mode: find element, compute center
+        auto *rootItem = rootWin->contentItem();
+        QuerySelector sel = parseSelector(msg["selector"].toObject());
+        QJsonArray props;
+        QJsonArray items;
+        walkTree(rootItem, sel, props, true, 20, 0,
+                 QString(rootItem->metaObject()->className()), items);
+
+        if (items.isEmpty()) {
+            QJsonObject ev;
+            ev["type"] = "input_result";
+            ev["id"] = id;
+            ev["command"] = "click";
+            ev["success"] = false;
+            ev["error"] = "No element found matching selector";
+            writeEventToOwner(id, ev);
+            return;
+        }
+
+        QJsonObject geom = items[0].toObject()["geometry"].toObject();
+        QJsonObject scenePos = items[0].toObject()["scenePosition"].toObject();
+        x = scenePos["x"].toDouble() + geom["width"].toDouble() / 2.0;
+        y = scenePos["y"].toDouble() + geom["height"].toDouble() / 2.0;
+    } else {
+        x = msg["x"].toDouble();
+        y = msg["y"].toDouble();
+    }
+
+    QPointF pos(x, y);
+    QPointF globalPos = rootWin->mapToGlobal(pos);
+
+    QMouseEvent press(QEvent::MouseButtonPress, pos, globalPos,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QGuiApplication::sendEvent(rootWin, &press);
+
+    QMouseEvent release(QEvent::MouseButtonRelease, pos, globalPos,
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QGuiApplication::sendEvent(rootWin, &release);
+
+    QJsonObject ev;
+    ev["type"] = "input_result";
+    ev["id"] = id;
+    ev["command"] = "click";
+    ev["success"] = true;
+    ev["x"] = x;
+    ev["y"] = y;
+    writeEventToOwner(id, ev);
+}
+
+void WindowManager::typeInWindow(QLocalSocket *client, const QString &id, const QString &text) {
+    auto it = m_windows.find(id);
+    if (it == m_windows.end()) {
+        QJsonObject ev;
+        ev["type"] = "error";
+        ev["id"] = id;
+        ev["message"] = "Window not found: " + id;
+        writeEvent(client, ev);
+        return;
+    }
+
+    auto *rootWin = qobject_cast<QQuickWindow *>(it->engine->rootObjects().first());
+    if (!rootWin) {
+        QJsonObject ev;
+        ev["type"] = "input_result";
+        ev["id"] = id;
+        ev["command"] = "type";
+        ev["success"] = false;
+        ev["error"] = "Root object is not a QQuickWindow";
+        writeEventToOwner(id, ev);
+        return;
+    }
+
+    for (const QChar &ch : text) {
+        QKeyEvent press(QEvent::KeyPress, 0, Qt::NoModifier, QString(ch));
+        QKeyEvent release(QEvent::KeyRelease, 0, Qt::NoModifier, QString(ch));
+        QGuiApplication::sendEvent(rootWin, &press);
+        QGuiApplication::sendEvent(rootWin, &release);
+    }
+
+    QJsonObject ev;
+    ev["type"] = "input_result";
+    ev["id"] = id;
+    ev["command"] = "type";
+    ev["success"] = true;
+    ev["length"] = text.length();
+    writeEventToOwner(id, ev);
+}
+
+void WindowManager::pressKeyInWindow(QLocalSocket *client, const QString &id,
+                                     const QString &key, const QString &modifiers) {
+    auto it = m_windows.find(id);
+    if (it == m_windows.end()) {
+        QJsonObject ev;
+        ev["type"] = "error";
+        ev["id"] = id;
+        ev["message"] = "Window not found: " + id;
+        writeEvent(client, ev);
+        return;
+    }
+
+    auto *rootWin = qobject_cast<QQuickWindow *>(it->engine->rootObjects().first());
+    if (!rootWin) {
+        QJsonObject ev;
+        ev["type"] = "input_result";
+        ev["id"] = id;
+        ev["command"] = "press";
+        ev["success"] = false;
+        ev["error"] = "Root object is not a QQuickWindow";
+        writeEventToOwner(id, ev);
+        return;
+    }
+
+    static const QHash<QString, int> keyMap = buildKeyMap();
+
+    int qtKey;
+    QString text;
+    if (key.length() == 1) {
+        qtKey = QChar(key[0]).toUpper().unicode();
+        text = key;
+    } else {
+        auto found = keyMap.constFind(key);
+        if (found == keyMap.constEnd()) {
+            QJsonObject ev;
+            ev["type"] = "input_result";
+            ev["id"] = id;
+            ev["command"] = "press";
+            ev["success"] = false;
+            ev["error"] = "Unknown key name: " + key;
+            writeEventToOwner(id, ev);
+            return;
+        }
+        qtKey = *found;
+        if (qtKey == Qt::Key_Space) text = " ";
+    }
+
+    Qt::KeyboardModifiers mods = Qt::NoModifier;
+    if (!modifiers.isEmpty()) {
+        const QStringList parts = modifiers.split('+');
+        for (const QString &part : parts) {
+            const QString trimmed = part.trimmed();
+            if (trimmed == "Shift") mods |= Qt::ShiftModifier;
+            else if (trimmed == "Ctrl" || trimmed == "Control") mods |= Qt::ControlModifier;
+            else if (trimmed == "Alt") mods |= Qt::AltModifier;
+            else if (trimmed == "Meta") mods |= Qt::MetaModifier;
+        }
+    }
+
+    QKeyEvent press(QEvent::KeyPress, qtKey, mods, text);
+    QKeyEvent release(QEvent::KeyRelease, qtKey, mods, text);
+    QGuiApplication::sendEvent(rootWin, &press);
+    QGuiApplication::sendEvent(rootWin, &release);
+
+    QJsonObject ev;
+    ev["type"] = "input_result";
+    ev["id"] = id;
+    ev["command"] = "press";
+    ev["success"] = true;
+    writeEventToOwner(id, ev);
+}
+
+void WindowManager::scrollInWindow(QLocalSocket *client, const QString &id, const QJsonObject &msg) {
+    auto it = m_windows.find(id);
+    if (it == m_windows.end()) {
+        QJsonObject ev;
+        ev["type"] = "error";
+        ev["id"] = id;
+        ev["message"] = "Window not found: " + id;
+        writeEvent(client, ev);
+        return;
+    }
+
+    auto *rootWin = qobject_cast<QQuickWindow *>(it->engine->rootObjects().first());
+    if (!rootWin) {
+        QJsonObject ev;
+        ev["type"] = "input_result";
+        ev["id"] = id;
+        ev["command"] = "scroll";
+        ev["success"] = false;
+        ev["error"] = "Root object is not a QQuickWindow";
+        writeEventToOwner(id, ev);
+        return;
+    }
+
+    QPointF pos(msg["x"].toDouble(), msg["y"].toDouble());
+    int deltaX = msg["deltaX"].toInt(0);
+    int deltaY = msg["deltaY"].toInt(0);
+
+    QWheelEvent wheel(pos, rootWin->mapToGlobal(pos),
+                      QPoint(0, 0), QPoint(deltaX, deltaY),
+                      Qt::NoButton, Qt::NoModifier,
+                      Qt::NoScrollPhase, false);
+    QGuiApplication::sendEvent(rootWin, &wheel);
+
+    QJsonObject ev;
+    ev["type"] = "input_result";
+    ev["id"] = id;
+    ev["command"] = "scroll";
+    ev["success"] = true;
     writeEventToOwner(id, ev);
 }

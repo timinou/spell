@@ -59,6 +59,11 @@ private:
     void screenshotWindow(QLocalSocket *client, const QString &id, const QString &savePath);
     void queryItems(QLocalSocket *client, const QString &id, const QJsonObject &msg);
     void evalInWindow(QLocalSocket *client, const QString &id, const QString &expression);
+    void clickInWindow(QLocalSocket *client, const QString &id, const QJsonObject &msg);
+    void typeInWindow(QLocalSocket *client, const QString &id, const QString &text);
+    void pressKeyInWindow(QLocalSocket *client, const QString &id,
+                          const QString &key, const QString &modifiers);
+    void scrollInWindow(QLocalSocket *client, const QString &id, const QJsonObject &msg);
 
     /// Write an event to a specific client (or stdout when client is nullptr).
     void writeEvent(QLocalSocket *client, const QJsonObject &event);

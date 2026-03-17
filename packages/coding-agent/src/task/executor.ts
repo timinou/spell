@@ -148,6 +148,8 @@ export interface ExecutorOptions {
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
+	/** Additional custom tools injected by the caller (e.g., orchestrator escalate). */
+	customTools?: CustomTool[];
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -951,6 +953,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				: SessionManager.inMemory(worktree ?? cwd);
 
 			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
+			const allCustomTools = [...mcpProxyTools, ...(options.customTools ?? [])];
 			const enableMCP = !options.mcpManager;
 
 			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
@@ -984,7 +987,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				enableLsp: lspEnabled,
 				skipPythonPreflight,
 				enableMCP,
-				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
+				customTools: allCustomTools.length > 0 ? allCustomTools : undefined,
 			});
 
 			activeSession = session;
