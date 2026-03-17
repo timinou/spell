@@ -204,6 +204,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #selectorController: SelectorController;
 	readonly #uiHelpers: UiHelpers;
 	#niriController: NiriOverviewController | undefined = undefined;
+	#niriListener: (() => void) | undefined = undefined;
 	#sttController: STTController | undefined;
 	#voiceAnimationInterval: NodeJS.Timeout | undefined;
 	#voiceHue = 0;
@@ -461,6 +462,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					return ctx.todoPhases;
 				},
 				subscribe: listener => {
+					ctx.#niriListener = listener;
 					// Auto-clear user_paused whenever the session starts a new agent run.
 					// This ensures needs_input resurfaces after the user pauses, the
 					// agent runs, and returns waiting for input again.
@@ -1037,8 +1039,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			selectorOptions.splice(1, 0, "Review with Athena");
 		}
 		this.isPendingApproval = true;
+		this.#niriListener?.();
 		const choice = await this.showHookSelector("Plan mode - next step", selectorOptions);
 		this.isPendingApproval = false;
+		this.#niriListener?.();
 
 		if (choice === "Approve and execute") {
 			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
