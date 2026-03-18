@@ -24,15 +24,15 @@ describe.skipIf(!isBridgeAvailable())("ChatPanel QML integration", () => {
 	// ── Initial state ─────────────────────────────────────────────────────────
 
 	it("starts with empty message list", async () => {
-		expect(await harness.query("messageCount")).toBe(0);
-		expect(await harness.query("isStreaming")).toBe(false);
+		expect(await harness.query<number>("messageCount")).toBe(0);
+		expect(await harness.query<boolean>("isStreaming")).toBe(false);
 	});
 
 	// ── user_message ──────────────────────────────────────────────────────────
 
 	it("appends user message with correct role and text", async () => {
 		await harness.sendMessage({ type: "user_message", text: "hello world" });
-		expect(await harness.query("messageCount")).toBe(1);
+		expect(await harness.query<number>("messageCount")).toBe(1);
 		const msg = await harness.query<Record<string, unknown>>("lastMessage");
 		expect(msg.role).toBe("user");
 		expect(msg.text).toBe("hello world");
@@ -43,8 +43,8 @@ describe.skipIf(!isBridgeAvailable())("ChatPanel QML integration", () => {
 
 	it("streams assistant message text end-to-end", async () => {
 		await harness.sendMessage({ type: "message_start", id: "msg-1", role: "assistant" });
-		expect(await harness.query("messageCount")).toBe(1);
-		expect(await harness.query("isStreaming")).toBe(true);
+		expect(await harness.query<number>("messageCount")).toBe(1);
+		expect(await harness.query<boolean>("isStreaming")).toBe(true);
 
 		const afterStart = await harness.query<Record<string, unknown>>("lastMessage");
 		expect(afterStart.role).toBe("assistant");
@@ -65,14 +65,14 @@ describe.skipIf(!isBridgeAvailable())("ChatPanel QML integration", () => {
 		await harness.sendMessage({ type: "message_end", id: "msg-1" });
 		const afterEnd = await harness.query<Record<string, unknown>>("lastMessage");
 		expect(afterEnd.isStreaming).toBe(false);
-		expect(await harness.query("isStreaming")).toBe(false);
+		expect(await harness.query<boolean>("isStreaming")).toBe(false);
 	});
 
 	// ── Tool execution lifecycle ───────────────────────────────────────────────
 
 	it("streams tool execution start→end lifecycle", async () => {
 		await harness.sendMessage({ type: "tool_start", id: "t-1", name: "bash", details: "Running build" });
-		expect(await harness.query("messageCount")).toBe(1);
+		expect(await harness.query<number>("messageCount")).toBe(1);
 
 		const toolMsg = await harness.query<Record<string, unknown>>("lastMessage");
 		expect(toolMsg.role).toBe("tool");
@@ -96,10 +96,10 @@ describe.skipIf(!isBridgeAvailable())("ChatPanel QML integration", () => {
 
 	it("reflects agent_busy state", async () => {
 		await harness.sendMessage({ type: "agent_busy", busy: true });
-		expect(await harness.query("isStreaming")).toBe(true);
+		expect(await harness.query<boolean>("isStreaming")).toBe(true);
 
 		await harness.sendMessage({ type: "agent_busy", busy: false });
-		expect(await harness.query("isStreaming")).toBe(false);
+		expect(await harness.query<boolean>("isStreaming")).toBe(false);
 	});
 
 	// ── Multiple message types coexist ────────────────────────────────────────
@@ -111,7 +111,7 @@ describe.skipIf(!isBridgeAvailable())("ChatPanel QML integration", () => {
 		await harness.sendMessage({ type: "message_start", id: "msg-2", role: "assistant" });
 		await harness.sendMessage({ type: "message_end", id: "msg-2" });
 
-		expect(await harness.query("messageCount")).toBe(3);
+		expect(await harness.query<number>("messageCount")).toBe(3);
 	});
 
 	// ── Screenshot smoke test ─────────────────────────────────────────────────

@@ -34,17 +34,13 @@ describe.skipIf(!isBridgeAvailable())("Canvas Orchestrator Flow", () => {
 			icon: "\u25b6",
 			path: "panels/DashboardPanel.qml", // reuse dashboard for test
 		});
-		await journey.settle();
-
 		// The sidebar should now contain "Code Review" text
 		await journey.expectText("Code Review");
 	});
 
 	it("agent sends dashboard_update with orchestrator and dashboard shows scope", async () => {
-		// Switch to dashboard panel by evaluating JS
-		await journey.evaluate("root.activePanelIndex = 1");
-		await journey.settle(100);
-
+		// Switch to dashboard panel
+		await journey.switchPanel("dashboard");
 		await journey.agentSends({
 			type: "dashboard_update",
 			agent: { status: "busy", elapsed: "5s" },
@@ -53,8 +49,6 @@ describe.skipIf(!isBridgeAvailable())("Canvas Orchestrator Flow", () => {
 			windows: [],
 			tokens: 1500,
 		});
-		await journey.settle(100);
-
 		// Verify orchestrator scope is visible
 		await journey.expectText("Review auth module");
 		// Verify agent status
@@ -70,8 +64,6 @@ describe.skipIf(!isBridgeAvailable())("Canvas Orchestrator Flow", () => {
 			windows: [],
 			tokens: 2000,
 		});
-		await journey.settle(100);
-
 		// Verify orchestrator is gone — "No active orchestrators" should appear
 		await journey.expectText("No active orchestrators");
 		await journey.expectText("Agent is idle");

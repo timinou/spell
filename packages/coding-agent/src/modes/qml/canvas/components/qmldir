@@ -1,3 +1,6 @@
 DataTable 1.0 DataTable.qml
 DiffView 1.0 DiffView.qml
 TreeView 1.0 TreeView.qml
+LayoutContainer 1.0 LayoutContainer.qml
+LogStream 1.0 LogStream.qml
+StatusIndicator 1.0 StatusIndicator.qml

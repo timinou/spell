@@ -41,7 +41,6 @@ describe.skipIf(!isBridgeAvailable())("Multi-Canvas Concurrent", () => {
 			icon: "B",
 			path: "panels/DashboardPanel.qml",
 		});
-		await journey.settle();
 
 		// Both panel titles should appear in the sidebar
 		await journey.expectText("Panel A");
@@ -50,8 +49,7 @@ describe.skipIf(!isBridgeAvailable())("Multi-Canvas Concurrent", () => {
 
 	it("dashboard shows both orchestrators simultaneously", async () => {
 		// Switch to dashboard
-		await journey.evaluate("root.activePanelIndex = 1");
-		await journey.settle(100);
+		await journey.switchPanel("dashboard");
 
 		await journey.agentSends({
 			type: "dashboard_update",
@@ -64,7 +62,6 @@ describe.skipIf(!isBridgeAvailable())("Multi-Canvas Concurrent", () => {
 			windows: [],
 			tokens: 500,
 		});
-		await journey.settle(100);
 
 		await journey.expectText("Analyze module A");
 		await journey.expectText("Analyze module B");
@@ -79,7 +76,6 @@ describe.skipIf(!isBridgeAvailable())("Multi-Canvas Concurrent", () => {
 			windows: [],
 			tokens: 800,
 		});
-		await journey.settle(100);
 
 		// Only module B remains
 		await journey.expectText("Analyze module B");

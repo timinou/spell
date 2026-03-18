@@ -35,11 +35,9 @@ describe.skipIf(!isBridgeAvailable())("Clean Shutdown", () => {
 			icon: "E",
 			path: "panels/DashboardPanel.qml",
 		});
-		await journey.settle();
 
 		// Switch to dashboard
-		await journey.evaluate("root.activePanelIndex = 1");
-		await journey.settle(100);
+		await journey.switchPanel("dashboard");
 
 		// Send dashboard update with orchestrators
 		await journey.agentSends({
@@ -50,7 +48,6 @@ describe.skipIf(!isBridgeAvailable())("Clean Shutdown", () => {
 			windows: [{ id: "canvas-1", title: "Canvas 1", state: "ready" }],
 			tokens: 5000,
 		});
-		await journey.settle(100);
 
 		// Verify full state is visible
 		await journey.expectText("Extra Panel");

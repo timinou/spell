@@ -22,8 +22,7 @@ describe.skipIf(!isBridgeAvailable())("Escalation Flow", () => {
 		});
 		// Switch to dashboard immediately
 		await journey.settle(100);
-		await journey.evaluate("root.activePanelIndex = 1");
-		await journey.settle(100);
+		await journey.switchPanel("dashboard");
 	});
 
 	afterAll(async () => {
@@ -39,7 +38,6 @@ describe.skipIf(!isBridgeAvailable())("Escalation Flow", () => {
 			windows: [],
 			tokens: 100,
 		});
-		await journey.settle(100);
 
 		await journey.expectText("Review diff for auth");
 	});
@@ -54,7 +52,6 @@ describe.skipIf(!isBridgeAvailable())("Escalation Flow", () => {
 			windows: [],
 			tokens: 500,
 		});
-		await journey.settle(100);
 
 		await journey.expectText("Escalating: full agent analyzing auth");
 	});
@@ -69,7 +66,6 @@ describe.skipIf(!isBridgeAvailable())("Escalation Flow", () => {
 			windows: [],
 			tokens: 1200,
 		});
-		await journey.settle();
 
 		await journey.agentSends({
 			type: "add_panel",
@@ -78,7 +74,6 @@ describe.skipIf(!isBridgeAvailable())("Escalation Flow", () => {
 			icon: "\u2714",
 			path: "panels/DashboardPanel.qml", // reuse for test
 		});
-		await journey.settle(100);
 
 		// Orchestrator gone, result panel visible in sidebar
 		await journey.expectText("No active orchestrators");
@@ -95,7 +90,6 @@ describe.skipIf(!isBridgeAvailable())("Escalation Flow", () => {
 		expect(idx).toBeGreaterThanOrEqual(0);
 
 		await journey.evaluate(`root.activePanelIndex = ${idx}`);
-		await journey.settle(100);
 
 		// Panel loaded successfully (not in error state)
 		const loaderStatus = await journey.evaluate<number>("panelLoader.status");

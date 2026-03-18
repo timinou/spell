@@ -266,6 +266,24 @@ export class QmlTestHarness {
 		if (delayMs > 0) await Bun.sleep(delayMs);
 	}
 
+	async waitUntil<T>(fn: () => Promise<T | null | false>, timeout = 2000): Promise<T> {
+		const start = Date.now();
+		let lastError: Error | null = null;
+		while (Date.now() - start < timeout) {
+			try {
+				const result = await fn();
+				if (result !== null && result !== false) return result;
+			} catch (err) {
+				lastError = err instanceof Error ? err : new Error(String(err));
+			}
+			await Bun.sleep(50);
+		}
+		// Final attempt — let it throw naturally if fn() rejects
+		const result = await fn();
+		if (result !== null && result !== false) return result;
+		throw lastError ?? new Error(`waitUntil timed out after ${timeout}ms`);
+	}
+
 	async observe(): Promise<ObservationEntry[]> {
 		const interactiveTypes = ["QQuickMouseArea", "QQuickTextEdit", "QQuickTextInput", "QQuickFlickable"];
 		const allItems: ObservationEntry[] = [];

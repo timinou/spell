@@ -21,8 +21,7 @@ describe.skipIf(!isBridgeAvailable())("Queue Backpressure", () => {
 		});
 		await journey.settle(100);
 		// Switch to dashboard
-		await journey.evaluate("root.activePanelIndex = 1");
-		await journey.settle(100);
+		await journey.switchPanel("dashboard");
 	});
 
 	afterAll(async () => {
@@ -38,15 +37,14 @@ describe.skipIf(!isBridgeAvailable())("Queue Backpressure", () => {
 			windows: [],
 			tokens: 0,
 		});
-		await journey.settle(100);
 
 		// Verify queue depth section exists
 		await journey.expectText("Queue Depth");
 
 		// Read queue values via the loaded panel item (dashboardPanel id is scoped inside the Loader)
-		const p1 = await journey.evaluate<number>("panelLoader.item.queueP1");
-		const p2 = await journey.evaluate<number>("panelLoader.item.queueP2");
-		const p3 = await journey.evaluate<number>("panelLoader.item.queueP3");
+		const p1 = await journey.panelProperty<number>("queueP1");
+		const p2 = await journey.panelProperty<number>("queueP2");
+		const p3 = await journey.panelProperty<number>("queueP3");
 		expect(p1).toBe(0);
 		expect(p2).toBe(0);
 		expect(p3).toBe(0);
@@ -61,11 +59,10 @@ describe.skipIf(!isBridgeAvailable())("Queue Backpressure", () => {
 			windows: [],
 			tokens: 100,
 		});
-		await journey.settle(100);
 
-		const p1 = await journey.evaluate<number>("panelLoader.item.queueP1");
-		const p2 = await journey.evaluate<number>("panelLoader.item.queueP2");
-		const p3 = await journey.evaluate<number>("panelLoader.item.queueP3");
+		const p1 = await journey.panelProperty<number>("queueP1");
+		const p2 = await journey.panelProperty<number>("queueP2");
+		const p3 = await journey.panelProperty<number>("queueP3");
 		expect(p1).toBe(15);
 		expect(p2).toBe(30);
 		expect(p3).toBe(5);
@@ -80,7 +77,6 @@ describe.skipIf(!isBridgeAvailable())("Queue Backpressure", () => {
 			windows: [],
 			tokens: 200,
 		});
-		await journey.settle(100);
 
 		// queueColor(60) should return error color (value > 50)
 		const color = await journey.evaluate<string>("panelLoader.item.queueColor(60)");
@@ -97,11 +93,10 @@ describe.skipIf(!isBridgeAvailable())("Queue Backpressure", () => {
 			windows: [],
 			tokens: 300,
 		});
-		await journey.settle(100);
 
-		const p1 = await journey.evaluate<number>("panelLoader.item.queueP1");
-		const p2 = await journey.evaluate<number>("panelLoader.item.queueP2");
-		const p3 = await journey.evaluate<number>("panelLoader.item.queueP3");
+		const p1 = await journey.panelProperty<number>("queueP1");
+		const p2 = await journey.panelProperty<number>("queueP2");
+		const p3 = await journey.panelProperty<number>("queueP3");
 		expect(p1).toBe(0);
 		expect(p2).toBe(0);
 		expect(p3).toBe(0);
