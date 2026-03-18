@@ -84,7 +84,7 @@ describe.skipIf(!isBridgeAvailable())("Multi-Canvas Concurrent", () => {
 
 	it("panel list length matches total panels", async () => {
 		// We have: chat, dashboard, panel-a, panel-b = 4 panels
-		const panelCount = await journey.evaluate<number>("root.panels.length");
+		const panelCount = await journey.evaluate<number>("panelsModel.count");
 		expect(panelCount).toBe(4);
 	});
 });

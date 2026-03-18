@@ -79,8 +79,8 @@ describe.skipIf(!isBridgeAvailable())("Queue Backpressure", () => {
 		});
 
 		// queueColor(60) should return error color (value > 50)
-		const color = await journey.evaluate<string>("panelLoader.item.queueColor(60)");
-		const errorColor = await journey.evaluate<string>("panelLoader.item.statusColor('error')");
+		const color = await journey.evaluate<string>("root.getActivePanelItem().queueColor(60)");
+		const errorColor = await journey.evaluate<string>("root.getActivePanelItem().statusColor('error')");
 		expect(color).toBe(errorColor);
 	});
 

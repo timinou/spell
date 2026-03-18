@@ -82,7 +82,7 @@ describe.skipIf(!isBridgeAvailable())("Escalation Flow", () => {
 
 	it("result panel is navigable", async () => {
 		// The escalation result panel should exist in the panel list
-		const panelCount = await journey.evaluate<number>("root.panels.length");
+		const panelCount = await journey.evaluate<number>("panelsModel.count");
 		expect(panelCount).toBe(3); // chat, dashboard, escalation-result
 
 		// Switch to it
@@ -92,7 +92,7 @@ describe.skipIf(!isBridgeAvailable())("Escalation Flow", () => {
 		await journey.evaluate(`root.activePanelIndex = ${idx}`);
 
 		// Panel loaded successfully (not in error state)
-		const loaderStatus = await journey.evaluate<number>("panelLoader.status");
+		const loaderStatus = await journey.evaluate<number>("root.getActivePanelStatus()");
 		// Loader.Ready = 1
 		expect(loaderStatus).toBe(1);
 	});
