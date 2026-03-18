@@ -1251,6 +1251,10 @@ export class Theme {
 		return (str: string) => this.fg("planMode", str);
 	}
 
+	getUserPausedBorderColor(): (str: string) => string {
+		return (str: string) => this.fg("planMode", str);
+	}
+
 	// ============================================================================
 	// Symbol Methods
 	// ============================================================================

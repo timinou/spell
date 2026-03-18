@@ -7,7 +7,17 @@ import { type Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { NiriOverviewController } from "@oh-my-pi/pi-niri";
 import type { Component, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
-import { Container, Loader, Markdown, ProcessTerminal, Spacer, Text, TUI } from "@oh-my-pi/pi-tui";
+import {
+	Container,
+	Loader,
+	Markdown,
+	ProcessTerminal,
+	padding,
+	Spacer,
+	Text,
+	TUI,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, hsvToRgb, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { KeybindingsManager } from "../config/keybindings";
@@ -99,6 +109,34 @@ const EDITOR_MAX_HEIGHT_MAX = 18;
 const EDITOR_RESERVED_ROWS = 12;
 const EDITOR_FALLBACK_ROWS = 24;
 
+class UserPausedFrameContainer extends Container {
+	constructor(private readonly isPaused: () => boolean) {
+		super();
+	}
+
+	render(width: number): string[] {
+		if (!this.isPaused()) {
+			return super.render(width);
+		}
+
+		const frameWidth = Math.max(2, width);
+		const innerWidth = Math.max(1, frameWidth - 2);
+		const colorize = theme.getUserPausedBorderColor();
+		const vertical = colorize("║");
+		const top = colorize(`╔${"═".repeat(innerWidth)}╗`);
+		const bottom = colorize(`╚${"═".repeat(innerWidth)}╝`);
+		const childLines = super.render(innerWidth);
+		const maxFrameBodyRows = Math.max(0, (process.stdout.rows ?? 24) - 2);
+		const visibleChildLines = childLines.slice(Math.max(0, childLines.length - maxFrameBodyRows));
+		const framedLines = visibleChildLines.map(line => {
+			const padSize = Math.max(0, innerWidth - visibleWidth(line));
+			return `${vertical}${line}${padding(padSize)}${vertical}`;
+		});
+
+		return [top, ...framedLines, bottom];
+	}
+}
+
 /** Options for creating an InteractiveMode instance (for future API use) */
 export interface InteractiveModeOptions {
 	/** Providers that were migrated during startup */
@@ -173,6 +211,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#isShuttingDown = false;
 	hookSelector: HookSelectorComponent | undefined = undefined;
 	hookInput: HookInputComponent | undefined = undefined;
+	#userPausedFrame: UserPausedFrameContainer;
 	hookEditor: HookEditorComponent | undefined = undefined;
 	lastStatusSpacer: Spacer | undefined = undefined;
 	lastStatusText: Text | undefined = undefined;
@@ -263,6 +302,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor);
+		this.#userPausedFrame = new UserPausedFrameContainer(() => this.#isUserPaused);
 		this.statusLine = new StatusLineComponent(session);
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
 
@@ -374,14 +414,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			setTerminalTitle(`pi: ${existingTitle}`);
 		}
 
-		this.ui.addChild(this.chatContainer);
-		this.ui.addChild(this.pendingMessagesContainer);
-		this.ui.addChild(this.statusContainer);
-		this.ui.addChild(this.todoContainer);
-		this.ui.addChild(this.btwContainer);
-		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
-		this.ui.addChild(new Spacer(1));
-		this.ui.addChild(this.editorContainer);
+		this.ui.addChild(this.#userPausedFrame);
+		this.#userPausedFrame.addChild(this.chatContainer);
+		this.#userPausedFrame.addChild(this.pendingMessagesContainer);
+		this.#userPausedFrame.addChild(this.statusContainer);
+		this.#userPausedFrame.addChild(this.todoContainer);
+		this.#userPausedFrame.addChild(this.btwContainer);
+		this.#userPausedFrame.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
+		this.#userPausedFrame.addChild(new Spacer(1));
+		this.#userPausedFrame.addChild(this.editorContainer);
 		this.ui.setFocus(this.editor);
 
 		this.#inputController.setupKeyHandlers();
@@ -463,11 +504,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				},
 				subscribe: listener => {
 					ctx.#niriListener = listener;
-					// Auto-clear user_paused whenever the session starts a new agent run.
-					// This ensures needs_input resurfaces after the user pauses, the
-					// agent runs, and returns waiting for input again.
-					return ctx.session.subscribe(event => {
-						if ("type" in event && event.type === "agent_start") ctx.#isUserPaused = false;
+					return ctx.session.subscribe(() => {
 						listener();
 					});
 				},
@@ -1514,14 +1551,24 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#inputController.handleCtrlZ();
 	}
 
+	clearUserPaused(): void {
+		if (!this.#isUserPaused) {
+			return;
+		}
+		this.#isUserPaused = false;
+		this.ui.requestRender();
+		this.#niriListener?.();
+	}
+
 	/** Toggle the user_paused acknowledgement. Only valid when status is needs_input or user_paused. */
 	handleToggleUserPause(): void {
 		// Determine if we are currently in a needs_input-derivable state.
 		const hasInputCallback = this.onInputCallback !== undefined;
 		const isHookAwaiting = this.hookSelector !== undefined || this.hookInput !== undefined;
-		if (!hasInputCallback && !isHookAwaiting) return; // not in needs_input territory — no-op
+		if (!hasInputCallback && !isHookAwaiting && !this.isPendingApproval) return; // not in needs_input territory — no-op
 		this.#isUserPaused = !this.#isUserPaused;
 		this.ui.requestRender();
+		this.#niriListener?.();
 	}
 
 	handleDequeue(): void {
