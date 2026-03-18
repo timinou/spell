@@ -98,6 +98,7 @@ export class EventController {
 				this.#readToolCallArgs.clear();
 				this.#readToolCallAssistantComponents.clear();
 				this.#lastAssistantComponent = undefined;
+				this.ctx.clearUserPaused();
 				if (this.ctx.retryEscapeHandler) {
 					this.ctx.editor.onEscape = this.ctx.retryEscapeHandler;
 					this.ctx.retryEscapeHandler = undefined;

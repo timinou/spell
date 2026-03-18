@@ -1,7 +1,7 @@
 /**
  * Simple text input component for hooks.
  */
-import { Container, Input, matchesKey, Spacer, Text, type TUI } from "@oh-my-pi/pi-tui";
+import { Container, Input, type KeyId, matchesKey, Spacer, Text, type TUI } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import { CountdownTimer } from "./countdown-timer";
 import { DynamicBorder } from "./dynamic-border";
@@ -10,6 +10,8 @@ export interface HookInputOptions {
 	tui?: TUI;
 	timeout?: number;
 	onTimeout?: () => void;
+	onTogglePause?: () => void;
+	togglePauseKeys?: KeyId[];
 }
 
 export class HookInputComponent extends Container {
@@ -19,6 +21,8 @@ export class HookInputComponent extends Container {
 	#titleText: Text;
 	#baseTitle: string;
 	#countdown: CountdownTimer | undefined;
+	#onTogglePauseCallback: (() => void) | undefined;
+	#togglePauseKeys: KeyId[];
 
 	constructor(
 		title: string,
@@ -32,6 +36,8 @@ export class HookInputComponent extends Container {
 		this.#onSubmitCallback = onSubmit;
 		this.#onCancelCallback = onCancel;
 		this.#baseTitle = title;
+		this.#onTogglePauseCallback = opts?.onTogglePause;
+		this.#togglePauseKeys = opts?.togglePauseKeys ?? [];
 
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
@@ -63,7 +69,9 @@ export class HookInputComponent extends Container {
 	handleInput(keyData: string): void {
 		// Reset countdown on any interaction
 		this.#countdown?.reset();
-		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
+		if (this.#togglePauseKeys.some(key => matchesKey(keyData, key))) {
+			this.#onTogglePauseCallback?.();
+		} else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			this.#onSubmitCallback(this.#input.getValue());
 		} else if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc")) {
 			this.#onCancelCallback();

@@ -1,0 +1,77 @@
+#+TITLE: FIX_USER_PAUSED_QUICKSHELL
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-fix-user-paused-quickshell
+
+* Initial Message
+
+why does hitting user_paused on a session not update the spell indicator in quickshell?
+
+* Problem
+
+Toggling user_paused (Alt+Shift+U) does not update the Quickshell/Niri status indicator.
+
+Root cause: ~handleToggleUserPause()~ in ~packages/coding-agent/src/modes/interactive-mode.ts~ (line 1518) toggles ~#isUserPaused~ and calls ~this.ui.requestRender()~ but does NOT call ~this.#niriListener?.()~. Without that call, the NiriOverviewController never re-derives status and never writes the updated ~.spell/status/<windowId>.json~ file. Quickshell polls that file every 2s — no file change means no visual update.
+
+Other state changes (e.g. ~isPendingApproval~ at line 1042) correctly call the niri listener.
+
+* Fix
+
+** ITEM Add niriListener call to handleToggleUserPause
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+File: ~packages/coding-agent/src/modes/interactive-mode.ts~, line ~1524 (after ~this.ui.requestRender()~).
+
+Add: ~this.#niriListener?.();~
+
+This matches the pattern used at lines 1042 and 1045 for other state transitions.
+
+* Verification
+
+- Toggle user_paused with Alt+Shift+U while in needs_input state
+- Confirm ~.spell/status/<windowId>.json~ updates to show ~"status": "user_paused"~
+- Confirm Quickshell workspace dot changes to mauve
+- Toggle again, confirm it reverts to ~needs_input~ with yellow blinking
+* ITEM Fix user_paused not updating quickshell indicator
+:PROPERTIES:
+:CUSTOM_ID: DRAFT-008-fix-user-paused-not-updating-quickshell
+:EFFORT: 5m
+:PRIORITY: #B
+:LAYER: backend
+:END:
+
+* Problem
+
+Toggling user_paused (Alt+Shift+U) does not update the Quickshell/Niri status indicator.
+
+Root cause: ~handleToggleUserPause()~ in ~packages/coding-agent/src/modes/interactive-mode.ts~ (line ~1518~) toggles ~#isUserPaused~ and calls ~this.ui.requestRender()~ but does NOT call ~this.#niriListener?.()~. Without that call, the NiriOverviewController never re-derives status and never writes ~.spell/status/<windowId>.json~. Quickshell polls that file every 2s — no file change means no visual update.
+
+Other state changes (e.g. ~isPendingApproval~ at line 1042) correctly call the niri listener.
+
+* Fix
+
+** ITEM Add niriListener call to handleToggleUserPause
+:PROPERTIES:\n:EFFORT: 2m\n:END:
+
+File: ~packages/coding-agent/src/modes/interactive-mode.ts~
+
+In ~handleToggleUserPause()~ (line ~1524~), after ~this.ui.requestRender();~, add:
+
+#+begin_src typescript\nthis.#niriListener?.();\n#+end_src
+
+This matches the pattern used at lines 1042 and 1045 for other state transitions.
+
+** ITEM Force-update all current spell session status files
+:PROPERTIES:\n:EFFORT: 3m\n:END:
+
+After the code fix, manually update all existing spell session status files in ~$HOME/.spell/status/~ so that any currently-paused sessions reflect the correct state immediately (without needing to toggle pause again). Read each JSON file, check if its status is stale (shows ~needs_input~ but session is actually paused), and rewrite with the correct status. Alternatively, simply restart the niri overview or touch the status files to force a re-derive.
+
+Approach: run ~ls ~/.spell/status/~ to see active sessions, then for each one check if the session is paused in the TUI. If so, write ~\"status\": \"user_paused\"~ into the JSON file directly.
+
+* Verification
+
+- Toggle user_paused with Alt+Shift+U while in needs_input state
+- Confirm ~.spell/status/<windowId>.json~ updates to show ~\"status\": \"user_paused\"~
+- Confirm Quickshell workspace dot changes to mauve
+- Toggle again, confirm it reverts to ~needs_input~ with yellow blinking"

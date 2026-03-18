@@ -1,0 +1,176 @@
+#+TITLE: USER_PAUSED_4SIDE_FRAME
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-user-paused-4side-frame
+
+* Initial Message
+
+The border is only in the bottom, i'd like it
+1. purple
+2. thicker
+3. on all four sides
+
+* Problem
+
+The current user_paused border only renders top/bottom single horizontal lines in warning (yellow) color. User wants:
+1. Purple color (like plan mode)
+2. Thicker appearance
+3. All four sides (top, bottom, left, right)
+
+Additionally, =handleToggleUserPause()= currently blocks when =isPendingApproval= is true (the ask tool is active but used for plan-mode approval). The guard only allows toggle when =onInputCallback= or =hookSelector/hookInput= is active. Need to also allow it when =isPendingApproval= is true.
+
+* Current State (from prior implementation)
+
+The following files were already modified in a prior session:
+
+- =packages/coding-agent/src/modes/interactive-mode.ts=: Has =UserPausedBorderComponent= (top/bottom only, yellow), =#userPausedTopBorder= / =#userPausedBottomBorder= fields, =clearUserPaused()= method
+- =packages/coding-agent/src/modes/theme/theme.ts=: Has =getUserPausedBorderColor()= returning =warning= color
+- =packages/coding-agent/src/modes/components/hook-selector.ts=: Has =onTogglePause= / =togglePauseKeys= options
+- =packages/coding-agent/src/modes/components/hook-input.ts=: Same
+- =packages/coding-agent/src/modes/controllers/extension-ui-controller.ts=: Passes toggle pause keys to hook components
+- =packages/coding-agent/src/modes/controllers/event-controller.ts=: Calls =clearUserPaused()= on =agent_start=
+- =packages/coding-agent/src/modes/types.ts=: Has =clearUserPaused()= in =InteractiveModeContext=
+
+* Approach
+
+** ITEM Replace top/bottom borders with a full-frame wrapping container
+:PROPERTIES:
+:EFFORT: 25m
+:END:
+
+Replace the two separate =UserPausedBorderComponent= instances with a single =UserPausedFrameContainer= that wraps all main TUI children and draws a 4-sided frame when paused.
+
+*** Design
+
+The TUI renders a flat list of lines via =Container.render(width)=. A wrapping container can override =render()= to:
+- When not paused: delegate to =super.render(width)= (pass-through)
+- When paused: delegate to =super.render(width - 2)= (narrower for side borders), then frame every line with =║= left/right, and add top (=╔═══╗=) / bottom (=╚═══╝=) double-line borders
+
+Double-line box characters (=║═╔╗╚╝=) give a naturally thicker look compared to single-line (=│─┌┐└┘=).
+
+Color: purple. Reuse =planMode= color =#9b7ec8= from the theme. Change =getUserPausedBorderColor()= to return =planMode= instead of =warning=.
+
+*** Files to modify
+
+- =packages/coding-agent/src/modes/interactive-mode.ts=:
+  - Replace =UserPausedBorderComponent= class with =UserPausedFrameContainer extends Container=
+  - Remove =#userPausedTopBorder= and =#userPausedBottomBorder= fields
+  - Add single =#userPausedFrame: UserPausedFrameContainer= field
+  - In =init()=, instead of adding top/bottom borders around children, wrap all main children (chatContainer through editorContainer) inside =#userPausedFrame=, then add =#userPausedFrame= to =this.ui=
+  - The frame container's =render(width)= method:
+    - If not paused: =super.render(width)= (no borders, zero overhead)
+    - If paused: =super.render(width - 2)=, then prefix each line with colored =║=, suffix with colored =║=, pad to fill width, add top/bottom =╔═╗= / =╚═╝= rows
+
+- =packages/coding-agent/src/modes/theme/theme.ts=:
+  - Change =getUserPausedBorderColor()= to return =this.fg("planMode", str)= instead of =this.fg("warning", str)=
+
+*** Layout change
+
+Before:
+#+begin_src
+ui.addChild(#userPausedTopBorder)     // conditional top border
+ui.addChild(chatContainer)
+ui.addChild(pendingMessagesContainer)
+ui.addChild(statusContainer)
+ui.addChild(todoContainer)
+ui.addChild(btwContainer)
+ui.addChild(statusLine)
+ui.addChild(Spacer(1))
+ui.addChild(editorContainer)
+ui.addChild(#userPausedBottomBorder)  // conditional bottom border
+#+end_src
+
+After:
+#+begin_src
+ui.addChild(#userPausedFrame)         // wrapping frame container
+  #userPausedFrame.addChild(chatContainer)
+  #userPausedFrame.addChild(pendingMessagesContainer)
+  #userPausedFrame.addChild(statusContainer)
+  #userPausedFrame.addChild(todoContainer)
+  #userPausedFrame.addChild(btwContainer)
+  #userPausedFrame.addChild(statusLine)
+  #userPausedFrame.addChild(Spacer(1))
+  #userPausedFrame.addChild(editorContainer)
+#+end_src
+
+Note: welcome/changelog children are added BEFORE the frame container (they stay outside the frame since they only show at startup).
+
+*** Render implementation
+
+#+begin_src typescript
+class UserPausedFrameContainer extends Container {
+  constructor(private readonly isPaused: () => boolean) { super(); }
+
+  invalidate(): void {
+    for (const child of this.children) child.invalidate();
+  }
+
+  render(width: number): string[] {
+    if (!this.isPaused()) {
+      return super.render(width);
+    }
+    const colorize = theme.getUserPausedBorderColor();
+    const innerWidth = Math.max(1, width - 2);
+    const childLines = super.render(innerWidth);
+
+    const h = "═".repeat(Math.max(1, width - 2));
+    const top = colorize(`╔${h}╗`);
+    const bot = colorize(`╚${h}╝`);
+    const v = colorize("║");
+
+    const framedLines = childLines.map(line => {
+      const vis = visibleWidth(line);
+      const pad = Math.max(0, innerWidth - vis);
+      return v + line + padding(pad) + v;
+    });
+
+    return [top, ...framedLines, bot];
+  }
+}
+#+end_src
+
+** ITEM Allow toggle user_paused during pending_approval
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+In =handleToggleUserPause()= (interactive-mode.ts line ~1543), the guard currently is:
+#+begin_src typescript
+const hasInputCallback = this.onInputCallback !== undefined;
+const isHookAwaiting = this.hookSelector !== undefined || this.hookInput !== undefined;
+if (!hasInputCallback && !isHookAwaiting) return;
+#+end_src
+
+Add =this.isPendingApproval= to the guard:
+#+begin_src typescript
+const hasInputCallback = this.onInputCallback !== undefined;
+const isHookAwaiting = this.hookSelector !== undefined || this.hookInput !== undefined;
+if (!hasInputCallback && !isHookAwaiting && !this.isPendingApproval) return;
+#+end_src
+
+This allows the user to toggle pause while a plan-mode approval selector is showing. The keybinding already works during hook selectors (from prior implementation), and =isPendingApproval= is set exactly when the plan-mode approval selector is active.
+
+** ITEM Verify and typecheck
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+- =bun x biome check= on all modified files
+- =bun x tsgo -p tsconfig.json= for type checking
+- Verify: when paused, purple double-line frame wraps entire TUI content
+- Verify: Alt+Shift+U works during pending_approval state
+
+* Key imports needed
+
+=UserPausedFrameContainer= in interactive-mode.ts will need:
+- =visibleWidth= and =padding= from =@oh-my-pi/pi-tui= (add to existing import)
+- =theme= already imported
+
+* Verification
+
+- Toggle Alt+Shift+U when waiting for input: purple 4-side double-line frame appears around all content
+- Toggle again: frame disappears
+- Start new agent run while paused: frame auto-clears
+- Open plan-mode approval dialog, toggle Alt+Shift+U: frame toggles
+- Open ask tool dialog, toggle Alt+Shift+U: frame toggles
+- =bun x tsgo -p tsconfig.json= passes
+- =bun x biome check= on changed files passes

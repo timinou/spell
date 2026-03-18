@@ -1,0 +1,455 @@
+#+TITLE: CANVAS_QML_VISUAL_OVERHAUL
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-canvas-qml-visual-overhaul
+
+* Problem
+
+The canvas QML components — spawned when the agent displays structured data (tables, diffs, trees, logs, prompts) — have poor visual quality. Specific failures:
+
+1. *Typography lacks hierarchy*: 4 font sizes (12/14/16/20px), 2 weights (normal/bold). Everything reads at the same visual weight.
+2. *Surface colors are indistinguishable*: 4 dark grays spanning only ~12 L* units (#0e1117 → #242a33). Container boundaries are barely perceptible.
+3. *Zero depth system*: No shadows, no border weight variation, no top-edge highlights. Every component sits on the same visual plane.
+4. *Crude interactive states*: Qt default RadioButton/CheckBox/Button look alien against the dark theme. No row hover on tables/trees. No focus rings. No transition animations.
+5. *DataTable is spartan*: 4px margins, invisible alternating rows, no cell padding, no hover.
+6. *DiffView too subtle*: 0.12 alpha on add/remove backgrounds is hard to read. Cramped gutter. No hunk separators.
+7. *TreeView uses emoji*: 📁/📄 icons render inconsistently, can't be themed, look unprofessional.
+8. *ContentBlock uniform treatment*: Every block type gets the same surface-colored rectangle — no visual distinction.
+9. *Prompts unstyled*: Native Qt controls with Fusion style palette.
+10. *No micro-interactions*: Only animation is StatusIndicator pulse.
+
+* Aesthetic Direction: Precision Dark (Instrument Panel)
+
+Bloomberg Terminal meets Linear meets JetBrains Fleet. Dense data rendered with absolute clarity where every pixel of contrast earns its keep.
+
+Principles:
+- Information density over decoration — enough breathing room to parse at a glance, no gratuitous whitespace
+- Contrast through luminance gaps, not color — wider L* steps between surface levels
+- Monochrome structure, chromatic semantics — color reserved for meaning (diff +/-, status, accent); structural hierarchy is achromatic
+- Motion confirms causality — animation only where user action needs acknowledgment
+
+*Memorable*: Data areas sit in recessed "wells" (darker-than-card background) inside elevated card panels — every component reads as an instrument with its data inset into the panel surface.
+
+* Design Decisions
+
+** Typography
+
+Keep Inter + Fira Code. Expand scale from 4 sizes to 7 (modified major-second scale anchored at 14px body). Add font weight tokens.
+
+| Token | Value | Role |
+|-------|-------|------|
+| fontSizeXS | 11px | captions, timestamps, line numbers |
+| fontSizeS | 12px | secondary labels, table headers, sidebar nav |
+| fontSizeCaption | 13px | secondary body, captions in context |
+| fontSizeM | 14px | body text (KEPT at 14px for dark-theme readability) |
+| fontSizeL | 16px | emphasis body, prompt questions |
+| fontSizeXL | 20px | section headers |
+| fontSizeXXL | 26px | page titles, hero headers |
+
+Rationale for keeping 14px body: On dark backgrounds, subpixel rendering is weaker. 13px Inter at 400 weight approaches the readability floor for sustained reading at <120 DPI. This is a developer tool where users read dense tables and diffs for extended periods.
+
+| Weight Token | Value | Qt Enum | Usage |
+|--------------|-------|---------|-------|
+| fontWeightLight | 300 | Font.Light | large display text |
+| fontWeightRegular | 400 | Font.Normal | body text |
+| fontWeightMedium | 500 | Font.Medium | table headers, nav labels, field labels |
+| fontWeightSemiBold | 600 | Font.DemiBold | section headers |
+| fontWeightBold | 700 | Font.Bold | page titles only |
+
+Prefer Qt enum names (Font.Medium, Font.DemiBold) over raw integers for readability in QML.
+
+Letter-spacing: trackingTight (-0.3px for 20px+), trackingNormal (0), trackingWide (+0.5px for 11-12px).
+*IMPORTANT*: Do NOT apply letter-spacing to Fira Code (mono) text — QML's font.letterSpacing disables OpenType ligatures, which destroys Fira Code's primary value. Letter-spacing tokens are Inter-only.
+
+Line-height multipliers (via QML's lineHeight with default ProportionalHeight mode):
+- lineHeightBody: 1.5 (body text)
+- lineHeightHeading: 1.25 (headers)
+- lineHeightMono: 1.6 (code, diffs, logs — critical for readability)
+
+** Color Strategy
+
+60% deep slate background / 30% elevated surfaces / 10% amber accent. Dark baseline.
+
+*** New surface tokens with 5-6 L* steps between levels
+
+| Token | Hex | L* | Role |
+|-------|-----|-----|------|
+| background | #0d1117 | 5 | Window background (unchanged) |
+| surface0 | #151b23 | 10 | Card/panel surface |
+| surface1 | #1e252e | 15 | Elevated surface, header bars |
+| surface2 | #2a3240 | 21 | Highest elevation, selected states |
+
+*** New border tokens (three-tier system)
+
+| Token | Hex | L* | Role |
+|-------|-----|-----|------|
+| borderSubtle | #253040 | 19 | Inner divisions (table rows, tree lines) |
+| borderDefault | #3a4556 | 29 | Component boundaries, card edges |
+| borderStrong | #4f5d73 | 39 | Focus rings, active borders |
+
+*** Backwards compatibility strategy (CRITICAL)
+
+~15+ out-of-scope files (shell.qml, panels/*, reference/*) consume old token names. Old aliases MUST keep their ORIGINAL hex values to avoid silent visual shifts:
+
+#+begin_src
+// Deprecated — keep at original values for out-of-scope consumers
+readonly property color surface: "#161b22"        // NOT surface0
+readonly property color surfaceHigh: "#1c2129"    // NOT surface1
+readonly property color surfaceHigher: "#242a33"  // NOT surface2
+readonly property color outline: "#30363d"        // NOT borderDefault
+readonly property color outlineVariant: "#21262d" // NOT borderSubtle
+#+end_src
+
+New tokens coexist alongside old ones at *different* hex values. In-scope canvas files migrate to new tokens. Out-of-scope files see zero visual change. Old aliases are never removed — they cost nothing in a singleton. Mark them with =// @deprecated= comments.
+
+*** Text adjustments
+
+- textPrimary: #e6edf3 — keep (WCAG AAA on surface0)
+- textSecondary: #8b949e — keep
+- textTertiary: *RAISE* from #484f58 to #6e7681 (current ~3:1 contrast fails WCAG AA; new gives ~4.8:1)
+- textGhost: #484f58 (new token, decorative only — line numbers, tree guides)
+
+*** Diff color tokens
+
+Raise alpha from 0.12 to 0.15. Tint hunk headers blue for visual separation:
+- diffAddBg: rgba(46, 160, 67, 0.15)
+- diffRemoveBg: rgba(248, 81, 73, 0.15)
+- diffHunkBg: rgba(56, 139, 253, 0.10)
+
+*** Row treatment
+
+Remove alternating row colors (insufficient contrast on dark theme). Replace with: consistent surface0 bg + 1px borderSubtle bottom border per row + hover highlight at surface1.
+
+** Motion Rules
+
+Every state change gets exactly one animation. Content arrival is instant (no entrance animations).
+
+| Element | Animation | Duration | Easing |
+|---------|-----------|----------|--------|
+| Table/tree row hover | bg color → surface1 | 120ms | OutQuad |
+| Tree expand/collapse chevron | rotation 90° | 150ms | OutQuad |
+| Sort indicator direction flip | rotation 180° | 100ms | OutQuad |
+| Button press | scale(0.97) | 80ms press / 120ms release | OutQuad |
+| Prompt answer confirmation | left border slide-in, others fade 50% | 150ms / 200ms | OutQuad |
+| StatusIndicator pulse | opacity 1.0→0.3 | 250ms (keep existing) | InOutQuad |
+
+No bounce/elastic easing. No parallax. No entrance animations on data arrival.
+
+*** Row hover performance (IMPORTANT)
+
+Do NOT use =Behavior on color= inside ListView delegates — it creates animation objects per delegate, causes scroll jank on 100+ rows, and glitches with delegate recycling.
+
+Instead: track hovered row index as a single property at the ListView level. Bind each delegate's color to =index === hoveredRowIndex ? surface1 : surface0=. For the color transition, conditionally create the Behavior only on the hovered delegate (via States or a ternary on the Behavior's enabled property). DataTable/DiffView/TreeView currently use =interactive: false= so delegate recycling isn't an issue, but LogStream scrolls and would hit this.
+
+** Spatial Composition
+
+Information-dense with controlled padding. Layout philosophy: "inset instrument panel."
+
+- ContentBlock inner padding: 8px → 16px
+- Table: row height 36→40px, cell padding 4→12px horizontal, 8px vertical
+- Table header: height 32→38px
+- Diff: gutter 30→44px line numbers, 14→20px ±gutter, 8px left padding on line text
+- Hunk separator: 8px vertical gap between hunks with centered 1px borderSubtle line at 60% width
+- Data areas (DataTable ListView, DiffView ListView, LogStream ListView): use background (#0d1117) color inside the card, creating a recessed "well" with 1px borderSubtle border
+
+** Interaction States
+
+All interactive elements need explicit state styling. System Qt controls look alien against the dark theme.
+
+*** Custom controls (inline component or dedicated .qml)
+
+Custom RadioButton:
+- indicator: 16px circle, 2px borderDefault stroke, filled 10px inner circle in primary when selected, 150ms ColorAnimation
+- contentItem: Text at fontSizeM, fontWeightRegular, textPrimary
+- background: transparent (override Qt default)
+
+Custom CheckBox:
+- indicator: 16px rounded-rect (cornerRadiusSmall), 2px borderDefault stroke, checkmark path in primary when checked, 150ms ColorAnimation
+- contentItem: Text at fontSizeM, fontWeightRegular, textPrimary
+- background: transparent
+
+Custom Button (SpellButton inline component):
+- background: Rectangle with surface1 bg, borderDefault border, cornerRadiusSmall radius
+- contentItem: Text at fontSizeM, fontWeightMedium, textPrimary, centered
+- Padding: 8px vertical / 16px horizontal
+- Hover: borderStrong border, 120ms transition
+- Press: scale(0.97) + surface2 bg, 80ms transition
+- Disabled: disabledOpacity
+- Focus: 2px primary focus ring
+
+*** Focus ring implementation
+
+QML has no CSS outline-offset. Implement as a reusable =FocusRing= inline component:
+
+#+begin_src qml
+component FocusRing: Rectangle {
+    anchors.fill: parent
+    anchors.margins: -2
+    color: "transparent"
+    border.width: 2
+    border.color: SpellUI.SpellTheme.primary
+    radius: (parent.radius || 0) + 2
+    visible: parent.activeFocus
+}
+#+end_src
+
+Apply inside all custom controls (Button, RadioButton, CheckBox, TextField).
+
+*** Per-element states
+
+Table header: default surface1 → hover surface2, pointer cursor
+Table row: default surface0 → hover surface1
+Tree node: default transparent → hover surface1
+Button: default surface1 → hover borderStrong → press surface2+scale(0.97) → disabled 38% opacity
+RadioButton/CheckBox: default borderDefault stroke → selected primary fill → disabled 38% opacity
+TextField: default borderDefault → focus borderStrong → error red border
+
+** Depth via Light Edges (not shadows)
+
+Drop shadows look like smudges on dark themes. Instead:
+- Top-edge highlight: 1px line at top of elevated cards, colored borderDefault
+- Inset well: data areas use background color (darker than card), 1px borderSubtle border
+- Separator weight hierarchy: 1px borderSubtle for inner, 1px borderDefault for component boundaries, 2px primary for focus
+
+** ContentBlock Per-Type Differentiation (CRITICAL DETAIL)
+
+Currently ContentBlock.qml is a single Rectangle (=color: SpellUI.SpellTheme.surface=) wrapping all types identically. The Loader sourceComponent switch selects content but the container appearance doesn't vary.
+
+Implementation approach: Add a =blockTypeStyle()= function returning {bgColor, borderColor, borderWidth, showTopHighlight} per block type. Bind the outer Rectangle's color and border to this. Add a conditional top-highlight Rectangle child.
+
+#+begin_src
+function blockTypeStyle(type) {
+    switch (type) {
+        case "markdown": return { bg: "transparent", border: "transparent", borderW: 0, topHighlight: false }
+        case "table":
+        case "diff":
+        case "tree":    return { bg: surface0, border: borderDefault, borderW: 1, topHighlight: true }
+        case "log":     return { bg: background, border: borderSubtle, borderW: 1, topHighlight: false }
+        case "status":  return { bg: "transparent", border: "transparent", borderW: 0, topHighlight: false }
+        case "image":
+        default:        return { bg: surface0, border: borderDefault, borderW: 1, topHighlight: false }
+    }
+}
+#+end_src
+
+Plus a conditional 1px Rectangle at the top of the card for topHighlight types.
+
+** DiffView Hunk Separator (CRITICAL DETAIL)
+
+DiffView flattens hunks into a single array (flatLines). To get 8px visual gaps between hunks, insert ={ type: "separator" }= entries in flatLines between hunks (not before the first hunk). Add a separator delegate case:
+
+#+begin_src qml
+// In delegate:
+case "separator":
+    Item {
+        width: parent.width
+        height: 8
+        Rectangle {
+            anchors.centerIn: parent
+            width: parent.width * 0.6
+            height: 1
+            color: SpellUI.SpellTheme.borderSubtle
+        }
+    }
+#+end_src
+
+** Anti-Patterns to Avoid
+
+- NO glassmorphism/backdrop blur — catastrophic QML perf on 100+ row tables
+- NO border-radius > 8px on data components — wastes space, looks toyish
+- NO emoji icons — inconsistent rendering, unthemeable
+- NO system default Qt controls without custom backgrounds
+- NO entrance animations on content arrival — data appears instantly
+- NO alternating row colors — insufficient contrast on dark theme
+- NO letter-spacing on Fira Code text — disables ligatures
+- NO Behavior on color inside ListView delegates — causes scroll jank on 100+ rows
+
+* Files In Scope
+
+Theme:
+- =packages/coding-agent/src/modes/qml/SpellTheme.qml=
+
+Canvas core:
+- =packages/coding-agent/src/modes/qml/canvas/ContentBlock.qml=
+- =packages/coding-agent/src/modes/qml/canvas/AgentCanvas.qml=
+- =packages/coding-agent/src/modes/qml/canvas/CanvasLauncher.qml=
+
+Components:
+- =packages/coding-agent/src/modes/qml/canvas/components/DataTable.qml=
+- =packages/coding-agent/src/modes/qml/canvas/components/DiffView.qml=
+- =packages/coding-agent/src/modes/qml/canvas/components/TreeView.qml=
+- =packages/coding-agent/src/modes/qml/canvas/components/LogStream.qml=
+- =packages/coding-agent/src/modes/qml/canvas/components/StatusIndicator.qml=
+
+Gallery:
+- =packages/coding-agent/src/modes/qml/canvas/ComponentGallery.qml=
+
+NOT in scope (unchanged): =shell.qml=, =panels/*=, =reference/*=, =LayoutContainer.qml=, test harnesses. These consume SpellTheme tokens and will see zero visual change because old aliases keep original hex values. =LayoutContainer.qml= is pure layout logic — it delegates all visuals to child ContentBlocks and inherits changes transitively.
+
+Note: =panels/markdown/MarkdownContent.qml= has hardcoded header sizes (24/20/17px), but this file is NOT used by canvas. Canvas markdown uses Qt's built-in =Text.MarkdownText= renderer in ContentBlock.qml. The panels markdown renderer is a separate concern for a future PR.
+
+* Implementation Sub-Tasks
+
+** ITEM Phase 1: Theme Foundation
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+Target: =SpellTheme.qml=
+
+1. New type scale: fontSizeXS(11), fontSizeS(12), fontSizeCaption(13), fontSizeM(14), fontSizeL(16), fontSizeXL(20), fontSizeXXL(26)
+2. Font weights: fontWeightLight(Font.Light), fontWeightRegular(Font.Normal), fontWeightMedium(Font.Medium), fontWeightSemiBold(Font.DemiBold), fontWeightBold(Font.Bold). Use Qt enum names.
+3. Letter-spacing (Inter only, NOT for mono): trackingTight(-0.3), trackingNormal(0), trackingWide(0.5)
+4. Line-height multipliers: lineHeightBody(1.5), lineHeightHeading(1.25), lineHeightMono(1.6)
+5. New surface tokens: surface0(#151b23), surface1(#1e252e), surface2(#2a3240)
+6. New border tokens: borderSubtle(#253040), borderDefault(#3a4556), borderStrong(#4f5d73)
+7. Revised textTertiary → #6e7681, add textGhost(#484f58)
+8. Diff color helpers: diffAddBg, diffRemoveBg, diffHunkBg (as functions returning rgba colors since QML doesn't support rgba literals as properties — use =Qt.rgba()= )
+9. Animation durations: durationFast(80), durationNormal(150), durationMedium(250)
+10. Keep ALL old property names at ORIGINAL hex values with =// @deprecated= comments. Old tokens: surface(#161b22), surfaceHigh(#1c2129), surfaceHigher(#242a33), outline(#30363d), outlineVariant(#21262d). These MUST NOT change values.
+11. Keep old font size names at original values: fontSizeSmall(12), fontSizeMedium(14), fontSizeLarge(16), fontSizeTitle(20). Mark =// @deprecated=.
+
+** ITEM Phase 2a: DataTable Overhaul
+:PROPERTIES:
+:EFFORT: 2.5h
+:END:
+
+Target: =DataTable.qml=
+
+1. Header: height 32→38px, font.weight Font.Medium at fontSizeS(12px) with font.letterSpacing trackingWide(+0.5px), surface1 background, 12px horizontal padding
+2. Header hover: track hoveredColumnIndex at Repeater level. Hovered header → surface2 bg. Pointer cursor via =cursorShape: Qt.PointingHandCursor= on MouseArea.
+3. Sort indicator: replace ▲/▼ text with a ▾ character that rotates (0° ascending, 180° descending) via =Rotation { angle: sortAsc ? 0 : 180 }= with =Behavior on angle { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }=. Fade-in on column activation via opacity 0→1, 100ms.
+4. Rows: height 36→40px, 12px horizontal / 8px vertical cell padding
+5. Remove alternating row colors — use surface0 bg for all rows
+6. Add 1px borderSubtle bottom border to each row (Rectangle anchored to bottom, height 1)
+7. Row hover: track =property int hoveredRowIndex: -1= at ListView level. Bind delegate color to =index === hoveredRowIndex ? surface1 : surface0=. Set hoveredRowIndex via MouseArea with hoverEnabled. For color transition: gate =Behavior on color= with =enabled: index === hoveredRowIndex || color !== surface0= to avoid per-delegate animation overhead.
+8. Inset well: wrap ListView in a Rectangle with background color (#0d1117), 1px borderSubtle border, cornerRadiusSmall radius
+9. Use fontSizeM(14px) for cell text, fontWeightRegular
+10. Last column fills remaining space: bind last column delegate width to =Math.max(modelData.width || 120, tableView.width - previousColumnsWidth)=
+
+** ITEM Phase 2b: DiffView Overhaul
+:PROPERTIES:
+:EFFORT: 2.5h
+:END:
+
+Target: =DiffView.qml=
+
+1. Filename header: height 32→38px, add file glyph (e.g. "≡" or "▪"), fontWeightSemiBold at fontSizeM(14px), 1px borderSubtle bottom border, surface1 background
+2. Diff line backgrounds: use theme diff color tokens — diffAddBg (rgba 46,160,67,0.15), diffRemoveBg (rgba 248,81,73,0.15), hunk header diffHunkBg (rgba 56,139,253,0.10)
+3. Gutter: line numbers width 30→44px with fontSizeXS(11px) + font.letterSpacing trackingWide, ± gutter width 14→20px
+4. Line text: 8px left padding, fontSizeS(12px) mono, lineHeight 1.6
+5. Hunk separator: insert ={ type: "separator" }= entries in flatLines array between hunks (not before first). Add separator delegate: 8px-tall Item with centered 1px borderSubtle Rectangle at 60% width.
+6. Line hover: track =hoveredLineIndex= at ListView level. Hovered line → surface1 bg layered UNDER the semantic diff color (use =Qt.lighter()= or blend). Gate Behavior as with DataTable.
+7. Inset well: wrap ListView in Rectangle with background color, 1px borderSubtle border
+8. "No changes" indicator: fontSizeM at textSecondary, centered with 24px top margin
+
+** ITEM Phase 2c: ContentBlock + Prompts Overhaul
+:PROPERTIES:
+:EFFORT: 3h
+:END:
+
+Target: =ContentBlock.qml=, =AgentCanvas.qml= (prompt section)
+
+*** ContentBlock changes:
+1. Add =blockTypeStyle(blockType)= function returning {bg, border, borderW, topHighlight} — see Design Decisions section for the switch map
+2. Bind outer Rectangle: =color: blockTypeStyle(blockType).bg=, =border.color: blockTypeStyle(blockType).border=, =border.width: blockTypeStyle(blockType).borderW=
+3. Add conditional top-edge highlight: =Rectangle { height: 1; anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; color: SpellUI.SpellTheme.borderDefault; visible: blockTypeStyle(root.blockType).topHighlight }=
+4. Internal padding: 8→16px for all types
+
+*** Prompt changes in AgentCanvas:
+5. Define inline components for custom controls:
+
+=SpellButton= inline component: background Rectangle (surface1 bg, borderDefault border, cornerRadiusSmall). contentItem Text (fontSizeM, Font.Medium, textPrimary, centered). States: hover (borderStrong, 120ms), press (scale 0.97 + surface2, 80ms), disabled (0.38 opacity). FocusRing child.
+
+Custom RadioButton: override indicator (16px circle, 2px borderDefault stroke, 10px inner circle filled primary when selected, 150ms ColorAnimation). Override contentItem (themed label). Override background (transparent).
+
+Custom CheckBox: override indicator (16px rounded-rect, 2px borderDefault stroke, checkmark in primary when checked, 150ms). Override contentItem + background.
+
+6. Prompt card: surface1 bg, borderDefault border, 16px padding
+7. Question text: fontSizeL(16px), Font.DemiBold
+8. Answered state: selected option gets 2px left border in success color, other options fade to 50% opacity via =Behavior on opacity=
+
+** ITEM Phase 2d: TreeView + LogStream + StatusIndicator
+:PROPERTIES:
+:EFFORT: 2.5h
+:END:
+
+Targets: =TreeView.qml=, =LogStream.qml=, =StatusIndicator.qml=
+
+*** TreeView:
+1. Replace emoji icons (📁/📄) with themed text glyphs in Fira Code: folder → "▪" colored textSecondary, file → "·" colored textGhost. These are themeable, consistent cross-platform, and professional.
+2. Expand/collapse: replace ▼/▶ text with a ▾ character that rotates (0° expanded, -90° collapsed) via =Rotation= with =Behavior on angle { NumberAnimation { duration: 150; easing.type: Easing.OutQuad } }=
+3. Row height 32→36px
+4. Row hover: track =hoveredNodeIndex= at ListView level, bind to surface1 bg. Gate Behavior.
+5. Indentation guides: for each depth level, render a 1px borderSubtle vertical line. Use a Repeater inside each delegate driven by =modelData.depth=, each placing a 1px-wide Rectangle at =depth * 16 + 8= offset.
+6. Node label: fontSizeM(14px), fontWeightRegular; folder names: Font.Medium
+7. Empty placeholder: fontSizeM at textSecondary
+
+*** LogStream:
+8. Title bar: height 34→38px, Font.DemiBold at fontSizeM(14px)
+9. Inset well: ListView container → background color (#0d1117), 1px borderSubtle border
+10. Line spacing: 2→4px between entries
+11. Line number: fontSizeXS(11px) + trackingWide (Inter only — line numbers use mono so skip letterSpacing), textGhost color
+12. Line text: fontSizeS(12px) mono, lineHeight 1.6
+13. Level colors: keep existing mapping but use revised textTertiary for debug
+
+*** StatusIndicator:
+14. Status dot: 8→10px, with 1px borderSubtle ring around it for visual weight
+15. Label: fontSizeM(14px), Font.Medium
+16. Detail text: fontSizeS(12px), textSecondary
+17. Elapsed: fontSizeXS(11px) mono, textSecondary
+
+** ITEM Phase 3: ComponentGallery Update
+:PROPERTIES:
+:EFFORT: 2.5h
+:END:
+
+Target: =ComponentGallery.qml= (721 lines, 8+ inline components)
+
+1. Update palette section: add new surface0/1/2, borderSubtle/Default/Strong, textGhost, diffAddBg/diffRemoveBg/diffHunkBg swatches. Add a "Deprecated" divider with old token swatches still shown (grayed label).
+2. Update typography section: show 7 new sizes + 5 weight levels + tracking + lineHeight demos
+3. ShowcaseCard: apply new card treatment (surface0 bg, borderDefault border, top-edge highlight 1px Rectangle at top)
+4. NavItem: update to use new surface/border tokens (surface1 for hover, surface2 for active, borderSubtle for separator)
+5. DividerLine: use borderSubtle instead of outline
+6. SwatchRow/TypeRow/SpacingRow/RadiusRow: update colors and font references to new tokens
+7. PromptWidget: apply custom RadioButton/CheckBox/Button styling matching AgentCanvas implementation
+8. Verify all canvas-related component demos reference new token names and render correctly
+
+Note: Old deprecated theme properties are NOT removed from SpellTheme. They stay permanently with original hex values. No migration needed for out-of-scope files.
+
+** ITEM Phase 4: Visual Verification
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+Launch ComponentGallery via =canvas launch= and screenshot each section. Verify against the design brief.
+
+Visual tests:
+1. Gallery → Palette tab: confirm new surface/border/text hierarchy is visible, distinct L* steps between surfaces
+2. Gallery → Typography tab: confirm 7 sizes, weight variation visible (especially Medium vs Regular), tracking on small text
+3. Gallery → DataTable tab: confirm row hover, inset well (recessed data area), no alternating rows, sort indicator rotates, header hover
+4. Gallery → DiffView tab: confirm raised alpha on add/remove, hunk separators between hunks, wider gutter
+5. Gallery → TreeView tab: confirm themed icons (no emoji), chevron rotation animation, hover, indentation guides
+6. Gallery → Prompts tab: confirm custom radio/checkbox indicators themed with primary color, styled button, focus ring
+7. Full canvas window via CanvasLauncher: send sample blocks via bridge protocol, confirm overall visual coherence and depth hierarchy
+
+Anti-slop checklist per screenshot:
+- No identical card grids with no visual hierarchy
+- Not center-aligned everything
+- No purple gradients
+- No glassmorphism
+- No evenly-spaced elements with no rhythm
+- No bounce/elastic animations
+- No emoji icons anywhere
+
+If any screenshot fails, fix and re-screenshot until the design brief is met.
+
+* Parallelization Strategy
+
+Phase 1 (theme) must complete first — all components depend on new tokens.
+
+Phase 2a/2b/2c/2d are fully parallelizable: DataTable, DiffView, ContentBlock+Prompts, and TreeView+LogStream+StatusIndicator do not import each other. They share only the SpellTheme singleton (read-only).
+
+Phase 3 (gallery) depends on Phase 2 completion — it showcases the updated components.
+Phase 4 (verification) depends on Phase 3.
+
+Execution: Phase 1 → [Phase 2a | 2b | 2c | 2d] → Phase 3 → Phase 4

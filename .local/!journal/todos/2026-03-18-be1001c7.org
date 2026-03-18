@@ -1,0 +1,23 @@
+#+TITLE: Session 1497b4bc615f950c Todos
+#+DATE: 2026-03-18
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DOING Inspect border rendering primitives
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: in_progress
+:END:
+
+** ITEM Implement 4-side paused frame styling
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: pending
+:END:
+
+** ITEM Verify and typecheck changes
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: pending
+:END:

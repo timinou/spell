@@ -1,0 +1,21 @@
+#+TITLE: Session 14979a9d4c00470c Todos
+#+DATE: 2026-03-18
+#+TODO: ITEM DOING | DONE
+
+* Execution
+
+** DONE Force-refresh existing status files
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Refreshed 17 active ~/.spell/status/*.json files by rewriting with current updatedAt timestamp to force poll-visible file changes.
+
+** DONE Verify behavior and run checks
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+Verified source includes niri callback in pause toggle handler; refreshed active status files and validated updatedAt rewrite; ran bun run check in packages/coding-agent successfully.

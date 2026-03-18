@@ -1,0 +1,19 @@
+#+TITLE: Session 1497b213386caff8 Todos
+#+DATE: 2026-03-18
+#+TODO: ITEM DOING | DONE
+
+* Phase 3: Flip test
+
+** DONE Change destruction test to preservation test
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+* Verification
+
+** DONE Run all integration tests and type check
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:END:

@@ -574,6 +574,7 @@ export class ExtensionUiController {
 			resolve(value);
 		};
 		const maxVisible = Math.max(4, Math.min(15, this.ctx.ui.terminal.rows - 12));
+		const togglePauseKeys = this.ctx.keybindings.getKeys("toggleUserPause");
 		this.ctx.hookSelector = new HookSelectorComponent(
 			title,
 			options,
@@ -607,6 +608,8 @@ export class ExtensionUiController {
 				tui: this.ctx.ui,
 				outline: dialogOptions?.outline,
 				maxVisible,
+				onTogglePause: () => this.ctx.handleToggleUserPause(),
+				togglePauseKeys,
 			},
 		);
 		this.ctx.editorContainer.clear();
@@ -665,6 +668,7 @@ export class ExtensionUiController {
 			dialogOptions?.signal?.removeEventListener("abort", onAbort);
 			resolve(value);
 		};
+		const togglePauseKeys = this.ctx.keybindings.getKeys("toggleUserPause");
 		this.ctx.hookInput = new HookInputComponent(
 			title,
 			placeholder,
@@ -680,6 +684,8 @@ export class ExtensionUiController {
 				timeout: dialogOptions?.timeout,
 				onTimeout: dialogOptions?.onTimeout,
 				tui: this.ctx.ui,
+				onTogglePause: () => this.ctx.handleToggleUserPause(),
+				togglePauseKeys,
 			},
 		);
 		this.ctx.editorContainer.clear();

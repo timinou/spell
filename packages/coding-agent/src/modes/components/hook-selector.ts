@@ -4,6 +4,7 @@
  */
 import {
 	Container,
+	type KeyId,
 	matchesKey,
 	padding,
 	replaceTabs,
@@ -27,6 +28,8 @@ export interface HookSelectorOptions {
 	onLeft?: () => void;
 	onRight?: () => void;
 	helpText?: string;
+	onTogglePause?: () => void;
+	togglePauseKeys?: KeyId[];
 }
 
 class OutlinedList extends Container {
@@ -64,6 +67,8 @@ export class HookSelectorComponent extends Container {
 	#countdown: CountdownTimer | undefined;
 	#onLeftCallback: (() => void) | undefined;
 	#onRightCallback: (() => void) | undefined;
+	#onTogglePauseCallback: (() => void) | undefined;
+	#togglePauseKeys: KeyId[];
 	constructor(
 		title: string,
 		options: string[],
@@ -81,6 +86,8 @@ export class HookSelectorComponent extends Container {
 		this.#baseTitle = title;
 		this.#onLeftCallback = opts?.onLeft;
 		this.#onRightCallback = opts?.onRight;
+		this.#onTogglePauseCallback = opts?.onTogglePause;
+		this.#togglePauseKeys = opts?.togglePauseKeys ?? [];
 
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
@@ -156,7 +163,9 @@ export class HookSelectorComponent extends Container {
 		// Reset countdown on any interaction
 		this.#countdown?.reset();
 
-		if (matchesKey(keyData, "up") || keyData === "k") {
+		if (this.#togglePauseKeys.some(key => matchesKey(keyData, key))) {
+			this.#onTogglePauseCallback?.();
+		} else if (matchesKey(keyData, "up") || keyData === "k") {
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
 			this.#updateList();
 		} else if (matchesKey(keyData, "down") || keyData === "j") {

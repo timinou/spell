@@ -1,0 +1,506 @@
+#+TITLE: QML_JOURNEY_CLEANUP_AND_INPUT_SIMULATION
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-qml-journey-cleanup-and-input-simulation
+
+* Initial Message
+
+commit
+
+* Context
+
+PLAN-002 (QML visual testing + orchestrator wiring) is fully executed and committed (7288de966). It delivered:
+- C++ bridge input simulation (click/type/press/scroll) via ~QGuiApplication::sendEvent~
+- Protocol types + QmlTestHarness interaction methods (click, clickAt, type, press, scroll, settle, observe, clickId)
+- QmlJourney DSL wrapping the harness for shell integration tests
+- 5 PROJ-F integration tests (18 tests, all passing)
+- Escalate tool wiring + bridge delivery fix
+
+Two gaps remain:
+1. Untracked PROJ files + pre-existing test type errors
+2. The QmlJourney interface is a thin passthrough that adds little value, and NONE of the 5 integration tests exercise the actual input simulation (click/type/press) we built
+
+* Problem
+
+** QmlJourney is a passthrough, not an abstraction
+
+12 of 15 methods are single-line delegations to ~#harness~. The only real logic is ~scroll()~ (geometry lookup) and ~expectText/expectTextAbsent~ (text search). This fails the \"earn every line\" rule.
+
+** Manual settle() is boilerplate
+
+Every test does ~agentSends(); await journey.settle(100); expectText()~. The settle is mechanical \u2014 it should be automatic after mutations.
+
+** One-shot assertions are fragile
+
+~expectText()~ queries visible text once and fails immediately. QML rendering is async \u2014 Loader panel switching is async. Assertions should retry/poll with a timeout, like Playwright's auto-retrying expect.
+
+** evaluate() leaks QML internals
+
+Tests use ~journey.evaluate(\"root.activePanelIndex = 1\")~ and ~journey.evaluate(\"panelLoader.item.queueP1\")~ \u2014 depending on internal QML ids that aren't part of the contract.
+
+** Zero input simulation coverage
+
+We built click/type/press/scroll in C++, protocol types, harness methods, and Journey wrappers. Not a single test exercises them.
+
+* Decisions
+
+** Auto-settle after mutations
+
+~agentSends()~, ~click()~, ~type()~, ~press()~, ~scroll()~ auto-settle after executing. Default settle delay configurable via ~launch()~ options (default: 50ms). Existing explicit ~settle()~ calls become redundant but harmless.
+
+** Retry-based assertions with timeout
+
+~expectText(text, opts?)~ polls ~findVisibleText()~ in a loop with 50ms intervals until found or timeout (default 2000ms). This handles Loader async loading naturally. Same for ~expectVisible()~ and ~expectNotFound()~.
+
+** Keep evaluate() as escape hatch
+
+The 5 existing tests use it. Do not remove. Add ~switchPanel(id)~ and ~panelProperty(name)~ as preferred replacements.
+
+** Focus management for typing
+
+In offscreen mode (~QT_QPA_PLATFORM=offscreen~), windows don't receive activation events. ~QKeyEvents~ route to the ~activeFocus~ item. Before any ~type()~ test, either: (a) click the TextEdit via selector to focus it, or (b) call ~evaluate(\"inputField.forceActiveFocus()\")~. The ~type(text, selector?)~ method already handles this \u2014 pass a selector and it clicks first.
+
+** Verify typing via prompt bridge event
+
+When InputBar fires ~messageSent~, ChatPanel calls ~bridge.send({ type: \"prompt\", text: text })~ (ChatPanel.qml line 150). Tests verify this event via ~waitForEvent()~. No test harness QML changes needed.
+
+** Reference QML files are documentation, not production
+
+~canvas/reference/~ contains example QMLs (AgentMonitor, CodeReviewSurface, etc.) not imported by any production code. Track them for reference but don't test them.
+
+* Phase 1: Cleanup
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+** ITEM Track untracked PROJ files + update qmldir
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+*** Files to git add
+- ~packages/coding-agent/src/modes/qml/canvas/components/LayoutContainer.qml~
+- ~packages/coding-agent/src/modes/qml/canvas/components/LogStream.qml~
+- ~packages/coding-agent/src/modes/qml/canvas/components/StatusIndicator.qml~
+- ~packages/coding-agent/src/modes/qml/canvas/reference/~ (5 files: AgentMonitor.qml, CodeReviewSurface.qml, DataDashboard.qml, InteractiveForm.qml, TaskBoard.qml, docs/)
+- ~packages/coding-agent/test/utils/event-bus.test.ts~
+
+*** qmldir update
+File: ~packages/coding-agent/src/modes/qml/canvas/components/qmldir~
+
+Current contents:
+#+begin_example
+DataTable 1.0 DataTable.qml
+DiffView 1.0 DiffView.qml
+TreeView 1.0 TreeView.qml
+#+end_example
+
+Add 3 entries:
+#+begin_example
+LayoutContainer 1.0 LayoutContainer.qml
+LogStream 1.0 LogStream.qml
+StatusIndicator 1.0 StatusIndicator.qml
+#+end_example
+
+** ITEM Fix qml-chat-panel.test.ts type errors
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+*** Root cause
+~harness.query(\"messageCount\").toBe(0)~ \u2014 query returns ~Promise<unknown>~, and ~expect(unknown).toBe(0)~ fails the overload because ~toBe~ expects ~undefined~ for ~unknown~.
+
+*** Fix
+Add type parameters to all ~.query()~ calls. 10 occurrences:
+- ~harness.query(\"messageCount\")~ \u2192 ~harness.query<number>(\"messageCount\")~
+- ~harness.query(\"isStreaming\")~ \u2192 ~harness.query<boolean>(\"isStreaming\")~
+
+File: ~packages/coding-agent/test/modes/qml-chat-panel.test.ts~
+
+* Phase 2: QmlJourney Interface Redesign
+:PROPERTIES:
+:EFFORT: 3h
+:END:
+
+** ITEM Add retry assertion helpers to QmlTestHarness
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+*** File
+- ~packages/qml/src/test-harness.ts~
+
+*** New method: waitUntil(fn, timeout?)
+
+Generic retry helper on the harness:
+
+#+begin_src typescript
+async waitUntil<T>(
+  fn: () => Promise<T | null | false>,
+  timeout = 2000,
+): Promise<T> {
+  const start = Date.now();
+  let lastError: Error | null = null;
+  while (Date.now() - start < timeout) {
+    try {
+      const result = await fn();
+      if (result !== null && result !== false) return result;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+    await Bun.sleep(50);
+  }
+  // Final attempt
+  const result = await fn();
+  if (result !== null && result !== false) return result;
+  throw lastError ?? new Error(`waitUntil timed out after ${timeout}ms`);
+}
+#+end_src
+
+** ITEM Redesign QmlJourney with auto-settle and retry assertions
+:PROPERTIES:
+:EFFORT: 1h30m
+:END:
+
+*** File
+- ~packages/coding-agent/test/helpers/qml-journey.ts~
+
+*** Launch options change
+#+begin_src typescript
+static async launch(
+  qmlFile: string,
+  options?: {
+    props?: Record<string, unknown>;
+    width?: number;
+    height?: number;
+    settleMs?: number;       // default 50ms, auto-applied after mutations
+    assertTimeout?: number;  // default 2000ms, retry timeout for assertions
+  },
+): Promise<QmlJourney>
+#+end_src
+
+Store ~#settleMs~ and ~#assertTimeout~ as fields.
+
+*** Auto-settle after mutations
+
+~agentSends~, ~click~, ~clickAt~, ~clickId~, ~type~, ~press~, ~scroll~ all call ~await this.#harness.settle(this.#settleMs)~ after executing.
+
+*** Retry-based assertions
+
+~expectText(text)~, ~expectTextAbsent(text)~, ~expectVisible(selector)~, ~expectNotFound(selector)~ use ~this.#harness.waitUntil()~ with ~this.#assertTimeout~:
+
+#+begin_src typescript
+async expectText(text: string, timeout?: number): Promise<void> {
+  await this.#harness.waitUntil(async () => {
+    const texts = await this.#harness.findVisibleText();
+    return texts.some(t => t.includes(text)) || null;
+  }, timeout ?? this.#assertTimeout);
+}
+
+async expectTextAbsent(text: string, timeout?: number): Promise<void> {
+  // Settle first, then check once. Retry-absence doesn't make sense
+  // (you'd always succeed on first poll before the text appears).
+  await this.#harness.settle(this.#settleMs);
+  const texts = await this.#harness.findVisibleText();
+  if (texts.some(t => t.includes(text))) {
+    throw new Error(`expectTextAbsent: \"${text}\" was found in visible text`);
+  }
+}
+#+end_src
+
+*** New domain helpers
+
+~switchPanel(id)~:
+#+begin_src typescript
+async switchPanel(id: string): Promise<void> {
+  const idx = await this.evaluate<number>(
+    `root.findPanelIndexById('${id}')`,
+  );
+  if (idx < 0) throw new Error(`switchPanel: panel '${id}' not found`);
+  await this.evaluate(`root.activePanelIndex = ${idx}`);
+  await this.#harness.settle(this.#settleMs);
+}
+#+end_src
+
+~panelProperty<T>(name)~:
+#+begin_src typescript
+async panelProperty<T>(name: string): Promise<T> {
+  return this.evaluate<T>(`panelLoader.item.${name}`);
+}
+#+end_src
+
+*** Methods to KEEP as-is
+~evaluate()~, ~findItems()~, ~waitForEvent()~, ~screenshot()~, ~teardown()~, ~observe()~, ~clickId()~ \u2014 these remain unchanged.
+
+*** Methods to REMOVE
+~settle()~ from the public API. It's now internal \u2014 called automatically. If a test needs extra wait beyond auto-settle, use ~evaluate(\"true\")~ or increase ~settleMs~.
+
+Wait \u2014 settle() should stay public for edge cases (animation waits). Keep it but document that it's rarely needed.
+
+** ITEM Update 5 existing integration tests for new API
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+*** Changes per test
+
+All 5 files: ~packages/coding-agent/test/integration/*.test.ts~
+
+1. Remove explicit ~settle()~ calls after ~agentSends()~ (now auto-settled)
+2. Replace ~journey.evaluate(\"root.activePanelIndex = 1\")~ with ~journey.switchPanel(\"dashboard\")~
+3. Replace ~journey.evaluate(\"panelLoader.item.queueP1\")~ with ~journey.panelProperty<number>(\"queueP1\")~
+4. Remove ~settle()~ calls between switchPanel and assertions (auto-settled + retry)
+5. Keep ~journey.evaluate(\"root.panels.length\")~ for panel count \u2014 this is a root-level property, not panel-specific
+
+*** Expected outcome
+Tests become 30-40% shorter. No more manual settle choreography.
+
+* Phase 3: Input Simulation Tests
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+** ITEM Chat input interaction test
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+*** File
+- ~packages/coding-agent/test/integration/chat-input-interaction.test.ts~
+
+*** QML loaded
+Uses existing ~ChatPanelTestHarness.qml~ (wraps ChatPanel with query/reset support).
+
+*** Setup
+#+begin_src typescript
+const harness = new QmlTestHarness({ width: 900, height: 600 });
+beforeAll(async () => {
+  await harness.setup(HARNESS_QML);
+});
+#+end_src
+
+Uses ~QmlTestHarness~ directly (not QmlJourney) because ChatPanelTestHarness is not the shell.
+
+*** Focus management
+Before any typing test, click the TextEdit or call ~evaluate(\"inputField.forceActiveFocus()\")~. The InputBar's TextEdit has ~id: inputField~ which is accessible from the test harness eval context because ChatPanelTestHarness embeds ChatPanel which embeds InputBar.
+
+*** Tests
+
+*1. Type text and press Return sends prompt event:*
+#+begin_src typescript
+it("typing text and pressing Return sends prompt event", async () => {
+  // Focus the input
+  await harness.click({ type: "QQuickTextEdit" });
+  await harness.settle();
+
+  // Type a message
+  await harness.type("hello world");
+  await harness.settle();
+
+  // Set up listener before pressing Return
+  const eventPromise = harness.waitForBridgeEvent(
+    e => e.type === "event" && (e as any).payload?.type === "prompt",
+    3000,
+  );
+  await harness.press("Return");
+
+  const ev = await eventPromise;
+  const payload = (ev as any).payload;
+  expect(payload.type).toBe("prompt");
+  expect(payload.text).toBe("hello world");
+});
+#+end_src
+
+*2. Type text and click send button:*
+#+begin_src typescript
+it("clicking send button submits message", async () => {
+  await harness.click({ type: "QQuickTextEdit" });
+  await harness.type("click test");
+  await harness.settle();
+
+  const eventPromise = harness.waitForBridgeEvent(
+    e => e.type === "event" && (e as any).payload?.type === "prompt",
+    3000,
+  );
+  // The send button is visible when not streaming. It's a StateLayer
+  // inside a Rectangle with a Text child showing "\u2191".
+  // Click at the send button area. Use observe() to find it.
+  const elements = await harness.observe();
+  // Find the MouseArea that isn't the input field's Flickable
+  // Filter by geometry: send button is 36x36, small and to the right
+  const sendButton = elements.find(
+    e => e.className.startsWith("QQuickMouseArea") && e.geometry.width <= 40,
+  );
+  if (!sendButton) throw new Error("Send button not found");
+  await harness.clickId(sendButton.id);
+
+  const ev = await eventPromise;
+  expect((ev as any).payload.text).toBe("click test");
+});
+#+end_src
+
+*3. Click abort button while streaming:*
+#+begin_src typescript
+it("clicking abort button sends abort event", async () => {
+  // Simulate streaming state
+  await harness.sendMessage({ type: "message_start", id: "m1", role: "assistant" });
+  await harness.settle(100);
+
+  // Abort button should now be visible (replaces send button during streaming)
+  const eventPromise = harness.waitForBridgeEvent(
+    e => e.type === "event" && (e as any).payload?.type === "abort",
+    3000,
+  );
+  const elements = await harness.observe();
+  const abortButton = elements.find(
+    e => e.className.startsWith("QQuickMouseArea") && e.geometry.width <= 40,
+  );
+  if (!abortButton) throw new Error("Abort button not found");
+  await harness.clickId(abortButton.id);
+
+  const ev = await eventPromise;
+  expect((ev as any).payload.type).toBe("abort");
+});
+#+end_src
+
+*4. Empty input does not send:*
+#+begin_src typescript
+it("pressing Return with empty input does not send", async () => {
+  await harness.click({ type: "QQuickTextEdit" });
+  await harness.press("Return");
+  await harness.settle(200);
+  // No message should have been added
+  expect(await harness.query<number>("messageCount")).toBe(0);
+});
+#+end_src
+
+** ITEM Shell sidebar interaction test
+:PROPERTIES:
+:EFFORT: 1h30m
+:END:
+
+*** File
+- ~packages/coding-agent/test/integration/shell-sidebar-interaction.test.ts~
+
+*** Uses QmlJourney (loads shell.qml)
+
+*** Tests
+
+*1. observe() lists sidebar panel click targets:*
+#+begin_src typescript
+it("observe returns sidebar StateLayer elements", async () => {
+  const elements = await journey.observe();
+  // Should have at least 2 MouseAreas (one per panel in sidebar)
+  const mouseAreas = elements.filter(e => e.className.startsWith("QQuickMouseArea"));
+  expect(mouseAreas.length).toBeGreaterThanOrEqual(2);
+});
+#+end_src
+
+*2. Click second panel in sidebar switches to it:*
+Uses ~observe()~ to find the sidebar MouseAreas, then ~clickId()~ on the second one:
+#+begin_src typescript
+it("clicking dashboard in sidebar switches panel", async () => {
+  // Start on chat (index 0)
+  const idx0 = await journey.evaluate<number>("root.activePanelIndex");
+  expect(idx0).toBe(0);
+
+  // Click the second sidebar item (Dashboard)
+  const elements = await journey.observe();
+  // The sidebar delegates are small rectangles (height: 44) with MouseAreas
+  const sidebarItems = elements.filter(
+    e => e.className.startsWith("QQuickMouseArea") && e.geometry.height === 44,
+  );
+  expect(sidebarItems.length).toBeGreaterThanOrEqual(2);
+  await journey.clickId(sidebarItems[1].id);
+
+  const idx1 = await journey.evaluate<number>("root.activePanelIndex");
+  expect(idx1).toBe(1);
+});
+#+end_src
+
+*3. switchPanel() navigates correctly:*
+#+begin_src typescript
+it("switchPanel navigates to dashboard by id", async () => {
+  await journey.switchPanel("dashboard");
+  const idx = await journey.evaluate<number>("root.activePanelIndex");
+  expect(idx).toBe(1);
+
+  await journey.switchPanel("chat");
+  const idx2 = await journey.evaluate<number>("root.activePanelIndex");
+  expect(idx2).toBe(0);
+});
+#+end_src
+
+** ITEM Observe + clickId round-trip test
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+*** File
+- ~packages/coding-agent/test/integration/observe-click-roundtrip.test.ts~
+
+*** Tests
+Verifies the full observe \u2192 find element \u2192 clickId \u2192 verify state pipeline works end-to-end. Uses the shell sidebar as the simplest interactive surface.
+
+1. ~observe()~ returns entries with valid geometry
+2. ~clickId()~ with valid id succeeds without error
+3. ~clickId()~ with invalid id throws
+4. ~clickId()~ without prior ~observe()~ throws
+5. Multiple ~observe()~ calls return fresh results
+
+* Verification
+
+After all phases complete:
+1. ~git status~ \u2014 no untracked PROJ files remain
+2. ~bunx biome check packages/coding-agent packages/qml/src~ \u2014 lint clean
+3. ~bunx tsgo -p packages/coding-agent/tsconfig.json~ \u2014 only pre-existing errors (if the chat panel test fix worked, zero errors)
+4. ~cd packages/qml && bun run build:bridge~ \u2014 bridge compiles (no C++ changes in this plan)
+5. ~bun test packages/coding-agent/test/integration/~ \u2014 all tests pass (old 5 + new 3)
+6. ~bun test packages/coding-agent/test/modes/qml-chat-panel.test.ts~ \u2014 passes with type fixes
+7. ~bun test packages/coding-agent/test/utils/event-bus.test.ts~ \u2014 17 tests pass
+
+* Sequencing
+
+Phase 1 (cleanup) has no dependencies \u2014 do first.
+Phase 2 (Journey redesign) changes the harness + journey interfaces.
+Phase 3 (interaction tests) depends on Phase 2 for retry assertions and auto-settle.
+
+Phase 2 and Phase 1 can be parallelized since they touch different files:
+- Phase 1: qmldir, qml-chat-panel.test.ts, git add
+- Phase 2: test-harness.ts, qml-journey.ts, 5 existing test files
+
+Phase 3 must come after Phase 2.
+
+* Key Files
+
+| File | Changes |
+|------+---------|
+| ~packages/coding-agent/src/modes/qml/canvas/components/qmldir~ | Add 3 component entries |
+| ~packages/coding-agent/test/modes/qml-chat-panel.test.ts~ | Add type parameters to ~.query()~ calls |
+| ~packages/qml/src/test-harness.ts~ | Add ~waitUntil()~ retry helper |
+| ~packages/coding-agent/test/helpers/qml-journey.ts~ | Auto-settle, retry assertions, switchPanel(), panelProperty() |
+| ~packages/coding-agent/test/integration/*.test.ts~ (existing 5) | Remove manual settle, use switchPanel/panelProperty |
+| ~packages/coding-agent/test/integration/chat-input-interaction.test.ts~ | NEW: 4 interaction tests |
+| ~packages/coding-agent/test/integration/shell-sidebar-interaction.test.ts~ | NEW: 3 sidebar tests |
+| ~packages/coding-agent/test/integration/observe-click-roundtrip.test.ts~ | NEW: 5 observe/clickId tests |
+
+* Critical Implementation Notes (for executor)
+
+** Focus in offscreen mode
+
+~QT_QPA_PLATFORM=offscreen~ does not send window activation events. ~QKeyEvents~ are routed to the ~activeFocus~ item. Before any ~type()~ call in tests, MUST either:
+- Click the TextEdit via selector: ~await harness.click({ type: \"QQuickTextEdit\" })~
+- Or call: ~await harness.evaluate(\"inputField.forceActiveFocus()\")~
+
+The ~type(text, selector?)~ method on the harness already supports this \u2014 pass a selector and it clicks first to focus.
+
+** Signal observation through bridge
+
+InputBar emits ~messageSent(text)~. ChatPanel handles it in ~sendUserMessage()~ which calls ~bridge.send({ type: \"prompt\", text: text })~. Tests observe this via ~waitForBridgeEvent(e => e.payload?.type === \"prompt\")~. No QML harness changes needed.
+
+** Sidebar StateLayer click identification
+
+Shell sidebar delegates are ~height: 44~ rectangles with StateLayer (inner MouseArea). The ~observe()~ method returns all visible MouseAreas. Filter by geometry height to identify sidebar items vs other interactive elements (send button is 36x36, input field is variable height).
+
+** expectTextAbsent cannot use retry
+
+Retrying an absence assertion would succeed on the first poll before the UI updates. Instead: settle first, then check once. This is the correct semantic \u2014 \"after settling, this text should not be present.\"

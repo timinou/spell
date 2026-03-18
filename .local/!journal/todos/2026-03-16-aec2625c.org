@@ -1,0 +1,29 @@
+#+TITLE: Session 149560189ce7eee8 Todos
+#+DATE: 2026-03-16
+#+TODO: ITEM DOING | DONE
+
+* Plan canvas session namespace
+
+** DONE Inspect existing canvas URI namespace handling and QML persistence flow
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Reviewed canvas-protocol.ts, canvas tool write/launch flow, internal router wiring in sdk.ts, and local protocol patterns/tests for session-scoped paths.
+
+** DONE Design implementation approach with tradeoffs and identify critical files/tests
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+Selected per-session persistence under artifacts-backed session storage. Chosen design: extend canvas protocol with session namespace + path resolver utility for non-existent targets, then route canvas write through it; keep stdlib read-only. Add protocol and canvas tool tests.
+
+** DONE Create drafts org plan item and exit plan mode
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Created DRAFT-007-canvas-session-namespace with required properties/body and validated properties are present.

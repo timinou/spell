@@ -1,0 +1,25 @@
+#+TITLE: Session 149667a7e446881d Todos
+#+DATE: 2026-03-17
+#+TODO: ITEM DOING | DONE
+
+* PROJ-F: Full Integration
+
+** DONE Rewrite canvas skill doc for 2D interaction
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Update main.ts to pass eventBus/orchestrator to QML mode
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Final verification: type check + lint + all tests
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Final verification: bun check:ts clean (0 new errors), bun lint:ts clean (1233 files), qmllint sweep clean (all QML files pass), 17/17 EventBus tests pass.

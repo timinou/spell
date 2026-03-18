@@ -1,0 +1,349 @@
+#+TITLE: QML_E2E_JOURNEY_TESTS
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-qml-e2e-journey-tests
+
+* Problem
+
+The QML integration test suite proves protocol compliance in isolation but does not prove that ~spell --qml~ works as a user experience. Specifically:
+
+- Messages are never verified through shell.qml's Loader routing
+- Typing/clicking is tested in isolated ChatPanelTestHarness, never through the production shell
+- The pending message queue (last-write-wins per panel) is never exercised
+- Armed tool round-trips (_tool/_rid) are never triggered
+- Error conditions (Loader failure, malformed messages) are never tested
+- Panel lifecycle (add/remove/replace, state destruction on switch) is never verified
+
+Two gaps are acknowledged as structurally untestable with current infrastructure:
+- Daemon/socket mode (production uses Unix socket; tests use stdio)
+- Multi-client bridge (requires daemon mode)
+
+* Metis Findings (incorporated)
+
+** Panel state is NOT preserved — Loader destroys components
+The ~Loader~ uses a reactive ~source~ binding. When ~activePanelIndex~ changes, the old component is destroyed entirely. ChatPanel's ~messagesModel~ is gone. Gap #3 must test destruction, not preservation.
+
+** Pending queue is last-write-wins, not FIFO
+~pendingPanelMessages[panelId] = payload~ overwrites previous. Only the LAST ~dashboard_update~ per panel survives. Tests must verify overwrite semantics.
+
+** Armed tools require 6-hop UI chain
+~Loader → ChatPanel → ListView → MessageDelegate → AssistantBubble → MarkdownContent → CodeBlock~. Build incrementally: first verify render, then attempt click. Capture rendering failures as distinct from tool invocation failures.
+
+** No reset protocol in shell.qml
+~reset()~ only works with ChatPanelTestHarness. Shell tests use evaluate-based cleanup between tests or fresh journey instances.
+
+** Non-dashboard messages to inactive panels are silently dropped
+Only ~dashboard_update~ is queued. All other types are lost when their target panel is inactive.
+
+* Momus Review Fixes (incorporated)
+
+** F1: Armed tools save button is fire-and-forget (no _rid)
+~onCodeSaveRequested~ sends ~{_tool:"write", path, content}~ with NO ~_rid~. The ~_rid~ pattern only exists on ~onLinkActivated~ for file:// links: ~{_tool:"read", _rid:"preview-"+Date.now(), path}~. Test #2 (save button) verifies fire-and-forget. Test #3 (_rid round-trip) uses ~evaluate()~ to trigger ~bridge.send~ directly, bypassing the rendering chain.
+
+** F2: shell-chat-input reduced to 2 tests (not 4)
+~chat-input-interaction.test.ts~ already covers all 4 scenarios (type+Return, click send, abort, empty input) via ChatPanelTestHarness. shell-chat-input only adds value by proving input works through the shell Loader. Two tests suffice: (1) type+Return → prompt event, (2) abort button during streaming → abort event. "Empty input blocked" and "prompt in messagesModel" are already proven.
+
+** F3: resetShell() needs waitUntil confirmation
+After setting ~activePanelIndex = 0~, must wait until ~panelLoader.item~ is non-null and has ~messagesModel~ before clearing. Add ~waitUntil~ loop + settle. Document that resetShell only works when resetting TO chat panel (index 0).
+
+* Key Production Contracts (from exploration)
+
+** shell.qml message routing (lines 298-337)
+#+begin_example
+onMessageReceived(payload):
+  if !payload.type → forwardToActivePanel (no-op, panels ignore typeless)
+  if type == "add_panel" → addOrReplacePanel()
+  if type == "remove_panel" → removePanelById()
+  compute targetPanelId (explicit or "dashboard" for dashboard_update)
+  if targetPanelId && targetPanelId != activePanelId:
+    if type == "dashboard_update" → queue in pendingPanelMessages[panelId]
+    else → silently drop
+  else → forwardToActivePanel(payload)
+#+end_example
+
+** Pending queue flush triggers
+- ~onActivePanelIndexChanged~ → ~flushPendingForActivePanel()~
+- ~panelLoader.onLoaded~ → ~flushPendingForActivePanel()~
+
+** ChatPanel.sendUserMessage(text)
+Appends user bubble to messagesModel, calls ~bridge.send({type:"prompt", text})~.
+
+** InputBar signals
+- ~messageSent(text)~ — Return key (non-Shift) or send button click, only if text.trim().length > 0
+- ~abortRequested()~ — abort button click (visible when isStreaming)
+
+** Armed tools (AssistantBubble.qml)
+- Code save: ~bridge.send({_tool:"write", path, content})~ — fire-and-forget, NO _rid
+- File link: ~bridge.send({_tool:"read", _rid:"preview-"+Date.now(), path})~ — expects _rid response
+
+* Test Isolation Strategy
+
+Each test file creates ONE ~QmlJourney~ in ~beforeAll~, tears down in ~afterAll~. Between tests, evaluate-based cleanup with confirmation:
+
+#+begin_src typescript
+async function resetShell(journey: QmlJourney): Promise<void> {
+  // Reset to chat panel (index 0)
+  await journey.evaluate("root.activePanelIndex = 0");
+  // Wait until Loader has loaded ChatPanel and item is ready
+  await journey.waitUntil(async () => {
+    const hasItem = await journey.evaluate<boolean>(
+      "panelLoader.item !== null && typeof panelLoader.item.messagesModel !== 'undefined'"
+    );
+    return hasItem || null;
+  }, 2000);
+  // Now safe to clear chat state
+  await journey.evaluate("panelLoader.item.messagesModel.clear()");
+  await journey.evaluate("panelLoader.item.isStreaming = false");
+  // Clear pending queue
+  await journey.evaluate("root.pendingPanelMessages = ({})");
+  await journey.settle(50);
+}
+#+end_src
+
+Note: resetShell only works when resetting TO chat panel (index 0, ChatPanel.qml). If the active panel is something else, the messagesModel/isStreaming clears target the wrong panel type.
+
+For tests that mutate the panel list (add/remove), use a nested ~describe~ with its own journey.
+
+* Phase 1: QmlJourney API Extensions
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+** ITEM Add focusInput, submitPrompt, simulateToolResponse, expectPanelActive, waitUntil
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+*** File: ~packages/coding-agent/test/helpers/qml-journey.ts~
+
+*** New methods
+
+*focusInput():* Find the TextEdit in the visual tree and click to focus. Pattern proven in ~chat-input-interaction.test.ts~ (local focusInput function).
+#+begin_src typescript
+async focusInput(): Promise<void> {
+  const elements = await this.observe();
+  const textEdit = elements.find(e => e.className.startsWith("QQuickTextEdit"));
+  if (textEdit) {
+    await this.clickId(textEdit.id);
+    return;
+  }
+  const flickable = elements.find(e => e.className.startsWith("QQuickFlickable"));
+  if (!flickable) throw new Error("No TextEdit or Flickable found for input focus");
+  await this.clickId(flickable.id);
+}
+#+end_src
+
+*submitPrompt(text):* Type a message and press Return. Sets up waitForBridgeEvent BEFORE pressing Return to avoid race. Returns captured prompt payload.
+#+begin_src typescript
+async submitPrompt(text: string): Promise<Record<string, unknown>> {
+  await this.focusInput();
+  await this.#harness.type(text);
+  await this.#harness.settle(this.#settleMs);
+  const eventPromise = this.#harness.waitForBridgeEvent(
+    e => e.type === "event" && (e as any).payload?.type === "prompt",
+    5000,
+  );
+  await this.#harness.press("Return");
+  const ev = await eventPromise;
+  await this.#harness.settle(this.#settleMs);
+  return (ev as any).payload;
+}
+#+end_src
+
+*simulateToolResponse(rid, payload):* Thin wrapper over harness method (already exists at ~test-harness.ts:377~).
+#+begin_src typescript
+async simulateToolResponse(rid: string, payload: Record<string, unknown>): Promise<void> {
+  await this.#harness.simulateToolResponse(rid, payload);
+  await this.#harness.settle(this.#settleMs);
+}
+#+end_src
+
+*expectPanelActive(id):* Retry-based assertion on active panel id.
+#+begin_src typescript
+async expectPanelActive(id: string): Promise<void> {
+  await this.#harness.waitUntil(async () => {
+    const activeId = await this.evaluate<string>(
+      "root.panels[root.activePanelIndex].id"
+    );
+    return activeId === id || null;
+  }, this.#assertTimeout);
+}
+#+end_src
+
+*waitUntil(fn, timeout):* Expose harness waitUntil for resetShell and custom assertions.
+#+begin_src typescript
+async waitUntil<T>(fn: () => Promise<T | null | false>, timeout?: number): Promise<T> {
+  return this.#harness.waitUntil(fn, timeout ?? this.#assertTimeout);
+}
+#+end_src
+
+*** Export ~resetShell~ as standalone helper
+Used in ~beforeEach~ for test isolation when sharing a journey instance. Implementation as shown in Test Isolation Strategy section above.
+
+* Phase 2: Test Files
+:PROPERTIES:
+:EFFORT: 6h
+:END:
+
+** ITEM shell-message-routing.test.ts — Gaps 1, 4
+:PROPERTIES:
+:EFFORT: 1h30m
+:END:
+
+*** File: ~packages/coding-agent/test/integration/shell-message-routing.test.ts~
+*** Loads: production ~shell.qml~ via QmlJourney (follow same launch pattern as shell-sidebar-interaction.test.ts)
+*** Isolation: shared journey + ~resetShell()~ in beforeEach
+
+*** Tests (7)
+
+*1. Routes message_start/update/end to active chat panel:*
+Send assistant message triplet, verify text visible and messagesModel.count == 1 via evaluate.
+
+*2. Routes dashboard_update to active dashboard:*
+switchPanel("dashboard"), send dashboard_update with agent status and queue depths, verify properties via panelProperty.
+
+*3. Queues dashboard_update for inactive dashboard, flushes on switch:*
+Verify chat is active, send dashboard_update, switchPanel("dashboard"), verify agentStatus property matches.
+
+*4. Last-write-wins: only final queued update survives:*
+Send 3 dashboard_updates to inactive dashboard with different status values ("first", "second", "final"), switch, verify only "final".
+
+*5. Non-dashboard message to inactive panel is silently dropped:*
+switchPanel("dashboard"), send message_start+update with panelId:"chat", switch back to chat, verify messagesModel.count == 0.
+
+*6. Messages without panelId go to active panel:*
+On chat, send message_start (no panelId) → verify arrives at chat.
+
+*7. Malformed messages are silently ignored:*
+Send ~{}~, ~{type:"nonexistent"}~, ~{foo:"bar"}~. Then send valid message and verify shell still works.
+
+** ITEM shell-chat-input.test.ts — Gap 2 (reduced scope per Momus F2)
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+*** File: ~packages/coding-agent/test/integration/shell-chat-input.test.ts~
+*** Loads: production ~shell.qml~ via QmlJourney
+*** Existing coverage: ~chat-input-interaction.test.ts~ already proves InputBar mechanics via ChatPanelTestHarness. These 2 tests prove input works through the shell's Loader nesting.
+
+*** Tests (2)
+
+*1. Type and Return emits prompt event through shell Loader:*
+#+begin_src typescript
+it("typing and pressing Return emits prompt event through shell", async () => {
+  const prompt = await journey.submitPrompt("hello from shell");
+  expect(prompt.type).toBe("prompt");
+  expect(prompt.text).toBe("hello from shell");
+});
+#+end_src
+
+*2. Abort button emits abort event during streaming:*
+Send message_start to enter streaming state. Observe to find small MouseArea (36x36, send/abort button). clickId on abort button. Capture abort bridge event.
+
+** ITEM panel-lifecycle.test.ts — Gap 3 (reframed: destruction, not preservation)
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+*** File: ~packages/coding-agent/test/integration/panel-lifecycle.test.ts~
+*** Loads: production ~shell.qml~ via QmlJourney
+*** Uses fresh journey per nested describe (panel mutations change panel list)
+
+*** Tests (5)
+
+*1. Panel switch destroys chat state:*
+Send message to chat (count == 1), switch to dashboard and back, verify count == 0. This documents the ACTUAL behavior — Loader destroys components.
+
+*2. add_panel creates sidebar entry:*
+Read panels.length before, send add_panel, verify length increased by 1.
+
+*3. add_panel with existing id replaces in-place:*
+Send add_panel with id "x", record length, send another add_panel with same id "x", verify length unchanged.
+
+*4. remove_panel removes sidebar entry:*
+Add panel, verify count, remove it, verify count decreased.
+
+*5. Switching to added panel loads it:*
+add_panel (using DashboardPanel.qml as source), switch to it, verify panelLoader.item exists and has handleMessage function.
+
+** ITEM armed-tools-roundtrip.test.ts — Gap 5 (corrected per Momus F1)
+:PROPERTIES:
+:EFFORT: 1h30m
+:END:
+
+*** File: ~packages/coding-agent/test/integration/armed-tools-roundtrip.test.ts~
+*** Loads: production ~shell.qml~ via QmlJourney
+*** Highest risk area — code block rendering in offscreen mode involves 6-hop chain
+
+*** Tests (3)
+
+*1. Code block renders with save button (rendering chain test):*
+Send message_start+update with markdown code fence, message_end, settle(200), findItems with objectName "codeSaveButton". If not found, remaining tests in this file skip gracefully (~test.skipIf~).
+
+*2. Save button click triggers fire-and-forget _tool:write event (NO _rid):*
+(Corrected per Momus F1 — save button sends NO _rid, it's fire-and-forget.)
+Find codeSaveButton, capture waitForBridgeEvent with payload._tool === "write", click button, verify event has _tool:"write" + content containing the code. Verify NO _rid field on the event.
+
+*3. _rid round-trip via evaluate (bypasses rendering chain):*
+Use ~evaluate~ to call ~bridge.send({_tool:"read", _rid:"test-123", path:"/tmp/test.txt"})~ from QML side. Capture the event on harness side (verify _rid:"test-123"). Call ~simulateToolResponse("test-123", {text:"contents"})~ to send response back. Verify QML received it — the response arrives as a message, shell forwards it to active panel.
+
+This test bypasses the full rendering chain intentionally — it proves the _rid protocol contract works regardless of which QML component triggers it.
+
+** ITEM shell-error-resilience.test.ts — Gap 6
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+*** File: ~packages/coding-agent/test/integration/shell-error-resilience.test.ts~
+*** Loads: production ~shell.qml~ via QmlJourney
+*** Uses fresh journey (panel mutations)
+
+*** Tests (3)
+
+*1. Bad panel path triggers Loader error overlay:*
+Send add_panel with path "panels/NonExistentPanel.qml", switch to it, settle(200), expectText("Failed to load panel").
+
+*2. Shell survives active panel removal:*
+Add panel, switch to it, remove it. Verify shell doesn't crash — evaluate("root.panels.length") returns expected value and shell responds to further messages.
+
+*3. Malformed messages don't crash the shell:*
+(Deduplication note: if shell-message-routing already covers this, skip here. Decide during implementation. Only one file should own this test.)
+
+* Verification
+
+After all phases complete:
+
+1. ~bun test packages/coding-agent/test/integration/shell-message-routing.test.ts~ — 7 tests pass
+2. ~bun test packages/coding-agent/test/integration/shell-chat-input.test.ts~ — 2 tests pass
+3. ~bun test packages/coding-agent/test/integration/panel-lifecycle.test.ts~ — 5 tests pass
+4. ~bun test packages/coding-agent/test/integration/armed-tools-roundtrip.test.ts~ — 3 pass (or graceful skip for rendering-dependent tests)
+5. ~bun test packages/coding-agent/test/integration/shell-error-resilience.test.ts~ — 3 tests pass
+6. ~bun test packages/coding-agent/test/integration/~ — all 8 existing + 5 new files pass (0 regressions)
+7. ~bunx biome check packages/coding-agent/test/~ — lint clean
+8. ~bunx tsgo -p packages/coding-agent/tsconfig.json~ — no new errors
+
+* Sequencing
+
+Phase 1 (QmlJourney extensions) must come first — Phase 2 tests depend on new methods.
+
+Phase 2 test files are independent of each other — can be written in parallel:
+- Task A: shell-message-routing + shell-error-resilience (share routing/error knowledge)
+- Task B: shell-chat-input + panel-lifecycle (share Loader/lifecycle knowledge)
+- Task C: armed-tools-roundtrip (standalone, highest risk, may need iteration)
+
+* Key Files
+
+| File | Change |
+|------+--------|
+| ~packages/coding-agent/test/helpers/qml-journey.ts~ | Add focusInput, submitPrompt, simulateToolResponse, expectPanelActive, waitUntil, resetShell |
+| ~packages/coding-agent/test/integration/shell-message-routing.test.ts~ | NEW: 7 tests — routing + queuing + drops + malformed |
+| ~packages/coding-agent/test/integration/shell-chat-input.test.ts~ | NEW: 2 tests — input through shell Loader (type+Return, abort) |
+| ~packages/coding-agent/test/integration/panel-lifecycle.test.ts~ | NEW: 5 tests — add/remove/replace/switch/destruction |
+| ~packages/coding-agent/test/integration/armed-tools-roundtrip.test.ts~ | NEW: 3 tests — _tool fire-and-forget + _rid round-trip |
+| ~packages/coding-agent/test/integration/shell-error-resilience.test.ts~ | NEW: 3 tests — Loader error + panel removal + malformed |
+
+* Gaps NOT Covered (infrastructure limitations)
+
+- *Daemon/socket mode*: Production uses Unix socket to persistent daemon. Tests use stdio+offscreen. Protocol is identical but connection lifecycle (reconnect, state snapshot) is untestable without a real daemon.
+- *Multi-client*: Bridge daemon supports multiple concurrent socket clients. Requires daemon mode to test.
+- *Visual rendering fidelity*: Offscreen mode renders but does not display. Screenshots exist but visual layout verification (colors, alignment, overflow) requires human review or pixel comparison.
+- *Hot reload*: ~QmlBridge~ watches files and calls ~reload()~. Requires filesystem watch integration test with real file changes.

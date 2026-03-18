@@ -1,0 +1,58 @@
+#+TITLE: ANTHROPIC_PROXY_MODE
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-anthropic-proxy-mode
+
+* Problem
+
+When =models.yml= configures anthropic with =baseUrl: http://localhost:8080=, the user still needs =ANTHROPIC_API_KEY="sk-ant-oat" spell= to make it work because:  # pragma: allowlist secret
+1. Without an API key, spell refuses to start (auth validation fails)
+2. =isAnthropicOAuthToken()= misdetects the key type, sending wrong auth headers
+
+The user wants: =baseUrl: http://localhost:8080= + =proxy: true= in models.yml, no apiKey needed.
+
+* Approach
+
+=proxy: true= on a provider means:
+- Treat it as keyless (like ollama/llama.cpp) — add to =#keylessProviders= so =getApiKey()= returns =kNoAuth= ("N/A"), bypassing all API key resolution
+- Force =isOAuth: true= in the streaming layer so =Authorization: Bearer= is used (not =X-Api-Key=)
+- Skip API key validation for this provider
+
+* Files to change
+
+** ITEM Add =proxy= to ProviderConfigSchema and wire keyless + isOAuth
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+=packages/coding-agent/src/config/model-registry.ts=:
+- Add =proxy: Type.Optional(Type.Boolean())= to =ProviderConfigSchema= (line ~197)
+- When =proxy: true=, add provider to =#keylessProviders= (same as ollama/lm-studio pattern, around line 804)
+- Track proxy providers in =#proxyProviders: Set<string>=, expose =isProxyProvider(provider: string): boolean=
+- Clear =#proxyProviders= in =#reloadStaticModels()= (line 674)
+- Skip the "apiKey is required" validation when =proxy: true= (line ~269)
+
+** ITEM Thread isOAuth=true for proxy providers to stream
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+=packages/coding-agent/src/sdk.ts= (line ~1464): In the agent config's =getApiKey= callback or alongside it, when =modelRegistry.isProxyProvider(provider)= is true, ensure the stream receives =isOAuth: true=.
+
+Simplest path: the =AnthropicOptions.isOAuth= field already exists and flows through =buildAnthropicClientOptions= (=packages/ai/src/providers/anthropic.ts= line 1060). Thread it:
+- =packages/ai/src/types.ts=: add =isOAuth?: boolean= to =StreamOptions= (line ~162)
+- =packages/agent/src/types.ts=: add =isOAuth?: boolean= to =AgentLoopConfig= (line ~91)
+- =packages/agent/src/agent-loop.ts= (line ~335): pass =config.isOAuth= into stream options
+- =packages/coding-agent/src/sdk.ts=: set =isOAuth: modelRegistry.isProxyProvider(model.provider) ? true : undefined= when building agent config
+
+** ITEM Update docs
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+=docs/models.md=: document =proxy: true= option.
+
+* Verification
+
+- =bun check:ts= passes
+- =bun lint:ts= passes
+- Config with just =baseUrl= + =proxy: true= (no apiKey) doesn't fail validation

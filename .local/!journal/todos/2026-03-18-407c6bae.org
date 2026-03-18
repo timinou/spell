@@ -1,0 +1,13 @@
+#+TITLE: Session 1497b6964ba804fb Todos
+#+DATE: 2026-03-18
+#+TODO: ITEM DOING | DONE
+
+* Execution
+
+** DONE Run visual and static verification
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+Captured and validated screenshots for palette, typography, DataTable, DiffView, TreeView, prompts, and full CanvasLauncher sample. Fixed prompt select value alignment regression (radio/checkbox) in both AgentCanvas and ComponentGallery and re-verified. Final qmllint pass clean across all touched QML files.

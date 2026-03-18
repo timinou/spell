@@ -1,0 +1,318 @@
+#+TITLE: FIX_QML_PANEL_STATE_DESTRUCTION
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-fix-qml-panel-state-destruction
+
+* Initial Message
+
+bro when i do `spell --qml` and the chat opens and I write sth and I click on Dashboard then Chat, the chat reinitialises. Reproduce the bug manually then in the test files and give me your root cause analysis and directions for fixing
+
+* Problem
+
+When using ~spell --qml~, typing a message in the Chat panel and switching to Dashboard then back to Chat loses all messages. The chat reinitialises with empty state on every panel switch.
+
+* Root Cause
+
+~shell.qml~ uses a single ~Loader~ (id: ~panelLoader~) with a reactive ~source~ binding tied to ~root.activePanelIndex~:
+
+#+begin_src qml
+Loader {
+    id: panelLoader
+    source: {
+        var panel = root.panels[root.activePanelIndex]
+        if (panel && panel.path) return panel.path
+        return Qt.resolvedUrl("panels/ChatPanel.qml")
+    }
+}
+#+end_src
+
+When ~activePanelIndex~ changes, the ~source~ binding re-evaluates. The Loader destroys the old component entirely (including its ~messagesModel~, ~isStreaming~, ~tokenCount~, scroll position, etc.) and creates a fresh one from the new source. QML Loader is designed for lazy loading, not tab-like switching.
+
+** What gets destroyed
+- ~ChatPanel.messagesModel~ (ListModel) — all chat history
+- ~ChatPanel.isStreaming~ / ~tokenCount~ / ~modelName~
+- ~DashboardPanel.agentStatus~ / queue depths / orchestrator list
+- ListView scroll position in any panel
+- Any input text in progress
+
+** Existing test documents the bug
+~panel-lifecycle.test.ts~ has a test "panel switch destroys chat state" that asserts ~count == 0~ after a round-trip switch. This test documents the wrong behavior — it should assert state preservation.
+
+* Fix: Replace Loader with Repeater of Loaders backed by ListModel
+
+** Architecture
+
+Replace the single ~Loader~ with a ~Repeater~ that creates one ~Loader~ per panel. All Loaders stay alive simultaneously. Only the active panel's Loader is visible.
+
+Use ~ListModel~ (not a JS array) for the panels collection. ListModel supports incremental operations (~append~, ~remove~, ~set~) that don't cause the Repeater to destroy and recreate all delegates. A JS array would cause full Repeater re-creation on every ~panels = nextPanels~ assignment (panel add/remove), losing state for all panels — defeating the purpose.
+
+** Key structural change
+
+#+begin_src qml
+// BEFORE: single Loader, destroys on switch
+Loader {
+    id: panelLoader
+    source: root.panels[root.activePanelIndex].path
+    onLoaded: root.flushPendingForActivePanel()
+}
+
+// AFTER: Repeater of Loaders, all stay alive
+ListModel { id: panelsModel }
+
+Item {
+    id: panelContainer
+    anchors.fill: parent
+
+    Repeater {
+        id: panelRepeater
+        model: panelsModel
+        delegate: Loader {
+            anchors.fill: parent
+            source: model.path || ""
+            visible: index === root.activePanelIndex
+            onLoaded: {
+                if (index === root.activePanelIndex)
+                    root.flushPendingForActivePanel()
+            }
+        }
+    }
+}
+#+end_src
+
+** Why ListModel matters
+
+~addOrReplacePanel~ and ~removePanelById~ currently reassign the entire ~panels~ array:
+#+begin_src javascript
+panels = nextPanels  // New array reference → Repeater destroys ALL delegates
+#+end_src
+
+With ListModel:
+#+begin_src javascript
+panelsModel.append(panel)    // Adds one Loader, existing ones untouched
+panelsModel.remove(idx)      // Removes one Loader, existing ones untouched
+panelsModel.set(idx, panel)  // Updates in-place, Loader re-evaluates source binding
+#+end_src
+
+** Active panel accessor
+
+Replace all ~panelLoader.item~ references with a function:
+#+begin_src qml
+function getActivePanelItem() {
+    var loader = panelRepeater.itemAt(activePanelIndex)
+    return loader ? loader.item : null
+}
+#+end_src
+
+Internal code (~forwardToActivePanel~, ~flushPendingForActivePanel~) uses this function. Tests access via ~root.getActivePanelItem()~.
+
+** onActivePanelIndexChanged flush is now safe
+
+The old single-Loader design had a race: ~onActivePanelIndexChanged~ fired before the Loader loaded the new panel, so ~panelLoader.item~ was the old component. That's why it was removed (previous session fix).
+
+With Repeater, each panel has its own Loader. ~panelRepeater.itemAt(newIndex)~ correctly returns the target panel's Loader. If it's already loaded, flush succeeds immediately. If it's loading for the first time, ~onLoaded~ handles the flush. So ~onActivePanelIndexChanged~ can be restored:
+
+#+begin_src qml
+onActivePanelIndexChanged: flushPendingForActivePanel()
+#+end_src
+
+* Phase 1: shell.qml refactor
+:PROPERTIES:
+:EFFORT: 1h30m
+:END:
+
+** ITEM Convert panels from JS array to ListModel
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+*** File: ~packages/coding-agent/src/modes/qml/shell.qml~
+
+*** Remove
+- ~property var panels: normalizePanels(bridge.props.panels)~
+- JS array-based ~findPanelIndexById~, ~activePanelId~, ~addOrReplacePanel~, ~removePanelById~
+
+*** Add
+- ~ListModel { id: panelsModel }~ declared at root level
+- ~Component.onCompleted~ that populates panelsModel from ~normalizePanels(bridge.props.panels)~
+- Refactored helper functions using ListModel API:
+  - ~findPanelIndexById~: iterate ~panelsModel.count~ with ~panelsModel.get(i).id~
+  - ~activePanelId~: ~panelsModel.get(activePanelIndex).id~
+  - ~addOrReplacePanel~: use ~panelsModel.append(panel)~ or ~panelsModel.set(idx, panel)~
+  - ~removePanelById~: use ~panelsModel.remove(idx)~
+- Keep ~normalizePanels~ and ~resolvePanel~ unchanged (they produce plain objects)
+
+*** Sidebar ListView update
+- Change ~model: root.panels~ to ~model: panelsModel~
+- Change delegate references from ~modelData.icon~, ~modelData.title~ to ~model.icon~, ~model.title~
+
+** ITEM Replace single Loader with Repeater of Loaders
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+*** File: ~packages/coding-agent/src/modes/qml/shell.qml~
+
+*** Remove
+The single ~Loader { id: panelLoader ... }~ block (lines 236-245).
+
+*** Add
+~Item~ container with ~Repeater~ of ~Loader~ delegates:
+- ~model: panelsModel~ — incremental updates from ListModel
+- ~anchors.fill: parent~ — each Loader fills the panel area
+- ~visible: index === root.activePanelIndex~ — only active panel visible
+- ~onLoaded:~ — calls ~root.flushPendingForActivePanel()~ if this Loader is active
+
+*** Add accessor
+~function getActivePanelItem()~ — returns ~panelRepeater.itemAt(activePanelIndex).item~ or null.
+
+*** Update internal functions
+- ~forwardToActivePanel~: use ~getActivePanelItem()~ instead of ~panelLoader.item~
+- ~flushPendingForActivePanel~: same
+
+*** Restore onActivePanelIndexChanged
+Now safe with per-panel Loaders.
+
+** ITEM Update error overlay
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+*** File: ~packages/coding-agent/src/modes/qml/shell.qml~
+
+*** Error overlay visibility
+Change ~panelLoader.status === Loader.Error~ to:
+#+begin_src qml
+visible: {
+    var loader = panelRepeater.itemAt(root.activePanelIndex)
+    return loader !== null && loader.status === Loader.Error
+}
+#+end_src
+
+*** Retry button
+Change ~panelLoader.source = ""; panelLoader.source = src~ to target the active Repeater Loader:
+#+begin_src qml
+onClicked: {
+    var loader = panelRepeater.itemAt(root.activePanelIndex)
+    if (loader) { var src = loader.source; loader.source = ""; loader.source = src }
+}
+#+end_src
+
+*** Error detail text
+Change ~panelLoader.source + ""~ to active Loader's source.
+
+* Phase 2: Test infrastructure update
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+** ITEM Update QmlJourney panelProperty and resetShell
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+*** File: ~packages/coding-agent/test/helpers/qml-journey.ts~
+
+*panelProperty:*
+#+begin_src typescript
+// BEFORE:
+return this.evaluate<T>(`panelLoader.item.${name}`);
+// AFTER:
+return this.evaluate<T>(`root.getActivePanelItem().${name}`);
+#+end_src
+
+*resetShell:*
+Replace all ~panelLoader.item~ references with ~root.getActivePanelItem()~:
+#+begin_src typescript
+await journey.evaluate("root.activePanelIndex = 0");
+await journey.waitUntil(async () => {
+    const hasItem = await journey.evaluate<boolean>(
+        "root.getActivePanelItem() !== null && typeof root.getActivePanelItem().messagesModel !== 'undefined'",
+    );
+    return hasItem || null;
+}, 2000);
+await journey.evaluate("root.getActivePanelItem().messagesModel.clear()");
+await journey.evaluate("root.getActivePanelItem().isStreaming = false");
+#+end_src
+
+** ITEM Bulk replace panelLoader.item in test evaluate strings
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+*** Files (all in ~packages/coding-agent/test/integration/~):
+- ~shell-message-routing.test.ts~ — ~8 occurrences
+- ~panel-lifecycle.test.ts~ — ~5 occurrences
+- ~armed-tools-roundtrip.test.ts~ — ~1 occurrence
+- ~shell-error-resilience.test.ts~ — ~3 occurrences
+- ~escalation-flow.test.ts~ — ~1 occurrence (~panelLoader.status~)
+- ~queue-backpressure.test.ts~ — ~2 occurrences
+
+*** Pattern
+All ~panelLoader.item.X~ → ~root.getActivePanelItem().X~
+All ~panelLoader.item !== null~ → ~root.getActivePanelItem() !== null~
+~panelLoader.status~ → ~(function(){var l=panelRepeater.itemAt(root.activePanelIndex);return l?l.status:-1})()~ or add a ~getActivePanelStatus()~ function to shell.qml.
+
+* Phase 3: Flip destruction test to preservation test
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+** ITEM Change "panel switch destroys chat state" to assert preservation
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+*** File: ~packages/coding-agent/test/integration/panel-lifecycle.test.ts~
+
+*** Change
+Rename test to "panel switch preserves chat state". Flip assertion:
+#+begin_src typescript
+it("panel switch preserves chat state", async () => {
+    await journey.agentSends({ type: "message_start", id: "m1", role: "assistant" });
+    await journey.agentSends({ type: "message_update", id: "m1", text: "hello" });
+    await journey.agentSends({ type: "message_end", id: "m1" });
+    const countBefore = await journey.evaluate<number>("root.getActivePanelItem().messagesModel.count");
+    expect(countBefore).toBe(1);
+
+    await journey.switchPanel("dashboard");
+    await journey.switchPanel("chat");
+    // No need for waitUntil — the ChatPanel was never destroyed
+    const countAfter = await journey.evaluate<number>("root.getActivePanelItem().messagesModel.count");
+    expect(countAfter).toBe(1); // PRESERVED
+});
+#+end_src
+
+* Verification
+
+1. ~bun test packages/coding-agent/test/integration/panel-lifecycle.test.ts~ — "preserves chat state" passes
+2. ~bun test packages/coding-agent/test/integration/shell-message-routing.test.ts~ — 7 tests pass (queue flush still works)
+3. ~bun test packages/coding-agent/test/integration/~ — all 50 tests pass (0 regressions)
+4. ~bunx biome check packages/coding-agent/test/ packages/coding-agent/src/modes/qml/shell.qml~ — lint clean
+5. ~bunx tsgo -p packages/coding-agent/tsconfig.json~ — no new errors
+6. Manual: ~spell --qml~, type message, switch to Dashboard, switch back — messages preserved
+
+* Key files
+
+| File | Change |
+|------+--------|
+| ~packages/coding-agent/src/modes/qml/shell.qml~ | ListModel for panels, Repeater of Loaders, accessor function, error overlay, flush restoration |
+| ~packages/coding-agent/test/helpers/qml-journey.ts~ | Update panelProperty and resetShell to use new accessor |
+| ~packages/coding-agent/test/integration/panel-lifecycle.test.ts~ | Flip destruction test to preservation |
+| ~packages/coding-agent/test/integration/shell-message-routing.test.ts~ | Update evaluate strings |
+| ~packages/coding-agent/test/integration/armed-tools-roundtrip.test.ts~ | Update evaluate strings |
+| ~packages/coding-agent/test/integration/shell-error-resilience.test.ts~ | Update evaluate strings |
+| ~packages/coding-agent/test/integration/escalation-flow.test.ts~ | Update panelLoader.status reference |
+| ~packages/coding-agent/test/integration/queue-backpressure.test.ts~ | Update evaluate strings |
+
+* Risks and mitigations
+
+** ListModel property access syntax differs from JS array
+Sidebar delegates use ~modelData.icon~ (JS array) vs ~model.icon~ (ListModel). Mechanical change but easy to miss one. Mitigation: grep for ~modelData~ after refactor.
+
+** Repeater delegate index stability
+ListModel incremental ops preserve Repeater delegate identity. When ~panelsModel.remove(idx)~ is called, delegates at higher indices shift down. If ~activePanelIndex~ pointed to a higher index, it must be adjusted — ~removePanelById~ already does this.
+
+** All panels loaded in memory
+With Repeater, all panels are simultaneously loaded (not just the active one). For 2-3 panels this is negligible. If panel count grows large, consider ~active: index === root.activePanelIndex || loaded~ pattern to lazy-load but keep alive once loaded.
+
+** Message routing to inactive panels becomes possible
+With all panels alive, messages COULD be forwarded to inactive panels directly (instead of queuing/dropping). This is explicitly NOT in scope — keep existing routing semantics. Future enhancement opportunity.

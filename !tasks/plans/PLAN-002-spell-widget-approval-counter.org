@@ -1,0 +1,105 @@
+#+TITLE: SPELL_WIDGET_APPROVAL_COUNTER
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-spell-widget-approval-counter
+
+* Initial Message
+
+ok dude this is intense and we can do it.
+
+in the spell widget in dank material shell/quickshell, /tmp/tmp.qlPinZ0NoF.png -> add a counter for plans that I need to approve as well
+
+* Problem
+
+The Spell widget in DankMaterialShell shows a combined ~actionableCount~ for ~needs_input~ and ~pending_approval~, but ~pending_approval~ never actually appears because of a bug in spell's niri status notification.
+
+** Bug: ~pending_approval~ status is never written to disk
+
+In ~packages/coding-agent/src/modes/interactive-mode.ts~, the plan approval flow sets ~isPendingApproval = true~ (line 1039), then awaits ~showHookSelector~ (line 1040), then sets it back to ~false~ (line 1041).
+
+The niri controller (~packages/niri/src/controller.ts~) learns about state changes via ~context.subscribe()~, which wraps ~session.subscribe()~ — a listener on ~AgentEvent~ emissions from the agent session. But after setting ~isPendingApproval = true~, no session event fires (the agent is paused waiting for the selector). The niri controller never sees the change, so ~pending_approval~ is never written to ~\~/.spell/status/<id>.json~.
+
+Contrast with ~needs_input~: that status is derived from ~onInputCallback~ which is set when the session's main loop yields, coinciding with agent events. And ~isAwaitingHookInput~ (hook selectors during streaming) works because events keep flowing while streaming. ~pending_approval~ is the one case where the flag is set at a quiet moment with no events.
+
+** Root cause
+
+~NiriOverviewContext.subscribe~ only fires on ~AgentEvent~ from the session. Interactive-mode-level state changes (~isPendingApproval~, and potentially ~isAwaitingHookInput~ in non-streaming scenarios) have no notification path to the niri controller.
+
+* Fix (spell repo)
+
+** ITEM Add notification for isPendingApproval changes
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: ~packages/coding-agent/src/modes/interactive-mode.ts~
+
+In the niri context object (around line 463), the ~subscribe~ callback stores the listener in a local variable. Add a method or mechanism so interactive-mode can trigger it:
+
+#+begin_src typescript
+// In the niri context creation block (~line 430-480):
+// Store a reference to call when non-session state changes
+let niriListener: (() => void) | undefined;
+
+// In subscribe:
+subscribe: listener => {
+    niriListener = listener;  // <-- store reference
+    return ctx.session.subscribe(event => {
+        if (\"type\" in event && event.type === \"agent_start\") ctx.#isUserPaused = false;
+        listener();
+    });
+},
+#+end_src
+
+Then around line 1039 where ~isPendingApproval~ is set:
+
+#+begin_src typescript
+this.isPendingApproval = true;
+niriListener?.();  // Notify niri controller of state change
+const choice = await this.showHookSelector(\"Plan mode - next step\", selectorOptions);
+this.isPendingApproval = false;
+niriListener?.();  // Notify again on clear
+#+end_src
+
+Problem: ~niriListener~ is scoped inside ~#startNiri()~ (or wherever the context object is created), but the plan approval code is in a different method. Solutions:
+
+Option A (preferred): Store the listener as a private field ~#niriListener~ on the class. The subscribe callback sets it, the plan approval code calls it.
+
+Option B: Make ~isPendingApproval~ a setter that calls the listener. Cleaner but more refactoring.
+
+Go with Option A — minimal change, clear intent.
+
+*** Implementation detail
+
+1. Add ~#niriListener?: () => void~ field to the class (near line 165 where ~isPendingApproval~ is declared)
+2. In the subscribe callback (~line 463~), set ~this.#niriListener = listener~ (change ~ctx~ references since we're inside the context object literal — use the outer ~this~ captured as ~ctx~, so ~ctx.#niriListener = listener~)
+3. After ~this.isPendingApproval = true~ (line 1039), add ~this.#niriListener?.()~
+4. After ~this.isPendingApproval = false~ (line 1041), add ~this.#niriListener?.()~
+
+* Fix (widget - dotfiles repo)
+
+** ITEM Add pendingApprovalCount to SpellStatusService.qml
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+File: ~\~/.dotfiles/wm/quickshell/dms/Services/SpellStatusService.qml~
+
+- Add ~property int pendingApprovalCount: 0~ after ~actionableCount~ (line 20)
+- In ~_rebuildSessions()~ (line 76), count ~pending_approval~ separately and assign to ~root.pendingApprovalCount~
+
+** ITEM Add approval indicator to SpellSessions.qml
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+File: ~\~/.dotfiles/wm/quickshell/dms/Modules/DankBar/Widgets/SpellSessions.qml~
+
+After the existing actionable count text, add a second icon+count for pending approvals. Use a distinct glyph (e.g. ~\"⬡\"~ hexagon) colored ~Theme.secondary~. Show only when ~pendingApprovalCount > 0~. Must be added in both horizontal (Row, line 44) and vertical (Column, line 22) layouts.
+
+* Verification
+
+1. Start a spell session, use ~/plan~ to enter plan mode
+2. When ~exit_plan_mode~ fires, check ~\~/.spell/status/<windowId>.json~ — should show ~\"status\": \"pending_approval\"~
+3. Widget should show the new approval counter
+4. After approving/rejecting, status should revert and counter should disappear
+5. Run ~bun check:ts~ in spell repo to verify no type errors

@@ -1,0 +1,11 @@
+#+TITLE: Session 14964f3703f26c43 Todos
+#+DATE: 2026-03-17
+#+TODO: ITEM DOING | DONE
+
+* Verification
+
+** DONE Run full verification across all packages
+:PROPERTIES:
+:TASK_ID: task-11
+:STATUS: completed
+:END:

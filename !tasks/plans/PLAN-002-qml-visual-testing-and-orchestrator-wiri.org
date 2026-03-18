@@ -1,0 +1,835 @@
+#+TITLE: QML_VISUAL_TESTING_AND_ORCHESTRATOR_WIRING
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-qml-visual-testing-and-orchestrator-wiri
+
+* Initial Message
+
+what's next? what's been done?
+
+* Context
+
+PLAN-002-2d-canvas-interaction-system produced 6 projects (PROJ-A through PROJ-F) across 3 waves. All code compiles and lints, but two wiring gaps remain and PROJ-F's integration tests were never written. This plan closes those gaps and builds a Playwright-equivalent visual testing framework for QML.
+
+Seven work items, three phases:
+1. Orchestrator wiring fixes (bridge delivery + escalate tool)
+2. C++ bridge input simulation commands + TS protocol/harness extensions
+3. Journey DSL + PROJ-F integration tests + QmlJourney documentation
+
+* Decisions (settled)
+
+** Input simulation: QGuiApplication::sendEvent(), NOT QTest
+
+Qt6::Test is not linked and we avoid adding a build dependency. ~QMouseEvent~, ~QKeyEvent~, ~QWheelEvent~ are from QtGui, transitively available via Qt6::Quick (already linked). Use ~QGuiApplication::sendEvent(rootWindow, &event)~ where ~rootWindow~ is the ~QQuickWindow*~ obtained from ~qobject_cast<QQuickWindow*>(engine->rootObjects().first())~. The window does its own hit-testing internally via the scene graph.
+
+** sendEvent target is always QQuickWindow
+
+Never send events to a QQuickItem directly. Qt's event delivery pipeline is: window -> scene graph -> item. Coordinates in QMouseEvent are window-local. For selector-based click: resolve item via walkTree, compute center = ~scenePosition + (width/2, height/2)~, then ~QGuiApplication::sendEvent(rootWindow, &mouseEvent)~ with that center as position.
+
+** Bridge delivery fix: setBridge() method on CanvasOrchestratorManager (Option A)
+
+Add ~#bridge~ field + ~setBridge()~ method. Make ~getBridge~ optional in options. Call ~setBridge(bridge)~ from qml-mode.ts after bridge creation, ~setBridge(undefined)~ on dispose. Two files changed.
+
+** Escalate tool: customTools field on ExecutorOptions
+
+Add ~customTools?: CustomTool[]~ to ~ExecutorOptions~. Merge with MCP proxy tools in ~runSubprocess()~ session creation. The orchestrator manager creates the escalate proxy tool and passes it via this field. Follows existing MCP proxy pattern. Does NOT use onEscalate callback — the tool carries its own handler via closure.
+
+** Interactive element detection for observe()
+
+The codebase uses ~SpellUI.StateLayer~ (custom MouseArea wrapper) for all clickable surfaces, NOT standard Qt Button controls. The interactive element whitelist for ~observe()~:
+- ~QQuickMouseArea~ (catches StateLayer's inner MouseArea)
+- ~QQuickTextEdit~
+- ~QQuickTextInput~
+- ~QQuickFlickable~ (scrollable containers)
+
+Detection in C++: ~matchesSelector~ gains an ~interactive~ boolean filter. When true, checks if className starts with any of the above prefixes.
+
+** settle() implementation
+
+~settle()~ sends an eval command with expression ~"true"~ and waits for ~eval_result~. This forces a round-trip through the C++ event loop, guaranteeing synchronous property bindings and signal handlers have completed. Accepts optional ~delayMs~ parameter (default 50) for animation-dependent assertions — sleeps after the eval round-trip.
+
+** Input result confirmation events
+
+All input commands (~click~, ~type~, ~press~, ~scroll~) return an ~input_result~ event. The harness waits for this before returning. No fire-and-forget. Consistent with existing protocol pattern (screenshot, query, eval all return results).
+
+** Scroll convention
+
+Positive ~deltaY~ = scroll up (away from user). Matches Qt ~QWheelEvent::angleDelta()~ convention. No inversion.
+
+** Key name mapping
+
+Minimal lookup table in C++: Return, Enter, Escape, Tab, Backspace, Delete, Up, Down, Left, Right, Space, Home, End, PageUp, PageDown. Single-character keys (a-z, 0-9, punctuation) mapped via ~QChar~. Unknown keys return error in ~input_result~. Implemented as ~static QHash<QString, int>~ initialized once.
+
+** Tests don't need real LLM
+
+PROJ-F integration tests simulate the agent side via ~sendMessage()~ / ~agentSends()~. Tests verify QML UI responds correctly to the message protocol. No model provider needed.
+
+* Phase 1: Orchestrator Wiring Fixes
+
+** ITEM Bridge delivery: setBridge() on CanvasOrchestratorManager
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+*** Files
+- ~packages/coding-agent/src/orchestrators/canvas-orchestrator.ts~
+- ~packages/coding-agent/src/modes/qml-mode.ts~
+- ~packages/coding-agent/src/sdk.ts~ (remove getBridge stub)
+
+*** Changes
+
+*canvas-orchestrator.ts:*
+1. Add ~#bridge?: QmlBridge | RemoteQmlBridge~ field (initialized undefined)
+2. Add method ~setBridge(bridge: QmlBridge | RemoteQmlBridge | undefined): void~ that sets ~this.#bridge = bridge~
+3. Make ~getBridge~ optional in ~CanvasOrchestratorManagerOptions~
+4. Replace ~this.#options.getBridge()~ at the two call sites (success result ~line 133 and error result ~line 156) with ~this.#bridge~
+
+*sdk.ts:*
+- Remove ~getBridge: () => undefined~ from CanvasOrchestratorManager constructor options
+
+*qml-mode.ts:*
+- After ~const bridge = new QmlBridge()~ (line 21): add ~options.orchestratorManager?.setBridge(bridge)~
+- Before ~await bridge.dispose()~ in processQmlEvents: add ~options.orchestratorManager?.setBridge(undefined)~
+
+** ITEM Escalate tool wiring via customTools on ExecutorOptions
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+*** Critical finding
+
+~runSubprocess()~ does NOT spawn a child OS process. It creates an in-process ~AgentSession~ via ~createAgentSession()~. No IPC needed. Direct callback injection works.
+
+*** Files
+- ~packages/coding-agent/src/task/executor.ts~
+- ~packages/coding-agent/src/orchestrators/canvas-orchestrator.ts~
+- ~packages/coding-agent/src/tools/escalate.ts~ (export escalateSchema)
+
+*** Changes
+
+*executor.ts:*
+1. Add ~customTools?: CustomTool[]~ field to ~ExecutorOptions~ interface (~line 121)
+2. In ~runSubprocess()~ body (~line 970-990), merge ~options.customTools~ with ~mcpProxyTools~ before passing to ~createAgentSession~:
+   #+begin_src typescript
+   const allCustomTools = [...mcpProxyTools, ...(options.customTools ?? [])];
+   // in createAgentSession:
+   customTools: allCustomTools.length > 0 ? allCustomTools : undefined
+   #+end_src
+3. Add helper ~createEscalateProxyTool()~ after ~createMCPProxyTools()~ (~line 440). It creates a ~CustomTool~ with:
+   - ~name: "escalate"~
+   - Schema from exported ~escalateSchema~
+   - ~execute()~ calls the provided callback, returns text result
+   - Follows exact pattern of ~createMCPProxyTools~
+
+*escalate.ts:*
+- Add ~export~ keyword to ~const escalateSchema~ (currently module-private)
+
+*canvas-orchestrator.ts:*
+- In ~#handleRequest~, create escalate proxy tool via ~createEscalateProxyTool()~ with a callback that:
+  1. Creates an ~AgentDefinition~ with ~name: "escalation-agent"~, ~source: "bundled"~, no tool restriction
+  2. Calls ~runSubprocess()~ with the parent's executorDefaults, same cwd, same AbortController signal
+  3. Returns ~result.output~ as the string result
+- Pass the tool via ~customTools: [escalateTool]~ in the ExecutorOptions to ~runSubprocess()~
+- Add ~"escalate"~ to the orchestrator's tool list alongside read/grep/find/lsp
+
+*** Escalation flow (step by step)
+1. QML button click sends ~{ _tier: "orchestrator", _scope: "Review this diff" }~
+2. canvas.ts ~#flushEvents~ routes to ~CANVAS_ORCHESTRATOR_CHANNEL~ at P1
+3. CanvasOrchestratorManager receives event, calls ~#handleRequest~
+4. ~#handleRequest~ creates escalate proxy tool + orchestrator agent definition
+5. Calls ~runSubprocess()~ with customTools containing the escalate tool
+6. Orchestrator agent runs, decides it needs full capabilities
+7. Orchestrator calls ~escalate~ tool with reason + assignment
+8. Escalate proxy callback spawns a full agent via second ~runSubprocess()~
+9. Full agent completes, result flows back through the callback
+10. Orchestrator receives result text, completes its turn
+11. CanvasOrchestratorManager sends result to canvas via ~this.#bridge~
+
+*** Edge cases
+- Orchestrator aborted mid-escalation: same AbortController signal cancels both. The escalate callback catches the abort and returns an error string (not throws).
+- Escalated agent fails: callback catches, returns error text. Orchestrator can report it gracefully.
+- Multiple escalations from same orchestrator: each creates a new subprocess. They run sequentially within the orchestrator's agent loop.
+
+* Phase 2: C++ Bridge Input Simulation + Protocol + Harness
+
+** ITEM C++ bridge input commands
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+*** Files
+- ~packages/qml/bridge/windowmanager.h~ (add method declarations + key map)
+- ~packages/qml/bridge/windowmanager.cpp~ (add implementations + dispatch cases)
+- No CMakeLists.txt changes needed (QMouseEvent/QKeyEvent/QWheelEvent from QtGui, transitively linked via Qt6::Quick)
+
+*** New includes in windowmanager.cpp
+#+begin_src cpp
+#include <QMouseEvent>
+#include <QKeyEvent>
+#include <QWheelEvent>
+#+end_src
+
+*** New dispatch cases (in dispatch() after "eval")
+#+begin_src cpp
+} else if (type == "click") {
+    clickInWindow(client, id, msg);
+} else if (type == "type") {
+    typeInWindow(client, id, msg["text"].toString());
+} else if (type == "press") {
+    pressKeyInWindow(client, id, msg["key"].toString(), msg["modifiers"].toString());
+} else if (type == "scroll") {
+    scrollInWindow(client, id, msg);
+}
+#+end_src
+
+*** clickInWindow implementation
+
+Two modes: coordinate-based and selector-based.
+
+#+begin_src cpp
+void WindowManager::clickInWindow(QLocalSocket *client, const QString &id, const QJsonObject &msg) {
+    auto it = m_windows.find(id);
+    if (it == m_windows.end()) { /* error event */ return; }
+
+    auto *rootWin = qobject_cast<QQuickWindow *>(it->engine->rootObjects().first());
+    if (!rootWin) { /* error: not a QQuickWindow */ return; }
+
+    double x, y;
+
+    if (msg.contains("selector")) {
+        // Selector mode: find element, compute center
+        QJsonArray items;
+        auto *rootItem = rootWin->contentItem();
+        QuerySelector sel = parseSelector(msg["selector"].toObject());
+        QJsonArray props;
+        walkTree(rootItem, sel, props, true /* includeGeometry */, 20, 0,
+                 QString(rootItem->metaObject()->className()), items);
+
+        if (items.isEmpty()) {
+            // error: no element matching selector
+            QJsonObject ev;
+            ev["type"] = "input_result";
+            ev["id"] = id;
+            ev["command"] = "click";
+            ev["success"] = false;
+            ev["error"] = "No element found matching selector";
+            writeEventToOwner(id, ev);
+            return;
+        }
+
+        QJsonObject geom = items[0].toObject()["geometry"].toObject();
+        QJsonObject scenePos = items[0].toObject()["scenePosition"].toObject();
+        x = scenePos["x"].toDouble() + geom["width"].toDouble() / 2.0;
+        y = scenePos["y"].toDouble() + geom["height"].toDouble() / 2.0;
+    } else {
+        x = msg["x"].toDouble();
+        y = msg["y"].toDouble();
+    }
+
+    QPointF pos(x, y);
+    QPointF globalPos = rootWin->mapToGlobal(pos);
+
+    QMouseEvent press(QEvent::MouseButtonPress, pos, globalPos,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QGuiApplication::sendEvent(rootWin, &press);
+
+    QMouseEvent release(QEvent::MouseButtonRelease, pos, globalPos,
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QGuiApplication::sendEvent(rootWin, &release);
+
+    QJsonObject ev;
+    ev["type"] = "input_result";
+    ev["id"] = id;
+    ev["command"] = "click";
+    ev["success"] = true;
+    ev["x"] = x;
+    ev["y"] = y;
+    writeEventToOwner(id, ev);
+}
+#+end_src
+
+*** typeInWindow implementation
+
+Types each character as a key press+release pair:
+
+#+begin_src cpp
+void WindowManager::typeInWindow(QLocalSocket *client, const QString &id, const QString &text) {
+    auto it = m_windows.find(id);
+    if (it == m_windows.end()) { /* error */ return; }
+    auto *rootWin = qobject_cast<QQuickWindow *>(it->engine->rootObjects().first());
+    if (!rootWin) { /* error */ return; }
+
+    for (const QChar &ch : text) {
+        QKeyEvent press(QEvent::KeyPress, 0, Qt::NoModifier, QString(ch));
+        QKeyEvent release(QEvent::KeyRelease, 0, Qt::NoModifier, QString(ch));
+        QGuiApplication::sendEvent(rootWin, &press);
+        QGuiApplication::sendEvent(rootWin, &release);
+    }
+
+    QJsonObject ev;
+    ev["type"] = "input_result";
+    ev["id"] = id;
+    ev["command"] = "type";
+    ev["success"] = true;
+    ev["length"] = text.length();
+    writeEventToOwner(id, ev);
+}
+#+end_src
+
+*** pressKeyInWindow implementation
+
+Uses key name lookup table:
+
+#+begin_src cpp
+static QHash<QString, int> buildKeyMap() {
+    QHash<QString, int> m;
+    m["Return"] = Qt::Key_Return;
+    m["Enter"] = Qt::Key_Enter;
+    m["Escape"] = Qt::Key_Escape;
+    m["Tab"] = Qt::Key_Tab;
+    m["Backspace"] = Qt::Key_Backspace;
+    m["Delete"] = Qt::Key_Delete;
+    m["Up"] = Qt::Key_Up;
+    m["Down"] = Qt::Key_Down;
+    m["Left"] = Qt::Key_Left;
+    m["Right"] = Qt::Key_Right;
+    m["Space"] = Qt::Key_Space;
+    m["Home"] = Qt::Key_Home;
+    m["End"] = Qt::Key_End;
+    m["PageUp"] = Qt::Key_PageUp;
+    m["PageDown"] = Qt::Key_PageDown;
+    return m;
+}
+
+void WindowManager::pressKeyInWindow(QLocalSocket *client, const QString &id,
+                                     const QString &key, const QString &modifiers) {
+    // ... window lookup ...
+    static const QHash<QString, int> keyMap = buildKeyMap();
+
+    int qtKey;
+    QString text;
+    if (key.length() == 1) {
+        qtKey = QChar(key[0]).toUpper().unicode();
+        text = key;
+    } else {
+        auto found = keyMap.constFind(key);
+        if (found == keyMap.constEnd()) {
+            // error: unknown key name
+            return;
+        }
+        qtKey = *found;
+        if (qtKey == Qt::Key_Space) text = " ";
+    }
+
+    Qt::KeyboardModifiers mods = Qt::NoModifier;
+    // Parse modifiers string if provided ("Shift", "Ctrl", "Alt", "Shift+Ctrl")
+
+    QKeyEvent press(QEvent::KeyPress, qtKey, mods, text);
+    QKeyEvent release(QEvent::KeyRelease, qtKey, mods, text);
+    QGuiApplication::sendEvent(rootWin, &press);
+    QGuiApplication::sendEvent(rootWin, &release);
+
+    // send input_result
+}
+#+end_src
+
+*** scrollInWindow implementation
+
+#+begin_src cpp
+void WindowManager::scrollInWindow(QLocalSocket *client, const QString &id, const QJsonObject &msg) {
+    // ... window lookup ...
+    QPointF pos(msg["x"].toDouble(), msg["y"].toDouble());
+    int deltaX = msg["deltaX"].toInt(0);
+    int deltaY = msg["deltaY"].toInt(0);
+    // Positive deltaY = scroll up (Qt convention)
+
+    QWheelEvent wheel(pos, rootWin->mapToGlobal(pos),
+                      QPoint(0, 0), QPoint(deltaX, deltaY),
+                      Qt::NoButton, Qt::NoModifier,
+                      Qt::NoScrollPhase, false);
+    QGuiApplication::sendEvent(rootWin, &wheel);
+
+    // send input_result
+}
+#+end_src
+
+*** Header declarations to add to windowmanager.h
+#+begin_src cpp
+// In private section, after evalInWindow:
+void clickInWindow(QLocalSocket *client, const QString &id, const QJsonObject &msg);
+void typeInWindow(QLocalSocket *client, const QString &id, const QString &text);
+void pressKeyInWindow(QLocalSocket *client, const QString &id,
+                      const QString &key, const QString &modifiers);
+void scrollInWindow(QLocalSocket *client, const QString &id, const QJsonObject &msg);
+#+end_src
+
+** ITEM Protocol types extension
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+*** File
+- ~packages/qml/src/protocol.ts~
+
+*** BridgeCommand additions (add to union)
+#+begin_src typescript
+| {
+    type: "click";
+    id: string;
+    /** Coordinate-based click */
+    x?: number;
+    y?: number;
+    /** Selector-based click (finds element, clicks center) */
+    selector?: {
+      type?: string;
+      objectName?: string;
+      visible?: boolean;
+      textContains?: string;
+    };
+  }
+| { type: "type"; id: string; text: string }
+| { type: "press"; id: string; key: string; modifiers?: string }
+| {
+    type: "scroll";
+    id: string;
+    x: number;
+    y: number;
+    /** Positive = scroll up (Qt convention). */
+    deltaX?: number;
+    /** Positive = scroll up (Qt convention). */
+    deltaY: number;
+  }
+#+end_src
+
+*** BridgeEvent addition (add to union)
+#+begin_src typescript
+| {
+    type: "input_result";
+    id: string;
+    command: "click" | "type" | "press" | "scroll";
+    success: boolean;
+    error?: string;
+    /** Click coordinates (for click commands) */
+    x?: number;
+    y?: number;
+    /** Characters typed (for type commands) */
+    length?: number;
+  }
+#+end_src
+
+** ITEM QmlTestHarness interaction methods
+:PROPERTIES:
+:EFFORT: 3h
+:END:
+
+*** File
+- ~packages/qml/src/test-harness.ts~
+
+*** New state field
+#+begin_src typescript
+#lastObservation: ObservationEntry[] | null = null;
+#+end_src
+
+*** New types (exported from test-harness.ts)
+#+begin_src typescript
+export interface ObservationEntry {
+  id: number;
+  className: string;
+  objectName: string;
+  text?: string;
+  geometry: { x: number; y: number; width: number; height: number };
+  scenePosition: { x: number; y: number };
+  enabled: boolean;
+  visible: boolean;
+}
+#+end_src
+
+*** New methods
+
+*click(selector):* Find element matching selector, send click command at its geometry center. Waits for ~input_result~.
+#+begin_src typescript
+async click(selector: QuerySelector): Promise<void> {
+  this.#ensureProcess();
+  this.#process!.send({
+    type: "click", id: TEST_WINDOW_ID,
+    selector: selector ?? {},
+  });
+  const event = await this.#process!.waitFor(
+    e => e.type === "input_result" && e.id === TEST_WINDOW_ID && (e as any).command === "click",
+    10_000,
+  );
+  const result = event as { success: boolean; error?: string };
+  if (!result.success) throw new Error(`click failed: ${result.error}`);
+}
+#+end_src
+
+*clickAt(x, y):* Coordinate-based click.
+#+begin_src typescript
+async clickAt(x: number, y: number): Promise<void> {
+  this.#ensureProcess();
+  this.#process!.send({ type: "click", id: TEST_WINDOW_ID, x, y });
+  // wait for input_result, throw on failure
+}
+#+end_src
+
+*type(text, selector?):* Type text into focused element. If selector provided, click it first to focus.
+#+begin_src typescript
+async type(text: string, selector?: QuerySelector): Promise<void> {
+  if (selector) await this.click(selector);
+  this.#ensureProcess();
+  this.#process!.send({ type: "type", id: TEST_WINDOW_ID, text });
+  // wait for input_result
+}
+#+end_src
+
+*press(key, modifiers?):* Press a named key.
+#+begin_src typescript
+async press(key: string, modifiers?: string): Promise<void> {
+  this.#ensureProcess();
+  this.#process!.send({ type: "press", id: TEST_WINDOW_ID, key, modifiers });
+  // wait for input_result
+}
+#+end_src
+
+*scroll(x, y, deltaY, deltaX?):* Scroll at position.
+
+*settle(delayMs?):* Wait for QML event loop to quiesce.
+#+begin_src typescript
+async settle(delayMs = 50): Promise<void> {
+  // Force round-trip through C++ event loop
+  await this.evaluate("true");
+  if (delayMs > 0) await Bun.sleep(delayMs);
+}
+#+end_src
+
+*observe():* Walk visual tree, return numbered interactive elements. Filters for QQuickMouseArea, QQuickTextEdit, QQuickTextInput, QQuickFlickable. Caches result for clickId().
+#+begin_src typescript
+async observe(): Promise<ObservationEntry[]> {
+  const interactiveTypes = ["QQuickMouseArea", "QQuickTextEdit", "QQuickTextInput", "QQuickFlickable"];
+  const allItems: ObservationEntry[] = [];
+  let nextId = 1;
+
+  for (const typeName of interactiveTypes) {
+    const items = await this.findItems(
+      { type: typeName, visible: true },
+      { includeGeometry: true, properties: ["text", "objectName"] },
+    );
+    for (const item of items) {
+      if (!item.geometry || item.geometry.width <= 0 || item.geometry.height <= 0) continue;
+      allItems.push({
+        id: nextId++,
+        className: item.className,
+        objectName: item.objectName,
+        text: item.properties.text as string | undefined,
+        geometry: item.geometry,
+        scenePosition: item.scenePosition ?? { x: item.geometry.x, y: item.geometry.y },
+        enabled: item.enabled,
+        visible: item.visible,
+      });
+    }
+  }
+
+  this.#lastObservation = allItems;
+  return allItems;
+}
+#+end_src
+
+*clickId(id):* Click observed element by ID. Throws if observe() not called.
+#+begin_src typescript
+async clickId(id: number): Promise<void> {
+  if (!this.#lastObservation) throw new Error("Call observe() before clickId()");
+  const entry = this.#lastObservation.find(e => e.id === id);
+  if (!entry) throw new Error(`No observed element with id ${id}`);
+  const x = entry.scenePosition.x + entry.geometry.width / 2;
+  const y = entry.scenePosition.y + entry.geometry.height / 2;
+  await this.clickAt(x, y);
+}
+#+end_src
+
+*#ensureProcess():* Private helper that throws "not set up" if process is null.
+
+*** Build bridge after changes
+After modifying the C++ code, rebuild:
+#+begin_src sh
+cd packages/qml && bun run build:bridge
+#+end_src
+
+* Phase 3: Journey DSL + PROJ-F Tests
+
+** ITEM QmlJourney DSL
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+*** File
+- ~packages/coding-agent/test/helpers/qml-journey.ts~
+
+*** Purpose
+
+Thin stateful wrapper over ~QmlTestHarness~ that reads like user journey scripts. Provides semantic methods (~agentSends~, ~expectVisible~, ~click~) that map directly to user story language.
+
+*** QmlJourney API Reference
+
+The ~QmlJourney~ class wraps ~QmlTestHarness~ for integration testing. All paths are resolved relative to the QML modes directory (~packages/coding-agent/src/modes/qml/~).
+
+*Lifecycle:*
+
+| Method | Description |
+|--------+-------------|
+| ~QmlJourney.launch(qmlFile, options?)~ | Static factory. Resolves qmlFile relative to modes/qml/, calls harness.setup(). Returns ready QmlJourney. |
+| ~teardown()~ | Calls harness.teardown(). |
+
+*Agent simulation — things the agent sends to QML:*
+
+| Method | Description |
+|--------+-------------|
+| ~agentSends(payload)~ | Sends a message to QML via bridge. This is how you simulate agent actions (adding panels, sending dashboard updates, streaming messages). Wraps ~harness.sendMessage(payload)~. |
+
+*User simulation — things the human does:*
+
+| Method | Description |
+|--------+-------------|
+| ~click(selector)~ | Find element matching selector, click its center. Wraps ~harness.click()~. |
+| ~clickAt(x, y)~ | Click at raw coordinates. |
+| ~clickId(id)~ | Click element from last ~observe()~ by ID. |
+| ~type(text, selector?)~ | Type text. Optional selector clicks first to focus. |
+| ~press(key)~ | Press named key (Return, Escape, Tab, etc.). |
+| ~scroll(selector, deltaY)~ | Scroll at element's center. |
+| ~observe()~ | Returns numbered list of interactive elements. |
+
+*Assertions — verify visual state:*
+
+| Method | Description |
+|--------+-------------|
+| ~expectVisible(selector)~ | Assert element matching selector exists, is visible, has positive dimensions. Wraps ~harness.assertVisible()~. |
+| ~expectNotFound(selector)~ | Assert no element matches. Wraps ~harness.assertNotFound()~. |
+| ~expectText(text)~ | Assert text appears somewhere in visible text elements. Uses ~harness.findVisibleText()~. |
+| ~expectTextAbsent(text)~ | Assert text does NOT appear in visible text elements. |
+
+*Utilities:*
+
+| Method | Description |
+|--------+-------------|
+| ~settle(delayMs?)~ | Wait for QML to quiesce (eval round-trip + optional delay). Default 50ms. |
+| ~screenshot(name)~ | Capture PNG. Saves to ~test/integration/screenshots/{name}~. |
+| ~findItems(selector, options?)~ | Direct access to harness.findItems() for custom assertions. |
+| ~evaluate(expression)~ | Direct access to harness.evaluate() for custom JS evaluation. |
+| ~waitForEvent(predicate, timeout?)~ | Wait for raw bridge event. For testing armed tool invocations. |
+
+*** Implementation skeleton
+#+begin_src typescript
+import * as path from "node:path";
+import { isBridgeAvailable, QmlTestHarness, type QuerySelector } from "@oh-my-pi/pi-qml";
+
+const QML_ROOT = path.resolve(import.meta.dir, "../../src/modes/qml");
+
+export class QmlJourney {
+  #harness: QmlTestHarness;
+
+  constructor(harness: QmlTestHarness) {
+    this.#harness = harness;
+  }
+
+  static async launch(
+    qmlFile: string,
+    options?: { props?: Record<string, unknown>; width?: number; height?: number },
+  ): Promise<QmlJourney> {
+    const harness = new QmlTestHarness({
+      width: options?.width ?? 1280,
+      height: options?.height ?? 800,
+    });
+    await harness.setup(path.resolve(QML_ROOT, qmlFile), options?.props);
+    return new QmlJourney(harness);
+  }
+
+  async agentSends(payload: Record<string, unknown>): Promise<void> {
+    await this.#harness.sendMessage(payload);
+  }
+
+  async click(selector: QuerySelector): Promise<void> {
+    await this.#harness.click(selector);
+  }
+
+  async clickAt(x: number, y: number): Promise<void> {
+    await this.#harness.clickAt(x, y);
+  }
+
+  async type(text: string, selector?: QuerySelector): Promise<void> {
+    await this.#harness.type(text, selector);
+  }
+
+  async press(key: string): Promise<void> {
+    await this.#harness.press(key);
+  }
+
+  async settle(delayMs?: number): Promise<void> {
+    await this.#harness.settle(delayMs);
+  }
+
+  async expectVisible(selector: QuerySelector): Promise<void> {
+    await this.#harness.assertVisible(selector);
+  }
+
+  async expectNotFound(selector: QuerySelector): Promise<void> {
+    await this.#harness.assertNotFound(selector);
+  }
+
+  async expectText(text: string): Promise<void> {
+    const texts = await this.#harness.findVisibleText();
+    if (!texts.some(t => t.includes(text))) {
+      throw new Error(`expectText: "${text}" not found in visible text. Found: ${texts.join(", ")}`);
+    }
+  }
+
+  async screenshot(name: string): Promise<string> {
+    const dir = path.resolve(import.meta.dir, "../integration/screenshots");
+    return this.#harness.screenshot(path.join(dir, name));
+  }
+
+  async observe() { return this.#harness.observe(); }
+  async clickId(id: number) { return this.#harness.clickId(id); }
+  async findItems(...args: Parameters<QmlTestHarness["findItems"]>) {
+    return this.#harness.findItems(...args);
+  }
+  async evaluate<T>(expr: string) { return this.#harness.evaluate<T>(expr); }
+
+  async teardown(): Promise<void> {
+    await this.#harness.teardown();
+  }
+}
+
+export { isBridgeAvailable };
+#+end_src
+
+** ITEM PROJ-F integration test: Chat to Canvas to Orchestrator
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+*** File
+- ~packages/coding-agent/test/integration/canvas-orchestrator-flow.test.ts~
+
+*** Tests
+1. Agent sends ~add_panel~ -> sidebar shows new panel title
+2. Click panel in sidebar -> panel content loads (verify text from loaded QML)
+3. Agent sends ~dashboard_update~ with orchestrator -> switch to dashboard panel, verify orchestrator scope visible
+4. Agent sends ~dashboard_update~ clearing orchestrator -> verify orchestrator disappears
+5. Screenshot after full flow for visual record
+
+Uses ~describe.skipIf(!isBridgeAvailable())~ pattern from existing tests.
+
+** ITEM PROJ-F integration test: Multi-canvas concurrent
+:PROPERTIES:
+:EFFORT: 1h30m
+:END:
+
+*** File
+- ~packages/coding-agent/test/integration/multi-canvas-concurrent.test.ts~
+
+*** Tests
+1. Add two panels via ~agentSends~
+2. Send independent updates to each panel (via panelId routing)
+3. Dashboard shows both orchestrators simultaneously
+4. Remove one panel -> dashboard shows only remaining orchestrator
+5. Verify panel list length in sidebar
+
+** ITEM PROJ-F integration test: Escalation flow
+:PROPERTIES:
+:EFFORT: 1h30m
+:END:
+
+*** File
+- ~packages/coding-agent/test/integration/escalation-flow.test.ts~
+
+*** Tests
+1. Agent sends ~dashboard_update~ showing orchestrator with scope
+2. Agent sends ~dashboard_update~ changing orchestrator status (simulating escalation in progress)
+3. Agent sends ~dashboard_update~ removing orchestrator + adding result to canvas via ~add_panel~ update
+4. Verify status transitions appear in dashboard
+5. Verify final result panel is navigable
+
+Note: This tests the UI's response to status messages, not actual orchestrator execution. The orchestrator infrastructure is tested separately.
+
+** ITEM PROJ-F integration test: Queue backpressure visible
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+*** File
+- ~packages/coding-agent/test/integration/queue-backpressure.test.ts~
+
+*** Tests
+1. Send ~dashboard_update~ with queue ~{ p1: 0, p2: 0, p3: 0 }~ -> verify all zeros displayed
+2. Send ~dashboard_update~ with elevated queue ~{ p1: 15, p2: 30, p3: 5 }~ -> verify numbers update
+3. Send ~dashboard_update~ with high queue ~{ p1: 0, p2: 60, p3: 0 }~ -> verify P2 count shows warning color (find text element, check color property)
+4. Send ~dashboard_update~ returning to zero -> verify reset
+
+** ITEM PROJ-F integration test: Clean shutdown
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+*** File
+- ~packages/coding-agent/test/integration/clean-shutdown.test.ts~
+
+*** Tests
+1. Add panels, send dashboard updates with orchestrators
+2. Verify full state is visible
+3. Teardown harness (simulates window close)
+4. Verify teardown completes without hanging or errors
+5. Verify no leaked processes (~harness.teardown()~ resolves cleanly)
+
+** ITEM QmlJourney API documentation
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+*** File
+- ~.spell/skills/qml-testing/SKILL.md~ (extend existing)
+
+*** Content to add
+
+Add a new section "Journey Testing" covering:
+1. QmlJourney API reference (the table from the DSL section above)
+2. Example test showing the observe -> act -> verify cycle
+3. Example test showing agentSends -> expectVisible pattern
+4. How to add new integration scenarios
+5. Screenshot capture and naming conventions
+6. Note: tests use ~skipIf(!isBridgeAvailable())~ - bridge must be built first via ~cd packages/qml && bun run build:bridge~
+
+* Verification
+
+After all items complete:
+
+1. ~cd packages/qml && bun run build:bridge~ (rebuild C++ bridge with input commands)
+2. ~bun check:ts~ (must pass, ignoring pre-existing qml-chat-panel.test.ts errors)
+3. ~bun lint:ts~ (must be clean)
+4. ~bun test packages/coding-agent/test/utils/event-bus.test.ts~ (17 tests must pass)
+5. ~bun test packages/coding-agent/test/integration/~ (all 5 PROJ-F test files must pass, or skip gracefully if bridge not built)
+6. Verify no import cycles introduced by new files
+
+* Sequencing
+
+Phase 1 and Phase 2 are independent and can be parallelized:
+- Phase 1 (orchestrator wiring) touches: orchestrators/canvas-orchestrator.ts, task/executor.ts, tools/escalate.ts, modes/qml-mode.ts, sdk.ts
+- Phase 2 (bridge input) touches: packages/qml/bridge/*.cpp, packages/qml/src/protocol.ts, packages/qml/src/test-harness.ts
+
+No file overlap. Safe to parallelize.
+
+Phase 3 (journey DSL + tests) depends on both Phase 1 and Phase 2 completing first.
+
+* Key Files Reference
+
+| File | Changes |
+|------+---------|
+| ~packages/qml/bridge/windowmanager.h~ | Add 4 input method declarations |
+| ~packages/qml/bridge/windowmanager.cpp~ | Add 4 input methods + dispatch cases + key map |
+| ~packages/qml/src/protocol.ts~ | Add click/type/press/scroll commands + input_result event |
+| ~packages/qml/src/test-harness.ts~ | Add click/clickAt/type/press/scroll/settle/observe/clickId methods |
+| ~packages/coding-agent/src/orchestrators/canvas-orchestrator.ts~ | Add #bridge field + setBridge() + escalate tool creation |
+| ~packages/coding-agent/src/task/executor.ts~ | Add customTools to ExecutorOptions + merge in runSubprocess |
+| ~packages/coding-agent/src/tools/escalate.ts~ | Export escalateSchema |
+| ~packages/coding-agent/src/modes/qml-mode.ts~ | Call setBridge/clearBridge |
+| ~packages/coding-agent/src/sdk.ts~ | Remove getBridge stub |
+| ~packages/coding-agent/test/helpers/qml-journey.ts~ | New: QmlJourney DSL |
+| ~packages/coding-agent/test/integration/*.test.ts~ | New: 5 PROJ-F test files |
+| ~.spell/skills/qml-testing/SKILL.md~ | Extend with Journey Testing section |

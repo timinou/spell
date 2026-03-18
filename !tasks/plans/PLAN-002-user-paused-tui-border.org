@@ -1,0 +1,64 @@
+#+TITLE: USER_PAUSED_TUI_BORDER
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-user-paused-tui-border
+
+* Initial Message
+
+can you put a border around windows that are user_paused (in the regular TUI) so that I can see that they are paused? Also, enable user_paused to be toggled when the ask tool is active
+
+* Problem
+
+When user_paused is active (toggled via Alt+Shift+U), there is no visual indicator in the regular TUI. The state only affects Niri overview. Users cannot see that they've paused.
+
+Additionally, the toggleUserPause keybinding (Alt+Shift+U) is registered on the editor component. When the ask tool is active, focus moves to the HookSelectorComponent or HookInputComponent, so the keybinding doesn't fire — the user cannot toggle pause while an ask dialog is showing.
+
+* Approach
+
+** ITEM Add paused border indicator to TUI
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+Add a colored top/bottom horizontal border (using DynamicBorder pattern) that appears when ~#isUserPaused~ is true. Use a distinct color (e.g., yellow/warning from theme, or add a new ~userPaused~ color).
+
+Files to modify:
+- ~packages/coding-agent/src/modes/interactive-mode.ts~: Add two DynamicBorder instances (top/bottom) as children of the main UI, shown/hidden based on ~#isUserPaused~. Add them around the main content (top border before chatContainer, bottom border after editorContainer). Toggle visibility in ~handleToggleUserPause()~.
+- ~packages/coding-agent/src/modes/theme/theme.ts~: Add ~getUserPausedBorderColor()~ method (similar to ~getPlanModeBorderColor()~). Or reuse ~warning~ color.
+- ~packages/coding-agent/src/modes/theme/dark.json~: Add ~userPaused~ color if needed (could reuse ~warning~/yellow).
+
+Alternative considered: Full box frame (left/right vertical bars on every line). Rejected — too invasive for the line-based renderer, and top/bottom colored borders are a well-established pattern in this TUI (see BorderedLoader, DynamicBorder).
+
+A small badge overlay (like PlanModeOverlay) could also be added but the horizontal borders are more visually prominent and match the "border around windows" request better.
+
+** ITEM Forward toggleUserPause keybinding to hook components
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+When the ask tool is active, focus is on HookSelectorComponent or HookInputComponent. These components' ~handleInput()~ methods don't forward unrecognized keys. The toggleUserPause keybinding (Alt+Shift+U) is never seen.
+
+Fix: In HookSelectorComponent and HookInputComponent ~handleInput()~, check for the toggleUserPause keybinding and call ~ctx.handleToggleUserPause()~ when matched. The hook components are created via ~extension-ui-controller.ts~ which has access to the context.
+
+Files to modify:
+- ~packages/coding-agent/src/modes/components/hook-selector.ts~: Accept a callback for unhandled/special keys, or accept the toggleUserPause key sequence directly. Call the pause toggle when matched.
+- ~packages/coding-agent/src/modes/components/hook-input.ts~: Same treatment.
+- ~packages/coding-agent/src/modes/controllers/extension-ui-controller.ts~: Pass the toggleUserPause callback or key binding when constructing hook components.
+
+Implementation approach: Add an ~onTogglePause~ callback to HookSelectorComponent/HookInputComponent constructors. In ~handleInput()~, check if the key matches the toggleUserPause binding (use ~matchesKey~ with the configured key). If so, call the callback. In extension-ui-controller.ts, pass ~() => this.ctx.handleToggleUserPause()~ as the callback.
+
+** ITEM Ensure border updates reactively
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+When ~#isUserPaused~ toggles (including auto-clear on agent_start), the border visibility must update. ~handleToggleUserPause()~ already calls ~ui.requestRender()~. The agent_start auto-clear (line 470) calls the niri listener but may not call ~ui.requestRender()~ — verify and add if needed. The DynamicBorder components should be added/removed from the container or use conditional rendering based on the paused state.
+
+Simplest approach: keep the borders always in the component tree but render empty lines (0 height) when not paused, or add/remove children. Prefer a ~PausedBorderComponent~ that checks ~#isUserPaused~ and renders accordingly.
+
+* Verification
+
+- Toggle Alt+Shift+U when agent is waiting for input: colored top/bottom borders appear
+- Toggle again: borders disappear
+- Start new agent run while paused: borders auto-clear
+- Open ask tool dialog, toggle Alt+Shift+U: borders toggle while ask is active
+- Run ~bun check:ts~ to verify types

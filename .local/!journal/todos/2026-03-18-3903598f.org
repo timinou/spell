@@ -1,0 +1,29 @@
+#+TITLE: Session 1497b771c5db538f Todos
+#+DATE: 2026-03-18
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE Implement full paused frame container
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Replaced top/bottom paused border components with UserPausedFrameContainer wrapper that renders purple-capable 4-sided double-line frame when paused.
+
+** DONE Allow pause toggle during pending approval
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+handleToggleUserPause now allows toggling when isPendingApproval is true; theme user paused border color switched to planMode purple.
+
+** DONE Run formatting/type checks
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+bun x biome check on both modified files passed after import order fix. bun x tsgo -p tsconfig.json completed successfully with no errors.

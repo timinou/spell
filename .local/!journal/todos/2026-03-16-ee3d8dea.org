@@ -1,0 +1,45 @@
+#+TITLE: Session 1495628629e7eeea Todos
+#+DATE: 2026-03-16
+#+TODO: ITEM DOING | DONE
+
+* Implement canvas session namespace
+
+** DONE Read existing canvas protocol/tool code and tests
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Reviewed canvas protocol, canvas tool path resolution, sdk registration, local/memory helper patterns, and existing test layout.
+
+** DONE Implement protocol namespace + URL-to-path resolver updates
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+Extended canvas protocol to stdlib+session, added root/url-path helpers, and wired session providers in sdk handler registration.
+
+** DONE Update canvas tool write/launch path resolution
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Canvas tool now resolves write paths via resolveCanvasUrlToPath(write) for canvas://session while launch/read still require existing paths; prompt updated to mention canvas://session usage.
+
+** DONE Add/adjust tests for protocol and canvas tool contracts
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+Added internal-urls canvas protocol tests and a canvas tool integration test for canvas://session write+launch flow.
+
+** DONE Run targeted tests and check:ts
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+Targeted canvas tests pass. bun check:ts fails on pre-existing qml-chat-panel.test.ts overload errors unrelated to touched files.

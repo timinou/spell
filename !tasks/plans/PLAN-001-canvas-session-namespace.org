@@ -1,0 +1,102 @@
+#+TITLE: CANVAS_SESSION_NAMESPACE
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-canvas-session-namespace
+
+* Initial Message
+
+add a namespace: canvas://session/, which are qml files that are ephemeral (saved just for this session)
+
+* Goal
+
+Add a new `canvas://session/` namespace for QML files that are session-scoped and ephemeral to the session lifecycle, while preserving existing `canvas://stdlib/` behavior.
+
+* Requirements Snapshot
+
+- User request: `canvas://session/` should hold QML files saved for this session.
+- Clarified decision: session-scoped persistence should survive process restart/resume for the same session ID.
+- Keep plan self-contained for fresh execution session.
+- No compatibility shim design; implement full cutover for the new namespace in canonical resolver paths.
+
+* Key Findings
+
+- `CanvasProtocolHandler` currently supports only `stdlib` and enforces existence before returning `sourcePath` (`packages/coding-agent/src/internal-urls/canvas-protocol.ts`).
+- `CanvasTool` write path resolution currently goes through `internalRouter.resolve(...)`, which requires file existence and therefore cannot create new files at internal URLs (`packages/coding-agent/src/tools/canvas.ts`).
+- `sdk.ts` already provides session context and registers protocol handlers; `LocalProtocolHandler` shows the established pattern for session-root derivation and a separate URL-to-path helper that does not require pre-existing files.
+- No existing canvas protocol tests cover namespace behavior today; test gap exists in `packages/coding-agent/test/internal-urls/`.
+
+* Design
+
+** Chosen approach
+
+1. Extend `CanvasProtocolHandler` to support two namespaces:
+   - `canvas://stdlib/<path>` (existing behavior, read-only built-in assets)
+   - `canvas://session/<path>` (session-root assets, read/write via tool flow)
+2. Introduce exported helper(s) in canvas protocol module analogous to local protocol:
+   - resolve canvas roots (`stdlib`, `session`)
+   - resolve `canvas://...` URL to filesystem path without requiring file existence
+3. Update `CanvasTool` path resolution so `write` uses URL-to-path resolution (create allowed), while `launch` remains existence-validated by normal resolve/read path.
+4. Keep security invariants: relative-path validation + containment checks + symlink escape protection where applicable.
+
+** Trade-offs considered
+
+- Option A: Keep using `internalRouter.resolve()` for `write` and add “create if missing” in protocol resolve.
+  - Rejected: mixes read/resolve semantics with mutation intent and weakens protocol contract.
+- Option B (chosen): add dedicated URL->path resolver utility for write paths.
+  - Accepted: preserves strict resolve semantics for reads/launch, and cleanly supports write-create flow.
+
+* File-Level Plan
+
+** ITEM Extend canvas protocol for session namespace
+*** Target files
+- `packages/coding-agent/src/internal-urls/canvas-protocol.ts`
+- `packages/coding-agent/src/sdk.ts`
+- `packages/coding-agent/src/internal-urls/index.ts` (if new exports added)
+
+*** Changes
+- Add `session` namespace handling.
+- Add options provider for session root (artifact-backed when available, fallback to tmp + sanitized session id if needed).
+- Add URL->path resolver helper for canvas URLs (no pre-existing-file requirement).
+- Preserve stdlib file existence check in `resolve()` and add equivalent checks for session reads.
+
+*** Edge handling
+- Reject unknown namespace with explicit available list.
+- Reject traversal and symlink escapes outside namespace root.
+- Ensure URL encoding errors surface clear messages.
+
+** ITEM Update canvas tool write path resolution
+*** Target files
+- `packages/coding-agent/src/tools/canvas.ts`
+
+*** Changes
+- Split path resolution by intent:
+  - write path: resolve internal canvas URL to absolute path (create allowed)
+  - launch/read path: keep existing resolve behavior requiring existing file
+- Ensure parent directories for session namespace writes are created via Bun.write behavior.
+- Keep existing behavior for absolute/relative non-URL paths.
+
+** ITEM Add tests for protocol + write/launch contract
+*** Target files
+- `packages/coding-agent/test/internal-urls/canvas-protocol.test.ts` (new)
+- `packages/coding-agent/test/tools/canvas-*.test.ts` (targeted addition or new test file)
+
+*** Test contracts
+- `canvas://session/foo.qml` resolves to session root path and supports read after write.
+- Unknown namespace and traversal attempts are rejected.
+- `canvas://session/` write path can be resolved before file exists.
+- `canvas://stdlib/` remains read-only source of built-in QML files.
+- Canvas tool write supports `canvas://session/...` and launch can open that file after write.
+
+* Verification
+
+- Run targeted tests only:
+  - `bun test packages/coding-agent/test/internal-urls/canvas-protocol.test.ts`
+  - Relevant canvas tool test file(s) updated for session URL support
+- Run package-level type/lint verification for touched package:
+  - `bun check:ts`
+
+* Implementation Notes for Next Session
+
+- Prefer reusing local protocol helper patterns instead of introducing divergent URL parsing behavior.
+- Keep namespace root derivation centralized in protocol module to avoid duplicate path logic in tools.
+- Ensure prompt/docs for canvas tool mention `canvas://session/` usage so behavior is discoverable to agent tooling.
+- If `canvas://stdlib/` currently remains writable through tool path fallback, harden by restricting write resolver to mutable namespaces only.

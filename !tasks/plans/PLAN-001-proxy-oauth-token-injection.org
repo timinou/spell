@@ -1,0 +1,108 @@
+#+TITLE: PROXY_OAUTH_TOKEN_INJECTION
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-proxy-oauth-token-injection
+
+* Initial Message
+
+i want you to find out where the ANTHROPIC_BASE_URL env var is preferred over the models .providers.anthropic.apiKey parameter. Where that happens, I want you to inject "sk-ant-oat" as the API key if providers.anthropic.proxy is true  # pragma: allowlist secret
+
+* Problem
+
+When a user configures ~providers.anthropic~ in ~models.json~ with a custom ~baseUrl~ and ~apiKey~ (for a proxy), the ~apiKey~ from ~models.json~ is stored in ~#customProviderApiKeys~ and exposed via the *fallback resolver* (tier 5 -- lowest priority in ~AuthStorage.getApiKey~). The ~ANTHROPIC_API_KEY~ env var is tier 4. So the env var always wins over the models.json config apiKey.  # pragma: allowlist secret
+
+The user wants: when ~providers.anthropic.proxy: true~, inject ~"sk-ant-oat"~ as the API key at the *highest* priority (runtime override, tier 1). This marker causes ~isAnthropicOAuthToken()~ to return true, which makes the SDK use ~Authorization: Bearer~ header instead of ~X-Api-Key~ header -- appropriate for proxy endpoints.  # pragma: allowlist secret
+
+* Key Findings (from exploration)
+
+** Auth resolution priority in ~AuthStorage.getApiKey()~
+
+1. Runtime override (~#runtimeOverrides~ -- set by CLI ~--api-key~ or ~setRuntimeApiKey~)
+2. API key from credential store (~agent.db~)
+3. OAuth token from credential store (auto-refreshed)
+4. Environment variable (~ANTHROPIC_API_KEY~ via ~getEnvApiKey~)  # pragma: allowlist secret
+5. Fallback resolver (~#customProviderApiKeys~ from ~models.json~)
+
+** Critical file paths
+
+- ~packages/coding-agent/src/config/model-registry.ts~ -- ProviderConfigSchema, #loadCustomModels, #loadModels, #reloadStaticModels
+- ~packages/ai/src/auth-storage.ts~ -- AuthStorage class with setRuntimeApiKey/removeRuntimeApiKey
+- ~packages/ai/src/utils.ts~ -- isAnthropicOAuthToken (checks for ~sk-ant-oat~)  # pragma: allowlist secret
+- ~packages/ai/src/providers/anthropic.ts~ -- buildAnthropicHeaders (uses OAuth check to choose Bearer vs X-Api-Key)
+
+** How ~sk-ant-oat~ flows  # pragma: allowlist secret
+
+1. ~ModelRegistry.getApiKey()~ -> ~AuthStorage.getApiKey()~ -> tier 1 returns ~"sk-ant-oat"~  # pragma: allowlist secret
+2. Passed as ~options.apiKey~ to ~streamAnthropic~ (via agent-loop.ts line 337)
+3. ~isAnthropicOAuthToken(apiKey)~ returns true
+4. ~buildAnthropicHeaders~ uses ~Authorization: Bearer sk-ant-oat~ (line 141-142 in anthropic.ts)  # pragma: allowlist secret
+
+** Existing ~setRuntimeApiKey~ usage
+
+Only called in ~main.ts~ (lines 654, 663) for CLI ~--api-key~ flag. The CLI flag sets it AFTER ModelRegistry construction, so CLI ~--api-key~ will naturally overwrite our proxy key for the same provider.
+
+* Approach
+
+** Decision: runtime override (tier 1)
+
+User confirmed: use ~authStorage.setRuntimeApiKey(providerName, "sk-ant-oat")~ so the proxy key always wins over stored credentials and env vars.  # pragma: allowlist secret
+
+** Design
+
+1. Add ~proxy: Type.Optional(Type.Boolean())~ to ~ProviderConfigSchema~ in model-registry.ts (line ~192)
+2. Add ~#proxyProviders: Set<string>~ field to ~ModelRegistry~ class to track which providers have proxy-originated runtime overrides
+3. In ~#loadCustomModels~ parsing loop (around line 863), when ~providerConfig.proxy~ is true, include provider name in a new ~proxyProviders~ set returned from the method
+4. In ~#loadModels~, after getting result from ~#loadCustomModels~:
+   - Clear previous proxy runtime overrides: for each provider in old ~#proxyProviders~, call ~authStorage.removeRuntimeApiKey(provider)~
+   - Update ~#proxyProviders~ with new set
+   - For each proxy provider, call ~authStorage.setRuntimeApiKey(provider, "sk-ant-oat")~  # pragma: allowlist secret
+5. Same cleanup in ~#reloadStaticModels~ (which already clears other state before calling ~#loadModels~)
+
+** Why track ~#proxyProviders~ separately
+
+~runtimeOverrides~ in AuthStorage is a flat map -- we can't distinguish keys set by ~--api-key~ from those set by proxy config. Tracking proxy providers lets us clear only proxy-originated overrides on reload, without clobbering CLI ~--api-key~ overrides for other providers.
+
+** ITEM Add ~proxy~ field to ProviderConfigSchema
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+File: ~packages/coding-agent/src/config/model-registry.ts~
+
+Add to ~ProviderConfigSchema~ (after line 208 ~authHeader~):
+#+begin_src typescript
+proxy: Type.Optional(Type.Boolean()),
+#+end_src
+
+** ITEM Add ~#proxyProviders~ tracking and runtime override injection
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: ~packages/coding-agent/src/config/model-registry.ts~
+
+1. Add field ~#proxyProviders: Set<string> = new Set()~ to ModelRegistry class (after line 611)
+2. In ~CustomModelsResult~ interface (line 358), add ~proxyProviders?: Set<string>~
+3. In ~#loadCustomModels~ parsing loop (around line 863-904), when ~providerConfig.proxy === true~, add providerName to a ~proxyProviders~ set and return it in the result
+4. In ~#loadModels~ (line 692):
+   - After getting result, before processing: clear old proxy overrides by iterating ~#proxyProviders~ and calling ~this.authStorage.removeRuntimeApiKey(provider)~
+   - Set ~this.#proxyProviders = proxyProviders ?? new Set()~
+   - For each provider in new ~#proxyProviders~, call ~this.authStorage.setRuntimeApiKey(provider, "sk-ant-oat")~  # pragma: allowlist secret
+5. In ~#reloadStaticModels~ (line 674), add ~#proxyProviders~ to the state cleared (the removal happens in #loadModels before re-applying)
+
+** ITEM Add test for proxy config
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: ~packages/coding-agent/test/model-registry.test.ts~
+
+Add test cases:
+1. When ~proxy: true~ is set for a provider, ~getApiKey~ returns ~"sk-ant-oat"~ (verifying runtime override was set)  # pragma: allowlist secret
+2. When proxy is removed on refresh, the runtime override is cleared (key falls back to normal resolution)
+3. When ~proxy: true~ and CLI ~--api-key~ is set after, the CLI key wins (since setRuntimeApiKey overwrites)
+
+* Verification
+
+- ~bun test packages/coding-agent/test/model-registry.test.ts~
+- ~bun check:ts~ (type check passes)
+- ~bun lint:ts~ (lint passes)

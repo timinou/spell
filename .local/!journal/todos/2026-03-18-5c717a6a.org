@@ -1,0 +1,29 @@
+#+TITLE: Session 14968efda6c6885e Todos
+#+DATE: 2026-03-18
+#+TODO: ITEM DOING | DONE
+
+* Verify & Commit DRAFT-008
+
+** DONE Run integration tests
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Run chat-panel test with type fixes
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Lint and type check changed files
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Commit
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

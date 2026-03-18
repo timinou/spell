@@ -1,0 +1,267 @@
+#+TITLE: FIX_PLAN_MODE_ENFORCEMENT_TOOL_LEAK
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-001-fix-plan-mode-enforcement-tool-leak
+
+* Initial Message
+
+Session 14963a22756e179f and others seem to have issues with accessing certain tools. Please list them then tell me why it doesn't have access, then allow it
+
+* Problem
+
+~enforcePlanModeToolDecision~ in ~agent-session.ts~ restricts the active tool set to ~[ask, exit_plan_mode]~ and runs a full agent loop via ~this.prompt(reminder, { synthetic: true, toolChoice: "required" })~. When the model calls ~ask~ (which blocks for user input), the agent loop continues after the user responds — still with the restricted tool set. The model then tries to use tools like ~org~, ~read~, ~bash~, etc. which are all unavailable, entering a failure spiral.
+
+Confirmed in two sessions:
+- ~14963a22756e179f~: bash worked 6 times in main loop, then after enforcement kicked in and model called ask, all subsequent tool calls failed
+- ~149642beead04abe~: org/ask worked in main loop, enforcement kicked in, model called ask, then org/read/find/bash/task all failed
+
+** Root cause
+
+The enforcement at ~agent-session.ts:3767-3812~:
+
+#+begin_src typescript
+const previousTools = this.agent.state.tools;
+this.agent.setTools(forcedTools);  // [ask, exit_plan_mode] only
+try {
+    await this.prompt(reminder, {
+        synthetic: true,
+        toolChoice: "required",
+    });
+} finally {
+    this.agent.setTools(previousTools);  // restore only AFTER entire loop finishes
+}
+#+end_src
+
+The ~prompt()~ call runs a FULL agent loop. If the model calls ~ask~ (blocking tool), the user responds, and the model generates further tool calls — those execute inside the enforcement loop where only 2 tools are available. Tools are only restored in ~finally~ after the entire loop terminates.
+
+The model also appears to hallucinate tool names not in the API definitions (calling ~bash~ when only ~ask~/~exit_plan_mode~ are defined), which is a secondary model-level issue but exacerbates the failure spiral.
+
+* Approach
+
+Restore the full tool set immediately after the enforcement prompt's first model response calls a required tool, rather than waiting for the entire loop to finish.
+
+** ITEM Fix enforcePlanModeToolDecision to restore tools after required tool is called
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+File: ~packages/coding-agent/src/session/agent-session.ts~ (lines 3767-3812)
+
+The simplest correct fix: after the synthetic prompt returns, immediately restore tools in the ~finally~ block as it does now — but ALSO ensure the enforcement prompt loop can't spiral. Two options:
+
+*** Option A: Abort after first tool result (preferred)
+
+Use the agent's abort/interrupt mechanism to stop the enforcement loop after the required tool is called. Add a listener or use ~interruptMode~ to stop the loop after the first tool execution.
+
+*** Option B: Restore tools before ask blocks
+
+Instead of running a full prompt loop, manually construct a single model call with ~toolChoice: "required"~ and handle only the first tool response. Don't let the loop continue.
+
+*** Option C: Early tool restoration via steering (simplest)
+
+After calling ~this.agent.setTools(forcedTools)~, register a one-shot callback (via the agent's tool execution events or ~getToolContext~) that restores the full tool set as soon as the required tool executes. This way the loop continues with the full tool set.
+
+Recommended: Option C or a variant — restore the full tool set inside the enforcement loop right after the first tool call completes, by monitoring tool execution events. The cleanest approach:
+
+#+begin_src typescript
+async #enforcePlanModeToolDecision(): Promise<void> {
+    // ... existing checks ...
+
+    const previousTools = this.agent.state.tools;
+    this.agent.setTools(forcedTools);
+
+    // Restore tools after first required tool executes
+    const restoreOnce = () => {
+        this.agent.setTools(previousTools);
+    };
+
+    // Listen for tool execution completion
+    const removeListener = this.agent.on("tool_execution_end", (event) => {
+        if (event.toolName === "ask" || event.toolName === "exit_plan_mode") {
+            restoreOnce();
+            removeListener();
+        }
+    });
+
+    try {
+        await this.prompt(reminder, {
+            synthetic: true,
+            expandPromptTemplates: false,
+            toolChoice: "required",
+        });
+    } finally {
+        removeListener();
+        this.agent.setTools(previousTools);
+    }
+}
+#+end_src
+
+However, the exact listener API needs to be verified. An alternative is to use ~getSteeringMessages~ or ~syncContextBeforeModelCall~ to detect tool completion and restore.
+
+Actually the simplest fix: just abort the prompt after the required tool is called. Check if the agent supports aborting mid-loop.
+
+** ITEM Verify fix with test or manual reproduction
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+- Enter plan mode in a session
+- Let the model respond without calling ask/exit_plan_mode
+- Enforcement should trigger
+- Model should call ask
+- After user responds, model should have access to all plan mode tools (org, read, find, etc.)
+
+* Key files
+
+- ~packages/coding-agent/src/session/agent-session.ts~ — ~#enforcePlanModeToolDecision()~ at line 3767
+- ~packages/agent/src/agent-loop.ts~ — agent loop execution, ~executeToolCalls~, ~syncContextBeforeModelCall~
+- ~packages/agent/src/agent.ts~ — ~setTools()~, ~prompt()~, event listeners
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ — ~enterPlanMode~ at line 790
+
+* Implementation notes
+
+- The agent event system needs to be checked for tool execution events (~tool_execution_end~ or similar)
+- ~syncContextBeforeModelCall~ reads ~this.#state.tools~ before each model call — restoring tools via ~setTools~ before the next sync would work
+- The enforcement prompt uses ~synthetic: true~ which prevents recursive enforcement
+- Must handle the case where the enforcement prompt errors/aborts — ~finally~ block must still restore tools (already handled)
+- Must verify the Anthropic API behavior: does ~tool_choice: any~ with only 2 tool definitions actually prevent other tool names? The session logs suggest the model can hallucinate names not in definitions.
+* DOING FIX_PLAN_MODE_ENFORCEMENT_TOOL_LEAK
+:PROPERTIES:
+:CUSTOM_ID: PLAN-001-fix-plan-mode-enforcement-tool-leak
+:END:
+
+* Problem
+
+~enforcePlanModeToolDecision~ in ~agent-session.ts~ restricts the active tool set to ~[ask, exit_plan_mode]~ and runs a full agent loop via ~this.prompt(reminder, { synthetic: true, toolChoice: "required" })~. When the model calls ~ask~ (which blocks for user input), the agent loop continues after the user responds — still with the restricted tool set. The model then tries to use tools like ~org~, ~read~, ~bash~, etc. which are all unavailable, entering a failure spiral.
+
+Confirmed in two sessions:
+- ~14963a22756e179f~: bash worked 6 times in main loop, then after enforcement kicked in and model called ask, all subsequent tool calls failed
+- ~149642beead04abe~: org/ask worked in main loop, enforcement kicked in, model called ask, then org/read/find/bash/task all failed
+
+** Root cause
+
+The enforcement at ~agent-session.ts:3767-3812~:
+
+#+begin_src typescript
+const previousTools = this.agent.state.tools;
+this.agent.setTools(forcedTools);  // [ask, exit_plan_mode] only
+try {
+    await this.prompt(reminder, {
+        synthetic: true,
+        toolChoice: "required",
+    });
+} finally {
+    this.agent.setTools(previousTools);  // restore only AFTER entire loop finishes
+}
+#+end_src
+
+The ~prompt()~ call runs a FULL agent loop. ~forcedTools~ is only ~[ask, exit_plan_mode]~ — if the model calls ~ask~, the user responds, and the loop continues, the model has no access to ~org~, ~task~, ~read~, or any other tool it needs to actually write the plan.
+
+* Approach
+
+Two changes:
+
+1. Expand ~forcedTools~ to include the tools the model needs to do useful work in plan mode — specifically ~org~ and task/subagent tools (~task~, ~cancel_job~, ~await~) alongside the existing ~ask~ and ~exit_plan_mode~.
+
+2. Update the enforcement reminder prompt to instruct the model to ask all necessary questions before proceeding — gathering every open decision point via ~ask~ until nothing is left undecided, then writing the plan.
+
+** ITEM Expand forced tool set in enforcePlanModeToolDecision
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+File: ~packages/coding-agent/src/session/agent-session.ts~ (lines 3786-3794)
+
+Current code builds ~forcedTools~ from only ~ask~ and ~exit_plan_mode~. Change to also pull ~org~, ~task~, ~cancel_job~, ~await~, ~todo_write~ from the registry (if present).
+
+#+begin_src typescript
+const forcedToolNames = ["ask", "exit_plan_mode", "org", "task", "cancel_job", "await", "todo_write"];
+const forcedTools = forcedToolNames
+    .map(name => this.#toolRegistry.get(name))
+    .filter((t): t is AgentTool => t !== undefined);
+
+// Still require at least ask + exit_plan_mode
+if (!forcedTools.some(t => t.name === "ask") || !forcedTools.some(t => t.name === "exit_plan_mode")) {
+    logger.warn("Plan mode enforcement skipped because ask/exit tools are unavailable", {
+        activeToolNames: this.agent.state.tools.map(tool => tool.name),
+    });
+    return;
+}
+#+end_src
+
+Also add the read-only exploration tools that plan mode needs: ~read~, ~grep~, ~find~, ~fetch~, ~web_search~, ~lsp~, ~ast_grep~, ~code_search~ (same tools available in the main plan mode tool set). This way the enforcement loop doesn't trap the model with unusable tools.
+
+The full list: ~ask~, ~exit_plan_mode~, ~org~, ~task~, ~cancel_job~, ~await~, ~todo_write~, ~read~, ~grep~, ~find~, ~fetch~, ~web_search~, ~lsp~, ~ast_grep~, ~emacs_code~.
+
+Actually, the simplest correct approach: instead of maintaining a separate allowlist, just use ~previousTools~ (the full plan mode tool set) and ensure ~ask~ and ~exit_plan_mode~ are in it. The enforcement's job is to FORCE a tool call when the model stopped without one — not to restrict what tools are available. The restriction was the bug.
+
+#+begin_src typescript
+// Ensure ask + exit_plan_mode are in the set, but keep all plan mode tools
+const forcedTools = [...previousTools];
+if (!forcedTools.some(t => t.name === "ask")) {
+    const askTool = this.#toolRegistry.get("ask");
+    if (askTool) forcedTools.push(askTool);
+}
+if (!forcedTools.some(t => t.name === "exit_plan_mode")) {
+    const exitTool = this.#toolRegistry.get("exit_plan_mode");
+    if (exitTool) forcedTools.push(exitTool);
+}
+#+end_src
+
+Then just set ~toolChoice: "required"~ to force the model to call SOME tool, and the reminder prompt guides it to call ~ask~ or ~exit_plan_mode~ specifically.
+
+** ITEM Update enforcement reminder prompt
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: ~packages/coding-agent/src/prompts/system/plan-mode-tool-decision-reminder.md~
+
+Current prompt:
+#+begin_src markdown
+<system-reminder>
+Plan mode turn ended without a required tool call.
+
+You **MUST** choose exactly one next action now:
+1. Call `{{askToolName}}` to gather required clarification, OR
+2. Call `{{exitToolName}}` to finish planning and request approval
+
+You **MUST NOT** output plain text in this turn.
+</system-reminder>
+#+end_src
+
+Updated prompt — instruct the model to exhaust all open questions before writing the plan:
+
+#+begin_src markdown
+<system-reminder>
+Plan mode turn ended without a required tool call.
+
+You **MUST** take action — do not output plain text without a tool call.
+
+If there are ANY unresolved questions, ambiguities, or decisions that could go multiple ways, you **MUST** call `{{askToolName}}` to gather clarification. Ask as many questions as necessary — keep asking until every decision in the plan is settled and no open questions remain.
+
+Once all decisions are made and you have gathered enough information, call `{{exitToolName}}` to finish planning and request approval.
+</system-reminder>
+#+end_src
+
+** ITEM Verify fix
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+- Enter plan mode in a session
+- Let the model respond without calling ask/exit_plan_mode (trigger enforcement)
+- Model should call ask — after user responds, model should still have access to org, read, find, task, etc.
+- Model should continue asking questions until satisfied, then call exit_plan_mode or org create
+
+* Key files
+
+- ~packages/coding-agent/src/session/agent-session.ts~ — ~#enforcePlanModeToolDecision()~ at line 3767
+- ~packages/coding-agent/src/prompts/system/plan-mode-tool-decision-reminder.md~ — enforcement prompt
+- ~packages/agent/src/agent-loop.ts~ — agent loop execution (no changes needed)
+- ~packages/agent/src/agent.ts~ — ~setTools()~ (no changes needed)
+
+* Implementation notes
+
+- The simplest fix is to NOT restrict tools at all — just keep ~previousTools~ (the full plan mode set) and use ~toolChoice: "required"~ to force a tool call. The reminder prompt guides the model to call ask or exit_plan_mode.
+- Remove ~this.agent.setTools(forcedTools)~ / ~this.agent.setTools(previousTools)~ dance entirely — no tool swap needed if we keep the full set.
+- The ~toolChoice: "required"~ already ensures the model must call a tool. The prompt tells it WHICH tools to prefer. The model having access to other tools is not a problem — it's the solution.

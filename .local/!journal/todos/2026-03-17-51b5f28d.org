@@ -1,0 +1,29 @@
+#+TITLE: Session 1496730a14ca1fbc Todos
+#+DATE: 2026-03-17
+#+TODO: ITEM DOING | DONE
+
+* Widget updates
+
+** DONE Add pending approval service count
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Added pendingApprovalCount property and separate pending_approval tally in _rebuildSessions().
+
+** DONE Render approval indicator in widget
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+Added ⬡ + pendingApprovalCount in both vertical Column and horizontal Row layouts, gated on pendingApprovalCount > 0, colored Theme.secondary.
+
+** DONE Verify status flow and widget wiring
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+Verified flow in code: interactive-mode now triggers #niriListener on pending approval set/clear; NiriOverviewController subscribe callback calls #writeStatusIfChanged; deriveStatus prioritizes pending_approval when isPendingApproval is true. Verified widget wiring: pendingApprovalCount computed in SpellStatusService and consumed in both Row/Column in SpellSessions.

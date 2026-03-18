@@ -1,0 +1,524 @@
+#+TITLE: FIX_TEST_FAILURES
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-fix-test-failures
+
+* Initial Message
+
+find and fix the test issues
+
+* Problem
+
+183 test failures when running =bun test= from repo root, 22 real failures when running each package individually. Broken down into:
+
+- 10 tests that fail even in isolation (genuine bugs in source or test)
+- 10 tests that fail only when run together (cross-contamination from module-level =vi.mock= / =mock.module=)
+- ~160 tests that fail only from repo root (=bun test= at root discovers ALL .test.ts files across packages in one process, maximizing mock leakage)
+
+* Root Causes
+
+** RC1: Stale ".omp" references — should be ".spell" (3 tests)
+
+Several test files reference =.omp= as the config/XDG directory name, but the codebase has standardized on =.spell= (=APP_NAME = \"spell\"=, =CONFIG_DIR_NAME = \".spell\"=).
+
+Affected tests:
+- =packages/coding-agent/test/discovery/pi-config-dir.test.ts= line 34: expects =source: \".omp\"= → should be =source: \".spell\"=. Also adjust =PI_CONFIG_DIR= value from =.config/omp= to something like =.config/custom= (to test override behavior, not the .omp name) and fix the expected path accordingly.
+- =packages/coding-agent/test/discovery/disabled-extensions.test.ts= line 21: creates =.omp/AGENTS.md= → should be =.spell/AGENTS.md=
+- =packages/coding-agent/test/plugin-extensions-discovery.test.ts= line 18: creates =$XDG_DATA_HOME/omp= → should be =$XDG_DATA_HOME/spell=
+
+** RC2: Exit-plan-mode error message mismatch (1 test)
+
+=packages/coding-agent/test/tools/exit-plan-mode.test.ts= line 76: expects substring ="Title may only contain letters, numbers, underscores, or hyphens."= but source (=packages/coding-agent/src/tools/exit-plan-mode.ts= line 37) now says ="Title may only contain letters, numbers, underscores, hyphens, or dots."=
+
+Fix: Update test expectation to include "or dots".
+
+** RC3: Google schema sanitizer mishandles property named "properties" (1 test)
+
+=packages/ai/src/utils/schema/sanitize-google.ts= line 112-115: When the sanitizer is inside a =properties= map (where keys are property names, not schema keywords) and encounters a property literally named ="properties"=, it incorrectly sets =insideProperties: true= for the recursion into that property's schema value. This means the schema keywords inside the =properties= parameter's type definition (like =patternProperties=) are mistakenly treated as property names and NOT stripped.
+
+The =org= tool has a parameter called =properties= (=Type.Record(Type.String(), Type.String())=) which generates =patternProperties=. After sanitization, =patternProperties= survives because of this bug.
+
+Fix in =sanitize-google.ts= line 114: change =insideProperties: key === \"properties\"= to =insideProperties: key === \"properties\" && !options.insideProperties=. When we're already inside properties (processing property names), recursing into a property value should return to schema mode, not stay in property-name mode.
+
+The provider-schema-compatibility test (=packages/coding-agent/test/tools/provider-schema-compatibility.test.ts=) should then pass without changes.
+
+** RC4: QML evaluate does not expose component IDs or context properties (3 tests)
+
+=packages/coding-agent/test/modes/qml-canvas-structured-input.test.ts= lines 81, 102, 115: Tests call =harness.evaluate(\"canvas.submitPromptResponse(...)\")= and =harness.evaluate(\"bridge.send(...)\")=. But the bridge's =evalInWindow= (=packages/qml/bridge/windowmanager.cpp= line 457-476) uses =QJSEngine::evaluate()= which only has access to the JS global scope. It injects =root= but not QML component IDs (=canvas=) or context properties (=bridge=).
+
+Fix in =packages/qml/bridge/windowmanager.cpp= =evalInWindow()=:
+1. Also inject =bridge= from the root context: =globalObj.setProperty(\"bridge\", jsEngine->newQObject(it->bridge))= (the bridge object is already stored in the window info struct)
+2. For QML =id=-bound children: iterate root's children and inject any named ones, OR use =QQmlExpression= instead of =QJSEngine::evaluate()= to run expressions in the QML context scope (where IDs are visible)
+
+Simplest approach: Use =QQmlExpression= which runs in the proper QML context:
+#+begin_src cpp
+QQmlExpression expr(it->engine->rootContext(), root, expression);
+QVariant result = expr.evaluate();
+#+end_src
+This makes both QML =id= references and context properties (=bridge=) accessible.
+
+Also clean up: delete the old =root= global injection if using =QQmlExpression=.
+
+** RC5: QML WM-close test times out (1 test)
+
+=packages/coding-agent/test/tools/canvas-wm-close.test.ts=: "WM close without prior close event" times out at 5s. This test simulates a window manager closing the window without the agent sending a close command first. The bridge's event handling may have a race condition where the =closed= state isn't emitted/detected.
+
+Investigate in =packages/qml/bridge/windowmanager.cpp= how WM-initiated close events (=QWindow::close()= or =QCloseEvent=) propagate. Verify the test harness properly simulates this case. May need to increase timeout or fix event propagation.
+
+** RC6: llama.cpp health check too permissive (1 test)
+
+=packages/ai/test/context-overflow.test.ts= line 574: The skip guard checks =curl http://localhost:8081/health=, but port 8081 is occupied by an =audio-forwarder= process that responds to =/health= with "OK". Test runs and fails because the server isn't actually llama.cpp.
+
+Fix: Make the health check more specific. Use =/v1/models= endpoint and verify it returns valid JSON with a =data= array (llama.cpp specific), or check response headers for llama.cpp identification.
+
+** RC7: Cross-contamination from module-level vi.mock (10 tests)
+
+File-level =vi.mock()= and =mock.module()= permanently replace modules for the entire =bun test= process. =vi.restoreAllMocks()= only restores =spyOn= mocks, not module mocks.
+
+Contamination sources identified:
+- =packages/coding-agent/test/commit-agentic-attribution.test.ts= line 9: =vi.mock(\"../src/sdk\")= → poisons =sdk-mcp-discovery.test.ts= and =sdk-session-isolation.test.ts=
+- =packages/ai/test/auth-storage-api-key-login.test.ts= line 7: =vi.mock(\"../src/utils/oauth/kagi\")= → poisons =kagi-login.test.ts=
+- =packages/emacs/test/startEmacsDaemon.test.ts= line 6-10: =mock.module(\"../src/daemon\")= → poisons =daemon-survival.test.ts=
+- =packages/coding-agent/test/task/worktree.test.ts= line 6: =vi.mock(\"@oh-my-pi/pi-natives\")= → poisons =theme-auto-detection.test.ts=
+
+Fix approach: Convert =vi.mock()= calls to =spyOn()= on the imported module where possible. For cases where full module replacement is needed, restructure the test to use dependency injection or accept test isolation boundaries.
+
+Alternatively, if the pattern is pervasive and hard to refactor, add =bunfig.toml= test configuration to run test files in separate workers: =[test]= / =preload= or use Bun's =--isolate= test runner flag if available.
+
+** The ~160 repo-root failures
+
+These are caused by running =bun test= from the monorepo root, which discovers ALL test files across all packages in a single process. This maximizes module mock leakage. The official way to run tests is =bun run test= (which uses =bun run --workspaces --if-present --parallel test= to run each package's test script in its own process). No fix needed for these beyond fixing RC7.
+
+* Implementation Plan
+
+** ITEM Fix stale .omp references in test files (RC1)
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+Files:
+- =packages/coding-agent/test/discovery/pi-config-dir.test.ts=: Change expected =source= from =".omp"= to =".spell"=, and update =PI_CONFIG_DIR= test value and expected path to match
+- =packages/coding-agent/test/discovery/disabled-extensions.test.ts=: Change =.omp= to =.spell= on line 21
+- =packages/coding-agent/test/plugin-extensions-discovery.test.ts=: Change ="omp"= to ="spell"= on line 18
+
+** ITEM Fix exit-plan-mode error message (RC2)
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+File: =packages/coding-agent/test/tools/exit-plan-mode.test.ts= line 76
+
+Change expected string from ="Title may only contain letters, numbers, underscores, or hyphens."= to ="Title may only contain letters, numbers, underscores, hyphens, or dots."=
+
+** ITEM Fix Google schema sanitizer insideProperties bug (RC3)
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+File: =packages/ai/src/utils/schema/sanitize-google.ts= line 114
+
+Change:
+#+begin_src typescript
+insideProperties: key === \"properties\",
+#+end_src
+To:
+#+begin_src typescript
+insideProperties: key === \"properties\" && !options.insideProperties,
+#+end_src
+
+This ensures that when we're already inside a =properties= map (where keys are property names), recursing into a property value named "properties" correctly returns to schema-keyword mode.
+
+Verify: Run =bun test packages/coding-agent/test/tools/provider-schema-compatibility.test.ts=
+Also add a unit test in =packages/ai/test/schema-helpers.test.ts= for this edge case.
+
+** ITEM Fix QML evalInWindow to use QQmlExpression (RC4)
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/qml/bridge/windowmanager.cpp= function =evalInWindow= (line 457)
+
+Replace =QJSEngine::evaluate()= with =QQmlExpression=:
+#+begin_src cpp
+void WindowManager::evalInWindow(QLocalSocket *client, const QString &id, const QString &expression) {
+    const auto it = m_windows.constFind(id);
+    if (it == m_windows.constEnd()) {
+        QJsonObject ev;
+        ev["type"] = "error";
+        ev["id"] = id;
+        ev["message"] = "Window not found: " + id;
+        writeEvent(client, ev);
+        return;
+    }
+
+    QObject *root = it->engine->rootObjects().first();
+    QQmlExpression expr(it->engine->rootContext(), root, expression);
+    bool valueIsUndefined = false;
+    QVariant resultVariant = expr.evaluate(&valueIsUndefined);
+
+    QJsonObject ev;
+    ev["type"] = "eval_result";
+    ev["id"] = id;
+    if (expr.hasError()) {
+        ev["error"] = expr.error().toString();
+        ev["value"] = QJsonValue::Null;
+    } else {
+        ev["error"] = QJsonValue::Null;
+        ev["value"] = QJsonValue::fromVariant(resultVariant);
+    }
+    writeEvent(client, ev);
+}
+#+end_src
+
+Need to add =#include <QQmlExpression>= at the top.
+
+This approach evaluates expressions in the QML context scope, making both =id=-bound components (=canvas=) and context properties (=bridge=) accessible.
+
+After building the bridge (=cd packages/qml && bun run build:bridge=), verify: =bun test packages/coding-agent/test/modes/qml-canvas-structured-input.test.ts=
+
+** ITEM Fix QML WM-close event handling (RC5)
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/test/tools/canvas-wm-close.test.ts= and possibly =packages/qml/bridge/windowmanager.cpp=
+
+Investigation needed during implementation:
+1. Read the full test to understand what "WM close without prior close event" simulates
+2. Check how the bridge handles =QCloseEvent= from the window manager
+3. Determine if the bridge emits a =closed= event when the WM closes the window
+4. Fix either the bridge (if it's not emitting the event) or the test (if it's not waiting correctly)
+
+** ITEM Fix llama.cpp health check (RC6)
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+File: =packages/ai/test/context-overflow.test.ts= line 574
+
+Replace generic health check with llama.cpp-specific check:
+#+begin_src typescript
+try {
+    const response = execSync("curl -s --max-time 2 http://localhost:8081/v1/models", { encoding: "utf-8" });
+    const parsed = JSON.parse(response);
+    llamaCppRunning = Array.isArray(parsed?.data);
+} catch {
+    llamaCppRunning = false;
+}
+#+end_src
+
+** ITEM Fix module mock cross-contamination (RC7)
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+Convert module-level =vi.mock= to =spyOn= where possible:
+
+1. =packages/coding-agent/test/commit-agentic-attribution.test.ts= (line 9-15): Replace =vi.mock(\"../src/sdk\")= with =spyOn(sdkModule, \"createAgentSession\")= in =beforeEach=. The module is already imported as =* as sdkModule=.
+
+2. =packages/ai/test/auth-storage-api-key-login.test.ts= (line 7-9): Replace =vi.mock(\"../src/utils/oauth/kagi\")= with =spyOn= on the imported module. Import as =* as kagiModule= and =spyOn(kagiModule, \"loginKagi\")= in =beforeEach=.
+
+3. =packages/emacs/test/startEmacsDaemon.test.ts= (line 6-10): Uses =mock.module= on both =../src/detection= and =../src/daemon=. This is harder to convert since the entire module is replaced. Options:
+   - Refactor to use dependency injection
+   - Accept test isolation and ensure this file runs alone
+   - Use =beforeEach= / =afterEach= with =mock.module= if Bun supports scoped module mocks
+
+4. =packages/coding-agent/test/task/worktree.test.ts= (line 6): =vi.mock(\"@oh-my-pi/pi-natives\")= — similar approach, convert to =spyOn= on specific functions used.
+
+For each file: verify the converted tests pass in isolation AND in combination with the previously-contaminated tests.
+
+* Verification
+
+After all fixes:
+1. Run each package in isolation: =bun test packages/<pkg>/test/= — expect 0 failures
+2. Run all packages together: =bun test packages/coding-agent/test/ packages/ai/test/ packages/tui/test/ packages/emacs/test/ packages/agent/test/ packages/utils/test/ packages/qml/test/ packages/natives/test/= — expect 0 failures
+3. Run official test command: =bun run test= — expect 0 failures (modulo the native build step)
+4. Run type checker: =bun check:ts= — expect clean
+
+* Key Files Reference
+
+| File | Change |
+|---+---|
+| =packages/coding-agent/test/discovery/pi-config-dir.test.ts= | .omp → .spell |
+| =packages/coding-agent/test/discovery/disabled-extensions.test.ts= | .omp → .spell |
+| =packages/coding-agent/test/plugin-extensions-discovery.test.ts= | omp → spell |
+| =packages/coding-agent/test/tools/exit-plan-mode.test.ts= | Update error message expectation |
+| =packages/ai/src/utils/schema/sanitize-google.ts= | Fix insideProperties recursion bug |
+| =packages/qml/bridge/windowmanager.cpp= | Use QQmlExpression for eval |
+| =packages/ai/test/context-overflow.test.ts= | Stricter llama.cpp health check |
+| =packages/coding-agent/test/commit-agentic-attribution.test.ts= | vi.mock → spyOn |
+| =packages/ai/test/auth-storage-api-key-login.test.ts= | vi.mock → spyOn |
+| =packages/emacs/test/startEmacsDaemon.test.ts= | Fix mock leakage |
+| =packages/coding-agent/test/task/worktree.test.ts= | vi.mock → spyOn |
+| =packages/coding-agent/test/tools/canvas-wm-close.test.ts= | Fix WM close event handling |
+* ITEM Fix Test Failures Across Spell Monorepo
+:PROPERTIES:
+:CUSTOM_ID: DRAFT-007-fix-test-failures-across-spell-monorepo
+:EFFORT: 3h
+:PRIORITY: #A
+:LAYER: test
+:END:
+
+* Summary
+
+22 real test failures across the monorepo (10 fail in isolation, 10 from mock contamination, ~160 from running =bun test= at repo root which merges all packages into one process — same root cause as the mock contamination). User decisions on each ambiguity are recorded below.
+
+* Decisions Made
+
+| Issue | Decision |
+|---+---|
+| PI_CONFIG_DIR source name | Always =.spell= — source is canonical brand name, PI_CONFIG_DIR only changes the path |
+| Schema sanitizer vs org tool | Fix the sanitizer only — the bug is real and general |
+| QML evalInWindow | Switch to =QQmlExpression= — evaluates in QML context where IDs and context properties are visible |
+| WM-close test timeout | Investigate and fix — if the bridge doesn't handle WM close properly, that's a real bug |
+| Mock contamination | Fix all 4 sources — convert =vi.mock= to =spyOn= where possible, restructure where needed |
+| llama.cpp health check | Use env var for llama.cpp URL so it doesn't collide with other services |
+
+* Fixes
+
+** ITEM Fix stale .omp references in test files
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+Three test files use =.omp= but the codebase has standardized on =.spell= (=APP_NAME = \"spell\"=, =CONFIG_DIR_NAME = \".spell\"=).
+
+Files to change:
+
+1. =packages/coding-agent/test/discovery/pi-config-dir.test.ts=
+   - Line 19: change =PI_CONFIG_DIR = \".config/omp\"= to =PI_CONFIG_DIR = \".config/custom-spell\"= (tests the override, not the old name)
+   - Line 27: update expected path from =.config/omp/agent= to =.config/custom-spell/agent=
+   - Line 31: same PI_CONFIG_DIR change
+   - Line 33: update expected path
+   - Line 34: change =source: \".omp\"= to =source: \".spell\"= (source is always the canonical brand name)
+
+2. =packages/coding-agent/test/discovery/disabled-extensions.test.ts=
+   - Line 21: change =.omp= to =.spell= in =fs.mkdir= call
+   - Line 22: change =.omp= to =.spell= in =fs.writeFile= call
+
+3. =packages/coding-agent/test/plugin-extensions-discovery.test.ts=
+   - Line 18: change =path.join(tempXdgDataHome, \"omp\")= to =path.join(tempXdgDataHome, \"spell\")=
+
+** ITEM Fix exit-plan-mode error message expectation
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+
+=packages/coding-agent/test/tools/exit-plan-mode.test.ts= line 76: Test expects ="Title may only contain letters, numbers, underscores, or hyphens."= but source at =packages/coding-agent/src/tools/exit-plan-mode.ts= line 37 says ="Title may only contain letters, numbers, underscores, hyphens, or dots."=
+
+Fix: Update expected string to include "or dots".
+
+** ITEM Fix Google schema sanitizer insideProperties bug
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+Bug in =packages/ai/src/utils/schema/sanitize-google.ts= line 114.
+
+When processing a =properties= map (keys are property names, not schema keywords), encountering a property literally named ="properties"= incorrectly sets =insideProperties: true= for recursion into that property's schema value. This means schema keywords like =patternProperties= inside the value are mistakenly treated as property names and NOT stripped.
+
+The =org= tool has a parameter called =properties= (=Type.Record(Type.String(), Type.String())= at =packages/coding-agent/src/tools/org.ts= line 38) which generates =patternProperties=. After sanitization, =patternProperties= survives.
+
+Fix at line 114: change
+#+begin_src typescript
+insideProperties: key === "properties",
+#+end_src
+to
+#+begin_src typescript
+insideProperties: key === "properties" && !options.insideProperties,
+#+end_src
+
+When already inside properties (property-name mode), recursing into a property value must return to schema-keyword mode.
+
+Add a test in =packages/ai/test/schema-helpers.test.ts= or =packages/ai/test/google-gemini-cli-alignment.test.ts= for this edge case: a schema with =properties: { properties: { type: \"object\", patternProperties: { ... } } }= should have =patternProperties= stripped after Google sanitization.
+
+Verify: =bun test packages/coding-agent/test/tools/provider-schema-compatibility.test.ts= passes.
+
+** ITEM Fix QML evalInWindow to use QQmlExpression
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+=packages/qml/bridge/windowmanager.cpp= function =evalInWindow= (line 457-486).
+
+Currently uses =QJSEngine::evaluate()= which runs in the global JS scope — only =root= is injected. QML component IDs (=canvas=) and context properties (=bridge=) are NOT accessible.
+
+Replace with =QQmlExpression= which evaluates in the QML context scope:
+
+#+begin_src cpp
+#include <QQmlExpression>
+
+void WindowManager::evalInWindow(QLocalSocket *client, const QString &id, const QString &expression) {
+    const auto it = m_windows.constFind(id);
+    if (it == m_windows.constEnd()) {
+        QJsonObject ev;
+        ev["type"] = "error";
+        ev["id"] = id;
+        ev["message"] = "Window not found: " + id;
+        writeEvent(client, ev);
+        return;
+    }
+
+    QObject *root = it->engine->rootObjects().first();
+    QQmlExpression expr(it->engine->rootContext(), root, expression);
+    bool valueIsUndefined = false;
+    QVariant resultVariant = expr.evaluate(&valueIsUndefined);
+
+    QJsonObject ev;
+    ev["type"] = "eval_result";
+    ev["id"] = id;
+    if (expr.hasError()) {
+        ev["error"] = expr.error().toString();
+        ev["value"] = QJsonValue::Null;
+    } else {
+        ev["error"] = QJsonValue::Null;
+        ev["value"] = QJsonValue::fromVariant(resultVariant);
+    }
+    writeEvent(client, ev);
+}
+#+end_src
+
+After editing, rebuild bridge: =cd packages/qml && bun run build:bridge=
+
+Verify: =bun test packages/coding-agent/test/modes/qml-canvas-structured-input.test.ts= — all 3 previously failing tests should pass.
+
+** ITEM Fix QML WM-close event handling
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+=packages/coding-agent/test/tools/canvas-wm-close.test.ts= line 51-58 times out (5s) waiting for =closed= event.
+
+The test calls =bridge.close(\"wm-test2\")= which sends ={ type: \"close\" }= to the C++ bridge. The bridge's =closeWindow()= (=windowmanager.cpp= line 212-225) does:
+1. =delete it->engine= — deletes the QML engine
+2. =m_windows.remove(id)= — removes from map
+3. =writeEvent(...)= — sends =closed= event
+
+Suspected issue: On the offscreen QML platform (=QT_QPA_PLATFORM=offscreen=), =delete it->engine= may not complete synchronously or may block, preventing the =closed= event from being written/flushed.
+
+Investigation approach:
+1. Add stderr logging in =closeWindow()= before and after =delete it->engine= to confirm it reaches the writeEvent call
+2. Check if =fflush(stdout)= in =writeEvent= is being called (the test uses stdio mode, not daemon sockets)
+3. If engine deletion is the culprit, try deferring it: emit the closed event first, then delete the engine via =QTimer::singleShot(0, ...)= or =engine->deleteLater()=
+
+Likely fix: Change line 217 from =delete it->engine= to =it->engine->deleteLater()= and move the map removal + event write before the deletion. This lets Qt clean up the engine asynchronously while the =closed= event reaches the client immediately:
+
+#+begin_src cpp
+void WindowManager::closeWindow(QLocalSocket *client, const QString &id) {
+    auto it = m_windows.find(id);
+    if (it == m_windows.end()) return;
+
+    QLocalSocket *owner = it->owner;
+    QQmlApplicationEngine *engine = it->engine;
+    m_windows.remove(id);
+
+    QJsonObject ev;
+    ev["type"] = "closed";
+    ev["id"] = id;
+    writeEvent(owner ? owner : client, ev);
+
+    engine->deleteLater();  // deferred cleanup
+}
+#+end_src
+
+Verify: =bun test packages/coding-agent/test/tools/canvas-wm-close.test.ts= — both tests should pass.
+
+** ITEM Fix llama.cpp health check with env var
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+=packages/ai/test/context-overflow.test.ts= line 573-578: Port 8081 is occupied by an =audio-forwarder= process that fools the generic health check.
+
+Fix:
+1. Add an env var for the llama.cpp URL (e.g. =LLAMA_CPP_URL= or =LLAMA_CPP_BASE_URL=)
+2. Default to =http://localhost:8081/v1= if not set
+3. Make the health check use =/v1/models= and verify it returns valid JSON with a =data= array (llama.cpp specific response shape)
+
+#+begin_src typescript
+const llamaCppBaseUrl = process.env.LLAMA_CPP_BASE_URL ?? "http://localhost:8081/v1";
+let llamaCppRunning = false;
+try {
+    const response = execSync(`curl -s --max-time 2 ${llamaCppBaseUrl}/models`, { encoding: "utf-8" });
+    const parsed = JSON.parse(response);
+    llamaCppRunning = Array.isArray(parsed?.data);
+} catch {
+    llamaCppRunning = false;
+}
+#+end_src
+
+Also update the model definition (line 587) to use =llamaCppBaseUrl= instead of hardcoded URL.
+
+** ITEM Fix module mock cross-contamination (all 4 sources)
+:PROPERTIES:
+:EFFORT: 45m
+:END:
+
+File-level =vi.mock()= and =mock.module()= permanently replace modules for the entire bun test process. =vi.restoreAllMocks()= only restores =spyOn= mocks, not module mocks.
+
+*** Source 1: =packages/coding-agent/test/commit-agentic-attribution.test.ts=
+
+Lines 9-15: =vi.mock(\"../src/sdk\")= and =vi.mock(\"../src/commit/agentic/tools\")=
+
+The module is already imported as =* as sdkModule= (line 6) and =* as toolsModule= (line 4).
+
+Fix: Remove the =vi.mock= calls. Use =spyOn= in =beforeEach=:
+#+begin_src typescript
+beforeEach(() => {
+    spyOn(sdkModule, "createAgentSession").mockResolvedValue(/* mock session */);
+    spyOn(toolsModule, "createCommitTools").mockReturnValue([]);
+});
+afterEach(() => {
+    vi.restoreAllMocks();
+});
+#+end_src
+
+Check the test body to ensure the mock shapes match what the test expects.
+
+*** Source 2: =packages/ai/test/auth-storage-api-key-login.test.ts=
+
+Line 7-9: =vi.mock(\"../src/utils/oauth/kagi\")=
+
+Fix: Import as namespace and use =spyOn=:
+#+begin_src typescript
+import * as kagiModule from "../src/utils/oauth/kagi";
+
+// In beforeEach:
+spyOn(kagiModule, "loginKagi").mockResolvedValueOnce("test-key");
+#+end_src
+
+The test already imports =loginKagi= directly (line 12) — after converting to =spyOn=, the direct import should still work because =spyOn= patches the module object.
+
+*** Source 3: =packages/emacs/test/startEmacsDaemon.test.ts=
+
+Lines 6-10: =mock.module(\"../src/detection\")= and =mock.module(\"../src/daemon\")=
+
+This is harder — the entire module is replaced. Two options:
+- A: Refactor the tested function to accept dependencies as parameters (dependency injection)
+- B: Convert to =spyOn= on the namespace imports
+
+Read the test and source more carefully during implementation. If the functions are simple enough (e.g. =detectEmacs= returns a path, =startEmacsSession= is the main function), =spyOn= on namespace imports should work.
+
+*** Source 4: =packages/coding-agent/test/task/worktree.test.ts=
+
+Line 6: =vi.mock(\"@oh-my-pi/pi-natives\")=
+
+Fix: Import as namespace and =spyOn= on the specific functions the test uses.
+
+For all 4: After converting, verify each test still passes individually AND in combination with its previously-contaminated targets:
+- =commit-agentic-attribution.test.ts= + =sdk-mcp-discovery.test.ts= + =sdk-session-isolation.test.ts=
+- =auth-storage-api-key-login.test.ts= + =kagi-login.test.ts=
+- =startEmacsDaemon.test.ts= + =daemon-survival.test.ts=
+- =worktree.test.ts= + =theme-auto-detection.test.ts=
+
+* Verification
+
+After all fixes, run in this order:
+
+1. Each affected test in isolation — every test file mentioned above should pass
+2. Full package test suites:
+   - =bun test packages/ai/test/= — 0 failures
+   - =bun test packages/coding-agent/test/= — 0 failures
+   - =bun test packages/tui/test/= — 0 failures
+   - =bun test packages/emacs/test/= — 0 failures
+3. Cross-package combined: =bun test packages/coding-agent/test/ packages/ai/test/ packages/tui/test/ packages/emacs/test/ packages/agent/test/ packages/utils/test/ packages/qml/test/ packages/natives/test/= — 0 failures
+4. Type checker: =bun check:ts= — clean
