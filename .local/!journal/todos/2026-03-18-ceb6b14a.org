@@ -4,18 +4,18 @@
 
 * Wave 1: CLI Migration
 
-** DOING PROJ-1: Replace --qml with --canvas [name]
+** DONE PROJ-1: Replace --qml with --canvas [name]
 :PROPERTIES:
 :TASK_ID: task-1
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
 * Wave 2: Core Modules (parallel)
 
-** ITEM PROJ-2: Orchestration module
+** DOING PROJ-2: Orchestration module
 :PROPERTIES:
 :TASK_ID: task-2
-:STATUS: pending
+:STATUS: in_progress
 :END:
 
 ** ITEM PROJ-3: Planning agent prompt + schema
