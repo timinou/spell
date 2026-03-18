@@ -52,17 +52,20 @@ Item {
 
             Rectangle {
                 id: statusDot
-                width: 8
-                height: 8
-                radius: 4
+                width: 10
+                height: 10
+                radius: 5
                 color: root.stateColor(root.currentState)
+                border.width: 1
+                border.color: SpellUI.SpellTheme.borderSubtle
             }
 
             Text {
                 text: root.displayLabel
                 color: SpellUI.SpellTheme.textPrimary
                 font.family: SpellUI.SpellTheme.fontFamily
-                font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
+                font.pixelSize: SpellUI.SpellTheme.fontSizeM
+                font.weight: SpellUI.SpellTheme.fontWeightMedium
                 Layout.fillWidth: true
                 elide: Text.ElideRight
             }
@@ -72,7 +75,7 @@ Item {
                 text: root.elapsedText
                 color: SpellUI.SpellTheme.textSecondary
                 font.family: SpellUI.SpellTheme.monoFontFamily
-                font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
+                font.pixelSize: SpellUI.SpellTheme.fontSizeXS
                 horizontalAlignment: Text.AlignRight
             }
         }
@@ -82,9 +85,9 @@ Item {
             text: root.detailText
             color: SpellUI.SpellTheme.textSecondary
             font.family: SpellUI.SpellTheme.fontFamily
-            font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
+            font.pixelSize: SpellUI.SpellTheme.fontSizeS
             Layout.fillWidth: true
-            Layout.leftMargin: 8 + SpellUI.SpellTheme.spacingS
+            Layout.leftMargin: 10 + SpellUI.SpellTheme.spacingS
             elide: Text.ElideRight
         }
     }
@@ -99,7 +102,7 @@ Item {
             property: "opacity"
             from: 1.0
             to: 0.3
-            duration: SpellUI.SpellTheme.mediumDuration
+            duration: SpellUI.SpellTheme.durationMedium
         }
 
         NumberAnimation {
@@ -107,7 +110,7 @@ Item {
             property: "opacity"
             from: 0.3
             to: 1.0
-            duration: SpellUI.SpellTheme.mediumDuration
+            duration: SpellUI.SpellTheme.durationMedium
         }
 
         onRunningChanged: {

@@ -14,7 +14,9 @@ Item {
 
     // Build flat line list from hunks for display
     property var flatLines: {
-        if (!diffData || !diffData.hunks) return []
+        if (!diffData || !diffData.hunks)
+            return []
+
         var result = []
         var lineNum = 0
         for (var h = 0; h < diffData.hunks.length; h++) {
@@ -25,6 +27,8 @@ Item {
             for (var l = 0; l < lines.length; l++) {
                 result.push({ type: lines[l].type || "context", text: lines[l].text || "", hunkIndex: h, lineIndex: lineNum++ })
             }
+            if (h < diffData.hunks.length - 1)
+                result.push({ type: "separator", hunkIndex: h })
         }
         return result
     }
@@ -38,124 +42,220 @@ Item {
         Rectangle {
             visible: diffData && diffData.filename
             Layout.fillWidth: true
-            height: 32
-            color: SpellUI.SpellTheme.surfaceHigher
-            radius: SpellUI.SpellTheme.cornerRadius
+            height: 38
+            color: SpellUI.SpellTheme.surface1
             objectName: "diffFilenameHeader"
 
-            Text {
-                anchors { fill: parent; margins: 8 }
-                text: diffData ? (diffData.filename || "") : ""
-                color: SpellUI.SpellTheme.textPrimary
-                font.family: SpellUI.SpellTheme.monoFontFamily
-                font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                font.bold: true
-                verticalAlignment: Text.AlignVCenter
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: SpellUI.SpellTheme.borderSubtle
+            }
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: SpellUI.SpellTheme.spacingS
+                anchors.rightMargin: SpellUI.SpellTheme.spacingS
+                spacing: SpellUI.SpellTheme.spacingS
+
+                Text {
+                    text: "▎"
+                    color: SpellUI.SpellTheme.textSecondary
+                    font.family: SpellUI.SpellTheme.fontFamily
+                    font.pixelSize: SpellUI.SpellTheme.fontSizeM
+                    font.weight: SpellUI.SpellTheme.fontWeightSemiBold
+                    Layout.alignment: Qt.AlignVCenter
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: diffData ? (diffData.filename || "") : ""
+                    color: SpellUI.SpellTheme.textPrimary
+                    font.family: SpellUI.SpellTheme.fontFamily
+                    font.pixelSize: SpellUI.SpellTheme.fontSizeM
+                    font.weight: SpellUI.SpellTheme.fontWeightSemiBold
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
             }
         }
 
         // No-changes indicator
-        Text {
+        Item {
             visible: flatLines.length === 0
-            text: "No changes"
-            color: SpellUI.SpellTheme.textTertiary
-            font.family: SpellUI.SpellTheme.fontFamily
-            font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-            Layout.alignment: Qt.AlignHCenter
-            Layout.topMargin: SpellUI.SpellTheme.spacingL
+            Layout.fillWidth: true
+            Layout.preferredHeight: 92
             objectName: "noChangesIndicator"
+
+            Column {
+                anchors.centerIn: parent
+                spacing: SpellUI.SpellTheme.spacingS
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "No changes"
+                    color: SpellUI.SpellTheme.textSecondary
+                    font.family: SpellUI.SpellTheme.fontFamily
+                    font.pixelSize: SpellUI.SpellTheme.fontSizeM
+                }
+            }
         }
 
-        // Diff lines
-        ListView {
-            id: diffListView
+        // Diff lines in recessed well
+        Rectangle {
+            visible: flatLines.length > 0
             Layout.fillWidth: true
-            Layout.preferredHeight: contentHeight
-            model: flatLines
-            interactive: false
-            clip: true
+            Layout.preferredHeight: diffListView.contentHeight
+            color: SpellUI.SpellTheme.background
+            border.width: 1
+            border.color: SpellUI.SpellTheme.borderSubtle
 
-            delegate: Item {
-                required property var modelData
-                required property int index
-                width: diffListView.width
-                height: lineRect.height
+            ListView {
+                id: diffListView
+                anchors.fill: parent
+                anchors.margins: 1
+                model: flatLines
+                interactive: false
+                clip: true
+                property int hoveredIndex: -1
 
-                property color lineColor: {
-                    switch (modelData.type) {
-                        case "add": return Qt.rgba(0.25, 0.73, 0.31, 0.12)
-                        case "remove": return Qt.rgba(0.97, 0.32, 0.29, 0.12)
-                        case "header": return SpellUI.SpellTheme.surfaceHigher
-                        default: return "transparent"
-                    }
-                }
+                delegate: Item {
+                    required property var modelData
+                    required property int index
+                    width: diffListView.width
+                    height: lineRect.height
 
-                Rectangle {
-                    id: lineRect
-                    width: parent.width
-                    height: lineText.implicitHeight + 8
-                    color: lineColor
-                    objectName: {
+                    readonly property bool isSeparator: modelData.type === "separator"
+                    readonly property color baseColor: {
                         switch (modelData.type) {
-                            case "add": return "addedLine"
-                            case "remove": return "removedLine"
-                            case "header": return "hunkHeader"
-                            default: return "contextLine"
+                        case "add":
+                            return SpellUI.SpellTheme.diffAddBg()
+                        case "remove":
+                            return SpellUI.SpellTheme.diffRemoveBg()
+                        case "header":
+                            return SpellUI.SpellTheme.diffHunkBg()
+                        default:
+                            return "transparent"
                         }
                     }
 
-                    RowLayout {
-                        anchors { fill: parent; margins: 4 }
-                        spacing: 4
-
-                        // Line number
-                        Text {
-                            text: modelData.type === "header" ? "" : String(modelData.lineIndex + 1)
-                            color: SpellUI.SpellTheme.textTertiary
-                            font.family: SpellUI.SpellTheme.monoFontFamily
-                            font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                            Layout.preferredWidth: 30
-                            horizontalAlignment: Text.AlignRight
+                    Rectangle {
+                        id: lineRect
+                        width: parent.width
+                        height: isSeparator ? 8 : (lineText.implicitHeight + 8)
+                        color: {
+                            if (isSeparator)
+                                return "transparent"
+                            if (diffListView.hoveredIndex === index)
+                                return Qt.tint(baseColor, SpellUI.SpellTheme.withAlpha(SpellUI.SpellTheme.surface1, 0.45))
+                            return baseColor
                         }
-
-                        // +/- gutter
-                        Text {
-                            text: {
-                                switch (modelData.type) {
-                                    case "add": return "+"
-                                    case "remove": return "-"
-                                    default: return " "
-                                }
+                        Behavior on color {
+                            enabled: !isSeparator && (diffListView.hoveredIndex === index || baseColor !== "transparent")
+                            ColorAnimation {
+                                duration: 120
+                                easing.type: Easing.OutQuad
                             }
-                            color: {
-                                switch (modelData.type) {
-                                    case "add": return SpellUI.SpellTheme.success
-                                    case "remove": return SpellUI.SpellTheme.error
-                                    default: return SpellUI.SpellTheme.textTertiary
-                                }
+                        }
+                        objectName: {
+                            switch (modelData.type) {
+                            case "add":
+                                return "addedLine"
+                            case "remove":
+                                return "removedLine"
+                            case "header":
+                                return "hunkHeader"
+                            case "separator":
+                                return "hunkSeparator"
+                            default:
+                                return "contextLine"
                             }
-                            font.family: SpellUI.SpellTheme.monoFontFamily
-                            font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                            font.bold: true
-                            Layout.preferredWidth: 14
                         }
 
-                        // Line text
-                        Text {
-                            id: lineText
-                            text: modelData.text || ""
-                            color: modelData.type === "header" ? SpellUI.SpellTheme.textSecondary : SpellUI.SpellTheme.textPrimary
-                            font.family: SpellUI.SpellTheme.monoFontFamily
-                            font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                            wrapMode: Text.NoWrap
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
+                        Rectangle {
+                            visible: isSeparator
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: parent.width * 0.6
+                            height: 1
+                            color: SpellUI.SpellTheme.borderSubtle
                         }
-                    }
 
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: root.lineClicked(modelData.lineIndex, modelData.type, modelData.text)
+                        RowLayout {
+                            visible: !isSeparator
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            spacing: 0
+
+                            // Line number
+                            Text {
+                                text: modelData.type === "header" ? "" : String(modelData.lineIndex + 1)
+                                color: SpellUI.SpellTheme.textGhost
+                                font.family: SpellUI.SpellTheme.fontFamily
+                                font.pixelSize: SpellUI.SpellTheme.fontSizeXS
+                                font.letterSpacing: SpellUI.SpellTheme.trackingWide
+                                Layout.preferredWidth: 44
+                                horizontalAlignment: Text.AlignRight
+                            }
+
+                            // +/- gutter
+                            Text {
+                                text: {
+                                    switch (modelData.type) {
+                                    case "add":
+                                        return "+"
+                                    case "remove":
+                                        return "-"
+                                    default:
+                                        return " "
+                                    }
+                                }
+                                color: {
+                                    switch (modelData.type) {
+                                    case "add":
+                                        return SpellUI.SpellTheme.success
+                                    case "remove":
+                                        return SpellUI.SpellTheme.error
+                                    default:
+                                        return SpellUI.SpellTheme.textTertiary
+                                    }
+                                }
+                                font.family: SpellUI.SpellTheme.monoFontFamily
+                                font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                                font.weight: SpellUI.SpellTheme.fontWeightSemiBold
+                                horizontalAlignment: Text.AlignHCenter
+                                Layout.preferredWidth: 20
+                            }
+
+                            // Line text
+                            Text {
+                                id: lineText
+                                text: modelData.text || ""
+                                color: modelData.type === "header" ? SpellUI.SpellTheme.textSecondary : SpellUI.SpellTheme.textPrimary
+                                font.family: SpellUI.SpellTheme.monoFontFamily
+                                font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                                lineHeightMode: Text.ProportionalHeight
+                                lineHeight: SpellUI.SpellTheme.lineHeightMono
+                                wrapMode: Text.NoWrap
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 8
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: !isSeparator
+                            enabled: !isSeparator
+                            onEntered: diffListView.hoveredIndex = index
+                            onExited: {
+                                if (diffListView.hoveredIndex === index)
+                                    diffListView.hoveredIndex = -1
+                            }
+                            onClicked: root.lineClicked(modelData.lineIndex, modelData.type, modelData.text)
+                        }
                     }
                 }
             }

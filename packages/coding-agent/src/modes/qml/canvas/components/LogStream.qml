@@ -65,8 +65,8 @@ Item {
         Rectangle {
             visible: root.logData && root.logData.title
             Layout.fillWidth: true
-            Layout.preferredHeight: visible ? 34 : 0
-            color: SpellUI.SpellTheme.surfaceHigh
+            Layout.preferredHeight: visible ? 38 : 0
+            color: SpellUI.SpellTheme.surface1
             radius: SpellUI.SpellTheme.cornerRadiusSmall
 
             Text {
@@ -76,8 +76,8 @@ Item {
                 text: root.logData ? (root.logData.title || "") : ""
                 color: SpellUI.SpellTheme.textPrimary
                 font.family: SpellUI.SpellTheme.fontFamily
-                font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                font.bold: true
+                font.pixelSize: SpellUI.SpellTheme.fontSizeM
+                font.weight: SpellUI.SpellTheme.fontWeightSemiBold
                 verticalAlignment: Text.AlignVCenter
             }
         }
@@ -85,8 +85,9 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: SpellUI.SpellTheme.surface
-            border.color: SpellUI.SpellTheme.outline
+            color: SpellUI.SpellTheme.background
+            border.color: SpellUI.SpellTheme.borderSubtle
+            border.width: 1
             radius: SpellUI.SpellTheme.cornerRadius
 
             Text {
@@ -95,7 +96,7 @@ Item {
                 text: "No log entries"
                 color: SpellUI.SpellTheme.textTertiary
                 font.family: SpellUI.SpellTheme.fontFamily
-                font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
+                font.pixelSize: SpellUI.SpellTheme.fontSizeM
                 objectName: "emptyPlaceholder"
             }
 
@@ -104,7 +105,7 @@ Item {
                 anchors.fill: parent
                 anchors.margins: SpellUI.SpellTheme.spacingS
                 clip: true
-                spacing: 2
+                spacing: 4
                 model: root.visibleLines
 
                 onContentYChanged: {
@@ -121,7 +122,7 @@ Item {
                     required property var modelData
                     required property int index
                     width: logListView.width
-                    height: Math.max(lineText.implicitHeight, lineNumber.implicitHeight) + 2
+                    height: Math.max(lineText.implicitHeight, lineNumber.implicitHeight)
 
                     RowLayout {
                         anchors.fill: parent
@@ -132,9 +133,9 @@ Item {
                             Layout.preferredWidth: 40
                             horizontalAlignment: Text.AlignRight
                             text: String(root.visibleStartNumber + index)
-                            color: SpellUI.SpellTheme.textTertiary
+                            color: SpellUI.SpellTheme.textGhost
                             font.family: SpellUI.SpellTheme.monoFontFamily
-                            font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
+                            font.pixelSize: SpellUI.SpellTheme.fontSizeXS
                         }
 
                         Text {
@@ -153,7 +154,9 @@ Item {
                                 }
                             }
                             font.family: SpellUI.SpellTheme.monoFontFamily
-                            font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
+                            font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                            lineHeightMode: Text.ProportionalHeight
+                            lineHeight: SpellUI.SpellTheme.lineHeightMono
                         }
                     }
                 }

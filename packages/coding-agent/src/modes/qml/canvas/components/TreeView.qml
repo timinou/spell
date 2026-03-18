@@ -82,9 +82,9 @@ Item {
     Text {
         visible: flatNodes.length === 0
         text: "No items"
-        color: SpellUI.SpellTheme.textTertiary
+        color: SpellUI.SpellTheme.textSecondary
         font.family: SpellUI.SpellTheme.fontFamily
-        font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
+        font.pixelSize: SpellUI.SpellTheme.fontSizeM
         anchors.centerIn: parent
         objectName: "emptyPlaceholder"
     }
@@ -96,64 +96,104 @@ Item {
         interactive: false
         clip: true
 
+        property int hoveredIndex: -1
+
+        currentIndex: hoveredIndex
+        highlightFollowsCurrentItem: true
+        highlightMoveDuration: SpellUI.SpellTheme.durationNormal
+
+        highlight: Rectangle {
+            visible: treeListView.hoveredIndex >= 0
+            color: SpellUI.SpellTheme.surface1
+            radius: SpellUI.SpellTheme.cornerRadiusSmall
+        }
+
         delegate: Item {
             required property var modelData
             required property int index
+
+            readonly property bool isFolderNode: modelData.icon === "folder" || modelData.hasChildren
+
             width: treeListView.width
-            height: 32
+            height: 36
             objectName: "treeNode_" + modelData.id
 
-            Rectangle {
+            Repeater {
+                model: modelData.depth
+
+                Rectangle {
+                    width: 1
+                    height: parent.height - 10
+                    x: 8 + index * 16
+                    y: 5
+                    color: SpellUI.SpellTheme.borderSubtle
+                }
+            }
+
+            RowLayout {
+                anchors {
+                    fill: parent
+                    leftMargin: modelData.depth * 16 + 8
+                    rightMargin: 8
+                }
+                spacing: 6
+
+                // Expand/collapse toggle
+                Item {
+                    width: 16
+                    height: 16
+                    objectName: modelData.hasChildren ? "treeToggle" : ""
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: modelData.hasChildren ? "▾" : ""
+                        color: SpellUI.SpellTheme.textSecondary
+                        font.pixelSize: SpellUI.SpellTheme.fontSizeXS
+                        rotation: modelData.isExpanded ? 0 : -90
+
+                        Behavior on rotation {
+                            NumberAnimation {
+                                duration: 150
+                                easing.type: Easing.OutQuad
+                            }
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: modelData.hasChildren
+                        onClicked: root.toggleNode(modelData.id)
+                    }
+                }
+
+                Text {
+                    text: isFolderNode ? "▪" : "·"
+                    color: isFolderNode ? SpellUI.SpellTheme.textSecondary : SpellUI.SpellTheme.textGhost
+                    font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                    objectName: modelData.icon ? "treeNodeIcon" : ""
+                }
+
+                // Label
+                Text {
+                    text: modelData.label
+                    color: SpellUI.SpellTheme.textPrimary
+                    font.family: SpellUI.SpellTheme.fontFamily
+                    font.pixelSize: SpellUI.SpellTheme.fontSizeM
+                    font.weight: isFolderNode ? SpellUI.SpellTheme.fontWeightMedium : SpellUI.SpellTheme.fontWeightRegular
+                    Layout.fillWidth: true
+                    objectName: "treeNodeLabel"
+                }
+            }
+
+            MouseArea {
                 anchors.fill: parent
-                color: "transparent"
-
-                RowLayout {
-                    anchors { fill: parent; leftMargin: modelData.depth * 16 + 8; rightMargin: 8 }
-                    spacing: 4
-
-                    // Expand/collapse toggle
-                    Item {
-                        width: 16
-                        height: 16
-                        objectName: modelData.hasChildren ? "treeToggle" : ""
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: modelData.hasChildren ? (modelData.isExpanded ? "▼" : "▶") : ""
-                            color: SpellUI.SpellTheme.textTertiary
-                            font.pixelSize: 10
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            enabled: modelData.hasChildren
-                            onClicked: root.toggleNode(modelData.id)
-                        }
-                    }
-
-                    // Icon (when provided)
-                    Text {
-                        visible: modelData.icon !== ""
-                        text: modelData.icon === "folder" ? "📁" : "📄"
-                        font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                        objectName: modelData.icon ? "treeNodeIcon" : ""
-                    }
-
-                    // Label
-                    Text {
-                        text: modelData.label
-                        color: SpellUI.SpellTheme.textPrimary
-                        font.family: SpellUI.SpellTheme.fontFamily
-                        font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                        Layout.fillWidth: true
-                        objectName: "treeNodeLabel"
-                    }
+                hoverEnabled: true
+                onEntered: treeListView.hoveredIndex = index
+                onExited: {
+                    if (treeListView.hoveredIndex === index)
+                        treeListView.hoveredIndex = -1
                 }
-
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: root.nodeClicked(modelData.id, modelData.label)
-                }
+                onClicked: root.nodeClicked(modelData.id, modelData.label)
             }
         }
     }

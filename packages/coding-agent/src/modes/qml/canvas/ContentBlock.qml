@@ -13,16 +13,66 @@ Rectangle {
 
     signal componentEvent(string eventType, var eventData)
 
-    implicitHeight: contentLoader.item ? contentLoader.item.implicitHeight + 16 : 48
-    color: SpellUI.SpellTheme.surface
+    function blockStyle(type) {
+        if (type === "markdown" || type === "status") {
+            return {
+                bg: "transparent",
+                border: "transparent",
+                borderW: 0,
+                topHighlight: false
+            }
+        }
+
+        if (type === "table" || type === "diff" || type === "tree") {
+            return {
+                bg: SpellUI.SpellTheme.surface0,
+                border: SpellUI.SpellTheme.borderDefault,
+                borderW: 1,
+                topHighlight: true
+            }
+        }
+
+        if (type === "log") {
+            return {
+                bg: SpellUI.SpellTheme.background,
+                border: SpellUI.SpellTheme.borderSubtle,
+                borderW: 1,
+                topHighlight: false
+            }
+        }
+
+        return {
+            bg: SpellUI.SpellTheme.surface0,
+            border: SpellUI.SpellTheme.borderDefault,
+            borderW: 1,
+            topHighlight: false
+        }
+    }
+
+    readonly property var visualStyle: blockStyle(blockType)
+
+    implicitHeight: contentLoader.item ? contentLoader.item.implicitHeight + 32 : 64
+    color: visualStyle.bg
+    border.color: visualStyle.border
+    border.width: visualStyle.borderW
     radius: SpellUI.SpellTheme.cornerRadius
     objectName: "contentBlock_" + blockId
+
+    Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: 1
+        radius: height / 2
+        color: SpellUI.SpellTheme.borderDefault
+        visible: visualStyle.topHighlight
+    }
 
     Loader {
         id: contentLoader
         anchors {
             fill: parent
-            margins: 8
+            margins: 16
         }
         sourceComponent: {
             switch (root.blockType) {
@@ -88,7 +138,7 @@ Rectangle {
             text: root.blockData.text || ""
             color: SpellUI.SpellTheme.textPrimary
             font.family: SpellUI.SpellTheme.fontFamily
-            font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
+            font.pixelSize: SpellUI.SpellTheme.fontSizeM
             wrapMode: Text.Wrap
             width: parent ? parent.width : 0
             textFormat: Text.MarkdownText
@@ -162,7 +212,7 @@ Rectangle {
                 text: "[" + root.blockType + "]"
                 color: SpellUI.SpellTheme.primary
                 font.family: SpellUI.SpellTheme.fontFamily
-                font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
+                font.pixelSize: SpellUI.SpellTheme.fontSizeS
                 font.bold: true
                 objectName: "blockTypeFallback"
             }
@@ -171,7 +221,7 @@ Rectangle {
                 text: JSON.stringify(root.blockData, null, 2)
                 color: SpellUI.SpellTheme.textSecondary
                 font.family: SpellUI.SpellTheme.monoFontFamily
-                font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
+                font.pixelSize: SpellUI.SpellTheme.fontSizeS
                 wrapMode: Text.Wrap
                 width: parent ? parent.width : 0
                 maximumLineCount: 10

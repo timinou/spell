@@ -7,11 +7,15 @@ Item {
     id: root
 
     required property var tableData
-    implicitHeight: tableLayout.implicitHeight
+    implicitHeight: headerHeight + bodyHeight
 
     // Sort state
     property string sortKey: ""
     property bool sortAsc: true
+
+    // Lightweight hover tracking
+    property int hoveredColumnIndex: -1
+    property int hoveredRowIndex: -1
 
     // Computed sorted rows
     property var sortedRows: {
@@ -30,9 +34,43 @@ Item {
         return rows
     }
 
+    readonly property int headerHeight: 38
+    readonly property int rowHeight: 40
+    readonly property int maxVisibleRows: 10
+    readonly property int bodyHeight: {
+        var visibleRows = sortedRows.length > 0 ? Math.min(sortedRows.length, maxVisibleRows) : 1
+        return visibleRows * rowHeight + 1
+    }
+
     signal rowClicked(int rowIndex, var rowData)
     signal sortChanged(string key, bool ascending)
     signal cellSelected(int rowIndex, string colKey)
+
+    function isSortableColumn(column) {
+        return root.tableData && root.tableData.sortable === true && column && column.key
+    }
+
+    function baseColumnWidth(column) {
+        return (column && column.width && column.width > 0) ? column.width : 120
+    }
+
+    function columnWidth(columnIndex, column, totalWidth) {
+        var columns = root.tableData ? root.tableData.columns || [] : []
+        if (columns.length === 0)
+            return baseColumnWidth(column)
+
+        var minWidth = baseColumnWidth(column)
+        var isLast = columnIndex === columns.length - 1
+        if (!isLast)
+            return minWidth
+
+        var consumed = 0
+        for (var i = 0; i < columns.length - 1; i++)
+            consumed += baseColumnWidth(columns[i])
+
+        var available = Math.floor(totalWidth - consumed)
+        return Math.max(minWidth, available)
+    }
 
     ColumnLayout {
         id: tableLayout
@@ -51,37 +89,69 @@ Item {
                     required property var modelData
                     required property int index
 
-                    width: modelData.width || 120
-                    height: 32
-                    color: SpellUI.SpellTheme.surfaceHigh
+                    width: root.columnWidth(index, modelData, headerRow.width)
+                    height: 38
+                    color: root.hoveredColumnIndex === index ? SpellUI.SpellTheme.surface2 : SpellUI.SpellTheme.surface1
                     objectName: "columnHeader_" + modelData.key
 
                     RowLayout {
                         anchors.fill: parent
-                        anchors.margins: 4
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 12
+                        spacing: 8
 
                         Text {
                             text: modelData.label || modelData.key
                             color: SpellUI.SpellTheme.textPrimary
                             font.family: SpellUI.SpellTheme.fontFamily
-                            font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                            font.bold: true
+                            font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                            font.weight: SpellUI.SpellTheme.fontWeightMedium
+                            font.letterSpacing: SpellUI.SpellTheme.trackingWide
                             Layout.fillWidth: true
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
                         }
 
                         Text {
-                            visible: root.tableData && root.tableData.sortable === true && root.sortKey === modelData.key
-                            text: root.sortAsc ? "▲" : "▼"
+                            visible: root.isSortableColumn(modelData)
+                            text: "▾"
                             color: SpellUI.SpellTheme.primary
-                            font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
+                            font.family: SpellUI.SpellTheme.fontFamily
+                            font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                            opacity: root.sortKey === modelData.key ? 1 : 0
+                            rotation: root.sortAsc ? 0 : 180
+
+                            Behavior on rotation {
+                                NumberAnimation {
+                                    duration: 100
+                                    easing.type: Easing.OutQuad
+                                }
+                            }
+
+                            Behavior on opacity {
+                                NumberAnimation {
+                                    duration: SpellUI.SpellTheme.durationFast
+                                    easing.type: Easing.OutQuad
+                                }
+                            }
                         }
                     }
 
                     MouseArea {
                         anchors.fill: parent
-                        enabled: root.tableData && root.tableData.sortable === true
+                        enabled: true
+                        hoverEnabled: true
+                        cursorShape: root.isSortableColumn(modelData) ? Qt.PointingHandCursor : Qt.ArrowCursor
+
+                        onEntered: root.hoveredColumnIndex = index
+                        onExited: {
+                            if (root.hoveredColumnIndex === index)
+                                root.hoveredColumnIndex = -1
+                        }
 
                         onClicked: {
+                            if (!root.isSortableColumn(modelData))
+                                return
                             var k = modelData.key
                             if (root.sortKey === k) {
                                 root.sortAsc = !root.sortAsc
@@ -96,66 +166,123 @@ Item {
             }
         }
 
-        // Data rows
-        ListView {
-            id: tableView
+        // Data rows in recessed well
+        Rectangle {
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            model: root.sortedRows
+            Layout.preferredHeight: root.bodyHeight
+            color: SpellUI.SpellTheme.background
+            border.width: 1
+            border.color: SpellUI.SpellTheme.borderSubtle
+            radius: SpellUI.SpellTheme.cornerRadiusSmall
             clip: true
 
-            delegate: Rectangle {
-                id: rowDelegate
+            ListView {
+                id: tableView
+                anchors.fill: parent
+                model: root.sortedRows
+                clip: true
 
-                required property var modelData
-                required property int index
+                delegate: Item {
+                    id: rowDelegate
 
-                width: tableView.width
-                height: 36
-                objectName: "tableRow"
+                    required property var modelData
+                    required property int index
 
-                // Capture for inner Repeater access
-                property var rowData: modelData
-                property int rowIdx: index
+                    width: tableView.width
+                    height: 40
+                    objectName: "tableRow"
 
-                color: {
-                    if (root.tableData && root.tableData.highlightRow === index)
-                        return Qt.rgba(232/255, 160/255, 64/255, 0.15)
-                    return index % 2 === 0 ? SpellUI.SpellTheme.surface : SpellUI.SpellTheme.surfaceHigh
-                }
+                    // Capture for inner Repeater access
+                    property var rowData: modelData
+                    property int rowIdx: index
 
-                Row {
-                    anchors.fill: parent
-
-                    Repeater {
-                        model: root.tableData ? root.tableData.columns : []
-
-                        delegate: Item {
-                            required property var modelData
-                            width: modelData.width || 120
-                            height: 36
-
-                            Text {
-                                anchors.fill: parent
-                                anchors.margins: 4
-                                text: {
-                                    var col = modelData.key
-                                    var row = rowDelegate.rowData
-                                    return (row && col && row[col] !== undefined) ? String(row[col]) : ""
-                                }
-                                color: SpellUI.SpellTheme.textPrimary
-                                font.family: SpellUI.SpellTheme.fontFamily
-                                font.pixelSize: SpellUI.SpellTheme.fontSizeMedium
-                                verticalAlignment: Text.AlignVCenter
+                    Rectangle {
+                        anchors.fill: parent
+                        color: {
+                            if (root.tableData && root.tableData.highlightRow === rowDelegate.rowIdx)
+                                return SpellUI.SpellTheme.withAlpha(SpellUI.SpellTheme.primary, 0.15)
+                            if (root.hoveredRowIndex === rowDelegate.rowIdx)
+                                return SpellUI.SpellTheme.surface1
+                            return SpellUI.SpellTheme.surface0
+                        }
+                        Behavior on color {
+                            enabled: rowDelegate.rowIdx === root.hoveredRowIndex || (root.tableData && root.tableData.highlightRow === rowDelegate.rowIdx) || color !== SpellUI.SpellTheme.surface0
+                            ColorAnimation {
+                                duration: 120
+                                easing.type: Easing.OutQuad
                             }
                         }
                     }
-                }
 
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: root.rowClicked(rowDelegate.rowIdx, rowDelegate.rowData)
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        height: 1
+                        color: SpellUI.SpellTheme.borderSubtle
+                    }
+
+                    Row {
+                        anchors.fill: parent
+
+                        Repeater {
+                            model: root.tableData ? root.tableData.columns : []
+
+                            delegate: Item {
+                                required property var modelData
+                                required property int index
+
+                                width: root.columnWidth(index, modelData, rowDelegate.width)
+                                height: rowDelegate.height
+
+                                Text {
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.bottom: parent.bottom
+                                    anchors.leftMargin: 12
+                                    anchors.rightMargin: 12
+                                    anchors.topMargin: 8
+                                    anchors.bottomMargin: 8
+                                    text: {
+                                        var col = modelData.key
+                                        var row = rowDelegate.rowData
+                                        return (row && col && row[col] !== undefined) ? String(row[col]) : ""
+                                    }
+                                    color: SpellUI.SpellTheme.textPrimary
+                                    font.family: SpellUI.SpellTheme.fontFamily
+                                    font.pixelSize: SpellUI.SpellTheme.fontSizeM
+                                    font.weight: SpellUI.SpellTheme.fontWeightRegular
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+
+                        onEntered: root.hoveredRowIndex = rowDelegate.rowIdx
+                        onExited: {
+                            if (root.hoveredRowIndex === rowDelegate.rowIdx)
+                                root.hoveredRowIndex = -1
+                        }
+
+                        onClicked: root.rowClicked(rowDelegate.rowIdx, rowDelegate.rowData)
+                    }
                 }
+            }
+
+            Text {
+                visible: tableView.count === 0
+                anchors.centerIn: parent
+                text: "No rows"
+                color: SpellUI.SpellTheme.textTertiary
+                font.family: SpellUI.SpellTheme.fontFamily
+                font.pixelSize: SpellUI.SpellTheme.fontSizeM
+                objectName: "emptyPlaceholder"
             }
         }
     }
