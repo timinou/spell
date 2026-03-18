@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { type Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { NiriOverviewController } from "@oh-my-pi/pi-niri";
+import { orgToMarkdown } from "@oh-my-pi/pi-org";
 import type { Component, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
 import {
 	Container,
@@ -928,7 +929,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.chatContainer.addChild(new DynamicBorder());
 		this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Plan Review")), 1, 1));
 		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Markdown(planContent, 1, 1, getMarkdownTheme()));
+		this.chatContainer.addChild(new Markdown(orgToMarkdown(planContent), 1, 1, getMarkdownTheme()));
 		this.chatContainer.addChild(new DynamicBorder());
 		this.ui.requestRender();
 	}
@@ -1019,7 +1020,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setPlanReferencePath(planReferencePath);
 		this.session.markPlanReferenceSent();
 		const prompt = renderPromptTemplate(planModeApprovedPrompt, {
-			planContent,
+			planContent: orgToMarkdown(planContent),
 			finalPlanFilePath: planReferencePath,
 			orgItemId: activeOrgItemId ?? "",
 		});

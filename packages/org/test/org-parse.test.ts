@@ -41,6 +41,29 @@ describe("orgToMarkdown", () => {
 		// Main check: no hard crash, produces some output
 		expect(typeof result).toBe("string");
 	});
+
+	test("converts org tables to GFM markdown tables", () => {
+		const org = "| Name | Age |\n|------+-----|\n| Alice | 30 |\n| Bob | 25 |";
+		const result = orgToMarkdown(org);
+		// Should produce a GFM pipe table, not crash on unknown 'table' node
+		expect(result).toContain("|");
+		expect(result).toContain("Alice");
+		expect(result).toContain("Bob");
+		// Should have header separator row
+		expect(result).toMatch(/\|\s*-+/);
+	});
+
+	test('unescapes JSON double-escape artifacts (\\uXXXX and \\")', () => {
+		const org = '* Tree\n\\u2502 \\u251c\\u2500 \\"chat\\" mode';
+		const result = orgToMarkdown(org);
+		// \u2502 → │, \u251c → ├, \u2500 → ─, \" → "
+		expect(result).toContain("│");
+		expect(result).toContain("├");
+		expect(result).toContain("─");
+		expect(result).toContain('"chat"');
+		// Should not contain literal \u escapes
+		expect(result).not.toContain("\\u2502");
+	});
 });
 
 describe("orgToPlainText", () => {

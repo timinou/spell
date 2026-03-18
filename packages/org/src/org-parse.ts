@@ -1,4 +1,5 @@
 import { toMdast } from "hast-util-to-mdast";
+import { gfmTableToMarkdown } from "mdast-util-gfm-table";
 import { toMarkdown } from "mdast-util-to-markdown";
 import { toString as orgNodeToString } from "orgast-util-to-string";
 import { parse } from "uniorg-parse/lib/parser";
@@ -13,12 +14,22 @@ export interface OrgHeading {
 	children: OrgHeading[];
 }
 
+/**
+ * Unescape JSON escape artifacts that LLMs produce when double-escaping tool arguments.
+ * Handles \\uXXXX unicode escapes and \\" escaped quotes.
+ */
+function unescapeJsonArtifacts(s: string): string {
+	return s
+		.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+		.replace(/\\"/g, '"');
+}
+
 /** Convert org-mode text to CommonMark markdown. */
 export function orgToMarkdown(org: string): string {
-	const orgAst = parse(org);
+	const orgAst = parse(unescapeJsonArtifacts(org));
 	const hast = orgToHast(orgAst);
 	const mdast = toMdast(hast);
-	return toMarkdown(mdast);
+	return toMarkdown(mdast, { extensions: [gfmTableToMarkdown()] });
 }
 
 /** Convert org-mode text to plain text (no markup). For token counting, search. */

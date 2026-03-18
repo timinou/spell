@@ -49,6 +49,7 @@ import {
 	modelsAreEqual,
 	parseRateLimitReason,
 } from "@oh-my-pi/pi-ai";
+import { orgToMarkdown } from "@oh-my-pi/pi-org";
 import { abortableSleep, getAgentDbPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJob, AsyncJobManager } from "../async";
 import type { Rule } from "../capability/rule";
@@ -2038,7 +2039,7 @@ export class AgentSession {
 
 		const content = renderPromptTemplate(planModeReferencePrompt, {
 			planFilePath,
-			planContent,
+			planContent: orgToMarkdown(planContent),
 		});
 
 		this.#planReferenceSent = true;

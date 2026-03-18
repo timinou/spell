@@ -1,0 +1,66 @@
+#+TITLE: ORG_PLAN_TO_MARKDOWN
+#+STATE: DONE
+#+CUSTOM_ID: PLAN-002-org-plan-to-markdown
+
+NOTE [2026-03-18]: Implemented: orgToMarkdown() wired at 3 sites — TUI preview (interactive-mode.ts:932), approved prompt (interactive-mode.ts:1023), reference prompt (agent-session.ts:2042). tsgo clean, biome clean.
+
+* Initial Message
+
+if you have an org -> html -> terminal pipeline, that would work too. or the export you provided
+
+* Problem
+
+Plan content is org-mode text (~* Heading~, ~** Sub-heading~, ~~code~~). It is consumed in two places that interpret it as markdown:
+
+1. *TUI plan preview* — ~interactive-mode.ts:931~ passes raw org to ~new Markdown(planContent, ...)~. In markdown, ~* text~ is an unordered list item, so org headings render as bullets.
+2. *LLM prompts* — ~plan-mode-approved.md~ and ~plan-mode-reference.md~ inject raw ~{{planContent}}~ under a ~## Plan~ heading. The executing LLM reads ~* Problem~ as a list item instead of a section heading.
+
+* Solution
+
+~orgToMarkdown()~ already exists in ~@oh-my-pi/pi-org~ (file: ~packages/org/src/org-parse.ts~). It uses a full AST pipeline: uniorg parse → hast → mdast → CommonMark. It handles headings, src blocks, links, and strips PROPERTIES drawers. It is already exported from the package and ~@oh-my-pi/pi-org~ is already a dependency of ~packages/coding-agent~.
+
+Wire ~orgToMarkdown~ into both consumption sites. No new utility needed.
+
+** ITEM Convert plan content in TUI preview
+:PROPERTIES:
+:EFFORT: 3m
+:END:
+
+File: ~packages/coding-agent/src/modes/interactive-mode.ts~
+Line 931: ~this.chatContainer.addChild(new Markdown(planContent, 1, 1, getMarkdownTheme()));~
+
+Change to:
+#+begin_src typescript
+import { orgToMarkdown } from "@oh-my-pi/pi-org";
+// ...
+this.chatContainer.addChild(new Markdown(orgToMarkdown(planContent), 1, 1, getMarkdownTheme()));
+#+end_src
+
+** ITEM Convert plan content in prompt injection
+:PROPERTIES:
+:EFFORT: 3m
+:END:
+
+File: ~packages/coding-agent/src/session/agent-session.ts~
+
+There are two injection sites, both using ~renderPromptTemplate~ with ~planContent~:
+
+1. Line ~2039-2041~ (plan-mode-reference): ~renderPromptTemplate(planModeReferencePrompt, { planFilePath, planContent })~
+2. Find the plan-mode-approved injection site (same file, search for ~planModeApprovedPrompt~)
+
+At both sites, change ~planContent~ to ~orgToMarkdown(planContent)~.
+
+Import ~orgToMarkdown~ from ~@oh-my-pi/pi-org~ at the top of the file.
+
+* Non-goals
+
+- Do NOT remove ~* Initial Message~ injection — keep that for now.
+- Do NOT modify ~org-format.ts~ or the org tool's own rendering (that stays as org-mode text for the LLM's org tool output).
+- Do NOT modify any prompt templates.
+
+* Verification
+
+- ~bun check:ts~ passes
+- Create a plan draft with ~org create~ containing ~* Problem~ and ~** Sub-task~ headings
+- Call ~exit_plan_mode~ — verify TUI plan preview shows markdown headings (not bullets)
+- Approve the plan — verify the executing session's prompt contains ~# Problem~ and ~## Sub-task~
