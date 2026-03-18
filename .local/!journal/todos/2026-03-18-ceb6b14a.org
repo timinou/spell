@@ -2,26 +2,18 @@
 #+DATE: 2026-03-18
 #+TODO: ITEM DOING | DONE
 
-* Wave 3: Wiring
-
-** DONE PROJ-5: Fluid mode entry point
-:PROPERTIES:
-:TASK_ID: task-5
-:STATUS: completed
-:END:
-
 * Wave 4: Testing
 
-** DOING PROJ-6: Tests and verification
+** DONE PROJ-6: Tests and verification
 :PROPERTIES:
 :TASK_ID: task-6
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
 * Verification
 
-** ITEM Final type check and verification
+** DOING Final type check and verification
 :PROPERTIES:
 :TASK_ID: task-7
-:STATUS: pending
+:STATUS: in_progress
 :END:

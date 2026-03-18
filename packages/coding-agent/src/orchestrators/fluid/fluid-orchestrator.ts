@@ -1,8 +1,8 @@
 import type { SingleResult } from "../../task/types";
-import { Priority, type EventBus } from "../../utils/event-bus";
+import { type EventBus, Priority } from "../../utils/event-bus";
 import { validateDag } from "./dag";
 import { QueueScheduler, type RunAgentFn } from "./queue-scheduler";
-import { FLUID_EVENT_CHANNEL, type AgentRuntime, type FluidAgentNode, type FluidPlan } from "./types";
+import { type AgentRuntime, FLUID_EVENT_CHANNEL, type FluidAgentNode, type FluidPlan } from "./types";
 
 interface FluidOrchestratorOptions {
 	eventBus: EventBus;

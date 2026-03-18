@@ -10,14 +10,14 @@ import { renderPromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import { FluidEventRouter, FluidOrchestrator } from "../orchestrators/fluid";
-import type { FluidAgentNode, FluidPlan } from "../orchestrators/fluid/types";
 import { fluidPlanSchema } from "../orchestrators/fluid/plan-schema";
+import type { FluidAgentNode, FluidPlan } from "../orchestrators/fluid/types";
+import { FLUID_EVENT_CHANNEL } from "../orchestrators/fluid/types";
 import fluidPlannerPrompt from "../prompts/agents/fluid-planner.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { runSubprocess } from "../task/executor";
 import type { AgentDefinition, SingleResult } from "../task/types";
 import { type EventBus, Priority } from "../utils/event-bus";
-import { FLUID_EVENT_CHANNEL } from "../orchestrators/fluid/types";
 
 export interface FluidModeOptions {
 	initialMessage?: string;

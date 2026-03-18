@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+	type AgentRuntime,
 	FLUID_EVENT_CHANNEL,
+	type FluidEvent,
 	FluidEventRouter,
 	FluidOrchestrator,
-	type AgentRuntime,
-	type FluidEvent,
 	type FluidPlan,
 } from "../../src/orchestrators/fluid";
 import type { SingleResult } from "../../src/task/types";
@@ -89,7 +89,9 @@ describe("FluidOrchestrator drain behavior", () => {
 
 		expect(received.length).toBeGreaterThan(0);
 		expect(
-			received.some(event => event.type === "agent_state_change" && event.agentId === "a" && event.state === "running"),
+			received.some(
+				event => event.type === "agent_state_change" && event.agentId === "a" && event.state === "running",
+			),
 		).toBe(true);
 
 		await execution;

@@ -1,5 +1,5 @@
 import { logger } from "@oh-my-pi/pi-utils";
-import { Priority, type EventBus } from "../../utils/event-bus";
+import { type EventBus, Priority } from "../../utils/event-bus";
 import { FLUID_EVENT_CHANNEL, type FluidEvent } from "./types";
 
 export class FluidEventRouter {

@@ -77,6 +77,7 @@ import {
 	summarizeDiscoverableMCPTools,
 } from "./mcp/discoverable-tool-metadata";
 import { buildMemoryToolDeveloperInstructions, getMemoryRoot, startMemoryStartupTask } from "./memories";
+import { CanvasOrchestratorManager } from "./orchestrators/canvas-orchestrator";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { collectEnvSecrets, loadSecrets, obfuscateMessages, SecretObfuscator } from "./secrets";
 import { AgentSession } from "./session/agent-session";
@@ -124,7 +125,6 @@ import {
 	type CanvasToolInvokePayload,
 	type CanvasWindowEventsPayload,
 } from "./tools/canvas";
-import { CanvasOrchestratorManager } from "./orchestrators/canvas-orchestrator";
 import { ToolContextStore } from "./tools/context";
 import { getGeminiImageTools } from "./tools/gemini-image";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";

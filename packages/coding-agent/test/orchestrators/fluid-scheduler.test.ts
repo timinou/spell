@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { QueueScheduler, type RunAgentFn } from "@oh-my-pi/pi-coding-agent/orchestrators/fluid/queue-scheduler";
-import type { FluidAgentNode, FluidPlan, FluidEvent } from "@oh-my-pi/pi-coding-agent/orchestrators/fluid/types";
+import type { FluidAgentNode, FluidEvent, FluidPlan } from "@oh-my-pi/pi-coding-agent/orchestrators/fluid/types";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 
 function mockResult(id: string, output = ""): SingleResult {
@@ -179,12 +179,7 @@ describe("QueueScheduler.execute", () => {
 	});
 
 	test("passes both branch outputs to a diamond fan-in dependent", async () => {
-		const plan = makePlan([
-			makeNode("A"),
-			makeNode("B", ["A"]),
-			makeNode("C", ["A"]),
-			makeNode("D", ["B", "C"]),
-		]);
+		const plan = makePlan([makeNode("A"), makeNode("B", ["A"]), makeNode("C", ["A"]), makeNode("D", ["B", "C"])]);
 		const upstreamSeen = new Map<string, Map<string, SingleResult>>();
 		const runner: RunAgentFn = async (node, upstreamResults) => {
 			upstreamSeen.set(node.id, new Map(upstreamResults));
@@ -214,7 +209,10 @@ describe("QueueScheduler.execute", () => {
 		await scheduler.execute(plan);
 
 		const transitions = events
-			.filter((event): event is Extract<FluidEvent, { type: "agent_state_change" }> => event.type === "agent_state_change")
+			.filter(
+				(event): event is Extract<FluidEvent, { type: "agent_state_change" }> =>
+					event.type === "agent_state_change",
+			)
 			.filter(event => event.agentId === "A")
 			.map(event => event.state);
 		expect(transitions).toEqual(["ready", "running", "completed"]);

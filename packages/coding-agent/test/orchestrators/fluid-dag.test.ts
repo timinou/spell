@@ -24,15 +24,13 @@ describe("fluid DAG utilities", () => {
 		});
 
 		test("accepts a valid diamond graph", () => {
-			const result = validateDag(
-				plan([node("A"), node("B", ["A"]), node("C", ["A"]), node("D", ["B", "C"])])
-			);
+			const result = validateDag(plan([node("A"), node("B", ["A"]), node("C", ["A"]), node("D", ["B", "C"])]));
 			expect(result.valid).toBe(true);
 			expect(result.errors).toEqual([]);
 		});
 
 		test("accepts valid parallel roots", () => {
-			const result = validateDag(plan([node("A"), node("B") ]));
+			const result = validateDag(plan([node("A"), node("B")]));
 			expect(result.valid).toBe(true);
 			expect(result.errors).toEqual([]);
 		});
@@ -44,13 +42,13 @@ describe("fluid DAG utilities", () => {
 		});
 
 		test("rejects duplicate agent ids", () => {
-			const result = validateDag(plan([node("A"), node("A") ]));
+			const result = validateDag(plan([node("A"), node("A")]));
 			expect(result.valid).toBe(false);
 			expect(result.errors).toContain("Duplicate agent id: A");
 		});
 
 		test("rejects missing dependencies", () => {
-			const result = validateDag(plan([node("A"), node("B", ["A", "MISSING"]) ]));
+			const result = validateDag(plan([node("A"), node("B", ["A", "MISSING"])]));
 			expect(result.valid).toBe(false);
 			expect(result.errors).toContain("Agent B depends on missing agent MISSING");
 		});
@@ -70,9 +68,7 @@ describe("fluid DAG utilities", () => {
 		test("rejects graph with no entry-point agents", () => {
 			const result = validateDag(plan([node("A", ["B"]), node("B", ["C"]), node("C", ["A"])]));
 			expect(result.valid).toBe(false);
-			expect(result.errors).toContain(
-				"Plan must contain at least one entry-point agent with no dependencies"
-			);
+			expect(result.errors).toContain("Plan must contain at least one entry-point agent with no dependencies");
 		});
 
 		test("ignores canvasOutput metadata for DAG validity", () => {
@@ -80,7 +76,7 @@ describe("fluid DAG utilities", () => {
 				plan([
 					{ ...node("A"), canvasOutput: { type: "markdown", title: "Root" } },
 					{ ...node("B", ["A"]), canvasOutput: { type: "table", title: "Child" } },
-				])
+				]),
 			);
 			expect(result.valid).toBe(true);
 		});
@@ -99,9 +95,7 @@ describe("fluid DAG utilities", () => {
 		});
 
 		test("returns valid order for diamond graph", () => {
-			const order = topologicalOrder(
-				plan([node("A"), node("B", ["A"]), node("C", ["A"]), node("D", ["B", "C"])])
-			);
+			const order = topologicalOrder(plan([node("A"), node("B", ["A"]), node("C", ["A"]), node("D", ["B", "C"])]));
 
 			expect(order).toHaveLength(4);
 			expect(order[0]).toBe("A");
@@ -114,7 +108,7 @@ describe("fluid DAG utilities", () => {
 
 		test("throws for cyclic graphs", () => {
 			expect(() => topologicalOrder(plan([node("A", ["B"]), node("B", ["A"])]))).toThrow(
-				"Cannot compute topological order for cyclic DAG"
+				"Cannot compute topological order for cyclic DAG",
 			);
 		});
 	});
@@ -123,7 +117,7 @@ describe("fluid DAG utilities", () => {
 		test("returns root agents when nothing is completed", () => {
 			const ready = getReadyAgents(
 				plan([node("A"), node("B"), node("C", ["A"]), node("D", ["B", "C"])]),
-				new Set<string>()
+				new Set<string>(),
 			);
 			expect(ready).toEqual(["A", "B"]);
 		});
@@ -131,16 +125,13 @@ describe("fluid DAG utilities", () => {
 		test("includes agents whose dependencies are completed", () => {
 			const ready = getReadyAgents(
 				plan([node("A"), node("B", ["A"]), node("C", ["A"]), node("D", ["B", "C"])]),
-				new Set<string>(["A"])
+				new Set<string>(["A"]),
 			);
 			expect(ready).toEqual(["A", "B", "C"]);
 		});
 
 		test("requires all dependencies to be completed", () => {
-			const ready = getReadyAgents(
-				plan([node("A"), node("B"), node("C", ["A", "B"])]),
-				new Set<string>(["A"])
-			);
+			const ready = getReadyAgents(plan([node("A"), node("B"), node("C", ["A", "B"])]), new Set<string>(["A"]));
 			expect(ready).toEqual(["A", "B"]);
 			expect(ready).not.toContain("C");
 		});

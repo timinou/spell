@@ -6,7 +6,7 @@ Working directory context: {{cwd}}
 
 Output requirements:
 - Return valid JSON only. No markdown wrappers. No commentary.
-- JSON MUST match this shape exactly:
+- JSON **MUST** match this shape exactly:
 ```json
 {
   "agents": [
@@ -31,7 +31,7 @@ Dependency semantics:
 
 Canvas semantics:
 - Use `canvasOutput` when an agent produces user-visible output.
-- Agents with `canvasOutput` MUST produce content that matches the declared component type.
+- Agents with `canvasOutput` **MUST** produce content that matches the declared component type.
 
 Splitter pattern (fan-out):
 - If one upstream output must be consumed in different ways, create splitter agents.
