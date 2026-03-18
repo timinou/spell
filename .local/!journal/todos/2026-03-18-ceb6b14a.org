@@ -2,40 +2,32 @@
 #+DATE: 2026-03-18
 #+TODO: ITEM DOING | DONE
 
-* Wave 1: CLI Migration
+* Wave 2: Core Modules (parallel)
 
-** DONE PROJ-1: Replace --qml with --canvas [name]
+** DONE PROJ-2: Orchestration module
 :PROPERTIES:
-:TASK_ID: task-1
+:TASK_ID: task-2
 :STATUS: completed
 :END:
 
-* Wave 2: Core Modules (parallel)
-
-** DOING PROJ-2: Orchestration module
-:PROPERTIES:
-:TASK_ID: task-2
-:STATUS: in_progress
-:END:
-
-** ITEM PROJ-3: Planning agent prompt + schema
+** DONE PROJ-3: Planning agent prompt + schema
 :PROPERTIES:
 :TASK_ID: task-3
-:STATUS: pending
+:STATUS: completed
 :END:
 
-** ITEM PROJ-4: QML shell and components
+** DONE PROJ-4: QML shell and components
 :PROPERTIES:
 :TASK_ID: task-4
-:STATUS: pending
+:STATUS: completed
 :END:
 
 * Wave 3: Wiring
 
-** ITEM PROJ-5: Fluid mode entry point
+** DOING PROJ-5: Fluid mode entry point
 :PROPERTIES:
 :TASK_ID: task-5
-:STATUS: pending
+:STATUS: in_progress
 :END:
 
 * Wave 4: Testing
