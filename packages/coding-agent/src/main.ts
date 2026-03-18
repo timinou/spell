@@ -25,6 +25,7 @@ import { initializeWithSettings } from "./discovery";
 import { exportFromFile } from "./export/html";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import { InteractiveMode, runPrintMode, runQmlMode, runRpcMode } from "./modes";
+import { runFluidMode } from "./modes/fluid-mode";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
 import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "./sdk";
@@ -707,21 +708,36 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		process.exit(1);
 	}
 
-	if (parsedArgs.qml) {
-		const qmlSessionId = session.sessionManager.getSessionId();
-		const qmlSessionFile = session.sessionManager.getSessionFile();
-		await runQmlMode(session, {
-			initialMessage: initialMessage ?? parsedArgs.messages[0],
-			sessionFile: qmlSessionFile,
-			eventBus,
-			orchestratorManager,
-		});
-		await session.dispose();
-		stopThemeWatcher();
-		if (qmlSessionId && qmlSessionFile) {
-			process.stderr.write(`\n${chalk.dim(`Resume this session with spell --resume ${qmlSessionId}`)}\n`);
+	if (parsedArgs.canvas) {
+		const canvasName = parsedArgs.canvas;
+		if (canvasName === "chat") {
+			const canvasSessionId = session.sessionManager.getSessionId();
+			const canvasSessionFile = session.sessionManager.getSessionFile();
+			await runQmlMode(session, {
+				initialMessage: initialMessage ?? parsedArgs.messages[0],
+				sessionFile: canvasSessionFile,
+				eventBus,
+				orchestratorManager,
+			});
+			await session.dispose();
+			stopThemeWatcher();
+			if (canvasSessionId && canvasSessionFile) {
+				process.stderr.write(`\n${chalk.dim(`Resume this session with spell --resume ${canvasSessionId}`)}\n`);
+			}
+			await postmortem.quit(0);
+		} else if (canvasName === "fluid") {
+			await runFluidMode(session, {
+				initialMessage: initialMessage ?? parsedArgs.messages[0],
+				eventBus,
+				orchestratorManager,
+			});
+			await session.dispose();
+			stopThemeWatcher();
+			await postmortem.quit(0);
+		} else {
+			process.stderr.write(`${chalk.red(`Unknown canvas: ${canvasName}. Available: chat, fluid`)}\n`);
+			await postmortem.quit(1);
 		}
-		await postmortem.quit(0);
 	}
 
 	if (mode === "rpc") {

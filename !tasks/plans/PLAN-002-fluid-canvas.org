@@ -1,0 +1,181 @@
+#+TITLE: FLUID_CANVAS
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-fluid-canvas
+
+* Goal
+
+Replace ~spell --qml~ with ~spell --canvas [name]~. Keep existing chat canvas as ~--canvas chat~. Build a new ~fluid~ canvas (default) that takes a single text prompt, decomposes it into a DAG of agent tasks via a planning agent, and executes them reactively via a queue-based scheduler. Each agent's output fills a queue; downstream agents that subscribe to it become ready and are dispatched. Agents stream live output to their own panel, and the planning agent declares which agents produce persistent canvas components.
+
+* Architecture
+
+#+begin_example
+CLI (--canvas [name])
+  \u2502
+  \u251c\u2500 \"chat\" \u2192 runQmlMode (existing, unchanged)
+  \u2502
+  \u2514\u2500 \"fluid\" (default) \u2192 runFluidMode
+        \u2502
+        \u251c\u2500 QmlBridge \u2192 FluidShell.qml
+        \u2502     \u251c\u2500 Input state (centered text box)
+        \u2502     \u251c\u2500 Planning state (loading)
+        \u2502     \u2514\u2500 Execution state (agent panel grid + queue inspector)
+        \u2502
+        \u2514\u2500 FluidOrchestrator
+              \u251c\u2500 Planning agent (runSubprocess + outputSchema)
+              \u251c\u2500 DAG validator (cycle detection, queue topology)
+              \u251c\u2500 Queue scheduler (reactive dispatch, concurrency semaphore)
+              \u251c\u2500 Event router (EventBus \u2192 SessionEventMapper \u2192 bridge)
+              \u2514\u2500 Drain timer (100ms, reentrancy guarded)
+#+end_example
+
+* Queue-Based Execution Model
+
+Each agent has exactly one output queue. Agents declare which queues they subscribe to (via ~dependsOn~). The scheduler dispatches an agent when *all* its subscribed queues have data. Concurrency is bounded by a configurable semaphore (default 5).
+
+#+begin_example
+analyze \u2500\u2500\u252c\u2500\u2500 extract-findings \u2500\u2500 fix-issues
+           \u2502
+           \u2514\u2500\u2500 extract-metrics  \u2500\u2500 dashboard (canvasOutput: table)
+#+end_example
+
+\"Waves\" are emergent: agents with no deps start immediately; their completion unlocks subscribers, which start immediately (up to concurrency limit). No explicit wave iteration.
+
+For fan-out (one agent's output consumed differently by multiple agents), the planning agent creates lightweight \"splitter\" nodes \u2014 regular agents with trivial extraction tasks. This keeps the model simple: one output per node, always.
+
+When an agent completes, its full ~SingleResult~ (output text, exit code, duration, tokens) is passed as structured context to all dependent agents.
+
+Agents with ~canvasOutput~ declared in the plan produce persistent canvas components (markdown, table, diff, etc.) when they complete. This is how the interface adapts: the planning agent controls what the user sees.
+
+* Key Technical Decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| ~--qml~ | Removed entirely | No external consumers, one concept one representation |
+| Execution model | Queue-based reactive scheduler | Waves are emergent, not pre-computed; naturally handles fan-out |
+| Fan-out | Splitter nodes (composition) | One output per node; no multi-port complexity |
+| DAG module | New in coding-agent, purpose-built | Swarm-ext not a dep; only ~dependsOn~ needed |
+| Module location | ~src/orchestrators/fluid/~ subfolder | Groups dag, queue-scheduler, event-router, orchestrator, types |
+| Planning agent tools | Configurable via ~settings.fluidFastPlan~ | Better plans with tools, fast option for quick tasks |
+| Concurrency | Configurable via ~settings.fluidConcurrency~, default 5 | Semaphore in scheduler |
+| Canvas output | Declared per-agent in FluidPlan (~canvasOutput~ field) | Planning agent controls UI layout |
+| Panel creation | Two-phase (create \u2192 confirm \u2192 start) | Prevents event loss from late panel creation |
+| Event drain | 100ms setInterval with reentrancy guard | Prevents UI freeze when parent agent idle |
+| Iterative planning | Phase 2 (not this plan) | Single-intent first, add re-planning later |
+| Mock strategy | Constructor injection (~runAgent~ option) | Avoids module-level mock leakage |
+| Multi-publishing | Composition (splitter nodes) | Keeps core model simple, no multi-port agents |
+
+* Critical Risk: EventBus Drain
+
+Drain is coupled to parent agent turn lifecycle (sdk.ts:1775). In fluid mode the parent is idle while subagents work. Without active draining, P1 queue fills at 100 entries and blocks. FluidOrchestrator owns a 100ms drain timer with reentrancy guard (~#draining~ boolean) to prevent overlapping drain() calls. ~drain()~ awaits handlers sequentially; reentrancy guard prevents handler interleaving.
+
+* PROJ Dependency Graph
+
+#+begin_example
+PROJ-1 (CLI)        \u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+                     \u2502
+                     v
+PROJ-2 (Orchestration) \u2500\u252c\u2500\u2500\u2500 PROJ-3 (Planner)        [parallel]
+                        \u2502
+                        \u2502\u2500\u2500\u2500 PROJ-4 (QML)            [parallel]
+                        \u2502
+                        v
+                   PROJ-5 (Wiring)         \u2500\u2500\u2500\u2500\u2500\u2500 needs 2+3+4
+                        \u2502
+                        v
+                   PROJ-6 (Tests)          \u2500\u2500\u2500\u2500\u2500\u2500 needs all above
+#+end_example
+
+* Execution Plan
+
+** Wave 1: CLI (blocks everything)
+
+| PROJ | Effort | Description |
+|---|---|---|
+| [[org:DRAFT-009-proj-1-cli-flag-migration-qml-to-canvas][PROJ-1]] | 1h | Replace ~--qml~ with ~--canvas [name]~, wire ~chat~ \u2192 runQmlMode, stub ~fluid~ |
+
+** Wave 2: Core modules (parallel)
+
+| PROJ | Effort | Description |
+|---|---|---|
+| [[org:DRAFT-009-proj-2-fluid-orchestration-module-dag-wa][PROJ-2]] | 6h | dag.ts, queue-scheduler.ts, event-router.ts, fluid-orchestrator.ts, types.ts |
+| [[org:DRAFT-009-proj-3-planning-agent-prompt-and-schema][PROJ-3]] | 2h | fluid-planner.md prompt + plan-schema.ts (JTD), splitter pattern guidance |
+| [[org:DRAFT-009-proj-4-fluid-qml-shell-and-components][PROJ-4]] | 6h | FluidShell.qml, AgentPanel.qml, QueueInspector.qml |
+
+** Wave 3: Wiring
+
+| PROJ | Effort | Description |
+|---|---|---|
+| [[org:DRAFT-009-proj-5-fluid-mode-entry-point-and-wiring][PROJ-5]] | 2h | fluid-mode.ts entry point, main.ts integration, settings keys |
+
+** Wave 4: Testing
+
+| PROJ | Effort | Description |
+|---|---|---|
+| [[org:DRAFT-009-proj-6-test-infrastructure-and-journey-t][PROJ-6]] | 6h | Mock runner, drain tests, DAG tests, scheduler tests, journey tests |
+
+Total estimated effort: *~23h* (3 days with parallel execution of Wave 2).
+
+* Settings Keys (new)
+
+Extend Settings type in coding-agent:
+- ~fluidConcurrency: number~ \u2014 max concurrent agents per fluid orchestration (default: 5)
+- ~fluidFastPlan: boolean~ \u2014 skip tool access for planning agent (default: false)
+
+* Verification Checkpoints
+
+** After Wave 1
+- ~bun check:ts~
+- ~spell --canvas chat~ launches existing QML shell
+- ~spell --canvas~ defaults to fluid (graceful stub error)
+
+** After Wave 2
+- ~bun check:ts~
+- DAG unit tests pass
+- Scheduler unit tests pass (with mock runner)
+
+** After Wave 3
+- ~bun check:ts~
+- ~spell --canvas fluid~ opens FluidShell window
+- Manual: type intent \u2192 planning starts \u2192 panels appear \u2192 agents stream
+
+** After Wave 4
+- All tests pass:
+  - ~bun test test/orchestrators/fluid-dag.test.ts~
+  - ~bun test test/orchestrators/fluid-scheduler.test.ts~
+  - ~bun test test/orchestrators/fluid-drain.test.ts~
+  - ~bun test test/integration/fluid-shell-*.test.ts~ (requires bridge)
+- ~bun check:ts~
+
+* Files Created/Modified Summary
+
+| File | Action | PROJ |
+|---|---|---|
+| ~src/cli/args.ts~ | Modify | 1 |
+| ~src/main.ts~ | Modify | 1, 5 |
+| ~src/orchestrators/fluid/index.ts~ | Create | 2 |
+| ~src/orchestrators/fluid/types.ts~ | Create | 2 |
+| ~src/orchestrators/fluid/dag.ts~ | Create | 2 |
+| ~src/orchestrators/fluid/queue-scheduler.ts~ | Create | 2 |
+| ~src/orchestrators/fluid/event-router.ts~ | Create | 2 |
+| ~src/orchestrators/fluid/fluid-orchestrator.ts~ | Create | 2 |
+| ~src/orchestrators/fluid/plan-schema.ts~ | Create | 3 |
+| ~src/prompts/agents/fluid-planner.md~ | Create | 3 |
+| ~src/modes/qml/FluidShell.qml~ | Create | 4 |
+| ~src/modes/qml/components/AgentPanel.qml~ | Create | 4 |
+| ~src/modes/qml/components/QueueInspector.qml~ | Create | 4 |
+| ~src/modes/fluid-mode.ts~ | Create | 5 |
+| Settings type (location TBD) | Modify | 5 |
+| ~packages/qml/src/test-harness.ts~ | Modify | 6 |
+| ~test/helpers/mock-subprocess.ts~ | Create | 6 |
+| ~test/orchestrators/fluid-dag.test.ts~ | Create | 6 |
+| ~test/orchestrators/fluid-scheduler.test.ts~ | Create | 6 |
+| ~test/orchestrators/fluid-drain.test.ts~ | Create | 6 |
+| ~test/integration/fluid-shell-input.test.ts~ | Create | 6 |
+| ~test/integration/fluid-shell-panels.test.ts~ | Create | 6 |
+| ~test/integration/fluid-shell-queue.test.ts~ | Create | 6 |
+
+* Phase 2 (future, not this plan)
+
+- Iterative planning: user submits additional intents while agents run
+- Multi-publish via publish tool (agents push to named queues during execution)
+- Agent panel interaction (user can steer individual agents mid-execution)

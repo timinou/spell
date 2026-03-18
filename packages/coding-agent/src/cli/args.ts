@@ -37,7 +37,7 @@ export interface Args {
 	extensions?: string[];
 	noExtensions?: boolean;
 	print?: boolean;
-	qml?: boolean;
+	canvas?: string;
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
@@ -138,8 +138,13 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			}
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
-		} else if (arg === "--qml") {
-			result.qml = true;
+		} else if (arg === "--canvas") {
+			const next = args[i + 1];
+			if (next && !next.startsWith("-")) {
+				result.canvas = args[++i];
+			} else {
+				result.canvas = "fluid";
+			}
 		} else if (arg === "--export" && i + 1 < args.length) {
 			result.export = args[++i];
 		} else if (arg === "--hook" && i + 1 < args.length) {
