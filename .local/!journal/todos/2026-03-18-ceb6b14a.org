@@ -2,40 +2,20 @@
 #+DATE: 2026-03-18
 #+TODO: ITEM DOING | DONE
 
-* Wave 2: Core Modules (parallel)
-
-** DONE PROJ-2: Orchestration module
-:PROPERTIES:
-:TASK_ID: task-2
-:STATUS: completed
-:END:
-
-** DONE PROJ-3: Planning agent prompt + schema
-:PROPERTIES:
-:TASK_ID: task-3
-:STATUS: completed
-:END:
-
-** DONE PROJ-4: QML shell and components
-:PROPERTIES:
-:TASK_ID: task-4
-:STATUS: completed
-:END:
-
 * Wave 3: Wiring
 
-** DOING PROJ-5: Fluid mode entry point
+** DONE PROJ-5: Fluid mode entry point
 :PROPERTIES:
 :TASK_ID: task-5
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
 * Wave 4: Testing
 
-** ITEM PROJ-6: Tests and verification
+** DOING PROJ-6: Tests and verification
 :PROPERTIES:
 :TASK_ID: task-6
-:STATUS: pending
+:STATUS: in_progress
 :END:
 
 * Verification
