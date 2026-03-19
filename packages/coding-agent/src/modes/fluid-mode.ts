@@ -9,11 +9,12 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
-import { FluidEventRouter, FluidOrchestrator } from "../orchestrators/fluid";
+import { FluidEventRouter, FluidOrchestrator, validatePlan } from "../orchestrators/fluid";
 import { fluidPlanSchema } from "../orchestrators/fluid/plan-schema";
 import type { AgentRuntime, FluidAgentNode, FluidEvent, FluidPlan } from "../orchestrators/fluid/types";
 import { FLUID_EVENT_CHANNEL } from "../orchestrators/fluid/types";
 import fluidPlannerPrompt from "../prompts/agents/fluid-planner.md" with { type: "text" };
+import fluidPlannerRetryPrompt from "../prompts/agents/fluid-planner-retry.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { runSubprocess } from "../task/executor";
 import type { AgentDefinition, SingleResult } from "../task/types";
@@ -29,6 +30,9 @@ interface ExecutionSnapshot {
 	plan: FluidPlan;
 	results: Map<string, AgentRuntime>;
 }
+
+const PLAN_VALIDATION_RETRY_FALLBACK =
+	"Refine the plan so tasks are concrete, dependencies are minimal, and coverage matches the user request.";
 
 export async function runFluidMode(session: AgentSession, options: FluidModeOptions = {}): Promise<void> {
 	const eventBus = options.eventBus;
@@ -126,7 +130,15 @@ async function executePlan(
 			return undefined;
 		}
 
-		const plan = await runPlanningAgent(session, eventBus, prompt, cwd, fastPlan, signal);
+		const initialPlan = await runPlanningAgent(session, eventBus, prompt, cwd, fastPlan, signal);
+		if (!initialPlan) {
+			if (signal?.aborted) {
+				emitExecutionCancelled(eventBus, signal);
+			}
+			return undefined;
+		}
+
+		const plan = await validateAndRefinePlan(session, eventBus, prompt, initialPlan, cwd, fastPlan, signal);
 		if (!plan) {
 			if (signal?.aborted) {
 				emitExecutionCancelled(eventBus, signal);
@@ -143,6 +155,73 @@ async function executePlan(
 	} finally {
 		await stopPlanningDrainTimer();
 	}
+}
+
+async function validateAndRefinePlan(
+	session: AgentSession,
+	eventBus: EventBus,
+	prompt: string,
+	initialPlan: FluidPlan,
+	cwd: string,
+	fastPlan: boolean,
+	signal?: AbortSignal,
+): Promise<FluidPlan | undefined> {
+	eventBus.enqueue(
+		FLUID_EVENT_CHANNEL,
+		{ type: "planner_stream", text: "Validating plan..." },
+		Priority.P2,
+		"stream:planner",
+	);
+	const firstValidation = validatePlan(initialPlan);
+	if (signal?.aborted) {
+		return undefined;
+	}
+	if (firstValidation.warnings.length > 0) {
+		logger.warn("Fluid plan validation produced warnings", { warnings: firstValidation.warnings });
+	}
+	if (firstValidation.valid) {
+		return initialPlan;
+	}
+
+	const firstCritique =
+		firstValidation.errors.length > 0
+			? `Structural validation failed: ${firstValidation.errors.join("; ")}`
+			: PLAN_VALIDATION_RETRY_FALLBACK;
+
+	eventBus.enqueue(
+		FLUID_EVENT_CHANNEL,
+		{ type: "planner_stream", text: "Refining plan based on validation feedback..." },
+		Priority.P2,
+		"stream:planner",
+	);
+	const revisedPlan = await runPlanningAgent(session, eventBus, prompt, cwd, fastPlan, signal, firstCritique);
+	if (!revisedPlan || signal?.aborted) {
+		return undefined;
+	}
+
+	eventBus.enqueue(
+		FLUID_EVENT_CHANNEL,
+		{ type: "planner_stream", text: "Validating revised plan..." },
+		Priority.P2,
+		"stream:planner",
+	);
+	const secondValidation = validatePlan(revisedPlan);
+	if (signal?.aborted) {
+		return undefined;
+	}
+	if (secondValidation.warnings.length > 0) {
+		logger.warn("Fluid plan validation produced warnings", { warnings: secondValidation.warnings });
+	}
+	if (secondValidation.valid) {
+		return revisedPlan;
+	}
+
+	const secondCritique =
+		secondValidation.errors.length > 0
+			? `Structural validation failed after one refinement attempt: ${secondValidation.errors.join("; ")}`
+			: "Plan failed validation after one refinement attempt.";
+	emitPlanError(eventBus, secondCritique);
+	return undefined;
 }
 
 async function executeFluidPlan(
@@ -186,6 +265,7 @@ async function runPlanningAgent(
 	cwd: string,
 	fastPlan: boolean,
 	signal?: AbortSignal,
+	critique?: string,
 ): Promise<FluidPlan | undefined> {
 	const systemPrompt = renderPromptTemplate(fluidPlannerPrompt, { cwd });
 
@@ -197,13 +277,16 @@ async function runPlanningAgent(
 		tools: fastPlan ? [] : ["read", "grep", "find", "lsp"],
 	};
 
+	const planningTask = critique
+		? renderPromptTemplate(fluidPlannerRetryPrompt, { userPrompt: prompt, critique })
+		: prompt;
 	let lastIntent = "";
 	try {
 		const result = await runSubprocess({
 			cwd,
 			agent,
-			task: prompt,
-			assignment: prompt,
+			task: planningTask,
+			assignment: planningTask,
 			index: 0,
 			id: `fluid-planner-${Date.now()}`,
 			outputSchema: fluidPlanSchema,

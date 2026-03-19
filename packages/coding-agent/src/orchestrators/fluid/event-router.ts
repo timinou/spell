@@ -1,5 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { type EventBus, Priority } from "../../utils/event-bus";
+import { highlightFluidCode } from "./code-highlight";
 import { FLUID_EVENT_CHANNEL, type FluidEvent } from "./types";
 
 export class FluidEventRouter {
@@ -43,7 +44,7 @@ export class FluidEventRouter {
 					agentId: event.agentId,
 					outputType: event.outputType,
 					title: event.title,
-					content: event.content,
+					content: event.outputType === "code" ? highlightFluidCode(event.content) : event.content,
 				};
 			case "execution_cancelled":
 				return { type: "fluid:execution_cancelled", reason: event.reason };

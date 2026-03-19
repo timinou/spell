@@ -7,6 +7,8 @@ export const canvasOutputSchema = Type.Object({
 		Type.Literal("diff"),
 		Type.Literal("tree"),
 		Type.Literal("log"),
+		Type.Literal("code"),
+		Type.Literal("progress"),
 	]),
 	title: Type.String({ description: "Display title for the canvas component" }),
 });

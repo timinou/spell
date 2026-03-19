@@ -1,6 +1,7 @@
 import type { SingleResult } from "../../task/types";
 
-export type CanvasOutputType = "markdown" | "table" | "diff" | "tree" | "log";
+export const CANVAS_OUTPUT_TYPES = ["markdown", "table", "diff", "tree", "log", "code", "progress"] as const;
+export type CanvasOutputType = (typeof CANVAS_OUTPUT_TYPES)[number];
 
 export interface FluidAgentNode {
 	id: string;

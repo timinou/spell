@@ -1,6 +1,6 @@
 import type { SingleResult } from "../../task/types";
 import { type EventBus, Priority } from "../../utils/event-bus";
-import { validateDag } from "./dag";
+import { validatePlan } from "./dag";
 import { QueueScheduler, type RunAgentFn } from "./queue-scheduler";
 import { type AgentRuntime, FLUID_EVENT_CHANNEL, type FluidAgentNode, type FluidPlan } from "./types";
 
@@ -40,7 +40,7 @@ export class FluidOrchestrator {
 		presetCompletedResults?: Map<string, SingleResult>,
 	): Promise<Map<string, AgentRuntime>> {
 		void this.#cwd;
-		const validation = validateDag(plan);
+		const validation = validatePlan(plan);
 		if (!validation.valid) {
 			const error = validation.errors.join("; ");
 			this.#eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_error", error }, Priority.P1);

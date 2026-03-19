@@ -122,6 +122,41 @@ describe("FluidEventRouter payload mapping", () => {
 		]);
 	});
 
+	test("maps code canvas_output into structured highlighted payload", async () => {
+		const eventBus = new EventBus();
+		new FluidEventRouter(eventBus);
+
+		const outbound: Record<string, unknown>[] = [];
+		eventBus.subscribe("bridge:outbound", payload => {
+			outbound.push(asRecord(payload));
+		});
+
+		eventBus.emit(FLUID_EVENT_CHANNEL, {
+			type: "canvas_output",
+			agentId: "analyze-types",
+			outputType: "code",
+			title: "Type map",
+			content: "```ts\nconst value = 1;\n```",
+		} satisfies FluidEvent);
+		await eventBus.drain();
+
+		expect(outbound).toHaveLength(1);
+		const payload = outbound[0];
+		expect(payload.type).toBe("fluid:canvas_output");
+		expect(payload.agentId).toBe("analyze-types");
+		expect(payload.outputType).toBe("code");
+		expect(payload.title).toBe("Type map");
+		expect(payload.content).toMatchObject({
+			language: "ts",
+			code: "const value = 1;",
+		});
+		const html = asRecord(payload.content).html;
+		expect(typeof html).toBe("string");
+		if (html !== "") {
+			expect(html).toContain("<pre");
+		}
+	});
+
 	test("serializes execution_complete result map into array entries", async () => {
 		const eventBus = new EventBus();
 		new FluidEventRouter(eventBus);

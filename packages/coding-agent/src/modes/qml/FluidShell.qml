@@ -204,6 +204,50 @@ ApplicationWindow {
             }
             return payloadContent
         }
+
+        if (outputType === "code") {
+            if (typeof payloadContent === "string") {
+                return { code: payloadContent, html: "", language: "text" }
+            }
+            if (!payloadContent) {
+                return { code: "", html: "", language: "text" }
+            }
+
+            var normalizedCode = payloadContent.code !== undefined
+                ? String(payloadContent.code)
+                : (payloadContent.text !== undefined ? String(payloadContent.text) : "")
+
+            return {
+                code: normalizedCode,
+                html: payloadContent.html !== undefined && payloadContent.html !== null ? String(payloadContent.html) : "",
+                language: payloadContent.language ? String(payloadContent.language) : "text"
+            }
+        }
+
+        if (outputType === "progress") {
+            if (typeof payloadContent === "number") {
+                return { value: payloadContent, max: 100, label: outputTitle ? String(outputTitle) : "Progress" }
+            }
+            if (typeof payloadContent === "string") {
+                var parsed = Number(payloadContent)
+                if (isFinite(parsed)) {
+                    return { value: parsed, max: 100, label: outputTitle ? String(outputTitle) : "Progress" }
+                }
+                return { value: -1, max: 100, label: payloadContent }
+            }
+            if (!payloadContent) {
+                return { value: 0, max: 100, label: outputTitle ? String(outputTitle) : "Progress" }
+            }
+            var normalizedValue = payloadContent.value !== undefined ? Number(payloadContent.value) : 0
+            return {
+                value: isFinite(normalizedValue) ? normalizedValue : 0,
+                max: payloadContent.max !== undefined && isFinite(Number(payloadContent.max)) ? Number(payloadContent.max) : 100,
+                label: payloadContent.label !== undefined && payloadContent.label !== null
+                    ? String(payloadContent.label)
+                    : (outputTitle ? String(outputTitle) : "Progress")
+            }
+        }
+
         if (typeof payloadContent === "string") {
             return { text: payloadContent }
         }

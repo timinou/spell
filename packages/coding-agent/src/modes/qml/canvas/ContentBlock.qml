@@ -23,7 +23,7 @@ Rectangle {
             }
         }
 
-        if (type === "table" || type === "diff" || type === "tree") {
+        if (type === "table" || type === "diff" || type === "tree" || type === "code" || type === "progress") {
             return {
                 bg: SpellUI.SpellTheme.surface0,
                 border: SpellUI.SpellTheme.borderDefault,
@@ -84,6 +84,8 @@ Rectangle {
                 case "layout": return layoutComponent
                 case "status": return statusComponent
                 case "log": return logComponent
+                case "code": return codeComponent
+                case "progress": return progressComponent
                 default: return fallbackComponent
             }
         }
@@ -198,6 +200,22 @@ Rectangle {
         id: logComponent
         Components.LogStream {
             logData: root.blockData
+            width: parent ? parent.width : 0
+        }
+    }
+
+    Component {
+        id: codeComponent
+        Components.CodeBlock {
+            codeData: root.blockData
+            width: parent ? parent.width : 0
+        }
+    }
+
+    Component {
+        id: progressComponent
+        Components.ProgressBar {
+            progressData: root.blockData
             width: parent ? parent.width : 0
         }
     }
