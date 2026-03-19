@@ -87,25 +87,62 @@ async function executePlan(
 	fastPlan: boolean,
 	signal?: AbortSignal,
 ): Promise<ExecutionSnapshot | undefined> {
-	eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_start" }, Priority.P1);
-	if (signal?.aborted) {
-		emitExecutionCancelled(eventBus, signal);
-		return undefined;
-	}
+	let draining = false;
+	let planningDrainTimer: NodeJS.Timeout | undefined;
+	const drainEventBusOnce = async (): Promise<number> => {
+		if (draining) {
+			return 0;
+		}
+		draining = true;
+		try {
+			return await eventBus.drain();
+		} finally {
+			draining = false;
+		}
+	};
+	const flushEventBus = async (): Promise<void> => {
+		while (draining) {
+			await Bun.sleep(5);
+		}
+		while ((await drainEventBusOnce()) > 0) {
+			// eventBus.drain() is capped; keep flushing until the queue is empty.
+		}
+	};
+	const stopPlanningDrainTimer = async (): Promise<void> => {
+		if (planningDrainTimer) {
+			clearInterval(planningDrainTimer);
+			planningDrainTimer = undefined;
+		}
+		await flushEventBus();
+	};
+	planningDrainTimer = setInterval(() => {
+		void drainEventBusOnce();
+	}, 100);
 
-	const plan = await runPlanningAgent(session, eventBus, prompt, cwd, fastPlan, signal);
-	if (!plan) {
+	try {
+		eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_start" }, Priority.P1);
 		if (signal?.aborted) {
 			emitExecutionCancelled(eventBus, signal);
+			return undefined;
 		}
-		return undefined;
-	}
 
-	const results = await executeFluidPlan(session, eventBus, plan, cwd, concurrency, signal);
-	if (!results) {
-		return undefined;
+		const plan = await runPlanningAgent(session, eventBus, prompt, cwd, fastPlan, signal);
+		if (!plan) {
+			if (signal?.aborted) {
+				emitExecutionCancelled(eventBus, signal);
+			}
+			return undefined;
+		}
+
+		await stopPlanningDrainTimer();
+		const results = await executeFluidPlan(session, eventBus, plan, cwd, concurrency, signal);
+		if (!results) {
+			return undefined;
+		}
+		return { plan, results };
+	} finally {
+		await stopPlanningDrainTimer();
 	}
-	return { plan, results };
 }
 
 async function executeFluidPlan(
@@ -125,7 +162,9 @@ async function executeFluidPlan(
 	});
 
 	try {
-		return await orchestrator.execute(plan, signal, presetCompletedResults);
+		const results = await orchestrator.execute(plan, signal, presetCompletedResults);
+		await eventBus.drain();
+		return results;
 	} catch (err) {
 		if (signal?.aborted) {
 			emitExecutionCancelled(eventBus, signal);
