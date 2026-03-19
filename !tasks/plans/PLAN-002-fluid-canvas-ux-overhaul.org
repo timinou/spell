@@ -1,0 +1,111 @@
+#+TITLE: FLUID_CANVAS_UX_OVERHAUL
+#+STATE: DONE
+#+CUSTOM_ID: PLAN-002-fluid-canvas-ux-overhaul
+
+* Summary
+
+The fluid canvas mode (=spell --canvas fluid=) has a broken feedback loop: the user types a prompt, clicks Plan, and sees nothing happen. The interface stays at the input screen for the entire planning duration (30-60s), then jumps to execution with no intermediate visibility. During execution, there's no elapsed time, no cancel, no error details, no dependency status, and the terminal is completely silent.
+
+This plan orchestrates three phases of fixes, each buildable and shippable independently.
+
+* Critical bug (discovered during investigation)
+
+=plan_start= is emitted inside =FluidOrchestrator.execute()= (line 35 of =fluid-orchestrator.ts=), which only runs AFTER =runPlanningAgent()= completes. The planning subprocess can take 30-60 seconds. During this time, ZERO events reach QML. The UI stays at \"What do you want to build?\" with no feedback.
+
+Additional stuck-state bugs:
+- Abort path (=fluid-mode.ts:101=) skips error emission when =ac.signal.aborted= is true, leaving QML in =executing= state forever
+- =submitPrompt()= has no state guard -- can double-submit
+- =agent_state_change= events omit =error= string for failed agents (no data path to show error in panel)
+- =agent_state_change= events omit timestamps (=startedAt/completedAt= tracked in runtime but not forwarded)
+- AbortController is local to =executePlan()= with nothing calling =abort()= -- no cancel path exists
+- Running agents are not signaled on abort (signal not threaded through =RunAgentFn=)
+- Duplicate =plan_error= emission paths: one via event bus, one via direct =bridge.sendMessage()= bypass
+- After =execution_complete=, user has no way to submit a new prompt (no back-to-input transition)
+
+* Phases
+
+** Phase 0: Fix Silent Planning + Stuck States
+:PROPERTIES:
+:EFFORT: 4h
+:END:
+
+Org ref: =DRAFT-009-fluid-canvas-phase-0-fix-silent-planning=
+
+Core fix: move =plan_start= emission to =executePlan()= before =runPlanningAgent()=. Add planner streaming via =onProgress=. Replace static spinner with streaming text + elapsed timer. Fix all stuck states and error path consolidation.
+
+Ships: user sees immediate \"Planning...\" with live streaming when they click Plan.
+
+** Phase 1: Immediate Feedback Affordances
+:PROPERTIES:
+:EFFORT: 10h
+:END:
+
+Org ref: =DRAFT-009-fluid-canvas-phase-1-immediate-feedback=
+
+Elapsed time on agent panels. Error text in failed panels. Cancel button + Escape keybind. Dependency status inline. Terminal feedback. =RunAgentFn= signature change (signal threading).
+
+Ships: user understands what every agent is doing, how long it's taking, what failed and why. Can cancel at any time.
+
+** Phase 2: DAG Graph, Retry, Expandable Panels
+:PROPERTIES:
+:EFFORT: 20h
+:END:
+
+Org ref: =DRAFT-009-fluid-canvas-phase-2-dag-graph-retry-exp=
+
+Horizontal DAG graph (nodes + edges, state-colored, interactive). Retry failed subtree. Expandable agent panels. Post-completion summary with totals.
+
+Ships: user sees the full orchestration topology, can drill into any agent, retry failures, and get a summary at the end.
+
+* Execution order
+
+1. Phase 0 first (blocks everything -- the UI is currently broken)
+2. Phase 1 next (builds on corrected event flow from Phase 0)
+3. Phase 2 last (builds on Phase 1 data model additions)
+
+Phases 0 and 1 could be merged into a single implementation session if momentum is good. Phase 2 is independently shippable later.
+
+* Key files (cross-phase reference)
+
+| File | Phase 0 | Phase 1 | Phase 2 |
+|---+---+---+---|
+| =src/orchestrators/fluid/types.ts= | +planner_stream, +error on agent_state_change | +timestamps, +execution_cancelled | -- |
+| =src/orchestrators/fluid/fluid-orchestrator.ts= | Remove plan_start | -- | -- |
+| =src/orchestrators/fluid/queue-scheduler.ts= | +error in failed event payload | +timestamps in events, thread signal, RunAgentFn sig change | -- |
+| =src/orchestrators/fluid/event-router.ts= | +planner_stream mapping | +error/timestamp forwarding, +execution_cancelled | -- |
+| =src/modes/fluid-mode.ts= | Move plan_start, add planner stream, fix abort path, consolidate plan_error to event bus only | Lift AC, thread signal, cancel handler, terminal | +retry handler |
+| =src/modes/qml/FluidShell.qml= | Streaming planning view, submission guard, back-to-input button in complete state | Cancel UI, dep tracking, execution_cancelled | +DagGraph, retry button, summary |
+| =src/modes/qml/components/AgentPanel.qml= | +error text display | +elapsed timer, dep status | +expand/collapse |
+| =src/modes/qml/components/QueueInspector.qml= | -- | -- | -- |
+| =src/modes/qml/components/DagGraph.qml= | -- | -- | NEW |
+
+* Test impact matrix
+
+** Phase 0: plan_start removal from orchestrator
+| Test file | Impact | Required change |
+|---+---+---|
+| =test/integration/fluid-event-pipeline.test.ts= | =planStartIndex= assertions break (plan_start no longer emitted by orchestrator) | Remove plan_start from orchestrator-level pipeline tests; add new integration test verifying executePlan-level sequence: plan_start -> [planner_stream...] -> plan_complete -> agent events -> execution_complete |
+| =test/orchestrators/fluid-drain.test.ts= | =plan_start= assertions in drain tests fail | Remove plan_start expectations from orchestrator drain tests; orchestrator contract now starts at plan_complete |
+| =test/orchestrators/fluid-scheduler.test.ts= | No impact (scheduler doesn't emit plan_start) | None |
+| =test/integration/fluid-shell-states.test.ts= | No impact (tests QML state, not event source) | None |
+| =test/integration/fluid-shell-agents.test.ts= | No impact | None |
+
+** Phase 1: RunAgentFn signature change (+ signal param)
+| Test file | Impact | Required change |
+|---+---+---|
+| =test/orchestrators/fluid-scheduler.test.ts= | Every =createMockRunner=, =createFailingRunner=, and inline =RunAgentFn= lambda | Add =_signal?: AbortSignal= to all mock runner signatures (~6 call sites) |
+| =test/integration/fluid-event-pipeline.test.ts= | Orchestrator =runAgent= option | Add =_signal= param to mock runner lambdas |
+
+* Decisions made
+
+- =plan_start= ownership moves from orchestrator to =executePlan()= (one emission point, no duplicates)
+- New =planner_stream= event type (not reusing =agent_stream= -- planner is not in the agent model, would collide)
+- =error= field added to =agent_state_change= variant in Phase 0 (not deferred to Phase 1) so abort-path errors can reach QML immediately
+- All =plan_error= emissions consolidated to event bus path only; direct =bridge.sendMessage= bypass in =executePlan= catch block removed
+- When =fastPlan=true= (tools=[]), =onProgress= may never fire with =lastIntent=. QML planning view uses a fallback: if no =planner_stream= text received after 2s, show BusyIndicator + elapsed timer only. If any stream text arrives, switch to streaming text view.
+- AbortController lifted to =processFluidEvents= scope so it spans planning + execution
+- Signal threaded all the way through: =RunAgentFn= signature changes to accept =AbortSignal= (impacts ~6 test mock sites enumerated above)
+- Terminal output via =process.stderr= (not logger -- logger goes to file only), gated by =fluid.debug= setting for verbose mode
+- StatusIndicator.qml not reused directly in AgentPanel (state name mismatch); elapsed timer logic built fresh in AgentPanel with Timer component
+- Dependency status computed in QML by cross-referencing =dependsOn= arrays stored in =agentsModel= against agent completion events. Note: =dependsOn= stored as JS array in ListModel with =dynamicRoles:true= -- use helper function for lookups, do not bind directly to array properties
+- Back-to-input transition added: \"New Prompt\" button in =complete= state, and after =execution_cancelled= event, return to =input= state

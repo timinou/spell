@@ -29,7 +29,12 @@ export class FluidEventRouter {
 					agentId: event.agentId,
 					state: event.state,
 					result: event.result,
+					error: event.error,
+					startedAt: event.startedAt,
+					completedAt: event.completedAt,
 				};
+			case "planner_stream":
+				return { type: "fluid:planner_stream", text: event.text };
 			case "agent_stream":
 				return { type: "fluid:agent_stream", agentId: event.agentId, text: event.text };
 			case "canvas_output":
@@ -40,6 +45,8 @@ export class FluidEventRouter {
 					title: event.title,
 					content: event.content,
 				};
+			case "execution_cancelled":
+				return { type: "fluid:execution_cancelled", reason: event.reason };
 			case "execution_complete":
 				return {
 					type: "fluid:execution_complete",
@@ -48,6 +55,8 @@ export class FluidEventRouter {
 						state: runtime.state,
 						error: runtime.error,
 						result: runtime.result,
+						startedAt: runtime.startedAt,
+						completedAt: runtime.completedAt,
 					})),
 				};
 			default:

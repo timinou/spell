@@ -11,12 +11,19 @@ Rectangle {
     property string agentTask: ""
     property string agentState: "pending"
     property string streamText: ""
+    property string errorText: ""
+    property string dependencyStatus: ""
+    property real startedAt: 0
+    property real completedAt: 0
+    property real nowMs: Date.now()
+    property bool expanded: false
     property var canvasOutput: null
 
     radius: SpellUI.SpellTheme.cornerRadius
     color: SpellUI.SpellTheme.surface0
     border.width: 1
     border.color: SpellUI.SpellTheme.borderSubtle
+    implicitHeight: root.expanded ? 380 : 170
 
     function stateColor(state) {
         switch (state) {
@@ -33,6 +40,28 @@ Rectangle {
         if (!state || state.length === 0) return "pending"
         return state
     }
+
+    function elapsedSeconds() {
+        if (startedAt <= 0) return 0
+        var endMs = completedAt > 0 ? completedAt : nowMs
+        return Math.max(0, Math.floor((endMs - startedAt) / 1000))
+    }
+
+    function formatElapsed() {
+        var secs = elapsedSeconds()
+        var mins = Math.floor(secs / 60)
+        var rem = secs % 60
+        return mins + "m " + (rem < 10 ? "0" : "") + rem + "s"
+    }
+
+    Timer {
+        interval: 1000
+        repeat: true
+        running: root.agentState === "running" && root.startedAt > 0
+        onTriggered: root.nowMs = Date.now()
+    }
+
+    onStartedAtChanged: nowMs = Date.now()
 
     ColumnLayout {
         anchors.fill: parent
@@ -65,6 +94,25 @@ Rectangle {
                     font.pixelSize: SpellUI.SpellTheme.fontSizeXS
                     elide: Text.ElideRight
                 }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: root.startedAt > 0
+                    text: "Elapsed: " + root.formatElapsed()
+                    color: SpellUI.SpellTheme.textTertiary
+                    font.family: SpellUI.SpellTheme.fontFamily
+                    font.pixelSize: SpellUI.SpellTheme.fontSizeXS
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: root.dependencyStatus.length > 0
+                    text: root.dependencyStatus
+                    color: SpellUI.SpellTheme.textTertiary
+                    font.family: SpellUI.SpellTheme.fontFamily
+                    font.pixelSize: SpellUI.SpellTheme.fontSizeXS
+                    elide: Text.ElideRight
+                }
             }
 
             Rectangle {
@@ -91,12 +139,29 @@ Rectangle {
                     font.weight: SpellUI.SpellTheme.fontWeightSemiBold
                 }
             }
+
+            Button {
+                Layout.alignment: Qt.AlignTop
+                text: root.expanded ? "Collapse" : "Expand"
+                onClicked: root.expanded = !root.expanded
+            }
+        }
+
+        Text {
+            Layout.fillWidth: true
+            visible: !root.expanded
+            text: root.streamText.length > 0 || root.canvasOutput ? "Expand to view output" : "Expand to inspect activity"
+            color: SpellUI.SpellTheme.textTertiary
+            font.family: SpellUI.SpellTheme.fontFamily
+            font.pixelSize: SpellUI.SpellTheme.fontSizeXS
         }
 
         Rectangle {
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.minimumHeight: 140
+            Layout.fillHeight: root.expanded
+            Layout.preferredHeight: root.expanded ? 180 : 0
+            Layout.minimumHeight: root.expanded ? 140 : 0
+            visible: root.expanded
             radius: SpellUI.SpellTheme.cornerRadiusSmall
             color: SpellUI.SpellTheme.background
             border.width: 1
@@ -133,10 +198,20 @@ Rectangle {
             }
         }
 
+        Text {
+            Layout.fillWidth: true
+            visible: root.agentState === "failed" && root.errorText.length > 0
+            text: root.errorText
+            color: SpellUI.SpellTheme.error
+            font.family: SpellUI.SpellTheme.fontFamily
+            font.pixelSize: SpellUI.SpellTheme.fontSizeXS
+            wrapMode: Text.WordWrap
+        }
+
         Loader {
             id: outputLoader
             Layout.fillWidth: true
-            active: root.canvasOutput !== null && root.canvasOutput !== undefined
+            active: root.expanded && root.canvasOutput !== null && root.canvasOutput !== undefined
             sourceComponent: outputComponent
         }
     }

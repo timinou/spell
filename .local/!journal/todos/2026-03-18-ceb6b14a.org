@@ -2,18 +2,10 @@
 #+DATE: 2026-03-18
 #+TODO: ITEM DOING | DONE
 
-* Wave 4: Testing
-
-** DONE PROJ-6: Tests and verification
-:PROPERTIES:
-:TASK_ID: task-6
-:STATUS: completed
-:END:
-
 * Verification
 
-** DOING Final type check and verification
+** DONE Final type check and verification
 :PROPERTIES:
 :TASK_ID: task-7
-:STATUS: in_progress
+:STATUS: completed
 :END:

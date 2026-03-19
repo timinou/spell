@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `planner_stream` and `execution_cancelled` fluid events, plus a `fluid.debug` setting for fluid canvas lifecycle tracing.
+- Added an interactive fluid DAG graph component with failed-subtree retry controls and execution summary stats.
+
+### Changed
+
+- Moved fluid `plan_start` emission to the planning entrypoint so users see immediate planning feedback with streaming progress and elapsed time.
+- Extended fluid execution to thread `AbortSignal` through planner/agent runs and support scheduler resume with preset completed agent results.
+- Updated fluid agent panels to show dependency status and support expandable/collapsible details.
+
+### Fixed
+
+- Fixed fluid canvas stuck states by consolidating plan error routing and returning to input after cancellation.
+- Fixed fluid agent state propagation to include failure error text plus start/completion timestamps for accurate UI status.
+
 ## [13.12.8] - 2026-03-16
 
 ### Breaking Changes

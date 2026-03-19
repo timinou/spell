@@ -1534,6 +1534,8 @@ export const SETTINGS_SCHEMA = {
 	"fluid.concurrency": { type: "number", default: 5 },
 
 	"fluid.fastPlan": { type: "boolean", default: false },
+
+	"fluid.debug": { type: "boolean", default: false },
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════════════

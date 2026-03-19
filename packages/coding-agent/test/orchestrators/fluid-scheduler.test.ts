@@ -20,7 +20,7 @@ function mockResult(id: string, output = ""): SingleResult {
 }
 
 function createMockRunner(results: Map<string, SingleResult>, delays?: Map<string, number>): RunAgentFn {
-	return async node => {
+	return async (node, _upstreamResults, _signal) => {
 		const delay = delays?.get(node.id) ?? 0;
 		if (delay > 0) {
 			await Bun.sleep(delay);
@@ -34,7 +34,7 @@ function createMockRunner(results: Map<string, SingleResult>, delays?: Map<strin
 }
 
 function createFailingRunner(failIds: Set<string>): RunAgentFn {
-	return async node => {
+	return async (node, _upstreamResults, _signal) => {
 		if (failIds.has(node.id)) {
 			throw new Error(`Agent ${node.id} failed`);
 		}
@@ -93,7 +93,7 @@ describe("QueueScheduler.execute", () => {
 	test("passes upstream results through a linear chain", async () => {
 		const plan = makePlan([makeNode("A"), makeNode("B", ["A"])]);
 		const upstreamSeen = new Map<string, Map<string, SingleResult>>();
-		const runner: RunAgentFn = async (node, upstreamResults) => {
+		const runner: RunAgentFn = async (node, upstreamResults, _signal) => {
 			upstreamSeen.set(node.id, new Map(upstreamResults));
 			return mockResult(node.id, `output-${node.id}`);
 		};
@@ -112,7 +112,7 @@ describe("QueueScheduler.execute", () => {
 		const plan = makePlan([makeNode("A"), makeNode("B")]);
 		const starts = new Map<string, number>();
 		const ends = new Map<string, number>();
-		const runner: RunAgentFn = async node => {
+		const runner: RunAgentFn = async (node, _upstreamResults, _signal) => {
 			starts.set(node.id, Date.now());
 			await Bun.sleep(80);
 			ends.set(node.id, Date.now());
@@ -140,7 +140,7 @@ describe("QueueScheduler.execute", () => {
 		const plan = makePlan([makeNode("A"), makeNode("B"), makeNode("C")]);
 		let active = 0;
 		let maxActive = 0;
-		const runner: RunAgentFn = async node => {
+		const runner: RunAgentFn = async (node, _upstreamResults, _signal) => {
 			active += 1;
 			maxActive = Math.max(maxActive, active);
 			try {
@@ -163,7 +163,7 @@ describe("QueueScheduler.execute", () => {
 	test("marks dependents failed when a dependency fails", async () => {
 		const plan = makePlan([makeNode("A"), makeNode("B", ["A"])]);
 		const started: string[] = [];
-		const runner: RunAgentFn = async (node, _upstreamResults) => {
+		const runner: RunAgentFn = async (node, _upstreamResults, _signal) => {
 			started.push(node.id);
 			return createFailingRunner(new Set(["A"]))(node, new Map());
 		};
@@ -181,7 +181,7 @@ describe("QueueScheduler.execute", () => {
 	test("passes both branch outputs to a diamond fan-in dependent", async () => {
 		const plan = makePlan([makeNode("A"), makeNode("B", ["A"]), makeNode("C", ["A"]), makeNode("D", ["B", "C"])]);
 		const upstreamSeen = new Map<string, Map<string, SingleResult>>();
-		const runner: RunAgentFn = async (node, upstreamResults) => {
+		const runner: RunAgentFn = async (node, upstreamResults, _signal) => {
 			upstreamSeen.set(node.id, new Map(upstreamResults));
 			return mockResult(node.id);
 		};
@@ -223,7 +223,7 @@ describe("QueueScheduler.execute", () => {
 		const controller = new AbortController();
 		const scheduler = new QueueScheduler({
 			concurrency: 1,
-			runAgent: async node => {
+			runAgent: async (node, _upstreamResults, _signal) => {
 				await Bun.sleep(100);
 				return mockResult(node.id);
 			},
@@ -235,5 +235,104 @@ describe("QueueScheduler.execute", () => {
 		controller.abort();
 
 		await expect(pending).rejects.toThrow("Fluid execution aborted");
+	});
+
+	test("completes five independent root agents at concurrency 5 and emits execution_complete once", async () => {
+		const plan = makePlan([makeNode("A"), makeNode("B"), makeNode("C"), makeNode("D"), makeNode("E")]);
+		const events: FluidEvent[] = [];
+		const scheduler = new QueueScheduler({
+			concurrency: 5,
+			runAgent: createMockRunner(
+				new Map([
+					["A", mockResult("A")],
+					["B", mockResult("B")],
+					["C", mockResult("C")],
+					["D", mockResult("D")],
+					["E", mockResult("E")],
+				]),
+			),
+			onEvent: event => {
+				events.push(event);
+			},
+		});
+
+		const results = await scheduler.execute(plan);
+
+		expect(results.size).toBe(5);
+		for (const id of ["A", "B", "C", "D", "E"]) {
+			expect(results.get(id)?.state).toBe("completed");
+		}
+
+		const completionEvents = events.filter(
+			(event): event is Extract<FluidEvent, { type: "execution_complete" }> => event.type === "execution_complete",
+		);
+		expect(completionEvents).toHaveLength(1);
+
+		const completedTransitions = events.filter(
+			(event): event is Extract<FluidEvent, { type: "agent_state_change" }> =>
+				event.type === "agent_state_change" && event.state === "completed",
+		);
+		const firstCompletedIndex = events.findIndex(
+			event => event.type === "agent_state_change" && event.state === "completed",
+		);
+		const completionIndex = events.findIndex(event => event.type === "execution_complete");
+		expect(completedTransitions).toHaveLength(5);
+		expect(firstCompletedIndex).toBeGreaterThanOrEqual(0);
+		expect(completionIndex).toBeGreaterThan(firstCompletedIndex);
+	});
+
+	test("preserves completed runtime result payload for downstream consumers", async () => {
+		const expected = mockResult("A", "canvas-ready");
+		const scheduler = new QueueScheduler({
+			concurrency: 1,
+			runAgent: async (_node, _upstreamResults, _signal) => expected,
+		});
+
+		const results = await scheduler.execute(makePlan([makeNode("A")]));
+		const runtime = results.get("A");
+		expect(runtime?.state).toBe("completed");
+		expect(runtime?.result).toBe(expected);
+		expect(runtime?.result?.output).toBe("canvas-ready");
+	});
+
+	test("resumes execution with preset completed results", async () => {
+		const plan = makePlan([makeNode("A"), makeNode("B", ["A"]), makeNode("C", ["B"])]);
+		const started: string[] = [];
+		const scheduler = new QueueScheduler({
+			concurrency: 1,
+			runAgent: async (node, _upstreamResults, _signal) => {
+				started.push(node.id);
+				return mockResult(node.id, `fresh-${node.id}`);
+			},
+			presetCompletedResults: new Map([["A", mockResult("A", "cached-A")]]),
+		});
+
+		const results = await scheduler.execute(plan);
+		expect(started).toEqual(["B", "C"]);
+		expect(results.get("A")?.state).toBe("completed");
+		expect(results.get("A")?.result?.output).toBe("cached-A");
+		expect(results.get("B")?.result?.output).toBe("fresh-B");
+		expect(results.get("C")?.result?.output).toBe("fresh-C");
+	});
+
+	test("emits execution_complete for an empty plan with an empty results map", async () => {
+		const events: FluidEvent[] = [];
+		const scheduler = new QueueScheduler({
+			concurrency: 3,
+			runAgent: createMockRunner(new Map()),
+			onEvent: event => {
+				events.push(event);
+			},
+		});
+
+		const results = await scheduler.execute(makePlan([]));
+		const completionEvents = events.filter(
+			(event): event is Extract<FluidEvent, { type: "execution_complete" }> => event.type === "execution_complete",
+		);
+
+		expect(completionEvents).toHaveLength(1);
+		expect(completionEvents[0]?.results.size).toBe(0);
+		expect(results.size).toBe(0);
+		expect(completionEvents[0]?.results).toBe(results);
 	});
 });

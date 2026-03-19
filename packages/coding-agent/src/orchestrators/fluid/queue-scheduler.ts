@@ -2,13 +2,18 @@ import type { SingleResult } from "../../task/types";
 import { getReadyAgents } from "./dag";
 import type { AgentRuntime, FluidAgentNode, FluidEvent, FluidPlan } from "./types";
 
-export type RunAgentFn = (node: FluidAgentNode, upstreamResults: Map<string, SingleResult>) => Promise<SingleResult>;
+export type RunAgentFn = (
+	node: FluidAgentNode,
+	upstreamResults: Map<string, SingleResult>,
+	signal?: AbortSignal,
+) => Promise<SingleResult>;
 
 interface QueueSchedulerOptions {
 	concurrency: number;
 	runAgent: RunAgentFn;
 	onEvent?: (event: FluidEvent) => void;
 	signal?: AbortSignal;
+	presetCompletedResults?: Map<string, SingleResult>;
 }
 
 export class QueueScheduler {
@@ -16,14 +21,15 @@ export class QueueScheduler {
 	readonly #runAgent: RunAgentFn;
 	readonly #onEvent?: (event: FluidEvent) => void;
 	readonly #signal?: AbortSignal;
+	readonly #presetCompletedResults?: Map<string, SingleResult>;
 
 	constructor(options: QueueSchedulerOptions) {
 		this.#concurrency = Math.max(1, options.concurrency);
 		this.#runAgent = options.runAgent;
 		this.#onEvent = options.onEvent;
 		this.#signal = options.signal;
+		this.#presetCompletedResults = options.presetCompletedResults;
 	}
-
 	async execute(plan: FluidPlan): Promise<Map<string, AgentRuntime>> {
 		const runtimes = new Map<string, AgentRuntime>();
 		const nodeById = new Map<string, FluidAgentNode>();
@@ -35,6 +41,20 @@ export class QueueScheduler {
 
 		for (const node of plan.agents) {
 			nodeById.set(node.id, node);
+			const presetResult = this.#presetCompletedResults?.get(node.id);
+			if (presetResult) {
+				const completedAt = Date.now();
+				runtimes.set(node.id, { node, state: "completed", result: presetResult, completedAt });
+				completed.add(node.id);
+				this.#onEvent?.({
+					type: "agent_state_change",
+					agentId: node.id,
+					state: "completed",
+					result: presetResult,
+					completedAt,
+				});
+				continue;
+			}
 			runtimes.set(node.id, { node, state: "pending" });
 		}
 
@@ -74,7 +94,13 @@ export class QueueScheduler {
 					runtime.error = "Dependency failed";
 					failed.add(node.id);
 					queued.delete(node.id);
-					this.#onEvent?.({ type: "agent_state_change", agentId: node.id, state: "failed" });
+					this.#onEvent?.({
+						type: "agent_state_change",
+						agentId: node.id,
+						state: "failed",
+						error: runtime.error,
+						completedAt: runtime.completedAt,
+					});
 				}
 			}
 		};
@@ -118,7 +144,12 @@ export class QueueScheduler {
 				runtime.state = "running";
 				runtime.startedAt = Date.now();
 				running.add(id);
-				this.#onEvent?.({ type: "agent_state_change", agentId: id, state: "running" });
+				this.#onEvent?.({
+					type: "agent_state_change",
+					agentId: id,
+					state: "running",
+					startedAt: runtime.startedAt,
+				});
 
 				const upstreamResults = new Map<string, SingleResult>();
 				for (const dep of node.dependsOn) {
@@ -128,7 +159,7 @@ export class QueueScheduler {
 					}
 				}
 
-				void this.#runAgent(node, upstreamResults)
+				void this.#runAgent(node, upstreamResults, this.#signal)
 					.then(result => {
 						runtime.state = "completed";
 						runtime.result = result;
@@ -139,6 +170,8 @@ export class QueueScheduler {
 							agentId: id,
 							state: "completed",
 							result,
+							startedAt: runtime.startedAt,
+							completedAt: runtime.completedAt,
 						});
 					})
 					.catch(err => {
@@ -150,6 +183,9 @@ export class QueueScheduler {
 							type: "agent_state_change",
 							agentId: id,
 							state: "failed",
+							error: runtime.error,
+							startedAt: runtime.startedAt,
+							completedAt: runtime.completedAt,
 						});
 					})
 					.finally(() => {

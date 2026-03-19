@@ -37,7 +37,7 @@ describe("FluidOrchestrator drain behavior", () => {
 		const orchestrator = new FluidOrchestrator({
 			eventBus,
 			cwd: process.cwd(),
-			runAgent: async node => mockResult(node.id, `done:${node.id}`),
+			runAgent: async (node, _upstreamResults, _signal) => mockResult(node.id, `done:${node.id}`),
 		});
 
 		const plan: FluidPlan = {
@@ -50,7 +50,7 @@ describe("FluidOrchestrator drain behavior", () => {
 		await orchestrator.execute(plan);
 		await eventBus.drain();
 
-		expect(received.some(event => event.type === "plan_start")).toBe(true);
+		expect(received.some(event => event.type === "plan_start")).toBe(false);
 		expect(received.some(event => event.type === "plan_complete")).toBe(true);
 		expect(
 			received.some(
@@ -74,7 +74,7 @@ describe("FluidOrchestrator drain behavior", () => {
 		const orchestrator = new FluidOrchestrator({
 			eventBus,
 			cwd: process.cwd(),
-			runAgent: async node => {
+			runAgent: async (node, _upstreamResults, _signal) => {
 				await Bun.sleep(220);
 				return mockResult(node.id, "slow");
 			},
@@ -102,7 +102,7 @@ describe("FluidOrchestrator drain behavior", () => {
 		const orchestrator = new FluidOrchestrator({
 			eventBus,
 			cwd: process.cwd(),
-			runAgent: async node => mockResult(node.id),
+			runAgent: async (node, _upstreamResults, _signal) => mockResult(node.id),
 		});
 
 		const cyclicPlan: FluidPlan = {
@@ -124,7 +124,7 @@ describe("FluidOrchestrator drain behavior", () => {
 		const orchestrator = new FluidOrchestrator({
 			eventBus,
 			cwd: process.cwd(),
-			runAgent: async node => {
+			runAgent: async (node, _upstreamResults, _signal) => {
 				if (!started) {
 					started = true;
 					controller.abort();
@@ -195,9 +195,19 @@ describe("FluidEventRouter", () => {
 			{ type: "plan_start" },
 			{ type: "plan_complete", plan },
 			{ type: "plan_error", error: "bad plan" },
-			{ type: "agent_state_change", agentId: "a", state: "completed", result: mockResult("a") },
+			{
+				type: "agent_state_change",
+				agentId: "a",
+				state: "completed",
+				result: mockResult("a"),
+				error: undefined,
+				startedAt: undefined,
+				completedAt: undefined,
+			},
+			{ type: "planner_stream", text: "thinking" },
 			{ type: "agent_stream", agentId: "a", text: "hello" },
 			{ type: "canvas_output", agentId: "a", outputType: "markdown", title: "out", content: "body" },
+			{ type: "execution_cancelled", reason: "user cancelled" },
 			{ type: "execution_complete", results: new Map([["a", runtime]]) },
 		];
 
@@ -211,7 +221,11 @@ describe("FluidEventRouter", () => {
 				agentId: "a",
 				state: "completed",
 				result: mockResult("a"),
+				error: undefined,
+				startedAt: undefined,
+				completedAt: undefined,
 			},
+			{ type: "fluid:planner_stream", text: "thinking" },
 			{ type: "fluid:agent_stream", agentId: "a", text: "hello" },
 			{
 				type: "fluid:canvas_output",
@@ -220,6 +234,7 @@ describe("FluidEventRouter", () => {
 				title: "out",
 				content: "body",
 			},
+			{ type: "fluid:execution_cancelled", reason: "user cancelled" },
 			{
 				type: "fluid:execution_complete",
 				results: [
@@ -228,6 +243,8 @@ describe("FluidEventRouter", () => {
 						state: "completed",
 						error: undefined,
 						result: mockResult("a", "done"),
+						startedAt: undefined,
+						completedAt: undefined,
 					},
 				],
 			},

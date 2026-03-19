@@ -11,7 +11,11 @@ interface FluidOrchestratorOptions {
 	runAgent?: RunAgentFn;
 }
 
-const defaultRunAgent: RunAgentFn = async (_node: FluidAgentNode, _upstream: Map<string, SingleResult>) => {
+const defaultRunAgent: RunAgentFn = async (
+	_node: FluidAgentNode,
+	_upstream: Map<string, SingleResult>,
+	_signal?: AbortSignal,
+) => {
 	throw new Error("FluidOrchestrator requires runAgent to be provided");
 };
 
@@ -30,9 +34,12 @@ export class FluidOrchestrator {
 		this.#runAgent = options.runAgent ?? defaultRunAgent;
 	}
 
-	async execute(plan: FluidPlan, signal?: AbortSignal): Promise<Map<string, AgentRuntime>> {
+	async execute(
+		plan: FluidPlan,
+		signal?: AbortSignal,
+		presetCompletedResults?: Map<string, SingleResult>,
+	): Promise<Map<string, AgentRuntime>> {
 		void this.#cwd;
-		this.#eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_start" }, Priority.P1);
 		const validation = validateDag(plan);
 		if (!validation.valid) {
 			const error = validation.errors.join("; ");
@@ -40,6 +47,7 @@ export class FluidOrchestrator {
 			throw new Error(error);
 		}
 		this.#eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_complete", plan }, Priority.P1);
+		const planAgentsById = new Map(plan.agents.map(agent => [agent.id, agent]));
 
 		this.#startDrainTimer();
 		try {
@@ -47,8 +55,27 @@ export class FluidOrchestrator {
 				concurrency: this.#concurrency,
 				runAgent: this.#runAgent,
 				signal,
+				presetCompletedResults,
 				onEvent: event => {
 					this.#eventBus.enqueue(FLUID_EVENT_CHANNEL, event, Priority.P1);
+					if (event.type !== "agent_state_change" || event.state !== "completed" || !event.result) {
+						return;
+					}
+					const node = planAgentsById.get(event.agentId);
+					if (!node?.canvasOutput) {
+						return;
+					}
+					this.#eventBus.enqueue(
+						FLUID_EVENT_CHANNEL,
+						{
+							type: "canvas_output",
+							agentId: event.agentId,
+							outputType: node.canvasOutput.type,
+							title: node.canvasOutput.title,
+							content: event.result.output,
+						},
+						Priority.P1,
+					);
 				},
 			});
 

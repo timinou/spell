@@ -31,9 +31,19 @@ export type FluidEvent =
 	| { type: "plan_start" }
 	| { type: "plan_complete"; plan: FluidPlan }
 	| { type: "plan_error"; error: string }
-	| { type: "agent_state_change"; agentId: string; state: AgentState; result?: SingleResult }
+	| {
+			type: "agent_state_change";
+			agentId: string;
+			state: AgentState;
+			result?: SingleResult;
+			error?: string;
+			startedAt?: number;
+			completedAt?: number;
+	  }
+	| { type: "planner_stream"; text: string }
 	| { type: "agent_stream"; agentId: string; text: string }
 	| { type: "canvas_output"; agentId: string; outputType: CanvasOutputType; title: string; content: string }
+	| { type: "execution_cancelled"; reason: string }
 	| { type: "execution_complete"; results: Map<string, AgentRuntime> };
 
 export const FLUID_EVENT_CHANNEL = "fluid:event";

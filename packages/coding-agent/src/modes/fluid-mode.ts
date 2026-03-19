@@ -11,7 +11,7 @@ import { Settings } from "../config/settings";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import { FluidEventRouter, FluidOrchestrator } from "../orchestrators/fluid";
 import { fluidPlanSchema } from "../orchestrators/fluid/plan-schema";
-import type { FluidAgentNode, FluidPlan } from "../orchestrators/fluid/types";
+import type { AgentRuntime, FluidAgentNode, FluidEvent, FluidPlan } from "../orchestrators/fluid/types";
 import { FLUID_EVENT_CHANNEL } from "../orchestrators/fluid/types";
 import fluidPlannerPrompt from "../prompts/agents/fluid-planner.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
@@ -23,6 +23,11 @@ export interface FluidModeOptions {
 	initialMessage?: string;
 	eventBus?: EventBus;
 	orchestratorManager?: CanvasOrchestratorManager;
+}
+
+interface ExecutionSnapshot {
+	plan: FluidPlan;
+	results: Map<string, AgentRuntime>;
 }
 
 export async function runFluidMode(session: AgentSession, options: FluidModeOptions = {}): Promise<void> {
@@ -52,16 +57,17 @@ export async function runFluidMode(session: AgentSession, options: FluidModeOpti
 	const settings = Settings.instance;
 	const concurrency = settings.get("fluid.concurrency") as number;
 	const fastPlan = settings.get("fluid.fastPlan") as boolean;
+	const debug = settings.get("fluid.debug") as boolean;
+	const debugUnsub = debug
+		? eventBus.subscribe(FLUID_EVENT_CHANNEL, (raw: unknown) => {
+				writeFluidDebug(raw as FluidEvent);
+			})
+		: undefined;
 
 	try {
-		// If an initial message was provided, skip the input step
-		if (options.initialMessage) {
-			await executePlan(session, eventBus, bridge, options.initialMessage, cwd, concurrency, fastPlan);
-		}
-
-		// Event loop: wait for user prompt from QML, then plan and execute
-		await processFluidEvents(session, eventBus, bridge, cwd, concurrency, fastPlan);
+		await processFluidEvents(session, eventBus, bridge, cwd, concurrency, fastPlan, options.initialMessage);
 	} finally {
+		debugUnsub?.();
 		eventRouter.dispose();
 		bridgeUnsub();
 		await bridge.dispose();
@@ -75,56 +81,59 @@ export async function runFluidMode(session: AgentSession, options: FluidModeOpti
 async function executePlan(
 	session: AgentSession,
 	eventBus: EventBus,
-	bridge: QmlBridge,
 	prompt: string,
 	cwd: string,
 	concurrency: number,
 	fastPlan: boolean,
-): Promise<void> {
-	// Phase 1: Run the planning agent
-	const plan = await runPlanningAgent(session, eventBus, prompt, cwd, fastPlan);
-	if (!plan) return;
+	signal?: AbortSignal,
+): Promise<ExecutionSnapshot | undefined> {
+	eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_start" }, Priority.P1);
+	if (signal?.aborted) {
+		emitExecutionCancelled(eventBus, signal);
+		return undefined;
+	}
 
-	// Phase 2: Execute the plan
+	const plan = await runPlanningAgent(session, eventBus, prompt, cwd, fastPlan, signal);
+	if (!plan) {
+		if (signal?.aborted) {
+			emitExecutionCancelled(eventBus, signal);
+		}
+		return undefined;
+	}
+
+	const results = await executeFluidPlan(session, eventBus, plan, cwd, concurrency, signal);
+	if (!results) {
+		return undefined;
+	}
+	return { plan, results };
+}
+
+async function executeFluidPlan(
+	session: AgentSession,
+	eventBus: EventBus,
+	plan: FluidPlan,
+	cwd: string,
+	concurrency: number,
+	signal?: AbortSignal,
+	presetCompletedResults?: Map<string, SingleResult>,
+): Promise<Map<string, AgentRuntime> | undefined> {
 	const orchestrator = new FluidOrchestrator({
 		eventBus,
 		cwd,
 		concurrency,
-		runAgent: (node, upstream) => runFluidAgent(session, eventBus, node, upstream, cwd),
+		runAgent: (node, upstream, runSignal) => runFluidAgent(session, eventBus, node, upstream, cwd, runSignal),
 	});
 
-	const ac = new AbortController();
-
 	try {
-		const results = await orchestrator.execute(plan, ac.signal);
-
-		// Emit canvas outputs for agents that declared them
-		for (const [agentId, runtime] of results) {
-			if (runtime.node.canvasOutput && runtime.result) {
-				eventBus.enqueue(
-					FLUID_EVENT_CHANNEL,
-					{
-						type: "canvas_output",
-						agentId,
-						outputType: runtime.node.canvasOutput.type,
-						title: runtime.node.canvasOutput.title,
-						content: runtime.result.output,
-					},
-					Priority.P1,
-				);
-			}
-		}
-
-		// Final drain to flush any pending events
-		await eventBus.drain();
+		return await orchestrator.execute(plan, signal, presetCompletedResults);
 	} catch (err) {
-		if (!ac.signal.aborted) {
-			logger.error("Fluid plan execution failed", { error: String(err) });
-			await bridge.sendMessage("fluid-shell", {
-				type: "fluid:plan_error",
-				error: err instanceof Error ? err.message : String(err),
-			});
+		if (signal?.aborted) {
+			emitExecutionCancelled(eventBus, signal);
+			return undefined;
 		}
+		logger.error("Fluid plan execution failed", { error: String(err) });
+		emitPlanError(eventBus, err);
+		return undefined;
 	}
 }
 
@@ -137,6 +146,7 @@ async function runPlanningAgent(
 	prompt: string,
 	cwd: string,
 	fastPlan: boolean,
+	signal?: AbortSignal,
 ): Promise<FluidPlan | undefined> {
 	const systemPrompt = renderPromptTemplate(fluidPlannerPrompt, { cwd });
 
@@ -148,6 +158,7 @@ async function runPlanningAgent(
 		tools: fastPlan ? [] : ["read", "grep", "find", "lsp"],
 	};
 
+	let lastIntent = "";
 	try {
 		const result = await runSubprocess({
 			cwd,
@@ -159,8 +170,24 @@ async function runPlanningAgent(
 			outputSchema: fluidPlanSchema,
 			eventBus,
 			settings: Settings.instance,
+			signal,
+			onProgress: progress => {
+				if (!progress.lastIntent || progress.lastIntent === lastIntent) {
+					return;
+				}
+				lastIntent = progress.lastIntent;
+				eventBus.enqueue(
+					FLUID_EVENT_CHANNEL,
+					{ type: "planner_stream", text: progress.lastIntent },
+					Priority.P2,
+					"stream:planner",
+				);
+			},
 		});
 
+		if (result.aborted || signal?.aborted) {
+			return undefined;
+		}
 		if (result.exitCode !== 0 || !result.output) {
 			logger.error("Planning agent failed", { exitCode: result.exitCode, error: result.error });
 			eventBus.enqueue(
@@ -175,6 +202,9 @@ async function runPlanningAgent(
 		const parsed = JSON.parse(result.output) as FluidPlan;
 		return parsed;
 	} catch (err) {
+		if (signal?.aborted) {
+			return undefined;
+		}
 		logger.error("Planning agent error", { error: String(err) });
 		eventBus.enqueue(
 			FLUID_EVENT_CHANNEL,
@@ -194,6 +224,7 @@ async function runFluidAgent(
 	node: FluidAgentNode,
 	upstreamResults: Map<string, SingleResult>,
 	cwd: string,
+	signal?: AbortSignal,
 ): Promise<SingleResult> {
 	// Build context from upstream results
 	const contextParts: string[] = [];
@@ -224,6 +255,7 @@ async function runFluidAgent(
 		id: `fluid-${node.id}-${Date.now()}`,
 		eventBus,
 		settings: Settings.instance,
+		signal,
 		onProgress: progress => {
 			if (progress.lastIntent) {
 				eventBus.enqueue(
@@ -248,9 +280,98 @@ async function processFluidEvents(
 	cwd: string,
 	concurrency: number,
 	fastPlan: boolean,
+	initialPrompt?: string,
 ): Promise<void> {
+	let activeController: AbortController | null = null;
+	let activeExecution: Promise<void> | null = null;
+	let lastPlan: FluidPlan | undefined;
+	let lastRuntimes: Map<string, AgentRuntime> | undefined;
+
+	const startExecution = (prompt: string): void => {
+		if (activeExecution) {
+			return;
+		}
+		const controller = new AbortController();
+		activeController = controller;
+		activeExecution = executePlan(session, eventBus, prompt, cwd, concurrency, fastPlan, controller.signal)
+			.then(snapshot => {
+				if (!snapshot) {
+					return;
+				}
+				lastPlan = snapshot.plan;
+				lastRuntimes = snapshot.results;
+			})
+			.catch(err => {
+				logger.error("Fluid execution failed", { error: String(err) });
+				emitPlanError(eventBus, err);
+			})
+			.finally(() => {
+				if (activeController === controller) {
+					activeController = null;
+				}
+				activeExecution = null;
+			});
+	};
+
+	const startRetry = (requestedAgentIds?: string[]): void => {
+		if (activeExecution) {
+			return;
+		}
+		if (!lastPlan || !lastRuntimes) {
+			emitPlanError(eventBus, "No prior fluid execution to retry");
+			return;
+		}
+
+		const retryRoots = resolveRetryRoots(lastRuntimes, requestedAgentIds);
+		if (retryRoots.length === 0) {
+			emitPlanError(eventBus, "No failed agents available to retry");
+			return;
+		}
+
+		const retrySet = collectRetrySubtree(lastPlan, new Set(retryRoots));
+		const presetCompletedResults = collectPresetCompletedResults(lastPlan, lastRuntimes, retrySet);
+		const controller = new AbortController();
+		activeController = controller;
+		activeExecution = executeFluidPlan(
+			session,
+			eventBus,
+			lastPlan,
+			cwd,
+			concurrency,
+			controller.signal,
+			presetCompletedResults,
+		)
+			.then(results => {
+				if (!results) {
+					return;
+				}
+				lastRuntimes = results;
+			})
+			.catch(err => {
+				logger.error("Fluid retry failed", { error: String(err) });
+				emitPlanError(eventBus, err);
+			})
+			.finally(() => {
+				if (activeController === controller) {
+					activeController = null;
+				}
+				activeExecution = null;
+			});
+	};
+
+	const cancelExecution = (reason = "Execution cancelled"): void => {
+		if (!activeController || activeController.signal.aborted) {
+			return;
+		}
+		activeController.abort(reason);
+	};
+
+	if (initialPrompt) {
+		startExecution(initialPrompt);
+	}
+
 	while (true) {
-		const events = await bridge.waitForEvent("fluid-shell", 600_000);
+		const events = await bridge.waitForEvent("fluid-shell", 250);
 		for (const event of events) {
 			if (!event.payload) continue;
 			const { type } = event.payload as { type?: string };
@@ -258,7 +379,21 @@ async function processFluidEvents(
 			switch (type) {
 				case "prompt": {
 					const text = (event.payload as { text: string }).text;
-					await executePlan(session, eventBus, bridge, text, cwd, concurrency, fastPlan);
+					startExecution(text);
+					break;
+				}
+				case "cancel_execution": {
+					const reason = (event.payload as { reason?: string }).reason;
+					cancelExecution(reason ?? "Cancelled from fluid canvas");
+					break;
+				}
+				case "retry_failed": {
+					const payload = event.payload as { agentIds?: unknown };
+					const agentIds =
+						Array.isArray(payload.agentIds) && payload.agentIds.length > 0
+							? payload.agentIds.map(id => String(id))
+							: undefined;
+					startRetry(agentIds);
 					break;
 				}
 			}
@@ -267,7 +402,134 @@ async function processFluidEvents(
 		// Check if shell was closed
 		const shell = bridge.getWindow("fluid-shell");
 		if (!shell || shell.state === "closed") {
+			cancelExecution("Fluid shell closed");
+			if (activeExecution) {
+				try {
+					await activeExecution;
+				} catch {
+					// execution errors are already surfaced through fluid events
+				}
+			}
 			break;
 		}
+	}
+}
+
+function resolveRetryRoots(runtimes: Map<string, AgentRuntime>, requestedAgentIds?: string[]): string[] {
+	if (requestedAgentIds && requestedAgentIds.length > 0) {
+		return requestedAgentIds.filter(agentId => runtimes.get(agentId)?.state === "failed");
+	}
+	const roots: string[] = [];
+	for (const [agentId, runtime] of runtimes.entries()) {
+		if (runtime.state === "failed") {
+			roots.push(agentId);
+		}
+	}
+	return roots;
+}
+
+function collectRetrySubtree(plan: FluidPlan, rootIds: Set<string>): Set<string> {
+	const retrySet = new Set<string>(rootIds);
+	const childrenByDependency = new Map<string, string[]>();
+	for (const node of plan.agents) {
+		for (const dep of node.dependsOn) {
+			const children = childrenByDependency.get(dep) ?? [];
+			children.push(node.id);
+			childrenByDependency.set(dep, children);
+		}
+	}
+
+	const queue = [...rootIds];
+	while (queue.length > 0) {
+		const current = queue.shift();
+		if (!current) {
+			continue;
+		}
+		for (const childId of childrenByDependency.get(current) ?? []) {
+			if (retrySet.has(childId)) {
+				continue;
+			}
+			retrySet.add(childId);
+			queue.push(childId);
+		}
+	}
+	return retrySet;
+}
+
+function collectPresetCompletedResults(
+	plan: FluidPlan,
+	runtimes: Map<string, AgentRuntime>,
+	retrySet: Set<string>,
+): Map<string, SingleResult> {
+	const preset = new Map<string, SingleResult>();
+	for (const node of plan.agents) {
+		if (retrySet.has(node.id)) {
+			continue;
+		}
+		const runtime = runtimes.get(node.id);
+		if (runtime?.state === "completed" && runtime.result) {
+			preset.set(node.id, runtime.result);
+		}
+	}
+	return preset;
+}
+
+function emitPlanError(eventBus: EventBus, err: unknown): void {
+	eventBus.enqueue(
+		FLUID_EVENT_CHANNEL,
+		{ type: "plan_error", error: err instanceof Error ? err.message : String(err) },
+		Priority.P1,
+	);
+}
+
+function emitExecutionCancelled(eventBus: EventBus, signal?: AbortSignal): void {
+	eventBus.enqueue(
+		FLUID_EVENT_CHANNEL,
+		{ type: "execution_cancelled", reason: resolveAbortReason(signal) },
+		Priority.P1,
+	);
+}
+
+function resolveAbortReason(signal?: AbortSignal): string {
+	if (!signal?.aborted) {
+		return "Execution cancelled";
+	}
+	const reason = signal.reason;
+	if (typeof reason === "string" && reason.length > 0) {
+		return reason;
+	}
+	if (reason instanceof Error && reason.message.length > 0) {
+		return reason.message;
+	}
+	return "Execution cancelled";
+}
+
+function writeFluidDebug(event: FluidEvent): void {
+	switch (event.type) {
+		case "plan_start":
+			process.stderr.write("[fluid] plan start\n");
+			return;
+		case "plan_complete":
+			process.stderr.write(`[fluid] plan complete (${event.plan.agents.length} agents)\n`);
+			return;
+		case "plan_error":
+			process.stderr.write(`[fluid] plan error: ${event.error}\n`);
+			return;
+		case "planner_stream":
+			process.stderr.write(`[fluid] planner: ${event.text}\n`);
+			return;
+		case "agent_state_change":
+			process.stderr.write(
+				`[fluid] agent ${event.agentId}: ${event.state}${event.error ? ` (${event.error})` : ""}\n`,
+			);
+			return;
+		case "execution_cancelled":
+			process.stderr.write(`[fluid] execution cancelled: ${event.reason}\n`);
+			return;
+		case "execution_complete":
+			process.stderr.write(`[fluid] execution complete (${event.results.size} results)\n`);
+			return;
+		default:
+			return;
 	}
 }

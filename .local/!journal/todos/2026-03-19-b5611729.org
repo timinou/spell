@@ -1,0 +1,29 @@
+#+TITLE: Session 1498a7702a730d13 Todos
+#+DATE: 2026-03-19
+#+TODO: ITEM DOING | DONE
+
+* Finalization
+
+** DONE Identify remaining follow-up work
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Found two remaining housekeeping items: plan file still marked DOING and coding-agent changelog Unreleased section missing entries for this completed work.
+
+** DONE Apply housekeeping updates
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+Updated plan artifact state from DOING to DONE and added coding-agent Unreleased changelog entries covering fluid canvas UX overhaul changes.
+
+** DONE Re-verify affected package checks
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Ran `bun run check` in `packages/coding-agent`; tsgo typecheck passed.

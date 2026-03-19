@@ -1,0 +1,368 @@
+#+TITLE: FLUID_CANVAS_E2E_TESTS
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-fluid-canvas-e2e-tests
+
+* Product Promises
+
+The fluid canvas feature makes these user-facing promises:
+
+1. ~--canvas~ flag defaults to ~fluid~; ~--canvas chat~ routes to existing QML shell
+2. ~--canvas invalid~ produces a clear error message
+3. FluidShell.qml launches and shows a centered text input field
+4. User types a prompt, presses Enter -> it reaches TS as ~{type: \"prompt\", text}~
+5. Planning state shows a loading indicator (\"Planning...\")
+6. After plan completes, agent panels appear for each agent in the DAG
+7. Agent panels show state transitions: pending -> ready -> running -> completed/failed
+8. Agent stream text appears in panels during execution
+9. Canvas outputs (markdown, table, diff, tree, log) render in panels after completion
+10. QueueInspector shows progress (X/Y agents completed)
+11. Failed agents show failure state (red indicator)
+12. Failed dependencies cascade -- downstream agents are marked failed
+13. Execution complete state is shown
+14. Plan errors show an error message and allow recovery (re-prompt)
+15. Settings ~fluid.concurrency~ and ~fluid.fastPlan~ are respected
+
+* Discovered Bugs (fix alongside tests)
+
+** BUG-1: FluidShell.qml never handles ~fluid:plan_error~
+
+~FluidShell.qml~ ~onMessageReceived~ checks for ~fluid:plan_start~, ~fluid:plan_complete~, ~fluid:execution_complete~, and agent events. There is *no case* for ~fluid:plan_error~.
+
+Meanwhile, ~fluid-mode.ts~ emits ~fluid:plan_error~ on 3 error paths via the event router.
+
+*Impact*: If the planning agent fails, the user sees the BusyIndicator forever. The shell is stuck in ~planning~ state with no recovery path.
+
+*Fix* (4 concrete steps in ~FluidShell.qml~):
+
+1. Add ~property string lastError: \"\"~ to the root ApplicationWindow properties.
+2. In ~onMessageReceived~, add a case for ~fluid:plan_error~:
+#+begin_src javascript
+if (payload.type === \"fluid:plan_error\") {
+    root.lastError = payload.error ? String(payload.error) : \"Planning failed\"
+    root.state = \"input\"
+    return
+}
+#+end_src
+3. Add a ~Text~ element in the input state ~ColumnLayout~ (below the ~TextField~, above the ~Button~) that shows ~lastError~ in ~SpellTheme.error~ color, ~visible: lastError.length > 0~, with ~wrapMode: Text.WordWrap~.
+4. Clear ~lastError~ at the start of ~submitPrompt()~: ~root.lastError = \"\"~.
+
+- File: ~packages/coding-agent/src/modes/qml/FluidShell.qml~
+
+** BUG-2: ~canvas_output~ events arrive after ~execution_complete~
+
+In ~fluid-mode.ts~, ~orchestrator.execute()~ resolves *after* ~QueueScheduler~ emits ~execution_complete~ (line 61 of queue-scheduler.ts). Then ~fluid-mode.ts~ loops over results and enqueues ~canvas_output~ events. The QML side transitions to ~state='complete'~ on ~execution_complete~, but canvas outputs arrive later.
+
+*Impact*: \"Execution complete\" banner flashes before canvas output panels render. The drain timer is already stopped in the ~finally~ block, so events may stall.
+
+*Fix* (3 concrete steps):
+
+1. In ~fluid-orchestrator.ts~, modify the ~onEvent~ callback inside ~execute()~ to intercept ~agent_state_change~ events with ~state === \"completed\"~. Look up the node in ~plan.agents~ by ~agentId~. If the node has ~canvasOutput~ and the event has a ~result~, enqueue a ~canvas_output~ event on ~FLUID_EVENT_CHANNEL~ immediately after forwarding the state_change:
+#+begin_src typescript
+onEvent: event => {
+    this.#eventBus.enqueue(FLUID_EVENT_CHANNEL, event, Priority.P1);
+    // Emit canvas_output right after completed state_change, before execution_complete
+    if (event.type === \"agent_state_change\" && event.state === \"completed\" && event.result) {
+        const node = plan.agents.find(a => a.id === event.agentId);
+        if (node?.canvasOutput) {
+            this.#eventBus.enqueue(FLUID_EVENT_CHANNEL, {
+                type: \"canvas_output\",
+                agentId: event.agentId,
+                outputType: node.canvasOutput.type,
+                title: node.canvasOutput.title,
+                content: event.result.output,
+            }, Priority.P1);
+        }
+    }
+},
+#+end_src
+2. Remove the for-loop in ~fluid-mode.ts~ (lines ~102-116) that emits ~canvas_output~ after ~orchestrator.execute()~ returns. This loop would now double-emit.
+3. Remove the now-unnecessary ~await eventBus.drain()~ call that followed that loop.
+
+- File: ~packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts~
+- File: ~packages/coding-agent/src/modes/fluid-mode.ts~
+
+* Existing Test Coverage
+
+| Category | Tests | Files |
+|---|---|---|
+| DAG validation | 17 | ~test/orchestrators/fluid-dag.test.ts~ |
+| Scheduler execution | 10 | ~test/orchestrators/fluid-scheduler.test.ts~ |
+| Drain timer + event router | 7 | ~test/orchestrators/fluid-drain.test.ts~ |
+| QML integration (FluidShell) | 0 | -- |
+| CLI flag (~--canvas~) | 0 | -- |
+| End-to-end pipeline | 0 | -- |
+
+* Test Plan
+
+** ITEM Shared test helpers
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: ~packages/coding-agent/test/helpers/fluid-test-data.ts~
+
+Shared constants used across all fluid test files:
+
+#+begin_src typescript
+import type { FluidPlan } from \"../../src/orchestrators/fluid/types\";
+import type { SingleResult } from \"../../src/task/types\";
+
+export const SIMPLE_PLAN: FluidPlan = {
+  agents: [
+    { id: \"analyze\", task: \"Analyze the code\", dependsOn: [] },
+    { id: \"fix\", task: \"Fix issues\", dependsOn: [\"analyze\"] },
+  ],
+};
+
+export const PARALLEL_PLAN: FluidPlan = {
+  agents: [
+    { id: \"root\", task: \"Gather data\", dependsOn: [] },
+    { id: \"branch-a\", task: \"Process A\", dependsOn: [\"root\"] },
+    { id: \"branch-b\", task: \"Process B\", dependsOn: [\"root\"] },
+    { id: \"merge\", task: \"Merge results\", dependsOn: [\"branch-a\", \"branch-b\"] },
+  ],
+};
+
+export const CANVAS_OUTPUT_PLAN: FluidPlan = {
+  agents: [
+    { id: \"analyze\", task: \"Analyze\", dependsOn: [],
+      canvasOutput: { type: \"markdown\", title: \"Analysis\" } },
+    { id: \"dashboard\", task: \"Build dashboard\", dependsOn: [\"analyze\"],
+      canvasOutput: { type: \"table\", title: \"Metrics\" } },
+  ],
+};
+
+export function mockResult(id: string, output = \"\"): SingleResult {
+  return {
+    index: 0, id, agent: \"test\", agentSource: \"bundled\" as const,
+    task: \"test\", exitCode: 0, output, stderr: \"\",
+    truncated: false, durationMs: 100, tokens: 10,
+  };
+}
+#+end_src
+
+** ITEM CLI argument parsing tests
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: ~packages/coding-agent/test/cli/canvas-args.test.ts~
+
+Tests for ~parseArgs()~ from ~src/cli/args.ts~:
+
+- ~parseArgs([\"--canvas\"])~ -> ~result.canvas === \"fluid\"~ (default)
+- ~parseArgs([\"--canvas\", \"chat\"])~ -> ~result.canvas === \"chat\"~
+- ~parseArgs([\"--canvas\", \"fluid\"])~ -> ~result.canvas === \"fluid\"~
+- ~parseArgs([\"--canvas\", \"--print\"])~ -> ~result.canvas === \"fluid\"~ (next is a flag, not consumed)
+- ~parseArgs([\"--canvas\", \"unknown\"])~ -> ~result.canvas === \"unknown\"~ (no arg-level validation)
+- ~parseArgs([])~ -> ~result.canvas === undefined~ (not set)
+
+Pure unit tests, no mocks needed. Import ~parseArgs~ directly.
+
+** ITEM FluidShell QML journey tests -- state machine
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+File: ~packages/coding-agent/test/integration/fluid-shell-states.test.ts~
+
+Uses ~QmlJourney.launch(\"FluidShell.qml\")~ to test the state machine. Uses ~describe.skipIf(!isBridgeAvailable())~.
+
+*IMPORTANT*: FluidShell uses ~TextField~ (internally ~QQuickTextInput~), not ~TextEdit~ (~QQuickTextEdit~). The existing ~QmlJourney.focusInput()~ will NOT work because it searches for ~QQuickTextEdit~. Instead, use ~journey.evaluate(\"intentField.forceActiveFocus()\")~ before typing. Do NOT modify ~focusInput()~ -- that would risk breaking existing shell.qml tests.
+
+*** Input state
+- On launch, input field is visible (evaluate ~intentField.visible~ -> true)
+- Focus input via ~evaluate(\"intentField.forceActiveFocus()\")~, type text, press Enter -> bridge receives ~{type: \"prompt\", text: \"...\"}~
+- Empty text + press Enter -> no bridge event (guarded by ~intentField.text.trim().length === 0~ check)
+- After submission, ~evaluate(\"intentField.text\")~ -> empty string
+- Click \"Plan\" button -> same prompt event as Enter key
+
+*** Planning state
+- Send ~{type: \"fluid:plan_start\"}~ -> evaluate ~root.state~ === \"planning\"
+- \"Planning...\" text visible via ~expectText(\"Planning\")~
+- Input field no longer visible (~evaluate(\"intentField.visible\")~ -> false)
+
+*** Plan error recovery (encodes BUG-1 fix)
+- Send ~{type: \"fluid:plan_error\", error: \"Planning failed\"}~ -> ~evaluate(\"root.state\")~ === \"input\"
+- Error message \"Planning failed\" visible via ~expectText(\"Planning failed\")~
+- User can type and submit a new prompt (full recovery cycle: focus, type, enter, expect prompt event)
+
+*** Executing state
+- Send ~{type: \"fluid:plan_complete\", plan: SIMPLE_PLAN}~ -> ~evaluate(\"root.state\")~ === \"executing\"
+- ~evaluate(\"agentsModel.count\")~ === 2 (number matches plan)
+- ~expectText(\"analyze\")~ -> agent ID visible
+- ~expectText(\"0/2\")~ -> QueueInspector shows 0 completed
+
+*** Completion state
+- Send ~{type: \"fluid:execution_complete\"}~ -> completion banner visible
+- ~expectText(\"2/2\")~ -> QueueInspector shows all completed
+
+** ITEM FluidShell QML journey tests -- agent events
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+File: ~packages/coding-agent/test/integration/fluid-shell-agents.test.ts~
+
+Uses ~QmlJourney~ launched with FluidShell.qml. In ~beforeEach~, send ~plan_complete~ with ~SIMPLE_PLAN~ to reach executing state.
+
+*** State transitions
+- Send ~{type: \"fluid:agent_state_change\", agentId: \"analyze\", state: \"ready\"}~ -> ~evaluate(\"agentsModel.get(0).agentState\")~ === \"ready\"
+- Send ~state: \"running\"~ -> model shows \"running\"
+- Send ~state: \"completed\"}~ -> model shows \"completed\"
+- Send ~state: \"failed\"}~ -> model shows \"failed\"
+- ~evaluate(\"root.completedCount\")~ increments after completed state
+- ~evaluate(\"root.failedCount\")~ increments after failed state
+
+*** Streaming
+- Send ~{type: \"fluid:agent_stream\", agentId: \"analyze\", text: \"hello \"}~ -> ~evaluate(\"agentsModel.get(0).streamText\")~ contains \"hello\"
+- Send another stream event with text \"world\" -> streamText contains \"hello world\"
+
+*** Canvas output
+- Send ~{type: \"fluid:canvas_output\", agentId: \"analyze\", outputType: \"markdown\", title: \"Result\", content: \"# Hello\"}~ -> ~evaluate(\"agentsModel.get(0).canvasOutput\")~ is not null, has blockType \"markdown\"
+- ~evaluate(\"agentsModel.get(0).canvasOutput.title\")~ === \"Result\"
+
+*** Pre-plan event queueing
+- Send ~plan_start~ first (clears pendingAgentEvents)
+- THEN send ~{type: \"fluid:agent_state_change\", agentId: \"analyze\", state: \"running\"}~ BEFORE ~plan_complete~
+- THEN send ~plan_complete~ with SIMPLE_PLAN
+- Verify: ~evaluate(\"agentsModel.get(0).agentState\")~ === \"running\" (queued event was applied)
+- Verify: no duplicate stream text after rapid stream events during flush
+
+** ITEM Plan normalization robustness tests
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+File: ~packages/coding-agent/test/integration/fluid-shell-normalization.test.ts~
+
+Tests ~FluidShell.qml~ normalization functions via ~QmlJourney~:
+
+- ~plan.agents~ array -> ~evaluate(\"agentsModel.count\")~ === N (canonical path)
+- ~plan.nodes~ array -> falls back to nodes, same count
+- ~{dag: {agents: [...]}}~ -> falls back, same count
+- Agent with ~agentId~ instead of ~id~ -> ~evaluate(\"agentsModel.get(0).agentId\")~ matches
+- Agent with ~description~ instead of ~task~ -> ~evaluate(\"agentsModel.get(0).agentTask\")~ matches
+- ~null~ agent in array -> gets fallback ~agent-N~ ID
+- Empty agents array -> ~evaluate(\"root.state\")~ === \"complete\" (immediate transition)
+- Single-agent plan -> ~evaluate(\"agentsModel.count\")~ === 1
+
+** ITEM Event pipeline integration test
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+File: ~packages/coding-agent/test/integration/fluid-event-pipeline.test.ts~
+
+Tests the full TS->EventBus->Router->bridge:outbound pipeline *without QML*. Does NOT require isBridgeAvailable().
+
+*** Router payload mapping
+- Create real ~EventBus~ + ~FluidEventRouter~, subscribe to ~bridge:outbound~
+- Emit ~plan_start~ on ~FLUID_EVENT_CHANNEL~ -> ~bridge:outbound~ receives ~{type: \"fluid:plan_start\"}~
+- Emit ~agent_state_change~ -> ~bridge:outbound~ receives correctly mapped payload with agentId, state
+- Emit ~canvas_output~ -> ~bridge:outbound~ receives with all fields preserved (agentId, outputType, title, content)
+- Emit ~execution_complete~ with ~Map<string, AgentRuntime>~ -> ~bridge:outbound~ serializes results as array of {agentId, state, error, result}
+- After ~dispose()~, emit event -> bridge:outbound receives nothing
+
+*** Full orchestrator pipeline
+- Create ~FluidOrchestrator~ with mock ~runAgent~ (from test helpers) + real ~EventBus~ + real ~FluidEventRouter~
+- Subscribe to ~bridge:outbound~ and collect all payloads in an array
+- Execute PARALLEL_PLAN (root -> branch-a, branch-b -> merge)
+- After execution, drain the bus and verify:
+  - Payloads include: ~fluid:plan_start~, ~fluid:plan_complete~
+  - State transitions for all 4 agents present
+  - ~fluid:execution_complete~ present
+  - *Event ordering*: plan_start comes first, plan_complete before any agent events, execution_complete is last
+  - Agent states follow valid sequence per agent (ready before running before completed)
+
+*** Canvas output ordering (encodes BUG-2 fix)
+- Execute ~CANVAS_OUTPUT_PLAN~ with mock runners
+- Verify: ~fluid:canvas_output~ events appear BEFORE ~fluid:execution_complete~ in the collected payloads
+- Verify: each canvas_output has correct agentId, outputType, title, content from the mock result
+
+** ITEM Additional scheduler edge case tests
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: ~packages/coding-agent/test/orchestrators/fluid-scheduler.test.ts~ (append to existing)
+
+- 5 parallel root agents, concurrency=5, all resolve instantly -> all reach completed, ~execution_complete~ fires exactly once
+- Agent with canvasOutput completes -> result available in ~AgentRuntime~ for canvas output emission
+- Empty plan (0 agents) -> verify ~execution_complete~ fires with empty results map
+
+** ITEM Window lifecycle and cleanup tests
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+File: ~packages/coding-agent/test/integration/fluid-shell-lifecycle.test.ts~
+
+Uses ~describe.skipIf(!isBridgeAvailable())~.
+
+- FluidShell launches -> ~evaluate(\"root.state\")~ === \"input\", window is open
+- Teardown completes without timeout or error
+- After dispose, emitting events on ~bridge:outbound~ does NOT produce bridge errors (cleanup verification: emit event, verify no crash -- indirect verification that unsubscribe worked)
+
+* Files to create
+
+| File | Category |
+|---|---|
+| ~test/helpers/fluid-test-data.ts~ | Shared test helpers |
+| ~test/cli/canvas-args.test.ts~ | CLI parsing |
+| ~test/integration/fluid-shell-states.test.ts~ | State machine |
+| ~test/integration/fluid-shell-agents.test.ts~ | Agent events |
+| ~test/integration/fluid-shell-normalization.test.ts~ | Normalization |
+| ~test/integration/fluid-event-pipeline.test.ts~ | Event pipeline |
+| ~test/integration/fluid-shell-lifecycle.test.ts~ | Lifecycle |
+
+* Files to modify (bug fixes)
+
+| File | Change |
+|---|---|
+| ~src/modes/qml/FluidShell.qml~ | Add ~lastError~ property, ~fluid:plan_error~ handler, error display Text, clear on submit (BUG-1) |
+| ~src/orchestrators/fluid/fluid-orchestrator.ts~ | Emit ~canvas_output~ in ~onEvent~ callback when agent completes with canvasOutput (BUG-2) |
+| ~src/modes/fluid-mode.ts~ | Remove post-execution canvas_output for-loop and drain call (BUG-2 cleanup) |
+
+* Key critical files
+
+- ~packages/coding-agent/src/modes/qml/FluidShell.qml~ -- main shell, state machine, event handling
+- ~packages/coding-agent/src/modes/qml/components/AgentPanel.qml~ -- agent display panel
+- ~packages/coding-agent/src/modes/qml/components/QueueInspector.qml~ -- progress bar
+- ~packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts~ -- orchestration coordinator
+- ~packages/coding-agent/src/orchestrators/fluid/event-router.ts~ -- event mapping
+- ~packages/coding-agent/src/orchestrators/fluid/queue-scheduler.ts~ -- scheduler
+- ~packages/coding-agent/src/modes/fluid-mode.ts~ -- entry point, wiring
+- ~packages/coding-agent/src/cli/args.ts~ -- CLI flag parsing
+- ~packages/coding-agent/test/helpers/qml-journey.ts~ -- QML test helper (read-only, do NOT modify)
+
+* Verification
+
+After all tests are written and bugs are fixed:
+
+#+begin_src bash
+# Run all fluid tests
+bun test packages/coding-agent/test/orchestrators/
+bun test packages/coding-agent/test/cli/canvas-args.test.ts
+bun test packages/coding-agent/test/integration/fluid-shell-states.test.ts
+bun test packages/coding-agent/test/integration/fluid-shell-agents.test.ts
+bun test packages/coding-agent/test/integration/fluid-shell-normalization.test.ts
+bun test packages/coding-agent/test/integration/fluid-event-pipeline.test.ts
+bun test packages/coding-agent/test/integration/fluid-shell-lifecycle.test.ts
+
+# Type check
+bun check:ts
+#+end_src
+
+* Execution Order
+
+1. *Fix BUG-1* (~FluidShell.qml~ plan_error handler + lastError property + error Text) -- blocks state machine tests
+2. *Fix BUG-2* (~fluid-orchestrator.ts~ canvas_output in onEvent + remove loop in ~fluid-mode.ts~) -- blocks pipeline test
+3. Shared test helpers (~fluid-test-data.ts~) -- blocks all test files
+4. CLI args tests -- no deps, parallel with bug fixes
+5. Event pipeline integration test -- needs BUG-2 fix, no QML bridge required
+6. Additional scheduler edge cases -- no deps, parallel
+7. FluidShell QML journey tests (states + agents) -- needs BUG-1 fix, needs bridge
+8. Remaining QML tests (normalization, lifecycle) -- parallel with #7
+
+Parallelizable: {1, 2, 3, 4} then {5, 6, 7, 8}
