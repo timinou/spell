@@ -1,0 +1,217 @@
+#+TITLE: FLUID_PIPELINE_E2E_TESTS
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-fluid-pipeline-e2e-tests
+
+* Initial Message
+
+commit with the plan
+
+* Problem
+
+Three disconnected test layers exist for fluid canvas mode:
+
+1. *EventBus + orchestrator tests* (=fluid-drain.test.ts=, =fluid-event-pipeline.test.ts=): Test EventBus -> FluidEventRouter -> =bridge:outbound=. No QML. Verify event ordering and drain timing.
+2. *QML journey tests* (=fluid-shell-states.test.ts=, =fluid-shell-agents.test.ts=): Launch QML headlessly via =QmlTestHarness= (offscreen). Events injected directly via =journey.agentSends()= -> =harness.sendMessage()=, bypassing EventBus entirely.
+3. *No full-pipeline test* exists that wires EventBus drain timer -> FluidEventRouter -> =bridge:outbound= -> =harness.sendMessage()= -> QML state transition.
+
+The drain timing bug just fixed was structurally uncatchable by either layer because:
+- Layer 1 verifies events reach =bridge:outbound= subscribers when drained, but never touches QML
+- Layer 2 verifies QML responds to events, but bypasses the drain mechanism entirely
+
+This gap means the agent cannot autonomously verify that event timing works end-to-end. It can only assert on internal state (EventBus queue depth, subscriber callbacks) or QML state (via direct injection), never both together.
+
+* Approach
+
+Write a single end-to-end test file that wires real =EventBus= + real =FluidEventRouter= + real =QmlJourney= using the production drain pattern. Not a framework. The =bridge:outbound= -> =sendMessage()= wiring is 3 lines of glue code.
+
+The production wiring pattern (from =fluid-mode.ts= lines 49-55):
+#+BEGIN_SRC typescript
+const eventRouter = new FluidEventRouter(eventBus);
+const bridgeUnsub = eventBus.subscribe("bridge:outbound", (raw: unknown) => {
+    // In production: bridge.sendMessage("fluid-shell", raw)
+    // In test: harness.sendMessage(raw as Record<string, unknown>)
+    void journey.agentSends(raw as Record<string, unknown>);
+});
+#+END_SRC
+
+This gives the test the exact same event delivery path as production, with events flowing through the real priority queue, real drain timer, real coalescing, and real FluidEventRouter mapping.
+
+** Key design decisions
+
+- *Factory function, not class.* Production wiring is ~8 lines of glue. A class adds indirection without earning it. A =setupFluidPipeline()= function returning ={ eventBus, router, journey, startDrain, stopDrain, teardown }= is transparent.
+- *No visual regression.* Golden screenshots are fragile across Qt versions and font rendering. State assertions via =evaluate()= + =expectText()= are more reliable. Screenshots remain available via =harness.screenshot()= for ad-hoc debugging.
+- *No real subprocesses.* FluidOrchestrator accepts a =runAgent= callback. Mock it with controlled timing. The pipeline test verifies wiring from orchestrator events through drain through QML rendering. Subprocess execution is orthogonal.
+- *Retry-based assertions only.* Total latency from enqueue to QML state change is 100-250ms (drain interval + bridge round-trip + QML event loop). Use =journey.waitUntil()= exclusively, never assert on timing.
+- *Bidirectional testing.* Production has a round-trip: QML emits events (=prompt=, =cancel_execution=) back via bridge events, which =processFluidEvents()= dispatches. The test must verify this loop.
+- *One =beforeAll= per describe.* QmlTestHarness spawns a real bridge process (cold start 1-3s). Start once, reset QML state between tests.
+- *Extract helper at DRY=2.* If a second test file needs the same setup, extract ~50 lines to =test/helpers/fluid-pipeline.ts=. Not before.
+
+* File changes
+
+| File | Change |
+|---+---|
+| =test/helpers/fluid-pipeline.ts= | New: =setupFluidPipeline()= factory function wiring EventBus + FluidEventRouter + QmlJourney + drain timer |
+| =test/integration/fluid-pipeline-e2e.test.ts= | New: end-to-end tests exercising the full event pipeline |
+
+* Implementation
+
+** ITEM Create =setupFluidPipeline()= helper
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/test/helpers/fluid-pipeline.ts=
+
+Factory function that returns the wired pipeline. This is extracted as a helper from the start because the teardown ordering is safety-critical and duplicating it in tests invites cleanup bugs.
+
+#+BEGIN_SRC typescript
+interface FluidPipeline {
+    eventBus: EventBus;
+    router: FluidEventRouter;
+    journey: QmlJourney;
+    // Start/stop the 100ms drain timer (same pattern as production)
+    startDrain(): void;
+    stopDrain(): Promise<void>;
+    // Full cleanup in production ordering
+    teardown(): Promise<void>;
+}
+
+async function setupFluidPipeline(): Promise<FluidPipeline> {
+    const eventBus = new EventBus();
+    const router = new FluidEventRouter(eventBus);
+    const journey = await QmlJourney.launch("FluidShell.qml");
+
+    // Wire bridge:outbound -> QML (production pattern from fluid-mode.ts)
+    const bridgeUnsub = eventBus.subscribe("bridge:outbound", (raw: unknown) => {
+        void journey.agentSends(raw as Record<string, unknown>).catch(() => {});
+    });
+
+    // Drain timer management (same pattern as executePlan)
+    let draining = false;
+    let timer: NodeJS.Timeout | undefined;
+    // ... (real implementation with reentrancy guard)
+
+    return {
+        eventBus, router, journey,
+        startDrain() { /* start setInterval 100ms */ },
+        async stopDrain() { /* clearInterval + flush */ },
+        async teardown() {
+            // Production ordering: stop drain -> dispose router -> unsub bridge -> teardown harness
+            await this.stopDrain();
+            router.dispose();
+            bridgeUnsub();
+            await journey.teardown();
+        },
+    };
+}
+#+END_SRC
+
+Critical: =teardown()= must enforce the production cleanup ordering from =fluid-mode.ts= finally block:
+1. Stop drain timer + flush
+2. =router.dispose()= (stop subscribing to FLUID_EVENT_CHANNEL)
+3. =bridgeUnsub()= (stop forwarding to QML)
+4. =journey.teardown()= (kill bridge process)
+
+** ITEM Write happy-path planning -> execution test
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts=
+
+Test: "planning events reach QML through the real event pipeline"
+
+1. Setup pipeline, start drain timer
+2. =eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_start" }, Priority.P1)=
+3. =journey.waitUntil(() => evaluate("root.state") === "planning")= -- proves drain delivered =plan_start= to QML
+4. Enqueue =planner_stream= event at P2 with coalescing key
+5. =journey.expectText("stream text")= -- proves planner stream reaches QML
+6. Stop planning drain timer
+7. Run =FluidOrchestrator.execute()= with mock =runAgent= (orchestrator starts its own drain timer)
+8. =journey.waitUntil(() => evaluate("root.state") === "executing")=
+9. Wait for execution to complete
+10. =journey.waitUntil(() => evaluate("root.state") === "complete")=
+11. Teardown
+
+This single test closes the primary gap: it exercises =EventBus.enqueue()= -> drain timer -> =FluidEventRouter= -> =bridge:outbound= -> =harness.sendMessage()= -> QML state machine, with real timing.
+
+** ITEM Write bidirectional cancel test
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: same file, second test
+
+Test: "cancel during planning flows through full pipeline round-trip"
+
+1. Setup pipeline, start drain, enqueue =plan_start=
+2. Wait for QML to reach planning state
+3. Set up =journey.waitForEvent()= for =cancel_execution= bridge event
+4. =journey.click({ type: "Button", textContains: "Cancel", visible: true })=
+5. Await the cancel event -- proves QML -> bridge event path works
+6. Enqueue =execution_cancelled= on FLUID_EVENT_CHANNEL (as production =processFluidEvents= would do in response to the bridge event)
+7. Wait for drain to deliver it
+8. =journey.waitUntil(() => evaluate("root.state") === "input")= -- proves the round-trip completed
+9. =journey.expectText("Cancelled")= -- proves the cancellation reason is shown
+
+This test verifies the bidirectional loop that is the most regression-prone area.
+
+** ITEM Write P2 coalescing stress test
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+File: same file, third test
+
+Test: "rapid P2 events coalesce correctly through drain"
+
+1. Setup pipeline, start drain, enqueue =plan_start=, wait for planning state
+2. Rapidly enqueue 20 =planner_stream= events with same coalescing key ="stream:planner"= (no sleep between them)
+3. After one drain interval (~150ms), assert QML received the *final* text value
+4. Assert QML did NOT necessarily receive all 20 intermediate values (coalescing is correct behavior, not a bug)
+5. Teardown
+
+This validates the P2 coalescing behavior end-to-end. If a future change breaks coalescing, this test fails.
+
+** ITEM Write parallel agent execution test
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: same file, fourth test
+
+Test: "parallel orchestrator execution drives QML agent panels through real pipeline"
+
+1. Setup pipeline, start drain, enqueue =plan_start=, wait for planning state
+2. Stop planning drain timer
+3. Create =FluidOrchestrator= with mock =runAgent= that adds controlled delays (10-50ms per agent)
+4. Execute =PARALLEL_PLAN= (root -> branch-a, branch-b -> merge)
+5. After orchestrator completes (it has its own drain timer), flush
+6. Assert per-agent invariants: each agent transitioned through =running= -> =completed=
+7. Assert =execution_complete= reached QML (=root.state === "complete"=)
+8. Do NOT assert cross-agent ordering (non-deterministic with parallelism)
+
+** ITEM Verify all tests pass and type-check
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+Run:
+- =bun test test/integration/fluid-pipeline-e2e.test.ts=
+- =bun run check= (type-check)
+
+* Verification
+
+- =bun test test/integration/fluid-pipeline-e2e.test.ts= passes (all 4 tests)
+- =bun run check= passes
+- The happy-path test would have caught the original drain timing bug: without a planning drain timer, =root.state= would never reach ="planning"= within the =waitUntil= timeout, and the test would fail with a clear message
+
+* What this enables for agent autonomy
+
+With this infrastructure in place, the agent can:
+
+1. *Verify full event flow headlessly*: enqueue events exactly as production code does, verify QML responds exactly as the user would see
+2. *Test timing-sensitive behavior*: drain timer intervals, coalescing, reentrancy -- all exercised through the real pipeline, not mocked
+3. *Test user interactions*: click Cancel, submit prompts, retry failed agents -- and verify the event round-trip through EventBus and back to QML
+4. *Take screenshots at any point*: =journey.screenshot("planning-state.png")= captures the QML rendering for visual inspection when needed
+5. *Never be blocked by environment*: all of this runs in =QT_QPA_PLATFORM=offscreen= mode, no display required
