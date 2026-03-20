@@ -4,7 +4,7 @@
  * live output to QML panels.
  */
 import * as path from "node:path";
-import { QmlBridge } from "@oh-my-pi/pi-qml";
+import { isDisplayAvailable, QmlBridge } from "@oh-my-pi/pi-qml";
 import { logger } from "@oh-my-pi/pi-utils";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
@@ -38,6 +38,10 @@ export async function runFluidMode(session: AgentSession, options: FluidModeOpti
 	const eventBus = options.eventBus;
 	if (!eventBus) {
 		throw new Error("Fluid mode requires an EventBus");
+	}
+
+	if (!isDisplayAvailable()) {
+		throw new Error("Fluid mode requires a graphical display (DISPLAY or WAYLAND_DISPLAY must be set)");
 	}
 
 	const bridge = new QmlBridge();

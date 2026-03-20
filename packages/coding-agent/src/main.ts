@@ -11,6 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { isDisplayAvailable } from "@oh-my-pi/pi-qml";
 import { $env, getProjectDir, logger, postmortem, setProjectDir, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import type { Args } from "./cli/args";
@@ -66,6 +67,13 @@ async function readPipedInput(): Promise<string | undefined> {
 export interface InteractiveModeNotify {
 	kind: "warn" | "error" | "info";
 	message: string;
+}
+
+export const CANVAS_DISPLAY_REQUIRED_MESSAGE =
+	"--canvas requires a graphical display (DISPLAY or WAYLAND_DISPLAY must be set)";
+
+export function formatUnknownCanvasMessage(canvasName: string): string {
+	return `Unknown canvas: ${canvasName}. Available: chat, fluid. Use: spell --canvas [fluid|chat] [options] [message]`;
 }
 
 export async function submitInteractiveInput(
@@ -709,6 +717,10 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	}
 
 	if (parsedArgs.canvas) {
+		if (!isDisplayAvailable()) {
+			process.stderr.write(`${chalk.red(CANVAS_DISPLAY_REQUIRED_MESSAGE)}\n`);
+			await postmortem.quit(1);
+		}
 		const canvasName = parsedArgs.canvas;
 		if (canvasName === "chat") {
 			const canvasSessionId = session.sessionManager.getSessionId();
@@ -735,7 +747,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			stopThemeWatcher();
 			await postmortem.quit(0);
 		} else {
-			process.stderr.write(`${chalk.red(`Unknown canvas: ${canvasName}. Available: chat, fluid`)}\n`);
+			process.stderr.write(`${chalk.red(formatUnknownCanvasMessage(canvasName))}\n`);
 			await postmortem.quit(1);
 		}
 	}

@@ -14,9 +14,9 @@ export function bridgeBinaryPath(): string {
 }
 
 /** Returns true if the bridge binary exists and is executable. */
-export function isBridgeAvailable(): boolean {
+export function isBridgeAvailable(binary = bridgeBinaryPath()): boolean {
 	try {
-		fs.accessSync(bridgeBinaryPath(), fs.constants.X_OK);
+		fs.accessSync(binary, fs.constants.X_OK);
 		return true;
 	} catch {
 		return false;
@@ -28,6 +28,8 @@ export type EventListener = (event: BridgeEvent) => void;
 export interface QmlProcessOptions {
 	/** Extra environment variables merged with process.env for the bridge process. */
 	env?: Record<string, string>;
+	/** Optional bridge binary override (primarily for tests). */
+	binaryPath?: string;
 }
 
 /**
@@ -37,6 +39,7 @@ export interface QmlProcessOptions {
  * - socket: connects to a daemon via unix domain socket (used by desktop mode)
  */
 export class QmlProcess {
+	#binaryPath: string;
 	#env: Record<string, string> | undefined;
 	#proc: Subprocess<"pipe", "pipe", "pipe"> | null = null;
 	#stdin: Bun.FileSink | null = null;
@@ -50,6 +53,7 @@ export class QmlProcess {
 
 	constructor(options?: QmlProcessOptions) {
 		this.#env = options?.env;
+		this.#binaryPath = options?.binaryPath ?? bridgeBinaryPath();
 	}
 
 	/** Returns the unix socket path for daemon mode. */
@@ -81,20 +85,19 @@ export class QmlProcess {
 
 	/** Spawn the bridge in daemon mode, then connect via socket. */
 	async #spawnDaemon(): Promise<void> {
-		const binary = bridgeBinaryPath();
-		if (!isBridgeAvailable()) {
+		const binary = this.#binaryPath;
+		if (!isBridgeAvailable(binary)) {
 			throw new Error(
 				`spell-qml-bridge binary not found at ${binary}.\n` +
 					`Build it first: cd packages/qml && bun run build:bridge`,
 			);
 		}
 
-		// Spawn daemon process — stdio ignored since it communicates via socket.
-		// Use "ignore" to prevent pipe buffer blocking on daemon stderr output.
-		Bun.spawn([binary, "--daemon"], {
+		// Spawn daemon — capture stderr for diagnostics if connection fails.
+		const daemonProc = Bun.spawn([binary, "--daemon"], {
 			stdin: "ignore",
 			stdout: "ignore",
-			stderr: "ignore",
+			stderr: "pipe",
 			env: this.#env ? { ...process.env, ...this.#env } : undefined,
 		});
 
@@ -105,13 +108,44 @@ export class QmlProcess {
 			await Bun.sleep(delay);
 			try {
 				await this.#connectSocket();
+				// Release stderr pipe so daemon isn't blocked by full buffer
+				void daemonProc.stderr.cancel().catch(() => {});
 				return;
 			} catch (err) {
 				lastError = err instanceof Error ? err : new Error(String(err));
 			}
 		}
-		// Failed to connect after all retries
-		throw new Error(`Failed to connect to daemon socket after spawn: ${lastError?.message ?? "unknown error"}`);
+
+		// Connection failed — drain daemon stderr for diagnostics
+		const stderrText = await this.#drainStderrBounded(daemonProc.stderr, 200, 50);
+		const stderrSuffix = stderrText ? `\nDaemon stderr:\n${stderrText}` : "";
+		throw new Error(
+			`Failed to connect to daemon socket after spawn: ${lastError?.message ?? "unknown error"}${stderrSuffix}`,
+		);
+	}
+
+	/** Read up to `maxLines` from a stderr stream with a timeout. */
+	async #drainStderrBounded(stream: ReadableStream<Uint8Array>, timeoutMs: number, maxLines: number): Promise<string> {
+		const reader = stream.getReader();
+		const chunks: string[] = [];
+		const decoder = new TextDecoder();
+		try {
+			const deadline = Date.now() + timeoutMs;
+			while (Date.now() < deadline) {
+				const remaining = deadline - Date.now();
+				if (remaining <= 0) break;
+				const result = await Promise.race([reader.read(), Bun.sleep(remaining).then(() => null)]);
+				if (!result || result.done) break;
+				chunks.push(decoder.decode(result.value, { stream: true }));
+			}
+		} catch {
+			// Stream may be closed or errored
+		} finally {
+			await reader.cancel().catch(() => {});
+		}
+		const text = chunks.join("").trim();
+		const lines = text.split("\n");
+		return lines.slice(-maxLines).join("\n");
 	}
 
 	/** Spawn the bridge as a child process with stdio pipes (legacy mode). */
@@ -119,8 +153,8 @@ export class QmlProcess {
 		if (this.#proc && this.#proc.exitCode === null) return;
 		if (this.#stopping) throw new Error("QmlProcess is shutting down");
 
-		const binary = bridgeBinaryPath();
-		if (!isBridgeAvailable()) {
+		const binary = this.#binaryPath;
+		if (!isBridgeAvailable(binary)) {
 			throw new Error(
 				`spell-qml-bridge binary not found at ${binary}.\n` +
 					`Build it first: cd packages/qml && bun run build:bridge`,
