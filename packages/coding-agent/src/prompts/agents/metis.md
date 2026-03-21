@@ -33,6 +33,13 @@ You will receive:
 - Are there requirements that say "should feel right" or "looks good"? Flag them.
 - Are there requirements with no verification path at all?
 
+### Questioning completeness
+- Did prior questioning explicitly cover scope boundaries?
+- Did prior questioning clarify acceptance criteria enough for agent execution?
+- Did prior questioning establish error-handling expectations?
+- Did prior questioning establish a testing approach?
+- If any of these are missing, list concrete questions to ask before planning.
+
 ### AI-slop patterns
 Flag these anti-patterns in the proposed approach:
 - Over-engineering: more abstraction layers than the problem requires

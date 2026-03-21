@@ -8,7 +8,7 @@
 import type { OrgConfig } from "../types";
 
 /** TODO keywords in order of typical progression. */
-export const DEFAULT_TODO_KEYWORDS = ["ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"] as const;
+export const DEFAULT_TODO_KEYWORDS = ["INIT", "ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"] as const;
 
 /** Terminal states — items in these states are considered complete. */
 export const TERMINAL_STATES = new Set(["DONE"]);
@@ -17,18 +17,19 @@ export const TERMINAL_STATES = new Set(["DONE"]);
 export const BLOCKED_STATES = new Set(["BLOCKED"]);
 
 /** In-progress states — actively being worked on. */
-export const ACTIVE_STATES = new Set(["DOING", "REVIEW"]);
+export const ACTIVE_STATES = new Set(["INIT", "DOING", "REVIEW"]);
 
 /**
  * Valid state transitions.
  * Key = current state, Value = allowed next states.
  */
 export const STATE_TRANSITIONS: Record<string, readonly string[]> = {
+	INIT: ["DOING", "REVIEW", "BLOCKED"],
 	ITEM: ["DOING", "BLOCKED"],
 	DOING: ["REVIEW", "BLOCKED", "DONE"],
 	REVIEW: ["DOING", "DONE", "BLOCKED"],
 	DONE: [],
-	BLOCKED: ["ITEM", "DOING"],
+	BLOCKED: ["INIT", "ITEM", "DOING"],
 };
 
 /** Properties required on every task heading (validation ERROR if missing). */

@@ -1503,7 +1503,7 @@ export const SETTINGS_SCHEMA = {
 	},
 	"org.todoKeywords": {
 		type: "array",
-		default: ["ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"],
+		default: ["INIT", "ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"],
 	},
 	"org.planDraftCategory": {
 		type: "string",

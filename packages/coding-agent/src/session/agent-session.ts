@@ -49,7 +49,7 @@ import {
 	modelsAreEqual,
 	parseRateLimitReason,
 } from "@oh-my-pi/pi-ai";
-import { orgToMarkdown } from "@oh-my-pi/pi-org";
+import { orgToMarkdown, resolveCategories } from "@oh-my-pi/pi-org";
 import { abortableSleep, getAgentDbPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJob, AsyncJobManager } from "../async";
 import type { Rule } from "../capability/rule";
@@ -97,7 +97,7 @@ import {
 } from "../mcp/discoverable-tool-metadata";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../patch";
-import { resolvePlanDraftItem } from "../plan-mode/org-plan";
+import { buildOrgConfig, resolvePlanItem } from "../plan-mode/org-plan";
 import type { PlanModeState } from "../plan-mode/state";
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
@@ -302,6 +302,19 @@ interface HandoffOptions {
 /** Standard thinking levels */
 
 const AUTO_HANDOFF_THRESHOLD_FOCUS = renderPromptTemplate(autoHandoffThresholdFocusPrompt);
+
+function describePlanChildCategory(name: string): string {
+	switch (name) {
+		case "projects":
+			return "Multi-feature infrastructure work";
+		case "features":
+			return "Single feature additions";
+		case "bugs":
+			return "Bug fixes";
+		default:
+			return name;
+	}
+}
 
 const noOpUIContext: ExtensionUIContext = {
 	select: async (_title, _options, _dialogOptions) => undefined,
@@ -2020,7 +2033,7 @@ export class AgentSession {
 		if (planFilePath.startsWith("org://")) {
 			// Resolve via org infrastructure: read the item body directly.
 			const itemId = planFilePath.slice("org://".length);
-			const item = await resolvePlanDraftItem(this.settings, this.sessionManager.getCwd(), itemId);
+			const item = await resolvePlanItem(this.settings, this.sessionManager.getCwd(), itemId);
 			if (!item) return null;
 			planContent = item.body;
 		} else {
@@ -2075,7 +2088,23 @@ export class AgentSession {
 
 		const planExists = fs.existsSync(resolvedPlanPath);
 		const orgEnabled = (this.settings.get("org.enabled") as boolean | undefined) ?? false;
-		const draftCategory = (this.settings.get("org.planDraftCategory") as string | undefined) ?? "drafts";
+		let planCategory = "plans";
+		let childCategories: Array<{ name: string; prefix: string; description: string }> = [];
+		if (orgEnabled) {
+			const config = buildOrgConfig(this.settings);
+			const categories = resolveCategories(config, this.sessionManager.getCwd());
+			const plansCategory = categories.find(category => category.name === "plans" || category.prefix === "PLAN");
+			if (plansCategory) {
+				planCategory = plansCategory.name;
+			}
+			childCategories = categories
+				.filter(category => !["plans", "drafts", "sessions"].includes(category.name))
+				.map(category => ({
+					name: category.name,
+					prefix: category.prefix,
+					description: describePlanChildCategory(category.name),
+				}));
+		}
 		// Read design history for anti-convergence injection when in design flavor
 		let designHistory = "";
 		if (state.flavor === "design") {
@@ -2114,9 +2143,9 @@ export class AgentSession {
 			exitToolName: "exit_plan_mode",
 			reentry: state.reentry ?? false,
 			iterative: state.workflow === "iterative",
-			orgItemId: state.orgItemId ?? "",
 			orgEnabled,
-			draftCategory,
+			planCategory,
+			childCategories,
 			ultraplan: state.ultraplan ?? false,
 			designFlavor: state.flavor === "design",
 			designHistory,

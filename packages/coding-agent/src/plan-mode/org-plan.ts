@@ -1,27 +1,19 @@
 /**
  * Org integration for plan mode.
  *
- * On plan approval: the draft item is marked DONE and a new active item is
- * created in the configured active category with the plan content as body.
- *
  * Operations throw on failure; callers are responsible for surfacing errors.
  */
-
-import * as path from "node:path";
 import {
-	appendItemToFile,
 	DEFAULT_ORG_CONFIG,
-	findCategory,
 	findItemById,
-	generateId,
-	initCategoryDir,
 	resolveCategories,
+	updateItemBodyInFile,
 	updateItemStateInFile,
 } from "@oh-my-pi/pi-org";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 
-export interface OrgPlanDraft {
+export interface OrgPlanRef {
 	id: string;
 	file: string;
 }
@@ -37,59 +29,51 @@ export function buildOrgConfig(settings: Settings) {
 }
 
 /**
- * Finalize an approved plan:
- *   1. Mark the draft item as DONE.
- *   2. Create a new item in the active category with the plan content as body.
+ * Mark an approved PLAN item as active by transitioning INIT -> DOING.
  *
- * Returns the new active item's id, or null on failure.
+ * Optionally prepends the first user message to the existing plan body.
+ * Returns the plan item's CUSTOM_ID on success, or null when org is disabled.
  */
-export async function finalizePlanDraft(
+export async function approvePlanItem(
 	settings: Settings,
 	projectRoot: string,
-	draft: OrgPlanDraft,
-	planTitle: string,
-	planContent: string,
-	/** When provided, prepended as an "* Initial message" section at the top of the plans item body. */
+	planItem: OrgPlanRef,
 	initialMessage?: string,
 ): Promise<string | null> {
 	if (!settings.get("org.enabled")) return null;
 
-	const activeCategory = (settings.get("org.planActiveCategory") as string | undefined) ?? "plans";
-	const activeState = (settings.get("org.planActiveState") as string | undefined) ?? "DOING";
-
 	const config = buildOrgConfig(settings);
 	const categories = resolveCategories(config, projectRoot);
-
-	// 1. Mark draft DONE
-	await updateItemStateInFile(draft.file, draft.id, "DONE", config.todoKeywords);
-
-	// 2. Create active item
-	const activeCat = findCategory(categories, activeCategory);
-	if (!activeCat) {
-		throw new Error(
-			`org.planActiveCategory "${activeCategory}" not found. Known categories: ${categories.map(c => c.name).join(", ")}`,
-		);
+	const catDirs = categories.map(c => ({ absPath: c.absPath, name: c.name, dir: c.dirName }));
+	const item = await findItemById(catDirs, planItem.id, config.todoKeywords);
+	if (!item) {
+		throw new Error(`Plan item "${planItem.id}" not found.`);
 	}
 
-	await initCategoryDir(activeCat.absPath, activeCat.prefix, config.todoKeywords);
-	const activeId = await generateId(activeCat.absPath, activeCat.prefix, planTitle);
-	const activeFilePath = path.join(activeCat.absPath, `${activeId}.org`);
-	const body = initialMessage ? `* Initial message\n\n${initialMessage}\n\n${planContent}` : planContent;
-	await appendItemToFile(
-		activeFilePath,
-		{ title: planTitle, category: activeCat.name, id: activeId, body },
-		activeState,
-	);
+	if (initialMessage?.trim()) {
+		const prefixedBody = item.body?.trim()
+			? `* Initial message\n\n${initialMessage}\n\n${item.body}`
+			: `* Initial message\n\n${initialMessage}`;
+		const bodyUpdated = await updateItemBodyInFile(planItem.file, planItem.id, prefixedBody, config.todoKeywords);
+		if (!bodyUpdated) {
+			throw new Error(`Failed to update body for plan item "${planItem.id}".`);
+		}
+	}
 
-	logger.debug("org-plan: finalized plan", { draftId: draft.id, activeId, activeFilePath });
-	return activeId;
+	const stateUpdated = await updateItemStateInFile(planItem.file, planItem.id, "DOING", config.todoKeywords);
+	if (!stateUpdated) {
+		throw new Error(`Failed to transition plan item "${planItem.id}" to DOING.`);
+	}
+
+	logger.debug("org-plan: approved plan", { planId: planItem.id, planFilePath: planItem.file });
+	return planItem.id;
 }
 
 /**
- * Resolve a plan draft item by its CUSTOM_ID across all configured categories.
+ * Resolve a plan item by its CUSTOM_ID across all configured categories.
  * Returns the item (with body) or null if not found / org disabled.
  */
-export async function resolvePlanDraftItem(
+export async function resolvePlanItem(
 	settings: Settings,
 	projectRoot: string,
 	itemId: string,

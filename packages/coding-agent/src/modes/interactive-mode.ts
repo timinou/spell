@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { type Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { NiriOverviewController } from "@oh-my-pi/pi-niri";
-import { orgToMarkdown } from "@oh-my-pi/pi-org";
+import { extractIdLinks, orgToMarkdown } from "@oh-my-pi/pi-org";
 import type { Component, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
 import {
 	Container,
@@ -29,7 +29,7 @@ import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
-import { finalizePlanDraft, type OrgPlanDraft } from "../plan-mode/org-plan";
+import { approvePlanItem, type OrgPlanRef, resolvePlanItem } from "../plan-mode/org-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
@@ -954,16 +954,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		planContent: string,
 		options: { planFilePath: string; finalPlanFilePath: string; orgItem?: { id: string; file: string } },
 	): Promise<void> {
-		// Org item from exit_plan_mode details takes precedence over pre-created state (backward compat).
-		const planModeState = this.session.getPlanModeState();
-		const orgDraft: OrgPlanDraft | null =
-			options.orgItem ??
-			(planModeState?.orgItemId && planModeState.orgItemFile
-				? { id: planModeState.orgItemId, file: planModeState.orgItemFile }
-				: null);
-		const planTitle = options.finalPlanFilePath.replace(/^local:\/\//, "").replace(/\.md$/, "");
+		const orgPlanItem: OrgPlanRef | null = options.orgItem ?? null;
 		// Only rename the markdown plan file for file-backed plans.
-		if (!options.orgItem) {
+		if (!orgPlanItem) {
 			await renameApprovedPlanFile({
 				planFilePath: options.planFilePath,
 				finalPlanFilePath: options.finalPlanFilePath,
@@ -987,27 +980,23 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		await this.#exitPlanMode({ silent: true, paused: false });
 		await this.handleClearCommand();
-		// Finalize the org draft first — if it succeeds, use org:// reference and skip local copy.
-		// Non-fatal: errors fall back to the file-backed local:// flow.
-		let activeOrgItemId: string | null = null;
-		if (orgDraft) {
-			try {
-				activeOrgItemId = await finalizePlanDraft(
-					this.settings,
-					this.sessionManager.getCwd(),
-					orgDraft,
-					planTitle,
-					planContent,
-					this.#getFirstUserMessageText() || undefined,
-				);
-			} catch (err) {
-				this.showWarning(`Org plan finalization failed: ${err instanceof Error ? err.message : String(err)}`);
+		let approvedOrgItemId = "";
+		let planReferencePath = options.finalPlanFilePath;
+		if (orgPlanItem) {
+			const approvedPlanItemId = await approvePlanItem(
+				this.settings,
+				this.sessionManager.getCwd(),
+				orgPlanItem,
+				this.#getFirstUserMessageText() || undefined,
+			);
+			if (!approvedPlanItemId) {
+				throw new Error("Failed to approve org PLAN item.");
 			}
-		}
-		// For file-backed plans (org disabled or finalization failed), persist the approved plan
-		// in the new session's local:// root so `local://<title>.md` resolves correctly.
-		const planReferencePath = activeOrgItemId ? `org://${activeOrgItemId}` : options.finalPlanFilePath;
-		if (!activeOrgItemId) {
+			approvedOrgItemId = approvedPlanItemId;
+			planReferencePath = `org://${approvedPlanItemId}`;
+		} else {
+			// For file-backed plans (org disabled), persist the approved plan in the new
+			// session local:// root so `local://<title>.md` resolves correctly.
 			const newLocalPath = resolveLocalUrlToPath(options.finalPlanFilePath, {
 				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
 				getSessionId: () => this.sessionManager.getSessionId(),
@@ -1022,7 +1011,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const prompt = renderPromptTemplate(planModeApprovedPrompt, {
 			planContent: orgToMarkdown(planContent),
 			finalPlanFilePath: planReferencePath,
-			orgItemId: activeOrgItemId ?? "",
+			orgItemId: approvedOrgItemId,
 		});
 		await this.session.prompt(prompt, { synthetic: true });
 	}
@@ -1097,7 +1086,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (choice === "Review with Momus") {
 			await this.#enterPlanMode({ ultraplan: true });
-			await this.session.prompt(`Run Momus review on this plan and address any issues:\n\n${planContent}`, {
+			const childItemIds = extractIdLinks(planContent);
+			const childBodies: string[] = [];
+			for (const childItemId of childItemIds) {
+				const childItem = await resolvePlanItem(this.settings, this.sessionManager.getCwd(), childItemId);
+				if (!childItem) {
+					this.showWarning(`Skipping unresolved child item ${childItemId} during Momus review.`);
+					continue;
+				}
+				childBodies.push(`## ${childItemId}\n\n${childItem.body}`);
+			}
+			const combinedPlanContent =
+				childBodies.length > 0
+					? `${planContent}\n\n---\n\n# Linked Child Items\n\n${childBodies.join("\n\n")}`
+					: planContent;
+			await this.session.prompt(`Run Momus review on this plan and address any issues:\n\n${combinedPlanContent}`, {
 				synthetic: true,
 			});
 			return;

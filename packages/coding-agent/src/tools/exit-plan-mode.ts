@@ -1,9 +1,10 @@
 import * as fs from "node:fs/promises";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import { extractIdLinks } from "@oh-my-pi/pi-org";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
-import { resolvePlanDraftItem } from "../plan-mode/org-plan";
+import { resolvePlanItem } from "../plan-mode/org-plan";
 import exitPlanModeDescription from "../prompts/tools/exit-plan-mode.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { resolvePlanPath } from "./plan-mode-guard";
@@ -14,7 +15,7 @@ const exitPlanModeSchema = Type.Object({
 	itemId: Type.Optional(
 		Type.String({
 			description:
-				"CUSTOM_ID of the org draft item you created via `org create` (e.g. DRAFT-003-auth-refactor). Required when org is enabled.",
+				"CUSTOM_ID of the PLAN item you created via `org create` (e.g. PLAN-003-auth-refactor). Required when org is enabled.",
 		}),
 	),
 });
@@ -45,12 +46,14 @@ export interface ExitPlanModeDetails {
 	planExists: boolean;
 	title: string;
 	finalPlanFilePath: string;
-	/** CUSTOM_ID of the org item the agent created for the plan. */
+	/** CUSTOM_ID of the org PLAN item the agent created. */
 	itemId?: string;
-	/** Absolute path to the .org file containing the plan item. */
+	/** Absolute path to the .org file containing the PLAN item. */
 	orgItemFile?: string;
-	/** Body text of the org item — used as plan content for display and finalization. */
+	/** Body text of the PLAN item — used as plan content for display and finalization. */
 	planContent?: string;
+	/** Child CUSTOM_ID references extracted from [[id:...]] links in PLAN body. */
+	childItemIds?: string[];
 }
 
 export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, ExitPlanModeDetails> {
@@ -80,17 +83,42 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 		const finalPlanFilePath = `local://${normalized.fileName}`;
 		const resolvedPlanPath = resolvePlanPath(this.session, state.planFilePath);
 		resolvePlanPath(this.session, finalPlanFilePath);
+		const orgEnabled = (this.session.settings.get("org.enabled") as boolean | undefined) ?? false;
+		if (orgEnabled && !params.itemId) {
+			throw new ToolError("itemId is required when org is enabled. Provide the PLAN item's CUSTOM_ID.");
+		}
 
-		// Org-backed plan: resolve item and return its body as the plan content.
+		// Org-backed plan: resolve PLAN item, validate child references, and return its body as plan content.
 		if (params.itemId) {
-			const item = await resolvePlanDraftItem(this.session.settings, this.session.cwd, params.itemId);
+			const item = await resolvePlanItem(this.session.settings, this.session.cwd, params.itemId);
 			if (!item) {
 				throw new ToolError(
-					`Org item "${params.itemId}" not found. Make sure you created it via \`org create\` before calling this tool.`,
+					`Org PLAN item "${params.itemId}" not found. Make sure you created it via \`org create\` before calling this tool.`,
 				);
 			}
+
+			const childItemIds = extractIdLinks(item.body);
+			if (childItemIds.length === 0) {
+				throw new ToolError(
+					`PLAN item "${params.itemId}" must include at least one child reference using [[id:...]] links in its body.`,
+				);
+			}
+
+			const missingChildIds: string[] = [];
+			for (const childItemId of childItemIds) {
+				const childItem = await resolvePlanItem(this.session.settings, this.session.cwd, childItemId);
+				if (!childItem) {
+					missingChildIds.push(childItemId);
+				}
+			}
+			if (missingChildIds.length > 0) {
+				throw new ToolError(
+					`PLAN item "${params.itemId}" references missing child items: ${missingChildIds.join(", ")}.`,
+				);
+			}
+
 			return {
-				content: [{ type: "text", text: "Plan ready for approval." }],
+				content: [{ type: "text", text: `Plan ready for approval (${childItemIds.length} linked child items).` }],
 				details: {
 					planFilePath: state.planFilePath,
 					planExists: true,
@@ -99,6 +127,7 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 					itemId: params.itemId,
 					orgItemFile: item.file,
 					planContent: item.body,
+					childItemIds,
 				},
 			};
 		}

@@ -3,6 +3,7 @@ export * from "./emacs/client";
 export * from "./emacs/daemon";
 export * from "./emacs/detection";
 export * from "./id-generator";
+export * from "./id-links";
 export * from "./journal";
 export * from "./org-parse";
 export * from "./org-reader";
