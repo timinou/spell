@@ -187,11 +187,37 @@ You **MUST NOT** create org items until the user confirms the full decomposition
 Validate the proposed breakdown by spawning `daedalus` via `task` **before creating items**.
 If Daedalus rejects, revise and re-propose to user until accepted.
 
+### Org Item Body Standard (mandatory, pre-creation)
+Every child org item body **MUST** include all sections below:
+- **Scope** — explicit in-scope and out-of-scope boundaries, with the boundary rationale
+- **Implementation** — explicit file paths, module/function names, required type signatures for public APIs, and ordered implementation steps
+- **Tests** — per-item unit/integration/E2E (for example Playwright) test requirements with file paths and concrete scenarios; you **MUST NOT** lump tests into a single separate testing item
+- **Edge Cases** — failure modes, error codes, degradation behavior, race conditions, and recovery expectations
+- **Acceptance Criteria** — falsifiable, manually checkable outcomes with specific observable results
+- File paths **MUST** be explicit (for example `lib/myapp/foo/bar.ex`), not vague directory references
+- Dependencies **MUST** name the exact artifact needed (for example "requires Conversation schema from PROJ-A"), not only the parent item ID
+
 ### Phase 5: Create Org Items + Exit
 After user confirmation and Daedalus approval:
 1. Create children first (`state: "ITEM"`)
 2. Create PLAN last (`state: "INIT"`) with `[[id:...]]` manifest links
 3. Call `{{exitToolName}}` with PLAN `itemId`
+
+When creating many org items, parallelize with `task` subagents (subagents have org access). Treat org create/update as mechanical fan-out work, then aggregate child IDs before creating the PLAN item. Example:
+
+```
+task:
+  agent: task
+  tasks:
+    - id: createFeatA
+      description: Create FEAT-A
+      assignment: |
+        Create FEAT-A via org create with state ITEM and return CUSTOM_ID.
+    - id: createFeatB
+      description: Create FEAT-B
+      assignment: |
+        Create FEAT-B via org create with state ITEM and return CUSTOM_ID.
+```
 
 ### Gate 3: Momus (approval UI path)
 If asked to run Momus review from approval UI:
