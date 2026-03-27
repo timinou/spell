@@ -12,15 +12,36 @@ const outputPath = path.join(nativeDir, binaryName);
 
 console.log(`Building spell-qml-bridge (${isDev ? "debug" : "release"})...`);
 
+const versionCheckBypassArgs = [
+  "-DQT_NO_PACKAGE_VERSION_CHECK=TRUE",
+  "-DQT_NO_PACKAGE_VERSION_INCOMPATIBLE_WARNING=TRUE",
+];
+
+async function configure(extraArgs: string[] = []) {
+  return await $`cmake ${[...configArgs, ...extraArgs]}`.cwd(packageDir).nothrow();
+}
+
 // Configure
 const configArgs = ["-S", packageDir, "-B", buildDir];
 if (!isDev) configArgs.push("-DCMAKE_BUILD_TYPE=Release");
 else configArgs.push("-DCMAKE_BUILD_TYPE=Debug");
 
-const configResult = await $`cmake ${configArgs}`.cwd(packageDir).nothrow();
+let configResult = await configure();
 if (configResult.exitCode !== 0) {
-	console.error("cmake configure failed");
-	process.exit(1);
+  const configureOutput = configResult.text();
+  if (!configureOutput.includes("QT_NO_PACKAGE_VERSION_CHECK")) {
+    console.error("cmake configure failed");
+    process.exit(1);
+  }
+
+  console.warn(
+    "cmake configure failed due to Qt package version skew; retrying with QT_NO_PACKAGE_VERSION_CHECK=TRUE",
+  );
+  configResult = await configure(versionCheckBypassArgs);
+  if (configResult.exitCode !== 0) {
+    console.error("cmake configure failed");
+    process.exit(1);
+  }
 }
 
 // Build

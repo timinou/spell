@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick Network)
+find_package(Qt6 REQUIRED COMPONENTS Quick Network WebEngineQuick)
 
 qt_add_executable(spell-qml-bridge
     bridge/main.cpp
@@ -14,6 +14,6 @@ qt_add_executable(spell-qml-bridge
     bridge/socketserver.cpp
 )
 
-target_link_libraries(spell-qml-bridge PRIVATE Qt6::Quick Qt6::Network)
+target_link_libraries(spell-qml-bridge PRIVATE Qt6::Quick Qt6::Network Qt6::WebEngineQuick)
 
 install(TARGETS spell-qml-bridge DESTINATION .)

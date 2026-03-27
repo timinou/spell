@@ -1,9 +1,11 @@
 #include <unistd.h>
+#include <QCoreApplication>
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QQmlContext>
 #include <QSocketNotifier>
+#include <QtWebEngineQuick/QtWebEngineQuick>
 #include <cstring>
 #include "socketserver.h"
 #include "windowmanager.h"
@@ -16,6 +18,9 @@ static bool hasDaemonFlag(int argc, char *argv[]) {
 }
 
 int main(int argc, char *argv[]) {
+    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+    QtWebEngineQuick::initialize();
+
     QGuiApplication app(argc, argv);
     app.setApplicationName("omp-qml-bridge");
 
