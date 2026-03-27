@@ -1,3 +1,5 @@
+export { bridgeBinaryPath, isBridgeAvailable, isDisplayAvailable, QmlBridge } from "@oh-my-pi/pi-qml";
+
 import { HookEditorComponent, HookInputComponent, HookSelectorComponent } from "./modes/components";
 
 // Core session management
