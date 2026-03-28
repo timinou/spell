@@ -1,0 +1,41 @@
+#+TITLE: TDD awareness in Daedalus decomposition validator
+#+STATE: DONE
+#+SESSION_ID: 14a4e5b57e629d71
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T21-37-34-201Z_14a4e5b57e629d71.jsonl]]
+#+CUSTOM_ID: FEAT-010-tdd-awareness-in-daedalus-decomposition
+#+EFFORT: 15m
+#+PRIORITY: B
+#+LAYER: prompts
+
+NOTE [2026-03-28]: Implemented in `packages/coding-agent/src/prompts/agents/daedalus.md`; local grep/read verification passed. Global `bun check:ts` remains blocked by unrelated workspace TypeScript error outside this item’s scope.
+
+* Initial Message
+
+have a slight nudge towards writing unit tests first (TDD) in plan modes, especially ultraplan. Slight nudge. Ask me questions
+
+* Scope
+- IN: ~packages/coding-agent/src/prompts/agents/daedalus.md~
+- OUT: No other agent prompts, no TypeScript code
+
+* Tests
+- Verify with ~grep~ that Daedalus's "Questioning completeness" section references test-first ordering
+- Verify the validation criteria don't introduce a hard REJECT for non-TDD approaches — it should be a flag, not a gate
+- Read the full file after edit to confirm output format and approval bar are untouched
+
+* Implementation
+File: ~packages/coding-agent/src/prompts/agents/daedalus.md~
+
+1. In the "Questioning completeness" section (lines 49-56), expand the "Testing approach" bullet (line 54) to include awareness of test-first ordering. Current text is just "Testing approach" — add: "including whether test scenarios are defined before implementation steps (preferred)."
+
+2. In the "Acceptance criteria quality" section (line 58-59), add a note: "Child items SHOULD define test scenarios and file paths before or alongside implementation steps, not as a footnote."
+
+* Edge Cases
+- Daedalus issues binary APPROVE/REJECT. The TDD nudge should be a flag/note that influences the verdict, not an automatic REJECT trigger. Use language like "Flag if tests appear as an afterthought" rather than "Reject items without test-first ordering."
+- Don't change the validation criteria numbering or output format
+- Keep the approval bar unchanged: "approve only when decomposition is executable without guesswork"
+
+* Acceptance Criteria
+- Daedalus's Questioning completeness section mentions test-first ordering as preferred
+- Acceptance criteria quality section notes that test scenarios should precede implementation
+- Output format and approval bar unchanged
+- Language is advisory, not a hard gate

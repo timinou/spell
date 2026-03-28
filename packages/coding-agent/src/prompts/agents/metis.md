@@ -37,7 +37,7 @@ You will receive:
 - Did prior questioning explicitly cover scope boundaries?
 - Did prior questioning clarify acceptance criteria enough for agent execution?
 - Did prior questioning establish error-handling expectations?
-- Did prior questioning establish a testing approach?
+- Did prior questioning establish a concrete testing approach (not reactive-only/post-implementation), with specific scenarios for the behavior being changed, and is a proactive test-first approach recommended where feasible?
 - If any of these are missing, list concrete questions to ask before planning.
 
 ### AI-slop patterns

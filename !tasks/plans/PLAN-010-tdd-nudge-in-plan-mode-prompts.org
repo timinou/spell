@@ -1,0 +1,62 @@
+#+TITLE: TDD nudge in plan mode prompts
+#+STATE: BLOCKED
+#+SESSION_ID: 14a4e5b57e629d71
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T21-37-34-201Z_14a4e5b57e629d71.jsonl]]
+#+CUSTOM_ID: PLAN-010-tdd-nudge-in-plan-mode-prompts
+
+
+NOTE [2026-03-28]: Prompt edits completed and child items closed. Plan remains blocked because repo-wide `bun check:ts` currently fails outside this plan's scope.
+
+* Initial Message
+
+have a slight nudge towards writing unit tests first (TDD) in plan modes, especially ultraplan. Slight nudge. Ask me questions
+
+* Context
+Plan mode already requires "testing approach" as a questioning topic and mandates a Tests section per child item in ultraplan. However, there is zero guidance on test-first ordering — tests are structurally listed after Implementation, and no prompt mentions TDD or test-first anywhere.
+
+This plan adds a consistent, slight nudge toward test-driven development across all plan mode prompts:
+- Structural: reorder Tests above Implementation in the ultraplan Org Item Body Standard
+- Guidance: add SHOULD-level TDD preference in general plan child item requirements
+- Execution: suggest test-first ordering within child item implementation steps
+- Gates: make Metis, Daedalus, and Momus aware of the preference so they flag afterthought testing
+
+All changes are prompt-only (.md files). No TypeScript code changes. The nudge uses SHOULD language throughout — it's a preference, not a hard gate. Non-TDD approaches (pure refactors, infrastructure) remain valid.
+
+Key files:
+- ~packages/coding-agent/src/prompts/system/plan-mode-active.md~ — main plan mode template (Handlebars)
+- ~packages/coding-agent/src/prompts/agents/metis.md~ — gap analyzer
+- ~packages/coding-agent/src/prompts/agents/daedalus.md~ — decomposition validator
+- ~packages/coding-agent/src/prompts/agents/momus.md~ — plan quality reviewer
+
+* Verification
+- ~grep -i "test-first\\|test.scenarios.*before\\|prefer.*test" packages/coding-agent/src/prompts/system/plan-mode-active.md~ returns matches
+- ~grep -i "test-first\\|afterthought\\|reactive" packages/coding-agent/src/prompts/agents/metis.md~ returns matches
+- ~grep -i "test.scenarios.*before\\|preferred" packages/coding-agent/src/prompts/agents/daedalus.md~ returns matches
+- ~grep -i "test.scenarios\\|afterthought\\|deferred" packages/coding-agent/src/prompts/agents/momus.md~ returns matches
+- In plan-mode-active.md, the Org Item Body Standard section lists Tests before Implementation
+- ~bun check:ts~ passes (prompt files are loaded as text imports; no syntax to break, but verify no accidental TypeScript damage)
+- All four files remain valid Markdown with no broken Handlebars conditionals
+
+* Execution Manifest
+All four items are independent prompt file edits with no cross-dependencies. Execute in parallel.
+
+1. [[id:FEAT-008-tdd-nudge-in-plan-mode-active-prompt]] (depends: none, effort: 30m) — Main template: reorder body standard, add SHOULD guidance, add execution ordering
+2. [[id:FEAT-009-tdd-awareness-in-metis-gap-analyzer]] (depends: none, effort: 15m) — Metis: expand testing completeness check
+3. [[id:FEAT-010-tdd-awareness-in-daedalus-decomposition]] (depends: none, effort: 15m) — Daedalus: add test-first preference to validation
+4. [[id:FEAT-011-tdd-check-in-momus-plan-reviewer]] (depends: none, effort: 15m) — Momus: add lightweight testing check to child-item integrity
+
+** Completion [2026-03-28]
+
+*** Verification
+- `grep -i "test-first\\|test.scenarios.*before\\|prefer.*test" packages/coding-agent/src/prompts/system/plan-mode-active.md` matched the new test-first guidance.
+- `grep -i "test-first\\|afterthought\\|reactive" packages/coding-agent/src/prompts/agents/metis.md` matched the new reactive-only / afterthought testing guidance.
+- `grep -i "test.scenarios.*before\\|preferred" packages/coding-agent/src/prompts/agents/daedalus.md` matched the new preferred test-first decomposition guidance.
+- `grep -i "test.scenarios\\|afterthought\\|deferred" packages/coding-agent/src/prompts/agents/momus.md` matched the new child-item testing integrity check.
+- `read packages/coding-agent/src/prompts/system/plan-mode-active.md` (Org Item Body Standard) confirmed `Tests` now appears before `Implementation` and both bullets describe test-first ordering as a preference.
+- `bun check:ts` failed outside this plan's scope with `TS2769` at `packages/org/test/live-emacs-section-update.test.ts:105` (`unknown` not assignable to `string`).
+
+*** Artifacts
+- None.
+
+*** Deviations
+- `bun check:ts` did not pass because of an unrelated workspace TypeScript failure in `packages/org/test/live-emacs-section-update.test.ts`. The prompt edits are complete and locally verified, but the plan remains blocked on repo-wide verification outside the modified files.

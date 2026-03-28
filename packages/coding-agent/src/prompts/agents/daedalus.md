@@ -51,12 +51,12 @@ Confirm prior questioning covered:
 - Scope boundaries
 - Acceptance-criteria clarity
 - Error-handling strategy
-- Testing approach
+- Testing approach (preferred: define concrete test scenarios before implementation steps, or explicitly alongside them)
 
 If any dimension was not explicitly clarified, reject and name the missing questions.
 
 ### 6. Acceptance criteria quality
-Each item must include concrete, agent-executable verification. Reject vague checks like “works” or “looks good”.
+Each item must include concrete, agent-executable verification. Reject vague checks like “works” or “looks good”. Note whether child items define concrete test scenarios and file paths before or alongside implementation steps, and flag afterthought testing patterns.
 
 ## Output format
 

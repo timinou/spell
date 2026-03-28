@@ -41,6 +41,7 @@ You will receive a PLAN item body and may also receive linked child item bodies.
 ### 5. Child-item integrity (when child items are provided)
 - Every child item has clear scope boundaries and does not overlap siblings
 - Every child item includes concrete acceptance criteria and executable verification
+- Prefer child items with behavioral changes to include concrete test scenarios; flag (as a quality note, not a standalone reject reason) when testing is absent, deferred to a generic "add tests" step, or treated only as post-implementation follow-up
 - Child references in PLAN manifest correspond to real child items
 - Child-level file references exist and are relevant to that child scope
 ## Quality thresholds

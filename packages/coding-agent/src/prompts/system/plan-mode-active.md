@@ -40,6 +40,7 @@ Child item requirements (`org create`):
 - Use concrete, executable acceptance criteria
 - Keep scopes non-overlapping
 - Include verification criteria: exact tests, checks, or manual proof the executor must produce
+- Test-first planning is preferred when practical: define test scenarios and test file paths before detailing implementation; for refactors or infrastructure work where that sequencing is not the best fit, note the preferred sequencing explicitly
 - If UI, browser, or visual behavior matters, name the required screenshot/artifact and what it must prove
 
 PLAN item requirements (`org create` in `{{planCategory}}`):
@@ -217,8 +218,8 @@ If Daedalus rejects, revise and re-propose to user until accepted.
 ### Org Item Body Standard (mandatory, pre-creation)
 Every child org item body **MUST** include all sections below:
 - **Scope** — explicit in-scope and out-of-scope boundaries, with the boundary rationale
-- **Implementation** — explicit file paths, module/function names, required type signatures for public APIs, and ordered implementation steps
-- **Tests** — per-item unit/integration/E2E (for example Playwright) test requirements with file paths and concrete scenarios; you **MUST NOT** lump tests into a single separate testing item
+- **Tests** — per-item unit/integration/E2E (for example Playwright) test requirements with file paths and concrete scenarios; define the scenarios and paths before implementation details when practical so they drive design; you **MUST NOT** lump tests into a single separate testing item
+- **Implementation** — explicit file paths, module/function names, required type signatures for public APIs, and ordered implementation steps that reference the test scenarios they satisfy; executors should write tests before implementation when practical
 - **Edge Cases** — failure modes, error codes, degradation behavior, race conditions, and recovery expectations
 - **Acceptance Criteria** — falsifiable, manually checkable outcomes with specific observable results
 - File paths **MUST** be explicit (for example `lib/myapp/foo/bar.ex`), not vague directory references

@@ -1,0 +1,44 @@
+#+TITLE: TDD nudge in plan-mode-active prompt
+#+STATE: DONE
+#+SESSION_ID: 14a4e5b57e629d71
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T21-37-34-201Z_14a4e5b57e629d71.jsonl]]
+#+CUSTOM_ID: FEAT-008-tdd-nudge-in-plan-mode-active-prompt
+#+EFFORT: 30m
+#+PRIORITY: B
+#+LAYER: prompts
+
+NOTE [2026-03-28]: Implemented in `packages/coding-agent/src/prompts/system/plan-mode-active.md`; local grep/read verification passed. Global `bun check:ts` remains blocked by unrelated workspace TypeScript error outside this item’s scope.
+
+* Initial Message
+
+have a slight nudge towards writing unit tests first (TDD) in plan modes, especially ultraplan. Slight nudge. Ask me questions
+
+* Scope
+- IN: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+- OUT: No TypeScript code, no other prompt files, no behavioral changes to plan mode activation
+
+* Tests
+- Verify with ~grep~ that the Tests section appears before Implementation in the Org Item Body Standard
+- Verify the SHOULD-level TDD guidance statement exists in the general plan directives
+- Verify execution ordering guidance references test-first in child item body requirements
+- Run ~bun check:ts~ to ensure no template syntax errors (Handlebars is loaded at runtime, but check for obvious breakage)
+
+* Implementation
+File: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+
+1. Add a SHOULD-level TDD preference statement near the child item requirements block (around line 38-43). Something like: "You SHOULD prefer a test-first approach: define test scenarios and file paths before detailing implementation steps. This applies to both the plan structure and the suggested execution order."
+
+2. Reorder the Org Item Body Standard (ultraplan section, lines 219-225). Current order: Scope, Implementation, Tests, Edge Cases, Acceptance Criteria. New order: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria. The Tests bullet already says "per-item unit/integration/E2E test requirements with file paths and concrete scenarios" — keep that, but add a note like "defined before implementation to drive design."
+
+3. Add execution ordering guidance: within the child item body standard or nearby, add a note that implementation steps within each child item SHOULD reference which tests they satisfy, and that the executor SHOULD write test files before implementation files.
+
+* Edge Cases
+- The reorder only affects the ultraplan Org Item Body Standard section (lines 218-226). The general child item requirements (lines 38-43) are separate and don't have this ordered structure — the guidance statement goes there instead.
+- The Handlebars conditionals (~{{#if ultraplan}}~) must remain intact — do not break template nesting.
+- "Slight nudge" = SHOULD, not MUST. The language must leave room for cases where test-first doesn't apply (e.g., pure refactors, infrastructure plumbing).
+
+* Acceptance Criteria
+- The Org Item Body Standard lists Tests before Implementation
+- A SHOULD-level TDD preference statement exists in the general child item requirements area
+- No Handlebars template errors introduced
+- The nudge uses SHOULD language, not MUST
