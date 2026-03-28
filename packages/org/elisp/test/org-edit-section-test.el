@@ -64,6 +64,32 @@ Second summary content.
 "
   "Fixture with repeated section names and nested headings.")
 
+(defconst org-edit-section-test--file-level-fixture
+  "#+TITLE: Plan item
+#+STATE: ITEM
+#+CUSTOM_ID: PLAN-008-org-section-level-editing
+
+* Context
+Old plan context.
+
+* Verification
+- Existing check
+"
+  "Fixture for file-level org items with section headings.")
+
+(ert-deftest org-edit-section-test/file-level-item-sections-edit-successfully ()
+  "File-level CUSTOM_ID items can update a named section body."
+  (org-edit-section-test--with-org-file
+      org-edit-section-test--file-level-fixture
+    (let* ((raw (org-tasks-edit-section test-file "PLAN-008-org-section-level-editing" "Context" "Revised plan context." "replace"))
+           (result (org-edit-section-test--decode raw))
+           (contents (org-edit-section-test--read-file test-file)))
+      (should (cdr (assoc 'success result)))
+      (should (string-match-p "Revised plan context\\." contents))
+      (should (string-match-p "- Existing check" contents))
+      (should-not (string-match-p "Old plan context\\." contents)))))
+
+
 (ert-deftest org-edit-section-test/replace-targeted-section-only ()
   "Replace updates only the matching section body and preserves siblings." 
   (org-edit-section-test--with-org-file

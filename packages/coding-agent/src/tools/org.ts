@@ -300,6 +300,7 @@ function previewArgValue(value: unknown, width: number = TRUNCATE_LENGTHS.CONTEN
  * Convert an inner org tool result to a string suitable for the LLM.
  *
  * - Query results ({ items, total }): org-mode text with byte budget.
+ * - Section update results with `fileContent`: full org file text.
  * - Single-item get results ({ item }): org-mode text, no budget.
  * - Everything else (create, update, dashboard, etc.): JSON.
  */
@@ -312,6 +313,15 @@ function formatOrgResult(result: unknown): string {
 	) {
 		const r = result as { items: OrgItem[]; total: number };
 		return formatOrgQueryResult(r.items, r.total ?? r.items.length);
+	}
+
+	if (
+		typeof result === "object" &&
+		result !== null &&
+		"fileContent" in result &&
+		typeof (result as Record<string, unknown>).fileContent === "string"
+	) {
+		return (result as { fileContent: string }).fileContent;
 	}
 
 	if (

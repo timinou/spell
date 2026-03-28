@@ -65,7 +65,7 @@ async function fetchItem(ctx: OrgContext, id: string): Promise<OrgItem | undefin
 	);
 }
 
-/** Build a standard mutation response, optionally including the full item. */
+/** Build a standard mutation response, optionally including the full item or full file text. */
 async function buildMutationResponse(
 	id: string,
 	updated: string[],
@@ -73,8 +73,12 @@ async function buildMutationResponse(
 	includeBody: boolean | undefined,
 	ctx: OrgContext,
 	extra?: Record<string, unknown>,
+	includeFileContent = false,
 ): Promise<Record<string, unknown>> {
 	const response: Record<string, unknown> = { success: true, id, updated, file, ...extra };
+	if (includeFileContent) {
+		response.fileContent = await Bun.file(file).text();
+	}
 	if (includeBody) {
 		response.item = await fetchItem(ctx, id);
 	}
@@ -318,9 +322,17 @@ async function cmdUpdate(
 					section: args.section,
 					file: targetFile,
 				});
-				return buildMutationResponse(args.id, [updatedField], targetFile, args.includeBody, ctx, {
-					section: args.section,
-				});
+				return buildMutationResponse(
+					args.id,
+					[updatedField],
+					targetFile,
+					args.includeBody,
+					ctx,
+					{
+						section: args.section,
+					},
+					true,
+				);
 			}
 		}
 
@@ -344,9 +356,17 @@ async function cmdUpdate(
 			return result;
 		}
 		logger.debug("org:update", { id: args.id, updated: [updatedField], section: args.section, file: targetFile });
-		return buildMutationResponse(args.id, [updatedField], targetFile, args.includeBody, ctx, {
-			section: args.section,
-		});
+		return buildMutationResponse(
+			args.id,
+			[updatedField],
+			targetFile,
+			args.includeBody,
+			ctx,
+			{
+				section: args.section,
+			},
+			true,
+		);
 	}
 
 	// At least one mutation must be specified
