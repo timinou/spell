@@ -1,0 +1,53 @@
+#+TITLE: Org tool TUI label improvements
+#+STATE: DONE
+#+SESSION_ID: 14a4c7cd9cc6fdff
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T19-26-54-579Z_14a4c7cd9cc6fdff.jsonl]]
+#+CUSTOM_ID: PLAN-004-org-tool-tui-label-improvements
+
+
+NOTE [2026-03-28]: Completed after targeted typecheck, lint, test, and visual verification artifacts.
+
+* Initial Message
+
+The org tool in pi-tui just shows "Org". Can you make it clearer what part of the Org tool is being used? Creating vs. updating vs. etc. and e.g. if an org-ql is made what that org-ql query was?
+
+* Context
+The Org tool in pi-tui shows only "Org" for all operations — create, query, update, get, etc. are all indistinguishable. Other tools (Grep, LSP, Bash, Read, etc.) show operation-specific labels with relevant details via ~renderStatusLine~.
+
+OrgTool already has ~renderResult~ on the class instance (entering path 1 at tool-execution.ts:381), but no ~renderCall~. The fix is to add ~renderCall~ to the class using the same ~renderStatusLine~ pattern every other tool uses.
+
+Secondary fix: the coding-agent adapter's ~orgSchema~ is missing ~query~ and ~ql~ params that exist in pi-org's tool definition. These pass through via ~lenientArgValidation = true~ but aren't in the schema, so the LLM doesn't know about them.
+
+** Key decisions
+- Add ~renderCall~ on the OrgTool class (not in ~toolRenderers~ registry) — because the class already owns ~renderResult~ and the tool-execution.ts rendering path is already wired for instance methods
+- Show command as description (e.g. "Org: create"), relevant context as meta
+- Single file change: ~packages/coding-agent/src/tools/org.ts~ plus no registry changes needed
+
+** Critical file paths
+- ~packages/coding-agent/src/tools/org.ts~ — the only file to modify
+- ~packages/coding-agent/src/modes/components/tool-execution.ts~ — rendering flow (read-only, for reference; line 381-404 is the active path)
+- ~packages/coding-agent/src/tui/status-line.ts~ — ~renderStatusLine~ API: ~{ icon, title, description?, meta?, badge? }~
+- ~packages/coding-agent/src/tools/render-utils.ts~ — ~truncateToWidth~, ~TRUNCATE_LENGTHS~
+- ~packages/org/src/tool.ts~ — pi-org tool definition with ~query~ (line 660) and ~ql~ (line 661) params
+
+* Verification
+- ~bunx --bun tsgo -p packages/coding-agent~ — type check passes
+- ~bunx biome check packages/coding-agent/src/tools/org.ts~ — lint passes
+- Manual: invoke ~org query~ / ~org create~ / ~org update~ in a session and confirm the TUI shows command + details instead of bare "Org"
+
+* Execution Manifest
+1. [[id:FEAT-002-add-operation-specific-labels-to-org-too]] (depends: none, effort: 30m)
+
+
+** Completion [2026-03-28]
+*** Verification
+- `bunx --bun tsgo -p packages/coding-agent` — passed with no diagnostics.
+- `bunx biome check packages/coding-agent/src/tools/org.ts packages/coding-agent/test/tools/org.test.ts` — passed.
+- `bun test packages/coding-agent/test/tools/org.test.ts` — passed (`2 pass`, `0 fail`, `17 expect() calls`).
+- `bun --eval "..."` rendered `OrgTool.renderCall()` previews for `create`, `query`, and `update`; confirmed the TUI output includes operation-specific labels/details and that the adapter schema exposes `query`/`ql`.
+*** Artifacts
+- Rendered preview output: [[file:!tasks/plans/plan-artifacts/PLAN-004-org-tool-tui-label-improvements/org-render-previews.json]]
+- HTML preview used for screenshot capture: [[file:!tasks/plans/plan-artifacts/PLAN-004-org-tool-tui-label-improvements/org-render-previews.html]]
+- Screenshot of observable UI labels: [[file:!tasks/plans/plan-artifacts/PLAN-004-org-tool-tui-label-improvements/org-render-previews.png]]
+*** Deviations
+- The linked feature draft mentioned a command-aware `renderResult` enhancement. The approved plan scope and the user-visible bug were fully resolved by adding `renderCall` plus exposing `query`/`ql` in the adapter schema, so `renderResult` was left unchanged.

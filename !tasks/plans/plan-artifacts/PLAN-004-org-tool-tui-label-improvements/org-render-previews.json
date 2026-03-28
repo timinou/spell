@@ -1,0 +1,9 @@
+{
+  "create": "⏳ Org: create category:plans · title:Add operation labels to org tool · state:TODO ",
+  "query": "⏳ Org: query query:todo:DOING tags:auth · ql:(effort >= \"2h\") · category:plans · includeBody:true ",
+  "update": "⏳ Org: update id:FEAT-002-add-operation-specific-labels-to-org-too · state:DONE · append · note ",
+  "schema": {
+    "hasQuery": true,
+    "hasQl": true
+  }
+}

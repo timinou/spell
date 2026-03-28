@@ -5,16 +5,24 @@
  * categories relative to the project root, and optionally starts an Emacs
  * daemon for advanced operations.
  */
-
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	RenderResultOptions,
+} from "@oh-my-pi/pi-agent-core";
 import type { EmacsSession, OrgConfig, OrgItem, OrgSessionContext, OrgToolDefinition } from "@oh-my-pi/pi-org";
 import { createOrgTool, DEFAULT_ORG_CONFIG, detectEmacs, startEmacsSession } from "@oh-my-pi/pi-org";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import type { Theme } from "../modes/theme/theme";
+import { renderStatusLine } from "../tui/status-line";
 import type { ToolSession } from ".";
 import { formatOrgQueryResult, renderItemOrg } from "./org-format";
+import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "./render-utils";
 
 // Path to the elisp directory shipped with the pi-org package.
 // import.meta.dir = packages/coding-agent/src/tools — navigate to workspace root then pi-org
@@ -48,6 +56,8 @@ const orgSchema = Type.Object({
 	priority: Type.Optional(Type.String({ description: "Priority filter (#A/#B/#C)" })),
 	layer: Type.Optional(Type.String({ description: "Layer filter" })),
 	agent: Type.Optional(Type.String({ description: "Agent filter" })),
+	query: Type.Optional(Type.String({ description: "Keyword query syntax: 'todo:DOING tags:auth priority:>=B'" })),
+	ql: Type.Optional(Type.String({ description: "Raw org-ql sexp for advanced queries (e.g. '(effort >= \"2h\")')" })),
 	includeBody: Type.Optional(Type.Boolean({ description: "Include body text in query results" })),
 	// get/update/set/note params
 	id: Type.Optional(Type.String({ description: "Task CUSTOM_ID" })),
@@ -58,11 +68,16 @@ const orgSchema = Type.Object({
 
 type OrgParams = Static<typeof orgSchema>;
 
+interface OrgCallPreview {
+	description: string;
+	meta: string[];
+}
+
 // =============================================================================
 // Tool class
 // =============================================================================
 
-export class OrgTool implements AgentTool<typeof orgSchema> {
+export class OrgTool implements AgentTool<typeof orgSchema, { error?: boolean }, Theme> {
 	readonly name = "org";
 	readonly label = "Org";
 	readonly description: string;
@@ -83,6 +98,15 @@ export class OrgTool implements AgentTool<typeof orgSchema> {
 			buildSessionContext(session),
 		);
 		this.description = this.#inner.description;
+	}
+
+	renderCall(args: OrgParams, _options: RenderResultOptions, theme: Theme): Component {
+		const preview = buildOrgCallPreview(args as Record<string, unknown>);
+		const text = renderStatusLine(
+			{ icon: "pending", title: "Org", description: preview.description, meta: preview.meta },
+			theme,
+		);
+		return new Text(text, 0, 0);
 	}
 
 	async execute(
@@ -120,7 +144,7 @@ export class OrgTool implements AgentTool<typeof orgSchema> {
 			.filter(c => c.type === "text")
 			.map(c => (c as { type: string; text: string }).text)
 			.join("");
-		return new Text(text.slice(0, 500), 0, 0);
+		return new Text(replaceTabs(text).slice(0, 500), 0, 0);
 	}
 
 	async dispose(): Promise<void> {
@@ -170,6 +194,96 @@ function buildSessionContext(session: ToolSession): OrgSessionContext {
 		transcriptPath: session.getSessionFile() ?? undefined,
 		initialMessage: session.getFirstUserMessage?.() ?? undefined,
 	};
+}
+
+function buildOrgCallPreview(args: Record<string, unknown>): OrgCallPreview {
+	const description = previewArgValue(args.command, TRUNCATE_LENGTHS.SHORT) ?? "request";
+	const meta: string[] = [];
+
+	switch (description) {
+		case "create":
+			pushMeta(meta, "category", args.category, TRUNCATE_LENGTHS.SHORT);
+			pushMeta(meta, "title", args.title);
+			pushPathMeta(meta, args.file);
+			pushMeta(meta, "state", args.state, TRUNCATE_LENGTHS.SHORT);
+			break;
+		case "query":
+			pushMeta(meta, "query", args.query);
+			pushMeta(meta, "ql", args.ql);
+			pushMeta(meta, "state", args.state, TRUNCATE_LENGTHS.SHORT);
+			pushMeta(meta, "category", args.category, TRUNCATE_LENGTHS.SHORT);
+			pushMeta(meta, "dir", args.dir, TRUNCATE_LENGTHS.SHORT);
+			pushMeta(meta, "priority", args.priority, TRUNCATE_LENGTHS.SHORT);
+			pushMeta(meta, "layer", args.layer, TRUNCATE_LENGTHS.SHORT);
+			pushMeta(meta, "agent", args.agent, TRUNCATE_LENGTHS.SHORT);
+			if (args.includeBody === true) meta.push("includeBody:true");
+			break;
+		case "get":
+		case "note":
+			pushMeta(meta, "id", args.id);
+			break;
+		case "update":
+			pushMeta(meta, "id", args.id);
+			pushMeta(meta, "state", args.state, TRUNCATE_LENGTHS.SHORT);
+			pushMeta(meta, "title", args.title);
+			pushPathMeta(meta, args.file);
+			if (previewArgValue(args.append, TRUNCATE_LENGTHS.SHORT)) meta.push("append");
+			if (previewArgValue(args.note, TRUNCATE_LENGTHS.SHORT)) meta.push("note");
+			break;
+		case "set": {
+			pushMeta(meta, "id", args.id);
+			const property = previewArgValue(args.property, TRUNCATE_LENGTHS.SHORT);
+			const value = previewArgValue(args.value, TRUNCATE_LENGTHS.SHORT);
+			if (property && value) {
+				meta.push(truncateToWidth(`${property}=${value}`, TRUNCATE_LENGTHS.CONTENT));
+			}
+			break;
+		}
+		case "init":
+			pushMeta(meta, "category", args.category, TRUNCATE_LENGTHS.SHORT);
+			break;
+		case "dashboard":
+		case "wave":
+		case "graph":
+		case "archive":
+		case "validate":
+			pushMeta(meta, "dir", args.dir, TRUNCATE_LENGTHS.SHORT);
+			break;
+		default:
+			pushMeta(meta, "id", args.id);
+			pushMeta(meta, "query", args.query);
+			pushMeta(meta, "ql", args.ql);
+			break;
+	}
+
+	return { description, meta };
+}
+
+function pushMeta(meta: string[], label: string, value: unknown, width: number = TRUNCATE_LENGTHS.CONTENT): void {
+	const preview = previewArgValue(value, width);
+	if (!preview) return;
+	meta.push(truncateToWidth(`${label}:${preview}`, width));
+}
+
+function pushPathMeta(meta: string[], value: unknown): void {
+	if (typeof value !== "string" || value.trim().length === 0) return;
+	meta.push(truncateToWidth(`file:${shortenPath(value.trim())}`, TRUNCATE_LENGTHS.CONTENT));
+}
+
+function previewArgValue(value: unknown, width: number = TRUNCATE_LENGTHS.CONTENT): string | undefined {
+	if (typeof value === "string") {
+		const clean = replaceTabs(value).trim();
+		return clean ? truncateToWidth(clean, width) : undefined;
+	}
+	if (Array.isArray(value)) {
+		const parts = value.map(part => previewArgValue(part, width)).filter((part): part is string => Boolean(part));
+		if (parts.length === 0) return undefined;
+		return truncateToWidth(parts.join(","), width);
+	}
+	if (typeof value === "number" || typeof value === "boolean") {
+		return String(value);
+	}
+	return undefined;
 }
 
 // =============================================================================

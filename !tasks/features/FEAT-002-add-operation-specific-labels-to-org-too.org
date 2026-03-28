@@ -1,0 +1,67 @@
+#+TITLE: Add operation-specific labels to Org tool TUI rendering
+#+STATE: DONE
+#+SESSION_ID: 14a4c7cd9cc6fdff
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T19-26-54-579Z_14a4c7cd9cc6fdff.jsonl]]
+#+CUSTOM_ID: FEAT-002-add-operation-specific-labels-to-org-too
+#+EFFORT: 30m
+#+PRIORITY: B
+#+LAYER: tui
+
+NOTE [2026-03-28]: Implemented command-specific OrgTool renderCall labels and exposed org query/ql schema fields; verified with tsgo, biome, bun test, and rendered preview artifacts. Kept renderResult unchanged because the approved plan scope and user-visible bug were fully resolved by call-label rendering.
+
+* Initial Message
+
+The org tool in pi-tui just shows "Org". Can you make it clearer what part of the Org tool is being used? Creating vs. updating vs. etc. and e.g. if an org-ql is made what that org-ql query was?
+
+* Problem
+OrgTool class has ~renderResult~ on the instance but no ~renderCall~. The TUI always shows "Org" regardless of whether the agent is creating, querying, updating, etc. The user cannot tell what operation is in flight or what filters were applied.
+
+* Approach
+Add ~renderCall~ method to the ~OrgTool~ class (consistent with its existing ~renderResult~ pattern). Use ~renderStatusLine~ to produce descriptive labels.
+
+Also add the missing ~query~ and ~ql~ fields to ~orgSchema~ — these exist in the pi-org tool definition (tool.ts lines 660-661) but were never added to the coding-agent adapter.
+
+* File: ~packages/coding-agent/src/tools/org.ts~
+** New imports
+- ~renderStatusLine~ from ~"../tui"~
+- ~truncateToWidth~, ~TRUNCATE_LENGTHS~ from ~"./render-utils"~
+- ~type Theme~ from ~"../modes/theme/theme"~
+
+** Schema additions (orgSchema)
+Add two missing fields that pi-org supports:
+- ~query~: ~Type.Optional(Type.String({ description: "Keyword query syntax: 'todo:DOING tags:auth priority:>=B'" }))~
+- ~ql~: ~Type.Optional(Type.String({ description: "Raw org-ql sexp for advanced queries (e.g. '(effort >= \"2h\")')" }))~
+
+Place them after the existing ~includeBody~ field in the query params section.
+
+** Add ~renderCall~ method to OrgTool class
+Signature: ~renderCall(args: OrgParams, options: RenderResultOptions, theme: Theme): Component~
+
+Logic:
+1. Extract ~command~ from args (default ~"request"~ if missing)
+2. Build ~description~ and ~meta~ array based on command:
+   | Command | Description | Meta entries |
+   |---------|-------------|--------------|
+   | create | ~"create"~ | category if present, truncated title if present |
+   | query | ~"query"~ | query string if present, ql if present, then state/category/dir/priority/layer/agent filters as ~key:value~ pairs |
+   | get | ~"get"~ | id |
+   | update | ~"update"~ | id, state if present (e.g. ~"→ DONE"~) |
+   | note | ~"note"~ | id |
+   | set | ~"set"~ | id, ~property=value~ if both present |
+   | dashboard/wave/graph/archive/init/validate | command name | (none) |
+3. Return ~new Text(renderStatusLine({ icon: "pending", title: "Org", description, meta }, theme), 0, 0)~
+
+** Improve ~renderResult~
+The current implementation just slices 500 chars of raw text. Replace with a command-aware renderer:
+- For query results: show item count (extract from text or details)
+- For create/update: show success + item ID
+- For errors: show error message
+- Use ~renderStatusLine~ for the header line (with ~"success"~ or ~"error"~ icon), then the truncated text body below
+
+* Acceptance
+- When the agent calls ~org create~, TUI shows ~"Org: create"~ with category and title in meta
+- When the agent calls ~org query~ with filters, TUI shows ~"Org: query"~ with filter params visible
+- When the agent calls ~org update~, TUI shows ~"Org: update"~ with item ID and state transition
+- ~query~ and ~ql~ params appear in the tool schema (visible to LLM)
+- ~bun check:ts~ passes for coding-agent package (run ~bunx --bun tsgo -p packages/coding-agent~)
+- ~bun lint:ts~ passes
