@@ -1521,6 +1521,7 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: "DOING",
 	},
+	"planMode.allowedFolders": { type: "record", default: EMPTY_STRING_RECORD },
 
 	"thinkingBudgets.low": { type: "number", default: 2048 },
 
