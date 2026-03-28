@@ -1,0 +1,18 @@
+Verification summary for PLAN-005-increase-tui-scrollback
+Date: 2026-03-28
+
+Command: bun check:ts
+Result: exit 1
+Observed output excerpt:
+- packages/coding-agent/src/orchestrators/fluid/index.ts: organizeImports failure
+- packages/coding-agent/src/tools/output-meta.ts: formatter mismatch
+- packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts: organizeImports failure
+Conclusion: repo-wide TypeScript check is currently failing for unrelated files, so the plan's required global verification could not be satisfied.
+
+Command: bunx @biomejs/biome check packages/coding-agent/src/tools/bash-interactive.ts
+Result: success
+Output: Checked 1 file in 25ms. No fixes applied.
+
+Command: LSP diagnostics on packages/coding-agent/src/tools/bash-interactive.ts
+Result: success
+Output: No diagnostics

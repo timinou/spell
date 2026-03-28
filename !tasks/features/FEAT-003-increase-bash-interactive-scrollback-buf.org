@@ -1,0 +1,37 @@
+#+TITLE: Increase bash-interactive scrollback buffer
+#+STATE: BLOCKED
+#+SESSION_ID: 14a4d222b3c27b27
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T20-12-03-151Z_14a4d222b3c27b27.jsonl]]
+#+CUSTOM_ID: FEAT-003-increase-bash-interactive-scrollback-buf
+#+EFFORT: 5m
+#+PRIORITY: #C
+#+LAYER: coding-agent
+
+
+NOTE [2026-03-28]: Blocked by unrelated repo-wide bun check:ts failures after implementing the scrollback change.
+
+* Initial Message
+
+increase the scrollback of pi-tui
+
+Increase the xterm.js scrollback buffer in bash-interactive from 10,000 to 50,000 lines.
+
+** Target
+- File: =packages/coding-agent/src/tools/bash-interactive.ts= line 119
+- Change: =scrollback: 10_000= → =scrollback: 50_000=
+
+** Acceptance
+- Value changed, =bun check:ts= passes
+
+
+** Status [2026-03-28]
+Implemented the requested code change in =packages/coding-agent/src/tools/bash-interactive.ts=: =scrollback: 50_000=.
+
+Blocked on acceptance because =bun check:ts= currently fails in unrelated files:
+- =packages/coding-agent/src/orchestrators/fluid/index.ts= (organizeImports)
+- =packages/coding-agent/src/tools/output-meta.ts= (formatter mismatch)
+- =packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts= (organizeImports)
+
+Targeted verification for the touched file succeeded:
+- =bunx @biomejs/biome check packages/coding-agent/src/tools/bash-interactive.ts=
+- LSP diagnostics for =packages/coding-agent/src/tools/bash-interactive.ts=: no diagnostics

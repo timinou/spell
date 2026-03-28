@@ -116,7 +116,7 @@ class BashInteractiveOverlayComponent implements Component {
 			rows: 40,
 			disableStdin: true,
 			allowProposedApi: true,
-			scrollback: 10_000,
+			scrollback: 50_000,
 		});
 	}
 

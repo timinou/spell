@@ -1,0 +1,9 @@
+packages/coding-agent/src/tools/bash-interactive.ts
+
+this.#terminal = new XtermTerminal({
+	cols: 120,
+	rows: 40,
+	disableStdin: true,
+	allowProposedApi: true,
+	scrollback: 50_000,
+});

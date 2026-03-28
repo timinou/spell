@@ -1,0 +1,42 @@
+#+TITLE: Increase TUI scrollback
+#+STATE: BLOCKED
+#+SESSION_ID: 14a4d222b3c27b27
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T20-12-03-151Z_14a4d222b3c27b27.jsonl]]
+#+CUSTOM_ID: PLAN-005-increase-tui-scrollback
+
+
+NOTE [2026-03-28]: Blocked by unrelated repo-wide bun check:ts failures after the scrollback change landed.
+
+* Initial Message
+
+increase the scrollback of pi-tui
+
+* Context
+The bash-interactive tool uses xterm.js headless with =scrollback: 10_000=. This caps how much output from interactive shell sessions is retained. Bump to 50,000.
+
+Single-line change in =packages/coding-agent/src/tools/bash-interactive.ts= line 119.
+
+* Verification
+- =bun check:ts= passes (no type impact — it's a numeric literal)
+
+* Execution Manifest
+1. [[id:FEAT-003-increase-bash-interactive-scrollback-buf]] (depends: none, effort: 5m)
+
+
+** Completion [2026-03-28]
+*** Verification
+- Updated =packages/coding-agent/src/tools/bash-interactive.ts= from =scrollback: 10_000= to =scrollback: 50_000=.
+- Ran =bun check:ts= from repo root: failed in unrelated files.
+  - =packages/coding-agent/src/orchestrators/fluid/index.ts=: organizeImports failure
+  - =packages/coding-agent/src/tools/output-meta.ts=: formatter mismatch
+  - =packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts=: organizeImports failure
+- Ran =bunx @biomejs/biome check packages/coding-agent/src/tools/bash-interactive.ts=: passed.
+- Ran LSP diagnostics for =packages/coding-agent/src/tools/bash-interactive.ts=: no diagnostics.
+
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-005-increase-tui-scrollback/source-snippet-bash-interactive-scrollback.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-005-increase-tui-scrollback/verification-summary.txt]]
+
+*** Deviations
+- Required global verification (=bun check:ts=) did not pass because of unrelated existing failures, so this plan remains blocked and is not marked DONE.
+- Linked child item =FEAT-003-increase-bash-interactive-scrollback-buf= was moved to BLOCKED for the same reason.
