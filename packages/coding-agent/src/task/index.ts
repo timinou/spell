@@ -502,6 +502,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			allowedFolders: planModeAllowedFolders.length > 0 ? planModeAllowedFolders : undefined,
 		});
 		const planModeTools = ["read", "grep", "find", "ls", "lsp", "fetch", "web_search"];
+		if (planModeAllowedFolders.length > 0) {
+			planModeTools.push("write", "edit");
+		}
 		const effectiveAgent: typeof agent = planModeState?.enabled
 			? {
 					...agent,
@@ -755,7 +758,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				if (!isIsolated) {
 					return runSubprocess({
 						cwd: this.session.cwd,
-						agent,
+						agent: effectiveAgent,
 						task: task.task,
 						assignment: task.assignment,
 						description: task.description,
@@ -808,7 +811,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					const result = await runSubprocess({
 						cwd: this.session.cwd,
 						worktree: isolationDir,
-						agent,
+						agent: effectiveAgent,
 						task: task.task,
 						assignment: task.assignment,
 						description: task.description,
