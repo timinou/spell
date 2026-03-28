@@ -1,0 +1,55 @@
+Resume command: bun src/cli.ts --model openai/gpt-4o-mini --resume /tmp/spell-plan-proof-JV6ozI/design-session.jsonl
+Working directory: packages/coding-agent
+
+Captured TUI after resume (design flavor shares the standard Plotting badge):
+
+Starting emacs-code…
+
+╭─── spell v13.12.8 ─────────────────────────────────────────────────────────╮
+│                          │ Tips                                            │
+│      Welcome back!       │ ? for keyboard shortcuts                        │
+│                          │ # for prompt actions                            │
+│               ·✦·        │ / for commands                                  │
+│             ✧ ✦ ✧        │ ! to run bash                                   │
+│               ·✦·        │ $ to run python                     ╭────────────╮
+│               ╱╱         │ ────────────────────────────────────│ 🗺 Plotting │
+│              ╱╱          │ LSP Servers                         ╰────────────╯
+│              ╱╱          │ No LSP servers                                  │
+│             ╱╱           │ ─────────────────────────────────────────────── │
+│             ╱╱           │ Recent sessions                                 │
+│                          │ • Resume ultraplan mode proof (just now)        │
+│       GPT-4o mini        │ • Resume design mode proof (just now)           │
+│  cloudflare-ai-gateway   │                                                 │
+╰──────────────────────────┴─────────────────────────────────────────────────╯
+
+
+
+ Resume design mode proof
+
+
+────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 13.16.4 is available. Run: spell update
+────────────────────────────────────────────────────────────────────────────────
+
+╭── ✦  > ⬢ Opus 4.6 > 🗺 Plotting ▶─────────────────────────────────────────────╮
+╰─                                                                            ─╯
+
+Equivalent resume proof from the same design session file using current source:
+
+mode=plan
+planFilePath=!tasks/plans/PLAN-006-fix-ultraplan-session-restart.org
+flavor=design
+containsDesignWorkflow=true
+## Design Planning Workflow
+
+You are in **design plan mode**. Before writing a single line of implementation code, you **MUST** produce a Design Direction Brief that commits to concrete aesthetic and UX decisions. Vague plans produce generic output. Commit to specifics.
+
+{{#if designHistory}}
+<anti-convergence>
+Recent design directions used in this project (AVOID repeating these — commit to something DIFFERENT):
+{{designHistory}}
+</anti-convergence>
+{{/if}}
+
+### Gate 1: Aphrodite (mandatory — ru

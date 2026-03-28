@@ -1,0 +1,39 @@
+#+TITLE: Ultraplan flag not persisted in mode change entry
+#+STATE: DONE
+#+SESSION_ID: 14a4d80792c4384f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T20-37-48-235Z_14a4d80792c4384f.jsonl]]
+#+CUSTOM_ID: BUG-002-ultraplan-flag-not-persisted-in-mode-cha
+#+EFFORT: 10m
+#+PRIORITY: #A
+#+LAYER: session
+
+NOTE [2026-03-28]: Implemented in packages/coding-agent/src/modes/interactive-mode.ts with focused regression coverage in packages/coding-agent/test/interactive-mode-plan-mode-persistence.test.ts. Verified with bun test test/interactive-mode-plan-mode-persistence.test.ts, bun run check, and restart/resume artifacts for ultraplan and design plan modes.
+
+* Initial Message
+
+restarting an ultraplan session puts it in plan mode instead of ultraplan mode. fix it
+
+* Problem
+~#enterPlanMode~ persists the mode change via ~appendModeChange("plan", { planFilePath })~, so restart/resume loses both ~ultraplan~ and ~flavor~ from session state. The restore path already reads ~modeData?.ultraplan~ and should restore ~modeData?.flavor~ too before re-entering plan mode.
+
+Current workspace note: the working tree already contains candidate edits in ~packages/coding-agent/src/modes/interactive-mode.ts~ for this bug, an untracked regression test at ~packages/coding-agent/test/interactive-mode-plan-mode-persistence.test.ts~, and an unrelated hunk later in ~interactive-mode.ts~ around approved-plan artifact paths. Execution must verify/refine the candidate fix and preserve the unrelated hunk.
+
+* Change
+- In ~packages/coding-agent/src/modes/interactive-mode.ts~, make the persisted ~mode_change~ payload for plan mode include ~planFilePath~, ~ultraplan~, and ~flavor~.
+- In ~#restoreModeFromSession~, read both ~ultraplan~ and ~flavor~ from ~sessionContext.modeData~ and pass them into ~#enterPlanMode~.
+- Keep the implementation surgical; do not widen plan-mode behavior beyond persistence/restore.
+- Review the existing untracked regression test and keep or refine it so it proves both restore and persist paths.
+
+* Files
+- ~packages/coding-agent/src/modes/interactive-mode.ts~
+- ~packages/coding-agent/test/interactive-mode-plan-mode-persistence.test.ts~
+
+* Acceptance
+- Restarting a session that entered ultraplan mode restores plan mode with ~ultraplan: true~ and shows the ~Grand Scheme~ UI state again.
+- Restarting a session that entered design plan mode restores the design flavor instead of falling back to plain plan mode.
+- Focused automated proof:
+  - ~cd packages/coding-agent && bun test test/interactive-mode-plan-mode-persistence.test.ts~
+  - ~cd packages/coding-agent && bun run check~
+- Manual proof artifacts saved under ~!tasks/plans/plan-artifacts/PLAN-006-fix-ultraplan-session-restart/~:
+  - ~ultraplan-resume-grand-scheme.txt~ (or equivalent terminal capture) proving resumed ultraplan still renders ~Grand Scheme~
+  - ~design-resume-design-mode.txt~ (or equivalent terminal capture) proving resumed design plan mode still restores the design flavor

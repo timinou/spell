@@ -1,0 +1,52 @@
+#+TITLE: Fix ultraplan session restart
+#+STATE: DONE
+#+SESSION_ID: 14a4d80792c4384f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T20-37-48-235Z_14a4d80792c4384f.jsonl]]
+#+CUSTOM_ID: PLAN-006-fix-ultraplan-session-restart
+
+
+NOTE [2026-03-28]: Completed with focused automated verification and saved restart/resume artifacts under !tasks/plans/plan-artifacts/PLAN-006-fix-ultraplan-session-restart/.
+
+* Context
+
+Restarting an ultraplan session falls back to plain plan mode because the persisted ~mode_change~ entry omits the ~ultraplan~ flag. The same omission exists for the design-plan ~flavor~ field. The restore path in ~packages/coding-agent/src/modes/interactive-mode.ts~ already rebuilds plan mode from ~sessionContext.modeData~; the fix should stay surgical and make persist/restore agree on the same shape.
+
+Recommended approach:
+- Keep the change scoped to ~packages/coding-agent/src/modes/interactive-mode.ts~ and the focused regression test at ~packages/coding-agent/test/interactive-mode-plan-mode-persistence.test.ts~.
+- Persist ~planFilePath~, ~ultraplan~, and ~flavor~ together in the plan ~mode_change~ entry.
+- Restore both ~ultraplan~ and ~flavor~ before re-entering plan mode.
+- Preserve unrelated local workspace edits later in ~interactive-mode.ts~ around approved-plan artifact paths.
+
+Current workspace reality for the executor:
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ already has a local candidate diff for this bug fix.
+- ~packages/coding-agent/test/interactive-mode-plan-mode-persistence.test.ts~ already exists as an untracked focused regression test candidate.
+- Do not assume a pristine tree; verify/refine the existing local changes instead of reapplying blindly.
+
+* Verification
+
+Focused verification only, per clarified scope:
+- ~cd packages/coding-agent && bun test test/interactive-mode-plan-mode-persistence.test.ts~
+- ~cd packages/coding-agent && bun run check~
+
+Manual restart proof is required for both persistence modes:
+- Save ~!tasks/plans/plan-artifacts/PLAN-006-fix-ultraplan-session-restart/ultraplan-resume-grand-scheme.txt~ (or equivalent terminal capture artifact) proving that after restarting/resuming an ultraplan session, the UI still shows ~Grand Scheme~.
+- Save ~!tasks/plans/plan-artifacts/PLAN-006-fix-ultraplan-session-restart/design-resume-design-mode.txt~ (or equivalent terminal capture artifact) proving that after restarting/resuming a design plan session, the design flavor is still restored instead of plain plan mode.
+
+Completion requires the automated checks to pass and both manual artifacts to be referenced in the completion report.
+
+* Execution Manifest
+
+1. [[id:BUG-002-ultraplan-flag-not-persisted-in-mode-cha]] (depends: none, effort: 10m)
+
+
+** Completion [2026-03-28]
+*** Verification
+- `cd packages/coding-agent && bun test test/interactive-mode-plan-mode-persistence.test.ts` → passed (`2 pass, 0 fail`).
+- `cd packages/coding-agent && bun run check` → passed (`tsgo -p tsconfig.json`).
+- Manual ultraplan resume proof: `bun src/cli.ts --model openai/gpt-4o-mini --resume /tmp/spell-plan-proof-JV6ozI/ultraplan-session.jsonl` from `packages/coding-agent` showed `Grand Scheme` in the restored TUI.
+- Manual design resume proof: `bun src/cli.ts --model openai/gpt-4o-mini --resume /tmp/spell-plan-proof-JV6ozI/design-session.jsonl` from `packages/coding-agent`, plus resumed-session prompt rendering against current source, confirmed `mode=plan`, `flavor=design`, and a rendered `## Design Planning Workflow` block.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-006-fix-ultraplan-session-restart/ultraplan-resume-grand-scheme.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-006-fix-ultraplan-session-restart/design-resume-design-mode.txt]]
+*** Deviations
+- The design-mode badge remains `Plotting`; the saved design artifact therefore pairs the resumed TUI capture with equivalent prompt-render evidence from the same resumed session file to prove that the restored flavor is `design`, not plain plan mode.

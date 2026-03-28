@@ -810,7 +810,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (sessionContext.mode === "plan") {
 			const planFilePath = sessionContext.modeData?.planFilePath as string | undefined;
 			const ultraplan = sessionContext.modeData?.ultraplan as boolean | undefined;
-			await this.#enterPlanMode({ planFilePath, ultraplan });
+			const flavor = sessionContext.modeData?.flavor as "design" | undefined;
+			await this.#enterPlanMode({ planFilePath, ultraplan, flavor });
 		} else if (sessionContext.mode === "plan_paused") {
 			this.planModePaused = true;
 			this.#planModeHasEntered = true;
@@ -860,7 +861,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.planModeUltraplan = options?.ultraplan ?? false;
 		this.planModeFlavor = options?.flavor;
 		this.#updatePlanModeStatus();
-		this.sessionManager.appendModeChange("plan", { planFilePath });
+		this.sessionManager.appendModeChange("plan", {
+			planFilePath,
+			ultraplan: options?.ultraplan,
+			flavor: options?.flavor,
+		});
 		this.updateEditorBorderColor();
 		this.#showPlanModeOverlay(options?.ultraplan ?? false, false);
 		this.showStatus(

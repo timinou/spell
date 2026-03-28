@@ -1,0 +1,29 @@
+Command: bun src/cli.ts --model openai/gpt-4o-mini --resume /tmp/spell-plan-proof-JV6ozI/ultraplan-session.jsonl
+Working directory: packages/coding-agent
+
+Captured TUI after resume:
+
+│                          │ Tips                                            │
+│      Welcome back!       │ ? for keyboard shortcuts        ╭────────────────╮
+│                          │ # for prompt actions            │ 🗺 Grand Scheme │
+│               ·✦·        │ / for commands                  ╰────────────────╯
+│             ✧ ✦ ✧        │ ! to run bash                                   │
+│               ·✦·        │ $ to run python                                 │
+│               ╱╱         │ ─────────────────────────────────────────────── │
+│              ╱╱          │ LSP Servers                                     │
+│              ╱╱          │ No LSP servers                                  │
+│             ╱╱           │ ─────────────────────────────────────────────── │
+│             ╱╱           │ Recent sessions                                 │
+│                          │ • manual-design-proof (just now)                │
+│       GPT-4o mini        │ • manual-ultraplan-proof (just now)             │
+│  cloudflare-ai-gateway   │                                                 │
+╰──────────────────────────┴─────────────────────────────────────────────────╯
+
+
+────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 13.16.4 is available. Run: spell update
+────────────────────────────────────────────────────────────────────────────────
+
+╭── ✦  > ⬢ Opus 4.6 > 🗺 Grand Scheme ▶─────────────────────────────────────────╮
+╰─                                                                            ─╯
