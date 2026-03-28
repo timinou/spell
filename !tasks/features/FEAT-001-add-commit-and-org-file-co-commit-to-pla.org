@@ -1,0 +1,57 @@
+#+TITLE: Add commit and org-file co-commit to plan completion protocol
+#+STATE: DONE
+#+SESSION_ID: 14a4b71c50d1e9bb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T18-13-58-723Z_14a4b71c50d1e9bb.jsonl]]
+#+CUSTOM_ID: FEAT-001-add-commit-and-org-file-co-commit-to-pla
+#+EFFORT: 20m
+#+PRIORITY: #A
+#+LAYER: agent-runtime
+
+NOTE [2026-03-28]: Implemented in packages/coding-agent/src/prompts/system/plan-mode-approved.md and verified by the targeted prompt test plus rendered prompt review.
+
+* Initial Message
+
+bro commit
+
+* Problem
+The plan-mode-approved completion protocol (~plan-mode-approved.md~) has no commit step. After executing a plan, the agent leaves changes uncommitted. The user has to manually ask for a commit. Additionally:
+- Artifacts saved under ~plan-artifacts/~ are not referenced using org-mode image/file link syntax in the completion report, so they don't render inline when viewing the org file.
+- Org-mode files (~!tasks/~) that describe the changes are not committed alongside the code changes they correspond to.
+
+* File
+~packages/coding-agent/src/prompts/system/plan-mode-approved.md~
+
+* Change
+Modify the ~## Completion Protocol~ section (inside the ~{{#if orgItemId}}~ block) to add three things:
+
+** 1. Commit step (new step 5, renumber old step 5 to 6)
+After step 4 (close org lifecycle), add a new step:
+
+#+begin_src markdown
+5. Commit the changes:
+   - Stage only files modified by this plan execution (code, tests, configs).
+   - Stage the org-mode files from `!tasks/` that correspond to the committed changes (the linked child items and the PLAN item itself).
+   - Commit with a conventional commit message referencing the plan (e.g., `fix(coding-agent): description`).
+   - Do **NOT** stage unrelated workspace changes.
+#+end_src
+
+Renumber old step 5 ("If verification fails...") to step 6.
+
+** 2. Artifact org-image syntax note (in step 2 or 3)
+Add a note in the artifact/completion-report steps that when referencing saved artifacts (screenshots, images) in the org completion report body, use org-mode file link syntax:
+
+#+begin_src
+[[file:{{orgItemArtifactsDir}}/screenshot-name.png]]
+#+end_src
+
+This goes in the ~*** Artifacts~ subsection guidance (step 3), so the agent knows how to format artifact references.
+
+** 3. Org-file co-commit note (in new step 5)
+The commit step must explicitly state that org-mode files (~!tasks/bugs/~, ~!tasks/features/~, ~!tasks/plans/~) describing the work belong in the same commit as the code they describe. This ensures traceability: the org item and the code it tracks land together.
+
+* Acceptance Criteria
+- [ ] Rendered prompt with ~orgItemId~ context contains a commit step after org lifecycle closure
+- [ ] Rendered prompt mentions staging org-mode files from ~!tasks/~ with code changes
+- [ ] Rendered prompt mentions org file link syntax ~[[file:...]]~ for artifact references in completion reports
+- [ ] Step numbering is sequential (no gaps or duplicates)
+- [ ] The "if verification fails" guardrail remains as the final step

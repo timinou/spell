@@ -1,0 +1,35 @@
+#+TITLE: Update plan-mode-approved prompt test for commit and artifact syntax
+#+STATE: DONE
+#+SESSION_ID: 14a4b71c50d1e9bb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T18-13-58-723Z_14a4b71c50d1e9bb.jsonl]]
+#+CUSTOM_ID: FEAT-001-update-plan-mode-approved-prompt-test-fo
+#+EFFORT: 10m
+#+PRIORITY: #B
+#+LAYER: testing
+
+NOTE [2026-03-28]: Updated packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts to assert commit step, !tasks/ co-commit guidance, artifact file-link syntax, and step ordering.
+
+* Initial Message
+
+bro commit
+
+* Problem
+After modifying the completion protocol in ~plan-mode-approved.md~, the test in ~plan-mode-approved-prompt.test.ts~ needs to verify the new commit step and artifact syntax guidance are present in the rendered output.
+
+* File
+~packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts~
+
+* Change
+In the existing test ~"describes the org-backed completion protocol and artifact directory"~, add assertions that the rendered prompt contains:
+- A commit instruction (e.g., ~toContain("Commit the changes")~ or similar)
+- Mention of staging org-mode files from ~!tasks/~ (e.g., ~toContain("!tasks/")~)
+- Org file link syntax guidance (~toContain("[[file:")~)
+
+Do NOT change the template context or remove existing assertions. Only add new expect calls.
+
+* Acceptance Criteria
+- [ ] Existing assertions still pass (no regressions)
+- [ ] New assertions verify commit step is present
+- [ ] New assertions verify org-file co-commit guidance is present
+- [ ] New assertions verify artifact file-link syntax guidance is present
+- [ ] ~bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts~ passes

@@ -1,0 +1,54 @@
+#+TITLE: Add commit step and artifact syntax to plan completion protocol
+#+STATE: DONE
+#+SESSION_ID: 14a4b71c50d1e9bb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T18-13-58-723Z_14a4b71c50d1e9bb.jsonl]]
+#+CUSTOM_ID: PLAN-003-add-commit-step-and-artifact-syntax-to-p
+
+NOTE [2026-03-28]: Executed both manifest steps, verified the prompt change with the targeted test and rendered output review, and committed the code plus linked org items together.
+
+
+* Initial Message
+
+bro commit
+
+* Context
+
+** Problem
+The plan-mode completion protocol instructs the agent to verify, write a completion report, and close org lifecycle — but never to commit. The user must manually request a commit after every plan execution. This is a gap: the commit should be part of the completion sequence.
+
+Two additional issues compound this:
+1. Artifacts (screenshots saved under ~plan-artifacts/~) are referenced as plain text paths in completion reports. They should use org-mode file link syntax (~[[file:path/to/image.png]]~) so they render inline when the org file is viewed.
+2. Org-mode item files (~!tasks/bugs/~, ~!tasks/features/~, ~!tasks/plans/~) that describe the work are not committed with the code changes. They should be staged together for traceability.
+
+** Approach
+Modify ~packages/coding-agent/src/prompts/system/plan-mode-approved.md~ completion protocol to:
+1. Add a commit step (step 5) after org lifecycle closure (step 4), before the "if verification fails" guardrail (becomes step 6).
+2. Add guidance in the artifacts subsection to use ~[[file:{{orgItemArtifactsDir}}/name.png]]~ syntax for image/artifact references.
+3. The commit step explicitly requires staging corresponding ~!tasks/~ org files alongside code changes.
+
+Update the test to verify the new content renders correctly.
+
+** Key decisions
+- Commit is step 5 (after org closure, before failure guardrail) — org items should be in their final state before committing.
+- The commit message should follow conventional commit format, matching project convention.
+- Unrelated workspace changes must not be staged — the commit covers only plan-execution changes plus their org items.
+- The ~[[file:...]]~ syntax is standard org-mode for inline file/image links and already used for ~TRANSCRIPT_PATH~ properties across existing org items.
+
+* Verification
+- ~bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts~ — all tests pass with new assertions
+- Manual review: rendered prompt with ~orgItemId~ context contains commit step, org co-commit instruction, and artifact link syntax
+- Verify step numbering is sequential (1-6) with no gaps
+
+* Execution Manifest
+1. [[id:FEAT-001-add-commit-and-org-file-co-commit-to-pla]] (depends: none, effort: 20m) — Modify plan-mode-approved.md completion protocol
+2. [[id:FEAT-001-update-plan-mode-approved-prompt-test-fo]] (depends: FEAT-001-add-commit-and-org-file-co-commit-to-pla, effort: 10m) — Update prompt test expectations
+
+
+** Completion [2026-03-28]
+*** Verification
+- `bun test ./test/plan-mode/plan-mode-approved-prompt.test.ts` (cwd: `packages/coding-agent`) — passed (`2 pass`, `0 fail`).
+- Manual rendered-prompt review via `bun -e 'import { renderPromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-templates"; import planModeApprovedPrompt from "@oh-my-pi/pi-coding-agent/prompts/system/plan-mode-approved.md" with { type: "text" }; const rendered = renderPromptTemplate(planModeApprovedPrompt, { planContent: "1. Do work", finalPlanFilePath: "PLAN-003-REF", orgItemId: "PLAN-003-plan-completion-artifacts-and-lifecycle", orgItemArtifactsDir: "!tasks/plans/plan-artifacts/PLAN-003-plan-completion-artifacts-and-lifecycle" }); const start = rendered.indexOf("## Completion Protocol"); const end = rendered.indexOf("## Plan"); console.log(start >= 0 && end > start ? rendered.slice(start, end).trimEnd() : rendered);'` (cwd: `packages/coding-agent`) — confirmed the rendered completion protocol includes the org artifact link syntax, the new commit step, the `!tasks/` co-commit instruction, and sequential steps 1-6.
+*** Artifacts
+- None. This prompt-only change did not require UI, browser, or visual artifacts.
+*** Deviations
+- None.
