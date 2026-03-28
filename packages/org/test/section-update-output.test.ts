@@ -4,18 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { EmacsSession } from "../src/emacs/daemon";
 import type { OrgConfig } from "../src/types";
+import type { OrgToolDefinition } from "../src/tool";
 
 const callToolMock = vi.fn(async (_name: string, _args: Record<string, unknown>) => ({ success: true }));
 const createOrgClientMock = vi.fn(async () => ({
 	callTool: callToolMock,
 	close: async (): Promise<void> => {},
 }));
-
-mock.module("../src/emacs/client", () => ({
-	createOrgClient: createOrgClientMock,
-}));
-
-import { createOrgTool, type OrgToolDefinition } from "../src/tool";
 
 const TODO_KEYWORDS = ["ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"];
 
@@ -25,9 +20,14 @@ beforeEach(async () => {
 	tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-org-section-output-"));
 	callToolMock.mockReset();
 	createOrgClientMock.mockClear();
+	mock.module("../src/emacs/client", () => ({
+		createOrgClient: createOrgClientMock,
+	}));
 });
 
 afterEach(async () => {
+	mock.restore();
+	vi.restoreAllMocks();
 	await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -46,12 +46,13 @@ function makeConfig(): OrgConfig {
 	};
 }
 
-function makeEmacsTool(config?: OrgConfig): OrgToolDefinition {
+async function makeEmacsTool(config?: OrgConfig): Promise<OrgToolDefinition> {
 	const session: EmacsSession = {
 		socketPath: "/tmp/fake-org.sock",
 		stop: async (): Promise<void> => {},
 		isAlive: (): boolean => true,
 	};
+	const { createOrgTool } = await import("../src/tool");
 	return createOrgTool(tmpDir, config ?? makeConfig(), async (): Promise<EmacsSession> => session);
 }
 
@@ -87,7 +88,7 @@ describe("createOrgTool section update output", () => {
 	test("successful section replace returns the whole updated file content", async () => {
 		const id = "PLAN-008-org-section-level-editing";
 		const filePath = await seedPlanFile(id);
-		const tool = makeEmacsTool();
+		const tool = await makeEmacsTool();
 
 		callToolMock.mockImplementationOnce(async (name: string, args: Record<string, unknown>) => {
 			expect(name).toBe("org-edit-section");

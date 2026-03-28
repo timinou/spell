@@ -1,4 +1,4 @@
-import { describe, expect, it, mock, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
@@ -22,28 +22,34 @@ Revised context.
 	}),
 }));
 
-mock.module("@oh-my-pi/pi-org", () => ({
-	createOrgTool: createOrgToolMock,
-	DEFAULT_ORG_CONFIG: {
-		dirs: {},
-		todoKeywords: ["ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"],
-		requiredProperties: ["CUSTOM_ID"],
-	},
-	detectEmacs: async () => ({
-		found: true,
-		meetsMinimum: true,
-		socatFound: true,
-		errors: [],
-		path: "/usr/bin/emacs",
-	}),
-	startEmacsSession: async () => ({
-		socketPath: "/tmp/fake-org.sock",
-		stop: async (): Promise<void> => {},
-		isAlive: (): boolean => true,
-	}),
-}));
+beforeEach(() => {
+	mock.module("@oh-my-pi/pi-org", () => ({
+		createOrgTool: createOrgToolMock,
+		DEFAULT_ORG_CONFIG: {
+			dirs: {},
+			todoKeywords: ["ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"],
+			requiredProperties: ["CUSTOM_ID"],
+		},
+		detectEmacs: async () => ({
+			found: true,
+			meetsMinimum: true,
+			socatFound: true,
+			errors: [],
+			path: "/usr/bin/emacs",
+		}),
+		startEmacsSession: async () => ({
+			socketPath: "/tmp/fake-org.sock",
+			stop: async (): Promise<void> => {},
+			isAlive: (): boolean => true,
+		}),
+	}));
+	createOrgToolMock.mockClear();
+});
 
-import { OrgTool } from "../../src/tools/org";
+afterEach(() => {
+	mock.restore();
+	vi.restoreAllMocks();
+});
 
 function createSession(): ToolSession {
 	return {
@@ -59,6 +65,7 @@ function createSession(): ToolSession {
 
 describe("OrgTool section update output", () => {
 	it("returns full file text when the inner org tool includes fileContent", async () => {
+		const { OrgTool } = await import("../../src/tools/org");
 		const tool = new OrgTool(createSession());
 		const result = await tool.execute("call-1", {
 			command: "update",

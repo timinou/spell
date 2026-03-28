@@ -106,10 +106,9 @@ async function callToolOnce(
 		stderr: "ignore",
 	});
 
-	// Write request, then signal EOF on stdin so socat knows we're done sending.
+	// Keep stdin open until the server responds. Closing the write side early can
+	// cause socat to tear down the socket before slower tool calls send their reply.
 	proc.stdin.write(line);
-	proc.stdin.end();
-
 	// Read stdout with a hard deadline.
 	const responseText = await Promise.race([
 		readFirstLine(proc.stdout),

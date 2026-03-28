@@ -13,11 +13,11 @@
   "Handle org-edit-section tool call with ARGS.
 ARGS is an alist with keys: file, custom_id, section, body, mode."
   (condition-case err
-      (let* ((file (alist-get 'file args))
-             (custom-id (alist-get 'custom_id args))
-             (section (alist-get 'section args))
-             (body (alist-get 'body args))
-             (mode (or (alist-get 'mode args) "replace"))
+      (let* ((file (org-mcp--arg args 'file))
+             (custom-id (org-mcp--arg args 'custom_id))
+             (section (org-mcp--arg args 'section))
+             (body (org-mcp--arg args 'body))
+             (mode (or (org-mcp--arg args 'mode) "replace"))
              (resolved-file (org-mcp--resolve-file file)))
         (unless custom-id
           (error "custom_id argument is required"))

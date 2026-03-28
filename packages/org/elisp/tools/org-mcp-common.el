@@ -8,6 +8,11 @@
 
 (require 'org-tasks)
 
+(defun org-mcp--arg (args key)
+  "Read KEY from ARGS supporting both symbol and JSON string keys."
+  (or (alist-get key args)
+      (alist-get (symbol-name key) args nil nil #'string=)))
+
 (defun org-mcp--resolve-file (file)
   "Resolve FILE path for org-tasks operations.
 If FILE is nil, signal an error (file is required).
@@ -17,7 +22,6 @@ If FILE is a relative path, resolve against @tasks directory."
   (if (file-name-absolute-p file)
       file
     (expand-file-name file (org-tasks--directory))))
-
 (provide 'org-mcp-common)
 
 ;;; org-mcp-common.el ends here

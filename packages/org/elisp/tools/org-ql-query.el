@@ -108,12 +108,21 @@
 ;; ---------------------------------------------------------------------------
 
 (mcp-server-register-tool
- "org-ql-query"
- "Query org files using org-ql sexp syntax. Returns matching items as JSON."
- '(("files" . "string or array of strings: absolute paths to .org files")
-   ("query" . "string: org-ql sexp query, e.g. \"(todo \\\"DOING\\\")\"")
-   ("sort"  . "string (optional): sort key, e.g. \"priority\", \"date\", \"todo\""))
- #'org-ql-query--handler)
+ (make-mcp-server-tool
+  :name "org-ql-query"
+  :title "Query Org QL"
+  :description "Query org files using org-ql sexp syntax. Returns matching items as JSON."
+  :input-schema '((type . "object")
+                  (properties
+                   . ((files . ((type . "array")
+                                (items . ((type . "string")))
+                                (description . "Absolute paths to .org files")))
+                      (query . ((type . "string")
+                                (description . "org-ql sexp query, e.g. \"(todo \\\"DOING\\\")\"")))
+                      (sort . ((type . "string")
+                               (description . "Optional sort key, e.g. priority, date, todo")))))
+                  (required . ["files" "query"]))
+  :function #'org-ql-query--handler))
 
 (provide 'org-ql-query)
 

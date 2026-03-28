@@ -54,7 +54,8 @@
 (require 'json)
 (require 'mcp-server-transport)
 (require 'mcp-server-transport-unix)
-(require 'mcp-server-transport-tcp)
+;; TCP transport is optional in this vendored copy; unix transport is the only path used by pi-org.
+(require 'mcp-server-transport-tcp nil t)
 (require 'mcp-server-tools)
 (require 'mcp-server-security)
 (require 'mcp-server-emacs-tools)
@@ -363,34 +364,15 @@ Uses `catch'/`throw' for early exit after successful response send."
 
     (condition-case err
         (let* ((result (mcp-server-tools-call tool-name arguments))
-               ;; Check if this is an error result
                (is-error-bool (and (> (length result) 0)
                                    (listp (aref result 0))
                                    (eq (alist-get 'type (aref result 0)) 'error))))
           (mcp-server--debug "Tool %s - is-error-bool = %S (type: %s)"
                              tool-name is-error-bool (type-of is-error-bool))
-          ;; Use direct hash table approach to avoid alist conversion issues
-          (condition-case direct-err
-              (let ((response-hash (make-hash-table :test 'equal))
-                    (result-hash (make-hash-table :test 'equal)))
-                ;; Build result hash
-                (puthash "content" (vconcat (append result nil)) result-hash)
-                (puthash "isError" (if is-error-bool t :false) result-hash)
-                ;; Build response hash
-                (puthash "jsonrpc" "2.0" response-hash)
-                (puthash "id" id response-hash)
-                (puthash "result" result-hash response-hash)
-                ;; Send using raw JSON via transport interface
-                (let ((json-str (json-serialize response-hash)))
-                  (mcp-server--debug "Direct JSON: %s" json-str)
-                  (mcp-server-transport-send-raw mcp-server-current-transport client-id json-str)
-                  (mcp-server--debug "Direct send completed successfully")
-                  ;; Exit cleanly without returning to main handler
-                  (throw 'mcp-handled 'success)))
-            (error
-             ;; If direct approach fails, fall back to error response
-             (mcp-server--debug "Direct send failed: %s" (error-message-string direct-err))
-             (error "Direct send failed: %s" (error-message-string direct-err))))))
+          (mcp-server--send-response
+           client-id id
+           `((content . ,(append result nil))
+             (isError . ,(if is-error-bool t :false))))))
 
     (error
      (mcp-server--send-response
