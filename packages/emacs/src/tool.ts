@@ -81,50 +81,6 @@ export function createEmacsTool(_projectRoot: string, deps: EmacsToolDependencie
 	};
 }
 
-/**
- * Detect Emacs and start a managed daemon for the given session.
- * Returns null if Emacs is unavailable, below minimum version,
- * treesit is not compiled in, or socat is missing.
- *
- * Intended to be called once at Pi session init — the returned EmacsSession
- * is cached at module level by startEmacsSession and reused across calls.
- */
-export async function startEmacsDaemon(
-	emacsPath: string | undefined,
-	projectRoot: string,
-	sessionId: string,
-): Promise<EmacsSession | null> {
-	const detection = await detectEmacs(emacsPath);
-	if (!detection.found || !detection.meetsMinimum || !detection.socatFound) {
-		if (detection.errors.length > 0) {
-			logger.debug("emacs: Emacs not available", { errors: detection.errors });
-		}
-		return null;
-	}
-	if (!detection.treesitAvailable) {
-		logger.warn("emacs: treesit not available in this Emacs build — code intelligence disabled");
-		return null;
-	}
-	try {
-		return await startEmacsSession(detection.path!, projectRoot, sessionId, EMACS_ELISP_DIR);
-	} catch (err) {
-		logger.warn("emacs: Failed to start Emacs session", { error: String(err) });
-		return null;
-	}
-}
-
-/**
- * Build the EmacsToolDependencies from config — starts an Emacs daemon on demand.
- * @deprecated Use EmacsSessionManager for lazy startup/restart, or startEmacsDaemon for one-off warmup flows.
- */
-export function makeEmacsSessionFactory(
-	emacsPath: string | undefined,
-	projectRoot: string,
-	sessionId: string,
-): () => Promise<EmacsSession | null> {
-	return () => startEmacsDaemon(emacsPath, projectRoot, sessionId);
-}
-
 // =============================================================================
 // Warmup pipeline — mirrors warmupLspServers in packages/coding-agent/src/lsp
 // =============================================================================
