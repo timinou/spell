@@ -1,11 +1,14 @@
 #+TITLE: Increase bash-interactive scrollback buffer
-#+STATE: BLOCKED
+#+STATE: DONE
 #+SESSION_ID: 14a4d222b3c27b27
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T20-12-03-151Z_14a4d222b3c27b27.jsonl]]
 #+CUSTOM_ID: FEAT-003-increase-bash-interactive-scrollback-buf
 #+EFFORT: 5m
 #+PRIORITY: #C
 #+LAYER: coding-agent
+
+
+NOTE [2026-03-28]: Verification retried successfully; bun check:ts now passes and the feature is complete.
 
 
 NOTE [2026-03-28]: Blocked by unrelated repo-wide bun check:ts failures after implementing the scrollback change.
@@ -35,3 +38,13 @@ Blocked on acceptance because =bun check:ts= currently fails in unrelated files:
 Targeted verification for the touched file succeeded:
 - =bunx @biomejs/biome check packages/coding-agent/src/tools/bash-interactive.ts=
 - LSP diagnostics for =packages/coding-agent/src/tools/bash-interactive.ts=: no diagnostics
+
+
+** Completion [2026-03-28]
+Verification retried after clearing current repo-wide formatting blockers.
+
+- Confirmed =packages/coding-agent/src/tools/bash-interactive.ts= still sets =scrollback: 50_000=.
+- Ran =bun check:ts=: passed.
+
+Artifact:
+- [[file:!tasks/plans/plan-artifacts/PLAN-005-increase-tui-scrollback/verification-retry-success-bun-check-ts.txt]]

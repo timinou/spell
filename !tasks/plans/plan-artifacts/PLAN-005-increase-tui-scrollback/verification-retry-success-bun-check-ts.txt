@@ -1,0 +1,14 @@
+Verification retry for PLAN-005-increase-tui-scrollback
+Date: 2026-03-28
+
+Command: bun check:ts
+Result: success
+Observed output:
+$ biome check . && tsgo -p tsconfig.json
+Checked 1293 files in 1458ms. No fixes applied.
+
+Support work performed before the successful rerun:
+- bunx @biomejs/biome check --write packages/coding-agent/src/orchestrators/fluid/index.ts packages/coding-agent/src/tools/output-meta.ts packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts packages/org/src/org-writer.ts
+- bunx @biomejs/biome check --write packages/qml/scripts/build-bridge.ts
+
+Result: repo-wide TypeScript verification is now green, and the requested scrollback change remains present in packages/coding-agent/src/tools/bash-interactive.ts.

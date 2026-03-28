@@ -130,25 +130,25 @@ export async function appendItemToFile(
 ): Promise<string> {
 	return filePathMutex.withLock(filePath, async () => {
 		const props: Record<string, string> = {
-		CUSTOM_ID: params.id,
-		...params.properties,
-	};
+			CUSTOM_ID: params.id,
+			...params.properties,
+		};
 
-	let existing: string;
-	try {
-		existing = await Bun.file(filePath).text();
-	} catch {
-		// New file — use file-level properties with optional session context
-		const content = serializeFileItem(params.title, state, props, params.body, session);
-		await atomicWrite(filePath, content);
+		let existing: string;
+		try {
+			existing = await Bun.file(filePath).text();
+		} catch {
+			// New file — use file-level properties with optional session context
+			const content = serializeFileItem(params.title, state, props, params.body, session);
+			await atomicWrite(filePath, content);
+			return filePath;
+		}
+
+		// Existing file — append as heading-level item; session context stays with the file
+		const heading = serializeHeading(1, state, params.title, props, params.body);
+		const separator = existing.endsWith("\n") ? "" : "\n";
+		await atomicWrite(filePath, existing + separator + heading);
 		return filePath;
-	}
-
-	// Existing file — append as heading-level item; session context stays with the file
-	const heading = serializeHeading(1, state, params.title, props, params.body);
-	const separator = existing.endsWith("\n") ? "" : "\n";
-	await atomicWrite(filePath, existing + separator + heading);
-	return filePath;
 	});
 }
 
@@ -169,73 +169,73 @@ export async function applyItemMutations(
 ): Promise<string[] | null> {
 	return filePathMutex.withLock(filePath, async () => {
 		let content: string;
-	try {
-		content = await Bun.file(filePath).text();
-	} catch {
-		return null; // file does not exist — item not found
-	}
-	const lines = content.split("\n");
-
-	const ctx = locateItem(lines, customId);
-	if (!ctx) return null;
-
-	const applied: string[] = [];
-
-	// 1. State
-	if (mutations.state) {
-		const ok =
-			ctx.kind === "file"
-				? mutateFileLevelState(lines, ctx, mutations.state, mutations.note)
-				: mutateHeadingState(lines, ctx, mutations.state, todoKeywords, mutations.note);
-		if (ok) {
-			applied.push("state");
-			if (mutations.note) applied.push("note");
+		try {
+			content = await Bun.file(filePath).text();
+		} catch {
+			return null; // file does not exist — item not found
 		}
-	}
+		const lines = content.split("\n");
 
-	// 2. Title
-	if (mutations.title) {
-		const ok =
-			ctx.kind === "file"
-				? mutateFileLevelTitle(lines, ctx, mutations.title)
-				: mutateHeadingTitle(lines, ctx, mutations.title, todoKeywords);
-		if (ok) applied.push("title");
-	}
+		const ctx = locateItem(lines, customId);
+		if (!ctx) return null;
 
-	// 3. Body replace and/or append
-	//    Body replace runs first. If both body and append are set,
-	//    append applies on top of the replaced body (fresh range lookup).
-	if (mutations.body !== undefined) {
-		const ok =
-			ctx.kind === "file"
-				? spliceFileLevelBody(lines, ctx, mutations.body)
-				: spliceHeadingBody(lines, ctx, mutations.body);
-		if (ok) applied.push("body");
-	}
+		const applied: string[] = [];
 
-	if (mutations.append !== undefined) {
-		// Re-locate the body range — earlier mutations (state note, body replace)
-		// may have shifted line indices via splice.
-		const freshCtx = locateItem(lines, customId);
-		if (freshCtx) {
-			const range =
-				freshCtx.kind === "file"
-					? { start: freshCtx.bodyStart, end: lines.length }
-					: { start: freshCtx.bodyStart, end: freshCtx.bodyEnd };
-			const existing = lines.slice(range.start, range.end).join("\n").trimEnd();
-			const combined = existing ? `${existing}\n\n${mutations.append.trimEnd()}` : mutations.append.trimEnd();
+		// 1. State
+		if (mutations.state) {
 			const ok =
-				freshCtx.kind === "file"
-					? spliceFileLevelBody(lines, freshCtx, combined)
-					: spliceHeadingBody(lines, freshCtx, combined);
-			if (ok) applied.push("append");
+				ctx.kind === "file"
+					? mutateFileLevelState(lines, ctx, mutations.state, mutations.note)
+					: mutateHeadingState(lines, ctx, mutations.state, todoKeywords, mutations.note);
+			if (ok) {
+				applied.push("state");
+				if (mutations.note) applied.push("note");
+			}
 		}
-	}
 
-	if (applied.length === 0) return applied;
+		// 2. Title
+		if (mutations.title) {
+			const ok =
+				ctx.kind === "file"
+					? mutateFileLevelTitle(lines, ctx, mutations.title)
+					: mutateHeadingTitle(lines, ctx, mutations.title, todoKeywords);
+			if (ok) applied.push("title");
+		}
 
-	await atomicWrite(filePath, lines.join("\n"));
-	return applied;
+		// 3. Body replace and/or append
+		//    Body replace runs first. If both body and append are set,
+		//    append applies on top of the replaced body (fresh range lookup).
+		if (mutations.body !== undefined) {
+			const ok =
+				ctx.kind === "file"
+					? spliceFileLevelBody(lines, ctx, mutations.body)
+					: spliceHeadingBody(lines, ctx, mutations.body);
+			if (ok) applied.push("body");
+		}
+
+		if (mutations.append !== undefined) {
+			// Re-locate the body range — earlier mutations (state note, body replace)
+			// may have shifted line indices via splice.
+			const freshCtx = locateItem(lines, customId);
+			if (freshCtx) {
+				const range =
+					freshCtx.kind === "file"
+						? { start: freshCtx.bodyStart, end: lines.length }
+						: { start: freshCtx.bodyStart, end: freshCtx.bodyEnd };
+				const existing = lines.slice(range.start, range.end).join("\n").trimEnd();
+				const combined = existing ? `${existing}\n\n${mutations.append.trimEnd()}` : mutations.append.trimEnd();
+				const ok =
+					freshCtx.kind === "file"
+						? spliceFileLevelBody(lines, freshCtx, combined)
+						: spliceHeadingBody(lines, freshCtx, combined);
+				if (ok) applied.push("append");
+			}
+		}
+
+		if (applied.length === 0) return applied;
+
+		await atomicWrite(filePath, lines.join("\n"));
+		return applied;
 	});
 }
 
@@ -485,23 +485,23 @@ export async function setPropertyInFile(
 ): Promise<boolean> {
 	return filePathMutex.withLock(filePath, async () => {
 		let content: string;
-	try {
-		content = await Bun.file(filePath).text();
-	} catch {
-		return false;
-	}
-	const lines = content.split("\n");
-	const ctx = locateItem(lines, customId);
-	if (!ctx) return false;
+		try {
+			content = await Bun.file(filePath).text();
+		} catch {
+			return false;
+		}
+		const lines = content.split("\n");
+		const ctx = locateItem(lines, customId);
+		if (!ctx) return false;
 
-	const ok =
-		ctx.kind === "file"
-			? setFileLevelProperty(lines, ctx, property, value)
-			: setHeadingProperty(lines, ctx, customId, property, value);
-	if (!ok) return false;
+		const ok =
+			ctx.kind === "file"
+				? setFileLevelProperty(lines, ctx, property, value)
+				: setHeadingProperty(lines, ctx, customId, property, value);
+		if (!ok) return false;
 
-	await atomicWrite(filePath, lines.join("\n"));
-	return true;
+		await atomicWrite(filePath, lines.join("\n"));
+		return true;
 	});
 }
 

@@ -1,8 +1,11 @@
 #+TITLE: Increase TUI scrollback
-#+STATE: BLOCKED
+#+STATE: DONE
 #+SESSION_ID: 14a4d222b3c27b27
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T20-12-03-151Z_14a4d222b3c27b27.jsonl]]
 #+CUSTOM_ID: PLAN-005-increase-tui-scrollback
+
+
+NOTE [2026-03-28]: Verification retried successfully; plan closed after bun check:ts passed.
 
 
 NOTE [2026-03-28]: Blocked by unrelated repo-wide bun check:ts failures after the scrollback change landed.
@@ -40,3 +43,24 @@ Single-line change in =packages/coding-agent/src/tools/bash-interactive.ts= line
 *** Deviations
 - Required global verification (=bun check:ts=) did not pass because of unrelated existing failures, so this plan remains blocked and is not marked DONE.
 - Linked child item =FEAT-003-increase-bash-interactive-scrollback-buf= was moved to BLOCKED for the same reason.
+
+
+** Completion [2026-03-28]
+*** Verification
+- Retried =bun check:ts= after fixing current repo-wide Biome blockers in:
+  - =packages/coding-agent/src/orchestrators/fluid/index.ts=
+  - =packages/coding-agent/src/tools/output-meta.ts=
+  - =packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts=
+  - =packages/org/src/org-writer.ts=
+  - =packages/qml/scripts/build-bridge.ts=
+- Confirmed requested code change remains in =packages/coding-agent/src/tools/bash-interactive.ts=: =scrollback: 50_000=.
+- Ran =bun check:ts=: passed.
+
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-005-increase-tui-scrollback/source-snippet-bash-interactive-scrollback.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-005-increase-tui-scrollback/verification-summary.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-005-increase-tui-scrollback/verification-retry-success-bun-check-ts.txt]]
+
+*** Deviations
+- To satisfy the plan's required repo-wide verification, this retry also fixed existing formatter/import-order issues in the five files listed above. No behavioral changes were made in those files.
+- The earlier blocked completion report remains in the plan history; this retry supersedes that blocker and closes the plan.

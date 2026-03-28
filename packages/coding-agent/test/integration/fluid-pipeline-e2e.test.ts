@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { FLUID_EVENT_CHANNEL, FluidOrchestrator, type FluidPlan } from "../../src/orchestrators/fluid";
 import { Priority } from "../../src/utils/event-bus";
-import { PARALLEL_PLAN, SIMPLE_PLAN, mockResult } from "../helpers/fluid-test-data";
 import { type FluidPipeline, setupFluidPipeline } from "../helpers/fluid-pipeline";
+import { mockResult, PARALLEL_PLAN, SIMPLE_PLAN } from "../helpers/fluid-test-data";
 import { isBridgeAvailable } from "../helpers/qml-journey";
 
 interface ShellBridgeEvent {
