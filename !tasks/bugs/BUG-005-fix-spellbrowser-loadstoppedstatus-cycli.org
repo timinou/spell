@@ -1,0 +1,119 @@
+#+TITLE: Fix SpellBrowser LoadStoppedStatus cycling loop on server restart
+#+STATE: DONE
+#+SESSION_ID: 14a4dd52d5f788b9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T21-00-56-023Z_14a4dd52d5f788b9.jsonl]]
+#+CUSTOM_ID: BUG-005-fix-spellbrowser-loadstoppedstatus-cycli
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: qml-browser
+
+NOTE [2026-03-28]: Implemented SpellBrowser load-cycle detection, guarded recovery, and recovery-state resets.
+
+* Initial Message
+
+My friend, please. There is a bug file in ~/code/ora/hotelcomm (org file) taht is about hot reload not working with the qml browser. Find it and tell me what the problem is
+
+* Problem
+
+When a WebSocket server (e.g., Phoenix LiveView endpoint) restarts during development, QWebEngine's =SpellBrowser= enters an unrecoverable rapid-cycling loop:
+
+1. WebSocket dies → LiveView JS client shows =phx-disconnected= overlay and triggers micro-navigation to reconnect
+2. =onLoadingChanged= fires =LoadStartedStatus= → =browserState = "loading"=
+3. Server not yet back → =LoadStoppedStatus= fires → handler (line 2144-2154) sets =browserState = "interactive"= because URL exists
+4. JS reconnection logic fires again → back to step 2
+5. Loop repeats indefinitely: =loading → interactive → LoadStopped → loading → ...=
+
+The root cause is line 2145 of =SpellBrowser.qml=:
+#+begin_src qml
+browserState = currentUrlString && currentUrlString.length > 0 ? "interactive" : "idle"
+#+end_src
+
+This treats ALL =LoadStoppedStatus= events as "page is recoverable" without differentiating network-induced stops from user-initiated stops. No cycle detection exists.
+
+* Fix: Cycle Detection + Hard Recovery
+
+** 1. Add state history tracking properties (SpellBrowser.qml, near line 38)
+
+New properties:
+- =property var loadStateHistory: []= — array of ={status, timestamp}= tuples
+- =property int cycleThreshold: 3= — 3 rapid LoadStarted→LoadStopped pairs = cycle detected
+- =property int cycleWindowMs: 3000= — window for detection (3 seconds)
+- =property bool recovering: false= — guards against re-entrant recovery
+
+** 2. Add =recordStateTransition()= function
+
+Called at the top of =onLoadingChanged= for every status event. Appends ={status, timestamp}= to =loadStateHistory=, trims history to last 10 entries to cap memory.
+
+** 3. Add =detectLoadCycle()= function
+
+Examines recent =loadStateHistory= within =cycleWindowMs= window. Returns =true= if there are >=cycleThreshold= pairs of =LoadStartedStatus → LoadStoppedStatus= transitions. Pattern: alternating Started/Stopped with no Succeeded in between.
+
+** 4. Add =forceRecovery()= function
+
+When cycle detected:
+1. Set =recovering = true=
+2. Call =webView.stop()= to halt any in-flight load
+3. Set =helperReady = false=
+4. Set =browserState = "loading"=
+5. Set =statusText = "Recovering from server restart..."=
+6. =emitState(false)= — emit non-silent so status bar updates
+7. Use a =Timer= with 1-second delay, then call =webView.reloadAndBypassCache()=
+8. On next =LoadSucceededStatus=, set =recovering = false= and clear =loadStateHistory=
+
+** 5. Modify =onLoadingChanged= handler (lines 2107-2177)
+
+At the top of the handler (after =requestUrl= extraction):
+- Call =recordStateTransition(loadRequest.status)=
+- If =recovering= is true and status is =LoadStartedStatus=: return early (let recovery Timer handle it)
+- If =detectLoadCycle()= returns true: call =forceRecovery()= and return
+
+In the =LoadStoppedStatus= branch (line 2144):
+- If =recovering=: return early (don't set interactive)
+- Otherwise: existing behavior (keep backward compatible for user-initiated stop)
+
+In the =LoadSucceededStatus= branch (line 2118):
+- After successful helper injection: if =recovering=, reset =recovering = false= and clear =loadStateHistory=
+
+** 6. Add recovery Timer (near existing =commandTimeout= Timer at line 2032)
+
+#+begin_src qml
+Timer {
+    id: recoveryTimer
+    interval: 1000
+    repeat: false
+    onTriggered: {
+        if (recovering) {
+            webView.reloadAndBypassCache()
+        }
+    }
+}
+#+end_src
+
+** 7. Add =browser:force_reload= command
+
+New command in =executeActiveCommand= switch (line 1542):
+- Calls =webView.stop()= then =webView.reloadAndBypassCache()=
+- Resets =helperReady=, =loadStateHistory=, =recovering=
+- Completes when next =LoadSucceededStatus= fires
+- This gives the bridge/TypeScript layer a way to force recovery programmatically
+
+* Target Files
+
+- =packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml= — all changes above
+
+* Edge Cases
+
+- User manually clicking Stop during normal browsing should NOT trigger cycle detection (single LoadStopped without rapid repetition won't hit threshold of 3)
+- Server that takes >3 seconds to restart: recovery timer fires, reloadAndBypassCache fails (LoadFailedStatus), page shows error state. User can manually reload once server is up. This is correct behavior.
+- Multiple rapid server restarts (e.g., saving file twice quickly): each restart resets the detection window. Recovery only fires once per cycle detection.
+- =recovering= flag prevents re-entrant recovery attempts while one is in-flight
+
+* Acceptance Criteria
+
+- [ ] SpellBrowser no longer enters infinite loading cycle when WebSocket server restarts
+- [ ] Recovery shows "Recovering from server restart..." in status bar during recovery
+- [ ] After recovery, page returns to =interactive= state with helper injected
+- [ ] Normal user Stop/Reload workflow is unchanged (no false cycle detection)
+- [ ] =browser:force_reload= command works from bridge
+- [ ] =bun check:ts= passes (no type regressions)
+- [ ] =qmllint= passes on modified SpellBrowser.qml

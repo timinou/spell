@@ -1,0 +1,70 @@
+#+TITLE: Add browserforce_reload command to BrowserWindow protocol
+#+STATE: DONE
+#+SESSION_ID: 14a4dd52d5f788b9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T21-00-56-023Z_14a4dd52d5f788b9.jsonl]]
+#+CUSTOM_ID: FEAT-006-add-browserforce-reload-command-to-brows
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: qml-browser
+
+NOTE [2026-03-28]: Added browser:force_reload protocol support, BrowserJourney helper coverage, and browser tool documentation.
+
+* Initial Message
+
+My friend, please. There is a bug file in ~/code/ora/hotelcomm (org file) taht is about hot reload not working with the qml browser. Find it and tell me what the problem is
+
+* Problem
+
+There is no way for the TypeScript/bridge layer to force a hard page reload that clears all state (helper cache, DOM, HTTP cache). The existing =browser:goto= with the same URL does a soft navigation. =reloadPage()= uses cached resources.
+
+When the agent or an extension detects that a page is in a bad state (e.g., after server restart), there's no reliable way to recover programmatically.
+
+* Implementation
+
+** 1. Add =browser:force_reload= to =executeActiveCommand= switch (SpellBrowser.qml line 1542)
+
+#+begin_src qml
+case "browser:force_reload":
+    executeForceReloadCommand(command)
+    return
+#+end_src
+
+** 2. Add =executeForceReloadCommand= function
+
+#+begin_src qml
+function executeForceReloadCommand(command) {
+    // Reset all browser state
+    helperReady = false
+    loadStateHistory = []
+    recovering = false
+    lastError = ""
+    clearObservedElements()
+
+    browserState = "loading"
+    statusText = "Force reloading..."
+    emitState(true)
+
+    webView.stop()
+    webView.reloadAndBypassCache()
+    // Completion handled by onLoadingChanged -> LoadSucceededStatus
+}
+#+end_src
+
+The command completes when =LoadSucceededStatus= fires (existing =onLoadingChanged= handler checks for =activeCommand.action === "browser:goto"= — extend to also check for ="browser:force_reload"=).
+
+** 3. Document in browser tool prompt
+
+Add =browser:force_reload= to the list of supported actions in the browser tool's prompt/schema.
+
+* Target Files
+
+- =packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml= — new command handler
+- =packages/coding-agent/src/tools/browser.ts= — add to schema and prompt if separate from QML (check if command passthrough or explicit handling)
+- =packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml= — no change needed (command passes through via handleMessage)
+
+* Acceptance Criteria
+
+- [ ] =browser:force_reload= command resets all browser state and reloads with cache bypass
+- [ ] Command completes when page reaches =interactive= state
+- [ ] Command times out if page fails to load (uses standard command timeout)
+- [ ] =qmllint= passes on SpellBrowser.qml

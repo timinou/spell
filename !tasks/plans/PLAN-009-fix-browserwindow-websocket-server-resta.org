@@ -1,0 +1,105 @@
+#+TITLE: Fix BrowserWindow WebSocket server restart recovery
+#+STATE: DONE
+#+SESSION_ID: 14a4dd52d5f788b9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T21-00-56-023Z_14a4dd52d5f788b9.jsonl]]
+#+CUSTOM_ID: PLAN-009-fix-browserwindow-websocket-server-resta
+
+
+NOTE [2026-03-28]: Completed reconnect recovery implementation, verification, artifact capture, and child-item closeout.
+
+* Initial Message
+
+My friend, please. There is a bug file in ~/code/ora/hotelcomm (org file) taht is about hot reload not working with the qml browser. Find it and tell me what the problem is
+
+* Context
+
+** Problem
+The Spell canvas BrowserWindow (QWebEngine-based) enters an unrecoverable rapid-cycling loop when the WebSocket server it's connected to restarts. This happens constantly during Phoenix LiveView development because every code recompilation restarts the BEAM Endpoint, killing the WebSocket for ~200-500ms.
+
+The cycling pattern: =loading → interactive → LoadStopped → loading → interactive → LoadStopped → ...= repeats indefinitely. The browser never stabilizes and subsequent navigation commands fail silently.
+
+Bug reference: =ecosystem/djinn/!tasks/bugs/BUG-001-spell-canvas-browserwindow-fails-to-reco.org= in the hotelcomm repo.
+
+** Root Cause
+Line 2144-2154 of =SpellBrowser.qml= (=packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml=):
+
+The =LoadStoppedStatus= handler sets =browserState = \"interactive\"= whenever a URL exists, without differentiating network-induced stops from user-initiated stops. Combined with LiveView's JS client auto-reconnection (which triggers micro-navigations), this creates the infinite loop.
+
+No state history tracking exists. No cycle detection. No recovery mechanism.
+
+** Approach
+Two-layer fix:
+
+*** QML Layer (SpellBrowser.qml)
+1. Add state history tracking: record ={status, timestamp}= tuples for each =onLoadingChanged= event
+2. Add cycle detection: detect 3+ rapid =LoadStarted → LoadStopped= pairs within 3 seconds
+3. Add automatic recovery: when cycle detected, stop loading, wait 1 second, force =reloadAndBypassCache()=
+4. Show status bar feedback: \"Recovering from server restart...\" during recovery
+5. Guard against re-entrant recovery with a =recovering= flag
+
+*** Bridge API Layer (new command)
+Add =browser:force_reload= command that resets all browser state (helper cache, observations, error state) and forces a cache-bypassing reload. This gives the TypeScript/extension layer a way to programmatically recover from bad page states.
+
+** Key Decisions
+- Cycle threshold: 3 pairs of LoadStarted→LoadStopped within 3 seconds (conservative enough to avoid false positives from normal browsing)
+- Recovery delay: 1 second after cycle detection (gives server time to restart)
+- Recovery method: =reloadAndBypassCache()= — clears HTTP cache but preserves cookies/session (important for Phoenix login persistence)
+- State history capped at 10 entries to bound memory
+- =recovering= flag prevents detection→recovery→detection re-entrancy
+
+** Critical File Paths
+- =packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml= — all fix changes (2262 lines)
+  - Properties: line 33-42 (add new tracking properties after existing ones)
+  - =onLoadingChanged=: lines 2107-2177 (modify handler)
+  - =clearObservedElements=: line 1994 (may need to reset recovery state)
+  - =executeActiveCommand=: line 1540 (add =browser:force_reload= case)
+  - Timers: near line 2032 (add =recoveryTimer=)
+- =packages/coding-agent/test/browser-reconnect/server.ts= — new test server
+- =packages/coding-agent/test/browser-reconnect/reconnect.test.ts= — new test file
+
+* Verification
+
+** Automated
+- =bun test packages/coding-agent/test/browser-reconnect/reconnect.test.ts= — all 3 test cases pass:
+  1. Initial load succeeds
+  2. Automatic recovery after server restart
+  3. =browser:force_reload= command recovery
+- =bun check:ts= passes (no type regressions from any schema/prompt changes)
+- =qmllint packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml= passes
+
+** Manual
+- Open a BrowserWindow pointing at a running Phoenix LiveView app (e.g., =http://localhost:4000=)
+- Make a code change that triggers Phoenix code reloader
+- Observe: status bar shows \"Recovering from server restart...\" briefly, then page returns to =interactive= with green indicator
+- Verify: normal Stop/Reload buttons still work correctly (no false cycle detection)
+
+* Execution Manifest
+
+1. [[id:FEAT-007-self-contained-browserwindow-reconnectio]] (depends: none, effort: 1h)
+   Build the test server and test file first so the fix can be verified immediately.
+   Creates =packages/coding-agent/test/browser-reconnect/server.ts= and =reconnect.test.ts=.
+   Initial test run should demonstrate the bug (test 2 fails without the fix).
+
+2. [[id:BUG-005-fix-spellbrowser-loadstoppedstatus-cycli]] (depends: none, effort: 2h)
+   Core fix in =SpellBrowser.qml=: state history tracking, cycle detection, automatic recovery with status bar feedback, recovery timer, and =recovering= guard flag.
+   Can be developed in parallel with item 1 (different files).
+
+3. [[id:FEAT-006-add-browserforce-reload-command-to-brows]] (depends: BUG-005, effort: 30m)
+   Add =browser:force_reload= command to =SpellBrowser.qml= and document in browser tool.
+   Depends on BUG-005 because it uses the same state reset functions.
+
+Total effort: ~3.5h
+
+
+** Completion [2026-03-28]
+*** Verification
+- =bun test packages/coding-agent/test/browser-reconnect/reconnect.test.ts packages/coding-agent/test/tools/canvas-browser-protocol.test.ts= → passed; 48 tests, 0 failures.
+- =qmllint packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml= → passed; no output.
+- =bun check:ts= → passed after fixing reconnect test-server formatting and type issues discovered during verification.
+- =bun /tmp/capture-browser-recovery.ts= → passed; launched BrowserWindow against the self-contained reconnect server, forced recovery after a stalled restart, and saved a screenshot after the page returned to =open=.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-009-fix-browserwindow-websocket-server-resta/browserwindow-force-reload-recovered-open.png]] — BrowserWindow viewport after long-restart recovery via =browser:force_reload=; page status is =open=.
+- [[file:!tasks/plans/plan-artifacts/PLAN-009-fix-browserwindow-websocket-server-resta/browserwindow-force-reload-recovered-open-review.png]] — Puppeteer screenshot of the saved BrowserWindow recovery artifact, confirming the visual evidence was captured into the plan artifacts directory.
+
+*** Deviations
+- Did not run the Phoenix LiveView manual repro from the original plan because no Phoenix app/session was present in this workspace. Verified the same restart pattern with a self-contained Bun HTTP/WebSocket harness that reproduces the reconnect cycle and exercises BrowserWindow recovery end to end.

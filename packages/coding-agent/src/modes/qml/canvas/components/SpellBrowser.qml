@@ -40,6 +40,13 @@ Item {
     property int commandSequence: 0
     property bool commandRunning: false
     property bool helperReady: false
+    property var loadStateHistory: []
+    property bool recoveryActive: false
+    property string recoveryStatusText: ""
+    property int recoveryWindowMs: 3000
+    property int recoveryPairThreshold: 3
+    property int recoveryDelayMs: 1000
+    property int maxLoadStateHistoryEntries: 10
 
     WebEngineProfile {
         id: ephemeralProfile
@@ -1388,6 +1395,7 @@ Item {
         var allowed = {
             "browser:sync": true,
             "browser:goto": true,
+            "browser:force_reload": true,
             "browser:evaluate": true,
             "browser:observe": true,
             "browser:click": true,
@@ -1556,6 +1564,9 @@ Item {
         case "browser:goto":
             startNavigationCommand(command)
             return
+        case "browser:force_reload":
+            executeForceReloadCommand()
+            return
         case "browser:evaluate":
             executeEvaluateCommand(payload)
             return
@@ -1604,6 +1615,10 @@ Item {
         }
     }
 
+    function isPageLoadCommand(command) {
+        return !!command && (command.action === "browser:goto" || command.action === "browser:force_reload")
+    }
+
     function startNavigationCommand(command) {
         var target = normalizeNavigationTarget(stringField(command.payload, ["url"]))
         if (!target) {
@@ -1621,8 +1636,16 @@ Item {
         lastError = ""
         statusText = "Loading " + target
         browserState = "loading"
+        finishRecovery()
         emitState(true)
         webView.url = target
+    }
+
+    function executeForceReloadCommand() {
+        finishRecovery()
+        startRecovery("Force reloading...", 1)
+        webView.stop()
+        recoveryTimer.restart()
     }
 
     function executeEvaluateCommand(payload) {
@@ -2016,6 +2039,75 @@ Item {
         webView.stop()
     }
 
+    function resetLoadStateHistory() {
+        loadStateHistory = []
+    }
+
+    function pushLoadState(statusName) {
+        var now = Date.now()
+        var next = loadStateHistory.concat([{ status: statusName, timestamp: now }])
+        if (next.length > maxLoadStateHistoryEntries) {
+            next = next.slice(next.length - maxLoadStateHistoryEntries)
+        }
+        loadStateHistory = next
+    }
+
+    function recentStartedStoppedPairCount() {
+        var now = Date.now()
+        var lowerBound = now - recoveryWindowMs
+        var pairs = 0
+        var sawStarted = false
+
+        for (var i = 0; i < loadStateHistory.length; i++) {
+            var entry = loadStateHistory[i]
+            if (!entry || typeof entry.timestamp !== "number" || entry.timestamp < lowerBound) {
+                continue
+            }
+            if (entry.status === "started") {
+                sawStarted = true
+                continue
+            }
+            if (entry.status === "stopped" && sawStarted) {
+                pairs += 1
+                sawStarted = false
+            }
+        }
+
+        return pairs
+    }
+
+    function startRecovery(statusMessage, delayMs) {
+        recoveryActive = true
+        recoveryStatusText = statusMessage
+        browserState = "loading"
+        statusText = statusMessage
+        clearObservedElements()
+        lastError = ""
+        recoveryTimer.interval = Math.max(1, delayMs)
+        emitState(true)
+    }
+
+    function maybeStartRecovery() {
+        if (recoveryActive) {
+            return false
+        }
+        if (recentStartedStoppedPairCount() < recoveryPairThreshold) {
+            return false
+        }
+
+        startRecovery("Recovering from server restart...", recoveryDelayMs)
+        webView.stop()
+        recoveryTimer.restart()
+        return true
+    }
+
+    function finishRecovery() {
+        recoveryActive = false
+        recoveryStatusText = ""
+        recoveryTimer.stop()
+        resetLoadStateHistory()
+    }
+
     function handleMessage(payload) {
         if (!payload || typeof payload !== "object") {
             return
@@ -2044,6 +2136,23 @@ Item {
         interval: root.waitPollIntervalMs
         repeat: false
         onTriggered: root.pollWaitForSelector()
+    }
+
+    Timer {
+        id: recoveryTimer
+        interval: root.recoveryDelayMs
+        repeat: false
+        onTriggered: {
+            if (!recoveryActive) {
+                return
+            }
+            clearObservedElements()
+            lastError = ""
+            browserState = "loading"
+            statusText = recoveryStatusText
+            emitState(true)
+            webView.reloadAndBypassCache()
+        }
     }
 
     Rectangle {
@@ -2107,10 +2216,11 @@ Item {
             onLoadingChanged: function(loadRequest) {
                 var requestUrl = loadRequest.url ? loadRequest.url.toString() : currentUrlString
                 if (loadRequest.status === WebEngineView.LoadStartedStatus) {
+                    pushLoadState("started")
                     clearObservedElements()
                     lastError = ""
                     browserState = "loading"
-                    statusText = "Loading " + requestUrl
+                    statusText = recoveryActive ? recoveryStatusText : "Loading " + requestUrl
                     emitState(true)
                     return
                 }
@@ -2118,19 +2228,21 @@ Item {
                 if (loadRequest.status === WebEngineView.LoadSucceededStatus) {
                     ensureBrowserHelper(function(ok) {
                         if (!ok) {
+                            finishRecovery()
                             browserState = "error"
                             lastError = "SpellBrowser helper injection failed."
                             statusText = "Page loaded without browser helper"
                             emitState(true)
-                            if (activeCommand && activeCommand.action === "browser:goto") {
+                            if (isPageLoadCommand(activeCommand)) {
                                 failActiveCommand("unavailable", lastError)
                             }
                             return
                         }
+                        finishRecovery()
                         browserState = "interactive"
                         statusText = pageTitle && pageTitle.length > 0 ? pageTitle : requestUrl
                         emitState(true)
-                        if (activeCommand && activeCommand.action === "browser:goto") {
+                        if (isPageLoadCommand(activeCommand)) {
                             completeActiveCommand({
                                 url: currentUrlString,
                                 title: pageTitle,
@@ -2142,10 +2254,20 @@ Item {
                 }
 
                 if (loadRequest.status === WebEngineView.LoadStoppedStatus) {
+                    pushLoadState("stopped")
+                    if (maybeStartRecovery()) {
+                        return
+                    }
+                    if (recoveryActive) {
+                        browserState = "loading"
+                        statusText = recoveryStatusText
+                        emitState(true)
+                        return
+                    }
                     browserState = currentUrlString && currentUrlString.length > 0 ? "interactive" : "idle"
                     statusText = "Load stopped"
                     emitState(true)
-                    if (activeCommand && activeCommand.action === "browser:goto") {
+                    if (isPageLoadCommand(activeCommand)) {
                         failActiveCommand("navigation_failed", "Navigation was stopped before the page finished loading.", {
                             url: requestUrl
                         })
@@ -2155,11 +2277,12 @@ Item {
 
                 if (loadRequest.status === WebEngineView.LoadFailedStatus) {
                     clearObservedElements()
+                    finishRecovery()
                     browserState = "error"
                     lastError = loadRequest.errorString || "WebEngine load failure"
                     statusText = "Page load failed"
                     emitState(true)
-                    if (activeCommand && activeCommand.action === "browser:goto") {
+                    if (isPageLoadCommand(activeCommand)) {
                         failActiveCommand("navigation_failed", lastError, {
                             url: requestUrl,
                             errorCode: loadRequest.errorCode

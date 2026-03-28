@@ -119,6 +119,13 @@ export class BrowserJourney {
 		);
 	}
 
+	async forceReload(timeout = 10_000): Promise<{ url: string; title: string; state: BrowserLifecycleState }> {
+		return this.commandOk<{ url: string; title: string; state: BrowserLifecycleState }>(
+			{ action: "browser:force_reload" },
+			timeout,
+		);
+	}
+
 	async evaluate<TResult>(script: string, timeout = 10_000): Promise<TResult> {
 		return this.commandOk<TResult>({ action: "browser:evaluate", script }, timeout);
 	}

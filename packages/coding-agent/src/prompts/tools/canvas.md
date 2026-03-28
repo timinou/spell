@@ -101,6 +101,7 @@ Each command is a JSON payload sent to the running browser window. Use a unique 
 **Supported actions:**
 - `browser:sync` — return the current browser state snapshot
 - `browser:goto` (`url`) — navigate to a URL
+- `browser:force_reload` — reset BrowserWindow state and reload the current page with cache bypass (useful after a server restart or bad page state)
 - `browser:evaluate` (`script`) — evaluate JavaScript in the page world and return the result
 - `browser:observe` (`include_all?`, `viewport_only?`, `limit?`) — scan the page and return observed elements with `id` values
 - `browser:click` (`selector` or `element_id` or `x`/`y`) — click a target

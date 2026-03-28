@@ -1,0 +1,106 @@
+#+TITLE: Self-contained BrowserWindow reconnection test harness
+#+STATE: DONE
+#+SESSION_ID: 14a4dd52d5f788b9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T21-00-56-023Z_14a4dd52d5f788b9.jsonl]]
+#+CUSTOM_ID: FEAT-007-self-contained-browserwindow-reconnectio
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: testing
+
+NOTE [2026-03-28]: Implemented self-contained BrowserWindow reconnect harness and verified the reconnect regression tests.
+
+* Initial Message
+
+My friend, please. There is a bug file in ~/code/ora/hotelcomm (org file) taht is about hot reload not working with the qml browser. Find it and tell me what the problem is
+
+* Problem
+
+The cycling bug was discovered during real Phoenix LiveView development but cannot be reproduced without running a full Phoenix app. A self-contained test harness is needed to:
+1. Reproduce the bug deterministically
+2. Verify the fix
+3. Serve as regression test infrastructure for future BrowserWindow bugs
+
+* Implementation
+
+** 1. Minimal WebSocket test server (Bun)
+
+File: =packages/coding-agent/test/browser-reconnect/server.ts=
+
+A minimal Bun HTTP + WebSocket server that:
+- Serves a single HTML page at =http://127.0.0.1:0= (random port)
+- The HTML page opens a WebSocket connection and shows connection status:
+  - Green "Connected" when WS is open
+  - Red "Disconnected" / "Reconnecting..." when WS closes
+  - Auto-reconnects with 200ms interval (mimics LiveView JS client behavior)
+- Exposes =GET /restart= endpoint that:
+  1. Closes all WebSocket connections
+  2. Shuts down the server
+  3. Restarts on the same port after 300ms delay
+- Exposes =GET /kill= endpoint for permanent shutdown
+- Returns the assigned port for test use
+
+Key: the auto-reconnecting HTML + server restart pattern reproduces the exact same rapid =LoadStarted → LoadStopped= cycling that Phoenix LiveView causes.
+
+** 2. Test file
+
+File: =packages/coding-agent/test/browser-reconnect/reconnect.test.ts=
+
+Uses the QML journey/bridge test infrastructure (check existing patterns in =packages/coding-agent/test/=):
+
+Test cases:
+1. =initial load succeeds= — server starts, browser loads page, reaches =interactive= state, page shows "Connected"
+2. =recovers after server restart= — load page, trigger =/restart=, wait up to 5s, verify page returns to =interactive= with "Connected" text visible
+3. =force_reload recovers stuck page= — load page, trigger =/restart= with longer delay (1s), send =browser:force_reload= command, verify recovery
+
+Each test:
+- Starts the Bun server
+- Launches a BrowserWindow via canvas tool (or direct bridge)
+- Uses =browser:sync= / =browser:get_text= to verify state
+- Cleans up server + browser window in afterEach
+
+** 3. Test HTML template
+
+The HTML served by the test server:
+
+#+begin_src html
+<!DOCTYPE html>
+<html>
+<body>
+  <div id="status">Connecting...</div>
+  <script>
+    let ws;
+    function connect() {
+      ws = new WebSocket("ws://" + location.host + "/ws");
+      ws.onopen = () => { document.getElementById("status").textContent = "Connected"; };
+      ws.onclose = () => {
+        document.getElementById("status").textContent = "Reconnecting...";
+        setTimeout(connect, 200);
+      };
+    }
+    connect();
+  </script>
+</body>
+</html>
+#+end_src
+
+This mimics LiveView's JS client reconnection behavior that causes the cycling bug.
+
+* Target Files
+
+- =packages/coding-agent/test/browser-reconnect/server.ts= — new
+- =packages/coding-agent/test/browser-reconnect/reconnect.test.ts= — new
+
+* Edge Cases
+
+- Port conflicts: use port 0 for OS-assigned port
+- Test timeout: set 15s timeout per test (server restart + recovery takes time)
+- CI environment: tests require Qt WebEngine to be installed; skip if not available (check for bridge binary)
+- Cleanup: ensure server.close() and browser window close in afterEach even on test failure
+
+* Acceptance Criteria
+
+- [ ] =bun test packages/coding-agent/test/browser-reconnect/reconnect.test.ts= passes
+- [ ] Test 2 verifies automatic recovery (no manual intervention)
+- [ ] Test 3 verifies =browser:force_reload= command recovery
+- [ ] Server cleanup is reliable (no port leaks between tests)
+- [ ] Tests skip gracefully if QML bridge binary is not built

@@ -1,6 +1,7 @@
 export const browserCommandActions = [
 	"browser:sync",
 	"browser:goto",
+	"browser:force_reload",
 	"browser:evaluate",
 	"browser:observe",
 	"browser:click",
@@ -142,6 +143,10 @@ export interface BrowserGotoCommand extends BrowserCommandBase {
 	url: string;
 }
 
+export interface BrowserForceReloadCommand extends BrowserCommandBase {
+	action: "browser:force_reload";
+}
+
 export interface BrowserEvaluateCommand extends BrowserCommandBase {
 	action: "browser:evaluate";
 	script: string;
@@ -240,6 +245,7 @@ export interface BrowserScreenshotCommand extends BrowserCommandBase {
 export type BrowserCommandPayload =
 	| BrowserSyncCommand
 	| BrowserGotoCommand
+	| BrowserForceReloadCommand
 	| BrowserEvaluateCommand
 	| BrowserObserveCommand
 	| BrowserClickCommand

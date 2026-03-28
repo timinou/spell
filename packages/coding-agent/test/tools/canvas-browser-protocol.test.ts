@@ -258,6 +258,10 @@ describe("classifyBrowserCommandIdempotency", () => {
 			expect(classifyBrowserCommandIdempotency("browser:goto")).toBe("mutating");
 		});
 
+		it("classifies browser:force_reload as mutating", () => {
+			expect(classifyBrowserCommandIdempotency("browser:force_reload")).toBe("mutating");
+		});
+
 		it("classifies browser:click as mutating", () => {
 			expect(classifyBrowserCommandIdempotency("browser:click")).toBe("mutating");
 		});
