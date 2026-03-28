@@ -8,6 +8,19 @@ export declare enum Reason {
     UNHANDLED_REJECTION = "unhandled_rejection",// Unhandled promise rejection
     MANUAL = "manual"
 }
+export interface CrashSessionContext {
+    session: {
+        id: string | null;
+        file: string | null;
+        cwd: string | null;
+    } | null;
+    model: {
+        provider: string | null;
+        id: string | null;
+        key: string | null;
+    } | null;
+}
+export declare function registerSessionContext(getter: () => CrashSessionContext | null | undefined): void;
 /**
  * Register a process cleanup callback, to be run on shutdown, signal, or fatal error.
  *

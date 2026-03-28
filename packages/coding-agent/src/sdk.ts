@@ -1547,6 +1547,24 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolSession,
 	});
 
+	postmortem.registerSessionContext(() => {
+		const activeModel = session.model ?? model;
+		return {
+			session: {
+				id: sessionManager.getSessionId(),
+				file: sessionManager.getSessionFile() ?? null,
+				cwd: sessionManager.getCwd(),
+			},
+			model: activeModel
+				? {
+						provider: activeModel.provider,
+						id: activeModel.id,
+						key: formatModelString(activeModel),
+					}
+				: null,
+		};
+	});
+
 	if (model?.api === "openai-codex-responses") {
 		try {
 			await logger.timeAsync("prewarmCodexWebsocket", prewarmOpenAICodexResponses, model, {
