@@ -23,6 +23,7 @@ import type { ToolSession } from "..";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import type { Theme } from "../modes/theme/theme";
+import { listPlanModeAllowedFolders } from "../plan-mode/allowed-folders";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
@@ -496,11 +497,15 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		}
 
 		const planModeState = this.session.getPlanModeState?.();
+		const planModeAllowedFolders = listPlanModeAllowedFolders(this.session.settings.get("planMode.allowedFolders"));
+		const renderedPlanModeSubagentPrompt = renderPromptTemplate(planModeSubagentPrompt, {
+			allowedFolders: planModeAllowedFolders.length > 0 ? planModeAllowedFolders : undefined,
+		});
 		const planModeTools = ["read", "grep", "find", "ls", "lsp", "fetch", "web_search"];
 		const effectiveAgent: typeof agent = planModeState?.enabled
 			? {
 					...agent,
-					systemPrompt: `${planModeSubagentPrompt}\n\n${agent.systemPrompt}`,
+					systemPrompt: `${renderedPlanModeSubagentPrompt}\n\n${agent.systemPrompt}`,
 					tools: planModeTools,
 					spawns: undefined,
 				}

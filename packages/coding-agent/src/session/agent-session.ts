@@ -97,6 +97,7 @@ import {
 } from "../mcp/discoverable-tool-metadata";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../patch";
+import { listPlanModeAllowedFolders } from "../plan-mode/allowed-folders";
 import { buildOrgConfig, resolvePlanItem } from "../plan-mode/org-plan";
 import type { PlanModeState } from "../plan-mode/state";
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
@@ -2088,6 +2089,7 @@ export class AgentSession {
 
 		const planExists = fs.existsSync(resolvedPlanPath);
 		const orgEnabled = (this.settings.get("org.enabled") as boolean | undefined) ?? false;
+		const allowedFolders = listPlanModeAllowedFolders(this.settings.get("planMode.allowedFolders"));
 		let planCategory = "plans";
 		let childCategories: Array<{ name: string; prefix: string; description: string }> = [];
 		if (orgEnabled) {
@@ -2146,6 +2148,7 @@ export class AgentSession {
 			orgEnabled,
 			planCategory,
 			childCategories,
+			allowedFolders: allowedFolders.length > 0 ? allowedFolders : undefined,
 			ultraplan: state.ultraplan ?? false,
 			designFlavor: state.flavor === "design",
 			designHistory,

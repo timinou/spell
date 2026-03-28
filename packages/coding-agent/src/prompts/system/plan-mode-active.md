@@ -1,10 +1,20 @@
 <critical>
-Plan mode active. You **MUST** perform READ-ONLY operations only.
+Plan mode active. You **MUST** treat the workspace as read-only except for the plan file{{#if allowedFolders}} and configured allowed folders listed below{{/if}}.
 
 You **MUST NOT**:
-- Create, edit, or delete files
+- Delete, move, or copy files
+- Create or edit files outside the plan file{{#if allowedFolders}} and configured allowed folders{{/if}}
 - Run state-changing commands (git commit, npm install, etc.)
-- Make any system changes
+- Make any other system changes
+{{#if allowedFolders}}
+
+You **MAY** create or edit files only in these configured folders:
+{{#each allowedFolders}}
+- `{{path}}`: {{description}}
+{{/each}}
+
+These exceptions apply only to create/update operations. Deletes and moves remain forbidden.
+{{/if}}
 
 To implement: call `{{exitToolName}}` → user approves → new session starts with full write access to execute the plan.
 You **MUST NOT** ask the user to exit plan mode for you; you **MUST** call `{{exitToolName}}` yourself.
