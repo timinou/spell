@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { type AssistantMessage, Effort } from "@oh-my-pi/pi-ai";
+import { type Api, type AssistantMessage, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { Settings } from "../../src/config/settings";
 import type { LoadExtensionsResult } from "../../src/extensibility/extensions/types";
 import * as sdkModule from "../../src/sdk";
@@ -41,6 +41,7 @@ function createMockSession(
 		emit: (event: AgentSessionEvent) => void;
 		state: { messages: AssistantMessage[] };
 	}) => void,
+	model?: Model<Api>,
 ): AgentSession {
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];
 	const state = { messages: [] as AssistantMessage[] };
@@ -53,7 +54,7 @@ function createMockSession(
 	const session = {
 		state,
 		agent: { state: { systemPrompt: "test" } },
-		model: undefined,
+		model,
 		extensionRunner: undefined,
 		sessionManager: {
 			appendSessionInit: () => {},
@@ -217,6 +218,46 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.output).toContain('"ok": true');
 	});
+	it("drops forced tool choice on the final reminder attempt", async () => {
+		const promptOptions: Array<PromptOptions | undefined> = [];
+		const session = createMockSession(
+			({ options, promptIndex, emit, state }) => {
+				promptOptions.push(options);
+				if (promptIndex < 4) {
+					const assistant = createAssistantStopMessage(`attempt ${promptIndex}`);
+					state.messages.push(assistant);
+					emit({ type: "message_end", message: assistant });
+					return;
+				}
+				emit({
+					type: "tool_execution_end",
+					toolCallId: "tool-final-retry",
+					toolName: "submit_result",
+					result: {
+						content: [{ type: "text", text: "Result submitted." }],
+						details: { status: "success", data: { ok: true } },
+					},
+					isError: false,
+				});
+			},
+			{ api: "openai-responses" } as Model<Api>,
+		);
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-final-retry" });
+		expect(promptOptions).toHaveLength(4);
+		expect(promptOptions[1]?.toolChoice).toEqual({ type: "function", name: "submit_result" });
+		expect(promptOptions[2]?.toolChoice).toEqual({ type: "function", name: "submit_result" });
+		expect(promptOptions[3]?.toolChoice).toBeUndefined();
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain('"ok": true');
+	});
+
 	it("uses provided thinking level when model override has no explicit suffix", async () => {
 		vi.clearAllMocks();
 		const session = createMockSession(({ emit }) => {
@@ -308,10 +349,25 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(createAgentSessionMock.mock.calls[0]?.[0]?.thinkingLevel).toBe(cases[0].expectedThinkingLevel);
 		expect(createAgentSessionMock.mock.calls[1]?.[0]?.thinkingLevel).toBe(cases[1].expectedThinkingLevel);
 	});
-	it("completes with a warning after 3 reminders when submit_result is never called", async () => {
+	it("completes with a warning after 3 reminders when submit_result is never called but work happened", async () => {
 		const prompts: string[] = [];
 		const session = createMockSession(({ text, promptIndex, emit, state }) => {
 			prompts.push(text);
+			if (promptIndex === 1) {
+				emit({
+					type: "tool_execution_start",
+					toolCallId: "tool-read-1",
+					toolName: "read",
+					args: { path: "/tmp/work-note.txt" },
+				});
+				emit({
+					type: "tool_execution_end",
+					toolCallId: "tool-read-1",
+					toolName: "read",
+					result: { content: [{ type: "text", text: "read complete" }] },
+					isError: false,
+				});
+			}
 			const assistant = createAssistantStopMessage(promptIndex === 1 ? "did work" : "still no submit_result");
 			state.messages.push(assistant);
 			emit({ type: "message_end", message: assistant });
@@ -331,10 +387,40 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(prompts).toHaveLength(4);
 		expect(result.exitCode).toBe(0);
 		expect(result.aborted).toBe(false);
-		expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+		expect(result.stderr).toBe("");
+		expect(result.error).toBeUndefined();
 		expect(result.abortReason).toBeUndefined();
 		expect(result.output).toContain(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
 		expect(result.output).toContain("did work");
+	});
+
+	it("fails after 3 reminders when submit_result is never called and no tools run", async () => {
+		const session = createMockSession(({ promptIndex, emit, state }) => {
+			const assistant = createAssistantStopMessage(
+				promptIndex === 1 ? "never used a tool" : "still no submit_result",
+			);
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-no-work-no-submit-result",
+			outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+		});
+		expect(result.exitCode).toBe(1);
+		expect(result.aborted).toBe(false);
+		expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+		expect(result.error).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+		expect(result.abortReason).toBeUndefined();
+		expect(result.output).toContain(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+		expect(result.output).toContain("never used a tool");
 	});
 
 	it("surfaces abort reason when submit_result reports aborted status", async () => {

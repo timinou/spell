@@ -5,6 +5,7 @@ export * from "./emacs/detection";
 export * from "./id-generator";
 export * from "./id-links";
 export * from "./journal";
+export * from "./mutex";
 export * from "./org-parse";
 export * from "./org-reader";
 export * from "./org-writer";

@@ -84,6 +84,14 @@ describe("scanMaxSequence", () => {
 		const result = await scanMaxSequence(tmpDir, "FEAT");
 		expect(result).toBe(12);
 	});
+	test("counts file-level #+CUSTOM_ID entries", async () => {
+		await Bun.write(
+			path.join(tmpDir, "file-level.org"),
+			"#+TITLE: File task\n#+STATE: ITEM\n#+CUSTOM_ID: PROJ-009-file-task\n",
+		);
+		const result = await scanMaxSequence(tmpDir, "PROJ");
+		expect(result).toBe(9);
+	});
 });
 
 // ---------------------------------------------------------------------------

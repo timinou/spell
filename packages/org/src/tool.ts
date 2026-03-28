@@ -18,6 +18,7 @@ import type { OrgClient } from "./emacs/client";
 import { createOrgClient } from "./emacs/client";
 import type { EmacsSession } from "./emacs/daemon";
 import { generateId } from "./id-generator";
+import { KeyedMutex } from "./mutex";
 import { applyFilter, findItemById, readCategory } from "./org-reader";
 import { appendItemToFile, applyItemMutations, initCategoryDir, setPropertyInFile } from "./org-writer";
 import { buildOrgQlSexp, parseKeywordQuery, requiresEmacs } from "./query-builder";
@@ -32,6 +33,8 @@ import type {
 	OrgSessionContext,
 	ValidationIssue,
 } from "./types";
+
+const createCategoryMutex = new KeyedMutex<string>();
 
 // =============================================================================
 // Context passed into every command handler
@@ -137,25 +140,28 @@ async function cmdCreate(
 	// Ensure directory exists
 	await fs.mkdir(cat.absPath, { recursive: true });
 
-	// Generate ID
-	const id = await generateId(cat.absPath, cat.prefix, args.title);
+	const { id, filePath } = await createCategoryMutex.withLock(cat.absPath, async () => {
+		const id = await generateId(cat.absPath, cat.prefix, args.title);
 
-	// Determine target file
-	const fileName = args.file ? (args.file.endsWith(".org") ? args.file : `${args.file}.org`) : `${id}.org`;
-	const filePath = path.join(cat.absPath, fileName);
+		// Determine target file
+		const fileName = args.file ? (args.file.endsWith(".org") ? args.file : `${args.file}.org`) : `${id}.org`;
+		const filePath = path.join(cat.absPath, fileName);
 
-	const params: OrgCreateParams & { id: string } = {
-		title: args.title,
-		category: catName,
-		state,
-		id,
-		properties: args.properties,
-		body: args.body,
-		file: args.file,
-	};
+		const params: OrgCreateParams & { id: string } = {
+			title: args.title,
+			category: catName,
+			state,
+			id,
+			properties: args.properties,
+			body: args.body,
+			file: args.file,
+		};
 
-	const sessionCtx = cat.writeInitialPrompt ? ctx.getSessionContext?.() : undefined;
-	await appendItemToFile(filePath, params, state, sessionCtx);
+		const sessionCtx = cat.writeInitialPrompt ? ctx.getSessionContext?.() : undefined;
+		await appendItemToFile(filePath, params, state, sessionCtx);
+
+		return { id, filePath };
+	});
 
 	logger.debug("org:create", { id, filePath, category: cat.name });
 

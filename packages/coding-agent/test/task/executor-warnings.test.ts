@@ -118,7 +118,7 @@ describe("subagent warning injection", () => {
 		expect(result.rawOutput.includes("SYSTEM WARNING")).toBe(false);
 	});
 
-	it("does not inject missing-submit warning when no schema and raw text exists", () => {
+	it("prefixes missing-submit warning when no schema and raw text exists", () => {
 		const result = finalizeSubprocessOutput({
 			rawOutput: "plain text notes",
 			exitCode: 0,
@@ -129,8 +129,8 @@ describe("subagent warning injection", () => {
 			outputSchema: undefined,
 		});
 
-		expect(result.rawOutput).toBe("plain text notes");
-		expect(result.rawOutput.includes("SYSTEM WARNING")).toBe(false);
+		expect(result.rawOutput).toBe(`${SUBAGENT_WARNING_MISSING_SUBMIT_RESULT}\n\nplain text notes`);
+		expect(result.rawOutput.includes("SYSTEM WARNING")).toBe(true);
 		expect(result.exitCode).toBe(0);
 	});
 });

@@ -53,8 +53,9 @@ export async function scanMaxSequence(categoryAbsPath: string, prefix: string): 
 	}
 
 	const orgFiles = entries.filter(e => e.endsWith(".org"));
-	// Regex matches :CUSTOM_ID: PREFIX-NNN or PREFIX-NNN-slug anywhere in the file
-	const idRe = new RegExp(`:CUSTOM_ID:\\s+${prefix}-(\\d+)`, "g");
+	// Regex matches file-level #+CUSTOM_ID and heading-level :CUSTOM_ID
+	// entries such as PREFIX-NNN or PREFIX-NNN-slug anywhere in the file.
+	const idRe = new RegExp(`(?:#\\+CUSTOM_ID:|:CUSTOM_ID:)\\s+${prefix}-(\\d+)`, "g");
 
 	await Promise.all(
 		orgFiles.map(async file => {

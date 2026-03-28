@@ -264,6 +264,10 @@ export const SUBAGENT_WARNING_NULL_SUBMIT_RESULT = "SYSTEM WARNING: Subagent cal
 export const SUBAGENT_WARNING_MISSING_SUBMIT_RESULT =
 	"SYSTEM WARNING: Subagent exited without calling submit_result tool after 3 reminders.";
 
+function prependSubagentWarning(rawOutput: string, warning: string): string {
+	return rawOutput ? `${warning}\n\n${rawOutput}` : warning;
+}
+
 export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): FinalizeSubprocessOutputResult {
 	let { rawOutput, exitCode, stderr } = args;
 	const { submitResultItems, reportFindings, doneAborted, signalAborted, outputSchema } = args;
@@ -284,9 +288,7 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		} else {
 			const submitData = lastSubmitResult?.data;
 			if (submitData === null || submitData === undefined) {
-				rawOutput = rawOutput
-					? `${SUBAGENT_WARNING_NULL_SUBMIT_RESULT}\n\n${rawOutput}`
-					: SUBAGENT_WARNING_NULL_SUBMIT_RESULT;
+				rawOutput = prependSubagentWarning(rawOutput, SUBAGENT_WARNING_NULL_SUBMIT_RESULT);
 			} else {
 				const completeData = normalizeCompleteData(submitData, reportFindings);
 				try {
@@ -301,8 +303,6 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		}
 	} else {
 		const allowFallback = exitCode === 0 && !doneAborted && !signalAborted;
-		const { normalized: normalizedSchema, error: schemaError } = normalizeOutputSchema(outputSchema);
-		const hasOutputSchema = normalizedSchema !== undefined && !schemaError;
 		const fallback = allowFallback ? resolveFallbackCompletion(rawOutput, outputSchema) : null;
 		if (fallback) {
 			const completeData = normalizeCompleteData(fallback.data, reportFindings);
@@ -314,13 +314,10 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 			}
 			exitCode = 0;
 			stderr = "";
-		} else if (!hasOutputSchema && allowFallback && rawOutput.trim().length > 0) {
+		} else if (allowFallback) {
+			rawOutput = prependSubagentWarning(rawOutput, SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
 			exitCode = 0;
 			stderr = "";
-		} else if (exitCode === 0) {
-			rawOutput = rawOutput
-				? `${SUBAGENT_WARNING_MISSING_SUBMIT_RESULT}\n\n${rawOutput}`
-				: SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
 		}
 	}
 
@@ -1100,14 +1097,20 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			while (!submitResultCalled && retryCount < MAX_SUBMIT_RESULT_RETRIES && !abortSignal.aborted) {
 				try {
 					retryCount++;
+					const isLastRetry = retryCount === MAX_SUBMIT_RESULT_RETRIES;
 					const reminder = renderPromptTemplate(submitReminderTemplate, {
 						retryCount,
 						maxRetries: MAX_SUBMIT_RESULT_RETRIES,
+						isLastRetry,
 					});
 
+					// Give models that reject forced tool choice one last plain-text recovery attempt.
+					const shouldForceSubmitResultToolChoice = !isLastRetry;
 					await session.prompt(reminder, {
 						attribution: "agent",
-						...(reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
+						...(shouldForceSubmitResultToolChoice && reminderToolChoice
+							? { toolChoice: reminderToolChoice }
+							: {}),
 					});
 					await session.waitForIdle();
 				} catch (err) {
@@ -1236,13 +1239,25 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 
 	// Update final progress
+	const missingSubmitResultWarning = !hasSubmitResult && rawOutput.startsWith(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+	const missingSubmitResultFailed = missingSubmitResultWarning && progress.toolCount === 0;
+	if (missingSubmitResultFailed) {
+		exitCode = 1;
+		stderr = SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
+	}
 	const wasAborted = abortedViaSubmitResult || (!hasSubmitResult && (done.aborted || signal?.aborted || false));
 	const finalAbortReason = wasAborted
 		? abortedViaSubmitResult
 			? submitResultAbortReason
 			: (done.abortReason ?? (signal?.aborted ? resolveSignalAbortReason() : "Subagent aborted task"))
 		: undefined;
-	progress.status = wasAborted ? "aborted" : exitCode === 0 ? "completed" : "failed";
+	progress.status = wasAborted
+		? "aborted"
+		: missingSubmitResultFailed
+			? "failed"
+			: exitCode === 0
+				? "completed"
+				: "failed";
 	scheduleProgress(true);
 
 	return {

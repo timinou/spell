@@ -17,8 +17,11 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { atomicWrite } from "./atomic-write";
+import { KeyedMutex } from "./mutex";
 import { DEFAULT_TODO_KEYWORDS } from "./schema/defaults";
 import type { ItemMutation, MemoryEntry, OrgCreateParams, OrgSessionContext } from "./types";
+
+const filePathMutex = new KeyedMutex<string>();
 
 // =============================================================================
 // Serialization helpers
@@ -125,7 +128,8 @@ export async function appendItemToFile(
 	state: string,
 	session?: OrgSessionContext,
 ): Promise<string> {
-	const props: Record<string, string> = {
+	return filePathMutex.withLock(filePath, async () => {
+		const props: Record<string, string> = {
 		CUSTOM_ID: params.id,
 		...params.properties,
 	};
@@ -145,6 +149,7 @@ export async function appendItemToFile(
 	const separator = existing.endsWith("\n") ? "" : "\n";
 	await atomicWrite(filePath, existing + separator + heading);
 	return filePath;
+	});
 }
 
 /**
@@ -162,7 +167,8 @@ export async function applyItemMutations(
 	mutations: ItemMutation,
 	todoKeywords: string[],
 ): Promise<string[] | null> {
-	let content: string;
+	return filePathMutex.withLock(filePath, async () => {
+		let content: string;
 	try {
 		content = await Bun.file(filePath).text();
 	} catch {
@@ -230,6 +236,7 @@ export async function applyItemMutations(
 
 	await atomicWrite(filePath, lines.join("\n"));
 	return applied;
+	});
 }
 
 // =============================================================================
@@ -476,7 +483,8 @@ export async function setPropertyInFile(
 	property: string,
 	value: string,
 ): Promise<boolean> {
-	let content: string;
+	return filePathMutex.withLock(filePath, async () => {
+		let content: string;
 	try {
 		content = await Bun.file(filePath).text();
 	} catch {
@@ -494,6 +502,7 @@ export async function setPropertyInFile(
 
 	await atomicWrite(filePath, lines.join("\n"));
 	return true;
+	});
 }
 
 function setFileLevelProperty(lines: string[], ctx: FileLevelContext, property: string, value: string): boolean {
