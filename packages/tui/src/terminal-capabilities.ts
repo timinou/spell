@@ -185,11 +185,23 @@ type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;
 };
 
+const KITTY_DELETE_ALL_IMAGES = "\x1b_Ga=d;\x1b\\";
+
 /**
  * Override terminal image protocol at runtime after capability probes complete.
  */
 export function setTerminalImageProtocol(imageProtocol: ImageProtocol | null): void {
 	(TERMINAL as unknown as MutableTerminalInfo).imageProtocol = imageProtocol;
+}
+
+/**
+ * Clear visible image placements from the terminal before rendering text-only overlays.
+ * Kitty placements float above text, so they must be explicitly deleted.
+ */
+export function clearImagePlacements(): void {
+	if (!process.stdout.isTTY) return;
+	if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return;
+	process.stdout.write(KITTY_DELETE_ALL_IMAGES);
 }
 
 export function getTerminalInfo(terminalId: TerminalId): TerminalInfo {

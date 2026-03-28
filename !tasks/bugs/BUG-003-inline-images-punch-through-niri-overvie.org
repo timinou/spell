@@ -1,0 +1,70 @@
+#+TITLE: Inline images punch through niri overview overlay
+#+STATE: DONE
+#+SESSION_ID: 14a4d90980661620
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T20-42-12-353Z_14a4d90980661620.jsonl]]
+#+CUSTOM_ID: BUG-003-inline-images-punch-through-niri-overvie
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: tui
+
+NOTE [2026-03-28]: Implemented Kitty placement clearing and Niri overview image suppression/restoration with regression coverage in packages/tui/src/terminal-capabilities.ts, packages/niri/src/controller.ts, and packages/niri/test/controller.test.ts.
+
+* Initial Message
+
+[Image #1] can you please make sure images are not overlapping niri overview modes?
+
+* Problem
+
+When niri's overview mode is opened, the NiriOverviewController shows a full-screen OverviewComponent overlay. However, the TUI overlay compositing explicitly skips lines containing terminal image protocol sequences:
+
+- =tui.ts#compositeLineAt=: ~if (TERMINAL.isImageLine(baseLine)) return baseLine~ — image lines pass through unchanged
+- =tui.ts#applyLineResets=: image lines are excluded from reset application
+
+This means Kitty graphics protocol images (used by Ghostty) "punch through" the overview overlay, appearing on top of it. The user sees raw images overlapping the overview UI.
+
+* Root Cause
+
+Kitty graphics protocol images are rendered as virtual placements on top of terminal text. The TUI overlay compositor correctly avoids corrupting image escape sequences by skipping those lines, but this means no overlay can paint over image content.
+
+* Fix
+
+Two-part fix — clear existing placements and suppress new ones while the overview is open:
+
+** 1. Add =clearImagePlacements()= to =packages/tui/src/terminal-capabilities.ts=
+
+Sends the appropriate delete escape sequence based on the active image protocol:
+- Kitty: =\\x1b_Ga=d;\\x1b\\\\= (delete all image data and placements)
+- iTerm2/Sixel: no-op (these are inline in text flow and get overwritten by re-render)
+
+** 2. Extend =NiriOverviewContext.ui= interface in =packages/niri/src/controller.ts=
+
+Add to the =ui= interface:
+- =invalidate(): void= — to invalidate all component caches
+- Make =requestRender= accept an optional force boolean
+
+** 3. Modify =NiriOverviewController= in =packages/niri/src/controller.ts=
+
+Add private field =#savedImageProtocol: ImageProtocol | null = null=
+
+In =#showOverview()=, before showing the overlay:
+1. Save current =TERMINAL.imageProtocol= to =#savedImageProtocol=
+2. Call =clearImagePlacements()= to remove visible image placements from terminal
+3. Call =setTerminalImageProtocol(null)= to suppress future image rendering
+4. Call =ui.invalidate()= then =ui.requestRender(true)= to force full re-render without images
+5. Show the overlay (now no image lines exist to interfere)
+
+In =#hideOverview()=, after hiding the overlay:
+1. Restore image protocol via =setTerminalImageProtocol(savedProtocol)=
+2. Call =ui.invalidate()= then =ui.requestRender(true)= to re-render with images restored
+
+* Files to Modify
+
+- =packages/tui/src/terminal-capabilities.ts= — add =clearImagePlacements()= function
+- =packages/niri/src/controller.ts= — extend context ui interface, add image suppression logic
+
+* Acceptance Criteria
+
+1. When niri overview opens, no inline images are visible — only the overview overlay content
+2. When niri overview closes, images are restored correctly in their original positions
+3. =bun check:ts= passes
+4. No visual artifacts when toggling overview rapidly

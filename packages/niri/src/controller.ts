@@ -1,7 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { OverlayHandle } from "@oh-my-pi/pi-tui";
+import type { ImageProtocol, OverlayHandle } from "@oh-my-pi/pi-tui";
+import { clearImagePlacements, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import { withLargerFont } from "./font-scaling";
 import { NiriEventStream } from "./ipc";
@@ -34,7 +35,8 @@ export interface NiriOverviewContext {
 	/** TUI instance — used to show/hide the overlay. */
 	ui: {
 		showOverlay(component: OverviewComponent, options?: object): OverlayHandle;
-		requestRender(): void;
+		invalidate(): void;
+		requestRender(force?: boolean): void;
 	};
 	/** Current agent session — used to read streaming/error state. */
 	session: {
@@ -93,6 +95,7 @@ export class NiriOverviewController {
 	#overlayHandle: OverlayHandle | null = null;
 	#restoreFont: (() => void) | null = null;
 	#unsubscribeSession: (() => void) | null = null;
+	#savedImageProtocol: ImageProtocol | null = null;
 	#destroyed = false;
 	#niriWindowId: number | null = null;
 	#lastWrittenStatus: string | null = null;
@@ -122,10 +125,7 @@ export class NiriOverviewController {
 		this.#destroyed = true;
 		this.#stream.destroy();
 		this.#unsubscribeSession?.();
-		this.#overlayHandle?.hide();
-		this.#overlayHandle = null;
-		this.#restoreFont?.();
-		this.#restoreFont = null;
+		this.#hideOverview();
 		if (this.#niriWindowId !== null) {
 			const filePath = path.join(this.#statusDir, `${this.#niriWindowId}.json`);
 			fs.rm(filePath, { force: true }).catch(() => {});
@@ -187,6 +187,7 @@ export class NiriOverviewController {
 
 		logger.debug("NiriOverviewController: overview opened");
 		this.#component.update(this.#buildSnapshot());
+		this.#suppressImagesForOverview();
 		this.#overlayHandle = this.#context.ui.showOverlay(this.#component, OVERLAY_OPTIONS);
 
 		// Best-effort font scaling — fire and forget
@@ -210,7 +211,28 @@ export class NiriOverviewController {
 
 		this.#restoreFont?.();
 		this.#restoreFont = null;
+		this.#restoreImagesAfterOverview();
 		this.#context.onOverviewChanged?.(false);
+	}
+
+	#suppressImagesForOverview(): void {
+		this.#savedImageProtocol = TERMINAL.imageProtocol;
+		if (!this.#savedImageProtocol) return;
+
+		clearImagePlacements();
+		setTerminalImageProtocol(null);
+		this.#context.ui.invalidate();
+		this.#context.ui.requestRender(true);
+	}
+
+	#restoreImagesAfterOverview(): void {
+		const imageProtocol = this.#savedImageProtocol;
+		this.#savedImageProtocol = null;
+		if (!imageProtocol) return;
+
+		setTerminalImageProtocol(imageProtocol);
+		this.#context.ui.invalidate();
+		this.#context.ui.requestRender(true);
 	}
 
 	#buildSnapshot() {

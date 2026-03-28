@@ -1,0 +1,62 @@
+#+TITLE: Fix images overlapping niri overview
+#+STATE: DONE
+#+SESSION_ID: 14a4d90980661620
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T20-42-12-353Z_14a4d90980661620.jsonl]]
+#+CUSTOM_ID: PLAN-007-fix-images-overlapping-niri-overview
+
+
+NOTE [2026-03-28]: Verification completed with focused checks plus live Ghostty+niri overview testing. User waived persisted screenshot artifacts.
+
+* Initial Message
+
+[Image #1] can you please make sure images are not overlapping niri overview modes?
+
+* Context
+
+When niri overview mode is opened, the coding-agent's TUI shows an OverviewComponent as a full-screen overlay. However, inline images rendered via Kitty graphics protocol (used by Ghostty) punch through the overlay. This happens because the TUI's overlay compositing logic (~tui.ts#compositeLineAt~) explicitly skips lines containing image protocol escape sequences to avoid corrupting them.
+
+The fix has two parts:
+1. Add a ~clearImagePlacements()~ utility in the TUI package that sends the Kitty graphics delete command
+2. Modify the NiriOverviewController to suppress images when the overview opens and restore them when it closes
+
+** Approach
+
+When overview opens:
+- Save current image protocol
+- Send Kitty delete command to clear existing visual placements
+- Set image protocol to null (suppresses future image rendering)
+- Force full TUI re-render (produces clean lines without image sequences)
+- Show overlay (now compositing works on all lines)
+
+When overview closes:
+- Hide overlay
+- Restore saved image protocol
+- Force full TUI re-render (images get re-sent via Kitty protocol)
+
+** Key Files
+- ~packages/tui/src/terminal-capabilities.ts~ — already exports ~setTerminalImageProtocol~, ~TERMINAL~, ~ImageProtocol~
+- ~packages/niri/src/controller.ts~ — ~NiriOverviewController~ with ~#showOverview()~ and ~#hideOverview()~
+- ~packages/tui/src/tui.ts~ — ~requestRender(force)~ and ~invalidate()~ exist, context interface needs extension
+
+* Verification
+
+1. =bun check:ts= passes (focused: =bunx tsgo -p packages/tui/tsconfig.json= and =bunx tsgo -p packages/niri/tsconfig.json=)
+2. Manual test: run spell in Ghostty inside niri, trigger image display (e.g. generate_image or read an image file), open niri overview — images should not be visible, only the overview overlay
+3. Close overview — images should be restored
+
+* Execution Manifest
+
+1. [[id:BUG-003-inline-images-punch-through-niri-overvie]] (depends: none, effort: 30m) — Add clearImagePlacements to TUI, extend NiriOverviewContext.ui, add image suppression in controller
+
+
+** Completion [2026-03-28]
+*** Verification
+- `bunx biome check packages/tui/src/terminal-capabilities.ts packages/niri/src/controller.ts packages/niri/test/controller.test.ts` -> passed.
+- `bunx tsgo -p packages/tui/tsconfig.json` -> passed.
+- `bunx tsgo -p packages/niri/tsconfig.json` -> passed.
+- `bun --cwd=packages/niri test test/controller.test.ts` -> passed (`36 pass`, `0 fail`).
+- Manual Ghostty + niri verification: launched `spell @/home/user/code/ora/spell/assets/hero.png "Describe this image."`, opened Niri overview, confirmed overview overlay did not show inline image punch-through, then closed overview and confirmed image rendering returned.
+*** Artifacts
+- None. User explicitly waived saved screenshot artifacts in follow-up.
+*** Deviations
+- Saved visual artifacts were not retained because the user instructed: `that part is fine, I'll report back if you didn't fix. no need for an artifact`.

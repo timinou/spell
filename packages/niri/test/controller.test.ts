@@ -14,7 +14,8 @@
  * The NiriEventStream is mocked so tests run without a real socket.
  */
 
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import type { NiriOverviewContext } from "../src/controller";
 import { NiriOverviewController } from "../src/controller";
 import type { OverviewComponent } from "../src/overview-component";
@@ -67,6 +68,30 @@ mock.module("../src/niri-query.ts", () => ({
 	queryNiriFocusedWindowId: () => Promise.resolve(fakeWindowId),
 }));
 
+type MutableTerminalInfo = {
+	imageProtocol: ImageProtocol | null;
+};
+
+const terminalInfo = TERMINAL as unknown as MutableTerminalInfo;
+const originalProtocol = TERMINAL.imageProtocol;
+const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const originalStdoutWrite = process.stdout.write;
+
+function restoreStdoutIsTty(): void {
+	if (stdoutIsTtyDescriptor) {
+		Object.defineProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
+		return;
+	}
+	delete (process.stdout as unknown as { isTTY?: boolean }).isTTY;
+}
+
+afterEach(() => {
+	setTerminalImageProtocol(originalProtocol);
+	terminalInfo.imageProtocol = originalProtocol;
+	process.stdout.write = originalStdoutWrite;
+	restoreStdoutIsTty();
+});
+
 // ─── Factory helpers ──────────────────────────────────────────────────────────
 
 interface FakeOverlayHandle {
@@ -94,21 +119,17 @@ function makeCtx(
 		todoPhases: NiriOverviewContext["todoPhases"];
 		sessionName: string;
 	}> = {},
-): {
-	ctx: NiriOverviewContext;
-	showOverlayMock: ReturnType<typeof mock>;
-	renderMock: ReturnType<typeof mock>;
-	overlayHandle: FakeOverlayHandle;
-	sessionListeners: Array<() => void>;
-} {
+) {
 	const handle = makeHandle();
 	const showOverlayMock = mock((_comp: OverviewComponent) => handle);
-	const renderMock = mock(() => {});
+	const renderMock = mock((_force?: boolean) => {});
+	const invalidateMock = mock(() => {});
 	const sessionListeners: Array<() => void> = [];
 
 	const ctx: NiriOverviewContext = {
 		ui: {
 			showOverlay: showOverlayMock as unknown as NiriOverviewContext["ui"]["showOverlay"],
+			invalidate: invalidateMock,
 			requestRender: renderMock,
 		},
 		session: {
@@ -145,7 +166,7 @@ function makeCtx(
 		},
 	};
 
-	return { ctx, showOverlayMock, renderMock, overlayHandle: handle, sessionListeners };
+	return { ctx, showOverlayMock, renderMock, invalidateMock, overlayHandle: handle, sessionListeners };
 }
 
 function fireNiriEvent(event: object): void {
@@ -174,6 +195,69 @@ describe("NiriOverviewController", () => {
 		fireNiriEvent({ OverviewOpenedOrClosed: { is_open: false } });
 
 		expect(overlayHandle.hide).toHaveBeenCalledTimes(1);
+		ctrl.destroy();
+	});
+
+	it("suppresses inline images while overview is open and restores them after close", () => {
+		const { ctx, renderMock, invalidateMock } = makeCtx();
+		const writes: string[] = [];
+		setTerminalImageProtocol(ImageProtocol.Kitty);
+		terminalInfo.imageProtocol = ImageProtocol.Kitty;
+		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+		process.stdout.write = ((chunk: string | Uint8Array) => {
+			writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+			return true;
+		}) as typeof process.stdout.write;
+		const ctrl = new NiriOverviewController("/fake.sock", ctx);
+
+		fireNiriEvent({ OverviewOpenedOrClosed: { is_open: true } });
+
+		expect(writes).toContain("\x1b_Ga=d;\x1b\\");
+		expect(TERMINAL.imageProtocol).toBeNull();
+		expect(invalidateMock).toHaveBeenCalledTimes(1);
+		expect(renderMock).toHaveBeenNthCalledWith(1, true);
+
+		fireNiriEvent({ OverviewOpenedOrClosed: { is_open: false } });
+		expect(TERMINAL.imageProtocol).toBe(ImageProtocol.Kitty);
+		expect(invalidateMock).toHaveBeenCalledTimes(2);
+		expect(renderMock).toHaveBeenNthCalledWith(2, true);
+		ctrl.destroy();
+	});
+
+	it("restores suppressed images when destroyed with overview open", () => {
+		const { ctx, renderMock, invalidateMock } = makeCtx();
+		setTerminalImageProtocol(ImageProtocol.Kitty);
+		terminalInfo.imageProtocol = ImageProtocol.Kitty;
+		const ctrl = new NiriOverviewController("/fake.sock", ctx);
+
+		fireNiriEvent({ OverviewOpenedOrClosed: { is_open: true } });
+		expect(TERMINAL.imageProtocol).toBeNull();
+
+		ctrl.destroy();
+
+		expect(TERMINAL.imageProtocol).toBe(ImageProtocol.Kitty);
+		expect(invalidateMock).toHaveBeenCalledTimes(2);
+		expect(renderMock).toHaveBeenNthCalledWith(1, true);
+		expect(renderMock).toHaveBeenNthCalledWith(2, true);
+	});
+
+	it("repeatedly toggles overview without leaving images suppressed", () => {
+		const { ctx, renderMock, invalidateMock } = makeCtx();
+		setTerminalImageProtocol(ImageProtocol.Kitty);
+		terminalInfo.imageProtocol = ImageProtocol.Kitty;
+		const ctrl = new NiriOverviewController("/fake.sock", ctx);
+
+		fireNiriEvent({ OverviewOpenedOrClosed: { is_open: true } });
+		fireNiriEvent({ OverviewOpenedOrClosed: { is_open: false } });
+		fireNiriEvent({ OverviewOpenedOrClosed: { is_open: true } });
+		fireNiriEvent({ OverviewOpenedOrClosed: { is_open: false } });
+
+		expect(TERMINAL.imageProtocol).toBe(ImageProtocol.Kitty);
+		expect(invalidateMock).toHaveBeenCalledTimes(4);
+		expect(renderMock).toHaveBeenNthCalledWith(1, true);
+		expect(renderMock).toHaveBeenNthCalledWith(2, true);
+		expect(renderMock).toHaveBeenNthCalledWith(3, true);
+		expect(renderMock).toHaveBeenNthCalledWith(4, true);
 		ctrl.destroy();
 	});
 
