@@ -910,6 +910,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!options?.silent) {
 			this.showStatus(paused ? "Plan mode paused." : "Plan mode disabled.");
 		}
+		this.#niriListener?.();
 	}
 
 	async #readPlanFile(planFilePath: string): Promise<string | null> {

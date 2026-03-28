@@ -1,13 +1,14 @@
 import type { WindowInfo } from "@oh-my-pi/pi-qml";
+import { classifyBrowserPayload } from "./canvas-browser-protocol";
 
 export type EventClassification = "silent" | "loud";
 
 /**
  * Classify an event as silent (noise) or loud (agent-visible).
  *
- * Silent: url_changed, harmless stderr (fontconfig, CSP frame-ancestors,
- * dev-mode warnings), or any event with payload.silent === true.
- * Loud: close, JS errors in stderr, user interactions, unknown types.
+ * Silent: url_changed, browser state/url updates, harmless stderr (fontconfig,
+ * CSP frame-ancestors, dev-mode warnings), or any event with payload.silent === true.
+ * Loud: close, browser command results/failures, JS errors in stderr, user interactions, unknown types.
  */
 export function classifyEvent(event: WindowInfo["events"][number]): EventClassification {
 	const name = event.name ?? "";
@@ -22,6 +23,9 @@ export function classifyEvent(event: WindowInfo["events"][number]): EventClassif
 	// Navigation noise.
 	if (name === "url_changed") return "silent";
 
+	const browserClassification = classifyBrowserPayload(payload);
+	if (browserClassification) return browserClassification;
+
 	// Stderr events: JS errors stay loud; harmless system messages are silent.
 	if (name === "stderr") {
 		const text = String(payload.text ?? payload.message ?? payload.data ?? "");
@@ -30,7 +34,11 @@ export function classifyEvent(event: WindowInfo["events"][number]): EventClassif
 			return "loud";
 		}
 		// Known harmless patterns.
-		if (/fontconfig|frame-ancestors|Content Security Policy|dev mode|Lit is in/i.test(text)) {
+		if (
+			/fontconfig|frame-ancestors|Content Security Policy|dev mode|Lit is in|Please use WebEngineProfilePrototype|Sandboxing disabled by user/i.test(
+				text,
+			)
+		) {
 			return "silent";
 		}
 		// Unknown stderr — surface it.

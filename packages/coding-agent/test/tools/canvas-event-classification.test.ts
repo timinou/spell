@@ -61,6 +61,23 @@ describe("classifyEvent", () => {
 			);
 		});
 
+		it("classifies WebEngineProfile deprecation stderr as silent", () => {
+			expect(
+				classifyEvent(
+					mkEvent({
+						name: "stderr",
+						payload: { text: "QML WebEngineProfile: Please use WebEngineProfilePrototype" },
+					}),
+				),
+			).toBe("silent");
+		});
+
+		it("classifies sandbox-disabled stderr as silent", () => {
+			expect(classifyEvent(mkEvent({ name: "stderr", payload: { text: "Sandboxing disabled by user." } }))).toBe(
+				"silent",
+			);
+		});
+
 		it("classifies stderr with CSP frame-ancestors as silent", () => {
 			expect(
 				classifyEvent(
