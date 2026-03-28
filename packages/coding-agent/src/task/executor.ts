@@ -1119,8 +1119,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			await session.waitForIdle();
 			if (!submitResultCalled && !abortSignal.aborted) {
-				aborted = true;
-				exitCode = 1;
 				abortReasonText ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
 				error ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
 			}
