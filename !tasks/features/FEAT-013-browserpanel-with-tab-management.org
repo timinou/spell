@@ -1,0 +1,65 @@
+#+TITLE: BrowserPanel with tab management
+#+STATE: DONE
+#+SESSION_ID: 14a39c20621f577b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T21-37-36-136Z_14a39c20621f577b.jsonl]]
+#+CUSTOM_ID: FEAT-013-browserpanel-with-tab-management
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: qml+ts
+
+* Initial Message
+
+explain what you did and what it enables
+
+* Scope
+In-scope:
+- Create ~packages/coding-agent/src/modes/qml/panels/BrowserPanel.qml~: multi-tab browser panel with QML-native TabBar, each tab is a SpellBrowser instance managed via ListModel
+- Tab lifecycle commands: ~tab:open~, ~tab:close~, ~tab:list~, ~tab:switch~ routed through send_message
+- Add optional ~tabId~ field to ~BrowserCommandPayload~ in ~packages/coding-agent/src/tools/canvas-browser-protocol.ts~ (defaults to active tab)
+- Add tab command types to ~canvas-browser-protocol.ts~
+- Shared WebEngineProfile (via WebEngineProfilePrototype) across all browser tabs for cookie consistency
+- BrowseShell.qml integration: browser tabs appear in the top TabBar, clicking switches content to the browser
+- ~browse-mode.ts~ extended to handle tab:* commands from QML and route browser:* commands with tabId
+
+Out-of-scope:
+- Chat delegate overhaul (FEAT-3)
+- Finding cards (FEAT-4)
+- Tab persistence across sessions (FEAT-6)
+
+Depends on: [[id:FEAT-012-browseshell-skeleton-and-cli-wiring]] (requires BrowseShell.qml and browse-mode.ts)
+
+* Implementation
+1. ~packages/coding-agent/src/tools/canvas-browser-protocol.ts~: Add ~tabId?: string~ to ~BrowserCommandBase~. Add tab command types: ~TabOpenCommand~, ~TabCloseCommand~, ~TabListCommand~, ~TabSwitchCommand~. Add ~TabResultEvent~ type. Add ~tabCommandActions~ const array.
+2. ~packages/coding-agent/src/modes/qml/panels/BrowserPanel.qml~:
+   - ~ListModel { id: tabsModel }~ stores ~{ tabId, url, title, active }~
+   - StackLayout with Repeater of SpellBrowser instances
+   - Shared WebEngineProfilePrototype for persistent cookies
+   - ~handleMessage(payload)~ routes: tab:* to tab management, browser:* to SpellBrowser matching payload.tabId (or active tab)
+   - Each SpellBrowser's ~onProtocolEvent~ prepends its tabId to the payload before forwarding to bridge
+3. ~packages/coding-agent/src/modes/qml/BrowseShell.qml~: Modify to add dynamic browser tab entries to the top TabBar when ~tab:open~ events arrive. Clicking a browser tab switches the StackLayout to show BrowserPanel focused on that tab.
+4. ~packages/coding-agent/src/modes/browse-mode.ts~: Add tab:* command dispatch. Route browser:* with tabId to the correct tab via send_message.
+
+* Tests
+- File: ~packages/coding-agent/test/tools/canvas-browser-protocol.test.ts~ (extend)
+- Scenario: New tab command types validate correctly with isBrowserCommandAction
+- Scenario: tabId field accepted on existing commands
+- File: ~packages/coding-agent/test/integration/browse-tab-management.test.ts~
+- Scenario: Launch BrowseShell, send tab:open, verify tab appears in TabBar
+- Scenario: Send tab:close, verify tab removed
+- Scenario: Send browser:goto with tabId, verify correct tab navigates
+
+* Edge Cases
+- tab:close on the last remaining tab: no-op or create a blank tab
+- browser:* command with invalid tabId: return error result with code 'invalid_tab'
+- tab:open with no URL: opens about:blank
+- Many tabs (>10): TabBar should scroll horizontally
+- Two browser:goto commands to the same tab in quick succession: serial queue handles this
+
+* Acceptance Criteria
+- Agent can programmatically open/close browser tabs
+- Agent can target specific tabs with browser:* commands using tabId
+- Tab bar shows open browser tabs alongside Chat tab
+- Clicking a browser tab shows the live browser view
+- Clicking Chat tab returns to chat view
+- All existing browser protocol tests pass
+- New tab management tests pass

@@ -6,6 +6,8 @@ import {
 	classifyBrowserPayload,
 	isBrowserCommandAction,
 	isBrowserEventAction,
+	tabCommandActions,
+	tabEventActions,
 } from "../../src/tools/canvas-browser-protocol";
 import { classifyEvent } from "../../src/tools/canvas-event-utils";
 
@@ -18,6 +20,12 @@ function mkEvent(overrides: Partial<CanvasEvent> = {}): CanvasEvent {
 describe("isBrowserCommandAction", () => {
 	it("accepts all known browser command actions", () => {
 		browserCommandActions.forEach(action => {
+			expect(isBrowserCommandAction(action)).toBe(true);
+		});
+	});
+
+	it("accepts tab commands through the shared command guard", () => {
+		tabCommandActions.forEach(action => {
 			expect(isBrowserCommandAction(action)).toBe(true);
 		});
 	});
@@ -43,6 +51,12 @@ describe("isBrowserCommandAction", () => {
 describe("isBrowserEventAction", () => {
 	it("accepts all known browser event actions", () => {
 		browserEventActions.forEach(action => {
+			expect(isBrowserEventAction(action)).toBe(true);
+		});
+	});
+
+	it("accepts tab events through the shared event guard", () => {
+		tabEventActions.forEach(action => {
 			expect(isBrowserEventAction(action)).toBe(true);
 		});
 	});
@@ -251,6 +265,10 @@ describe("classifyBrowserCommandIdempotency", () => {
 		it("classifies browser:screenshot as idempotent", () => {
 			expect(classifyBrowserCommandIdempotency("browser:screenshot")).toBe("idempotent");
 		});
+
+		it("classifies tab:list as idempotent", () => {
+			expect(classifyBrowserCommandIdempotency("tab:list")).toBe("idempotent");
+		});
 	});
 
 	describe("mutating commands", () => {
@@ -288,6 +306,18 @@ describe("classifyBrowserCommandIdempotency", () => {
 
 		it("classifies browser:evaluate as mutating", () => {
 			expect(classifyBrowserCommandIdempotency("browser:evaluate")).toBe("mutating");
+		});
+
+		it("classifies tab:open as mutating", () => {
+			expect(classifyBrowserCommandIdempotency("tab:open")).toBe("mutating");
+		});
+
+		it("classifies tab:close as mutating", () => {
+			expect(classifyBrowserCommandIdempotency("tab:close")).toBe("mutating");
+		});
+
+		it("classifies tab:switch as mutating", () => {
+			expect(classifyBrowserCommandIdempotency("tab:switch")).toBe("mutating");
 		});
 	});
 });
@@ -399,6 +429,25 @@ describe("classifyEvent with browser payloads", () => {
 							lineNumber: 200,
 							sourceId: "error.js",
 							silent: false,
+						},
+					}),
+				),
+			).toBe("loud");
+		});
+
+		it("classifies tab:result as loud", () => {
+			expect(
+				classifyEvent(
+					mkEvent({
+						name: "custom-event",
+						payload: {
+							action: "tab:result",
+							_rid: "tab-1",
+							command: "tab:open",
+							ok: true,
+							result: { activeTabId: "research-1" },
+							error: null,
+							activeTabId: "research-1",
 						},
 					}),
 				),

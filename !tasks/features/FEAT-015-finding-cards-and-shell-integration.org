@@ -1,0 +1,61 @@
+#+TITLE: Finding cards and shell integration
+#+STATE: DONE
+#+SESSION_ID: 14a39c20621f577b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T21-37-36-136Z_14a39c20621f577b.jsonl]]
+#+CUSTOM_ID: FEAT-015-finding-cards-and-shell-integration
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: qml+ts
+
+* Initial Message
+
+explain what you did and what it enables
+
+* Scope
+In-scope:
+- Wire BrowseChatPanel into BrowseShell.qml (replaces initial ChatPanel usage)
+- Wire BrowserPanel into BrowseShell.qml as tab content for browser tabs
+- Define finding data schema in ~packages/coding-agent/src/modes/browse-findings.ts~: ~{ id, url, title, excerpt, tags, tabId, timestamp }~
+- Add 'finding' message type to BrowseEventMapper in ~packages/coding-agent/src/modes/browse-event-mapper.ts~
+- Create ~packages/coding-agent/src/modes/qml/panels/delegates/FindingCard.qml~: inline chat delegate with URL, title, excerpt, tags, 'View in tab' action
+- Cross-component 'view in tab' signal: FindingCard -> BrowseChatPanel -> bridge -> browse-mode.ts -> send tab:switch to BrowseShell
+- Register FindingCard in FlowMessageDelegate routing for role='finding'
+
+Out-of-scope:
+- Findings accumulator panel (FEAT-5)
+- Tab persistence (FEAT-6)
+
+Depends on: [[id:FEAT-013-browserpanel-with-tab-management]] (requires BrowserPanel.qml and tab protocol), [[id:FEAT-014-browsechatpanel-and-flow-delegates]] (requires BrowseChatPanel.qml and FlowMessageDelegate.qml)
+
+* Implementation
+1. ~packages/coding-agent/src/modes/browse-findings.ts~: Define ~BrowseFinding~ interface. Export ~createFinding()~ factory with auto-generated ID.
+2. ~packages/coding-agent/src/modes/browse-event-mapper.ts~: Implement ~emitFinding(finding)~ that sends ~{ type: 'finding', ...finding }~ to QML bridge.
+3. ~packages/coding-agent/src/modes/browse-mode.ts~: When agent emits custom message with ~customType: 'finding'~, call ~emitFinding()~. Handle 'view_in_tab' events from QML by sending tab:switch.
+4. ~packages/coding-agent/src/modes/qml/panels/delegates/FindingCard.qml~: Styled card with:
+   - Top: favicon placeholder + URL domain in textTertiary, monoFontFamily
+   - Title: textPrimary, fontSizeM, fontWeightMedium
+   - Excerpt: textSecondary, fontSizeS, max 3 lines with ellipsis
+   - Tags: Row of small pill labels (surface1 background, textTertiary text)
+   - 'View in tab' button emits ~{ type: 'view_in_tab', tabId }~ via bridge
+   - Card background: surface0, borderSubtle bottom border, no rounded corners
+5. ~FlowMessageDelegate.qml~: Add ~finding~ role routing to FindingCard
+6. ~BrowseShell.qml~: Wire BrowseChatPanel as Chat tab content. Wire BrowserPanel for browser tabs. Handle 'view_in_tab' by switching to target browser tab.
+
+* Tests
+- File: ~packages/coding-agent/test/integration/browse-finding-cards.test.ts~
+- Scenario: Send finding message to BrowseChatPanel, verify FindingCard renders with title and excerpt
+- Scenario: Multiple findings render as sequential cards
+- Scenario: FindingCard 'view in tab' emits correct bridge event
+
+* Edge Cases
+- Finding with no tabId: 'View in tab' button hidden
+- Finding with very long excerpt: truncated to 3 lines with ellipsis
+- Finding with empty tags: tag row hidden
+- 'View in tab' for a closed tab: open new tab to that URL
+
+* Acceptance Criteria
+- Agent can emit findings that appear as styled cards in chat
+- Finding cards show URL domain, title, excerpt, and tags
+- 'View in tab' switches to the associated browser tab
+- BrowseShell correctly switches between Chat and browser tab views
+- BrowseChatPanel replaces ChatPanel in the browse shell

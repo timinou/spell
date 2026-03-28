@@ -1,0 +1,44 @@
+#+TITLE: Tab persistence and resume
+#+STATE: DONE
+#+SESSION_ID: 14a39c20621f577b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T21-37-36-136Z_14a39c20621f577b.jsonl]]
+#+CUSTOM_ID: FEAT-017-tab-persistence-and-resume
+#+EFFORT: 1h30m
+#+PRIORITY: #B
+#+LAYER: ts+qml
+
+* Initial Message
+
+explain what you did and what it enables
+
+* Scope
+In-scope:
+- Save open browser tab state (URLs, titles, active tab) when session ends or tabs change
+- Restore tabs on ~--resume~ via BrowseShell launch props
+- Storage: QML Settings with browse-mode-specific category
+
+Out-of-scope:
+- Cookie/auth state restoration (WebEngineProfile handles this independently)
+- Saving scroll positions within tabs
+- Saving findings (they are in the session transcript)
+
+Depends on: [[id:FEAT-013-browserpanel-with-tab-management]] (requires tab lifecycle and BrowserPanel)
+
+* Implementation
+1. ~packages/coding-agent/src/modes/qml/BrowseShell.qml~: Add Settings block with category 'SpellBrowse'. Save ~tabsJson~ property (JSON string of ~[{url, title}]~) whenever tabs change. On Component.onCompleted, if bridge.props.restoreTabs is set, parse and open those tabs.
+2. ~packages/coding-agent/src/modes/browse-mode.ts~: On session end, read tab state from QML via sync command. On resume, pass saved tab state as ~restoreTabs~ in launch props.
+
+* Tests
+- File: ~packages/coding-agent/test/integration/browse-tab-persistence.test.ts~
+- Scenario: Open tabs, close session, verify Settings contain tab URLs
+- Scenario: Launch with restoreTabs prop, verify tabs are recreated
+
+* Edge Cases
+- Resume with URLs that no longer load: tabs open but show error state
+- Resume with empty tab list: just Chat tab shown
+- Settings file corrupted: fall back to no tabs
+
+* Acceptance Criteria
+- Closing a browse session saves open tab URLs
+- Resuming a browse session restores previously open tabs
+- Tabs that fail to load show appropriate error state

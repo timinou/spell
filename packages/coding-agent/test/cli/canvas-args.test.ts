@@ -17,6 +17,11 @@ describe("parseArgs --canvas", () => {
 		expect(result.canvas).toBe("fluid");
 	});
 
+	test("parses --canvas browse", () => {
+		const result = parseArgs(["--canvas", "browse"]);
+		expect(result.canvas).toBe("browse");
+	});
+
 	test("uses fluid when next arg is another flag", () => {
 		const result = parseArgs(["--canvas", "--print"]);
 		expect(result.canvas).toBe("fluid");

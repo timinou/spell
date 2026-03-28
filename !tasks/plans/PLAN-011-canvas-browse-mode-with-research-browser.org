@@ -1,0 +1,105 @@
+#+TITLE: Canvas browse mode with research browser
+#+STATE: DONE
+#+SESSION_ID: 14a39c20621f577b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T21-37-36-136Z_14a39c20621f577b.jsonl]]
+#+CUSTOM_ID: PLAN-011-canvas-browse-mode-with-research-browser
+#+EFFORT: 22h30m
+#+PRIORITY: #A
+
+
+* Initial Message
+
+explain what you did and what it enables
+
+* Context
+
+** Problem
+The agent has a reusable browser component (SpellBrowser.qml) and standalone BrowserWindow.qml in the QML stdlib, but no integrated browser experience where the user can watch the agent work in real time. The existing ~--canvas chat~ mode has no browser integration, and the ChatPanel's visual quality is below expectations (basic bubbles, poor reactivity, no structured content types).
+
+** Approach
+Create a new ~spell --canvas browse~ mode that launches a dedicated browser-first shell with:
+- Tab bar across the top: Chat tab (default view) + dynamic browser tabs the agent opens
+- Below the tab bar: active content fills the space (chat or live browser view)
+- Linear/Notion-inspired ultra-minimal chat design with flowing text, no bubbles
+- Research-specific 'finding' cards inline in chat with URL, title, excerpt, 'view in tab' action
+- Collapsible findings accumulator panel for all research results
+- Tab persistence across sessions via ~--resume~
+
+** Key Design Decisions
+- New top-level ~BrowseShell.qml~ (like FluidShell.qml), NOT a panel inside shell.qml — the layout is incompatible with shell.qml's panel-switcher model
+- New ~BrowseChatPanel.qml~ with new Flow delegates — existing ChatPanel.qml and delegates are untouched to preserve ~--canvas chat~ stability
+- ~BrowseEventMapper~ extends ~SessionEventMapper~ with finding/tab event hooks
+- Tab lifecycle commands (~tab:open/close/list/switch~) added to the browser protocol alongside ~browser:*~ commands
+- Optional ~tabId~ field on all ~browser:*~ commands (defaults to active tab)
+- Shared WebEngineProfile across all browser tabs for cookie consistency
+- Findings created via hybrid approach: agent sends 'finding' custom message with structured data
+- Cross-component 'view in tab': finding card -> bridge event -> browse-mode.ts -> tab:switch command
+
+** Showcase Use Case
+Research assistant: user says "research X", agent opens browser tabs, navigates sites, extracts content, surfaces findings as styled cards in chat, user can click any tab to watch the agent work or click a finding to jump to its source tab.
+
+** Critical File Paths
+- ~packages/coding-agent/src/cli/args.ts~ (modify: add 'browse')
+- ~packages/coding-agent/src/main.ts~ (modify: add browse dispatch)
+- ~packages/coding-agent/src/modes/browse-mode.ts~ (new)
+- ~packages/coding-agent/src/modes/browse-event-mapper.ts~ (new)
+- ~packages/coding-agent/src/modes/browse-findings.ts~ (new)
+- ~packages/coding-agent/src/modes/qml/BrowseShell.qml~ (new)
+- ~packages/coding-agent/src/modes/qml/panels/BrowseChatPanel.qml~ (new)
+- ~packages/coding-agent/src/modes/qml/panels/BrowserPanel.qml~ (new)
+- ~packages/coding-agent/src/modes/qml/panels/FindingsPanel.qml~ (new)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/FlowAssistant.qml~ (new)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/FlowUser.qml~ (new)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/FlowTool.qml~ (new)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/ThinkingBlock.qml~ (new)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/FlowImage.qml~ (new)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/FindingCard.qml~ (new)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/FlowMessageDelegate.qml~ (new)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/FlowInputBar.qml~ (new)
+- ~packages/coding-agent/src/tools/canvas-browser-protocol.ts~ (modify: add tabId, tab commands)
+- ~packages/coding-agent/test/helpers/browse-journey.ts~ (new)
+
+* Verification
+- ~spell --canvas browse~ launches a QML window with Chat tab and status bar
+- ~spell --canvas browse "research quantum computing"~ triggers agent research flow with browser tabs
+- ~spell --canvas chat~ and ~spell --canvas fluid~ continue to work unchanged
+- ~bun run check~ passes for packages/coding-agent
+- ~qmllint~ passes on all new QML files
+- ~bun test test/integration/browse-*.test.ts~ passes
+- ~bun test test/tools/canvas-browser-protocol.test.ts~ passes
+- Tab persistence: close session, resume, verify tabs restored
+
+* Execution Manifest
+
+** Phase 1 (sequential, no dependencies)
+1. [[id:FEAT-012-browseshell-skeleton-and-cli-wiring]] — BrowseShell skeleton + CLI wiring (effort: 3h, depends: none)
+
+** Phase 2 (parallel, needs Phase 1)
+1. [[id:FEAT-013-browserpanel-with-tab-management]] — BrowserPanel with tab management (effort: 4h, depends: FEAT-012)
+2. [[id:FEAT-014-browsechatpanel-and-flow-delegates]] — BrowseChatPanel + Flow delegates (effort: 5h, depends: FEAT-012)
+
+** Phase 3 (sequential, needs Phase 2)
+1. [[id:FEAT-015-finding-cards-and-shell-integration]] — Finding cards + shell integration (effort: 4h, depends: FEAT-013, FEAT-014)
+
+** Phase 4 (parallel, needs Phase 3)
+1. [[id:FEAT-016-findings-accumulator-panel]] — Findings accumulator panel (effort: 2h, depends: FEAT-015)
+2. [[id:FEAT-017-tab-persistence-and-resume]] — Tab persistence + resume (effort: 1h30m, depends: FEAT-013)
+
+** Phase 5 (needs all above)
+1. [[id:FEAT-018-browsejourney-test-helper-and-integratio]] — BrowseJourney tests (effort: 3h, depends: FEAT-012 through FEAT-016)
+
+
+** Completion [2026-03-28]
+*** Verification
+- `cd packages/coding-agent && bun run check && bun test test/integration/browse-*.test.ts test/modes/browse-event-mapper.test.ts test/tools/canvas-browser-protocol.test.ts test/cli/canvas-args.test.ts test/cli/canvas-messages.test.ts test/integration/shell-chat-input.test.ts test/integration/fluid-shell-lifecycle.test.ts`
+  - Passed. `tsgo -p tsconfig.json` completed successfully and Bun reported `84 pass`, `0 fail`, `146 expect() calls` across 14 files.
+- `cd packages/coding-agent && qmllint src/modes/qml/BrowseShell.qml src/modes/qml/panels/BrowserPanel.qml src/modes/qml/panels/BrowseChatPanel.qml src/modes/qml/panels/FindingsPanel.qml src/modes/qml/panels/BrowseChatPanelTestHarness.qml src/modes/qml/panels/delegates/FlowAssistant.qml src/modes/qml/panels/delegates/FlowUser.qml src/modes/qml/panels/delegates/FlowTool.qml src/modes/qml/panels/delegates/ThinkingBlock.qml src/modes/qml/panels/delegates/FlowImage.qml src/modes/qml/panels/delegates/FindingCard.qml src/modes/qml/panels/delegates/FlowMessageDelegate.qml src/modes/qml/panels/delegates/FlowInputBar.qml`
+  - Passed with no diagnostics.
+- Manual UI verification via BrowseJourney screenshots confirmed:
+  - browse shell chat tab renders the new flow chat, finding card, and findings drawer together.
+  - browser tab activation renders the live browser surface in the browse shell.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-011-canvas-browse-mode-with-research-browser/browse-chat-findings-drawer.png]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-011-canvas-browse-mode-with-research-browser/browse-browser-tab-active.png]]
+*** Deviations
+- None.

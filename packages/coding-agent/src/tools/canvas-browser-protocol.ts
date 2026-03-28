@@ -1,4 +1,4 @@
-export const browserCommandActions = [
+export const pageBrowserCommandActions = [
 	"browser:sync",
 	"browser:goto",
 	"browser:force_reload",
@@ -18,9 +18,15 @@ export const browserCommandActions = [
 	"browser:screenshot",
 ] as const;
 
-export type BrowserCommandAction = (typeof browserCommandActions)[number];
+export const tabCommandActions = ["tab:open", "tab:close", "tab:list", "tab:switch"] as const;
 
-export const browserEventActions = [
+export const browserCommandActions = [...pageBrowserCommandActions, ...tabCommandActions] as const;
+
+export type PageBrowserCommandAction = (typeof pageBrowserCommandActions)[number];
+export type TabCommandAction = (typeof tabCommandActions)[number];
+export type BrowserCommandAction = PageBrowserCommandAction | TabCommandAction;
+
+export const pageBrowserEventActions = [
 	"browser:result",
 	"browser:state",
 	"browser:url_changed",
@@ -29,7 +35,13 @@ export const browserEventActions = [
 	"browser:console",
 ] as const;
 
-export type BrowserEventAction = (typeof browserEventActions)[number];
+export const tabEventActions = ["tab:result"] as const;
+
+export const browserEventActions = [...pageBrowserEventActions, ...tabEventActions] as const;
+
+export type PageBrowserEventAction = (typeof pageBrowserEventActions)[number];
+export type TabEventAction = (typeof tabEventActions)[number];
+export type BrowserEventAction = PageBrowserEventAction | TabEventAction;
 export type BrowserAction = BrowserCommandAction | BrowserEventAction;
 
 export type BrowserLifecycleState = "idle" | "loading" | "interactive" | "error";
@@ -40,6 +52,7 @@ export type BrowserCommandIdempotency = "idempotent" | "mutating";
 export type BrowserErrorCode =
 	| "invalid_action"
 	| "invalid_payload"
+	| "invalid_tab"
 	| "navigation_blocked"
 	| "navigation_failed"
 	| "script_error"
@@ -120,6 +133,14 @@ export interface BrowserStateSnapshot {
 	canGoBack: boolean;
 	canGoForward: boolean;
 	loading: boolean;
+	tabId?: string;
+}
+
+export interface BrowserTabSummary {
+	tabId: string;
+	url: string;
+	title: string;
+	state: BrowserLifecycleState;
 }
 
 export interface BrowserCommandBase {
@@ -127,6 +148,7 @@ export interface BrowserCommandBase {
 	_rid?: string;
 	timeout?: number;
 	timeout_ms?: number;
+	tabId?: string;
 }
 
 export interface BrowserQueryRequest {
@@ -242,6 +264,26 @@ export interface BrowserScreenshotCommand extends BrowserCommandBase {
 	full_page?: boolean;
 }
 
+export interface TabOpenCommand extends BrowserCommandBase {
+	action: "tab:open";
+	title?: string;
+	url?: string;
+}
+
+export interface TabCloseCommand extends BrowserCommandBase {
+	action: "tab:close";
+	tabId: string;
+}
+
+export interface TabListCommand extends BrowserCommandBase {
+	action: "tab:list";
+}
+
+export interface TabSwitchCommand extends BrowserCommandBase {
+	action: "tab:switch";
+	tabId: string;
+}
+
 export type BrowserCommandPayload =
 	| BrowserSyncCommand
 	| BrowserGotoCommand
@@ -259,18 +301,23 @@ export type BrowserCommandPayload =
 	| BrowserGetHtmlCommand
 	| BrowserGetAttributeCommand
 	| BrowserExtractReadableCommand
-	| BrowserScreenshotCommand;
+	| BrowserScreenshotCommand
+	| TabOpenCommand
+	| TabCloseCommand
+	| TabListCommand
+	| TabSwitchCommand;
 
 export interface BrowserResultEvent {
 	action: "browser:result";
 	_rid: string;
-	command: BrowserCommandAction;
+	command: PageBrowserCommandAction;
 	ok: boolean;
 	result: unknown;
 	error: BrowserError | null;
 	url: string;
 	title: string;
 	state: BrowserLifecycleState;
+	tabId?: string;
 }
 
 export interface BrowserStateEvent extends BrowserStateSnapshot {
@@ -283,6 +330,7 @@ export interface BrowserUrlChangedEvent {
 	url: string;
 	title: string;
 	silent: true;
+	tabId?: string;
 }
 
 export interface BrowserNavigationBlockedEvent {
@@ -291,6 +339,7 @@ export interface BrowserNavigationBlockedEvent {
 	reason: string;
 	detail: unknown;
 	silent: false;
+	tabId?: string;
 }
 
 export interface BrowserNavigationFailedEvent {
@@ -299,6 +348,7 @@ export interface BrowserNavigationFailedEvent {
 	error: string;
 	errorCode?: number;
 	silent: false;
+	tabId?: string;
 }
 
 export interface BrowserConsoleEvent {
@@ -308,6 +358,17 @@ export interface BrowserConsoleEvent {
 	lineNumber: number;
 	sourceId: string;
 	silent: boolean;
+	tabId?: string;
+}
+
+export interface TabResultEvent {
+	action: "tab:result";
+	_rid: string;
+	command: TabCommandAction;
+	ok: boolean;
+	result: unknown;
+	error: BrowserError | null;
+	activeTabId: string;
 }
 
 export type BrowserEventPayload =
@@ -316,7 +377,8 @@ export type BrowserEventPayload =
 	| BrowserUrlChangedEvent
 	| BrowserNavigationBlockedEvent
 	| BrowserNavigationFailedEvent
-	| BrowserConsoleEvent;
+	| BrowserConsoleEvent
+	| TabResultEvent;
 
 export type BrowserPayload = BrowserCommandPayload | BrowserEventPayload;
 
@@ -363,6 +425,7 @@ export function classifyBrowserCommandIdempotency(action: BrowserCommandAction):
 		case "browser:get_attribute":
 		case "browser:extract_readable":
 		case "browser:screenshot":
+		case "tab:list":
 			return "idempotent";
 		default:
 			return "mutating";

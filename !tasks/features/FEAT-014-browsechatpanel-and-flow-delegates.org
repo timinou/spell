@@ -1,0 +1,68 @@
+#+TITLE: BrowseChatPanel and Flow delegates
+#+STATE: DONE
+#+SESSION_ID: 14a39c20621f577b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T21-37-36-136Z_14a39c20621f577b.jsonl]]
+#+CUSTOM_ID: FEAT-014-browsechatpanel-and-flow-delegates
+#+EFFORT: 5h
+#+PRIORITY: #A
+#+LAYER: qml
+
+* Initial Message
+
+explain what you did and what it enables
+
+* Scope
+In-scope:
+- Create ~packages/coding-agent/src/modes/qml/panels/BrowseChatPanel.qml~: Linear/Notion-inspired ultra-minimal chat panel
+- Create new delegate components in ~packages/coding-agent/src/modes/qml/panels/delegates/~:
+  - ~FlowAssistant.qml~: no bubble, flowing text with subtle top separator, MarkdownContent, streaming cursor
+  - ~FlowUser.qml~: minimal user message, subtle styling, no bubble
+  - ~FlowTool.qml~: compact tool execution indicator, collapsible output, monochrome icon + name + status
+  - ~ThinkingBlock.qml~: collapsible thinking content, muted italic, click to expand/collapse with smooth animation
+  - ~FlowImage.qml~: inline image preview with aspect-ratio preservation, click to expand
+- New ~FlowMessageDelegate.qml~ that routes messages to Flow delegates based on role
+- Smooth streaming: text appends without scroll jank, auto-follow when at bottom
+- Proper scroll management: sticky-to-bottom during streaming, free scroll when user scrolls up
+- New ~FlowInputBar.qml~: minimal input, subtle border, send button
+
+Out-of-scope:
+- Finding cards (FEAT-4, separate delegate)
+- Integration with BrowseShell (FEAT-4 wires this in)
+- Existing ChatPanel.qml delegates (untouched)
+
+Depends on: [[id:FEAT-012-browseshell-skeleton-and-cli-wiring]] (requires BrowseShell.qml to exist; delegates are built independently, wiring happens in FEAT-4)
+
+* Implementation
+1. Design system: all delegates use SpellTheme tokens. No borders on messages. Subtle 1px ~borderSubtle~ separator between messages. Role indicated by alignment/styling. Tool executions compact with monochrome status dot.
+2. ~FlowAssistant.qml~: Item with MarkdownContent child. Top separator (thin Rectangle, borderSubtle). Streaming text updates reactively. No background rectangle. Font: fontFamily at fontSizeM.
+3. ~FlowUser.qml~: Item with Text child. Subtle visual distinction (e.g. left-padding or muted prefix). No bubble, no background.
+4. ~FlowTool.qml~: Row with status dot (8px: primary while running, success on done, error on fail) + tool name (monoFontFamily, fontSizeS, textTertiary) + collapsible details. Collapsed by default.
+5. ~ThinkingBlock.qml~: Collapsible Item. Header: italic 'Thinking...' in textTertiary. Body: muted text. Animated height transition (durationNormal). Collapsed once response starts.
+6. ~FlowImage.qml~: Image with fillMode PreserveAspectFit, max height 400px. cornerRadiusSmall. Click expands.
+7. ~FlowMessageDelegate.qml~: Loader picking component based on ~role~ property (user/assistant/tool/thinking/image).
+8. ~BrowseChatPanel.qml~: ColumnLayout with ScrollView + ListView bound to messagesModel. FlowInputBar at bottom. handleMessage() dispatcher matching ChatPanel handler pattern but using FlowMessageDelegate. Auto-scroll: track if near bottom, follow if so.
+9. ~FlowInputBar.qml~: TextField, borderDefault 1px, no heavy background. Send icon button. Abort button when streaming.
+
+* Tests
+- File: ~packages/coding-agent/test/integration/browse-chat-delegates.test.ts~
+- Scenario: Launch BrowseChatPanel in QmlTestHarness, send message_start + message_update + message_end, verify FlowAssistant renders
+- Scenario: Send user_message, verify FlowUser renders
+- Scenario: Send tool_start + tool_end, verify FlowTool renders with status
+- Scenario: Send message with thinking content, verify ThinkingBlock renders and is collapsible
+
+* Edge Cases
+- Very long messages: text wraps, no horizontal overflow
+- Rapid streaming updates: MarkdownContent handles frequent delta appends
+- Empty messages: no empty delegate rendered
+- Multiple thinking blocks in one response: each gets its own ThinkingBlock
+- Image URLs that fail to load: show fallback placeholder
+
+* Acceptance Criteria
+- BrowseChatPanel renders messages with no bubbles, flowing text, subtle separators
+- Tool executions show as compact status dots with collapsible output
+- Thinking blocks collapse/expand with smooth animation
+- Image previews render inline with aspect ratio preserved
+- Streaming text appends smoothly without scroll jank
+- Auto-scroll follows new content when user is at bottom
+- User can scroll up freely without being snapped back
+- Visual style matches Linear/Notion minimal aesthetic

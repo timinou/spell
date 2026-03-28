@@ -1,0 +1,53 @@
+#+TITLE: Findings accumulator panel
+#+STATE: DONE
+#+SESSION_ID: 14a39c20621f577b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T21-37-36-136Z_14a39c20621f577b.jsonl]]
+#+CUSTOM_ID: FEAT-016-findings-accumulator-panel
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: qml
+
+* Initial Message
+
+explain what you did and what it enables
+
+* Scope
+In-scope:
+- Create ~packages/coding-agent/src/modes/qml/panels/FindingsPanel.qml~: collapsible panel accumulating all research findings
+- ListModel with sort/filter capabilities
+- Toggle button in BrowseShell status bar to show/hide findings
+- Sort by: time (default), domain, tags
+- Filter by: tag selection
+
+Out-of-scope:
+- Finding creation logic (FEAT-4)
+- Export/save findings to file
+
+Depends on: [[id:FEAT-015-finding-cards-and-shell-integration]] (requires finding data schema and emission)
+
+* Implementation
+1. ~packages/coding-agent/src/modes/qml/panels/FindingsPanel.qml~:
+   - ListModel bound to accumulated findings
+   - handleMessage() accepts 'finding' type and appends to model
+   - Header with sort dropdown (Time | Domain | Tags) and filter tag chips
+   - ListView with compact finding cards (URL + title + tags, no excerpt)
+   - Click a finding to expand excerpt inline
+   - Minimal styling: surface0 background, borderSubtle separator
+2. ~packages/coding-agent/src/modes/qml/BrowseShell.qml~: Add findings panel as collapsible bottom drawer. Toggle via status bar button. Animate open/close with durationMedium.
+
+* Tests
+- File: ~packages/coding-agent/test/integration/browse-findings-panel.test.ts~
+- Scenario: Send multiple findings, verify panel accumulates them
+- Scenario: Sort by domain groups findings by URL domain
+- Scenario: Toggle panel visibility
+
+* Edge Cases
+- Many findings (>50): ListView handles virtualization
+- No findings yet: show empty state message
+- Filter with no matches: show 'No findings match' message
+
+* Acceptance Criteria
+- Findings panel shows all accumulated findings
+- Sorting by time/domain/tags works
+- Panel can be toggled open/closed
+- Panel does not interfere with chat or browser tab interaction

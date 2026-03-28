@@ -1,0 +1,56 @@
+#+TITLE: BrowseJourney test helper and integration tests
+#+STATE: DONE
+#+SESSION_ID: 14a39c20621f577b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T21-37-36-136Z_14a39c20621f577b.jsonl]]
+#+CUSTOM_ID: FEAT-018-browsejourney-test-helper-and-integratio
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: ts
+
+* Initial Message
+
+explain what you did and what it enables
+
+* Scope
+In-scope:
+- Create ~packages/coding-agent/test/helpers/browse-journey.ts~: test helper targeting BrowseShell.qml with methods for tab management, chat interaction, finding verification
+- Shell layout tests
+- Browser tab management tests
+- Finding card rendering tests
+- Cross-component interaction tests (finding -> view in tab)
+
+Out-of-scope:
+- Browser command protocol tests (already covered in existing browser-*.test.ts)
+- ChatPanel delegate unit tests (covered in FEAT-3 tests)
+
+Depends on: [[id:FEAT-012-browseshell-skeleton-and-cli-wiring]], [[id:FEAT-013-browserpanel-with-tab-management]], [[id:FEAT-014-browsechatpanel-and-flow-delegates]], [[id:FEAT-015-finding-cards-and-shell-integration]], [[id:FEAT-016-findings-accumulator-panel]]
+
+* Implementation
+1. ~packages/coding-agent/test/helpers/browse-journey.ts~: Extends QmlJourney pattern. Methods:
+   - ~BrowseJourney.launch()~: launches BrowseShell.qml with bridge
+   - ~openTab(url)~: sends tab:open command, waits for tab to appear
+   - ~closeTab(tabId)~: sends tab:close
+   - ~switchToChat()~: clicks Chat tab
+   - ~switchToTab(tabId)~: clicks browser tab
+   - ~sendFinding(finding)~: sends finding message to chat
+   - ~expectTabCount(n)~: asserts number of open browser tabs
+   - ~expectFindingCard(title)~: asserts finding card visible in chat
+   - Inherits settle(), evaluate(), teardown() from QmlJourney
+2. Test files:
+   - ~packages/coding-agent/test/integration/browse-shell-layout.test.ts~: verify shell renders, Chat tab exists, status bar shows
+   - ~packages/coding-agent/test/integration/browse-tab-lifecycle.test.ts~: open/close/switch tabs
+   - ~packages/coding-agent/test/integration/browse-finding-flow.test.ts~: send finding, verify card, click 'view in tab'
+
+* Tests
+This item IS the tests. Each test file listed above has specific scenarios.
+
+* Edge Cases
+- BrowseShell with WebEngine unavailable: tests skip gracefully via isBridgeAvailable()
+- Rapid tab open/close: verify no race conditions in tab model
+- Finding card with 'view in tab' for non-existent tab: verify graceful handling
+
+* Acceptance Criteria
+- BrowseJourney helper provides semantic methods for browse-mode testing
+- All integration tests pass with ~bun test test/integration/browse-*.test.ts~
+- Tests skip gracefully when bridge is unavailable
+- Cross-component flow (finding -> view in tab) is covered

@@ -1,0 +1,58 @@
+#+TITLE: BrowseShell skeleton and CLI wiring
+#+STATE: DONE
+#+SESSION_ID: 14a39c20621f577b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T21-37-36-136Z_14a39c20621f577b.jsonl]]
+#+CUSTOM_ID: FEAT-012-browseshell-skeleton-and-cli-wiring
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: qml+ts
+
+* Initial Message
+
+explain what you did and what it enables
+
+* Scope
+In-scope:
+- Add ~browse~ to ~--canvas~ CLI flag options in ~packages/coding-agent/src/cli/args.ts~
+- Add ~runBrowseMode()~ dispatch in ~packages/coding-agent/src/main.ts~ (lines 740-752 area)
+- Create ~packages/coding-agent/src/modes/browse-mode.ts~ cloning ~qml-mode.ts~ pattern: bridge launch, event subscription, QML event dispatch (prompt/abort/steer/restart), dashboard updater
+- Create ~BrowseEventMapper~ in ~packages/coding-agent/src/modes/browse-event-mapper.ts~ extending ~SessionEventMapper~ with placeholder hooks for finding/tab events
+- Create ~packages/coding-agent/src/modes/qml/BrowseShell.qml~: top tab bar (Chat tab active by default), content area below filled by Chat tab content, minimal status bar. Uses existing ChatPanel.qml as initial Chat tab content.
+- Export ~runBrowseMode~ from ~packages/coding-agent/src/modes/index.ts~
+
+Out-of-scope:
+- Browser tabs (FEAT-2)
+- New chat delegates (FEAT-3)
+- Finding cards (FEAT-4)
+
+* Implementation
+1. ~packages/coding-agent/src/cli/args.ts~: Add 'browse' to canvas flag validation (line ~76 area where unknown canvas error is formatted)
+2. ~packages/coding-agent/src/main.ts~: Add ~else if (canvasName === 'browse')~ branch after fluid branch (~line 740). Call ~runBrowseMode()~ with same options pattern as chat/fluid.
+3. ~packages/coding-agent/src/modes/browse-event-mapper.ts~: Create extending SessionEventMapper. Add stub methods for ~emitFinding()~ and ~emitTabEvent()~.
+4. ~packages/coding-agent/src/modes/browse-mode.ts~: Clone qml-mode.ts structure. Launch BrowseShell.qml. Wire BrowseEventMapper. Handle QML events (prompt, abort, steer, restart). Start dashboard updater. Wire EventBus channels.
+5. ~packages/coding-agent/src/modes/qml/BrowseShell.qml~: ApplicationWindow with:
+   - Top: TabBar with a permanent 'Chat' tab
+   - Center: StackLayout switching between Chat content and future browser tabs
+   - Bottom: minimal status bar (agent status dot + status text)
+   - Message routing via Connections { target: bridge; onMessageReceived }
+   - Dark chrome: SpellTheme colors, no borders, thin toolbar, content-first (Arc/Linear aesthetic)
+6. ~packages/coding-agent/src/modes/index.ts~: Add export for browse-mode
+
+* Tests
+- File: ~packages/coding-agent/test/modes/browse-mode-cli.test.ts~
+- Scenario: parseArgs with ~--canvas browse~ returns correct canvas value
+- Scenario: parseArgs with ~--canvas unknown~ still produces error
+- File: ~packages/coding-agent/test/integration/browse-shell-layout.test.ts~
+- Scenario: QmlJourney launches BrowseShell.qml, verifies Chat tab exists, verifies status bar renders
+
+* Edge Cases
+- ~--canvas browse~ with no display available: must show CANVAS_DISPLAY_REQUIRED_MESSAGE and exit
+- ~--canvas browse~ with ~--resume~: must restore session conversation (tab persistence is FEAT-6)
+- BrowseShell receives unknown message types: must not crash, forward to active panel
+
+* Acceptance Criteria
+- ~spell --canvas browse~ launches a QML window with a Chat tab and status bar
+- ~spell --canvas browse "hello"~ sends the initial message to the agent
+- Existing ~--canvas chat~ and ~--canvas fluid~ continue to work unchanged
+- ~bun run check~ passes for packages/coding-agent
+- QmlJourney test verifies BrowseShell layout

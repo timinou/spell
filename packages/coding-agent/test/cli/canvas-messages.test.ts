@@ -11,7 +11,7 @@ describe("canvas CLI messages", () => {
 	test("unknown canvas message includes supported modes and usage syntax", () => {
 		const message = formatUnknownCanvasMessage("custom");
 		expect(message).toContain("Unknown canvas: custom.");
-		expect(message).toContain("Available: chat, fluid.");
-		expect(message).toContain("Use: spell --canvas [fluid|chat] [options] [message]");
+		expect(message).toContain("Available: chat, fluid, browse.");
+		expect(message).toContain("Use: spell --canvas [fluid|chat|browse] [options] [message]");
 	});
 });
