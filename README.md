@@ -208,6 +208,20 @@ Typical flow:
 3. Refine the plan
 4. Approve and execute
 
+##### Optional: allow plan mode writes in specific folders
+
+If you want `/plan` to create or update files in a small set of directories before approval, configure `planMode.allowedFolders` in your Spell config. Keys are folder paths; values are short descriptions surfaced back to the agent in plan mode prompts.
+
+Paths may be relative to the current workspace, absolute, or `~`-prefixed. These exceptions only allow create/update operations. Deletes and moves remain blocked.
+
+```yaml
+planMode:
+  allowedFolders:
+    ./docs/plans: "Architecture notes and plan artifacts"
+    ./scratch: "Temporary exploration files"
+    ~/shared-plans: "Cross-project plan output directory"
+```
+
 #### 4) Review context via `/extensions`
 
 If context usage is unexpectedly high, inspect discovered external provider assets (rules/prompts/context/hooks/extensions).

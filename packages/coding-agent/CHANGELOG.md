@@ -6,6 +6,7 @@
 
 - Added `planner_stream` and `execution_cancelled` fluid events, plus a `fluid.debug` setting for fluid canvas lifecycle tracing.
 - Added an interactive fluid DAG graph component with failed-subtree retry controls and execution summary stats.
+- Added `planMode.allowedFolders` to allow plan mode and plan-mode subagents to create or update files in explicitly described folders while keeping deletes and moves blocked.
 
 ### Changed
 
