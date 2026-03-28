@@ -39,13 +39,16 @@ Child item requirements (`org create`):
 - Include `EFFORT`, `PRIORITY`, `LAYER`
 - Use concrete, executable acceptance criteria
 - Keep scopes non-overlapping
+- Include verification criteria: exact tests, checks, or manual proof the executor must produce
+- If UI, browser, or visual behavior matters, name the required screenshot/artifact and what it must prove
 
 PLAN item requirements (`org create` in `{{planCategory}}`):
 - `state: "INIT"`
 - Body uses org headings (`*`, `**`, `***`)
-- Include two sections:
+- Include three sections:
   1. `* Context` — problem, approach, key decisions
-  2. `* Execution Manifest` — ordered child references using `[[id:...]]` links, dependencies, effort
+  2. `* Verification` — focused commands, manual checks, and required artifacts needed to declare the plan done
+  3. `* Execution Manifest` — ordered child references using `[[id:...]]` links, dependencies, effort
 
 Example flow:
 ```
@@ -59,7 +62,7 @@ org create -> {
   category: "{{planCategory}}",
   title: "Auth Initiative",
   state: "INIT",
-  body: "* Context\n...\n\n* Execution Manifest\n1. [[id:FEAT-001-add-auth-api]] (depends: none, effort: 2h)\n2. [[id:BUG-001-fix-token-refresh]] (depends: FEAT-001-add-auth-api, effort: 30m)"
+  body: "* Context\n...\n\n* Verification\n- Run focused auth checks\n- Capture required UI artifacts\n\n* Execution Manifest\n1. [[id:FEAT-001-add-auth-api]] (depends: none, effort: 2h)\n2. [[id:BUG-001-fix-token-refresh]] (depends: FEAT-001-add-auth-api, effort: 30m)"
 }
 -> returns PLAN-001-auth-initiative
 
@@ -81,6 +84,17 @@ You **MUST** use `todo_write` to set up task phases that capture the plan's work
 Plan execution runs in fresh context (session cleared). You **MUST** make the plan self-contained: include requirements, decisions, key findings, remaining todos needed to continue without prior session history.
 </caution>
 
+## Revising Existing Plan Items
+
+When a plan or child item already exists and only part of its body needs revision:
+
+- You **MUST** call `org get` first to read the current item before revising it.
+- To revise one existing heading inside the body (for example `* Context`, `* Verification`, or `* Execution Manifest`), you **MUST** use `org update` with `section` plus exactly one of `body` or `append`. This preserves untouched sections.
+- You **SHOULD** use full `body` replacement only when the structure of the plan itself changes.
+- You **MUST NOT** use `org note` to correct or replace plan content. `note` is append-only and is only for timestamped observations that supplement the body.
+- To create a brand-new heading, you **MAY** use `append` with explicit org heading markup. `section` edits an existing heading only.
+
+
 {{#if reentry}}
 ## Re-entry
 
@@ -89,8 +103,11 @@ Plan execution runs in fresh context (session cleared). You **MUST** make the pl
 2. Evaluate request against it
 3. Decide:
    - **Different task** → Create a new PLAN and linked children
-   - **Same task, continuing** → Update PLAN and linked child items to remove stale content
-4. Call `{{exitToolName}}` when complete
+   - **Same task, section-only revision** → Use `org update` with `section` plus exactly one of `body` or `append` after reading the current item
+   - **Same task, structural rewrite** → Use `org update` with full `body` replacement
+4. Update linked child items with the same rule: `section` for partial revisions, full `body` only when structure changes
+5. Use `org note` only for timestamped observations that supplement the body; do not use it to correct stale plan content
+6. Call `{{exitToolName}}` when complete
 </procedure>
 {{/if}}
 

@@ -81,6 +81,14 @@ async function buildMutationResponse(
 	return response;
 }
 
+function isToolErrorResult(result: unknown): result is Record<string, unknown> & { error: true; code?: string } {
+	if (typeof result !== "object" || result === null || !("error" in result)) {
+		return false;
+	}
+
+	return (result as Record<string, unknown>).error === true;
+}
+
 async function cmdInit(ctx: OrgContext, args: { category?: string }): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 
@@ -260,6 +268,7 @@ async function cmdUpdate(
 		note?: string;
 		body?: string;
 		append?: string;
+		section?: string;
 		title?: string;
 		file?: string;
 		includeBody?: boolean;
@@ -269,6 +278,75 @@ async function cmdUpdate(
 
 	if (args.state && !ctx.config.todoKeywords.includes(args.state)) {
 		return { error: true, message: `Unknown state: "${args.state}". Valid: ${ctx.config.todoKeywords.join(", ")}` };
+	}
+
+	if (args.section !== undefined) {
+		if (args.body === undefined && args.append === undefined) {
+			return { error: true, message: "update with section requires exactly one of: body, append" };
+		}
+		if (args.body !== undefined && args.append !== undefined) {
+			return { error: true, message: "update with section requires exactly one of: body, append" };
+		}
+		if (args.state !== undefined || args.title !== undefined || args.note !== undefined) {
+			return { error: true, message: "update with section cannot combine state, title, or note" };
+		}
+
+		const mode = args.body !== undefined ? "replace" : "append";
+		const body = args.body ?? args.append ?? "";
+		const updatedField = mode === "replace" ? "body" : "append";
+		let targetFile = args.file;
+		let client: OrgClient | undefined;
+
+		if (targetFile) {
+			client = await ctx.getOrgClient();
+			const hintedResult = await client.callTool("org-edit-section", {
+				file: targetFile,
+				custom_id: args.id,
+				section: args.section,
+				body,
+				mode,
+			});
+			if (isToolErrorResult(hintedResult)) {
+				if (hintedResult.code !== "ITEM_NOT_FOUND") {
+					return hintedResult;
+				}
+				targetFile = undefined;
+			} else {
+				logger.debug("org:update", {
+					id: args.id,
+					updated: [updatedField],
+					section: args.section,
+					file: targetFile,
+				});
+				return buildMutationResponse(args.id, [updatedField], targetFile, args.includeBody, ctx, {
+					section: args.section,
+				});
+			}
+		}
+
+		if (!targetFile) {
+			const item = await fetchItem(ctx, args.id);
+			if (!item) {
+				return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
+			}
+			targetFile = item.file;
+		}
+
+		client ??= await ctx.getOrgClient();
+		const result = await client.callTool("org-edit-section", {
+			file: targetFile,
+			custom_id: args.id,
+			section: args.section,
+			body,
+			mode,
+		});
+		if (isToolErrorResult(result)) {
+			return result;
+		}
+		logger.debug("org:update", { id: args.id, updated: [updatedField], section: args.section, file: targetFile });
+		return buildMutationResponse(args.id, [updatedField], targetFile, args.includeBody, ctx, {
+			section: args.section,
+		});
 	}
 
 	// At least one mutation must be specified
@@ -614,7 +692,7 @@ export function createOrgTool(
   archive     Archive DONE items
 
 Task IDs are auto-generated: PREFIX-NNN-kebab-title (e.g. PROJ-042-auth-refactor)
-update accepts any combination of: state, body (full replace), append (add to end), title, note (dated note on state change)
+update accepts any combination of: state, body (full replace), append (add to end), title, note (dated note on state change); section-scoped body updates use 'section' with exactly one of body/append via Emacs and cannot combine state/title/note
 
 query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth priority:>=B'`,
 		parameters: {
@@ -648,6 +726,10 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 				properties: { type: "object", description: "Properties map (create)" },
 				body: { type: "string", description: "Body text — create: initial body; update: full replacement" },
 				append: { type: "string", description: "Text to append to the end of an item's body (update)" },
+				section: {
+					type: "string",
+					description: "Target heading (:raw-value) for section-scoped update (update+body/append)",
+				},
 				file: {
 					type: "string",
 					description: "Target file basename (create), or absolute path hint to skip scan (update/note/set)",
@@ -719,6 +801,7 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 						append: args.append as string | undefined,
 						title: args.title as string | undefined,
 						file: args.file as string | undefined,
+						section: args.section as string | undefined,
 						includeBody: args.includeBody as boolean | undefined,
 					});
 				}

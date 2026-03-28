@@ -1,0 +1,53 @@
+#+TITLE: Update plan-mode prompts for section editing guidance
+#+STATE: DONE
+#+SESSION_ID: 14a4d8a6194e3dbd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T20-40-30-565Z_14a4d8a6194e3dbd.jsonl]]
+#+CUSTOM_ID: FEAT-005-update-plan-mode-prompts-for-section-edi
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: prompt
+
+* Initial Message
+
+when the plan or ultraplan mode needs to update an Org file, what can it update? Can it easily update any part of the body? How does it do it? I'd like pdates to be done easily, i see it use the 'note' tool way too much which is annoying because it can lead to contradicting or outdated information in the final implementaiton
+
+* Scope
+Update the plan-mode system prompt to guide the agent on when and how to use ~update~ with ~section~ for plan revisions, and when to use ~note~ vs full ~body~ replacement.
+
+** In-scope
+- Plan-mode prompt updates (~plan-mode-active.md~)
+- Guidance on section editing workflow: get -> identify section -> update section
+- Clarify ~note~ vs ~section~ vs ~body~ usage rules
+- Re-entry section: instruct agent to use section targeting for partial plan updates
+
+** Out-of-scope
+- Execution-mode prompt changes (can be done later if needed)
+- Org tool description changes (tool description comes from schema, already correct with new ~section~ param)
+
+* Implementation
+
+** ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+
+Add a section (probably near the PLAN item requirements or in the re-entry block) with these rules:
+
+*** Revising plan items
+- When updating a specific section of a plan item (e.g. just the Context or just the Verification), use ~org update~ with ~section~ parameter to target that heading. This preserves untouched sections.
+- When restructuring the entire plan body, use ~org update~ with ~body~ for full replacement.
+- Use ~org note~ only for timestamped observations that supplement (not contradict) the body. Notes are append-only — they cannot revise existing content.
+- Before revising a plan item, ~org get~ it first to see current state. Do not blindly overwrite.
+
+*** Re-entry block update
+The existing re-entry procedure says "Update PLAN and linked child items to remove stale content". Refine this to:
+- Read existing plan items via ~org get~
+- Use ~org update~ with ~section~ to surgically revise specific sections
+- Use full ~body~ replacement only when the structure itself changes
+- Do NOT use ~note~ for corrections — it appends contradictory content
+
+* Tests
+- Manual review: read the prompt and verify clarity
+- Functional: after FEAT-004 lands, verify that the agent in plan mode uses section targeting (this is behavioral, not unit-testable)
+
+* Acceptance Criteria
+- ~plan-mode-active.md~ contains clear section editing guidance
+- Re-entry block references section targeting
+- No mention of ~note~ as a revision mechanism for plan content

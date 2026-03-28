@@ -1,0 +1,83 @@
+#+TITLE: Org section-level editing
+#+STATE: DONE
+#+SESSION_ID: 14a4d8a6194e3dbd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T20-40-30-565Z_14a4d8a6194e3dbd.jsonl]]
+#+CUSTOM_ID: PLAN-008-org-section-level-editing
+
+
+* Context
+
+The org tool's ~update~ command supports full ~body~ replacement and ~append~, but nothing for surgically updating a specific section/heading within a body. Plan mode overuses ~note~ (append-only with date prefix) for revisions, causing contradictory information to accumulate in plan items.
+
+** Problem
+When a plan evolves during planning, the agent either:
+1. Uses ~note~ — appends contradictions without removing stale content
+2. Uses ~body~ — overwrites the entire body, losing sections that didn't change
+
+Neither option is right for partial updates to structured bodies containing org headings like ~* Context~, ~* Verification~, ~* Execution Manifest~.
+
+** Approach: Emacs-native section editing
+Add a ~section~ parameter to the existing ~update~ command. When ~section~ is set, the operation routes through Emacs RPC to leverage org-element's AST for robust heading navigation and manipulation.
+
+Emacs org-element provides:
+- ~org-find-property~ to locate items by CUSTOM_ID
+- ~org-element-map subtree 'headline~ to iterate child headings
+- ~:raw-value~ for heading title matching (excludes TODO keyword and tags)
+- ~:contents-begin~ / ~:contents-end~ for precise region bounds
+- ~org-end-of-meta-data~ to skip property drawers
+
+This is more robust than line-based TS parsing because org-element handles edge cases (folded headings, inline formatting, etc.) natively.
+
+** Key decisions
+- ~section~ matches heading titles via ~:raw-value~ (case-sensitive, first-match for duplicates)
+- Heading level is irrelevant for matching
+- Section not found returns an error, does not modify the file
+- Creating new sections uses regular ~append~ with heading markup (not ~section~)
+- When ~section~ is not set, existing TS mutation path is unchanged
+- ~note~ command untouched — still useful for timestamped observations
+- ERT tests for the elisp function, TS tests for the wiring
+
+** Files touched
+- ~packages/org/elisp/org-tasks.el~ — new ~org-tasks-edit-section~ function
+- ~packages/org/elisp/tools/org-edit-section.el~ — new MCP tool wrapper
+- ~packages/org/elisp/tools/org-edit-body.el~ — fix dead reference (wrap existing ~org-tasks-edit-body~)
+- ~packages/org/elisp/mcp-server-emacs-tools.el~ — register new tool
+- ~packages/org/elisp/test/org-edit-section-test.el~ — ERT tests
+- ~packages/org/src/tool.ts~ — route section updates through Emacs RPC
+- ~packages/org/src/types.ts~ — add ~section~ to ~OrgUpdateParams~
+- ~packages/coding-agent/src/tools/org.ts~ — add ~section~ to schema
+- ~packages/coding-agent/src/prompts/system/plan-mode-active.md~ — section editing guidance
+
+* Verification
+- ERT tests: ~emacs --batch -l ert -l packages/org/elisp/org-tasks.el -l packages/org/elisp/test/org-edit-section-test.el -f ert-run-tests-batch-and-exit~ exits 0
+- Existing ERT tests still pass: ~emacs --batch -l ert -l packages/org/elisp/org-tasks.el -l packages/org/elisp/test/org-tasks-test.el -f ert-run-tests-batch-and-exit~
+- TS tests: ~bun test packages/org/test/apply-mutations.test.ts~
+- Type checks: ~bunx tsgo -p packages/org && bunx tsgo -p packages/coding-agent~
+- Lint: ~bun lint:ts~
+- Manual: verify ~plan-mode-active.md~ contains section editing guidance and re-entry instructions
+
+* Execution Manifest
+1. [[id:FEAT-004-add-section-level-mutation-to-org-update]] (depends: none, effort: 2h) — elisp function + MCP tool + ERT tests + TS integration + fix dead org-edit-body reference
+2. [[id:FEAT-005-update-plan-mode-prompts-for-section-edi]] (depends: FEAT-004, effort: 30m) — plan-mode-active.md section editing guidance
+
+Note: BUG-004-fix-dead-org-edit-body-elisp-reference is absorbed into FEAT-004 (creating the missing file is part of the same work).
+
+
+** Completion [2026-03-28]
+
+*** Verification
+- `emacs --batch -l ert -l packages/org/elisp/org-tasks.el -l packages/org/elisp/test/org-edit-section-test.el -f ert-run-tests-batch-and-exit` -> passed (7/7)
+- `emacs --batch -l ert -l packages/org/elisp/org-tasks.el -l packages/org/elisp/test/org-tasks-test.el -f ert-run-tests-batch-and-exit` -> passed (18/18)
+- `bun test packages/org/test/apply-mutations.test.ts packages/org/test/tool-commands.test.ts` -> passed (37 tests)
+- `bunx tsgo -p packages/org` -> passed
+- `bunx tsgo -p packages/coding-agent` -> passed
+- `bun lint:ts` -> passed
+- Manual: re-read `packages/coding-agent/src/prompts/system/plan-mode-active.md` and confirmed section-editing guidance plus re-entry instructions are present.
+
+*** Artifacts
+- None. No UI, browser, or visual artifacts were required for this plan.
+
+*** Deviations
+- Added `packages/org/test/tool-commands.test.ts` coverage for section routing in addition to the planned `apply-mutations.test.ts`, because the new behavior lives in `createOrgTool` update dispatch rather than `applyItemMutations`.
+- Disallowed combining `section` updates with `state`, `title`, or `note` in one call to avoid partial mixed mutations across the TS and Emacs paths.
+- Implemented targeted section replacement so nested child headings under the matched section are preserved instead of being deleted with the parent section body.

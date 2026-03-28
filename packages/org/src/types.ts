@@ -202,6 +202,8 @@ export interface OrgUpdateParams {
 	body?: string;
 	/** Append text to the body (logged below existing content). */
 	append?: string;
+	/** Target heading (:raw-value) for section-scoped body mutation (first case-sensitive match wins). */
+	section?: string;
 	/** Update the item's title. */
 	title?: string;
 	/** Optional note appended on state change. */

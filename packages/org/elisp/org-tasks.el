@@ -623,6 +623,85 @@ Returns JSON string with result."
              (mode . ,mode)
              (file . ,abs-file))))))))
 
+(defun org-tasks-edit-section (file custom-id section body mode)
+  "Edit SECTION body text for item CUSTOM-ID in FILE.
+SECTION is matched against headline `:raw-value` (case-sensitive, first match wins).
+BODY is the new text. MODE is \"replace\" or \"append\".
+Returns JSON string with result or error."
+  (let ((abs-file (expand-file-name file)))
+    (unless (file-exists-p abs-file)
+      (error "File not found: %s" abs-file))
+    (unless (member mode '("replace" "append"))
+      (error "Invalid mode: %s (must be \"replace\" or \"append\")" mode))
+    (with-current-buffer (find-file-noselect abs-file)
+      (org-mode)
+      (org-tasks--setup-keywords)
+      (let* ((ast (org-element-parse-buffer))
+             (item-headline
+              (org-element-map ast 'headline
+                (lambda (hl)
+                  (when (equal (org-tasks--extract-property hl "CUSTOM_ID") custom-id)
+                    hl))
+                nil t)))
+        (if (not item-headline)
+            (json-encode
+             `((error . t)
+               (code . "ITEM_NOT_FOUND")
+               (message . ,(format "Item %s not found in %s" custom-id abs-file))))
+          (let ((section-headline
+                 (org-element-map item-headline 'headline
+                   (lambda (hl)
+                     (when (and (not (eq hl item-headline))
+                                (equal (org-element-property :raw-value hl) section))
+                       hl))
+                   nil t)))
+            (if (not section-headline)
+                (json-encode
+                 `((error . t)
+                   (code . "SECTION_NOT_FOUND")
+                   (message . ,(format "Section %s not found in item %s" section custom-id))))
+              (goto-char (org-element-property :begin section-headline))
+              (org-back-to-heading t)
+              (org-end-of-meta-data t)
+              (let* ((body-start (point))
+                     (section-level (org-element-property :level section-headline))
+                     (section-contents-end (or (org-element-property :contents-end section-headline)
+                                               body-start))
+                     (subheading-regexp (format "^\\*\\{%d,\\} " (1+ section-level)))
+                     (body-end
+                      (save-excursion
+                        (goto-char body-start)
+                        (if (re-search-forward subheading-regexp section-contents-end t)
+                            (match-beginning 0)
+                          section-contents-end)))
+                     (existing-raw (buffer-substring-no-properties body-start body-end))
+                     (existing-content (string-trim existing-raw)))
+                (if (string= mode "replace")
+                    (progn
+                      (delete-region body-start body-end)
+                      (goto-char body-start)
+                      (unless (string-empty-p body)
+                        (insert body)
+                        (unless (string-suffix-p "\n" body)
+                          (insert "\n"))))
+                  (goto-char body-end)
+                  (unless (string-empty-p existing-content)
+                    (unless (string-suffix-p "\n" existing-raw)
+                      (insert "\n"))
+                    (insert "\n"))
+                  (unless (string-empty-p body)
+                    (insert body)
+                    (unless (string-suffix-p "\n" body)
+                      (insert "\n"))))
+                (save-buffer)
+                (json-encode
+                 `((success . t)
+                   (custom_id . ,custom-id)
+                   (section . ,section)
+                   (mode . ,mode)
+                   (file . ,abs-file)))))))))))
+
+
 ;;; CLI Entry Points
 
 (defun org-tasks-validate-file-cli (file)

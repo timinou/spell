@@ -181,6 +181,94 @@ describe("update with file hint", () => {
 	});
 });
 
+describe("update section routing", () => {
+	test("section without body/append returns validation error", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-003-section-missing", "Section missing", { state: "ITEM" });
+		const tool = makeTool();
+
+		const result = (await tool.execute({
+			command: "update",
+			id: "DRAFT-003-section-missing",
+			file: filePath,
+			section: "Implementation",
+		})) as Record<string, unknown>;
+
+		expect(result.error).toBe(true);
+		expect(result.message).toBe("update with section requires exactly one of: body, append");
+	});
+
+	test("section with both body and append returns validation error", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-004-section-both", "Section both", { state: "ITEM" });
+		const tool = makeTool();
+
+		const result = (await tool.execute({
+			command: "update",
+			id: "DRAFT-004-section-both",
+			file: filePath,
+			section: "Implementation",
+			body: "Replaced",
+			append: "Appended",
+		})) as Record<string, unknown>;
+
+		expect(result.error).toBe(true);
+		expect(result.message).toBe("update with section requires exactly one of: body, append");
+	});
+
+	test("section cannot combine state, title, or note", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-004-section-mixed", "Section mixed", { state: "ITEM" });
+		const tool = makeTool();
+
+		const result = (await tool.execute({
+			command: "update",
+			id: "DRAFT-004-section-mixed",
+			file: filePath,
+			section: "Implementation",
+			body: "Replaced",
+			state: "DOING",
+		})) as Record<string, unknown>;
+
+		expect(result.error).toBe(true);
+		expect(result.message).toBe("update with section cannot combine state, title, or note");
+	});
+
+	test("section with body routes through emacs client path", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-005-section-route", "Section route", { state: "ITEM" });
+		const tool = makeTool();
+
+		await expect(
+			tool.execute({
+				command: "update",
+				id: "DRAFT-005-section-route",
+				file: filePath,
+				section: "Implementation",
+				body: "New section body",
+			}),
+		).rejects.toThrow("Emacs not available in tests");
+	});
+
+	test("non-section body update remains on TS mutation path", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-006-no-section", "No section", {
+			state: "ITEM",
+			body: "Old body",
+		});
+		const tool = makeTool();
+
+		const result = (await tool.execute({
+			command: "update",
+			id: "DRAFT-006-no-section",
+			file: filePath,
+			body: "Replaced body",
+		})) as Record<string, unknown>;
+
+		expect(result.success).toBe(true);
+		expect(result.file).toBe(filePath);
+		expect((result.updated as string[]).includes("body")).toBe(true);
+
+		const content = await readFile(filePath);
+		expect(content).toContain("Replaced body");
+	});
+});
+
 // ---------------------------------------------------------------------------
 // includeBody echo
 // ---------------------------------------------------------------------------

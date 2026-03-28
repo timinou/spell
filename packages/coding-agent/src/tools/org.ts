@@ -46,6 +46,11 @@ const orgSchema = Type.Object({
 	properties: Type.Optional(Type.Record(Type.String(), Type.String(), { description: "Properties map" })),
 	body: Type.Optional(Type.String({ description: "Body text -- create: initial body; update: full replacement" })),
 	append: Type.Optional(Type.String({ description: "Text to append to item body (update)" })),
+	section: Type.Optional(
+		Type.String({
+			description: "Target heading (:raw-value) for section-scoped update (requires body or append)",
+		}),
+	),
 	file: Type.Optional(
 		Type.String({
 			description: "Target file basename (create), or absolute path hint to skip scan (update/note/set)",
@@ -226,6 +231,7 @@ function buildOrgCallPreview(args: Record<string, unknown>): OrgCallPreview {
 			pushMeta(meta, "id", args.id);
 			pushMeta(meta, "state", args.state, TRUNCATE_LENGTHS.SHORT);
 			pushMeta(meta, "title", args.title);
+			pushMeta(meta, "section", args.section, TRUNCATE_LENGTHS.SHORT);
 			pushPathMeta(meta, args.file);
 			if (previewArgValue(args.append, TRUNCATE_LENGTHS.SHORT)) meta.push("append");
 			if (previewArgValue(args.note, TRUNCATE_LENGTHS.SHORT)) meta.push("note");

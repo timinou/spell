@@ -1,0 +1,182 @@
+#+TITLE: Add section-level mutation to org update command
+#+STATE: DONE
+#+SESSION_ID: 14a4d8a6194e3dbd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T20-40-30-565Z_14a4d8a6194e3dbd.jsonl]]
+#+CUSTOM_ID: FEAT-004-add-section-level-mutation-to-org-update
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Scope
+Add a ~section~ parameter to the org ~update~ command that targets a specific heading within an item's body. Uses Emacs org-element for robust heading navigation and manipulation.
+
+** In-scope
+- New elisp function ~org-tasks-edit-section~ in ~org-tasks.el~
+- New MCP tool ~org-edit-section~ in ~packages/org/elisp/tools/org-edit-section.el~
+- Fix dead ~org-edit-body~ reference: create ~packages/org/elisp/tools/org-edit-body.el~
+- TS integration: ~section~ parameter on ~update~ routes through Emacs RPC
+- ERT tests for section editing
+- TS-side tests for the wiring
+
+** Out-of-scope
+- Creating new sections via ~section~ param (use ~append~ with heading markup)
+- Renaming section headings
+- Changing the existing pure-TS body replacement path (still used when ~section~ is not set)
+
+* Implementation
+
+** 1. Elisp: ~org-tasks-edit-section~ in ~packages/org/elisp/org-tasks.el~
+
+New function using org-element APIs:
+
+#+begin_src elisp
+(defun org-tasks-edit-section (file custom-id section body mode)
+  "Edit a section within item CUSTOM-ID in FILE.
+SECTION is the heading title to match (case-sensitive, first match).
+BODY is the new text. MODE is \"replace\" or \"append\".
+Returns JSON with result."
+  ...)
+#+end_src
+
+Algorithm using org-element:
+1. ~org-find-property~ to locate item by CUSTOM_ID
+2. Navigate into item subtree
+3. Use ~org-element-map~ on the subtree to find child headline where ~:raw-value~ matches SECTION
+4. Compute section body region: from after the section heading's property drawer (or heading end) to ~:contents-end~ of the section element (this naturally handles nested sub-headings as part of the section)
+5. Replace or append within that region
+6. ~save-buffer~ and return JSON result
+
+Key org-element properties to use:
+- ~:raw-value~ — heading title text (no TODO keyword, no tags)
+- ~:contents-begin~ / ~:contents-end~ — byte range of heading contents
+- ~:begin~ / ~:end~ — byte range of entire element including heading line
+- ~org-element-map subtree 'headline~ — iterate child headings
+
+For the section body region specifically:
+- Section body starts after the heading line (and property drawer if present)
+- Section body ends at ~:end~ of the headline element (includes all children)
+- Use ~org-end-of-meta-data~ after positioning at the section heading to skip past any property drawer
+
+** 2. MCP tool: ~packages/org/elisp/tools/org-edit-section.el~
+
+Follow the pattern in ~org-update-state.el~:
+- Define handler function ~org-mcp-edit-section-handler~
+- Register with ~mcp-server-register-tool~
+- Input schema: ~file~ (string), ~custom_id~ (string), ~section~ (string), ~body~ (string), ~mode~ (string: "replace"|"append")
+- Required: all five params
+- Calls ~org-tasks-edit-section~
+
+** 3. Fix dead reference: ~packages/org/elisp/tools/org-edit-body.el~
+
+Create the missing file that ~mcp-server-emacs-tools.el~ already requires.
+Follow same pattern — wrap ~org-tasks-edit-body~ from ~org-tasks.el~.
+- Input schema: ~file~ (string), ~custom_id~ (string), ~body~ (string), ~mode~ (string: "replace"|"append")
+- Required: all four params
+
+** 4. Register new tool: ~packages/org/elisp/mcp-server-emacs-tools.el~
+
+Add to available tools alist:
+#+begin_example
+(org-edit-section . org-edit-section)
+#+end_example
+
+Add require:
+#+begin_example
+(require 'org-edit-section)
+#+end_example
+
+** 5. TS schema: ~packages/coding-agent/src/tools/org.ts~
+
+Add ~section~ parameter to ~orgSchema~:
+#+begin_src typescript
+section: Type.Optional(Type.String({
+  description: "Target a specific heading within the item body (update only). When set, body/append operate on that section."
+})),
+#+end_src
+
+Add to ~buildOrgCallPreview~ for update case:
+#+begin_src typescript
+pushMeta(meta, "section", args.section, TRUNCATE_LENGTHS.SHORT);
+#+end_src
+
+** 6. TS tool dispatch: ~packages/org/src/tool.ts~
+
+In ~cmdUpdate~:
+- Add ~section~ to args interface
+- When ~section~ is set AND (~body~ or ~append~ is set):
+  - Route through Emacs: ~ctx.getOrgClient().callTool("org-edit-section", { file, custom_id: id, section, body, mode })~
+  - Where ~mode~ = ~body~ is set ? "replace" : "append" and ~body~ = the body or append text
+  - Return appropriate mutation response
+- When ~section~ is not set: existing TS path (unchanged)
+
+Add ~section~ to schema description and parameter type.
+
+** 7. TS types: ~packages/org/src/types.ts~
+
+Add ~section?: string~ to ~OrgUpdateParams~.
+No change to ~ItemMutation~ needed since section routing bypasses TS mutations.
+
+* ERT Tests
+File: ~packages/org/elisp/test/org-edit-section-test.el~
+
+Use the ~org-tasks-test--with-org-file~ macro pattern from ~org-tasks-test.el~.
+
+Test fixtures: item with multiple sections:
+#+begin_example
+* ITEM Test Task
+:PROPERTIES:
+:CUSTOM_ID: TSK-001-test
+:EFFORT: 1h
+:END:
+
+** Context
+Original context content.
+
+** Verification
+- Check A
+- Check B
+
+** Execution
+1. Step one
+2. Step two
+#+end_example
+
+Tests:
+1. ~edit-section/replace-body~ — replace Context section body, verify Verification and Execution unchanged
+2. ~edit-section/append-body~ — append to Verification section, verify original content preserved
+3. ~edit-section/not-found~ — section "Nonexistent" returns error JSON
+4. ~edit-section/item-not-found~ — bad CUSTOM_ID returns error
+5. ~edit-section/nested-headings-preserved~ — section with sub-headings (e.g. ~** Context~ with ~*** Approach~): replacing Context preserves Approach as a child
+6. ~edit-section/empty-section~ — section heading with no body, replace inserts content
+7. ~edit-section/first-match-semantics~ — two sections named "Notes" at different levels, first match wins
+
+Run command:
+#+begin_example
+emacs --batch -l ert \
+  -l packages/org/elisp/org-tasks.el \
+  -l packages/org/elisp/test/org-edit-section-test.el \
+  -f ert-run-tests-batch-and-exit
+#+end_example
+
+* TS-side Tests
+File: ~packages/org/test/apply-mutations.test.ts~
+
+Add tests for section routing (these test the TS wiring, not the elisp):
+1. ~section without body or append returns error~
+2. ~section parameter is passed through to cmdUpdate~ (verify args validation)
+
+* Edge Cases
+- Heading matching: case-sensitive, exact match on ~:raw-value~ (trimmed)
+- First-match semantics for duplicate heading titles
+- Emacs not available: ~getOrgClient()~ throws — TS catches and returns error message directing user to ensure Emacs is available
+- Section heading with tags: ~** Context :planning:~ — match on ~:raw-value~ which is "Context" (tags are separate in org-element)
+- File-level items with sections: same logic — ~org-find-property~ finds the CUSTOM_ID, section search within that subtree
+
+* Acceptance Criteria
+- ERT tests pass: ~emacs --batch -l ert ... -f ert-run-tests-batch-and-exit~ exits 0
+- ~bun test packages/org/test/apply-mutations.test.ts~ passes
+- ~bunx tsgo -p packages/org~ — no type errors
+- ~bunx tsgo -p packages/coding-agent~ — no type errors
+- Section replacement preserves content outside the targeted section
+- Section not found returns error without modifying file
+- Dead ~org-edit-body~ reference is fixed
