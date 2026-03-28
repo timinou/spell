@@ -28,7 +28,7 @@ import {
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import "./discovery";
-import { type EmacsWarmupResult, warmupEmacs } from "@oh-my-pi/pi-emacs";
+import { EmacsSessionManager, type EmacsWarmupResult, warmupEmacs } from "@oh-my-pi/pi-emacs";
 import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
 import { TtsrManager } from "./export/ttsr";
@@ -867,6 +867,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		: undefined;
 
 	const pendingActionStore = new PendingActionStore();
+	const emacsPath = settings.get("emacs.path") as string | undefined;
+	const startEmacsWarmup = (onConnecting?: (name: string) => void): Promise<EmacsWarmupResult> =>
+		warmupEmacs(cwd, sessionId, {
+			emacsPath,
+			onConnecting,
+		});
+	const emacsSessionManager = new EmacsSessionManager({
+		startSession: () => startEmacsWarmup(),
+	});
+
 	const toolSession: ToolSession = {
 		cwd,
 		hasUI: options.hasUI ?? false,
@@ -917,6 +927,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRegistry,
 		asyncJobManager,
 		pendingActionStore,
+		emacsSessionManager,
 	};
 
 	// Initialize internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, local://)
@@ -970,18 +981,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// Fire Emacs daemon startup now so it runs in the background during MCP/Gemini/Exa init.
 	// It will be awaited alongside the LSP warmup before the session is returned.
-	const shouldStartEmacs =
-		toolSession.emacsSession === undefined &&
-		(options.toolNames === undefined || options.toolNames.includes("emacs_code"));
+	const shouldStartEmacs = options.toolNames === undefined || options.toolNames.includes("emacs_code");
 	const emacsWarmupPromise: Promise<EmacsWarmupResult | undefined> = shouldStartEmacs
 		? logger.timeAsync("warmupEmacs", () =>
-				warmupEmacs(cwd, sessionId, {
-					emacsPath: settings.get("emacs.path") as string | undefined,
-					onConnecting: name => {
-						if (options.hasUI) {
-							process.stderr.write(chalk.gray(`Starting ${name}…\n`));
-						}
-					},
+				startEmacsWarmup(name => {
+					if (options.hasUI) {
+						process.stderr.write(chalk.gray(`Starting ${name}…\n`));
+					}
 				}),
 			)
 		: Promise.resolve(undefined);
@@ -1580,7 +1586,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (shouldStartEmacs) {
 		emacsResult = await emacsWarmupPromise;
 		if (emacsResult) {
-			toolSession.emacsSession = emacsResult.session;
+			toolSession.emacsSessionManager?.recordWarmupResult(emacsResult);
 			if (emacsResult.status === "error") {
 				logger.warn("[emacs-warmup] daemon startup failed", { error: emacsResult.error });
 			} else if (emacsResult.status === "ready") {
@@ -1590,13 +1596,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	toolSession.dispose = async () => {
-		if (toolSession.emacsSession) {
+		if (toolSession.emacsSessionManager) {
 			try {
-				await toolSession.emacsSession.stop();
+				await toolSession.emacsSessionManager.dispose();
 			} catch (err) {
-				logger.warn("emacsSession stop failed", { error: String(err) });
+				logger.warn("emacsSessionManager dispose failed", { error: String(err) });
 			}
-			toolSession.emacsSession = null;
 		}
 		if (toolSession.qmlRemoteServer) {
 			try {

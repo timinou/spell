@@ -17,6 +17,7 @@
 
 - Fixed fluid canvas stuck states by consolidating plan error routing and returning to input after cancellation.
 - Fixed fluid agent state propagation to include failure error text plus start/completion timestamps for accurate UI status.
+- Fixed `emacs_code` daemon recovery by adding lazy restart through `EmacsSessionManager`, including dead-session detection and startup backoff.
 
 ## [13.12.8] - 2026-03-16
 

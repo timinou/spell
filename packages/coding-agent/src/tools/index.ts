@@ -1,5 +1,5 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { EmacsSession } from "@oh-my-pi/pi-emacs";
+import type { EmacsSessionManager } from "@oh-my-pi/pi-emacs";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
@@ -178,8 +178,8 @@ export interface ToolSession {
 	getCheckpointState?: () => CheckpointState | undefined;
 	/** Set or clear active checkpoint state. */
 	setCheckpointState?: (state: CheckpointState | null) => void;
-	/** Pre-started Emacs daemon session; null if Emacs is unavailable; undefined if not yet initialized. */
-	emacsSession?: EmacsSession | null;
+	/** Emacs daemon lifecycle manager for lazy startup, restart, and disposal. */
+	emacsSessionManager?: EmacsSessionManager;
 	/** Active QML remote server; when set, CanvasTool routes panels to the Android client. */
 	qmlRemoteServer?: import("@oh-my-pi/pi-qml-remote").QmlRemoteServer;
 	/** Dispose session-owned resources (emacs daemon, QML remote server). */

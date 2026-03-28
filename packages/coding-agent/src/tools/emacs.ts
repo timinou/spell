@@ -64,9 +64,9 @@ export class EmacsTool implements AgentTool<typeof emacsSchema> {
 
 	constructor(session: ToolSession) {
 		const projectRoot = session.cwd ?? getProjectDir();
-		// Use the pre-started session owned by Pi — detection already ran during createTools preflight.
+		// Use Pi's session manager so dead daemons can be restarted lazily after init.
 		this.#inner = createEmacsTool(projectRoot, {
-			getSession: () => Promise.resolve(session.emacsSession ?? null),
+			getSession: () => session.emacsSessionManager?.getSession() ?? Promise.resolve(null),
 		});
 		this.description = this.#inner.description;
 	}

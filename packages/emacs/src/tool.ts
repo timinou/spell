@@ -34,7 +34,7 @@ export function createEmacsTool(_projectRoot: string, deps: EmacsToolDependencie
 			if (!command) return { error: true, message: "Missing required field: command" };
 
 			const session = await deps.getSession();
-			if (!session) return { error: true, message: "Emacs daemon unavailable" };
+			if (!session || !session.isAlive()) return { error: true, message: "Emacs daemon unavailable" };
 
 			const socatPath = Bun.which("socat") ?? undefined;
 			const client = await createEmacsClient(session.socketPath, socatPath);
@@ -115,7 +115,7 @@ export async function startEmacsDaemon(
 
 /**
  * Build the EmacsToolDependencies from config — starts an Emacs daemon on demand.
- * @deprecated Use startEmacsDaemon at session init and pass session.emacsSession to EmacsTool.
+ * @deprecated Use EmacsSessionManager for lazy startup/restart, or startEmacsDaemon for one-off warmup flows.
  */
 export function makeEmacsSessionFactory(
 	emacsPath: string | undefined,
