@@ -1,0 +1,73 @@
+#+TITLE: Recursive Loop Spawning and DAG Management
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-023-recursive-loop-spawning-and-dag-manageme
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: runtime
+
+NOTE [2026-03-29]: Implemented LoopDag, ChildSpawner, depth guard, completion handler with policy-per-edge. All recursion tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- Recursive loop spawning: parent can create child loops during iteration
+- Depth limit enforcement (default 3, configurable)
+- Escalation at depth limit: request human approval to go deeper
+- Child completion protocol: child signals parent with ChildCompletionSignal
+- Policy-per-edge: each dependency declares failure policy (retry count, onFail: block|skip|escalate)
+- Default policy: retry(2)-then-block
+- DAG model: topological validation, cycle prevention via ancestor chain check
+- Parent waits for required children before advancing
+** Out-of-scope
+- Concurrent execution of children (uses kernel concurrency limits)
+- Worktree isolation for children ([[id:FEAT-git-loop-integration]])
+** Boundary rationale
+Recursion adds parent/child relationships to flat kernel. Separated because kernel tests must pass without recursion complexity.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/recursion.test.ts
+- Spawn child: parent in iterating state can spawn child loop
+- Depth limit: spawning at depth 3 triggers escalation
+- Child completion: child success signals parent, parent continues
+- Child failure + retry policy: parent retries child up to configured limit
+- Child failure + block policy: parent paused after retries exhausted
+- Child failure + skip policy: parent continues, logs skipped child
+- Child failure + escalate policy: parent paused, human notified
+- DAG cycle detection: A->B->A rejected at spawn time
+- DAG topological order: children execute in dependency order
+- Multiple children: parent waits for all required before advancing
+- Optional children: parent advances when optional child fails
+
+* Implementation
+** packages/coding-agent/src/loop/recursion/spawner.ts
+ChildSpawner: validate depth, check cycles, create child, register completion callback.
+** packages/coding-agent/src/loop/recursion/dag.ts
+Loop DAG model: nodes, edges with policies. Topological sort. Cycle detection.
+** packages/coding-agent/src/loop/recursion/completion-handler.ts
+Handle ChildCompletionSignal: apply edge policy, retry/block/skip/escalate.
+** packages/coding-agent/src/loop/recursion/depth-guard.ts
+Depth limit check + escalation trigger.
+Steps: (1) Write recursion tests. (2) Implement DAG. (3) Implement spawner. (4) Implement completion handler. (5) Implement depth guard. (6) Verify.
+
+* Edge Cases
+- Child crashes without signaling: parent timeout triggers failure policy
+- Orphaned child: parent cancelled -> child aborted
+- Deep recursion: 3 levels x 5 children = 125 leaf loops max
+- Concurrent child spawn for same parent
+
+* Acceptance Criteria
+- Depth limit enforced
+- All failure policies work correctly
+- DAG cycles detected and rejected
+- Parent waits for required children
+- All tests pass

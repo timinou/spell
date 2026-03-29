@@ -15,7 +15,7 @@
 
 ;; org-ql is loaded via vendor bootstrap; guard against missing
 (require 'load-org-ql nil t)
-
+(require 'loop-predicates nil t)
 ;; ---------------------------------------------------------------------------
 ;; Custom predicates
 ;; ---------------------------------------------------------------------------

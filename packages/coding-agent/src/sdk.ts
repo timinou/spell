@@ -70,6 +70,7 @@ import {
 	SkillProtocolHandler,
 } from "./internal-urls";
 import { disposeAllKernelSessions } from "./ipy/executor";
+import { LoopManager } from "./loop/loop-manager";
 import { discoverAndLoadMCPTools, type MCPManager, type MCPToolsLoadResult } from "./mcp";
 import {
 	collectDiscoverableMCPTools,
@@ -236,6 +237,8 @@ export interface CreateAgentSessionResult {
 	eventBus?: EventBus;
 	/** Canvas orchestrator manager (undefined if no canvas support) */
 	orchestratorManager?: CanvasOrchestratorManager;
+	/** Loop orchestration manager for loop lifecycle, gates, and dashboards. */
+	loopManager?: LoopManager;
 }
 
 // Re-exports
@@ -877,6 +880,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		startSession: () => startEmacsWarmup(),
 	});
 
+	const loopManager = new LoopManager({
+		cwd,
+		settings,
+		eventBus,
+		roleResolver: {
+			getCurrentModel: () => session?.model ?? model,
+			getPlanModel: () => session?.resolveRoleModel("plan"),
+			getReviewModel: () => session?.resolveRoleModel("review"),
+			getSettings: () => settings,
+		},
+	});
+
 	const toolSession: ToolSession = {
 		cwd,
 		hasUI: options.hasUI ?? false,
@@ -928,6 +943,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		asyncJobManager,
 		pendingActionStore,
 		emacsSessionManager,
+		loopManager,
 	};
 
 	// Initialize internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, local://)
@@ -1335,7 +1351,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const toolNamesFromRegistry = Array.from(toolRegistry.keys());
 	const requestedToolNames = [...(options.toolNames?.map(name => name.toLowerCase()) ?? toolNamesFromRegistry)];
-	if (options.requireSubmitResultTool && toolRegistry.has("submit_result") && !requestedToolNames.includes("submit_result")) {
+	if (
+		options.requireSubmitResultTool &&
+		toolRegistry.has("submit_result") &&
+		!requestedToolNames.includes("submit_result")
+	) {
 		requestedToolNames.push("submit_result");
 	}
 	const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
@@ -1548,7 +1568,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		asyncJobManager,
 		pendingActionStore,
 		toolSession,
+		loopManager,
 	});
+	await loopManager.restoreFromDisk();
 
 	postmortem.registerSessionContext(() => {
 		const activeModel = session.model ?? model;
@@ -1836,5 +1858,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		emacsResult,
 		eventBus,
 		orchestratorManager,
+		loopManager,
 	};
 }

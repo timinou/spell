@@ -1,0 +1,66 @@
+#+TITLE: Review Model Role for Loop Workflows
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-020-review-model-role-for-loop-workflows
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: config
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-03-29]: Added review to ModelRole union, MODEL_ROLES record, MODEL_ROLE_IDS array. Created validateLoopPrerequisites. All review-model-role tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- Add 'review' to the model role enum in model registry
+- Configuration validation: loop workflows require review role configured before start
+- Settings UI entry for review model selection
+** Out-of-scope
+- LLM switching logic (FEAT-llm-orchestration)
+- Review prompt content
+** Boundary rationale
+Model role must exist before any loop feature references it. Standalone 2h change.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/config/review-model-role.test.ts
+- resolveRoleModel('review') returns configured model when set
+- resolveRoleModel('review') returns undefined when not configured
+- Settings schema includes review model field
+- Role list includes 'review' alongside 'plan' and 'task'
+- All MODEL_ROLE_IDS consumers include 'review' (grep for exhaustiveness)
+- Role picker includes review option
+NOTE: The test "loop start without review model fails" belongs to PROJ-001-loop-kernel-state-machine since loop_start doesn't exist until that item. This item provides ONLY the role+config+validation API: validateLoopPrerequisites() returns error listing missing review model. PROJ-001 calls validateLoopPrerequisites() at loop start.
+** File: packages/coding-agent/test/config/review-model-role.test.ts
+- resolveRoleModel('review') returns configured model when set
+- resolveRoleModel('review') returns undefined when not configured
+- Loop workflow validation: starting loop without review model configured returns clear error
+- Settings schema includes review model field
+- Role list includes 'review' alongside 'plan' and 'task'
+
+* Implementation
+** packages/coding-agent/src/config/model-registry.ts
+Add 'review' to RoleModel type union. Add resolveRoleModel('review') support.
+** packages/coding-agent/src/config/settings-schema.ts
+Add review model setting field.
+** packages/coding-agent/src/modes/components/settings-defs.ts
+Add review model to settings UI.
+Steps: (1) Write tests. (2) Add role to type union. (3) Add settings field. (4) Add validation. (5) Verify.
+
+* Edge Cases
+- User has plan model but not review model: loop start fails with actionable error naming missing config
+- User sets review model same as plan model: allowed (valid configuration)
+
+* Acceptance Criteria
+- 'review' appears in model role type
+- Settings UI shows review model configuration
+- Starting a loop without review model configured produces clear error
+- All tests pass

@@ -1,0 +1,69 @@
+#+TITLE: Spec Ingestion and Readiness Workflow
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-032-spec-ingestion-and-readiness-workflow
+#+EFFORT: 16h
+#+PRIORITY: #B
+#+LAYER: integration
+
+NOTE [2026-03-29]: Implemented spec parser, validator, importer, readiness evaluator, ancillary domain scan, preparation workflow prompt. All spec-ingestion tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- Org-to-org import: parse external org files (CUSTOM_ID headings + [[id:]] links). Preflight validation: missing IDs, broken links, dangling refs, duplicates
+- Import into Spell org system preserving structure and links
+- Readiness validation workflow (ultraplan-like):
+  - Required: all items have CUSTOM_ID, links resolve, domain guidelines present, gates defined, review model configured
+  - Advisory: acceptance criteria present, effort estimates, dependencies declared
+  - Launch blocked unless required checks pass
+- Preparation prompt file: step-by-step workflow with Handlebars template
+- Ancillary document identification: scan for missing domain guidelines, propose creation
+** Out-of-scope
+- Spec content authoring (human)
+- Loop execution ([[id:PROJ-001-loop-kernel-state-machine]])
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/spec-ingestion.test.ts
+- Import valid org: items created with correct IDs and properties
+- Import preserves [[id:]] links
+- Missing CUSTOM_ID flagged as error
+- Broken [[id:]] link flagged as error
+- Duplicate CUSTOM_ID flagged as error
+- Valid spec passes all checks
+- Missing review model fails required check
+- Missing domain guidelines fails required check
+- Missing acceptance criteria: advisory warning
+- Readiness report: pass/fail per check
+- Ancillary scan: detects missing guideline files
+
+* Implementation
+** packages/coding-agent/src/loop/ingestion/parser.ts
+** packages/coding-agent/src/loop/ingestion/validator.ts
+** packages/coding-agent/src/loop/ingestion/importer.ts
+** packages/coding-agent/src/loop/ingestion/readiness.ts
+** packages/coding-agent/src/loop/ingestion/ancillary.ts
+** packages/coding-agent/src/loop/prompts/preparation-workflow.md
+Steps: (1) Write tests with fixtures. (2) Implement parser. (3) Validator. (4) Importer. (5) Readiness. (6) Prompt. (7) Verify.
+
+* Edge Cases
+- Nested headings deeper than 5: flatten
+- CUSTOM_ID with special chars: sanitize
+- Large spec (100+ files): batch with progress
+- Files outside project root: reject
+
+* Acceptance Criteria
+- Valid spec imports successfully with links preserved
+- Invalid specs produce clear validation errors
+- Readiness blocks launch when required checks fail
+- Preparation prompt actionable for new spec folders
+- All tests pass

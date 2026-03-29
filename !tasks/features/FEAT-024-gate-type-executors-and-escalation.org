@@ -1,0 +1,88 @@
+#+TITLE: Gate Type Executors and Escalation
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-024-gate-type-executors-and-escalation
+#+EFFORT: 8h
+#+PRIORITY: #A
+#+LAYER: runtime
+
+NOTE [2026-03-29]: Implemented Command, LLM-review, Artifact, Human gate executors. FindingDedup with content-hash escalation. VirtualClock + GateTimer. All executor/dedup/timer tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- Four gate executor implementations:
+  - Command: run shell command, check exit code + stdout/stderr
+  - LLM-review: spawn subagent with review criteria, parse structured response
+  - Artifact: check file existence + optional content validation (regex, JSON schema)
+  - Human: present evidence (canvas or CLI), auto-approve timer
+- Diff-aware failure dedup: track previous findings per gate, detect repeats
+- Immediate escalation on repeated findings (same finding 2+ times)
+- Auto-approve timers: configurable per gate, server-side (not canvas-dependent)
+- Virtual clock interface for testable timers
+** Out-of-scope
+- Gate trigger matching ([[id:FEAT-021-gate-evaluator-core]])
+- Canvas rendering of gate results ([[id:FEAT-canvas-loop-dashboard]])
+** Boundary rationale
+Executors implement how each gate type runs. Separated from evaluator for independent testing.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/gate-executors.test.ts
+- Command executor: passing command -> pass
+- Command executor: failing command -> fail with stderr
+- Command executor: timeout -> fail with timeout reason
+- LLM-review: subagent returns pass -> pass
+- LLM-review: subagent returns findings -> fail with findings
+- Artifact: file exists -> pass
+- Artifact: file missing -> fail
+- Artifact: content doesn't match regex -> fail
+- Human: auto-approve after timeout -> pass
+- Human: user approves before timeout -> pass
+- Human: user rejects -> fail
+** File: packages/coding-agent/test/loop/gate-dedup.test.ts
+- First occurrence: normal failure
+- Same finding second time: immediate escalation
+- Different finding: normal failure
+- Comparison by content hash, not identity
+** File: packages/coding-agent/test/loop/gate-timer.test.ts
+- Virtual clock: timer fires at configured time
+- Timer cancel prevents auto-approve
+- Timer reset extends deadline
+
+* Implementation
+** packages/coding-agent/src/loop/gates/executors/command.ts
+CommandGateExecutor: spawn shell, capture output, map to GateDecision.
+** packages/coding-agent/src/loop/gates/executors/llm-review.ts
+LlmReviewGateExecutor: spawn review subagent, parse response.
+** packages/coding-agent/src/loop/gates/executors/artifact.ts
+ArtifactGateExecutor: file existence + content validation.
+** packages/coding-agent/src/loop/gates/executors/human.ts
+HumanGateExecutor: EventBus event for canvas, CLI fallback, auto-approve timer.
+** packages/coding-agent/src/loop/gates/dedup.ts
+FindingDedup: content hash tracking, repeat detection, escalation trigger.
+** packages/coding-agent/src/loop/gates/timer.ts
+GateTimer: injectable clock, countdown, cancel/reset.
+** packages/coding-agent/src/loop/gates/clock.ts
+Clock interface + RealClock + VirtualClock.
+Steps: (1) Write all executor/dedup/timer tests. (2) Implement clock. (3) Implement timer. (4) Implement executors. (5) Implement dedup. (6) Verify.
+
+* Edge Cases
+- Command not found -> fail with descriptive error
+- LLM-review malformed response -> fail with parse error
+- Human gate canvas disconnected -> CLI fallback
+- Finding text differs by whitespace -> normalize before hashing
+
+* Acceptance Criteria
+- All four executors produce correct GateDecision
+- Diff-aware dedup detects repeated findings
+- Auto-approve fires correctly with virtual clock
+- All tests pass (no wall-clock waits)

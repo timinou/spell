@@ -1,0 +1,66 @@
+#+TITLE: Validation Domain Registry with 6 Domains
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-029-validation-domain-registry-with-6-domain
+#+EFFORT: 8h
+#+PRIORITY: #B
+#+LAYER: integration
+
+NOTE [2026-03-29]: Implemented LoopDomainRegistry with 6 domains (code, test, architecture, ui, security, documentation), plugin mechanism, guidelines templates. All domain-registry tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- Domain registry: register/query validation domains
+- 6 initial domains, each providing default gate configs, guidelines template, evidence collector:
+  1. code: compile + lint + format (command gates)
+  2. test: suite + coverage threshold (command gates)
+  3. architecture: contract compliance + dependency direction (LLM-review gates)
+  4. ui: screenshot comparison + responsive (artifact gates)
+  5. security: secret scanning + dependency audit (command gates)
+  6. documentation: docs updated + changelog (artifact + LLM-review gates)
+- Extensible plugin entrypoint for custom domains
+- Guidelines stored as org items linked to loop specs
+** Out-of-scope
+- Gate execution ([[id:FEAT-024-gate-type-executors-and-escalation]])
+- Domain-specific tooling (e.g., screenshot comparison)
+** Boundary rationale
+Domains define what to validate and provide default gate configs. Don't execute gates.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/domain-registry.test.ts
+- Register domain with name + gates + template
+- Query domain by name
+- All 6 domains registered at startup
+- Each domain has gate configuration
+- Each domain has guidelines template
+- Plugin registration: custom domain added at runtime
+- Duplicate name: rejected
+- Gate config generation: domain produces valid GateConfig
+
+* Implementation
+** packages/coding-agent/src/loop/domains/registry.ts
+** packages/coding-agent/src/loop/domains/types.ts
+** packages/coding-agent/src/loop/domains/code.ts through docs.ts
+** packages/coding-agent/src/loop/domains/index.ts
+Steps: (1) Write registry tests. (2) Define interface. (3) Implement registry. (4) Implement 6 domains. (5) Plugin entrypoint. (6) Verify.
+
+* Edge Cases
+- Domain references unavailable tool: gate config adaptable, not hardcoded to one stack
+- Guidelines template has Handlebars placeholders for project values
+- Empty domain (no gates): allowed for documentation-only domains
+
+* Acceptance Criteria
+- All 6 domains registered and queryable
+- Each produces valid gate configurations
+- Plugin mechanism works
+- All tests pass

@@ -1,4 +1,4 @@
-import { QmlJourney, isBridgeAvailable } from "./qml-journey";
+import { isBridgeAvailable, QmlJourney } from "./qml-journey";
 
 export interface BrowseJourneyLaunchOptions {
 	props?: Record<string, unknown>;

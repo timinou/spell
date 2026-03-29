@@ -88,6 +88,7 @@ import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { executePython as executePythonCommand, type PythonResult } from "../ipy/executor";
+import type { LoopManager } from "../loop/loop-manager";
 import {
 	buildDiscoverableMCPSearchIndex,
 	collectDiscoverableMCPTools,
@@ -229,6 +230,8 @@ export interface AgentSessionConfig {
 	pendingActionStore?: PendingActionStore;
 	/** ToolSession for session-owned resource cleanup */
 	toolSession?: { dispose?(): Promise<void> | void };
+	/** Loop orchestration manager for slash commands, tools, and dashboards */
+	loopManager?: LoopManager;
 }
 
 /** Options for AgentSession.prompt() */
@@ -455,6 +458,7 @@ export class AgentSession {
 	#obfuscator: SecretObfuscator | undefined;
 	#pendingActionStore: PendingActionStore | undefined;
 	#toolSession?: { dispose?(): Promise<void> | void };
+	#loopManager: LoopManager | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
 	#promptGeneration = 0;
@@ -490,6 +494,7 @@ export class AgentSession {
 		this.agent.providerSessionState = this.#providerSessionState;
 		this.#pendingActionStore = config.pendingActionStore;
 		this.#toolSession = config.toolSession;
+		this.#loopManager = config.loopManager;
 		this.#unsubscribePendingActionPush = this.#pendingActionStore?.subscribePush(action => {
 			const reminderText = [
 				"<system-reminder>",
@@ -1962,6 +1967,10 @@ export class AgentSession {
 
 	setPlanReferencePath(path: string): void {
 		this.#planReferencePath = path;
+	}
+
+	getLoopManager(): LoopManager | undefined {
+		return this.#loopManager;
 	}
 
 	getCheckpointState(): CheckpointState | undefined {

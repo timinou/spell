@@ -1,0 +1,70 @@
+#+TITLE: Three-Way LLM Switching Orchestration
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-025-three-way-llm-switching-orchestration
+#+EFFORT: 6h
+#+PRIORITY: #B
+#+LAYER: runtime
+
+NOTE [2026-03-29]: Implemented PhaseCoordinator (plan->code->review), LlmSwitcher, HandoffArtifact generator, handoff prompt templates. All llm-orchestration tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- Three-way switching protocol within iteration: plan -> code -> review
+- Planning phase: reads specs + loop state, produces iteration plan
+- Coding phase: implements work per plan
+- Review phase: evaluates against acceptance criteria, produces HandoffArtifact
+- Context handoff artifact generation between switches (per contract schema)
+- Integration with kernel: switching triggered by state transitions
+- Review role uses [[id:FEAT-020-review-model-role-for-loop-workflows]] configuration
+** Out-of-scope
+- Model registry changes (separate item)
+- Gate execution (gates use review separately)
+- Prompt content (stored in .md files)
+** Boundary rationale
+Orchestration coordinates when and how switches happen. Models and prompts configured elsewhere.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/llm-orchestration.test.ts
+- Switch sequence: plan->code->review for normal iteration
+- Plan->code handoff includes iteration plan summary
+- Code->review handoff includes changed files list
+- Review->plan handoff includes findings and next priorities
+- Review role resolution uses configured review model
+- Review role missing: clear error before switching
+- Reflection uses planning model (not coding)
+- Handoff artifact conforms to HandoffArtifact schema
+
+* Implementation
+** packages/coding-agent/src/loop/orchestration/switcher.ts
+LlmSwitcher: switch(fromRole, toRole, context) -> apply model, inject handoff.
+** packages/coding-agent/src/loop/orchestration/handoff.ts
+Handoff artifact generator: collect changed files, gate results, findings.
+** packages/coding-agent/src/loop/orchestration/phase-coordinator.ts
+PhaseCoordinator: integrates with kernel state transitions to trigger switches.
+** packages/coding-agent/src/loop/prompts/plan-handoff.md
+** packages/coding-agent/src/loop/prompts/code-handoff.md
+** packages/coding-agent/src/loop/prompts/review-handoff.md
+Steps: (1) Write tests. (2) Implement handoff generator. (3) Implement switcher. (4) Implement coordinator. (5) Create prompt templates. (6) Verify.
+
+* Edge Cases
+- Model switch fails (API error): retry once, then pause loop
+- Handoff artifact too large: truncate with summary
+- Review model same as plan model: allowed, switching still meaningful
+- Zero changed files in coding phase: handoff reflects zero changes
+
+* Acceptance Criteria
+- Switch sequence executes correctly
+- Handoff artifacts conform to contract schema
+- Review phase uses review model
+- All tests pass

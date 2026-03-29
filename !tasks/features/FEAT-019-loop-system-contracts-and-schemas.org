@@ -1,0 +1,69 @@
+#+TITLE: Loop System Contracts and Schemas
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-019-loop-system-contracts-and-schemas
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: contracts
+
+NOTE [2026-03-29]: Implemented TypeBox schemas for all loop event types, fixture corpus, enums, and barrel exports under packages/coding-agent/src/loop/contracts/. All contract tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- TypeBox schemas for all loop system event types: LoopEvent envelope, GateDecision, ChildCompletionSignal, HandoffArtifact, IterationCheckpoint
+- Fixture corpus: one valid + one invalid fixture per event type
+- Schema version policy (semver, backwards-compatible additions)
+- Shared constants: LoopState enum, GateTrigger enum, FailurePolicy enum, GateType enum
+** Out-of-scope
+- Runtime behavior (state machine, evaluation logic)
+- Persistence format (NDJSON encoding is a persistence concern)
+** Boundary rationale
+Contracts must stabilize before any consumer is built. Every other item imports these schemas.
+
+* Tests
+TDD-first. Write all tests before implementing schemas.
+** File: packages/coding-agent/test/loop/contracts.test.ts
+- Schema validation: each event type validates against its TypeBox schema
+- Fixture round-trip: JSON.parse(JSON.stringify(fixture)) passes validation
+- Invalid fixtures: missing required fields, wrong types, extra fields all reject
+- Enum exhaustiveness: every LoopState/GateTrigger/FailurePolicy value has a fixture
+- Version field presence: all event envelopes include version field
+
+* Implementation
+** packages/coding-agent/src/loop/contracts/index.ts
+Barrel re-export of all schemas and types.
+** packages/coding-agent/src/loop/contracts/loop-event.ts
+LoopEvent schema: { version, type, loopId, parentLoopId?, timestamp, payload }
+** packages/coding-agent/src/loop/contracts/gate-decision.ts
+GateDecision: { gateId, trigger, outcome, reason, evidence[], attemptNumber, maxAttempts, previousFindings? }
+** packages/coding-agent/src/loop/contracts/child-completion.ts
+ChildCompletionSignal: { childLoopId, parentLoopId, outcome, summary, artifacts[], gateResults[] }
+** packages/coding-agent/src/loop/contracts/handoff-artifact.ts
+HandoffArtifact: { fromRole, toRole, iteration, changedFiles[], gateResults[], openFindings[], summary }
+** packages/coding-agent/src/loop/contracts/iteration-checkpoint.ts
+IterationCheckpoint: { loopId, iteration, state, timestamp, taskFileHash, orgItemId, childLoopIds[], pendingGates[] }
+** packages/coding-agent/src/loop/contracts/enums.ts
+LoopState, GateTrigger, FailurePolicy, GateType as const objects.
+** packages/coding-agent/test/loop/fixtures/
+JSON fixture files: one valid + one invalid per schema.
+Steps: (1) Write test file with all scenarios. (2) Create fixture files. (3) Implement schemas. (4) Verify exhaustiveness.
+
+* Edge Cases
+- Schema evolution: adding optional fields must not break existing fixtures
+- Enum extension: adding new enum values must not break existing consumers (string union, not numeric)
+- Payload typing: LoopEvent.payload is unknown; consumers cast after type-field discrimination
+
+* Acceptance Criteria
+- All test scenarios in contracts.test.ts pass
+- Every schema has at least one valid and one invalid fixture
+- Importing from packages/coding-agent/src/loop/contracts/ provides all types and schemas
+- No circular imports within contracts/

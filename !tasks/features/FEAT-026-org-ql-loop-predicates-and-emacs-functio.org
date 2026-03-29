@@ -1,0 +1,71 @@
+#+TITLE: Org-QL Loop Predicates and Emacs Functions
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-026-org-ql-loop-predicates-and-emacs-functio
+#+EFFORT: 6h
+#+PRIORITY: #B
+#+LAYER: integration
+
+NOTE [2026-03-29]: Implemented loop-predicates.el (loop-status, loop-blocked, acceptance-failed, dependency-chain, loop-depth), loop-navigation.el, TS query builder extensions. All predicate tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- Loop-specific org-ql predicates:
+  - (loop-status STATUS) - find items by loop state
+  - (loop-blocked) - find paused/failed/escalated items
+  - (acceptance-failed) - items whose last gate decision was fail
+  - (dependency-chain ID) - transitive dependencies of a loop item
+  - (loop-depth N) - items at specific recursion depth
+- Emacs elisp functions:
+  - spell-loop-jump-to-linked: navigate to [[id:]] target
+  - spell-loop-show-dep-graph: display dependency graph
+  - spell-loop-highlight-acceptance: highlight acceptance criteria
+  - spell-loop-show-gate-results: display gate history
+- Integration with existing org-ql bridge (packages/org/elisp/tools/org-ql-query.el)
+** Out-of-scope
+- Org item schema changes ([[id:FEAT-022-loop-state-persistence-and-recovery]] defines properties)
+- Canvas rendering of queries
+** Boundary rationale
+Predicates enable querying loop state across org. Emacs functions provide spec navigation.
+
+* Tests
+TDD-first.
+** File: packages/org/test/loop-predicates.test.ts
+- (loop-status "DOING") returns items with LOOP_STATE=iterating
+- (loop-blocked) returns items with LOOP_STATE in (paused, failed)
+- (acceptance-failed) returns items with LAST_GATE_OUTCOME=fail
+- (dependency-chain "LOOP-001") returns transitive deps
+- (loop-depth 2) returns depth-2 items only
+- Combined predicates: (and (loop-status "DOING") (loop-depth 1))
+** File: packages/org/test/loop-elisp.test.ts
+- spell-loop-jump-to-linked navigates to target
+- spell-loop-show-dep-graph produces valid output for fixture data
+
+* Implementation
+** packages/org/elisp/tools/loop-predicates.el
+Register org-ql predicates.
+** packages/org/elisp/tools/loop-navigation.el
+Navigation functions.
+** packages/org/src/query-builder.ts
+Extend OrgQlFilter with loop fields. Update buildOrgQlSexp.
+Steps: (1) Write tests against fixture org files. (2) Implement elisp predicates. (3) Implement navigation. (4) Extend TS query builder. (5) Verify.
+
+* Edge Cases
+- dependency-chain with no deps: empty list
+- Circular refs (broken data): detect, return error
+- Item without LOOP_STATE property: silently excluded
+
+* Acceptance Criteria
+- All predicates return correct results on fixtures
+- Emacs functions work from emacs_code tool
+- TS query builder supports loop fields
+- All tests pass

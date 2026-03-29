@@ -1,0 +1,52 @@
+#+TITLE: Loop Event Replay and Debug CLI
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-031-loop-event-replay-and-debug-cli
+#+EFFORT: 4h
+#+PRIORITY: #C
+#+LAYER: tooling
+
+NOTE [2026-03-29]: Implemented replayer, formatter, and command handlers for /loop replay and /loop debug. All replay tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- Replay CLI: /loop replay <id> [--at-iteration N] - reconstruct state at any point from event log
+- Debug CLI: /loop debug <id> - full event timeline with filters by type
+- Visual timeline: formatted text output of loop lifecycle
+** Out-of-scope
+- Interactive replay (stepping through events)
+- Canvas visualization ([[id:FEAT-canvas-loop-dashboard]])
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/replay.test.ts
+- Replay at iteration N: state matches live state at that iteration
+- Replay at final: matches completed loop
+- Debug timeline: all events in chronological order
+- Debug filter: filtering by type returns subset
+- Corrupt event log: skips bad lines, reconstructs from valid
+- Empty event log: returns initial state
+
+* Implementation
+** packages/coding-agent/src/loop/replay/replayer.ts
+** packages/coding-agent/src/loop/replay/formatter.ts
+** packages/coding-agent/src/loop/replay/commands.ts
+Steps: (1) Write tests. (2) Implement replayer. (3) Formatter. (4) Wire commands. (5) Verify.
+
+* Edge Cases
+- Target iteration beyond actual: return final state
+- Event log from different schema version: version-aware deserialization
+
+* Acceptance Criteria
+- Replay reconstructs correct state at any iteration
+- Debug shows all events
+- All tests pass

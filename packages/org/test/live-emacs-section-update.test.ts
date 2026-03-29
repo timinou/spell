@@ -120,11 +120,11 @@ async function launchCleanEmacsBridge(emacsPath: string): Promise<LiveSession> {
 			"-Q",
 			`--daemon=${daemonName}`,
 			"--eval",
-			`(add-to-list 'load-path \"${ELISP_DIR}\")`,
+			`(add-to-list 'load-path "${ELISP_DIR}")`,
 			"--eval",
 			"(require 'org-tasks-mcp)",
 			"--eval",
-			`(mcp-server-start-unix nil \"${socketPath}\")`,
+			`(mcp-server-start-unix nil "${socketPath}")`,
 		],
 		{
 			stdout: "ignore",

@@ -1,0 +1,86 @@
+#+TITLE: Loop Journey Test Types and Integration Suite
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-033-loop-journey-test-types-and-integration
+#+EFFORT: 20h
+#+PRIORITY: #A
+#+LAYER: testing
+
+NOTE [2026-03-29]: Implemented LoopJourney, IntegrationJourney, StubLoopResponder, VirtualClock helper. Full pipeline and dashboard QmlJourney tests pass.
+
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- LoopJourney test type:
+  - Deterministic stub LLM: canned responses per role (plan/code/review)
+  - Virtual clock integration for timer tests
+  - Assertion helpers: expectLoopState, expectIteration, expectGateResult
+  - Fault injection: gate failure, child crash, network error, disk full
+  - Lifecycle helpers: startLoop, advanceIteration, triggerReflection, completeLoop
+- IntegrationJourney test type:
+  - Hermetic fixture repos (temp git repos with known state)
+  - Full pipeline: spec ingestion -> loop creation -> iteration -> gate -> completion
+  - Multi-loop coordination tests
+  - Worktree lifecycle tests
+- QmlJourney dashboard tests:
+  - Dashboard rendering accuracy
+  - Control interactions (pause/resume/approve/reject)
+  - Auto-approve timer with virtual clock
+  - Disconnect/reconnect rebuild
+  - CLI fallback equivalence
+- Shared infrastructure: virtual clock, stub LLM
+** Out-of-scope
+- Real LLM integration (nightly CI only)
+- Performance benchmarks
+
+* Tests
+The tests ARE the deliverable.
+** File: packages/coding-agent/test/helpers/loop-journey.ts
+LoopJourney class: launch, startLoop, advanceIteration, triggerReflection, expectLoopState, expectIteration, expectGateResult, injectFault, teardown
+** File: packages/coding-agent/test/helpers/integration-journey.ts
+IntegrationJourney: createFixtureRepo, importSpecs, runLoop, verifyCompletion, teardown
+** File: packages/coding-agent/test/helpers/stub-llm.ts
+Stub LLM: per-role canned response configuration
+** File: packages/coding-agent/test/helpers/virtual-clock.ts
+Virtual clock: advance(ms), now(), installForTest(), restoreRealClock()
+** File: packages/coding-agent/test/integration/loop/full-pipeline.test.ts
+- Happy path: spec -> loop -> 3 iterations -> gates pass -> complete
+- Gate failure: retry -> pass second attempt
+- Recursive: parent spawns child -> child completes -> parent continues
+- Kill switch: loop killed -> children cancelled
+- Budget exceeded: loop paused
+- Spec drift: detected at reflection -> revalidation
+** File: packages/coding-agent/test/integration/loop/dashboard.test.ts
+- QmlJourney dashboard rendering and control tests
+
+* Implementation
+** packages/coding-agent/test/helpers/loop-journey.ts
+** packages/coding-agent/test/helpers/integration-journey.ts
+** packages/coding-agent/test/helpers/stub-llm.ts
+** packages/coding-agent/test/helpers/virtual-clock.ts
+** packages/coding-agent/test/integration/loop/
+Steps: (1) Build virtual clock. (2) Build stub LLM. (3) Build LoopJourney. (4) Build IntegrationJourney. (5) Write pipeline tests. (6) Write dashboard tests. (7) Verify.
+
+* Edge Cases
+- Stub LLM: no response configured -> clear test error
+- Virtual clock: advancing past multiple deadlines fires in order
+- Fixture repo: cleanup on test failure (afterEach force)
+- Concurrent tests: unique temp directory each
+
+* Acceptance Criteria
+- LoopJourney enables deterministic lifecycle testing
+- IntegrationJourney enables full pipeline testing
+- Virtual clock enables timer testing without wall-clock waits
+- All integration tests pass
+- Dashboard QmlJourney tests pass
+
+\n\n* Momus Fix: Infrastructure Preconditions\nExecution of this item requires:\n- QML bridge binary built (cd packages/qml && bun run build:bridge) for QmlJourney tests\n- All Phase B + C items implemented (kernel, gates, persistence, recursion, etc.) for IntegrationJourney\n- Hermetic git fixture repos: each IntegrationJourney test creates temp dir with git init, known file state, and spec org files. Cleanup in afterEach with force remove.\n- Stub LLM: not a real provider — a mock that returns configured canned responses per (role, iteration) tuple. No network calls.\n- Virtual clock: replaces Date.now() and setTimeout scheduling in gate timer module. Uses injectable Clock interface from [[id:FEAT-024-gate-type-executors-and-escalation]].

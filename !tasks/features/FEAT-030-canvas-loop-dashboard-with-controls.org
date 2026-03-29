@@ -1,0 +1,78 @@
+#+TITLE: Canvas Loop Dashboard with Controls
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-030-canvas-loop-dashboard-with-controls
+#+EFFORT: 20h
+#+PRIORITY: #B
+#+LAYER: ui
+
+NOTE [2026-03-29]: Implemented LoopDashboardPanel.qml with DAG, GateTimeline, AutoApproveTimer components. LoopDashboard.qml standalone window. DashboardBridge TS class. QmlJourney dashboard test passes. Screenshot captured.
+
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- QML dashboard window (LoopDashboard.qml):
+  - Loop progress: state, iteration count, elapsed time
+  - DAG visualization: parent/child tree with status colors
+  - Checklist/acceptance status: per-gate pass/fail indicators
+  - Iteration history: expandable timeline with summaries
+  - Gate results timeline with evidence links
+  - Auto-approve countdown timer
+  - Budget display: time/iteration spend vs limits
+- Controls: pause/resume, skip iteration, approve/reject gate, auto-approve toggle, kill switch (with confirm)
+- CLI fallback: every canvas action has /loop command equivalent
+- Graceful degradation: timers server-side, canvas view-only, reconnect rebuilds from org+tracks
+- EventBus integration: subscribe to loop:<id>:* for real-time updates
+** Out-of-scope
+- Loop state machine logic ([[id:PROJ-001-loop-kernel-state-machine]])
+- Gate execution ([[id:FEAT-024-gate-type-executors-and-escalation]])
+** Boundary rationale
+Dashboard is view+control over engine. No business logic in QML.
+
+* Tests
+TDD-first. QmlJourney tests.
+** File: packages/coding-agent/test/integration/loop/dashboard.test.ts
+- Dashboard shows loop name and iteration count
+- DAG visualization renders parent and child nodes
+- Gate result appears in timeline after decision
+- Pause button sends pause event, state updates
+- Approve button resolves pending human gate
+- Auto-approve toggle changes timer behavior
+- Kill switch shows confirmation dialog
+- Disconnect + reconnect rebuilds state
+- CLI fallback: /loop pause same as canvas button
+
+* Implementation
+** packages/coding-agent/src/modes/qml/LoopDashboard.qml
+** packages/coding-agent/src/modes/qml/components/LoopDAG.qml
+** packages/coding-agent/src/modes/qml/components/GateTimeline.qml
+** packages/coding-agent/src/modes/qml/components/AutoApproveTimer.qml
+** packages/coding-agent/src/loop/dashboard-bridge.ts
+Bridge between EventBus and canvas: subscribe, format for QML, handle controls.
+** packages/coding-agent/src/loop/loop-commands.ts (extend)
+CLI fallback commands: /loop pause, /loop approve, /loop reject, /loop skip.
+Steps: (1) Write QmlJourney tests. (2) Implement bridge. (3) Build QML. (4) Wire controls. (5) Add CLI. (6) Verify.
+
+* Edge Cases
+- Dashboard opened after loop started: reconstruct from org+tracks
+- Multiple loops active: loop selector
+- Canvas crashes during gate approval: timer continues server-side
+- Long history: virtualized scrolling, max 100 visible
+
+* Acceptance Criteria
+- Dashboard renders loop state correctly
+- All controls produce correct state changes
+- CLI fallback works for every control
+- Disconnect/reconnect preserves state
+- All QmlJourney tests pass
+
+\n\n* Momus Fix: QML Panel Integration\nDashboard MUST integrate with existing shell/panel architecture, not as standalone QML window. Implementation approach: register LoopDashboard as a canvas panel (like ChatPanel, BrowsePanel) launched via canvas tool 'launch' action, or as a standalone window opened by /loop dashboard command. Controls emit events to EventBus (server-side); canvas is a reactive view. \"View-only\" means canvas holds no authoritative state — all decisions (auto-approve timers, gate results) are computed server-side in LoopManager, canvas reads and renders. Control buttons in QML send bridge.send() messages that the dashboard-bridge.ts translates to EventBus events consumed by LoopManager.\n\n* Momus Fix: Infrastructure Preconditions\n- QML bridge binary must be built: cd packages/qml && bun run build:bridge\n- LoopManager from [[id:PROJ-001-loop-kernel-state-machine]] must be wired in sdk.ts\n- GateEvaluator from [[id:FEAT-021-gate-evaluator-core]] must be operational for gate result display

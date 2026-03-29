@@ -1,0 +1,134 @@
+#+TITLE: Loop Kernel State Machine
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: PROJ-001-loop-kernel-state-machine
+#+EFFORT: 18h
+#+PRIORITY: #A
+#+LAYER: runtime
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-03-29]: Implemented LoopKernel, LoopRegistry, LoopManager, loop_start/loop_done tools, /loop slash commands, prompt builder, sdk.ts wiring, and AgentSession integration. All kernel/command tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- In-memory loop state machine: idle, planning, iterating, reflecting, validating, complete, failed, paused
+- Iteration lifecycle: start -> agent works -> checkpoint -> next phase
+- Context refresh between iterations (fresh prompt with updated task state)
+- EventBus explicit channel subscriptions per loop: subscribe to each of loop:<loopId>:state, loop:<loopId>:iteration, loop:<loopId>:gate individually (no wildcard support in EventBus)
+- Concurrent loop coordination: configurable concurrency limit (default 2)
+- Loop registry: track active/paused/completed loops
+- Canonical slash commands: /loop start, /loop pause, /loop resume, /loop status, /loop list, /loop kill. NOTE: use 'pause' not 'stop' throughout (pause is resumable, kill is terminal)
+- Agent tools: loop_start, loop_done (iteration complete signal)
+- Runtime wiring entrypoint: LoopManager class instantiated in packages/coding-agent/src/sdk.ts alongside CanvasOrchestratorManager, subscribes to EventBus, owns loop kernel lifecycle
+- Tool registry integration: loop_start and loop_done registered in packages/coding-agent/src/tools/index.ts BUILTIN_TOOLS array
+- Slash command registration: /loop commands registered via packages/coding-agent/src/extensibility/slash-commands.ts or builtin-registry
+- Plan-mode coexistence: loops can run alongside plan mode. Loop /loop commands remain available in plan mode. Loop tools are NOT narrowed by plan mode tool constraints (they are infrastructure, not code-editing tools). If a loop is active when plan mode enters, loop continues; plan mode tools operate within the current iteration context
+** Out-of-scope
+- Persistence ([[id:FEAT-022-loop-state-persistence-and-recovery]])
+- Recursive spawning ([[id:FEAT-023-recursive-loop-spawning-and-dag-manageme]])
+- Gate evaluation ([[id:FEAT-021-gate-evaluator-core]])
+- LLM switching ([[id:FEAT-025-three-way-llm-switching-orchestration]])
+- Git operations ([[id:FEAT-028-git-integration-for-loop-workflows]])
+** Boundary rationale
+Kernel must execute deterministically in-memory first. Persistence, recursion, and gates layer on top.
+** In-scope
+- In-memory loop state machine: idle, planning, iterating, reflecting, validating, complete, failed, paused
+- Iteration lifecycle: start -> agent works -> checkpoint -> next phase
+- Context refresh between iterations (fresh prompt with updated task state)
+- EventBus channel namespacing: loop:<loopId>:state, loop:<loopId>:iteration, loop:<loopId>:gate
+- Concurrent loop coordination: configurable concurrency limit (default 2)
+- Loop registry: track active/paused/completed loops
+- Slash commands: /loop start, /loop stop, /loop resume, /loop status, /loop list
+- Agent tools: loop_start, loop_done (iteration complete signal)
+** Out-of-scope
+- Persistence (FEAT-loop-persistence)
+- Recursive spawning (FEAT-loop-recursion)
+- Gate evaluation (FEAT-gate-evaluator)
+- LLM switching (FEAT-llm-orchestration)
+- Git operations (FEAT-git-loop-integration)
+** Boundary rationale
+Kernel must execute deterministically in-memory first. Persistence, recursion, and gates layer on top.
+
+* Tests
+TDD-first. All state machine tests written before implementation.
+** File: packages/coding-agent/test/loop/kernel.test.ts
+- State transitions: idle->planning->iterating->reflecting->validating->complete (happy path)
+- State transitions: iterating->paused->iterating (pause/resume)
+- State transitions: iterating->failed (on error)
+- Invalid transitions rejected: complete->iterating throws
+- Iteration counter increments on each loop_done
+- Context refresh: buildIterationPrompt returns fresh prompt with current task content
+- Max iterations enforcement: loop transitions to validating at limit
+- EventBus emissions: each state change emits LoopEvent on namespaced channel
+- Concurrent loop limit: third loop start rejected when limit is 2
+- Loop registry: active loops queryable by status
+** File: packages/coding-agent/test/loop/kernel-commands.test.ts
+- /loop start creates new loop and transitions to planning
+- /loop stop transitions active loop to paused
+- /loop resume transitions paused loop to iterating
+- /loop status shows all loops with current state
+- /loop list shows active + paused + completed counts
+
+* Implementation
+** packages/coding-agent/src/loop/kernel.ts
+LoopKernel class: state machine, iteration management, prompt building.
+Public API: start(config), pause(loopId), resume(loopId), done(loopId), kill(loopId), getState(loopId), listLoops()
+** packages/coding-agent/src/loop/loop-manager.ts
+LoopManager class: instantiated in sdk.ts, owns loop registry, subscribes EventBus channels per loop (explicit, no wildcards), coordinates lifecycle with session. Disposes on shutdown.
+** packages/coding-agent/src/loop/loop-registry.ts
+In-memory registry of active LoopKernel instances. Concurrency enforcement.
+** packages/coding-agent/src/loop/loop-commands.ts
+Canonical slash command handlers: /loop start|pause|resume|status|list|kill. Registered via extension command API.
+** packages/coding-agent/src/loop/loop-tools.ts
+loop_start and loop_done tool definitions (AgentTool interface). Added to BUILTIN_TOOLS in tools/index.ts.
+** packages/coding-agent/src/loop/prompt-builder.ts
+Build iteration prompts from task state + loop metadata. Uses .md prompt templates imported with { type: "text" }.
+** packages/coding-agent/src/loop/prompts/iteration.md
+Handlebars template for iteration prompt.
+** packages/coding-agent/src/loop/prompts/reflection.md
+Handlebars template for reflection prompt.
+** packages/coding-agent/src/sdk.ts (modify)
+Instantiate LoopManager alongside CanvasOrchestratorManager. Wire EventBus. Dispose on shutdown.
+** packages/coding-agent/src/tools/index.ts (modify)
+Add loop_start and loop_done to BUILTIN_TOOLS.
+Steps: (1) Write kernel.test.ts and kernel-commands.test.ts. (2) Implement LoopKernel state machine. (3) Implement LoopManager. (4) Implement registry. (5) Implement prompt builder. (6) Wire commands via extension API. (7) Register tools in BUILTIN_TOOLS. (8) Wire LoopManager in sdk.ts. (9) Verify all tests pass.
+** packages/coding-agent/src/loop/kernel.ts
+LoopKernel class: state machine, iteration management, prompt building.
+Public API: start(config), stop(loopId), resume(loopId), done(loopId), getState(loopId), listLoops()
+** packages/coding-agent/src/loop/loop-registry.ts
+In-memory registry of active LoopKernel instances. Concurrency enforcement.
+** packages/coding-agent/src/loop/loop-commands.ts
+Slash command handlers delegating to LoopKernel.
+** packages/coding-agent/src/loop/loop-tools.ts
+loop_start and loop_done tool definitions.
+** packages/coding-agent/src/loop/prompt-builder.ts
+Build iteration prompts from task state + loop metadata. Uses .md prompt templates.
+** packages/coding-agent/src/loop/prompts/iteration.md
+Handlebars template for iteration prompt.
+** packages/coding-agent/src/loop/prompts/reflection.md
+Handlebars template for reflection prompt.
+Steps: (1) Write kernel.test.ts and kernel-commands.test.ts. (2) Implement LoopKernel state machine. (3) Implement registry. (4) Implement prompt builder. (5) Wire commands and tools. (6) Verify all tests pass.
+
+* Edge Cases
+- Loop start with same name as existing active loop: reject with error
+- Loop done with no active loop: return error, do not crash
+- Concurrent modification: two loop_done calls for same loop in rapid succession
+- EventBus subscriber throws: must not crash loop kernel
+- Empty task file at iteration start: pause loop, report error
+
+* Acceptance Criteria
+- All state transition tests pass
+- /loop start creates a loop visible in /loop list
+- loop_done advances iteration and emits events
+- Max iterations triggers transition to validating
+- Concurrent limit enforced
+- EventBus events emitted for every state change

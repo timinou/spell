@@ -4,8 +4,8 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { EventBus } from "../utils/event-bus";
-import { createFindingTabId } from "./browse-findings";
 import { BrowseEventMapper } from "./browse-event-mapper";
+import { createFindingTabId } from "./browse-findings";
 
 export interface BrowseModeOptions {
 	initialMessage?: string;

@@ -1,0 +1,76 @@
+#+TITLE: Loop State Persistence and Recovery
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-022-loop-state-persistence-and-recovery
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: persistence
+
+NOTE [2026-03-29]: Implemented checkpoint save/load, NDJSON event log, org-sync, reconciliation, session restore hooks. All persistence tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- Org-backed loop state: each loop is an org item with properties (LOOP_STATE, ITERATION, MAX_ITERATIONS, PARENT_LOOP, DEPTH)
+- .local/!tracks/ structured directory:
+  - .local/!tracks/loops/<loopId>/state.json (current checkpoint)
+  - .local/!tracks/loops/<loopId>/events.ndjson (append-only event log)
+  - .local/!tracks/gates/<loopId>/ (gate decision history)
+  - .local/!tracks/iterations/<loopId>/ (per-iteration summaries)
+- Session resumability: detect active loops from org items on session start, restore kernel state
+- Recovery: replay events.ndjson to reconstruct state after crash
+- Reconciliation: org authoritative for semantic state, tracks authoritative for runtime telemetry
+** Out-of-scope
+- Loop state machine logic ([[id:PROJ-001-loop-kernel-state-machine]])
+- Cross-process locking (upgrade packages/org/src/mutex.ts separately)
+** Boundary rationale
+Persistence layers on top of in-memory kernel. Kernel tests don't need filesystem.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/persistence.test.ts
+- Persist round-trip: save checkpoint -> load -> state matches
+- Event log append: each LoopEvent appended as NDJSON line
+- Event log replay: replaying events from empty state produces correct final state
+- Crash recovery: delete checkpoint, keep event log -> recover from log
+- Org item creation: starting loop creates org item with correct properties
+- Org item update: state transitions update LOOP_STATE property
+- Session resume: mock session start with active org items -> kernel states restored
+- Reconciliation: org says DOING but checkpoint says paused -> org wins
+- File structure: verify .local/!tracks/ directory layout
+
+* Implementation
+** packages/coding-agent/src/loop/persistence/checkpoint.ts
+Save/load IterationCheckpoint to .local/!tracks/loops/<id>/state.json
+** packages/coding-agent/src/loop/persistence/event-log.ts
+Append-only NDJSON writer/reader. Replay function.
+** packages/coding-agent/src/loop/persistence/org-sync.ts
+Create/update org items for loops. Map LoopState to org TODO states.
+** packages/coding-agent/src/loop/persistence/reconcile.ts
+Reconciliation: compare org vs checkpoint, resolve per hierarchy.
+** packages/coding-agent/src/loop/persistence/session-hooks.ts
+Session start/shutdown hooks for save/restore.
+Steps: (1) Write persistence tests. (2) Implement checkpoint. (3) Implement event log. (4) Implement org sync. (5) Implement reconciliation. (6) Wire session hooks. (7) Verify.
+
+* Edge Cases
+- Corrupt checkpoint JSON: fall back to event log replay
+- Event log truncated mid-line: skip incomplete final line, log warning
+- Org item deleted externally: create new from checkpoint on resume
+- Disk full: log error, loop continues in memory (best-effort)
+- Concurrent writes to same event log: file-level append lock
+
+* Acceptance Criteria
+- Persist/restore round-trip preserves all state
+- Event log replay produces identical state to live execution
+- Crash recovery works from event log alone
+- Org items reflect loop state after every transition
+- Session resume restores active loops
+- All tests pass

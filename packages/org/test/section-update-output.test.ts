@@ -3,8 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { EmacsSession } from "../src/emacs/daemon";
-import type { OrgConfig } from "../src/types";
 import type { OrgToolDefinition } from "../src/tool";
+import type { OrgConfig } from "../src/types";
 
 const callToolMock = vi.fn(async (_name: string, _args: Record<string, unknown>) => ({ success: true }));
 const createOrgClientMock = vi.fn(async () => ({

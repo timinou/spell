@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, it } from "bun:test";
 import { isBridgeAvailable, QmlJourney } from "../helpers/qml-journey";
 
 const HARNESS_QML = "panels/BrowseChatPanelTestHarness.qml";

@@ -1,6 +1,6 @@
 import type { AgentSessionEvent } from "../session/agent-session";
 import type { CustomMessage } from "../session/messages";
-import { createFinding, parseBrowseFinding, type BrowseFinding } from "./browse-findings";
+import { type BrowseFinding, createFinding, parseBrowseFinding } from "./browse-findings";
 import { SessionEventMapper } from "./qml-event-mapper";
 
 export interface BrowseTabEvent {

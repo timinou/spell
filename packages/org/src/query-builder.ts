@@ -18,6 +18,11 @@ export interface OrgQlFilter {
 	clocked?: { on?: string; from?: string };
 	effort?: { op: "<=" | ">=" | "="; value: string };
 	text?: string;
+	loopStatus?: string[];
+	loopBlocked?: boolean;
+	acceptanceFailed?: boolean;
+	dependencyChain?: string;
+	loopDepth?: number;
 	and?: OrgQlFilter[];
 	or?: OrgQlFilter[];
 	not?: OrgQlFilter;
@@ -76,6 +81,28 @@ export function buildOrgQlSexp(filter: OrgQlFilter): string {
 		parts.push(`(regexp "${filter.text.replace(/"/g, '\\"')}")`);
 	}
 
+	if (filter.loopStatus && filter.loopStatus.length > 0) {
+		for (const status of filter.loopStatus) {
+			parts.push(`(loop-status "${status}")`);
+		}
+	}
+
+	if (filter.loopBlocked) {
+		parts.push("(loop-blocked)");
+	}
+
+	if (filter.acceptanceFailed) {
+		parts.push("(acceptance-failed)");
+	}
+
+	if (filter.dependencyChain) {
+		parts.push(`(dependency-chain "${filter.dependencyChain}")`);
+	}
+
+	if (filter.loopDepth !== undefined) {
+		parts.push(`(loop-depth ${filter.loopDepth})`);
+	}
+
 	if (filter.and && filter.and.length > 0) {
 		const inner = filter.and.map(buildOrgQlSexp).join(" ");
 		parts.push(`(and ${inner})`);
@@ -104,6 +131,15 @@ export function buildOrgQlSexp(filter: OrgQlFilter): string {
  */
 export function requiresEmacs(filter: OrgQlFilter): boolean {
 	if (filter.dateRange || filter.clocked || filter.effort) return true;
+	if (
+		filter.loopStatus ||
+		filter.loopBlocked ||
+		filter.acceptanceFailed ||
+		filter.dependencyChain ||
+		filter.loopDepth !== undefined
+	) {
+		return true;
+	}
 	if (filter.properties?.some(p => p.op && p.op !== "=")) return true;
 	if (filter.and?.some(requiresEmacs)) return true;
 	if (filter.or?.some(requiresEmacs)) return true;
@@ -138,6 +174,17 @@ export function parseKeywordQuery(input: string): OrgQlFilter {
 			if (key && value !== undefined) {
 				filter.properties = [...(filter.properties ?? []), { key, value }];
 			}
+		} else if (token.startsWith("loop-status:")) {
+			filter.loopStatus = token.slice("loop-status:".length).split(",").filter(Boolean);
+		} else if (token === "loop-blocked") {
+			filter.loopBlocked = true;
+		} else if (token === "acceptance-failed") {
+			filter.acceptanceFailed = true;
+		} else if (token.startsWith("dependency-chain:")) {
+			filter.dependencyChain = token.slice("dependency-chain:".length);
+		} else if (token.startsWith("loop-depth:")) {
+			const depth = Number.parseInt(token.slice("loop-depth:".length), 10);
+			if (Number.isFinite(depth)) filter.loopDepth = depth;
 		}
 	}
 

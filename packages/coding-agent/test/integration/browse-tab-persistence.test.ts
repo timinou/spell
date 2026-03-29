@@ -1,7 +1,7 @@
+import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "bun:test";
 import { isBridgeAvailable, QmlJourney } from "../helpers/qml-journey";
 
 const BROWSE_SHELL_QML = "BrowseShell.qml";

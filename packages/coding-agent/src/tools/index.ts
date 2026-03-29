@@ -8,6 +8,8 @@ import type { Skill } from "../extensibility/skills";
 import type { InternalUrlRouter } from "../internal-urls";
 import { getPreludeDocs, warmPythonEnvironment } from "../ipy/executor";
 import { checkPythonKernelAvailability } from "../ipy/kernel";
+import type { LoopManager } from "../loop/loop-manager";
+import { LoopDoneTool, LoopStartTool } from "../loop/loop-tools";
 import { LspTool } from "../lsp";
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import { EditTool } from "../patch";
@@ -50,6 +52,7 @@ import { WriteTool } from "./write";
 
 export * from "../exa";
 export type * from "../exa/types";
+export * from "../loop/loop-tools";
 export * from "../lsp";
 export * from "../patch";
 export * from "../session/streaming-output";
@@ -182,6 +185,8 @@ export interface ToolSession {
 	emacsSessionManager?: EmacsSessionManager;
 	/** Active QML remote server; when set, CanvasTool routes panels to the Android client. */
 	qmlRemoteServer?: import("@oh-my-pi/pi-qml-remote").QmlRemoteServer;
+	/** Loop orchestration manager for loop tools, slash commands, and dashboards. */
+	loopManager?: LoopManager;
 	/** Dispose session-owned resources (emacs daemon, QML remote server). */
 	dispose?(): Promise<void> | void;
 }
@@ -218,6 +223,8 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
 	canvas: s => new CanvasTool(s),
+	loop_start: s => (s.loopManager ? new LoopStartTool(s) : null),
+	loop_done: s => (s.loopManager ? new LoopDoneTool(s) : null),
 };
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {

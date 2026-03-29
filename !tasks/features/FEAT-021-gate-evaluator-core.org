@@ -1,0 +1,69 @@
+#+TITLE: Gate Evaluator Core
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-021-gate-evaluator-core
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: runtime
+
+NOTE [2026-03-29]: Implemented GateEvaluator, GateRegistry, trigger matching, config DSL normalization. All gate-evaluator tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- Gate schema: { id, type, trigger, criteria, maxAttempts, onFail, timeout, evidenceCollector }
+- Gate registry: register/unregister gates for a loop
+- Trigger matching: evaluate which gates fire at a given point (every-iteration, every-N, on-reflection, on-completion, on-child-complete)
+- Core evaluation pipeline: collect evidence -> evaluate criteria -> produce GateDecision
+- Gate configuration DSL: declarative gate definitions in loop config
+** Out-of-scope
+- Gate type implementations (command/LLM/artifact/human) - FEAT-gate-executors
+- Auto-approve timers (FEAT-gate-executors)
+- Diff-aware dedup (FEAT-gate-executors)
+** Boundary rationale
+Evaluator defines what gates are and when they fire. Executors define how each type runs.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/gate-evaluator.test.ts
+- Trigger matching: every-iteration gate fires on every iteration
+- Trigger matching: every-3 gate fires on iterations 3, 6, 9
+- Trigger matching: on-reflection gate fires only during reflection phase
+- Trigger matching: on-completion gate fires only when loop reaches validating
+- Trigger matching: on-child-complete fires on child completion signal
+- Multiple gates: all matching gates fire in priority order
+- Gate registration: duplicate gate ID rejects
+- Gate removal: removing gate by ID succeeds
+- Pipeline: evidence -> criteria evaluation -> GateDecision production
+- Gate config DSL: declarative config produces correct registry state
+
+* Implementation
+** packages/coding-agent/src/loop/gates/evaluator.ts
+GateEvaluator class: register/unregister/evaluate. Trigger matching. Pipeline orchestration.
+** packages/coding-agent/src/loop/gates/registry.ts
+Gate registry: per-loop storage, priority ordering.
+** packages/coding-agent/src/loop/gates/trigger.ts
+Trigger matching: shouldFire(gate, loopState, event) -> boolean
+** packages/coding-agent/src/loop/gates/config.ts
+Gate configuration DSL parser.
+Steps: (1) Write evaluator tests. (2) Implement trigger matching. (3) Implement registry. (4) Implement pipeline. (5) Add config DSL. (6) Verify.
+
+* Edge Cases
+- Zero registered gates: returns empty decisions array (not error)
+- Gate with trigger 'every-0': invalid, reject at registration
+- Evidence collection throws: gate decision is 'fail' with error reason
+- Multiple gates, one fails: remaining still execute (no short-circuit)
+
+* Acceptance Criteria
+- All trigger matching scenarios pass
+- Gate registration/removal works correctly
+- Pipeline produces GateDecision conforming to contract schema
+- Config DSL populates registry

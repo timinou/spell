@@ -1,0 +1,70 @@
+#+TITLE: Git Integration for Loop Workflows
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-028-git-integration-for-loop-workflows
+#+EFFORT: 8h
+#+PRIORITY: #B
+#+LAYER: integration
+
+NOTE [2026-03-29]: Implemented dirty-check, checkpoint commits, worktree helpers, merge, drift detection, isolation advisor. Added !.local/!tracks to .gitignore allowlist. All git-integration tests pass.
+
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- Dirty tree policy: reject if uncommitted changes; if agent work propose checkpoint; if human work propose semantic commit + gitignore
+- Checkpoint commits: message format "loop(<loopId>): iteration <N> checkpoint" with state/gate summary. Include .org and .local/!tracks/ files
+- Worktree management (opt-in): create per loop, branch naming loop/<loopId>, merge back on completion
+- Smart isolation: detect overlapping paths between concurrent loops, recommend worktree
+- Merge: auto-merge -> conflict artifact -> human gate
+- Spec drift detection: snapshot file hashes at start, compare at reflection, pause on drift
+** Out-of-scope
+- Git conflict resolution UI (human gate handles this)
+- Task tool worktree isolation (existing system)
+** Boundary rationale
+Git operations hook into kernel events but don't own loop state.
+
+* Tests
+TDD-first. Temp git repos as fixtures.
+** File: packages/coding-agent/test/loop/git-integration.test.ts
+- Dirty tree: loop start fails on dirty repo
+- Checkpoint: correct message format with metadata
+- Checkpoint includes .org files
+- Worktree creation: creates branch and directory
+- Worktree merge: merges branch back
+- Merge conflict: produces conflict artifact
+- Spec drift: detects file hash change
+- Spec drift: no false positive when unchanged
+- Smart isolation: recommends worktree for overlapping paths
+
+* Implementation
+** packages/coding-agent/src/loop/git/dirty-check.ts
+** packages/coding-agent/src/loop/git/checkpoint.ts
+** packages/coding-agent/src/loop/git/worktree.ts
+** packages/coding-agent/src/loop/git/merge.ts
+** packages/coding-agent/src/loop/git/drift.ts
+** packages/coding-agent/src/loop/git/isolation-advisor.ts
+Steps: (1) Write tests with temp repos. (2) Implement each module. (3) Verify.
+
+* Edge Cases
+- Worktree exists from crashed loop: detect and reuse/clean
+- Merge conflict in .org: prefer loop version
+- Spec drift during iteration (not reflection): defer to next reflection
+- No git repo: skip all git ops, log warning
+
+* Acceptance Criteria
+- Dirty tree rejected with clear message
+- Checkpoints have correct format
+- Worktree lifecycle works
+- Spec drift detected
+- All tests pass
+
+\n\n* Momus Fix: Gitignore Reconciliation\n.local/!tracks/ is currently excluded by .gitignore. Implementation MUST add !.local/!tracks to the gitignore allowlist (alongside !.local/!journal) before checkpoint commits can include track files. This is Step 0 of implementation.

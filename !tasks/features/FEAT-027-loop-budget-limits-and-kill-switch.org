@@ -1,0 +1,59 @@
+#+TITLE: Loop Budget Limits and Kill Switch
+#+STATE: DONE
+#+SESSION_ID: 14a5ca4770a9f1db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-16-12-482Z_14a5ca4770a9f1db.jsonl]]
+#+CUSTOM_ID: FEAT-027-loop-budget-limits-and-kill-switch
+#+EFFORT: 4h
+#+PRIORITY: #B
+#+LAYER: runtime
+
+NOTE [2026-03-29]: Implemented budget tracker, kill-switch tree traversal, runaway detector. All safeguards tests pass.
+
+* Initial Message
+
+I have a spec folder in ~/code/ora/hotelcomm/ecosystem/djinn/specs/djinn-agentmaker-mvp that I want to use as a basis for a Ralph Wiggum loop (https://www.npmjs.com/package/@tmustier/pi-ralph-wiggum)
+
+Let's build the Spell features/extensions that let me run and monitor this loop well. It should support a canvas but not break if it goes away. The whole thing should be tested using QmlJourney and any other Journey types that you may develop as a result, to make sure the whole thing works insanely well.
+
+You're allowed to vendor pi-ralph-wiggum and extend it, or add it as a dependency and build your own abstraction on top of that. That abstraction should leverage Spell as much as possible, especially the Canvas and the org tools, but also the plan/ultraplan loops, and switching between the planning and the codign LLMs. Understand the pi-ralph-wiggum extension deeply and find what Org affordances you need to properly steer it to completion. Pay particular attention to being able to fulfil acceptance criteria and completion guidelines. Ask me as many questions as humanly/agentically possible, challenge me as much as you can, bring me fresh ideas.
+
+* Scope
+** In-scope
+- Global loop budgets (configurable per loop): max wall-clock time (default 4h), max total iterations across recursive tree (default 200)
+- Kill-switch: /loop kill <id> terminates loop + all children immediately
+- Runaway detection: no progress after N iterations (default 5) -> pause and alert. Progress = task file changes, gate passes, new artifacts
+- Budget dashboard: spend vs limits in /loop status and canvas
+** Out-of-scope
+- Token budget (requires provider API not yet available)
+- Cost estimation
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/safeguards.test.ts
+- Wall-clock: loop paused when time exceeds limit (virtual clock)
+- Iteration budget: paused when tree iterations exceed limit
+- Kill switch: terminates loop + all children
+- Kill switch: children org items set to cancelled
+- Runaway: 5 iterations no task file change -> pause
+- Runaway: task file change resets counter
+- Budget display: /loop status includes spend vs limits
+- Budget override: per-loop config overrides defaults
+
+* Implementation
+** packages/coding-agent/src/loop/safeguards/budget.ts
+** packages/coding-agent/src/loop/safeguards/kill-switch.ts
+** packages/coding-agent/src/loop/safeguards/runaway.ts
+** packages/coding-agent/src/loop/safeguards/config.ts
+Steps: (1) Write tests. (2) Implement budget tracker. (3) Kill switch. (4) Runaway detector. (5) Verify.
+
+* Edge Cases
+- Budget check during child: counts toward parent budget
+- Kill during gate execution: abort gate first
+- Both budgets hit simultaneously: first trigger wins
+- Zero budget (disabled): skip enforcement
+
+* Acceptance Criteria
+- Budgets enforced with virtual clock
+- Kill switch terminates tree
+- Runaway detection pauses stalled loops
+- All tests pass
