@@ -53,7 +53,8 @@ export class TodoReminderComponent extends Container {
 		if (task.gateCommit) parts.push("[commit]");
 		if (task.gateArtifact) parts.push("[artifact]");
 		if (task.gateCmd) parts.push("[cmd]");
+		if (task.gateLlm) parts.push("[llm]");
 		if (task.verifyCmd) parts.push("[verify]");
-		return " " + parts.join(" ");
+		return ` ${parts.join(" ")}`;
 	}
 }
