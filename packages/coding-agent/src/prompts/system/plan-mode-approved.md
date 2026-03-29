@@ -18,6 +18,7 @@ Before your final turn, you **MUST**:
    - Run the focused tests, checks, and manual verification required by the plan and linked child items.
    - If UI, browser, or visual behavior matters, capture screenshots with `puppeteer` `action: "screenshot"` and save them under `{{orgItemArtifactsDir}}/`.
    - Use artifact filenames that explain what each file proves.
+   - For documentation artifacts (org items, spec files, config files), reference the file path or org heading in the completion report — do not screenshot text-based files.
 3. Update org item `{{orgItemId}}` with a completion report via `org update`:
    - Append a `** Completion [YYYY-MM-DD]` section
    - Include `*** Verification`, `*** Artifacts`, and `*** Deviations` subsections

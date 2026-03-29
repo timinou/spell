@@ -42,6 +42,7 @@ Child item requirements (`org create`):
 - Include verification criteria: exact tests, checks, or manual proof the executor must produce
 - Test-first planning is preferred when practical: define test scenarios and test file paths before detailing implementation; for refactors or infrastructure work where that sequencing is not the best fit, note the preferred sequencing explicitly
 - If UI, browser, or visual behavior matters, name the required screenshot/artifact and what it must prove
+- For documentation artifacts (org items, spec files, config files), verification is a reference to the created file path or org item ID — screenshots are not needed
 
 PLAN item requirements (`org create` in `{{planCategory}}`):
 - `state: "INIT"`
