@@ -1,0 +1,56 @@
+#+TITLE: Add follow-ups org category
+#+STATE: DONE
+#+SESSION_ID: 14a61ac6d527fceb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-07-54-452Z_14a61ac6d527fceb.jsonl]]
+#+CUSTOM_ID: PLAN-019-add-follow-ups-org-category
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: backend
+
+
+* Initial Message
+
+Add a "follow-ups" org category to the plan mode Org tool
+
+* Context
+
+The org system supports plan decomposition into child categories (projects, features, bugs). A "follow-ups" category is needed for post-plan action items, deferred work discovered during execution, loose ends, and items deliberately deferred during planning — work that doesn't cleanly fit as a feature, bug, or project.
+
+** Approach
+Add =followups= (prefix =FUP=, path =follow-ups=) to the default org config and register its description in the plan mode child-category mapper. The template already renders categories dynamically, so no prompt file changes are needed.
+
+** Key decisions
+- Prefix: =FUP=
+- Category name: =followups= (no hyphen — matches existing convention: =projects=, =features=, =bugs=, =drafts=)
+- Path: =follow-ups= (hyphenated for filesystem readability, consistent with how org paths can differ from logical names)
+- Available as plan child items (not excluded like drafts/sessions)
+- Description: "Post-plan action items and deferred work"
+
+* Verification
+
+1. =bun check:ts= passes (focused: =bunx tsgo -p packages/org= and =bunx tsgo -p packages/coding-agent=)
+2. Grep =DEFAULT_ORG_CONFIG= and confirm =followups= entry with prefix =FUP= and path =follow-ups=
+3. Grep =describePlanChildCategory= and confirm =followups= case returns the correct description
+4. Confirm the exclusion filter in =agent-session.ts= does NOT include =followups=
+
+* Execution Manifest
+
+1. [[id:FEAT-051-add-follow-ups-org-category]] (depends: none, effort: 30m)
+   - Two files: =packages/org/src/schema/defaults.ts= (add category entry), =packages/coding-agent/src/session/agent-session.ts= (add description case)
+   - Both edits are independent and can be done in parallel
+
+** Completion [2026-03-29]
+
+*** Verification
+- =bunx tsgo -p packages/org=: passes, zero errors
+- =bunx tsgo -p packages/coding-agent=: passes, zero errors
+- =DEFAULT_ORG_CONFIG= contains =followups: { prefix: "FUP", path: "follow-ups" }= after =bugs= and before =drafts=
+- =describePlanChildCategory= has =case "followups"= returning ="Post-plan action items and deferred work"=
+- Exclusion filter at line 2114 is =["plans", "drafts", "sessions"]= — =followups= is NOT excluded
+
+*** Artifacts
+- =packages/org/src/schema/defaults.ts= — added =followups= category entry
+- =packages/coding-agent/src/session/agent-session.ts= — added =followups= case in =describePlanChildCategory=
+
+*** Deviations
+None.

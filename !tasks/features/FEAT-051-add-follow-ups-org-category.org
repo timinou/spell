@@ -1,0 +1,67 @@
+#+TITLE: Add follow-ups org category
+#+STATE: DONE
+#+SESSION_ID: 14a61ac6d527fceb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-07-54-452Z_14a61ac6d527fceb.jsonl]]
+#+CUSTOM_ID: FEAT-051-add-follow-ups-org-category
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: backend
+
+NOTE [2026-03-29]: Both edits applied. tsgo passes for packages/org and packages/coding-agent.
+
+* Initial Message
+
+Add a "follow-ups" org category to the plan mode Org tool
+
+* Scope
+
+Add a "follow-ups" category (prefix =FUP=) to the org system and expose it as a plan mode child category. Follow-ups capture post-plan action items, deferred work discovered during execution, loose ends, and items deliberately deferred during planning.
+
+** In scope
+- Default org config: new =followups= category entry
+- Plan mode child category description
+- No new filtering — category is available as a child item
+
+** Out of scope
+- New TODO states or workflows specific to follow-ups
+- Any changes to org file format, parsing, or validation
+- UI changes
+
+* Implementation
+
+** 1. =packages/org/src/schema/defaults.ts=
+Add =followups= to =DEFAULT_ORG_CONFIG.dirs.tasks.categories=:
+
+#+begin_src typescript
+followups: { prefix: "FUP", path: "follow-ups" },
+#+end_src
+
+Place after =bugs= and before =drafts= so the ordering is: plans, projects, features, bugs, followups, drafts.
+
+** 2. =packages/coding-agent/src/session/agent-session.ts=
+
+Add a case to =describePlanChildCategory()=:
+
+#+begin_src typescript
+case "followups":
+    return "Post-plan action items and deferred work";
+#+end_src
+
+The category is NOT in the exclusion list =['plans', 'drafts', 'sessions']= so it will automatically appear as a plan mode child category.
+
+** 3. =packages/coding-agent/src/prompts/system/plan-mode-active.md= (no changes needed)
+
+The template already renders child categories dynamically via ={{#each childCategories}}=. The new category will appear automatically.
+
+* Edge Cases
+
+- User-defined org configs that override =DEFAULT_ORG_CONFIG= are unaffected — this only changes the default config
+- The =resolveCategories= function in =packages/org/src/categories.ts= is generic and handles any category shape already
+- =describePlanChildCategory= has a =default= case that returns the raw name, so even without the explicit case it would degrade gracefully
+
+* Acceptance Criteria
+
+1. =bun check:ts= passes with no new errors
+2. In plan mode with org enabled, the agent prompt lists =followups= (=FUP=) as an available child category with the description "Post-plan action items and deferred work"
+3. =org create= with =category: "followups"= produces items with =FUP-NNN-slug= IDs
+4. =org init= creates the =follow-ups/= subdirectory under the tasks dir

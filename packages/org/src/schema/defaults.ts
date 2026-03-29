@@ -64,6 +64,7 @@ export const DEFAULT_ORG_CONFIG: OrgConfig = {
 				projects: { prefix: "PROJ", path: "projects" },
 				features: { prefix: "FEAT", path: "features" },
 				bugs: { prefix: "BUG", path: "bugs" },
+				followups: { prefix: "FUP", path: "follow-ups" },
 				drafts: { prefix: "DRAFT", path: "drafts" },
 			},
 		},

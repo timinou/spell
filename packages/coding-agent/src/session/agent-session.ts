@@ -315,6 +315,8 @@ function describePlanChildCategory(name: string): string {
 			return "Single feature additions";
 		case "bugs":
 			return "Bug fixes";
+		case "followups":
+			return "Post-plan action items and deferred work";
 		default:
 			return name;
 	}
