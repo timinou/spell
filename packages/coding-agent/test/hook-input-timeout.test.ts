@@ -72,4 +72,18 @@ describe("HookInputComponent timeout", () => {
 
 		component.dispose();
 	});
+	it("prefills placeholder text and keeps editing at the end", () => {
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const component = new HookInputComponent("Prompt", "saved value", onSubmit, onCancel);
+
+		component.handleInput("!");
+		component.handleInput("\n");
+
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit).toHaveBeenCalledWith("saved value!");
+		expect(onCancel).not.toHaveBeenCalled();
+
+		component.dispose();
+	});
 });

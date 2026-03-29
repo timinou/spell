@@ -33,6 +33,7 @@ function createContext(args: {
 	) => Promise<string | undefined>;
 	input?: (
 		prompt: string,
+		initialValue?: string,
 		dialogOptions?: {
 			timeout?: number;
 			signal?: AbortSignal;
@@ -48,13 +49,13 @@ function createContext(args: {
 			select: args.select,
 			input: (
 				prompt: string,
-				_placeholder: string | undefined,
+				initialValue: string | undefined,
 				dialogOptions?: {
 					timeout?: number;
 					signal?: AbortSignal;
 					onTimeout?: () => void;
 				},
-			) => args.input?.(prompt, dialogOptions) ?? Promise.resolve(undefined),
+			) => args.input?.(prompt, initialValue, dialogOptions) ?? Promise.resolve(undefined),
 		},
 		abort: args.abort ?? (() => {}),
 	} as unknown as AgentToolContext;
@@ -226,12 +227,18 @@ describe("AskTool cancellation", () => {
 			}),
 		);
 		const abort = vi.fn();
-		const input = vi.fn(async (_prompt: string, dialogOptions?: { timeout?: number; onTimeout?: () => void }) => {
-			const timeout = dialogOptions?.timeout ?? 1;
-			await Bun.sleep(timeout + 5);
-			dialogOptions?.onTimeout?.();
-			return undefined;
-		});
+		const input = vi.fn(
+			async (
+				_prompt: string,
+				_initialValue: string | undefined,
+				dialogOptions?: { timeout?: number; onTimeout?: () => void },
+			) => {
+				const timeout = dialogOptions?.timeout ?? 1;
+				await Bun.sleep(timeout + 5);
+				dialogOptions?.onTimeout?.();
+				return undefined;
+			},
+		);
 		const context = createContext({
 			select: async () => "Other (type your own)",
 			input,
@@ -452,6 +459,112 @@ describe("AskTool multi-question navigation", () => {
 
 		const result = await tool.execute("call-nav-3", { questions }, undefined, undefined, context);
 		expect(result.details?.results?.[0]?.selectedOptions).toEqual(["two"]);
+		expect(result.details?.results?.[1]?.selectedOptions).toEqual(["alpha"]);
+	});
+
+	it("restores custom Other input when revisiting a previous single-select question", async () => {
+		const tool = new AskTool(createSession());
+		let secondVisits = 0;
+		let inputCalls = 0;
+		const input = vi.fn(async (_prompt: string, initialValue?: string) => {
+			inputCalls += 1;
+			if (inputCalls === 1) {
+				expect(initialValue).toBeUndefined();
+				return "custom answer";
+			}
+			expect(initialValue).toBe("custom answer");
+			return "custom answer";
+		});
+		const context = createContext({
+			select: async (prompt, _options, dialogOptions) => {
+				if (prompt.includes("First?")) return "Other (type your own)";
+				secondVisits += 1;
+				if (secondVisits === 1) {
+					dialogOptions?.onLeft?.();
+					return undefined;
+				}
+				return "alpha";
+			},
+			input,
+		});
+
+		const result = await tool.execute(
+			"call-nav-other-single",
+			{
+				questions: [
+					{
+						id: "first",
+						question: "First?",
+						options: [{ label: "one" }, { label: "two" }],
+					},
+					{
+						id: "second",
+						question: "Second?",
+						options: [{ label: "alpha" }, { label: "beta" }],
+					},
+				],
+			},
+			undefined,
+			undefined,
+			context,
+		);
+
+		expect(input).toHaveBeenCalledTimes(2);
+		expect(result.details?.results?.[0]?.customInput).toBe("custom answer");
+		expect(result.details?.results?.[1]?.selectedOptions).toEqual(["alpha"]);
+	});
+
+	it("restores custom Other input when revisiting a previous multi-select question", async () => {
+		const tool = new AskTool(createSession());
+		let secondVisits = 0;
+		let inputCalls = 0;
+		const input = vi.fn(async (_prompt: string, initialValue?: string) => {
+			inputCalls += 1;
+			if (inputCalls === 1) {
+				expect(initialValue).toBeUndefined();
+				return "custom multi";
+			}
+			expect(initialValue).toBe("custom multi");
+			return "custom multi";
+		});
+		const context = createContext({
+			select: async (prompt, _options, dialogOptions) => {
+				if (prompt.includes("First?")) return "Other (type your own)";
+				secondVisits += 1;
+				if (secondVisits === 1) {
+					dialogOptions?.onLeft?.();
+					return undefined;
+				}
+				return "alpha";
+			},
+			input,
+		});
+
+		const result = await tool.execute(
+			"call-nav-other-multi",
+			{
+				questions: [
+					{
+						id: "first",
+						question: "First?",
+						options: [{ label: "one" }, { label: "two" }],
+						multi: true,
+					},
+					{
+						id: "second",
+						question: "Second?",
+						options: [{ label: "alpha" }, { label: "beta" }],
+					},
+				],
+			},
+			undefined,
+			undefined,
+			context,
+		);
+
+		expect(input).toHaveBeenCalledTimes(2);
+		expect(result.details?.results?.[0]?.multi).toBe(true);
+		expect(result.details?.results?.[0]?.customInput).toBe("custom multi");
 		expect(result.details?.results?.[1]?.selectedOptions).toEqual(["alpha"]);
 	});
 

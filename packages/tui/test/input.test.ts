@@ -23,6 +23,19 @@ describe("Input component", () => {
 		return input;
 	}
 
+	it("places the cursor at the end when setting a value", () => {
+		const input = new Input();
+		input.focused = true;
+
+		input.setValue("hello");
+		input.handleInput("!");
+		expect(input.getValue()).toBe("hello!");
+
+		input.setValue("world");
+		input.handleInput("?");
+		expect(input.getValue()).toBe("world?");
+	});
+
 	it("moves by CJK and punctuation blocks (backward)", () => {
 		const text = "天气不错，去散步吧！";
 

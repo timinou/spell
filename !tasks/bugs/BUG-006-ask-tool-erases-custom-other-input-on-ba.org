@@ -1,0 +1,44 @@
+#+TITLE: Ask tool erases custom Other input on back-navigation
+#+STATE: DONE
+#+SESSION_ID: 14a5d148c445b435
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-46-48-849Z_14a5d148c445b435.jsonl]]
+#+CUSTOM_ID: BUG-006-ask-tool-erases-custom-other-input-on-ba
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: tools
+
+NOTE [2026-03-29]: Threaded preserved custom input through ask tool prompting into the existing input placeholder path, prefilled HookInputComponent, and added focused regression coverage in `packages/coding-agent/test/tools/ask.test.ts` plus `packages/coding-agent/test/hook-input-timeout.test.ts`. Verified with `bun test packages/coding-agent/test/tools/ask.test.ts packages/coding-agent/test/hook-input-timeout.test.ts`.
+
+* Initial Message
+
+When I edit an "Other (type your own)" in the ask tool after I validated it and go back to that question, it gets erased. Can you fix that please?
+
+* Problem
+When a user selects "Other (type your own)" in a multi-question ask flow, types custom text, advances forward, then navigates back to that question and re-selects "Other", the input field is blank — the previously typed text is lost from the UI even though it is preserved in internal state.
+
+* Root Cause
+Four-link failure chain:
+1. ~promptForInput()~ (ask.ts:211-220) never passes the existing ~customInput~ value to ~ui.input()~
+2. ~UIContext.input()~ interface (ask.ts:151-154) has a 2-param signature that omits initial value entirely
+3. The adapter (ask.ts:419) hardcodes ~undefined~ for placeholder: ~extensionUi.input(prompt, undefined, dialogOptions)~
+4. ~HookInputComponent~ (hook-input.ts:29) receives ~_placeholder~ parameter but ignores it — never calls ~this.#input.setValue()~
+
+* Fix
+
+** ask.ts
+- Add ~initialValue?: string~ to ~UIContext.input()~ interface (after ~prompt~, before ~options~)
+- Add ~initialValue?: string~ to ~promptForInput()~ and pass it to ~ui.input()~
+- Pass ~customInput~ to ~promptForInput(customInput)~ at both call sites:
+  - Multi-select path (line 268)
+  - Single-select path (line 334)
+- Update adapter (line 419) to forward ~initialValue~ as the placeholder parameter to ~extensionUi.input()~
+
+** hook-input.ts
+- Rename ~_placeholder~ to ~placeholder~ in constructor
+- After ~this.#input = new Input()~ (line 61), if ~placeholder~ is set, call ~this.#input.setValue(placeholder)~
+
+* Acceptance Criteria
+- Multi-question flow: select "Other" on Q1, type text, advance to Q2, go back to Q1, re-select "Other" — input field shows previous text with cursor at end
+- Same flow for multi-select questions
+- Empty "Other" (never typed before) still shows blank input
+- Test: verify ~input()~ callback receives the previous custom text as placeholder on re-visit

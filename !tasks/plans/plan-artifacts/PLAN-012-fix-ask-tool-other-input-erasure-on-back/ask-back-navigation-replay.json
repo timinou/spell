@@ -1,0 +1,20 @@
+{
+  "inputCalls": [null, "custom answer"],
+  "results": [
+    {
+      "id": "first",
+      "question": "First?",
+      "options": ["one", "two"],
+      "multi": false,
+      "selectedOptions": [],
+      "customInput": "custom answer"
+    },
+    {
+      "id": "second",
+      "question": "Second?",
+      "options": ["alpha", "beta"],
+      "multi": false,
+      "selectedOptions": ["alpha"]
+    }
+  ]
+}

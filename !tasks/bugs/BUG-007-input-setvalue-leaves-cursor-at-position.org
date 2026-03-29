@@ -1,0 +1,35 @@
+#+TITLE: Input setValue leaves cursor at position zero
+#+STATE: DONE
+#+SESSION_ID: 14a5d148c445b435
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-46-48-849Z_14a5d148c445b435.jsonl]]
+#+CUSTOM_ID: BUG-007-input-setvalue-leaves-cursor-at-position
+#+EFFORT: 15m
+#+PRIORITY: #C
+#+LAYER: tui
+
+NOTE [2026-03-29]: Implemented cursor-at-end behavior in `packages/tui/src/components/input.ts`, added regression coverage in `packages/tui/test/input.test.ts`, and verified with `bun test packages/tui/test/input.test.ts`.
+
+* Initial Message
+
+When I edit an "Other (type your own)" in the ask tool after I validated it and go back to that question, it gets erased. Can you fix that please?
+
+* Problem
+~Input.setValue()~ in ~packages/tui/src/components/input.ts~ clamps cursor to ~Math.min(this.#cursor, value.length)~. When called on a fresh input (cursor=0) to pre-fill a value, cursor stays at position 0 — the beginning of the text. Standard text input behavior is cursor-at-end when value is set programmatically.
+
+This affects every call site that uses ~setValue~ to pre-fill an input for editing: MCP wizard fields, plugin settings, model selector, agent dashboard, and (after the ask tool fix) the "Other" input pre-fill.
+
+* Fix
+
+** packages/tui/src/components/input.ts
+Change ~setValue~ (line 50-53):
+#+begin_src typescript
+setValue(value: string): void {
+    this.#value = value;
+    this.#cursor = value.length; // cursor at end (was: Math.min(this.#cursor, value.length))
+}
+#+end_src
+
+* Acceptance Criteria
+- After ~setValue("hello")~ on a fresh Input, ~getValue()~ returns ~"hello"~ and cursor is at position 5 (end)
+- After ~setValue("world")~ on an Input that already had text, cursor is at end of new value
+- Typing after ~setValue~ appends at end, not inserts at beginning

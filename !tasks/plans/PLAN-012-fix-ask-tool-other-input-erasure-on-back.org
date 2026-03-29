@@ -1,0 +1,57 @@
+#+TITLE: Fix Ask Tool Other Input Erasure On Back Navigation
+#+STATE: DONE
+#+SESSION_ID: 14a5d148c445b435
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T14-46-48-849Z_14a5d148c445b435.jsonl]]
+#+CUSTOM_ID: PLAN-012-fix-ask-tool-other-input-erasure-on-back
+
+
+* Initial Message
+
+When I edit an "Other (type your own)" in the ask tool after I validated it and go back to that question, it gets erased. Can you fix that please?
+
+* Context
+When navigating back to a question in the ask tool's multi-question flow and re-selecting "Other (type your own)", the input field is blank — the previously typed custom text is lost from the UI.
+
+The internal state is preserved correctly (~resultsByIndex~ stores ~customInput~ and ~askSingleQuestion~ restores it to a local variable), but the value never reaches the UI because of a four-link failure chain:
+1. ~promptForInput()~ ignores the existing ~customInput~ value
+2. ~UIContext.input()~ interface omits the initial value parameter
+3. The adapter hardcodes ~undefined~ for the placeholder
+4. ~HookInputComponent~ receives the placeholder but discards it
+
+Additionally, ~Input.setValue()~ in the TUI package leaves cursor at position 0, which would cause a confusing UX even if the value were passed through — the user would see their text but the cursor would be at the start.
+
+** Approach
+Thread the existing ~customInput~ value through the chain: ~askSingleQuestion~ → ~promptForInput~ → ~UIContext.input~ → ~extensionUi.input~ → ~HookInputComponent~ → ~Input.setValue~. Fix ~setValue~ to position cursor at end.
+
+** Key decisions
+- Reuse the existing ~placeholder~ parameter on ~ExtensionUIContext.input()~ and ~HookInputComponent~ — they already accept it but ignore it. No new API surface needed.
+- Fix ~Input.setValue~ cursor positioning globally — all callers benefit (MCP wizard, settings, model selector, etc).
+
+* Verification
+- ~bun test packages/coding-agent/test/tools/ask.test.ts~ — new regression test passes
+- ~bun check:ts~ on affected packages — no type errors from interface changes
+- Manual: in a multi-question ask, select Other → type text → forward → back → re-select Other → verify text is pre-filled with cursor at end
+
+* Execution Manifest
+1. [[id:BUG-007-input-setvalue-leaves-cursor-at-position]] (depends: none, effort: 15m) — Fix ~Input.setValue~ cursor positioning in TUI package
+2. [[id:BUG-006-ask-tool-erases-custom-other-input-on-ba]] (depends: BUG-007, effort: 30m) — Thread ~customInput~ through the ask tool chain, pre-fill HookInputComponent, add regression test
+
+
+** Completion [2026-03-29]
+
+*** Verification
+- `bun test packages/tui/test/input.test.ts` -> passed (11 tests, 0 failures)
+- `bun test packages/coding-agent/test/tools/ask.test.ts packages/coding-agent/test/hook-input-timeout.test.ts` -> passed (16 tests, 0 failures)
+- `bun test packages/tui/test/input.test.ts packages/coding-agent/test/tools/ask.test.ts packages/coding-agent/test/hook-input-timeout.test.ts` -> passed (27 tests, 0 failures)
+- `bun run --cwd packages/tui check` -> passed (`tsgo -p tsconfig.json`)
+- `bun run --cwd packages/coding-agent check` -> passed (`tsgo -p tsconfig.json`)
+- `bunx @biomejs/biome check packages/tui/src/components/input.ts packages/tui/test/input.test.ts packages/coding-agent/src/tools/ask.ts packages/coding-agent/src/modes/components/hook-input.ts packages/coding-agent/test/tools/ask.test.ts packages/coding-agent/test/hook-input-timeout.test.ts` -> passed (`Checked 6 files in 20ms. No fixes applied.`)
+- `bun -e '...HookInputComponent prefill replay...'` -> printed `saved value!`, confirming prefilled input editing appends at the end
+- `bun -e '...AskTool back-navigation replay...'` -> replay showed `inputCalls: [null, "custom answer"]`, confirming the second visit reused the saved custom input
+
+*** Artifacts
+- Hook input prefill replay: [[file:!tasks/plans/plan-artifacts/PLAN-012-fix-ask-tool-other-input-erasure-on-back/hook-input-prefill-output.txt]]
+- Ask back-navigation replay: [[file:!tasks/plans/plan-artifacts/PLAN-012-fix-ask-tool-other-input-erasure-on-back/ask-back-navigation-replay.json]]
+
+*** Deviations
+- The affected UI is terminal-based, not browser-rendered, so I captured text artifacts from focused headless replays instead of a Puppeteer screenshot.

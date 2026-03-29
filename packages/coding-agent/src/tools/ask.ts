@@ -150,6 +150,7 @@ interface UIContext {
 	): Promise<string | undefined>;
 	input(
 		prompt: string,
+		initialValue?: string,
 		options_?: { signal?: AbortSignal; timeout?: number; onTimeout?: () => void },
 	): Promise<string | undefined>;
 }
@@ -208,14 +209,16 @@ async function askSingleQuestion(
 		return { choice, timedOut: timeoutTriggered, navigation: navigationAction };
 	};
 
-	const promptForInput = async (): Promise<{ input: string | undefined; timedOut: boolean }> => {
+	const promptForInput = async (initialValue?: string): Promise<{ input: string | undefined; timedOut: boolean }> => {
 		let inputTimedOut = false;
 		const onTimeout = () => {
 			inputTimedOut = true;
 		};
 		const input = signal
-			? await untilAborted(signal, () => ui.input("Enter your response:", { signal, timeout, onTimeout }))
-			: await ui.input("Enter your response:", { signal, timeout, onTimeout });
+			? await untilAborted(signal, () =>
+					ui.input("Enter your response:", initialValue, { signal, timeout, onTimeout }),
+				)
+			: await ui.input("Enter your response:", initialValue, { signal, timeout, onTimeout });
 		return { input, timedOut: inputTimedOut };
 	};
 
@@ -265,7 +268,7 @@ async function askSingleQuestion(
 					timedOut = true;
 					break;
 				}
-				const inputResult = await promptForInput();
+				const inputResult = await promptForInput(customInput);
 				if (inputResult.input) customInput = inputResult.input;
 				if (inputResult.timedOut) timedOut = true;
 				break;
@@ -331,7 +334,7 @@ async function askSingleQuestion(
 			}
 		} else if (choice === OTHER_OPTION) {
 			if (!selectTimedOut) {
-				const inputResult = await promptForInput();
+				const inputResult = await promptForInput(customInput);
 				if (inputResult.input) customInput = inputResult.input;
 				if (inputResult.timedOut) timedOut = true;
 			}
@@ -416,7 +419,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		const extensionUi = context.ui;
 		const ui: UIContext = {
 			select: (prompt, options, dialogOptions) => extensionUi.select(prompt, options, dialogOptions),
-			input: (prompt, dialogOptions) => extensionUi.input(prompt, undefined, dialogOptions),
+			input: (prompt, initialValue, dialogOptions) => extensionUi.input(prompt, initialValue, dialogOptions),
 		};
 
 		// Determine timeout based on settings and plan mode
