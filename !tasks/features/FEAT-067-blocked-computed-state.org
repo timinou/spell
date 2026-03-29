@@ -1,0 +1,208 @@
+#+TITLE: Blocked Computed State
+#+STATE: DONE
+#+SESSION_ID: 14a636e83f8a8b65
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-17-14-206Z_14a62aa5178a8b47/13-CreateFeat4.jsonl]]
+#+CUSTOM_ID: FEAT-067-blocked-computed-state
+#+EFFORT: 1.5h
+#+PRIORITY: #B
+#+LAYER: logic
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate org items for the TODO Gates + Unified Dashboard plan. Each task creates one org item via `org create` and returns its CUSTOM_ID.\n\n## Rules\n- Use `org create` with `state: \"ITEM\"`\n- Include EFFORT, PRIORITY, LAYER properties\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- File paths must be explicit\n- Return the CUSTOM_ID of the created item\n\n## Repo context\n- `packages/coding-agent/src/tools/todo-write.ts` — TodoItem type, schema, applyOps, formatSummary, TUI renderer\n- `packages/coding-agent/src/session/agent-session.ts` — #cloneTodoPhases, setTodoPhases, getTodoPhases, #syncTodoPhasesFromBranch, #checkTodoCompletion\n- `packages/org/src/journal.ts` — JournalTodoItem, serializeJournalOrg, writeJournal\n- `packages/coding-agent/src/prompts/tools/todo-write.md` — prompt template\n- `packages/coding-agent/src/modes/qml/panels/LoopDashboardPanel.qml` — loop dashboard panel\n- `packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml` — main dashboard panel (always available)\n- `packages/coding-agent/src/loop/dashboard-bridge.ts` — LoopDashboardBridge pattern\n- `packages/coding-agent/src/slash-commands/builtin-registry.ts` — builtin slash commands\n- `packages/coding-agent/src/task/render.ts` — task TUI rendering\n- `packages/coding-agent/src/modes/components/todo-reminder.ts` — TodoReminderComponent\n- `packages/coding-agent/src/tools/render-utils.ts` — TUI rendering utilities\n- `packages/org/test/journal.test.ts` — existing journal tests\n- `packages/coding-agent/test/tools/todo-write.test.ts` — existing todo-write tests (if exists)\n
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create`:
+
+```
+category: features
+title: Blocked Computed State
+state: ITEM
+priority: #B
+properties:
+  EFFORT: 1.5h
+  PRIORITY: "#B"
+  LAYER: logic
+```
+
+Body:
+
+```
+* Scope
+
+** In scope
+- Compute blocked state: task is blocked when =status === "pending"= AND =blockers?.some(id => referenced task not completed/abandoned)=
+- =isTaskBlocked(task, allTasks)= helper function
+- Update =normalizeInProgressTask()= to skip blocked tasks when auto-promoting first pending
+- Update =formatTodoLine()= to render blocked icon distinct from pending
+- Update =formatSummary()= to label blocked tasks in remaining items list
+
+** Out of scope
+- Auto-transition (blocked → pending when blocker completes) — AI manages this
+- New TodoStatus enum value — blocked is computed, not stored
+- QML rendering of blocked state (FEAT: QML TodoPanel)
+
+** Boundary rationale
+Blocked is a derived presentation state, not a persisted status. The computation is cheap (O(tasks²) worst case, negligible for typical todo lists). Keeping it computed avoids state machine complexity.
+
+* Tests
+
+Test file: =packages/coding-agent/test/tools/todo-write-gates.test.ts= (extend)
+
+** Scenario 1: isTaskBlocked returns true for pending task with unresolved blocker
+- task-2 has blockers=["task-1"], task-1 is pending
+- Assert isTaskBlocked(task-2) === true
+
+** Scenario 2: isTaskBlocked returns false when blocker is completed
+- task-2 has blockers=["task-1"], task-1 is completed
+- Assert isTaskBlocked(task-2) === false
+
+** Scenario 3: isTaskBlocked returns false when blocker ref is missing (auto-cleared)
+- task-2 has blockers=["task-99"], task-99 not in phases
+- Assert isTaskBlocked(task-2) === false (missing = resolved)
+
+** Scenario 4: normalizeInProgressTask skips blocked task
+- phase has [task-1 (pending, blocked by task-3), task-2 (pending, not blocked)]
+- normalizeInProgressTask promotes task-2 to in_progress, NOT task-1
+
+** Scenario 5: formatTodoLine renders blocked icon
+- Blocked task renders with distinct icon (not pending checkbox, not in_progress arrow)
+
+** Scenario 6: in_progress task is never considered blocked
+- task-1 is in_progress with blockers=["task-2"] where task-2 is pending
+- Assert isTaskBlocked returns false (in_progress overrides blocked)
+
+* Implementation
+
+Preferred sequencing: tests first.
+
+** Step 1: Create isTaskBlocked helper
+File: =packages/coding-agent/src/tools/todo-write.ts= (after findTask, line ~120)
+- =function isTaskBlocked(task: TodoItem, allTasks: TodoItem[]): boolean=
+- Returns true only if task.status === "pending" AND task.blockers has at least one ID referencing a task that exists and is NOT completed/abandoned
+- Missing blocker ref = resolved (return false for that blocker)
+
+** Step 2: Update normalizeInProgressTask
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~178-193)
+- When finding firstPendingTask, skip tasks where =isTaskBlocked(task, orderedTasks)= is true
+- Pass allTasks to isTaskBlocked
+
+** Step 3: Update formatTodoLine
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~388-404)
+- Before the switch on task.status, check =isTaskBlocked(task, allTasks)=
+- If blocked: render with blocked icon (e.g. =○̸= or theme.fg("warning", `${prefix}${checkbox.unchecked} ${item.content} [blocked]`))
+- Need to pass allTasks to formatTodoLine (API change)
+
+** Step 4: Update formatSummary
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~286)
+- In the remaining items section, label blocked tasks: =[blocked by task-N]=
+
+* Edge Cases
+- Circular blockers: task-1 blocks task-2, task-2 blocks task-1 — both show as blocked, neither auto-promoted. AI must resolve.
+- Self-blocker: task-1 has blockers=["task-1"] — treat as blocked (pathological but safe)
+- Multiple blockers: all must be resolved for task to unblock
+- Blocker on completed task: already handled (completed = resolved)
+- Blocker on abandoned task: abandoned = resolved (user chose to drop it)
+
+* Acceptance Criteria
+- [ ] isTaskBlocked correctly computes blocked state in all 6 scenarios
+- [ ] normalizeInProgressTask skips blocked tasks
+- [ ] formatTodoLine renders blocked tasks distinctly
+- [ ] formatSummary labels blocked tasks
+- [ ] Circular blockers don't cause infinite loops
+- [ ] Existing todo-write tests still pass
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In scope
+- Compute blocked state: task is blocked when =status === "pending"= AND =blockers?.some(id => referenced task not completed/abandoned)=
+- =isTaskBlocked(task, allTasks)= helper function
+- Update =normalizeInProgressTask()= to skip blocked tasks when auto-promoting first pending
+- Update =formatTodoLine()= to render blocked icon distinct from pending
+- Update =formatSummary()= to label blocked tasks in remaining items list
+
+** Out of scope
+- Auto-transition (blocked → pending when blocker completes) — AI manages this
+- New TodoStatus enum value — blocked is computed, not stored
+- QML rendering of blocked state (FEAT: QML TodoPanel)
+
+** Boundary rationale
+Blocked is a derived presentation state, not a persisted status. The computation is cheap (O(tasks²) worst case, negligible for typical todo lists). Keeping it computed avoids state machine complexity.
+
+* Tests
+
+Test file: =packages/coding-agent/test/tools/todo-write-gates.test.ts= (extend)
+
+** Scenario 1: isTaskBlocked returns true for pending task with unresolved blocker
+- task-2 has blockers=["task-1"], task-1 is pending
+- Assert isTaskBlocked(task-2) === true
+
+** Scenario 2: isTaskBlocked returns false when blocker is completed
+- task-2 has blockers=["task-1"], task-1 is completed
+- Assert isTaskBlocked(task-2) === false
+
+** Scenario 3: isTaskBlocked returns false when blocker ref is missing (auto-cleared)
+- task-2 has blockers=["task-99"], task-99 not in phases
+- Assert isTaskBlocked(task-2) === false (missing = resolved)
+
+** Scenario 4: normalizeInProgressTask skips blocked task
+- phase has [task-1 (pending, blocked by task-3), task-2 (pending, not blocked)]
+- normalizeInProgressTask promotes task-2 to in_progress, NOT task-1
+
+** Scenario 5: formatTodoLine renders blocked icon
+- Blocked task renders with distinct icon (not pending checkbox, not in_progress arrow)
+
+** Scenario 6: in_progress task is never considered blocked
+- task-1 is in_progress with blockers=["task-2"] where task-2 is pending
+- Assert isTaskBlocked returns false (in_progress overrides blocked)
+
+* Implementation
+
+Preferred sequencing: tests first.
+
+** Step 1: Create isTaskBlocked helper
+File: =packages/coding-agent/src/tools/todo-write.ts= (after findTask, line ~120)
+- =function isTaskBlocked(task: TodoItem, allTasks: TodoItem[]): boolean=
+- Returns true only if task.status === "pending" AND task.blockers has at least one ID referencing a task that exists and is NOT completed/abandoned
+- Missing blocker ref = resolved (return false for that blocker)
+
+** Step 2: Update normalizeInProgressTask
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~178-193)
+- When finding firstPendingTask, skip tasks where =isTaskBlocked(task, orderedTasks)= is true
+- Pass allTasks to isTaskBlocked
+
+** Step 3: Update formatTodoLine
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~388-404)
+- Before the switch on task.status, check =isTaskBlocked(task, allTasks)=
+- If blocked: render with blocked icon (e.g. =○̸= or theme.fg("warning", `${prefix}${checkbox.unchecked} ${item.content} [blocked]`))
+- Need to pass allTasks to formatTodoLine (API change)
+
+** Step 4: Update formatSummary
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~286)
+- In the remaining items section, label blocked tasks: =[blocked by task-N]=
+
+* Edge Cases
+- Circular blockers: task-1 blocks task-2, task-2 blocks task-1 — both show as blocked, neither auto-promoted. AI must resolve.
+- Self-blocker: task-1 has blockers=["task-1"] — treat as blocked (pathological but safe)
+- Multiple blockers: all must be resolved for task to unblock
+- Blocker on completed task: already handled (completed = resolved)
+- Blocker on abandoned task: abandoned = resolved (user chose to drop it)
+
+* Acceptance Criteria
+- [ ] isTaskBlocked correctly computes blocked state in all 6 scenarios
+- [ ] normalizeInProgressTask skips blocked tasks
+- [ ] formatTodoLine renders blocked tasks distinctly
+- [ ] formatSummary labels blocked tasks
+- [ ] Circular blockers don't cause infinite loops
+- [ ] Existing todo-write tests still pass

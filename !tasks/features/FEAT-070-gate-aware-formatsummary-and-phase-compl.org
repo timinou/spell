@@ -1,0 +1,246 @@
+#+TITLE: Gate-Aware formatSummary and Phase Completion Hooks
+#+STATE: DONE
+#+SESSION_ID: 14a636e83eca8b5f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-17-14-206Z_14a62aa5178a8b47/12-CreateFeat3.jsonl]]
+#+CUSTOM_ID: FEAT-070-gate-aware-formatsummary-and-phase-compl
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: logic
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate org items for the TODO Gates + Unified Dashboard plan. Each task creates one org item via `org create` and returns its CUSTOM_ID.\n\n## Rules\n- Use `org create` with `state: \"ITEM\"`\n- Include EFFORT, PRIORITY, LAYER properties\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- File paths must be explicit\n- Return the CUSTOM_ID of the created item\n\n## Repo context\n- `packages/coding-agent/src/tools/todo-write.ts` — TodoItem type, schema, applyOps, formatSummary, TUI renderer\n- `packages/coding-agent/src/session/agent-session.ts` — #cloneTodoPhases, setTodoPhases, getTodoPhases, #syncTodoPhasesFromBranch, #checkTodoCompletion\n- `packages/org/src/journal.ts` — JournalTodoItem, serializeJournalOrg, writeJournal\n- `packages/coding-agent/src/prompts/tools/todo-write.md` — prompt template\n- `packages/coding-agent/src/modes/qml/panels/LoopDashboardPanel.qml` — loop dashboard panel\n- `packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml` — main dashboard panel (always available)\n- `packages/coding-agent/src/loop/dashboard-bridge.ts` — LoopDashboardBridge pattern\n- `packages/coding-agent/src/slash-commands/builtin-registry.ts` — builtin slash commands\n- `packages/coding-agent/src/task/render.ts` — task TUI rendering\n- `packages/coding-agent/src/modes/components/todo-reminder.ts` — TodoReminderComponent\n- `packages/coding-agent/src/tools/render-utils.ts` — TUI rendering utilities\n- `packages/org/test/journal.test.ts` — existing journal tests\n- `packages/coding-agent/test/tools/todo-write.test.ts` — existing todo-write tests (if exists)\n
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create`:
+
+```
+category: features
+title: Gate-Aware formatSummary and Phase Completion Hooks
+state: ITEM
+priority: #A
+properties:
+  EFFORT: 3h
+  PRIORITY: "#A"
+  LAYER: logic
+```
+
+Body:
+
+```
+* Scope
+
+** In scope
+- Inject gate directive text in =formatSummary()= when tasks with gates are completed
+- Phase completion detection in =applyOps()=: before/after state comparison
+- Aggregate phase-level gate directives into response
+- Update =todo-write.md= prompt template with gate documentation and examples
+- Return completedPhaseIds from applyOps alongside existing errors
+
+** Out of scope
+- Hard gate enforcement (blocking completion) — soft enforcement only
+- Git validation or syscalls
+- QML dashboard (FEAT: QML TodoPanel)
+- Blocked state computation (FEAT: Blocked Computed State)
+
+** Boundary rationale
+This is the behavioral enforcement layer. It tells the AI what to do about gates via response text. No automated validation — the AI self-polices.
+
+* Tests
+
+Test file: =packages/coding-agent/test/tools/todo-write-gates.test.ts= (extend from FEAT-1)
+
+** Scenario 1: formatSummary injects GATE_COMMIT directive
+- Complete a task with gateCommit=true
+- Assert response text contains 'Commit your changes for task-N before proceeding'
+
+** Scenario 2: formatSummary injects GATE_ARTIFACT directive
+- Complete a task with gateArtifact="dist/output.json"
+- Assert response text contains 'Verify artifact exists at dist/output.json'
+
+** Scenario 3: formatSummary injects VERIFY_CMD directive
+- Complete a task with verifyCmd="bun test test/foo.test.ts"
+- Assert response contains 'Run `bun test test/foo.test.ts` to verify'
+
+** Scenario 4: No gate → no directive
+- Complete a task without gate fields
+- Assert no gate directive text in response
+
+** Scenario 5: Phase completion detected
+- Create phase with 2 tasks, both pending
+- Complete both tasks in one applyOps call
+- Assert completedPhaseIds includes the phase id
+
+** Scenario 6: Phase completion NOT triggered when task added in same batch
+- Complete last task in phase AND add_task to same phase in one ops batch
+- Assert phase NOT in completedPhaseIds
+
+** Scenario 7: Phase completion injects aggregate directive
+- Complete last task in phase where tasks have mixed gates
+- Assert response aggregates: 'Phase "X" complete. Commit changes. Verify artifacts.'
+
+** Scenario 8: Integration: gate + phase completion together
+- Create 2 phases, complete all tasks in phase 1 (with gates)
+- Assert both per-task and phase-level directives appear
+
+* Implementation
+
+Preferred sequencing: write tests first, then implement.
+
+** Step 1: Modify applyOps return type
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~212)
+- Change return to ={file, errors, completedPhaseIds: string[]}=
+- Before ops: snapshot phase completion states: =Map<phaseId, boolean>= where boolean = all tasks completed/abandoned
+- After all ops + normalizeInProgressTask: check which phases newly completed
+- Return newly completed phase IDs
+
+** Step 2: Update TodoWriteTool.execute()
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~355-377)
+- Destructure completedPhaseIds from applyOps
+- Pass to formatSummary
+
+** Step 3: Enhance formatSummary
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~286-337)
+- Accept completedPhaseIds parameter
+- After existing summary, inject gate directive section:
+  - For each task that just transitioned to completed and has gates: emit per-task directives
+  - For each completed phase: emit phase-level summary of required actions
+- Directive text per gate type:
+  - GATE_COMMIT: =REQUIRED: Commit your changes for [task-id] ([content]) before proceeding.=
+  - GATE_ARTIFACT: =REQUIRED: Verify artifact exists at [path] for [task-id].=
+  - GATE_CMD: =REQUIRED: Run `[command]` to verify [task-id].=
+  - GATE_LLM: =REQUIRED: Review [task-id] against acceptance criteria: [criteria]=
+  - VERIFY_CMD: =RECOMMENDED: Run `[command]` to verify [task-id].=
+
+** Step 4: Update prompt template
+File: =packages/coding-agent/src/prompts/tools/todo-write.md=
+- Add gate fields documentation to Task Anatomy section
+- Add gate example showing task creation with gateCommit + gateArtifact
+- Add note: 'When implementing plan items, set gate fields to track required deliverables'
+
+* Edge Cases
+- Batch op: complete + start next in same call — phase completion detected, directive injected, but AI also sees next task started
+- Replace op rebuilds everything — no meaningful phase completion (all phases are new)
+- Empty phase: completing last task when phase had tasks that were all removed — handle gracefully
+- completedPhaseIds correctly excludes phases that were already complete before this call
+
+* Acceptance Criteria
+- [ ] All 8 test scenarios pass
+- [ ] formatSummary output contains gate directives only for gated tasks
+- [ ] Phase completion correctly detected via before/after comparison
+- [ ] todo-write.md updated with gate documentation
+- [ ] Existing todo-write tests still pass
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In scope
+- Inject gate directive text in =formatSummary()= when tasks with gates are completed
+- Phase completion detection in =applyOps()=: before/after state comparison
+- Aggregate phase-level gate directives into response
+- Update =todo-write.md= prompt template with gate documentation and examples
+- Return completedPhaseIds from applyOps alongside existing errors
+
+** Out of scope
+- Hard gate enforcement (blocking completion) — soft enforcement only
+- Git validation or syscalls
+- QML dashboard (FEAT: QML TodoPanel)
+- Blocked state computation (FEAT: Blocked Computed State)
+
+** Boundary rationale
+This is the behavioral enforcement layer. It tells the AI what to do about gates via response text. No automated validation — the AI self-polices.
+
+* Tests
+
+Test file: =packages/coding-agent/test/tools/todo-write-gates.test.ts= (extend from FEAT-1)
+
+** Scenario 1: formatSummary injects GATE_COMMIT directive
+- Complete a task with gateCommit=true
+- Assert response text contains 'Commit your changes for task-N before proceeding'
+
+** Scenario 2: formatSummary injects GATE_ARTIFACT directive
+- Complete a task with gateArtifact="dist/output.json"
+- Assert response text contains 'Verify artifact exists at dist/output.json'
+
+** Scenario 3: formatSummary injects VERIFY_CMD directive
+- Complete a task with verifyCmd="bun test test/foo.test.ts"
+- Assert response contains 'Run `bun test test/foo.test.ts` to verify'
+
+** Scenario 4: No gate → no directive
+- Complete a task without gate fields
+- Assert no gate directive text in response
+
+** Scenario 5: Phase completion detected
+- Create phase with 2 tasks, both pending
+- Complete both tasks in one applyOps call
+- Assert completedPhaseIds includes the phase id
+
+** Scenario 6: Phase completion NOT triggered when task added in same batch
+- Complete last task in phase AND add_task to same phase in one ops batch
+- Assert phase NOT in completedPhaseIds
+
+** Scenario 7: Phase completion injects aggregate directive
+- Complete last task in phase where tasks have mixed gates
+- Assert response aggregates: 'Phase "X" complete. Commit changes. Verify artifacts.'
+
+** Scenario 8: Integration: gate + phase completion together
+- Create 2 phases, complete all tasks in phase 1 (with gates)
+- Assert both per-task and phase-level directives appear
+
+* Implementation
+
+Preferred sequencing: write tests first, then implement.
+
+** Step 1: Modify applyOps return type
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~212)
+- Change return to ={file, errors, completedPhaseIds: string[]}=
+- Before ops: snapshot phase completion states: =Map<phaseId, boolean>= where boolean = all tasks completed/abandoned
+- After all ops + normalizeInProgressTask: check which phases newly completed
+- Return newly completed phase IDs
+
+** Step 2: Update TodoWriteTool.execute()
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~355-377)
+- Destructure completedPhaseIds from applyOps
+- Pass to formatSummary
+
+** Step 3: Enhance formatSummary
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~286-337)
+- Accept completedPhaseIds parameter
+- After existing summary, inject gate directive section:
+  - For each task that just transitioned to completed and has gates: emit per-task directives
+  - For each completed phase: emit phase-level summary of required actions
+- Directive text per gate type:
+  - GATE_COMMIT: =REQUIRED: Commit your changes for [task-id] ([content]) before proceeding.=
+  - GATE_ARTIFACT: =REQUIRED: Verify artifact exists at [path] for [task-id].=
+  - GATE_CMD: =REQUIRED: Run `[command]` to verify [task-id].=
+  - GATE_LLM: =REQUIRED: Review [task-id] against acceptance criteria: [criteria]=
+  - VERIFY_CMD: =RECOMMENDED: Run `[command]` to verify [task-id].=
+
+** Step 4: Update prompt template
+File: =packages/coding-agent/src/prompts/tools/todo-write.md=
+- Add gate fields documentation to Task Anatomy section
+- Add gate example showing task creation with gateCommit + gateArtifact
+- Add note: 'When implementing plan items, set gate fields to track required deliverables'
+
+* Edge Cases
+- Batch op: complete + start next in same call — phase completion detected, directive injected, but AI also sees next task started
+- Replace op rebuilds everything — no meaningful phase completion (all phases are new)
+- Empty phase: completing last task when phase had tasks that were all removed — handle gracefully
+- completedPhaseIds correctly excludes phases that were already complete before this call
+
+* Acceptance Criteria
+- [ ] All 8 test scenarios pass
+- [ ] formatSummary output contains gate directives only for gated tasks
+- [ ] Phase completion correctly detected via before/after comparison
+- [ ] todo-write.md updated with gate documentation
+- [ ] Existing todo-write tests still pass

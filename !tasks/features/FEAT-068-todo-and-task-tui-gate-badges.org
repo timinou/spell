@@ -1,0 +1,204 @@
+#+TITLE: Todo and Task TUI Gate Badges
+#+STATE: DONE
+#+SESSION_ID: 14a636e83f4a8b63
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-17-14-206Z_14a62aa5178a8b47/14-CreateFeat5.jsonl]]
+#+CUSTOM_ID: FEAT-068-todo-and-task-tui-gate-badges
+#+EFFORT: 1.5h
+#+PRIORITY: #B
+#+LAYER: ui
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate org items for the TODO Gates + Unified Dashboard plan. Each task creates one org item via `org create` and returns its CUSTOM_ID.\n\n## Rules\n- Use `org create` with `state: \"ITEM\"`\n- Include EFFORT, PRIORITY, LAYER properties\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- File paths must be explicit\n- Return the CUSTOM_ID of the created item\n\n## Repo context\n- `packages/coding-agent/src/tools/todo-write.ts` — TodoItem type, schema, applyOps, formatSummary, TUI renderer\n- `packages/coding-agent/src/session/agent-session.ts` — #cloneTodoPhases, setTodoPhases, getTodoPhases, #syncTodoPhasesFromBranch, #checkTodoCompletion\n- `packages/org/src/journal.ts` — JournalTodoItem, serializeJournalOrg, writeJournal\n- `packages/coding-agent/src/prompts/tools/todo-write.md` — prompt template\n- `packages/coding-agent/src/modes/qml/panels/LoopDashboardPanel.qml` — loop dashboard panel\n- `packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml` — main dashboard panel (always available)\n- `packages/coding-agent/src/loop/dashboard-bridge.ts` — LoopDashboardBridge pattern\n- `packages/coding-agent/src/slash-commands/builtin-registry.ts` — builtin slash commands\n- `packages/coding-agent/src/task/render.ts` — task TUI rendering\n- `packages/coding-agent/src/modes/components/todo-reminder.ts` — TodoReminderComponent\n- `packages/coding-agent/src/tools/render-utils.ts` — TUI rendering utilities\n- `packages/org/test/journal.test.ts` — existing journal tests\n- `packages/coding-agent/test/tools/todo-write.test.ts` — existing todo-write tests (if exists)\n
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create`:
+
+```
+category: features
+title: Todo and Task TUI Gate Badges
+state: ITEM
+priority: #B
+properties:
+  EFFORT: 1.5h
+  PRIORITY: "#B"
+  LAYER: ui
+```
+
+Body:
+
+```
+* Scope
+
+** In scope
+- =formatTodoLine()= gate badge rendering: dim badges after task content e.g. =[commit] [artifact: path] [verify]=
+- =todoWriteToolRenderer= result rendering: gate badges visible in collapsed and expanded views
+- =TodoReminderComponent=: show gate indicators for incomplete gated tasks
+- Task =render.ts=: when task subagent implements an org item with GATE_* properties, show badges in the task TUI
+
+** Out of scope
+- Gate enforcement logic (FEAT: Gate-Aware formatSummary)
+- Blocked state rendering (FEAT: Blocked Computed State — formatTodoLine changes there)
+- QML panel rendering (FEAT: QML TodoPanel)
+
+** Boundary rationale
+Pure presentation layer. Reads gate fields from TodoItem, renders badges. No behavioral changes.
+
+* Tests
+
+Test file: =packages/coding-agent/test/tools/todo-write-gates.test.ts= (extend)
+
+** Scenario 1: formatTodoLine shows commit badge
+- Task with gateCommit=true
+- Assert rendered string contains "[commit]" badge
+
+** Scenario 2: formatTodoLine shows artifact badge with path
+- Task with gateArtifact="dist/bundle.js"
+- Assert rendered string contains "[artifact: dist/bundle.js]" badge
+
+** Scenario 3: formatTodoLine shows verify badge
+- Task with verifyCmd="bun test"
+- Assert rendered string contains "[verify]" badge
+
+** Scenario 4: No gates → no badges
+- Task without gate fields
+- Assert no badge text in rendered string
+
+** Scenario 5: Multiple badges
+- Task with gateCommit=true AND gateArtifact="out.json"
+- Assert both badges appear
+
+** Scenario 6: Completed gated task shows strikethrough with badges
+- Completed task with gateCommit=true
+- Assert strikethrough content still has badge
+
+* Implementation
+
+Preferred sequencing: implementation-first is fine here (pure rendering, TDD less critical).
+
+** Step 1: Badge rendering helper
+File: =packages/coding-agent/src/tools/todo-write.ts= (near formatTodoLine)
+- =function renderGateBadges(item: TodoItem, uiTheme: Theme): string=
+- Returns dim-styled badge string: e.g. =" [commit] [artifact: dist/out.json]"=
+- Returns empty string if no gates
+
+** Step 2: Update formatTodoLine
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~388)
+- Append =renderGateBadges()= output after task content in each status case
+- Note: FEAT-4 adds blocked rendering to this function — this item must be sequenced after FEAT-4
+
+** Step 3: Update TodoReminderComponent
+File: =packages/coding-agent/src/modes/components/todo-reminder.ts= (line ~37-44)
+- Add gate badge rendering for incomplete gated tasks in the reminder list
+- Import and use renderGateBadges (or inline equivalent)
+
+** Step 4: Update task render.ts
+File: =packages/coding-agent/src/task/render.ts=
+- When rendering AgentProgress for a task that implements an org item, check if org item has GATE_* properties
+- This requires the task context to carry org item gate info — may need to extract from assignment text or add metadata to AgentProgress
+- If gate info available, append badges to task description in renderAgentProgress
+
+* Edge Cases
+- Badge string length: long artifact paths should be truncated (use TRUNCATE_LENGTHS)
+- Theme consistency: badges use dim styling to not distract from task content
+- Task render gate info may not be available if task wasn't created from an org item — degrade gracefully
+
+* Acceptance Criteria
+- [ ] All 6 test scenarios pass
+- [ ] Gate badges visible in TUI when todo_write creates gated tasks
+- [ ] TodoReminderComponent shows gate indicators
+- [ ] Task TUI shows badges when org item has GATE_* properties (best-effort)
+- [ ] No visual regression for ungated tasks
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In scope
+- =formatTodoLine()= gate badge rendering: dim badges after task content e.g. =[commit] [artifact: path] [verify]=
+- =todoWriteToolRenderer= result rendering: gate badges visible in collapsed and expanded views
+- =TodoReminderComponent=: show gate indicators for incomplete gated tasks
+- Task =render.ts=: when task subagent implements an org item with GATE_* properties, show badges in the task TUI
+
+** Out of scope
+- Gate enforcement logic (FEAT: Gate-Aware formatSummary)
+- Blocked state rendering (FEAT: Blocked Computed State — formatTodoLine changes there)
+- QML panel rendering (FEAT: QML TodoPanel)
+
+** Boundary rationale
+Pure presentation layer. Reads gate fields from TodoItem, renders badges. No behavioral changes.
+
+* Tests
+
+Test file: =packages/coding-agent/test/tools/todo-write-gates.test.ts= (extend)
+
+** Scenario 1: formatTodoLine shows commit badge
+- Task with gateCommit=true
+- Assert rendered string contains "[commit]" badge
+
+** Scenario 2: formatTodoLine shows artifact badge with path
+- Task with gateArtifact="dist/bundle.js"
+- Assert rendered string contains "[artifact: dist/bundle.js]" badge
+
+** Scenario 3: formatTodoLine shows verify badge
+- Task with verifyCmd="bun test"
+- Assert rendered string contains "[verify]" badge
+
+** Scenario 4: No gates → no badges
+- Task without gate fields
+- Assert no badge text in rendered string
+
+** Scenario 5: Multiple badges
+- Task with gateCommit=true AND gateArtifact="out.json"
+- Assert both badges appear
+
+** Scenario 6: Completed gated task shows strikethrough with badges
+- Completed task with gateCommit=true
+- Assert strikethrough content still has badge
+
+* Implementation
+
+Preferred sequencing: implementation-first is fine here (pure rendering, TDD less critical).
+
+** Step 1: Badge rendering helper
+File: =packages/coding-agent/src/tools/todo-write.ts= (near formatTodoLine)
+- =function renderGateBadges(item: TodoItem, uiTheme: Theme): string=
+- Returns dim-styled badge string: e.g. =" [commit] [artifact: dist/out.json]"=
+- Returns empty string if no gates
+
+** Step 2: Update formatTodoLine
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~388)
+- Append =renderGateBadges()= output after task content in each status case
+- Note: FEAT-4 adds blocked rendering to this function — this item must be sequenced after FEAT-4
+
+** Step 3: Update TodoReminderComponent
+File: =packages/coding-agent/src/modes/components/todo-reminder.ts= (line ~37-44)
+- Add gate badge rendering for incomplete gated tasks in the reminder list
+- Import and use renderGateBadges (or inline equivalent)
+
+** Step 4: Update task render.ts
+File: =packages/coding-agent/src/task/render.ts=
+- When rendering AgentProgress for a task that implements an org item, check if org item has GATE_* properties
+- This requires the task context to carry org item gate info — may need to extract from assignment text or add metadata to AgentProgress
+- If gate info available, append badges to task description in renderAgentProgress
+
+* Edge Cases
+- Badge string length: long artifact paths should be truncated (use TRUNCATE_LENGTHS)
+- Theme consistency: badges use dim styling to not distract from task content
+- Task render gate info may not be available if task wasn't created from an org item — degrade gracefully
+
+* Acceptance Criteria
+- [ ] All 6 test scenarios pass
+- [ ] Gate badges visible in TUI when todo_write creates gated tasks
+- [ ] TodoReminderComponent shows gate indicators
+- [ ] Task TUI shows badges when org item has GATE_* properties (best-effort)
+- [ ] No visual regression for ungated tasks

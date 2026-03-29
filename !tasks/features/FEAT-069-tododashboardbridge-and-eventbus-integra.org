@@ -1,0 +1,228 @@
+#+TITLE: TodoDashboardBridge and EventBus Integration
+#+STATE: DONE
+#+SESSION_ID: 14a636e8400a8b6b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-17-14-206Z_14a62aa5178a8b47/15-CreateFeat6.jsonl]]
+#+CUSTOM_ID: FEAT-069-tododashboardbridge-and-eventbus-integra
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: infra
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate org items for the TODO Gates + Unified Dashboard plan. Each task creates one org item via `org create` and returns its CUSTOM_ID.\n\n## Rules\n- Use `org create` with `state: \"ITEM\"`\n- Include EFFORT, PRIORITY, LAYER properties\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- File paths must be explicit\n- Return the CUSTOM_ID of the created item\n\n## Repo context\n- `packages/coding-agent/src/tools/todo-write.ts` — TodoItem type, schema, applyOps, formatSummary, TUI renderer\n- `packages/coding-agent/src/session/agent-session.ts` — #cloneTodoPhases, setTodoPhases, getTodoPhases, #syncTodoPhasesFromBranch, #checkTodoCompletion\n- `packages/org/src/journal.ts` — JournalTodoItem, serializeJournalOrg, writeJournal\n- `packages/coding-agent/src/prompts/tools/todo-write.md` — prompt template\n- `packages/coding-agent/src/modes/qml/panels/LoopDashboardPanel.qml` — loop dashboard panel\n- `packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml` — main dashboard panel (always available)\n- `packages/coding-agent/src/loop/dashboard-bridge.ts` — LoopDashboardBridge pattern\n- `packages/coding-agent/src/slash-commands/builtin-registry.ts` — builtin slash commands\n- `packages/coding-agent/src/task/render.ts` — task TUI rendering\n- `packages/coding-agent/src/modes/components/todo-reminder.ts` — TodoReminderComponent\n- `packages/coding-agent/src/tools/render-utils.ts` — TUI rendering utilities\n- `packages/org/test/journal.test.ts` — existing journal tests\n- `packages/coding-agent/test/tools/todo-write.test.ts` — existing todo-write tests (if exists)\n
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create`:
+
+```
+category: features
+title: TodoDashboardBridge and EventBus Integration
+state: ITEM
+priority: #B
+properties:
+  EFFORT: 2h
+  PRIORITY: "#B"
+  LAYER: infra
+```
+
+Body:
+
+```
+* Scope
+
+** In scope
+- Emit ='todo:change'= EventBus event in =setTodoPhases()= in agent-session.ts
+- New =TodoDashboardBridge= class (analogous to =LoopDashboardBridge=)
+  - =buildSnapshot()=: returns =todo_snapshot= payload with phases, tasks, gate fields, blocked status
+  - =subscribe()=: EventBus subscription to ='todo:change'=, rebuilds snapshot on change
+  - =registerPanel()= / =unregisterPanel()=: emit =shell:add_panel= / =shell:remove_panel=
+  - =handleControl()=: process gate toggle messages from QML (set/clear gate fields on tasks)
+- Auto-register panel when any task has gate properties
+- Auto-unregister when all tasks cleared or no gated tasks remain
+
+** Out of scope
+- QML panel component (FEAT: QML TodoPanel)
+- /gui slash command (FEAT: /gui Slash Command)
+- formatSummary changes (FEAT: Gate-Aware formatSummary)
+
+** Boundary rationale
+This is the communication bridge between session state and QML. It follows the exact pattern of LoopDashboardBridge but for todo state. The QML panel consumes this bridge's output.
+
+* Tests
+
+Test file: =packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts= (new)
+
+** Scenario 1: buildSnapshot returns correct payload
+- Create TodoDashboardBridge with mock todo phases (including gated tasks)
+- Call buildSnapshot()
+- Assert payload contains phases, tasks with gate fields, blocked computation
+
+** Scenario 2: subscribe triggers callback on todo:change
+- Subscribe to bridge
+- Emit 'todo:change' on EventBus
+- Assert callback received updated snapshot
+
+** Scenario 3: registerPanel emits shell:add_panel
+- Call registerPanel()
+- Assert EventBus received shell:add_panel with correct panel metadata
+
+** Scenario 4: Auto-register triggers when gated task is added
+- Bridge monitors setTodoPhases calls
+- Set phases with a gated task
+- Assert registerPanel was called
+
+** Scenario 5: Auto-unregister when no gated tasks remain
+- Bridge has registered panel
+- Set phases with no gated tasks
+- Assert unregisterPanel was called
+
+** Scenario 6: handleControl toggles gate field
+- Send toggle message: {action: 'todo_control', taskId: 'task-1', gate: 'gateCommit', enabled: true}
+- Assert task-1 now has gateCommit=true in session state
+
+* Implementation
+
+Preferred sequencing: implementation-first (bridge pattern well-established from LoopDashboardBridge).
+
+** Step 1: Add EventBus emission to setTodoPhases
+File: =packages/coding-agent/src/session/agent-session.ts= (line ~2784)
+- After =this.#todoPhases = this.#cloneTodoPhases(phases)=
+- Emit: =this.#eventBus?.emit('todo:change', { phases: this.#todoPhases })=
+- EventBus may be undefined (check ToolSession interface for availability)
+
+** Step 2: Define TodoDashboardPayload
+File: =packages/coding-agent/src/tools/todo-dashboard-bridge.ts= (new)
+- Interface matching: type, phases (with tasks including gate fields and computed blocked status)
+
+** Step 3: Implement TodoDashboardBridge
+File: =packages/coding-agent/src/tools/todo-dashboard-bridge.ts=
+- Follow LoopDashboardBridge pattern (=packages/coding-agent/src/loop/dashboard-bridge.ts=)
+- Constructor takes session (for getTodoPhases/setTodoPhases) and optional EventBus
+- buildSnapshot reads current phases, computes blocked status per task
+- subscribe listens to 'todo:change'
+- handleControl processes gate toggle messages by calling setTodoPhases with modified phases
+
+** Step 4: Auto-registration logic
+- In subscribe callback or in a dedicated method, check if any task has gate properties
+- If yes and panel not registered: registerPanel()
+- If no and panel registered: unregisterPanel()
+
+* Edge Cases
+- EventBus not available (ToolSession without EventBus): degrade gracefully, no panel
+- Rapid todo:change emissions: bridge should not spam QML with snapshots. Consider debounce (50-100ms)
+- handleControl with invalid taskId: log warning, no-op
+- handleControl with invalid gate name: log warning, no-op
+- Auto-clear removes gated tasks: triggers todo:change, which triggers unregisterPanel
+
+* Acceptance Criteria
+- [ ] All 6 test scenarios pass
+- [ ] setTodoPhases emits 'todo:change' EventBus event
+- [ ] TodoDashboardBridge follows LoopDashboardBridge pattern
+- [ ] Auto-register/unregister works based on gated task presence
+- [ ] handleControl correctly mutates session todo state
+- [ ] =tsgo -p packages/coding-agent= passes
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In scope
+- Emit ='todo:change'= EventBus event in =setTodoPhases()= in agent-session.ts
+- New =TodoDashboardBridge= class (analogous to =LoopDashboardBridge=)
+  - =buildSnapshot()=: returns =todo_snapshot= payload with phases, tasks, gate fields, blocked status
+  - =subscribe()=: EventBus subscription to ='todo:change'=, rebuilds snapshot on change
+  - =registerPanel()= / =unregisterPanel()=: emit =shell:add_panel= / =shell:remove_panel=
+  - =handleControl()=: process gate toggle messages from QML (set/clear gate fields on tasks)
+- Auto-register panel when any task has gate properties
+- Auto-unregister when all tasks cleared or no gated tasks remain
+
+** Out of scope
+- QML panel component (FEAT: QML TodoPanel)
+- /gui slash command (FEAT: /gui Slash Command)
+- formatSummary changes (FEAT: Gate-Aware formatSummary)
+
+** Boundary rationale
+This is the communication bridge between session state and QML. It follows the exact pattern of LoopDashboardBridge but for todo state. The QML panel consumes this bridge's output.
+
+* Tests
+
+Test file: =packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts= (new)
+
+** Scenario 1: buildSnapshot returns correct payload
+- Create TodoDashboardBridge with mock todo phases (including gated tasks)
+- Call buildSnapshot()
+- Assert payload contains phases, tasks with gate fields, blocked computation
+
+** Scenario 2: subscribe triggers callback on todo:change
+- Subscribe to bridge
+- Emit 'todo:change' on EventBus
+- Assert callback received updated snapshot
+
+** Scenario 3: registerPanel emits shell:add_panel
+- Call registerPanel()
+- Assert EventBus received shell:add_panel with correct panel metadata
+
+** Scenario 4: Auto-register triggers when gated task is added
+- Bridge monitors setTodoPhases calls
+- Set phases with a gated task
+- Assert registerPanel was called
+
+** Scenario 5: Auto-unregister when no gated tasks remain
+- Bridge has registered panel
+- Set phases with no gated tasks
+- Assert unregisterPanel was called
+
+** Scenario 6: handleControl toggles gate field
+- Send toggle message: {action: 'todo_control', taskId: 'task-1', gate: 'gateCommit', enabled: true}
+- Assert task-1 now has gateCommit=true in session state
+
+* Implementation
+
+Preferred sequencing: implementation-first (bridge pattern well-established from LoopDashboardBridge).
+
+** Step 1: Add EventBus emission to setTodoPhases
+File: =packages/coding-agent/src/session/agent-session.ts= (line ~2784)
+- After =this.#todoPhases = this.#cloneTodoPhases(phases)=
+- Emit: =this.#eventBus?.emit('todo:change', { phases: this.#todoPhases })=
+- EventBus may be undefined (check ToolSession interface for availability)
+
+** Step 2: Define TodoDashboardPayload
+File: =packages/coding-agent/src/tools/todo-dashboard-bridge.ts= (new)
+- Interface matching: type, phases (with tasks including gate fields and computed blocked status)
+
+** Step 3: Implement TodoDashboardBridge
+File: =packages/coding-agent/src/tools/todo-dashboard-bridge.ts=
+- Follow LoopDashboardBridge pattern (=packages/coding-agent/src/loop/dashboard-bridge.ts=)
+- Constructor takes session (for getTodoPhases/setTodoPhases) and optional EventBus
+- buildSnapshot reads current phases, computes blocked status per task
+- subscribe listens to 'todo:change'
+- handleControl processes gate toggle messages by calling setTodoPhases with modified phases
+
+** Step 4: Auto-registration logic
+- In subscribe callback or in a dedicated method, check if any task has gate properties
+- If yes and panel not registered: registerPanel()
+- If no and panel registered: unregisterPanel()
+
+* Edge Cases
+- EventBus not available (ToolSession without EventBus): degrade gracefully, no panel
+- Rapid todo:change emissions: bridge should not spam QML with snapshots. Consider debounce (50-100ms)
+- handleControl with invalid taskId: log warning, no-op
+- handleControl with invalid gate name: log warning, no-op
+- Auto-clear removes gated tasks: triggers todo:change, which triggers unregisterPanel
+
+* Acceptance Criteria
+- [ ] All 6 test scenarios pass
+- [ ] setTodoPhases emits 'todo:change' EventBus event
+- [ ] TodoDashboardBridge follows LoopDashboardBridge pattern
+- [ ] Auto-register/unregister works based on gated task presence
+- [ ] handleControl correctly mutates session todo state
+- [ ] =tsgo -p packages/coding-agent= passes

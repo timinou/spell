@@ -1,0 +1,160 @@
+#+TITLE: Slash gui Command for Dashboard Focus
+#+STATE: DONE
+#+SESSION_ID: 14a636e83f8a8b67
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-17-14-206Z_14a62aa5178a8b47/17-CreateFeat8.jsonl]]
+#+CUSTOM_ID: FEAT-064-slash-gui-command-for-dashboard-focus
+#+EFFORT: 45m
+#+PRIORITY: #C
+#+LAYER: ui
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate org items for the TODO Gates + Unified Dashboard plan. Each task creates one org item via `org create` and returns its CUSTOM_ID.\n\n## Rules\n- Use `org create` with `state: \"ITEM\"`\n- Include EFFORT, PRIORITY, LAYER properties\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- File paths must be explicit\n- Return the CUSTOM_ID of the created item\n\n## Repo context\n- `packages/coding-agent/src/tools/todo-write.ts` — TodoItem type, schema, applyOps, formatSummary, TUI renderer\n- `packages/coding-agent/src/session/agent-session.ts` — #cloneTodoPhases, setTodoPhases, getTodoPhases, #syncTodoPhasesFromBranch, #checkTodoCompletion\n- `packages/org/src/journal.ts` — JournalTodoItem, serializeJournalOrg, writeJournal\n- `packages/coding-agent/src/prompts/tools/todo-write.md` — prompt template\n- `packages/coding-agent/src/modes/qml/panels/LoopDashboardPanel.qml` — loop dashboard panel\n- `packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml` — main dashboard panel (always available)\n- `packages/coding-agent/src/loop/dashboard-bridge.ts` — LoopDashboardBridge pattern\n- `packages/coding-agent/src/slash-commands/builtin-registry.ts` — builtin slash commands\n- `packages/coding-agent/src/task/render.ts` — task TUI rendering\n- `packages/coding-agent/src/modes/components/todo-reminder.ts` — TodoReminderComponent\n- `packages/coding-agent/src/tools/render-utils.ts` — TUI rendering utilities\n- `packages/org/test/journal.test.ts` — existing journal tests\n- `packages/coding-agent/test/tools/todo-write.test.ts` — existing todo-write tests (if exists)\n
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create`:
+
+```
+category: features
+title: Slash gui Command for Dashboard Focus
+state: ITEM
+priority: #C
+properties:
+  EFFORT: 45m
+  PRIORITY: "#C"
+  LAYER: ui
+```
+
+Body:
+
+```
+* Scope
+
+** In scope
+- Register =/gui= in =builtin-registry.ts= as a builtin slash command
+- Emit =shell:focus_panel= event targeting the dashboard panel ID
+- TUI-only graceful degradation: show warning 'QML shell not available. Start spell with --gui to use the dashboard.'
+- Help text and autocomplete integration
+
+** Out of scope
+- Dashboard panel content (FEAT: QML TodoPanel)
+- TodoDashboardBridge (FEAT: TodoDashboardBridge)
+
+** Boundary rationale
+Minimal slash command that opens/focuses the dashboard. Pure wiring.
+
+* Tests
+
+Manual verification (slash command is wiring-only).
+
+** Scenario 1: /gui in QML mode
+- Run spell with --gui
+- Type /gui
+- Assert dashboard panel focuses
+
+** Scenario 2: /gui in TUI-only mode
+- Run spell without --gui
+- Type /gui
+- Assert warning message shown
+
+* Implementation
+
+Preferred sequencing: implementation-first.
+
+** Step 1: Register slash command
+File: =packages/coding-agent/src/slash-commands/builtin-registry.ts=
+- Add to BUILTIN_SLASH_COMMAND_REGISTRY array:
+  ={name: "gui", description: "Open dashboard panel", handle: async (_cmd, runtime) => { ... }}=
+
+** Step 2: Implement handler
+- Check if QML shell is available (runtime.ctx has a method or flag for this)
+- If available: emit =shell:focus_panel= event via EventBus with dashboard panel ID
+- If not: =runtime.ctx.showWarning('QML shell not available. Start spell with --gui.')=
+- Clear editor text
+
+** Step 3: Verify shell:focus_panel handling
+File: =packages/coding-agent/src/modes/qml/shell.qml=
+- May need to add handler for =shell:focus_panel= event if it doesn't exist
+- If shell already handles panel focus events, just verify the panel ID matches
+
+* Edge Cases
+- /gui when no todos and no loop: dashboard shows but with empty state (handled by FEAT-7)
+- /gui during streaming: should work (slash commands are processed before streaming check)
+- /gui with args: ignore args (no subcommands needed)
+
+* Acceptance Criteria
+- [ ] /gui appears in slash command autocomplete
+- [ ] /gui focuses dashboard panel in QML mode
+- [ ] /gui shows warning in TUI-only mode
+- [ ] No TypeScript errors
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In scope
+- Register =/gui= in =builtin-registry.ts= as a builtin slash command
+- Emit =shell:focus_panel= event targeting the dashboard panel ID
+- TUI-only graceful degradation: show warning 'QML shell not available. Start spell with --gui to use the dashboard.'
+- Help text and autocomplete integration
+
+** Out of scope
+- Dashboard panel content (FEAT: QML TodoPanel)
+- TodoDashboardBridge (FEAT: TodoDashboardBridge)
+
+** Boundary rationale
+Minimal slash command that opens/focuses the dashboard. Pure wiring.
+
+* Tests
+
+Manual verification (slash command is wiring-only).
+
+** Scenario 1: /gui in QML mode
+- Run spell with --gui
+- Type /gui
+- Assert dashboard panel focuses
+
+** Scenario 2: /gui in TUI-only mode
+- Run spell without --gui
+- Type /gui
+- Assert warning message shown
+
+* Implementation
+
+Preferred sequencing: implementation-first.
+
+** Step 1: Register slash command
+File: =packages/coding-agent/src/slash-commands/builtin-registry.ts=
+- Add to BUILTIN_SLASH_COMMAND_REGISTRY array:
+  ={name: "gui", description: "Open dashboard panel", handle: async (_cmd, runtime) => { ... }}=
+
+** Step 2: Implement handler
+- Check if QML shell is available (runtime.ctx has a method or flag for this)
+- If available: emit =shell:focus_panel= event via EventBus with dashboard panel ID
+- If not: =runtime.ctx.showWarning('QML shell not available. Start spell with --gui.')=
+- Clear editor text
+
+** Step 3: Verify shell:focus_panel handling
+File: =packages/coding-agent/src/modes/qml/shell.qml=
+- May need to add handler for =shell:focus_panel= event if it doesn't exist
+- If shell already handles panel focus events, just verify the panel ID matches
+
+* Edge Cases
+- /gui when no todos and no loop: dashboard shows but with empty state (handled by FEAT-7)
+- /gui during streaming: should work (slash commands are processed before streaming check)
+- /gui with args: ignore args (no subcommands needed)
+
+* Acceptance Criteria
+- [ ] /gui appears in slash command autocomplete
+- [ ] /gui focuses dashboard panel in QML mode
+- [ ] /gui shows warning in TUI-only mode
+- [ ] No TypeScript errors

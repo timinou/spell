@@ -1,0 +1,222 @@
+#+TITLE: QML TodoPanel with Gate Toggles
+#+STATE: DONE
+#+SESSION_ID: 14a636e83fca8b69
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-17-14-206Z_14a62aa5178a8b47/16-CreateFeat7.jsonl]]
+#+CUSTOM_ID: FEAT-066-qml-todopanel-with-gate-toggles
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: qml
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate org items for the TODO Gates + Unified Dashboard plan. Each task creates one org item via `org create` and returns its CUSTOM_ID.\n\n## Rules\n- Use `org create` with `state: \"ITEM\"`\n- Include EFFORT, PRIORITY, LAYER properties\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- File paths must be explicit\n- Return the CUSTOM_ID of the created item\n\n## Repo context\n- `packages/coding-agent/src/tools/todo-write.ts` — TodoItem type, schema, applyOps, formatSummary, TUI renderer\n- `packages/coding-agent/src/session/agent-session.ts` — #cloneTodoPhases, setTodoPhases, getTodoPhases, #syncTodoPhasesFromBranch, #checkTodoCompletion\n- `packages/org/src/journal.ts` — JournalTodoItem, serializeJournalOrg, writeJournal\n- `packages/coding-agent/src/prompts/tools/todo-write.md` — prompt template\n- `packages/coding-agent/src/modes/qml/panels/LoopDashboardPanel.qml` — loop dashboard panel\n- `packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml` — main dashboard panel (always available)\n- `packages/coding-agent/src/loop/dashboard-bridge.ts` — LoopDashboardBridge pattern\n- `packages/coding-agent/src/slash-commands/builtin-registry.ts` — builtin slash commands\n- `packages/coding-agent/src/task/render.ts` — task TUI rendering\n- `packages/coding-agent/src/modes/components/todo-reminder.ts` — TodoReminderComponent\n- `packages/coding-agent/src/tools/render-utils.ts` — TUI rendering utilities\n- `packages/org/test/journal.test.ts` — existing journal tests\n- `packages/coding-agent/test/tools/todo-write.test.ts` — existing todo-write tests (if exists)\n
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create`:
+
+```
+category: features
+title: QML TodoPanel with Gate Toggles
+state: ITEM
+priority: #B
+properties:
+  EFFORT: 3h
+  PRIORITY: "#B"
+  LAYER: qml
+```
+
+Body:
+
+```
+* Scope
+
+** In scope
+- New =TodoPanel.qml= component: view-only task list grouped by phase with gate toggle checkboxes
+- Context-adaptive integration in =DashboardPanel.qml=: show todo section when tasks exist, loop section when loop active, both when both
+- Gate toggle interaction: checkboxes for commit/artifact/cmd/llm per task, sends =todo_control= message via bridge
+- Status indicators: pending, in_progress, completed, blocked icons
+- Auto-refresh via =todo_snapshot= messages from TodoDashboardBridge
+- Journey tests for panel rendering and gate toggle interaction
+
+** Out of scope
+- Task manipulation (add/remove/reorder tasks) from QML
+- Hard gate enforcement or validation from QML
+- /gui slash command (FEAT: /gui Slash Command)
+
+** Boundary rationale
+V1 is view-only + gate toggles. The panel shows current state and lets the user configure gates. All task manipulation stays with the AI via todo_write.
+
+* Tests
+
+Test file: =packages/coding-agent/test/qml/todo-panel.journey.ts= (new, Journey test)
+
+** Scenario 1: Panel renders phases and tasks
+- Launch TodoPanel with snapshot containing 2 phases, 4 tasks
+- Assert all phase headers and task labels visible
+
+** Scenario 2: Gate toggle sends control message
+- Launch TodoPanel with snapshot
+- Toggle commit gate checkbox for task-1
+- Assert bridge receives {action: 'todo_control', taskId: 'task-1', gate: 'gateCommit', enabled: true}
+
+** Scenario 3: Blocked tasks render with distinct indicator
+- Launch TodoPanel with snapshot containing a blocked task
+- Assert blocked task has blocked icon/styling
+
+** Scenario 4: Context-adaptive: todo only
+- DashboardPanel with todo tasks but no active loop
+- Assert todo section visible, loop section hidden
+
+** Scenario 5: Context-adaptive: todo + loop
+- DashboardPanel with todo tasks AND active loop
+- Assert both sections visible
+
+** Scenario 6: Empty state
+- DashboardPanel with no todos and no loop
+- Assert appropriate empty state message
+
+* Implementation
+
+Preferred sequencing: QML component first, then Journey tests.
+
+** Step 1: Create TodoPanel.qml
+File: =packages/coding-agent/src/modes/qml/panels/TodoPanel.qml= (new)
+- Properties: =phases= (ListModel), =onControlRequested= signal
+- Phase grouping: Column of phase headers, each with task Repeater
+- Task row: status icon + content text + gate toggle checkboxes (commit, artifact, cmd, llm)
+- Gate toggles: CheckBox components that emit =controlRequested(taskId, gateName, enabled)=
+- Status icons: use existing SpellTheme color conventions (success=completed, accent=in_progress, warning=blocked, dim=pending)
+
+** Step 2: Integrate into DashboardPanel.qml
+File: =packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml=
+- Add a TodoPanel section below existing content
+- Conditional visibility: =visible: todoPhases.count > 0=
+- Receive =todo_snapshot= messages via bridge.messageReceived
+- Forward snapshot data to TodoPanel properties
+- Keep existing loop section (LoopDashboardPanel) with its own visibility condition
+
+** Step 3: Wire bridge messages
+- DashboardPanel handleMessage: route =todo_snapshot= to TodoPanel
+- TodoPanel controlRequested signal → bridge.send({action: 'todo_control', ...})
+
+** Step 4: Journey tests
+- Use QmlJourney DSL for headless QML testing
+- Launch panel with mock snapshot data
+- Verify rendering and interaction via DOM introspection
+
+* Edge Cases
+- Large task list (20+ tasks): panel should scroll, not overflow
+- Rapid snapshot updates: QML bindings handle this naturally via property updates
+- Gate toggle while AI is running: bridge.handleControl mutates state, next todo_write call sees the change
+- Long task content: truncate with ellipsis
+- Long artifact path in gate: truncate with tooltip
+
+* Acceptance Criteria
+- [ ] TodoPanel.qml renders phases and tasks from snapshot
+- [ ] Gate toggle checkboxes send control messages back to bridge
+- [ ] Context-adaptive: DashboardPanel shows todo/loop/both based on state
+- [ ] All 6 Journey test scenarios pass
+- [ ] No QML lint errors (qmllint passes)
+- [ ] Screenshot artifact: TodoPanel with 2 phases, mixed gate states, one blocked task
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In scope
+- New =TodoPanel.qml= component: view-only task list grouped by phase with gate toggle checkboxes
+- Context-adaptive integration in =DashboardPanel.qml=: show todo section when tasks exist, loop section when loop active, both when both
+- Gate toggle interaction: checkboxes for commit/artifact/cmd/llm per task, sends =todo_control= message via bridge
+- Status indicators: pending, in_progress, completed, blocked icons
+- Auto-refresh via =todo_snapshot= messages from TodoDashboardBridge
+- Journey tests for panel rendering and gate toggle interaction
+
+** Out of scope
+- Task manipulation (add/remove/reorder tasks) from QML
+- Hard gate enforcement or validation from QML
+- /gui slash command (FEAT: /gui Slash Command)
+
+** Boundary rationale
+V1 is view-only + gate toggles. The panel shows current state and lets the user configure gates. All task manipulation stays with the AI via todo_write.
+
+* Tests
+
+Test file: =packages/coding-agent/test/qml/todo-panel.journey.ts= (new, Journey test)
+
+** Scenario 1: Panel renders phases and tasks
+- Launch TodoPanel with snapshot containing 2 phases, 4 tasks
+- Assert all phase headers and task labels visible
+
+** Scenario 2: Gate toggle sends control message
+- Launch TodoPanel with snapshot
+- Toggle commit gate checkbox for task-1
+- Assert bridge receives {action: 'todo_control', taskId: 'task-1', gate: 'gateCommit', enabled: true}
+
+** Scenario 3: Blocked tasks render with distinct indicator
+- Launch TodoPanel with snapshot containing a blocked task
+- Assert blocked task has blocked icon/styling
+
+** Scenario 4: Context-adaptive: todo only
+- DashboardPanel with todo tasks but no active loop
+- Assert todo section visible, loop section hidden
+
+** Scenario 5: Context-adaptive: todo + loop
+- DashboardPanel with todo tasks AND active loop
+- Assert both sections visible
+
+** Scenario 6: Empty state
+- DashboardPanel with no todos and no loop
+- Assert appropriate empty state message
+
+* Implementation
+
+Preferred sequencing: QML component first, then Journey tests.
+
+** Step 1: Create TodoPanel.qml
+File: =packages/coding-agent/src/modes/qml/panels/TodoPanel.qml= (new)
+- Properties: =phases= (ListModel), =onControlRequested= signal
+- Phase grouping: Column of phase headers, each with task Repeater
+- Task row: status icon + content text + gate toggle checkboxes (commit, artifact, cmd, llm)
+- Gate toggles: CheckBox components that emit =controlRequested(taskId, gateName, enabled)=
+- Status icons: use existing SpellTheme color conventions (success=completed, accent=in_progress, warning=blocked, dim=pending)
+
+** Step 2: Integrate into DashboardPanel.qml
+File: =packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml=
+- Add a TodoPanel section below existing content
+- Conditional visibility: =visible: todoPhases.count > 0=
+- Receive =todo_snapshot= messages via bridge.messageReceived
+- Forward snapshot data to TodoPanel properties
+- Keep existing loop section (LoopDashboardPanel) with its own visibility condition
+
+** Step 3: Wire bridge messages
+- DashboardPanel handleMessage: route =todo_snapshot= to TodoPanel
+- TodoPanel controlRequested signal → bridge.send({action: 'todo_control', ...})
+
+** Step 4: Journey tests
+- Use QmlJourney DSL for headless QML testing
+- Launch panel with mock snapshot data
+- Verify rendering and interaction via DOM introspection
+
+* Edge Cases
+- Large task list (20+ tasks): panel should scroll, not overflow
+- Rapid snapshot updates: QML bindings handle this naturally via property updates
+- Gate toggle while AI is running: bridge.handleControl mutates state, next todo_write call sees the change
+- Long task content: truncate with ellipsis
+- Long artifact path in gate: truncate with tooltip
+
+* Acceptance Criteria
+- [ ] TodoPanel.qml renders phases and tasks from snapshot
+- [ ] Gate toggle checkboxes send control messages back to bridge
+- [ ] Context-adaptive: DashboardPanel shows todo/loop/both based on state
+- [ ] All 6 Journey test scenarios pass
+- [ ] No QML lint errors (qmllint passes)
+- [ ] Screenshot artifact: TodoPanel with 2 phases, mixed gate states, one blocked task

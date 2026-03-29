@@ -177,4 +177,77 @@ describe("writeJournal", () => {
 		// Bun.write creates parent dirs, so this should succeed silently
 		await expect(writeJournal("/tmp/definitely-does-not-exist-pi-org-test/sub", "s", [])).resolves.toBeUndefined();
 	});
+	test("serializes gate properties to org PROPERTIES drawer", async () => {
+		const gatedPhases: JournalTodoPhase[] = [{
+			id: "phase-1",
+			name: "Gated Work",
+			tasks: [{
+				id: "task-1",
+				content: "Build feature",
+				status: "in_progress",
+				gateCommit: true,
+				gateArtifact: "dist/output.json",
+				verifyCmd: "bun test",
+			}],
+		}];
+		await writeJournal(tmpDir, "gate-session", gatedPhases);
+		const content = await Bun.file(journalFilePath(tmpDir, "gate-session")).text();
+		expect(content).toContain(":GATE_COMMIT: true");
+		expect(content).toContain(":GATE_ARTIFACT: dist/output.json");
+		expect(content).toContain(":VERIFY_CMD: bun test");
+	});
+
+	test("serializes blocker properties space-separated", async () => {
+		const blockerPhases: JournalTodoPhase[] = [{
+			id: "phase-1",
+			name: "Blocked Work",
+			tasks: [{
+				id: "task-1",
+				content: "Depends on others",
+				status: "pending",
+				blockers: ["task-2", "task-3"],
+			}],
+		}];
+		await writeJournal(tmpDir, "blocker-session", blockerPhases);
+		const content = await Bun.file(journalFilePath(tmpDir, "blocker-session")).text();
+		expect(content).toContain(":BLOCKER: task-2 task-3");
+	});
+
+	test("omits gate properties when not set", async () => {
+		const plainPhases: JournalTodoPhase[] = [{
+			id: "phase-1",
+			name: "Plain Work",
+			tasks: [{
+				id: "task-1",
+				content: "Simple task",
+				status: "pending",
+			}],
+		}];
+		await writeJournal(tmpDir, "plain-session", plainPhases);
+		const content = await Bun.file(journalFilePath(tmpDir, "plain-session")).text();
+		expect(content).not.toContain(":GATE_");
+		expect(content).not.toContain(":VERIFY_CMD");
+		expect(content).not.toContain(":BLOCKER");
+	});
+
+	test("serializes details as body text below PROPERTIES drawer", async () => {
+		const detailPhases: JournalTodoPhase[] = [{
+			id: "phase-1",
+			name: "Detailed Work",
+			tasks: [{
+				id: "task-1",
+				content: "Complex task",
+				status: "in_progress",
+				details: "Step 1: Read the code\nStep 2: Fix the bug",
+			}],
+		}];
+		await writeJournal(tmpDir, "detail-session", detailPhases);
+		const content = await Bun.file(journalFilePath(tmpDir, "detail-session")).text();
+		expect(content).toContain("Step 1: Read the code");
+		expect(content).toContain("Step 2: Fix the bug");
+		const endIdx = content.indexOf(":END:");
+		const detailIdx = content.indexOf("Step 1: Read the code");
+		expect(detailIdx).toBeGreaterThan(endIdx);
+	});
+
 });

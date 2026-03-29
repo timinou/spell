@@ -1,0 +1,180 @@
+#+TITLE: Journal Gate Serialization
+#+STATE: DONE
+#+SESSION_ID: 14a636e83e8a8b5d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-17-14-206Z_14a62aa5178a8b47/11-CreateFeat2.jsonl]]
+#+CUSTOM_ID: FEAT-065-journal-gate-serialization
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: persistence
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate org items for the TODO Gates + Unified Dashboard plan. Each task creates one org item via `org create` and returns its CUSTOM_ID.\n\n## Rules\n- Use `org create` with `state: \"ITEM\"`\n- Include EFFORT, PRIORITY, LAYER properties\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- File paths must be explicit\n- Return the CUSTOM_ID of the created item\n\n## Repo context\n- `packages/coding-agent/src/tools/todo-write.ts` — TodoItem type, schema, applyOps, formatSummary, TUI renderer\n- `packages/coding-agent/src/session/agent-session.ts` — #cloneTodoPhases, setTodoPhases, getTodoPhases, #syncTodoPhasesFromBranch, #checkTodoCompletion\n- `packages/org/src/journal.ts` — JournalTodoItem, serializeJournalOrg, writeJournal\n- `packages/coding-agent/src/prompts/tools/todo-write.md` — prompt template\n- `packages/coding-agent/src/modes/qml/panels/LoopDashboardPanel.qml` — loop dashboard panel\n- `packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml` — main dashboard panel (always available)\n- `packages/coding-agent/src/loop/dashboard-bridge.ts` — LoopDashboardBridge pattern\n- `packages/coding-agent/src/slash-commands/builtin-registry.ts` — builtin slash commands\n- `packages/coding-agent/src/task/render.ts` — task TUI rendering\n- `packages/coding-agent/src/modes/components/todo-reminder.ts` — TodoReminderComponent\n- `packages/coding-agent/src/tools/render-utils.ts` — TUI rendering utilities\n- `packages/org/test/journal.test.ts` — existing journal tests\n- `packages/coding-agent/test/tools/todo-write.test.ts` — existing todo-write tests (if exists)\n
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create`:
+
+```
+category: features
+title: Journal Gate Serialization
+state: ITEM
+priority: #B
+properties:
+  EFFORT: 1h
+  PRIORITY: "#B"
+  LAYER: persistence
+```
+
+Body:
+
+```
+* Scope
+
+** In scope
+- Extend =JournalTodoItem= type in =journal.ts= with optional gate fields matching TodoItem
+- Update =serializeJournalOrg()= to write gate properties in PROPERTIES drawer: =:GATE_COMMIT:=, =:GATE_ARTIFACT:=, =:GATE_CMD:=, =:GATE_LLM:=, =:VERIFY_CMD:=, =:BLOCKER:=
+- Add =details= field to =JournalTodoItem= (currently missing)
+
+** Out of scope
+- Reading gate properties back from journal files (journal is write-only persistence)
+- TodoItem type changes (FEAT: TodoItem Gate Fields)
+
+** Boundary rationale
+Journal serialization is the external persistence layer. It writes org files for user/tool consumption but nothing reads them back into the AI session. Pure output path.
+
+* Tests
+
+Test file: =packages/org/test/journal.test.ts= (extend existing)
+
+** Scenario 1: Gate properties serialized to org
+- Create phases with tasks that have gateCommit=true, gateArtifact="dist/output.json", verifyCmd="bun test"
+- Call writeJournal
+- Read the org file content
+- Assert =:GATE_COMMIT: true= appears in PROPERTIES drawer
+- Assert =:GATE_ARTIFACT: dist/output.json= appears
+- Assert =:VERIFY_CMD: bun test= appears
+
+** Scenario 2: Blocker properties serialized
+- Create task with blockers=["task-1", "task-2"]
+- Call writeJournal
+- Assert =:BLOCKER: task-1 task-2= appears (space-separated, matching loop module convention)
+
+** Scenario 3: Missing gate fields produce no properties
+- Create task with no gate fields
+- Call writeJournal
+- Assert no =:GATE_*= properties in output
+
+** Scenario 4: Details field serialized
+- Create task with details="Implementation steps here"
+- Call writeJournal
+- Assert details appear in org body (below PROPERTIES drawer, before next heading)
+
+* Implementation
+
+Preferred sequencing: write tests first.
+
+** Step 1: Extend JournalTodoItem
+File: =packages/org/src/journal.ts= (line ~26-31)
+- Add: =details?: string=, =gateCommit?: boolean=, =gateArtifact?: string=, =gateCmd?: string=, =gateLlm?: string=, =verifyCmd?: string=, =blockers?: string[]=
+
+** Step 2: Update serializeJournalOrg
+File: =packages/org/src/journal.ts= (line ~54-81)
+- After existing PROPERTIES drawer (=:TASK_ID:=, =:STATUS:=), conditionally add gate properties
+- =if (task.gateCommit) lines.push(`:GATE_COMMIT: true`)=
+- =if (task.gateArtifact) lines.push(`:GATE_ARTIFACT: ${task.gateArtifact}`)=
+- Same for gateCmd, gateLlm, verifyCmd
+- =if (task.blockers?.length) lines.push(`:BLOCKER: ${task.blockers.join(" ")}`)=
+- After =:END:=, if task.details, add it as body text
+
+* Edge Cases
+- Boolean gate (gateCommit): serialize as string "true" in org property
+- Empty blockers array: don't emit =:BLOCKER:= property
+- Multi-line details: each line on its own line after =:END:=
+- Details with org heading characters (=*=): should be fine since they're under =**= headings
+
+* Acceptance Criteria
+- [ ] JournalTodoItem has all gate fields
+- [ ] All 4 test scenarios pass
+- [ ] Existing journal tests still pass
+- [ ] =tsgo -p packages/org= passes
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In scope
+- Extend =JournalTodoItem= type in =journal.ts= with optional gate fields matching TodoItem
+- Update =serializeJournalOrg()= to write gate properties in PROPERTIES drawer: =:GATE_COMMIT:=, =:GATE_ARTIFACT:=, =:GATE_CMD:=, =:GATE_LLM:=, =:VERIFY_CMD:=, =:BLOCKER:=
+- Add =details= field to =JournalTodoItem= (currently missing)
+
+** Out of scope
+- Reading gate properties back from journal files (journal is write-only persistence)
+- TodoItem type changes (FEAT: TodoItem Gate Fields)
+
+** Boundary rationale
+Journal serialization is the external persistence layer. It writes org files for user/tool consumption but nothing reads them back into the AI session. Pure output path.
+
+* Tests
+
+Test file: =packages/org/test/journal.test.ts= (extend existing)
+
+** Scenario 1: Gate properties serialized to org
+- Create phases with tasks that have gateCommit=true, gateArtifact="dist/output.json", verifyCmd="bun test"
+- Call writeJournal
+- Read the org file content
+- Assert =:GATE_COMMIT: true= appears in PROPERTIES drawer
+- Assert =:GATE_ARTIFACT: dist/output.json= appears
+- Assert =:VERIFY_CMD: bun test= appears
+
+** Scenario 2: Blocker properties serialized
+- Create task with blockers=["task-1", "task-2"]
+- Call writeJournal
+- Assert =:BLOCKER: task-1 task-2= appears (space-separated, matching loop module convention)
+
+** Scenario 3: Missing gate fields produce no properties
+- Create task with no gate fields
+- Call writeJournal
+- Assert no =:GATE_*= properties in output
+
+** Scenario 4: Details field serialized
+- Create task with details="Implementation steps here"
+- Call writeJournal
+- Assert details appear in org body (below PROPERTIES drawer, before next heading)
+
+* Implementation
+
+Preferred sequencing: write tests first.
+
+** Step 1: Extend JournalTodoItem
+File: =packages/org/src/journal.ts= (line ~26-31)
+- Add: =details?: string=, =gateCommit?: boolean=, =gateArtifact?: string=, =gateCmd?: string=, =gateLlm?: string=, =verifyCmd?: string=, =blockers?: string[]=
+
+** Step 2: Update serializeJournalOrg
+File: =packages/org/src/journal.ts= (line ~54-81)
+- After existing PROPERTIES drawer (=:TASK_ID:=, =:STATUS:=), conditionally add gate properties
+- =if (task.gateCommit) lines.push(`:GATE_COMMIT: true`)=
+- =if (task.gateArtifact) lines.push(`:GATE_ARTIFACT: ${task.gateArtifact}`)=
+- Same for gateCmd, gateLlm, verifyCmd
+- =if (task.blockers?.length) lines.push(`:BLOCKER: ${task.blockers.join(" ")}`)=
+- After =:END:=, if task.details, add it as body text
+
+* Edge Cases
+- Boolean gate (gateCommit): serialize as string "true" in org property
+- Empty blockers array: don't emit =:BLOCKER:= property
+- Multi-line details: each line on its own line after =:END:=
+- Details with org heading characters (=*=): should be fine since they're under =**= headings
+
+* Acceptance Criteria
+- [ ] JournalTodoItem has all gate fields
+- [ ] All 4 test scenarios pass
+- [ ] Existing journal tests still pass
+- [ ] =tsgo -p packages/org= passes

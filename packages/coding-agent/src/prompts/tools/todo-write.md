@@ -50,7 +50,14 @@ Create a todo list when:
 - `content`: Short label (5-10 words). What is being done, not how.
 - `details`: File paths, implementation steps, edge cases. Shown only when task is active.
 - `notes`: Runtime observations added during execution.
+- `gateCommit`: Set `true` when the task requires a git commit before proceeding.
+- `gateArtifact`: Path to an artifact that must exist after completion (screenshot, build output, etc.).
+- `gateCmd`: Command that must pass to verify the task (e.g., `bun test test/foo.test.ts`).
+- `gateLlm`: Acceptance criteria the AI should self-review against.
+- `verifyCmd`: Recommended (not required) verification command.
+- `blockers`: Array of task IDs that must complete before this task can start.
 
+When implementing plan items, set gate fields to track required deliverables. The tool response will inject directives when gated tasks are completed.
 <avoid>
 - Single-step tasks — act directly
 - Conversational or informational requests
@@ -86,4 +93,14 @@ ops: [{op: "replace", phases: [
 <example name="skip">
 User: "What does this function do?" / "Add a comment" / "Run npm install"
 → Do it directly. No list needed.
+</example>
+
+<example name="gated-task">
+Create a task with commit and artifact gates:
+ops: [{op: "replace", phases: [
+  {name: "Implementation", tasks: [
+    {content: "Add gate fields", gateCommit: true, gateArtifact: "packages/coding-agent/test/tools/todo-write-gates.test.ts", verifyCmd: "bun test packages/coding-agent/test/tools/todo-write-gates.test.ts"},
+    {content: "Update dashboard", gateCommit: true, blockers: ["task-1"]}
+  ]}
+]}]
 </example>

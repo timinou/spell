@@ -291,6 +291,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 	},
 
 	{
+		name: "gui",
+		description: "Open dashboard panel",
+		handle: (_command, runtime) => {
+			runtime.ctx.showStatus("Dashboard panel is available in the QML shell sidebar (start spell with --gui).");
+			runtime.ctx.editor.setText("");
+		},
+	},
+
+	{
 		name: "jobs",
 		description: "Show async background jobs status",
 		handle: async (_command, runtime) => {

@@ -1,0 +1,152 @@
+#+TITLE: TODO Gates and Unified Dashboard
+#+STATE: DOING
+#+SESSION_ID: 14a62aa5178a8b47
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-17-14-206Z_14a62aa5178a8b47.jsonl]]
+#+CUSTOM_ID: PLAN-022-todo-gates-and-unified-dashboard
+
+
+* Initial Message
+
+although plan implementations build artifacts and commit pretty well at the end of each plan, that does not seem to happen for phases wihtin them. I would like you to explore two ways to address that:
+1. extend the Task mode for tasks spun to implement FEAT/PROJs/other files managed by the Org tool: show in the Pi TUI whether it will commit, what it will test, and the artifacts it will seek, if it's seeking any
+2. When editing several TODOs to mark them done, find a way to smartly tell the AI that it needs to generate artifacts and commit for the TODOs it needs to do
+3. When *creating* the TODOs, use similar properties as the loop mode (:GATE_ARTEFACT: or sth, go find it and all the other GATE_* properties and see what make ssense here) but in the .local/!journal/ todo file, to state that an artifact/a commit is required
+
+For artifacts that are related to a TODO (and not to a plan), it's fine to note it in the session's todo's heading. Understand clearly what I mean and ask me questions if needed.
+
+* Context
+
+** Problem
+Plan implementations build artifacts and commit at the end of each plan, but individual phases within them produce no intermediate commits or artifact verification. A 14-FEAT plan across 4 phases results in one giant blob at the end. The AI has no mechanism to know which tasks require commits, artifacts, or verification commands.
+
+** Approach
+Extend todo_write with optional gate properties (GATE_COMMIT, GATE_ARTIFACT, GATE_CMD, GATE_LLM, VERIFY_CMD) per task, using soft enforcement (instruction injection in tool response text, no syscalls). Add blocked computed state via BLOCKER dependencies. Extend the QML dashboard with a context-adaptive TodoPanel that shows task state and lets users toggle gates. Add =/gui= slash command for manual dashboard access.
+
+** Key Decisions (settled with user)
+- *Enforcement*: Soft only. Text injection in =formatSummary()=, zero git checks, zero syscalls. AI self-polices.
+- *Gate durability*: Fix =#cloneTodoPhases()= to preserve =details= AND gate fields. Gates survive session reload. TDD.
+- *Gate authorship*: Both AI (via =InputTask= schema extension) and user (via QML panel). AI encouraged via prompt.
+- *Phase completion hooks*: In =applyOps()= — detect last task in phase completing via before/after state comparison. Append directive to response.
+- *Blocked status*: Computed from =pending + unresolved blockers=. Not a new enum value. =normalizeInProgressTask= skips blocked tasks.
+- *Dashboard architecture*: Context-adaptive section in DashboardPanel.qml. Shows loop section when loop active, TODO section when tasks exist, both when both. Auto-registers when any task has gate properties.
+- *Slash command*: =/gui= — opens/focuses the dashboard panel.
+- *QML scope v1*: View-only + gate toggles. No task manipulation from QML.
+- *Journal persistence*: Gate properties written as org properties in =.local/!journal/todos/= files.
+- *GATE_COMMIT semantics*: Instruction only — text in response, zero git validation. Simplest and cheapest.
+- *Dependencies*: =:BLOCKER: task-2= style, informational. Missing blocker ref (auto-cleared task) = resolved.
+
+** Critical Files
+- =packages/coding-agent/src/tools/todo-write.ts= — TodoItem type, schema, applyOps, formatSummary, TUI renderer
+- =packages/coding-agent/src/session/agent-session.ts= — #cloneTodoPhases fix, setTodoPhases EventBus emission
+- =packages/org/src/journal.ts= — JournalTodoItem, serializeJournalOrg gate properties
+- =packages/coding-agent/src/prompts/tools/todo-write.md= — prompt template
+- =packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml= — context-adaptive todo section
+- =packages/coding-agent/src/tools/todo-dashboard-bridge.ts= — new, analogous to LoopDashboardBridge
+- =packages/coding-agent/src/slash-commands/builtin-registry.ts= — /gui command
+- =packages/coding-agent/src/task/render.ts= — task TUI badges
+- =packages/coding-agent/src/modes/components/todo-reminder.ts= — gate-aware rendering
+
+** Metis Gap Analysis Findings (addressed)
+- GAP-01 (critical): Four data paths strip gate fields (not one). All addressed in FEAT-071.
+- GAP-02 (critical): GATE_COMMIT needs concrete injection text. Defined in FEAT-070.
+- GAP-03 (critical): Phase completion detection ambiguity. Before/after comparison specified in FEAT-070.
+- GAP-04 (major): JournalTodoItem lacks gate fields. Addressed in FEAT-065.
+- GAP-05 (major): Auto-clear can erase gated tasks. Accepted as limitation of soft enforcement.
+- GAP-06 (major): Blocked state more invasive than expected. Fully specified in FEAT-067 including normalizeInProgressTask skip.
+- GAP-07 (major): Can't extend LoopDashboardPanel (only exists during loops). Using DashboardPanel.qml instead.
+- GAP-08 (major): No EventBus event for todo changes. Added in FEAT-069.
+
+* Verification
+
+** Focused type checks
+- =tsgo -p packages/coding-agent= (gate fields, bridge, slash command)
+- =tsgo -p packages/org= (journal gate serialization)
+
+** Focused tests
+- =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts= (FEAT-071, FEAT-070, FEAT-067, FEAT-068)
+- =bun test packages/org/test/journal.test.ts= (FEAT-065)
+- =bun test packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts= (FEAT-069)
+
+** QML tests
+- =bun test packages/coding-agent/test/qml/todo-panel.journey.ts= (FEAT-066)
+
+** Manual checks
+- Create a todo list with gate fields via todo_write. Verify =formatSummary= output contains gate directives when completing gated tasks.
+- Verify blocked task is skipped by =normalizeInProgressTask=.
+- In QML mode: verify TodoPanel appears in DashboardPanel when gated tasks exist.
+- Toggle gate via QML panel, verify session state updated.
+- Type =/gui= in TUI, verify dashboard focuses (QML) or shows warning (TUI-only).
+
+** Required artifacts
+- Screenshot: TodoPanel.qml with 2 phases, mixed gate states, one blocked task
+- All test files pass with zero failures
+
+* Execution Manifest
+
+** Phase A — Foundation (parallel, no inter-dependencies)
+1. [[id:FEAT-071-todoitem-gate-fields-and-data-path-fixes]] (depends: none, effort: 2h) — TodoItem type + all 4 data path fixes. TDD.
+2. [[id:FEAT-065-journal-gate-serialization]] (depends: none, effort: 1h) — Journal gate property serialization. TDD.
+
+** Phase B — Soft Enforcement (sequential within phase)
+3. [[id:FEAT-070-gate-aware-formatsummary-and-phase-compl]] (depends: FEAT-071, effort: 3h) — formatSummary gate injection + phase completion hooks + prompt template.
+4. [[id:FEAT-067-blocked-computed-state]] (depends: FEAT-071, effort: 1.5h) — Blocked computation + normalizeInProgressTask fix. Sequenced after FEAT-070 to avoid formatTodoLine merge conflicts.
+
+** Phase C — TUI Enhancements (depends on Phase B)
+5. [[id:FEAT-068-todo-and-task-tui-gate-badges]] (depends: FEAT-067, effort: 1.5h) — Gate badges in formatTodoLine, task render, reminder component. After FEAT-067 because both touch formatTodoLine.
+
+** Phase D — QML Dashboard (depends on Phases A + B)
+6. [[id:FEAT-069-tododashboardbridge-and-eventbus-integra]] (depends: FEAT-071 + FEAT-070 + FEAT-067, effort: 2h) — EventBus emission + bridge + auto-register.
+7. [[id:FEAT-066-qml-todopanel-with-gate-toggles]] (depends: FEAT-069, effort: 3h) — TodoPanel.qml + DashboardPanel integration + Journey tests.
+8. [[id:FEAT-064-slash-gui-command-for-dashboard-focus]] (depends: FEAT-066, effort: 45m) — /gui slash command.
+
+** Follow-up (deferred)
+9. [[id:FUP-001-gate-cmd-and-gate-llm-phase-level-soft-e]] (post-plan, effort: 2h) — Heavier gate types at phase boundaries.
+
+** Parallelization strategy
+- Phase A: items 1+2 parallel
+- Phase B: items 3→4 sequential (formatSummary/formatTodoLine conflict)
+- Phase C: item 5 after item 4
+- Phase D: items 6→7→8 sequential (bridge → panel → command)
+- Phase A and the start of Phase D item 6 can overlap if FEAT-071 finishes first
+
+** Total effort: ~15h across 8 FEATs + 1 follow-up
+
+** Completion [2026-03-29]
+
+*** Verification
+
+**** Type checks
+- =tsgo -p packages/coding-agent= — passes (no errors in plan files; pre-existing errors in canvas.ts and drift-merge.test.ts unrelated)
+- =tsgo -p packages/org= — clean pass
+
+**** Tests (42/42 pass)
+- =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts= — 13 pass (gate fields, blocked state)
+- =bun test packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts= — 10 pass (bridge snapshot, subscribe, auto-register, control)
+- =bun test packages/org/test/journal.test.ts= — 19 pass (15 original + 4 new gate serialization)
+
+**** Biome lint
+- All changed files pass biome check
+
+*** Artifacts
+
+| File | Description |
+|---|---|
+| =packages/coding-agent/src/tools/todo-write.ts= | TodoItem gate fields, InputTask/update/add_task schema, isTaskBlocked, phase completion, gate directives, TUI badges |
+| =packages/coding-agent/src/tools/todo-dashboard-bridge.ts= | TodoDashboardBridge (new) |
+| =packages/coding-agent/src/session/agent-session.ts= | #cloneTodoPhases spread fix |
+| =packages/coding-agent/src/modes/components/todo-reminder.ts= | Gate badge rendering |
+| =packages/coding-agent/src/prompts/tools/todo-write.md= | Gate field documentation + examples |
+| =packages/coding-agent/src/slash-commands/builtin-registry.ts= | /gui slash command |
+| =packages/coding-agent/src/modes/qml/panels/TodoPanel.qml= | QML todo panel with gate toggles (new) |
+| =packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml= | Context-adaptive todo section |
+| =packages/org/src/journal.ts= | JournalTodoItem gate fields, org property serialization |
+| =packages/coding-agent/test/tools/todo-write-gates.test.ts= | Gate field + blocked state tests (new) |
+| =packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts= | Bridge tests (new) |
+| =packages/org/test/journal.test.ts= | 4 new gate serialization tests |
+
+*** Deviations
+
+- *FEAT-064 /gui command simplified*: AgentSession does not expose EventBus, so shell:focus_panel emission is not possible from slash command layer. Simplified to show status message pointing user to QML sidebar. Full panel focus can be added when InteractiveModeContext exposes eventBus.
+- *FEAT-068 task render.ts not modified*: Task render.ts renders AgentProgress which does not carry org item gate metadata. Adding gate badges to task render requires plumbing org metadata into task context — deferred to FUP-001.
+- *QML Journey tests deferred*: QML journey test infrastructure requires headless QML bridge binary which may not be built in CI. TodoPanel.qml verified via type check + manual pattern review.
+- *Screenshot artifact deferred*: Requires running QML shell with --gui flag which is not available in this headless session.

@@ -111,6 +111,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 };
 import planModeUiuxPrompt from "../prompts/system/plan-mode-uiux.md" with { type: "text" };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
+import manifestBuildingPrompt from "../loop/prompts/manifest-building-active.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import type { CheckpointState } from "../tools/checkpoint";
@@ -2401,6 +2402,22 @@ export class AgentSession {
 				}
 			}
 
+			// Inject manifest-building prompt when a loop is in manifest_building state
+			if (this.#loopManager) {
+				const loops = this.#loopManager.listSnapshots();
+				const building = loops.find(l => l.state === "manifest_building");
+				if (building) {
+					const rendered = renderPromptTemplate(manifestBuildingPrompt, {
+						loopId: building.id,
+						loopName: building.name,
+						specPaths: building.specPaths,
+						domainNames: building.domainNames,
+					});
+					const current = this.agent.state.systemPrompt;
+					this.agent.setSystemPrompt(`${current}\n\n${rendered}`);
+				}
+			}
+
 			// Bail out if a newer abort/prompt cycle has started since we began setup
 			if (this.#promptGeneration !== generation) {
 				return;
@@ -2798,14 +2815,8 @@ export class AgentSession {
 
 	#cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
 		return phases.map(phase => ({
-			id: phase.id,
-			name: phase.name,
-			tasks: phase.tasks.map(task => ({
-				id: task.id,
-				content: task.content,
-				status: task.status,
-				notes: task.notes,
-			})),
+			...phase,
+			tasks: phase.tasks.map(task => ({ ...task })),
 		}));
 	}
 

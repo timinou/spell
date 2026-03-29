@@ -1,6 +1,7 @@
 import { Box, Container, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import type { TodoItem } from "../../tools/todo-write";
+import { hasGate } from "../../tools/todo-write";
 
 /**
  * Component that renders a todo completion reminder notification.
@@ -36,12 +37,23 @@ export class TodoReminderComponent extends Container {
 
 		const todoList = this.todos
 			.map(t => {
-				const line = `  ${theme.checkbox.unchecked} ${t.content}`;
+				const badges = this.#gateBadges(t);
+				const line = `  ${theme.checkbox.unchecked} ${t.content}${badges}`;
 				if (!t.details) return line;
 				const detailLines = t.details.split("\n").map(l => `    ${l}`);
 				return [line, ...detailLines].join("\n");
 			})
 			.join("\n");
 		this.#box.addChild(new Text(theme.italic(todoList), 0, 0));
+	}
+
+	#gateBadges(task: TodoItem): string {
+		if (!hasGate(task)) return "";
+		const parts: string[] = [];
+		if (task.gateCommit) parts.push("[commit]");
+		if (task.gateArtifact) parts.push("[artifact]");
+		if (task.gateCmd) parts.push("[cmd]");
+		if (task.verifyCmd) parts.push("[verify]");
+		return " " + parts.join(" ");
 	}
 }

@@ -28,6 +28,13 @@ export interface JournalTodoItem {
 	content: string;
 	status: "pending" | "in_progress" | "completed" | "abandoned";
 	notes?: string;
+	details?: string;
+	gateCommit?: boolean;
+	gateArtifact?: string;
+	gateCmd?: string;
+	gateLlm?: string;
+	verifyCmd?: string;
+	blockers?: string[];
 }
 
 export interface JournalTodoPhase {
@@ -66,7 +73,18 @@ function serializeJournalOrg(phases: JournalTodoPhase[], sessionId: string, date
 			lines.push(":PROPERTIES:");
 			lines.push(`:TASK_ID: ${task.id}`);
 			lines.push(`:STATUS: ${task.status}`);
+			if (task.gateCommit) lines.push(":GATE_COMMIT: true");
+			if (task.gateArtifact) lines.push(`:GATE_ARTIFACT: ${task.gateArtifact}`);
+			if (task.gateCmd) lines.push(`:GATE_CMD: ${task.gateCmd}`);
+			if (task.gateLlm) lines.push(`:GATE_LLM: ${task.gateLlm}`);
+			if (task.verifyCmd) lines.push(`:VERIFY_CMD: ${task.verifyCmd}`);
+			if (task.blockers?.length) lines.push(`:BLOCKER: ${task.blockers.join(" ")}`);
 			lines.push(":END:");
+
+			if (task.details) {
+				lines.push("");
+				lines.push(task.details.trimEnd());
+			}
 
 			if (task.notes) {
 				lines.push("");

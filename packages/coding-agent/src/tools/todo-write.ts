@@ -27,6 +27,12 @@ export interface TodoItem {
 	status: TodoStatus;
 	notes?: string;
 	details?: string;
+	gateCommit?: boolean;
+	gateArtifact?: string;
+	gateCmd?: string;
+	gateLlm?: string;
+	verifyCmd?: string;
+	blockers?: string[];
 }
 
 export interface TodoPhase {
@@ -55,6 +61,12 @@ const InputTask = Type.Object({
 	details: Type.Optional(
 		Type.String({ description: "Implementation details, file paths, and specifics (shown only when active)" }),
 	),
+	gateCommit: Type.Optional(Type.Boolean({ description: "Require commit after completing this task" })),
+	gateArtifact: Type.Optional(Type.String({ description: "Path to artifact that must exist after completion" })),
+	gateCmd: Type.Optional(Type.String({ description: "Command to run for verification" })),
+	gateLlm: Type.Optional(Type.String({ description: "LLM review criteria" })),
+	verifyCmd: Type.Optional(Type.String({ description: "Recommended verification command" })),
+	blockers: Type.Optional(Type.Array(Type.String({ description: "Task ID that blocks this task" }))),
 });
 
 const InputPhase = Type.Object({
@@ -80,6 +92,12 @@ const todoWriteSchema = Type.Object({
 				content: Type.String({ description: "Task description" }),
 				notes: Type.Optional(Type.String({ description: "Additional context or notes" })),
 				details: Type.Optional(Type.String({ description: "Implementation details, file paths, and specifics" })),
+				gateCommit: Type.Optional(Type.Boolean()),
+				gateArtifact: Type.Optional(Type.String()),
+				gateCmd: Type.Optional(Type.String()),
+				gateLlm: Type.Optional(Type.String()),
+				verifyCmd: Type.Optional(Type.String()),
+				blockers: Type.Optional(Type.Array(Type.String())),
 			}),
 			Type.Object({
 				op: Type.Literal("update"),
@@ -88,6 +106,12 @@ const todoWriteSchema = Type.Object({
 				content: Type.Optional(Type.String({ description: "Updated task description" })),
 				notes: Type.Optional(Type.String({ description: "Additional context or notes" })),
 				details: Type.Optional(Type.String({ description: "Updated details" })),
+				gateCommit: Type.Optional(Type.Boolean()),
+				gateArtifact: Type.Optional(Type.String()),
+				gateCmd: Type.Optional(Type.String()),
+				gateLlm: Type.Optional(Type.String()),
+				verifyCmd: Type.Optional(Type.String()),
+				blockers: Type.Optional(Type.Array(Type.String())),
 			}),
 			Type.Object({
 				op: Type.Literal("remove_task"),
@@ -126,7 +150,7 @@ function findTask(phases: TodoPhase[], id: string): TodoItem | undefined {
 }
 
 function buildPhaseFromInput(
-	input: { name: string; tasks?: Array<{ content: string; status?: TodoStatus; notes?: string; details?: string }> },
+	input: { name: string; tasks?: Array<Static<typeof InputTask>> },
 	phaseId: string,
 	nextTaskId: number,
 ): { phase: TodoPhase; nextTaskId: number } {
@@ -139,6 +163,12 @@ function buildPhaseFromInput(
 			status: t.status ?? "pending",
 			notes: t.notes,
 			details: t.details,
+			gateCommit: t.gateCommit,
+			gateArtifact: t.gateArtifact,
+			gateCmd: t.gateCmd,
+			gateLlm: t.gateLlm,
+			verifyCmd: t.verifyCmd,
+			blockers: t.blockers,
 		});
 	}
 	return { phase: { id: phaseId, name: input.name, tasks }, nextTaskId: tid };
@@ -175,6 +205,17 @@ function clonePhases(phases: TodoPhase[]): TodoPhase[] {
 	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task })) }));
 }
 
+/** Check if a task is blocked by unresolved dependencies. */
+export function isTaskBlocked(task: TodoItem, allTasks: TodoItem[]): boolean {
+	if (task.status !== "pending" || !task.blockers?.length) return false;
+	return task.blockers.some(blockerId => {
+		const blocker = allTasks.find(t => t.id === blockerId);
+		// Missing blocker ref (auto-cleared task) = resolved
+		if (!blocker) return false;
+		return blocker.status !== "completed" && blocker.status !== "abandoned";
+	});
+}
+
 function normalizeInProgressTask(phases: TodoPhase[]): void {
 	const orderedTasks = phases.flatMap(phase => phase.tasks);
 	if (orderedTasks.length === 0) return;
@@ -188,7 +229,8 @@ function normalizeInProgressTask(phases: TodoPhase[]): void {
 
 	if (inProgressTasks.length > 0) return;
 
-	const firstPendingTask = orderedTasks.find(task => task.status === "pending");
+	// Skip blocked tasks when auto-promoting
+	const firstPendingTask = orderedTasks.find(task => task.status === "pending" && !isTaskBlocked(task, orderedTasks));
 	if (firstPendingTask) firstPendingTask.status = "in_progress";
 }
 
@@ -209,8 +251,39 @@ export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPha
 	return [];
 }
 
-function applyOps(file: TodoFile, ops: TodoWriteParams["ops"]): { file: TodoFile; errors: string[] } {
+interface ApplyOpsResult {
+	file: TodoFile;
+	errors: string[];
+	/** Phase IDs that became fully completed in this call. */
+	completedPhaseIds: string[];
+	/** Tasks that transitioned to completed and have gate fields. */
+	completedGatedTasks: TodoItem[];
+}
+
+function isPhaseComplete(phase: TodoPhase): boolean {
+	return phase.tasks.length > 0 && phase.tasks.every(t => t.status === "completed" || t.status === "abandoned");
+}
+
+export function hasGate(task: TodoItem): boolean {
+	return !!(task.gateCommit || task.gateArtifact || task.gateCmd || task.gateLlm || task.verifyCmd);
+}
+
+function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: TodoPhase[]): ApplyOpsResult {
 	const errors: string[] = [];
+
+	// Snapshot which phases were already complete before this call
+	const wasComplete = new Map<string, boolean>();
+	for (const phase of previousPhases) {
+		wasComplete.set(phase.id, isPhaseComplete(phase));
+	}
+
+	// Track tasks that existed before to detect status transitions
+	const previousStatus = new Map<string, TodoStatus>();
+	for (const phase of previousPhases) {
+		for (const task of phase.tasks) {
+			previousStatus.set(task.id, task.status);
+		}
+	}
 
 	for (const op of ops) {
 		switch (op.op) {
@@ -246,6 +319,12 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"]): { file: TodoFile
 					status: "pending",
 					notes: op.notes,
 					details: op.details,
+					gateCommit: op.gateCommit,
+					gateArtifact: op.gateArtifact,
+					gateCmd: op.gateCmd,
+					gateLlm: op.gateLlm,
+					verifyCmd: op.verifyCmd,
+					blockers: op.blockers,
 				});
 				break;
 			}
@@ -260,6 +339,12 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"]): { file: TodoFile
 				if (op.content !== undefined) task.content = op.content;
 				if (op.notes !== undefined) task.notes = op.notes;
 				if (op.details !== undefined) task.details = op.details;
+				if (op.gateCommit !== undefined) task.gateCommit = op.gateCommit;
+				if (op.gateArtifact !== undefined) task.gateArtifact = op.gateArtifact;
+				if (op.gateCmd !== undefined) task.gateCmd = op.gateCmd;
+				if (op.gateLlm !== undefined) task.gateLlm = op.gateLlm;
+				if (op.verifyCmd !== undefined) task.verifyCmd = op.verifyCmd;
+				if (op.blockers !== undefined) task.blockers = op.blockers;
 				break;
 			}
 
@@ -280,12 +365,49 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"]): { file: TodoFile
 	}
 
 	normalizeInProgressTask(file.phases);
-	return { file, errors };
+
+	// Detect newly completed phases
+	const completedPhaseIds: string[] = [];
+	for (const phase of file.phases) {
+		if (isPhaseComplete(phase) && !wasComplete.get(phase.id)) {
+			completedPhaseIds.push(phase.id);
+		}
+	}
+
+	// Detect tasks that transitioned to completed and have gates
+	const completedGatedTasks: TodoItem[] = [];
+	for (const phase of file.phases) {
+		for (const task of phase.tasks) {
+			if (task.status === "completed" && previousStatus.get(task.id) !== "completed" && hasGate(task)) {
+				completedGatedTasks.push(task);
+			}
+		}
+	}
+
+	return { file, errors, completedPhaseIds, completedGatedTasks };
 }
 
-function formatSummary(phases: TodoPhase[], errors: string[]): string {
-	const tasks = phases.flatMap(p => p.tasks);
-	if (tasks.length === 0) return errors.length > 0 ? `Errors: ${errors.join("; ")}` : "Todo list cleared.";
+/** Build gate directive lines for a single task. */
+function gateDirectivesForTask(task: TodoItem): string[] {
+	const lines: string[] = [];
+	if (task.gateCommit) lines.push(`REQUIRED: Commit your changes for ${task.id} (${task.content}) before proceeding.`);
+	if (task.gateArtifact) lines.push(`REQUIRED: Verify artifact exists at ${task.gateArtifact} for ${task.id}.`);
+	if (task.gateCmd) lines.push(`REQUIRED: Run \`${task.gateCmd}\` to verify ${task.id}.`);
+	if (task.gateLlm) lines.push(`REQUIRED: Review ${task.id} against acceptance criteria: ${task.gateLlm}`);
+	if (task.verifyCmd) lines.push(`RECOMMENDED: Run \`${task.verifyCmd}\` to verify ${task.id}.`);
+	return lines;
+}
+
+interface FormatSummaryOptions {
+	phases: TodoPhase[];
+	errors: string[];
+	completedPhaseIds: string[];
+	completedGatedTasks: TodoItem[];
+}
+
+function formatSummary({ phases, errors, completedPhaseIds, completedGatedTasks }: FormatSummaryOptions): string {
+	const allTasks = phases.flatMap(p => p.tasks);
+	if (allTasks.length === 0) return errors.length > 0 ? `Errors: ${errors.join("; ")}` : "Todo list cleared.";
 
 	const remainingByPhase = phases
 		.map(phase => ({
@@ -308,7 +430,9 @@ function formatSummary(phases: TodoPhase[], errors: string[]): string {
 	} else {
 		lines.push(`Remaining items (${remainingTasks.length}):`);
 		for (const task of remainingTasks) {
-			lines.push(`  - ${task.id} ${task.content} [${task.status}] (${task.phase})`);
+			const blocked = isTaskBlocked(task, allTasks);
+			const blockerLabel = blocked ? " [blocked]" : "";
+			lines.push(`  - ${task.id} ${task.content} [${task.status}]${blockerLabel} (${task.phase})`);
 			if (task.status === "in_progress" && task.details) {
 				for (const line of task.details.split("\n")) {
 					lines.push(`      ${line}`);
@@ -317,22 +441,52 @@ function formatSummary(phases: TodoPhase[], errors: string[]): string {
 		}
 	}
 	lines.push(
-		`Phase ${currentIdx + 1}/${phases.length} "${current.name}" — ${done}/${current.tasks.length} tasks complete`,
+		`Phase ${currentIdx + 1}/${phases.length} "${current.name}" \u2014 ${done}/${current.tasks.length} tasks complete`,
 	);
 	for (const phase of phases) {
 		lines.push(`  ${phase.name}:`);
 		for (const task of phase.tasks) {
+			const blocked = isTaskBlocked(task, allTasks);
 			const sym =
 				task.status === "completed"
-					? "✓"
+					? "\u2713"
 					: task.status === "in_progress"
-						? "→"
+						? "\u2192"
 						: task.status === "abandoned"
-							? "✗"
-							: "○";
+							? "\u2717"
+							: blocked
+								? "\u26D4"
+								: "\u25CB";
 			lines.push(`    ${sym} ${task.id} ${task.content}`);
 		}
 	}
+
+	// Gate directives for tasks that just completed with gates
+	if (completedGatedTasks.length > 0) {
+		lines.push("");
+		lines.push("--- Gate Requirements ---");
+		for (const task of completedGatedTasks) {
+			for (const directive of gateDirectivesForTask(task)) {
+				lines.push(directive);
+			}
+		}
+	}
+
+	// Phase completion aggregate directives
+	if (completedPhaseIds.length > 0) {
+		for (const phaseId of completedPhaseIds) {
+			const phase = phases.find(p => p.id === phaseId);
+			if (!phase) continue;
+			const gatedInPhase = phase.tasks.filter(hasGate);
+			if (gatedInPhase.length === 0) continue;
+			const actions: string[] = [];
+			if (gatedInPhase.some(t => t.gateCommit)) actions.push("Commit changes.");
+			if (gatedInPhase.some(t => t.gateArtifact)) actions.push("Verify artifacts.");
+			if (gatedInPhase.some(t => t.gateCmd || t.verifyCmd)) actions.push("Run verification commands.");
+			lines.push(`\nPhase "${phase.name}" complete. ${actions.join(" ")}`);
+		}
+	}
+
 	return lines.join("\n");
 }
 
@@ -361,8 +515,15 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 	): Promise<AgentToolResult<TodoWriteToolDetails>> {
 		const previousPhases = this.session.getTodoPhases?.() ?? [];
 		const current = fileFromPhases(previousPhases);
-		const { file: updated, errors } = applyOps(current, params.ops);
+		const {
+			file: updated,
+			errors,
+			completedPhaseIds,
+			completedGatedTasks,
+		} = applyOps(current, params.ops, previousPhases);
 		this.session.setTodoPhases?.(updated.phases);
+		// Notify dashboard bridge of todo state change
+		this.session.eventBus?.emit("todo:change", { phases: updated.phases });
 		const storage = this.session.getSessionFile() ? "session" : "memory";
 
 		// Best-effort journal write to .local/!journal/todos/
@@ -371,7 +532,12 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 		void writeJournal(projectRoot, sessionId, updated.phases);
 
 		return {
-			content: [{ type: "text", text: formatSummary(updated.phases, errors) }],
+			content: [
+				{
+					type: "text",
+					text: formatSummary({ phases: updated.phases, errors, completedPhaseIds, completedGatedTasks }),
+				},
+			],
 			details: { phases: updated.phases, storage },
 		};
 	}
@@ -385,21 +551,40 @@ interface TodoWriteRenderArgs {
 	ops?: Array<{ op: string }>;
 }
 
-function formatTodoLine(item: TodoItem, uiTheme: Theme, prefix: string): string {
+/** Render compact gate badges after task content. */
+function renderGateBadges(item: TodoItem, uiTheme: Theme): string {
+	const badges: string[] = [];
+	if (item.gateCommit) badges.push("[commit]");
+	if (item.gateArtifact) badges.push(`[artifact: ${item.gateArtifact}]`);
+	if (item.gateCmd) badges.push("[cmd]");
+	if (item.gateLlm) badges.push("[llm]");
+	if (item.verifyCmd) badges.push("[verify]");
+	if (badges.length === 0) return "";
+	return " " + uiTheme.fg("dim", badges.join(" "));
+}
+
+function formatTodoLine(item: TodoItem, uiTheme: Theme, prefix: string, allTasks?: TodoItem[]): string {
 	const checkbox = uiTheme.checkbox;
+	const badges = renderGateBadges(item, uiTheme);
+
+	// Check blocked state (computed, not stored)
+	if (allTasks && isTaskBlocked(item, allTasks)) {
+		return uiTheme.fg("warning", `${prefix}${checkbox.unchecked} ${item.content} [blocked]`) + badges;
+	}
+
 	switch (item.status) {
 		case "completed":
-			return uiTheme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(item.content)}`);
+			return uiTheme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(item.content)}`) + badges;
 		case "in_progress": {
-			const main = uiTheme.fg("accent", `${prefix}${checkbox.unchecked} ${item.content}`);
+			const main = uiTheme.fg("accent", `${prefix}${checkbox.unchecked} ${item.content}`) + badges;
 			if (!item.details) return main;
 			const detailLines = item.details.split("\n").map(l => uiTheme.fg("dim", `${prefix}  ${l}`));
 			return [main, ...detailLines].join("\n");
 		}
 		case "abandoned":
-			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(item.content)}`);
+			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(item.content)}`) + badges;
 		default:
-			return uiTheme.fg("dim", `${prefix}${checkbox.unchecked} ${item.content}`);
+			return uiTheme.fg("dim", `${prefix}${checkbox.unchecked} ${item.content}`) + badges;
 	}
 }
 
@@ -440,7 +625,7 @@ export const todoWriteToolRenderer = {
 					expanded,
 					maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
 					itemType: "todo",
-					renderItem: todo => formatTodoLine(todo, uiTheme, ""),
+					renderItem: todo => formatTodoLine(todo, uiTheme, "", allTasks),
 				},
 				uiTheme,
 			);

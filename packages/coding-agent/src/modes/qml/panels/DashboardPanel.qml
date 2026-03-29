@@ -45,6 +45,11 @@ Item {
             if (msg.tokens !== undefined) {
                 dashboardPanel.tokenCount = Number(msg.tokens) || 0
             }
+        },
+        todo_snapshot: function(msg) {
+            if (todoPanelLoader.item && todoPanelLoader.item.handleMessage) {
+                todoPanelLoader.item.handleMessage(msg)
+            }
         }
     })
 
@@ -373,6 +378,30 @@ Item {
                     font.family: SpellUI.SpellTheme.fontFamily
                     font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
                     color: SpellUI.SpellTheme.textTertiary
+                }
+            }
+        }
+
+        // Todo tasks section (visible when tasks exist)
+        Loader {
+            id: todoPanelLoader
+            Layout.fillWidth: true
+            Layout.preferredHeight: item ? Math.min(item.implicitHeight, 300) : 0
+            visible: item && item.todoPhases && item.todoPhases.length > 0
+            source: "TodoPanel.qml"
+            asynchronous: false
+
+            Connections {
+                target: todoPanelLoader.item
+                function onControlRequested(taskId: string, gate: string, enabled: bool): void {
+                    if (typeof bridge !== "undefined" && bridge && bridge.send) {
+                        bridge.send({
+                            action: "todo_control",
+                            taskId: taskId,
+                            gate: gate,
+                            enabled: enabled
+                        })
+                    }
                 }
             }
         }

@@ -1,0 +1,240 @@
+#+TITLE: TodoItem Gate Fields and Data Path Fixes
+#+STATE: DONE
+#+SESSION_ID: 14a636e83f0a8b61
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-17-14-206Z_14a62aa5178a8b47/10-CreateFeat1.jsonl]]
+#+CUSTOM_ID: FEAT-071-todoitem-gate-fields-and-data-path-fixes
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: data
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate org items for the TODO Gates + Unified Dashboard plan. Each task creates one org item via `org create` and returns its CUSTOM_ID.\n\n## Rules\n- Use `org create` with `state: \"ITEM\"`\n- Include EFFORT, PRIORITY, LAYER properties\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- File paths must be explicit\n- Return the CUSTOM_ID of the created item\n\n## Repo context\n- `packages/coding-agent/src/tools/todo-write.ts` — TodoItem type, schema, applyOps, formatSummary, TUI renderer\n- `packages/coding-agent/src/session/agent-session.ts` — #cloneTodoPhases, setTodoPhases, getTodoPhases, #syncTodoPhasesFromBranch, #checkTodoCompletion\n- `packages/org/src/journal.ts` — JournalTodoItem, serializeJournalOrg, writeJournal\n- `packages/coding-agent/src/prompts/tools/todo-write.md` — prompt template\n- `packages/coding-agent/src/modes/qml/panels/LoopDashboardPanel.qml` — loop dashboard panel\n- `packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml` — main dashboard panel (always available)\n- `packages/coding-agent/src/loop/dashboard-bridge.ts` — LoopDashboardBridge pattern\n- `packages/coding-agent/src/slash-commands/builtin-registry.ts` — builtin slash commands\n- `packages/coding-agent/src/task/render.ts` — task TUI rendering\n- `packages/coding-agent/src/modes/components/todo-reminder.ts` — TodoReminderComponent\n- `packages/coding-agent/src/tools/render-utils.ts` — TUI rendering utilities\n- `packages/org/test/journal.test.ts` — existing journal tests\n- `packages/coding-agent/test/tools/todo-write.test.ts` — existing todo-write tests (if exists)\n
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create`:
+
+```
+category: features
+title: TodoItem Gate Fields and Data Path Fixes
+state: ITEM
+priority: #A
+properties:
+  EFFORT: 2h
+  PRIORITY: "#A"
+  LAYER: data
+```
+
+Body (use org heading markup with `*` for sections):
+
+```
+* Scope
+
+** In scope
+- Extend =TodoItem= interface with optional gate fields: =gateCommit?: boolean=, =gateArtifact?: string=, =gateCmd?: string=, =gateLlm?: string=, =verifyCmd?: string=, =blockers?: string[]=
+- Extend =InputTask= TypeBox schema with =Type.Optional= gate fields
+- Fix =#cloneTodoPhases()= in =agent-session.ts= to preserve =details= AND all gate fields (pre-existing bug: =details= is currently stripped)
+- Fix =buildPhaseFromInput()= in =todo-write.ts= to propagate gate fields from InputTask
+- Fix =update= op handler in =applyOps()= to copy gate fields on update
+- Verify strict=true compatibility with optional gate fields
+
+** Out of scope
+- formatSummary changes (FEAT: Gate-Aware formatSummary)
+- Journal serialization (FEAT: Journal Gate Serialization)
+- TUI rendering of gate badges (FEAT: Todo + Task TUI Gate Badges)
+- QML dashboard (FEAT: QML TodoPanel)
+
+** Boundary rationale
+This item is the pure data model foundation. All other items depend on TodoItem having gate fields that survive all data paths. No behavioral changes.
+
+* Tests
+
+Test file: =packages/coding-agent/test/tools/todo-write-gates.test.ts= (new)
+
+** Scenario 1: #cloneTodoPhases preserves all fields
+- Create TodoPhase[] with tasks that have details, gateCommit, gateArtifact, gateCmd, gateLlm, verifyCmd, blockers
+- Call getTodoPhases() after setTodoPhases()
+- Assert all fields survive round-trip
+
+** Scenario 2: buildPhaseFromInput propagates gate fields
+- Call applyOps with =replace= op containing tasks with gate fields
+- Assert resulting phases have gate fields on tasks
+
+** Scenario 3: buildPhaseFromInput propagates gate fields via add_phase
+- Call applyOps with =add_phase= op containing tasks with gate fields
+- Assert resulting phases have gate fields on tasks
+
+** Scenario 4: update op preserves existing gate fields
+- Create a task with gateCommit=true, gateArtifact="path/to/file"
+- Call applyOps with =update= op changing only status
+- Assert gate fields are preserved
+
+** Scenario 5: update op can set gate fields
+- Create a task without gate fields
+- Call applyOps with =update= op setting gateCommit=true
+- Assert gateCommit is now true
+
+** Scenario 6: getLatestTodoPhasesFromEntries preserves gate fields
+- Create mock session entries with tool result details containing gate fields
+- Call getLatestTodoPhasesFromEntries
+- Assert gate fields survive
+
+** Scenario 7: #syncTodoPhasesFromBranch preserves gate fields
+- Verify gate fields survive the filter in #syncTodoPhasesFromBranch (completed tasks are stripped, but pending/in_progress tasks with gates should survive)
+
+** Scenario 8: strict schema validation
+- Create a todo_write params object with gate fields
+- Validate against todoWriteSchema
+- Assert validation passes
+
+* Implementation
+
+Preferred sequencing: write tests first, then implement.
+
+** Step 1: Extend TodoItem type
+File: =packages/coding-agent/src/tools/todo-write.ts=
+- Add optional fields to TodoItem interface (line ~24-30)
+- Add Type.Optional fields to InputTask schema (line ~51-58)
+- Add gate fields to update op schema (line ~84-91)
+
+** Step 2: Fix buildPhaseFromInput
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~128-145)
+- Copy gate fields from input task to TodoItem in the push call
+
+** Step 3: Fix update op handler
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~253-264)
+- Add gate field copying: =if (op.gateCommit !== undefined) task.gateCommit = op.gateCommit;= etc.
+
+** Step 4: Fix #cloneTodoPhases
+File: =packages/coding-agent/src/session/agent-session.ts= (line ~2799-2810)
+- Add details, gateCommit, gateArtifact, gateCmd, gateLlm, verifyCmd, blockers to the clone spread
+- Or switch to spread operator ={...task}= to future-proof (but explicitly type the return)
+
+** Step 5: Verify getLatestTodoPhasesFromEntries
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~195)
+- Uses =clonePhases()= which does ={...task}= spread — should already work, but verify
+
+* Edge Cases
+- Gate fields are all optional — existing code with no gate fields must not break
+- =undefined= gate fields should not be serialized (no =gateCommit: undefined= in JSON)
+- =blockers= is an array of task-id strings; empty array vs undefined must both work
+- Strict mode with optional fields: verify TypeBox emits correct JSON Schema for all providers
+
+* Acceptance Criteria
+- [ ] TodoItem interface has 6 new optional fields
+- [ ] InputTask schema has 6 new optional Type.Optional fields
+- [ ] All 8 test scenarios pass
+- [ ] =bun check:ts= passes (focused: =tsgo -p packages/coding-agent=)
+- [ ] Existing todo-write tests still pass
+- [ ] No =any= types introduced
+```
+
+Return the CUSTOM_ID of the created item.
+</goal>
+
+* Scope
+
+** In scope
+- Extend =TodoItem= interface with optional gate fields: =gateCommit?: boolean=, =gateArtifact?: string=, =gateCmd?: string=, =gateLlm?: string=, =verifyCmd?: string=, =blockers?: string[]=
+- Extend =InputTask= TypeBox schema with =Type.Optional= gate fields
+- Fix =#cloneTodoPhases()= in =agent-session.ts= to preserve =details= AND all gate fields (pre-existing bug: =details= is currently stripped)
+- Fix =buildPhaseFromInput()= in =todo-write.ts= to propagate gate fields from InputTask
+- Fix =update= op handler in =applyOps()= to copy gate fields on update
+- Verify strict=true compatibility with optional gate fields
+
+** Out of scope
+- formatSummary changes (FEAT: Gate-Aware formatSummary)
+- Journal serialization (FEAT: Journal Gate Serialization)
+- TUI rendering of gate badges (FEAT: Todo + Task TUI Gate Badges)
+- QML dashboard (FEAT: QML TodoPanel)
+
+** Boundary rationale
+This item is the pure data model foundation. All other items depend on TodoItem having gate fields that survive all data paths. No behavioral changes.
+
+* Tests
+
+Test file: =packages/coding-agent/test/tools/todo-write-gates.test.ts= (new)
+
+** Scenario 1: #cloneTodoPhases preserves all fields
+- Create TodoPhase[] with tasks that have details, gateCommit, gateArtifact, gateCmd, gateLlm, verifyCmd, blockers
+- Call getTodoPhases() after setTodoPhases()
+- Assert all fields survive round-trip
+
+** Scenario 2: buildPhaseFromInput propagates gate fields
+- Call applyOps with =replace= op containing tasks with gate fields
+- Assert resulting phases have gate fields on tasks
+
+** Scenario 3: buildPhaseFromInput propagates gate fields via add_phase
+- Call applyOps with =add_phase= op containing tasks with gate fields
+- Assert resulting phases have gate fields on tasks
+
+** Scenario 4: update op preserves existing gate fields
+- Create a task with gateCommit=true, gateArtifact="path/to/file"
+- Call applyOps with =update= op changing only status
+- Assert gate fields are preserved
+
+** Scenario 5: update op can set gate fields
+- Create a task without gate fields
+- Call applyOps with =update= op setting gateCommit=true
+- Assert gateCommit is now true
+
+** Scenario 6: getLatestTodoPhasesFromEntries preserves gate fields
+- Create mock session entries with tool result details containing gate fields
+- Call getLatestTodoPhasesFromEntries
+- Assert gate fields survive
+
+** Scenario 7: #syncTodoPhasesFromBranch preserves gate fields
+- Verify gate fields survive the filter in #syncTodoPhasesFromBranch (completed tasks are stripped, but pending/in_progress tasks with gates should survive)
+
+** Scenario 8: strict schema validation
+- Create a todo_write params object with gate fields
+- Validate against todoWriteSchema
+- Assert validation passes
+
+* Implementation
+
+Preferred sequencing: write tests first, then implement.
+
+** Step 1: Extend TodoItem type
+File: =packages/coding-agent/src/tools/todo-write.ts=
+- Add optional fields to TodoItem interface (line ~24-30)
+- Add Type.Optional fields to InputTask schema (line ~51-58)
+- Add gate fields to update op schema (line ~84-91)
+
+** Step 2: Fix buildPhaseFromInput
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~128-145)
+- Copy gate fields from input task to TodoItem in the push call
+
+** Step 3: Fix update op handler
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~253-264)
+- Add gate field copying: =if (op.gateCommit !== undefined) task.gateCommit = op.gateCommit;= etc.
+
+** Step 4: Fix #cloneTodoPhases
+File: =packages/coding-agent/src/session/agent-session.ts= (line ~2799-2810)
+- Add details, gateCommit, gateArtifact, gateCmd, gateLlm, verifyCmd, blockers to the clone spread
+- Or switch to spread operator ={...task}= to future-proof (but explicitly type the return)
+
+** Step 5: Verify getLatestTodoPhasesFromEntries
+File: =packages/coding-agent/src/tools/todo-write.ts= (line ~195)
+- Uses =clonePhases()= which does ={...task}= spread — should already work, but verify
+
+* Edge Cases
+- Gate fields are all optional — existing code with no gate fields must not break
+- =undefined= gate fields should not be serialized (no =gateCommit: undefined= in JSON)
+- =blockers= is an array of task-id strings; empty array vs undefined must both work
+- Strict mode with optional fields: verify TypeBox emits correct JSON Schema for all providers
+
+* Acceptance Criteria
+- [ ] TodoItem interface has 6 new optional fields
+- [ ] InputTask schema has 6 new optional Type.Optional fields
+- [ ] All 8 test scenarios pass
+- [ ] =bun check:ts= passes (focused: =tsgo -p packages/coding-agent=)
+- [ ] Existing todo-write tests still pass
+- [ ] No =any= types introduced
