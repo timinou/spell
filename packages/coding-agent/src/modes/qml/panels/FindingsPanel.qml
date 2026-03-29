@@ -52,17 +52,18 @@ Item {
     function normalizeUrl(url) {
         var raw = String(url || "")
         if (raw.length === 0) return ""
-        var lower = raw.toLowerCase()
-        // Strip fragment
-        var hashIdx = lower.indexOf("#")
-        if (hashIdx >= 0) lower = lower.substring(0, hashIdx)
-        // Strip trailing slash
-        if (lower.length > 1 && lower.charAt(lower.length - 1) === "/") {
-            lower = lower.substring(0, lower.length - 1)
+        // Regex-based URL parsing (no URL constructor in Qt JS)
+        var match = raw.match(/^([a-z][a-z0-9+.-]*:\/\/)(?:www\.)?([^/?#]+)(\/?[^?#]*)?(\?[^#]*)?/i)
+        if (!match) return raw.toLowerCase()
+        var scheme = match[1].toLowerCase()
+        var host = match[2].toLowerCase()
+        var path = match[3] || ""
+        var query = match[4] || ""
+        // Strip trailing slash from path only
+        if (path.length > 1 && path.charAt(path.length - 1) === "/") {
+            path = path.substring(0, path.length - 1)
         }
-        // Strip www. prefix from host
-        lower = lower.replace("://www.", "://")
-        return lower
+        return scheme + host + path + query
     }
 
     function sourceTypeIcon(st) {

@@ -158,4 +158,34 @@ describe.skipIf(!isBridgeAvailable())("Browse research flow", () => {
 			await browse.teardown();
 		}
 	}, 15_000);
+
+	it("does not merge findings on different ports", async () => {
+		const browse = await BrowseJourney.launch();
+		try {
+			await browse.sendSearchBatch("port test", [{ url: "https://api.example.com:8080/docs", title: "Port 8080" }]);
+			await browse.sendSearchBatch("port test 2", [{ url: "https://api.example.com/docs", title: "Default port" }]);
+			await browse.openFindingsDrawer();
+			await browse.evaluate("root.getFindingsPanelItem().setViewMode('all')");
+			await browse.settle();
+			const count = await browse.evaluate<number>("root.getFindingsPanelItem().findingCount()");
+			expect(count).toBe(2);
+		} finally {
+			await browse.teardown();
+		}
+	}, 15_000);
+
+	it("findingsCount badge matches actual unique count after dedup", async () => {
+		const browse = await BrowseJourney.launch();
+		try {
+			await browse.sendSearchBatch("dedup count", [{ url: "https://example.com/article", title: "First" }]);
+			await browse.sendFetchFinding("https://example.com/article", "example.com", "content");
+			await browse.waitUntil(async () => {
+				return (await browse.evaluate<number>("root.findingsCount")) >= 1 || null;
+			}, 5_000);
+			// After dedup merge, badge should show 1 (actual unique count), not 2 (raw increment count)
+			expect(await browse.evaluate<number>("root.findingsCount")).toBe(1);
+		} finally {
+			await browse.teardown();
+		}
+	}, 15_000);
 });

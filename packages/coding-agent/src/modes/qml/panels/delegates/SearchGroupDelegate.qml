@@ -10,6 +10,7 @@ Item {
     required property string collapsed
     required property int index
     property bool showSeparator: false
+    property var cachedSources: []
 
     signal viewInTab(string tabId, string url, string title)
     signal toggleCollapsed(int index)
@@ -17,11 +18,14 @@ Item {
     width: parent ? parent.width : 0
     implicitHeight: content.implicitHeight
 
-    function parseSources() {
+    onSourcesJsonChanged: updateCachedSources()
+    Component.onCompleted: updateCachedSources()
+
+    function updateCachedSources() {
         try {
-            return JSON.parse(root.sourcesJson)
+            cachedSources = JSON.parse(root.sourcesJson)
         } catch (e) {
-            return []
+            cachedSources = []
         }
     }
 
@@ -82,10 +86,7 @@ Item {
                     Text {
                         id: countText
                         anchors.centerIn: parent
-                        text: {
-                            var sources = root.parseSources()
-                            return String(sources.length)
-                        }
+                        text: String(root.cachedSources.length)
                         font.family: SpellUI.SpellTheme.monoFontFamily
                         font.pixelSize: SpellUI.SpellTheme.fontSizeS
                         color: SpellUI.SpellTheme.textTertiary
@@ -111,18 +112,14 @@ Item {
             spacing: SpellUI.SpellTheme.spacingXS
 
             Repeater {
-                model: {
-                    var sources = root.parseSources()
-                    return Math.min(sources.length, 3)
-                }
+                model: Math.min(root.cachedSources.length, 3)
 
                 delegate: Text {
                     required property int index
                     Layout.fillWidth: true
                     text: {
-                        var sources = root.parseSources()
-                        if (index < sources.length) {
-                            var s = sources[index]
+                        if (index < root.cachedSources.length) {
+                            var s = root.cachedSources[index]
                             return root.sourceTypeIcon(s.sourceType || "search") + " " + (s.title || s.url || "")
                         }
                         return ""
@@ -142,7 +139,7 @@ Item {
             spacing: SpellUI.SpellTheme.spacingS
 
             Repeater {
-                model: root.collapsed !== "true" ? root.parseSources().length : 0
+                model: root.collapsed !== "true" ? root.cachedSources.length : 0
 
                 delegate: Rectangle {
                     required property int index
@@ -164,8 +161,7 @@ Item {
 
                             Text {
                                 text: {
-                                    var sources = root.parseSources()
-                                    if (index < sources.length) return root.sourceTypeIcon(sources[index].sourceType || "search")
+                                    if (index < root.cachedSources.length) return root.sourceTypeIcon(root.cachedSources[index].sourceType || "search")
                                     return ""
                                 }
                                 font.pixelSize: SpellUI.SpellTheme.fontSizeS
@@ -174,9 +170,8 @@ Item {
                             Text {
                                 Layout.fillWidth: true
                                 text: {
-                                    var sources = root.parseSources()
-                                    if (index < sources.length) {
-                                        var url = sources[index].url || ""
+                                    if (index < root.cachedSources.length) {
+                                        var url = root.cachedSources[index].url || ""
                                         var match = url.match(/^[a-z]+:\/\/([^/]+)/i)
                                         return match ? match[1].replace(/^www\./, "") : url
                                     }
@@ -192,8 +187,7 @@ Item {
                         Text {
                             Layout.fillWidth: true
                             text: {
-                                var sources = root.parseSources()
-                                return index < sources.length ? (sources[index].title || "") : ""
+                                return index < root.cachedSources.length ? (root.cachedSources[index].title || "") : ""
                             }
                             font.family: SpellUI.SpellTheme.fontFamily
                             font.pixelSize: SpellUI.SpellTheme.fontSizeS
@@ -205,12 +199,10 @@ Item {
                         Text {
                             Layout.fillWidth: true
                             visible: {
-                                var sources = root.parseSources()
-                                return index < sources.length && (sources[index].excerpt || "").length > 0
+                                return index < root.cachedSources.length && (root.cachedSources[index].excerpt || "").length > 0
                             }
                             text: {
-                                var sources = root.parseSources()
-                                return index < sources.length ? (sources[index].excerpt || "") : ""
+                                return index < root.cachedSources.length ? (root.cachedSources[index].excerpt || "") : ""
                             }
                             font.family: SpellUI.SpellTheme.fontFamily
                             font.pixelSize: SpellUI.SpellTheme.fontSizeS
@@ -223,9 +215,8 @@ Item {
 
                     SpellUI.StateLayer {
                         onClicked: {
-                            var sources = root.parseSources()
-                            if (index < sources.length) {
-                                root.viewInTab("", sources[index].url || "", sources[index].title || "")
+                            if (index < root.cachedSources.length) {
+                                root.viewInTab("", root.cachedSources[index].url || "", root.cachedSources[index].title || "")
                             }
                         }
                     }
@@ -233,7 +224,7 @@ Item {
             }
 
             Text {
-                visible: root.parseSources().length === 0
+                visible: root.cachedSources.length === 0
                 text: "No results"
                 font.family: SpellUI.SpellTheme.fontFamily
                 font.pixelSize: SpellUI.SpellTheme.fontSizeS

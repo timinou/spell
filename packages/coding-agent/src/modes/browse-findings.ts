@@ -1,8 +1,14 @@
 import * as crypto from "node:crypto";
 
-export type FindingSourceType = 'search' | 'fetch' | 'code_search' | 'browser' | 'agent';
+export type FindingSourceType = "search" | "fetch" | "code_search" | "browser" | "agent";
 
-const VALID_SOURCE_TYPES: ReadonlySet<string> = new Set<FindingSourceType>(['search', 'fetch', 'code_search', 'browser', 'agent']);
+const VALID_SOURCE_TYPES: ReadonlySet<string> = new Set<FindingSourceType>([
+	"search",
+	"fetch",
+	"code_search",
+	"browser",
+	"agent",
+]);
 
 export interface BrowseFinding {
 	id: string;
@@ -55,7 +61,7 @@ export function createFinding(input: BrowseFindingInput): BrowseFinding {
 		title: cleanString(input.title),
 		excerpt: cleanString(input.excerpt),
 		tags: cleanTags(input.tags),
-		sourceType: input.sourceType ?? 'agent',
+		sourceType: input.sourceType ?? "agent",
 		curated: input.curated ?? true,
 		enriched: input.enriched ?? false,
 		timestamp,
@@ -81,25 +87,24 @@ export function parseBrowseFinding(value: unknown): BrowseFinding | null {
 		title,
 		excerpt: cleanString(record.excerpt) || undefined,
 		tags: cleanTags(record.tags),
-		sourceType: VALID_SOURCE_TYPES.has(rawSourceType) ? rawSourceType as FindingSourceType : undefined,
-		curated: typeof record.curated === 'boolean' ? record.curated : undefined,
+		sourceType: VALID_SOURCE_TYPES.has(rawSourceType) ? (rawSourceType as FindingSourceType) : undefined,
+		curated: typeof record.curated === "boolean" ? record.curated : undefined,
 		contentBody: cleanString(record.contentBody) || undefined,
-		enriched: typeof record.enriched === 'boolean' ? record.enriched : undefined,
+		enriched: typeof record.enriched === "boolean" ? record.enriched : undefined,
 		tabId: cleanString(record.tabId) || undefined,
 		timestamp: Number.isFinite(record.timestamp) ? Number(record.timestamp) : undefined,
 	});
 }
 
-
 export function normalizeUrlForDedup(url: string): string {
-	if (!url) return '';
+	if (!url) return "";
 	let parsed: URL;
 	try {
 		parsed = new URL(url);
 	} catch {
 		return url.toLowerCase();
 	}
-	const host = parsed.hostname.replace(/^www\./, '');
-	const path = parsed.pathname.replace(/\/$/, '');
+	const host = parsed.host.replace(/^www\./, "");
+	const path = parsed.pathname.replace(/\/$/, "");
 	return `${parsed.protocol.toLowerCase()}//${host}${path}${parsed.search}`;
 }

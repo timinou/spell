@@ -192,8 +192,11 @@ ApplicationWindow {
                     curated: entry.curated === "true",
                     enriched: entry.enriched === "true"
                 })
-                findingsCount += 1
             }
+            Qt.callLater(function() {
+                var panel = getFindingsPanelItem()
+                if (panel) findingsCount = panel.findingCount()
+            })
         } catch (e) {
             // Silently ignore corrupt settings
         }
@@ -385,8 +388,11 @@ ApplicationWindow {
         }
 
         if (payload.type === "finding") {
-            findingsCount += 1
             forwardToFindingsPanel(payload)
+            Qt.callLater(function() {
+                var panel = getFindingsPanelItem()
+                if (panel) findingsCount = panel.findingCount()
+            })
             forwardToChat(payload)
             persistFindings()
             return
@@ -396,7 +402,6 @@ ApplicationWindow {
             var findings = payload.findings || []
             for (var i = 0; i < findings.length; i++) {
                 var f = findings[i]
-                findingsCount += 1
                 forwardToFindingsPanel({
                     type: "finding",
                     id: f.id || "",
@@ -414,6 +419,10 @@ ApplicationWindow {
                     ContentStore.set(f.url, f.contentBody)
                 }
             }
+            Qt.callLater(function() {
+                var panel = getFindingsPanelItem()
+                if (panel) findingsCount = panel.findingCount()
+            })
             forwardToChat(payload)
             persistFindings()
             return

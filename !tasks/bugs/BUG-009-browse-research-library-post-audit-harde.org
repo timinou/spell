@@ -1,0 +1,156 @@
+#+TITLE: Browse research library post-audit hardening
+#+STATE: DONE
+#+SESSION_ID: 14a62467a59126da
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-49-58-422Z_14a62467a59126da.jsonl]]
+#+CUSTOM_ID: BUG-009-browse-research-library-post-audit-harde
+#+EFFORT: 1h30m
+#+PRIORITY: #B
+#+LAYER: ts+qml
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+* Scope
+Five issues from post-implementation audit of PLAN-018. All fixes are surgical — no architectural changes.
+
+** Fix 1: normalizeUrlForDedup drops port (TS)
+- File: ~packages/coding-agent/src/modes/browse-findings.ts~ line 102
+- Bug: uses ~parsed.hostname~ (excludes port) instead of ~parsed.host~ (includes non-default port)
+- Example: ~https://api.example.com:8080/docs~ and ~https://api.example.com/docs~ falsely deduplicate
+- Fix: change ~parsed.hostname~ to ~parsed.host~ on line 102
+- The ~www.~ stripping regex works on either since port follows hostname
+
+** Fix 2: QML normalizeUrl diverges from TS normalizeUrlForDedup
+- File: ~packages/coding-agent/src/modes/qml/panels/FindingsPanel.qml~ lines 52-66
+- Two divergences:
+  1. QML lowercases entire URL including path. TS preserves path case. Case-sensitive paths like ~/API/v1~ vs ~/api/v1~ treated differently
+  2. QML strips trailing slash from end of entire string. TS strips from ~pathname~ before appending ~search~. For ~https://example.com/path/?q=1~: TS → ~https://example.com/path?q=1~, QML → ~https://example.com/path/?q=1~
+- Fix: rewrite QML normalizeUrl using regex to extract scheme, host (with port), path, query. Lowercase only scheme+host. Strip trailing slash from path only. Reassemble
+
+** Fix 3: findingsCount drifts from actual unique findings
+- File: ~packages/coding-agent/src/modes/qml/BrowseShell.qml~
+- Bug: ~findingsCount~ incremented on every message (lines 388, 399, 195) including dedup merges and restores. Never corrected
+- Fix: remove ~findingsCount += 1~ increments. After forwarding to findings panel, read back actual count via ~Qt.callLater~:
+  #+begin_example
+  forwardToFindingsPanel(payload)
+  Qt.callLater(function() {
+      var panel = getFindingsPanelItem()
+      if (panel) findingsCount = panel.findingCount()
+  })
+  #+end_example
+- Apply in all three locations: ~type: "finding"~ handler, ~findings_batch~ handler (after loop), ~restoreFindingsFromState~ (after loop)
+
+** Fix 4: SearchGroupDelegate parseSources() called redundantly
+- File: ~packages/coding-agent/src/modes/qml/panels/delegates/SearchGroupDelegate.qml~
+- Performance: ~JSON.parse(sourcesJson)~ invoked ~57 times for 10 expanded sources
+- Fix: cache in ~property var cachedSources: []~, update on ~onSourcesJsonChanged~ and ~Component.onCompleted~. Replace all ~parseSources()~ calls with ~root.cachedSources~. Delete ~parseSources()~
+
+** Fix 5: URL-keyed ContentStore entries never evicted
+- File: ~packages/coding-agent/src/modes/qml/BrowseContentStore.js~
+- Bug: URL-keyed entries accumulate without eviction. Only tabId-keyed entries cleaned on tab close
+- Fix: add LRU eviction with ~_order~ array and ~_maxSize = 20~
+
+* Tests
+*TDD: write ALL tests FIRST (they must fail), THEN implement fixes. Do NOT interleave.*
+
+** Phase A: Write failing tests (before any fix)
+
+*** A1. Unit tests — browse-findings.test.ts
+Extend existing ~normalizeUrlForDedup~ describe block with 4 new cases:
+
+#+begin_example
+it("preserves non-default port", () => {
+    expect(normalizeUrlForDedup("https://api.example.com:8080/docs")).toBe("https://api.example.com:8080/docs");
+});
+
+it("preserves path case", () => {
+    expect(normalizeUrlForDedup("https://example.com/API/v1")).toBe("https://example.com/API/v1");
+});
+
+it("strips trailing slash from path before query", () => {
+    expect(normalizeUrlForDedup("https://example.com/path/?q=1")).toBe("https://example.com/path?q=1");
+});
+
+it("preserves port with www stripping", () => {
+    expect(normalizeUrlForDedup("https://www.example.com:3000/page")).toBe("https://example.com:3000/page");
+});
+#+end_example
+
+Expected failures: "preserves non-default port" and "preserves port with www stripping" (hostname drops port). Others should already pass — verify.
+
+*** A2. Integration tests — browse-research-flow.test.ts
+Extend existing describe block with 2 new cases:
+
+#+begin_example
+it("does not merge findings on different ports", async () => {
+    const browse = await BrowseJourney.launch();
+    try {
+        await browse.sendSearchBatch("port test", [
+            { url: "https://api.example.com:8080/docs", title: "Port 8080" },
+        ]);
+        await browse.sendSearchBatch("port test 2", [
+            { url: "https://api.example.com/docs", title: "Default port" },
+        ]);
+        await browse.openFindingsDrawer();
+        await browse.evaluate("root.getFindingsPanelItem().setViewMode('all')");
+        await browse.settle();
+        const count = await browse.evaluate<number>("root.getFindingsPanelItem().findingCount()");
+        expect(count).toBe(2);
+    } finally { await browse.teardown(); }
+}, 15_000);
+
+it("findingsCount badge matches actual unique count after dedup", async () => {
+    const browse = await BrowseJourney.launch();
+    try {
+        await browse.sendSearchBatch("dedup count", [
+            { url: "https://example.com/article", title: "First" },
+        ]);
+        await browse.sendFetchFinding("https://example.com/article", "example.com", "content");
+        await browse.waitUntil(async () => {
+            return (await browse.evaluate<number>("root.findingsCount")) === 1 || null;
+        }, 5_000);
+        expect(await browse.evaluate<number>("root.findingsCount")).toBe(1);
+    } finally { await browse.teardown(); }
+}, 15_000);
+#+end_example
+
+Expected failures: port test (false merge), count test (shows 2 not 1).
+
+*** A3. Confirm expected failures
+Run ~bun test test/modes/browse-findings.test.ts test/integration/browse-research-flow.test.ts~. New tests must fail. Existing tests must still pass.
+
+** Phase B: Implement fixes 1-5
+Apply all fixes as described in Scope. Re-run all tests — they must all pass.
+
+** Phase C: Full regression
+~bun test test/integration/browse-*.test.ts test/modes/browse-*.test.ts~
+
+* Acceptance Criteria
+- ~normalizeUrlForDedup("https://api.example.com:8080/docs")~ includes ~:8080~
+- QML normalizeUrl and TS normalizeUrlForDedup produce identical output for same input
+- findingsCount badge matches findingsModel.count after dedup merges
+- SearchGroupDelegate calls JSON.parse at most once per sourcesJson change
+- ContentStore evicts entries when exceeding 20 stored items
+- All existing browse tests pass unchanged
+- All new tests pass
+
+
+** Completion [2026-03-29]
+
+*** Verification
+- ~bun test test/modes/browse-findings.test.ts~ — 20/20 pass (including 4 new: port preservation, path case, trailing slash before query, port with www stripping)
+- ~bun test test/integration/browse-research-flow.test.ts~ — 6/6 pass (including 2 new: port dedup, findingsCount badge accuracy)
+- ~bun test test/integration/browse-*.test.ts test/modes/browse-*.test.ts~ — 63/63 pass (full regression)
+- ~bunx --bun tsgo -p tsconfig.json~ — clean, no errors
+- Manual: ~normalizeUrlForDedup("https://api.example.com:8080/API/v1/?q=1#top")~ returns ~https://api.example.com:8080/API/v1?q=1~ (port preserved, path case preserved, slash stripped, fragment stripped)
+
+*** Artifacts
+- ~packages/coding-agent/src/modes/browse-findings.ts~ — Fix 1: ~parsed.hostname~ -> ~parsed.host~
+- ~packages/coding-agent/src/modes/qml/panels/FindingsPanel.qml~ — Fix 2: regex-based normalizeUrl
+- ~packages/coding-agent/src/modes/qml/BrowseShell.qml~ — Fix 3: Qt.callLater readback (3 locations)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/SearchGroupDelegate.qml~ — Fix 4: cachedSources property
+- ~packages/coding-agent/src/modes/qml/BrowseContentStore.js~ — Fix 5: LRU eviction (max 20)
+- ~packages/coding-agent/test/modes/browse-findings.test.ts~ — 4 new unit tests
+- ~packages/coding-agent/test/integration/browse-research-flow.test.ts~ — 2 new integration tests
+
+*** Deviations
+- Integration test \"does not merge findings on different ports\" passed before the fix because QML's ~normalizeUrl~ already preserved ports (only TS ~normalizeUrlForDedup~ had the ~hostname~ bug). The test remains valuable as a regression guard for QML-side dedup correctness.

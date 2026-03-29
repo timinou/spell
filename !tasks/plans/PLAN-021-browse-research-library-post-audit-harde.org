@@ -1,0 +1,69 @@
+#+TITLE: Browse research library post-audit hardening
+#+STATE: DONE
+#+SESSION_ID: 14a62467a59126da
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-49-58-422Z_14a62467a59126da.jsonl]]
+#+CUSTOM_ID: PLAN-021-browse-research-library-post-audit-harde
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+* Initial Message
+
+anything to work on as a follow-up for polish or hardening? show me your audit before I validate
+
+* Context
+
+** Problem
+Post-implementation audit of PLAN-018 (browse research library integration) found five issues:
+1. ~normalizeUrlForDedup~ uses ~parsed.hostname~ instead of ~parsed.host~, dropping non-default ports and causing false dedup
+2. QML ~normalizeUrl~ diverges from the TS function: lowercases path (TS preserves case), strips trailing slash from wrong position when query params present
+3. ~findingsCount~ in BrowseShell monotonically increments without accounting for dedup merges or 200-entry cap, inflating the footer badge
+4. ~SearchGroupDelegate.parseSources()~ calls ~JSON.parse~ redundantly in every binding expression (~57 times for 10 expanded sources)
+5. URL-keyed ~ContentStore~ entries accumulate without eviction in long sessions
+
+** Approach
+All five fixes are surgical, non-overlapping, and contained in a single work item. No architectural changes required.
+- Fix 1: ~parsed.hostname~ → ~parsed.host~ (one line)
+- Fix 2: Rewrite QML normalizeUrl to match TS logic using regex URL parsing
+- Fix 3: Replace manual ~findingsCount += 1~ with ~Qt.callLater~ readback from panel's ~findingCount()~
+- Fix 4: Cache parsed sources in ~property var cachedSources~, replace all ~parseSources()~ calls
+- Fix 5: Add LRU tracking (~_order~ array, max 20) to BrowseContentStore.js
+
+** Key Design Decisions
+- QML normalizeUrl uses regex-based URL parsing (no URL constructor available in Qt JS engine) to extract scheme, host (with port), path, and query components independently
+- findingsCount uses ~Qt.callLater~ for readback to ensure the panel has processed the dedup before reading. Fallback to existing counter when panel is not yet loaded (pending queue scenario)
+- ContentStore LRU limit set to 20 (higher than the 10 tab limit to allow URL-keyed entries to survive longer for tab reopening)
+
+** Critical File Paths
+- ~packages/coding-agent/src/modes/browse-findings.ts~ (Fix 1)
+- ~packages/coding-agent/src/modes/qml/panels/FindingsPanel.qml~ (Fix 2)
+- ~packages/coding-agent/src/modes/qml/BrowseShell.qml~ (Fix 3)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/SearchGroupDelegate.qml~ (Fix 4)
+- ~packages/coding-agent/src/modes/qml/BrowseContentStore.js~ (Fix 5)
+- ~packages/coding-agent/test/modes/browse-findings.test.ts~ (new test cases)
+- ~packages/coding-agent/test/integration/browse-research-flow.test.ts~ (new test cases)
+
+* Verification
+- ~cd packages/coding-agent && bunx --bun tsgo -p tsconfig.json~ — clean
+- ~qmllint src/modes/qml/BrowseShell.qml src/modes/qml/panels/FindingsPanel.qml src/modes/qml/panels/delegates/SearchGroupDelegate.qml~ — clean
+- ~bun test test/modes/browse-findings.test.ts test/modes/browse-event-mapper.test.ts~ — all pass
+- ~bun test test/integration/browse-*.test.ts~ — all pass (including new cases)
+- Manual spot check: ~normalizeUrlForDedup("https://api.example.com:8080/API/v1/?q=1#top")~ returns ~https://api.example.com:8080/API/v1?q=1~
+
+* Execution Manifest
+1. [[id:BUG-009-browse-research-library-post-audit-harde]] — TDD: write failing tests first (Phase A), then implement fixes 1-5 (Phase B), then full regression (Phase C). Effort: 1h30m, depends: none
+
+
+** Completion [2026-03-29]
+
+*** Verification
+- ~bun test test/modes/browse-findings.test.ts~ — 20/20 pass
+- ~bun test test/integration/browse-research-flow.test.ts~ — 6/6 pass
+- ~bun test test/integration/browse-*.test.ts test/modes/browse-*.test.ts~ — 63/63 pass (full regression)
+- ~bunx --bun tsgo -p tsconfig.json~ — clean
+- Manual: ~normalizeUrlForDedup(\"https://api.example.com:8080/API/v1/?q=1#top\")~ → ~https://api.example.com:8080/API/v1?q=1~
+
+*** Artifacts
+All files listed in [[id:BUG-009-browse-research-library-post-audit-harde]] completion report.
+
+*** Deviations
+- Port-dedup integration test passed before fix (QML normalizeUrl already preserved ports; only TS had hostname bug). Test kept as regression guard.

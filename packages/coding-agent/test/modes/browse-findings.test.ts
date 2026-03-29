@@ -122,4 +122,20 @@ describe("normalizeUrlForDedup", () => {
 	it("lowercases malformed URLs without crashing", () => {
 		expect(normalizeUrlForDedup("not a url")).toBe("not a url");
 	});
+
+	it("preserves non-default port", () => {
+		expect(normalizeUrlForDedup("https://api.example.com:8080/docs")).toBe("https://api.example.com:8080/docs");
+	});
+
+	it("preserves path case", () => {
+		expect(normalizeUrlForDedup("https://example.com/API/v1")).toBe("https://example.com/API/v1");
+	});
+
+	it("strips trailing slash from path before query", () => {
+		expect(normalizeUrlForDedup("https://example.com/path/?q=1")).toBe("https://example.com/path?q=1");
+	});
+
+	it("preserves port with www stripping", () => {
+		expect(normalizeUrlForDedup("https://www.example.com:3000/page")).toBe("https://example.com:3000/page");
+	});
 });
