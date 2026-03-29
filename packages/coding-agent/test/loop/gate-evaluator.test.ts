@@ -36,6 +36,7 @@ function createLoop(): LoopSnapshot {
 		lastProgressHash: "hash",
 		autoApproveEnabled: true,
 		reviewModelConfigured: true,
+		gitAvailable: true,
 	};
 }
 

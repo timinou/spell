@@ -72,6 +72,7 @@ export class LoopRegistry {
 			parentLoopId: loop.parentLoopId,
 			budget: structuredClone(loop.budgetStatus),
 			pendingHumanGates: loop.pendingGates.length,
+			gitAvailable: loop.gitAvailable,
 		}));
 	}
 }

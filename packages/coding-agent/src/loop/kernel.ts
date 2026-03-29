@@ -118,6 +118,7 @@ export class LoopKernel {
 			lastProgressHash: hashTaskContent(taskContent),
 			autoApproveEnabled: config.autoApproveEnabled ?? true,
 			reviewModelConfigured: false,
+			gitAvailable: true,
 		};
 		this.#registry.add(loop);
 		this.#emit(loop, "loop.created", { state: loop.state, iteration: 0, name: loop.name });

@@ -1,0 +1,107 @@
+#+TITLE: Register loop elisp as MCP tools
+#+STATE: DONE
+#+SESSION_ID: 14a60db1731e8e15
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T15-59-54-903Z_14a5e20405e9f1f6/23-CreateFeat2.jsonl]]
+#+CUSTOM_ID: FEAT-038-register-loop-elisp-as-mcp-tools
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: integration
+
+NOTE [2026-03-29]: 4 MCP tools registered in loop-navigation.el (conditional on mcp-server-tools feature). MCP bootstrap requires loop-navigation and loop-predicates. Tool handlers wrap existing functions with JSON I/O.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the loop orchestration hardening plan. Each item has a pre-written body. Use `org create` with category: features, state: ITEM. Return the generated CUSTOM_ID for each.\n## Constraints\n- state MUST be ITEM\n- category MUST be features\n- Include EFFORT, PRIORITY, LAYER in properties\n- Body must include all sections: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- title: Register loop elisp as MCP tools
+- category: features
+- state: ITEM
+- properties: { EFFORT: '3h', PRIORITY: '#B', LAYER: 'integration' }
+- body: the full body below
+
+Body:
+```
+* Scope
+** In-scope
+- Register 4 loop-navigation functions as MCP tools: spell-loop-jump-to-linked, spell-loop-show-dep-graph, spell-loop-highlight-acceptance, spell-loop-show-gate-results
+- Ensure loop-predicates.el is loaded by MCP server bootstrap (packages/org/elisp/mcp-server-emacs-tools.el or equivalent require chain)
+- Test via batch Emacs tool handler invocation
+** Out-of-scope
+- New predicate definitions (already exist in loop-predicates.el)
+- Changing existing tool registrations
+** Boundary rationale
+loop-navigation.el functions are standalone but unreachable without MCP registration. loop-predicates.el is loaded by org-ql-query.el but only if org-ql loads (requires s.el from [[id:FEAT-034-vendor-s-el-for-org-ql-batch-loading]]).
+
+* Tests
+** File: packages/org/test/loop-elisp.test.ts (modify)
+- Assert batch Emacs loads loop-navigation tools: emacs --batch -Q -l mcp-server-emacs-tools.el succeeds
+- Assert tool handler for loop-jump-to-linked returns a line number for known CUSTOM_ID
+- Assert tool handler for loop-show-dep-graph returns text containing parent -> child
+** File: packages/org/test/loop-predicates.test.ts (extend)
+- Assert loop-predicates.el is loaded transitively when MCP server starts (verify org-ql-defpred functions available)
+
+* Implementation
+** packages/org/elisp/tools/loop-navigation.el (modify)
+Add 4 mcp-server-register-tool calls following pattern from org-ql-query.el. Each tool: name, title, description, input-schema (file + custom_id params), handler function.
+** packages/org/elisp/mcp-server-emacs-tools.el (modify) or equivalent bootstrap
+Add (require 'loop-navigation) and verify (require 'loop-predicates) is in the load chain.
+Steps: (1) Add tool registrations to loop-navigation.el. (2) Add requires to bootstrap. (3) Test batch load. (4) Test tool calls.
+
+* Edge Cases
+- MCP server may not be running in all sessions (emacs_code tool may not be available): tools are no-ops without Emacs
+- loop-jump-to-linked with unknown ID: return nil/error gracefully
+- loop-show-dep-graph with no LOOP_CHILDREN: return empty string
+
+* Acceptance Criteria
+- Batch Emacs loads all loop tools without errors
+- Tool handlers return expected results for fixture org files
+- All loop-elisp and loop-predicates tests pass
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-scope
+- Register 4 loop-navigation functions as MCP tools: spell-loop-jump-to-linked, spell-loop-show-dep-graph, spell-loop-highlight-acceptance, spell-loop-show-gate-results
+- Ensure loop-predicates.el is loaded by MCP server bootstrap (packages/org/elisp/mcp-server-emacs-tools.el or equivalent require chain)
+- Test via batch Emacs tool handler invocation
+** Out-of-scope
+- New predicate definitions (already exist in loop-predicates.el)
+- Changing existing tool registrations
+** Boundary rationale
+loop-navigation.el functions are standalone but unreachable without MCP registration. loop-predicates.el is loaded by org-ql-query.el but only if org-ql loads (requires s.el from [[id:FEAT-034-vendor-s-el-for-org-ql-batch-loading]]).
+
+* Tests
+** File: packages/org/test/loop-elisp.test.ts (modify)
+- Assert batch Emacs loads loop-navigation tools: emacs --batch -Q -l mcp-server-emacs-tools.el succeeds
+- Assert tool handler for loop-jump-to-linked returns a line number for known CUSTOM_ID
+- Assert tool handler for loop-show-dep-graph returns text containing parent -> child
+** File: packages/org/test/loop-predicates.test.ts (extend)
+- Assert loop-predicates.el is loaded transitively when MCP server starts (verify org-ql-defpred functions available)
+
+* Implementation
+** packages/org/elisp/tools/loop-navigation.el (modify)
+Add 4 mcp-server-register-tool calls following pattern from org-ql-query.el. Each tool: name, title, description, input-schema (file + custom_id params), handler function.
+** packages/org/elisp/mcp-server-emacs-tools.el (modify) or equivalent bootstrap
+Add (require 'loop-navigation) and verify (require 'loop-predicates) is in the load chain.
+Steps: (1) Add tool registrations to loop-navigation.el. (2) Add requires to bootstrap. (3) Test batch load. (4) Test tool calls.
+
+* Edge Cases
+- MCP server may not be running in all sessions (emacs_code tool may not be available): tools are no-ops without Emacs
+- loop-jump-to-linked with unknown ID: return nil/error gracefully
+- loop-show-dep-graph with no LOOP_CHILDREN: return empty string
+
+* Acceptance Criteria
+- Batch Emacs loads all loop tools without errors
+- Tool handlers return expected results for fixture org files
+- All loop-elisp and loop-predicates tests pass

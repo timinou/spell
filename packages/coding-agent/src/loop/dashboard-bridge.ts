@@ -63,6 +63,23 @@ export class LoopDashboardBridge {
 		};
 	}
 
+	/** Emit an add_panel event so the shell sidebar registers this loop's dashboard. */
+	registerPanel(loopId: string, loopName: string): void {
+		this.#eventBus?.emit("shell:add_panel", {
+			id: `loop-dashboard-${loopId}`,
+			title: `Loop: ${loopName}`,
+			type: "loop-dashboard",
+			loopId,
+		});
+	}
+
+	/** Emit a remove_panel event to clean up the shell sidebar entry. */
+	unregisterPanel(loopId: string): void {
+		this.#eventBus?.emit("shell:remove_panel", {
+			id: `loop-dashboard-${loopId}`,
+		});
+	}
+
 	subscribe(loopId: string, callback: (payload: LoopDashboardPayload) => void): void {
 		callback(this.buildSnapshot(loopId));
 		if (!this.#eventBus) return;

@@ -1,0 +1,113 @@
+#+TITLE: Auto-register loop dashboard panel in shell
+#+STATE: DONE
+#+SESSION_ID: 14a60db173de8e1b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T15-59-54-903Z_14a5e20405e9f1f6/25-CreateFeat4.jsonl]]
+#+CUSTOM_ID: FEAT-035-auto-register-loop-dashboard-panel-in-sh
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: ui
+
+NOTE [2026-03-29]: registerPanel/unregisterPanel added to LoopDashboardBridge. LoopManager.start() emits shell:add_panel, kill()/markDone() emit shell:remove_panel. Tests verify event emission.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the loop orchestration hardening plan. Each item has a pre-written body. Use `org create` with category: features, state: ITEM. Return the generated CUSTOM_ID for each.\n## Constraints\n- state MUST be ITEM\n- category MUST be features\n- Include EFFORT, PRIORITY, LAYER in properties\n- Body must include all sections: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- title: Auto-register loop dashboard panel in shell
+- category: features
+- state: ITEM
+- properties: { EFFORT: '3h', PRIORITY: '#B', LAYER: 'ui' }
+- body: the full body below
+
+Body:
+```
+* Scope
+** In-scope
+- LoopManager.start() sends add_panel event via EventBus for LoopDashboardPanel
+- LoopManager.kill() and markDone() (when terminal) send remove_panel event
+- LoopDashboardBridge handles panel lifecycle: subscribe on add, dispose on remove
+- Shell receives add_panel/remove_panel via bridge message routing (already implemented in shell.qml)
+** Out-of-scope
+- QML component changes to LoopDashboardPanel (already done)
+- CLI-only sessions (no shell, no panel registration)
+** Boundary rationale
+The shell already handles add_panel messages. The gap is that no code sends them on loop lifecycle events.
+
+* Tests
+** File: packages/coding-agent/test/integration/loop/dashboard.test.ts (extend)
+- New test: QmlJourney shell test: agentSends loop_start -> evaluate sidebar panel count increased -> agentSends loop_kill -> evaluate sidebar panel count decreased
+** File: packages/coding-agent/test/loop/dashboard-bridge.test.ts (extend)
+- New test: bridge.subscribe emits initial snapshot to callback
+- New test: bridge.dispose unsubscribes from all EventBus channels
+
+* Implementation
+** packages/coding-agent/src/loop/loop-manager.ts (modify)
+After this.#kernel.start() in start(), emit add_panel event to EventBus with panel id, title, path.
+In kill() and markDone() when state is terminal, emit remove_panel event.
+** packages/coding-agent/src/loop/dashboard-bridge.ts (modify)
+Add registerPanel(loopId) and unregisterPanel(loopId) methods that construct add_panel/remove_panel payloads and emit to EventBus.
+Steps: (1) Add EventBus emit helpers to bridge. (2) Call from LoopManager lifecycle methods. (3) Extend dashboard test. (4) Extend bridge test.
+
+* Edge Cases
+- Multiple active loops: each gets its own panel entry with unique id (loop-dashboard-{loopId})
+- Loop killed before dashboard panel loads: remove_panel is safe to send for non-existent panels
+- No EventBus (subagent): skip panel registration silently
+- Canvas disconnected: panel state lost, reconnect rebuilds from org+tracks (existing behavior)
+
+* Acceptance Criteria
+- Starting a loop adds a sidebar entry in the shell
+- Killing a loop removes the sidebar entry
+- QmlJourney test passes asserting panel count changes
+- Bridge subscribe/dispose tests pass
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-scope
+- LoopManager.start() sends add_panel event via EventBus for LoopDashboardPanel
+- LoopManager.kill() and markDone() (when terminal) send remove_panel event
+- LoopDashboardBridge handles panel lifecycle: subscribe on add, dispose on remove
+- Shell receives add_panel/remove_panel via bridge message routing (already implemented in shell.qml)
+** Out-of-scope
+- QML component changes to LoopDashboardPanel (already done)
+- CLI-only sessions (no shell, no panel registration)
+** Boundary rationale
+The shell already handles add_panel messages. The gap is that no code sends them on loop lifecycle events.
+
+* Tests
+** File: packages/coding-agent/test/integration/loop/dashboard.test.ts (extend)
+- New test: QmlJourney shell test: agentSends loop_start -> evaluate sidebar panel count increased -> agentSends loop_kill -> evaluate sidebar panel count decreased
+** File: packages/coding-agent/test/loop/dashboard-bridge.test.ts (extend)
+- New test: bridge.subscribe emits initial snapshot to callback
+- New test: bridge.dispose unsubscribes from all EventBus channels
+
+* Implementation
+** packages/coding-agent/src/loop/loop-manager.ts (modify)
+After this.#kernel.start() in start(), emit add_panel event to EventBus with panel id, title, path.
+In kill() and markDone() when state is terminal, emit remove_panel event.
+** packages/coding-agent/src/loop/dashboard-bridge.ts (modify)
+Add registerPanel(loopId) and unregisterPanel(loopId) methods that construct add_panel/remove_panel payloads and emit to EventBus.
+Steps: (1) Add EventBus emit helpers to bridge. (2) Call from LoopManager lifecycle methods. (3) Extend dashboard test. (4) Extend bridge test.
+
+* Edge Cases
+- Multiple active loops: each gets its own panel entry with unique id (loop-dashboard-{loopId})
+- Loop killed before dashboard panel loads: remove_panel is safe to send for non-existent panels
+- No EventBus (subagent): skip panel registration silently
+- Canvas disconnected: panel state lost, reconnect rebuilds from org+tracks (existing behavior)
+
+* Acceptance Criteria
+- Starting a loop adds a sidebar entry in the shell
+- Killing a loop removes the sidebar entry
+- QmlJourney test passes asserting panel count changes
+- Bridge subscribe/dispose tests pass

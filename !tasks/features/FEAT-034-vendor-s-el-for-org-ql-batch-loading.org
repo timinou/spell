@@ -1,0 +1,109 @@
+#+TITLE: Vendor sel for org-ql batch loading
+#+STATE: DONE
+#+SESSION_ID: 14a60db1711e8e13
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T15-59-54-903Z_14a5e20405e9f1f6/22-CreateFeat1.jsonl]]
+#+CUSTOM_ID: FEAT-034-vendor-s-el-for-org-ql-batch-loading
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: integration
+
+NOTE [2026-03-29]: s.el 1.13.1 vendored to packages/org/elisp/vendor/org-ql/s.el. load-org-ql.el updated with require. Batch Emacs loads org-ql successfully.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the loop orchestration hardening plan. Each item has a pre-written body. Use `org create` with category: features, state: ITEM. Return the generated CUSTOM_ID for each.\n## Constraints\n- state MUST be ITEM\n- category MUST be features\n- Include EFFORT, PRIORITY, LAYER in properties\n- Body must include all sections: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- title: Vendor s.el for org-ql batch loading
+- category: features
+- state: ITEM
+- properties: { EFFORT: '2h', PRIORITY: '#A', LAYER: 'integration' }
+- body: the full body below
+
+Body:
+```
+* Scope
+** In-scope
+- Download s.el (~1.13.1, GPL-3.0+) and add to packages/org/elisp/vendor/org-ql/
+- Verify batch Emacs loads org-ql + loop-predicates without errors
+- Extend loop-predicates.test.ts with batch Emacs org-ql evaluation (alongside existing TS sexp builder tests, do not replace them)
+** Out-of-scope
+- Upgrading other vendored elisp packages
+- Changing org-ql itself
+** Boundary rationale
+ts.el requires s at line 61. s.el is the only missing transitive dependency. Adding it unblocks all org-ql batch operations.
+
+* Tests
+TDD-first.
+** File: packages/org/test/loop-predicates.test.ts
+- Extend existing test: add batch Emacs evaluation test that loads load-org-ql.el with s.el on load-path
+- Assert (loop-status "iterating") returns LOOP-1 and LOOP-3 from fixture
+- Assert (loop-blocked) returns LOOP-2 and LOOP-4
+- Assert (loop-depth 2) returns LOOP-4
+- Keep existing TS sexp builder assertions intact
+
+* Implementation
+** packages/org/elisp/vendor/org-ql/s.el
+Vendored copy of s.el ~1.13.1. No modifications needed. Verify Package-Requires: ((emacs "24")) -- no further deps.
+** packages/org/test/loop-predicates.test.ts (modify)
+Add second test case using batch Emacs: build eval.el with correct load-path (vendor dir), load load-org-ql.el, require loop-predicates, run org-ql-select, capture output via princ.
+Steps: (1) Download s.el from GitHub/MELPA. (2) Place in vendor dir. (3) Verify emacs --batch -Q -l load-org-ql.el succeeds. (4) Extend test. (5) Run bun test.
+
+* Edge Cases
+- s.el may have minor version differences: any 1.12+ works (ts.el Package-Requires says 1.12.0)
+- Batch Emacs with -Q has no user site-lisp: only vendor dir on load-path
+- If load-org-ql.el changes upstream, s.el must stay vendored
+
+* Acceptance Criteria
+- emacs --batch -Q with vendor dir on load-path loads org-ql without errors
+- loop-predicates.test.ts batch Emacs test passes asserting correct CUSTOM_IDs
+- Existing TS sexp builder tests still pass
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-scope
+- Download s.el (~1.13.1, GPL-3.0+) and add to packages/org/elisp/vendor/org-ql/
+- Verify batch Emacs loads org-ql + loop-predicates without errors
+- Extend loop-predicates.test.ts with batch Emacs org-ql evaluation (alongside existing TS sexp builder tests, do not replace them)
+** Out-of-scope
+- Upgrading other vendored elisp packages
+- Changing org-ql itself
+** Boundary rationale
+ts.el requires s at line 61. s.el is the only missing transitive dependency. Adding it unblocks all org-ql batch operations.
+
+* Tests
+TDD-first.
+** File: packages/org/test/loop-predicates.test.ts
+- Extend existing test: add batch Emacs evaluation test that loads load-org-ql.el with s.el on load-path
+- Assert (loop-status "iterating") returns LOOP-1 and LOOP-3 from fixture
+- Assert (loop-blocked) returns LOOP-2 and LOOP-4
+- Assert (loop-depth 2) returns LOOP-4
+- Keep existing TS sexp builder assertions intact
+
+* Implementation
+** packages/org/elisp/vendor/org-ql/s.el
+Vendored copy of s.el ~1.13.1. No modifications needed. Verify Package-Requires: ((emacs "24")) -- no further deps.
+** packages/org/test/loop-predicates.test.ts (modify)
+Add second test case using batch Emacs: build eval.el with correct load-path (vendor dir), load load-org-ql.el, require loop-predicates, run org-ql-select, capture output via princ.
+Steps: (1) Download s.el from GitHub/MELPA. (2) Place in vendor dir. (3) Verify emacs --batch -Q -l load-org-ql.el succeeds. (4) Extend test. (5) Run bun test.
+
+* Edge Cases
+- s.el may have minor version differences: any 1.12+ works (ts.el Package-Requires says 1.12.0)
+- Batch Emacs with -Q has no user site-lisp: only vendor dir on load-path
+- If load-org-ql.el changes upstream, s.el must stay vendored
+
+* Acceptance Criteria
+- emacs --batch -Q with vendor dir on load-path loads org-ql without errors
+- loop-predicates.test.ts batch Emacs test passes asserting correct CUSTOM_IDs
+- Existing TS sexp builder tests still pass

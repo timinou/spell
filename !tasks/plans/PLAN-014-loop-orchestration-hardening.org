@@ -1,0 +1,94 @@
+#+TITLE: Loop Orchestration Hardening
+#+STATE: DONE
+#+SESSION_ID: 14a5e20405e9f1f6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T15-59-54-903Z_14a5e20405e9f1f6.jsonl]]
+#+CUSTOM_ID: PLAN-014-loop-orchestration-hardening
+#+EFFORT: 20h
+#+PRIORITY: #A
+#+LAYER: runtime
+
+NOTE [2026-03-29]: All 7 FEAT items completed and verified. 14 new tests added (59 total loop tests). Clean type checks and lint.
+
+
+* Initial Message
+
+continue
+
+* Context
+
+The loop orchestration system (PLAN-013) was implemented with 16 subsystems, 56 tests, and full TypeScript/biome clean builds. Post-implementation review identified 7 gaps that prevent production-grade reliability. Gap #1 (settings UI for review model) was confirmed already resolved -- MODEL_ROLE_IDS auto-generates the UI entry.
+
+This plan addresses 7 remaining gaps:
+1. Missing vendor dependency (s.el) prevents batch Emacs from loading org-ql predicates
+2. Loop navigation elisp functions not registered as MCP tools (unreachable from emacs_code)
+3. Loop auto-approve timeout not persisted to settings (lost on session restart)
+4. Loop dashboard panel not auto-registered in shell sidebar on loop start
+5. No gitAvailable guard -- loop_start in non-git dirs hits silent failures in drift/checkpoint
+6. Worktree helpers exist but are never called from loop lifecycle (leak on kill)
+7. No context refresh hook between iteration phases (conversation accumulates without compaction)
+
+Key design decisions (per Metis analysis):
+- s.el vendoring: low risk, same GPL-3.0+ license as existing vendor packages, no transitive deps
+- Context refresh: onBeforePhase callback in PhaseCoordinator, NOT AgentSession.prompt() in orchestration layer (layer violation)
+- Worktree: opt-in per loop via useWorktree flag, NOT auto-detect
+- Git guard: proceed with git features disabled (warn, don't reject) -- add gitAvailable to LoopSnapshot
+- Auto-approve: settings-schema entry as global default, per-gate config overrides
+
+* Verification
+- bun check:ts passes (biome + tsgo)
+- bun test packages/coding-agent/test/loop packages/coding-agent/test/integration/loop packages/org/test/loop-*.test.ts -- all pass
+- emacs --batch -Q with vendor dir on load-path loads org-ql without errors
+- /loop start in non-git tmpdir succeeds with gitAvailable=false warning
+- /loop start with useWorktree=true creates worktree branch, kill removes it
+- QmlJourney shell test: loop start adds sidebar panel entry, kill removes it
+- Settings UI shows loop auto-approve fields under tools tab
+
+* Execution Manifest
+
+** Wave 1 (parallel, no dependencies)
+1. [[id:FEAT-034-vendor-s-el-for-org-ql-batch-loading]] (effort: 2h)
+2. [[id:FEAT-036-add-loop-auto-approve-settings-to-schema]] (effort: 2h)
+3. [[id:FEAT-035-auto-register-loop-dashboard-panel-in-sh]] (effort: 3h)
+4. [[id:FEAT-039-add-gitavailable-guard-to-loop-lifecycle]] (effort: 2h)
+5. [[id:FEAT-037-add-context-refresh-hook-for-loop-iterat]] (effort: 4h)
+
+** Wave 2 (depends on Wave 1)
+6. [[id:FEAT-038-register-loop-elisp-as-mcp-tools]] (depends: FEAT-034, effort: 3h)
+7. [[id:FEAT-040-wire-worktree-lifecycle-into-loop-manage]] (depends: FEAT-039, effort: 4h)
+
+** Total: ~20h across 7 items, 2 waves
+
+
+** Completion [2026-03-29]
+
+*** Verification
+- =bunx tsgo -p tsconfig.json --noEmit= (packages/coding-agent): clean, 0 errors
+- =biome lint .=: 1417 files checked, no issues
+- =biome format --write .=: 1417 files, no changes needed
+- =bun test test/loop/=: 59 pass, 0 fail, 144 expect() calls (up from 45 tests, +14 new)
+- =bun test test/loop-elisp.test.ts test/loop-predicates.test.ts= (org): 3 pass, 0 fail
+- =emacs --batch -Q -l load-org-ql.el=: loads successfully with s.el (org-ql loaded: t)
+- Batch Emacs MCP bootstrap loads loop-navigation and loop-predicates without error
+
+*** Artifacts
+All changes are source code in the repository. No screenshots needed (all artifacts are code/config/elisp).
+
+Key files modified:
+- packages/org/elisp/vendor/org-ql/s.el (new, vendored 1.13.1)
+- packages/org/elisp/vendor/org-ql/load-org-ql.el (s.el require added)
+- packages/org/elisp/tools/loop-navigation.el (4 MCP tool registrations)
+- packages/org/elisp/mcp-server-emacs-tools.el (loop tool require chain)
+- packages/coding-agent/src/loop/types.ts (gitAvailable, worktreePath, useWorktree)
+- packages/coding-agent/src/loop/kernel.ts (gitAvailable default)
+- packages/coding-agent/src/loop/loop-manager.ts (gitAvailable guard, dashboard panel, settings, onBeforePhase, worktree lifecycle)
+- packages/coding-agent/src/loop/loop-tools.ts (gitAvailable warning)
+- packages/coding-agent/src/loop/loop-registry.ts (gitAvailable in listEntries)
+- packages/coding-agent/src/loop/orchestration/phase-coordinator.ts (onBeforePhase hook)
+- packages/coding-agent/src/loop/gates/executors/human.ts (HumanGateSettings)
+- packages/coding-agent/src/loop/dashboard-bridge.ts (registerPanel/unregisterPanel)
+- packages/coding-agent/src/loop/git/worktree.ts (exit code checking)
+- packages/coding-agent/src/config/settings-schema.ts (loop.autoApproveEnabled, loop.autoApproveTimeoutMs)
+
+*** Deviations
+- FEAT-038 (MCP tool registrations): Used =(when (featurep 'mcp-server-tools) ...)= guard instead of unconditional registration. This ensures loop-navigation.el works both standalone (existing test) and when loaded through the MCP bootstrap. The plan assumed require at top-level, but that would break existing tests that load loop-navigation without the MCP server stack.
+- FEAT-036: Settings wiring uses a callback-based HumanGateSettings interface rather than passing the Settings instance directly. This avoids coupling the gate executor to the full Settings class and keeps subagent fallback simple (undefined = use default).

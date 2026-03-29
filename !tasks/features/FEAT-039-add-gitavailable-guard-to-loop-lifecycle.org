@@ -1,0 +1,119 @@
+#+TITLE: Add gitAvailable guard to loop lifecycle
+#+STATE: DONE
+#+SESSION_ID: 14a60db1701e8e0f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T15-59-54-903Z_14a5e20405e9f1f6/26-CreateFeat5.jsonl]]
+#+CUSTOM_ID: FEAT-039-add-gitavailable-guard-to-loop-lifecycle
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: runtime
+
+NOTE [2026-03-29]: gitAvailable: boolean added to LoopSnapshot and LoopListEntry. Detected from ensureCleanGitTree response. Guards snapshotSpecFiles, drift detection, worktree creation. loop_start tool response includes warning when git unavailable. Tests verify both git and non-git directory behavior.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the loop orchestration hardening plan. Each item has a pre-written body. Use `org create` with category: features, state: ITEM. Return the generated CUSTOM_ID for each.\n## Constraints\n- state MUST be ITEM\n- category MUST be features\n- Include EFFORT, PRIORITY, LAYER in properties\n- Body must include all sections: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- title: Add gitAvailable guard to loop lifecycle
+- category: features
+- state: ITEM
+- properties: { EFFORT: '2h', PRIORITY: '#A', LAYER: 'runtime' }
+- body: the full body below
+
+Body:
+```
+* Scope
+** In-scope
+- Add gitAvailable: boolean to LoopSnapshot interface (types.ts)
+- LoopManager.start() sets gitAvailable based on ensureCleanGitTree result message
+- When gitAvailable is false: skip snapshotSpecFiles, skip createLoopCheckpoint, skip worktree creation, skip drift detection
+- loop_start tool includes warning message in response when git unavailable
+** Out-of-scope
+- Changing ensureCleanGitTree behavior (already graceful)
+- Rejecting loop starts for non-git directories
+** Boundary rationale
+Loops should work in non-git directories (documentation, research). Git features degrade gracefully rather than blocking.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/kernel-commands.test.ts (extend)
+- New test: LoopManager in tmpdir without git init -> loop starts with gitAvailable=false
+- New test: LoopManager with git init -> loop starts with gitAvailable=true
+** File: packages/coding-agent/test/loop/git-integration.test.ts (extend)
+- New test: drift detection skipped when gitAvailable=false (no throw)
+
+* Implementation
+** packages/coding-agent/src/loop/types.ts (modify)
+Add gitAvailable: boolean to LoopSnapshot and LoopListEntry.
+** packages/coding-agent/src/loop/kernel.ts (modify)
+Accept gitAvailable in start config, set on snapshot.
+** packages/coding-agent/src/loop/loop-manager.ts (modify)
+Parse ensureCleanGitTree message to detect unavailability. Set gitAvailable. Guard snapshotSpecFiles and checkpoint/drift calls.
+** packages/coding-agent/src/loop/loop-tools.ts (modify)
+Include warning in response text when gitAvailable is false.
+Steps: (1) Add type field. (2) Set in kernel. (3) Guard in manager. (4) Surface in tool. (5) Test.
+
+* Edge Cases
+- Directory is a git repo but git binary not found: ensureCleanGitTree returns ok:true with message about unavailability
+- Subagent tmpdir: no .git, gitAvailable=false, all git features skip
+- Git available but dirty: throws error (existing behavior, unchanged)
+
+* Acceptance Criteria
+- Loop starts successfully in non-git directory with gitAvailable=false
+- No throw from drift/checkpoint/worktree when gitAvailable=false
+- loop_start tool response includes 'Git repository unavailable' warning
+- All existing git-integration tests still pass
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-scope
+- Add gitAvailable: boolean to LoopSnapshot interface (types.ts)
+- LoopManager.start() sets gitAvailable based on ensureCleanGitTree result message
+- When gitAvailable is false: skip snapshotSpecFiles, skip createLoopCheckpoint, skip worktree creation, skip drift detection
+- loop_start tool includes warning message in response when git unavailable
+** Out-of-scope
+- Changing ensureCleanGitTree behavior (already graceful)
+- Rejecting loop starts for non-git directories
+** Boundary rationale
+Loops should work in non-git directories (documentation, research). Git features degrade gracefully rather than blocking.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/kernel-commands.test.ts (extend)
+- New test: LoopManager in tmpdir without git init -> loop starts with gitAvailable=false
+- New test: LoopManager with git init -> loop starts with gitAvailable=true
+** File: packages/coding-agent/test/loop/git-integration.test.ts (extend)
+- New test: drift detection skipped when gitAvailable=false (no throw)
+
+* Implementation
+** packages/coding-agent/src/loop/types.ts (modify)
+Add gitAvailable: boolean to LoopSnapshot and LoopListEntry.
+** packages/coding-agent/src/loop/kernel.ts (modify)
+Accept gitAvailable in start config, set on snapshot.
+** packages/coding-agent/src/loop/loop-manager.ts (modify)
+Parse ensureCleanGitTree message to detect unavailability. Set gitAvailable. Guard snapshotSpecFiles and checkpoint/drift calls.
+** packages/coding-agent/src/loop/loop-tools.ts (modify)
+Include warning in response text when gitAvailable is false.
+Steps: (1) Add type field. (2) Set in kernel. (3) Guard in manager. (4) Surface in tool. (5) Test.
+
+* Edge Cases
+- Directory is a git repo but git binary not found: ensureCleanGitTree returns ok:true with message about unavailability
+- Subagent tmpdir: no .git, gitAvailable=false, all git features skip
+- Git available but dirty: throws error (existing behavior, unchanged)
+
+* Acceptance Criteria
+- Loop starts successfully in non-git directory with gitAvailable=false
+- No throw from drift/checkpoint/worktree when gitAvailable=false
+- loop_start tool response includes 'Git repository unavailable' warning
+- All existing git-integration tests still pass

@@ -1,0 +1,115 @@
+#+TITLE: Add loop auto-approve settings to schema
+#+STATE: DONE
+#+SESSION_ID: 14a60db1739e8e19
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T15-59-54-903Z_14a5e20405e9f1f6/24-CreateFeat3.jsonl]]
+#+CUSTOM_ID: FEAT-036-add-loop-auto-approve-settings-to-schema
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: config
+
+NOTE [2026-03-29]: Added loop.autoApproveEnabled (boolean) and loop.autoApproveTimeoutMs (number, default 300000) to settings-schema.ts. HumanGateExecutor accepts HumanGateSettings. LoopManager.setAutoApprove persists to settings. Gate timer test verifies settings-based timeout.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the loop orchestration hardening plan. Each item has a pre-written body. Use `org create` with category: features, state: ITEM. Return the generated CUSTOM_ID for each.\n## Constraints\n- state MUST be ITEM\n- category MUST be features\n- Include EFFORT, PRIORITY, LAYER in properties\n- Body must include all sections: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- title: Add loop auto-approve settings to schema
+- category: features
+- state: ITEM
+- properties: { EFFORT: '2h', PRIORITY: '#B', LAYER: 'config' }
+- body: the full body below
+
+Body:
+```
+* Scope
+** In-scope
+- Add loop.autoApproveTimeoutMs (number, default 300000) to settings-schema.ts with UI metadata on tools tab
+- Add loop.autoApproveEnabled (boolean, default true) to settings-schema.ts with UI metadata on tools tab
+- Widen LoopManagerOptions.settings interface to include get(path) for reading settings values (or pass Settings instance)
+- HumanGateExecutor constructor reads timeout from settings instead of DEFAULT_HUMAN_GATE_TIMEOUT_MS constant
+- LoopManager.setAutoApprove persists toggle to settings via settings.set()
+** Out-of-scope
+- Other loop config fields (maxIterations, reflectEvery stay in StartLoopOptions)
+- Settings UI component changes (schema-driven UI auto-generates entries)
+** Boundary rationale
+Auto-approve timeout is a session-level preference, not per-loop. Settings persistence ensures the value survives session restarts.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/gate-timer.test.ts (extend)
+- New test: HumanGateExecutor uses configured timeout from settings mock instead of constant
+** File: packages/coding-agent/test/loop/kernel-commands.test.ts (extend)
+- New test: LoopManager.setAutoApprove persists to settings and new gates read the persisted value
+
+* Implementation
+** packages/coding-agent/src/config/settings-schema.ts (modify)
+Add loop.autoApproveTimeoutMs and loop.autoApproveEnabled entries in the tools section.
+** packages/coding-agent/src/loop/loop-manager.ts (modify)
+Widen LoopManagerOptions.settings to accept get/set for loop settings. Pass to HumanGateExecutor. setAutoApprove persists via settings.
+** packages/coding-agent/src/loop/gates/executors/human.ts (modify)
+Constructor accepts optional timeout override. If not provided, reads from settings.
+Steps: (1) Add schema entries. (2) Widen settings interface. (3) Wire HumanGateExecutor. (4) Wire setAutoApprove persistence. (5) Test.
+
+* Edge Cases
+- Settings not available (subagent context): fall back to DEFAULT_HUMAN_GATE_TIMEOUT_MS constant
+- autoApproveTimeoutMs set to 0: means auto-approve disabled (no timer)
+- Per-gate autoApproveAfterMs in gate config overrides the global setting
+
+* Acceptance Criteria
+- Settings.isolated() round-trip for loop.autoApproveTimeoutMs preserves value
+- HumanGateExecutor uses configured timeout in VirtualClock test
+- Settings UI shows the two loop auto-approve fields under tools tab
+- All existing gate timer tests still pass
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-scope
+- Add loop.autoApproveTimeoutMs (number, default 300000) to settings-schema.ts with UI metadata on tools tab
+- Add loop.autoApproveEnabled (boolean, default true) to settings-schema.ts with UI metadata on tools tab
+- Widen LoopManagerOptions.settings interface to include get(path) for reading settings values (or pass Settings instance)
+- HumanGateExecutor constructor reads timeout from settings instead of DEFAULT_HUMAN_GATE_TIMEOUT_MS constant
+- LoopManager.setAutoApprove persists toggle to settings via settings.set()
+** Out-of-scope
+- Other loop config fields (maxIterations, reflectEvery stay in StartLoopOptions)
+- Settings UI component changes (schema-driven UI auto-generates entries)
+** Boundary rationale
+Auto-approve timeout is a session-level preference, not per-loop. Settings persistence ensures the value survives session restarts.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/gate-timer.test.ts (extend)
+- New test: HumanGateExecutor uses configured timeout from settings mock instead of constant
+** File: packages/coding-agent/test/loop/kernel-commands.test.ts (extend)
+- New test: LoopManager.setAutoApprove persists to settings and new gates read the persisted value
+
+* Implementation
+** packages/coding-agent/src/config/settings-schema.ts (modify)
+Add loop.autoApproveTimeoutMs and loop.autoApproveEnabled entries in the tools section.
+** packages/coding-agent/src/loop/loop-manager.ts (modify)
+Widen LoopManagerOptions.settings to accept get/set for loop settings. Pass to HumanGateExecutor. setAutoApprove persists via settings.
+** packages/coding-agent/src/loop/gates/executors/human.ts (modify)
+Constructor accepts optional timeout override. If not provided, reads from settings.
+Steps: (1) Add schema entries. (2) Widen settings interface. (3) Wire HumanGateExecutor. (4) Wire setAutoApprove persistence. (5) Test.
+
+* Edge Cases
+- Settings not available (subagent context): fall back to DEFAULT_HUMAN_GATE_TIMEOUT_MS constant
+- autoApproveTimeoutMs set to 0: means auto-approve disabled (no timer)
+- Per-gate autoApproveAfterMs in gate config overrides the global setting
+
+* Acceptance Criteria
+- Settings.isolated() round-trip for loop.autoApproveTimeoutMs preserves value
+- HumanGateExecutor uses configured timeout in VirtualClock test
+- Settings UI shows the two loop auto-approve fields under tools tab
+- All existing gate timer tests still pass

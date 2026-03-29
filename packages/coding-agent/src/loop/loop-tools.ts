@@ -67,7 +67,12 @@ export class LoopStartTool implements AgentTool<typeof loopStartSchema, { error?
 			reflectEvery: params.reflectEvery,
 			domains: params.domains,
 		});
-		return { content: [{ type: "text", text: JSON.stringify({ loopId: loop.id, state: loop.state }) }] };
+		const result: Record<string, unknown> = { loopId: loop.id, state: loop.state };
+		if (!loop.gitAvailable) {
+			result.warning =
+				"Git repository unavailable; git features (checkpoints, drift detection, worktrees) are disabled.";
+		}
+		return { content: [{ type: "text", text: JSON.stringify(result) }] };
 	}
 
 	renderResult(result: AgentToolResult) {

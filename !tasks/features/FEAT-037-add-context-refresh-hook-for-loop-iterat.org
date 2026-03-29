@@ -1,0 +1,119 @@
+#+TITLE: Add context refresh hook for loop iterations
+#+STATE: DONE
+#+SESSION_ID: 14a60db1735e8e17
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T15-59-54-903Z_14a5e20405e9f1f6/28-CreateFeat7.jsonl]]
+#+CUSTOM_ID: FEAT-037-add-context-refresh-hook-for-loop-iterat
+#+EFFORT: 4h
+#+PRIORITY: #B
+#+LAYER: runtime
+
+NOTE [2026-03-29]: Added IterationRunOptions.onBeforePhase callback to PhaseCoordinator. Called 3 times per iteration (plan, code, review). Errors caught and logged without aborting. Tests verify call order, snapshot passing, and error resilience.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the loop orchestration hardening plan. Each item has a pre-written body. Use `org create` with category: features, state: ITEM. Return the generated CUSTOM_ID for each.\n## Constraints\n- state MUST be ITEM\n- category MUST be features\n- Include EFFORT, PRIORITY, LAYER in properties\n- Body must include all sections: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- title: Add context refresh hook for loop iterations
+- category: features
+- state: ITEM
+- properties: { EFFORT: '4h', PRIORITY: '#B', LAYER: 'runtime' }
+- body: the full body below
+
+Body:
+```
+* Scope
+** In-scope
+- Add onBeforePhase?: (role: LoopRole, loop: LoopSnapshot) => Promise<void> callback to RunIterationOptions or as a new field on LoopRoleResponder
+- PhaseCoordinator.runIteration calls onBeforePhase before each responder.run() call (3 times per iteration: plan, code, review)
+- Default implementation: no-op
+- StubLoopResponder gains beforePhase call counter for test verification
+- Document: production callers should use this hook to call session.compact() with loop-specific summarization instructions
+** Out-of-scope
+- Implementing the AgentSession.compact() bridge (that is the caller's responsibility -- the PhaseCoordinator only provides the hook)
+- Changing the LoopManager.runIteration signature (it passes through to PhaseCoordinator)
+** Boundary rationale
+Context refresh belongs at the session layer, not the orchestration layer (per Metis recommendation). PhaseCoordinator provides a clean extension point without coupling to AgentSession.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/llm-orchestration.test.ts (extend)
+- New test: PhaseCoordinator calls onBeforePhase 3 times per iteration with correct roles (plan, code, review) in order
+- New test: onBeforePhase receives correct LoopSnapshot at each call
+- New test: onBeforePhase error does not crash the iteration (caught and logged)
+** File: packages/coding-agent/test/helpers/stub-llm.ts (modify)
+- Add beforePhaseCount: number and beforePhaseRoles: LoopRole[] tracking fields
+
+* Implementation
+** packages/coding-agent/src/loop/orchestration/phase-coordinator.ts (modify)
+Add options parameter to runIteration with onBeforePhase callback. Call await options.onBeforePhase?.(role, loop) before each responder.run(). Wrap in try-catch to prevent hook errors from crashing the iteration.
+** packages/coding-agent/src/loop/loop-manager.ts (modify)
+Pass onBeforePhase through from RunIterationOptions to PhaseCoordinator. Allow callers to inject their compaction hook.
+** packages/coding-agent/test/helpers/stub-llm.ts (modify)
+Add tracking fields for beforePhase calls.
+Steps: (1) Add callback type. (2) Wire in PhaseCoordinator. (3) Pass through LoopManager. (4) Extend StubLoopResponder. (5) Test.
+
+* Edge Cases
+- onBeforePhase throws: log error, continue iteration (do not abort)
+- onBeforePhase is slow (e.g., compaction takes 10s): no timeout, but document that callers should keep it fast
+- onBeforePhase not provided: skip (no-op default)
+
+* Acceptance Criteria
+- PhaseCoordinator calls onBeforePhase exactly 3 times per iteration in plan->code->review order
+- Error in onBeforePhase is logged but does not abort the iteration
+- StubLoopResponder tracks call count and role sequence
+- All existing llm-orchestration tests still pass
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-scope
+- Add onBeforePhase?: (role: LoopRole, loop: LoopSnapshot) => Promise<void> callback to RunIterationOptions or as a new field on LoopRoleResponder
+- PhaseCoordinator.runIteration calls onBeforePhase before each responder.run() call (3 times per iteration: plan, code, review)
+- Default implementation: no-op
+- StubLoopResponder gains beforePhase call counter for test verification
+- Document: production callers should use this hook to call session.compact() with loop-specific summarization instructions
+** Out-of-scope
+- Implementing the AgentSession.compact() bridge (that is the caller's responsibility -- the PhaseCoordinator only provides the hook)
+- Changing the LoopManager.runIteration signature (it passes through to PhaseCoordinator)
+** Boundary rationale
+Context refresh belongs at the session layer, not the orchestration layer (per Metis recommendation). PhaseCoordinator provides a clean extension point without coupling to AgentSession.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/llm-orchestration.test.ts (extend)
+- New test: PhaseCoordinator calls onBeforePhase 3 times per iteration with correct roles (plan, code, review) in order
+- New test: onBeforePhase receives correct LoopSnapshot at each call
+- New test: onBeforePhase error does not crash the iteration (caught and logged)
+** File: packages/coding-agent/test/helpers/stub-llm.ts (modify)
+- Add beforePhaseCount: number and beforePhaseRoles: LoopRole[] tracking fields
+
+* Implementation
+** packages/coding-agent/src/loop/orchestration/phase-coordinator.ts (modify)
+Add options parameter to runIteration with onBeforePhase callback. Call await options.onBeforePhase?.(role, loop) before each responder.run(). Wrap in try-catch to prevent hook errors from crashing the iteration.
+** packages/coding-agent/src/loop/loop-manager.ts (modify)
+Pass onBeforePhase through from RunIterationOptions to PhaseCoordinator. Allow callers to inject their compaction hook.
+** packages/coding-agent/test/helpers/stub-llm.ts (modify)
+Add tracking fields for beforePhase calls.
+Steps: (1) Add callback type. (2) Wire in PhaseCoordinator. (3) Pass through LoopManager. (4) Extend StubLoopResponder. (5) Test.
+
+* Edge Cases
+- onBeforePhase throws: log error, continue iteration (do not abort)
+- onBeforePhase is slow (e.g., compaction takes 10s): no timeout, but document that callers should keep it fast
+- onBeforePhase not provided: skip (no-op default)
+
+* Acceptance Criteria
+- PhaseCoordinator calls onBeforePhase exactly 3 times per iteration in plan->code->review order
+- Error in onBeforePhase is logged but does not abort the iteration
+- StubLoopResponder tracks call count and role sequence
+- All existing llm-orchestration tests still pass

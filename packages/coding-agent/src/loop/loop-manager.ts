@@ -1,7 +1,9 @@
+import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import { validateLoopPrerequisites } from "../config/loop-prerequisites";
 import type { EventBus } from "../utils/event-bus";
 import { type ChildCompletionSignal, type GateDecision, LOOP_STATES, type LoopEvent } from "./contracts";
+import { LoopDashboardBridge } from "./dashboard-bridge";
 import { LoopDomainRegistry } from "./domains/registry";
 import { RealClock } from "./gates/clock";
 import { FindingDedup } from "./gates/dedup";
@@ -10,8 +12,9 @@ import { ArtifactGateExecutor, CommandGateExecutor, HumanGateExecutor, LlmReview
 import type { LoopReviewer } from "./gates/types";
 import { ensureCleanGitTree } from "./git/dirty-check";
 import { type DriftSnapshot, detectSpecDrift, snapshotSpecFiles } from "./git/drift";
+import { createLoopWorktree, removeLoopWorktree } from "./git/worktree";
 import { LoopKernel } from "./kernel";
-import { type LoopRoleResponder, PhaseCoordinator } from "./orchestration/phase-coordinator";
+import { type IterationRunOptions, type LoopRoleResponder, PhaseCoordinator } from "./orchestration/phase-coordinator";
 import { LlmSwitcher, type LoopRoleResolver } from "./orchestration/switcher";
 import { saveLoopState } from "./persistence/checkpoint";
 import { appendLoopEvent } from "./persistence/event-log";
@@ -38,9 +41,15 @@ interface PendingLoopEvent {
 	snapshot: LoopSnapshot;
 }
 
+export interface LoopManagerSettings {
+	getModelRole(role: string): string | undefined;
+	get?(path: string): unknown;
+	set?(path: string, value: unknown): void;
+}
+
 interface LoopManagerOptions {
 	cwd: string;
-	settings: { getModelRole(role: string): string | undefined };
+	settings: LoopManagerSettings;
 	roleResolver?: LoopRoleResolver;
 	reviewer?: LoopReviewer;
 	eventBus?: EventBus;
@@ -48,16 +57,17 @@ interface LoopManagerOptions {
 }
 
 const DEFAULT_CHILD_POLICY: LoopRetryPolicy = { policy: "retry", retries: 2 };
+const WORKTREE_BASE = ".local/!tracks/worktrees";
 
 export class LoopManager {
 	readonly #cwd: string;
-	readonly #settings: LoopManagerOptions["settings"];
+	readonly #settings: LoopManagerSettings;
 	readonly #eventBus?: EventBus;
 	readonly #kernel: LoopKernel;
 	readonly #dag = new LoopDag();
 	readonly #spawner: ChildSpawner;
 	readonly #domainRegistry = new LoopDomainRegistry();
-	readonly #humanExecutor = new HumanGateExecutor(new RealClock());
+	readonly #humanExecutor: HumanGateExecutor;
 	readonly #dedup = new FindingDedup();
 	readonly #phaseCoordinator = new PhaseCoordinator();
 	readonly #switcher = new LlmSwitcher();
@@ -66,6 +76,7 @@ export class LoopManager {
 	readonly #reviewer?: LoopReviewer;
 	readonly #roleResolver?: LoopRoleResolver;
 	readonly #evaluator: GateEvaluator;
+	readonly #dashboardBridge: LoopDashboardBridge;
 	#restored = false;
 
 	constructor(options: LoopManagerOptions) {
@@ -75,6 +86,16 @@ export class LoopManager {
 		this.#reviewer = options.reviewer;
 		this.#roleResolver = options.roleResolver;
 		this.#spawner = new ChildSpawner(this.#dag, 3);
+		this.#humanExecutor = new HumanGateExecutor(new RealClock(), {
+			getAutoApproveTimeoutMs: () => {
+				const val = this.#settings.get?.("loop.autoApproveTimeoutMs");
+				return typeof val === "number" ? val : undefined;
+			},
+			getAutoApproveEnabled: () => {
+				const val = this.#settings.get?.("loop.autoApproveEnabled");
+				return typeof val === "boolean" ? val : undefined;
+			},
+		});
 		this.#kernel = new LoopKernel({
 			concurrencyLimit: options.concurrencyLimit,
 			onEvent: (event, snapshot) => {
@@ -89,6 +110,7 @@ export class LoopManager {
 				...(this.#reviewer ? { "llm-review": new LlmReviewGateExecutor(this.#reviewer) } : {}),
 			},
 		});
+		this.#dashboardBridge = new LoopDashboardBridge(this, this.#eventBus);
 	}
 
 	async restoreFromDisk(): Promise<LoopSnapshot[]> {
@@ -110,8 +132,13 @@ export class LoopManager {
 	async start(options: StartLoopOptions): Promise<LoopSnapshot> {
 		await this.restoreFromDisk();
 		const cleanTree = await ensureCleanGitTree(this.#cwd);
+		// Detect git availability: ensureCleanGitTree returns ok:true with message when git is unavailable
+		const gitAvailable = cleanTree.ok && !cleanTree.message;
 		if (!cleanTree.ok) {
 			throw new Error(cleanTree.message ?? "Repository has uncommitted changes");
+		}
+		if (!gitAvailable) {
+			logger.warn("Git repository unavailable; git features disabled for this loop", { cwd: this.#cwd });
 		}
 		const prerequisites = validateLoopPrerequisites(this.#settings);
 		const domains = (options.domains ?? ["code", "test"]).map(name => {
@@ -127,11 +154,44 @@ export class LoopManager {
 			domains: domains.map(domain => domain.name),
 			gates: gateConfigs,
 		});
-		if (options.specPaths && options.specPaths.length > 0) {
-			this.#driftSnapshots.set(snapshot.id, await snapshotSpecFiles(options.specPaths));
+		// Set gitAvailable on the snapshot
+		this.#kernel.updateLoop(
+			snapshot.id,
+			loop => {
+				loop.gitAvailable = gitAvailable;
+			},
+			"loop.git_status",
+			{ gitAvailable },
+		);
+		// Git-dependent operations: skip when git unavailable
+		if (gitAvailable) {
+			if (options.specPaths && options.specPaths.length > 0) {
+				this.#driftSnapshots.set(snapshot.id, await snapshotSpecFiles(options.specPaths));
+			}
+			// Worktree creation (opt-in)
+			if (options.useWorktree) {
+				try {
+					const targetDir = path.join(this.#cwd, WORKTREE_BASE, snapshot.id);
+					const wt = await createLoopWorktree(this.#cwd, snapshot.id, targetDir);
+					this.#kernel.updateLoop(
+						snapshot.id,
+						loop => {
+							loop.worktreePath = wt.path;
+						},
+						"loop.worktree_created",
+						{ branch: wt.branch, path: wt.path },
+					);
+				} catch (err) {
+					logger.error("Failed to create loop worktree", { loopId: snapshot.id, error: String(err) });
+				}
+			}
+		} else if (options.useWorktree) {
+			logger.warn("Worktree requested but git unavailable; skipping", { loopId: snapshot.id });
 		}
 		this.#kernel.setReviewModelConfigured(snapshot.id, prerequisites.ok);
 		await this.#flushPendingEvents();
+		// Register dashboard panel in shell sidebar
+		this.#dashboardBridge.registerPanel(snapshot.id, snapshot.name);
 		return this.#kernel.getState(snapshot.id);
 	}
 
@@ -158,6 +218,11 @@ export class LoopManager {
 		} = {},
 	): Promise<LoopSnapshot> {
 		const snapshot = this.#kernel.done(loopId, options);
+		// Clean up worktree on terminal state
+		if (snapshot.state === LOOP_STATES.complete) {
+			await this.#cleanupWorktree(loopId);
+			this.#dashboardBridge.unregisterPanel(loopId);
+		}
 		await this.#flushPendingEvents();
 		return snapshot;
 	}
@@ -167,14 +232,20 @@ export class LoopManager {
 		const killedIds = collectKillTree(loopId, all);
 		const killed: LoopSnapshot[] = [];
 		for (const id of killedIds) {
+			await this.#cleanupWorktree(id);
 			const snapshot = this.#kernel.kill(id);
 			killed.push(snapshot);
+			this.#dashboardBridge.unregisterPanel(id);
 		}
 		await this.#flushPendingEvents();
 		return killed;
 	}
 
-	async runIteration(loopId: string, responder: LoopRoleResponder): Promise<LoopAdvanceResult> {
+	async runIteration(
+		loopId: string,
+		responder: LoopRoleResponder,
+		iterationOptions?: IterationRunOptions,
+	): Promise<LoopAdvanceResult> {
 		let snapshot = this.#kernel.getState(loopId);
 		if (snapshot.state === LOOP_STATES.paused) {
 			throw new Error(`Loop ${loopId} is paused`);
@@ -183,7 +254,7 @@ export class LoopManager {
 			this.#resolveSwitch("plan");
 			snapshot = this.#kernel.done(loopId);
 		}
-		const run = await this.#phaseCoordinator.runIteration(snapshot, responder);
+		const run = await this.#phaseCoordinator.runIteration(snapshot, responder, iterationOptions);
 		this.#resolveSwitch("review");
 		this.#kernel.updateLoop(
 			loopId,
@@ -228,6 +299,8 @@ export class LoopManager {
 
 	setAutoApprove(loopId: string, gateId: string, enabled: boolean): void {
 		this.#humanExecutor.setAutoApprove(loopId, gateId, enabled);
+		// Persist the toggle to settings if available
+		this.#settings.set?.("loop.autoApproveEnabled", enabled);
 	}
 
 	listPendingHumanGates(loopId?: string): LoopPendingHumanGate[] {
@@ -396,12 +469,27 @@ export class LoopManager {
 			"loop.safeguards_checked",
 			{ idleIterations: runaway.idleIterations },
 		);
-		const driftSnapshot = this.#driftSnapshots.get(loop.id);
-		if (driftSnapshot && latest.state === LOOP_STATES.reflecting) {
-			const drifted = await detectSpecDrift(driftSnapshot);
-			if (drifted.length > 0) {
-				this.#kernel.pause(loop.id, `Spec drift detected: ${drifted.join(", ")}`);
+		// Drift detection only when git is available
+		if (latest.gitAvailable) {
+			const driftSnapshot = this.#driftSnapshots.get(loop.id);
+			if (driftSnapshot && latest.state === LOOP_STATES.reflecting) {
+				const drifted = await detectSpecDrift(driftSnapshot);
+				if (drifted.length > 0) {
+					this.#kernel.pause(loop.id, `Spec drift detected: ${drifted.join(", ")}`);
+				}
 			}
+		}
+	}
+
+	async #cleanupWorktree(loopId: string): Promise<void> {
+		try {
+			const snapshot = this.#kernel.getState(loopId);
+			if (snapshot.worktreePath) {
+				await removeLoopWorktree(this.#cwd, snapshot.worktreePath);
+				logger.debug("Removed loop worktree", { loopId, path: snapshot.worktreePath });
+			}
+		} catch (err) {
+			logger.warn("Failed to remove loop worktree", { loopId, error: String(err) });
 		}
 	}
 

@@ -38,6 +38,7 @@ function createParent(depth = 0): LoopSnapshot {
 		lastProgressHash: "hash",
 		autoApproveEnabled: true,
 		reviewModelConfigured: true,
+		gitAvailable: true,
 	};
 }
 

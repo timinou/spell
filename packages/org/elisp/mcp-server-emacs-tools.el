@@ -52,7 +52,12 @@ names (symbols) to enable selectively."
     (org-archive-item . org-archive-tool)
     (org-capture . org-capture-tool)
     ;; org-ql query tool
-    (org-ql-query . org-ql-query))
+    (org-ql-query . org-ql-query)
+    ;; Loop tools
+    (loop-jump-to-linked . loop-navigation)
+    (loop-show-dep-graph . loop-navigation)
+    (loop-highlight-acceptance . loop-navigation)
+    (loop-show-gate-results . loop-navigation))
   "Alist mapping tool names (symbols) to their feature names.")
 
 ;; Add vendor/org-ql directory to load-path for org-ql and its dependencies
@@ -107,6 +112,10 @@ names (symbols) to enable selectively."
 (require 'org-archive-tool)
 (require 'org-capture-tool nil t)
 (ignore-errors (require 'org-ql-query))
+
+;; Loop orchestration tools
+(require 'loop-navigation)
+(require 'loop-predicates nil t)
 
 (defun mcp-server-emacs-tools--tool-enabled-p (tool-name)
   "Return non-nil if TOOL-NAME is enabled."

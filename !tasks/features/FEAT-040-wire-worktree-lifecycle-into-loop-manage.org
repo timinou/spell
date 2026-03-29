@@ -1,0 +1,121 @@
+#+TITLE: Wire worktree lifecycle into loop manager
+#+STATE: DONE
+#+SESSION_ID: 14a60db1709e8e11
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T15-59-54-903Z_14a5e20405e9f1f6/27-CreateFeat6.jsonl]]
+#+CUSTOM_ID: FEAT-040-wire-worktree-lifecycle-into-loop-manage
+#+EFFORT: 4h
+#+PRIORITY: #B
+#+LAYER: runtime
+
+NOTE [2026-03-29]: useWorktree added to StartLoopOptions, worktreePath to LoopSnapshot. createLoopWorktree/removeLoopWorktree check exit codes and throw on failure. LoopManager creates worktree on start (when useWorktree && gitAvailable), removes on kill/markDone. E2E test verifies full lifecycle.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the loop orchestration hardening plan. Each item has a pre-written body. Use `org create` with category: features, state: ITEM. Return the generated CUSTOM_ID for each.\n## Constraints\n- state MUST be ITEM\n- category MUST be features\n- Include EFFORT, PRIORITY, LAYER in properties\n- Body must include all sections: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- title: Wire worktree lifecycle into loop manager
+- category: features
+- state: ITEM
+- properties: { EFFORT: '4h', PRIORITY: '#B', LAYER: 'runtime' }
+- body: the full body below
+
+Body:
+```
+* Scope
+** In-scope
+- Add useWorktree?: boolean to StartLoopOptions (types.ts)
+- Add worktreePath?: string to LoopSnapshot (types.ts)
+- LoopManager.start(): when useWorktree=true and gitAvailable=true, call createLoopWorktree, store path in snapshot
+- LoopManager.kill() and markDone() (terminal): call removeLoopWorktree if worktreePath set
+- Upgrade createLoopWorktree/removeLoopWorktree to check exit codes and throw on failure
+- E2E test with real git repo: create worktree, verify branch exists, remove on kill, verify cleanup
+** Out-of-scope
+- Reusing task/worktree.ts ensureWorktree infrastructure (future consideration per Metis)
+- Auto-detecting when worktrees are needed (user must opt in)
+** Boundary rationale
+Worktrees are opt-in per loop. Existing helpers exist but were never called. This item wires them into the lifecycle with proper error handling.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/git-integration.test.ts (extend)
+- New test: createLoopWorktree creates branch loop/{id} and directory
+- New test: removeLoopWorktree removes directory and prunes worktree
+- New test: E2E: start loop with useWorktree=true -> verify branch -> kill -> verify no worktree
+- New test: useWorktree=true with gitAvailable=false -> worktree creation skipped, no throw
+
+* Implementation
+** packages/coding-agent/src/loop/types.ts (modify)
+Add useWorktree to StartLoopOptions, worktreePath to LoopSnapshot.
+** packages/coding-agent/src/loop/git/worktree.ts (modify)
+Check exit codes from git worktree add/remove. Throw on non-zero with stderr.
+** packages/coding-agent/src/loop/loop-manager.ts (modify)
+In start(): if useWorktree && gitAvailable, create worktree at .local/!tracks/worktrees/{loopId}/. In kill()/markDone(): if snapshot.worktreePath, remove.
+Steps: (1) Add type fields. (2) Upgrade worktree helpers. (3) Wire in manager. (4) E2E test.
+
+* Edge Cases
+- Worktree directory already exists from crashed loop: detect and reuse or clean
+- Git worktree remove fails (locked): log warning, don't crash kill
+- Branch loop/{id} already exists: fail with clear error
+- Non-git directory with useWorktree=true: skip silently (gitAvailable guard from [[id:FEAT-038-add-gitavailable-guard-to-loop-lifecycle]])
+
+* Acceptance Criteria
+- Worktree created on start with correct branch name
+- Worktree removed on kill/complete with no leak
+- Error handling test: exit code checked, stderr in error message
+- All existing git-integration tests still pass
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-scope
+- Add useWorktree?: boolean to StartLoopOptions (types.ts)
+- Add worktreePath?: string to LoopSnapshot (types.ts)
+- LoopManager.start(): when useWorktree=true and gitAvailable=true, call createLoopWorktree, store path in snapshot
+- LoopManager.kill() and markDone() (terminal): call removeLoopWorktree if worktreePath set
+- Upgrade createLoopWorktree/removeLoopWorktree to check exit codes and throw on failure
+- E2E test with real git repo: create worktree, verify branch exists, remove on kill, verify cleanup
+** Out-of-scope
+- Reusing task/worktree.ts ensureWorktree infrastructure (future consideration per Metis)
+- Auto-detecting when worktrees are needed (user must opt in)
+** Boundary rationale
+Worktrees are opt-in per loop. Existing helpers exist but were never called. This item wires them into the lifecycle with proper error handling.
+
+* Tests
+TDD-first.
+** File: packages/coding-agent/test/loop/git-integration.test.ts (extend)
+- New test: createLoopWorktree creates branch loop/{id} and directory
+- New test: removeLoopWorktree removes directory and prunes worktree
+- New test: E2E: start loop with useWorktree=true -> verify branch -> kill -> verify no worktree
+- New test: useWorktree=true with gitAvailable=false -> worktree creation skipped, no throw
+
+* Implementation
+** packages/coding-agent/src/loop/types.ts (modify)
+Add useWorktree to StartLoopOptions, worktreePath to LoopSnapshot.
+** packages/coding-agent/src/loop/git/worktree.ts (modify)
+Check exit codes from git worktree add/remove. Throw on non-zero with stderr.
+** packages/coding-agent/src/loop/loop-manager.ts (modify)
+In start(): if useWorktree && gitAvailable, create worktree at .local/!tracks/worktrees/{loopId}/. In kill()/markDone(): if snapshot.worktreePath, remove.
+Steps: (1) Add type fields. (2) Upgrade worktree helpers. (3) Wire in manager. (4) E2E test.
+
+* Edge Cases
+- Worktree directory already exists from crashed loop: detect and reuse or clean
+- Git worktree remove fails (locked): log warning, don't crash kill
+- Branch loop/{id} already exists: fail with clear error
+- Non-git directory with useWorktree=true: skip silently (gitAvailable guard from [[id:FEAT-038-add-gitavailable-guard-to-loop-lifecycle]])
+
+* Acceptance Criteria
+- Worktree created on start with correct branch name
+- Worktree removed on kill/complete with no leak
+- Error handling test: exit code checked, stderr in error message
+- All existing git-integration tests still pass

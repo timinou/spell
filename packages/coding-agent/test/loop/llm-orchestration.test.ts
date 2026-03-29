@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-ai";
+import type { LoopRole } from "../../src/loop/contracts";
 import { PhaseCoordinator } from "../../src/loop/orchestration/phase-coordinator";
 import { LlmSwitcher } from "../../src/loop/orchestration/switcher";
 import type { LoopSnapshot } from "../../src/loop/types";
@@ -38,6 +39,7 @@ function createLoop(): LoopSnapshot {
 		lastProgressHash: "hash",
 		autoApproveEnabled: true,
 		reviewModelConfigured: true,
+		gitAvailable: true,
 	};
 }
 
@@ -81,5 +83,50 @@ describe("loop llm orchestration", () => {
 		};
 		const result = new LlmSwitcher().resolve("review", resolver);
 		expect(result.model).toBe(model);
+	});
+});
+
+describe("onBeforePhase hook", () => {
+	function makeResponder() {
+		const responder = new StubLoopResponder();
+		responder.set("plan", { summary: "plan" });
+		responder.set("code", { summary: "code", changedFiles: [] });
+		responder.set("review", { summary: "review" });
+		return responder;
+	}
+
+	it("calls onBeforePhase 3 times per iteration in plan->code->review order", async () => {
+		const roles: LoopRole[] = [];
+		await new PhaseCoordinator().runIteration(createLoop(), makeResponder(), {
+			onBeforePhase: async role => {
+				roles.push(role);
+			},
+		});
+		expect(roles).toEqual(["plan", "code", "review"]);
+	});
+
+	it("receives correct LoopSnapshot at each call", async () => {
+		const snapshots: LoopSnapshot[] = [];
+		await new PhaseCoordinator().runIteration(createLoop(), makeResponder(), {
+			onBeforePhase: async (_role, loop) => {
+				snapshots.push(loop);
+			},
+		});
+		expect(snapshots).toHaveLength(3);
+		expect(snapshots[0]!.id).toBe("LOOP-1");
+		expect(snapshots[2]!.name).toBe("demo");
+	});
+
+	it("error in onBeforePhase does not crash the iteration", async () => {
+		let callCount = 0;
+		const result = await new PhaseCoordinator().runIteration(createLoop(), makeResponder(), {
+			onBeforePhase: async () => {
+				callCount++;
+				if (callCount === 1) throw new Error("hook failure");
+			},
+		});
+		// Should complete despite first hook throwing
+		expect(result.handoffs).toHaveLength(3);
+		expect(callCount).toBe(3);
 	});
 });

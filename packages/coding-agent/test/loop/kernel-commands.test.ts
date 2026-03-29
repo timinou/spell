@@ -60,3 +60,32 @@ describe("loop slash-command backend", () => {
 		expect(list.message).toContain("two");
 	});
 });
+
+describe("loop gitAvailable guard", () => {
+	let manager: LoopManager;
+	let tmpDir: string;
+
+	afterEach(async () => {
+		if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it("sets gitAvailable=false in non-git directory", async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "loop-no-git-"));
+		manager = new LoopManager({ cwd: tmpDir, settings: createSettings() });
+		const loop = await manager.start({ name: "no-git", domains: [] });
+		expect(loop.gitAvailable).toBe(false);
+	});
+
+	it("sets gitAvailable=true in git directory", async () => {
+		const { $ } = await import("bun");
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "loop-git-"));
+		await $`git init`.cwd(tmpDir).quiet().nothrow();
+		await $`git config user.email test@test.com`.cwd(tmpDir).quiet().nothrow();
+		await $`git config user.name Test`.cwd(tmpDir).quiet().nothrow();
+		await Bun.write(path.join(tmpDir, "f.txt"), "x");
+		await $`git add . && git commit -m init`.cwd(tmpDir).quiet().nothrow();
+		manager = new LoopManager({ cwd: tmpDir, settings: createSettings() });
+		const loop = await manager.start({ name: "has-git", domains: [] });
+		expect(loop.gitAvailable).toBe(true);
+	});
+});

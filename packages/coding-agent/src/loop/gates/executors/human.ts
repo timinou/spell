@@ -15,18 +15,27 @@ function makePendingKey(loopId: string, gateId: string): string {
 	return `${loopId}:${gateId}`;
 }
 
+export interface HumanGateSettings {
+	getAutoApproveTimeoutMs(): number | undefined;
+	getAutoApproveEnabled(): boolean | undefined;
+}
+
 export class HumanGateExecutor implements GateExecutor<HumanGateConfig> {
 	readonly #clock: Clock;
 	#pending = new Map<string, PendingHumanGate>();
+	#settings?: HumanGateSettings;
 
-	constructor(clock: Clock) {
+	constructor(clock: Clock, settings?: HumanGateSettings) {
 		this.#clock = clock;
+		this.#settings = settings;
 	}
 
 	async execute(gate: HumanGateConfig, context: GateExecutionContext) {
 		const key = makePendingKey(context.loop.id, gate.id);
 		const { promise, resolve } = Promise.withResolvers<{ approved: boolean; reason: string }>();
-		const autoApproveAfterMs = gate.autoApproveAfterMs ?? DEFAULT_HUMAN_GATE_TIMEOUT_MS;
+		const globalTimeout = this.#settings?.getAutoApproveTimeoutMs();
+		// Per-gate config overrides global setting
+		const autoApproveAfterMs = gate.autoApproveAfterMs ?? globalTimeout ?? DEFAULT_HUMAN_GATE_TIMEOUT_MS;
 		const entry: PendingHumanGate = {
 			pending: {
 				loopId: context.loop.id,

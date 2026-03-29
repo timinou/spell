@@ -165,6 +165,8 @@ export interface LoopSnapshot {
 	statusReason?: string;
 	autoApproveEnabled: boolean;
 	reviewModelConfigured: boolean;
+	gitAvailable: boolean;
+	worktreePath?: string;
 }
 
 export interface LoopListEntry {
@@ -177,6 +179,7 @@ export interface LoopListEntry {
 	parentLoopId?: string;
 	budget: LoopBudgetStatus;
 	pendingHumanGates: number;
+	gitAvailable: boolean;
 }
 
 export interface StartLoopOptions {
@@ -196,6 +199,7 @@ export interface StartLoopOptions {
 	requiredChild?: boolean;
 	failurePolicy?: LoopRetryPolicy;
 	autoApproveEnabled?: boolean;
+	useWorktree?: boolean;
 }
 
 export interface LoopAdvanceResult {

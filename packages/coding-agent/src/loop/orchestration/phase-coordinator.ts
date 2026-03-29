@@ -1,3 +1,4 @@
+import { logger } from "@oh-my-pi/pi-utils";
 import type { HandoffArtifact, LoopRole } from "../contracts";
 import { buildIterationPrompt, buildReflectionPrompt } from "../prompt-builder";
 import type { LoopSnapshot } from "../types";
@@ -20,8 +21,18 @@ export interface IterationRunResult {
 	reviewSummary: string;
 }
 
+export interface IterationRunOptions {
+	/** Called before each phase (plan, code, review). Use for context compaction. */
+	onBeforePhase?: (role: LoopRole, loop: LoopSnapshot) => Promise<void>;
+}
+
 export class PhaseCoordinator {
-	async runIteration(loop: LoopSnapshot, responder: LoopRoleResponder): Promise<IterationRunResult> {
+	async runIteration(
+		loop: LoopSnapshot,
+		responder: LoopRoleResponder,
+		options?: IterationRunOptions,
+	): Promise<IterationRunResult> {
+		await this.#callBeforePhase("plan", loop, options);
 		const planPrompt = buildIterationPrompt({
 			loopId: loop.id,
 			name: loop.name,
@@ -40,6 +51,7 @@ export class PhaseCoordinator {
 			iteration: loop.iteration,
 			summary: plan.summary,
 		});
+		await this.#callBeforePhase("code", loop, options);
 		const code = await responder.run("code", plan.summary, loop);
 		const codeToReview = createHandoffArtifact({
 			fromRole: "code",
@@ -48,6 +60,7 @@ export class PhaseCoordinator {
 			changedFiles: code.changedFiles,
 			summary: code.summary,
 		});
+		await this.#callBeforePhase("review", loop, options);
 		const reviewPrompt = buildReflectionPrompt({
 			loopId: loop.id,
 			name: loop.name,
@@ -74,5 +87,14 @@ export class PhaseCoordinator {
 			findings: [...(review.findings ?? [])],
 			reviewSummary: review.summary,
 		};
+	}
+
+	async #callBeforePhase(role: LoopRole, loop: LoopSnapshot, options?: IterationRunOptions): Promise<void> {
+		if (!options?.onBeforePhase) return;
+		try {
+			await options.onBeforePhase(role, loop);
+		} catch (err) {
+			logger.error("onBeforePhase hook error", { role, loopId: loop.id, error: String(err) });
+		}
 	}
 }

@@ -4,6 +4,7 @@
 ;; Designed to be loaded from mcp-server-emacs-tools.el.
 ;;
 ;; Vendored packages (stripped of interactive UI):
+;;   - s.el        (string manipulation, required by ts.el)
 ;;   - dash.el      (list manipulation)
 ;;   - ts.el        (timestamp library)
 ;;   - compat.el    (compatibility shims for Emacs 29+)
@@ -18,6 +19,7 @@
   (when vendor-dir
     (add-to-list 'load-path vendor-dir)))
 
+(require 's)
 (require 'dash)
 (require 'ts)
 (require 'compat nil t)  ;; optional shim — Emacs 30 may not need it
