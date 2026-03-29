@@ -1,0 +1,96 @@
+#+TITLE: formatOrgResult JSONstringify fallback pollutes LLM context
+#+STATE: DONE
+#+SESSION_ID: 14a63493537cca88
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-00-37-453Z_14a63493537cca88.jsonl]]
+#+CUSTOM_ID: BUG-016-formatorgresult-json-stringify-fallback
+#+EFFORT: 30m
+#+PRIORITY: #C
+#+LAYER: tool
+
+NOTE [2026-03-29]: Added mutation result and error result branches before JSON.stringify fallback. 5/5 tests pass in packages/coding-agent/test/tools/org-format-result.test.ts.
+
+* Problem
+In =packages/coding-agent/src/tools/org.ts=, the =formatOrgResult= function has a fallback
+path (line 337):
+
+#+begin_src typescript
+return JSON.stringify(result, null, 2);
+#+end_src
+
+This serializes create/update/set/note results as JSON. The JSON output contains =\n= escapes
+for any newlines in string values, which the LLM may echo back in subsequent tool calls.
+
+While not the primary cause of the =\n= bug (that's the prompt example), this reinforces the
+pattern: the LLM sees =\n= in tool results and uses the same pattern in its responses.
+
+* Tests (write FIRST)
+Test file: =packages/coding-agent/test/tools/org-format-result.test.ts=
+
+Write these tests before implementation. They test the =formatOrgResult= function directly.
+
+** Scenarios
+1. Mutation success result produces plain text (not JSON):
+   - Input: ={ success: true, id: "FEAT-001-add-auth", updated: ["body"], file: "/path/to/file.org" }=
+   - Output must NOT start with ={= (not JSON)
+   - Output must contain =id: FEAT-001-add-auth=
+   - Output must contain =updated: body=
+   - Output must contain =file:= with the path
+
+2. Query result still uses org-mode text (no change):
+   - Input: ={ items: [...], total: 5 }=
+   - Output is org-mode formatted (existing behavior, no regression)
+
+3. Single-item get result still uses org-mode text (no change):
+   - Input: ={ item: { id: "...", title: "...", state: "ITEM", ... } }=
+   - Output is org-mode formatted (existing behavior, no regression)
+
+4. Section update with fileContent returns raw content (no change):
+   - Input: ={ success: true, fileContent: "..." }=
+   - Output is the raw file content (existing behavior, no regression)
+
+5. Error result produces readable text:
+   - Input: ={ error: true, message: "Item not found" }=
+   - Output contains the error message, not raw JSON
+
+6. Unknown shape falls through to JSON (last resort):
+   - Input: ={ unexpected: "data" }=
+   - Output is JSON.stringify (acceptable fallback)
+
+* Implementation
+** Target file
+=packages/coding-agent/src/tools/org.ts= — =formatOrgResult= function (line ~307)
+
+** Steps
+Add a new branch before the =JSON.stringify= fallback that handles mutation results:
+
+#+begin_src typescript
+// Mutation results (create, update, set, note)
+if (typeof result === "object" && result !== null && "success" in result) {
+  const r = result as Record<string, unknown>;
+  const parts: string[] = [];
+  if (r.id) parts.push(`id: ${r.id}`);
+  if (r.success) parts.push("success: true");
+  if (Array.isArray(r.updated)) parts.push(`updated: ${r.updated.join(", ")}`);
+  if (typeof r.file === "string") parts.push(`file: ${r.file}`);
+  if (typeof r.section === "string") parts.push(`section: ${r.section}`);
+  if (typeof r.note === "string") parts.push(`note: ${r.note}`);
+  return parts.join("\n");
+}
+
+// Error results
+if (typeof result === "object" && result !== null && "error" in result) {
+  const r = result as Record<string, unknown>;
+  return `error: ${r.message ?? "unknown"}${r.code ? ` (${r.code})` : ""}`;
+}
+#+end_src
+
+Keep the =JSON.stringify= fallback only for truly unknown shapes.
+
+** Edge cases
+- The =fileContent= branch (section updates) already returns raw file content — unchanged
+- The =item= branch already returns org-mode text — unchanged
+- Only the fallback path changes
+
+* Verification
+- All tests in =packages/coding-agent/test/tools/org-format-result.test.ts= pass
+- =bun check:ts= passes

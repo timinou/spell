@@ -1,0 +1,62 @@
+#+TITLE: Literal n in org body from LLM tool calls
+#+STATE: DONE
+#+SESSION_ID: 14a63493537cca88
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-00-37-453Z_14a63493537cca88.jsonl]]
+#+CUSTOM_ID: BUG-013-literal-n-in-org-body-from-llm-tool-call
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: tool
+
+NOTE [2026-03-29]: Implemented normalizeOrgBody in packages/org/src/tool.ts. Applied to body, append, and note args in execute dispatcher. 7/7 tests pass in packages/org/test/body-normalization.test.ts.
+
+* Problem
+When the LLM generates =org update= (or =org create=) tool calls with multi-line body text,
+it sometimes produces literal =\n= characters (JSON =\\n=) instead of actual newlines. This
+causes the org file to contain the two-character sequence =\n= as text rather than line breaks.
+
+The issue is especially prevalent during section updates after Momus review, where the LLM
+revises plan items. The prompt example at line 67 of =plan-mode-active.md= shows the body
+as a single-line string with =\n= separators, which the LLM mimics and then double-escapes
+in JSON.
+
+* Tests (write FIRST)
+Test file: =packages/org/test/body-normalization.test.ts=
+
+Write these tests before any implementation. They should import the normalization function
+and the tool's =cmdCreate= / =cmdUpdate= paths.
+
+** Scenarios
+1. Literal =\n= converted: input ="line1\\nline2"= (string containing backslash+n) produces ="line1\nline2"= (string with real newline)
+2. Literal =\t= converted: input ="col1\\tcol2"= produces ="col1\tcol2"= (real tab)
+3. Double =\\n\\n= (paragraph break): input ="para1\\n\\npara2"= produces ="para1\n\npara2"= (two real newlines)
+4. Already-real newlines pass through: input ="line1\nline2"= (already real newline) stays ="line1\nline2"=
+5. Mixed: input ="real\nand\\nliteral"= produces ="real\nand\nliteral"=
+6. Empty string passes through: =""= stays =""=
+7. Undefined/null passes through: =undefined= stays =undefined=
+8. End-to-end via tool: call =cmdCreate= with body containing literal =\n=, read the written file, verify real newlines in file content
+9. End-to-end section update: call =cmdUpdate= with =section= + =body= containing literal =\n=, read file, verify real newlines
+
+* Implementation
+** Target file
+=packages/org/src/tool.ts= — in the top-level =execute= dispatcher (before =cmdCreate= and
+=cmdUpdate= consume the args), normalize the =body= and =append= string fields.
+
+** Steps
+1. Create a =normalizeOrgBody(text: string): string= function that replaces literal =\n=
+   (the two-character sequence backslash+n) with actual newline characters. Also handle =\t=
+   to real tab.
+2. Call it on =args.body= and =args.append= before dispatching to =cmdCreate= / =cmdUpdate= /
+   section-update paths.
+3. By the time the tool receives the argument, JSON parsing is done. The literal =\n= is
+   genuinely the two characters =\= + =n= in the string value.
+
+** Edge cases
+- Body might contain code blocks with intentional =\n= text — unlikely in org plan bodies
+  but theoretically possible. Accept the risk: plan bodies never contain code literals.
+- Empty body or =undefined= body must pass through unchanged.
+- The normalization must happen before ANY consumer sees the args (both Emacs and file-based
+  paths).
+
+* Verification
+- All tests in =packages/org/test/body-normalization.test.ts= pass
+- =bun test packages/org/test/= passes with no regressions

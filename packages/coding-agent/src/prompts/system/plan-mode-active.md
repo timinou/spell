@@ -64,7 +64,7 @@ org create -> {
   category: "{{planCategory}}",
   title: "Auth Initiative",
   state: "INIT",
-  body: "* Context\n...\n\n* Verification\n- Run focused auth checks\n- Capture required UI artifacts\n\n* Execution Manifest\n1. [[id:FEAT-001-add-auth-api]] (depends: none, effort: 2h)\n2. [[id:BUG-001-fix-token-refresh]] (depends: FEAT-001-add-auth-api, effort: 30m)"
+  body: "<org body with * Context, * Verification, * Execution Manifest headings and [[id:...]] links>"
 }
 -> returns PLAN-001-auth-initiative
 

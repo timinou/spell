@@ -85,6 +85,16 @@ async function buildMutationResponse(
 	return response;
 }
 
+/**
+ * Normalize literal escape sequences that LLMs produce in body text.
+ * By the time the tool receives args, JSON parsing is done — so literal
+ * `\n` is genuinely the two characters `\` + `n` in the string value.
+ */
+export function normalizeOrgBody(text: string | undefined): string | undefined {
+	if (text === undefined) return undefined;
+	return text.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+}
+
 function isToolErrorResult(result: unknown): result is Record<string, unknown> & { error: true; code?: string } {
 	if (typeof result !== "object" || result === null || !("error" in result)) {
 		return false;
@@ -786,7 +796,7 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 						category: cat,
 						state: args.state as string | undefined,
 						properties: args.properties as Record<string, string> | undefined,
-						body: args.body as string | undefined,
+						body: normalizeOrgBody(args.body as string | undefined),
 						file: args.file as string | undefined,
 					});
 				}
@@ -817,8 +827,8 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 						id,
 						state: args.state as string | undefined,
 						note: args.note as string | undefined,
-						body: args.body as string | undefined,
-						append: args.append as string | undefined,
+						body: normalizeOrgBody(args.body as string | undefined),
+						append: normalizeOrgBody(args.append as string | undefined),
 						title: args.title as string | undefined,
 						file: args.file as string | undefined,
 						section: args.section as string | undefined,
@@ -828,7 +838,7 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 
 				case "note": {
 					const id = args.id as string | undefined;
-					const note = args.note as string | undefined;
+					const note = normalizeOrgBody(args.note as string | undefined);
 					if (!id) return { error: true, message: "note requires id" };
 					if (!note) return { error: true, message: "note requires note" };
 					return cmdNote(ctx, {

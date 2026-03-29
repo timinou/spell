@@ -137,16 +137,16 @@ Old plan context.
       (should (equal "ITEM_NOT_FOUND" (cdr (assoc 'code result))))
       (should (equal before after)))))
 
-(ert-deftest org-edit-section-test/replace-preserves-nested-heading-in-target-section ()
-  "Replacing a section body preserves nested headings beneath that section."
+(ert-deftest org-edit-section-test/replace-removes-nested-headings-in-target-section ()
+  "Replacing a section body removes nested headings beneath that section."
   (org-edit-section-test--with-org-file
       org-edit-section-test--fixture
     (org-tasks-edit-section test-file "FEAT-004-section-edits" "Details" "Updated details." "replace")
     (let ((contents (org-edit-section-test--read-file test-file)))
       (should (string-match-p "Updated details\\." contents))
       (should-not (string-match-p "Details line 1\\." contents))
-      (should (string-match-p "\\*\\*\\* Nested detail" contents))
-      (should (string-match-p "Nested text\\." contents)))))
+      (should-not (string-match-p "\\*\\*\\* Nested detail" contents))
+      (should-not (string-match-p "Nested text\\." contents)))))
 
 (ert-deftest org-edit-section-test/append-to-empty-section-inserts-content ()
   "Appending to an empty section inserts content without mutating sibling section text." 
@@ -167,6 +167,80 @@ Old plan context.
       (should (string-match-p "First-only update\\." contents))
       (should (string-match-p "Second summary content\\." contents))
       (should-not (string-match-p "\\*\\* Summary\\nOld summary\\." contents)))))
+
+(defconst org-edit-section-test--subheading-fixture
+  "* ITEM FEAT-005-subheading-replace
+:PROPERTIES:
+:CUSTOM_ID: FEAT-005-subheading-replace
+:EFFORT: 1h
+:END:
+
+** Context
+Old context text.
+
+*** Problem
+Old problem description.
+
+*** Approach
+Old approach text.
+
+** Verification
+- Existing check
+"
+  "Fixture with sub-headings under a section for replace tests.")
+
+(ert-deftest org-edit-section-test/replace-section-with-subheadings-no-duplication ()
+  "Replace mode replaces the entire section including sub-headings."
+  (org-edit-section-test--with-org-file
+      org-edit-section-test--subheading-fixture
+    (org-tasks-edit-section test-file "FEAT-005-subheading-replace" "Context"
+      "New context text.\n\n*** New Problem\nNew problem description.\n\n*** New Approach\nNew approach text.\n"
+      "replace")
+    (let ((contents (org-edit-section-test--read-file test-file)))
+      ;; New content present
+      (should (string-match-p "New context text\\." contents))
+      (should (string-match-p "\\*\\*\\* New Problem" contents))
+      (should (string-match-p "New problem description\\." contents))
+      (should (string-match-p "\\*\\*\\* New Approach" contents))
+      (should (string-match-p "New approach text\\." contents))
+      ;; Old content gone
+      (should-not (string-match-p "Old context text\\." contents))
+      (should-not (string-match-p "Old problem description\\." contents))
+      (should-not (string-match-p "Old approach text\\." contents))
+      ;; Sibling section preserved
+      (should (string-match-p "\\*\\* Verification" contents))
+      (should (string-match-p "- Existing check" contents)))))
+
+(ert-deftest org-edit-section-test/replace-section-different-subheadings ()
+  "Replace mode removes old sub-headings even when new body has different ones."
+  (org-edit-section-test--with-org-file
+      org-edit-section-test--subheading-fixture
+    (org-tasks-edit-section test-file "FEAT-005-subheading-replace" "Context"
+      "Completely new structure.\n\n*** Design\nDesign notes.\n"
+      "replace")
+    (let ((contents (org-edit-section-test--read-file test-file)))
+      ;; New sub-heading present
+      (should (string-match-p "\\*\\*\\* Design" contents))
+      (should (string-match-p "Design notes\\." contents))
+      ;; Old sub-headings gone
+      (should-not (string-match-p "\\*\\*\\* Problem" contents))
+      (should-not (string-match-p "\\*\\*\\* Approach" contents)))))
+
+(ert-deftest org-edit-section-test/append-preserves-subheadings ()
+  "Append mode still inserts before sub-headings (no regression)."
+  (org-edit-section-test--with-org-file
+      org-edit-section-test--subheading-fixture
+    (org-tasks-edit-section test-file "FEAT-005-subheading-replace" "Context"
+      "Appended context."
+      "append")
+    (let ((contents (org-edit-section-test--read-file test-file)))
+      ;; Old content preserved
+      (should (string-match-p "Old context text\\." contents))
+      ;; Appended content present
+      (should (string-match-p "Appended context\\." contents))
+      ;; Sub-headings preserved
+      (should (string-match-p "\\*\\*\\* Problem" contents))
+      (should (string-match-p "Old problem description\\." contents)))))
 
 (provide 'org-edit-section-test)
 

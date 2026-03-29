@@ -1,0 +1,120 @@
+#+TITLE: Fix literal n corruption in org plan bodies
+#+STATE: DONE
+#+SESSION_ID: 14a63493537cca88
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-00-37-453Z_14a63493537cca88.jsonl]]
+#+CUSTOM_ID: PLAN-024-fix-literal-n-corruption-in-org-plan-bod
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+* Initial Message
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-djinn/2026-03-29T19-33-09-232Z_14a612d27c1c32e4.jsonl
+ ID: 14a612d27c1c32e4
+
+
+In that session and in a few others, running momus leads to \n\n being added instead of new lines. Can you trace why?
+
+* Context
+
+** Problem
+When the LLM uses =org update= with =section= to revise plan items (especially after Momus
+review), the body parameter contains literal =\n= characters instead of actual newlines. This
+produces org files with =\n= text on a single line instead of properly formatted multi-line
+content.
+
+Two independent bugs compound to create the observed behavior:
+
+1. *LLM generates literal =\n= in JSON tool call arguments* — The plan-mode prompt example
+   (line 67 of =plan-mode-active.md=) shows the body as a single-line string with =\n=
+   separators. The LLM mimics this pattern and double-escapes the =\n= in JSON, producing
+   literal backslash-n in the string value. The =formatOrgResult= fallback using
+   =JSON.stringify= reinforces this pattern in tool results.
+
+2. *Emacs section edit does not replace sub-headings* — The =org-tasks--edit-section-headline=
+   function in replace mode only deletes text before the first sub-heading, then inserts the
+   new body. When the new body contains sub-headings (which it always does for plan sections),
+   they get inserted before the existing sub-headings, creating duplication. Combined with
+   Bug 1 (literal =\n=), the entire new body becomes a single long line with =\n= text
+   followed by the original properly-formatted sub-headings.
+
+** Approach
+Four targeted fixes, ordered by impact:
+
+1. *Body normalization in org tool* (critical) — Convert literal =\n= / =\t= to real newlines/tabs
+   before any consumer sees the args.
+2. *Section edit full replace* (critical) — In replace mode, delete the entire section content
+   including sub-headings, not just the preamble.
+3. *Prompt example cleanup* (preventive) — Remove =\n= from the body example in the plan-mode
+   prompt.
+4. *formatOrgResult cleanup* (secondary) — Replace JSON.stringify fallback with human-readable text.
+
+** Key files
+- =packages/org/src/tool.ts= — org tool command dispatcher (body normalization target)
+- =packages/org/elisp/org-tasks.el= — Emacs section editor (line ~626)
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — plan-mode prompt (line ~67)
+- =packages/coding-agent/src/tools/org.ts= — =formatOrgResult= function (line ~307)
+
+** Session evidence
+Session =14a612d27c1c32e4= lines 181, 193, 195: =org update= calls with =section= have =\\n=
+in the JSONL (literal backslash-n after JSON parsing). Line 211: =org get= result shows
+duplicated content — corrupted single-line version + original properly-formatted version.
+
+* Verification
+TDD sequencing: for each item, write failing tests first, then implement until green.
+
+** Test suites
+- =bun test packages/org/test/body-normalization.test.ts= — literal =\n= normalization (BUG-013)
+- Emacs tests in =packages/org/elisp/test/org-edit-section-test.el= — sub-heading replacement (BUG-014)
+- =bun test packages/coding-agent/test/prompts/plan-mode-prompt.test.ts= — prompt =\n= guard (BUG-015)
+- =bun test packages/coding-agent/test/tools/org-format-result.test.ts= — result formatting (BUG-016)
+
+** Full regression
+- =bun test packages/org/test/= passes
+- =bun check:ts= passes for =packages/coding-agent= and =packages/org=
+
+** Manual smoke tests
+- Create a plan item with body containing literal =\n=, verify the file has real newlines
+- Update a section that has sub-headings, verify old sub-headings are fully replaced (no duplication)
+* Execution Manifest
+
+** Phase 1: Critical fixes (parallel — independent packages)
+1. [[id:BUG-013-literal-n-in-org-body-from-llm-tool-call]] (depends: none, effort: 1h)
+   - Body normalization in =packages/org/src/tool.ts=
+   - Add test in =packages/org/test/=
+2. [[id:BUG-014-section-edit-replace-does-not-replace-su]] (depends: none, effort: 1h)
+   - Emacs section edit fix in =packages/org/elisp/org-tasks.el=
+   - Add test in =packages/org/elisp/test/org-edit-section-test.el=
+
+** Phase 2: Preventive fixes (parallel — independent files)
+3. [[id:BUG-015-plan-mode-prompt-example-teaches-literal]] (depends: none, effort: 30m)
+   - Prompt example in =packages/coding-agent/src/prompts/system/plan-mode-active.md=
+4. [[id:BUG-016-formatorgresult-json-stringify-fallback]] (depends: none, effort: 30m)
+   - =formatOrgResult= in =packages/coding-agent/src/tools/org.ts=
+
+** Total effort: ~3h
+** All items in Phase 1 and Phase 2 are independent and can execute in parallel
+
+** Completion [2026-03-29]
+
+*** Verification
+- =bun test packages/org/test/body-normalization.test.ts= — 7/7 pass
+- =bun test packages/coding-agent/test/tools/org-format-result.test.ts= — 5/5 pass
+- Emacs tests: =emacs --batch -l org-tasks.el -l test/org-edit-section-test.el -f ert-run-tests-batch-and-exit= — 11/11 pass
+- =bun test packages/org/test/= — 210/210 pass (full regression)
+- =tsgo -p tsconfig.json --noEmit= on =packages/org= — clean
+- =tsgo -p tsconfig.json --noEmit= on =packages/coding-agent= — 1 pre-existing error in =todo-reminder.ts= (unrelated)
+- =biome check= on all changed files — clean after formatting
+- Manual review: line 67 of =plan-mode-active.md= no longer contains =\\n= in body example
+
+*** Artifacts
+- =packages/org/src/tool.ts= — =normalizeOrgBody()= function added (BUG-013)
+- =packages/org/test/body-normalization.test.ts= — new test file (BUG-013)
+- =packages/org/elisp/org-tasks.el= — =body-end= computation fixed for replace mode (BUG-014)
+- =packages/org/elisp/test/org-edit-section-test.el= — 3 new tests, 1 renamed test (BUG-014)
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — body example cleaned (BUG-015)
+- =packages/coding-agent/src/tools/org.ts= — =formatOrgResult= mutation/error branches (BUG-016)
+- =packages/coding-agent/test/tools/org-format-result.test.ts= — new test file (BUG-016)
+
+*** Deviations
+- BUG-014: existing test =replace-preserves-nested-heading-in-target-section= was renamed to =replace-removes-nested-headings-in-target-section= and assertions inverted to match the corrected behavior (replace mode now removes all section content including sub-headings)
+- BUG-015: no separate test file was created since this is a static prompt change; manual review confirmed the fix"

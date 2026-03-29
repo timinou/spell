@@ -1,0 +1,74 @@
+#+TITLE: Plan-mode prompt example teaches literal n in body
+#+STATE: DONE
+#+SESSION_ID: 14a63493537cca88
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-00-37-453Z_14a63493537cca88.jsonl]]
+#+CUSTOM_ID: BUG-015-plan-mode-prompt-example-teaches-literal
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: prompt
+
+NOTE [2026-03-29]: Replaced literal \\n body example on line 67 of plan-mode-active.md with descriptive placeholder.
+
+* Problem
+Line 67 of =packages/coding-agent/src/prompts/system/plan-mode-active.md= shows the org create
+example with the body as a single-line JSON string containing =\n= separators:
+
+#+begin_example
+body: "* Context\n...\n\n* Verification\n- Run focused auth checks\n..."
+#+end_example
+
+The LLM interprets this as "use =\n= characters in body strings" and then double-escapes them
+in JSON tool calls, producing literal backslash-n in the body. This is the primary trigger
+for [[id:BUG-013-literal-n-in-org-body-from-llm-tool-call]].
+
+* Tests (write FIRST)
+No unit test — this is a prompt-only change. Verification is manual review.
+
+However, add a grep-based assertion to an existing or new test:
+
+Test file: =packages/coding-agent/test/prompts/plan-mode-prompt.test.ts=
+
+** Scenarios
+1. Plan-mode prompt does not contain =\n= inside a body example string:
+   - Load =plan-mode-active.md= as text
+   - Grep for pattern: =body:.*".*\\n.*"= (body parameter with escaped newlines in a quoted string)
+   - Assert no matches — the example must not teach =\n= as body content
+
+* Implementation
+** Target file
+=packages/coding-agent/src/prompts/system/plan-mode-active.md= — the example flow section
+(around line 56-72)
+
+** Steps
+Replace the single-line body example. Recommended approach — truncate the body:
+
+Before:
+#+begin_example
+org create -> {
+  category: "plans",
+  title: "Auth Initiative",
+  state: "INIT",
+  body: "* Context\n...\n\n* Verification\n- Run focused auth checks\n- Capture required UI artifacts\n\n* Execution Manifest\n1. [[id:FEAT-001-add-auth-api]] (depends: none, effort: 2h)\n2. [[id:BUG-001-fix-token-refresh]] (depends: FEAT-001-add-auth-api, effort: 30m)"
+}
+#+end_example
+
+After:
+#+begin_example
+org create -> {
+  category: "plans",
+  title: "Auth Initiative",
+  state: "INIT",
+  body: "<org body with * Context, * Verification, * Execution Manifest headings and [[id:...]] links>"
+}
+#+end_example
+
+** Edge cases
+- The example is inside a Handlebars template — the replacement must not introduce Handlebars
+  syntax ({{}}) that would be interpreted
+- Check the system prompt injected at the start of this session (it includes the rendered
+  template) — the same =\n= example appears there too
+
+* Verification
+- =bun check:ts= passes
+- Test in =packages/coding-agent/test/prompts/plan-mode-prompt.test.ts= passes
+- Manual review: the rendered prompt no longer contains =\n= in the body field

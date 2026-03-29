@@ -1,0 +1,105 @@
+#+TITLE: Section edit replace does not replace sub-headings
+#+STATE: DONE
+#+SESSION_ID: 14a63493537cca88
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-00-37-453Z_14a63493537cca88.jsonl]]
+#+CUSTOM_ID: BUG-014-section-edit-replace-does-not-replace-su
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: tool
+
+NOTE [2026-03-29]: Fixed body-end computation in org-tasks--edit-section-headline to use section-contents-end in replace mode. 11/11 Emacs tests pass including 3 new tests for sub-heading replacement.
+
+* Problem
+The Emacs =org-tasks--edit-section-headline= function in replace mode only deletes text
+before the first sub-heading, then inserts the new body. If the new body contains sub-headings
+(e.g. =** Problem=, =** Approach=), they are inserted before the existing sub-headings,
+creating duplication.
+
+Example: replacing =* Context= section body that has =** Problem= / =** Approach= sub-headings:
+1. Function deletes text between =* Context= heading and =** Problem= sub-heading
+2. Inserts new body (which includes =** Problem= content)
+3. Existing =** Problem= sub-heading remains
+4. Result: duplicated sub-headings
+
+This compounds with [[id:BUG-013-literal-n-in-org-body-from-llm-tool-call]] because when the
+body has literal =\n= instead of real newlines, the sub-headings in the body are not recognized
+as headings — the entire body becomes a single line, making the duplication appear as a long
+line with =\n= text followed by the original sub-headings.
+
+* Tests (write FIRST)
+Test file: =packages/org/elisp/test/org-edit-section-test.el=
+
+Add these test cases to the existing test file. They should fail before the fix is applied.
+
+** Scenarios
+1. Replace section with sub-headings — no duplication:
+   - Input file has =* Context= with =** Problem= and =** Approach= sub-headings
+   - Replace body: new =** Problem= text + new =** Approach= text
+   - Verify: file has only the NEW sub-headings, old ones fully removed
+   - Verify: no duplicated =** Problem= or =** Approach= lines
+
+2. Replace section with sub-headings — different sub-heading set:
+   - Input file has =* Context= with =** Old Section= sub-heading
+   - Replace body: =** New Section= with different content
+   - Verify: =** Old Section= is gone, =** New Section= exists
+
+3. Replace section preserves sibling sections:
+   - Input file has =* Context= (with sub-headings) and =* Verification= (separate section)
+   - Replace =* Context= body
+   - Verify: =* Verification= section is untouched
+
+4. Append mode still appends before sub-headings (no regression):
+   - Input file has =* Context= with =** Problem= sub-heading and body text before it
+   - Append text
+   - Verify: appended text appears after existing body, before =** Problem=
+   - Verify: =** Problem= sub-heading is preserved
+
+5. Replace empty section (no existing sub-headings):
+   - Input file has =* Context= with only plain text body (no sub-headings)
+   - Replace body with new content including =** New Sub=
+   - Verify: new content appears correctly
+
+* Implementation
+** Target file
+=packages/org/elisp/org-tasks.el= — function =org-tasks--edit-section-headline= (line ~626)
+
+** Steps
+In replace mode, change =body-end= to use =section-contents-end= instead of stopping at the
+first sub-heading. This makes replace mode replace the ENTIRE section content (body text +
+sub-headings), not just the text before the first sub-heading.
+
+Current code (line ~636):
+#+begin_src elisp
+(body-end
+  (save-excursion
+    (goto-char body-start)
+    (if (re-search-forward subheading-regexp section-contents-end t)
+        (match-beginning 0)
+      section-contents-end)))
+#+end_src
+
+Fix: compute body-end based on mode:
+#+begin_src elisp
+(body-end
+  (if (string= mode "replace")
+      section-contents-end
+    (save-excursion
+      (goto-char body-start)
+      (if (re-search-forward subheading-regexp section-contents-end t)
+          (match-beginning 0)
+        section-contents-end))))
+#+end_src
+
+For append mode, keep the current behavior (append after body text, before sub-headings).
+
+** Edge cases
+- Section with no sub-headings: =section-contents-end= is already the fallback — no change
+- Section with sub-headings where you only want to edit the text before them: this change
+  makes that impossible in replace mode. Accept this: callers use replace to replace the full
+  section content.
+- Empty new body in replace mode: the delete-region call already handles this
+
+* Verification
+- All tests in =packages/org/elisp/test/org-edit-section-test.el= pass (existing + new)
+- Manual: update a plan section that has =** sub-headings= and verify the result has only
+  the new content, no duplication

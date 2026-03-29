@@ -304,7 +304,7 @@ function previewArgValue(value: unknown, width: number = TRUNCATE_LENGTHS.CONTEN
  * - Single-item get results ({ item }): org-mode text, no budget.
  * - Everything else (create, update, dashboard, etc.): JSON.
  */
-function formatOrgResult(result: unknown): string {
+export function formatOrgResult(result: unknown): string {
 	if (
 		typeof result === "object" &&
 		result !== null &&
@@ -332,6 +332,26 @@ function formatOrgResult(result: unknown): string {
 	) {
 		const item = (result as { item: OrgItem }).item;
 		return renderItemOrg(item, true, Infinity);
+	}
+
+	// Mutation results (create, update, set, note)
+	if (typeof result === "object" && result !== null && "success" in result) {
+		const r = result as Record<string, unknown>;
+		const parts: string[] = [];
+		if (r.success) parts.push("success");
+		if (r.id) parts.push(`id: ${r.id}`);
+		if (Array.isArray(r.updated)) parts.push(`updated: ${(r.updated as string[]).join(", ")}`);
+		if (typeof r.file === "string") parts.push(`file: ${r.file}`);
+		if (typeof r.section === "string") parts.push(`section: ${r.section}`);
+		if (typeof r.state === "string") parts.push(`state: ${r.state}`);
+		if (typeof r.category === "string") parts.push(`category: ${r.category}`);
+		return parts.join("\n");
+	}
+
+	// Error results
+	if (typeof result === "object" && result !== null && "error" in result) {
+		const r = result as Record<string, unknown>;
+		return `error: ${r.message ?? "unknown"}${r.code ? ` (${r.code})` : ""}`;
 	}
 
 	return JSON.stringify(result, null, 2);

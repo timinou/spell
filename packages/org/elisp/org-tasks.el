@@ -634,11 +634,13 @@ Returns JSON string with result."
                                    body-start))
          (subheading-regexp (format "^\\*\\{%d,\\} " (1+ section-level)))
          (body-end
-          (save-excursion
-            (goto-char body-start)
-            (if (re-search-forward subheading-regexp section-contents-end t)
-                (match-beginning 0)
-              section-contents-end)))
+          (if (string= mode "replace")
+              section-contents-end
+            (save-excursion
+              (goto-char body-start)
+              (if (re-search-forward subheading-regexp section-contents-end t)
+                  (match-beginning 0)
+                section-contents-end))))
          (existing-raw (buffer-substring-no-properties body-start body-end))
          (existing-content (string-trim existing-raw)))
     (if (string= mode "replace")
