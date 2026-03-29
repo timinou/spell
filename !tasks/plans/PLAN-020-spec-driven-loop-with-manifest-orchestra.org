@@ -1,11 +1,12 @@
 #+TITLE: Spec-Driven Loop with Manifest Orchestration
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14a61a0e469744fc
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
 #+CUSTOM_ID: PLAN-020-spec-driven-loop-with-manifest-orchestra
 #+EFFORT: 49h
 #+PRIORITY: #A
 #+LAYER: backend
+
 
 * Initial Message
 
@@ -176,3 +177,73 @@ Transform the loop system into a spec-driven orchestration engine across 4 phase
 
 13. [[id:FEAT-063-enhanced-tui-manifest-approval]] (depends: PROJ-002, FEAT-054, FEAT-055, effort: 3h)
     TUI manifest summary, dependency chain, gate overview. Replan diff display. Status command enhancement.
+
+
+** Completion [2026-03-29]
+
+*** Verification
+
+All 4 phases completed. Verification evidence:
+
+**** Type Check
+- =tsgo -p packages/coding-agent= passes clean (0 errors)
+
+**** Lint
+- =biome check packages/coding-agent/src/loop/= passes clean (88 files checked, 0 errors)
+
+**** Tests
+- =bun test packages/coding-agent/test/loop/= — 88 tests pass across 19 files (1361ms)
+- New tests: 29 tests across 3 files (manifest-model, org-depend-parser, ticket-lifecycle)
+- Existing tests: all 59 pre-existing tests continue to pass
+- =kernel-commands.test.ts= updated for prepare/launch API (5 tests pass)
+
+**** Verification Commands Run
+#+begin_src
+tsgo -p packages/coding-agent           # clean
+biome check packages/coding-agent/src/loop/  # 88 files, 0 errors
+bun test packages/coding-agent/test/loop/    # 88 pass, 0 fail
+bun test packages/coding-agent/test/loop/manifest-model.test.ts     # 10 pass
+bun test packages/coding-agent/test/loop/org-depend-parser.test.ts  # 11 pass
+bun test packages/coding-agent/test/loop/ticket-lifecycle.test.ts   # 8 pass
+bun test packages/coding-agent/test/loop/kernel.test.ts             # 7 pass (existing)
+bun test packages/coding-agent/test/loop/kernel-commands.test.ts    # 5 pass (updated)
+#+end_src
+
+*** Artifacts
+
+**** New Source Files (27 files)
+- =packages/coding-agent/src/loop/contracts/enums.ts= — TICKET_STATES, manifestBuilding, onTicketComplete
+- =packages/coding-agent/src/loop/types.ts= — ManifestTicket, ManifestSnapshot, LoopPromptContext extensions
+- =packages/coding-agent/src/loop/kernel.ts= — manifest_building state machine
+- =packages/coding-agent/src/loop/loop-manager.ts= — prepare(), launch() methods
+- =packages/coding-agent/src/loop/loop-tools.ts= — LoopPrepareTool, LoopLaunchTool, extended LoopDoneTool
+- =packages/coding-agent/src/loop/ticket-lifecycle.ts= — TicketLifecycleManager
+- =packages/coding-agent/src/loop/prompt-builder.ts= — buildManifestPromptContext
+- =packages/coding-agent/src/loop/ingestion/org-depend.ts= — property parser, dependency graph, topological sort
+- =packages/coding-agent/src/loop/ingestion/metis-builder.ts= — Metis gap analysis input builder
+- =packages/coding-agent/src/loop/ingestion/momus-builder.ts= — Momus validation input builder
+- =packages/coding-agent/src/loop/persistence/manifest-writer.ts= — org file serialization
+- =packages/coding-agent/src/loop/persistence/manifest-reader.ts= — org file parsing
+- =packages/coding-agent/src/loop/gates/ticket-gates.ts= — per-ticket gate derivation
+- =packages/coding-agent/src/loop/gates/trigger.ts= — onTicketComplete trigger
+- =packages/coding-agent/src/loop/git/manifest-drift.ts= — enhanced drift detection + manifest merge
+- =packages/coding-agent/src/loop/tui/manifest-display.ts= — TUI rendering
+- =packages/coding-agent/src/loop/qml/ManifestViewer.qml= — QML canvas viewer
+- =packages/coding-agent/src/loop/prompts/manifest-building-active.md= — system prompt
+- =packages/coding-agent/src/loop/prompts/loop-prepare-tool.md= — tool description
+- =packages/coding-agent/src/loop/prompts/loop-launch-tool.md= — tool description
+- =packages/org/elisp/tools/manifest-predicates.el= — org-ql predicates
+- =packages/org/elisp/tools/manifest-tools.el= — MCP tools
+
+**** Updated Documentation
+- =packages/coding-agent/src/loop/ARCHITECTURE.md= — manifest system section, updated state machine
+- =packages/coding-agent/src/loop/TUTORIAL.md= — loop_prepare/loop_launch workflow
+- =packages/coding-agent/CHANGELOG.md= — breaking changes under [Unreleased]
+
+**** Test Files (3 new)
+- =packages/coding-agent/test/loop/manifest-model.test.ts= — 10 tests
+- =packages/coding-agent/test/loop/org-depend-parser.test.ts= — 11 tests
+- =packages/coding-agent/test/loop/ticket-lifecycle.test.ts= — 8 tests
+
+*** Deviations
+None.

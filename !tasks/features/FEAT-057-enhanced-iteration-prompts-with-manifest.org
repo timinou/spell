@@ -1,5 +1,5 @@
 #+TITLE: Enhanced Iteration Prompts with Manifest Context
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14a61a0e469744fc
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
 #+CUSTOM_ID: FEAT-057-enhanced-iteration-prompts-with-manifest
