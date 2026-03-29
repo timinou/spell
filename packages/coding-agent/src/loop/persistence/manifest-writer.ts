@@ -18,6 +18,11 @@ function renderTicketOrg(ticket: ManifestTicket): string {
 		if (gate.type === "artifact") lines.push(`:GATE_ARTIFACT: ${gate.path}`);
 		if (gate.type === "llm-review") lines.push(`:GATE_LLM: ${gate.criteria}`);
 	}
+	if (ticket.orgItemId) lines.push(`:ORG_ITEM_ID: ${ticket.orgItemId}`);
+	if (ticket.childLoopId) lines.push(`:CHILD_LOOP_ID: ${ticket.childLoopId}`);
+	if (ticket.iterationHistory.length > 0) lines.push(`:ITERATION_HISTORY: ${ticket.iterationHistory.join(",")}`);
+	if (ticket.changedFiles.length > 0) lines.push(`:CHANGED_FILES: ${ticket.changedFiles.join("|")}`);
+	if (ticket.findings.length > 0) lines.push(`:FINDINGS: ${ticket.findings.join("|")}`);
 	lines.push(":END:");
 	if (ticket.acceptanceCriteria.length > 0) {
 		lines.push("", "** Acceptance Criteria");

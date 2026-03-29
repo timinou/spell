@@ -1,0 +1,139 @@
+#+TITLE: Drift merge orphans tickets on CUSTOM_ID rename
+#+STATE: DONE
+#+SESSION_ID: 14a637757ed7453b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-06-01-931Z_14a6281492d7450d/32-CreateBug006.jsonl]]
+#+CUSTOM_ID: BUG-010-drift-merge-orphans-tickets-on-custom-id
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: backend
+
+NOTE [2026-03-29]: Added specModified check to detect CUSTOM_ID renames in modified files. 5 test scenarios pass.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal
+Create 6 org items (3 BUG, 3 FEAT) for the manifest system wiring plan, then report back the CUSTOM_IDs.
+
+## Rules
+- Use `org create` for each item
+- Set `state: "ITEM"` for all
+- Include EFFORT, PRIORITY, LAYER properties
+- Return the CUSTOM_ID for each created item
+- Bodies use org heading format (`*`, `**`)
+- TDD sequencing: Tests section comes BEFORE Implementation section, and test file paths + scenarios are defined first so they drive design
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- category: `bugs`
+- title: `Drift merge orphans tickets on CUSTOM_ID rename`
+- state: `ITEM`
+- properties: `{ "EFFORT": "1h", "PRIORITY": "#B", "LAYER": "backend" }`
+- body (org format):
+
+```
+* Scope
+** In-Scope
+- Fix =mergeManifestWithDrift= in =git/manifest-drift.ts= to detect CUSTOM_ID renames in modified (not deleted) spec files
+- Currently, only tickets whose spec file is deleted can be removed. If a file is modified and a CUSTOM_ID is renamed, the old ticket becomes a permanent orphan
+
+** Out-of-Scope
+- Other drift detection changes
+- Manifest persistence wiring
+
+* Tests
+Test file: =packages/coding-agent/test/loop/drift-merge.test.ts=
+
+Write these tests FIRST:
+
+** Scenarios
+1. CUSTOM_ID rename in modified file: ticket =A= (ITEM) has =specPath: "spec.org"=. Drift says =spec.org= is modified. New spec content has =B= but not =A=. After merge: =A= is removed, =B= is added as ITEM
+2. CUSTOM_ID rename with DONE ticket: ticket =A= (DONE) has =specPath: "spec.org"=. Drift says modified. New content has =B= not =A=. After merge: =A= is preserved (DONE), =B= is added
+3. No rename (same IDs in modified file): ticket =A= (ITEM) in modified file, new content still has =A=. After merge: =A= survives, not removed
+4. Multiple renames in same file: =A= and =B= renamed to =C= and =D=. Both non-DONE removed, both new ones added
+5. Deleted file still works: ticket =A= in deleted file, removed as before
+
+* Implementation
+File: =packages/coding-agent/src/loop/git/manifest-drift.ts= lines ~139-154
+
+Current logic:
+#+begin_src typescript
+const specDeleted = ticket.specPath !== undefined && deletedPaths.has(ticket.specPath);
+const idGone = !newIdSet.has(ticket.id) && specDeleted;
+#+end_src
+
+Fix: also check modified files. If a ticket's specPath is in =driftReport.modified= AND the ticket's ID is no longer in =newIdSet=, treat it as removed (unless DONE):
+#+begin_src typescript
+const modifiedPaths = new Set(driftReport.modified);
+const specDeleted = ticket.specPath !== undefined && deletedPaths.has(ticket.specPath);
+const specModified = ticket.specPath !== undefined && modifiedPaths.has(ticket.specPath);
+const idGone = !newIdSet.has(ticket.id) && (specDeleted || specModified);
+#+end_src
+
+* Edge Cases
+- Ticket with no =specPath=: never considered for removal via drift (=specDeleted= and =specModified= are both false)
+- DONE ticket with renamed ID: preserved per existing logic
+- Ticket whose specPath is in both modified and deleted: treated as deleted (deleted takes priority, but the OR handles both)
+
+* Acceptance Criteria
+- [ ] All 5 test scenarios pass
+- [ ] Existing drift/merge behavior preserved for non-rename cases
+- [ ] =tsgo -p packages/coding-agent= clean
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-Scope
+- Fix =mergeManifestWithDrift= in =git/manifest-drift.ts= to detect CUSTOM_ID renames in modified (not deleted) spec files
+- Currently, only tickets whose spec file is deleted can be removed. If a file is modified and a CUSTOM_ID is renamed, the old ticket becomes a permanent orphan
+
+** Out-of-Scope
+- Other drift detection changes
+- Manifest persistence wiring
+
+* Tests
+Test file: =packages/coding-agent/test/loop/drift-merge.test.ts=
+
+Write these tests FIRST:
+
+** Scenarios
+1. CUSTOM_ID rename in modified file: ticket =A= (ITEM) has =specPath: "spec.org"=. Drift says =spec.org= is modified. New spec content has =B= but not =A=. After merge: =A= is removed, =B= is added as ITEM
+2. CUSTOM_ID rename with DONE ticket: ticket =A= (DONE) has =specPath: "spec.org"=. Drift says modified. New content has =B= not =A=. After merge: =A= is preserved (DONE), =B= is added
+3. No rename (same IDs in modified file): ticket =A= (ITEM) in modified file, new content still has =A=. After merge: =A= survives, not removed
+4. Multiple renames in same file: =A= and =B= renamed to =C= and =D=. Both non-DONE removed, both new ones added
+5. Deleted file still works: ticket =A= in deleted file, removed as before
+
+* Implementation
+File: =packages/coding-agent/src/loop/git/manifest-drift.ts= lines ~139-154
+
+Current logic:
+#+begin_src typescript
+const specDeleted = ticket.specPath !== undefined && deletedPaths.has(ticket.specPath);
+const idGone = !newIdSet.has(ticket.id) && specDeleted;
+#+end_src
+
+Fix: also check modified files. If a ticket's specPath is in =driftReport.modified= AND the ticket's ID is no longer in =newIdSet=, treat it as removed (unless DONE):
+#+begin_src typescript
+const modifiedPaths = new Set(driftReport.modified);
+const specDeleted = ticket.specPath !== undefined && deletedPaths.has(ticket.specPath);
+const specModified = ticket.specPath !== undefined && modifiedPaths.has(ticket.specPath);
+const idGone = !newIdSet.has(ticket.id) && (specDeleted || specModified);
+#+end_src
+
+* Edge Cases
+- Ticket with no =specPath=: never considered for removal via drift (=specDeleted= and =specModified= are both false)
+- DONE ticket with renamed ID: preserved per existing logic
+- Ticket whose specPath is in both modified and deleted: treated as deleted (deleted takes priority, but the OR handles both)
+
+* Acceptance Criteria
+- [ ] All 5 test scenarios pass
+- [ ] Existing drift/merge behavior preserved for non-rename cases
+- [ ] =tsgo -p packages/coding-agent= clean

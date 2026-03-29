@@ -35,7 +35,7 @@ describe("LoopDashboardBridge", () => {
 		await bridge.handleControl({ loopId: loop.id, action: "pause" });
 		expect(manager.getLoop(loop.id).state).toBe("paused");
 		await bridge.handleControl({ loopId: loop.id, action: "resume" });
-		expect(manager.getLoop(loop.id).state).toBe("iterating");
+		expect(manager.getLoop(loop.id).state).toBe("planning");
 	});
 
 	it("subscribe emits initial snapshot to callback", async () => {

@@ -1,0 +1,245 @@
+#+TITLE: Ticket completion pipeline in LoopManager
+#+STATE: DONE
+#+SESSION_ID: 14a637757f974541
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-06-01-931Z_14a6281492d7450d/33-CreateFeat064.jsonl]]
+#+CUSTOM_ID: FEAT-074-ticket-completion-pipeline-in-loopmanage
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+
+NOTE [2026-03-29]: Wired TLM into LoopManager.markDone(). Ticket transitions, gate firing, manifest update on snapshot. 6 test scenarios pass.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal
+Create 6 org items (3 BUG, 3 FEAT) for the manifest system wiring plan, then report back the CUSTOM_IDs.
+
+## Rules
+- Use `org create` for each item
+- Set `state: "ITEM"` for all
+- Include EFFORT, PRIORITY, LAYER properties
+- Return the CUSTOM_ID for each created item
+- Bodies use org heading format (`*`, `**`)
+- TDD sequencing: Tests section comes BEFORE Implementation section, and test file paths + scenarios are defined first so they drive design
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- category: `features`
+- title: `Ticket completion pipeline in LoopManager`
+- state: `ITEM`
+- properties: `{ "EFFORT": "3h", "PRIORITY": "#A", "LAYER": "backend" }`
+- body (org format):
+
+```
+* Scope
+** In-Scope
+- Instantiate =TicketLifecycleManager= in =LoopManager= constructor
+- Wire =completedTickets= / =activeTickets= from =markDone()= options into ticket state transitions
+- Fire =onTicketComplete= gate evaluation for each completed ticket
+- Set updated manifest on =LoopSnapshot= via =kernel.updateLoop()= after mutations
+- The kernel stays ticket-ignorant: =LoopDoneOptions= is NOT modified. All ticket logic lives in =LoopManager.markDone()= before calling =kernel.done()=
+
+** Out-of-Scope
+- Manifest persistence to disk (FEAT-065)
+- Prompt wiring (FEAT-066)
+- Ticket gate registration (FEAT-065 — gates must be registered before they can fire)
+
+** Dependencies
+- Requires =TicketLifecycleManager= from =ticket-lifecycle.ts= (exists, tested)
+- Requires =GateEvaluator= with =onTicketComplete= trigger support (exists in =gates/trigger.ts=)
+- Requires =ManifestSnapshot= on =LoopSnapshot= (type exists, population handled by FEAT-065)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/ticket-pipeline.test.ts=
+
+Write these tests FIRST. Use the existing mock harness pattern from =test/loop/kernel-commands.test.ts= (real LoopManager with temp cwd).
+
+** Scenarios
+1. =markDone= with =completedTickets= transitions tickets from DOING to DONE in manifest
+2. =markDone= with =activeTickets= transitions tickets from ITEM to DOING in manifest
+3. Completing ticket A unblocks ticket B (dependency cascade) — B moves from BLOCKED to ITEM
+4. =markDone= without =completedTickets= (legacy path) still works identically to before
+5. =markDone= with =completedTickets= on loop WITHOUT manifest: silently ignores tickets (no crash)
+6. =onTicketComplete= gate fires for each completed ticket (register a simple command gate with =onTicketComplete= trigger, verify it's in gate decisions)
+7. Updated manifest is set on snapshot after mutations (=getLoop()= returns snapshot with updated ticket states)
+
+** Test Setup
+Use real =LoopManager= + =LoopKernel= + =TicketLifecycleManager= + =GateEvaluator=. Mock only persistence I/O (event-log, checkpoint, org-sync) per existing pattern in =test/loop/= directory. Create a loop via =prepare()=, manually set manifest on snapshot via =kernel.updateLoop=, then call =launch()= + =markDone()=.
+
+* Implementation
+File: =packages/coding-agent/src/loop/loop-manager.ts=
+
+** Step 1: Add TLM instance
+#+begin_src typescript
+import { TicketLifecycleManager } from "./ticket-lifecycle";
+// In constructor:
+readonly #ticketLifecycle = new TicketLifecycleManager();
+#+end_src
+
+** Step 2: Wire markDone ticket transitions
+In =markDone()=, BEFORE calling =kernel.done()=:
+#+begin_src typescript
+const snapshot = this.#kernel.getState(loopId);
+if (snapshot.manifest && options.completedTickets?.length) {
+  const manifest = snapshot.manifest;
+  for (const ticketId of options.completedTickets) {
+    try {
+      this.#ticketLifecycle.completeTicket(manifest, ticketId, snapshot.iteration);
+    } catch (err) {
+      logger.warn("Failed to complete ticket", { loopId, ticketId, error: String(err) });
+    }
+  }
+  for (const ticketId of options.activeTickets ?? []) {
+    try {
+      this.#ticketLifecycle.startTicket(manifest, ticketId, snapshot.iteration);
+    } catch (err) {
+      logger.warn("Failed to start ticket", { loopId, ticketId, error: String(err) });
+    }
+  }
+  // Set updated manifest on snapshot
+  this.#kernel.updateLoop(loopId, loop => { loop.manifest = manifest; }, "manifest.tickets_updated", {
+    completed: options.completedTickets,
+    active: options.activeTickets,
+  });
+}
+#+end_src
+
+** Step 3: Fire ticket gates
+After ticket transitions, for each completed ticket, evaluate gates with =ticketCompleted=:
+#+begin_src typescript
+if (snapshot.manifest && options.completedTickets?.length) {
+  for (const ticketId of options.completedTickets) {
+    await this.#evaluator.evaluate(snapshot, {
+      iteration: snapshot.iteration,
+      state: snapshot.state,
+      ticketCompleted: ticketId,
+    }, { cwd: this.#cwd, attemptNumber: 1, evidence: [] });
+  }
+}
+#+end_src
+
+* Edge Cases
+- =completedTickets= contains ID not in manifest: =TLM.completeTicket= throws, caught by try/catch, logged as warning
+- =completedTickets= on loop without manifest: guarded by =if (snapshot.manifest)=
+- Ticket already DONE: =TLM.completeTicket= throws (DONE is terminal), caught and logged
+- Gate evaluation fails: caught by =GateEvaluator= internal error handling, returns fail decision
+
+* Acceptance Criteria
+- [ ] All 7 test scenarios pass
+- [ ] Existing =kernel-commands.test.ts= tests still pass
+- [ ] =TicketLifecycleManager= is instantiated in =LoopManager= constructor
+- [ ] =completedTickets= / =activeTickets= cause real ticket state transitions
+- [ ] =onTicketComplete= gates fire when tickets are completed
+- [ ] =tsgo -p packages/coding-agent= clean
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-Scope
+- Instantiate =TicketLifecycleManager= in =LoopManager= constructor
+- Wire =completedTickets= / =activeTickets= from =markDone()= options into ticket state transitions
+- Fire =onTicketComplete= gate evaluation for each completed ticket
+- Set updated manifest on =LoopSnapshot= via =kernel.updateLoop()= after mutations
+- The kernel stays ticket-ignorant: =LoopDoneOptions= is NOT modified. All ticket logic lives in =LoopManager.markDone()= before calling =kernel.done()=
+
+** Out-of-Scope
+- Manifest persistence to disk (FEAT-065)
+- Prompt wiring (FEAT-066)
+- Ticket gate registration (FEAT-065 — gates must be registered before they can fire)
+
+** Dependencies
+- Requires =TicketLifecycleManager= from =ticket-lifecycle.ts= (exists, tested)
+- Requires =GateEvaluator= with =onTicketComplete= trigger support (exists in =gates/trigger.ts=)
+- Requires =ManifestSnapshot= on =LoopSnapshot= (type exists, population handled by FEAT-065)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/ticket-pipeline.test.ts=
+
+Write these tests FIRST. Use the existing mock harness pattern from =test/loop/kernel-commands.test.ts= (real LoopManager with temp cwd).
+
+** Scenarios
+1. =markDone= with =completedTickets= transitions tickets from DOING to DONE in manifest
+2. =markDone= with =activeTickets= transitions tickets from ITEM to DOING in manifest
+3. Completing ticket A unblocks ticket B (dependency cascade) — B moves from BLOCKED to ITEM
+4. =markDone= without =completedTickets= (legacy path) still works identically to before
+5. =markDone= with =completedTickets= on loop WITHOUT manifest: silently ignores tickets (no crash)
+6. =onTicketComplete= gate fires for each completed ticket (register a simple command gate with =onTicketComplete= trigger, verify it's in gate decisions)
+7. Updated manifest is set on snapshot after mutations (=getLoop()= returns snapshot with updated ticket states)
+
+** Test Setup
+Use real =LoopManager= + =LoopKernel= + =TicketLifecycleManager= + =GateEvaluator=. Mock only persistence I/O (event-log, checkpoint, org-sync) per existing pattern in =test/loop/= directory. Create a loop via =prepare()=, manually set manifest on snapshot via =kernel.updateLoop=, then call =launch()= + =markDone()=.
+
+* Implementation
+File: =packages/coding-agent/src/loop/loop-manager.ts=
+
+** Step 1: Add TLM instance
+#+begin_src typescript
+import { TicketLifecycleManager } from "./ticket-lifecycle";
+// In constructor:
+readonly #ticketLifecycle = new TicketLifecycleManager();
+#+end_src
+
+** Step 2: Wire markDone ticket transitions
+In =markDone()=, BEFORE calling =kernel.done()=:
+#+begin_src typescript
+const snapshot = this.#kernel.getState(loopId);
+if (snapshot.manifest && options.completedTickets?.length) {
+  const manifest = snapshot.manifest;
+  for (const ticketId of options.completedTickets) {
+    try {
+      this.#ticketLifecycle.completeTicket(manifest, ticketId, snapshot.iteration);
+    } catch (err) {
+      logger.warn("Failed to complete ticket", { loopId, ticketId, error: String(err) });
+    }
+  }
+  for (const ticketId of options.activeTickets ?? []) {
+    try {
+      this.#ticketLifecycle.startTicket(manifest, ticketId, snapshot.iteration);
+    } catch (err) {
+      logger.warn("Failed to start ticket", { loopId, ticketId, error: String(err) });
+    }
+  }
+  // Set updated manifest on snapshot
+  this.#kernel.updateLoop(loopId, loop => { loop.manifest = manifest; }, "manifest.tickets_updated", {
+    completed: options.completedTickets,
+    active: options.activeTickets,
+  });
+}
+#+end_src
+
+** Step 3: Fire ticket gates
+After ticket transitions, for each completed ticket, evaluate gates with =ticketCompleted=:
+#+begin_src typescript
+if (snapshot.manifest && options.completedTickets?.length) {
+  for (const ticketId of options.completedTickets) {
+    await this.#evaluator.evaluate(snapshot, {
+      iteration: snapshot.iteration,
+      state: snapshot.state,
+      ticketCompleted: ticketId,
+    }, { cwd: this.#cwd, attemptNumber: 1, evidence: [] });
+  }
+}
+#+end_src
+
+* Edge Cases
+- =completedTickets= contains ID not in manifest: =TLM.completeTicket= throws, caught by try/catch, logged as warning
+- =completedTickets= on loop without manifest: guarded by =if (snapshot.manifest)=
+- Ticket already DONE: =TLM.completeTicket= throws (DONE is terminal), caught and logged
+- Gate evaluation fails: caught by =GateEvaluator= internal error handling, returns fail decision
+
+* Acceptance Criteria
+- [ ] All 7 test scenarios pass
+- [ ] Existing =kernel-commands.test.ts= tests still pass
+- [ ] =TicketLifecycleManager= is instantiated in =LoopManager= constructor
+- [ ] =completedTickets= / =activeTickets= cause real ticket state transitions
+- [ ] =onTicketComplete= gates fire when tickets are completed
+- [ ] =tsgo -p packages/coding-agent= clean

@@ -1,6 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { HandoffArtifact, LoopRole } from "../contracts";
-import { buildIterationPrompt, buildReflectionPrompt } from "../prompt-builder";
+import { buildIterationPrompt, buildManifestPromptContext, buildReflectionPrompt } from "../prompt-builder";
 import type { LoopSnapshot } from "../types";
 import { createHandoffArtifact } from "./handoff";
 
@@ -33,6 +33,7 @@ export class PhaseCoordinator {
 		options?: IterationRunOptions,
 	): Promise<IterationRunResult> {
 		await this.#callBeforePhase("plan", loop, options);
+		const manifestCtx = buildManifestPromptContext(loop);
 		const planPrompt = buildIterationPrompt({
 			loopId: loop.id,
 			name: loop.name,
@@ -43,6 +44,7 @@ export class PhaseCoordinator {
 			changedFiles: loop.changedFiles,
 			openFindings: loop.openFindings,
 			pendingGates: loop.pendingGates,
+			...manifestCtx,
 		});
 		const plan = await responder.run("plan", planPrompt, loop);
 		const planToCode = createHandoffArtifact({
@@ -71,6 +73,7 @@ export class PhaseCoordinator {
 			changedFiles: code.changedFiles ?? [],
 			openFindings: code.findings ?? [],
 			pendingGates: loop.pendingGates,
+			...manifestCtx,
 		});
 		const review = await responder.run("review", reviewPrompt, loop);
 		const reviewToPlan = createHandoffArtifact({

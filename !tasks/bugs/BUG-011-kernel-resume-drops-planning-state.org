@@ -1,0 +1,187 @@
+#+TITLE: Kernel resume drops planning state
+#+STATE: DONE
+#+SESSION_ID: 14a637757f17453d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-06-01-931Z_14a6281492d7450d/30-CreateBug004.jsonl]]
+#+CUSTOM_ID: BUG-011-kernel-resume-drops-planning-state
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: backend
+
+NOTE [2026-03-29]: Fixed resume() to use ALLOWED_TRANSITIONS[paused] lookup. 5 test scenarios pass.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal
+Create 6 org items (3 BUG, 3 FEAT) for the manifest system wiring plan, then report back the CUSTOM_IDs.
+
+## Rules
+- Use `org create` for each item
+- Set `state: "ITEM"` for all
+- Include EFFORT, PRIORITY, LAYER properties
+- Return the CUSTOM_ID for each created item
+- Bodies use org heading format (`*`, `**`)
+- TDD sequencing: Tests section comes BEFORE Implementation section, and test file paths + scenarios are defined first so they drive design
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- category: `bugs`
+- title: `Kernel resume drops planning state`
+- state: `ITEM`
+- properties: `{ "EFFORT": "1h", "PRIORITY": "#A", "LAYER": "backend" }`
+- body (org format):
+
+```
+* Scope
+** In-Scope
+- Fix =resume()= in =kernel.ts= to restore the correct pre-pause state for ALL valid states, not just =manifest_building=
+- Currently only checks =stateBeforePause === manifestBuilding=, falls through to =iterating= for everything else
+- A loop paused from =planning= (before first iteration) incorrectly resumes to =iterating=, skipping planning
+
+** Out-of-Scope
+- Other state machine changes
+- LoopManager changes
+
+* Tests
+Test file: =packages/coding-agent/test/loop/kernel-resume.test.ts=
+
+Write these tests FIRST (they will fail until implementation):
+
+** Scenarios
+1. Pause from =planning= -> resume returns to =planning= (currently broken: returns =iterating=)
+2. Pause from =iterating= -> resume returns to =iterating= (should still work)
+3. Pause from =manifest_building= -> resume returns to =manifest_building= (should still work)
+4. Pause from =reflecting= -> resume returns to =reflecting= (currently broken: returns =iterating=). Note: =reflecting= is NOT in the paused allowed targets, so this test verifies it falls back to =iterating= correctly. Actually check =ALLOWED_TRANSITIONS[paused]= — it allows: iterating, planning, manifestBuilding, killed, cancelled. So reflecting is NOT a valid resume target. The fix should use =stateBeforePause= only when it's a valid target from =paused=, otherwise fall back to =iterating=.
+5. Pause with no =stateBeforePause= set (legacy snapshots) -> defaults to =iterating=
+
+** Test Pattern
+#+begin_src typescript
+import { describe, expect, it } from "bun:test";
+import { LOOP_STATES, type LoopEvent } from "../../src/loop/contracts";
+import { LoopKernel } from "../../src/loop/kernel";
+
+function createKernel() {
+  const events: LoopEvent[] = [];
+  return { events, kernel: new LoopKernel({ onEvent: e => events.push(e) }) };
+}
+#+end_src
+
+* Implementation
+File: =packages/coding-agent/src/loop/kernel.ts= lines 145-149
+
+Current code:
+#+begin_src typescript
+resume(loopId: string): LoopSnapshot {
+  const loop = this.#registry.get(loopId);
+  const target = loop.stateBeforePause === LOOP_STATES.manifestBuilding
+    ? LOOP_STATES.manifestBuilding
+    : LOOP_STATES.iterating;
+  return this.#transition(loopId, target, {});
+}
+#+end_src
+
+Fix: use =stateBeforePause= directly when it's a valid resume target from =paused=:
+#+begin_src typescript
+resume(loopId: string): LoopSnapshot {
+  const loop = this.#registry.get(loopId);
+  const allowed = ALLOWED_TRANSITIONS[LOOP_STATES.paused];
+  const target = loop.stateBeforePause && allowed.includes(loop.stateBeforePause)
+    ? loop.stateBeforePause
+    : LOOP_STATES.iterating;
+  return this.#transition(loopId, target, {});
+}
+#+end_src
+
+This is a lookup, not a switch. Any state in the paused allowed targets works. States like =reflecting= that aren't valid resume targets fall back to =iterating=.
+
+* Edge Cases
+- Legacy snapshots without =stateBeforePause= field: defaults to =iterating= (safe)
+- =stateBeforePause= set to a terminal state (shouldn't happen, but defensively): falls back to =iterating=
+
+* Acceptance Criteria
+- [ ] All 5 test scenarios pass
+- [ ] Existing =kernel.test.ts= tests still pass (7 tests)
+- [ ] Existing =kernel-commands.test.ts= tests still pass (5 tests)
+- [ ] =tsgo -p packages/coding-agent= clean
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-Scope
+- Fix =resume()= in =kernel.ts= to restore the correct pre-pause state for ALL valid states, not just =manifest_building=
+- Currently only checks =stateBeforePause === manifestBuilding=, falls through to =iterating= for everything else
+- A loop paused from =planning= (before first iteration) incorrectly resumes to =iterating=, skipping planning
+
+** Out-of-Scope
+- Other state machine changes
+- LoopManager changes
+
+* Tests
+Test file: =packages/coding-agent/test/loop/kernel-resume.test.ts=
+
+Write these tests FIRST (they will fail until implementation):
+
+** Scenarios
+1. Pause from =planning= -> resume returns to =planning= (currently broken: returns =iterating=)
+2. Pause from =iterating= -> resume returns to =iterating= (should still work)
+3. Pause from =manifest_building= -> resume returns to =manifest_building= (should still work)
+4. Pause from =reflecting= -> resume returns to =reflecting= (currently broken: returns =iterating=). Note: =reflecting= is NOT in the paused allowed targets, so this test verifies it falls back to =iterating= correctly. Actually check =ALLOWED_TRANSITIONS[paused]= — it allows: iterating, planning, manifestBuilding, killed, cancelled. So reflecting is NOT a valid resume target. The fix should use =stateBeforePause= only when it's a valid target from =paused=, otherwise fall back to =iterating=.
+5. Pause with no =stateBeforePause= set (legacy snapshots) -> defaults to =iterating=
+
+** Test Pattern
+#+begin_src typescript
+import { describe, expect, it } from "bun:test";
+import { LOOP_STATES, type LoopEvent } from "../../src/loop/contracts";
+import { LoopKernel } from "../../src/loop/kernel";
+
+function createKernel() {
+  const events: LoopEvent[] = [];
+  return { events, kernel: new LoopKernel({ onEvent: e => events.push(e) }) };
+}
+#+end_src
+
+* Implementation
+File: =packages/coding-agent/src/loop/kernel.ts= lines 145-149
+
+Current code:
+#+begin_src typescript
+resume(loopId: string): LoopSnapshot {
+  const loop = this.#registry.get(loopId);
+  const target = loop.stateBeforePause === LOOP_STATES.manifestBuilding
+    ? LOOP_STATES.manifestBuilding
+    : LOOP_STATES.iterating;
+  return this.#transition(loopId, target, {});
+}
+#+end_src
+
+Fix: use =stateBeforePause= directly when it's a valid resume target from =paused=:
+#+begin_src typescript
+resume(loopId: string): LoopSnapshot {
+  const loop = this.#registry.get(loopId);
+  const allowed = ALLOWED_TRANSITIONS[LOOP_STATES.paused];
+  const target = loop.stateBeforePause && allowed.includes(loop.stateBeforePause)
+    ? loop.stateBeforePause
+    : LOOP_STATES.iterating;
+  return this.#transition(loopId, target, {});
+}
+#+end_src
+
+This is a lookup, not a switch. Any state in the paused allowed targets works. States like =reflecting= that aren't valid resume targets fall back to =iterating=.
+
+* Edge Cases
+- Legacy snapshots without =stateBeforePause= field: defaults to =iterating= (safe)
+- =stateBeforePause= set to a terminal state (shouldn't happen, but defensively): falls back to =iterating=
+
+* Acceptance Criteria
+- [ ] All 5 test scenarios pass
+- [ ] Existing =kernel.test.ts= tests still pass (7 tests)
+- [ ] Existing =kernel-commands.test.ts= tests still pass (5 tests)
+- [ ] =tsgo -p packages/coding-agent= clean

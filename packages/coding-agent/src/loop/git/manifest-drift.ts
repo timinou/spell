@@ -135,12 +135,14 @@ export function mergeManifestWithDrift(
 
 	// Deleted file paths — tickets referencing these paths may need removal
 	const deletedPaths = new Set(driftReport.deleted);
+	const modifiedPaths = new Set(driftReport.modified);
 
 	// Handle removals: tickets whose spec files were deleted
 	const surviving: ManifestTicket[] = [];
 	for (const ticket of result.manifest.tickets) {
 		const specDeleted = ticket.specPath !== undefined && deletedPaths.has(ticket.specPath);
-		const idGone = !newIdSet.has(ticket.id) && specDeleted;
+		const specModified = ticket.specPath !== undefined && modifiedPaths.has(ticket.specPath);
+		const idGone = !newIdSet.has(ticket.id) && (specDeleted || specModified);
 
 		if (idGone) {
 			if (ticket.state === TICKET_STATES.done) {
@@ -156,7 +158,6 @@ export function mergeManifestWithDrift(
 	}
 
 	// Handle modifications: tickets whose spec content changed
-	const modifiedPaths = new Set(driftReport.modified);
 	for (const ticket of surviving) {
 		if (ticket.specPath !== undefined && modifiedPaths.has(ticket.specPath)) {
 			result.modified.push(ticket.id);

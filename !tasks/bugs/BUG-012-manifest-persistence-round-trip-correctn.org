@@ -1,0 +1,179 @@
+#+TITLE: Manifest persistence round-trip correctness
+#+STATE: DONE
+#+SESSION_ID: 14a637757f57453f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-06-01-931Z_14a6281492d7450d/31-CreateBug005.jsonl]]
+#+CUSTOM_ID: BUG-012-manifest-persistence-round-trip-correctn
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: backend
+
+NOTE [2026-03-29]: Fixed edge direction, identity fields, tags parsing, deterministic gate IDs. 6 test scenarios pass.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal
+Create 6 org items (3 BUG, 3 FEAT) for the manifest system wiring plan, then report back the CUSTOM_IDs.
+
+## Rules
+- Use `org create` for each item
+- Set `state: "ITEM"` for all
+- Include EFFORT, PRIORITY, LAYER properties
+- Return the CUSTOM_ID for each created item
+- Bodies use org heading format (`*`, `**`)
+- TDD sequencing: Tests section comes BEFORE Implementation section, and test file paths + scenarios are defined first so they drive design
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- category: `bugs`
+- title: `Manifest persistence round-trip correctness`
+- state: `ITEM`
+- properties: `{ "EFFORT": "2h", "PRIORITY": "#A", "LAYER": "backend" }`
+- body (org format):
+
+```
+* Scope
+** In-Scope
+Four distinct bugs in =manifest-writer.ts= and =manifest-reader.ts=:
+1. Dependency edge direction reversed: reader builds ={from: ticket.id, to: dep}= but convention is ={from: blocker, to: dependent}= (i.e., ={from: dep, to: ticket.id}=)
+2. Writer drops identity fields: =orgItemId=, =childLoopId=, =iterationHistory=, =changedFiles=, =findings= not serialized as org properties
+3. Reader ignores =#+TAGS:= line — writer outputs it but reader hardcodes =tags: []=
+4. Gate IDs use =Date.now()= yielding collisions for tickets parsed in same millisecond — use =gate-{type}-{customId}= instead
+
+** Out-of-Scope
+- manifest-drift.ts changes (separate BUG-006)
+- LoopManager wiring (separate FEAT items)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/manifest-roundtrip.test.ts=
+
+Write these tests FIRST:
+
+** Scenarios
+1. Edge direction: write manifest with ticket A depending on B (=A.dependencies = ["B"]=), read back, verify =dependencyEdges= contains ={from: "B", to: "A"}= (blocker -> dependent)
+2. Identity fields preserved: write ticket with =orgItemId=, =childLoopId=, =iterationHistory: [1,3,5]=, =changedFiles: ["a.ts"]=, =findings: ["issue"]=, read back, verify all preserved
+3. Tags round-trip: write ticket with =tags: ["auth", "api"]=, read back, verify =tags= contains both values
+4. Gate IDs unique: write two tickets each with =GATE_CMD=, read back, verify all gate IDs are distinct
+5. Gate IDs deterministic: read same ticket twice, verify gate IDs are identical (no =Date.now()= variance)
+6. Full round-trip fidelity: create ManifestSnapshot with 3 tickets (varied states, deps, triggers, gates, all fields), write, read, deep-compare essential fields
+
+** Test Helpers
+#+begin_src typescript
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { readManifest } from "../../src/loop/persistence/manifest-reader";
+import { writeManifest } from "../../src/loop/persistence/manifest-writer";
+import type { ManifestSnapshot, ManifestTicket } from "../../src/loop/types";
+import { TICKET_STATES } from "../../src/loop/contracts";
+
+let tmpDir: string;
+beforeEach(async () => { tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "manifest-rt-")); });
+afterEach(async () => { await fs.rm(tmpDir, { recursive: true, force: true }); });
+#+end_src
+
+* Implementation
+** manifest-reader.ts
+1. Fix edge direction at line ~121: change ={from: ticket.id, to: dep}= to ={from: dep, to: ticket.id}=
+2. Parse tags: after properties parsing, look for =#+TAGS:\s+(.+)= line, split by spaces, set on ticket
+3. Gate IDs: in =parseGatesFromProperties=, replace =Date.now()= with =customId= parameter. Change signature to =parseGatesFromProperties(props, customId)=. Generate IDs as =gate-cmd-{customId}=, =gate-artifact-{customId}=, =gate-llm-{customId}=
+4. Parse identity fields from PROPERTIES: =ORG_ITEM_ID=, =CHILD_LOOP_ID=, =ITERATION_HISTORY= (comma-separated numbers), =CHANGED_FILES= (comma-separated), =FINDINGS= (comma-separated)
+
+** manifest-writer.ts
+1. In =renderTicketOrg=, add property lines for:
+   - =:ORG_ITEM_ID: {ticket.orgItemId}= (if set)
+   - =:CHILD_LOOP_ID: {ticket.childLoopId}= (if set)
+   - =:ITERATION_HISTORY: {ticket.iterationHistory.join(",")}= (if non-empty)
+   - =:CHANGED_FILES: {ticket.changedFiles.join(",")}= (if non-empty)
+   - =:FINDINGS: {ticket.findings.join(",")}= (if non-empty)
+
+* Edge Cases
+- Empty iterationHistory/changedFiles/findings: don't write the property line (avoid =:ITERATION_HISTORY:= with empty value)
+- Tags with special characters: space-separated, no quoting needed for org
+- Ticket with no gates: no GATE_* properties, no gate IDs to generate
+- Comma in a finding string: use pipe =|= separator instead of comma to avoid ambiguity. Or use newline-separated in a body section. Decision: use =|= as separator for findings/changedFiles since commas appear in file paths and findings text.
+
+* Acceptance Criteria
+- [ ] All 6 test scenarios pass
+- [ ] Existing =manifest-model.test.ts= round-trip tests still pass
+- [ ] Edge direction matches =buildDependencyGraph= convention (from=blocker, to=dependent)
+- [ ] =tsgo -p packages/coding-agent= clean
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-Scope
+Four distinct bugs in =manifest-writer.ts= and =manifest-reader.ts=:
+1. Dependency edge direction reversed: reader builds ={from: ticket.id, to: dep}= but convention is ={from: blocker, to: dependent}= (i.e., ={from: dep, to: ticket.id}=)
+2. Writer drops identity fields: =orgItemId=, =childLoopId=, =iterationHistory=, =changedFiles=, =findings= not serialized as org properties
+3. Reader ignores =#+TAGS:= line — writer outputs it but reader hardcodes =tags: []=
+4. Gate IDs use =Date.now()= yielding collisions for tickets parsed in same millisecond — use =gate-{type}-{customId}= instead
+
+** Out-of-Scope
+- manifest-drift.ts changes (separate BUG-006)
+- LoopManager wiring (separate FEAT items)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/manifest-roundtrip.test.ts=
+
+Write these tests FIRST:
+
+** Scenarios
+1. Edge direction: write manifest with ticket A depending on B (=A.dependencies = ["B"]=), read back, verify =dependencyEdges= contains ={from: "B", to: "A"}= (blocker -> dependent)
+2. Identity fields preserved: write ticket with =orgItemId=, =childLoopId=, =iterationHistory: [1,3,5]=, =changedFiles: ["a.ts"]=, =findings: ["issue"]=, read back, verify all preserved
+3. Tags round-trip: write ticket with =tags: ["auth", "api"]=, read back, verify =tags= contains both values
+4. Gate IDs unique: write two tickets each with =GATE_CMD=, read back, verify all gate IDs are distinct
+5. Gate IDs deterministic: read same ticket twice, verify gate IDs are identical (no =Date.now()= variance)
+6. Full round-trip fidelity: create ManifestSnapshot with 3 tickets (varied states, deps, triggers, gates, all fields), write, read, deep-compare essential fields
+
+** Test Helpers
+#+begin_src typescript
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { readManifest } from "../../src/loop/persistence/manifest-reader";
+import { writeManifest } from "../../src/loop/persistence/manifest-writer";
+import type { ManifestSnapshot, ManifestTicket } from "../../src/loop/types";
+import { TICKET_STATES } from "../../src/loop/contracts";
+
+let tmpDir: string;
+beforeEach(async () => { tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "manifest-rt-")); });
+afterEach(async () => { await fs.rm(tmpDir, { recursive: true, force: true }); });
+#+end_src
+
+* Implementation
+** manifest-reader.ts
+1. Fix edge direction at line ~121: change ={from: ticket.id, to: dep}= to ={from: dep, to: ticket.id}=
+2. Parse tags: after properties parsing, look for =#+TAGS:\s+(.+)= line, split by spaces, set on ticket
+3. Gate IDs: in =parseGatesFromProperties=, replace =Date.now()= with =customId= parameter. Change signature to =parseGatesFromProperties(props, customId)=. Generate IDs as =gate-cmd-{customId}=, =gate-artifact-{customId}=, =gate-llm-{customId}=
+4. Parse identity fields from PROPERTIES: =ORG_ITEM_ID=, =CHILD_LOOP_ID=, =ITERATION_HISTORY= (comma-separated numbers), =CHANGED_FILES= (comma-separated), =FINDINGS= (comma-separated)
+
+** manifest-writer.ts
+1. In =renderTicketOrg=, add property lines for:
+   - =:ORG_ITEM_ID: {ticket.orgItemId}= (if set)
+   - =:CHILD_LOOP_ID: {ticket.childLoopId}= (if set)
+   - =:ITERATION_HISTORY: {ticket.iterationHistory.join(",")}= (if non-empty)
+   - =:CHANGED_FILES: {ticket.changedFiles.join(",")}= (if non-empty)
+   - =:FINDINGS: {ticket.findings.join(",")}= (if non-empty)
+
+* Edge Cases
+- Empty iterationHistory/changedFiles/findings: don't write the property line (avoid =:ITERATION_HISTORY:= with empty value)
+- Tags with special characters: space-separated, no quoting needed for org
+- Ticket with no gates: no GATE_* properties, no gate IDs to generate
+- Comma in a finding string: use pipe =|= separator instead of comma to avoid ambiguity. Or use newline-separated in a body section. Decision: use =|= as separator for findings/changedFiles since commas appear in file paths and findings text.
+
+* Acceptance Criteria
+- [ ] All 6 test scenarios pass
+- [ ] Existing =manifest-model.test.ts= round-trip tests still pass
+- [ ] Edge direction matches =buildDependencyGraph= convention (from=blocker, to=dependent)
+- [ ] =tsgo -p packages/coding-agent= clean

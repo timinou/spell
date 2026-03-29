@@ -144,8 +144,11 @@ export class LoopKernel {
 
 	resume(loopId: string): LoopSnapshot {
 		const loop = this.#registry.get(loopId);
+		const allowed = ALLOWED_TRANSITIONS[LOOP_STATES.paused];
 		const target =
-			loop.stateBeforePause === LOOP_STATES.manifestBuilding ? LOOP_STATES.manifestBuilding : LOOP_STATES.iterating;
+			loop.stateBeforePause && allowed.includes(loop.stateBeforePause)
+				? loop.stateBeforePause
+				: LOOP_STATES.iterating;
 		return this.#transition(loopId, target, {});
 	}
 

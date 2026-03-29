@@ -1,0 +1,267 @@
+#+TITLE: Manifest prompt wiring
+#+STATE: DONE
+#+SESSION_ID: 14a637757fd74543
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-06-01-931Z_14a6281492d7450d/35-CreateFeat066.jsonl]]
+#+CUSTOM_ID: FEAT-072-manifest-prompt-wiring
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: backend
+
+NOTE [2026-03-29]: Injected manifest context into phase-coordinator prompts and manifest-building prompt into agent-session. 5 test scenarios pass.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal
+Create 6 org items (3 BUG, 3 FEAT) for the manifest system wiring plan, then report back the CUSTOM_IDs.
+
+## Rules
+- Use `org create` for each item
+- Set `state: "ITEM"` for all
+- Include EFFORT, PRIORITY, LAYER properties
+- Return the CUSTOM_ID for each created item
+- Bodies use org heading format (`*`, `**`)
+- TDD sequencing: Tests section comes BEFORE Implementation section, and test file paths + scenarios are defined first so they drive design
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- category: `features`
+- title: `Manifest prompt wiring`
+- state: `ITEM`
+- properties: `{ "EFFORT": "2h", "PRIORITY": "#A", "LAYER": "backend" }`
+- body (org format):
+
+```
+* Scope
+** In-Scope
+- Inject =manifest-building-active.md= system prompt when loop is in =manifest_building= state (agent-session.ts level — phase coordinator doesn't run during manifest_building)
+- Merge =buildManifestPromptContext(snapshot)= into iteration/reflection prompt contexts in =PhaseCoordinator.runIteration()=
+- The manifest-building prompt uses Handlebars variables: =loopId=, =loopName=, =specPaths=, =domainNames=
+
+** Out-of-Scope
+- Manifest data model changes
+- Ticket lifecycle changes
+- Persistence changes
+
+** Dependencies
+- Requires FEAT-065 (manifest on snapshot must be populated for =buildManifestPromptContext= to return non-empty context)
+- Requires =buildManifestPromptContext= from =prompt-builder.ts= (exists)
+- Requires =manifest-building-active.md= from =prompts/= (exists)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/manifest-prompts.test.ts=
+
+Write these tests FIRST.
+
+** Scenarios
+1. =buildManifestPromptContext= with manifest on snapshot returns populated fields (=manifestTickets=, =manifestProgress=, =readyTickets=, etc.) — this test already implicitly exists but should be explicit
+2. =buildManifestPromptContext= with no manifest returns empty object
+3. =buildIterationPrompt= with manifest context renders ticket table (verify output contains ticket IDs)
+4. =buildIterationPrompt= without manifest context does NOT render manifest section
+5. =buildReflectionPrompt= with manifest context renders manifest reflection section
+6. Phase coordinator integration: =runIteration= with manifest-bearing snapshot produces prompts containing manifest ticket IDs
+
+Note: scenario 6 requires a mock responder per the existing =PhaseCoordinator= test pattern. The responder captures the prompt text passed to it, and we verify it contains manifest content.
+
+For the agent-session.ts injection, testing is impractical (it requires a full session setup). Verify manually: grep for the import of =manifest-building-active.md= and the conditional injection logic.
+
+* Implementation
+** phase-coordinator.ts
+File: =packages/coding-agent/src/loop/orchestration/phase-coordinator.ts=
+
+In =runIteration()=, modify prompt context construction (lines 36-46) to include manifest fields:
+#+begin_src typescript
+import { buildIterationPrompt, buildManifestPromptContext, buildReflectionPrompt } from "../prompt-builder";
+
+// In runIteration, replace the planPrompt construction:
+const manifestCtx = buildManifestPromptContext(loop);
+const planPrompt = buildIterationPrompt({
+  loopId: loop.id,
+  name: loop.name,
+  iteration: loop.iteration,
+  state: loop.state,
+  summary: loop.lastSummary,
+  taskContent: loop.taskContent,
+  changedFiles: loop.changedFiles,
+  openFindings: loop.openFindings,
+  pendingGates: loop.pendingGates,
+  ...manifestCtx,
+});
+
+// Same for reviewPrompt (lines 64-74):
+const reviewPrompt = buildReflectionPrompt({
+  loopId: loop.id,
+  name: loop.name,
+  iteration: loop.iteration,
+  state: loop.state,
+  summary: code.summary,
+  taskContent: loop.taskContent,
+  changedFiles: code.changedFiles ?? [],
+  openFindings: code.findings ?? [],
+  pendingGates: loop.pendingGates,
+  ...manifestCtx,
+});
+#+end_src
+
+** agent-session.ts
+File: =packages/coding-agent/src/session/agent-session.ts=
+
+Find where system prompt is built/mutated. Add conditional manifest-building prompt injection:
+#+begin_src typescript
+import manifestBuildingPrompt from "../loop/prompts/manifest-building-active.md" with { type: "text" };
+import Handlebars from "handlebars";
+
+// In the system prompt getter or builder, when loop is active:
+if (this.#loopManager) {
+  const loops = this.#loopManager.listSnapshots();
+  const building = loops.find(l => l.state === "manifest_building");
+  if (building) {
+    const rendered = Handlebars.compile(manifestBuildingPrompt)({
+      loopId: building.id,
+      loopName: building.name,
+      specPaths: building.specPaths,
+      domainNames: building.domainNames,
+    });
+    // Append to system prompt
+    systemPrompt += "\n\n" + rendered;
+  }
+}
+#+end_src
+
+Note: the exact injection point depends on how =agent-session.ts= builds its system prompt. Read the file to find the right location. The pattern should be: check for active loop in manifest_building state, render the template, append to system prompt.
+
+* Edge Cases
+- No active loop: no injection, no manifest context
+- Loop in manifest_building but no specPaths: template renders with empty list (still useful — agent can explore manually)
+- Multiple loops active: only inject manifest-building prompt for the one in manifest_building state
+- Handlebars compilation of manifest-building-active.md: already validated (it was created with valid Handlebars)
+
+* Acceptance Criteria
+- [ ] All 6 test scenarios pass (5 unit + 1 integration)
+- [ ] =buildIterationPrompt= with manifest context renders ticket table in output
+- [ ] =PhaseCoordinator.runIteration= passes manifest context through to prompts
+- [ ] =manifest-building-active.md= is imported in =agent-session.ts=
+- [ ] Conditional injection fires only during =manifest_building= state
+- [ ] =tsgo -p packages/coding-agent= clean
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-Scope
+- Inject =manifest-building-active.md= system prompt when loop is in =manifest_building= state (agent-session.ts level — phase coordinator doesn't run during manifest_building)
+- Merge =buildManifestPromptContext(snapshot)= into iteration/reflection prompt contexts in =PhaseCoordinator.runIteration()=
+- The manifest-building prompt uses Handlebars variables: =loopId=, =loopName=, =specPaths=, =domainNames=
+
+** Out-of-Scope
+- Manifest data model changes
+- Ticket lifecycle changes
+- Persistence changes
+
+** Dependencies
+- Requires FEAT-065 (manifest on snapshot must be populated for =buildManifestPromptContext= to return non-empty context)
+- Requires =buildManifestPromptContext= from =prompt-builder.ts= (exists)
+- Requires =manifest-building-active.md= from =prompts/= (exists)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/manifest-prompts.test.ts=
+
+Write these tests FIRST.
+
+** Scenarios
+1. =buildManifestPromptContext= with manifest on snapshot returns populated fields (=manifestTickets=, =manifestProgress=, =readyTickets=, etc.) — this test already implicitly exists but should be explicit
+2. =buildManifestPromptContext= with no manifest returns empty object
+3. =buildIterationPrompt= with manifest context renders ticket table (verify output contains ticket IDs)
+4. =buildIterationPrompt= without manifest context does NOT render manifest section
+5. =buildReflectionPrompt= with manifest context renders manifest reflection section
+6. Phase coordinator integration: =runIteration= with manifest-bearing snapshot produces prompts containing manifest ticket IDs
+
+Note: scenario 6 requires a mock responder per the existing =PhaseCoordinator= test pattern. The responder captures the prompt text passed to it, and we verify it contains manifest content.
+
+For the agent-session.ts injection, testing is impractical (it requires a full session setup). Verify manually: grep for the import of =manifest-building-active.md= and the conditional injection logic.
+
+* Implementation
+** phase-coordinator.ts
+File: =packages/coding-agent/src/loop/orchestration/phase-coordinator.ts=
+
+In =runIteration()=, modify prompt context construction (lines 36-46) to include manifest fields:
+#+begin_src typescript
+import { buildIterationPrompt, buildManifestPromptContext, buildReflectionPrompt } from "../prompt-builder";
+
+// In runIteration, replace the planPrompt construction:
+const manifestCtx = buildManifestPromptContext(loop);
+const planPrompt = buildIterationPrompt({
+  loopId: loop.id,
+  name: loop.name,
+  iteration: loop.iteration,
+  state: loop.state,
+  summary: loop.lastSummary,
+  taskContent: loop.taskContent,
+  changedFiles: loop.changedFiles,
+  openFindings: loop.openFindings,
+  pendingGates: loop.pendingGates,
+  ...manifestCtx,
+});
+
+// Same for reviewPrompt (lines 64-74):
+const reviewPrompt = buildReflectionPrompt({
+  loopId: loop.id,
+  name: loop.name,
+  iteration: loop.iteration,
+  state: loop.state,
+  summary: code.summary,
+  taskContent: loop.taskContent,
+  changedFiles: code.changedFiles ?? [],
+  openFindings: code.findings ?? [],
+  pendingGates: loop.pendingGates,
+  ...manifestCtx,
+});
+#+end_src
+
+** agent-session.ts
+File: =packages/coding-agent/src/session/agent-session.ts=
+
+Find where system prompt is built/mutated. Add conditional manifest-building prompt injection:
+#+begin_src typescript
+import manifestBuildingPrompt from "../loop/prompts/manifest-building-active.md" with { type: "text" };
+import Handlebars from "handlebars";
+
+// In the system prompt getter or builder, when loop is active:
+if (this.#loopManager) {
+  const loops = this.#loopManager.listSnapshots();
+  const building = loops.find(l => l.state === "manifest_building");
+  if (building) {
+    const rendered = Handlebars.compile(manifestBuildingPrompt)({
+      loopId: building.id,
+      loopName: building.name,
+      specPaths: building.specPaths,
+      domainNames: building.domainNames,
+    });
+    // Append to system prompt
+    systemPrompt += "\n\n" + rendered;
+  }
+}
+#+end_src
+
+Note: the exact injection point depends on how =agent-session.ts= builds its system prompt. Read the file to find the right location. The pattern should be: check for active loop in manifest_building state, render the template, append to system prompt.
+
+* Edge Cases
+- No active loop: no injection, no manifest context
+- Loop in manifest_building but no specPaths: template renders with empty list (still useful — agent can explore manually)
+- Multiple loops active: only inject manifest-building prompt for the one in manifest_building state
+- Handlebars compilation of manifest-building-active.md: already validated (it was created with valid Handlebars)
+
+* Acceptance Criteria
+- [ ] All 6 test scenarios pass (5 unit + 1 integration)
+- [ ] =buildIterationPrompt= with manifest context renders ticket table in output
+- [ ] =PhaseCoordinator.runIteration= passes manifest context through to prompts
+- [ ] =manifest-building-active.md= is imported in =agent-session.ts=
+- [ ] Conditional injection fires only during =manifest_building= state
+- [ ] =tsgo -p packages/coding-agent= clean

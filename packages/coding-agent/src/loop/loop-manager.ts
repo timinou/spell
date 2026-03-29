@@ -9,6 +9,7 @@ import { RealClock } from "./gates/clock";
 import { FindingDedup } from "./gates/dedup";
 import { GateEvaluator } from "./gates/evaluator";
 import { ArtifactGateExecutor, CommandGateExecutor, HumanGateExecutor, LlmReviewGateExecutor } from "./gates/executors";
+import { deriveManifestGates } from "./gates/ticket-gates";
 import type { LoopReviewer } from "./gates/types";
 import { ensureCleanGitTree } from "./git/dirty-check";
 import { type DriftSnapshot, detectSpecDrift, snapshotSpecFiles } from "./git/drift";
@@ -18,6 +19,8 @@ import { type IterationRunOptions, type LoopRoleResponder, PhaseCoordinator } fr
 import { LlmSwitcher, type LoopRoleResolver } from "./orchestration/switcher";
 import { saveLoopState } from "./persistence/checkpoint";
 import { appendLoopEvent } from "./persistence/event-log";
+import { readManifest } from "./persistence/manifest-reader";
+import { writeManifest } from "./persistence/manifest-writer";
 import { syncLoopOrgItem } from "./persistence/org-sync";
 import { restoreLoopSnapshots } from "./persistence/session-hooks";
 import { applyChildCompletionPolicy } from "./recursion/completion-handler";
@@ -26,6 +29,7 @@ import { ChildSpawner } from "./recursion/spawner";
 import { checkBudget } from "./safeguards/budget";
 import { collectKillTree } from "./safeguards/kill-switch";
 import { detectRunaway } from "./safeguards/runaway";
+import { TicketLifecycleManager } from "./ticket-lifecycle";
 import type {
 	LoopAdvanceResult,
 	LoopCommandResult,
@@ -77,6 +81,7 @@ export class LoopManager {
 	readonly #roleResolver?: LoopRoleResolver;
 	readonly #evaluator: GateEvaluator;
 	readonly #dashboardBridge: LoopDashboardBridge;
+	readonly #ticketLifecycle = new TicketLifecycleManager();
 	#restored = false;
 
 	constructor(options: LoopManagerOptions) {
@@ -123,6 +128,22 @@ export class LoopManager {
 			try {
 				this.#kernel.restore(loop);
 				this.#evaluator.configure(loop.id, loop.gateConfigs);
+				// Restore manifest from disk if present
+				const manifest = await readManifest(this.#cwd, loop.id);
+				if (manifest) {
+					this.#kernel.updateLoop(
+						loop.id,
+						snap => {
+							snap.manifest = manifest;
+						},
+						"manifest.restored",
+						{ ticketCount: manifest.tickets.length },
+					);
+					const ticketGates = deriveManifestGates(manifest.tickets);
+					for (const [, gates] of ticketGates) {
+						for (const gate of gates) this.#evaluator.register(loop.id, gate);
+					}
+				}
 			} catch (error) {
 				logger.warn("Skipping duplicate restored loop", { loopId: loop.id, error: String(error) });
 			}
@@ -207,6 +228,25 @@ export class LoopManager {
 		if (snapshot.state !== LOOP_STATES.manifestBuilding) {
 			throw new Error(`Cannot launch loop ${loopId}: expected manifest_building state, got ${snapshot.state}`);
 		}
+		// Read manifest from disk and populate snapshot
+		const manifest = await readManifest(this.#cwd, loopId);
+		if (manifest && manifest.tickets.length > 0) {
+			this.#kernel.updateLoop(
+				loopId,
+				loop => {
+					loop.manifest = manifest;
+				},
+				"manifest.loaded",
+				{ ticketCount: manifest.tickets.length },
+			);
+			// Register per-ticket gates derived from manifest
+			const ticketGates = deriveManifestGates(manifest.tickets);
+			for (const [, gates] of ticketGates) {
+				for (const gate of gates) {
+					this.#evaluator.register(loopId, gate);
+				}
+			}
+		}
 		this.#kernel.done(loopId);
 		await this.#flushPendingEvents();
 		return this.#kernel.getState(loopId);
@@ -236,6 +276,52 @@ export class LoopManager {
 			activeTickets?: string[];
 		} = {},
 	): Promise<LoopSnapshot> {
+		// Process ticket transitions BEFORE kernel.done() — kernel stays ticket-ignorant
+		const current = this.#kernel.getState(loopId);
+		if (current.manifest && (options.completedTickets?.length || options.activeTickets?.length)) {
+			const manifest = current.manifest;
+			for (const ticketId of options.completedTickets ?? []) {
+				try {
+					this.#ticketLifecycle.completeTicket(manifest, ticketId, current.iteration);
+				} catch (err) {
+					logger.warn("Failed to complete ticket", { loopId, ticketId, error: String(err) });
+				}
+			}
+			for (const ticketId of options.activeTickets ?? []) {
+				try {
+					this.#ticketLifecycle.startTicket(manifest, ticketId, current.iteration);
+				} catch (err) {
+					logger.warn("Failed to start ticket", { loopId, ticketId, error: String(err) });
+				}
+			}
+			// Set updated manifest on snapshot
+			this.#kernel.updateLoop(
+				loopId,
+				loop => {
+					loop.manifest = manifest;
+				},
+				"manifest.tickets_updated",
+				{
+					completed: options.completedTickets,
+					active: options.activeTickets,
+				},
+			);
+			// Fire onTicketComplete gates for each completed ticket
+			const updatedSnapshot = this.#kernel.getState(loopId);
+			for (const ticketId of options.completedTickets ?? []) {
+				await this.#evaluator.evaluate(
+					updatedSnapshot,
+					{ iteration: updatedSnapshot.iteration, state: updatedSnapshot.state, ticketCompleted: ticketId },
+					{ cwd: this.#cwd, attemptNumber: 1, evidence: [] },
+				);
+			}
+			// Persist manifest to disk after mutations
+			try {
+				await writeManifest(this.#cwd, loopId, current.name, manifest);
+			} catch (err) {
+				logger.warn("Failed to write manifest", { loopId, error: String(err) });
+			}
+		}
 		const snapshot = this.#kernel.done(loopId, options);
 		// Clean up worktree on terminal state
 		if (snapshot.state === LOOP_STATES.complete) {

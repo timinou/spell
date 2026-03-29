@@ -1,0 +1,239 @@
+#+TITLE: Manifest lifecycle persistence and gate registration
+#+STATE: DONE
+#+SESSION_ID: 14a637757fd74545
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-06-01-931Z_14a6281492d7450d/34-CreateFeat065.jsonl]]
+#+CUSTOM_ID: FEAT-073-manifest-lifecycle-persistence-and-gate
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: backend
+
+NOTE [2026-03-29]: Wired launch() to read manifest + register gates, markDone() to persist, restoreFromDisk() to restore. 5 test scenarios pass.
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal
+Create 6 org items (3 BUG, 3 FEAT) for the manifest system wiring plan, then report back the CUSTOM_IDs.
+
+## Rules
+- Use `org create` for each item
+- Set `state: "ITEM"` for all
+- Include EFFORT, PRIORITY, LAYER properties
+- Return the CUSTOM_ID for each created item
+- Bodies use org heading format (`*`, `**`)
+- TDD sequencing: Tests section comes BEFORE Implementation section, and test file paths + scenarios are defined first so they drive design
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create` with:
+- category: `features`
+- title: `Manifest lifecycle persistence and gate registration`
+- state: `ITEM`
+- properties: `{ "EFFORT": "2h", "PRIORITY": "#A", "LAYER": "backend" }`
+- body (org format):
+
+```
+* Scope
+** In-Scope
+- =launch()=: read manifest from disk via =readManifest()=, validate >=1 ticket, populate =snapshot.manifest= via =kernel.updateLoop()=, register derived ticket gates with =GateEvaluator=
+- =markDone()=: after ticket transitions (from FEAT-064), write manifest to disk via =writeManifest()=
+- =restoreFromDisk()=: for each restored loop with manifest dir, read manifest and populate snapshot
+- Write order: TLM mutates in-memory -> writeManifest to org files -> set on snapshot -> checkpoint
+- Register ticket gates: call =deriveManifestGates(manifest.tickets)= and register each ticket's gates with =this.#evaluator= (Daedalus amendment — without this, onTicketComplete gates are a no-op)
+
+** Out-of-Scope
+- Ticket state transitions (FEAT-064)
+- Prompt wiring (FEAT-066)
+
+** Dependencies
+- Requires FEAT-064 (ticket pipeline) for the markDone ticket transition flow
+- Requires BUG-005 (persistence correctness) for reliable round-trip
+- Requires =writeManifest= from =persistence/manifest-writer.ts= (exists)
+- Requires =readManifest= from =persistence/manifest-reader.ts= (exists)
+- Requires =deriveManifestGates= from =gates/ticket-gates.ts= (exists)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/manifest-persistence-lifecycle.test.ts=
+
+Write these tests FIRST. Use temp filesystem (=mkdtemp=) and real =LoopManager=.
+
+** Scenarios
+1. =launch()= reads manifest from disk: prepare loop, write manifest files to expected location manually, call =launch()=, verify =getLoop()= returns snapshot with =manifest= populated
+2. =launch()= with no manifest files: prepare loop, call =launch()= without writing manifest files, verify it proceeds (manifest stays undefined — no hard requirement yet, or throws if we want strict validation)
+3. =launch()= with empty manifest (0 tickets): prepare loop, write empty manifest, call =launch()=, verify error thrown ("manifest has no tickets")
+4. =launch()= registers ticket gates: prepare loop, write manifest with tickets that have GATE_CMD, call =launch()=, verify evaluator has gates registered (via =evaluator.list()=)
+5. =markDone()= writes manifest after ticket transitions: set up loop with manifest, complete a ticket, verify manifest .org files on disk reflect the updated state
+6. =restoreFromDisk()=: write loop checkpoint + manifest files, create fresh LoopManager, call =restoreFromDisk()=, verify snapshot has manifest
+
+** Test Setup
+Mock persistence boundaries (event-log, org-sync, checkpoint save) per existing =test/loop/= patterns. Use real filesystem for manifest files (=writeManifest= / =readManifest= work on real files). Create manifest.org + ticket .org files in =tmpDir/.local/!tracks/loops/{loopId}/manifest/=.
+
+* Implementation
+File: =packages/coding-agent/src/loop/loop-manager.ts=
+
+** Step 1: Import manifest persistence and gate derivation
+#+begin_src typescript
+import { readManifest } from "./persistence/manifest-reader";
+import { writeManifest } from "./persistence/manifest-writer";
+import { deriveManifestGates } from "./gates/ticket-gates";
+#+end_src
+
+** Step 2: launch() — read and validate manifest
+After verifying =manifest_building= state, before calling =kernel.done()=:
+#+begin_src typescript
+const manifest = await readManifest(this.#cwd, loopId);
+if (manifest && manifest.tickets.length > 0) {
+  this.#kernel.updateLoop(loopId, loop => { loop.manifest = manifest; }, "manifest.loaded", { ticketCount: manifest.tickets.length });
+  // Register per-ticket gates
+  const ticketGates = deriveManifestGates(manifest.tickets);
+  for (const [ticketId, gates] of ticketGates) {
+    for (const gate of gates) {
+      this.#evaluator.register(loopId, gate);
+    }
+  }
+}
+#+end_src
+
+** Step 3: markDone() — persist manifest after transitions
+After the ticket transition block (from FEAT-064) and before =kernel.done()=:
+#+begin_src typescript
+const current = this.#kernel.getState(loopId);
+if (current.manifest) {
+  await writeManifest(this.#cwd, loopId, current.name, current.manifest);
+}
+#+end_src
+
+** Step 4: restoreFromDisk() — populate manifest on restored snapshots
+In the restore loop, after =kernel.restore(loop)=:
+#+begin_src typescript
+const manifest = await readManifest(this.#cwd, loop.id);
+if (manifest) {
+  this.#kernel.updateLoop(loop.id, snap => { snap.manifest = manifest; }, "manifest.restored", { ticketCount: manifest.tickets.length });
+  const ticketGates = deriveManifestGates(manifest.tickets);
+  for (const [, gates] of ticketGates) {
+    for (const gate of gates) this.#evaluator.register(loop.id, gate);
+  }
+}
+#+end_src
+
+* Edge Cases
+- =readManifest= returns =undefined= (no manifest dir): launch proceeds without manifest (legacy loops)
+- =writeManifest= fails: log error, don't crash loop (manifest on snapshot is still the authoritative copy)
+- Restored loop with stale manifest on disk: disk manifest wins (user-editable format)
+- =deriveManifestGates= returns empty map (no tickets with gates): no gates registered, fine
+
+* Acceptance Criteria
+- [ ] All 6 test scenarios pass
+- [ ] =launch()= populates =snapshot.manifest= from disk
+- [ ] =launch()= registers ticket gates with evaluator
+- [ ] =markDone()= persists manifest to org files
+- [ ] =restoreFromDisk()= restores manifest on snapshot
+- [ ] Existing loop tests still pass
+- [ ] =tsgo -p packages/coding-agent= clean
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-Scope
+- =launch()=: read manifest from disk via =readManifest()=, validate >=1 ticket, populate =snapshot.manifest= via =kernel.updateLoop()=, register derived ticket gates with =GateEvaluator=
+- =markDone()=: after ticket transitions (from FEAT-064), write manifest to disk via =writeManifest()=
+- =restoreFromDisk()=: for each restored loop with manifest dir, read manifest and populate snapshot
+- Write order: TLM mutates in-memory -> writeManifest to org files -> set on snapshot -> checkpoint
+- Register ticket gates: call =deriveManifestGates(manifest.tickets)= and register each ticket's gates with =this.#evaluator= (Daedalus amendment — without this, onTicketComplete gates are a no-op)
+
+** Out-of-Scope
+- Ticket state transitions (FEAT-064)
+- Prompt wiring (FEAT-066)
+
+** Dependencies
+- Requires FEAT-064 (ticket pipeline) for the markDone ticket transition flow
+- Requires BUG-005 (persistence correctness) for reliable round-trip
+- Requires =writeManifest= from =persistence/manifest-writer.ts= (exists)
+- Requires =readManifest= from =persistence/manifest-reader.ts= (exists)
+- Requires =deriveManifestGates= from =gates/ticket-gates.ts= (exists)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/manifest-persistence-lifecycle.test.ts=
+
+Write these tests FIRST. Use temp filesystem (=mkdtemp=) and real =LoopManager=.
+
+** Scenarios
+1. =launch()= reads manifest from disk: prepare loop, write manifest files to expected location manually, call =launch()=, verify =getLoop()= returns snapshot with =manifest= populated
+2. =launch()= with no manifest files: prepare loop, call =launch()= without writing manifest files, verify it proceeds (manifest stays undefined — no hard requirement yet, or throws if we want strict validation)
+3. =launch()= with empty manifest (0 tickets): prepare loop, write empty manifest, call =launch()=, verify error thrown ("manifest has no tickets")
+4. =launch()= registers ticket gates: prepare loop, write manifest with tickets that have GATE_CMD, call =launch()=, verify evaluator has gates registered (via =evaluator.list()=)
+5. =markDone()= writes manifest after ticket transitions: set up loop with manifest, complete a ticket, verify manifest .org files on disk reflect the updated state
+6. =restoreFromDisk()=: write loop checkpoint + manifest files, create fresh LoopManager, call =restoreFromDisk()=, verify snapshot has manifest
+
+** Test Setup
+Mock persistence boundaries (event-log, org-sync, checkpoint save) per existing =test/loop/= patterns. Use real filesystem for manifest files (=writeManifest= / =readManifest= work on real files). Create manifest.org + ticket .org files in =tmpDir/.local/!tracks/loops/{loopId}/manifest/=.
+
+* Implementation
+File: =packages/coding-agent/src/loop/loop-manager.ts=
+
+** Step 1: Import manifest persistence and gate derivation
+#+begin_src typescript
+import { readManifest } from "./persistence/manifest-reader";
+import { writeManifest } from "./persistence/manifest-writer";
+import { deriveManifestGates } from "./gates/ticket-gates";
+#+end_src
+
+** Step 2: launch() — read and validate manifest
+After verifying =manifest_building= state, before calling =kernel.done()=:
+#+begin_src typescript
+const manifest = await readManifest(this.#cwd, loopId);
+if (manifest && manifest.tickets.length > 0) {
+  this.#kernel.updateLoop(loopId, loop => { loop.manifest = manifest; }, "manifest.loaded", { ticketCount: manifest.tickets.length });
+  // Register per-ticket gates
+  const ticketGates = deriveManifestGates(manifest.tickets);
+  for (const [ticketId, gates] of ticketGates) {
+    for (const gate of gates) {
+      this.#evaluator.register(loopId, gate);
+    }
+  }
+}
+#+end_src
+
+** Step 3: markDone() — persist manifest after transitions
+After the ticket transition block (from FEAT-064) and before =kernel.done()=:
+#+begin_src typescript
+const current = this.#kernel.getState(loopId);
+if (current.manifest) {
+  await writeManifest(this.#cwd, loopId, current.name, current.manifest);
+}
+#+end_src
+
+** Step 4: restoreFromDisk() — populate manifest on restored snapshots
+In the restore loop, after =kernel.restore(loop)=:
+#+begin_src typescript
+const manifest = await readManifest(this.#cwd, loop.id);
+if (manifest) {
+  this.#kernel.updateLoop(loop.id, snap => { snap.manifest = manifest; }, "manifest.restored", { ticketCount: manifest.tickets.length });
+  const ticketGates = deriveManifestGates(manifest.tickets);
+  for (const [, gates] of ticketGates) {
+    for (const gate of gates) this.#evaluator.register(loop.id, gate);
+  }
+}
+#+end_src
+
+* Edge Cases
+- =readManifest= returns =undefined= (no manifest dir): launch proceeds without manifest (legacy loops)
+- =writeManifest= fails: log error, don't crash loop (manifest on snapshot is still the authoritative copy)
+- Restored loop with stale manifest on disk: disk manifest wins (user-editable format)
+- =deriveManifestGates= returns empty map (no tickets with gates): no gates registered, fine
+
+* Acceptance Criteria
+- [ ] All 6 test scenarios pass
+- [ ] =launch()= populates =snapshot.manifest= from disk
+- [ ] =launch()= registers ticket gates with evaluator
+- [ ] =markDone()= persists manifest to org files
+- [ ] =restoreFromDisk()= restores manifest on snapshot
+- [ ] Existing loop tests still pass
+- [ ] =tsgo -p packages/coding-agent= clean

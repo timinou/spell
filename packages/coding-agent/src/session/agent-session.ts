@@ -89,6 +89,7 @@ import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slas
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { executePython as executePythonCommand, type PythonResult } from "../ipy/executor";
 import type { LoopManager } from "../loop/loop-manager";
+import manifestBuildingPrompt from "../loop/prompts/manifest-building-active.md" with { type: "text" };
 import {
 	buildDiscoverableMCPSearchIndex,
 	collectDiscoverableMCPTools,
@@ -111,7 +112,6 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 };
 import planModeUiuxPrompt from "../prompts/system/plan-mode-uiux.md" with { type: "text" };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
-import manifestBuildingPrompt from "../loop/prompts/manifest-building-active.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import type { CheckpointState } from "../tools/checkpoint";

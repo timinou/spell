@@ -34,11 +34,11 @@ function parseAcceptanceCriteria(content: string): string[] {
 		.filter(Boolean);
 }
 
-function parseGatesFromProperties(props: Record<string, string>): LoopGateConfig[] {
+function parseGatesFromProperties(props: Record<string, string>, customId: string): LoopGateConfig[] {
 	const gates: LoopGateConfig[] = [];
 	if (props.GATE_CMD) {
 		gates.push({
-			id: `gate-cmd-${Date.now()}`,
+			id: `gate-cmd-${customId}`,
 			type: "command",
 			command: props.GATE_CMD,
 			trigger: { kind: GATE_TRIGGERS.onCompletion },
@@ -46,7 +46,7 @@ function parseGatesFromProperties(props: Record<string, string>): LoopGateConfig
 	}
 	if (props.GATE_ARTIFACT) {
 		gates.push({
-			id: `gate-artifact-${Date.now()}`,
+			id: `gate-artifact-${customId}`,
 			type: "artifact",
 			path: props.GATE_ARTIFACT,
 			trigger: { kind: GATE_TRIGGERS.onCompletion },
@@ -54,7 +54,7 @@ function parseGatesFromProperties(props: Record<string, string>): LoopGateConfig
 	}
 	if (props.GATE_LLM) {
 		gates.push({
-			id: `gate-llm-${Date.now()}`,
+			id: `gate-llm-${customId}`,
 			type: "llm-review",
 			criteria: props.GATE_LLM,
 			trigger: { kind: GATE_TRIGGERS.onCompletion },
@@ -69,6 +69,7 @@ export function parseTicketOrg(content: string): ManifestTicket | undefined {
 	const props = parseProperties(content);
 	const customId = props.CUSTOM_ID;
 	if (!customId) return undefined;
+	const tagMatch = content.match(/^#\+TAGS:\s+(.+)/m);
 	return {
 		id: customId,
 		title: headingMatch[2] ?? "",
@@ -77,14 +78,20 @@ export function parseTicketOrg(content: string): ManifestTicket | undefined {
 		acceptanceCriteria: parseAcceptanceCriteria(content),
 		dependencies: props.BLOCKER?.split(/\s+/).filter(Boolean) ?? [],
 		triggers: props.TRIGGER?.split(/\s+/).filter(Boolean) ?? [],
-		gates: parseGatesFromProperties(props),
+		gates: parseGatesFromProperties(props, customId),
 		effort: props.EFFORT,
 		priority: props.PRIORITY,
 		layer: props.LAYER,
-		tags: [],
-		changedFiles: [],
-		findings: [],
-		iterationHistory: [],
+		tags: tagMatch?.[1]?.split(/\s+/).filter(Boolean) ?? [],
+		changedFiles: props.CHANGED_FILES ? props.CHANGED_FILES.split("|").filter(Boolean) : [],
+		findings: props.FINDINGS ? props.FINDINGS.split("|").filter(Boolean) : [],
+		orgItemId: props.ORG_ITEM_ID || undefined,
+		childLoopId: props.CHILD_LOOP_ID || undefined,
+		iterationHistory: props.ITERATION_HISTORY
+			? props.ITERATION_HISTORY.split(",")
+					.map(Number)
+					.filter(n => !Number.isNaN(n))
+			: [],
 	};
 }
 
@@ -118,7 +125,7 @@ export async function readManifest(cwd: string, loopId: string): Promise<Manifes
 	const dependencyEdges: ManifestSnapshot["dependencyEdges"] = [];
 	for (const ticket of tickets) {
 		for (const dep of ticket.dependencies) {
-			dependencyEdges.push({ from: ticket.id, to: dep });
+			dependencyEdges.push({ from: dep, to: ticket.id });
 		}
 	}
 
