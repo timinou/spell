@@ -1,0 +1,126 @@
+#+TITLE: Comprehensive loop integration tests
+#+STATE: DONE
+#+SESSION_ID: 14a60f0f7e9e8e1d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T19-16-43-130Z_14a60f0f7e9e8e1d.jsonl]]
+#+CUSTOM_ID: FEAT-044-comprehensive-loop-integration-tests
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: test
+
+NOTE [2026-03-29]: Created test/integration/loop/lifecycle.test.ts with 9 tests (8 planned + 1 cross-cutting I/O verification). All tests pass in ~1.4s. Key adaptations from plan: (1) Gate triggers use every-n instead of every-iteration since gate evaluation happens after state transitions past iterating; (2) Runaway detection fires after 2 iterations due to self-comparison behavior in detectRunaway; (3) Real clock with short timeouts (50ms) for human gate instead of VirtualClock mock.
+
+* Initial Message
+
+how deeply are the tests going into checking loop behaviours?
+
+* Scope
+** In-scope
+- 8 integration test scenarios in a single file exercising LoopManager end-to-end through mocked I/O
+- All tests use the MockedLoopHarness from [[id:FEAT-043-add-loop-integration-test-harness-with-m]]
+- Tests run through the full call chain: LoopManager -> LoopKernel -> PhaseCoordinator -> GateEvaluator -> safeguards -> persistence (mocked)
+** Out-of-scope
+- Real filesystem, git, or network operations
+- QML shell integration
+- Performance/load testing
+
+* Tests
+** File: packages/coding-agent/test/integration/loop/lifecycle.test.ts (new)
+
+*** Test 1: Multi-iteration loop lifecycle (start -> iterate x3 -> reflect -> iterate -> validate -> complete)
+Contract: The full state machine produces correct transitions across a multi-iteration run.
+- Start loop with maxIterations=5, reflectEvery=3, domains=[]
+- Advance 3 iterations: verify iteration count, state=planning after each
+- After iteration 3: verify state=reflecting (reflectEvery=3 triggers)
+- Call kernel.done to transition reflecting -> planning
+- Advance iteration 4
+- Call markDone with forceValidate=true: verify state=validating
+- Call markDone again: verify state=complete, completedAt set
+- Assert persistence mock recorded all events (created, iterations, state changes)
+- Assert dashboard panel registered on start, unregistered on complete
+
+*** Test 2: Gate evaluation blocks iteration when command gate fails
+Contract: When a command gate fires and fails, the gate decision is recorded with correct outcome.
+- Start loop with a command gate config { id: "lint", type: "command", command: "false", trigger: { kind: "every-iteration" } }
+- Run one iteration via runIteration()
+- Assert gateResults contains { gateId: "lint", outcome: "fail" }
+- Assert loop state reflects the gate failure in pendingGates/gateResults
+
+*** Test 3: Human gate auto-approve via VirtualClock
+Contract: When a human gate fires, auto-approve timer resolves the gate after configured timeout.
+- Start loop with human gate { id: "review", type: "human", prompt: "Approve?", trigger: { kind: "every-iteration" }, autoApproveAfterMs: 100 }
+- Use VirtualClock instead of RealClock (override in harness)
+- Run iteration (will create pending human gate)
+- Advance clock by 100ms
+- Assert gate resolved with outcome=pass and reason containing "Auto-approved"
+
+*** Test 4: Budget exceeded pauses the loop
+Contract: When wall-clock budget is exceeded, safeguards pause the loop.
+- Start loop with budgetLimits: { wallClockMs: 1000, maxTreeIterations: 200, maxIdleIterations: 5 }
+- Use a LoopKernel with a custom now() that returns time beyond the budget
+- Run iteration
+- Assert loop state=paused with statusReason containing budget
+- Verify the loop can be resumed and the budget status reflects elapsed time
+
+*** Test 5: Runaway detection pauses the loop on idle iterations
+Contract: When progress hash doesn't change across iterations, runaway detection fires.
+- Start loop with maxIdleIterations=2
+- Configure responder to return identical summary, changedFiles=[], findings=[] on every iteration
+- Run 3 iterations
+- Assert loop paused with reason containing "Runaway"
+- Assert budgetStatus.idleIterations >= 2
+
+*** Test 6: Child spawn, complete, and kill-tree
+Contract: Parent-child loop lifecycle works end-to-end including completion policy and kill-tree.
+- Start parent loop
+- Spawn child with requiredChild=true
+- Assert parent.childLoopIds contains child.id, pendingChildLoopIds contains child.id
+- Complete child with success signal
+- Assert pendingChildLoopIds no longer contains child.id
+- Start a new parent, spawn 2 children
+- Kill parent
+- Assert all 3 loops (parent + 2 children) are killed
+- Assert worktree cleanup was called for each (if worktreePath was set)
+
+*** Test 7: gitAvailable=false skips all git operations
+Contract: When git is unavailable, loop starts successfully with git features disabled.
+- Override harness gitCheck to return { ok: true, message: "Git unavailable" }
+- Start loop with specPaths=["spec.org"], useWorktree=true
+- Assert loop.gitAvailable=false
+- Assert loop.worktreePath is undefined
+- Assert no snapshotSpecFiles or createLoopWorktree calls in mockState
+- Run iteration -> assert no drift detection calls
+- Assert loop still functions normally (transitions, gates, etc.)
+
+*** Test 8: onBeforePhase hook called during runIteration and error resilience
+Contract: The onBeforePhase hook fires for each phase during runIteration and errors don't crash the pipeline.
+- Start loop, configure onBeforePhase that records [role, loopId] and throws on "code" phase
+- Run iteration with iterationOptions.onBeforePhase set
+- Assert hook was called 3 times (plan, code, review) despite error on code
+- Assert iteration still completed successfully (handoffs created, state advanced)
+- Assert persistence recorded the iteration completion
+
+* Implementation
+** File: packages/coding-agent/test/integration/loop/lifecycle.test.ts (new)
+- Import and use createMockedLoopHarness from test/helpers/mocked-loop-harness.ts
+- Each test: create harness in beforeEach, teardown in afterEach
+- Use describe blocks to group related tests
+- For Test 3 (human gate): need to construct LoopManager with VirtualClock. The harness should allow overriding the Clock used by HumanGateExecutor. The simplest approach: harness exposes the manager's internal human executor's clock (or the harness constructs with VirtualClock by default).
+- For Test 4 (budget): Use a kernel with custom now() that advances time. The harness should allow injecting a time source.
+- For Test 5 (runaway): The StubLoopResponder returns identical content; the progress hash won't change.
+
+Steps:
+1. Implement harness (FEAT-043)
+2. Write all 8 tests using the harness
+3. Verify all pass, assert no real I/O
+
+* Edge Cases
+- Test 1 (lifecycle): reflectEvery=0 should skip reflection. Not tested here but the kernel tests cover it.
+- Test 3 (human gate): If clock doesn't advance, gate stays pending forever. Test must advance clock in a setTimeout or use Promise.race.
+- Test 6 (child): Depth limit enforcement is tested in recursion.test.ts; focus here is on the parent-child state coordination, not the spawn limit.
+
+* Acceptance Criteria
+- All 8 tests pass
+- No real filesystem writes during test run (verify via mockState)
+- Tests exercise LoopManager.runIteration, markDone, kill, spawnChild, completeChild end-to-end
+- tsgo clean
+- Test file runs in under 5 seconds

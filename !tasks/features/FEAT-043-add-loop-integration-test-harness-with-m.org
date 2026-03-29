@@ -1,0 +1,54 @@
+#+TITLE: Add loop integration test harness with mocked IO
+#+STATE: DONE
+#+SESSION_ID: 14a60f0f7e9e8e1d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T19-16-43-130Z_14a60f0f7e9e8e1d.jsonl]]
+#+CUSTOM_ID: FEAT-043-add-loop-integration-test-harness-with-m
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: test
+
+NOTE [2026-03-29]: Created test/helpers/mocked-loop-harness.ts with MockState type, createMockState(), resetMockState(), and createTestSettings() helpers. Also fixed gate registration gap in LoopManager: gates from StartLoopOptions.gates and restored snapshots are now registered with the GateEvaluator registry via configure().
+
+* Initial Message
+
+how deeply are the tests going into checking loop behaviours?
+
+* Scope
+** In-scope
+- Create a MockedLoopHarness test helper that wraps LoopManager with all I/O mocked
+- Mock modules: persistence (appendLoopEvent, syncLoopOrgItem, saveLoopState, restoreLoopSnapshots), git (ensureCleanGitTree, snapshotSpecFiles, detectSpecDrift, createLoopWorktree, removeLoopWorktree)
+- Use real in-memory components: LoopKernel, GateEvaluator, PhaseCoordinator, EventBus, VirtualClock, StubLoopResponder
+- The harness exposes: manager, eventBus, responder, clock, and mock state (calls to persistence, git)
+- All mocks are no-ops that record calls for assertion (e.g. persistedEvents[], syncedLoops[], gitCalls[])
+- ensureCleanGitTree mock defaults to {ok: true} (git available, clean) but can be overridden per test
+- restoreLoopSnapshots mock defaults to [] but can be seeded with snapshots
+** Out-of-scope
+- Real filesystem or git operations
+- QML/shell integration
+** Boundary rationale
+A shared harness eliminates per-test boilerplate for mocking 8+ module functions and lets all integration tests focus on behavioral assertions.
+
+* Tests
+The harness itself is verified by the integration tests that use it (next item). No separate test file for the harness.
+
+* Implementation
+** File: packages/coding-agent/test/helpers/mocked-loop-harness.ts (new)
+Structure:
+- MockState interface: { persistedEvents: Array<{event, snapshot}>, syncedSnapshots: LoopSnapshot[], savedStates: LoopSnapshot[], gitCalls: string[], worktreeCalls: string[] }
+- createMockedLoopHarness() factory function that:
+  1. Calls mock.module() for each I/O module with recording no-op implementations
+  2. Imports LoopManager AFTER mocks are installed (critical for bun:test mock.module)
+  3. Creates EventBus, StubLoopResponder with default plan/code/review responses
+  4. Returns { manager, eventBus, responder, mockState, overrideGitCheck(result), seedRestore(snapshots[]) }
+- teardown() function that calls mock.restore() for all mocked modules
+- Uses bun:test mock.module() pattern (not vi.mock) matching existing project convention in compaction.test.ts
+
+* Edge Cases
+- mock.module must be called before the dynamic import of loop-manager (bun hoists mocks)
+- The harness must be importable from multiple test files without mock leaks between tests
+- StubLoopResponder default responses must cover all 3 roles (plan, code, review) to prevent throw on unconfigured role
+
+* Acceptance Criteria
+- Harness compiles (tsgo clean)
+- All integration tests in the next item use it successfully
+- No real filesystem writes occur during tests (verify mockState captures all persistence calls)

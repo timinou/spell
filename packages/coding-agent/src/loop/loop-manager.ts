@@ -122,6 +122,7 @@ export class LoopManager {
 		for (const loop of restored) {
 			try {
 				this.#kernel.restore(loop);
+				this.#evaluator.configure(loop.id, loop.gateConfigs);
 			} catch (error) {
 				logger.warn("Skipping duplicate restored loop", { loopId: loop.id, error: String(error) });
 			}
@@ -154,6 +155,8 @@ export class LoopManager {
 			domains: domains.map(domain => domain.name),
 			gates: gateConfigs,
 		});
+		// Register gate configs with the evaluator so gates are evaluated during iterations
+		this.#evaluator.configure(snapshot.id, gateConfigs);
 		// Set gitAvailable on the snapshot
 		this.#kernel.updateLoop(
 			snapshot.id,
