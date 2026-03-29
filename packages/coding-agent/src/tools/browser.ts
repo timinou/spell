@@ -21,6 +21,7 @@ import type { ToolSession } from "../sdk";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { htmlToBasicMarkdown } from "../web/scrapers/types";
 import type { OutputMeta } from "./output-meta";
+import { resolveToCwd } from "./path-utils";
 import stealthTamperingScript from "./puppeteer/00_stealth_tampering.txt" with { type: "text" };
 import stealthActivityScript from "./puppeteer/01_stealth_activity.txt" with { type: "text" };
 import stealthHairlineScript from "./puppeteer/02_stealth_hairline.txt" with { type: "text" };
@@ -124,6 +125,20 @@ function normalizeSelector(selector: string): string {
 		return `aria/${rest}`;
 	}
 	return selector;
+}
+
+function resolveScreenshotArtifactPath(requestedPath: string | undefined, cwd: string): string {
+	if (!requestedPath?.trim()) {
+		return path.join(os.tmpdir(), `spell-sshots-${Snowflake.next()}.png`);
+	}
+
+	const resolvedPath = resolveToCwd(requestedPath, cwd);
+	const ext = path.extname(resolvedPath);
+	if (ext && ext.toLowerCase() !== ".png") {
+		throw new ToolError("Screenshot path must end in .png because browser screenshots are saved as PNG files.");
+	}
+
+	return resolvedPath;
 }
 
 type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; reason: string };
@@ -1345,6 +1360,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 				case "screenshot": {
 					const page = await this.#ensurePage(params);
 					const fullPage = params.selector ? false : (params.full_page ?? false);
+					const screenshotPath = resolveScreenshotArtifactPath(params.path, this.session.cwd);
 					let buffer: Buffer;
 
 					if (params.selector) {
@@ -1369,16 +1385,16 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 						{ maxBytes: 0.75 * 1024 * 1024 },
 					);
 					const dimensionNote = formatDimensionNote(resized);
-					const tempFile = path.join(os.tmpdir(), `spell-sshots-${Snowflake.next()}.png`);
-					await Bun.write(tempFile, resized.buffer);
-					details.screenshotPath = tempFile;
-					details.mimeType = resized.mimeType;
-					details.bytes = resized.buffer.length;
+					await Bun.write(screenshotPath, buffer);
+					details.screenshotPath = screenshotPath;
+					details.mimeType = "image/png";
+					details.bytes = buffer.length;
 
 					// Show both raw bytes (saved to disk) and compressed bytes (sent to model).
 					const lines = [
 						"Screenshot captured",
-						`Format: ${resized.mimeType} (${(resized.buffer.length / 1024).toFixed(2)} KB)`,
+						`Saved artifact: image/png (${(buffer.length / 1024).toFixed(2)} KB)`,
+						`Preview sent to model: ${resized.mimeType} (${(resized.buffer.length / 1024).toFixed(2)} KB)`,
 						`Dimensions: ${resized.width}x${resized.height}`,
 					];
 					if (dimensionNote) {

@@ -37,6 +37,33 @@ describe("plan-mode allowed folder prompts", () => {
 		expect(rendered).toContain("Deletes and moves remain forbidden.");
 	});
 
+	it("requires org-native plans to include verification guidance", () => {
+		const rendered = renderPromptTemplate(planModeActivePrompt, {
+			planFilePath: "org://PLAN-001-auth-initiative",
+			planExists: true,
+			askToolName: "ask",
+			writeToolName: "write",
+			editToolName: "edit",
+			exitToolName: "exit_plan_mode",
+			reentry: false,
+			iterative: false,
+			orgEnabled: true,
+			planCategory: "plans",
+			childCategories: [{ name: "features", prefix: "FEAT", description: "Feature work" }],
+			allowedFolders: undefined,
+			ultraplan: false,
+			designFlavor: false,
+			designHistory: "",
+			planModeUiuxPrompt: "",
+		});
+
+		expect(rendered).toContain(
+			"Include verification criteria: exact tests, checks, or manual proof the executor must produce",
+		);
+		expect(rendered).toContain("* Verification");
+		expect(rendered).toContain("required screenshot/artifact and what it must prove");
+	});
+
 	it("keeps the subagent prompt read-only when no folders are configured", () => {
 		const rendered = renderPromptTemplate(planModeSubagentPrompt, {});
 

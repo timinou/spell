@@ -987,6 +987,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#exitPlanMode({ silent: true, paused: false });
 		await this.handleClearCommand();
 		let approvedOrgItemId = "";
+		let approvedOrgItemArtifactsDir: string | undefined;
 		let planReferencePath = options.finalPlanFilePath;
 		if (orgPlanItem) {
 			const approvedPlanItemId = await approvePlanItem(
@@ -999,6 +1000,12 @@ export class InteractiveMode implements InteractiveModeContext {
 				throw new Error("Failed to approve org PLAN item.");
 			}
 			approvedOrgItemId = approvedPlanItemId;
+			const orgItemArtifactsDir = path.join(path.dirname(orgPlanItem.file), "plan-artifacts", approvedPlanItemId);
+			const relativeOrgItemArtifactsDir = path.relative(this.sessionManager.getCwd(), orgItemArtifactsDir);
+			approvedOrgItemArtifactsDir =
+				relativeOrgItemArtifactsDir && !relativeOrgItemArtifactsDir.startsWith("..")
+					? relativeOrgItemArtifactsDir
+					: orgItemArtifactsDir;
 			planReferencePath = `org://${approvedPlanItemId}`;
 		} else {
 			// For file-backed plans (org disabled), persist the approved plan in the new
@@ -1018,6 +1025,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			planContent: orgToMarkdown(planContent),
 			finalPlanFilePath: planReferencePath,
 			orgItemId: approvedOrgItemId,
+			orgItemArtifactsDir: approvedOrgItemArtifactsDir,
 		});
 		await this.session.prompt(prompt, { synthetic: true });
 	}
