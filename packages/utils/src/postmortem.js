@@ -5,9 +5,14 @@
  * in response to process exit, signals, or fatal exceptions. It is intended to
  * allow reliably releasing resources or shutting down subprocesses, files, sockets, etc.
  */
+import * as fs from "node:fs";
 import inspector from "node:inspector";
+import * as os from "node:os";
+import * as path from "node:path";
 import { isMainThread } from "node:worker_threads";
-import { logger } from ".";
+import { getLogPath, getProjectDir, getReportsDir, VERSION } from "./dirs";
+import * as logger from "./logger";
+import { toError } from "./type-guards";
 // Cleanup reasons, in order of priority/meaning.
 export var Reason;
 (function (Reason) {
@@ -24,6 +29,7 @@ export var Reason;
 const callbackList = [];
 // Tracks cleanup run state (to prevent recursion/reentry issues)
 let cleanupStage = "idle";
+let sessionContextGetter;
 /**
  * Internal: runs all registered cleanup callbacks for the given reason.
  * Ensures each callback is invoked at most once. Handles errors and prevents reentrancy.
@@ -57,10 +63,108 @@ function runCleanup(reason) {
         cleanupStage = "complete";
     });
 }
-// Register signal and error event handlers to trigger cleanup before exit.
-// Main thread: full signal handling (SIGINT, SIGTERM, SIGHUP) + exceptions + exit
-// Worker thread: exit only (workers use self.addEventListener for exceptions)
-let inspectorOpened = false;
+function macosMarketingName(release) {
+    const major = Number.parseInt(release.split(".")[0] ?? "", 10);
+    if (Number.isNaN(major))
+        return undefined;
+    const names = {
+        25: "Tahoe",
+        24: "Sequoia",
+        23: "Sonoma",
+        22: "Ventura",
+        21: "Monterey",
+        20: "Big Sur",
+    };
+    return names[major];
+}
+function collectCrashSystemInfo() {
+    const cpus = os.cpus();
+    let osString = `${os.type()} ${os.release()} (${os.platform()})`;
+    if (os.platform() === "darwin") {
+        const marketingName = macosMarketingName(os.release());
+        if (marketingName) {
+            osString = `${osString} ${marketingName}`;
+        }
+    }
+    return {
+        os: osString,
+        arch: os.arch(),
+        cpu: cpus[0]?.model ?? "Unknown CPU",
+        memory: {
+            total: os.totalmem(),
+            free: os.freemem(),
+        },
+        versions: {
+            app: VERSION,
+            bun: Bun.version,
+            node: process.version,
+        },
+        cwd: getProjectDir(),
+        shell: Bun.env.SHELL ?? Bun.env.ComSpec ?? "unknown",
+        terminal: Bun.env.TERM_PROGRAM ?? Bun.env.TERM ?? undefined,
+    };
+}
+function serializeUnknown(value) {
+    if (value === null ||
+        value === undefined ||
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean") {
+        return value;
+    }
+    if (typeof value === "bigint") {
+        return value.toString();
+    }
+    if (value instanceof Error) {
+        return serializeError(value);
+    }
+    try {
+        return JSON.parse(JSON.stringify(value, (_, nestedValue) => {
+            return typeof nestedValue === "bigint" ? nestedValue.toString() : nestedValue;
+        }));
+    }
+    catch {
+        return String(value);
+    }
+}
+function serializeError(err, raw) {
+    const code = "code" in err && typeof err.code === "string" ? err.code : undefined;
+    const info = {
+        name: err.name || "Error",
+        message: err.message || "(no message)",
+    };
+    if (err.stack) {
+        info.stack = err.stack;
+    }
+    if (code) {
+        info.code = code;
+    }
+    const cause = err.cause;
+    if (cause !== undefined) {
+        info.cause = serializeUnknown(cause);
+    }
+    if (raw !== undefined && raw !== err) {
+        info.raw = serializeUnknown(raw);
+    }
+    return info;
+}
+function getCrashSessionContext() {
+    try {
+        const context = sessionContextGetter?.();
+        return {
+            session: context?.session ?? null,
+            model: context?.model ?? null,
+        };
+    }
+    catch (error) {
+        const err = toError(error);
+        logger.warn("Crash session context getter failed", { err, stack: err.stack });
+        return {
+            session: null,
+            model: null,
+        };
+    }
+}
 function formatFatalError(label, err) {
     const name = err.name || "Error";
     const message = err.message || "(no message)";
@@ -69,6 +173,44 @@ function formatFatalError(label, err) {
     const formattedStack = stackLines.length > 0 ? `\n${stackLines.join("\n")}` : "";
     return `\n[${label}] ${name}: ${message}${formattedStack}\n`;
 }
+function writeCrashReport(reason, err, raw) {
+    try {
+        const reportsDir = getReportsDir();
+        fs.mkdirSync(reportsDir, { recursive: true });
+        const timestamp = new Date().toISOString();
+        const reportPath = path.join(reportsDir, `crash-${timestamp.replace(/[:.]/g, "-")}.json`);
+        const sessionContext = getCrashSessionContext();
+        const report = {
+            timestamp,
+            reason,
+            pid: process.pid,
+            uptimeSeconds: process.uptime(),
+            logPath: getLogPath(),
+            error: serializeError(err, raw),
+            session: sessionContext.session,
+            model: sessionContext.model,
+            system: collectCrashSystemInfo(),
+        };
+        // Fatal handlers cannot rely on async I/O. Persist the smallest useful report first,
+        // then let cleanup continue or fail independently.
+        fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+        process.stderr.write(`Crash report written to ${reportPath}\n`);
+        return reportPath;
+    }
+    catch (error) {
+        const writeErr = toError(error);
+        process.stderr.write(`Crash report write failed: ${writeErr.message}\n`);
+        logger.error("Failed to write crash report", { err: writeErr, stack: writeErr.stack });
+        return undefined;
+    }
+}
+export function registerSessionContext(getter) {
+    sessionContextGetter = getter;
+}
+// Register signal and error event handlers to trigger cleanup before exit.
+// Main thread: full signal handling (SIGINT, SIGTERM, SIGHUP) + exceptions + exit
+// Worker thread: exit only (workers use self.addEventListener for exceptions)
+let inspectorOpened = false;
 if (isMainThread) {
     process
         .on("SIGINT", async () => {
@@ -85,14 +227,16 @@ if (isMainThread) {
     })
         .on("uncaughtException", async (err) => {
         process.stderr.write(formatFatalError("Uncaught Exception", err));
-        logger.error("Uncaught exception", { err, stack: err.stack });
+        const reportPath = writeCrashReport(Reason.UNCAUGHT_EXCEPTION, err);
+        logger.error("Uncaught exception", { err, stack: err.stack, reportPath });
         await runCleanup(Reason.UNCAUGHT_EXCEPTION);
         process.exit(1);
     })
         .on("unhandledRejection", async (reason) => {
-        const err = reason instanceof Error ? reason : new Error(String(reason));
+        const err = toError(reason);
         process.stderr.write(formatFatalError("Unhandled Rejection", err));
-        logger.error("Unhandled rejection", { err, stack: err.stack });
+        const reportPath = writeCrashReport(Reason.UNHANDLED_REJECTION, err, reason);
+        logger.error("Unhandled rejection", { err, stack: err.stack, reportPath });
         await runCleanup(Reason.UNHANDLED_REJECTION);
         process.exit(1);
     })
