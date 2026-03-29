@@ -1,0 +1,92 @@
+#+TITLE: Fix tree selector undefined entries
+#+STATE: DONE
+#+SESSION_ID: 14a60c51ec1356f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T19-04-44-720Z_14a60c51ec1356f4.jsonl]]
+#+CUSTOM_ID: PLAN-016-fix-tree-selector-undefined-entries
+
+
+* Initial Message
+
+In this sesssion:
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T15-59-54-903Z_14a5e20405e9f1f6.jsonl
+ ID: 14a5e20405e9f1f6
+
+
+I had so many of these:
+
+
+
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined                                                                                                                                                                                                                                            ╭────────────────╮
+  ├─ [undefined] undefined                                                                                                                                                                                                                                            │ 🗺 Grand Scheme │
+  ├─ [undefined] undefined                                                                                                                                                                                                                                            ╰────────────────╯
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+
+
+
+What happened? What does it mean?
+
+* Context
+
+The tree selector (~packages/coding-agent/src/modes/components/tree-selector.ts~) renders every ~SessionEntry~ in the session via ~#getEntryDisplayText~. Four entry types (~mode_change~, ~service_tier_change~, ~session_init~, ~ttsr_injection~) have no display handler, no search indexing, and are not classified as bookkeeping entries for the filter. This causes them to appear as blank entries in default view and, during streaming partial updates where tool metadata arrives incrementally, can produce ~[undefined] undefined~ text from template literal interpolation of unresolved JS ~undefined~ values.
+
+** Approach
+
+TDD: write the test first defining the display, filter, and search contracts for every ~SessionEntry~ type, then implement the handlers to make the tests pass. Single file change plus a new test file.
+
+** Key decisions
+
+- All four missing types are bookkeeping — add to ~isSettingsEntry~ so they're hidden in default view (same as ~model_change~, ~thinking_level_change~, etc.)
+- Display format follows existing convention: ~[type: detail]~ in dim color
+- The ~TreeList~ class is not exported, so the test must instantiate it by importing from the module directly — or test through the public ~render~ method by extracting printable text from the rendered lines
+
+* Verification
+
+- ~bun test packages/coding-agent/test/tree-selector-entry-display.test.ts~
+- ~tsgo -p packages/coding-agent~ (focused type check)
+- Manual: open a session with plan mode transitions, invoke ~/tree~, confirm no empty or ~[undefined]~ entries appear
+
+* Execution Manifest
+
+1. [[id:BUG-008-tree-selector-shows-undefined-undefined]] (depends: none, effort: 1h)
+
+** Completion [2026-03-29]
+
+*** Verification
+- =bun test packages/coding-agent/test/tree-selector-entry-display.test.ts= — 10/10 pass, 0 fail, 47 expect() calls
+- =bunx tsgo -p packages/coding-agent= — clean, no errors
+- No screenshots needed (code-only fix, no UI layout change)
+
+*** Artifacts
+- Test file: =packages/coding-agent/test/tree-selector-entry-display.test.ts= (new, 10 tests)
+- Implementation: =packages/coding-agent/src/modes/components/tree-selector.ts= (3 sites modified)
+  - =#getEntryDisplayText= — added cases for =service_tier_change=, =mode_change=, =session_init=, =ttsr_injection=
+  - =#getSearchableText= — added cases for same four types
+  - =#applyFilter= — added same four types to =isSettingsEntry=
+
+*** Deviations
+None.

@@ -296,7 +296,11 @@ class TreeList implements Component {
 				entry.type === "label" ||
 				entry.type === "custom" ||
 				entry.type === "model_change" ||
-				entry.type === "thinking_level_change";
+				entry.type === "thinking_level_change" ||
+				entry.type === "service_tier_change" ||
+				entry.type === "mode_change" ||
+				entry.type === "session_init" ||
+				entry.type === "ttsr_injection";
 
 			switch (this.#filterMode) {
 				case "user-only":
@@ -394,6 +398,18 @@ class TreeList implements Component {
 				break;
 			case "label":
 				parts.push("label", entry.label ?? "");
+				break;
+			case "service_tier_change":
+				parts.push("tier", entry.serviceTier ?? "");
+				break;
+			case "mode_change":
+				parts.push("mode", entry.mode);
+				break;
+			case "session_init":
+				parts.push("session init");
+				break;
+			case "ttsr_injection":
+				parts.push("ttsr", ...entry.injectedRules);
 				break;
 		}
 
@@ -597,6 +613,18 @@ class TreeList implements Component {
 				break;
 			case "label":
 				result = theme.fg("dim", `[label: ${entry.label ?? "(cleared)"}]`);
+				break;
+			case "service_tier_change":
+				result = theme.fg("dim", `[tier: ${entry.serviceTier ?? "(none)"}]`);
+				break;
+			case "mode_change":
+				result = theme.fg("dim", `[mode: ${entry.mode}]`);
+				break;
+			case "session_init":
+				result = theme.fg("dim", "[session init]");
+				break;
+			case "ttsr_injection":
+				result = theme.fg("dim", `[ttsr: ${entry.injectedRules.join(", ")}]`);
 				break;
 			default:
 				result = "";

@@ -1,0 +1,113 @@
+#+TITLE: Tree selector shows undefined undefined for unhandled entry types
+#+STATE: DONE
+#+SESSION_ID: 14a60c51ec1356f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T19-04-44-720Z_14a60c51ec1356f4.jsonl]]
+#+CUSTOM_ID: BUG-008-tree-selector-shows-undefined-undefined
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: tui
+
+NOTE [2026-03-29]: Fix implemented and verified. All 10 tests pass, type check clean.
+
+* Initial Message
+
+In this sesssion:
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T15-59-54-903Z_14a5e20405e9f1f6.jsonl
+ ID: 14a5e20405e9f1f6
+
+
+I had so many of these:
+
+
+
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined                                                                                                                                                                                                                                            ╭────────────────╮
+  ├─ [undefined] undefined                                                                                                                                                                                                                                            │ 🗺 Grand Scheme │
+  ├─ [undefined] undefined                                                                                                                                                                                                                                            ╰────────────────╯
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+  ├─ [undefined] undefined
+
+
+
+What happened? What does it mean?
+
+* Problem
+
+~tree-selector.ts~ renders session entries via ~#getEntryDisplayText~ and ~#applyFilter~.
+Four ~SessionEntry~ types are unhandled in both the display switch and the settings filter:
+
+- ~mode_change~ — plan mode transitions
+- ~service_tier_change~ — API tier changes
+- ~session_init~ — subagent debug entries
+- ~ttsr_injection~ — time-traveling rule injections
+
+These entries:
+1. Pass through the default filter (shown to user in default view)
+2. Get ~result = ""~ from the ~default~ switch branch
+3. During streaming partial updates, tool call metadata may be ~undefined~ at interpolation time, producing the literal string ~[undefined] undefined~
+
+The ~#getSearchableText~ method has the same gap — missing handlers for these four types.
+
+* Affected file
+
+~packages/coding-agent/src/modes/components/tree-selector.ts~
+
+Three methods need changes:
+- ~#getEntryDisplayText~ — add case handlers for each missing type
+- ~#getSearchableText~ — add case handlers for search indexing
+- ~#applyFilter~ — add ~service_tier_change~, ~mode_change~, ~session_init~, ~ttsr_injection~ to ~isSettingsEntry~
+
+* Test-first plan
+
+** Test file: ~packages/coding-agent/test/tree-selector-entry-display.test.ts~
+
+Write a focused unit test that exercises ~#getEntryDisplayText~ (and the related filter) by constructing minimal ~SessionTreeNode[]~ arrays containing entries of every type, instantiating ~TreeList~, and asserting:
+
+1. Display text contract for each previously-unhandled type:
+   - ~mode_change~ renders as ~[mode: plan]~ (using the ~mode~ field)
+   - ~service_tier_change~ renders as ~[tier: flex]~ (using ~serviceTier~, or ~(none)~ when null)
+   - ~session_init~ renders as ~[session init]~
+   - ~ttsr_injection~ renders as ~[ttsr: rule1, rule2]~ (comma-joined rule names)
+
+2. Filter contract:
+   - All four types are hidden in default filter mode (same as other bookkeeping entries)
+   - All four types are visible in ~"all"~ filter mode
+
+3. Defensive rendering: a ~toolResult~ entry with missing ~toolCallId~ and missing ~toolName~ (both ~undefined~) renders ~[tool]~ not ~[undefined]~.
+
+4. Search indexing: ~#getSearchableText~ returns meaningful text for the new types (verify via search filter matching).
+
+** Implementation (after tests)
+
+1. Add display cases to ~#getEntryDisplayText~ switch
+2. Add search cases to ~#getSearchableText~ switch
+3. Expand ~isSettingsEntry~ in ~#applyFilter~
+
+* Acceptance criteria
+
+- ~bun test packages/coding-agent/test/tree-selector-entry-display.test.ts~ passes
+- ~bun check:ts~ passes (focused: ~tsgo -p packages/coding-agent~)
+- No entry type in ~SessionEntry~ union is unhandled in ~#getEntryDisplayText~ switch (exhaustive check)
