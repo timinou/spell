@@ -1,0 +1,86 @@
+#+TITLE: Write Loop System Tutorial
+#+STATE: DONE
+#+SESSION_ID: 14a60f2471639474
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T19-17-04-581Z_14a60f2471639474.jsonl]]
+#+CUSTOM_ID: FEAT-041-write-loop-system-tutorial
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: docs
+
+NOTE [2026-03-29]: Tutorial written at packages/coding-agent/src/loop/TUTORIAL.md (423 lines). Covers all 8 content sections: getting started, plan-code-review cycle, domains, gates, safeguards, child loops, slash commands reference, tool parameters reference, and 3 practical examples.
+
+* Initial Message
+
+I recently created a loop system. Can you write a complete tutorial about it please? Investigate and give me your summary, then ask me questions, then plan to write the tutorial
+
+* Goal
+Write a comprehensive tutorial for the Spell Loop system targeting both end users and contributors.
+
+File: =packages/coding-agent/src/loop/TUTORIAL.md=
+
+* Content Outline
+
+** Getting Started
+- What loops are and when to use them
+- Prerequisites: clean git tree, review model configured
+- Starting a loop via tool (~loop_start~) and slash command (~/loop start~)
+- Completing iterations via ~loop_done~
+- Checking status via ~/loop status~
+
+** The Plan-Code-Review Cycle
+- Explain the three phases per iteration
+- Role handoffs and how context flows between phases
+- Iteration prompts and reflection prompts
+- The ~reflectEvery~ parameter (default: 3)
+
+** Domains
+- Built-in domains: code, test, architecture, ui, security, docs
+- What each domain contributes (guidelines template + default gates)
+- How domains are selected at loop start (~domains~ parameter)
+- Default: =["code", "test"]=
+
+** Gates
+- Four gate types: command, llm-review, artifact, human
+- Gate triggers: every-iteration, every-n, on-reflection, on-completion, on-child-complete
+- Failure policies: retry, block, skip, escalate
+- Human gates and auto-approve timers
+- How to approve/reject via =/loop approve= and =/loop reject=
+
+** Safeguards
+- Budget limits: 4h wall-clock, 200 tree iterations, 5 idle iterations
+- Runaway detection via progress hash comparison
+- Kill switch: =/loop kill= cascades through parent-child tree
+- Spec drift detection during reflection
+
+** Child Loops (Recursion)
+- Spawning child loops (depth limit 3)
+- DAG-based cycle detection
+- Failure policies for child completion
+- Required vs optional children
+
+** Slash Commands Reference
+- ~/loop start <name>~
+- ~/loop pause <id>~
+- ~/loop resume <id>~
+- ~/loop status [id]~
+- ~/loop list~
+- ~/loop kill <id>~
+- ~/loop approve <loopId> <gateId>~
+- ~/loop reject <loopId> <gateId>~
+
+** Tool Parameters Reference
+- ~loop_start~: name, taskContent, maxIterations, reflectEvery, domains
+- ~loop_done~: loopId, summary, changedFiles, findings, forceValidate, taskContent
+
+** Practical Examples
+- Example 1: Simple code-and-test loop
+- Example 2: Loop with custom gates
+- Example 3: Working with human approval gates
+
+* Acceptance Criteria
+- File exists at =packages/coding-agent/src/loop/TUTORIAL.md=
+- Covers all 8 content sections listed above
+- Includes concrete parameter examples for tool invocations and slash commands
+- Includes at least 3 practical workflow examples
+- All type names, parameter names, and default values match the source code
+- No invented behavior: every claim is traceable to the implementation

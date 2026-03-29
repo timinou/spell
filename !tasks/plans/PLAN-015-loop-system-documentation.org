@@ -1,0 +1,74 @@
+#+TITLE: Loop System Documentation
+#+STATE: DONE
+#+SESSION_ID: 14a60f2471639474
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T19-17-04-581Z_14a60f2471639474.jsonl]]
+#+CUSTOM_ID: PLAN-015-loop-system-documentation
+
+
+* Initial Message
+
+I recently created a loop system. Can you write a complete tutorial about it please? Investigate and give me your summary, then ask me questions, then plan to write the tutorial
+
+* Context
+The Spell Loop system is a recently built multi-iteration orchestration framework (~16 subsystems, ~30 files under =packages/coding-agent/src/loop/=). It has no documentation beyond terse tool descriptions. Two complementary documents are needed:
+
+1. *Tutorial* (=TUTORIAL.md=) -- user-facing guide for anyone using loops in Spell. Covers getting started, the plan-code-review cycle, domains, gates, safeguards, child loops, slash commands, tool parameters, and practical examples.
+2. *Architecture Reference* (=ARCHITECTURE.md=) -- contributor-facing deep dive into every subsystem. Covers the state machine, data model, iteration flow, gate system, domain system, persistence layers, recursion, safeguards, integration points, replay/debug, and constants.
+
+Both files live at =packages/coding-agent/src/loop/=.
+
+** Key Design Decisions
+- Two files, not one: separates the "how to use" from the "how it works" concern.
+- Placed alongside the source code rather than a top-level =docs/= directory, because the loop system is self-contained and the documentation references internal types/paths extensively.
+- All facts must be traced to source -- no invented behavior.
+- Cross-references between the two documents where appropriate (tutorial links to architecture for depth, architecture links to tutorial for usage examples).
+
+** Source Files to Reference
+Core: =kernel.ts=, =loop-manager.ts=, =types.ts=, =constants.ts=, =contracts/enums.ts=
+Tools: =loop-tools.ts=, =prompts/loop-start-tool.md=, =prompts/loop-done-tool.md=
+Orchestration: =orchestration/phase-coordinator.ts=, =orchestration/switcher.ts=, =orchestration/handoff.ts=
+Gates: =gates/evaluator.ts=, =gates/trigger.ts=, =gates/executors/command.ts=, =gates/executors/human.ts=, =gates/executors/artifact.ts=, =gates/executors/llm-review.ts=
+Domains: =domains/registry.ts=, =domains/code.ts=, =domains/test.ts=
+Persistence: =persistence/checkpoint.ts=, =persistence/event-log.ts=, =persistence/org-sync.ts=, =persistence/session-hooks.ts=
+Recursion: =recursion/spawner.ts=, =recursion/dag.ts=, =recursion/depth-guard.ts=, =recursion/completion-handler.ts=
+Safeguards: =safeguards/budget.ts=, =safeguards/runaway.ts=, =safeguards/kill-switch.ts=
+Git: =git/dirty-check.ts=, =git/drift.ts=
+Replay: =replay/replayer.ts=, =replay/formatter.ts=, =replay/commands.ts=
+Integration: =loop-commands.ts=, =dashboard-bridge.ts=, =config/loop-prerequisites.ts=, =tools/index.ts= (lines 226-227)
+
+* Verification
+- Both files exist at the specified paths
+- =bun check:ts= passes (no broken imports from the new .md files -- but these are standalone docs, not imported)
+- Spot-check: every constant value, type name, and default matches the source code
+- Tutorial includes at least 3 practical workflow examples
+- Architecture includes the full ALLOWED_TRANSITIONS table and directory map
+
+* Execution Manifest
+1. [[id:FEAT-041-write-loop-system-tutorial]] (depends: none, effort: 2h)
+   Write the user-facing tutorial covering getting started, plan-code-review cycle, domains, gates, safeguards, child loops, slash commands, tool parameters, and practical examples.
+2. [[id:FEAT-042-write-loop-system-architecture-reference]] (depends: none, effort: 2h)
+   Write the contributor-facing architecture reference covering all 12 subsystem sections.
+
+Both items are independent and can execute in parallel -- the tutorial references usage patterns while the architecture references implementation details. Cross-references can be added in both directions since the file paths are known ahead of time.
+
+
+** Completion [2026-03-29]
+
+*** Verification
+- Both files created and verified:
+  - =packages/coding-agent/src/loop/TUTORIAL.md= (423 lines, 15,689 bytes)
+  - =packages/coding-agent/src/loop/ARCHITECTURE.md= (869 lines, 32,958 bytes)
+- Spot-checked all constant values against =constants.ts=: LOOP_SCHEMA_VERSION, DEFAULT_LOOP_MAX_ITERATIONS, DEFAULT_LOOP_REFLECT_EVERY, DEFAULT_LOOP_DEPTH_LIMIT, DEFAULT_LOOP_CONCURRENCY_LIMIT, DEFAULT_HUMAN_GATE_TIMEOUT_MS, DEFAULT_BUDGET_LIMITS -- all match
+- Verified all enum values in =contracts/enums.ts=: LOOP_STATES (10), GATE_TRIGGERS (5), FAILURE_POLICIES (4), GATE_TYPES (4), GATE_OUTCOMES (4), CHILD_OUTCOMES (4), LOOP_ROLES (3) -- all match
+- Verified full ALLOWED_TRANSITIONS table in =kernel.ts= against documentation -- exact match
+- Verified =done()= state routing logic matches documentation
+- Tutorial contains 3 practical examples (requirement: at least 3)
+- Architecture contains full ALLOWED_TRANSITIONS table and directory map (both required)
+- Cross-references present between both documents
+
+*** Artifacts
+- =packages/coding-agent/src/loop/TUTORIAL.md= -- User-facing tutorial (8 sections, 3 examples)
+- =packages/coding-agent/src/loop/ARCHITECTURE.md= -- Contributor-facing architecture reference (13 sections)
+
+*** Deviations
+None.
