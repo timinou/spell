@@ -1,0 +1,69 @@
+#+TITLE: Fix subtask org Initial Message pollution
+#+STATE: DONE
+#+SESSION_ID: 14a63c23006c00f2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-33-39-585Z_14a63c23006c00f2.jsonl]]
+#+CUSTOM_ID: PLAN-026-fix-subtask-org-initial-message-pollutio
+
+
+* Initial Message
+
+⏳ Org: get id:FEAT-054-document-webhookhandler-dispatch-event-a
+ * ITEM Document WebhookHandlerdispatch_event as phase-1 stub
+ :PROPERTIES:
+ :CUSTOM_ID: FEAT-054-document-webhookhandler-dispatch-event-a
+ :SESSION_ID: 14a63aebbcc0609b
+ :TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-djinn/2026-03-29T20-38-24-359Z_14a621c1d9c06050/62-CreateFeat10.jsonl]]
+ :CUSTOM_ID: FEAT-054-document-webhookhandler-dispatch-event-a
+ :EFFORT: 15m
+ :PRIORITY: C
+ :LAYER: documentation
+ :END:
+
+ * Initial Message
+
+ ═══════════Background═══════════
+
+ <con
+
+
+In session:  Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-djinn/2026-03-29T22-32-00-063Z_14a63bc1cfc0609d.jsonl
+ ID: 14a63bc1cfc0609d
+
+
+
+Why are org files like this getting the initial message as the initial prompt? which pathway led to them being created that way? do org files created in subtasks lead to this issue? how would you fix it? explain and show the tradeoffs
+
+* Context
+Org items created by subtasks (via the =task= tool) have their =* Initial Message= section
+populated with the entire subtask assignment/context blob instead of the user's original message.
+
+The root cause is ~buildSessionContext()~ in =packages/coding-agent/src/tools/org.ts= which
+unconditionally reads ~session.getFirstUserMessage()~. In subtask sessions (taskDepth > 0),
+that returns the parent agent's assignment text, not the actual user input.
+
+The fix gates ~initialMessage~ on ~taskDepth === 0~. The ~taskDepth~ field already exists on
+the =ToolSession= interface. Items created by subtasks still retain =SESSION_ID= and
+=TRANSCRIPT_PATH= for traceability.
+
+* Verification
+- =bun test packages/org/test/org-writer.test.ts= — existing writer tests pass
+- =bun test packages/coding-agent/test/plan-mode/org-plan.test.ts= — existing plan tests pass
+- =bun check:ts= — no type errors (no signature changes)
+
+* Execution Manifest
+1. [[id:BUG-017-org-items-created-by-subtasks-get-assign]] — 10m, no dependencies
+
+** Completion [2026-03-29]
+*** Verification
+- =bun test packages/org/test/org-writer.test.ts= — 13 pass, 0 fail
+- =bun test packages/coding-agent/test/plan-mode/org-plan.test.ts= — 7 pass, 0 fail
+- =tsgo --noEmit= — no new type errors (pre-existing errors in unrelated test file only)
+- Code review: single-line change gates ~initialMessage~ on ~(session.taskDepth ?? 0) > 0~
+
+*** Artifacts
+- Modified: =packages/coding-agent/src/tools/org.ts= line 200
+
+*** Deviations
+None.

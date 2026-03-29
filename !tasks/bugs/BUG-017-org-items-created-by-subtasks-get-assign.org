@@ -1,0 +1,76 @@
+#+TITLE: Org items created by subtasks get assignment blob as Initial Message
+#+STATE: DONE
+#+SESSION_ID: 14a63c23006c00f2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-33-39-585Z_14a63c23006c00f2.jsonl]]
+#+CUSTOM_ID: BUG-017-org-items-created-by-subtasks-get-assign
+#+EFFORT: 10m
+#+PRIORITY: #B
+#+LAYER: backend
+
+NOTE [2026-03-29]: Fixed: gated initialMessage on taskDepth === 0 in buildSessionContext(). Tests pass.
+
+* Initial Message
+
+⏳ Org: get id:FEAT-054-document-webhookhandler-dispatch-event-a
+ * ITEM Document WebhookHandlerdispatch_event as phase-1 stub
+ :PROPERTIES:
+ :CUSTOM_ID: FEAT-054-document-webhookhandler-dispatch-event-a
+ :SESSION_ID: 14a63aebbcc0609b
+ :TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-djinn/2026-03-29T20-38-24-359Z_14a621c1d9c06050/62-CreateFeat10.jsonl]]
+ :CUSTOM_ID: FEAT-054-document-webhookhandler-dispatch-event-a
+ :EFFORT: 15m
+ :PRIORITY: C
+ :LAYER: documentation
+ :END:
+
+ * Initial Message
+
+ ═══════════Background═══════════
+
+ <con
+
+
+In session:  Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-djinn/2026-03-29T22-32-00-063Z_14a63bc1cfc0609d.jsonl
+ ID: 14a63bc1cfc0609d
+
+
+
+Why are org files like this getting the initial message as the initial prompt? which pathway led to them being created that way? do org files created in subtasks lead to this issue? how would you fix it? explain and show the tradeoffs
+
+* Problem
+When =org create= is called from a subtask (taskDepth > 0), ~buildSessionContext()~ in
+=packages/coding-agent/src/tools/org.ts= reads ~session.getFirstUserMessage()~ which returns
+the subtask's assignment/context blob — not the user's original message. This gets written
+as =* Initial Message= in the org file, polluting every subtask-created item with kilobytes
+of orchestration context.
+
+* Root Cause
+~buildSessionContext()~ (org.ts line 196-202) does not check ~session.taskDepth~. In subtask
+sessions, the first user message IS the parent's assignment.
+
+* Fix
+In ~buildSessionContext()~, gate ~initialMessage~ on ~taskDepth === 0~:
+
+#+begin_src typescript
+function buildSessionContext(session: ToolSession): OrgSessionContext {
+    return {
+        sessionId: session.getSessionId?.() ?? undefined,
+        transcriptPath: session.getSessionFile() ?? undefined,
+        initialMessage: (session.taskDepth ?? 0) > 0
+            ? undefined
+            : (session.getFirstUserMessage?.() ?? undefined),
+    };
+}
+#+end_src
+
+* Files
+- =packages/coding-agent/src/tools/org.ts= — ~buildSessionContext()~ (line ~196)
+
+* Verification
+- Existing test in =packages/org/test/org-writer.test.ts= still passes (covers the writer itself)
+- Existing test in =packages/coding-agent/test/plan-mode/org-plan.test.ts= still passes
+- Manual: create an org item from a subtask — verify no =* Initial Message= section
+- Manual: create an org item from top-level session — verify =* Initial Message= still present
+- =bun check:ts= passes (no type changes)

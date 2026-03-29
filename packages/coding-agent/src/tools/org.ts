@@ -197,7 +197,7 @@ function buildSessionContext(session: ToolSession): OrgSessionContext {
 	return {
 		sessionId: session.getSessionId?.() ?? undefined,
 		transcriptPath: session.getSessionFile() ?? undefined,
-		initialMessage: session.getFirstUserMessage?.() ?? undefined,
+		initialMessage: (session.taskDepth ?? 0) > 0 ? undefined : (session.getFirstUserMessage?.() ?? undefined),
 	};
 }
 
