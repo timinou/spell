@@ -37,6 +37,11 @@ export async function runBrowseMode(session: AgentSession, options: BrowseModeOp
 	});
 
 	const mapper = new BrowseEventMapper();
+	mapper.onAdditionalEvent = additionalEvent => {
+		bridge.sendMessage("browse-shell", additionalEvent).catch(err => {
+			logger.error("Failed to send additional browse event to QML", { error: String(err) });
+		});
+	};
 	session.subscribe((event: AgentSessionEvent) => {
 		const qmlEvent = mapper.map(event);
 		if (qmlEvent) {

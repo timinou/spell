@@ -34,6 +34,7 @@ import type { AgentSession } from "./session/agent-session";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
 import { resolvePromptInput } from "./system-prompt";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
+import browseFindingsPrompt from "./prompts/agents/browse-findings.md" with { type: "text" };
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
 	try {
@@ -472,6 +473,18 @@ async function buildSessionOptions(
 		options.systemPrompt = resolvedSystemPrompt;
 	} else if (resolvedAppendPrompt) {
 		options.systemPrompt = defaultPrompt => `${defaultPrompt}\n\n${resolvedAppendPrompt}`;
+	}
+
+	// Browse mode: append research library prompt supplement
+	if (parsed.canvas === "browse" && browseFindingsPrompt) {
+		const currentPrompt = options.systemPrompt;
+		if (typeof currentPrompt === "function") {
+			options.systemPrompt = defaultPrompt => `${currentPrompt(defaultPrompt)}\n\n${browseFindingsPrompt}`;
+		} else if (typeof currentPrompt === "string") {
+			options.systemPrompt = `${currentPrompt}\n\n${browseFindingsPrompt}`;
+		} else {
+			options.systemPrompt = defaultPrompt => `${defaultPrompt}\n\n${browseFindingsPrompt}`;
+		}
 	}
 
 	// Tools

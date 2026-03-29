@@ -9,6 +9,7 @@ Item {
 
     property string sortMode: "time"
     property string filterTag: ""
+    property string viewMode: "curated"
 
     readonly property alias findingsModel: findingsModel
 
@@ -48,8 +49,37 @@ Item {
         return host.replace(/^www\./, "")
     }
 
+    function normalizeUrl(url) {
+        var raw = String(url || "")
+        if (raw.length === 0) return ""
+        var lower = raw.toLowerCase()
+        // Strip fragment
+        var hashIdx = lower.indexOf("#")
+        if (hashIdx >= 0) lower = lower.substring(0, hashIdx)
+        // Strip trailing slash
+        if (lower.length > 1 && lower.charAt(lower.length - 1) === "/") {
+            lower = lower.substring(0, lower.length - 1)
+        }
+        // Strip www. prefix from host
+        lower = lower.replace("://www.", "://")
+        return lower
+    }
+
+    function sourceTypeIcon(st) {
+        if (st === "search") return "\uD83D\uDD0D"
+        if (st === "fetch") return "\uD83D\uDCC4"
+        if (st === "code_search") return "\uD83D\uDCBB"
+        if (st === "browser") return "\uD83C\uDF10"
+        if (st === "agent") return "\u2728"
+        return ""
+    }
+
     function findingCount() {
         return findingsModel.count
+    }
+
+    function displayCount() {
+        return displayModel.count
     }
 
     function displayTitleAt(index) {
@@ -78,6 +108,11 @@ Item {
         var entries = []
         for (var i = 0; i < findingsModel.count; i++) {
             var item = findingsModel.get(i)
+            // Curated filter
+            if (root.viewMode === "curated" && item.curated !== "true") {
+                continue
+            }
+            // Tag filter
             if (root.filterTag.length > 0 && tagList(item.tagsText).indexOf(root.filterTag) < 0) {
                 continue
             }
@@ -90,6 +125,9 @@ Item {
                 domain: item.domain,
                 tabId: item.tabId,
                 timestamp: item.timestamp,
+                sourceType: item.sourceType,
+                curated: item.curated,
+                enriched: item.enriched,
                 expanded: false
             })
         }
@@ -120,8 +158,46 @@ Item {
         rebuildDisplayModel()
     }
 
+    function setViewMode(mode) {
+        root.viewMode = mode
+        rebuildDisplayModel()
+    }
+
     function handleMessage(payload) {
         if (!payload || payload.type !== "finding") return
+        var normalizedUrl = normalizeUrl(payload.url)
+        // Check for existing entry by normalized URL
+        if (normalizedUrl.length > 0) {
+            for (var i = 0; i < findingsModel.count; i++) {
+                var existing = findingsModel.get(i)
+                if (normalizeUrl(existing.url) === normalizedUrl) {
+                    // Merge/enrich: update excerpt if new one is longer
+                    var newExcerpt = String(payload.excerpt || "")
+                    if (newExcerpt.length > String(existing.excerpt).length) {
+                        findingsModel.setProperty(i, "excerpt", newExcerpt)
+                    }
+                    // Tags union
+                    var existingTags = tagList(existing.tagsText)
+                    var newTags = tagsTextFromPayload(payload).split("\n")
+                    var merged = existingTags.slice()
+                    for (var t = 0; t < newTags.length; t++) {
+                        if (newTags[t].length > 0 && merged.indexOf(newTags[t]) < 0) {
+                            merged.push(newTags[t])
+                        }
+                    }
+                    findingsModel.setProperty(i, "tagsText", merged.join("\n"))
+                    // Mark enriched
+                    findingsModel.setProperty(i, "enriched", "true")
+                    // Promote to curated if incoming is curated
+                    if (payload.curated) {
+                        findingsModel.setProperty(i, "curated", "true")
+                    }
+                    rebuildDisplayModel()
+                    return
+                }
+            }
+        }
+        // New finding: append
         findingsModel.append({
             id: String(payload.id || "finding-" + Date.now()),
             url: String(payload.url || ""),
@@ -130,8 +206,13 @@ Item {
             tagsText: tagsTextFromPayload(payload),
             domain: domainFromUrl(payload.url),
             tabId: String(payload.tabId || ""),
-            timestamp: Number(payload.timestamp || Date.now())
+            timestamp: Number(payload.timestamp || Date.now()),
+            sourceType: String(payload.sourceType || "agent"),
+            curated: payload.curated === false || payload.curated === "false" ? "false" : "true",
+            enriched: payload.enriched ? "true" : "false"
         })
+        // Cap at 200 entries
+        while (findingsModel.count > 200) findingsModel.remove(0)
         rebuildDisplayModel()
     }
 
@@ -164,6 +245,51 @@ Item {
                     font.family: SpellUI.SpellTheme.monoFontFamily
                     font.pixelSize: SpellUI.SpellTheme.fontSizeS
                     color: SpellUI.SpellTheme.textTertiary
+                }
+
+                // View mode toggle: Curated / All
+                Rectangle {
+                    implicitWidth: curatedText.implicitWidth + SpellUI.SpellTheme.spacingM
+                    implicitHeight: curatedText.implicitHeight + SpellUI.SpellTheme.spacingXS
+                    radius: SpellUI.SpellTheme.cornerRadiusSmall
+                    color: root.viewMode === "curated" ? SpellUI.SpellTheme.surface1 : "transparent"
+                    border.width: root.viewMode === "curated" ? 1 : 0
+                    border.color: SpellUI.SpellTheme.borderSubtle
+
+                    Text {
+                        id: curatedText
+                        anchors.centerIn: parent
+                        text: "Curated"
+                        font.family: SpellUI.SpellTheme.fontFamily
+                        font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                        color: root.viewMode === "curated" ? SpellUI.SpellTheme.textPrimary : SpellUI.SpellTheme.textTertiary
+                    }
+
+                    SpellUI.StateLayer {
+                        onClicked: root.setViewMode("curated")
+                    }
+                }
+
+                Rectangle {
+                    implicitWidth: allViewText.implicitWidth + SpellUI.SpellTheme.spacingM
+                    implicitHeight: allViewText.implicitHeight + SpellUI.SpellTheme.spacingXS
+                    radius: SpellUI.SpellTheme.cornerRadiusSmall
+                    color: root.viewMode === "all" ? SpellUI.SpellTheme.surface1 : "transparent"
+                    border.width: root.viewMode === "all" ? 1 : 0
+                    border.color: SpellUI.SpellTheme.borderSubtle
+
+                    Text {
+                        id: allViewText
+                        anchors.centerIn: parent
+                        text: "All"
+                        font.family: SpellUI.SpellTheme.fontFamily
+                        font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                        color: root.viewMode === "all" ? SpellUI.SpellTheme.textPrimary : SpellUI.SpellTheme.textTertiary
+                    }
+
+                    SpellUI.StateLayer {
+                        onClicked: root.setViewMode("all")
+                    }
                 }
 
                 Item { Layout.fillWidth: true }
@@ -284,6 +410,9 @@ Item {
                     required property bool expanded
                     required property int index
                     required property string domain
+                    required property string sourceType
+                    required property string curated
+                    required property string enriched
 
                     width: ListView.view.width
                     implicitHeight: expanded ? expandedColumn.implicitHeight + SpellUI.SpellTheme.spacingM * 2 : headerColumn.implicitHeight + SpellUI.SpellTheme.spacingM * 2
@@ -301,23 +430,47 @@ Item {
                             Layout.fillWidth: true
                             spacing: SpellUI.SpellTheme.spacingXS
 
-                            Text {
+                            RowLayout {
                                 Layout.fillWidth: true
-                                text: title
-                                font.family: SpellUI.SpellTheme.fontFamily
-                                font.pixelSize: SpellUI.SpellTheme.fontSizeS
-                                font.weight: SpellUI.SpellTheme.fontWeightMedium
-                                color: SpellUI.SpellTheme.textPrimary
-                                elide: Text.ElideRight
+                                spacing: SpellUI.SpellTheme.spacingXS
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: title
+                                    font.family: SpellUI.SpellTheme.fontFamily
+                                    font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                                    font.weight: SpellUI.SpellTheme.fontWeightMedium
+                                    color: SpellUI.SpellTheme.textPrimary
+                                    elide: Text.ElideRight
+                                }
+
+                                Text {
+                                    visible: enriched === "true"
+                                    text: "enriched"
+                                    font.family: SpellUI.SpellTheme.monoFontFamily
+                                    font.pixelSize: SpellUI.SpellTheme.fontSizeXS
+                                    color: SpellUI.SpellTheme.accent
+                                }
                             }
 
-                            Text {
+                            RowLayout {
                                 Layout.fillWidth: true
-                                text: domain
-                                font.family: SpellUI.SpellTheme.monoFontFamily
-                                font.pixelSize: SpellUI.SpellTheme.fontSizeS
-                                color: SpellUI.SpellTheme.textTertiary
-                                elide: Text.ElideRight
+                                spacing: SpellUI.SpellTheme.spacingXS
+
+                                Text {
+                                    visible: root.sourceTypeIcon(sourceType).length > 0
+                                    text: root.sourceTypeIcon(sourceType)
+                                    font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: domain
+                                    font.family: SpellUI.SpellTheme.monoFontFamily
+                                    font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                                    color: SpellUI.SpellTheme.textTertiary
+                                    elide: Text.ElideRight
+                                }
                             }
 
                             Text {
@@ -358,7 +511,7 @@ Item {
                 Text {
                     anchors.centerIn: parent
                     visible: findingsModel.count === 0 || displayModel.count === 0
-                    text: findingsModel.count === 0 ? "No findings yet" : "No findings match"
+                    text: findingsModel.count === 0 ? "No findings yet" : (displayModel.count === 0 && root.viewMode === "curated" ? "No curated findings. Switch to All to see auto-generated findings." : "No findings match")
                     font.family: SpellUI.SpellTheme.fontFamily
                     font.pixelSize: SpellUI.SpellTheme.fontSizeS
                     color: SpellUI.SpellTheme.textTertiary

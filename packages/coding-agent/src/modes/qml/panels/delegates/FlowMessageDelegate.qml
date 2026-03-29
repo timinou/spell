@@ -17,6 +17,10 @@ Item {
     required property string excerpt
     required property string tagsText
     required property string tabId
+    required property string sourceType
+    required property string query
+    required property string sourcesJson
+    required property string collapsed
 
     signal toggleExpanded(int index)
     signal viewInTab(string tabId, string url, string title)
@@ -32,6 +36,7 @@ Item {
             if (root.role === "tool") return toolComponent
             if (root.role === "image") return imageComponent
             if (root.role === "finding") return findingComponent
+            if (root.role === "search_group") return searchGroupComponent
             return assistantComponent
         }
     }
@@ -91,6 +96,7 @@ Item {
         id: findingComponent
 
         FindingCard {
+            sourceType: root.sourceType
             width: root.width
             url: root.url
             title: root.title
@@ -100,6 +106,25 @@ Item {
             showSeparator: root.index > 0
             onViewInTab: function(tabId, url, title) {
                 root.viewInTab(tabId, url, title)
+            }
+        }
+    }
+
+    Component {
+        id: searchGroupComponent
+
+        SearchGroupDelegate {
+            width: root.width
+            query: root.query
+            sourcesJson: root.sourcesJson
+            collapsed: root.collapsed
+            index: root.index
+            showSeparator: root.index > 0
+            onViewInTab: function(tabId, url, title) {
+                root.viewInTab(tabId, url, title)
+            }
+            onToggleCollapsed: function(index) {
+                root.toggleExpanded(index)
             }
         }
     }

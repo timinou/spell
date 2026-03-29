@@ -1,0 +1,50 @@
+#+TITLE: BrowseJourney research flow integration tests
+#+STATE: DONE
+#+SESSION_ID: 14a4eb4e2f680249
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T22-02-01-277Z_14a4eb4e2f680249.jsonl]]
+#+CUSTOM_ID: FEAT-049-browsejourney-research-flow-integration
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: ts
+
+* Initial Message
+
+How would you enable something for me to look at the result of web searches and fetches to see the research library being built? Because a lot of research is done through fetches not through browsers, so it would be nice to integrate that to the UX. Ask me as many questions as humanly possible. Think about this in the context of the UX we'd like to create
+
+* Scope
+In-scope:
+- Extend ~packages/coding-agent/test/helpers/browse-journey.ts~ with research-specific helpers:
+  - ~sendSearchBatch(query, sources)~: simulates findings_batch message with searchGroup
+  - ~sendFetchFinding(url, title, contentBody?)~: simulates single fetch finding
+  - ~expectSearchGroup(query)~: asserts search group visible in chat
+  - ~expectContentViewer(title)~: asserts content viewer tab active with title
+- New test file: ~packages/coding-agent/test/integration/browse-research-flow.test.ts~
+  - E2E scenario: simulated web_search batch -> findings appear in panel + chat search group
+  - E2E scenario: simulated fetch finding -> finding card -> view in tab -> content viewer
+  - E2E scenario: same URL found via search then fetched -> enrichment badge in panel
+  - E2E scenario: curated toggle hides auto-generated search findings, shows agent-curated
+- Regression: verify all existing browse-*.test.ts still pass
+
+Out-of-scope:
+- Real agent execution (tests use simulated messages via agentSends)
+- Browser navigation tests (covered by existing browser-*.test.ts)
+
+Depends on: All previous items (FEAT-045 through FEAT-048 — needs full research library pipeline)
+
+* Tests
+This item IS the tests. The scenarios above ARE the deliverable.
+
+* Implementation
+1. Add helper methods to browse-journey.ts
+2. Create browse-research-flow.test.ts with the E2E scenarios
+3. Run full ~bun test test/integration/browse-*.test.ts~ suite to verify no regressions
+
+* Edge Cases
+- Tests must use unique settingsCategory per test to avoid cross-test state pollution (pattern established in existing browse tests)
+- Tests must handle QML settle time for complex renders (search group expansion, content viewer loading)
+- Tests skip gracefully when bridge binary is unavailable via ~describe.skipIf(!isBridgeAvailable())~
+
+* Acceptance Criteria
+- ~bun test test/integration/browse-research-flow.test.ts~ passes
+- ~bun test test/integration/browse-*.test.ts~ passes (all browse integration tests including existing ones)
+- No test flakes on 3 consecutive runs

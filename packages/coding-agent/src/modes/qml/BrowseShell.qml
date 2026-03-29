@@ -3,6 +3,7 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtCore
 import "." as SpellUI
+import "BrowseContentStore.js" as ContentStore
 
 ApplicationWindow {
     id: root
@@ -56,6 +57,7 @@ ApplicationWindow {
         category: root.browseSettingsCategory
         property string tabsJson: "[]"
         property string activeTabId: ""
+        property string findingsJson: "[]"
     }
 
     ListModel {
@@ -64,6 +66,13 @@ ApplicationWindow {
 
     function activeTabId() {
         return activeBrowserTabId.length > 0 ? activeBrowserTabId : "chat"
+    }
+
+    function activeTabType() {
+        if (activeBrowserTabId.length === 0) return "chat"
+        var index = findBrowserTabIndexById(activeBrowserTabId)
+        if (index < 0) return "browser"
+        return String(browserTabsModel.get(index).tabType || "browser")
     }
 
     function findBrowserTabIndexById(tabId) {
@@ -97,7 +106,8 @@ ApplicationWindow {
             tabs.push({
                 tabId: String(tab.tabId || ("restored-" + i)),
                 title: String(tab.title || "Browser"),
-                url: String(tab.url || "about:blank")
+                url: String(tab.url || "about:blank"),
+                tabType: String(tab.tabType || "browser")
             })
         }
         return tabs
@@ -120,7 +130,8 @@ ApplicationWindow {
             tabs.push({
                 tabId: String(entry.tabId || ("restored-" + i)),
                 title: String(entry.title || "Browser"),
-                url: String(entry.url || "about:blank")
+                url: String(entry.url || "about:blank"),
+                tabType: String(entry.tabType || "browser")
             })
         }
         return tabs
@@ -130,6 +141,62 @@ ApplicationWindow {
         if (restoringTabs) return
         browseSettings.tabsJson = JSON.stringify(browserTabsSnapshot())
         browseSettings.activeTabId = activeBrowserTabId
+    }
+
+    function persistFindings() {
+        var panel = getFindingsPanelItem()
+        if (!panel || !panel.findingsModel) return
+        var entries = []
+        for (var i = 0; i < panel.findingsModel.count && i < 200; i++) {
+            var item = panel.findingsModel.get(i)
+            entries.push({
+                id: String(item.id || ""),
+                url: String(item.url || ""),
+                title: String(item.title || ""),
+                excerpt: String(item.excerpt || ""),
+                tagsText: String(item.tagsText || ""),
+                tabId: String(item.tabId || ""),
+                timestamp: Number(item.timestamp || 0),
+                sourceType: String(item.sourceType || "agent"),
+                curated: String(item.curated || "false"),
+                enriched: String(item.enriched || "false")
+            })
+        }
+        browseSettings.findingsJson = JSON.stringify(entries)
+    }
+
+    function restoreFindingsFromState() {
+        var raw = browseSettings.findingsJson
+        if (typeof raw !== "string" || raw.length < 3) return
+        try {
+            var entries = JSON.parse(raw)
+            if (!entries || entries.length === undefined) return
+            for (var i = 0; i < entries.length; i++) {
+                var entry = entries[i]
+                if (!entry || typeof entry !== "object") continue
+                var tagsRaw = String(entry.tagsText || "").split("\n")
+                var tagsClean = []
+                for (var t = 0; t < tagsRaw.length; t++) {
+                    if (tagsRaw[t].length > 0) tagsClean.push(tagsRaw[t])
+                }
+                forwardToFindingsPanel({
+                    type: "finding",
+                    id: entry.id || "",
+                    url: entry.url || "",
+                    title: entry.title || "",
+                    excerpt: entry.excerpt || "",
+                    tags: tagsClean,
+                    tabId: entry.tabId || "",
+                    timestamp: entry.timestamp || 0,
+                    sourceType: entry.sourceType || "agent",
+                    curated: entry.curated === "true",
+                    enriched: entry.enriched === "true"
+                })
+                findingsCount += 1
+            }
+        } catch (e) {
+            // Silently ignore corrupt settings
+        }
     }
 
     function restoreTabsFromState() {
@@ -144,7 +211,7 @@ ApplicationWindow {
 
         for (var i = 0; i < restoredTabs.length; i++) {
             var tab = restoredTabs[i]
-            upsertBrowserTab(tab.tabId, tab.title, tab.url, false)
+            upsertBrowserTab(tab.tabId, tab.title, tab.url, false, tab.tabType)
             forwardToBrowserPanel({ action: "tab:open", tabId: tab.tabId, title: tab.title, url: tab.url })
         }
 
@@ -163,13 +230,15 @@ ApplicationWindow {
         persistTabState()
     }
 
-    function upsertBrowserTab(tabId, title, url, activate) {
+    function upsertBrowserTab(tabId, title, url, activate, tabType) {
         if (!tabId) return
         var index = findBrowserTabIndexById(tabId)
+        var resolvedTabType = tabType || "browser"
         var tab = {
             tabId: tabId,
             title: title && title.length > 0 ? title : "Browser",
-            url: url || "about:blank"
+            url: url || "about:blank",
+            tabType: resolvedTabType
         }
         if (index >= 0) {
             browserTabsModel.set(index, tab)
@@ -187,6 +256,7 @@ ApplicationWindow {
         var index = findBrowserTabIndexById(tabId)
         if (index < 0) return
         browserTabsModel.remove(index)
+        ContentStore.remove(tabId)
         if (activeBrowserTabId === tabId) {
             if (browserTabsModel.count === 0) {
                 activeBrowserTabId = ""
@@ -207,7 +277,8 @@ ApplicationWindow {
         browserTabsModel.set(index, {
             tabId: current.tabId,
             title: payload.title !== undefined && String(payload.title).length > 0 ? String(payload.title) : current.title,
-            url: payload.url !== undefined && String(payload.url).length > 0 ? String(payload.url) : current.url
+            url: payload.url !== undefined && String(payload.url).length > 0 ? String(payload.url) : current.url,
+            tabType: current.tabType || "browser"
         })
         persistTabState()
     }
@@ -317,16 +388,54 @@ ApplicationWindow {
             findingsCount += 1
             forwardToFindingsPanel(payload)
             forwardToChat(payload)
+            persistFindings()
             return
         }
+
+        if (payload.type === "findings_batch") {
+            var findings = payload.findings || []
+            for (var i = 0; i < findings.length; i++) {
+                var f = findings[i]
+                findingsCount += 1
+                forwardToFindingsPanel({
+                    type: "finding",
+                    id: f.id || "",
+                    url: f.url || "",
+                    title: f.title || "",
+                    excerpt: f.excerpt || "",
+                    tags: f.tags || [],
+                    tabId: f.tabId || "",
+                    timestamp: f.timestamp || Date.now(),
+                    sourceType: f.sourceType || "search",
+                    curated: !!f.curated,
+                    enriched: !!f.enriched
+                })
+                if (f.contentBody && f.contentBody.length > 0 && f.url) {
+                    ContentStore.set(f.url, f.contentBody)
+                }
+            }
+            forwardToChat(payload)
+            persistFindings()
+            return
+        }
+
 
         if (payload.action === "browser:url_changed" || payload.action === "browser:result" || payload.action === "browser:navigation_failed") {
             updateBrowserTabFromPayload(payload)
         }
 
         if (payload.action === "tab:open") {
-            upsertBrowserTab(String(payload.tabId || ""), String(payload.title || ""), String(payload.url || ""), true)
-            forwardToBrowserPanel(payload)
+            var content = ContentStore.get(String(payload.url || ""))
+            var resolvedTabType = content ? "document" : "browser"
+            upsertBrowserTab(String(payload.tabId || ""), String(payload.title || ""), String(payload.url || ""), true, resolvedTabType)
+            if (resolvedTabType === "document") {
+                ContentStore.set(String(payload.tabId), content)
+                if (contentViewerLoader.item) {
+                    contentViewerLoader.item.loadContent(payload.url, payload.title, content)
+                }
+            } else {
+                forwardToBrowserPanel(payload)
+            }
             return
         }
 
@@ -354,6 +463,17 @@ ApplicationWindow {
         var browserPanel = getBrowserPanelItem()
         if (browserPanel && typeof browserPanel.focusTab === "function") {
             browserPanel.focusTab(activeBrowserTabId)
+        }
+        if (root.activeTabType() === "document" && contentViewerLoader.item) {
+            var content = ContentStore.get(activeBrowserTabId)
+            var tabIndex = findBrowserTabIndexById(activeBrowserTabId)
+            var tabUrl = ""
+            var tabTitle = ""
+            if (tabIndex >= 0) {
+                tabUrl = String(browserTabsModel.get(tabIndex).url || "")
+                tabTitle = String(browserTabsModel.get(tabIndex).title || "")
+            }
+            contentViewerLoader.item.loadContent(tabUrl, tabTitle, content || "")
         }
     }
 
@@ -442,6 +562,7 @@ ApplicationWindow {
                                     required property string tabId
                                     required property string title
                                     required property string url
+                                    required property string tabType
 
                                     width: Math.max(88, tabLabel.implicitWidth + SpellUI.SpellTheme.spacingL * 2)
                                     height: 32
@@ -455,7 +576,7 @@ ApplicationWindow {
                                     Text {
                                         id: tabLabel
                                         anchors.centerIn: parent
-                                        text: title || "Browser"
+                                        text: (tabType === "document" ? "\uD83D\uDCC4 " : "") + (title || "Browser")
                                         font.family: SpellUI.SpellTheme.fontFamily
                                         font.pixelSize: SpellUI.SpellTheme.fontSizeS
                                         font.weight: root.activeTabId() === tabId
@@ -500,13 +621,30 @@ ApplicationWindow {
                 id: browserPanelLoader
                 anchors.fill: parent
                 active: true
-                visible: root.activeTabId() !== "chat"
+                visible: root.activeTabId() !== "chat" && root.activeTabType() !== "document"
                 source: Qt.resolvedUrl("panels/BrowserPanel.qml")
                 onLoaded: {
                     if (item && typeof item.focusTab === "function") {
                         item.focusTab(root.activeBrowserTabId)
                     }
                     root.flushPendingBrowserPanel()
+                }
+            }
+
+            Loader {
+                id: contentViewerLoader
+                anchors.fill: parent
+                active: true
+                visible: root.activeTabType() === "document"
+                source: Qt.resolvedUrl("panels/ContentViewerPanel.qml")
+                onLoaded: {
+                    if (item) {
+                        item.viewInBrowser.connect(function(url, title) {
+                            var newTabId = "browser-" + Date.now()
+                            upsertBrowserTab(newTabId, title, url, true, "browser")
+                            forwardToBrowserPanel({ action: "tab:open", tabId: newTabId, title: title, url: url })
+                        })
+                    }
                 }
             }
         }
@@ -605,7 +743,10 @@ ApplicationWindow {
         }
     }
 
-    Component.onCompleted: restoreTabsFromState()
+    Component.onCompleted: {
+        restoreTabsFromState()
+        restoreFindingsFromState()
+    }
 
     Connections {
         target: bridge

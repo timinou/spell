@@ -1,0 +1,82 @@
+#+TITLE: Browse research library integration
+#+STATE: DOING
+#+SESSION_ID: 14a4eb4e2f680249
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T22-02-01-277Z_14a4eb4e2f680249.jsonl]]
+#+CUSTOM_ID: PLAN-018-browse-research-library-integration
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Context
+
+** Problem
+
+The browse mode (~spell --canvas browse~) has a working findings panel and inline finding cards, but findings only enter the system when the agent explicitly sends a ~customType='finding'~ message. Most research happens through ~web_search~ (returns SearchSource[]), ~fetch~ (returns scraped content), and ~code_search~ (returns CodeSearchSource[]) tool calls -- none of which surface in the findings panel or research library. The user cannot see the research being built in real time unless the agent cooperates.
+
+** Approach
+
+Hybrid auto-creation + agent-driven curation:
+- *web_search*: every SearchSource automatically becomes a finding (sourceType='search', curated=false)
+- *code_search*: every CodeSearchSource becomes a finding (sourceType='code_search', curated=false)
+- *fetch*: URL tracked as uncurated finding automatically; agent can promote noteworthy fetches via explicit custom message (curated=true)
+- FindingsPanel gets Curated/All toggle -- curated by default, All shows everything including background fetches
+- Dedup by normalized URL in findings panel; enrichment merges later data into existing finding
+- Search results grouped under collapsible headers in chat flow
+- Fetched content viewable in a dedicated ContentViewer panel tab (document type, with markdown rendering, search, copy)
+- Each finding card shows source type icon (search/fetch/code/browser/agent)
+- Browse-mode system prompt supplement teaches agent to emit findings for noteworthy fetches
+
+** Key Design Decisions
+
+1. *Batched finding emission*: BrowseEventMapper emits ~{type:'findings_batch', findings:[], searchGroup?:{query}}~ for web_search -- avoids 10+ rapid bridge messages and provides natural search grouping boundary. map() signature stays ~Record<string,unknown> | null~ (no breaking change). Additional events emitted via onAdditionalEvent callback.
+2. *Start-end correlation*: mapper maintains ~Map<toolCallId, {toolName, args}>~ from tool_execution_start to retrieve query/URL at tool_execution_end (args not available on end event)
+3. *Per-tool extraction*: web_search/code_search iterate sources arrays; fetch produces exactly one finding from URL. All three guard against isError, missing details, and error fields before extracting.
+4. *QML ListModel arrays*: all array-typed fields use newline-delimited strings (tagsText pattern) or JSON strings (sourcesJson) -- QML ListModel cannot store native arrays
+5. *Content store*: fetched content bodies stored in BrowseContentStore.js (imported by BrowseShell), keyed by tabId, LRU-evicted at 10 entries -- avoids 50KB strings in ListModel
+6. *Three-way panel visibility*: BrowseShell chat/browser/document via tabType field on browserTabsModel entries
+7. *Persistence without content*: findings metadata persisted in QSettings (excludes contentBody to stay under size limits), content re-fetched on demand
+8. *Enrichment without timeline*: merge data on dedup (update excerpt, set enriched badge), but clickable interaction timeline deferred to [[id:FEAT-050-finding-enrichment-timeline-visualizatio]]
+
+** Critical File Paths
+- ~packages/coding-agent/src/modes/browse-findings.ts~ (schema extension, URL normalization)
+- ~packages/coding-agent/src/modes/browse-event-mapper.ts~ (tool interception, batch emission)
+- ~packages/coding-agent/src/modes/browse-mode.ts~ (batch event handling, view_in_tab content)
+- ~packages/coding-agent/src/modes/qml/BrowseShell.qml~ (findings_batch routing, content store, three-way visibility, persistence)
+- ~packages/coding-agent/src/modes/qml/BrowseContentStore.js~ (new: LRU content store for document tabs)
+- ~packages/coding-agent/src/modes/qml/panels/FindingsPanel.qml~ (curated toggle, dedup, sort/filter)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/FindingCard.qml~ (source icons, enriched badge)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/SearchGroupDelegate.qml~ (new: collapsible search group)
+- ~packages/coding-agent/src/modes/qml/panels/delegates/FlowMessageDelegate.qml~ (search_group routing)
+- ~packages/coding-agent/src/modes/qml/panels/BrowseChatPanel.qml~ (findings_batch handler, search_group role)
+- ~packages/coding-agent/src/modes/qml/panels/ContentViewerPanel.qml~ (new: markdown viewer with search/copy)
+- ~packages/coding-agent/src/prompts/agents/browse-findings.md~ (new: agent prompt supplement)
+- ~packages/coding-agent/src/main.ts~ (prompt wiring for browse mode)
+
+** Showcase Use Case
+User says "research quantum computing". Agent runs web_search -> 10 SearchSource findings automatically appear in FindingsPanel (All mode) and chat (collapsible search group). Agent fetches 3 promising URLs -> they appear as fetch findings in All mode. Agent marks 2 as noteworthy via sendCustomMessage -> those 2 appear in Curated mode. User clicks a fetched finding -> ContentViewer tab opens with rendered markdown. User clicks "Open in browser" -> live browser tab opens.
+
+* Verification
+- ~cd packages/coding-agent && bun run check~
+- ~bun test test/integration/browse-*.test.ts test/modes/browse-event-mapper.test.ts test/modes/browse-findings.test.ts test/tools/canvas-browser-protocol.test.ts~
+- ~qmllint src/modes/qml/BrowseShell.qml src/modes/qml/panels/FindingsPanel.qml src/modes/qml/panels/BrowseChatPanel.qml src/modes/qml/panels/ContentViewerPanel.qml src/modes/qml/panels/delegates/FindingCard.qml src/modes/qml/panels/delegates/SearchGroupDelegate.qml src/modes/qml/panels/delegates/FlowMessageDelegate.qml~
+- Screenshot artifacts:
+  - ~browse-findings-curated-toggle.png~ -- panel with curated/all toggle visible, both finding types shown
+  - ~browse-search-group-expanded.png~ -- expanded search group in chat with source cards
+  - ~browse-content-viewer-panel.png~ -- document tab with rendered markdown, search bar visible
+- Existing ~spell --canvas chat~ and ~spell --canvas fluid~ regression: ~bun test test/integration/shell-chat-input.test.ts test/integration/fluid-shell-lifecycle.test.ts~
+
+* Execution Manifest
+
+** Phase 1 (sequential, foundation -- no dependencies)
+1. [[id:FEAT-045-finding-schema-and-mapper-tool-intercept]] -- Finding schema + mapper tool interception + prompt supplement (effort: 4h30m, depends: none)
+
+** Phase 2 (sequential, needs Phase 1)
+2. [[id:FEAT-046-findingspanel-curated-toggle-dedup-and-p]] -- FindingsPanel curated toggle, dedup, icons, persistence (effort: 3h, depends: FEAT-045 sourceType/curated/enriched fields + normalizeUrlForDedup)
+3. [[id:FEAT-047-search-grouping-in-chat]] -- Search grouping in chat (effort: 3h, depends: FEAT-046 FindingCard with sourceType icons)
+
+** Phase 3 (sequential, needs Phase 2)
+4. [[id:FEAT-048-contentviewer-panel-and-document-tabs]] -- ContentViewer panel + document tabs + BrowseContentStore.js extraction (effort: 6h, depends: FEAT-046 persistence format + FEAT-047 chat integration)
+
+** Phase 4 (needs all above)
+5. [[id:FEAT-049-browsejourney-research-flow-integration]] -- E2E research flow integration tests (effort: 2h, depends: FEAT-045 through FEAT-048)
+
+** Deferred (not executed in this plan)
+- [[id:FEAT-050-finding-enrichment-timeline-visualizatio]] -- Clickable enrichment timeline (effort: 3h, deferred to follow-up)

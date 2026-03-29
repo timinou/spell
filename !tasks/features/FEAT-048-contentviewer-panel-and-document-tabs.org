@@ -1,0 +1,78 @@
+#+TITLE: ContentViewer panel and document tabs
+#+STATE: DONE
+#+SESSION_ID: 14a4eb4e2f680249
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T22-02-01-277Z_14a4eb4e2f680249.jsonl]]
+#+CUSTOM_ID: FEAT-048-contentviewer-panel-and-document-tabs
+#+EFFORT: 6h
+#+PRIORITY: #B
+#+LAYER: qml+ts
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+How would you enable something for me to look at the result of web searches and fetches to see the research library being built? Because a lot of research is done through fetches not through browsers, so it would be nice to integrate that to the UX. Ask me as many questions as humanly possible. Think about this in the context of the UX we'd like to create
+
+* Scope
+In-scope:
+- New panel: ~packages/coding-agent/src/modes/qml/panels/ContentViewerPanel.qml~
+  - Wraps MarkdownContent (~panels/markdown/MarkdownContent.qml~) in Flickable for scroll
+  - Top bar: URL display (elided), search bar (TextInput for text search), copy-all button, 'Open in browser' button
+  - Search: JavaScript iteration over visible Text elements to find matches, scroll-to-match on enter
+  - Copy: copies raw markdown content to clipboard via clipboard API
+  - 'Open in browser': emits ~viewInBrowser(url, title)~ signal
+  - Receives content via handleMessage({type:'load_content', content, url, title})
+- Content store in BrowseShell.qml: JS object map ~contentStore~ keyed by tabId. LRU eviction at 10 entries. Populated when document tab created from finding with contentBody
+- Document tab type: extend ~browserTabsModel~ entries with ~tabType~ field ('browser'|'document'). Existing tabs default to 'browser'
+- BrowseShell.qml three-way visibility:
+  - chatLoader visible when activeTabId==='chat'
+  - browserPanelLoader visible when active tab has tabType==='browser'
+  - contentViewerLoader (new Loader) visible when active tab has tabType==='document'
+- Tab bar: document tabs show document icon prefix instead of no icon
+- Finding card 'View in tab': if finding has contentBody, create document tab and load content. If no contentBody, create browser tab with URL. Updated in BrowseShell.qml handleBridgeMessage for view_in_tab
+- browse-mode.ts (~packages/coding-agent/src/modes/browse-mode.ts~): update view_in_tab handler to pass contentBody from finding to shell
+- Tab persistence: extend browseSettings.tabsJson format to include tabType field. Content bodies NOT persisted (re-fetched on demand). On restore, document tabs that lost content show 'Content unavailable, open in browser' placeholder
+
+Out-of-scope:
+- Syntax highlighting in ContentViewer (future)
+- Enrichment timeline (deferred item)
+
+Depends on:
+- FEAT-046-findingspanel-curated-toggle-dedup-and-p (persistence format must be forward-compatible with tabType)
+- FEAT-047-search-grouping-in-chat (both complete before ContentViewer integrates)
+
+* Tests
+- File: ~packages/coding-agent/test/integration/browse-content-viewer.test.ts~ (new)
+  - Scenario: creating a document tab shows ContentViewer with rendered markdown content
+  - Scenario: 'Open in browser' from ContentViewer creates a browser tab
+  - Scenario: document tab shows doc icon in tab bar
+  - Scenario: switching between chat, browser tab, and document tab shows correct panel
+  - Scenario: content store evicts oldest entry when exceeding 10 tabs
+  - Scenario: document tab restored from persistence shows placeholder when content unavailable
+
+* Implementation
+1. Add tabType field to browserTabsModel in BrowseShell.qml (default 'browser' for existing entries)
+2. Update tab persistence (browserTabsSnapshot, parseRestoreTabs) for tabType
+3. Create ContentViewerPanel.qml with MarkdownContent, search bar, copy, open-in-browser
+4. Add contentViewerLoader to BrowseShell.qml with three-way visibility
+5. Add contentStore JS object with LRU logic in BrowseShell.qml
+6. Update view_in_tab handling in BrowseShell.qml and browse-mode.ts
+7. Update tab bar delegate for document icon prefix
+8. Write integration tests
+
+
+
+
+9. Extract content store logic into ~packages/coding-agent/src/modes/qml/BrowseContentStore.js~ (imported by BrowseShell.qml via ~import 'BrowseContentStore.js' as ContentStore~) — keeps BrowseShell as orchestrator, store as pure JS logic with LRU eviction, get/set/has/evict methods
+* Edge Cases
+- Content body > 50KB: truncate in content store, show 'Content truncated' note
+- Empty content body: show placeholder 'No content available' with 'Open in browser' button
+- Document tab URL is a PDF or image: show 'Open in browser' only (MarkdownContent cannot render these)
+- Content store eviction while tab is active: show placeholder, don't crash
+- Tab persistence migration: old sessions without tabType field default to 'browser'
+- Three-way visibility: only one Loader visible at any time (chat XOR browser XOR document)
+
+* Acceptance Criteria
+- ~bun test test/integration/browse-content-viewer.test.ts~ passes
+- ~qmllint~ passes on ContentViewerPanel.qml, BrowseShell.qml
+- ~bun run check~ passes
+- Screenshot artifact: ~browse-content-viewer-panel.png~ showing a document tab with rendered markdown content, search bar visible

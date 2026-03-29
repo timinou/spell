@@ -16,6 +16,9 @@ export interface BrowseFindingInput {
 	tags?: string[];
 	tabId?: string;
 	timestamp?: number;
+	sourceType?: string;
+	curated?: boolean;
+	contentBody?: string;
 }
 
 export interface ViewInTabEventPayload {
@@ -151,6 +154,70 @@ export class BrowseJourney {
 
 	async screenshot(name: string): Promise<string> {
 		return this.#journey.screenshot(name);
+	}
+
+	async sendSearchBatch(query: string, sources: BrowseFindingInput[]): Promise<void> {
+		const findings = sources.map(s => ({
+			id: s.id ?? randomId("finding"),
+			url: s.url,
+			title: s.title,
+			excerpt: s.excerpt ?? "",
+			tags: s.tags ?? [],
+			tabId: s.tabId ?? "",
+			timestamp: s.timestamp ?? Date.now(),
+			sourceType: s.sourceType ?? "search",
+			curated: s.curated ?? false,
+			enriched: false,
+		}));
+		await this.#journey.agentSends({
+			type: "findings_batch",
+			findings,
+			searchGroup: { query, toolCallId: randomId("call") },
+		});
+	}
+
+	async sendFetchFinding(url: string, title: string, contentBody?: string): Promise<void> {
+		await this.#journey.agentSends({
+			type: "findings_batch",
+			findings: [
+				{
+					id: randomId("finding"),
+					url,
+					title,
+					excerpt: "",
+					tags: [],
+					tabId: "",
+					timestamp: Date.now(),
+					sourceType: "fetch",
+					curated: false,
+					enriched: false,
+					contentBody: contentBody ?? "",
+				},
+			],
+			searchGroup: null,
+		});
+	}
+
+	async expectFindingsCount(count: number): Promise<void> {
+		await this.#journey.waitUntil(async () => {
+			return (await this.#journey.evaluate<number>("root.findingsCount")) === count || null;
+		}, 5_000);
+	}
+
+	async openFindingsDrawer(): Promise<void> {
+		const isOpen = await this.#journey.evaluate<boolean>("root.findingsDrawerOpen");
+		if (!isOpen) {
+			await this.#journey.click({ objectName: "findingsToggleButton", visible: true });
+			await this.#journey.waitUntil(async () => {
+				return (await this.#journey.evaluate<boolean>("root.findingsDrawerOpen")) || null;
+			}, 5_000);
+		}
+	}
+
+	async expectFindingsPanelCount(count: number): Promise<void> {
+		await this.#journey.waitUntil(async () => {
+			return (await this.#journey.evaluate<number>("root.getFindingsPanelItem().findingCount()")) === count || null;
+		}, 5_000);
 	}
 
 	async teardown(): Promise<void> {

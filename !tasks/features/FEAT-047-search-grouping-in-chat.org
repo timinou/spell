@@ -1,0 +1,64 @@
+#+TITLE: Search grouping in chat
+#+STATE: DONE
+#+SESSION_ID: 14a4eb4e2f680249
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T22-02-01-277Z_14a4eb4e2f680249.jsonl]]
+#+CUSTOM_ID: FEAT-047-search-grouping-in-chat
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: qml
+
+* Initial Message
+
+How would you enable something for me to look at the result of web searches and fetches to see the research library being built? Because a lot of research is done through fetches not through browsers, so it would be nice to integrate that to the UX. Ask me as many questions as humanly possible. Think about this in the context of the UX we'd like to create
+
+* Scope
+In-scope:
+- BrowseChatPanel.qml (~packages/coding-agent/src/modes/qml/panels/BrowseChatPanel.qml~): add ~findings_batch~ handler that creates a ~search_group~ role entry in messagesModel. The entry stores: query string, sourcesJson (JSON-serialized array of {url, title, excerpt, sourceType, tagsText}), collapsed state (string 'true'/'false')
+- New delegate: ~packages/coding-agent/src/modes/qml/panels/delegates/SearchGroupDelegate.qml~
+  - Collapsible header: 'Search: query' with source count badge
+  - Collapsed: shows query + first 3 source titles as one-liners
+  - Expanded: renders all sources as FindingCard instances via Repeater (parses sourcesJson)
+  - Each FindingCard emits viewInTab; SearchGroupDelegate forwards to parent
+- FlowMessageDelegate.qml (~packages/coding-agent/src/modes/qml/panels/delegates/FlowMessageDelegate.qml~): add ~search_group~ role routing to SearchGroupDelegate, forward viewInTab signal. Add required properties: query, sourcesJson, collapsed
+- normalizeMessage() in BrowseChatPanel: add search_group fields (query, sourcesJson, collapsed)
+- For findings_batch WITHOUT searchGroup (e.g., code_search results): create individual finding entries in chat, not a group
+
+Out-of-scope:
+- FindingsPanel changes (owned by item 2)
+- FindingCard UI changes (owned by item 2)
+- ContentViewer (item 4)
+
+Depends on: FEAT-046-findingspanel-curated-toggle-dedup-and-p (needs FindingCard with sourceType icons for rendering inside SearchGroupDelegate's Repeater)
+
+* Tests
+- File: ~packages/coding-agent/test/integration/browse-search-grouping.test.ts~ (new)
+  - Scenario: findings_batch with searchGroup creates a search_group entry in chat
+  - Scenario: collapsed group shows query text and top 3 source titles
+  - Scenario: clicking group header expands to show all finding cards
+  - Scenario: findings_batch without searchGroup (e.g., code_search) creates individual finding entries, not a group
+  - Scenario: viewInTab from within expanded group emits bridge event
+
+* Implementation
+1. Add findings_batch handler to BrowseChatPanel.qml handlers object
+2. Extend normalizeMessage for search_group role (query, sourcesJson, collapsed fields)
+3. Create SearchGroupDelegate.qml with collapse/expand logic
+4. Update FlowMessageDelegate.qml to route search_group and forward signals
+5. Write integration tests
+
+Key QML design:
+- sourcesJson stored as string in ListModel (QML ListModel limitation — cannot store arrays)
+- SearchGroupDelegate parses ~JSON.parse(sourcesJson)~ on load and when expanded
+- Collapsed/expanded state toggled via property, with Behavior animation on implicitHeight
+- Max 20 sources per group (web_search limit)
+
+* Edge Cases
+- Empty sources array: show header with 'No results' text
+- Source with very long title: elide in collapsed view
+- Multiple search groups in sequence: each has independent collapse state
+- findings_batch without searchGroup field: create individual finding messages, not a group
+- sourcesJson parsing failure: show error text, don't crash delegate
+
+* Acceptance Criteria
+- ~bun test test/integration/browse-search-grouping.test.ts~ passes
+- ~qmllint~ passes on SearchGroupDelegate.qml, FlowMessageDelegate.qml, BrowseChatPanel.qml
+- Screenshot artifact: ~browse-search-group-expanded.png~ showing an expanded search group with source cards visible

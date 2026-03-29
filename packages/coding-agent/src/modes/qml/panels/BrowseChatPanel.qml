@@ -37,7 +37,11 @@ Item {
             url: message.url || "",
             excerpt: message.excerpt || "",
             tagsText: Array.isArray(message.tags) ? message.tags.join("\n") : (message.tagsText || ""),
-            tabId: message.tabId || ""
+            tabId: message.tabId || "",
+            sourceType: message.sourceType || "",
+            query: message.query || "",
+            sourcesJson: message.sourcesJson || "[]",
+            collapsed: message.collapsed || "false"
         }
     }
 
@@ -160,8 +164,49 @@ Item {
                 url: msg.url || "",
                 excerpt: msg.excerpt || "",
                 tags: Array.isArray(msg.tags) ? msg.tags : [],
-                tabId: msg.tabId || ""
+                tabId: msg.tabId || "",
+                sourceType: msg.sourceType || "search"
             })
+        },
+
+        findings_batch: function(msg) {
+            if (msg.searchGroup && msg.searchGroup.query) {
+                var sourcesArr = msg.findings || []
+                var sourcesData = []
+                for (var i = 0; i < sourcesArr.length; i++) {
+                    var f = sourcesArr[i]
+                    sourcesData.push({
+                        url: f.url || "",
+                        title: f.title || "",
+                        excerpt: f.excerpt || "",
+                        sourceType: f.sourceType || "search",
+                        tagsText: Array.isArray(f.tags) ? f.tags.join("\n") : ""
+                    })
+                }
+                appendMessage({
+                    msgId: "search-group-" + Date.now(),
+                    role: "search_group",
+                    text: "",
+                    query: msg.searchGroup.query || "",
+                    sourcesJson: JSON.stringify(sourcesData),
+                    collapsed: "true"
+                })
+            } else {
+                var findings = msg.findings || []
+                for (var j = 0; j < findings.length; j++) {
+                    var finding = findings[j]
+                    appendMessage({
+                        msgId: finding.id || "finding-" + Date.now() + "-" + j,
+                        role: "finding",
+                        title: finding.title || finding.url || "Finding",
+                        url: finding.url || "",
+                        excerpt: finding.excerpt || "",
+                        tags: Array.isArray(finding.tags) ? finding.tags : [],
+                        tabId: finding.tabId || "",
+                        sourceType: finding.sourceType || "search"
+                    })
+                }
+            }
         }
     })
 
@@ -209,7 +254,12 @@ Item {
 
             delegate: Delegates.FlowMessageDelegate {
                 onToggleExpanded: function(index) {
-                    messagesModel.setProperty(index, "isExpanded", !messagesModel.get(index).isExpanded)
+                    var entry = messagesModel.get(index)
+                    if (entry.role === "search_group") {
+                        messagesModel.setProperty(index, "collapsed", entry.collapsed === "true" ? "false" : "true")
+                    } else {
+                        messagesModel.setProperty(index, "isExpanded", !entry.isExpanded)
+                    }
                 }
                 onViewInTab: function(tabId, url, title) {
                     chatPanel.viewInTab(tabId, url, title)

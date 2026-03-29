@@ -1,0 +1,105 @@
+#+TITLE: Finding schema and mapper tool interception
+#+STATE: DONE
+#+SESSION_ID: 14a4eb4e2f680249
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T22-02-01-277Z_14a4eb4e2f680249.jsonl]]
+#+CUSTOM_ID: FEAT-045-finding-schema-and-mapper-tool-intercept
+#+EFFORT: 4h30m
+#+PRIORITY: #A
+#+LAYER: ts+qml
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+How would you enable something for me to look at the result of web searches and fetches to see the research library being built? Because a lot of research is done through fetches not through browsers, so it would be nice to integrate that to the UX. Ask me as many questions as humanly possible. Think about this in the context of the UX we'd like to create
+
+* Scope
+In-scope:
+- Extend ~BrowseFinding~ interface in ~packages/coding-agent/src/modes/browse-findings.ts~ with: ~sourceType~ ('search'|'fetch'|'code_search'|'browser'|'agent'), ~curated~ (boolean), ~contentBody~ (string, optional), ~enriched~ (boolean)
+- Add ~normalizeUrlForDedup(url)~ utility in same file: lowercase scheme+host, strip trailing slash, strip fragment, strip www. prefix
+- Extend ~BrowseEventMapper~ in ~packages/coding-agent/src/modes/browse-event-mapper.ts~:
+  - Maintain ~Map<string, {toolName, args}>~ populated on ~tool_execution_start~, consumed on ~tool_execution_end~
+  - Intercept ~tool_execution_end~ for toolName in ['web_search', 'fetch', 'code_search']
+  - For web_search: extract ~SearchRenderDetails.response.sources~ (typed as ~SearchSource[]~) from ~event.result.details~. Each source becomes a finding with sourceType='search', curated=false
+  - For code_search: extract ~CodeSearchRenderDetails.response.sources~ (typed as ~CodeSearchSource[]~) from ~event.result.details~. Each source becomes a finding with sourceType='code_search', curated=false. Title = ~source.repository + '/' + source.path~ if source.title is empty
+  - For fetch: create uncurated finding with sourceType='fetch'. Title derived from domain of ~FetchToolDetails.finalUrl~. ContentBody is text content from ~event.result.content[0].text~ (first 10KB, not full 50KB)
+  - Emit batched payload: ~{type:'findings_batch', findings: BrowseFinding[], searchGroup?: {query: string, toolCallId: string}}~
+  - Retain existing customType='finding' interception for agent-curated findings (curated=true)
+- Update ~BrowseShell.qml~ (~packages/coding-agent/src/modes/qml/BrowseShell.qml~): add ~findings_batch~ routing in ~handleBridgeMessage~: iterate findings and forward each to findings panel, forward entire batch to chat panel, increment findingsCount
+- Update ~browse-mode.ts~ (~packages/coding-agent/src/modes/browse-mode.ts~): handle batched findings events from mapper (mapper.map returns array when intercepting tool_execution_end, single object otherwise)
+- Create ~packages/coding-agent/src/prompts/agents/browse-findings.md~: system prompt supplement teaching agent to emit findings for noteworthy fetch results via ~sendCustomMessage({customType:'finding', ...})~
+- Wire prompt supplement in ~packages/coding-agent/src/main.ts~: when canvasName === 'browse', append browse-findings prompt to session systemPrompt
+
+Out-of-scope:
+- FindingsPanel UI changes (item 2)
+- Chat grouping delegate (item 3)
+- ContentViewer panel (item 4)
+- FindingCard UI changes (item 2)
+
+Depends on: none (foundation item)
+
+* Tests
+Test-first: define scenarios before implementation.
+
+
+
+** Error/guard unit tests (browse-event-mapper.test.ts)
+  - Scenario: web_search with event.isError=true: falls through to super.map(), no findings_batch emitted
+  - Scenario: web_search with result.details undefined: falls through to super.map()
+  - Scenario: web_search with result.details.response undefined: falls through to super.map()
+  - Scenario: web_search with result.details.error set: falls through to super.map()
+  - Scenario: web_search with empty sources array: emits findings_batch with findings=[]
+  - Scenario: fetch with event.isError=true: falls through to super.map(), no finding emitted
+  - Scenario: fetch with result.details.finalUrl empty: falls through to super.map()
+  - Scenario: code_search with result.details.error set: falls through to super.map()
+** Unit tests
+- File: ~packages/coding-agent/test/modes/browse-event-mapper.test.ts~ (extend existing)
+  - Scenario: web_search tool_execution_end emits findings_batch with one finding per SearchSource
+  - Scenario: code_search tool_execution_end emits findings_batch with code sources
+  - Scenario: fetch tool_execution_end emits single uncurated finding with sourceType='fetch'
+  - Scenario: start->end correlation: mapper stores args from tool_execution_start, retrieves query on tool_execution_end
+  - Scenario: unknown tool names pass through to super.map()
+  - Scenario: agent-curated finding (customType='finding') still works with curated=true
+
+- File: ~packages/coding-agent/test/modes/browse-findings.test.ts~ (new)
+  - Scenario: createFinding with new fields (sourceType, curated, contentBody, enriched)
+  - Scenario: normalizeUrlForDedup strips www, fragment, trailing slash, lowercases host
+  - Scenario: parseBrowseFinding handles new fields
+
+* Implementation
+1. Extend BrowseFinding interface and createFinding/parseBrowseFinding in browse-findings.ts
+2. Add normalizeUrlForDedup() in browse-findings.ts
+3. Extend BrowseEventMapper.map() — *no signature change*: return type stays ~Record<string, unknown> | null~. For research tools, return a single ~{type:'findings_batch', ...}~ record (not an array)
+4. Per-tool extraction in BrowseEventMapper:
+   - *web_search*: guard ~event.result?.details?.response?.sources~ is array AND ~event.result.details.error~ is falsy AND ~event.isError~ is not true. Iterate sources → one BrowseFinding per SearchSource. Wrap in ~{type:'findings_batch', findings:[], searchGroup:{query, toolCallId}}~
+   - *code_search*: guard ~event.result?.details?.response?.sources~ is array AND ~event.result.details.error~ is falsy AND ~event.isError~ is not true. Iterate sources → one BrowseFinding per CodeSearchSource. Wrap in ~{type:'findings_batch', findings:[], searchGroup:null}~ (no group header for code search)
+   - *fetch*: guard ~event.result?.details?.finalUrl~ is truthy AND ~event.isError~ is not true. Create ONE BrowseFinding from FetchToolDetails. Emit as ~{type:'finding', ...}~ (single finding, not a batch). Title = domain of finalUrl. ContentBody = first 10KB of ~event.result.content[0].text~
+   - *All three*: if any guard fails, fall through to ~super.map(event)~ for normal tool_end emission
+5. Also emit ~super.map(event)~ AFTER the findings payload for all three tools, so the normal tool_end message still reaches QML (tool execution card stays visible in chat)
+6. browse-mode.ts: no caller changes needed — map() still returns single record or null. The findings_batch record is sent via the same ~bridge.sendMessage~ path
+7. Add findings_batch routing in BrowseShell.qml handleBridgeMessage: iterate ~payload.findings~ and forward each to findings panel, forward entire payload to chat panel, increment findingsCount by ~payload.findings.length~
+8. Create ~packages/coding-agent/src/prompts/agents/browse-findings.md~
+9. Wire prompt in main.ts: in the ~canvasName === 'browse'~ branch (~line 749~), BEFORE calling ~runBrowseMode~, read the browse-findings.md content and append it to the session's system prompt via ~session.appendSystemPrompt(browsePrompt)~ if that API exists, or by using ~await session.prompt(browsePrompt, { synthetic: true, skipCompactionCheck: true })~ as a system-level injection
+10. Write unit tests
+
+Key type signatures:
+- ~BrowseFinding~: add ~sourceType: 'search' | 'fetch' | 'code_search' | 'browser' | 'agent'~, ~curated: boolean~, ~contentBody?: string~, ~enriched: boolean~
+- ~normalizeUrlForDedup(url: string): string~
+- map() return type: *unchanged* — ~Record<string, unknown> | null~
+
+Critical: map() must call super.map(event) for the normal tool_end emission in addition to the findings payload. Use a two-call pattern: emit findings_batch first, then return super.map(event) for the tool_end. Since map() can only return one value, the findings_batch must be sent via a separate channel — either emit it as a side-effect (store in a pending queue consumed by browse-mode.ts), or restructure map() to accept a callback for additional emissions. The cleanest approach: add an ~onAdditionalEvent~ callback to BrowseEventMapper that browse-mode.ts sets. The mapper calls ~this.onAdditionalEvent(findingsBatch)~ before returning ~super.map(event)~.
+* Edge Cases
+- web_search with 0 sources: emit empty batch, no findings
+- web_search with error (result.details.error truthy): skip finding creation, emit normal tool_end
+- fetch with aborted signal: no finding emitted
+- tool_execution_start without matching tool_execution_end (orphaned): cleanup on next message_end or agent_end
+- result.details is undefined or wrong shape: guard with runtime type checks, fall through to super.map()
+- Multiple web_search calls: each gets its own batch with distinct toolCallId
+- contentBody extraction: truncate to 10KB to avoid oversized bridge messages
+
+* Acceptance Criteria
+- ~bun test test/modes/browse-event-mapper.test.ts~ passes with new tool interception scenarios
+- ~bun test test/modes/browse-findings.test.ts~ passes with new schema and normalization tests
+- ~bun run check~ passes (tsgo type check)
+- ~qmllint src/modes/qml/BrowseShell.qml~ passes
+- File ~src/prompts/agents/browse-findings.md~ exists and contains agent instructions
+- Existing browse-*.test.ts integration tests still pass

@@ -1,0 +1,65 @@
+#+TITLE: FindingsPanel curated toggle dedup and persistence
+#+STATE: DONE
+#+SESSION_ID: 14a4eb4e2f680249
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T22-02-01-277Z_14a4eb4e2f680249.jsonl]]
+#+CUSTOM_ID: FEAT-046-findingspanel-curated-toggle-dedup-and-p
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: qml+ts
+
+* Initial Message
+
+How would you enable something for me to look at the result of web searches and fetches to see the research library being built? Because a lot of research is done through fetches not through browsers, so it would be nice to integrate that to the UX. Ask me as many questions as humanly possible. Think about this in the context of the UX we'd like to create
+
+* Scope
+In-scope:
+- FindingsPanel.qml (~packages/coding-agent/src/modes/qml/panels/FindingsPanel.qml~): add ~viewMode~ property ('curated'|'all', default 'curated'), toggle UI in header row between sort controls and title
+- FindingsPanel dedup: on handleMessage, normalize URL via JS port of normalizeUrlForDedup. If normalized URL matches existing entry, merge: update excerpt if longer, set enriched='true', update tags union. Do NOT duplicate
+- FindingCard.qml (~packages/coding-agent/src/modes/qml/panels/delegates/FindingCard.qml~): add sourceType icon (Unicode glyph before domain label). Mapping: search=magnifying glass, fetch=document, code_search=laptop, browser=globe, agent=sparkles. Add 'enriched' badge (subtle indicator after title when enriched='true')
+- Findings persistence: in BrowseShell.qml (~packages/coding-agent/src/modes/qml/BrowseShell.qml~), add ~browseSettings.findingsJson~ QSettings property. On findings panel loaded, restore from settings. On finding added/updated, persist. Exclude contentBody from persisted JSON to keep size small. Tab persistence format remains forward-compatible with tabType field added by item 4
+- rebuildDisplayModel respects viewMode: when 'curated', filter to curated='true' entries only
+
+Out-of-scope:
+- Chat panel changes (item 3)
+- ContentViewer (item 4)
+- Search grouping (item 3)
+
+Depends on: FEAT-045-finding-schema-and-mapper-tool-intercept (needs sourceType, curated, enriched fields and normalizeUrlForDedup utility from browse-findings.ts)
+
+* Tests
+- File: ~packages/coding-agent/test/integration/browse-findings-panel.test.ts~ (extend existing)
+  - Scenario: curated toggle shows only agent-surfaced findings when active
+  - Scenario: 'all' mode shows both curated and uncurated findings
+  - Scenario: duplicate URL findings are merged (second occurrence enriches first)
+  - Scenario: source type icon visible on finding card
+  - Scenario: enriched badge visible after merge
+
+- File: ~packages/coding-agent/test/integration/browse-findings-persistence.test.ts~ (new)
+  - Scenario: findings survive shell teardown and relaunch with same settingsCategory
+  - Scenario: contentBody excluded from persisted JSON (persisted JSON does not contain contentBody field)
+
+* Implementation
+1. Add viewMode property and toggle UI to FindingsPanel.qml
+2. Add URL normalization JS function in FindingsPanel (port of TS normalizeUrlForDedup)
+3. Modify handleMessage to dedup by normalized URL, merge enrichment
+4. Update rebuildDisplayModel to filter by viewMode
+5. Add sourceType icon mapping function to FindingCard.qml
+6. Add enriched badge rendering to FindingCard.qml
+7. Add findingsJson QSettings property to BrowseShell.qml
+8. Add persistence save/restore logic in BrowseShell
+9. Write integration tests
+
+* Edge Cases
+- Findings with no URL (empty string): skip dedup, always append
+- Very long findingsJson (hundreds of findings): cap at 200 entries, oldest evicted
+- QSettings size: findings metadata without contentBody stays under 1KB each, 200 entries = 200KB, within platform limits
+- viewMode toggle with active filterTag: both filters apply simultaneously
+- Enrichment of a curated finding by an auto-generated fetch: preserve curated='true'
+- Enrichment of an auto finding by a curated agent finding: promote to curated='true'
+
+* Acceptance Criteria
+- ~bun test test/integration/browse-findings-panel.test.ts~ passes with toggle, dedup, icon scenarios
+- ~bun test test/integration/browse-findings-persistence.test.ts~ passes
+- ~qmllint src/modes/qml/panels/FindingsPanel.qml src/modes/qml/panels/delegates/FindingCard.qml~ passes
+- Curated toggle default hides auto-generated findings; toggling to All shows them
+- Screenshot artifact: ~browse-findings-curated-toggle.png~ showing panel with both curated and auto findings, toggle visible

@@ -12,6 +12,8 @@ Item {
     required property string tagsText
     required property string tabId
     property bool showSeparator: false
+    required property string sourceType
+    property string enriched: "false"
 
     signal viewInTab(string tabId, string url, string title)
 
@@ -23,6 +25,15 @@ Item {
         var match = raw.match(/^[a-z]+:\/\/([^/]+)/i)
         var host = match ? match[1] : raw
         return host.replace(/^www\./, "")
+    }
+
+    function sourceTypeIcon() {
+        if (root.sourceType === "search") return "\uD83D\uDD0D"
+        if (root.sourceType === "fetch") return "\uD83D\uDCC4"
+        if (root.sourceType === "code_search") return "\uD83D\uDCBB"
+        if (root.sourceType === "browser") return "\uD83C\uDF10"
+        if (root.sourceType === "agent") return "\u2728"
+        return ""
     }
 
     function tagList() {
@@ -72,11 +83,18 @@ Item {
                     Layout.fillWidth: true
                     spacing: SpellUI.SpellTheme.spacingS
 
+                    Text {
+                        text: root.sourceTypeIcon()
+                        font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                        visible: root.sourceTypeIcon().length > 0
+                    }
+
                     Rectangle {
                         Layout.preferredWidth: 10
                         Layout.preferredHeight: 10
                         radius: 5
                         color: SpellUI.SpellTheme.textTertiary
+                        visible: root.sourceTypeIcon().length === 0
                     }
 
                     Text {
@@ -97,6 +115,14 @@ Item {
                     font.weight: SpellUI.SpellTheme.fontWeightMedium
                     color: SpellUI.SpellTheme.textPrimary
                     wrapMode: Text.Wrap
+                }
+
+                Text {
+                    visible: root.enriched === "true"
+                    text: "enriched"
+                    font.family: SpellUI.SpellTheme.monoFontFamily
+                    font.pixelSize: SpellUI.SpellTheme.fontSizeXS || 10
+                    color: SpellUI.SpellTheme.primary
                 }
 
                 Text {
@@ -138,7 +164,7 @@ Item {
 
                 Rectangle {
                     objectName: "viewInTabButton"
-                    visible: root.tabId.length > 0
+                    visible: root.url.length > 0
                     implicitWidth: buttonText.implicitWidth + SpellUI.SpellTheme.spacingL
                     implicitHeight: buttonText.implicitHeight + SpellUI.SpellTheme.spacingS
                     radius: SpellUI.SpellTheme.cornerRadiusSmall
@@ -149,7 +175,7 @@ Item {
                     Text {
                         id: buttonText
                         anchors.centerIn: parent
-                        text: "View in tab"
+                        text: root.tabId.length > 0 ? "View in tab" : "Open in browser"
                         font.family: SpellUI.SpellTheme.fontFamily
                         font.pixelSize: SpellUI.SpellTheme.fontSizeS
                         color: SpellUI.SpellTheme.textPrimary
