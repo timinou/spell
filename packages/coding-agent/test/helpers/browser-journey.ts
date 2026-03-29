@@ -41,11 +41,13 @@ function formatBrowserError(event: BrowserResultEvent): string {
 export class BrowserJourney {
 	#journey: QmlJourney;
 	#settingsFile: string;
+	#storageName: string | undefined;
 	#ridCounter = 0;
 
-	constructor(journey: QmlJourney, settingsFile: string) {
+	constructor(journey: QmlJourney, settingsFile: string, storageName?: string) {
 		this.#journey = journey;
 		this.#settingsFile = settingsFile;
+		this.#storageName = storageName;
 	}
 
 	static async launch(options?: BrowserLaunchOptions): Promise<BrowserJourney> {
@@ -62,7 +64,7 @@ export class BrowserJourney {
 			settleMs: options?.settleMs ?? 100,
 			assertTimeout: options?.assertTimeout ?? 5000,
 		});
-		const browser = new BrowserJourney(journey, settingsFile);
+		const browser = new BrowserJourney(journey, settingsFile, storageName);
 		await browser.waitUntilInteractive();
 		return browser;
 	}
@@ -215,11 +217,22 @@ export class BrowserJourney {
 		await this.#journey.settle(delayMs);
 	}
 
-	async teardown(): Promise<void> {
+	async teardown(options?: { preserveStorage?: boolean }): Promise<void> {
 		try {
 			await this.#journey.teardown();
 		} finally {
 			await fs.rm(this.#settingsFile, { force: true });
+			if (!options?.preserveStorage && this.#storageName) {
+				const storageDir = path.join(
+					os.homedir(),
+					".local",
+					"share",
+					"omp-qml-bridge",
+					"QtWebEngine",
+					this.#storageName,
+				);
+				await fs.rm(storageDir, { recursive: true, force: true });
+			}
 		}
 	}
 }

@@ -154,6 +154,31 @@ ApplicationWindow {
                     text: "Go"
                     onClicked: browser.navigate(addressField.text)
                 }
+
+                Button {
+                    text: "Save Session"
+                    onClicked: saveSessionDialog.openWithDomain(saveSessionDialog.currentDomain)
+                }
+
+                ComboBox {
+                    id: profilePicker
+                    model: ListModel { id: profileModel }
+                    textRole: "name"
+                    Layout.preferredWidth: 160
+                    currentIndex: 0
+                    onActivated: function(index) {
+                        var item = profileModel.get(index)
+                        if (item && typeof bridge !== "undefined" && bridge) {
+                            bridge.send({
+                                type: "profile_switch",
+                                profileStorage: item.profileStorage
+                            })
+                        }
+                    }
+                    Component.onCompleted: {
+                        profileModel.append({ name: "Default", profileStorage: "spell-browser" })
+                    }
+                }
             }
         }
 
@@ -238,9 +263,45 @@ ApplicationWindow {
         }
     }
 
+    Components.SaveSessionDialog {
+        id: saveSessionDialog
+        currentDomain: {
+            try {
+                var url = browser.currentUrlString
+                if (url && url.length > 0) {
+                    var match = url.match(/^https?:\/\/([^\/:]+)/)
+                    return match ? match[1] : ""
+                }
+            } catch(e) {}
+            return ""
+        }
+        onSessionSaved: function(sessionData) {
+            if (typeof bridge !== "undefined" && bridge) {
+                bridge.send({
+                    type: "save_session",
+                    name: sessionData.name,
+                    description: sessionData.description,
+                    domains: [currentDomain],
+                    parentService: sessionData.parentService || undefined
+                })
+            }
+        }
+    }
+
     Connections {
         target: bridge
         function onMessageReceived(payload) {
+            if (payload && payload.action === "service:profiles") {
+                profileModel.clear()
+                if (payload.profiles && payload.profiles.length > 0) {
+                    for (var i = 0; i < payload.profiles.length; i++) {
+                        profileModel.append(payload.profiles[i])
+                    }
+                } else {
+                    profileModel.append({ name: "Default", profileStorage: "spell-browser" })
+                }
+                return
+            }
             browser.handleMessage(payload)
         }
     }

@@ -1,0 +1,306 @@
+#+TITLE: E2E Cookie Persistence and Connect Flow Tests
+#+STATE: DONE
+#+SESSION_ID: 14a63a6be34e1b24
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-39-57-094Z_14a62fd8094e1b0b/10-CreateFeat4.jsonl]]
+#+CUSTOM_ID: FEAT-080-e2e-cookie-persistence-and-connect-flow
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: testing
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the Browser Login Persistence plan. Each item must have state ITEM, include EFFORT, PRIORITY, LAYER properties, and a comprehensive body following the org item body standard.\n\n## Constraints\n- Use `org create` with category 'features'\n- State must be 'ITEM'\n- Return the CUSTOM_ID of each created item\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- Use org heading markup (* for top-level sections)\n\n## Project Context\nSpell is a coding agent with a QML-based Browse Canvas. We're adding login persistence so browser sessions survive across Spell restarts. Key files:\n- `packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml` — browser window with WebEngineProfile\n- `packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml` — browser interaction engine\n- `packages/coding-agent/src/tools/canvas-browser-protocol.ts` — browser command types\n- `packages/coding-agent/src/tools/canvas.ts` — canvas tool that manages windows\n- `packages/coding-agent/src/sdk.ts` — system prompt assembly\n- `packages/coding-agent/src/modes/browse-mode.ts` — browse mode entry\n- `packages/coding-agent/src/modes/qml/panels/BrowserPanel.qml` — multi-tab browser panel\n- `packages/coding-agent/test/helpers/browser-journey.ts` — headless browser test DSL\n- `packages/coding-agent/test/browser-reconnect/server.ts` — fake Bun server pattern\n- WebEngine storage: `~/.local/share/omp-qml-bridge/QtWebEngine/<storageName>/`\n- Settings: `~/.config/omp-qml-bridge/<storageName>.ini`\n- Registry location: `~/.spell/browser/services.json`
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create a FEAT org item via `org create` with these properties:
+
+title: "E2E Cookie Persistence and Connect Flow Tests"
+category: features
+state: ITEM
+properties:
+  EFFORT: 3h
+  PRIORITY: #A
+  LAYER: testing
+
+Body (use org heading markup with * for sections):
+* Scope
+
+** In Scope
+- Fake login server (=LoginServer= class following =ReconnectTestServer= pattern from =packages/coding-agent/test/browser-reconnect/server.ts=)
+- Cross-session cookie persistence test (launch -> login -> teardown -> relaunch -> still logged in)
+- Session inheritance test (shared storageName shares cookies between services)
+- Full connect flow test (navigate -> login -> save_session -> relaunch -> validated)
+- Fix =BrowserJourney.teardown()= to also delete WebEngine storage directory (prevents test pollution)
+
+** Out of Scope
+- Unit tests for registry CRUD (covered in FEAT-1 tests)
+- QML UI tests for toolbar (covered in FEAT-2 tests)
+- Agent integration unit tests (covered in FEAT-3 tests)
+- CLI cleanup command (FEAT-7)
+
+** Boundary Rationale
+This item is implementation-first (server infrastructure before tests) because the fake login server IS the test infrastructure. All tests in this item require a running =LoginServer= and a =BrowserJourney= instance with controlled storageName.
+* Tests
+
+** Test Infrastructure
+File: =packages/coding-agent/test/browser-services/login-server.ts=
+
+=LoginServer= class (Bun.serve based, like =ReconnectTestServer=):
+- =GET /= -> login form HTML: username + password + submit button
+- =POST /login= -> validates credentials (any non-empty user/pass), sets =Set-Cookie: session=<token>; Path=/; HttpOnly=, redirects to =/dashboard=
+- =GET /dashboard= -> checks Cookie header for session token, returns logged-in HTML with =#logged-in= element OR 302 redirect to =/= if no cookie
+- =GET /api/check= -> returns JSON ={loggedIn: true}= or ={loggedIn: false}= (for programmatic validation)
+- =start()= / =stop()= / =state()= lifecycle methods
+
+** Test Files and Scenarios
+
+File: =packages/coding-agent/test/browser-services/cookie-persistence.test.ts=
+1. *Cookies persist across browser restart*:
+   - Launch BrowserJourney with storageName ='persist-test-<random>'=
+   - Navigate to LoginServer, fill form, submit
+   - Verify =#logged-in= element visible on =/dashboard=
+   - Teardown browser (do NOT delete WebEngine storage)
+   - Launch NEW BrowserJourney with SAME storageName
+   - Navigate to =/dashboard= directly
+   - Verify =#logged-in= element still visible (cookies survived)
+   - Teardown + clean up storage dir
+2. *Fresh profile has no cookies*:
+   - Launch BrowserJourney with fresh random storageName
+   - Navigate to =/dashboard=
+   - Verify redirect to login page (no =#logged-in= element)
+
+File: =packages/coding-agent/test/browser-services/session-inheritance.test.ts=
+3. *Shared storageName shares cookies*:
+   - Launch BrowserJourney with storageName ='shared-test-<random>'=
+   - Navigate to LoginServer on =/=, login
+   - Teardown browser
+   - Launch NEW BrowserJourney with SAME storageName (simulating a child service)
+   - Navigate to =/api/check=
+   - Verify response body contains ='loggedIn":true'= (or evaluate JS to check cookie)
+   - Teardown + cleanup
+
+File: =packages/coding-agent/test/browser-services/connect-flow.test.ts=
+4. *Full connect flow end-to-end*:
+   - Create temp ServiceRegistry
+   - Launch BrowserJourney with fresh storageName
+   - Navigate to LoginServer, fill form, submit, verify logged in
+   - Simulate =save_session= bridge event with service details
+   - Verify registry now contains the service entry
+   - Teardown browser
+   - Relaunch browser with same storageName (resolved from registry)
+   - Navigate to =/dashboard=, verify still logged in
+   - Clean up: remove registry entry (which deletes storage dir)
+* Implementation
+
+** Files
+- New: =packages/coding-agent/test/browser-services/login-server.ts=
+- New: =packages/coding-agent/test/browser-services/cookie-persistence.test.ts=
+- New: =packages/coding-agent/test/browser-services/session-inheritance.test.ts=
+- New: =packages/coding-agent/test/browser-services/connect-flow.test.ts=
+- Modified: =packages/coding-agent/test/helpers/browser-journey.ts= - =teardown()= method enhanced
+
+** BrowserJourney.teardown() Fix
+Current code (line ~218):
+#+begin_src typescript
+async teardown(): Promise<void> {
+  try {
+    await this.#journey.teardown();
+  } finally {
+    await fs.rm(this.#settingsFile, { force: true });
+  }
+}
+#+end_src
+
+Fixed code adds storage dir cleanup:
+#+begin_src typescript
+async teardown(options?: { preserveStorage?: boolean }): Promise<void> {
+  try {
+    await this.#journey.teardown();
+  } finally {
+    await fs.rm(this.#settingsFile, { force: true });
+    if (!options?.preserveStorage && this.#storageName) {
+      const storageDir = path.join(
+        os.homedir(), '.local', 'share', 'omp-qml-bridge', 'QtWebEngine', this.#storageName
+      );
+      await fs.rm(storageDir, { recursive: true, force: true });
+    }
+  }
+}
+#+end_src
+
+Note: =preserveStorage: true= is used in cookie-persistence test between first and second launch.
+
+This requires storing =storageName= in BrowserJourney (currently only stored in props passed to QML). The =launch= method already receives =storageName= in options — store it as =#storageName= field.
+
+** Steps (implementation-first for server, test-first for test files)
+1. Implement =LoginServer= class
+2. Fix =BrowserJourney.teardown()= with =preserveStorage= option + =#storageName= field
+3. Write =cookie-persistence.test.ts=
+4. Write =session-inheritance.test.ts=
+5. Write =connect-flow.test.ts=
+6. Run all tests: =bun test packages/coding-agent/test/browser-services/=
+* Edge Cases
+- Browser takes time to flush cookies to disk -> add =browser.settle(500)= before teardown
+- WebEngine storage dir doesn't exist yet at teardown (no navigation happened) -> =fs.rm= with =force: true= ignores ENOENT
+- Fake server port conflict -> use =port: 0= for random OS-assigned port
+- BrowserJourney created without storageName (other tests) -> teardown skips storage cleanup (=#storageName= is undefined)
+- Cookie =HttpOnly= flag -> cannot check via =document.cookie= JS; use =/api/check= endpoint or verify page content instead
+- Chromium cookie flush timing -> WebEngine may not flush cookies immediately; =ForcePersistentCookies= + navigation settle should be sufficient
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/cookie-persistence.test.ts= passes
+- =bun test packages/coding-agent/test/browser-services/session-inheritance.test.ts= passes
+- =bun test packages/coding-agent/test/browser-services/connect-flow.test.ts= passes
+- After test run, no orphaned =WebEngine/<storageName>= directories remain (=BrowserJourney.teardown= cleans up)
+- =bunx biome check= passes on modified =browser-journey.ts=
+
+Requires:
+- =ServiceRegistry= class from FEAT =Service Registry and Profile Manager=
+- =save_session= bridge event handling from FEAT =Agent Service Tool Integration=
+- =BrowserWindow.qml= with Save Session capability from FEAT =BrowserWindow Toolbar Enhancements=
+- QML bridge binary built (=cd packages/qml && bun run build:bridge=)
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In Scope
+- Fake login server (=LoginServer= class following =ReconnectTestServer= pattern from =packages/coding-agent/test/browser-reconnect/server.ts=)
+- Cross-session cookie persistence test (launch -> login -> teardown -> relaunch -> still logged in)
+- Session inheritance test (shared storageName shares cookies between services)
+- Full connect flow test (navigate -> login -> save_session -> relaunch -> validated)
+- Fix =BrowserJourney.teardown()= to also delete WebEngine storage directory (prevents test pollution)
+
+** Out of Scope
+- Unit tests for registry CRUD (covered in FEAT-1 tests)
+- QML UI tests for toolbar (covered in FEAT-2 tests)
+- Agent integration unit tests (covered in FEAT-3 tests)
+- CLI cleanup command (FEAT-7)
+
+** Boundary Rationale
+This item is implementation-first (server infrastructure before tests) because the fake login server IS the test infrastructure. All tests in this item require a running =LoginServer= and a =BrowserJourney= instance with controlled storageName.
+* Tests
+
+** Test Infrastructure
+File: =packages/coding-agent/test/browser-services/login-server.ts=
+
+=LoginServer= class (Bun.serve based, like =ReconnectTestServer=):
+- =GET /= -> login form HTML: username + password + submit button
+- =POST /login= -> validates credentials (any non-empty user/pass), sets =Set-Cookie: session=<token>; Path=/; HttpOnly=, redirects to =/dashboard=
+- =GET /dashboard= -> checks Cookie header for session token, returns logged-in HTML with =#logged-in= element OR 302 redirect to =/= if no cookie
+- =GET /api/check= -> returns JSON ={loggedIn: true}= or ={loggedIn: false}= (for programmatic validation)
+- =start()= / =stop()= / =state()= lifecycle methods
+
+** Test Files and Scenarios
+
+File: =packages/coding-agent/test/browser-services/cookie-persistence.test.ts=
+1. *Cookies persist across browser restart*:
+   - Launch BrowserJourney with storageName ='persist-test-<random>'=
+   - Navigate to LoginServer, fill form, submit
+   - Verify =#logged-in= element visible on =/dashboard=
+   - Teardown browser (do NOT delete WebEngine storage)
+   - Launch NEW BrowserJourney with SAME storageName
+   - Navigate to =/dashboard= directly
+   - Verify =#logged-in= element still visible (cookies survived)
+   - Teardown + clean up storage dir
+2. *Fresh profile has no cookies*:
+   - Launch BrowserJourney with fresh random storageName
+   - Navigate to =/dashboard=
+   - Verify redirect to login page (no =#logged-in= element)
+
+File: =packages/coding-agent/test/browser-services/session-inheritance.test.ts=
+3. *Shared storageName shares cookies*:
+   - Launch BrowserJourney with storageName ='shared-test-<random>'=
+   - Navigate to LoginServer on =/=, login
+   - Teardown browser
+   - Launch NEW BrowserJourney with SAME storageName (simulating a child service)
+   - Navigate to =/api/check=
+   - Verify response body contains ='loggedIn":true'= (or evaluate JS to check cookie)
+   - Teardown + cleanup
+
+File: =packages/coding-agent/test/browser-services/connect-flow.test.ts=
+4. *Full connect flow end-to-end*:
+   - Create temp ServiceRegistry
+   - Launch BrowserJourney with fresh storageName
+   - Navigate to LoginServer, fill form, submit, verify logged in
+   - Simulate =save_session= bridge event with service details
+   - Verify registry now contains the service entry
+   - Teardown browser
+   - Relaunch browser with same storageName (resolved from registry)
+   - Navigate to =/dashboard=, verify still logged in
+   - Clean up: remove registry entry (which deletes storage dir)
+* Implementation
+
+** Files
+- New: =packages/coding-agent/test/browser-services/login-server.ts=
+- New: =packages/coding-agent/test/browser-services/cookie-persistence.test.ts=
+- New: =packages/coding-agent/test/browser-services/session-inheritance.test.ts=
+- New: =packages/coding-agent/test/browser-services/connect-flow.test.ts=
+- Modified: =packages/coding-agent/test/helpers/browser-journey.ts= - =teardown()= method enhanced
+
+** BrowserJourney.teardown() Fix
+Current code (line ~218):
+#+begin_src typescript
+async teardown(): Promise<void> {
+  try {
+    await this.#journey.teardown();
+  } finally {
+    await fs.rm(this.#settingsFile, { force: true });
+  }
+}
+#+end_src
+
+Fixed code adds storage dir cleanup:
+#+begin_src typescript
+async teardown(options?: { preserveStorage?: boolean }): Promise<void> {
+  try {
+    await this.#journey.teardown();
+  } finally {
+    await fs.rm(this.#settingsFile, { force: true });
+    if (!options?.preserveStorage && this.#storageName) {
+      const storageDir = path.join(
+        os.homedir(), '.local', 'share', 'omp-qml-bridge', 'QtWebEngine', this.#storageName
+      );
+      await fs.rm(storageDir, { recursive: true, force: true });
+    }
+  }
+}
+#+end_src
+
+Note: =preserveStorage: true= is used in cookie-persistence test between first and second launch.
+
+This requires storing =storageName= in BrowserJourney (currently only stored in props passed to QML). The =launch= method already receives =storageName= in options — store it as =#storageName= field.
+
+** Steps (implementation-first for server, test-first for test files)
+1. Implement =LoginServer= class
+2. Fix =BrowserJourney.teardown()= with =preserveStorage= option + =#storageName= field
+3. Write =cookie-persistence.test.ts=
+4. Write =session-inheritance.test.ts=
+5. Write =connect-flow.test.ts=
+6. Run all tests: =bun test packages/coding-agent/test/browser-services/=
+* Edge Cases
+- Browser takes time to flush cookies to disk -> add =browser.settle(500)= before teardown
+- WebEngine storage dir doesn't exist yet at teardown (no navigation happened) -> =fs.rm= with =force: true= ignores ENOENT
+- Fake server port conflict -> use =port: 0= for random OS-assigned port
+- BrowserJourney created without storageName (other tests) -> teardown skips storage cleanup (=#storageName= is undefined)
+- Cookie =HttpOnly= flag -> cannot check via =document.cookie= JS; use =/api/check= endpoint or verify page content instead
+- Chromium cookie flush timing -> WebEngine may not flush cookies immediately; =ForcePersistentCookies= + navigation settle should be sufficient
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/cookie-persistence.test.ts= passes
+- =bun test packages/coding-agent/test/browser-services/session-inheritance.test.ts= passes
+- =bun test packages/coding-agent/test/browser-services/connect-flow.test.ts= passes
+- After test run, no orphaned =WebEngine/<storageName>= directories remain (=BrowserJourney.teardown= cleans up)
+- =bunx biome check= passes on modified =browser-journey.ts=
+
+Requires:
+- =ServiceRegistry= class from FEAT =Service Registry and Profile Manager=
+- =save_session= bridge event handling from FEAT =Agent Service Tool Integration=
+- =BrowserWindow.qml= with Save Session capability from FEAT =BrowserWindow Toolbar Enhancements=
+- QML bridge binary built (=cd packages/qml && bun run build:bridge=)

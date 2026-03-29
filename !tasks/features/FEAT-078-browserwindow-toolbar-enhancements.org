@@ -1,0 +1,216 @@
+#+TITLE: BrowserWindow Toolbar Enhancements
+#+STATE: DONE
+#+SESSION_ID: 14a63a6bdf0e1b1a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-39-57-094Z_14a62fd8094e1b0b/8-CreateFeat2.jsonl]]
+#+CUSTOM_ID: FEAT-078-browserwindow-toolbar-enhancements
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: ui
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the Browser Login Persistence plan. Each item must have state ITEM, include EFFORT, PRIORITY, LAYER properties, and a comprehensive body following the org item body standard.\n\n## Constraints\n- Use `org create` with category 'features'\n- State must be 'ITEM'\n- Return the CUSTOM_ID of each created item\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- Use org heading markup (* for top-level sections)\n\n## Project Context\nSpell is a coding agent with a QML-based Browse Canvas. We're adding login persistence so browser sessions survive across Spell restarts. Key files:\n- `packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml` — browser window with WebEngineProfile\n- `packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml` — browser interaction engine\n- `packages/coding-agent/src/tools/canvas-browser-protocol.ts` — browser command types\n- `packages/coding-agent/src/tools/canvas.ts` — canvas tool that manages windows\n- `packages/coding-agent/src/sdk.ts` — system prompt assembly\n- `packages/coding-agent/src/modes/browse-mode.ts` — browse mode entry\n- `packages/coding-agent/src/modes/qml/panels/BrowserPanel.qml` — multi-tab browser panel\n- `packages/coding-agent/test/helpers/browser-journey.ts` — headless browser test DSL\n- `packages/coding-agent/test/browser-reconnect/server.ts` — fake Bun server pattern\n- WebEngine storage: `~/.local/share/omp-qml-bridge/QtWebEngine/<storageName>/`\n- Settings: `~/.config/omp-qml-bridge/<storageName>.ini`\n- Registry location: `~/.spell/browser/services.json`
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create a FEAT org item via `org create` with these properties:
+
+title: "BrowserWindow Toolbar Enhancements"
+category: features
+state: ITEM
+properties:
+  EFFORT: 4h
+  PRIORITY: #A
+  LAYER: ui
+
+Body (use org heading markup with * for sections):
+* Scope
+
+** In Scope
+- Save Session button in BrowserWindow.qml toolbar (=toolbarRow= RowLayout)
+- SaveSessionDialog.qml component: service name, description, optional parent dropdown, auto-populated domains from current URL
+- Profile picker dropdown in BrowserWindow.qml toolbar: shows available profiles, allows switching
+- =browser:get_favicon= command: extracts favicon via WebEngineView.icon property, returns base64 PNG through bridge
+- Bridge events: =save_session= payload (name, description, domains, parentService, faviconData), =profile_switch= payload
+- Profile list passed to BrowserWindow via bridge message (=service:profiles= response or initial props)
+
+** Out of Scope
+- Service registry CRUD (FEAT-1 provides the module; this FEAT only sends bridge events)
+- Agent-side handling of =save_session= / =profile_switch= events (FEAT-3)
+- BrowseShell services panel (FEAT-5)
+- Health dashboard (FEAT-6)
+
+** Boundary Rationale
+This FEAT owns all BrowserWindow.qml toolbar modifications. Merging Save Session and Profile Picker avoids two FEATs touching the same =toolbarRow= RowLayout in separate changes. The QML side emits events; the TypeScript side handles them.
+* Tests
+
+File: =packages/coding-agent/test/browser-services/browser-toolbar.test.ts=
+
+All tests use =BrowserJourney= (headless QML via =QmlTestHarness=, =QT_QPA_PLATFORM=offscreen=).
+1. *Save Session button visible*: launch BrowserWindow, observe toolbar, verify 'Save Session' button exists
+2. *Save Session dialog opens*: click Save Session button, verify dialog is visible with expected fields
+3. *Dialog auto-populates domain*: navigate to =http://127.0.0.1:<port>/=, open dialog, verify domain field contains ='127.0.0.1'=
+4. *Dialog submit sends event*: fill name + description, submit, verify =save_session= bridge event payload contains ={name, description, domains, faviconData}=
+5. *Dialog cancel sends nothing*: open dialog, cancel, verify no =save_session= event
+6. *Profile picker visible*: launch BrowserWindow, verify profile picker/dropdown exists in toolbar
+7. *Profile picker shows profiles*: send profiles list via bridge message, verify dropdown items update
+8. *Profile switch event*: select a different profile from picker, verify =profile_switch= bridge event with ={profileStorage: 'selected-name'}=
+9. *browser:get_favicon returns data*: navigate to a page, send =browser:get_favicon= command, verify response contains base64 string or null
+* Implementation
+
+** Files
+- Modified: =packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml= - toolbar button + picker + dialog trigger
+- New: =packages/coding-agent/src/modes/qml/canvas/components/SaveSessionDialog.qml= - modal dialog
+- Modified: =packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml= - =browser:get_favicon= command handler
+- Modified: =packages/coding-agent/src/tools/canvas-browser-protocol.ts= - add =browser:get_favicon= to =pageBrowserCommandActions=
+- New: =packages/coding-agent/test/browser-services/browser-toolbar.test.ts=
+
+** SaveSessionDialog.qml Structure
+- Modal =Dialog= with =Column= layout
+- =TextField= for service name (required)
+- =TextArea= for description (optional)
+- =ComboBox= for parent service (optional, populated from bridge)
+- Read-only =TextField= showing auto-detected domains from =browser.currentUrlString=
+- Save + Cancel buttons
+- On Save: =bridge.send({type: 'save_session', name, description, domains: [currentDomain], parentService, faviconData})=
+
+** browser:get_favicon Implementation
+In SpellBrowser.qml =executeActiveCommand= switch:
+#+begin_src javascript
+case "browser:get_favicon":
+    var iconUrl = webEngineView.icon
+    if (iconUrl && iconUrl.toString().length > 0) {
+        // QML Image to canvas to base64 approach
+        // Or grab via webEngineView.icon property which is a QUrl
+        emitResult(cmd, true, { faviconUrl: iconUrl.toString() })
+    } else {
+        emitResult(cmd, true, { faviconUrl: null })
+    }
+    break
+#+end_src
+Note: =WebEngineView.icon= is a URL, not raw data. To get base64, use a hidden =Image= element that loads the icon URL, then render to =Canvas= and =toDataURL()=. Alternatively, return the icon URL and let the TS side fetch it.
+
+** Steps
+1. Write test file with all 9 scenarios
+2. Add =browser:get_favicon= to =pageBrowserCommandActions= in =canvas-browser-protocol.ts=
+3. Implement =browser:get_favicon= handler in =SpellBrowser.qml=
+4. Create =SaveSessionDialog.qml= with form fields and bridge event
+5. Add Save Session button to =BrowserWindow.qml= =toolbarRow=
+6. Add Profile Picker (=ComboBox=) to =toolbarRow= with bridge message handling for profile list
+7. Wire =onMessageReceived= in BrowserWindow to handle profile list updates
+8. Run tests
+* Edge Cases
+- No favicon available (=WebEngineView.icon= empty) -> =get_favicon= returns ={faviconUrl: null}=, dialog shows generic icon placeholder
+- Dialog dismissed without saving -> no bridge event emitted, no side effects
+- Profile picker with zero profiles -> show single 'Default' entry
+- Very long service name entered -> QML =TextField= has =maximumLength: 48= to match sanitizeKey limit
+- Current URL is =about:blank= -> domains auto-populate as empty, user must enter manually
+- Multiple BrowserWindow instances open -> each has its own Save Session / Profile Picker (scoped to that window)
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/browser-toolbar.test.ts= passes (all 9 scenarios)
+- Save Session dialog renders, collects input, and sends correct bridge event payload
+- Profile picker renders and emits =profile_switch= event on selection
+- =browser:get_favicon= returns icon URL or null
+- =bunx biome check= and =bun run tsgo -p packages/coding-agent= pass on changed files
+
+Requires: ServiceEntry type definition from FEAT =Service Registry and Profile Manager= (for parent service dropdown type, domain format)
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In Scope
+- Save Session button in BrowserWindow.qml toolbar (=toolbarRow= RowLayout)
+- SaveSessionDialog.qml component: service name, description, optional parent dropdown, auto-populated domains from current URL
+- Profile picker dropdown in BrowserWindow.qml toolbar: shows available profiles, allows switching
+- =browser:get_favicon= command: extracts favicon via WebEngineView.icon property, returns base64 PNG through bridge
+- Bridge events: =save_session= payload (name, description, domains, parentService, faviconData), =profile_switch= payload
+- Profile list passed to BrowserWindow via bridge message (=service:profiles= response or initial props)
+
+** Out of Scope
+- Service registry CRUD (FEAT-1 provides the module; this FEAT only sends bridge events)
+- Agent-side handling of =save_session= / =profile_switch= events (FEAT-3)
+- BrowseShell services panel (FEAT-5)
+- Health dashboard (FEAT-6)
+
+** Boundary Rationale
+This FEAT owns all BrowserWindow.qml toolbar modifications. Merging Save Session and Profile Picker avoids two FEATs touching the same =toolbarRow= RowLayout in separate changes. The QML side emits events; the TypeScript side handles them.
+* Tests
+
+File: =packages/coding-agent/test/browser-services/browser-toolbar.test.ts=
+
+All tests use =BrowserJourney= (headless QML via =QmlTestHarness=, =QT_QPA_PLATFORM=offscreen=).
+1. *Save Session button visible*: launch BrowserWindow, observe toolbar, verify 'Save Session' button exists
+2. *Save Session dialog opens*: click Save Session button, verify dialog is visible with expected fields
+3. *Dialog auto-populates domain*: navigate to =http://127.0.0.1:<port>/=, open dialog, verify domain field contains ='127.0.0.1'=
+4. *Dialog submit sends event*: fill name + description, submit, verify =save_session= bridge event payload contains ={name, description, domains, faviconData}=
+5. *Dialog cancel sends nothing*: open dialog, cancel, verify no =save_session= event
+6. *Profile picker visible*: launch BrowserWindow, verify profile picker/dropdown exists in toolbar
+7. *Profile picker shows profiles*: send profiles list via bridge message, verify dropdown items update
+8. *Profile switch event*: select a different profile from picker, verify =profile_switch= bridge event with ={profileStorage: 'selected-name'}=
+9. *browser:get_favicon returns data*: navigate to a page, send =browser:get_favicon= command, verify response contains base64 string or null
+* Implementation
+
+** Files
+- Modified: =packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml= - toolbar button + picker + dialog trigger
+- New: =packages/coding-agent/src/modes/qml/canvas/components/SaveSessionDialog.qml= - modal dialog
+- Modified: =packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml= - =browser:get_favicon= command handler
+- Modified: =packages/coding-agent/src/tools/canvas-browser-protocol.ts= - add =browser:get_favicon= to =pageBrowserCommandActions=
+- New: =packages/coding-agent/test/browser-services/browser-toolbar.test.ts=
+
+** SaveSessionDialog.qml Structure
+- Modal =Dialog= with =Column= layout
+- =TextField= for service name (required)
+- =TextArea= for description (optional)
+- =ComboBox= for parent service (optional, populated from bridge)
+- Read-only =TextField= showing auto-detected domains from =browser.currentUrlString=
+- Save + Cancel buttons
+- On Save: =bridge.send({type: 'save_session', name, description, domains: [currentDomain], parentService, faviconData})=
+
+** browser:get_favicon Implementation
+In SpellBrowser.qml =executeActiveCommand= switch:
+#+begin_src javascript
+case "browser:get_favicon":
+    var iconUrl = webEngineView.icon
+    if (iconUrl && iconUrl.toString().length > 0) {
+        // QML Image to canvas to base64 approach
+        // Or grab via webEngineView.icon property which is a QUrl
+        emitResult(cmd, true, { faviconUrl: iconUrl.toString() })
+    } else {
+        emitResult(cmd, true, { faviconUrl: null })
+    }
+    break
+#+end_src
+Note: =WebEngineView.icon= is a URL, not raw data. To get base64, use a hidden =Image= element that loads the icon URL, then render to =Canvas= and =toDataURL()=. Alternatively, return the icon URL and let the TS side fetch it.
+
+** Steps
+1. Write test file with all 9 scenarios
+2. Add =browser:get_favicon= to =pageBrowserCommandActions= in =canvas-browser-protocol.ts=
+3. Implement =browser:get_favicon= handler in =SpellBrowser.qml=
+4. Create =SaveSessionDialog.qml= with form fields and bridge event
+5. Add Save Session button to =BrowserWindow.qml= =toolbarRow=
+6. Add Profile Picker (=ComboBox=) to =toolbarRow= with bridge message handling for profile list
+7. Wire =onMessageReceived= in BrowserWindow to handle profile list updates
+8. Run tests
+* Edge Cases
+- No favicon available (=WebEngineView.icon= empty) -> =get_favicon= returns ={faviconUrl: null}=, dialog shows generic icon placeholder
+- Dialog dismissed without saving -> no bridge event emitted, no side effects
+- Profile picker with zero profiles -> show single 'Default' entry
+- Very long service name entered -> QML =TextField= has =maximumLength: 48= to match sanitizeKey limit
+- Current URL is =about:blank= -> domains auto-populate as empty, user must enter manually
+- Multiple BrowserWindow instances open -> each has its own Save Session / Profile Picker (scoped to that window)
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/browser-toolbar.test.ts= passes (all 9 scenarios)
+- Save Session dialog renders, collects input, and sends correct bridge event payload
+- Profile picker renders and emits =profile_switch= event on selection
+- =browser:get_favicon= returns icon URL or null
+- =bunx biome check= and =bun run tsgo -p packages/coding-agent= pass on changed files
+
+Requires: ServiceEntry type definition from FEAT =Service Registry and Profile Manager= (for parent service dropdown type, domain format)

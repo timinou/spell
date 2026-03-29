@@ -1,0 +1,270 @@
+#+TITLE: Agent Service Tool Integration
+#+STATE: DONE
+#+SESSION_ID: 14a63a6be2ce1b1e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-39-57-094Z_14a62fd8094e1b0b/9-CreateFeat3.jsonl]]
+#+CUSTOM_ID: FEAT-081-agent-service-tool-integration
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the Browser Login Persistence plan. Each item must have state ITEM, include EFFORT, PRIORITY, LAYER properties, and a comprehensive body following the org item body standard.\n\n## Constraints\n- Use `org create` with category 'features'\n- State must be 'ITEM'\n- Return the CUSTOM_ID of each created item\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- Use org heading markup (* for top-level sections)\n\n## Project Context\nSpell is a coding agent with a QML-based Browse Canvas. We're adding login persistence so browser sessions survive across Spell restarts. Key files:\n- `packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml` — browser window with WebEngineProfile\n- `packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml` — browser interaction engine\n- `packages/coding-agent/src/tools/canvas-browser-protocol.ts` — browser command types\n- `packages/coding-agent/src/tools/canvas.ts` — canvas tool that manages windows\n- `packages/coding-agent/src/sdk.ts` — system prompt assembly\n- `packages/coding-agent/src/modes/browse-mode.ts` — browse mode entry\n- `packages/coding-agent/src/modes/qml/panels/BrowserPanel.qml` — multi-tab browser panel\n- `packages/coding-agent/test/helpers/browser-journey.ts` — headless browser test DSL\n- `packages/coding-agent/test/browser-reconnect/server.ts` — fake Bun server pattern\n- WebEngine storage: `~/.local/share/omp-qml-bridge/QtWebEngine/<storageName>/`\n- Settings: `~/.config/omp-qml-bridge/<storageName>.ini`\n- Registry location: `~/.spell/browser/services.json`
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create a FEAT org item via `org create` with these properties:
+
+title: "Agent Service Tool Integration"
+category: features
+state: ITEM
+properties:
+  EFFORT: 4h
+  PRIORITY: #A
+  LAYER: backend
+
+Body (use org heading markup with * for sections):
+* Scope
+
+** In Scope
+- New =service-protocol.ts= type file for service lifecycle commands (separate from browser protocol)
+- =service:list=, =service:connect=, =service:disconnect= commands handled entirely in TypeScript (never forwarded to QML bridge)
+- System prompt name-only injection: ='Connected services: linkedin, google-personal'= appended when browser/canvas tools are available AND registry has entries
+- Service-aware browser launch: when =props.serviceName= is provided, resolve =storageName= from service registry before passing to QML bridge
+- Handle =save_session= bridge event from BrowserWindow: register service in registry via ServiceRegistry.add()
+- Handle =profile_switch= bridge event: close current window, relaunch with new storageName
+
+** Out of Scope
+- Registry CRUD implementation (depends on FEAT =Service Registry and Profile Manager=)
+- QML UI components (FEAT =BrowserWindow Toolbar Enhancements=)
+- BrowseShell services panel (FEAT-5)
+- E2E testing (FEAT-4)
+
+** Boundary Rationale
+Service commands are NOT browser protocol commands. Browser commands (=browser:click=, =browser:goto=) route through QML =SpellBrowser.handleMessage()=. Service commands are intercepted in TypeScript before reaching the bridge. This separation is reflected in separate type files to prevent conflation.
+
+** Design Note: BrowseShell Profile Model
+BrowseShell tabs share the default ='spell-browse-mode'= WebEngineProfile (hardcoded in =BrowserPanel.qml= line 19). Service-specific sessions launch in STANDALONE =BrowserWindow= instances with the service's =storageName=. The services panel's 'Open' action (FEAT-5) will launch a BrowserWindow, not a BrowseShell tab. This avoids the complexity of per-tab WebEngineProfile management.
+* Tests
+
+File: =packages/coding-agent/test/browser-services/agent-integration.test.ts=
+
+Unit tests (mock ServiceRegistry, no QML bridge needed):
+1. *service:list returns services*: mock registry with 2 entries, send =service:list= command, verify response contains both services with name + status
+2. *service:connect creates entry*: send =service:connect= with name + domains, verify =ServiceRegistry.add= called with correct args
+3. *service:disconnect removes entry*: send =service:disconnect= with name, verify =ServiceRegistry.remove= called
+4. *service:list with empty registry*: returns empty array, no error
+5. *service:connect with duplicate name*: returns error result with code ='service_exists'=
+6. *service:disconnect with unknown name*: returns error result with code ='service_not_found'=
+7. *System prompt includes services*: mock registry with entries, mock tool availability with 'canvas' present, verify =appendPrompt= contains ='Connected services: service1, service2'=
+8. *System prompt omits services when no browser tools*: mock tool availability without 'canvas'/'puppeteer', verify no services section in prompt
+9. *System prompt omits services when registry empty*: verify no services section
+10. *Service-aware launch*: send canvas launch with =props.serviceName: 'linkedin'=, verify =props.storageName= resolved from registry's =profileStorage= field
+11. *Service-aware launch with unknown service*: =props.serviceName: 'unknown'= -> fall back to using ='unknown'= as storageName directly
+12. *save_session event handling*: simulate bridge event with save_session payload, verify ServiceRegistry.add called with extracted fields
+* Implementation
+
+** Files
+- New: =packages/coding-agent/src/browser/service-protocol.ts= - service command/event types
+- Modified: =packages/coding-agent/src/tools/canvas.ts= - intercept service:* commands + service-aware launch + save_session event handling
+- New: =packages/coding-agent/src/browser/service-prompt-section.ts= - builds prompt injection text
+- Modified: =packages/coding-agent/src/sdk.ts= - inject service section via =appendPrompt= in =rebuildSystemPrompt= (line ~1295)
+- New: =packages/coding-agent/test/browser-services/agent-integration.test.ts=
+
+** Service Protocol Types
+#+begin_src typescript
+// service-protocol.ts
+export type ServiceCommandAction = 'service:list' | 'service:connect' | 'service:disconnect';
+
+export interface ServiceListCommand { action: 'service:list'; _rid?: string; }
+export interface ServiceConnectCommand {
+  action: 'service:connect';
+  _rid?: string;
+  name: string;
+  displayName?: string;
+  description?: string;
+  domains?: string[];
+  loginUrl?: string;
+  parentService?: string;
+}
+export interface ServiceDisconnectCommand {
+  action: 'service:disconnect';
+  _rid?: string;
+  name: string;
+}
+
+export type ServiceCommand = ServiceListCommand | ServiceConnectCommand | ServiceDisconnectCommand;
+
+export interface ServiceResultEvent {
+  action: 'service:result';
+  _rid?: string;
+  command: ServiceCommandAction;
+  ok: boolean;
+  result?: unknown;
+  error?: { code: string; message: string };
+}
+#+end_src
+
+** Prompt Injection (service-prompt-section.ts)
+#+begin_src typescript
+export async function buildServicePromptSection(registryPath?: string): Promise<string | null> {
+  const registry = new ServiceRegistry(registryPath);
+  const services = await registry.list();
+  if (services.length === 0) return null;
+  const names = services.map(s => s.name).join(', ');
+  return `Connected browser services: ${names}. Use service:list for details.`;
+}
+#+end_src
+
+** Steps (test-first)
+1. Write test file with all 12 scenarios (mocked registry)
+2. Define =service-protocol.ts= types
+3. Implement =service-prompt-section.ts=
+4. Hook prompt injection into =sdk.ts= =rebuildSystemPrompt= (add to =appendPrompt= assembly after MCP instructions, gated on =tools.has('canvas')=)
+5. Implement service command interception in =canvas.ts= =execute= method (check for =service:*= action prefix before standard dispatch)
+6. Implement =save_session= event handling in =canvas.ts= event loop (=flushEvents= or a dedicated handler)
+7. Implement service-aware launch: in =canvas.ts= launch action, if =params.props?.serviceName=, resolve storageName from registry
+8. Run all tests
+* Edge Cases
+- =service:connect= with duplicate name -> return ={ok: false, error: {code: 'service_exists', message: '...'}}=
+- =service:disconnect= with non-existent name -> return ={ok: false, error: {code: 'service_not_found', message: '...'}}=
+- Empty registry -> prompt injection returns null, section omitted entirely
+- Registry read failure (corrupt file, permission denied) -> log warning, omit section, do not break prompt build
+- =service:list= when registry file does not exist -> return empty array
+- =save_session= event missing required fields (no name) -> log warning, ignore event
+- =serviceName= in launch props points to deleted service -> use serviceName as literal storageName
+- Many services (>50) -> prompt section could be long; names only keeps it bounded
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/agent-integration.test.ts= passes (all 12 scenarios)
+- System prompt contains service names when conditions met (verified in test)
+- Service commands return correct results (verified in test)
+- =bunx biome check= and =bun run tsgo -p packages/coding-agent= pass
+
+Requires: =ServiceRegistry= class and =ServiceEntry= type from FEAT =Service Registry and Profile Manager=
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In Scope
+- New =service-protocol.ts= type file for service lifecycle commands (separate from browser protocol)
+- =service:list=, =service:connect=, =service:disconnect= commands handled entirely in TypeScript (never forwarded to QML bridge)
+- System prompt name-only injection: ='Connected services: linkedin, google-personal'= appended when browser/canvas tools are available AND registry has entries
+- Service-aware browser launch: when =props.serviceName= is provided, resolve =storageName= from service registry before passing to QML bridge
+- Handle =save_session= bridge event from BrowserWindow: register service in registry via ServiceRegistry.add()
+- Handle =profile_switch= bridge event: close current window, relaunch with new storageName
+
+** Out of Scope
+- Registry CRUD implementation (depends on FEAT =Service Registry and Profile Manager=)
+- QML UI components (FEAT =BrowserWindow Toolbar Enhancements=)
+- BrowseShell services panel (FEAT-5)
+- E2E testing (FEAT-4)
+
+** Boundary Rationale
+Service commands are NOT browser protocol commands. Browser commands (=browser:click=, =browser:goto=) route through QML =SpellBrowser.handleMessage()=. Service commands are intercepted in TypeScript before reaching the bridge. This separation is reflected in separate type files to prevent conflation.
+
+** Design Note: BrowseShell Profile Model
+BrowseShell tabs share the default ='spell-browse-mode'= WebEngineProfile (hardcoded in =BrowserPanel.qml= line 19). Service-specific sessions launch in STANDALONE =BrowserWindow= instances with the service's =storageName=. The services panel's 'Open' action (FEAT-5) will launch a BrowserWindow, not a BrowseShell tab. This avoids the complexity of per-tab WebEngineProfile management.
+* Tests
+
+File: =packages/coding-agent/test/browser-services/agent-integration.test.ts=
+
+Unit tests (mock ServiceRegistry, no QML bridge needed):
+1. *service:list returns services*: mock registry with 2 entries, send =service:list= command, verify response contains both services with name + status
+2. *service:connect creates entry*: send =service:connect= with name + domains, verify =ServiceRegistry.add= called with correct args
+3. *service:disconnect removes entry*: send =service:disconnect= with name, verify =ServiceRegistry.remove= called
+4. *service:list with empty registry*: returns empty array, no error
+5. *service:connect with duplicate name*: returns error result with code ='service_exists'=
+6. *service:disconnect with unknown name*: returns error result with code ='service_not_found'=
+7. *System prompt includes services*: mock registry with entries, mock tool availability with 'canvas' present, verify =appendPrompt= contains ='Connected services: service1, service2'=
+8. *System prompt omits services when no browser tools*: mock tool availability without 'canvas'/'puppeteer', verify no services section in prompt
+9. *System prompt omits services when registry empty*: verify no services section
+10. *Service-aware launch*: send canvas launch with =props.serviceName: 'linkedin'=, verify =props.storageName= resolved from registry's =profileStorage= field
+11. *Service-aware launch with unknown service*: =props.serviceName: 'unknown'= -> fall back to using ='unknown'= as storageName directly
+12. *save_session event handling*: simulate bridge event with save_session payload, verify ServiceRegistry.add called with extracted fields
+* Implementation
+
+** Files
+- New: =packages/coding-agent/src/browser/service-protocol.ts= - service command/event types
+- Modified: =packages/coding-agent/src/tools/canvas.ts= - intercept service:* commands + service-aware launch + save_session event handling
+- New: =packages/coding-agent/src/browser/service-prompt-section.ts= - builds prompt injection text
+- Modified: =packages/coding-agent/src/sdk.ts= - inject service section via =appendPrompt= in =rebuildSystemPrompt= (line ~1295)
+- New: =packages/coding-agent/test/browser-services/agent-integration.test.ts=
+
+** Service Protocol Types
+#+begin_src typescript
+// service-protocol.ts
+export type ServiceCommandAction = 'service:list' | 'service:connect' | 'service:disconnect';
+
+export interface ServiceListCommand { action: 'service:list'; _rid?: string; }
+export interface ServiceConnectCommand {
+  action: 'service:connect';
+  _rid?: string;
+  name: string;
+  displayName?: string;
+  description?: string;
+  domains?: string[];
+  loginUrl?: string;
+  parentService?: string;
+}
+export interface ServiceDisconnectCommand {
+  action: 'service:disconnect';
+  _rid?: string;
+  name: string;
+}
+
+export type ServiceCommand = ServiceListCommand | ServiceConnectCommand | ServiceDisconnectCommand;
+
+export interface ServiceResultEvent {
+  action: 'service:result';
+  _rid?: string;
+  command: ServiceCommandAction;
+  ok: boolean;
+  result?: unknown;
+  error?: { code: string; message: string };
+}
+#+end_src
+
+** Prompt Injection (service-prompt-section.ts)
+#+begin_src typescript
+export async function buildServicePromptSection(registryPath?: string): Promise<string | null> {
+  const registry = new ServiceRegistry(registryPath);
+  const services = await registry.list();
+  if (services.length === 0) return null;
+  const names = services.map(s => s.name).join(', ');
+  return `Connected browser services: ${names}. Use service:list for details.`;
+}
+#+end_src
+
+** Steps (test-first)
+1. Write test file with all 12 scenarios (mocked registry)
+2. Define =service-protocol.ts= types
+3. Implement =service-prompt-section.ts=
+4. Hook prompt injection into =sdk.ts= =rebuildSystemPrompt= (add to =appendPrompt= assembly after MCP instructions, gated on =tools.has('canvas')=)
+5. Implement service command interception in =canvas.ts= =execute= method (check for =service:*= action prefix before standard dispatch)
+6. Implement =save_session= event handling in =canvas.ts= event loop (=flushEvents= or a dedicated handler)
+7. Implement service-aware launch: in =canvas.ts= launch action, if =params.props?.serviceName=, resolve storageName from registry
+8. Run all tests
+* Edge Cases
+- =service:connect= with duplicate name -> return ={ok: false, error: {code: 'service_exists', message: '...'}}=
+- =service:disconnect= with non-existent name -> return ={ok: false, error: {code: 'service_not_found', message: '...'}}=
+- Empty registry -> prompt injection returns null, section omitted entirely
+- Registry read failure (corrupt file, permission denied) -> log warning, omit section, do not break prompt build
+- =service:list= when registry file does not exist -> return empty array
+- =save_session= event missing required fields (no name) -> log warning, ignore event
+- =serviceName= in launch props points to deleted service -> use serviceName as literal storageName
+- Many services (>50) -> prompt section could be long; names only keeps it bounded
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/agent-integration.test.ts= passes (all 12 scenarios)
+- System prompt contains service names when conditions met (verified in test)
+- Service commands return correct results (verified in test)
+- =bunx biome check= and =bun run tsgo -p packages/coding-agent= pass
+
+Requires: =ServiceRegistry= class and =ServiceEntry= type from FEAT =Service Registry and Profile Manager=

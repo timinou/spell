@@ -131,6 +131,7 @@ import { getGeminiImageTools } from "./tools/gemini-image";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { PendingActionStore } from "./tools/pending-action";
 import { EventBus } from "./utils/event-bus";
+import { buildServicePromptSection } from "./browser/service-prompt-section";
 
 // Types
 export interface CreateAgentSessionOptions {
@@ -1308,6 +1309,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				parts.push(`### ${srvName}\n${truncated}`);
 			}
 			appendPrompt = parts.join("\n\n");
+		}
+
+		// Inject connected browser services if canvas tools available
+		if (toolNames.includes("canvas") || toolNames.includes("puppeteer")) {
+			try {
+				const serviceSection = await buildServicePromptSection();
+				if (serviceSection) {
+					appendPrompt = appendPrompt ? `${appendPrompt}\n\n${serviceSection}` : serviceSection;
+				}
+			} catch {
+				// Service registry not available — skip
+			}
 		}
 		const defaultPrompt = await buildSystemPromptInternal({
 			cwd,

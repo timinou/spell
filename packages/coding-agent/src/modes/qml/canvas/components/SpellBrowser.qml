@@ -1609,6 +1609,14 @@ Item {
         case "browser:screenshot":
             executeScreenshotCommand(payload)
             return
+        case "browser:get_favicon":
+            var iconUrl = webView.icon
+            if (iconUrl && iconUrl.toString().length > 0) {
+                completeActiveCommand({ faviconUrl: iconUrl.toString() })
+            } else {
+                completeActiveCommand({ faviconUrl: null })
+            }
+            return
         default:
             failActiveCommand("invalid_action", "Unsupported browser action: " + command.action)
             return

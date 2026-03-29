@@ -1,0 +1,236 @@
+#+TITLE: Service Registry and Profile Manager
+#+STATE: DONE
+#+SESSION_ID: 14a63a6be38e1b26
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-39-57-094Z_14a62fd8094e1b0b/7-CreateFeat1.jsonl]]
+#+CUSTOM_ID: FEAT-079-service-registry-and-profile-manager
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the Browser Login Persistence plan. Each item must have state ITEM, include EFFORT, PRIORITY, LAYER properties, and a comprehensive body following the org item body standard.\n\n## Constraints\n- Use `org create` with category 'features'\n- State must be 'ITEM'\n- Return the CUSTOM_ID of each created item\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- Use org heading markup (* for top-level sections)\n\n## Project Context\nSpell is a coding agent with a QML-based Browse Canvas. We're adding login persistence so browser sessions survive across Spell restarts. Key files:\n- `packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml` — browser window with WebEngineProfile\n- `packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml` — browser interaction engine\n- `packages/coding-agent/src/tools/canvas-browser-protocol.ts` — browser command types\n- `packages/coding-agent/src/tools/canvas.ts` — canvas tool that manages windows\n- `packages/coding-agent/src/sdk.ts` — system prompt assembly\n- `packages/coding-agent/src/modes/browse-mode.ts` — browse mode entry\n- `packages/coding-agent/src/modes/qml/panels/BrowserPanel.qml` — multi-tab browser panel\n- `packages/coding-agent/test/helpers/browser-journey.ts` — headless browser test DSL\n- `packages/coding-agent/test/browser-reconnect/server.ts` — fake Bun server pattern\n- WebEngine storage: `~/.local/share/omp-qml-bridge/QtWebEngine/<storageName>/`\n- Settings: `~/.config/omp-qml-bridge/<storageName>.ini`\n- Registry location: `~/.spell/browser/services.json`
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create a FEAT org item via `org create` with these properties:
+
+title: "Service Registry and Profile Manager"
+category: features
+state: ITEM
+properties:
+  EFFORT: 4h
+  PRIORITY: #A
+  LAYER: backend
+
+Body (use org heading markup with * for sections):
+* Scope
+
+** In Scope
+- ServiceEntry type definition with TypeBox schema validation
+- Registry file CRUD at =~/.spell/browser/services.json=
+- Atomic writes (temp file + rename) to prevent corruption
+- storageName collision detection after sanitization
+- Exact-domain matching for URL-to-service lookup (no eTLD+1 / PSL dependency; users configure explicit domain lists)
+- storageName sanitization in TypeScript (mirrors QML =sanitizeKey=: strip to =[a-zA-Z0-9_-]=, cap at 48 chars)
+- Profile storage path resolution: =storageName -> ~/.local/share/omp-qml-bridge/QtWebEngine/<name>/=
+- Profile directory creation/deletion with permission hardening (0700)
+- Parent-child service relationships via shared storageName
+
+** Out of Scope
+- eTLD+1 / Public Suffix List domain matching (explicit domains only; avoids external dependency)
+- BrowserWindow UI changes (FEAT-2)
+- Agent prompt injection (FEAT-3)
+- CLI commands (FEAT-7)
+- QML changes of any kind
+
+** Boundary Rationale
+The registry is a pure TypeScript module with no QML dependencies. Domain resolution uses exact matching because it is predictable, requires no external dependencies, and the user explicitly controls which domains map to which service. eTLD+1 was considered but rejected: it requires a Public Suffix List library, adds complexity, and the user must verify domain associations anyway.
+* Tests
+
+File: =packages/coding-agent/test/browser-services/service-registry.test.ts=
+1. *Add service*: creates registry entry, verifies JSON file updated, verifies WebEngine storage dir created with 0700 permissions
+2. *Remove service*: deletes registry entry AND WebEngine storage directory
+3. *List services*: returns all services with name, status, displayName
+4. *Get service by name*: returns full ServiceEntry
+5. *Resolve domain*: exact match on =entry.domains= array; returns null for unknown domains
+6. *Collision detection*: rejects =addService= when sanitized storageName matches an existing entry
+7. *storageName sanitization*: ='my.service'= and ='my-service'= both sanitize to ='my-service'= (collision)
+8. *Atomic write*: write registry, verify file contents valid JSON; simulate concurrent write does not corrupt
+9. *Parent-child*: child services resolve to parent's storageName; removing parent does NOT cascade-delete children (they keep their storageName)
+10. *Corrupt registry*: invalid JSON in services.json -> backup to =services.json.bak=, start fresh, log warning
+11. *Missing storage dir*: registry entry exists but WebEngine dir deleted externally -> =getService= returns entry with status ='unknown'=
+* Implementation
+
+** Files
+- New: =packages/coding-agent/src/browser/types.ts= - ServiceEntry interface + TypeBox schema
+- New: =packages/coding-agent/src/browser/service-registry.ts= - ServiceRegistry class
+- New: =packages/coding-agent/src/browser/index.ts= - barrel export
+- New: =packages/coding-agent/test/browser-services/service-registry.test.ts=
+
+** ServiceEntry Interface
+#+begin_src typescript
+interface ServiceEntry {
+  name: string;              // unique key, e.g. 'linkedin', 'google-personal'
+  displayName: string;       // human-readable, e.g. 'LinkedIn'
+  description: string;       // AI hint, e.g. 'Professional network for research'
+  profileStorage: string;    // WebEngine storageName (sanitized)
+  domains: string[];         // exact domain matches, e.g. ['linkedin.com', 'www.linkedin.com']
+  parentService?: string;    // parent name (shares profileStorage)
+  loginUrl?: string;         // URL for agent-driven reconnection
+  faviconPath?: string;      // absolute path to extracted favicon PNG
+  lastUsed?: string;         // ISO 8601 datetime
+  lastValidated?: string;    // ISO 8601 datetime
+  status: 'connected' | 'unknown';
+}
+#+end_src
+
+** ServiceRegistry Class API
+#+begin_src typescript
+class ServiceRegistry {
+  constructor(registryPath?: string);       // defaults to ~/.spell/browser/services.json
+  async add(entry: Omit<ServiceEntry, 'status'>): Promise<void>;
+  async remove(name: string): Promise<void>;
+  async get(name: string): Promise<ServiceEntry | null>;
+  async list(): Promise<ServiceEntry[]>;
+  async resolveByDomain(domain: string): Promise<ServiceEntry | null>;
+  async updateLastUsed(name: string): Promise<void>;
+  resolveStoragePath(storageName: string): string;
+}
+#+end_src
+
+** Steps (test-first)
+1. Write test file with all 11 scenarios stubbed
+2. Define =types.ts= with ServiceEntry interface + TypeBox schema
+3. Implement ServiceRegistry constructor + =resolveStoragePath=
+4. Implement =add= with storageName sanitization, collision detection, atomic write, dir creation with 0700
+5. Implement =remove= (delete entry + =fs.rm= on storage dir)
+6. Implement =get=, =list=, =resolveByDomain= (exact domain match)
+7. Implement =updateLastUsed=
+8. Implement corrupt-registry recovery (try/catch on JSON parse, backup + fresh start)
+9. Run all tests, fix failures
+* Edge Cases
+- storageName ='my.service'= and ='my-service'= both sanitize to ='my-service'= -> collision detected, =add= throws
+- Registry file missing at startup -> created with empty ={"services":{}}= on first write
+- Registry file contains invalid JSON -> backup to =.bak=, start fresh, log warning via logger
+- WebEngine storage dir missing but registry entry exists -> =get= returns entry but sets =status: 'unknown'=
+- Parent service deleted -> children become orphans but their storageName still works (it is the actual directory name)
+- Concurrent =add= calls -> atomic write (temp + rename) prevents partial writes; last writer wins
+- Empty =domains= array -> service exists but never matched by =resolveByDomain=
+- =loginUrl= empty -> agent must ask user where to navigate
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/service-registry.test.ts= passes (all 11 scenarios)
+- =bunx biome check packages/coding-agent/src/browser/= passes
+- =bun run tsgo -p packages/coding-agent= type-checks cleanly on new files
+- Registry file at =~/.spell/browser/services.json= is valid JSON after CRUD operations
+- Storage directories created with 0700 permissions (verified in test via =fs.stat=)
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In Scope
+- ServiceEntry type definition with TypeBox schema validation
+- Registry file CRUD at =~/.spell/browser/services.json=
+- Atomic writes (temp file + rename) to prevent corruption
+- storageName collision detection after sanitization
+- Exact-domain matching for URL-to-service lookup (no eTLD+1 / PSL dependency; users configure explicit domain lists)
+- storageName sanitization in TypeScript (mirrors QML =sanitizeKey=: strip to =[a-zA-Z0-9_-]=, cap at 48 chars)
+- Profile storage path resolution: =storageName -> ~/.local/share/omp-qml-bridge/QtWebEngine/<name>/=
+- Profile directory creation/deletion with permission hardening (0700)
+- Parent-child service relationships via shared storageName
+
+** Out of Scope
+- eTLD+1 / Public Suffix List domain matching (explicit domains only; avoids external dependency)
+- BrowserWindow UI changes (FEAT-2)
+- Agent prompt injection (FEAT-3)
+- CLI commands (FEAT-7)
+- QML changes of any kind
+
+** Boundary Rationale
+The registry is a pure TypeScript module with no QML dependencies. Domain resolution uses exact matching because it is predictable, requires no external dependencies, and the user explicitly controls which domains map to which service. eTLD+1 was considered but rejected: it requires a Public Suffix List library, adds complexity, and the user must verify domain associations anyway.
+* Tests
+
+File: =packages/coding-agent/test/browser-services/service-registry.test.ts=
+1. *Add service*: creates registry entry, verifies JSON file updated, verifies WebEngine storage dir created with 0700 permissions
+2. *Remove service*: deletes registry entry AND WebEngine storage directory
+3. *List services*: returns all services with name, status, displayName
+4. *Get service by name*: returns full ServiceEntry
+5. *Resolve domain*: exact match on =entry.domains= array; returns null for unknown domains
+6. *Collision detection*: rejects =addService= when sanitized storageName matches an existing entry
+7. *storageName sanitization*: ='my.service'= and ='my-service'= both sanitize to ='my-service'= (collision)
+8. *Atomic write*: write registry, verify file contents valid JSON; simulate concurrent write does not corrupt
+9. *Parent-child*: child services resolve to parent's storageName; removing parent does NOT cascade-delete children (they keep their storageName)
+10. *Corrupt registry*: invalid JSON in services.json -> backup to =services.json.bak=, start fresh, log warning
+11. *Missing storage dir*: registry entry exists but WebEngine dir deleted externally -> =getService= returns entry with status ='unknown'=
+* Implementation
+
+** Files
+- New: =packages/coding-agent/src/browser/types.ts= - ServiceEntry interface + TypeBox schema
+- New: =packages/coding-agent/src/browser/service-registry.ts= - ServiceRegistry class
+- New: =packages/coding-agent/src/browser/index.ts= - barrel export
+- New: =packages/coding-agent/test/browser-services/service-registry.test.ts=
+
+** ServiceEntry Interface
+#+begin_src typescript
+interface ServiceEntry {
+  name: string;              // unique key, e.g. 'linkedin', 'google-personal'
+  displayName: string;       // human-readable, e.g. 'LinkedIn'
+  description: string;       // AI hint, e.g. 'Professional network for research'
+  profileStorage: string;    // WebEngine storageName (sanitized)
+  domains: string[];         // exact domain matches, e.g. ['linkedin.com', 'www.linkedin.com']
+  parentService?: string;    // parent name (shares profileStorage)
+  loginUrl?: string;         // URL for agent-driven reconnection
+  faviconPath?: string;      // absolute path to extracted favicon PNG
+  lastUsed?: string;         // ISO 8601 datetime
+  lastValidated?: string;    // ISO 8601 datetime
+  status: 'connected' | 'unknown';
+}
+#+end_src
+
+** ServiceRegistry Class API
+#+begin_src typescript
+class ServiceRegistry {
+  constructor(registryPath?: string);       // defaults to ~/.spell/browser/services.json
+  async add(entry: Omit<ServiceEntry, 'status'>): Promise<void>;
+  async remove(name: string): Promise<void>;
+  async get(name: string): Promise<ServiceEntry | null>;
+  async list(): Promise<ServiceEntry[]>;
+  async resolveByDomain(domain: string): Promise<ServiceEntry | null>;
+  async updateLastUsed(name: string): Promise<void>;
+  resolveStoragePath(storageName: string): string;
+}
+#+end_src
+
+** Steps (test-first)
+1. Write test file with all 11 scenarios stubbed
+2. Define =types.ts= with ServiceEntry interface + TypeBox schema
+3. Implement ServiceRegistry constructor + =resolveStoragePath=
+4. Implement =add= with storageName sanitization, collision detection, atomic write, dir creation with 0700
+5. Implement =remove= (delete entry + =fs.rm= on storage dir)
+6. Implement =get=, =list=, =resolveByDomain= (exact domain match)
+7. Implement =updateLastUsed=
+8. Implement corrupt-registry recovery (try/catch on JSON parse, backup + fresh start)
+9. Run all tests, fix failures
+* Edge Cases
+- storageName ='my.service'= and ='my-service'= both sanitize to ='my-service'= -> collision detected, =add= throws
+- Registry file missing at startup -> created with empty ={"services":{}}= on first write
+- Registry file contains invalid JSON -> backup to =.bak=, start fresh, log warning via logger
+- WebEngine storage dir missing but registry entry exists -> =get= returns entry but sets =status: 'unknown'=
+- Parent service deleted -> children become orphans but their storageName still works (it is the actual directory name)
+- Concurrent =add= calls -> atomic write (temp + rename) prevents partial writes; last writer wins
+- Empty =domains= array -> service exists but never matched by =resolveByDomain=
+- =loginUrl= empty -> agent must ask user where to navigate
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/service-registry.test.ts= passes (all 11 scenarios)
+- =bunx biome check packages/coding-agent/src/browser/= passes
+- =bun run tsgo -p packages/coding-agent= type-checks cleanly on new files
+- Registry file at =~/.spell/browser/services.json= is valid JSON after CRUD operations
+- Storage directories created with 0700 permissions (verified in test via =fs.stat=)

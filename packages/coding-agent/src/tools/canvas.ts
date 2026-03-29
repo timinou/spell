@@ -3,8 +3,11 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { WindowInfo } from "@oh-my-pi/pi-qml";
 import { bridgeBinaryPath, isBridgeAvailable, QmlBridge } from "@oh-my-pi/pi-qml";
 import type { RemoteQmlBridge } from "@oh-my-pi/pi-qml-remote";
-
+import { logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import type { ServiceCommand } from "../browser/service-protocol";
+import { isServiceCommand } from "../browser/service-protocol";
+import { ServiceRegistry, ServiceRegistryError } from "../browser/service-registry";
 import { resolveCanvasUrlToPath } from "../internal-urls";
 import canvasDescription from "../prompts/tools/canvas.md" with { type: "text" };
 import { Priority } from "../utils/event-bus";
@@ -385,6 +388,8 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 					// Unknown tier or missing required fields — treat as regular event.
 					regularEvents.push(ev);
 				}
+			} else if (p.type === "save_session" && typeof p.name === "string") {
+				void this.#handleSaveSession(p);
 			} else {
 				regularEvents.push(ev);
 			}
@@ -511,11 +516,32 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 
 				const abs = await this.#resolveLaunchPath(filePath);
 				const bridge = this.#ensureBridge();
+
+				// Service-aware launch: resolve storageName from registry
+				const props = (params.props as Record<string, unknown> | undefined) ?? {};
+				if (typeof props.serviceName === "string" && props.serviceName) {
+					try {
+						const registry = new ServiceRegistry();
+						const service = await registry.get(props.serviceName);
+						if (service) {
+							props.storageName = service.profileStorage;
+							await registry.updateLastUsed(props.serviceName);
+						} else {
+							props.storageName = props.serviceName;
+						}
+					} catch (err) {
+						logger.warn("Failed to resolve service for launch", {
+							serviceName: props.serviceName,
+							error: err instanceof Error ? err.message : String(err),
+						});
+					}
+				}
+
 				const win = await bridge.launch(id, abs, {
 					title: params.title,
 					width: params.width,
 					height: params.height,
-					props: params.props as Record<string, unknown> | undefined,
+					props,
 				});
 				const events = bridge.drainEvents(id);
 				// Merge armed tools: explicit props override, then file-declared (with denylist).
@@ -562,6 +588,16 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 				const id = params.id;
 				if (!id) throw new ToolError("send_message action requires 'id'");
 				if (!params.payload) throw new ToolError("send_message action requires 'payload'");
+
+				// Intercept service commands — handled in TS, never forwarded to QML
+				const payloadAction = (params.payload as Record<string, unknown>)?.action;
+				if (typeof payloadAction === "string" && isServiceCommand(payloadAction)) {
+					const result = await this.#handleServiceCommand(params.payload as unknown as ServiceCommand);
+					const details: CanvasToolDetails = { action: "send_message", windowId: id };
+					return toolResult(details)
+						.text(JSON.stringify(result, null, 2))
+						.done();
+				}
 
 				const remote = this.#remoteBridge();
 				if (remote) {
@@ -615,6 +651,77 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 
 			default:
 				throw new ToolError(`Unknown action: ${action as string}`);
+		}
+	}
+
+	async #handleServiceCommand(cmd: ServiceCommand): Promise<Record<string, unknown>> {
+		const registry = new ServiceRegistry();
+		const rid = cmd._rid;
+		try {
+			switch (cmd.action) {
+				case "service:list": {
+					const services = await registry.list();
+					return { action: "service:result", _rid: rid, command: cmd.action, ok: true, result: services };
+				}
+				case "service:connect": {
+					await registry.add({
+						name: cmd.name,
+						displayName: cmd.displayName || cmd.name,
+						description: cmd.description || "",
+						profileStorage: cmd.name,
+						domains: cmd.domains || [],
+						parentService: cmd.parentService,
+						loginUrl: cmd.loginUrl,
+					});
+					return {
+						action: "service:result",
+						_rid: rid,
+						command: cmd.action,
+						ok: true,
+						result: { name: cmd.name },
+					};
+				}
+				case "service:disconnect": {
+					await registry.remove(cmd.name);
+					return {
+						action: "service:result",
+						_rid: rid,
+						command: cmd.action,
+						ok: true,
+						result: { name: cmd.name },
+					};
+				}
+			}
+		} catch (err) {
+			const code = err instanceof ServiceRegistryError ? err.code : "unknown";
+			const message = err instanceof Error ? err.message : String(err);
+			return { action: "service:result", _rid: rid, command: cmd.action, ok: false, error: { code, message } };
+		}
+	}
+
+	async #handleSaveSession(payload: Record<string, unknown>): Promise<void> {
+		try {
+			const name = payload.name as string;
+			if (!name) return;
+			const registry = new ServiceRegistry();
+			const domains = Array.isArray(payload.domains)
+				? payload.domains.filter((d): d is string => typeof d === "string")
+				: [];
+			await registry.add({
+				name,
+				displayName: (payload.displayName as string) || name,
+				description: (payload.description as string) || "",
+				profileStorage: name,
+				domains,
+				parentService: (payload.parentService as string) || undefined,
+				loginUrl: undefined,
+				faviconPath: undefined,
+			});
+			logger.debug("Saved browser session", { name, domains });
+		} catch (err) {
+			logger.warn("Failed to save browser session", {
+				error: err instanceof Error ? err.message : String(err),
+			});
 		}
 	}
 

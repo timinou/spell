@@ -1,0 +1,138 @@
+#+TITLE: Browser Login Persistence
+#+STATE: DOING
+#+SESSION_ID: 14a62fd8094e1b0b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-39-57-094Z_14a62fd8094e1b0b.jsonl]]
+#+CUSTOM_ID: PLAN-025-browser-login-persistence
+#+EFFORT: 22h
+#+PRIORITY: #A
+
+* Initial Message
+
+How would you enable a 'login persistence' feature in the Spell Browse Canvas? And how would you test that headlessly and mockedly (hint, see the browser test that spins a fake Node.JS backend for hot reload on WebSocket) For example, if I want you to do research on LinkedIn, I'd like to connect to LinkedIn and then the feature would let me see the list of connected services (and the agent would be able to see that to quickly know what it can do), and then that can be used to quickly spin up LinkedIn browser windows for whatever I asked it to if they are relevant.
+
+As usual: ask me as many questions as humanly/agentically possible, and challenge me as much as you possibly can (and more). This time, on top of that, be VERY connected to the vision and the intention, so that this interface is in fact useful for the types of purpose I'm imagining. If extra low effort, high reward value come to mind during this research/planning phase, bring them to me
+
+* Context
+
+** Problem
+The Spell Browse Canvas has WebEngine browser windows with persistent cookie support (=ForcePersistentCookies=, =WebEngineProfilePrototype=), but there is no way to:
+1. Name and manage browser profiles for specific services (LinkedIn, Google, GitHub)
+2. See which services have active sessions
+3. Automatically launch authenticated browsers when the agent needs to interact with a service
+4. Reuse login sessions across Spell sessions
+
+** Approach
+Named service profiles stored in a JSON registry (=~/.spell/browser/services.json=). Each service maps to a WebEngine =storageName= directory at =~/.local/share/omp-qml-bridge/QtWebEngine/<storageName>/=. The agent can query available services, launch browsers with the right profile, and validate session health by observing pages (LLM-driven, no heuristic code).
+
+** Key Design Decisions
+- *Session inheritance*: child services share parent's =storageName= (logical aliases). A "YouTube" service points to the "google-personal" profile's cookie store, enabling SSO completion without re-entering credentials.
+- *Domain resolution*: exact domain matching with manual aliases (no eTLD+1 / PSL dependency). Users configure explicit domain lists per service.
+- *Agent-driven validation*: the agent uses =browser:observe= on a service homepage and uses LLM judgment to determine login status. No heuristic code in the codebase.
+- *System prompt injection*: name-only (='Connected services: linkedin, google-personal'=). No domains/URLs/descriptions in prompts (privacy). Agent queries details on demand via =service:list=.
+- *Service commands*: =service:list=, =service:connect=, =service:disconnect= are handled in TypeScript (not forwarded to QML). Separate type file (=service-protocol.ts=) to avoid conflating with =browser:*= WebEngine commands.
+- *BrowseShell profile model*: BrowseShell tabs share the default ='spell-browse-mode'= profile. Service-specific sessions launch in standalone =BrowserWindow= instances with the service's =storageName=.
+- *Remove = hard delete*: removing a service deletes the registry entry AND the WebEngine storage directory. Clean break, no ambiguity.
+- *Atomic writes*: registry uses temp file + rename to prevent corruption from crashes or concurrent writes.
+- *Favicon*: extracted via =WebEngineView.icon= QML property at save time, stored as PNG in profile directory.
+- *Profile locking*: daemon-level protection (existing socket-based singleton). Two daemons on the same socket path reconnect rather than conflict.
+- *Multi-account from day one*: profiles are freely named (='linkedin-personal'=, ='linkedin-work'=), each with its own WebEngine storage.
+- *Connect flow*: hybrid \u2014 manual 'Save Session' button always available in BrowserWindow toolbar, plus auto-prompt on first successful login in a new profile.
+- *Profile picker*: merged into BrowserWindow toolbar (same FEAT as Save Session to avoid two items touching the same QML =RowLayout=).
+- *Test teardown*: =BrowserJourney.teardown()= extended to clean WebEngine storage dirs (prevents orphaned test profiles).
+
+** Metis Gaps Addressed
+- GAP-01 (multi-process profile corruption): daemon singleton via existing socket path
+- GAP-02 (atomic writes): temp + rename for registry
+- GAP-03 (storageName sanitization): validated in TS, not just QML
+- GAP-04 (privacy): name-only prompt injection, details on demand
+- GAP-05 (domain resolution): exact matching, no eTLD+1
+- GAP-06/07 (testing gaps): dedicated cross-session persistence + inheritance tests
+- GAP-09 (disconnect flow): hard delete (registry + storage)
+- GAP-10 (collision detection): storageName uniqueness enforced after sanitization
+- GAP-14 (favicon): WebEngineView.icon API, not SQLite
+- GAP-15 (protocol separation): service-protocol.ts separate from browser protocol
+
+** Daedalus Fixes Applied
+- ISSUE-1: teardown fix moved from Phase 2 to FEAT-4 (Phase 1)
+- ISSUE-2: profile picker merged into FEAT-2 (BrowserWindow toolbar)
+- ISSUE-3: eTLD+1 dropped; exact-domain matching, no new dependency
+- ISSUE-4: explicit design note on BrowseShell single-profile model
+- ISSUE-5: service commands in separate service-protocol.ts
+
+** Codebase Reference
+- =packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml= \u2014 browser window with =ForcePersistentCookies=, =WebEngineProfilePrototype=, =storageName= resolution
+- =packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml= \u2014 browser interaction engine, command handler
+- =packages/coding-agent/src/tools/canvas-browser-protocol.ts= \u2014 =browser:*= command type union
+- =packages/coding-agent/src/tools/canvas.ts= \u2014 canvas tool, window management, event loops
+- =packages/coding-agent/src/sdk.ts= \u2014 system prompt assembly (=rebuildSystemPrompt= at line ~1282, =appendPrompt= pattern)
+- =packages/coding-agent/src/modes/browse-mode.ts= \u2014 browse mode entry, settings category from session hash
+- =packages/coding-agent/src/modes/qml/panels/BrowserPanel.qml= \u2014 multi-tab browser, hardcoded =storageName: 'spell-browse-mode'=
+- =packages/coding-agent/test/helpers/browser-journey.ts= \u2014 headless browser test DSL
+- =packages/coding-agent/test/browser-reconnect/server.ts= \u2014 fake Bun HTTP/WS server pattern (=ReconnectTestServer=)
+- WebEngine storage: =~/.local/share/omp-qml-bridge/QtWebEngine/<storageName>/=
+- Settings: =~/.config/omp-qml-bridge/<storageName>.ini=
+
+* Verification
+
+** Phase 1 Verification
+- =bun test packages/coding-agent/test/browser-services/service-registry.test.ts= \u2014 11 scenarios pass
+- =bun test packages/coding-agent/test/browser-services/browser-toolbar.test.ts= \u2014 9 scenarios pass
+- =bun test packages/coding-agent/test/browser-services/agent-integration.test.ts= \u2014 12 scenarios pass
+- =bun test packages/coding-agent/test/browser-services/cookie-persistence.test.ts= \u2014 cookie survives browser restart
+- =bun test packages/coding-agent/test/browser-services/session-inheritance.test.ts= \u2014 shared storageName shares cookies
+- =bun test packages/coding-agent/test/browser-services/connect-flow.test.ts= \u2014 full connect->save->relaunch cycle
+- =bunx biome check packages/coding-agent/src/browser/= \u2014 lint clean
+- =bun run tsgo -p packages/coding-agent= \u2014 type-check clean on new/modified files
+
+** Phase 2 Verification
+- =bun test packages/coding-agent/test/browser-services/services-panel.test.ts= \u2014 5 scenarios pass
+- =bun test packages/coding-agent/test/browser-services/health-dashboard.test.ts= \u2014 4 scenarios pass
+- =bun test packages/coding-agent/test/browser-services/cleanup-command.test.ts= \u2014 6 scenarios pass
+- =spell browser cleanup --dry-run= \u2014 lists orphaned profiles
+
+** Manual Checks
+- Launch BrowserWindow, verify Save Session button and Profile Picker visible in toolbar
+- Log into a test service, click Save Session, verify dialog collects name/description/domains
+- Relaunch Spell, launch browser with saved service name, verify still logged in
+- System prompt contains service names when canvas tools available
+
+* Execution Manifest
+
+** Phase 1 \u2014 Core Infrastructure
+
+1. [[id:FEAT-079-service-registry-and-profile-manager]] (depends: none, effort: 4h)
+   Service registry CRUD, atomic writes, domain resolution, profile lifecycle.
+   Produces: =ServiceRegistry= class, =ServiceEntry= type in =packages/coding-agent/src/browser/=
+
+2. [[id:FEAT-078-browserwindow-toolbar-enhancements]] (depends: FEAT-079 ServiceEntry type, effort: 4h)
+   Save Session button + Profile Picker + SaveSessionDialog + browser:get_favicon.
+   Produces: toolbar UI, bridge events =save_session= / =profile_switch= / =browser:get_favicon=
+
+3. [[id:FEAT-081-agent-service-tool-integration]] (depends: FEAT-079 ServiceRegistry class, effort: 4h)
+   service:list/connect/disconnect commands, prompt injection, service-aware launch, save_session handling.
+   Produces: =service-protocol.ts=, prompt section, canvas.ts service routing
+
+4. [[id:FEAT-080-e2e-cookie-persistence-and-connect-flow]] (depends: FEAT-079 + FEAT-078 + FEAT-081, effort: 3h)
+   Fake login server, cross-session persistence test, session inheritance test, connect flow test, teardown fix.
+   Produces: =LoginServer=, 3 test files, =BrowserJourney.teardown()= storage cleanup
+
+** Phase 2 \u2014 UI and Lifecycle
+
+5. [[id:FEAT-076-browseshell-services-panel]] (depends: FEAT-079 + FEAT-081, effort: 3h)
+   ServicesPanel.qml in BrowseShell, open/disconnect/validate actions.
+   Design: 'Open' launches standalone BrowserWindow (NOT a BrowseShell tab).
+
+6. [[id:FEAT-075-session-health-dashboard]] (depends: FEAT-076 + FEAT-081, effort: 2h)
+   Aggregate status in BrowseShell, per-service last-validated, refresh trigger.
+
+7. [[id:FEAT-077-profile-cleanup-cli-utility]] (depends: FEAT-079, effort: 2h)
+   =spell browser cleanup= CLI command, dry-run/force modes, orphan detection.
+
+** Parallelization Notes
+- FEAT-079 (registry) must complete first \u2014 all others depend on it
+- FEAT-078 (toolbar) and FEAT-081 (agent integration) can run in parallel after FEAT-079
+- FEAT-080 (E2E tests) requires all three Phase 1 FEATs
+- Phase 2: FEAT-076 and FEAT-077 can run in parallel; FEAT-075 depends on FEAT-076
+
+** Total Effort
+Phase 1: ~15h | Phase 2: ~7h | Total: ~22h

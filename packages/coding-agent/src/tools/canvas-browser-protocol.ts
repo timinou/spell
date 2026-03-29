@@ -16,6 +16,7 @@ export const pageBrowserCommandActions = [
 	"browser:get_attribute",
 	"browser:extract_readable",
 	"browser:screenshot",
+	"browser:get_favicon",
 ] as const;
 
 export const tabCommandActions = ["tab:open", "tab:close", "tab:list", "tab:switch"] as const;
@@ -264,6 +265,10 @@ export interface BrowserScreenshotCommand extends BrowserCommandBase {
 	full_page?: boolean;
 }
 
+export interface BrowserGetFaviconCommand extends BrowserCommandBase {
+	action: "browser:get_favicon";
+}
+
 export interface TabOpenCommand extends BrowserCommandBase {
 	action: "tab:open";
 	title?: string;
@@ -302,6 +307,7 @@ export type BrowserCommandPayload =
 	| BrowserGetAttributeCommand
 	| BrowserExtractReadableCommand
 	| BrowserScreenshotCommand
+	| BrowserGetFaviconCommand
 	| TabOpenCommand
 	| TabCloseCommand
 	| TabListCommand
