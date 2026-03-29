@@ -19,6 +19,7 @@ ApplicationWindow {
     property string statusText: "Ready"
     property int tokenCount: 0
     property bool findingsDrawerOpen: false
+    property bool servicesDrawerOpen: false
     property int findingsCount: 0
     property bool restoringTabs: false
     property string browseSettingsCategory: resolvedBrowseSettingsCategory()
@@ -428,6 +429,13 @@ ApplicationWindow {
             return
         }
 
+        if (payload.action === "service_list_update" && payload.services) {
+            if (servicesPanelLoader.item && typeof servicesPanelLoader.item.updateServices === "function") {
+                servicesPanelLoader.item.updateServices(payload.services)
+            }
+            return
+        }
+
 
         if (payload.action === "browser:url_changed" || payload.action === "browser:result" || payload.action === "browser:navigation_failed") {
             updateBrowserTabFromPayload(payload)
@@ -680,6 +688,27 @@ ApplicationWindow {
             }
         }
 
+        Item {
+            Layout.fillWidth: true
+            implicitHeight: root.servicesDrawerOpen ? 220 : 0
+            clip: true
+
+            Behavior on implicitHeight {
+                NumberAnimation {
+                    duration: SpellUI.SpellTheme.durationMedium
+                    easing.type: Easing.OutQuad
+                }
+            }
+
+            Loader {
+                id: servicesPanelLoader
+                anchors.fill: parent
+                active: true
+                visible: parent.implicitHeight > 0
+                source: Qt.resolvedUrl("panels/ServicesPanel.qml")
+            }
+        }
+
         Rectangle {
             Layout.fillWidth: true
             implicitHeight: footerRow.implicitHeight + SpellUI.SpellTheme.spacingS * 2
@@ -728,6 +757,34 @@ ApplicationWindow {
 
                     SpellUI.StateLayer {
                         onClicked: root.toggleFindingsDrawer()
+                    }
+                }
+
+                Rectangle {
+                    objectName: "servicesToggleButton"
+                    implicitWidth: servicesToggleText.implicitWidth + SpellUI.SpellTheme.spacingL
+                    implicitHeight: servicesToggleText.implicitHeight + SpellUI.SpellTheme.spacingXS
+                    radius: SpellUI.SpellTheme.cornerRadiusSmall
+                    color: root.servicesDrawerOpen ? SpellUI.SpellTheme.surface1 : "transparent"
+                    border.width: 1
+                    border.color: SpellUI.SpellTheme.borderSubtle
+
+                    Text {
+                        id: servicesToggleText
+                        anchors.centerIn: parent
+                        text: {
+                            if (!servicesPanelLoader.item) return "Services"
+                            var total = servicesPanelLoader.item.totalCount
+                            if (total > 0) return "Services (" + servicesPanelLoader.item.connectedCount + "/" + total + ")"
+                            return "Services"
+                        }
+                        font.family: SpellUI.SpellTheme.fontFamily
+                        font.pixelSize: SpellUI.SpellTheme.fontSizeS
+                        color: SpellUI.SpellTheme.textSecondary
+                    }
+
+                    SpellUI.StateLayer {
+                        onClicked: root.servicesDrawerOpen = !root.servicesDrawerOpen
                     }
                 }
 

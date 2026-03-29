@@ -1,0 +1,184 @@
+#+TITLE: BrowseShell Services Panel
+#+STATE: DONE
+#+SESSION_ID: 14a63a6be1ce1b1c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-39-57-094Z_14a62fd8094e1b0b/11-CreateFeat5.jsonl]]
+#+CUSTOM_ID: FEAT-076-browseshell-services-panel
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: ui
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the Browser Login Persistence plan. Each item must have state ITEM, include EFFORT, PRIORITY, LAYER properties, and a comprehensive body following the org item body standard.\n\n## Constraints\n- Use `org create` with category 'features'\n- State must be 'ITEM'\n- Return the CUSTOM_ID of each created item\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- Use org heading markup (* for top-level sections)\n\n## Project Context\nSpell is a coding agent with a QML-based Browse Canvas. We're adding login persistence so browser sessions survive across Spell restarts. Key files:\n- `packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml` — browser window with WebEngineProfile\n- `packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml` — browser interaction engine\n- `packages/coding-agent/src/tools/canvas-browser-protocol.ts` — browser command types\n- `packages/coding-agent/src/tools/canvas.ts` — canvas tool that manages windows\n- `packages/coding-agent/src/sdk.ts` — system prompt assembly\n- `packages/coding-agent/src/modes/browse-mode.ts` — browse mode entry\n- `packages/coding-agent/src/modes/qml/panels/BrowserPanel.qml` — multi-tab browser panel\n- `packages/coding-agent/test/helpers/browser-journey.ts` — headless browser test DSL\n- `packages/coding-agent/test/browser-reconnect/server.ts` — fake Bun server pattern\n- WebEngine storage: `~/.local/share/omp-qml-bridge/QtWebEngine/<storageName>/`\n- Settings: `~/.config/omp-qml-bridge/<storageName>.ini`\n- Registry location: `~/.spell/browser/services.json`
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create a FEAT org item via `org create` with these properties:
+
+title: "BrowseShell Services Panel"
+category: features
+state: ITEM
+properties:
+  EFFORT: 3h
+  PRIORITY: #B
+  LAYER: ui
+
+Body (use org heading markup with * for sections):
+* Scope
+
+** In Scope
+- New =ServicesPanel.qml= component in BrowseShell showing connected services
+- Service list with name, status indicator, favicon, last-used timestamp
+- Quick actions per service: Open (launches standalone BrowserWindow), Disconnect (removes service), Validate (triggers agent validation)
+- Empty state placeholder when no services registered
+- Panel refreshes when =service:list= response arrives via bridge
+
+** Out of Scope
+- Service registry CRUD (FEAT-1)
+- BrowserWindow toolbar changes (FEAT-2)
+- Agent tool commands (FEAT-3)
+- E2E testing of connect flow (FEAT-4)
+- Health dashboard auto-refresh (FEAT-6)
+
+** Design Note: BrowseShell Profile Model
+BrowseShell tabs share the default ='spell-browse-mode'= WebEngineProfile (hardcoded in =BrowserPanel.qml=). Service-specific sessions launch in STANDALONE =BrowserWindow= instances with the service's storageName. The 'Open' action in the services panel launches a BrowserWindow via bridge event, NOT a new BrowseShell tab. This is because each service needs its own WebEngineProfile, and BrowseShell's =BrowserPanel= shares a single profile across all tabs.
+* Tests
+
+File: =packages/coding-agent/test/browser-services/services-panel.test.ts=
+
+Tests use a =BrowseJourney= (existing test DSL for BrowseShell, =packages/coding-agent/test/helpers/browse-journey.ts=) with mock service data sent via bridge messages.
+1. *Panel shows registered services*: send =service_list_update= bridge message with 2 services, verify both service names visible in panel
+2. *Open action sends launch event*: click 'Open' on a service, verify bridge event ={type: 'service_open', name: 'linkedin', storageName: 'linkedin', loginUrl: '...'}=
+3. *Disconnect action sends remove event*: click 'Disconnect' on a service, verify bridge event ={type: 'service_disconnect', name: 'linkedin'}=
+4. *Empty registry placeholder*: send =service_list_update= with empty array, verify 'No connected services' text visible
+5. *Panel updates on refresh*: send initial list with 2 services, then updated list with 3, verify third service appears
+* Implementation
+
+** Files
+- New: =packages/coding-agent/src/modes/qml/panels/ServicesPanel.qml=
+- Modified: =packages/coding-agent/src/modes/qml/BrowseShell.qml= - integrate ServicesPanel
+- New: =packages/coding-agent/test/browser-services/services-panel.test.ts=
+
+** ServicesPanel.qml Structure
+- Root =Item= with =ListView= bound to =ListModel=
+- Delegate: =Rectangle= with =RowLayout= containing:
+  - Favicon =Image= (source from =faviconPath= or fallback globe icon)
+  - =Column=: service =displayName= (bold) + last-used timestamp (dimmed)
+  - Status indicator dot (green=connected, gray=unknown)
+  - Action buttons: Open, Disconnect, Validate
+- Empty state: centered =Text= 'No connected services'
+- Property: =property var servicesList: []= updated from bridge messages
+- Function: =updateServices(list)= populates =ListModel= from JS array
+
+** BrowseShell Integration
+- Add =ServicesPanel= to BrowseShell layout (as a sidebar section or tab)
+- Wire bridge =onMessageReceived=: handle =service_list_update= messages
+- On startup, BrowseShell requests service list from agent (=bridge.send({type: 'request_services'})=)
+- Agent responds with =service_list_update= containing current registry contents
+
+** Steps
+1. Write test file with all 5 scenarios
+2. Create =ServicesPanel.qml= with =ListView= + delegates + empty state
+3. Wire action buttons to =bridge.send= calls
+4. Integrate into =BrowseShell.qml= layout
+5. Handle =service_list_update= bridge messages in BrowseShell, forward to ServicesPanel
+6. Run tests
+* Edge Cases
+- Many services (>20) -> =ListView= is inherently scrollable
+- Favicon path missing or file deleted -> =Image= with fallback =source= (built-in globe/link icon)
+- Service opened while panel is visible -> panel does not block; action is fire-and-forget
+- BrowseShell startup before agent responds -> empty state shown, updates when response arrives
+- Disconnect while BrowserWindow for that service is open -> BrowserWindow continues working (cookies are in-memory until closed) but service won't be listed next time
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/services-panel.test.ts= passes (all 5 scenarios)
+- ServicesPanel renders services with names, status, and actions
+- Open action sends correct bridge event
+- =bunx biome check= and =bun run tsgo -p packages/coding-agent= pass
+
+Requires:
+- =ServiceEntry= type from FEAT =Service Registry and Profile Manager= (for data shape)
+- =service:list= command handling from FEAT =Agent Service Tool Integration= (for agent-side response)
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In Scope
+- New =ServicesPanel.qml= component in BrowseShell showing connected services
+- Service list with name, status indicator, favicon, last-used timestamp
+- Quick actions per service: Open (launches standalone BrowserWindow), Disconnect (removes service), Validate (triggers agent validation)
+- Empty state placeholder when no services registered
+- Panel refreshes when =service:list= response arrives via bridge
+
+** Out of Scope
+- Service registry CRUD (FEAT-1)
+- BrowserWindow toolbar changes (FEAT-2)
+- Agent tool commands (FEAT-3)
+- E2E testing of connect flow (FEAT-4)
+- Health dashboard auto-refresh (FEAT-6)
+
+** Design Note: BrowseShell Profile Model
+BrowseShell tabs share the default ='spell-browse-mode'= WebEngineProfile (hardcoded in =BrowserPanel.qml=). Service-specific sessions launch in STANDALONE =BrowserWindow= instances with the service's storageName. The 'Open' action in the services panel launches a BrowserWindow via bridge event, NOT a new BrowseShell tab. This is because each service needs its own WebEngineProfile, and BrowseShell's =BrowserPanel= shares a single profile across all tabs.
+* Tests
+
+File: =packages/coding-agent/test/browser-services/services-panel.test.ts=
+
+Tests use a =BrowseJourney= (existing test DSL for BrowseShell, =packages/coding-agent/test/helpers/browse-journey.ts=) with mock service data sent via bridge messages.
+1. *Panel shows registered services*: send =service_list_update= bridge message with 2 services, verify both service names visible in panel
+2. *Open action sends launch event*: click 'Open' on a service, verify bridge event ={type: 'service_open', name: 'linkedin', storageName: 'linkedin', loginUrl: '...'}=
+3. *Disconnect action sends remove event*: click 'Disconnect' on a service, verify bridge event ={type: 'service_disconnect', name: 'linkedin'}=
+4. *Empty registry placeholder*: send =service_list_update= with empty array, verify 'No connected services' text visible
+5. *Panel updates on refresh*: send initial list with 2 services, then updated list with 3, verify third service appears
+* Implementation
+
+** Files
+- New: =packages/coding-agent/src/modes/qml/panels/ServicesPanel.qml=
+- Modified: =packages/coding-agent/src/modes/qml/BrowseShell.qml= - integrate ServicesPanel
+- New: =packages/coding-agent/test/browser-services/services-panel.test.ts=
+
+** ServicesPanel.qml Structure
+- Root =Item= with =ListView= bound to =ListModel=
+- Delegate: =Rectangle= with =RowLayout= containing:
+  - Favicon =Image= (source from =faviconPath= or fallback globe icon)
+  - =Column=: service =displayName= (bold) + last-used timestamp (dimmed)
+  - Status indicator dot (green=connected, gray=unknown)
+  - Action buttons: Open, Disconnect, Validate
+- Empty state: centered =Text= 'No connected services'
+- Property: =property var servicesList: []= updated from bridge messages
+- Function: =updateServices(list)= populates =ListModel= from JS array
+
+** BrowseShell Integration
+- Add =ServicesPanel= to BrowseShell layout (as a sidebar section or tab)
+- Wire bridge =onMessageReceived=: handle =service_list_update= messages
+- On startup, BrowseShell requests service list from agent (=bridge.send({type: 'request_services'})=)
+- Agent responds with =service_list_update= containing current registry contents
+
+** Steps
+1. Write test file with all 5 scenarios
+2. Create =ServicesPanel.qml= with =ListView= + delegates + empty state
+3. Wire action buttons to =bridge.send= calls
+4. Integrate into =BrowseShell.qml= layout
+5. Handle =service_list_update= bridge messages in BrowseShell, forward to ServicesPanel
+6. Run tests
+* Edge Cases
+- Many services (>20) -> =ListView= is inherently scrollable
+- Favicon path missing or file deleted -> =Image= with fallback =source= (built-in globe/link icon)
+- Service opened while panel is visible -> panel does not block; action is fire-and-forget
+- BrowseShell startup before agent responds -> empty state shown, updates when response arrives
+- Disconnect while BrowserWindow for that service is open -> BrowserWindow continues working (cookies are in-memory until closed) but service won't be listed next time
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/services-panel.test.ts= passes (all 5 scenarios)
+- ServicesPanel renders services with names, status, and actions
+- Open action sends correct bridge event
+- =bunx biome check= and =bun run tsgo -p packages/coding-agent= pass
+
+Requires:
+- =ServiceEntry= type from FEAT =Service Registry and Profile Manager= (for data shape)
+- =service:list= command handling from FEAT =Agent Service Tool Integration= (for agent-side response)

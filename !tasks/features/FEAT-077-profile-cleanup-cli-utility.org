@@ -1,0 +1,180 @@
+#+TITLE: Profile Cleanup CLI Utility
+#+STATE: DONE
+#+SESSION_ID: 14a63a6be34e1b22
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-39-57-094Z_14a62fd8094e1b0b/13-CreateFeat7.jsonl]]
+#+CUSTOM_ID: FEAT-077-profile-cleanup-cli-utility
+#+EFFORT: 2h
+#+PRIORITY: #C
+#+LAYER: cli
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the Browser Login Persistence plan. Each item must have state ITEM, include EFFORT, PRIORITY, LAYER properties, and a comprehensive body following the org item body standard.\n\n## Constraints\n- Use `org create` with category 'features'\n- State must be 'ITEM'\n- Return the CUSTOM_ID of each created item\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- Use org heading markup (* for top-level sections)\n\n## Project Context\nSpell is a coding agent with a QML-based Browse Canvas. We're adding login persistence so browser sessions survive across Spell restarts. Key files:\n- `packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml` — browser window with WebEngineProfile\n- `packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml` — browser interaction engine\n- `packages/coding-agent/src/tools/canvas-browser-protocol.ts` — browser command types\n- `packages/coding-agent/src/tools/canvas.ts` — canvas tool that manages windows\n- `packages/coding-agent/src/sdk.ts` — system prompt assembly\n- `packages/coding-agent/src/modes/browse-mode.ts` — browse mode entry\n- `packages/coding-agent/src/modes/qml/panels/BrowserPanel.qml` — multi-tab browser panel\n- `packages/coding-agent/test/helpers/browser-journey.ts` — headless browser test DSL\n- `packages/coding-agent/test/browser-reconnect/server.ts` — fake Bun server pattern\n- WebEngine storage: `~/.local/share/omp-qml-bridge/QtWebEngine/<storageName>/`\n- Settings: `~/.config/omp-qml-bridge/<storageName>.ini`\n- Registry location: `~/.spell/browser/services.json`
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create a FEAT org item via `org create` with these properties:
+
+title: "Profile Cleanup CLI Utility"
+category: features
+state: ITEM
+properties:
+  EFFORT: 2h
+  PRIORITY: #C
+  LAYER: cli
+
+Body (use org heading markup with * for sections):
+* Scope
+
+** In Scope
+- =spell browser cleanup= CLI subcommand
+- Identifies orphaned WebEngine profile directories: present in =~/.local/share/omp-qml-bridge/QtWebEngine/= but not referenced by any entry in the service registry AND matching timestamped test patterns (=spell-browser-<digits>-<digits>=)
+- =--dry-run= mode: lists orphaned profiles without deleting
+- =--force= mode: deletes all orphaned profiles (including non-timestamped unreferenced ones)
+- Default (no flag): deletes only timestamped test artifacts, prompts for confirmation on others
+
+** Out of Scope
+- BrowserJourney.teardown() fix (already in FEAT-4)
+- Registry CRUD (FEAT-1)
+- BrowserWindow changes (FEAT-2)
+- Agent integration (FEAT-3)
+
+** Boundary Rationale
+This is a standalone CLI utility. It reads the service registry (if it exists) to determine which profiles are referenced, then scans the filesystem. It does not modify the registry — only cleans up orphaned storage directories.
+* Tests
+
+File: =packages/coding-agent/test/browser-services/cleanup-command.test.ts=
+1. *Identifies orphaned timestamped profiles*: create temp dirs matching =spell-browser-<ts>-<random>= pattern + a registry with one different storageName, run cleanup in dry-run, verify timestamped dirs identified
+2. *Dry-run lists without deleting*: run with =--dry-run=, verify dirs still exist after
+3. *Force mode deletes all orphans*: run with =--force=, verify orphaned dirs removed
+4. *Skips registry-referenced profiles*: create dir matching a registry entry's storageName, verify NOT listed as orphan
+5. *Skips well-known profiles*: ='spell-browser'= and ='spell-browse-mode'= are never deleted
+6. *Handles missing QtWebEngine directory*: verify graceful 'No browser profiles found' message
+* Implementation
+
+** Files
+- New: =packages/coding-agent/src/commands/browser-cleanup.ts=
+- Modified: =packages/coding-agent/src/cli/args.ts= - register =browser cleanup= subcommand
+- New: =packages/coding-agent/test/browser-services/cleanup-command.test.ts=
+
+** Cleanup Logic
+#+begin_src typescript
+const WELL_KNOWN = new Set(['spell-browser', 'spell-browse-mode']);
+const TIMESTAMPED_PATTERN = /^spell-browser-\d+-\d+$/;
+
+async function findOrphanedProfiles(options: { registryPath?: string }): Promise<OrphanProfile[]> {
+  const registry = new ServiceRegistry(options.registryPath);
+  const referenced = new Set((await registry.list()).map(s => s.profileStorage));
+  const qtDir = path.join(os.homedir(), '.local', 'share', 'omp-qml-bridge', 'QtWebEngine');
+  const entries = await fs.readdir(qtDir).catch(() => []);
+  return entries
+    .filter(name => !WELL_KNOWN.has(name) && !referenced.has(name))
+    .map(name => ({
+      name,
+      path: path.join(qtDir, name),
+      isTimestamped: TIMESTAMPED_PATTERN.test(name),
+    }));
+}
+#+end_src
+
+** Steps
+1. Write test file with all 6 scenarios (using temp directories)
+2. Implement =findOrphanedProfiles= function
+3. Implement =browser-cleanup.ts= with =--dry-run= and =--force= flags
+4. Register subcommand in =args.ts=
+5. Run tests
+* Edge Cases
+- QtWebEngine directory doesn't exist -> 'No browser profiles found', exit 0
+- Permission denied on a storage directory -> warn, skip, continue with others
+- Registry file corrupt -> treat ALL non-well-known profiles as potential orphans, require =--force=
+- Empty QtWebEngine directory -> 'No browser profiles found'
+- Non-directory entries in QtWebEngine/ -> skip (only process directories)
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/cleanup-command.test.ts= passes (all 6 scenarios)
+- =spell browser cleanup --dry-run= lists orphaned profiles on stdout
+- =spell browser cleanup --force= deletes orphaned profiles
+- =bunx biome check= and =bun run tsgo -p packages/coding-agent= pass
+
+Requires: =ServiceRegistry= class from FEAT =Service Registry and Profile Manager= (to check which profiles are referenced)
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In Scope
+- =spell browser cleanup= CLI subcommand
+- Identifies orphaned WebEngine profile directories: present in =~/.local/share/omp-qml-bridge/QtWebEngine/= but not referenced by any entry in the service registry AND matching timestamped test patterns (=spell-browser-<digits>-<digits>=)
+- =--dry-run= mode: lists orphaned profiles without deleting
+- =--force= mode: deletes all orphaned profiles (including non-timestamped unreferenced ones)
+- Default (no flag): deletes only timestamped test artifacts, prompts for confirmation on others
+
+** Out of Scope
+- BrowserJourney.teardown() fix (already in FEAT-4)
+- Registry CRUD (FEAT-1)
+- BrowserWindow changes (FEAT-2)
+- Agent integration (FEAT-3)
+
+** Boundary Rationale
+This is a standalone CLI utility. It reads the service registry (if it exists) to determine which profiles are referenced, then scans the filesystem. It does not modify the registry — only cleans up orphaned storage directories.
+* Tests
+
+File: =packages/coding-agent/test/browser-services/cleanup-command.test.ts=
+1. *Identifies orphaned timestamped profiles*: create temp dirs matching =spell-browser-<ts>-<random>= pattern + a registry with one different storageName, run cleanup in dry-run, verify timestamped dirs identified
+2. *Dry-run lists without deleting*: run with =--dry-run=, verify dirs still exist after
+3. *Force mode deletes all orphans*: run with =--force=, verify orphaned dirs removed
+4. *Skips registry-referenced profiles*: create dir matching a registry entry's storageName, verify NOT listed as orphan
+5. *Skips well-known profiles*: ='spell-browser'= and ='spell-browse-mode'= are never deleted
+6. *Handles missing QtWebEngine directory*: verify graceful 'No browser profiles found' message
+* Implementation
+
+** Files
+- New: =packages/coding-agent/src/commands/browser-cleanup.ts=
+- Modified: =packages/coding-agent/src/cli/args.ts= - register =browser cleanup= subcommand
+- New: =packages/coding-agent/test/browser-services/cleanup-command.test.ts=
+
+** Cleanup Logic
+#+begin_src typescript
+const WELL_KNOWN = new Set(['spell-browser', 'spell-browse-mode']);
+const TIMESTAMPED_PATTERN = /^spell-browser-\d+-\d+$/;
+
+async function findOrphanedProfiles(options: { registryPath?: string }): Promise<OrphanProfile[]> {
+  const registry = new ServiceRegistry(options.registryPath);
+  const referenced = new Set((await registry.list()).map(s => s.profileStorage));
+  const qtDir = path.join(os.homedir(), '.local', 'share', 'omp-qml-bridge', 'QtWebEngine');
+  const entries = await fs.readdir(qtDir).catch(() => []);
+  return entries
+    .filter(name => !WELL_KNOWN.has(name) && !referenced.has(name))
+    .map(name => ({
+      name,
+      path: path.join(qtDir, name),
+      isTimestamped: TIMESTAMPED_PATTERN.test(name),
+    }));
+}
+#+end_src
+
+** Steps
+1. Write test file with all 6 scenarios (using temp directories)
+2. Implement =findOrphanedProfiles= function
+3. Implement =browser-cleanup.ts= with =--dry-run= and =--force= flags
+4. Register subcommand in =args.ts=
+5. Run tests
+* Edge Cases
+- QtWebEngine directory doesn't exist -> 'No browser profiles found', exit 0
+- Permission denied on a storage directory -> warn, skip, continue with others
+- Registry file corrupt -> treat ALL non-well-known profiles as potential orphans, require =--force=
+- Empty QtWebEngine directory -> 'No browser profiles found'
+- Non-directory entries in QtWebEngine/ -> skip (only process directories)
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/cleanup-command.test.ts= passes (all 6 scenarios)
+- =spell browser cleanup --dry-run= lists orphaned profiles on stdout
+- =spell browser cleanup --force= deletes orphaned profiles
+- =bunx biome check= and =bun run tsgo -p packages/coding-agent= pass
+
+Requires: =ServiceRegistry= class from FEAT =Service Registry and Profile Manager= (to check which profiles are referenced)

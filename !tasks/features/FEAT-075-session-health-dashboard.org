@@ -1,0 +1,188 @@
+#+TITLE: Session Health Dashboard
+#+STATE: DONE
+#+SESSION_ID: 14a63a6be30e1b20
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-39-57-094Z_14a62fd8094e1b0b/12-CreateFeat6.jsonl]]
+#+CUSTOM_ID: FEAT-075-session-health-dashboard
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: ui
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate 7 FEAT org items for the Browser Login Persistence plan. Each item must have state ITEM, include EFFORT, PRIORITY, LAYER properties, and a comprehensive body following the org item body standard.\n\n## Constraints\n- Use `org create` with category 'features'\n- State must be 'ITEM'\n- Return the CUSTOM_ID of each created item\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- Use org heading markup (* for top-level sections)\n\n## Project Context\nSpell is a coding agent with a QML-based Browse Canvas. We're adding login persistence so browser sessions survive across Spell restarts. Key files:\n- `packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml` — browser window with WebEngineProfile\n- `packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml` — browser interaction engine\n- `packages/coding-agent/src/tools/canvas-browser-protocol.ts` — browser command types\n- `packages/coding-agent/src/tools/canvas.ts` — canvas tool that manages windows\n- `packages/coding-agent/src/sdk.ts` — system prompt assembly\n- `packages/coding-agent/src/modes/browse-mode.ts` — browse mode entry\n- `packages/coding-agent/src/modes/qml/panels/BrowserPanel.qml` — multi-tab browser panel\n- `packages/coding-agent/test/helpers/browser-journey.ts` — headless browser test DSL\n- `packages/coding-agent/test/browser-reconnect/server.ts` — fake Bun server pattern\n- WebEngine storage: `~/.local/share/omp-qml-bridge/QtWebEngine/<storageName>/`\n- Settings: `~/.config/omp-qml-bridge/<storageName>.ini`\n- Registry location: `~/.spell/browser/services.json`
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create a FEAT org item via `org create` with these properties:
+
+title: "Session Health Dashboard"
+category: features
+state: ITEM
+properties:
+  EFFORT: 2h
+  PRIORITY: #B
+  LAYER: ui
+
+Body (use org heading markup with * for sections):
+* Scope
+
+** In Scope
+- Aggregate health status indicator in BrowseShell (e.g., '3 services: 2 connected, 1 unknown')
+- Per-service status in ServicesPanel with last-validated timestamp
+- 'Refresh' button that triggers agent-driven validation (agent opens each service's =loginUrl=, uses =browser:observe= to determine login status, updates registry)
+- Status transitions: unknown -> connected (validated), connected -> unknown (validation failed)
+
+** Out of Scope
+- Automated/scheduled health checking (validation is always user/agent-initiated)
+- Heuristic-based validation code (the agent LLM does the pattern matching, not custom code)
+- Registry CRUD (FEAT-1)
+- BrowserWindow changes (FEAT-2)
+
+** Boundary Rationale
+Health checking is agent-driven: the agent uses =browser:observe= on a service's homepage and uses its own judgment to determine login status. No heuristic code is needed in the codebase. This FEAT only provides the UI trigger and status display; the validation logic is an agent prompt concern.
+* Tests
+
+File: =packages/coding-agent/test/browser-services/health-dashboard.test.ts=
+1. *Dashboard shows aggregate status*: send =service_list_update= with 3 services (2 connected, 1 unknown), verify aggregate text visible
+2. *Refresh triggers validation request*: click Refresh, verify bridge event ={type: 'validate_services'}= sent
+3. *Dashboard updates after validation*: send updated =service_list_update= with changed statuses, verify display updates
+4. *No services -> dashboard hidden or shows zero state*: verify no errors with empty list
+* Implementation
+
+** Files
+- Modified: =packages/coding-agent/src/modes/qml/panels/ServicesPanel.qml= - add health status section + per-service timestamps
+- Modified: =packages/coding-agent/src/modes/qml/BrowseShell.qml= - add aggregate status indicator
+- New: =packages/coding-agent/test/browser-services/health-dashboard.test.ts=
+
+** Aggregate Status
+In BrowseShell, add a small status row:
+#+begin_src qml
+Text {
+    text: servicesPanel.connectedCount + " connected, " + servicesPanel.unknownCount + " unknown"
+    visible: servicesPanel.totalCount > 0
+}
+#+end_src
+
+** Per-Service Status Enhancement
+Extend ServicesPanel delegate to show:
+- =lastValidated= timestamp (e.g., 'Validated 2h ago' or 'Never validated')
+- Validation spinner when validation in progress for that service
+
+** Validation Flow
+1. User clicks 'Refresh All' in ServicesPanel
+2. Bridge event: ={type: 'validate_services'}=
+3. Agent receives event, iterates services, for each:
+   a. Launches browser (or reuses existing) with service's storageName
+   b. Navigates to service's =loginUrl=
+   c. Uses =browser:observe= to inspect page
+   d. Determines login status via LLM judgment
+   e. Updates registry =lastValidated= + =status=
+4. Agent sends =service_list_update= back to BrowseShell with refreshed data
+5. Dashboard and ServicesPanel update
+
+** Steps
+1. Write test file
+2. Add aggregate status to BrowseShell
+3. Add =lastValidated= display + refresh button to ServicesPanel
+4. Wire =validate_services= bridge event
+5. Run tests
+* Edge Cases
+- Validation in progress -> show spinner per service being validated
+- Network error during validation -> mark service as 'unknown', set =lastValidated= to now
+- Service has no =loginUrl= -> skip in validation, status remains unchanged
+- Agent takes long to validate (many services) -> status updates arrive incrementally per service
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/health-dashboard.test.ts= passes (all 4 scenarios)
+- Aggregate status shows correct counts
+- Refresh button triggers =validate_services= bridge event
+- =bunx biome check= and =bun run tsgo -p packages/coding-agent= pass
+
+Requires:
+- =ServicesPanel.qml= from FEAT =BrowseShell Services Panel=
+- =service:list= command from FEAT =Agent Service Tool Integration= (for agent-side validation flow)
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+** In Scope
+- Aggregate health status indicator in BrowseShell (e.g., '3 services: 2 connected, 1 unknown')
+- Per-service status in ServicesPanel with last-validated timestamp
+- 'Refresh' button that triggers agent-driven validation (agent opens each service's =loginUrl=, uses =browser:observe= to determine login status, updates registry)
+- Status transitions: unknown -> connected (validated), connected -> unknown (validation failed)
+
+** Out of Scope
+- Automated/scheduled health checking (validation is always user/agent-initiated)
+- Heuristic-based validation code (the agent LLM does the pattern matching, not custom code)
+- Registry CRUD (FEAT-1)
+- BrowserWindow changes (FEAT-2)
+
+** Boundary Rationale
+Health checking is agent-driven: the agent uses =browser:observe= on a service's homepage and uses its own judgment to determine login status. No heuristic code is needed in the codebase. This FEAT only provides the UI trigger and status display; the validation logic is an agent prompt concern.
+* Tests
+
+File: =packages/coding-agent/test/browser-services/health-dashboard.test.ts=
+1. *Dashboard shows aggregate status*: send =service_list_update= with 3 services (2 connected, 1 unknown), verify aggregate text visible
+2. *Refresh triggers validation request*: click Refresh, verify bridge event ={type: 'validate_services'}= sent
+3. *Dashboard updates after validation*: send updated =service_list_update= with changed statuses, verify display updates
+4. *No services -> dashboard hidden or shows zero state*: verify no errors with empty list
+* Implementation
+
+** Files
+- Modified: =packages/coding-agent/src/modes/qml/panels/ServicesPanel.qml= - add health status section + per-service timestamps
+- Modified: =packages/coding-agent/src/modes/qml/BrowseShell.qml= - add aggregate status indicator
+- New: =packages/coding-agent/test/browser-services/health-dashboard.test.ts=
+
+** Aggregate Status
+In BrowseShell, add a small status row:
+#+begin_src qml
+Text {
+    text: servicesPanel.connectedCount + " connected, " + servicesPanel.unknownCount + " unknown"
+    visible: servicesPanel.totalCount > 0
+}
+#+end_src
+
+** Per-Service Status Enhancement
+Extend ServicesPanel delegate to show:
+- =lastValidated= timestamp (e.g., 'Validated 2h ago' or 'Never validated')
+- Validation spinner when validation in progress for that service
+
+** Validation Flow
+1. User clicks 'Refresh All' in ServicesPanel
+2. Bridge event: ={type: 'validate_services'}=
+3. Agent receives event, iterates services, for each:
+   a. Launches browser (or reuses existing) with service's storageName
+   b. Navigates to service's =loginUrl=
+   c. Uses =browser:observe= to inspect page
+   d. Determines login status via LLM judgment
+   e. Updates registry =lastValidated= + =status=
+4. Agent sends =service_list_update= back to BrowseShell with refreshed data
+5. Dashboard and ServicesPanel update
+
+** Steps
+1. Write test file
+2. Add aggregate status to BrowseShell
+3. Add =lastValidated= display + refresh button to ServicesPanel
+4. Wire =validate_services= bridge event
+5. Run tests
+* Edge Cases
+- Validation in progress -> show spinner per service being validated
+- Network error during validation -> mark service as 'unknown', set =lastValidated= to now
+- Service has no =loginUrl= -> skip in validation, status remains unchanged
+- Agent takes long to validate (many services) -> status updates arrive incrementally per service
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/browser-services/health-dashboard.test.ts= passes (all 4 scenarios)
+- Aggregate status shows correct counts
+- Refresh button triggers =validate_services= bridge event
+- =bunx biome check= and =bun run tsgo -p packages/coding-agent= pass
+
+Requires:
+- =ServicesPanel.qml= from FEAT =BrowseShell Services Panel=
+- =service:list= command from FEAT =Agent Service Tool Integration= (for agent-side validation flow)
