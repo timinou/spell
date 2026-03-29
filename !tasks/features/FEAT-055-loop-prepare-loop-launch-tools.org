@@ -1,0 +1,105 @@
+#+TITLE: loop_prepare  loop_launch Tools
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: FEAT-055-loop-prepare-loop-launch-tools
+#+EFFORT: 5h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+Replace =loop_start= and extend =loop_done= with the new spec-driven loop API: =loop_prepare= (spec ingestion + manifest building trigger) and =loop_launch= (start iterating on approved manifest).
+
+** In-Scope
+- Remove =loop_start= tool (breaking change)
+- New =loop_prepare= tool:
+  - Schema: name, specPaths?, orgItemIds?, domains?, maxIterations?, reflectEvery?, budgetLimits?, autoDecompose?, gates?
+  - Spec ingestion from specPaths (parse org files) and/or orgItemIds (query existing org items)
+  - Fallback: discover =specs/= directory in project root if no specPaths given
+  - Transition kernel to =manifest_building= state
+  - Return loopId, state, spec parsing results, readiness warnings
+- New =loop_launch= tool:
+  - Schema: loopId (required)
+  - Validate manifest exists and is non-empty
+  - Validate all required readiness checks pass
+  - Transition from =manifest_building= to =planning=
+  - Also available as =/loop launch <id>= slash command
+- =loop_prepare= auto-launches when approval callback fires (if auto-approve enabled)
+- Extend =loop_done= with ticket tracking:
+  - New optional field: =completedTickets: string[]= (ticket IDs marked done this iteration)
+  - New optional field: =activeTickets: string[]= (ticket IDs being worked on)
+  - Update manifest state based on reported tickets
+- Remove old =/loop start= slash command, add =/loop prepare= and =/loop launch=
+- Update tool descriptions (=loop-prepare-tool.md=, =loop-launch-tool.md=, update =loop-done-tool.md=)
+
+** Out-of-Scope
+- Manifest building prompts (separate item)
+- Metis/Momus integration (Phase 3)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/loop-tools-v2.test.ts=
+
+** Scenarios
+1. loop_prepare with specPaths: creates loop in manifest_building state, parses specs
+2. loop_prepare with orgItemIds: creates loop, queries org items, builds initial manifest skeleton
+3. loop_prepare with both specPaths and orgItemIds: merges both sources
+4. loop_prepare fallback: no specPaths given, discovers =specs/= directory
+5. loop_launch: validates manifest, transitions to planning
+6. loop_launch without manifest: rejects with error
+7. loop_launch auto-trigger: approval callback fires, loop transitions automatically
+8. loop_done with completedTickets: updates ticket states in manifest
+9. /loop prepare and /loop launch slash commands work
+10. Backwards compat removed: loop_start tool no longer registered
+
+* Implementation
+
+** New file: =packages/coding-agent/src/loop/loop-tools-v2.ts=
+(or modify existing =loop-tools.ts= in-place)
+
+=LoopPrepareTool= class:
+- Schema includes specPaths, orgItemIds, domains, maxIterations, reflectEvery, budgetLimits, autoDecompose, gates
+- Execute: call LoopManager.prepare() which does spec ingestion + creates loop in manifest_building state
+
+=LoopLaunchTool= class:
+- Schema: loopId (required)
+- Execute: call LoopManager.launch(loopId) which validates + transitions
+
+** Extend: =packages/coding-agent/src/loop/loop-manager.ts=
+- Add =prepare()= method: spec ingestion, org item query, manifest skeleton creation, kernel.start with manifestBuilding flag
+- Add =launch()= method: readiness validation, kernel transition manifest_building -> planning
+- Remove old =start()= method (or repurpose as internal)
+- Extend =markDone()= to handle completedTickets/activeTickets fields
+
+** New prompt files:
+- =packages/coding-agent/src/loop/prompts/loop-prepare-tool.md=
+- =packages/coding-agent/src/loop/prompts/loop-launch-tool.md=
+- Update =packages/coding-agent/src/loop/prompts/loop-done-tool.md=
+
+** Update: =packages/coding-agent/src/loop/loop-commands.ts=
+- Replace =start= with =prepare= command
+- Add =launch= command
+
+** Update: =packages/coding-agent/src/tools/index.ts=
+- Register LoopPrepareTool and LoopLaunchTool instead of LoopStartTool
+
+* Edge Cases
+- specPaths pointing to non-existent directory: return error, don't create loop
+- orgItemIds referencing non-existent items: return warning per missing ID, create loop with valid items only
+- Both specPaths and orgItemIds empty: reject (nothing to build manifest from)
+- loop_launch called on a loop not in manifest_building state: reject
+- loop_launch called before manifest has any tickets: reject with "empty manifest" error
+- Auto-launch with Momus rejection: stay in manifest_building, agent must fix and re-launch
+
+* Acceptance Criteria
+- [ ] loop_start tool is removed from tool registry
+- [ ] loop_prepare creates loop in manifest_building state with parsed specs
+- [ ] loop_launch validates and transitions to planning
+- [ ] loop_done accepts completedTickets and updates manifest
+- [ ] Slash commands /loop prepare and /loop launch work
+- [ ] All 10 test scenarios pass

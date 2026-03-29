@@ -9,7 +9,7 @@ import type { InternalUrlRouter } from "../internal-urls";
 import { getPreludeDocs, warmPythonEnvironment } from "../ipy/executor";
 import { checkPythonKernelAvailability } from "../ipy/kernel";
 import type { LoopManager } from "../loop/loop-manager";
-import { LoopDoneTool, LoopStartTool } from "../loop/loop-tools";
+import { LoopDoneTool, LoopLaunchTool, LoopPrepareTool } from "../loop/loop-tools";
 import { LspTool } from "../lsp";
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import { EditTool } from "../patch";
@@ -223,7 +223,8 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
 	canvas: s => new CanvasTool(s),
-	loop_start: s => (s.loopManager ? new LoopStartTool(s) : null),
+	loop_prepare: s => (s.loopManager ? new LoopPrepareTool(s) : null),
+	loop_launch: s => (s.loopManager ? new LoopLaunchTool(s) : null),
 	loop_done: s => (s.loopManager ? new LoopDoneTool(s) : null),
 };
 

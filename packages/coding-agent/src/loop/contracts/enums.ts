@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 
 export const LOOP_STATES = {
 	idle: "idle",
+	manifestBuilding: "manifest_building",
 	planning: "planning",
 	iterating: "iterating",
 	reflecting: "reflecting",
@@ -17,6 +18,7 @@ export type LoopState = (typeof LOOP_STATES)[keyof typeof LOOP_STATES];
 
 export const LoopStateSchema = Type.Union([
 	Type.Literal(LOOP_STATES.idle),
+	Type.Literal(LOOP_STATES.manifestBuilding),
 	Type.Literal(LOOP_STATES.planning),
 	Type.Literal(LOOP_STATES.iterating),
 	Type.Literal(LOOP_STATES.reflecting),
@@ -34,6 +36,7 @@ export const GATE_TRIGGERS = {
 	onReflection: "on-reflection",
 	onCompletion: "on-completion",
 	onChildComplete: "on-child-complete",
+	onTicketComplete: "on-ticket-complete",
 } as const;
 
 export type GateTrigger = (typeof GATE_TRIGGERS)[keyof typeof GATE_TRIGGERS];
@@ -44,6 +47,7 @@ export const GateTriggerSchema = Type.Union([
 	Type.Literal(GATE_TRIGGERS.onReflection),
 	Type.Literal(GATE_TRIGGERS.onCompletion),
 	Type.Literal(GATE_TRIGGERS.onChildComplete),
+	Type.Literal(GATE_TRIGGERS.onTicketComplete),
 ]);
 
 export const FAILURE_POLICIES = {
@@ -108,6 +112,24 @@ export const ChildOutcomeSchema = Type.Union([
 	Type.Literal(CHILD_OUTCOMES.failed),
 	Type.Literal(CHILD_OUTCOMES.cancelled),
 	Type.Literal(CHILD_OUTCOMES.skipped),
+]);
+
+export const TICKET_STATES = {
+	item: "ITEM",
+	doing: "DOING",
+	done: "DONE",
+	blocked: "BLOCKED",
+	hold: "HOLD",
+} as const;
+
+export type TicketState = (typeof TICKET_STATES)[keyof typeof TICKET_STATES];
+
+export const TicketStateSchema = Type.Union([
+	Type.Literal(TICKET_STATES.item),
+	Type.Literal(TICKET_STATES.doing),
+	Type.Literal(TICKET_STATES.done),
+	Type.Literal(TICKET_STATES.blocked),
+	Type.Literal(TICKET_STATES.hold),
 ]);
 
 export const LOOP_ROLES = {

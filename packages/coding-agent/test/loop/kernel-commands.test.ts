@@ -25,21 +25,23 @@ describe("loop slash-command backend", () => {
 		await fs.rm(cwd, { recursive: true, force: true });
 	});
 
-	it("/loop start creates a loop and status shows it", async () => {
-		const start = await manager.handleCommand("start", ["demo"]);
-		expect(start.ok).toBe(true);
-		const loopId = start.loop?.id;
+	it("/loop prepare creates a loop in manifest_building and status shows it", async () => {
+		const prep = await manager.handleCommand("prepare", ["demo"]);
+		expect(prep.ok).toBe(true);
+		const loopId = prep.loop?.id;
 		expect(loopId).toBeDefined();
 
 		const status = await manager.handleCommand("status", [String(loopId)]);
 		expect(status.ok).toBe(true);
 		expect(status.message).toContain(String(loopId));
-		expect(status.message).toContain("state=planning");
+		expect(status.message).toContain("state=manifest_building");
 	});
 
 	it("/loop pause and /loop resume change state", async () => {
-		const start = await manager.handleCommand("start", ["demo"]);
-		const loopId = String(start.loop?.id);
+		const prep = await manager.handleCommand("prepare", ["demo"]);
+		const loopId = String(prep.loop?.id);
+		// Launch to get to planning, then done to get to iterating
+		await manager.launch(loopId);
 		await manager.markDone(loopId);
 
 		const paused = await manager.handleCommand("pause", [loopId]);
@@ -52,8 +54,8 @@ describe("loop slash-command backend", () => {
 	});
 
 	it("/loop list reports all registered loops", async () => {
-		await manager.handleCommand("start", ["one"]);
-		await manager.handleCommand("start", ["two"]);
+		await manager.handleCommand("prepare", ["one"]);
+		await manager.handleCommand("prepare", ["two"]);
 		const list = await manager.handleCommand("list", []);
 		expect(list.ok).toBe(true);
 		expect(list.message).toContain("one");

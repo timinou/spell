@@ -1,0 +1,77 @@
+#+TITLE: Enhanced TUI Manifest Approval
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: FEAT-063-enhanced-tui-manifest-approval
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: frontend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+Enhanced TUI display for manifest approval during the manifest_building -> planning transition, and manifest diff display on drift-triggered replans.
+
+** In-Scope
+- Manifest summary display when loop_launch is called or =/loop launch= is used:
+  - Ticket list with ID, title, state, effort, priority
+  - Dependency chain overview (topological order)
+  - Gate overview (count by type: N command, M artifact, K llm-review gates)
+  - Estimated iterations (based on ticket count and effort estimates)
+  - Domain activation summary
+- Manifest diff display on replan:
+  - Added tickets (green)
+  - Removed tickets (red)
+  - Modified tickets (yellow with change summary)
+  - Preserved tickets (dimmed)
+- Integration with existing TUI rendering:
+  - Use =@oh-my-pi/pi-tui= components (Text, Box, etc.)
+  - Respect theme colors and TRUNCATE_LENGTHS
+  - Use =replaceTabs()= and =truncateToWidth()= for sanitization
+- Loop status display enhancement:
+  - =/loop status= shows manifest progress when manifest exists
+  - Show active tickets, completed tickets, blocked tickets
+
+** Out-of-Scope
+- Interactive approval UI (approval is via =/loop launch= command or auto-trigger)
+- QML canvas (separate item)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/tui-manifest-display.test.ts=
+
+** Scenarios
+1. Manifest summary renders with correct ticket count and structure
+2. Dependency chain renders in topological order
+3. Gate overview counts by type
+4. Replan diff shows added/removed/modified correctly
+5. Status display includes manifest progress
+
+* Implementation
+
+** New file: =packages/coding-agent/src/loop/tui/manifest-summary.ts=
+Render functions for manifest summary, diff, and status display.
+
+** Extend: =packages/coding-agent/src/loop/replay/formatter.ts=
+- Add =formatManifestSummary()= for status display
+- Add =formatManifestDiff()= for replan display
+
+** Extend: =packages/coding-agent/src/loop/loop-commands.ts=
+- Update =status= command output to include manifest info
+- Add manifest summary to =launch= command confirmation
+
+* Edge Cases
+- Very long ticket titles: truncate with ellipsis
+- Deep dependency chain: show first 3 levels, then "...N more levels"
+- No gates configured: show warning in summary
+- Empty manifest: show "No tickets" message
+
+* Acceptance Criteria
+- [ ] Manifest summary renders cleanly in TUI
+- [ ] Dependency chain visualization is readable
+- [ ] Replan diff clearly shows what changed
+- [ ] Status command includes manifest progress
+- [ ] All 5 test scenarios pass

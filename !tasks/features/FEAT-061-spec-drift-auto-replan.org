@@ -1,0 +1,96 @@
+#+TITLE: Spec Drift Auto-Replan
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: FEAT-061-spec-drift-auto-replan
+#+EFFORT: 4h
+#+PRIORITY: #B
+#+LAYER: backend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+Enhance spec drift detection to auto-pause, re-run manifest generation on changed specs, merge changes preserving completed tickets, and commit the replan.
+
+** In-Scope
+- Enhanced drift detection: compare current spec content hashes against snapshot (existing =git/drift.ts=)
+- On drift detected:
+  1. Pause the loop
+  2. Re-parse changed spec files
+  3. Merge into existing manifest:
+     - Preserve DONE tickets (completed work is immutable)
+     - Preserve DOING tickets (in-progress work continues)
+     - Update ITEM/BLOCKED tickets if their spec changed
+     - Add new tickets from new specs
+     - Remove tickets whose specs were deleted (mark as HOLD with reason)
+  4. Present diff to user for approval (if auto-approve is off) or auto-approve
+  5. Stage and commit manifest with =\ud83d\udd04 loop(replan): manifest updated after spec drift= message
+  6. Resume loop
+- Manifest version increment on replan
+- Event log: =manifest.replanned= event with added/removed/modified ticket counts
+- Safeguard integration: drift check runs in =checkSafeguards()= pipeline (existing hook point)
+
+** Out-of-Scope
+- Drift detection for non-spec files (only spec org files are tracked)
+- Manual manifest editing (user edits go through org tool during manifest_building)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/spec-drift-replan.test.ts=
+
+** Scenarios
+1. No drift: all hashes match, no action taken
+2. Spec modified: re-parse, merge, preserved DONE tickets, updated ITEM ticket
+3. New spec added: new ticket added to manifest
+4. Spec deleted: orphaned ticket marked HOLD
+5. DOING ticket's spec changed: ticket stays DOING, findings updated
+6. Manifest version incremented after replan
+7. Git commit with correct emoji and message
+8. Auto-approve off: loop stays paused until user approves replan
+
+* Implementation
+
+** Extend: =packages/coding-agent/src/loop/git/drift.ts=
+- Return changed file paths AND the nature of change (modified, added, deleted)
+- Expose =DriftChangeSet= type: ={ modified: string[]; added: string[]; deleted: string[] }=
+
+** New file: =packages/coding-agent/src/loop/manifest/replan.ts=
+#+begin_src typescript
+interface ReplanResult {
+  addedTickets: string[];
+  removedTickets: string[];
+  modifiedTickets: string[];
+  preservedTickets: string[];
+  newVersion: number;
+}
+
+async function replanManifest(
+  currentManifest: ManifestSnapshot,
+  driftChangeSet: DriftChangeSet,
+  cwd: string,
+): Promise<ReplanResult>;
+#+end_src
+
+** Extend: =packages/coding-agent/src/loop/loop-manager.ts=
+- In =checkSafeguards()=: check for spec drift, trigger replan if detected
+- On replan: pause loop, run =replanManifest()=, present diff, commit, resume
+
+** New file: =packages/coding-agent/src/loop/git/replan-commit.ts=
+Stage manifest files and commit with =\ud83d\udd04 loop(replan): ...= message.
+
+* Edge Cases
+- Drift detected during manifest_building: re-parse but don't pause (we're already building)
+- Spec file encoding changes but content identical: hash still matches, no drift
+- Replan while child loop is active: pause parent and child, replan, resume
+- Git not available: skip commit, still replan manifest in memory
+
+* Acceptance Criteria
+- [ ] Drift detection identifies modified, added, and deleted specs
+- [ ] Manifest merge preserves completed ticket states
+- [ ] New tickets from new specs are added correctly
+- [ ] Deleted spec tickets are marked HOLD
+- [ ] Git commit uses correct emoji convention
+- [ ] All 8 test scenarios pass

@@ -1,0 +1,59 @@
+#+TITLE: Momus Manifest Validation
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: FEAT-059-momus-manifest-validation
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+Integrate Momus as a mandatory validation gate on the manifest before loop_launch. Momus validates completeness, feasibility, and gate coverage.
+
+** In-Scope
+- Spawn Momus as a task subagent before loop_launch
+- Momus validation criteria:
+  - Completeness: all specs covered by tickets, no orphan tickets, no circular dependencies
+  - Feasibility: effort estimates realistic, dependency order achievable, budget sufficient
+  - Gate coverage: every ticket has at least one gate (derived or explicit)
+  - Acceptance criteria: every ticket's acceptance criteria is parseable
+- Momus verdict: APPROVE or REJECT with findings
+- On REJECT: agent revises manifest, re-runs Momus
+- On APPROVE: loop_launch proceeds
+- Mandatory gate in manifest_building prompt
+- Reuse Momus agent definition from =packages/coding-agent/src/prompts/agents/momus.md=
+
+** Out-of-Scope
+- Momus during iteration (optional, agent-decided)
+- Modifying Momus agent definition
+
+* Tests
+Test file: =packages/coding-agent/test/loop/momus-integration.test.ts=
+
+** Scenarios
+1. Momus input preparation: manifest summary formatted correctly for review
+2. manifest-building-active.md includes Momus validation instructions
+3. Momus REJECT flow: agent instructed to revise and re-validate
+
+* Implementation
+- Add Momus invocation section to =manifest-building-active.md= (after Metis, before loop_launch)
+- New helper: =packages/coding-agent/src/loop/ingestion/momus-input.ts=
+  - =buildMomusInput(manifest: ManifestSnapshot, tickets: ManifestTicket[])= -> formatted string
+- Prompt-driven: agent spawns Momus via =task= tool
+
+* Edge Cases
+- Momus rejects 3+ times: prompt instructs agent to ask user for override decision
+- Momus times out: log warning, ask user whether to proceed
+- Manifest changes between Momus runs: re-validate from scratch
+
+* Acceptance Criteria
+- [ ] Momus input builder produces comprehensive validation summary
+- [ ] Manifest building prompt mandates Momus before loop_launch
+- [ ] Rejection results in revision cycle
+- [ ] All 3 test scenarios pass

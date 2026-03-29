@@ -1,0 +1,83 @@
+#+TITLE: Ticket Lifecycle Management
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: FEAT-054-ticket-lifecycle-management
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+Implement the hybrid ticket lifecycle: loop transitions tickets to DOING when an iteration starts working on them, agent transitions to DONE when satisfied, loop verifies via per-ticket gates.
+
+** In-Scope
+- Ticket state transitions following org keywords: ITEM -> DOING -> DONE, plus BLOCKED, HOLD
+- LoopManager integration: =startTicket(loopId, ticketId)= transitions to DOING, updates manifest
+- Agent-side: =loop_done= reports which tickets were completed this iteration
+- Per-ticket gate verification on DONE transition
+- Org sync per-ticket: update individual ticket .org files on state change
+- Event emission: =ticket.state_changed= events in the loop event log
+- Dependency resolution: when ticket completes, check if any BLOCKER-blocked tickets can unblock
+- TRIGGER execution: when ticket completes, apply TRIGGER rules (transition referenced tickets)
+
+** Out-of-Scope
+- Per-ticket gate derivation (separate item)
+- Child loop spawning for tickets (handled by agent during iteration)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/ticket-lifecycle.test.ts=
+
+** Scenarios
+1. Start ticket: ITEM -> DOING, event emitted, org file updated
+2. Complete ticket: DOING -> DONE, gates verified, event emitted
+3. Block ticket: DOING -> BLOCKED with reason, event emitted
+4. Unblock cascade: ticket A DONE -> ticket B (BLOCKED by A) transitions to ITEM (available)
+5. TRIGGER execution: ticket A DONE with TRIGGER FEAT-002(DOING) -> FEAT-002 transitions to DOING
+6. Invalid transition: ITEM -> DONE directly blocked (must go through DOING)
+7. Multiple tickets per iteration: start 2 tickets, complete 1, other stays DOING
+8. Ticket not in manifest: reject startTicket with unknown ticketId
+
+* Implementation
+
+** New file: =packages/coding-agent/src/loop/manifest/ticket-manager.ts=
+#+begin_src typescript
+class TicketManager {
+  startTicket(loopId: string, ticketId: string, iteration: number): ManifestTicket;
+  completeTicket(loopId: string, ticketId: string, iteration: number): ManifestTicket;
+  blockTicket(loopId: string, ticketId: string, reason: string): ManifestTicket;
+  holdTicket(loopId: string, ticketId: string): ManifestTicket;
+  resolveBlockers(loopId: string, completedTicketId: string): string[]; // Returns newly unblocked IDs
+  applyTriggers(loopId: string, completedTicketId: string): string[];   // Returns triggered IDs
+  getAvailableTickets(loopId: string): ManifestTicket[];  // ITEM tickets with no unresolved blockers
+}
+#+end_src
+
+** Extend: =packages/coding-agent/src/loop/loop-manager.ts=
+- Add TicketManager as a dependency
+- Call =startTicket()= when plan phase selects tickets
+- Call =completeTicket()= when =loop_done= reports ticket completion
+- Call =resolveBlockers()= and =applyTriggers()= after ticket completion
+
+** Extend: =packages/coding-agent/src/loop/persistence/org-sync.ts=
+- Add =syncTicketOrgItem()= for per-ticket state updates
+- Update ticket .org files with new state and iteration history
+
+* Edge Cases
+- Complete ticket with failing gates: reject completion, keep DOING, record gate failure
+- TRIGGER targets non-existent ticket: log warning, skip
+- All tickets DONE but loop not at maxIterations: force validation
+- Concurrent ticket starts (shouldn't happen but guard against it)
+
+* Acceptance Criteria
+- [ ] Ticket state transitions follow org keyword rules
+- [ ] Dependency unblocking cascades correctly
+- [ ] TRIGGER rules execute on ticket completion
+- [ ] Per-ticket org files update on state change
+- [ ] Event log records all ticket state changes
+- [ ] All 8 test scenarios pass

@@ -1,0 +1,127 @@
+#+TITLE: Manifest Data Model State Machine  Persistence
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: PROJ-002-manifest-data-model-state-machine-persis
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+The foundational infrastructure for spec-driven loops: the manifest data model, kernel state machine extension, and org-native persistence.
+
+** In-Scope
+- ManifestTicket type representing a single work item in the manifest
+- Extended LoopSnapshot with manifest fields (tickets, manifestOrgPath, manifestVersion)
+- New =manifest_building= state in kernel.ts ALLOWED_TRANSITIONS table
+- =done()= routing for manifest_building -> planning transition (on approval)
+- Manifest persistence as org files under =.local/!tracks/loops/{loopId}/=:
+  - =manifest.org=: orchestration sheet with top-level heading per loop + subheadings for overview
+  - Individual ticket .org files in =manifest/= subdirectory
+- Checkpoint extension (state.json) with manifest state
+- Event log extension with ticket-level events (=ticket.created=, =ticket.state_changed=, =ticket.gate_completed=)
+- Recovery/replay for manifest state from events
+
+** Out-of-Scope
+- Tool implementations (loop_prepare, loop_launch) -- separate item
+- Gate derivation from specs -- separate item
+- Prompt changes -- separate item
+
+* Tests
+Test file: =packages/coding-agent/test/loop/manifest-model.test.ts=
+
+** Scenarios
+1. ManifestTicket round-trip: create ticket, serialize to org, parse back, verify all fields preserved
+2. LoopSnapshot with manifest: create snapshot with embedded manifest, verify checkpoint save/load
+3. Kernel =manifest_building= state: verify transitions idle -> manifest_building, manifest_building -> planning, manifest_building -> paused/killed/cancelled
+4. Kernel =manifest_building= blocks: verify manifest_building cannot transition to iterating directly
+5. Event replay with tickets: emit ticket events, replay from NDJSON, verify manifest state reconstructed
+6. Manifest org persistence: write manifest.org + ticket files, read back, verify consistency
+7. Ticket state machine: ITEM -> DOING -> DONE transitions valid; ITEM -> DONE blocked; BLOCKED -> DOING valid
+
+* Implementation
+
+** Types (=packages/coding-agent/src/loop/types.ts=)
+Add:
+#+begin_src typescript
+interface ManifestTicket {
+  id: string;              // CUSTOM_ID from spec (e.g., FEAT-001-auth-api)
+  title: string;
+  state: OrgTodoState;     // ITEM | DOING | DONE | BLOCKED | HOLD
+  specPath?: string;       // Source spec file path
+  orgItemId?: string;      // Pre-existing org item ID (if from orgItemIds source)
+  acceptanceCriteria: string[];
+  dependencies: string[];  // BLOCKER IDs
+  triggers: string[];      // TRIGGER expressions
+  gates: LoopGateConfig[]; // Derived gates for this ticket
+  effort?: string;         // EFFORT property
+  priority?: string;       // PRIORITY property
+  layer?: string;          // LAYER property
+  tags: string[];
+  changedFiles: string[];  // Files changed while working this ticket
+  findings: string[];      // Open findings for this ticket
+  childLoopId?: string;    // If decomposed into child loop
+  iterationHistory: number[]; // Which iterations worked on this ticket
+}
+
+interface ManifestSnapshot {
+  version: number;         // Incremented on replan
+  tickets: ManifestTicket[];
+  dependencyEdges: Array<{ from: string; to: string }>; // Derived from BLOCKER
+  triggerRules: Array<{ source: string; target: string; keyword: string }>; // From TRIGGER
+  manifestOrgPath: string; // Path to manifest.org
+  createdAt: number;
+  updatedAt: number;
+}
+#+end_src
+
+Extend LoopSnapshot:
+#+begin_src typescript
+// Add to LoopSnapshot interface:
+manifest?: ManifestSnapshot;
+manifestOrgPath?: string;
+#+end_src
+
+** Kernel (=packages/coding-agent/src/loop/kernel.ts=)
+- Add =manifest_building= to LOOP_STATES enum in =contracts/enums.ts=
+- Update ALLOWED_TRANSITIONS:
+  - idle -> [planning, manifest_building]
+  - manifest_building -> [planning, paused, failed, killed, cancelled]
+- Update =start()= to accept optional =manifestBuilding: true= flag, which sets initial state to =manifest_building= instead of =planning=
+- Update =done()= to handle manifest_building -> planning transition
+
+** Persistence (=packages/coding-agent/src/loop/persistence/=)
+- =manifest-writer.ts=: serialize ManifestSnapshot to manifest.org + individual ticket .org files
+- =manifest-reader.ts=: parse manifest.org + ticket files back to ManifestSnapshot
+- Extend =checkpoint.ts=: include manifest in PersistedLoopState
+- Extend =event-log.ts=: new event types for ticket lifecycle
+- Extend =session-hooks.ts=: restore manifest state on startup
+
+** Event Types
+Add to =contracts/loop-event.ts=:
+- =ticket.created= (payload: ticketId, title, specPath)
+- =ticket.state_changed= (payload: ticketId, fromState, toState, iteration)
+- =ticket.gate_completed= (payload: ticketId, gateId, outcome)
+- =manifest.created= (payload: version, ticketCount)
+- =manifest.replanned= (payload: version, added, removed, modified)
+
+* Edge Cases
+- Manifest with circular dependencies (BLOCKER cycles): detect and reject during manifest creation
+- Empty manifest (no tickets): reject at loop_launch, not at manifest creation
+- Ticket with CUSTOM_ID collision: reject during manifest building
+- Org file parse failure: surface error with file path and line number
+- Checkpoint with manifest but missing ticket files: reconstruct from event log
+
+* Acceptance Criteria
+- [ ] ManifestTicket type compiles and covers all required fields
+- [ ] LoopSnapshot extension is backwards-compatible (manifest is optional)
+- [ ] Kernel handles manifest_building state with correct transitions
+- [ ] Manifest persists to org files and can be read back losslessly
+- [ ] Event replay reconstructs manifest state correctly
+- [ ] All 7 test scenarios pass

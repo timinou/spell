@@ -26,7 +26,7 @@ interface LoopDoneOptions {
 }
 
 const ALLOWED_TRANSITIONS: Record<LoopState, readonly LoopState[]> = {
-	idle: [LOOP_STATES.planning],
+	idle: [LOOP_STATES.planning, LOOP_STATES.manifestBuilding],
 	planning: [LOOP_STATES.iterating, LOOP_STATES.paused, LOOP_STATES.failed, LOOP_STATES.killed, LOOP_STATES.cancelled],
 	iterating: [
 		LOOP_STATES.planning,
@@ -54,7 +54,20 @@ const ALLOWED_TRANSITIONS: Record<LoopState, readonly LoopState[]> = {
 	],
 	complete: [],
 	failed: [],
-	paused: [LOOP_STATES.iterating, LOOP_STATES.planning, LOOP_STATES.killed, LOOP_STATES.cancelled],
+	paused: [
+		LOOP_STATES.iterating,
+		LOOP_STATES.planning,
+		LOOP_STATES.manifestBuilding,
+		LOOP_STATES.killed,
+		LOOP_STATES.cancelled,
+	],
+	manifest_building: [
+		LOOP_STATES.planning,
+		LOOP_STATES.paused,
+		LOOP_STATES.failed,
+		LOOP_STATES.killed,
+		LOOP_STATES.cancelled,
+	],
 	cancelled: [],
 	killed: [],
 };
@@ -82,7 +95,7 @@ export class LoopKernel {
 		const loop: LoopSnapshot = {
 			id,
 			name: config.name,
-			state: LOOP_STATES.planning,
+			state: config.manifestBuilding ? LOOP_STATES.manifestBuilding : LOOP_STATES.planning,
 			iteration: 0,
 			maxIterations: config.maxIterations ?? DEFAULT_LOOP_MAX_ITERATIONS,
 			depth: config.depth ?? 0,
@@ -130,7 +143,10 @@ export class LoopKernel {
 	}
 
 	resume(loopId: string): LoopSnapshot {
-		return this.#transition(loopId, LOOP_STATES.iterating, {});
+		const loop = this.#registry.get(loopId);
+		const target =
+			loop.stateBeforePause === LOOP_STATES.manifestBuilding ? LOOP_STATES.manifestBuilding : LOOP_STATES.iterating;
+		return this.#transition(loopId, target, {});
 	}
 
 	kill(loopId: string, reason = "Killed by operator"): LoopSnapshot {
@@ -178,6 +194,9 @@ export class LoopKernel {
 		}
 		if (loop.state === LOOP_STATES.paused) {
 			return this.resume(loopId);
+		}
+		if (loop.state === LOOP_STATES.manifestBuilding) {
+			return this.#transition(loopId, LOOP_STATES.planning, { manifestApproved: true });
 		}
 		if (loop.state === LOOP_STATES.planning) {
 			return this.#transition(loopId, LOOP_STATES.iterating, { resumedFromPlanning: true });
@@ -269,9 +288,11 @@ export class LoopKernel {
 		loop.budgetStatus.elapsedMs = Math.max(0, this.#now() - loop.startedAt);
 		if (nextState === LOOP_STATES.paused) {
 			loop.pausedAt = this.#now();
+			loop.stateBeforePause = previousState;
 			loop.statusReason = typeof payload.reason === "string" ? payload.reason : undefined;
 		} else if (previousState === LOOP_STATES.paused) {
 			loop.pausedAt = undefined;
+			loop.stateBeforePause = undefined;
 		}
 		this.#registry.update(loop);
 		this.#emit(loop, "loop.state_changed", { from: previousState, to: nextState, ...payload });

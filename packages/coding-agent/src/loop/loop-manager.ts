@@ -198,6 +198,20 @@ export class LoopManager {
 		return this.#kernel.getState(snapshot.id);
 	}
 
+	async prepare(options: StartLoopOptions): Promise<LoopSnapshot> {
+		return this.start({ ...options, manifestBuilding: true });
+	}
+
+	async launch(loopId: string): Promise<LoopSnapshot> {
+		const snapshot = this.#kernel.getState(loopId);
+		if (snapshot.state !== LOOP_STATES.manifestBuilding) {
+			throw new Error(`Cannot launch loop ${loopId}: expected manifest_building state, got ${snapshot.state}`);
+		}
+		this.#kernel.done(loopId);
+		await this.#flushPendingEvents();
+		return this.#kernel.getState(loopId);
+	}
+
 	async pause(loopId: string, reason?: string): Promise<LoopSnapshot> {
 		const snapshot = this.#kernel.pause(loopId, reason);
 		await this.#flushPendingEvents();
@@ -218,6 +232,8 @@ export class LoopManager {
 			findings?: string[];
 			forceValidate?: boolean;
 			taskContent?: string;
+			completedTickets?: string[];
+			activeTickets?: string[];
 		} = {},
 	): Promise<LoopSnapshot> {
 		const snapshot = this.#kernel.done(loopId, options);
@@ -384,11 +400,11 @@ export class LoopManager {
 
 	async handleCommand(command: string, args: string[]): Promise<LoopCommandResult> {
 		switch (command) {
-			case "start": {
+			case "prepare": {
 				const name = args.join(" ").trim();
-				if (!name) return { ok: false, message: "Usage: /loop start <name>" };
-				const loop = await this.start({ name });
-				return { ok: true, message: `Started loop ${loop.id}`, loop };
+				if (!name) return { ok: false, message: "Usage: /loop prepare <name>" };
+				const loop = await this.prepare({ name });
+				return { ok: true, message: `Prepared loop ${loop.id}`, loop };
 			}
 			case "pause": {
 				const loopId = args[0];
@@ -401,6 +417,12 @@ export class LoopManager {
 				if (!loopId) return { ok: false, message: "Usage: /loop resume <id>" };
 				const loop = await this.resume(loopId);
 				return { ok: true, message: `Resumed loop ${loop.id}`, loop };
+			}
+			case "launch": {
+				const loopId = args[0];
+				if (!loopId) return { ok: false, message: "Usage: /loop launch <id>" };
+				const loop = await this.launch(loopId);
+				return { ok: true, message: `Launched loop ${loop.id}`, loop };
 			}
 			case "status":
 				return { ok: true, message: this.status(args[0]) };
@@ -425,7 +447,7 @@ export class LoopManager {
 				return { ok: true, message: `Rejected gate ${gateId}` };
 			}
 			default:
-				return { ok: false, message: "Usage: /loop <start|pause|resume|status|list|kill|approve|reject>" };
+				return { ok: false, message: "Usage: /loop <prepare|launch|pause|resume|status|list|kill|approve|reject>" };
 		}
 	}
 

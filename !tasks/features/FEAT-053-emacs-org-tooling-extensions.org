@@ -1,0 +1,74 @@
+#+TITLE: Emacs Org Tooling Extensions
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: FEAT-053-emacs-org-tooling-extensions
+#+EFFORT: 4h
+#+PRIORITY: #B
+#+LAYER: backend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+Extend the Emacs org MCP server with new functions for manifest management: org-ql queries for ticket state, BLOCKER/TRIGGER property introspection, dependency graph traversal, and full org-element AST access.
+
+** In-Scope
+- New org-ql predicates for manifest tickets:
+  - =ticket-state(STATE)=: match tickets by org TODO state
+  - =ticket-blocked-by(ID)=: match tickets whose BLOCKER contains ID
+  - =ticket-triggers(ID)=: match tickets whose TRIGGER targets ID
+  - =has-gate(TYPE)=: match tickets with GATE_CMD/GATE_ARTIFACT/GATE_LLM property
+- Enhanced property drawer manipulation:
+  - Batch property get/set for manifest operations
+  - BLOCKER/TRIGGER-aware property updates (validate ID references)
+- Full org-element AST export as JSON:
+  - New MCP tool =org-element-ast= that parses a file and returns the full heading tree with drawers, properties, and body content
+- Manifest-specific tools:
+  - =manifest-ticket-summary=: return ticket table (id, title, state, blockers, effort) as JSON for all tickets in a directory
+  - =manifest-dependency-order=: return topological sort of tickets by BLOCKER edges
+- Wire all new tools through the existing =packages/org/elisp/tools/= registration pattern
+
+** Out-of-Scope
+- TypeScript-side org tool wrapper changes (those go in the loop tooling items)
+- QML canvas integration (Phase 4)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/emacs-org-extensions.test.ts=
+
+Note: These tests require the Emacs daemon. Use conditional skip if Emacs is unavailable.
+
+** Scenarios
+1. org-ql predicate =ticket-state("DOING")=: returns only tickets in DOING state
+2. org-ql predicate =ticket-blocked-by("FEAT-001")=: returns tickets with FEAT-001 in BLOCKER
+3. =org-element-ast= on a manifest ticket file: returns JSON with heading hierarchy, properties, body
+4. =manifest-ticket-summary= on a directory with 3 ticket files: returns correct table
+5. =manifest-dependency-order=: topological sort respects BLOCKER edges
+6. Batch property set: update EFFORT and PRIORITY on a ticket in one call
+
+* Implementation
+
+** New elisp files in =packages/org/elisp/tools/=:
+- =manifest-predicates.el=: org-ql predicates for ticket-state, ticket-blocked-by, ticket-triggers, has-gate
+- =org-element-ast.el=: MCP tool that calls org-element-parse-buffer, traverses the AST, and serializes to JSON
+- =manifest-summary.el=: MCP tool that scans a directory of .org files, extracts ticket metadata, returns JSON table
+- =manifest-dependency-order.el=: MCP tool that builds dependency graph from BLOCKER properties and returns topological order
+
+** Register in =packages/org/elisp/mcp-server-emacs-tools.el=:
+Add require statements for the new tools.
+
+* Edge Cases
+- org-element-ast on a malformed org file: return partial AST with error markers
+- manifest-dependency-order with circular deps: return error with cycle description
+- Ticket files with no CUSTOM_ID: skip with warning in summary
+- Large manifest (50+ tickets): verify performance is acceptable (<5s for summary)
+
+* Acceptance Criteria
+- [ ] All 4 new org-ql predicates registered and queryable
+- [ ] org-element-ast returns valid JSON for standard org files
+- [ ] manifest-ticket-summary produces correct table from test fixtures
+- [ ] manifest-dependency-order handles DAG correctly
+- [ ] All 6 test scenarios pass (or skip gracefully without Emacs)

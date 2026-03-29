@@ -1,0 +1,54 @@
+#+TITLE: Metis Gap Analysis for Loop Specs
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: FEAT-058-metis-gap-analysis-for-loop-specs
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+Integrate the Metis gap analysis agent into the manifest_building phase. Metis receives full spec content + structured summary and identifies gaps before manifest creation.
+
+** In-Scope
+- Spawn Metis as a task subagent during manifest_building (via prompt instructions)
+- Prepare Metis input: full spec content (all parsed org files) + structured summary (ticket titles, acceptance criteria, dependencies, effort estimates)
+- Process Metis output: gaps become questions for the user or refinements to the manifest
+- Mandatory gate: manifest_building prompt requires Metis to run before manifest creation
+- Metis agent definition reuse from =packages/coding-agent/src/prompts/agents/metis.md=
+- Optional re-run: loop orchestrator can invoke Metis during iterations if it deems useful (not mandatory)
+
+** Out-of-Scope
+- Momus validation (separate item)
+- Modifying the Metis agent definition itself (reuse as-is)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/metis-integration.test.ts=
+
+** Scenarios
+1. Metis input preparation: full spec content + structured summary formatted correctly
+2. manifest-building-active.md includes Metis invocation instructions
+3. Metis gap output processed into manifest refinement notes
+
+* Implementation
+- Add Metis invocation section to =manifest-building-active.md= prompt template
+- New helper: =packages/coding-agent/src/loop/ingestion/metis-input.ts=
+  - =buildMetisInput(parsed: ParsedSpecFile[], tickets: ManifestTicket[])= -> formatted string
+- The agent spawns Metis via the =task= tool during manifest_building; this is prompt-driven, not code-driven
+
+* Edge Cases
+- Metis finds critical gaps: prompt instructs agent to ask user for clarification before proceeding
+- Metis times out or fails: log warning, allow manifest creation with advisory note
+- Very large spec content exceeds context: truncate with "...N more files" summary
+
+* Acceptance Criteria
+- [ ] Metis input builder produces well-structured summary
+- [ ] Manifest building prompt mandates Metis before org item creation
+- [ ] Agent can spawn and process Metis results during manifest_building
+- [ ] All 3 test scenarios pass

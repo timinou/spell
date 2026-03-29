@@ -2,8 +2,29 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed `loop_start` tool; replaced with `loop_prepare` + `loop_launch` two-step flow
+- `loop_done` now accepts optional `completedTickets` and `activeTickets` arrays
 ### Added
 
+- Manifest system for spec-driven loop orchestration
+- `manifest_building` state in loop state machine with pre-launch approval flow
+- ManifestTicket and ManifestSnapshot data model with org-native persistence
+- `loop_prepare` tool: ingests specs and enters manifest building mode
+- `loop_launch` tool: validates manifest and starts iteration
+- Org-depend property parser (BLOCKER, TRIGGER, GATE_* properties)
+- Ticket lifecycle manager with dependency cascade and trigger execution
+- Per-ticket gate derivation from spec properties and acceptance criteria
+- Metis gap analysis input builder for spec completeness review
+- Momus manifest validation input builder for pre-launch quality checks
+- Spec drift detection with manifest-aware merge preserving completed tickets
+- QML manifest viewer canvas for real-time monitoring
+- TUI manifest approval display with dependency tree and gate overview
+- Emacs org-ql predicates: ticket-state, ticket-blocked-by, has-gate, ticket-ready, ticket-effort
+- Emacs MCP tools: manifest-ticket-summary, manifest-dependency-order
+- Enhanced iteration/reflection prompts with full manifest context
+- Manifest building system prompt for guided ticket decomposition
 - Added `planner_stream` and `execution_cancelled` fluid events, plus a `fluid.debug` setting for fluid canvas lifecycle tracing.
 - Added an interactive fluid DAG graph component with failed-subtree retry controls and execution summary stats.
 - Added `planMode.allowedFolders` to allow plan mode and plan-mode subagents to create or update files in explicitly described folders while keeping deletes and moves blocked.

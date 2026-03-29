@@ -14,11 +14,12 @@ This is the contributor-facing reference for the loop system internals. For usag
 6. [Gate System](#gate-system)
 7. [Domain System](#domain-system)
 8. [Persistence Layer](#persistence-layer)
-9. [Recursion System](#recursion-system)
-10. [Safeguards](#safeguards)
-11. [Integration Points](#integration-points)
-12. [Replay and Debug](#replay-and-debug)
-13. [Constants Reference](#constants-reference)
+9. [Manifest System](#manifest-system)
+10. [Recursion System](#recursion-system)
+11. [Safeguards](#safeguards)
+12. [Integration Points](#integration-points)
+13. [Replay and Debug](#replay-and-debug)
+14. [Constants Reference](#constants-reference)
 
 ---
 
@@ -57,6 +58,15 @@ The loop system is a state-machine-driven orchestration engine for multi-iterati
 | SessionHooks | Restore loops on startup | `persistence/session-hooks.ts` |
 | DashboardBridge | UI event channel binding | `dashboard-bridge.ts` |
 | PromptBuilder | Handlebars template rendering | `prompt-builder.ts` |
+| TicketLifecycleManager | Manifest ticket state transitions and dependency cascade | `ticket-lifecycle.ts` |
+| ManifestWriter | Writes manifest snapshot + ticket files to org format | `persistence/manifest-writer.ts` |
+| ManifestReader | Reads manifest snapshot + tickets from org files | `persistence/manifest-reader.ts` |
+| OrgDependParser | Parses BLOCKER/TRIGGER/GATE_* properties and builds dependency graph | `ingestion/org-depend.ts` |
+| MetisBuilder | Builds Metis gap-analysis input from spec and manifest | `ingestion/metis-builder.ts` |
+| MomusBuilder | Builds Momus validation input for pre-launch quality checks | `ingestion/momus-builder.ts` |
+| TicketGateDerivation | Derives per-ticket gates from spec properties and acceptance criteria | `gates/ticket-gates.ts` |
+| ManifestDriftDetector | Detects spec file changes and merges manifest preserving completed tickets | `git/manifest-drift.ts` |
+| TuiManifestDisplay | TUI rendering for manifest approval, dependency tree, gate overview | `tui/manifest-display.ts` |
 
 ---
 
@@ -67,7 +77,7 @@ loop/
   kernel.ts                  # State machine (ALLOWED_TRANSITIONS, start/done/pause/resume/kill/fail)
   loop-manager.ts            # Orchestration facade
   loop-registry.ts           # In-memory storage with concurrency limits
-  loop-tools.ts              # loop_start and loop_done tool definitions
+  loop-tools.ts              # loop_prepare, loop_launch, and loop_done tool definitions
   loop-commands.ts            # Slash command dispatcher
   prompt-builder.ts           # Handlebars template rendering
   types.ts                    # Core type definitions (LoopSnapshot, gate configs, etc.)
@@ -75,6 +85,7 @@ loop/
   hash.ts                     # Content hashing (Bun.hash) for progress detection
   ids.ts                      # Loop ID generation (LOOP-{timestamp}-{slug})
   index.ts                    # Public re-exports
+  ticket-lifecycle.ts         # Manifest ticket state transitions and dependency cascade
   dashboard-bridge.ts         # UI panel lifecycle and event subscription
 
   contracts/
@@ -96,6 +107,7 @@ loop/
     trigger.ts                # shouldFire() trigger matching logic
     config.ts                 # Gate config normalization (defaults)
     dedup.ts                  # FindingDedup for repeated gate results
+    ticket-gates.ts           # Per-ticket gate derivation from spec properties
     clock.ts                  # Clock interface (RealClock, VirtualClock for tests)
     timer.ts                  # GateTimer for auto-approve timeouts
     types.ts                  # GateExecutor, GateExecutionContext, LoopReviewer
@@ -119,6 +131,8 @@ loop/
     event-log.ts              # events.ndjson append/read/replay
     org-sync.ts               # Org item sync and state mapping
     reconcile.ts              # Checkpoint-vs-org reconciliation
+    manifest-writer.ts        # Writes ManifestSnapshot + ticket files to org format
+    manifest-reader.ts        # Reads ManifestSnapshot + tickets from org files
     session-hooks.ts          # Startup restore flow
 
   recursion/
@@ -137,10 +151,14 @@ loop/
     dirty-check.ts            # Pre-start git cleanliness check
     drift.ts                  # Spec file change detection
     worktree.ts               # Git worktree creation/removal
+    manifest-drift.ts         # Spec drift detection and manifest-aware merge
 
   ingestion/
     parser.ts                 # Org file parsing (CUSTOM_ID, [[id:]] links)
     validator.ts              # Parsed spec validation (missing IDs, broken links)
+    org-depend.ts             # BLOCKER/TRIGGER/GATE_* property parsing, dependency graph
+    metis-builder.ts          # Metis gap-analysis input builder
+    momus-builder.ts          # Momus validation input builder
     readiness.ts              # Pre-start readiness evaluation
     ancillary.ts              # Domain guideline file existence check
     importer.ts               # Spec file import to !tasks/drafts/
@@ -157,9 +175,17 @@ loop/
     code-handoff.md           # Code -> review handoff template
     review-handoff.md         # Review -> plan handoff template
     preparation-workflow.md   # Pre-start validation checklist
-    loop-start-tool.md        # loop_start tool description
+    loop-start-tool.md        # loop_start tool description (deprecated)
     loop-done-tool.md         # loop_done tool description
+    loop-prepare-tool.md      # loop_prepare tool description
+    loop-launch-tool.md       # loop_launch tool description
 ```
+
+  tui/
+    manifest-display.ts       # TUI manifest approval display with dependency tree
+
+  qml/
+    ManifestViewer.qml        # QML manifest viewer canvas for real-time monitoring
 
 ---
 
@@ -174,6 +200,7 @@ Defined in `contracts/enums.ts` as `LOOP_STATES`:
 | State | Description |
 |---|---|
 | `idle` | Initial state before `start()` is called |
+| `manifest_building` | Manifest decomposition and approval; entered via `loop_prepare`, exits to `planning` via `loop_launch` |
 | `planning` | Plan phase active; waiting for `done()` to move to `iterating` |
 | `iterating` | Code/review phases active; `done()` triggers next transition |
 | `reflecting` | Mid-loop reflection; entered every `reflectEvery` iterations |
@@ -183,21 +210,21 @@ Defined in `contracts/enums.ts` as `LOOP_STATES`:
 | `paused` | Suspended by user or safeguard; can `resume` |
 | `cancelled` | Terminal: user cancellation |
 | `killed` | Terminal: emergency stop (cascades to children) |
-
 ### ALLOWED_TRANSITIONS
 
 This is the complete transition table from `kernel.ts`:
 
 | From State | Allowed Target States |
 |---|---|
-| `idle` | `planning` |
+| `idle` | `planning`, `manifest_building` |
+| `manifest_building` | `planning`, `paused`, `failed`, `killed`, `cancelled` |
 | `planning` | `iterating`, `paused`, `failed`, `killed`, `cancelled` |
 | `iterating` | `planning`, `reflecting`, `validating`, `paused`, `failed`, `killed`, `cancelled` |
 | `reflecting` | `planning`, `validating`, `paused`, `failed`, `killed`, `cancelled` |
 | `validating` | `complete`, `failed`, `paused`, `killed`, `cancelled` |
 | `complete` | *(none -- terminal)* |
 | `failed` | *(none -- terminal)* |
-| `paused` | `iterating`, `planning`, `killed`, `cancelled` |
+| `paused` | `iterating`, `planning`, `manifest_building`, `killed`, `cancelled` |
 | `cancelled` | *(none -- terminal)* |
 | `killed` | *(none -- terminal)* |
 
@@ -659,6 +686,117 @@ Located in `persistence/session-hooks.ts`. On startup, `restoreLoopSnapshots(cwd
 
 ---
 
+## Manifest System
+
+The manifest system adds spec-driven loop orchestration. Instead of starting a loop directly, users call `loop_prepare` to ingest specs, decompose work into tickets, and build a manifest for approval before launching iteration via `loop_launch`.
+
+### Data Model
+
+**ManifestTicket** represents a single unit of work:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Ticket ID (from org CUSTOM_ID) |
+| `title` | `string` | Human-readable ticket title |
+| `state` | `TicketState` | `ITEM` \| `DOING` \| `DONE` \| `BLOCKED` \| `HOLD` |
+| `blockedBy` | `string[]` | IDs of tickets that must complete first |
+| `triggers` | `string[]` | IDs of tickets to unblock on completion |
+| `gates` | `TicketGate[]` | Per-ticket quality gates derived from spec properties |
+| `effort` | `string?` | Estimated effort (e.g., `"2h"`, `"1d"`) |
+| `acceptance` | `string[]` | Acceptance criteria extracted from spec |
+| `specPath` | `string` | Path to the source spec file |
+
+**ManifestSnapshot** is the top-level manifest state:
+
+| Field | Type | Description |
+|---|---|---|
+| `tickets` | `ManifestTicket[]` | All tickets in dependency order |
+| `rootTicketIds` | `string[]` | Tickets with no dependencies (entry points) |
+| `completedTicketIds` | `string[]` | Tickets in terminal `DONE` state |
+| `activeTicketId` | `string?` | Currently executing ticket |
+| `specHash` | `string` | Hash of ingested spec content for drift detection |
+
+### manifest_building State
+
+The `manifest_building` state is entered via `loop_prepare` from `idle`. During this state:
+
+1. Specs are ingested and parsed via `ingestion/org-depend.ts`
+2. The agent decomposes work into `ManifestTicket`s with dependencies
+3. The manifest is displayed for approval via TUI or QML canvas
+4. `loop_launch` validates the manifest and transitions to `planning`
+
+Transitions: `idle -> manifest_building -> planning` (or `manifest_building -> failed/cancelled/killed`).
+
+### Ticket Lifecycle
+
+Tickets follow a state machine managed by `ticket-lifecycle.ts`:
+
+```
+ITEM -> DOING -> DONE
+  |       |
+  v       v
+HOLD   BLOCKED -> DOING (when blockers resolve)
+```
+
+- **ITEM**: Initial state; ticket is defined but not started
+- **DOING**: Actively being worked on
+- **DONE**: Completed; triggers dependency cascade
+- **BLOCKED**: Waiting on upstream tickets (auto-set when `blockedBy` is non-empty)
+- **HOLD**: Manually paused by user
+
+When a ticket transitions to `DONE`, the `TicketLifecycleManager` cascades:
+1. Removes the completed ticket from all downstream `blockedBy` arrays
+2. Fires `TRIGGER` properties (e.g., unblocking specific tickets)
+3. Transitions newly-unblocked tickets from `BLOCKED` to `ITEM`
+
+### Manifest Persistence
+
+Manifest state persists as org files under `.local/!tracks/loops/{loopId}/manifest/`:
+
+- `manifest.org` -- Top-level manifest metadata (spec hash, root ticket IDs)
+- `tickets/{ticketId}.org` -- Individual ticket files with full state and properties
+
+`ManifestWriter` serializes the snapshot; `ManifestReader` reconstructs it. Round-trip fidelity is guaranteed: `read(write(snapshot)) === snapshot`.
+
+### Dependency Graph and Topological Sort
+
+`ingestion/org-depend.ts` parses org properties:
+
+- `BLOCKER: ticket-id-1, ticket-id-2` -- This ticket is blocked by the listed tickets
+- `TRIGGER: ticket-id-3` -- Completing this ticket unblocks the target
+- `GATE_TYPE: command|artifact|llm-review` -- Gate type for this ticket
+- `GATE_COMMAND: bun test` -- Gate-specific configuration
+
+The parser builds a dependency graph and produces a topological sort for execution ordering. Cycles are detected and rejected at parse time.
+
+### Gate Derivation
+
+`gates/ticket-gates.ts` derives per-ticket gates from spec properties:
+
+1. Explicit `GATE_*` org properties define gates directly
+2. Acceptance criteria are converted to `artifact` or `llm-review` gates
+3. Domain default gates are inherited when a ticket specifies domain membership
+
+### Spec Drift Detection
+
+`git/manifest-drift.ts` detects when spec files change after manifest building:
+
+1. Compares current spec file hashes against `ManifestSnapshot.specHash`
+2. On drift, performs a manifest-aware merge:
+   - Completed tickets are preserved (work already done)
+   - New spec items become new tickets
+   - Modified spec items update ticket metadata but preserve state
+   - Removed spec items mark tickets as `HOLD` (not deleted)
+
+### Metis/Momus Integration
+
+**MetisBuilder** (`ingestion/metis-builder.ts`): Builds input for Metis gap-analysis review. Collects spec content, existing ticket coverage, and acceptance criteria to identify gaps in the manifest before launch.
+
+**MomusBuilder** (`ingestion/momus-builder.ts`): Builds input for Momus pre-launch validation. Assembles the full manifest with dependency graph, gate configurations, and effort estimates for quality review.
+
+
+---
+
 ## Recursion System
 
 ### ChildSpawner
@@ -761,9 +899,9 @@ In `tools/index.ts`, loop tools are conditionally registered:
 
 ```typescript
 // Loop tools registered only when LoopManager is available
-loop_start: loopManager ? new LoopStartTool(loopManager) : undefined,
+loop_prepare: loopManager ? new LoopPrepareTool(loopManager) : undefined,
+loop_launch: loopManager ? new LoopLaunchTool(loopManager) : undefined,
 loop_done: loopManager ? new LoopDoneTool(loopManager) : undefined,
-```
 
 ### Slash Command Dispatch
 

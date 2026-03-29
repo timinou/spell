@@ -1,0 +1,90 @@
+#+TITLE: QML Manifest Viewer Canvas
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: FEAT-062-qml-manifest-viewer-canvas
+#+EFFORT: 6h
+#+PRIORITY: #B
+#+LAYER: frontend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+QML canvas window for monitoring loop manifests: ticket table with state badges, dependency graph visualization, gate summary, auto-approve toggle.
+
+** In-Scope
+- QML window launched via canvas tool when loop is in any active state
+- Ticket table view:
+  - Columns: ID, title, state (with color badges), effort, priority, blockers, gates
+  - Row click expands to show acceptance criteria, findings, iteration history
+  - State badges: ITEM (gray), DOING (blue), DONE (green), BLOCKED (red), HOLD (yellow)
+- Dependency graph view:
+  - Directed graph of tickets with BLOCKER edges
+  - Nodes colored by state
+  - Layout: top-down topological order
+- Gate summary panel:
+  - Per-ticket gates with pass/fail indicators
+  - Domain gates with last result
+  - Manifest validation gates status
+- Auto-approve toggle:
+  - Armed tool so it fires directly without agent processing
+  - Toggle sends =bridge.send({ _tool: "org", ... })= or direct LoopManager callback
+- Real-time updates via loop events:
+  - Subscribe to =loop:{loopId}:state=, =loop:{loopId}:iteration=, =loop:{loopId}:gate= channels
+  - Update ticket states, gate results, progress metrics live
+- Progress bar showing N/M tickets completed
+
+** Out-of-Scope
+- Interactive manifest editing (reorder, priority changes) -- view-only beyond auto-approve toggle
+- Multiple loop windows simultaneously
+
+* Tests
+Test file: =packages/coding-agent/test/loop/qml-manifest-viewer.test.ts=
+Use QmlJourney DSL for QML E2E testing.
+
+** Scenarios
+1. Window launches with ticket table populated from manifest snapshot
+2. Ticket state change event updates table row color
+3. Gate result event updates gate summary panel
+4. Auto-approve toggle sends correct payload
+5. Progress bar reflects completion percentage
+6. Dependency graph renders correct edges (screenshot verification)
+
+* Implementation
+
+** QML file: =packages/coding-agent/src/loop/canvas/ManifestViewer.qml=
+Main window with tab bar: Tickets | Dependencies | Gates
+
+** Supporting QML:
+- =TicketTable.qml=: TableView with ticket data model
+- =DependencyGraph.qml=: Canvas-based directed graph (or QtQuick.Shapes)
+- =GateSummary.qml=: ListView of gate results
+- =ProgressBar.qml=: Manifest completion progress
+
+** Bridge integration:
+- =spellArmedTools: ["read", "org"]= for auto-approve
+- =bridge.messageReceived= handler for loop event updates
+- =bridge.send= for auto-approve toggle
+
+** TypeScript integration:
+- Launch via canvas tool in LoopManager or LoopDashboardBridge
+- Forward loop events to QML window via =send_message=
+- Props: initial manifest snapshot, loopId
+
+* Edge Cases
+- Window opened before manifest exists: show "Preparing manifest..." placeholder
+- Large manifest (50+ tickets): virtualized table, simplified graph
+- Window survives loop pause/resume
+- Window closed and reopened: re-sync from current state
+
+* Acceptance Criteria
+- [ ] Ticket table displays all manifest tickets with correct state badges
+- [ ] Dependency graph renders edges correctly
+- [ ] Gate summary shows per-ticket and domain gate results
+- [ ] Auto-approve toggle works without agent round-trip
+- [ ] Real-time updates reflect loop state changes
+- [ ] All 6 test scenarios pass (QmlJourney DSL)

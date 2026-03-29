@@ -1,0 +1,82 @@
+#+TITLE: Automatic Gate Derivation from Specs
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: FEAT-060-automatic-gate-derivation-from-specs
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+Derive per-ticket gates from spec acceptance criteria and GATE_* property hints. Combine with domain-based gates for the layered gate system.
+
+** In-Scope
+- Gate derivation from GATE_CMD properties -> CommandGateConfig
+- Gate derivation from GATE_ARTIFACT properties -> ArtifactGateConfig (with optional GATE_ARTIFACT_REGEX)
+- Gate derivation from GATE_LLM properties -> LlmReviewGateConfig
+- Gate derivation from free-text acceptance criteria -> LlmReviewGateConfig with criteria = acceptance text
+- Merge derived gates with domain default gates:
+  - Per-ticket gates: fire on ticket completion (new trigger type: =on-ticket-complete=)
+  - Per-iteration domain gates: existing behavior
+  - Per-manifest validation gates: fire on loop completion (existing =on-completion=)
+- New gate trigger: =on-ticket-complete= in =contracts/enums.ts=
+- GateEvaluator extension: filter gates by ticket ID when evaluating per-ticket gates
+- GateRegistry extension: store gates keyed by (loopId, ticketId) for per-ticket gates
+
+** Out-of-Scope
+- Changes to existing domain gate definitions
+- Gate executor implementations (command, artifact, human, llm-review -- all exist)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/gate-derivation.test.ts=
+
+** Scenarios
+1. GATE_CMD -> CommandGateConfig with correct trigger (on-ticket-complete)
+2. GATE_ARTIFACT -> ArtifactGateConfig with path and optional regex
+3. GATE_LLM -> LlmReviewGateConfig with criteria
+4. Free-text acceptance criteria -> LlmReviewGateConfig
+5. Multiple GATE_* properties on one ticket -> multiple gates
+6. Layered evaluation: ticket gate fires on ticket completion, domain gate fires per-iteration
+7. Per-ticket gate failure: ticket stays DOING, doesn't transition to DONE
+8. Ticket with no gates: acceptance criteria auto-generates LLM-review gate
+
+* Implementation
+
+** New file: =packages/coding-agent/src/loop/gates/derivation.ts=
+#+begin_src typescript
+function deriveTicketGates(ticket: ManifestTicket, gateHints: GateHint[]): LoopGateConfig[];
+function deriveFromAcceptanceCriteria(criteria: string[]): LoopGateConfig[];
+function deriveFromGateHints(hints: GateHint[]): LoopGateConfig[];
+#+end_src
+
+** Extend: =packages/coding-agent/src/loop/contracts/enums.ts=
+- Add =on-ticket-complete= to GATE_TRIGGERS
+
+** Extend: =packages/coding-agent/src/loop/gates/trigger.ts=
+- Handle =on-ticket-complete= trigger: fires when event includes ticketId matching gate's associated ticket
+
+** Extend: =packages/coding-agent/src/loop/gates/evaluator.ts=
+- Accept optional =ticketId= in evaluation context
+- Filter per-ticket gates by ticketId
+
+** Extend: =packages/coding-agent/src/loop/gates/registry.ts=
+- Support per-ticket gate storage alongside per-loop gates
+
+* Edge Cases
+- Ticket with only free-text criteria and no GATE_* hints: auto-generate LLM-review gate
+- GATE_CMD with complex shell syntax (pipes, redirects): pass through to bash -lc
+- GATE_ARTIFACT with relative path: resolve relative to cwd
+- Duplicate gate IDs across tickets: auto-suffix with ticket ID
+
+* Acceptance Criteria
+- [ ] All three GATE_* property types derive correct gate configs
+- [ ] Free-text acceptance criteria generates LLM-review gates
+- [ ] on-ticket-complete trigger fires correctly
+- [ ] Layered evaluation respects gate scope (per-ticket vs per-loop)
+- [ ] All 8 test scenarios pass

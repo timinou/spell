@@ -1,0 +1,57 @@
+#+TITLE: Enhanced Iteration Prompts with Manifest Context
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: FEAT-057-enhanced-iteration-prompts-with-manifest
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: backend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+Update iteration and reflection prompt templates to include full manifest state, enabling the plan phase to make agent-directed ticket selection decisions.
+
+** In-Scope
+- Extend =LoopPromptContext= with manifest fields
+- Update =iteration.md= template to include:
+  - Full manifest ticket table (id, title, state, blockers, effort)
+  - Available tickets (ITEM state with no unresolved blockers)
+  - Ticket dependency graph summary
+  - Per-ticket findings from previous iterations
+- Update =reflection.md= template to include:
+  - Manifest progress summary (N/M tickets done)
+  - Tickets that have been DOING for multiple iterations (potential stalls)
+  - Gate results per ticket
+- Update =plan-handoff.md= to include which tickets the plan selected
+- Update =code-handoff.md= to include active ticket context
+- Update =review-handoff.md= to include ticket-specific review criteria
+- Extend =prompt-builder.ts= to populate manifest context from LoopSnapshot
+
+** Out-of-Scope
+- Prompt content for Metis/Momus (Phase 3 integration)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/manifest-prompts.test.ts=
+
+** Scenarios
+1. Iteration prompt with manifest: renders ticket table, available tickets, dependency graph
+2. Iteration prompt without manifest (backwards compat): renders as before
+3. Reflection prompt with progress: shows N/M done, stall detection
+4. Handoff prompts include ticket context
+
+* Implementation
+- Extend =LoopPromptContext= in =types.ts= with =manifest?: ManifestPromptContext=
+- New type =ManifestPromptContext= with tickets, available, progress, stalledTickets
+- Update all 5 prompt .md templates
+- Update =prompt-builder.ts= to extract ManifestPromptContext from LoopSnapshot
+
+* Acceptance Criteria
+- [ ] Plan phase receives enough context to make informed ticket selection
+- [ ] Reflection prompt shows meaningful progress metrics
+- [ ] Templates degrade gracefully when manifest is absent
+- [ ] All 4 test scenarios pass

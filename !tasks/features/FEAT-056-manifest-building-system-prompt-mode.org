@@ -1,0 +1,88 @@
+#+TITLE: Manifest Building System Prompt  Mode
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: FEAT-056-manifest-building-system-prompt-mode
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+New system prompt section for the =manifest_building= state, with tool restriction logic (relaxed read-only: workspace read-only + exploration + org writes + test/check execution).
+
+** In-Scope
+- New prompt template: =packages/coding-agent/src/loop/prompts/manifest-building-active.md=
+  - Instruct the agent to: read specs, explore codebase, build manifest via org tool
+  - Explain the org-depend property conventions (BLOCKER, TRIGGER, GATE_CMD, GATE_ARTIFACT, GATE_LLM)
+  - Explain acceptance criteria format (structured hints vs free-text for LLM gates)
+  - Instruct agent to use org tool to create/update ticket org items
+  - Instruct agent to call loop_launch when manifest is ready
+- Conditional injection in system prompt builder when loop state is =manifest_building=
+- Tool restriction for manifest_building mode:
+  - Allowed: read, grep, find, lsp, ast_grep, bash (read-only commands, tests, checks), org, emacs_code, ask, loop_launch, loop_done (for abort)
+  - Blocked: write, edit, ast_edit (no file writes to workspace)
+  - Guard: =enforcePlanModeWrite()= pattern adapted for manifest building
+- Integration with =packages/coding-agent/src/session/agent-session.ts=:
+  - Detect loop in manifest_building state
+  - Inject manifest-building-active.md as custom message (same pattern as plan mode)
+  - Apply tool restrictions
+
+** Out-of-Scope
+- Metis/Momus spawning prompts (Phase 3)
+- QML canvas approval (Phase 4)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/manifest-building-mode.test.ts=
+
+** Scenarios
+1. System prompt includes manifest-building section when loop is in manifest_building
+2. System prompt does NOT include manifest-building section in other loop states
+3. Tool restriction: write tool blocked during manifest_building
+4. Tool restriction: org tool allowed during manifest_building
+5. Tool restriction: bash allowed for read-only commands (grep, find, test)
+6. Prompt template renders correctly with spec parsing context
+
+* Implementation
+
+** New file: =packages/coding-agent/src/loop/prompts/manifest-building-active.md=
+Handlebars template with variables:
+- =loopId=, =loopName=
+- =specPaths= (list of parsed spec files)
+- =orgItemIds= (list of existing org item IDs)
+- =domains= (selected domains)
+- =readinessResult= (from evaluateLoopReadiness)
+- =parsedTicketCount= (number of tickets found so far)
+
+Content sections:
+1. Mode description and constraints (read-only workspace)
+2. Org-depend convention reference (BLOCKER, TRIGGER, GATE_* properties)
+3. Acceptance criteria authoring guide (structured hints + free-text)
+4. Workflow: explore specs -> create ticket org items -> build manifest -> call loop_launch
+5. Tool availability summary
+
+** Extend: =packages/coding-agent/src/session/agent-session.ts=
+- Add =buildManifestBuildingMessage()= method (parallel to =buildPlanModeMessage()=)
+- Detect loop in manifest_building state and inject the message
+- Apply tool restrictions via =setActiveToolsByName()=
+
+** New file: =packages/coding-agent/src/loop/manifest-building-guard.ts=
+Write restriction enforcement for manifest_building mode. Allow org file writes only.
+
+* Edge Cases
+- Agent tries to write to a workspace file during manifest_building: blocked with clear error
+- Agent runs a destructive bash command: guard blocks based on command pattern
+- Loop transitions out of manifest_building mid-turn: tool restrictions lifted on next turn
+- No specs found: prompt instructs agent to report issue and suggest alternatives
+
+* Acceptance Criteria
+- [ ] manifest-building-active.md template renders correctly
+- [ ] System prompt injection conditional on manifest_building state
+- [ ] Tool restrictions enforced (write blocked, org allowed, read allowed)
+- [ ] Agent can create org items and call loop_launch during manifest_building
+- [ ] All 6 test scenarios pass

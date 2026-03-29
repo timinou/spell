@@ -1,0 +1,178 @@
+#+TITLE: Spec-Driven Loop with Manifest Orchestration
+#+STATE: DOING
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: PLAN-020-spec-driven-loop-with-manifest-orchestra
+#+EFFORT: 49h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Context
+
+** Problem
+The loop system is a state-machine-driven orchestration engine for multi-iteration plan-code-review cycles, but it operates on a single flat =taskContent= string. Specs are only used for validation and drift detection -- they are never decomposed into trackable work items. There is no manifest concept, no per-ticket tracking, no integration with ultraplanning (Metis/Momus), and no pre-launch approval flow. The gap between the existing loop infrastructure and a spec-driven workflow is substantial but bridgeable: the building blocks (spec parser, org sync, gate system, domain system, plan-code-review cycle, ultraplan agents) exist but are disconnected.
+
+** Approach
+Transform the loop system into a spec-driven orchestration engine across 4 phases:
+
+1. *Core Foundation*: Manifest data model, =manifest_building= state in kernel, org-native persistence, org-depend property parser, Emacs tooling extensions, ticket lifecycle management.
+2. *Tooling*: Replace =loop_start= with =loop_prepare= + =loop_launch= (breaking change). Manifest building system prompt. Enhanced iteration prompts with full manifest context for agent-directed ticket selection.
+3. *Integration*: Metis gap analysis on specs before manifest creation (mandatory). Momus validation on manifest before launch (mandatory). Automatic gate derivation from acceptance criteria and GATE_* properties. Layered gate system (per-ticket, per-iteration, per-manifest). Spec drift auto-replan with manifest merge.
+4. *UX*: QML manifest viewer canvas for monitoring. Enhanced TUI manifest approval summary.
+
+** Key Design Decisions
+
+*** Manifest as org
+- =manifest.org= orchestration sheet + individual ticket =.org= files in =.local/!tracks/loops/{loopId}/manifest/=
+- Use org tool and Emacs extensions for ergonomic manifest management
+- Persistence hierarchy: event log (truth) -> checkpoint (optimization) -> org items (visibility)
+
+*** org-depend conventions
+- =:BLOCKER:= property with IDs (entries that must be DONE first)
+- =:TRIGGER:= property with =ID(KEYWORD)= expressions (actions on completion)
+- Custom: =:GATE_CMD:=, =:GATE_ARTIFACT:=, =:GATE_LLM:= for gate hints
+- Added to original spec/task org files, not duplicated
+
+*** New loop states
+- Add =manifest_building= between =idle= and =planning=
+- State machine: idle -> manifest_building -> planning -> iterating -> ...
+- =manifest_building= has relaxed tool restrictions (read-only workspace + exploration + org writes + test/check)
+
+*** Breaking API change
+- Remove =loop_start= tool entirely
+- New =loop_prepare= (spec ingestion + manifest building trigger) + =loop_launch= (start iterating on approved manifest)
+- =loop_done= extended with =completedTickets= and =activeTickets= fields
+
+*** Hybrid ticket lifecycle
+- Loop transitions tickets to DOING when iteration starts on them
+- Agent transitions tickets to DONE when satisfied
+- Loop verifies via per-ticket gates before accepting DONE
+- org keywords: (no state) -> ITEM -> DOING -> DONE, plus BLOCKED, HOLD
+
+*** Layered gates
+- Per-ticket: derived from acceptance criteria + GATE_* properties, fire on ticket completion
+- Per-iteration: domain gates (existing behavior)
+- Per-manifest: validation gates on loop completion
+
+*** Agent-directed ticket selection
+- Plan phase receives full manifest state (all tickets, states, dependencies, findings)
+- Agent picks which tickets to work on next based on dependency order and state
+- LLM decides when a ticket is "large" enough to spawn a child loop
+
+*** Spec drift response
+- Auto-pause on drift detection
+- Re-parse changed specs, merge into manifest preserving completed tickets
+- User approval for replan (respects auto-approve settings)
+- Git commit with =🔄 loop(replan): ...= message
+
+*** Pre-launch flow
+- =loop_prepare= triggers =manifest_building= state
+- Agent runs Metis (mandatory), builds manifest via org tool, runs Momus (mandatory)
+- User approves via =/loop launch= or auto-approval callback
+- Transitions to =planning= and iteration begins
+
+** Critical File Paths
+- Kernel: =packages/coding-agent/src/loop/kernel.ts= (state machine)
+- Manager: =packages/coding-agent/src/loop/loop-manager.ts= (orchestration)
+- Types: =packages/coding-agent/src/loop/types.ts= (data model)
+- Enums: =packages/coding-agent/src/loop/contracts/enums.ts= (states, triggers)
+- Tools: =packages/coding-agent/src/loop/loop-tools.ts= (agent interface)
+- Ingestion: =packages/coding-agent/src/loop/ingestion/= (spec parsing)
+- Persistence: =packages/coding-agent/src/loop/persistence/= (checkpoint, events, org-sync)
+- Gates: =packages/coding-agent/src/loop/gates/= (evaluator, triggers, registry)
+- Prompts: =packages/coding-agent/src/loop/prompts/= (templates)
+- Domains: =packages/coding-agent/src/loop/domains/= (domain definitions)
+- Emacs org tools: =packages/org/elisp/tools/= (org-ql predicates, property tools)
+- System prompt: =packages/coding-agent/src/session/agent-session.ts= (conditional injection)
+- Plan mode: =packages/coding-agent/src/modes/interactive-mode.ts= (tool restriction pattern)
+- Architecture doc: =packages/coding-agent/src/loop/ARCHITECTURE.md= (update throughout)
+
+* Verification
+
+** Per-Phase Checks
+
+*** Phase 1
+- =bun test packages/coding-agent/test/loop/manifest-model.test.ts= -- manifest data model
+- =bun test packages/coding-agent/test/loop/org-depend-parser.test.ts= -- property parser
+- =bun test packages/coding-agent/test/loop/emacs-org-extensions.test.ts= -- Emacs extensions (skip if no Emacs)
+- =bun test packages/coding-agent/test/loop/ticket-lifecycle.test.ts= -- ticket management
+- =tsgo -p packages/coding-agent= -- type check
+
+*** Phase 2
+- =bun test packages/coding-agent/test/loop/loop-tools-v2.test.ts= -- new tools
+- =bun test packages/coding-agent/test/loop/manifest-building-mode.test.ts= -- system prompt
+- =bun test packages/coding-agent/test/loop/manifest-prompts.test.ts= -- iteration prompts
+- Verify =loop_start= tool is no longer registered
+
+*** Phase 3
+- =bun test packages/coding-agent/test/loop/metis-integration.test.ts= -- Metis
+- =bun test packages/coding-agent/test/loop/momus-integration.test.ts= -- Momus
+- =bun test packages/coding-agent/test/loop/gate-derivation.test.ts= -- gate derivation
+- =bun test packages/coding-agent/test/loop/spec-drift-replan.test.ts= -- drift replan
+
+*** Phase 4
+- =bun test packages/coding-agent/test/loop/qml-manifest-viewer.test.ts= -- QML canvas
+- =bun test packages/coding-agent/test/loop/tui-manifest-display.test.ts= -- TUI
+- Screenshot: QML manifest viewer with ticket table and dependency graph
+
+** Global Checks
+- =bun check:ts= -- full TypeScript check (expect pre-existing .d.ts noise only)
+- =biome check packages/coding-agent/src/loop/= -- lint loop directory
+- Update =packages/coding-agent/src/loop/ARCHITECTURE.md= with manifest system docs
+- Update =packages/coding-agent/src/loop/TUTORIAL.md= with new workflow
+- Update =packages/coding-agent/CHANGELOG.md= with breaking change note
+
+* Execution Manifest
+
+** Phase 1: Core Foundation
+
+1. [[id:PROJ-002-manifest-data-model-state-machine-persis]] (depends: none, effort: 6h)
+   ManifestTicket type, LoopSnapshot extension, manifest_building state in kernel, org-native persistence (manifest.org + ticket files), checkpoint/event-log extensions, ticket state machine.
+
+2. [[id:FEAT-052-org-depend-property-parser-enhanced-spec]] (depends: PROJ-002, effort: 4h)
+   Parse BLOCKER, TRIGGER, GATE_CMD, GATE_ARTIFACT, GATE_LLM from org PROPERTIES drawers. Build dependency graph. Integrate with existing ingestion pipeline.
+
+3. [[id:FEAT-053-emacs-org-tooling-extensions]] (depends: none, effort: 4h)
+   New org-ql predicates (ticket-state, ticket-blocked-by, has-gate). org-element-ast export. manifest-ticket-summary and manifest-dependency-order MCP tools.
+
+4. [[id:FEAT-054-ticket-lifecycle-management]] (depends: PROJ-002, FEAT-052, effort: 3h)
+   Hybrid lifecycle: loop DOING transitions, agent DONE transitions, gate verification. Dependency unblocking cascade. TRIGGER execution. Per-ticket org sync.
+
+** Phase 2: Tooling
+
+5. [[id:FEAT-055-loop-prepare-loop-launch-tools]] (depends: PROJ-002, FEAT-052, FEAT-054, effort: 5h)
+   Remove loop_start. New loop_prepare (spec ingestion + manifest_building) and loop_launch (validate + transition to planning). Extend loop_done with completedTickets/activeTickets.
+
+6. [[id:FEAT-056-manifest-building-system-prompt-mode]] (depends: FEAT-055, effort: 3h)
+   manifest-building-active.md prompt. Tool restrictions (relaxed read-only). System prompt conditional injection.
+
+7. [[id:FEAT-057-enhanced-iteration-prompts-with-manifest]] (depends: PROJ-002, FEAT-054, effort: 2h)
+   Extend iteration/reflection/handoff prompts with full manifest state. Agent-directed ticket selection context.
+
+** Phase 3: Integration
+
+8. [[id:FEAT-058-metis-gap-analysis-for-loop-specs]] (depends: FEAT-056, effort: 3h)
+   Metis input builder (full specs + structured summary). Mandatory gate in manifest_building prompt.
+
+9. [[id:FEAT-059-momus-manifest-validation]] (depends: FEAT-056, FEAT-058, effort: 2h)
+   Momus input builder (manifest summary). Mandatory pre-launch validation. Rejection/revision cycle.
+
+10. [[id:FEAT-060-automatic-gate-derivation-from-specs]] (depends: FEAT-052, FEAT-054, effort: 4h)
+    Derive per-ticket gates from GATE_* properties and acceptance criteria. New on-ticket-complete trigger. GateEvaluator per-ticket filtering.
+
+11. [[id:FEAT-061-spec-drift-auto-replan]] (depends: PROJ-002, FEAT-055, FEAT-060, effort: 4h)
+    Enhanced drift detection (modified/added/deleted). Manifest merge preserving completed tickets. Auto-pause + user approval. 🔄 commit convention.
+
+** Phase 4: UX
+
+12. [[id:FEAT-062-qml-manifest-viewer-canvas]] (depends: PROJ-002, FEAT-054, FEAT-060, effort: 6h)
+    QML window: ticket table, dependency graph, gate summary, auto-approve toggle. Real-time updates via loop events.
+
+13. [[id:FEAT-063-enhanced-tui-manifest-approval]] (depends: PROJ-002, FEAT-054, FEAT-055, effort: 3h)
+    TUI manifest summary, dependency chain, gate overview. Replan diff display. Status command enhancement.

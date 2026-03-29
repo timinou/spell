@@ -1,0 +1,108 @@
+#+TITLE: Org-Depend Property Parser  Enhanced Spec Ingestion
+#+STATE: ITEM
+#+SESSION_ID: 14a61a0e469744fc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T20-04-45-466Z_14a61a0e469744fc.jsonl]]
+#+CUSTOM_ID: FEAT-052-org-depend-property-parser-enhanced-spec
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+from what I understand, the loop mode of the coding agent should base itself off of specs directories and keep track of itself through successive planning/ultraplanning, and leverage org to know which tickets in the specs are done/taken/etc, and builds a manifest for the gates based off of the specs, with the ability to complete the manifest at loop creation before formally launching (like a plan but for the loop). Is that true? If not, what does it do currently, and what would it take to take it there?
+
+Ask me as many questions as humanly/agentically possible
+
+* Scope
+Parse org-depend conventions (BLOCKER, TRIGGER) and custom gate hint properties (GATE_CMD, GATE_ARTIFACT, GATE_LLM) from org spec files. Enhance the existing spec ingestion pipeline to extract structured ticket data.
+
+** In-Scope
+- Parse BLOCKER property from PROPERTIES drawers: list of IDs that must be DONE before this ticket starts
+- Parse TRIGGER property: =ID(KEYWORD)= expressions and =chain-siblings(KEYWORD)= for sequential chains
+- Parse custom properties: GATE_CMD (shell command), GATE_ARTIFACT (file path + optional regex), GATE_LLM (criteria string)
+- Extract acceptance criteria from spec headings (look for =Acceptance Criteria= heading or =** AC= or =** Acceptance=)
+- Extract structured data: EFFORT, PRIORITY, LAYER, tags from org properties
+- Build dependency graph (edges from BLOCKER references)
+- Build trigger rules (from TRIGGER expressions)
+- Integrate with existing =ingestion/parser.ts= pipeline
+- Support both file-level (=#+PROPERTY:=) and heading-level (=:PROPERTIES:= drawer) property formats
+
+** Out-of-Scope
+- Gate object construction from parsed properties (Phase 3 gate derivation item)
+- Manifest building orchestration (Phase 2 tooling)
+
+* Tests
+Test file: =packages/coding-agent/test/loop/org-depend-parser.test.ts=
+
+** Scenarios
+1. Parse BLOCKER with single ID: =:BLOCKER: FEAT-001= -> dependencies: ["FEAT-001"]
+2. Parse BLOCKER with multiple IDs: =:BLOCKER: FEAT-001 FEAT-002= -> dependencies: ["FEAT-001", "FEAT-002"]
+3. Parse BLOCKER with previous-sibling: =:BLOCKER: previous-sibling= -> resolve to preceding sibling's CUSTOM_ID
+4. Parse TRIGGER with ID(KEYWORD): =:TRIGGER: FEAT-002(DOING)= -> trigger rule { source: this, target: FEAT-002, keyword: DOING }
+5. Parse TRIGGER with chain-siblings: =:TRIGGER: chain-siblings(DOING)= -> trigger rule targeting next sibling
+6. Parse GATE_CMD: =:GATE_CMD: bun test= -> gate hint { type: "command", command: "bun test" }
+7. Parse GATE_ARTIFACT: =:GATE_ARTIFACT: dist/bundle.js= -> gate hint { type: "artifact", path: "dist/bundle.js" }
+8. Parse GATE_LLM: =:GATE_LLM: Verify API backwards compatibility= -> gate hint { type: "llm-review", criteria: "..." }
+9. Extract acceptance criteria from heading content
+10. Build dependency graph: 3 tickets with BLOCKER refs -> correct edge list, detect cycle
+11. Mixed file-level and heading-level properties: both formats parsed correctly
+12. Malformed properties: missing ID in BLOCKER, invalid TRIGGER syntax -> validation errors with file/line
+
+* Implementation
+
+** New file: =packages/coding-agent/src/loop/ingestion/depend-parser.ts=
+#+begin_src typescript
+interface ParsedDependencies {
+  blockers: string[];          // IDs from BLOCKER
+  triggers: TriggerRule[];     // From TRIGGER
+  gateHints: GateHint[];       // From GATE_CMD, GATE_ARTIFACT, GATE_LLM
+}
+
+interface TriggerRule {
+  type: "id-keyword" | "chain-siblings";
+  targetId?: string;
+  keyword: string;
+}
+
+interface GateHint {
+  type: "command" | "artifact" | "llm-review";
+  command?: string;   // GATE_CMD
+  path?: string;      // GATE_ARTIFACT
+  regex?: string;     // GATE_ARTIFACT_REGEX
+  criteria?: string;  // GATE_LLM
+}
+
+function parseDependProperties(properties: Record<string, string>): ParsedDependencies;
+function parseBlocker(value: string): string[];
+function parseTrigger(value: string): TriggerRule[];
+function parseGateHints(properties: Record<string, string>): GateHint[];
+#+end_src
+
+** New file: =packages/coding-agent/src/loop/ingestion/criteria-extractor.ts=
+Extract acceptance criteria text from org content by finding headings matching patterns: =Acceptance Criteria=, =AC=, =Acceptance=.
+
+** Extend: =packages/coding-agent/src/loop/ingestion/parser.ts=
+- Add property extraction to ParsedSpecFile (currently only extracts CUSTOM_ID and [[id:]] links)
+- Add acceptance criteria extraction
+- Add structured data extraction (EFFORT, PRIORITY, LAYER, tags)
+
+** New file: =packages/coding-agent/src/loop/ingestion/dependency-graph.ts=
+Build and validate dependency graph from parsed BLOCKER/TRIGGER properties. Detect cycles via DFS.
+
+* Edge Cases
+- BLOCKER referencing non-existent ID: validation warning (not error - ID might be in a different spec directory)
+- Self-referencing BLOCKER: reject as error
+- chain-siblings with no next sibling: validation warning
+- GATE_CMD with shell metacharacters: pass through as-is (bash -lc handles it)
+- Empty PROPERTIES drawer: skip gracefully
+- Multiple GATE_CMD properties: collect all as separate gate hints
+- File-level =#+BLOCKER:= vs heading-level =:BLOCKER:=: both supported, heading-level takes precedence
+
+* Acceptance Criteria
+- [ ] BLOCKER parsing handles single ID, multiple IDs, and previous-sibling
+- [ ] TRIGGER parsing handles ID(KEYWORD) and chain-siblings(KEYWORD)
+- [ ] GATE_CMD, GATE_ARTIFACT, GATE_LLM parsed into GateHint objects
+- [ ] Acceptance criteria extracted from spec heading content
+- [ ] Dependency graph construction and cycle detection work correctly
+- [ ] All 12 test scenarios pass
+- [ ] Integration with existing parseSpecDirectory() is non-breaking

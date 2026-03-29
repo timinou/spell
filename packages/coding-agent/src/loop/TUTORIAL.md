@@ -6,17 +6,16 @@ This tutorial covers usage. For implementation internals, see [ARCHITECTURE.md](
 
 ---
 
-## Table of Contents
-
 1. [Getting Started](#getting-started)
-2. [The Plan-Code-Review Cycle](#the-plan-code-review-cycle)
-3. [Domains](#domains)
-4. [Gates](#gates)
-5. [Safeguards](#safeguards)
-6. [Child Loops](#child-loops)
-7. [Slash Commands Reference](#slash-commands-reference)
-8. [Tool Parameters Reference](#tool-parameters-reference)
-9. [Practical Examples](#practical-examples)
+2. [The Manifest Workflow](#the-manifest-workflow)
+3. [The Plan-Code-Review Cycle](#the-plan-code-review-cycle)
+4. [Domains](#domains)
+5. [Gates](#gates)
+6. [Safeguards](#safeguards)
+7. [Child Loops](#child-loops)
+8. [Slash Commands Reference](#slash-commands-reference)
+9. [Tool Parameters Reference](#tool-parameters-reference)
+10. [Practical Examples](#practical-examples)
 
 ---
 
@@ -27,12 +26,14 @@ This tutorial covers usage. For implementation internals, see [ARCHITECTURE.md](
 - A **review model** must be configured in your model roles. The loop system validates this before start and will reject the request if missing.
 - A **clean git tree** is recommended. The system runs `git status --porcelain` at start and warns if uncommitted changes exist. Git is not strictly required -- the system degrades gracefully without it, but spec drift detection and worktrees are disabled.
 
-### Starting a Loop
+### Preparing a Loop
+
+Loops use a two-step prepare-then-launch flow. First, call `loop_prepare` to ingest specs and enter manifest building mode:
 
 **Via tool call:**
 
 ```
-loop_start({
+loop_prepare({
   name: "auth-refactor",
   taskContent: "Refactor the authentication module to use JWT tokens",
   domains: ["code", "test"]
@@ -42,10 +43,33 @@ loop_start({
 **Via slash command:**
 
 ```
-/loop start auth-refactor
+/loop prepare auth-refactor
 ```
 
-Both create a loop, assign it a unique ID (format: `LOOP-{timestamp}-{slug}`), persist state to disk, and create an org item for tracking.
+This creates a loop in `manifest_building` state, assigns it a unique ID (format: `LOOP-{timestamp}-{slug}`), persists state to disk, and creates an org item for tracking. You then decompose the work into tickets.
+
+### Building the Manifest
+
+During `manifest_building`, you decompose the task into tickets with dependencies:
+
+```
+// The agent creates tickets from specs, sets up dependencies,
+// and presents the manifest for approval via TUI or canvas.
+// Each ticket has: title, acceptance criteria, effort estimate,
+// blockers, triggers, and gates.
+```
+
+### Launching the Loop
+
+Once the manifest is approved, call `loop_launch` to begin iteration:
+
+```
+loop_launch({
+  loopId: "LOOP-1711721600000-auth-refactor"
+})
+```
+
+This validates the manifest (all tickets have valid dependencies, gates are configured) and transitions to `planning` state. The first ticket in topological order becomes active.
 
 ### Completing an Iteration
 
@@ -125,10 +149,10 @@ Domains define the quality standards for a loop. Each domain contributes a guide
 
 ### Selecting Domains
 
-Pass the `domains` parameter at loop start:
+Pass the `domains` parameter at loop prepare:
 
 ```
-loop_start({
+loop_prepare({
   name: "feature-x",
   domains: ["code", "test", "security"]
 })
@@ -213,7 +237,7 @@ Safeguards prevent loops from running away with resources. Three independent che
 Budget limits can be customized at loop start:
 
 ```
-loop_start({
+loop_prepare({
   name: "long-refactor",
   budgetLimits: {
     wallClockMs: 8 * 60 * 60 * 1000,  // 8 hours
@@ -264,7 +288,8 @@ All commands use the `/loop` prefix:
 
 | Command | Usage | Description |
 |---|---|---|
-| `start` | `/loop start <name>` | Create and start a new loop |
+| `prepare` | `/loop prepare <name>` | Create a loop and enter manifest building mode |
+| `launch` | `/loop launch <id>` | Validate manifest and start iteration |
 | `pause` | `/loop pause <id>` | Pause an active loop |
 | `resume` | `/loop resume <id>` | Resume a paused loop |
 | `status` | `/loop status [id]` | Show status of a specific loop, or all loops if no ID given |
@@ -277,7 +302,7 @@ All commands use the `/loop` prefix:
 
 ## Tool Parameters Reference
 
-### `loop_start`
+### `loop_prepare`
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -287,6 +312,11 @@ All commands use the `/loop` prefix:
 | `reflectEvery` | `integer` | No | 3 | Reflect every N iterations (0 to disable) |
 | `domains` | `string[]` | No | -- | Domain names to activate (e.g., `["code", "test"]`) |
 
+### `loop_launch`
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `loopId` | `string` | Yes | -- | ID of the loop to launch (must be in `manifest_building` state) |
 ### `loop_done`
 
 | Parameter | Type | Required | Default | Description |
@@ -297,6 +327,39 @@ All commands use the `/loop` prefix:
 | `findings` | `string[]` | No | -- | Issues or observations found |
 | `forceValidate` | `boolean` | No | `false` | Force transition to validating state |
 | `taskContent` | `string` | No | -- | Updated task content (replaces existing) |
+| `completedTickets` | `string[]` | No | -- | Ticket IDs completed in this iteration |
+| `activeTickets` | `string[]` | No | -- | Ticket IDs currently active |
+
+---
+
+## The Manifest Workflow
+
+The manifest system adds a pre-launch phase where work is decomposed into tickets with dependencies, gates, and acceptance criteria.
+
+### Ticket Structure
+
+Each ticket represents a discrete unit of work with:
+- **Dependencies**: `blockedBy` lists upstream tickets that must complete first
+- **Triggers**: Completing a ticket can automatically unblock downstream tickets
+- **Gates**: Per-ticket quality checks derived from spec properties
+- **Acceptance criteria**: Concrete, testable conditions for completion
+- **Effort estimate**: Expected time investment
+
+### Workflow
+
+1. **Prepare**: `loop_prepare` ingests specs and enters `manifest_building` state
+2. **Decompose**: Agent breaks task into tickets with dependencies and gates
+3. **Review**: Manifest displayed via TUI (`tui/manifest-display.ts`) or QML canvas (`qml/ManifestViewer.qml`)
+4. **Approve**: User reviews dependency tree, gate configuration, and effort estimates
+5. **Launch**: `loop_launch` validates manifest integrity and starts the plan-code-review cycle
+
+### Ticket Management During Iteration
+
+During iteration, tickets track progress:
+- `loop_done` accepts `completedTickets` and `activeTickets` arrays
+- Completing a ticket triggers dependency cascade (unblocks downstream tickets)
+- Spec drift is detected automatically; manifest merges preserve completed work
+
 
 ---
 
@@ -307,14 +370,19 @@ All commands use the `/loop` prefix:
 A basic loop for implementing a feature with type checking and tests:
 
 ```
-loop_start({
+loop_prepare({
   name: "add-user-search",
   taskContent: "Add full-text search to the user list endpoint with pagination",
   domains: ["code", "test"],
   maxIterations: 10,
   reflectEvery: 3
 })
-```
+
+// Build manifest: decompose into tickets, set dependencies...
+
+loop_launch({
+  loopId: "LOOP-1711721600000-add-user-search"
+})
 
 This creates a loop that:
 - Runs up to 10 plan-code-review iterations
@@ -337,14 +405,19 @@ When all iterations are done (or you call with `forceValidate: true`):
 A loop for sensitive work that needs security scanning and architecture validation:
 
 ```
-loop_start({
+loop_prepare({
   name: "payment-gateway",
   taskContent: "Integrate Stripe payment processing with webhook handling",
   domains: ["code", "test", "security", "architecture"],
   maxIterations: 20,
   reflectEvery: 5
 })
-```
+
+// Build manifest with tickets for: webhook handler, payment flow, error handling...
+
+loop_launch({
+  loopId: "LOOP-1711721600000-payment-gateway"
+})
 
 This adds:
 - `security-scan` gate: runs `git grep -n SECRET` on completion to catch leaked secrets
@@ -357,12 +430,17 @@ The reflection cadence is set to 5 to give more room between reviews for a large
 For high-stakes work requiring human oversight, you can force validation at key milestones:
 
 ```
-// Start the loop
-loop_start({
+// Prepare the loop
+loop_prepare({
   name: "database-migration",
   taskContent: "Migrate user table schema from v2 to v3 with zero downtime",
   domains: ["code", "test"],
   maxIterations: 30
+})
+
+// Build manifest, get approval, then launch
+loop_launch({
+  loopId: "LOOP-1711721600000-database-migration"
 })
 
 // ... several iterations of work ...
@@ -372,9 +450,9 @@ loop_done({
   loopId: "LOOP-1711721600000-database-migration",
   summary: "Schema migration scripts complete, ready for review",
   changedFiles: ["migrations/003_user_v3.sql", "src/models/user.ts"],
+  completedTickets: ["TICKET-001-schema-migration"],
   forceValidate: true
 })
-```
 
 Setting `forceValidate: true` transitions the loop to `validating` regardless of iteration count, triggering all `on-completion` gates. This is useful when you reach a natural checkpoint and want validation before continuing.
 
@@ -387,13 +465,13 @@ If the loop was started with human gates configured, the operator would need to 
 For reference, a loop moves through these states during its lifecycle:
 
 ```
-idle -> planning -> iterating -> planning -> iterating -> ...
-                                    |
-                                    v
-                               reflecting -> planning -> ...
-                                    |
-                                    v
-                               validating -> complete
+idle -> manifest_building -> planning -> iterating -> planning -> iterating -> ...
+                                                        |
+                                                        v
+                                                   reflecting -> planning -> ...
+                                                        |
+                                                        v
+                                                   validating -> complete
 ```
 
 Control states that can be entered from most active states:

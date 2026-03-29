@@ -5,6 +5,7 @@ export interface GateTriggerEvent {
 	iteration: number;
 	state: string;
 	childSignal?: ChildCompletionSignal;
+	ticketCompleted?: string;
 }
 
 export function shouldFire(gate: LoopGateConfig, event: GateTriggerEvent): boolean {
@@ -24,6 +25,8 @@ export function shouldFire(gate: LoopGateConfig, event: GateTriggerEvent): boole
 			return event.state === LOOP_STATES.validating;
 		case GATE_TRIGGERS.onChildComplete:
 			return event.childSignal !== undefined;
+		case GATE_TRIGGERS.onTicketComplete:
+			return event.ticketCompleted !== undefined;
 		default:
 			return false;
 	}

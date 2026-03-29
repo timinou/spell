@@ -10,6 +10,7 @@ import type {
 	IterationCheckpoint,
 	LoopRole,
 	LoopState,
+	TicketState,
 } from "./contracts";
 
 export interface LoopBudgetLimits {
@@ -34,6 +35,20 @@ export interface LoopPromptContext extends Record<string, unknown> {
 	changedFiles: string[];
 	openFindings: string[];
 	pendingGates: string[];
+	manifestTickets?: Array<{
+		id: string;
+		title: string;
+		state: string;
+		dependencies: string[];
+		hasGates: boolean;
+		effort?: string;
+		priority?: string;
+	}>;
+	manifestProgress?: string;
+	readyTickets?: string[];
+	activeTickets?: string[];
+	completedTickets?: string[];
+	manifestComplete?: boolean;
 }
 
 export interface LoopRoleSelection {
@@ -126,6 +141,36 @@ export interface LoopPendingHumanGate {
 	autoApproveAt?: number;
 }
 
+export interface ManifestTicket {
+	id: string;
+	title: string;
+	state: TicketState;
+	specPath?: string;
+	orgItemId?: string;
+	acceptanceCriteria: string[];
+	dependencies: string[];
+	triggers: string[];
+	gates: LoopGateConfig[];
+	effort?: string;
+	priority?: string;
+	layer?: string;
+	tags: string[];
+	changedFiles: string[];
+	findings: string[];
+	childLoopId?: string;
+	iterationHistory: number[];
+}
+
+export interface ManifestSnapshot {
+	version: number;
+	tickets: ManifestTicket[];
+	dependencyEdges: Array<{ from: string; to: string }>;
+	triggerRules: Array<{ source: string; target: string; keyword: string }>;
+	manifestOrgPath: string;
+	createdAt: number;
+	updatedAt: number;
+}
+
 export interface LoopSnapshot {
 	id: string;
 	name: string;
@@ -139,6 +184,7 @@ export interface LoopSnapshot {
 	updatedAt: number;
 	startedAt: number;
 	pausedAt?: number;
+	stateBeforePause?: LoopState;
 	completedAt?: number;
 	currentRole: LoopRole;
 	reflectEvery: number;
@@ -167,6 +213,7 @@ export interface LoopSnapshot {
 	reviewModelConfigured: boolean;
 	gitAvailable: boolean;
 	worktreePath?: string;
+	manifest?: ManifestSnapshot;
 }
 
 export interface LoopListEntry {
@@ -200,6 +247,7 @@ export interface StartLoopOptions {
 	failurePolicy?: LoopRetryPolicy;
 	autoApproveEnabled?: boolean;
 	useWorktree?: boolean;
+	manifestBuilding?: boolean;
 }
 
 export interface LoopAdvanceResult {
