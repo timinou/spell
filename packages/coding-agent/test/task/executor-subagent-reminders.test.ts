@@ -105,6 +105,40 @@ describe("runSubprocess submit_result reminders", () => {
 		enableLsp: false,
 	};
 
+	it("requests submit_result injection for subagent sessions", async () => {
+		const session = createMockSession(({ emit }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-submit-result",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		await runSubprocess({
+			...baseOptions,
+			id: "subagent-submit-result-injected",
+			agent: { ...baseAgent, tools: ["read"] },
+		});
+
+		const createAgentSessionMock = sdkModule.createAgentSession as unknown as {
+			mock: { calls: Array<[Record<string, unknown>]> };
+		};
+		expect(createAgentSessionMock.mock.calls).toHaveLength(1);
+		expect(createAgentSessionMock.mock.calls[0]?.[0]?.toolNames).toEqual(["read"]);
+		expect(createAgentSessionMock.mock.calls[0]?.[0]?.requireSubmitResultTool).toBe(true);
+	});
+
 	it("sends reminder prompt when subagent stops without submit_result", async () => {
 		const prompts: string[] = [];
 		const promptOptions: Array<PromptOptions | undefined> = [];

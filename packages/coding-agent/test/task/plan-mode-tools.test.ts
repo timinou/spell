@@ -8,7 +8,7 @@ import * as executorModule from "../../src/task/executor";
 import type { AgentDefinition, SingleResult } from "../../src/task/types";
 import type { ToolSession } from "../../src/tools/index";
 
-const READ_ONLY_PLAN_MODE_TOOLS = ["read", "grep", "find", "ls", "lsp", "fetch", "web_search"];
+const READ_ONLY_PLAN_MODE_TOOLS = ["read", "grep", "find", "ls", "lsp", "fetch", "web_search", "org"];
 
 const baseAgent: AgentDefinition = {
 	name: "task",
@@ -88,6 +88,7 @@ describe("TaskTool plan mode tool narrowing", () => {
 
 		const call = runSubprocessSpy.mock.calls[0]?.[0];
 		expect(call?.agent.tools).toEqual(READ_ONLY_PLAN_MODE_TOOLS);
+		expect(call?.agent.tools).toContain("org");
 		expect(call?.agent.tools).not.toContain("write");
 		expect(call?.agent.spawns).toBeUndefined();
 		expect(call?.agent.systemPrompt).not.toContain("Architecture notes and plan artifacts");

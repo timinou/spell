@@ -1334,7 +1334,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	const toolNamesFromRegistry = Array.from(toolRegistry.keys());
-	const requestedToolNames = options.toolNames?.map(name => name.toLowerCase()) ?? toolNamesFromRegistry;
+	const requestedToolNames = [...(options.toolNames?.map(name => name.toLowerCase()) ?? toolNamesFromRegistry)];
+	if (options.requireSubmitResultTool && toolRegistry.has("submit_result") && !requestedToolNames.includes("submit_result")) {
+		requestedToolNames.push("submit_result");
+	}
 	const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
 	const includeExitPlanMode = requestedToolNames.includes("exit_plan_mode");
 	const mcpDiscoveryEnabled = settings.get("mcp.discoveryMode") ?? false;

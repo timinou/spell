@@ -501,7 +501,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const renderedPlanModeSubagentPrompt = renderPromptTemplate(planModeSubagentPrompt, {
 			allowedFolders: planModeAllowedFolders.length > 0 ? planModeAllowedFolders : undefined,
 		});
-		const planModeTools = ["read", "grep", "find", "ls", "lsp", "fetch", "web_search"];
+		const planModeTools = ["read", "grep", "find", "ls", "lsp", "fetch", "web_search", "org"];
 		if (planModeAllowedFolders.length > 0) {
 			planModeTools.push("write", "edit");
 		}

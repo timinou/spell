@@ -894,7 +894,7 @@ Bundled agent definitions are implemented in `packages/coding-agent/src/task/age
 
 - `PI_BLOCKED_AGENT` prevents self-recursive spawn of a specific agent.
 - Parent spawn policy (`session.getSessionSpawns()`) gates whether a child can be launched.
-- In plan mode (`session.getPlanModeState?.().enabled`), effective subagent tools are replaced with a restricted set (`read`, `grep`, `find`, `ls`, `lsp`, `fetch`, `web_search`) and child spawning is disabled for that effective agent (`spawns: undefined`).
+- In plan mode (`session.getPlanModeState?.().enabled`), effective subagent tools are replaced with a restricted set (`read`, `grep`, `find`, `ls`, `lsp`, `fetch`, `web_search`, `org`) and child spawning is disabled for that effective agent (`spawns: undefined`).
 
 ## Execution Boundary: In-Process Session, Not OS Subprocess
 
