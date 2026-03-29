@@ -1,0 +1,345 @@
+#+TITLE: Audit Detection in Session Layer
+#+STATE: DONE
+#+SESSION_ID: 14a63e9e81d40ac3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-08-03-164Z_14a6364696d40ab5/7-CreateFeatB.jsonl]]
+#+CUSTOM_ID: FEAT-082-audit-detection-in-session-layer
+#+EFFORT: 3h
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate org items for the /audit phase feature. Each item follows the mandatory body standard.\n\n## Constraints\n- Use `org create` to create items\n- Category: `features` for all items\n- State: `ITEM` for all items\n- Include all mandatory sections: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria\n- File paths must be exact\n- Return the CUSTOM_ID of each created item
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item with:
+
+```
+org create:
+  category: features
+  title: Audit Detection in Session Layer
+  state: ITEM
+  properties:
+    EFFORT: 3h
+    PRIORITY: A
+    LAYER: coding-agent
+  body: (see below)
+```
+
+Body must include these sections:
+
+```
+* Scope
+** In-scope
+- Add ~#auditState~ field to ~AgentSession~ with public getter/setter
+- Add ~#auditSuggestCallback~ (Promise-based async callback for suggest mode popup bridge)
+- Change ~#checkTodoCompletion()~ return type from ~Promise<void>~ to ~Promise<boolean>~ (true = reminder was injected)
+- New ~#checkAuditPhase()~ method called after ~#checkTodoCompletion~ in ~agent_end~ handler
+- Import and inject ~plan-audit.md~ prompt via ~renderPromptTemplate()~
+- Add ~audit_suggest~ and ~audit_escalate~ to ~AgentSessionEvent~ union type
+- Emit ~audit_escalate~ event with last assistant message text when audit response is not clean
+
+** Out-of-scope
+- InteractiveMode lifecycle (FEAT-C sets the state and registers the callback)
+- UI overlays and status-line (FEAT-C)
+- /audit slash command (FEAT-C)
+
+Boundary rationale: This item owns all AgentSession modifications. The session detects completion and injects prompts; the interactive mode (FEAT-C) sets the state and handles escalation events.
+
+* Tests
+File: ~packages/coding-agent/test/session/audit-detection.test.ts~
+
+Define test scenarios before implementation steps. These scenarios drive the detection logic design:
+
+** Scenarios
+- ~#checkTodoCompletion~ returns false when all todos are complete (no reminder sent)
+- ~#checkTodoCompletion~ returns true when reminder is injected (incomplete todos)
+- ~#checkTodoCompletion~ returns false when no todos exist (phases.length === 0)
+- ~#checkAuditPhase~ injects audit prompt when ~auditState.pending === "auto"~ and checkTodoCompletion returned false
+- ~#checkAuditPhase~ does NOT inject when ~auditState.pending === false~
+- ~#checkAuditPhase~ calls suggest callback when ~auditState.pending === "suggest"~
+- ~#checkAuditPhase~ skips injection when suggest callback returns false
+- ~#checkAuditPhase~ detects ~[AUDIT_CLEAN]~ in response and clears audit state
+- ~#checkAuditPhase~ emits ~audit_escalate~ when active=true and response is not clean
+- ~#checkAuditPhase~ does NOT fire during tool-call intermediate stops (hasToolCalls guard)
+- ~#checkAuditPhase~ does NOT fire on error/aborted stops
+- Audit state survives across agent turns within same session
+- Audit state is cleared on abort (stopReason === "aborted")
+
+* Implementation
+All changes in ~packages/coding-agent/src/session/agent-session.ts~:
+
+Implement in this order, satisfying test scenarios as you go:
+
+** Step 1: Add AuditState field and methods
+#+begin_src typescript
+import type { AuditState } from "../plan-mode/audit-state";
+import { isAuditClean } from "../plan-mode/audit-state";
+
+// Field (near other plan-mode fields ~line 380)
+#auditState: AuditState = { pending: false, active: false };
+#auditSuggestCallback?: () => Promise<boolean>;
+
+// Public setter/getter
+setAuditState(state: AuditState): void { this.#auditState = state; }
+getAuditState(): AuditState { return this.#auditState; }
+setAuditSuggestCallback(cb: (() => Promise<boolean>) | undefined): void { this.#auditSuggestCallback = cb; }
+#+end_src
+
+** Step 2: Modify #checkTodoCompletion return type
+Change ~async #checkTodoCompletion(): Promise<void>~ to ~Promise<boolean>~.
+Return ~false~ when ~incomplete.length === 0~ (all complete or no todos).
+Return ~false~ when reminders disabled/max reached (early returns).
+Return ~true~ after injecting a reminder and calling ~scheduleAgentContinue~.
+
+** Step 3: Update agent_end handler call site
+#+begin_src typescript
+// At line ~877, replace:
+// await this.#checkTodoCompletion();
+// With:
+const todoReminderSent = await this.#checkTodoCompletion();
+if (!todoReminderSent) {
+  await this.#checkAuditPhase();
+}
+#+end_src
+
+** Step 4: Implement #checkAuditPhase
+#+begin_src typescript
+async #checkAuditPhase(): Promise<void> {
+  const state = this.#auditState;
+
+  // Phase 2: Audit response received
+  if (state.active) {
+    this.#auditState = { pending: false, active: false };
+    const lastMsg = this.#getLastAssistantText();
+    if (!lastMsg || isAuditClean(lastMsg)) return; // Clean or empty
+    // Findings exist — emit escalation event
+    this.#emit({ type: "audit_escalate", auditContent: lastMsg });
+    return;
+  }
+
+  // Phase 1: Check if audit should trigger
+  if (state.pending === "auto") {
+    this.#auditState = { pending: false, active: true };
+    this.#injectAuditPrompt();
+    return;
+  }
+
+  if (state.pending === "suggest") {
+    if (!this.#auditSuggestCallback) return;
+    const proceed = await this.#auditSuggestCallback();
+    if (!proceed) {
+      this.#auditState = { pending: false, active: false };
+      return;
+    }
+    this.#auditState = { pending: false, active: true };
+    this.#injectAuditPrompt();
+    return;
+  }
+}
+#+end_src
+
+** Step 5: Implement #injectAuditPrompt helper
+Import ~plan-audit.md~ template, render with ~renderPromptTemplate~, inject as developer message, call ~#scheduleAgentContinue~.
+
+** Step 6: Add audit events to AgentSessionEvent union
+#+begin_src typescript
+// Add to union at ~line 171:
+| { type: "audit_suggest" }
+| { type: "audit_escalate"; auditContent: string }
+#+end_src
+
+** Step 7: Clear audit state on abort
+In the agent_end handler where ~stopReason === "aborted"~ is checked (around line 861-864), also clear audit state:
+#+begin_src typescript
+if (msg.stopReason === "aborted" && this.#checkpointState) {
+  this.#checkpointState = undefined;
+  this.#pendingRewindReport = undefined;
+}
+// Add: clear audit on abort
+if (msg.stopReason === "aborted" || msg.stopReason === "error") {
+  this.#auditState = { pending: false, active: false };
+}
+#+end_src
+
+** Step 8: #getLastAssistantText helper
+Extract text content from the last assistant message in this.agent.state.messages. Filter for text blocks, join, return.
+
+* Edge Cases
+- Agent stops with tool calls (intermediate stop): hasToolCalls guard at line 870 prevents reaching audit check
+- Agent stops with error/abort: cleared explicitly in step 7
+- Suggest callback throws: wrap in try-catch, treat as "skip"
+- Auto-compaction runs before audit check (line 867): audit still works because it only reads the last assistant message, which survives compaction
+- No todos exist (phases.length === 0): checkTodoCompletion returns false, audit still fires
+- Todo reminders disabled: checkTodoCompletion returns false early, audit fires (even with incomplete todos)
+- Multiple rapid agent_end events: active flag prevents double-injection; once active=true, next agent_end processes the response
+
+* Acceptance Criteria
+- All tests in ~audit-detection.test.ts~ pass
+- ~#checkTodoCompletion()~ return type is ~Promise<boolean>~ and existing callers handle it
+- ~#checkAuditPhase()~ correctly sequences: pending check → prompt injection → response detection → escalation event
+- No regressions in existing todo reminder behavior
+- ~bun check:ts~ passes for packages/coding-agent (focused check, not full workspace)
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-scope
+- Add ~#auditState~ field to ~AgentSession~ with public getter/setter
+- Add ~#auditSuggestCallback~ (Promise-based async callback for suggest mode popup bridge)
+- Change ~#checkTodoCompletion()~ return type from ~Promise<void>~ to ~Promise<boolean>~ (true = reminder was injected)
+- New ~#checkAuditPhase()~ method called after ~#checkTodoCompletion~ in ~agent_end~ handler
+- Import and inject ~plan-audit.md~ prompt via ~renderPromptTemplate()~
+- Add ~audit_suggest~ and ~audit_escalate~ to ~AgentSessionEvent~ union type
+- Emit ~audit_escalate~ event with last assistant message text when audit response is not clean
+
+** Out-of-scope
+- InteractiveMode lifecycle (FEAT-C sets the state and registers the callback)
+- UI overlays and status-line (FEAT-C)
+- /audit slash command (FEAT-C)
+
+Boundary rationale: This item owns all AgentSession modifications. The session detects completion and injects prompts; the interactive mode (FEAT-C) sets the state and handles escalation events.
+
+* Tests
+File: ~packages/coding-agent/test/session/audit-detection.test.ts~
+
+Define test scenarios before implementation steps. These scenarios drive the detection logic design:
+
+** Scenarios
+- ~#checkTodoCompletion~ returns false when all todos are complete (no reminder sent)
+- ~#checkTodoCompletion~ returns true when reminder is injected (incomplete todos)
+- ~#checkTodoCompletion~ returns false when no todos exist (phases.length === 0)
+- ~#checkAuditPhase~ injects audit prompt when ~auditState.pending === "auto"~ and checkTodoCompletion returned false
+- ~#checkAuditPhase~ does NOT inject when ~auditState.pending === false~
+- ~#checkAuditPhase~ calls suggest callback when ~auditState.pending === "suggest"~
+- ~#checkAuditPhase~ skips injection when suggest callback returns false
+- ~#checkAuditPhase~ detects ~[AUDIT_CLEAN]~ in response and clears audit state
+- ~#checkAuditPhase~ emits ~audit_escalate~ when active=true and response is not clean
+- ~#checkAuditPhase~ does NOT fire during tool-call intermediate stops (hasToolCalls guard)
+- ~#checkAuditPhase~ does NOT fire on error/aborted stops
+- Audit state survives across agent turns within same session
+- Audit state is cleared on abort (stopReason === "aborted")
+
+* Implementation
+All changes in ~packages/coding-agent/src/session/agent-session.ts~:
+
+Implement in this order, satisfying test scenarios as you go:
+
+** Step 1: Add AuditState field and methods
+#+begin_src typescript
+import type { AuditState } from "../plan-mode/audit-state";
+import { isAuditClean } from "../plan-mode/audit-state";
+
+// Field (near other plan-mode fields ~line 380)
+#auditState: AuditState = { pending: false, active: false };
+#auditSuggestCallback?: () => Promise<boolean>;
+
+// Public setter/getter
+setAuditState(state: AuditState): void { this.#auditState = state; }
+getAuditState(): AuditState { return this.#auditState; }
+setAuditSuggestCallback(cb: (() => Promise<boolean>) | undefined): void { this.#auditSuggestCallback = cb; }
+#+end_src
+
+** Step 2: Modify #checkTodoCompletion return type
+Change ~async #checkTodoCompletion(): Promise<void>~ to ~Promise<boolean>~.
+Return ~false~ when ~incomplete.length === 0~ (all complete or no todos).
+Return ~false~ when reminders disabled/max reached (early returns).
+Return ~true~ after injecting a reminder and calling ~scheduleAgentContinue~.
+
+** Step 3: Update agent_end handler call site
+#+begin_src typescript
+// At line ~877, replace:
+// await this.#checkTodoCompletion();
+// With:
+const todoReminderSent = await this.#checkTodoCompletion();
+if (!todoReminderSent) {
+  await this.#checkAuditPhase();
+}
+#+end_src
+
+** Step 4: Implement #checkAuditPhase
+#+begin_src typescript
+async #checkAuditPhase(): Promise<void> {
+  const state = this.#auditState;
+
+  // Phase 2: Audit response received
+  if (state.active) {
+    this.#auditState = { pending: false, active: false };
+    const lastMsg = this.#getLastAssistantText();
+    if (!lastMsg || isAuditClean(lastMsg)) return; // Clean or empty
+    // Findings exist — emit escalation event
+    this.#emit({ type: "audit_escalate", auditContent: lastMsg });
+    return;
+  }
+
+  // Phase 1: Check if audit should trigger
+  if (state.pending === "auto") {
+    this.#auditState = { pending: false, active: true };
+    this.#injectAuditPrompt();
+    return;
+  }
+
+  if (state.pending === "suggest") {
+    if (!this.#auditSuggestCallback) return;
+    const proceed = await this.#auditSuggestCallback();
+    if (!proceed) {
+      this.#auditState = { pending: false, active: false };
+      return;
+    }
+    this.#auditState = { pending: false, active: true };
+    this.#injectAuditPrompt();
+    return;
+  }
+}
+#+end_src
+
+** Step 5: Implement #injectAuditPrompt helper
+Import ~plan-audit.md~ template, render with ~renderPromptTemplate~, inject as developer message, call ~#scheduleAgentContinue~.
+
+** Step 6: Add audit events to AgentSessionEvent union
+#+begin_src typescript
+// Add to union at ~line 171:
+| { type: "audit_suggest" }
+| { type: "audit_escalate"; auditContent: string }
+#+end_src
+
+** Step 7: Clear audit state on abort
+In the agent_end handler where ~stopReason === "aborted"~ is checked (around line 861-864), also clear audit state:
+#+begin_src typescript
+if (msg.stopReason === "aborted" && this.#checkpointState) {
+  this.#checkpointState = undefined;
+  this.#pendingRewindReport = undefined;
+}
+// Add: clear audit on abort
+if (msg.stopReason === "aborted" || msg.stopReason === "error") {
+  this.#auditState = { pending: false, active: false };
+}
+#+end_src
+
+** Step 8: #getLastAssistantText helper
+Extract text content from the last assistant message in this.agent.state.messages. Filter for text blocks, join, return.
+
+* Edge Cases
+- Agent stops with tool calls (intermediate stop): hasToolCalls guard at line 870 prevents reaching audit check
+- Agent stops with error/abort: cleared explicitly in step 7
+- Suggest callback throws: wrap in try-catch, treat as "skip"
+- Auto-compaction runs before audit check (line 867): audit still works because it only reads the last assistant message, which survives compaction
+- No todos exist (phases.length === 0): checkTodoCompletion returns false, audit still fires
+- Todo reminders disabled: checkTodoCompletion returns false early, audit fires (even with incomplete todos)
+- Multiple rapid agent_end events: active flag prevents double-injection; once active=true, next agent_end processes the response
+
+* Acceptance Criteria
+- All tests in ~audit-detection.test.ts~ pass
+- ~#checkTodoCompletion()~ return type is ~Promise<boolean>~ and existing callers handle it
+- ~#checkAuditPhase()~ correctly sequences: pending check → prompt injection → response detection → escalation event
+- No regressions in existing todo reminder behavior
+- ~bun check:ts~ passes for packages/coding-agent (focused check, not full workspace)

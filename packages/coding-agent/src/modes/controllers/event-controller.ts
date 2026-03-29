@@ -553,6 +553,12 @@ export class EventController {
 			case "todo_auto_clear":
 				await this.ctx.reloadTodos();
 				break;
+			case "audit_escalate":
+				await this.ctx.handleAuditEscalation(event.auditContent);
+				break;
+			case "audit_suggest":
+				this.ctx.showAuditOverlay();
+				break;
 		}
 	}
 

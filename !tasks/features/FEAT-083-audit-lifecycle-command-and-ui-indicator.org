@@ -1,0 +1,413 @@
+#+TITLE: Audit Lifecycle Command and UI Indicators
+#+STATE: DONE
+#+SESSION_ID: 14a63e9e83540ac7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-08-03-164Z_14a6364696d40ab5/8-CreateFeatC.jsonl]]
+#+CUSTOM_ID: FEAT-083-audit-lifecycle-command-and-ui-indicator
+#+EFFORT: 3h
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate org items for the /audit phase feature. Each item follows the mandatory body standard.\n\n## Constraints\n- Use `org create` to create items\n- Category: `features` for all items\n- State: `ITEM` for all items\n- Include all mandatory sections: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria\n- File paths must be exact\n- Return the CUSTOM_ID of each created item
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item with:
+
+```
+org create:
+  category: features
+  title: Audit Lifecycle, Command, and UI Indicators
+  state: ITEM
+  properties:
+    EFFORT: 3h
+    PRIORITY: A
+    LAYER: coding-agent
+  body: (see below)
+```
+
+Body must include these sections:
+
+```
+* Scope
+** In-scope
+- Track audit depth (~#auditDepth~, ~#auditMaxDepth~) on InteractiveMode (survives session clears)
+- Set audit pending in ~#approvePlan()~ based on ultraplan flag
+- Register suggest callback on session (show popup selector)
+- Handle ~audit_escalate~ event in event-controller: enter ultraplan with audit findings
+- Handle ~audit_suggest~ event in event-controller: show popup selector
+- ~/audit~ slash command registration and handler
+- Wire ~AuditModeOverlay~ show/hide in InteractiveMode
+- Status-line audit segment with full type integration
+- Distinguish audit-triggered plan mode from user-triggered (for depth reset logic)
+
+** Out-of-scope
+- AuditState type definition (FEAT-A)
+- Session detection logic (FEAT-B)
+- Prompt template (FEAT-A)
+
+Boundary rationale: This item owns all interactive-mode and UI modifications. It consumes the session API from FEAT-B and the foundation artifacts from FEAT-A.
+
+* Tests
+File: ~packages/coding-agent/test/modes/audit-lifecycle.test.ts~
+
+Scenarios drive design — define before implementation:
+
+** Scenarios
+- ~#approvePlan~ with ultraplan=true sets audit pending="auto" on session
+- ~#approvePlan~ with ultraplan=false sets audit pending="suggest" on session
+- ~#approvePlan~ with ~#isAuditEscalation=true~ does NOT set audit pending (prevents infinite escalation beyond max depth... actually it should set it until depth >= maxDepth)
+- ~#approvePlan~ resets ~#auditDepth~ to 0 when NOT an audit-escalation approval
+- Suggest callback shows popup and returns true when user selects "Run audit"
+- Suggest callback returns false when user selects "Skip"
+- ~audit_escalate~ handler: enters ultraplan, increments depth, injects audit content as initial prompt
+- ~audit_escalate~ handler: when depth >= maxDepth, does NOT enter ultraplan (audit is final)
+- ~/audit~ command injects audit prompt when not in plan mode
+- ~/audit~ command shows error when plan mode is active
+- Audit overlay shows with correct depth/maxDepth values
+- Audit overlay hides when audit completes
+- Status line shows audit segment when audit is active
+
+* Implementation
+** Step 1: Add audit fields to InteractiveMode (~interactive-mode.ts~)
+#+begin_src typescript
+// Near other plan-mode fields (~line 181)
+#auditDepth = 0;
+#auditMaxDepth = 2;
+#isAuditEscalation = false;
+#auditOverlay: AuditModeOverlay | undefined;
+#auditOverlayHandle: OverlayHandle | undefined;
+#+end_src
+
+** Step 2: Modify #approvePlan (~interactive-mode.ts~, line 959)
+After existing approval logic, before ~session.prompt()~:
+#+begin_src typescript
+// Set audit state based on whether this was ultraplan
+if (!this.#isAuditEscalation || this.#auditDepth < this.#auditMaxDepth) {
+  this.session.setAuditState({
+    pending: this.planModeUltraplan ? "auto" : "suggest",
+    active: false,
+  });
+} else {
+  // Max depth reached, no more audits
+  this.session.setAuditState({ pending: false, active: false });
+}
+// Reset depth for non-audit approvals
+if (!this.#isAuditEscalation) {
+  this.#auditDepth = 0;
+}
+this.#isAuditEscalation = false;
+#+end_src
+
+** Step 3: Register suggest callback (~interactive-mode.ts~)
+In session initialization (where other callbacks are registered):
+#+begin_src typescript
+this.session.setAuditSuggestCallback(async () => {
+  const choice = await this.showHookSelector(
+    "Implementation complete",
+    ["Run audit", "Skip audit"],
+  );
+  return choice === "Run audit";
+});
+#+end_src
+
+** Step 4: Handle audit_escalate in event-controller (~event-controller.ts~)
+In the event switch statement, add case for audit_escalate:
+#+begin_src typescript
+if (event.type === "audit_escalate") {
+  await this.ctx.handleAuditEscalation(event.auditContent);
+}
+#+end_src
+
+** Step 5: Implement handleAuditEscalation (~interactive-mode.ts~)
+#+begin_src typescript
+async handleAuditEscalation(auditContent: string): Promise<void> {
+  if (this.#auditDepth >= this.#auditMaxDepth) {
+    this.showStatus("Audit depth limit reached. Review audit findings manually.");
+    this.#hideAuditOverlay();
+    return;
+  }
+  this.#auditDepth++;
+  this.#isAuditEscalation = true;
+  this.#hideAuditOverlay();
+  // Enter ultraplan with audit findings
+  await this.handlePlanModeCommand(
+    `Implement these audit recommendations:\n\n${auditContent}`,
+    { ultraplan: true },
+  );
+}
+#+end_src
+
+** Step 6: Add /audit slash command (~builtin-registry.ts~)
+#+begin_src typescript
+{
+  name: "audit",
+  description: "Run an implementation audit (checks for polish, hardening, and improvement opportunities)",
+  handle: async (_command, runtime) => {
+    await runtime.ctx.handleAuditCommand();
+    runtime.ctx.editor.setText("");
+  },
+},
+#+end_src
+
+** Step 7: Implement handleAuditCommand (~interactive-mode.ts~)
+#+begin_src typescript
+async handleAuditCommand(): Promise<void> {
+  if (this.planModeEnabled) {
+    this.showWarning("Cannot audit during plan mode.");
+    return;
+  }
+  // Manual audit: inject prompt directly
+  this.session.setAuditState({ pending: false, active: true });
+  this.#showAuditOverlay();
+  // Session's #injectAuditPrompt is private; use session.prompt() with rendered template
+  const prompt = renderPromptTemplate(planAuditPrompt, {
+    auditDepth: this.#auditDepth,
+    maxDepth: this.#auditMaxDepth,
+  });
+  await this.session.prompt(prompt, { synthetic: true });
+}
+#+end_src
+
+** Step 8: Wire AuditModeOverlay show/hide (~interactive-mode.ts~)
+Follow ~#showPlanModeOverlay~ / ~#hidePlanModeOverlay~ pattern:
+- ~#showAuditOverlay()~: create or update overlay, show at top-left (different anchor from plan mode overlay at top-right)
+- ~#hideAuditOverlay()~: hide and clear overlay handle
+- Call ~#showAuditOverlay()~ when audit becomes active (in suggest callback, in auto trigger via event, in /audit command)
+- Call ~#hideAuditOverlay()~ when audit completes (clean or escalated)
+
+** Step 9: Add handleAuditCommand and handleAuditEscalation to InteractiveModeContext (~types.ts~)
+#+begin_src typescript
+handleAuditCommand(): Promise<void>;
+handleAuditEscalation(auditContent: string): Promise<void>;
+#+end_src
+
+** Step 10: Status-line audit segment
+Files to modify:
+- ~packages/coding-agent/src/config/settings-schema.ts~: Add ~"audit"~ to ~StatusLineSegmentId~ union
+- ~packages/coding-agent/src/modes/components/status-line/types.ts~: Add ~auditMode?: { active: boolean; depth: number; maxDepth: number }~ to ~SegmentContext~
+- ~packages/coding-agent/src/modes/components/status-line.ts~: Add ~setAuditStatus(status)~ method following ~setPlanModeStatus~ pattern
+- ~packages/coding-agent/src/modes/components/status-line/segments.ts~: Add ~auditSegment~ to SEGMENTS registry
+
+auditSegment renders: ~"Audit 1/2"~ when active, hidden otherwise.
+
+** Step 11: Update status line from InteractiveMode
+Call ~this.statusLine.setAuditStatus(...)~ when audit state changes (active, depth change, clear).
+
+* Edge Cases
+- ~/audit~ during plan mode: show warning, reject
+- ~/audit~ during active audit: show warning "Audit already in progress"
+- Audit escalation at max depth: show status message, do not enter ultraplan
+- User dismisses suggest popup (Escape): treat as "Skip"
+- handleClearCommand during audit: audit overlay should be hidden, state on InteractiveMode survives but session state is cleared
+- Plan mode overlay and audit overlay coexist: different anchors (top-right vs top-left)
+- Abort during audit-driven ultraplan: #isAuditEscalation stays true until next #approvePlan; if user manually runs /plan, isAuditEscalation is stale — reset on /plan entry
+
+* Acceptance Criteria
+- All tests in ~audit-lifecycle.test.ts~ pass
+- Ultraplan → execute → audit auto-triggers (observable: audit overlay appears, prompt is injected)
+- /plan → execute → suggest popup appears with "Run audit" / "Skip audit"
+- Audit with findings → ultraplan mode enters (observable: "Grand Scheme" overlay)
+- Audit with [AUDIT_CLEAN] → no escalation, overlay dismissed
+- Depth counter increments on each escalation, stops at maxDepth
+- ~/audit~ command works outside plan mode
+- Status line shows "Audit 1/2" during active audit
+- Overlay badge shows "Audit 1/2" at top-left
+- ~bun check:ts~ passes for packages/coding-agent
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-scope
+- Track audit depth (~#auditDepth~, ~#auditMaxDepth~) on InteractiveMode (survives session clears)
+- Set audit pending in ~#approvePlan()~ based on ultraplan flag
+- Register suggest callback on session (show popup selector)
+- Handle ~audit_escalate~ event in event-controller: enter ultraplan with audit findings
+- Handle ~audit_suggest~ event in event-controller: show popup selector
+- ~/audit~ slash command registration and handler
+- Wire ~AuditModeOverlay~ show/hide in InteractiveMode
+- Status-line audit segment with full type integration
+- Distinguish audit-triggered plan mode from user-triggered (for depth reset logic)
+
+** Out-of-scope
+- AuditState type definition (FEAT-A)
+- Session detection logic (FEAT-B)
+- Prompt template (FEAT-A)
+
+Boundary rationale: This item owns all interactive-mode and UI modifications. It consumes the session API from FEAT-B and the foundation artifacts from FEAT-A.
+
+* Tests
+File: ~packages/coding-agent/test/modes/audit-lifecycle.test.ts~
+
+Scenarios drive design — define before implementation:
+
+** Scenarios
+- ~#approvePlan~ with ultraplan=true sets audit pending="auto" on session
+- ~#approvePlan~ with ultraplan=false sets audit pending="suggest" on session
+- ~#approvePlan~ with ~#isAuditEscalation=true~ does NOT set audit pending (prevents infinite escalation beyond max depth... actually it should set it until depth >= maxDepth)
+- ~#approvePlan~ resets ~#auditDepth~ to 0 when NOT an audit-escalation approval
+- Suggest callback shows popup and returns true when user selects "Run audit"
+- Suggest callback returns false when user selects "Skip"
+- ~audit_escalate~ handler: enters ultraplan, increments depth, injects audit content as initial prompt
+- ~audit_escalate~ handler: when depth >= maxDepth, does NOT enter ultraplan (audit is final)
+- ~/audit~ command injects audit prompt when not in plan mode
+- ~/audit~ command shows error when plan mode is active
+- Audit overlay shows with correct depth/maxDepth values
+- Audit overlay hides when audit completes
+- Status line shows audit segment when audit is active
+
+* Implementation
+** Step 1: Add audit fields to InteractiveMode (~interactive-mode.ts~)
+#+begin_src typescript
+// Near other plan-mode fields (~line 181)
+#auditDepth = 0;
+#auditMaxDepth = 2;
+#isAuditEscalation = false;
+#auditOverlay: AuditModeOverlay | undefined;
+#auditOverlayHandle: OverlayHandle | undefined;
+#+end_src
+
+** Step 2: Modify #approvePlan (~interactive-mode.ts~, line 959)
+After existing approval logic, before ~session.prompt()~:
+#+begin_src typescript
+// Set audit state based on whether this was ultraplan
+if (!this.#isAuditEscalation || this.#auditDepth < this.#auditMaxDepth) {
+  this.session.setAuditState({
+    pending: this.planModeUltraplan ? "auto" : "suggest",
+    active: false,
+  });
+} else {
+  // Max depth reached, no more audits
+  this.session.setAuditState({ pending: false, active: false });
+}
+// Reset depth for non-audit approvals
+if (!this.#isAuditEscalation) {
+  this.#auditDepth = 0;
+}
+this.#isAuditEscalation = false;
+#+end_src
+
+** Step 3: Register suggest callback (~interactive-mode.ts~)
+In session initialization (where other callbacks are registered):
+#+begin_src typescript
+this.session.setAuditSuggestCallback(async () => {
+  const choice = await this.showHookSelector(
+    "Implementation complete",
+    ["Run audit", "Skip audit"],
+  );
+  return choice === "Run audit";
+});
+#+end_src
+
+** Step 4: Handle audit_escalate in event-controller (~event-controller.ts~)
+In the event switch statement, add case for audit_escalate:
+#+begin_src typescript
+if (event.type === "audit_escalate") {
+  await this.ctx.handleAuditEscalation(event.auditContent);
+}
+#+end_src
+
+** Step 5: Implement handleAuditEscalation (~interactive-mode.ts~)
+#+begin_src typescript
+async handleAuditEscalation(auditContent: string): Promise<void> {
+  if (this.#auditDepth >= this.#auditMaxDepth) {
+    this.showStatus("Audit depth limit reached. Review audit findings manually.");
+    this.#hideAuditOverlay();
+    return;
+  }
+  this.#auditDepth++;
+  this.#isAuditEscalation = true;
+  this.#hideAuditOverlay();
+  // Enter ultraplan with audit findings
+  await this.handlePlanModeCommand(
+    `Implement these audit recommendations:\n\n${auditContent}`,
+    { ultraplan: true },
+  );
+}
+#+end_src
+
+** Step 6: Add /audit slash command (~builtin-registry.ts~)
+#+begin_src typescript
+{
+  name: "audit",
+  description: "Run an implementation audit (checks for polish, hardening, and improvement opportunities)",
+  handle: async (_command, runtime) => {
+    await runtime.ctx.handleAuditCommand();
+    runtime.ctx.editor.setText("");
+  },
+},
+#+end_src
+
+** Step 7: Implement handleAuditCommand (~interactive-mode.ts~)
+#+begin_src typescript
+async handleAuditCommand(): Promise<void> {
+  if (this.planModeEnabled) {
+    this.showWarning("Cannot audit during plan mode.");
+    return;
+  }
+  // Manual audit: inject prompt directly
+  this.session.setAuditState({ pending: false, active: true });
+  this.#showAuditOverlay();
+  // Session's #injectAuditPrompt is private; use session.prompt() with rendered template
+  const prompt = renderPromptTemplate(planAuditPrompt, {
+    auditDepth: this.#auditDepth,
+    maxDepth: this.#auditMaxDepth,
+  });
+  await this.session.prompt(prompt, { synthetic: true });
+}
+#+end_src
+
+** Step 8: Wire AuditModeOverlay show/hide (~interactive-mode.ts~)
+Follow ~#showPlanModeOverlay~ / ~#hidePlanModeOverlay~ pattern:
+- ~#showAuditOverlay()~: create or update overlay, show at top-left (different anchor from plan mode overlay at top-right)
+- ~#hideAuditOverlay()~: hide and clear overlay handle
+- Call ~#showAuditOverlay()~ when audit becomes active (in suggest callback, in auto trigger via event, in /audit command)
+- Call ~#hideAuditOverlay()~ when audit completes (clean or escalated)
+
+** Step 9: Add handleAuditCommand and handleAuditEscalation to InteractiveModeContext (~types.ts~)
+#+begin_src typescript
+handleAuditCommand(): Promise<void>;
+handleAuditEscalation(auditContent: string): Promise<void>;
+#+end_src
+
+** Step 10: Status-line audit segment
+Files to modify:
+- ~packages/coding-agent/src/config/settings-schema.ts~: Add ~"audit"~ to ~StatusLineSegmentId~ union
+- ~packages/coding-agent/src/modes/components/status-line/types.ts~: Add ~auditMode?: { active: boolean; depth: number; maxDepth: number }~ to ~SegmentContext~
+- ~packages/coding-agent/src/modes/components/status-line.ts~: Add ~setAuditStatus(status)~ method following ~setPlanModeStatus~ pattern
+- ~packages/coding-agent/src/modes/components/status-line/segments.ts~: Add ~auditSegment~ to SEGMENTS registry
+
+auditSegment renders: ~"Audit 1/2"~ when active, hidden otherwise.
+
+** Step 11: Update status line from InteractiveMode
+Call ~this.statusLine.setAuditStatus(...)~ when audit state changes (active, depth change, clear).
+
+* Edge Cases
+- ~/audit~ during plan mode: show warning, reject
+- ~/audit~ during active audit: show warning "Audit already in progress"
+- Audit escalation at max depth: show status message, do not enter ultraplan
+- User dismisses suggest popup (Escape): treat as "Skip"
+- handleClearCommand during audit: audit overlay should be hidden, state on InteractiveMode survives but session state is cleared
+- Plan mode overlay and audit overlay coexist: different anchors (top-right vs top-left)
+- Abort during audit-driven ultraplan: #isAuditEscalation stays true until next #approvePlan; if user manually runs /plan, isAuditEscalation is stale — reset on /plan entry
+
+* Acceptance Criteria
+- All tests in ~audit-lifecycle.test.ts~ pass
+- Ultraplan → execute → audit auto-triggers (observable: audit overlay appears, prompt is injected)
+- /plan → execute → suggest popup appears with "Run audit" / "Skip audit"
+- Audit with findings → ultraplan mode enters (observable: "Grand Scheme" overlay)
+- Audit with [AUDIT_CLEAN] → no escalation, overlay dismissed
+- Depth counter increments on each escalation, stops at maxDepth
+- ~/audit~ command works outside plan mode
+- Status line shows "Audit 1/2" during active audit
+- Overlay badge shows "Audit 1/2" at top-left
+- ~bun check:ts~ passes for packages/coding-agent

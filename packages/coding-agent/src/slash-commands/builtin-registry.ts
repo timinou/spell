@@ -110,6 +110,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "audit",
+		description: "Run an implementation audit (checks for polish, hardening, and improvement opportunities)",
+		handle: async (_command, runtime) => {
+			await runtime.ctx.handleAuditCommand();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "model",
 		aliases: ["models"],
 		description: "Select model (opens selector UI)",

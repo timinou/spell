@@ -100,11 +100,14 @@ import {
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../patch";
 import { listPlanModeAllowedFolders } from "../plan-mode/allowed-folders";
+import type { AuditState } from "../plan-mode/audit-state";
+import { isAuditClean } from "../plan-mode/audit-state";
 import { buildOrgConfig, resolvePlanItem } from "../plan-mode/org-plan";
 import type { PlanModeState } from "../plan-mode/state";
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import handoffDocumentPrompt from "../prompts/system/handoff-document.md" with { type: "text" };
+import planAuditPrompt from "../prompts/system/plan-audit.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
@@ -169,7 +172,9 @@ export type AgentSessionEvent =
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { type: "ttsr_triggered"; rules: Rule[] }
 	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
-	| { type: "todo_auto_clear" };
+	| { type: "todo_auto_clear" }
+	| { type: "audit_suggest" }
+	| { type: "audit_escalate"; auditContent: string };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -380,6 +385,10 @@ export class AgentSession {
 	#planModeState: PlanModeState | undefined;
 	#planReferenceSent = false;
 	#planReferencePath = "local://PLAN.md";
+
+	// Audit state
+	#auditState: AuditState = { pending: false, active: false };
+	#auditSuggestCallback?: () => Promise<boolean>;
 
 	// Compaction state
 	#compactionAbortController: AbortController | undefined = undefined;
@@ -863,6 +872,10 @@ export class AgentSession {
 				this.#checkpointState = undefined;
 				this.#pendingRewindReport = undefined;
 			}
+			// Clear audit state on abort/error to avoid stale flags
+			if (msg.stopReason === "aborted" || msg.stopReason === "error") {
+				this.#auditState = { pending: false, active: false };
+			}
 			const compactionTask = this.#checkCompaction(msg);
 			this.#trackPostPromptTask(compactionTask);
 			await compactionTask;
@@ -875,7 +888,10 @@ export class AgentSession {
 				if (this.#enforceRewindBeforeYield()) {
 					return;
 				}
-				await this.#checkTodoCompletion();
+				const todoReminderSent = await this.#checkTodoCompletion();
+				if (!todoReminderSent) {
+					await this.#checkAuditPhase();
+				}
 			}
 		}
 	};
@@ -1970,6 +1986,18 @@ export class AgentSession {
 
 	setPlanReferencePath(path: string): void {
 		this.#planReferencePath = path;
+	}
+
+	getAuditState(): AuditState {
+		return this.#auditState;
+	}
+
+	setAuditState(state: AuditState): void {
+		this.#auditState = state;
+	}
+
+	setAuditSuggestCallback(cb: (() => Promise<boolean>) | undefined): void {
+		this.#auditSuggestCallback = cb;
 	}
 
 	getLoopManager(): LoopManager | undefined {
@@ -3922,25 +3950,26 @@ export class AgentSession {
 	}
 	/**
 	 * Check if agent stopped with incomplete todos and prompt to continue.
+	 * Returns true if a reminder was injected (agent will continue).
 	 */
-	async #checkTodoCompletion(): Promise<void> {
+	async #checkTodoCompletion(): Promise<boolean> {
 		const remindersEnabled = this.settings.get("todo.reminders");
 		const todosEnabled = this.settings.get("todo.enabled");
 		if (!remindersEnabled || !todosEnabled) {
 			this.#todoReminderCount = 0;
-			return;
+			return false;
 		}
 
 		const remindersMax = this.settings.get("todo.reminders.max");
 		if (this.#todoReminderCount >= remindersMax) {
 			logger.debug("Todo completion: max reminders reached", { count: this.#todoReminderCount });
-			return;
+			return false;
 		}
 
 		const phases = this.getTodoPhases();
 		if (phases.length === 0) {
 			this.#todoReminderCount = 0;
-			return;
+			return false;
 		}
 
 		const incompleteByPhase = phases
@@ -3957,7 +3986,7 @@ export class AgentSession {
 		const incomplete = incompleteByPhase.flatMap(phase => phase.tasks);
 		if (incomplete.length === 0) {
 			this.#todoReminderCount = 0;
-			return;
+			return false;
 		}
 
 		// Build reminder message
@@ -3993,6 +4022,79 @@ export class AgentSession {
 			timestamp: Date.now(),
 		});
 		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
+		return true;
+	}
+
+	/**
+	 * Check if an audit phase should trigger or if an audit response needs processing.
+	 * Called after checkTodoCompletion returns false (no reminder sent).
+	 */
+	async #checkAuditPhase(): Promise<void> {
+		const state = this.#auditState;
+
+		// Phase 2: Audit response received — check if findings exist
+		if (state.active) {
+			this.#auditState = { pending: false, active: false };
+			const lastMsg = this.#getLastAssistantText();
+			if (!lastMsg || isAuditClean(lastMsg)) return; // Clean or empty — done
+			// Findings exist — emit escalation event for the mode layer to handle
+			await this.#emitSessionEvent({ type: "audit_escalate", auditContent: lastMsg });
+			return;
+		}
+
+		// Phase 1: Check if audit should trigger
+		if (state.pending === "auto") {
+			this.#auditState = { pending: false, active: true };
+			await this.#emitSessionEvent({ type: "audit_suggest" });
+			this.#injectAuditPrompt();
+			return;
+		}
+
+		if (state.pending === "suggest") {
+			if (!this.#auditSuggestCallback) return;
+			let proceed = false;
+			try {
+				proceed = await this.#auditSuggestCallback();
+			} catch {
+				// Callback threw — treat as skip
+			}
+			if (!proceed) {
+				this.#auditState = { pending: false, active: false };
+				return;
+			}
+			this.#auditState = { pending: false, active: true };
+			await this.#emitSessionEvent({ type: "audit_suggest" });
+			this.#injectAuditPrompt();
+		}
+	}
+
+	/**
+	 * Inject the audit prompt as a developer message and schedule agent continuation.
+	 */
+	#injectAuditPrompt(): void {
+		const rendered = renderPromptTemplate(planAuditPrompt, {});
+		this.agent.appendMessage({
+			role: "developer",
+			content: [{ type: "text", text: rendered }],
+			attribution: "agent",
+			timestamp: Date.now(),
+		});
+		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
+	}
+
+	/**
+	 * Extract the text content from the last assistant message in the conversation.
+	 */
+	#getLastAssistantText(): string | undefined {
+		const messages = this.agent.state.messages;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const msg = messages[i];
+			if (msg.role === "assistant") {
+				const parts = msg.content.filter((c): c is TextContent => c.type === "text").map(c => c.text);
+				return parts.length > 0 ? parts.join("\n") : undefined;
+			}
+		}
+		return undefined;
 	}
 
 	/**

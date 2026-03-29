@@ -220,6 +220,9 @@ export interface InteractiveModeContext {
 	registerExtensionShortcuts(): void;
 	handlePlanModeCommand(initialPrompt?: string, options?: { ultraplan?: boolean; flavor?: "design" }): Promise<void>;
 	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;
+	handleAuditCommand(): Promise<void>;
+	handleAuditEscalation(auditContent: string): Promise<void>;
+	showAuditOverlay(): void;
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;

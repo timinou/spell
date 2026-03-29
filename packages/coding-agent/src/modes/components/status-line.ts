@@ -101,6 +101,12 @@ export class StatusLineComponent implements Component {
 		this.#planModeStatus = status ?? null;
 	}
 
+	#auditStatus?: { active: boolean; depth: number; maxDepth: number };
+
+	setAuditStatus(status: { active: boolean; depth: number; maxDepth: number } | undefined): void {
+		this.#auditStatus = status;
+	}
+
 	setHookStatus(key: string, text: string | undefined): void {
 		if (text === undefined) {
 			this.#hookStatuses.delete(key);
@@ -371,6 +377,7 @@ export class StatusLineComponent implements Component {
 			width,
 			options: this.#resolveSettings().segmentOptions ?? {},
 			planMode: this.#planModeStatus,
+			auditMode: this.#auditStatus,
 			usageStats,
 			contextPercent,
 			contextWindow,

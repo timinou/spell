@@ -1,0 +1,125 @@
+#+TITLE: Audit Phase for Plan Execution
+#+STATE: DONE
+#+SESSION_ID: 14a6364696d40ab5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-08-03-164Z_14a6364696d40ab5.jsonl]]
+#+CUSTOM_ID: PLAN-027-audit-phase-for-plan-execution
+#+EFFORT: 7h
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+
+* Initial Message
+
+I want you to create a /audit phase (that is automatically launched for any implementation that used ultraplan, and is asked to be launched for the /plan phases) that injects something like this as a follow-up prompt upon completion of the plan:
+
+"""
+anything to work on as a follow-up for polish or hardening? show me your audit before I validate
+"""
+
+
+Then, if the audit brought anything to light, activates an ultraplan on implementing the audit advices.
+
+* Context
+
+The coding-agent has a robust plan mode (/plan, /ultraplan) but no post-execution quality gate. After a plan executes, there is no systematic check for polish, hardening, edge cases, or low-effort/high-reward improvements that the implementing agent noticed during execution.
+
+** Problem
+- Plans execute and complete, but implementation quality depends entirely on the initial plan's foresight
+- Agents accumulate insights during implementation (missed edge cases, refactoring opportunities, API improvements) that are lost when execution completes
+- No structured feedback loop between implementation experience and follow-up work
+
+** Approach
+Create an /audit phase that runs after plan execution completes:
+- *Automatic* for ultraplan: audit prompt injected as follow-up after agent finishes executing
+- *Suggested* for /plan: popup selector offers audit after execution ("Run audit" / "Skip audit")
+- *Manual*: /audit slash command available anytime outside plan mode
+- *Recursive with depth limit*: audit findings auto-escalate to ultraplan for implementation (max 2 cycles)
+
+** Key Design Decisions
+1. *State split*: ~AuditState~ (pending/active, per-session) on AgentSession; audit depth (per-lifecycle) on InteractiveMode. Depth survives ~handleClearCommand~ / session resets.
+2. *Suggest mode bridge*: Promise-based callback registered by InteractiveMode on AgentSession. Session calls callback, awaits boolean response (popup result).
+3. *Escalation approval*: Audit-driven ultraplan goes through normal approval selector. Human reviews the plan before execution. The "automatic" part is entering ultraplan mode, not approving the plan.
+4. *[AUDIT_CLEAN] marker*: Agent concludes with ~[AUDIT_CLEAN]~ if no findings. Detection via case-insensitive regex ~/\[AUDIT[_\s]?CLEAN\]/i~. Absence defaults to "clean" (avoids runaway escalation).
+5. *Depth reset*: Resets to 0 on any non-audit-escalation plan approval. Increments on each audit→ultraplan escalation.
+6. *#checkTodoCompletion change*: Returns ~Promise<boolean>~ (true = reminder sent). Audit check runs only when false (all complete or no todos).
+7. *UI indicators*: Top-left overlay badge ("Audit 1/2") coexists with plan mode overlay at top-right. Status line audit segment.
+8. *Abort/error handling*: Clears audit state. No stale flags.
+
+** Critical File Paths
+- ~packages/coding-agent/src/plan-mode/audit-state.ts~ (new)
+- ~packages/coding-agent/src/prompts/system/plan-audit.md~ (new)
+- ~packages/coding-agent/src/modes/components/audit-mode-overlay.ts~ (new)
+- ~packages/coding-agent/src/session/agent-session.ts~ (modify: agent_end handler, state fields, events)
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ (modify: #approvePlan, lifecycle, overlay)
+- ~packages/coding-agent/src/modes/controllers/event-controller.ts~ (modify: audit event handling)
+- ~packages/coding-agent/src/slash-commands/builtin-registry.ts~ (modify: /audit command)
+- ~packages/coding-agent/src/modes/types.ts~ (modify: InteractiveModeContext)
+- ~packages/coding-agent/src/modes/components/status-line/segments.ts~ (modify: auditSegment)
+- ~packages/coding-agent/src/modes/components/status-line/types.ts~ (modify: SegmentContext)
+- ~packages/coding-agent/src/modes/components/status-line.ts~ (modify: audit setter)
+- ~packages/coding-agent/src/config/settings-schema.ts~ (modify: StatusLineSegmentId)
+
+* Verification
+- ~bun check:ts~ passes for packages/coding-agent (focused tsgo check)
+- ~bun test packages/coding-agent/test/plan-mode/audit-state.test.ts~ — marker detection tests pass
+- ~bun test packages/coding-agent/test/session/audit-detection.test.ts~ — session detection tests pass
+- ~bun test packages/coding-agent/test/modes/audit-lifecycle.test.ts~ — lifecycle tests pass
+- Manual verification: /ultraplan → approve → execute → audit auto-triggers (overlay visible)
+- Manual verification: /plan → approve → execute → suggest popup appears
+- Manual verification: /audit command works outside plan mode
+- Manual verification: audit with findings → ultraplan enters → approval selector shown
+- Manual verification: audit with [AUDIT_CLEAN] → clean exit, no escalation
+- Manual verification: depth counter reaches max → audit runs but does not escalate
+
+* Execution Manifest
+1. [[id:FEAT-084-audit-foundation-types-prompt-overlay-co]] (depends: none, effort: 1h)
+   Foundation: AuditState type, isAuditClean helper, plan-audit.md template, AuditModeOverlay component. All new files, no existing file modifications.
+
+2. [[id:FEAT-082-audit-detection-in-session-layer]] (depends: FEAT-084, effort: 3h)
+   Session layer: AuditState field on AgentSession, #checkTodoCompletion boolean return, #checkAuditPhase in agent_end, suggest callback bridge, audit_escalate/audit_suggest events.
+
+3. [[id:FEAT-083-audit-lifecycle-command-and-ui-indicator]] (depends: FEAT-084 + FEAT-082, effort: 3h)
+   Mode layer: InteractiveMode lifecycle (#approvePlan audit setup, depth tracking, escalation handler), event-controller wiring, /audit slash command, overlay show/hide, status-line audit segment with full type cascade.
+
+
+** Completion [2026-03-29]
+
+*** Verification
+
+- =bunx tsgo -p tsconfig.json --noEmit= — zero non-browser type errors (browser.ts errors are pre-existing)
+- =bun test test/plan-mode/audit-state.test.ts= — 9 tests pass
+- =bun test test/session/audit-detection.test.ts= — 8 tests pass
+- =bun test test/modes/audit-lifecycle.test.ts= — 13 tests pass
+- =bunx biome check= — clean on all 13 modified/created files
+- Import ordering fixed via =bun fix:ts=
+
+*** Artifacts
+
+New files created:
+- =packages/coding-agent/src/plan-mode/audit-state.ts= — AuditState type + isAuditClean helper
+- =packages/coding-agent/src/prompts/system/plan-audit.md= — Handlebars audit prompt template
+- =packages/coding-agent/src/modes/components/audit-mode-overlay.ts= — TUI overlay badge
+- =packages/coding-agent/test/plan-mode/audit-state.test.ts= — 9 marker detection tests
+- =packages/coding-agent/test/session/audit-detection.test.ts= — 8 state machine tests
+- =packages/coding-agent/test/modes/audit-lifecycle.test.ts= — 13 lifecycle decision tests
+
+Modified files:
+- =packages/coding-agent/src/session/agent-session.ts= — audit state field, checkTodoCompletion boolean return, checkAuditPhase, injectAuditPrompt, getLastAssistantText, audit events
+- =packages/coding-agent/src/modes/interactive-mode.ts= — audit depth tracking, approvePlan audit setup, suggest callback, overlay show/hide, audit command, escalation handler
+- =packages/coding-agent/src/modes/controllers/event-controller.ts= — audit_escalate and audit_suggest event handling
+- =packages/coding-agent/src/slash-commands/builtin-registry.ts= — /audit slash command
+- =packages/coding-agent/src/modes/types.ts= — handleAuditCommand, handleAuditEscalation, showAuditOverlay
+- =packages/coding-agent/src/modes/components/status-line/segments.ts= — auditSegment
+- =packages/coding-agent/src/modes/components/status-line/types.ts= — auditMode in SegmentContext
+- =packages/coding-agent/src/modes/components/status-line.ts= — setAuditStatus, auditMode in context
+- =packages/coding-agent/src/config/settings-schema.ts= — audit in StatusLineSegmentId
+- =packages/coding-agent/src/modes/components/status-line-segment-editor.ts= — audit segment metadata
+- =packages/coding-agent/src/modes/theme/theme.ts= — icon.audit in SymbolKey, 3 default maps, icon getter
+- =packages/coding-agent/src/modes/theme/defaults/dark-poimandres.json= — icon.audit override
+- =packages/coding-agent/src/modes/theme/defaults/light-poimandres.json= — icon.audit override
+
+*** Deviations
+
+- =showAuditOverlay= is public (not private =#showAuditOverlay=) because it is called from EventController via InteractiveModeContext. The plan originally described it as private, but the event-driven architecture requires cross-controller access.
+- =audit_suggest= event is emitted in both auto and suggest activation paths (not just suggest) so the UI layer can show the overlay regardless of trigger mode. The plan described it only for suggest mode.
+- Manual verification items (TUI interaction: overlay display, popup selectors, ultraplan entry) cannot be automated in this environment — they require an interactive terminal session. The type system and test coverage verify the wiring is correct.

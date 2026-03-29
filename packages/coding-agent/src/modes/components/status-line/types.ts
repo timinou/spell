@@ -25,6 +25,11 @@ export interface SegmentContext {
 		paused: boolean;
 		ultraplan?: boolean;
 	} | null;
+	auditMode?: {
+		active: boolean;
+		depth: number;
+		maxDepth: number;
+	};
 	// Cached values for performance (computed once per render)
 	usageStats: {
 		input: number;

@@ -1,0 +1,189 @@
+#+TITLE: Audit Foundation - Types Prompt Overlay Component
+#+STATE: DONE
+#+SESSION_ID: 14a63e9e82540ac5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-08-03-164Z_14a6364696d40ab5/6-CreateFeatA.jsonl]]
+#+CUSTOM_ID: FEAT-084-audit-foundation-types-prompt-overlay-co
+#+EFFORT: 1h
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate org items for the /audit phase feature. Each item follows the mandatory body standard.\n\n## Constraints\n- Use `org create` to create items\n- Category: `features` for all items\n- State: `ITEM` for all items\n- Include all mandatory sections: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria\n- File paths must be exact\n- Return the CUSTOM_ID of each created item
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item with:
+
+```
+org create:
+  category: features
+  title: Audit Foundation - Types, Prompt, Overlay Component
+  state: ITEM
+  properties:
+    EFFORT: 1h
+    PRIORITY: A
+    LAYER: coding-agent
+  body: (see below)
+```
+
+Body must include these sections:
+
+```
+* Scope
+** In-scope
+- Create ~AuditState~ interface and ~isAuditClean()~ helper in a new ~plan-mode/audit-state.ts~
+- Create Handlebars audit prompt template ~plan-audit.md~ with ~[AUDIT_CLEAN]~ marker contract
+- Create ~AuditModeOverlay~ TUI component (badge similar to ~PlanModeOverlay~)
+
+** Out-of-scope
+- Session integration (FEAT-B)
+- InteractiveMode lifecycle wiring (FEAT-C)
+- Status-line segment (FEAT-C)
+- Slash command (FEAT-C)
+
+Boundary rationale: This item creates all new standalone files with no modifications to existing code. Downstream items consume these artifacts.
+
+* Tests
+File: ~packages/coding-agent/test/plan-mode/audit-state.test.ts~
+
+** Scenarios
+- ~isAuditClean~ detects ~[AUDIT_CLEAN]~ exact match
+- ~isAuditClean~ detects case variations: ~[audit_clean]~, ~[Audit_Clean]~
+- ~isAuditClean~ detects with surrounding text: ~"No issues found. [AUDIT_CLEAN]"~
+- ~isAuditClean~ detects with whitespace variant: ~[AUDIT CLEAN]~
+- ~isAuditClean~ returns false for partial matches: ~"AUDIT_CLEAN"~ without brackets
+- ~isAuditClean~ returns false for empty string and unrelated content
+- ~AuditState~ type compiles with all field combinations
+
+* Implementation
+** ~packages/coding-agent/src/plan-mode/audit-state.ts~ (new)
+
+#+begin_src typescript
+export interface AuditState {
+  /** Whether an audit is pending after plan execution completes */
+  pending: "auto" | "suggest" | false;
+  /** Whether the audit prompt has been injected and we're waiting for the response */
+  active: boolean;
+}
+
+/** Check if audit response indicates no actionable findings. */
+export function isAuditClean(text: string): boolean {
+  return /\[AUDIT[_\s]?CLEAN\]/i.test(text);
+}
+#+end_src
+
+** ~packages/coding-agent/src/prompts/system/plan-audit.md~ (new)
+Handlebars template. Key sections:
+1. Instruction: review implementation for polish, hardening, edge cases
+2. Instruction: identify low-effort high-reward improvements from implementation experience
+3. For each finding: What, Where (file path), Why (impact), Effort (trivial/small/medium)
+4. ~[AUDIT_CLEAN]~ marker contract: agent MUST conclude with exactly ~[AUDIT_CLEAN]~ if no actionable items found
+5. Conditional section: ~{{#if orgItemId}}~ for org-backed plan context
+6. Template variables: ~planContent~, ~orgItemId~, ~auditDepth~, ~maxDepth~
+
+** ~packages/coding-agent/src/modes/components/audit-mode-overlay.ts~ (new)
+Follow ~PlanModeOverlay~ pattern (plan-mode-overlay.ts):
+- Constructor takes ~depth: number~, ~maxDepth: number~
+- ~update(depth, maxDepth)~ method
+- ~render()~ returns 3-line box: top border, label, bottom border
+- Label format: ~"<audit-icon> Audit <depth>/<maxDepth>"~ using theme icon
+- ~measuredWidth()~ for overlay positioning
+- ~setBackground()~ for niri compositing (matching PlanModeOverlay API)
+- Use ~theme.boxSharp~ for borders, ~theme.fg("accent", ...)~ for label color
+
+* Edge Cases
+- ~isAuditClean~ must handle: markdown code fences around marker, trailing whitespace, marker mid-paragraph
+- Empty audit response should be treated as clean (not escalate)
+- Overlay with depth=0 should show ~"Audit 1/2"~ (display as 1-indexed)
+- Overlay with depth >= maxDepth should show different styling or label
+
+* Acceptance Criteria
+- All tests in ~audit-state.test.ts~ pass
+- ~plan-audit.md~ renders correctly with ~renderPromptTemplate()~ given test variables
+- ~AuditModeOverlay~ renders a 3-line box matching ~PlanModeOverlay~ visual pattern
+- No modifications to any existing files (except importing these new modules later in FEAT-B/C)
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+** In-scope
+- Create ~AuditState~ interface and ~isAuditClean()~ helper in a new ~plan-mode/audit-state.ts~
+- Create Handlebars audit prompt template ~plan-audit.md~ with ~[AUDIT_CLEAN]~ marker contract
+- Create ~AuditModeOverlay~ TUI component (badge similar to ~PlanModeOverlay~)
+
+** Out-of-scope
+- Session integration (FEAT-B)
+- InteractiveMode lifecycle wiring (FEAT-C)
+- Status-line segment (FEAT-C)
+- Slash command (FEAT-C)
+
+Boundary rationale: This item creates all new standalone files with no modifications to existing code. Downstream items consume these artifacts.
+
+* Tests
+File: ~packages/coding-agent/test/plan-mode/audit-state.test.ts~
+
+** Scenarios
+- ~isAuditClean~ detects ~[AUDIT_CLEAN]~ exact match
+- ~isAuditClean~ detects case variations: ~[audit_clean]~, ~[Audit_Clean]~
+- ~isAuditClean~ detects with surrounding text: ~"No issues found. [AUDIT_CLEAN]"~
+- ~isAuditClean~ detects with whitespace variant: ~[AUDIT CLEAN]~
+- ~isAuditClean~ returns false for partial matches: ~"AUDIT_CLEAN"~ without brackets
+- ~isAuditClean~ returns false for empty string and unrelated content
+- ~AuditState~ type compiles with all field combinations
+
+* Implementation
+** ~packages/coding-agent/src/plan-mode/audit-state.ts~ (new)
+
+#+begin_src typescript
+export interface AuditState {
+  /** Whether an audit is pending after plan execution completes */
+  pending: "auto" | "suggest" | false;
+  /** Whether the audit prompt has been injected and we're waiting for the response */
+  active: boolean;
+}
+
+/** Check if audit response indicates no actionable findings. */
+export function isAuditClean(text: string): boolean {
+  return /\[AUDIT[_\s]?CLEAN\]/i.test(text);
+}
+#+end_src
+
+** ~packages/coding-agent/src/prompts/system/plan-audit.md~ (new)
+Handlebars template. Key sections:
+1. Instruction: review implementation for polish, hardening, edge cases
+2. Instruction: identify low-effort high-reward improvements from implementation experience
+3. For each finding: What, Where (file path), Why (impact), Effort (trivial/small/medium)
+4. ~[AUDIT_CLEAN]~ marker contract: agent MUST conclude with exactly ~[AUDIT_CLEAN]~ if no actionable items found
+5. Conditional section: ~{{#if orgItemId}}~ for org-backed plan context
+6. Template variables: ~planContent~, ~orgItemId~, ~auditDepth~, ~maxDepth~
+
+** ~packages/coding-agent/src/modes/components/audit-mode-overlay.ts~ (new)
+Follow ~PlanModeOverlay~ pattern (plan-mode-overlay.ts):
+- Constructor takes ~depth: number~, ~maxDepth: number~
+- ~update(depth, maxDepth)~ method
+- ~render()~ returns 3-line box: top border, label, bottom border
+- Label format: ~"<audit-icon> Audit <depth>/<maxDepth>"~ using theme icon
+- ~measuredWidth()~ for overlay positioning
+- ~setBackground()~ for niri compositing (matching PlanModeOverlay API)
+- Use ~theme.boxSharp~ for borders, ~theme.fg("accent", ...)~ for label color
+
+* Edge Cases
+- ~isAuditClean~ must handle: markdown code fences around marker, trailing whitespace, marker mid-paragraph
+- Empty audit response should be treated as clean (not escalate)
+- Overlay with depth=0 should show ~"Audit 1/2"~ (display as 1-indexed)
+- Overlay with depth >= maxDepth should show different styling or label
+
+* Acceptance Criteria
+- All tests in ~audit-state.test.ts~ pass
+- ~plan-audit.md~ renders correctly with ~renderPromptTemplate()~ given test variables
+- ~AuditModeOverlay~ renders a 3-line box matching ~PlanModeOverlay~ visual pattern
+- No modifications to any existing files (except importing these new modules later in FEAT-B/C)

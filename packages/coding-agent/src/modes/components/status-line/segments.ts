@@ -355,6 +355,16 @@ const cacheWriteSegment: StatusLineSegment = {
 	},
 };
 
+const auditSegment: StatusLineSegment = {
+	id: "audit",
+	render(ctx) {
+		const audit = ctx.auditMode;
+		if (!audit?.active) return { content: "", visible: false };
+		const label = withIcon(theme.icon.audit, `Audit ${audit.depth + 1}/${audit.maxDepth}`);
+		return { content: theme.fg("accent", label), visible: true };
+	},
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Segment Registry
 // ═══════════════════════════════════════════════════════════════════════════
@@ -380,6 +390,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	hostname: hostnameSegment,
 	cache_read: cacheReadSegment,
 	cache_write: cacheWriteSegment,
+	audit: auditSegment,
 };
 
 export function renderSegment(id: StatusLineSegmentId, ctx: SegmentContext): RenderedSegment {

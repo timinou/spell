@@ -30,6 +30,7 @@ import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slas
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
 import { approvePlanItem, type OrgPlanRef, resolvePlanItem } from "../plan-mode/org-plan";
+import planAuditPrompt from "../prompts/system/plan-audit.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
@@ -39,6 +40,7 @@ import { STTController, type SttState } from "../stt";
 import type { ExitPlanModeDetails } from "../tools";
 import { setTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
+import { AuditModeOverlay } from "./components/audit-mode-overlay";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import { CustomEditor } from "./components/custom-editor";
 import { DynamicBorder } from "./components/dynamic-border";
@@ -180,6 +182,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	planModePlanFilePath: string | undefined = undefined;
 	planModeUltraplan = false;
 	planModeFlavor: "design" | undefined = undefined;
+	#auditDepth = 0;
+	#auditMaxDepth = 2;
+	#isAuditEscalation = false;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
@@ -230,6 +235,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#planModeHasEntered = false;
 	#planModeOverlay: PlanModeOverlay | undefined;
 	#planModeOverlayHandle: OverlayHandle | undefined;
+	#auditOverlay: AuditModeOverlay | undefined;
+	#auditOverlayHandle: OverlayHandle | undefined;
 	readonly lspServers:
 		| Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>
 		| undefined = undefined;
@@ -444,6 +451,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Initialize hooks with TUI-based UI context
 		await this.initHooksAndCustomTools();
 
+		// Register audit suggest callback for popup bridge
+		this.session.setAuditSuggestCallback(async () => {
+			const choice = await this.showHookSelector("Implementation complete", ["Run audit", "Skip audit"]);
+			return choice === "Run audit";
+		});
+
 		// Restore mode from session (e.g. plan mode on resume)
 		await this.#restoreModeFromSession();
 
@@ -657,6 +670,70 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#planModeOverlayHandle = undefined;
 			this.#planModeOverlay = undefined;
 		}
+	}
+
+	showAuditOverlay(): void {
+		if (!this.#auditOverlay) {
+			this.#auditOverlay = new AuditModeOverlay(this.#auditDepth, this.#auditMaxDepth);
+		} else {
+			this.#auditOverlay.update(this.#auditDepth, this.#auditMaxDepth);
+		}
+		if (!this.#auditOverlayHandle) {
+			const w = this.#auditOverlay.measuredWidth();
+			this.#auditOverlayHandle = this.ui.showOverlay(this.#auditOverlay, {
+				anchor: "top-left",
+				width: w,
+				margin: 1,
+				focusable: false,
+				layer: 1,
+			});
+		}
+		this.#auditOverlayHandle.setHidden(false);
+		this.statusLine.setAuditStatus({
+			active: true,
+			depth: this.#auditDepth,
+			maxDepth: this.#auditMaxDepth,
+		});
+	}
+
+	#hideAuditOverlay(): void {
+		if (this.#auditOverlayHandle) {
+			this.#auditOverlayHandle.hide();
+			this.#auditOverlayHandle = undefined;
+			this.#auditOverlay = undefined;
+		}
+		this.statusLine.setAuditStatus(undefined);
+	}
+
+	async handleAuditCommand(): Promise<void> {
+		if (this.planModeEnabled) {
+			this.showWarning("Cannot audit during plan mode.");
+			return;
+		}
+		if (this.session.getAuditState().active) {
+			this.showWarning("Audit already in progress.");
+			return;
+		}
+		this.session.setAuditState({ pending: false, active: true });
+		this.showAuditOverlay();
+		const prompt = renderPromptTemplate(planAuditPrompt, {
+			auditDepth: this.#auditDepth,
+			maxDepth: this.#auditMaxDepth,
+		});
+		await this.session.prompt(prompt, { synthetic: true });
+	}
+
+	async handleAuditEscalation(auditContent: string): Promise<void> {
+		this.#hideAuditOverlay();
+		if (this.#auditDepth >= this.#auditMaxDepth) {
+			this.showStatus("Audit depth limit reached. Review audit findings manually.");
+			return;
+		}
+		this.#auditDepth++;
+		this.#isAuditEscalation = true;
+		await this.handlePlanModeCommand(`Implement these audit recommendations:\n\n${auditContent}`, {
+			ultraplan: true,
+		});
 	}
 
 	updateEditorTopBorder(): void {
@@ -1021,6 +1098,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.session.setPlanReferencePath(planReferencePath);
 		this.session.markPlanReferenceSent();
+		// Set audit state: auto for ultraplan, suggest for regular plan
+		if (!this.#isAuditEscalation || this.#auditDepth < this.#auditMaxDepth) {
+			this.session.setAuditState({
+				pending: this.planModeUltraplan ? "auto" : "suggest",
+				active: false,
+			});
+		} else {
+			this.session.setAuditState({ pending: false, active: false });
+		}
+		// Reset depth for non-audit approvals
+		if (!this.#isAuditEscalation) {
+			this.#auditDepth = 0;
+		}
+		this.#isAuditEscalation = false;
+
 		const prompt = renderPromptTemplate(planModeApprovedPrompt, {
 			planContent: orgToMarkdown(planContent),
 			finalPlanFilePath: planReferencePath,
