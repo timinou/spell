@@ -1,0 +1,32 @@
+#+TITLE: exitPlanMode missing niri listener notification
+#+STATE: ITEM
+#+SESSION_ID: 14a478ec02229bc5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T13-42-16-328Z_14a478ec02229bc5.jsonl]]
+#+CUSTOM_ID: BUG-001-exitplanmode-missing-niri-listener-notif
+#+EFFORT: 10m
+#+PRIORITY: #B
+#+LAYER: integration
+
+* Initial Message
+
+pausing a plan pre-approval does not change the count in DMS/quickshell (~/.dotfiles)
+
+** Problem
+~#exitPlanMode()~ in ~interactive-mode.ts~ updates ~planModeEnabled~, ~planModePaused~, and other flags but never calls ~this.#niriListener?.()~. The niri controller (~packages/niri/src/controller.ts~) only re-derives agent status and writes to ~~/.spell/status/<windowId>.json~ when the listener fires. Without the call, the DMS/QuickShell ~SpellStatusService~ (~~/.dotfiles/wm/quickshell/dms/Services/SpellStatusService.qml~) keeps polling the stale status file and the actionableCount/pendingApprovalCount never update.
+
+Session events from tool/model restoration (~setActiveToolsByName~, ~setModelTemporary~) fire /before/ the flags are updated (lines 882-889), so the session subscribe callback computes the old status. The flags update on lines 893-894 with no subsequent notification.
+
+** Contrast with working paths
+- ~handleExitPlanModeTool~ correctly calls ~this.#niriListener?.()~ after toggling ~isPendingApproval~ (lines 1069, 1072)
+- ~handleToggleUserPause~ correctly calls ~this.#niriListener?.()~ after toggling ~#isUserPaused~ (line 1575)
+- ~clearUserPaused~ correctly calls ~this.#niriListener?.()~ (line 1564)
+
+** Fix
+Add ~this.#niriListener?.()~ at the end of ~#exitPlanMode~, after line 912 (after all state mutations and UI updates are complete).
+
+** Target file
+~packages/coding-agent/src/modes/interactive-mode.ts~ — ~#exitPlanMode~ method (~line 875)
+
+** Acceptance
+- After pausing plan mode via keybinding toggle, ~~/.spell/status/<windowId>.json~ is rewritten within one tick
+- DMS SpellSessions widget reflects the new status on next 2s poll cycle

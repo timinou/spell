@@ -1,0 +1,265 @@
+#+TITLE: SpellBrowser QML Core Component
+#+STATE: ITEM
+#+SESSION_ID: 14a39a54391f5771
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T20-45-55-331Z_14a3904c40df5761/7-CreateFeat1.jsonl]]
+#+CUSTOM_ID: FEAT-001-spellbrowser-qml-core-component
+#+PRIORITY: #A
+#+LAYER: ui
+#+EFFORT: 4h
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+Plan mode — create org items only. Do not create or modify source files.\n\nThis is part of a plan to add a reusable QML browser component to the spell project's QML stdlib. The project lives at /home/user/code/ora/spell.\n\nKey codebase facts:\n- Stdlib root: packages/coding-agent/src/modes/qml/\n- canvas://stdlib/ resolves to that path\n- Bridge binary at packages/qml/bridge/ links Qt6::WebEngineQuick\n- QmlTestHarness/QmlJourney provide headless QML testing via offscreen mode\n- Armed tools: QML declares spellArmedTools, sends {_tool, _rid}, receives {_rid, result}\n- Canvas tool handles launch/send_message/close/screenshot/list_windows\n- Event classification in canvas-event-utils.ts (silent vs loud)\n- Existing puppeteer tool in browser.ts (headless Chromium, separate use case)
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item using the org tool with these exact parameters:
+
+category: features
+title: SpellBrowser QML Core Component
+state: ITEM
+priority: #A
+properties:
+  EFFORT: 4h
+  PRIORITY: #A
+  LAYER: ui
+
+body (use this exact content, preserving all detail):
+* Scope
+** In-scope
+- Composable QML component wrapping WebEngineView
+- Full browser command protocol handler
+- Serial command queue with _rid correlation
+- State machine, JS injection, event emission
+- Bridge isolation (page JS cannot access bridge)
+** Out-of-scope
+- ApplicationWindow / toolbar UI (FEAT-2 owns)
+- TypeScript protocol types (FEAT-3 owns)
+- Test infrastructure (FEAT-4 owns)
+- Prompt documentation (FEAT-5 owns)
+** Boundary rationale
+SpellBrowser is the headless/command-driven engine. BrowserWindow adds chrome on top. This keeps the component reusable in any window layout.
+* Implementation
+** File: packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml
+** Properties (public API)
+- currentUrl: string — current page URL
+- pageTitle: string — current page title
+- loading: bool — WebEngineView loading state
+- canGoBack: bool
+- canGoForward: bool
+- browserState: string — one of: idle, loading, interactive, error
+- lastError: string — last error message
+- profile: WebEngineProfile — configurable (default persistent)
+- allowedSchemes: var — list of allowed URL schemes (default: ["http", "https", "data"])
+** Methods
+- handleCommand(payload: object) — main entry point, processes bridge messages with action field
+- navigateTo(url: string) — navigate, validate scheme
+- goBack(), goForward(), reload(), stop()
+** Command Protocol (agent -> browser via canvas send_message)
+All commands accept optional _rid for async response correlation.
+All commands accept optional timeout (ms, default 30000).
+*** Navigation
+- { action: "browser:goto", url: "...", waitUntil?: "load"|"domcontentloaded", _rid?, timeout? }
+- { action: "browser:back", _rid? }
+- { action: "browser:forward", _rid? }
+- { action: "browser:reload", _rid? }
+*** JavaScript
+- { action: "browser:evaluate", script: "...", _rid?, timeout? }
+*** Interaction
+- { action: "browser:click", x?: N, y?: N, selector?: "...", elementId?: N, _rid?, timeout? }
+- { action: "browser:type", text: "...", selector?: "...", _rid?, timeout? }
+- { action: "browser:fill", selector: "...", value: "...", _rid?, timeout? }
+- { action: "browser:press", key: "...", modifiers?: "...", _rid?, timeout? }
+- { action: "browser:scroll", deltaX?: N, deltaY: N, x?: N, y?: N, _rid? }
+- { action: "browser:drag", fromX: N, fromY: N, toX: N, toY: N, _rid?, timeout? }
+*** Query
+- { action: "browser:observe", includeAll?: bool, viewportOnly?: bool, _rid?, timeout? }
+- { action: "browser:get_text", selector: "...", _rid?, timeout? }
+- { action: "browser:get_html", selector: "...", _rid?, timeout? }
+- { action: "browser:get_attribute", selector: "...", attribute: "...", _rid?, timeout? }
+- { action: "browser:wait_for_selector", selector: "...", timeout? (default 5000), _rid? }
+- { action: "browser:extract_readable", format?: "text"|"markdown", _rid?, timeout? }
+*** Capture
+- { action: "browser:screenshot", fullPage?: bool, selector?: "...", _rid? }
+** Event Protocol (browser -> agent via bridge.send)
+*** Automatic events (no _rid, emitted on state changes)
+- { type: "browser:loaded", url, title }
+- { type: "browser:url_changed", url }
+- { type: "browser:console", level: "log"|"warn"|"error", message, lineNumber, sourceId }
+- { type: "browser:load_failed", url, error }
+- { type: "browser:state_changed", state: "idle"|"loading"|"interactive"|"error" }
+*** Command responses (with _rid if provided in command)
+- { type: "browser:result", _rid, success: true, data: {...} }
+- { type: "browser:error", _rid, code: "...", message: "...", retryable: bool }
+** Error codes
+TIMEOUT, NOT_FOUND, STALE_TARGET, NAVIGATION_FAILED, PERMISSION_DENIED, EVAL_ERROR, WEBENGINE_UNAVAILABLE, INVALID_COMMAND, SCHEME_DENIED
+** Serial command queue
+- Commands execute one at a time per component instance
+- Navigation (goto/back/forward/reload) cancels pending non-navigation commands with NAVIGATION_FAILED
+- Window close fails all pending commands with { code: "WINDOW_CLOSED" }
+- Per-command timeout triggers { code: "TIMEOUT" } error
+** Element ID cache
+- observe command returns elements with numeric IDs
+- IDs valid until next navigation or DOM mutation
+- click/type with elementId resolves from cache (like puppeteer click_id/type_id)
+- Navigation invalidates all cached IDs
+** JavaScript injection infrastructure
+- Private injected scripts for: observe (accessibility snapshot), click-by-selector, fill, wait_for_selector (MutationObserver + polling), extract_readable (lightweight inline readability extraction — NOT bundled Mozilla Readability), drag (HTML5 drag event simulation)
+- All injected scripts namespaced under window.__spellBrowser to avoid conflicts
+- Results communicated via console.log with "__SPELL_BROWSER__:" prefix (same pattern as hotelcomm inspector)
+** Security policy
+- allowedSchemes property controls navigable URLs (default: http, https, data)
+- file://, qrc://, chrome:// blocked by default
+- bridge object never exposed to page JavaScript (WebEngineView context is separate from QML bridge)
+- evaluate runs in page context, not QML context
+** WebEngineProfile
+- Default persistent profile with storageName "spell-browser"
+- Configurable via profile property
+- Cookies persist across sessions by default
+* Tests
+Tests owned by FEAT-4 (BrowserJourney). This item's acceptance criteria are verified via those tests.
+* Edge Cases
+- Command arrives before WebEngineView ready: queue and execute after ready
+- Navigation during evaluate: cancel evaluate with NAVIGATION_FAILED
+- Multiple rapid goto commands: only last one completes, earlier ones get NAVIGATION_FAILED
+- Selector matches zero elements: NOT_FOUND error
+- JavaScript evaluation throws: EVAL_ERROR with exception message
+- data: URL navigation: allowed by default (in allowedSchemes)
+- about:blank: always allowed regardless of scheme policy
+- Console.log with prefix collision: filter by exact prefix match
+- Large observe result (many DOM elements): cap at 500 elements, include truncation flag
+* Acceptance Criteria
+- [ ] SpellBrowser.qml exists at packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml
+- [ ] Component loads in offscreen QML without errors
+- [ ] handleCommand processes all browser:* actions
+- [ ] _rid correlation returns exactly one terminal response per command
+- [ ] State machine transitions correctly: idle -> loading -> interactive -> error
+- [ ] Serial command queue prevents concurrent command execution
+- [ ] Navigation cancels pending commands
+- [ ] URL scheme validation blocks file:// by default
+- [ ] Element ID cache populated by observe, invalidated by navigation
+- [ ] Bridge object not accessible from page JavaScript
+
+Return the CUSTOM_ID of the created item.
+</goal>
+
+* Scope
+** In-scope
+- Composable QML component wrapping WebEngineView
+- Full browser command protocol handler
+- Serial command queue with _rid correlation
+- State machine, JS injection, event emission
+- Bridge isolation (page JS cannot access bridge)
+** Out-of-scope
+- ApplicationWindow / toolbar UI (FEAT-2 owns)
+- TypeScript protocol types (FEAT-3 owns)
+- Test infrastructure (FEAT-4 owns)
+- Prompt documentation (FEAT-5 owns)
+** Boundary rationale
+SpellBrowser is the headless/command-driven engine. BrowserWindow adds chrome on top. This keeps the component reusable in any window layout.
+* Implementation
+** File: packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml
+** Properties (public API)
+- currentUrl: string — current page URL
+- pageTitle: string — current page title
+- loading: bool — WebEngineView loading state
+- canGoBack: bool
+- canGoForward: bool
+- browserState: string — one of: idle, loading, interactive, error
+- lastError: string — last error message
+- profile: WebEngineProfile — configurable (default persistent)
+- allowedSchemes: var — list of allowed URL schemes (default: ["http", "https", "data"])
+** Methods
+- handleCommand(payload: object) — main entry point, processes bridge messages with action field
+- navigateTo(url: string) — navigate, validate scheme
+- goBack(), goForward(), reload(), stop()
+** Command Protocol (agent -> browser via canvas send_message)
+All commands accept optional _rid for async response correlation.
+All commands accept optional timeout (ms, default 30000).
+*** Navigation
+- { action: "browser:goto", url: "...", waitUntil?: "load"|"domcontentloaded", _rid?, timeout? }
+- { action: "browser:back", _rid? }
+- { action: "browser:forward", _rid? }
+- { action: "browser:reload", _rid? }
+*** JavaScript
+- { action: "browser:evaluate", script: "...", _rid?, timeout? }
+*** Interaction
+- { action: "browser:click", x?: N, y?: N, selector?: "...", elementId?: N, _rid?, timeout? }
+- { action: "browser:type", text: "...", selector?: "...", _rid?, timeout? }
+- { action: "browser:fill", selector: "...", value: "...", _rid?, timeout? }
+- { action: "browser:press", key: "...", modifiers?: "...", _rid?, timeout? }
+- { action: "browser:scroll", deltaX?: N, deltaY: N, x?: N, y?: N, _rid? }
+- { action: "browser:drag", fromX: N, fromY: N, toX: N, toY: N, _rid?, timeout? }
+*** Query
+- { action: "browser:observe", includeAll?: bool, viewportOnly?: bool, _rid?, timeout? }
+- { action: "browser:get_text", selector: "...", _rid?, timeout? }
+- { action: "browser:get_html", selector: "...", _rid?, timeout? }
+- { action: "browser:get_attribute", selector: "...", attribute: "...", _rid?, timeout? }
+- { action: "browser:wait_for_selector", selector: "...", timeout? (default 5000), _rid? }
+- { action: "browser:extract_readable", format?: "text"|"markdown", _rid?, timeout? }
+*** Capture
+- { action: "browser:screenshot", fullPage?: bool, selector?: "...", _rid? }
+** Event Protocol (browser -> agent via bridge.send)
+*** Automatic events (no _rid, emitted on state changes)
+- { type: "browser:loaded", url, title }
+- { type: "browser:url_changed", url }
+- { type: "browser:console", level: "log"|"warn"|"error", message, lineNumber, sourceId }
+- { type: "browser:load_failed", url, error }
+- { type: "browser:state_changed", state: "idle"|"loading"|"interactive"|"error" }
+*** Command responses (with _rid if provided in command)
+- { type: "browser:result", _rid, success: true, data: {...} }
+- { type: "browser:error", _rid, code: "...", message: "...", retryable: bool }
+** Error codes
+TIMEOUT, NOT_FOUND, STALE_TARGET, NAVIGATION_FAILED, PERMISSION_DENIED, EVAL_ERROR, WEBENGINE_UNAVAILABLE, INVALID_COMMAND, SCHEME_DENIED
+** Serial command queue
+- Commands execute one at a time per component instance
+- Navigation (goto/back/forward/reload) cancels pending non-navigation commands with NAVIGATION_FAILED
+- Window close fails all pending commands with { code: "WINDOW_CLOSED" }
+- Per-command timeout triggers { code: "TIMEOUT" } error
+** Element ID cache
+- observe command returns elements with numeric IDs
+- IDs valid until next navigation or DOM mutation
+- click/type with elementId resolves from cache (like puppeteer click_id/type_id)
+- Navigation invalidates all cached IDs
+** JavaScript injection infrastructure
+- Private injected scripts for: observe (accessibility snapshot), click-by-selector, fill, wait_for_selector (MutationObserver + polling), extract_readable (lightweight inline readability extraction — NOT bundled Mozilla Readability), drag (HTML5 drag event simulation)
+- All injected scripts namespaced under window.__spellBrowser to avoid conflicts
+- Results communicated via console.log with "__SPELL_BROWSER__:" prefix (same pattern as hotelcomm inspector)
+** Security policy
+- allowedSchemes property controls navigable URLs (default: http, https, data)
+- file://, qrc://, chrome:// blocked by default
+- bridge object never exposed to page JavaScript (WebEngineView context is separate from QML bridge)
+- evaluate runs in page context, not QML context
+** WebEngineProfile
+- Default persistent profile with storageName "spell-browser"
+- Configurable via profile property
+- Cookies persist across sessions by default
+* Tests
+Tests owned by FEAT-4 (BrowserJourney). This item's acceptance criteria are verified via those tests.
+* Edge Cases
+- Command arrives before WebEngineView ready: queue and execute after ready
+- Navigation during evaluate: cancel evaluate with NAVIGATION_FAILED
+- Multiple rapid goto commands: only last one completes, earlier ones get NAVIGATION_FAILED
+- Selector matches zero elements: NOT_FOUND error
+- JavaScript evaluation throws: EVAL_ERROR with exception message
+- data: URL navigation: allowed by default (in allowedSchemes)
+- about:blank: always allowed regardless of scheme policy
+- Console.log with prefix collision: filter by exact prefix match
+- Large observe result (many DOM elements): cap at 500 elements, include truncation flag
+* Acceptance Criteria
+- [ ] SpellBrowser.qml exists at packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml
+- [ ] Component loads in offscreen QML without errors
+- [ ] handleCommand processes all browser:* actions
+- [ ] _rid correlation returns exactly one terminal response per command
+- [ ] State machine transitions correctly: idle -> loading -> interactive -> error
+- [ ] Serial command queue prevents concurrent command execution
+- [ ] Navigation cancels pending commands
+- [ ] URL scheme validation blocks file:// by default
+- [ ] Element ID cache populated by observe, invalidated by navigation
+- [ ] Bridge object not accessible from page JavaScript

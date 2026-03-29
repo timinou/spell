@@ -1,0 +1,25 @@
+#+TITLE: Fix plan pause niri status notification
+#+STATE: DOING
+#+SESSION_ID: 14a478ec02229bc5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T13-42-16-328Z_14a478ec02229bc5.jsonl]]
+#+CUSTOM_ID: PLAN-003-fix-plan-pause-niri-status-notification
+
+* Initial Message
+
+pausing a plan pre-approval does not change the count in DMS/quickshell (~/.dotfiles)
+
+* Context
+When a user pauses plan mode pre-approval (via the plan toggle keybinding), the DMS/QuickShell SpellSessions widget count does not update. The root cause is that ~#exitPlanMode()~ in ~interactive-mode.ts~ mutates state flags (~planModeEnabled~, ~planModePaused~) without calling ~this.#niriListener?.()~ to notify the niri controller. The niri controller writes status to ~~/.spell/status/<windowId>.json~, which the DMS widget polls every 2 seconds.
+
+The session events that fire during tool/model restoration inside ~#exitPlanMode~ are ordered /before/ the flag mutations, so the subscribe-based listener computes the stale status. Every other state mutation path (~handleExitPlanModeTool~, ~handleToggleUserPause~, ~clearUserPaused~) already calls the listener correctly.
+
+** Approach
+Add a single ~this.#niriListener?.()~ call at the end of ~#exitPlanMode~, after all state mutations and UI updates are complete (after the current line 912). This matches the pattern used by every other status-affecting mutation.
+
+** Key files
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ — ~#exitPlanMode~ method (line 875)
+- ~packages/niri/src/controller.ts~ — ~#writeStatusIfChanged~ / ~#deriveStatus~ (consumers of the notification)
+- ~~/.dotfiles/wm/quickshell/dms/Services/SpellStatusService.qml~ — downstream consumer (no changes needed)
+
+* Execution Manifest
+1. [[id:BUG-001-exitplanmode-missing-niri-listener-notif]] (depends: none, effort: 10m)

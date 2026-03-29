@@ -1,0 +1,23 @@
+#+TITLE: Session 1498c12990f30d38 Todos
+#+DATE: 2026-03-19
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE Add fluid pipeline end-to-end tests
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Added full EventBus→router→bridge→QML integration tests with shared pipeline setup and per-test state resets; stabilized executing-state assertions with controlled agent delays.
+
+* Verification
+
+** DONE Run targeted tests and checks
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+bun test test/integration/fluid-pipeline-e2e.test.ts passed (4/4). bun run check completed successfully in packages/coding-agent.

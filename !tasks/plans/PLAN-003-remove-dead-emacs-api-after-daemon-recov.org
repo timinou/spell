@@ -1,0 +1,32 @@
+#+TITLE: Remove dead emacs API after daemon recovery refactor
+#+STATE: DOING
+#+SESSION_ID: 14a46b97b09e15ea
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T12-44-02-114Z_14a46b97b09e15ea.jsonl]]
+#+CUSTOM_ID: PLAN-003-remove-dead-emacs-api-after-daemon-recov
+
+* Initial Message
+
+any dead code?
+
+* Context
+Commit 202e7f1b9 added EmacsSessionManager and routed all runtime daemon startup through warmupEmacs + the manager. Two older exported functions — startEmacsDaemon and makeEmacsSessionFactory — now have zero runtime callers. They are only referenced by their own dedicated tests and a smoke-test assertion in resolution.test.ts.
+
+All shared imports in tool.ts (detectEmacs, startEmacsSession, EMACS_ELISP_DIR) are also used by the live warmupEmacs function, so removing the dead functions does not orphan any imports.
+
+The org package's emacsSessionFactory is completely unrelated — it uses its own local detection/daemon APIs and is live.
+
+** Approach
+Delete the two functions, their exports, and their dedicated tests. Update the resolution smoke test to remove the dead assertion. Single-item plan; all changes are in packages/emacs/.
+
+** Key decisions
+- Full removal, not deprecation — the functions are already deprecated and have zero runtime callers
+- No backward-compatibility shims — this is an internal package with no external consumers
+- Existing contracts covered by warmupEmacs: detection failures, startup errors, and session creation are all tested through the session-manager and tool-getSession test suites
+
+* Execution Manifest
+1. [[id:BUG-001-remove-dead-startemacsdaemon-and-makeema]] — Remove startEmacsDaemon, makeEmacsSessionFactory, and their tests (depends: none, effort: 20m)
+
+** Verification
+- bun test packages/emacs/test/ (all remaining tests pass, no regression)
+- bun run check in packages/emacs (type check clean)
+- bunx biome check on changed files (lint clean)

@@ -1,0 +1,81 @@
+#+TITLE: QML Browser Component Stdlib
+#+STATE: DOING
+#+SESSION_ID: 14a3904c40df5761
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T20-45-55-331Z_14a3904c40df5761.jsonl]]
+#+CUSTOM_ID: PLAN-003-qml-browser-component-stdlib
+
+* Initial Message
+
+loook at the extension in ~/code/ora/hotelcomm, could you enable a puppeteer-like browser window component in the qml stdlib with async tool call registration so that the agent can do things in the browser window that is there?
+
+* Context
+
+** Problem
+The hotelcomm extension at ~/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/ demonstrates a production-grade browser window with WebEngineView, JavaScript injection, DOM inspection, and async tool call registration via the armed tools pattern. However, it's a monolithic 1392-line QML file mixing browser logic, Phoenix-specific DOM inspection, and UI chrome. There is no reusable browser component in the QML stdlib — every extension that needs a browser must rebuild from scratch.
+
+** Approach
+Extract the browser-as-component pattern into the QML stdlib as two complementary pieces:
+1. SpellBrowser.qml — composable WebEngineView wrapper with a full command protocol, usable in any ApplicationWindow
+2. BrowserWindow.qml — ready-to-launch standalone browser window with navigation toolbar
+
+The agent controls the browser via canvas send_message with structured browser:* action payloads. Async request-response uses _rid correlation (matching the existing armed tools pattern). The browser can also call agent tools (read, write, grep, find) via the armed tools system for reverse communication.
+
+** Key Design Decisions
+- Dual control planes: Agent sends commands via canvas send_message, browser calls agent tools via armed tools (_tool/_rid)
+- Near-full puppeteer parity: goto, evaluate, click (coord + selector + elementId), type, fill, press, scroll, drag, observe (DOM snapshot), get_text, get_html, get_attribute, wait_for_selector, extract_readable, screenshot
+- Serial command queue with _rid correlation and exactly-one terminal response guarantee
+- State machine: idle -> loading -> interactive -> error
+- Element ID cache (populated by observe, invalidated by navigation) for click_id/type_id equivalents
+- Per-command timeout with default 30s
+- Bridge isolation: page JavaScript cannot access bridge object
+- URL scheme validation (deny file://, qrc://, chrome:// by default)
+- Lightweight inline JS for readability extraction (not bundled Mozilla Readability)
+- All tests headless via QT_QPA_PLATFORM=offscreen with skip guard when WebEngine unavailable
+- BrowserJourney test abstraction on top of QmlJourney for semantic browser test methods
+
+** Critical File Paths
+- packages/coding-agent/src/modes/qml/canvas/components/SpellBrowser.qml (new)
+- packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml (new)
+- packages/coding-agent/src/tools/canvas-browser-protocol.ts (new)
+- packages/coding-agent/src/tools/canvas-event-utils.ts (modify)
+- packages/coding-agent/src/prompts/tools/canvas.md (modify)
+- packages/coding-agent/test/helpers/browser-journey.ts (new)
+- packages/coding-agent/test/integration/browser-navigation.test.ts (new)
+- packages/coding-agent/test/integration/browser-interaction.test.ts (new)
+- packages/coding-agent/test/integration/browser-armed-tools.test.ts (new)
+- packages/coding-agent/test/integration/browser-error-handling.test.ts (new)
+
+** Reference Implementation
+The hotelcomm inspector at ~/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/inspector.qml provides patterns to harvest:
+- WebEngineProfile with persistent cookies (lines 38-43)
+- Console.log prefix protocol for JS -> QML communication (line 45, prefix: "__PHX_INSPECTOR__:")
+- JavaScript injection via webView.runJavaScript() (line 782)
+- Armed tool invocation with _rid pattern (lines 466-473, function invokeTool)
+- Bridge message response handling for _rid correlation (lines 1337-1385)
+- Auto-selection via selector after injection (lines 785-797)
+
+** Verification
+- bun check:ts must pass with new TS files
+- bun lint:ts must pass
+- All browser-*.test.ts tests must pass headlessly (or skip if WebEngine unavailable)
+- canvas-browser-protocol.test.ts unit tests must pass
+- BrowserWindow.qml launches via canvas tool and responds to commands
+- SpellBrowser.qml loads in offscreen mode without errors
+
+* Execution Manifest
+
+** Phase 1 (parallel, no dependencies)
+1. [[id:FEAT-001-spellbrowser-qml-core-component]] — SpellBrowser QML Core Component (effort: 4h, depends: none)
+   The foundational composable WebEngineView component with full command protocol, serial queue, state machine, JS injection infrastructure, element ID cache, and security policy.
+2. [[id:FEAT-001-browser-protocol-types-and-event-integra]] — Browser Protocol Types and Event Integration (effort: 1.5h, depends: none)
+   TypeScript type definitions for the command/result/event protocol, error codes, idempotency classification, and browser event classification in canvas-event-utils.ts.
+
+** Phase 2 (sequential, needs Phase 1)
+3. [[id:FEAT-001-browserwindow-qml-standalone-application]] — BrowserWindow QML Standalone Application (effort: 2h, depends: FEAT-001-spellbrowser-qml-core-component)
+   ApplicationWindow with SpellBrowser embedded, navigation toolbar, status bar, armed tools declaration, bridge message routing, and settings persistence. Requires SpellBrowser.qml component API.
+
+** Phase 3 (parallel, needs Phase 1+2)
+4. [[id:FEAT-001-browserjourney-test-abstraction-and-inte]] — BrowserJourney Test Abstraction and Integration Tests (effort: 3h, depends: all Phase 1+2 items)
+   BrowserJourney class extending QmlJourney, WebEngine offscreen probe, and 4 test files covering navigation, interaction, armed tools, and error handling. Uses data: URLs and Bun.serve() local server for fixtures.
+5. [[id:FEAT-001-canvas-browser-documentation]] — Canvas Browser Documentation (effort: 1h, depends: all Phase 1+2 items)
+   Update canvas.md with browser section: launch pattern, all browser:* commands, _rid lifecycle, armed tools from browser, and workflow examples.

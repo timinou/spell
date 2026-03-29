@@ -1,0 +1,65 @@
+#+TITLE: Subagent Missing Submit Result Structural Fix
+#+STATE: DONE
+#+SESSION_ID: 14a4c04eb99cc29c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T18-54-09-638Z_14a4c04eb99cc29c.jsonl]]
+#+CUSTOM_ID: PLAN-003-subagent-missing-submit-result-structura
+
+
+* Initial Message
+
+completion protocol is currently structured and where I need to add these requirements.
+
+
+ ⏳ Task: explore
+  ├─ Context
+  │  Looking at plan mode completion protocol and how it's assembled. Need to find where completion
+ instructions live, how artifacts are referenced, and how org files relate to commits.
+  └─ Tasks: 2 agents
+    ├─ ⏹ CompletionProtocol: Find the plan completion protocol source ⟦aborted⟧
+    └─ ⏹ OrgImageSyntax: Find org image syntax patterns in codebase ⟦aborted⟧
+
+
+In session:
+
+File:
+ /home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T18-13-58-723Z_14a4b71c50d1e9bb.jsonl
+ ID: 14a4b71c50d1e9bb
+
+
+
+Why did it abort bro? WHYYYY????
+
+* Context
+
+Subagents that complete work but fail to call ~submit_result~ are incorrectly handled. The old code forced ~aborted = true~ (too harsh — penalized good work). The current fix (BUG-001-subagent-status-shows-aborted-when-submi, DONE) removed that coercion, but now schema-less agents silently show green "done" status with no warning. Both are wrong.
+
+The structural fix addresses three orthogonal issues:
+1. *Warning propagation*: ~finalizeSubprocessOutput~ must always prepend the warning marker for missing submit_result, even for schema-less agents. The render layer already handles this marker with a yellow warning icon — the marker just isn't being set.
+2. *Retry effectiveness*: The 3-retry loop forces tool choice on every attempt. Models that can't handle forced tool choice fail all 3 the same way. Last retry should drop tool choice and use a plain prompt.
+3. *Content-aware status*: After all retries fail, use ~progress.toolCount~ to distinguish "did work, forgot protocol" (completed with warning) from "never engaged" (failed).
+
+Key decisions:
+- Keep existing 3-retry count (MAX_SUBMIT_RESULT_RETRIES = 3)
+- Don't add a new status enum value — use the existing warning path in render.ts that already exists but was never triggered for schema-less agents
+- The yellow "warning" badge from render.ts line 744 is the correct visual treatment — it already has the right color and icon
+
+* Verification
+- ~bun test test/task/executor-warnings.test.ts test/task/executor-subagent-reminders.test.ts~ — targeted test run
+- ~bun check:ts~ scoped to packages/coding-agent — type check
+- Manual inspection: the test "does not inject missing-submit warning when no schema and raw text exists" should now be renamed and expect the warning prefix
+
+* Execution Manifest
+1. [[id:BUG-001-structural-fix-for-subagent-missing-subm]] (depends: none, effort: 45m)
+
+
+** Completion [2026-03-28]
+*** Verification
+- `bun test test/task/executor-warnings.test.ts test/task/executor-subagent-reminders.test.ts` (cwd: `packages/coding-agent`) -> passed, 18 tests / 0 failures.
+- `bun check:ts` (cwd: `packages/coding-agent`) -> failed immediately because `packages/coding-agent/package.json` does not define a `check:ts` script.
+- `bun run check` (cwd: `packages/coding-agent`) -> passed (`tsgo -p tsconfig.json`).
+- `bun x biome check src/task/executor.ts src/prompts/system/subagent-submit-reminder.md test/task/executor-warnings.test.ts test/task/executor-subagent-reminders.test.ts` (cwd: `packages/coding-agent`) -> passed, no issues.
+- Manual inspection -> `packages/coding-agent/src/task/executor.ts` now passes `isLastRetry`, drops forced tool choice on the last reminder, prefixes missing-submit warnings for schema-less output, and fails no-work reminder exhaustion via `progress.toolCount`; `packages/coding-agent/src/prompts/system/subagent-submit-reminder.md` now has a final-reminder fallback branch; `packages/coding-agent/test/task/executor-warnings.test.ts` renamed the schema-less warning test and expects the warning prefix.
+*** Artifacts
+- None.
+*** Deviations
+- `bun check:ts` could not be run with package scope because `packages/coding-agent/package.json` exposes `check` but not `check:ts`. Used `bun run check` plus targeted `biome check` in the package instead.

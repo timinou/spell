@@ -1,0 +1,63 @@
+#+TITLE: Plan mode writable folders
+#+STATE: DOING
+#+SESSION_ID: 14a4713646d0fa6e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T13-08-35-227Z_14a4713646d0fa6e.jsonl]]
+#+CUSTOM_ID: PLAN-003-plan-mode-writable-folders
+
+* Context
+
+Plan mode and ultraplan mode currently enforce strict read-only behavior — the only writable file is the plan file itself. This is enforced at two layers: (1) =enforcePlanModeWrite()= in =plan-mode-guard.ts= which gates =write.ts= and =patch/index.ts=, and (2) system prompts telling the agent not to write.
+
+Users want the ability to configure directories that plan mode can write to, with short descriptions explaining each folder's purpose. The descriptions serve as documentation in the config file and are surfaced in the system prompt so the agent understands what each folder is for.
+
+** Approach
+Add a single =planMode.allowedFolders= setting (=Record&lt;string, string&gt;=, default empty) to the settings schema. Modify the plan mode write guard to check if a target path falls under any allowed folder. Update system prompts (both main agent and subagent) to communicate allowed folders with descriptions. Thread the setting through the template context in =buildPlanModeMessage=. Update README with feature docs. Commit incrementally after each logical unit.
+
+Deletions and moves remain unconditionally blocked even in allowed folders — only create/update ops are permitted.
+
+** Key decisions
+- =Record&lt;string, string&gt;= over =Array&lt;string&gt;= — values are the description annotations the user requested
+- Folder resolution uses =path.resolve(cwd, expandTilde(folder))= for tilde and relative path support
+- Prefix-match with separator boundary prevents =/tmp/foo= from matching =/tmp/foobar=
+- Subagent write tools are conditionally enabled when allowed folders are configured (gated by same guard)
+- No UI metadata — power-user config-file-only setting
+
+** Example config.yml
+#+begin_src yaml
+planMode:
+  allowedFolders:
+    ./docs/plans: "Architecture notes and plan artifacts"
+    ./scratch: "Temporary exploration files"
+    ~/shared-plans: "Cross-project plan output directory"
+#+end_src
+
+* Execution Manifest
+
+1. [[id:FEAT-001-plan-mode-allowed-folders-config]] (depends: none, effort: 1h)
+
+Commit after each logical wave. Do NOT batch everything into one commit.
+
+** Wave 1: Core enforcement
+Commit: =feat: add planMode.allowedFolders setting with write guard support=
+- =packages/coding-agent/src/config/settings-schema.ts= — add =planMode.allowedFolders= record setting
+- =packages/coding-agent/src/tools/plan-mode-guard.ts= — add =isUnderAllowedFolder= helper, update =enforcePlanModeWrite= to check allowed folders (delete/move still unconditionally blocked)
+- =packages/coding-agent/test/tools/plan-mode-guard.test.ts= — new test file (9 cases: allowed write, nested subdir, blocked outside, blocked delete, blocked move, empty config, prefix boundary, tilde expansion, disabled plan mode)
+
+** Wave 2: Prompt + context plumbing
+Commit: =feat: surface allowed folders in plan mode system prompts=
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — add conditional =allowedFolders= block after MUST NOT list
+- =packages/coding-agent/src/prompts/system/plan-mode-subagent.md= — same conditional block
+- =packages/coding-agent/src/session/agent-session.ts= (~line 2137 in =buildPlanModeMessage=) — read =planMode.allowedFolders= from settings, pass as =allowedFolders= when non-empty
+
+** Wave 3: Subagent tool enablement
+Commit: =feat: enable write/edit tools for plan mode subagents when allowed folders configured=
+- =packages/coding-agent/src/task/index.ts= (~line 500) — if plan mode active AND allowed folders non-empty, add =write=, =edit= to =planModeTools=
+
+** Wave 4: Docs
+Commit: =docs: document planMode.allowedFolders in README and changelog=
+- =README.md= (monorepo root, after line ~209) — add subsection documenting the setting with example YAML
+- =packages/coding-agent/CHANGELOG.md= — add entry under =[Unreleased] > Added=
+
+** Verification (after all waves)
+- =bun check:ts= passes on changed files
+- =bun test packages/coding-agent/test/tools/plan-mode-guard.test.ts= passes all 9 cases

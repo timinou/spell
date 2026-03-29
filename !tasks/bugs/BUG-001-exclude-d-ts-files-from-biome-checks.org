@@ -1,0 +1,30 @@
+#+TITLE: Exclude dts files from Biome checks
+#+STATE: ITEM
+#+SESSION_ID: 149b941a88dbf633
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-21T15-54-42-083Z_149b941a88dbf633.jsonl]]
+#+CUSTOM_ID: BUG-001-exclude-d-ts-files-from-biome-checks
+#+EFFORT: 5m
+#+PRIORITY: A
+#+LAYER: infra
+
+* Initial Message
+
+bun check:ts still fails due pre-existing repo-wide Biome internal panic and unrelated packages/utils/*.d.ts formatting diagnostics (not introduced by this change set).
+
+
+
+^ fix this
+
+** Problem
+`bun check:ts` fails with 19 errors — all from `packages/utils/src/*.d.ts`:
+- 4 Biome internal panics (scope.rs:150:38 "no entry found for key") on ptree, ring, snowflake, temp
+- 15 formatting diffs (missing trailing newline, tab-vs-space indentation)
+
+These `.d.ts` files are generated type declarations checked into git. Biome should never lint/format them.
+
+** Fix
+Add `!**/*.d.ts` to the `files.includes` exclusion list in `/biome.json` (line ~43).
+
+** Acceptance
+- `bun check:ts` passes (0 biome errors)
+- No `.d.ts` files appear in biome diagnostics

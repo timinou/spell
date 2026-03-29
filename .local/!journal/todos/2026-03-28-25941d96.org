@@ -1,0 +1,13 @@
+#+TITLE: Session 14a49689c7e29bcd Todos
+#+DATE: 2026-03-28
+#+TODO: ITEM DOING | DONE
+
+* Execution
+
+** DONE Run targeted verification
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Verified the source change with a focused regression test, targeted Biome check, and the package tsgo check.

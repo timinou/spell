@@ -1,0 +1,107 @@
+#+TITLE: Add concurrency tests for org file operations
+#+STATE: DONE
+#+SESSION_ID: 14a4b5ed5e43db3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T18-08-48-505Z_14a4b5ed5e43db3d.jsonl]]
+#+CUSTOM_ID: FEAT-001-add-concurrency-tests-for-org-file-opera
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: backend
+
+NOTE [2026-03-28]: Implemented the planned mutex, atomic-write, and integrated concurrency regression tests under packages/org/test/ and verified them during plan execution.
+
+** Purpose
+No concurrency tests exist in ~packages/org/test/~. The race conditions fixed in BUG-001 items
+need regression tests proving correctness AND tests proving the new mutex doesn't introduce
+new failure modes (deadlock, permanent lock, leaked resources).
+
+TDD approach: write tests first, verify they fail, then implement the fixes.
+
+** New file: ~packages/org/test/mutex.test.ts~
+
+*** Test 1: AsyncMutex serializes concurrent operations
+- Acquire lock, start async work, acquire again before first completes
+- Assert: second operation waits until first releases, executes in FIFO order
+- Use a shared array to track execution order
+
+*** Test 2: AsyncMutex releases lock on error (no permanent block)
+- Acquire lock, throw inside the locked function
+- Assert: error propagates to caller
+- Then acquire lock again
+- Assert: second acquire succeeds (lock was released despite error)
+- This is the critical safety test — a bug here blocks ALL subsequent operations forever
+
+*** Test 3: AsyncMutex withLock convenience preserves return value
+- Call withLock(() => 42)
+- Assert: returns 42
+
+*** Test 4: KeyedMutex creates independent locks per key
+- Acquire lock on key \"A\", start slow async work
+- Acquire lock on key \"B\" concurrently
+- Assert: B completes before A (different keys don't block each other)
+
+*** Test 5: KeyedMutex same key serializes correctly
+- Two withLock calls on same key with overlapping execution
+- Assert: they execute sequentially, not concurrently (use shared counter)
+
+** New file: ~packages/org/test/atomic-write.test.ts~
+
+*** Test 6: atomicWrite concurrent calls to same path do not ENOENT
+- Call atomicWrite(samePath, contentA) and atomicWrite(samePath, contentB) via Promise.all
+- Assert: no error thrown, file exists, contains one of the two contents
+
+*** Test 7: atomicWrite cleans up tmp file on rename failure
+- Create a scenario where rename fails (e.g., write to path under a file not a directory)
+- Assert: no orphan ~.*.tmp~ files remain in the directory after the error
+
+*** Test 8: atomicWrite leaves no orphan tmp file on success
+- Write successfully
+- Assert: only the target file exists, no ~*.tmp~ files in the directory
+- Use ~fs.readdir~ to verify no leftover tmp files
+
+*** Test 9: atomicWrite concurrent calls produce distinct tmp file names
+- Monkey-patch or spy on ~Bun.write~ to capture the tmp paths
+- Call atomicWrite twice concurrently
+- Assert: the two tmp paths are different strings
+
+** New file: ~packages/org/test/concurrency.test.ts~
+
+*** Test 10: appendItemToFile concurrent calls preserve both items
+- Create an empty category directory
+- Call appendItemToFile(samePath, itemA, ...) and appendItemToFile(samePath, itemB, ...) concurrently
+- Assert: file contains both CUSTOM_IDs (serialization ensures no data loss)
+
+*** Test 11: applyItemMutations concurrent mutations to different items in same file
+- Seed a file with two heading-level items
+- Call applyItemMutations(file, idA, {state: \"DOING\"}) and applyItemMutations(file, idB, {state: \"DONE\"}) concurrently
+- Assert: both mutations applied (file contains both state changes)
+
+*** Test 12: applyItemMutations returns null without blocking subsequent operations
+- Call applyItemMutations with a non-existent CUSTOM_ID (returns null)
+- Immediately call applyItemMutations with a valid CUSTOM_ID
+- Assert: second call succeeds (lock released after null return)
+
+*** Test 13: appendItemToFile error does not permanently block subsequent writes
+- Call appendItemToFile with a path that will fail (e.g., path is a directory, not a file)
+- Then call appendItemToFile with a valid path
+- Assert: second call succeeds (lock was released despite first call's error)
+
+*** Test 14: cmdCreate concurrent calls produce distinct sequence numbers
+- Create a tool with a category directory
+- Seed with one item (PROJ-001)
+- Call tool.execute({command: \"create\", title: \"A\"}) and tool.execute({command: \"create\", title: \"B\"}) concurrently
+- Assert: returned IDs have different sequence numbers (002 and 003)
+
+*** Test 15: cmdCreate in different categories runs concurrently (not serialized)
+- Create tool with two categories
+- Start slow cmdCreate in category A, start cmdCreate in category B
+- Assert: B completes before A (category locks are independent)
+
+*** Test 16: cmdCreate + cmdUpdate to same file do not deadlock
+- Create an item via cmdCreate
+- Concurrently: cmdCreate (same category) and cmdUpdate (same file)
+- Assert: both complete without timeout (no deadlock from nested category->file lock ordering)
+
+** Acceptance
+- All 16 tests pass: ~bun test packages/org/test/mutex.test.ts packages/org/test/atomic-write.test.ts packages/org/test/concurrency.test.ts~
+- Tests are deterministic (mutex guarantees ordering, no flaky timing)
+- ~tsgo -p packages/org/tsconfig.json~ passes

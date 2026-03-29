@@ -1,0 +1,73 @@
+#+TITLE: SDK warmup wiring uses ad-hoc property for emacs session lifecycle
+#+STATE: ITEM
+#+SESSION_ID: 14a469a3db5e15e8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T12-35-30-285Z_14a469a3db5e15e8.jsonl]]
+#+CUSTOM_ID: BUG-001-sdk-warmup-wiring-uses-ad-hoc-property-f
+#+EFFORT: 45m
+#+PRIORITY: B
+#+LAYER: packages/coding-agent
+
+* Initial Message
+
+Emacs Code
+ {
+   "error": true,
+   "message": "Emacs daemon unavailable"
+ }
+
+
+
+In this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-mamabox-sales-.ancillary-docview/2026-03-28T11-54-55-960Z_14a4605a9611252c.jsonl
+ ID: 14a4605a9611252c
+
+
+Explain why the daemon was unavaialble and why the tool, and/or the daemon manager behind it, was not able to spin the daemon back up. Then tell me how you can TDD solve it
+
+* Scope
+** In-scope
+- Replace toolSession.emacsSession with toolSession.emacsSessionManager (EmacsSessionManager from pi-emacs)
+- Adapt sdk.ts warmup code to create the manager and inject the pre-started session
+- Adapt EmacsTool constructor to use manager.getSession() as the deps callback
+- Update dispose() to call manager.dispose()
+** Out-of-scope
+- The session manager itself (created in sibling BUG item)
+- Detection or daemon launch logic changes
+
+* Implementation
+** File: packages/coding-agent/src/tools/index.ts
+- Import EmacsSessionManager from @oh-my-pi/pi-emacs
+- Replace emacsSession?: EmacsSession | null with emacsSessionManager?: EmacsSessionManager
+- Remove EmacsSession import if no longer needed
+
+** File: packages/coding-agent/src/tools/emacs.ts
+- Change getSession callback: () => session.emacsSessionManager?.getSession() ?? Promise.resolve(null)
+- Remove direct emacsSession reference
+
+** File: packages/coding-agent/src/sdk.ts
+- After detection/warmup, create EmacsSessionManager:
+  const emacsManager = new EmacsSessionManager({ emacsPath, projectRoot, sessionId });
+  if (warmupResult?.session) emacsManager.setSession(warmupResult.session);
+  toolSession.emacsSessionManager = emacsManager;
+- Replace dispose:
+  await toolSession.emacsSessionManager?.dispose();
+- Remove the shouldStartEmacs guard: the manager handles lazy init, so even if warmup is skipped, the tool can still work
+
+* Tests
+** File: packages/coding-agent/test/emacs-wiring.test.ts (or expand existing)
+- Test: "EmacsTool delegates to emacsSessionManager.getSession()"
+- Test: "dispose() calls emacsSessionManager.dispose()"
+- Test: "EmacsTool works even when warmup was skipped" (manager handles lazy start)
+
+* Edge Cases
+- If emacsSessionManager is undefined on toolSession (shouldn't happen after init, but guard with ?.)
+- Backward compatibility: nothing else reads toolSession.emacsSession (grep confirms only emacs.ts and sdk.ts)
+
+* Acceptance Criteria
+- toolSession.emacsSession property is removed
+- sdk.ts creates EmacsSessionManager and stores on toolSession
+- EmacsTool uses manager.getSession() for lazy daemon access
+- dispose() delegates to manager
+- No change to tool schema or user-facing behavior
+- bun check passes for packages/coding-agent

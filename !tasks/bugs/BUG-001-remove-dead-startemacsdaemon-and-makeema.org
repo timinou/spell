@@ -1,0 +1,40 @@
+#+TITLE: Remove dead startEmacsDaemon and makeEmacsSessionFactory
+#+STATE: ITEM
+#+SESSION_ID: 14a46b97b09e15ea
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T12-44-02-114Z_14a46b97b09e15ea.jsonl]]
+#+CUSTOM_ID: BUG-001-remove-dead-startemacsdaemon-and-makeema
+#+EFFORT: 20m
+#+PRIORITY: #C
+#+LAYER: packages/emacs
+
+* Initial Message
+
+any dead code?
+
+** Problem
+startEmacsDaemon and makeEmacsSessionFactory in packages/emacs/src/tool.ts have zero runtime callers after the EmacsSessionManager refactor (commit 202e7f1b9). They are only referenced by their own tests and a smoke-test assertion.
+
+** Acceptance criteria
+- Both functions deleted from packages/emacs/src/tool.ts
+- Their named exports removed from packages/emacs/src/index.ts line 6
+- packages/emacs/test/startEmacsDaemon.test.ts deleted (entire file tests dead code)
+- packages/emacs/test/resolution.test.ts updated: remove makeEmacsSessionFactory import (line 4) and its typeof assertion (lines 30-32); keep createEmacsTool, detectEmacs, createEmacsClient assertions
+- The @deprecated JSDoc block (lines 116-119) deleted along with makeEmacsSessionFactory
+- The startEmacsDaemon JSDoc block (lines 84-91) deleted along with startEmacsDaemon
+- bun test packages/emacs/test/ passes (no regression)
+- bun run check in packages/emacs passes
+- bunx biome check on changed files passes
+
+** What to keep
+- createEmacsTool (live: used by packages/coding-agent/src/tools/emacs.ts:68)
+- warmupEmacs (live: used by packages/coding-agent/src/sdk.ts:872,986)
+- EmacsToolDependencies type (part of createEmacsTool public API)
+- EmacsWarmupOptions type (part of warmupEmacs public API)
+- All imports in tool.ts (detectEmacs, startEmacsSession, EMACS_ELISP_DIR) are shared with warmupEmacs — none become orphaned
+- org package emacsSessionFactory (completely separate, local to org package)
+
+** Files
+- packages/emacs/src/tool.ts — delete lines 84-126 (startEmacsDaemon + makeEmacsSessionFactory + their JSDoc)
+- packages/emacs/src/index.ts — remove makeEmacsSessionFactory and startEmacsDaemon from named export on line 6
+- packages/emacs/test/startEmacsDaemon.test.ts — delete file
+- packages/emacs/test/resolution.test.ts — remove import of makeEmacsSessionFactory and its assertion

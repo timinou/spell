@@ -1,0 +1,21 @@
+#+TITLE: Session 14a476757cde15f1 Todos
+#+DATE: 2026-03-28
+#+TODO: ITEM DOING | DONE
+
+* Execution
+
+** DONE Remove dead exports and tests
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+Deleted startEmacsDaemon and makeEmacsSessionFactory, switched barrel to export * from ./tool, removed dead smoke-test assertion, and deleted packages/emacs/test/startEmacsDaemon.test.ts. Grep confirms no remaining references.
+
+** DONE Verify and commit change
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Verified with bun test packages/emacs/test/ (26 pass, 3 skip), bun run check in packages/emacs, and bunx biome check on changed files. Committed targeted files only as 9332c0a1e: refactor(emacs): remove dead daemon startup helpers.

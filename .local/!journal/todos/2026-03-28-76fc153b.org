@@ -1,0 +1,21 @@
+#+TITLE: Session 14a4dd0de8661622 Todos
+#+DATE: 2026-03-28
+#+TODO: ITEM DOING | DONE
+
+* Verification and closure
+
+** DONE Run focused checks and capture proof
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Focused Biome/tsgo checks passed, Niri controller tests passed with suppression/restoration coverage, and live Ghostty+niri verification confirmed the overview hides images and restores them afterward. User waived saved artifacts.
+
+** DONE Update org state and commit plan changes
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+Committed only the plan-related code and org files as ed9f557f7 with message fix(niri): suppress inline images during overview (PLAN-007). Unrelated workspace changes remain unstaged.

@@ -1,0 +1,752 @@
+#+TITLE: Ultraplan Decomposition Workflow
+#+STATE: DONE
+#+SESSION_ID: 149acbb3fb7763aa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-21T01-19-08-269Z_149acbb3fb7763aa.jsonl]]
+#+CUSTOM_ID: PLAN-002-ultraplan-decomposition-workflow
+#+EFFORT: 12h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+* Initial Message
+
+Change the ultraplan's prompt and stuff to favour creating PROJ, FEAT, and BUG files and to use the DRAFT->PLAN to orchestrate between those files, and make sure you explicitly ask all the questions you can before you record each file, and that you run Metis before you start creating Org files, so that all that is written are detailed instructions, and all options have been decided upon. Ask me as many questions as possible
+
+* Problem
+
+The current ultraplan workflow creates a single monolithic DRAFT item containing everything: problem statement, approach, sub-tasks, verification. On approval, the body is copied verbatim into a PLAN item. This has three problems:
+
+1. *No structured decomposition.* The PROJ, FEAT, and BUG categories exist in org config but sit empty. All work lives in a flat PLAN body. There's no way to track individual work items across plans or query them independently.
+
+2. *DRAFT duplication.* Every approved plan exists twice: once as a DONE DRAFT, once as a DOING PLAN with identical content. The DRAFT category adds overhead with no value.
+
+3. *Insufficient questioning.* The agent often makes assumptions about scope, error handling, and categorization rather than asking the user. Quality gates (Metis/Momus) run too late or too narrowly.
+
+* Design Decisions (all confirmed with user)
+
+** Removal of DRAFT category
+- PLAN items are created directly in the =plans= category. No intermediate DRAFT step.
+- =finalizePlanDraft()= is replaced with =approvePlan()= that transitions PLAN from INIT→DOING.
+- Settings =org.planDraftCategory= and =org.planDraftState= are kept in schema (backward compat) but ignored by new code.
+- Existing DRAFT files on disk are left as-is (become orphaned).
+
+** New INIT state
+- INIT = "Initiative" — used for PLAN (orchestrator) items.
+- ITEM = used for child tasks within each initiative.
+- TODO keywords become: =[INIT, ITEM, DOING, REVIEW, DONE, BLOCKED]=.
+- State transitions for INIT mirror ITEM: =INIT → [DOING, BLOCKED]=, plus =INIT → REVIEW → DONE=.
+- STATE_TRANSITIONS in defaults.ts is dead code (never enforced at runtime), but we update it for documentation.
+
+** Child items in PROJ/FEAT/BUG categories
+- Agent creates child items in their respective categories (PROJ for multi-feature/infra work, FEAT for single features, BUG for fixes).
+- Agent proposes categories and asks user to confirm the full breakdown before creating any items.
+- Children are created with state: ITEM.
+- PLAN body references children via =[[id:CHILD-CUSTOM-ID]]= org-mode links.
+
+** Dynamic categories from config
+- Available categories (excluding plans, drafts, sessions) are read from org config at template render time.
+- Passed to plan-mode-active.md as structured data via Handlebars =#each=.
+- Agent sees the list and picks appropriate categories for each child item.
+
+** Org-mode [[id:...]] links
+- PLAN body uses =[[id:FEAT-001-add-auth]]= style links to reference children by CUSTOM_ID.
+- A new =extractIdLinks()= utility in =packages/org/src/= parses these links.
+- =exit_plan_mode= uses this parser to validate child references exist.
+
+** PLAN body format
+- Narrative context section (problem, approach, decisions)
+- Structured execution manifest: ordered list of child references with dependencies
+- Example:
+  #+begin_example
+  * Context
+  Background and key decisions...
+
+  * Execution Manifest
+  1. [[id:FEAT-001-add-auth]] (depends: none, effort: 2h)
+  2. [[id:FEAT-002-add-middleware]] (depends: FEAT-001, effort: 1h)
+  3. [[id:BUG-001-fix-token-refresh]] (depends: FEAT-001, effort: 30m)
+  #+end_example
+
+** Creation order
+- Children first → collect IDs → create PLAN with [[id:...]] references in body.
+- The prompt template must enforce this order explicitly.
+
+** Questioning workflow
+- Agent explores codebase, asks questions progressively (scope boundaries, acceptance criteria clarity, error handling, testing approach as SHOULD checklist).
+- Metis runs on requirements + codebase context.
+- Agent addresses Metis gaps with more questions if needed.
+- Agent proposes breakdown (titles, categories, scope) to user.
+- Daedalus validates the proposed decomposition (before items are created).
+- User confirms the breakdown.
+- Agent creates child items, then PLAN.
+
+** Quality gates (ultraplan only)
+- Gate 1: Metis — requirements gap analysis (unchanged).
+- Gate 2: Daedalus (NEW) — decomposition validation. Runs BEFORE items are created. Validates: category fitness, scope boundaries, dependency ordering, effort estimates.
+- Gate 3: Momus — plan quality review (existing, enhanced). Now validates PLAN + all child items.
+
+** /plan vs /ultraplan
+- Both use the new flow (direct PLAN creation, no DRAFT).
+- /plan: explore → ask → propose → create items → PLAN → exit.
+- /ultraplan: explore → ask → Metis → more questions → propose → Daedalus → user confirm → create items → PLAN → exit → (Momus via approval UI).
+
+** Approval flow
+- =exit_plan_mode= accepts PLAN CUSTOM_ID (required when org enabled).
+- Validates PLAN item exists and has [[id:...]] child references in body.
+- On approval: transitions PLAN INIT→DOING. Children stay ITEM.
+- Execution session behavior with children is OUT OF SCOPE (follow-up).
+
+** Backward compatibility
+- =org.planDraftCategory= and =org.planDraftState= settings remain in schema, ignored by new code.
+- =drafts= category stays in DEFAULT_ORG_CONFIG temporarily (can be removed in a future cleanup).
+- Existing DRAFT files on disk are orphaned but accessible via direct file reads.
+
+* Approach — Phase 1: Structural Changes
+
+** ITEM Add INIT state to org defaults
+:PROPERTIES:
+:EFFORT: 30m
+:LAYER: backend
+:FILES: packages/org/src/schema/defaults.ts
+:END:
+
+- Add ="INIT"= to =DEFAULT_TODO_KEYWORDS= as the first entry: =[INIT, ITEM, DOING, REVIEW, DONE, BLOCKED]=.
+- Add =INIT= to =STATE_TRANSITIONS=: =INIT: ["DOING", "REVIEW", "BLOCKED"]=.
+- Add =INIT= to =ACTIVE_STATES= (it represents an in-progress initiative being planned).
+- Update =CUSTOM_ID_REGEXP= if needed (INIT prefix is not a category prefix, so no change needed — INIT is a state not a category).
+- No changes to =REQUIRED_PROPERTIES= or =RECOMMENDED_PROPERTIES=.
+
+** ITEM Add [[id:...]] link extractor to packages/org
+:PROPERTIES:
+:EFFORT: 30m
+:LAYER: backend
+:FILES: packages/org/src/id-links.ts, packages/org/src/index.ts
+:END:
+
+- Create =packages/org/src/id-links.ts= with:
+  - =extractIdLinks(body: string): string[]= — returns array of CUSTOM_IDs referenced via =[[id:...]]= links.
+  - Regex: =/\[\[id:([A-Z]+-\d+(?:-[a-z0-9-]+)?)\]\]/g= (matches CUSTOM_ID_REGEXP format).
+- Export from =packages/org/src/index.ts=.
+- Add unit tests in =packages/org/test/id-links.test.ts=: empty body, single link, multiple links, no matches, malformed links, duplicate links (deduplicated).
+
+** ITEM Rewrite finalizePlanDraft → approvePlanItem
+:PROPERTIES:
+:EFFORT: 1h
+:LAYER: backend
+:FILES: packages/coding-agent/src/plan-mode/org-plan.ts
+:END:
+
+- Rename =finalizePlanDraft()= → =approvePlanItem()=.
+- New signature: =approvePlanItem(settings, projectRoot, planItem: {id, file}, initialMessage?)=.
+- New logic: transition PLAN from INIT→DOING via =updateItemStateInFile()=. No item creation, no copy.
+- Remove =OrgPlanDraft= interface (replace with =OrgPlanRef= or inline).
+- Remove all draft-related logic (finding draft category, generating new ID, creating active item).
+- Optionally: if =initialMessage= provided, prepend to plan body via =updateItemBodyInFile()= (check if this function exists, may need to add).
+- Update the caller in =interactive-mode.ts= =#approvePlan()= method:
+  - Replace =finalizePlanDraft()= call with =approvePlanItem()=.
+  - Remove =activeOrgItemId= variable and the dual-path logic (org vs file-backed).
+  - The plan reference is always =org://PLAN-xxx-id=.
+  - Remove the =renameApprovedPlanFile()= call for org-backed plans.
+- Update =resolvePlanDraftItem()= → =resolvePlanItem()= (same logic, renamed for clarity).
+
+** ITEM Inject available categories into plan-mode template
+:PROPERTIES:
+:EFFORT: 45m
+:LAYER: backend
+:FILES: packages/coding-agent/src/session/agent-session.ts
+:END:
+
+- In =#buildPlanModeMessage()=:
+  - Read org config via =buildOrgConfig()= + =resolveCategories()=.
+  - Filter categories: exclude =plans=, =drafts=, =sessions= (these are system categories).
+  - Map to array of ={name: string, prefix: string, description: string}=.
+  - Description is derived from category name: =projects= → "Multi-feature infrastructure work", =features= → "Single feature additions", =bugs= → "Bug fixes". If custom categories exist, use name as description.
+  - Pass as =childCategories= template variable.
+- Also remove =draftCategory= variable (no longer needed).
+- Pass =planCategory= variable (the category name for PLAN items, default "plans").
+
+** ITEM Rewrite plan-mode-active.md template
+:PROPERTIES:
+:EFFORT: 2h
+:LAYER: prompt
+:FILES: packages/coding-agent/src/prompts/system/plan-mode-active.md
+:END:
+
+This is the core prompt change. The template has multiple conditional branches. Changes:
+
+*** Non-ultraplan flow (replaces current org-backed plan creation)
+
+The current block at lines 15-46 (={{#if orgEnabled}}=) instructs agent to create a single DRAFT item. Replace with:
+
+- Instruct agent to create child items in appropriate categories first.
+- List available categories via ={{#each childCategories}}= block.
+- Instruct agent to create PLAN in =plans= category with state =INIT=.
+- PLAN body must contain: narrative context + execution manifest with =[[id:CHILD-ID]]= links.
+- Instruct agent to call =exit_plan_mode= with PLAN's CUSTOM_ID.
+- Provide a concrete example of the multi-item creation flow.
+
+*** Ultraplan section (lines 135-163, ={{#if ultraplan}}=)
+
+Replace with the new workflow:
+
+1. *Phase: Explore & Question (progressive)*
+   - Explore codebase, ask questions freely.
+   - SHOULD cover: scope boundaries, acceptance criteria clarity, error handling, testing approach.
+   - Err toward asking rather than assuming.
+
+2. *Phase: Metis gap analysis*
+   - Spawn =metis= subagent (unchanged).
+   - Address gaps by asking more questions if needed.
+
+3. *Phase: Propose decomposition*
+   - Present proposed breakdown to user via =ask= tool: titles, categories, scope summaries for each item.
+   - Wait for user confirmation before proceeding.
+
+4. *Phase: Daedalus validation*
+   - Spawn =daedalus= subagent with the proposed breakdown.
+   - If Daedalus finds issues, revise and re-propose.
+
+5. *Phase: Create org items*
+   - Create child items first (PROJ/FEAT/BUG with state ITEM).
+   - Create PLAN item last (state INIT, body with [[id:...]] links).
+   - Call =exit_plan_mode= with PLAN CUSTOM_ID.
+
+*** Planning Workflow section (non-ultraplan, non-iterative)
+
+Update Phase 4 ("Write Plan") to describe multi-item creation without quality gates.
+
+*** Iterative workflow
+
+Update to use new direct-PLAN creation flow (no DRAFT reference).
+
+** ITEM Update exit-plan-mode tool
+:PROPERTIES:
+:EFFORT: 45m
+:LAYER: backend
+:FILES: packages/coding-agent/src/tools/exit-plan-mode.ts, packages/coding-agent/src/prompts/tools/exit-plan-mode.md
+:END:
+
+- Update =exitPlanModeSchema=: make =itemId= required when org is enabled (or just always required — the tool already throws if item not found).
+- Update parameter description: "CUSTOM_ID of the PLAN item" (not "draft item").
+- In =execute()=:
+  - After resolving the org item, parse body for =[[id:...]]= links using =extractIdLinks()=.
+  - Validate each referenced child item exists via =findItemById()=.
+  - If any child is missing, throw =ToolError= listing the missing IDs.
+  - Include child count in the success response.
+- Update =ExitPlanModeDetails= interface to include =childItemIds?: string[]=.
+- Update =exit-plan-mode.md= prompt file: reference PLAN items, not drafts. Mention =itemId= is the PLAN's CUSTOM_ID.
+
+** ITEM Remove planDraftCategory from active code paths
+:PROPERTIES:
+:EFFORT: 30m
+:LAYER: backend
+:FILES: packages/coding-agent/src/session/agent-session.ts, packages/coding-agent/src/config/settings-schema.ts
+:END:
+
+- In =settings-schema.ts=: keep =org.planDraftCategory= and =org.planDraftState= entries (backward compat) but they are no longer read by new code.
+- In =#buildPlanModeMessage()=: remove =draftCategory= from template variables. Replace with =planCategory= (the plans category name).
+- In =#buildPlanModeMessage()=: remove =orgItemId= variable (was used for re-entry DRAFT tracking).
+- In =sendPlanModeContext()=: no changes needed (delegates to =#buildPlanModeMessage=).
+
+** ITEM Update interactive-mode.ts approval flow
+:PROPERTIES:
+:EFFORT: 1h
+:LAYER: backend
+:FILES: packages/coding-agent/src/modes/interactive-mode.ts
+:END:
+
+- In =#approvePlan()=:
+  - Replace =finalizePlanDraft()= call with =approvePlanItem()=.
+  - Simplify the =orgDraft= resolution: use =details.itemId= and =details.orgItemFile= directly.
+  - Remove =activeOrgItemId= fallback logic.
+  - The plan reference is always =org://PLAN-xxx=.
+  - Remove =renameApprovedPlanFile()= for org-backed plans (PLAN already exists at final location).
+- In =handleExitPlanModeTool()=: no structural changes needed (Momus path stays).
+- In =#enterPlanMode()=: remove =orgItemId= from =setPlanModeState()= (no pre-created draft to track).
+
+* Approach — Phase 2: Quality Gates (separately executable)
+
+** ITEM Create Daedalus agent prompt
+:PROPERTIES:
+:EFFORT: 1h
+:LAYER: prompt
+:FILES: packages/coding-agent/src/prompts/agents/daedalus.md
+:END:
+
+Create =daedalus.md= with frontmatter:
+#+begin_example
+---
+name: daedalus
+description: Decomposition validator. Validates proposed work breakdown before org items are created.
+tools: read, grep, find, bash, lsp, ast_grep
+model: pi/slow
+thinking-level: high
+blocking: true
+---
+#+end_example
+
+Daedalus checks:
+- *Category fitness*: Is each item in the right category? (PROJ for cross-cutting, FEAT for single features, BUG for defects)
+- *Scope boundaries*: No two items have overlapping scope. No gaps in coverage.
+- *Dependency ordering*: Dependencies are acyclic and reference valid items.
+- *Effort estimates*: Combined child effort is within 2x of the plan's total estimate. No item has unreasonably large or small effort.
+- *Questioning completeness*: Were scope boundaries, error handling, testing approach covered in prior questions? Flag if missing.
+- *Acceptance criteria*: Each item has concrete, agent-executable verification criteria.
+
+Output format: =APPROVE= or =REJECT= with specific issues per item.
+
+** ITEM Update Metis prompt for questioning awareness
+:PROPERTIES:
+:EFFORT: 30m
+:LAYER: prompt
+:FILES: packages/coding-agent/src/prompts/agents/metis.md
+:END:
+
+- Add a section to Metis's "What to look for" about questioning completeness.
+- Metis should flag if the agent's exploration missed asking about: scope boundaries, acceptance criteria clarity, error handling strategy, testing approach.
+- This covers requirement #7 (question checklist in Metis's analysis).
+
+** ITEM Update Momus to validate child items
+:PROPERTIES:
+:EFFORT: 45m
+:LAYER: prompt
+:FILES: packages/coding-agent/src/prompts/agents/momus.md
+:END:
+
+- Add section on child item validation.
+- Momus now receives PLAN body + child item IDs.
+- For each child: verify file references exist, acceptance criteria are concrete, scope is clear.
+- Update invocation in =interactive-mode.ts=: extract child IDs from plan body, org get each child, concatenate content, pass to Momus.
+
+** ITEM Update Momus invocation to include children
+:PROPERTIES:
+:EFFORT: 45m
+:LAYER: backend
+:FILES: packages/coding-agent/src/modes/interactive-mode.ts
+:END:
+
+- In =handleExitPlanModeTool()= where Momus review is triggered (line ~1098):
+  - Parse =planContent= for =[[id:...]]= links.
+  - For each child ID, resolve via =resolvePlanDraftItem()= (renamed =resolvePlanItem()=).
+  - Concatenate: PLAN body + separator + each child body with its ID.
+  - Pass combined content to the Momus prompt.
+
+* Verification
+
+** Type checks
+- =bun check:ts= passes (tsgo).
+- No new =any= types.
+
+** Unit tests
+- =packages/org/test/id-links.test.ts=: [[id:...]] parser tests.
+- =packages/coding-agent/src/plan-mode/org-plan.test.ts=: =approvePlanItem()= tests (transitions INIT→DOING).
+
+** Manual testing
+- =/plan= command: verify agent creates child items + PLAN directly (no DRAFT).
+- =/ultraplan= command: verify Metis → questions → Daedalus → user confirm → create items → PLAN → exit.
+- Approval flow: verify PLAN transitions INIT→DOING.
+- Momus review: verify PLAN + children passed to Momus.
+
+** Backward compatibility
+- Existing DRAFT files remain readable via direct file access.
+- Old =org.planDraftCategory= setting does not cause errors.
+
+* Files Changed (summary)
+
+| File | Change |
+|------|--------|
+| =packages/org/src/schema/defaults.ts= | Add INIT state |
+| =packages/org/src/id-links.ts= | NEW: [[id:...]] link extractor |
+| =packages/org/src/index.ts= | Export id-links |
+| =packages/org/test/id-links.test.ts= | NEW: parser tests |
+| =packages/coding-agent/src/plan-mode/org-plan.ts= | Rewrite: finalize→approve |
+| =packages/coding-agent/src/tools/exit-plan-mode.ts= | Validate child references |
+| =packages/coding-agent/src/prompts/tools/exit-plan-mode.md= | Update descriptions |
+| =packages/coding-agent/src/prompts/system/plan-mode-active.md= | Major rewrite |
+| =packages/coding-agent/src/prompts/agents/daedalus.md= | NEW: decomposition validator |
+| =packages/coding-agent/src/prompts/agents/metis.md= | Add questioning awareness |
+| =packages/coding-agent/src/prompts/agents/momus.md= | Add child validation |
+| =packages/coding-agent/src/session/agent-session.ts= | Inject categories, remove draft vars |
+| =packages/coding-agent/src/config/settings-schema.ts= | Keep deprecated settings |
+| =packages/coding-agent/src/modes/interactive-mode.ts= | Rewrite approval, Momus invocation |
+
+* Non-goals
+
+- Execution session changes (how the executing agent uses child items) — follow-up.
+- Removing =drafts= category from DEFAULT_ORG_CONFIG (cleanup follow-up).
+- State transition enforcement at runtime (STATE_TRANSITIONS is dead code).
+- Migration of existing DRAFT files.
+- Changes to /design workflow (Aphrodite/Athena gates stay as-is).
+* DOING ULTRAPLAN_DECOMPOSITION_WORKFLOW
+:PROPERTIES:
+:CUSTOM_ID: PLAN-002-ultraplan-decomposition-workflow
+:END:
+
+* Initial Message
+
+Change the ultraplan's prompt and stuff to favour creating PROJ, FEAT, and BUG files and to use the DRAFT->PLAN to orchestrate between those files, and make sure you explicitly ask all the questions you can before you record each file, and that you run Metis before you start creating Org files, so that all that is written are detailed instructions, and all options have been decided upon. Ask me as many questions as possible
+
+* Problem
+
+The current ultraplan workflow creates a single monolithic DRAFT item containing everything: problem statement, approach, sub-tasks, verification. On approval, the body is copied verbatim into a PLAN item. This has three problems:
+
+1. *No structured decomposition.* The PROJ, FEAT, and BUG categories exist in org config but sit empty. All work lives in a flat PLAN body. There's no way to track individual work items across plans or query them independently.
+
+2. *DRAFT duplication.* Every approved plan exists twice: once as a DONE DRAFT, once as a DOING PLAN with identical content. The DRAFT category adds overhead with no value.
+
+3. *Insufficient questioning.* The agent often makes assumptions about scope, error handling, and categorization rather than asking the user. Quality gates (Metis/Momus) run too late or too narrowly.
+
+* Design Decisions (all confirmed with user)
+
+** Removal of DRAFT category
+- PLAN items are created directly in the =plans= category. No intermediate DRAFT step.
+- =finalizePlanDraft()= is replaced with =approvePlan()= that transitions PLAN from INIT→DOING.
+- Settings =org.planDraftCategory= and =org.planDraftState= are kept in schema (backward compat) but ignored by new code.
+- Existing DRAFT files on disk are left as-is (become orphaned).
+
+** New INIT state
+- INIT = "Initiative" — used for PLAN (orchestrator) items.
+- ITEM = used for child tasks within each initiative.
+- TODO keywords become: =[INIT, ITEM, DOING, REVIEW, DONE, BLOCKED]=.
+- State transitions for INIT mirror ITEM: =INIT → [DOING, BLOCKED]=, plus =INIT → REVIEW → DONE=.
+- STATE_TRANSITIONS in defaults.ts is dead code (never enforced at runtime), but we update it for documentation.
+
+** Child items in PROJ/FEAT/BUG categories
+- Agent creates child items in their respective categories (PROJ for multi-feature/infra work, FEAT for single features, BUG for fixes).
+- Agent proposes categories and asks user to confirm the full breakdown before creating any items.
+- Children are created with state: ITEM.
+- PLAN body references children via =[[id:CHILD-CUSTOM-ID]]= org-mode links.
+
+** Dynamic categories from config
+- Available categories (excluding plans, drafts, sessions) are read from org config at template render time.
+- Passed to plan-mode-active.md as structured data via Handlebars =#each=.
+- Agent sees the list and picks appropriate categories for each child item.
+
+** Org-mode [[id:...]] links
+- PLAN body uses =[[id:FEAT-001-add-auth]]= style links to reference children by CUSTOM_ID.
+- A new =extractIdLinks()= utility in =packages/org/src/= parses these links.
+- =exit_plan_mode= uses this parser to validate child references exist.
+
+** PLAN body format
+- Narrative context section (problem, approach, decisions)
+- Structured execution manifest: ordered list of child references with dependencies
+- Example:
+  #+begin_example
+  * Context
+  Background and key decisions...
+
+  * Execution Manifest
+  1. [[id:FEAT-001-add-auth]] (depends: none, effort: 2h)
+  2. [[id:FEAT-002-add-middleware]] (depends: FEAT-001, effort: 1h)
+  3. [[id:BUG-001-fix-token-refresh]] (depends: FEAT-001, effort: 30m)
+  #+end_example
+
+** Creation order
+- Children first → collect IDs → create PLAN with [[id:...]] references in body.
+- The prompt template must enforce this order explicitly.
+
+** Questioning workflow
+- Agent explores codebase, asks questions progressively (scope boundaries, acceptance criteria clarity, error handling, testing approach as SHOULD checklist).
+- Metis runs on requirements + codebase context.
+- Agent addresses Metis gaps with more questions if needed.
+- Agent proposes breakdown (titles, categories, scope) to user.
+- Daedalus validates the proposed decomposition (before items are created).
+- User confirms the breakdown.
+- Agent creates child items, then PLAN.
+
+** Quality gates (ultraplan only)
+- Gate 1: Metis — requirements gap analysis (unchanged).
+- Gate 2: Daedalus (NEW) — decomposition validation. Runs BEFORE items are created. Validates: category fitness, scope boundaries, dependency ordering, effort estimates.
+- Gate 3: Momus — plan quality review (existing, enhanced). Now validates PLAN + all child items.
+
+** /plan vs /ultraplan
+- Both use the new flow (direct PLAN creation, no DRAFT).
+- /plan: explore → ask → propose → create items → PLAN → exit.
+- /ultraplan: explore → ask → Metis → more questions → propose → Daedalus → user confirm → create items → PLAN → exit → (Momus via approval UI).
+
+** Approval flow
+- =exit_plan_mode= accepts PLAN CUSTOM_ID (required when org enabled).
+- Validates PLAN item exists and has [[id:...]] child references in body.
+- On approval: transitions PLAN INIT→DOING. Children stay ITEM.
+- Execution session behavior with children is OUT OF SCOPE (follow-up).
+
+** Backward compatibility
+- =org.planDraftCategory= and =org.planDraftState= settings remain in schema, ignored by new code.
+- =drafts= category stays in DEFAULT_ORG_CONFIG temporarily (can be removed in a future cleanup).
+- Existing DRAFT files on disk are orphaned but accessible via direct file reads.
+
+* Approach — Phase 1: Structural Changes
+
+** ITEM Add INIT state to org defaults
+:PROPERTIES:
+:EFFORT: 30m
+:LAYER: backend
+:FILES: packages/org/src/schema/defaults.ts
+:END:
+
+- Add ="INIT"= to =DEFAULT_TODO_KEYWORDS= as the first entry: =[INIT, ITEM, DOING, REVIEW, DONE, BLOCKED]=.
+- Add =INIT= to =STATE_TRANSITIONS=: =INIT: ["DOING", "REVIEW", "BLOCKED"]=.
+- Add =INIT= to =ACTIVE_STATES= (it represents an in-progress initiative being planned).
+- Update =CUSTOM_ID_REGEXP= if needed (INIT prefix is not a category prefix, so no change needed — INIT is a state not a category).
+- No changes to =REQUIRED_PROPERTIES= or =RECOMMENDED_PROPERTIES=.
+
+** ITEM Add [[id:...]] link extractor to packages/org
+:PROPERTIES:
+:EFFORT: 30m
+:LAYER: backend
+:FILES: packages/org/src/id-links.ts, packages/org/src/index.ts
+:END:
+
+- Create =packages/org/src/id-links.ts= with:
+  - =extractIdLinks(body: string): string[]= — returns array of CUSTOM_IDs referenced via =[[id:...]]= links.
+  - Regex: =/\[\[id:([A-Z]+-\d+(?:-[a-z0-9-]+)?)\]\]/g= (matches CUSTOM_ID_REGEXP format).
+- Export from =packages/org/src/index.ts=.
+- Add unit tests in =packages/org/test/id-links.test.ts=: empty body, single link, multiple links, no matches, malformed links, duplicate links (deduplicated).
+
+** ITEM Rewrite finalizePlanDraft → approvePlanItem
+:PROPERTIES:
+:EFFORT: 1h
+:LAYER: backend
+:FILES: packages/coding-agent/src/plan-mode/org-plan.ts
+:END:
+
+- Rename =finalizePlanDraft()= → =approvePlanItem()=.
+- New signature: =approvePlanItem(settings, projectRoot, planItem: {id, file}, initialMessage?)=.
+- New logic: transition PLAN from INIT→DOING via =updateItemStateInFile()=. No item creation, no copy.
+- Remove =OrgPlanDraft= interface (replace with =OrgPlanRef= or inline).
+- Remove all draft-related logic (finding draft category, generating new ID, creating active item).
+- Optionally: if =initialMessage= provided, prepend to plan body via =updateItemBodyInFile()= (check if this function exists, may need to add).
+- Update the caller in =interactive-mode.ts= =#approvePlan()= method:
+  - Replace =finalizePlanDraft()= call with =approvePlanItem()=.
+  - Remove =activeOrgItemId= variable and the dual-path logic (org vs file-backed).
+  - The plan reference is always =org://PLAN-xxx-id=.
+  - Remove the =renameApprovedPlanFile()= call for org-backed plans.
+- Update =resolvePlanDraftItem()= → =resolvePlanItem()= (same logic, renamed for clarity).
+
+** ITEM Inject available categories into plan-mode template
+:PROPERTIES:
+:EFFORT: 45m
+:LAYER: backend
+:FILES: packages/coding-agent/src/session/agent-session.ts
+:END:
+
+- In =#buildPlanModeMessage()=:
+  - Read org config via =buildOrgConfig()= + =resolveCategories()=.
+  - Filter categories: exclude =plans=, =drafts=, =sessions= (these are system categories).
+  - Map to array of ={name: string, prefix: string, description: string}=.
+  - Description is derived from category name: =projects= → "Multi-feature infrastructure work", =features= → "Single feature additions", =bugs= → "Bug fixes". If custom categories exist, use name as description.
+  - Pass as =childCategories= template variable.
+- Also remove =draftCategory= variable (no longer needed).
+- Pass =planCategory= variable (the category name for PLAN items, default "plans").
+
+** ITEM Rewrite plan-mode-active.md template
+:PROPERTIES:
+:EFFORT: 2h
+:LAYER: prompt
+:FILES: packages/coding-agent/src/prompts/system/plan-mode-active.md
+:END:
+
+This is the core prompt change. The template has multiple conditional branches. Changes:
+
+*** Non-ultraplan flow (replaces current org-backed plan creation)
+
+The current block at lines 15-46 (={{#if orgEnabled}}=) instructs agent to create a single DRAFT item. Replace with:
+
+- Instruct agent to create child items in appropriate categories first.
+- List available categories via ={{#each childCategories}}= block.
+- Instruct agent to create PLAN in =plans= category with state =INIT=.
+- PLAN body must contain: narrative context + execution manifest with =[[id:CHILD-ID]]= links.
+- Instruct agent to call =exit_plan_mode= with PLAN's CUSTOM_ID.
+- Provide a concrete example of the multi-item creation flow.
+
+*** Ultraplan section (lines 135-163, ={{#if ultraplan}}=)
+
+Replace with the new workflow:
+
+1. *Phase: Explore & Question (progressive)*
+   - Explore codebase, ask questions freely.
+   - SHOULD cover: scope boundaries, acceptance criteria clarity, error handling, testing approach.
+   - Err toward asking rather than assuming.
+
+2. *Phase: Metis gap analysis*
+   - Spawn =metis= subagent (unchanged).
+   - Address gaps by asking more questions if needed.
+
+3. *Phase: Propose decomposition*
+   - Present proposed breakdown to user via =ask= tool: titles, categories, scope summaries for each item.
+   - Wait for user confirmation before proceeding.
+
+4. *Phase: Daedalus validation*
+   - Spawn =daedalus= subagent with the proposed breakdown.
+   - If Daedalus finds issues, revise and re-propose.
+
+5. *Phase: Create org items*
+   - Create child items first (PROJ/FEAT/BUG with state ITEM).
+   - Create PLAN item last (state INIT, body with [[id:...]] links).
+   - Call =exit_plan_mode= with PLAN CUSTOM_ID.
+
+*** Planning Workflow section (non-ultraplan, non-iterative)
+
+Update Phase 4 ("Write Plan") to describe multi-item creation without quality gates.
+
+*** Iterative workflow
+
+Update to use new direct-PLAN creation flow (no DRAFT reference).
+
+** ITEM Update exit-plan-mode tool
+:PROPERTIES:
+:EFFORT: 45m
+:LAYER: backend
+:FILES: packages/coding-agent/src/tools/exit-plan-mode.ts, packages/coding-agent/src/prompts/tools/exit-plan-mode.md
+:END:
+
+- Update =exitPlanModeSchema=: make =itemId= required when org is enabled (or just always required — the tool already throws if item not found).
+- Update parameter description: "CUSTOM_ID of the PLAN item" (not "draft item").
+- In =execute()=:
+  - After resolving the org item, parse body for =[[id:...]]= links using =extractIdLinks()=.
+  - Validate each referenced child item exists via =findItemById()=.
+  - If any child is missing, throw =ToolError= listing the missing IDs.
+  - Include child count in the success response.
+- Update =ExitPlanModeDetails= interface to include =childItemIds?: string[]=.
+- Update =exit-plan-mode.md= prompt file: reference PLAN items, not drafts. Mention =itemId= is the PLAN's CUSTOM_ID.
+
+** ITEM Remove planDraftCategory from active code paths
+:PROPERTIES:
+:EFFORT: 30m
+:LAYER: backend
+:FILES: packages/coding-agent/src/session/agent-session.ts, packages/coding-agent/src/config/settings-schema.ts
+:END:
+
+- In =settings-schema.ts=: keep =org.planDraftCategory= and =org.planDraftState= entries (backward compat) but they are no longer read by new code.
+- In =#buildPlanModeMessage()=: remove =draftCategory= from template variables. Replace with =planCategory= (the plans category name).
+- In =#buildPlanModeMessage()=: remove =orgItemId= variable (was used for re-entry DRAFT tracking).
+- In =sendPlanModeContext()=: no changes needed (delegates to =#buildPlanModeMessage=).
+
+** ITEM Update interactive-mode.ts approval flow
+:PROPERTIES:
+:EFFORT: 1h
+:LAYER: backend
+:FILES: packages/coding-agent/src/modes/interactive-mode.ts
+:END:
+
+- In =#approvePlan()=:
+  - Replace =finalizePlanDraft()= call with =approvePlanItem()=.
+  - Simplify the =orgDraft= resolution: use =details.itemId= and =details.orgItemFile= directly.
+  - Remove =activeOrgItemId= fallback logic.
+  - The plan reference is always =org://PLAN-xxx=.
+  - Remove =renameApprovedPlanFile()= for org-backed plans (PLAN already exists at final location).
+- In =handleExitPlanModeTool()=: no structural changes needed (Momus path stays).
+- In =#enterPlanMode()=: remove =orgItemId= from =setPlanModeState()= (no pre-created draft to track).
+
+* Approach — Phase 2: Quality Gates (separately executable)
+
+** ITEM Create Daedalus agent prompt
+:PROPERTIES:
+:EFFORT: 1h
+:LAYER: prompt
+:FILES: packages/coding-agent/src/prompts/agents/daedalus.md
+:END:
+
+Create =daedalus.md= with frontmatter:
+#+begin_example
+---
+name: daedalus
+description: Decomposition validator. Validates proposed work breakdown before org items are created.
+tools: read, grep, find, bash, lsp, ast_grep
+model: pi/slow
+thinking-level: high
+blocking: true
+---
+#+end_example
+
+Daedalus checks:
+- *Category fitness*: Is each item in the right category? (PROJ for cross-cutting, FEAT for single features, BUG for defects)
+- *Scope boundaries*: No two items have overlapping scope. No gaps in coverage.
+- *Dependency ordering*: Dependencies are acyclic and reference valid items.
+- *Effort estimates*: Combined child effort is within 2x of the plan's total estimate. No item has unreasonably large or small effort.
+- *Questioning completeness*: Were scope boundaries, error handling, testing approach covered in prior questions? Flag if missing.
+- *Acceptance criteria*: Each item has concrete, agent-executable verification criteria.
+
+Output format: =APPROVE= or =REJECT= with specific issues per item.
+
+** ITEM Update Metis prompt for questioning awareness
+:PROPERTIES:
+:EFFORT: 30m
+:LAYER: prompt
+:FILES: packages/coding-agent/src/prompts/agents/metis.md
+:END:
+
+- Add a section to Metis's "What to look for" about questioning completeness.
+- Metis should flag if the agent's exploration missed asking about: scope boundaries, acceptance criteria clarity, error handling strategy, testing approach.
+- This covers requirement #7 (question checklist in Metis's analysis).
+
+** ITEM Update Momus to validate child items
+:PROPERTIES:
+:EFFORT: 45m
+:LAYER: prompt
+:FILES: packages/coding-agent/src/prompts/agents/momus.md
+:END:
+
+- Add section on child item validation.
+- Momus now receives PLAN body + child item IDs.
+- For each child: verify file references exist, acceptance criteria are concrete, scope is clear.
+- Update invocation in =interactive-mode.ts=: extract child IDs from plan body, org get each child, concatenate content, pass to Momus.
+
+** ITEM Update Momus invocation to include children
+:PROPERTIES:
+:EFFORT: 45m
+:LAYER: backend
+:FILES: packages/coding-agent/src/modes/interactive-mode.ts
+:END:
+
+- In =handleExitPlanModeTool()= where Momus review is triggered (line ~1098):
+  - Parse =planContent= for =[[id:...]]= links.
+  - For each child ID, resolve via =resolvePlanDraftItem()= (renamed =resolvePlanItem()=).
+  - Concatenate: PLAN body + separator + each child body with its ID.
+  - Pass combined content to the Momus prompt.
+
+* Verification
+
+** Type checks
+- =bun check:ts= passes (tsgo).
+- No new =any= types.
+
+** Unit tests
+- =packages/org/test/id-links.test.ts=: [[id:...]] parser tests.
+- =packages/coding-agent/src/plan-mode/org-plan.test.ts=: =approvePlanItem()= tests (transitions INIT→DOING).
+
+** Manual testing
+- =/plan= command: verify agent creates child items + PLAN directly (no DRAFT).
+- =/ultraplan= command: verify Metis → questions → Daedalus → user confirm → create items → PLAN → exit.
+- Approval flow: verify PLAN transitions INIT→DOING.
+- Momus review: verify PLAN + children passed to Momus.
+
+** Backward compatibility
+- Existing DRAFT files remain readable via direct file access.
+- Old =org.planDraftCategory= setting does not cause errors.
+
+* Files Changed (summary)
+
+| File | Change |
+|------|--------|
+| =packages/org/src/schema/defaults.ts= | Add INIT state |
+| =packages/org/src/id-links.ts= | NEW: [[id:...]] link extractor |
+| =packages/org/src/index.ts= | Export id-links |
+| =packages/org/test/id-links.test.ts= | NEW: parser tests |
+| =packages/coding-agent/src/plan-mode/org-plan.ts= | Rewrite: finalize→approve |
+| =packages/coding-agent/src/tools/exit-plan-mode.ts= | Validate child references |
+| =packages/coding-agent/src/prompts/tools/exit-plan-mode.md= | Update descriptions |
+| =packages/coding-agent/src/prompts/system/plan-mode-active.md= | Major rewrite |
+| =packages/coding-agent/src/prompts/agents/daedalus.md= | NEW: decomposition validator |
+| =packages/coding-agent/src/prompts/agents/metis.md= | Add questioning awareness |
+| =packages/coding-agent/src/prompts/agents/momus.md= | Add child validation |
+| =packages/coding-agent/src/session/agent-session.ts= | Inject categories, remove draft vars |
+| =packages/coding-agent/src/config/settings-schema.ts= | Keep deprecated settings |
+| =packages/coding-agent/src/modes/interactive-mode.ts= | Rewrite approval, Momus invocation |
+
+* Non-goals
+
+- Execution session changes (how the executing agent uses child items) — follow-up.
+- Removing =drafts= category from DEFAULT_ORG_CONFIG (cleanup follow-up).
+- State transition enforcement at runtime (STATE_TRANSITIONS is dead code).
+- Migration of existing DRAFT files.
+- Changes to /design workflow (Aphrodite/Athena gates stay as-is).

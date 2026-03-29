@@ -1,0 +1,21 @@
+#+TITLE: Session 149b4e29477763b5 Todos
+#+DATE: 2026-03-21
+#+TODO: ITEM DOING | DONE
+
+* Verification
+
+** DONE Run targeted tests and type checks
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: completed
+:END:
+
+Focused tests passed: id-links parser, exit-plan-mode (expanded), org-plan approval, and plan-mode-approved prompt. Package type checks passed via `bun x tsgo -p packages/coding-agent/tsconfig.json` and `bun x tsgo -p packages/org/tsconfig.json`.
+
+** DONE Review diff for plan conformance
+:PROPERTIES:
+:TASK_ID: task-11
+:STATUS: completed
+:END:
+
+Confirmed implementation matches approved scope: direct PLAN flow, INIT state adoption, child-link parser + validation, prompt workflow rewrite with Metis/Daedalus ordering, Momus child-context wiring, and backward-compatible settings retention.

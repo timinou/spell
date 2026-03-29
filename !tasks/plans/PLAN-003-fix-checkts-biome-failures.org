@@ -1,0 +1,15 @@
+#+TITLE: Fix checkts Biome failures
+#+STATE: DOING
+#+SESSION_ID: 149b941a88dbf633
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-21T15-54-42-083Z_149b941a88dbf633.jsonl]]
+#+CUSTOM_ID: PLAN-003-fix-checkts-biome-failures
+
+* Initial Message
+
+bun check:ts still fails due pre-existing repo-wide Biome internal panic and unrelated packages/utils/*.d.ts formatting diagnostics (not introduced by this change set).
+
+
+
+^ fix this
+
+* Context\n`bun check:ts` fails with 19 Biome diagnostics, all from generated `.d.ts` files in `packages/utils/src/`. These are type declaration outputs checked into git — they should never be linted or formatted by Biome.\n\nThe fix is a single-line addition to `biome.json`: add `!**/*.d.ts` to the `files.includes` exclusion list.\n\n* Execution Manifest\n1. [[id:BUG-001-exclude-d-ts-files-from-biome-checks]] (depends: none, effort: 5m)\n   - Edit `biome.json`, add `\"!**/*.d.ts\"` after line 46 (`!**/template.generated.ts`) in the `files.includes` array\n   - Run `bun check:ts` to verify 0 biome errors\n   - No other files need changing

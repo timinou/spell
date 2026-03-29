@@ -1,0 +1,23 @@
+#+TITLE: Session 14a49ad78c742957 Todos
+#+DATE: 2026-03-28
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE Add completion protocol prompts
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+Added org-backed completion protocol guidance, verification requirements for new plans, wired `orgItemArtifactsDir` into the approved prompt context, and covered prompt rendering with focused tests.
+
+* Verification
+
+** DONE Run focused checks
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+Verified with `bun test packages/coding-agent/test/tools/browser.test.ts packages/coding-agent/test/plan-mode/org-plan.test.ts packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts packages/coding-agent/test/system-prompt-templates.test.ts`, `bun x biome check ...` on the changed files, and `bun x tsgo -p packages/coding-agent/tsconfig.json --noEmit`.

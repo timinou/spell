@@ -1,0 +1,56 @@
+#+TITLE: emacs_code getSession has no isAlive check before use
+#+STATE: ITEM
+#+SESSION_ID: 14a469a3db5e15e8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T12-35-30-285Z_14a469a3db5e15e8.jsonl]]
+#+CUSTOM_ID: BUG-001-emacs-code-getsession-has-no-isalive-che
+#+EFFORT: 30m
+#+PRIORITY: A
+#+LAYER: packages/emacs
+
+* Initial Message
+
+Emacs Code
+ {
+   "error": true,
+   "message": "Emacs daemon unavailable"
+ }
+
+
+
+In this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-mamabox-sales-.ancillary-docview/2026-03-28T11-54-55-960Z_14a4605a9611252c.jsonl
+ ID: 14a4605a9611252c
+
+
+Explain why the daemon was unavaialble and why the tool, and/or the daemon manager behind it, was not able to spin the daemon back up. Then tell me how you can TDD solve it
+
+* Scope
+** In-scope
+- tool.ts execute path: check isAlive() on the session before attempting socat
+- Return "Emacs daemon unavailable" if session exists but isAlive() is false, instead of proceeding to fail at socat
+** Out-of-scope
+- Recovery logic (handled by sibling item)
+- Changes to daemon.ts health timer
+- SDK warmup changes
+
+* Implementation
+** File: packages/emacs/src/tool.ts
+- In createEmacsTool execute(), after getSession(), add isAlive() check:
+  const session = await deps.getSession();
+  if (!session || !session.isAlive()) return { error: true, message: "Emacs daemon unavailable" };
+- This makes the error message accurate for dead-but-non-null sessions
+
+* Tests
+** File: packages/emacs/test/tool-getSession.test.ts
+- Test: "execute returns error when getSession returns null" (exists implicitly, make explicit)
+- Test: "execute returns error when session.isAlive() is false" — mock getSession to return {socketPath: "...", isAlive: () => false, stop: async () => {}}
+- Test: "execute proceeds normally when session.isAlive() is true"
+
+* Edge Cases
+- Session that was alive when getSession was called but dies before socat connect — this is acceptable, socat will fail and the error is caught in the try/catch
+
+* Acceptance Criteria
+- tool.ts checks isAlive() before proceeding to socat
+- Test proves dead sessions produce the "unavailable" error without reaching socat
+- No regression on existing behavior

@@ -1,0 +1,210 @@
+#+TITLE: FLUID_CANVAS_COMPONENTS_PLANNER
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-fluid-canvas-components-planner
+
+* Initial Message
+
+ok thanks. what's next? ask me as many questiosn as possible. Be thorough in understanding what still needs to be done to get to a ful canvas experience
+
+* Problem
+
+Two areas block fluid canvas maturity:
+
+1. *Canvas component gaps.* The =component-gaps.md= doc identified 5 missing components. Three are resolved (LayoutContainer, StatusIndicator, LogStream). Two remain: a reusable *ProgressBar* canvas block and a *syntax-highlighted CodeBlock*. Without a CodeBlock, all agent code output is rendered as unstyled plain text via =Text.MarkdownText=, which has no token-level coloring. Without a ProgressBar canvas block, agents cannot emit live structured progress.
+
+2. *Planner quality.* The planner prompt is generic (86 lines, 3 examples). No guidance on task granularity, anti-patterns, or canvasOutput usage. DAG validation is structural only (cycles, missing deps) -- no checks for empty task descriptions, excessive agent count, or invalid canvasOutput types. No semantic validation exists.
+
+* Approach
+
+Two phases, each independently shippable.
+
+*Phase 1 (components + structural validation):*
+- Add =CodeBlock= canvas component using TS-side tokenization (shiki) into pre-rendered HTML, displayed via =Text.RichText= in QML. No C++ changes. The block data schema is ={ language: string, code: string, html: string }=. TS layer populates =html= before sending to QML.
+- Add =ProgressBar= canvas component as a *static display* block only. Shows a completed ratio or labeled bar. NOT live-updating (the current =canvas_output= event fires only on agent completion; streaming canvas updates are a separate feature in DRAFT-009-fluid-structured-agent-progress-events). Block data: ={ value: number, max?: number, label?: string }=.
+- Register both as planner-emittable types: update =CanvasOutputType= union, =canvasOutputSchema=, ContentBlock.qml dispatch, and planner prompt simultaneously.
+- Extend =validateDag()= (rename to =validatePlan()=) with: non-empty task descriptions, agent count cap (warn >12), valid canvasOutput types against the TS enum.
+
+*Phase 2 (planner prompt + semantic validation):*
+- Improve planner prompt with 5 concrete heuristics and richer examples.
+- Add semantic validation as inline LLM call (NOT a subprocess -- use the =ai= package directly with a cheap/fast model). Runs within the planning phase latency (hidden inside "Planning..." UI state). On rejection: re-invoke planner with critique as context, max 1 retry. On second failure: emit =plan_error=.
+- Wire into =executePlan()= between =runPlanningAgent()= return and =executeFluidPlan()= call.
+
+* Key decisions
+
+- *CodeBlock highlighting: TS-side tokenization.* Shiki produces HTML; QML renders =Text.RichText=. No C++ QSyntaxHighlighter. Block data carries both raw =code= and pre-rendered =html= so QML stays pure display. Language detection falls back to "text" if unknown.
+- *ProgressBar: static only.* Live-updating canvas blocks requires a new =canvas_update= event type which is out of scope (belongs in structured-progress-events PROJ).
+- *Both new types are planner-emittable.* They get added to the =CanvasOutputType= union, schema, prompt, and QML dispatcher atomically. =code= for when the planner wants an agent to produce syntax-highlighted output. =progress= for summary bars in completion results.
+- *Semantic validation: inline, not subprocess.* Direct LLM call avoids subprocess startup latency. Runs during planning phase. Max 1 re-plan attempt.
+- *Rename validateDag -> validatePlan.* One function, one validation pass, one error list. No parallel validation paths.
+
+* Mutation sites per new block type
+
+Every new type touches exactly 4 files atomically:
+1. =src/orchestrators/fluid/types.ts= -- =CanvasOutputType= union
+2. =src/orchestrators/fluid/plan-schema.ts= -- =Type.Literal(...)= in schema
+3. =src/prompts/agents/fluid-planner.md= -- allowed types list + usage example
+4. =src/modes/qml/canvas/ContentBlock.qml= -- switch case + Component
+
+* File changes
+
+| File | Change |
+|---+---|
+| =src/modes/qml/canvas/components/CodeBlock.qml= | New: syntax-highlighted code display via =Text.RichText= |
+| =src/modes/qml/canvas/components/ProgressBar.qml= | New: static progress bar with label |
+| =src/modes/qml/canvas/ContentBlock.qml= | Add =code= and =progress= to switch + new Component refs |
+| =src/orchestrators/fluid/types.ts= | Add ="code" &#124; "progress"= to =CanvasOutputType= |
+| =src/orchestrators/fluid/plan-schema.ts= | Add =Type.Literal("code"), Type.Literal("progress")= |
+| =src/orchestrators/fluid/dag.ts= | Rename =validateDag= to =validatePlan=, add task/count/type checks |
+| =src/prompts/agents/fluid-planner.md= | Richer heuristics, anti-patterns, =code= and =progress= examples |
+| =src/modes/fluid-mode.ts= | Add =validateAndRefine()= between planning and execution |
+| =src/orchestrators/fluid/index.ts= | Update re-export if validateDag renamed |
+
+Consumers of =validateDag= (run =lsp references= before renaming):
+- =src/orchestrators/fluid/fluid-orchestrator.ts= (line 47)
+- =test/orchestrators/fluid-dag.test.ts= (all tests)
+- =test/orchestrators/fluid-drain.test.ts= (if any)
+
+* Implementation
+
+** ITEM Add CodeBlock canvas component
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+File: =src/modes/qml/canvas/components/CodeBlock.qml=
+
+Block data shape: ={ language: string, code: string, html: string }=
+
+- =Text= element with =textFormat: Text.RichText= displaying =blockData.html=
+- Mono font (=SpellTheme.monoFontFamily=), dark background (=SpellTheme.background=)
+- Language label in top-right corner
+- Horizontal scroll via =Flickable= for wide lines (no word-wrap for code)
+- Falls back to displaying =blockData.code= as plain text if =html= is empty
+
+The TS-side tokenization:
+- Add =shiki= or similar as dependency to =packages/coding-agent=
+- Create =src/orchestrators/fluid/code-highlight.ts= with =highlightCode(code: string, language: string): string= returning HTML
+- Call it in =FluidEventRouter.toBridgePayload()= when event is =canvas_output= with =outputType === "code"=: parse the output content as code, tokenize, add =html= field to the bridge payload
+
+** ITEM Add ProgressBar canvas component
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: =src/modes/qml/canvas/components/ProgressBar.qml=
+
+Block data shape: ={ value: number, max?: number, label?: string }=
+
+- Qt Quick Controls =ProgressBar= (=from: 0, to: max ?? 100, value: blockData.value=)
+- Label text above or beside the bar
+- Themed with =SpellTheme= colors
+- Indeterminate mode when =value= is -1 (=indeterminate: true=)
+
+** ITEM Register new types in ContentBlock + type system
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+Atomic changes across 4 files:
+
+=types.ts=: Add ="code" | "progress"= to =CanvasOutputType= union.
+
+=plan-schema.ts=: Add =Type.Literal("code"), Type.Literal("progress")= to the =Type.Union= in =canvasOutputSchema=.
+
+=ContentBlock.qml=: Add =case "code": return codeComponent= and =case "progress": return progressComponent= to the switch. Add =Component { id: codeComponent; ... }= and =Component { id: progressComponent; ... }=.
+
+=FluidShell.qml normalizeBlockData()=: Add =code= case (pass through raw if already structured, otherwise wrap in ={ code: content, html: "", language: "text" }=).
+
+** ITEM Rename validateDag to validatePlan and extend
+:PROPERTIES:
+:EFFORT: 1h
+:END:
+
+File: =src/orchestrators/fluid/dag.ts=
+
+Rename =validateDag= export to =validatePlan=. Update all consumers (orchestrator, tests).
+
+Add checks:
+- Empty task description: =agent.task.trim().length === 0= -> error
+- Agent count warning: =agents.length > 12= -> warning (not error, just flag)
+- Invalid canvasOutput type: check against =CanvasOutputType= values -> error
+- Duplicate canvasOutput titles within same type -> warning
+
+Keep existing checks (cycles, duplicates, missing deps, entry points).
+
+=ValidationResult= stays ={ valid: boolean, errors: string[] }= but add =warnings: string[]=.
+
+** ITEM Improve planner prompt
+:PROPERTIES:
+:EFFORT: 1h30m
+:END:
+
+File: =src/prompts/agents/fluid-planner.md=
+
+Add 5 heuristics:
+1. Each task should be completable by a single agent in one session.
+2. Target 2-8 agents. Use more only when tasks are genuinely parallelizable.
+3. Use =canvasOutput= only for output meant for human review (not intermediate data).
+4. Each task description must state what the agent should produce, not just what it should do.
+5. Prefer wide DAGs (parallelism) over deep chains (sequential bottleneck).
+
+Add anti-patterns section:
+- Don't create a single agent for everything (defeats the purpose).
+- Don't create > 12 agents for a simple task (overhead exceeds benefit).
+- Don't chain agents when they could run in parallel.
+
+Add =code= and =progress= canvasOutput examples:
+#+BEGIN_SRC json
+{
+  "id": "analyze-types",
+  "task": "Analyze all TypeScript type exports and produce a highlighted type map.",
+  "dependsOn": [],
+  "canvasOutput": { "type": "code", "title": "Type Export Map" }
+}
+#+END_SRC
+
+Improve existing examples with clearer task descriptions.
+
+** ITEM Add semantic validation
+:PROPERTIES:
+:EFFORT: 2h
+:END:
+
+File: =src/orchestrators/fluid/plan-validator.ts= (new)
+
+Create =validatePlanSemantic(plan: FluidPlan, userPrompt: string): Promise<{ valid: boolean, critique?: string }>=
+
+- Uses the =ai= package directly to call a cheap/fast model (e.g. =haiku=, =gemini-flash=, or whatever is available)
+- System prompt: "You are a plan quality reviewer. Given a user prompt and a decomposition plan, check: (1) Do the tasks collectively address the user's request? (2) Are tasks too vague or too granular? (3) Are dependencies logical? (4) Is the plan decomposition reasonable? Respond with JSON: { valid: true } or { valid: false, critique: '...' }"
+- Keep the validation prompt in a =.md= file (=src/prompts/agents/fluid-plan-validator.md=)
+- Use Handlebars for dynamic content (user prompt, plan JSON)
+
+File: =src/modes/fluid-mode.ts=
+
+In =executePlan()=, after =runPlanningAgent()= returns a plan:
+
+1. Run =validatePlanSemantic(plan, prompt)=
+2. If valid, proceed to =executeFluidPlan()=
+3. If invalid, re-invoke =runPlanningAgent()= with critique appended to the prompt
+4. Max 1 retry. If second plan also fails validation, emit =plan_error= with the critique
+
+Emit a =planner_stream= event during validation: "Validating plan..." so the user sees activity.
+
+* Verification
+
+- =bun test test/orchestrators/fluid-dag.test.ts= passes (updated for =validatePlan= rename)
+- =bun test test/integration/fluid-pipeline-e2e.test.ts= passes
+- =bun test test/integration/fluid-event-pipeline.test.ts= passes
+- =bun run check= passes
+- New unit tests for =validatePlan= extended checks (empty tasks, type validation)
+- New unit test for =validatePlanSemantic= (mock the LLM call)
+- Manual verification: launch =spell --canvas fluid=, submit a prompt, verify planner uses improved heuristics
+
+* Deferred work (separate PROJs already filed)
+
+- =DRAFT-009-fluid-session-persistence-and-resume= -- session persistence + =--resume=
+- =DRAFT-009-fluid-dev-panel-power-user-corner= -- power-user corner panel
+- =DRAFT-009-fluid-error-recovery-edit-retry-and-skip= -- edit-retry + skip
+- =DRAFT-009-fluid-structured-agent-progress-events= -- structured progress events (tool calls, file edits)
+- =DRAFT-009-fluid-iterative-refinement-keep-results= -- keep previous results across plans
+- =DRAFT-009-wire-fluid-orchestratormanager-for-cross= -- cross-canvas orchestrator wiring

@@ -1,0 +1,76 @@
+#+TITLE: Subagent status shows aborted when submit_result protocol fails
+#+STATE: DONE
+#+SESSION_ID: 14a4a46b4911e9b4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T16-52-18-852Z_14a4a46b4911e9b4.jsonl]]
+#+CUSTOM_ID: BUG-001-subagent-status-shows-aborted-when-submi
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: agent-runtime
+
+NOTE [2026-03-28]: Implemented in packages/coding-agent/src/task/executor.ts by removing missing-submit-result abort/exit-code coercion; verified by focused executor reminder and warning tests on 2026-03-28.
+
+* Initial Message
+
+intentional aesthetic direction.
+  └─ Tasks: 1 agents
+    └─ ⏹ Aphrodite: Design direction analysis for UI cleanup ⟦aborted⟧
+
+
+In File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-djinn_playground/2026-03-28T16-43-06-6
+ 67Z_14a4a2500aebfa8c.jsonl
+ ID: 14a4a2500aebfa8c
+
+
+
+
+Why do subagents return aborted even though the message in the chat is that it's completed?
+
+* Problem
+When a subagent completes its work but fails to call ~submit_result~ (e.g., model doesn't support forced tool choice, hits context limits, or confuses the tool name), the executor marks the result as ~aborted~ even though the agent produced valid output. The user sees "⏹ aborted" in the TUI while the agent's output text clearly shows completed work.
+
+Confirmed from session data: ~gpt-5.3-codex~ model via ~openai-codex-responses~ API failed to call ~submit_result~ after 3 reminders (on the 3rd attempt, it called ~fetch~ with URL ~https://submit_result://complete~).
+
+* Root Cause
+In ~packages/coding-agent/src/task/executor.ts~ lines 1121-1126:
+#+begin_src typescript
+if (!submitResultCalled && !abortSignal.aborted) {
+    aborted = true;        // <-- problem
+    exitCode = 1;          // <-- problem
+    abortReasonText ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
+    error ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
+}
+#+end_src
+
+Setting ~aborted = true~ and ~exitCode = 1~ creates a circular dependency:
+1. ~done.aborted = true~ → ~doneAborted = true~ in ~finalizeSubprocessOutput~
+2. ~allowFallback = exitCode === 0 && !doneAborted~ → ~false~
+3. Fallback path (raw output acceptance) is blocked
+4. ~wasAborted = !hasSubmitResult && done.aborted~ → ~true~
+5. ~progress.status = "aborted"~
+
+* Fix
+Remove ~aborted = true~ and ~exitCode = 1~ from the missing-submit-result block. Keep only the error message for diagnostics:
+#+begin_src typescript
+if (!submitResultCalled && !abortSignal.aborted) {
+    error ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
+}
+#+end_src
+
+This lets ~finalizeSubprocessOutput~ handle the fallback correctly:
+- ~doneAborted = false~ → ~allowFallback = true~
+- ~resolveFallbackCompletion~ tries to parse raw output as structured data
+- If no schema: raw output accepted, ~exitCode = 0~ → "completed"
+- If schema but can't parse: warning prepended, ~exitCode = 0~ → "completed" (with warning)
+- Genuine aborts (signal, explicit abort via submit_result) still correctly show "aborted"
+
+* Files
+- ~packages/coding-agent/src/task/executor.ts~ — lines 1121-1126: remove ~aborted = true~ and ~exitCode = 1~
+
+* Acceptance Criteria
+- [ ] Subagent that produces output but doesn't call submit_result → status "completed" (not "aborted")
+- [ ] Subagent that is genuinely cancelled (signal abort) → status "aborted" (unchanged)
+- [ ] Subagent that calls submit_result with status "aborted" → status "aborted" (unchanged)
+- [ ] Warning message ~SUBAGENT_WARNING_MISSING_SUBMIT_RESULT~ still appears in output text
+- [ ] ~bun check:ts~ passes with targeted scope
+- [ ] Existing test ~executor-subagent-reminders.test.ts~ updated to expect new behavior

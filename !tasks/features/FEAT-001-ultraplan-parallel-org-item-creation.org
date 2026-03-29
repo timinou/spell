@@ -1,0 +1,38 @@
+#+TITLE: Ultraplan Parallel Org Item Creation
+#+STATE: ITEM
+#+SESSION_ID: 149ca470047f34c1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-22T11-44-32-785Z_149ca470047f34c1.jsonl]]
+#+CUSTOM_ID: FEAT-001-ultraplan-parallel-org-item-creation
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: prompts
+
+* Initial Message
+
+Actually, I realize I can't use task parallelization since the task tool agents don't have org access—I'll need to update them sequentially. Let me start by identifying what needs to happen: update the existing Phase
+ 2 items from the previous session, create FEAT-F for the Tailwind refactor, and update the PLAN item. The Phase 1 items that are already completed should remain as-is.
+
+
+
+^^^^^ is that true? the org tool should be accessible by task parallelisation
+
+* Scope
+Add explicit parallelization guidance to the ultraplan prompt's Phase 5 (Create Org Items + Exit) so the agent uses task parallelization for org item creation/updates instead of sequential calls.
+
+* Problem
+The ultraplan agent in a hotelcomm session incorrectly assumed task subagents don't have org tool access and proceeded to create/update 15 org items sequentially. It ran out of context after completing only 6. The task and quick_task agent types have All tools including org.
+
+* Target File
+packages/coding-agent/src/prompts/system/plan-mode-active.md
+
+* Change
+In the ultraplan section, Phase 5 (lines ~190-194), add guidance:
+- When creating/updating multiple org items, use parallel quick_task agents
+- Each task gets one org create/update call
+- All items are independent (non-overlapping IDs), safe to parallelize
+- This applies to both initial creation and enrichment updates
+
+* Acceptance Criteria
+- Phase 5 includes explicit instruction to parallelize org item creation via task tool
+- Mentions quick_task agent type specifically
+- Notes that org tool is available to task/quick_task agents

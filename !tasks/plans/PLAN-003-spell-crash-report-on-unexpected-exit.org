@@ -1,0 +1,65 @@
+#+TITLE: Spell crash report on unexpected exit
+#+STATE: DOING
+#+SESSION_ID: 14a49d36b5e4645f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T16-20-50-007Z_14a49d36b5e4645f.jsonl]]
+#+CUSTOM_ID: PLAN-003-spell-crash-report-on-unexpected-exit
+
+* Initial Message
+
+File: /home/user/.spell/agent/sessions/-code-ora-mamabox-sales-.ancillary-docview/2026-03-28T13-04-00-862Z_14a4702a5751253f.jsonl
+ ID: 14a4702a5751253f
+
+
+Why did it crash every time after make dev?
+
+* Context
+
+When spell crashes (uncaught exception, unhandled rejection, native SIGSEGV), the process exits and the terminal returns to prompt. The user has no actionable diagnostic information — no crash report, no pointer to logs, no session context. Investigating requires manually grepping =~/.spell/logs/= and correlating timestamps with session JSONL files.
+
+The existing infrastructure is close but not wired together:
+- =postmortem.ts= handles signals and fatal exceptions, runs cleanup, writes to stderr and log
+- =report-bundle.ts= can create full diagnostic archives but only via manual =/debug= menu
+- =system-info.ts= collects OS/arch/CPU/memory/versions
+- Session state (ID, file, CWD, model) is available at runtime via =SessionManager=
+- None of this is captured automatically on crash
+
+** Approach
+
+Add a lightweight =writeCrashReport= to =postmortem.ts= that fires synchronously (=writeFileSync=) in the uncaughtException/unhandledRejection handlers BEFORE cleanup runs. It writes a single JSON file to =~/.spell/reports/crash-TIMESTAMP.json= and prints a one-line breadcrumb to stderr.
+
+Session context is injected via a =registerSessionContext= function called from =sdk.ts= after the session is created. The getter is synchronous — it reads already-available state, no I/O.
+
+** Key decisions
+
+- Sync write only (=fs.writeFileSync=) — process is dying, cannot await
+- JSON not tar.gz — minimal overhead, no compression needed for a single small file
+- Reports dir (=~/.spell/reports/=) reuses existing =getReportsDir()= — same place as manual debug bundles
+- No crash report on clean SIGINT (Ctrl-C) or normal exit — only on exceptions and (optionally) SIGTERM if a session was active
+- Session context is optional — crash during startup (before session exists) still produces a report with error + system info
+- Existing cleanup behavior is unchanged — crash report fires first, then cleanup runs as before
+
+** Critical file paths
+
+- =packages/utils/src/postmortem.ts= — main implementation (writeCrashReport, registerSessionContext, handler hookup)
+- =packages/coding-agent/src/sdk.ts= — register session context after line ~685
+- =packages/coding-agent/CHANGELOG.md= — unreleased section
+
+* Verification
+
+1. =bun check:ts= passes
+2. Manual test: add =throw new Error(\"test crash\")= temporarily to a tool handler, trigger it, verify:
+   - JSON file appears in =~/.spell/reports/=
+   - stderr shows crash report path
+   - JSON contains error.name, error.message, error.stack, session.id, model.id, system.os, pid, uptime
+3. Normal Ctrl-C exit does NOT produce a crash report
+4. Crash during startup (before session) produces report with error + system but null session/model
+5. Verify file written synchronously: the report must exist even if cleanup callbacks fail
+
+* Execution Manifest
+
+1. [[id:FEAT-001-automatic-crash-report-on-unexpected-exi]] (depends: none, effort: 2h)
+   - Add =writeCrashReport= and =registerSessionContext= to =postmortem.ts=
+   - Hook into uncaughtException/unhandledRejection handlers
+   - Register session context in =sdk.ts=
+   - Update changelog
+   - Verify with =bun check:ts=

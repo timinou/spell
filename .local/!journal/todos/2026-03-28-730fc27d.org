@@ -1,0 +1,13 @@
+#+TITLE: Session 14a4bc42ef646466 Todos
+#+DATE: 2026-03-28
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE Verify behavior and update changelog
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Targeted package checks passed. Manual smoke tests verified: crash report written with session/model/system data, startup crash report has null session/model, SIGINT creates no report, and report survives failing cleanup callbacks. Root bun check:ts still fails in unrelated pre-existing files.

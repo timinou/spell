@@ -1,0 +1,87 @@
+#+TITLE: completePlanItem helper for plan lifecycle closure
+#+STATE: ITEM
+#+SESSION_ID: 14a475a741b4294e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T13-27-59-494Z_14a475a741b4294e.jsonl]]
+#+CUSTOM_ID: FEAT-001-completeplanitem-helper-for-plan-lifecyc
+#+EFFORT: 45m
+#+PRIORITY: #B
+#+LAYER: core
+
+* Initial Message
+
+I want you to think about how you can use the browser tool and the testing infra of whatever we're working on to add completion artifacts to plan at the end of plans being implemented. The goal is to have annotated/commented/captioned screenshots showing behaviour and whatnot at the end of every plan, and to make sure implemented plans close by doing the right closing actions on the org tool, sometimes they leave plans as DOING instead of marking them done/implemented. Think deeply about what that means and show me your understanding of spell and of engineering management and quality control
+
+* Scope
+
+Add =completePlanItem()= to =org-plan.ts= as the symmetric counterpart to =approvePlanItem()=. Where =approvePlanItem()= handles INIT → DOING on approval, =completePlanItem()= handles DOING → DONE on execution completion.
+
+This function is used by the prompt-driven completion protocol (the agent calls =org update= directly based on prompt instructions), but also enables a future programmatic safety net: a session-end hook that auto-closes orphaned DOING plans.
+
+** Out of scope
+- Session-end hook implementation (future work, separate item)
+- UI changes to show completion status
+- Automatic screenshot capture (handled by prompt instructions)
+
+* Implementation
+
+** File: =packages/coding-agent/src/plan-mode/org-plan.ts=
+
+Add a new exported function:
+
+#+begin_src typescript
+export async function completePlanItem(
+  settings: Settings,
+  projectRoot: string,
+  planItem: OrgPlanRef,
+  completionNote?: string,
+): Promise<{ planId: string; closedChildren: string[] } | null>
+#+end_src
+
+Logic:
+1. Check =settings.get("org.enabled")= — return null if disabled
+2. Build config via =buildOrgConfig(settings)= (reuse existing helper)
+3. Find the plan item via =findItemById()=
+4. Extract child IDs via =extractIdLinks(item.body)=
+5. For each child ID:
+   - Find the item
+   - If its state is in =ACTIVE_STATES= or state is "ITEM", transition to DONE with note
+   - If already DONE or BLOCKED, skip
+   - Collect closed child IDs
+6. Transition the plan item DOING → DONE via =updateItemStateInFile()= with dated note
+7. If =completionNote= is provided, append it to the plan body via =updateItemBodyInFile()=
+8. Return ={ planId, closedChildren }=
+
+** Import additions
+- Import =extractIdLinks= from the same package
+- Import =TERMINAL_STATES=, =BLOCKED_STATES= from schema/defaults
+
+* Edge Cases
+
+- Plan not in DOING state: throw descriptive error ("Cannot complete plan in {state} state")
+- Child item not found: log warning, skip, include in result as "not found"
+- Child already DONE: skip silently
+- Child BLOCKED: do NOT transition — leave it, log it
+- Org disabled: return null (same pattern as approvePlanItem)
+- Empty child list: still transition the plan to DONE (some plans may have no children)
+
+* Tests
+
+** File: =packages/coding-agent/test/plan-mode/org-plan.test.ts= (new or existing)
+
+Test cases:
+1. Transitions plan from DOING to DONE
+2. Transitions active child items to DONE
+3. Skips already-DONE child items
+4. Skips BLOCKED child items
+5. Returns null when org disabled
+6. Throws when plan is not in DOING state
+7. Works with empty child list
+8. Includes completion note in plan body when provided
+
+* Acceptance Criteria
+
+1. =completePlanItem()= transitions a DOING plan to DONE
+2. All ACTIVE/ITEM child items are transitioned to DONE with notes
+3. BLOCKED children are left untouched
+4. Function returns accurate ={ planId, closedChildren }= summary
+5. Existing =approvePlanItem()= behavior is unchanged

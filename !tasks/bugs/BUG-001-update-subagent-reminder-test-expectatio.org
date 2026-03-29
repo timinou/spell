@@ -1,0 +1,63 @@
+#+TITLE: Update subagent reminder test expectations for corrected abort semantics
+#+STATE: DONE
+#+SESSION_ID: 14a4a46b4911e9b4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T16-52-18-852Z_14a4a46b4911e9b4.jsonl]]
+#+CUSTOM_ID: BUG-001-update-subagent-reminder-test-expectatio
+#+EFFORT: 15m
+#+PRIORITY: #A
+#+LAYER: testing
+
+NOTE [2026-03-28]: Updated executor-subagent-reminders.test.ts expectations to completed-with-warning semantics and verified reminder plus warning suites passed on 2026-03-28.
+
+* Initial Message
+
+intentional aesthetic direction.
+  └─ Tasks: 1 agents
+    └─ ⏹ Aphrodite: Design direction analysis for UI cleanup ⟦aborted⟧
+
+
+In File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-djinn_playground/2026-03-28T16-43-06-6
+ 67Z_14a4a2500aebfa8c.jsonl
+ ID: 14a4a2500aebfa8c
+
+
+
+
+Why do subagents return aborted even though the message in the chat is that it's completed?
+
+* Problem
+The test "aborts after 3 reminders when submit_result is never called" in ~executor-subagent-reminders.test.ts~ asserts the current (buggy) behavior where missing submit_result → aborted. After fixing BUG-001, the test expectations must change.
+
+* File
+~packages/coding-agent/test/task/executor-subagent-reminders.test.ts~
+
+* Current Expectations (lines 331-335)
+#+begin_src typescript
+expect(prompts).toHaveLength(4);
+expect(result.exitCode).toBe(1);
+expect(result.aborted).toBe(true);
+expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+expect(result.abortReason).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+#+end_src
+
+* New Expectations
+#+begin_src typescript
+expect(prompts).toHaveLength(4);  // Still 4 (initial + 3 reminders)
+expect(result.aborted).toBe(false);  // Not aborted, just missing protocol
+expect(result.exitCode).toBe(0);     // Accepted with warning
+// Warning should appear in output text (prepended by finalizeSubprocessOutput)
+expect(result.output).toContain(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+// abortReason should be undefined since not aborted
+expect(result.abortReason).toBeUndefined();
+#+end_src
+
+Note: The test uses ~outputSchema~, so ~finalizeSubprocessOutput~ enters the schema path. The mock agent responds with plain text that won't parse as JSON, so ~resolveFallbackCompletion~ fails. The fallback path prepends the warning to rawOutput and keeps ~exitCode = 0~.
+
+The test at line 338 ("surfaces abort reason when submit_result reports aborted status") should remain UNCHANGED — that tests genuine abort via submit_result.
+
+* Acceptance Criteria
+- [ ] Test "aborts after 3 reminders" updated with corrected expectations
+- [ ] Test "surfaces abort reason when submit_result reports aborted status" unchanged
+- [ ] All tests in ~executor-subagent-reminders.test.ts~ pass
+- [ ] All tests in ~executor-warnings.test.ts~ still pass (no changes needed)

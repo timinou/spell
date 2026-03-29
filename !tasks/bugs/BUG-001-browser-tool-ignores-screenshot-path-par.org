@@ -1,0 +1,53 @@
+#+TITLE: Browser tool ignores screenshot path param
+#+STATE: ITEM
+#+SESSION_ID: 14a475a741b4294e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T13-27-59-494Z_14a475a741b4294e.jsonl]]
+#+CUSTOM_ID: BUG-001-browser-tool-ignores-screenshot-path-par
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: tool
+
+* Initial Message
+
+I want you to think about how you can use the browser tool and the testing infra of whatever we're working on to add completion artifacts to plan at the end of plans being implemented. The goal is to have annotated/commented/captioned screenshots showing behaviour and whatnot at the end of every plan, and to make sure implemented plans close by doing the right closing actions on the org tool, sometimes they leave plans as DOING instead of marking them done/implemented. Think deeply about what that means and show me your understanding of spell and of engineering management and quality control
+
+* Scope
+
+The browser tool's Typebox schema declares a =path= parameter for screenshots (line 376 of =browser.ts=), and the tool prompt documents it as "Optional path to save screenshot (relative to cwd)". But the screenshot handler (lines 1345-1394) never reads =params.path= — it unconditionally saves to =/tmp/spell-sshots-{snowflake}.png=.
+
+This is a prerequisite for plan completion artifacts: without it, screenshots can only go to temp files that disappear, not persistent project-relative locations.
+
+** Out of scope
+- Canvas tool screenshot (already supports path)
+- QML BrowserWindow screenshot (already supports path)
+- Image annotation/overlay (not needed — captions go in the org item body)
+
+* Implementation
+
+** File: =packages/coding-agent/src/tools/browser.ts=
+
+In the =case "screenshot"= block (around line 1372), after =await Bun.write(tempFile, resized.buffer)=:
+
+1. Check if =params.path= is provided
+2. If so, resolve it relative to =this.session.cwd= (use =path.resolve(this.session.cwd, params.path)=)
+3. Write the resized buffer to the resolved path via =Bun.write()= (auto-creates parent dirs)
+4. Set =details.screenshotPath= to the resolved path instead of tempFile
+5. If =params.path= is not provided, fall back to the existing tempFile behavior
+
+** Edge Cases
+- Relative path (=screenshots/foo.png=) resolves against session cwd
+- Absolute path (=/tmp/custom.png=) used as-is
+- Path traversal (=../../etc/passwd=) — =Bun.write= handles this, but we should not do additional validation beyond what the sandbox already provides
+- Missing parent dirs — =Bun.write= creates them automatically
+
+* Tests
+
+Add a test case to the browser tool test file that verifies:
+- Screenshot with =path= param saves to the specified location
+- Screenshot without =path= falls back to temp file
+
+* Acceptance Criteria
+
+1. =puppeteer screenshot= with =path: "artifacts/test.png"= saves the file at ={cwd}/artifacts/test.png=
+2. =puppeteer screenshot= without =path= continues to save to =/tmp/spell-sshots-*.png=
+3. =details.screenshotPath= reflects the actual save location in both cases

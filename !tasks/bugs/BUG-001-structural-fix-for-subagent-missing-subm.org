@@ -1,0 +1,136 @@
+#+TITLE: Structural fix for subagent missing-submit-result status
+#+STATE: DONE
+#+SESSION_ID: 14a4c04eb99cc29c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T18-54-09-638Z_14a4c04eb99cc29c.jsonl]]
+#+CUSTOM_ID: BUG-001-structural-fix-for-subagent-missing-subm
+#+EFFORT: 45m
+#+PRIORITY: #A
+#+LAYER: agent-runtime
+
+NOTE [2026-03-28]: Implemented warning propagation for schema-less missing submit_result output, dropped forced tool choice on the last reminder, added final-reminder prompt fallback text, and verified targeted tests plus package-local checks in packages/coding-agent.
+
+* Initial Message
+
+completion protocol is currently structured and where I need to add these requirements.
+
+
+ ⏳ Task: explore
+  ├─ Context
+  │  Looking at plan mode completion protocol and how it's assembled. Need to find where completion
+ instructions live, how artifacts are referenced, and how org files relate to commits.
+  └─ Tasks: 2 agents
+    ├─ ⏹ CompletionProtocol: Find the plan completion protocol source ⟦aborted⟧
+    └─ ⏹ OrgImageSyntax: Find org image syntax patterns in codebase ⟦aborted⟧
+
+
+In session:
+
+File:
+ /home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T18-13-58-723Z_14a4b71c50d1e9bb.jsonl
+ ID: 14a4b71c50d1e9bb
+
+
+
+Why did it abort bro? WHYYYY????
+
+* Problem
+
+BUG-001-subagent-status-shows-aborted-when-submi (DONE) removed ~aborted = true~ and ~exitCode = 1~ from the missing-submit-result block in ~executor.ts~. This fixed the false "aborted" label but introduced a worse problem: schema-less agents (explore, task, etc.) that fail to call ~submit_result~ are now silently marked "completed" with a green checkmark. No warning is shown because ~finalizeSubprocessOutput~ only prepends the ~SUBAGENT_WARNING_MISSING_SUBMIT_RESULT~ marker for schema-having agents.
+
+The render layer (~render.ts~ line 734) uses ~extractMissingSubmitResultWarning()~ to detect this marker and show a yellow warning icon. For schema-less agents, the marker is never set, so render shows full success.
+
+Root: ~finalizeSubprocessOutput~ line 317-319:
+#+begin_src typescript
+} else if (!hasOutputSchema && allowFallback && rawOutput.trim().length > 0) {
+    exitCode = 0;
+    stderr = "";
+    // BUG: no warning prefix added → render shows green checkmark
+}
+#+end_src
+
+Additionally, the 3-retry loop (lines 1100-1118) uses ~buildNamedToolChoice("submit_result", model)~ on every retry. Some models (codex, gemini) don't properly support forced named tool choice, so ALL 3 retries fail the same way.
+
+* Fix — Three changes
+
+** 1. Always prepend warning for missing submit_result (finalizeSubprocessOutput)
+
+In ~finalizeSubprocessOutput~, line 317-319, prepend the warning marker even for schema-less agents:
+
+#+begin_src typescript
+} else if (!hasOutputSchema && allowFallback && rawOutput.trim().length > 0) {
+    rawOutput = `${SUBAGENT_WARNING_MISSING_SUBMIT_RESULT}\n\n${rawOutput}`;
+    exitCode = 0;
+    stderr = "";
+}
+#+end_src
+
+This ensures ~extractMissingSubmitResultWarning~ in render.ts detects it and shows the yellow warning icon + "warning" badge instead of green "done".
+
+** 2. Degrade tool choice on last retry (executor retry loop)
+
+Modify the retry loop (lines 1100-1118) so the last retry drops forced tool choice entirely:
+
+#+begin_src typescript
+while (!submitResultCalled && retryCount < MAX_SUBMIT_RESULT_RETRIES && !abortSignal.aborted) {
+    try {
+        retryCount++;
+        const isLastRetry = retryCount === MAX_SUBMIT_RESULT_RETRIES;
+        const reminder = renderPromptTemplate(submitReminderTemplate, {
+            retryCount,
+            maxRetries: MAX_SUBMIT_RESULT_RETRIES,
+            isLastRetry,
+        });
+        await session.prompt(reminder, {
+            attribution: "agent",
+            // Drop tool choice on last retry — some models fight forced tool choice
+            // but comply with a plain prompt asking them to call the tool.
+            ...(!isLastRetry && reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
+        });
+        await session.waitForIdle();
+    } catch (err) {
+        logger.error("Subagent prompt failed", { ... });
+    }
+}
+#+end_src
+
+** 3. Content-based exitCode when all retries fail
+
+After the retry loop (lines 1121-1124), use ~progress.toolCount~ to distinguish agents that did work from those that never engaged:
+
+#+begin_src typescript
+if (!submitResultCalled && !abortSignal.aborted) {
+    // Agent that made tool calls did useful work; protocol violation, not task failure.
+    // Agent that made NO tool calls never engaged — genuine failure.
+    if (progress.toolCount === 0) {
+        exitCode = 1;
+    }
+    error ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
+}
+#+end_src
+
+Combined with Part 1, this produces three TUI outcomes for missing submit_result:
+| Scenario | exitCode | warning prefix | render status |
+|----------|----------|----------------|---------------|
+| Did work, has output | 0 | yes | warning (yellow) |
+| No tool calls, no output | 1 | no | failed (red) |
+| Signal abort | 1 (via line 1128) | n/a | aborted (red) |
+
+* Update subagent-submit-reminder.md
+
+Add ~{{#if isLastRetry}}~ block with a final warning that does NOT demand a specific tool call but instead says: "Call submit_result now. If you cannot, summarize your results as text — your output will be accepted but marked as incomplete."
+
+* Files
+- ~packages/coding-agent/src/task/executor.ts~ — finalizeSubprocessOutput (line 317-319), retry loop (lines 1100-1118), post-retry (lines 1121-1124)
+- ~packages/coding-agent/src/prompts/system/subagent-submit-reminder.md~ — add isLastRetry conditional
+- ~packages/coding-agent/test/task/executor-warnings.test.ts~ — update "does not inject missing-submit warning when no schema and raw text exists" (it SHOULD now inject it)
+- ~packages/coding-agent/test/task/executor-subagent-reminders.test.ts~ — add test for degraded tool choice on last retry
+
+* Acceptance Criteria
+- [ ] Schema-less agent that did work but didn't call submit_result → TUI shows yellow warning icon + "warning" badge (not green "done")
+- [ ] Schema-less agent with no tool calls and no output → TUI shows red "failed" badge
+- [ ] Signal-aborted agent → TUI shows red "aborted" badge (unchanged)
+- [ ] Agent that calls submit_result successfully → TUI shows green "done" (unchanged)
+- [ ] Last retry drops forced tool choice from prompt options
+- [ ] ~executor-warnings.test.ts~ test "does not inject missing-submit warning when no schema and raw text exists" is updated to expect warning prefix
+- [ ] New test in ~executor-subagent-reminders.test.ts~ verifying tool choice is omitted on final retry
+- [ ] ~bun check:ts~ passes with targeted scope on packages/coding-agent

@@ -1,0 +1,138 @@
+#+TITLE: emacs_code has no daemon recovery or lazy restart
+#+STATE: ITEM
+#+SESSION_ID: 14a469a3db5e15e8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T12-35-30-285Z_14a469a3db5e15e8.jsonl]]
+#+CUSTOM_ID: BUG-001-emacs-code-has-no-daemon-recovery-or-laz
+#+EFFORT: 2h
+#+PRIORITY: A
+#+LAYER: packages/emacs
+
+* Initial Message
+
+Emacs Code
+ {
+   "error": true,
+   "message": "Emacs daemon unavailable"
+ }
+
+
+
+In this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-mamabox-sales-.ancillary-docview/2026-03-28T11-54-55-960Z_14a4605a9611252c.jsonl
+ ID: 14a4605a9611252c
+
+
+Explain why the daemon was unavaialble and why the tool, and/or the daemon manager behind it, was not able to spin the daemon back up. Then tell me how you can TDD solve it
+
+* Scope
+** In-scope
+- Replace bare getSession property read with a lazy session manager that can restart the daemon
+- Add rate-limited retry logic (circuit breaker pattern) for daemon restart
+- Wire the new session manager into both tool.ts and the SDK warmup path
+- Preserve the existing warmup-at-init fast path (background startup during SDK init)
+** Out-of-scope
+- Changes to daemon.ts internal launch/reattach logic (it already works correctly)
+- Changes to detection.ts
+- Changes to the emacs_code tool schema or rendering
+
+* Implementation
+
+** New file: packages/emacs/src/session-manager.ts
+EmacsSessionManager class:
+- Constructor takes: emacsPath, projectRoot, sessionId (the same params warmupEmacs takes)
+- getSession(): Promise<EmacsSession | null> — the lazy factory:
+  1. Fast path: if #session is non-null and isAlive(), return it
+  2. If #session exists but !isAlive(): clear it, fall through to restart
+  3. If circuit breaker is tripped (N failures within cooldown): return null, log once
+  4. Attempt startEmacsSession() with stored params
+  5. On success: store session, reset failure count, return session
+  6. On failure: increment failure count, log, return null
+- setSession(session): void — allows SDK warmup to inject pre-started session
+- dispose(): Promise<void> — stops daemon and clears state
+
+Circuit breaker config:
+- MAX_CONSECUTIVE_FAILURES = 3
+- COOLDOWN_MS = 60_000 (1 minute after 3 failures)
+- After cooldown expires, reset and allow another attempt
+
+** File: packages/emacs/src/tool.ts
+- EmacsToolDependencies.getSession() signature stays the same
+- createEmacsTool stays the same (it already takes getSession callback)
+- startEmacsDaemon stays the same (used internally by session manager)
+- warmupEmacs: modify to return both the result AND a session manager
+  OR: keep warmupEmacs as-is, let SDK create the session manager separately
+  Decision: keep warmupEmacs unchanged; SDK creates session manager and calls setSession() with the warmup result
+
+** File: packages/coding-agent/src/tools/emacs.ts
+- EmacsTool constructor: accept EmacsSessionManager instead of reading toolSession.emacsSession
+- getSession callback delegates to manager.getSession()
+
+** File: packages/coding-agent/src/tools/index.ts
+- ToolSession: replace emacsSession?: EmacsSession | null with emacsSessionManager?: EmacsSessionManager
+  or keep both for the transition, with the manager as the primary
+
+** File: packages/coding-agent/src/sdk.ts
+- After warmup, create EmacsSessionManager and call setSession(result.session) if warmup succeeded
+- Store manager on toolSession
+- dispose() calls manager.dispose() instead of session.stop()
+
+* Tests
+** File: packages/emacs/test/session-manager.test.ts
+
+Test: "getSession returns pre-injected session when alive"
+- Create manager, call setSession(mockAliveSession), call getSession()
+- Assert returns the mock session, no startEmacsSession call
+
+Test: "getSession attempts lazy start when no session exists"
+- Create manager without setSession, mock startEmacsSession to return a session
+- Assert getSession() returns the new session
+- Assert startEmacsSession was called once
+
+Test: "getSession restarts daemon when previous session died"
+- Create manager, setSession(mockDeadSession where isAlive()=false)
+- Mock startEmacsSession to return new session
+- Call getSession()
+- Assert returns new session, old session is replaced
+
+Test: "getSession returns null when startEmacsSession fails"
+- Mock startEmacsSession to throw
+- Assert getSession() returns null (not throw)
+
+Test: "getSession stops retrying after MAX_CONSECUTIVE_FAILURES"
+- Mock startEmacsSession to throw 3 times
+- Call getSession() 4 times
+- Assert startEmacsSession called exactly 3 times (4th call skipped, circuit breaker)
+- Assert getSession() returns null on 4th call
+
+Test: "getSession resets circuit breaker after cooldown"
+- Mock startEmacsSession to throw 3 times
+- Advance time past COOLDOWN_MS (use Bun.sleep mock or inject a clock)
+- Mock startEmacsSession to succeed
+- Assert getSession() attempts restart and returns session
+
+Test: "getSession does not race — concurrent calls share one startup"
+- Mock startEmacsSession with a delayed promise
+- Call getSession() 3 times concurrently
+- Assert startEmacsSession called exactly once
+- Assert all 3 calls return the same session
+
+Test: "dispose stops the daemon and clears session"
+- Create manager with active session
+- Call dispose()
+- Assert session.stop() was called
+- Assert subsequent getSession() attempts restart (not returns dead session)
+
+* Edge Cases
+- Concurrent getSession calls must coalesce into a single startup attempt (use a pending promise lock)
+- If daemon detection passes but startup times out, that counts as one failure toward the breaker
+- If detection itself fails (emacs not installed), the circuit breaker should trip immediately and stay tripped permanently (no point retrying detection)
+- dispose() during an in-flight startup should cancel/ignore the result
+
+* Acceptance Criteria
+- A daemon that crashes mid-session is automatically restarted on next tool call
+- After 3 consecutive failures, the tool stops retrying for 60s
+- Concurrent tool calls don't spawn multiple daemons
+- The fast path (alive daemon) adds negligible overhead (one isAlive() call)
+- All tests pass with mocked startEmacsSession (no real emacs required)
+- No regression on existing daemon-survival tests

@@ -1,0 +1,21 @@
+#+TITLE: Session 149ca7af0b7f34c4 Todos
+#+DATE: 2026-03-22
+#+TODO: ITEM DOING | DONE
+
+* Execute Approved Plan
+
+** DONE Insert org item body standard subsection
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Inserted new mandatory Org Item Body Standard section between Phase 4 and Phase 5 with required five sections and explicit constraints.
+
+** DONE Verify required prompt constraints
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+Verified `agent: task` in Phase 5; confirmed no quicktask matches; confirmed Org Item Body Standard is between Phase 4 and Phase 5 and includes Scope/Implementation/Tests/Edge Cases/Acceptance Criteria plus explicit no-test-lumping rule; verified `{{#if ultraplan}}...{{/if}}` intact. File diff is limited to ultraplan section changes.

@@ -1,0 +1,73 @@
+#+TITLE: Fix subagent aborted status mismatch
+#+STATE: DONE
+#+SESSION_ID: 14a4a46b4911e9b4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T16-52-18-852Z_14a4a46b4911e9b4.jsonl]]
+#+CUSTOM_ID: PLAN-003-fix-subagent-aborted-status-mismatch
+
+NOTE [2026-03-28]: Completed on 2026-03-28. Missing submit_result now yields completed-with-warning status, focused verification passed, and linked child items were closed.
+
+
+* Initial Message
+
+intentional aesthetic direction.
+  └─ Tasks: 1 agents
+    └─ ⏹ Aphrodite: Design direction analysis for UI cleanup ⟦aborted⟧
+
+
+In File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-djinn_playground/2026-03-28T16-43-06-6
+ 67Z_14a4a2500aebfa8c.jsonl
+ ID: 14a4a2500aebfa8c
+
+
+
+
+Why do subagents return aborted even though the message in the chat is that it's completed?
+
+* Context
+
+** Problem
+Subagents show "⏹ aborted" status in the TUI when they produce valid output but fail to call ~submit_result~. The agent's output text shows completed work, but the status badge shows "aborted". This confuses users because their work appears cancelled when it actually completed.
+
+** Confirmed scenario
+From session ~2026-03-28T16-43-06-667Z_14a4a2500aebfa8c~: Agent "Aphrodite" using ~gpt-5.3-codex~ produced 225 lines of design analysis. After 3 ~submit_result~ reminders, the model called ~fetch~ with URL ~https://submit_result://complete~ instead of calling the actual tool. The session shows all 3 reminders (lines 26, 36, 42 in JSONL) and the confused ~fetch~ call (line 44). Result: status "aborted" despite complete, valuable output.
+
+** Root cause
+In ~packages/coding-agent/src/task/executor.ts~, the "missing submit_result" handler (lines 1121-1126) sets ~aborted = true~ and ~exitCode = 1~. This:
+1. Prevents ~finalizeSubprocessOutput~ fallback path (~allowFallback = exitCode === 0 && !doneAborted~ → false)
+2. Forces ~wasAborted = !hasSubmitResult && done.aborted~ → true (line 1241)
+3. Status = "aborted"
+
+** Approach
+Decouple "missing submit_result" from "aborted". Remove ~aborted = true~ and ~exitCode = 1~ from the missing-submit-result block. Keep only the error message for diagnostics. The existing ~finalizeSubprocessOutput~ fallback logic already handles this case correctly when ~doneAborted = false~:
+- With schema: tries ~resolveFallbackCompletion~; if fails, prepends warning to output
+- Without schema: accepts raw output directly
+- Both cases: ~exitCode = 0~ → status "completed" (with warning embedded in output)
+
+Genuine aborts (signal cancellation, explicit abort via submit_result) are unaffected — they flow through different code paths (~abortSignal.aborted~ check in finally block, ~abortedViaSubmitResult~ flag).
+
+** Key design decisions
+- "Missing submit_result" is a protocol compliance issue, not an abort. The agent executed its work.
+- Status "aborted" reserved exclusively for: (1) external cancellation (signal), (2) explicit abort via submit_result with ~status: "aborted"~
+- Warning text ~SUBAGENT_WARNING_MISSING_SUBMIT_RESULT~ preserved in output for diagnostic visibility
+
+* Verification
+- ~bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts~ — all tests pass with updated expectations
+- ~bun test packages/coding-agent/test/task/executor-warnings.test.ts~ — all tests pass (no changes needed, tests ~finalizeSubprocessOutput~ independently)
+- Verify the "surfaces abort reason when submit_result reports aborted status" test is UNCHANGED and still passes
+
+* Execution Manifest
+1. [[id:BUG-001-subagent-status-shows-aborted-when-submi]] (depends: none, effort: 30m) — Fix executor.ts missing-submit-result handler
+2. [[id:BUG-001-update-subagent-reminder-test-expectatio]] (depends: BUG-001-subagent-status-shows-aborted-when-submi, effort: 15m) — Update test expectations
+
+
+** Completion [2026-03-28]
+*** Verification
+- `bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts` -> passed (`8 pass`, `0 fail`). This includes the unchanged test `surfaces abort reason when submit_result reports aborted status`.
+- `bun test packages/coding-agent/test/task/executor-warnings.test.ts` -> passed (`8 pass`, `0 fail`).
+- `git diff -- packages/coding-agent/src/task/executor.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts` -> confirmed only the missing-submit abort coercion removal and the reminder test expectation update landed.
+- `bunx @biomejs/biome check packages/coding-agent/src/task/executor.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts` -> passed (`Checked 2 files`, `No fixes applied`).
+*** Artifacts
+- None.
+*** Deviations
+- None.

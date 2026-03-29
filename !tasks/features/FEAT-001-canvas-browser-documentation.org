@@ -1,0 +1,116 @@
+#+TITLE: Canvas Browser Documentation
+#+STATE: ITEM
+#+SESSION_ID: 14a39a54461f5775
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T20-45-55-331Z_14a3904c40df5761/11-CreateFeat5.jsonl]]
+#+CUSTOM_ID: FEAT-001-canvas-browser-documentation
+#+LAYER: docs
+#+EFFORT: 1h
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+Plan mode — create org items only. Do not create or modify source files.\n\nThis is part of a plan to add a reusable QML browser component to the spell project's QML stdlib. The project lives at /home/user/code/ora/spell.\n\nKey codebase facts:\n- Stdlib root: packages/coding-agent/src/modes/qml/\n- canvas://stdlib/ resolves to that path\n- Bridge binary at packages/qml/bridge/ links Qt6::WebEngineQuick\n- QmlTestHarness/QmlJourney provide headless QML testing via offscreen mode\n- Armed tools: QML declares spellArmedTools, sends {_tool, _rid}, receives {_rid, result}\n- Canvas tool handles launch/send_message/close/screenshot/list_windows\n- Event classification in canvas-event-utils.ts (silent vs loud)\n- Existing puppeteer tool in browser.ts (headless Chromium, separate use case)
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item using the org tool with these exact parameters:
+
+category: features
+title: Canvas Browser Documentation
+state: ITEM
+priority: #B
+properties:
+  EFFORT: 1h
+  PRIORITY: #B
+  LAYER: docs
+
+body:
+* Scope
+** In-scope
+- Update canvas.md tool prompt with browser component documentation
+** Out-of-scope
+- Implementation of browser components
+- Test infrastructure
+** Boundary rationale
+Documentation is the agent-facing contract. Updated once all browser features are implemented.
+* Implementation
+** Modify file: packages/coding-agent/src/prompts/tools/canvas.md
+*** Add new <browser> section after <armed-tools> section
+Content should cover:
+1. BrowserWindow overview: what it is, when to use it (visible browser for interactive workflows vs headless puppeteer for automation)
+2. Launch pattern example:
+   canvas launch { id: "browser-1", path: "canvas://stdlib/canvas/BrowserWindow.qml", title: "Browser", width: 1440, height: 900, props: { initialUrl: "https://example.com" } }
+3. Browser commands via send_message:
+   - Navigation: browser:goto, browser:back, browser:forward, browser:reload
+   - JavaScript: browser:evaluate
+   - Interaction: browser:click, browser:type, browser:fill, browser:press, browser:scroll, browser:drag
+   - Query: browser:observe, browser:get_text, browser:get_html, browser:get_attribute, browser:wait_for_selector, browser:extract_readable
+   - Capture: browser:screenshot
+4. _rid lifecycle: include _rid in command, receive matching _rid in browser:result or browser:error
+5. Event types: browser:loaded, browser:url_changed, browser:console, browser:load_failed
+6. Armed tools from browser: browser window can call read, write, grep, find tools
+7. Concrete request/response examples for common workflows:
+   - Navigate and wait: send browser:goto with _rid, wait for browser:result
+   - Evaluate and get result: send browser:evaluate, receive result in browser:result.data
+   - Click and verify: send browser:click, then browser:get_text to verify
+* Tests
+No tests needed for documentation changes.
+* Edge Cases
+- Documentation must not conflict with existing canvas tool docs
+- Examples must use valid command shapes matching protocol types from FEAT-3
+* Acceptance Criteria
+- [ ] canvas.md contains <browser> section
+- [ ] All browser:* actions documented with parameter descriptions
+- [ ] Launch pattern with BrowserWindow.qml documented
+- [ ] _rid lifecycle documented with examples
+- [ ] Armed tools from browser documented
+- [ ] At least 3 concrete request/response workflow examples
+
+Return the CUSTOM_ID of the created item.
+</goal>
+
+* Scope
+** In-scope
+- Update canvas.md tool prompt with browser component documentation
+** Out-of-scope
+- Implementation of browser components
+- Test infrastructure
+** Boundary rationale
+Documentation is the agent-facing contract. Updated once all browser features are implemented.
+* Implementation
+** Modify file: packages/coding-agent/src/prompts/tools/canvas.md
+*** Add new <browser> section after <armed-tools> section
+Content should cover:
+1. BrowserWindow overview: what it is, when to use it (visible browser for interactive workflows vs headless puppeteer for automation)
+2. Launch pattern example:
+   canvas launch { id: "browser-1", path: "canvas://stdlib/canvas/BrowserWindow.qml", title: "Browser", width: 1440, height: 900, props: { initialUrl: "https://example.com" } }
+3. Browser commands via send_message:
+   - Navigation: browser:goto, browser:back, browser:forward, browser:reload
+   - JavaScript: browser:evaluate
+   - Interaction: browser:click, browser:type, browser:fill, browser:press, browser:scroll, browser:drag
+   - Query: browser:observe, browser:get_text, browser:get_html, browser:get_attribute, browser:wait_for_selector, browser:extract_readable
+   - Capture: browser:screenshot
+4. _rid lifecycle: include _rid in command, receive matching _rid in browser:result or browser:error
+5. Event types: browser:loaded, browser:url_changed, browser:console, browser:load_failed
+6. Armed tools from browser: browser window can call read, write, grep, find tools
+7. Concrete request/response examples for common workflows:
+   - Navigate and wait: send browser:goto with _rid, wait for browser:result
+   - Evaluate and get result: send browser:evaluate, receive result in browser:result.data
+   - Click and verify: send browser:click, then browser:get_text to verify
+* Tests
+No tests needed for documentation changes.
+* Edge Cases
+- Documentation must not conflict with existing canvas tool docs
+- Examples must use valid command shapes matching protocol types from FEAT-3
+* Acceptance Criteria
+- [ ] canvas.md contains <browser> section
+- [ ] All browser:* actions documented with parameter descriptions
+- [ ] Launch pattern with BrowserWindow.qml documented
+- [ ] _rid lifecycle documented with examples
+- [ ] Armed tools from browser documented
+- [ ] At least 3 concrete request/response workflow examples

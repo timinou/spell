@@ -1,0 +1,13 @@
+#+TITLE: Session 149a760469d3fc57 Todos
+#+DATE: 2026-03-20
+#+TODO: ITEM DOING | DONE
+
+* Coverage
+
+** DONE Run focused checks and tests
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+tsgo clean for coding-agent and qml; biome clean for all touched files; new and regression tests all passing.

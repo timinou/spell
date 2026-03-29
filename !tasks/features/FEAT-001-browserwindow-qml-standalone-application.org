@@ -1,0 +1,166 @@
+#+TITLE: BrowserWindow QML Standalone Application
+#+STATE: ITEM
+#+SESSION_ID: 14a39a54449f5773
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T20-45-55-331Z_14a3904c40df5761/8-CreateFeat2.jsonl]]
+#+CUSTOM_ID: FEAT-001-browserwindow-qml-standalone-application
+#+EFFORT: 2h
+#+PRIORITY: #B
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+Plan mode — create org items only. Do not create or modify source files.\n\nThis is part of a plan to add a reusable QML browser component to the spell project's QML stdlib. The project lives at /home/user/code/ora/spell.\n\nKey codebase facts:\n- Stdlib root: packages/coding-agent/src/modes/qml/\n- canvas://stdlib/ resolves to that path\n- Bridge binary at packages/qml/bridge/ links Qt6::WebEngineQuick\n- QmlTestHarness/QmlJourney provide headless QML testing via offscreen mode\n- Armed tools: QML declares spellArmedTools, sends {_tool, _rid}, receives {_rid, result}\n- Canvas tool handles launch/send_message/close/screenshot/list_windows\n- Event classification in canvas-event-utils.ts (silent vs loud)\n- Existing puppeteer tool in browser.ts (headless Chromium, separate use case)
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item using the org tool with these exact parameters:
+
+category: features
+title: BrowserWindow QML Standalone Application
+state: ITEM
+priority: #B
+properties:
+  EFFORT: 2h
+  PRIORITY: #B
+  LAYER: ui
+
+body:
+* Scope
+** In-scope
+- ApplicationWindow that embeds SpellBrowser component
+- Navigation toolbar (back, forward, reload, address bar, go button)
+- Status bar with loading state and browser state indicator
+- Armed tools declaration and bridge message routing
+- Props handling and settings persistence
+** Out-of-scope
+- Browser command protocol logic (FEAT-1 SpellBrowser owns)
+- DOM inspection panels (extension concern, like hotelcomm inspector)
+- Custom chrome beyond standard nav toolbar
+** Boundary rationale
+BrowserWindow is pure chrome: toolbar bindings, status display, message routing. All browser logic lives in SpellBrowser.
+* Implementation
+** File: packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml
+** Structure
+- ApplicationWindow root with visible, width/height from windowWidth/windowHeight, title from windowTitle
+- property var spellArmedTools: ["read", "write", "grep", "find"]
+- SpellBrowser component fills main area
+- Header: Rectangle with RowLayout toolbar
+  - Back button (enabled: browser.canGoBack)
+  - Forward button (enabled: browser.canGoForward)
+  - Reload button
+  - TextField address bar (Layout.fillWidth, onAccepted: navigate)
+  - Go button
+- Footer: Rectangle with status bar
+  - Loading indicator dot (color based on browserState)
+  - Status text label (shows browserState, currentUrl, or lastError)
+** Bridge integration
+- Connections { target: bridge; function onMessageReceived(payload) { browser.handleCommand(payload) } }
+- SpellBrowser events forwarded to bridge automatically (SpellBrowser calls bridge.send internally)
+** Props
+- bridge.props.initialUrl: string — initial URL to navigate to on load
+- bridge.props.profileName: string — WebEngineProfile storageName
+- bridge.props.allowedSchemes: array — passed to SpellBrowser.allowedSchemes
+** Settings persistence
+- Settings { category: "SpellBrowser"; property alias lastUrl: browser.currentUrl }
+- On Component.onCompleted: navigate to props.initialUrl or restore lastUrl
+** Import path
+- SpellBrowser imported as: import "components" (relative QML import)
+- Accessible via: canvas://stdlib/canvas/BrowserWindow.qml
+** Agent launch pattern
+- canvas launch { id: "browser-1", path: "canvas://stdlib/canvas/BrowserWindow.qml", title: "Browser", width: 1440, height: 900, props: { initialUrl: "https://example.com" } }
+* Tests
+Tests owned by FEAT-4 (BrowserJourney). Specific BrowserWindow UI tests:
+- Toolbar renders with all buttons
+- Address bar updates on navigation
+- Back/forward buttons enable/disable correctly
+- Status bar shows loading/ready/error states
+- Bridge messages route to SpellBrowser
+* Edge Cases
+- No initialUrl in props and no saved lastUrl: navigate to about:blank
+- Address bar empty + Go clicked: no-op or re-navigate current URL
+- WebEngine unavailable at runtime: show error in status bar, disable toolbar
+- Window resize: SpellBrowser fills available space
+- Multiple BrowserWindow instances: each has independent state and profile
+* Acceptance Criteria
+- [ ] BrowserWindow.qml exists at packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml
+- [ ] Loads via canvas://stdlib/canvas/BrowserWindow.qml
+- [ ] Toolbar with back, forward, reload, address bar, go button renders
+- [ ] Status bar shows current browser state
+- [ ] Bridge messages forwarded to SpellBrowser.handleCommand()
+- [ ] Armed tools declared (read, write, grep, find)
+- [ ] Props.initialUrl navigates on load
+- [ ] Settings persist lastUrl between sessions
+
+Return the CUSTOM_ID of the created item.
+</goal>
+
+* Scope
+** In-scope
+- ApplicationWindow that embeds SpellBrowser component
+- Navigation toolbar (back, forward, reload, address bar, go button)
+- Status bar with loading state and browser state indicator
+- Armed tools declaration and bridge message routing
+- Props handling and settings persistence
+** Out-of-scope
+- Browser command protocol logic (FEAT-1 SpellBrowser owns)
+- DOM inspection panels (extension concern, like hotelcomm inspector)
+- Custom chrome beyond standard nav toolbar
+** Boundary rationale
+BrowserWindow is pure chrome: toolbar bindings, status display, message routing. All browser logic lives in SpellBrowser.
+* Implementation
+** File: packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml
+** Structure
+- ApplicationWindow root with visible, width/height from windowWidth/windowHeight, title from windowTitle
+- property var spellArmedTools: ["read", "write", "grep", "find"]
+- SpellBrowser component fills main area
+- Header: Rectangle with RowLayout toolbar
+  - Back button (enabled: browser.canGoBack)
+  - Forward button (enabled: browser.canGoForward)
+  - Reload button
+  - TextField address bar (Layout.fillWidth, onAccepted: navigate)
+  - Go button
+- Footer: Rectangle with status bar
+  - Loading indicator dot (color based on browserState)
+  - Status text label (shows browserState, currentUrl, or lastError)
+** Bridge integration
+- Connections { target: bridge; function onMessageReceived(payload) { browser.handleCommand(payload) } }
+- SpellBrowser events forwarded to bridge automatically (SpellBrowser calls bridge.send internally)
+** Props
+- bridge.props.initialUrl: string — initial URL to navigate to on load
+- bridge.props.profileName: string — WebEngineProfile storageName
+- bridge.props.allowedSchemes: array — passed to SpellBrowser.allowedSchemes
+** Settings persistence
+- Settings { category: "SpellBrowser"; property alias lastUrl: browser.currentUrl }
+- On Component.onCompleted: navigate to props.initialUrl or restore lastUrl
+** Import path
+- SpellBrowser imported as: import "components" (relative QML import)
+- Accessible via: canvas://stdlib/canvas/BrowserWindow.qml
+** Agent launch pattern
+- canvas launch { id: "browser-1", path: "canvas://stdlib/canvas/BrowserWindow.qml", title: "Browser", width: 1440, height: 900, props: { initialUrl: "https://example.com" } }
+* Tests
+Tests owned by FEAT-4 (BrowserJourney). Specific BrowserWindow UI tests:
+- Toolbar renders with all buttons
+- Address bar updates on navigation
+- Back/forward buttons enable/disable correctly
+- Status bar shows loading/ready/error states
+- Bridge messages route to SpellBrowser
+* Edge Cases
+- No initialUrl in props and no saved lastUrl: navigate to about:blank
+- Address bar empty + Go clicked: no-op or re-navigate current URL
+- WebEngine unavailable at runtime: show error in status bar, disable toolbar
+- Window resize: SpellBrowser fills available space
+- Multiple BrowserWindow instances: each has independent state and profile
+* Acceptance Criteria
+- [ ] BrowserWindow.qml exists at packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml
+- [ ] Loads via canvas://stdlib/canvas/BrowserWindow.qml
+- [ ] Toolbar with back, forward, reload, address bar, go button renders
+- [ ] Status bar shows current browser state
+- [ ] Bridge messages forwarded to SpellBrowser.handleCommand()
+- [ ] Armed tools declared (read, write, grep, find)
+- [ ] Props.initialUrl navigates on load
+- [ ] Settings persist lastUrl between sessions

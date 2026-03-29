@@ -1,0 +1,191 @@
+#+TITLE: Browser Protocol Types and Event Integration
+#+STATE: ITEM
+#+SESSION_ID: 14a39a54471f5779
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T20-45-55-331Z_14a3904c40df5761/9-CreateFeat3.jsonl]]
+#+CUSTOM_ID: FEAT-001-browser-protocol-types-and-event-integra
+#+EFFORT: 1.5h
+#+PRIORITY: #A
+#+LAYER: core
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+Plan mode — create org items only. Do not create or modify source files.\n\nThis is part of a plan to add a reusable QML browser component to the spell project's QML stdlib. The project lives at /home/user/code/ora/spell.\n\nKey codebase facts:\n- Stdlib root: packages/coding-agent/src/modes/qml/\n- canvas://stdlib/ resolves to that path\n- Bridge binary at packages/qml/bridge/ links Qt6::WebEngineQuick\n- QmlTestHarness/QmlJourney provide headless QML testing via offscreen mode\n- Armed tools: QML declares spellArmedTools, sends {_tool, _rid}, receives {_rid, result}\n- Canvas tool handles launch/send_message/close/screenshot/list_windows\n- Event classification in canvas-event-utils.ts (silent vs loud)\n- Existing puppeteer tool in browser.ts (headless Chromium, separate use case)
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item using the org tool with these exact parameters:
+
+category: features
+title: Browser Protocol Types and Event Integration
+state: ITEM
+priority: #A
+properties:
+  EFFORT: 1.5h
+  PRIORITY: #A
+  LAYER: core
+
+body:
+* Scope
+** In-scope
+- TypeScript type definitions for browser command/result/event protocol
+- Error code enumeration
+- Command idempotency classification
+- Browser event classification in canvas-event-utils.ts
+** Out-of-scope
+- QML implementation of protocol (FEAT-1)
+- Runtime protocol enforcement/validation (FEAT-1 QML handles)
+** Boundary rationale
+TS types document the contract and enable type-safe test assertions. They don't drive QML behavior but ensure the TS agent side (event classification, documentation) is consistent.
+* Implementation
+** New file: packages/coding-agent/src/tools/canvas-browser-protocol.ts
+*** BrowserAction union type
+type BrowserAction = "browser:goto" | "browser:back" | "browser:forward" | "browser:reload" | "browser:evaluate" | "browser:click" | "browser:type" | "browser:fill" | "browser:press" | "browser:scroll" | "browser:drag" | "browser:observe" | "browser:get_text" | "browser:get_html" | "browser:get_attribute" | "browser:wait_for_selector" | "browser:extract_readable" | "browser:screenshot"
+*** BrowserCommand interface hierarchy
+- BrowserCommandBase: { action: BrowserAction; _rid?: string; timeout?: number }
+- BrowserGotoCommand: extends base + { url: string; waitUntil?: "load" | "domcontentloaded" }
+- BrowserEvaluateCommand: extends base + { script: string }
+- BrowserClickCommand: extends base + { x?: number; y?: number; selector?: string; elementId?: number }
+- BrowserTypeCommand: extends base + { text: string; selector?: string }
+- BrowserFillCommand: extends base + { selector: string; value: string }
+- BrowserPressCommand: extends base + { key: string; modifiers?: string }
+- BrowserScrollCommand: extends base + { deltaX?: number; deltaY: number; x?: number; y?: number }
+- BrowserDragCommand: extends base + { fromX: number; fromY: number; toX: number; toY: number }
+- BrowserObserveCommand: extends base + { includeAll?: boolean; viewportOnly?: boolean }
+- BrowserGetTextCommand: extends base + { selector: string }
+- BrowserGetHtmlCommand: extends base + { selector: string }
+- BrowserGetAttributeCommand: extends base + { selector: string; attribute: string }
+- BrowserWaitCommand: extends base + { selector: string }
+- BrowserExtractReadableCommand: extends base + { format?: "text" | "markdown" }
+- BrowserScreenshotCommand: extends base + { fullPage?: boolean; selector?: string }
+- BrowserCommand = union of all above
+*** BrowserErrorCode enum
+enum BrowserErrorCode { TIMEOUT, NOT_FOUND, STALE_TARGET, NAVIGATION_FAILED, PERMISSION_DENIED, EVAL_ERROR, WEBENGINE_UNAVAILABLE, INVALID_COMMAND, SCHEME_DENIED, WINDOW_CLOSED }
+*** BrowserResult and BrowserError types
+- BrowserResult: { type: "browser:result"; _rid: string; success: true; data: unknown }
+- BrowserError: { type: "browser:error"; _rid: string; code: BrowserErrorCode; message: string; retryable: boolean }
+- BrowserResponse = BrowserResult | BrowserError
+*** BrowserEvent types
+- BrowserLoadedEvent: { type: "browser:loaded"; url: string; title: string }
+- BrowserUrlChangedEvent: { type: "browser:url_changed"; url: string }
+- BrowserConsoleEvent: { type: "browser:console"; level: string; message: string; lineNumber: number; sourceId: string }
+- BrowserLoadFailedEvent: { type: "browser:load_failed"; url: string; error: string }
+- BrowserStateChangedEvent: { type: "browser:state_changed"; state: "idle" | "loading" | "interactive" | "error" }
+- BrowserEvent = union of all above
+*** Command idempotency classification
+- isSafeToRetry(action: BrowserAction): boolean — returns true for observe, get_text, get_html, get_attribute, screenshot, extract_readable
+- isSideEffecting(action: BrowserAction): boolean — returns true for click, type, fill, press, scroll, drag, goto
+*** Export isBrowserEvent(name?: string): boolean helper for event classification
+
+** Modify file: packages/coding-agent/src/tools/canvas-event-utils.ts
+- Import isBrowserEvent from canvas-browser-protocol
+- Update classifyEvent to classify browser events:
+  - browser:url_changed -> silent
+  - browser:console -> silent
+  - browser:state_changed -> silent
+  - browser:loaded -> loud
+  - browser:load_failed -> loud
+  - browser:result -> loud
+  - browser:error -> loud
+  - All other browser:* -> loud (safe default)
+* Tests
+** File: packages/coding-agent/test/tools/canvas-browser-protocol.test.ts
+- isSafeToRetry returns correct values for each action
+- isSideEffecting returns correct values
+- isBrowserEvent correctly identifies browser event names
+- classifyEvent handles browser events (verify silent/loud classification)
+* Edge Cases
+- Unknown browser:* action: isSideEffecting returns true (conservative default)
+- Non-browser events: isBrowserEvent returns false, existing classification unchanged
+- Event with name undefined: not a browser event
+* Acceptance Criteria
+- [ ] canvas-browser-protocol.ts exports all types and helper functions
+- [ ] canvas-event-utils.ts classifies browser events correctly
+- [ ] Unit tests pass for idempotency and event classification
+- [ ] No changes to existing event classification behavior for non-browser events
+
+Return the CUSTOM_ID of the created item.
+</goal>
+
+* Scope
+** In-scope
+- TypeScript type definitions for browser command/result/event protocol
+- Error code enumeration
+- Command idempotency classification
+- Browser event classification in canvas-event-utils.ts
+** Out-of-scope
+- QML implementation of protocol (FEAT-1)
+- Runtime protocol enforcement/validation (FEAT-1 QML handles)
+** Boundary rationale
+TS types document the contract and enable type-safe test assertions. They don't drive QML behavior but ensure the TS agent side (event classification, documentation) is consistent.
+* Implementation
+** New file: packages/coding-agent/src/tools/canvas-browser-protocol.ts
+*** BrowserAction union type
+type BrowserAction = "browser:goto" | "browser:back" | "browser:forward" | "browser:reload" | "browser:evaluate" | "browser:click" | "browser:type" | "browser:fill" | "browser:press" | "browser:scroll" | "browser:drag" | "browser:observe" | "browser:get_text" | "browser:get_html" | "browser:get_attribute" | "browser:wait_for_selector" | "browser:extract_readable" | "browser:screenshot"
+*** BrowserCommand interface hierarchy
+- BrowserCommandBase: { action: BrowserAction; _rid?: string; timeout?: number }
+- BrowserGotoCommand: extends base + { url: string; waitUntil?: "load" | "domcontentloaded" }
+- BrowserEvaluateCommand: extends base + { script: string }
+- BrowserClickCommand: extends base + { x?: number; y?: number; selector?: string; elementId?: number }
+- BrowserTypeCommand: extends base + { text: string; selector?: string }
+- BrowserFillCommand: extends base + { selector: string; value: string }
+- BrowserPressCommand: extends base + { key: string; modifiers?: string }
+- BrowserScrollCommand: extends base + { deltaX?: number; deltaY: number; x?: number; y?: number }
+- BrowserDragCommand: extends base + { fromX: number; fromY: number; toX: number; toY: number }
+- BrowserObserveCommand: extends base + { includeAll?: boolean; viewportOnly?: boolean }
+- BrowserGetTextCommand: extends base + { selector: string }
+- BrowserGetHtmlCommand: extends base + { selector: string }
+- BrowserGetAttributeCommand: extends base + { selector: string; attribute: string }
+- BrowserWaitCommand: extends base + { selector: string }
+- BrowserExtractReadableCommand: extends base + { format?: "text" | "markdown" }
+- BrowserScreenshotCommand: extends base + { fullPage?: boolean; selector?: string }
+- BrowserCommand = union of all above
+*** BrowserErrorCode enum
+enum BrowserErrorCode { TIMEOUT, NOT_FOUND, STALE_TARGET, NAVIGATION_FAILED, PERMISSION_DENIED, EVAL_ERROR, WEBENGINE_UNAVAILABLE, INVALID_COMMAND, SCHEME_DENIED, WINDOW_CLOSED }
+*** BrowserResult and BrowserError types
+- BrowserResult: { type: "browser:result"; _rid: string; success: true; data: unknown }
+- BrowserError: { type: "browser:error"; _rid: string; code: BrowserErrorCode; message: string; retryable: boolean }
+- BrowserResponse = BrowserResult | BrowserError
+*** BrowserEvent types
+- BrowserLoadedEvent: { type: "browser:loaded"; url: string; title: string }
+- BrowserUrlChangedEvent: { type: "browser:url_changed"; url: string }
+- BrowserConsoleEvent: { type: "browser:console"; level: string; message: string; lineNumber: number; sourceId: string }
+- BrowserLoadFailedEvent: { type: "browser:load_failed"; url: string; error: string }
+- BrowserStateChangedEvent: { type: "browser:state_changed"; state: "idle" | "loading" | "interactive" | "error" }
+- BrowserEvent = union of all above
+*** Command idempotency classification
+- isSafeToRetry(action: BrowserAction): boolean — returns true for observe, get_text, get_html, get_attribute, screenshot, extract_readable
+- isSideEffecting(action: BrowserAction): boolean — returns true for click, type, fill, press, scroll, drag, goto
+*** Export isBrowserEvent(name?: string): boolean helper for event classification
+
+** Modify file: packages/coding-agent/src/tools/canvas-event-utils.ts
+- Import isBrowserEvent from canvas-browser-protocol
+- Update classifyEvent to classify browser events:
+  - browser:url_changed -> silent
+  - browser:console -> silent
+  - browser:state_changed -> silent
+  - browser:loaded -> loud
+  - browser:load_failed -> loud
+  - browser:result -> loud
+  - browser:error -> loud
+  - All other browser:* -> loud (safe default)
+* Tests
+** File: packages/coding-agent/test/tools/canvas-browser-protocol.test.ts
+- isSafeToRetry returns correct values for each action
+- isSideEffecting returns correct values
+- isBrowserEvent correctly identifies browser event names
+- classifyEvent handles browser events (verify silent/loud classification)
+* Edge Cases
+- Unknown browser:* action: isSideEffecting returns true (conservative default)
+- Non-browser events: isBrowserEvent returns false, existing classification unchanged
+- Event with name undefined: not a browser event
+* Acceptance Criteria
+- [ ] canvas-browser-protocol.ts exports all types and helper functions
+- [ ] canvas-event-utils.ts classifies browser events correctly
+- [ ] Unit tests pass for idempotency and event classification
+- [ ] No changes to existing event classification behavior for non-browser events

@@ -1,0 +1,179 @@
+#+TITLE: Plan mode allowed folders config
+#+STATE: ITEM
+#+SESSION_ID: 14a4713646d0fa6e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T13-08-35-227Z_14a4713646d0fa6e.jsonl]]
+#+CUSTOM_ID: FEAT-001-plan-mode-allowed-folders-config
+#+EFFORT: 45m
+#+PRIORITY: B
+#+LAYER: config+enforcement
+
+* Scope
+
+Add a =planMode.allowedFolders= setting (=Record&lt;string, string&gt;=) that lets users configure directories plan mode can write to, beyond the plan file itself. Keys are folder paths, values are short human-readable descriptions explaining each folder's purpose.
+
+** In-scope
+- New setting in =settings-schema.ts=
+- Guard update in =plan-mode-guard.ts=
+- System prompt update in =plan-mode-active.md= and =plan-mode-subagent.md=
+- Template context plumbing in =agent-session.ts= (=buildPlanModeMessage=)
+- Subagent tool filtering update in =task/index.ts= (conditionally allow write tools if allowed folders exist)
+- README docs in monorepo =README.md= (plan mode section near line 200)
+- CHANGELOG entry in =packages/coding-agent/CHANGELOG.md=
+
+** Out-of-scope
+- UI settings panel for this (no =ui= metadata needed — this is a power-user config)
+- Bash command sandboxing (bash remains prompt-gated, not code-gated)
+
+* Implementation
+
+** 1. Settings schema: =packages/coding-agent/src/config/settings-schema.ts=
+Add under a new =planMode= section:
+#+begin_src typescript
+"planMode.allowedFolders": {
+  type: "record",
+  default: {} as Record<string, string>,
+},
+#+end_src
+
+** 2. Plan mode guard: =packages/coding-agent/src/tools/plan-mode-guard.ts=
+- Import =path= and =expandTilde= from =./path-utils=
+- Add =isUnderAllowedFolder= helper
+- After the plan file check, resolve each allowed folder from settings
+- If =resolvedTarget= starts with any resolved allowed folder prefix, return (allow the write)
+- Deletions and moves remain blocked unconditionally (even inside allowed folders) — these are destructive
+- Only =create= and =update= ops are allowed in allowed folders
+
+New helper:
+#+begin_src typescript
+function isUnderAllowedFolder(
+  resolvedTarget: string,
+  allowedFolders: Record<string, string>,
+  cwd: string,
+): boolean {
+  for (const folder of Object.keys(allowedFolders)) {
+    const resolved = path.resolve(cwd, expandTilde(folder));
+    const prefix = resolved.endsWith(path.sep) ? resolved : resolved + path.sep;
+    if (resolvedTarget.startsWith(prefix) || resolvedTarget === resolved) {
+      return true;
+    }
+  }
+  return false;
+}
+#+end_src
+
+=enforcePlanModeWrite= signature changes:
+- It already receives =session: ToolSession= which carries =session.cwd= and =session.settings=
+- After rejecting delete/move, check allowed folders before the final plan-file-only throw
+
+** 3. System prompt: =packages/coding-agent/src/prompts/system/plan-mode-active.md=
+Add a conditional block after the =MUST NOT= list (before =To implement:= line):
+#+begin_src handlebars
+{{#if allowedFolders}}
+
+**Exception — writable folders:**
+You MAY create and edit files within these directories:
+{{#each allowedFolders}}
+- =={{@key}}== — {{this}}
+{{/each}}
+
+You MUST NOT delete or move files even in allowed folders.
+{{/if}}
+#+end_src
+
+** 4. Subagent prompt: =packages/coding-agent/src/prompts/system/plan-mode-subagent.md=
+Add same conditional block after the =MUST NOT= list so subagents know about writable folders.
+
+** 5. Template context: =packages/coding-agent/src/session/agent-session.ts= (=buildPlanModeMessage=, ~line 2137)
+- Read =settings.get("planMode.allowedFolders")=
+- Only pass it to template if the record is non-empty (otherwise =allowedFolders= stays falsy and the conditional block is skipped)
+
+** 6. Subagent tools: =packages/coding-agent/src/task/index.ts= (~line 499)
+- If =planModeState= is enabled AND allowed folders are non-empty, add =write= and =edit= to the subagent =planModeTools= list
+- Subagents still go through =enforcePlanModeWrite= so they're safely gated
+
+** 7. README: =README.md= (monorepo root, plan mode section near line 200)
+Add a short subsection after the plan mode flow (after line ~209) documenting the =planMode.allowedFolders= setting with an example config.yml snippet:
+
+#+begin_src markdown
+##### Writable folders in plan mode
+
+By default, plan mode is read-only. To allow writing to specific directories during planning, add `planMode.allowedFolders` to your config (`~/.spell/agent/config.yml` or project `.spell/config.yml`):
+
+```yaml
+planMode:
+  allowedFolders:
+    ./docs/plans: "Architecture notes and plan artifacts"
+    ./scratch: "Temporary exploration files"
+```
+
+Keys are folder paths (relative to project root, absolute, or `~`-prefixed). Values are short descriptions — they appear in the agent's system prompt so it knows what each folder is for.
+
+Deletes and moves are still blocked even in allowed folders.
+```
+#+end_src
+
+** 8. CHANGELOG: =packages/coding-agent/CHANGELOG.md=
+Add under =[Unreleased] > Added=:
+=Added planMode.allowedFolders setting to configure writable directories during plan/ultraplan mode=
+
+* Tests
+
+Test file: =packages/coding-agent/test/tools/plan-mode-guard.test.ts= (new file — existing test is =plan-mode-guard-local.test.ts= which only covers =resolvePlanPath=)
+
+** Contract: =enforcePlanModeWrite= allows writes to configured allowed folders
+*** Test: write to file inside an allowed folder succeeds (does not throw)
+- Configure session with =planMode.allowedFolders= = ={ "./scratch": "temp files" }=
+- Call =enforcePlanModeWrite(session, "scratch/notes.md", { op: "create" })=
+- Assert: no error thrown
+*** Test: write to file in a nested subdirectory of allowed folder succeeds
+- Allowed folder: =./docs/plans=
+- Target: =docs/plans/deep/nested/file.md=
+- Assert: no error thrown
+*** Test: write to file outside all allowed folders still throws ToolError
+- Allowed folder: =./scratch=
+- Target: =src/main.ts= (not under scratch)
+- Assert: throws =ToolError= with plan-mode message
+*** Test: delete inside allowed folder still throws ToolError
+- Allowed folder: =./scratch=
+- Target: =scratch/old.md= with =op: "delete"=
+- Assert: throws =ToolError= (deletes are unconditionally blocked)
+*** Test: move/rename inside allowed folder still throws ToolError
+- Allowed folder: =./scratch=
+- Target: =scratch/a.md= with =move: "scratch/b.md"=
+- Assert: throws =ToolError= (moves are unconditionally blocked)
+*** Test: empty allowedFolders record = current behavior (plan file only)
+- =planMode.allowedFolders= = ={}=
+- Write to non-plan file throws
+*** Test: prefix boundary — =/tmp/foo= does not match =/tmp/foobar/file.txt=
+- Allowed folder: =/tmp/foo=
+- Target: =/tmp/foobar/file.txt=
+- Assert: throws ToolError (not under allowed folder, despite string prefix match)
+*** Test: tilde expansion — =~/plans= resolves correctly
+- Allowed folder: =~/plans=
+- Target: =$HOME/plans/note.md=
+- Assert: no error thrown
+*** Test: plan mode disabled = all writes pass through (no change to existing behavior)
+- Session with =planModeState.enabled = false=
+- Assert: no error for any path
+
+** Contract: =isUnderAllowedFolder= path resolution
+These are tested indirectly through the =enforcePlanModeWrite= tests above. The helper is not exported — it's an implementation detail of the guard. Testing it through the public function ensures the full path resolution pipeline (=resolveToCwd= + =expandTilde= + prefix match) is exercised.
+
+* Edge Cases
+- Folder paths may be relative (resolve against cwd) or absolute
+- Tilde expansion (=~/docs=) must be handled
+- Trailing slash in config should not matter
+- Empty record = current behavior (no extra writable folders)
+- Path traversal: =../../../etc= resolves fine through =path.resolve= — it's the user's config, they own it
+- Prefix boundary: =/tmp/foo= must not match =/tmp/foobar= (separator check)
+
+* Acceptance Criteria
+- Setting =planMode.allowedFolders= in =config.yml= with folder-to-description pairs allows creating/editing files under those folders during plan mode
+- Deletes and moves remain blocked even in allowed folders
+- Files outside allowed folders and the plan file are still blocked
+- System prompt shows allowed folders with descriptions when configured
+- Empty config (default) = no behavior change from current
+- =bun check:ts= passes (focused on changed files)
+- All tests in =plan-mode-guard.test.ts= pass
+- README documents the feature with example config
+- CHANGELOG entry added

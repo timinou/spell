@@ -1,0 +1,13 @@
+#+TITLE: Session 14a4c973d41cc29e Todos
+#+DATE: 2026-03-28
+#+TODO: ITEM DOING | DONE
+
+* Verification
+
+** DONE Run focused verification
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Targeted tests passed. Package-local `bun run check` and targeted `bun x biome check` passed. `bun check:ts` is not defined in packages/coding-agent, and that deviation was recorded in the org completion report.

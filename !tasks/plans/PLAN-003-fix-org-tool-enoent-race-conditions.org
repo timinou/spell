@@ -1,0 +1,126 @@
+#+TITLE: Fix org tool ENOENT race conditions
+#+STATE: DONE
+#+SESSION_ID: 14a4b5ed5e43db3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T18-08-48-505Z_14a4b5ed5e43db3d.jsonl]]
+#+CUSTOM_ID: PLAN-003-fix-org-tool-enoent-race-conditions
+
+
+* Context
+
+** Problem
+~atomicWrite~ in ~packages/org/src/atomic-write.ts~ uses a deterministic tmp path (~${filePath}.tmp~).
+When two concurrent async operations target the same org file, they share the same ~.tmp~ path.
+The interleaving that causes ENOENT:
+
+1. Op A writes content-A to ~X.org.tmp~
+2. Op B overwrites ~X.org.tmp~ with content-B
+3. Op A renames ~X.org.tmp~ -> ~X.org~ (succeeds, but moves B's content — silent corruption)
+4. Op B renames ~X.org.tmp~ -> ~X.org~ — ENOENT because ~.tmp~ is already gone
+
+This affects all org write paths: ~appendItemToFile~, ~applyItemMutations~, ~setPropertyInFile~,
+~initCategoryDir~, and ~writeJournal~. The plan-mode system prompt explicitly encourages parallel
+~org create~ via task subagents (plan-mode-active.md line 219), making concurrent writes a normal path.
+
+Beyond ENOENT, concurrent read-then-write cycles cause silent data loss: two operations read the
+same file state, compute independent mutations, and the second write overwrites the first.
+
+Additionally, ~generateId~ in ~cmdCreate~ scans files for max sequence numbers non-atomically.
+Two concurrent creates in the same category can generate duplicate sequence numbers. (This is
+directly observable: the BUG items in this plan both got sequence number 001.)
+
+** Approach
+Three-layer fix, all within ~packages/org/~:
+
+1. *Unique tmp paths*: Change ~atomicWrite~ to use ~${filePath}.${crypto.randomUUID().slice(0, 8)}.tmp~.
+   Add try/finally to clean up orphan tmp files on failure.
+
+2. *Per-file write serialization*: Add in-process ~AsyncMutex~ + ~KeyedMutex~ (~Map<string, AsyncMutex>~).
+   Wrap ~appendItemToFile~, ~applyItemMutations~, ~setPropertyInFile~ with per-file locks.
+
+3. *Per-category ID serialization*: In ~cmdCreate~, wrap ~generateId~ + ~appendItemToFile~
+   in a per-category-path mutex so sequence scan + file write are atomic.
+
+** Key decisions
+- In-process mutex (not filesystem locks). Sufficient because org tool runs single-process.
+  The existing ~packages/coding-agent/src/config/file-lock.ts~ uses fs-level mkdir locks but
+  that's heavier than needed and would add cross-package dependency.
+- ~AsyncMutex~ uses Promise-chain pattern with ~Promise.withResolvers~, matching project conventions.
+  The existing ~Semaphore~ in ~packages/coding-agent/src/task/parallel.ts~ is count-based, not
+  a fit for serialization.
+- Journal writes (~writeJournal~) are already best-effort with try/catch — unique tmp fix alone
+  is sufficient; no mutex needed since journal files are session-scoped and full-rewrite.
+- ~initCategoryDir~ race is benign (both writes produce identical content) — unique tmp fix
+  alone is sufficient.
+- Lock ordering is always category -> file (never reversed). ~cmdCreate~ acquires category lock,
+  then ~appendItemToFile~ internally acquires file lock. No other code path reverses this.
+
+** Edge cases the fix must handle correctly
+1. *Lock release on error*: If locked function throws, lock MUST release. Permanent block = all
+   subsequent ops on that key hang forever. ~withLock~ must use try/finally.
+2. *Nested lock no-deadlock*: ~cmdCreate~ holds category lock, calls ~appendItemToFile~ which
+   acquires file lock. Lock ordering is consistent (category -> file). No reverse path exists.
+   ~cmdUpdate~/~cmdNote~/~cmdSet~ acquire only file lock, never category lock.
+3. *Null-return operations release promptly*: ~applyItemMutations~ returns null when item not found.
+   Lock must release immediately, not hold while fallback scan continues.
+4. *Orphan tmp cleanup*: Unique tmp suffixes mean failed writes leave uniquely-named orphans.
+   ~atomicWrite~ finally block must unlink the tmp file if rename didn't succeed.
+5. *Different-key parallelism preserved*: ~KeyedMutex~ must not accidentally serialize different
+   file paths or different category paths.
+
+** Key files
+- ~packages/org/src/atomic-write.ts~ — unique tmp path + cleanup (11 lines currently)
+- ~packages/org/src/mutex.ts~ — new file: AsyncMutex + KeyedMutex
+- ~packages/org/src/org-writer.ts~ — per-file mutex on appendItemToFile, applyItemMutations, setPropertyInFile
+- ~packages/org/src/tool.ts~ — per-category mutex in cmdCreate (lines 106-169)
+- ~packages/org/src/index.ts~ — export mutex module
+- ~packages/org/test/mutex.test.ts~ — new: 5 tests for mutex primitives
+- ~packages/org/test/atomic-write.test.ts~ — new: 4 tests for unique tmp + cleanup
+- ~packages/org/test/concurrency.test.ts~ — new: 7 tests for integrated concurrency
+
+* Verification
+- ~bun test packages/org/test/mutex.test.ts~ — mutex primitive correctness (5 tests)
+- ~bun test packages/org/test/atomic-write.test.ts~ — unique tmp + cleanup (4 tests)
+- ~bun test packages/org/test/concurrency.test.ts~ — integrated concurrency (7 tests)
+- ~bun test packages/org/test/~ — all existing tests still pass (no regression)
+- ~tsgo -p packages/org/tsconfig.json~ — type check passes
+- Critical safety tests:
+  - Test 2 (mutex error release): proves no permanent block after exception
+  - Test 13 (appendItemToFile error recovery): proves lock released after write failure
+  - Test 14 (cmdCreate distinct IDs): proves sequence collision fixed
+  - Test 16 (create + update no deadlock): proves nested lock ordering is safe
+
+* Execution Manifest
+
+TDD order — tests first, then implementation:
+
+1. [[id:FEAT-001-add-concurrency-tests-for-org-file-opera]] (depends: none, effort: 30m)
+   Write all 16 tests across 3 test files. Tests WILL FAIL initially (no mutex, no unique tmp).
+   This establishes the contract before writing implementation code.
+
+2. [[id:BUG-001-fix-atomicwrite-deterministic-tmp-path-c]] (depends: none, effort: 20m)
+   Fix atomicWrite: unique tmp paths + cleanup. Tests 6-9 should pass after this.
+   Can be implemented in parallel with item 3 (different files).
+
+3. [[id:BUG-001-add-write-serialization-for-org-file-ope]] (depends: none, effort: 45m)
+   Add AsyncMutex/KeyedMutex, wrap org-writer and cmdCreate. Tests 1-5, 10-16 should pass after this.
+   Can be implemented in parallel with item 2 (different files).
+
+After items 2+3: ALL 16 tests + all existing tests must pass.
+
+
+** Completion [2026-03-28]
+
+*** Verification
+- `bun test packages/org/test/mutex.test.ts` — passed (5 tests, 0 fail)
+- `bun test packages/org/test/atomic-write.test.ts` — passed (4 tests, 0 fail)
+- `bun test packages/org/test/concurrency.test.ts` — passed (7 tests, 0 fail)
+- `bun test packages/org/test/id-generator-scan.test.ts` — passed (14 tests, 0 fail)
+- `bun test packages/org/test/` — passed (189 tests, 0 fail)
+- `./node_modules/.bin/tsgo -p packages/org/tsconfig.json` — passed (success, no output)
+
+*** Artifacts
+- None. No UI/browser artifacts were required for this backend change.
+
+*** Deviations
+- `tsgo -p packages/org/tsconfig.json` was not available on PATH in this session (`command not found`), so the equivalent workspace-local binary `./node_modules/.bin/tsgo -p packages/org/tsconfig.json` was used instead.
+- Implementation also updated `packages/org/src/id-generator.ts` and `packages/org/test/id-generator-scan.test.ts` after review exposed an existing invariant violation: `scanMaxSequence()` did not detect file-level `#+CUSTOM_ID:` entries written by `create`, so ID generation would have remained incorrect even after adding locks.

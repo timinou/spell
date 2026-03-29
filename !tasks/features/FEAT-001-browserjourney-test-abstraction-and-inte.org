@@ -1,0 +1,270 @@
+#+TITLE: BrowserJourney Test Abstraction and Integration Tests
+#+STATE: ITEM
+#+SESSION_ID: 14a39a5446df5777
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T20-45-55-331Z_14a3904c40df5761/10-CreateFeat4.jsonl]]
+#+CUSTOM_ID: FEAT-001-browserjourney-test-abstraction-and-inte
+#+PRIORITY: #A
+#+LAYER: test
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+Plan mode — create org items only. Do not create or modify source files.\n\nThis is part of a plan to add a reusable QML browser component to the spell project's QML stdlib. The project lives at /home/user/code/ora/spell.\n\nKey codebase facts:\n- Stdlib root: packages/coding-agent/src/modes/qml/\n- canvas://stdlib/ resolves to that path\n- Bridge binary at packages/qml/bridge/ links Qt6::WebEngineQuick\n- QmlTestHarness/QmlJourney provide headless QML testing via offscreen mode\n- Armed tools: QML declares spellArmedTools, sends {_tool, _rid}, receives {_rid, result}\n- Canvas tool handles launch/send_message/close/screenshot/list_windows\n- Event classification in canvas-event-utils.ts (silent vs loud)\n- Existing puppeteer tool in browser.ts (headless Chromium, separate use case)
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item using the org tool with these exact parameters:
+
+category: features
+title: BrowserJourney Test Abstraction and Integration Tests
+state: ITEM
+priority: #A
+properties:
+  EFFORT: 3h
+  PRIORITY: #A
+  LAYER: test
+
+body:
+* Scope
+** In-scope
+- BrowserJourney class extending QmlJourney with browser-specific semantic methods
+- WebEngine offscreen availability probe and skip guard
+- Integration tests for all browser command categories
+- Test fixtures (data: URLs, local Bun.serve test server)
+** Out-of-scope
+- SpellBrowser.qml implementation (FEAT-1)
+- BrowserWindow.qml implementation (FEAT-2)
+- Protocol type definitions (FEAT-3)
+** Boundary rationale
+Test infrastructure is its own deliverable. Depends on FEAT-1+2+3 being complete. BrowserJourney is a reusable test abstraction that future browser-related features can use.
+* Implementation
+** New file: packages/coding-agent/test/helpers/browser-journey.ts
+*** Class: BrowserJourney extends QmlJourney
+Constructor: private, use static launch()
+Static launch(options?: { initialUrl?, width?, height?, settleMs?, assertTimeout?, props? }): Promise<BrowserJourney>
+  - Launches canvas/BrowserWindow.qml via QmlJourney.launch
+  - Waits for browser:state_changed to "idle" or "interactive"
+
+*** Browser control methods (all return Promise):
+- navigateTo(url: string, waitUntil?: "load" | "domcontentloaded"): sends browser:goto with _rid, waits for browser:result or browser:error
+- evaluateInPage(script: string): sends browser:evaluate with _rid, returns result data
+- clickElement(opts: { x?: number; y?: number; selector?: string; elementId?: number }): sends browser:click with _rid
+- typeInPage(text: string, selector?: string): sends browser:type with _rid
+- fillInput(selector: string, value: string): sends browser:fill with _rid
+- pressKey(key: string, modifiers?: string): sends browser:press with _rid
+- scrollPage(deltaY: number, opts?: { deltaX?, x?, y? }): sends browser:scroll with _rid
+- observePage(opts?: { includeAll?, viewportOnly? }): sends browser:observe with _rid, returns observation array
+- getPageText(selector: string): sends browser:get_text with _rid, returns string
+- waitForElement(selector: string, timeout?: number): sends browser:wait_for_selector with _rid
+- screenshotPage(opts?: { fullPage?, selector? }): sends browser:screenshot with _rid
+- extractReadable(format?: "text" | "markdown"): sends browser:extract_readable with _rid
+- dragOnPage(from: {x,y}, to: {x,y}): sends browser:drag with _rid
+
+*** Assertion methods:
+- expectPageUrl(url: string, timeout?): poll currentUrl until match
+- expectPageTitle(title: string, timeout?): poll pageTitle until match
+- expectPageLoaded(timeout?): wait for browserState === "interactive"
+- expectPageText(text: string, timeout?): evaluateInPage + check text inclusion
+
+*** Internal helpers:
+- #sendBrowserCommand(payload): sends via agentSends, manages _rid
+- #waitForBrowserResult(rid, timeout): waits for matching browser:result or browser:error event
+- #createRid(prefix): generates unique request ID
+- #currentRidCounter: number
+
+*** WebEngine availability probe:
+- Export function: webEngineOffscreenAvailable(): boolean
+  - Launch minimal QML with WebEngineView in offscreen mode
+  - Return true if loads without error, false if WebEngine unavailable
+  - Cache result for session
+  - Or simpler: check if bridge binary exists + test import QtWebEngine in eval
+
+** New file: packages/coding-agent/test/integration/browser-navigation.test.ts
+- describe.skipIf(!webEngineOffscreenAvailable())("Browser Navigation", ...)
+- Tests:
+  - Navigate to data: URL, verify browser:loaded event and currentUrl
+  - Navigate back and forward
+  - Reload page
+  - Navigate to denied scheme (file://), verify SCHEME_DENIED error
+  - Navigate to invalid URL, verify NAVIGATION_FAILED error
+  - Multiple rapid navigations, only last completes
+
+** New file: packages/coding-agent/test/integration/browser-interaction.test.ts
+- describe.skipIf(!webEngineOffscreenAvailable())("Browser Interaction", ...)
+- Uses local Bun.serve() test server with simple HTML fixtures
+- Tests:
+  - evaluateInPage returns computed value
+  - evaluateInPage with error returns EVAL_ERROR
+  - click by coordinate on known element
+  - click by selector (CSS)
+  - type text into focused input
+  - fill input by selector
+  - press key (Enter)
+  - scroll page
+  - observe returns element list with IDs
+  - get_text returns element text content
+  - wait_for_selector succeeds for present element
+  - wait_for_selector times out for absent element
+
+** New file: packages/coding-agent/test/integration/browser-armed-tools.test.ts
+- describe.skipIf(!webEngineOffscreenAvailable())("Browser Armed Tools", ...)
+- Tests:
+  - BrowserWindow declares armed tools (verify via bridge event)
+  - Evaluate sends _tool invocation from QML, test roundtrip with simulateToolResponse
+  - _rid correlation: tool result delivered back to QML
+
+** New file: packages/coding-agent/test/integration/browser-error-handling.test.ts
+- describe.skipIf(!webEngineOffscreenAvailable())("Browser Error Handling", ...)
+- Tests:
+  - Selector not found: NOT_FOUND error with retryable: false
+  - Command timeout: TIMEOUT error
+  - Evaluate error: EVAL_ERROR with exception message
+  - Invalid command action: INVALID_COMMAND error
+  - Command during closed state: WINDOW_CLOSED error
+
+** Test fixtures:
+- data: URLs for simple tests (no server): data:text/html,<html><body><h1>Test</h1><button id="btn">Click</button><input id="inp" type="text"/></body></html>
+- Bun.serve() local server for interaction tests with dynamic HTML
+- Server started in beforeAll, stopped in afterAll
+- Server serves minimal HTML with forms, buttons, inputs for interaction testing
+* Edge Cases
+- WebEngine not available (CI without Qt WebEngine): all tests skip gracefully
+- Offscreen rendering limitations: some visual operations may behave differently
+- data: URL navigation: WebEngine may not fire all navigation events
+- Multiple test files sharing bridge: each test file creates its own BrowserJourney instance
+- Test server port collision: use port 0 (OS-assigned random port)
+* Acceptance Criteria
+- [ ] BrowserJourney class exists with all documented methods
+- [ ] webEngineOffscreenAvailable() correctly detects WebEngine support
+- [ ] Tests skip gracefully when WebEngine unavailable
+- [ ] Navigation tests pass (goto, back, forward, reload, error cases)
+- [ ] Interaction tests pass (evaluate, click, type, fill, press, scroll, observe, get_text, wait_for_selector)
+- [ ] Armed tools roundtrip test passes
+- [ ] Error handling tests pass (timeout, not_found, eval_error, invalid_command)
+- [ ] All tests are fully headless and autonomous (no manual intervention)
+
+Return the CUSTOM_ID of the created item.
+</goal>
+
+* Scope
+** In-scope
+- BrowserJourney class extending QmlJourney with browser-specific semantic methods
+- WebEngine offscreen availability probe and skip guard
+- Integration tests for all browser command categories
+- Test fixtures (data: URLs, local Bun.serve test server)
+** Out-of-scope
+- SpellBrowser.qml implementation (FEAT-1)
+- BrowserWindow.qml implementation (FEAT-2)
+- Protocol type definitions (FEAT-3)
+** Boundary rationale
+Test infrastructure is its own deliverable. Depends on FEAT-1+2+3 being complete. BrowserJourney is a reusable test abstraction that future browser-related features can use.
+* Implementation
+** New file: packages/coding-agent/test/helpers/browser-journey.ts
+*** Class: BrowserJourney extends QmlJourney
+Constructor: private, use static launch()
+Static launch(options?: { initialUrl?, width?, height?, settleMs?, assertTimeout?, props? }): Promise<BrowserJourney>
+  - Launches canvas/BrowserWindow.qml via QmlJourney.launch
+  - Waits for browser:state_changed to "idle" or "interactive"
+
+*** Browser control methods (all return Promise):
+- navigateTo(url: string, waitUntil?: "load" | "domcontentloaded"): sends browser:goto with _rid, waits for browser:result or browser:error
+- evaluateInPage(script: string): sends browser:evaluate with _rid, returns result data
+- clickElement(opts: { x?: number; y?: number; selector?: string; elementId?: number }): sends browser:click with _rid
+- typeInPage(text: string, selector?: string): sends browser:type with _rid
+- fillInput(selector: string, value: string): sends browser:fill with _rid
+- pressKey(key: string, modifiers?: string): sends browser:press with _rid
+- scrollPage(deltaY: number, opts?: { deltaX?, x?, y? }): sends browser:scroll with _rid
+- observePage(opts?: { includeAll?, viewportOnly? }): sends browser:observe with _rid, returns observation array
+- getPageText(selector: string): sends browser:get_text with _rid, returns string
+- waitForElement(selector: string, timeout?: number): sends browser:wait_for_selector with _rid
+- screenshotPage(opts?: { fullPage?, selector? }): sends browser:screenshot with _rid
+- extractReadable(format?: "text" | "markdown"): sends browser:extract_readable with _rid
+- dragOnPage(from: {x,y}, to: {x,y}): sends browser:drag with _rid
+
+*** Assertion methods:
+- expectPageUrl(url: string, timeout?): poll currentUrl until match
+- expectPageTitle(title: string, timeout?): poll pageTitle until match
+- expectPageLoaded(timeout?): wait for browserState === "interactive"
+- expectPageText(text: string, timeout?): evaluateInPage + check text inclusion
+
+*** Internal helpers:
+- #sendBrowserCommand(payload): sends via agentSends, manages _rid
+- #waitForBrowserResult(rid, timeout): waits for matching browser:result or browser:error event
+- #createRid(prefix): generates unique request ID
+- #currentRidCounter: number
+
+*** WebEngine availability probe:
+- Export function: webEngineOffscreenAvailable(): boolean
+  - Launch minimal QML with WebEngineView in offscreen mode
+  - Return true if loads without error, false if WebEngine unavailable
+  - Cache result for session
+  - Or simpler: check if bridge binary exists + test import QtWebEngine in eval
+
+** New file: packages/coding-agent/test/integration/browser-navigation.test.ts
+- describe.skipIf(!webEngineOffscreenAvailable())("Browser Navigation", ...)
+- Tests:
+  - Navigate to data: URL, verify browser:loaded event and currentUrl
+  - Navigate back and forward
+  - Reload page
+  - Navigate to denied scheme (file://), verify SCHEME_DENIED error
+  - Navigate to invalid URL, verify NAVIGATION_FAILED error
+  - Multiple rapid navigations, only last completes
+
+** New file: packages/coding-agent/test/integration/browser-interaction.test.ts
+- describe.skipIf(!webEngineOffscreenAvailable())("Browser Interaction", ...)
+- Uses local Bun.serve() test server with simple HTML fixtures
+- Tests:
+  - evaluateInPage returns computed value
+  - evaluateInPage with error returns EVAL_ERROR
+  - click by coordinate on known element
+  - click by selector (CSS)
+  - type text into focused input
+  - fill input by selector
+  - press key (Enter)
+  - scroll page
+  - observe returns element list with IDs
+  - get_text returns element text content
+  - wait_for_selector succeeds for present element
+  - wait_for_selector times out for absent element
+
+** New file: packages/coding-agent/test/integration/browser-armed-tools.test.ts
+- describe.skipIf(!webEngineOffscreenAvailable())("Browser Armed Tools", ...)
+- Tests:
+  - BrowserWindow declares armed tools (verify via bridge event)
+  - Evaluate sends _tool invocation from QML, test roundtrip with simulateToolResponse
+  - _rid correlation: tool result delivered back to QML
+
+** New file: packages/coding-agent/test/integration/browser-error-handling.test.ts
+- describe.skipIf(!webEngineOffscreenAvailable())("Browser Error Handling", ...)
+- Tests:
+  - Selector not found: NOT_FOUND error with retryable: false
+  - Command timeout: TIMEOUT error
+  - Evaluate error: EVAL_ERROR with exception message
+  - Invalid command action: INVALID_COMMAND error
+  - Command during closed state: WINDOW_CLOSED error
+
+** Test fixtures:
+- data: URLs for simple tests (no server): data:text/html,<html><body><h1>Test</h1><button id="btn">Click</button><input id="inp" type="text"/></body></html>
+- Bun.serve() local server for interaction tests with dynamic HTML
+- Server started in beforeAll, stopped in afterAll
+- Server serves minimal HTML with forms, buttons, inputs for interaction testing
+* Edge Cases
+- WebEngine not available (CI without Qt WebEngine): all tests skip gracefully
+- Offscreen rendering limitations: some visual operations may behave differently
+- data: URL navigation: WebEngine may not fire all navigation events
+- Multiple test files sharing bridge: each test file creates its own BrowserJourney instance
+- Test server port collision: use port 0 (OS-assigned random port)
+* Acceptance Criteria
+- [ ] BrowserJourney class exists with all documented methods
+- [ ] webEngineOffscreenAvailable() correctly detects WebEngine support
+- [ ] Tests skip gracefully when WebEngine unavailable
+- [ ] Navigation tests pass (goto, back, forward, reload, error cases)
+- [ ] Interaction tests pass (evaluate, click, type, fill, press, scroll, observe, get_text, wait_for_selector)
+- [ ] Armed tools roundtrip test passes
+- [ ] Error handling tests pass (timeout, not_found, eval_error, invalid_command)
+- [ ] All tests are fully headless and autonomous (no manual intervention)

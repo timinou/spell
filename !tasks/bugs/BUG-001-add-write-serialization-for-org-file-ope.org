@@ -1,0 +1,77 @@
+#+TITLE: Add write serialization for org file operations
+#+STATE: DONE
+#+SESSION_ID: 14a4b5ed5e43db3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T18-08-48-505Z_14a4b5ed5e43db3d.jsonl]]
+#+CUSTOM_ID: BUG-001-add-write-serialization-for-org-file-ope
+#+EFFORT: 45m
+#+PRIORITY: #A
+#+LAYER: backend
+
+NOTE [2026-03-28]: Implemented AsyncMutex/KeyedMutex-based per-file and per-category serialization, plus the file-level CUSTOM_ID scan fix required to preserve correct ID generation.
+
+* Initial Message
+
+3. **Org tool ENOENT**: File rename race conditions during org
+ item creation
+
+
+^^^ trace this back, waht is this issue?
+
+** Problem
+Even with unique tmp paths (BUG-001), concurrent read-then-write cycles on the same org file
+cause silent data loss. Two operations read the same content, compute independent mutations,
+and the second write overwrites the first's changes.
+
+Affected functions in ~packages/org/src/org-writer.ts~:
+- ~appendItemToFile~ (read file -> serialize -> atomicWrite)
+- ~applyItemMutations~ (read file -> mutate lines -> atomicWrite)
+- ~setPropertyInFile~ (read file -> set property -> atomicWrite)
+
+Additionally, ~cmdCreate~ in ~packages/org/src/tool.ts~ calls ~generateId~ (scans files for max sequence)
+then ~appendItemToFile~. Two concurrent creates in the same category can generate duplicate sequence numbers.
+
+** Approach: In-process KeyedMutex
+Create a ~KeyedMutex~ class — a ~Map<string, AsyncMutex>~ that lazily creates per-key mutexes.
+This is sufficient because the org tool runs in a single process.
+
+~AsyncMutex~ implementation (simple Promise-chain lock):
+#+begin_src typescript
+class AsyncMutex {
+  #tail = Promise.resolve();
+  async acquire(): Promise<() => void> {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const prev = this.#tail;
+    this.#tail = promise;
+    await prev;
+    return resolve;
+  }
+}
+#+end_src
+
+** Changes
+
+*** New file: ~packages/org/src/mutex.ts~
+- ~AsyncMutex~ class (Promise-chain pattern, no external deps)
+- ~KeyedMutex~ class wrapping ~Map<string, AsyncMutex>~
+- Export ~withLock(key, fn)~ convenience method
+
+*** Modified: ~packages/org/src/org-writer.ts~
+- Module-level ~fileLocks = new KeyedMutex()~
+- Wrap ~appendItemToFile~ body in ~fileLocks.withLock(filePath, ...)~
+- Wrap ~applyItemMutations~ body in ~fileLocks.withLock(filePath, ...)~
+- Wrap ~setPropertyInFile~ body in ~fileLocks.withLock(filePath, ...)~
+
+*** Modified: ~packages/org/src/tool.ts~
+- Module-level ~categoryLocks = new KeyedMutex()~
+- In ~cmdCreate~, wrap the ~generateId~ + ~appendItemToFile~ sequence in ~categoryLocks.withLock(cat.absPath, ...)~
+- This ensures atomic ID generation: scan + write are serialized per category
+
+*** Modified: ~packages/org/src/index.ts~
+- Add ~export * from \"./mutex\"~ (KeyedMutex is useful elsewhere)
+
+** Acceptance
+- Two concurrent ~appendItemToFile~ calls to the same file both succeed and both items present in file
+- Two concurrent ~cmdCreate~ calls in the same category produce distinct sequence numbers
+- Two concurrent ~applyItemMutations~ calls to the same file both apply their mutations
+- Existing tests pass: ~bun test packages/org/test/~
+- ~tsgo -p packages/org/tsconfig.json~ passes

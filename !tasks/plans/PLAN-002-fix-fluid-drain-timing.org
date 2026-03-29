@@ -1,0 +1,134 @@
+#+TITLE: FIX_FLUID_DRAIN_TIMING
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-fix-fluid-drain-timing
+
+* Problem
+
+The fluid canvas UX overhaul added =plan_start=, =planner_stream=, and =execution_cancelled= events to give immediate planning feedback. But none of these events reach QML during the planning phase because the EventBus requires explicit =drain()= calls to process queued events, and no drain runs until =FluidOrchestrator.execute()= starts its drain timer — which happens AFTER planning completes (30-60s later).
+
+The result: user types a prompt, clicks Plan, and sees the "What do you want to build?" screen for 30-60 seconds. Then everything arrives in a burst. This is the same UX as before the overhaul.
+
+* Root Cause
+
+The EventBus has two dispatch paths:
+- =emit()= — synchronous, inline dispatch (P0 priority)
+- =enqueue()= + =drain()= — async, batched delivery (P1/P2/P3)
+
+All fluid events use =enqueue()= at P1/P2 priority, which means they sit in the queue until =drain()= is called.
+
+The drain timer lives inside =FluidOrchestrator.#startDrainTimer()= (=fluid-orchestrator.ts= line 89-98), called at line 52 inside =execute()=. But =execute()= only runs after planning is complete.
+
+The event flow during planning:
+1. =executePlan()= enqueues =plan_start= at line 90 → sits in queue
+2. =runPlanningAgent()= takes 30-60s, enqueues =planner_stream= events via =onProgress= → coalesce in queue
+3. After planning, =executeFluidPlan()= creates orchestrator, calls =execute()= → drain timer starts
+4. All events finally delivered in a burst
+
+Additional sub-bug: =planner_stream= uses P2 with coalescing key ="stream:planner"=, so each new intent replaces the previous. With no drain running, only the LAST planning intent survives — all intermediate feedback is lost.
+
+Secondary issue: =execution_complete= is emitted just before the orchestrator's drain timer stops (in =finally= block). Whether the last drain tick fires before =clearInterval()= is a race condition.
+
+* Fix
+
+** ITEM Add drain timer lifecycle to =executePlan()= covering the planning phase
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+In =packages/coding-agent/src/modes/fluid-mode.ts=, function =executePlan()=:
+
+1. Before the =plan_start= enqueue (line 90), start a =setInterval= drain timer at 100ms (matching the orchestrator's cadence), with a reentrancy guard (=draining= flag) to prevent concurrent =drain()= calls
+2. Wrap the entire body in =try/finally= to guarantee =clearInterval= + final =await eventBus.drain()= on ALL exit paths (early abort return, planning failure, normal completion)
+3. After planning succeeds, stop the timer, flush, then call =executeFluidPlan()= which starts the orchestrator's own non-overlapping drain timer
+
+Critical: the =try/finally= is mandatory because =executePlan()= has multiple early-return paths (signal already aborted at line 91, planning agent returns null at line 97). Without it, the =setInterval= leaks permanently.
+
+Implementation pattern:
+
+#+BEGIN_SRC typescript
+async function executePlan(
+    session, eventBus, prompt, cwd, concurrency, fastPlan, signal?
+): Promise<ExecutionSnapshot | undefined> {
+    let draining = false;
+    const planningDrainTimer = setInterval(async () => {
+        if (draining) return;
+        draining = true;
+        try { await eventBus.drain(); }
+        finally { draining = false; }
+    }, 100);
+
+    try {
+        eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_start" }, Priority.P1);
+        if (signal?.aborted) {
+            emitExecutionCancelled(eventBus, signal);
+            return undefined;
+        }
+
+        const plan = await runPlanningAgent(session, eventBus, prompt, cwd, fastPlan, signal);
+        if (!plan) {
+            if (signal?.aborted) emitExecutionCancelled(eventBus, signal);
+            return undefined;
+        }
+
+        const results = await executeFluidPlan(session, eventBus, plan, cwd, concurrency, signal);
+        if (!results) return undefined;
+        return { plan, results };
+    } finally {
+        clearInterval(planningDrainTimer);
+        await eventBus.drain();
+    }
+}
+#+END_SRC
+
+** ITEM Add final drain after orchestrator execution
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+In =packages/coding-agent/src/modes/fluid-mode.ts=, function =executeFluidPlan()=:
+
+After =await orchestrator.execute(plan, signal, presetCompletedResults)= returns, add =await eventBus.drain()= to flush =execution_complete= and any trailing events. This fixes the race condition where the orchestrator's drain timer stops before the last events are processed.
+
+Note: the =finally= drain in =executePlan()= above also catches this path, but the explicit drain here is defense-in-depth and makes the contract clear at the orchestrator boundary.
+
+** ITEM Add integration test for planning-phase event delivery
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+
+In =packages/coding-agent/test/orchestrators/fluid-drain.test.ts=:
+
+Add tests that verify:
+1. Events enqueued during a simulated planning phase are delivered to =bridge:outbound= subscribers within ~200ms (not batched at end)
+2. Intermediate =planner_stream= intents are delivered individually (not coalesced to last-only)
+3. Timer cleanup on abort: start drain timer, abort signal, verify =clearInterval= ran and no leaked timer
+
+Test structure:
+- Create EventBus and FluidEventRouter
+- Subscribe to =bridge:outbound= and collect received events with timestamps
+- Simulate the =executePlan= pattern: start drain timer, enqueue =plan_start=, sleep 150ms, enqueue =planner_stream= "intent-1", sleep 150ms, enqueue =planner_stream= "intent-2", stop drain timer
+- Assert: =fluid:plan_start= received within first 200ms, both =fluid:planner_stream= events received (not just last one)
+
+** ITEM Verify with manual test
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+Run =spell --canvas= and verify:
+1. After clicking Plan, the UI immediately transitions to planning state (within 100ms)
+2. Planning stream text appears progressively during planning
+3. Cancel button works during planning
+4. After planning completes, agent execution begins with panels showing
+
+* Key files
+
+| File | Change |
+|---+---|
+| =src/modes/fluid-mode.ts= | Add drain timer in =executePlan()= with try/finally + reentrancy guard, final drain in =executeFluidPlan()= |
+| =test/orchestrators/fluid-drain.test.ts= | Add planning-phase drain delivery + timer cleanup tests |
+
+* Verification
+
+- =bun test test/orchestrators/fluid-drain.test.ts= passes
+- =bun run check= passes (typecheck)
+- Manual: =spell --canvas= shows immediate planning feedback

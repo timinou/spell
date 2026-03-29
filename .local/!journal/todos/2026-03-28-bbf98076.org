@@ -1,0 +1,13 @@
+#+TITLE: Session 14a476234910fa75 Todos
+#+DATE: 2026-03-28
+#+TODO: ITEM DOING | DONE
+
+* Wave 4 Docs and final verification
+
+** DONE Document config and changelog
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+Documented `planMode.allowedFolders` in README and CHANGELOG, then ran final focused verification: `bun test packages/coding-agent/test/tools/plan-mode-guard.test.ts`, `bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts`, `bun test packages/coding-agent/test/task/plan-mode-tools.test.ts`, `bunx biome check` on changed files, and `bunx tsgo -p packages/coding-agent/tsconfig.json`.

@@ -1,0 +1,63 @@
+#+TITLE: Ultraplan Org Item Quality Standard and Parallelization Fix
+#+STATE: ITEM
+#+SESSION_ID: 149ca627a27f34c2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-22T11-52-02-953Z_149ca627a27f34c2.jsonl]]
+#+CUSTOM_ID: FEAT-001-ultraplan-org-item-quality-standard-and
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: prompt
+
+* Initial Message
+
+chagne from quicktask to task, and tell me how you can properly prompt the org task writing to be as complete as possible (look back at what I didn't like in the prompts in File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm/2026-03-21T20-28-01-481Z_149bd2a99268db75.jsonl
+ ID: 149bd2a99268db75 and tlel me how you would make sure the level of rigour is always high up there in ultraplan)
+
+* Scope
+Update the ultraplan section of plan-mode-active.md with two changes:
+1. Change =quicktask= to =task= in Phase 5 parallelization example
+2. Add an "Org Item Body Standard" subsection that defines mandatory structure for every child item body
+
+Out of scope: changes to non-ultraplan plan mode, changes to Metis/Daedalus/Momus prompts.
+
+* Problem Evidence (session 149bd2a99268db75)
+User feedback at turn 641: "All of the PROJ and the FEAT need to include more details and they need to include the specific unit, integration, and Playwright tests to make sure they work, as well as the manual acceptance criteria. Right now your level of details is shoddy at best."
+
+Initial items had 3-5K char bodies with no tests, no acceptance criteria, no edge cases. After pushback, items grew to 7-13K with code snippets and typespecs — but tests remained lumped in a separate item and acceptance criteria were still absent.
+
+* Implementation
+
+** Change 1: quicktask → task (line 196-210 of plan-mode-active.md)
+Replace =agent: quicktask= with =agent: task= in the Phase 5 parallelization code example. Also update the prose to say "task" not "quicktask". Reason: org item creation needs enough reasoning to follow the body standard below — quicktask is too low-reasoning for that.
+
+** Change 2: Add Org Item Body Standard
+Insert a new subsection between Phase 4 (Daedalus) and Phase 5 (Create Org Items). This subsection defines the mandatory sections for every child item body:
+
+=* Scope= — What is in, what is explicitly out, why this boundary.
+=* Implementation= — Specific file paths, module/function names, type signatures (code snippets for non-trivial interfaces), step-by-step instructions. Not vague descriptions.
+=* Tests= — Per-item test specifications. Each item carries its own test requirements:
+  - Unit test file paths with specific test case descriptions
+  - Integration test scenarios where the item participates
+  - Visual/E2E test cases (Playwright, etc.) where applicable
+  Do NOT lump all tests into a single testing item.
+=* Edge Cases= — What can go wrong, error codes, degradation behavior, race conditions.
+=* Acceptance Criteria= — Concrete, manually checkable conditions. Not "it works" — specific observable outcomes. Example: "POST /api/webhooks/whatsapp with valid HMAC returns 200 and creates a Message record" not "webhook ingestion works".
+
+The subsection should also note:
+- Acceptance criteria must be falsifiable — another engineer can check each one independently
+- Public APIs must include full type signatures
+- File paths must be explicit (=lib/myapp/foo/bar.ex=), not vague ("a module in the foo directory")
+- Dependencies on other items must name the specific artifact needed (e.g., "requires Conversation schema from PROJ-A" not just "depends: PROJ-A")
+
+** Exact insertion point
+After line 188 (end of Phase 4 Daedalus section), before line 190 (Phase 5 heading).
+
+* Tests
+No tests — this is a prompt-only change. Verification is manual inspection.
+
+* Acceptance Criteria
+1. plan-mode-active.md Phase 5 code example uses =agent: task= not =agent: quicktask=
+2. New subsection "Org Item Body Standard" exists between Phase 4 and Phase 5
+3. The subsection mandates all five sections: Scope, Implementation, Tests, Edge Cases, Acceptance Criteria
+4. The subsection explicitly forbids lumping tests into a single separate item
+5. No other sections of plan-mode-active.md are modified
+6. The Handlebars conditionals (={{#if ultraplan}}=) remain intact

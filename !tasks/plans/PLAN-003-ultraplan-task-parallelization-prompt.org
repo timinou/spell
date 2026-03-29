@@ -1,0 +1,40 @@
+#+TITLE: Ultraplan Prompt Rigor and Parallelization
+#+STATE: DOING
+#+SESSION_ID: 149ca470047f34c1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-22T11-44-32-785Z_149ca470047f34c1.jsonl]]
+#+CUSTOM_ID: PLAN-003-ultraplan-task-parallelization-prompt
+
+* Context
+
+** Problem
+The ultraplan mode prompt (plan-mode-active.md) has two issues:
+1. Phase 5 parallelization example uses =quicktask= but should use =task= (org item creation needs reasoning to meet quality standards)
+2. No quality standard for org item bodies — the agent produces shallow items lacking tests, acceptance criteria, and edge cases until the user pushes back
+
+** Evidence
+Session 149bd2a99268db75 (hotelcomm Phase 2 planning):
+- Initial org items: 3-5K char bodies, no tests, no acceptance criteria, no edge cases
+- User feedback at turn 641: "your level of details is shoddy at best"
+- After pushback: items grew to 7-13K chars with code snippets and typespecs — but tests still lumped separately and acceptance criteria still absent
+- Session died after 6 of 15 org updates (context window exhaustion from sequential creation)
+
+** Approach
+Two changes to the ultraplan section of plan-mode-active.md:
+1. Fix =quicktask= → =task= in Phase 5 code example
+2. Add an "Org Item Body Standard" subsection defining 5 mandatory body sections (Scope, Implementation, Tests, Edge Cases, Acceptance Criteria)
+
+** Key Decisions
+- Use =task= not =quicktask= because items need enough reasoning to follow the body standard
+- Place the standard between Phase 4 (Daedalus) and Phase 5 (Create) so it's the last thing read before writing items
+- Tests are per-item, not lumped into a single testing item
+- Acceptance criteria must be falsifiable and specific
+
+* Execution Manifest
+1. [[id:FEAT-001-ultraplan-org-item-quality-standard-and]] (depends: none, effort: 30m)
+
+* Verification
+- plan-mode-active.md Phase 5 uses =agent: task=
+- New "Org Item Body Standard" subsection exists between Phase 4 and Phase 5
+- Standard mandates: Scope, Implementation, Tests, Edge Cases, Acceptance Criteria
+- Forbids lumping tests into a single separate item
+- No other prompt sections affected

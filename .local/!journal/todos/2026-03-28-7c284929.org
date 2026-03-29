@@ -1,0 +1,21 @@
+#+TITLE: Session 14a4c4c55fc3db44 Todos
+#+DATE: 2026-03-28
+#+TODO: ITEM DOING | DONE
+
+* Verification and closure
+
+** DONE Run focused org verification
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+Verification passed. Commands and outcomes: `bun test packages/org/test/mutex.test.ts` -> 5 pass; `bun test packages/org/test/atomic-write.test.ts` -> 4 pass; `bun test packages/org/test/concurrency.test.ts` -> 7 pass; `bun test packages/org/test/id-generator-scan.test.ts` -> 14 pass; `bun test packages/org/test/` -> 189 pass; `./node_modules/.bin/tsgo -p packages/org/tsconfig.json` -> success with no output. Initial `tsgo -p packages/org/tsconfig.json` failed because `tsgo` is not on PATH in this session.
+
+** DONE Close org plan truthfully
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+Appended a completion report to PLAN-003-fix-org-tool-enoent-race-conditions with verification, artifacts, and deviations; moved linked child items FEAT-001-add-concurrency-tests-for-org-file-opera, BUG-001-fix-atomicwrite-deterministic-tmp-path-c, and BUG-001-add-write-serialization-for-org-file-ope to DONE; then moved the plan item itself to DONE. Verified the resulting org states via `org get`.

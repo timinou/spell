@@ -1,0 +1,70 @@
+#+TITLE: Plan Completion Artifacts and Lifecycle Closure
+#+STATE: DOING
+#+SESSION_ID: 14a475a741b4294e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T13-27-59-494Z_14a475a741b4294e.jsonl]]
+#+CUSTOM_ID: PLAN-003-plan-completion-artifacts-and-lifecycle
+
+* Context
+
+** Problem
+
+Spell's plan lifecycle has a broken feedback loop. Plans transition INIT → DOING on approval via =approvePlanItem()=, but there is no mechanism — prompt-level or programmatic — to transition DOING → DONE. The dashboard shows 71 plans stuck in DOING and only 5 that reached DONE (93% abandonment rate). The =plan-mode-approved.md= prompt says "keep going until complete" but defines "complete" only as "all steps executed," with no definition of done (DoD) covering:
+
+- Verification evidence (screenshots, test results)
+- Org lifecycle closure (DOING → DONE)
+- Child item resolution (ITEM/DOING → DONE)
+
+Additionally, the browser tool declares a =path= parameter for screenshots in its Typebox schema and prompt documentation, but the implementation ignores it — all screenshots go to =/tmp/= where they're ephemeral and useless as persistent artifacts.
+
+** Approach
+
+Three coordinated changes, each at a different layer:
+
+1. *Infrastructure fix*: Make the browser tool's =path= param work so screenshots can be saved to persistent, meaningful locations.
+
+2. *Prompt engineering*: Add a structured Completion Protocol to =plan-mode-approved.md= that defines the agent's DoD: capture verification artifacts, write a completion report to the org item, close child items, close the plan. Also enrich =plan-mode-active.md= so plans include verification criteria for the executor.
+
+3. *Code helper*: Add =completePlanItem()= to =org-plan.ts= as the symmetric counterpart to =approvePlanItem()=. This enables a future session-end safety net (auto-close orphaned DOING plans when session exits).
+
+** Key Decisions
+
+- *Prompt-first, not tool-first*: The primary fix is prompt instructions, not a new tool. The agent already has access to =org update= and =browser screenshot=. The problem is that it was never told to use them at completion time.
+- *Screenshot storage convention*: =plan-artifacts/{plan-id}/= as a subfolder in the same directory as the plan's org file (e.g., =!tasks/plans/plan-artifacts/PLAN-003-foo/=). Co-located with plans, persistent, gitignore-able.
+- *Completion report format*: Appended to the org item body as a =** Completion [DATE]= heading with verification, artifacts, and deviations subsections. This keeps the audit trail in the org item itself.
+- *Child item handling*: Active/ITEM children are auto-closed. BLOCKED children are left untouched (they need human attention). Already-DONE children are skipped.
+- *Conditional on org*: Everything is gated on =orgItemId= being set. File-backed plans (org disabled) are unaffected.
+
+** Critical File Paths
+
+| File | Role |
+|------|------|
+| =packages/coding-agent/src/tools/browser.ts= | Screenshot path param fix (lines 1345-1394) |
+| =packages/coding-agent/src/prompts/system/plan-mode-approved.md= | Completion protocol addition |
+| =packages/coding-agent/src/prompts/system/plan-mode-active.md= | Verification criteria guidance |
+| =packages/coding-agent/src/plan-mode/org-plan.ts= | =completePlanItem()= helper |
+| =packages/coding-agent/src/modes/interactive-mode.ts= | Template rendering context (may need =orgItemDir=) |
+| =packages/org/src/schema/defaults.ts= | State definitions (TERMINAL_STATES, ACTIVE_STATES) |
+| =packages/org/src/id-links.ts= | =extractIdLinks()= for child ID resolution |
+
+* Execution Manifest
+
+1. [[id:BUG-001-browser-tool-ignores-screenshot-path-par]] (depends: none, effort: 30m)
+   Infrastructure prerequisite. Fix the browser tool to honor the =path= parameter for screenshots. Without this, completion artifacts can only be saved to ephemeral temp files.
+
+2. [[id:FEAT-001-completeplanitem-helper-for-plan-lifecyc]] (depends: none, effort: 45m)
+   Add =completePlanItem()= to =org-plan.ts=. Can be done in parallel with item 1 — different files, no shared types being changed.
+
+3. [[id:FEAT-001-plan-completion-protocol-in-execution-pr]] (depends: 1 conceptually, effort: 1h)
+   The primary fix. Add completion protocol to =plan-mode-approved.md= and verification criteria guidance to =plan-mode-active.md=. Depends on item 1 being done so the screenshot path instructions reference working behavior. Also needs to pass the plan org file directory into the template context (check =interactive-mode.ts= around line 1011).
+
+** Parallelization
+
+Items 1 and 2 are fully parallel — different packages, no shared types. Item 3 depends on both conceptually but can start after either completes (prompt writing doesn't need compiled code).
+
+** Verification
+
+After implementation:
+1. Run =bun check:ts= scoped to affected packages
+2. Run template rendering tests: =bun test packages/coding-agent/test/system-prompt-templates.test.ts=
+3. Run org-plan tests if added
+4. Manual verification: start a plan mode session, approve a plan, and verify the agent follows the completion protocol (captures screenshots if applicable, writes completion report, transitions to DONE)

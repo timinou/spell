@@ -1,0 +1,209 @@
+#+TITLE: Metis Gap Analysis Embedded Browser Plan
+#+STATE: ITEM
+#+SESSION_ID: 14a3968dbf1f5769
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-27T20-45-55-331Z_14a3904c40df5761/3-MetisGapAnalysis.jsonl]]
+#+CUSTOM_ID: PLAN-003-metis-gap-analysis-embedded-browser-plan
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+Plan mode — READ ONLY. Do not create or modify any files. Use org tool for analysis output.
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+You are Metis, a gap-analysis agent. Analyze the following plan for missing requirements, unstated assumptions, and implementation risks. Return a structured gap analysis.
+
+## User Requirements
+- Create a reusable QML browser component (`SpellBrowser.qml`) in the QML stdlib at `packages/coding-agent/src/modes/qml/canvas/components/`
+- Create a standalone `BrowserWindow.qml` with navigation toolbar, address bar, status bar
+- Dual control planes: armed tools (QML calls agent tools) + canvas send_message (agent sends browser commands)
+- Near-full puppeteer parity: goto, evaluate, click (coord + selector), type, fill, press, scroll, screenshot, observe (DOM snapshot), get_text, get_html, get_attribute, wait_for_selector, extract_readable, drag
+- Async tool call registration via existing _tool/_rid armed tools pattern
+
+## Codebase Context
+- Bridge binary at `packages/qml/bridge/` already links Qt6::WebEngineQuick and calls QtWebEngineQuick::initialize()
+- Bridge protocol (packages/qml/src/protocol.ts) supports: load, reload, message, close, screenshot, query, eval, click, type, press, scroll commands
+- Canvas tool (packages/coding-agent/src/tools/canvas.ts) handles: write, launch, send_message, close, screenshot, list_windows
+- Armed tools pattern: QML declares `property var spellArmedTools: [...]`, uses `bridge.send({ _tool, _rid, ... })` to call agent tools, receives results via `bridge.messageReceived({ _rid, result })`
+- Canvas event loop classifies events as silent/loud and delivers them to agent via EventBus
+- Hotelcomm extension at ~/code/ora/hotelcomm demonstrates a 1392-line monolithic inspector.qml with WebEngineView, JS injection, armed tools, and bridge message handling
+- Existing puppeteer tool at packages/coding-agent/src/tools/browser.ts uses headless Chromium via puppeteer npm package
+- QML stdlib components live in packages/coding-agent/src/modes/qml/canvas/components/
+
+## Proposed Design
+- SpellBrowser.qml: composable component wrapping WebEngineView with command protocol handler
+- BrowserWindow.qml: ApplicationWindow embedding SpellBrowser with toolbar
+- Agent controls browser via canvas send_message with structured payloads ({action: 'browser:goto', url: '...', _rid: '...'})
+- Browser responds via bridge.send events
+- QML also declares armed tools for reverse calls (browser -> agent)
+- Event classification updates in canvas-event-utils.ts
+- Documentation updates in canvas.md
+
+## Decisions Made
+- Both component + standalone window
+- Dual control planes
+- Near-full puppeteer parity
+- Command protocol uses 'browser:' action prefix
+- Located in existing stdlib component paths
+
+## Your Task
+Identify:
+1. **Missing requirements**: What has been overlooked?
+2. **Unstated assumptions**: What is assumed but not validated?
+3. **Implementation risks**: What could go wrong?
+4. **Security concerns**: What about running arbitrary JS in embedded browser?
+5. **Integration gaps**: What about existing tools, extensions, tests?
+6. **Protocol design issues**: Flaws in the command/event protocol?
+
+For each gap, rate severity (HIGH/MEDIUM/LOW) and suggest mitigation.
+</goal>
+
+* Scope
+Analyze plan to add `SpellBrowser.qml` + `BrowserWindow.qml` with dual control planes and near-puppeteer parity.
+
+* Gap Analysis
+
+** 1) Missing requirements
+*** MR-1: Canonical action contract is undefined (**HIGH**)
+- Gap: Plan names `browser:*` actions but does not define full request/response schema (required fields, optional fields, success/error shape, timeout semantics, event names).
+- Evidence: Canvas `send_message` is an untyped passthrough payload (`canvas.ts`), and bridge only transports opaque payloads (`windowmanager.cpp` -> `sendMessage`, `Bridge::deliverMessage`).
+- Risk: Immediate divergence between BrowserWindow QML, canvas event loop, and callers.
+- Mitigation: Write a canonical typed contract in TS (`BrowserCommand`, `BrowserResult`, `BrowserEvent`) and enforce it in one adapter on both send and receive sides.
+
+*** MR-2: Correlation + completion semantics for async commands not specified (**HIGH**)
+- Gap: `_rid` is required for armed tools, but browser command plane does not define whether every command must echo `_rid`, whether streaming/progress is allowed, or what happens on timeout/cancel/close.
+- Evidence: armed-tool reply path exists (`canvas.ts` emits `_rid` reply); browser plan only says "structured payload".
+- Risk: Hanging calls, duplicate completions, race conditions after navigation.
+- Mitigation: Require `_rid` for all non-fire-and-forget browser commands; enforce exactly-one terminal response (`ok|error|canceled|timeout|window_closed`).
+
+*** MR-3: Lifecycle/state model missing (**HIGH**)
+- Gap: No spec for ready/loading/navigating/destroyed states, and behavior when commands arrive before `WebEngineView` is ready.
+- Evidence: Existing bridge has window `ready/closed/error` states, but not browser-internal navigation state.
+- Risk: nondeterministic failures (early `evaluate`, `click`, `observe`).
+- Mitigation: Explicit state machine in SpellBrowser (`idle/loading/interactive/closed/error`) + queue/drop policy per command type.
+
+*** MR-4: Parity scope is ambiguous ("near-full puppeteer parity") (**MEDIUM**)
+- Gap: Which semantics are required to match puppeteer behavior is unspecified (selector grammar, retries/actionability checks, viewport semantics, observe node identity, screenshot clipping/fullpage).
+- Evidence: Puppeteer tool has rich behavior (actionability checks, element-id cache, observe snapshot, selector normalization) not mirrored in plan.
+- Risk: callers assume puppeteer-like guarantees and get weaker behavior.
+- Mitigation: Define parity matrix per action: `exact`, `approximate`, `unsupported` with documented caveats.
+
+*** MR-5: Test requirements omitted (**HIGH**)
+- Gap: No acceptance tests listed for command plane, `_rid` handling, and parity actions.
+- Evidence: Existing project has QmlJourney/QML harness patterns; plan does not include them.
+- Risk: regressions in async messaging and UI automation surface late.
+- Mitigation: Add QML integration tests for at least goto/evaluate/click/type/observe/screenshot + close-during-command race.
+
+*** MR-6: Ownership boundary between stdlib component and app window not specified (**MEDIUM**)
+- Gap: Which concerns belong in reusable component vs BrowserWindow wrapper (toolbar logic, history, status text, error UI, command adapter) is unstated.
+- Risk: monolithic BrowserWindow or duplicated logic in future windows.
+- Mitigation: Keep SpellBrowser headless/command-driven; BrowserWindow owns only chrome (toolbar/status) and binds props/events.
+
+** 2) Unstated assumptions
+*** UA-1: WebEngine feature availability assumed across environments (**HIGH**)
+- Assumption: Runtime always has Qt WebEngine dependencies/sandbox support.
+- Evidence: Bridge links WebEngineQuick and initializes it, but deployment/runtime constraints not addressed.
+- Mitigation: startup capability probe and explicit error event (`browser:unavailable`) with fallback guidance.
+
+*** UA-2: Selector model can map cleanly to QML/WebEngine DOM (**MEDIUM**)
+- Assumption: Puppeteer selectors + element identity can be emulated with JS injection.
+- Risk: brittle mapping, stale IDs after DOM mutation.
+- Mitigation: define supported selector subset + short-lived element handles with invalidation on navigation/DOM mutation.
+
+*** UA-3: Event volume is manageable (**MEDIUM**)
+- Assumption: observe/status/url_changed/error events won’t flood EventBus.
+- Evidence: canvas event loop already needs silent/loud classification + debouncing.
+- Mitigation: browser-specific event throttling and silent classification defaults (progress/url updates silent by default).
+
+*** UA-4: Existing canvas security posture is sufficient for embedded browser JS execution (**HIGH**)
+- Assumption: allowing arbitrary `evaluate` inside loaded pages is equivalent risk to existing tools.
+- Risk: privilege confusion (page JS vs agent tool calls), data exfiltration via armed tools.
+- Mitigation: strict separation: page JS never gets bridge object; bridge only exposed to trusted app QML; no dynamic eval of untrusted page-origin strings without explicit user intent.
+
+** 3) Implementation risks
+*** IR-1: Message-loop race on window close and pending commands (**HIGH**)
+- Risk: responses emitted after close, orphaned `_rid` promises.
+- Evidence: window manager emits `closed`; canvas loops can abort asynchronously.
+- Mitigation: central in-flight registry; on close, fail all pending with deterministic `window_closed`.
+
+*** IR-2: Navigation invalidates command targets (**HIGH**)
+- Risk: click/type/drag targets stale between resolve and act.
+- Mitigation: two-phase action with revalidation; bounded retries; stale-target errors with actionable message.
+
+*** IR-3: Screenshot/observe performance + memory pressure (**MEDIUM**)
+- Risk: repeated large captures in QML process can stall UI thread.
+- Mitigation: cap dimensions/frequency, async pipeline, optional sampling mode.
+
+*** IR-4: Protocol collisions with generic canvas actions (**MEDIUM**)
+- Risk: `action` namespace overlap (`set/append/...` vs `browser:*`) in same window if mixed surfaces are used.
+- Mitigation: nested envelope (`{domain:"browser", action:"goto"}`) or reserved prefix + validator.
+
+** 4) Security concerns
+*** SC-1: Arbitrary `evaluate` is high-risk without guardrails (**HIGH**)
+- Concern: remote pages + unrestricted JS can read sensitive DOM/session and trigger network exfiltration.
+- Mitigation: explicit trust mode flag (`trusted: true`), default deny for dangerous ops on untrusted origins, audit log of executed scripts.
+
+*** SC-2: Bridge/tool privilege escalation path (**HIGH**)
+- Concern: If page content can indirectly trigger `bridge.send({ _tool: ... })`, it becomes agent-RCE.
+- Evidence: armed tool protocol is powerful by design.
+- Mitigation: enforce origin boundary (only QML code can call bridge), never forward page JS messages to bridge without strict allowlist and schema validation.
+
+*** SC-3: URL scheme abuse/local file access (**HIGH**)
+- Concern: loading `file://`, `qrc://`, custom schemes could expose local artifacts.
+- Mitigation: URL allow/deny policy by scheme, optional per-window allowedOrigins list, explicit opt-in for local schemes.
+
+*** SC-4: Secret leakage in logs/events/screenshots (**MEDIUM**)
+- Concern: DOM snapshots and screenshots may capture credentials/tokens.
+- Mitigation: redact patterns in emitted events, optional screenshot/observe redaction masks, no raw script/error dumps by default.
+
+** 5) Integration gaps
+*** IG-1: Existing `browser` tool overlap unresolved (**MEDIUM**)
+- Gap: Plan does not define when to use headless puppeteer tool vs embedded SpellBrowser window.
+- Risk: duplicated capabilities with diverging behavior.
+- Mitigation: define routing policy (interactive visual workflows => SpellBrowser; headless automation => browser tool).
+
+*** IG-2: Canvas event classifier not updated for browser noise classes (**MEDIUM**)
+- Gap: current classifier only handles generic events (`url_changed`, `stderr`, close).
+- Risk: noisy turns or dropped critical browser errors.
+- Mitigation: add browser event taxonomy + tests in `canvas-event-utils`.
+
+*** IG-3: No migration path for hotelcomm inspector learnings (**LOW**)
+- Gap: monolith reference exists, but extraction plan doesn’t identify reusable patterns vs anti-patterns.
+- Mitigation: perform explicit "harvest list" before implementation (message handling, JS bridge helpers, failure handling).
+
+*** IG-4: Documentation scope incomplete (**LOW**)
+- Gap: mentions `canvas.md` only; missing tool docs/examples for browser command payloads.
+- Mitigation: update canvas tool docs + include concrete request/response examples with `_rid` lifecycle.
+
+** 6) Protocol design issues
+*** PD-1: No versioning/feature negotiation (**MEDIUM**)
+- Issue: protocol evolution will break older windows/agents silently.
+- Mitigation: include `protocolVersion` + optional `capabilities` handshake event.
+
+*** PD-2: Error model too weak (**HIGH**)
+- Issue: no standardized error codes (timeout, not_found, stale_target, navigation_failed, permission_denied).
+- Mitigation: typed error envelope `{code,message,details,retryable}` required for every failure.
+
+*** PD-3: Missing idempotency/retry guidance (**MEDIUM**)
+- Issue: transport retries can duplicate side effects (click/type/drag).
+- Mitigation: define command idempotency classes; only retry safe commands automatically.
+
+*** PD-4: Ambiguous ordering/concurrency semantics (**HIGH**)
+- Issue: unclear whether commands run serially or concurrently; interleaved goto/click/evaluate can produce nondeterminism.
+- Mitigation: default per-window serialized command queue with explicit opt-in concurrency for read-only commands.
+
+*** PD-5: Event naming and directionality ambiguous (**MEDIUM**)
+- Issue: mix of `bridge.send` app events, canvas control actions, and browser command replies without strict namespaces.
+- Mitigation: enforce namespaces (`browser.command`, `browser.result`, `browser.event`) and reject unknown top-level shapes.
+
+* Recommended minimum acceptance criteria before implementation
+1. Finalize protocol spec (schema + states + error codes + `_rid` contract).
+2. Define security policy (allowed schemes/origins, evaluate guardrails, bridge isolation).
+3. Define parity matrix against puppeteer tool action-by-action.
+4. Add integration tests for success + failure + close-race paths.
+5. Define routing/ownership with existing `browser` tool and canvas event classifier updates.

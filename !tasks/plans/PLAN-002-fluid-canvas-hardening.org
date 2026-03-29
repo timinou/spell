@@ -1,0 +1,90 @@
+#+TITLE: FLUID_CANVAS_HARDENING
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-fluid-canvas-hardening
+
+* Situation
+
+The Fluid Canvas mode (=--canvas= or =--canvas fluid=) was reported as "not working in real time." Thorough manual investigation confirmed:
+
+** What works (verified with screenshots + runtime tests)
+
+- QML FluidShell.qml renders all states correctly: input, planning, executing, complete
+- DAG graph visualization with dependency edges renders and updates
+- Agent panels show state badges (pending, running, completed, failed), elapsed timers, stream text, canvas output
+- Event pipeline: =plan_start= → =planner_stream= → =plan_complete= → =agent_state_change= → =canvas_output= → =execution_complete= all route correctly
+- The =canvas_output= after =execution_complete= ordering concern (from memory) is NOT a bug: JS microtask semantics guarantee =canvas_output= is always enqueued before =execution_complete= in the EventBus; and the QML side handles late-arriving =canvas_output= correctly as defense-in-depth
+- Bridge daemon socket protocol, window lifecycle, screenshot capture all work
+- All 38 unit tests pass, all 24 shell integration tests pass, all 4 e2e tests pass
+- Type checks and lint clean
+
+** What needs fixing
+
+Three concrete issues were found during investigation:
+
+1. *Missing display guard*: =runFluidMode()= and the =--canvas= path in =main.ts= never call =isDisplayAvailable()=. In headless environments (CI, SSH without X forwarding, automated harnesses), the daemon spawns but Qt cannot create windows, producing opaque "QML object creation failed" errors.
+
+2. *Opaque daemon errors*: When the bridge daemon fails (e.g., no display), its stderr is discarded (=stderr: "ignore"= in =qml-process.ts= line 97). Users see only "QML load timed out" with no hint of the underlying cause.
+
+3. *CLI flag ambiguity*: =--canvas= consumes the next non-flag argument as the canvas type name. =spell --canvas "Do something"= sets canvas type to "Do something" and fails with "Unknown canvas." The expected usage is =spell --canvas -p "Do something"= or =spell --canvas fluid "Do something"=, but this is undocumented and confusing.
+
+* Approach
+
+** ITEM Add isDisplayAvailable guard to canvas entry points
+
+- File: =packages/coding-agent/src/main.ts= (around line 711)
+- Import =isDisplayAvailable= from =@oh-my-pi/pi-qml=
+- Before entering =runFluidMode= or =runQmlMode=, check =isDisplayAvailable()=
+- If false, emit clear error: "=--canvas requires a graphical display (DISPLAY or WAYLAND_DISPLAY must be set)=" and exit 1
+- Also add the check in =runFluidMode()= at =packages/coding-agent/src/modes/fluid-mode.ts= line 43
+
+** ITEM Capture daemon stderr for diagnostics
+
+- File: =packages/qml/src/qml-process.ts=, =#spawnDaemon()= method (line ~92)
+- Change daemon spawn from =stderr: "ignore"= to =stderr: "pipe"=
+- Capture stderr into a bounded buffer (last 50 lines)
+- When socket connection fails after spawn, include captured stderr in the error message
+- When daemon exits unexpectedly, log the captured stderr at warn level
+- Keep the existing =spawnStdio()= path unchanged (already captures stderr)
+
+** ITEM Improve --canvas CLI flag documentation and error message
+
+- File: =packages/coding-agent/src/main.ts= line 737-739
+- In the "Unknown canvas" error message, include the user-friendly syntax: ="Unknown canvas: {name}. Available: chat, fluid. Use: spell --canvas [fluid|chat] [options] [message]"=
+- Consider whether =--canvas= should only accept known values and reject unknown ones earlier (in =args.ts=), but that's a bigger change — the error message improvement is sufficient for now
+
+* Non-goals
+
+- No changes to the QML rendering pipeline — it works correctly
+- No changes to the event ordering — it is correct
+- No changes to the planning agent or subprocess execution
+- No new tests for the display guard (it's a simple precondition check)
+- No refactoring of the EventBus or FluidOrchestrator
+
+* Verification
+
+- =bunx tsgo -p packages/coding-agent/tsconfig.json= — no type errors
+- =bunx biome check packages/coding-agent/src/main.ts packages/coding-agent/src/modes/fluid-mode.ts packages/qml/src/qml-process.ts= — no lint errors
+- =bun test packages/coding-agent/test/orchestrators/fluid-dag.test.ts= — existing tests pass
+- =bun test packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts= — existing tests pass
+- Manual: with DISPLAY set, =spell --canvas -p "message"= launches QML window and begins planning
+- Manual: with DISPLAY unset, =spell --canvas= exits immediately with clear error message
+
+* Key file paths
+
+- =packages/coding-agent/src/main.ts= — canvas entry point
+- =packages/coding-agent/src/modes/fluid-mode.ts= — fluid mode runner
+- =packages/qml/src/qml-process.ts= — daemon spawn/connect
+- =packages/qml/src/qml-bridge.ts= — =isDisplayAvailable()= export
+- =packages/coding-agent/src/modes/qml/FluidShell.qml= — QML UI (no changes needed)
+- =packages/coding-agent/src/orchestrators/fluid/= — event pipeline (no changes needed)
+
+* Context from investigation
+
+The previous developer committed =b949b8f43= which:
+- Made code highlighter initialization non-blocking
+- Simplified plan validation to structural-only
+- Updated tests for async highlighter warmup
+
+That commit is correct and tested. The remaining issues are all pre-existing gaps in the CLI/daemon error handling path, not regressions from that commit.
+
+Memory note about "canvas_output emitted after execution_complete → wrong order" should be marked as NOT A BUG. The ordering is guaranteed correct by JS microtask semantics, P1 FIFO EventBus drain, and the QML handler accepts late-arriving canvas_output regardless.

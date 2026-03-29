@@ -1,0 +1,32 @@
+#+TITLE: Fix dead org-edit-body elisp reference
+#+STATE: DONE
+#+SESSION_ID: 14a4d8a6194e3dbd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T20-40-30-565Z_14a4d8a6194e3dbd.jsonl]]
+#+CUSTOM_ID: BUG-004-fix-dead-org-edit-body-elisp-reference
+#+EFFORT: 15m
+#+PRIORITY: #C
+#+LAYER: backend
+
+NOTE [2026-03-28]: Absorbed into FEAT-004-add-section-level-mutation-to-org-update
+
+* Initial Message
+
+when the plan or ultraplan mode needs to update an Org file, what can it update? Can it easily update any part of the body? How does it do it? I'd like pdates to be done easily, i see it use the 'note' tool way too much which is annoying because it can lead to contradicting or outdated information in the final implementaiton
+
+* Scope
+~packages/org/elisp/mcp-server-emacs-tools.el~ references ~org-edit-body~ in both the available tools alist (line 29) and requires it (line 83), but no ~org-edit-body.el~ file exists anywhere in the repo. This has been broken since the initial commit (~258613759~).
+
+The body editing function exists as ~org-tasks-edit-body~ in ~org-tasks.el~ (line 577) but was never wired into a standalone MCP tool file.
+
+** Options (executor decides)
+1. Create ~packages/org/elisp/tools/org-edit-body.el~ that wraps ~org-tasks-edit-body~ (follow pattern from ~org-update-state.el~)
+2. Remove the dead reference from ~mcp-server-emacs-tools.el~ if the Emacs path is not needed (TS handles body editing)
+
+* Implementation
+- If creating: new file ~packages/org/elisp/tools/org-edit-body.el~ following the pattern in ~org-update-state.el~ — register MCP tool wrapping ~org-tasks-edit-body~
+- If removing: delete lines 29 and 83 from ~mcp-server-emacs-tools.el~
+
+* Acceptance Criteria
+- No broken ~require~ when Emacs daemon loads the MCP tools
+- If creating: ~org-edit-body~ tool responds to MCP calls
+- If removing: ~org-edit-body~ no longer in available tools list

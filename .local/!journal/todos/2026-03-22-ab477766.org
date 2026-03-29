@@ -1,0 +1,29 @@
+#+TITLE: Session 149ca627a27f34c2 Todos
+#+DATE: 2026-03-22
+#+TODO: ITEM DOING | DONE
+
+* Execution
+
+** DONE Locate ultraplan Phase 5 prompt section
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Found target in packages/coding-agent/src/prompts/system/plan-mode-active.md lines 190-194.
+
+** DONE Add parallel org-item guidance
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+Added concise Phase 5 paragraph plus quicktask code example that states subagents have org access.
+
+** DONE Verify file changes and plan criteria
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Verified Phase 5 now includes quicktask parallelization guidance, explicitly states subagents have org access, and git diff shows only this section changed.

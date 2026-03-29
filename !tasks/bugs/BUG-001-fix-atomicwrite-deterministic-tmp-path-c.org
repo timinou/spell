@@ -1,0 +1,37 @@
+#+TITLE: Fix atomicWrite deterministic tmp path causing ENOENT
+#+STATE: DONE
+#+SESSION_ID: 14a4b5ed5e43db3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T18-08-48-505Z_14a4b5ed5e43db3d.jsonl]]
+#+CUSTOM_ID: BUG-001-fix-atomicwrite-deterministic-tmp-path-c
+#+EFFORT: 20m
+#+PRIORITY: #A
+#+LAYER: backend
+
+NOTE [2026-03-28]: Implemented unique per-write tmp paths plus orphan cleanup in packages/org/src/atomic-write.ts and verified with focused atomic-write tests.
+
+* Initial Message
+
+3. **Org tool ENOENT**: File rename race conditions during org
+ item creation
+
+
+^^^ trace this back, waht is this issue?
+
+** Problem
+~atomicWrite~ in ~packages/org/src/atomic-write.ts~ uses a deterministic tmp path (~${filePath}.tmp~).
+When two concurrent operations target the same file, the second ~fs.rename~ fails with ENOENT because
+the first already moved the shared ~.tmp~ file.
+
+** Fix
+- Generate a unique tmp path per call: ~${filePath}.${crypto.randomUUID().slice(0, 8)}.tmp~
+- Add try/finally to clean up the tmp file on write or rename failure
+- Use ~crypto.randomUUID()~ (Web Crypto, available in Bun) for the suffix
+
+** Files
+- ~packages/org/src/atomic-write.ts~ (sole file, ~11 lines currently)
+
+** Acceptance
+- ~atomicWrite~ uses a unique tmp path per invocation
+- Failed writes clean up their tmp file (try/finally around rename, unlink in catch)
+- Existing tests still pass: ~bun test packages/org/test/~
+- No other files import or depend on the tmp path naming convention

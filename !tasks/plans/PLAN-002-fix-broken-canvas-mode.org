@@ -1,0 +1,155 @@
+#+TITLE: FIX_BROKEN_CANVAS_MODE
+#+STATE: DOING
+#+CUSTOM_ID: PLAN-002-fix-broken-canvas-mode
+
+* Initial Message
+
+/tmp/tmp.2XP8y6JYqQ.png
+it blocked there when I did `spell --canvas`.. it no worky at all.
+
+
+Be thorough
+
+* Problem
+
+~spell --canvas~ hangs at "Planning..." for 18+ minutes. A previous agent added several features to fluid mode but never tested them end-to-end. The canvas mode is completely non-functional.
+
+Screenshot shows the planner subprocess stuck cycling through submit_result attempts, with messages like "Checking submit tool availability", "Attempting mandated submit path", "Finalizing before submit_result" visible in the QML shell.
+
+* Root Cause Analysis
+
+** PRIMARY: Semantic validation + retry flow doubles planning time with no timeout
+
+The previous agent added ~validateAndRefinePlan()~ which runs: plan -> structural validate -> *semantic validate (LLM call via completeSimple, NO timeout)* -> [if invalid: run planner AGAIN -> validate AGAIN]. Worst case = 2 full planner subprocess runs + 2 LLM API calls = 10-19 minutes.
+
+~validatePlanSemantic~ calls ~completeSimple~ with only the parent AbortSignal (user cancellation only), no built-in timeout. If the semantic validator returns ~{ valid: false }~, it triggers a FULL second planner run with exploration tools (read, grep, find, lsp).
+
+The ~fastPlan~ setting defaults to ~false~, so every user hits this slow path.
+
+** CONTRIBUTING: Top-level await in code-highlight.ts blocks module import
+
+Line 38: ~const highlighter = await createFluidCodeHighlighter()~ at module scope. Import chain: ~fluid-mode.ts -> index.ts -> event-router.ts -> code-highlight.ts~. Shiki loads WASM + 20 TextMate grammars at import time, adding 2-5 seconds startup penalty to every ~--canvas~ invocation. Could hang longer if WASM loading fails.
+
+** CONTRIBUTING: outputSchema renders as "unknown" in subagent system prompt (pre-existing)
+
+~jtdToTypeScript(fluidPlanSchema)~ produces ~"unknown"~ because ~fluidPlanSchema~ is TypeBox (JSON Schema), not JTD. The subagent system prompt tells the planner: "Your result MUST match this TypeScript interface: unknown". Pre-existing, not a regression, but contributes to agent confusion. Not addressed in this plan (separate fix).
+
+* What the Previous Agent Changed (Assessment)
+
+| Change | Verdict | Action |
+|---|---|---|
+| ~validateDag~ -> ~validatePlan~ rename + enhanced validation (warnings, canvas type checks, empty task checks) | GOOD | Keep as-is |
+| ~code~ / ~progress~ canvas output types in types.ts, plan-schema.ts | GOOD | Keep as-is |
+| QML components (CodeBlock.qml, ProgressBar.qml, ContentBlock.qml dispatch, FluidShell normalization) | GOOD | Keep as-is |
+| FluidShell.qml ~fluid:plan_error~ handler | GOOD, fixes known bug | Keep as-is |
+| Expanded planner prompt (~fluid-planner.md~) | FINE | Keep as-is |
+| code-highlight.ts with Shiki | CONCEPT GOOD, EXECUTION BAD | Fix top-level await |
+| Semantic plan validation (~plan-validator.ts~, ~fluid-plan-validator.md~) | LOW VALUE, HIGH COST | Remove from main flow, keep files |
+| Validate-and-retry flow in ~fluid-mode.ts~ | PRIMARY PROBLEM | Simplify: structural-only + retry |
+| ~fluid-planner-retry.md~ | FINE | Keep file, still used for structural retry |
+
+* Approach
+
+** ITEM Fix top-level await in code-highlight.ts
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+
+File: ~packages/coding-agent/src/orchestrators/fluid/code-highlight.ts~
+
+Replace the top-level await at line 38:
+#+begin_src typescript
+// BEFORE (blocks module import chain)
+const highlighter = await createFluidCodeHighlighter();
+#+end_src
+
+With fire-and-forget background initialization:
+#+begin_src typescript
+// AFTER (non-blocking background init)
+let highlighter: Highlighter | undefined;
+createFluidCodeHighlighter().then(h => { highlighter = h; }).catch(() => {});
+#+end_src
+
+~highlightFluidCode~ is already synchronous and handles ~!highlighter~ by returning plain text. No API change needed. The only tradeoff: very early code blocks before Shiki loads get plain text — acceptable since code blocks only appear after plan execution, well after init completes.
+
+** ITEM Simplify validateAndRefinePlan to structural-only validation
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+File: ~packages/coding-agent/src/modes/fluid-mode.ts~
+
+The current ~validateAndRefinePlan~ calls ~assessPlanCandidate~ which chains structural + semantic validation. Replace with structural-only:
+
+1. Remove the ~assessPlanCandidate~ function entirely
+2. Simplify ~validateAndRefinePlan~ to:
+   - Call ~validatePlan(initialPlan)~ (structural, synchronous, fast)
+   - If valid: return plan (log warnings if any)
+   - If invalid: emit retry stream message, call ~runPlanningAgent~ once with the structural errors as critique
+   - Validate revised plan structurally; if still invalid, emit plan_error
+3. Remove unused imports: ~validatePlanSemantic~, ~SemanticPlanValidationResult~
+4. Keep ~validatePlan~ import (still used for structural validation)
+
+The retry for structural failures is cheap and useful (the planner just re-runs with the error as feedback, no extra LLM validation call). Semantic validation is removed from the main flow.
+
+The ~plan-validator.ts~, ~fluid-plan-validator.md~, and ~fluid-planner-retry.md~ files remain on disk — no deletions. They export from ~index.ts~ and can be re-enabled later with proper timeout/gating.
+
+** ITEM Remove validatePlan call from FluidOrchestrator.execute()
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+
+File: ~packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts~
+
+~FluidOrchestrator.execute()~ at line 43 calls ~validatePlan(plan)~ AGAIN before execution. This is redundant now that ~validateAndRefinePlan~ already validates structurally. The orchestrator should trust that validated plans are passed to it.
+
+Remove the ~validatePlan~ call and the conditional error emission from ~execute()~. The plan is already validated before reaching the orchestrator.
+
+Wait: actually, this is a defense-in-depth check. The orchestrator validates because ~execute()~ is a public method callable from anywhere. Keep it. It's fast (synchronous, no LLM call) and catches bugs. No change needed.
+
+** ITEM Verify compilation and run tests
+:PROPERTIES:
+:EFFORT: 30m
+:END:
+
+1. Run ~bun check:ts~ from repo root (or ~tsgo -p packages/coding-agent/tsconfig.json~ for focused check)
+2. Run ~biome check packages/coding-agent/src/orchestrators/fluid/code-highlight.ts packages/coding-agent/src/modes/fluid-mode.ts~ for lint
+3. Run specific tests:
+   - ~bun test packages/coding-agent/test/orchestrators/fluid-dag.test.ts~
+   - ~bun test packages/coding-agent/test/integration/fluid-event-pipeline.test.ts~
+4. Fix any type errors or test failures from the changes
+5. Manually verify ~spell --canvas~ starts planning without hanging (should take <2 minutes for planning, not 18)
+
+* Files Modified
+
+| File | Change |
+|---|---|
+| ~packages/coding-agent/src/orchestrators/fluid/code-highlight.ts~ | Replace top-level await with background init |
+| ~packages/coding-agent/src/modes/fluid-mode.ts~ | Simplify validateAndRefinePlan, remove semantic validation, remove assessPlanCandidate, clean imports |
+
+* Files NOT Modified (keep previous agent's changes)
+
+- ~packages/coding-agent/src/orchestrators/fluid/dag.ts~ — validatePlan with enhanced validation: keep
+- ~packages/coding-agent/src/orchestrators/fluid/types.ts~ — CANVAS_OUTPUT_TYPES with code/progress: keep
+- ~packages/coding-agent/src/orchestrators/fluid/plan-schema.ts~ — code/progress literals: keep
+- ~packages/coding-agent/src/orchestrators/fluid/event-router.ts~ — highlightFluidCode usage: keep (works with sync function)
+- ~packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts~ — validatePlan import: keep
+- ~packages/coding-agent/src/orchestrators/fluid/index.ts~ — plan-validator export: keep
+- ~packages/coding-agent/src/orchestrators/fluid/plan-validator.ts~ — semantic validator: keep file, just not called
+- ~packages/coding-agent/src/modes/qml/FluidShell.qml~ — code/progress normalization: keep
+- ~packages/coding-agent/src/modes/qml/canvas/ContentBlock.qml~ — code/progress dispatch: keep
+- ~packages/coding-agent/src/modes/qml/canvas/components/CodeBlock.qml~ — keep
+- ~packages/coding-agent/src/modes/qml/canvas/components/ProgressBar.qml~ — keep
+- ~packages/coding-agent/src/modes/qml/canvas/components/qmldir~ — keep
+- ~packages/coding-agent/src/prompts/agents/fluid-planner.md~ — expanded prompt: keep
+- ~packages/coding-agent/src/prompts/agents/fluid-plan-validator.md~ — keep file
+- ~packages/coding-agent/src/prompts/agents/fluid-planner-retry.md~ — keep file (used by structural retry)
+- ~packages/coding-agent/test/orchestrators/fluid-dag.test.ts~ — updated tests: keep
+- ~packages/coding-agent/test/integration/fluid-event-pipeline.test.ts~ — new test: keep
+
+* Verification
+
+- [ ] ~bun check:ts~ passes
+- [ ] ~bun test packages/coding-agent/test/orchestrators/fluid-dag.test.ts~ passes (31 tests)
+- [ ] ~bun test packages/coding-agent/test/integration/fluid-event-pipeline.test.ts~ passes
+- [ ] ~spell --canvas~ starts and completes planning within ~2 minutes (not 18)

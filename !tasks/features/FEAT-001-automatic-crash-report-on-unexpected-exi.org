@@ -1,0 +1,113 @@
+#+TITLE: Automatic crash report on unexpected exit
+#+STATE: ITEM
+#+SESSION_ID: 14a49d36b5e4645f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T16-20-50-007Z_14a49d36b5e4645f.jsonl]]
+#+CUSTOM_ID: FEAT-001-automatic-crash-report-on-unexpected-exi
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: infra
+
+* Initial Message
+
+File: /home/user/.spell/agent/sessions/-code-ora-mamabox-sales-.ancillary-docview/2026-03-28T13-04-00-862Z_14a4702a5751253f.jsonl
+ ID: 14a4702a5751253f
+
+
+Why did it crash every time after make dev?
+
+When spell exits unexpectedly (uncaught exception, unhandled rejection, SIGSEGV, etc.), there is no automatic diagnostic capture. The user sees the terminal return to prompt with no actionable information. The existing postmortem handler in =packages/utils/src/postmortem.ts= writes to stderr and the log file, but does not create a structured crash report.
+
+* Current state
+
+- =postmortem.ts= handles SIGINT, SIGTERM, SIGHUP, uncaughtException, unhandledRejection
+- On fatal: writes formatted error to stderr, logs to =~/.spell/logs/spell.YYYY-MM-DD.log=, runs cleanup, exits
+- =report-bundle.ts= can create full diagnostic archives but is only triggered manually via =/debug= menu
+- =tui.ts= writes a TUI-specific crash log to =~/.spell/agent/spell-crash.log= for line-overflow errors only
+- Session state (ID, file, model, CWD, pending tool calls) is available at runtime but not captured on crash
+- No breadcrumb pointing user to the crash report after exit
+
+* Goal
+
+On any unexpected exit (uncaughtException, unhandledRejection, or signal-induced crash where session was active), automatically:
+1. Write a structured crash report to =~/.spell/reports/crash-TIMESTAMP.json=
+2. Print a one-line pointer to the report file on stderr before exit
+3. Include enough context to diagnose the crash without reproducing it
+
+* Crash report contents
+
+#+begin_src json
+{
+  \"timestamp\": \"2026-03-28T16:33:00.000Z\",
+  \"reason\": \"uncaught_exception\",
+  \"error\": {
+    \"name\": \"TypeError\",
+    \"message\": \"Cannot read properties of undefined\",
+    \"stack\": \"...\"
+  },
+  \"session\": {
+    \"id\": \"14a49fdb712307f1\",
+    \"file\": \"~/.spell/agent/sessions/.../2026-03-28T16-32-22-980Z_14a49fdb712307f1.jsonl\",
+    \"cwd\": \"/home/user/code/project\"
+  },
+  \"model\": {
+    \"id\": \"claude-opus-4-6\",
+    \"provider\": \"anthropic\"
+  },
+  \"system\": {
+    \"os\": \"Linux 6.18.6\",
+    \"arch\": \"x64\",
+    \"memory\": { \"total\": 32000000000, \"free\": 8000000000 },
+    \"bun\": \"1.2.x\",
+    \"app\": \"13.12.8\"
+  },
+  \"pid\": 12345,
+  \"uptime\": 342.5
+}
+#+end_src
+
+* Implementation
+
+** 1. Add =writeCrashReport= function to =packages/utils/src/postmortem.ts=
+
+- Accept reason (Reason enum), optional Error, optional session context
+- Write JSON to =getReportsDir()/crash-TIMESTAMP.json=
+- Use =fs.writeFileSync= (sync — process is dying)
+- Collect: error details, =process.pid=, =process.uptime()=, =os.freemem()=, =os.totalmem()=, =Bun.version=, =VERSION=, =os.type()=, =os.release()=, =os.arch()=
+
+** 2. Add session context registration
+
+- Add =registerSessionContext= export to =postmortem.ts= that stores a getter function
+- In =sdk.ts= after session is created: register a getter returning ={id, file, cwd, model}=
+- The getter is called synchronously during crash — must not allocate or await
+
+** 3. Hook into existing fatal handlers
+
+- In the =uncaughtException= and =unhandledRejection= handlers, call =writeCrashReport= before =runCleanup=
+- In signal handlers (SIGTERM, SIGHUP), call =writeCrashReport= only if session was active
+
+** 4. Print breadcrumb on stderr
+
+- After writing the crash report, print: =\\n[spell] Crash report written to: /path/to/crash-TIMESTAMP.json\\n=
+- Use =process.stderr.write= (already done for the error itself)
+
+* Files to modify
+
+- =packages/utils/src/postmortem.ts= — add writeCrashReport, registerSessionContext, hook into handlers
+- =packages/coding-agent/src/sdk.ts= — register session context after session creation
+- =packages/coding-agent/CHANGELOG.md= — add to Unreleased/Added
+
+* Files NOT to modify
+
+- =packages/tui/src/tui.ts= — TUI crash log is a separate concern (rendering overflow), leave as-is
+- =packages/coding-agent/src/debug/report-bundle.ts= — manual debug bundle, orthogonal
+
+* Acceptance criteria
+
+1. When spell crashes with an uncaught exception, a JSON file appears in =~/.spell/reports/=
+2. The JSON contains error, session, model, and system fields as specified above
+3. stderr shows the crash report path before exit
+4. Normal exits (SIGINT/Ctrl-C, clean quit) do NOT produce crash reports
+5. The crash report write is synchronous and tolerates missing session context (e.g., crash during startup before session is created)
+6. Existing postmortem cleanup behavior is unchanged — crash report is written BEFORE cleanup, not instead of it
+7. =bun check:ts= passes
+8. No new dependencies

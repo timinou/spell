@@ -1,0 +1,86 @@
+#+TITLE: Plan completion protocol in execution prompt
+#+STATE: ITEM
+#+SESSION_ID: 14a475a741b4294e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T13-27-59-494Z_14a475a741b4294e.jsonl]]
+#+CUSTOM_ID: FEAT-001-plan-completion-protocol-in-execution-pr
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+* Scope
+
+The plan-mode-approved.md prompt tells the agent to "keep going until complete" but never defines what "complete" means beyond "all steps executed." The result: 71 plans stuck in DOING, 5 reached DONE (93% abandonment). No verification artifacts, no audit trail, no regression baseline.
+
+This item adds a structured Definition of Done (DoD) to the plan execution prompt, and enriches the planning-phase prompt so plans include verification criteria.
+
+** Out of scope
+- Programmatic session-end safety net (separate item, depends on completePlanItem helper)
+- Image annotation overlays (captions in org body text are sufficient)
+- Changes to the approval UI
+
+* Implementation
+
+** File: =packages/coding-agent/src/prompts/system/plan-mode-approved.md=
+
+Add a =## Completion Protocol= section after the existing =<instruction>= block but before the final =<critical>= block. This section is conditional on org being enabled (=orgItemId= is set). Structure:
+
+*** Section 1: Verification Artifacts
+- If the plan involves UI changes or visible behavior, use the browser tool to capture screenshots
+- Save screenshots to =plan-artifacts/{plan-id}/= in the same directory as the plan's org file (i.e., sibling =plan-artifacts/= folder). The plan's org file path is available from the org item metadata.
+- For each screenshot, write a caption describing what it demonstrates
+- If the plan involves test changes, run the relevant tests and capture pass/fail summary
+
+*** Section 2: Completion Report
+- Use =org update= with =append= to add a dated completion report to the plan item body
+- Report structure:
+  - =** Completion [DATE]= heading
+  - =*** Verification= — list of checks performed (tests passed, screenshots captured)
+  - =*** Artifacts= — list of screenshot paths with captions
+  - =*** Deviations= — any changes from the original plan
+
+*** Section 3: Close Child Items
+- For each =[[id:...]]= referenced child item in the plan body
+- Transition from ITEM/DOING to DONE via =org update= with =state: "DONE"= and =note=
+
+*** Section 4: Close the Plan
+- Transition plan from DOING to DONE via =org update= with =state: "DONE"= and =note=
+- This must be the LAST action
+
+The prompt must use Handlebars conditionals: =\{\{#if orgItemId\}\}= to gate the entire protocol, since file-backed plans (org disabled) cannot use org update.
+
+** File: =packages/coding-agent/src/prompts/system/plan-mode-active.md=
+
+In the "Child item requirements" section (around line 28-31), add guidance that child items should include a =Verification= section specifying what observable behavior to check — this gives the executor concrete targets for screenshot capture.
+
+Also in the "PLAN item requirements" section, add that the Execution Manifest should note which items have visual/behavioral verification targets.
+
+** Template Variables
+
+The existing Handlebars context already provides:
+- =orgItemId= — the PLAN item's CUSTOM_ID (set when org-backed)
+- =planContent= — the plan body text
+- =tools= — array of available tool names (for =\{\{#has tools "browser"\}\}= gating)
+
+No new template variables needed. However, we need to also pass the plan org file's directory path so the prompt can reference the correct artifact location. Check how =plan-mode-approved.md= is rendered in =interactive-mode.ts= (around line 1011) — if the org file path is not already in the template context, add it as =orgItemDir= (dirname of the org file path).
+
+* Edge Cases
+
+- File-backed plans (org disabled): completion protocol is skipped entirely via =\{\{#if orgItemId\}\}=
+- Plans without browser tool: screenshot section uses =\{\{#has tools "browser"\}\}= to skip
+- Plans with no UI component: agent should note "no visual verification applicable" and skip screenshots
+- Child items already DONE: agent should skip (DONE has no outgoing transitions)
+- BLOCKED child items: agent should not auto-close — leave as-is and note in completion report
+
+* Tests
+
+The system-prompt-templates.test.ts already tests template rendering for plan-mode-approved.md. Add test cases that verify:
+1. Completion protocol renders when =orgItemId= is set
+2. Completion protocol is absent when =orgItemId= is not set
+3. Browser section renders when "browser" is in tools list
+4. Browser section is absent when "browser" is not in tools list
+
+* Acceptance Criteria
+
+1. When the agent finishes executing an org-backed plan, it captures screenshots (when applicable), writes a completion report to the org item, closes child items, and transitions the plan to DONE
+2. File-backed plans (org disabled) are unaffected
+3. The completion protocol section renders correctly in template tests

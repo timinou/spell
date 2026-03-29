@@ -1,0 +1,73 @@
+#+TITLE: Emacs Daemon Recovery and Lazy Restart
+#+STATE: DOING
+#+SESSION_ID: 14a469a3db5e15e8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T12-35-30-285Z_14a469a3db5e15e8.jsonl]]
+#+CUSTOM_ID: PLAN-003-emacs-daemon-recovery-and-lazy-restart
+
+* Initial Message
+
+Emacs Code
+ {
+   "error": true,
+   "message": "Emacs daemon unavailable"
+ }
+
+
+
+In this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-mamabox-sales-.ancillary-docview/2026-03-28T11-54-55-960Z_14a4605a9611252c.jsonl
+ ID: 14a4605a9611252c
+
+
+Explain why the daemon was unavaialble and why the tool, and/or the daemon manager behind it, was not able to spin the daemon back up. Then tell me how you can TDD solve it
+
+* Context
+
+The emacs_code tool returns \"Emacs daemon unavailable\" when toolSession.emacsSession is null/undefined. The daemon lifecycle has a fundamental gap: startup is one-shot (warmupEmacs runs once during session init), getSession() is a pure property reader with no retry, and the health timer detects crashes but never triggers recovery.
+
+The Emacs PGTK build on Wayland is known to exit when the display connection drops (screen lock, monitor unplug), making runtime daemon death a real operational scenario, not theoretical.
+
+** Problem
+- packages/emacs/src/tool.ts:37 checks !session (null/undefined) but NOT isAlive()
+- getSession() in packages/coding-agent/src/tools/emacs.ts:69 is () => Promise.resolve(session.emacsSession ?? null) — a dead-end property read
+- No code path exists to restart the daemon after it dies or if warmup was skipped
+- The health timer in daemon.ts evicts dead sessions from cache but nobody re-creates them
+
+** Approach
+Introduce EmacsSessionManager (new class in packages/emacs/src/session-manager.ts) that wraps getSession() with lazy-init + circuit breaker retry. Wire it through sdk.ts and EmacsTool, replacing the bare emacsSession property.
+
+** Key decisions
+- TDD: write all tests first, then implement
+- Circuit breaker: 3 consecutive failures = 60s cooldown before retrying
+- Concurrent calls coalesce into one startup attempt (pending promise lock)
+- Preserve existing warmup-at-init fast path via setSession() injection
+- detection failures trip the breaker permanently (no point retrying if emacs isn't installed)
+
+** Critical files
+- packages/emacs/src/session-manager.ts (NEW)
+- packages/emacs/src/tool.ts (add isAlive check)
+- packages/emacs/test/session-manager.test.ts (NEW — 8 test contracts)
+- packages/emacs/test/tool-getSession.test.ts (NEW — 3 test contracts)
+- packages/coding-agent/src/tools/emacs.ts (wire manager)
+- packages/coding-agent/src/tools/index.ts (replace emacsSession property)
+- packages/coding-agent/src/sdk.ts (create manager, inject session, wire dispose)
+
+* Execution Manifest
+
+1. [[id:BUG-001-emacs-code-getsession-has-no-isalive-che]] — isAlive check in tool.ts (depends: none, effort: 30m)
+   Quick fix: add isAlive() guard before socat. Tests first, then one-line impl change.
+
+2. [[id:BUG-001-emacs-code-has-no-daemon-recovery-or-laz]] — EmacsSessionManager with lazy restart (depends: BUG-001-emacs-code-getsession-has-no-isalive-che, effort: 2h)
+   Core work: new class with circuit breaker, 8 test contracts, concurrent call coalescing.
+   Depends on item 1 because the manager's getSession() will use the isAlive() check internally.
+
+3. [[id:BUG-001-sdk-warmup-wiring-uses-ad-hoc-property-f]] — SDK wiring replacement (depends: BUG-001-emacs-code-has-no-daemon-recovery-or-laz, effort: 45m)
+   Integration: replace toolSession.emacsSession with toolSession.emacsSessionManager across sdk.ts, emacs.ts, index.ts.
+
+** Verification
+- bun test packages/emacs/test/session-manager.test.ts (all 8 contracts pass)
+- bun test packages/emacs/test/tool-getSession.test.ts (3 contracts pass)
+- bun test packages/emacs/test/ (no regression on daemon-survival, startEmacsDaemon, detection tests)
+- bun check:ts packages/emacs packages/coding-agent (type check passes)
+- Manual: kill spell-emacs-* daemon process, invoke emacs_code tool, verify it auto-restarts

@@ -1,0 +1,29 @@
+#+TITLE: Session 149b957fd49bf634 Todos
+#+DATE: 2026-03-21
+#+TODO: ITEM DOING | DONE
+
+* Execute approved plan
+
+** DONE Inspect biome.json include list
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Confirmed files.includes list and insertion point directly after !**/template.generated.ts.
+
+** DONE Add d.ts exclusion in biome config
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+Inserted !**/*.d.ts in files.includes immediately after !**/template.generated.ts.
+
+** DONE Verify checkts outcome
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+bun check:ts no longer reports any diagnostics from packages/utils/src/*.d.ts. Remaining failures are 2 organizeImports diagnostics in coding-agent files unrelated to .d.ts exclusion.
