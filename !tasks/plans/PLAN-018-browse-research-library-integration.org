@@ -1,9 +1,10 @@
 #+TITLE: Browse research library integration
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14a4eb4e2f680249
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T22-02-01-277Z_14a4eb4e2f680249.jsonl]]
 #+CUSTOM_ID: PLAN-018-browse-research-library-integration
 #+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
 
 * Context
 
@@ -80,3 +81,26 @@ User says "research quantum computing". Agent runs web_search -> 10 SearchSource
 
 ** Deferred (not executed in this plan)
 - [[id:FEAT-050-finding-enrichment-timeline-visualizatio]] -- Clickable enrichment timeline (effort: 3h, deferred to follow-up)
+
+
+** Completion [2026-03-29]
+
+*** Verification
+- =bunx --bun tsgo -p tsconfig.json= — clean (exit 0)
+- =bun lint:ts= — clean (2 pre-existing warnings, no new issues)
+- =qmllint= on all 7 QML files — clean
+- =bun test test/modes/browse-event-mapper.test.ts test/modes/browse-findings.test.ts= — 36 pass, 0 fail
+- =bun test test/integration/browse-research-flow.test.ts= — 4 pass, 0 fail
+- =bun test test/integration/browse-*.test.ts= — 21 pass, 0 fail (full regression, including 8 pre-existing)
+- Total: 57 tests pass, 0 fail, 119 assertions
+
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-018-browse-research-library-integration/browse-findings-curated-toggle.png]] — Curated/All toggle visible, search group in chat, agent-curated finding with sparkles icon
+- [[file:!tasks/plans/plan-artifacts/PLAN-018-browse-research-library-integration/browse-search-group-expanded.png]] — Search group with 3 results, All findings view active
+- [[file:!tasks/plans/plan-artifacts/PLAN-018-browse-research-library-integration/browse-content-viewer-panel.png]] — Document tab with rendered markdown, code block, search bar, Copy and Open in browser buttons
+
+*** Deviations
+- FEAT-050 (enrichment timeline) deferred as planned — not executed
+- Screenshots stored in both =test/integration/screenshots/= and =!tasks/plans/plan-artifacts/= (latter is the canonical location)
+- =displayCount()= helper function added to FindingsPanel.qml (not in original plan) to expose display model count for test assertions
+- Curated field default in FindingsPanel.handleMessage changed to =true= when not explicitly =false= (backward compat with existing tests and agent-curated findings)

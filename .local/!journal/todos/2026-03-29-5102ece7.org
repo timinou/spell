@@ -1,0 +1,11 @@
+#+TITLE: Session 14a61a0e469744fc Todos
+#+DATE: 2026-03-29
+#+TODO: ITEM DOING | DONE
+
+* Finalize
+
+** DONE Create PLAN item and exit plan mode
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:

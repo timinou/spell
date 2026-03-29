@@ -1,0 +1,42 @@
+#+TITLE: Finding enrichment timeline visualization
+#+STATE: ITEM
+#+SESSION_ID: 14a4eb4e2f680249
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T22-02-01-277Z_14a4eb4e2f680249.jsonl]]
+#+CUSTOM_ID: FEAT-050-finding-enrichment-timeline-visualizatio
+#+EFFORT: 3h
+#+PRIORITY: #C
+#+LAYER: qml
+
+* Initial Message
+
+How would you enable something for me to look at the result of web searches and fetches to see the research library being built? Because a lot of research is done through fetches not through browsers, so it would be nice to integrate that to the UX. Ask me as many questions as humanly possible. Think about this in the context of the UX we'd like to create
+
+* Scope
+In-scope:
+- Clickable interaction timeline on enriched findings in FindingsPanel
+- When user clicks an enriched finding, show a timeline of interactions: 'Found via search' -> 'Fetched' -> 'Browsed'
+- Timeline data stored in BrowseFinding's history field (interactionHistory serialized as JSON string in QML ListModel)
+- Timeline visualization as a small vertical list below the finding card, expandable on click
+
+Out-of-scope:
+- Initial enrichment merge logic (handled by FEAT-046-findingspanel-curated-toggle-dedup-and-p)
+- Schema fields for enrichment (handled by FEAT-045-finding-schema-and-mapper-tool-intercept)
+
+Depends on: FEAT-046-findingspanel-curated-toggle-dedup-and-p (enrichment merge), FEAT-045-finding-schema-and-mapper-tool-intercept (schema)
+
+NOTE: This item is DEFERRED. It is not part of the current execution plan. Created as a placeholder for follow-up work.
+
+* Tests
+- File: ~packages/coding-agent/test/integration/browse-enrichment-timeline.test.ts~ (new)
+  - Scenario: enriched finding shows timeline on click
+  - Scenario: timeline shows correct interaction types in chronological order
+
+* Implementation
+Deferred to follow-up plan.
+
+* Edge Cases
+- Finding with single interaction: timeline shows one entry, no expand needed
+- Finding with many interactions (>10): truncate to most recent 10
+
+* Acceptance Criteria
+- Deferred. Acceptance criteria will be refined when this item is scheduled for implementation.

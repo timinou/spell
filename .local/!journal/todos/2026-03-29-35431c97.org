@@ -1,0 +1,13 @@
+#+TITLE: Session 14a5d4665e45b43a Todos
+#+DATE: 2026-03-29
+#+TODO: ITEM DOING | DONE
+
+* Execution
+
+** DONE Run final verification and close plan
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Ran focused tests, package-local type checks, targeted Biome on touched files, saved replay artifacts, closed the org plan and child items truthfully, and committed the plan changes as `49d675130` (`fix(coding-agent): preserve ask Other input on back navigation`).
