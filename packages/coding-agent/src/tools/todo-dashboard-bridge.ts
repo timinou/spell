@@ -180,6 +180,8 @@ export class TodoDashboardBridge {
 		}
 
 		this.#session.setTodoPhases?.(phases);
+		// Re-emit so subscribers (including ourselves) refresh
+		this.#eventBus?.emit("todo:change", { phases });
 	}
 
 	dispose(): void {
