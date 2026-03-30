@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, BarChart3, Database, Server, Star, Zap } from "lucide-react";
+import { Activity, AlertCircle, BarChart3, Database, Server, Star, TrendingDown, Zap } from "lucide-react";
 import type { AggregatedStats } from "../types";
 
 interface StatsGridProps {
@@ -44,7 +44,7 @@ const statConfig = [
 	{
 		key: "cacheSavings",
 		title: "Cache Savings",
-		icon: Database,
+		icon: TrendingDown,
 		color: "var(--accent-green)",
 		getValue: (s: AggregatedStats) => (s.cacheSavings > 0 ? `$${s.cacheSavings.toFixed(2)}` : "-"),
 		getDetail: (s: AggregatedStats) =>

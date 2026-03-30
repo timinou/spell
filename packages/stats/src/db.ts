@@ -228,6 +228,7 @@ export function getOverallStats(): AggregatedStats {
 			SUM(
 				CASE
 					WHEN cache_read_tokens > 0 AND input_tokens > 0
+						AND cache_read_tokens * (cost_input * 1.0 / input_tokens) > cost_cache_read
 					THEN cache_read_tokens * (cost_input * 1.0 / input_tokens) - cost_cache_read
 					ELSE 0
 				END
@@ -265,6 +266,7 @@ export function getStatsByModel(): ModelStats[] {
 			SUM(
 				CASE
 					WHEN cache_read_tokens > 0 AND input_tokens > 0
+						AND cache_read_tokens * (cost_input * 1.0 / input_tokens) > cost_cache_read
 					THEN cache_read_tokens * (cost_input * 1.0 / input_tokens) - cost_cache_read
 					ELSE 0
 				END
@@ -307,6 +309,7 @@ export function getStatsByFolder(): FolderStats[] {
 			SUM(
 				CASE
 					WHEN cache_read_tokens > 0 AND input_tokens > 0
+						AND cache_read_tokens * (cost_input * 1.0 / input_tokens) > cost_cache_read
 					THEN cache_read_tokens * (cost_input * 1.0 / input_tokens) - cost_cache_read
 					ELSE 0
 				END

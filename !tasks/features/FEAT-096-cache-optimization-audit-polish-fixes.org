@@ -1,0 +1,142 @@
+#+TITLE: Cache optimization audit polish fixes
+#+STATE: DONE
+#+SESSION_ID: 14a6db1f3bc1dd69
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T10-08-16-623Z_14a6db1f3bc1dd69.jsonl]]
+#+CUSTOM_ID: FEAT-096-cache-optimization-audit-polish-fixes
+#+EFFORT: S
+#+PRIORITY: #C
+#+LAYER: packages/ai, packages/stats
+
+NOTE [2026-03-30]: All 4 audit fixes implemented and verified.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-003-audit-implementation:
+
+Good — the type is properly constrained. The env var is untyped (string), but the function correctly handles the three valid values and defaults everything else to `"long"`.
+
+Now let me check if the `Database` icon is used twice (Cache Rate and Cache Savings) which would make the dashboard cards visually identical:
+
+Both Cache Rate and Cache Savings use `Database` icon but with different colors (`--accent-cyan` vs `--accent-green`). This is a minor visual issue — two adjacent cards with the same icon shape may be confusing, but different colors help distinguish them. Not a bug, just a polish item.
+
+Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. Duplicate icon for adjacent stat cards
+- **What**: Cache Rate and Cache Savings both use the `Database` icon in `StatsGrid.tsx`
+- **Where**: `packages/stats/src/client/components/StatsGrid.tsx` lines 39 and 47
+- **Why**: Adjacent cards with the same icon shape may cause visual confusion in the dashboard. Different colors help but a distinct icon (e.g., `TrendingDown` or `PiggyBank` from lucide) would be clearer.
+- **Effort**: `trivial`
+
+### 2. `as BedrockTool` type cast for cache point in tool config
+- **What**: The cache point object in `convertToolConfig` requires `as BedrockTool` because the AWS SDK's `Tool` union type doesn't accept object literals for the `cachePoint` variant without assertion
+- **Where**: `packages/ai/src/providers/amazon-bedrock.ts` line 623
+- **Why**: Low risk — this mirrors how Bedrock's union types work and the value is correct. But if the SDK changes the `cachePoint` shape, the cast silences the error. A `satisfies` check would be safer if the SDK version is pinned.
+- **Effort**: `trivial`
+
+### 3. No Bedrock-side enforcement of max 4 cache breakpoints
+- **What**: Unlike Anthropic's `enforceCacheControlLimit(params, 4)`, the Bedrock provider has no guard against exceeding the 4-breakpoint limit
+- **Where**: `packages/ai/src/providers/amazon-bedrock.ts` — `convertMessages()` + `convertToolConfig()` + `buildSystemPrompt()`
+- **Why**: Currently safe because exactly 4 placement sites exist. But if a future contributor adds a 5th cache point (e.g., for a tool result message), Bedrock will return a 400 error at runtime with no helpful diagnostic. The Anthropic provider already has this guard.
+- **Effort**: `small`
+
+### 4. Cache savings can be slightly negative for free/zero-cost models
+- **What**: SQL formula `cache_read_tokens * (cost_input / input_tokens) - cost_cache_read` produces a negative value when `cost_input = 0` (free model) but `cost_cache_read > 0`
+- **Where**: `packages/stats/src/db.ts` — the `cache_savings` SQL in all 3 stat queries
+- **Why**: UI is protected (both dashboard and CLI guard `> 0`), but `AggregatedStats.cacheSavings` can hold a negative number. Any future consumer that doesn't guard would display nonsensical "negative savings". Adding `MAX(0, ...)` or `CASE WHEN result > 0` in SQL would make the contract honest.
+- **Effort**: `trivial`
+
+All 4 fixes from AUD-003. Independent, trivial-to-small changes. One commit.
+
+* Finding 1: Duplicate icon for Cache Savings card
+** File
+~packages/stats/src/client/components/StatsGrid.tsx~
+
+** Problem
+Cache Rate and Cache Savings both use the ~Database~ icon (lines 39 and 47). Adjacent cards with the same icon shape are visually confusing.
+
+** Fix
+Import ~TrendingDown~ from ~lucide-react~ (confirmed available in lucide-react@0.576.0). Change the Cache Savings card icon from ~Database~ to ~TrendingDown~.
+
+Change line 1 import to include ~TrendingDown~:
+#+begin_src tsx
+import { Activity, AlertCircle, BarChart3, Database, Server, Star, TrendingDown, Zap } from "lucide-react";
+#+end_src
+
+Change the ~cacheSavings~ entry's ~icon~ from ~Database~ to ~TrendingDown~.
+
+* Finding 2: ~as BedrockTool~ type cast
+** File
+~packages/ai/src/providers/amazon-bedrock.ts~ — line 623
+
+** Problem
+~as BedrockTool~ silences future SDK type changes. The AWS SDK's ~Tool~ type is a discriminated union; the ~cachePoint~ variant should be directly assignable.
+
+** Fix
+Check if ~{ cachePoint: ... }~ satisfies ~BedrockTool~ without the cast. If not (because the SDK union doesn't export a ~CachePointMember~ variant), keep the cast but document why:
+#+begin_src typescript
+// AWS SDK Tool union requires assertion for cachePoint variant
+} as BedrockTool);
+#+end_src
+
+If the SDK does export a narrow type (e.g., ~Tool.CachePointMember~), use that instead of the cast.
+
+* Finding 3: No Bedrock cache breakpoint limit enforcement
+** File
+~packages/ai/src/providers/amazon-bedrock.ts~
+
+** Problem
+Unlike Anthropic's ~enforceCacheControlLimit(params, 4)~, Bedrock has no guard. Currently safe (exactly 4 placement sites), but a 5th would produce a runtime 400 error with no diagnostic.
+
+** Fix
+Add a ~countBedrockCachePoints~ + ~enforceBedrockCachePointLimit~ function pair. Count cache points across ~commandInput.system~, ~commandInput.messages~, and ~commandInput.toolConfig.tools~. If >4, strip excess starting from innermost message cache points (matching Anthropic's priority: system > tools > penultimate user > last user).
+
+Insert the enforcer after ~commandInput~ assembly (line 143) and before ~onPayload~:
+#+begin_src typescript
+enforceBedrockCachePointLimit(commandInput, 4);
+#+end_src
+
+Implementation: iterate system blocks, tool blocks, and message content blocks, counting items with ~cachePoint~ key. If over limit, remove cache points from last-user first, then penultimate-user, preserving system and tools (most stable).
+
+* Finding 4: Cache savings can be negative for free models
+** Files
+~packages/stats/src/db.ts~ — 3 SQL queries (lines ~228-234, ~262-268, ~304-310)
+
+** Problem
+When ~cost_input = 0~ (free model) but ~cost_cache_read > 0~, the formula yields a negative number. UI guards ~> 0~ but the field contract is violated.
+
+** Fix
+Wrap the SUM expression in ~MAX(0, ...)~ in all 3 queries:
+#+begin_src sql
+SUM(
+  MAX(0,
+    CASE
+      WHEN cache_read_tokens > 0 AND input_tokens > 0
+      THEN cache_read_tokens * (cost_input * 1.0 / input_tokens) - cost_cache_read
+      ELSE 0
+    END
+  )
+) as cache_savings,
+#+end_src
+
+Actually, ~MAX~ inside ~SUM~ is not valid SQLite. Use ~CASE~ to clamp per-row:
+#+begin_src sql
+SUM(
+  CASE
+    WHEN cache_read_tokens > 0 AND input_tokens > 0
+      AND cache_read_tokens * (cost_input * 1.0 / input_tokens) > cost_cache_read
+    THEN cache_read_tokens * (cost_input * 1.0 / input_tokens) - cost_cache_read
+    ELSE 0
+  END
+) as cache_savings,
+#+end_src
+
+* Acceptance
+- Dashboard: Cache Savings card has ~TrendingDown~ icon, Cache Rate keeps ~Database~ icon
+- ~bun check:ts~ passes
+- ~as BedrockTool~ cast either replaced with narrow type or documented with comment
+- Bedrock provider enforces max 4 cache breakpoints; extra points are stripped gracefully
+- ~cacheSavings~ is always >= 0 in ~AggregatedStats~, even for free models

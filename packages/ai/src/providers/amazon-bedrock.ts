@@ -141,6 +141,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				toolConfig,
 				additionalModelRequestFields,
 			};
+			enforceBedrockCachePointLimit(commandInput, 4);
 			options?.onPayload?.(commandInput);
 			rawRequestDump = {
 				provider: model.provider,
@@ -620,7 +621,7 @@ function convertToolConfig(
 				type: CachePointType.DEFAULT,
 				...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
 			},
-		} as BedrockTool);
+		});
 	}
 
 	let bedrockToolChoice: ToolChoice | undefined;
@@ -638,6 +639,76 @@ function convertToolConfig(
 	}
 
 	return { tools: bedrockTools, toolChoice: bedrockToolChoice };
+}
+
+/** Count cache points across system, tools, and messages. */
+function countBedrockCachePoints(input: {
+	system?: SystemContentBlock[];
+	messages?: Message[];
+	toolConfig?: ToolConfiguration;
+}): number {
+	let total = 0;
+	for (const block of input.system ?? []) {
+		if ("cachePoint" in block) total++;
+	}
+	for (const tool of input.toolConfig?.tools ?? []) {
+		if ("cachePoint" in tool) total++;
+	}
+	for (const msg of input.messages ?? []) {
+		if (!msg.content) continue;
+		for (const block of msg.content) {
+			if ("cachePoint" in block) total++;
+		}
+	}
+	return total;
+}
+
+/**
+ * Enforce max cache breakpoints for Bedrock. Strips excess starting from
+ * message cache points (last user first), then tools, then system.
+ */
+function enforceBedrockCachePointLimit(
+	input: { system?: SystemContentBlock[]; messages?: Message[]; toolConfig?: ToolConfiguration },
+	maxBreakpoints: number,
+): void {
+	const total = countBedrockCachePoints(input);
+	if (total <= maxBreakpoints) return;
+	let excess = total - maxBreakpoints;
+
+	// Strip message cache points first (reverse order: last user loses cache first)
+	const messages = input.messages ?? [];
+	for (let i = messages.length - 1; i >= 0 && excess > 0; i--) {
+		const content = messages[i].content;
+		if (!content) continue;
+		for (let j = content.length - 1; j >= 0 && excess > 0; j--) {
+			if ("cachePoint" in content[j]) {
+				content.splice(j, 1);
+				excess--;
+			}
+		}
+	}
+
+	// Then strip tool cache points
+	if (excess > 0 && input.toolConfig?.tools) {
+		const tools = input.toolConfig.tools;
+		for (let i = tools.length - 1; i >= 0 && excess > 0; i--) {
+			if ("cachePoint" in tools[i]) {
+				tools.splice(i, 1);
+				excess--;
+			}
+		}
+	}
+
+	// System cache points stripped last (most valuable)
+	if (excess > 0) {
+		const system = input.system ?? [];
+		for (let i = system.length - 1; i >= 0 && excess > 0; i--) {
+			if ("cachePoint" in system[i]) {
+				system.splice(i, 1);
+				excess--;
+			}
+		}
+	}
 }
 
 function mapStopReason(reason: string | undefined): StopReason {
