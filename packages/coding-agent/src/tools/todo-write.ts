@@ -151,7 +151,7 @@ function makeEmptyFile(): TodoFile {
 	return { phases: [], nextTaskId: 1, nextPhaseId: 1 };
 }
 
-function findTask(phases: TodoPhase[], id: string): TodoItem | undefined {
+export function findTask(phases: TodoPhase[], id: string): TodoItem | undefined {
 	for (const phase of phases) {
 		const task = phase.tasks.find(t => t.id === id);
 		if (task) return task;
@@ -458,7 +458,11 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 	const completedGatedTasks: TodoItem[] = [];
 	for (const phase of file.phases) {
 		for (const task of phase.tasks) {
-			if (task.status === "completed" && previousStatus.get(task.id) !== "completed" && hasGate(task)) {
+			if (
+				task.status === "completed" &&
+				previousStatus.get(task.id) !== "completed" &&
+				(hasGate(task) || task.orgItemId)
+			) {
 				completedGatedTasks.push(task);
 			}
 		}
@@ -578,7 +582,7 @@ export function formatSummary({
 		for (const phaseId of completedPhaseIds) {
 			const phase = phases.find(p => p.id === phaseId);
 			if (!phase) continue;
-			const gatedInPhase = phase.tasks.filter(hasGate);
+			const gatedInPhase = phase.tasks.filter(t => hasGate(t) || t.orgItemId);
 			if (gatedInPhase.length === 0) continue;
 			const actions: string[] = [];
 			if (gatedInPhase.some(t => t.gateCommit)) actions.push("Commit changes.");

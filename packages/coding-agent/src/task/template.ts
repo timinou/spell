@@ -1,6 +1,6 @@
 import { renderPromptTemplate } from "../config/prompt-templates";
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
-import type { TodoItem, TodoPhase } from "../tools/todo-write";
+import { findTask, type TodoPhase } from "../tools/todo-write";
 import type { TaskItem } from "./types";
 
 interface RenderResult {
@@ -39,7 +39,7 @@ export function renderTemplate(context: string | undefined, task: TaskItem): Ren
  * unresolvable or the todo has no gates worth injecting.
  */
 export function resolveVerificationContext(todoRef: string, phases: TodoPhase[]): string | undefined {
-	const task = findTodoItem(todoRef, phases);
+	const task = findTask(phases, todoRef);
 	if (!task) return undefined;
 
 	const lines: string[] = [];
@@ -57,12 +57,4 @@ export function resolveVerificationContext(todoRef: string, phases: TodoPhase[])
 	if (lines.length === 0) return undefined;
 
 	return `--- Verification Requirements (from ${todoRef}) ---\n${lines.join("\n")}`;
-}
-
-function findTodoItem(id: string, phases: TodoPhase[]): TodoItem | undefined {
-	for (const phase of phases) {
-		const task = phase.tasks.find(t => t.id === id);
-		if (task) return task;
-	}
-	return undefined;
 }

@@ -1,0 +1,117 @@
+#+TITLE: Audit remediation for PLAN-037 verification protocol
+#+STATE: DONE
+#+SESSION_ID: 14a7172d84008cd4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T14-30-39-888Z_14a7172d84008cd4.jsonl]]
+#+CUSTOM_ID: PLAN-042-audit-remediation-for-plan-037-verificat
+
+
+NOTE [2026-03-30]: All 5 audit findings implemented and verified. 62 tests pass across 2 test files. Type check clean.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-005-audit-implementation:
+
+`verified` is only on the schema op, not on `TodoItem`. It's consumed at line 409 and never stored. This is correct — it's a one-time authorization token, not persistent state.
+
+Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. `hasGate()` does not include `orgItemId`, causing silent gap in post-completion directives
+
+- **What**: A task with only `orgItemId` (no other gate fields) triggers two-phase completion via `hasRequiredGate()`, but after completing with `verified: true`, line 461 uses `hasGate(task)` which returns `false`. The "Gate Requirements" section won't fire for orgItemId-only tasks, and the phase-completion aggregate at line 581 also misses them.
+- **Where**: `packages/coding-agent/src/tools/todo-write.ts`, lines 461 and 581
+- **Why**: Low practical impact because the two-phase checklist already forces the agent to acknowledge the orgItemId gate before completion. But it's an asymmetry — every other required gate gets a post-completion directive, orgItemId-only tasks don't. The fix is to either: (a) add `orgItemId` to `hasGate()`, or (b) change lines 461/581 to use `hasGate(task) || task.orgItemId`. Option (b) preserves the semantic distinction between `hasGate` (any gate including advisory) and `hasRequiredGate` (required gates only).
+- **Effort**: `trivial`
+
+### 2. `todo-reminder.ts` guard duplicates logic instead of reusing `hasRequiredGate`
+
+- **What**: Line 51 uses `!hasGate(task) && !task.orgItemId` as a manual union rather than using a single predicate. If the set of fields in either function changes, this guard silently drifts.
+- **Where**: `packages/coding-agent/src/modes/components/todo-reminder.ts`, line 51
+- **Why**: Maintenance risk — if a new gate-like field is added, this guard must be manually updated. A single `!hasGate(task) && !hasRequiredGate(task)` would be future-proof and consistent.
+- **Effort**: `trivial`
+
+### 3. `findTodoItem` in `template.ts` duplicates `findTask` from `todo-write.ts`
+
+- **What**: `template.ts:62` defines `findTodoItem(id, phases)` — identical logic to `todo-write.ts:154` `findTask(phases, id)` (only argument order differs). Both iterate phases and find by id.
+- **Where**: `packages/coding-agent/src/task/template.ts`, line 62 vs `packages/coding-agent/src/tools/todo-write.ts`, line 154
+- **Why**: Low risk since both are private. But `findTask` could be exported from `todo-write.ts` and reused, avoiding the second copy. The argument order difference (`phases, id` vs `id, phases`) makes this slightly fiddly.
+- **Effort**: `small`
+
+### 4. No test covers the two-phase rejection through `applyOps` end-to-end
+
+- **What**: The tests cover `hasRequiredGate` and `formatSummary` with `pendingVerificationTasks`, but no test calls `applyOps` (or the tool's `execute` method) to verify the actual rejection flow — that passing `{status: "completed"}` on a gated task leaves the status unchanged and populates `pendingVerificationTasks`, and that a follow-up `{status: "completed", verified: true}` then succeeds.
+- **Where**: `packages/coding-agent/test/tools/todo-write-gates.test.ts` — missing integration-level test
+- **Why**: The `formatSummary` tests prove the rendering is correct given a `pendingVerificationTasks` array, but they don't prove `applyOps` actually populates it. If the two-phase check in `applyOps` regresses, no test catches it. The blocker rejection path (analogous feature) has full end-to-end coverage via the tool test file.
+- **Effort**: `small`
+
+### 5. `add_task` op does not support `after` positioning despite prompt documentation
+
+- **What**: The `todo-write.md` prompt example at line 129 shows `after: "task-2"` in an `add_task` op, but neither the schema nor `applyOps` supports an `after` field on the `add_task` op. This pre-dates this PR but the new prompt content sits alongside it.
+- **Where**: `packages/coding-agent/src/prompts/tools/todo-write.md`, line 129
+- **Why**: The agent will send `after` in the JSON, it'll be silently ignored by the schema (TypeBox doesn't reject extra keys by default with `strict: true` on the tool level but not on individual union members). Pre-existing issue, not caused by this PR.
+- **Effort**: `trivial` (to fix the prompt; `small` to implement the feature)
+
+* Context
+** Problem
+Post-implementation audit of PLAN-037 (todo verification protocol with orgItemId and todoRef) identified 5 issues ranging from trivial to small effort. Three are correctness gaps in gate detection, one is a missing test, and one is a pre-existing prompt documentation bug.
+
+** Approach
+All 5 findings are independent and can be executed in any order. The most impactful are:
+1. =hasGate= gap (BUG-029): orgItemId-only tasks silently miss post-completion directives
+2. Missing e2e test (BUG-031): two-phase applyOps flow has no integration test
+3. Prompt bug (BUG-032): add_task example generates malformed JSON
+
+The remaining two (BUG-030, FEAT-105) are maintenance polish.
+
+** Key Decisions
+- =hasGate= is NOT modified. Instead, the two call sites that need orgItemId awareness get =hasGate(task) || task.orgItemId=. This preserves =hasGate= as "any gate including advisory" and =hasRequiredGate= as "required gates only".
+- =findTask= from =todo-write.ts= is exported and reused in =template.ts=. The argument order stays as =findTask(phases, id)= — the single call site in template.ts swaps its args.
+- The e2e test uses =TodoWriteTool.execute()= like existing tests in =todo-write.test.ts=, not a direct =applyOps= call (which is private).
+
+* Verification
+** Focused Tests
+#+begin_src bash
+bun test packages/coding-agent/test/tools/todo-write-gates.test.ts
+bun test packages/coding-agent/test/task/todo-ref-injection.test.ts
+#+end_src
+
+** Type Check
+#+begin_src bash
+bun check:ts
+#+end_src
+
+** Manual Checks
+- Verify =findTodoItem= no longer exists in =packages/coding-agent/src/task/template.ts=
+- Verify =add_task= prompt example matches actual schema (no =after=, no =task: {}= nesting)
+
+* Execution Manifest
+All items are independent — no ordering constraints. BUG-029 and BUG-031 are highest priority.
+
+1. [[id:BUG-029-hasgate-misses-orgitemid-causing-silent]] — Fix hasGate gap in completedGatedTasks and phase aggregate (S, #A)
+2. [[id:BUG-031-add-end-to-end-two-phase-completion-test]] — Add e2e two-phase test through TodoWriteTool.execute (S, #A)
+3. [[id:BUG-032-fix-add-task-prompt-example-with-wrong-n]] — Fix add_task prompt example (S, #B)
+4. [[id:BUG-030-todo-reminder-gatebadges-guard-duplicate]] — Use hasRequiredGate in todo-reminder guard (S, #C)
+5. [[id:FEAT-105-export-findtask-and-remove-findtodoitem]] — Export findTask and remove findTodoItem duplication (S, #C)
+
+** Completion [2026-03-30]
+
+*** Verification
+- =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts= — 53 pass, 0 fail (includes 4 new e2e tests)
+- =bun test packages/coding-agent/test/task/todo-ref-injection.test.ts= — 9 pass, 0 fail
+- =bun check:ts= — clean (biome check + tsgo type checking)
+- Manual: =findTodoItem= no longer exists in =packages/coding-agent/src/= (grep confirms 0 matches)
+- Manual: =add_task= prompt example at line 129 uses flat fields, =phase-1= ID, no =after= or =task:{}= nesting
+
+*** Artifacts
+All changes are in source files:
+- =packages/coding-agent/src/tools/todo-write.ts= — BUG-029 (lines 461, 581), FEAT-105 (export findTask)
+- =packages/coding-agent/src/modes/components/todo-reminder.ts= — BUG-030 (hasRequiredGate guard)
+- =packages/coding-agent/src/task/template.ts= — FEAT-105 (removed findTodoItem, imports findTask)
+- =packages/coding-agent/src/prompts/tools/todo-write.md= — BUG-032 (fixed add_task example)
+- =packages/coding-agent/test/tools/todo-write-gates.test.ts= — BUG-031 (4 new e2e tests)
+
+*** Deviations
+None.

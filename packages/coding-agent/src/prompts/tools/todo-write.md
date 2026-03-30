@@ -98,7 +98,6 @@ When implementing plan items, set gate fields to track required deliverables. Th
 ## Verification Protocol
 
 Tasks with **required gates** (`gateCommit`, `gateArtifact`, `gateCmd`, `gateLlm`, or `orgItemId`) use two-phase completion:
-
 1. **First attempt**: marking a gated task `completed` without `verified: true` is **rejected**. The tool returns a verification checklist showing each gate requirement.
 2. **After verification**: re-submit the update with `verified: true` to complete the task.
 
@@ -126,7 +125,7 @@ ops: [
 
 <example name="add_task">
 Add a follow-up task with implementation specifics in `details`:
-ops: [{op: "add_task", phase: "Implementation", after: "task-2", task: {content: "Handle retries", details: "Update retry.ts to cap exponential backoff and preserve AbortSignal handling", status: "pending"}}]
+ops: [{op: "add_task", phase: "phase-1", content: "Handle retries", details: "Update retry.ts to cap exponential backoff and preserve AbortSignal handling"}]
 </example>
 
 <example name="initial-setup">

@@ -12,6 +12,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
 import type { FormatSummaryOptions, TodoItem, TodoPhase, TodoStatus } from "../../src/tools/todo-write";
 import {
 	formatSummary,
@@ -570,5 +573,166 @@ describe("two-phase gated completion via formatSummary", () => {
 			pendingVerificationTasks: [task],
 		});
 		expect(result).toContain("[ ] Review against: check acceptance criteria (gateLlm)");
+	});
+});
+
+// =============================================================================
+// Two-phase gated completion via TodoWriteTool.execute
+// =============================================================================
+
+function createSession(initialPhases: TodoPhase[] = []): ToolSession {
+	let phases = initialPhases;
+	return {
+		cwd: "/tmp/test",
+		hasUI: false,
+		getSessionFile: () => null,
+		getSessionSpawns: () => "*",
+		settings: Settings.isolated(),
+		getTodoPhases: () => phases,
+		setTodoPhases: next => {
+			phases = next;
+		},
+	};
+}
+
+describe("two-phase gated completion via TodoWriteTool.execute", () => {
+	test("completing a gated task without verified is rejected", async () => {
+		const tool = new TodoWriteTool(createSession());
+		await tool.execute("call-1", {
+			ops: [
+				{
+					op: "replace",
+					phases: [
+						{
+							name: "Work",
+							tasks: [{ content: "Run tests", gateCmd: "bun test" }],
+						},
+					],
+				},
+			],
+		});
+
+		// Mark in_progress
+		await tool.execute("call-2", {
+			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
+		});
+
+		// Try to complete without verified — should be rejected
+		const result = await tool.execute("call-3", {
+			ops: [{ op: "update", id: "task-1", status: "completed" }],
+		});
+
+		const tasks = result.details?.phases[0]?.tasks ?? [];
+		expect(tasks[0]?.status).toBe("in_progress");
+
+		const summary = result.content.find(part => part.type === "text")?.text ?? "";
+		expect(summary).toContain("Verification Required");
+		expect(summary).toContain("[ ] Run `bun test` (gateCmd)");
+	});
+
+	test("completing a gated task with verified: true succeeds", async () => {
+		const tool = new TodoWriteTool(createSession());
+		await tool.execute("call-1", {
+			ops: [
+				{
+					op: "replace",
+					phases: [
+						{
+							name: "Work",
+							tasks: [{ content: "Run tests", gateCmd: "bun test" }],
+						},
+					],
+				},
+			],
+		});
+
+		await tool.execute("call-2", {
+			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
+		});
+
+		const result = await tool.execute("call-3", {
+			ops: [{ op: "update", id: "task-1", status: "completed", verified: true }],
+		});
+
+		const tasks = result.details?.phases[0]?.tasks ?? [];
+		expect(tasks[0]?.status).toBe("completed");
+
+		const summary = result.content.find(part => part.type === "text")?.text ?? "";
+		expect(summary).toContain("Gate Requirements");
+	});
+
+	test("non-gated task completes without verified", async () => {
+		const tool = new TodoWriteTool(createSession());
+		await tool.execute("call-1", {
+			ops: [
+				{
+					op: "replace",
+					phases: [
+						{
+							name: "Work",
+							tasks: [{ content: "Simple task" }],
+						},
+					],
+				},
+			],
+		});
+
+		await tool.execute("call-2", {
+			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
+		});
+
+		const result = await tool.execute("call-3", {
+			ops: [{ op: "update", id: "task-1", status: "completed" }],
+		});
+
+		const tasks = result.details?.phases[0]?.tasks ?? [];
+		expect(tasks[0]?.status).toBe("completed");
+
+		const summary = result.content.find(part => part.type === "text")?.text ?? "";
+		expect(summary).not.toContain("Verification Required");
+	});
+
+	test("orgItemId-only task triggers two-phase completion", async () => {
+		const tool = new TodoWriteTool(createSession());
+		await tool.execute("call-1", {
+			ops: [
+				{
+					op: "replace",
+					phases: [
+						{
+							name: "Work",
+							tasks: [{ content: "Auth feature", orgItemId: "FEAT-001-auth" }],
+						},
+					],
+				},
+			],
+		});
+
+		await tool.execute("call-2", {
+			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
+		});
+
+		// Try to complete without verified — should be rejected (BUG-029)
+		const rejected = await tool.execute("call-3", {
+			ops: [{ op: "update", id: "task-1", status: "completed" }],
+		});
+
+		const rejectedTasks = rejected.details?.phases[0]?.tasks ?? [];
+		expect(rejectedTasks[0]?.status).toBe("in_progress");
+
+		const rejectedSummary = rejected.content.find(part => part.type === "text")?.text ?? "";
+		expect(rejectedSummary).toContain("Verification Required");
+		expect(rejectedSummary).toContain("[ ] Update org item FEAT-001-auth (orgItemId)");
+
+		// Now complete with verified: true
+		const accepted = await tool.execute("call-4", {
+			ops: [{ op: "update", id: "task-1", status: "completed", verified: true }],
+		});
+
+		const acceptedTasks = accepted.details?.phases[0]?.tasks ?? [];
+		expect(acceptedTasks[0]?.status).toBe("completed");
+
+		const acceptedSummary = accepted.content.find(part => part.type === "text")?.text ?? "";
+		expect(acceptedSummary).toContain("Gate Requirements");
 	});
 });
