@@ -744,7 +744,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			? `Implement these audit recommendations from ${auditItemRef}:\n\n${auditContent}`
 			: `Implement these audit recommendations:\n\n${auditContent}`;
 
-		await this.handlePlanModeCommand(prompt, { ultraplan: true });
+		await this.handlePlanModeCommand(prompt);
 	}
 
 	async #createAuditItem(findings: string, sourceRef?: string): Promise<string> {

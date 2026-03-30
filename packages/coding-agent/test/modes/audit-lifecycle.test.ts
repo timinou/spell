@@ -71,11 +71,11 @@ describe("audit lifecycle", () => {
 
 			let state: AuditState;
 			if (!isAuditEscalation || auditDepth < maxDepth) {
-				state = { pending: "auto", active: false };
+				state = { pending: "suggest", active: false };
 			} else {
 				state = { pending: false, active: false };
 			}
-			expect(state.pending).toBe("auto");
+			expect(state.pending).toBe("suggest");
 		});
 	});
 

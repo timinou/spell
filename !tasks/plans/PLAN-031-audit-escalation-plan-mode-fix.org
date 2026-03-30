@@ -1,0 +1,57 @@
+#+TITLE: Audit escalation plan mode fix
+#+STATE: DONE
+#+SESSION_ID: 14a6d56ddb293192
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-43-24-268Z_14a6d56ddb293192.jsonl]]
+#+CUSTOM_ID: PLAN-031-audit-escalation-plan-mode-fix
+#+EFFORT: 15m
+#+PRIORITY: #B
+#+LAYER: backend
+
+NOTE [2026-03-30]: All steps executed, all verification passed, org lifecycle closed.
+
+
+* Initial Message
+
+when an audit starts planning again, use the /plan mode, not the /ultraplan mode for implementing the audits
+
+* Context
+
+When audit findings trigger implementation, ~handleAuditEscalation~ in ~interactive-mode.ts~ (line 747) enters ultraplan mode:
+
+#+begin_src typescript
+await this.handlePlanModeCommand(prompt, { ultraplan: true });
+#+end_src
+
+The user wants regular ~/plan~ mode instead, so they can review the implementation plan before execution. This is a one-line source change plus one test update.
+
+** Key files
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ — line 747: remove ~{ ultraplan: true }~
+- ~packages/coding-agent/test/modes/audit-lifecycle.test.ts~ — lines 74/78: ~"auto"~ → ~"suggest"~ (since regular plan → suggest-based follow-up audit)
+
+** Downstream effects
+- Follow-up audit after audit-escalated plan becomes "suggest" (popup) instead of "auto" — gives user control
+- No changes to audit prompt, overlay, depth tracking, org item creation, or state machine
+
+* Verification
+- ~bun test packages/coding-agent/test/modes/audit-lifecycle.test.ts~ — 13 tests pass
+- ~bunx --bun tsgo -p packages/coding-agent/tsconfig.json --noEmit~ — clean
+- Grep confirms no ~ultraplan: true~ in ~handleAuditEscalation~
+
+* Execution Manifest
+1. [[id:BUG-019-audit-escalation-uses-ultraplan-instead]] (depends: none, effort: 15m)
+   Remove ~ultraplan: true~ from escalation call, update test expectation from ~"auto"~ to ~"suggest"~.
+
+
+** Completion [2026-03-30]
+
+*** Verification
+- ~bun test packages/coding-agent/test/modes/audit-lifecycle.test.ts~ — 13 pass, 0 fail, 17 expect() calls
+- ~bunx --bun tsgo -p packages/coding-agent/tsconfig.json --noEmit~ — clean (no errors)
+- Grep confirms ~ultraplan: true~ removed from ~handleAuditEscalation~; only remains in ~/ultraplan~ command handler (line 1248), which is correct
+
+*** Artifacts
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ line 747: ~{ ultraplan: true }~ removed from ~handlePlanModeCommand~ call
+- ~packages/coding-agent/test/modes/audit-lifecycle.test.ts~ lines 74, 78: expectations updated from ~"auto"~ to ~"suggest"~
+
+*** Deviations
+None.

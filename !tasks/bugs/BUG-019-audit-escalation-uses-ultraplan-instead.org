@@ -1,0 +1,37 @@
+#+TITLE: Audit escalation uses ultraplan instead of plan mode
+#+STATE: DONE
+#+SESSION_ID: 14a6d56ddb293192
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-43-24-268Z_14a6d56ddb293192.jsonl]]
+#+CUSTOM_ID: BUG-019-audit-escalation-uses-ultraplan-instead
+#+EFFORT: 15m
+#+PRIORITY: #B
+#+LAYER: backend
+#+FILES: packages/coding-agent/src/modes/interactive-mode.ts, packages/coding-agent/test/modes/audit-lifecycle.test.ts
+
+NOTE [2026-03-30]: Fixed. Removed { ultraplan: true } from handleAuditEscalation call. Updated test to expect "suggest" instead of "auto". All 13 tests pass, type check clean.
+
+* Initial Message
+
+when an audit starts planning again, use the /plan mode, not the /ultraplan mode for implementing the audits
+
+When the audit phase finds issues and escalates to implementation, ~handleAuditEscalation~ in ~interactive-mode.ts~ calls:
+
+#+begin_src typescript
+await this.handlePlanModeCommand(prompt, { ultraplan: true });
+#+end_src
+
+This forces ultraplan mode. The user wants regular ~/plan~ mode so they can review the plan before execution.
+
+* Change
+1. In ~packages/coding-agent/src/modes/interactive-mode.ts~ line 747, change ~{ ultraplan: true }~ to ~{}~ (or omit the options object)
+2. In ~packages/coding-agent/test/modes/audit-lifecycle.test.ts~ lines 74 and 78, change the "audit escalation below max depth" test: ~pending: "auto"~ → ~pending: "suggest"~ since regular plan mode → suggest-based follow-up audit
+
+* Downstream Effects
+- After audit-escalated /plan execution, ~#approvePlan~ reads ~this.planModeUltraplan~ (now false) → sets ~pending: "suggest"~ → user sees popup asking whether to run follow-up audit
+- This is correct: gives the user control over recursive audit cycles instead of auto-triggering
+- Depth tracking, org item creation, and overlay behavior are all unchanged
+
+* Acceptance
+- ~bun test packages/coding-agent/test/modes/audit-lifecycle.test.ts~ passes (13 tests, 0 failures)
+- ~bunx --bun tsgo -p packages/coding-agent/tsconfig.json --noEmit~ clean
+- ~handleAuditEscalation~ no longer passes ~ultraplan: true~
