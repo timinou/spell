@@ -53,6 +53,8 @@ export class GatewayTool implements AgentTool<typeof gatewaySchema> {
 			const message = err instanceof Error ? err.message : String(err);
 			return toolResult().text(`Gateway error: ${message}`).done();
 		}
+		// Exhaustive switch -- unreachable at compile time, defensive at runtime
+		return toolResult().text(`Unknown gateway action: ${input.action}`).done();
 	}
 
 	async #register(input: GatewayInput): Promise<AgentToolResult> {

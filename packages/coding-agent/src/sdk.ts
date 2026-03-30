@@ -893,7 +893,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 	});
 
-	const gatewayClient = new GatewayClient({ autoSpawn: false });
+	const gatewayClient = taskDepth === 0 ? new GatewayClient({ autoSpawn: false }) : undefined;
 
 	const toolSession: ToolSession = {
 		cwd,
@@ -1675,9 +1675,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			try {
 				const sid = toolSession.getSessionId?.();
 				if (sid) await toolSession.gatewayClient.cleanup(sid);
-				await toolSession.gatewayClient.dispose();
 			} catch (err) {
 				logger.warn("gatewayClient cleanup failed", { error: String(err) });
+			}
+			try {
+				await toolSession.gatewayClient.dispose();
+			} catch (err) {
+				logger.warn("gatewayClient dispose failed", { error: String(err) });
 			}
 		}
 	};
