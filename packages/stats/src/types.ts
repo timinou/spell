@@ -62,6 +62,8 @@ export interface AggregatedStats {
 	totalCacheWriteTokens: number;
 	/** Cache hit rate (0-1) */
 	cacheRate: number;
+	/** Estimated cost saved by cache reads vs full input pricing */
+	cacheSavings: number;
 	/** Total cost */
 	totalCost: number;
 	/** Total premium requests */

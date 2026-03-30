@@ -42,6 +42,17 @@ const statConfig = [
 		getDetail: (s: AggregatedStats) => `${(s.totalCacheReadTokens / 1000).toFixed(1)}k cached tokens`,
 	},
 	{
+		key: "cacheSavings",
+		title: "Cache Savings",
+		icon: Database,
+		color: "var(--accent-green)",
+		getValue: (s: AggregatedStats) => (s.cacheSavings > 0 ? `$${s.cacheSavings.toFixed(2)}` : "-"),
+		getDetail: (s: AggregatedStats) =>
+			s.cacheSavings > 0
+				? `${(s.totalCacheReadTokens / 1000).toFixed(1)}k tokens at reduced rate`
+				: "No cache savings data",
+	},
+	{
 		key: "errors",
 		title: "Error Rate",
 		icon: AlertCircle,

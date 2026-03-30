@@ -166,6 +166,7 @@ function buildAggregatedStats(rows: any[]): AggregatedStats {
 			totalCacheReadTokens: 0,
 			totalCacheWriteTokens: 0,
 			cacheRate: 0,
+			cacheSavings: 0,
 			totalCost: 0,
 			totalPremiumRequests: 0,
 			avgDuration: null,
@@ -197,6 +198,7 @@ function buildAggregatedStats(rows: any[]): AggregatedStats {
 			totalInputTokens + totalCacheReadTokens > 0
 				? totalCacheReadTokens / (totalInputTokens + totalCacheReadTokens)
 				: 0,
+		cacheSavings: row.cache_savings || 0,
 		totalCost: row.total_cost || 0,
 		totalPremiumRequests,
 		avgDuration: row.avg_duration,
@@ -223,6 +225,13 @@ export function getOverallStats(): AggregatedStats {
 			SUM(cache_write_tokens) as total_cache_write_tokens,
 			SUM(premium_requests) as total_premium_requests,
 			SUM(cost_total) as total_cost,
+			SUM(
+				CASE
+					WHEN cache_read_tokens > 0 AND input_tokens > 0
+					THEN cache_read_tokens * (cost_input * 1.0 / input_tokens) - cost_cache_read
+					ELSE 0
+				END
+			) as cache_savings,
 			AVG(duration) as avg_duration,
 			AVG(ttft) as avg_ttft,
 			AVG(CASE WHEN duration > 0 THEN output_tokens * 1000.0 / duration ELSE NULL END) as avg_tokens_per_second,
@@ -253,6 +262,13 @@ export function getStatsByModel(): ModelStats[] {
 			SUM(cache_write_tokens) as total_cache_write_tokens,
 			SUM(premium_requests) as total_premium_requests,
 			SUM(cost_total) as total_cost,
+			SUM(
+				CASE
+					WHEN cache_read_tokens > 0 AND input_tokens > 0
+					THEN cache_read_tokens * (cost_input * 1.0 / input_tokens) - cost_cache_read
+					ELSE 0
+				END
+			) as cache_savings,
 			AVG(duration) as avg_duration,
 			AVG(ttft) as avg_ttft,
 			AVG(CASE WHEN duration > 0 THEN output_tokens * 1000.0 / duration ELSE NULL END) as avg_tokens_per_second,
@@ -288,6 +304,13 @@ export function getStatsByFolder(): FolderStats[] {
 			SUM(cache_write_tokens) as total_cache_write_tokens,
 			SUM(premium_requests) as total_premium_requests,
 			SUM(cost_total) as total_cost,
+			SUM(
+				CASE
+					WHEN cache_read_tokens > 0 AND input_tokens > 0
+					THEN cache_read_tokens * (cost_input * 1.0 / input_tokens) - cost_cache_read
+					ELSE 0
+				END
+			) as cache_savings,
 			AVG(duration) as avg_duration,
 			AVG(ttft) as avg_ttft,
 			AVG(CASE WHEN duration > 0 THEN output_tokens * 1000.0 / duration ELSE NULL END) as avg_tokens_per_second,

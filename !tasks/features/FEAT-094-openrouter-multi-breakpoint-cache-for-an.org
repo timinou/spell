@@ -1,0 +1,35 @@
+#+TITLE: OpenRouter multi-breakpoint cache for Anthropic models
+#+STATE: DONE
+#+SESSION_ID: 14a6d78fafc1dd60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-52-43-199Z_14a6d78fafc1dd60.jsonl]]
+#+CUSTOM_ID: FEAT-094-openrouter-multi-breakpoint-cache-for-an
+#+EFFORT: S
+#+PRIORITY: #C
+#+LAYER: packages/ai
+
+NOTE [2026-03-30]: Added system/developer message breakpoint via forward scan. Extracted addCacheControlToMessage helper to eliminate duplication.
+
+* Initial Message
+
+How does this coding harness manage token caching, especially with Anthropic Opus? Is there any room for improvement? Look at usage statistics if you can find them.
+
+* Problem
+~maybeAddOpenRouterAnthropicCacheControl()~ in ~openai-completions.ts~ only adds a single cache breakpoint on the last user/assistant message. OpenRouter supports Anthropic-style prompt caching with ~cache_control~ on system and tool blocks too, but Spell doesn't use them.
+
+This means OpenRouter Anthropic sessions pay full input pricing for system prompts and tool definitions on every turn.
+
+* Approach
+Extend ~maybeAddOpenRouterAnthropicCacheControl()~ to place breakpoints on:
+1. System/developer message (first message, if present)
+2. Last user/assistant message (already done)
+Optionally also on tool definitions if OpenRouter's Anthropic compat supports that.
+
+Need to verify OpenRouter's exact cache_control support by testing or checking their docs.
+
+* Files
+- ~packages/ai/src/providers/openai-completions.ts~ — ~maybeAddOpenRouterAnthropicCacheControl()~
+
+* Acceptance
+- System/developer messages get cache_control breakpoints for OpenRouter Anthropic models
+- Existing single-breakpoint behavior preserved as fallback if no system message exists
+- Manual verification with OpenRouter: observe cached_tokens in usage response

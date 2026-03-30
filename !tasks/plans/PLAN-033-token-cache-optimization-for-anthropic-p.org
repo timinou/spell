@@ -1,0 +1,99 @@
+#+TITLE: Token cache optimization for Anthropic providers
+#+STATE: DONE
+#+SESSION_ID: 14a6d78fafc1dd60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-52-43-199Z_14a6d78fafc1dd60.jsonl]]
+#+CUSTOM_ID: PLAN-033-token-cache-optimization-for-anthropic-p
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-03-30]: All 4 execution items shipped. FUP-004 deferred as planned.
+
+
+* Initial Message
+
+How does this coding harness manage token caching, especially with Anthropic Opus? Is there any room for improvement? Look at usage statistics if you can find them.
+
+* Context
+** Current state
+Spell's token caching is already highly effective. Analysis of 20 recent sessions (1,290 turns total) shows:
+- *99.9% average cache hit rate* across sessions
+- Cache write/read ratio of ~4.8% (writes are small, incremental deltas)
+- Post-compaction cache recovery is fast (system+tools cache breakpoints survive)
+- The Anthropic direct API provider uses a well-designed 4-breakpoint strategy: tools → system → penultimate user → last user
+
+The implementation lives primarily in ~packages/ai/src/providers/anthropic.ts~ (~applyPromptCaching~, ~getCacheControl~, ~buildAnthropicSystemBlocks~) with the ~prompt-caching-scope-2026-01-05~ beta enabled for scoped caching.
+
+** Key findings
+1. *Bedrock caching is under-optimized*: Only 2 cache points (system + last user) vs 4 on direct API. Missing: tool definitions and penultimate user message. For Bedrock Opus ($15/MTok input), this means tool definitions (~2-4k tokens) are re-processed every turn at full cost.
+
+2. *Cache retention default is conservative*: Defaults to "short" (5-min TTL). The 1h TTL (~"long"~) is free on Anthropic's direct API and costs nothing extra. Users who pause >5 minutes pay a full cache re-write ($18.75/MTok for Opus). Most users don't know about ~PI_CACHE_RETENTION=long~.
+
+3. *Proxy URL gate blocks 1h TTL*: ~getCacheControl()~ only enables 1h TTL when ~baseUrl.includes("api.anthropic.com")~. Custom proxies never get extended caching even when ~PI_CACHE_RETENTION=long~ is set. Decision: remove this gate entirely — proxies forward cache_control as-is, and the user explicitly opted in.
+
+4. *OpenRouter gets 1 breakpoint*: ~maybeAddOpenRouterAnthropicCacheControl()~ only places one breakpoint on the last message. System and tool caches are wasted.
+
+5. *No cost-savings visibility*: Dashboard shows cache rate (%) but not dollar savings. For Opus, the difference between cached ($1.5/MTok) and uncached ($15/MTok) is 10x.
+
+** Approach
+Incremental improvements to providers and defaults. Each item is independent and can be shipped separately. Ordered by cost-impact x effort ratio.
+
+** Key decisions
+- Default cache retention changed from ~"short"~ to ~"long"~ globally
+- ~api.anthropic.com~ base URL gate for 1h TTL removed — applies to all Anthropic-messages endpoints including custom proxies
+- ~PI_CACHE_RETENTION=short~ and ~PI_CACHE_RETENTION=none~ remain as explicit overrides
+
+** Cost model reference (Anthropic Opus 4)
+| Token Type     | Cost/MTok |
+|----------------+-----------|
+| Input          | $15.00    |
+| Cache Read     | $1.50     |
+| Cache Write    | $18.75    |
+| Output         | $75.00    |
+
+Cache reads are 10x cheaper than uncached input. Cache writes are 1.25x more expensive than input but amortized across all subsequent turns in the cache window.
+* Verification
+- ~bun check:ts~ passes
+- Existing tests in ~packages/ai/test/~ pass
+- Manual inspection of cache_read_input_tokens and cache_creation_input_tokens in API responses for Bedrock sessions (regression test for breakpoint placement)
+- Stats dashboard renders new cache savings metric
+- ~resolveCacheRetention()~ returns ~"long"~ by default, ~"short"~ with ~PI_CACHE_RETENTION=short~
+
+* Execution Manifest
+** Priority B — Ship first (material cost impact)
+1. [[id:FEAT-092-bedrock-cache-breakpoint-parity-with-ant]] — Bedrock 4-breakpoint parity (effort: S)
+2. [[id:FEAT-093-smart-cache-retention-default-for-expens]] — Default to ~"long"~ retention on Anthropic API (effort: S)
+
+Items 1 and 2 are independent; can be parallelized.
+
+** Priority C — Ship second (visibility / minor providers)
+3. [[id:FEAT-094-openrouter-multi-breakpoint-cache-for-an]] — OpenRouter multi-breakpoint (effort: S)
+4. [[id:FEAT-095-cache-cost-savings-metric-in-stats-dashb]] — Cache savings $ metric in dashboard (effort: S)
+
+Items 3 and 4 are independent; can be parallelized.
+
+** Deferred investigation
+5. [[id:FUP-004-investigate-compaction-cache-interaction]] — Compaction-cache interaction (effort: M, may be a no-op)
+
+** Completion [2026-03-30]
+*** Verification
+- ~bun check:ts~ passes (Biome + tsgo, zero errors)
+- ~bunx --bun tsgo --noEmit~ passes for both ~packages/ai~ and ~packages/stats~ individually
+- Anthropic-related tests (41 tests across 5 files): all pass
+- OpenAI completions compat tests (5 tests): all pass
+- ~resolveCacheRetention()~ returns "long" by default, "short" with ~PI_CACHE_RETENTION=short~, "none" with ~PI_CACHE_RETENTION=none~
+- Dead ~baseUrl~ parameter removed from ~getCacheControl~ and ~buildParams~
+
+*** Artifacts
+Files modified:
+- ~packages/ai/src/utils.ts~ — Default retention changed to "long"
+- ~packages/ai/src/providers/anthropic.ts~ — URL gate removed, dead param cleaned up
+- ~packages/ai/src/providers/amazon-bedrock.ts~ — Tool + penultimate user cache points added
+- ~packages/ai/src/providers/openai-completions.ts~ — System message breakpoint + helper extraction
+- ~packages/stats/src/types.ts~ — cacheSavings field added
+- ~packages/stats/src/client/types.ts~ — cacheSavings field added
+- ~packages/stats/src/db.ts~ — SQL calculation in all 3 stat queries
+- ~packages/stats/src/client/components/StatsGrid.tsx~ — Cache Savings card
+- ~packages/stats/src/index.ts~ — CLI cache savings line
+
+*** Deviations
+- Removed ~baseUrl~ parameter from ~getCacheControl()~ and ~buildParams()~ since it became dead after removing the URL gate. This was not in the original plan but follows design integrity (no dead parameters).
+- ~FUP-004-investigate-compaction-cache-interaction~ left as-is (deferred investigation, no code changes needed).

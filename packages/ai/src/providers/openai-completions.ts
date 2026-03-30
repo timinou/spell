@@ -699,36 +699,40 @@ function mapReasoningEffort(
 	return reasoningEffortMap[effort] ?? effort;
 }
 
+function addCacheControlToMessage(msg: ChatCompletionMessageParam): boolean {
+	const content = msg.content;
+	if (typeof content === "string") {
+		msg.content = [Object.assign({ type: "text" as const, text: content }, { cache_control: { type: "ephemeral" } })];
+		return true;
+	}
+	if (!Array.isArray(content)) return false;
+	for (let j = content.length - 1; j >= 0; j--) {
+		const part = content[j];
+		if (part?.type === "text") {
+			Object.assign(part, { cache_control: { type: "ephemeral" } });
+			return true;
+		}
+	}
+	return false;
+}
+
 function maybeAddOpenRouterAnthropicCacheControl(
 	model: Model<"openai-completions">,
 	messages: ChatCompletionMessageParam[],
 ): void {
 	if (model.provider !== "openrouter" || !model.id.startsWith("anthropic/")) return;
 
-	// Anthropic-style caching requires cache_control on a text part. Add a breakpoint
-	// on the last user/assistant message (walking backwards until we find text content).
+	// Add cache breakpoint on the first system/developer message
+	for (const msg of messages) {
+		if (msg.role !== "system" && msg.role !== "developer") continue;
+		if (addCacheControlToMessage(msg)) break;
+	}
+
+	// Add cache breakpoint on the last user/assistant message
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
-		if (msg.role !== "user" && msg.role !== "assistant" && msg.role !== "developer") continue;
-
-		const content = msg.content;
-		if (typeof content === "string") {
-			msg.content = [
-				Object.assign({ type: "text" as const, text: content }, { cache_control: { type: "ephemeral" } }),
-			];
-			return;
-		}
-
-		if (!Array.isArray(content)) continue;
-
-		// Find last text part and add cache_control
-		for (let j = content.length - 1; j >= 0; j--) {
-			const part = content[j];
-			if (part?.type === "text") {
-				Object.assign(part, { cache_control: { type: "ephemeral" } });
-				return;
-			}
-		}
+		if (msg.role !== "user" && msg.role !== "assistant") continue;
+		if (addCacheControlToMessage(msg)) break;
 	}
 }
 

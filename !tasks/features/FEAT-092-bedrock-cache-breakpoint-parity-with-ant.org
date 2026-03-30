@@ -1,0 +1,36 @@
+#+TITLE: Bedrock cache breakpoint parity with Anthropic direct API
+#+STATE: DONE
+#+SESSION_ID: 14a6d78fafc1dd60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-52-43-199Z_14a6d78fafc1dd60.jsonl]]
+#+CUSTOM_ID: FEAT-092-bedrock-cache-breakpoint-parity-with-ant
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: packages/ai
+
+NOTE [2026-03-30]: Implemented 4-breakpoint parity: tools (convertToolConfig) + penultimate user (convertMessages) added alongside existing system + last user cache points.
+
+* Initial Message
+
+How does this coding harness manage token caching, especially with Anthropic Opus? Is there any room for improvement? Look at usage statistics if you can find them.
+
+* Problem
+The Anthropic direct API provider places up to 4 cache breakpoints (tools, system, penultimate user, last user), but the Bedrock Converse provider only places 2 (system prompt, last user message). This means Bedrock Opus sessions miss cache opportunities on tool definitions and earlier conversation, paying full input token pricing for content that could be cached.
+
+With Opus 4 on Bedrock at $15/MTok input vs $1.5/MTok cache read, every cache miss on tool definitions (~2-4k tokens) costs 10x more than it should.
+
+* Approach
+Add cache points in ~packages/ai/src/providers/amazon-bedrock.ts~:
+1. Tool definitions: Add a ~cachePoint~ after the last tool in ~convertToolConfig()~
+2. Penultimate user message: Mirror the Anthropic strategy in ~convertMessages()~ by adding a ~cachePoint~ to the second-to-last user message's content blocks
+
+Bedrock uses ~CachePointType.DEFAULT~ blocks appended to content arrays rather than Anthropic's ~cache_control~ field on individual blocks. The Bedrock API supports up to 4 cache points for Claude models.
+
+* Files
+- ~packages/ai/src/providers/amazon-bedrock.ts~ — ~convertMessages()~ and ~convertToolConfig()~
+
+* Acceptance
+- Tool definitions block has a cache point after the last tool spec
+- Penultimate user message has a cache point after its last content block
+- Max 4 cache points total (Bedrock limit)
+- Existing tests pass
+- Manual verification: deploy and observe cache_read_tokens increase in Bedrock sessions

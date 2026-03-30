@@ -121,7 +121,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
 
-			const toolConfig = convertToolConfig(context.tools, options.toolChoice);
+			const toolConfig = convertToolConfig(context.tools, options.toolChoice, model, cacheRetention);
 			let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
 
 			// Bedrock rejects thinking + forced tool_choice ("any" or specific tool).
@@ -562,6 +562,26 @@ function convertMessages(
 		}
 	}
 
+	// Add cache point to the penultimate user message for supported Claude models
+	if (cacheRetention !== "none" && supportsPromptCaching(model)) {
+		const userIndexes = result
+			.map((msg, idx) => (msg.role === ConversationRole.USER ? idx : -1))
+			.filter(idx => idx >= 0);
+
+		if (userIndexes.length >= 2) {
+			const penultimateIdx = userIndexes[userIndexes.length - 2];
+			const penultimateUser = result[penultimateIdx];
+			if (penultimateUser.content) {
+				(penultimateUser.content as ContentBlock[]).push({
+					cachePoint: {
+						type: CachePointType.DEFAULT,
+						...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
+					},
+				});
+			}
+		}
+	}
+
 	// Add cache point to the last user message for supported Claude models
 	if (cacheRetention !== "none" && supportsPromptCaching(model) && result.length > 0) {
 		const lastMessage = result[result.length - 1];
@@ -581,6 +601,8 @@ function convertMessages(
 function convertToolConfig(
 	tools: Tool[] | undefined,
 	toolChoice: BedrockOptions["toolChoice"],
+	model: Model<"bedrock-converse-stream">,
+	cacheRetention: CacheRetention,
 ): ToolConfiguration | undefined {
 	if (!tools?.length || toolChoice === "none") return undefined;
 
@@ -591,6 +613,15 @@ function convertToolConfig(
 			inputSchema: { json: tool.parameters },
 		},
 	}));
+
+	if (cacheRetention !== "none" && supportsPromptCaching(model)) {
+		bedrockTools.push({
+			cachePoint: {
+				type: CachePointType.DEFAULT,
+				...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
+			},
+		} as BedrockTool);
+	}
 
 	let bedrockToolChoice: ToolChoice | undefined;
 	switch (toolChoice) {

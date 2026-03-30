@@ -1,0 +1,54 @@
+#+TITLE: Smart cache retention default for expensive models
+#+STATE: DONE
+#+SESSION_ID: 14a6d78fafc1dd60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-52-43-199Z_14a6d78fafc1dd60.jsonl]]
+#+CUSTOM_ID: FEAT-093-smart-cache-retention-default-for-expens
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: packages/ai
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-03-30]: Default changed to 'long' (1h TTL). api.anthropic.com gate removed. baseUrl parameter eliminated from getCacheControl and buildParams.
+
+* Initial Message
+
+How does this coding harness manage token caching, especially with Anthropic Opus? Is there any room for improvement? Look at usage statistics if you can find them.
+
+* Problem
+Cache retention defaults to ~"short"~ (5-minute TTL) regardless of model cost. For Opus 4 at $15/MTok input, a 5-minute cache expiry means any pause >5 minutes forces a full re-cache of the entire prompt (system prompt + tools + conversation = often 50-150k tokens). The 1h TTL (available via ~PI_CACHE_RETENTION=long~) would save the cache write cost ($18.75/MTok) on resume.
+
+The write cost penalty for extended caching on Anthropic direct API is zero — 1h TTL is a free API feature. Users just don't know about it and the default is conservative.
+
+* Approach
+Two changes:
+
+** Change 1: Default retention to "long"
+In ~resolveCacheRetention()~ (~packages/ai/src/utils.ts~), change the default from ~"short"~ to ~"long"~:
+#+begin_src typescript
+export function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+    if (cacheRetention) return cacheRetention;
+    if ($env.PI_CACHE_RETENTION === "short") return "short";
+    return "long";
+}
+#+end_src
+
+~PI_CACHE_RETENTION=short~ and ~PI_CACHE_RETENTION=none~ still work as explicit overrides.
+
+** Change 2: Remove the api.anthropic.com gate for 1h TTL
+In ~getCacheControl()~ (~packages/ai/src/providers/anthropic.ts~, line 160), remove the ~baseUrl.includes("api.anthropic.com")~ check so that the 1h TTL is sent for any Anthropic-compatible endpoint (including custom proxies):
+#+begin_src typescript
+const ttl = retention === "long" ? "1h" : undefined;
+#+end_src
+
+Rationale (user decision): most Anthropic-compatible proxies forward ~cache_control~ as-is, and unknown TTL values are typically ignored by APIs that don't support them. Users who set a custom base URL are already making an informed choice; gating a free optimization behind hostname matching is unnecessarily restrictive.
+* Files
+- ~packages/ai/src/utils.ts~ — ~resolveCacheRetention()~
+- ~packages/ai/src/providers/anthropic.ts~ — ~getCacheControl()~ already handles the baseUrl check
+
+* Acceptance
+- Default cache retention is ~"long"~ (1h TTL) for all Anthropic-messages providers (direct API, custom proxies, any base URL)
+- ~PI_CACHE_RETENTION=short~ overrides to 5-minute TTL
+- ~PI_CACHE_RETENTION=none~ disables caching entirely
+- Bedrock behavior unchanged (uses its own ~CacheTTL.ONE_HOUR~ constant, not affected by this change)
+- The ~baseUrl.includes(\"api.anthropic.com\")~ gate in ~getCacheControl()~ is removed
+- Existing tests pass; update any tests that assert on the old default or the URL gate

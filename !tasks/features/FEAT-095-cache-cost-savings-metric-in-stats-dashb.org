@@ -1,0 +1,36 @@
+#+TITLE: Cache cost savings metric in stats dashboard
+#+STATE: DONE
+#+SESSION_ID: 14a6d78fafc1dd60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-52-43-199Z_14a6d78fafc1dd60.jsonl]]
+#+CUSTOM_ID: FEAT-095-cache-cost-savings-metric-in-stats-dashb
+#+EFFORT: S
+#+PRIORITY: #C
+#+LAYER: packages/stats
+
+NOTE [2026-03-30]: Added cacheSavings field to AggregatedStats (both types files), SQL calculation using per-row cost rates, dashboard card, and CLI output.
+
+* Initial Message
+
+How does this coding harness manage token caching, especially with Anthropic Opus? Is there any room for improvement? Look at usage statistics if you can find them.
+
+* Problem
+The stats dashboard shows cache rate (%) and total cached tokens, but doesn't show the dollar amount saved by caching. For Opus at $15/MTok input vs $1.5/MTok cache read, users have no visibility into how much money caching saves them.
+
+* Approach
+Add a computed "Cache Savings" metric to ~buildAggregatedStats()~ and the dashboard:
+- ~cacheSavings = totalCacheReadTokens * (model_input_cost - model_cache_read_cost) / 1_000_000~
+- Since stats aggregate across models, use the per-message cost data already stored: ~cost_input~ and ~cost_cache_read~ per row
+- ~cacheSavings = SUM(cache_read_tokens * ((cost_input / input_tokens) - (cost_cache_read / cache_read_tokens)))~ or more simply, sum the counterfactual: ~SUM(cache_read_tokens * cost_input_rate) - SUM(cost_cache_read)~
+
+Actually simpler: the savings is ~totalCacheReadTokens~ priced at full input rate minus what was actually paid.
+
+* Files
+- ~packages/stats/src/db.ts~ — ~buildAggregatedStats()~, add SQL for savings
+- ~packages/stats/src/types.ts~ — add ~cacheSavings~ field to ~AggregatedStats~
+- ~packages/stats/src/client/components/StatsGrid.tsx~ — display savings
+- ~packages/stats/src/index.ts~ — CLI summary
+
+* Acceptance
+- Dashboard shows "Cache Savings: $X.XX" card
+- CLI ~spell stats~ shows cache savings alongside cache rate
+- Savings calculated correctly using per-model pricing

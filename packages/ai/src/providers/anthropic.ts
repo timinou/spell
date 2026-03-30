@@ -149,15 +149,15 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 }
 
 type AnthropicCacheControl = CacheControlEphemeral;
-function getCacheControl(
-	baseUrl: string,
-	cacheRetention?: CacheRetention,
-): { retention: CacheRetention; cacheControl?: AnthropicCacheControl } {
+function getCacheControl(cacheRetention?: CacheRetention): {
+	retention: CacheRetention;
+	cacheControl?: AnthropicCacheControl;
+} {
 	const retention = resolveCacheRetention(cacheRetention);
 	if (retention === "none") {
 		return { retention };
 	}
-	const ttl = retention === "long" && baseUrl.includes("api.anthropic.com") ? "1h" : undefined;
+	const ttl = retention === "long" ? "1h" : undefined;
 	return {
 		retention,
 		cacheControl: { type: "ephemeral", ...(ttl && { ttl }) },
@@ -603,7 +603,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				dynamicHeaders: copilotDynamicHeaders?.headers,
 				isOAuth: options?.isOAuth,
 			});
-			let params = buildParams(model, baseUrl, context, isOAuthToken, options);
+			let params = buildParams(model, context, isOAuthToken, options);
 			const replacementPayload = await options?.onPayload?.(params, model);
 			if (replacementPayload !== undefined) {
 				params = replacementPayload as typeof params;
@@ -1245,12 +1245,11 @@ function enforceCacheControlLimit(params: MessageCreateParamsStreaming, maxBreak
 }
 function buildParams(
 	model: Model<"anthropic-messages">,
-	baseUrl: string,
 	context: Context,
 	isOAuthToken: boolean,
 	options?: AnthropicOptions,
 ): MessageCreateParamsStreaming {
-	const { cacheControl } = getCacheControl(baseUrl, options?.cacheRetention);
+	const { cacheControl } = getCacheControl(options?.cacheRetention);
 	const params: MessageCreateParamsStreaming = {
 		model: model.id,
 		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
