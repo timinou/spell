@@ -56,6 +56,9 @@ interface MemoryRuntimeConfig {
 	phase1MaxInputTokens: number;
 }
 
+/** Callback fired when phase1 completes (or fails). Receives usage stats on success, null otherwise. */
+type Phase1CompleteCallback = (stats: { usage: { input: number; cacheWrite: number } } | null) => void;
+
 const DEFAULTS: MemoryRuntimeConfig = {
 	enabled: false,
 	maxRolloutsPerStartup: 64,
@@ -135,7 +138,7 @@ export function startMemoryStartupTask(options: {
 	modelRegistry: ModelRegistry;
 	agentDir: string;
 	taskDepth: number;
-	onPhase1Complete?: (stats: { usage: { input: number; cacheWrite: number } } | null) => void;
+	onPhase1Complete?: Phase1CompleteCallback;
 }): void {
 	const { session, settings, modelRegistry, agentDir, taskDepth } = options;
 	const cfg = loadMemoryConfig(settings);
@@ -224,7 +227,7 @@ async function runMemoryStartup(options: {
 	modelRegistry: ModelRegistry;
 	agentDir: string;
 	config: MemoryRuntimeConfig;
-	onPhase1Complete?: (stats: { usage: { input: number; cacheWrite: number } } | null) => void;
+	onPhase1Complete?: Phase1CompleteCallback;
 }): Promise<void> {
 	await runPhase1(options);
 	await runPhase2(options);
@@ -237,7 +240,7 @@ async function runPhase1(options: {
 	modelRegistry: ModelRegistry;
 	agentDir: string;
 	config: MemoryRuntimeConfig;
-	onPhase1Complete?: (stats: { usage: { input: number; cacheWrite: number } } | null) => void;
+	onPhase1Complete?: Phase1CompleteCallback;
 }): Promise<void> {
 	const { session, modelRegistry, agentDir, config } = options;
 	const nowSec = unixNow();
@@ -312,12 +315,8 @@ async function runPhase1(options: {
 		const budgetClaims: Stage1Claim[] = [];
 		for (const claim of claims) {
 			if (budgetClaims.length > 0 && budgetRemaining <= 0) break;
-			try {
-				const size = Bun.file(claim.rolloutPath).size;
-				budgetRemaining -= Math.ceil(size / 4);
-			} catch {
-				// Stat failed (file deleted?) — include claim, let runStage1Job handle the error
-			}
+			const size = Bun.file(claim.rolloutPath).size; // Returns 0 for missing files (Bun behavior), which is fine — claim is included with 0-token estimate
+			budgetRemaining -= Math.ceil(size / 4);
 			budgetClaims.push(claim);
 		}
 		if (budgetClaims.length < claims.length) {
@@ -409,6 +408,9 @@ async function runPhase1(options: {
 		}
 
 		options.onPhase1Complete?.({ usage: { input: stats.usage.input, cacheWrite: stats.usage.cacheWrite } });
+	} catch (error) {
+		options.onPhase1Complete?.(null);
+		throw error;
 	} finally {
 		closeMemoryDb(db);
 	}

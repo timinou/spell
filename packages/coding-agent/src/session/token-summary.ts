@@ -19,31 +19,6 @@ export function formatTokenCount(n: number): string {
 	return `${rounded}M`;
 }
 
-export interface StartupTokenInfo {
-	memoryUsage?: { cacheWrite: number; input: number };
-	contextTokens: number;
-	modelName: string;
-}
-
-/**
- * Format a one-line startup note about token overhead.
- * Example: "Memory: 1.3M tokens (cache-write) | Context: 45K | Model: opus-4-6:high"
- */
-export function formatStartupTokenNote(info: StartupTokenInfo): string {
-	let memPart: string;
-	if (info.memoryUsage && info.memoryUsage.cacheWrite > 0) {
-		memPart = `Memory: ${formatTokenCount(info.memoryUsage.cacheWrite)} tokens (cache-write)`;
-	} else if (info.memoryUsage && info.memoryUsage.input > 0) {
-		memPart = `Memory: ${formatTokenCount(info.memoryUsage.input)} tokens (input)`;
-	} else {
-		memPart = "Memory: skipped";
-	}
-
-	const ctxPart = `Context: ${formatTokenCount(info.contextTokens)}`;
-	const modelPart = `Model: ${info.modelName}`;
-	return [memPart, ctxPart, modelPart].join(" | ");
-}
-
 export interface ExitTokenInfo {
 	input: number;
 	output: number;

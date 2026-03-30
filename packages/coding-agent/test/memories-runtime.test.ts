@@ -491,11 +491,12 @@ describe("memories runtime", () => {
 		}
 
 		test("claims filtered when cumulative estimated tokens exceed budget", async () => {
-			// Each file ~8100 bytes → ~2025 estimated tokens
-			// Budget 1000 → first claim always included, second would exceed → 1 claim processed
+			// Each file ~8100 bytes -> ~2025 estimated tokens
+			// Budget 1000 -> first claim always included, second would exceed -> 1 claim processed
 			const fx = await createFixture({ "memories.phase1MaxInputTokens": 1000 });
 			await createRolloutFiles(fx.sessionDir, fx.agentDir, 3, 8000);
 			mockStage1And2(1);
+			const outputSpy = vi.spyOn(memoryStorage, "markStage1SucceededWithOutput");
 
 			startMemoryStartupTask({
 				session: fx.session,
@@ -505,9 +506,8 @@ describe("memories runtime", () => {
 				taskDepth: 0,
 			});
 
-			// 1 stage1 call + 1 phase2 call = 2 total
 			await waitFor(() => {
-				expect(ai.completeSimple).toHaveBeenCalledTimes(2);
+				expect(outputSpy).toHaveBeenCalledTimes(1);
 			});
 		});
 
@@ -515,6 +515,7 @@ describe("memories runtime", () => {
 			const fx = await createFixture({ "memories.phase1MaxInputTokens": 1 });
 			await createRolloutFiles(fx.sessionDir, fx.agentDir, 1, 40_000);
 			mockStage1And2(1);
+			const outputSpy = vi.spyOn(memoryStorage, "markStage1SucceededWithOutput");
 
 			startMemoryStartupTask({
 				session: fx.session,
@@ -524,9 +525,8 @@ describe("memories runtime", () => {
 				taskDepth: 0,
 			});
 
-			// 1 stage1 call + 1 phase2 call = 2 total
 			await waitFor(() => {
-				expect(ai.completeSimple).toHaveBeenCalledTimes(2);
+				expect(outputSpy).toHaveBeenCalledTimes(1);
 			});
 		});
 
@@ -534,6 +534,7 @@ describe("memories runtime", () => {
 			const fx = await createFixture({ "memories.phase1MaxInputTokens": 10_000_000 });
 			await createRolloutFiles(fx.sessionDir, fx.agentDir, 3, 8000);
 			mockStage1And2(3);
+			const outputSpy = vi.spyOn(memoryStorage, "markStage1SucceededWithOutput");
 
 			startMemoryStartupTask({
 				session: fx.session,
@@ -543,9 +544,8 @@ describe("memories runtime", () => {
 				taskDepth: 0,
 			});
 
-			// 3 stage1 calls + 1 phase2 call = 4 total
 			await waitFor(() => {
-				expect(ai.completeSimple).toHaveBeenCalledTimes(4);
+				expect(outputSpy).toHaveBeenCalledTimes(3);
 			});
 		});
 	});

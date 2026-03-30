@@ -1,0 +1,133 @@
+#+TITLE: AUD-002 audit polish callback types dead code tests
+#+STATE: DONE
+#+SESSION_ID: 14a6d9634d5142b6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T10-00-42-037Z_14a6d9634d5142b6.jsonl]]
+#+CUSTOM_ID: PLAN-034-aud-002-audit-polish-callback-types-dead
+#+EFFORT: S
+#+PRIORITY: #A
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-002-audit-implementation:
+
+Here are my findings:
+
+---
+
+### Finding 1: `onPhase1Complete` never fires on exception paths in the try block
+- **What**: If anything inside the `try` block at line 270 throws (e.g., `collectThreads`, `upsertThreads`, `resolveMemoryModel`), the `finally` block closes the DB but `onPhase1Complete` is never called. The callback fires on all 4 early-return paths and the success path, but not on uncaught exceptions.
+- **Where**: `packages/coding-agent/src/memories/index.ts` lines 270–413 (the try/finally block)
+- **Why**: The callback contract is inconsistent — callers can't distinguish "phase1 hasn't started yet" from "phase1 threw." Currently the only consumer (`sdk.ts`) just logs, so impact is low. But if any future consumer depends on "callback always fires," they'll have a bug. Easy fix: add `options.onPhase1Complete?.(null)` in a catch clause, or move the call to the `finally` block.
+- **Effort**: `trivial`
+
+### Finding 2: Inline callback type duplicated 3 times
+- **What**: `(stats: { usage: { input: number; cacheWrite: number } } | null) => void` is inlined in 3 separate function signatures (lines 138, 227, 240).
+- **Where**: `packages/coding-agent/src/memories/index.ts`
+- **Why**: Violates DRY at 2. If the callback shape changes (e.g., adding `output` to usage), three signatures need updating. Extract to a named type like `type Phase1CompleteCallback = ...`.
+- **Effort**: `trivial`
+
+### Finding 3: Budget filter's try-catch is dead code for `Bun.file().size`
+- **What**: `Bun.file(path).size` returns `0` for nonexistent files — it does not throw. The try-catch at line 315 never catches anything. The comment says "Stat failed (file deleted?)" but this path is unreachable.
+- **Where**: `packages/coding-agent/src/memories/index.ts` lines 315–320
+- **Why**: Dead code misleads readers into thinking missing-file handling exists. The actual behavior (size=0, claim included with 0 token estimate) is correct but accidental. Removing the try-catch and adding a comment explaining `Bun.file().size` returns 0 for missing files would be clearer. Alternatively, keep the try-catch as a defensive guard against future Bun changes — but update the comment.
+- **Effort**: `trivial`
+
+### Finding 4: Exit summary suppression compares against magic string
+- **What**: `if (summary !== "Session: no tokens recorded")` at line 1348 compares against a literal string that lives inside `formatExitTokenSummary`. If the wording changes in `token-summary.ts`, the check silently stops working and empty-session summaries always print.
+- **Where**: `packages/coding-agent/src/modes/interactive-mode.ts` line 1348
+- **Why**: Fragile coupling. Better to check `stats.tokens.input > 0 || stats.tokens.output > 0 || stats.cost > 0` before calling the formatter, or export a sentinel constant from `token-summary.ts`.
+- **Effort**: `trivial`
+
+### Finding 5: `formatStartupTokenNote` remains dead code
+- **What**: `formatStartupTokenNote` in `token-summary.ts` is still not called from any production code. FEAT-091's deviation notes explain that the startup note was implemented as `logger.debug` only, and the callback doesn't call `formatStartupTokenNote`. The function and its `StartupTokenInfo` interface are tested but dead.
+- **Where**: `packages/coding-agent/src/session/token-summary.ts` lines 22–45
+- **Why**: Dead code that may mislead future readers into thinking it's wired. The plan documented this as a deviation, which is good, but the code doesn't indicate it's awaiting integration.
+- **Effort**: `trivial` (add a `@todo` comment) or `small` (wire it properly via a future item)
+
+### Finding 6: Budget test doesn't verify the filtering count directly
+- **What**: Budget tests assert `completeSimple` call counts (stage1 + phase2) as a proxy for "how many claims were processed." This couples the test to phase2 behavior. If phase2 stops running (e.g., watermark logic changes), the test fails for the wrong reason. A more direct assertion would spy on `markStage1SucceededWithOutput` or check `stats.claimed` via the debug log.
+- **Where**: `packages/coding-agent/test/memories-runtime.test.ts` lines 493–549
+- **Why**: Test brittleness — any change to phase2 triggering could break budget tests even if budget filtering is correct. The existing e2e test already covers phase2 independently.
+- **Effort**: `small`
+
+* Context
+** Problem
+AUD-002 found 6 issues in the PLAN-032 implementation (token optimization audit fixes):
+1. =onPhase1Complete= callback never fires on exception paths in =runPhase1= try block
+2. Inline callback type duplicated 3 times across function signatures
+3. Budget filter try-catch is dead code (=Bun.file().size= returns 0 for missing files, never throws)
+4. Exit summary suppression compares against a magic string literal
+5. =formatStartupTokenNote= + =StartupTokenInfo= remain dead code (exported, never imported)
+6. Budget tests assert =completeSimple= call count including phase2 — brittle coupling
+
+** Approach
+Single BUG item. All findings are trivial/small mechanical fixes in non-overlapping code regions across 5 files. No new behavior, no architectural changes.
+
+** Key Decisions
+- Finding 1: Use =catch= block (not =finally=) to avoid double-firing on early-return paths that already call the callback. Catch calls =onPhase1Complete?.(null)= then re-throws.
+- Finding 3: Remove try-catch entirely (not keep as defensive code). =Bun.file().size= returning 0 is documented Bun behavior, not an implementation accident.
+- Finding 4: Guard uses =stats.tokens.input > 0 || stats.tokens.output > 0 || stats.tokens.cacheRead > 0 || stats.cost > 0= — mirrors the formatter's non-zero checks.
+- Finding 5: Remove dead code entirely. Git preserves history. 4 tests removed, 12 remain.
+- Finding 6: Spy on =markStage1SucceededWithOutput= (proven pattern in same test file). Keep =mockStage1And2()= helper for mock responses.
+
+** Key File Paths
+- =packages/coding-agent/src/memories/index.ts= — findings 1, 2, 3
+- =packages/coding-agent/src/modes/interactive-mode.ts= — finding 4
+- =packages/coding-agent/src/session/token-summary.ts= — finding 5
+- =packages/coding-agent/test/memories-runtime.test.ts= — finding 6
+- =packages/coding-agent/test/session-token-summary.test.ts= — finding 5 (remove 4 tests)
+
+* Verification
+** Tests
+#+begin_src sh
+# Token summary (12 tests after 4 removed)
+bun test packages/coding-agent/test/session-token-summary.test.ts
+
+# Memory runtime (13 tests, budget assertions updated)
+bun test packages/coding-agent/test/memories-runtime.test.ts
+
+# Storage regression check
+bun test packages/coding-agent/test/memories-storage.test.ts
+#+end_src
+
+** Type checking
+#+begin_src sh
+bun check:ts
+#+end_src
+
+** Manual checks
+- Grep for =formatStartupTokenNote= in =src/= — zero results
+- Grep for =StartupTokenInfo= in =src/= — zero results
+- Grep for =\"Session: no tokens recorded\"= in =src/modes/= — zero results
+- Grep for =Phase1CompleteCallback= in =src/memories/index.ts= — 4 occurrences (1 definition + 3 uses)
+
+* Execution Manifest
+** Phase 1: All fixes (single item, sequential steps within)
+1. [[id:BUG-021-post-audit-polish-callback-types-dead-co]] — All 6 findings (EFFORT: S, PRIORITY: #A)
+   - Steps 1-3 touch =memories/index.ts= (type alias → catch block → budget filter)
+   - Step 4 touches =interactive-mode.ts= (magic string)
+   - Step 5 touches =token-summary.ts= + =session-token-summary.test.ts= (dead code removal)
+   - Step 6 touches =memories-runtime.test.ts= (budget test assertions)
+   - No inter-step dependencies except step 2 uses the type alias from step 1
+
+
+** Completion [2026-03-30]
+*** Verification
+- =bun test packages/coding-agent/test/session-token-summary.test.ts= — 12 pass, 0 fail (4 dead tests removed)
+- =bun test packages/coding-agent/test/memories-runtime.test.ts= — 13 pass, 0 fail (budget assertions updated)
+- =bun test packages/coding-agent/test/memories-storage.test.ts= — 4 pass, 0 fail (regression check)
+- =bun check:ts= — clean (biome check + tsgo, no errors)
+- =grep formatStartupTokenNote packages/coding-agent/src/= — zero results
+- =grep StartupTokenInfo packages/coding-agent/src/= — zero results
+- =grep "Session: no tokens recorded" packages/coding-agent/src/modes/= — zero results
+- =grep Phase1CompleteCallback packages/coding-agent/src/memories/index.ts= — 4 occurrences (1 def + 3 uses)
+*** Artifacts
+All changes are code-only (no screenshots needed):
+- =packages/coding-agent/src/memories/index.ts= — findings 1, 2, 3
+- =packages/coding-agent/src/modes/interactive-mode.ts= — finding 4
+- =packages/coding-agent/src/session/token-summary.ts= — finding 5
+- =packages/coding-agent/test/session-token-summary.test.ts= — finding 5 (4 tests removed)
+- =packages/coding-agent/test/memories-runtime.test.ts= — finding 6 (budget assertions updated)
+*** Deviations
+None.

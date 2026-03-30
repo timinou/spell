@@ -1,0 +1,269 @@
+#+TITLE: Post-audit polish callback types dead code test brittleness
+#+STATE: DONE
+#+SESSION_ID: 14a6d9634d5142b6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T10-00-42-037Z_14a6d9634d5142b6.jsonl]]
+#+CUSTOM_ID: BUG-021-post-audit-polish-callback-types-dead-co
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: coding-agent/memories
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-002-audit-implementation:
+
+Here are my findings:
+
+---
+
+### Finding 1: `onPhase1Complete` never fires on exception paths in the try block
+- **What**: If anything inside the `try` block at line 270 throws (e.g., `collectThreads`, `upsertThreads`, `resolveMemoryModel`), the `finally` block closes the DB but `onPhase1Complete` is never called. The callback fires on all 4 early-return paths and the success path, but not on uncaught exceptions.
+- **Where**: `packages/coding-agent/src/memories/index.ts` lines 270–413 (the try/finally block)
+- **Why**: The callback contract is inconsistent — callers can't distinguish "phase1 hasn't started yet" from "phase1 threw." Currently the only consumer (`sdk.ts`) just logs, so impact is low. But if any future consumer depends on "callback always fires," they'll have a bug. Easy fix: add `options.onPhase1Complete?.(null)` in a catch clause, or move the call to the `finally` block.
+- **Effort**: `trivial`
+
+### Finding 2: Inline callback type duplicated 3 times
+- **What**: `(stats: { usage: { input: number; cacheWrite: number } } | null) => void` is inlined in 3 separate function signatures (lines 138, 227, 240).
+- **Where**: `packages/coding-agent/src/memories/index.ts`
+- **Why**: Violates DRY at 2. If the callback shape changes (e.g., adding `output` to usage), three signatures need updating. Extract to a named type like `type Phase1CompleteCallback = ...`.
+- **Effort**: `trivial`
+
+### Finding 3: Budget filter's try-catch is dead code for `Bun.file().size`
+- **What**: `Bun.file(path).size` returns `0` for nonexistent files — it does not throw. The try-catch at line 315 never catches anything. The comment says "Stat failed (file deleted?)" but this path is unreachable.
+- **Where**: `packages/coding-agent/src/memories/index.ts` lines 315–320
+- **Why**: Dead code misleads readers into thinking missing-file handling exists. The actual behavior (size=0, claim included with 0 token estimate) is correct but accidental. Removing the try-catch and adding a comment explaining `Bun.file().size` returns 0 for missing files would be clearer. Alternatively, keep the try-catch as a defensive guard against future Bun changes — but update the comment.
+- **Effort**: `trivial`
+
+### Finding 4: Exit summary suppression compares against magic string
+- **What**: `if (summary !== "Session: no tokens recorded")` at line 1348 compares against a literal string that lives inside `formatExitTokenSummary`. If the wording changes in `token-summary.ts`, the check silently stops working and empty-session summaries always print.
+- **Where**: `packages/coding-agent/src/modes/interactive-mode.ts` line 1348
+- **Why**: Fragile coupling. Better to check `stats.tokens.input > 0 || stats.tokens.output > 0 || stats.cost > 0` before calling the formatter, or export a sentinel constant from `token-summary.ts`.
+- **Effort**: `trivial`
+
+### Finding 5: `formatStartupTokenNote` remains dead code
+- **What**: `formatStartupTokenNote` in `token-summary.ts` is still not called from any production code. FEAT-091's deviation notes explain that the startup note was implemented as `logger.debug` only, and the callback doesn't call `formatStartupTokenNote`. The function and its `StartupTokenInfo` interface are tested but dead.
+- **Where**: `packages/coding-agent/src/session/token-summary.ts` lines 22–45
+- **Why**: Dead code that may mislead future readers into thinking it's wired. The plan documented this as a deviation, which is good, but the code doesn't indicate it's awaiting integration.
+- **Effort**: `trivial` (add a `@todo` comment) or `small` (wire it properly via a future item)
+
+### Finding 6: Budget test doesn't verify the filtering count directly
+- **What**: Budget tests assert `completeSimple` call counts (stage1 + phase2) as a proxy for "how many claims were processed." This couples the test to phase2 behavior. If phase2 stops running (e.g., watermark logic changes), the test fails for the wrong reason. A more direct assertion would spy on `markStage1SucceededWithOutput` or check `stats.claimed` via the debug log.
+- **Where**: `packages/coding-agent/test/memories-runtime.test.ts` lines 493–549
+- **Why**: Test brittleness — any change to phase2 triggering could break budget tests even if budget filtering is correct. The existing e2e test already covers phase2 independently.
+- **Effort**: `small`
+
+* Scope
+** In scope
+- Extract =Phase1CompleteCallback= type alias from 3 inline occurrences
+- Fire =onPhase1Complete= on exception paths in =runPhase1=
+- Remove dead try-catch in budget filter
+- Replace magic string check in exit summary with stats guard
+- Remove dead =formatStartupTokenNote= / =StartupTokenInfo= + their 4 tests
+- Decouple budget tests from phase2 call counts
+** Out of scope
+- Wiring =formatStartupTokenNote= (deferred to a future item if needed)
+- Changes to =storage.ts=
+- Changes to =sdk.ts= (callback consumer; no changes needed)
+** Boundary rationale
+All 6 findings are mechanical fixes from AUD-002. They touch 5 files in non-overlapping regions. No new behavior.
+
+* Tests
+** File: =packages/coding-agent/test/session-token-summary.test.ts=
+*** Delete: =describe(\"formatStartupTokenNote\")= block (4 tests)
+- These test dead code that will be removed
+- Remaining: 7 =formatTokenCount= tests + 5 =formatExitTokenSummary= tests = 12 tests
+** File: =packages/coding-agent/test/memories-runtime.test.ts=
+*** Modify: 3 budget tests in =describe(\"phase1 token budget\")=
+- Add spy: =const successSpy = vi.spyOn(memoryStorage, \"markStage1SucceededWithOutput\");=
+- Change assertions from =expect(ai.completeSimple).toHaveBeenCalledTimes(N)= to =expect(successSpy).toHaveBeenCalledTimes(M)=
+- Keep existing =mockStage1And2()= helper unchanged (still needed to provide mock responses)
+- Expected counts: \"claims filtered\" → 1, \"at least one claim\" → 1, \"large budget\" → 3
+- Also use =waitFor= wrapping the new assertion since the async work is fire-and-forget
+
+* Implementation
+** Step 1: Extract =Phase1CompleteCallback= type (Finding 2)
+File: =packages/coding-agent/src/memories/index.ts=
+
+Add near the top of the file (after the =Stage1OutputSchema= interface around line 98):
+#+begin_src typescript
+type Phase1CompleteCallback = (stats: { usage: { input: number; cacheWrite: number } } | null) => void;
+#+end_src
+
+Replace the inline type at 3 locations:
+- Line 138 (=startMemoryStartupTask= options): =onPhase1Complete?: Phase1CompleteCallback;=
+- Line 227 (=runMemoryStartup= options): =onPhase1Complete?: Phase1CompleteCallback;=
+- Line 240 (=runPhase1= options): =onPhase1Complete?: Phase1CompleteCallback;=
+
+** Step 2: Add catch block for =onPhase1Complete= (Finding 1)
+File: =packages/coding-agent/src/memories/index.ts=
+
+In =runPhase1=, the current structure is:
+#+begin_src typescript
+try {
+    // ... lines 271-411 (main work + callback on success)
+} finally {
+    closeMemoryDb(db);
+}
+#+end_src
+
+Change to:
+#+begin_src typescript
+try {
+    // ... lines 271-411 (unchanged)
+} catch (error) {
+    options.onPhase1Complete?.(null);
+    throw error;
+} finally {
+    closeMemoryDb(db);
+}
+#+end_src
+
+This ensures the callback fires on ALL paths:
+- Early returns (cooldown, no model, no key, no claims): already call =onPhase1Complete?.(null)=
+- Success: calls =onPhase1Complete?.({ usage: ... })= at line 411
+- Exception: new catch calls =onPhase1Complete?.(null)= then re-throws
+- The =finally= only closes DB, not the callback
+
+** Step 3: Remove dead try-catch in budget filter (Finding 3)
+File: =packages/coding-agent/src/memories/index.ts=
+
+Current code (lines ~310-322):
+#+begin_src typescript
+// Budget filter: estimate tokens per claim via file size, limit total
+let budgetRemaining = config.phase1MaxInputTokens;
+const budgetClaims: Stage1Claim[] = [];
+for (const claim of claims) {
+    if (budgetClaims.length > 0 && budgetRemaining <= 0) break;
+    try {
+        const size = Bun.file(claim.rolloutPath).size;
+        budgetRemaining -= Math.ceil(size / 4);
+    } catch {
+        // Stat failed (file deleted?) — include claim, let runStage1Job handle the error
+    }
+    budgetClaims.push(claim);
+}
+#+end_src
+
+Replace with:
+#+begin_src typescript
+// Budget filter: estimate tokens per claim via file size, limit total.
+// Bun.file().size returns 0 for missing files, so missing claims
+// cost zero budget and are always included.
+let budgetRemaining = config.phase1MaxInputTokens;
+const budgetClaims: Stage1Claim[] = [];
+for (const claim of claims) {
+    if (budgetClaims.length > 0 && budgetRemaining <= 0) break;
+    const size = Bun.file(claim.rolloutPath).size;
+    budgetRemaining -= Math.ceil(size / 4);
+    budgetClaims.push(claim);
+}
+#+end_src
+
+** Step 4: Replace magic string with stats guard (Finding 4)
+File: =packages/coding-agent/src/modes/interactive-mode.ts=
+
+Current code (lines ~1338-1353):
+#+begin_src typescript
+// Print token usage summary
+try {
+    const stats = this.session.getSessionStats();
+    const summary = formatExitTokenSummary({
+        input: stats.tokens.input,
+        output: stats.tokens.output,
+        thinking: 0,
+        cacheRead: stats.tokens.cacheRead,
+        cost: stats.cost,
+    });
+    if (summary !== \"Session: no tokens recorded\") {
+        process.stderr.write(`\
+${chalk.dim(summary)}\
+`);
+    }
+} catch {
+    // Non-critical: don't let summary formatting break shutdown
+}
+#+end_src
+
+Replace with:
+#+begin_src typescript
+// Print token usage summary
+try {
+    const stats = this.session.getSessionStats();
+    const hasUsage = stats.tokens.input > 0 || stats.tokens.output > 0 || stats.tokens.cacheRead > 0 || stats.cost > 0;
+    if (hasUsage) {
+        const summary = formatExitTokenSummary({
+            input: stats.tokens.input,
+            output: stats.tokens.output,
+            thinking: 0,
+            cacheRead: stats.tokens.cacheRead,
+            cost: stats.cost,
+        });
+        process.stderr.write(`\
+${chalk.dim(summary)}\
+`);
+    }
+} catch {
+    // Non-critical: don't let summary formatting break shutdown
+}
+#+end_src
+
+** Step 5: Remove dead =formatStartupTokenNote= (Finding 5)
+File: =packages/coding-agent/src/session/token-summary.ts=
+
+Delete lines 22-45:
+- =export interface StartupTokenInfo= (lines 22-26)
+- =export function formatStartupTokenNote= (lines 28-45)
+
+File: =packages/coding-agent/test/session-token-summary.test.ts=
+
+Delete the entire =describe(\"formatStartupTokenNote\", ...)= block (4 tests). Verify the remaining 12 tests pass.
+
+** Step 6: Fix budget test assertions (Finding 6)
+File: =packages/coding-agent/test/memories-runtime.test.ts=
+
+In each of the 3 budget tests, add a spy on =markStage1SucceededWithOutput= and change the primary assertion:
+
+For \"claims filtered when cumulative estimated tokens exceed budget\":
+#+begin_src typescript
+const successSpy = vi.spyOn(memoryStorage, \"markStage1SucceededWithOutput\");
+// ... existing setup ...
+await waitFor(() => {
+    expect(successSpy).toHaveBeenCalledTimes(1);
+});
+#+end_src
+
+For \"at least one claim always processed even if it exceeds budget\":
+#+begin_src typescript
+const successSpy = vi.spyOn(memoryStorage, \"markStage1SucceededWithOutput\");
+// ... existing setup ...
+await waitFor(() => {
+    expect(successSpy).toHaveBeenCalledTimes(1);
+});
+#+end_src
+
+For \"large budget processes all claims\":
+#+begin_src typescript
+const successSpy = vi.spyOn(memoryStorage, \"markStage1SucceededWithOutput\");
+// ... existing setup ...
+await waitFor(() => {
+    expect(successSpy).toHaveBeenCalledTimes(3);
+});
+#+end_src
+
+Keep the =mockStage1And2()= helper unchanged — it's still needed to provide mock responses to prevent real API calls.
+
+* Edge Cases
+- =catch= block re-throws the original error after calling =onPhase1Complete?.(null)=. If the callback itself throws, the original error is lost. This is acceptable: the callback is optional and consumers should not throw.
+- =Bun.file().size= returning 0 for missing files means missing claims get 0 token estimate and are always included. This is correct — =runStage1Job= will fail gracefully when reading the rollout file.
+- Removing =formatStartupTokenNote= is safe. Git preserves history. If a future item needs startup display, it can reintroduce the function.
+- The =hasUsage= guard condition faithfully mirrors =formatExitTokenSummary='s non-zero checks (it covers all fields the formatter checks, except =thinking= which is hardcoded 0 and =memoryTokens= which isn't passed).
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/session-token-summary.test.ts= — 12 tests pass (was 16, 4 removed)
+- =bun test packages/coding-agent/test/memories-runtime.test.ts= — 13 tests pass
+- =bun test packages/coding-agent/test/memories-storage.test.ts= — 4 tests pass (regression check)
+- =bun check:ts= — no type errors
+- =Phase1CompleteCallback= type alias used at all 3 locations (no inline duplication)
+- No try-catch around =Bun.file().size= in budget filter
+- No =formatStartupTokenNote= or =StartupTokenInfo= in =token-summary.ts=
+- No magic string comparison against =\"Session: no tokens recorded\"= in =interactive-mode.ts=
+- Budget test assertions use =markStage1SucceededWithOutput= spy, not =completeSimple= call count

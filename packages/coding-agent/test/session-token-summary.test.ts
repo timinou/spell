@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-	formatExitTokenSummary,
-	formatStartupTokenNote,
-	formatTokenCount,
-} from "@oh-my-pi/pi-coding-agent/session/token-summary";
+import { formatExitTokenSummary, formatTokenCount } from "@oh-my-pi/pi-coding-agent/session/token-summary";
 
 describe("formatTokenCount", () => {
 	test("formats zero", () => {
@@ -37,48 +33,6 @@ describe("formatTokenCount", () => {
 
 	test("handles very large numbers with M suffix", () => {
 		expect(formatTokenCount(1_500_000_000)).toBe("1500M");
-	});
-});
-
-describe("formatStartupTokenNote", () => {
-	test("shows memory cache-write count and model", () => {
-		const result = formatStartupTokenNote({
-			memoryUsage: { cacheWrite: 1_332_246, input: 500_000 },
-			contextTokens: 45_000,
-			modelName: "opus-4-6:high",
-		});
-		expect(result).toContain("1.3M");
-		expect(result).toContain("cache-write");
-		expect(result).toContain("45K");
-		expect(result).toContain("opus-4-6:high");
-	});
-
-	test("shows skipped when no memory usage", () => {
-		const result = formatStartupTokenNote({
-			contextTokens: 12_000,
-			modelName: "opus-4-6:high",
-		});
-		expect(result).toContain("skipped");
-	});
-
-	test("shows input fallback when cacheWrite is zero", () => {
-		const result = formatStartupTokenNote({
-			memoryUsage: { cacheWrite: 0, input: 300_000 },
-			contextTokens: 12_000,
-			modelName: "opus-4-6:high",
-		});
-		expect(result).toContain("300K");
-		expect(result).toContain("input");
-	});
-
-	test("handles all zeros gracefully", () => {
-		const result = formatStartupTokenNote({
-			memoryUsage: { cacheWrite: 0, input: 0 },
-			contextTokens: 0,
-			modelName: "test",
-		});
-		expect(result).toContain("skipped");
-		expect(result).toContain("Model: test");
 	});
 });
 

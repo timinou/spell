@@ -1338,14 +1338,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Print token usage summary
 		try {
 			const stats = this.session.getSessionStats();
-			const summary = formatExitTokenSummary({
-				input: stats.tokens.input,
-				output: stats.tokens.output,
-				thinking: 0,
-				cacheRead: stats.tokens.cacheRead,
-				cost: stats.cost,
-			});
-			if (summary !== "Session: no tokens recorded") {
+			const hasUsage =
+				stats.tokens.input > 0 || stats.tokens.output > 0 || stats.tokens.cacheRead > 0 || stats.cost > 0;
+			if (hasUsage) {
+				const summary = formatExitTokenSummary({
+					input: stats.tokens.input,
+					output: stats.tokens.output,
+					thinking: 0,
+					cacheRead: stats.tokens.cacheRead,
+					cost: stats.cost,
+				});
 				process.stderr.write(`\n${chalk.dim(summary)}\n`);
 			}
 		} catch {
