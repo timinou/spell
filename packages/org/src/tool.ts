@@ -12,11 +12,11 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { EmacsSession } from "@oh-my-pi/pi-emacs";
 import { logger } from "@oh-my-pi/pi-utils";
 import { findCategory, resolveCategories } from "./categories";
 import type { OrgClient } from "./emacs/client";
 import { createOrgClient } from "./emacs/client";
-import type { EmacsSession } from "./emacs/daemon";
 import { generateId } from "./id-generator";
 import { KeyedMutex } from "./mutex";
 import { applyFilter, findItemById, readCategory } from "./org-reader";
@@ -888,8 +888,17 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 			}
 		},
 		async dispose() {
+			const sessionPromise = emacsSessionPromise;
 			emacsSessionPromise = null;
 			orgClientPromise = null;
+			if (sessionPromise) {
+				try {
+					const session = await sessionPromise;
+					await session.stop();
+				} catch {
+					// Session may have already died or never started.
+				}
+			}
 		},
 	};
 }

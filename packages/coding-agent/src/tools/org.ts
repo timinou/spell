@@ -12,8 +12,9 @@ import type {
 	AgentToolUpdateCallback,
 	RenderResultOptions,
 } from "@oh-my-pi/pi-agent-core";
-import type { EmacsSession, OrgConfig, OrgItem, OrgSessionContext, OrgToolDefinition } from "@oh-my-pi/pi-org";
-import { createOrgTool, DEFAULT_ORG_CONFIG, detectEmacs, startEmacsSession } from "@oh-my-pi/pi-org";
+import { type EmacsSession, startEmacsSession } from "@oh-my-pi/pi-emacs";
+import type { OrgConfig, OrgItem, OrgSessionContext, OrgToolDefinition } from "@oh-my-pi/pi-org";
+import { createOrgTool, DEFAULT_ORG_CONFIG, detectEmacs } from "@oh-my-pi/pi-org";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
@@ -175,7 +176,13 @@ function makeEmacsFactory(
 					: "Emacs not found or does not meet minimum version";
 			throw new Error(`org: Emacs not available — ${errors}`);
 		}
-		return startEmacsSession(detection.path!, projectRoot, sessionId, ELISP_DIR);
+		return startEmacsSession(detection.path!, projectRoot, sessionId, ELISP_DIR, {
+			socketPrefix: "spell-org-",
+			startupTimeoutMs: 30_000,
+			tryReattach: false,
+			emacsFlags: [], // org daemon does not skip user init
+			evalExpressions: ["(require 'org-tasks-mcp)"],
+		});
 	};
 }
 

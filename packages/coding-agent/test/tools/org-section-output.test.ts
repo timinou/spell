@@ -37,6 +37,8 @@ beforeEach(() => {
 			errors: [],
 			path: "/usr/bin/emacs",
 		}),
+	}));
+	mock.module("@oh-my-pi/pi-emacs", () => ({
 		startEmacsSession: async () => ({
 			socketPath: "/tmp/fake-org.sock",
 			stop: async (): Promise<void> => {},

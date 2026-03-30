@@ -1,6 +1,6 @@
+export type { EmacsSession, StartEmacsOptions } from "@oh-my-pi/pi-emacs";
 export * from "./categories";
 export * from "./emacs/client";
-export * from "./emacs/daemon";
 export * from "./emacs/detection";
 export * from "./id-generator";
 export * from "./id-links";

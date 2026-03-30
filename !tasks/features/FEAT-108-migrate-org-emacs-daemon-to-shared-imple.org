@@ -1,0 +1,139 @@
+#+TITLE: Migrate org Emacs daemon to shared implementation and fix dispose
+#+STATE: DONE
+#+SESSION_ID: 14a72be9fb2e0a9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T16-01-15-756Z_14a72be9fb2e0a9e.jsonl]]
+#+CUSTOM_ID: FEAT-108-migrate-org-emacs-daemon-to-shared-imple
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: infra
+#+BLOCKER: FEAT-107-migrate-main-emacs-daemon-to-manageddaem
+
+NOTE [2026-03-30]: packages/org/src/emacs/daemon.ts deleted. Org tool imports startEmacsSession from @oh-my-pi/pi-emacs with org-specific options. dispose() now calls session.stop(). 213 org tests pass.
+
+* Initial Message
+
+Yo bro are emacs sessions properly disposed of at the end of all spell sessions regardless of the exist mode?
+
+Delete =packages/org/src/emacs/daemon.ts= entirely and reuse =packages/emacs/src/daemon.ts=. Fix org tool's =dispose()= to actually stop the daemon.
+
+* Current state
+
+** =packages/org/src/emacs/daemon.ts= — near-duplicate of =packages/emacs/src/daemon.ts=
+Differences from main daemon:
+1. Socket prefix: =spell-org-= vs =spell-emacs-=
+2. Startup timeout: 30s vs 120s (org doesn't compile tree-sitter)
+3. No reattach logic (=tryAttachExisting=)
+4. No first-run warning
+5. No =-Q= flag (no skip of user init)
+6. Loads =org-tasks-mcp= elisp vs =pi-prelude= + =pi-emacs-mcp=
+7. Direct =process.on("exit"/"SIGINT"/"SIGTERM")= handlers (ineffective due to =--daemon= fork)
+8. Ignores stderr (=stdio: ["ignore", "ignore", "ignore"]=)
+
+** =packages/org/src/tool.ts= — dispose is a no-op
+#+begin_src typescript
+async dispose() {
+    emacsSessionPromise = null;
+    orgClientPromise = null;
+}
+#+end_src
+Never calls =session.stop()=. The daemon process persists.
+
+** =packages/coding-agent/src/tools/org.ts= — separate factory
+=makeEmacsFactory()= creates its own =startEmacsSession= call from =@oh-my-pi/pi-org=, completely bypassing =EmacsSessionManager=.
+
+* What changes
+
+** Option A (recommended): Reuse =packages/emacs/src/daemon.ts=
+The main daemon's =startEmacsSession()= is already parameterized by =emacsPath=, =projectRoot=, =sessionId=, =elispDir=. The only missing parameters are socket prefix and timeout. Two approaches:
+
+*** A1: Add optional config to =startEmacsSession=
+#+begin_src typescript
+export interface StartEmacsOptions {
+  socketPrefix?: string;   // default: "spell-emacs-"
+  startupTimeoutMs?: number; // default: 120_000
+  tryReattach?: boolean;     // default: true
+  emacsFlags?: string[];     // default: ["-Q"]
+}
+export async function startEmacsSession(
+  emacsPath: string, projectRoot: string,
+  sessionId: string, elispDir: string,
+  options?: StartEmacsOptions
+): Promise<EmacsSession>;
+#+end_src
+
+Org tool calls:
+#+begin_src typescript
+startEmacsSession(emacsPath, projectRoot, sessionId, elispDir, {
+  socketPrefix: "spell-org-",
+  startupTimeoutMs: 30_000,
+  tryReattach: false,
+  emacsFlags: [], // no -Q for org
+});
+#+end_src
+
+This eliminates the org daemon file entirely.
+
+** Delete =packages/org/src/emacs/daemon.ts=
+- Remove the file
+- Update =packages/org/src/index.ts= to re-export =EmacsSession= and =startEmacsSession= from =@oh-my-pi/pi-emacs= instead of local daemon
+- Update =packages/coding-agent/src/tools/org.ts= import: change from =@oh-my-pi/pi-org= to =@oh-my-pi/pi-emacs=
+
+** Fix org tool =dispose()= in =packages/org/src/tool.ts=
+#+begin_src typescript
+async dispose() {
+    const sessionPromise = emacsSessionPromise;
+    emacsSessionPromise = null;
+    orgClientPromise = null;
+    if (sessionPromise) {
+        try {
+            const session = await sessionPromise;
+            await session.stop();
+        } catch {
+            // Session may have already died or never started
+        }
+    }
+}
+#+end_src
+
+** Remove dead process.on handlers
+The org daemon's =process.on("exit"/"SIGINT"/"SIGTERM")= handlers are deleted along with the file. =ManagedDaemon= handles this via postmortem.
+
+** Update imports in =packages/coding-agent/src/tools/org.ts=
+Change:
+#+begin_src typescript
+import { createOrgTool, DEFAULT_ORG_CONFIG, detectEmacs, startEmacsSession } from "@oh-my-pi/pi-org";
+#+end_src
+To:
+#+begin_src typescript
+import { createOrgTool, DEFAULT_ORG_CONFIG, detectEmacs } from "@oh-my-pi/pi-org";
+import { startEmacsSession } from "@oh-my-pi/pi-emacs";
+#+end_src
+
+* Dead code removed
+- =packages/org/src/emacs/daemon.ts= — entire file
+- =packages/org/src/index.ts= — remove re-export of local daemon types (=export * from "./emacs/daemon"=); re-export from =@oh-my-pi/pi-emacs= if needed by consumers
+- All =process.on("exit"/"SIGINT"/"SIGTERM")= handlers in org daemon
+
+* TDD: Tests
+
+** =packages/org/test/= — update daemon-related tests
+- =live-emacs-section-update.test.ts= uses =--daemon=NAME= directly in test: update to =--fg-daemon=NAME=
+- =section-update-output.test.ts= mocks =EmacsSession= — no changes needed (interface unchanged)
+
+** New tests in =packages/org/test/dispose.test.ts=
+1. *dispose stops daemon*: create org tool with mock factory, call execute to trigger session start, call dispose, verify =session.stop()= was called
+2. *dispose before first use*: dispose without ever calling execute → no error
+3. *dispose with failed session*: factory rejects → dispose handles gracefully
+
+** Update =packages/coding-agent/test/tools/emacs.test.ts= if any imports change
+
+* Acceptance criteria
+- =packages/org/src/emacs/daemon.ts= deleted
+- =packages/org/src/tool.ts= =dispose()= calls =session.stop()=
+- =packages/coding-agent/src/tools/org.ts= imports =startEmacsSession= from =@oh-my-pi/pi-emacs=
+- No duplicate daemon implementation exists anywhere
+- =bun test packages/org/test/= passes
+- =bun test packages/coding-agent/test/= passes (no regressions)
+- =bun check:ts= passes
+- Grep: no =spell-org-= socket prefix in =packages/org/= (moved to config parameter)
+- Grep: no =process.on("exit"= or =process.on("SIGINT"= in =packages/org/=

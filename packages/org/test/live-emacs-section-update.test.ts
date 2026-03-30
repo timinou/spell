@@ -118,7 +118,7 @@ async function launchCleanEmacsBridge(emacsPath: string): Promise<LiveSession> {
 		[
 			emacsPath,
 			"-Q",
-			`--daemon=${daemonName}`,
+			`--fg-daemon=${daemonName}`,
 			"--eval",
 			`(add-to-list 'load-path "${ELISP_DIR}")`,
 			"--eval",
@@ -132,12 +132,8 @@ async function launchCleanEmacsBridge(emacsPath: string): Promise<LiveSession> {
 		},
 	);
 
-	const stderrText = new Response(proc.stderr).text();
-	const exitCode = await proc.exited;
-	if (exitCode !== 0) {
-		throw new Error(`Clean Emacs bridge failed to start: ${await stderrText}`);
-	}
-
+	// --fg-daemon keeps the process alive (foreground mode).
+	// Wait for the socket instead of proc.exited.
 	await waitForSocket(socketPath);
 	let alive = true;
 	return {
@@ -150,6 +146,12 @@ async function launchCleanEmacsBridge(emacsPath: string): Promise<LiveSession> {
 			const emacsclient = Bun.which("emacsclient");
 			if (emacsclient) {
 				await Bun.$`${emacsclient} --socket-name=${daemonName} --eval "(kill-emacs)"`.quiet().nothrow();
+			} else {
+				try {
+					proc.kill();
+				} catch {
+					/* already dead */
+				}
 			}
 			try {
 				await fs.unlink(socketPath);

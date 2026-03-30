@@ -665,10 +665,9 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 	async function checkShutdownRequested(): Promise<void> {
 		if (!shutdownState.requested) return;
 
-		if (extensionRunner?.hasHandlers("session_shutdown")) {
-			await extensionRunner.emit({ type: "session_shutdown" });
-		}
-
+		// session.dispose() handles tool cleanup (including daemon shutdown)
+		// and extension session_shutdown events.
+		await session.dispose();
 		process.exit(0);
 	}
 
@@ -697,6 +696,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 		}
 	}
 
-	// stdin closed — RPC client is gone, exit cleanly
+	// stdin closed — RPC client is gone, clean up and exit.
+	await session.dispose();
 	process.exit(0);
 }

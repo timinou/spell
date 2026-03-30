@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test, vi } from "bun:tes
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { EmacsSession } from "../src/emacs/daemon";
+import type { EmacsSession } from "@oh-my-pi/pi-emacs";
 import type { OrgToolDefinition } from "../src/tool";
 import type { OrgConfig } from "../src/types";
 

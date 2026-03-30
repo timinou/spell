@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
-import * as net from "node:net";
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger, type ManagedDaemon, probeSocket, startDaemon } from "@oh-my-pi/pi-utils";
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -16,6 +15,25 @@ export interface EmacsSession {
 	isAlive(): boolean;
 }
 
+/** Configuration options for startEmacsSession. */
+export interface StartEmacsOptions {
+	/** Socket filename prefix (default: "spell-emacs-"). */
+	socketPrefix?: string;
+	/** Maximum time to wait for the daemon socket (default: 120_000). */
+	startupTimeoutMs?: number;
+	/** Whether to attempt reattaching to an existing daemon (default: true). */
+	tryReattach?: boolean;
+	/** Emacs flags prepended before --fg-daemon (default: ["-Q"]). */
+	emacsFlags?: string[];
+	/**
+	 * Custom elisp eval expressions to replace the default load sequence.
+	 * When provided, these are used instead of the default pi-prelude/pi-emacs-mcp evals.
+	 * Each entry becomes a `--eval "(expr)"` argument.
+	 * The load-path setup and mcp-server-start-unix are always included.
+	 */
+	evalExpressions?: string[];
+}
+
 /**
  * Start (or return an existing) Emacs daemon for the given project + session.
  *
@@ -26,16 +44,26 @@ export interface EmacsSession {
  * @param emacsPath   - Absolute path to the emacs binary.
  * @param projectRoot - Absolute path to the project root (used for hashing).
  * @param sessionId   - Opaque session identifier (e.g. Pi session UUID).
- * @param orgElispDir - Path to packages/org/elisp/ for MCP server infrastructure.
- * @param elispDir    - Path to packages/emacs/elisp/ for pi-emacs tools.
+ * @param elispDir    - Path to elisp/ directory to add to load-path.
+ * @param options     - Optional daemon configuration overrides.
  */
 export async function startEmacsSession(
 	emacsPath: string,
 	projectRoot: string,
 	sessionId: string,
 	elispDir: string,
+	options?: StartEmacsOptions,
 ): Promise<EmacsSession> {
+	const {
+		socketPrefix = "spell-emacs-",
+		startupTimeoutMs = STARTUP_TIMEOUT_MS,
+		tryReattach: shouldReattach = true,
+		emacsFlags = ["-Q"],
+		evalExpressions,
+	} = options ?? {};
+
 	const key = sessionKey(projectRoot, sessionId);
+	const prefix = socketPrefix;
 
 	const cached = sessions.get(key);
 	if (cached?.isAlive()) {
@@ -46,14 +74,21 @@ export async function startEmacsSession(
 	if (cached) sessions.delete(key);
 
 	// Try to reattach to a daemon from a previous process.
-	const attached = await tryAttachExisting(key);
-	if (attached) {
-		sessions.set(key, attached);
-		logger.debug("[emacs-daemon] Reattached to existing daemon", { key, socketPath: attached.socketPath });
-		return attached;
+	if (shouldReattach) {
+		const attached = await tryAttachExisting(key, prefix);
+		if (attached) {
+			sessions.set(key, attached);
+			logger.debug("[emacs-daemon] Reattached to existing daemon", { key, socketPath: attached.socketPath });
+			return attached;
+		}
 	}
 
-	const session = await launchDaemon(emacsPath, projectRoot, sessionId, elispDir, key);
+	const session = await launchDaemon(emacsPath, projectRoot, elispDir, key, {
+		socketPrefix: prefix,
+		startupTimeoutMs,
+		emacsFlags,
+		evalExpressions,
+	});
 	sessions.set(key, session);
 	return session;
 }
@@ -69,7 +104,6 @@ const sessions = new Map<string, EmacsSession>();
 // Implementation
 // ---------------------------------------------------------------------------
 
-const POLL_INTERVAL_MS = 500;
 // First-run startup compiles all tree-sitter grammars (git clone + cc per language).
 // At ~3-5s per grammar × 15 languages = ~75s worst case on a slow connection.
 // Subsequent starts use cached .so files and take ~900ms.
@@ -81,60 +115,23 @@ const FIRST_RUN_WARN_MS = 8_000;
 
 /** Stable hash key derived from project root + session ID. */
 function sessionKey(projectRoot: string, sessionId: string): string {
-	// Bun.hash returns a 64-bit unsigned integer (as a number or bigint depending on runtime).
-	// We stringify it and take the first 12 hex chars.
 	const raw = Bun.hash(projectRoot + sessionId);
 	return BigInt(raw).toString(16).slice(0, 12).padStart(12, "0");
 }
 
 /** Absolute path to the Unix socket for a given hash key. */
-function socketPath(hashHex: string): string {
+function socketPathForKey(hashHex: string, prefix: string): string {
 	const dir = process.env.XDG_RUNTIME_DIR ?? "/tmp";
-	return path.join(dir, `spell-emacs-${hashHex}.sock`);
-}
-
-/** Returns true when the socket file is present on disk. */
-async function socketExists(p: string): Promise<boolean> {
-	try {
-		await fs.access(p);
-		return true;
-	} catch (err) {
-		if (isEnoent(err)) return false;
-		// Permission errors or other unexpected errors: treat as absent to avoid hanging.
-		return false;
-	}
-}
-
-/** Poll until the socket appears or the deadline passes. */
-/** Poll until the socket appears or the deadline passes.
- *
- * Emits a one-time progress line to stderr after FIRST_RUN_WARN_MS so users
- * know spell is compiling tree-sitter grammars, not hanging.
- */
-async function waitForSocket(p: string, daemonName: string): Promise<void> {
-	const start = Date.now();
-	const deadline = start + STARTUP_TIMEOUT_MS;
-	let warned = false;
-	while (Date.now() < deadline) {
-		if (await socketExists(p)) return;
-		if (!warned && Date.now() - start >= FIRST_RUN_WARN_MS) {
-			warned = true;
-			process.stderr.write(
-				`  Emacs (${daemonName}): installing tree-sitter grammars on first run, may take ~60s...\n`,
-			);
-		}
-		await Bun.sleep(POLL_INTERVAL_MS);
-	}
-	throw new Error(`Emacs daemon did not create socket within ${STARTUP_TIMEOUT_MS}ms: ${p}`);
+	return path.join(dir, `${prefix}${hashHex}.sock`);
 }
 
 /**
  * Probe for a daemon left behind by a previous process at the known socket path.
  * Returns a reattached EmacsSession if the daemon is still live, null otherwise.
  */
-async function tryAttachExisting(key: string): Promise<EmacsSession | null> {
-	const sock = socketPath(key);
-	const daemonName = `spell-emacs-${key}`;
+async function tryAttachExisting(key: string, prefix: string): Promise<EmacsSession | null> {
+	const sock = socketPathForKey(key, prefix);
+	const daemonName = `${prefix}${key}`;
 
 	// If the socket file doesn't exist, there's nothing to attach to.
 	try {
@@ -145,30 +142,16 @@ async function tryAttachExisting(key: string): Promise<EmacsSession | null> {
 	}
 
 	// Probe the socket to see if the daemon is still listening.
-	const alive = await new Promise<boolean>(resolve => {
-		const conn = net.createConnection(sock);
-		const timeout = setTimeout(() => {
-			conn.destroy();
-			resolve(false);
-		}, 1000);
-		conn.on("connect", () => {
-			clearTimeout(timeout);
-			conn.destroy();
-			resolve(true);
-		});
-		conn.on("error", () => {
-			clearTimeout(timeout);
-			conn.destroy();
-			resolve(false);
-		});
-	});
-
+	const alive = await probeSocket(sock, 1000);
 	if (!alive) return null;
 
-	// Daemon is live — build a session around it.
+	// Daemon is live — build a lightweight session around it.
+	// No ManagedDaemon here: we don't have a proc reference for reattached daemons.
 	let isAlive = true;
 	const healthTimer = setInterval(async () => {
-		if (!(await socketExists(sock))) {
+		try {
+			await fs.access(sock);
+		} catch {
 			logger.warn("[emacs-daemon] Socket disappeared — reattached daemon may have crashed", { daemonName, sock });
 			isAlive = false;
 			sessions.delete(key);
@@ -211,15 +194,22 @@ async function tryAttachExisting(key: string): Promise<EmacsSession | null> {
 	};
 }
 
+interface LaunchOptions {
+	socketPrefix: string;
+	startupTimeoutMs: number;
+	emacsFlags: string[];
+	evalExpressions?: string[];
+}
+
 async function launchDaemon(
 	emacsPath: string,
 	projectRoot: string,
-	_sessionId: string,
 	elispDir: string,
 	key: string,
+	opts: LaunchOptions,
 ): Promise<EmacsSession> {
-	const daemonName = `spell-emacs-${key}`;
-	const sock = socketPath(key);
+	const daemonName = `${opts.socketPrefix}${key}`;
+	const sock = socketPathForKey(key, opts.socketPrefix);
 
 	// Socket is stale (tryAttachExisting already confirmed it's dead) — remove before spawning.
 	try {
@@ -230,106 +220,85 @@ async function launchDaemon(
 		}
 	}
 
-	// -Q skips the user's init file and all site files.
-	// pi-prelude.el bootstraps tree-sitter grammars into Pi's own directory,
-	// compiling any that are missing (first run only, then instant).
-	// pi-emacs-mcp.el is self-contained: it vendors the MCP infrastructure.
-	const args = [
-		"-Q",
-		`--daemon=${daemonName}`,
-		"--eval",
-		`(add-to-list 'load-path "${elispDir}")`,
-		"--eval",
-		// pi-project-root is read by pi-prelude to locate per-project treesitter.json.
-		`(setq pi-project-root "${projectRoot}")`,
-		"--eval",
-		`(require 'pi-prelude)`,
-		"--eval",
-		`(require 'pi-emacs-mcp)`,
-		"--eval",
-		`(mcp-server-start-unix nil "${sock}")`,
-	];
+	// Build spawn command.
+	// --fg-daemon keeps the process in the foreground so proc.pid tracks the live daemon.
+	const evalArgs = buildEvalArgs(elispDir, projectRoot, sock, opts.evalExpressions);
+	const command = [emacsPath, ...opts.emacsFlags, `--fg-daemon=${daemonName}`, ...evalArgs];
+
+	// Show a first-run warning so users know we're compiling tree-sitter grammars.
+	let firstRunTimer: ReturnType<typeof setTimeout> | undefined;
+	if (opts.startupTimeoutMs > FIRST_RUN_WARN_MS) {
+		firstRunTimer = setTimeout(() => {
+			process.stderr.write(
+				`  Emacs (${daemonName}): installing tree-sitter grammars on first run, may take ~60s...\n`,
+			);
+		}, FIRST_RUN_WARN_MS);
+	}
 
 	logger.debug("[emacs-daemon] Spawning daemon", { daemonName, sock, elispDir });
 
-	const proc = Bun.spawn([emacsPath, ...args], {
-		stdio: ["ignore", "ignore", "pipe"],
-	});
-	// Consume stderr in a background task — logs each line, never blocks process exit.
-	if (proc.stderr) {
-		(async () => {
-			const decoder = new TextDecoder();
-			for await (const chunk of proc.stderr as ReadableStream<Uint8Array>) {
-				for (const line of decoder.decode(chunk).split("\n")) {
-					if (line.trim()) logger.debug(`[emacs-daemon] ${line.trim()}`, { daemonName });
-				}
-			}
-		})().catch(() => {});
-	}
-
-	// Wait for the daemon to signal readiness by writing the socket.
+	let daemon: ManagedDaemon;
 	try {
-		await waitForSocket(sock, daemonName);
+		daemon = await startDaemon({
+			name: `emacs-${key}`,
+			command,
+			socketPath: sock,
+			stopCommand: ["emacsclient", `--socket-name=${daemonName}`, "--eval", "(kill-emacs)"],
+			healthIntervalMs: HEALTH_INTERVAL_MS,
+			startupTimeoutMs: opts.startupTimeoutMs,
+			logStderr: true,
+			onCrash: () => {
+				sessions.delete(key);
+			},
+		});
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		logger.error("[emacs-daemon] Daemon startup timed out", { daemonName, sock, err: msg });
 		throw err;
+	} finally {
+		if (firstRunTimer) clearTimeout(firstRunTimer);
 	}
 
 	logger.debug("[emacs-daemon] Daemon ready", { daemonName, sock });
 
-	// Health-check timer: if the socket disappears, evict the session from cache.
-	let alive = true;
-	const healthTimer = setInterval(async () => {
-		if (!(await socketExists(sock))) {
-			logger.warn("[emacs-daemon] Socket disappeared — daemon may have crashed", { daemonName, sock });
-			alive = false;
-			sessions.delete(key);
-			clearInterval(healthTimer);
-		}
-	}, HEALTH_INTERVAL_MS);
-	// Do not let the timer block process exit.
-	healthTimer.unref();
-
 	return {
-		socketPath: sock,
+		socketPath: daemon.socketPath,
 
 		isAlive(): boolean {
-			return alive;
+			return daemon.isAlive();
 		},
 
 		async stop(): Promise<void> {
-			clearInterval(healthTimer);
-			alive = false;
 			sessions.delete(key);
-
-			logger.debug("[emacs-daemon] Stopping daemon", { daemonName });
-
-			// Ask emacs to shut itself down gracefully.
-			try {
-				await Bun.$`emacsclient --socket-name=${daemonName} --eval "(kill-emacs)"`.quiet().nothrow();
-			} catch (err) {
-				logger.warn("[emacs-daemon] emacsclient kill failed", {
-					daemonName,
-					err: err instanceof Error ? err.message : String(err),
-				});
-			}
-
-			// Force-kill if still running.
-			try {
-				proc.kill();
-			} catch {
-				// Already dead.
-			}
-
-			// Remove socket file if still present.
-			try {
-				await fs.unlink(sock);
-			} catch (err) {
-				if (!isEnoent(err)) {
-					logger.warn("[emacs-daemon] Could not remove socket after stop", { sock });
-				}
-			}
+			await daemon.stop();
 		},
 	};
+}
+
+/**
+ * Build the --eval argument list for the Emacs daemon.
+ *
+ * Default sequence: load-path → pi-project-root → pi-prelude → pi-emacs-mcp → mcp-server-start.
+ * When evalExpressions is provided, those replace the pi-prelude/pi-emacs-mcp requires
+ * while keeping load-path setup and mcp-server-start-unix.
+ */
+function buildEvalArgs(elispDir: string, projectRoot: string, sock: string, evalExpressions?: string[]): string[] {
+	const args: string[] = [
+		"--eval",
+		`(add-to-list 'load-path "${elispDir}")`,
+		"--eval",
+		`(setq pi-project-root "${projectRoot}")`,
+	];
+
+	if (evalExpressions) {
+		for (const expr of evalExpressions) {
+			args.push("--eval", expr);
+		}
+	} else {
+		// Default: load pi-prelude (tree-sitter bootstrap) and pi-emacs-mcp (MCP server).
+		args.push("--eval", `(require 'pi-prelude)`, "--eval", `(require 'pi-emacs-mcp)`);
+	}
+
+	args.push("--eval", `(mcp-server-start-unix nil "${sock}")`);
+	return args;
 }

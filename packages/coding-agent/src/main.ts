@@ -29,12 +29,12 @@ import { InteractiveMode, runBrowseMode, runPrintMode, runQmlMode, runRpcMode } 
 import { runFluidMode } from "./modes/fluid-mode";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
+import browseFindingsPrompt from "./prompts/agents/browse-findings.md" with { type: "text" };
 import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "./sdk";
 import type { AgentSession } from "./session/agent-session";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
 import { resolvePromptInput } from "./system-prompt";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
-import browseFindingsPrompt from "./prompts/agents/browse-findings.md" with { type: "text" };
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
 	try {
@@ -726,6 +726,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		process.stderr.write(`${chalk.yellow("\nSet an API key environment variable:")}\n`);
 		process.stderr.write("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n");
 		process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
+		await session.dispose();
 		process.exit(1);
 	}
 

@@ -1,0 +1,120 @@
+#+TITLE: Fix Emacs Daemon Lifecycle Leaks
+#+STATE: DONE
+#+SESSION_ID: 14a72be9fb2e0a9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T16-01-15-756Z_14a72be9fb2e0a9e.jsonl]]
+#+CUSTOM_ID: PLAN-040-fix-emacs-daemon-lifecycle-leaks
+
+
+* Context
+Emacs sessions are NOT reliably disposed on all exit paths. Two near-identical daemon implementations exist with overlapping bugs. Rather than patching each independently, we build a shared =ManagedDaemon= abstraction and migrate both daemons to it, eliminating duplication and all lifecycle gaps in one pass.
+
+** Problem: 5 bugs across 2 daemon implementations
+
+*** Bug 1: No postmortem registration (main daemon)
+=packages/emacs/src/daemon.ts= never calls =postmortem.register()=. SSH cleanup is registered at =sdk.ts:432=; Python at =sdk.ts:440=; Emacs is absent. When signals (SIGTERM from outside, SIGHUP, uncaughtException) hit the process, the Emacs daemon is orphaned.
+
+*** Bug 2: Org tool dispose is a no-op
+=packages/org/src/tool.ts:890= nulls promise references but never calls =session.stop()=:
+#+begin_src typescript
+async dispose() {
+    emacsSessionPromise = null;
+    orgClientPromise = null;
+    // session.stop() never called!
+}
+#+end_src
+
+*** Bug 3: --daemon fork makes proc.kill() ineffective
+Both daemons spawn with =--daemon=NAME= which forks internally. =proc= from =Bun.spawn= tracks the pre-fork PID (already exited). All =proc.kill()= calls — org daemon's =process.on("exit")= handler, main daemon's =stop()= fallback — send signals to a dead PID.
+
+*** Bug 4: Exit paths skip session.dispose()
+- RPC mode: =process.exit(0)= at lines 672, 701 without =session.dispose()=
+- =main.ts:729=: =process.exit(1)= after session creation without dispose
+- These leak the daemon even when the graceful path works.
+
+*** Bug 5: Code duplication (maintenance fork)
+=packages/emacs/src/daemon.ts= (336 lines) and =packages/org/src/emacs/daemon.ts= (220 lines) implement the same lifecycle. Bugs fixed in one must be manually applied to the other.
+
+** Approach: shared ManagedDaemon → migrate → delete dead code
+
+1. *Phase 1*: Create =ManagedDaemon= in =packages/utils/src/managed-daemon.ts= — the reusable daemon lifecycle (spawn, socket poll, health check, postmortem, graceful stop). TDD: 16 test scenarios.
+2. *Phase 2*: Rewrite =packages/emacs/src/daemon.ts= to use =ManagedDaemon=. Switch =--daemon= → =--fg-daemon=. Preserve public API. Remove ~200 lines of manual lifecycle code. Update tests.
+3. *Phase 3*: Delete =packages/org/src/emacs/daemon.ts= entirely. Add =StartEmacsOptions= (socket prefix, timeout, flags, reattach) to =startEmacsSession=. Org tool imports from =@oh-my-pi/pi-emacs=. Fix org dispose to call =session.stop()=. New dispose tests.
+4. *Phase 4*: Fix remaining exit paths (RPC mode, main.ts) that call =process.exit()= without =session.dispose()=.
+
+** Key decisions
+- =--fg-daemon= instead of =--daemon= so =proc= tracks the live daemon PID and =proc.kill()= works as synchronous last-resort cleanup. Emacs 26+ supports this; codebase requires 29+.
+- Postmortem registration lives inside =startDaemon()=, not at the consumer level — cannot be forgotten.
+- =probeSocket()= and =waitForSocket()= are public exports from utils, reusable beyond Emacs.
+- =EmacsSession= interface and =startEmacsSession= signature preserved (additive optional config) — zero breaking changes for consumers.
+- Org daemon deleted, not wrapped — one implementation, configurable via options.
+
+** Files touched (complete list)
+| File | Action |
+|---|---|
+| =packages/utils/src/managed-daemon.ts= | Create (new) |
+| =packages/utils/src/index.ts= | Add export |
+| =packages/utils/test/managed-daemon.test.ts= | Create (new, 16 tests) |
+| =packages/emacs/src/daemon.ts= | Rewrite internals (keep public API) |
+| =packages/emacs/test/daemon-survival.test.ts= | Update: remove no-handlers test, add postmortem/fg-daemon tests |
+| =packages/org/src/emacs/daemon.ts= | Delete |
+| =packages/org/src/index.ts= | Update exports |
+| =packages/org/src/tool.ts= | Fix dispose to call session.stop() |
+| =packages/org/test/dispose.test.ts= | Create (new, 3 tests) |
+| =packages/org/test/live-emacs-section-update.test.ts= | Update: =--daemon= → =--fg-daemon= |
+| =packages/coding-agent/src/tools/org.ts= | Update import path |
+| =packages/coding-agent/src/modes/rpc/rpc-mode.ts= | Add session.dispose() before exits |
+| =packages/coding-agent/src/main.ts= | Add session.dispose() at line 729 path |
+
+* Verification
+After all phases complete:
+- =bun check:ts= passes
+- =bun test packages/utils/test/managed-daemon.test.ts= — 16 tests pass
+- =bun test packages/emacs/test/= — all tests pass
+- =bun test packages/org/test/= — all tests pass (including new dispose tests)
+- =bun test packages/coding-agent/test/tools/emacs.test.ts= — passes
+- Grep: no =packages/org/src/emacs/daemon.ts= exists (deleted)
+- Grep: no =--daemon== without =fg-= prefix in Emacs spawn args
+- Grep: no =process.on("exit"= or =process.on("SIGINT"= in =packages/org/=
+- Grep: no =process.exit= after session creation without prior =session.dispose()= in main.ts or rpc-mode.ts
+- Grep: =postmortem.register= called inside =startDaemon()= in managed-daemon.ts
+- Manual: start spell with Emacs, =kill -15 $PID= → =pgrep -f spell-emacs= returns empty
+
+* Execution Manifest
+
+** Phase 1: Shared abstraction (standalone, no dependencies)
+- [[id:FEAT-106-create-shared-manageddaemon-abstraction]] — Create ManagedDaemon in packages/utils (L, Pri A)
+
+** Phase 2: Main daemon migration (depends on Phase 1)
+- [[id:FEAT-107-migrate-main-emacs-daemon-to-manageddaem]] — Migrate packages/emacs daemon to ManagedDaemon (L, Pri A, blocked by FEAT-106)
+
+** Phase 3: Org daemon elimination (depends on Phase 2)
+- [[id:FEAT-108-migrate-org-emacs-daemon-to-shared-imple]] — Delete org daemon, reuse shared impl, fix dispose (M, Pri A, blocked by FEAT-107)
+
+** Phase 4: Exit path cleanup (depends on Phase 2)
+- [[id:BUG-028-rpc-mode-and-post-session-exit-paths-ski]] — Fix exit paths that skip session.dispose (S, Pri B, blocked by FEAT-107)
+
+** Completion [2026-03-30]
+
+*** Verification
+- =bun check:ts= passes (biome + tsgo, 0 errors)
+- =bun test packages/utils/test/managed-daemon.test.ts= — 18 tests pass
+- =bun test packages/emacs/test/= — 30 tests pass (27 pass, 3 skip)
+- =bun test packages/org/test/= — 213 tests pass
+- =bun test packages/coding-agent/test/tools/emacs.test.ts= — 1 test passes
+- Grep: =packages/org/src/emacs/daemon.ts= deleted
+- Grep: no =--daemon== without =fg-= prefix in source files
+- Grep: no =process.on(\"exit\"= or =process.on(\"SIGINT\"= in =packages/org/=
+- Grep: =postmortem.register= called inside =startDaemon()= in managed-daemon.ts (line 183)
+- Grep: all =process.exit()= calls after session creation in rpc-mode.ts and main.ts have =session.dispose()= before them
+
+*** Artifacts
+- =packages/utils/src/managed-daemon.ts= — new shared daemon lifecycle (259 lines)
+- =packages/utils/test/managed-daemon.test.ts= — 18 test scenarios
+- =packages/emacs/src/daemon.ts= — rewritten (309 lines, down from 336)
+- =packages/emacs/test/daemon-survival.test.ts= — updated (351 lines, added fg-daemon and postmortem tests)
+- =packages/org/test/dispose.test.ts= — new (55 lines, 3 tests)
+
+*** Deviations
+- Plan specified 16 tests for managed-daemon; delivered 18 (some plan scenarios were consolidated, some added for better coverage of the actual code paths).
+- =buildEvalArgs= helper added to daemon.ts to support configurable elisp eval expressions. This was not in the original plan but is required for org daemon to use different =require= statements than the main emacs daemon.
+- Live emacs test (=live-emacs-section-update.test.ts=) required additional fix: =--fg-daemon= keeps process alive, so the test logic that awaited =proc.exited= had to be replaced with =waitForSocket()=.

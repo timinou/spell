@@ -1,0 +1,137 @@
+#+TITLE: Create shared ManagedDaemon abstraction in packagesutils
+#+STATE: DONE
+#+SESSION_ID: 14a72be9fb2e0a9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T16-01-15-756Z_14a72be9fb2e0a9e.jsonl]]
+#+CUSTOM_ID: FEAT-106-create-shared-manageddaemon-abstraction
+#+EFFORT: L
+#+PRIORITY: A
+#+LAYER: infra
+
+NOTE [2026-03-30]: ManagedDaemon created in packages/utils/src/managed-daemon.ts with startDaemon, probeSocket, waitForSocket exports. 18 tests pass.
+
+* Initial Message
+
+Yo bro are emacs sessions properly disposed of at the end of all spell sessions regardless of the exist mode?
+
+Create a shared daemon lifecycle manager in =packages/utils/src/managed-daemon.ts= that encapsulates the common spawn→socket→health→stop→postmortem pattern used by multiple subsystems.
+
+* Current state (what exists today)
+Two near-identical, independent Emacs daemon implementations:
+
+** =packages/emacs/src/daemon.ts= (main, =spell-emacs-*=)
+- Module-level =sessions= Map keyed by =hash(projectRoot+sessionId)=
+- =startEmacsSession()= checks cache → =tryAttachExisting()= → =launchDaemon()=
+- =launchDaemon()=: =Bun.spawn([emacsPath, ...args])= with =--daemon=NAME=, polls socket via =waitForSocket()= (120s timeout), health timer (5s, =.unref()=), =stop()= via =emacsclient --eval "(kill-emacs)"= + =proc.kill()= + =fs.unlink(sock)=
+- =tryAttachExisting()=: probes socket with =net.createConnection=, returns reattached session or null
+- NO =process.on()= handlers, NO =postmortem.register()=
+- =--daemon= forks: =proc= tracks dead pre-fork PID, =proc.kill()= is a no-op
+
+** =packages/org/src/emacs/daemon.ts= (org, =spell-org-*=)
+- Same module-level =sessions= Map, same =sessionKey()= hash
+- =startEmacsSession()= checks cache → =launchDaemon()= (no reattach)
+- =launchDaemon()=: same pattern, =--daemon=NAME=, 30s timeout, health timer (5s), =stop()= via =emacsclient --eval "(kill-emacs)"= + =proc.kill()= + =fs.unlink(sock)=
+- HAS =process.on("exit"/"SIGINT"/"SIGTERM")= handlers calling =proc.kill()= — but these are ineffective because =--daemon= forks
+- Socket prefix: =spell-org-= vs =spell-emacs-=
+- No reattachment logic
+- No first-run warning
+
+** Also relevant: building blocks in packages/utils
+- =ptree.ts=: =ChildProcess= wrapper, =spawn()= helper, =terminate()=, =AbortSignal= integration, =[Symbol.dispose]=
+- =procmgr.ts=: =terminate()= for cross-platform tree kill, =isPidRunning()=
+- =postmortem.ts=: =register()= for cleanup callbacks on exit/signals/exceptions, LIFO execution, =quit()=
+
+* Design
+
+** New file: =packages/utils/src/managed-daemon.ts=
+
+*** Interface
+#+begin_src typescript
+export interface DaemonConfig {
+  /** Human-readable name for logging and postmortem registration (e.g. "emacs-main", "emacs-org") */
+  name: string;
+  /** Command + args to spawn the daemon. Spawned with --fg-daemon semantics (foreground, no fork). */
+  command: string[];
+  /** Absolute path to the Unix socket the daemon will create to signal readiness. */
+  socketPath: string;
+  /** How to gracefully stop the daemon. If omitted, only proc.kill() is used. */
+  stopCommand?: string[];
+  /** Health check interval in ms (default: 5000). Set 0 to disable. */
+  healthIntervalMs?: number;
+  /** Maximum time to wait for the socket to appear (default: 30000). */
+  startupTimeoutMs?: number;
+  /** Spawn environment variables. Merged with process.env. */
+  env?: Record<string, string>;
+  /** Working directory for the spawned process. */
+  cwd?: string;
+  /** Pipe stderr and forward lines to logger (default: true). */
+  logStderr?: boolean;
+  /** Callback fired if socket disappears (daemon crash). */
+  onCrash?: () => void;
+}
+
+export interface ManagedDaemon {
+  /** Absolute path to the Unix socket. */
+  readonly socketPath: string;
+  /** True when the daemon process is alive and socket exists. */
+  isAlive(): boolean;
+  /** PID of the daemon process (valid because --fg-daemon, no fork). */
+  readonly pid: number;
+  /** Graceful stop: send stopCommand, wait briefly, then proc.kill(SIGTERM), then SIGKILL. Removes socket. Deregisters from postmortem. */
+  stop(): Promise<void>;
+}
+
+/** Spawn a daemon, wait for socket readiness, register with postmortem, start health checks. */
+export async function startDaemon(config: DaemonConfig): Promise<ManagedDaemon>;
+
+/** Probe whether a Unix socket has a live listener (connect + disconnect). */
+export async function probeSocket(socketPath: string, timeoutMs?: number): Promise<boolean>;
+
+/** Poll until a socket file appears on disk or deadline is reached. */
+export async function waitForSocket(socketPath: string, timeoutMs: number, pollIntervalMs?: number): Promise<void>;
+#+end_src
+
+*** Implementation details
+1. *Spawn*: =Bun.spawn(config.command, { stdio: ["ignore", "ignore", "pipe"] })= — stderr piped for logging.
+2. *No fork*: callers must use =--fg-daemon= (Emacs) or equivalent. =proc= tracks the real PID.
+3. *Socket readiness*: =waitForSocket()= polls =fs.access(socketPath)= at 500ms intervals.
+4. *Health timer*: =setInterval()= at =config.healthIntervalMs=, =.unref()='d. On socket disappearance, marks dead, calls =config.onCrash()=.
+5. *Postmortem*: =postmortem.register(config.name, ...)= on start. The callback: (a) clears health timer, (b) tries sync =proc.kill()= for =Reason.EXIT= (synchronous-only context), (c) tries async =stopCommand= + =terminate()= for signal reasons. Cancel function stored and called on =stop()= to prevent double-dispose.
+6. *Graceful stop*: (a) =Bun.$\`${stopCommand}\`.quiet().nothrow()=, (b) wait 2s for =proc.exited=, (c) =terminate({ target: proc })= as escalation, (d) =fs.unlink(socketPath)=.
+7. *probeSocket*: extracted from =tryAttachExisting()= — connect to socket, disconnect, return boolean.
+8. *stderr*: background async loop reads =proc.stderr=, splits lines, logs via =logger.debug()=.
+
+** Export from packages/utils
+Add to =packages/utils/src/index.ts=:
+#+begin_src typescript
+export * from "./managed-daemon";
+#+end_src
+
+* TDD: Test file =packages/utils/test/managed-daemon.test.ts=
+
+Test-first. Write tests before implementation. Use real Unix sockets (=net.createServer=) and =Bun.spawn= mocks.
+
+** Test scenarios (all required)
+1. *Happy path*: spawn daemon, socket appears, =isAlive()= true, =stop()= kills and removes socket
+2. *Startup timeout*: socket never appears → throws with timeout error after =startupTimeoutMs=
+3. *Postmortem registration*: verify =postmortem.register()= called with =config.name=, callback kills proc
+4. *Postmortem deregistration on stop*: after =stop()=, the cancel function is called (no double-dispose)
+5. *Health check detects crash*: socket disappears after start → =isAlive()= becomes false, =onCrash= called
+6. *Health check disabled*: =healthIntervalMs: 0= → no timer created
+7. *Stop with stopCommand*: verify =stopCommand= is executed before =proc.kill()=
+8. *Stop without stopCommand*: =proc.kill()= is the only shutdown mechanism
+9. *Stop idempotent*: calling =stop()= twice does not throw
+10. *probeSocket with live listener*: returns true
+11. *probeSocket with dead socket file*: returns false
+12. *probeSocket with no socket file*: returns false
+13. *waitForSocket happy path*: socket appears before deadline → resolves
+14. *waitForSocket timeout*: socket never appears → throws
+15. *stderr logging*: verify daemon stderr lines are forwarded to logger.debug
+16. *pid exposed*: =daemon.pid= matches the spawned process PID
+
+* Acceptance criteria
+- File =packages/utils/src/managed-daemon.ts= exists with =startDaemon=, =probeSocket=, =waitForSocket= exports
+- File =packages/utils/test/managed-daemon.test.ts= exists with all 16 test scenarios passing
+- =bun test packages/utils/test/managed-daemon.test.ts= passes
+- =bun check:ts= passes
+- =startDaemon= integrates with =postmortem.register()= — grep confirms
+- No dependency on =packages/emacs= or =packages/org= (direction: utils is depended on, not depending)

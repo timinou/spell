@@ -1,0 +1,39 @@
+#+TITLE: RPC mode and post-session exit paths skip sessiondispose
+#+STATE: DONE
+#+SESSION_ID: 14a72be9fb2e0a9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T16-01-15-756Z_14a72be9fb2e0a9e.jsonl]]
+#+CUSTOM_ID: BUG-028-rpc-mode-and-post-session-exit-paths-ski
+#+EFFORT: S
+#+PRIORITY: B
+#+LAYER: infra
+#+BLOCKER: BUG-025-register-main-emacs-daemon-cleanup-with
+
+NOTE [2026-03-30]: rpc-mode.ts: both process.exit(0) paths now call session.dispose() first. main.ts line 729: session.dispose() added before process.exit(1).
+
+NOTE [2026-03-30]: Updated blocker to FEAT-107. With ManagedDaemon registering postmortem internally, these exit paths get automatic signal cleanup. But explicit session.dispose() before process.exit() is still required for graceful shutdown."
+
+* Initial Message
+
+Yo bro are emacs sessions properly disposed of at the end of all spell sessions regardless of the exist mode?
+
+Several exit paths call =process.exit()= after the session has been created but without calling =session.dispose()= first.
+
+* RPC mode (=packages/coding-agent/src/modes/rpc/rpc-mode.ts=)
+- Line 672: =checkShutdownRequested()= → =process.exit(0)= (no dispose)
+- Line 701: stdin closed → =process.exit(0)= (no dispose)
+
+* Main command (=packages/coding-agent/src/main.ts=)
+- Line 729: no model available → =process.exit(1)= (session already created at line 681)
+
+These exits leak the Emacs daemon because =toolSession.dispose()= (which calls =emacsSessionManager.dispose()=) is never invoked.
+
+After BUG-025 (postmortem registration), the signal-based cleanup path covers these if =postmortem.quit()= is used instead of bare =process.exit()=. But the correct fix is explicit cleanup.
+
+* Fix
+1. RPC mode: call =session.dispose()= before both =process.exit(0)= calls, or replace with =postmortem.quit(0)=
+2. Main.ts line 729: call =session.dispose()= before =process.exit(1)=, or replace with =postmortem.quit(1)=
+3. Audit: grep for any other =process.exit()= calls after session creation that skip dispose
+
+* Acceptance criteria
+- No =process.exit()= after session creation without prior =session.dispose()=
+- =bun check:ts= passes

@@ -1,0 +1,99 @@
+#+TITLE: Migrate main Emacs daemon to ManagedDaemon
+#+STATE: DONE
+#+SESSION_ID: 14a72be9fb2e0a9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T16-01-15-756Z_14a72be9fb2e0a9e.jsonl]]
+#+CUSTOM_ID: FEAT-107-migrate-main-emacs-daemon-to-manageddaem
+#+EFFORT: L
+#+PRIORITY: A
+#+LAYER: infra
+#+BLOCKER: FEAT-106-create-shared-manageddaemon-abstraction
+
+NOTE [2026-03-30]: packages/emacs/src/daemon.ts rewritten to use ManagedDaemon. --fg-daemon, postmortem via ManagedDaemon, StartEmacsOptions added. 30 emacs tests pass.
+
+* Initial Message
+
+Yo bro are emacs sessions properly disposed of at the end of all spell sessions regardless of the exist mode?
+
+Replace =packages/emacs/src/daemon.ts= internals with =ManagedDaemon= from =packages/utils=. Preserve the public API (=startEmacsSession=, =EmacsSession= interface) while eliminating all manual daemon lifecycle code.
+
+* Current public API (must be preserved)
+#+begin_src typescript
+// packages/emacs/src/daemon.ts
+export interface EmacsSession {
+  socketPath: string;
+  stop(): Promise<void>;
+  isAlive(): boolean;
+}
+export async function startEmacsSession(
+  emacsPath: string, projectRoot: string,
+  sessionId: string, elispDir: string
+): Promise<EmacsSession>;
+#+end_src
+
+Consumers:
+- =packages/emacs/src/tool.ts= — =warmupEmacs()= calls =startEmacsSession()=
+- =packages/emacs/src/session-manager.ts= — wraps =EmacsSession= with circuit breaker
+- =packages/emacs/test/daemon-survival.test.ts= — tests =startEmacsSession()= behavior
+- =packages/coding-agent/src/sdk.ts= — creates =EmacsSessionManager= with =warmupEmacs= as factory
+
+* What changes
+
+** =packages/emacs/src/daemon.ts= — rewrite internals
+1. Remove manual =Bun.spawn()= call, =waitForSocket()=, health timer, =stop()= implementation
+2. =launchDaemon()= → call =startDaemon()= from =@oh-my-pi/pi-utils= with:
+   - =command: [emacsPath, "-Q", "--fg-daemon=NAME", ...eval args]=  (NOTE: =--fg-daemon= not =--daemon=)
+   - =socketPath: socketPath(key)=
+   - =stopCommand: ["emacsclient", "--socket-name=NAME", "--eval", "(kill-emacs)"]=
+   - =startupTimeoutMs: 120_000=
+   - =healthIntervalMs: 5_000=
+   - =logStderr: true=
+   - =onCrash: () => sessions.delete(key)=
+   - =name: "emacs-" + key=
+3. =EmacsSession= returned by wrapping =ManagedDaemon= → map =.socketPath=, =.isAlive()=, =.stop()=
+4. Keep =tryAttachExisting()= — but rewrite using =probeSocket()= from utils. The reattach path creates a lightweight =EmacsSession= without a =ManagedDaemon= (no proc to track; only =emacsclient kill-emacs= for stop). This is intentional: reattached daemons don't have a =proc= reference.
+5. Keep module-level =sessions= Map and =sessionKey()= hash — caching is Emacs-specific.
+6. Keep first-run warning (=FIRST_RUN_WARN_MS=) — pass as callback or integrate into =waitForSocket()= watcher.
+
+** =packages/emacs/src/daemon.ts= — dead code to remove
+- =socketExists()= function (replaced by =waitForSocket= in utils)
+- Manual =waitForSocket()= (replaced by utils)
+- Manual =Bun.spawn()= call in =launchDaemon()= (replaced by =startDaemon=)
+- Manual health timer setup (replaced by =startDaemon=)
+- Manual =stop()= implementation (replaced by =ManagedDaemon.stop()=)
+- =POLL_INTERVAL_MS=, =HEALTH_INTERVAL_MS= constants (moved to =DaemonConfig= defaults)
+- stderr consumption loop (handled by =startDaemon=)
+
+** =--daemon= → =--fg-daemon=
+In the spawn args, replace =--daemon=${daemonName}= with =--fg-daemon=${daemonName}=. This is why =proc.kill()= now works — no fork.
+
+** Impact on =EmacsSessionManager=
+No changes needed. =EmacsSessionManager= wraps =EmacsSession= (the interface). Since the interface is preserved, the manager works unchanged.
+
+** Impact on =packages/coding-agent/src/sdk.ts=
+=postmortem.register("emacs-cleanup", ...)= is NO LONGER needed at the SDK level because =startDaemon()= registers with postmortem internally. Remove any existing SSH-style manual registration pattern for Emacs if it exists (currently it doesn't, which is the bug).
+
+* TDD: Test file updates
+
+** =packages/emacs/test/daemon-survival.test.ts= — update existing tests
+Current test "does not register process exit/SIGINT/SIGTERM kill handlers" (line 277) asserts that NO process.on handlers are registered by =startEmacsSession=. This test reflects the OLD design (daemon survives parent exit). With ManagedDaemon, the new contract is the opposite: the daemon IS cleaned up on exit. Update this test:
+- Remove: "does not register process exit/SIGINT/SIGTERM kill handlers" — this was the bug, not a feature
+- Add: "registers postmortem cleanup handler on daemon start" — verify =postmortem.register= is called
+- Add: "postmortem handler kills daemon on signal exit" — simulate signal, verify daemon stopped
+- Keep: "reattaches to existing live socket without spawning" — still valid
+- Keep: "spawns new daemon when no socket exists" — still valid
+- Add: "uses --fg-daemon instead of --daemon" — verify spawn args
+- Add: "probeSocket returns true for live listener, false for dead/missing" — tests the shared utility integration
+
+** =packages/emacs/test/session-manager.test.ts= — no changes needed
+All tests use mock =EmacsSession= objects. Interface unchanged.
+
+* Acceptance criteria
+- =startEmacsSession= still returns =EmacsSession= with same interface
+- =warmupEmacs= in =packages/emacs/src/tool.ts= works unchanged
+- =EmacsSessionManager= in =packages/emacs/src/session-manager.ts= works unchanged
+- =packages/coding-agent/src/sdk.ts= works unchanged (no new wiring needed)
+- =bun test packages/emacs/test/= passes all tests
+- =bun check:ts= passes
+- =--fg-daemon= used instead of =--daemon= — grep confirms
+- No manual health timer, no manual proc.kill fallback, no manual postmortem gap
+- Dead code removed: manual waitForSocket, socketExists, stderr loop, health timer setup in daemon.ts

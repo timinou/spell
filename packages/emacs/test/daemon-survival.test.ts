@@ -1,5 +1,5 @@
 /**
- * Tests for daemon survival across session restarts.
+ * Tests for daemon survival across session restarts and ManagedDaemon integration.
  *
  * Contracts:
  * 1. When a daemon socket is live (connectable), startEmacsSession reattaches
@@ -7,8 +7,9 @@
  * 2. When no socket exists, startEmacsSession spawns a new daemon.
  * 3. When a stale (non-connectable) socket file exists, startEmacsSession
  *    spawns a new daemon (launchDaemon removes the stale socket).
- * 4. The spawned daemon process is NOT killed when the parent process exits —
- *    no process.on('exit'/'SIGINT'/'SIGTERM') kill handlers are registered.
+ * 4. The daemon uses --fg-daemon (foreground) so proc.pid tracks the live process.
+ * 5. Postmortem cleanup is registered via ManagedDaemon (not manual process.on handlers).
+ * 6. probeSocket correctly identifies live vs dead sockets.
  */
 
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
@@ -16,6 +17,7 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { postmortem, probeSocket } from "@oh-my-pi/pi-utils";
 
 // We test the module directly, not through tool.ts.
 // Import after any module setup so mocks take effect.
@@ -42,46 +44,12 @@ describe("startEmacsSession - daemon survival", () => {
 		server = net.createServer().listen(sockPath, onReady);
 		await serverReady;
 
-		// Probe: attempt to connect within 1000ms
-		const connected = await new Promise<boolean>(resolve => {
-			const probe = net.createConnection(sockPath);
-			const timer = setTimeout(() => {
-				probe.destroy();
-				resolve(false);
-			}, 1000);
-			probe.on("connect", () => {
-				clearTimeout(timer);
-				probe.destroy();
-				resolve(true);
-			});
-			probe.on("error", () => {
-				clearTimeout(timer);
-				resolve(false);
-			});
-		});
-
-		expect(connected).toBe(true);
+		// probeSocket from shared utils should detect the listener.
+		expect(await probeSocket(sockPath)).toBe(true);
 	});
 
 	it("probe returns false for a non-existent socket", async () => {
-		const connected = await new Promise<boolean>(resolve => {
-			const probe = net.createConnection(`${sockPath}.noexist`);
-			const timer = setTimeout(() => {
-				probe.destroy();
-				resolve(false);
-			}, 1000);
-			probe.on("connect", () => {
-				clearTimeout(timer);
-				probe.destroy();
-				resolve(true);
-			});
-			probe.on("error", () => {
-				clearTimeout(timer);
-				resolve(false);
-			});
-		});
-
-		expect(connected).toBe(false);
+		expect(await probeSocket(`${sockPath}.noexist`)).toBe(false);
 	});
 
 	it("probe returns false for a stale socket file with no listener", async () => {
@@ -92,24 +60,7 @@ describe("startEmacsSession - daemon survival", () => {
 		await new Promise<void>(r => staleServer.close(() => r()));
 		// Socket file still exists but nothing is listening.
 
-		const connected = await new Promise<boolean>(resolve => {
-			const probe = net.createConnection(sockPath);
-			const timer = setTimeout(() => {
-				probe.destroy();
-				resolve(false);
-			}, 1000);
-			probe.on("connect", () => {
-				clearTimeout(timer);
-				probe.destroy();
-				resolve(true);
-			});
-			probe.on("error", () => {
-				clearTimeout(timer);
-				resolve(false);
-			});
-		});
-
-		expect(connected).toBe(false);
+		expect(await probeSocket(sockPath)).toBe(false);
 	});
 });
 
@@ -239,6 +190,7 @@ describe("startEmacsSession - reattach vs spawn", () => {
 			exited: Promise.resolve(0),
 			stderr: null,
 			kill: () => {},
+			pid: 99999,
 		} as unknown as ReturnType<typeof Bun.spawn>);
 
 		// Also mock waitForSocket so the test doesn't hang for 120s.
@@ -274,14 +226,69 @@ describe("startEmacsSession - reattach vs spawn", () => {
 		}
 	});
 
-	it("does not register process exit/SIGINT/SIGTERM kill handlers", async () => {
+	it("uses --fg-daemon instead of --daemon for foreground mode", async () => {
+		const projectRoot = "/tmp/spell-emacs-fgdaemon-test";
+		const sessionId = "fgdaemon-session-id";
+		const rawHash = Bun.hash(projectRoot + sessionId);
+		const key = BigInt(rawHash).toString(16).slice(0, 12).padStart(12, "0");
+		const xdgDir = process.env.XDG_RUNTIME_DIR ?? "/tmp";
+		const sock = path.join(xdgDir, `spell-emacs-${key}.sock`);
+
+		try {
+			await fs.unlink(sock);
+		} catch {
+			// fine
+		}
+
+		let capturedCommand: string[] | null = null;
+		const spawnSpy = spyOn(Bun, "spawn").mockImplementation(((...args: unknown[]) => {
+			const cmd = args[0] as string[];
+			capturedCommand = [...cmd];
+			return {
+				exitCode: null,
+				exited: Promise.resolve(0),
+				stderr: null,
+				kill: () => {},
+				pid: 99999,
+			};
+		}) as unknown as typeof Bun.spawn);
+
+		const fakeServer = (async () => {
+			await Bun.sleep(50);
+			const s = net.createServer();
+			await new Promise<void>(r => s.listen(sock, r));
+			return s;
+		})();
+
+		try {
+			const { startEmacsSession } = await import("../src/daemon");
+			await startEmacsSession("/usr/bin/emacs", projectRoot, sessionId, "/tmp/fake-elisp");
+
+			expect(capturedCommand).not.toBeNull();
+			// Verify --fg-daemon is used (not --daemon)
+			const fgDaemonArg = capturedCommand!.find(arg => arg.startsWith("--fg-daemon="));
+			const plainDaemonArg = capturedCommand!.find(arg => arg.startsWith("--daemon="));
+			expect(fgDaemonArg).toBeDefined();
+			expect(plainDaemonArg).toBeUndefined();
+		} finally {
+			spawnSpy.mockRestore();
+			const srv = await fakeServer;
+			srv.close();
+			try {
+				await fs.unlink(sock);
+			} catch {
+				// best-effort
+			}
+		}
+	});
+
+	it("registers postmortem cleanup via ManagedDaemon (not manual process.on)", async () => {
 		/**
-		 * The daemon must survive parent process restarts.
-		 * Contract: launchDaemon does NOT call process.on with 'exit', 'SIGINT', or 'SIGTERM'.
+		 * With ManagedDaemon, postmortem.register is called internally by startDaemon.
+		 * There should be NO direct process.on('exit'/'SIGINT'/'SIGTERM') handlers.
 		 */
 		const registeredSignals: string[] = [];
 		const originalOn = process.on.bind(process);
-		// Spy on process.on to capture any new listeners registered during daemon launch.
 		const spy = spyOn(process, "on").mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
 			if (event === "exit" || event === "SIGINT" || event === "SIGTERM") {
 				registeredSignals.push(event);
@@ -289,8 +296,10 @@ describe("startEmacsSession - reattach vs spawn", () => {
 			return originalOn(event as Parameters<typeof process.on>[0], listener as Parameters<typeof process.on>[1]);
 		});
 
-		const projectRoot = "/tmp/spell-emacs-noexit-test";
-		const sessionId = "noexit-session-id";
+		const registerSpy = spyOn(postmortem, "register");
+
+		const projectRoot = "/tmp/spell-emacs-postmortem-test";
+		const sessionId = "postmortem-session-id";
 		const rawHash = Bun.hash(projectRoot + sessionId);
 		const key = BigInt(rawHash).toString(16).slice(0, 12).padStart(12, "0");
 		const xdgDir = process.env.XDG_RUNTIME_DIR ?? "/tmp";
@@ -307,9 +316,9 @@ describe("startEmacsSession - reattach vs spawn", () => {
 			exited: Promise.resolve(0),
 			stderr: null,
 			kill: () => {},
+			pid: 99999,
 		} as unknown as ReturnType<typeof Bun.spawn>);
 
-		// Simulate daemon becoming ready.
 		const fakeServer = (async () => {
 			await Bun.sleep(50);
 			const s = net.createServer();
@@ -321,11 +330,14 @@ describe("startEmacsSession - reattach vs spawn", () => {
 			const { startEmacsSession } = await import("../src/daemon");
 			await startEmacsSession("/usr/bin/emacs", projectRoot, sessionId, "/tmp/fake-elisp");
 
-			// The daemon launch must NOT have registered any kill-on-exit listeners.
+			// No direct process.on exit/signal handlers registered by daemon code.
 			expect(registeredSignals).toEqual([]);
+			// postmortem.register was called by ManagedDaemon internally.
+			expect(registerSpy).toHaveBeenCalled();
 		} finally {
 			spy.mockRestore();
 			spawnSpy.mockRestore();
+			registerSpy.mockRestore();
 			const srv = await fakeServer;
 			srv.close();
 			try {
