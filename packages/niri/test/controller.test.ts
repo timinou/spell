@@ -448,6 +448,42 @@ describe("NiriOverviewController", () => {
 		ctrl.destroy();
 	});
 
+	it("filters blockerLabels to unresolved blockers only", () => {
+		const { ctx, showOverlayMock } = makeCtx({
+			todoPhases: [
+				{
+					name: "Phase 1",
+					tasks: [
+						{ id: "t-1", content: "Create schema", status: "completed" },
+						{ id: "t-2", content: "Write migrations", status: "pending" },
+						{
+							id: "t-3",
+							content: "Build API",
+							status: "pending",
+							blockers: ["t-1", "t-2"],
+						},
+					],
+				},
+			],
+		});
+		const ctrl = new NiriOverviewController("/fake.sock", ctx);
+		fireNiriEvent({ OverviewOpenedOrClosed: { is_open: true } });
+
+		const component = showOverlayMock.mock.calls[0]?.[0] as OverviewComponent | undefined;
+		expect(component).toBeDefined();
+
+		const plain = component!
+			.render(120)
+			.join("\n")
+			.replace(/\x1b\[[^m]*m/g, "");
+		// Only the unresolved blocker (t-2 "Write migrations") should appear;
+		// the completed blocker (t-1 "Create schema") should be filtered out.
+		expect(plain).toContain("Write migrations");
+		expect(plain).not.toContain("\u2190 Create schema");
+
+		ctrl.destroy();
+	});
+
 	it("updates the overlay on session events when visible", () => {
 		const { ctx, sessionListeners, renderMock } = makeCtx();
 		const ctrl = new NiriOverviewController("/fake.sock", ctx);

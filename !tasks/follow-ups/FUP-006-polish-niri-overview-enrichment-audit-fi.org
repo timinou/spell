@@ -1,0 +1,78 @@
+#+TITLE: Polish niri overview enrichment audit findings
+#+STATE: DONE
+#+SESSION_ID: 14a72e292249809c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T16-11-04-713Z_14a72e292249809c.jsonl]]
+#+CUSTOM_ID: FUP-006-polish-niri-overview-enrichment-audit-fi
+#+EFFORT: S
+#+PRIORITY: C
+#+LAYER: tui
+
+NOTE [2026-03-30]: All three findings implemented: hasGates removed, blockerLabels filtered to unresolved only, width truncation added via sliceByColumn in renderTodoItem/renderPhase.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-006-audit-implementation:
+
+Line 228: `todoLeftPad = Math.max(0, Math.floor((width - maxTodoWidth) / 2))`. If `maxTodoWidth > width`, `todoLeftPad` is 0, and the line is passed to `rawLine` without truncation. So the line will exceed `width`.
+
+---
+
+Here are my audit findings:
+
+### Finding 1
+- **What**: `hasGates` field in `TodoItemSnapshot` is computed but never read
+- **Where**: `packages/niri/src/types.ts:40`, consumed in `controller.ts:288`, never referenced in `overview-component.ts`
+- **Why**: Dead data in the snapshot type. The renderer checks `item.gateBadges` directly, making `hasGates` redundant. Future readers will wonder why it exists, and it adds a required boolean to every snapshot that serves no purpose. Removing it also simplifies test setup (every `makeTask` call sets `hasGates: false` unnecessarily).
+- **Effort**: `trivial`
+
+### Finding 2
+- **What**: Enriched todo lines are not truncated when they exceed terminal width
+- **Where**: `packages/niri/src/overview-component.ts:109` (the return from `renderTodoItem`), interaction with `applyBackgroundToLine` at line 230
+- **Why**: `applyBackgroundToLine` pads short lines but does not truncate long ones. A task with long content + blocker label + multiple gate badges can exceed `width`, breaking the visual contract. This is pre-existing behavior (long content could always overflow), but the enrichment makes it more likely in practice. The width-contract test at line 71 doesn't catch it because it uses empty `todoPhases`.
+- **Effort**: `small` (truncate in `renderTodoItem` or add `sliceByColumn` in the layout path)
+
+### Finding 3
+- **What**: `blockerLabels` includes all blocker names, not just unresolved ones
+- **Where**: `packages/niri/src/controller.ts:271-273`
+- **Why**: When a task has 3 blockers and only 1 is unresolved, the rendered label might show a completed blocker's name (e.g. `← Create schema +2` where "Create schema" is already done). Slightly misleading in the quick-glance overlay. The fix would be to filter `blockerLabels` to only include unresolved blocker IDs (those whose status is neither completed nor abandoned), matching the same predicate used for the `blocked` computation.
+- **Effort**: `trivial`
+
+* Objective
+
+Address three audit findings from the niri overview enrichment (PLAN-039). All changes are local to =packages/niri/=.
+
+* Finding 1: Remove dead =hasGates= field
+
+=TodoItemSnapshot.hasGates= is computed in =controller.ts:288= but never read by any consumer. The renderer checks =item.gateBadges= directly. Remove it from:
+- =packages/niri/src/types.ts= — delete =hasGates: boolean= from =TodoItemSnapshot=
+- =packages/niri/src/controller.ts= — delete =hasGates: gateBadges.length > 0= from =#buildSnapshot()= return
+- =packages/niri/test/overview-component.test.ts= — remove =hasGates: false= from =makeTask()= defaults, remove =hasGates: true= from 3 test task objects
+
+* Finding 2: Truncate enriched todo lines to terminal width
+
+=renderTodoItem()= can produce lines exceeding =width= when task content + blocker labels + gate badges are long. =applyBackgroundToLine= (=packages/tui/src/utils.ts:269=) only pads short lines, it does not truncate.
+
+Fix in =packages/niri/src/overview-component.ts=:
+- In =renderTodoItem()=, after assembling the full line string, compute its =visibleWidth()= and if it exceeds a budget, truncate using =sliceByColumn()= (already exported from =@oh-my-pi/pi-tui= and already imported in the file).
+- The budget is not known inside =renderTodoItem()= — it's determined by the layout in =#buildLines()=. Two options:
+  - (A) Pass =maxWidth= as a parameter to =renderTodoItem()= and =renderPhase()=. The available width for todo content is =width - todoLeftPad=. This is the cleanest fix.
+  - (B) Truncate in the layout loop where =rawLine()= is called. Replace the raw line assembly with a =sliceByColumn= call.
+  - Recommended: (A) — keeps truncation responsibility inside the render helpers, making the width-contract guarantee local to those functions.
+- Also extend the existing width-contract test (=every rendered line is exactly width visible columns=) to include a snapshot with enriched todo items (long content + blocker labels + badges) to prove the fix.
+
+* Finding 3: Filter =blockerLabels= to unresolved blockers only
+
+In =controller.ts:271-273=, =blockerLabels= includes content strings for ALL blocker IDs, including resolved (completed/abandoned) ones. When a task has both resolved and unresolved blockers, the rendered label can misleadingly show a completed blocker's name.
+
+Fix in =packages/niri/src/controller.ts= =#buildSnapshot()=:
+- Change the =blockerLabels= computation to filter using the same predicate as the =blocked= computation: only include labels for blockers whose status is neither =completed= nor =abandoned= (or that are missing from =taskById=).
+- Update the test for overflow count (=renders overflow count for multiple blockers=) to include a mix of resolved and unresolved blockers and verify only unresolved ones appear.
+
+* Acceptance Criteria
+
+- =bun check:ts= passes
+- =bun test packages/niri/test/overview-component.test.ts= passes with updated tests
+- =bun test packages/niri/test/controller.test.ts= passes
+- =hasGates= does not appear anywhere in =packages/niri/src/= or =packages/niri/test/=
+- Width-contract test includes enriched todo items
+- =blockerLabels= only contains unresolved blocker names (verified by test)

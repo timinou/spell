@@ -1,5 +1,5 @@
 import type { Component } from "@oh-my-pi/pi-tui";
-import { applyBackgroundToLine, padding, visibleWidth } from "@oh-my-pi/pi-tui";
+import { applyBackgroundToLine, padding, sliceByColumn, visibleWidth } from "@oh-my-pi/pi-tui";
 import type { AgentStatus, OverviewSnapshot, TodoItemSnapshot, TodoPhaseSnapshot } from "./types";
 
 // ─── Color tables ────────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ const TODO_ICONS: Record<TodoItemSnapshot["status"], string> = {
 	abandoned: "✗",
 };
 
-function renderTodoItem(item: TodoItemSnapshot, indent: string): string {
+function renderTodoItem(item: TodoItemSnapshot, indent: string, maxWidth?: number): string {
 	const isDone = item.status === "completed" || item.status === "abandoned";
 	const icon = item.blocked ? "\u2298" : TODO_ICONS[item.status];
 	const dim = isDone ? DIM : "";
@@ -106,20 +106,28 @@ function renderTodoItem(item: TodoItemSnapshot, indent: string): string {
 	// Blocked pending tasks get a warning-colored icon
 	const iconStr = item.blocked ? `${YELLOW_FG}${icon}${RESET_FG}` : icon;
 
-	return `${indent}${dim}${iconStr} ${item.content}${suffix}${reset}`;
+	let line = `${indent}${dim}${iconStr} ${item.content}${suffix}${reset}`;
+	if (maxWidth !== undefined && visibleWidth(line) > maxWidth) {
+		line = sliceByColumn(line, 0, maxWidth);
+	}
+	return line;
 }
 
-function renderPhase(phase: TodoPhaseSnapshot): string[] {
+function renderPhase(phase: TodoPhaseSnapshot, maxWidth?: number): string[] {
 	// Determine phase icon from task statuses
 	const hasActive = phase.tasks.some(t => t.status === "in_progress");
 	const allDone =
 		phase.tasks.length > 0 && phase.tasks.every(t => t.status === "completed" || t.status === "abandoned");
-	const icon = allDone ? "✓" : hasActive ? "→" : "○";
+	const icon = allDone ? "\u2713" : hasActive ? "\u2192" : "\u25CB";
 	const dim = allDone ? DIM : "";
 	const reset = dim ? RESET_BOLD : "";
-	const lines: string[] = [`${dim}${icon} ${BOLD}${phase.name}${RESET_BOLD}${reset}`];
+	let header = `${dim}${icon} ${BOLD}${phase.name}${RESET_BOLD}${reset}`;
+	if (maxWidth !== undefined && visibleWidth(header) > maxWidth) {
+		header = sliceByColumn(header, 0, maxWidth);
+	}
+	const lines: string[] = [header];
 	for (const task of phase.tasks) {
-		lines.push(renderTodoItem(task, "  "));
+		lines.push(renderTodoItem(task, "  ", maxWidth));
 	}
 	return lines;
 }
@@ -218,7 +226,7 @@ export class OverviewComponent implements Component {
 			// Build all todo lines first so we know their count before committing.
 			const todoLines: string[] = [];
 			for (const phase of snap.todoPhases) {
-				for (const line of renderPhase(phase)) todoLines.push(line);
+				for (const line of renderPhase(phase, width)) todoLines.push(line);
 			}
 
 			// Only include if the block fits in remaining space (leave >=1 row for bottom fill).

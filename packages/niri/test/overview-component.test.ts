@@ -36,7 +36,6 @@ function makeTask(
 	return {
 		id: `task-${++taskCounter}`,
 		blocked: false,
-		hasGates: false,
 		...overrides,
 	};
 }
@@ -73,6 +72,37 @@ describe("OverviewComponent", () => {
 		const comp = new OverviewComponent(makeSnapshot());
 		for (const line of comp.render(WIDTH)) {
 			// Measure visible width after stripping ANSI
+			const plain = stripAnsi(line);
+			expect(plain.length).toBe(WIDTH);
+		}
+	});
+
+	it("every rendered line is exactly width even with enriched todo items", () => {
+		const WIDTH = 60;
+		const comp = new OverviewComponent(
+			makeSnapshot({
+				todoPhases: [
+					{
+						name: "Implementation",
+						tasks: [
+							makeTask({
+								content: "A very long task name that pushes the line width",
+								status: "pending",
+								blocked: true,
+								blockerLabels: ["Another long blocker name", "Second blocker"],
+								gateBadges: ["commit", "cmd", "artifact"],
+								orgItemId: "FEAT-999-overflow",
+							}),
+							makeTask({
+								content: "Short task",
+								status: "in_progress",
+							}),
+						],
+					},
+				],
+			}),
+		);
+		for (const line of comp.render(WIDTH)) {
 			const plain = stripAnsi(line);
 			expect(plain.length).toBe(WIDTH);
 		}
@@ -279,7 +309,6 @@ describe("OverviewComponent", () => {
 							makeTask({
 								content: "Add auth module",
 								status: "in_progress",
-								hasGates: true,
 								gateBadges: ["commit", "cmd"],
 							}),
 						],
@@ -302,7 +331,6 @@ describe("OverviewComponent", () => {
 							makeTask({
 								content: "Full check",
 								status: "pending",
-								hasGates: true,
 								gateBadges: ["commit", "cmd", "artifact", "llm", "verify"],
 							}),
 						],
@@ -370,7 +398,6 @@ describe("OverviewComponent", () => {
 								status: "pending",
 								blocked: true,
 								blockerLabels: ["Create schema"],
-								hasGates: true,
 								gateBadges: ["commit"],
 								orgItemId: "FEAT-100-deploy",
 							}),

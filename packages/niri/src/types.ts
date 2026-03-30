@@ -37,7 +37,6 @@ export interface TodoItemSnapshot {
 	status: "pending" | "in_progress" | "completed" | "abandoned";
 	blocked: boolean;
 	blockerLabels?: string[];
-	hasGates: boolean;
 	gateBadges?: string[];
 	orgItemId?: string;
 }

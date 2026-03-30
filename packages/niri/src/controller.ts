@@ -269,6 +269,10 @@ export class NiriOverviewController {
 					});
 
 				const blockerLabels = blockerIds
+					.filter(bid => {
+						const dep = taskById.get(bid);
+						return !dep || (dep.status !== "completed" && dep.status !== "abandoned");
+					})
 					.map(bid => taskById.get(bid)?.content)
 					.filter((c): c is string => c !== undefined);
 
@@ -285,7 +289,6 @@ export class NiriOverviewController {
 					status: t.status,
 					blocked,
 					blockerLabels: blockerLabels.length > 0 ? blockerLabels : undefined,
-					hasGates: gateBadges.length > 0,
 					gateBadges: gateBadges.length > 0 ? gateBadges : undefined,
 					orgItemId: t.orgItemId,
 				};
