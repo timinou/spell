@@ -51,7 +51,7 @@ describe("parseOrgDependProperties", () => {
 		const props = parseOrgDependProperties(ORG_CONTENT);
 		expect(props.length).toBe(2);
 
-		const feat001 = props.find((p) => p.customId === "FEAT-001")!;
+		const feat001 = props.find(p => p.customId === "FEAT-001")!;
 		expect(feat001.title).toBe("Implement auth API");
 		expect(feat001.state).toBe("ITEM");
 		expect(feat001.blockers).toEqual(["FEAT-000"]);
@@ -72,21 +72,30 @@ Some body text.
 
 	it("parses heading with minimal properties", () => {
 		const props = parseOrgDependProperties(ORG_CONTENT);
-		const feat000 = props.find((p) => p.customId === "FEAT-000")!;
+		const feat000 = props.find(p => p.customId === "FEAT-000")!;
 		expect(feat000.title).toBe("Setup project");
 		expect(feat000.state).toBe("DOING");
 		expect(feat000.blockers).toEqual([]);
 		expect(feat000.triggers).toEqual([]);
 	});
+
+	it("parses space-separated multi-blocker BLOCKER property", () => {
+		const content = `
+* ITEM Build API
+:PROPERTIES:
+:CUSTOM_ID: FEAT-010
+:BLOCKER: FEAT-001 FEAT-002 FEAT-003
+:END:
+`;
+		const props = parseOrgDependProperties(content);
+		expect(props.length).toBe(1);
+		expect(props[0].blockers).toEqual(["FEAT-001", "FEAT-002", "FEAT-003"]);
+	});
 });
 
 describe("buildDependencyGraph", () => {
 	it("detects circular dependencies", () => {
-		const props = [
-			makeProp("A", ["B"]),
-			makeProp("B", ["C"]),
-			makeProp("C", ["A"]),
-		];
+		const props = [makeProp("A", ["B"]), makeProp("B", ["C"]), makeProp("C", ["A"])];
 		const graph = buildDependencyGraph(props);
 		expect(graph.cycles.length).toBeGreaterThan(0);
 		// The cycle should contain all three nodes
@@ -97,21 +106,13 @@ describe("buildDependencyGraph", () => {
 	});
 
 	it("reports no cycles for a linear chain", () => {
-		const props = [
-			makeProp("A", ["B"]),
-			makeProp("B", ["C"]),
-			makeProp("C", []),
-		];
+		const props = [makeProp("A", ["B"]), makeProp("B", ["C"]), makeProp("C", [])];
 		const graph = buildDependencyGraph(props);
 		expect(graph.cycles).toEqual([]);
 	});
 
 	it("builds correct edges from blockers", () => {
-		const props = [
-			makeProp("A", ["B", "C"]),
-			makeProp("B", []),
-			makeProp("C", []),
-		];
+		const props = [makeProp("A", ["B", "C"]), makeProp("B", []), makeProp("C", [])];
 		const graph = buildDependencyGraph(props);
 		expect(graph.edges).toContainEqual({ from: "B", to: "A" });
 		expect(graph.edges).toContainEqual({ from: "C", to: "A" });
@@ -120,11 +121,7 @@ describe("buildDependencyGraph", () => {
 
 describe("topologicalSort", () => {
 	it("returns valid order for a linear chain", () => {
-		const props = [
-			makeProp("A", ["B"]),
-			makeProp("B", ["C"]),
-			makeProp("C", []),
-		];
+		const props = [makeProp("A", ["B"]), makeProp("B", ["C"]), makeProp("C", [])];
 		const graph = buildDependencyGraph(props);
 		const order = topologicalSort(graph);
 		expect(order.indexOf("C")).toBeLessThan(order.indexOf("B"));
@@ -132,10 +129,7 @@ describe("topologicalSort", () => {
 	});
 
 	it("throws on cyclic graph", () => {
-		const props = [
-			makeProp("A", ["B"]),
-			makeProp("B", ["A"]),
-		];
+		const props = [makeProp("A", ["B"]), makeProp("B", ["A"])];
 		const graph = buildDependencyGraph(props);
 		expect(() => topologicalSort(graph)).toThrow();
 	});

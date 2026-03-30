@@ -1,0 +1,98 @@
+#+TITLE: Add Missing TodoWrite Dependency Tests From PLAN-036 Spec
+#+STATE: DONE
+#+SESSION_ID: 14a70c37602039a2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T13-42-46-400Z_14a70c37602039a2.jsonl]]
+#+CUSTOM_ID: FEAT-103-add-missing-todowrite-dependency-tests-f
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: test
+#+BLOCKER: BUG-023-gate-rejection-applies-non-status-fields BUG-024-dangling-blocker-ref-warning-uses-confus
+
+NOTE [2026-03-30]: Added 3 missing tests: (1) remove_task creating dangling blocker ref, (2) add_phase with in_progress blocked task demotion, (3) BLOCKER property space-separated multi-blocker parsing. Also added gate rejection preserves co-submitted field updates test for BUG-023.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-004-audit-implementation:
+
+Good — the parser already has coverage for BLOCKER extraction. The missing test is specifically the end-to-end "create org item with BLOCKER property, read it back" flow, which tests the org *write* path, not just the *parser*.
+
+---
+
+Here are my findings:
+
+## Audit Findings
+
+### 1. Gate rejection silently drops non-status field updates
+- **What**: When the smart gate rejects an `in_progress` transition, the `break` exits the entire `update` case, discarding any co-submitted field changes (content, notes, details, blockers, etc.) without mentioning them in the error.
+- **Where**: `packages/coding-agent/src/tools/todo-write.ts` ~line 373 (the `break` statement)
+- **Why**: A caller sending `{op: "update", id: "task-2", status: "in_progress", notes: "starting this"}` gets an error about the status, but the notes update is silently lost. The whole op is rejected, which is defensible, but the error message only mentions the status transition — the caller doesn't know other fields were dropped. Low real-world impact since agents rarely combine `in_progress` with other fields, but it's a contract nuance.
+- **Effort**: small (apply non-status fields before the gate check, or mention "entire update op rejected" in the error)
+
+### 2. "Errors: Warning:" double prefix on dangling ref messages
+- **What**: Dangling blocker ref warnings use the format `"Warning: task-1 references non-existent blocker task-99"` and are pushed into the `errors` array, which renders as `"Errors: Warning: task-1 references..."`.
+- **Where**: `packages/coding-agent/src/tools/todo-write.ts` ~line 416
+- **Why**: The model sees a slightly confusing "Errors: Warning:" prefix. Not user-visible (model text only), but muddies the distinction between real errors and warnings.
+- **Effort**: trivial (drop the "Warning:" prefix from the message, or use a different rendering path for warnings)
+
+### 3. Missing test: `remove_task` creating dangling blocker ref
+- **What**: The plan specified testing that `remove_task` on a task referenced as a blocker by another task produces a dangling-ref warning. This test was not implemented.
+- **Where**: `packages/coding-agent/test/tools/todo-write.test.ts`
+- **Why**: Low risk — the dangling ref validation is a single post-ops pass that doesn't depend on which op caused the dangle. But the plan explicitly specified this scenario.
+- **Effort**: trivial
+
+### 4. Missing test: `add_phase` with `in_progress` blocked task demotion
+- **What**: The plan specified testing that `add_phase` ops with `in_progress` and unresolved blockers get demoted by `normalizeInProgressTask`. Only `replace` is tested.
+- **Where**: `packages/coding-agent/test/tools/todo-write.test.ts`
+- **Why**: Low risk — both `replace` and `add_phase` go through the same `normalizeInProgressTask` demotion pass. But the plan explicitly specified both.
+- **Effort**: trivial
+
+### 5. Missing test: BLOCKER property round-trip integration
+- **What**: FEAT-098 plan specifies an integration test: create org item with `properties: { BLOCKER: "FEAT-001-test" }`, read it back via `org get`, verify `parseOrgDependProperties()` extracts blockers. Not implemented.
+- **Where**: Should be in `packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts` or a new test file
+- **Why**: The org-depend parser already has unit test coverage for BLOCKER extraction. The missing test covers the org *write* → *read* path specifically, which is already proven by other org tests. Low risk since no code changes were needed to the org infrastructure.
+- **Effort**: small
+
+* Scope
+
+*In scope*: Add three missing tests that were specified in PLAN-036 child items but not implemented: (1) =remove_task= creating a dangling blocker ref, (2) =add_phase= with =in_progress= blocked task demotion, (3) BLOCKER property org round-trip. All three test existing, already-working behavior — no production code changes.
+
+*Out of scope*: Production code changes. New behaviors.
+
+*Boundary rationale*: Pure test additions. These depend on BUG-023 and BUG-024 because the dangling-ref test assertion must match the updated message format, and the gate-rejection test infrastructure may shift.
+
+* Tests
+
+** Test 1: =remove_task= creating dangling blocker ref (=todo-write.test.ts=)
+- Create tasks where task-2 has =blockers: ["task-1"]=
+- Remove task-1 via =remove_task= op
+- Assert summary contains ="task-2 references non-existent blocker task-1"= (note: no "Warning:" prefix after BUG-024)
+
+** Test 2: =add_phase= with =in_progress= blocked task demotion (=todo-write.test.ts=)
+- Execute =add_phase= op with a task that has =status: "in_progress"= and =blockers: ["task-1"]= where task-1 is pending
+- Assert the blocked task is demoted to =pending=
+- Assert task-1 (unblocked) is auto-promoted to =in_progress=
+
+** Test 3: BLOCKER property org round-trip (=test/loop/org-depend-parser.test.ts=)
+- Construct org content string with =:BLOCKER: FEAT-001 FEAT-002= (space-separated, multiple IDs)
+- Parse with =parseOrgDependProperties()=
+- Assert =blockers= equals =["FEAT-001", "FEAT-002"]=
+- This validates the parser handles space-separated multi-blocker values (the prompt now instructs agents to produce this format)
+
+Note: a true end-to-end org create→read round-trip would require a running org server, which is out of scope. The parser test validates the contract the prompt relies on.
+
+* Implementation
+
+1. In =packages/coding-agent/test/tools/todo-write.test.ts=, add to the =smart gate enforcement= describe block:
+   - =it("remove_task creating dangling blocker ref produces warning", ...)=
+   - =it("add_phase with in_progress blocked task demotes to pending", ...)=
+
+2. In =packages/coding-agent/test/loop/org-depend-parser.test.ts=, add to the =parseOrgDependProperties= describe block:
+   - =it("parses space-separated multi-blocker BLOCKER property", ...)=
+
+* Edge Cases
+None — these are pure test additions for already-working behavior.
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= passes with new tests
+- =bun test packages/coding-agent/test/loop/org-depend-parser.test.ts= passes with new test
+- =bun check:ts= passes

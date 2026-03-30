@@ -374,7 +374,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 		});
 
 		const summary = result.content.find(part => part.type === "text")!.text!;
-		expect(summary).toContain("Warning: task-1 references non-existent blocker task-99");
+		expect(summary).toContain("task-1 references non-existent blocker task-99");
 	});
 
 	it("replace with in_progress blocked task demotes to pending", async () => {
@@ -433,5 +433,82 @@ describe("TodoWriteTool smart gate enforcement", () => {
 		expect(summary).toContain("Cannot start task-3: blocked by task-2 (in_progress)");
 		// Should NOT mention task-1 since it's completed
 		expect(summary).not.toContain("task-1 (completed)");
+	});
+
+	it("remove_task creating dangling blocker ref produces warning", async () => {
+		const tool = new TodoWriteTool(createSession());
+		await tool.execute("call-1", {
+			ops: [
+				{
+					op: "replace",
+					phases: [
+						{
+							name: "Work",
+							tasks: [{ content: "Schema" }, { content: "API", blockers: ["task-1"] }],
+						},
+					],
+				},
+			],
+		});
+
+		// Remove the blocker task — task-2 now has a dangling ref
+		const result = await tool.execute("call-2", {
+			ops: [{ op: "remove_task", id: "task-1" }],
+		});
+
+		const summary = result.content.find(part => part.type === "text")!.text!;
+		expect(summary).toContain("task-2 references non-existent blocker task-1");
+	});
+
+	it("add_phase with in_progress blocked task demotes to pending", async () => {
+		const tool = new TodoWriteTool(createSession());
+		const result = await tool.execute("call-1", {
+			ops: [
+				{
+					op: "replace",
+					phases: [{ name: "Setup", tasks: [{ content: "Schema" }] }],
+				},
+				{
+					op: "add_phase",
+					name: "Build",
+					tasks: [{ content: "API", status: "in_progress", blockers: ["task-1"] }],
+				},
+			],
+		});
+
+		// task-2 (API) should be demoted to pending (blocked), task-1 should be auto-promoted
+		const phases = result.details?.phases ?? [];
+		expect(phases[0].tasks[0].status).toBe("in_progress");
+		expect(phases[1].tasks[0].status).toBe("pending");
+	});
+
+	it("gate rejection preserves co-submitted field updates", async () => {
+		const tool = new TodoWriteTool(createSession());
+		await tool.execute("call-1", {
+			ops: [
+				{
+					op: "replace",
+					phases: [
+						{
+							name: "Work",
+							tasks: [{ content: "Schema" }, { content: "API", blockers: ["task-1"] }],
+						},
+					],
+				},
+			],
+		});
+
+		// Try to start blocked task with co-submitted notes
+		const result = await tool.execute("call-2", {
+			ops: [{ op: "update", id: "task-2", status: "in_progress", notes: "starting this" }],
+		});
+
+		const summary = result.content.find(part => part.type === "text")!.text!;
+		expect(summary).toContain("Cannot start task-2");
+		// Status should be rejected
+		const task2 = result.details?.phases[0]?.tasks[1];
+		expect(task2?.status).toBe("pending");
+		// But notes should be preserved
+		expect(task2?.notes).toBe("starting this");
 	});
 });

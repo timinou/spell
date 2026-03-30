@@ -353,14 +353,23 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 					break;
 				}
 
+				// Apply non-status fields first (preserved even if gate rejects status transition)
+				if (op.content !== undefined) task.content = op.content;
+				if (op.notes !== undefined) task.notes = op.notes;
+				if (op.details !== undefined) task.details = op.details;
+				if (op.gateCommit !== undefined) task.gateCommit = op.gateCommit;
+				if (op.gateArtifact !== undefined) task.gateArtifact = op.gateArtifact;
+				if (op.gateCmd !== undefined) task.gateCmd = op.gateCmd;
+				if (op.gateLlm !== undefined) task.gateLlm = op.gateLlm;
+				if (op.verifyCmd !== undefined) task.verifyCmd = op.verifyCmd;
+				if (op.blockers !== undefined) task.blockers = op.blockers;
+
 				// Smart gate: reject in_progress transition when task has unresolved blockers
 				if (op.status === "in_progress") {
-					const effectiveBlockers = op.blockers ?? task.blockers;
-					if (effectiveBlockers?.length) {
+					if (task.blockers?.length) {
 						const allTasks = file.phases.flatMap(p => p.tasks);
-						const probe: TodoItem = { ...task, blockers: effectiveBlockers };
-						if (hasUnresolvedBlockers(probe, allTasks)) {
-							const unresolvedDetails = effectiveBlockers
+						if (hasUnresolvedBlockers(task, allTasks)) {
+							const unresolvedDetails = task.blockers
 								.map(id => {
 									const b = allTasks.find(t => t.id === id);
 									return b && b.status !== "completed" && b.status !== "abandoned"
@@ -376,15 +385,6 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 				}
 
 				if (op.status !== undefined) task.status = op.status;
-				if (op.content !== undefined) task.content = op.content;
-				if (op.notes !== undefined) task.notes = op.notes;
-				if (op.details !== undefined) task.details = op.details;
-				if (op.gateCommit !== undefined) task.gateCommit = op.gateCommit;
-				if (op.gateArtifact !== undefined) task.gateArtifact = op.gateArtifact;
-				if (op.gateCmd !== undefined) task.gateCmd = op.gateCmd;
-				if (op.gateLlm !== undefined) task.gateLlm = op.gateLlm;
-				if (op.verifyCmd !== undefined) task.verifyCmd = op.verifyCmd;
-				if (op.blockers !== undefined) task.blockers = op.blockers;
 				break;
 			}
 
@@ -413,7 +413,7 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 			if (!task.blockers?.length) continue;
 			for (const blockerId of task.blockers) {
 				if (!allTaskIds.has(blockerId)) {
-					errors.push(`Warning: ${task.id} references non-existent blocker ${blockerId}`);
+					errors.push(`${task.id} references non-existent blocker ${blockerId}`);
 				}
 			}
 		}
