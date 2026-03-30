@@ -323,6 +323,8 @@ function describePlanChildCategory(name: string): string {
 			return "Bug fixes";
 		case "followups":
 			return "Post-plan action items and deferred work";
+		case "audits":
+			return "Post-implementation audit findings and remediation plans";
 		default:
 			return name;
 	}
@@ -2140,7 +2142,7 @@ export class AgentSession {
 				planCategory = plansCategory.name;
 			}
 			childCategories = categories
-				.filter(category => !["plans", "drafts", "sessions"].includes(category.name))
+				.filter(category => !["plans", "drafts", "sessions", "audits"].includes(category.name))
 				.map(category => ({
 					name: category.name,
 					prefix: category.prefix,
@@ -4044,7 +4046,7 @@ export class AgentSession {
 
 		// Phase 1: Check if audit should trigger
 		if (state.pending === "auto") {
-			this.#auditState = { pending: false, active: true };
+			this.#auditState = { ...state, pending: false, active: true };
 			await this.#emitSessionEvent({ type: "audit_suggest" });
 			this.#injectAuditPrompt();
 			return;
@@ -4062,7 +4064,7 @@ export class AgentSession {
 				this.#auditState = { pending: false, active: false };
 				return;
 			}
-			this.#auditState = { pending: false, active: true };
+			this.#auditState = { ...state, pending: false, active: true };
 			await this.#emitSessionEvent({ type: "audit_suggest" });
 			this.#injectAuditPrompt();
 		}
@@ -4072,7 +4074,11 @@ export class AgentSession {
 	 * Inject the audit prompt as a developer message and schedule agent continuation.
 	 */
 	#injectAuditPrompt(): void {
-		const rendered = renderPromptTemplate(planAuditPrompt, {});
+		const rendered = renderPromptTemplate(planAuditPrompt, {
+			auditDepth: this.#auditState.auditDepth,
+			maxDepth: this.#auditState.maxDepth,
+			sourceRef: this.#auditState.sourceRef,
+		});
 		this.agent.appendMessage({
 			role: "developer",
 			content: [{ type: "text", text: rendered }],

@@ -1,5 +1,20 @@
 You have just completed implementing a plan. Before the user validates, perform a thorough audit of the work you just did.
 
+<critical>
+This is a **READ-ONLY** audit. You **MUST NOT**:
+- Edit, create, or delete any files
+- Run commands that modify state (git commit, npm install, build scripts, etc.)
+- Use any tools that write to the filesystem
+- Attempt to fix any issues you discover
+
+Your **ONLY** job is to review and report findings. Do not act on them.
+Any tool calls during the audit will abort the review and discard your findings.
+</critical>
+
+{{#if sourceRef}}
+You are auditing the implementation of: `{{sourceRef}}`
+{{/if}}
+
 ## Your Task
 
 Review the implementation for:

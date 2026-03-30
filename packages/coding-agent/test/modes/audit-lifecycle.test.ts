@@ -11,28 +11,43 @@ import { isAuditClean } from "../../src/plan-mode/audit-state";
 
 describe("audit lifecycle", () => {
 	describe("plan approval sets audit state", () => {
-		it("ultraplan approval sets pending=auto", () => {
+		it("ultraplan approval sets pending=auto with sourceRef and depth", () => {
 			const isUltraplan = true;
 			const isAuditEscalation = false;
 			const auditDepth = 0;
 			const maxDepth = 2;
+			const planRef = "org://PLAN-027-test-plan";
 
 			let state: AuditState;
 			if (!isAuditEscalation || auditDepth < maxDepth) {
-				state = { pending: isUltraplan ? "auto" : "suggest", active: false };
+				state = {
+					pending: isUltraplan ? "auto" : "suggest",
+					active: false,
+					sourceRef: planRef,
+					auditDepth,
+					maxDepth,
+				};
 			} else {
 				state = { pending: false, active: false };
 			}
 			expect(state.pending).toBe("auto");
+			expect(state.sourceRef).toBe(planRef);
+			expect(state.auditDepth).toBe(0);
+			expect(state.maxDepth).toBe(2);
 		});
 
-		it("regular plan approval sets pending=suggest", () => {
+		it("regular plan approval sets pending=suggest with sourceRef", () => {
 			const isUltraplan = false;
+			const planRef = "local://MY_PLAN.md";
 			const state: AuditState = {
 				pending: isUltraplan ? "auto" : "suggest",
 				active: false,
+				sourceRef: planRef,
+				auditDepth: 0,
+				maxDepth: 2,
 			};
 			expect(state.pending).toBe("suggest");
+			expect(state.sourceRef).toBe(planRef);
 		});
 
 		it("audit escalation at max depth disables audit", () => {

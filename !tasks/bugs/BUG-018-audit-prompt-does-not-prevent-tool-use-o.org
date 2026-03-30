@@ -1,0 +1,117 @@
+#+TITLE: Audit prompt does not prevent tool use or auto-escalate
+#+STATE: DONE
+#+SESSION_ID: 14a64088c5d40ac9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-52-52-375Z_14a64088c5d40ac9.jsonl]]
+#+CUSTOM_ID: BUG-018-audit-prompt-does-not-prevent-tool-use-o
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+* Initial Message
+
+Ok this is good BUT
+1. sometimes the audits just go ahead and do it instead of asking me to plan
+2. when they show me a summary, they then don't do anythign.
+
+I'd like you to automatically create a new default org-mode task folder category called audits that contains them. The audits should always refer to their oringial plans/projects/features/bug improbvmenets that they're fixing, and the audit planning should start automatically after the summary is done.
+
+* Scope
+** In-scope
+- Rewrite ~plan-audit.md~ to explicitly forbid tool use and file modifications during audit
+- Add ~<critical>~ block prohibiting all write operations — the audit is read-only
+- Add instruction that findings MUST be presented as a structured summary, NOT implemented
+- Fix ~#injectAuditPrompt~ to pass ~auditDepth~ and ~maxDepth~ template vars (currently passes empty ~{}~)
+- Add ~sourceRef~ field to ~AuditState~ to track the org item ID or plan reference of the plan being audited
+- Populate ~sourceRef~ in ~#approvePlan~ from the approved org item ID or plan file path
+- Pass ~sourceRef~ to audit prompt template as ~{{sourceRef}}~ so agent can reference it
+
+** Out-of-scope
+- Org audit category (FEAT ticket)
+- Automatic escalation to ultraplan (FEAT ticket)
+- Overlay or UI changes
+
+* Tests
+File: ~packages/coding-agent/test/plan-mode/audit-state.test.ts~ (update existing)
+
+** Scenarios
+- ~AuditState~ type includes optional ~sourceRef?: string~ field
+- ~sourceRef~ round-trips through set/get on session
+
+File: ~packages/coding-agent/test/session/audit-prompt-injection.test.ts~ (new, optional: verify template rendering)
+- Rendered audit prompt contains "MUST NOT" and "read-only" language
+- Rendered audit prompt with ~auditDepth=1, maxDepth=2~ includes cycle info
+- Rendered audit prompt with ~sourceRef="PLAN-027-foo"~ includes reference
+
+* Implementation
+** ~packages/coding-agent/src/prompts/system/plan-audit.md~ (rewrite)
+Add before review instructions:
+#+begin_src markdown
+<critical>
+This is a READ-ONLY audit. You **MUST NOT**:
+- Edit, create, or delete any files
+- Run commands that modify state (git commit, npm install, etc.)
+- Use any tools that write to the filesystem
+
+Your ONLY job is to review and report findings. Any attempt to fix issues directly will abort the audit.
+</critical>
+#+end_src
+
+Add after findings format:
+#+begin_src markdown
+{{#if sourceRef}}
+You are auditing the implementation of: `{{sourceRef}}`
+{{/if}}
+#+end_src
+
+** ~packages/coding-agent/src/plan-mode/audit-state.ts~ (modify)
+Add ~sourceRef~ to ~AuditState~:
+#+begin_src typescript
+export interface AuditState {
+  pending: "auto" | "suggest" | false;
+  active: boolean;
+  /** Reference to the plan/item being audited (org ID or file path) */
+  sourceRef?: string;
+}
+#+end_src
+
+** ~packages/coding-agent/src/session/agent-session.ts~ (modify ~#injectAuditPrompt~)
+Pass state context to template:
+#+begin_src typescript
+#injectAuditPrompt(): void {
+  const rendered = renderPromptTemplate(planAuditPrompt, {
+    auditDepth: this.#auditState.active ? 0 : undefined, // depth comes from mode layer
+    sourceRef: this.#auditState.sourceRef,
+  });
+  // ...
+}
+#+end_src
+
+Actually, the depth is tracked on InteractiveMode, not on AgentSession. Two options:
+1. Add depth to AuditState (duplicates state)
+2. Add depth params to #injectAuditPrompt
+
+Option 2 is cleaner. Add ~auditDepth~ and ~maxDepth~ as optional fields on AuditState so the mode layer can set them before the session injects the prompt.
+
+** ~packages/coding-agent/src/modes/interactive-mode.ts~ (modify ~#approvePlan~)
+Set ~sourceRef~ when configuring audit state:
+#+begin_src typescript
+this.session.setAuditState({
+  pending: this.planModeUltraplan ? "auto" : "suggest",
+  active: false,
+  sourceRef: approvedOrgItemId ? `org://${approvedOrgItemId}` : planReferencePath,
+  auditDepth: this.#auditDepth,
+  maxDepth: this.#auditMaxDepth,
+});
+#+end_src
+
+* Edge Cases
+- Agent ignores the read-only constraint: the tool-call guard in ~agent_end~ already returns early on tool calls, so if the agent uses tools, ~#checkAuditPhase~ won't fire. The audit effectively aborts. This is acceptable — the prompt must prevent tool use.
+- Empty sourceRef: template ~{{#if sourceRef}}~ block handles this gracefully
+- Resumed session with stale audit state: sourceRef may point to old plan — acceptable, it's informational
+
+* Acceptance Criteria
+- Audit prompt contains explicit "MUST NOT edit files" language
+- ~#injectAuditPrompt~ renders template with depth and sourceRef from AuditState
+- ~AuditState~ type includes ~sourceRef~, ~auditDepth~, ~maxDepth~ optional fields
+- Existing audit-state tests still pass
+- ~bun check:ts~ passes for packages/coding-agent (excluding pre-existing browser.ts errors)

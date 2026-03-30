@@ -2,11 +2,12 @@
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
  */
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { NiriOverviewController } from "@oh-my-pi/pi-niri";
-import { extractIdLinks, orgToMarkdown } from "@oh-my-pi/pi-org";
+import { appendItemToFile, extractIdLinks, generateId, orgToMarkdown, resolveCategories } from "@oh-my-pi/pi-org";
 import type { Component, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
 import {
 	Container,
@@ -29,7 +30,7 @@ import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
-import { approvePlanItem, type OrgPlanRef, resolvePlanItem } from "../plan-mode/org-plan";
+import { approvePlanItem, buildOrgConfig, type OrgPlanRef, resolvePlanItem } from "../plan-mode/org-plan";
 import planAuditPrompt from "../prompts/system/plan-audit.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
@@ -731,9 +732,59 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#auditDepth++;
 		this.#isAuditEscalation = true;
-		await this.handlePlanModeCommand(`Implement these audit recommendations:\n\n${auditContent}`, {
-			ultraplan: true,
-		});
+
+		// Create audit org item referencing the source plan
+		const sourceRef = this.session.getAuditState().sourceRef;
+		let auditItemRef = "";
+		if (this.settings.get("org.enabled")) {
+			auditItemRef = await this.#createAuditItem(auditContent, sourceRef);
+		}
+
+		const prompt = auditItemRef
+			? `Implement these audit recommendations from ${auditItemRef}:\n\n${auditContent}`
+			: `Implement these audit recommendations:\n\n${auditContent}`;
+
+		await this.handlePlanModeCommand(prompt, { ultraplan: true });
+	}
+
+	async #createAuditItem(findings: string, sourceRef?: string): Promise<string> {
+		try {
+			const config = buildOrgConfig(this.settings);
+			const cwd = this.sessionManager.getCwd();
+			const categories = resolveCategories(config, cwd);
+			const auditCat = categories.find(c => c.name === "audits");
+			if (!auditCat) return "";
+
+			await fs.mkdir(auditCat.absPath, { recursive: true });
+
+			const sourceId = sourceRef?.replace(/^org:\/\//, "") ?? "";
+			const sourceLabel = sourceId || "implementation";
+			const title = `Audit: ${sourceLabel}`;
+
+			const id = await generateId(auditCat.absPath, auditCat.prefix, title);
+			const filePath = path.join(auditCat.absPath, `${id}.org`);
+
+			const sourceSection = sourceId ? `* Source\nAuditing: [[id:${sourceId}]]\n` : "* Source\nManual audit\n";
+			const body = `${sourceSection}\n* Findings\n${findings}`;
+
+			await appendItemToFile(
+				filePath,
+				{
+					title,
+					category: "audits",
+					state: "DOING",
+					id,
+					properties: { EFFORT: "1h", PRIORITY: "#B", LAYER: "coding-agent" },
+					body,
+				},
+				"DOING",
+			);
+
+			return `org://${id}`;
+		} catch (err) {
+			logger.warn("Failed to create audit org item", { error: err });
+			return "";
+		}
 	}
 
 	updateEditorTopBorder(): void {
@@ -1103,6 +1154,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.session.setAuditState({
 				pending: this.planModeUltraplan ? "auto" : "suggest",
 				active: false,
+				sourceRef: planReferencePath,
+				auditDepth: this.#auditDepth,
+				maxDepth: this.#auditMaxDepth,
 			});
 		} else {
 			this.session.setAuditState({ pending: false, active: false });

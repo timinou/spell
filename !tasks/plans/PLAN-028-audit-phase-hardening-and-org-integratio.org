@@ -1,0 +1,102 @@
+#+TITLE: Audit Phase Hardening and Org Integration
+#+STATE: DONE
+#+SESSION_ID: 14a64088c5d40ac9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-52-52-375Z_14a64088c5d40ac9.jsonl]]
+#+CUSTOM_ID: PLAN-028-audit-phase-hardening-and-org-integratio
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+
+* Initial Message
+
+Ok this is good BUT
+1. sometimes the audits just go ahead and do it instead of asking me to plan
+2. when they show me a summary, they then don't do anythign.
+
+I'd like you to automatically create a new default org-mode task folder category called audits that contains them. The audits should always refer to their oringial plans/projects/features/bug improbvmenets that they're fixing, and the audit planning should start automatically after the summary is done.
+
+* Context
+
+The audit phase (PLAN-027) is implemented but has two behavioral bugs and a missing feature:
+
+** Problem 1: Audits fix things directly
+The audit prompt (~plan-audit.md~) tells the agent to "review" but does not prohibit tool use or file modifications. The agent interprets "review" as "review and fix," making tool calls during the audit response. When the agent makes tool calls, the ~agent_end~ handler's tool-call guard (~hasToolCalls~ check at line 883) returns early before ~#checkAuditPhase~ runs. This means the escalation to ultraplan never fires.
+
+Fix: Add explicit read-only constraints to the audit prompt. The agent must report findings only — no tool use, no file edits.
+
+** Problem 2: Summary shown, nothing happens
+Even when the agent does produce a clean findings summary (no tool calls), the escalation flow may not fire correctly because:
+1. ~#injectAuditPrompt~ passes empty ~{}~ to ~renderPromptTemplate~, so the ~{{#if auditDepth}}~ block never renders — the agent doesn't know about audit cycles
+2. The ~AuditState~ doesn't carry ~sourceRef~ — so escalation can't reference the original plan
+
+Fix: Carry ~sourceRef~, ~auditDepth~, and ~maxDepth~ on ~AuditState~ so both the prompt and escalation have full context.
+
+** Missing feature: Org audit category
+No ~audits~ category exists. When escalation fires, the audit findings are passed as raw text to ultraplan without being tracked as org items. The user wants:
+- New ~audits~ default org category (~AUD~ prefix, ~!tasks/audits/~ path)
+- Automatic creation of audit org items with ~[[id:SOURCE_ID]]~ links to original plans
+- Ultraplan prompt referencing the audit org item
+
+** Approach
+Two sequential changes:
+1. BUG fix: Harden audit prompt (read-only) + carry sourceRef/depth on AuditState + fix template rendering
+2. FEAT: Add audits org category + auto-create audit items on escalation
+
+** Key Decisions
+- ~sourceRef~ is an optional field on ~AuditState~ (not a separate field on InteractiveMode) because it travels with the state the session needs
+- ~auditDepth~ and ~maxDepth~ also live on ~AuditState~ so ~#injectAuditPrompt~ can access them without cross-layer coupling
+- Audit items use ~appendItemToFile~ + ~generateId~ from ~@oh-my-pi/pi-org~ directly — no heavy OrgContext needed
+- ~audits~ excluded from plan-mode ~childCategories~ (agent sees it as internal/programmatic, not a planning target)
+
+** Critical File Paths
+- ~packages/coding-agent/src/prompts/system/plan-audit.md~ (rewrite: add read-only constraints)
+- ~packages/coding-agent/src/plan-mode/audit-state.ts~ (modify: add sourceRef, auditDepth, maxDepth)
+- ~packages/coding-agent/src/session/agent-session.ts~ (modify: pass state to template, describePlanChildCategory, category filter)
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ (modify: set sourceRef in #approvePlan, #createAuditItem, handleAuditEscalation)
+- ~packages/org/src/schema/defaults.ts~ (modify: add audits category)
+
+* Verification
+- ~bun check:ts~ passes for packages/coding-agent (excluding pre-existing browser.ts errors)
+- ~bun test packages/coding-agent/test/plan-mode/audit-state.test.ts~ passes (updated for new fields)
+- ~bun test packages/coding-agent/test/session/audit-detection.test.ts~ passes
+- ~bun test packages/coding-agent/test/modes/audit-lifecycle.test.ts~ passes (updated for sourceRef)
+- Audit prompt contains "MUST NOT" edit/create/delete language and read-only constraints
+- ~DEFAULT_ORG_CONFIG~ includes audits category with prefix AUD
+- ~describePlanChildCategory("audits")~ returns meaningful description
+- ~audits~ excluded from plan-mode childCategories list
+
+* Execution Manifest
+1. [[id:BUG-018-audit-prompt-does-not-prevent-tool-use-o]] (depends: none, effort: 2h)
+   Harden audit prompt read-only, add sourceRef/auditDepth/maxDepth to AuditState, fix #injectAuditPrompt template rendering, wire sourceRef through #approvePlan.
+
+2. [[id:FEAT-085-add-audits-org-category-and-auto-create]] (depends: BUG-018, effort: 2h)
+   Add audits org category to DEFAULT_ORG_CONFIG, auto-create audit items on escalation with [[id:]] links, update describePlanChildCategory, exclude from childCategories.
+
+
+** Completion [2026-03-30]
+
+*** Verification
+- ~bun test packages/coding-agent/test/plan-mode/audit-state.test.ts packages/coding-agent/test/modes/audit-lifecycle.test.ts packages/coding-agent/test/session/audit-detection.test.ts~ — 33 pass, 0 fail, 61 assertions
+- ~bunx --bun tsgo -p packages/coding-agent/tsconfig.json --noEmit~ — clean (no errors)
+- ~bunx --bun tsgo -p packages/org/tsconfig.json --noEmit~ — clean
+- ~bunx --bun biome check~ on all 4 changed source files — no issues
+- Audit prompt contains explicit ~MUST NOT~ read-only constraints
+- ~DEFAULT_ORG_CONFIG~ includes ~audits~ category with prefix ~AUD~, path ~audits~
+- ~describePlanChildCategory("audits")~ returns ~"Post-implementation audit findings and remediation plans"~
+- ~audits~ excluded from plan-mode ~childCategories~ filter (alongside plans, drafts, sessions)
+
+*** Artifacts
+Source files modified:
+- ~packages/coding-agent/src/prompts/system/plan-audit.md~ — rewritten with read-only CRITICAL block, sourceRef/depth template vars
+- ~packages/coding-agent/src/plan-mode/audit-state.ts~ — added ~sourceRef~, ~auditDepth~, ~maxDepth~ optional fields
+- ~packages/coding-agent/src/session/agent-session.ts~ — fixed ~#injectAuditPrompt~ template rendering, added audits to category filter and ~describePlanChildCategory~
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ — wired sourceRef in ~#approvePlan~, added ~#createAuditItem~, updated ~handleAuditEscalation~
+- ~packages/org/src/schema/defaults.ts~ — added audits category to ~DEFAULT_ORG_CONFIG~
+
+Test files modified:
+- ~packages/coding-agent/test/plan-mode/audit-state.test.ts~ — added sourceRef/depth field tests and audits org category test
+- ~packages/coding-agent/test/modes/audit-lifecycle.test.ts~ — updated plan approval tests to include sourceRef and depth
+
+*** Deviations
+None.

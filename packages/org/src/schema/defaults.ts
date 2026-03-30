@@ -66,6 +66,7 @@ export const DEFAULT_ORG_CONFIG: OrgConfig = {
 				bugs: { prefix: "BUG", path: "bugs" },
 				followups: { prefix: "FUP", path: "follow-ups" },
 				drafts: { prefix: "DRAFT", path: "drafts" },
+				audits: { prefix: "AUD", path: "audits" },
 			},
 		},
 		sessions: {
