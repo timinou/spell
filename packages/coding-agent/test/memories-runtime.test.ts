@@ -339,7 +339,7 @@ describe("memories runtime", () => {
 				`${JSON.stringify({ type: "session", id: "thread-cooldown", cwd: fx.agentDir })}\n${JSON.stringify({ type: "message", message: { role: "user", content: "hello" } })}\n`,
 			);
 
-			const completeSpy = vi.spyOn(ai, "completeSimple");
+			const claimSpy = vi.spyOn(memoryStorage, "claimStage1Jobs");
 
 			startMemoryStartupTask({
 				session: fx.session,
@@ -349,8 +349,8 @@ describe("memories runtime", () => {
 				taskDepth: 0,
 			});
 
-			await Bun.sleep(100);
-			expect(completeSpy).not.toHaveBeenCalled();
+			await Bun.sleep(200);
+			expect(claimSpy).not.toHaveBeenCalled();
 		});
 
 		test("phase1 runs when cooldown has elapsed", async () => {
@@ -406,6 +406,146 @@ describe("memories runtime", () => {
 
 			await waitFor(async () => {
 				expect(ai.completeSimple).toHaveBeenCalled();
+			});
+		});
+
+		test("phase1 proceeds when .last_phase1 contains invalid content", async () => {
+			const fx = await createFixture();
+			const memoryRoot = getMemoryRoot(fx.agentDir, fx.session.sessionManager.getCwd());
+			await fs.mkdir(memoryRoot, { recursive: true });
+			await Bun.write(path.join(memoryRoot, ".last_phase1"), "not-a-number");
+
+			// Add a rollout so there would be work to do
+			const rolloutPath = path.join(fx.sessionDir, "thread-invalid.jsonl");
+			await fs.writeFile(
+				rolloutPath,
+				`${JSON.stringify({ type: "session", id: "thread-invalid", cwd: fx.agentDir })}\n${JSON.stringify({ type: "message", message: { role: "user", content: "hello" } })}\n`,
+			);
+
+			const claimSpy = vi.spyOn(memoryStorage, "claimStage1Jobs");
+
+			startMemoryStartupTask({
+				session: fx.session,
+				settings: fx.settings,
+				modelRegistry: fx.modelRegistry,
+				agentDir: fx.agentDir,
+				taskDepth: 0,
+			});
+
+			await waitFor(() => {
+				expect(claimSpy).toHaveBeenCalled();
+			});
+		});
+	});
+
+	describe("phase1 token budget", () => {
+		function mockStage1And2(stage1Count: number) {
+			const spy = vi.spyOn(ai, "completeSimple");
+			for (let i = 0; i < stage1Count; i++) {
+				spy.mockResolvedValueOnce({
+					stopReason: "end_turn",
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({
+								rollout_summary: `Summary ${i}`,
+								rollout_slug: `slug-${i}`,
+								raw_memory: `Raw ${i}`,
+							}),
+						},
+					],
+					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+				} as any);
+			}
+			// Phase2 consolidation response
+			spy.mockResolvedValueOnce({
+				stopReason: "end_turn",
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							memory_md: "# Memory",
+							memory_summary: "Summary",
+							skills: [],
+						}),
+					},
+				],
+			} as any);
+		}
+
+		async function createRolloutFiles(
+			sessionDir: string,
+			agentDir: string,
+			count: number,
+			sizePerFile: number,
+		): Promise<void> {
+			for (let i = 0; i < count; i++) {
+				const threadId = `thread-budget-${i}`;
+				const rolloutPath = path.join(sessionDir, `${threadId}.jsonl`);
+				const rows = [
+					JSON.stringify({ type: "session", id: threadId, cwd: agentDir }),
+					JSON.stringify({ type: "message", message: { role: "user", content: "x".repeat(sizePerFile) } }),
+				];
+				await fs.writeFile(rolloutPath, `${rows.join("\n")}\n`);
+			}
+		}
+
+		test("claims filtered when cumulative estimated tokens exceed budget", async () => {
+			// Each file ~8100 bytes → ~2025 estimated tokens
+			// Budget 1000 → first claim always included, second would exceed → 1 claim processed
+			const fx = await createFixture({ "memories.phase1MaxInputTokens": 1000 });
+			await createRolloutFiles(fx.sessionDir, fx.agentDir, 3, 8000);
+			mockStage1And2(1);
+
+			startMemoryStartupTask({
+				session: fx.session,
+				settings: fx.settings,
+				modelRegistry: fx.modelRegistry,
+				agentDir: fx.agentDir,
+				taskDepth: 0,
+			});
+
+			// 1 stage1 call + 1 phase2 call = 2 total
+			await waitFor(() => {
+				expect(ai.completeSimple).toHaveBeenCalledTimes(2);
+			});
+		});
+
+		test("at least one claim always processed even if it exceeds budget", async () => {
+			const fx = await createFixture({ "memories.phase1MaxInputTokens": 1 });
+			await createRolloutFiles(fx.sessionDir, fx.agentDir, 1, 40_000);
+			mockStage1And2(1);
+
+			startMemoryStartupTask({
+				session: fx.session,
+				settings: fx.settings,
+				modelRegistry: fx.modelRegistry,
+				agentDir: fx.agentDir,
+				taskDepth: 0,
+			});
+
+			// 1 stage1 call + 1 phase2 call = 2 total
+			await waitFor(() => {
+				expect(ai.completeSimple).toHaveBeenCalledTimes(2);
+			});
+		});
+
+		test("large budget processes all claims", async () => {
+			const fx = await createFixture({ "memories.phase1MaxInputTokens": 10_000_000 });
+			await createRolloutFiles(fx.sessionDir, fx.agentDir, 3, 8000);
+			mockStage1And2(3);
+
+			startMemoryStartupTask({
+				session: fx.session,
+				settings: fx.settings,
+				modelRegistry: fx.modelRegistry,
+				agentDir: fx.agentDir,
+				taskDepth: 0,
+			});
+
+			// 3 stage1 calls + 1 phase2 call = 4 total
+			await waitFor(() => {
+				expect(ai.completeSimple).toHaveBeenCalledTimes(4);
 			});
 		});
 	});

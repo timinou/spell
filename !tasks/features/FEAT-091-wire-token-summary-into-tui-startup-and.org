@@ -1,0 +1,108 @@
+#+TITLE: Wire token summary into TUI startup and exit
+#+STATE: DONE
+#+SESSION_ID: 14a6d82d2ad142b4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-19-27-112Z_14a6cff2621142a7/10-CreateFeatWiring.jsonl]]
+#+CUSTOM_ID: FEAT-091-wire-token-summary-into-tui-startup-and
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: coding-agent/modes
+
+NOTE [2026-03-30]: Completed: exit token summary wired in shutdown() after this.stop(), before resume hint. onPhase1Complete callback added to startMemoryStartupTask (optional, backward-compatible). sdk.ts logs phase1 usage via logger.debug.
+
+* Scope
+** In scope
+- Display session token summary on exit (after TUI stops, before process exits)
+- Display memory startup token note after welcome screen (or as standalone line if welcome is skipped)
+** Out of scope
+- Changes to =formatTokenCount=, =formatStartupTokenNote=, =formatExitTokenSummary= (already exist and tested in =token-summary.ts=)
+- Changes to the memory system logic (cooldown, smol model, etc.)
+- Real-time token tracking during session (status line already handles this)
+** Boundary rationale
+FEAT-089 created the formatting functions but never wired them in. This item completes that work. The exit summary is straightforward (=shutdown()= already prints post-TUI messages). The startup note requires passing memory phase1 results back from the fire-and-forget =startMemoryStartupTask=.
+
+* Tests
+** File: =packages/coding-agent/test/session-token-summary.test.ts=
+- Existing 16 tests for formatting functions must continue passing
+- No new unit tests needed for wiring — the formatting logic is already tested
+- Wiring is verified by manual TUI observation (described in acceptance criteria)
+
+** Integration verification (manual)
+- Start a session with memory enabled in a project → memory startup note appears after welcome
+- Start a session with =startup.quiet: true= → memory note still appears as standalone line
+- Exit a session after some work → token summary line appears before "Resume this session" hint
+- Exit a session with zero usage → no summary line (or "no tokens recorded")
+
+* Implementation
+** Step 1: Add exit token summary to =shutdown()=
+- File: =packages/coding-agent/src/modes/interactive-mode.ts=
+- Import: =import { formatExitTokenSummary } from "../session/token-summary";= (note: file is at =src/session/token-summary.ts=, import relative from =modes/=)
+- In =shutdown()= method, after =this.stop()= (line ~1335) and before the "Resume this session" hint (line ~1341):
+  1. Call =this.session.getSessionStats()= to get =SessionStats=
+  2. Map to =ExitTokenInfo=: =input: stats.tokens.input, output: stats.tokens.output, thinking: 0, cacheRead: stats.tokens.cacheRead, cost: stats.cost=
+  3. Note: =SessionStats.tokens= has no =thinking= field — use =0= for now (thinking tokens are included in =output= by the API). If a separate thinking field is later added to =SessionStats=, update accordingly.
+  4. Call =formatExitTokenSummary(info)=
+  5. If result is NOT "Session: no tokens recorded", write: =process.stderr.write(\`
+${chalk.dim(summary)}
+\`);=
+  6. The "Resume this session" hint follows naturally after
+
+** Step 2: Add memory startup note via callback
+- File: =packages/coding-agent/src/memories/index.ts=
+- Add optional =onPhase1Complete= callback to =startMemoryStartupTask= options:
+  #+begin_src typescript
+  export function startMemoryStartupTask(options: {
+      session: AgentSession;
+      settings: Settings;
+      modelRegistry: ModelRegistry;
+      agentDir: string;
+      taskDepth: number;
+      onPhase1Complete?: (stats: { usage: { input: number; cacheWrite: number } } | null) => void;
+  }): void
+  #+end_src
+- Pass =onPhase1Complete= through to =runMemoryStartup= and then to =runPhase1=
+- At the end of =runPhase1=, after writing =.last_phase1= timestamp, call =onPhase1Complete?.({ usage: { input: stats.usage.input, cacheWrite: stats.usage.cacheWrite } })=
+- If phase1 skips (cooldown, no model, no claims), call =onPhase1Complete?.(null)=
+
+** Step 3: Wire callback in =sdk.ts=
+- File: =packages/coding-agent/src/sdk.ts=
+- In the =startMemoryStartupTask= call (line ~1673), add =onPhase1Complete= callback:
+  #+begin_src typescript
+  startMemoryStartupTask({
+      session,
+      settings,
+      modelRegistry,
+      agentDir,
+      taskDepth,
+      onPhase1Complete: (stats) => {
+          // Memory phase1 done — note is informational only, no TUI dependency
+          if (stats) {
+              logger.debug("Memory phase1 usage", stats.usage);
+          }
+      },
+  });
+  #+end_src
+- The callback fires asynchronously after memory completes. For now, log the stats. The startup note display depends on the TUI being available.
+
+** Step 4: Display startup note in interactive mode
+- File: =packages/coding-agent/src/modes/interactive-mode.ts=
+- Import: =import { formatStartupTokenNote } from "../session/token-summary";=
+- After the welcome component is added (around line 418), add a mechanism to display the memory note when it arrives:
+  - Store a reference to a =Text= component placeholder
+  - When the =onPhase1Complete= callback fires (via session event or direct reference), update the text and request a render
+- Alternative simpler approach: since =startMemoryStartupTask= is fire-and-forget and memory typically completes within seconds, the startup note can be emitted as a =logger.debug= message and shown in the status line's hook status area instead of as a TUI component. This avoids complexity around async component insertion.
+- Recommended approach: use the simpler =process.stderr.write= approach similar to exit, but only when =startup.quiet= is false and after a brief delay. If memory has not completed by the time the user starts typing, skip the note.
+
+* Edge Cases
+- Memory disabled: =onPhase1Complete= never called (=startMemoryStartupTask= returns early). No note displayed.
+- Memory cooldown skip: =onPhase1Complete(null)= called. Startup note shows "Memory: skipped".
+- Session with no model: =onPhase1Complete(null)= called. Same as above.
+- =startup.quiet: true=: exit summary still shown (it's post-TUI). Startup note behavior depends on implementation choice.
+- Very fast exit (Ctrl+C immediately): =shutdown()= fires, =getSessionStats()= returns zeros, summary says "no tokens recorded" — suppressed by the check.
+- =getSessionStats()= throws: wrap in try-catch, skip summary silently.
+
+* Acceptance Criteria
+- Exit a session after some interactions → token summary line appears in terminal output, formatted as: =Session: 45K in | 12K out | 120K cache | $0.42=
+- Exit a session with zero usage → no summary line printed
+- =bun test packages/coding-agent/test/session-token-summary.test.ts= — all 16 tests pass
+- =bun check:ts= — no type errors
+- Memory startup callback fires with usage stats (verify via =logger.debug= in log file)

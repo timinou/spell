@@ -12,11 +12,11 @@ export function formatTokenCount(n: number): string {
 	if (v < 1_000_000) {
 		const k = v / 1000;
 		const rounded = Math.round(k * 10) / 10;
-		return rounded % 1 === 0 ? `${rounded}K` : `${rounded}K`;
+		return `${rounded}K`;
 	}
 	const m = v / 1_000_000;
 	const rounded = Math.round(m * 10) / 10;
-	return rounded % 1 === 0 ? `${rounded}M` : `${rounded}M`;
+	return `${rounded}M`;
 }
 
 export interface StartupTokenInfo {

@@ -1,0 +1,108 @@
+#+TITLE: Enforce phase1MaxInputTokens budget in memory claim loop
+#+STATE: DONE
+#+SESSION_ID: 14a6d82d2a9142b2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-19-27-112Z_14a6cff2621142a7/9-CreateFeatBudget.jsonl]]
+#+CUSTOM_ID: FEAT-090-enforce-phase1maxinputtokens-budget-in-m
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: coding-agent/memories
+
+NOTE [2026-03-30]: Completed: budget filtering added after claimStage1Jobs. Uses Bun.file(path).size / 4 for token estimation. First claim always processed. Budget-skipped claims expire naturally. 3 new test scenarios pass.
+
+* Scope
+** In scope
+- Enforce =memories.phase1MaxInputTokens= (default 500K) in =runPhase1= after =claimStage1Jobs= returns
+- Estimate tokens per claim via file size approximation
+- Filter claims to stay within budget before =runWithConcurrency=
+- Always process at least one claim (prevent permanent stall)
+** Out of scope
+- Changes to =claimStage1Jobs= in =storage.ts= (filtering happens in =index.ts= after claims are returned)
+- Changes to the settings schema (=phase1MaxInputTokens= already exists)
+- Phase2 budget controls
+** Boundary rationale
+The setting =memories.phase1MaxInputTokens= exists in schema, config interface, DEFAULTS, and =loadMemoryConfig=, but nothing enforces it. This item connects the setting to behavior. Filtering is done in =runPhase1= (not in =claimStage1Jobs=) because token estimation requires async file stat, and =claimStage1Jobs= is a synchronous SQLite function.
+
+* Tests
+** File: =packages/coding-agent/test/memories-runtime.test.ts=
+Add a new =describe("phase1 token budget")= block inside the existing =describe("memories runtime")= block.
+
+*** Scenario: claims filtered when cumulative estimated tokens exceed budget
+- Create fixture with =phase1MaxInputTokens= set to a low value (e.g., 1000)
+- Create 3 rollout files with known sizes (e.g., 8000 bytes each ≈ 2000 tokens)
+- Mock =completeSimple= to return valid stage1 output for each call (copy pattern from existing "runs phase1" test)
+- Call =startMemoryStartupTask=
+- Use =waitFor= to assert =completeSimple= was called at most 1 time (budget allows ~250 tokens, first claim always included, second exceeds)
+
+*** Scenario: at least one claim always processed even if it alone exceeds budget
+- Create fixture with =phase1MaxInputTokens: 1= (impossibly low)
+- Create 1 large rollout file (e.g., 40KB)
+- Mock =completeSimple= to return valid output
+- Call =startMemoryStartupTask=
+- Use =waitFor= to assert =completeSimple= WAS called exactly once
+
+*** Scenario: file stat failure includes claim anyway
+- Create fixture with low budget
+- Create rollout files, then delete one before startup (so stat fails)
+- Mock =completeSimple=
+- Assert the claim with the missing file is still attempted (=completeSimple= called, and that call hits =runStage1Job= which will fail gracefully since =Bun.file(claim.rolloutPath).text()= throws → caught → =markStage1Failed=)
+
+*** Scenario: large budget processes all claims
+- Create fixture with =phase1MaxInputTokens: 10_000_000= (very high)
+- Create 3 rollout files
+- Mock =completeSimple=
+- Assert =completeSimple= called 3 times (stage1) + 1 time (phase2) = 4 total
+
+* Implementation
+** Step 1: Add budget filtering after =claimStage1Jobs= in =runPhase1=
+- File: =packages/coding-agent/src/memories/index.ts=
+- After the existing early return =if (claims.length === 0) return;= (line ~292 after BUG fix reorder)
+- Add a new async function =filterClaimsByBudget= or inline the logic:
+
+#+begin_src typescript
+// Budget filter: estimate tokens per claim and limit total
+let budgetRemaining = config.phase1MaxInputTokens;
+const budgetFilteredClaims: Stage1Claim[] = [];
+for (const claim of claims) {
+    if (budgetFilteredClaims.length > 0 && budgetRemaining <= 0) break;
+    let estimatedTokens: number;
+    try {
+        const size = Bun.file(claim.rolloutPath).size;
+        estimatedTokens = Math.ceil(size / 4);
+    } catch {
+        // Stat failed (file deleted?) — include claim, let runStage1Job handle the error
+        estimatedTokens = 0;
+    }
+    budgetRemaining -= estimatedTokens;
+    budgetFilteredClaims.push(claim);
+}
+if (budgetFilteredClaims.length < claims.length) {
+    logger.debug("Memory phase1 budget limited claims", {
+        original: claims.length,
+        filtered: budgetFilteredClaims.length,
+        budget: config.phase1MaxInputTokens,
+    });
+}
+#+end_src
+
+- Replace =claims= with =budgetFilteredClaims= in the =runWithConcurrency= call and =stats.claimed= assignment
+- Key invariant: =budgetFilteredClaims.length >= 1= is guaranteed because the first claim is always added before the budget check (=budgetFilteredClaims.length > 0= guard)
+- Do NOT use =markStage1Failed= for budget-skipped claims — let their leases expire naturally (120s default, and phase1 won't re-run within cooldown anyway)
+
+** Step 2: Update stats.claimed
+- Set =stats.claimed = budgetFilteredClaims.length= instead of =claims.length=
+
+* Edge Cases
+- First claim exceeds budget alone: still processed (=budgetFilteredClaims.length > 0= guard). Inner =truncateByApproxTokens= at line ~629 further bounds the actual model input.
+- All claims fit budget: no filtering occurs, =budgetFilteredClaims === claims=
+- =Bun.file(path).size= failure: treated as 0 tokens, claim included. The downstream =Bun.file(claim.rolloutPath).text()= in =runStage1Job= will fail and hit =markStage1Failed= — correct error path.
+- Budget exactly equals first claim: first included, second skipped (=budgetRemaining <= 0= fires)
+- Skipped claims in running state: leases expire after =stage1LeaseSeconds= (120s default). Next session startup re-claims them. No retry decrement — correct, these aren't failures.
+- =phase1MaxInputTokens= set to 0: first claim still processed (min-one guarantee)
+- Negative config value: first claim still processed
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/memories-runtime.test.ts= — all tests pass including new budget tests
+- =bun check:ts= — no type errors
+- Setting =memories.phase1MaxInputTokens= to a low value causes fewer claims to be processed
+- At least one claim is always processed regardless of budget
+- Log message appears when claims are filtered

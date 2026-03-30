@@ -37,6 +37,7 @@ import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
+import { formatExitTokenSummary } from "../session/token-summary";
 import { STTController, type SttState } from "../stt";
 import type { ExitPlanModeDetails } from "../tools";
 import { setTerminalTitle } from "../utils/title-generator";
@@ -1333,6 +1334,23 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.ui.terminal.drainInput(1000);
 
 		this.stop();
+
+		// Print token usage summary
+		try {
+			const stats = this.session.getSessionStats();
+			const summary = formatExitTokenSummary({
+				input: stats.tokens.input,
+				output: stats.tokens.output,
+				thinking: 0,
+				cacheRead: stats.tokens.cacheRead,
+				cost: stats.cost,
+			});
+			if (summary !== "Session: no tokens recorded") {
+				process.stderr.write(`\n${chalk.dim(summary)}\n`);
+			}
+		} catch {
+			// Non-critical: don't let summary formatting break shutdown
+		}
 
 		// Print resumption hint if this is a persisted session
 		const sessionId = this.sessionManager.getSessionId();

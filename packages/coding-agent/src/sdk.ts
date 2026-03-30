@@ -29,6 +29,7 @@ import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import "./discovery";
 import { EmacsSessionManager, type EmacsWarmupResult, warmupEmacs } from "@oh-my-pi/pi-emacs";
+import { buildServicePromptSection } from "./browser/service-prompt-section";
 import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
 import { TtsrManager } from "./export/ttsr";
@@ -131,7 +132,6 @@ import { getGeminiImageTools } from "./tools/gemini-image";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { PendingActionStore } from "./tools/pending-action";
 import { EventBus } from "./utils/event-bus";
-import { buildServicePromptSection } from "./browser/service-prompt-section";
 
 // Types
 export interface CreateAgentSessionOptions {
@@ -1676,6 +1676,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRegistry,
 		agentDir,
 		taskDepth,
+		onPhase1Complete: stats => {
+			if (stats) {
+				logger.debug("Memory phase1 usage", stats.usage);
+			}
+		},
 	});
 
 	// Wire MCP manager callbacks to session for reactive tool updates

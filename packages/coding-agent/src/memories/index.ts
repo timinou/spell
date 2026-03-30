@@ -135,6 +135,7 @@ export function startMemoryStartupTask(options: {
 	modelRegistry: ModelRegistry;
 	agentDir: string;
 	taskDepth: number;
+	onPhase1Complete?: (stats: { usage: { input: number; cacheWrite: number } } | null) => void;
 }): void {
 	const { session, settings, modelRegistry, agentDir, taskDepth } = options;
 	const cfg = loadMemoryConfig(settings);
@@ -151,7 +152,14 @@ export function startMemoryStartupTask(options: {
 		return;
 	}
 
-	void runMemoryStartup({ session, settings, modelRegistry, agentDir, config: cfg }).catch(error => {
+	void runMemoryStartup({
+		session,
+		settings,
+		modelRegistry,
+		agentDir,
+		config: cfg,
+		onPhase1Complete: options.onPhase1Complete,
+	}).catch(error => {
 		logger.warn("Memory startup failed", { error: String(error) });
 	});
 }
@@ -216,6 +224,7 @@ async function runMemoryStartup(options: {
 	modelRegistry: ModelRegistry;
 	agentDir: string;
 	config: MemoryRuntimeConfig;
+	onPhase1Complete?: (stats: { usage: { input: number; cacheWrite: number } } | null) => void;
 }): Promise<void> {
 	await runPhase1(options);
 	await runPhase2(options);
@@ -228,13 +237,11 @@ async function runPhase1(options: {
 	modelRegistry: ModelRegistry;
 	agentDir: string;
 	config: MemoryRuntimeConfig;
+	onPhase1Complete?: (stats: { usage: { input: number; cacheWrite: number } } | null) => void;
 }): Promise<void> {
 	const { session, modelRegistry, agentDir, config } = options;
-	const db = openMemoryDb(getAgentDbPath(agentDir));
 	const nowSec = unixNow();
-	const workerId = `memory-${process.pid}`;
 	const memoryRoot = getMemoryRoot(agentDir, session.sessionManager.getCwd());
-	const currentThreadId = session.sessionManager.getSessionId();
 
 	// Cooldown: skip phase1 if last run was recent
 	try {
@@ -248,13 +255,17 @@ async function runPhase1(options: {
 					lastRun,
 					cooldownMinutes: config.phase1CooldownMinutes,
 				});
-				closeMemoryDb(db);
+				options.onPhase1Complete?.(null);
 				return;
 			}
 		}
 	} catch {
 		// File missing or unreadable — no cooldown, proceed
 	}
+
+	const db = openMemoryDb(getAgentDbPath(agentDir));
+	const workerId = `memory-${process.pid}`;
+	const currentThreadId = session.sessionManager.getSessionId();
 
 	try {
 		const threads = await collectThreads(session, currentThreadId);
@@ -267,6 +278,7 @@ async function runPhase1(options: {
 		});
 		if (!phase1Model) {
 			logger.debug("Phase1 skipped: no model available");
+			options.onPhase1Complete?.(null);
 			return;
 		}
 		const phase1ApiKey = await modelRegistry.getApiKey(phase1Model, session.sessionManager.getSessionId());
@@ -275,6 +287,7 @@ async function runPhase1(options: {
 				provider: phase1Model.provider,
 				model: phase1Model.id,
 			});
+			options.onPhase1Complete?.(null);
 			return;
 		}
 
@@ -289,10 +302,34 @@ async function runPhase1(options: {
 			workerId,
 			excludeThreadIds: currentThreadId ? [currentThreadId] : [],
 		});
-		if (claims.length === 0) return;
+		if (claims.length === 0) {
+			options.onPhase1Complete?.(null);
+			return;
+		}
+
+		// Budget filter: estimate tokens per claim via file size, limit total
+		let budgetRemaining = config.phase1MaxInputTokens;
+		const budgetClaims: Stage1Claim[] = [];
+		for (const claim of claims) {
+			if (budgetClaims.length > 0 && budgetRemaining <= 0) break;
+			try {
+				const size = Bun.file(claim.rolloutPath).size;
+				budgetRemaining -= Math.ceil(size / 4);
+			} catch {
+				// Stat failed (file deleted?) — include claim, let runStage1Job handle the error
+			}
+			budgetClaims.push(claim);
+		}
+		if (budgetClaims.length < claims.length) {
+			logger.debug("Memory phase1 budget limited claims", {
+				original: claims.length,
+				filtered: budgetClaims.length,
+				budget: config.phase1MaxInputTokens,
+			});
+		}
 
 		const stats: Stage1Stats = {
-			claimed: claims.length,
+			claimed: budgetClaims.length,
 			succeeded: 0,
 			succeededNoOutput: 0,
 			failed: 0,
@@ -300,7 +337,7 @@ async function runPhase1(options: {
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		};
 
-		await runWithConcurrency(claims, config.stage1Concurrency, async claim => {
+		await runWithConcurrency(budgetClaims, config.stage1Concurrency, async claim => {
 			const result = await runStage1Job({
 				claim,
 				model: phase1Model,
@@ -370,6 +407,8 @@ async function runPhase1(options: {
 		} catch {
 			// Non-critical: cooldown file write failure shouldn't break phase1
 		}
+
+		options.onPhase1Complete?.({ usage: { input: stats.usage.input, cacheWrite: stats.usage.cacheWrite } });
 	} finally {
 		closeMemoryDb(db);
 	}

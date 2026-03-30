@@ -1,0 +1,84 @@
+#+TITLE: Memory and token-summary post-audit polish
+#+STATE: DONE
+#+SESSION_ID: 14a6d82d2a1142b0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-19-27-112Z_14a6cff2621142a7/8-CreateBugItem.jsonl]]
+#+CUSTOM_ID: BUG-020-memory-and-token-summary-post-audit-poli
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: coding-agent/memories
+
+NOTE [2026-03-30]: Completed: dead ternary removed from formatTokenCount, cooldown check reordered before DB open in runPhase1, test hardened to spy on claimStage1Jobs, new test for invalid .last_phase1 content added.
+
+* Scope
+** In scope
+- Remove dead ternary in =formatTokenCount= (=token-summary.ts= lines 15, 19)
+- Move cooldown check before DB open in =runPhase1= (=memories/index.ts=)
+- Harden cooldown skip test: spy on =claimStage1Jobs= instead of =completeSimple= (=memories-runtime.test.ts=)
+- Add test for invalid =.last_phase1= file content
+** Out of scope
+- Token budget enforcement (separate FEAT item)
+- TUI wiring for token display (separate FEAT item)
+- Any changes to =storage.ts= or the claim system
+** Boundary rationale
+These are all mechanical polish fixes with no new behavior. They touch 3 files and can be done in one pass.
+
+* Tests
+** File: =packages/coding-agent/test/memories-runtime.test.ts=
+*** Scenario: cooldown skip test hardened
+- Existing test "phase1 skips when last consolidation was within cooldown window" currently spies on =ai.completeSimple= with =Bun.sleep(100)=
+- Change to spy on =memoryStorage.claimStage1Jobs= (synchronous, already imported as =import * as memoryStorage=)
+- Assert =claimStage1Jobs= was NOT called (deterministic: if cooldown fires, DB is never opened, claims never run)
+- Keep =Bun.sleep(100)= as safety margin since =startMemoryStartupTask= fires-and-forgets
+*** Scenario: invalid cooldown file content
+- Write ="garbage"= to =.last_phase1=
+- Add rollout data so work would exist
+- Assert =claimStage1Jobs= IS called (=Number("garbage")= is =NaN=, =isNaN= guard at line 243 allows proceeding)
+** File: =packages/coding-agent/test/session-token-summary.test.ts=
+- Existing 16 tests must continue passing after dead ternary removal (no behavioral change)
+
+* Implementation
+** Step 1: Remove dead ternary in =formatTokenCount=
+- File: =packages/coding-agent/src/session/token-summary.ts=
+- Lines 15 and 19 have =rounded % 1 === 0 ? \`${rounded}K\` : \`${rounded}K\`= — both branches identical
+- Replace line 15 with: =return \`${rounded}K\`;=
+- Replace line 19 with: =return \`${rounded}M\`;=
+- Run =bun test packages/coding-agent/test/session-token-summary.test.ts= to verify no regression
+
+** Step 2: Move cooldown check before DB open in =runPhase1=
+- File: =packages/coding-agent/src/memories/index.ts=
+- Current order (lines 232-257): open DB → compute nowSec, workerId, memoryRoot, currentThreadId → cooldown check → if skip: closeMemoryDb + return
+- New order: compute memoryRoot and nowSec (need these for cooldown) → cooldown check → if skip: return (no DB was opened) → open DB → compute workerId, currentThreadId
+- Specifically:
+  1. Keep =const { session, modelRegistry, agentDir, config } = options;= at top
+  2. Move =const nowSec = unixNow();= and =const memoryRoot = getMemoryRoot(...)= before DB open
+  3. Place cooldown check block (lines 239-257) next — but remove =closeMemoryDb(db)= from the cooldown return path (line 251) since DB was never opened
+  4. Then =const db = openMemoryDb(...)=
+  5. Then =const workerId= and =const currentThreadId= (only used inside the try block)
+- The existing =try { ... } finally { closeMemoryDb(db); }= block starting at line 259 stays as-is
+- Run =bun test packages/coding-agent/test/memories-runtime.test.ts= to verify
+
+** Step 3: Harden cooldown tests
+- File: =packages/coding-agent/test/memories-runtime.test.ts=
+- In test "phase1 skips when last consolidation was within cooldown window" (line 329):
+  - Change =const completeSpy = vi.spyOn(ai, "completeSimple");= to =const claimSpy = vi.spyOn(memoryStorage, "claimStage1Jobs");=
+  - Change assertion from =expect(completeSpy).not.toHaveBeenCalled()= to =expect(claimSpy).not.toHaveBeenCalled()=
+- Add new test "phase1 proceeds when .last_phase1 contains invalid content":
+  - Create fixture, memoryRoot, write =.last_phase1= with content ="not-a-number"=
+  - Add rollout file (same pattern as existing cooldown tests)
+  - Spy on =memoryStorage.claimStage1Jobs=
+  - Call =startMemoryStartupTask=
+  - Use =waitFor= to assert =claimStage1Jobs= WAS called
+
+* Edge Cases
+- Dead ternary: JS =Math.round(k * 10) / 10= already produces integer numbers (=45= not =45.0=), so template literal stringification is correct. The ternary removal changes no behavior.
+- DB reorder: if =Bun.file(...).text()= throws in cooldown check, the catch block falls through to DB open — correct. If cooldown fires, no DB handle exists to leak.
+- Invalid cooldown content: =Number("garbage")= → =NaN=, =Number.isNaN(NaN)= → =true=, inner block skipped, falls through to DB open — correct.
+- =claimStage1Jobs= spy: this function is synchronous (=storage.ts:136=, returns =Stage1Claim[]=). It is called inside the try block after DB open. If cooldown fires, DB is never opened, so claimStage1Jobs is never reached.
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/memories-runtime.test.ts= — all tests pass including new invalid-content test
+- =bun test packages/coding-agent/test/session-token-summary.test.ts= — all 16 tests pass
+- =bun check:ts= — no type errors
+- No dead ternary in =formatTokenCount= (both branches must differ or ternary must be removed)
+- =openMemoryDb= call appears AFTER cooldown check in =runPhase1=
+- No =closeMemoryDb= on cooldown early-return path
