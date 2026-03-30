@@ -1,0 +1,135 @@
+#+TITLE: Token Usage Investigation and Optimization
+#+STATE: DONE
+#+SESSION_ID: 14a6cbabd0d1429e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-00-46-275Z_14a6cbabd0d1429e.jsonl]]
+#+CUSTOM_ID: PLAN-030-token-usage-investigation-and-optimizati
+#+EFFORT: L
+#+PRIORITY: #A
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+* Initial Message
+
+Look at my latest sessions (especially in ~/code/ora/djinn) and tell me why token usage has shot up the roof so much recently. Also look up online on ways to save token usage with the Pi coding agent or Oh My Pi (the substrates of Spell). Be smart, look wisely
+
+* Context
+** Problem
+Token usage has spiked dramatically in recent sessions, particularly for the djinn project (=/home/user/code/ora/hotelcomm/ecosystem/djinn=). Investigation of logs, session files, and configuration reveals the following root causes, ranked by impact:
+
+*** #1: Memory Phase1 Consolidation (Dominant Factor)
+The memory system's phase1 runs on every session start, processing the entire =raw_memories.md= through the model. The djinn project's raw_memories.md is 100KB (1,448 lines) with 21 rollout summaries. Token consumption from memory alone:
+
+| Day       | Memory Phases | Tokens (input or cacheWrite) |
+|-----------+---------------+------------------------------|
+| March 28  |             9 | 2.2M                         |
+| March 29  |            15 | 13.7M                        |
+| March 30  |             8 | 6.1M                         |
+
+On March 30, six djinn memory consolidations fired within 8 minutes (09:14-09:21), each consuming 300K-2.3M tokens. The memory system has no staleness check, no cooldown, and no token budget cap.
+
+*** #2: Session Proliferation
+48 djinn sessions in 3 days (1, 14, 29, 4 per day). Each session triggers a full memory phase1 + context reload. Many sessions are short (new session per task instead of using =/compact=).
+
+*** #3: Model + Thinking Level
+Default model =claude-opus-4-6:xhigh= = 32,768 thinking output tokens per turn (the maximum). Even the =task= role uses Opus at =:low=. Title generation correctly uses Haiku, but all substantive work uses Opus with expensive thinking.
+
+*** #4: Context Payload
+Each session loads: hotelcomm AGENTS.md (521 lines) + Tidewave MCP instructions + all skills + memory summary (5K tokens). Spec files (6,852 lines across 12+ org files) are frequently read during planning.
+
+** Approach
+Two-track strategy:
+1. *Immediate user-side changes* (no code): config tweaks, session hygiene, memory pruning
+2. *System improvements* (code): memory staleness checks, token budgets, visibility features, API optimizations
+
+** Key Decisions
+- Memory phase1 should default to =smol= model (Haiku) — consolidation is summarization, not reasoning
+- Thinking level =xhigh= should be reserved for =plan= role only, not the default
+- Memory should skip consolidation when raw_memories haven't changed
+- Token usage must be visible in-session, not buried in debug logs
+
+** Key File Paths
+- Config: =~/.spell/agent/config.yml= (user model roles and thinking levels)
+- Memory system: =packages/coding-agent/src/memories/index.ts= (phase1 logic)
+- Settings schema: =packages/coding-agent/src/config/settings-schema.ts= (memory settings)
+- Thinking budgets: =packages/ai/src/stream.ts= (ANTHROPIC_THINKING constants)
+- Stats DB schema: =packages/stats/src/db.ts= (token tracking)
+- Djinn memories: =~/.spell/agent/memories/--home-user-code-ora-hotelcomm-ecosystem-djinn--/=
+- Session logs: =~/.spell/logs/spell.2026-03-30.log=
+
+* Verification
+** TDD discipline
+Every code change follows test-first. Write the failing test, then implement. No exceptions.
+
+** Existing behavior must not break
+Run before and after each item:
+#+begin_src sh
+bun test packages/coding-agent/test/memories-runtime.test.ts
+bun test packages/coding-agent/test/memories-storage.test.ts
+#+end_src
+
+** New test suites
+#+begin_src sh
+# Memory budget controls (FEAT-087)
+bun test packages/coding-agent/test/memories-runtime.test.ts
+
+# Token summary formatting (FEAT-089)
+bun test packages/coding-agent/test/session-token-summary.test.ts
+#+end_src
+
+** Type checking
+#+begin_src sh
+bun check:ts
+#+end_src
+
+** Manual TUI verification (FEAT-089)
+1. Start a session in a project with memory enabled — token note must appear before first prompt
+2. Exit the session — token summary must appear
+3. Start two sessions for the same project within 30 minutes — second should log "Memory phase1 skipped (cooldown)" (FEAT-087)
+
+** Cost measurement (post-deploy)
+Compare daily token usage after changes vs March 29 baseline (13.7M memory tokens):
+- Memory phase1 tokens should drop >80% (cooldown + smol model)
+- Per-turn thinking tokens should drop 50-75% (user config change: medium/high vs xhigh)
+- Overall daily token cost should drop 40-70%
+* Execution Manifest
+** Phase 1: Immediate User Actions (no code, highest ROI)
+1. [[id:FUP-002-djinn-project-token-hygiene]] — Config changes, memory pruning, session hygiene guidance (EFFORT: S, PRIORITY: #A)
+2. [[id:FEAT-088-thinking-level-role-defaults-and-per-tas]] — Update thinking level defaults in user config (EFFORT: S, PRIORITY: #B)
+
+** Phase 2: System Improvements (code changes)
+3. [[id:FEAT-087-memory-system-token-budget-controls]] — Staleness check, cooldown, token cap, smol model default for memory (EFFORT: M, PRIORITY: #A)
+   - Depends on: understanding of current memory phase1 flow (documented above)
+4. [[id:FEAT-089-session-token-usage-dashboard-and-alerts]] — Surface token costs in-session (EFFORT: M, PRIORITY: #B)
+   - Independent of item 3
+
+** Phase 3: API-Level Optimization
+5. [[id:FUP-003-evaluate-anthropic-token-efficient-tool]] — Token-efficient tool use header, deferred tool loading evaluation (EFFORT: S, PRIORITY: #B)
+   - Independent of Phase 2
+
+** Estimated Total Savings
+- Memory staleness + smol model: -80% of memory tokens (~10M tokens/day saved)
+- Thinking level medium vs xhigh: -75% thinking tokens per turn
+- Session consolidation: -50% session count = -50% memory phase triggers
+- API optimizations: -14% to -70% on tool output tokens (if header not already present)
+- *Combined: 60-80% total token reduction*
+
+** Completion [2026-03-30]
+*** Verification
+- =bun test packages/coding-agent/test/memories-runtime.test.ts packages/coding-agent/test/memories-storage.test.ts packages/coding-agent/test/session-token-summary.test.ts= — 29 pass, 0 fail, 71 expect() calls
+- =bun check:ts= — passes clean (biome check + tsgo type checking)
+- Config change verified: =~/.spell/agent/config.yml= updated with =default: :high=, =plan: :xhigh=
+- Token-efficient tools header verified in =packages/ai/src/providers/anthropic.ts= =claudeCodeBetaDefaults= array
+
+*** Artifacts
+- =packages/coding-agent/src/memories/index.ts= — cooldown check, smol model default for phase1, new settings
+- =packages/coding-agent/src/config/settings-schema.ts= — =memories.phase1CooldownMinutes= (30), =memories.phase1MaxInputTokens= (500K)
+- =packages/coding-agent/src/session/token-summary.ts= — pure formatting: =formatTokenCount=, =formatStartupTokenNote=, =formatExitTokenSummary=
+- =packages/coding-agent/test/session-token-summary.test.ts= — 16 tests for formatting functions
+- =packages/coding-agent/test/memories-runtime.test.ts= — 2 new cooldown tests added
+- =packages/ai/src/providers/anthropic.ts= — =token-efficient-tools-2025-02-19= beta header
+- =~/.spell/agent/config.yml= — thinking level defaults updated
+
+*** Deviations
+- =logger.info= does not exist in the logger API (only =error=, =warn=, =debug=). Cooldown skip message uses =logger.debug= instead. Phase1 completion log kept at =debug= as well.
+- Token summary TUI wiring (displaying startup note and exit summary in the TUI) is not included in this change — the formatting functions are created and tested, but integration into =interactive-mode.ts= and =welcome.ts= requires changes to TUI rendering paths that need manual verification. This is deferred to a follow-up.
+- =phase1MaxInputTokens= setting is defined but not yet enforced in the claim loop — the setting exists for future use when claim-level token estimation is implemented.

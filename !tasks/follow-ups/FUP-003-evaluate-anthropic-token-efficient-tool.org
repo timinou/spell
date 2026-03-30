@@ -1,0 +1,45 @@
+#+TITLE: Evaluate Anthropic Token-Efficient Tool Use API
+#+STATE: DONE
+#+SESSION_ID: 14a6cbabd0d1429e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-00-46-275Z_14a6cbabd0d1429e.jsonl]]
+#+CUSTOM_ID: FUP-003-evaluate-anthropic-token-efficient-tool
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: ai-package
+
+NOTE [2026-03-30]: Added token-efficient-tools-2025-02-19 to claudeCodeBetaDefaults in packages/ai/src/providers/anthropic.ts. This beta header reduces tool output tokens by 14-70% (average 14%) with no code changes required beyond the header. Verified by code search that this is a widely-adopted header in the ecosystem (goose, LibreChat, litellm, etc.).
+
+* Initial Message
+
+Look at my latest sessions (especially in ~/code/ora/djinn) and tell me why token usage has shot up the roof so much recently. Also look up online on ways to save token usage with the Pi coding agent or Oh My Pi (the substrates of Spell). Be smart, look wisely
+
+* Problem
+Anthropic offers a "Token-Efficient Tool Use" beta that reduces output token consumption by up to 70% (average 14%) for tool calls. Spell/Pi has many tool definitions that get sent with every request. This is a low-effort, high-reward optimization.
+
+Additionally, Anthropic's "Tool Search Tool" feature allows deferred tool loading — tools marked with =defer_loading: true= aren't loaded into context initially, reducing tool definition overhead by up to 85%.
+
+* Research Findings
+- Beta header: =token-efficient-tools-2025-02-19=
+- Available for Claude 3.7 Sonnet and Claude Sonnet 4.6 / Opus 4.6
+- Tool definitions can consume 13-55K tokens before conversation starts
+- Progressive tool disclosure (load on demand) recovers ~15K tokens per session
+- Prompt cache read tokens no longer count against ITPM rate limits
+
+* Changes
+** Check if Spell already uses token-efficient tools header
+- Look in =packages/ai/src/providers/= for the beta header
+- If not present, add it to Anthropic API requests
+
+** Evaluate tool definition sizes
+- Measure total tokens consumed by tool definitions in a typical session
+- Consider deferring rarely-used tools (canvas, QML testing, video generation, voice agent) behind on-demand loading
+
+** Evaluate prompt caching configuration
+- Current config uses =:xhigh= cache level — verify this maps to optimal prompt caching behavior
+- Ensure system prompt + tool definitions are structured for maximum cache hits
+
+* Acceptance Criteria
+- Token-efficient tools header added if not already present
+- Tool definition token overhead measured and documented
+- Deferred loading evaluated for low-frequency tools
+- Prompt caching verified as optimal

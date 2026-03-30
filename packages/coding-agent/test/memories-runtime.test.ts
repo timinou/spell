@@ -324,6 +324,91 @@ describe("memories runtime", () => {
 			);
 		});
 	});
+
+	describe("phase1 cooldown", () => {
+		test("phase1 skips when last consolidation was within cooldown window", async () => {
+			const fx = await createFixture();
+			const memoryRoot = getMemoryRoot(fx.agentDir, fx.session.sessionManager.getCwd());
+			await fs.mkdir(memoryRoot, { recursive: true });
+			await Bun.write(path.join(memoryRoot, ".last_phase1"), String(Math.floor(Date.now() / 1000)));
+
+			// Add a rollout so there would be work to do
+			const rolloutPath = path.join(fx.sessionDir, "thread-cooldown.jsonl");
+			await fs.writeFile(
+				rolloutPath,
+				`${JSON.stringify({ type: "session", id: "thread-cooldown", cwd: fx.agentDir })}\n${JSON.stringify({ type: "message", message: { role: "user", content: "hello" } })}\n`,
+			);
+
+			const completeSpy = vi.spyOn(ai, "completeSimple");
+
+			startMemoryStartupTask({
+				session: fx.session,
+				settings: fx.settings,
+				modelRegistry: fx.modelRegistry,
+				agentDir: fx.agentDir,
+				taskDepth: 0,
+			});
+
+			await Bun.sleep(100);
+			expect(completeSpy).not.toHaveBeenCalled();
+		});
+
+		test("phase1 runs when cooldown has elapsed", async () => {
+			const fx = await createFixture();
+			const memoryRoot = getMemoryRoot(fx.agentDir, fx.session.sessionManager.getCwd());
+			await fs.mkdir(memoryRoot, { recursive: true });
+			// Timestamp from 2 hours ago
+			await Bun.write(path.join(memoryRoot, ".last_phase1"), String(Math.floor(Date.now() / 1000) - 7200));
+
+			const rolloutPath = path.join(fx.sessionDir, "thread-elapsed.jsonl");
+			const rolloutRows = [
+				{ type: "session", id: "thread-elapsed", cwd: fx.agentDir },
+				{ type: "message", message: { role: "user", content: "summarize this" } },
+			];
+			await fs.writeFile(rolloutPath, `${rolloutRows.map(r => JSON.stringify(r)).join("\n")}\n`);
+
+			vi.spyOn(ai, "completeSimple")
+				.mockResolvedValueOnce({
+					stopReason: "end_turn",
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({
+								rollout_summary: "Elapsed summary",
+								rollout_slug: "thread-elapsed-rollout",
+								raw_memory: "Raw elapsed",
+							}),
+						},
+					],
+					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+				} as any)
+				.mockResolvedValueOnce({
+					stopReason: "end_turn",
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({
+								memory_md: "# Memory\n\nElapsed body",
+								memory_summary: "Elapsed summary",
+								skills: [],
+							}),
+						},
+					],
+				} as any);
+
+			startMemoryStartupTask({
+				session: fx.session,
+				settings: fx.settings,
+				modelRegistry: fx.modelRegistry,
+				agentDir: fx.agentDir,
+				taskDepth: 0,
+			});
+
+			await waitFor(async () => {
+				expect(ai.completeSimple).toHaveBeenCalled();
+			});
+		});
+	});
 });
 
 describe("buildMemoryToolDeveloperInstructions", () => {

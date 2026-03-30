@@ -71,6 +71,7 @@ const claudeCodeBetaDefaults = [
 	"interleaved-thinking-2025-05-14",
 	"context-management-2025-06-27",
 	"prompt-caching-scope-2026-01-05",
+	"token-efficient-tools-2025-02-19",
 ];
 function getHeaderCaseInsensitive(headers: Record<string, string> | undefined, headerName: string): string | undefined {
 	if (!headers) return undefined;

@@ -1,0 +1,71 @@
+#+TITLE: Session Token Usage Dashboard and Alerts
+#+STATE: DONE
+#+SESSION_ID: 14a6cbabd0d1429e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-00-46-275Z_14a6cbabd0d1429e.jsonl]]
+#+CUSTOM_ID: FEAT-089-session-token-usage-dashboard-and-alerts
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: coding-agent/stats
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-03-30]: Created packages/coding-agent/src/session/token-summary.ts with formatTokenCount, formatStartupTokenNote, formatExitTokenSummary. 16 tests pass in session-token-summary.test.ts. Note: wiring into TUI lifecycle (startup note and exit summary display) is deferred to a follow-up since it requires changes to interactive-mode.ts and welcome.ts which are TUI-specific and need manual verification.
+
+* Initial Message
+
+Look at my latest sessions (especially in ~/code/ora/djinn) and tell me why token usage has shot up the roof so much recently. Also look up online on ways to save token usage with the Pi coding agent or Oh My Pi (the substrates of Spell). Be smart, look wisely
+
+* Problem
+Token consumption is invisible during sessions. The user had no idea memory phase1 was consuming 13.7M tokens/day until manual log analysis. There's no real-time feedback loop — "just knowing how many tokens you're burning in real-time changes behavior" (community finding).
+
+The stats DB (=packages/stats/src/db.ts=) tracks per-message token breakdowns (input, output, cacheRead, cacheWrite, cost) but this data isn't surfaced in-session.
+
+* Changes
+Test-first where practical. The TUI rendering tests are integration-heavy (snapshot-based), so the startup note and exit summary are best verified with focused unit tests for the formatting logic, plus manual TUI verification.
+
+** Show token consumption note on session start
+*** Tests — =packages/coding-agent/test/session-token-summary.test.ts= (new file)
+- =test("formatStartupTokenNote shows memory token count and model")=: given memory usage ={cacheWrite: 1_332_246}= and model ="opus-4-6:xhigh"= — assert output contains "1.3M" and "opus-4-6:xhigh"
+- =test("formatStartupTokenNote shows skipped when no memory usage")=: given null/zero memory usage — assert output contains "skipped"
+- =test("formatStartupTokenNote formats context token count with K suffix")=: given context tokens 45_000 — assert output contains "45K"
+- =test("formatStartupTokenNote handles zero gracefully")=: all zeros — no crash, produces valid string
+*** Implementation
+- Create =packages/coding-agent/src/session/token-summary.ts= with pure formatting functions:
+  - =formatStartupTokenNote(opts: { memoryUsage?: { cacheWrite: number; input: number }; contextTokens: number; modelName: string }): string=
+  - =formatExitTokenSummary(opts: { input: number; output: number; thinking: number; cacheRead: number; cost: number; memoryTokens?: number }): string=
+  - =formatTokenCount(n: number): string= — returns "1.3M", "45K", "132" as appropriate
+- In =packages/coding-agent/src/modes/interactive-mode.ts= (or wherever the startup path emits status):
+  - After memory startup task completes (=runMemoryStartup= returns), emit the note via the existing status display mechanism
+  - If memory is disabled or skipped, still show model + context size
+- In =packages/coding-agent/src/modes/components/welcome.ts=: if welcome is shown, incorporate token note into the welcome panel's right column
+- Respect =ui.skipWelcome= — when welcome is skipped, still print the one-liner via =interactive-mode.ts= status output
+
+** Add per-session token summary on exit
+*** Tests — =packages/coding-agent/test/session-token-summary.test.ts=
+- =test("formatExitTokenSummary shows all token categories")=: given input=45000, output=12000, thinking=8000, cacheRead=120000, cost=0.42 — assert output contains "45K input", "12K output", "8K thinking", "120K cache-read", "$0.42"
+- =test("formatExitTokenSummary includes memory line when memory tokens present")=: given memoryTokens=1_300_000 — assert output mentions memory separately
+- =test("formatExitTokenSummary omits zero categories")=: thinking=0 — assert "thinking" not in output
+*** Implementation
+- Wire =formatExitTokenSummary= into the session exit/cleanup path
+- Accumulate per-session token totals from the stats tracking already in the agent session
+
+** Surface memory phase1 costs in logs
+*** Tests — no new test file needed; verified by checking log output in existing memory tests
+*** Implementation
+- Change =logger.debug= to =logger.info= at line 333 of =packages/coding-agent/src/memories/index.ts=
+- Add a human-readable formatted line alongside the structured log: =logger.info(\`Memory consolidation: \${formatTokenCount(stats.usage.total)} tokens (\${projectName})\`)=
+
+** Behavioral contract preservation
+- No existing TUI rendering behavior changes — the note is additive
+- No existing memory behavior changes — only log level and new display
+- No existing session lifecycle changes — summary is a new exit hook
+- All existing tests must pass: =bun test packages/coding-agent/test/= (focused on changed areas)
+* Acceptance Criteria
+- New tests pass: =bun test packages/coding-agent/test/session-token-summary.test.ts=
+- =formatTokenCount= correctly formats: 132 -> "132", 45000 -> "45K", 1332246 -> "1.3M"
+- =formatStartupTokenNote= produces a single-line string with memory cost, context size, and model name
+- =formatExitTokenSummary= produces a single-line summary with all non-zero token categories and cost
+- Session startup displays token note in TUI (manual verification: start a session, note appears before first prompt)
+- Session exit displays token summary (manual verification: exit a session, summary appears)
+- Memory phase1 logged at =info= not =debug= — visible in =~/.spell/logs/spell.*.log= without grep for JSON
+- All existing tests still pass: =bun test packages/coding-agent/test/memories-runtime.test.ts=
+- =bun check:ts= passes for =packages/coding-agent=

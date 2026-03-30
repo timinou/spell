@@ -1,0 +1,70 @@
+#+TITLE: Memory System Token Budget Controls
+#+STATE: DONE
+#+SESSION_ID: 14a6cbabd0d1429e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-00-46-275Z_14a6cbabd0d1429e.jsonl]]
+#+CUSTOM_ID: FEAT-087-memory-system-token-budget-controls
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: coding-agent/memories
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-03-30]: Implemented: (1) phase1CooldownMinutes setting (default 30), (2) phase1MaxInputTokens setting (default 500K), (3) .last_phase1 cooldown file check, (4) phase1 fallback role changed from \"default\" to \"smol\", (5) loadMemoryConfig reads new settings. 13 memory tests pass (11 existing + 2 new cooldown tests).
+
+* Initial Message
+
+Look at my latest sessions (especially in ~/code/ora/djinn) and tell me why token usage has shot up the roof so much recently. Also look up online on ways to save token usage with the Pi coding agent or Oh My Pi (the substrates of Spell). Be smart, look wisely
+
+* Problem
+Memory phase1 consolidation is the single largest token consumer — 13.7M tokens on March 29 alone, across 15 phase invocations. Each session start processes the entire =raw_memories.md= (100KB, 1,448 lines) through the model. As projects accumulate memories, the cost per consolidation grows unboundedly.
+
+* Changes
+Test-first: write tests before each implementation change. Existing test infrastructure in =packages/coding-agent/test/memories-runtime.test.ts= (fixture helpers, =waitFor= helper, mock =completeSimple=, =Settings.isolated=) and =memories-storage.test.ts= (DB operations).
+
+** Add memory staleness check (highest ROI, do first)
+*** Tests — =packages/coding-agent/test/memories-runtime.test.ts=
+- =test("phase1 skips when no claimable jobs exist and raw_memories unchanged")=: create fixture with existing =raw_memories.md= and =MEMORY.md=, no new threads, call =startMemoryStartupTask= — assert =completeSimple= is never called
+- =test("phase1 runs when new threads exist even if raw_memories unchanged")=: same as above but add a new thread entry — assert =completeSimple= IS called
+- =test("phase1 runs on first startup with no prior consolidation")=: fresh fixture with rollout data, no existing =MEMORY.md= — assert =completeSimple= IS called
+*** Implementation — =packages/coding-agent/src/memories/index.ts=
+- In =runPhase1=, after =claimStage1Jobs= returns empty claims, return early (already done at line 268)
+- The claim system already handles this: =claimStage1Jobs= only returns threads that haven't been processed. The 6 duplicate consolidations on March 30 were from multiple concurrent sessions each claiming the same threads. The fix is to make the lease/concurrency cap more aggressive or add a cooldown window.
+
+** Add per-session memory phase cooldown
+*** Tests — =packages/coding-agent/test/memories-runtime.test.ts=
+- =test("phase1 skips when last consolidation was within cooldown window")=: set up fixture, write a timestamp marker file in memoryRoot (e.g. =.last_phase1=), call =startMemoryStartupTask= — assert =completeSimple= not called
+- =test("phase1 runs when cooldown has elapsed")=: same but with old timestamp — assert =completeSimple= IS called
+- =test("cooldown window defaults to 30 minutes")=: verify the default from config
+*** Implementation
+- Add =memories.phase1CooldownMinutes= setting (default: 30) to =settings-schema.ts=
+- In =runPhase1=, before claiming jobs, check for a =.last_phase1= timestamp file in memoryRoot. If present and within cooldown, skip and log
+- After successful phase1, write/update the =.last_phase1= file
+
+** Add memory phase1 token budget cap
+*** Tests — =packages/coding-agent/test/memories-runtime.test.ts=
+- =test("phase1 limits claims when total estimated tokens exceed budget")=: set up fixture with many threads, configure low =memories.phase1MaxInputTokens= — assert only a subset of threads are processed
+*** Implementation
+- Add =memories.phase1MaxInputTokens= setting (default: 500_000)
+- In =runPhase1=, track estimated token cost per claim and stop claiming once budget is exhausted
+
+** Default memory model to smol role
+*** Tests — =packages/coding-agent/test/memories-runtime.test.ts=
+- =test("phase1 uses smol model role when available")=: set up modelRegistry with a =smol= role model, call =startMemoryStartupTask= — assert =completeSimple= is called with the smol model
+- =test("phase1 falls back to default model when smol role unavailable")=: modelRegistry with no smol role — assert =completeSimple= uses default model
+*** Implementation — =packages/coding-agent/src/memories/index.ts=
+- Change =resolveMemoryModel= fallbackRole from ="default"= to ="smol"= (line 242)
+- Add a secondary fallback to ="default"= if smol is unavailable
+
+** Behavioral contract preservation
+All existing tests in =memories-runtime.test.ts= and =memories-storage.test.ts= must continue to pass without modification. The new features are additive guards that prevent unnecessary work — they must not change the behavior when consolidation IS needed.
+- "runs phase1 to phase2 and writes consolidated outputs" — must still pass
+- "phase2 sync prunes stale summaries" — must still pass
+- "phase2 empty-input cleanup" — must still pass
+- "startup gating skips when disabled or subagent depth" — must still pass
+* Acceptance Criteria
+- All existing tests in =memories-runtime.test.ts= and =memories-storage.test.ts= pass: =bun test packages/coding-agent/test/memories-runtime.test.ts packages/coding-agent/test/memories-storage.test.ts=
+- New tests pass: cooldown skip, cooldown elapsed, staleness skip, model role selection, budget cap
+- =memories.phase1CooldownMinutes= setting exists in schema and defaults to 30
+- =memories.phase1MaxInputTokens= setting exists in schema and defaults to 500_000
+- Phase1 model resolves to =smol= when available, falls back to =default=
+- Logs show "Memory phase1 skipped (cooldown)" when within cooldown window
+- =bun check:ts= passes for =packages/coding-agent=

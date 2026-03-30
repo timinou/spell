@@ -693,6 +693,10 @@ export const SETTINGS_SCHEMA = {
 
 	"memories.summaryInjectionTokenLimit": { type: "number", default: 5000 },
 
+	"memories.phase1CooldownMinutes": { type: "number", default: 30 },
+
+	"memories.phase1MaxInputTokens": { type: "number", default: 500_000 },
+
 	// TTSR
 	"ttsr.enabled": {
 		type: "boolean",
@@ -1677,6 +1681,8 @@ export interface MemoriesSettings {
 	rolloutPayloadPercent: number;
 	fallbackTokenLimit: number;
 	summaryInjectionTokenLimit: number;
+	phase1CooldownMinutes: number;
+	phase1MaxInputTokens: number;
 }
 
 export interface TodoCompletionSettings {

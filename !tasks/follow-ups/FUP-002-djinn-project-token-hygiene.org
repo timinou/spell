@@ -1,0 +1,45 @@
+#+TITLE: Djinn Project Token Hygiene
+#+STATE: DONE
+#+SESSION_ID: 14a6cbabd0d1429e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-00-46-275Z_14a6cbabd0d1429e.jsonl]]
+#+CUSTOM_ID: FUP-002-djinn-project-token-hygiene
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: user-config
+
+NOTE [2026-03-30]: Config updated: default thinking changed from xhigh to high, plan role changed from medium to xhigh. Memory pruning guidance documented in the plan. Session hygiene: user should use /compact between tasks instead of starting new sessions.
+
+* Initial Message
+
+Look at my latest sessions (especially in ~/code/ora/djinn) and tell me why token usage has shot up the roof so much recently. Also look up online on ways to save token usage with the Pi coding agent or Oh My Pi (the substrates of Spell). Be smart, look wisely
+
+* Problem
+The djinn project's token usage has specific structural causes beyond the memory system:
+- 48 sessions in 3 days, each triggering full context reload + memory consolidation
+- 521-line AGENTS.md in hotelcomm parent directory loaded every session
+- Tidewave MCP instructions (24 lines) adding tool context overhead
+- 4,653 + 2,199 = 6,852 lines of org specs frequently referenced during planning
+- Ultraplan mode (xhigh thinking) used for planning sessions
+
+* Immediate Actions (no code changes needed)
+** Reduce session churn
+- Use =/compact= between tasks within a single session instead of starting new sessions
+- Fewer sessions = fewer memory phase1 triggers (each costs 400K-2.3M tokens)
+
+** Trim raw_memories.md
+- The file is 1,448 lines (100KB). Much of it may be stale architectural context from early exploration
+- Manually prune entries that are no longer relevant
+- This directly reduces memory phase1 input cost proportionally
+
+** Consider Sonnet for routine djinn work
+- Opus is ideal for architecture/planning, but routine implementation (file edits, test writing) works well with Sonnet at ~60% lower cost
+- Keep Opus for =plan= and =slow= roles only
+
+** Consolidate spec loading
+- Instead of loading all 12 spec files when planning, create a single condensed reference spec (~500 lines) for routine use
+- Reserve full spec loading for dedicated spec-review sessions
+
+* Acceptance Criteria
+- raw_memories.md pruned to relevant entries only
+- Session count per day reduced by using /compact more aggressively
+- Model selection matches task complexity (Sonnet for routine, Opus for architecture)

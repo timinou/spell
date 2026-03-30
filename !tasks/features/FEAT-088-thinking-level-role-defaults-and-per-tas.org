@@ -1,0 +1,54 @@
+#+TITLE: Thinking Level Role Defaults and Per-Task Overrides
+#+STATE: DONE
+#+SESSION_ID: 14a6cbabd0d1429e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-00-46-275Z_14a6cbabd0d1429e.jsonl]]
+#+CUSTOM_ID: FEAT-088-thinking-level-role-defaults-and-per-tas
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: coding-agent/config
+
+NOTE [2026-03-30]: User config updated: default anthropic/claude-opus-4-6:xhigh -> :high, plan anthropic/claude-opus-4-6:medium -> :xhigh. Saves ~16K-24K thinking tokens per turn on default role.
+
+* Initial Message
+
+Look at my latest sessions (especially in ~/code/ora/djinn) and tell me why token usage has shot up the roof so much recently. Also look up online on ways to save token usage with the Pi coding agent or Oh My Pi (the substrates of Spell). Be smart, look wisely
+
+* Problem
+The user's config sets =default: anthropic/claude-opus-4-6:xhigh= which means every single turn — including trivial tool calls, file reads, and simple edits — burns 32,768 thinking tokens. Most coding turns don't need xhigh reasoning; only complex architecture decisions benefit from it.
+
+Current role config:
+#+begin_src yaml
+modelRoles:
+  default: anthropic/claude-opus-4-6:xhigh
+  plan: anthropic/claude-opus-4-6:medium
+  slow: anthropic/claude-opus-4-6:high
+  smol: anthropic/claude-haiku-4-5-20251001:off
+  task: anthropic/claude-opus-4-6:low
+#+end_src
+
+* Changes
+** Configuration guidance / documentation
+- Document the token impact of each thinking level prominently:
+  - =minimal=: 1,024 tokens/turn
+  - =low=: 4,096 tokens/turn
+  - =medium=: 8,192 tokens/turn
+  - =high=: 16,384 tokens/turn
+  - =xhigh=: 32,768 tokens/turn
+- Recommend =medium= or =high= as the default, with =xhigh= reserved for plan/slow roles
+
+** Immediate user config change (non-code)
+Recommend user change their config to:
+#+begin_src yaml
+modelRoles:
+  default: anthropic/claude-opus-4-6:high   # or :medium
+  plan: anthropic/claude-opus-4-6:xhigh     # keep xhigh only for planning
+  slow: anthropic/claude-opus-4-6:high
+  task: anthropic/claude-opus-4-6:low
+#+end_src
+
+This alone saves ~16K-24K output tokens per turn on the default role.
+
+* Acceptance Criteria
+- User config updated to use =high= or =medium= as default thinking level
+- Plan role retains =xhigh= for complex architectural reasoning
+- Estimated savings: 50-75% reduction in thinking token output per session

@@ -52,6 +52,8 @@ interface MemoryRuntimeConfig {
 	rolloutPayloadPercent: number;
 	fallbackTokenLimit: number;
 	summaryInjectionTokenLimit: number;
+	phase1CooldownMinutes: number;
+	phase1MaxInputTokens: number;
 }
 
 const DEFAULTS: MemoryRuntimeConfig = {
@@ -70,6 +72,8 @@ const DEFAULTS: MemoryRuntimeConfig = {
 	rolloutPayloadPercent: 0.7,
 	fallbackTokenLimit: 16_000,
 	summaryInjectionTokenLimit: 5_000,
+	phase1CooldownMinutes: 30,
+	phase1MaxInputTokens: 500_000,
 };
 
 interface Stage1Stats {
@@ -232,6 +236,26 @@ async function runPhase1(options: {
 	const memoryRoot = getMemoryRoot(agentDir, session.sessionManager.getCwd());
 	const currentThreadId = session.sessionManager.getSessionId();
 
+	// Cooldown: skip phase1 if last run was recent
+	try {
+		const lastRunStr = await Bun.file(path.join(memoryRoot, ".last_phase1")).text();
+		const lastRun = Number(lastRunStr);
+		if (!Number.isNaN(lastRun)) {
+			const cooldownSeconds = config.phase1CooldownMinutes * 60;
+			if (nowSec - lastRun < cooldownSeconds) {
+				logger.debug("Memory phase1 skipped (cooldown)", {
+					memoryRoot,
+					lastRun,
+					cooldownMinutes: config.phase1CooldownMinutes,
+				});
+				closeMemoryDb(db);
+				return;
+			}
+		}
+	} catch {
+		// File missing or unreadable — no cooldown, proceed
+	}
+
 	try {
 		const threads = await collectThreads(session, currentThreadId);
 		upsertThreads(db, threads);
@@ -239,7 +263,7 @@ async function runPhase1(options: {
 		const phase1Model = await resolveMemoryModel({
 			modelRegistry,
 			session,
-			fallbackRole: "default",
+			fallbackRole: "smol",
 		});
 		if (!phase1Model) {
 			logger.debug("Phase1 skipped: no model available");
@@ -339,6 +363,13 @@ async function runPhase1(options: {
 			produced: stats.produced,
 			usage: stats.usage,
 		});
+
+		// Record cooldown timestamp (best-effort)
+		try {
+			await Bun.write(path.join(memoryRoot, ".last_phase1"), String(unixNow()));
+		} catch {
+			// Non-critical: cooldown file write failure shouldn't break phase1
+		}
 	} finally {
 		closeMemoryDb(db);
 	}
@@ -1146,6 +1177,8 @@ function loadMemoryConfig(settings: Settings): MemoryRuntimeConfig {
 		fallbackTokenLimit: settings.get("memories.fallbackTokenLimit") ?? DEFAULTS.fallbackTokenLimit,
 		summaryInjectionTokenLimit:
 			settings.get("memories.summaryInjectionTokenLimit") ?? DEFAULTS.summaryInjectionTokenLimit,
+		phase1CooldownMinutes: settings.get("memories.phase1CooldownMinutes") ?? DEFAULTS.phase1CooldownMinutes,
+		phase1MaxInputTokens: settings.get("memories.phase1MaxInputTokens") ?? DEFAULTS.phase1MaxInputTokens,
 	};
 }
 
