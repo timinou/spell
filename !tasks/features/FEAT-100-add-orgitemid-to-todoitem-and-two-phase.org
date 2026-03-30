@@ -1,0 +1,80 @@
+#+TITLE: Add orgItemId to TodoItem and two-phase gated completion
+#+STATE: DONE
+#+SESSION_ID: 14a70c4258c08ccd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T13-42-57-635Z_14a70c4258c08ccd.jsonl]]
+#+CUSTOM_ID: FEAT-100-add-orgitemid-to-todoitem-and-two-phase
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+when a subtask is associated to a todo (especially relelvant during plan/ultraplan/loop implementations), can you have a soft reminder when the task gets done to make sure to check its validation criteria, tests, artifacts (if any) and to commit ahead of marking the task as done?
+
+* Summary
+Add =orgItemId= optional field to =TodoItem= so tasks know which org item they belong to. Implement two-phase gated completion: when a gated task is marked =completed= without =verified: true=, the status change is rejected and a verification checklist is returned instead.
+
+* Files
+- =packages/coding-agent/src/tools/todo-write.ts= — TodoItem interface, InputTask schema, update op schema, applyOps, formatSummary, gateDirectivesForTask, hasGate, TUI badge rendering
+- =packages/coding-agent/src/modes/components/todo-reminder.ts= — add org badge
+- =packages/coding-agent/test/tools/todo-write-gates.test.ts= — test field survival, two-phase flow, directive content
+
+* Implementation
+** Add orgItemId field
+- Add =orgItemId?: string= to =TodoItem= interface
+- Add =Type.Optional(Type.String({ description: "Org item ID this task is linked to" }))= to =InputTask= schema
+- Preserve through all data paths: replace, add_phase, add_task, update ops
+- Add to =hasGate()= — no. =orgItemId= should NOT be in =hasGate=; create a =hasRequiredGate(task)= function that returns true for gateCommit/gateArtifact/gateCmd/gateLlm/orgItemId. Use this for two-phase triggering. Keep =hasGate= unchanged (it already includes verifyCmd).
+
+** Add verified flag to update op
+- Add =verified?: boolean= to the update op in =todoWriteSchema=
+- Description: "Set true after verifying all gate requirements. Required to complete a gated task."
+
+** Two-phase applyOps logic
+In the =update= case of =applyOps=, after finding the task:
+#+begin_src typescript
+// Two-phase gated completion
+if (op.status === "completed" && hasRequiredGate(task) && !op.verified) {
+    // Don't apply status change — add to pending verification list
+    pendingVerificationTasks.push(task);
+    break;
+}
+#+end_src
+
+Add =pendingVerificationTasks: TodoItem[]= to =ApplyOpsResult=.
+
+** Enhanced formatSummary
+When =pendingVerificationTasks= is non-empty, render a "Verification Required" section:
+#+begin_example
+--- Verification Required ---
+task-1 "Build feature" requires verification before completion:
+  [ ] Run `bun test` (gateCmd)
+  [ ] Verify artifact at dist/out.json (gateArtifact)
+  [ ] Commit changes (gateCommit)
+  [ ] Update org item FEAT-001-add-auth (orgItemId)
+
+Complete these steps, then call todo_write with {op: "update", id: "task-1", status: "completed", verified: true}.
+#+end_example
+
+Keep existing gate directives for =completedGatedTasks= (fires when =verified: true= is used).
+
+** TUI changes
+- Add =[org: FEAT-001]= badge in =renderGateBadges= when =orgItemId= is set
+- Add =[org]= badge in =TodoReminderComponent#gateBadges=
+
+* Tests
+- =orgItemId survives all data paths= (replace, add_phase, add_task, update, clone via getLatestTodoPhasesFromEntries)
+- =two-phase: gated task completion without verified is rejected= — status stays in_progress, pendingVerificationTasks populated
+- =two-phase: gated task completion with verified: true succeeds= — status becomes completed
+- =two-phase: non-gated task completes without verified= — no rejection
+- =verification checklist includes orgItemId directive= when set
+- =verification checklist omits orgItemId line= when not set
+- =verifyCmd alone does not trigger two-phase= (only required gates trigger it)
+- =hasRequiredGate returns correctly= for each field combination
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts= passes with all new tests
+- =bun check:ts= passes
+- Two-phase rejection produces a verification checklist mentioning each set gate
+- =verified: true= bypasses the rejection and completes the task normally
+- orgItemId field survives all data paths identically to other gate fields

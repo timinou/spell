@@ -1,0 +1,61 @@
+#+TITLE: Update prompts for verification protocol and orgItemId
+#+STATE: DONE
+#+SESSION_ID: 14a70c4258c08ccd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T13-42-57-635Z_14a70c4258c08ccd.jsonl]]
+#+CUSTOM_ID: FEAT-102-update-prompts-for-verification-protocol
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: prompts
+
+* Initial Message
+
+when a subtask is associated to a todo (especially relelvant during plan/ultraplan/loop implementations), can you have a soft reminder when the task gets done to make sure to check its validation criteria, tests, artifacts (if any) and to commit ahead of marking the task as done?
+
+* Summary
+Update all relevant prompt files to document the new =orgItemId= field, =verified= flag, two-phase completion protocol, and =todoRef= field on tasks. Ensure the agent knows how to use these features during plan execution.
+
+* Files
+- =packages/coding-agent/src/prompts/tools/todo-write.md= — document orgItemId, verified, two-phase protocol, examples
+- =packages/coding-agent/src/prompts/system/plan-mode-approved.md= — instruct agent to set orgItemId when creating todos from plan child items
+- =packages/coding-agent/src/prompts/tools/task.md= — document todoRef field and when to use it
+
+* Implementation
+** todo-write.md changes
+- Add =orgItemId= to Task Anatomy section:
+  - =orgItemId=: Org item ID this task is linked to. When set, completion directives include org item lifecycle updates.
+- Add =verified= to Task Anatomy or a new Completion Protocol section:
+  - =verified=: Set true on update op after verifying all gate requirements. Required to complete a gated task.
+- Add a new "Completion Protocol" section explaining two-phase flow:
+  - When a gated task is marked completed without =verified: true=, the tool rejects and returns a verification checklist
+  - Agent must perform verification, then re-submit with =verified: true=
+- Add example for gated completion:
+#+begin_example
+<example name="gated-completion">
+Complete a gated task after verification:
+1. First attempt (rejected with checklist):
+   ops: [{op: "update", id: "task-1", status: "completed"}]
+2. After verification:
+   ops: [{op: "update", id: "task-1", status: "completed", verified: true}]
+</example>
+#+end_example
+
+** plan-mode-approved.md changes
+- In the instruction section, after "initialize todo tracking for this plan with =todo_write=":
+  - Add: "When creating todos from plan execution manifest items, set =orgItemId= on each task to the corresponding child item's CUSTOM_ID (e.g., =FEAT-001-add-auth=)."
+  - Add: "When spawning task subagents to work on a todo item, set =todoRef= on the task to the todo item's ID so verification requirements are automatically injected."
+
+** task.md changes
+- Add =todoRef= to the =.assignment= parameters section or a new per-task field:
+  - =todoRef=: Optional todo item ID. When set, the subagent receives the linked todo's verification requirements (gates, orgItemId) automatically. Use this when delegating a todo item to a subagent.
+- Add to the templates section as a recommended practice
+
+* Edge Cases
+- Prompts must not assume orgItemId is always set — all guidance should be conditional ("when set", "if linked")
+- The two-phase protocol should be explained as the default for gated tasks, not opt-in
+
+* Acceptance Criteria
+- All three prompt files are updated with correct documentation
+- No existing examples or instructions are broken
+- =bun check:ts= passes (prompts are imported as text, no type impact)
+- Two-phase completion protocol is clearly explained with a concrete example
+- orgItemId and todoRef are documented with their purpose and expected usage pattern

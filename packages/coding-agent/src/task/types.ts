@@ -44,6 +44,12 @@ export const taskItemSchema = Type.Object({
 		description:
 			"Complete per-task instructions the subagent executes. Must follow the Target/Change/Edge Cases/Acceptance structure. Only include per-task deltas — shared background belongs in `context`.",
 	}),
+	todoRef: Type.Optional(
+		Type.String({
+			description:
+				"Todo item ID (e.g. 'task-3') to link this subagent to. Resolves verification requirements (gates, orgItemId) and injects them into the subagent context automatically.",
+		}),
+	),
 });
 export type TaskItem = Static<typeof taskItemSchema>;
 

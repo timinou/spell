@@ -37,11 +37,12 @@ import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { renderCall, renderResult } from "./render";
-import { renderTemplate } from "./template";
+import { renderTemplate, resolveVerificationContext } from "./template";
 import {
 	type AgentDefinition,
 	type AgentProgress,
 	type SingleResult,
+	type TaskItem,
 	type TaskParams,
 	type TaskSchema,
 	type TaskToolDetails,
@@ -184,6 +185,18 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		return new TaskTool(session, agents, isolationMode !== "none");
 	}
 
+	/** Augment each task's assignment with verification context from its todoRef. */
+	#injectVerificationContext(tasks: TaskItem[]): TaskItem[] {
+		const phases = this.session.getTodoPhases?.();
+		if (!phases || phases.length === 0) return tasks;
+		return tasks.map(task => {
+			if (!task.todoRef) return task;
+			const verificationBlock = resolveVerificationContext(task.todoRef, phases);
+			if (!verificationBlock) return task;
+			return { ...task, assignment: `${task.assignment.trim()}\n\n${verificationBlock}` };
+		});
+	}
+
 	async execute(
 		_toolCallId: string,
 		params: TaskParams,
@@ -214,7 +227,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const uniqueIds = await outputManager.allocateBatch(taskItems.map(t => t.id));
 		const fallbackAgentSource =
 			this.#discoveredAgents.find(agent => agent.name === params.agent)?.source ?? "bundled";
-		const renderedTasks = taskItems.map(taskItem => renderTemplate(params.context, taskItem));
+		const augmentedTasks = this.#injectVerificationContext(taskItems);
+		const renderedTasks = augmentedTasks.map(taskItem => renderTemplate(params.context, taskItem));
 		const progressByTaskId = new Map<string, AgentProgress>();
 		for (let index = 0; index < renderedTasks.length; index++) {
 			const renderedTask = renderedTasks[index];
@@ -546,7 +560,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			};
 		}
 
-		const tasks = params.tasks;
+		const tasks = this.#injectVerificationContext(params.tasks);
 		const missingTaskIndexes: number[] = [];
 		const idIndexes = new Map<string, number[]>();
 

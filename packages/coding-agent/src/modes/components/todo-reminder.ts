@@ -48,13 +48,14 @@ export class TodoReminderComponent extends Container {
 	}
 
 	#gateBadges(task: TodoItem): string {
-		if (!hasGate(task)) return "";
+		if (!hasGate(task) && !task.orgItemId) return "";
 		const parts: string[] = [];
 		if (task.gateCommit) parts.push("[commit]");
 		if (task.gateArtifact) parts.push("[artifact]");
 		if (task.gateCmd) parts.push("[cmd]");
 		if (task.gateLlm) parts.push("[llm]");
 		if (task.verifyCmd) parts.push("[verify]");
+		if (task.orgItemId) parts.push("[org]");
 		return ` ${parts.join(" ")}`;
 	}
 }

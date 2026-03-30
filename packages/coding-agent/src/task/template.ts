@@ -1,5 +1,6 @@
 import { renderPromptTemplate } from "../config/prompt-templates";
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
+import type { TodoItem, TodoPhase } from "../tools/todo-write";
 import type { TaskItem } from "./types";
 
 interface RenderResult {
@@ -30,4 +31,38 @@ export function renderTemplate(context: string | undefined, task: TaskItem): Ren
 		id,
 		description,
 	};
+}
+
+/**
+ * Resolve a todoRef against the current todo phases and build a verification
+ * requirements section for the subagent. Returns undefined if the ref is
+ * unresolvable or the todo has no gates worth injecting.
+ */
+export function resolveVerificationContext(todoRef: string, phases: TodoPhase[]): string | undefined {
+	const task = findTodoItem(todoRef, phases);
+	if (!task) return undefined;
+
+	const lines: string[] = [];
+	if (task.gateCmd) lines.push(`You MUST run: \`${task.gateCmd}\` and verify it passes.`);
+	if (task.gateArtifact) lines.push(`You MUST produce artifact at: ${task.gateArtifact}`);
+	if (task.gateCommit) lines.push("You MUST commit changes before yielding.");
+	if (task.gateLlm) lines.push(`You MUST self-review against: ${task.gateLlm}`);
+	if (task.verifyCmd) lines.push(`You SHOULD run: \`${task.verifyCmd}\` to verify.`);
+	if (task.orgItemId) {
+		lines.push(
+			`You MUST update org item ${task.orgItemId}: set to DOING at start, update with progress, and append completion report when done.`,
+		);
+	}
+
+	if (lines.length === 0) return undefined;
+
+	return `--- Verification Requirements (from ${todoRef}) ---\n${lines.join("\n")}`;
+}
+
+function findTodoItem(id: string, phases: TodoPhase[]): TodoItem | undefined {
+	for (const phase of phases) {
+		const task = phase.tasks.find(t => t.id === id);
+		if (task) return task;
+	}
+	return undefined;
 }

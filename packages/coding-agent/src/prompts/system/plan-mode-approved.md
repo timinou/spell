@@ -47,6 +47,8 @@ You **MUST** verify each step before proceeding to the next.
 {{#has tools "todo_write"}}
 Before execution, you **MUST** initialize todo tracking for this plan with `todo_write`.
 When the plan's execution manifest specifies dependencies between items (via `[[id:...]]` links or `:BLOCKER:` properties), express these as `blockers` in your `todo_write` task list so the dependency gate enforces correct execution order.
+When creating todos from plan execution manifest items, set `orgItemId` on each task to the corresponding child item's CUSTOM_ID (e.g., `FEAT-001-add-auth`). This links the todo to its org item and triggers the verification protocol on completion.
+When spawning task subagents to work on a todo item, set `todoRef` on the task to the todo item's ID (e.g., `task-3`) so verification requirements are automatically injected into the subagent's context.
 After each completed step, you **MUST** immediately update `todo_write` so progress stays visible.
 If a `todo_write` call fails, you **MUST** fix the todo payload and retry before continuing silently.
 {{/has}}

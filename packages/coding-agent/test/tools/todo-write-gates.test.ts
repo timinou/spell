@@ -17,6 +17,7 @@ import {
 	formatSummary,
 	getLatestTodoPhasesFromEntries,
 	hasGate,
+	hasRequiredGate,
 	hasUnresolvedBlockers,
 	isTaskBlocked,
 } from "../../src/tools/todo-write";
@@ -174,6 +175,7 @@ describe("formatSummary gate directives", () => {
 			errors: overrides.errors ?? [],
 			completedPhaseIds: overrides.completedPhaseIds ?? [],
 			completedGatedTasks: overrides.completedGatedTasks ?? [],
+			pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
 		});
 	}
 
@@ -321,6 +323,7 @@ describe("formatSummary blocked visibility", () => {
 			errors: overrides.errors ?? [],
 			completedPhaseIds: overrides.completedPhaseIds ?? [],
 			completedGatedTasks: overrides.completedGatedTasks ?? [],
+			pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
 		});
 	}
 
@@ -415,5 +418,157 @@ describe("formatSummary blocked visibility", () => {
 			phases: [makePhase("phase-1", "Foundation", [blocker]), makePhase("phase-2", "Features", [dependent])],
 		});
 		expect(result).toContain("Remaining items (2, 1 blocked):");
+	});
+});
+
+// =============================================================================
+// FEAT-100: orgItemId field + hasRequiredGate + two-phase gated completion
+// =============================================================================
+
+describe("hasRequiredGate", () => {
+	test("returns true for gateCommit", () => {
+		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", gateCommit: true }))).toBe(true);
+	});
+
+	test("returns true for gateArtifact", () => {
+		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", gateArtifact: "dist/out.json" }))).toBe(true);
+	});
+
+	test("returns true for gateCmd", () => {
+		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", gateCmd: "bun test" }))).toBe(true);
+	});
+
+	test("returns true for gateLlm", () => {
+		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", gateLlm: "check criteria" }))).toBe(true);
+	});
+
+	test("returns true for orgItemId", () => {
+		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", orgItemId: "FEAT-001-auth" }))).toBe(true);
+	});
+
+	test("returns false for verifyCmd alone", () => {
+		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", verifyCmd: "bun check" }))).toBe(false);
+	});
+
+	test("returns false when no gates set", () => {
+		expect(hasRequiredGate(makeTask({ id: "t1", content: "a" }))).toBe(false);
+	});
+});
+
+describe("orgItemId field", () => {
+	test("orgItemId survives clonePhases (via getLatestTodoPhasesFromEntries)", () => {
+		const phases: TodoPhase[] = [
+			makePhase("phase-1", "Work", [
+				makeTask({
+					id: "task-1",
+					content: "Build feature",
+					status: "in_progress",
+					orgItemId: "FEAT-001-add-auth",
+					gateCmd: "bun test",
+				}),
+			]),
+		];
+
+		const entries = [
+			{
+				type: "message" as const,
+				message: {
+					role: "toolResult",
+					toolName: "todo_write",
+					isError: false,
+					details: { phases },
+				},
+			},
+		];
+
+		const restored = getLatestTodoPhasesFromEntries(entries as any);
+		expect(restored[0].tasks[0].orgItemId).toBe("FEAT-001-add-auth");
+	});
+
+	test("orgItemId shows in gate directives for completed task", () => {
+		const task = makeTask({
+			id: "task-1",
+			content: "Build it",
+			status: "completed",
+			orgItemId: "FEAT-001-add-auth",
+		});
+		const result = formatSummary({
+			phases: [makePhase("phase-1", "Work", [task])],
+			errors: [],
+			completedPhaseIds: [],
+			completedGatedTasks: [task],
+			pendingVerificationTasks: [],
+		});
+		expect(result).toContain("REQUIRED: Update org item FEAT-001-add-auth for task-1.");
+	});
+});
+
+describe("two-phase gated completion via formatSummary", () => {
+	function callFormatSummary(overrides: Partial<FormatSummaryOptions> = {}): string {
+		return formatSummary({
+			phases: overrides.phases ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
+			errors: overrides.errors ?? [],
+			completedPhaseIds: overrides.completedPhaseIds ?? [],
+			completedGatedTasks: overrides.completedGatedTasks ?? [],
+			pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
+		});
+	}
+
+	test("pending verification task renders verification checklist", () => {
+		const task = makeTask({
+			id: "task-1",
+			content: "Build feature",
+			status: "in_progress",
+			gateCmd: "bun test",
+			gateArtifact: "dist/out.json",
+			gateCommit: true,
+			orgItemId: "FEAT-001-add-auth",
+		});
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [task])],
+			pendingVerificationTasks: [task],
+		});
+		expect(result).toContain("--- Verification Required ---");
+		expect(result).toContain('task-1 "Build feature" requires verification before completion:');
+		expect(result).toContain("[ ] Run `bun test` (gateCmd)");
+		expect(result).toContain("[ ] Verify artifact at dist/out.json (gateArtifact)");
+		expect(result).toContain("[ ] Commit changes (gateCommit)");
+		expect(result).toContain("[ ] Update org item FEAT-001-add-auth (orgItemId)");
+		expect(result).toContain('{op: "update", id: "task-1", status: "completed", verified: true}');
+	});
+
+	test("no verification section when pendingVerificationTasks is empty", () => {
+		const result = callFormatSummary({ pendingVerificationTasks: [] });
+		expect(result).not.toContain("--- Verification Required ---");
+	});
+
+	test("verification checklist omits orgItemId line when not set", () => {
+		const task = makeTask({
+			id: "task-1",
+			content: "Simple gated",
+			status: "in_progress",
+			gateCommit: true,
+		});
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [task])],
+			pendingVerificationTasks: [task],
+		});
+		expect(result).toContain("--- Verification Required ---");
+		expect(result).toContain("[ ] Commit changes (gateCommit)");
+		expect(result).not.toContain("orgItemId");
+	});
+
+	test("verification checklist includes gateLlm", () => {
+		const task = makeTask({
+			id: "task-1",
+			content: "Review task",
+			status: "in_progress",
+			gateLlm: "check acceptance criteria",
+		});
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [task])],
+			pendingVerificationTasks: [task],
+		});
+		expect(result).toContain("[ ] Review against: check acceptance criteria (gateLlm)");
 	});
 });

@@ -12,6 +12,7 @@ Subagents lack your conversation history. Every decision, file content, and user
   - `.id`: CamelCase, max 32 chars
   - `.description`: UI display only — subagent never sees it
   - `.assignment`: Complete self-contained instructions. One-liners PROHIBITED; missing acceptance criteria = too vague.
+  - `.todoRef`: Optional todo item ID (e.g. `task-3`). When set, the subagent receives the linked todo's verification requirements (gates, orgItemId) automatically injected into its context. Use this when delegating a todo item to a subagent.
 - `context`: Shared background prepended to every assignment. Session-specific info only.
 - `schema`: JTD schema for expected output. Format lives here — **MUST NOT** be duplicated in assignments.
 - `tasks`: Tasks to execute in parallel.

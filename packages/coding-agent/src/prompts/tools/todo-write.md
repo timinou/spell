@@ -90,9 +90,21 @@ task-3 and task-4 both depend on task-1 (schema). task-5 depends on both task-3 
 - `gateCmd`: Command that must pass to verify the task (e.g., `bun test test/foo.test.ts`).
 - `gateLlm`: Acceptance criteria the AI should self-review against.
 - `verifyCmd`: Recommended (not required) verification command.
+- `orgItemId`: Org item ID this task is linked to. When set, completion directives include org item lifecycle updates.
 - `blockers`: Array of task IDs that must complete before this task can start.
 
 When implementing plan items, set gate fields to track required deliverables. The tool response will inject directives when gated tasks are completed.
+
+## Verification Protocol
+
+Tasks with **required gates** (`gateCommit`, `gateArtifact`, `gateCmd`, `gateLlm`, or `orgItemId`) use two-phase completion:
+
+1. **First attempt**: marking a gated task `completed` without `verified: true` is **rejected**. The tool returns a verification checklist showing each gate requirement.
+2. **After verification**: re-submit the update with `verified: true` to complete the task.
+
+This ensures gates are checked before the task is marked done — not after.
+
+`verifyCmd` alone does **not** trigger two-phase (it is advisory, not required).
 <avoid>
 - Single-step tasks — act directly
 - Conversational or informational requests
@@ -136,6 +148,23 @@ ops: [{op: "replace", phases: [
   {name: "Implementation", tasks: [
     {content: "Add gate fields", gateCommit: true, gateArtifact: "packages/coding-agent/test/tools/todo-write-gates.test.ts", verifyCmd: "bun test packages/coding-agent/test/tools/todo-write-gates.test.ts"},
     {content: "Update dashboard", gateCommit: true, blockers: ["task-1"]}
+  ]}
+]}]
+</example>
+
+<example name="gated-completion">
+Complete a gated task after verification:
+1. First attempt (rejected with checklist):
+   ops: [{op: "update", id: "task-1", status: "completed"}]
+2. After verification:
+   ops: [{op: "update", id: "task-1", status: "completed", verified: true}]
+</example>
+
+<example name="org-linked-task">
+Create a task linked to an org item:
+ops: [{op: "replace", phases: [
+  {name: "Implementation", tasks: [
+    {content: "Add auth module", orgItemId: "FEAT-001-add-auth", gateCmd: "bun test test/auth.test.ts", gateCommit: true}
   ]}
 ]}]
 </example>

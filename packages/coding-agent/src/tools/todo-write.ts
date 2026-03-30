@@ -33,6 +33,8 @@ export interface TodoItem {
 	gateLlm?: string;
 	verifyCmd?: string;
 	blockers?: string[];
+	/** Org item ID this task is linked to. Triggers verification protocol on completion. */
+	orgItemId?: string;
 }
 
 export interface TodoPhase {
@@ -67,6 +69,7 @@ const InputTask = Type.Object({
 	gateLlm: Type.Optional(Type.String({ description: "LLM review criteria" })),
 	verifyCmd: Type.Optional(Type.String({ description: "Recommended verification command" })),
 	blockers: Type.Optional(Type.Array(Type.String({ description: "Task ID that blocks this task" }))),
+	orgItemId: Type.Optional(Type.String({ description: "Org item ID this task is linked to" })),
 });
 
 const InputPhase = Type.Object({
@@ -98,6 +101,7 @@ const todoWriteSchema = Type.Object({
 				gateLlm: Type.Optional(Type.String()),
 				verifyCmd: Type.Optional(Type.String()),
 				blockers: Type.Optional(Type.Array(Type.String())),
+				orgItemId: Type.Optional(Type.String()),
 			}),
 			Type.Object({
 				op: Type.Literal("update"),
@@ -112,6 +116,12 @@ const todoWriteSchema = Type.Object({
 				gateLlm: Type.Optional(Type.String()),
 				verifyCmd: Type.Optional(Type.String()),
 				blockers: Type.Optional(Type.Array(Type.String())),
+				orgItemId: Type.Optional(Type.String()),
+				verified: Type.Optional(
+					Type.Boolean({
+						description: "Set true after verifying all gate requirements. Required to complete a gated task.",
+					}),
+				),
 			}),
 			Type.Object({
 				op: Type.Literal("remove_task"),
@@ -169,6 +179,7 @@ function buildPhaseFromInput(
 			gateLlm: t.gateLlm,
 			verifyCmd: t.verifyCmd,
 			blockers: t.blockers,
+			orgItemId: t.orgItemId,
 		});
 	}
 	return { phase: { id: phaseId, name: input.name, tasks }, nextTaskId: tid };
@@ -275,6 +286,8 @@ interface ApplyOpsResult {
 	completedPhaseIds: string[];
 	/** Tasks that transitioned to completed and have gate fields. */
 	completedGatedTasks: TodoItem[];
+	/** Tasks whose completion was rejected pending verification. */
+	pendingVerificationTasks: TodoItem[];
 }
 
 function isPhaseComplete(phase: TodoPhase): boolean {
@@ -285,8 +298,14 @@ export function hasGate(task: TodoItem): boolean {
 	return !!(task.gateCommit || task.gateArtifact || task.gateCmd || task.gateLlm || task.verifyCmd);
 }
 
+/** Returns true when the task has gates that require two-phase verified completion. */
+export function hasRequiredGate(task: TodoItem): boolean {
+	return !!(task.gateCommit || task.gateArtifact || task.gateCmd || task.gateLlm || task.orgItemId);
+}
+
 function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: TodoPhase[]): ApplyOpsResult {
 	const errors: string[] = [];
+	const pendingVerificationTasks: TodoItem[] = [];
 
 	// Snapshot which phases were already complete before this call
 	const wasComplete = new Map<string, boolean>();
@@ -342,6 +361,7 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 					gateLlm: op.gateLlm,
 					verifyCmd: op.verifyCmd,
 					blockers: op.blockers,
+					orgItemId: op.orgItemId,
 				});
 				break;
 			}
@@ -363,6 +383,7 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 				if (op.gateLlm !== undefined) task.gateLlm = op.gateLlm;
 				if (op.verifyCmd !== undefined) task.verifyCmd = op.verifyCmd;
 				if (op.blockers !== undefined) task.blockers = op.blockers;
+				if (op.orgItemId !== undefined) task.orgItemId = op.orgItemId;
 
 				// Smart gate: reject in_progress transition when task has unresolved blockers
 				if (op.status === "in_progress") {
@@ -382,6 +403,12 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 							break;
 						}
 					}
+				}
+
+				// Two-phase gated completion: reject completion without verification
+				if (op.status === "completed" && hasRequiredGate(task) && !op.verified) {
+					pendingVerificationTasks.push(task);
+					break;
 				}
 
 				if (op.status !== undefined) task.status = op.status;
@@ -437,7 +464,7 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 		}
 	}
 
-	return { file, errors, completedPhaseIds, completedGatedTasks };
+	return { file, errors, completedPhaseIds, completedGatedTasks, pendingVerificationTasks };
 }
 
 /** Build gate directive lines for a single task. */
@@ -448,6 +475,7 @@ function gateDirectivesForTask(task: TodoItem): string[] {
 	if (task.gateCmd) lines.push(`REQUIRED: Run \`${task.gateCmd}\` to verify ${task.id}.`);
 	if (task.gateLlm) lines.push(`REQUIRED: Review ${task.id} against acceptance criteria: ${task.gateLlm}`);
 	if (task.verifyCmd) lines.push(`RECOMMENDED: Run \`${task.verifyCmd}\` to verify ${task.id}.`);
+	if (task.orgItemId) lines.push(`REQUIRED: Update org item ${task.orgItemId} for ${task.id}.`);
 	return lines;
 }
 
@@ -456,6 +484,8 @@ export interface FormatSummaryOptions {
 	errors: string[];
 	completedPhaseIds: string[];
 	completedGatedTasks: TodoItem[];
+	/** Tasks whose completion was rejected pending verification. */
+	pendingVerificationTasks: TodoItem[];
 }
 
 export function formatSummary({
@@ -463,6 +493,7 @@ export function formatSummary({
 	errors,
 	completedPhaseIds,
 	completedGatedTasks,
+	pendingVerificationTasks,
 }: FormatSummaryOptions): string {
 	const allTasks = phases.flatMap(p => p.tasks);
 	if (allTasks.length === 0) return errors.length > 0 ? `Errors: ${errors.join("; ")}` : "Todo list cleared.";
@@ -557,6 +588,24 @@ export function formatSummary({
 		}
 	}
 
+	// Two-phase verification checklist for tasks that need verification before completion
+	if (pendingVerificationTasks.length > 0) {
+		lines.push("");
+		lines.push("--- Verification Required ---");
+		for (const task of pendingVerificationTasks) {
+			lines.push(`${task.id} "${task.content}" requires verification before completion:`);
+			if (task.gateCmd) lines.push(`  [ ] Run \`${task.gateCmd}\` (gateCmd)`);
+			if (task.gateArtifact) lines.push(`  [ ] Verify artifact at ${task.gateArtifact} (gateArtifact)`);
+			if (task.gateCommit) lines.push(`  [ ] Commit changes (gateCommit)`);
+			if (task.gateLlm) lines.push(`  [ ] Review against: ${task.gateLlm} (gateLlm)`);
+			if (task.orgItemId) lines.push(`  [ ] Update org item ${task.orgItemId} (orgItemId)`);
+			lines.push("");
+			lines.push(
+				`Complete these steps, then call todo_write with {op: "update", id: "${task.id}", status: "completed", verified: true}.`,
+			);
+		}
+	}
+
 	return lines.join("\n");
 }
 
@@ -590,6 +639,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 			errors,
 			completedPhaseIds,
 			completedGatedTasks,
+			pendingVerificationTasks,
 		} = applyOps(current, params.ops, previousPhases);
 		this.session.setTodoPhases?.(updated.phases);
 		// Notify dashboard bridge of todo state change
@@ -605,7 +655,13 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 			content: [
 				{
 					type: "text",
-					text: formatSummary({ phases: updated.phases, errors, completedPhaseIds, completedGatedTasks }),
+					text: formatSummary({
+						phases: updated.phases,
+						errors,
+						completedPhaseIds,
+						completedGatedTasks,
+						pendingVerificationTasks,
+					}),
 				},
 			],
 			details: { phases: updated.phases, storage },
@@ -629,6 +685,7 @@ function renderGateBadges(item: TodoItem, uiTheme: Theme): string {
 	if (item.gateCmd) badges.push("[cmd]");
 	if (item.gateLlm) badges.push("[llm]");
 	if (item.verifyCmd) badges.push("[verify]");
+	if (item.orgItemId) badges.push(`[org: ${item.orgItemId}]`);
 	if (badges.length === 0) return "";
 	return ` ${uiTheme.fg("dim", badges.join(" "))}`;
 }

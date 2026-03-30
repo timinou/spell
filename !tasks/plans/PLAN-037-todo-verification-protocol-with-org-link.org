@@ -1,0 +1,94 @@
+#+TITLE: Todo verification protocol with org linkage and task injection
+#+STATE: DOING
+#+SESSION_ID: 14a70c4258c08ccd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T13-42-57-635Z_14a70c4258c08ccd.jsonl]]
+#+CUSTOM_ID: PLAN-037-todo-verification-protocol-with-org-link
+
+
+* Initial Message
+
+when a subtask is associated to a todo (especially relelvant during plan/ultraplan/loop implementations), can you have a soft reminder when the task gets done to make sure to check its validation criteria, tests, artifacts (if any) and to commit ahead of marking the task as done?
+
+* Context
+** Problem
+When the coding-agent works through plan/ultraplan/loop implementations, each todo task may have gate fields (gateCmd, gateArtifact, gateCommit, gateLlm) and be linked to an org item. Currently:
+1. Gate directives fire *after* a task is marked completed — the agent can ignore them and move on
+2. Subagents spawned via the task tool have no awareness of the verification requirements; they only know what the parent manually includes in their assignment
+3. There is no mechanism linking a todo task back to its source org item, so the agent relies on the end-of-plan orchestrator protocol to update org state, which is fragile
+
+** Approach
+Three connected changes:
+
+*** 1. =orgItemId= field on =TodoItem= + two-phase gated completion
+Add =orgItemId?: string= to link todos to their source org item. Add =verified?: boolean= to the update op. When a gated task is marked =completed= without =verified: true=, the status change is *rejected* and a verification checklist is returned. The agent must verify, then re-submit with =verified: true=. This creates a deliberate friction point.
+
+"Required gates" that trigger two-phase: =gateCommit=, =gateArtifact=, =gateCmd=, =gateLlm=, =orgItemId=.
+=verifyCmd= alone does NOT trigger two-phase (it's a recommendation, not a requirement).
+
+*** 2. Task-level gate injection via =todoRef=
+Add =todoRef?: string= to =TaskItem=. When the task tool spawns a subagent, it resolves =todoRef= against the current todo phases, extracts the todo's gates and =orgItemId=, and injects a "Verification Requirements" section into the subagent's context. The subagent inherently knows: which org item to update, which tests to run, which artifacts to produce, whether to commit.
+
+*** 3. Prompt documentation
+Update =todo-write.md=, =plan-mode-approved.md=, and =task.md= to document the new fields and the two-phase protocol.
+
+** Key Decisions
+- Directive-only approach for org updates: the tool surfaces what needs updating, the agent handles org calls (not automated side-effects)
+- Two-phase completion is the mechanism: first attempt → rejection + checklist; second attempt with =verified: true= → completes
+- =hasRequiredGate()= is a new function separate from =hasGate()= to distinguish required gates (that trigger two-phase) from advisory ones (=verifyCmd=)
+- Subagents still don't get =todo_write= access; they get the verification context injected into their prompt and use =org= tool directly for org updates
+- Resolution helper =resolveVerificationContext(todoRef, phases)= is a pure function testable independently of subprocess spawning
+
+* Verification
+** Focused Tests
+#+begin_src bash
+bun test packages/coding-agent/test/tools/todo-write-gates.test.ts
+bun test packages/coding-agent/test/task/todo-ref-injection.test.ts
+#+end_src
+
+** Type Check
+#+begin_src bash
+bun check:ts
+#+end_src
+
+** Manual Checks
+- Read the three updated prompt files and verify documentation is accurate and non-contradictory
+- Grep for =orgItemId= and =todoRef= across the codebase to confirm no missed consumers
+
+* Execution Manifest
+Items are ordered by dependency. FEAT-100 must complete first (defines =orgItemId= and =hasRequiredGate= that FEAT-101 depends on). FEAT-102 depends on both.
+
+1. [[id:FEAT-100-add-orgitemid-to-todoitem-and-two-phase]] — orgItemId field + two-phase gated completion (M, #A)
+   No blockers. Core changes to =todo-write.ts=, tests.
+
+2. [[id:FEAT-101-task-level-gate-injection-via-todoref]] — Task-level gate injection via todoRef (M, #A)
+   Depends on: FEAT-100 (reads =orgItemId= from resolved todo items).
+   Changes to =task/types.ts=, =task/index.ts=, =task/template.ts=, new test file.
+
+3. [[id:FEAT-102-update-prompts-for-verification-protocol]] — Prompt and documentation updates (S, #B)
+   Depends on: FEAT-100, FEAT-101 (documents all new fields).
+   Changes to =todo-write.md=, =plan-mode-approved.md=, =task.md=.
+
+** Completion [2026-03-30]
+*** Verification
+- =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts= — 49 pass, 0 fail (83 expect calls)
+- =bun test packages/coding-agent/test/task/todo-ref-injection.test.ts= — 9 pass, 0 fail (21 expect calls)
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= — 19 pass, 0 fail (regression, 37 expect calls)
+- =bun test packages/coding-agent/test/tools/task-template.test.ts= — 4 pass, 0 fail (regression, 9 expect calls)
+- =bun check:ts= — clean (biome + tsgo)
+- Grep verification: =orgItemId= appears in all required paths (interface, schemas, all ops, directives, badges, template resolution)
+- Grep verification: =todoRef= appears in types.ts, index.ts (both execution paths), template.ts, and prompt docs
+
+*** Artifacts
+- =packages/coding-agent/src/tools/todo-write.ts= — orgItemId field, hasRequiredGate, two-phase logic, verification checklist
+- =packages/coding-agent/src/task/types.ts= — todoRef on TaskItem schema
+- =packages/coding-agent/src/task/template.ts= — resolveVerificationContext pure function
+- =packages/coding-agent/src/task/index.ts= — #injectVerificationContext at both sync and async execution paths
+- =packages/coding-agent/src/modes/components/todo-reminder.ts= — [org] badge
+- =packages/coding-agent/src/prompts/tools/todo-write.md= — orgItemId, verified, Verification Protocol section, examples
+- =packages/coding-agent/src/prompts/system/plan-mode-approved.md= — orgItemId and todoRef instructions
+- =packages/coding-agent/src/prompts/tools/task.md= — todoRef parameter documentation
+- =packages/coding-agent/test/tools/todo-write-gates.test.ts= — 15 new tests for hasRequiredGate, orgItemId, two-phase
+- =packages/coding-agent/test/task/todo-ref-injection.test.ts= — 9 tests for resolveVerificationContext and template rendering
+
+*** Deviations
+None.

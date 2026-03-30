@@ -1,0 +1,90 @@
+#+TITLE: Task-level gate injection via todoRef
+#+STATE: DONE
+#+SESSION_ID: 14a70c4258c08ccd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T13-42-57-635Z_14a70c4258c08ccd.jsonl]]
+#+CUSTOM_ID: FEAT-101-task-level-gate-injection-via-todoref
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+when a subtask is associated to a todo (especially relelvant during plan/ultraplan/loop implementations), can you have a soft reminder when the task gets done to make sure to check its validation criteria, tests, artifacts (if any) and to commit ahead of marking the task as done?
+
+* Summary
+Add =todoRef= optional field to =TaskItem= schema. When set, the task tool resolves it against the current todo phases, extracts gate fields and orgItemId, and injects a verification requirements section into the subagent's context. This ensures the subagent inherently knows its obligations — org item to update, tests to run, artifacts to produce, commit requirements — without relying on the parent agent to manually include this in the assignment.
+
+* Files
+- =packages/coding-agent/src/task/types.ts= — add =todoRef= to =taskItemSchema=
+- =packages/coding-agent/src/task/index.ts= — resolve todoRef and inject verification context (in both executeSync and async paths)
+- =packages/coding-agent/src/task/template.ts= — accept optional verification context and append to rendered task
+- =packages/coding-agent/src/prompts/tools/task.md= — document todoRef field
+
+* Implementation
+** Add todoRef to TaskItem schema
+In =taskItemSchema= (types.ts):
+#+begin_src typescript
+todoRef: Type.Optional(Type.String({
+    description: "Todo item ID (e.g. 'task-3') to link this subagent to. " +
+        "Resolves verification requirements (gates, orgItemId) and injects them into the subagent context automatically."
+})),
+#+end_src
+
+** Resolve todoRef in TaskTool
+In =index.ts=, before =renderTemplate= is called, resolve each task's todoRef:
+1. Read current todo phases from =session.getTodoPhases()=
+2. For each task with =todoRef=, find the matching =TodoItem= in the phases
+3. Build a verification context block from the todo's gate fields:
+   - =gateCmd= → "You MUST run: =<cmd>= and verify it passes"
+   - =gateArtifact= → "You MUST produce artifact at: =<path>="
+   - =gateCommit= → "You MUST commit changes before yielding"
+   - =gateLlm= → "You MUST self-review against: =<criteria>="
+   - =verifyCmd= → "You SHOULD run: =<cmd>= to verify"
+   - =orgItemId= → "You MUST update org item =<id>=: set to DOING at start, update with progress, and append completion report when done. Artifact directory: =!tasks/features/<id>/artifacts/="
+4. If no todo found, log warning and skip injection
+
+** Inject into subagent context
+Modify =renderTemplate= to accept optional =verificationContext: string=. If present, append it after the assignment (or as a separate section in the subagent user prompt). The subagent sees:
+#+begin_example
+--- Background ---
+<context from parent>
+
+--- Task ---
+<assignment from parent>
+
+--- Verification Requirements (from todo task-3) ---
+You MUST run: `bun test test/foo.test.ts` and verify it passes
+You MUST produce artifact at: screenshots/auth-flow.png
+You MUST commit changes before yielding
+You MUST update org item FEAT-001-add-auth: set to DOING at start, ...
+#+end_example
+
+** Handle both execution paths
+The resolution must happen in both:
+- =executeSync= (line ~728 in index.ts) — where =renderTemplate= is called
+- Async path (line ~217) — where tasks are rendered before scheduling
+
+Extract a helper: =resolveVerificationContext(todoRef, phases)= → =string | undefined=
+
+* Edge Cases
+- =todoRef= references a non-existent task → log warning, no injection, no error
+- Todo item has no gates → no verification section injected (skip silently)
+- =todoRef= is not set → no resolution, existing behavior unchanged
+- Multiple tasks with different =todoRef= values → each gets its own verification context
+- =session.getTodoPhases()= returns empty → no resolution possible, skip
+
+* Tests
+Note: TaskTool integration is hard to unit test (spawns subprocesses). Test the resolution helper and template rendering independently:
+- =resolveVerificationContext= returns correct block for a todo with all gates set
+- =resolveVerificationContext= returns undefined for non-existent todoRef
+- =resolveVerificationContext= returns undefined for gateless todo
+- =renderTemplate= with verification context appends the section correctly
+- =renderTemplate= without verification context is unchanged (regression)
+
+Test file: =packages/coding-agent/test/task/todo-ref-injection.test.ts=
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/task/todo-ref-injection.test.ts= passes
+- =bun check:ts= passes
+- When a task is spawned with =todoRef= pointing to a gated todo, the subagent's rendered prompt contains the verification requirements section
+- When =todoRef= is absent or points to a gateless todo, no verification section appears
