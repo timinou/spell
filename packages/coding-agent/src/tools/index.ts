@@ -1,5 +1,6 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { EmacsSessionManager } from "@oh-my-pi/pi-emacs";
+import type { GatewayClient } from "@oh-my-pi/pi-gateway";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
@@ -32,6 +33,7 @@ import { EmacsTool } from "./emacs";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
 import { FindTool } from "./find";
+import { GatewayTool } from "./gateway";
 import { GrepTool } from "./grep";
 import { InspectImageTool } from "./inspect-image";
 import { NotebookTool } from "./notebook";
@@ -72,6 +74,7 @@ export * from "./emacs";
 export * from "./exit-plan-mode";
 export * from "./fetch";
 export * from "./find";
+export * from "./gateway";
 export * from "./gemini-image";
 export * from "./grep";
 export * from "./inspect-image";
@@ -189,6 +192,8 @@ export interface ToolSession {
 	loopManager?: LoopManager;
 	/** Dispose session-owned resources (emacs daemon, QML remote server). */
 	dispose?(): Promise<void> | void;
+	/** Gateway client for managing .localhost service aliases */
+	gatewayClient?: GatewayClient;
 }
 
 type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
@@ -226,6 +231,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	loop_prepare: s => (s.loopManager ? new LoopPrepareTool(s) : null),
 	loop_launch: s => (s.loopManager ? new LoopLaunchTool(s) : null),
 	loop_done: s => (s.loopManager ? new LoopDoneTool(s) : null),
+	gateway: GatewayTool.createIf,
 };
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {

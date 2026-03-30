@@ -1,0 +1,79 @@
+#+TITLE: Gateway TLS Reverse Proxy
+#+STATE: DONE
+#+SESSION_ID: 14a77178d4fac8bb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T19-49-24-420Z_14a76021d13ac89c/11-CreateFeatB.jsonl]]
+#+CUSTOM_ID: FEAT-115-gateway-tls-reverse-proxy
+#+EFFORT: M
+#+LAYER: core
+#+BLOCKER: PROJ-003-gateway-package-and-daemon-core
+
+NOTE [2026-03-30]: Implemented proxy.ts and tls.ts. Host-header routing, HTTP redirect, proper error responses. Tests pass.
+
+** Scope
+*In scope:*
+- HTTP/HTTPS reverse proxy: ~packages/gateway/src/proxy.ts~ — Bun.serve() instance inside the gateway daemon
+- TLS configuration: wildcard cert (~*.localhost~ + ~localhost~) via mkcert, stored at =~/.spell/gateway/tls/=
+- mkcert integration: ~packages/gateway/src/tls.ts~ — detect mkcert binary, generate wildcard cert, locate CA root
+- Port 443 for HTTPS (with sysctl for unprivileged binding), port 80 for HTTP redirect
+- Host-header based routing: parse Host header, extract alias, look up backend in registry
+- Request forwarding: proxy HTTP request to backend target, forward response headers/body/status
+- WebSocket upgrade passthrough: detect Upgrade header, use Bun's server.upgrade() or raw socket proxy
+- Error responses: 502 (backend unreachable), 503 + Retry-After (backend starting via process manager), 404 (unknown alias)
+- Programmatic clients: connect to 127.0.0.1:443 with Host header override — no DNS dependency
+- NODE_EXTRA_CA_CERTS: expose CA root path so other Bun/Node processes trust the mkcert CA
+
+*Out of scope:*
+- Process management (in PROJ-A)
+- Client SDK (FEAT-C)
+- mkcert installation / sysctl setup (FEAT-D init command)
+
+*Boundary rationale:* Pure HTTP proxy layer. Depends on PROJ-A for registry lookups and process manager for auto-start. Owns TLS cert management and request routing.
+
+** Tests
+- ~packages/gateway/test/proxy.test.ts~:
+  - Scenario: request to registered alias proxies to backend, response matches
+  - Scenario: request to unknown alias returns 404 with JSON error body
+  - Scenario: request when backend is down returns 502
+  - Scenario: request when backend is starting returns 503 with Retry-After header
+  - Scenario: Host header parsing extracts alias correctly for ~myapp.localhost~, ~myapp.localhost:443~
+  - Scenario: HTTP request on port 80 redirects to HTTPS
+  - Scenario: large response body (>1MB) streams correctly without buffering
+  - Scenario: backend response headers forwarded to client (content-type, custom headers)
+- ~packages/gateway/test/tls.test.ts~:
+  - Scenario: detect mkcert binary via Bun.which()
+  - Scenario: generate wildcard cert, verify files exist at expected paths
+  - Scenario: load existing cert (skip regeneration)
+  - Scenario: mkcert not installed — throw descriptive error
+  - Scenario: resolve CA root path via ~mkcert -CAROOT~
+
+** Implementation
+1. Implement ~packages/gateway/src/tls.ts~:
+   - ~ensureCerts()~: check =~/.spell/gateway/tls/= for existing wildcard.pem + wildcard-key.pem
+   - If missing: run ~mkcert -cert-file ... -key-file ... '*.localhost' localhost~
+   - ~getCaRoot()~: run ~mkcert -CAROOT~, return path to rootCA.pem
+   - ~loadTlsConfig()~: return ~{ key: BunFile, cert: BunFile }~ for Bun.serve() tls option
+2. Implement ~packages/gateway/src/proxy.ts~:
+   - ~startProxy(registry, processManager, tlsConfig)~: create Bun.serve() with:
+     - ~port: 443~, ~tls: tlsConfig~
+     - ~fetch(req)~: extract alias from Host header → registry.getByAlias(alias) → if not found: 404 → if found but backend down: check managed → trigger process manager start → 503 if starting, 502 if external → else: fetch(backend target + req path, forward headers/body) → return response
+   - HTTP redirect server on port 80: redirect all requests to https:// equivalent
+   - WebSocket: detect ~Upgrade: websocket~ header, use Bun server.upgrade() or manual socket forwarding
+3. Integrate into daemon.ts: start proxy after socket server, pass registry and process manager
+4. Write tests per test plan
+
+** Edge Cases
+- Host header missing: return 400 Bad Request
+- Host header has port number (~myapp.localhost:443~): strip port before alias lookup
+- Backend returns connection refused: return 502, do not retry
+- Backend response timeout (>30s): return 504 Gateway Timeout
+- TLS cert expired: detect via file mtime, regenerate on daemon start if older than 825 days (mkcert default)
+- Multiple concurrent requests to same starting backend: coalesce start attempts, all get 503 until ready
+- CORS preflight (OPTIONS): proxy to backend, don't intercept
+
+** Acceptance Criteria
+- HTTPS proxy on port 443 serves registered aliases
+- Wildcard TLS cert at =~/.spell/gateway/tls/= trusted by browser
+- HTTP on port 80 redirects to HTTPS
+- Backend errors produce correct 4xx/5xx responses
+- WebSocket connections proxy through successfully
+- All proxy and TLS tests pass

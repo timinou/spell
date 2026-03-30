@@ -54,7 +54,19 @@ export type BridgeCommand =
 			/** Positive = scroll up (Qt convention). */
 			deltaY: number;
 	  }
-	| { type: "quit" };
+	| { type: "quit" }
+	| { type: "create_systray"; icon?: string; tooltip?: string }
+	| {
+			type: "update_systray_menu";
+			items: Array<{
+				id: string;
+				label: string;
+				enabled?: boolean;
+				checked?: boolean;
+				separator?: boolean;
+			}>;
+	  }
+	| { type: "destroy_systray" };
 
 /** Events emitted by bridge process → spell (stdout) */
 export type BridgeEvent =
@@ -98,7 +110,9 @@ export type BridgeEvent =
 			/** Characters typed (for type commands) */
 			length?: number;
 	  }
-	| { type: "state"; windows: Array<{ id: string; path: string; state: string; armedTools?: string[] }> };
+	| { type: "state"; windows: Array<{ id: string; path: string; state: string; armedTools?: string[] }> }
+	| { type: "systray_click"; id: "__systray__"; itemId: string }
+	| { type: "systray_activated"; id: "__systray__" };
 
 /** State of a managed window */
 export type WindowState = "loading" | "ready" | "closed" | "error";

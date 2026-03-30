@@ -9,6 +9,7 @@
 #include <QQuickWindow>
 #include <QString>
 #include "bridge.h"
+#include "systray.h"
 #include <QQuickItem>
 #include <QLocalSocket>
 #include <optional>
@@ -87,6 +88,7 @@ private:
                          int maxDepth, int depth, const QString &path,
                          QJsonArray &results);
 
+    SystrayManager *m_systray = nullptr;
     std::function<void(QLocalSocket *, const QJsonObject &)> m_eventWriter;
     QHash<QString, WindowEntry> m_windows;
 };

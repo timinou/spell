@@ -70,6 +70,11 @@ interface MCPServerConfigBase {
 		clientId?: string;
 		callbackPort?: number;
 	};
+	/** Gateway configuration for exposing via .localhost alias */
+	gateway?: {
+		expose?: boolean;
+		alias?: string;
+	};
 }
 
 /** Stdio server configuration */

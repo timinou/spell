@@ -1,0 +1,80 @@
+#+TITLE: Gateway Package and Daemon Core
+#+STATE: DONE
+#+SESSION_ID: 14a77178d47ac8b5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T19-49-24-420Z_14a76021d13ac89c/10-CreateProjA.jsonl]]
+#+CUSTOM_ID: PROJ-003-gateway-package-and-daemon-core
+#+EFFORT: L
+#+LAYER: infra
+
+NOTE [2026-03-30]: All components implemented: protocol.ts, registry.ts, process-manager.ts, daemon.ts. 28 tests pass.
+
+** Scope
+*In scope:*
+- New ~packages/gateway~ package: package.json, tsconfig.json, src/index.ts exports
+- Gateway daemon entry point: ~packages/gateway/src/daemon.ts~ — standalone Bun process
+- Unix socket control plane: NDJSON protocol over ~$XDG_RUNTIME_DIR/spell-gateway.sock~
+- Protocol types: ~packages/gateway/src/protocol.ts~ — request/response message types for register, deregister, list, status, cleanup, cert-info RPCs
+- Persistent service registry: ~packages/gateway/src/registry.ts~ — JSON at =~/.spell/gateway/services.json=, atomic writes via rename-from-tmp
+- Service schema: alias, target, sessionId, persistent flag, managed process config, status, pid, timestamps
+- Session-scoped service tagging: sessionId field on registration, cleanup RPC tears down all services for a session
+- Managed backend process lifecycle: ~packages/gateway/src/process-manager.ts~ — spawn child processes from config (command/args/env/cwd), PID tracking, health checks (HTTP probe or process alive), auto-restart with exponential backoff, graceful shutdown
+- Daemon lifecycle: use ManagedDaemon pattern (packages/utils/src/managed-daemon.ts) for the daemon itself — postmortem registration, health timer, graceful stop
+- tsconfig.base.json path alias: ~@oh-my-pi/pi-gateway~ -> ~packages/gateway/src/index.ts~
+
+*Out of scope:*
+- HTTP/HTTPS proxy (FEAT-B)
+- TLS/mkcert (FEAT-B)
+- Client SDK (FEAT-C)
+- CLI commands (FEAT-D)
+- Agent tool (FEAT-E)
+
+*Boundary rationale:* The daemon and its internal components (registry, protocol, process manager) are the foundation. Everything else is a consumer.
+
+** Tests
+- ~packages/gateway/test/registry.test.ts~:
+  - Scenario: register service, verify persisted to JSON, read back matches
+  - Scenario: register two services with same alias, second fails with conflict error
+  - Scenario: deregister service, verify removed from JSON
+  - Scenario: register session-scoped service, cleanup by sessionId, verify removed
+  - Scenario: atomic write — corrupt mid-write detected, backup created
+  - Scenario: concurrent register from two clients, no data loss
+- ~packages/gateway/test/protocol.test.ts~:
+  - Scenario: parse valid NDJSON register request
+  - Scenario: reject malformed JSON
+  - Scenario: reject unknown message type with error response
+  - Scenario: round-trip request/response ID correlation
+- ~packages/gateway/test/process-manager.test.ts~:
+  - Scenario: spawn managed process, verify PID tracked, process alive
+  - Scenario: managed process dies, auto-restart triggers, new PID tracked
+  - Scenario: health check fails 3 times, process restarted
+  - Scenario: graceful shutdown sends SIGTERM, waits, then SIGKILL
+  - Scenario: exponential backoff between restart attempts (100ms, 200ms, 400ms, ...)
+
+** Implementation
+1. Create ~packages/gateway/package.json~ with name ~@oh-my-pi/pi-gateway~, workspace deps on ~@oh-my-pi/pi-utils~
+2. Create ~packages/gateway/tsconfig.json~ extending ~../../tsconfig.base.json~
+3. Add path alias to ~tsconfig.base.json~: ~@oh-my-pi/pi-gateway~ and ~@oh-my-pi/pi-gateway/*~
+4. Implement ~packages/gateway/src/protocol.ts~: GatewayRequest, GatewayResponse union types, message type enum, serialization helpers
+5. Implement ~packages/gateway/src/registry.ts~: GatewayRegistry class with add/remove/list/getByAlias/cleanupSession methods. Follow ServiceRegistry pattern (packages/coding-agent/src/browser/service-registry.ts) for atomic writes
+6. Implement ~packages/gateway/src/process-manager.ts~: ManagedBackend class — spawn(config), stop(), isAlive(), health check timer, auto-restart with backoff. Uses Bun.spawn(), postmortem.register() for cleanup
+7. Implement ~packages/gateway/src/daemon.ts~: main daemon entry — create Unix socket server (net.createServer), accept NDJSON connections, dispatch to registry/process-manager, handle multiple concurrent clients
+8. Implement ~packages/gateway/src/index.ts~: export public API (types, registry, protocol)
+9. Write tests per test plan above
+
+** Edge Cases
+- Stale socket file on disk: probe before bind, remove if dead (same pattern as QML bridge socketserver.cpp)
+- Registry file doesn't exist on first run: initialize with empty ~{services: {}}~
+- Registry file corrupted: backup to .bak, start fresh (same pattern as browser service-registry.ts)
+- Managed process refuses to die: SIGTERM → 2s wait → SIGKILL → 3s wait → log error
+- Multiple daemon instances: second bind attempt fails, log error pointing to existing daemon
+- Session cleanup for non-existent sessionId: no-op, return success
+- Service alias validation: lowercase alphanumeric + hyphens only, max 63 chars (DNS label rules)
+
+** Acceptance Criteria
+- ~packages/gateway~ directory exists with valid package.json, tsconfig.json
+- ~bun check:ts~ passes with new package included
+- All test files pass: ~bun test packages/gateway/test/~
+- Daemon starts, listens on Unix socket, accepts NDJSON connections
+- Registry persists services across daemon restarts
+- Process manager spawns and tracks child processes
+- Session cleanup removes all session-tagged services

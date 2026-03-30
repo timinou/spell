@@ -1,0 +1,76 @@
+#+TITLE: Gateway Standalone Systray
+#+STATE: DONE
+#+SESSION_ID: 14a77178d53ac8bd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T19-49-24-420Z_14a76021d13ac89c/17-CreateFeatG2.jsonl]]
+#+CUSTOM_ID: FEAT-113-gateway-standalone-systray
+#+EFFORT: L
+#+LAYER: ui
+#+BLOCKER: FEAT-111-gateway-client-sdk
+
+NOTE [2026-03-30]: SystrayManager C++ class, protocol commands, TS API. CMakeLists updated with Qt6::Widgets.
+
+** Scope
+*In scope:*
+- QML bridge C++ changes: add Qt6::Widgets to ~packages/qml/CMakeLists.txt~ target_link_libraries
+- Systray lifecycle in bridge: ~packages/qml/bridge/systray.h~ / ~packages/qml/bridge/systray.cpp~ — QSystemTrayIcon + QMenu management
+- New bridge protocol commands: =create_systray=, =update_systray_menu=, =destroy_systray= in ~packages/qml/bridge/windowmanager.h~ dispatch
+- Protocol types: extend ~packages/qml/src/protocol.ts~ with new BridgeCommand variants for systray
+- QML bridge TypeScript API: extend ~packages/qml/src/qml-bridge.ts~ with createSystray(), updateSystrayMenu(), destroySystray() methods
+- Gateway daemon integration: on startup, connect to QML bridge, create systray icon
+- Systray menu: dynamic menu showing service list (alias → status), Start/Stop gateway, separator, Quit
+- Tray icon: Spell icon with status overlay (green dot = healthy, red dot = issues)
+- Tray click: show/hide service list popup
+- QML bridge keeps systray alive even when no shell windows are open
+
+*Out of scope:*
+- QML shell panel (FEAT-G1)
+- Gateway daemon core logic (PROJ-A)
+
+*Boundary rationale:* Requires C++ bridge extension — completely separate work from the QML panel. The bridge changes are the prerequisite; the gateway integration is the consumer.
+
+** Tests
+- ~packages/qml/test/systray-protocol.test.ts~:
+  - Scenario: send create_systray command, bridge creates QSystemTrayIcon
+  - Scenario: send update_systray_menu command, menu items update
+  - Scenario: send destroy_systray command, tray icon removed
+  - Scenario: click menu item, bridge emits event with item ID
+- Manual verification: gateway daemon starts, systray icon appears
+- Manual verification: register service via CLI, systray menu updates
+- Manual verification: click service in systray menu, opens browser to alias URL
+- Manual verification: close all QML windows, systray persists
+
+** Implementation
+1. *C++ bridge changes:*
+   - Add Qt6::Widgets to ~packages/qml/CMakeLists.txt~
+   - Create ~packages/qml/bridge/systray.h~: SystrayManager class wrapping QSystemTrayIcon + QMenu
+   - Methods: create(icon, tooltip), updateMenu(items[{id, label, enabled, checked}]), destroy()
+   - Signal: menuItemClicked(id) → emit as bridge event
+   - Integrate into main.cpp: instantiate SystrayManager alongside WindowManager
+2. *Protocol extension:*
+   - Add to ~packages/qml/bridge/windowmanager.h~ (or separate handler): dispatch create_systray, update_systray_menu, destroy_systray commands
+   - Add to ~packages/qml/src/protocol.ts~: new BridgeCommand and BridgeEvent types for systray
+3. *TypeScript API:*
+   - Add to ~packages/qml/src/qml-bridge.ts~: createSystray(opts), updateSystrayMenu(items), destroySystray()
+   - Event handling for systray menu clicks
+4. *Gateway integration:*
+   - In gateway daemon startup: import QmlBridge, call createSystray() with Spell icon
+   - On registry changes: call updateSystrayMenu() with current service list
+   - Menu item click handler: open browser, toggle service, etc.
+5. Write protocol tests, manual verification for visual behavior
+
+** Edge Cases
+- QML bridge not available (no Qt installed): gateway works without systray, log info message
+- QML bridge crashes: systray disappears, gateway continues working, reconnect attempts recreate systray
+- Multiple gateway instances: only one systray (first wins, tracked by client ID)
+- Desktop environment without systray support (tiling WM): QSystemTrayIcon.isSystemTrayAvailable() check, skip if false
+- Menu update while menu is open: Qt handles this gracefully (menu rebuilds on next open)
+- Large number of services (>20): group by status, add "Show all..." submenu
+
+** Acceptance Criteria
+- Qt6::Widgets linked, bridge compiles with systray support
+- systray protocol commands work via NDJSON socket
+- Gateway daemon creates systray icon on startup
+- Systray menu shows live service list
+- Systray persists when no QML windows are open
+- Menu clicks trigger correct actions (open browser, toggle service)
+- =bun check:ts= passes with new protocol types

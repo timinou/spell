@@ -1,0 +1,68 @@
+#+TITLE: MCP HTTP Gateway Integration
+#+STATE: DONE
+#+SESSION_ID: 14a77178d4bac8b9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T19-49-24-420Z_14a76021d13ac89c/15-CreateFeatF.jsonl]]
+#+CUSTOM_ID: FEAT-114-mcp-http-gateway-integration
+#+EFFORT: L
+#+LAYER: integration
+#+BLOCKER: FEAT-115-gateway-tls-reverse-proxy FEAT-111-gateway-client-sdk
+
+NOTE [2026-03-30]: MCPServer interface extended with gateway field. Manager auto-registers HTTP/SSE servers. Gateway ops wrapped in try/catch.
+
+## Scope
+**In scope:**
+- Extend MCPServer interface: add ~gateway?: { expose?: boolean; alias?: string }~ field in =packages/coding-agent/src/capability/mcp.ts=
+- Update MCPServer validation to accept the new field
+- MCP manager integration: in =packages/coding-agent/src/mcp/manager.ts=, after connecting to HTTP MCP servers with ~gateway.expose = true~, auto-register them with the gateway daemon
+- Lazy-start for HTTP MCPs: when gateway receives request to an MCP alias and the backing process isn't running, spawn it using the MCP config's command/args/env
+- MCP config resolution: gateway reads MCP command/args from the registered service's managed config (populated during auto-registration)
+- Auto-alias derivation: if ~gateway.alias~ not specified, derive from MCP server name (lowercase, hyphenated)
+- Discovery integration: HTTP MCPs with gateway exposure get registered on ~discoverAndConnect()~
+- Deregistration on MCP disconnect/session end
+
+**Out of scope:**
+- stdio-to-HTTP MCP bridge (Phase 2 — wrapping stdio MCPs in HTTP adapter)
+- Non-MCP service management (PROJ-A, FEAT-B)
+
+**Boundary rationale:** MCP-specific integration layer. Uses PROJ-A process manager for lazy-start, FEAT-B proxy for routing, FEAT-C client for registration.
+
+** Tests
+- =packages/coding-agent/test/mcp/gateway-integration.test.ts=:
+  - Scenario: MCPServer with ~gateway: { expose: true }~ gets auto-registered with gateway after connect
+  - Scenario: MCPServer with ~gateway: { expose: true, alias: "custom" }~ uses custom alias
+  - Scenario: MCPServer without gateway field is not registered
+  - Scenario: HTTP MCP deregistered from gateway on disconnect
+  - Scenario: gateway.expose validation — only valid for transport=http or transport=sse
+- =packages/gateway/test/mcp-lazy-start.test.ts=:
+  - Scenario: request to MCP alias when process not running triggers spawn
+  - Scenario: spawn uses command/args/env from managed config
+  - Scenario: health check verifies MCP HTTP endpoint responds before routing
+  - Scenario: spawn failure returns 503 with error detail
+  - Scenario: concurrent requests during startup coalesce, all get response after start
+
+** Implementation
+1. Add ~gateway?: { expose?: boolean; alias?: string }~ to MCPServer in =packages/coding-agent/src/capability/mcp.ts=
+2. Update validate function: gateway.expose only valid when command or url present
+3. In =packages/coding-agent/src/mcp/manager.ts= connectServers():
+   - After successful connection, check if config has gateway.expose = true
+   - If yes and transport is http/sse: call gatewayClient.register({ alias, target: config.url, managed: { command, args, env }, persistent: false, sessionId })
+   - Store gateway registration state on connection object
+4. In MCPManager disconnect/dispose: deregister from gateway
+5. In gateway daemon process-manager: when lazy-start is triggered for an MCP service, spawn the process, wait for HTTP health (GET /), then begin proxying
+6. Write tests per plan
+
+** Edge Cases
+- MCP has url but no command: can proxy but can't lazy-start — register as external (unmanaged)
+- MCP has command but no url: need to assign a port — use ephemeral port (0), detect via process output or health probe
+- MCP server changes port on restart: re-register with new target
+- Gateway not available: skip auto-registration, log warning, MCP works normally via direct connection
+- Multiple sessions expose same MCP: first registration wins, subsequent sessions reuse alias
+- MCP config env vars need expansion: env vars like ~${HOME}~ must be resolved before passing to process manager
+
+** Acceptance Criteria
+- HTTP MCPs with ~gateway.expose: true~ in mcp.json get .localhost aliases automatically
+- Lazy-start works: cold MCP spawned on first request to alias
+- MCP deregistered on session end
+- Direct MCP connection still works when gateway unavailable
+- All MCP gateway integration tests pass
+- MCPServer type accepts new gateway field, ~bun check:ts~ passes

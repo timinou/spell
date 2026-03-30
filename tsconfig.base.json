@@ -45,6 +45,8 @@
 			"@oh-my-pi/pi-niri": ["./packages/niri/src/index.ts"],
 			"@oh-my-pi/pi-niri/*": ["./packages/niri/src/*"],
 			"@oh-my-pi/pi-emacs/*": ["./packages/emacs/src/*"],
+			"@oh-my-pi/pi-gateway": ["./packages/gateway/src/index.ts"],
+			"@oh-my-pi/pi-gateway/*": ["./packages/gateway/src/*"],
 			"@sinclair/typebox": ["./node_modules/@sinclair/typebox/build/esm/index.d.mts"],
 			"@sinclair/typebox/*": ["./node_modules/@sinclair/typebox/build/esm/*"]
 		}

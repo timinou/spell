@@ -4,6 +4,7 @@
  * Discovers, connects to, and manages MCP servers.
  * Handles tool loading and lifecycle.
  */
+import { GatewayClient } from "@oh-my-pi/pi-gateway";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import type { SourceMeta } from "../capability/types";
@@ -129,6 +130,7 @@ export class MCPManager {
 	#notificationsEpoch = 0;
 	#subscribedResources = new Map<string, Set<string>>();
 	#pendingResourceRefresh = new Map<string, { connection: MCPServerConnection; promise: Promise<void> }>();
+	#gatewayRegistrations = new Set<string>();
 
 	constructor(
 		private cwd: string,
@@ -318,6 +320,9 @@ export class MCPManager {
 						this.#connections.set(name, connection);
 					}
 
+					// Register with gateway if configured
+					this.#registerWithGateway(name, config);
+
 					// Wire auth refresh for HTTP transports so 401s trigger token refresh
 					if (connection.transport instanceof HttpTransport && config.auth?.type === "oauth") {
 						connection.transport.onAuthError = async () => {
@@ -490,6 +495,38 @@ export class MCPManager {
 		this.#tools.push(...tools);
 	}
 
+	#registerWithGateway(name: string, config: MCPServerConfig): void {
+		if (!config.gateway?.expose) return;
+		if (config.type === "stdio" || !("url" in config)) return;
+		const alias = config.gateway.alias ?? name.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+		void (async () => {
+			try {
+				const client = new GatewayClient();
+				await client.register({
+					alias,
+					target: config.url,
+					persistent: false,
+				});
+				client.dispose();
+				this.#gatewayRegistrations.add(alias);
+				logger.debug("Registered MCP server with gateway", { path: `mcp:${name}`, alias });
+			} catch (error) {
+				logger.debug("Failed to register MCP server with gateway", { path: `mcp:${name}`, error });
+			}
+		})();
+	}
+
+	async #deregisterFromGateway(alias: string): Promise<void> {
+		try {
+			const client = new GatewayClient();
+			await client.deregister(alias);
+			client.dispose();
+			this.#gatewayRegistrations.delete(alias);
+		} catch (error) {
+			logger.debug("Failed to deregister MCP server from gateway", { alias, error });
+		}
+	}
+
 	#triggerNotificationRefresh(serverName: string, kind: "tools" | "resources" | "prompts"): void {
 		const refresh = (() => {
 			switch (kind) {
@@ -614,6 +651,14 @@ export class MCPManager {
 		}
 		this.#subscribedResources.delete(name);
 
+		// Deregister from gateway if registered
+		if (connection?.config.gateway?.expose) {
+			const alias = connection.config.gateway.alias ?? name.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+			if (this.#gatewayRegistrations.has(alias)) {
+				void this.#deregisterFromGateway(alias);
+			}
+		}
+
 		if (connection) {
 			await disconnectServer(connection);
 			this.#connections.delete(name);
@@ -642,6 +687,9 @@ export class MCPManager {
 		this.#connections.clear();
 		this.#tools = [];
 		this.#subscribedResources.clear();
+		// Deregister all gateway registrations
+		const deregPromises = Array.from(this.#gatewayRegistrations).map(alias => this.#deregisterFromGateway(alias));
+		await Promise.allSettled(deregPromises);
 	}
 
 	/**

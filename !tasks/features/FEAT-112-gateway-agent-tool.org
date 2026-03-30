@@ -1,0 +1,63 @@
+#+TITLE: Gateway Agent Tool
+#+STATE: DONE
+#+SESSION_ID: 14a77178d53ac8bf
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T19-49-24-420Z_14a76021d13ac89c/14-CreateFeatE.jsonl]]
+#+CUSTOM_ID: FEAT-112-gateway-agent-tool
+#+EFFORT: S
+#+LAYER: integration
+#+BLOCKER: FEAT-111-gateway-client-sdk
+
+NOTE [2026-03-30]: GatewayTool with register/deregister/list/status actions. ToolSession extended with gatewayClient. Registered in BUILTIN_TOOLS.
+
+** Scope
+*In scope:*
+- New ~gateway~ tool: ~packages/coding-agent/src/tools/gateway.ts~
+- ToolSession extension: add ~gatewayClient?: GatewayClient~ to ToolSession interface in ~packages/coding-agent/src/tools/index.ts~
+- GatewayClient initialization in session setup: ~packages/coding-agent/src/sdk.ts~
+- Register in BUILTIN_TOOLS: ~gateway: s => new GatewayTool(s)~ (or conditional on gateway availability)
+- Tool schema (TypeBox): action enum (register, deregister, list, status), alias, target, persistent flag
+- Tool execution: delegate to GatewayClient, auto-tag session-scoped services with session ID
+- Result includes alias URL (https://alias.localhost) for agent to reference
+- Session dispose hook: call ~gatewayClient.cleanup(sessionId)~ to tear down session-scoped services
+
+*Out of scope:*
+- GatewayClient implementation (FEAT-C)
+- TUI renderer (use default JSON rendering initially)
+
+*Boundary rationale:* Thin tool wrapper around GatewayClient. Agent uses this to manage services during sessions.
+
+** Tests
+- ~packages/coding-agent/test/tools/gateway.test.ts~:
+  - Scenario: register action creates service, returns alias URL in result
+  - Scenario: deregister action removes service
+  - Scenario: list action returns service array
+  - Scenario: register with persistent=false tags with session ID
+  - Scenario: tool handles missing gateway daemon gracefully (auto-spawn or error)
+
+** Implementation
+1. Add ~gatewayClient?: GatewayClient~ to ToolSession interface (~packages/coding-agent/src/tools/index.ts~)
+2. In SDK session setup (~packages/coding-agent/src/sdk.ts~), create GatewayClient instance, assign to ~toolSession.gatewayClient~
+3. In session dispose, call ~gatewayClient.cleanup(sessionId)~ then ~gatewayClient.dispose()~
+4. Create ~packages/coding-agent/src/tools/gateway.ts~:
+   - Schema: ~{ action: "register"|"deregister"|"list"|"status", alias?: string, target?: string, persistent?: boolean }~
+   - ~execute()~: switch on action, delegate to ~session.gatewayClient~
+   - register: call ~client.register({ alias, target, sessionId: session.id, persistent })~, return ~{ aliasUrl, alias, target }~
+   - deregister: call ~client.deregister(alias)~
+   - list: call ~client.list()~, format as structured result
+   - status: call ~client.status(alias)~
+5. Add to BUILTIN_TOOLS: ~gateway: s => (s.gatewayClient ? new GatewayTool(s) : null)~
+6. Write tests
+
+** Edge Cases
+- Gateway daemon not installed: tool returns null from factory (not in toolbox), no error
+- Gateway daemon not running: GatewayClient auto-spawns on first use
+- Register without alias: auto-generate from target hostname/port
+- Register without target: error with clear message
+- Session has no ID: use process PID as fallback session identifier
+
+** Acceptance Criteria
+- ~gateway~ tool appears in agent toolbox when gateway is available
+- Agent can register a service and get back an alias URL
+- Session cleanup tears down session-scoped services
+- Tool doesn't appear when gateway is not installed
+- All gateway tool tests pass

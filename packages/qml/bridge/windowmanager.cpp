@@ -101,6 +101,31 @@ void WindowManager::dispatch(QLocalSocket *client, const QByteArray &jsonLine) {
         if (m_windows.isEmpty()) {
             QGuiApplication::quit();
         }
+    } else if (type == "create_systray") {
+        if (!m_systray) {
+            m_systray = new SystrayManager(this);
+            connect(m_systray, &SystrayManager::menuItemClicked, this, [this, client](const QString &itemId) {
+                QJsonObject evt;
+                evt["type"] = "systray_click";
+                evt["itemId"] = itemId;
+                writeEvent(client, evt);
+            });
+            connect(m_systray, &SystrayManager::activated, this, [this, client]() {
+                QJsonObject evt;
+                evt["type"] = "systray_activated";
+                writeEvent(client, evt);
+            });
+        }
+        m_systray->create(msg["icon"].toString(), msg["tooltip"].toString());
+    } else if (type == "update_systray_menu") {
+        if (m_systray)
+            m_systray->updateMenu(msg["items"].toArray());
+    } else if (type == "destroy_systray") {
+        if (m_systray) {
+            m_systray->destroy();
+            m_systray->deleteLater();
+            m_systray = nullptr;
+        }
     }
 }
 

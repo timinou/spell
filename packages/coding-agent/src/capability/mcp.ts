@@ -25,6 +25,13 @@ export interface MCPServer {
 	env?: Record<string, string>;
 	/** URL (for HTTP/SSE transport) */
 	url?: string;
+	/** Gateway configuration for exposing this MCP server via .localhost alias */
+	gateway?: {
+		/** Whether to auto-register with the gateway (default: false) */
+		expose?: boolean;
+		/** Custom alias (default: derived from server name) */
+		alias?: string;
+	};
 	/** HTTP headers (for HTTP transport) */
 	headers?: Record<string, string>;
 	/** Authentication configuration */

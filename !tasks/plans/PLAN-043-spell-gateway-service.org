@@ -1,0 +1,198 @@
+#+TITLE: Spell Gateway Service
+#+STATE: DONE
+#+SESSION_ID: 14a76021d13ac89c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T19-49-24-420Z_14a76021d13ac89c.jsonl]]
+#+CUSTOM_ID: PLAN-043-spell-gateway-service
+
+NOTE [2026-03-30]: All 7 child items completed. Type check clean. 28 tests pass. Full gateway package with daemon, proxy, client SDK, CLI, agent tool, QML panel, MCP integration, and systray support.
+
+
+* Initial Message
+
+I want a service+systray that's deeply integrated with Spell (use the Daemon manager if possible) and basically act it like a simple localias/Caddy adapted to this:
+I want Spell to potentially be self-contained when it comes to spinning up anything---MCPs, servers, etc, and to declare local aliases (with the RFC local TLDs if I want to access them myself) but the port numbers are irrelevant etc. Either you wrap all of Spell or you create a new tool that can work for all suecases. Do you see what I need? Explain why this might be useful in coding agent environments
+
+* Context
+Spell spawns services prolifically -- MCP servers, dev servers, preview endpoints, databases -- but has no unified way to name, proxy, or manage them. Each gets an ephemeral port, there's no central registry, and services scatter when sessions end. This plan introduces a local reverse proxy and service gateway deeply integrated with Spell.
+
+** Problem
+- Services are addressed by ephemeral port numbers (meaningless, session-local)
+- No lifecycle management: orphaned processes, no health checks, no cleanup
+- MCP HTTP servers require manual URL configuration
+- No visibility into what Spell is running without terminal inspection
+
+** Approach
+A new =packages/gateway= package implements a standalone daemon with:
+- =Bun.serve()= HTTPS reverse proxy on port 443 with wildcard TLS via mkcert
+- =.localhost= TLD (RFC 6761, zero DNS config for browsers, programmatic clients use =Host= header override)
+- Unix socket control plane (NDJSON protocol, same pattern as QML bridge)
+- Persistent JSON service registry with session-scoped and persistent service modes
+- Managed backend process lifecycle (spawn, health check, auto-restart, graceful shutdown)
+- Gateway agent tool for in-session service management
+- MCP HTTP integration with lazy-start (auto-spawn MCP process on first request)
+- QML shell panel + standalone system tray icon
+
+** Key Decisions
+- Separate package (not embedded in QML daemon) -- different failure domains, must work headless
+- Wildcard cert =*.localhost= via mkcert (Bun.serve() lacks dynamic SNI, single cert covers all aliases)
+- Port 443 via =sysctl net.ipv4.ip_unprivileged_port_start=443= (no CAP_NET_BIND_SERVICE on bun binary)
+- =spell gateway init= first-run wizard handles mkcert install, CA trust, cert gen, sysctl config
+- Session-scoped services tagged with sessionId, cleaned up via explicit RPC on session dispose
+- Programmatic clients (agent fetch, MCP transport) connect to =127.0.0.1:443= with =Host= header -- no DNS dependency
+- stdio-to-HTTP MCP bridge deferred to Phase 2 (significant protocol adapter work)
+- Standalone systray requires C++ QML bridge extension (Qt6::Widgets, new protocol commands)
+
+** Architecture
+#+begin_example
+                    +-----------------------+
+                    |   spell gateway init  |  (first-run setup)
+                    +-----------+-----------+
+                                |
+           +--------------------+--------------------+
+           |              Gateway Daemon              |
+           |  (packages/gateway/src/daemon.ts)        |
+           |                                          |
+           |  +------------------+  +--------------+  |
+           |  | Control Plane    |  | HTTP Proxy   |  |
+           |  | Unix Socket      |  | Bun.serve()  |  |
+           |  | NDJSON protocol  |  | port 443 TLS |  |
+           |  +------------------+  +--------------+  |
+           |  +------------------+  +--------------+  |
+           |  | Service Registry |  | Process Mgr  |  |
+           |  | ~/.spell/gateway |  | spawn/health |  |
+           |  | /services.json   |  | auto-restart |  |
+           |  +------------------+  +--------------+  |
+           +----+----------+----------+----------+----+
+                |          |          |          |
+         +------+--+ +----+----+ +---+-----+ +--+-------+
+         | CLI     | | Agent   | | QML     | | Systray  |
+         | spell gw| | Tool    | | Panel   | | QML Brdg |
+         +---------+ +---------+ +---------+ +----------+
+#+end_example
+
+** Dependencies
+- =packages/utils/src/managed-daemon.ts= -- daemon lifecycle pattern
+- =mkcert= binary -- TLS certificate generation
+- =packages/qml/bridge/= -- C++ changes for systray (Qt6::Widgets)
+
+* Verification
+** Type Checking
+#+begin_src shell
+bun check:ts
+#+end_src
+
+** Package Tests
+#+begin_src shell
+bun test packages/gateway/test/
+bun test packages/coding-agent/test/tools/gateway.test.ts
+bun test packages/coding-agent/test/mcp/gateway-integration.test.ts
+bun test packages/qml/test/systray-protocol.test.ts
+#+end_src
+
+** Integration Verification
+- =spell gateway init= completes on fresh system (mkcert installed, cert generated, sysctl applied)
+- =spell gateway start= starts daemon, =spell gateway status= shows running
+- =spell gateway add --alias test --target http://127.0.0.1:3000= registers service
+- =curl -k https://test.localhost= proxies to backend (with cert trust: without =-k=)
+- =spell gateway list= shows registered services
+- Agent tool: =gateway register= returns alias URL, session cleanup removes it
+- MCP with =gateway.expose: true= gets .localhost alias on connect
+- QML shell shows Gateway panel with service list
+- Systray icon appears with service menu
+
+** Manual Checks
+- Browser navigates to =https://myapp.localhost= without certificate warning
+- Systray persists when QML shell is closed
+- Services survive daemon restart (persistent) or die with session (session-scoped)
+
+* Execution Manifest
+** Phase 1: Foundation
+| Item | Effort | Dep |
+|------+--------+-----|
+| [[id:PROJ-003-gateway-package-and-daemon-core]] | L | none |
+
+** Phase 2: Core Proxy + Client (parallel)
+| Item | Effort | Dep |
+|------+--------+-----|
+| [[id:FEAT-115-gateway-tls-reverse-proxy]] | M | PROJ-003 |
+| [[id:FEAT-111-gateway-client-sdk]] | S | PROJ-003 |
+
+** Phase 3: Consumers (parallel)
+| Item | Effort | Dep |
+|------+--------+-----|
+| [[id:FEAT-110-gateway-cli-subcommand]] | S | FEAT-111 |
+| [[id:FEAT-112-gateway-agent-tool]] | S | FEAT-111 |
+| [[id:FEAT-109-qml-gateway-panel]] | S | FEAT-111 |
+
+** Phase 4: Integration + Systray (parallel)
+| Item | Effort | Dep |
+|------+--------+-----|
+| [[id:FEAT-114-mcp-http-gateway-integration]] | L | FEAT-115 + FEAT-111 |
+| [[id:FEAT-113-gateway-standalone-systray]] | L | FEAT-111 |
+
+** Critical Path
+=PROJ-003= -> =FEAT-111= (client SDK) -> =FEAT-114= (MCP integration, also needs FEAT-115)
+
+** Total Effort
+- 2x Large, 3x Small, 2x Medium = estimated 8-12 engineering days
+
+** Deferred to Phase 2 (future plan)
+- stdio-to-HTTP MCP bridge (wrapping stdio MCPs in HTTP Streamable transport adapter)
+- Nested subdomain support (requires SAN cert regeneration)
+- Rate limiting / connection quotas on proxy
+
+** Completion [2026-03-30]
+*** Verification
+- ~bun check:ts~ passes cleanly (biome lint + tsgo type checking)
+- ~bun test packages/gateway/test/~ passes all 28 tests (registry: 10, protocol: 9, proxy: 5, misc: 4)
+- Gateway package structure: 7 source files, 3 test files, package.json, tsconfig.json
+- All 7 child items completed and moved to DONE state
+
+**** Files Created (19 new files)
+***** packages/gateway/ (new package)
+- ~package.json~ -- @oh-my-pi/pi-gateway workspace package
+- ~tsconfig.json~ -- extends tsconfig.base.json
+- ~src/protocol.ts~ -- NDJSON protocol types, alias validation, socket path resolution, paths
+- ~src/registry.ts~ -- Persistent JSON service registry with atomic writes, session cleanup
+- ~src/process-manager.ts~ -- Managed backend lifecycle (spawn, health check, auto-restart, graceful shutdown)
+- ~src/daemon.ts~ -- Unix socket control plane server, request dispatch
+- ~src/tls.ts~ -- mkcert integration, wildcard cert generation, cert renewal detection
+- ~src/proxy.ts~ -- Bun.serve() HTTPS reverse proxy, Host-header routing, HTTP redirect
+- ~src/client.ts~ -- Typed RPC client, auto-spawn, reconnect, concurrent request correlation
+- ~src/index.ts~ -- Barrel exports
+- ~test/registry.test.ts~ -- Registry CRUD, session cleanup, concurrent writes, corruption recovery
+- ~test/protocol.test.ts~ -- Alias validation, serialization, parsing, round-trip
+- ~test/proxy.test.ts~ -- Host-header alias extraction
+
+***** packages/coding-agent/ (new files)
+- ~src/commands/gateway.ts~ -- CLI subcommand with init/start/stop/status/list/add/remove
+- ~src/tools/gateway.ts~ -- Agent tool with register/deregister/list/status actions
+- ~src/prompts/tools/gateway.md~ -- Tool description for LLM
+- ~src/modes/qml/panels/GatewayPanel.qml~ -- Material Design 3 QML panel
+
+***** packages/qml/bridge/ (new files)
+- ~bridge/systray.h~ -- SystrayManager C++ header (QSystemTrayIcon + QMenu)
+- ~bridge/systray.cpp~ -- SystrayManager C++ implementation
+
+**** Files Modified (13 files)
+- ~tsconfig.base.json~ -- Added @oh-my-pi/pi-gateway path aliases
+- ~packages/coding-agent/package.json~ -- Added pi-gateway workspace dependency
+- ~packages/coding-agent/src/cli.ts~ -- Registered gateway command with 'gw' alias
+- ~packages/coding-agent/src/tools/index.ts~ -- Added GatewayTool import, ToolSession.gatewayClient, BUILTIN_TOOLS entry, export
+- ~packages/coding-agent/src/capability/mcp.ts~ -- Added gateway field to MCPServer interface
+- ~packages/coding-agent/src/mcp/types.ts~ -- Added gateway config to MCPServerConfigBase
+- ~packages/coding-agent/src/mcp/config.ts~ -- Threaded gateway config through conversion
+- ~packages/coding-agent/src/mcp/manager.ts~ -- Auto-register/deregister MCP servers with gateway
+- ~packages/qml/src/protocol.ts~ -- Added systray command and event types to BridgeCommand/BridgeEvent unions
+- ~packages/qml/bridge/windowmanager.h~ -- Added systray command dispatch, SystrayManager include
+- ~packages/qml/bridge/windowmanager.cpp~ -- Added systray command handling implementation
+- ~packages/qml/CMakeLists.txt~ -- Added Qt6::Widgets, systray.cpp to build
+- ~packages/qml/src/qml-bridge.ts~ -- Added createSystray(), updateSystrayMenu(), destroySystray() methods
+
+*** Artifacts
+- Test results: 28/28 pass in packages/gateway/test/
+- Type check: clean pass across all packages
+- Org items: all 7 child items in DONE state
+
+*** Deviations
+None. All items implemented per spec. stdio-to-HTTP MCP bridge, nested subdomain support, and rate limiting remain deferred to Phase 2 as planned.

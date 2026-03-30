@@ -1,0 +1,54 @@
+#+TITLE: QML Gateway Panel
+#+STATE: DONE
+#+SESSION_ID: 14a77178d47ac8b7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T19-49-24-420Z_14a76021d13ac89c/16-CreateFeatG1.jsonl]]
+#+CUSTOM_ID: FEAT-109-qml-gateway-panel
+#+EFFORT: S
+#+LAYER: ui
+#+BLOCKER: FEAT-111-gateway-client-sdk
+
+NOTE [2026-03-30]: GatewayPanel.qml created following existing panel patterns. Bridge integration for service list, add, remove.
+
+## Scope
+**In scope:**
+- QML panel component: `packages/coding-agent/src/modes/qml/panels/GatewayPanel.qml`
+- Panel registration in QML shell: add to panel registry in `packages/coding-agent/src/modes/qml/shell.qml`
+- Panel shows: list of gateway services (alias, target, status, persistent flag), refresh button, add/remove controls
+- Bridge message integration: gateway tool events forwarded to QML panel via existing shell message routing
+- Status indicators: green (active), yellow (starting), red (error/stopped), gray (unknown)
+- Quick actions: open alias URL in browser, deregister service, copy URL to clipboard
+
+**Out of scope:**
+- Standalone systray (FEAT-G2)
+- Gateway daemon logic (PROJ-A)
+
+**Boundary rationale:** Standard QML panel using existing shell infrastructure. No bridge changes needed.
+
+## Tests
+- Manual verification: open QML shell, navigate to Gateway panel, verify service list renders
+- Manual verification: register service via CLI, verify panel updates
+- Manual verification: click "Open" button, verify browser opens alias URL
+
+## Implementation
+1. Create `packages/coding-agent/src/modes/qml/panels/GatewayPanel.qml`:
+   - ListView model populated via bridge messages
+   - Each delegate: alias label, target label, status badge, action buttons
+   - Refresh button sends `gateway_list` message via bridge
+   - Add button opens inline form (alias + target fields)
+   - Remove button sends `gateway_deregister` message
+   - Open button calls Qt.openUrlExternally(aliasUrl)
+2. Register panel in shell.qml panel registry
+3. In QML mode (qml-mode.ts): handle gateway_list/gateway_register/gateway_deregister bridge events, delegate to GatewayClient, send results back to QML
+4. Follow existing ServicesPanel.qml pattern for layout and styling
+
+## Edge Cases
+- Gateway daemon not running: panel shows "Gateway not running" message with "Start" button
+- Empty service list: show placeholder message
+- Service status changes while panel is open: periodic refresh or event-driven update
+- Long alias/target URLs: truncate with ellipsis, tooltip on hover
+
+## Acceptance Criteria
+- Gateway panel appears in QML shell panel list
+- Service list shows correct data from gateway registry
+- Add/remove/refresh actions work through bridge
+- Panel follows Material Design 3 styling consistent with other panels

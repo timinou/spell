@@ -1,0 +1,65 @@
+#+TITLE: Gateway Client SDK
+#+STATE: DONE
+#+SESSION_ID: 14a77178d2fac8b3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T19-49-24-420Z_14a76021d13ac89c/12-CreateFeatC.jsonl]]
+#+CUSTOM_ID: FEAT-111-gateway-client-sdk
+#+EFFORT: S
+#+LAYER: core
+#+BLOCKER: PROJ-003-gateway-package-and-daemon-core
+
+NOTE [2026-03-30]: GatewayClient with typed RPCs, auto-spawn, reconnect, request/response correlation.
+
+** Scope
+*In scope:*
+- GatewayClient class: =packages/gateway/src/client.ts=
+- Connect to daemon Unix socket, send NDJSON requests, receive responses
+- Auto-spawn daemon if socket not available (like QmlProcess.ensure())
+- Reconnect with exponential backoff on disconnect
+- All control plane RPCs as typed methods: register(), deregister(), list(), status(), cleanup(sessionId), certInfo()
+- Exported from =packages/gateway/src/index.ts= as public API
+- Convenience method: =getAliasUrl(alias)= returns =https://{alias}.localhost=
+
+*Out of scope:*
+- Daemon implementation (PROJ-A)
+- Proxy (FEAT-B)
+- CLI/tool consumers (FEAT-D, FEAT-E)
+
+*Boundary rationale:* Single client library used by CLI, agent tool, systray, and MCP integration. Must be clean, well-typed, and reusable.
+
+** Tests
+=packages/gateway/test/client.test.ts=:
+- Scenario: connect to running daemon, list returns empty array
+- Scenario: register service via client, list returns the service
+- Scenario: deregister service, list returns empty
+- Scenario: register session-scoped service, cleanup by sessionId, list returns empty
+- Scenario: connect when daemon not running, auto-spawn daemon, operation succeeds
+- Scenario: request/response ID correlation — concurrent requests get correct responses
+- Scenario: daemon dies mid-connection, client reconnects on next call
+- Scenario: certInfo returns CA root path
+
+** Implementation
+1. Implement =packages/gateway/src/client.ts=:
+   - GatewayClient class with #socket, #pending (Map<id, resolver>), #connected state
+   - =constructor(socketPath?)=: use default socket path if not provided
+   - =#connect()=: create net.createConnection to socket, set up NDJSON parser for responses
+   - =#ensureDaemon()=: try connect → if fail, spawn daemon binary → retry connect with backoff [100, 200, 400, 500]ms
+   - =#request(type, params)=: generate unique ID, send NDJSON line, return promise from #pending map
+   - Public methods: register(opts), deregister(alias), list(), status(alias?), cleanup(sessionId), certInfo()
+   - =getAliasUrl(alias)=: return =https://${alias}.localhost=
+   - =dispose()=: close socket connection
+2. Export GatewayClient and types from index.ts
+3. Write tests — tests will need to start a real daemon instance
+
+** Edge Cases
+- Socket path from environment: check $XDG_RUNTIME_DIR first, fall back to /tmp/spell-gateway-{uid}.sock
+- Daemon binary not found: throw descriptive error with build instructions
+- Response timeout: reject pending promise after 10s with timeout error
+- Socket write after close: queue request, reconnect, retry
+- Concurrent dispose + request: request rejects with disposed error
+
+** Acceptance Criteria
+- GatewayClient connects to daemon, all RPCs work end-to-end
+- Auto-spawn works when daemon not running
+- Reconnect works after daemon restart
+- All client tests pass
+- TypeScript types are clean and exported

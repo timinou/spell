@@ -288,6 +288,26 @@ export class QmlBridge {
 		}
 	}
 
+	/** Create a system tray icon. */
+	async createSystray(opts?: { icon?: string; tooltip?: string }): Promise<void> {
+		await this.#process.ensure();
+		this.#process.send({ type: "create_systray", icon: opts?.icon, tooltip: opts?.tooltip });
+	}
+
+	/** Update the system tray context menu items. */
+	async updateSystrayMenu(
+		items: Array<{ id: string; label: string; enabled?: boolean; checked?: boolean; separator?: boolean }>,
+	): Promise<void> {
+		await this.#process.ensure();
+		this.#process.send({ type: "update_systray_menu", items });
+	}
+
+	/** Destroy the system tray icon. */
+	async destroySystray(): Promise<void> {
+		await this.#process.ensure();
+		this.#process.send({ type: "destroy_systray" });
+	}
+
 	/** Dispose the bridge — disconnects (daemon) or kills process, stops watchers. */
 	async dispose(): Promise<void> {
 		this.#removeListener?.();

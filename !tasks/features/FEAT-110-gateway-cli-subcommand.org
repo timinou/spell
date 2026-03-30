@@ -1,0 +1,64 @@
+#+TITLE: Gateway CLI Subcommand
+#+STATE: DONE
+#+SESSION_ID: 14a77178d27ac8b1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T19-49-24-420Z_14a76021d13ac89c/13-CreateFeatD.jsonl]]
+#+CUSTOM_ID: FEAT-110-gateway-cli-subcommand
+#+EFFORT: S
+#+LAYER: integration
+#+BLOCKER: FEAT-111-gateway-client-sdk
+
+NOTE [2026-03-30]: Created packages/coding-agent/src/commands/gateway.ts with init/start/stop/status/list/add/remove. Registered in cli.ts with alias 'gw'.
+
+** Scope
+*In scope:*
+- ~spell gateway~ CLI subcommand with subactions: init, start, stop, status, list, add, remove
+- Command class: ~packages/coding-agent/src/commands/gateway.ts~
+- CLI handler: ~packages/coding-agent/src/cli/gateway-cli.ts~
+- Registration in ~packages/coding-agent/src/cli.ts~ CommandEntry array
+- ~init~ subaction: first-time setup wizard
+  - Check/prompt mkcert installation (pacman/brew/apt)
+  - Run ~mkcert -install~ (CA into system trust store)
+  - Generate wildcard cert: ~mkcert -cert-file ~/.spell/gateway/tls/wildcard.pem -key-file ~/.spell/gateway/tls/wildcard-key.pem '*.localhost' localhost~
+  - Configure sysctl: write ~/etc/sysctl.d/99-spell-gateway.conf~ with ~net.ipv4.ip_unprivileged_port_start=443~, apply via ~sysctl --system~
+  - Verify systemd-resolved handles *.localhost resolution
+  - Start gateway daemon
+- ~start~: start daemon if not running
+- ~stop~: stop daemon gracefully
+- ~status~: show daemon status, listening port, service count
+- ~list~: show registered services (alias, target, status, persistent)
+- ~add --alias NAME --target URL [--persistent]~: register external service
+- ~remove --alias NAME~: deregister service
+
+*Out of scope:*
+- Daemon implementation (PROJ-A)
+- Proxy (FEAT-B)
+- Client SDK implementation (FEAT-C, used as dependency)
+
+*Boundary rationale:* CLI is a thin consumer of GatewayClient. Business logic lives in the gateway package.
+
+** Tests
+- No unit tests needed for CLI glue — tested via integration through client tests
+- Manual verification: each subcommand runs and produces expected output
+
+** Implementation
+1. Create ~packages/coding-agent/src/commands/gateway.ts~: Command class with args.action routing (init/start/stop/status/list/add/remove), flags for --alias, --target, --persistent
+2. Create ~packages/coding-agent/src/cli/gateway-cli.ts~: handler functions for each subaction, uses GatewayClient
+3. Add to ~packages/coding-agent/src/cli.ts~: ~{ name: "gateway", load: () => import("./commands/gateway").then(m => m.default), aliases: ["gw"] }~
+4. init handler: sequential steps with user-visible progress, sudo prompts for mkcert -install and sysctl
+5. Formatted output: table for list, colored status indicators
+
+** Edge Cases
+- ~init~ when already initialized: detect existing cert + sysctl, skip with message
+- ~init~ without mkcert: print install instructions for detected package manager (pacman, apt, brew)
+- ~init~ mkcert -install fails (no sudo): clear error message, suggest running manually
+- ~start~ when already running: no-op with message
+- ~stop~ when not running: no-op with message
+- ~add~ with duplicate alias: error message from registry
+- ~remove~ non-existent alias: error message
+
+** Acceptance Criteria
+- ~spell gateway init~ completes full setup flow on fresh system
+- ~spell gateway start/stop/status~ control daemon lifecycle
+- ~spell gateway list~ shows registered services in table format
+- ~spell gateway add/remove~ manage services
+- Command registered and appears in ~spell --help~
