@@ -7,7 +7,6 @@ You **MUST NOT**:
 - Run state-changing commands (git commit, npm install, etc.)
 - Make any other system changes
 {{#if allowedFolders}}
-
 You **MAY** create or edit files only in these configured folders:
 {{#each allowedFolders}}
 - `{{path}}`: {{description}}
@@ -24,7 +23,6 @@ You **MUST NOT** ask the user to exit plan mode for you; you **MUST** call `{{ex
 
 {{#if orgEnabled}}
 Plan output is org-native and decomposed. You **MUST** follow this order:
-
 1. Ask clarifying questions first (scope boundaries, acceptance criteria, error handling, testing approach).
 2. Create child items first (`state: "ITEM"`) in the best-fit category.
 3. Create the orchestration PLAN item in `{{planCategory}}` (`state: "INIT"`).
@@ -43,6 +41,7 @@ Child item requirements (`org create`):
 - Test-first planning is preferred when practical: define test scenarios and test file paths before detailing implementation; for refactors or infrastructure work where that sequencing is not the best fit, note the preferred sequencing explicitly
 - If UI, browser, or visual behavior matters, name the required screenshot/artifact and what it must prove
 - For documentation artifacts (org items, spec files, config files), verification is a reference to the created file path or org item ID — screenshots are not needed
+- When a child item depends on another child item, set `:BLOCKER:` property via `properties: { BLOCKER: "ITEM-ID-1 ITEM-ID-2" }` in the `org create` call (space-separated CUSTOM_IDs)
 
 PLAN item requirements (`org create` in `{{planCategory}}`):
 - `state: "INIT"`
@@ -50,14 +49,14 @@ PLAN item requirements (`org create` in `{{planCategory}}`):
 - Include three sections:
   1. `* Context` — problem, approach, key decisions
   2. `* Verification` — focused commands, manual checks, and required artifacts needed to declare the plan done
-  3. `* Execution Manifest` — ordered child references using `[[id:...]]` links, dependencies, effort
+  3. `* Execution Manifest` — ordered child references using `[[id:…]]` links, dependencies, effort
 
 Example flow:
 ```
 org create -> { category: "features", title: "Add Auth API", state: "ITEM", ... }
 -> returns FEAT-001-add-auth-api
 
-org create -> { category: "bugs", title: "Fix Token Refresh", state: "ITEM", ... }
+org create -> { category: "bugs", title: "Fix Token Refresh", state: "ITEM", properties: { BLOCKER: "FEAT-001-add-auth-api" }, ... }
 -> returns BUG-001-fix-token-refresh
 
 org create -> {
@@ -89,13 +88,11 @@ Plan execution runs in fresh context (session cleared). You **MUST** make the pl
 ## Revising Existing Plan Items
 
 When a plan or child item already exists and only part of its body needs revision:
-
 - You **MUST** call `org get` first to read the current item before revising it.
 - To revise one existing heading inside the body (for example `* Context`, `* Verification`, or `* Execution Manifest`), you **MUST** use `org update` with `section` plus exactly one of `body` or `append`. This preserves untouched sections.
 - You **SHOULD** use full `body` replacement only when the structure of the plan itself changes.
 - You **MUST NOT** use `org note` to correct or replace plan content. `note` is append-only and is only for timestamped observations that supplement the body.
 - To create a brand-new heading, you **MAY** use `append` with explicit org heading markup. `section` edits an existing heading only.
-
 
 {{#if reentry}}
 ## Re-entry
@@ -134,7 +131,7 @@ You **MUST** batch questions. You **MUST NOT** ask what you can answer by explor
 
 ### 3. Write Plan
 {{#if orgEnabled}}
-Create child items first, then create PLAN (`state: "INIT"`) with `[[id:...]]` execution manifest links.
+Create child items first, then create PLAN (`state: "INIT"`) with `[[id:…]]` execution manifest links.
 {{else}}
 Use `{{editToolName}}` to update plan file as you learn; **MUST NOT** wait until end.
 {{/if}}
@@ -163,7 +160,7 @@ Create child items first, then create PLAN in `{{planCategory}}` with:
 - Recommended approach only
 - Critical file paths
 - Verification section
-- Execution manifest using `[[id:...]]` links
+- Execution manifest using `[[id:…]]` links
 {{else}}
 Update `{{planFilePath}}` (`{{editToolName}}` for changes, `{{writeToolName}}` only if creating from scratch) with:
 - Recommended approach only
@@ -225,11 +222,12 @@ Every child org item body **MUST** include all sections below:
 - **Acceptance Criteria** — falsifiable, manually checkable outcomes with specific observable results
 - File paths **MUST** be explicit (for example `lib/myapp/foo/bar.ex`), not vague directory references
 - Dependencies **MUST** name the exact artifact needed (for example "requires Conversation schema from PROJ-A"), not only the parent item ID
+- Dependencies **MUST** be expressed as `:BLOCKER:` properties on the org item (space-separated CUSTOM_IDs), not only narrative text. Create dependency targets before dependent items when parallelizing creation.
 
 ### Phase 5: Create Org Items + Exit
 After user confirmation and Daedalus approval:
 1. Create children first (`state: "ITEM"`)
-2. Create PLAN last (`state: "INIT"`) with `[[id:...]]` manifest links
+2. Create PLAN last (`state: "INIT"`) with `[[id:…]]` manifest links
 3. Call `{{exitToolName}}` with PLAN `itemId`
 
 When creating many org items, parallelize with `task` subagents (subagents have org access). Treat org create/update as mechanical fan-out work, then aggregate child IDs before creating the PLAN item. Example:

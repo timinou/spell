@@ -1,0 +1,117 @@
+#+TITLE: TodoWrite Dependency Hardening
+#+STATE: DONE
+#+SESSION_ID: 14a6fcda8914e87a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T12-35-39-172Z_14a6fcda8914e87a.jsonl]]
+#+CUSTOM_ID: PLAN-036-todowrite-dependency-hardening
+
+
+* Initial Message
+
+can you check how well the TodoWrite dependency writing/following/view (especially in overview mode) is? I don't seem to have seen that dep feature be used in my recent session. Also see if the adherence to the dependency graphs is good enough or not. Look at today's sessions and related plans in ~/code/ora/hotelcomm/ecosystem/djinn. Thanks
+
+* Context
+The TodoWrite tool has a =blockers= dependency system that works mechanically (correct rendering, correct auto-promotion skip) but has critical gaps:
+
+1. *No enforcement*: The =update= op sets =task.status= directly with zero validation. An agent can mark a blocked task =in_progress= -- no error, no warning.
+2. *Weak prompt guidance*: =blockers= gets one line in Task Anatomy, one example, and a confusingly-worded rule ("On blockers") that's actually about runtime impediments, not dependency-graph blockers.
+3. *Poor blocked visibility*: The summary header doesn't show blocked count. No deadlock warning when all tasks are blocked.
+4. *Org integration gap*: Plan-mode creates org items with narrative "depends on FEAT-XXX" text but zero =:BLOCKER:= properties. The org-depend parser and manifest-reader fully support BLOCKER/TRIGGER extraction, but the properties are never set.
+
+*Investigation findings* (2026-03-30 djinn sessions):
+- 9 sessions today, 7 with todo_write calls. 4/7 used blockers (complex multi-wave plans), 3/7 didn't (simple linear workflows).
+- When blockers ARE used, adherence is correct -- agent completes tasks in dependency order.
+- =isTaskBlocked()= correctly evaluates resolution. =normalizeInProgressTask()= correctly skips blocked tasks.
+- =[blocked]= label and =⛔= symbol render correctly in both model text and TUI.
+- Zero =:BLOCKER:= properties on any org item in =~/code/ora/hotelcomm/ecosystem/djinn/!tasks/=.
+
+*Approach*: Four items -- smart gate enforcement (BUG), summary visibility (FEAT), prompt enhancement (FEAT), plan-mode wiring (FEAT). TDD throughout: tests before implementation. Items 1+3 ship together (enforcement without guidance = confusing rejections).
+
+*Key design decisions*:
+- Smart gate: reject =in_progress=, allow =completed=/=abandoned= (legitimate out-of-order work)
+- Extract =hasUnresolvedBlockers()= from =isTaskBlocked()= (Metis GAP-1: isTaskBlocked guards on status=pending, can't be reused for gate)
+- Post-ops blocker demotion pass in =normalizeInProgressTask= covers =replace=/=add_phase= ops uniformly (Daedalus MUST_FIX)
+- Dangling blocker ref validation as single post-all-ops pass, not per-op (Daedalus MUST_FIX)
+- Rewrite "On blockers" rule to "On runtime impediments" (Metis GAP-3: disambiguate two meanings)
+- Deadlock warning when all pending tasks blocked (Metis GAP-2)
+- Plan-mode parallel creation ordering constraint (Metis GAP-4: can't set BLOCKER before target exists)
+
+* Verification
+Run focused tests for each changed file:
+
+#+begin_src shell
+# Smart gate enforcement + summary visibility
+bun test packages/coding-agent/test/tools/todo-write-gates.test.ts
+
+# TodoWrite integration tests
+bun test packages/coding-agent/test/tools/todo-write.test.ts
+
+# Prompt template tests
+bun test packages/coding-agent/test/prompt-templates.test.ts
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+
+# Plan mode prompt tests
+bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts
+
+# Org-depend round-trip (existing, verify no regression)
+bun test packages/coding-agent/test/loop/org-depend-parser.test.ts
+
+# Type check
+bun check:ts
+#+end_src
+
+Manual verification:
+- Read rendered =todo-write.md= prompt: confirm "Dependency Management" section present, "On blockers:" absent
+- Read rendered =plan-mode-active.md=: confirm BLOCKER property guidance present
+- Read rendered =plan-mode-approved.md=: confirm TodoWrite blocker guidance present
+
+* Execution Manifest
+** Phase 1: Enforcement + Prompt (ship together)
+- [[id:BUG-022-todowrite-smart-gate-rejects-blocked-in]] -- Smart Gate Enforcement (2h30m), no dependencies. Extract =hasUnresolvedBlockers=, gate =update= ops, post-ops demotion pass, dangling ref validation. TDD.
+- [[id:FEAT-099-todowrite-dependency-management-prompt-s]] -- Dependency Prompt Enhancement (2h), depends on BUG-022 for terminology alignment. Rewrite "On blockers" rule, add Dependency Management section. TDD.
+
+** Phase 2: Visibility (independent)
+- [[id:FEAT-097-todowrite-summary-shows-blocked-count-an]] -- Summary Blocked Visibility (2h), depends on BUG-022 for =isTaskBlocked= contract stability. Blocked count in header, phase progress, deadlock warning. TDD.
+
+** Phase 3: Org Integration
+- [[id:FEAT-098-plan-mode-wires-blocker-properties-on-or]] -- Plan Mode BLOCKER Wiring (3h), depends on FEAT-099 for consistent blocker terminology. Update plan-mode-active.md and plan-mode-approved.md. BLOCKER round-trip integration test. TDD.
+
+Total effort: ~9.5h
+
+** Completion [2026-03-30]
+
+*** Verification
+
+All tests pass, type check clean:
+
+#+begin_src
+bun test test/tools/todo-write-gates.test.ts test/tools/todo-write.test.ts test/system-prompt-templates.test.ts test/plan-mode/plan-mode-approved-prompt.test.ts test/loop/org-depend-parser.test.ts
+→ 72 pass, 0 fail, 213 expect() calls across 5 files
+
+bun test test/prompt-templates.test.ts
+→ 75 pass, 0 fail (no regression)
+
+bun check:ts
+→ Checked 1466 files. No fixes applied.
+#+end_src
+
+Manual verification:
+- =todo-write.md= prompt: "Dependency Management" section present, "On blockers:" absent, "On runtime impediments:" present
+- =plan-mode-active.md=: =:BLOCKER:= property guidance in child item requirements and example flow, ultraplan body standard
+- =plan-mode-approved.md=: TodoWrite blocker wiring guidance present in todo_write instruction block
+
+*** Artifacts
+
+Code changes:
+- =packages/coding-agent/src/tools/todo-write.ts= — =hasUnresolvedBlockers= extraction, smart gate enforcement, post-ops demotion, dangling ref validation, =formatSummary= blocked count + deadlock warning
+- =packages/coding-agent/src/prompts/tools/todo-write.md= — Dependency Management section, "On runtime impediments" rename
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — =:BLOCKER:= property guidance (3 locations)
+- =packages/coding-agent/src/prompts/system/plan-mode-approved.md= — TodoWrite blocker wiring guidance
+
+Test additions:
+- =packages/coding-agent/test/tools/todo-write-gates.test.ts= — 17 new tests (hasUnresolvedBlockers unit tests, formatSummary blocked visibility tests)
+- =packages/coding-agent/test/tools/todo-write.test.ts= — 10 new integration tests (smart gate enforcement, batch ops, auto-promotion, dangling refs, demotion)
+- =packages/coding-agent/test/system-prompt-templates.test.ts= — 2 new tests (todo-write Dependency Management, plan-mode-active BLOCKER guidance)
+- =packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts= — 1 new test (TodoWrite blocker wiring guidance)
+
+*** Deviations
+None.

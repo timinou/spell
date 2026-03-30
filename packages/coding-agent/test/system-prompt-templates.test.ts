@@ -161,4 +161,39 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).not.toContain("Example discoverable MCP tools:");
 		expect(rendered).toContain("call `search_tool_bm25` before concluding no such tool exists");
 	});
+
+	test("todo-write prompt includes Dependency Management section and omits 'On blockers:'", async () => {
+		const templatePath = path.join(import.meta.dir, "../src/prompts/tools/todo-write.md");
+		const template = await Bun.file(templatePath).text();
+		const rendered = renderPromptTemplate(template, baseRenderContext);
+
+		// FEAT-099: Dependency Management section present
+		expect(rendered).toContain("## Dependency Management");
+		expect(rendered).toContain("### Smart gate enforcement");
+		expect(rendered).toContain("### When to use `blockers`");
+		expect(rendered).toContain("### Cross-phase dependency example");
+
+		// FEAT-099: "On blockers:" removed, replaced with "On runtime impediments:"
+		expect(rendered).not.toContain("On blockers:");
+		expect(rendered).toContain("On runtime impediments:");
+	});
+
+	test("plan-mode-active includes BLOCKER property guidance for child items", async () => {
+		const templatePath = path.join(systemPromptsDir, "plan-mode-active.md");
+		const template = await Bun.file(templatePath).text();
+		const rendered = renderPromptTemplate(template, {
+			...baseRenderContext,
+			orgEnabled: true,
+			planCategory: "plans",
+			childCategories: [{ name: "features", prefix: "FEAT", description: "Feature items" }],
+			exitToolName: "exit_plan_mode",
+			askToolName: "ask",
+		});
+
+		// FEAT-098: BLOCKER property guidance in child item requirements
+		expect(rendered).toContain(":BLOCKER:");
+		expect(rendered).toContain('properties: { BLOCKER: "ITEM-ID-1 ITEM-ID-2" }');
+		// Example flow shows BLOCKER usage
+		expect(rendered).toContain('BLOCKER: "FEAT-001-add-auth-api"');
+	});
 });

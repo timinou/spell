@@ -1,0 +1,65 @@
+#+TITLE: TodoWrite Summary Shows Blocked Count and Deadlock Warning
+#+STATE: DONE
+#+SESSION_ID: 14a70ac33460399e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T12-35-39-172Z_14a6fcda8914e87a/9-CreateFeatSummary.jsonl]]
+#+CUSTOM_ID: FEAT-097-todowrite-summary-shows-blocked-count-an
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: tool
+
+* Scope
+**In scope**: Improve =formatSummary()= output in =todo-write.ts= to show blocked task count in the remaining items header, blocked info in phase progress line, and a deadlock warning when all pending tasks are blocked with no =in_progress= task.
+
+**Out of scope**: TUI renderer changes (=formatTodoLine= already shows =[blocked]= correctly). Gate enforcement (separate item). Prompt changes.
+
+**Boundary rationale**: Pure output formatting changes to the text returned to the model. Blocked state computation uses existing =isTaskBlocked()= (contract preserved by BUG item).
+
+* Tests
+TDD: write all tests BEFORE implementation. All tests in =packages/coding-agent/test/tools/todo-write-gates.test.ts= (extend existing =formatSummary= describe block).
+
+** Test scenarios for blocked count in header
+- 5 remaining, 2 blocked: header shows "Remaining items (5, 2 blocked):"
+- 3 remaining, 0 blocked: header shows "Remaining items (3):" (no blocked suffix)
+- 1 remaining, 1 blocked: header shows "Remaining items (1, 1 blocked):"
+- All tasks completed: header shows "Remaining items: none." (unchanged)
+
+** Test scenarios for phase progress
+- Current phase has blocked tasks: progress line includes blocked count
+- Current phase has no blocked tasks: progress line unchanged
+
+** Test scenarios for deadlock warning
+- All pending tasks blocked, no in_progress: summary includes "WARNING: All remaining tasks are blocked. No task can be started. Review blockers or complete/abandon a blocking task."
+- Some tasks blocked but one is in_progress: no warning
+- No blocked tasks: no warning
+
+** Cross-phase blocked count
+- Tasks in phase-2 blocked by tasks in phase-1: correctly counted in header
+
+* Implementation
+Sequencing: implement tests first, then code.
+
+1. Modify =formatSummary()= header in =packages/coding-agent/src/tools/todo-write.ts= (~line 436):
+   - Count blocked tasks: =const blockedCount = remainingTasks.filter(t => isTaskBlocked(t, allTasks)).length;=
+   - Change header: =Remaining items (${remainingTasks.length}${blockedCount > 0 ? `, ${blockedCount} blocked` : ""}):=
+
+2. Add blocked info to phase progress line (~line 449):
+   - Count blocked in current phase: =const blockedInPhase = current.tasks.filter(t => isTaskBlocked(t, allTasks)).length;=
+   - Append to progress: =Phase N/M "name" -- X/Y tasks complete${blockedInPhase > 0 ? `, ${blockedInPhase} blocked` : ""}=
+
+3. Add deadlock warning after remaining items list (~line 447, before phase progress):
+   - Detect: =const inProgress = allTasks.some(t => t.status === "in_progress");=
+   - Detect: =const allBlocked = remainingTasks.length > 0 && remainingTasks.every(t => t.status !== "in_progress" && (t.status !== "pending" || isTaskBlocked(t, allTasks)));=
+   - If =!inProgress && allBlocked=: emit =WARNING: All remaining tasks are blocked. No task can be started. Review blockers or complete/abandon a blocking task.=
+
+* Edge Cases
+- Phase with mix of completed, in_progress, and blocked tasks: blocked count only counts pending+blocked tasks
+- Deadlock triggered by circular blockers: both tasks pending and mutually blocked, warning fires
+- Deadlock NOT triggered when a task is in_progress (even if other tasks are blocked): no warning
+- Zero remaining tasks (all completed/abandoned): no header change, no deadlock check
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts= passes with all new test scenarios
+- =bun check:ts= passes
+- Blocked count appears in remaining items header when blocked > 0
+- Deadlock warning appears when all pending tasks are blocked and no task is in_progress
+- Existing formatSummary tests continue to pass (no regressions)

@@ -42,9 +42,44 @@ Create a todo list when:
 - You **MUST** mark `completed` **immediately** — never defer
 - You **MUST** keep exactly **one** task `in_progress`
 - You **MUST** complete phases in order — do not mark later tasks `completed` while earlier ones are `pending`
-- On blockers: keep `in_progress`, add a new task describing the blocker
+- On runtime impediments: if you hit an unexpected obstacle, keep the current task `in_progress` and add a new task describing the impediment
 - Multiple ops can be batched in one call (e.g., complete current + start next)
 </protocol>
+
+## Dependency Management
+
+Use `blockers` to express task dependencies when execution order matters beyond phase sequencing.
+
+### When to use `blockers`
+- Cross-phase dependencies: a task in Phase B depends on a specific task in Phase A
+- Intra-phase parallel work: two tasks in the same phase, but one must complete first
+- Wave-based execution: tasks form a dependency DAG across multiple phases
+
+### When phase ordering suffices (no explicit blockers needed)
+- Simple linear workflows: Phase 1 tasks all complete before Phase 2 starts
+- Tasks within a single phase that are naturally sequential
+
+### Smart gate enforcement
+- Setting a blocked task to `in_progress` will be **rejected** with an error listing unresolved blockers
+- Setting a blocked task to `completed` or `abandoned` is **allowed** (legitimate out-of-order completion)
+- Auto-promotion (`normalizeInProgressTask`) skips blocked tasks
+- If all remaining tasks are blocked and no task is `in_progress`, a deadlock warning is shown
+
+### Cross-phase dependency example
+```
+ops: [{op: "replace", phases: [
+  {name: "Foundation", tasks: [
+    {content: "Create schema"},
+    {content: "Write migrations"}
+  ]},
+  {name: "Features", tasks: [
+    {content: "Build API endpoints", blockers: ["task-1"]},
+    {content: "Add UI components", blockers: ["task-1"]},
+    {content: "Integration tests", blockers: ["task-3", "task-4"]}
+  ]}
+]}]
+```
+task-3 and task-4 both depend on task-1 (schema). task-5 depends on both task-3 and task-4.
 
 ## Task Anatomy
 - `content`: Short label (5-10 words). What is being done, not how.

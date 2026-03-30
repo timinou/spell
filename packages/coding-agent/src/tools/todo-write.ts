@@ -205,15 +205,24 @@ function clonePhases(phases: TodoPhase[]): TodoPhase[] {
 	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task })) }));
 }
 
-/** Check if a task is blocked by unresolved dependencies. */
-export function isTaskBlocked(task: TodoItem, allTasks: TodoItem[]): boolean {
-	if (task.status !== "pending" || !task.blockers?.length) return false;
+/**
+ * Check if a task has any blocker that is not yet completed or abandoned.
+ * Unlike isTaskBlocked, this does NOT guard on the task's own status —
+ * it purely evaluates the blocker graph. Missing refs are treated as resolved.
+ */
+export function hasUnresolvedBlockers(task: TodoItem, allTasks: TodoItem[]): boolean {
+	if (!task.blockers?.length) return false;
 	return task.blockers.some(blockerId => {
 		const blocker = allTasks.find(t => t.id === blockerId);
-		// Missing blocker ref (auto-cleared task) = resolved
 		if (!blocker) return false;
 		return blocker.status !== "completed" && blocker.status !== "abandoned";
 	});
+}
+
+/** Check if a task is blocked by unresolved dependencies (pending tasks only). */
+export function isTaskBlocked(task: TodoItem, allTasks: TodoItem[]): boolean {
+	if (task.status !== "pending") return false;
+	return hasUnresolvedBlockers(task, allTasks);
 }
 
 function normalizeInProgressTask(phases: TodoPhase[]): void {
@@ -227,9 +236,17 @@ function normalizeInProgressTask(phases: TodoPhase[]): void {
 		}
 	}
 
-	if (inProgressTasks.length > 0) return;
+	// Demote in_progress tasks that have unresolved blockers (catches replace/add_phase ops)
+	for (const task of orderedTasks) {
+		if (task.status === "in_progress" && hasUnresolvedBlockers(task, orderedTasks)) {
+			task.status = "pending";
+		}
+	}
 
-	// Skip blocked tasks when auto-promoting
+	// If no task is in_progress after normalization, auto-promote first unblocked pending task
+	const stillInProgress = orderedTasks.some(task => task.status === "in_progress");
+	if (stillInProgress) return;
+
 	const firstPendingTask = orderedTasks.find(task => task.status === "pending" && !isTaskBlocked(task, orderedTasks));
 	if (firstPendingTask) firstPendingTask.status = "in_progress";
 }
@@ -335,6 +352,29 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 					errors.push(`Task "${op.id}" not found`);
 					break;
 				}
+
+				// Smart gate: reject in_progress transition when task has unresolved blockers
+				if (op.status === "in_progress") {
+					const effectiveBlockers = op.blockers ?? task.blockers;
+					if (effectiveBlockers?.length) {
+						const allTasks = file.phases.flatMap(p => p.tasks);
+						const probe: TodoItem = { ...task, blockers: effectiveBlockers };
+						if (hasUnresolvedBlockers(probe, allTasks)) {
+							const unresolvedDetails = effectiveBlockers
+								.map(id => {
+									const b = allTasks.find(t => t.id === id);
+									return b && b.status !== "completed" && b.status !== "abandoned"
+										? `${id} (${b.status})`
+										: null;
+								})
+								.filter(Boolean)
+								.join(", ");
+							errors.push(`Cannot start ${op.id}: blocked by ${unresolvedDetails}`);
+							break;
+						}
+					}
+				}
+
 				if (op.status !== undefined) task.status = op.status;
 				if (op.content !== undefined) task.content = op.content;
 				if (op.notes !== undefined) task.notes = op.notes;
@@ -365,6 +405,19 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 	}
 
 	normalizeInProgressTask(file.phases);
+
+	// Validate dangling blocker refs — warn but don't change behavior (missing = resolved)
+	const allTaskIds = new Set(file.phases.flatMap(p => p.tasks.map(t => t.id)));
+	for (const phase of file.phases) {
+		for (const task of phase.tasks) {
+			if (!task.blockers?.length) continue;
+			for (const blockerId of task.blockers) {
+				if (!allTaskIds.has(blockerId)) {
+					errors.push(`Warning: ${task.id} references non-existent blocker ${blockerId}`);
+				}
+			}
+		}
+	}
 
 	// Detect newly completed phases
 	const completedPhaseIds: string[] = [];
@@ -433,7 +486,9 @@ export function formatSummary({
 	if (remainingTasks.length === 0) {
 		lines.push("Remaining items: none.");
 	} else {
-		lines.push(`Remaining items (${remainingTasks.length}):`);
+		const blockedCount = remainingTasks.filter(t => isTaskBlocked(t, allTasks)).length;
+		const blockedSuffix = blockedCount > 0 ? `, ${blockedCount} blocked` : "";
+		lines.push(`Remaining items (${remainingTasks.length}${blockedSuffix}):`);
 		for (const task of remainingTasks) {
 			const blocked = isTaskBlocked(task, allTasks);
 			const blockerLabel = blocked ? " [blocked]" : "";
@@ -445,8 +500,18 @@ export function formatSummary({
 			}
 		}
 	}
+	// Deadlock warning: all remaining tasks are blocked and none in_progress
+	const hasInProgress = allTasks.some(t => t.status === "in_progress");
+	if (!hasInProgress && remainingTasks.length > 0 && remainingTasks.every(t => isTaskBlocked(t, allTasks))) {
+		lines.push(
+			"WARNING: All remaining tasks are blocked. No task can be started. Review blockers or complete/abandon a blocking task.",
+		);
+	}
+
+	const blockedInPhase = current.tasks.filter(t => isTaskBlocked(t, allTasks)).length;
+	const phaseBlockedSuffix = blockedInPhase > 0 ? `, ${blockedInPhase} blocked` : "";
 	lines.push(
-		`Phase ${currentIdx + 1}/${phases.length} "${current.name}" \u2014 ${done}/${current.tasks.length} tasks complete`,
+		`Phase ${currentIdx + 1}/${phases.length} "${current.name}" \u2014 ${done}/${current.tasks.length} tasks complete${phaseBlockedSuffix}`,
 	);
 	for (const phase of phases) {
 		lines.push(`  ${phase.name}:`);

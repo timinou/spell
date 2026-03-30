@@ -1,0 +1,84 @@
+#+TITLE: TodoWrite Dependency Management Prompt Section
+#+STATE: DONE
+#+SESSION_ID: 14a70ac33320399a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T12-35-39-172Z_14a6fcda8914e87a/10-CreateFeatPrompt.jsonl]]
+#+CUSTOM_ID: FEAT-099-todowrite-dependency-management-prompt-s
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+* Scope
+**In scope**: Add a dedicated "Dependency Management" section to =packages/coding-agent/src/prompts/tools/todo-write.md=. Rewrite the existing "On blockers" rule (line 45) to "On runtime impediments" to disambiguate from the =blockers= field. Add rules, examples, and smart gate behavior explanation.
+
+**Out of scope**: Plan-mode prompt changes (separate item). TodoWrite code changes. TUI changes.
+
+**Boundary rationale**: Prompt changes are text-only, no code compilation required. Must align terminology with BUG item's error messages ("blocked", "unresolved blockers").
+
+* Tests
+TDD: write test BEFORE modifying the prompt. Test in =packages/coding-agent/test/prompt-templates.test.ts= or =packages/coding-agent/test/system-prompt-templates.test.ts= (whichever tests tool prompt rendering).
+
+** Test scenarios
+- Rendered todo-write prompt includes "Dependency Management" section heading
+- Rendered prompt includes blocker example with cross-phase dependency
+- Rendered prompt does NOT contain "On blockers:" (old ambiguous rule)
+- Rendered prompt contains "On runtime impediments:" (new disambiguated rule)
+- Rendered prompt includes guidance on when to use =blockers= field vs relying on phase ordering
+
+* Implementation
+Sequencing: write test, then modify prompt, verify test passes.
+
+1. Rewrite existing rule in =packages/coding-agent/src/prompts/tools/todo-write.md= line 45:
+   - Change: =- On blockers: keep `in_progress`, add a new task describing the blocker=
+   - To: =- On runtime impediments: if you hit an unexpected obstacle, keep the current task `in_progress` and add a new task describing the impediment=
+
+2. Add "Dependency Management" section after the Rules section (~after line 46):
+   #+begin_example
+   ## Dependency Management
+
+   Use `blockers` to express task dependencies when execution order matters beyond phase sequencing.
+
+   ### When to use `blockers`
+   - Cross-phase dependencies: a task in Phase B depends on a specific task in Phase A (not just "Phase A is done")
+   - Intra-phase parallel work: two tasks in the same phase, but one must complete first
+   - Wave-based execution: tasks form a dependency DAG across multiple phases
+
+   ### When phase ordering suffices (no explicit blockers needed)
+   - Simple linear workflows: Phase 1 tasks all complete before Phase 2 starts
+   - Tasks within a single phase that are naturally sequential (phases complete in order)
+
+   ### Smart gate enforcement
+   - Setting a blocked task to `in_progress` will be **rejected** with an error listing unresolved blockers
+   - Setting a blocked task to `completed` or `abandoned` is **allowed** (legitimate out-of-order completion)
+   - Auto-promotion (`normalizeInProgressTask`) skips blocked tasks
+
+   ### Examples
+   #### Cross-phase dependency
+   ```
+   ops: [{op: "replace", phases: [
+     {name: "Foundation", tasks: [
+       {content: "Create schema"},
+       {content: "Write migrations"}
+     ]},
+     {name: "Features", tasks: [
+       {content: "Build API endpoints", blockers: ["task-1"]},
+       {content: "Add UI components", blockers: ["task-1"]},
+       {content: "Integration tests", blockers: ["task-3", "task-4"]}
+     ]}
+   ]}]
+   ```
+   task-3 and task-4 both depend on task-1 (schema). task-5 depends on both task-3 and task-4.
+   #+end_example
+
+3. Ensure the existing gated-task example (line 98-105) still makes sense with the new terminology.
+
+* Edge Cases
+- Prompt length: the Dependency Management section adds ~30 lines. Verify total prompt stays under reasonable size.
+- Existing examples reference =blockers= field: the gated-task example (line 103) uses =blockers: ["task-1"]=. This should remain as-is since it correctly demonstrates the =blockers= field.
+- Handlebars rendering: the prompt uses =renderPromptTemplate()=. Verify no template syntax conflicts with added content.
+
+* Acceptance Criteria
+- Prompt template test passes with new content assertions
+- =bun check:ts= passes
+- The word "On blockers:" no longer appears in the rendered prompt
+- "Dependency Management" section appears in the rendered prompt
+- Existing functionality unchanged (prompt is text, no behavioral code changes)

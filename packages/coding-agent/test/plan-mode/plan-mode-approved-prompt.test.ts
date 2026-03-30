@@ -40,4 +40,18 @@ describe("plan-mode-approved prompt", () => {
 			rendered.indexOf("6. If verification fails or required evidence is missing"),
 		);
 	});
+
+	it("includes TodoWrite blocker wiring guidance when todo_write is available", () => {
+		const rendered = renderPromptTemplate(planModeApprovedPrompt, {
+			planContent: "1. Do work",
+			finalPlanFilePath: "org://PLAN-005-test",
+			orgItemId: "PLAN-005-test",
+			orgItemArtifactsDir: "!tasks/plans/plan-artifacts/PLAN-005-test",
+			tools: ["read", "todo_write", "edit"],
+		});
+
+		expect(rendered).toContain("blockers");
+		expect(rendered).toContain("dependency gate enforces correct execution order");
+		expect(rendered).toContain(":BLOCKER:");
+	});
 });

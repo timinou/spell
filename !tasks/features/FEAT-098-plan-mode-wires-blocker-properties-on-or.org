@@ -1,0 +1,72 @@
+#+TITLE: Plan Mode Wires BLOCKER Properties on Org Items
+#+STATE: DONE
+#+SESSION_ID: 14a70ac334a039a0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T12-35-39-172Z_14a6fcda8914e87a/11-CreateFeatPlanMode.jsonl]]
+#+CUSTOM_ID: FEAT-098-plan-mode-wires-blocker-properties-on-or
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: prompt
+
+* Scope
+**In scope**: Update plan-mode prompt templates so that org items created during planning get =:BLOCKER:= properties set (not just narrative "depends on" text). Update plan execution prompt to guide the executor to wire plan dependencies into TodoWrite blockers. Covers both =plan-mode-active.md= and =plan-mode-approved.md=.
+
+**Out of scope**: TodoWrite tool code changes (separate items). Loop system code changes (org-depend.ts, manifest-reader.ts already support BLOCKER). Changes to org create/update commands (they already accept =properties= parameter).
+
+**Boundary rationale**: Pure prompt changes. The org infrastructure already supports =:BLOCKER:= properties; the gap is that the plan-mode prompts don't instruct the agent to set them. No code changes to the org package or loop system needed.
+
+* Tests
+TDD: write tests BEFORE modifying prompts.
+
+Test file: =packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts= (extend existing) and/or =packages/coding-agent/test/system-prompt-templates.test.ts=.
+
+** Test scenarios for plan-mode-active.md
+- Rendered plan-mode prompt includes guidance about =:BLOCKER:= property in child item requirements
+- Rendered prompt includes example of =org create= with =properties: { BLOCKER: "FEAT-001-xxx" }=
+- Ultraplan org item body standard includes =:BLOCKER:= as a required property for items with dependencies
+- Ultraplan includes ordering constraint: "create dependency targets before dependent items when parallelizing"
+
+** Test scenarios for plan-mode-approved.md
+- Rendered execution prompt includes guidance about using TodoWrite blockers from plan dependencies
+- Guidance references the execution manifest's dependency structure
+
+** Integration test for BLOCKER property round-trip
+- Create org item with =properties: { BLOCKER: "FEAT-001-test FEAT-002-test" }=
+- Read it back via =org get=
+- Verify =:BLOCKER:= property is preserved
+- Verify =parseOrgDependProperties()= from =org-depend.ts= extracts blockers correctly
+
+* Implementation
+Sequencing: write tests, then modify prompts, then verify.
+
+1. Update =packages/coding-agent/src/prompts/system/plan-mode-active.md= child item requirements (~line 36-43):
+   - Add after "Include =EFFORT=, =PRIORITY=, =LAYER=":
+     =- When a child item depends on another child item, set =:BLOCKER:= property via =properties: { BLOCKER: "ITEM-ID-1 ITEM-ID-2" }= during =org create==
+   - Add to example flow (~line 53-70): show an org create call that includes BLOCKER
+
+2. Update ultraplan org item body standard (~line 215-223):
+   - Add to body requirements: =- **Dependencies** -- when present, MUST be expressed as =:BLOCKER:= property on the org item (space-separated CUSTOM_IDs), not only narrative text. Create blocker items before dependent items.=
+   - Add parallel creation ordering constraint: =When parallelizing child item creation via task subagents, items that are dependency targets MUST be created first. Only parallelize items that do not depend on each other.=
+
+3. Update =packages/coding-agent/src/prompts/system/plan-mode-approved.md= (~line 44-52):
+   - In the instruction block, after "initialize todo tracking", add:
+     =When the plan's execution manifest specifies dependencies between items (via =[[id:...]]= links with "depends on" annotations or =:BLOCKER:= properties), express these as =blockers= in your =todo_write= task list.=
+
+4. Verify BLOCKER property round-trip:
+   - The org package's =org create= already passes =properties= to the PROPERTIES drawer writer
+   - =org-depend.ts= =parseOrgDependProperties()= already extracts =:BLOCKER:= from PROPERTIES
+   - =manifest-reader.ts= =parseTicketOrg()= already converts BLOCKER to =ManifestTicket.dependencies=
+   - No code changes needed -- just prompt changes + tests confirming the existing path works
+
+* Edge Cases
+- BLOCKER property with multiple space-separated IDs: =:BLOCKER: FEAT-001-xxx FEAT-002-yyy= -- already supported by org-depend parser
+- BLOCKER referencing an item that doesn't exist yet: plan-mode creates items sequentially for deps, but IDs are auto-generated. The agent must create the blocker item first, get its CUSTOM_ID, then use it. This is inherent to the org system.
+- Ultraplan parallel creation: items that are dependency targets must be created before dependent items. Items without cross-dependencies can be parallelized.
+- Empty BLOCKER: items without dependencies should NOT have a BLOCKER property (don't set empty string)
+- Plan-mode-approved execution: the agent reads the finalized plan and creates a TodoWrite list. The prompt guides it to wire deps, but ultimately the agent must do the mapping (plan item IDs to TodoWrite task IDs).
+
+* Acceptance Criteria
+- Plan-mode prompt tests pass with new BLOCKER guidance assertions
+- Execution prompt tests pass with TodoWrite blocker guidance assertions
+- BLOCKER property round-trip integration test passes
+- =bun check:ts= passes
+- A new plan created in plan-mode would have =:BLOCKER:= properties on child items with dependencies (verified by reading the prompt output, not by running plan-mode end-to-end)

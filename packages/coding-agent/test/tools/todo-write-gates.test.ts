@@ -13,7 +13,13 @@
 
 import { describe, expect, test } from "bun:test";
 import type { FormatSummaryOptions, TodoItem, TodoPhase, TodoStatus } from "../../src/tools/todo-write";
-import { formatSummary, getLatestTodoPhasesFromEntries, hasGate, isTaskBlocked } from "../../src/tools/todo-write";
+import {
+	formatSummary,
+	getLatestTodoPhasesFromEntries,
+	hasGate,
+	hasUnresolvedBlockers,
+	isTaskBlocked,
+} from "../../src/tools/todo-write";
 
 // =============================================================================
 // Helper: build phases with gate fields
@@ -248,5 +254,166 @@ describe("formatSummary gate directives", () => {
 		});
 		// ⛔ is the blocked symbol in phase tree rendering
 		expect(result).toContain("\u26D4 task-2");
+	});
+});
+
+// =============================================================================
+// BUG-022: hasUnresolvedBlockers (status-independent blocker resolution)
+// =============================================================================
+
+describe("hasUnresolvedBlockers", () => {
+	test("returns true when task has pending blocker", () => {
+		const task1 = makeTask({ id: "task-1", content: "First", status: "pending" });
+		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		expect(hasUnresolvedBlockers(task2, [task1, task2])).toBe(true);
+	});
+
+	test("returns true when task has in_progress blocker", () => {
+		const task1 = makeTask({ id: "task-1", content: "First", status: "in_progress" });
+		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		expect(hasUnresolvedBlockers(task2, [task1, task2])).toBe(true);
+	});
+
+	test("returns false when all blockers completed", () => {
+		const task1 = makeTask({ id: "task-1", content: "First", status: "completed" });
+		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		expect(hasUnresolvedBlockers(task2, [task1, task2])).toBe(false);
+	});
+
+	test("returns false when all blockers abandoned", () => {
+		const task1 = makeTask({ id: "task-1", content: "First", status: "abandoned" });
+		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		expect(hasUnresolvedBlockers(task2, [task1, task2])).toBe(false);
+	});
+
+	test("returns false when blocker ref is missing (dangling = resolved)", () => {
+		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-99"] });
+		expect(hasUnresolvedBlockers(task2, [task2])).toBe(false);
+	});
+
+	test("returns false when task has no blockers", () => {
+		const task = makeTask({ id: "task-1", content: "Solo", status: "pending" });
+		expect(hasUnresolvedBlockers(task, [task])).toBe(false);
+	});
+
+	test("works regardless of task's own status (unlike isTaskBlocked)", () => {
+		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
+		// in_progress task with unresolved blocker: isTaskBlocked returns false, hasUnresolvedBlockers returns true
+		const inProgress = makeTask({ id: "task-2", content: "Second", status: "in_progress", blockers: ["task-1"] });
+		expect(hasUnresolvedBlockers(inProgress, [blocker, inProgress])).toBe(true);
+		expect(isTaskBlocked(inProgress, [blocker, inProgress])).toBe(false);
+
+		// completed task with unresolved blocker
+		const completed = makeTask({ id: "task-3", content: "Third", status: "completed", blockers: ["task-1"] });
+		expect(hasUnresolvedBlockers(completed, [blocker, completed])).toBe(true);
+		expect(isTaskBlocked(completed, [blocker, completed])).toBe(false);
+	});
+});
+
+// =============================================================================
+// FEAT-097: formatSummary blocked count + deadlock warning
+// =============================================================================
+
+describe("formatSummary blocked visibility", () => {
+	function callFormatSummary(overrides: Partial<FormatSummaryOptions> = {}): string {
+		return formatSummary({
+			phases: overrides.phases ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
+			errors: overrides.errors ?? [],
+			completedPhaseIds: overrides.completedPhaseIds ?? [],
+			completedGatedTasks: overrides.completedGatedTasks ?? [],
+		});
+	}
+
+	test("header shows blocked count when some tasks are blocked", () => {
+		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
+		const blocked1 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		const blocked2 = makeTask({ id: "task-3", content: "Third", status: "pending", blockers: ["task-1"] });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [blocker, blocked1, blocked2])],
+		});
+		expect(result).toContain("Remaining items (3, 2 blocked):");
+	});
+
+	test("header omits blocked count when no tasks are blocked", () => {
+		const task1 = makeTask({ id: "task-1", content: "First", status: "pending" });
+		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending" });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [task1, task2])],
+		});
+		expect(result).toContain("Remaining items (2):");
+		expect(result).not.toContain("blocked");
+	});
+
+	test("header shows blocked count of 1", () => {
+		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
+		const blocked = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [blocker, blocked])],
+		});
+		expect(result).toContain("Remaining items (2, 1 blocked):");
+	});
+
+	test("all tasks completed: header unchanged", () => {
+		const task = makeTask({ id: "task-1", content: "Done", status: "completed" });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [task])],
+		});
+		expect(result).toContain("Remaining items: none.");
+	});
+
+	test("phase progress includes blocked count", () => {
+		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
+		const blocked = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [blocker, blocked])],
+		});
+		expect(result).toContain("1 blocked");
+		expect(result).toMatch(/Phase 1\/1 .* \u2014 0\/2 tasks complete, 1 blocked/);
+	});
+
+	test("phase progress omits blocked count when zero", () => {
+		const task1 = makeTask({ id: "task-1", content: "First", status: "pending" });
+		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending" });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [task1, task2])],
+		});
+		// Should not have "blocked" in the phase progress line
+		const phaseLine = result.split("\n").find(l => l.includes("Phase 1/1"))!;
+		expect(phaseLine).not.toContain("blocked");
+	});
+
+	test("deadlock warning when all pending tasks are blocked and none in_progress", () => {
+		const task1 = makeTask({ id: "task-1", content: "A", status: "pending", blockers: ["task-2"] });
+		const task2 = makeTask({ id: "task-2", content: "B", status: "pending", blockers: ["task-1"] });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [task1, task2])],
+		});
+		expect(result).toContain("WARNING: All remaining tasks are blocked.");
+	});
+
+	test("no deadlock warning when a task is in_progress", () => {
+		const task1 = makeTask({ id: "task-1", content: "A", status: "in_progress" });
+		const task2 = makeTask({ id: "task-2", content: "B", status: "pending", blockers: ["task-1"] });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [task1, task2])],
+		});
+		expect(result).not.toContain("WARNING");
+	});
+
+	test("no deadlock warning when no tasks are blocked", () => {
+		const task1 = makeTask({ id: "task-1", content: "A", status: "pending" });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [task1])],
+		});
+		expect(result).not.toContain("WARNING");
+	});
+
+	test("cross-phase blocked count: task in phase-2 blocked by task in phase-1", () => {
+		const blocker = makeTask({ id: "task-1", content: "Schema", status: "pending" });
+		const dependent = makeTask({ id: "task-2", content: "API", status: "pending", blockers: ["task-1"] });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Foundation", [blocker]), makePhase("phase-2", "Features", [dependent])],
+		});
+		expect(result).toContain("Remaining items (2, 1 blocked):");
 	});
 });

@@ -1,0 +1,95 @@
+#+TITLE: TodoWrite Smart Gate Rejects Blocked In-Progress Transitions
+#+STATE: DONE
+#+SESSION_ID: 14a70ac333a0399c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T12-35-39-172Z_14a6fcda8914e87a/8-CreateBugSmartGate.jsonl]]
+#+CUSTOM_ID: BUG-022-todowrite-smart-gate-rejects-blocked-in
+#+EFFORT: 2h30m
+#+PRIORITY: #A
+#+LAYER: tool
+
+* Scope
+**In scope**: Smart gate enforcement in =todo-write.ts= that prevents blocked tasks from transitioning to =in_progress= while allowing =completed= and =abandoned= transitions. Extract =hasUnresolvedBlockers()= from =isTaskBlocked()=. Add post-ops blocker demotion pass in =normalizeInProgressTask()=. Add dangling blocker ref validation as a single post-all-ops pass.
+
+**Out of scope**: Prompt changes (separate item). TUI renderer changes beyond summary text. Org-level dependency wiring.
+
+**Boundary rationale**: This item is pure enforcement logic + unit tests. Prompt guidance ships in a paired item to avoid confusing gate rejections without explanation.
+
+* Tests
+TDD: write all tests BEFORE implementation. All tests in =packages/coding-agent/test/tools/todo-write-gates.test.ts= (extend existing) and =packages/coding-agent/test/tools/todo-write.test.ts= (extend existing).
+
+** Test scenarios for =hasUnresolvedBlockers=
+- Returns true when task has pending blocker
+- Returns true when task has in_progress blocker
+- Returns false when all blockers completed
+- Returns false when all blockers abandoned
+- Returns false when blocker ref is missing (dangling = resolved)
+- Returns false when task has no blockers
+- Works regardless of task's own status (unlike =isTaskBlocked=)
+
+** Test scenarios for smart gate in =applyOps=
+- =update= to =in_progress= on task with unresolved blocker: returns error, status unchanged (still =pending=)
+- =update= to =completed= on task with unresolved blocker: succeeds, no error
+- =update= to =abandoned= on task with unresolved blocker: succeeds, no error
+- =update= to =in_progress= on task with NO blockers: succeeds
+- =update= to =in_progress= on task with ALL blockers resolved: succeeds
+- Error message includes unresolved blocker IDs with their current statuses
+- Batch ops: complete blocker + start dependent in same =ops= array succeeds (gate sees in-flight mutations)
+- Batch ops: start dependent BEFORE completing blocker in same =ops= array fails
+
+** Test scenarios for =normalizeInProgressTask= post-op pass
+- Task explicitly set to =in_progress= via =replace= op with unresolved blockers: demoted to =pending=
+- Task explicitly set to =in_progress= via =add_phase= op with unresolved blockers: demoted to =pending=
+- Auto-promotion after demotion picks next unblocked pending task
+- Task with =in_progress= and resolved blockers: NOT demoted
+
+** Test scenarios for dangling blocker ref validation
+- =replace= op with blocker ref pointing to non-existent task ID: warning in errors array
+- =remove_task= that removes a blocker referenced by another task: warning in errors array
+- Dangling ref is still treated as resolved (existing behavior preserved)
+
+** Integration test in =todo-write.test.ts=
+- =execute()= with update blocked->in_progress returns error text in =content=
+- =execute()= with update blocked->completed succeeds and updates phases
+- Auto-promotion after completing a blocker task unblocks and promotes dependent
+
+* Implementation
+Sequencing: implement tests first, then code, verifying each test passes as implementation proceeds.
+
+1. Extract =hasUnresolvedBlockers(task: TodoItem, allTasks: TodoItem[]): boolean= from =isTaskBlocked= in =packages/coding-agent/src/tools/todo-write.ts=:
+   - Move blocker resolution logic (=task.blockers.some(...)=) into =hasUnresolvedBlockers=
+   - =isTaskBlocked= becomes: =task.status !== "pending" || !task.blockers?.length ? false : hasUnresolvedBlockers(task, allTasks)=
+   - Export =hasUnresolvedBlockers= for testing
+   - All 5 existing call sites of =isTaskBlocked= remain unchanged
+
+2. Add smart gate in =applyOps= =update= case (~line 332-349):
+   - BEFORE =if (op.status !== undefined) task.status = op.status;=
+   - Check: if =op.status === "in_progress"= and task has blockers, compute effective blockers (=op.blockers ?? task.blockers=)
+   - Call =hasUnresolvedBlockers= with a temporary task copy using effective blockers against current =file.phases.flatMap(p => p.tasks)=
+   - If unresolved: push error with specific blocker IDs + statuses, skip status change
+   - If resolved or no blockers: proceed normally
+
+3. Add post-ops blocker demotion in =normalizeInProgressTask= (~line 219-235):
+   - After existing multi-in_progress demotion logic (line 224-228)
+   - Before auto-promotion (line 233)
+   - Check all =in_progress= tasks: if =hasUnresolvedBlockers(task, orderedTasks)= is true, demote to =pending=
+   - This catches =replace=, =add_phase= ops that set =in_progress= on blocked tasks
+
+4. Add dangling blocker ref validation in =applyOps= (~line 367, after =normalizeInProgressTask= call):
+   - Collect all task IDs in current =file.phases=
+   - For each task with blockers, check if all blocker IDs exist in the task set
+   - For missing refs: push warning to =errors= array (e.g., "Warning: task-3 references non-existent blocker task-99")
+   - Do NOT change behavior: missing refs remain treated as resolved
+
+* Edge Cases
+- Circular blockers: task-1 blocks task-2, task-2 blocks task-1. Both stay pending. Smart gate prevents either from starting. Deadlock scenario (handled by summary item's deadlock warning).
+- Batch ops ordering: =ops= array processed sequentially. Gate check at each op sees cumulative state from prior ops.
+- =update= that sets BOTH =status: "in_progress"= AND =blockers: ["task-X"]=: gate uses the NEW blocker array (from =op.blockers=), not the existing one.
+- Existing sessions with blocked tasks already =in_progress= (before this fix): =normalizeInProgressTask= demotion pass will demote them on next =todo_write= call. This is correct — fixes the inconsistency.
+- =hasUnresolvedBlockers= on a task with empty blockers array: returns false.
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts= passes with all new test scenarios
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= passes with new integration tests
+- =bun check:ts= passes (no type errors)
+- Existing =isTaskBlocked= behavior unchanged for all 5 call sites (display, summary, auto-promotion, TUI, dashboard)
+- Gate rejection error message is actionable: includes task ID, blocker IDs, blocker statuses

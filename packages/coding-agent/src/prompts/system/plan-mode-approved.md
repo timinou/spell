@@ -7,7 +7,6 @@ Finalized plan artifact: `{{finalPlanFilePath}}`
 Active org item: `{{orgItemId}}`
 {{/if}}
 {{#if orgItemId}}
-
 ## Completion Protocol
 
 A plan is only complete when verification evidence exists and the org lifecycle is closed truthfully.
@@ -38,7 +37,6 @@ Before your final turn, you **MUST**:
 6. If verification fails or required evidence is missing, do **NOT** mark the plan `DONE`; keep org state truthful and report the blocker.
 {{/if}}
 
-
 ## Plan
 
 {{planContent}}
@@ -48,6 +46,7 @@ You **MUST** execute this plan step by step from `{{finalPlanFilePath}}`. You ha
 You **MUST** verify each step before proceeding to the next.
 {{#has tools "todo_write"}}
 Before execution, you **MUST** initialize todo tracking for this plan with `todo_write`.
+When the plan's execution manifest specifies dependencies between items (via `[[id:...]]` links or `:BLOCKER:` properties), express these as `blockers` in your `todo_write` task list so the dependency gate enforces correct execution order.
 After each completed step, you **MUST** immediately update `todo_write` so progress stays visible.
 If a `todo_write` call fails, you **MUST** fix the todo payload and retry before continuing silently.
 {{/has}}
