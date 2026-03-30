@@ -1,0 +1,95 @@
+#+TITLE: Enrich niri overview with blockers gates and dependencies
+#+STATE: DONE
+#+SESSION_ID: 14a72bdc7b898095
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T16-01-01-934Z_14a72bdc7b898095.jsonl]]
+#+CUSTOM_ID: FEAT-104-enrich-niri-overview-with-blockers-gates
+#+EFFORT: M
+#+PRIORITY: B
+#+LAYER: tui
+
+NOTE [2026-03-30]: All acceptance criteria met. Types expanded, controller computes blocked state/gate badges/org links, overview renders enriched task metadata, 23 tests pass including 8 new enrichment tests.
+
+* Initial Message
+
+Yo can you make sure the niri overview mode of the task list shows the blockers and the dependencies and everything that the todo write tool now supports thanks to org mode and org depend?
+
+* Objective
+
+Show blockers, dependency state, gate badges, and org item links in the niri compositor overview mode, matching the metadata that todo_write now supports.
+
+* Context
+
+The niri overview (~Super key overlay~) currently renders each task as just an icon + content text. The full =TodoItem= from =todo-write.ts= has: id, blockers, gateCommit, gateArtifact, gateCmd, gateLlm, verifyCmd, orgItemId — none of which reach the overview.
+
+Data flow today:
+1. =todo-write.ts= =TodoItem= — full data
+2. =modes/types.ts= =TodoItem= — slimmed (id, content, status, details)
+3. =interactive-mode.ts= =todoPhases: TodoPhase[]= — slimmed type, but runtime data has all fields
+4. =niri/controller.ts= =TodoItemView= — minimal (content, status)
+5. =niri/controller.ts= =#buildSnapshot()= — strips to content + status
+6. =niri/overview-component.ts= =renderTodoItem()= — renders only icon + content
+
+* Files to Modify
+
+** =packages/coding-agent/src/modes/types.ts=
+Expand =TodoItem= type to include optional fields: =blockers=, =gateCommit=, =gateArtifact=, =gateCmd=, =gateLlm=, =verifyCmd=, =orgItemId=. This makes the interactive mode type aware of the full todo-write data model without requiring runtime changes (data already flows through).
+
+** =packages/niri/src/types.ts=
+Expand =TodoItemSnapshot= to include:
+- =id: string= (needed for blocker reference resolution)
+- =blocked: boolean= (pre-computed: is this task blocked by unresolved deps?)
+- =blockerLabels?: string[]= (content strings of blocking tasks, for display)
+- =hasGates: boolean= (any gate set?)
+- =gateBadges?: string[]= (compact badge labels like "commit", "cmd", etc.)
+- =orgItemId?: string=
+
+** =packages/niri/src/controller.ts=
+- Expand =TodoItemView= to include: =id=, =blockers?=, =gateCommit?=, =gateArtifact?=, =gateCmd?=, =gateLlm?=, =verifyCmd?=, =orgItemId?=
+- Update =#buildSnapshot()= to compute =blocked= state from blocker graph (trivial: check if any blocker task is not completed/abandoned — same logic as =isTaskBlocked= in =todo-write.ts=, but self-contained in the niri package to avoid cross-package dependency)
+- Compute =blockerLabels= by resolving blocker IDs to their content strings
+- Compute =gateBadges= array from gate fields
+- Pass =orgItemId= through
+
+** =packages/niri/src/overview-component.ts=
+- Update =renderTodoItem()= to show:
+  - Blocked tasks: distinct icon (=⊘=) in warning color + dimmed blocker labels (e.g., =⊘ Deploy staging  ← Create schema=)
+  - Gate badges after task content: dim =[commit] [cmd]= etc., similar to main TUI format
+  - Org badge: =[org]= if linked
+- Keep rendering compact — overview is a quick-glance display
+
+** =packages/niri/test/overview-component.test.ts=
+- Add tests for blocked task rendering (blocked icon, blocker labels appear)
+- Add tests for gate badge rendering
+- Add tests for org badge rendering
+- Verify backward compat: snapshots without new fields still render correctly
+
+* Rendering Design
+
+#+begin_example
+→ Implementation
+  ⊘ Deploy to staging ← Create schema  [commit]
+  → Add auth module  [commit] [cmd]
+  ○ Run integration tests
+  ✓ Write unit tests
+#+end_example
+
+Icons:
+- =⊘= blocked pending (replaces =○=)
+- =○= pending (unblocked)
+- =→= in_progress
+- =✓= completed
+- =✗= abandoned
+
+After content, dimmed:
+- =← Blocker Task Name= (only first blocker to save space, add =+N= if more)
+- =[commit]= =[cmd]= =[artifact]= =[llm]= =[verify]= =[org]= gate/link badges
+
+* Acceptance Criteria
+
+- =bun check:ts= passes with expanded types
+- =bun test packages/niri/test/overview-component.test.ts= passes
+- Blocked tasks render with =⊘= icon and blocker label
+- Gate badges appear after gated task content
+- Org badge appears for org-linked tasks
+- Tasks without blockers/gates render identically to current behavior (backward compatible)
+- No runtime import from =packages/coding-agent= in =packages/niri=

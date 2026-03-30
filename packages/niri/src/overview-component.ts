@@ -66,6 +66,8 @@ export const STATUS_COLORS: Record<
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";
 const RESET_BOLD = "\x1b[22m";
+const YELLOW_FG = "\x1b[38;2;249;226;175m";
+const RESET_FG = "\x1b[39m";
 
 // ─── Todo rendering helpers ───────────────────────────────────────────────────
 
@@ -77,10 +79,34 @@ const TODO_ICONS: Record<TodoItemSnapshot["status"], string> = {
 };
 
 function renderTodoItem(item: TodoItemSnapshot, indent: string): string {
-	const icon = TODO_ICONS[item.status];
-	const dim = item.status === "completed" || item.status === "abandoned" ? DIM : "";
+	const isDone = item.status === "completed" || item.status === "abandoned";
+	const icon = item.blocked ? "\u2298" : TODO_ICONS[item.status];
+	const dim = isDone ? DIM : "";
 	const reset = dim ? RESET_BOLD : "";
-	return `${indent}${dim}${icon} ${item.content}${reset}`;
+
+	let suffix = "";
+
+	// Blocker labels — show first blocker + "+N" overflow
+	if (item.blocked && item.blockerLabels && item.blockerLabels.length > 0) {
+		const first = item.blockerLabels[0];
+		const overflow = item.blockerLabels.length > 1 ? ` +${item.blockerLabels.length - 1}` : "";
+		suffix += ` ${DIM}\u2190 ${first}${overflow}${RESET_BOLD}`;
+	}
+
+	// Gate and org badges
+	const badges: string[] = [];
+	if (item.gateBadges) {
+		for (const b of item.gateBadges) badges.push(`[${b}]`);
+	}
+	if (item.orgItemId) badges.push("[org]");
+	if (badges.length > 0) {
+		suffix += ` ${DIM}${badges.join(" ")}${RESET_BOLD}`;
+	}
+
+	// Blocked pending tasks get a warning-colored icon
+	const iconStr = item.blocked ? `${YELLOW_FG}${icon}${RESET_FG}` : icon;
+
+	return `${indent}${dim}${iconStr} ${item.content}${suffix}${reset}`;
 }
 
 function renderPhase(phase: TodoPhaseSnapshot): string[] {

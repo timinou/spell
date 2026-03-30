@@ -1,0 +1,49 @@
+#+TITLE: Niri Overview Enrichment
+#+STATE: DONE
+#+SESSION_ID: 14a72bdc7b898095
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T16-01-01-934Z_14a72bdc7b898095.jsonl]]
+#+CUSTOM_ID: PLAN-039-niri-overview-enrichment
+
+NOTE [2026-03-30]: All steps executed, verified, and closed.
+
+
+* Initial Message
+
+Yo can you make sure the niri overview mode of the task list shows the blockers and the dependencies and everything that the todo write tool now supports thanks to org mode and org depend?
+
+* Context
+
+The niri compositor overview overlay shows agent status and todo list when the user opens the niri workspace overview (Super key). Currently, the overlay strips all task metadata down to content + status, discarding blockers, gates, org links, and dependency information that the todo_write tool now supports.
+
+The fix enriches the data pipeline from interactive-mode through the niri controller to the overview component, adding blocked state computation, gate badge rendering, blocker label resolution, and org item indicators.
+
+Key constraint: the niri package must remain independent of the coding-agent package. Blocked state computation (trivial: check if any blocker task is not completed/abandoned) is done inside the niri controller, not imported from todo-write.ts.
+
+* Verification
+
+- =bun check:ts= — types compile across both packages
+- =bun test packages/niri/test/overview-component.test.ts= — tests for blocked tasks, gate badges, org badges, and backward compatibility
+
+* Execution Manifest
+
+1. [[id:FEAT-104-enrich-niri-overview-with-blockers-gates]] — Single feature: expand types in modes/types.ts and niri/types.ts, update controller snapshot building, update overview rendering, add tests
+
+** Completion [2026-03-30]
+
+*** Verification
+- =bun check:ts= — passes cleanly (1467 files, no errors, no warnings)
+- =bun test packages/niri/test/overview-component.test.ts= — 23 pass, 0 fail, 125 expect() calls
+- =bun test packages/niri/test/= — 66 pass across 3 files (controller, overview-component, ipc)
+- No runtime imports from =packages/coding-agent= in =packages/niri=
+
+*** Artifacts
+**** Files Modified
+- =packages/coding-agent/src/modes/types.ts= — expanded =TodoItem= with blockers, gates, orgItemId, notes, verifyCmd
+- =packages/niri/src/types.ts= — expanded =TodoItemSnapshot= with id, blocked, blockerLabels, hasGates, gateBadges, orgItemId
+- =packages/niri/src/controller.ts= — expanded =TodoItemView= with raw fields; rewrote =#buildSnapshot()= to compute blocked state from blocker graph, resolve blocker labels, build gate badges
+- =packages/niri/src/overview-component.ts= — updated =renderTodoItem()= with blocked icon (⊘), blocker labels (← Name +N), gate badges ([commit] [cmd] etc.), org badge ([org]), yellow warning color for blocked icon
+- =packages/niri/test/overview-component.test.ts= — added 8 new enrichment tests (blocked icon, blocker labels, overflow count, gate badges, all gate types, org badge, combined badges, backward compat)
+- =packages/niri/test/controller.test.ts= — added required =id= field to TodoItemView test data
+
+*** Deviations
+None.

@@ -365,8 +365,8 @@ describe("NiriOverviewController", () => {
 						{
 							name: "Phase 1",
 							tasks: [
-								{ content: "Task A", status: "completed" },
-								{ content: "Task B", status: "completed" },
+								{ id: "t", content: "Task A", status: "completed" },
+								{ id: "t", content: "Task B", status: "completed" },
 							],
 						},
 					],
@@ -382,8 +382,8 @@ describe("NiriOverviewController", () => {
 						{
 							name: "Phase 1",
 							tasks: [
-								{ content: "Task A", status: "completed" },
-								{ content: "Task B", status: "pending" },
+								{ id: "t", content: "Task A", status: "completed" },
+								{ id: "t", content: "Task B", status: "pending" },
 							],
 						},
 					],

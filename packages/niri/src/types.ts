@@ -32,8 +32,14 @@ export interface OverviewSnapshot {
 
 /** Minimal view of a todo item for the overlay */
 export interface TodoItemSnapshot {
+	id: string;
 	content: string;
 	status: "pending" | "in_progress" | "completed" | "abandoned";
+	blocked: boolean;
+	blockerLabels?: string[];
+	hasGates: boolean;
+	gateBadges?: string[];
+	orgItemId?: string;
 }
 
 /** Minimal view of a todo phase for the overlay */

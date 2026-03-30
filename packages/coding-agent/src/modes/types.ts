@@ -41,6 +41,14 @@ export type TodoItem = {
 	content: string;
 	status: TodoStatus;
 	details?: string;
+	notes?: string;
+	blockers?: string[];
+	gateCommit?: boolean;
+	gateArtifact?: string;
+	gateCmd?: string;
+	gateLlm?: string;
+	verifyCmd?: string;
+	orgItemId?: string;
 };
 
 export type TodoPhase = {

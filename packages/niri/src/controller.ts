@@ -16,8 +16,16 @@ export type { TodoItemSnapshot, TodoPhaseSnapshot };
 
 /** Minimal snapshot of a todo task visible to the overview. */
 export interface TodoItemView {
+	id: string;
 	content: string;
 	status: "pending" | "in_progress" | "completed" | "abandoned";
+	blockers?: string[];
+	gateCommit?: boolean;
+	gateArtifact?: string;
+	gateCmd?: string;
+	gateLlm?: string;
+	verifyCmd?: string;
+	orgItemId?: string;
 }
 
 /** Minimal snapshot of a todo phase visible to the overview. */
@@ -242,9 +250,46 @@ export class NiriOverviewController {
 		const sessionTitle = ctx.sessionManager.getSessionName() ?? "";
 		const messageCount = ctx.session.messages.length;
 		const agentStatus = this.#deriveStatus();
+
+		// Build a flat task-id lookup across all phases for blocker resolution.
+		const allTasks = ctx.todoPhases.flatMap(p => p.tasks);
+		const taskById = new Map(allTasks.map(t => [t.id, t]));
+
 		const todoPhases: TodoPhaseSnapshot[] = ctx.todoPhases.map(p => ({
 			name: p.name,
-			tasks: p.tasks.map(t => ({ content: t.content, status: t.status })),
+			tasks: p.tasks.map(t => {
+				const blockerIds = t.blockers ?? [];
+				const blocked =
+					blockerIds.length > 0 &&
+					t.status !== "completed" &&
+					t.status !== "abandoned" &&
+					blockerIds.some(bid => {
+						const dep = taskById.get(bid);
+						return !dep || (dep.status !== "completed" && dep.status !== "abandoned");
+					});
+
+				const blockerLabels = blockerIds
+					.map(bid => taskById.get(bid)?.content)
+					.filter((c): c is string => c !== undefined);
+
+				const gateBadges: string[] = [];
+				if (t.gateCommit) gateBadges.push("commit");
+				if (t.gateCmd) gateBadges.push("cmd");
+				if (t.gateArtifact) gateBadges.push("artifact");
+				if (t.gateLlm) gateBadges.push("llm");
+				if (t.verifyCmd) gateBadges.push("verify");
+
+				return {
+					id: t.id,
+					content: t.content,
+					status: t.status,
+					blocked,
+					blockerLabels: blockerLabels.length > 0 ? blockerLabels : undefined,
+					hasGates: gateBadges.length > 0,
+					gateBadges: gateBadges.length > 0 ? gateBadges : undefined,
+					orgItemId: t.orgItemId,
+				};
+			}),
 		}));
 
 		return { projectName, sessionTitle, messageCount, todoPhases, agentStatus };
