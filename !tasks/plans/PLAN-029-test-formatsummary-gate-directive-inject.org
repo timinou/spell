@@ -1,0 +1,67 @@
+#+TITLE: Test formatSummary gate directive injection
+#+STATE: DONE
+#+SESSION_ID: 14a63880ea8a8b6f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-17-47-178Z_14a63880ea8a8b6f.jsonl]]
+#+CUSTOM_ID: PLAN-029-test-formatsummary-gate-directive-inject
+#+EFFORT: 30m
+#+PRIORITY: B
+
+
+* Initial Message
+
+Implement these audit recommendations:
+
+## Audit Summary
+
+| # | What | Where | Why | Effort | Status |
+|---|---|---|---|---|---|
+| 1 | `#gateBadges` missing `[llm]` badge | `todo-reminder.ts:50-58` | Inconsistent gate visibility between TUI renderer and reminder | trivial | **Fixed** |
+| 2 | `handleControl` doesn't emit `todo:change` | `todo-dashboard-bridge.ts:182` | QML toggles show stale state until next tool call | trivial | **Fixed** |
+| 3 | `formatSummary` gate directive injection untested | `test/tools/todo-write-gates.test.ts` | Core value prop (directive injection) has no coverage | small | Open — would need mock ToolSession or exported formatSummary |
+| 4 | `renderGateBadges` shows artifact path, reminder doesn't | `todo-write.ts:558` vs `todo-reminder.ts:54` | Minor inconsistency, by design (reminder is compact) | trivial | Accepted |
+
+Finding 3 is the remaining gap. The directive injection logic is correct and works, but it's only testable through the full tool execution path which requires a mock ToolSession. That's a small effort improvement for a follow-up.
+
+* Context
+
+** Problem
+The ~formatSummary~ function in ~todo-write.ts~ injects gate directives when gated tasks are completed and emits phase completion summaries. This is the core value proposition of the todo gates feature (PLAN-022). However, ~formatSummary~ is module-private and has zero direct test coverage. A refactor that breaks the injection would pass all existing tests.
+
+** Approach
+Export ~formatSummary~ and ~FormatSummaryOptions~ from ~todo-write.ts~. It is a pure function with well-defined inputs — no mock ToolSession needed. Add 6 test scenarios to the existing ~todo-write-gates.test.ts~ file covering: gate directive injection for each gate type, absence of directives for non-gated tasks, phase completion aggregates, and blocked task rendering in the summary text.
+
+** Key decisions
+- Export the pure function rather than testing through execute() — avoids ToolSession mock complexity
+- Extend existing test file rather than creating a new one — tests are thematically related
+
+* Verification
+
+** Type check
+#+begin_src sh
+tsgo -p packages/coding-agent --noEmit 2>&1 | grep -E "todo-write|todo-write-gates"
+#+end_src
+Should produce no output (clean).
+
+** Tests
+#+begin_src sh
+bun test packages/coding-agent/test/tools/todo-write-gates.test.ts
+#+end_src
+All tests pass including the 6 new formatSummary scenarios.
+
+* Execution Manifest
+
+** Phase A — Implementation (single item)
+1. [[id:FEAT-086-test-coverage-for-formatsummary-gate-dir]] (effort: 30m) — Export formatSummary + add 6 test scenarios. No dependencies.
+
+** Completion [2026-03-30]
+
+*** Verification
+- ~tsgo -p packages/coding-agent --noEmit~ — clean, no errors on todo-write files
+- ~bun test packages/coding-agent/test/tools/todo-write-gates.test.ts~ — 19 pass, 0 fail, 40 expect() calls
+
+*** Artifacts
+- ~packages/coding-agent/src/tools/todo-write.ts~ — exported ~formatSummary~ and ~FormatSummaryOptions~
+- ~packages/coding-agent/test/tools/todo-write-gates.test.ts~ — 6 new test scenarios in ~describe("formatSummary gate directives")~
+
+*** Deviations
+None.

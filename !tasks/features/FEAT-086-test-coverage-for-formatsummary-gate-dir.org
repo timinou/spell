@@ -1,0 +1,100 @@
+#+TITLE: Test coverage for formatSummary gate directive injection
+#+STATE: DONE
+#+SESSION_ID: 14a63880ea8a8b6f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T22-17-47-178Z_14a63880ea8a8b6f.jsonl]]
+#+CUSTOM_ID: FEAT-086-test-coverage-for-formatsummary-gate-dir
+#+EFFORT: 30m
+#+PRIORITY: B
+#+LAYER: test
+
+NOTE [2026-03-30]: All 6 formatSummary test scenarios pass. Type check clean.
+
+* Initial Message
+
+Implement these audit recommendations:
+
+## Audit Summary
+
+| # | What | Where | Why | Effort | Status |
+|---|---|---|---|---|---|
+| 1 | `#gateBadges` missing `[llm]` badge | `todo-reminder.ts:50-58` | Inconsistent gate visibility between TUI renderer and reminder | trivial | **Fixed** |
+| 2 | `handleControl` doesn't emit `todo:change` | `todo-dashboard-bridge.ts:182` | QML toggles show stale state until next tool call | trivial | **Fixed** |
+| 3 | `formatSummary` gate directive injection untested | `test/tools/todo-write-gates.test.ts` | Core value prop (directive injection) has no coverage | small | Open — would need mock ToolSession or exported formatSummary |
+| 4 | `renderGateBadges` shows artifact path, reminder doesn't | `todo-write.ts:558` vs `todo-reminder.ts:54` | Minor inconsistency, by design (reminder is compact) | trivial | Accepted |
+
+Finding 3 is the remaining gap. The directive injection logic is correct and works, but it's only testable through the full tool execution path which requires a mock ToolSession. That's a small effort improvement for a follow-up.
+
+* Scope
+
+** In scope
+- Export ~formatSummary~ and ~FormatSummaryOptions~ from ~todo-write.ts~ for direct testing
+- Export ~applyOps~ (or the ~ApplyOpsResult~ type) if needed for constructing test inputs
+- Tests for gate directive injection in formatSummary response text
+- Tests for phase completion aggregate directives
+
+** Out of scope
+- Refactoring formatSummary internals
+- Testing through TodoWriteTool.execute() (too much mock surface)
+- Changing any gate directive wording
+
+** Boundary rationale
+~formatSummary~ is a pure function with well-defined inputs (~FormatSummaryOptions~). Exporting it is the minimal change needed for direct testing without mocking ToolSession.
+
+* Tests
+
+File: ~packages/coding-agent/test/tools/todo-write-gates.test.ts~ (extend existing)
+
+** Scenarios
+
+*** 1. Completing a gated task injects "--- Gate Requirements ---" section
+- Input: phases with one completed gated task (gateCommit=true), completedGatedTasks=[that task]
+- Assert: output contains "--- Gate Requirements ---" and "REQUIRED: Commit your changes for task-1"
+
+*** 2. Each gate type produces the correct directive text
+- gateCommit → "REQUIRED: Commit your changes for"
+- gateArtifact → "REQUIRED: Verify artifact exists at"
+- gateCmd → "REQUIRED: Run \`...\` to verify"
+- gateLlm → "REQUIRED: Review ... against acceptance criteria:"
+- verifyCmd → "RECOMMENDED: Run \`...\` to verify"
+
+*** 3. No gate directives when completing non-gated task
+- Input: completedGatedTasks=[]
+- Assert: output does NOT contain "--- Gate Requirements ---"
+
+*** 4. Phase completion aggregate directive
+- Input: one phase fully completed with gated tasks, completedPhaseIds=[that phase id]
+- Assert: output contains 'Phase "PhaseName" complete.' with action summary
+
+*** 5. Blocked task shows [blocked] label in remaining items
+- Input: phases with a blocked pending task
+- Assert: remaining items line contains "[blocked]"
+
+*** 6. Blocked task uses ⛔ symbol in phase tree
+- Input: phases with a blocked pending task
+- Assert: phase tree line contains the ⛔ character
+
+* Implementation
+
+** Step 1: Export formatSummary and FormatSummaryOptions
+File: ~packages/coding-agent/src/tools/todo-write.ts~
+- Change ~interface FormatSummaryOptions~ → ~export interface FormatSummaryOptions~
+- Change ~function formatSummary~ → ~export function formatSummary~
+- No other changes needed; the function is pure
+
+** Step 2: Add test describe block
+File: ~packages/coding-agent/test/tools/todo-write-gates.test.ts~
+- Import ~formatSummary~ and ~FormatSummaryOptions~ from the todo-write module
+- Add ~describe("formatSummary gate directives", () => { ... })~ with the 6 scenarios above
+- Use the existing ~makeTask~ and ~makePhase~ helpers
+
+* Edge Cases
+- Empty completedGatedTasks array → no "--- Gate Requirements ---" section
+- Task with multiple gates → multiple directive lines for same task
+- Phase with no gated tasks in completedPhaseIds → no aggregate directive (skipped)
+- completedPhaseIds referencing non-existent phase → gracefully skipped (already handled by ~if (!phase) continue~)
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/tools/todo-write-gates.test.ts~ passes with all new + existing tests
+- ~formatSummary~ is exported and importable
+- Each of the 6 scenarios produces a passing test
+- No type errors: ~tsgo -p packages/coding-agent --noEmit~ clean on plan files

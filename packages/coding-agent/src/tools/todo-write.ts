@@ -398,14 +398,19 @@ function gateDirectivesForTask(task: TodoItem): string[] {
 	return lines;
 }
 
-interface FormatSummaryOptions {
+export interface FormatSummaryOptions {
 	phases: TodoPhase[];
 	errors: string[];
 	completedPhaseIds: string[];
 	completedGatedTasks: TodoItem[];
 }
 
-function formatSummary({ phases, errors, completedPhaseIds, completedGatedTasks }: FormatSummaryOptions): string {
+export function formatSummary({
+	phases,
+	errors,
+	completedPhaseIds,
+	completedGatedTasks,
+}: FormatSummaryOptions): string {
 	const allTasks = phases.flatMap(p => p.tasks);
 	if (allTasks.length === 0) return errors.length > 0 ? `Errors: ${errors.join("; ")}` : "Todo list cleared.";
 
@@ -560,7 +565,7 @@ function renderGateBadges(item: TodoItem, uiTheme: Theme): string {
 	if (item.gateLlm) badges.push("[llm]");
 	if (item.verifyCmd) badges.push("[verify]");
 	if (badges.length === 0) return "";
-	return " " + uiTheme.fg("dim", badges.join(" "));
+	return ` ${uiTheme.fg("dim", badges.join(" "))}`;
 }
 
 function formatTodoLine(item: TodoItem, uiTheme: Theme, prefix: string, allTasks?: TodoItem[]): string {

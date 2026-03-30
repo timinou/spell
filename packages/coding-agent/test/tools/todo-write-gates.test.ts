@@ -12,12 +12,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { TodoItem, TodoPhase, TodoStatus } from "../../src/tools/todo-write";
-import { getLatestTodoPhasesFromEntries, hasGate, isTaskBlocked } from "../../src/tools/todo-write";
-
-// We test applyOps and formatSummary indirectly through the TodoWriteTool.execute
-// since those are module-private. For unit-level verification we construct phases
-// directly and test the exported helpers.
+import type { FormatSummaryOptions, TodoItem, TodoPhase, TodoStatus } from "../../src/tools/todo-write";
+import { formatSummary, getLatestTodoPhasesFromEntries, hasGate, isTaskBlocked } from "../../src/tools/todo-write";
 
 // =============================================================================
 // Helper: build phases with gate fields
@@ -158,5 +154,99 @@ describe("isTaskBlocked", () => {
 		// Both should be blocked — isTaskBlocked doesn't recurse
 		expect(isTaskBlocked(task1, [task1, task2])).toBe(true);
 		expect(isTaskBlocked(task2, [task1, task2])).toBe(true);
+	});
+});
+
+// =============================================================================
+// formatSummary gate directive injection
+// =============================================================================
+
+describe("formatSummary gate directives", () => {
+	function callFormatSummary(overrides: Partial<FormatSummaryOptions> = {}): string {
+		return formatSummary({
+			phases: overrides.phases ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
+			errors: overrides.errors ?? [],
+			completedPhaseIds: overrides.completedPhaseIds ?? [],
+			completedGatedTasks: overrides.completedGatedTasks ?? [],
+		});
+	}
+
+	test("completing a gated task injects Gate Requirements section", () => {
+		const task = makeTask({ id: "task-1", content: "Build it", status: "completed", gateCommit: true });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [task])],
+			completedGatedTasks: [task],
+		});
+		expect(result).toContain("--- Gate Requirements ---");
+		expect(result).toContain("REQUIRED: Commit your changes for task-1");
+	});
+
+	test("each gate type produces its directive", () => {
+		const task = makeTask({
+			id: "task-1",
+			content: "Full gates",
+			status: "completed",
+			gateCommit: true,
+			gateArtifact: "dist/out.json",
+			gateCmd: "bun test",
+			gateLlm: "check acceptance",
+			verifyCmd: "bun check",
+		});
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [task])],
+			completedGatedTasks: [task],
+		});
+		expect(result).toContain("REQUIRED: Commit your changes for task-1 (Full gates) before proceeding.");
+		expect(result).toContain("REQUIRED: Verify artifact exists at dist/out.json for task-1.");
+		expect(result).toContain("REQUIRED: Run `bun test` to verify task-1.");
+		expect(result).toContain("REQUIRED: Review task-1 against acceptance criteria: check acceptance");
+		expect(result).toContain("RECOMMENDED: Run `bun check` to verify task-1.");
+	});
+
+	test("no gate directives when completing non-gated task", () => {
+		const task = makeTask({ id: "task-1", content: "Simple", status: "completed" });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [task])],
+			completedGatedTasks: [],
+		});
+		expect(result).not.toContain("--- Gate Requirements ---");
+		expect(result).not.toContain("REQUIRED:");
+		expect(result).not.toContain("RECOMMENDED:");
+	});
+
+	test("phase completion aggregate directive", () => {
+		const task = makeTask({
+			id: "task-1",
+			content: "Done",
+			status: "completed",
+			gateCommit: true,
+			gateCmd: "bun test",
+		});
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Build", [task])],
+			completedPhaseIds: ["phase-1"],
+		});
+		expect(result).toContain('Phase "Build" complete.');
+		expect(result).toContain("Commit changes.");
+		expect(result).toContain("Run verification commands.");
+	});
+
+	test("blocked task shows [blocked] label in remaining items", () => {
+		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
+		const blocked = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [blocker, blocked])],
+		});
+		expect(result).toContain("task-2 Second [pending] [blocked]");
+	});
+
+	test("blocked task uses block symbol in phase tree", () => {
+		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
+		const blocked = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		const result = callFormatSummary({
+			phases: [makePhase("phase-1", "Work", [blocker, blocked])],
+		});
+		// ⛔ is the blocked symbol in phase tree rendering
+		expect(result).toContain("\u26D4 task-2");
 	});
 });
