@@ -131,6 +131,7 @@ export class MCPManager {
 	#subscribedResources = new Map<string, Set<string>>();
 	#pendingResourceRefresh = new Map<string, { connection: MCPServerConnection; promise: Promise<void> }>();
 	#gatewayRegistrations = new Set<string>();
+	#gatewayClient: GatewayClient | null = null;
 
 	constructor(
 		private cwd: string,
@@ -495,19 +496,29 @@ export class MCPManager {
 		this.#tools.push(...tools);
 	}
 
+	#deriveGatewayAlias(name: string, config: MCPServerConfig): string {
+		return config.gateway?.alias ?? name.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+	}
+
+	#getGatewayClient(): GatewayClient {
+		if (!this.#gatewayClient) {
+			this.#gatewayClient = new GatewayClient();
+		}
+		return this.#gatewayClient;
+	}
+
 	#registerWithGateway(name: string, config: MCPServerConfig): void {
 		if (!config.gateway?.expose) return;
 		if (config.type === "stdio" || !("url" in config)) return;
-		const alias = config.gateway.alias ?? name.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+		const alias = this.#deriveGatewayAlias(name, config);
 		void (async () => {
 			try {
-				const client = new GatewayClient();
+				const client = this.#getGatewayClient();
 				await client.register({
 					alias,
 					target: config.url,
 					persistent: false,
 				});
-				client.dispose();
 				this.#gatewayRegistrations.add(alias);
 				logger.debug("Registered MCP server with gateway", { path: `mcp:${name}`, alias });
 			} catch (error) {
@@ -518,9 +529,8 @@ export class MCPManager {
 
 	async #deregisterFromGateway(alias: string): Promise<void> {
 		try {
-			const client = new GatewayClient();
+			const client = this.#getGatewayClient();
 			await client.deregister(alias);
-			client.dispose();
 			this.#gatewayRegistrations.delete(alias);
 		} catch (error) {
 			logger.debug("Failed to deregister MCP server from gateway", { alias, error });
@@ -653,7 +663,7 @@ export class MCPManager {
 
 		// Deregister from gateway if registered
 		if (connection?.config.gateway?.expose) {
-			const alias = connection.config.gateway.alias ?? name.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+			const alias = this.#deriveGatewayAlias(name, connection.config);
 			if (this.#gatewayRegistrations.has(alias)) {
 				void this.#deregisterFromGateway(alias);
 			}
@@ -690,6 +700,11 @@ export class MCPManager {
 		// Deregister all gateway registrations
 		const deregPromises = Array.from(this.#gatewayRegistrations).map(alias => this.#deregisterFromGateway(alias));
 		await Promise.allSettled(deregPromises);
+		// Dispose shared gateway client
+		if (this.#gatewayClient) {
+			await this.#gatewayClient.dispose();
+			this.#gatewayClient = null;
+		}
 	}
 
 	/**

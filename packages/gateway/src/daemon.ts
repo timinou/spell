@@ -20,7 +20,9 @@ import {
 	resolveSocketPath,
 	serializeMessage,
 } from "./protocol";
+import { type ProxyServers, startProxy } from "./proxy";
 import { GatewayRegistry, GatewayRegistryError } from "./registry";
+import { ensureCerts } from "./tls";
 
 // ---------------------------------------------------------------------------
 // Daemon state
@@ -221,9 +223,22 @@ async function startDaemon(): Promise<void> {
 		process.exit(1);
 	});
 
+	// Start HTTPS reverse proxy (optional — control plane works without it)
+	let proxy: ProxyServers | null = null;
+	try {
+		const tls = await ensureCerts();
+		proxy = startProxy({ registry, processManager, tls });
+		logger.debug("[gateway] HTTPS reverse proxy started");
+	} catch (err) {
+		logger.warn("[gateway] HTTPS proxy not started (TLS certs may be missing)", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+
 	// Register postmortem cleanup
 	postmortem.register("gateway-daemon", async reason => {
 		logger.debug("[gateway] Postmortem cleanup", { reason });
+		proxy?.stop();
 		server.close();
 		await processManager.stopAll();
 		try {
@@ -236,6 +251,7 @@ async function startDaemon(): Promise<void> {
 	// Graceful shutdown on signals
 	const shutdown = async () => {
 		logger.debug("[gateway] Shutting down...");
+		proxy?.stop();
 		server.close();
 		await processManager.stopAll();
 		try {

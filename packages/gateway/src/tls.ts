@@ -5,7 +5,7 @@
  * Certificates are stored at ~/.spell/gateway/tls/.
  */
 import * as fs from "node:fs/promises";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { PATHS } from "./protocol";
 
@@ -70,29 +70,4 @@ export async function ensureCerts(): Promise<TlsConfig> {
 
 	logger.debug("[gateway] TLS certificates generated", { cert: PATHS.cert });
 	return { cert: PATHS.cert, key: PATHS.key };
-}
-
-/**
- * Load TLS config for Bun.serve().
- * Returns the cert/key file paths suitable for Bun's tls option.
- */
-export async function loadTlsConfig(): Promise<{ cert: string; key: string }> {
-	const { cert, key } = await ensureCerts();
-	return { cert, key };
-}
-
-/**
- * Check if certs are expired (mkcert certs are valid for ~825 days).
- * Returns true if certs should be regenerated.
- */
-export async function certsNeedRenewal(): Promise<boolean> {
-	try {
-		const stat = await fs.stat(PATHS.cert);
-		const ageMs = Date.now() - stat.mtimeMs;
-		const maxAgeMs = 800 * 24 * 60 * 60 * 1000; // ~800 days (conservative margin)
-		return ageMs > maxAgeMs;
-	} catch (err) {
-		if (isEnoent(err)) return true;
-		return false;
-	}
 }

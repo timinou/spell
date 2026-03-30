@@ -7,6 +7,7 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { isPidRunning, terminate } from "@oh-my-pi/pi-utils/procmgr";
+import type { Subprocess } from "bun";
 import type { ManagedProcessConfig } from "./protocol";
 
 const INITIAL_BACKOFF_MS = 100;
@@ -24,7 +25,7 @@ export interface ManagedBackendState {
 
 export class ManagedBackend {
 	#config: ManagedProcessConfig;
-	#proc: ReturnType<typeof Bun.spawn> | null = null;
+	#proc: Subprocess | null = null;
 	#alive = false;
 	#stopped = false;
 	#restarts = 0;

@@ -38,15 +38,20 @@ export class GatewayTool implements AgentTool<typeof gatewaySchema> {
 	}
 
 	async execute(_toolCallId: string, input: GatewayInput, _signal?: AbortSignal): Promise<AgentToolResult> {
-		switch (input.action) {
-			case "register":
-				return this.#register(input);
-			case "deregister":
-				return this.#deregister(input);
-			case "list":
-				return this.#list();
-			case "status":
-				return this.#status(input);
+		try {
+			switch (input.action) {
+				case "register":
+					return await this.#register(input);
+				case "deregister":
+					return await this.#deregister(input);
+				case "list":
+					return await this.#list();
+				case "status":
+					return await this.#status(input);
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			return toolResult().text(`Gateway error: ${message}`).done();
 		}
 	}
 
@@ -66,7 +71,7 @@ export class GatewayTool implements AgentTool<typeof gatewaySchema> {
 			persistent: input.persistent,
 		});
 
-		const url = await this.#client.getAliasUrl(input.alias);
+		const url = this.#client.getAliasUrl(input.alias);
 		return toolResult().text(`Registered service "${input.alias}" → ${input.target}\nURL: ${url}`).done();
 	}
 

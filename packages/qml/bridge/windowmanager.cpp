@@ -108,11 +108,13 @@ void WindowManager::dispatch(QLocalSocket *client, const QByteArray &jsonLine) {
                 QJsonObject evt;
                 evt["type"] = "systray_click";
                 evt["itemId"] = itemId;
+                evt["id"] = "__systray__";
                 writeEvent(client, evt);
             });
             connect(m_systray, &SystrayManager::activated, this, [this, client]() {
                 QJsonObject evt;
                 evt["type"] = "systray_activated";
+                evt["id"] = "__systray__";
                 writeEvent(client, evt);
             });
         }

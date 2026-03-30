@@ -10,6 +10,7 @@
  * - Proper error responses (400, 404, 502, 503, 504)
  */
 import { logger } from "@oh-my-pi/pi-utils";
+import type { Server } from "bun";
 import type { ProcessManager } from "./process-manager";
 import type { GatewayRegistry } from "./registry";
 import type { TlsConfig } from "./tls";
@@ -25,8 +26,8 @@ export interface ProxyConfig {
 }
 
 export interface ProxyServers {
-	https: ReturnType<typeof Bun.serve>;
-	http: ReturnType<typeof Bun.serve> | null;
+	https: Server<undefined>;
+	http: Server<undefined> | null;
 	stop(): void;
 }
 
@@ -114,7 +115,7 @@ export function startProxy(config: ProxyConfig): ProxyServers {
 	logger.debug("[gateway] HTTPS proxy started", { port: httpsPort });
 
 	// HTTP → HTTPS redirect server (best-effort, don't fail if port 80 is busy)
-	let httpServer: ReturnType<typeof Bun.serve> | null = null;
+	let httpServer: Server<undefined> | null = null;
 	try {
 		httpServer = Bun.serve({
 			port: httpPort,

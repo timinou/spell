@@ -1,7 +1,6 @@
 /**
  * Manage the Spell HTTPS gateway daemon and services.
  */
-import * as fs from "node:fs";
 import { ensureCerts, findMkcert, GatewayClient, PATHS } from "@oh-my-pi/pi-gateway";
 import { logger } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
@@ -64,10 +63,15 @@ export default class Gateway extends Command {
 
 		// 2. Install local CA if not already done
 		process.stdout.write("Installing local CA...\n");
-		await $`${mkcertPath} -install`.quiet();
+		const installResult = await $`${mkcertPath} -install`.quiet().nothrow();
+		if (installResult.exitCode !== 0) {
+			process.stdout.write(
+				`Warning: mkcert -install exited with code ${installResult.exitCode}. CA may already be installed.\n`,
+			);
+		}
 
 		// 3. Generate certs (skips if already present)
-		if (fs.existsSync(PATHS.cert) && fs.existsSync(PATHS.key)) {
+		if ((await Bun.file(PATHS.cert).exists()) && (await Bun.file(PATHS.key).exists())) {
 			process.stdout.write("TLS certificates already exist, skipping generation.\n");
 		} else {
 			process.stdout.write("Generating TLS certificates...\n");

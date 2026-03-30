@@ -10,8 +10,8 @@ import {
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import type { Message, Model } from "@oh-my-pi/pi-ai";
-
 import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import { GatewayClient } from "@oh-my-pi/pi-gateway";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { $env, getAgentDbPath, getAgentDir, getProjectDir, logger, postmortem } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
@@ -893,6 +893,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 	});
 
+	const gatewayClient = new GatewayClient({ autoSpawn: false });
+
 	const toolSession: ToolSession = {
 		cwd,
 		hasUI: options.hasUI ?? false,
@@ -945,6 +947,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		pendingActionStore,
 		emacsSessionManager,
 		loopManager,
+		gatewayClient,
 	};
 
 	// Initialize internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, local://)
@@ -1666,6 +1669,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				server.stop();
 			} catch (err) {
 				logger.warn("qmlRemoteServer stop failed", { error: String(err) });
+			}
+		}
+		if (toolSession.gatewayClient) {
+			try {
+				const sid = toolSession.getSessionId?.();
+				if (sid) await toolSession.gatewayClient.cleanup(sid);
+				await toolSession.gatewayClient.dispose();
+			} catch (err) {
+				logger.warn("gatewayClient cleanup failed", { error: String(err) });
 			}
 		}
 	};
