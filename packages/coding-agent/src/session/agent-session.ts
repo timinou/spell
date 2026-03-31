@@ -2883,10 +2883,9 @@ export class AgentSession {
 
 	#syncTodoPhasesFromBranch(): void {
 		const phases = getLatestTodoPhasesFromEntries(this.sessionManager.getBranch());
-		// Strip completed/abandoned tasks — they were done in a previous run,
-		// so the auto-clear grace period has already elapsed.
+		// Strip completed tasks — abandoned tasks are preserved for deferral audit trail.
 		for (const phase of phases) {
-			phase.tasks = phase.tasks.filter(t => t.status !== "completed" && t.status !== "abandoned");
+			phase.tasks = phase.tasks.filter(t => t.status !== "completed");
 		}
 		this.setTodoPhases(phases.filter(p => p.tasks.length > 0));
 	}
@@ -2898,7 +2897,7 @@ export class AgentSession {
 		}));
 	}
 
-	/** Schedule auto-removal of completed/abandoned tasks after a delay. */
+	/** Schedule auto-removal of completed tasks after a delay. */
 	#scheduleTodoAutoClear(phases: TodoPhase[]): void {
 		const delaySec = this.settings.get("tasks.todoClearDelay") ?? 60;
 		if (delaySec < 0) return; // "Never" — no auto-clear
@@ -2906,7 +2905,7 @@ export class AgentSession {
 		const doneTaskIds = new Set<string>();
 		for (const phase of phases) {
 			for (const task of phase.tasks) {
-				if (task.status === "completed" || task.status === "abandoned") {
+				if (task.status === "completed") {
 					doneTaskIds.add(task.id);
 				}
 			}
@@ -2940,7 +2939,7 @@ export class AgentSession {
 		let removed = false;
 		for (const phase of this.#todoPhases) {
 			const idx = phase.tasks.findIndex(t => t.id === taskId);
-			if (idx !== -1 && (phase.tasks[idx].status === "completed" || phase.tasks[idx].status === "abandoned")) {
+			if (idx !== -1 && phase.tasks[idx].status === "completed") {
 				phase.tasks.splice(idx, 1);
 				removed = true;
 				break;

@@ -23,6 +23,7 @@ Before your final turn, you **MUST**:
    - Include `*** Verification`, `*** Artifacts`, and `*** Deviations` subsections
    - Record exact commands/checks, outcomes, and saved artifact paths
    - When referencing saved artifacts in the report, use org-mode file links such as `[[file:{{orgItemArtifactsDir}}/name.png]]` so they render inline
+   - If any tasks were deferred (abandoned with `deferralFupId`), list all FUP references using `[[id:FUP-xxx]]` org links in the Deviations subsection so they are traceable in the plan record
    - If there were no deviations, write `None.`
 4. Close org lifecycle state truthfully:
    - Linked child items in `ITEM`, `INIT`, `DOING`, or `REVIEW` **MUST** move to `DONE`

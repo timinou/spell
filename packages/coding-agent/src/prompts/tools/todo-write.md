@@ -26,7 +26,6 @@ Create a todo list when:
 |`replace`|Initial setup, or full restructure when the plan changes significantly|
 |`add_phase`|Add a new phase of work discovered mid-task|
 |`add_task`|Add a task to an existing phase|
-|`remove_task`|Remove a task that is no longer relevant|
 
 ## Statuses
 
@@ -35,7 +34,7 @@ Create a todo list when:
 |`pending`|Not started|
 |`in_progress`|Currently working — exactly one at a time|
 |`completed`|Fully done|
-|`abandoned`|Dropped intentionally|
+|`abandoned`|Deferred with follow-up — requires `deferralFupId` linking to a FUP org item|
 
 ## Rules
 - You **MUST** mark `in_progress` **before** starting work, not after
@@ -93,6 +92,7 @@ task-3 and task-4 both depend on task-1 (schema). task-5 depends on both task-3 
 - `orgItemId`: Org item ID for lineage tracking. Non-gating — does not trigger verification protocol.
 - `orgItemClosingId`: Org item ID that triggers verification. When set, completion requires two-phase verified completion.
 - `blockers`: Array of task IDs that must complete before this task can start.
+- `deferralFupId`: FUP org item ID. Required when abandoning a task — links to the follow-up item that captures deferred work.
 
 When implementing plan items, set gate fields to track required deliverables. The tool response will inject directives when gated tasks are completed.
 
@@ -158,6 +158,14 @@ Complete a gated task after verification:
    ops: [{op: "update", id: "task-1", status: "completed"}]
 2. After verification:
    ops: [{op: "update", id: "task-1", status: "completed", verified: true}]
+</example>
+
+<example name="deferral">
+Abandon a task with proper follow-up tracking:
+1. Create a FUP org item:
+   org create category=followups title="Follow-up: Handle retries" body="Deferred from task-3: Handle retries"
+2. Abandon with the FUP ID:
+   ops: [{op: "update", id: "task-3", status: "abandoned", deferralFupId: "FUP-008-handle-retries"}]
 </example>
 
 <example name="org-linked-task">

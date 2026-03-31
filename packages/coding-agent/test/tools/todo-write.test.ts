@@ -81,7 +81,7 @@ describe("TodoWriteTool auto-start behavior", () => {
 		expect(completedSummary.text).toContain("Remaining items: none.");
 	});
 
-	it("keeps only one in_progress task when replace input contains multiples", async () => {
+	it("auto-promotes first task when all created as pending", async () => {
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
 			ops: [
@@ -90,10 +90,7 @@ describe("TodoWriteTool auto-start behavior", () => {
 					phases: [
 						{
 							name: "Execution",
-							tasks: [
-								{ content: "status", status: "in_progress" },
-								{ content: "diagnostics", status: "in_progress" },
-							],
+							tasks: [{ content: "status" }, { content: "diagnostics" }],
 						},
 					],
 				},
@@ -262,7 +259,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 		});
 
 		const result = await tool.execute("call-2", {
-			ops: [{ op: "update", id: "task-2", status: "abandoned" }],
+			ops: [{ op: "update", id: "task-2", status: "abandoned", deferralFupId: "FUP-001-test" }],
 		});
 
 		const summary = result.content.find(part => part.type === "text")!.text!;
@@ -386,7 +383,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 					phases: [
 						{
 							name: "Work",
-							tasks: [{ content: "Schema" }, { content: "API", status: "in_progress", blockers: ["task-1"] }],
+							tasks: [{ content: "Schema" }, { content: "API", blockers: ["task-1"] }],
 						},
 					],
 				},
@@ -435,31 +432,6 @@ describe("TodoWriteTool smart gate enforcement", () => {
 		expect(summary).not.toContain("task-1 (completed)");
 	});
 
-	it("remove_task creating dangling blocker ref produces warning", async () => {
-		const tool = new TodoWriteTool(createSession());
-		await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
-					phases: [
-						{
-							name: "Work",
-							tasks: [{ content: "Schema" }, { content: "API", blockers: ["task-1"] }],
-						},
-					],
-				},
-			],
-		});
-
-		// Remove the blocker task — task-2 now has a dangling ref
-		const result = await tool.execute("call-2", {
-			ops: [{ op: "remove_task", id: "task-1" }],
-		});
-
-		const summary = result.content.find(part => part.type === "text")!.text!;
-		expect(summary).toContain("task-2 references non-existent blocker task-1");
-	});
-
 	it("add_phase with in_progress blocked task demotes to pending", async () => {
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
@@ -471,7 +443,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 				{
 					op: "add_phase",
 					name: "Build",
-					tasks: [{ content: "API", status: "in_progress", blockers: ["task-1"] }],
+					tasks: [{ content: "API", blockers: ["task-1"] }],
 				},
 			],
 		});

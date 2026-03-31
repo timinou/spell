@@ -1,0 +1,198 @@
+#+TITLE: Deferral gate enforcement and tracking
+#+STATE: DONE
+#+SESSION_ID: 14a84f459fab5d5d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T13-14-13-502Z_14a84f459fab5d5d.jsonl]]
+#+CUSTOM_ID: FEAT-133-deferral-gate-enforcement-and-tracking
+#+EFFORT: L
+#+PRIORITY: #A
+#+LAYER: core
+
+* Scope
+
+**In scope:**
+- Hard gate on ~todo_write~ abandonment: ~deferralFupId~ field required when ~status=abandoned~
+- Remove ~remove_task~ op entirely — tasks can only be abandoned (never deleted)
+- Remove ~status~ field from ~InputTask~ schema — tasks are always created as ~pending~, preventing ~replace~/~add_phase~ bypass of the deferral gate
+- Journal status mapping: abandoned to ~BLOCKED~ (not ~DONE~) with ~:DEFERRED_TO:~ property
+- Session auto-clear: exclude abandoned tasks (preserve deferral audit trail)
+- Session resume: preserve abandoned tasks in ~#syncTodoPhasesFromBranch~ (currently stripped)
+- Phase completion: warn about deferred tasks and list FUP IDs
+- Pre-filled ~org create~ template in rejection message (hybrid enforcement)
+- Plan audit prompt: add deferral focus area
+- Plan completion report: require ~[[id:FUP-xxx]]~ links for all deferrals
+- ~todo-write.md~ prompt: document ~deferralFupId~, deferral protocol, remove ~remove_task~ docs
+
+**Out of scope:**
+- Retroactive FUP creation for past sessions
+- FUP ID existence validation (trust the ID — org create is a prerequisite)
+- Dashboard bridge changes (nice-to-have, separate follow-up)
+- Prompt changes to plan-mode-approved.md for deferral protocol (tool gate is sufficient enforcement)
+- ~isPhaseComplete~ logic change — abandoned remains terminal for phase progression
+- ~hasUnresolvedBlockers~ logic change — abandoned still resolves blockers
+
+**Boundary rationale:** The deferral gate enforcement is the core invariant. Dashboard rendering and retroactive audits are polish that can follow. The ~isPhaseComplete~ and ~hasUnresolvedBlockers~ behaviors are kept to avoid deadlocks — phases must still progress when tasks are deferred. The reporting (warnings, FUP IDs) compensates for this pragmatic choice.
+
+* Tests
+
+Test file: ~packages/coding-agent/test/tools/todo-write-deferral.test.ts~
+
+Scenarios:
+1. Abandonment without ~deferralFupId~ is REJECTED with template message
+2. Abandonment with ~deferralFupId~ succeeds and stores it on task
+3. Multiple tasks abandoned in one call, each with ~deferralFupId~ (same FUP ID shared)
+4. Multiple tasks abandoned with different FUP IDs
+5. ~remove_task~ op is rejected as unknown operation
+6. ~replace~ op: ~status~ field not in InputTask schema, task created as ~pending~
+7. ~add_phase~ op: same as above
+8. Journal serialization maps abandoned to ~BLOCKED~ with ~:DEFERRED_TO:~ property
+9. Journal ~#+TODO~ line includes ~BLOCKED~ before pipe
+10. Phase completion with deferred tasks shows warning listing FUP IDs
+11. ~formatSummary~ rejection message includes pre-filled ~org create~ template with task context
+12. Auto-clear timer skips abandoned tasks (completed still auto-clear normally)
+13. ~#syncTodoPhasesFromBranch~ preserves abandoned tasks on resume (completed still stripped)
+14. ~deferralFupId~ survives round-trip through session persistence
+
+* Edge Cases
+
+- Task with ~orgItemClosingId~ that is abandoned: the rejection template must warn that the org item lifecycle obligation transfers to the FUP. The ~orgItemClosingId~ should be mentioned in the template body so the agent includes it in the FUP.
+- Batch abandonment where some tasks succeed and some fail: if one task in a batch lacks ~deferralFupId~, that specific op is rejected but other ops in the batch still execute (consistent with current behavior where individual ops can fail).
+- Task that was ~in_progress~ being abandoned: no special handling beyond the deferral gate — the auto-promotion of next pending task still fires via ~normalizeInProgressTask~.
+- Abandoned task that is a blocker for another task: ~hasUnresolvedBlockers~ treats it as resolved. ~formatSummary~ should add a warning when a task becomes unblocked due to an abandoned (not completed) blocker, noting the FUP ID.
+- Empty ~deferralFupId~ string: treat as missing — reject.
+
+* Acceptance Criteria
+
+1. ~bun test packages/coding-agent/test/tools/todo-write-deferral.test.ts~ — all scenarios pass
+2. ~bun test packages/coding-agent/test/tools/todo-write.test.ts~ — zero regressions
+3. ~bun test packages/coding-agent/test/tools/todo-write-gates.test.ts~ — zero regressions
+4. ~bun check:ts~ — no type errors
+5. ~todo_write~ rejects ~{op: "update", id: "task-1", status: "abandoned"}~ with a helpful template
+6. ~todo_write~ accepts ~{op: "update", id: "task-1", status: "abandoned", deferralFupId: "FUP-008-..."}~
+7. Journal file for abandoned task shows ~** BLOCKED~ with ~:DEFERRED_TO:~ property
+8. Abandoned tasks remain visible in todo list (no auto-clear)
+
+** Define types and schema changes
+:PROPERTIES:
+:CUSTOM_ID: FEAT-133-deferral-gate-enforcement-and-tracking::define-types
+:END:
+
+Files:
+- ~packages/coding-agent/src/tools/todo-write.ts~
+- ~packages/org/src/journal.ts~
+
+Steps:
+1. Add ~deferralFupId?: string~ to ~TodoItem~ interface (after ~orgItemClosingId~)
+2. Add ~deferralFupId?: string~ to ~JournalTodoItem~ interface (after ~orgItemClosingId~)
+3. Add ~deferralFupId~ field to the update op schema (~Type.Optional(Type.String(...))~, description: FUP org item ID for deferral tracking. Required when status=abandoned.)
+4. Remove ~status~ field from ~InputTask~ entirely — tasks are always created pending. Update ~buildPhaseFromInput~ line 180 to hardcode ~status: "pending"~ instead of ~t.status ?? "pending"~
+5. Remove the ~remove_task~ variant from the schema union type (the ~Type.Object~ with ~op: Type.Literal("remove_task")~ block)
+6. Remove the ~case "remove_task"~ block from ~applyOps~ switch statement
+
+** Implement deferral gate logic
+:PROPERTIES:
+:CUSTOM_ID: FEAT-133-deferral-gate-enforcement-and-tracking::implement-gate
+:DEPENDS: FEAT-133-deferral-gate-enforcement-and-tracking::define-types
+:END:
+
+Files:
+- ~packages/coding-agent/src/tools/todo-write.ts~
+
+Steps:
+1. Add ~pendingDeferralTasks: TodoItem[]~ to ~ApplyOpsResult~ interface
+2. Initialize ~pendingDeferralTasks~ array in ~applyOps~ function
+3. In the ~case "update"~ block, after the existing ~in_progress~ blocker check and before the ~if (op.status !== undefined) task.status = op.status~ line:
+   - Add deferral gate: ~if (op.status === "abandoned" && (!op.deferralFupId || op.deferralFupId.trim() === "")) { pendingDeferralTasks.push(task); break; }~
+   - Store FUP ID: ~if (op.deferralFupId) task.deferralFupId = op.deferralFupId;~
+4. Return ~pendingDeferralTasks~ in the ~ApplyOpsResult~
+5. In ~formatSummary~:
+   - Accept ~pendingDeferralTasks~ in ~FormatSummaryOptions~
+   - Add deferral rejection section (pattern: lines 608-625 for verification):
+     - Header: ~--- Deferral Required ---~
+     - For each task: show task ID, content, and pre-filled ~org create~ template
+     - Template includes: category followups, state ITEM, suggested title derived from task content, body with original task content/details/orgItemId/orgItemClosingId context, and re-submission command ~todo_write ops: [{op: "update", id: "TASK_ID", status: "abandoned", deferralFupId: "FUP_ID"}]~
+   - Phase completion warning: when a newly-completed phase has abandoned tasks, list them with their ~deferralFupId~ values
+6. Pass ~pendingDeferralTasks~ through ~TodoWriteTool.execute~ method to ~formatSummary~
+
+** Journal deferral representation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-133-deferral-gate-enforcement-and-tracking::journal-representation
+:DEPENDS: FEAT-133-deferral-gate-enforcement-and-tracking::define-types
+:END:
+
+File: ~packages/org/src/journal.ts~
+
+Steps:
+1. Change ~STATUS_TO_ORG~ mapping: ~abandoned: "BLOCKED"~ (was ~"DONE"~)
+2. Change ~#+TODO~ line to: ~#+TODO: ITEM DOING BLOCKED | DONE~ (BLOCKED before pipe = active/not-done state)
+3. In ~serializeJournalOrg~, after the existing property emissions (after line 85), add:
+   ~if (task.deferralFupId) lines.push(":DEFERRED_TO: " + task.deferralFupId);~
+
+** Auto-clear and resume exclusion for deferred tasks
+:PROPERTIES:
+:CUSTOM_ID: FEAT-133-deferral-gate-enforcement-and-tracking::auto-clear-exclusion
+:DEPENDS: FEAT-133-deferral-gate-enforcement-and-tracking::define-types
+:END:
+
+File: ~packages/coding-agent/src/session/agent-session.ts~
+
+Steps:
+1. In ~#scheduleTodoAutoClear~ (around line 2909): change the condition from ~task.status === "completed" || task.status === "abandoned"~ to ~task.status === "completed"~ only. Abandoned tasks are NOT auto-cleared.
+2. In ~#syncTodoPhasesFromBranch~ (around line 2889): change filter from ~t.status !== "completed" && t.status !== "abandoned"~ to ~t.status !== "completed"~ only. Abandoned tasks survive session resume.
+
+** Prompt and documentation updates
+:PROPERTIES:
+:CUSTOM_ID: FEAT-133-deferral-gate-enforcement-and-tracking::prompt-updates
+:DEPENDS: FEAT-133-deferral-gate-enforcement-and-tracking::implement-gate
+:END:
+
+Files:
+- ~packages/coding-agent/src/prompts/system/plan-audit.md~
+- ~packages/coding-agent/src/prompts/system/plan-mode-approved.md~
+- ~packages/coding-agent/src/prompts/tools/todo-write.md~
+
+Steps:
+1. plan-audit.md: Add to the numbered review list (after item 3 Low-effort improvements):
+   ~4. *Deferred work*: Explain the reasons for deferral and explore whether requested follow-up is properly captured~
+   Renumber subsequent items (current 4 becomes 5, current 5 becomes 6).
+2. plan-mode-approved.md: In the completion report structure (the Deviations subsection), add a bullet:
+   ~If any tasks were deferred (abandoned with deferralFupId), list all FUP references using [[id:FUP-xxx]] org links so they are traceable in the plan record~
+3. todo-write.md:
+   - Remove ~remove_task~ from the Operations table row and the ~remove_task~ example block
+   - Add ~deferralFupId~ to the Task Anatomy section: a line describing it as FUP org item ID required when abandoning a task for follow-up audit tracking
+   - Update ~abandoned~ status description in the Statuses table from ~Dropped intentionally~ to ~Deferred with follow-up — requires deferralFupId linking to a FUP org item~
+   - Add a new example block showing the two-step deferral flow: create FUP via ~org create~, then abandon with ~deferralFupId~
+   - Remove all references to ~remove_task~ in examples and prose
+
+** Write deferral enforcement tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-133-deferral-gate-enforcement-and-tracking::write-tests
+:DEPENDS: FEAT-133-deferral-gate-enforcement-and-tracking::implement-gate FEAT-133-deferral-gate-enforcement-and-tracking::journal-representation FEAT-133-deferral-gate-enforcement-and-tracking::auto-clear-exclusion
+:END:
+
+File: ~packages/coding-agent/test/tools/todo-write-deferral.test.ts~
+
+Test groups:
+1. Deferral gate enforcement
+   - Reject abandonment without ~deferralFupId~
+   - Reject abandonment with empty string ~deferralFupId~
+   - Accept abandonment with valid ~deferralFupId~
+   - ~deferralFupId~ stored on task after acceptance
+   - Batch: multiple tasks abandoned with same FUP ID
+   - Batch: multiple tasks with different FUP IDs
+   - Partial batch: one task lacks FUP ID, others succeed — the lacking op is rejected, others apply
+2. Bypass prevention
+   - ~remove_task~ op rejected as unknown
+   - ~replace~ op: ~status~ field stripped from InputTask schema, task created as pending regardless
+3. Journal serialization
+   - Abandoned task maps to ~BLOCKED~ in journal org
+   - ~:DEFERRED_TO:~ property emitted with FUP ID
+   - ~#+TODO~ line includes ~BLOCKED~ keyword
+4. Phase completion reporting
+   - Phase with deferred tasks shows warning with FUP IDs in formatSummary output
+5. Pre-filled template
+   - Rejection message includes ~org create~ template with task context
+   - Template includes ~orgItemId~ when present on the task
+   - Template includes ~orgItemClosingId~ when present on the task
+6. Session persistence
+   - Auto-clear skips abandoned tasks (only clears completed)
+   - Completed tasks still auto-clear normally

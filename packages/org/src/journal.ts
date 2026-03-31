@@ -12,7 +12,7 @@
  *   pending     → ITEM
  *   in_progress → DOING
  *   completed   → DONE
- *   abandoned   → DONE (with ~~strikethrough~~ note in title)
+ *   abandoned   → BLOCKED (deferred with :DEFERRED_TO: property)
  */
 
 import * as path from "node:path";
@@ -37,6 +37,7 @@ export interface JournalTodoItem {
 	blockers?: string[];
 	orgItemId?: string;
 	orgItemClosingId?: string;
+	deferralFupId?: string;
 }
 
 export interface JournalTodoPhase {
@@ -53,7 +54,7 @@ const STATUS_TO_ORG: Record<string, string> = {
 	pending: "ITEM",
 	in_progress: "DOING",
 	completed: "DONE",
-	abandoned: "DONE",
+	abandoned: "BLOCKED",
 };
 
 // =============================================================================
@@ -61,7 +62,12 @@ const STATUS_TO_ORG: Record<string, string> = {
 // =============================================================================
 
 function serializeJournalOrg(phases: JournalTodoPhase[], sessionId: string, date: string): string {
-	const lines: string[] = [`#+TITLE: Session ${sessionId} Todos`, `#+DATE: ${date}`, `#+TODO: ITEM DOING | DONE`, ""];
+	const lines: string[] = [
+		`#+TITLE: Session ${sessionId} Todos`,
+		`#+DATE: ${date}`,
+		`#+TODO: ITEM DOING BLOCKED | DONE`,
+		"",
+	];
 
 	for (const phase of phases) {
 		lines.push(`* ${phase.name}`);
@@ -83,6 +89,7 @@ function serializeJournalOrg(phases: JournalTodoPhase[], sessionId: string, date
 			if (task.blockers?.length) lines.push(`:DEPENDS: ${task.blockers.join(" ")}`);
 			if (task.orgItemId) lines.push(`:ORG_ITEM_ID: ${task.orgItemId}`);
 			if (task.orgItemClosingId) lines.push(`:ORG_ITEM_CLOSING_ID: ${task.orgItemClosingId}`);
+			if (task.deferralFupId) lines.push(`:DEFERRED_TO: ${task.deferralFupId}`);
 			lines.push(":END:");
 
 			if (task.details) {

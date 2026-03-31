@@ -179,6 +179,7 @@ describe("formatSummary gate directives", () => {
 			completedPhaseIds: overrides.completedPhaseIds ?? [],
 			completedGatedTasks: overrides.completedGatedTasks ?? [],
 			pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
+			pendingDeferralTasks: overrides.pendingDeferralTasks ?? [],
 		});
 	}
 
@@ -327,6 +328,7 @@ describe("formatSummary blocked visibility", () => {
 			completedPhaseIds: overrides.completedPhaseIds ?? [],
 			completedGatedTasks: overrides.completedGatedTasks ?? [],
 			pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
+			pendingDeferralTasks: overrides.pendingDeferralTasks ?? [],
 		});
 	}
 
@@ -505,6 +507,7 @@ describe("orgItemId field", () => {
 			completedPhaseIds: [],
 			completedGatedTasks: [task],
 			pendingVerificationTasks: [],
+			pendingDeferralTasks: [],
 		});
 		expect(result).toContain("REQUIRED: Update org item FEAT-001-add-auth to DONE for task-1.");
 	});
@@ -522,6 +525,7 @@ describe("orgItemId field", () => {
 			completedPhaseIds: [],
 			completedGatedTasks: [task],
 			pendingVerificationTasks: [],
+			pendingDeferralTasks: [],
 		});
 		expect(result).toContain("INFO: Linked to org item FEAT-001-add-auth (non-gating lineage).");
 	});
@@ -535,6 +539,7 @@ describe("two-phase gated completion via formatSummary", () => {
 			completedPhaseIds: overrides.completedPhaseIds ?? [],
 			completedGatedTasks: overrides.completedGatedTasks ?? [],
 			pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
+			pendingDeferralTasks: overrides.pendingDeferralTasks ?? [],
 		});
 	}
 

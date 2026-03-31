@@ -37,6 +37,8 @@ export interface TodoItem {
 	orgItemId?: string;
 	/** Gating reference. Triggers two-phase verification protocol on completion. */
 	orgItemClosingId?: string;
+	/** FUP org item ID. Required when status=abandoned (deferral tracking). */
+	deferralFupId?: string;
 }
 
 export interface TodoPhase {
@@ -60,7 +62,6 @@ const StatusEnum = StringEnum(["pending", "in_progress", "completed", "abandoned
 
 const InputTask = Type.Object({
 	content: Type.String({ description: "Task description" }),
-	status: Type.Optional(StatusEnum),
 	notes: Type.Optional(Type.String({ description: "Additional context or notes" })),
 	details: Type.Optional(
 		Type.String({ description: "Implementation details, file paths, and specifics (shown only when active)" }),
@@ -129,10 +130,11 @@ const todoWriteSchema = Type.Object({
 						description: "Set true after verifying all gate requirements. Required to complete a gated task.",
 					}),
 				),
-			}),
-			Type.Object({
-				op: Type.Literal("remove_task"),
-				id: Type.String({ description: "Task ID, e.g. task-3" }),
+				deferralFupId: Type.Optional(
+					Type.String({
+						description: "FUP org item ID for deferral tracking. Required when status=abandoned.",
+					}),
+				),
 			}),
 		]),
 	),
@@ -177,7 +179,7 @@ function buildPhaseFromInput(
 		tasks.push({
 			id: `task-${tid++}`,
 			content: t.content,
-			status: t.status ?? "pending",
+			status: "pending",
 			notes: t.notes,
 			details: t.details,
 			gateCommit: t.gateCommit,
@@ -296,6 +298,8 @@ interface ApplyOpsResult {
 	completedGatedTasks: TodoItem[];
 	/** Tasks whose completion was rejected pending verification. */
 	pendingVerificationTasks: TodoItem[];
+	/** Tasks whose abandonment was rejected pending deferral follow-up. */
+	pendingDeferralTasks: TodoItem[];
 }
 
 function isPhaseComplete(phase: TodoPhase): boolean {
@@ -314,6 +318,7 @@ export function hasRequiredGate(task: TodoItem): boolean {
 function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: TodoPhase[]): ApplyOpsResult {
 	const errors: string[] = [];
 	const pendingVerificationTasks: TodoItem[] = [];
+	const pendingDeferralTasks: TodoItem[] = [];
 
 	// Snapshot which phases were already complete before this call
 	const wasComplete = new Map<string, boolean>();
@@ -421,21 +426,14 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 					break;
 				}
 
-				if (op.status !== undefined) task.status = op.status;
-				break;
-			}
-
-			case "remove_task": {
-				let removed = false;
-				for (const phase of file.phases) {
-					const idx = phase.tasks.findIndex(t => t.id === op.id);
-					if (idx !== -1) {
-						phase.tasks.splice(idx, 1);
-						removed = true;
-						break;
-					}
+				// Deferral gate: abandoned requires deferralFupId
+				if (op.status === "abandoned" && (!op.deferralFupId || op.deferralFupId.trim() === "")) {
+					pendingDeferralTasks.push(task);
+					break;
 				}
-				if (!removed) errors.push(`Task "${op.id}" not found`);
+				if (op.deferralFupId) task.deferralFupId = op.deferralFupId;
+
+				if (op.status !== undefined) task.status = op.status;
 				break;
 			}
 		}
@@ -478,7 +476,7 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 		}
 	}
 
-	return { file, errors, completedPhaseIds, completedGatedTasks, pendingVerificationTasks };
+	return { file, errors, completedPhaseIds, completedGatedTasks, pendingVerificationTasks, pendingDeferralTasks };
 }
 
 /** Build gate directive lines for a single task. */
@@ -502,6 +500,8 @@ export interface FormatSummaryOptions {
 	completedGatedTasks: TodoItem[];
 	/** Tasks whose completion was rejected pending verification. */
 	pendingVerificationTasks: TodoItem[];
+	/** Tasks whose abandonment was rejected pending deferral follow-up. */
+	pendingDeferralTasks: TodoItem[];
 }
 
 export function formatSummary({
@@ -510,6 +510,7 @@ export function formatSummary({
 	completedPhaseIds,
 	completedGatedTasks,
 	pendingVerificationTasks,
+	pendingDeferralTasks,
 }: FormatSummaryOptions): string {
 	const allTasks = phases.flatMap(p => p.tasks);
 	if (allTasks.length === 0) return errors.length > 0 ? `Errors: ${errors.join("; ")}` : "Todo list cleared.";
@@ -601,6 +602,11 @@ export function formatSummary({
 			if (gatedInPhase.some(t => t.gateArtifact)) actions.push("Verify artifacts.");
 			if (gatedInPhase.some(t => t.gateCmd || t.verifyCmd)) actions.push("Run verification commands.");
 			lines.push(`\nPhase "${phase.name}" complete. ${actions.join(" ")}`);
+			const deferredInPhase = phase.tasks.filter(t => t.status === "abandoned" && t.deferralFupId);
+			if (deferredInPhase.length > 0) {
+				const fupRefs = deferredInPhase.map(t => `${t.id} -> ${t.deferralFupId}`).join(", ");
+				lines.push(`WARNING: Phase "${phase.name}" has deferred tasks: ${fupRefs}`);
+			}
 		}
 	}
 
@@ -619,6 +625,31 @@ export function formatSummary({
 			lines.push("");
 			lines.push(
 				`Complete these steps, then call todo_write with {op: "update", id: "${task.id}", status: "completed", verified: true}.`,
+			);
+		}
+	}
+
+	// Deferral rejection: tasks that need a FUP before abandonment
+	if (pendingDeferralTasks.length > 0) {
+		lines.push("");
+		lines.push("--- Deferral Required ---");
+		for (const task of pendingDeferralTasks) {
+			lines.push(`${task.id} "${task.content}" cannot be abandoned without a follow-up item.`);
+			lines.push("");
+			lines.push("Step 1: Create a FUP org item:");
+			const suggestedTitle = `Follow-up: ${task.content}`;
+			const bodyLines = [`Deferred from ${task.id}: ${task.content}`];
+			if (task.details) bodyLines.push(`\nOriginal details:\n${task.details}`);
+			if (task.orgItemId) bodyLines.push(`\nSource org item: [[id:${task.orgItemId}]]`);
+			if (task.orgItemClosingId)
+				bodyLines.push(
+					`\nWARNING: This task has orgItemClosingId=${task.orgItemClosingId}. The lifecycle obligation transfers to the FUP.`,
+				);
+			lines.push(`  org create category=followups title="${suggestedTitle}" body="${bodyLines.join("\n")}"`);
+			lines.push("");
+			lines.push("Step 2: Abandon with the FUP ID:");
+			lines.push(
+				`  todo_write ops: [{op: "update", id: "${task.id}", status: "abandoned", deferralFupId: "FUP_ID"}]`,
 			);
 		}
 	}
@@ -657,6 +688,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 			completedPhaseIds,
 			completedGatedTasks,
 			pendingVerificationTasks,
+			pendingDeferralTasks,
 		} = applyOps(current, params.ops, previousPhases);
 		this.session.setTodoPhases?.(updated.phases);
 		// Notify dashboard bridge of todo state change
@@ -678,6 +710,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 						completedPhaseIds,
 						completedGatedTasks,
 						pendingVerificationTasks,
+						pendingDeferralTasks,
 					}),
 				},
 			],

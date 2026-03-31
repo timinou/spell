@@ -1,0 +1,129 @@
+#+TITLE: Deferral gate enforcement
+#+STATE: DONE
+#+SESSION_ID: 14a84f459fab5d5d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T13-14-13-502Z_14a84f459fab5d5d.jsonl]]
+#+CUSTOM_ID: PLAN-051-deferral-gate-enforcement
+
+
+* Context
+
+** Problem
+
+During plan execution, the coding agent can abandon todo tasks freely by setting ~status: "abandoned"~ via ~todo_write~. This causes deferred work to be silently forgotten. In session ~14a837d85a75458c~ (PLAN-048), the agent abandoned tasks 10, 15, and 16 with just a ~notes~ field — no FUP org items were created, no structured tracking exists, no audit trail. The completion report mentioned deferrals in prose, but nothing structured survived for follow-up.
+
+Three systemic escape hatches exist:
+1. ~update~ op with ~status: "abandoned"~ — no gate, sails through at line 424 of ~todo-write.ts~
+2. ~remove_task~ op — silently deletes tasks with zero validation
+3. ~replace~/~add_phase~ ops — can create tasks pre-~abandoned~ via the shared ~StatusEnum~ in ~InputTask~
+
+** Approach
+
+Hard gate enforcement at the ~todo_write~ tool level. When ~status=abandoned~, a ~deferralFupId~ field is REQUIRED — the tool rejects without it and provides a pre-filled ~org create~ template. All bypass paths are closed:
+- ~remove_task~ op is removed entirely
+- ~status~ field is removed from ~InputTask~ (tasks always created as ~pending~)
+- ~abandoned~ can only be reached via the ~update~ op with ~deferralFupId~
+
+Supporting changes:
+- Journal maps abandoned to ~BLOCKED~ (not ~DONE~) with ~:DEFERRED_TO:~ property
+- Session auto-clear and resume preserve abandoned tasks (audit trail)
+- Phase completion warns about deferred tasks with FUP IDs
+- Plan audit and completion report prompts require FUP references
+
+** Key Decisions
+
+1. Scope: ALL abandoned tasks require FUP (not just org-linked)
+2. No escape hatch: every abandonment creates a FUP. If work is irrelevant, FUP is created and marked DONE immediately
+3. Enforcement: hard rejection (not soft warning). Two-step flow: agent creates FUP via ~org create~, then passes ~deferralFupId~ to ~todo_write~
+4. Journal: ~BLOCKED~ status (not ~DONE~). ~#+TODO~ line: ~ITEM DOING BLOCKED | DONE~
+5. ~isPhaseComplete~ unchanged — abandoned remains terminal for phase progression (avoids deadlocks). Compensated by warnings listing FUP IDs
+6. ~hasUnresolvedBlockers~ unchanged — abandoned still resolves blockers (same deadlock avoidance reason)
+7. Batch abandonment allowed — multiple tasks can share one FUP ID
+8. No retroactive enforcement
+9. ~remove_task~ op removed entirely — tasks can only be abandoned, never deleted
+10. FUP content: full self-contained context (title, reason, original task content/details, source org item link, acceptance criteria, sub-outline steps) so follow-up sessions can execute without reading the original plan
+
+** Critical File Paths
+
+- ~packages/coding-agent/src/tools/todo-write.ts~ — Schema, types, ~applyOps~ logic, ~formatSummary~
+- ~packages/org/src/journal.ts~ — Status mapping, ~DEFERRED_TO~ property, ~#+TODO~ line
+- ~packages/coding-agent/src/session/agent-session.ts~ — Auto-clear (~#scheduleTodoAutoClear~) and resume (~#syncTodoPhasesFromBranch~)
+- ~packages/coding-agent/src/prompts/system/plan-audit.md~ — Deferral focus area
+- ~packages/coding-agent/src/prompts/system/plan-mode-approved.md~ — FUP links in completion report
+- ~packages/coding-agent/src/prompts/tools/todo-write.md~ — ~deferralFupId~ docs, ~remove_task~ removal
+- ~packages/coding-agent/test/tools/todo-write-deferral.test.ts~ — New test file
+
+** Metis/Daedalus Findings Addressed
+
+- CRITICAL: ~remove_task~ bypasses deferral gate — resolved by removing ~remove_task~ entirely
+- CRITICAL: ~StatusEnum~ is shared between ~InputTask~ and update op — resolved by removing ~status~ from ~InputTask~ (not from ~StatusEnum~)
+- HIGH: ~replace~/~add_phase~ can create pre-abandoned tasks — resolved by removing ~status~ from ~InputTask~
+- HIGH: Journal ~#+TODO~ line must include ~BLOCKED~ — included in journal-representation sub-outline
+- HIGH: plan-mode-approved.md needs FUP link bullet in completion report — included in prompt-updates sub-outline
+- MEDIUM: ~#syncTodoPhasesFromBranch~ strips abandoned tasks on resume — included in auto-clear-exclusion sub-outline
+- MEDIUM: Auto-clear timer destroys deferral audit trail — included in auto-clear-exclusion sub-outline
+
+* Verification
+
+1. ~bun test packages/coding-agent/test/tools/todo-write-deferral.test.ts~ — all new deferral tests pass
+2. ~bun test packages/coding-agent/test/tools/todo-write.test.ts~ — zero regressions
+3. ~bun test packages/coding-agent/test/tools/todo-write-gates.test.ts~ — zero regressions
+4. ~bun check:ts~ — no type errors
+5. Manual verification: create a todo list, attempt to abandon a task without ~deferralFupId~ — tool response shows rejection with pre-filled template
+6. Manual verification: abandon a task with ~deferralFupId~ — task shows as abandoned with FUP ID in todo list, journal file shows ~** BLOCKED~ with ~:DEFERRED_TO:~ property
+
+* Execution Manifest
+
+Single child item: [[id:FEAT-133-deferral-gate-enforcement-and-tracking]]
+
+Sub-outline execution order (3 waves, derived from dependency graph):
+
+** foundation                                                              :wave:
+- FEAT-133::define-types -- Define types and schema changes (1h)
+  - Add ~deferralFupId~ to ~TodoItem~ and ~JournalTodoItem~
+  - Add ~deferralFupId~ to update op schema
+  - Remove ~status~ from ~InputTask~
+  - Remove ~remove_task~ op
+** core                                                                    :wave:
+- FEAT-133::implement-gate -- Implement deferral gate logic (3h, depends define-types)
+  - Rejection logic in ~applyOps~ for abandoned without ~deferralFupId~
+  - Pre-filled ~org create~ template in ~formatSummary~
+  - Phase completion deferral warnings
+- FEAT-133::journal-representation -- Journal deferral representation (1h, depends define-types)
+  - ~abandoned -> BLOCKED~ status mapping
+  - ~:DEFERRED_TO:~ property
+  - ~#+TODO~ line update
+- FEAT-133::auto-clear-exclusion -- Auto-clear and resume exclusion (0.5h, depends define-types)
+  - Exclude abandoned from ~#scheduleTodoAutoClear~
+  - Preserve abandoned in ~#syncTodoPhasesFromBranch~
+** docs-and-verify                                                         :wave:
+- FEAT-133::prompt-updates -- Prompt and documentation updates (1h, depends implement-gate)
+  - plan-audit.md deferral focus area
+  - plan-mode-approved.md FUP link requirement
+  - todo-write.md deferralFupId docs and remove_task removal
+- FEAT-133::write-tests -- Write deferral enforcement tests (3h, depends implement-gate + journal + auto-clear)
+  - New file: ~packages/coding-agent/test/tools/todo-write-deferral.test.ts~
+  - 14 test scenarios covering gate enforcement, bypass prevention, journal, phase reporting, templates, persistence
+
+** Completion [2026-03-31]
+
+*** Verification
+- ~bun check:ts~ — passes (1492 files, 0 errors)
+- ~bun test packages/coding-agent/test/tools/todo-write-deferral.test.ts~ — 17 pass, 0 fail
+- ~bun test packages/coding-agent/test/tools/todo-write.test.ts~ — 18 pass, 0 fail
+- ~bun test packages/coding-agent/test/tools/todo-write-gates.test.ts~ — 55 pass, 0 fail
+- Manual verification: attempted ~{op: \"update\", id: \"task-1\", status: \"abandoned\"}~ without ~deferralFupId~ — correctly rejected with \"Deferral Required\" template
+- Manual verification: ~{op: \"update\", id: \"task-1\", status: \"abandoned\", deferralFupId: \"FUP-001-test\"}~ — correctly accepted, task shows abandoned with FUP ID
+
+*** Artifacts
+- New test file: ~packages/coding-agent/test/tools/todo-write-deferral.test.ts~ (17 tests, 48 assertions)
+- Modified: ~packages/coding-agent/src/tools/todo-write.ts~ (schema, gate logic, formatSummary)
+- Modified: ~packages/org/src/journal.ts~ (BLOCKED mapping, DEFERRED_TO property, #+TODO line)
+- Modified: ~packages/coding-agent/src/session/agent-session.ts~ (auto-clear/resume exclusion)
+- Modified: ~packages/coding-agent/src/prompts/tools/todo-write.md~ (deferralFupId docs, remove_task removal)
+- Modified: ~packages/coding-agent/src/prompts/system/plan-audit.md~ (deferral focus area)
+- Modified: ~packages/coding-agent/src/prompts/system/plan-mode-approved.md~ (FUP link requirement)
+- Modified: ~packages/coding-agent/test/tools/todo-write.test.ts~ (fixed for new schema)
+- Modified: ~packages/coding-agent/test/tools/todo-write-gates.test.ts~ (added pendingDeferralTasks to formatSummary calls)
+
+*** Deviations
+None.
