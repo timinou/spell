@@ -417,6 +417,8 @@ export class AgentSession {
 	#todoReminderCount = 0;
 	#todoPhases: TodoPhase[] = [];
 	#todoClearTimers = new Map<string, Timer>();
+	/** Tracks how many completed tasks have been auto-cleared per phase. */
+	#clearedCompletedCounts = new Map<string, { name: string; count: number }>();
 	#nextToolChoiceOverride: ToolChoice | undefined = undefined;
 
 	// Bash execution state
@@ -2876,8 +2878,15 @@ export class AgentSession {
 		return this.#cloneTodoPhases(this.#todoPhases);
 	}
 
-	setTodoPhases(phases: TodoPhase[]): void {
+	getClearedCompletedCounts(): ReadonlyMap<string, { name: string; count: number }> {
+		return this.#clearedCompletedCounts;
+	}
+
+	setTodoPhases(phases: TodoPhase[], options?: { reset?: boolean }): void {
 		this.#todoPhases = this.#cloneTodoPhases(phases);
+		if (options?.reset) {
+			this.#clearedCompletedCounts.clear();
+		}
 		this.#scheduleTodoAutoClear(phases);
 	}
 
@@ -2940,6 +2949,13 @@ export class AgentSession {
 		for (const phase of this.#todoPhases) {
 			const idx = phase.tasks.findIndex(t => t.id === taskId);
 			if (idx !== -1 && phase.tasks[idx].status === "completed") {
+				// Track the cleared task count for this phase before removing.
+				const entry = this.#clearedCompletedCounts.get(phase.id);
+				if (entry) {
+					entry.count++;
+				} else {
+					this.#clearedCompletedCounts.set(phase.id, { name: phase.name, count: 1 });
+				}
 				phase.tasks.splice(idx, 1);
 				removed = true;
 				break;

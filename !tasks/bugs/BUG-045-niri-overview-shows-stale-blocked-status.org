@@ -1,0 +1,58 @@
+#+TITLE: Niri overview shows stale blocked status for todo phases
+#+STATE: DONE
+#+SESSION_ID: 14a8672fd6d6ec42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-58-42-651Z_14a8672fd6d6ec42.jsonl]]
+#+CUSTOM_ID: BUG-045-niri-overview-shows-stale-blocked-status
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: niri,coding-agent
+
+NOTE [2026-03-31]: Fixed: todoPhases getter reads from session.getTodoPhases() (authoritative) instead of stale interactive-mode cache. Blocker logic now treats missing deps as resolved (!!dep && ...) matching canonical hasUnresolvedBlockers semantics.
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-03-31T14-38-52-893Z_14a862a5f760c510.jsonl
+ ID: 14a862a5f760c510
+
+
+Dude bro. there is a discrepancy bewtween the niri veiw where it stilll showed Phase 2 as blocked when it was launched. Also I want a count of completed tasks in the niri overview mode, don't just make them disappear
+
+Two compounding issues make the niri overview show phases/tasks as blocked when they are not:
+
+* Stale snapshot source
+The niri controller reads =ctx.todoPhases= which is the interactive mode's cached
+field. That field is updated by the event controller's async =tool_result= handler
+(=setTodos()=). But the session's =#emit()= does not await async listeners, so the
+niri controller's subscription fires before the event controller updates the cache.
+Meanwhile, the session's internal =#todoPhases= (via =setTodoPhases()=) was already
+updated synchronously by the todo-write tool before the event was emitted.
+
+*Fix*: Change the niri context's =todoPhases= getter from =ctx.todoPhases= (stale
+cache) to =ctx.session.getTodoPhases()= (authoritative source).
+
+* Missing blocker refs treated as blocking
+In =controller.ts#buildSnapshot()=, the blocker resolution logic uses:
+#+begin_src typescript
+return !dep || (dep.status !== "completed" && dep.status !== "abandoned");
+#+end_src
+When =dep= is undefined (blocker task auto-cleared/missing), =!dep= is true,
+treating it as blocking. The canonical =hasUnresolvedBlockers= in =todo-write.ts=
+does the opposite: =if (!blocker) return false= (missing = resolved).
+
+After a blocker task is auto-cleared from the session data, all dependent tasks
+flip to "blocked" in the niri overview.
+
+*Fix*: Change to =return !!dep && dep.status !== "completed" && dep.status !== "abandoned"=.
+Apply the same fix to =blockerLabels= filter.
+
+* Files to change
+- =packages/coding-agent/src/modes/interactive-mode.ts= (line ~529: niri context =todoPhases= getter)
+- =packages/niri/src/controller.ts= (lines ~262-274: blocked/blockerLabels computation)
+
+* Acceptance
+- When a task transitions to =in_progress=, the niri overview immediately reflects
+  the change (no stale "blocked" or "pending" state)
+- When a blocker task is auto-cleared, dependent tasks do NOT revert to "blocked"
+- =bun check:ts= passes

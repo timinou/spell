@@ -1,0 +1,109 @@
+#+TITLE: Fix niri overview stale state and completed task visibility
+#+STATE: DONE
+#+SESSION_ID: 14a8672fd6d6ec42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-58-42-651Z_14a8672fd6d6ec42.jsonl]]
+#+CUSTOM_ID: PLAN-053-fix-niri-overview-stale-state-and-comple
+
+NOTE [2026-03-31]: All waves executed. bun check:ts clean. 24 niri overview tests pass. BUG-045 and BUG-046 both DONE.
+
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-03-31T14-38-52-893Z_14a862a5f760c510.jsonl
+ ID: 14a862a5f760c510
+
+
+Dude bro. there is a discrepancy bewtween the niri veiw where it stilll showed Phase 2 as blocked when it was launched. Also I want a count of completed tasks in the niri overview mode, don't just make them disappear
+
+* Context
+
+The niri overview (compositor-level window overview) renders a snapshot of the
+current todo phases and tasks. Two bugs make it unreliable:
+
+1. *Stale snapshot*: The niri controller reads =ctx.todoPhases= from the interactive
+   mode's cached field. This cache is updated by an async event handler that hasn't
+   finished when the niri listener fires (session =#emit()= does not await async
+   listeners). The authoritative data in =session.getTodoPhases()= is already correct
+   at that point.
+
+2. *Missing-blocker = blocking*: The niri controller's inline blocker resolution
+   treats missing refs (=!dep=) as blocking. The canonical =hasUnresolvedBlockers=
+   treats them as resolved. After auto-clear removes a completed blocker task, all
+   dependents flip to "blocked".
+
+3. *Completed tasks vanish*: After auto-clear (default 60s delay), completed tasks
+   are spliced from the phase data and empty phases are filtered out. No count or
+   summary remains in the niri overview.
+
+Approach: Fix the stale read and blocker semantics first (BUG-045), then add
+per-phase completed-count tracking in the session and render it in the niri overview
+(BUG-046).
+
+Key decisions:
+- The niri context =todoPhases= getter switches from interactive mode cache to
+  =session.getTodoPhases()= (authoritative, sync)
+- Cleared-completed counts are tracked per phase ID in the session as a
+  =Map<string, { name: string; count: number }>=
+- The =replace= op triggers a count reset via an optional =reset= parameter on
+  =setTodoPhases=
+- The niri overview renders completed counts in phase headers and preserves
+  fully-cleared phases as dimmed summary lines
+
+* Verification
+
+- =bun check:ts= passes after all changes
+- Manual verification: run spell with niri, observe that:
+  - Task status changes are immediately reflected in the overview
+  - After blocker tasks are auto-cleared, dependent tasks do NOT revert to blocked
+  - After tasks are auto-cleared, their phase shows a completed count
+  - After all tasks in a phase are cleared, the phase appears as a completed summary
+
+* Execution Manifest
+
+** Wave 1: Fix stale reads and blocker semantics
+[[id:BUG-045-niri-overview-shows-stale-blocked-status]]
+
+Files: =interactive-mode.ts= (niri context getter), =controller.ts= (blocker logic)
+
+** Wave 2: Add completed count tracking and rendering
+[[id:BUG-046-completed-tasks-vanish-from-niri-overvie]]
+
+Files: =agent-session.ts=, =tools/index.ts=, =sdk.ts=, =todo-write.ts=,
+=interactive-mode.ts=, =controller.ts=, =types.ts=, =overview-component.ts=
+
+Depends on Wave 1 (niri context getter must read from session before counts are
+wired through it).
+
+
+
+** Completion [2026-03-31]
+
+*** Verification
+
+- =bun check:ts= passes (biome check + tsgo, 1492 files, 0 errors)
+- =bun test packages/niri/test/overview-component.test.ts= — 24 tests pass, 149 assertions, 0 failures
+- All test fixtures updated with =completedCount: 0= for new required field
+
+Wave 1 changes verified:
+- =interactive-mode.ts= todoPhases getter: =ctx.todoPhases= → =ctx.session.getTodoPhases()= (authoritative sync read)
+- =controller.ts= blocker logic: =!dep || (...)= → =!!dep && (...)= at both sites (lines 268, 274)
+
+Wave 2 changes verified:
+- =agent-session.ts=: =#clearedCompletedCounts= map, increment in =#runTodoAutoClear=, =getClearedCompletedCounts()= getter, =setTodoPhases(phases, { reset })= clears counts on replace
+- =tools/index.ts=: =setTodoPhases= signature updated with optional second param
+- =sdk.ts=: binding forwards options parameter
+- =todo-write.ts=: detects replace ops and passes ={ reset: true }=
+- =controller.ts=: =NiriOverviewContext= gains =getClearedCompletedCounts?()=, =TodoPhaseView= gains optional =id=, =#buildSnapshot= computes =completedCount= per phase and creates phantom phases for fully-cleared phases
+- =types.ts=: =TodoPhaseSnapshot.completedCount= added as required field
+- =overview-component.ts=: =renderPhase= shows progress =(N/M)= or =(N completed)= for phantom phases, with phantom phases dimmed
+- =interactive-mode.ts=: wires =getClearedCompletedCounts= from session into niri context
+
+*** Artifacts
+
+No screenshots — niri overlay changes require compositor-level runtime (not available in CI). Verification relies on type checking and existing test suite.
+
+*** Deviations
+
+None.

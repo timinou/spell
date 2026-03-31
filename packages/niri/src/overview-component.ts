@@ -114,14 +114,30 @@ function renderTodoItem(item: TodoItemSnapshot, indent: string, maxWidth?: numbe
 }
 
 function renderPhase(phase: TodoPhaseSnapshot, maxWidth?: number): string[] {
+	const totalTasks =
+		phase.tasks.length +
+		phase.completedCount -
+		phase.tasks.filter(t => t.status === "completed" || t.status === "abandoned").length;
+	const isPhantom = phase.tasks.length === 0 && phase.completedCount > 0;
+
 	// Determine phase icon from task statuses
 	const hasActive = phase.tasks.some(t => t.status === "in_progress");
 	const allDone =
-		phase.tasks.length > 0 && phase.tasks.every(t => t.status === "completed" || t.status === "abandoned");
+		isPhantom ||
+		(phase.tasks.length > 0 && phase.tasks.every(t => t.status === "completed" || t.status === "abandoned"));
 	const icon = allDone ? "\u2713" : hasActive ? "\u2192" : "\u25CB";
 	const dim = allDone ? DIM : "";
 	const reset = dim ? RESET_BOLD : "";
-	let header = `${dim}${icon} ${BOLD}${phase.name}${RESET_BOLD}${reset}`;
+
+	// Build progress suffix: "(3/5)" or "(5 completed)" for phantom phases.
+	let progress = "";
+	if (isPhantom) {
+		progress = ` (${phase.completedCount} completed)`;
+	} else if (totalTasks > 0) {
+		progress = ` (${phase.completedCount}/${totalTasks})`;
+	}
+
+	let header = `${dim}${icon} ${BOLD}${phase.name}${RESET_BOLD}${progress}${reset}`;
 	if (maxWidth !== undefined && visibleWidth(header) > maxWidth) {
 		header = sliceByColumn(header, 0, maxWidth);
 	}

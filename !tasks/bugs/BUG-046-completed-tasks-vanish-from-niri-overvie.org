@@ -1,0 +1,106 @@
+#+TITLE: Completed tasks vanish from niri overview with no trace
+#+STATE: DONE
+#+SESSION_ID: 14a8672fd6d6ec42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-58-42-651Z_14a8672fd6d6ec42.jsonl]]
+#+CUSTOM_ID: BUG-046-completed-tasks-vanish-from-niri-overvie
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: niri,coding-agent
+#+DEPENDS: BUG-045-niri-overview-shows-stale-blocked-status
+
+NOTE [2026-03-31]: Implemented per-phase cleared-completed count tracking in agent-session.ts with Map, getClearedCompletedCounts() getter, reset-on-replace semantics. Wired through ToolSession interface, SDK, todo-write, niri context, controller, and overview-component. Phase headers now show progress (N/M) and phantom phases appear as completed summaries.
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-03-31T14-38-52-893Z_14a862a5f760c510.jsonl
+ ID: 14a862a5f760c510
+
+
+Dude bro. there is a discrepancy bewtween the niri veiw where it stilll showed Phase 2 as blocked when it was launched. Also I want a count of completed tasks in the niri overview mode, don't just make them disappear
+
+When tasks complete, the session's =#runTodoAutoClear= removes them from the phase
+data after a configurable delay (default 60s). Empty phases are then filtered out.
+This means completed work vanishes from the niri overview with no visual trace.
+
+The user wants to see how many tasks have been completed per phase, not have them
+silently disappear.
+
+* Design
+
+Track per-phase cleared-completed counts in the session. Expose them to the niri
+controller, which renders completed counts in phase headers and preserves
+fully-completed phases as summary lines.
+
+** Session changes (=agent-session.ts=)
+
+Add =#clearedCompletedCounts: Map<string, { name: string; count: number }>=.
+
+In =#runTodoAutoClear=, before removing a task, look up its phase and increment the
+count (recording the phase name).
+
+Update =setTodoPhases(phases, options?)= to accept an optional ={ reset?: boolean }=
+parameter. When =reset= is true (signaled by a =replace= op), clear all
+counts — the entire todo list has been replaced and old counts are stale.
+
+Add =getClearedCompletedCounts(): ReadonlyMap<string, { name: string; count: number }>= getter.
+
+** ToolSession interface changes (=tools/index.ts=, =sdk.ts=)
+
+Update =setTodoPhases= signature to accept optional second parameter:
+=setTodoPhases?: (phases: TodoPhase[], options?: { reset?: boolean }) => void=
+
+Update SDK binding to forward the options parameter.
+
+** todo-write tool changes (=todo-write.ts=)
+
+Detect if any op in the batch is a =replace= op. If so, pass ={ reset: true }= to
+=setTodoPhases=:
+#+begin_src typescript
+const hasReplace = params.ops.some(op => op.op === "replace");
+this.session.setTodoPhases?.(updated.phases, hasReplace ? { reset: true } : undefined);
+#+end_src
+
+** Niri controller changes (=controller.ts=)
+
+Add =getClearedCompletedCounts?(): ReadonlyMap<string, { name: string; count: number }>=
+to =NiriOverviewContext=. In =#buildSnapshot()=:
+
+1. For each active phase, compute =completedCount= = (in-data completed tasks) + (cleared count for that phase ID)
+2. For phase IDs in the cleared counts map but NOT in active phases (fully cleared),
+   create phantom =TodoPhaseSnapshot= entries with no tasks and just the =completedCount=
+
+** Niri types changes (=types.ts=)
+
+Add =completedCount: number= to =TodoPhaseSnapshot=.
+
+** Overview component changes (=overview-component.ts=)
+
+Update =renderPhase()=:
+- Phase header shows progress: ="→ Phase Name (3/5)"= or ="✓ Phase Name (5/5)"=
+- For phantom phases (all tasks cleared): show ="✓ Phase Name (N completed)"= dimmed
+- Individual completed tasks still in data render as today (dimmed with ✓ icon)
+
+** Interactive mode changes (=interactive-mode.ts=)
+
+Wire =getClearedCompletedCounts= in the niri context, reading from the session.
+
+* Files to change
+- =packages/coding-agent/src/session/agent-session.ts= (cleared count tracking)
+- =packages/coding-agent/src/tools/index.ts= (ToolSession interface)
+- =packages/coding-agent/src/sdk.ts= (binding)
+- =packages/coding-agent/src/tools/todo-write.ts= (replace detection)
+- =packages/coding-agent/src/modes/interactive-mode.ts= (niri context wiring)
+- =packages/niri/src/controller.ts= (snapshot building, context interface)
+- =packages/niri/src/types.ts= (TodoPhaseSnapshot)
+- =packages/niri/src/overview-component.ts= (rendering)
+
+* Acceptance
+- After a task is auto-cleared, its phase still shows in the niri overview with a
+  completed count (e.g. "✓ Phase 1 (3/3)")
+- After all tasks in a phase are auto-cleared, the phase appears as a completed
+  summary line, not vanishing
+- After a =replace= op, old completed counts are reset (no stale counts from
+  previous plan)
+- =bun check:ts= passes

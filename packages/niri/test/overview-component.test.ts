@@ -84,6 +84,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Implementation",
+						completedCount: 0,
 						tasks: [
 							makeTask({
 								content: "A very long task name that pushes the line width",
@@ -145,6 +146,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Implementation",
+						completedCount: 0,
 						tasks: [
 							makeTask({ content: "Write tests", status: "completed" }),
 							makeTask({ content: "Fix types", status: "in_progress" }),
@@ -165,8 +167,8 @@ describe("OverviewComponent", () => {
 		const comp = new OverviewComponent(
 			makeSnapshot({
 				todoPhases: [
-					{ name: "Phase 1", tasks: [makeTask({ content: "Task A", status: "completed" })] },
-					{ name: "Phase 2", tasks: [makeTask({ content: "Task B", status: "pending" })] },
+					{ name: "Phase 1", completedCount: 0, tasks: [makeTask({ content: "Task A", status: "completed" })] },
+					{ name: "Phase 2", completedCount: 0, tasks: [makeTask({ content: "Task B", status: "pending" })] },
 				],
 			}),
 		);
@@ -231,6 +233,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Deploy",
+						completedCount: 0,
 						tasks: [
 							makeTask({ content: "Create schema", status: "pending" }),
 							makeTask({
@@ -257,6 +260,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Work",
+						completedCount: 0,
 						tasks: [
 							makeTask({
 								content: "Run tests",
@@ -280,6 +284,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Work",
+						completedCount: 0,
 						tasks: [
 							makeTask({
 								content: "Integration tests",
@@ -305,6 +310,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Release",
+						completedCount: 0,
 						tasks: [
 							makeTask({
 								content: "Add auth module",
@@ -327,6 +333,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Verify",
+						completedCount: 0,
 						tasks: [
 							makeTask({
 								content: "Full check",
@@ -354,6 +361,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Tracked",
+						completedCount: 0,
 						tasks: [
 							makeTask({
 								content: "Auth refactor",
@@ -375,6 +383,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Untracked",
+						completedCount: 0,
 						tasks: [makeTask({ content: "Quick fix", status: "in_progress" })],
 					},
 				],
@@ -392,6 +401,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Deploy",
+						completedCount: 0,
 						tasks: [
 							makeTask({
 								content: "Deploy staging",
@@ -421,6 +431,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Simple",
+						completedCount: 0,
 						tasks: [
 							makeTask({ content: "Do thing", status: "pending" }),
 							makeTask({ content: "Done thing", status: "completed" }),

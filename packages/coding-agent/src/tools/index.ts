@@ -169,7 +169,7 @@ export interface ToolSession {
 	/** Get cached todo phases for this session. */
 	getTodoPhases?: () => TodoPhase[];
 	/** Replace cached todo phases for this session. */
-	setTodoPhases?: (phases: TodoPhase[]) => void;
+	setTodoPhases?: (phases: TodoPhase[], options?: { reset?: boolean }) => void;
 	/** Whether MCP tool discovery is active for this session. */
 	isMCPDiscoveryEnabled?: () => boolean;
 	/** Get hidden-but-discoverable MCP tools for search_tool_bm25 prompts and fallbacks. */

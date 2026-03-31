@@ -690,7 +690,8 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 			pendingVerificationTasks,
 			pendingDeferralTasks,
 		} = applyOps(current, params.ops, previousPhases);
-		this.session.setTodoPhases?.(updated.phases);
+		const hasReplace = params.ops.some(op => op.op === "replace");
+		this.session.setTodoPhases?.(updated.phases, hasReplace ? { reset: true } : undefined);
 		// Notify dashboard bridge of todo state change
 		this.session.eventBus?.emit("todo:change", { phases: updated.phases });
 		const storage = this.session.getSessionFile() ? "session" : "memory";

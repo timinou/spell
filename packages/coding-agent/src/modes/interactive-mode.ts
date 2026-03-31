@@ -527,7 +527,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				},
 				sessionManager: this.sessionManager,
 				get todoPhases() {
-					return ctx.todoPhases;
+					return ctx.session.getTodoPhases();
+				},
+				getClearedCompletedCounts() {
+					return ctx.session.getClearedCompletedCounts();
 				},
 				subscribe: listener => {
 					ctx.#niriListener = listener;
