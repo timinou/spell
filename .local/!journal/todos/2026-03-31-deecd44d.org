@@ -1,0 +1,14 @@
+#+TITLE: Session 14a837cdc9be5f51 Todos
+#+DATE: 2026-03-31
+#+TODO: ITEM DOING | DONE
+
+* Wave 2: Test Coverage
+
+** DONE Write extractPlanWaves test suite
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:BLOCKER: task-1
+:END:
+
+FEAT-131: 7 scenarios covering the wave extraction contract

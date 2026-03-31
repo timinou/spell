@@ -1,0 +1,27 @@
+#+TITLE: Session 14a781a160fac8ed Todos
+#+DATE: 2026-03-30
+#+TODO: ITEM DOING | DONE
+
+* Execution
+
+** DONE Apply three gateway fixes
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+1. Separate try blocks for cleanup/dispose in sdk.ts:1674-1682
+2. Guard GatewayClient creation with taskDepth === 0 at sdk.ts:896
+3. Add defensive return after catch in gateway.ts:55
+
+** DONE Verify with bun check:ts
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Close org items and commit
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

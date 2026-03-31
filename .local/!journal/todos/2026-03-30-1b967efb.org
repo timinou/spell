@@ -1,0 +1,15 @@
+#+TITLE: Session 14a6cff2621142a7 Todos
+#+DATE: 2026-03-30
+#+TODO: ITEM DOING | DONE
+
+* Verification & Completion
+
+** DONE Run all tests, type checks, and finalize org items
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+bun test memories-runtime, memories-storage, session-token-summary. bun check:ts. Update org lifecycle.
+
+29 tests pass, bun check:ts clean, committed f67ae08a6

@@ -1,0 +1,21 @@
+#+TITLE: Session 14a6e8ddea41dd72 Todos
+#+DATE: 2026-03-30
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE Verify with bun check:ts
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+Run type checker to ensure all changes compile
+
+** DONE Close org items and commit
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+Update FEAT-096, PLAN-035, commit changes

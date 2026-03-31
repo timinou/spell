@@ -1,0 +1,23 @@
+#+TITLE: Session 14a73450e249809e Todos
+#+DATE: 2026-03-30
+#+TODO: ITEM DOING | DONE
+
+* Implementation
+
+** DONE Update and add tests
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+Update width-contract test with enriched items, add blocker filtering test, remove hasGates from test helpers
+
+* Verification
+
+** DONE Run type checks and tests
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+bun check:ts, bun test packages/niri/test/overview-component.test.ts, bun test packages/niri/test/controller.test.ts, grep for hasGates

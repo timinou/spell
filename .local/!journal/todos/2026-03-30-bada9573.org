@@ -1,0 +1,28 @@
+#+TITLE: Session 14a77c0814bac8e8 Todos
+#+DATE: 2026-03-30
+#+TODO: ITEM DOING | DONE
+
+* Phase 2: SDK wiring (depends on Phase 1)
+
+** DONE BUG-034: SDK gatewayClient init, dispose cleanup, tool error handling
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:BLOCKER: task-1
+:END:
+
+1. sdk.ts: create GatewayClient({autoSpawn:false}), assign to toolSession
+2. sdk.ts: add gateway cleanup in toolSession.dispose
+3. tools/gateway.ts: wrap execute() in try/catch
+4. tools/gateway.ts: remove spurious await on getAliasUrl
+
+* Verification
+
+** DONE Type check, tests, grep verification
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:BLOCKER: task-2 task-3
+:END:
+
+bun check:ts, bun test packages/gateway/test/, verify no ReturnType<> in gateway, no existsSync in commands/gateway.ts

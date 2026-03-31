@@ -1,0 +1,14 @@
+#+TITLE: Session 14a70c37602039a2 Todos
+#+DATE: 2026-03-30
+#+TODO: ITEM DOING | DONE
+
+* Verification
+
+** DONE Run all tests and type checks
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:BLOCKER: task-1 task-2 task-3 task-4
+:END:
+
+Run full verification suite from plan, manual prompt checks.

@@ -1,0 +1,14 @@
+#+TITLE: Session 14a82a6edf7e5f3c Todos
+#+DATE: 2026-03-31
+#+TODO: ITEM DOING | DONE
+
+* Verification & Cleanup
+
+** DONE Abandon superseded items + final verification
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: completed
+:BLOCKER: task-9
+:END:
+
+Abandon PLAN-046, PROJ-004, FEAT-116, FEAT-117, FEAT-118. Run all tests. Type check. Manual verification.
