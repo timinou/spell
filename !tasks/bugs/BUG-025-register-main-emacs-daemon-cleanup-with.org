@@ -1,0 +1,30 @@
+#+TITLE: Register main Emacs daemon cleanup with postmortem
+#+STATE: DONE
+#+SESSION_ID: 14a72be9fb2e0a9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T16-01-15-756Z_14a72be9fb2e0a9e.jsonl]]
+#+CUSTOM_ID: BUG-025-register-main-emacs-daemon-cleanup-with
+#+EFFORT: S
+#+PRIORITY: A
+#+LAYER: infra
+
+NOTE [2026-03-30]: Superseded by shared DaemonManager plan (PLAN-040 revision)"
+
+* Initial Message
+
+Yo bro are emacs sessions properly disposed of at the end of all spell sessions regardless of the exist mode?
+
+The =EmacsSessionManager= (=packages/emacs=) is never registered with the postmortem cleanup system. When signals (SIGINT from outside, SIGTERM, SIGHUP) hit the process, postmortem runs registered callbacks, but Emacs cleanup is absent. The daemon survives as an orphan.
+
+SSH and Python cleanups are registered at sdk.ts:432-440. Emacs needs the same treatment.
+
+* Affected files
+- =packages/coding-agent/src/sdk.ts= — add =postmortem.register("emacs-cleanup", ...)=
+
+* Fix
+Add =postmortem.register("emacs-cleanup", () => toolSession.emacsSessionManager?.dispose())= after the =toolSession= object is created (around line 948), alongside the existing SSH/Python registrations. The registration must return a cancel function; store it and call it in =toolSession.dispose()= to avoid double-dispose.
+
+* Acceptance criteria
+- =postmortem.register= is called for emacs cleanup in sdk.ts
+- The cancel function is called in =toolSession.dispose()= to prevent double-dispose
+- =bun check:ts= passes
+- Grep confirms no other Emacs cleanup registration gaps

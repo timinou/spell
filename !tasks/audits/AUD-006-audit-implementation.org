@@ -1,0 +1,34 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-006-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Line 228: `todoLeftPad = Math.max(0, Math.floor((width - maxTodoWidth) / 2))`. If `maxTodoWidth > width`, `todoLeftPad` is 0, and the line is passed to `rawLine` without truncation. So the line will exceed `width`.
+
+---
+
+Here are my audit findings:
+
+### Finding 1
+- **What**: `hasGates` field in `TodoItemSnapshot` is computed but never read
+- **Where**: `packages/niri/src/types.ts:40`, consumed in `controller.ts:288`, never referenced in `overview-component.ts`
+- **Why**: Dead data in the snapshot type. The renderer checks `item.gateBadges` directly, making `hasGates` redundant. Future readers will wonder why it exists, and it adds a required boolean to every snapshot that serves no purpose. Removing it also simplifies test setup (every `makeTask` call sets `hasGates: false` unnecessarily).
+- **Effort**: `trivial`
+
+### Finding 2
+- **What**: Enriched todo lines are not truncated when they exceed terminal width
+- **Where**: `packages/niri/src/overview-component.ts:109` (the return from `renderTodoItem`), interaction with `applyBackgroundToLine` at line 230
+- **Why**: `applyBackgroundToLine` pads short lines but does not truncate long ones. A task with long content + blocker label + multiple gate badges can exceed `width`, breaking the visual contract. This is pre-existing behavior (long content could always overflow), but the enrichment makes it more likely in practice. The width-contract test at line 71 doesn't catch it because it uses empty `todoPhases`.
+- **Effort**: `small` (truncate in `renderTodoItem` or add `sliceByColumn` in the layout path)
+
+### Finding 3
+- **What**: `blockerLabels` includes all blocker names, not just unresolved ones
+- **Where**: `packages/niri/src/controller.ts:271-273`
+- **Why**: When a task has 3 blockers and only 1 is unresolved, the rendered label might show a completed blocker's name (e.g. `← Create schema +2` where "Create schema" is already done). Slightly misleading in the quick-glance overlay. The fix would be to filter `blockerLabels` to only include unresolved blocker IDs (those whose status is neither completed nor abandoned), matching the same predicate used for the `blocked` computation.
+- **Effort**: `trivial`

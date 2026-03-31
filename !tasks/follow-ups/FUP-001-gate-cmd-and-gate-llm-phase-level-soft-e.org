@@ -1,0 +1,88 @@
+#+TITLE: GATE_CMD and GATE_LLM Phase-Level Soft Enforcement
+#+STATE: ITEM
+#+SESSION_ID: 14a636e8400a8b6d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-29T21-17-14-206Z_14a62aa5178a8b47/18-CreateFup1.jsonl]]
+#+CUSTOM_ID: FUP-001-gate-cmd-and-gate-llm-phase-level-soft-e
+#+EFFORT: 2h
+#+PRIORITY: #C
+#+LAYER: logic
+
+* Initial Message
+
+═══════════Background═══════════
+
+<context>
+## Goal\nCreate org items for the TODO Gates + Unified Dashboard plan. Each task creates one org item via `org create` and returns its CUSTOM_ID.\n\n## Rules\n- Use `org create` with `state: \"ITEM\"`\n- Include EFFORT, PRIORITY, LAYER properties\n- Body must include: Scope, Tests, Implementation, Edge Cases, Acceptance Criteria sections\n- File paths must be explicit\n- Return the CUSTOM_ID of the created item\n\n## Repo context\n- `packages/coding-agent/src/tools/todo-write.ts` — TodoItem type, schema, applyOps, formatSummary, TUI renderer\n- `packages/coding-agent/src/session/agent-session.ts` — #cloneTodoPhases, setTodoPhases, getTodoPhases, #syncTodoPhasesFromBranch, #checkTodoCompletion\n- `packages/org/src/journal.ts` — JournalTodoItem, serializeJournalOrg, writeJournal\n- `packages/coding-agent/src/prompts/tools/todo-write.md` — prompt template\n- `packages/coding-agent/src/modes/qml/panels/LoopDashboardPanel.qml` — loop dashboard panel\n- `packages/coding-agent/src/modes/qml/panels/DashboardPanel.qml` — main dashboard panel (always available)\n- `packages/coding-agent/src/loop/dashboard-bridge.ts` — LoopDashboardBridge pattern\n- `packages/coding-agent/src/slash-commands/builtin-registry.ts` — builtin slash commands\n- `packages/coding-agent/src/task/render.ts` — task TUI rendering\n- `packages/coding-agent/src/modes/components/todo-reminder.ts` — TodoReminderComponent\n- `packages/coding-agent/src/tools/render-utils.ts` — TUI rendering utilities\n- `packages/org/test/journal.test.ts` — existing journal tests\n- `packages/coding-agent/test/tools/todo-write.test.ts` — existing todo-write tests (if exists)\n
+</context>
+
+═══════════Task═══════════
+
+Your assignment is below. Your work begins now.
+<goal>
+Create an org item via `org create`:
+
+```
+category: followups
+title: GATE_CMD and GATE_LLM Phase-Level Soft Enforcement
+state: ITEM
+priority: #C
+properties:
+  EFFORT: 2h
+  PRIORITY: "#C"
+  LAYER: logic
+```
+
+Body:
+
+```
+* Scope
+
+Deferred from the main TODO Gates plan. Wire GATE_CMD and GATE_LLM as soft enforcement at phase completion boundaries.
+
+** In scope
+- At phase completion, if any task in the phase has =gateCmd=: inject 'Run `[command]` to verify phase completion'
+- At phase completion, if any task has =gateLlm=: inject 'Review phase against criteria: [criteria]'
+- Consider whether GATE_CMD should be auto-executed (like loop mode) or remain soft
+
+** Out of scope
+- Hard enforcement (auto-executing commands or LLM reviews)
+- Changes to the loop module
+
+* Notes
+- GATE_CMD auto-execution would require shell access from todo_write, which violates its current tool contract
+- GATE_LLM auto-review would require model calls from todo_write, adding latency
+- Both are better suited for a future 'todo verification mode' that runs after task completion
+- The existing loop infrastructure (=packages/coding-agent/src/loop/gates/executors/=) could be reused if we decide to add hard enforcement later
+
+* Acceptance Criteria
+- [ ] Phase completion with gateCmd tasks injects verification directive
+- [ ] Phase completion with gateLlm tasks injects review directive
+- [ ] Decision documented on whether to auto-execute or keep soft
+```
+
+Return the CUSTOM_ID.
+</goal>
+
+* Scope
+
+Deferred from the main TODO Gates plan. Wire GATE_CMD and GATE_LLM as soft enforcement at phase completion boundaries.
+
+** In scope
+- At phase completion, if any task in the phase has =gateCmd=: inject 'Run `[command]` to verify phase completion'
+- At phase completion, if any task has =gateLlm=: inject 'Review phase against criteria: [criteria]'
+- Consider whether GATE_CMD should be auto-executed (like loop mode) or remain soft
+
+** Out of scope
+- Hard enforcement (auto-executing commands or LLM reviews)
+- Changes to the loop module
+
+* Notes
+- GATE_CMD auto-execution would require shell access from todo_write, which violates its current tool contract
+- GATE_LLM auto-review would require model calls from todo_write, adding latency
+- Both are better suited for a future 'todo verification mode' that runs after task completion
+- The existing loop infrastructure (=packages/coding-agent/src/loop/gates/executors/=) could be reused if we decide to add hard enforcement later
+
+* Acceptance Criteria
+- [ ] Phase completion with gateCmd tasks injects verification directive
+- [ ] Phase completion with gateLlm tasks injects review directive
+- [ ] Decision documented on whether to auto-execute or keep soft

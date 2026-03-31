@@ -1,0 +1,107 @@
+#+TITLE: Executor Prompt Wave Decomposition
+#+STATE: ITEM
+#+SESSION_ID: 14a78ccf38be5f24
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2/14-CreateFeatExecutorPrompt.jsonl]]
+#+CUSTOM_ID: FEAT-118-executor-prompt-wave-decomposition
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: prompt
+#+BLOCKER: PROJ-004-manifest-wave-infrastructure
+
+* Scope
+** In-scope
+- =packages/coding-agent/src/prompts/system/plan-mode-approved.md= -- wave-based todo initialization
+- =packages/coding-agent/src/prompts/tools/todo-write.md= -- wave-based examples
+
+** Out-of-scope
+- plan-mode-active.md (owned by FEAT planner prompts)
+- exit-plan-mode.ts code (owned by FEAT exit-plan-mode)
+- todo-write.ts code (no changes needed -- existing features sufficient)
+
+Boundary: this item owns executor-side prompt changes only. The template variable contract comes from PROJ-004 types.
+
+Template variable contract (from PROJ-004):
+- =waves= is an array of ={ name: string, entries: { orgItemId: string, step: string }[] }=
+- Present only when PLAN has wave-structured Execution Manifest
+- Absent/empty for non-wave plans (backward compat)
+
+* Tests
+No automated tests -- prompt-only change. Verification by reading:
+- plan-mode-approved.md has Handlebars conditional for waves
+- todo-write.md has wave-based examples
+- Non-wave behavior preserved in both files
+
+Preferred sequencing: implementation only.
+
+* Implementation
+** Step 1: Add wave-based todo initialization to plan-mode-approved.md
+Locate the =<instruction>= block (around line 44-55) that contains the todo_write instructions.
+Add Handlebars conditional block for wave-based execution:
+
+#+begin_example
+{{curly "#if waves"}}
+## Wave-Based Execution
+
+This plan uses wave-based decomposition for cross-item parallelism.
+
+When initializing `todo_write`:
+- Create one phase per wave, named after the wave
+- Each wave entry becomes a task in that phase
+- Set `orgItemId` on each task to the entry's orgItemId
+- For cross-wave dependencies: if an org item appears in wave N and wave N-1, the wave N task MUST have a blocker on the wave N-1 task for the same orgItemId
+- Tasks within the same wave are independent -- parallelize via `task` subagents with `todoRef`
+- Read each child org item via `org get` to populate task details from the matching implementation step
+
+### Waves
+{{curly "#each waves"}}
+#### {{curly "name"}}
+{{curly "#each entries"}}
+- `{{curly "orgItemId"}}` -- {{curly "step"}}
+{{curly "/each"}}
+{{curly "/each"}}
+{{curly "/if"}}
+#+end_example
+
+Note: replace =curly= with actual Handlebars syntax (={{= / =}}=) during implementation. The example uses placeholder to avoid template processing.
+
+Preserve existing non-wave instructions as the default path (when waves is absent).
+
+** Step 2: Update todo-write.md with wave-based examples
+Add a new example section showing:
+- Phases named after waves (foundation, core, verify)
+- Multiple tasks per phase with different orgItemIds
+- Blockers expressing cross-wave dependencies for same orgItemId
+- todoRef usage on task subagents for wave tasks
+
+Example:
+#+begin_example
+<example name="wave-based-plan">
+Create phases from plan waves, with cross-wave blockers:
+ops: [{op: "replace", phases: [
+  {name: "foundation", tasks: [
+    {content: "Define type interfaces", orgItemId: "FEAT-001-add-types", details: "Create FooConfig and FooResult in src/types/foo.ts"},
+    {content: "Define parser schema", orgItemId: "FEAT-002-add-parser", details: "Create ParserSchema in src/types/parser.ts"}
+  ]},
+  {name: "core", tasks: [
+    {content: "Implement validation", orgItemId: "FEAT-001-add-types", blockers: ["task-1"], details: "Implement validate() in src/validate.ts"},
+    {content: "Implement parser", orgItemId: "FEAT-002-add-parser", blockers: ["task-2"], details: "Implement parse() in src/parser.ts"}
+  ]},
+  {name: "verify", tasks: [
+    {content: "Write type tests", orgItemId: "FEAT-001-add-types", blockers: ["task-3"], gateCmd: "bun test test/types.test.ts"},
+    {content: "Write parser tests", orgItemId: "FEAT-002-add-parser", blockers: ["task-4"], gateCmd: "bun test test/parser.test.ts"}
+  ]}
+]}]
+#+end_example
+
+* Edge Cases
+- Plan with no waves: executor falls back to current 1-task-per-item behavior (Handlebars guard)
+- Plan with single-entry waves: works but degenerates to current behavior with phases
+- Asymmetric wave coverage (item A in all 3 waves, item B only in wave 1): blocker graph is correct -- item B task has no cross-wave blockers
+- Wave with zero entries: skip phase creation (empty phases are noise)
+
+* Acceptance Criteria
+- plan-mode-approved.md renders wave instructions when =waves= template variable is present
+- plan-mode-approved.md renders current instructions when no waves (backward compat)
+- todo-write.md has clear example of wave-based phase/task structure
+- Example shows cross-wave blocker pattern for shared orgItemId
+- todo-write.md example uses all relevant fields: orgItemId, blockers, details, gateCmd

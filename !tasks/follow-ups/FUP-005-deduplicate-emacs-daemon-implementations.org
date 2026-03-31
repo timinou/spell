@@ -1,0 +1,41 @@
+#+TITLE: Deduplicate Emacs daemon implementations
+#+STATE: DONE
+#+SESSION_ID: 14a72be9fb2e0a9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T16-01-15-756Z_14a72be9fb2e0a9e.jsonl]]
+#+CUSTOM_ID: FUP-005-deduplicate-emacs-daemon-implementations
+#+EFFORT: M
+#+PRIORITY: C
+#+LAYER: infra
+
+NOTE [2026-03-30]: Superseded by shared DaemonManager plan (PLAN-040 revision)
+
+* Initial Message
+
+Yo bro are emacs sessions properly disposed of at the end of all spell sessions regardless of the exist mode?
+
+=packages/emacs/src/daemon.ts= and =packages/org/src/emacs/daemon.ts= are near-identical implementations of the same Emacs daemon lifecycle: session caching by hash key, socket polling, health timer, graceful stop via emacsclient, force-kill fallback.
+
+Differences:
+- Socket prefix: =spell-emacs-*= vs =spell-org-*=
+- Startup timeout: 120s vs 30s
+- Main daemon has =tryAttachExisting()= (reattach to surviving daemon)
+- Main daemon has first-run warning for tree-sitter compilation
+- Main daemon streams stderr; org daemon ignores it
+- Org daemon registers direct =process.on()= handlers; main daemon does not
+
+This is a maintenance fork. Bug fixes applied to one (e.g., =--fg-daemon= switch) must be manually applied to both. A shared =startEmacsSession()= factory parameterized by prefix, timeout, and features would eliminate this duplication.
+
+* Suggested approach
+Extract shared daemon lifecycle into =packages/emacs/src/daemon.ts= (or a new shared module) with configurable:
+- Socket prefix (=spell-emacs-= vs =spell-org-=)
+- Startup timeout
+- Whether to attempt reattachment
+- Whether to stream stderr
+- First-run warning configuration
+
+The org package would depend on =@oh-my-pi/pi-emacs= for the daemon, or a shared lower-level package.
+
+* Acceptance criteria
+- Single daemon implementation used by both packages
+- All behavioral differences configurable
+- =bun check:ts= passes

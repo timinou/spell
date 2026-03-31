@@ -1,0 +1,36 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-008-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+The `createAgentSession` is the single path for both top-level and subagent sessions. The `gatewayClient` creation at line 896 runs unconditionally.
+
+Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. `gatewayClient.dispose()` skipped when `cleanup()` throws
+- **What**: In `toolSession.dispose`, `cleanup(sid)` and `dispose()` are in the same `try` block. If `cleanup()` throws (e.g., daemon unreachable), `dispose()` is never called — the socket is not disconnected and the `#disposed` flag is not set.
+- **Where**: `packages/coding-agent/src/sdk.ts:1674-1682`
+- **Why**: The `cleanup()` RPC connects to the daemon. If the daemon isn't running, it throws after connection timeout. `dispose()` (which is purely local — sets flag, clears pending, disconnects socket) is then skipped. This happens on *every* session teardown when no daemon is running, including all subagent sessions. The socket resource leaks (though GC will eventually collect it) and every session teardown logs a noisy warning.
+- **Effort**: `trivial` — move `dispose()` to a `finally` block or a separate `try/catch`.
+
+### 2. `GatewayClient` created eagerly for all sessions including subagents
+- **What**: `new GatewayClient({ autoSpawn: false })` runs unconditionally in `createAgentSession`, including every subagent (`taskDepth > 0`). Combined with finding #1, every subagent teardown attempts a `cleanup()` RPC to a daemon that likely isn't running, logging a warning.
+- **Where**: `packages/coding-agent/src/sdk.ts:896`
+- **Why**: Subagents never use the gateway tool (it's not in the typical subagent tool set), so the client creation and dispose cycle is pure waste. Not a correctness bug, but log noise and unnecessary connection attempts on every subagent session close.
+- **Effort**: `small` — guard creation with `taskDepth === 0` or make it lazy (create only when `GatewayTool.createIf` accesses it).
+
+### 3. `GatewayTool.execute()` has an implicit `undefined` return path after try/catch
+- **What**: The `execute()` method has `try { switch ... } catch { return ... }` but no return after the catch block. If the switch somehow falls through the try without returning and without throwing, the function returns `undefined` as `AgentToolResult`.
+- **Where**: `packages/coding-agent/src/tools/gateway.ts:40-56`
+- **Why**: TypeScript considers the switch exhaustive (all 4 union members covered), so this is unreachable in practice. But a defensive `return toolResult().text("Unknown action").done()` after the catch would be safer, especially since the schema union is validated at runtime by the framework — a mismatch between schema and switch cases would silently return `undefined`. Pre-existing pattern, but we restructured the function and could have closed it.
+- **Effort**: `trivial` — add an unreachable-safety return after the catch block.

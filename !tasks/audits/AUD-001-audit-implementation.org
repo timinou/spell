@@ -1,0 +1,49 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-001-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Here are my findings:
+
+---
+
+### Finding 1: Dead ternary — both branches identical in `formatTokenCount`
+
+- **What**: Lines 15 and 19 have `rounded % 1 === 0 ? \`${rounded}K\` : \`${rounded}K\`` — both branches produce the same string. The intent was to drop `.0` trailing decimals (e.g. `"45K"` not `"45.0K"`), but `Math.round(k * 10) / 10` already produces `45` not `45.0` as a JS number, so template literal stringification handles it correctly by accident. The ternary is dead logic.
+- **Where**: `packages/coding-agent/src/session/token-summary.ts` lines 15, 19
+- **Why**: No behavioral bug (tests pass because JS number stringification of `45` is `"45"` not `"45.0"`), but the dead ternary misleads readers into thinking there's intentional branch logic. Simple cleanup.
+- **Effort**: `trivial`
+
+### Finding 2: Cooldown check opens DB before checking, wasting a syscall on skip
+
+- **What**: `runPhase1` opens the SQLite DB on line 233 before the cooldown check on line 240. If cooldown triggers (the most common path after this change), the DB open+close is pure waste. Moving the cooldown check before `openMemoryDb` would avoid the syscall entirely on skip.
+- **Where**: `packages/coding-agent/src/memories/index.ts` lines 233 vs 240
+- **Why**: Minor perf waste on the hot path (cooldown skip is now the common case). The DB open is not free — it's a file lock acquisition. Low severity but cheap to fix.
+- **Effort**: `small` — move cooldown check before DB open, restructure the DB open to happen after
+
+### Finding 3: `phase1MaxInputTokens` setting declared but never enforced
+
+- **What**: The setting `memories.phase1MaxInputTokens` exists in the schema, the config interface, DEFAULTS, and `loadMemoryConfig`, but nothing in `runPhase1` or `claimStage1Jobs` reads or enforces it. The claim loop processes all available claims regardless of estimated token cost.
+- **Where**: `packages/coding-agent/src/memories/index.ts` — `phase1MaxInputTokens` field; `claimStage1Jobs` call at line 281
+- **Why**: The setting exists but does nothing. This is a documented deviation in the plan's completion report, but having a published setting that has no effect is misleading. If a user configures it expecting budget enforcement, their configuration is silently ignored.
+- **Effort**: `medium` — implementing token estimation per claim requires reading rollout file sizes and approximating token counts before claiming
+
+### Finding 4: Cooldown skip test uses `Bun.sleep(100)` instead of `waitFor` with negative assertion
+
+- **What**: The "phase1 skips" test at line 352 uses `await Bun.sleep(100)` then asserts `not.toHaveBeenCalled()`. This is timing-sensitive — on a slow CI machine, the async `runMemoryStartup` might not have had time to reach the cooldown check in 100ms, making the test pass vacuously (it would also pass if the code was simply slow). The existing test pattern uses `waitFor` with positive assertions for better reliability.
+- **Where**: `packages/coding-agent/test/memories-runtime.test.ts` line 352
+- **Why**: Flaky test risk. A negative assertion after a fixed sleep proves nothing if the async work hasn't started yet. The existing "startup gating skips when DB is unavailable" test at line 163 uses the same pattern (`Bun.sleep(50)`), so this is consistent with codebase convention, but both share the same weakness.
+- **Effort**: `trivial` — increase sleep to 200-300ms for more margin, or add a secondary assertion that the DB was opened (proving the code ran past the entry gate but stopped at cooldown)
+
+### Finding 5: No test for cooldown file with invalid content (e.g. "garbage")
+
+- **What**: The cooldown code handles `Number.isNaN(lastRun)` by proceeding (no cooldown), but there's no test for this path. If someone writes non-numeric content to `.last_phase1`, the code should proceed normally.
+- **Where**: `packages/coding-agent/src/memories/index.ts` line 243; `packages/coding-agent/test/memories-runtime.test.ts`
+- **Why**: The code handles it correctly, but the edge case is untested. Low risk since the only writer is our own code, but a defensive test would lock the contract.
+- **Effort**: `trivial`

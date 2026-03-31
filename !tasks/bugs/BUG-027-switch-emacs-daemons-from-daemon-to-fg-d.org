@@ -1,0 +1,51 @@
+#+TITLE: Switch Emacs daemons from --daemon to --fg-daemon for reliable prockill
+#+STATE: DONE
+#+SESSION_ID: 14a72be9fb2e0a9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T16-01-15-756Z_14a72be9fb2e0a9e.jsonl]]
+#+CUSTOM_ID: BUG-027-switch-emacs-daemons-from-daemon-to-fg-d
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: infra
+
+NOTE [2026-03-30]: Superseded by shared DaemonManager plan (PLAN-040 revision)
+
+* Initial Message
+
+Yo bro are emacs sessions properly disposed of at the end of all spell sessions regardless of the exist mode?
+
+Both Emacs daemon implementations spawn Emacs with =--daemon=NAME=:
+- =packages/emacs/src/daemon.ts= (main emacs-code daemon: =spell-emacs-*=)
+- =packages/org/src/emacs/daemon.ts= (org daemon: =spell-org-*=)
+
+Emacs =--daemon= forks: the original process exits and a detached daemon continues with a new PID. This means:
+1. =proc= (from =Bun.spawn=) tracks the pre-fork process that has already exited
+2. =proc.kill()= sends signal to the dead pre-fork PID — does nothing
+3. The org daemon's =process.on("exit"/"SIGINT"/"SIGTERM")= handlers calling =proc.kill()= are ineffective
+4. The main daemon's =stop()= fallback =proc.kill()= is ineffective
+5. Only the =emacsclient --eval "(kill-emacs)"= path works
+
+With =--fg-daemon=NAME= (available since Emacs 26, code already requires 29+ for tree-sitter):
+1. Emacs does NOT fork — =proc= tracks the actual daemon
+2. =proc.kill()= targets the correct PID
+3. =process.on("exit")= handlers with sync =proc.kill()= work as last-resort cleanup
+4. If the parent process is SIGKILLed, the =--fg-daemon= child may receive SIGHUP from terminal close (better than =--daemon= which explicitly detaches)
+
+* Affected files
+- =packages/emacs/src/daemon.ts= — change =--daemon= → =--fg-daemon=, add =process.on("exit")= handler with sync =proc.kill()= (like org daemon has)
+- =packages/org/src/emacs/daemon.ts= — change =--daemon= → =--fg-daemon=
+
+* Fix
+1. In both files, replace =--daemon=${daemonName}= with =--fg-daemon=${daemonName}= in the spawn args
+2. In =packages/emacs/src/daemon.ts=, add direct =process.on("exit")= handler with =proc.kill()= as synchronous last-resort cleanup (the org daemon already has this pattern)
+3. Verify that =waitForSocket()= still works (it polls for socket file, independent of fork behavior)
+4. In =tryAttachExisting()= (main daemon only), the reattach path already uses =emacsclient= for stop — no change needed
+
+* Edge cases
+- =--fg-daemon= keeps the process in foreground: verify =Bun.spawn= doesn't block or behave differently with a long-lived foreground child (it shouldn't — spawn is async)
+- stderr streaming in main daemon already reads from =proc.stderr= — this should work better with =--fg-daemon= since the pipe persists for the daemon's lifetime instead of closing after fork
+
+* Acceptance criteria
+- Both daemons use =--fg-daemon=NAME= instead of =--daemon=NAME=
+- Main daemon has =process.on("exit")= handler for sync =proc.kill()=
+- =bun check:ts= passes
+- Manual test: start spell, use emacs tool, =kill -15 $SPELL_PID= → no orphaned =spell-emacs-*= or =spell-org-*= processes

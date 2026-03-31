@@ -1,0 +1,128 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-007-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+`$`mkcert -install`.quiet()` is missing `.nothrow()`. If `mkcert -install` fails (e.g., CA already trusted returns non-zero, or sudo needed), this will throw an unhandled exception, crashing the init flow.
+
+Let me also check the `#write` -> `#serializedWrite` chain. If `fn` throws, does `#write` still get called?
+
+Looking at registry.ts line 143-156:
+```typescript
+async #serializedWrite<T>(fn: (data: RegistryFile) => Promise<T>): Promise<T> {
+    ...
+    const data = await this.#read();
+    const result = await fn(data);   // if this throws...
+    await this.#write(data);         // this is skipped (correct!)
+    resolve(result);
+    ...
+}
+```
+Correct — if `fn` throws, `#write` is not called and `reject(err)` handles it.
+
+Now, one more thing — the `#writeQueue` chaining:
+
+```typescript
+this.#writeQueue = this.#writeQueue.then(async () => {
+    try { ... resolve(result); }
+    catch (err) { reject(err); }
+});
+```
+
+If the `.then()` callback throws an unhandled error (outside the try/catch), the chain would break. But since everything is inside try/catch, this is safe. The queue continues because the next `.then()` attaches to the new promise which always resolves (the try/catch ensures the callback never throws).
+
+Here's my complete audit:
+
+---
+
+## Audit Findings
+
+### 1. C++ systray events missing `id` field — runtime type mismatch
+- **What**: The C++ code emits `systray_click` and `systray_activated` events without an `id` field, but the TypeScript `BridgeEvent` union requires `id: "__systray__"` as a literal string constant. At runtime, the events from C++ won't have `id`, causing the `qml-bridge.ts` event handler to fail the `this.#windows.get(event.id)` lookup silently (returns `undefined`, logs "event for unknown window" debug).
+- **Where**: `packages/qml/bridge/windowmanager.cpp` lines 108-116 — missing `evt["id"] = "__systray__"` in both lambda handlers
+- **Why**: Systray events will be silently dropped by the TypeScript bridge handler. The type system says `id` is present but C++ doesn't emit it. Any consumer depending on systray events (gateway daemon, future listeners) will never receive them.
+- **Effort**: `trivial`
+
+### 2. Proxy not started by daemon — core feature disconnected
+- **What**: `startProxy()` is defined in `proxy.ts` and exported, but the daemon entry point (`daemon.ts`) never imports or calls it. The daemon only starts the Unix socket control plane — no HTTPS proxy is actually listening on port 443.
+- **Where**: `packages/gateway/src/daemon.ts` — `startDaemon()` function creates socket server but never calls `startProxy()`
+- **Why**: The entire HTTPS reverse proxy is dead infrastructure. `curl https://test.localhost` will not work. The proxy needs to be started after the socket server, with the registry and process manager passed in.
+- **Effort**: `small`
+
+### 3. `ReturnType<>` used in multiple places
+- **What**: `ReturnType<typeof Bun.spawn>` in `process-manager.ts:27` and `ReturnType<typeof Bun.serve>` in `proxy.ts:28-29,117` — explicitly prohibited by AGENTS.md ("NEVER use `ReturnType<>`").
+- **Where**: `packages/gateway/src/process-manager.ts:27`, `packages/gateway/src/proxy.ts:28-29`
+- **Why**: Convention violation. The actual types are `Subprocess` and `Server` from Bun's type definitions.
+- **Effort**: `trivial`
+
+### 4. `loadTlsConfig()` is dead code that duplicates `ensureCerts()`
+- **What**: `loadTlsConfig()` just calls `ensureCerts()` and returns the same `{ cert, key }` shape. It's exported but has no callers anywhere in the codebase.
+- **Where**: `packages/gateway/src/tls.ts:79-82`
+- **Why**: Dead code. Removing it also removes a misleading function whose name suggests it loads file handles but returns paths.
+- **Effort**: `trivial`
+
+### 5. `certsNeedRenewal()` exported but never called
+- **What**: The function is defined and exported but has no consumers.
+- **Where**: `packages/gateway/src/tls.ts:88-98`
+- **Why**: Dead code. Either the daemon should call it on startup or it should be removed until needed.
+- **Effort**: `trivial`
+
+### 6. MCP manager creates a new `GatewayClient` per register/deregister call
+- **What**: `#registerWithGateway` and `#deregisterFromGateway` each construct a new `GatewayClient()`, use it for one RPC, then call `dispose()`. Each instance opens a new Unix socket connection.
+- **Where**: `packages/coding-agent/src/mcp/manager.ts:504,521`
+- **Why**: Connection churn. If many MCP servers have `gateway.expose`, each connect/disconnect creates and tears down a socket. Should use a single shared client instance held on the manager (or on ToolSession).
+- **Effort**: `small`
+
+### 7. `mkcert -install` missing `.nothrow()` in CLI init
+- **What**: `await $\`${mkcertPath} -install\`.quiet()` will throw if mkcert returns non-zero (e.g. sudo required, CA already installed on some platforms returns 1).
+- **Where**: `packages/coding-agent/src/commands/gateway.ts:67`
+- **Why**: `spell gateway init` crashes mid-flow instead of providing a graceful error message.
+- **Effort**: `trivial`
+
+### 8. Gateway tool `execute()` has no try/catch — raw client errors bubble
+- **What**: The `execute()` method delegates directly to `#register`, `#deregister`, etc., which call `this.#client.*` without wrapping in try/catch. If the gateway daemon is unreachable (despite `createIf` gating), any client RPC error throws as an unhandled exception, which the agent framework may surface poorly.
+- **Where**: `packages/coding-agent/src/tools/gateway.ts:40-51`
+- **Why**: Unhandled errors from the gateway client (timeout, connection refused on reconnect, etc.) surface as raw stack traces instead of a clean tool error result.
+- **Effort**: `small`
+
+### 9. `await` on synchronous `getAliasUrl()`
+- **What**: `const url = await this.#client.getAliasUrl(input.alias)` — `getAliasUrl` returns a plain `string`, not a `Promise`. The `await` is harmless but misleading.
+- **Where**: `packages/coding-agent/src/tools/gateway.ts:69`
+- **Why**: Suggests the method is async when it's a trivial string concatenation. Minor but confusing for readers.
+- **Effort**: `trivial`
+
+### 10. CLI `existsSync` in async context
+- **What**: `fs.existsSync(PATHS.cert)` used in the async `#init()` method. AGENTS.md says "Avoid sync APIs in async flows" and specifically "Don't use `existsSync`".
+- **Where**: `packages/coding-agent/src/commands/gateway.ts:70`
+- **Why**: Convention violation. Should use the async `certsExist()` from tls.ts or `Bun.file(...).exists()`.
+- **Effort**: `trivial`
+
+### 11. Duplicate alias derivation logic in MCP manager
+- **What**: The regex `name.toLowerCase().replace(/[^a-z0-9-]/g, "-")` appears in both `#registerWithGateway` (line 501) and the disconnect handler (line 656). Same logic, two places.
+- **Where**: `packages/coding-agent/src/mcp/manager.ts:501,656`
+- **Why**: If the derivation changes, one site gets updated and the other doesn't, causing phantom services that can never be deregistered.
+- **Effort**: `trivial`
+
+### 12. `client.dispose()` not awaited in MCP manager
+- **What**: `client.dispose()` is called without `await` in both `#registerWithGateway` (line 510) and `#deregisterFromGateway` (line 523). `dispose()` is async (rejects pending, destroys socket).
+- **Where**: `packages/coding-agent/src/mcp/manager.ts:510,523`
+- **Why**: Pending socket cleanup may race with subsequent operations. Likely harmless in practice since the socket is being abandoned anyway, but it's a fire-and-forget of an async operation.
+- **Effort**: `trivial`
+
+### 13. No session cleanup integration in coding-agent
+- **What**: The plan specifies that session dispose should call `gatewayClient.cleanup(sessionId)` to tear down session-scoped services. Neither `sdk.ts` nor the tool session dispose hook calls cleanup.
+- **Where**: `packages/coding-agent/src/sdk.ts` — `toolSession.dispose` function (around line 1654)
+- **Why**: Session-scoped gateway services are never cleaned up when a session ends. They persist until the daemon is restarted or manually removed.
+- **Effort**: `small`
+
+### 14. No `gatewayClient` initialization in SDK
+- **What**: `toolSession.gatewayClient` is declared in the ToolSession interface but never set anywhere in `sdk.ts`. The tool factory `GatewayTool.createIf` checks `session.gatewayClient` — it will always be `undefined`, so the gateway tool never appears in the toolbox.
+- **Where**: `packages/coding-agent/src/sdk.ts` — session setup code
+- **Why**: The gateway agent tool is unreachable. `GatewayTool.createIf` returns `null` every time because `gatewayClient` is never wired up.
+- **Effort**: `small`

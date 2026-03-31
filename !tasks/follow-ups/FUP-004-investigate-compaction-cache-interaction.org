@@ -1,0 +1,25 @@
+#+TITLE: Investigate compaction-cache interaction optimization
+#+STATE: ITEM
+#+SESSION_ID: 14a6d78fafc1dd60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T09-52-43-199Z_14a6d78fafc1dd60.jsonl]]
+#+CUSTOM_ID: FUP-004-investigate-compaction-cache-interaction
+#+EFFORT: M
+#+PRIORITY: #C
+#+LAYER: packages/coding-agent
+
+* Initial Message
+
+How does this coding harness manage token caching, especially with Anthropic Opus? Is there any room for improvement? Look at usage statistics if you can find them.
+
+* Problem
+After compaction, the entire conversation cache is invalidated. The first post-compaction turn must write a new cache (observed: ~23k-160k tokens at cache write cost of $18.75/MTok for Opus). However, the system prompt and tool definitions haven't changed — their cache should survive compaction since they're in separate cache breakpoints.
+
+Current data shows post-compaction recovery is actually very fast (turn 329 in the analyzed session showed 29k cacheRead already), suggesting the system/tool cache breakpoints DO survive compaction. Only the conversation messages are re-cached.
+
+* Investigation needed
+1. Confirm system prompt + tool cache breakpoints persist across compaction (the data strongly suggests yes)
+2. Evaluate whether compaction timing should consider cache freshness — e.g., if a large cache was just written, delay compaction slightly to amortize the write cost
+3. Evaluate if ~keepRecentTokens~ (default 20k) could be tuned relative to cache breakpoint positions to preserve more of the cached conversation prefix
+
+* No-op risk
+This may turn out to be a non-issue — the data shows the system is already quite efficient post-compaction. Worth investigating but low confidence of significant savings.

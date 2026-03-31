@@ -1,0 +1,54 @@
+#+TITLE: Org tool dispose does not stop Emacs session
+#+STATE: DONE
+#+SESSION_ID: 14a72be9fb2e0a9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T16-01-15-756Z_14a72be9fb2e0a9e.jsonl]]
+#+CUSTOM_ID: BUG-026-org-tool-dispose-does-not-stop-emacs-ses
+#+EFFORT: S
+#+PRIORITY: A
+#+LAYER: infra
+
+NOTE [2026-03-30]: Superseded by shared DaemonManager plan (PLAN-040 revision)
+
+* Initial Message
+
+Yo bro are emacs sessions properly disposed of at the end of all spell sessions regardless of the exist mode?
+
+The org tool's =dispose()= (=packages/org/src/tool.ts:890=) only nulls the promise references:
+
+#+begin_src typescript
+async dispose() {
+    emacsSessionPromise = null;
+    orgClientPromise = null;
+}
+#+end_src
+
+It never calls =session.stop()= on the resolved =EmacsSession=. This means the org Emacs daemon (=spell-org-*=) never receives a graceful =kill-emacs= through the normal =session.dispose()= → =#disposeTools()= chain.
+
+The org daemon has direct =process.on("exit"/"SIGINT"/"SIGTERM")= handlers as a fallback, but those call =proc.kill()= which is ineffective after =--daemon= fork (see sibling item).
+
+* Affected files
+- =packages/org/src/tool.ts= — fix =dispose()= method
+
+* Fix
+In =dispose()=, if =emacsSessionPromise= has resolved, await it and call =.stop()= on the session. Handle the case where the promise is still pending (race).
+
+#+begin_src typescript
+async dispose() {
+    const sessionPromise = emacsSessionPromise;
+    emacsSessionPromise = null;
+    orgClientPromise = null;
+    if (sessionPromise) {
+        try {
+            const session = await sessionPromise;
+            await session.stop();
+        } catch {
+            // Session may have already died or never started
+        }
+    }
+}
+#+end_src
+
+* Acceptance criteria
+- Org tool =dispose()= awaits the session and calls =.stop()=
+- =bun check:ts= passes
+- Manual test: start spell, use org tool, exit → no orphaned =spell-org-*= process

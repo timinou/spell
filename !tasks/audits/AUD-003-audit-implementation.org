@@ -1,0 +1,46 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-003-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Good — the type is properly constrained. The env var is untyped (string), but the function correctly handles the three valid values and defaults everything else to `"long"`.
+
+Now let me check if the `Database` icon is used twice (Cache Rate and Cache Savings) which would make the dashboard cards visually identical:
+
+Both Cache Rate and Cache Savings use `Database` icon but with different colors (`--accent-cyan` vs `--accent-green`). This is a minor visual issue — two adjacent cards with the same icon shape may be confusing, but different colors help distinguish them. Not a bug, just a polish item.
+
+Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. Duplicate icon for adjacent stat cards
+- **What**: Cache Rate and Cache Savings both use the `Database` icon in `StatsGrid.tsx`
+- **Where**: `packages/stats/src/client/components/StatsGrid.tsx` lines 39 and 47
+- **Why**: Adjacent cards with the same icon shape may cause visual confusion in the dashboard. Different colors help but a distinct icon (e.g., `TrendingDown` or `PiggyBank` from lucide) would be clearer.
+- **Effort**: `trivial`
+
+### 2. `as BedrockTool` type cast for cache point in tool config
+- **What**: The cache point object in `convertToolConfig` requires `as BedrockTool` because the AWS SDK's `Tool` union type doesn't accept object literals for the `cachePoint` variant without assertion
+- **Where**: `packages/ai/src/providers/amazon-bedrock.ts` line 623
+- **Why**: Low risk — this mirrors how Bedrock's union types work and the value is correct. But if the SDK changes the `cachePoint` shape, the cast silences the error. A `satisfies` check would be safer if the SDK version is pinned.
+- **Effort**: `trivial`
+
+### 3. No Bedrock-side enforcement of max 4 cache breakpoints
+- **What**: Unlike Anthropic's `enforceCacheControlLimit(params, 4)`, the Bedrock provider has no guard against exceeding the 4-breakpoint limit
+- **Where**: `packages/ai/src/providers/amazon-bedrock.ts` — `convertMessages()` + `convertToolConfig()` + `buildSystemPrompt()`
+- **Why**: Currently safe because exactly 4 placement sites exist. But if a future contributor adds a 5th cache point (e.g., for a tool result message), Bedrock will return a 400 error at runtime with no helpful diagnostic. The Anthropic provider already has this guard.
+- **Effort**: `small`
+
+### 4. Cache savings can be slightly negative for free/zero-cost models
+- **What**: SQL formula `cache_read_tokens * (cost_input / input_tokens) - cost_cache_read` produces a negative value when `cost_input = 0` (free model) but `cost_cache_read > 0`
+- **Where**: `packages/stats/src/db.ts` — the `cache_savings` SQL in all 3 stat queries
+- **Why**: UI is protected (both dashboard and CLI guard `> 0`), but `AggregatedStats.cacheSavings` can hold a negative number. Any future consumer that doesn't guard would display nonsensical "negative savings". Adding `MAX(0, ...)` or `CASE WHEN result > 0` in SQL would make the contract honest.
+- **Effort**: `trivial`

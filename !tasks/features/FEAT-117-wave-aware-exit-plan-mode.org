@@ -1,0 +1,86 @@
+#+TITLE: Wave-aware Exit Plan Mode
+#+STATE: ITEM
+#+SESSION_ID: 14a78ccf38be5f26
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2/12-CreateFeatExitPlan.jsonl]]
+#+CUSTOM_ID: FEAT-117-wave-aware-exit-plan-mode
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: backend
+#+BLOCKER: PROJ-004-manifest-wave-infrastructure
+
+* Scope
+** In-scope
+- =packages/coding-agent/src/tools/exit-plan-mode.ts= -- extend ExitPlanModeDetails, call wave extraction
+- =packages/coding-agent/src/modes/interactive-mode.ts= -- pass waves through #approvePlan to template context
+- Tests extending existing exit-plan-mode test suite
+
+** Out-of-scope
+- Prompt template content changes (handled by FEAT executor prompts)
+- Wave extraction logic itself (provided by PROJ-004-manifest-wave-infrastructure: extractPlanWaves function)
+- todo-write.ts behavior changes
+
+Boundary: this item wires wave data through the exit-plan-mode -> approval -> template pipeline. Does not change what the template says.
+
+Requires: WaveManifest type and extractPlanWaves() from =@oh-my-pi/pi-org= (PROJ-004).
+
+* Tests
+File: =packages/coding-agent/test/tools/exit-plan-mode.test.ts= (extend existing)
+
+** Scenario: PLAN with wave-structured manifest returns waves in details
+- Create PLAN org body with =:wave:= tagged headings + =[[id:...]]= entries
+- Create matching child items
+- Call exit-plan-mode
+- Assert =details.waves= is populated with correct wave names and entries
+
+** Scenario: PLAN without wave structure returns no waves (backward compat)
+- Create PLAN org body with flat =[[id:...]]= links
+- Call exit-plan-mode
+- Assert =details.waves= is undefined/null
+
+** Scenario: Wave entry references missing child item
+- Create PLAN with wave entry =[[id:MISSING-ITEM]]=
+- Call exit-plan-mode
+- Assert error about missing child item (existing validation catches this)
+
+* Implementation
+** Step 1: Extend ExitPlanModeDetails in =packages/coding-agent/src/tools/exit-plan-mode.ts=
+#+begin_src typescript
+import type { WaveManifest } from "@oh-my-pi/pi-org";
+
+// Add to ExitPlanModeDetails interface:
+/** Manifest waves extracted from Execution Manifest :wave: headings. */
+waves?: WaveManifest["waves"];
+#+end_src
+
+** Step 2: Add wave extraction to execute() in exit-plan-mode.ts
+- After =const childItemIds = extractIdLinks(item.body);= (line 100)
+- Call =extractPlanWaves(item.body)= from =@oh-my-pi/pi-org=
+- If waves found and non-empty, include in return details
+- Wave entry orgItemIds are already validated by the existing childItemIds check
+
+** Step 3: Pass waves through #approvePlan in interactive-mode.ts
+- In =#approvePlan()= at line 1171, add =waves= to the template context:
+#+begin_src typescript
+const prompt = renderPromptTemplate(planModeApprovedPrompt, {
+  planContent: orgToMarkdown(planContent),
+  finalPlanFilePath: planReferencePath,
+  orgItemId: approvedOrgItemId,
+  orgItemArtifactsDir: approvedOrgItemArtifactsDir,
+  waves: details?.waves, // NEW: pass wave data to template
+});
+#+end_src
+- This requires threading =details= (ExitPlanModeDetails) through handleExitPlanModeTool -> #approvePlan
+- Currently #approvePlan receives planContent + options. Either add waves to options or pass details object
+
+* Edge Cases
+- Emacs not running during exit_plan_mode: extractPlanWaves uses TS parser, no elisp needed
+- Large PLAN body with many waves: parseOrgHeadings handles it, no performance concern
+- Wave entry orgItemId not in childItemIds: caught by existing missing child validation loop
+- ExitPlanModeDetails serialization through event system: waves is plain JSON-serializable (no circular refs, no functions)
+- details?.waves undefined when plan has no waves: template {{#if waves}} guard handles this
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/tools/exit-plan-mode.test.ts= passes
+- Wave-structured PLANs return =waves= in ExitPlanModeDetails
+- Non-wave PLANs work exactly as before (details.waves is undefined)
+- Executor session receives =waves= template variable when approving a wave-structured plan

@@ -1,0 +1,135 @@
+#+TITLE: Manifest Wave Infrastructure
+#+STATE: ITEM
+#+SESSION_ID: 14a781d021545ee2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2.jsonl]]
+#+CUSTOM_ID: PROJ-004-manifest-wave-infrastructure
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: infra
+
+* Initial Message
+
+Bro how can you make Todo Write use the tasks INSIDE the FEAT and PROJ of the execution manifests, instead of having one task per file which limits the parallelisability of the TODO write. Do you feel me? Is this a prompting thing? Can you imagine the Dependency Graph of planning an ultraplanning even deeper?
+
+* Scope
+** In-scope
+- New elisp MCP tool: =org-extract-plan-waves.el= -- parses PLAN body Execution Manifest for =:wave:= tagged headings. Uses org-element AST. DISTINCT from existing =org-next-wave.el= (runtime dependency waves from item states).
+- New TypeScript: =packages/org/src/wave-parser.ts= -- WaveEntry, Wave, WaveManifest types + fallback parser via =parseOrgHeadings()=
+- Wire existing =cmdWave()= stub in =packages/org/src/tool.ts= (line 616) to existing =org-next-wave= elisp MCP tool via =OrgClient.callTool()=
+- Wire existing =cmdGraph()= stub in =packages/org/src/tool.ts= (line 622) to existing =org-dependency-graph= elisp MCP tool via =OrgClient.callTool()=
+- Export new types from =packages/org/src/index.ts=
+
+** Out-of-scope
+- Modifying existing =org-next-wave.el= or =org-dependency-graph.el= -- they stay as-is
+- Changes to coding-agent package (handled by dependent items)
+- Prompt changes (handled by dependent items)
+
+Boundary rationale: this item builds org-package-level infrastructure that all downstream items depend on. Deliberately does NOT touch coding-agent.
+
+* Tests
+File: =packages/org/test/wave-parser.test.ts=
+
+** Scenario: Parse wave-structured Execution Manifest
+- Input: org body with =* Execution Manifest= containing =** foundation :wave:= and =** core :wave:= headings, each with =[[id:FEAT-001]]= list items
+- Expected: WaveManifest with 2 waves, correct names and entries
+
+** Scenario: Parse manifest with no waves (backward compat)
+- Input: org body with flat =[[id:...]]= links under Execution Manifest, no =:wave:= headings
+- Expected: null return (no waves found)
+
+** Scenario: Parse manifest with single wave
+- Input: one wave heading with 3 entries
+- Expected: WaveManifest with 1 wave, 3 entries
+
+** Scenario: Invalid wave entry (no [[id:...]] link)
+- Input: wave heading with list items but no id links
+- Expected: entries without orgItemId are skipped
+
+** Scenario: Wave entry with step description
+- Input: =- [[id:FEAT-001]] Define TypeScript interfaces=
+- Expected: WaveEntry { orgItemId: "FEAT-001", step: "Define TypeScript interfaces" }
+
+** Scenario: cmdWave returns wave data from elisp (integration)
+- Verify =cmdWave()= no longer returns "wave not yet wired"
+- May require Emacs mock or integration test environment
+
+** Scenario: cmdGraph returns graph data from elisp (integration)
+- Verify =cmdGraph()= no longer returns "graph not yet wired"
+
+* Implementation
+Preferred sequencing: types first, then TS parser, then elisp, then wiring. Tests alongside each step.
+
+** Step 1: Define wave types in =packages/org/src/wave-parser.ts=       :foundation:
+#+begin_src typescript
+export interface WaveEntry {
+  orgItemId: string;
+  step: string;
+}
+
+export interface Wave {
+  name: string;
+  entries: WaveEntry[];
+}
+
+export interface WaveManifest {
+  waves: Wave[];
+}
+#+end_src
+
+** Step 2: Implement TS fallback parser in =packages/org/src/wave-parser.ts= :foundation:
+- Function: =extractPlanWaves(orgBody: string): WaveManifest | null=
+- Uses =parseOrgHeadings()= to parse org body
+- Finds child heading titled "Execution Manifest"
+- Under it, finds sub-headings tagged "wave"
+- For each wave heading, extracts list items containing =[[id:...]]= links via =extractIdLinks()=
+- Step text = list item text after the =[[id:...]]= link
+- Returns null if no wave structure found (backward compat)
+
+** Step 3: Export from =packages/org/src/index.ts=                        :foundation:
+- Export types: WaveEntry, Wave, WaveManifest
+- Export function: extractPlanWaves
+
+** Step 4: Create =packages/org/elisp/tools/org-extract-plan-waves.el=    :core:
+- Register as MCP tool: =org-extract-plan-waves=
+- Input schema: ={ file: string }= (path to PLAN .org file)
+- Parse with org-element: find "Execution Manifest" section (by raw-value)
+- Under it, find headings tagged =:wave:=
+- For each wave heading:
+  - name = heading raw-value
+  - entries = extract items containing =[[id:...]]= links from body paragraphs/lists
+  - step = text following the link
+- Return JSON: ={ waves: [{ name, entries: [{ orgItemId, step }] }] }=
+- Add =(require 'org-extract-plan-waves)= to =packages/org/elisp/org-tasks-mcp.el=
+
+** Step 5: Wire =cmdWave()= in =packages/org/src/tool.ts=                :core:
+- Replace stub body (line 616-619) with:
+  - Get OrgClient via =ctx.getOrgClient()=
+  - Call =client.callTool("org-next-wave", args)=
+  - Parse JSON response
+  - Return structured result
+- Keep same function signature
+
+** Step 6: Wire =cmdGraph()= in =packages/org/src/tool.ts=               :core:
+- Replace stub body (line 622-625) with:
+  - Get OrgClient via =ctx.getOrgClient()=
+  - Call =client.callTool("org-dependency-graph", args)=
+  - Parse JSON response
+  - Return structured result
+
+* Edge Cases
+- PLAN body has no Execution Manifest heading: return null
+- Execution Manifest has no =:wave:= headings: return null (backward compat)
+- Wave heading with no entries: empty entries array
+- Entry with =[[id:...]]= but no description: step = "" (empty string)
+- Multiple =[[id:...]]= links in same list item: first one used for orgItemId, rest ignored
+- Emacs not running: TS fallback parser used seamlessly
+- org-element parse failure in elisp: return error JSON, TS caller catches and falls back
+- Wave name with special characters: heading raw-value is used as-is
+
+* Acceptance Criteria
+- =bun test packages/org/test/wave-parser.test.ts= passes
+- =extractPlanWaves()= correctly parses wave-structured org body and returns WaveManifest
+- =extractPlanWaves()= returns null for non-wave org bodies (backward compat)
+- =cmdWave()= in tool.ts returns actual wave data from elisp (not "wave not yet wired")
+- =cmdGraph()= in tool.ts returns actual graph data from elisp (not "graph not yet wired")
+- New types (WaveEntry, Wave, WaveManifest) and =extractPlanWaves= exported from =@oh-my-pi/pi-org=

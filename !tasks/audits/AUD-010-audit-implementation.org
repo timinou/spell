@@ -1,0 +1,86 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-010-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Now I have a complete picture. Here are the findings:
+
+---
+
+## Audit Findings
+
+### 1. `registerModeCommands()` and `setModeConfigs()` are never called — modes are dead infrastructure
+
+- **What**: `registerModeCommands()` is exported but never called. `setModeConfigs()` is defined on AgentSession but never called. `loadCapability("modes", ...)` is never called anywhere in the startup path. The mode provider is registered in `builtin.ts`, but no code loads it.
+- **Where**: `packages/coding-agent/src/slash-commands/builtin-registry.ts:658`, `packages/coding-agent/src/session/agent-session.ts:2077`, startup chain in `sdk.ts` / `main.ts`
+- **Why**: The entire mode system is wired (types, parsing, resolution, templates, commands) but **nothing ever loads or activates it**. A user placing `.spell/modes/my-mode/MODE.md` will see no effect. The discovery provider runs (it's registered via `registerProvider`) but `loadCapability("modes")` is never invoked, so items are never collected. Even if capability loading happened, `setModeConfigs` and `registerModeCommands` are never called to wire the results into the session and command system. This is the critical gap.
+- **Effort**: `small` — need ~15 lines in `sdk.ts` or interactive-mode init: load the capability, resolve extends chains, call `setModeConfigs` and `registerModeCommands`.
+
+### 2. Inline `import()` type annotation violates AGENTS.md rule
+
+- **What**: `const userState: import("../plan-mode/state").UserModeState` uses an inline import for the type annotation.
+- **Where**: `packages/coding-agent/src/modes/interactive-mode.ts:1220`
+- **Why**: AGENTS.md explicitly says "NEVER use inline imports — no `import("pkg").Type` in type positions." Should be a top-level `import type { UserModeState } from "../plan-mode/state"`.
+- **Effort**: `trivial`
+
+### 3. Standalone user mode activation creates state then discards it with `void`
+
+- **What**: `handleModeCommand` for standalone (non-plan, non-audit) user modes constructs a `UserModeState` object then immediately `void`s it. The mode is never stored anywhere — it has no effect.
+- **Where**: `packages/coding-agent/src/modes/interactive-mode.ts:1220-1229`
+- **Why**: A user creating a standalone mode (not extending plan or audit) will get "Mode activated" status but the mode does nothing — no tool restrictions, no read-only enforcement, no prompt injection, no TUI badge. The TODO comment acknowledges this, but the user-facing status message "Mode activated" is misleading.
+- **Effort**: `small` — either store the state via `setActiveModeState` (which doesn't exist yet) or change the status message to be honest: "Standalone mode support not yet implemented."
+
+### 4. `getActiveModeState()` does not return audit or user mode states
+
+- **What**: `AgentSession.getActiveModeState()` only returns `#planModeState` when `enabled: true`. It never checks `#auditState` or any user mode state. The ActiveModeState union type promises three variants but the accessor only returns one.
+- **Where**: `packages/coding-agent/src/session/agent-session.ts:1980-1983`
+- **Why**: `enforceModeWrite` calls `session.getActiveModeState()` and checks for audit/user modes, but that accessor will never return them. Audit write blocking in `enforceModeWrite` is dead code in production (though it passes unit tests because the mock supplies the state directly).
+- **Effort**: `small` — extend `getActiveModeState()` to also check `#auditState.active` and any stored user mode.
+
+### 5. `resolvedTools` field is computed but never consumed at runtime
+
+- **What**: `ResolvedModeConfig.resolvedTools` is populated by `resolveModeConfig()` but no code ever reads it to actually restrict tools.
+- **Where**: `packages/coding-agent/src/capability/mode.ts:73`, `packages/coding-agent/src/discovery/mode-helpers.ts:194`
+- **Why**: Mode tool restrictions (`tools.allow`/`tools.deny`) appear to work in the config but have no runtime effect. Users will define tool restrictions and see no enforcement.
+- **Effort**: `small` — wire `resolvedTools` into the mode activation path (where `setActiveToolsByName` is called).
+
+### 6. `customFocusAreas` injected into plan-mode-active.md template — wrong template
+
+- **What**: `buildPlanModeMessage` passes `customFocusAreas: modeConfig?.frontmatter.audit?.focusAreas` to the `planModeActivePrompt` template. But `plan-mode-active.md` has no `{{#if customFocusAreas}}` block — that block is in `plan-audit.md`.
+- **Where**: `packages/coding-agent/src/session/agent-session.ts:2223`
+- **Why**: The template variable is silently ignored. No bug, just wasted computation. Not harmful but misleading during code review.
+- **Effort**: `trivial`
+
+### 7. Audit focus area numbering starts at 0
+
+- **What**: In `plan-audit.md`, the custom focus areas use `{{@index}}` (0-indexed) for numbering: `0. **Brand voice**`, `1. **Copy clarity**`. The default list starts at `1.`.
+- **Where**: `packages/coding-agent/src/prompts/system/plan-audit.md:23`
+- **Why**: Visual inconsistency. Custom focus areas render `0.` where defaults render `1.`. Minor cosmetic issue in the LLM prompt.
+- **Effort**: `trivial` — use `{{math @index "+" 1}}` or switch to bullet points.
+
+### 8. No test for `deepMergeFrontmatter` object merge (non-scalar, non-array)
+
+- **What**: The `deepMergeFrontmatter` function handles three cases: arrays replace, objects deep-merge, scalars override. The tests cover scalar override and array replace (via extends chain tests) but there's no explicit test for deep object merge — e.g., parent has `tools: { allow: ["read"] }`, child has `tools: { deny: ["write"] }`, result should have both.
+- **Where**: `packages/coding-agent/test/capability/mode-config.test.ts`
+- **Why**: The deep merge of nested objects (like `tools`, `audit`, `ui`) is a critical contract. If it breaks, mode inheritance silently drops parent config.
+- **Effort**: `trivial`
+
+### 9. `scanModesDir` casts `fm as ModeConfigFrontmatter` without validation
+
+- **What**: The frontmatter parsed from MODE.md is cast to `ModeConfigFrontmatter` via `fm as ModeConfigFrontmatter`. No runtime validation ensures the YAML matches the interface shape (e.g., `tools.allow` is actually a string array, not a string).
+- **Where**: `packages/coding-agent/src/discovery/builtin.ts:876`
+- **Why**: Malformed YAML in a user's MODE.md will create a `ModeConfig` with garbage in typed fields. Downstream code (tool resolution, gate toggles) will access these fields trusting the types, potentially throwing unclear errors.
+- **Effort**: `small` — add basic shape validation or use a schema validator like the TypeBox schema pattern used elsewhere.
+
+### 10. `getModeCommandDefs()` result is not included in autocomplete
+
+- **What**: `getModeCommandDefs()` is exported but never called. The autocomplete system uses `BUILTIN_SLASH_COMMAND_DEFS` which is a static array computed at module load time. Mode commands inserted into `BUILTIN_SLASH_COMMAND_LOOKUP` at runtime will execute correctly (via `executeBuiltinSlashCommand`) but won't appear in the autocomplete dropdown.
+- **Where**: `packages/coding-agent/src/slash-commands/builtin-registry.ts:705`
+- **Why**: Users won't see their custom mode commands in autocomplete, making them hard to discover. They'll work if typed manually but appear invisible.
+- **Effort**: `small` — call `getModeCommandDefs()` in the autocomplete provider and merge with `BUILTIN_SLASH_COMMAND_DEFS`.

@@ -1,0 +1,97 @@
+#+TITLE: Planner Prompt Wave Encoding
+#+STATE: ITEM
+#+SESSION_ID: 14a78ccf387e5f22
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2/13-CreateFeatPlannerPrompt.jsonl]]
+#+CUSTOM_ID: FEAT-116-planner-prompt-wave-encoding
+#+EFFORT: 1h30m
+#+PRIORITY: #A
+#+LAYER: prompt
+
+* Scope
+** In-scope
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= -- ALL changes in this one file:
+  - Org Item Body Standard: wave-tagged implementation steps
+  - Execution Manifest format: wave headings with =:wave:= tags
+  - Ultraplan section: meta-planning parallelism instructions (merged from former followup)
+
+** Out-of-scope
+- Code changes (none needed for this item)
+- Executor prompts (plan-mode-approved.md, todo-write.md -- handled by FEAT executor prompts)
+- exit-plan-mode.ts code (handled by FEAT exit-plan-mode)
+
+Boundary: this item owns ALL changes to plan-mode-active.md. No other item touches this file.
+
+* Tests
+No automated tests -- prompt-only change. Verification by reading the file:
+- Wave-tagged implementation step format documented with examples
+- Wave-structured Execution Manifest format documented with examples
+- Ultraplan section includes parallel exploration instructions
+- Existing non-wave planning instructions preserved (backward compat)
+
+Preferred sequencing: implementation only (no test files).
+
+* Implementation
+** Step 1: Update Org Item Body Standard section
+Locate the "Org Item Body Standard" heading in the ultraplan section.
+After the "Implementation" bullet, add guidance:
+- Implementation steps SHOULD use org heading tags for wave assignment
+- Tags like =:foundation:=, =:core:=, =:verify:= mark which execution wave a step belongs to
+- Planner decides granularity and wave names per item
+- Steps with the same wave tag across different org items can execute in parallel
+- Example:
+
+#+begin_example
+* Implementation
+** Define TypeScript interfaces                    :foundation:
+- File: src/types/foo.ts
+- Create FooConfig, FooResult types
+** Implement core parser logic                     :core:
+- File: src/parser.ts
+** Write unit tests                                :verify:
+- File: test/parser.test.ts
+#+end_example
+
+** Step 2: Update Execution Manifest section
+Locate where Execution Manifest format is described (around line 52).
+Replace flat =[[id:...]]= format description with wave-structured format:
+- Under =* Execution Manifest=, use =** wave-name :wave:= headings to group cross-item parallel tasks
+- Under each wave, list items: =- [[id:ITEM-ID]] Step description=
+- Wave ordering defines sequential dependency (wave N depends on wave N-1 completion)
+- Backward compat: flat =[[id:...]]= links still work when waves aren't needed
+- Example:
+
+#+begin_example
+* Execution Manifest
+** foundation                                      :wave:
+- [[id:FEAT-001-add-types]] Define TypeScript interfaces
+- [[id:FEAT-002-add-parser]] Define parser schema types
+** core                                            :wave:
+- [[id:FEAT-001-add-types]] Implement validation logic
+- [[id:FEAT-002-add-parser]] Implement parser
+** verify                                          :wave:
+- [[id:FEAT-001-add-types]] Write type tests
+- [[id:FEAT-002-add-parser]] Write parser tests
+#+end_example
+
+** Step 3: Update ultraplan section for meta-planning parallelism
+Add to Phase 1 (Explore + Question):
+- When scope spans multiple independent subsystems, launch parallel explore agents per subsystem
+- Group findings by dependency layer (types/contracts -> implementation -> verification)
+
+Add to Phase 5 (Create Org Items):
+- When creating wave-structured plans, analyze cross-item step dependencies to form optimal waves
+- Implementation steps across items that share no dependencies belong in the same wave
+- Steps that consume outputs of other steps go in later waves
+
+* Edge Cases
+- Plans with single org item: waves not needed, flat manifest works
+- Plans with unrelated items: single wave containing all items (maximum parallelism)
+- Plans with linear dependencies: one wave per item (degenerates to current behavior)
+- Planner may choose not to use waves: all existing behavior preserved
+
+* Acceptance Criteria
+- plan-mode-active.md contains wave-tagged implementation step documentation with examples
+- plan-mode-active.md contains wave-structured Execution Manifest format with examples
+- Ultraplan section includes parallel exploration and wave-based item creation guidance
+- Existing planning instructions preserved -- planner can still create non-wave plans
+- No regression in non-ultraplan planning workflows (iterative, regular planning sections untouched)
