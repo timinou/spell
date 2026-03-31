@@ -10,7 +10,7 @@ const ORG_CONTENT = `
 * ITEM Implement auth API
 :PROPERTIES:
 :CUSTOM_ID: FEAT-001
-:BLOCKER: FEAT-000
+:DEPENDS: FEAT-000
 :TRIGGER: FEAT-002(DOING)
 :GATE_CMD: bun test
 :EFFORT: 4h
@@ -79,17 +79,30 @@ Some body text.
 		expect(feat000.triggers).toEqual([]);
 	});
 
-	it("parses space-separated multi-blocker BLOCKER property", () => {
+	it("parses space-separated multi-dependency DEPENDS property", () => {
 		const content = `
 * ITEM Build API
 :PROPERTIES:
 :CUSTOM_ID: FEAT-010
-:BLOCKER: FEAT-001 FEAT-002 FEAT-003
+:DEPENDS: FEAT-001 FEAT-002 FEAT-003
 :END:
 `;
 		const props = parseOrgDependProperties(content);
 		expect(props.length).toBe(1);
 		expect(props[0].blockers).toEqual(["FEAT-001", "FEAT-002", "FEAT-003"]);
+	});
+
+	it("falls back to legacy BLOCKER property", () => {
+		const content = `
+* ITEM Legacy Item
+:PROPERTIES:
+:CUSTOM_ID: FEAT-020
+:BLOCKER: FEAT-001 FEAT-002
+:END:
+`;
+		const props = parseOrgDependProperties(content);
+		expect(props.length).toBe(1);
+		expect(props[0].blockers).toEqual(["FEAT-001", "FEAT-002"]);
 	});
 });
 

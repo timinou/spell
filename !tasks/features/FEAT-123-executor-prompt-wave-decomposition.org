@@ -1,0 +1,81 @@
+#+TITLE: Executor Prompt Wave Decomposition
+#+STATE: DONE
+#+SESSION_ID: 14a781d021545ee2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2.jsonl]]
+#+CUSTOM_ID: FEAT-123-executor-prompt-wave-decomposition
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: prompt
+#+BLOCKER: FEAT-122-wave-aware-exit-plan-mode FEAT-119-orgitemid-orgitemclosingid-split
+
+NOTE [2026-03-31]: plan-mode-approved.md updated with wave-based todo initialization using orgItemId/orgItemClosingId. todo-write.md updated with wave-based example. DEPENDS used throughout.
+
+* Initial Message
+
+Bro how can you make Todo Write use the tasks INSIDE the FEAT and PROJ of the execution manifests, instead of having one task per file which limits the parallelisability of the TODO write. Do you feel me? Is this a prompting thing? Can you imagine the Dependency Graph of planning an ultraplanning even deeper?
+
+* Scope
+** In-scope
+- =packages/coding-agent/src/prompts/system/plan-mode-approved.md=: wave-based todo initialization
+- =packages/coding-agent/src/prompts/tools/todo-write.md=: wave examples with =orgItemClosingId=
+
+** Out-of-scope
+- plan-mode-active.md (FEAT-120 planner prompts)
+- exit-plan-mode.ts code (FEAT-122)
+- todo-write.ts code (FEAT-119)
+
+Boundary: executor-side prompt changes only.
+
+Template variable contract:
+- =waves= is an array of ={ name: string, entries: { orgItemId: string, step: string }[] }=
+- Always present (all plans use waves)
+
+Requires: =waves= template variable from FEAT-122, =orgItemClosingId= field from FEAT-119.
+
+* Tests
+No automated tests -- prompt-only. Verification by reading files.
+
+* Implementation
+** Step 1: Replace todo initialization in plan-mode-approved.md
+- Remove old 1-task-per-org-item instruction
+- Add wave-based todo initialization:
+  - Create one todo phase per wave, named after the wave
+  - Each wave entry becomes a task in that phase
+  - Set =orgItemId= (non-gating) on ALL tasks for lineage tracking
+  - Set =orgItemClosingId= (gating) ONLY on the LAST wave task for each org item
+  - Cross-wave blockers: if orgItemId X appears in wave N and wave N-1, wave N task blocks on wave N-1 task
+  - Tasks within same wave: parallelize via =task= subagents with =todoRef=
+  - Read child org items via =org get= to populate task details from matching sub-outline step
+
+** Step 2: Update todo-write.md with wave example
+- Show phases named after waves
+- Multiple tasks per phase with different orgItemIds
+- =orgItemClosingId= on final-wave tasks
+- Cross-wave blocker pattern
+- Example:
+#+begin_example
+ops: [{op: "replace", phases: [
+  {name: "foundation", tasks: [
+    {content: "Define type interfaces", orgItemId: "FEAT-001", details: "Sub-outline FEAT-001::define-types"},
+    {content: "Define parser schema", orgItemId: "FEAT-002", details: "Sub-outline FEAT-002::define-schema"}
+  ]},
+  {name: "verify", tasks: [
+    {content: "Write type tests", orgItemId: "FEAT-001", orgItemClosingId: "FEAT-001", blockers: ["task-1"], gateCmd: "bun test test/types.test.ts"},
+    {content: "Write parser tests", orgItemId: "FEAT-002", orgItemClosingId: "FEAT-002", blockers: ["task-2"], gateCmd: "bun test test/parser.test.ts"}
+  ]}
+]}]
+#+end_example
+
+** Step 3: Replace BLOCKER references with DEPENDS
+- Any remaining =:BLOCKER:= references in plan-mode-approved.md become =:DEPENDS:=
+
+* Edge Cases
+- Single-wave plan: all tasks in one phase, all get =orgItemClosingId= (each is the last for its item)
+- Org item with steps in only some waves: =orgItemClosingId= goes on last wave task, regardless of which wave
+- Wave with zero entries: skip (don't create empty phase)
+
+* Acceptance Criteria
+- plan-mode-approved.md renders wave-based todo initialization
+- todo-write.md has wave-based example with =orgItemClosingId= and cross-wave blockers
+- No references to =BLOCKER= as org property remain
+- Example shows correct =orgItemClosingId= placement (only on final-wave task per org item)

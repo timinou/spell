@@ -11,7 +11,7 @@ function renderTicketOrg(ticket: ManifestTicket): string {
 	if (ticket.effort) lines.push(`:EFFORT: ${ticket.effort}`);
 	if (ticket.priority) lines.push(`:PRIORITY: ${ticket.priority}`);
 	if (ticket.layer) lines.push(`:LAYER: ${ticket.layer}`);
-	if (ticket.dependencies.length > 0) lines.push(`:BLOCKER: ${ticket.dependencies.join(" ")}`);
+	if (ticket.dependencies.length > 0) lines.push(`:DEPENDS: ${ticket.dependencies.join(" ")}`);
 	if (ticket.triggers.length > 0) lines.push(`:TRIGGER: ${ticket.triggers.join(" ")}`);
 	for (const gate of ticket.gates) {
 		if (gate.type === "command") lines.push(`:GATE_CMD: ${gate.command}`);

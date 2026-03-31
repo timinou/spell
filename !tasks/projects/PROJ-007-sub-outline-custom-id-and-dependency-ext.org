@@ -1,0 +1,93 @@
+#+TITLE: Sub-outline CUSTOM_ID and Dependency Extension
+#+STATE: DONE
+#+SESSION_ID: 14a8261522fe5f30
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2/20-CreateProjB.jsonl]]
+#+CUSTOM_ID: PROJ-007-sub-outline-custom-id-and-dependency-ext
+#+EFFORT: 5h
+#+PRIORITY: #A
+#+LAYER: infra
+
+NOTE [2026-03-31]: CUSTOM_ID_REGEXP updated for ::sub-slug. extractIdLinks captures sub-outline IDs. parseSubOutlineId utility added. Tests pass.
+
+* Scope
+** In-scope
+- Sub-outline CUSTOM_ID format: =PARENT-ID::sub-slug= (e.g., =FEAT-001::define-types=). Globally unique by parent prefix.
+- =packages/org/src/schema/defaults.ts=: update =CUSTOM_ID_REGEXP= to accept =::slug= suffix
+- =packages/org/src/id-links.ts=: update =extractIdLinks= regex to match =[[id:FEAT-001::define-types]]=
+- =packages/org/elisp/tools/org-dependency-graph.el=: extend to handle sub-outline DEPENDS refs containing =::=
+- =packages/org/src/org-parse.ts=: verify =parseOrgHeadings()= already extracts CUSTOM_ID from nested sub-headings (confirmed: it does)
+- Roundtrip test: write org file with =::= CUSTOM_IDs, parse with org-element in elisp, verify no data loss
+
+** Out-of-scope
+- Wave computation (PROJ emergent wave computation)
+- BLOCKER to DEPENDS migration (PROJ consolidation)
+- Changes to coding-agent package
+
+Boundary: this item makes sub-outline CUSTOM_IDs a first-class concept in the org infrastructure. It does NOT compute waves -- that builds on top of this.
+
+* Tests
+File: =packages/org/test/sub-outline-ids.test.ts=
+
+** Scenario: extractIdLinks parses :: CUSTOM_IDs from [[id:...]] links
+- Input: text containing =[[id:FEAT-001::define-types]]= and =[[id:FEAT-001]]=
+- Expected: both IDs extracted, including the :: variant
+
+** Scenario: CUSTOM_ID_REGEXP validates :: format
+- =FEAT-001::define-types= passes validation
+- =FEAT-001::= fails (empty slug)
+- =::define-types= fails (no parent)
+- =FEAT-001= still passes (top-level, unchanged)
+
+** Scenario: parseOrgHeadings extracts sub-heading CUSTOM_IDs
+- Input: org body with =** Step heading= having =:CUSTOM_ID: FEAT-001::define-types= in properties drawer
+- Expected: OrgHeading with properties["CUSTOM_ID"] = "FEAT-001::define-types"
+
+** Scenario: elisp org-element roundtrip with :: CUSTOM_IDs
+- Write org file with =:CUSTOM_ID: FEAT-001::define-types= on a sub-heading
+- Call elisp MCP tool to read it back
+- Verify CUSTOM_ID value preserved exactly (:: not mangled by org-archive or other internals)
+
+** Scenario: dependency graph handles sub-outline DEPENDS
+- Org item with =:DEPENDS: FEAT-001::define-types FEAT-002::schema=
+- Dependency graph includes edges from those sub-outline IDs
+
+* Implementation
+Preferred sequencing: regex updates first (enable the format), then elisp extension, then roundtrip tests.
+
+** Step 1: Update =CUSTOM_ID_REGEXP= in =packages/org/src/schema/defaults.ts=
+- Change from =/^[A-Z]+-\d+(-[a-z0-9-]+)?$/= to =/^[A-Z]+-\d+(-[a-z0-9-]+)?(::[a-z0-9-]+)?$/=
+- The =::[a-z0-9-]+= suffix is optional, preserving backward compat
+
+** Step 2: Update =extractIdLinks= in =packages/org/src/id-links.ts=
+- Change regex from =/\[\[id:([A-Z]+-\d+(?:-[a-z0-9-]+)?)\]\]/g=
+- To: =/\[\[id:([A-Z]+-\d+(?:-[a-z0-9-]+)?(?:::[a-z0-9-]+)?)\]\]/g=
+- Adds optional =(?:::[a-z0-9-]+)?= suffix
+
+** Step 3: Extend elisp dependency graph for :: IDs
+- In =org-dependency-graph.el=, =org-mcp--parse-space-separated= already splits on whitespace
+- DEPENDS value like =FEAT-001::define-types FEAT-002::schema= will split correctly
+- Verify edges include :: IDs in from/to fields
+- May need to update =org-mcp--collect-graph-nodes= to collect sub-heading CUSTOM_IDs
+
+** Step 4: Verify parseOrgHeadings handles nested CUSTOM_IDs
+- Already confirmed working -- just add test coverage
+
+** Step 5: Export utility for parsing :: IDs
+- Function: =parseSubOutlineId(id: string): { parentId: string, subSlug: string } | null=
+- Returns null for top-level IDs (no :: separator)
+- Export from =packages/org/src/id-links.ts= or new file
+
+* Edge Cases
+- =::= in CUSTOM_ID value within org property drawer: =:CUSTOM_ID: FEAT-001::slug= -- property parser reads value as everything after =: = to end of line, so =::= is part of the value. Verified safe.
+- =[[id:FEAT-001::slug]]= in org link: org-element parses link target as string, =::= is just characters. Verify with roundtrip test.
+- DEPENDS with mix of top-level and sub-outline IDs: =DEPENDS: FEAT-001 FEAT-002::schema= -- space-separated parser handles both
+- Empty sub-slug: =FEAT-001::= -- should fail CUSTOM_ID_REGEXP validation
+- Parent ID doesn't exist: validation should warn (dangling reference)
+
+* Acceptance Criteria
+- =bun test packages/org/test/sub-outline-ids.test.ts= passes
+- =FEAT-001::define-types= passes CUSTOM_ID_REGEXP validation
+- =[[id:FEAT-001::define-types]]= is extracted by =extractIdLinks()=
+- Elisp roundtrip test confirms =::= CUSTOM_IDs survive org-element parse
+- =parseSubOutlineId()= correctly splits parent ID and sub-slug
+- Dependency graph includes edges for sub-outline DEPENDS refs

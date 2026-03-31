@@ -41,7 +41,7 @@ Child item requirements (`org create`):
 - Test-first planning is preferred when practical: define test scenarios and test file paths before detailing implementation; for refactors or infrastructure work where that sequencing is not the best fit, note the preferred sequencing explicitly
 - If UI, browser, or visual behavior matters, name the required screenshot/artifact and what it must prove
 - For documentation artifacts (org items, spec files, config files), verification is a reference to the created file path or org item ID — screenshots are not needed
-- When a child item depends on another child item, set `:BLOCKER:` property via `properties: { BLOCKER: "ITEM-ID-1 ITEM-ID-2" }` in the `org create` call (space-separated CUSTOM_IDs)
+- When a child item depends on another child item, set `:DEPENDS:` property via `properties: { DEPENDS: "ITEM-ID-1 ITEM-ID-2" }` in the `org create` call (space-separated CUSTOM_IDs)
 
 PLAN item requirements (`org create` in `{{planCategory}}`):
 - `state: "INIT"`
@@ -56,7 +56,7 @@ Example flow:
 org create -> { category: "features", title: "Add Auth API", state: "ITEM", ... }
 -> returns FEAT-001-add-auth-api
 
-org create -> { category: "bugs", title: "Fix Token Refresh", state: "ITEM", properties: { BLOCKER: "FEAT-001-add-auth-api" }, ... }
+org create -> { category: "bugs", title: "Fix Token Refresh", state: "ITEM", properties: { DEPENDS: "FEAT-001-add-auth-api" }, ... }
 -> returns BUG-001-fix-token-refresh
 
 org create -> {
@@ -217,18 +217,50 @@ If Daedalus rejects, revise and re-propose to user until accepted.
 Every child org item body **MUST** include all sections below:
 - **Scope** — explicit in-scope and out-of-scope boundaries, with the boundary rationale
 - **Tests** — per-item unit/integration/E2E (for example Playwright) test requirements with file paths and concrete scenarios; define the scenarios and paths before implementation details when practical so they drive design; you **MUST NOT** lump tests into a single separate testing item
-- **Implementation** — explicit file paths, module/function names, required type signatures for public APIs, and ordered implementation steps that reference the test scenarios they satisfy; executors should write tests before implementation when practical
+- **Implementation** — each step has a sub-heading with `:CUSTOM_ID: PARENT-ID::sub-slug` and optional `:DEPENDS:` property. Steps reference test scenarios they satisfy. Example:
+  ```
+  ** Define TypeScript interfaces
+  :PROPERTIES:
+  :CUSTOM_ID: FEAT-001::define-types
+  :END:
+  - File: src/types/foo.ts
+
+  ** Implement core parser
+  :PROPERTIES:
+  :CUSTOM_ID: FEAT-001::implement-parser
+  :DEPENDS: FEAT-001::define-types
+  :END:
+  - File: src/parser.ts
+  ```
 - **Edge Cases** — failure modes, error codes, degradation behavior, race conditions, and recovery expectations
 - **Acceptance Criteria** — falsifiable, manually checkable outcomes with specific observable results
+- **Implementation steps** — each step **MUST** have a sub-heading with CUSTOM_ID using `PARENT-ID::sub-slug` format (e.g., `FEAT-001::define-types`). Steps declare dependencies via `:DEPENDS:` property referencing other sub-outline IDs. These sub-outline IDs enable wave-based parallel execution.
 - File paths **MUST** be explicit (for example `lib/myapp/foo/bar.ex`), not vague directory references
 - Dependencies **MUST** name the exact artifact needed (for example "requires Conversation schema from PROJ-A"), not only the parent item ID
-- Dependencies **MUST** be expressed as `:BLOCKER:` properties on the org item (space-separated CUSTOM_IDs), not only narrative text. Create dependency targets before dependent items when parallelizing creation.
+- Dependencies **MUST** be expressed as `:DEPENDS:` properties on the org item (space-separated CUSTOM_IDs), not only narrative text. Create dependency targets before dependent items when parallelizing creation.
 
 ### Phase 5: Create Org Items + Exit
 After user confirmation and Daedalus approval:
 1. Create children first (`state: "ITEM"`)
 2. Create PLAN last (`state: "INIT"`) with `[[id:…]]` manifest links
 3. Call `{{exitToolName}}` with PLAN `itemId`
+4. Before calling `{{exitToolName}}`, use `org wave` on the category to compute wave structure from the sub-outline dependency graph
+5. Structure the PLAN's Execution Manifest using wave headings with `:wave:` tag:
+
+```
+* Execution Manifest
+** foundation                                      :wave:
+- [[id:FEAT-001::define-types]] Define TypeScript interfaces (2h)
+- [[id:FEAT-002::define-schema]] Define parser schema types (1h)
+** core                                            :wave:
+- [[id:FEAT-001::implement-parser]] Implement parser logic (3h, depends FEAT-001::define-types)
+- [[id:FEAT-002::implement-validator]] Implement validation (2h, depends FEAT-002::define-schema)
+** verify                                          :wave:
+- [[id:FEAT-001::write-tests]] Write parser tests (1h, depends FEAT-001::implement-parser)
+- [[id:FEAT-002::write-tests]] Write validator tests (1h, depends FEAT-002::implement-validator)
+```
+
+Waves are NOT manually assigned. They emerge from topological sorting of the sub-outline dependency graph. The `org wave` command computes them. Wave names are chosen by the planner to be descriptive.
 
 When creating many org items, parallelize with `task` subagents (subagents have org access). Treat org create/update as mechanical fan-out work, then aggregate child IDs before creating the PLAN item. Example:
 

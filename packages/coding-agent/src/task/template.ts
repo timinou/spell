@@ -48,10 +48,13 @@ export function resolveVerificationContext(todoRef: string, phases: TodoPhase[])
 	if (task.gateCommit) lines.push("You MUST commit changes before yielding.");
 	if (task.gateLlm) lines.push(`You MUST self-review against: ${task.gateLlm}`);
 	if (task.verifyCmd) lines.push(`You SHOULD run: \`${task.verifyCmd}\` to verify.`);
-	if (task.orgItemId) {
+	if (task.orgItemClosingId) {
 		lines.push(
-			`You MUST update org item ${task.orgItemId}: set to DOING at start, update with progress, and append completion report when done.`,
+			`You MUST update org item ${task.orgItemClosingId}: set to DOING at start, update with progress, and append completion report when done.`,
 		);
+	}
+	if (task.orgItemId && !task.orgItemClosingId) {
+		lines.push(`Linked to org item ${task.orgItemId} for lineage tracking (non-gating).`);
 	}
 
 	if (lines.length === 0) return undefined;

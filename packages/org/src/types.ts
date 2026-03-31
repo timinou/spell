@@ -240,3 +240,18 @@ export interface MemoryEntry {
 	tags?: string[];
 	body: string;
 }
+
+// =============================================================================
+// Wave computation types
+// =============================================================================
+
+export interface WaveItem {
+	custom_id: string;
+	parent_id: string;
+	title: string;
+}
+
+export interface ComputedWave {
+	number: number;
+	items: WaveItem[];
+}

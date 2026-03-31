@@ -33,8 +33,10 @@ export interface TodoItem {
 	gateLlm?: string;
 	verifyCmd?: string;
 	blockers?: string[];
-	/** Org item ID this task is linked to. Triggers verification protocol on completion. */
+	/** Non-gating reference to org item. Tracks lineage without triggering verification. */
 	orgItemId?: string;
+	/** Gating reference. Triggers two-phase verification protocol on completion. */
+	orgItemClosingId?: string;
 }
 
 export interface TodoPhase {
@@ -69,7 +71,10 @@ const InputTask = Type.Object({
 	gateLlm: Type.Optional(Type.String({ description: "LLM review criteria" })),
 	verifyCmd: Type.Optional(Type.String({ description: "Recommended verification command" })),
 	blockers: Type.Optional(Type.Array(Type.String({ description: "Task ID that blocks this task" }))),
-	orgItemId: Type.Optional(Type.String({ description: "Org item ID this task is linked to" })),
+	orgItemId: Type.Optional(Type.String({ description: "Org item ID for lineage tracking (non-gating)" })),
+	orgItemClosingId: Type.Optional(
+		Type.String({ description: "Org item ID that triggers two-phase verified completion" }),
+	),
 });
 
 const InputPhase = Type.Object({
@@ -102,6 +107,7 @@ const todoWriteSchema = Type.Object({
 				verifyCmd: Type.Optional(Type.String()),
 				blockers: Type.Optional(Type.Array(Type.String())),
 				orgItemId: Type.Optional(Type.String()),
+				orgItemClosingId: Type.Optional(Type.String()),
 			}),
 			Type.Object({
 				op: Type.Literal("update"),
@@ -117,6 +123,7 @@ const todoWriteSchema = Type.Object({
 				verifyCmd: Type.Optional(Type.String()),
 				blockers: Type.Optional(Type.Array(Type.String())),
 				orgItemId: Type.Optional(Type.String()),
+				orgItemClosingId: Type.Optional(Type.String()),
 				verified: Type.Optional(
 					Type.Boolean({
 						description: "Set true after verifying all gate requirements. Required to complete a gated task.",
@@ -180,6 +187,7 @@ function buildPhaseFromInput(
 			verifyCmd: t.verifyCmd,
 			blockers: t.blockers,
 			orgItemId: t.orgItemId,
+			orgItemClosingId: t.orgItemClosingId,
 		});
 	}
 	return { phase: { id: phaseId, name: input.name, tasks }, nextTaskId: tid };
@@ -300,7 +308,7 @@ export function hasGate(task: TodoItem): boolean {
 
 /** Returns true when the task has gates that require two-phase verified completion. */
 export function hasRequiredGate(task: TodoItem): boolean {
-	return !!(task.gateCommit || task.gateArtifact || task.gateCmd || task.gateLlm || task.orgItemId);
+	return !!(task.gateCommit || task.gateArtifact || task.gateCmd || task.gateLlm || task.orgItemClosingId);
 }
 
 function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: TodoPhase[]): ApplyOpsResult {
@@ -362,6 +370,7 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 					verifyCmd: op.verifyCmd,
 					blockers: op.blockers,
 					orgItemId: op.orgItemId,
+					orgItemClosingId: op.orgItemClosingId,
 				});
 				break;
 			}
@@ -384,6 +393,7 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 				if (op.verifyCmd !== undefined) task.verifyCmd = op.verifyCmd;
 				if (op.blockers !== undefined) task.blockers = op.blockers;
 				if (op.orgItemId !== undefined) task.orgItemId = op.orgItemId;
+				if (op.orgItemClosingId !== undefined) task.orgItemClosingId = op.orgItemClosingId;
 
 				// Smart gate: reject in_progress transition when task has unresolved blockers
 				if (op.status === "in_progress") {
@@ -461,7 +471,7 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 			if (
 				task.status === "completed" &&
 				previousStatus.get(task.id) !== "completed" &&
-				(hasGate(task) || task.orgItemId)
+				(hasGate(task) || task.orgItemClosingId)
 			) {
 				completedGatedTasks.push(task);
 			}
@@ -479,7 +489,9 @@ function gateDirectivesForTask(task: TodoItem): string[] {
 	if (task.gateCmd) lines.push(`REQUIRED: Run \`${task.gateCmd}\` to verify ${task.id}.`);
 	if (task.gateLlm) lines.push(`REQUIRED: Review ${task.id} against acceptance criteria: ${task.gateLlm}`);
 	if (task.verifyCmd) lines.push(`RECOMMENDED: Run \`${task.verifyCmd}\` to verify ${task.id}.`);
-	if (task.orgItemId) lines.push(`REQUIRED: Update org item ${task.orgItemId} for ${task.id}.`);
+	if (task.orgItemClosingId) lines.push(`REQUIRED: Update org item ${task.orgItemClosingId} to DONE for ${task.id}.`);
+	if (task.orgItemId && !task.orgItemClosingId)
+		lines.push(`INFO: Linked to org item ${task.orgItemId} (non-gating lineage).`);
 	return lines;
 }
 
@@ -582,7 +594,7 @@ export function formatSummary({
 		for (const phaseId of completedPhaseIds) {
 			const phase = phases.find(p => p.id === phaseId);
 			if (!phase) continue;
-			const gatedInPhase = phase.tasks.filter(t => hasGate(t) || t.orgItemId);
+			const gatedInPhase = phase.tasks.filter(t => hasGate(t) || t.orgItemClosingId);
 			if (gatedInPhase.length === 0) continue;
 			const actions: string[] = [];
 			if (gatedInPhase.some(t => t.gateCommit)) actions.push("Commit changes.");
@@ -602,7 +614,8 @@ export function formatSummary({
 			if (task.gateArtifact) lines.push(`  [ ] Verify artifact at ${task.gateArtifact} (gateArtifact)`);
 			if (task.gateCommit) lines.push(`  [ ] Commit changes (gateCommit)`);
 			if (task.gateLlm) lines.push(`  [ ] Review against: ${task.gateLlm} (gateLlm)`);
-			if (task.orgItemId) lines.push(`  [ ] Update org item ${task.orgItemId} (orgItemId)`);
+			if (task.orgItemClosingId)
+				lines.push(`  [ ] Update org item ${task.orgItemClosingId} to DONE (orgItemClosingId)`);
 			lines.push("");
 			lines.push(
 				`Complete these steps, then call todo_write with {op: "update", id: "${task.id}", status: "completed", verified: true}.`,
@@ -689,7 +702,8 @@ function renderGateBadges(item: TodoItem, uiTheme: Theme): string {
 	if (item.gateCmd) badges.push("[cmd]");
 	if (item.gateLlm) badges.push("[llm]");
 	if (item.verifyCmd) badges.push("[verify]");
-	if (item.orgItemId) badges.push(`[org: ${item.orgItemId}]`);
+	if (item.orgItemClosingId) badges.push(`[org-closing: ${item.orgItemClosingId}]`);
+	if (item.orgItemId && !item.orgItemClosingId) badges.push(`[org: ${item.orgItemId}]`);
 	if (badges.length === 0) return "";
 	return ` ${uiTheme.fg("dim", badges.join(" "))}`;
 }

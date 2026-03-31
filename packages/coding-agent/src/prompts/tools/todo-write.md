@@ -90,14 +90,15 @@ task-3 and task-4 both depend on task-1 (schema). task-5 depends on both task-3 
 - `gateCmd`: Command that must pass to verify the task (e.g., `bun test test/foo.test.ts`).
 - `gateLlm`: Acceptance criteria the AI should self-review against.
 - `verifyCmd`: Recommended (not required) verification command.
-- `orgItemId`: Org item ID this task is linked to. When set, completion directives include org item lifecycle updates.
+- `orgItemId`: Org item ID for lineage tracking. Non-gating — does not trigger verification protocol.
+- `orgItemClosingId`: Org item ID that triggers verification. When set, completion requires two-phase verified completion.
 - `blockers`: Array of task IDs that must complete before this task can start.
 
 When implementing plan items, set gate fields to track required deliverables. The tool response will inject directives when gated tasks are completed.
 
 ## Verification Protocol
 
-Tasks with **required gates** (`gateCommit`, `gateArtifact`, `gateCmd`, `gateLlm`, or `orgItemId`) use two-phase completion:
+Tasks with **required gates** (`gateCommit`, `gateArtifact`, `gateCmd`, `gateLlm`, or `orgItemClosingId`) use two-phase completion:
 1. **First attempt**: marking a gated task `completed` without `verified: true` is **rejected**. The tool returns a verification checklist showing each gate requirement.
 2. **After verification**: re-submit the update with `verified: true` to complete the task.
 
@@ -160,10 +161,31 @@ Complete a gated task after verification:
 </example>
 
 <example name="org-linked-task">
-Create a task linked to an org item:
+Create a task linked to an org item with gating verification:
 ops: [{op: "replace", phases: [
   {name: "Implementation", tasks: [
-    {content: "Add auth module", orgItemId: "FEAT-001-add-auth", gateCmd: "bun test test/auth.test.ts", gateCommit: true}
+    {content: "Add auth module", orgItemClosingId: "FEAT-001-add-auth", gateCmd: "bun test test/auth.test.ts", gateCommit: true}
+  ]}
+]}]
+
+Create a task with non-gating org lineage:
+ops: [{op: "replace", phases: [
+  {name: "Implementation", tasks: [
+    {content: "Refactor helpers", orgItemId: "FEAT-001-add-auth", gateCommit: true}
+  ]}
+]}]
+</example>
+
+<example name="wave-based-plan">
+Create wave-based todo list from a plan's Execution Manifest. Each wave is a phase; tasks within a wave are parallelizable. `orgItemId` tracks lineage (non-gating). `orgItemClosingId` on the final wave task per org item triggers verification.
+ops: [{op: "replace", phases: [
+  {name: "foundation", tasks: [
+    {content: "Define type interfaces", orgItemId: "FEAT-001", details: "Sub-outline FEAT-001::define-types"},
+    {content: "Define parser schema", orgItemId: "FEAT-002", details: "Sub-outline FEAT-002::define-schema"}
+  ]},
+  {name: "verify", tasks: [
+    {content: "Write type tests", orgItemId: "FEAT-001", orgItemClosingId: "FEAT-001", blockers: ["task-1"], gateCmd: "bun test test/types.test.ts"},
+    {content: "Write parser tests", orgItemId: "FEAT-002", orgItemClosingId: "FEAT-002", blockers: ["task-2"], gateCmd: "bun test test/parser.test.ts"}
   ]}
 ]}]
 </example>

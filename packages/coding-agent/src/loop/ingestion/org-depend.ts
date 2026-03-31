@@ -2,7 +2,7 @@
  * Parser for org-depend properties — extracts dependency graphs from org file PROPERTIES drawers.
  *
  * Supports:
- * - :BLOCKER: space-separated IDs
+ * - :DEPENDS: space-separated IDs (legacy: :BLOCKER:)
  * - :TRIGGER: space-separated ID(KEYWORD) expressions
  * - :GATE_CMD:, :GATE_ARTIFACT:, :GATE_LLM: single-value properties
  * - Standard: :CUSTOM_ID:, :EFFORT:, :PRIORITY:, :LAYER:
@@ -141,7 +141,8 @@ export function parseOrgDependProperties(content: string): OrgDependProperties[]
 		const customId = extractProperty(h.propertiesBlock, "CUSTOM_ID");
 		if (!customId) continue;
 
-		const blockerRaw = extractProperty(h.propertiesBlock, "BLOCKER") ?? "";
+		const blockerRaw =
+			extractProperty(h.propertiesBlock, "DEPENDS") ?? extractProperty(h.propertiesBlock, "BLOCKER") ?? "";
 		const blockers = blockerRaw.split(/\s+/).filter(s => s.length > 0);
 
 		const triggerRaw = extractProperty(h.propertiesBlock, "TRIGGER") ?? "";
@@ -226,7 +227,7 @@ function detectCycles(adjacency: Map<string, string[]>, nodeIds: Set<string>): s
 
 /**
  * Build a directed dependency graph from parsed properties.
- * Edges: from=blocker (dependency), to=the item that declared the blocker (dependent).
+ * Edges: from=dependency, to=the item that declared the dependency (dependent).
  */
 export function buildDependencyGraph(properties: OrgDependProperties[]): DependencyGraph {
 	const nodes = new Map<string, OrgDependProperties>();

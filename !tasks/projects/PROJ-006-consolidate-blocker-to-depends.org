@@ -1,0 +1,86 @@
+#+TITLE: Consolidate BLOCKER to DEPENDS
+#+STATE: DONE
+#+SESSION_ID: 14a82615267e5f34
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2/21-CreateProjC.jsonl]]
+#+CUSTOM_ID: PROJ-006-consolidate-blocker-to-depends
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: infra
+
+NOTE [2026-03-31]: Renamed BLOCKER to DEPENDS across all TS code and prompts. org-depend.ts reads DEPENDS first with BLOCKER fallback. All writers output DEPENDS. Tests pass.
+
+* Scope
+** In-scope
+- Rename =BLOCKER= property to =DEPENDS= in all TypeScript code (elisp already uses DEPENDS)
+- =packages/coding-agent/src/loop/ingestion/org-depend.ts=: parse =DEPENDS= instead of =BLOCKER=
+- =packages/coding-agent/src/loop/persistence/manifest-writer.ts=: write =:DEPENDS:= instead of =:BLOCKER:=
+- =packages/coding-agent/src/loop/persistence/manifest-reader.ts=: read =DEPENDS= instead of =BLOCKER=
+- =packages/org/src/journal.ts=: write =DEPENDS= instead of =BLOCKER=
+- All prompts referencing =:BLOCKER:= property: plan-mode-active.md, plan-mode-approved.md, todo-write.md, agent prompts
+- Migration: handle existing org files with =:BLOCKER:= (read both, write DEPENDS)
+
+** Out-of-scope
+- Todo-write =blockers= runtime field: this is a DIFFERENT concept (runtime task deps, array of task IDs). Stays as-is.
+- Elisp changes: elisp already uses =DEPENDS/BLOCKS=, no changes needed.
+- Wave computation (separate PROJ)
+
+Boundary: purely a naming consolidation. Eliminates the BLOCKER/DEPENDS naming inconsistency between TS and elisp.
+
+* Tests
+File: =packages/coding-agent/test/loop/org-depend-parser.test.ts= (update existing)
+File: =packages/org/test/journal.test.ts= (update existing)
+
+** Scenario: org-depend parser reads DEPENDS property
+- Org heading with =:DEPENDS: FEAT-001 FEAT-002=
+- Parser extracts both as dependency IDs
+
+** Scenario: org-depend parser reads legacy BLOCKER for backward compat
+- Org heading with =:BLOCKER: FEAT-001= (old format)
+- Parser still extracts it (reads both BLOCKER and DEPENDS, prefers DEPENDS)
+
+** Scenario: manifest writer uses DEPENDS
+- Create manifest ticket
+- Verify org output contains =:DEPENDS:= not =:BLOCKER:=
+
+** Scenario: journal writes DEPENDS
+- Create journal entry with dependencies
+- Verify =:DEPENDS:= in output
+
+* Implementation
+Preferred sequencing: parser changes first (read DEPENDS), then writer changes (write DEPENDS), then prompt changes.
+
+** Step 1: Update org-depend.ts parser
+- =extractProperty(h.propertiesBlock, "BLOCKER")= -> read both =DEPENDS= and =BLOCKER=, prefer DEPENDS
+- This provides backward compat with existing org files
+
+** Step 2: Update manifest-writer.ts
+- =:BLOCKER:= -> =:DEPENDS:= in renderTicketOrg()
+
+** Step 3: Update manifest-reader.ts
+- Read =DEPENDS= property instead of =BLOCKER=
+
+** Step 4: Update journal.ts
+- Write =:DEPENDS:= instead of =:BLOCKER:=
+
+** Step 5: Update prompts
+- plan-mode-active.md: =properties: { BLOCKER: ... }= -> =properties: { DEPENDS: ... }=
+- plan-mode-approved.md: =:BLOCKER: properties= -> =:DEPENDS: properties=
+- Any other prompts referencing BLOCKER as org property
+
+** Step 6: Update tests
+- org-depend-parser.test.ts: test both DEPENDS and legacy BLOCKER reading
+- manifest-roundtrip.test.ts: update expected output
+- journal.test.ts: update expected output
+
+* Edge Cases
+- Existing org files with =:BLOCKER:=: backward compat reader handles both
+- Files with BOTH =:BLOCKER:= and =:DEPENDS:=: DEPENDS wins (explicit precedence)
+- Loop resume with old manifest using =:BLOCKER:=: reader handles both, no breakage
+- Todo-write =blockers= field unchanged: runtime concept, different from org DEPENDS
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/loop/= passes (all loop tests)
+- =bun test packages/org/test/journal.test.ts= passes
+- No occurrence of =BLOCKER= as org property name in non-test TS files (grep verify)
+- Existing org files with =:BLOCKER:= still parse correctly (backward compat)
+- Manifest output uses =:DEPENDS:= exclusively

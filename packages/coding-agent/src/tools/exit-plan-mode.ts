@@ -41,6 +41,20 @@ function normalizePlanTitle(title: string): { title: string; fileName: string } 
 	return { title: normalizedTitle, fileName };
 }
 
+export interface PlanWaveEntry {
+	/** Sub-outline CUSTOM_ID (e.g., FEAT-001::define-types). */
+	orgItemId: string;
+	/** Description of the step. */
+	step: string;
+}
+
+export interface PlanWave {
+	/** Wave name (e.g., "foundation", "core"). */
+	name: string;
+	/** Entries in this wave — parallelizable. */
+	entries: PlanWaveEntry[];
+}
+
 export interface ExitPlanModeDetails {
 	planFilePath: string;
 	planExists: boolean;
@@ -54,6 +68,39 @@ export interface ExitPlanModeDetails {
 	planContent?: string;
 	/** Child CUSTOM_ID references extracted from [[id:...]] links in PLAN body. */
 	childItemIds?: string[];
+	/** Wave structure extracted from Execution Manifest. */
+	waves?: PlanWave[];
+}
+
+/**
+ * Extract wave structure from plan body's Execution Manifest.
+ *
+ * Looks for `** wave-name :wave:` headings followed by `- [[id:...]] description` entries.
+ * Returns undefined if no wave headings are found (backward compat with flat manifests).
+ */
+export function extractPlanWaves(body: string): PlanWave[] | undefined {
+	const waveRe = /^\*\*\s+(.+?)\s+:wave:\s*$/;
+	const entryRe = /^-\s+\[\[id:([^\]]+)\]\]\s+(.+)$/;
+	const lines = body.split("\n");
+	const waves: PlanWave[] = [];
+	let current: PlanWave | null = null;
+
+	for (const line of lines) {
+		const waveMatch = waveRe.exec(line);
+		if (waveMatch) {
+			current = { name: waveMatch[1].trim(), entries: [] };
+			waves.push(current);
+			continue;
+		}
+		if (current) {
+			const entryMatch = entryRe.exec(line);
+			if (entryMatch) {
+				current.entries.push({ orgItemId: entryMatch[1], step: entryMatch[2] });
+			}
+		}
+	}
+
+	return waves.length > 0 ? waves : undefined;
 }
 
 export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, ExitPlanModeDetails> {
@@ -116,9 +163,15 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 					`PLAN item "${params.itemId}" references missing child items: ${missingChildIds.join(", ")}.`,
 				);
 			}
+			const waves = extractPlanWaves(item.body);
 
 			return {
-				content: [{ type: "text", text: `Plan ready for approval (${childItemIds.length} linked child items).` }],
+				content: [
+					{
+						type: "text",
+						text: `Plan ready for approval (${childItemIds.length} linked child items${waves ? `, ${waves.length} waves` : ""}).`,
+					},
+				],
 				details: {
 					planFilePath: state.planFilePath,
 					planExists: true,
@@ -128,6 +181,7 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 					orgItemFile: item.file,
 					planContent: item.body,
 					childItemIds,
+					waves,
 				},
 			};
 		}

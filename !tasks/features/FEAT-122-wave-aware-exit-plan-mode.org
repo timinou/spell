@@ -1,0 +1,82 @@
+#+TITLE: Wave-aware Exit Plan Mode
+#+STATE: DONE
+#+SESSION_ID: 14a781d021545ee2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2.jsonl]]
+#+CUSTOM_ID: FEAT-122-wave-aware-exit-plan-mode
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: backend
+#+BLOCKER: FEAT-121-wave-manifest-generation
+
+NOTE [2026-03-31]: extractPlanWaves() parses :wave: tagged headings from plan body. PlanWave/PlanWaveEntry types added. Waves threaded through #approvePlan to template context. Tests pass.
+
+* Initial Message
+
+Bro how can you make Todo Write use the tasks INSIDE the FEAT and PROJ of the execution manifests, instead of having one task per file which limits the parallelisability of the TODO write. Do you feel me? Is this a prompting thing? Can you imagine the Dependency Graph of planning an ultraplanning even deeper?
+
+* Scope
+** In-scope
+- =packages/coding-agent/src/tools/exit-plan-mode.ts=: extract waves from Execution Manifest (always, not optional)
+- =packages/coding-agent/src/modes/interactive-mode.ts=: pass waves through #approvePlan to template context
+- Wave extraction uses elisp (Emacs is hard dependency, always running)
+- Add =waves= to ExitPlanModeDetails
+- Validate wave structure: all referenced sub-outline IDs must exist
+- Tests
+
+** Out-of-scope
+- Wave computation (PROJ-008)
+- Manifest generation (FEAT-121)
+- Prompt template content (FEAT executor prompts)
+- todo-write changes (FEAT orgItemId split)
+
+Boundary: this item wires wave data from PLAN body through exit-plan-mode and approval to the executor session template context.
+
+Requires: wave manifest format from FEAT-121, wave types from PROJ-008.
+
+* Tests
+File: =packages/coding-agent/test/tools/exit-plan-mode.test.ts= (extend existing)
+
+** Scenario: PLAN with wave-structured manifest returns waves in details
+- Create PLAN org body with =:wave:= tagged headings + =[[id:...]]= entries
+- Create matching child items with sub-outline CUSTOM_IDs
+- Call exit-plan-mode
+- Assert =details.waves= populated with correct structure
+
+** Scenario: PLAN without wave structure fails validation
+- Create PLAN org body with flat =[[id:...]]= links (no waves)
+- Call exit-plan-mode
+- Assert error or warning: waves required (always-waves mandate)
+
+** Scenario: Wave entry references non-existent sub-outline
+- Create PLAN with =[[id:FEAT-001::missing-step]]= in wave
+- Call exit-plan-mode
+- Assert validation error
+
+* Implementation
+** Step 1: Add wave types to ExitPlanModeDetails
+#+begin_src typescript
+import type { Wave } from "@oh-my-pi/pi-org";
+// Add to ExitPlanModeDetails:
+waves?: Wave[];
+#+end_src
+
+** Step 2: Extract waves in execute()
+- After extracting childItemIds, call elisp =org-extract-plan-waves= or parse with =extractPlanWaves()=
+- Include waves in return details
+- Validate: all wave entry IDs must be resolvable
+
+** Step 3: Pass waves through approval flow
+- Thread waves from ExitPlanModeDetails -> handleExitPlanModeTool -> #approvePlan -> renderPromptTemplate
+- Template receives =waves= as Handlebars variable
+
+* Edge Cases
+- Emacs unavailable: hard error (Emacs is hard dependency per user decision)
+- Wave with entries from different files: valid (cross-file dependencies)
+- Very large wave structure: no special handling, JSON serializable
+- Plan approval UI: waves data survives event system serialization
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/tools/exit-plan-mode.test.ts= passes
+- Wave-structured PLANs return =waves= in ExitPlanModeDetails
+- Executor session receives =waves= template variable after approval
+- Plans without wave structure produce validation error

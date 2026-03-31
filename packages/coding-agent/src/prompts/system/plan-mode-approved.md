@@ -46,8 +46,40 @@ You **MUST** execute this plan step by step from `{{finalPlanFilePath}}`. You ha
 You **MUST** verify each step before proceeding to the next.
 {{#has tools "todo_write"}}
 Before execution, you **MUST** initialize todo tracking for this plan with `todo_write`.
-When the plan's execution manifest specifies dependencies between items (via `[[id:...]]` links or `:BLOCKER:` properties), express these as `blockers` in your `todo_write` task list so the dependency gate enforces correct execution order.
-When creating todos from plan execution manifest items, set `orgItemId` on each task to the corresponding child item's CUSTOM_ID (e.g., `FEAT-001-add-auth`). This links the todo to its org item and triggers the verification protocol on completion.
+
+{{#if waves}}
+### Wave-based Todo Initialization
+
+The plan's Execution Manifest uses wave structure. Create one todo phase per wave, with tasks from each wave entry:
+1. **One phase per wave** — name each phase after the wave (e.g., `foundation`, `core`, `verify`)
+2. **One task per wave entry** — each `[[id:…]]` entry in a wave becomes a task in that phase
+3. **`orgItemId` on ALL tasks** — set to the parent org item's CUSTOM_ID (the part before `::`) for lineage tracking. This is non-gating.
+4. **`orgItemClosingId` ONLY on the LAST wave task per org item** — set to the parent org item's CUSTOM_ID. This triggers two-phase verification on completion.
+5. **Cross-wave blockers** — if an org item has tasks in wave N and wave N+1, the wave N+1 task must block on the wave N task
+6. **Intra-wave parallelism** — tasks within the same wave have no blockers between them (they are parallelizable via `task` subagents with `todoRef`)
+7. **Read child org items** — use `org get` on each child item's CUSTOM_ID to populate task `details` from matching sub-outline steps
+
+Example:
+```
+ops: [{op: "replace", phases: [
+  {name: "foundation", tasks: [
+    {content: "Define type interfaces", orgItemId: "FEAT-001", details: "Sub-outline FEAT-001::define-types"},
+    {content: "Define parser schema", orgItemId: "FEAT-002", details: "Sub-outline FEAT-002::define-schema"}
+  ]},
+  {name: "core", tasks: [
+    {content: "Implement parser", orgItemId: "FEAT-001", blockers: ["task-1"], details: "Sub-outline FEAT-001::implement-parser"},
+    {content: "Implement validator", orgItemId: "FEAT-002", blockers: ["task-2"], details: "Sub-outline FEAT-002::implement-validator"}
+  ]},
+  {name: "verify", tasks: [
+    {content: "Write parser tests", orgItemId: "FEAT-001", orgItemClosingId: "FEAT-001", blockers: ["task-3"], gateCmd: "bun test test/parser.test.ts"},
+    {content: "Write validator tests", orgItemId: "FEAT-002", orgItemClosingId: "FEAT-002", blockers: ["task-4"], gateCmd: "bun test test/validator.test.ts"}
+  ]}
+]}]
+```
+{{else}}
+When the plan's execution manifest specifies dependencies between items (via `[[id:…]` links or `:DEPENDS:` properties), express these as `blockers` in your `todo_write` task list so the dependency gate enforces correct execution order.
+When creating todos from plan execution manifest items, set `orgItemId` on each task to the corresponding child item's CUSTOM_ID (e.g., `FEAT-001-add-auth`). For the final task of each org item, also set `orgItemClosingId` to trigger the verification protocol on completion.
+{{/if}}
 When spawning task subagents to work on a todo item, set `todoRef` on the task to the todo item's ID (e.g., `task-3`) so verification requirements are automatically injected into the subagent's context.
 After each completed step, you **MUST** immediately update `todo_write` so progress stays visible.
 If a `todo_write` call fails, you **MUST** fix the todo payload and retry before continuing silently.

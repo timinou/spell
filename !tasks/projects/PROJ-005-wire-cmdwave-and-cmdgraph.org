@@ -1,0 +1,70 @@
+#+TITLE: Wire cmdWave and cmdGraph
+#+STATE: DONE
+#+SESSION_ID: 14a8261525be5f32
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2/19-CreateProjA.jsonl]]
+#+CUSTOM_ID: PROJ-005-wire-cmdwave-and-cmdgraph
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: infra
+
+NOTE [2026-03-31]: Wired cmdWave/cmdGraph to elisp MCP tools org-next-wave and org-dependency-graph via OrgClient.callTool. Added resolveFileArg helper. Tests pass.
+
+* Scope
+** In-scope
+- =packages/org/src/tool.ts= line 616: replace =cmdWave()= stub with =OrgClient.callTool("org-next-wave", args)=
+- =packages/org/src/tool.ts= line 622: replace =cmdGraph()= stub with =OrgClient.callTool("org-dependency-graph", args)=
+- Parse JSON responses from elisp, return structured results
+- Tests verifying bridge calls return real data
+
+** Out-of-scope
+- Modifying existing elisp tools (=org-next-wave.el=, =org-dependency-graph.el=) -- they stay as-is
+- New elisp tools (handled by PROJ emergent wave computation)
+- Any changes outside =packages/org/=
+
+Boundary: this item connects TWO existing stubs to TWO existing elisp MCP tools. Purely wiring.
+
+* Tests
+File: =packages/org/test/tool-wave-graph.test.ts=
+
+** Scenario: cmdWave returns wave data from elisp
+- Call =org wave= command
+- Assert response has =wave_number=, =items= array, =blocked_items=, =completed_count=, =total_count=
+- Assert response is NOT ={ error: true, message: "wave not yet wired" }=
+
+** Scenario: cmdGraph returns graph data from elisp
+- Call =org graph= command
+- Assert response has =nodes= array, =edges= array, =cycles= array
+- Assert response is NOT ={ error: true, message: "graph not yet wired" }=
+
+** Scenario: cmdWave/cmdGraph handle missing file gracefully
+- Call with non-existent file
+- Assert error response with meaningful message
+
+* Implementation
+Preferred sequencing: implement wiring first, then tests.
+
+** Step 1: Wire cmdWave in =packages/org/src/tool.ts=
+- Replace stub body (lines 616-619) with:
+  1. =const client = await ctx.getOrgClient()=
+  2. =const result = await client.callTool("org-next-wave", { file: args.file })=
+  3. Parse JSON response, return structured object
+  4. Handle error responses from elisp gracefully
+
+** Step 2: Wire cmdGraph in =packages/org/src/tool.ts=
+- Replace stub body (lines 622-625) with same pattern as cmdWave but calling =org-dependency-graph=
+
+** Step 3: Add args forwarding
+- cmdWave and cmdGraph currently take =ctx: OrgContext= but need args for file path
+- Check how other commands pass args (e.g., cmdDashboard) and follow same pattern
+
+* Edge Cases
+- Emacs daemon not running: OrgClient.callTool should throw meaningful error (Emacs is hard dependency)
+- Elisp returns error JSON: parse and surface as tool error
+- Large org file with many items: no special handling, elisp handles it
+- Empty org file: should return empty results, not error
+
+* Acceptance Criteria
+- =bun test packages/org/test/tool-wave-graph.test.ts= passes
+- =org wave= command returns real wave data (not "wave not yet wired")
+- =org graph= command returns real graph data (not "graph not yet wired")
+- Error responses from elisp are surfaced clearly

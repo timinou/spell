@@ -39,7 +39,7 @@ import type { SessionContext, SessionManager } from "../session/session-manager"
 import { getRecentSessions } from "../session/session-manager";
 import { formatExitTokenSummary } from "../session/token-summary";
 import { STTController, type SttState } from "../stt";
-import type { ExitPlanModeDetails } from "../tools";
+import type { ExitPlanModeDetails, PlanWave } from "../tools";
 import { setTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import { AuditModeOverlay } from "./components/audit-mode-overlay";
@@ -1087,7 +1087,12 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #approvePlan(
 		planContent: string,
-		options: { planFilePath: string; finalPlanFilePath: string; orgItem?: { id: string; file: string } },
+		options: {
+			planFilePath: string;
+			finalPlanFilePath: string;
+			orgItem?: { id: string; file: string };
+			waves?: PlanWave[];
+		},
 	): Promise<void> {
 		const orgPlanItem: OrgPlanRef | null = options.orgItem ?? null;
 		// Only rename the markdown plan file for file-backed plans.
@@ -1173,6 +1178,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			finalPlanFilePath: planReferencePath,
 			orgItemId: approvedOrgItemId,
 			orgItemArtifactsDir: approvedOrgItemArtifactsDir,
+			waves: options.waves,
 		});
 		await this.session.prompt(prompt, { synthetic: true });
 	}
@@ -1237,7 +1243,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			try {
 				const orgItem =
 					details.itemId && details.orgItemFile ? { id: details.itemId, file: details.orgItemFile } : undefined;
-				await this.#approvePlan(planContent, { planFilePath, finalPlanFilePath, orgItem });
+				await this.#approvePlan(planContent, { planFilePath, finalPlanFilePath, orgItem, waves: details.waves });
 			} catch (error) {
 				this.showError(
 					`Failed to finalize approved plan: ${error instanceof Error ? error.message : String(error)}`,

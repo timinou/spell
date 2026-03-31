@@ -178,7 +178,7 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("On runtime impediments:");
 	});
 
-	test("plan-mode-active includes BLOCKER property guidance for child items", async () => {
+	test("plan-mode-active includes DEPENDS property guidance for child items", async () => {
 		const templatePath = path.join(systemPromptsDir, "plan-mode-active.md");
 		const template = await Bun.file(templatePath).text();
 		const rendered = renderPromptTemplate(template, {
@@ -190,10 +190,10 @@ describe("system Handlebars prompt templates", () => {
 			askToolName: "ask",
 		});
 
-		// FEAT-098: BLOCKER property guidance in child item requirements
-		expect(rendered).toContain(":BLOCKER:");
-		expect(rendered).toContain('properties: { BLOCKER: "ITEM-ID-1 ITEM-ID-2" }');
-		// Example flow shows BLOCKER usage
-		expect(rendered).toContain('BLOCKER: "FEAT-001-add-auth-api"');
+		// FEAT-098: DEPENDS property guidance in child item requirements
+		expect(rendered).toContain(":DEPENDS:");
+		expect(rendered).toContain('properties: { DEPENDS: "ITEM-ID-1 ITEM-ID-2" }');
+		// Example flow shows DEPENDS usage
+		expect(rendered).toContain('DEPENDS: "FEAT-001-add-auth-api"');
 	});
 });

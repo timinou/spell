@@ -35,6 +35,7 @@ describe("resolveVerificationContext", () => {
 					gateLlm: "check acceptance criteria",
 					verifyCmd: "bun check:ts",
 					orgItemId: "FEAT-001-add-auth",
+					orgItemClosingId: "FEAT-001-add-auth",
 				}),
 			]),
 		];

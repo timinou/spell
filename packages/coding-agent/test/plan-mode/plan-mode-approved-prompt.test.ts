@@ -52,6 +52,6 @@ describe("plan-mode-approved prompt", () => {
 
 		expect(rendered).toContain("blockers");
 		expect(rendered).toContain("dependency gate enforces correct execution order");
-		expect(rendered).toContain(":BLOCKER:");
+		expect(rendered).toContain(":DEPENDS:");
 	});
 });

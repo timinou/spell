@@ -1,0 +1,99 @@
+#+TITLE: orgItemId orgItemClosingId Split
+#+STATE: DONE
+#+SESSION_ID: 14a8261526be5f36
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2/22-CreateFeatG.jsonl]]
+#+CUSTOM_ID: FEAT-119-orgitemid-orgitemclosingid-split
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+
+NOTE [2026-03-31]: Added orgItemClosingId (gating). orgItemId now non-gating (lineage). Updated hasRequiredGate, gateDirectives, TypeBox schemas, template.ts, journal.ts, todo-write.md. Tests pass.
+
+* Scope
+** In-scope
+- =packages/coding-agent/src/tools/todo-write.ts=: add =orgItemClosingId= field to TodoItem
+- =orgItemId= becomes non-gating (reference only, for tracking lineage)
+- =orgItemClosingId= becomes gating (triggers two-phase verification protocol)
+- Update =hasRequiredGate()= to check =orgItemClosingId= instead of =orgItemId=
+- Update gate directive generation for =orgItemClosingId=
+- =packages/coding-agent/src/prompts/tools/todo-write.md=: document new field
+- =packages/coding-agent/src/task/template.ts=: update =resolveVerificationContext= for new field
+
+** Out-of-scope
+- Wave computation (separate PROJ)
+- Prompt changes beyond todo-write.md (handled by FEAT executor prompts)
+- Org tool changes
+
+Boundary: this item splits the overloaded =orgItemId= into two fields with distinct gating semantics.
+
+* Tests
+File: =packages/coding-agent/test/tools/todo-write.test.ts= (extend existing)
+
+** Scenario: orgItemId is non-gating
+- Create task with =orgItemId: "FEAT-001"= but no =orgItemClosingId=
+- Mark task completed
+- Assert: NO two-phase verification rejection (completes directly)
+
+** Scenario: orgItemClosingId triggers two-phase verification
+- Create task with =orgItemClosingId: "FEAT-001"=
+- Mark task completed without =verified: true=
+- Assert: rejection with verification checklist
+- Mark completed with =verified: true=
+- Assert: success
+
+** Scenario: both fields on same task
+- Create task with =orgItemId: "FEAT-001"= AND =orgItemClosingId: "FEAT-001"=
+- Only =orgItemClosingId= triggers gating
+
+** Scenario: orgItemClosingId topological validation
+- If =orgItemClosingId= references an org item with incomplete sub-outline tasks, reject completion
+- This validates that the closing task is truly the last one
+
+** Scenario: backward compat
+- Existing tasks with only =orgItemId= and no =orgItemClosingId=: no gating behavior (matches new semantics)
+- Wait: this is a BREAKING CHANGE from current behavior where =orgItemId= IS gating
+- Need migration path: if =orgItemId= is set but =orgItemClosingId= is not, treat =orgItemId= as =orgItemClosingId= for backward compat
+
+* Implementation
+** Step 1: Add =orgItemClosingId= to TodoItem interface
+#+begin_src typescript
+export interface TodoItem {
+  // ... existing fields ...
+  /** Non-gating reference to org item. Tracks lineage without triggering verification. */
+  orgItemId?: string;
+  /** Gating reference. Triggers two-phase verification protocol on completion. */
+  orgItemClosingId?: string;
+}
+#+end_src
+
+** Step 2: Update =hasRequiredGate()= in todo-write.ts
+- Change: check =orgItemClosingId= instead of =orgItemId=
+- Backward compat: if =orgItemId= is set AND =orgItemClosingId= is not, treat =orgItemId= as closing (legacy behavior)
+
+** Step 3: Update gate directive generation
+- Completion directives reference =orgItemClosingId=, not =orgItemId=
+
+** Step 4: Update =resolveVerificationContext= in task/template.ts
+- Include =orgItemClosingId= in verification context for subagents
+
+** Step 5: Update todo-write.md prompt
+- Document =orgItemClosingId= field
+- Explain: =orgItemId= for lineage, =orgItemClosingId= for verification gating
+- Update examples
+
+** Step 6: Update todo-write schema (JSON Schema for tool)
+- Add =orgItemClosingId= to the schema definition
+
+* Edge Cases
+- Legacy tasks with only =orgItemId=: backward compat treats as closing (gating)
+- New tasks with only =orgItemId=: non-gating (new behavior). This means NEW plans must explicitly set =orgItemClosingId= on the closing task.
+- Both fields set to same value: fine, =orgItemClosingId= is what matters
+- =orgItemClosingId= on a non-final wave task: topological validation should warn
+- Empty string =orgItemClosingId=: treat as absent
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= passes
+- Tasks with =orgItemClosingId= trigger two-phase verification
+- Tasks with only =orgItemId= (and no =orgItemClosingId=) do NOT trigger verification (new behavior)
+- Legacy backward compat: tasks created before this change (=orgItemId= only) still gate correctly
+- todo-write.md documents both fields with clear examples

@@ -49,6 +49,7 @@ export type TodoItem = {
 	gateLlm?: string;
 	verifyCmd?: string;
 	orgItemId?: string;
+	orgItemClosingId?: string;
 };
 
 export type TodoPhase = {

@@ -1,0 +1,81 @@
+#+TITLE: Wave Manifest Generation
+#+STATE: DONE
+#+SESSION_ID: 14a781d021545ee2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2.jsonl]]
+#+CUSTOM_ID: FEAT-121-wave-manifest-generation
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: infra
+#+BLOCKER: PROJ-008-emergent-wave-computation
+
+NOTE [2026-03-31]: cmdWave extended with manifest option. formatWaveManifest generates org-mode skeleton from computed waves. WaveItem/ComputedWave types exported from org package. Tests pass.
+
+* Initial Message
+
+Bro how can you make Todo Write use the tasks INSIDE the FEAT and PROJ of the execution manifests, instead of having one task per file which limits the parallelisability of the TODO write. Do you feel me? Is this a prompting thing? Can you imagine the Dependency Graph of planning an ultraplanning even deeper?
+
+* Scope
+** In-scope
+- =packages/org/src/tool.ts=: new command or extension to =cmdWave= that generates a skeleton Execution Manifest from computed waves
+- Output: org-mode text with =** wave-name :wave:= headings and =- [[id:SUB-OUTLINE-ID]] Step description= entries
+- Planner uses this skeleton to build the PLAN body Execution Manifest section
+- Tests
+
+** Out-of-scope
+- Wave computation engine (PROJ-008 provides computed wave data)
+- Exit-plan-mode parsing (FEAT exit-plan-mode)
+- Prompt changes (FEAT planner/executor prompts)
+
+Boundary: this item takes computed wave data and produces org-mode skeleton text. It's the bridge between wave computation and plan authoring.
+
+Requires: computed wave data (wave numbers, sub-outline IDs, titles) from PROJ-008.
+
+* Tests
+File: =packages/org/test/wave-manifest.test.ts=
+
+** Scenario: Generate skeleton from 3 waves
+- Input: computed waves with 2 items per wave
+- Expected: org text with 3 =** wave-N :wave:= headings, each with 2 list items
+
+** Scenario: Generate skeleton from single wave
+- Input: 1 wave with 4 items
+- Expected: single =** wave-1 :wave:= heading with 4 list items
+
+** Scenario: Empty waves
+- Input: no sub-outlines with CUSTOM_IDs
+- Expected: empty manifest (or comment explaining no waves found)
+
+** Scenario: Step descriptions from sub-outline titles
+- Wave entry uses sub-outline heading title as step description
+- =- [[id:FEAT-001::define-types]] Define TypeScript interfaces=
+
+* Implementation
+** Step 1: Add manifest generation to org tool
+- New subcommand or option: =org wave --manifest= or =org wave manifest=
+- Calls =org-compute-waves= elisp tool to get wave data
+- Formats into org-mode skeleton text
+
+** Step 2: Format as org text
+#+begin_src
+* Execution Manifest
+** wave-1                                          :wave:
+- [[id:FEAT-001::define-types]] Define TypeScript interfaces
+- [[id:FEAT-002::define-schema]] Define parser schema
+** wave-2                                          :wave:
+- [[id:FEAT-001::implement-parser]] Implement parser logic
+#+end_src
+
+** Step 3: Return skeleton to caller
+- Could return as tool result text (planner copies into PLAN body)
+- Or: write directly to PLAN item body (if PLAN item exists)
+
+* Edge Cases
+- Sub-outline with no title: use CUSTOM_ID as description
+- Very long wave names: use =wave-N= numbering, planner renames
+- Mixed top-level and sub-outline items: top-level items go in wave 0 or separate section
+
+* Acceptance Criteria
+- =bun test packages/org/test/wave-manifest.test.ts= passes
+- =org wave manifest= (or equivalent) returns valid org-mode skeleton
+- Skeleton contains correct wave headings and sub-outline [[id:...]] links
+- Planner can paste skeleton into PLAN body and fill in descriptions

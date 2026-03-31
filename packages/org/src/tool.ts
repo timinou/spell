@@ -25,6 +25,7 @@ import { buildOrgQlSexp, parseKeywordQuery, requiresEmacs } from "./query-builde
 import { DEFAULT_ORG_CONFIG, EFFORT_REGEXP, PRIORITY_REGEXP, REQUIRED_PROPERTIES } from "./schema/defaults";
 import type {
 	CategoryMetrics,
+	ComputedWave,
 	OrgConfig,
 	OrgCreateParams,
 	OrgDashboard,
@@ -613,16 +614,67 @@ async function cmdValidate(ctx: OrgContext, args: { category?: string; file?: st
 	};
 }
 
-async function cmdWave(ctx: OrgContext): Promise<unknown> {
-	// Emacs wave call — not yet wired to elisp tool
-	void ctx;
-	return { error: true, message: "wave not yet wired" };
+/** Resolve file path from file or category arg. */
+function resolveFileArg(ctx: OrgContext, args: { file?: string; category?: string }): string | undefined {
+	if (args.file) return args.file;
+	if (args.category) {
+		const categories = resolveCategories(ctx.config, ctx.projectRoot);
+		const cat = categories.find(c => c.name === args.category);
+		if (cat) return cat.absPath;
+	}
+	return undefined;
 }
 
-async function cmdGraph(ctx: OrgContext): Promise<unknown> {
-	// Emacs graph call — not yet wired to elisp tool
-	void ctx;
-	return { error: true, message: "graph not yet wired" };
+/** Format computed waves into org-mode Execution Manifest skeleton. */
+function formatWaveManifest(waves: ComputedWave[]): string {
+	if (waves.length === 0) return "* Execution Manifest\n(No sub-outlines with dependencies found.)\n";
+	const lines: string[] = ["* Execution Manifest"];
+	for (const wave of waves) {
+		const tag = ":wave:";
+		lines.push(`** wave-${wave.number}${" ".repeat(Math.max(1, 50 - 10 - String(wave.number).length))}${tag}`);
+		for (const item of wave.items) {
+			lines.push(`- [[id:${item.custom_id}]] ${item.title}`);
+		}
+	}
+	lines.push("");
+	return lines.join("\n");
+}
+
+async function cmdWave(
+	ctx: OrgContext,
+	args: { file?: string; category?: string; manifest?: boolean },
+): Promise<unknown> {
+	const client = await ctx.getOrgClient();
+	const toolArgs: Record<string, unknown> = {};
+	const resolvedFile = resolveFileArg(ctx, args);
+	if (resolvedFile) toolArgs.file = resolvedFile;
+
+	if (args.manifest) {
+		// Compute waves and generate skeleton Execution Manifest
+		const raw = (await client.callTool("org-compute-waves", toolArgs)) as {
+			error?: boolean;
+			waves?: Array<{ number: number; items: Array<{ custom_id: string; parent_id: string; title: string }> }>;
+			warnings?: string[];
+			total_sub_outlines?: number;
+		};
+		if (raw.error) return raw;
+		return {
+			manifest: formatWaveManifest(raw.waves ?? []),
+			waves: raw.waves ?? [],
+			warnings: raw.warnings ?? [],
+			total_sub_outlines: raw.total_sub_outlines ?? 0,
+		};
+	}
+
+	return client.callTool("org-next-wave", toolArgs);
+}
+
+async function cmdGraph(ctx: OrgContext, args: { file?: string; category?: string }): Promise<unknown> {
+	const client = await ctx.getOrgClient();
+	const toolArgs: Record<string, unknown> = {};
+	const resolvedFile = resolveFileArg(ctx, args);
+	if (resolvedFile) toolArgs.file = resolvedFile;
+	return client.callTool("org-dependency-graph", toolArgs);
 }
 
 async function cmdArchive(ctx: OrgContext, args: { category?: string }): Promise<unknown> {
@@ -777,6 +829,10 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 				note: { type: "string", description: "Dated note text (note cmd, or appended on state change)" },
 				property: { type: "string", description: "Property name (set)" },
 				value: { type: "string", description: "Property value (set)" },
+				manifest: {
+					type: "boolean",
+					description: "Generate skeleton Execution Manifest from computed waves (wave cmd)",
+				},
 			},
 			required: ["command"],
 		},
@@ -875,10 +931,17 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 					return cmdDashboard(ctx);
 
 				case "wave":
-					return cmdWave(ctx);
+					return cmdWave(ctx, {
+						file: args.file as string | undefined,
+						category: args.category as string | undefined,
+						manifest: (args.manifest as boolean | undefined) ?? false,
+					});
 
 				case "graph":
-					return cmdGraph(ctx);
+					return cmdGraph(ctx, {
+						file: args.file as string | undefined,
+						category: args.category as string | undefined,
+					});
 
 				case "archive":
 					return cmdArchive(ctx, { category: args.category as string | undefined });

@@ -35,7 +35,7 @@ Use the available analysis tools to assess specification completeness.
 For each work item, create an org ticket with:
 - A clear, action-oriented title
 - `:CUSTOM_ID:` — unique identifier (e.g., `FEAT-001-auth-api`)
-- `:BLOCKER:` — space-separated IDs of items that must complete first
+- `:DEPENDS:` — space-separated IDs of items that must complete first
 - `:TRIGGER:` — `ID(KEYWORD)` expressions for cascading state changes
 - `:GATE_CMD:` — command to verify completion (e.g., `bun test path/to/test.ts`)
 - `:GATE_ARTIFACT:` — file that must exist on completion
@@ -49,7 +49,7 @@ For each work item, create an org ticket with:
 
 Ensure:
 - No circular dependencies exist
-- All BLOCKER references point to valid ticket IDs
+- All DEPENDS references point to valid ticket IDs
 - Critical path is reasonable
 - Effort estimates are plausible
 

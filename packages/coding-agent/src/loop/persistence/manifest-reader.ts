@@ -76,7 +76,7 @@ export function parseTicketOrg(content: string): ManifestTicket | undefined {
 		state: parseTicketState(headingMatch[1] ?? "ITEM"),
 		specPath: props.SPEC_PATH,
 		acceptanceCriteria: parseAcceptanceCriteria(content),
-		dependencies: props.BLOCKER?.split(/\s+/).filter(Boolean) ?? [],
+		dependencies: (props.DEPENDS ?? props.BLOCKER)?.split(/\s+/).filter(Boolean) ?? [],
 		triggers: props.TRIGGER?.split(/\s+/).filter(Boolean) ?? [],
 		gates: parseGatesFromProperties(props, customId),
 		effort: props.EFFORT,

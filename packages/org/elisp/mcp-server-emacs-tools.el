@@ -95,6 +95,7 @@ names (symbols) to enable selectively."
 (require 'org-next-ids)
 (require 'org-dependency-graph)
 (require 'org-next-wave)
+(require 'org-compute-waves)
 (require 'org-create-item)
 (require 'org-agenda-tool nil t)
 (require 'org-clock-tool nil t)

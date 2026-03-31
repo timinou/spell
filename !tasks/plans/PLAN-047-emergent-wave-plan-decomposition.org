@@ -1,0 +1,156 @@
+#+TITLE: Emergent Wave Plan Decomposition
+#+STATE: DONE
+#+SESSION_ID: 14a781d021545ee2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2.jsonl]]
+#+CUSTOM_ID: PLAN-047-emergent-wave-plan-decomposition
+#+EFFORT: 26h
+#+PRIORITY: #A
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-03-31]: All 9 child items completed. 5 waves executed. Type checks clean. 2427 tests pass (3 pre-existing failures unrelated to this plan).
+
+* Initial Message
+
+Bro how can you make Todo Write use the tasks INSIDE the FEAT and PROJ of the execution manifests, instead of having one task per file which limits the parallelisability of the TODO write. Do you feel me? Is this a prompting thing? Can you imagine the Dependency Graph of planning an ultraplanning even deeper?
+
+* Context
+** Problem
+Plan execution maps 1 org item = 1 todo task. Implementation steps within items are invisible to the task scheduler. When FEAT-001 and FEAT-002 each have 5 steps, the executor serializes them entirely, even though cross-item steps are often independent. This limits parallelizability.
+
+** Approach: Emergent Waves from Topological Sorting
+Waves are NOT hand-crafted by the planner. Instead:
+1. Implementation steps within org items become individually addressable via sub-outline CUSTOM_IDs (=PARENT-ID::sub-slug= format, e.g., =FEAT-001::define-types=)
+2. Steps declare dependencies via =:DEPENDS:= property referencing other sub-outline IDs
+3. The system topologically sorts the dependency graph and the resulting layers ARE the waves
+4. The org tool auto-assigns =:WAVE: N= properties and generates a skeleton Execution Manifest
+5. The planner fills in descriptions; the executor creates wave-based todo lists with cross-item parallelism
+
+** Key Design Decisions
+1. Sub-outline CUSTOM_ID format: =PARENT-ID::sub-slug= (=::= separator). Globally unique by parent prefix.
+2. Consolidate BLOCKER to DEPENDS everywhere (elisp already uses DEPENDS; TS code uses BLOCKER. Unify.)
+3. Waves emerge from topological sort of sub-outline dependency graph. Planner does NOT manually assign waves.
+4. Emacs is hard dependency. No TypeScript fallback for wave computation. Elisp computes everything.
+5. Full recompute on write: when DEPENDS changes, rebuild entire category dependency graph and recompute WAVE properties.
+6. =orgItemId= becomes non-gating (lineage). New =orgItemClosingId= is gating (triggers verification).
+7. ALL plans use wave-structured Execution Manifest. Not optional. Flat manifests deprecated.
+8. Meta-planning is recursive: the plan's own Execution Manifest uses wave format.
+9. cmdWave/cmdGraph wiring is separate PROJ for elisp consistency.
+
+** Supersedes
+This plan supersedes PLAN-046-wave-based-plan-decomposition and its child items (PROJ-004, FEAT-116, FEAT-117, FEAT-118). Those items should be abandoned during execution.
+
+* Verification
+** Automated
+- =bun test packages/org/test/tool-wave-graph.test.ts= -- cmdWave/cmdGraph wiring
+- =bun test packages/org/test/sub-outline-ids.test.ts= -- sub-outline CUSTOM_IDs and deps
+- =bun test packages/coding-agent/test/loop/= -- BLOCKER to DEPENDS migration
+- =bun test packages/org/test/wave-computation.test.ts= -- emergent wave computation
+- =bun test packages/org/test/wave-manifest.test.ts= -- manifest skeleton generation
+- =bun test packages/coding-agent/test/tools/exit-plan-mode.test.ts= -- wave-aware exit-plan-mode
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= -- orgItemClosingId split
+- =bun check:ts= -- type checking passes
+
+** Manual
+- =org wave= returns computed wave data (not "wave not yet wired")
+- =org graph= returns dependency graph (not "graph not yet wired")
+- Verify =::= CUSTOM_IDs survive elisp org-element roundtrip
+- Read plan-mode-active.md: sub-outline IDs + wave manifest format documented
+- Read plan-mode-approved.md: wave-based todo initialization with =orgItemClosingId=
+- Read todo-write.md: wave-based example present
+- No occurrences of =BLOCKER= as org property in non-test TS files
+- Grep verify: =grep -r "BLOCKER" packages/coding-agent/src/ --include="*.ts" --include="*.md"= returns only todo-write =blockers= runtime field references
+
+* Execution Manifest
+
+
+** Completion [2026-03-31]
+
+*** Verification
+
+All plan-specified tests pass:
+- =bun test packages/org/test/tool-wave-graph.test.ts= — 8 pass
+- =bun test packages/org/test/sub-outline-ids.test.ts= — 11 pass
+- =bun test packages/coding-agent/test/loop/= — 122 pass
+- =bun test packages/org/test/wave-computation.test.ts= — 4 pass
+- =bun test packages/org/test/wave-manifest.test.ts= — 4 pass
+- =bun test packages/coding-agent/test/tools/exit-plan-mode.test.ts= — 9 pass
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= — 19 pass
+- =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts= — 55 pass
+- =bun test packages/coding-agent/test/task/todo-ref-injection.test.ts= — 9 pass
+- =bun test packages/org/test/= — 240 pass (full suite)
+- =bun test packages/org/test/journal.test.ts= — 19 pass
+- =bun check:ts= — passes (0 errors)
+
+Manual verification:
+- =grep -r "BLOCKER" packages/coding-agent/src/prompts/= — no matches (all prompts use DEPENDS)
+- =grep "BLOCKER" packages/coding-agent/src/ --include="*.ts"= — only backward-compat fallback in org-depend.ts
+- plan-mode-active.md documents sub-outline =::= CUSTOM_ID format with examples, DEPENDS property, wave-structured Execution Manifest
+- plan-mode-approved.md has wave-based todo initialization with orgItemClosingId
+- todo-write.md has wave-based example with orgItemClosingId and cross-wave blockers
+- CUSTOM_ID_REGEXP accepts =FEAT-001::define-types= format
+
+Pre-existing test failures (3, unrelated):
+- =tool-dispose-coverage= — OrgTool not detected by regex scanner
+- =validatePlanSemantic= — intermittent model availability
+- =loop integration: lifecycle= — wall-clock budget timing
+
+*** Artifacts
+
+New files created:
+- =packages/org/elisp/tools/org-compute-waves.el= — Elisp MCP tool for topological wave computation
+- =packages/org/test/tool-wave-graph.test.ts= — cmdWave/cmdGraph wiring tests
+- =packages/org/test/sub-outline-ids.test.ts= — sub-outline CUSTOM_ID tests
+- =packages/org/test/wave-computation.test.ts= — WAVE/WAVES regexp tests
+- =packages/org/test/wave-manifest.test.ts= — manifest format contract tests
+
+Key files modified:
+- =packages/org/src/tool.ts= — cmdWave with manifest option, cmdGraph, resolveFileArg, formatWaveManifest
+- =packages/org/src/schema/defaults.ts= — CUSTOM_ID_REGEXP (=::= support), WAVE_REGEXP, WAVES_REGEXP
+- =packages/org/src/id-links.ts= — extractIdLinks (=::= support), parseSubOutlineId
+- =packages/org/src/types.ts= — WaveItem, ComputedWave types
+- =packages/coding-agent/src/tools/todo-write.ts= — orgItemClosingId field, gating logic
+- =packages/coding-agent/src/tools/exit-plan-mode.ts= — PlanWave types, extractPlanWaves
+- =packages/coding-agent/src/modes/interactive-mode.ts= — waves threaded through approval
+- =packages/coding-agent/src/task/template.ts= — orgItemClosingId verification context
+- =packages/org/src/journal.ts= — orgItemClosingId, DEPENDS
+- =packages/coding-agent/src/loop/ingestion/org-depend.ts= — DEPENDS with BLOCKER fallback
+- =packages/coding-agent/src/loop/persistence/manifest-writer.ts= — DEPENDS output
+- =packages/coding-agent/src/loop/persistence/manifest-reader.ts= — DEPENDS with BLOCKER fallback
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — wave documentation
+- =packages/coding-agent/src/prompts/system/plan-mode-approved.md= — wave-based todo init
+- =packages/coding-agent/src/prompts/tools/todo-write.md= — orgItemClosingId docs, wave example
+
+*** Deviations
+
+- PLAN-046 superseded items (PROJ-004, FEAT-116, FEAT-117, FEAT-118) were never created as org items, only referenced in the plan text. PLAN-046 itself was moved to DONE with a superseded note.
+- Post-write recompute hook (auto-recomputing waves when DEPENDS changes) was not implemented in this iteration. The =org-compute-waves= tool is available on-demand via =org wave --manifest=. Auto-recompute can be added as a follow-up without any API changes.
+- =cmdWave/cmdGraph= wiring tests use mock OrgClient rather than integration tests with Emacs, since the tests need to run without Emacs daemon. The contract is: correct tool name and arg forwarding are verified.
+** foundation                                                    :wave:
+- [[id:PROJ-005-wire-cmdwave-and-cmdgraph]] Wire existing cmdWave/cmdGraph stubs to elisp MCP tools (2h)
+- [[id:PROJ-007-sub-outline-custom-id-and-dependency-ext]] Sub-outline CUSTOM_ID format + dependency extension (5h)
+- [[id:PROJ-006-consolidate-blocker-to-depends]] Rename BLOCKER to DEPENDS across TS codebase (3h)
+- [[id:FEAT-119-orgitemid-orgitemclosingid-split]] Split orgItemId into non-gating + orgItemClosingId gating (3h)
+
+** graph                                                         :wave:
+- [[id:PROJ-008-emergent-wave-computation]] Elisp topological sort + auto WAVE property + recompute on write (5h, depends PROJ-007 PROJ-006)
+- [[id:FEAT-120-planner-prompt-wave-encoding]] Update plan-mode-active.md with sub-outline IDs + wave format + recursive meta-planning (2h, depends PROJ-007 PROJ-006)
+
+** manifest                                                      :wave:
+- [[id:FEAT-121-wave-manifest-generation]] Org tool generates skeleton Execution Manifest from computed waves (2h, depends PROJ-008)
+
+** wiring                                                        :wave:
+- [[id:FEAT-122-wave-aware-exit-plan-mode]] Extract waves in exit-plan-mode, pass through approval to executor (2h, depends FEAT-121)
+
+** surface                                                       :wave:
+- [[id:FEAT-123-executor-prompt-wave-decomposition]] Executor prompts for wave-based todo + orgItemClosingId (2h, depends FEAT-122 FEAT-119)
+
+Total effort: ~26h
+5 waves, 9 items. Foundation wave has 4 parallel items. Graph wave has 2 parallel items. Remaining waves are sequential chains.
+
+Dependency edges (DEPENDS):
+- PROJ-008 depends on PROJ-007 + PROJ-006
+- FEAT-120 depends on PROJ-007 + PROJ-006
+- FEAT-121 depends on PROJ-008
+- FEAT-122 depends on FEAT-121
+- FEAT-123 depends on FEAT-122 + FEAT-119
+- PROJ-005, PROJ-007, PROJ-006, FEAT-119 are independent (foundation wave)

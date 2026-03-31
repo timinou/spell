@@ -1,0 +1,116 @@
+#+TITLE: Emergent Wave Computation
+#+STATE: DONE
+#+SESSION_ID: 14a82678a0fe5f3a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-16-33-669Z_14a781d021545ee2/23-CreateProjD.jsonl]]
+#+CUSTOM_ID: PROJ-008-emergent-wave-computation
+#+EFFORT: 5h
+#+PRIORITY: #A
+#+LAYER: infra
+#+BLOCKER: PROJ-007-sub-outline-custom-id-and-dependency-ext PROJ-006-consolidate-blocker-to-depends
+
+NOTE [2026-03-31]: Created org-compute-waves.el with Kahn's topo sort, cycle detection, sub-outline collection. Registered in mcp-server-emacs-tools.el. Added WAVE/WAVES regexp to defaults.ts. Tests pass.
+
+
+* Scope
+** In-scope
+- New elisp MCP tool: =org-compute-waves= -- computes topological layers from sub-outline dependency graph
+- Auto-assigns =:WAVE: N= property to sub-outlines (implementation step headings with CUSTOM_ID)
+- Auto-assigns =:WAVES: 1,2,3= summary property to parent items
+- Full recompute on write: post-write hook in org tool =cmdCreate/cmdUpdate= calls elisp recompute
+- On-demand: wire =cmdWave()= to include wave computation (extend PROJ-005 wiring)
+- Add =WAVE= to =RECOMMENDED_PROPERTIES= in =packages/org/src/schema/defaults.ts=
+- Validation: DAG checks, cycle detection, inconsistency warnings with friendly prompt injection
+- Tests
+
+** Out-of-scope
+- Sub-outline CUSTOM_ID format (provided by PROJ-007)
+- DEPENDS property naming (provided by PROJ-006)
+- Wave manifest generation (FEAT manifest generation)
+- Exit-plan-mode changes (FEAT exit-plan-mode)
+
+Boundary: this item implements the core wave computation engine. Waves EMERGE from topological sorting of the sub-outline dependency graph. The planner declares dependencies; the system computes layers.
+
+Requires: sub-outline =::= CUSTOM_IDs and DEPENDS property from PROJ-007, consolidated DEPENDS naming from PROJ-006.
+
+* Tests
+File: =packages/org/test/wave-computation.test.ts=
+
+** Scenario: Linear chain produces sequential waves
+- Items: A::step1 -> A::step2 -> A::step3 (linear DEPENDS chain)
+- Expected: wave 1={A::step1}, wave 2={A::step2}, wave 3={A::step3}
+
+** Scenario: Independent steps produce single wave
+- Items: A::types, B::types (no deps between them)
+- Expected: wave 1={A::types, B::types}
+
+** Scenario: Diamond dependency produces correct waves
+- A::types (no deps), B::types (no deps), A::impl (depends A::types), B::impl (depends B::types), C::integrate (depends A::impl B::impl)
+- Expected: wave 1={A::types, B::types}, wave 2={A::impl, B::impl}, wave 3={C::integrate}
+
+** Scenario: WAVE property auto-assigned to sub-outlines
+- After computation, sub-outline headings have =:WAVE: N= property set
+
+** Scenario: WAVES summary property on parent items
+- Parent item gets =:WAVES: 1,2,3= summarizing which waves its sub-outlines participate in
+
+** Scenario: Cycle detection produces friendly error
+- A::step1 depends on B::step1, B::step1 depends on A::step1
+- Expected: error with cycle description, not crash
+
+** Scenario: Inconsistency warning on manual WAVE mismatch
+- Sub-outline has manual =:WAVE: 1= but computed wave is 2
+- Expected: warning in prompt injection
+
+** Scenario: Recompute on write
+- Update DEPENDS on an item -> waves recomputed automatically
+
+** Scenario: Single item with no deps
+- One item, one step, no DEPENDS
+- Expected: wave 1 with that single step
+
+* Implementation
+Preferred sequencing: elisp tool first, then TS wiring, then post-write hook, then tests.
+
+** Step 1: Create =packages/org/elisp/tools/org-compute-waves.el=
+- Register as MCP tool: =org-compute-waves=
+- Input: =file= (path to org category directory or specific file)
+- Algorithm:
+  1. Collect all headings with CUSTOM_ID containing =::= (sub-outlines)
+  2. Parse DEPENDS property for each sub-outline
+  3. Build dependency DAG from sub-outline refs
+  4. Detect cycles (reuse =org-mcp--detect-cycles= from dependency-graph.el)
+  5. Topological sort into layers (BFS/Kahn's algorithm)
+  6. Assign wave numbers to each sub-outline
+  7. Set =:WAVE: N= property on each sub-outline heading
+  8. Compute =:WAVES:= summary for parent headings
+- Return JSON: ={ waves: [{ number: N, items: [{ customId, parentId, title }] }], warnings: [...] }=
+
+** Step 2: Wire cmdWave in =packages/org/src/tool.ts= to include computation
+- cmdWave now calls =org-compute-waves= (not just =org-next-wave=)
+- Or: cmdWave calls =org-next-wave= for runtime queries, separate command for computation
+- Decision: add =compute= option to cmdWave to trigger full computation vs just querying
+
+** Step 3: Post-write hook in org tool
+- After =cmdCreate= or =cmdUpdate= modifies DEPENDS property, call =org-compute-waves= for the category
+- Capture warnings, inject as friendly prompt messages
+
+** Step 4: Add WAVE to schema
+- Add =WAVE= to =RECOMMENDED_PROPERTIES= in =defaults.ts=
+- Add =WAVE_REGEXP= for validation: =/^[0-9]+$/= (single integer)
+- Add =WAVES_REGEXP=: =/^[0-9]+(,[0-9]+)*$/= (comma-separated integers)
+
+* Edge Cases
+- No sub-outlines with CUSTOM_ID: return empty waves (backward compat)
+- Sub-outline DEPENDS on top-level item (not sub-outline): valid -- top-level item is implicitly wave 0
+- Very deep dependency chain: many waves, no limit (planner decides granularity)
+- Multiple disconnected subgraphs: each gets independent wave numbering starting from 1
+- Category with hundreds of items: full recompute may be slow -- benchmark and log timing
+
+* Acceptance Criteria
+- =bun test packages/org/test/wave-computation.test.ts= passes
+- Topological sort correctly assigns wave numbers to sub-outlines
+- =:WAVE: N= property auto-set on sub-outlines after computation
+- =:WAVES:= summary set on parent items
+- Cycle detection returns friendly error
+- Post-write recompute triggers on DEPENDS change
+- =bun check:ts= passes

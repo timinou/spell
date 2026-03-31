@@ -47,8 +47,14 @@ export const EFFORT_REGEXP = /^[0-9]+[hm]$/;
 /** Regexp for valid PRIORITY format: #A, #B, or #C. */
 export const PRIORITY_REGEXP = /^#[ABC]$/;
 
-/** Regexp for valid CUSTOM_ID format: PREFIX-NUM or PREFIX-NUM-slug. */
-export const CUSTOM_ID_REGEXP = /^[A-Z]+-\d+(-[a-z0-9-]+)?$/;
+/** Regexp for valid CUSTOM_ID format: PREFIX-NUM, PREFIX-NUM-slug, or PREFIX-NUM::sub-slug. */
+export const CUSTOM_ID_REGEXP = /^[A-Z]+-\d+(-[a-z0-9-]+)?(::[a-z0-9-]+)?$/;
+
+/** Regexp for valid WAVE format: single integer. */
+export const WAVE_REGEXP = /^[0-9]+$/;
+
+/** Regexp for valid WAVES summary format: comma-separated integers. */
+export const WAVES_REGEXP = /^[0-9]+(,[0-9]+)*$/;
 
 /** Valid LAYER values. */
 export const VALID_LAYERS = ["backend", "frontend", "data", "prompt", "infra", "test", "docs"] as const;

@@ -445,8 +445,12 @@ describe("hasRequiredGate", () => {
 		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", gateLlm: "check criteria" }))).toBe(true);
 	});
 
-	test("returns true for orgItemId", () => {
-		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", orgItemId: "FEAT-001-auth" }))).toBe(true);
+	test("returns false for orgItemId (non-gating lineage)", () => {
+		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", orgItemId: "FEAT-001-auth" }))).toBe(false);
+	});
+
+	test("returns true for orgItemClosingId", () => {
+		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", orgItemClosingId: "FEAT-001-auth" }))).toBe(true);
 	});
 
 	test("returns false for verifyCmd alone", () => {
@@ -488,7 +492,24 @@ describe("orgItemId field", () => {
 		expect(restored[0].tasks[0].orgItemId).toBe("FEAT-001-add-auth");
 	});
 
-	test("orgItemId shows in gate directives for completed task", () => {
+	test("orgItemClosingId shows in gate directives for completed task", () => {
+		const task = makeTask({
+			id: "task-1",
+			content: "Build it",
+			status: "completed",
+			orgItemClosingId: "FEAT-001-add-auth",
+		});
+		const result = formatSummary({
+			phases: [makePhase("phase-1", "Work", [task])],
+			errors: [],
+			completedPhaseIds: [],
+			completedGatedTasks: [task],
+			pendingVerificationTasks: [],
+		});
+		expect(result).toContain("REQUIRED: Update org item FEAT-001-add-auth to DONE for task-1.");
+	});
+
+	test("orgItemId without orgItemClosingId shows non-gating info", () => {
 		const task = makeTask({
 			id: "task-1",
 			content: "Build it",
@@ -502,7 +523,7 @@ describe("orgItemId field", () => {
 			completedGatedTasks: [task],
 			pendingVerificationTasks: [],
 		});
-		expect(result).toContain("REQUIRED: Update org item FEAT-001-add-auth for task-1.");
+		expect(result).toContain("INFO: Linked to org item FEAT-001-add-auth (non-gating lineage).");
 	});
 });
 
@@ -525,7 +546,7 @@ describe("two-phase gated completion via formatSummary", () => {
 			gateCmd: "bun test",
 			gateArtifact: "dist/out.json",
 			gateCommit: true,
-			orgItemId: "FEAT-001-add-auth",
+			orgItemClosingId: "FEAT-001-add-auth",
 		});
 		const result = callFormatSummary({
 			phases: [makePhase("phase-1", "Work", [task])],
@@ -536,7 +557,7 @@ describe("two-phase gated completion via formatSummary", () => {
 		expect(result).toContain("[ ] Run `bun test` (gateCmd)");
 		expect(result).toContain("[ ] Verify artifact at dist/out.json (gateArtifact)");
 		expect(result).toContain("[ ] Commit changes (gateCommit)");
-		expect(result).toContain("[ ] Update org item FEAT-001-add-auth (orgItemId)");
+		expect(result).toContain("[ ] Update org item FEAT-001-add-auth to DONE (orgItemClosingId)");
 		expect(result).toContain('{op: "update", id: "task-1", status: "completed", verified: true}');
 	});
 
@@ -692,7 +713,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 		expect(summary).not.toContain("Verification Required");
 	});
 
-	test("orgItemId-only task triggers two-phase completion", async () => {
+	test("orgItemClosingId-only task triggers two-phase completion", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
 			ops: [
@@ -701,7 +722,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 					phases: [
 						{
 							name: "Work",
-							tasks: [{ content: "Auth feature", orgItemId: "FEAT-001-auth" }],
+							tasks: [{ content: "Auth feature", orgItemClosingId: "FEAT-001-auth" }],
 						},
 					],
 				},
@@ -712,7 +733,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
 		});
 
-		// Try to complete without verified — should be rejected (BUG-029)
+		// Try to complete without verified — should be rejected
 		const rejected = await tool.execute("call-3", {
 			ops: [{ op: "update", id: "task-1", status: "completed" }],
 		});
@@ -722,7 +743,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 
 		const rejectedSummary = rejected.content.find(part => part.type === "text")?.text ?? "";
 		expect(rejectedSummary).toContain("Verification Required");
-		expect(rejectedSummary).toContain("[ ] Update org item FEAT-001-auth (orgItemId)");
+		expect(rejectedSummary).toContain("[ ] Update org item FEAT-001-auth to DONE (orgItemClosingId)");
 
 		// Now complete with verified: true
 		const accepted = await tool.execute("call-4", {
