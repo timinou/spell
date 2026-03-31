@@ -2896,7 +2896,10 @@ export class AgentSession {
 		for (const phase of phases) {
 			phase.tasks = phase.tasks.filter(t => t.status !== "completed");
 		}
-		this.setTodoPhases(phases.filter(p => p.tasks.length > 0));
+		this.setTodoPhases(
+			phases.filter(p => p.tasks.length > 0),
+			{ reset: true },
+		);
 	}
 
 	#cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
@@ -3020,7 +3023,7 @@ export class AgentSession {
 		this.agent.reset();
 		await this.sessionManager.flush();
 		await this.sessionManager.newSession(options);
-		this.setTodoPhases([]);
+		this.setTodoPhases([], { reset: true });
 		this.agent.sessionId = this.sessionManager.getSessionId();
 		this.#steeringMessages = [];
 		this.#followUpMessages = [];

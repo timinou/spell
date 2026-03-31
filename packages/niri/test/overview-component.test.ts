@@ -84,7 +84,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Implementation",
-						completedCount: 0,
+						doneCount: 0,
 						tasks: [
 							makeTask({
 								content: "A very long task name that pushes the line width",
@@ -146,7 +146,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Implementation",
-						completedCount: 0,
+						doneCount: 0,
 						tasks: [
 							makeTask({ content: "Write tests", status: "completed" }),
 							makeTask({ content: "Fix types", status: "in_progress" }),
@@ -167,8 +167,8 @@ describe("OverviewComponent", () => {
 		const comp = new OverviewComponent(
 			makeSnapshot({
 				todoPhases: [
-					{ name: "Phase 1", completedCount: 0, tasks: [makeTask({ content: "Task A", status: "completed" })] },
-					{ name: "Phase 2", completedCount: 0, tasks: [makeTask({ content: "Task B", status: "pending" })] },
+					{ name: "Phase 1", doneCount: 0, tasks: [makeTask({ content: "Task A", status: "completed" })] },
+					{ name: "Phase 2", doneCount: 0, tasks: [makeTask({ content: "Task B", status: "pending" })] },
 				],
 			}),
 		);
@@ -233,7 +233,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Deploy",
-						completedCount: 0,
+						doneCount: 0,
 						tasks: [
 							makeTask({ content: "Create schema", status: "pending" }),
 							makeTask({
@@ -260,7 +260,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Work",
-						completedCount: 0,
+						doneCount: 0,
 						tasks: [
 							makeTask({
 								content: "Run tests",
@@ -284,7 +284,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Work",
-						completedCount: 0,
+						doneCount: 0,
 						tasks: [
 							makeTask({
 								content: "Integration tests",
@@ -310,7 +310,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Release",
-						completedCount: 0,
+						doneCount: 0,
 						tasks: [
 							makeTask({
 								content: "Add auth module",
@@ -333,7 +333,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Verify",
-						completedCount: 0,
+						doneCount: 0,
 						tasks: [
 							makeTask({
 								content: "Full check",
@@ -361,7 +361,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Tracked",
-						completedCount: 0,
+						doneCount: 0,
 						tasks: [
 							makeTask({
 								content: "Auth refactor",
@@ -383,7 +383,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Untracked",
-						completedCount: 0,
+						doneCount: 0,
 						tasks: [makeTask({ content: "Quick fix", status: "in_progress" })],
 					},
 				],
@@ -401,7 +401,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Deploy",
-						completedCount: 0,
+						doneCount: 0,
 						tasks: [
 							makeTask({
 								content: "Deploy staging",
@@ -431,7 +431,7 @@ describe("OverviewComponent", () => {
 				todoPhases: [
 					{
 						name: "Simple",
-						completedCount: 0,
+						doneCount: 0,
 						tasks: [
 							makeTask({ content: "Do thing", status: "pending" }),
 							makeTask({ content: "Done thing", status: "completed" }),
@@ -450,5 +450,68 @@ describe("OverviewComponent", () => {
 		expect(plain).not.toContain("[cmd]");
 		expect(plain).not.toContain("[org]");
 		expect(plain).not.toContain("\u2190");
+	});
+
+	// ── Progress suffix & phantom phases ────────────────────────────────────────────
+
+	it("renders progress suffix (N/M) for active phase with cleared completed tasks", () => {
+		const comp = new OverviewComponent(
+			makeSnapshot({
+				todoPhases: [
+					{
+						name: "Implementation",
+						doneCount: 2,
+						tasks: [
+							makeTask({ content: "Write docs", status: "pending" }),
+							makeTask({ content: "Fix lint", status: "in_progress" }),
+						],
+					},
+				],
+			}),
+		);
+		const plain = renderPlain(comp);
+		// totalTasks = 2 tasks + 2 cleared = 4; progress = (2/4)
+		expect(plain).toContain("(2/4)");
+		// Active phase uses → icon, not ✓
+		expect(plain).toContain("→ Implementation");
+	});
+
+	it("renders all-done phase with progress suffix and ✓ icon", () => {
+		const comp = new OverviewComponent(
+			makeSnapshot({
+				todoPhases: [
+					{
+						name: "Setup",
+						// 2 in-data completed + 1 cleared = doneCount 3
+						doneCount: 3,
+						tasks: [
+							makeTask({ content: "Init repo", status: "completed" }),
+							makeTask({ content: "Add config", status: "completed" }),
+						],
+					},
+				],
+			}),
+		);
+		const plain = renderPlain(comp);
+		// totalTasks = 2 + 3 - 2 = 3; progress = (3/3)
+		expect(plain).toContain("(3/3)");
+		expect(plain).toContain("✓ Setup");
+	});
+
+	it("renders phantom phase with completed summary", () => {
+		const comp = new OverviewComponent(
+			makeSnapshot({
+				todoPhases: [
+					{
+						name: "Foundation",
+						doneCount: 4,
+						tasks: [],
+					},
+				],
+			}),
+		);
+		const plain = renderPlain(comp);
+		expect(plain).toContain("(4 completed)");
+		expect(plain).toContain("✓ Foundation");
 	});
 });

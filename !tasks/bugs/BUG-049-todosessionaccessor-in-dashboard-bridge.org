@@ -1,0 +1,79 @@
+#+TITLE: TodoSessionAccessor in dashboard bridge missing options parameter on setTodoPhases
+#+STATE: DONE
+#+SESSION_ID: 14a86e34ff16ec47
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T15-29-22-940Z_14a86e34ff16ec47.jsonl]]
+#+CUSTOM_ID: BUG-049-todosessionaccessor-in-dashboard-bridge
+#+EFFORT: 5m
+#+PRIORITY: #C
+#+LAYER: coding-agent
+
+NOTE [2026-03-31]: Updated TodoSessionAccessor.setTodoPhases signature to include options?: { reset?: boolean } parameter.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-011-audit-implementation:
+
+Good — `showTodos` checks `snap.todoPhases.length > 0` which will be true when phantom phases are present. Correct.
+
+Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. Session reset doesn't clear completed counts — stale phantom phases survive across sessions
+- **What**: `this.setTodoPhases([])` on the new-session path (line ~3023) and `#syncTodoPhasesFromBranch` (line ~2899, called on session restore, compaction, and handoff) don't pass `{ reset: true }`, so `#clearedCompletedCounts` retains stale entries from the previous session/plan.
+- **Where**: `packages/coding-agent/src/session/agent-session.ts` lines 3023 and 2899
+- **Why**: After `/new` or session restore, the niri overview will show phantom completed phases from the previous session. User-facing regression — contradicts the design intent that `replace` resets counts for a "new plan."
+- **Effort**: `trivial` — add `{ reset: true }` to the `setTodoPhases([])` call on line 3023, and add it to the `setTodoPhases(...)` call on line 2899.
+
+### 2. No test coverage for non-zero `completedCount`, progress suffix, or phantom phases
+- **What**: All test fixtures set `completedCount: 0`. No test verifies that the progress suffix `(N/M)` renders, that phantom phases `(N completed)` render, or that the `allDone` logic recognizes phantom phases.
+- **Where**: `packages/niri/test/overview-component.test.ts`
+- **Why**: The new rendering logic (progress suffix, phantom phase detection, `totalTasks` computation) has zero test coverage. A future refactor could break the progress display silently.
+- **Effort**: `small` — add 2-3 test cases: one with `completedCount > 0` on an active phase (verify `(N/M)` in output), one with a phantom phase (`tasks: [], completedCount: 5`, verify `(5 completed)` in output), one verifying the `allDone` icon for phantom phases.
+
+### 3. Progress suffix escapes the DIM span for completed phases
+- **What**: In `renderPhase`, the header template is `${dim}${icon} ${BOLD}${phase.name}${RESET_BOLD}${progress}${reset}`. SGR 22 (`RESET_BOLD`) resets *both* bold and dim. So `${progress}` renders in normal intensity even when `dim` is active. The pre-existing code had the same issue but it was invisible since nothing followed `RESET_BOLD` before `reset`.
+- **Where**: `packages/niri/src/overview-component.ts` line ~140
+- **Why**: Minor cosmetic inconsistency — the progress suffix `(3/5)` renders brighter than the dimmed phase name on completed phases. Arguably this is *desirable* (counts stand out), but it's not intentional. If the intent is full dim, `progress` should go before `RESET_BOLD`, or DIM should be re-applied around it.
+- **Effort**: `trivial` — move `${progress}` before `${RESET_BOLD}`, or decide the current look is intentional and add a comment.
+
+### 4. `todo-dashboard-bridge.ts` interface doesn't support `options` parameter
+- **What**: `TodoSessionAccessor.setTodoPhases` is typed as `(phases: TodoPhase[]) => void` (line 58), missing the `options` second parameter. The bridge calls `setTodoPhases?.(phases)` without options on line 186.
+- **Where**: `packages/coding-agent/src/tools/todo-dashboard-bridge.ts` lines 58, 186
+- **Why**: Low risk — the dashboard bridge only applies individual task mutations (toggling status), never a full `replace` op. But if it ever gains replace capability, counts won't reset. The mismatched interface types also mean TypeScript won't catch this if a future caller passes options through the bridge.
+- **Effort**: `trivial` — update the `TodoSessionAccessor` signature to match the session's.
+
+### 5. `completedCount` naming includes abandoned tasks
+- **What**: The controller computes `completedCount` as `inDataCompleted + clearedForPhase` where `inDataCompleted` counts both `"completed"` and `"abandoned"` statuses. The field name suggests only completed tasks.
+- **Where**: `packages/niri/src/controller.ts` line ~267, `packages/niri/src/types.ts` line ~49
+- **Why**: Maintainers may misinterpret the count. The rendering math is internally consistent (both the controller and the component use the same `completed || abandoned` filter), so this is a naming/documentation issue, not a functional bug. The user-facing display correctly represents "done" tasks.
+- **Effort**: `trivial` — rename to `doneCount` or update the JSDoc to clarify it includes abandoned tasks.
+
+In =packages/coding-agent/src/tools/todo-dashboard-bridge.ts= line 58:
+
+#+begin_src typescript
+setTodoPhases?: (phases: TodoPhase[]) => void;
+#+end_src
+
+This is out of sync with the session's =setTodoPhases(phases, options?)= signature
+updated in PLAN-053. The bridge only performs individual task mutations today (no
+replace ops), so the missing parameter has no functional impact. But the type
+mismatch means TypeScript won't catch a future caller trying to forward options
+through this interface.
+
+* Fix
+
+Update the =TodoSessionAccessor= interface:
+
+#+begin_src typescript
+setTodoPhases?: (phases: TodoPhase[], options?: { reset?: boolean }) => void;
+#+end_src
+
+No change needed at the call site (line 186) since it never passes options.
+
+* Acceptance
+
+- =TodoSessionAccessor.setTodoPhases= signature matches =ToolSession.setTodoPhases=
+- =bun check:ts= passes

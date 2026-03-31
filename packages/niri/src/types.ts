@@ -45,6 +45,6 @@ export interface TodoItemSnapshot {
 export interface TodoPhaseSnapshot {
 	name: string;
 	tasks: TodoItemSnapshot[];
-	/** Total completed tasks (in-data + auto-cleared). */
-	completedCount: number;
+	/** Total done tasks — completed + abandoned, both in-data and auto-cleared. */
+	doneCount: number;
 }

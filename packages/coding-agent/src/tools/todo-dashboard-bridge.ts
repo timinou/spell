@@ -55,7 +55,7 @@ export interface TodoControlMessage {
 
 interface TodoSessionAccessor {
 	getTodoPhases?: () => TodoPhase[];
-	setTodoPhases?: (phases: TodoPhase[]) => void;
+	setTodoPhases?: (phases: TodoPhase[], options?: { reset?: boolean }) => void;
 }
 
 // =============================================================================

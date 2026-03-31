@@ -116,9 +116,9 @@ function renderTodoItem(item: TodoItemSnapshot, indent: string, maxWidth?: numbe
 function renderPhase(phase: TodoPhaseSnapshot, maxWidth?: number): string[] {
 	const totalTasks =
 		phase.tasks.length +
-		phase.completedCount -
+		phase.doneCount -
 		phase.tasks.filter(t => t.status === "completed" || t.status === "abandoned").length;
-	const isPhantom = phase.tasks.length === 0 && phase.completedCount > 0;
+	const isPhantom = phase.tasks.length === 0 && phase.doneCount > 0;
 
 	// Determine phase icon from task statuses
 	const hasActive = phase.tasks.some(t => t.status === "in_progress");
@@ -132,12 +132,12 @@ function renderPhase(phase: TodoPhaseSnapshot, maxWidth?: number): string[] {
 	// Build progress suffix: "(3/5)" or "(5 completed)" for phantom phases.
 	let progress = "";
 	if (isPhantom) {
-		progress = ` (${phase.completedCount} completed)`;
+		progress = ` (${phase.doneCount} completed)`;
 	} else if (totalTasks > 0) {
-		progress = ` (${phase.completedCount}/${totalTasks})`;
+		progress = ` (${phase.doneCount}/${totalTasks})`;
 	}
 
-	let header = `${dim}${icon} ${BOLD}${phase.name}${RESET_BOLD}${progress}${reset}`;
+	let header = `${dim}${icon} ${BOLD}${phase.name}${progress}${RESET_BOLD}${reset}`;
 	if (maxWidth !== undefined && visibleWidth(header) > maxWidth) {
 		header = sliceByColumn(header, 0, maxWidth);
 	}

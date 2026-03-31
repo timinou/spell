@@ -268,7 +268,7 @@ export class NiriOverviewController {
 
 			return {
 				name: p.name,
-				completedCount: inDataCompleted + clearedForPhase,
+				doneCount: inDataCompleted + clearedForPhase,
 				tasks: p.tasks.map(t => {
 					const blockerIds = t.blockers ?? [];
 					const blocked =
@@ -311,7 +311,7 @@ export class NiriOverviewController {
 		// Add phantom phases for fully-cleared phases no longer in active data.
 		for (const [phaseId, { name, count }] of clearedCounts) {
 			if (!activePhaseIds.has(phaseId)) {
-				todoPhases.push({ name, tasks: [], completedCount: count });
+				todoPhases.push({ name, tasks: [], doneCount: count });
 			}
 		}
 
