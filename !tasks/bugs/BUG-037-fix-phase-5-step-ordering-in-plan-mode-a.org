@@ -1,0 +1,99 @@
+#+TITLE: Fix Phase 5 Step Ordering in plan-mode-activemd
+#+STATE: DONE
+#+SESSION_ID: 14a82a6edf7e5f3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T10-33-16-413Z_14a82a6edf7e5f3c.jsonl]]
+#+CUSTOM_ID: BUG-037-fix-phase-5-step-ordering-in-plan-mode-a
+#+EFFORT: 15m
+#+PRIORITY: #A
+#+LAYER: prompt
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-009-audit-implementation:
+
+Here are the audit findings, prioritized by effort-to-impact ratio:
+
+---
+
+**1. Phase 5 step ordering is contradictory in plan-mode-active.md**
+- **Where**: `packages/coding-agent/src/prompts/system/plan-mode-active.md` lines 244–248
+- **What**: Step 3 says "Call `{{exitToolName}}`" but step 4 says "Before calling `{{exitToolName}}`, use `org wave`". A numbered list implies sequential execution — 3 before 4.
+- **Why**: The LLM may call `exitToolName` before computing waves, producing a plan without wave structure. This is the primary path through which waves enter the system; getting it wrong defeats the entire feature.
+- **Effort**: `trivial`
+
+---
+
+**2. Journal serialization silently drops orgItemId and orgItemClosingId**
+- **Where**: `packages/org/src/journal.ts` lines 70–84 (`serializeJournalOrg`)
+- **What**: `JournalTodoItem` interface has both `orgItemId` and `orgItemClosingId` (lines 38–39), but the serializer never writes them to org properties.
+- **Why**: Journal persistence drops the org-linking fields. While non-critical (journal is informational), it means the audit trail silently loses which tasks were linked to which org items and which triggered verification.
+- **Effort**: `trivial` (add 2 `if` lines to serializer, matching the pattern of the other fields)
+
+---
+
+**3. No test coverage for `extractPlanWaves`**
+- **Where**: `packages/coding-agent/src/tools/exit-plan-mode.ts` line 81
+- **What**: The function is exported, public, and used in the plan approval flow — but has zero tests. `grep` confirms no references in any test file.
+- **Why**: Regression risk on the wave extraction contract. Edge cases untested: no waves, entries appearing before any wave heading, wave heading without entries, `:wave:` tag with varying whitespace. This function is the sole bridge between plan text and structured wave data.
+- **Effort**: `small`
+
+---
+
+**4. `TodoDashboardBridge` drops orgItemId/orgItemClosingId**
+- **Where**: `packages/coding-agent/src/tools/todo-dashboard-bridge.ts` lines 18–29, 86–97
+- **What**: `TodoDashboardTask` interface doesn't include `orgItemId` or `orgItemClosingId`. The `buildSnapshot` mapping omits them.
+- **Why**: QML dashboard can't display which tasks are org-linked or which will trigger verification gating. For wave-based plans, the dashboard shows tasks without their most important metadata.
+- **Effort**: `trivial`
+
+---
+
+**5. Two parallel type hierarchies for wave data**
+- **Where**: `exit-plan-mode.ts` has `PlanWave { name, entries: PlanWaveEntry[] }` where entry has `{ orgItemId, step }`. `types.ts` has `ComputedWave { number, items: WaveItem[] }` where item has `{ custom_id, parent_id, title }`.
+- **What**: Same concept, different field names, different structures. `PlanWave` is text-extracted (name-based), `ComputedWave` is elisp-computed (number-based). No conversion between them exists — they serve different code paths that don't communicate.
+- **Why**: Maintenance cost. If wave semantics change, both hierarchies need updating independently. A future consumer wanting to correlate `org wave` output with `extractPlanWaves` output would need manual mapping.
+- **Effort**: `medium` (defensible split since they represent plan-text vs computed views, but worth documenting the relationship)
+
+---
+
+**6. `formatWaveManifest` padding arithmetic is off by 2**
+- **Where**: `packages/org/src/tool.ts` line 634
+- **What**: `50 - 10 - String(wave.number).length` uses `10` as the prefix length, but `** wave-` is 8 characters, so the `:wave:` tag starts 2 columns earlier than intended.
+- **Why**: Cosmetic only. The org heading is still valid and the tag is parsed correctly by `extractPlanWaves`.
+- **Effort**: `trivial`
+
+* Scope
+** In-scope
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= lines 244-248
+
+** Out-of-scope
+- Other prompt files (no issue there)
+
+* Problem
+Phase 5 numbered steps are contradictory:
+#+begin_example
+1. Create children first
+2. Create PLAN last
+3. Call {{exitToolName}} with PLAN itemId
+4. Before calling {{exitToolName}}, use org wave...
+5. Structure the PLAN's Execution Manifest...
+#+end_example
+
+Step 3 says "call exit" but step 4 says "before calling exit, compute waves." The LLM reads numbered lists sequentially — it will call exit before computing waves.
+
+* Fix
+Reorder to:
+#+begin_example
+1. Create children first (state: "ITEM")
+2. Use org wave on the category to compute wave structure from the sub-outline dependency graph
+3. Create PLAN last (state: "INIT") with wave-structured Execution Manifest using :wave: tag headings and [[id:...]] links
+4. Call {{exitToolName}} with PLAN itemId
+#+end_example
+
+This puts wave computation before PLAN creation (since the manifest needs wave data) and exit last.
+
+* Tests
+No automated tests — prompt-only change. Verify by reading the file.
+
+* Acceptance Criteria
+- Steps in Phase 5 are logically sequential: children → compute waves → create PLAN with manifest → call exit
+- No step references a future step's output

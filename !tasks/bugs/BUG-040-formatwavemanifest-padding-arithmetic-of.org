@@ -1,0 +1,93 @@
+#+TITLE: formatWaveManifest Padding Arithmetic Off by 2
+#+STATE: DONE
+#+SESSION_ID: 14a82a6edf7e5f3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T10-33-16-413Z_14a82a6edf7e5f3c.jsonl]]
+#+CUSTOM_ID: BUG-040-formatwavemanifest-padding-arithmetic-of
+#+EFFORT: 10m
+#+PRIORITY: #C
+#+LAYER: infra
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-009-audit-implementation:
+
+Here are the audit findings, prioritized by effort-to-impact ratio:
+
+---
+
+**1. Phase 5 step ordering is contradictory in plan-mode-active.md**
+- **Where**: `packages/coding-agent/src/prompts/system/plan-mode-active.md` lines 244–248
+- **What**: Step 3 says "Call `{{exitToolName}}`" but step 4 says "Before calling `{{exitToolName}}`, use `org wave`". A numbered list implies sequential execution — 3 before 4.
+- **Why**: The LLM may call `exitToolName` before computing waves, producing a plan without wave structure. This is the primary path through which waves enter the system; getting it wrong defeats the entire feature.
+- **Effort**: `trivial`
+
+---
+
+**2. Journal serialization silently drops orgItemId and orgItemClosingId**
+- **Where**: `packages/org/src/journal.ts` lines 70–84 (`serializeJournalOrg`)
+- **What**: `JournalTodoItem` interface has both `orgItemId` and `orgItemClosingId` (lines 38–39), but the serializer never writes them to org properties.
+- **Why**: Journal persistence drops the org-linking fields. While non-critical (journal is informational), it means the audit trail silently loses which tasks were linked to which org items and which triggered verification.
+- **Effort**: `trivial` (add 2 `if` lines to serializer, matching the pattern of the other fields)
+
+---
+
+**3. No test coverage for `extractPlanWaves`**
+- **Where**: `packages/coding-agent/src/tools/exit-plan-mode.ts` line 81
+- **What**: The function is exported, public, and used in the plan approval flow — but has zero tests. `grep` confirms no references in any test file.
+- **Why**: Regression risk on the wave extraction contract. Edge cases untested: no waves, entries appearing before any wave heading, wave heading without entries, `:wave:` tag with varying whitespace. This function is the sole bridge between plan text and structured wave data.
+- **Effort**: `small`
+
+---
+
+**4. `TodoDashboardBridge` drops orgItemId/orgItemClosingId**
+- **Where**: `packages/coding-agent/src/tools/todo-dashboard-bridge.ts` lines 18–29, 86–97
+- **What**: `TodoDashboardTask` interface doesn't include `orgItemId` or `orgItemClosingId`. The `buildSnapshot` mapping omits them.
+- **Why**: QML dashboard can't display which tasks are org-linked or which will trigger verification gating. For wave-based plans, the dashboard shows tasks without their most important metadata.
+- **Effort**: `trivial`
+
+---
+
+**5. Two parallel type hierarchies for wave data**
+- **Where**: `exit-plan-mode.ts` has `PlanWave { name, entries: PlanWaveEntry[] }` where entry has `{ orgItemId, step }`. `types.ts` has `ComputedWave { number, items: WaveItem[] }` where item has `{ custom_id, parent_id, title }`.
+- **What**: Same concept, different field names, different structures. `PlanWave` is text-extracted (name-based), `ComputedWave` is elisp-computed (number-based). No conversion between them exists — they serve different code paths that don't communicate.
+- **Why**: Maintenance cost. If wave semantics change, both hierarchies need updating independently. A future consumer wanting to correlate `org wave` output with `extractPlanWaves` output would need manual mapping.
+- **Effort**: `medium` (defensible split since they represent plan-text vs computed views, but worth documenting the relationship)
+
+---
+
+**6. `formatWaveManifest` padding arithmetic is off by 2**
+- **Where**: `packages/org/src/tool.ts` line 634
+- **What**: `50 - 10 - String(wave.number).length` uses `10` as the prefix length, but `** wave-` is 8 characters, so the `:wave:` tag starts 2 columns earlier than intended.
+- **Why**: Cosmetic only. The org heading is still valid and the tag is parsed correctly by `extractPlanWaves`.
+- **Effort**: `trivial`
+
+* Scope
+** In-scope
+- =packages/org/src/tool.ts= — =formatWaveManifest= function, line 634
+
+** Out-of-scope
+- Wave computation logic
+- extractPlanWaves parser (handles any whitespace)
+
+* Problem
+Line 634:
+#+begin_src typescript
+lines.push(`** wave-${wave.number}${" ".repeat(Math.max(1, 50 - 10 - String(wave.number).length))}${tag}`);
+#+end_src
+
+The =10= is meant to be the length of =** wave-= but that string is 8 characters. The =:wave:= tag starts 2 columns earlier than the intended column 50.
+
+* Fix
+Change =10= to =8=:
+#+begin_src typescript
+const prefix = `** wave-${wave.number}`;
+lines.push(`${prefix}${" ".repeat(Math.max(1, 50 - prefix.length))}${tag}`);
+#+end_src
+
+This computes the actual prefix length instead of hardcoding, preventing future drift if the format changes.
+
+* Tests
+No automated test — cosmetic formatting. Verify manually that generated manifest headings align =:wave:= tag at column 50.
+
+* Acceptance Criteria
+- =:wave:= tag is right-aligned at column 50 in generated manifest output

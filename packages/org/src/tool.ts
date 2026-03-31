@@ -631,7 +631,8 @@ function formatWaveManifest(waves: ComputedWave[]): string {
 	const lines: string[] = ["* Execution Manifest"];
 	for (const wave of waves) {
 		const tag = ":wave:";
-		lines.push(`** wave-${wave.number}${" ".repeat(Math.max(1, 50 - 10 - String(wave.number).length))}${tag}`);
+		const prefix = `** wave-${wave.number}`;
+		lines.push(`${prefix}${" ".repeat(Math.max(1, 50 - prefix.length))}${tag}`);
 		for (const item of wave.items) {
 			lines.push(`- [[id:${item.custom_id}]] ${item.title}`);
 		}

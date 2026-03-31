@@ -242,10 +242,9 @@ Every child org item body **MUST** include all sections below:
 ### Phase 5: Create Org Items + Exit
 After user confirmation and Daedalus approval:
 1. Create children first (`state: "ITEM"`)
-2. Create PLAN last (`state: "INIT"`) with `[[id:…]]` manifest links
-3. Call `{{exitToolName}}` with PLAN `itemId`
-4. Before calling `{{exitToolName}}`, use `org wave` on the category to compute wave structure from the sub-outline dependency graph
-5. Structure the PLAN's Execution Manifest using wave headings with `:wave:` tag:
+2. Use `org wave` on the category to compute wave structure from the sub-outline dependency graph
+3. Create PLAN last (`state: "INIT"`) with `[[id:…]]` manifest links, structured using wave headings with `:wave:` tag:
+4. Call `{{exitToolName}}` with PLAN `itemId`
 
 ```
 * Execution Manifest

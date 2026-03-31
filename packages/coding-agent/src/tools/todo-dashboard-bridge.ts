@@ -26,6 +26,8 @@ export interface TodoDashboardTask {
 	gateLlm?: string;
 	verifyCmd?: string;
 	blockers?: string[];
+	orgItemId?: string;
+	orgItemClosingId?: string;
 }
 
 export interface TodoDashboardPhase {
@@ -94,6 +96,8 @@ export class TodoDashboardBridge {
 				gateLlm: task.gateLlm,
 				verifyCmd: task.verifyCmd,
 				blockers: task.blockers,
+				orgItemId: task.orgItemId,
+				orgItemClosingId: task.orgItemClosingId,
 			})),
 		}));
 

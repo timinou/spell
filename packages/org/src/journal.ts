@@ -81,6 +81,8 @@ function serializeJournalOrg(phases: JournalTodoPhase[], sessionId: string, date
 			if (task.gateLlm) lines.push(`:GATE_LLM: ${task.gateLlm}`);
 			if (task.verifyCmd) lines.push(`:VERIFY_CMD: ${task.verifyCmd}`);
 			if (task.blockers?.length) lines.push(`:DEPENDS: ${task.blockers.join(" ")}`);
+			if (task.orgItemId) lines.push(`:ORG_ITEM_ID: ${task.orgItemId}`);
+			if (task.orgItemClosingId) lines.push(`:ORG_ITEM_CLOSING_ID: ${task.orgItemClosingId}`);
 			lines.push(":END:");
 
 			if (task.details) {

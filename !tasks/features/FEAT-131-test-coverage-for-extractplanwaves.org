@@ -1,0 +1,142 @@
+#+TITLE: Test Coverage for extractPlanWaves
+#+STATE: DONE
+#+SESSION_ID: 14a82a6edf7e5f3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T10-33-16-413Z_14a82a6edf7e5f3c.jsonl]]
+#+CUSTOM_ID: FEAT-131-test-coverage-for-extractplanwaves
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: test
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-009-audit-implementation:
+
+Here are the audit findings, prioritized by effort-to-impact ratio:
+
+---
+
+**1. Phase 5 step ordering is contradictory in plan-mode-active.md**
+- **Where**: `packages/coding-agent/src/prompts/system/plan-mode-active.md` lines 244–248
+- **What**: Step 3 says "Call `{{exitToolName}}`" but step 4 says "Before calling `{{exitToolName}}`, use `org wave`". A numbered list implies sequential execution — 3 before 4.
+- **Why**: The LLM may call `exitToolName` before computing waves, producing a plan without wave structure. This is the primary path through which waves enter the system; getting it wrong defeats the entire feature.
+- **Effort**: `trivial`
+
+---
+
+**2. Journal serialization silently drops orgItemId and orgItemClosingId**
+- **Where**: `packages/org/src/journal.ts` lines 70–84 (`serializeJournalOrg`)
+- **What**: `JournalTodoItem` interface has both `orgItemId` and `orgItemClosingId` (lines 38–39), but the serializer never writes them to org properties.
+- **Why**: Journal persistence drops the org-linking fields. While non-critical (journal is informational), it means the audit trail silently loses which tasks were linked to which org items and which triggered verification.
+- **Effort**: `trivial` (add 2 `if` lines to serializer, matching the pattern of the other fields)
+
+---
+
+**3. No test coverage for `extractPlanWaves`**
+- **Where**: `packages/coding-agent/src/tools/exit-plan-mode.ts` line 81
+- **What**: The function is exported, public, and used in the plan approval flow — but has zero tests. `grep` confirms no references in any test file.
+- **Why**: Regression risk on the wave extraction contract. Edge cases untested: no waves, entries appearing before any wave heading, wave heading without entries, `:wave:` tag with varying whitespace. This function is the sole bridge between plan text and structured wave data.
+- **Effort**: `small`
+
+---
+
+**4. `TodoDashboardBridge` drops orgItemId/orgItemClosingId**
+- **Where**: `packages/coding-agent/src/tools/todo-dashboard-bridge.ts` lines 18–29, 86–97
+- **What**: `TodoDashboardTask` interface doesn't include `orgItemId` or `orgItemClosingId`. The `buildSnapshot` mapping omits them.
+- **Why**: QML dashboard can't display which tasks are org-linked or which will trigger verification gating. For wave-based plans, the dashboard shows tasks without their most important metadata.
+- **Effort**: `trivial`
+
+---
+
+**5. Two parallel type hierarchies for wave data**
+- **Where**: `exit-plan-mode.ts` has `PlanWave { name, entries: PlanWaveEntry[] }` where entry has `{ orgItemId, step }`. `types.ts` has `ComputedWave { number, items: WaveItem[] }` where item has `{ custom_id, parent_id, title }`.
+- **What**: Same concept, different field names, different structures. `PlanWave` is text-extracted (name-based), `ComputedWave` is elisp-computed (number-based). No conversion between them exists — they serve different code paths that don't communicate.
+- **Why**: Maintenance cost. If wave semantics change, both hierarchies need updating independently. A future consumer wanting to correlate `org wave` output with `extractPlanWaves` output would need manual mapping.
+- **Effort**: `medium` (defensible split since they represent plan-text vs computed views, but worth documenting the relationship)
+
+---
+
+**6. `formatWaveManifest` padding arithmetic is off by 2**
+- **Where**: `packages/org/src/tool.ts` line 634
+- **What**: `50 - 10 - String(wave.number).length` uses `10` as the prefix length, but `** wave-` is 8 characters, so the `:wave:` tag starts 2 columns earlier than intended.
+- **Why**: Cosmetic only. The org heading is still valid and the tag is parsed correctly by `extractPlanWaves`.
+- **Effort**: `trivial`
+
+* Scope
+** In-scope
+- =packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts= — NEW test file
+- Tests for =extractPlanWaves()= from =packages/coding-agent/src/tools/exit-plan-mode.ts= line 81
+
+** Out-of-scope
+- Changing extractPlanWaves implementation (tests only)
+- Integration tests with Emacs (unit tests of the text parser)
+
+* Context
+=extractPlanWaves= is the sole bridge between plan body text and structured wave data used by the executor. It's exported, public, used in every plan approval flow, and has zero tests. The function parses =** wave-name :wave:= headings and =- [[id:...]] description= entries from org body text.
+
+Note: This function operates on =PlanWave= types (text-extracted, name-based). The org package has separate =ComputedWave= types (elisp-computed, number-based) used by =formatWaveManifest=. These serve different code paths: =ComputedWave= is for elisp → TS manifest generation, =PlanWave= is for plan body → executor. They don't interact.
+
+* Tests
+File: =packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts=
+
+** Scenario: extracts 3-wave structure
+Input:
+#+begin_example
+* Execution Manifest
+** foundation                                      :wave:
+- [[id:FEAT-001::define-types]] Define TypeScript interfaces
+- [[id:FEAT-002::define-schema]] Define parser schema
+** core                                            :wave:
+- [[id:FEAT-001::impl]] Implement parser
+** verify                                          :wave:
+- [[id:FEAT-001::tests]] Write tests
+#+end_example
+Expected: 3 waves, names =foundation=, =core=, =verify=, correct entry counts and IDs.
+
+** Scenario: returns undefined for body without waves
+Input: plain org body with =[[id:...]]= links but no =:wave:= headings.
+Expected: =undefined=
+
+** Scenario: entries before any wave heading are ignored
+Input:
+#+begin_example
+- [[id:FEAT-001]] Some orphan entry
+** wave-1                                          :wave:
+- [[id:FEAT-001::a]] Step A
+#+end_example
+Expected: 1 wave with 1 entry. Orphan entry not included.
+
+** Scenario: wave heading with no entries
+Input:
+#+begin_example
+** empty-wave                                      :wave:
+** next-wave                                       :wave:
+- [[id:FEAT-001::a]] Step A
+#+end_example
+Expected: 2 waves. First has 0 entries, second has 1.
+
+** Scenario: handles varying whitespace in wave heading
+Input: =** foundation :wave:= (minimal spacing)
+Expected: wave extracted with name =foundation=
+
+** Scenario: non-wave headings between waves don't leak entries
+Input:
+#+begin_example
+** wave-1                                          :wave:
+- [[id:FEAT-001::a]] Step A
+** Some other heading
+- [[id:FEAT-002::b]] Step B
+** wave-2                                          :wave:
+- [[id:FEAT-003::c]] Step C
+#+end_example
+Expected: wave-1 has 1 entry (FEAT-001::a). wave-2 has 1 entry (FEAT-003::c). FEAT-002::b is NOT in wave-1 because =current= should reset on non-wave headings.
+
+NOTE: This last scenario may reveal a bug — =extractPlanWaves= does not reset =current= on non-wave =**= headings. The entry regex =^-\s+\[\[id:= would match the line under "Some other heading", adding it to wave-1. If this test fails, file a follow-up bug.
+
+** Scenario: top-level IDs (no ::) in wave entries
+Input: =- [[id:FEAT-001]] Full feature= under a wave heading
+Expected: entry with =orgItemId: "FEAT-001"=, =step: "Full feature"=
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts= passes
+- All 7 scenarios covered
+- If scenario 6 (non-wave heading leak) reveals a bug, document it in test comments

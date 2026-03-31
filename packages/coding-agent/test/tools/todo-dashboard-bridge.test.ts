@@ -10,12 +10,20 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { EventBus } from "../../src/utils/event-bus";
-import type { TodoPhase } from "../../src/tools/todo-write";
 import { TodoDashboardBridge } from "../../src/tools/todo-dashboard-bridge";
+import type { TodoPhase } from "../../src/tools/todo-write";
+import { EventBus } from "../../src/utils/event-bus";
 
 function makePhases(
-	...items: Array<{ id: string; content: string; status?: string; gateCommit?: boolean; blockers?: string[] }>
+	...items: Array<{
+		id: string;
+		content: string;
+		status?: string;
+		gateCommit?: boolean;
+		blockers?: string[];
+		orgItemId?: string;
+		orgItemClosingId?: string;
+	}>
 ): TodoPhase[] {
 	return [
 		{
@@ -27,6 +35,8 @@ function makePhases(
 				status: (item.status ?? "pending") as any,
 				gateCommit: item.gateCommit,
 				blockers: item.blockers,
+				orgItemId: item.orgItemId,
+				orgItemClosingId: item.orgItemClosingId,
 			})),
 		},
 	];
@@ -90,7 +100,9 @@ describe("TodoDashboardBridge", () => {
 	test("registerPanel emits shell:add_panel", () => {
 		const eventBus = new EventBus();
 		const events: any[] = [];
-		eventBus.subscribe("shell:add_panel", data => { events.push(data); });
+		eventBus.subscribe("shell:add_panel", data => {
+			events.push(data);
+		});
 
 		const bridge = new TodoDashboardBridge(makeSession(), eventBus);
 		bridge.registerPanel();
@@ -103,7 +115,9 @@ describe("TodoDashboardBridge", () => {
 	test("registerPanel is idempotent", () => {
 		const eventBus = new EventBus();
 		const events: any[] = [];
-		eventBus.subscribe("shell:add_panel", data => { events.push(data); });
+		eventBus.subscribe("shell:add_panel", data => {
+			events.push(data);
+		});
 
 		const bridge = new TodoDashboardBridge(makeSession(), eventBus);
 		bridge.registerPanel();
@@ -115,7 +129,9 @@ describe("TodoDashboardBridge", () => {
 	test("auto-registers when gated tasks exist", () => {
 		const eventBus = new EventBus();
 		const events: any[] = [];
-		eventBus.subscribe("shell:add_panel", data => { events.push(data); });
+		eventBus.subscribe("shell:add_panel", data => {
+			events.push(data);
+		});
 
 		const session = makeSession(makePhases({ id: "t1", content: "A", gateCommit: true }));
 		const bridge = new TodoDashboardBridge(session, eventBus);
@@ -129,8 +145,12 @@ describe("TodoDashboardBridge", () => {
 		const eventBus = new EventBus();
 		const addEvents: any[] = [];
 		const removeEvents: any[] = [];
-		eventBus.subscribe("shell:add_panel", data => { addEvents.push(data); });
-		eventBus.subscribe("shell:remove_panel", data => { removeEvents.push(data); });
+		eventBus.subscribe("shell:add_panel", data => {
+			addEvents.push(data);
+		});
+		eventBus.subscribe("shell:remove_panel", data => {
+			removeEvents.push(data);
+		});
 
 		const session = makeSession(makePhases({ id: "t1", content: "A", gateCommit: true }));
 		const bridge = new TodoDashboardBridge(session, eventBus);
@@ -187,5 +207,21 @@ describe("TodoDashboardBridge", () => {
 
 		bridge.dispose();
 		expect(bridge.panelRegistered).toBe(false);
+	});
+
+	test("buildSnapshot includes orgItemId and orgItemClosingId", () => {
+		const session = makeSession(
+			makePhases({
+				id: "task-1",
+				content: "Auth task",
+				orgItemId: "FEAT-001-auth",
+				orgItemClosingId: "FEAT-001-auth-close",
+			}),
+		);
+		const bridge = new TodoDashboardBridge(session);
+		const snap = bridge.buildSnapshot();
+
+		expect(snap.phases[0].tasks[0].orgItemId).toBe("FEAT-001-auth");
+		expect(snap.phases[0].tasks[0].orgItemClosingId).toBe("FEAT-001-auth-close");
 	});
 });

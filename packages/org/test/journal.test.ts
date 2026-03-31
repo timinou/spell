@@ -243,6 +243,48 @@ describe("writeJournal", () => {
 		expect(content).not.toContain(":BLOCKER");
 	});
 
+	test("orgItemId and orgItemClosingId written to journal", async () => {
+		const phases: JournalTodoPhase[] = [
+			{
+				id: "phase-1",
+				name: "Linked Work",
+				tasks: [
+					{
+						id: "task-1",
+						content: "Linked task",
+						status: "completed",
+						orgItemId: "FEAT-001-auth",
+						orgItemClosingId: "FEAT-001-auth-close",
+					},
+				],
+			},
+		];
+		await writeJournal(tmpDir, "linked-session", phases);
+		const content = await Bun.file(journalFilePath(tmpDir, "linked-session")).text();
+		expect(content).toContain(":ORG_ITEM_ID: FEAT-001-auth");
+		expect(content).toContain(":ORG_ITEM_CLOSING_ID: FEAT-001-auth-close");
+	});
+
+	test("omits org item properties when not set", async () => {
+		const phases: JournalTodoPhase[] = [
+			{
+				id: "phase-1",
+				name: "Plain Work",
+				tasks: [
+					{
+						id: "task-1",
+						content: "No org link",
+						status: "pending",
+					},
+				],
+			},
+		];
+		await writeJournal(tmpDir, "no-org-session", phases);
+		const content = await Bun.file(journalFilePath(tmpDir, "no-org-session")).text();
+		expect(content).not.toContain(":ORG_ITEM_ID:");
+		expect(content).not.toContain(":ORG_ITEM_CLOSING_ID:");
+	});
+
 	test("serializes details as body text below PROPERTIES drawer", async () => {
 		const detailPhases: JournalTodoPhase[] = [
 			{

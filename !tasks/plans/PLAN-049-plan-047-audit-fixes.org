@@ -1,0 +1,123 @@
+#+TITLE: PLAN-047 Audit Fixes
+#+STATE: DONE
+#+SESSION_ID: 14a82a6edf7e5f3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T10-33-16-413Z_14a82a6edf7e5f3c.jsonl]]
+#+CUSTOM_ID: PLAN-049-plan-047-audit-fixes
+#+EFFORT: 2h
+#+PRIORITY: #A
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-009-audit-implementation:
+
+Here are the audit findings, prioritized by effort-to-impact ratio:
+
+---
+
+**1. Phase 5 step ordering is contradictory in plan-mode-active.md**
+- **Where**: `packages/coding-agent/src/prompts/system/plan-mode-active.md` lines 244–248
+- **What**: Step 3 says "Call `{{exitToolName}}`" but step 4 says "Before calling `{{exitToolName}}`, use `org wave`". A numbered list implies sequential execution — 3 before 4.
+- **Why**: The LLM may call `exitToolName` before computing waves, producing a plan without wave structure. This is the primary path through which waves enter the system; getting it wrong defeats the entire feature.
+- **Effort**: `trivial`
+
+---
+
+**2. Journal serialization silently drops orgItemId and orgItemClosingId**
+- **Where**: `packages/org/src/journal.ts` lines 70–84 (`serializeJournalOrg`)
+- **What**: `JournalTodoItem` interface has both `orgItemId` and `orgItemClosingId` (lines 38–39), but the serializer never writes them to org properties.
+- **Why**: Journal persistence drops the org-linking fields. While non-critical (journal is informational), it means the audit trail silently loses which tasks were linked to which org items and which triggered verification.
+- **Effort**: `trivial` (add 2 `if` lines to serializer, matching the pattern of the other fields)
+
+---
+
+**3. No test coverage for `extractPlanWaves`**
+- **Where**: `packages/coding-agent/src/tools/exit-plan-mode.ts` line 81
+- **What**: The function is exported, public, and used in the plan approval flow — but has zero tests. `grep` confirms no references in any test file.
+- **Why**: Regression risk on the wave extraction contract. Edge cases untested: no waves, entries appearing before any wave heading, wave heading without entries, `:wave:` tag with varying whitespace. This function is the sole bridge between plan text and structured wave data.
+- **Effort**: `small`
+
+---
+
+**4. `TodoDashboardBridge` drops orgItemId/orgItemClosingId**
+- **Where**: `packages/coding-agent/src/tools/todo-dashboard-bridge.ts` lines 18–29, 86–97
+- **What**: `TodoDashboardTask` interface doesn't include `orgItemId` or `orgItemClosingId`. The `buildSnapshot` mapping omits them.
+- **Why**: QML dashboard can't display which tasks are org-linked or which will trigger verification gating. For wave-based plans, the dashboard shows tasks without their most important metadata.
+- **Effort**: `trivial`
+
+---
+
+**5. Two parallel type hierarchies for wave data**
+- **Where**: `exit-plan-mode.ts` has `PlanWave { name, entries: PlanWaveEntry[] }` where entry has `{ orgItemId, step }`. `types.ts` has `ComputedWave { number, items: WaveItem[] }` where item has `{ custom_id, parent_id, title }`.
+- **What**: Same concept, different field names, different structures. `PlanWave` is text-extracted (name-based), `ComputedWave` is elisp-computed (number-based). No conversion between them exists — they serve different code paths that don't communicate.
+- **Why**: Maintenance cost. If wave semantics change, both hierarchies need updating independently. A future consumer wanting to correlate `org wave` output with `extractPlanWaves` output would need manual mapping.
+- **Effort**: `medium` (defensible split since they represent plan-text vs computed views, but worth documenting the relationship)
+
+---
+
+**6. `formatWaveManifest` padding arithmetic is off by 2**
+- **Where**: `packages/org/src/tool.ts` line 634
+- **What**: `50 - 10 - String(wave.number).length` uses `10` as the prefix length, but `** wave-` is 8 characters, so the `:wave:` tag starts 2 columns earlier than intended.
+- **Why**: Cosmetic only. The org heading is still valid and the tag is parsed correctly by `extractPlanWaves`.
+- **Effort**: `trivial`
+
+* Context
+** Problem
+Post-implementation audit of PLAN-047 (emergent wave plan decomposition) identified 6 findings: 1 prompt ordering bug that could defeat the wave feature, 2 data-loss bugs in serialization, 1 test gap on a critical function, 1 dashboard metadata gap, and 1 cosmetic formatting issue.
+
+** Approach
+Fix all 6 findings in priority order. Findings 1, 2, 4, 6 are trivial one-line fixes. Finding 3 (test coverage) is the most work at ~1h. Finding 5 (type hierarchy documentation) is folded into finding 3's test file as a clarifying comment.
+
+** Key Decisions
+- Do NOT unify PlanWave/ComputedWave type hierarchies — the split is defensible (text-extracted vs elisp-computed). Document the relationship in the test file instead.
+- extractPlanWaves test scenario 6 (non-wave heading leak) may reveal a latent bug. If the test fails, document it; do NOT fix extractPlanWaves in this plan.
+
+* Verification
+** Automated
+- =bun test packages/org/test/journal.test.ts= -- journal orgItemId/orgItemClosingId
+- =bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts= -- extractPlanWaves coverage
+- =bun test packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts= -- dashboard bridge fields
+- =bun check:ts= -- type checking passes
+
+** Manual
+- Read plan-mode-active.md Phase 5: steps are logically sequential (children → waves → PLAN → exit)
+- Read journal.ts: orgItemId/orgItemClosingId written to =:ORG_ITEM_ID:= and =:ORG_ITEM_CLOSING_ID:=
+- Read formatWaveManifest: prefix length computed dynamically, not hardcoded
+
+* Execution Manifest
+** trivial-fixes                                                 :wave:
+- [[id:BUG-037-fix-phase-5-step-ordering-in-plan-mode-a]] Fix Phase 5 step ordering (15m)
+- [[id:BUG-038-journal-serialization-drops-orgitemid-an]] Journal serialization fix (15m)
+- [[id:BUG-039-tododashboardbridge-drops-orgitemid-and]] Dashboard bridge fix (15m)
+- [[id:BUG-040-formatwavemanifest-padding-arithmetic-of]] Padding arithmetic fix (10m)
+
+** test-coverage                                                 :wave:
+- [[id:FEAT-131-test-coverage-for-extractplanwaves]] extractPlanWaves test suite (1h, depends BUG-037)
+
+Dependency: FEAT-131 depends on BUG-037 because the test needs to understand the correct wave format, which BUG-037 clarifies by fixing the prompt.
+
+Total effort: ~2h. 2 waves. First wave has 4 parallel trivial items. Second wave has 1 test item.
+
+** Completion [2026-03-31]
+*** Verification
+- =bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts= -- 7/7 pass (40 assertions)
+- =bun test packages/org/test/journal.test.ts= -- 21/21 pass (35 assertions)
+- =bun test packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts= -- 11/11 pass (24 assertions)
+- =bunx tsgo -p tsconfig.json= -- clean (0 errors)
+- Manual: plan-mode-active.md Phase 5 steps now sequential: children -> waves -> PLAN -> exit
+- Manual: journal.ts writes =:ORG_ITEM_ID:= and =:ORG_ITEM_CLOSING_ID:= when set
+- Manual: formatWaveManifest uses dynamic =prefix.length= instead of hardcoded =10=
+
+*** Artifacts
+All 6 findings addressed:
+1. BUG-037: Prompt step reorder -- =packages/coding-agent/src/prompts/system/plan-mode-active.md=
+2. BUG-038: Journal serialization -- =packages/org/src/journal.ts=, =packages/org/test/journal.test.ts=
+3. BUG-039: Dashboard bridge -- =packages/coding-agent/src/tools/todo-dashboard-bridge.ts=, =packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts=
+4. BUG-040: Padding arithmetic -- =packages/org/src/tool.ts=
+5. FEAT-131: extractPlanWaves tests -- =packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts= (new, 7 scenarios)
+6. Finding 5 (type hierarchy): Documented in test file header comment (PlanWave vs ComputedWave intentional split)
+
+Scenario 6 (non-wave heading leak) confirmed: =extractPlanWaves= does NOT reset =current= on non-wave =**= headings. Entries under non-wave headings accumulate into the preceding wave. Documented as known limitation in test, not a bug for current usage (plan bodies are generated with waves only).
+
+*** Deviations
+None.
