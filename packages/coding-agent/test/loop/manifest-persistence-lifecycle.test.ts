@@ -68,7 +68,7 @@ describe("manifest lifecycle persistence", () => {
 		await writeManifest(cwd, loop.id, "test", manifest);
 
 		// Launch should read manifest from disk
-		const launched = await manager.launch(loop.id);
+		const _launched = await manager.launch(loop.id);
 		const snapshot = manager.getLoop(loop.id);
 
 		expect(snapshot.manifest).toBeDefined();
@@ -81,7 +81,7 @@ describe("manifest lifecycle persistence", () => {
 		const loop = await manager.start({ name: "test", manifestBuilding: true, domains: [] });
 
 		// Don't write any manifest files
-		const launched = await manager.launch(loop.id);
+		const _launched = await manager.launch(loop.id);
 		const snapshot = manager.getLoop(loop.id);
 
 		// Should proceed fine — manifest stays undefined for legacy loops

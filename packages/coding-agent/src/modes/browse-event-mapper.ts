@@ -2,8 +2,8 @@ import type { AgentSessionEvent } from "../session/agent-session";
 import type { CustomMessage } from "../session/messages";
 import type { CodeSearchSource } from "../web/search/code-search";
 import type { SearchSource } from "../web/search/types";
-import { type BrowseFinding, createFinding, parseBrowseFinding } from "./browse-findings";
 import type { FindingSourceType } from "./browse-findings";
+import { type BrowseFinding, createFinding, parseBrowseFinding } from "./browse-findings";
 import { SessionEventMapper } from "./qml-event-mapper";
 
 export interface BrowseTabEvent {
@@ -101,7 +101,9 @@ export class BrowseEventMapper extends SessionEventMapper {
 	}
 
 	#extractToolFindings(event: AgentSessionEvent & { type: "tool_execution_end" }, pending: PendingToolCall): void {
-		const result = event.result as { content?: Array<{ type: string; text?: string }>; details?: unknown } | undefined;
+		const result = event.result as
+			| { content?: Array<{ type: string; text?: string }>; details?: unknown }
+			| undefined;
 		if (!result) return;
 
 		switch (pending.toolName) {
@@ -117,11 +119,7 @@ export class BrowseEventMapper extends SessionEventMapper {
 		}
 	}
 
-	#extractSearchFindings(
-		result: { details?: unknown },
-		args: Record<string, unknown>,
-		toolCallId: string,
-	): void {
+	#extractSearchFindings(result: { details?: unknown }, args: Record<string, unknown>, toolCallId: string): void {
 		const details = result.details as ToolResultDetails | undefined;
 		if (!details || details.error || !Array.isArray(details.response?.sources)) return;
 
@@ -129,14 +127,16 @@ export class BrowseEventMapper extends SessionEventMapper {
 		for (const raw of details.response!.sources) {
 			const source = raw as SearchSource;
 			if (!source.url) continue;
-			findings.push(createFinding({
-				url: source.url,
-				title: source.title,
-				excerpt: source.snippet,
-				sourceType: "search" as FindingSourceType,
-				curated: false,
-				enriched: false,
-			}));
+			findings.push(
+				createFinding({
+					url: source.url,
+					title: source.title,
+					excerpt: source.snippet,
+					sourceType: "search" as FindingSourceType,
+					curated: false,
+					enriched: false,
+				}),
+			);
 		}
 
 		this.onAdditionalEvent?.({
@@ -155,14 +155,16 @@ export class BrowseEventMapper extends SessionEventMapper {
 			const source = raw as CodeSearchSource;
 			if (!source.url) continue;
 			const title = source.title || `${source.repository}/${source.path}`;
-			findings.push(createFinding({
-				url: source.url,
-				title,
-				excerpt: source.snippet,
-				sourceType: "code_search" as FindingSourceType,
-				curated: false,
-				enriched: false,
-			}));
+			findings.push(
+				createFinding({
+					url: source.url,
+					title,
+					excerpt: source.snippet,
+					sourceType: "code_search" as FindingSourceType,
+					curated: false,
+					enriched: false,
+				}),
+			);
 		}
 
 		this.onAdditionalEvent?.({

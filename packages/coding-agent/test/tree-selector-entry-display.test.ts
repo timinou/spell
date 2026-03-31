@@ -5,11 +5,10 @@
  * 3. Correct filter classification — bookkeeping entries hidden in default mode
  */
 import { beforeAll, describe, expect, it } from "bun:test";
-
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tree-selector";
-import { assistantMsg, userMsg } from "./utilities";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { assistantMsg, userMsg } from "./utilities";
 
 beforeAll(async () => {
 	const t = await getThemeByName("dark");
@@ -27,13 +26,13 @@ function strip(s: string): string {
  */
 function renderTreeText(session: SessionManager, filterMode: "default" | "all" = "default"): string[] {
 	const tree = session.getTree();
-	let selectCalled = false;
+	let _selectCalled = false;
 	const component = new TreeSelectorComponent(
 		tree,
 		null,
 		40, // terminalHeight
 		_id => {
-			selectCalled = true;
+			_selectCalled = true;
 		},
 		() => {},
 		undefined,

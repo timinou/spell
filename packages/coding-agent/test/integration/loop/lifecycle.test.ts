@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import type { LoopEvent } from "../../../src/loop/contracts";
 import type { LoopSnapshot } from "../../../src/loop/types";
-import { createMockState, createTestSettings, resetMockState, type MockState } from "../../helpers/mocked-loop-harness";
+import { createMockState, createTestSettings, type MockState, resetMockState } from "../../helpers/mocked-loop-harness";
 
 // ---------------------------------------------------------------------------
 // Shared mock state: mutable object that mock closures reference by indirection.

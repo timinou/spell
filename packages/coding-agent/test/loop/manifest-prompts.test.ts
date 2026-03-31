@@ -1,13 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { TICKET_STATES } from "../../src/loop/contracts";
 import { buildIterationPrompt, buildManifestPromptContext, buildReflectionPrompt } from "../../src/loop/prompt-builder";
-import type {
-	LoopGateConfig,
-	LoopPromptContext,
-	LoopSnapshot,
-	ManifestSnapshot,
-	ManifestTicket,
-} from "../../src/loop/types";
+import type { LoopSnapshot, ManifestSnapshot, ManifestTicket } from "../../src/loop/types";
 
 function makeTicket(overrides: Partial<ManifestTicket> & { id: string }): ManifestTicket {
 	return {

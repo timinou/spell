@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { LOOP_STATES, TICKET_STATES, type LoopEvent } from "../../src/loop/contracts";
+import { LOOP_STATES, type LoopEvent, TICKET_STATES } from "../../src/loop/contracts";
 import { LoopKernel } from "../../src/loop/kernel";
-import type { ManifestTicket, ManifestSnapshot, LoopSnapshot } from "../../src/loop/types";
-import { renderTicketOrg } from "../../src/loop/persistence/manifest-writer";
 import { parseTicketOrg } from "../../src/loop/persistence/manifest-reader";
+import { renderTicketOrg } from "../../src/loop/persistence/manifest-writer";
+import type { ManifestSnapshot, ManifestTicket } from "../../src/loop/types";
 
 function createEventBuffer() {
 	const events: LoopEvent[] = [];

@@ -1,10 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-	type BrowseFinding,
-	createFinding,
-	normalizeUrlForDedup,
-	parseBrowseFinding,
-} from "../../src/modes/browse-findings";
+import { createFinding, normalizeUrlForDedup, parseBrowseFinding } from "../../src/modes/browse-findings";
 
 describe("createFinding", () => {
 	it("includes sourceType, curated, enriched with defaults", () => {

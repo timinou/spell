@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import type { BrowseFinding } from "../../src/modes/browse-findings";
 import { BrowseEventMapper } from "../../src/modes/browse-event-mapper";
+import type { BrowseFinding } from "../../src/modes/browse-findings";
 import type { AgentSessionEvent } from "../../src/session/agent-session";
 
 const ev = (event: unknown) => event as AgentSessionEvent;

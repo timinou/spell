@@ -1,6 +1,6 @@
-import { describe, expect, it, beforeEach } from "bun:test";
-import { TicketLifecycleManager } from "../../src/loop/ticket-lifecycle";
+import { beforeEach, describe, expect, it } from "bun:test";
 import { TICKET_STATES } from "../../src/loop/contracts";
+import { TicketLifecycleManager } from "../../src/loop/ticket-lifecycle";
 import type { ManifestSnapshot, ManifestTicket } from "../../src/loop/types";
 
 function makeTicket(overrides: Partial<ManifestTicket> & { id: string }): ManifestTicket {
@@ -53,9 +53,7 @@ describe("TicketLifecycleManager", () => {
 
 	it("DONE is terminal — rejects further transitions", () => {
 		const manifest = makeManifest([makeTicket({ id: "T-1", state: TICKET_STATES.done })]);
-		expect(() => mgr.transitionTicket(manifest, "T-1", TICKET_STATES.doing)).toThrow(
-			/Invalid transition/,
-		);
+		expect(() => mgr.transitionTicket(manifest, "T-1", TICKET_STATES.doing)).toThrow(/Invalid transition/);
 	});
 
 	it("starting ticket with unmet dependencies throws", () => {
@@ -73,7 +71,7 @@ describe("TicketLifecycleManager", () => {
 		]);
 		const result = mgr.completeTicket(manifest, "A", 1);
 		expect(result.unblockedTickets).toContain("B");
-		const ticketB = manifest.tickets.find((t) => t.id === "B")!;
+		const ticketB = manifest.tickets.find(t => t.id === "B")!;
 		expect(ticketB.state).toBe(TICKET_STATES.item);
 	});
 
@@ -84,7 +82,7 @@ describe("TicketLifecycleManager", () => {
 			makeTicket({ id: "C", state: TICKET_STATES.doing }), // not DONE
 		]);
 		const ready = mgr.getReadyTickets(manifest);
-		expect(ready.map((t) => t.id)).toEqual(["A"]);
+		expect(ready.map(t => t.id)).toEqual(["A"]);
 	});
 
 	it("getProgressSummary returns correct format", () => {

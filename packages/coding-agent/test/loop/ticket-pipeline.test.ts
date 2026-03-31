@@ -56,7 +56,7 @@ describe("ticket completion pipeline in LoopManager.markDone", () => {
 		await fs.rm(cwd, { recursive: true, force: true });
 	});
 
-	async function setupLoopWithManifest(manifest: ManifestSnapshot) {
+	async function _setupLoopWithManifest(_manifest: ManifestSnapshot) {
 		const loop = await manager.start({ name: "test", manifestBuilding: true, domains: [] });
 		// Set manifest on snapshot via kernel (accessed through manager's internal)
 		// We use launch to move from manifest_building -> planning, but first set the manifest
@@ -110,7 +110,7 @@ describe("ticket completion pipeline in LoopManager.markDone", () => {
 		await manager.launch(loop.id); // -> planning (manifest loaded from disk)
 		await manager.markDone(loop.id); // -> iterating
 
-		const result = await manager.markDone(loop.id, {
+		const _result = await manager.markDone(loop.id, {
 			summary: "iteration work",
 			completedTickets: ["T-001"],
 		});
