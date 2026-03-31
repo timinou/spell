@@ -870,6 +870,30 @@ async function scanModesDir(
 			const name = (fm.name as string) || entry.name;
 			const sections = parseModeConfigSections(body);
 
+			// Basic shape validation for critical frontmatter fields
+			const fmTyped = fm as ModeConfigFrontmatter;
+			if (fmTyped.tools) {
+				if (fmTyped.tools.allow !== undefined && !Array.isArray(fmTyped.tools.allow)) {
+					warnings.push(
+						`Mode at ${modePath}: tools.allow must be a string array, got ${typeof fmTyped.tools.allow}`,
+					);
+					continue;
+				}
+				if (fmTyped.tools.deny !== undefined && !Array.isArray(fmTyped.tools.deny)) {
+					warnings.push(
+						`Mode at ${modePath}: tools.deny must be a string array, got ${typeof fmTyped.tools.deny}`,
+					);
+					continue;
+				}
+			}
+			if (fmTyped.extends !== undefined && typeof fmTyped.extends !== "string") {
+				warnings.push(`Mode at ${modePath}: extends must be a string, got ${typeof fmTyped.extends}`);
+				continue;
+			}
+			if (fmTyped.command !== undefined && typeof fmTyped.command !== "string") {
+				warnings.push(`Mode at ${modePath}: command must be a string, got ${typeof fmTyped.command}`);
+				continue;
+			}
 			items.push({
 				name,
 				path: modePath,

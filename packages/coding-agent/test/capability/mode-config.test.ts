@@ -182,6 +182,27 @@ describe("extends chain resolution", () => {
 
 		expect(() => resolveModeConfig(a, allModes, new Map())).toThrow(/nonexistent.*not found/);
 	});
+
+	test("deep object merge preserves nested fields from both parent and child", () => {
+		const parent = makeMode("parent", {
+			frontmatter: { tools: { allow: ["read", "write", "edit"] } },
+		});
+		const child = makeMode("child", {
+			frontmatter: { extends: "parent", tools: { deny: ["write"] } },
+		});
+
+		const allModes = new Map([
+			["parent", parent],
+			["child", child],
+		]);
+		const resolved = resolveModeConfig(child, allModes, new Map());
+
+		// Deep merge: parent's allow + child's deny both present
+		expect(resolved.frontmatter.tools?.allow).toEqual(["read", "write", "edit"]);
+		expect(resolved.frontmatter.tools?.deny).toEqual(["write"]);
+		// resolvedTools applies deny to allow
+		expect(resolved.resolvedTools).toEqual(["read", "edit"]);
+	});
 });
 
 describe("resolveToolAccess", () => {

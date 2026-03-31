@@ -1,11 +1,13 @@
 #+TITLE: Add deep object merge test and frontmatter validation
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14a837d85a75458c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T11-31-52-297Z_14a837d85a75458c.jsonl]]
 #+CUSTOM_ID: BUG-044-add-deep-object-merge-test-and-frontmatt
 #+EFFORT: XS
 #+PRIORITY: #B
 #+LAYER: core
+
+NOTE [2026-03-31]: Added deep object merge test (parent tools.allow + child tools.deny merge). Added basic frontmatter shape validation in scanModesDir for tools.allow/deny arrays, extends/command strings.
 
 * Initial Message
 

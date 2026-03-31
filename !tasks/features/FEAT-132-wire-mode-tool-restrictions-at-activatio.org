@@ -1,5 +1,5 @@
 #+TITLE: Wire mode tool restrictions at activation
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14a837d85a75458c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T11-31-52-297Z_14a837d85a75458c.jsonl]]
 #+CUSTOM_ID: FEAT-132-wire-mode-tool-restrictions-at-activatio
@@ -7,6 +7,8 @@
 #+PRIORITY: #A
 #+LAYER: core
 #+DEPENDS: BUG-041-wire-mode-capability-loading-into-startu
+
+NOTE [2026-03-31]: Wired resolvedTools at user mode activation. Preserves essential tools (ask, exit_plan_mode, resolve). Stores tool snapshot for potential restoration. Plan-like modes use their own tool restriction mechanism.
 
 * Initial Message
 

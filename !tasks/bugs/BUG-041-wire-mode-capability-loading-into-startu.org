@@ -1,11 +1,13 @@
 #+TITLE: Wire mode capability loading into startup
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14a837d85a75458c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T11-31-52-297Z_14a837d85a75458c.jsonl]]
 #+CUSTOM_ID: BUG-041-wire-mode-capability-loading-into-startu
 #+EFFORT: S
 #+PRIORITY: #A
 #+LAYER: core
+
+NOTE [2026-03-31]: Wired mode capability loading into sdk.ts (loadCapability + resolveModeConfig), stored via session.setModeConfigs(), registered mode commands in interactive-mode init(), added mode command defs to autocomplete.
 
 * Initial Message
 

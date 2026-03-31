@@ -1,11 +1,13 @@
 #+TITLE: Fix getActiveModeState to return audit and user mode states
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14a837d85a75458c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T11-31-52-297Z_14a837d85a75458c.jsonl]]
 #+CUSTOM_ID: BUG-042-fix-getactivemodestate-to-return-audit-a
 #+EFFORT: S
 #+PRIORITY: #A
 #+LAYER: core
+
+NOTE [2026-03-31]: Extended getActiveModeState() to check Plan > User > Audit priority. Added #userModeState field + setUserModeState/getUserModeState methods. Fixed handleModeCommand to store user mode state via session.setUserModeState(). Fixed inline import type violation.
 
 * Initial Message
 

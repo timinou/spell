@@ -103,7 +103,7 @@ import { listPlanModeAllowedFolders } from "../plan-mode/allowed-folders";
 import type { AuditState } from "../plan-mode/audit-state";
 import { isAuditClean } from "../plan-mode/audit-state";
 import { buildOrgConfig, resolvePlanItem } from "../plan-mode/org-plan";
-import type { ActiveModeState, PlanModeState } from "../plan-mode/state";
+import type { ActiveModeState, PlanModeState, UserModeState } from "../plan-mode/state";
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import handoffDocumentPrompt from "../prompts/system/handoff-document.md" with { type: "text" };
@@ -394,6 +394,7 @@ export class AgentSession {
 	#auditSuggestCallback?: () => Promise<boolean>;
 
 	#modeStack: ActiveModeState[] = [];
+	#userModeState: UserModeState | undefined;
 
 	// Compaction state
 	#compactionAbortController: AbortController | undefined = undefined;
@@ -1978,8 +1979,21 @@ export class AgentSession {
 	}
 
 	getActiveModeState(): ActiveModeState | undefined {
+		// Plan mode is always the outermost mode — highest priority
 		if (this.#planModeState?.enabled) return this.#planModeState;
+		// User mode next
+		if (this.#userModeState?.enabled) return this.#userModeState;
+		// Active audit mode
+		if (this.#auditState.active) return this.#auditState;
 		return undefined;
+	}
+
+	setUserModeState(state: UserModeState | undefined): void {
+		this.#userModeState = state;
+	}
+
+	getUserModeState(): UserModeState | undefined {
+		return this.#userModeState;
 	}
 
 	setPlanModeState(state: PlanModeState | undefined): void {
@@ -2220,7 +2234,6 @@ export class AgentSession {
 			planModeUiuxPrompt,
 			modeContext: modeConfig?.sections.context,
 			modeInstructions: modeConfig?.sections.instructions,
-			customFocusAreas: modeConfig?.frontmatter.audit?.focusAreas,
 			// Gate toggles
 			gateMetisDisabled: modeConfig?.frontmatter.gates?.metis === false,
 			gateDaedalusDisabled: modeConfig?.frontmatter.gates?.daedalus === false,

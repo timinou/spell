@@ -1,5 +1,5 @@
 #+TITLE: Fix inline import and dead code in handleModeCommand
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14a837d85a75458c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T11-31-52-297Z_14a837d85a75458c.jsonl]]
 #+CUSTOM_ID: BUG-043-fix-inline-import-and-dead-code-in-handl
@@ -7,6 +7,8 @@
 #+PRIORITY: #B
 #+LAYER: core
 #+DEPENDS: BUG-042-fix-getactivemodestate-to-return-audit-a
+
+NOTE [2026-03-31]: Fixed inline import (handled in BUG-042). Removed customFocusAreas from planModeActivePrompt render call (wrong template). Changed plan-audit.md custom focus areas from 0-indexed numbering to bullet points.
 
 * Initial Message
 

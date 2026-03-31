@@ -17,6 +17,7 @@ import { $env, getAgentDbPath, getAgentDir, getProjectDir, logger, postmortem } 
 import chalk from "chalk";
 import { AsyncJobManager } from "./async";
 import { loadCapability } from "./capability";
+import { type ModeConfig, modeConfigCapability, type ResolvedModeConfig } from "./capability/mode";
 import { type Rule, ruleCapability } from "./capability/rule";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelString, parseModelPattern, parseModelString, resolveModelRoleValue } from "./config/model-resolver";
@@ -27,6 +28,7 @@ import {
 } from "./config/prompt-templates";
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
+import { resolveModeConfig } from "./discovery/mode-helpers";
 import "./discovery";
 import { EmacsSessionManager, type EmacsWarmupResult, warmupEmacs } from "@oh-my-pi/pi-emacs";
 import { buildServicePromptSection } from "./browser/service-prompt-section";
@@ -799,6 +801,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			return { ttsrManager, rulesResult, registeredTtsrRuleNames };
 		},
 	);
+
+	// Discover and resolve mode configs
+	const modesResult = await logger.timeAsync("discoverModes", async () => {
+		const result = await loadCapability<ModeConfig>(modeConfigCapability.id, { cwd });
+		const allModes = new Map(result.items.map(m => [m.name, m]));
+		const resolvedConfigs = new Map<string, ResolvedModeConfig>();
+		for (const mode of result.items) {
+			try {
+				resolvedConfigs.set(mode.name, resolveModeConfig(mode, allModes, new Map()));
+			} catch (error) {
+				result.warnings.push(`Mode "${mode.name}": ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+		return { resolvedConfigs, warnings: result.warnings };
+	});
 
 	// Filter rules for the rulebook (non-TTSR, non-alwaysApply, with descriptions)
 	const rulebookRules = logger.time("filterRulebookRules", () =>
@@ -1587,6 +1604,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolSession,
 		loopManager,
 	});
+
+	if (modesResult.resolvedConfigs.size > 0) {
+		session.setModeConfigs(modesResult.resolvedConfigs);
+	}
+	for (const warning of modesResult.warnings) {
+		logger.warn(warning);
+	}
 	await loopManager.restoreFromDisk();
 
 	postmortem.registerSessionContext(() => {

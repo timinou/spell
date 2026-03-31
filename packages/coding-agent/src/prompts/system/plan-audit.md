@@ -20,7 +20,7 @@ You are auditing the implementation of: `{{sourceRef}}`
 Review the implementation for:
 {{#if customFocusAreas}}
 {{#each customFocusAreas}}
-{{@index}}. **{{this}}**
+- **{{this}}**
 {{/each}}
 {{else}}
 1. **Polish**: Inconsistent naming, dead code, missing cleanup, rough edges

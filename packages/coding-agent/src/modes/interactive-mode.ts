@@ -31,6 +31,7 @@ import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slas
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
 import { approvePlanItem, buildOrgConfig, type OrgPlanRef, resolvePlanItem } from "../plan-mode/org-plan";
+import type { UserModeState } from "../plan-mode/state";
 import planAuditPrompt from "../prompts/system/plan-audit.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
@@ -38,6 +39,7 @@ import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
 import { formatExitTokenSummary } from "../session/token-summary";
+import { getModeCommandDefs, registerModeCommands } from "../slash-commands/builtin-registry";
 import { STTController, type SttState } from "../stt";
 import type { ExitPlanModeDetails, PlanWave } from "../tools";
 import { setTerminalTitle } from "../utils/title-generator";
@@ -367,6 +369,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.refreshSlashCommandState(getProjectDir()),
 		);
 
+		// Register mode-derived slash commands
+		const modeConfigs = this.session.getAllModeConfigs();
+		if (modeConfigs.size > 0) {
+			const modeWarnings = registerModeCommands(modeConfigs, this);
+			for (const w of modeWarnings) {
+				logger.warn(w);
+			}
+		}
+
 		// Get current model info for welcome screen
 		const modelName = this.session.model?.name ?? "Unknown";
 		const providerName = this.session.model?.provider ?? "Unknown";
@@ -546,8 +557,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			name: cmd.name,
 			description: cmd.description,
 		}));
+		const modeCommandDefs = getModeCommandDefs();
 		const autocompleteProvider = this.#inputController.createAutocompleteProvider(
-			[...this.#pendingSlashCommands, ...fileSlashCommands],
+			[...this.#pendingSlashCommands, ...fileSlashCommands, ...modeCommandDefs],
 			basePath,
 		);
 		this.editor.setAutocompleteProvider(autocompleteProvider);
@@ -1211,21 +1223,35 @@ export class InteractiveMode implements InteractiveModeContext {
 				flavor: isDesign ? "design" : undefined,
 				modeConfigName: config.name,
 			});
+			// Note: plan-like modes use their own tool restriction mechanism (exit_plan_mode handling)
 		} else if (isAuditLike) {
 			// Audit-extending modes: delegate to audit lifecycle
 			// TODO(FEAT-126): Full audit mode activation with modeConfig
 			this.showStatus(`Audit-extending mode "${config.name}" not yet supported.`);
 		} else {
 			// Standalone user mode
-			const userState: import("../plan-mode/state").UserModeState = {
+			const userState: UserModeState = {
 				type: "user",
 				name: config.name,
 				config,
 				enabled: true,
 				readOnly: frontmatter.readOnly ?? false,
 			};
-			// TODO(FEAT-126): Full generic lifecycle — store userState as active mode
-			void userState;
+			this.session.setUserModeState(userState);
+
+			// Apply tool restrictions from mode config
+			if (config.resolvedTools) {
+				// Preserve essential tools that must always be available
+				const essentialTools = ["ask", "exit_plan_mode", "resolve"];
+				const allowedTools = new Set([...config.resolvedTools, ...essentialTools]);
+				// Get current tool names and filter to allowed set
+				const currentTools = this.session.agent.state.tools.map(t => t.name);
+				const filteredTools = currentTools.filter(name => allowedTools.has(name));
+				// Store snapshot before restricting
+				userState.toolSnapshot = currentTools;
+				await this.session.setActiveToolsByName(filteredTools);
+			}
+
 			this.showStatus(`Mode "${config.name}" activated.`);
 		}
 	}
