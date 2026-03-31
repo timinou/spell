@@ -1,0 +1,132 @@
+#+TITLE: Elisp Org-Fluid-Plan MCP Tool
+#+STATE: DONE
+#+SESSION_ID: 14a8998aaf7f2312
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T18-38-42-877Z_14a8998aaf7f2312.jsonl]]
+#+CUSTOM_ID: PROJ-015-elisp-org-fluid-plan-mcp-tool
+#+EFFORT: 8h
+#+PRIORITY: #A
+#+LAYER: infrastructure
+
+* Initial Message
+
+Think about it. the wave-based dependency ordering only makes sense for one DAG, but orchestration flows can be several DAGs. Can you leanly improve/change the decomposition steps of plans and ultraplans to fully support these? As in: you remove Daedalus (just don't activate it anymore), but instead you create the org files, and the org subtasks can depend on each other and other file CUSTOM_IDs, and the execution manifest is built from there, and there is a way to spin several agents that will then also spin agents so that there are several threads, that are coordinated through the main agent? And then once the first DAG has been generated, Daedalus is generated with that DAG summary as the startying point, instead of the current way which has Daedalus generate the decomposition analysis before the DAG which makes no sense? That way we can unlock deep parallelism and the orchestration is way more more granular per subtask
+
+Ask me many questions. Challenge me a lot.
+
+* Scope
+- In :: New =org-fluid-plan= Elisp MCP tool. Reads a PLAN's linked org items, builds dependency graph, detects connected components via union-find, computes wave layers per component, emits FluidPlan-compatible JSON. ERTs for all algorithms. Register as MCP tool in dispatch table + TypeScript wrapper.
+- Out :: TypeScript consumers of the FluidPlan (handled by PROJ-002/FEAT-003). =org-next-wave.el= stays for now (used by =org wave= CLI). Loop system caller migration deferred to FEAT-005.
+- Boundary :: Elisp owns org file reading + graph computation. TypeScript receives structured JSON via MCP.
+
+* Tests
+File: =packages/org/elisp/test/test-org-fluid-plan.el=
+
+Scenarios:
+1. Single connected DAG (A->B->C) -> one component, correct wave ordering [1:A, 2:B, 3:C]
+2. Two disconnected components (A->B, C->D) -> two FluidPlan components in output
+3. Diamond dependency (A->B, A->C, B->D, C->D) -> correct waves [1:A, 2:B+C, 3:D]
+4. Cycle detection (A->B->C->A) -> error with cycle path in message
+5. Leaf items (no deps) -> all in wave 1
+6. Cross-file resolution (items in different category files) -> correct graph
+7. Missing DEPENDS target -> warning (not error), item treated as root
+8. Empty plan (no children) -> error
+9. Sub-outline IDs (PARENT::sub-slug) -> correctly parsed and included
+10. Single-item plan -> one component, no dependencies
+
+* Implementation
+
+** Define MCP tool interface
+:PROPERTIES:
+:CUSTOM_ID: PROJ-001::define-interface
+:EFFORT: 1h
+:END:
+- File: =packages/org/elisp/tools/org-fluid-plan.el=
+- Input schema: ={ plan_id: string }= (PLAN CUSTOM_ID)
+- Output schema: ={ components: [{ id: string, agents: [{ id, task, dependsOn, orgItemId, effort, priority }], waves: [{ number, items }] }], warnings: [] }=
+- Define Elisp data structures for internal graph representation
+
+** Resolve PLAN linked items across files
+:PROPERTIES:
+:CUSTOM_ID: PROJ-001::resolve-items
+:DEPENDS: PROJ-001::define-interface
+:EFFORT: 1.5h
+:END:
+- File: =packages/org/elisp/tools/org-fluid-plan.el=
+- Parse PLAN body for =[[id:...]]= links to extract child CUSTOM_IDs
+- Use =org-element= to find items by CUSTOM_ID across all category files in the org directory
+- Return item properties: CUSTOM_ID, title, body, DEPENDS, EFFORT, PRIORITY, LAYER, state
+- Handle cross-file lookups (items may span projects/, features/, bugs/ category dirs)
+
+** Connected component detection
+:PROPERTIES:
+:CUSTOM_ID: PROJ-001::connected-components
+:DEPENDS: PROJ-001::define-interface
+:EFFORT: 1.5h
+:END:
+- File: =packages/org/elisp/tools/org-fluid-plan.el=
+- Union-find algorithm on undirected adjacency (A depends on B => A and B in same component)
+- =make-union-find=, =union-find-find=, =union-find-union= functions
+- Returns list of component ID sets (each set = one disconnected subgraph)
+- Handles isolated nodes (no edges) as individual components
+
+** Topological sort + cycle detection per component
+:PROPERTIES:
+:CUSTOM_ID: PROJ-001::graph-algorithms
+:DEPENDS: PROJ-001::connected-components
+:EFFORT: 1.5h
+:END:
+- File: =packages/org/elisp/tools/org-fluid-plan.el=
+- Port and extend Kahn's algorithm from =org-compute-waves.el= (already exists in Elisp)
+- Run per-component (not global) — each component gets its own topological ordering
+- Three-color DFS cycle detection (WHITE/GRAY/BLACK) with cycle path reporting
+- Wave assignment per component: wave N = items whose deps are all in waves < N
+
+** Assemble FluidPlan JSON from components
+:PROPERTIES:
+:CUSTOM_ID: PROJ-001::emit-fluid-plan
+:DEPENDS: PROJ-001::graph-algorithms PROJ-001::resolve-items
+:EFFORT: 1h
+:END:
+- File: =packages/org/elisp/tools/org-fluid-plan.el=
+- For each component: build agents array with orgItemId, task (item body/title), dependsOn list, effort, priority
+- Assemble top-level components array with per-component waves
+- Emit as JSON via =json-encode=
+- Include warnings array (missing deps, skipped items)
+
+** Register in MCP server + TypeScript wrapper
+:PROPERTIES:
+:CUSTOM_ID: PROJ-001::register-mcp
+:DEPENDS: PROJ-001::emit-fluid-plan
+:EFFORT: 0.5h
+:END:
+- Files: =packages/org/elisp/mcp-server-emacs-tools.el=, =packages/org/src/tool.ts=
+- Add =org-fluid-plan= to Elisp MCP dispatch table (alongside existing org-compute-waves, org-next-wave)
+- Add TypeScript wrapper function in =tool.ts= to call the MCP tool and return typed result
+- Define TypeScript interface for the MCP response matching Elisp output schema
+
+** ERT test suite
+:PROPERTIES:
+:CUSTOM_ID: PROJ-001::erts
+:DEPENDS: PROJ-001::emit-fluid-plan
+:EFFORT: 1h
+:END:
+- File: =packages/org/elisp/test/test-org-fluid-plan.el=
+- Uses temp org files with known dependency structures (created per-test)
+- Covers all 10 scenarios defined in Tests section
+- Tests both the full MCP handler and individual functions (union-find, cycle detection, wave assignment)
+- Run: =emacs --batch -l test-org-fluid-plan.el -f ert-run-tests-batch-and-exit=
+
+* Edge Cases
+- Items with both top-level CUSTOM_ID and sub-outline =::sub-slug= :: both included; sub-outline inherits parent's file location
+- DEPENDS referencing items outside the PLAN's linked children :: warning emitted, dependency edge ignored (item treated as root within its component)
+- Org items in DONE/BLOCKED state :: included in graph but flagged in output (coordinator decides whether to skip)
+- Very large plans (50+ items) :: no algorithmic concern — union-find is O(n alpha(n)), Kahn's is O(V+E)
+- Plan item with no =[[id:...]]= links :: error returned (empty plan)
+
+* Acceptance Criteria
+- =org-fluid-plan= MCP tool callable from TypeScript via =tool.ts= wrapper
+- Returns correct FluidPlan JSON for all 10 ERT scenarios
+- Connected components correctly detected for disconnected graphs
+- Cycle detection returns actionable error message with cycle path
+- All ERTs pass
+- TypeScript wrapper correctly types the MCP response

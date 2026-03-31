@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { extractIdLinks } from "@oh-my-pi/pi-org";
+import { extractIdLinks, type FluidPlanWithComponents } from "@oh-my-pi/pi-org";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
@@ -70,6 +70,8 @@ export interface ExitPlanModeDetails {
 	childItemIds?: string[];
 	/** Wave structure extracted from Execution Manifest. */
 	waves?: PlanWave[];
+	/** FluidPlan with connected components from org-fluid-plan MCP tool. */
+	fluidPlan?: FluidPlanWithComponents;
 }
 
 /**

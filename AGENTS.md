@@ -19,6 +19,15 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 | `packages/utils`        | Shared utilities (logger, streams, temp files)       |
 | `crates/pi-natives`     | Rust crate for performance-critical text/grep ops    |
 
+## Org Logic: Elisp-First Policy
+
+Org-mode graph algorithms (dependency analysis, topological sort, wave computation, connected components) live in Elisp and are accessed via the Emacs MCP tool interface. TypeScript code calls these through `OrgClient.callTool()`.
+
+- **Canonical graph tool**: `org-fluid-plan` — builds FluidPlan from PLAN item's linked org items, detects connected components via union-find, computes wave layers per component
+- **Prefer ERTs** for org algorithm testing over TypeScript unit tests
+- **Reduce TypeScript org logic** — avoid duplicating graph algorithms in TypeScript when an Elisp MCP tool exists
+- Plan execution uses `FluidOrchestrator` with `OrgFluidBridge` for org state lifecycle (ITEM->DOING->DONE)
+
 ## Code Quality
 
 - No `any` types unless absolutely necessary

@@ -11,6 +11,16 @@ export interface FluidAgentNode {
 		type: CanvasOutputType;
 		title: string;
 	};
+	/** Org CUSTOM_ID of the item this agent represents. */
+	orgItemId?: string;
+	/** Estimated effort for this agent's work. */
+	effort?: string;
+	/** Priority level (A/B/C). */
+	priority?: string;
+	/** Whether this node is a coordinator managing a sub-DAG. */
+	isCoordinator?: boolean;
+	/** Sub-plan that this coordinator manages (only set when isCoordinator=true). */
+	subPlan?: FluidPlan;
 }
 
 export interface FluidPlan {

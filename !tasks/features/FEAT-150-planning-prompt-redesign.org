@@ -1,0 +1,99 @@
+#+TITLE: Planning Prompt Redesign
+#+STATE: DONE
+#+SESSION_ID: 14a8998aaf7f2312
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T18-38-42-877Z_14a8998aaf7f2312.jsonl]]
+#+CUSTOM_ID: FEAT-150-planning-prompt-redesign
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: prompts
+#+DEPENDS: FEAT-149-plan-execution-unification
+
+* Initial Message
+
+Think about it. the wave-based dependency ordering only makes sense for one DAG, but orchestration flows can be several DAGs. Can you leanly improve/change the decomposition steps of plans and ultraplans to fully support these? As in: you remove Daedalus (just don't activate it anymore), but instead you create the org files, and the org subtasks can depend on each other and other file CUSTOM_IDs, and the execution manifest is built from there, and there is a way to spin several agents that will then also spin agents so that there are several threads, that are coordinated through the main agent? And then once the first DAG has been generated, Daedalus is generated with that DAG summary as the startying point, instead of the current way which has Daedalus generate the decomposition analysis before the DAG which makes no sense? That way we can unlock deep parallelism and the orchestration is way more more granular per subtask
+
+Ask me many questions. Challenge me a lot.
+
+* Scope
+- In :: Update =plan-mode-active.md= Handlebars template: remove Daedalus blocking gate (Phase 4), remove user confirmation of decomposition (Phase 3), agent creates org items directly after Metis. Rewrite =daedalus.md= as advisory reviewer of real DAG. Keep Metis unchanged. Update Handlebars conditionals.
+- Out :: Legacy cleanup (FEAT-005). Execution machinery (already done in prior items).
+- Boundary :: Prompt-only changes. The execution model is already finalized by FEAT-149. These prompts describe the new planning flow to the agent.
+
+Note: sequencing is implementation-then-prompt since the execution model must be settled before the prompt describes it.
+
+* Tests
+Prompt template rendering verification (manual + automated):
+1. Ultraplan mode: Daedalus section renders as advisory (not blocking gate)
+2. Ultraplan mode: no mandatory user confirmation phase — agent proceeds directly to org item creation after Metis
+3. Regular plan mode: no Daedalus at all (Daedalus is ultraplan-only)
+4. =gateDaedalusDisabled= flag: Daedalus advisory section hidden entirely when true (preserved behavior)
+5. Handlebars template renders without errors for all mode combinations: plan, ultraplan, design, iterative, reentry
+6. =gateMomusDisabled= still controls Momus approval UI gate (unaffected)
+
+Automated test file: =packages/coding-agent/test/prompts/plan-mode-rendering.test.ts= (extend if exists, create if not)
+- Render =plan-mode-active.md= with various context objects, verify output contains/excludes expected sections
+
+* Implementation
+
+** Redesign ultraplan planning flow
+:PROPERTIES:
+:CUSTOM_ID: FEAT-150::ultraplan-flow
+:EFFORT: 1.5h
+:END:
+- File: =packages/coding-agent/src/prompts/system/plan-mode-active.md=
+- New ultraplan flow (replace current Phase 1-5):
+  - Phase 1: Explore + Question Aggressively (unchanged)
+  - Phase 2: Metis Gap Analysis (unchanged — mandatory, pre-creation)
+  - Phase 3: Create Org Items (NEW — agent creates items directly, no user confirmation; keeps Org Item Body Standard for quality)
+  - Phase 4: Daedalus Advisory Review (NEW — spawn daedalus on real DAG, apply suggestions if valuable, non-blocking)
+  - Phase 5: Exit Plan Mode (call =exit_plan_mode=)
+- Remove current Phase 3 (Propose Decomposition / mandatory confirmation via =ask=)
+- Remove current Phase 4 (Daedalus Validation / mandatory pre-creation gate)
+- Keep Org Item Body Standard section (still guides item quality even without user confirmation)
+- Keep ={{#unless gateMetisDisabled}}= conditional for Metis
+- Change ={{#unless gateDaedalusDisabled}}= content from blocking gate to advisory review
+
+** Rewrite Daedalus as advisory reviewer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-150::daedalus-advisory
+:DEPENDS: FEAT-150::ultraplan-flow
+:EFFORT: 1h
+:END:
+- File: =packages/coding-agent/src/prompts/agents/daedalus.md=
+- Input change: receives real DAG (org items already created, dependency graph from =org-fluid-plan= or =org wave=) instead of proposed decomposition
+- Output change: replace APPROVE/REJECT binary with advisory format:
+  - =OBSERVATIONS= — what the DAG looks like, critical path, parallelism opportunities
+  - =SUGGESTIONS= — specific improvements (scope overlap, missing deps, effort imbalance)
+  - =WARNINGS= — risks the planner should consider before finalizing
+- Remove: "Approval bar: approve only when decomposition is executable without guesswork"
+- Add: "Your output is advisory. The planner will apply suggestions via =org update= if valuable. You do not block plan creation."
+- Keep all validation criteria content (category fitness, scope boundaries, dependency ordering, effort estimates, acceptance criteria quality) — these become observation categories, not gates
+
+** Ensure Handlebars template compatibility
+:PROPERTIES:
+:CUSTOM_ID: FEAT-150::template-compat
+:DEPENDS: FEAT-150::daedalus-advisory
+:EFFORT: 0.5h
+:END:
+- File: =packages/coding-agent/src/prompts/system/plan-mode-active.md=
+- Verify rendering for all mode combinations: regular plan, ultraplan, design flavor, iterative, reentry
+- Remove =gateDaedalusDisabled= conditional wrapping (advisory section should always render in ultraplan since it's non-blocking; the flag becomes vestigial)
+- Or: repurpose =gateDaedalusDisabled= to hide advisory section entirely (preserving the config surface)
+- Keep =gateMomusDisabled= for Momus approval UI gate (unaffected by this change)
+- Test: render template with each mode context object, spot-check output
+
+* Edge Cases
+- Daedalus advisory finds critical issue (e.g., cycle in dependencies) :: agent has discretion to fix via =org update= or note the issue and proceed. The cycle would also be caught by =org-fluid-plan= Elisp tool at exit-plan-mode time.
+- Agent creates malformed org items (missing EFFORT, bad CUSTOM_ID) :: =exit-plan-mode= validation catches these (existing validation in =ExitPlanModeTool.execute=). This is not a prompt concern.
+- Metis identifies gaps AFTER agent has already created some items :: agent can update existing items via =org update= (section-scoped updates). No need to delete and recreate.
+- Agent skips Daedalus entirely (it's advisory) :: acceptable. Plan quality relies on Org Item Body Standard + exit-plan-mode validation + Momus in approval UI.
+- Regular plan mode agent tries to run Daedalus :: Daedalus section only renders in ultraplan mode (={{#if ultraplan}}=). Not available in regular plan mode.
+
+* Acceptance Criteria
+- Ultraplan planning flow: Explore -> Metis -> Create items -> Daedalus advisory -> exit_plan_mode (no user confirmation step)
+- No mandatory user confirmation of decomposition in ultraplan mode
+- Daedalus prompt produces advisory output (OBSERVATIONS/SUGGESTIONS/WARNINGS), not APPROVE/REJECT
+- Regular plan mode planning flow unaffected (no Daedalus, no Metis)
+- Template renders without errors for all mode combinations (verified by rendering tests)
+- =gateMomusDisabled= still works for Momus gate
+- =bun check:ts= passes (prompt import unchanged)

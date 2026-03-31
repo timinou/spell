@@ -1,0 +1,126 @@
+#+TITLE: Plan Execution Unification
+#+STATE: DONE
+#+SESSION_ID: 14a8998aaf7f2312
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T18-38-42-877Z_14a8998aaf7f2312.jsonl]]
+#+CUSTOM_ID: FEAT-149-plan-execution-unification
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: integration
+#+DEPENDS: FEAT-147-orgfluidbridge-and-lifecycle-hooks FEAT-148-coordinator-agent-sessions
+
+* Initial Message
+
+Think about it. the wave-based dependency ordering only makes sense for one DAG, but orchestration flows can be several DAGs. Can you leanly improve/change the decomposition steps of plans and ultraplans to fully support these? As in: you remove Daedalus (just don't activate it anymore), but instead you create the org files, and the org subtasks can depend on each other and other file CUSTOM_IDs, and the execution manifest is built from there, and there is a way to spin several agents that will then also spin agents so that there are several threads, that are coordinated through the main agent? And then once the first DAG has been generated, Daedalus is generated with that DAG summary as the startying point, instead of the current way which has Daedalus generate the decomposition analysis before the DAG which makes no sense? That way we can unlock deep parallelism and the orchestration is way more more granular per subtask
+
+Ask me many questions. Challenge me a lot.
+
+* Scope
+- In :: Wire exit-plan-mode to generate FluidPlan via Elisp MCP (=org-fluid-plan=). Replace =#approvePlan= in =interactive-mode.ts= to invoke FluidOrchestrator directly. Extract all side effects (audit state, design history, plan reference, tool restoration) into OrgFluidBridge lifecycle hooks. Handle both /plan and /ultraplan through same execution path. Headless execution (no QML dependency).
+- Out :: Prompt content changes (FEAT-004). Legacy cleanup (FEAT-005).
+- Boundary :: This is the integration point that wires the Elisp MCP tool (PROJ-015), FluidOrchestrator (PROJ-016), OrgFluidBridge (FEAT-017), and coordinator sessions (FEAT-148) into the existing interactive-mode flow.
+
+* Tests
+Files: =packages/coding-agent/test/tools/exit-plan-mode-fluid.test.ts= (new), extend existing tests
+
+Scenarios:
+1. =exit-plan-mode= with org items -> calls =org-fluid-plan= MCP -> returns =FluidPlanWithComponents= in details
+2. =#approvePlan= replacement -> invokes FluidOrchestrator with generated FluidPlan
+3. Single-component plan -> one coordinator, no splitting visible to user
+4. Multi-component plan -> coordinators dispatched in parallel
+5. Headless execution (no DISPLAY set) -> works without QML, no =isDisplayAvailable()= check
+6. Approval UI still offers: Approve, Refine, Review with Momus
+7. Audit state set correctly after FluidOrchestrator completes (via OrgFluidBridge hooks)
+8. Design history entry written for design-flavored plans (via hooks)
+9. Plan reference path set for session context
+10. Graceful fallback: if Elisp MCP unavailable, fall back to PlanWave extraction + old prompt flow
+
+* Implementation
+
+** Generate FluidPlan in exit-plan-mode
+:PROPERTIES:
+:CUSTOM_ID: FEAT-149::exit-plan-mode-fluid
+:EFFORT: 1.5h
+:END:
+- File: =packages/coding-agent/src/tools/exit-plan-mode.ts=
+- After validating org items and extracting child IDs: call =org-fluid-plan= MCP tool with PLAN CUSTOM_ID
+- Store =FluidPlanWithComponents= in =ExitPlanModeDetails= (new field: =fluidPlan?: FluidPlanWithComponents=)
+- Keep =PlanWave= extraction as fallback for when Elisp MCP is unavailable (graceful degradation)
+- Validation: if =org-fluid-plan= returns errors (cycles), surface them as =ToolError= to the agent
+
+** Replace #approvePlan with FluidOrchestrator launch
+:PROPERTIES:
+:CUSTOM_ID: FEAT-149::approve-to-fluid
+:DEPENDS: FEAT-149::exit-plan-mode-fluid
+:EFFORT: 2.5h
+:END:
+- File: =packages/coding-agent/src/modes/interactive-mode.ts=
+- New method: =#executeApprovedPlan(details: ExitPlanModeDetails)= — the primary approval handler
+- Steps:
+  1. Call =approvePlanItem= for org INIT->DOING transition (existing function, now wired)
+  2. Create =OrgFluidBridge= with session, EventBus, plan metadata, mode info (ultraplan/regular/design)
+  3. Create =FluidOrchestrator= with coordinator =runAgent= from =coordinator-runner.ts=
+  4. Execute: =await orchestrator.execute(fluidPlan, signal)=
+  5. Bridge's post-execution hooks fire automatically: audit state, design history, plan reference, plan completion
+- Extract ALL side effects from current =#approvePlan= into the bridge's post-execution hooks:
+  - Design history write (=extractDesignBriefEntry= -> =.spell/design-history.jsonl=)
+  - Audit state setup (=setAuditState= with auto/suggest)
+  - Plan reference path (=setPlanReferencePath=, =markPlanReferenceSent=)
+  - Tool restoration (=setActiveToolsByName(previousTools)=)
+  - Session clear (=handleClearCommand=)
+- Keep Momus review flow: approval UI still calls =#handleMomusReview= which re-enters plan mode
+- Fallback: if =fluidPlan= is absent in details (Elisp unavailable), use old =#approvePlan= flow with prompt injection
+
+** Headless execution
+:PROPERTIES:
+:CUSTOM_ID: FEAT-149::headless-execution
+:DEPENDS: FEAT-149::approve-to-fluid
+:EFFORT: 0.5h
+:END:
+- File: =packages/coding-agent/src/modes/interactive-mode.ts=
+- FluidOrchestrator instantiated directly in =#executeApprovedPlan= (NOT through =fluid-mode.ts= which requires QML/display)
+- EventBus created locally for execution event monitoring
+- No =isDisplayAvailable()= check — plan execution is always headless
+- Progress can be reported via TUI status line updates (subscribe to =fluid:event= channel)
+
+** Handle /plan, /ultraplan, user-defined modes
+:PROPERTIES:
+:CUSTOM_ID: FEAT-149::mode-compat
+:DEPENDS: FEAT-149::approve-to-fluid
+:EFFORT: 1h
+:END:
+- File: =packages/coding-agent/src/modes/interactive-mode.ts=
+- Both /plan and /ultraplan flow through same =#executeApprovedPlan= method
+- =modeExecutionInstructions= from mode config: injected into coordinator prompts (passed through OrgFluidBridge -> coordinator-runner)
+- Design flavor: bridge handles design history in post-execution hook (=planFlavor= field on bridge metadata)
+- Ultraplan vs regular: bridge sets audit state accordingly (=auto= vs =suggest=)
+- Reentry: =#handlePlanModeCommand= still works for re-entering plan mode on partially executed plans
+
+** Tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-149::tests
+:DEPENDS: FEAT-149::mode-compat
+:EFFORT: 0.5h
+:END:
+- File: =packages/coding-agent/test/tools/exit-plan-mode-fluid.test.ts= (new)
+- Mock org MCP client (=org-fluid-plan= returns test FluidPlan)
+- Mock FluidOrchestrator (verify =execute= called with correct plan)
+- Mock session (verify side effects: audit state, plan reference)
+- Test fallback: Elisp unavailable -> old flow invoked
+
+* Edge Cases
+- Elisp MCP unavailable (Emacs not running, MCP connection error) :: graceful fallback to PlanWave extraction + old prompt-based execution flow. Log warning.
+- Plan with no org items (file-backed plan, org disabled) :: old =#approvePlan= flow preserved entirely. No FluidOrchestrator invocation.
+- FluidOrchestrator throws during execution :: PLAN stays in DOING state, error surfaced to user via TUI. Bridge's =execution_complete= does NOT fire. Operator intervenes manually.
+- User cancels execution (Ctrl+C) :: parent AbortController.abort() cascades to all coordinators. Org items stay in current state (DOING). User can re-enter plan mode to resume.
+- Reentry on partially executed plan :: bridge detects items already in DOING/DONE state, skips already-completed work. Items in DOING are re-attempted.
+- Momus review after initial approval :: Momus triggers re-entry into plan mode. Agent revises items. On second approval, FluidOrchestrator re-executes with updated plan.
+
+* Acceptance Criteria
+- /plan and /ultraplan both produce org items that execute via FluidOrchestrator (scenarios 2-4)
+- No QML dependency for plan execution (scenario 5)
+- Audit state, design history, plan reference all preserved from old flow (scenarios 7-9)
+- Approval UI unchanged: Approve, Refine, Momus options still work (scenario 6)
+- Plan completion protocol fires correctly via OrgFluidBridge (scenario 2)
+- Graceful fallback when Elisp unavailable (scenario 10)
+- All test scenarios pass
+- =bun check:ts= passes

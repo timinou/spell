@@ -1,0 +1,104 @@
+#+TITLE: Coordinator Agent Sessions
+#+STATE: DONE
+#+SESSION_ID: 14a8998aaf7f2312
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T18-38-42-877Z_14a8998aaf7f2312.jsonl]]
+#+CUSTOM_ID: FEAT-148-coordinator-agent-sessions
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: runtime
+#+DEPENDS: PROJ-016-fluidorchestrator-multi-component-execut
+
+* Initial Message
+
+Think about it. the wave-based dependency ordering only makes sense for one DAG, but orchestration flows can be several DAGs. Can you leanly improve/change the decomposition steps of plans and ultraplans to fully support these? As in: you remove Daedalus (just don't activate it anymore), but instead you create the org files, and the org subtasks can depend on each other and other file CUSTOM_IDs, and the execution manifest is built from there, and there is a way to spin several agents that will then also spin agents so that there are several threads, that are coordinated through the main agent? And then once the first DAG has been generated, Daedalus is generated with that DAG summary as the startying point, instead of the current way which has Daedalus generate the decomposition analysis before the DAG which makes no sense? That way we can unlock deep parallelism and the orchestration is way more more granular per subtask
+
+Ask me many questions. Challenge me a lot.
+
+* Scope
+- In :: Coordinator prompt template (new .md file). RunAgent implementation that spawns =createAgentSession= for coordinator nodes. Own =todo_write= instance per coordinator (not filtered). Sub-DAG context injection into coordinator prompt. Simple vs complex coordinator detection. Transitional commit support within coordinators.
+- Out :: Plan mode entry point (FEAT-003). Planning prompt redesign (FEAT-004).
+- Boundary :: How coordinators execute is independent from how they're dispatched (PROJ-016) and how org state is tracked (FEAT-017). This item defines the coordinator's runtime behavior.
+
+* Tests
+File: =packages/coding-agent/test/orchestrators/coordinator-session.test.ts= (new)
+
+Scenarios:
+1. Coordinator spawned via =runSubprocess= with correct sub-DAG context embedded in prompt
+2. Coordinator has =todo_write= tool available (not filtered by =parentOwnedToolNames=)
+3. Coordinator gets org tools (=org create/update/get=) for state transitions
+4. Simple coordinator (1-2 tasks in sub-plan) -> lightweight prompt variant
+5. Complex coordinator (5+ tasks) -> full prompt with dependency management + parallel task spawning instructions
+6. Coordinator abort -> agent session receives abort signal, cleans up gracefully
+7. Coordinator result -> returned to parent FluidOrchestrator as =SingleResult=
+
+* Implementation
+
+** Coordinator prompt template
+:PROPERTIES:
+:CUSTOM_ID: FEAT-148::coordinator-prompt
+:EFFORT: 1h
+:END:
+- File: =packages/coding-agent/src/prompts/agents/coordinator.md= (new)
+- Handlebars template with variables: =subDagItems= (list of org items with CUSTOM_IDs, bodies, dependencies), =planId= (parent PLAN CUSTOM_ID), =isSimple= (boolean for 1-2 items)
+- Simple variant: "Execute these org items in sequence. For each: transition ITEM->DOING, execute using task tool, verify, transition DOING->DONE, commit."
+- Complex variant: "You are a coordinator managing {{subDagItems.length}} org items. Analyze dependencies. Parallelize independent items via task tool. For each item: transition ITEM->DOING, spawn task subagent, verify completion, transition DOING->DONE, commit transitional changes."
+- Both variants include: org state transition instructions, verification requirements, transitional commit protocol
+- Does NOT include plan-level completion (parent handles that)
+
+** RunAgent implementation for coordinator nodes
+:PROPERTIES:
+:CUSTOM_ID: FEAT-148::run-coordinator
+:DEPENDS: FEAT-148::coordinator-prompt
+:EFFORT: 2h
+:END:
+- File: =packages/coding-agent/src/orchestrators/fluid/coordinator-runner.ts= (new)
+- Exported function: =runCoordinator(node: FluidAgentNode, session: AgentSession, signal?: AbortSignal): Promise<SingleResult>=
+- Receives FluidAgentNode with =isCoordinator: true= and =subPlan= containing the component's agents
+- Builds coordinator prompt from Handlebars template + sub-DAG items (fetched via org get)
+- Creates =AgentDefinition= with tools: =task=, =org=, =todo_write=, =read=, =grep=, =find=, =bash=, =lsp=, =ast_grep=, =edit=, =write=
+- Calls =runSubprocess= (in-process via =createAgentSession=, NOT =Bun.spawn=)
+- =todo_write= explicitly NOT in =parentOwnedToolNames= — coordinator gets its own instance
+- Returns =SingleResult= to parent FluidOrchestrator for status tracking
+- Passes abort signal through to the agent session
+
+** Simple vs complex coordinator detection
+:PROPERTIES:
+:CUSTOM_ID: FEAT-148::complexity-detection
+:DEPENDS: FEAT-148::coordinator-prompt
+:EFFORT: 0.5h
+:END:
+- File: =packages/coding-agent/src/orchestrators/fluid/coordinator-runner.ts=
+- Heuristic: =subPlan.agents.length <= 2= -> simple, else complex
+- Simple: uses lightweight prompt variant (=isSimple: true= in template), fewer tools
+- Complex: uses full prompt, all tools, dependency management instructions
+- Heuristic is initial; can be refined later based on observed coordinator performance
+
+** Mock tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-148::tests
+:DEPENDS: FEAT-148::run-coordinator
+:EFFORT: 0.5h
+:END:
+- File: =packages/coding-agent/test/orchestrators/coordinator-session.test.ts=
+- Mock =runSubprocess=: verify it's called with correct agent definition, tools, and prompt content
+- Mock org MCP client: verify sub-DAG items are fetched
+- Verify =todo_write= is in the tool list (not filtered)
+- Test abort signal propagation
+- Test simple vs complex prompt selection based on sub-plan size
+
+* Edge Cases
+- Coordinator's agent session fails to start (model unavailable, auth error) :: coordinator marked =failed=, parent FluidOrchestrator continues other coordinators
+- =todo_write= conflict :: each coordinator session has its own todo state. No collision because =runSubprocess/createAgentSession= creates isolated session state.
+- Coordinator receives upstream results from parent :: not applicable — coordinators are root nodes with =dependsOn: []=. No upstream context passed.
+- Very large sub-DAG (20+ items) :: coordinator prompt may be token-heavy. Recommendation: plan decomposition should aim for <15 items per component. Not enforced here.
+- Coordinator transitional commits :: coordinator commits after each item completion. Parent handles final plan-level commit.
+
+* Acceptance Criteria
+- Coordinators spawned as in-process agent sessions via =runSubprocess/createAgentSession= (verified by test scenario 1)
+- Simple coordinators (<=2 items) get lightweight prompt; complex get full prompt (scenarios 4-5)
+- =todo_write= available to coordinators, not filtered (scenario 2)
+- Org tools available for state transitions (scenario 3)
+- Abort propagation from parent to coordinator session works (scenario 6)
+- =SingleResult= correctly returned for parent tracking (scenario 7)
+- All 7 test scenarios pass
+- =bun check:ts= passes

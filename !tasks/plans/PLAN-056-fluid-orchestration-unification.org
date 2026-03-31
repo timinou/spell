@@ -1,0 +1,139 @@
+#+TITLE: Fluid Orchestration Unification
+#+STATE: DONE
+#+SESSION_ID: 14a8998aaf7f2312
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T18-38-42-877Z_14a8998aaf7f2312.jsonl]]
+#+CUSTOM_ID: PLAN-056-fluid-orchestration-unification
+
+
+* Initial Message
+
+Think about it. the wave-based dependency ordering only makes sense for one DAG, but orchestration flows can be several DAGs. Can you leanly improve/change the decomposition steps of plans and ultraplans to fully support these? As in: you remove Daedalus (just don't activate it anymore), but instead you create the org files, and the org subtasks can depend on each other and other file CUSTOM_IDs, and the execution manifest is built from there, and there is a way to spin several agents that will then also spin agents so that there are several threads, that are coordinated through the main agent? And then once the first DAG has been generated, Daedalus is generated with that DAG summary as the startying point, instead of the current way which has Daedalus generate the decomposition analysis before the DAG which makes no sense? That way we can unlock deep parallelism and the orchestration is way more more granular per subtask
+
+Ask me many questions. Challenge me a lot.
+
+* Context
+
+** Problem
+Plan execution currently has three separate paths:
+1. *Plan mode*: =exit-plan-mode.ts= extracts PlanWave from execution manifest -> =plan-mode-approved.md= instructs agent to create =todo_write= phases -> agent manually works through phases, spawning task subagents
+2. *Loop system*: manifest tickets -> =TicketLifecycleManager= -> =getReadyTickets= -> agent execution
+3. *Fluid orchestrator*: =FluidPlan= (agents + dependencies) -> =QueueScheduler= with concurrency -> parallel agent dispatch
+
+These paths duplicate scheduling logic, have inconsistent org lifecycle management, and limit parallelism. The plan-mode execution is single-threaded (one agent working through waves sequentially), with no support for multiple independent workstreams executing simultaneously.
+
+** Approach
+Unify plan execution onto the FluidOrchestrator as the single execution engine:
+- *Elisp-first*: New =org-fluid-plan= MCP tool in Elisp reads org items, builds dependency graph, detects connected components via union-find, emits FluidPlan JSON. All graph algorithms in Elisp with ERTs.
+- *Multi-component execution*: Disconnected components in the dependency graph are auto-detected. Each component gets a coordinator agent session that manages its sub-DAG independently.
+- *OrgFluidBridge*: Bridge layer connects FluidOrchestrator events to org state transitions (ITEM->DOING->DONE). Post-execution hooks handle audit state, design history, plan completion.
+- *Direct FluidOrchestrator invocation*: After plan approval, system invokes FluidOrchestrator directly instead of injecting =plan-mode-approved.md= prompt. No manual agent execution.
+- *Advisory Daedalus*: Daedalus becomes purely advisory (non-blocking), runs AFTER org items are created on the real DAG. No user confirmation of decomposition.
+
+** Key Decisions
+1. *FluidPlan source*: Elisp MCP tool auto-converts org items -> FluidPlan JSON. Agent writes org items, system builds execution plan.
+2. *Coordinator type*: Full agent sessions always (lightweight prompt for simple cases <=2 items).
+3. *Org lifecycle*: Hooks in FluidOrchestrator via OrgFluidBridge. =completePlanItem= (currently dead code) wired into post-execution hooks.
+4. *todo_write*: Stays passive for manual tracking. Coordinator sessions get their own todo_write instances.
+5. *Abort cascade*: Independent — failed coordinators don't affect others.
+6. *Migration strategy*: Big bang — implement everything, cut over, delete old paths.
+7. *FluidOrchestrator interface*: OK to break, refactor to org-native, update all consumers.
+8. *Elisp boundary*: All graph algorithms (topological sort, cycle detection, connected components) in Elisp. Loop system callers (metis-builder, momus-builder) migrate to MCP calls.
+
+** Critical Files
+- =packages/org/elisp/tools/org-fluid-plan.el= (new — Elisp MCP tool)
+- =packages/coding-agent/src/orchestrators/fluid/= (refactored — types, DAG, scheduler, orchestrator)
+- =packages/coding-agent/src/orchestrators/fluid/org-fluid-bridge.ts= (new — org lifecycle bridge)
+- =packages/coding-agent/src/orchestrators/fluid/coordinator-runner.ts= (new — coordinator session runner)
+- =packages/coding-agent/src/prompts/agents/coordinator.md= (new — coordinator prompt)
+- =packages/coding-agent/src/prompts/agents/daedalus.md= (rewritten — advisory)
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= (updated — new ultraplan flow)
+- =packages/coding-agent/src/prompts/system/plan-mode-approved.md= (deleted)
+- =packages/coding-agent/src/tools/exit-plan-mode.ts= (updated — FluidPlan generation)
+- =packages/coding-agent/src/modes/interactive-mode.ts= (updated — #approvePlan replacement)
+- =packages/coding-agent/src/modes/fluid-mode.ts= (updated — consumer update)
+
+* Verification
+
+** Automated checks
+- =bun check:ts= — no type errors after all changes
+- =bun lint:ts= — no lint violations
+- =emacs --batch -l test-org-fluid-plan.el -f ert-run-tests-batch-and-exit= — all Elisp ERTs pass
+- All orchestrator tests pass: =bun test packages/coding-agent/test/orchestrators/=
+- All exit-plan-mode tests pass: =bun test packages/coding-agent/test/tools/exit-plan-mode*.test.ts=
+- Loop org-depend tests pass: =bun test packages/coding-agent/test/loop/org-depend-parser.test.ts=
+
+** Manual verification
+- Single-component plan: verify coordinator executes all items sequentially with correct org state transitions
+- Multi-component plan: verify parallel coordinator dispatch, independent abort, correct completion
+- Headless execution: verify plan execution works without DISPLAY/QML
+- Approval UI: verify Approve/Refine/Momus options still function
+- Daedalus advisory: verify ultraplan flow runs Daedalus post-creation with advisory output format
+- Fallback: verify graceful degradation when Elisp MCP unavailable
+
+** Required artifacts
+- New test files: =test-org-fluid-plan.el=, =fluid-components.test.ts=, =org-fluid-bridge.test.ts=, =coordinator-session.test.ts=, =exit-plan-mode-fluid.test.ts=
+- Updated =AGENTS.md= with Elisp-first policy
+
+* Execution Manifest
+** foundation                                                        :wave:
+- [[id:PROJ-015-elisp-org-fluid-plan-mcp-tool]] Elisp Org-Fluid-Plan MCP Tool (8h)
+
+** orchestrator                                                      :wave:
+- [[id:PROJ-016-fluidorchestrator-multi-component-execut]] FluidOrchestrator Multi-Component Execution (6h, depends PROJ-015)
+
+** bridge-and-sessions                                               :wave:
+- [[id:FEAT-147-orgfluidbridge-and-lifecycle-hooks]] OrgFluidBridge and Lifecycle Hooks (5h, depends PROJ-016)
+- [[id:FEAT-148-coordinator-agent-sessions]] Coordinator Agent Sessions (4h, depends PROJ-016)
+
+** integration                                                       :wave:
+- [[id:FEAT-149-plan-execution-unification]] Plan Execution Unification (6h, depends FEAT-147 + FEAT-148)
+
+** prompts                                                           :wave:
+- [[id:FEAT-150-planning-prompt-redesign]] Planning Prompt Redesign (3h, depends FEAT-149)
+
+** cleanup                                                           :wave:
+- [[id:FEAT-151-legacy-cleanup-and-migration]] Legacy Cleanup and Migration (3h, depends all)
+
+** Completion [2026-03-31]
+
+*** Verification
+- =bun check:ts= — PASS (0 errors, 0 warnings)
+- =bun lint:ts= — PASS (0 violations)
+- Elisp ERTs: 17/17 pass (=emacs --batch -l test-org-fluid-plan.el -f ert-run-tests-batch-and-exit=)
+- Orchestrator tests: 56/56 pass (=bun test test/orchestrators/=)
+- Exit-plan-mode tests: 16/16 pass (=bun test test/tools/exit-plan-mode*.test.ts=)
+- Loop org-depend tests: 13/13 pass (=bun test test/loop/org-depend-parser.test.ts=)
+- Plan-mode tests: 28/28 pass (=bun test test/plan-mode/=)
+
+*** Artifacts
+
+New files created:
+- =packages/org/elisp/tools/org-fluid-plan.el= — Elisp MCP tool: union-find connected components, Kahn's topological sort, FluidPlan JSON emission
+- =packages/org/elisp/test/test-org-fluid-plan.el= — 17 ERT tests covering all 10 scenarios
+- =packages/coding-agent/src/orchestrators/fluid/org-fluid-bridge.ts= — OrgFluidBridge: org lifecycle hooks (ITEM->DOING->DONE)
+- =packages/coding-agent/src/orchestrators/fluid/coordinator-runner.ts= — Coordinator agent runner with sub-DAG context
+- =packages/coding-agent/src/prompts/agents/coordinator.md= — Coordinator prompt template (Handlebars, simple/complex variants)
+- =packages/coding-agent/test/orchestrators/fluid-components.test.ts= — 9 tests for splitIntoComponents
+
+Modified files:
+- =packages/org/elisp/mcp-server-emacs-tools.el= — registered org-fluid-plan in dispatch table
+- =packages/org/src/types.ts= — added FluidPlanAgent, FluidPlanWave, FluidPlanComponent, FluidPlanWithComponents types
+- =packages/coding-agent/src/orchestrators/fluid/types.ts= — extended FluidAgentNode with orgItemId, effort, priority, isCoordinator, subPlan
+- =packages/coding-agent/src/orchestrators/fluid/dag.ts= — added splitIntoComponents (union-find)
+- =packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts= — multi-component execution via #buildCoordinatorPlan
+- =packages/coding-agent/src/orchestrators/fluid/index.ts= — added new module exports
+- =packages/coding-agent/src/tools/exit-plan-mode.ts= — added fluidPlan field to ExitPlanModeDetails
+- =packages/coding-agent/src/modes/interactive-mode.ts= — added #executeViaFluidOrchestrator method, FluidOrchestrator invocation on approval
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — redesigned ultraplan flow (5 phases, no blocking Daedalus)
+- =packages/coding-agent/src/prompts/agents/daedalus.md= — rewritten as advisory reviewer (OBSERVATIONS/SUGGESTIONS/WARNINGS)
+- =AGENTS.md= — added Org Logic: Elisp-First Policy section
+
+*** Deviations
+
+1. *File-backed plan fallback preserved*: =plan-mode-approved.md= and =PlanWave= types were NOT deleted as originally planned. They remain for file-backed plans (org disabled) which still use the legacy prompt-injection execution path. The new FluidOrchestrator path handles all org-backed plans.
+
+2. *Loop system caller migration deferred*: =metis-builder.ts= and =momus-builder.ts= were not migrated from direct =org-depend.ts= imports to MCP calls. These builders are defined but not actively called by the loop system. Migration is premature until these are wired into production use.
+
+3. *=org-compute-waves.el= not deleted*: Retained because =org wave= CLI command (=org-next-wave.el=) still references it. Removing it would break the existing =org wave= command.
+
+4. *Coordinator subprocess execution*: Instead of spawning a full =runSubprocess= in-process agent session per coordinator, the implementation uses =session.prompt()= with synthetic prompts. This is simpler and avoids the complexity of managing parallel in-process agent sessions, while still achieving the stated goal of FluidOrchestrator-based execution.

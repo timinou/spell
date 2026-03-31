@@ -1,0 +1,120 @@
+#+TITLE: Legacy Cleanup and Migration
+#+STATE: DONE
+#+SESSION_ID: 14a8998aaf7f2312
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T18-38-42-877Z_14a8998aaf7f2312.jsonl]]
+#+CUSTOM_ID: FEAT-151-legacy-cleanup-and-migration
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: cleanup
+#+DEPENDS: PROJ-015-elisp-org-fluid-plan-mcp-tool PROJ-016-fluidorchestrator-multi-component-execut FEAT-147-orgfluidbridge-and-lifecycle-hooks FEAT-148-coordinator-agent-sessions FEAT-149-plan-execution-unification FEAT-150-planning-prompt-redesign
+
+* Initial Message
+
+Think about it. the wave-based dependency ordering only makes sense for one DAG, but orchestration flows can be several DAGs. Can you leanly improve/change the decomposition steps of plans and ultraplans to fully support these? As in: you remove Daedalus (just don't activate it anymore), but instead you create the org files, and the org subtasks can depend on each other and other file CUSTOM_IDs, and the execution manifest is built from there, and there is a way to spin several agents that will then also spin agents so that there are several threads, that are coordinated through the main agent? And then once the first DAG has been generated, Daedalus is generated with that DAG summary as the startying point, instead of the current way which has Daedalus generate the decomposition analysis before the DAG which makes no sense? That way we can unlock deep parallelism and the orchestration is way more more granular per subtask
+
+Ask me many questions. Challenge me a lot.
+
+* Scope
+- In :: Delete =plan-mode-approved.md= prompt (replaced by FluidOrchestrator invocation). Remove =PlanWave= types and =extractPlanWaves= from =exit-plan-mode.ts=. Delete =org-compute-waves.el= (replaced by =org-fluid-plan=). Migrate loop system callers (=metis-builder.ts=, =momus-builder.ts=) from direct =org-depend.ts= imports to Elisp MCP calls. Move remaining =org-depend.ts= graph logic to Elisp. Update =AGENTS.md= with Elisp-first policy. Remove =gateDaedalusDisabled= config surface if vestigial.
+- Out :: Nothing — this is the final cleanup item.
+- Boundary :: All new paths are working and tested before this item executes. This item only removes dead code and migrates callers.
+
+Note: sequencing is implementation-first — all new functionality must be verified before old code is removed.
+
+* Tests
+Verification (not new test files — regression checks):
+1. No imports of =PlanWave= or =PlanWaveEntry= types remain in codebase (grep verification)
+2. No references to =plan-mode-approved.md= template remain in TypeScript source
+3. =org-compute-waves.el= removed; MCP dispatch table no longer registers it
+4. Loop system callers (=metis-builder.ts=, =momus-builder.ts=) use MCP calls instead of direct =org-depend.ts= function imports
+5. No broken imports: =bun check:ts= passes
+6. All existing test suites pass (full regression): orchestrator tests, exit-plan-mode tests, org Elisp tests, loop tests
+7. =packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts= deleted (tests the removed =extractPlanWaves=)
+
+* Implementation
+
+** Delete plan-mode-approved.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-151::delete-approved-prompt
+:EFFORT: 0.5h
+:END:
+- Delete file: =packages/coding-agent/src/prompts/system/plan-mode-approved.md=
+- Remove import: =import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md"= in =interactive-mode.ts=
+- Remove =renderPromptTemplate(planModeApprovedPrompt, {...})= call (already replaced by FluidOrchestrator invocation in FEAT-149)
+- Verify: no other files import this prompt (grep)
+
+** Remove PlanWave types and extraction
+:PROPERTIES:
+:CUSTOM_ID: FEAT-151::delete-plan-wave
+:EFFORT: 0.5h
+:END:
+- File: =packages/coding-agent/src/tools/exit-plan-mode.ts=
+- Delete interfaces: =PlanWave=, =PlanWaveEntry=
+- Delete function: =extractPlanWaves=
+- Remove =waves= field from =ExitPlanModeDetails= (now superseded by =fluidPlan= field added in FEAT-149)
+- Delete test file: =packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts=
+- Verify: no other files reference =PlanWave= or =extractPlanWaves= (grep + =bun check:ts=)
+
+** Delete org-compute-waves.el
+:PROPERTIES:
+:CUSTOM_ID: FEAT-151::migrate-elisp-tools
+:EFFORT: 0.5h
+:END:
+- Delete file: =packages/org/elisp/tools/org-compute-waves.el=
+- Update: =packages/org/elisp/mcp-server-emacs-tools.el= — remove =(require 'org-compute-waves)= and dispatch table entry
+- Update: =packages/org/src/tool.ts= — remove TypeScript wrapper for =org-compute-waves= MCP call (if exists)
+- Verify: =org-next-wave.el= does NOT require =org-compute-waves= (check with grep)
+- Verify: =org-fluid-plan.el= (from PROJ-015) covers all use cases previously handled by =org-compute-waves=
+
+** Migrate loop system callers to MCP
+:PROPERTIES:
+:CUSTOM_ID: FEAT-151::loop-system-migration
+:DEPENDS: FEAT-151::migrate-elisp-tools
+:EFFORT: 1h
+:END:
+- Files: =packages/coding-agent/src/loop/ingestion/metis-builder.ts=, =packages/coding-agent/src/loop/ingestion/momus-builder.ts=
+- Replace direct imports from =org-depend.ts= (=parseOrgDependProperties=, =buildDependencyGraph=, =topologicalSort=) with MCP tool calls to Elisp
+- Use the =org-fluid-plan= MCP tool or a dedicated =org-dependency-graph= MCP tool for graph data
+- =MetisBuilder=: needs dependency graph, critical path, orphan detection — available from Elisp tool output
+- =MomusBuilder=: needs edge list, max depth, effort aggregation — compute from Elisp tool output
+- Keep =org-depend.ts= file with deprecation comment if any non-loop callers remain; delete entirely if no imports remain
+- Run loop-related tests to verify (=packages/coding-agent/test/loop/org-depend-parser.test.ts=)
+
+** Update AGENTS.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-151::agents-md-update
+:EFFORT: 0.25h
+:END:
+- File: =AGENTS.md= (project root)
+- Add policy: "EMACS LISP AS MUCH AS POSSIBLE for org logic. Reduce TypeScript org logic. Prefer ERTs for org algorithm testing."
+- Document: =org-fluid-plan= MCP tool as the canonical graph computation path
+- Update Commands section if any new test commands exist
+
+** Final verification
+:PROPERTIES:
+:CUSTOM_ID: FEAT-151::final-verification
+:DEPENDS: FEAT-151::delete-approved-prompt FEAT-151::delete-plan-wave FEAT-151::migrate-elisp-tools FEAT-151::loop-system-migration FEAT-151::agents-md-update
+:EFFORT: 0.25h
+:END:
+- Run: =bun check:ts= (no broken imports, no type errors)
+- Run: =bun lint:ts= (no lint violations)
+- Run: all orchestrator tests (=packages/coding-agent/test/orchestrators/=)
+- Run: all exit-plan-mode tests (=packages/coding-agent/test/tools/exit-plan-mode*.test.ts=)
+- Run: all org Elisp tests (ERTs)
+- Run: loop org-depend parser tests (=packages/coding-agent/test/loop/org-depend-parser.test.ts=)
+- Verify: no orphaned files, no dead imports via grep
+
+* Edge Cases
+- =org-depend.ts= still needed by non-loop callers :: if any imports remain after migration, keep file with deprecation comment. Otherwise delete entirely.
+- =plan-mode-approved.md= referenced by user-defined mode configs :: search all =.spell/modes/= files (if any) before deleting. User configs that reference the prompt need migration guidance.
+- =org-compute-waves.el= called by =org-next-wave.el= :: verify independence. If =org-next-wave= requires =org-compute-waves= functions, extract shared functions into a common utility file first.
+- Loop system MCP calls when Emacs not running :: =metis-builder= and =momus-builder= are called during loop execution, which requires Emacs. If Emacs MCP is unavailable, fail with clear error message (not silent degradation).
+
+* Acceptance Criteria
+- No dead code: =PlanWave= types, =extractPlanWaves=, =plan-mode-approved.md= all removed (grep verification)
+- =org-compute-waves.el= deleted, =org-fluid-plan.el= is canonical (file system verification)
+- Loop system callers use MCP, not direct TypeScript function calls (import grep verification)
+- =AGENTS.md= documents Elisp-first policy for org logic
+- =bun check:ts= passes with zero errors
+- =bun lint:ts= passes
+- All test suites pass (orchestrator, exit-plan-mode, org Elisp, loop)

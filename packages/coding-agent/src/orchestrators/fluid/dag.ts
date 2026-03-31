@@ -1,4 +1,4 @@
-import { CANVAS_OUTPUT_TYPES, type CanvasOutputType, type FluidPlan } from "./types";
+import { CANVAS_OUTPUT_TYPES, type CanvasOutputType, type FluidAgentNode, type FluidPlan } from "./types";
 
 interface TopologicalResult {
 	order: string[];
@@ -161,4 +161,86 @@ export function getReadyAgents(plan: FluidPlan, completed: Set<string>): string[
 		}
 	}
 	return ready;
+}
+
+/**
+ * Split a FluidPlan into connected components using union-find.
+ *
+ * Each component is an independent sub-DAG that can be executed
+ * by a separate coordinator. Single-component plans return `[plan]`
+ * unchanged (backward compatible).
+ */
+export function splitIntoComponents(plan: FluidPlan): FluidPlan[] {
+	if (plan.agents.length <= 1) return [plan];
+
+	// Union-find: parent map + rank
+	const parent = new Map<string, string>();
+	const rank = new Map<string, number>();
+
+	for (const node of plan.agents) {
+		parent.set(node.id, node.id);
+		rank.set(node.id, 0);
+	}
+
+	function find(x: string): string {
+		let root = x;
+		while (parent.get(root) !== root) {
+			root = parent.get(root)!;
+		}
+		// Path compression
+		let current = x;
+		while (current !== root) {
+			const next = parent.get(current)!;
+			parent.set(current, root);
+			current = next;
+		}
+		return root;
+	}
+
+	function union(a: string, b: string): void {
+		const ra = find(a);
+		const rb = find(b);
+		if (ra === rb) return;
+		const rankA = rank.get(ra) ?? 0;
+		const rankB = rank.get(rb) ?? 0;
+		if (rankA < rankB) {
+			parent.set(ra, rb);
+		} else if (rankA > rankB) {
+			parent.set(rb, ra);
+		} else {
+			parent.set(rb, ra);
+			rank.set(ra, rankA + 1);
+		}
+	}
+
+	// Union nodes connected by dependency edges (undirected for component detection)
+	for (const node of plan.agents) {
+		for (const dep of node.dependsOn) {
+			if (parent.has(dep)) {
+				union(node.id, dep);
+			}
+		}
+	}
+
+	// Group nodes by component root
+	const componentMap = new Map<string, FluidAgentNode[]>();
+	for (const node of plan.agents) {
+		const root = find(node.id);
+		let members = componentMap.get(root);
+		if (!members) {
+			members = [];
+			componentMap.set(root, members);
+		}
+		members.push(node);
+	}
+
+	// Single component: return unchanged (no allocation overhead)
+	if (componentMap.size === 1) return [plan];
+
+	// Build per-component FluidPlans
+	const components: FluidPlan[] = [];
+	for (const agents of componentMap.values()) {
+		components.push({ agents });
+	}
+	return components;
 }

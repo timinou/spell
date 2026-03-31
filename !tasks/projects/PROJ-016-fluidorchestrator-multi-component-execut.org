@@ -1,0 +1,110 @@
+#+TITLE: FluidOrchestrator Multi-Component Execution
+#+STATE: DONE
+#+SESSION_ID: 14a8998aaf7f2312
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T18-38-42-877Z_14a8998aaf7f2312.jsonl]]
+#+CUSTOM_ID: PROJ-016-fluidorchestrator-multi-component-execut
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: infrastructure
+#+DEPENDS: PROJ-015-elisp-org-fluid-plan-mcp-tool
+
+* Initial Message
+
+Think about it. the wave-based dependency ordering only makes sense for one DAG, but orchestration flows can be several DAGs. Can you leanly improve/change the decomposition steps of plans and ultraplans to fully support these? As in: you remove Daedalus (just don't activate it anymore), but instead you create the org files, and the org subtasks can depend on each other and other file CUSTOM_IDs, and the execution manifest is built from there, and there is a way to spin several agents that will then also spin agents so that there are several threads, that are coordinated through the main agent? And then once the first DAG has been generated, Daedalus is generated with that DAG summary as the startying point, instead of the current way which has Daedalus generate the decomposition analysis before the DAG which makes no sense? That way we can unlock deep parallelism and the orchestration is way more more granular per subtask
+
+Ask me many questions. Challenge me a lot.
+
+* Scope
+- In :: Extend FluidOrchestrator to accept multi-component plans. Connected component splitting as pre-processing step. Coordinator node type in FluidAgentNode. Independent abort per component. Extend FluidPlan types with org fields. Update all consumers (fluid-mode.ts, canvas-orchestrator.ts).
+- Out :: Org lifecycle hooks (FEAT-001). Coordinator prompt/session implementation (FEAT-002). Plan mode wiring (FEAT-003).
+- Boundary :: This item makes FluidOrchestrator mechanically capable of multi-component hierarchical execution. Org awareness and plan mode integration are separate bridge/integration concerns.
+
+* Tests
+Files: =packages/coding-agent/test/orchestrators/fluid-components.test.ts= (new), extend =fluid-scheduler.test.ts=, =fluid-dag.test.ts=, =fluid-orchestrator.test.ts= (new)
+
+Scenarios:
+1. =splitIntoComponents= correctly partitions a plan with 2 disconnected subgraphs
+2. Single connected plan -> one component (no splitting, backward compat)
+3. Plan with isolated nodes (no edges) -> each node is its own component
+4. Coordinator nodes dispatch correctly: each coordinator's runAgent called with its sub-plan
+5. Coordinator failure -> other coordinators continue (independent abort)
+6. All coordinators complete -> =execution_complete= event fires
+7. =validatePlan= accepts plans with =orgItemId= field (backward compat)
+8. End-to-end mock: multi-component plan -> parallel coordinator dispatch -> completion
+
+* Implementation
+
+** Extend FluidPlan types for org + multi-component
+:PROPERTIES:
+:CUSTOM_ID: PROJ-016::extend-types
+:EFFORT: 1h
+:END:
+- File: =packages/coding-agent/src/orchestrators/fluid/types.ts=
+- Add to =FluidAgentNode=: =orgItemId?: string=, =effort?: string=, =priority?: string=, =isCoordinator?: boolean=, =subPlan?: FluidPlan=
+- Add =FluidPlanWithComponents= type: ={ components: FluidPlan[], warnings?: string[] }=
+- Keep =FluidPlan= backward-compatible — single-component plans work unchanged
+- Add =FluidOrgMetadata= type for org-specific fields passed through the bridge
+
+** Split FluidPlan into connected components
+:PROPERTIES:
+:CUSTOM_ID: PROJ-016::component-splitter
+:DEPENDS: PROJ-016::extend-types
+:EFFORT: 1.5h
+:END:
+- File: =packages/coding-agent/src/orchestrators/fluid/dag.ts=
+- =splitIntoComponents(plan: FluidPlan): FluidPlan[]= — union-find on undirected edges, partition agents into per-component FluidPlans
+- Single connected plan returns =[plan]= (no-op)
+- Isolated nodes (no edges, no dependsOn) each become their own component
+- Preserves agent ordering within components
+
+** Extend execution for coordinator nodes
+:PROPERTIES:
+:CUSTOM_ID: PROJ-016::coordinator-dispatch
+:DEPENDS: PROJ-016::component-splitter
+:EFFORT: 2h
+:END:
+- Files: =packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts=, =packages/coding-agent/src/orchestrators/fluid/queue-scheduler.ts=
+- When plan has multiple components: FluidOrchestrator creates a top-level FluidPlan with one coordinator node per component (all =dependsOn: []=)
+- Each coordinator node has =isCoordinator: true= and =subPlan= set to its component's FluidPlan
+- RunAgentFn signature extended: receives optional =subPlan= context alongside the node
+- Independent AbortControllers per coordinator — parent abort cascades to all child controllers
+- Single-component plans: no coordinator wrapping, execute directly (backward compat)
+
+** Update fluid-mode.ts + canvas-orchestrator.ts
+:PROPERTIES:
+:CUSTOM_ID: PROJ-016::update-consumers
+:DEPENDS: PROJ-016::coordinator-dispatch
+:EFFORT: 1h
+:END:
+- Files: =packages/coding-agent/src/modes/fluid-mode.ts=, =packages/coding-agent/src/orchestrators/canvas-orchestrator.ts=
+- =fluid-mode.ts=: =runFluidAgent= works with new FluidAgentNode fields (=orgItemId= passthrough, backward compat for LLM-generated canvas plans)
+- =canvas-orchestrator.ts=: minimal changes — single-component plans work as before since no coordinator wrapping occurs
+- Verify =canvasOutput= routing still works for non-coordinator nodes
+
+** Unit + mock tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-016::tests
+:DEPENDS: PROJ-016::coordinator-dispatch
+:EFFORT: 0.5h
+:END:
+- File: =packages/coding-agent/test/orchestrators/fluid-components.test.ts= (new)
+- Extend existing: =fluid-scheduler.test.ts=, =fluid-dag.test.ts=
+- Mock =runAgent= to verify coordinator dispatch behavior
+- Test independent abort: abort one coordinator, verify others complete
+
+* Edge Cases
+- Single-component plan :: no splitting occurs, FluidOrchestrator backward-compatible with current behavior
+- Plan with 0 agents :: =validatePlan= rejects (existing behavior preserved)
+- Coordinator abort :: parent =AbortController.abort()= cascades to all coordinator controllers
+- Coordinator failure :: only the failed coordinator is marked failed. No dependents since coordinators are independent (=dependsOn: []=)
+- =canvasOutput= on coordinator nodes :: ignored (canvas output is per-task, not per-coordinator)
+- Preset completed results :: still work for non-coordinator nodes; coordinator nodes are never preset-completed
+
+* Acceptance Criteria
+- =splitIntoComponents= correctly partitions disconnected graphs (verified by test scenario 1-3)
+- Multi-component plans execute coordinators in parallel (verified by test scenario 4, 8)
+- Single-component plans work exactly as before (no regression in existing =fluid-scheduler.test.ts=, =fluid-dag.test.ts=, =fluid-drain.test.ts=)
+- Independent abort works (verified by test scenario 5)
+- All existing fluid orchestrator tests pass unchanged
+- New component tests pass
+- =bun check:ts= passes

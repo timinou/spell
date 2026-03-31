@@ -1,0 +1,94 @@
+#+TITLE: OrgFluidBridge and Lifecycle Hooks
+#+STATE: DONE
+#+SESSION_ID: 14a8998aaf7f2312
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T18-38-42-877Z_14a8998aaf7f2312.jsonl]]
+#+CUSTOM_ID: FEAT-147-orgfluidbridge-and-lifecycle-hooks
+#+EFFORT: 5h
+#+PRIORITY: #A
+#+LAYER: integration
+#+DEPENDS: PROJ-016-fluidorchestrator-multi-component-execut
+
+* Initial Message
+
+Think about it. the wave-based dependency ordering only makes sense for one DAG, but orchestration flows can be several DAGs. Can you leanly improve/change the decomposition steps of plans and ultraplans to fully support these? As in: you remove Daedalus (just don't activate it anymore), but instead you create the org files, and the org subtasks can depend on each other and other file CUSTOM_IDs, and the execution manifest is built from there, and there is a way to spin several agents that will then also spin agents so that there are several threads, that are coordinated through the main agent? And then once the first DAG has been generated, Daedalus is generated with that DAG summary as the startying point, instead of the current way which has Daedalus generate the decomposition analysis before the DAG which makes no sense? That way we can unlock deep parallelism and the orchestration is way more more granular per subtask
+
+Ask me many questions. Challenge me a lot.
+
+* Scope
+- In :: OrgFluidBridge class connecting FluidOrchestrator events to org state transitions. Post-execution hook system for audit state, design history, plan completion. Wire =completePlanItem= (currently dead code) into the new flow. Org ITEM->DOING->DONE lifecycle driven by FluidOrchestrator events.
+- Out :: Coordinator prompt/session details (FEAT-002). Plan mode entry point changes (FEAT-003). Prompt changes (FEAT-004).
+- Boundary :: Org awareness is a bridge layer ON TOP of FluidOrchestrator. The orchestrator stays generic; the bridge adds org lifecycle semantics. This keeps FluidOrchestrator testable without org dependencies.
+
+* Tests
+File: =packages/coding-agent/test/orchestrators/org-fluid-bridge.test.ts= (new)
+
+Scenarios:
+1. Agent =running= event -> org item transitions ITEM->DOING via org update MCP call
+2. Agent =completed= event -> org item transitions DOING->DONE
+3. Agent =failed= event -> org item stays in DOING (coordinator decides recovery, not bridge)
+4. All agents complete -> post-execution hook fires: =completePlanItem= called, PLAN transitions DOING->DONE
+5. Design-flavored plan -> design history entry written via post-execution hook
+6. Partial failure (some agents fail) -> post-execution hook fires but PLAN NOT marked DONE, failed items reported in summary
+7. Plan reference path set correctly on session for context access
+8. Audit state set: =auto= for ultraplan, =suggest= for regular plan
+
+* Implementation
+
+** OrgFluidBridge class
+:PROPERTIES:
+:CUSTOM_ID: FEAT-017::bridge-class
+:EFFORT: 2h
+:END:
+- File: =packages/coding-agent/src/orchestrators/fluid/org-fluid-bridge.ts= (new)
+- Constructor: receives EventBus, org MCP client/tool access, plan metadata (PLAN CUSTOM_ID, mode info)
+- Subscribes to FluidOrchestrator events on the =fluid:event= channel
+- On =agent_state_change(running)=: call org update to transition item ITEM->DOING
+- On =agent_state_change(completed)=: call org update to transition item DOING->DONE
+- On =agent_state_change(failed)=: log warning, leave item in DOING state (coordinator handles recovery)
+- Maps =agentId= to org CUSTOM_ID via =orgItemId= field on FluidAgentNode
+- Idempotent: skips transition if item already in target state (handles re-runs)
+
+** Post-execution lifecycle hooks
+:PROPERTIES:
+:CUSTOM_ID: FEAT-017::post-execution-hooks
+:DEPENDS: FEAT-017::bridge-class
+:EFFORT: 1.5h
+:END:
+- File: =packages/coding-agent/src/orchestrators/fluid/org-fluid-bridge.ts=
+- On =execution_complete= event: run hook chain:
+  1. Reconcile child org item states via =completePlanItem= from =org-plan.ts= (ITEM/ACTIVE->DONE, BLOCKED stays)
+  2. Set audit state on session: =auto= for ultraplan, =suggest= for regular plan (extracted from current =#approvePlan=)
+  3. Write design history entry if plan has design flavor (extracted from current =#approvePlan=)
+  4. Set plan reference path on session (=setPlanReferencePath=, =markPlanReferenceSent=)
+  5. Transition PLAN item DOING->DONE only if ALL children are DONE
+- Error handling: individual hook failures logged but don't block other hooks
+- Returns summary: =PostExecutionResult= with success/failure counts, deferred items, audit state
+
+** Integration tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-017::integration-test
+:DEPENDS: FEAT-017::post-execution-hooks
+:EFFORT: 1.5h
+:END:
+- File: =packages/coding-agent/test/orchestrators/org-fluid-bridge.test.ts=
+- Mock org MCP client (verify correct tool calls with correct CUSTOM_IDs and target states)
+- Mock EventBus (emit synthetic agent_state_change events)
+- Mock session (verify =setAuditState=, =setPlanReferencePath= calls)
+- Verify =completePlanItem= integration: mock the function, verify it's called with correct PLAN reference
+- Test design history write: mock =Bun.write=, verify correct path and entry content
+
+* Edge Cases
+- Race condition: two coordinators completing near-simultaneously :: safe because org writer has per-file =KeyedMutex= (in-process, same event loop)
+- Coordinator completes but org update MCP call fails (Emacs down) :: bridge logs error, does NOT block =execution_complete=. Item stays in stale state; operator can reconcile manually.
+- Plan with items already in DONE state (re-run scenario) :: bridge skips transitions for already-DONE items (idempotent)
+- Audit state when audit depth exceeds max :: set =pending: false= (matches current =interactive-mode.ts:1188= behavior)
+- Post-execution hook throws :: caught per-hook, other hooks still run. Error reported in =PostExecutionResult=.
+
+* Acceptance Criteria
+- Org items transition ITEM->DOING->DONE as coordinators execute (verified by test scenarios 1-3)
+- =completePlanItem= called on successful completion -> PLAN transitions to DONE (scenario 4)
+- Audit state correctly set based on plan mode: ultraplan vs regular (scenario 8)
+- Design history written for design-flavored plans (scenario 5)
+- Partial failure handled correctly: PLAN stays DOING, failed items reported (scenario 6)
+- All 8 test scenarios pass
+- =bun check:ts= passes

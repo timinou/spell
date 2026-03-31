@@ -1,6 +1,6 @@
 import type { SingleResult } from "../../task/types";
 import { type EventBus, Priority } from "../../utils/event-bus";
-import { validatePlan } from "./dag";
+import { splitIntoComponents, validatePlan } from "./dag";
 import { QueueScheduler, type RunAgentFn } from "./queue-scheduler";
 import { type AgentRuntime, FLUID_EVENT_CHANNEL, type FluidAgentNode, type FluidPlan } from "./types";
 
@@ -34,6 +34,10 @@ export class FluidOrchestrator {
 		this.#runAgent = options.runAgent ?? defaultRunAgent;
 	}
 
+	/**
+	 * Execute a FluidPlan. If it has multiple connected components,
+	 * each component is wrapped in a coordinator node and executed in parallel.
+	 */
 	async execute(
 		plan: FluidPlan,
 		signal?: AbortSignal,
@@ -46,8 +50,15 @@ export class FluidOrchestrator {
 			this.#eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_error", error }, Priority.P1);
 			throw new Error(error);
 		}
-		this.#eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_complete", plan }, Priority.P1);
-		const planAgentsById = new Map(plan.agents.map(agent => [agent.id, agent]));
+
+		// Split into connected components — single-component returns [plan] unchanged
+		const components = splitIntoComponents(plan);
+
+		// Multi-component: wrap each in a coordinator node
+		const executionPlan = components.length > 1 ? this.#buildCoordinatorPlan(components) : plan;
+
+		this.#eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_complete", plan: executionPlan }, Priority.P1);
+		const planAgentsById = new Map(executionPlan.agents.map(agent => [agent.id, agent]));
 
 		this.#startDrainTimer();
 		try {
@@ -79,11 +90,26 @@ export class FluidOrchestrator {
 				},
 			});
 
-			const results = await scheduler.execute(plan);
+			const results = await scheduler.execute(executionPlan);
 			return results;
 		} finally {
 			this.#stopDrainTimer();
 		}
+	}
+
+	/**
+	 * Build a top-level plan with one coordinator node per component.
+	 * All coordinators are roots (dependsOn: []) so they execute in parallel.
+	 */
+	#buildCoordinatorPlan(components: FluidPlan[]): FluidPlan {
+		const coordinatorAgents: FluidAgentNode[] = components.map((component, i) => ({
+			id: `coordinator-${i + 1}`,
+			task: `Coordinate execution of component ${i + 1} (${component.agents.length} items)`,
+			dependsOn: [],
+			isCoordinator: true,
+			subPlan: component,
+		}));
+		return { agents: coordinatorAgents };
 	}
 
 	#startDrainTimer(): void {
