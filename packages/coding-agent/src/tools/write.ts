@@ -17,8 +17,8 @@ import writeDescription from "../prompts/tools/write.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
+import { enforceModeWrite, resolvePlanPath } from "./mode-guard";
 import { type OutputMeta, outputMeta } from "./output-meta";
-import { enforcePlanModeWrite, resolvePlanPath } from "./plan-mode-guard";
 import {
 	formatDiagnostics,
 	formatExpandHint,
@@ -98,7 +98,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		return untilAborted(signal, async () => {
-			enforcePlanModeWrite(this.session, path, { op: "create" });
+			enforceModeWrite(this.session, path, { op: "create" });
 			const absolutePath = resolvePlanPath(this.session, path);
 			const batchRequest = getLspBatchRequest(context?.toolCall);
 

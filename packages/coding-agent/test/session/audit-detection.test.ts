@@ -17,27 +17,27 @@ import { isAuditClean } from "../../src/plan-mode/audit-state";
 describe("audit detection state machine", () => {
 	describe("pending → active transitions", () => {
 		it("auto pending activates immediately", () => {
-			const state: AuditState = { pending: "auto", active: false };
+			const state: AuditState = { type: "audit", pending: "auto", active: false };
 			// Simulates #checkAuditPhase auto branch
-			const next: AuditState = { pending: false, active: true };
+			const next: AuditState = { type: "audit", pending: false, active: true };
 			expect(next.active).toBe(true);
 			expect(next.pending).toBe(false);
 			expect(state.pending).toBe("auto");
 		});
 
 		it("suggest pending requires callback approval", () => {
-			const state: AuditState = { pending: "suggest", active: false };
+			const state: AuditState = { type: "audit", pending: "suggest", active: false };
 			// Accepted
-			const accepted: AuditState = { pending: false, active: true };
+			const accepted: AuditState = { type: "audit", pending: false, active: true };
 			expect(accepted.active).toBe(true);
 			// Rejected
-			const rejected: AuditState = { pending: false, active: false };
+			const rejected: AuditState = { type: "audit", pending: false, active: false };
 			expect(rejected.active).toBe(false);
 			expect(state.pending).toBe("suggest");
 		});
 
 		it("false pending is a no-op", () => {
-			const state: AuditState = { pending: false, active: false };
+			const state: AuditState = { type: "audit", pending: false, active: false };
 			// No transition occurs
 			expect(state.pending).toBe(false);
 			expect(state.active).toBe(false);
@@ -51,7 +51,7 @@ describe("audit detection state machine", () => {
 				expect(isAuditClean(response)).toBe(true);
 			}
 			// After clean detection: state resets
-			const cleared: AuditState = { pending: false, active: false };
+			const cleared: AuditState = { type: "audit", pending: false, active: false };
 			expect(cleared.active).toBe(false);
 		});
 
@@ -77,7 +77,7 @@ describe("audit detection state machine", () => {
 	describe("abort/error clears audit state", () => {
 		it("abort resets to default state", () => {
 			// When stopReason === "aborted" or "error", agent_end handler clears audit
-			const cleared: AuditState = { pending: false, active: false };
+			const cleared: AuditState = { type: "audit", pending: false, active: false };
 			expect(cleared.pending).toBe(false);
 			expect(cleared.active).toBe(false);
 		});

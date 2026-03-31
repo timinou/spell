@@ -1,0 +1,142 @@
+#+TITLE: Mode Config Foundation
+#+STATE: DONE
+#+SESSION_ID: 14a78ba624cf3e43
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-59-32-115Z_14a78ba624cf3e43.jsonl]]
+#+CUSTOM_ID: PROJ-009-mode-config-foundation
+#+EFFORT: L
+#+PRIORITY: #A
+#+LAYER: core
+
+NOTE [2026-03-31]: Types defined, body parser implemented, extends resolver done, discovery loader registered, built-in definitions created. 15 test scenarios pass.
+
+
+* Initial Message
+
+I want to make my sales and marketing cofounders more able to use spell by e.g. being able to create .spell/<something> files that e.g. customise the behaviour of plan, ultraplan, and audit. What can you propose?
+
+* Scope
+
+**In scope:**
+- ~ModeConfig~ type definition + ~ModeConfigFrontmatter~ schema
+- Mode capability type in discovery system (~capability/mode.ts~)
+- Discovery from ~.spell/modes/<name>/MODE.md~ (project ~.spell/modes/~ + user ~~/.spell/agent/modes/~)
+- Body section parser: split markdown body by ~##~ headings into named sections (Context, Instructions, Focus Areas, Examples)
+- Extends chain resolver with cycle detection (single-parent only)
+- Frontmatter validation schema
+- Project/user precedence (project overrides user, same as skills)
+- Deep merge semantics for extends chain (child overrides parent for scalars, arrays replace, objects deep-merge)
+- Tool allow/deny resolution through extends chain
+
+**Out of scope (handled by downstream items):**
+- Prompt injection into existing templates (FEAT: Mode Prompt Injection)
+- Slash command registration and mode activation (FEAT: Mode Activation + Runtime)
+- Lifecycle generalization / ActiveModeState (FEAT: Mode Lifecycle Generalization)
+- Canvas/QML UI loading (FEAT: Canvas Integration)
+
+**Boundary rationale:** This is the pure data model and parsing layer. It produces loaded, validated, resolved ~ModeConfig~ objects that all downstream features consume. No runtime behavior changes, no prompt changes, no tool registration. Strict separation ensures the foundation is testable in isolation.
+
+* Tests
+
+Test file: ~packages/coding-agent/test/capability/mode-config.test.ts~
+
+Scenarios — define before implementation, write tests first:
+
+1. *Discovery*: Place ~.spell/modes/test-mode/MODE.md~ with valid frontmatter + body. Verify mode is discovered, parsed, and registered as capability item.
+2. *Frontmatter parsing*: Verify all frontmatter fields (name, description, extends, command, readOnly, tools, gates, decomposition, audit, todo, categories, ui, afterComplete, contextPolicy) are correctly parsed from YAML.
+3. *Body section parsing*: Given body with ~## Context~, ~## Instructions~, ~## Focus Areas~, ~## Examples~ headings, verify each section content is extracted into ~ModeConfigSections~ with correct trimming.
+4. *Unknown headings*: Body with ~## Custom Section~ → preserved in a catch-all map, not discarded.
+5. *Extends chain (2 levels)*: Mode A extends Mode B. Verify A's frontmatter overrides B's for scalars, A's body sections are appended after B's.
+6. *Extends chain (3 levels)*: C extends B extends A. Verify correct deep merge order.
+7. *Circular extends*: A extends B, B extends A. Verify error with descriptive cycle path.
+8. *Self-extends*: A extends A. Verify error.
+9. *Missing extends target*: A extends ~nonexistent~. Verify clear error message naming the missing target.
+10. *Project/user precedence*: Same mode name in project and user dirs. Verify project wins.
+11. *Tool resolution*: Parent has ~tools.allow: [read, write, edit]~, child has ~tools.deny: [write]~ → resolved list is ~[read, edit]~.
+12. *Tool resolution (allow only)*: Mode with ~tools.allow: [read, grep, find]~ → only those tools available.
+13. *Minimal MODE.md*: Just a name in frontmatter, empty body → valid ModeConfig with empty sections.
+14. *No frontmatter*: Plain markdown with no ~---~ separator → entire content as body, derive name from directory name.
+15. *Built-in extends targets*: ~extends: plan~ resolves against built-in mode definitions, not user .spell/modes/ files.
+
+* Implementation
+
+Implementation order follows test scenarios — write each test, then implement to satisfy it.
+
+** Define types
+:PROPERTIES:
+:CUSTOM_ID: PROJ-009::define-types
+:END:
+
+- File: ~packages/coding-agent/src/capability/mode.ts~
+- ~ModeConfigFrontmatter~ interface (name, description, extends, command, readOnly, tools, gates, decomposition, audit, todo, categories, ui, afterComplete, contextPolicy, model)
+- ~ModeConfig~ interface (name, path, frontmatter, sections, level, _source)
+- ~ModeConfigSections~ interface ({ context, instructions, focusAreas, examples, custom map, planPhase, codePhase, reviewPhase })
+- ~ResolvedModeConfig~ with merged frontmatter + sections + computed tool list + extends chain
+- Register with ~defineCapability<ModeConfig>~
+- Satisfies test scenarios 1-3, 13-14
+
+** Body section parser
+:PROPERTIES:
+:CUSTOM_ID: PROJ-009::body-section-parser
+:END:
+
+- File: ~packages/coding-agent/src/discovery/mode-helpers.ts~
+- ~parseModeConfigSections(body: string): ModeConfigSections~ — split by ~## heading~ regex
+- Map known headings to typed fields, collect unknowns in ~custom~ map
+- Recognize phase-specific sections: ~## Plan Phase~, ~## Code Phase~, ~## Review Phase~
+- Satisfies test scenarios 4, 6
+
+** Extends chain resolver
+:PROPERTIES:
+:CUSTOM_ID: PROJ-009::extends-resolver
+:DEPENDS: PROJ-009::define-types
+:END:
+
+- File: ~packages/coding-agent/src/discovery/mode-helpers.ts~
+- ~resolveModeConfig()~ — walk extends chain, deep merge frontmatter, concat body sections
+- ~detectExtendsCycle()~ — visited set cycle detection, return descriptive path
+- ~resolveToolAccess()~ — compute final tool list from allow/deny + extends chain
+- Satisfies test scenarios 5, 7-11, 15
+
+** Discovery loader
+:PROPERTIES:
+:CUSTOM_ID: PROJ-009::discovery-loader
+:DEPENDS: PROJ-009::define-types PROJ-009::body-section-parser
+:END:
+
+- File: ~packages/coding-agent/src/discovery/builtin.ts~
+- ~loadModes(ctx)~ — scan ~.spell/modes/~ for directories with ~MODE.md~
+- Scan ~~/.spell/agent/modes/~ for user-level modes
+- Parse frontmatter via ~parseFrontmatter~, body via ~parseModeConfigSections~
+- Register with ~registerProvider<ModeConfig>(modeConfigCapability.id, ...)~
+- Satisfies test scenarios 1, 10, 14
+
+** Built-in mode definitions
+:PROPERTIES:
+:CUSTOM_ID: PROJ-009::builtin-definitions
+:DEPENDS: PROJ-009::define-types
+:END:
+
+- Directory: ~packages/coding-agent/src/modes/definitions/~
+- Create ~plan.md~, ~audit.md~ — prompt-only definitions for extends targets
+- Not full MODE.md files — define only sections users inherit
+- Satisfies test scenario 15
+
+* Edge Cases
+
+- *MODE.md with BOM*: Strip UTF-8 BOM before parsing (existing ~parseFrontmatter~ should handle this).
+- *MODE.md with frontmatter but empty body*: Valid — ~sections~ all undefined, ~custom~ empty map.
+- *Extends target = built-in name*: Resolves against ~modes/definitions/plan.md~ etc., not user .spell/modes/plan/.
+- *Multiple .spell/modes/ in ancestor dirs*: Walk up like skills, closest to cwd wins, deeper ancestors ignored for same name.
+- *Unknown frontmatter fields*: Warn via logger, don't fail. Forward compatibility for future extensions.
+- *MODE.md updated while session active*: Modes are loaded once at startup (same as skills). Changes require session restart.
+- *Directory without MODE.md*: Silently ignored during discovery.
+- *MODE.md with only body (no frontmatter)*: Derive name from directory name, all frontmatter defaults apply.
+
+* Acceptance Criteria
+
+- ~bun test packages/coding-agent/test/capability/mode-config.test.ts~ passes all 15 scenarios.
+- ~bun check:ts~ passes with no regressions.
+- ~bun lint:ts~ passes.
+- A ~.spell/modes/example/MODE.md~ file is correctly discovered, parsed, and resolved through the capability system.
+- Circular extends chain produces a clear, actionable error message.
+- Type definitions are exported from ~packages/coding-agent/src/capability/mode.ts~ for downstream consumers.

@@ -1,4 +1,5 @@
 export interface AuditState {
+	type: "audit";
 	/** Whether an audit is pending after plan execution completes */
 	pending: "auto" | "suggest" | false;
 	/** Whether the audit prompt has been injected and we're waiting for the response */

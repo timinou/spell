@@ -30,7 +30,7 @@ describe("ExitPlanModeTool", () => {
 			settings: Settings.isolated(),
 			getArtifactsDir: () => artifactsDir,
 			getSessionId: () => "session-a",
-			getPlanModeState: () => ({ enabled: true, planFilePath: "local://PLAN.md" }),
+			getPlanModeState: () => ({ type: "plan" as const, enabled: true, planFilePath: "local://PLAN.md" }),
 			...overrides,
 		};
 	}

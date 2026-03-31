@@ -7,7 +7,7 @@ import { renderPromptTemplate } from "../config/prompt-templates";
 import { resolvePlanItem } from "../plan-mode/org-plan";
 import exitPlanModeDescription from "../prompts/tools/exit-plan-mode.md" with { type: "text" };
 import type { ToolSession } from ".";
-import { resolvePlanPath } from "./plan-mode-guard";
+import { resolvePlanPath } from "./mode-guard";
 import { ToolError } from "./tool-errors";
 
 const exitPlanModeSchema = Type.Object({

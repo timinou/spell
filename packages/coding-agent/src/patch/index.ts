@@ -30,8 +30,8 @@ import {
 	invalidateFsScanAfterRename,
 	invalidateFsScanAfterWrite,
 } from "../tools/fs-cache-invalidation";
+import { enforceModeWrite, resolvePlanPath } from "../tools/mode-guard";
 import { outputMeta } from "../tools/output-meta";
-import { enforcePlanModeWrite, resolvePlanPath } from "../tools/plan-mode-guard";
 import { applyPatch } from "./applicator";
 import { generateDiffString, generateUnifiedDiffString, replaceText } from "./diff";
 import { findMatch } from "./fuzzy";
@@ -467,7 +467,7 @@ export class EditTool implements AgentTool<TInput> {
 			}
 			const { path, edits, delete: deleteFile, move } = params;
 
-			enforcePlanModeWrite(this.session, path, { op: deleteFile ? "delete" : "update", move });
+			enforceModeWrite(this.session, path, { op: deleteFile ? "delete" : "update", move });
 
 			if (path.endsWith(".ipynb") && edits?.length > 0) {
 				throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
@@ -674,7 +674,7 @@ export class EditTool implements AgentTool<TInput> {
 			// Normalize unrecognized operations to "update"
 			const op: Operation = rawOp === "create" || rawOp === "delete" ? rawOp : "update";
 
-			enforcePlanModeWrite(this.session, path, { op, move: rename });
+			enforceModeWrite(this.session, path, { op, move: rename });
 			const resolvedPath = resolvePlanPath(this.session, path);
 			const resolvedRename = rename ? resolvePlanPath(this.session, rename) : undefined;
 
@@ -759,7 +759,7 @@ export class EditTool implements AgentTool<TInput> {
 		}
 		const { path, old_text, new_text, all } = params;
 
-		enforcePlanModeWrite(this.session, path);
+		enforceModeWrite(this.session, path);
 
 		if (path.endsWith(".ipynb")) {
 			throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");

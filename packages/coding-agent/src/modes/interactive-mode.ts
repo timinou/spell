@@ -716,7 +716,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("Audit already in progress.");
 			return;
 		}
-		this.session.setAuditState({ pending: false, active: true });
+		this.session.setAuditState({ type: "audit", pending: false, active: true });
 		this.showAuditOverlay();
 		const prompt = renderPromptTemplate(planAuditPrompt, {
 			auditDepth: this.#auditDepth,
@@ -940,7 +940,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			const planFilePath = sessionContext.modeData?.planFilePath as string | undefined;
 			const ultraplan = sessionContext.modeData?.ultraplan as boolean | undefined;
 			const flavor = sessionContext.modeData?.flavor as "design" | undefined;
-			await this.#enterPlanMode({ planFilePath, ultraplan, flavor });
+			const modeConfigName = sessionContext.modeData?.modeConfigName as string | undefined;
+			await this.#enterPlanMode({ planFilePath, ultraplan, flavor, modeConfigName });
 		} else if (sessionContext.mode === "plan_paused") {
 			this.planModePaused = true;
 			this.#planModeHasEntered = true;
@@ -953,6 +954,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		workflow?: "parallel" | "iterative";
 		ultraplan?: boolean;
 		flavor?: "design";
+		modeConfigName?: string;
 	}): Promise<void> {
 		if (this.planModeEnabled) {
 			return;
@@ -975,12 +977,14 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		await this.session.setActiveToolsByName(uniquePlanTools);
 		this.session.setPlanModeState({
+			type: "plan",
 			enabled: true,
 			planFilePath,
 			workflow: options?.workflow ?? "parallel",
 			reentry: this.#planModeHasEntered,
 			ultraplan: options?.ultraplan ?? false,
 			flavor: options?.flavor,
+			modeConfigName: options?.modeConfigName,
 		});
 		if (this.session.isStreaming) {
 			await this.session.sendPlanModeContext({ deliverAs: "steer" });
@@ -994,6 +998,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			planFilePath,
 			ultraplan: options?.ultraplan,
 			flavor: options?.flavor,
+			modeConfigName: options?.modeConfigName,
 		});
 		this.updateEditorBorderColor();
 		this.#showPlanModeOverlay(options?.ultraplan ?? false, false);
@@ -1158,6 +1163,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Set audit state: auto for ultraplan, suggest for regular plan
 		if (!this.#isAuditEscalation || this.#auditDepth < this.#auditMaxDepth) {
 			this.session.setAuditState({
+				type: "audit",
 				pending: this.planModeUltraplan ? "auto" : "suggest",
 				active: false,
 				sourceRef: planReferencePath,
@@ -1165,7 +1171,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				maxDepth: this.#auditMaxDepth,
 			});
 		} else {
-			this.session.setAuditState({ pending: false, active: false });
+			this.session.setAuditState({ type: "audit", pending: false, active: false });
 		}
 		// Reset depth for non-audit approvals
 		if (!this.#isAuditEscalation) {
@@ -1173,19 +1179,60 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#isAuditEscalation = false;
 
+		const planState = this.session.getPlanModeState();
+		const modeConfig = planState?.modeConfigName ? this.session.getModeConfig(planState.modeConfigName) : undefined;
 		const prompt = renderPromptTemplate(planModeApprovedPrompt, {
 			planContent: orgToMarkdown(planContent),
 			finalPlanFilePath: planReferencePath,
 			orgItemId: approvedOrgItemId,
 			orgItemArtifactsDir: approvedOrgItemArtifactsDir,
 			waves: options.waves,
+			modeExecutionInstructions: modeConfig?.sections.instructions,
 		});
 		await this.session.prompt(prompt, { synthetic: true });
 	}
 
+	async handleModeCommand(modeName: string, prompt?: string): Promise<void> {
+		const config = this.session.getModeConfig(modeName);
+		if (!config) {
+			this.showStatus(`Mode "${modeName}" not found.`);
+			return;
+		}
+
+		const { extendsChain, frontmatter } = config;
+		const isPlanLike = extendsChain.includes("plan") || extendsChain.includes("ultraplan");
+		const isAuditLike = extendsChain.includes("audit");
+
+		if (isPlanLike) {
+			const isUltra = extendsChain.includes("ultraplan") || frontmatter.extends === "ultraplan";
+			const isDesign = frontmatter.extends === "design" || extendsChain.includes("design");
+			await this.handlePlanModeCommand(prompt, {
+				ultraplan: isUltra || undefined,
+				flavor: isDesign ? "design" : undefined,
+				modeConfigName: config.name,
+			});
+		} else if (isAuditLike) {
+			// Audit-extending modes: delegate to audit lifecycle
+			// TODO(FEAT-126): Full audit mode activation with modeConfig
+			this.showStatus(`Audit-extending mode "${config.name}" not yet supported.`);
+		} else {
+			// Standalone user mode
+			const userState: import("../plan-mode/state").UserModeState = {
+				type: "user",
+				name: config.name,
+				config,
+				enabled: true,
+				readOnly: frontmatter.readOnly ?? false,
+			};
+			// TODO(FEAT-126): Full generic lifecycle — store userState as active mode
+			void userState;
+			this.showStatus(`Mode "${config.name}" activated.`);
+		}
+	}
+
 	async handlePlanModeCommand(
 		initialPrompt?: string,
-		options?: { ultraplan?: boolean; flavor?: "design" },
+		options?: { ultraplan?: boolean; flavor?: "design"; modeConfigName?: string },
 	): Promise<void> {
 		if (this.planModeEnabled) {
 			const confirmed = await this.showHookConfirm(
@@ -1196,7 +1243,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#exitPlanMode({ paused: true });
 			return;
 		}
-		await this.#enterPlanMode({ ultraplan: options?.ultraplan, flavor: options?.flavor });
+		await this.#enterPlanMode({
+			ultraplan: options?.ultraplan,
+			flavor: options?.flavor,
+			modeConfigName: options?.modeConfigName,
+		});
 		if (initialPrompt && this.onInputCallback) {
 			this.onInputCallback(this.startPendingSubmission({ text: initialPrompt }));
 		}

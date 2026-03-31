@@ -21,6 +21,7 @@ describe("audit lifecycle", () => {
 			let state: AuditState;
 			if (!isAuditEscalation || auditDepth < maxDepth) {
 				state = {
+					type: "audit",
 					pending: isUltraplan ? "auto" : "suggest",
 					active: false,
 					sourceRef: planRef,
@@ -28,7 +29,7 @@ describe("audit lifecycle", () => {
 					maxDepth,
 				};
 			} else {
-				state = { pending: false, active: false };
+				state = { type: "audit", pending: false, active: false };
 			}
 			expect(state.pending).toBe("auto");
 			expect(state.sourceRef).toBe(planRef);
@@ -40,6 +41,7 @@ describe("audit lifecycle", () => {
 			const isUltraplan = false;
 			const planRef = "local://MY_PLAN.md";
 			const state: AuditState = {
+				type: "audit",
 				pending: isUltraplan ? "auto" : "suggest",
 				active: false,
 				sourceRef: planRef,
@@ -57,9 +59,9 @@ describe("audit lifecycle", () => {
 
 			let state: AuditState;
 			if (!isAuditEscalation || auditDepth < maxDepth) {
-				state = { pending: "auto", active: false };
+				state = { type: "audit", pending: "auto", active: false };
 			} else {
-				state = { pending: false, active: false };
+				state = { type: "audit", pending: false, active: false };
 			}
 			expect(state.pending).toBe(false);
 		});
@@ -71,9 +73,9 @@ describe("audit lifecycle", () => {
 
 			let state: AuditState;
 			if (!isAuditEscalation || auditDepth < maxDepth) {
-				state = { pending: "suggest", active: false };
+				state = { type: "audit", pending: "suggest", active: false };
 			} else {
-				state = { pending: false, active: false };
+				state = { type: "audit", pending: false, active: false };
 			}
 			expect(state.pending).toBe("suggest");
 		});

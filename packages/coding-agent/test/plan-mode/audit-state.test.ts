@@ -47,11 +47,11 @@ describe("isAuditClean", () => {
 describe("AuditState", () => {
 	it("compiles with all valid field combinations", () => {
 		const states: AuditState[] = [
-			{ pending: false, active: false },
-			{ pending: "auto", active: false },
-			{ pending: "suggest", active: false },
-			{ pending: false, active: true },
-			{ pending: "auto", active: true },
+			{ type: "audit", pending: false, active: false },
+			{ type: "audit", pending: "auto", active: false },
+			{ type: "audit", pending: "suggest", active: false },
+			{ type: "audit", pending: false, active: true },
+			{ type: "audit", pending: "auto", active: true },
 		];
 		// Type-level: all combinations must satisfy the AuditState interface
 		expect(states).toHaveLength(5);
@@ -59,6 +59,7 @@ describe("AuditState", () => {
 
 	it("accepts optional sourceRef, auditDepth, and maxDepth", () => {
 		const state: AuditState = {
+			type: "audit",
 			pending: "auto",
 			active: false,
 			sourceRef: "org://PLAN-027-foo",
@@ -71,7 +72,7 @@ describe("AuditState", () => {
 	});
 
 	it("allows omitting optional fields", () => {
-		const state: AuditState = { pending: false, active: false };
+		const state: AuditState = { type: "audit", pending: false, active: false };
 		expect(state.sourceRef).toBeUndefined();
 		expect(state.auditDepth).toBeUndefined();
 		expect(state.maxDepth).toBeUndefined();

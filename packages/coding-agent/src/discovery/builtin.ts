@@ -13,6 +13,7 @@ import { readDirEntries, readFile } from "../capability/fs";
 import { type Hook, hookCapability } from "../capability/hook";
 import { type Instruction, instructionCapability } from "../capability/instruction";
 import { type MCPServer, mcpCapability } from "../capability/mcp";
+import { type ModeConfig, type ModeConfigFrontmatter, modeConfigCapability } from "../capability/mode";
 import { type Prompt, promptCapability } from "../capability/prompt";
 import { type Rule, ruleCapability } from "../capability/rule";
 import { type Settings, settingsCapability } from "../capability/settings";
@@ -33,6 +34,7 @@ import {
 	SOURCE_PATHS,
 	scanSkillsFromDir,
 } from "./helpers";
+import { parseModeConfigSections } from "./mode-helpers";
 
 const PROVIDER_ID = "native";
 const DISPLAY_NAME = "Spell";
@@ -832,4 +834,60 @@ registerProvider<ContextFile>(contextFileCapability.id, {
 	description: "Load AGENTS.md from .spell/ directories",
 	priority: PRIORITY,
 	load: loadContextFiles,
+});
+
+// Modes
+async function loadModes(ctx: LoadContext): Promise<LoadResult<ModeConfig>> {
+	const items: ModeConfig[] = [];
+	const warnings: string[] = [];
+
+	// Scan project-level .spell/modes/
+	const projectModesDir = path.join(ctx.cwd, PATHS.projectDir, "modes");
+	await scanModesDir(projectModesDir, "project", items, warnings);
+
+	// Scan user-level ~/.spell/agent/modes/
+	const userModesDir = path.join(ctx.home, PATHS.userAgent, "modes");
+	await scanModesDir(userModesDir, "user", items, warnings);
+
+	return { items, warnings };
+}
+
+async function scanModesDir(
+	dir: string,
+	level: "user" | "project",
+	items: ModeConfig[],
+	warnings: string[],
+): Promise<void> {
+	const entries = await readDirEntries(dir);
+	for (const entry of entries) {
+		if (!entry.isDirectory()) continue;
+		const modePath = path.join(dir, entry.name, "MODE.md");
+		const content = await readFile(modePath);
+		if (!content) continue;
+
+		try {
+			const { frontmatter: fm, body } = parseFrontmatter(content, { source: modePath });
+			const name = (fm.name as string) || entry.name;
+			const sections = parseModeConfigSections(body);
+
+			items.push({
+				name,
+				path: modePath,
+				frontmatter: fm as ModeConfigFrontmatter,
+				sections,
+				level,
+				_source: createSourceMeta(PROVIDER_ID, modePath, level),
+			});
+		} catch (error) {
+			warnings.push(`Failed to parse mode config at ${modePath}: ${error}`);
+		}
+	}
+}
+
+registerProvider<ModeConfig>(modeConfigCapability.id, {
+	id: PROVIDER_ID,
+	displayName: DISPLAY_NAME,
+	description: "User-defined workflow modes from .spell/modes/ directories",
+	priority: PRIORITY,
+	load: loadModes,
 });

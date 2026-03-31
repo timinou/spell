@@ -1,0 +1,158 @@
+#+TITLE: Mode Lifecycle Generalization
+#+STATE: DONE
+#+SESSION_ID: 14a82771b34f3e5c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-59-32-115Z_14a78ba624cf3e43/12-CreateFeat3.jsonl]]
+#+CUSTOM_ID: FEAT-126-mode-lifecycle-generalization
+#+EFFORT: L
+#+PRIORITY: #A
+#+LAYER: core
+#+BLOCKER: PROJ-009-mode-config-foundation FEAT-124-mode-prompt-injection FEAT-125-mode-activation-and-runtime
+
+NOTE [2026-03-31]: ActiveModeState union type with PlanModeState, AuditState, UserModeState variants. Type guards isPlanMode/isAuditMode/isUserMode. enforceModeWrite generalized from enforcePlanModeWrite. getActiveModeState on ToolSession and AgentSession. Mode stack with depth limit. Session persistence of modeConfigName. 11 test scenarios pass.
+
+
+* Scope
+
+**In scope:**
+- Design and implement ~ActiveModeState~ type: a union that wraps mode config + runtime state, with PlanModeState and AuditState as variants alongside UserModeState
+- Refactor ~getPlanModeState/setPlanModeState~ to ~getActiveModeState/setActiveModeState~ across all consumers
+- Generalize ~enforcePlanModeWrite~ (plan-mode-guard.ts) to ~enforceModeWrite~ that checks ~activeModeState.readOnly~ regardless of mode type
+- Generalize ~exit_plan_mode~ tool to ~exit_mode~ that handles both built-in plan modes and user-defined modes
+- Generic enter/exit in interactive-mode.ts that dispatches to mode-specific lifecycle hooks
+- Session persistence: ~appendModeChange~ stores mode type + config name for user modes
+- Session resume: reconstruct user-defined mode state by re-loading MODE.md by name from discovery
+- TUI overlay generalization: any active mode shows a badge with mode name, not just plan/audit
+- Existing behavior MUST be preserved: plan, ultraplan, design, audit modes work identically after refactor
+
+**Out of scope:**
+- Mode transitions / context policies (FEAT: Mode Transitions + Context)
+- Audit lifecycle changes (FEAT: Audit Mode Generalization)
+- Loop integration (Phase 3)
+- Canvas/QML (Phase 3)
+
+**Boundary rationale:** This is the core architectural refactor that makes the mode system generic. It touches ~15 files but is a strict rename+generalize pass — no new features, just making existing plan-specific code mode-generic. New capabilities build on top of this abstraction.
+* Tests
+
+This is a refactor — test-first is not the natural sequencing. Instead: run ALL existing plan mode tests first, then refactor, then verify no regressions, then add new tests for generic behavior.
+
+Existing test files that must pass unchanged:
+- ~packages/coding-agent/test/modes/audit-lifecycle.test.ts~
+- ~packages/coding-agent/test/plan-mode/~ (all files)
+- ~packages/coding-agent/test/tools/exit-plan-mode.test.ts~ (or renamed)
+- Any test importing PlanModeState
+
+New test file: ~packages/coding-agent/test/modes/active-mode-state.test.ts~
+
+New scenarios:
+1. ~ActiveModeState~ with plan variant -> getPlanModeState() still works (backward compat)
+2. ~ActiveModeState~ with user mode variant -> getActiveModeState() returns UserModeState with mode config
+3. ~enforceModeWrite~ with user mode readOnly=true -> blocks write ops
+4. ~enforceModeWrite~ with user mode readOnly=false -> allows write ops
+5. ~exit_mode~ tool with plan mode active -> behaves like exit_plan_mode (plan validation, org checks)
+6. ~exit_mode~ tool with user mode active -> exits mode, restores tools, no plan-specific validation
+7. Session persist: activate user mode, persist, rebuild session context -> mode name and config name present
+8. Session resume: mode_change entry for user mode -> re-loads MODE.md, reconstructs state
+9. Session resume with deleted MODE.md -> graceful degradation, warn, enter no-mode state
+10. TUI badge shows 'marketing-review' for user mode, 'Plan' for plan mode, 'Audit 1/2' for audit
+11. User mode extending ultraplan exits with wave-structured org item -> extractPlanWaves runs and waves extracted correctly (GAP-02)
+* Implementation
+
+** ActiveModeState type
+:PROPERTIES:
+:CUSTOM_ID: FEAT-126::active-mode-state
+:DEPENDS: PROJ-009::define-types
+:END:
+- File: packages/coding-agent/src/plan-mode/state.ts (or new mode-state.ts)
+- ActiveModeState = PlanModeState | AuditModeState | UserModeState
+- UserModeState: { type: 'user', name, config: ResolvedModeConfig, enabled, readOnly, toolSnapshot }
+- Add type discriminants to PlanModeState ('plan') and AuditModeState ('audit')
+- Helper type guards: isPlanMode(), isAuditMode(), isUserMode()
+- Satisfies test scenarios 1, 2
+
+** Refactor state accessors
+:PROPERTIES:
+:CUSTOM_ID: FEAT-126::refactor-accessors
+:DEPENDS: FEAT-126::active-mode-state
+:END:
+- File: packages/coding-agent/src/session/agent-session.ts
+- getPlanModeState() -> getActiveModeState() (rename all call sites)
+- Keep getPlanModeState() as convenience wrapper filtered to plan type
+- setPlanModeState() -> setActiveModeState()
+- Update buildPlanModeMessage() to use getActiveModeState()
+
+** Generalize write guard
+:PROPERTIES:
+:CUSTOM_ID: FEAT-126::generalize-write-guard
+:DEPENDS: FEAT-126::active-mode-state
+:END:
+- Rename plan-mode-guard.ts -> mode-guard.ts
+- enforcePlanModeWrite -> enforceModeWrite
+- Check activeModeState.readOnly (works for plan AND user modes)
+- Update all callers (edit, write, patch tools)
+- Satisfies test scenarios 3, 4
+
+** Generalize exit tool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-126::generalize-exit-tool
+:DEPENDS: FEAT-126::active-mode-state FEAT-126::refactor-accessors FEAT-126::generalize-write-guard
+:END:
+- Rename exit-plan-mode.ts -> exit-mode.ts, tool name to exit_mode
+- Dispatch by mode base type: plan-type -> full validation (org items, child refs, extractPlanWaves)
+- User modes extending plan/ultraplan -> ALSO run full plan validation including wave extraction (GAP-02)
+- Standalone user modes -> simpler exit (deactivation, optional org integration)
+- Template variable {{exitToolName}} already provides indirection
+- GAP-02: resolve base mode chain; if any ancestor is plan/ultraplan, treat exit as plan-type exit and run extractPlanWaves on the org item
+- Satisfies test scenarios 5, 6, 11 (new: wave extraction for user-extends-plan)
+
+** Generic enter-exit lifecycle
+:PROPERTIES:
+:CUSTOM_ID: FEAT-126::generic-lifecycle
+:DEPENDS: FEAT-126::refactor-accessors FEAT-126::generalize-exit-tool
+:END:
+- File: packages/coding-agent/src/modes/interactive-mode.ts
+- #enterPlanMode -> #enterMode(config: ActiveModeConfig) dispatching by type
+- #exitPlanMode -> #exitMode() dispatching by type
+- User mode enter: set state, snapshot tools, apply restrictions, show overlay
+- User mode exit: restore tools, clear state, remove overlay
+- Plan mode enter/exit: exact same code as today via dispatch
+- Satisfies test scenarios 5, 6, 8
+
+** Session persistence
+:PROPERTIES:
+:CUSTOM_ID: FEAT-126::session-persistence
+:DEPENDS: FEAT-126::active-mode-state FEAT-126::generic-lifecycle
+:END:
+- File: packages/coding-agent/src/session/session-manager.ts
+- appendModeChange data includes { type: 'user', configName: 'marketing-review' } for user modes
+- buildSessionContext reconstructs mode type from data
+- Resume: if type='user', reload MODE.md by name, reconstruct UserModeState
+- If MODE.md deleted, warn and enter no-mode state
+- Satisfies test scenarios 7, 8, 9
+
+** TUI overlay generalization
+:PROPERTIES:
+:CUSTOM_ID: FEAT-126::tui-overlay
+:DEPENDS: FEAT-126::active-mode-state
+:END:
+- #showPlanModeOverlay -> #showModeOverlay reading mode name from active state
+- User modes show their name field as badge
+- Plan modes show 'Plan', audit 'Audit N/M' (unchanged)
+- Satisfies test scenario 10
+* Edge Cases
+- *Backward compat*: Any code that directly accesses ~planModeState.enabled~ must work after refactor. Type guards ensure this.
+- *exit_mode with no mode active*: Return error, don't crash. Same as current exit_plan_mode behavior.
+- *Rename import paths*: All imports of ~plan-mode-guard~ must update to ~mode-guard~. Use LSP references to find all.
+- *Tool name change*: ~exit_plan_mode~ -> ~exit_mode~ affects prompt templates, tool registry, and agent session tool decision enforcement. All must update atomically.
+- *Subagent tool filtering*: ~packages/coding-agent/src/task/executor.ts~ filters tools for subagents. Must respect new mode-generic tool restrictions.
+- *Concurrent session resume + mode discovery*: Discovery is async. Session resume must await mode config loading before reconstructing user mode state.
+- *User mode extending plan exit*: When a user mode extends plan/ultraplan, exit_mode must walk the extends chain to determine base type and dispatch to plan-type exit including extractPlanWaves. Failure to do so loses wave data (GAP-02).
+* Acceptance Criteria
+- ALL existing plan mode tests pass without modification (backward compat)
+- ALL existing audit lifecycle tests pass without modification
+- ~bun test packages/coding-agent/test/modes/active-mode-state.test.ts~ passes all 11 new scenarios
+- ~bun check:ts~ passes with no regressions
+- ~bun lint:ts~ passes
+- /plan, /ultraplan, /design, /audit commands work identically to before
+- A user-defined mode can be entered, produces correct TUI badge, and can be exited cleanly
+- Session resume with a user mode restores the mode correctly
+- User mode extending ultraplan exits correctly with wave extraction (GAP-02)

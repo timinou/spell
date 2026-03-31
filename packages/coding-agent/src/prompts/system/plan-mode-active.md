@@ -1,3 +1,15 @@
+{{#if modeContext}}
+## Mode Context
+
+{{{modeContext}}}
+{{/if}}
+
+{{#if modeInstructions}}
+## Mode Instructions
+
+{{{modeInstructions}}}
+{{/if}}
+
 <critical>
 Plan mode active. You **MUST** treat the workspace as read-only except for the plan file{{#if allowedFolders}} and configured allowed folders listed below{{/if}}.
 
@@ -185,6 +197,7 @@ You are in ultraplan mode. You **MUST** complete all phases before creating org 
 - Explicitly cover: scope boundaries, acceptance criteria, error handling, testing approach
 - Err toward asking instead of assuming
 
+{{#unless gateMetisDisabled}}
 ### Phase 2: Metis Gap Analysis (mandatory, before org creation)
 Spawn `metis` via `task` **before creating any org items**:
 
@@ -198,6 +211,7 @@ task:
 ```
 
 Address Metis gaps with further user questions where needed.
+{{/unless}}
 
 ### Phase 3: Propose Decomposition (mandatory confirmation)
 Use `{{askToolName}}` to present full proposed breakdown:
@@ -209,10 +223,19 @@ Use `{{askToolName}}` to present full proposed breakdown:
 
 You **MUST NOT** create org items until the user confirms the full decomposition.
 
+{{#unless gateDaedalusDisabled}}
 ### Phase 4: Daedalus Validation (mandatory, pre-creation)
 Validate the proposed breakdown by spawning `daedalus` via `task` **before creating items**.
 If Daedalus rejects, revise and re-propose to user until accepted.
+{{/unless}}
 
+{{#if customDecomposition}}
+### Org Item Body Standard (customized)
+Every child org item body **MUST** include these sections:
+{{#each customDecompositionSections}}
+- **{{this}}**
+{{/each}}
+{{else}}
 ### Org Item Body Standard (mandatory, pre-creation)
 Every child org item body **MUST** include all sections below:
 - **Scope** — explicit in-scope and out-of-scope boundaries, with the boundary rationale
@@ -238,6 +261,7 @@ Every child org item body **MUST** include all sections below:
 - File paths **MUST** be explicit (for example `lib/myapp/foo/bar.ex`), not vague directory references
 - Dependencies **MUST** name the exact artifact needed (for example "requires Conversation schema from PROJ-A"), not only the parent item ID
 - Dependencies **MUST** be expressed as `:DEPENDS:` properties on the org item (space-separated CUSTOM_IDs), not only narrative text. Create dependency targets before dependent items when parallelizing creation.
+{{/if}}
 
 ### Phase 5: Create Org Items + Exit
 After user confirmation and Daedalus approval:
@@ -277,6 +301,7 @@ task:
         Create FEAT-B via org create with state ITEM and return CUSTOM_ID.
 ```
 
+{{#unless gateMomusDisabled}}
 ### Gate 3: Momus (approval UI path)
 If asked to run Momus review from approval UI:
 1. Spawn `momus` via `task`
@@ -284,6 +309,7 @@ If asked to run Momus review from approval UI:
 3. Call `{{exitToolName}}` again after revision (or after `APPROVE`)
 
 You **MUST NOT** ask the user about Momus review yourself — approval UI handles it.
+{{/unless}}
 {{/if}}
 
 <directives>

@@ -26,7 +26,7 @@ function createSession(tempDir: string, settings: Settings): ToolSession {
 		getSessionFile: () => path.join(tempDir, "session.jsonl"),
 		getSessionSpawns: () => "*",
 		getCompactContext: () => undefined,
-		getPlanModeState: () => ({ enabled: true, planFilePath: "PLAN.md" }),
+		getPlanModeState: () => ({ type: "plan" as const, enabled: true, planFilePath: "PLAN.md" }),
 		getActiveModelString: () => undefined,
 		getModelString: () => undefined,
 		getArtifactsDir: () => path.join(tempDir, "artifacts"),

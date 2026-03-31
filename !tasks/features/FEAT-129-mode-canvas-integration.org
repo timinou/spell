@@ -1,0 +1,101 @@
+#+TITLE: Mode Canvas Integration
+#+STATE: BLOCKED
+#+SESSION_ID: 14a82819e80f3e64
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-59-32-115Z_14a78ba624cf3e43/17-CreateFeat7.jsonl]]
+#+CUSTOM_ID: FEAT-129-mode-canvas-integration
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: ui
+#+BLOCKER: FEAT-126-mode-lifecycle-generalization
+
+NOTE [2026-03-31]: Canvas spawning and canvas-primary routing deferred. Requires QML bridge infrastructure work. Core mode system works without canvas integration.
+
+* Scope
+
+**In scope:**
+- Mode-spawned companion canvas windows: ~ui.canvas~ in MODE.md frontmatter specifies a QML file path (relative to mode directory) spawned when mode activates
+- Canvas-primary modes: ~ui.primary: 'canvas'~ routes agent output to canvas window; TUI shows only agent reasoning/tool calls
+- Mode overlay from QML: ~ui.overlay~ specifies a QML overlay component rendered in TUI (extends current plan mode badge)
+- Loop monitoring dashboard: a built-in canvas component that displays loop iteration progress, ticket status, gate results with pause/resume/approve controls
+- Canvas window lifecycle: window opens on mode enter, closes on mode exit (or stays if mode config says so)
+- Bridge communication: mode canvas receives agent events (findings, progress, artifacts) via bridge.messageReceived
+
+**Out of scope:**
+- Loop creation from canvas UI (future work)
+- Full TUI replacement by canvas (future work — requires canvas chat affordances)
+- Custom QML component library for mode canvases (users write their own QML)
+
+**Boundary rationale:** Canvas integration is the UI surface of the mode system. It depends on the lifecycle generalization (mode enter/exit events) but is otherwise independent. The loop monitoring dashboard is included here because it's a canvas component, not a loop system change.
+* Tests
+
+Test approach: QML integration tests using the qml-testing skill pattern (headless bridge + screenshot verification).
+
+Test file: ~packages/coding-agent/test/modes/canvas-integration.test.ts~
+
+Scenarios:
+1. Mode with ~ui.canvas: 'dashboard.qml'~ -> QML window spawned on mode activation
+2. Mode exit -> canvas window closed
+3. Canvas-primary mode -> agent output events routed to canvas via bridge
+4. Mode with ~ui.overlay: 'badge.qml'~ -> overlay rendered in TUI
+5. Canvas window receives mode context via bridge.props on launch
+6. Loop monitoring dashboard displays iteration count and ticket status
+7. Loop dashboard pause button triggers loop pause command
+
+Screenshot artifacts:
+- ~test/artifacts/mode-canvas-spawn.png~: canvas window visible after mode activation
+- ~test/artifacts/loop-dashboard.png~: loop monitoring dashboard showing iteration state
+* Implementation
+** Canvas spawning
+:PROPERTIES:
+:CUSTOM_ID: FEAT-129::canvas-spawning
+:DEPENDS: FEAT-126::generic-lifecycle
+:END:
+- In #enterMode(), if mode has ui.canvas, resolve QML path relative to mode dir
+- Spawn canvas window via canvas tool infrastructure
+- Pass mode config as bridge.props
+- Store window ID in mode state for cleanup
+- Satisfies test scenarios 1, 5
+
+** Canvas-primary routing
+:PROPERTIES:
+:CUSTOM_ID: FEAT-129::canvas-primary-routing
+:DEPENDS: FEAT-129::canvas-spawning
+:END:
+- File: packages/coding-agent/src/session/agent-session.ts
+- If active mode has ui.primary: 'canvas', route output events to canvas via bridge
+- TUI still shows tool calls and reasoning
+- Canvas receives structured events: { type: 'finding', data }, { type: 'artifact', data }
+- Satisfies test scenario 3
+
+** Mode overlay from QML
+:PROPERTIES:
+:CUSTOM_ID: FEAT-129::mode-overlay
+:DEPENDS: FEAT-126::tui-overlay
+:END:
+- If mode has ui.overlay, load QML component as TUI overlay
+- Falls back to text badge if QML fails
+- Satisfies test scenario 4
+
+** Loop monitoring dashboard
+:PROPERTIES:
+:CUSTOM_ID: FEAT-129::loop-dashboard
+:DEPENDS: FEAT-129::canvas-spawning
+:END:
+- QML component: current iteration, ticket list, active phase, gate results
+- Controls: Pause, Resume, Approve, Reject via bridge commands
+- Bridge commands dispatched to loop manager
+- Satisfies test scenarios 6, 7
+* Edge Cases
+- QML file not found in mode directory -> warn, skip canvas spawn, mode still activates
+- Canvas window closed by user manually -> mode continues without canvas
+- Canvas-primary mode but QML bridge not built -> fallback to TUI-only with warning
+- Multiple canvas windows from nested modes -> each mode manages its own window
+- Loop dashboard opened but no loop active -> show empty state with 'No active loop'
+* Acceptance Criteria
+- Mode with ~ui.canvas~ spawns a visible QML window on activation (screenshot proof)
+- Mode exit closes the canvas window
+- Canvas-primary mode routes structured output to canvas
+- Loop monitoring dashboard displays correct loop state
+- ~bun check:ts~ passes
+- ~bun lint:ts~ passes
+- Screenshot artifacts exist showing canvas window and loop dashboard

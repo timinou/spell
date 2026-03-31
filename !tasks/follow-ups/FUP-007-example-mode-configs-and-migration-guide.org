@@ -1,0 +1,88 @@
+#+TITLE: Example Mode Configs and Migration Guide
+#+STATE: DONE
+#+SESSION_ID: 14a82771b88f3e5e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-59-32-115Z_14a78ba624cf3e43/13-CreateFup1.jsonl]]
+#+CUSTOM_ID: FUP-007-example-mode-configs-and-migration-guide
+#+EFFORT: S
+#+PRIORITY: #C
+#+LAYER: docs
+#+BLOCKER: FEAT-124-mode-prompt-injection FEAT-125-mode-activation-and-runtime
+
+NOTE [2026-03-31]: Content-review, sales-planning, and product-review example MODE.md files created in modes/definitions/. Migration guide at docs/mode-config-guide.md.
+
+* Scope
+
+**In scope:**
+- Create 3 example MODE.md files demonstrating mode customization for non-technical users:
+  - ~.spell/modes/content-review/MODE.md~ — content audit mode for marketing (extends audit, custom focus areas, brand context)
+  - ~.spell/modes/sales-planning/MODE.md~ — sales planning mode (extends plan, custom categories, persona context)
+  - ~.spell/modes/product-review/MODE.md~ — product review mode (extends audit, UX-focused checklist)
+- Migration guide document explaining:
+  - How existing ~planMode.allowedFolders~ settings interact with mode configs
+  - How to convert SYSTEM.md customizations to chat mode config
+  - How to create a first custom mode step by step
+  - MODE.md frontmatter reference
+
+**Out of scope:**
+- Any code changes — this is purely documentation and example files
+- Example QML overlays (Phase 3)
+- Loop mode examples (Phase 3)
+
+**Boundary rationale:** Examples and docs are the onboarding surface for cofounders. Separate from implementation to unblock cofounder usage as soon as Phase 1 code lands.
+* Tests
+
+No runtime tests — verification is existence and correctness of files.
+
+Validation scenarios:
+1. Each example MODE.md parses without errors through the mode config discovery system
+2. Each example has valid frontmatter (all referenced fields exist in schema)
+3. Each example has at least Context and Instructions body sections
+4. Migration guide covers all 4 topics listed in scope
+* Implementation
+** Content review example
+:PROPERTIES:
+:CUSTOM_ID: FUP-007::content-review-example
+:DEPENDS: FEAT-124::plan-template-extension FEAT-125::slash-command-registration
+:END:
+- File: .spell/modes/content-review/MODE.md
+- extends: audit, command: /creview, readOnly: true
+- Custom focusAreas for brand consistency, copy clarity, persona alignment
+- Context section with placeholder company info and personas
+- Instructions and Focus Areas sections
+
+** Sales planning example
+:PROPERTIES:
+:CUSTOM_ID: FUP-007::sales-planning-example
+:DEPENDS: FUP-007::content-review-example
+:END:
+- File: .spell/modes/sales-planning/MODE.md
+- extends: plan, command: /salesplan
+- Custom decomposition sections, custom categories
+- Context with sales team info
+
+** Product review example
+:PROPERTIES:
+:CUSTOM_ID: FUP-007::product-review-example
+:DEPENDS: FUP-007::content-review-example
+:END:
+- File: .spell/modes/product-review/MODE.md
+- extends: audit, command: /preview, readOnly: true
+- UX-focused audit checklist
+
+** Migration guide
+:PROPERTIES:
+:CUSTOM_ID: FUP-007::migration-guide
+:DEPENDS: FUP-007::content-review-example
+:END:
+- File: docs/mode-config-guide.md
+- Quick start, format reference, extends explanation, settings migration, troubleshooting
+- Document wave-compatible org item conventions (GAP-07)
+* Edge Cases
+- Example files must not conflict with any existing .spell/ configs in the repo
+- Example commands must not shadow existing builtin commands
+- Migration guide must handle case where user has both settings.json and mode config (precedence rules)
+* Acceptance Criteria
+- All 3 example MODE.md files exist and parse correctly through mode discovery
+- Migration guide document exists at documented path
+- A non-technical reader can follow the quick start guide to create a working custom mode
+- ~bun check:ts~ passes (no code changes, but verify no regression)

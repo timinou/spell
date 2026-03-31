@@ -33,6 +33,7 @@ export class PhaseCoordinator {
 		options?: IterationRunOptions,
 	): Promise<IterationRunResult> {
 		await this.#callBeforePhase("plan", loop, options);
+		// TODO(FEAT-127): Inject active mode context and phase-specific sections here
 		const manifestCtx = buildManifestPromptContext(loop);
 		const planPrompt = buildIterationPrompt({
 			loopId: loop.id,

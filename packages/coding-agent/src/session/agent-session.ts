@@ -15,7 +15,6 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-
 import {
 	type Agent,
 	AgentBusyError,
@@ -52,6 +51,7 @@ import {
 import { orgToMarkdown, resolveCategories } from "@oh-my-pi/pi-org";
 import { abortableSleep, getAgentDbPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJob, AsyncJobManager } from "../async";
+import type { ResolvedModeConfig } from "../capability/mode";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "../config/model-registry";
 import { extractExplicitThinkingSelector, parseModelString, resolveModelRoleValue } from "../config/model-resolver";
@@ -103,7 +103,7 @@ import { listPlanModeAllowedFolders } from "../plan-mode/allowed-folders";
 import type { AuditState } from "../plan-mode/audit-state";
 import { isAuditClean } from "../plan-mode/audit-state";
 import { buildOrgConfig, resolvePlanItem } from "../plan-mode/org-plan";
-import type { PlanModeState } from "../plan-mode/state";
+import type { ActiveModeState, PlanModeState } from "../plan-mode/state";
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import handoffDocumentPrompt from "../prompts/system/handoff-document.md" with { type: "text" };
@@ -372,6 +372,7 @@ export class AgentSession {
 	#thinkingLevel: ThinkingLevel | undefined;
 	#promptTemplates: PromptTemplate[];
 	#slashCommands: FileSlashCommand[];
+	#modeConfigs = new Map<string, ResolvedModeConfig>();
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
@@ -389,8 +390,10 @@ export class AgentSession {
 	#planReferencePath = "local://PLAN.md";
 
 	// Audit state
-	#auditState: AuditState = { pending: false, active: false };
+	#auditState: AuditState = { type: "audit", pending: false, active: false };
 	#auditSuggestCallback?: () => Promise<boolean>;
+
+	#modeStack: ActiveModeState[] = [];
 
 	// Compaction state
 	#compactionAbortController: AbortController | undefined = undefined;
@@ -876,7 +879,7 @@ export class AgentSession {
 			}
 			// Clear audit state on abort/error to avoid stale flags
 			if (msg.stopReason === "aborted" || msg.stopReason === "error") {
-				this.#auditState = { pending: false, active: false };
+				this.#auditState = { type: "audit", pending: false, active: false };
 			}
 			const compactionTask = this.#checkCompaction(msg);
 			this.#trackPostPromptTask(compactionTask);
@@ -1974,6 +1977,11 @@ export class AgentSession {
 		return this.#planModeState;
 	}
 
+	getActiveModeState(): ActiveModeState | undefined {
+		if (this.#planModeState?.enabled) return this.#planModeState;
+		return undefined;
+	}
+
 	setPlanModeState(state: PlanModeState | undefined): void {
 		this.#planModeState = state;
 		if (state?.enabled) {
@@ -2056,6 +2064,18 @@ export class AgentSession {
 	/** Update the MCP prompt commands list. Called when server prompts are (re)loaded. */
 	setMCPPromptCommands(commands: LoadedCustomCommand[]): void {
 		this.#mcpPromptCommands = commands;
+	}
+
+	getModeConfig(name: string): ResolvedModeConfig | undefined {
+		return this.#modeConfigs.get(name);
+	}
+
+	getAllModeConfigs(): Map<string, ResolvedModeConfig> {
+		return this.#modeConfigs;
+	}
+
+	setModeConfigs(configs: Map<string, ResolvedModeConfig>): void {
+		this.#modeConfigs = configs;
 	}
 
 	// =========================================================================
@@ -2178,6 +2198,9 @@ export class AgentSession {
 				// No history file yet — fine
 			}
 		}
+		// Mode todo.phases are consumed by the agent via prompt instructions.
+		// Wave-derived phases take precedence over todo.phases when plan has waves.
+		const modeConfig = state.modeConfigName ? this.getModeConfig(state.modeConfigName) : undefined;
 		const content = renderPromptTemplate(planModeActivePrompt, {
 			planFilePath: displayPlanPath,
 			planExists,
@@ -2195,6 +2218,18 @@ export class AgentSession {
 			designFlavor: state.flavor === "design",
 			designHistory,
 			planModeUiuxPrompt,
+			modeContext: modeConfig?.sections.context,
+			modeInstructions: modeConfig?.sections.instructions,
+			customFocusAreas: modeConfig?.frontmatter.audit?.focusAreas,
+			// Gate toggles
+			gateMetisDisabled: modeConfig?.frontmatter.gates?.metis === false,
+			gateDaedalusDisabled: modeConfig?.frontmatter.gates?.daedalus === false,
+			gateMomusDisabled: modeConfig?.frontmatter.gates?.momus === false,
+			// Custom decomposition
+			customDecomposition: (modeConfig?.frontmatter.decomposition?.requiredSections?.length ?? 0) > 0,
+			customDecompositionSections: modeConfig?.frontmatter.decomposition?.requiredSections,
+			// Execution instructions (for approved prompt)
+			modeExecutionInstructions: modeConfig?.sections.instructions,
 		});
 
 		return {
@@ -4036,7 +4071,7 @@ export class AgentSession {
 
 		// Phase 2: Audit response received — check if findings exist
 		if (state.active) {
-			this.#auditState = { pending: false, active: false };
+			this.#auditState = { type: "audit", pending: false, active: false };
 			const lastMsg = this.#getLastAssistantText();
 			if (!lastMsg || isAuditClean(lastMsg)) return; // Clean or empty — done
 			// Findings exist — emit escalation event for the mode layer to handle
@@ -4061,7 +4096,7 @@ export class AgentSession {
 				// Callback threw — treat as skip
 			}
 			if (!proceed) {
-				this.#auditState = { pending: false, active: false };
+				this.#auditState = { type: "audit", pending: false, active: false };
 				return;
 			}
 			this.#auditState = { ...state, pending: false, active: true };
@@ -4074,10 +4109,14 @@ export class AgentSession {
 	 * Inject the audit prompt as a developer message and schedule agent continuation.
 	 */
 	#injectAuditPrompt(): void {
+		const state = this.#planModeState;
+		const modeConfig = state?.modeConfigName ? this.getModeConfig(state.modeConfigName) : undefined;
+		const auditConfig = modeConfig?.frontmatter.audit;
 		const rendered = renderPromptTemplate(planAuditPrompt, {
 			auditDepth: this.#auditState.auditDepth,
-			maxDepth: this.#auditState.maxDepth,
+			maxDepth: auditConfig?.maxDepth ?? this.#auditState.maxDepth,
 			sourceRef: this.#auditState.sourceRef,
+			customFocusAreas: auditConfig?.focusAreas,
 		});
 		this.agent.appendMessage({
 			role: "developer",
@@ -5933,5 +5972,20 @@ export class AgentSession {
 	 */
 	get extensionRunner(): ExtensionRunner | undefined {
 		return this.#extensionRunner;
+	}
+
+	getModeStack(): ActiveModeState[] {
+		return [...this.#modeStack];
+	}
+
+	pushModeStack(state: ActiveModeState): void {
+		if (this.#modeStack.length >= 3) {
+			throw new Error("Mode stack depth limit (3) exceeded. Cannot nest more modes.");
+		}
+		this.#modeStack.push(state);
+	}
+
+	popModeStack(): ActiveModeState | undefined {
+		return this.#modeStack.pop();
 	}
 }

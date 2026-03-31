@@ -1,0 +1,129 @@
+#+TITLE: Mode Prompt Injection
+#+STATE: DONE
+#+SESSION_ID: 14a826faeecf3e5a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-59-32-115Z_14a78ba624cf3e43/10-CreateFeat1.jsonl]]
+#+CUSTOM_ID: FEAT-124-mode-prompt-injection
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: core
+#+BLOCKER: PROJ-009-mode-config-foundation
+
+NOTE [2026-03-31]: Extension points added to plan-mode-active.md, plan-audit.md, plan-mode-approved.md. buildPlanModeMessage wires mode config sections. Gate toggles for Metis/Daedalus/Momus. Custom decomposition sections. Custom audit focus areas.
+
+
+* Scope
+
+**In scope:**
+- Add extension points in `plan-mode-active.md` for mode-injected content: `{{#if modeContext}}`, `{{#if modeInstructions}}`, `{{#if customDecomposition}}`
+- Add extension points in `plan-audit.md` for custom focus areas: `{{#if customFocusAreas}}`
+- Add extension points in `plan-mode-approved.md` for custom execution workflows: `{{#if modeExecutionInstructions}}` for post-approval behavior customization
+- Modify `agent-session.ts#buildPlanModeMessage()` to load resolved mode config and inject body sections as Handlebars template variables
+- Gate toggle support: if mode config has `gates.metis: false`, suppress the Metis phase in ultraplan prompt; same for daedalus, momus, aphrodite
+- Custom decomposition sections: mode config `decomposition.requiredSections` overrides the default Org Item Body Standard section list in ultraplan
+- Custom audit focus areas: mode config `audit.focusAreas` replaces/augments the default 5-item audit checklist
+- Chat mode: `.spell/modes/chat/MODE.md` body sections injected into base system prompt via `buildSystemPrompt()` in `system-prompt.ts`
+
+**Out of scope:**
+- Slash command registration (FEAT: Mode Activation + Runtime)
+- Lifecycle changes / ActiveModeState (Phase 2)
+- QML/canvas UI (Phase 3)
+
+**Boundary rationale:** This item is purely about making existing mode prompts accept customization from MODE.md files. No new modes are created, no new lifecycle — just injection points in existing templates.
+* Tests
+
+Test file: `packages/coding-agent/test/modes/mode-prompt-injection.test.ts`
+
+Scenarios:
+1. Plan mode with mode config having `## Context` section -> buildPlanModeMessage output contains the context text in correct location
+2. Plan mode with mode config having `## Instructions` section -> instructions appear in rendered prompt
+3. Ultraplan with `gates.metis: false` -> rendered prompt omits Metis gap analysis phase
+4. Ultraplan with `gates.daedalus: false` -> rendered prompt omits Daedalus validation
+5. Ultraplan with custom `decomposition.requiredSections: [Scope, Target Audience, Acceptance Criteria]` -> Org Item Body Standard section uses custom list
+6. Audit mode with `audit.focusAreas: ['Brand consistency', 'Copy clarity']` -> audit prompt replaces default checklist
+7. Chat mode with `.spell/modes/chat/MODE.md` having `## Context` -> system prompt includes context section
+8. Mode config with empty sections -> no injection, prompts unchanged from defaults
+9. Multiple sections (Context + Instructions + Focus Areas) -> all injected in correct order
+10. Gate toggles with extends chain: parent enables metis, child disables -> child wins
+11. Mode with custom execution instructions -> plan-mode-approved.md output includes custom execution section
+* Implementation
+** Load mode configs in session
+:PROPERTIES:
+:CUSTOM_ID: FEAT-124::load-mode-configs
+:DEPENDS: PROJ-009::discovery-loader
+:END:
+- File: packages/coding-agent/src/session/agent-session.ts
+- In session init, load mode configs via loadCapability(modeConfigCapability.id)
+- Store resolved configs for lookup by mode name
+- Satisfies test scenario 8 (empty sections = no injection)
+
+** Plan mode template extension points
+:PROPERTIES:
+:CUSTOM_ID: FEAT-124::plan-template-extension
+:DEPENDS: PROJ-009::define-types FEAT-124::load-mode-configs
+:END:
+- File: packages/coding-agent/src/prompts/system/plan-mode-active.md
+- Add {{#if modeContext}} before Planning Workflow section
+- Add {{#if modeInstructions}} after mode context
+- Add {{#if customDecomposition}} around Org Item Body Standard section list
+- In buildPlanModeMessage(), inject mode config sections as template variables
+- Use triple-stache {{{var}}} for raw markdown
+- Satisfies test scenarios 1, 2, 5, 9
+
+** Audit template extension points
+:PROPERTIES:
+:CUSTOM_ID: FEAT-124::audit-template-extension
+:DEPENDS: PROJ-009::define-types FEAT-124::load-mode-configs
+:END:
+- File: packages/coding-agent/src/prompts/system/plan-audit.md
+- Add {{#if customFocusAreas}} to replace/augment default 5-item checklist
+- In checkAuditPhase(), pass mode audit config as template variables
+- Satisfies test scenario 6
+
+** Gate toggle support
+:PROPERTIES:
+:CUSTOM_ID: FEAT-124::gate-toggles
+:DEPENDS: FEAT-124::plan-template-extension
+:END:
+- In buildPlanModeMessage(), check mode config gates object
+- If gates.metis === false, set template var to suppress Metis phase
+- Same for daedalus, momus, aphrodite
+- Wrap ultraplan gate sections in {{#unless gateXDisabled}} guards
+- Satisfies test scenarios 3, 4, 10
+
+** Execution prompt extension points
+:PROPERTIES:
+:CUSTOM_ID: FEAT-124::execution-prompt-extension
+:DEPENDS: FEAT-124::plan-template-extension
+:END:
+- File: packages/coding-agent/src/prompts/system/plan-mode-approved.md
+- Add {{#if modeExecutionInstructions}} section for custom post-approval behavior
+- Add {{#if modeTodoInstructions}} to customize wave-based todo initialization
+- Thread mode config through plan approval flow into executor prompt
+- Satisfies test scenario 11
+
+** Chat mode injection
+:PROPERTIES:
+:CUSTOM_ID: FEAT-124::chat-mode-injection
+:DEPENDS: PROJ-009::define-types FEAT-124::load-mode-configs
+:END:
+- File: packages/coding-agent/src/system-prompt.ts
+- Load chat mode config (.spell/modes/chat/MODE.md) if present
+- Add chatModeContext and chatModeInstructions to template data
+- Add extension points in system-prompt.md
+- Satisfies test scenario 7
+* Edge Cases
+- Mode config loaded but mode not active -> sections not injected (only active mode's config applies)
+- Gate toggle for a gate that doesn't exist in current mode (e.g., `gates.aphrodite: false` in non-design plan) -> silently ignored
+- Custom decomposition with empty array -> uses default sections (treat empty as "not specified")
+- Chat mode config present but plan mode active -> only plan mode injection applies, not chat
+- Very large context section (>10KB) -> no truncation at injection layer; let the LLM context window be the limit
+- Handlebars special characters in mode content ({{ or }}) -> triple-stache prevents escaping; document that users should avoid Handlebars syntax in MODE.md body
+* Acceptance Criteria
+- `bun test packages/coding-agent/test/modes/mode-prompt-injection.test.ts` passes all 11 scenarios
+- A `.spell/modes/test/MODE.md` with Context and Instructions sections produces a plan mode prompt containing those sections
+- Gate toggles demonstrably suppress the corresponding ultraplan phases in rendered output
+- Custom audit focus areas replace the default checklist in audit prompt output
+- Chat mode injection visible in system prompt when `.spell/modes/chat/MODE.md` exists
+- Execution prompt includes custom instructions when mode config provides them
+- `bun check:ts` passes
+- `bun lint:ts` passes

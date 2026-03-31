@@ -1,0 +1,99 @@
+#+TITLE: Audit Mode Generalization
+#+STATE: DONE
+#+SESSION_ID: 14a82819e7cf3e62
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-59-32-115Z_14a78ba624cf3e43/15-CreateFeat5.jsonl]]
+#+CUSTOM_ID: FEAT-128-audit-mode-generalization
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: core
+#+BLOCKER: FEAT-126-mode-lifecycle-generalization
+
+NOTE [2026-03-31]: AuditState has type:'audit' discriminant. Built-in audit.md definition created. Custom focus areas, maxDepth, escalation wired into audit prompt via injectAuditPrompt. Content-review example demonstrates extends:audit.
+
+
+* Scope
+
+**In scope:**
+- Express ~AuditState~ as an ~ActiveModeState~ variant with ~type: 'audit'~
+- Create an internal audit prompt definition (not in .spell/modes/, in ~packages/coding-agent/src/modes/definitions/audit.md~) that serves as the base for user ~extends: audit~ modes
+- User modes with ~extends: audit~ inherit the audit lifecycle (pending -> active -> escalate/clean)
+- Custom ~audit.focusAreas~ from mode config replaces/augments the default 5-item audit checklist in the prompt
+- Custom ~audit.maxDepth~ from mode config overrides default (2)
+- Custom ~audit.escalation~ from mode config overrides default ('auto' for ultraplan, 'suggest' for regular)
+- Preserve ALL existing audit behavior: [AUDIT_CLEAN] marker detection, escalation to ultraplan, depth tracking, suggest callback
+
+**Out of scope:**
+- Full audit lifecycle rewrite (keep ~checkAuditPhase()~ and ~injectAuditPrompt()~ working as-is)
+- Custom audit UI (Phase 3 canvas)
+- Audit as a nested mode (FEAT: Mode Transitions handles nesting)
+
+**Boundary rationale:** Audit generalization is scoped to making audit configurable through the mode system while preserving its unique lifecycle (which differs from plan mode). The audit lifecycle (pending/active/escalate) stays as-is; we're adding a configuration layer on top, not rewriting the state machine.
+* Tests
+
+Test file: ~packages/coding-agent/test/modes/audit-mode-generalization.test.ts~
+
+Existing tests that must pass unchanged:
+- ~packages/coding-agent/test/modes/audit-lifecycle.test.ts~
+
+New scenarios:
+1. Default audit (no mode config) -> identical behavior to current (5-item checklist, maxDepth=2, escalation auto/suggest)
+2. User mode with ~extends: audit~ and ~audit.focusAreas: ['Brand voice', 'Copy clarity']~ -> audit prompt contains custom focus areas instead of defaults
+3. User mode with ~audit.maxDepth: 1~ -> audit cycle stops after 1 iteration
+4. User mode with ~audit.escalation: false~ -> no escalation after findings
+5. User mode with ~audit.escalation: 'suggest'~ -> suggest popup, not auto-escalation
+6. AuditState as ActiveModeState variant -> ~isAuditMode(state)~ returns true
+7. Audit mode with custom focus areas + chained from plan mode -> focus areas apply in the audit phase
+8. Built-in audit prompt definition parseable as mode config sections
+* Implementation
+** Audit type discriminant
+:PROPERTIES:
+:CUSTOM_ID: FEAT-128::audit-type-discriminant
+:DEPENDS: FEAT-126::active-mode-state
+:END:
+- Add ~type: 'audit'~ to ~AuditState~ in ~audit-state.ts~
+- Satisfies test scenario 6
+
+** Built-in audit definition
+:PROPERTIES:
+:CUSTOM_ID: FEAT-128::builtin-audit-definition
+:DEPENDS: PROJ-009::builtin-definitions
+:END:
+- File: ~packages/coding-agent/src/modes/definitions/audit.md~
+- Contains current ~plan-audit.md~ content as MODE.md-compatible prompt definition
+- Frontmatter: ~name: audit~, ~readOnly: true~
+- Body: Focus Areas section matching current checklist
+- Satisfies test scenario 8
+
+** Custom focus and config
+:PROPERTIES:
+:CUSTOM_ID: FEAT-128::custom-audit-config
+:DEPENDS: FEAT-128::audit-type-discriminant FEAT-124::audit-template-extension
+:END:
+- In ~checkAuditPhase()~, check active mode audit config
+- If ~focusAreas~ specified, pass as template variable
+- If ~maxDepth~ specified, use instead of default 2
+- If ~escalation~ specified, use for pending state
+- Satisfies test scenarios 1-5
+
+** Extends audit lifecycle
+:PROPERTIES:
+:CUSTOM_ID: FEAT-128::extends-audit-lifecycle
+:DEPENDS: FEAT-128::audit-type-discriminant FEAT-128::builtin-audit-definition FEAT-128::custom-audit-config
+:END:
+- User modes with ~extends: audit~ inherit audit lifecycle (pending->active->escalate)
+- Mode activation for audit-extending modes triggers audit lifecycle
+- Satisfies test scenario 7
+
+* Edge Cases
+- User audit mode with extends: audit but no custom focusAreas -> falls back to default checklist
+- Audit escalation creates org items -> must respect mode's custom categories if any
+- maxDepth: 0 -> no audit (skip entirely)
+- Audit mode manually activated (/audit or custom command) vs auto-triggered after plan -> both paths honor mode config
+- [AUDIT_CLEAN] detection must work regardless of custom focus areas
+* Acceptance Criteria
+- ALL existing audit-lifecycle.test.ts tests pass unchanged
+- ~bun test packages/coding-agent/test/modes/audit-mode-generalization.test.ts~ passes all 8 new scenarios
+- Default audit behavior is byte-for-byte identical when no mode config present
+- A user mode with ~extends: audit~ and custom focus areas produces an audit prompt with those areas
+- ~bun check:ts~ passes
+- ~bun lint:ts~ passes

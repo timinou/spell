@@ -41,6 +41,12 @@ Before your final turn, you **MUST**:
 
 {{planContent}}
 
+{{#if modeExecutionInstructions}}
+## Mode Execution Instructions
+
+{{{modeExecutionInstructions}}}
+{{/if}}
+
 <instruction>
 You **MUST** execute this plan step by step from `{{finalPlanFilePath}}`. You have full tool access.
 You **MUST** verify each step before proceeding to the next.

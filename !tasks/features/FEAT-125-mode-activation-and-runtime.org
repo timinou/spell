@@ -1,0 +1,127 @@
+#+TITLE: Mode Activation and Runtime
+#+STATE: DONE
+#+SESSION_ID: 14a826faee8f3e58
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-59-32-115Z_14a78ba624cf3e43/11-CreateFeat2.jsonl]]
+#+CUSTOM_ID: FEAT-125-mode-activation-and-runtime
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: core
+#+BLOCKER: PROJ-009-mode-config-foundation
+
+NOTE [2026-03-31]: Slash command registration from MODE.md command field. Namespace collision detection. handleModeCommand dispatches to plan/audit/user mode activation. Tool allow/deny resolution through extends chain.
+
+* Scope
+
+**In scope:**
+- Auto-register slash commands from MODE.md ~command~ field during discovery
+- Namespace collision detection: user mode commands cannot shadow builtin command names; error at load time with clear message
+- Mode activation: custom slash command triggers mode entry using existing ~#enterPlanMode()~ with mode config attached to state
+- Tool allow/deny lists per mode: resolve through extends chain, apply via ~setActiveToolsByName()~
+- Todo phase templates: mode config ~todo.phases~ defines phase names used when agent creates task lists
+- Starter task instantiation: mode config ~todo.phases[].tasks~ pre-populates todo on mode activation
+- Gate presets: mode config ~todo.phases[].tasks[].gateCmd/gateLlm/gateArtifact/gateCommit~ pre-fill gate fields
+- Wave-derived todo phases override mode config ~todo.phases~ when plan produces waves. Mode config phases are fallback for non-wave plans.
+
+**Out of scope:**
+- Prompt injection (FEAT: Mode Prompt Injection handles this)
+- Lifecycle generalization / ActiveModeState (Phase 2)
+- Canvas/QML (Phase 3)
+
+**Boundary rationale:** This item covers the activation entry point (slash commands) and runtime behavior (tool filtering, todo templates). It uses the existing plan mode lifecycle (~enterPlanMode~) as the activation mechanism, attaching mode config as additional state. Full lifecycle generalization is Phase 2.
+* Tests
+
+Test file: ~packages/coding-agent/test/modes/mode-activation.test.ts~
+
+Scenarios:
+1. MODE.md with ~command: /mreview~ -> ~/mreview~ appears in slash command list and is executable
+2. MODE.md with ~command: /plan~ (shadows builtin) -> error at load time with message naming the collision
+3. MODE.md with no ~command~ field -> no slash command registered (mode only activatable via extends)
+4. Mode with ~tools.allow: [read, grep, find, ask]~ -> after activation, only those tools are active
+5. Mode with ~tools.deny: [bash, edit, write]~ -> those tools removed from active set
+6. Extends chain tool resolution: parent allows [read, write, edit, org], child denies [write, edit] -> result is [read, org]
+7. Mode activation stores mode config in session state (retrievable for prompt injection)
+8. Mode exit restores previous tool set (existing enterPlanMode behavior)
+9. Todo phase template: mode with ~todo.phases: [{name: Research}, {name: Draft}]~ -> agent receives phase template in context
+10. Starter tasks: mode with ~todo.phases[0].tasks: [{content: 'Review brand guide', gateLlm: 'Brand voice check'}]~ -> tasks pre-populated on activation
+11. Mode activation with ~readOnly: true~ -> write operations blocked (uses existing enforcePlanModeWrite)
+12. Two modes with same ~command~ name -> error at load time
+13. Mode with ~todo.phases~ + wave-structured plan -> wave phases used, ~todo.phases~ ignored
+* Implementation
+
+** Slash command registration
+:PROPERTIES:
+:CUSTOM_ID: FEAT-125::slash-command-registration
+:DEPENDS: PROJ-009::discovery-loader
+:END:
+- File: packages/coding-agent/src/extensibility/slash-commands.ts or new mode-commands.ts
+- After mode configs loaded, iterate resolved modes with command field
+- Create SlashCommand entry for each
+- Satisfies test scenarios 1, 3
+
+** Namespace collision detection
+:PROPERTIES:
+:CUSTOM_ID: FEAT-125::namespace-collision
+:DEPENDS: FEAT-125::slash-command-registration
+:END:
+- Check against BUILTIN_SLASH_COMMAND_REGISTRY keys
+- Check for inter-mode command collisions
+- Error at load time with clear message
+- Satisfies test scenarios 2, 12
+
+** Tool allow-deny resolution
+:PROPERTIES:
+:CUSTOM_ID: FEAT-125::tool-resolution
+:DEPENDS: PROJ-009::extends-resolver
+:END:
+- File: packages/coding-agent/src/tools/index.ts
+- Compute final tool list from mode config allow/deny + extends chain
+- Always preserve ask, exit_plan_mode, resolve regardless
+- Satisfies test scenarios 4, 5, 6
+
+** Mode activation handler
+:PROPERTIES:
+:CUSTOM_ID: FEAT-125::mode-activation
+:DEPENDS: FEAT-125::slash-command-registration FEAT-125::tool-resolution
+:END:
+- File: packages/coding-agent/src/modes/interactive-mode.ts
+- Extend #enterPlanMode() to accept optional ModeConfig
+- Store mode config in PlanModeState (add optional modeConfig field)
+- Apply readOnly, tool restrictions on activation
+- Persist mode config name in appendModeChange
+- Satisfies test scenarios 7, 8, 11
+
+** Todo phase templates
+:PROPERTIES:
+:CUSTOM_ID: FEAT-125::todo-templates
+:DEPENDS: PROJ-009::define-types FEAT-124::execution-prompt-extension
+:END:
+- On mode activation, if mode has todo.phases, inject phase template into agent context
+- Wave precedence rule: wave-derived phases override todo.phases when waves exist
+- Satisfies test scenarios 9, 13
+
+** Starter task instantiation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-125::starter-tasks
+:DEPENDS: FEAT-125::todo-templates
+:END:
+- If mode has starter tasks, call todo_write with pre-populated phases/tasks on first prompt
+- Gate presets applied from template
+- Satisfies test scenario 10
+* Edge Cases
+- Mode command name with/without leading ~/~ -> normalize: strip leading ~/~ if present
+- Mode with both ~tools.allow~ AND ~tools.deny~ -> error at validation time (mutually exclusive)
+- Mode activation while another mode is active -> exit current mode first (existing behavior)
+- Session resume with mode that has custom command -> command must be re-registered from discovered modes
+- Mode with tool restriction removing ~org~ tool but mode extends plan (which requires org) -> warn at load time
+- Starter tasks with gate fields that reference tools not in mode's allow list -> warn, don't fail
+- Empty ~tools.allow~ array -> no tools available except always-required (ask, exit_plan_mode)
+- Mode with ~todo.phases~ AND wave-structured plan -> waves override, ~todo.phases~ discarded for that plan
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/modes/mode-activation.test.ts~ passes all 13 scenarios
+- A ~.spell/modes/test-review/MODE.md~ with ~command: /treview~ produces a working ~/treview~ slash command
+- Typing ~/treview~ activates the mode with correct tool restrictions and read-only enforcement
+- Namespace collision produces a clear error at startup, not a silent shadow
+- Todo phase templates are visible in agent context when mode is active
+- Wave-derived phases take precedence over ~todo.phases~ when plan has waves
+- ~bun check:ts~ passes
+- ~bun lint:ts~ passes

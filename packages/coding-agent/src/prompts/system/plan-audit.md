@@ -18,11 +18,17 @@ You are auditing the implementation of: `{{sourceRef}}`
 ## Your Task
 
 Review the implementation for:
+{{#if customFocusAreas}}
+{{#each customFocusAreas}}
+{{@index}}. **{{this}}**
+{{/each}}
+{{else}}
 1. **Polish**: Inconsistent naming, dead code, missing cleanup, rough edges
 2. **Hardening**: Missing error handling, unchecked edge cases, resource leaks, race conditions
 3. **Low-effort improvements**: Quick wins you noticed during implementation but deferred
 4. **Contract violations**: Functions that accept input they silently discard, return values that hide failures, or make promises their callers cannot verify
 5. **Test gaps**: Behaviors that lack coverage, especially error paths and boundary conditions
+{{/if}}
 
 ## Output Format
 

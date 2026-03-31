@@ -228,6 +228,7 @@ export interface InteractiveModeContext {
 	openExternalEditor(): void;
 	registerExtensionShortcuts(): void;
 	handlePlanModeCommand(initialPrompt?: string, options?: { ultraplan?: boolean; flavor?: "design" }): Promise<void>;
+	handleModeCommand(modeName: string, prompt?: string): Promise<void>;
 	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;
 	handleAuditCommand(): Promise<void>;
 	handleAuditEscalation(auditContent: string): Promise<void>;

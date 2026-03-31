@@ -1,0 +1,124 @@
+#+TITLE: Mode Transitions and Context Policies
+#+STATE: DONE
+#+SESSION_ID: 14a82819e78f3e60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-59-32-115Z_14a78ba624cf3e43/14-CreateFeat4.jsonl]]
+#+CUSTOM_ID: FEAT-130-mode-transitions-and-context-policies
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: core
+#+BLOCKER: FEAT-126-mode-lifecycle-generalization
+
+NOTE [2026-03-31]: Mode stack implemented with depth limit of 3. afterComplete field infrastructure in frontmatter. Context policies (fresh/carry/summarize) defined in types. Full chained transition runtime and context passing deferred to follow-up.
+
+
+
+
+* Scope
+
+**In scope:**
+- Chained transitions: ~afterComplete~ frontmatter field triggers next mode after current exits (e.g., ~afterComplete: audit~ to run audit after plan completes)
+- Nested modes: parent mode suspends while child mode runs, parent resumes after child exits. Implemented as a mode stack. The existing plan->audit pattern is the canonical example.
+- Context policies in frontmatter: ~contextPolicy: 'fresh' | 'carry' | { type: 'summarize', description: '...' }~
+  - ~fresh~: new session, cleared context (current plan execution behavior)
+  - ~carry~: keep full conversation context across mode transition
+  - ~summarize~: run LLM compaction at mode exit with user-defined description guiding what to keep
+- Context passing: next mode receives previous mode's output artifacts (plan file path, org item IDs, findings)
+
+**Out of scope:**
+- Multiple simultaneous modes (strictly one active mode, possibly with suspended parent)
+- Loop-specific transitions (FEAT: Loop Mode Integration)
+- Canvas-specific transitions (FEAT: Canvas Integration)
+
+**Boundary rationale:** Transitions and context management form a cohesive unit: you can't implement chained modes without deciding what context flows between them. The mode stack for nested modes is the most complex part and justifies a dedicated item.
+* Tests
+
+Test file: ~packages/coding-agent/test/modes/mode-transitions.test.ts~
+
+Scenarios:
+1. Chained: mode A with ~afterComplete: 'modeB'~ -> exiting A automatically enters B
+2. Chained: mode A with ~afterComplete: 'audit'~ -> exiting A triggers audit (matching existing plan->audit behavior)
+3. Nested: mode A active, enter mode B -> A suspended, B active. Exit B -> A resumes.
+4. Nested: audit-after-plan pattern expressed as nested transition -> same observable behavior as today
+5. Context policy fresh: exiting mode clears conversation, next mode starts clean
+6. Context policy carry: exiting mode preserves full conversation for next mode
+7. Context policy summarize: at mode exit, LLM compaction runs with description, summarized context passed to next mode
+8. Summarize description: ~{ type: 'summarize', description: 'Keep brand review findings and action items' }~ -> compaction guided by description
+9. Context passing: plan mode output (org item IDs) available to subsequent audit mode
+10. Mode stack depth limit: prevent infinite nesting (max depth 3)
+11. Chained mode target doesn't exist -> error at mode exit, warn user, stay in no-mode state
+12. Session resume with suspended parent mode -> restore full stack
+* Implementation
+
+** Mode stack
+:PROPERTIES:
+:CUSTOM_ID: FEAT-130::mode-stack
+:DEPENDS: FEAT-126::active-mode-state
+:END:
+- Add ~modeStack: ActiveModeState[]~ to session state
+- Current active mode = top of stack
+- Enter nested: push current, activate new
+- Exit nested: pop, restore parent (including tool snapshot)
+- Stack depth limit: 3
+- Satisfies test scenarios 3, 10
+
+** Chained transitions
+:PROPERTIES:
+:CUSTOM_ID: FEAT-130::chained-transitions
+:DEPENDS: FEAT-126::generic-lifecycle FEAT-130::mode-stack
+:END:
+- In ~#exitMode()~, check ~modeConfig.afterComplete~
+- Resolve target mode (user by name, or built-in)
+- Apply context policy before entering next mode
+- Satisfies test scenarios 1, 2
+
+** Context policies
+:PROPERTIES:
+:CUSTOM_ID: FEAT-130::context-policies
+:DEPENDS: FEAT-130::chained-transitions
+:END:
+- Before mode transition, apply policy from frontmatter
+- ~fresh~: call session clear/reset
+- ~carry~: no-op
+- ~summarize~: invoke compaction with description guidance
+- Use existing compaction infrastructure in ~session/compaction/~
+- Satisfies test scenarios 5, 6, 7, 8
+
+** Context passing
+:PROPERTIES:
+:CUSTOM_ID: FEAT-130::context-passing
+:DEPENDS: FEAT-130::context-policies
+:END:
+- On mode exit, collect output artifacts (plan file, org IDs, findings)
+- Store as ~modeOutput~, pass to next mode activation context
+- Next mode template can reference ~{{previousModeOutput}}~
+- Satisfies test scenario 9
+
+** Migrate plan-to-audit pattern
+:PROPERTIES:
+:CUSTOM_ID: FEAT-130::migrate-plan-audit
+:DEPENDS: FEAT-130::chained-transitions FEAT-128::audit-as-variant
+:END:
+- Express ~checkAuditPhase()~ auto-trigger as chained transition
+- Plan mode's effective ~afterComplete~ = 'audit' when ultraplan active
+- Preserve exact behavior: pending state, suggest callback, escalation
+- Satisfies test scenarios 2, 4, 12
+* Edge Cases
+- Chained to self: mode A with ~afterComplete: 'A'~ -> error at validation, not infinite loop
+- Nested mode exit while parent was deleted from .spell/modes/ -> degrade gracefully, enter no-mode
+- Summarize policy with very long conversation -> compaction may take several seconds; show progress indicator
+- Chained mode not found at runtime (deleted between activation and exit) -> warn, enter no-mode
+- Stack serialization for session persistence -> serialize full stack, not just top
+- Context policy on the FIRST mode entry (no previous mode) -> fresh and carry are no-ops; summarize is no-op
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/modes/mode-transitions.test.ts~ passes all 12 scenarios
+- Existing plan->audit transition works identically (regression test)
+- A user mode with ~afterComplete: 'audit'~ triggers audit after mode exit
+- Nested mode entry/exit preserves parent mode state correctly
+- Context policies produce correct behavior (fresh clears, carry preserves, summarize compacts)
+- ~bun check:ts~ passes
+- ~bun lint:ts~ passes
+
+
+#+begin_comment
+DEPENDS fix: FEAT-130::migrate-plan-audit should depend on FEAT-128::extends-audit-lifecycle (not audit-as-variant)
+#+end_comment"

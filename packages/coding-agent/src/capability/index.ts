@@ -432,3 +432,6 @@ export function cacheStats(): { content: number; dir: number } {
 // =============================================================================
 
 export type * from "./types";
+
+// Mode capability is NOT re-exported here to avoid circular initialization.
+// Import directly from "./capability/mode" instead.

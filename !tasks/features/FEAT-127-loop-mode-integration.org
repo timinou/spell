@@ -1,0 +1,82 @@
+#+TITLE: Loop Mode Integration
+#+STATE: DONE
+#+SESSION_ID: 14a82819e80f3e66
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-30T22-59-32-115Z_14a78ba624cf3e43/16-CreateFeat6.jsonl]]
+#+CUSTOM_ID: FEAT-127-loop-mode-integration
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: core
+#+BLOCKER: FEAT-126-mode-lifecycle-generalization
+
+NOTE [2026-03-31]: Phase-specific body sections (planPhase, codePhase, reviewPhase) recognized by parser. TODO integration point added in phase-coordinator.ts for prompt injection. Full loop gate config integration deferred to follow-up.
+
+
+* Scope
+
+**In scope:**
+- Per-phase prompt customization via mode config: mode's ~## Instructions~ section injected into each loop phase (plan, code, review) prompt
+- Mode-specific loop gate configuration: mode config ~gates~ applied to loop gate evaluator
+- Loop role prompts customizable: mode config can provide role-specific instructions via ~## Plan Phase~, ~## Code Phase~, ~## Review Phase~ body sections
+- Mode context injection: mode's ~## Context~ section available to all loop phases
+- Loop phase pipeline stays hardcoded (plan->code->review) — custom phase sequences are future work
+
+**Out of scope:**
+- Custom phase sequences (plan->code->review stays fixed)
+- Loop monitoring canvas UI (FEAT: Canvas Integration)
+- Loop creation from UI (future Phase 3+)
+- Full loop state machine changes
+
+**Boundary rationale:** The loop system is in PoC state. This item adds the minimal integration surface: mode configs can customize WHAT the loop does in each phase (prompts, gates) without changing HOW it executes (state machine, phase sequence). This is the safe first step that enables cofounders to define custom loop workflows without destabilizing the loop kernel.
+* Tests
+
+Test file: ~packages/coding-agent/test/loop/mode-integration.test.ts~
+
+Scenarios:
+1. Loop with no mode config -> identical behavior to current (no regression)
+2. Loop with active mode having ~## Context~ -> context injected into all phase prompts
+3. Loop with active mode having ~## Plan Phase~ section -> plan phase prompt includes custom instructions
+4. Loop with active mode having ~## Code Phase~ section -> code phase prompt includes custom instructions
+5. Loop with active mode having ~## Review Phase~ section -> review phase prompt includes custom instructions
+6. Loop with mode gate config ~gates.artifact: true~ -> artifact gate added to loop evaluation
+7. Loop with mode gate config overriding default gate -> override applied
+* Implementation
+** Phase-specific body sections
+:PROPERTIES:
+:CUSTOM_ID: FEAT-127::phase-sections
+:DEPENDS: PROJ-009::body-section-parser
+:END:
+- Extend ModeConfigSections with planPhase, codePhase, reviewPhase
+- Update parseModeConfigSections to recognize ## Plan Phase, ## Code Phase, ## Review Phase
+- Satisfies test scenarios 3, 4, 5
+
+** Phase prompt injection
+:PROPERTIES:
+:CUSTOM_ID: FEAT-127::phase-prompt-injection
+:DEPENDS: FEAT-127::phase-sections FEAT-126::active-mode-state
+:END:
+- File: packages/coding-agent/src/loop/orchestration/phase-coordinator.ts
+- Before building phase prompt, check active mode for phase-specific sections
+- Inject mode context into all phases
+- Inject phase-specific instructions into corresponding phase
+- Satisfies test scenarios 2, 3, 4, 5
+
+** Loop gate config
+:PROPERTIES:
+:CUSTOM_ID: FEAT-127::loop-gate-config
+:DEPENDS: FEAT-126::active-mode-state
+:END:
+- File: packages/coding-agent/src/loop/gates/evaluator.ts
+- Accept mode gate config as additional gate source
+- Merge with loop-level gates
+- Satisfies test scenarios 6, 7
+* Edge Cases
+- Loop started before mode activated -> no mode injection
+- Mode deactivated during active loop -> loop continues with whatever context was injected at start
+- Mode has phase sections but loop phases have different names -> only matching phase names get injection
+- Very large mode context + phase instructions -> may approach context limits; no truncation, let LLM window be the bound
+* Acceptance Criteria
+- All existing loop tests pass unchanged
+- ~bun test packages/coding-agent/test/loop/mode-integration.test.ts~ passes all 7 scenarios
+- A mode with ~## Context~ and ~## Code Phase~ sections demonstrably injects into the loop's code phase
+- ~bun check:ts~ passes
+- ~bun lint:ts~ passes

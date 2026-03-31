@@ -1,4 +1,6 @@
 import { getOAuthProviders } from "@oh-my-pi/pi-ai";
+import { logger } from "@oh-my-pi/pi-utils";
+import type { ResolvedModeConfig } from "../capability/mode";
 import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";
 import type { InteractiveModeContext } from "../modes/types";
@@ -644,4 +646,66 @@ export async function executeBuiltinSlashCommand(text: string, runtime: BuiltinS
 
 	await command.handle(parsed, runtime);
 	return true;
+}
+
+/** Mode-derived slash commands registered at runtime. */
+const MODE_COMMAND_LOOKUP = new Map<string, { config: ResolvedModeConfig; spec: BuiltinSlashCommandSpec }>();
+
+/**
+ * Register slash commands from discovered mode configs.
+ * Returns warnings for collisions.
+ */
+export function registerModeCommands(configs: Map<string, ResolvedModeConfig>, _ctx: InteractiveModeContext): string[] {
+	const warnings: string[] = [];
+	MODE_COMMAND_LOOKUP.clear();
+
+	for (const [name, config] of configs) {
+		const command = config.frontmatter.command;
+		if (!command) continue;
+
+		// Normalize: strip leading /
+		const cmdName = command.startsWith("/") ? command.slice(1) : command;
+
+		// Check collision with builtins
+		if (BUILTIN_SLASH_COMMAND_LOOKUP.has(cmdName)) {
+			const msg = `Mode "${name}" command "/${cmdName}" collides with builtin command. Skipping.`;
+			logger.warn(msg);
+			warnings.push(msg);
+			continue;
+		}
+
+		// Check collision with other mode commands
+		if (MODE_COMMAND_LOOKUP.has(cmdName)) {
+			const existing = MODE_COMMAND_LOOKUP.get(cmdName)!;
+			const msg = `Mode "${name}" command "/${cmdName}" collides with mode "${existing.config.name}". Skipping.`;
+			logger.warn(msg);
+			warnings.push(msg);
+			continue;
+		}
+
+		const spec: BuiltinSlashCommandSpec = {
+			name: cmdName,
+			description: config.frontmatter.description ?? `Activate ${name} mode`,
+			inlineHint: "[prompt]",
+			allowArgs: true,
+			handle: async (cmd, runtime) => {
+				await runtime.ctx.handleModeCommand(name, cmd.args || undefined);
+				runtime.ctx.editor.setText("");
+			},
+		};
+
+		MODE_COMMAND_LOOKUP.set(cmdName, { config, spec });
+		BUILTIN_SLASH_COMMAND_LOOKUP.set(cmdName, spec);
+	}
+
+	return warnings;
+}
+
+/** Get mode command definitions for autocomplete. */
+export function getModeCommandDefs(): BuiltinSlashCommand[] {
+	return Array.from(MODE_COMMAND_LOOKUP.values()).map(({ spec }) => ({
+		name: spec.name,
+		description: spec.description,
+		inlineHint: spec.inlineHint,
+	}));
 }

@@ -14,7 +14,7 @@ import { LoopDoneTool, LoopLaunchTool, LoopPrepareTool } from "../loop/loop-tool
 import { LspTool } from "../lsp";
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import { EditTool } from "../patch";
-import type { PlanModeState } from "../plan-mode/state";
+import type { ActiveModeState, PlanModeState } from "../plan-mode/state";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
 import type { EventBus } from "../utils/event-bus";
@@ -160,8 +160,10 @@ export interface ToolSession {
 	asyncJobManager?: AsyncJobManager;
 	/** Settings instance for passing to subagents */
 	settings: Settings;
-	/** Plan mode state (if active) */
+	/** Plan mode state (if active) @deprecated Use getActiveModeState */
 	getPlanModeState?: () => PlanModeState | undefined;
+	/** Active mode state (plan, audit, or user-defined) */
+	getActiveModeState?: () => ActiveModeState | undefined;
 	/** Get compact conversation context for subagents (excludes tool results, system prompts) */
 	getCompactContext?: () => string;
 	/** Get cached todo phases for this session. */
