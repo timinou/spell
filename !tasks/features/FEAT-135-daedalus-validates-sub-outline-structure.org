@@ -1,0 +1,96 @@
+#+TITLE: Daedalus validates sub-outline structure and step dependencies
+#+STATE: DONE
+#+SESSION_ID: 14a8643cbea9cb63
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-45-49-434Z_14a8643cbea9cb63.jsonl]]
+#+CUSTOM_ID: FEAT-135-daedalus-validates-sub-outline-structure
+#+EFFORT: 1h
+#+LAYER: prompt
+#+PRIORITY: #A
+#+DEPENDS: FEAT-134-ultraplan-phase-3-full-detail-decomposit
+
+NOTE [2026-03-31]: Updated Daedalus prompt: expanded input spec to expect sub-outline detail, added validation criteria 7 (sub-outline structure) and 8 (wave derivability), added [SUB-OUTLINE] and [WAVE] criterion tags to output format. Daedalus remains read-only.
+
+* Initial Message
+
+Look at this:
+
+  File:
+  /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-03-31T13-03-26-160Z_14
+  a84ccd740b8ade.jsonl
+  ID: 14a84ccd740b8ade
+
+ My friend, the Daedalus validation should not have to ask me to give the subtasks for each one. It should do it on its own and have this
+ from the beginning.
+
+* Scope
+** In scope
+- Update Daedalus input specification to expect full sub-outline detail (not just title/category/scope/dependencies/effort/acceptance criteria)
+- Add validation criteria for sub-outline structure: step CUSTOM_ID format, intra-item dependency correctness, file path specificity, test scenario concreteness
+- Add validation criterion for wave derivability: the sub-outline dependency graph must be a valid DAG that produces meaningful parallelization waves
+
+** Out of scope
+- Changes to plan-mode-active.md (separate item)
+- Changes to Metis or Momus prompts
+- Changing Daedalus from validator to decomposer — it stays read-only
+
+* Implementation
+** Update Daedalus input specification
+:PROPERTIES:
+:CUSTOM_ID: FEAT-daedalus-suboutline::input-spec
+:END:
+
+Target file: ~packages/coding-agent/src/prompts/agents/daedalus.md~
+
+Current Input section (lines 12-18):
+#+begin_quote
+You will receive:
+1. Proposed decomposition items (title, category, scope, dependencies, effort, acceptance criteria)
+2. User requirements and clarified decisions
+3. Exploration findings (files, systems, constraints)
+#+end_quote
+
+Replace item 1 with:
+1. Proposed decomposition items, each containing:
+   - Title, category, scope boundaries (in-scope/out-of-scope)
+   - Sub-outline implementation steps (each with ~PARENT-ID::sub-slug~ CUSTOM_ID, inter-step dependencies, file paths, test scenarios, effort)
+   - Edge cases and acceptance criteria
+
+** Add sub-outline validation criteria
+:PROPERTIES:
+:CUSTOM_ID: FEAT-daedalus-suboutline::validation-criteria
+:DEPENDS: FEAT-daedalus-suboutline::input-spec
+:END:
+
+Add new validation criterion section after existing "6. Acceptance criteria quality":
+
+*** 7. Sub-outline structure
+- Every item must have at least one implementation sub-outline step with a valid ~PARENT-ID::sub-slug~ CUSTOM_ID
+- Intra-item dependencies must be acyclic and reference valid sibling sub-slugs
+- File paths must be explicit (not directory-level references like "src/")
+- Test scenarios must reference concrete files and describe observable behavior
+- Sub-outline steps must have effort estimates that sum to the item total
+
+*** 8. Wave derivability
+- The combined dependency graph (inter-item + intra-item sub-outline) must form a valid DAG
+- The graph must produce at least 2 meaningful waves (not a fully serial chain)
+- Flag items that are unnecessarily serialized (dependency exists but is informational, not mechanical)
+
+** Update Item Findings output format
+:PROPERTIES:
+:CUSTOM_ID: FEAT-daedalus-suboutline::output-format
+:DEPENDS: FEAT-daedalus-suboutline::validation-criteria
+:END:
+
+Update the criterion tags list in the output format section to include:
+- ~[SUB-OUTLINE]~ for sub-outline structure issues
+- ~[WAVE]~ for wave derivability issues
+
+* Edge Cases
+- If an item legitimately has only one implementation step (e.g., a pure documentation item), Daedalus should not reject — but should flag if a single-step item seems to hide complexity
+- Items with no test scenarios (e.g., spec-writing projects) should be validated differently — flag missing tests only when the item produces code
+
+* Acceptance Criteria
+- Daedalus input spec mentions sub-outline steps, CUSTOM_ID format, intra-item dependencies
+- New validation criteria sections 7 (sub-outline structure) and 8 (wave derivability) exist
+- Output format includes ~[SUB-OUTLINE]~ and ~[WAVE]~ criterion tags
+- Daedalus remains purely read-only — no behavioral change beyond expanded validation scope

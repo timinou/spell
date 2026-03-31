@@ -1,0 +1,75 @@
+#+TITLE: Ultraplan full-detail decomposition from the start
+#+STATE: DONE
+#+SESSION_ID: 14a8643cbea9cb63
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-45-49-434Z_14a8643cbea9cb63.jsonl]]
+#+CUSTOM_ID: PLAN-052-ultraplan-full-detail-decomposition-from
+
+
+* Initial Message
+
+Look at this:
+
+  File:
+  /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-03-31T13-03-26-160Z_14
+  a84ccd740b8ade.jsonl
+  ID: 14a84ccd740b8ade
+
+ My friend, the Daedalus validation should not have to ask me to give the subtasks for each one. It should do it on its own and have this
+ from the beginning.
+
+* Context
+
+The ultraplan workflow's Phase 3 (Propose Decomposition) currently instructs the agent to present only high-level fields per item: title, category, scope summary, dependencies, effort. The detailed "Org Item Body Standard" section — which requires sub-outline steps with ~PARENT-ID::sub-slug~ identifiers, test scenarios, file paths, edge cases — is positioned after Phase 4 (Daedalus validation) and framed as a Phase 5 (org creation) requirement.
+
+This causes a concrete failure mode observed in session ~14a84ccd740b8ade~: the agent presented a shallow decomposition (14 items with one-line scope summaries), the user had to manually request "Give me a more detailed thing so the Daedalus validation makes sense", the agent regenerated the entire breakdown with full sub-outline detail, and only then was Daedalus able to perform meaningful validation.
+
+** Approach
+Two coordinated prompt changes:
+1. Restructure Phase 3 to require full body-standard detail in the initial proposal — sub-outline steps, dependencies, tests, file paths, edge cases. Move the "Org Item Body Standard" section before Phase 3 so the agent sees the expected format before constructing the proposal.
+2. Update Daedalus to expect and validate sub-outline structure — step CUSTOM_ID format, intra-item dependency correctness, wave derivability.
+
+** Key decisions
+- The non-ultraplan ~/plan~ workflow is NOT changed. It uses a lighter-weight approach without mandatory Daedalus validation.
+- Daedalus remains a validator (read-only), not a decomposer. It validates that the agent produced complete sub-outlines, not generates them itself.
+- Large plans may need multi-message presentation. The prompt permits splitting across multiple ~ask~ calls but prohibits reducing detail.
+
+* Verification
+- Read ~packages/coding-agent/src/prompts/system/plan-mode-active.md~ and confirm:
+  - Phase 3 requires sub-outline steps, test scenarios, file paths, edge cases in the decomposition proposal
+  - "Org Item Body Standard" section appears before Phase 3 in the ultraplan flow
+  - Anti-pattern instruction against shallow-first proposals exists
+  - Non-ultraplan planning workflow is unchanged
+- Read ~packages/coding-agent/src/prompts/agents/daedalus.md~ and confirm:
+  - Input spec mentions sub-outline steps, CUSTOM_ID format, dependencies
+  - Validation criteria 7 (sub-outline structure) and 8 (wave derivability) exist
+  - Output format includes ~[SUB-OUTLINE]~ and ~[WAVE]~ tags
+- Run ~bun check:ts~ to verify no type errors introduced (prompt-only changes, but templates may be affected)
+
+* Execution Manifest
+** restructure                                      :wave:
+- [[id:FEAT-134-ultraplan-phase-3-full-detail-decomposit]] Restructure Phase 3 to require full body-standard detail (1h)
+** validate                                         :wave:
+- [[id:FEAT-135-daedalus-validates-sub-outline-structure]] Update Daedalus to validate sub-outline structure (1h, depends FEAT-134)
+
+
+** Completion [2026-03-31]
+*** Verification
+- ~bun check:ts~: passed (biome check + tsgo, 1492 files, no errors)
+- ~packages/coding-agent/src/prompts/system/plan-mode-active.md~:
+  - Org Item Body Standard moved before Phase 3 (line 223, before Phase 3 at line 250)
+  - Phase 3 now requires full body-standard detail: sub-outline steps, test scenarios, file paths, edge cases
+  - Anti-pattern caution block at line 260 prohibits shallow-first proposals
+  - Non-ultraplan Planning Workflow (lines 157-186) unchanged
+- ~packages/coding-agent/src/prompts/agents/daedalus.md~:
+  - Input spec expanded (lines 15-18) to expect sub-outline detail
+  - Validation criteria 7 (sub-outline structure, lines 64-71) added
+  - Validation criteria 8 (wave derivability, lines 73-76) added
+  - Output format includes ~[SUB-OUTLINE]~ and ~[WAVE]~ tags (line 96)
+  - Daedalus remains read-only (line 103)
+
+*** Artifacts
+- ~packages/coding-agent/src/prompts/system/plan-mode-active.md~ (modified)
+- ~packages/coding-agent/src/prompts/agents/daedalus.md~ (modified)
+
+*** Deviations
+None.

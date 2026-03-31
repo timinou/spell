@@ -213,22 +213,6 @@ task:
 Address Metis gaps with further user questions where needed.
 {{/unless}}
 
-### Phase 3: Propose Decomposition (mandatory confirmation)
-Use `{{askToolName}}` to present full proposed breakdown:
-- Item title
-- Category (`PROJ`/`FEAT`/`BUG`)
-- Scope summary
-- Dependencies
-- Effort
-
-You **MUST NOT** create org items until the user confirms the full decomposition.
-
-{{#unless gateDaedalusDisabled}}
-### Phase 4: Daedalus Validation (mandatory, pre-creation)
-Validate the proposed breakdown by spawning `daedalus` via `task` **before creating items**.
-If Daedalus rejects, revise and re-propose to user until accepted.
-{{/unless}}
-
 {{#if customDecomposition}}
 ### Org Item Body Standard (customized)
 Every child org item body **MUST** include these sections:
@@ -236,8 +220,8 @@ Every child org item body **MUST** include these sections:
 - **{{this}}**
 {{/each}}
 {{else}}
-### Org Item Body Standard (mandatory, pre-creation)
-Every child org item body **MUST** include all sections below:
+### Org Item Body Standard
+Every child org item body **MUST** include all sections below. This standard applies to both the Phase 3 decomposition proposal and the final org items — the proposal IS the draft body.
 - **Scope** — explicit in-scope and out-of-scope boundaries, with the boundary rationale
 - **Tests** — per-item unit/integration/E2E (for example Playwright) test requirements with file paths and concrete scenarios; define the scenarios and paths before implementation details when practical so they drive design; you **MUST NOT** lump tests into a single separate testing item
 - **Implementation** — each step has a sub-heading with `:CUSTOM_ID: PARENT-ID::sub-slug` and optional `:DEPENDS:` property. Steps reference test scenarios they satisfy. Example:
@@ -262,6 +246,30 @@ Every child org item body **MUST** include all sections below:
 - Dependencies **MUST** name the exact artifact needed (for example "requires Conversation schema from PROJ-A"), not only the parent item ID
 - Dependencies **MUST** be expressed as `:DEPENDS:` properties on the org item (space-separated CUSTOM_IDs), not only narrative text. Create dependency targets before dependent items when parallelizing creation.
 {{/if}}
+
+### Phase 3: Propose Decomposition (mandatory confirmation)
+Use `{{askToolName}}` to present the full proposed breakdown. Each item **MUST** include full body-standard detail as defined above:
+- Item title, category (`PROJ`/`FEAT`/`BUG`), effort estimate
+- **Scope**: explicit in-scope and out-of-scope boundaries
+- **Sub-outline implementation steps**: each with `PARENT-ID::sub-slug` identifier, inter-step `:DEPENDS:` references, file paths, test scenarios, and per-step effort
+- **Edge cases**: failure modes, race conditions, recovery expectations
+- **Acceptance criteria**: falsifiable, observable outcomes
+
+The decomposition proposal IS the draft item body — it flows directly into org creation after Daedalus validates and the user confirms.
+
+<caution>
+You **MUST NOT** present a high-level summary first and wait for the user to request detail. The initial proposal must contain full sub-outline implementation steps, test scenarios, file paths, and edge cases — immediately actionable for Daedalus validation.
+
+If the full detail makes the proposal too long for one message, split across multiple `{{askToolName}}` calls (for example, present 3-4 items per message), but do **NOT** reduce detail to fit a single message.
+</caution>
+
+You **MUST NOT** create org items until the user confirms the full decomposition.
+
+{{#unless gateDaedalusDisabled}}
+### Phase 4: Daedalus Validation (mandatory, pre-creation)
+Validate the proposed breakdown by spawning `daedalus` via `task` **before creating items**.
+If Daedalus rejects, revise and re-propose to user until accepted.
+{{/unless}}
 
 ### Phase 5: Create Org Items + Exit
 After user confirmation and Daedalus approval:

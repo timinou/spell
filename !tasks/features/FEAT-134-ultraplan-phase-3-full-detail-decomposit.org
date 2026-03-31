@@ -1,0 +1,83 @@
+#+TITLE: Ultraplan Phase 3 full-detail decomposition proposal
+#+STATE: DONE
+#+SESSION_ID: 14a8643cbea9cb63
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-45-49-434Z_14a8643cbea9cb63.jsonl]]
+#+CUSTOM_ID: FEAT-134-ultraplan-phase-3-full-detail-decomposit
+#+EFFORT: 1h
+#+LAYER: prompt
+#+PRIORITY: #A
+
+NOTE [2026-03-31]: Restructured ultraplan Phase 3 in plan-mode-active.md. Moved Org Item Body Standard before Phase 3, rewrote Phase 3 to require full body-standard detail, added anti-pattern caution against shallow-first proposals. Non-ultraplan workflow unchanged.
+
+* Initial Message
+
+Look at this:
+
+  File:
+  /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-03-31T13-03-26-160Z_14
+  a84ccd740b8ade.jsonl
+  ID: 14a84ccd740b8ade
+
+ My friend, the Daedalus validation should not have to ask me to give the subtasks for each one. It should do it on its own and have this
+ from the beginning.
+
+* Scope
+** In scope
+- Rewrite Phase 3 of ultraplan in ~plan-mode-active.md~ to require full body-standard detail in the initial decomposition proposal
+- Ensure the proposal presented to the user via ~ask~ includes: sub-outline steps with ~PARENT-ID::sub-slug~ identifiers, inter-step dependencies, test scenarios with file paths, explicit file paths, edge cases, and per-step effort estimates
+- Move the "Org Item Body Standard" section BEFORE Phase 3 (or inline its requirements into Phase 3) so the agent understands the detail level expected for the proposal, not just for org item creation
+- Add explicit instruction: the agent MUST generate full detail from codebase exploration + user requirements, not present a shallow summary and wait for the user to ask for more
+
+** Out of scope
+- Daedalus prompt changes (separate item)
+- Changes to Metis, Momus, or Phase 1/2
+- Changes to the non-ultraplan planning workflow
+
+* Implementation
+** Restructure Phase 3 in plan-mode-active.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-ultraplan-phase3::restructure
+:END:
+
+Target file: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+
+Current Phase 3 (lines 216-224) says:
+#+begin_quote
+### Phase 3: Propose Decomposition (mandatory confirmation)
+Use ~ask~ to present full proposed breakdown:
+- Item title
+- Category
+- Scope summary
+- Dependencies
+- Effort
+#+end_quote
+
+Replace with expanded version that requires:
+1. Per-item: title, category, scope boundaries (in/out), effort
+2. Per-item sub-outline steps: each with ~PARENT-ID::sub-slug~ identifier, depends, file paths, test scenarios, effort
+3. Per-item: edge cases, acceptance criteria
+4. Explicit prohibition against presenting high-level-only summaries
+5. Instruction that the decomposition proposal IS the draft item body — it flows directly into org creation after Daedalus validates and user confirms
+
+Also: the "Org Item Body Standard" section (lines 239-263) must be MOVED to before Phase 3 so the agent sees the expected detail format before constructing the proposal. Currently it appears after Phase 4 (Daedalus) which implies it's only for the creation step.
+
+** Add anti-pattern instruction
+:PROPERTIES:
+:CUSTOM_ID: FEAT-ultraplan-phase3::anti-pattern
+:DEPENDS: FEAT-ultraplan-phase3::restructure
+:END:
+
+Add a ~<caution>~ block to Phase 3 that says:
+- You MUST NOT present a high-level summary first and wait for the user to request detail
+- The decomposition proposal must be immediately actionable for Daedalus validation
+- If the full detail makes the ask too long for one message, split across multiple ask calls per-item or use a batching strategy, but do not reduce detail
+
+* Edge Cases
+- Very large plans (14+ items like the session that triggered this): the full detail will be very long. The prompt should acknowledge this and permit multi-message presentation but NOT permit detail reduction.
+- The non-ultraplan /plan workflow uses a different Phase 3 (the standard "Planning Workflow" section). That workflow does not have mandatory Daedalus validation and uses a lighter-weight approach — it should NOT be changed.
+
+* Acceptance Criteria
+- Phase 3 in ultraplan mode requires sub-outline steps, test scenarios, file paths, edge cases in the initial proposal
+- "Org Item Body Standard" section appears before Phase 3 in the ultraplan flow
+- No reference to "scope summary" as the only scope field — replaced with full scope boundaries
+- Explicit anti-pattern instruction against shallow-first proposals
