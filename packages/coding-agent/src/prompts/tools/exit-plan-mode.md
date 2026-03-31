@@ -11,7 +11,7 @@ Use when:
 - You **MUST** create the plan as an org item (via `org create`) BEFORE calling this tool
 - You **MUST** provide `title`: final plan name in SCREAMING_SNAKE_CASE (e.g. `AUTH_REFACTOR`)
 - You **MUST** provide `itemId`: the CUSTOM_ID of the PLAN item (e.g. `PLAN-003-auth-refactor`)
-- PLAN body **MUST** include child references via `[[id:...]]` links
+- PLAN body **MUST** include child references via `[[id:…]]` links
 - User sees plan contents when reviewing
 </instruction>
 

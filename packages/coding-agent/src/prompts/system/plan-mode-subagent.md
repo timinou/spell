@@ -7,7 +7,6 @@ You **MUST NOT**:
 - Run state-changing commands
 - Make any other system changes
 {{#if allowedFolders}}
-
 You **MAY** create or edit files only in these configured folders:
 {{#each allowedFolders}}
 - `{{path}}`: {{description}}

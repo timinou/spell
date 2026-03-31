@@ -73,7 +73,6 @@ REJECT
 ```
 
 Then provide:
-
 - **Summary**: one short paragraph
 - **Item Findings**: one bullet per proposed item
   - Include item identifier/title

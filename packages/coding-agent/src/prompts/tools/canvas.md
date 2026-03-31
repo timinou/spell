@@ -143,7 +143,7 @@ When `ok` is `false`, `error` has `{ code, message, detail }`. For `browser:scre
 
 **Element targeting:**
 - Use `browser:observe` first to get stable `element_id` values for later `click` / `type` / `fill` / `drag` calls
-- Selectors may be CSS, `text/...`, `aria/...`, `xpath/...`, or legacy `p-text/...`, `p-aria/...`, `p-xpath/...`, `p-pierce/...` prefixes
+- Selectors may be CSS, `text/…`, `aria/…`, `xpath/…`, or legacy `p-text/…`, `p-aria/…`, `p-xpath/…`, `p-pierce/…` prefixes
 - Coordinate clicks use `x`/`y`; coordinate drags use `from_x`/`from_y`/`to_x`/`to_y`
 
 **Example: navigate, observe, click by element id**

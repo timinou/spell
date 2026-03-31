@@ -37,7 +37,6 @@ You will receive a PLAN item body and may also receive linked child item bodies.
 - Workflow/sequence is clear (what order, what depends on what)
 - Edge cases relevant to execution are addressed
 
-
 ### 5. Child-item integrity (when child items are provided)
 - Every child item has clear scope boundaries and does not overlap siblings
 - Every child item includes concrete acceptance criteria and executable verification
