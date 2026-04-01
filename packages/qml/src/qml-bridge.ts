@@ -61,6 +61,12 @@ export class QmlBridge {
 		// in case it arrives outside a reconnect flow.
 		if (event.type === "state") return;
 
+		// Hotkey and systray events are not tied to a window — leave them for
+		// addListener consumers (for example onHotkeyTriggered/onSystrayActivated).
+		// Do not route them into the window map.
+		if (event.type === "hotkey_triggered" || event.type === "systray_activated" || event.type === "systray_click")
+			return;
+
 		const win = this.#windows.get(event.id);
 		if (!win) {
 			logger.debug("QmlBridge: event for unknown window", { event });
@@ -286,6 +292,48 @@ export class QmlBridge {
 				});
 			}
 		}
+	}
+
+	/**
+	 * Register a global hotkey.
+	 * On Linux this is a no-op (the compositor owns hotkeys).
+	 * On macOS this uses Carbon RegisterEventHotKey.
+	 */
+	async registerHotkey(hotkeyId: string, key: string, modifiers: string[]): Promise<void> {
+		await this.#process.ensure();
+		this.#process.send({ type: "register_hotkey", hotkeyId, key, modifiers });
+	}
+
+	/** Unregister a previously-registered global hotkey. */
+	async unregisterHotkey(hotkeyId: string): Promise<void> {
+		await this.#process.ensure();
+		this.#process.send({ type: "unregister_hotkey", hotkeyId });
+	}
+
+	/**
+	 * Subscribe to hotkey triggers. Returns a disposal function.
+	 * The callback is invoked whenever any registered hotkey fires.
+	 */
+	onHotkeyTriggered(callback: (hotkeyId: string) => void): () => void {
+		return this.#process.addListener(event => {
+			if (event.type === "hotkey_triggered") {
+				callback(event.hotkeyId);
+			}
+		});
+	}
+
+	/** Subscribe to tray icon activation. Returns a disposal function. */
+	onSystrayActivated(callback: () => void): () => void {
+		return this.#process.addListener(event => {
+			if (event.type === "systray_activated") callback();
+		});
+	}
+
+	/** Subscribe to system tray menu clicks. Returns a disposal function. */
+	onSystrayClick(callback: (itemId: string) => void): () => void {
+		return this.#process.addListener(event => {
+			if (event.type === "systray_click") callback(event.itemId);
+		});
 	}
 
 	/** Create a system tray icon. */

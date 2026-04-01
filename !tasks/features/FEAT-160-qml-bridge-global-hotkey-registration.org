@@ -1,0 +1,80 @@
+#+TITLE: QML bridge global hotkey registration
+#+STATE: DONE
+#+SESSION_ID: 14a98d3d254537a9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-23-26-613Z_14a98d3d254537a9.jsonl]]
+#+CUSTOM_ID: FEAT-160-qml-bridge-global-hotkey-registration
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: infra
+#+DEPENDS: PROJ-017-extract-packages-desktop-common-shared-m
+
+* Initial Message
+
+kk my friend, two improvements for my friends using Mac:
+1. Is there a way to register a globally available shortcut or statusbar easily for Mac OS X so that they get the Niri overview thing and can also have somehting similar to my DankMaterialShell list of sessions thing? If you have shared module ideas, propose them, and if you have low-effort high-reward improvements, propose them too (ask me)
+2. same thing here but with the niri overview thing, global shortcut to toggle that equivalent, or ideally when they're in their desktop overview thing in Mac. Look up online.
+
+* Goal
+
+Add global hotkey registration to the QML bridge daemon (=packages/qml/bridge/=) so any connected client can register a system-wide keyboard shortcut that triggers an event. This is cross-platform (Linux + macOS) using Qt/Carbon APIs.
+
+* C++ changes
+
+** New class: =HotkeyManager= (=hotkey.h=, =hotkey.cpp=)
+
+Platform-aware global hotkey registration:
+- macOS: Use Carbon =RegisterEventHotKey()= API (part of =Carbon/Carbon.h=, no extra dependency). The Carbon Events API for global hotkeys works in Qt apps and doesn't require Accessibility permissions — only Input Monitoring on macOS 10.15+ (and the QML daemon is not sandboxed).
+- Linux: Use =xcb= key grab via =QX11Info= or fall back to =XGrabKey= if X11, or skip on Wayland (Niri has its own IPC).
+- Both: Convert modifier+key string pairs into platform-native codes.
+
+Interface:
+#+begin_src cpp
+class HotkeyManager : public QObject {
+    Q_OBJECT
+public:
+    bool registerHotkey(const QString &id, const QString &key, const QStringList &modifiers);
+    void unregisterHotkey(const QString &id);
+    void unregisterAll();
+signals:
+    void hotkeyTriggered(const QString &id);
+};
+#+end_src
+
+** WindowManager dispatch
+
+New commands in the protocol:
+- =register_hotkey=: ={ type: "register_hotkey", id: string, key: string, modifiers: string[] }=
+- =unregister_hotkey=: ={ type: "unregister_hotkey", id: string }=
+
+New event:
+- =hotkey_triggered=: ={ type: "hotkey_triggered", hotkeyId: string }=
+
+** Integration in =windowmanager.cpp=
+- Instantiate =HotkeyManager= lazily (like =SystrayManager=)
+- Route =hotkeyTriggered= signal back to the registering client socket
+
+* TypeScript protocol changes
+
+=packages/qml/src/protocol.ts=:
+- Add =register_hotkey= and =unregister_hotkey= to =BridgeCommand=
+- Add =hotkey_triggered= to =BridgeEvent=
+
+=packages/qml/src/qml-bridge.ts=:
+- Add =registerHotkey(id, key, modifiers)= and =unregisterHotkey(id)= methods
+- Add =onHotkeyTriggered= callback or event emitter
+
+* Key mapping
+
+Use Qt's =QKeySequence= for parsing where possible. For Carbon on macOS, maintain a lookup table from Qt key enum to Carbon virtual keycodes. The modifiers map:
+- =cmd= / =meta= → =cmdKey= (macOS) / =Super= (Linux)
+- =alt= / =opt= → =optionKey= / =Mod1=
+- =ctrl= → =controlKey= / =Control=
+- =shift= → =shiftKey= / =Shift=
+
+* Acceptance
+
+- On macOS: register a hotkey (e.g., Cmd+Opt+Space), press it while QML daemon runs → =hotkey_triggered= event received by client
+- On Linux/X11: register a hotkey, press it → event received
+- On Linux/Wayland: graceful no-op (returns false from register, logs warning)
+- =bun check:ts= passes
+- Hot key does not interfere with system shortcuts

@@ -1,6 +1,6 @@
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentStatusContext, SnapshotContext, TodoPhaseView } from "@oh-my-pi/pi-desktop-common";
+import { buildOverviewSnapshot, deriveAgentStatus, StatusFileWriter } from "@oh-my-pi/pi-desktop-common";
 import type { ImageProtocol, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { clearImagePlacements, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -13,27 +13,6 @@ import type { AgentStatus, TodoItemSnapshot, TodoPhaseSnapshot } from "./types";
 export type { TodoItemSnapshot, TodoPhaseSnapshot };
 
 // ─── Minimal context ──────────────────────────────────────────────────────────
-
-/** Minimal snapshot of a todo task visible to the overview. */
-export interface TodoItemView {
-	id: string;
-	content: string;
-	status: "pending" | "in_progress" | "completed" | "abandoned";
-	blockers?: string[];
-	gateCommit?: boolean;
-	gateArtifact?: string;
-	gateCmd?: string;
-	gateLlm?: string;
-	verifyCmd?: string;
-	orgItemId?: string;
-}
-
-/** Minimal snapshot of a todo phase visible to the overview. */
-export interface TodoPhaseView {
-	id?: string;
-	name: string;
-	tasks: TodoItemView[];
-}
 
 /**
  * Minimal interface that the interactive mode must satisfy to drive the
@@ -108,9 +87,8 @@ export class NiriOverviewController {
 	#unsubscribeSession: (() => void) | null = null;
 	#savedImageProtocol: ImageProtocol | null = null;
 	#destroyed = false;
-	#niriWindowId: number | null = null;
-	#lastWrittenStatus: string | null = null;
-	readonly #statusDir = path.join(os.homedir(), ".spell", "status");
+	#writer = new StatusFileWriter();
+
 	constructor(socketPath: string, context: NiriOverviewContext) {
 		this.#context = context;
 		this.#component = new OverviewComponent(this.#buildSnapshot());
@@ -131,55 +109,36 @@ export class NiriOverviewController {
 		// Fire-and-forget: failures are silent (niri may not be running in tests).
 		void this.#initWindowId();
 	}
+
 	destroy(): void {
 		if (this.#destroyed) return;
 		this.#destroyed = true;
 		this.#stream.destroy();
 		this.#unsubscribeSession?.();
 		this.#hideOverview();
-		if (this.#niriWindowId !== null) {
-			const filePath = path.join(this.#statusDir, `${this.#niriWindowId}.json`);
-			fs.rm(filePath, { force: true }).catch(() => {});
-			this.#niriWindowId = null;
-		}
+		void this.#writer.cleanup();
 	}
 
 	// ── Private ───────────────────────────────────────────────────────────────
 
 	/** One-shot async init: discovers the niri window ID and writes the first status file. */
 	async #initWindowId(): Promise<void> {
-		try {
-			await fs.mkdir(this.#statusDir, { recursive: true });
-		} catch {
-			// ignore — may already exist
-		}
+		await this.#writer.ensureDir();
 		const id = await queryNiriFocusedWindowId();
 		if (id !== null && !this.#destroyed) {
-			this.#niriWindowId = id;
+			this.#writer.setWindowId(id);
 			this.#writeStatusIfChanged();
 		}
 	}
 
 	/** Write status file if status changed since last write. No-op if no window ID. */
 	#writeStatusIfChanged(): void {
-		if (this.#destroyed || this.#niriWindowId === null) return;
+		if (this.#destroyed) return;
 		const status = this.#deriveStatus();
 		const cwd = this.#context.sessionManager.getCwd();
 		const projectName = path.basename(cwd);
 		const sessionTitle = this.#context.sessionManager.getSessionName() ?? "";
-		const dedup = `${status}\0${sessionTitle}`;
-		if (dedup === this.#lastWrittenStatus) return;
-		this.#lastWrittenStatus = dedup;
-		const payload = JSON.stringify({
-			status,
-			windowId: this.#niriWindowId,
-			pid: process.pid,
-			projectName,
-			sessionTitle,
-			updatedAt: Date.now(),
-		});
-		const filePath = path.join(this.#statusDir, `${this.#niriWindowId}.json`);
-		Bun.write(filePath, payload).catch(() => {});
+		this.#writer.writeIfChanged(status, projectName, sessionTitle);
 	}
 
 	#handleNiriEvent(event: object): void {
@@ -249,93 +208,26 @@ export class NiriOverviewController {
 	#buildSnapshot() {
 		const ctx = this.#context;
 		const cwd = ctx.sessionManager.getCwd();
-		const projectName = path.basename(cwd);
-		const sessionTitle = ctx.sessionManager.getSessionName() ?? "";
-		const messageCount = ctx.session.messages.length;
-		const agentStatus = this.#deriveStatus();
-
-		// Build a flat task-id lookup across all phases for blocker resolution.
-		const allTasks = ctx.todoPhases.flatMap(p => p.tasks);
-		const taskById = new Map(allTasks.map(t => [t.id, t]));
-
-		const clearedCounts = ctx.getClearedCompletedCounts?.() ?? new Map();
-		const activePhaseIds = new Set<string>();
-
-		const todoPhases: TodoPhaseSnapshot[] = ctx.todoPhases.map(p => {
-			if (p.id) activePhaseIds.add(p.id);
-			const clearedForPhase = p.id ? (clearedCounts.get(p.id)?.count ?? 0) : 0;
-			const inDataCompleted = p.tasks.filter(t => t.status === "completed" || t.status === "abandoned").length;
-
-			return {
-				name: p.name,
-				doneCount: inDataCompleted + clearedForPhase,
-				tasks: p.tasks.map(t => {
-					const blockerIds = t.blockers ?? [];
-					const blocked =
-						blockerIds.length > 0 &&
-						t.status !== "completed" &&
-						t.status !== "abandoned" &&
-						blockerIds.some(bid => {
-							const dep = taskById.get(bid);
-							return !!dep && dep.status !== "completed" && dep.status !== "abandoned";
-						});
-
-					const blockerLabels = blockerIds
-						.filter(bid => {
-							const dep = taskById.get(bid);
-							return !!dep && dep.status !== "completed" && dep.status !== "abandoned";
-						})
-						.map(bid => taskById.get(bid)?.content)
-						.filter((c): c is string => c !== undefined);
-
-					const gateBadges: string[] = [];
-					if (t.gateCommit) gateBadges.push("commit");
-					if (t.gateCmd) gateBadges.push("cmd");
-					if (t.gateArtifact) gateBadges.push("artifact");
-					if (t.gateLlm) gateBadges.push("llm");
-					if (t.verifyCmd) gateBadges.push("verify");
-
-					return {
-						id: t.id,
-						content: t.content,
-						status: t.status,
-						blocked,
-						blockerLabels: blockerLabels.length > 0 ? blockerLabels : undefined,
-						gateBadges: gateBadges.length > 0 ? gateBadges : undefined,
-						orgItemId: t.orgItemId,
-					};
-				}),
-			};
-		});
-
-		// Add phantom phases for fully-cleared phases no longer in active data.
-		for (const [phaseId, { name, count }] of clearedCounts) {
-			if (!activePhaseIds.has(phaseId)) {
-				todoPhases.push({ name, tasks: [], doneCount: count });
-			}
-		}
-
-		return { projectName, sessionTitle, messageCount, todoPhases, agentStatus };
+		return buildOverviewSnapshot({
+			projectName: path.basename(cwd),
+			sessionTitle: ctx.sessionManager.getSessionName() ?? "",
+			messageCount: ctx.session.messages.length,
+			agentStatus: this.#deriveStatus(),
+			todoPhases: ctx.todoPhases,
+			clearedCompletedCounts: ctx.getClearedCompletedCounts?.(),
+		} satisfies SnapshotContext);
 	}
 
 	#deriveStatus(): AgentStatus {
 		const ctx = this.#context;
-		if (ctx.session.state.error) return "error";
-		// Plan approval takes highest priority after errors: the agent is stopped
-		// and waiting for the user to approve/reject the plan.
-		if (ctx.isPendingApproval) return "pending_approval";
-		// Hook input pauses LLM mid-run for a user question (ask tool, etc.).
-		if (ctx.isAwaitingHookInput) return ctx.isUserPaused ? "user_paused" : "needs_input";
-		// Streaming beats onInputCallback: the session is actively running.
-		if (ctx.session.isStreaming) return "running";
-		if (ctx.onInputCallback !== undefined) {
-			// If every todo is resolved the agent is done, not waiting for new work.
-			const allDone =
-				ctx.todoPhases.length > 0 &&
-				ctx.todoPhases.every(p => p.tasks.every(t => t.status === "completed" || t.status === "abandoned"));
-			if (allDone) return "completed";
-			return ctx.isUserPaused ? "user_paused" : "needs_input";
-		}
-		return "idle";
+		return deriveAgentStatus({
+			error: ctx.session.state.error,
+			isPendingApproval: ctx.isPendingApproval,
+			isAwaitingHookInput: ctx.isAwaitingHookInput,
+			isUserPaused: ctx.isUserPaused,
+			isStreaming: ctx.session.isStreaming,
+			hasInputCallback: ctx.onInputCallback !== undefined,
+			todoPhases: ctx.todoPhases,
+		} satisfies AgentStatusContext);
 	}
 }

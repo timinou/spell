@@ -1,0 +1,88 @@
+#+TITLE: macOS overview overlay via global hotkey
+#+STATE: DONE
+#+SESSION_ID: 14a98d3d254537a9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-23-26-613Z_14a98d3d254537a9.jsonl]]
+#+CUSTOM_ID: FEAT-162-macos-overview-overlay-via-global-hotkey
+#+EFFORT: 2h30m
+#+PRIORITY: #A
+#+LAYER: platform
+#+DEPENDS: FEAT-160-qml-bridge-global-hotkey-registration PROJ-017-extract-packages-desktop-common-shared-m
+
+* Initial Message
+
+kk my friend, two improvements for my friends using Mac:
+1. Is there a way to register a globally available shortcut or statusbar easily for Mac OS X so that they get the Niri overview thing and can also have somehting similar to my DankMaterialShell list of sessions thing? If you have shared module ideas, propose them, and if you have low-effort high-reward improvements, propose them too (ask me)
+2. same thing here but with the niri overview thing, global shortcut to toggle that equivalent, or ideally when they're in their desktop overview thing in Mac. Look up online.
+
+* Goal
+
+A QML overlay window (equivalent of the Niri overview) shown via global hotkey on macOS. Displays agent status, todo phases, project info — same information as the terminal overlay, but in a native floating window.
+
+* Architecture
+
+** Global hotkey registration
+
+Uses the =register_hotkey= command from [[id:FEAT-160-qml-bridge-global-hotkey-registration]]. Default hotkey: =Cmd+Opt+O= (configurable via =~/.spell/config.json=).
+
+Registration happens at daemon startup (or when the macOS integration service starts). On hotkey trigger:
+1. If no overlay window exists → spawn it (=QmlBridge.launch()=)
+2. If overlay exists and visible → close it
+3. If overlay exists but hidden → re-show and refresh data
+
+** QML overlay window
+
+New file: =packages/macos/qml/OverviewOverlay.qml=
+
+A fullscreen semi-transparent overlay (=Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool=):
+- Semi-transparent dark background (=color: "#E0181825"= — Catppuccin base with alpha)
+- Centered content panel showing:
+  - Large status badge with background color (same palette as terminal overlay)
+  - Project name + session title
+  - Message count
+  - Todo phases with task list:
+    - Status icons (●/◐/○/✗) for each task
+    - Blocked indicator with blocker labels
+    - Gate badges (commit, cmd, artifact, llm)
+    - Org item references
+    - Done count per phase
+- Click-outside or Escape → close overlay
+- Smooth fade-in/fade-out animation
+
+** Data flow
+
+The overlay receives data via =bridge.send()= from the macOS integration service:
+1. On hotkey trigger, service calls =buildOverviewSnapshot()= (from desktop-common) with latest context
+2. Sends snapshot as message to the overlay QML window
+3. QML window renders from the snapshot object
+4. If the overlay is already open and session state changes, service pushes updated snapshots
+
+** Multi-session handling
+
+Unlike the terminal overlay (which shows the current session), the macOS overlay shows ALL active sessions from status files. Each session gets its own card/section in the overlay.
+
+For single-session focus: if the user triggers the hotkey while a specific terminal is focused, highlight that session's card. Use =NSWorkspace= or =CGWindowListCopyWindowInfo= to detect the focused app/PID and match to status files.
+
+** Configuration
+
+=~/.spell/config.json= (or create if absent):
+#+begin_src json
+{
+  "macOS": {
+    "overviewHotkey": {
+      "key": "O",
+      "modifiers": ["cmd", "alt"]
+    }
+  }
+}
+#+end_src
+
+* Acceptance
+
+- On macOS: press Cmd+Opt+O → overlay appears showing session overview
+- Press again → overlay dismisses
+- Escape → overlay dismisses
+- Multiple sessions running → all shown with their status
+- Todo phases render with blocked state, gate badges
+- Status colors match terminal overlay (Catppuccin palette)
+- Hotkey works system-wide (even when terminal is not focused)
+- =bun check:ts= passes

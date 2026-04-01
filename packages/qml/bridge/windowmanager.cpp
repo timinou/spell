@@ -128,6 +128,26 @@ void WindowManager::dispatch(QLocalSocket *client, const QByteArray &jsonLine) {
             m_systray->deleteLater();
             m_systray = nullptr;
         }
+    } else if (type == "register_hotkey") {
+        if (!m_hotkey) {
+            m_hotkey = new HotkeyManager(this);
+            connect(m_hotkey, &HotkeyManager::hotkeyTriggered, this, [this, client](const QString &hotkeyId) {
+                QJsonObject evt;
+                evt["type"] = "hotkey_triggered";
+                evt["id"] = "__hotkey__";
+                evt["hotkeyId"] = hotkeyId;
+                writeEvent(client, evt);
+            });
+        }
+        const QString hotkeyId = msg["hotkeyId"].toString();
+        const QString key = msg["key"].toString();
+        const QJsonArray modsArr = msg["modifiers"].toArray();
+        QStringList modifiers;
+        for (const QJsonValue &v : modsArr) modifiers.append(v.toString());
+        m_hotkey->registerHotkey(hotkeyId, key, modifiers);
+    } else if (type == "unregister_hotkey") {
+        if (m_hotkey)
+            m_hotkey->unregisterHotkey(msg["hotkeyId"].toString());
     }
 }
 

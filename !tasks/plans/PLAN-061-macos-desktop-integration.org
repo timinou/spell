@@ -1,0 +1,105 @@
+#+TITLE: macOS Desktop Integration
+#+STATE: DONE
+#+SESSION_ID: 14a98d3d254537a9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-23-26-613Z_14a98d3d254537a9.jsonl]]
+#+CUSTOM_ID: PLAN-061-macos-desktop-integration
+
+
+* Initial Message
+
+kk my friend, two improvements for my friends using Mac:
+1. Is there a way to register a globally available shortcut or statusbar easily for Mac OS X so that they get the Niri overview thing and can also have somehting similar to my DankMaterialShell list of sessions thing? If you have shared module ideas, propose them, and if you have low-effort high-reward improvements, propose them too (ask me)
+2. same thing here but with the niri overview thing, global shortcut to toggle that equivalent, or ideally when they're in their desktop overview thing in Mac. Look up online.
+
+* Context
+
+** Problem
+
+Spell's desktop integration is Linux-only. The Niri overview (full-screen overlay on compositor overview open) and DankMaterialShell session dashboard (taskbar widget with session list, toasts, click-to-focus) have no macOS equivalents. Mac users get nothing — no session dashboard, no overview, no global hotkey to check agent status.
+
+** Current state
+
+- =packages/niri/= implements the terminal overlay and status file writer. Tightly coupled to Niri compositor IPC (=NIRI_SOCKET=).
+- Status files at =~/.spell/status/<windowId>.json= are the cross-platform data layer — already contain =status=, =windowId=, =pid=, =projectName=, =sessionTitle=, =updatedAt=.
+- The QML bridge daemon (=packages/qml/bridge/=) is cross-platform (Qt6 on macOS), already has =QSystemTrayIcon= support (menu bar icon on macOS), and socket-based IPC.
+- No global hotkey support exists in the QML bridge.
+- No macOS-specific integration code exists.
+
+** Approach
+
+Three pillars:
+
+1. *Shared module* (=packages/desktop-common/=): Extract platform-agnostic logic (status types, derivation, snapshot building, status file I/O, color palette) from niri so both Linux and macOS integrations share one source of truth.
+
+2. *Menu bar session dashboard*: Use existing QSystemTrayIcon (maps to NSStatusItem on macOS) for a menu bar icon. On click, open a QML popover window showing all active sessions grouped by urgency, with click-to-focus (via =osascript=). macOS notifications on needs_input/pending_approval transitions.
+
+3. *Overview overlay*: Add global hotkey registration to the QML bridge (Carbon =RegisterEventHotKey= on macOS). Default Cmd+Opt+O toggles a QML overlay showing agent status, todo phases, project info — same data as the terminal overlay but in a native floating window. For bonus Mission Control integration, ship a Hammerspoon Lua script (=com.apple.expose.awake= notification) with a =spell setup hammerspoon= auto-install command.
+
+** Key decisions
+
+1. *Qt-first*: Global hotkey and systray use Qt/Carbon APIs. No Electron, no separate Swift binary. The QML daemon is already running; adding hotkey registration is incremental.
+2. *Hammerspoon is optional bonus*: Primary experience works without Hammerspoon. For users who have it, Mission Control detection comes free.
+3. *Status files stay*: File-based IPC at 2s poll is sufficient for dashboard refresh. No new socket protocol for status.
+4. *osascript for focus*: =System Events= scripting brings terminal windows to front by PID. Works with any terminal app (iTerm2, Ghostty, Terminal.app, Kitty).
+5. *Shared desktop-common package*: Avoids duplicating types and logic. Both niri and macOS packages depend on it.
+
+* Verification
+
+** Type checks
+- =bun check:ts= passes after all changes
+
+** Unit tests
+- =cd packages/niri && bun test= — existing tests pass (no behavior regression)
+- =cd packages/desktop-common && bun test= — shared function tests pass
+- =cd packages/macos && bun test= — new tests for session service, focus, config
+
+** Manual verification (on macOS)
+- Run =spell= → menu bar icon appears
+- Click menu bar icon → session dashboard popover opens with active sessions
+- Start a second spell session → dashboard updates within 2s showing both
+- Trigger needs_input → macOS notification appears, icon changes color
+- Click session row → terminal with that session focuses
+- Press Cmd+Opt+O → overview overlay appears
+- Press Cmd+Opt+O again → overlay dismisses
+- =spell setup hammerspoon= → installs Lua script, prints confirmation
+- Open Mission Control (F3) with Hammerspoon active → overlay appears
+
+** Manual verification (on Linux)
+- =cd packages/niri && bun test= passes
+- Niri overview behavior unchanged
+- Status file format unchanged
+
+* Execution Manifest
+
+** Wave 1: Foundation (no platform code yet)
+- [[id:PROJ-017-extract-packages-desktop-common-shared-m]] — Extract shared module (2h)
+
+** Wave 2: Platform migration + new capabilities (parallel)
+- [[id:FEAT-164-refactor-packages-niri-to-use-desktop-co]] — Refactor niri to use desktop-common (1h) [depends: PROJ-017]
+- [[id:FEAT-160-qml-bridge-global-hotkey-registration]] — QML bridge global hotkey (2h) [depends: PROJ-017]
+
+** Wave 3: macOS features (parallel, both depend on Wave 1+2)
+- [[id:FEAT-161-macos-menu-bar-session-dashboard]] — Menu bar session dashboard (3h) [depends: PROJ-017]
+- [[id:FEAT-162-macos-overview-overlay-via-global-hotkey]] — Overview overlay (2h30m) [depends: FEAT-160, PROJ-017]
+
+** Wave 4: Bonus integration
+- [[id:FEAT-163-hammerspoon-integration-and-auto-setup-f]] — Hammerspoon integration (1h30m) [depends: FEAT-161, FEAT-162]
+
+Total estimated effort: ~12h
+
+
+** Completion [2026-04-01]
+*** Verification
+- `bun check:ts` → passed.
+- `qmllint packages/macos/qml/SessionDashboard.qml packages/macos/qml/OverviewOverlay.qml` → passed.
+- `bun test` in `packages/desktop-common` → 20 pass, 0 fail.
+- `bun test` in `packages/niri` → 71 pass, 0 fail.
+- `bun test` in `packages/macos` → 6 pass, 0 fail.
+- `bun packages/coding-agent/src/cli.ts setup hammerspoon --check` on this Linux host → exited non-zero with expected install hint: `Hammerspoon not found. Install it first: brew install --cask hammerspoon`.
+
+*** Artifacts
+- macOS manual verification handoff for Reda: [[file:!tasks/plans/plan-artifacts/PLAN-061-macos-desktop-integration/for-reda.org]]
+
+*** Deviations
+- macOS-specific UI/manual verification was not executed in this Linux environment. Per user instruction, the verification checklist was handed off in [[file:!tasks/plans/plan-artifacts/PLAN-061-macos-desktop-integration/for-reda.org]].
+- Hammerspoon integration uses the configured Spell overview hotkey via `hs.eventtap.keyStroke(...)` instead of bridge socket IPC. This preserves the intended user-facing behavior (Mission Control triggers the overview) without requiring a daemon-global message channel.

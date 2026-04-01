@@ -66,7 +66,9 @@ export type BridgeCommand =
 				separator?: boolean;
 			}>;
 	  }
-	| { type: "destroy_systray" };
+	| { type: "destroy_systray" }
+	| { type: "register_hotkey"; hotkeyId: string; key: string; modifiers: string[] }
+	| { type: "unregister_hotkey"; hotkeyId: string };
 
 /** Events emitted by bridge process → spell (stdout) */
 export type BridgeEvent =
@@ -112,7 +114,8 @@ export type BridgeEvent =
 	  }
 	| { type: "state"; windows: Array<{ id: string; path: string; state: string; armedTools?: string[] }> }
 	| { type: "systray_click"; id: "__systray__"; itemId: string }
-	| { type: "systray_activated"; id: "__systray__" };
+	| { type: "systray_activated"; id: "__systray__" }
+	| { type: "hotkey_triggered"; id: "__hotkey__"; hotkeyId: string };
 
 /** State of a managed window */
 export type WindowState = "loading" | "ready" | "closed" | "error";

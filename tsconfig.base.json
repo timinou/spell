@@ -47,6 +47,10 @@
 			"@oh-my-pi/pi-emacs/*": ["./packages/emacs/src/*"],
 			"@oh-my-pi/pi-gateway": ["./packages/gateway/src/index.ts"],
 			"@oh-my-pi/pi-gateway/*": ["./packages/gateway/src/*"],
+			"@oh-my-pi/pi-desktop-common": ["./packages/desktop-common/src/index.ts"],
+			"@oh-my-pi/pi-desktop-common/*": ["./packages/desktop-common/src/*"],
+			"@oh-my-pi/pi-macos": ["./packages/macos/src/index.ts"],
+			"@oh-my-pi/pi-macos/*": ["./packages/macos/src/*"],
 			"@sinclair/typebox": ["./node_modules/@sinclair/typebox/build/esm/index.d.mts"],
 			"@sinclair/typebox/*": ["./node_modules/@sinclair/typebox/build/esm/*"]
 		}

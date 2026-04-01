@@ -3,13 +3,15 @@
  *
  * Handles `spell setup <component>` to install dependencies for optional features.
  */
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { APP_NAME, getPythonEnvDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import chalk from "chalk";
+import spellHammerspoonLua from "../../../macos/hammerspoon/spell.lua" with { type: "text" };
 import { theme } from "../modes/theme/theme";
 
-export type SetupComponent = "python" | "stt";
+export type SetupComponent = "python" | "stt" | "hammerspoon";
 
 export interface SetupCommandArgs {
 	component: SetupComponent;
@@ -19,7 +21,7 @@ export interface SetupCommandArgs {
 	};
 }
 
-const VALID_COMPONENTS: SetupComponent[] = ["python", "stt"];
+const VALID_COMPONENTS: SetupComponent[] = ["python", "stt", "hammerspoon"];
 
 const PYTHON_PACKAGES = ["jupyter_kernel_gateway", "ipykernel"];
 const MANAGED_PYTHON_ENV = getPythonEnvDir();
@@ -209,6 +211,9 @@ export async function runSetupCommand(cmd: SetupCommandArgs): Promise<void> {
 		case "stt":
 			await handleSttSetup(cmd.flags);
 			break;
+		case "hammerspoon":
+			await handleHammerspoonSetup(cmd.flags);
+			break;
 	}
 }
 
@@ -349,6 +354,59 @@ async function handleSttSetup(flags: { json?: boolean; check?: boolean }): Promi
 	}
 }
 
+const HAMMERSPOON_INIT_SNIPPET = 'local spell = require("spell")\nspell.watchMissionControl()';
+
+function getHammerspoonRoot(): string {
+	return path.join(process.env.HOME ?? path.join("/", "tmp"), ".hammerspoon");
+}
+
+async function handleHammerspoonSetup(flags: { check?: boolean; json?: boolean }): Promise<void> {
+	const hsPath = Bun.which("hs");
+	const root = getHammerspoonRoot();
+	const initPath = path.join(root, "init.lua");
+	const scriptPath = path.join(root, "spell.lua");
+	const available = Boolean(hsPath || (await Bun.file(root).exists()));
+
+	if (flags.json) {
+		process.stdout.write(
+			`${JSON.stringify({ available, hsPath: hsPath ?? null, root, initPath, scriptPath }, null, 2)}\n`,
+		);
+		if (!available) process.exit(1);
+		return;
+	}
+
+	if (!available) {
+		process.stderr.write("Hammerspoon not found. Install it first: brew install --cask hammerspoon\n");
+		process.exit(1);
+	}
+
+	if (flags.check) {
+		process.stdout.write("Hammerspoon is installed.\n");
+		return;
+	}
+
+	await fs.mkdir(root, { recursive: true });
+	await Bun.write(scriptPath, spellHammerspoonLua);
+
+	let initText = "";
+	try {
+		initText = await Bun.file(initPath).text();
+	} catch {}
+
+	if (!initText.includes(HAMMERSPOON_INIT_SNIPPET)) {
+		const prefix = initText.trim().length > 0 && !initText.endsWith("\n") ? "\n\n" : "";
+		await Bun.write(initPath, `${initText}${prefix}${HAMMERSPOON_INIT_SNIPPET}\n`);
+	}
+
+	if (hsPath) {
+		await $`${hsPath} -c ${"hs.reload()"}`.quiet().nothrow();
+	}
+
+	process.stdout.write("Hammerspoon integration installed.\n");
+	process.stdout.write("Mission Control detection: enabled\n");
+	process.stdout.write("Spell overview will appear when you open Mission Control.\n");
+}
+
 /**
  * Print setup command help.
  */
@@ -359,18 +417,21 @@ ${chalk.bold("Usage:")}
   ${APP_NAME} setup <component> [options]
 
 ${chalk.bold("Components:")}
-  python    Install Jupyter kernel dependencies for Python code execution
-  stt       Install speech-to-text dependencies (openai-whisper, recording tools)
-            Packages: ${PYTHON_PACKAGES.join(", ")}
+  python       Install Jupyter kernel dependencies for Python code execution
+  stt          Install speech-to-text dependencies (openai-whisper, recording tools)
+               Packages: ${PYTHON_PACKAGES.join(", ")}
+  hammerspoon  Install Mission Control integration for the macOS overview hotkey
 
 ${chalk.bold("Options:")}
   -c, --check   Check if dependencies are installed without installing
   --json        Output status as JSON
 
 ${chalk.bold("Examples:")}
-  ${APP_NAME} setup python           Install Python execution dependencies
-  ${APP_NAME} setup stt              Install speech-to-text dependencies
-  ${APP_NAME} setup stt --check      Check if STT dependencies are available
-  ${APP_NAME} setup python --check   Check if Python execution is available
+  ${APP_NAME} setup python              Install Python execution dependencies
+  ${APP_NAME} setup stt                 Install speech-to-text dependencies
+  ${APP_NAME} setup hammerspoon         Install Mission Control integration
+  ${APP_NAME} setup stt --check         Check if STT dependencies are available
+  ${APP_NAME} setup python --check      Check if Python execution is available
+  ${APP_NAME} setup hammerspoon --check Check if Hammerspoon is available
 `);
 }

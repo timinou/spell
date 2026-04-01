@@ -13,8 +13,14 @@ qt_add_executable(spell-qml-bridge
     bridge/windowmanager.cpp
     bridge/socketserver.cpp
     bridge/systray.cpp
+    bridge/hotkey.cpp
+    bridge/hotkey.h
 )
 
 target_link_libraries(spell-qml-bridge PRIVATE Qt6::Quick Qt6::Network Qt6::WebEngineQuick Qt6::Widgets)
+
+if(APPLE)
+    target_link_libraries(spell-qml-bridge PRIVATE "-framework Carbon")
+endif()
 
 install(TARGETS spell-qml-bridge DESTINATION .)

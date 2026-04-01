@@ -1,0 +1,76 @@
+#+TITLE: Extract packagesdesktop-common shared module
+#+STATE: DONE
+#+SESSION_ID: 14a98d3d254537a9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-23-26-613Z_14a98d3d254537a9.jsonl]]
+#+CUSTOM_ID: PROJ-017-extract-packages-desktop-common-shared-m
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: core
+
+* Initial Message
+
+kk my friend, two improvements for my friends using Mac:
+1. Is there a way to register a globally available shortcut or statusbar easily for Mac OS X so that they get the Niri overview thing and can also have somehting similar to my DankMaterialShell list of sessions thing? If you have shared module ideas, propose them, and if you have low-effort high-reward improvements, propose them too (ask me)
+2. same thing here but with the niri overview thing, global shortcut to toggle that equivalent, or ideally when they're in their desktop overview thing in Mac. Look up online.
+
+* Goal
+
+Extract platform-agnostic desktop integration logic from =packages/niri/= into a new =packages/desktop-common/= package so both niri (Linux) and macOS packages can share it without duplication.
+
+* What to extract
+
+** Status file I/O
+- =StatusFileWriter= class: writes ={ status, windowId, pid, projectName, sessionTitle, updatedAt }= JSON to =~/.spell/status/<id>.json=
+- =StatusFileReader= class: polls =~/.spell/status/= directory, parses status files, detects stale entries (PID check or mtime threshold), emits session list
+- =StatusDir= constant: =path.join(os.homedir(), ".spell", "status")=
+- Status file types: =SessionStatusFile= interface
+
+** Agent status derivation
+- =AgentStatus= type (idle, running, needs_input, user_paused, error, completed, pending_approval)
+- =deriveAgentStatus()= pure function extracted from =NiriOverviewController.#deriveStatus()=
+- =AgentContext= interface (the minimal state needed to derive status)
+
+** Snapshot building
+- =OverviewSnapshot= and its child types (=TodoItemSnapshot=, =TodoPhaseSnapshot=)
+- =buildOverviewSnapshot()= pure function extracted from =NiriOverviewController.#buildSnapshot()=
+- =TodoItemView=, =TodoPhaseView= — the input types from the context
+
+** Status colors (platform-neutral)
+- =STATUS_COLORS= map but as hex values (not ANSI escapes)
+- =StatusColorPalette= type: =Record<AgentStatus, { bg: string; fg: string; label: string }>=
+- ANSI escape conversion stays in niri package as a thin wrapper
+- QML/HTML conversion available for macOS QML popover
+
+** Focus-window abstraction
+- =FocusWindowFn= type: =(windowId: number | string) => Promise<void>=
+- Platform implementations live in their respective packages (niri uses IPC, macOS uses =osascript=)
+
+* Package structure
+
+#+begin_src
+packages/desktop-common/
+  package.json          @oh-my-pi/pi-desktop-common
+  tsconfig.json
+  src/
+    index.ts            barrel exports
+    types.ts            AgentStatus, SessionStatusFile, OverviewSnapshot, TodoItemSnapshot, TodoPhaseSnapshot, TodoItemView, TodoPhaseView
+    status-file.ts      StatusFileWriter, StatusFileReader
+    status-derive.ts    deriveAgentStatus(), AgentContext
+    snapshot.ts         buildOverviewSnapshot()
+    colors.ts           STATUS_COLORS (hex), StatusColorPalette
+#+end_src
+
+* Migration
+
+- =packages/niri/= depends on =@oh-my-pi/pi-desktop-common=, imports shared types and functions
+- =NiriOverviewController= delegates to =StatusFileWriter= for file writes, =deriveAgentStatus()= for status, =buildOverviewSnapshot()= for snapshots
+- =overview-component.ts= wraps hex colors into ANSI escapes
+- =packages/coding-agent/= import paths for types (=TodoItemView=, =TodoPhaseView=) update to common or stay re-exported from niri
+
+* Acceptance
+
+- =bun check:ts= passes
+- =cd packages/niri && bun test= passes (no behavior change)
+- =packages/desktop-common/src/index.ts= exports all shared types and functions
+- No duplicated type definitions between niri and desktop-common
+- =packages/coding-agent/= compiles with updated imports

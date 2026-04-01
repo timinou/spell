@@ -1,0 +1,64 @@
+* macOS Verification Handoff for Reda
+
+These checks require a real macOS machine with Qt/QML display access and Hammerspoon installed for the final section.
+
+** Preconditions
+- Worktree includes plan changes for PLAN-061-macos-desktop-integration
+- =packages/qml= bridge binary built if needed: =bun --cwd=packages/qml run build:bridge=
+- A graphical desktop session is active
+- For Hammerspoon checks: Hammerspoon installed and launchable
+
+** Command checks
+1. Run type check:
+   #+begin_src bash
+   bun check:ts
+   #+end_src
+2. Run focused package tests:
+   #+begin_src bash
+   bun test --cwd packages/desktop-common
+   bun test --cwd packages/niri
+   bun test --cwd packages/macos
+   #+end_src
+3. Run setup command check:
+   #+begin_src bash
+   bun packages/coding-agent/src/cli.ts setup hammerspoon --check
+   #+end_src
+4. Install Hammerspoon integration:
+   #+begin_src bash
+   bun packages/coding-agent/src/cli.ts setup hammerspoon
+   #+end_src
+
+** Manual menu bar verification
+1. Start Spell with the macOS desktop integration path active.
+2. Confirm a Spell menu bar item appears.
+3. Click the menu bar item.
+4. Verify the session dashboard popover opens.
+5. Start a second Spell session.
+6. Verify the dashboard updates within 2 seconds and shows both sessions.
+7. Trigger a =needs_input= or =pending_approval= state.
+8. Verify a macOS notification appears once for that transition.
+9. Click a session row in the dashboard.
+10. Verify the owning terminal app/window is focused.
+
+** Manual overview verification
+1. Press =Cmd+Opt+O=.
+2. Verify the overview overlay appears.
+3. Press =Cmd+Opt+O= again.
+4. Verify the overlay dismisses.
+5. Re-open the overlay and press =Escape=.
+6. Verify the overlay dismisses.
+7. With multiple sessions active, verify they all appear in the overlay.
+
+** Hammerspoon verification
+1. Run =spell setup hammerspoon= if not already installed.
+2. Reload Hammerspoon if needed.
+3. Open Mission Control (F3/swipe up).
+4. Verify Spell overview appears via the configured hotkey.
+5. Run =require("spell").toggleOverview()= from Hammerspoon console if needed.
+6. Verify overlay toggle still works.
+
+** Evidence to capture
+- Screenshot of menu bar dashboard open
+- Screenshot of overview overlay open
+- Command output for =spell setup hammerspoon=
+- Notes on any divergence from expected behavior

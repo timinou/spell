@@ -1,0 +1,125 @@
+#+TITLE: Hammerspoon integration and auto-setup for macOS
+#+STATE: DONE
+#+SESSION_ID: 14a98d3d254537a9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-23-26-613Z_14a98d3d254537a9.jsonl]]
+#+CUSTOM_ID: FEAT-163-hammerspoon-integration-and-auto-setup-f
+#+EFFORT: 1h30m
+#+PRIORITY: #B
+#+LAYER: platform
+#+DEPENDS: FEAT-161-macos-menu-bar-session-dashboard FEAT-162-macos-overview-overlay-via-global-hotkey
+
+* Initial Message
+
+kk my friend, two improvements for my friends using Mac:
+1. Is there a way to register a globally available shortcut or statusbar easily for Mac OS X so that they get the Niri overview thing and can also have somehting similar to my DankMaterialShell list of sessions thing? If you have shared module ideas, propose them, and if you have low-effort high-reward improvements, propose them too (ask me)
+2. same thing here but with the niri overview thing, global shortcut to toggle that equivalent, or ideally when they're in their desktop overview thing in Mac. Look up online.
+
+* Goal
+
+For macOS users with Hammerspoon installed, provide bonus integration: Mission Control detection (shows overlay when Expose opens) and easy one-command setup. Make it zero-friction.
+
+* Auto-detection
+
+On macOS daemon startup, check if Hammerspoon is available:
+#+begin_src typescript
+const hammerspoonAvailable = Bun.which("hs") !== null
+  || await Bun.file(path.join(os.homedir(), ".hammerspoon/init.lua")).exists().catch(() => false);
+#+end_src
+
+If detected, offer to install the Spell Hammerspoon integration (or auto-install if already configured).
+
+* Hammerspoon Lua script
+
+Ship a Lua script at =packages/macos/hammerspoon/spell.lua=:
+
+#+begin_src lua
+-- Spell integration for Hammerspoon
+-- Communicates with the spell-qml-bridge daemon via Unix socket
+
+local spell = {}
+
+-- Socket path (matches QmlProcess.socketPath())
+local function socketPath()
+  local xdg = os.getenv("XDG_RUNTIME_DIR")
+  if xdg then return xdg .. "/spell-qml-bridge.sock" end
+  local uid = hs.execute("id -u"):gsub("%s+", "")
+  return "/tmp/spell-qml-bridge-" .. uid .. ".sock"
+end
+
+-- Send a JSON command to the daemon
+local function sendCommand(cmd)
+  local socket = hs.socket.new()
+  socket:connect(socketPath(), function()
+    local json = hs.json.encode(cmd) .. "
+"
+    socket:write(json, function() socket:disconnect() end)
+  end)
+end
+
+-- Mission Control detection using undocumented CoreDock notification
+-- "com.apple.expose.awake" fires when Expose/Mission Control opens
+-- "com.apple.expose.front.awake" fires when front-app Expose opens
+spell.missionControlWatcher = nil
+
+function spell.watchMissionControl()
+  -- Use hs.distributednotifications (wraps CFNotificationCenter)
+  spell.missionControlWatcher = hs.distributednotifications.new(function(name, object, userInfo)
+    if name == "com.apple.expose.awake" then
+      sendCommand({ type = "message", id = "__macos_integration__", payload = { action = "mission_control_opened" }})
+    end
+  end, "com.apple.expose.awake")
+  spell.missionControlWatcher:start()
+end
+
+function spell.stopWatchingMissionControl()
+  if spell.missionControlWatcher then
+    spell.missionControlWatcher:stop()
+    spell.missionControlWatcher = nil
+  end
+end
+
+-- Toggle overview via IPC
+function spell.toggleOverview()
+  sendCommand({ type = "message", id = "__macos_integration__", payload = { action = "toggle_overview" }})
+end
+
+return spell
+#+end_src
+
+User adds to their =~/.hammerspoon/init.lua=:
+#+begin_src lua
+local spell = require("spell")
+spell.watchMissionControl()
+#+end_src
+
+* CLI setup command
+
+=spell setup hammerspoon= command:
+
+1. Check if Hammerspoon is installed (=hs= binary or =~/.hammerspoon/= exists)
+2. Copy =spell.lua= to =~/.hammerspoon/Spoons/Spell.spoon/init.lua= (or =~/.hammerspoon/spell.lua=)
+3. Check if =~/.hammerspoon/init.lua= already sources it
+4. If not, append: =local spell = require("spell"); spell.watchMissionControl()=
+5. Trigger Hammerspoon reload: =hs -c "hs.reload()"=
+
+Print status:
+#+begin_src
+Hammerspoon integration installed.
+Mission Control detection: enabled
+Spell overview will appear when you open Mission Control.
+#+end_src
+
+* macOS integration service handler
+
+In =packages/macos/src/index.ts=, handle =mission_control_opened= messages from the Hammerspoon integration:
+- If the overview is not showing → show it
+- If already showing → do nothing (Mission Control closing will dismiss via timeout or user action)
+
+* Acceptance
+
+- =spell setup hammerspoon= installs the Lua script and configures init.lua
+- Open Mission Control on macOS (F3 or swipe up) → spell overview overlay appears
+- Close Mission Control → overlay dismisses (or auto-dismisses after 10s)
+- Running =spell setup hammerspoon= twice is idempotent
+- Without Hammerspoon installed: command prints a helpful install message (=brew install hammerspoon=)
+- =bun check:ts= passes

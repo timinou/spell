@@ -1,67 +1,35 @@
+import { STATUS_COLOR_PALETTE } from "@oh-my-pi/pi-desktop-common";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { applyBackgroundToLine, padding, sliceByColumn, visibleWidth } from "@oh-my-pi/pi-tui";
 import type { AgentStatus, OverviewSnapshot, TodoItemSnapshot, TodoPhaseSnapshot } from "./types";
 
 // ─── Color tables ────────────────────────────────────────────────────────────
 
-// ANSI truecolor escape for background and foreground. These are deliberately
-// independent of the coding-agent Theme singleton so the niri package stays
-// free of that dependency. Colors were chosen to match the intent: we use
-// Catppuccin-inspired tones that work in both dark/light contexts.
+// Convert STATUS_COLOR_PALETTE hex entries to ANSI truecolor escape codes.
+// Keeps this package free of any theme singleton while staying in sync with
+// the canonical palette defined in desktop-common.
+function hexToAnsiRgb(hex: string): string {
+	const r = parseInt(hex.slice(1, 3), 16);
+	const g = parseInt(hex.slice(3, 5), 16);
+	const b = parseInt(hex.slice(5, 7), 16);
+	return `${r};${g};${b}`;
+}
+
 export const STATUS_COLORS: Record<
 	AgentStatus,
 	{ bg: string; resetBg: string; fg: string; resetFg: string; label: string }
-> = {
-	idle: {
-		bg: "\x1b[48;2;166;227;161m", // green-ish bg
-		resetBg: "\x1b[49m",
-		fg: "\x1b[38;2;30;30;30m",
-		resetFg: "\x1b[39m",
-		label: "Idle",
-	},
-	running: {
-		bg: "\x1b[48;2;137;180;250m", // blue bg
-		resetBg: "\x1b[49m",
-		fg: "\x1b[38;2;10;10;10m",
-		resetFg: "\x1b[39m",
-		label: "Running",
-	},
-	needs_input: {
-		bg: "\x1b[48;2;249;226;175m", // yellow bg
-		resetBg: "\x1b[49m",
-		fg: "\x1b[38;2;20;20;20m",
-		resetFg: "\x1b[39m",
-		label: "Needs Input",
-	},
-	error: {
-		bg: "\x1b[48;2;243;139;168m", // red bg
-		resetBg: "\x1b[49m",
-		fg: "\x1b[38;2;10;10;10m",
-		resetFg: "\x1b[39m",
-		label: "Error",
-	},
-	completed: {
-		bg: "\x1b[48;2;166;227;161m", // green bg (same hue as idle, signals success)
-		resetBg: "\x1b[49m",
-		fg: "\x1b[38;2;30;30;30m",
-		resetFg: "\x1b[39m",
-		label: "Completed",
-	},
-	pending_approval: {
-		bg: "\x1b[48;2;148;226;213m", // Catppuccin teal
-		resetBg: "\x1b[49m",
-		fg: "\x1b[38;2;10;10;10m",
-		resetFg: "\x1b[39m",
-		label: "Pending Approval",
-	},
-	user_paused: {
-		bg: "\x1b[48;2;203;166;247m", // Catppuccin Mauve — distinct purple, clearly not blue
-		resetBg: "\x1b[49m",
-		fg: "\x1b[38;2;30;30;30m",
-		resetFg: "\x1b[39m",
-		label: "Paused",
-	},
-};
+> = Object.fromEntries(
+	Object.entries(STATUS_COLOR_PALETTE).map(([key, entry]) => [
+		key,
+		{
+			bg: `\x1b[48;2;${hexToAnsiRgb(entry.bg)}m`,
+			resetBg: "\x1b[49m",
+			fg: `\x1b[38;2;${hexToAnsiRgb(entry.fg)}m`,
+			resetFg: "\x1b[39m",
+			label: entry.label,
+		},
+	]),
+) as Record<AgentStatus, { bg: string; resetBg: string; fg: string; resetFg: string; label: string }>;
 
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";

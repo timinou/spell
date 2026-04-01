@@ -10,6 +10,7 @@
 #include <QString>
 #include "bridge.h"
 #include "systray.h"
+#include "hotkey.h"
 #include <QQuickItem>
 #include <QLocalSocket>
 #include <optional>
@@ -89,6 +90,7 @@ private:
                          QJsonArray &results);
 
     SystrayManager *m_systray = nullptr;
+    HotkeyManager *m_hotkey = nullptr;
     std::function<void(QLocalSocket *, const QJsonObject &)> m_eventWriter;
     QHash<QString, WindowEntry> m_windows;
 };
