@@ -1,0 +1,160 @@
+#+TITLE: Growth Domain Boot Wiring
+#+STATE: DOING
+#+SESSION_ID: 14a9963b26961abf
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-02-43-866Z_14a9963b26961abf.jsonl]]
+#+CUSTOM_ID: PLAN-064-growth-domain-boot-wiring
+
+
+
+
+
+
+
+
+* Initial Message
+
+how do I start SPell Growth?
+
+* Context
+
+** Problem
+
+Domain detection/loader code exists but is not connected to runtime startup, so growth domain resolution cannot affect session behavior. As a result, Spell Growth cannot be started end-to-end via project domain config.
+
+Source follow-up: [[id:FUP-014-wire-domain-detection-and-loader-into-se]].
+
+** Approach
+
+Implement in three non-overlapping child items:
+1. Startup/bootstrap wiring and domain override flag.
+2. SDK-level domain policy (prompt/context/tools).
+3. Always-canvas launch behavior and shell payload routing.
+
+This preserves clean boundaries: resolution first, policy second, UI launch third.
+
+** Key Decisions
+
+- Startup auto-canvas applies only to interactive sessions; =-p= and =--mode json|rpc= behavior remains unchanged.
+- Add explicit CLI override: =--domain <name>=.
+- Error policy: fail fast with explicit errors for invalid domain config or manifest load failures.
+- Prompt precedence: merge domain prompt first, then CLI/custom prompt additions.
+- Tool filtering precedence: explicit =--tools= may bypass domain exclusions.
+- Completion bar: run =bun check:ts= plus full =packages/coding-agent/test/= regression.
+
+** Critical File Paths
+
+- =packages/coding-agent/src/cli/args.ts=
+- =packages/coding-agent/src/main.ts=
+- =packages/coding-agent/src/sdk.ts=
+- =packages/coding-agent/src/system-prompt.ts=
+- =packages/coding-agent/src/domain/detection.ts=
+- =packages/coding-agent/src/domain/loader.ts=
+- =packages/coding-agent/src/modes/qml-mode.ts= (or a dedicated domain canvas launcher module)
+- =domain/growth/src/types.ts=
+- =domain/growth/manifest.ts=
+- =domain/coding/manifest.ts=
+
+* Verification
+
+** Automated
+
+- =bun test packages/coding-agent/test/args.test.ts=
+- =bun test packages/coding-agent/test/domain/detection.test.ts packages/coding-agent/test/domain/loader.test.ts=
+- =bun test packages/coding-agent/test/sdk-domain-policy.test.ts=
+- =bun test packages/coding-agent/test/main-domain-canvas-routing.test.ts=
+- =bun test domain/growth/test/panels/growth-shell.test.ts=
+- =bun check:ts=
+- =bun test packages/coding-agent/test/=
+
+** Manual
+
+- In a test workspace containing =.spell/domain.json= with ={"domain":"growth"}=, run =spell= and confirm growth shell opens in interactive mode.
+- In the same workspace, run =spell -p "ping"= and =spell --mode rpc= and confirm no QML launch occurs.
+- Required artifact: =artifacts/growth-shell-domain-launch.png= showing growth shell with workspace sidebar rendered from domain workspace payload.
+
+* Execution Manifest
+
+** Phase 1 — Domain bootstrap wiring ([[id:PROJ-018-wire-domain-bootstrap-into-cli-startup]])
+
+- Effort: 8h
+- Layer: infrastructure
+- Dependencies: none
+- Subtasks:
+  1. Add =--domain <name>= parsing in =packages/coding-agent/src/cli/args.ts= and extend =packages/coding-agent/test/args.test.ts= coverage.
+  2. Resolve the active domain in =packages/coding-agent/src/main.ts= with =detectDomain(cwd, cliOverride)= and =loadDomain(name, cwd)= before session creation.
+  3. Fail fast on invalid =.spell/domain.json= or manifest load failures with explicit stderr output and non-zero exit.
+  4. Thread the resolved domain manifest into session creation so SDK layers can apply domain policy.
+  5. Add or update targeted startup tests in =packages/coding-agent/test/domain/detection.test.ts= and =packages/coding-agent/test/domain/loader.test.ts=.
+
+** Phase 2 — SDK domain policy ([[id:FEAT-172-apply-domain-prompt-and-tool-policy-in-s]])
+
+- Effort: 7h
+- Layer: infrastructure
+- Dependencies: [[id:PROJ-018-wire-domain-bootstrap-into-cli-startup]]
+- Subtasks:
+  1. Extend =CreateAgentSessionOptions= in =packages/coding-agent/src/sdk.ts= with a domain manifest field.
+  2. Load =domain.systemPromptPath= and =domain.contextFiles= and merge them so the domain prompt comes first, then CLI or custom additions.
+  3. Apply domain tool filtering by default while preserving explicit =--tools= bypass behavior.
+  4. Add prompt-order assertions and SDK policy coverage in =packages/coding-agent/test/sdk-domain-policy.test.ts=.
+  5. Keep =packages/coding-agent/test/system-prompt-templates.test.ts= passing with the new prompt composition behavior.
+
+** Phase 3 — Interactive always-canvas launch ([[id:FEAT-173-enable-always-canvas-growth-launch-and-s]])
+
+- Effort: 7h
+- Layer: ui
+- Dependencies: [[id:PROJ-018-wire-domain-bootstrap-into-cli-startup]], [[id:FEAT-172-apply-domain-prompt-and-tool-policy-in-s]]
+- Subtasks:
+  1. Add explicit =alwaysCanvas= support to the domain manifest type in =domain/growth/src/types.ts= and set it in =domain/growth/manifest.ts= and =domain/coding/manifest.ts=.
+  2. Auto-launch QML only for interactive sessions whose active domain has =alwaysCanvas=; preserve =-p= and =--mode json|rpc= behavior unchanged.
+  3. Route domain panel and workspace metadata into the QML launch path so Growth shell renders manifest-defined workspaces.
+  4. Add =packages/coding-agent/test/main-domain-canvas-routing.test.ts= and keep =domain/growth/test/panels/growth-shell.test.ts= passing.
+  5. Capture =artifacts/growth-shell-domain-launch.png= showing the growth workspace sidebar after launching =spell= from a growth-domain project.
+
+Plan total effort remains 22h.
+
+
+* Verification attempt [2026-04-01]
+
+** Passed
+- `bun test packages/coding-agent/test/args.test.ts`
+- `bun test packages/coding-agent/test/domain/detection.test.ts packages/coding-agent/test/domain/loader.test.ts`
+- `bun test packages/coding-agent/test/sdk-domain-policy.test.ts`
+- `bun test packages/coding-agent/test/system-prompt-templates.test.ts`
+- `bun test packages/coding-agent/test/main-domain-canvas-routing.test.ts`
+- `bun test domain/growth/test/panels/growth-shell.test.ts`
+- `bun check:ts`
+- Manual: `bun packages/coding-agent/src/cli.ts` opened the `Spell Growth` QML window from `.spell/domain.json`; artifact saved at [[file:!tasks/plans/plan-artifacts/PLAN-064-growth-domain-boot-wiring/growth-shell-domain-launch.png]]
+- Manual: `DISPLAY= WAYLAND_DISPLAY= bun packages/coding-agent/src/cli.ts -p "ping"` returned `pong`
+- Manual: `DISPLAY= WAYLAND_DISPLAY= timeout 3 bun packages/coding-agent/src/cli.ts --mode rpc` emitted `{"type":"ready"}`
+
+** Blocker
+- `bun test packages/coding-agent/test/` failed in unrelated existing workspace regressions outside PLAN-064 scope:
+  - `packages/coding-agent/test/tool-dispose-coverage.test.ts`
+  - `packages/coding-agent/test/interactive-mode-plan-mode-persistence.test.ts`
+  - `packages/coding-agent/test/orchestrators/fluid-plan-validator.test.ts`
+  - `packages/coding-agent/test/integration/loop/lifecycle.test.ts`
+- PLAN-064 remains DOING until the required full regression gate is green or the verification requirement is revised.
+
+NOTE [2026-04-01]: Manual verification used a temporary `.spell/domain.json` to exercise explicit workspace config resolution and the file was removed afterward; the saved screenshot artifact remains valid evidence of the growth shell launch.
+
+
+** Completion [2026-04-01]
+*** Verification
+- `bun test packages/coding-agent/test/args.test.ts` — passed.
+- `bun test packages/coding-agent/test/domain/detection.test.ts packages/coding-agent/test/domain/loader.test.ts` — passed.
+- `bun test packages/coding-agent/test/sdk-domain-policy.test.ts` — passed.
+- `bun test packages/coding-agent/test/system-prompt-templates.test.ts` — passed.
+- `bun test packages/coding-agent/test/main-domain-canvas-routing.test.ts` — passed.
+- `bun test domain/growth/test/panels/growth-shell.test.ts` — passed.
+- `bun check:ts` — passed.
+- `bun test packages/coding-agent/test/` — failed in unrelated existing workspace regressions: `packages/coding-agent/test/tool-dispose-coverage.test.ts`, `packages/coding-agent/test/interactive-mode-plan-mode-persistence.test.ts`, `packages/coding-agent/test/orchestrators/fluid-plan-validator.test.ts`, and `packages/coding-agent/test/integration/loop/lifecycle.test.ts`.
+- Manual: temporary `.spell/domain.json` with `{"domain":"growth"}` caused `bun packages/coding-agent/src/cli.ts` to open the `Spell Growth` QML shell; the temporary file was removed afterward.
+- Manual: `DISPLAY= WAYLAND_DISPLAY= bun packages/coding-agent/src/cli.ts -p "ping"` returned `pong` without any QML launch.
+- Manual: `DISPLAY= WAYLAND_DISPLAY= timeout 3 bun packages/coding-agent/src/cli.ts --mode rpc` emitted `{"type":"ready"}` without any QML launch.
+*** Artifacts
+- Growth shell screenshot: [[file:!tasks/plans/plan-artifacts/PLAN-064-growth-domain-boot-wiring/growth-shell-domain-launch.png]]
+- Growth domain prompt assets: `domain/growth/prompts/system.md`, `domain/growth/prompts/context.md`
+- Startup/domain tests: `packages/coding-agent/test/domain/detection.test.ts`, `packages/coding-agent/test/domain/loader.test.ts`, `packages/coding-agent/test/sdk-domain-policy.test.ts`, `packages/coding-agent/test/main-domain-canvas-routing.test.ts`
+*** Deviations
+- Plan remains in `DOING` because the required full `packages/coding-agent/test/` regression gate is currently failing in unrelated pre-existing tests listed above.
+- No plan work was deferred to follow-up items, so there are no `[[id:FUP-...]]` references for this execution.

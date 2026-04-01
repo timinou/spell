@@ -23,6 +23,8 @@ import { ModelRegistry, ModelsConfigFile } from "./config/model-registry";
 import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedModel } from "./config/model-resolver";
 import { Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
+import { detectDomain } from "./domain/detection";
+import { loadDomain, type SpellDomain } from "./domain/loader";
 import { exportFromFile } from "./export/html";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import { InteractiveMode, runBrowseMode, runPrintMode, runQmlMode, runRpcMode } from "./modes";
@@ -75,6 +77,14 @@ export const CANVAS_DISPLAY_REQUIRED_MESSAGE =
 
 export function formatUnknownCanvasMessage(canvasName: string): string {
 	return `Unknown canvas: ${canvasName}. Available: chat, fluid, browse. Use: spell --canvas [fluid|chat|browse] [options] [message]`;
+}
+
+export function shouldAutoLaunchDomainCanvas(
+	isInteractive: boolean,
+	parsed: Pick<Args, "canvas">,
+	domainManifest?: SpellDomain,
+): boolean {
+	return isInteractive && !parsed.canvas && domainManifest?.alwaysCanvas === true;
 }
 
 export async function submitInteractiveInput(
@@ -363,6 +373,7 @@ async function buildSessionOptions(
 	scopedModels: ScopedModel[],
 	sessionManager: SessionManager | undefined,
 	modelRegistry: ModelRegistry,
+	domainManifest?: SpellDomain,
 ): Promise<{ options: CreateAgentSessionOptions }> {
 	const options: CreateAgentSessionOptions = {
 		cwd: parsed.cwd ?? getProjectDir(),
@@ -376,6 +387,9 @@ async function buildSessionOptions(
 
 	if (sessionManager) {
 		options.sessionManager = sessionManager;
+	}
+	if (domainManifest) {
+		options.domainManifest = domainManifest;
 	}
 
 	// Model from CLI
@@ -576,6 +590,15 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	}
 
 	const cwd = getProjectDir();
+	let domainManifest: SpellDomain;
+	try {
+		const activeDomain = await logger.timeAsync("detectDomain", () => detectDomain(cwd, parsedArgs.domain));
+		domainManifest = await logger.timeAsync("loadDomain", () => loadDomain(activeDomain, cwd));
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		process.stderr.write(`${chalk.red(`Error: ${message}`)}\n`);
+		process.exit(1);
+	}
 	await logger.timeAsync("settings:init", () => Settings.init({ cwd }));
 	if (parsedArgs.noPty) {
 		Bun.env.PI_NO_PTY = "1";
@@ -658,7 +681,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	}
 
 	const { options: sessionOptions } = await logger.timeAsync("buildSessionOptions", () =>
-		buildSessionOptions(parsedArgs, scopedModels, sessionManager, modelRegistry),
+		buildSessionOptions(parsedArgs, scopedModels, sessionManager, modelRegistry, domainManifest),
 	);
 	sessionOptions.authStorage = authStorage;
 	sessionOptions.modelRegistry = modelRegistry;
@@ -730,27 +753,43 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		process.exit(1);
 	}
 
+	const ensureCanvasDisplay = async (): Promise<boolean> => {
+		if (isDisplayAvailable()) {
+			return true;
+		}
+		process.stderr.write(`${chalk.red(CANVAS_DISPLAY_REQUIRED_MESSAGE)}\n`);
+		await postmortem.quit(1);
+		return false;
+	};
+	const launchChatCanvas = async (): Promise<void> => {
+		if (!(await ensureCanvasDisplay())) {
+			return;
+		}
+		const canvasSessionId = session.sessionManager.getSessionId();
+		const canvasSessionFile = session.sessionManager.getSessionFile();
+		await runQmlMode(session, {
+			initialMessage: initialMessage ?? parsedArgs.messages[0],
+			sessionFile: canvasSessionFile,
+			eventBus,
+			orchestratorManager,
+			cwd,
+			domainManifest,
+		});
+		await session.dispose();
+		stopThemeWatcher();
+		if (canvasSessionId && canvasSessionFile) {
+			process.stderr.write(`\n${chalk.dim(`Resume this session with spell --resume ${canvasSessionId}`)}\n`);
+		}
+		await postmortem.quit(0);
+	};
+
 	if (parsedArgs.canvas) {
-		if (!isDisplayAvailable()) {
-			process.stderr.write(`${chalk.red(CANVAS_DISPLAY_REQUIRED_MESSAGE)}\n`);
-			await postmortem.quit(1);
+		if (!(await ensureCanvasDisplay())) {
+			return;
 		}
 		const canvasName = parsedArgs.canvas;
 		if (canvasName === "chat") {
-			const canvasSessionId = session.sessionManager.getSessionId();
-			const canvasSessionFile = session.sessionManager.getSessionFile();
-			await runQmlMode(session, {
-				initialMessage: initialMessage ?? parsedArgs.messages[0],
-				sessionFile: canvasSessionFile,
-				eventBus,
-				orchestratorManager,
-			});
-			await session.dispose();
-			stopThemeWatcher();
-			if (canvasSessionId && canvasSessionFile) {
-				process.stderr.write(`\n${chalk.dim(`Resume this session with spell --resume ${canvasSessionId}`)}\n`);
-			}
-			await postmortem.quit(0);
+			await launchChatCanvas();
 		} else if (canvasName === "fluid") {
 			await runFluidMode(session, {
 				initialMessage: initialMessage ?? parsedArgs.messages[0],
@@ -774,6 +813,10 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			process.stderr.write(`${chalk.red(formatUnknownCanvasMessage(canvasName))}\n`);
 			await postmortem.quit(1);
 		}
+	}
+	if (shouldAutoLaunchDomainCanvas(isInteractive, parsedArgs, domainManifest)) {
+		await launchChatCanvas();
+		return;
 	}
 
 	if (mode === "rpc") {

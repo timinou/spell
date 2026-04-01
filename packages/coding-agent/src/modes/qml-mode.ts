@@ -5,43 +5,75 @@
 import * as path from "node:path";
 import { QmlBridge } from "@oh-my-pi/pi-qml";
 import { logger } from "@oh-my-pi/pi-utils";
+import type { SpellDomain } from "../domain/loader";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { EventBus } from "../utils/event-bus";
 import { SessionEventMapper } from "./qml-event-mapper";
+
+export interface QmlPanelConfig {
+	id: string;
+	title: string;
+	icon: string;
+	path: string;
+	armedTools?: string[];
+}
+
+export interface QmlLaunchConfig {
+	shellPath: string;
+	title: string;
+	panels: QmlPanelConfig[];
+	workspaces: SpellDomain["workspaces"];
+}
 
 export interface QmlModeOptions {
 	initialMessage?: string;
 	sessionFile?: string;
 	eventBus?: EventBus;
 	orchestratorManager?: CanvasOrchestratorManager;
+	cwd?: string;
+	domainManifest?: SpellDomain;
+}
+
+export function buildQmlLaunchConfig(
+	cwd: string,
+	domainManifest?: SpellDomain,
+	skillPanels: QmlPanelConfig[] = [],
+): QmlLaunchConfig {
+	const panels = [...builtinPanels(), ...skillPanels, ...resolveDomainPanels(cwd, domainManifest)];
+	const shellPath = domainManifest?.shellQmlPath
+		? path.resolve(cwd, domainManifest.shellQmlPath)
+		: path.resolve(import.meta.dir, "qml/shell.qml");
+	const title =
+		domainManifest && domainManifest.name !== "coding" ? `Spell ${toTitleCase(domainManifest.name)}` : "Spell";
+	return {
+		shellPath,
+		title,
+		panels,
+		workspaces: domainManifest?.workspaces ?? [],
+	};
 }
 
 export async function runQmlMode(session: AgentSession, options: QmlModeOptions = {}): Promise<void> {
 	const bridge = new QmlBridge();
 	options.orchestratorManager?.setBridge(bridge);
 
-	// Discover skill QML panels (if any skills expose them)
-	const panels = discoverSkillPanels(session);
+	const launchConfig = buildQmlLaunchConfig(
+		options.cwd ?? process.cwd(),
+		options.domainManifest,
+		discoverSkillPanels(session),
+	);
 
-	// Build panel list with Chat always first
-	const shellPath = path.resolve(import.meta.dir, "qml/shell.qml");
-	const chatPanelPath = path.resolve(import.meta.dir, "qml/panels/ChatPanel.qml");
-	const dashboardPanelPath = path.resolve(import.meta.dir, "qml/panels/DashboardPanel.qml");
-	const allPanels = [
-		{ id: "chat", title: "Chat", icon: "\u25cf", path: chatPanelPath },
-		{ id: "dashboard", title: "Dashboard", icon: "\u25a0", path: dashboardPanelPath },
-		...panels,
-	];
-
-	await bridge.launch("shell", shellPath, {
-		title: "Spell",
+	await bridge.launch("shell", launchConfig.shellPath, {
+		title: launchConfig.title,
 		width: 1280,
 		height: 800,
-		props: { panels: allPanels },
+		props: { panels: launchConfig.panels, workspaces: launchConfig.workspaces },
 	});
+	if (options.domainManifest?.workspaces.length) {
+		await sendWorkspaceLayout(bridge, options.domainManifest, options.domainManifest.workspaces[0]?.id);
+	}
 
-	// Forward agent events to QML
 	const mapper = new SessionEventMapper();
 	session.subscribe((event: AgentSessionEvent) => {
 		const qmlEvent = mapper.map(event);
@@ -52,8 +84,6 @@ export async function runQmlMode(session: AgentSession, options: QmlModeOptions 
 		}
 	});
 
-	// Send initial message if provided — emit a user bubble so the prompt is visible,
-	// then forward it to the session.
 	if (options.initialMessage) {
 		await bridge.sendMessage("shell", {
 			type: "user_message",
@@ -62,10 +92,9 @@ export async function runQmlMode(session: AgentSession, options: QmlModeOptions 
 		await session.prompt(options.initialMessage);
 	}
 
-	// Start periodic dashboard updates if eventBus is available.
 	const dashboardInterval = startDashboardUpdater(bridge, session, options);
 
-	await processQmlEvents(session, bridge, options.orchestratorManager);
+	await processQmlEvents(session, bridge, options);
 	clearInterval(dashboardInterval);
 }
 
@@ -73,11 +102,7 @@ export async function runQmlMode(session: AgentSession, options: QmlModeOptions 
  * Event loop: wait for QML user actions and dispatch them to the session.
  * Exits when the shell window closes.
  */
-async function processQmlEvents(
-	session: AgentSession,
-	bridge: QmlBridge,
-	orchestratorManager?: CanvasOrchestratorManager,
-): Promise<void> {
+async function processQmlEvents(session: AgentSession, bridge: QmlBridge, options: QmlModeOptions): Promise<void> {
 	while (true) {
 		const events = await bridge.waitForEvent("shell", 600_000);
 		for (const event of events) {
@@ -94,28 +119,79 @@ async function processQmlEvents(
 				case "steer":
 					await session.steer(event.payload.text as string);
 					break;
+				case "workspace_switch":
+					if (options.domainManifest && typeof event.payload.workspaceId === "string") {
+						await sendWorkspaceLayout(bridge, options.domainManifest, event.payload.workspaceId);
+					}
+					break;
 				case "restart":
 					await restart(session, bridge);
 					return;
 			}
 		}
 
-		// Check if shell was closed
 		const shell = bridge.getWindow("shell");
 		if (!shell || shell.state === "closed") {
 			break;
 		}
 	}
 
-	orchestratorManager?.setBridge(undefined);
+	options.orchestratorManager?.setBridge(undefined);
 	await bridge.dispose();
+}
+
+function builtinPanels(): QmlPanelConfig[] {
+	const chatPanelPath = path.resolve(import.meta.dir, "qml/panels/ChatPanel.qml");
+	const dashboardPanelPath = path.resolve(import.meta.dir, "qml/panels/DashboardPanel.qml");
+	return [
+		{ id: "chat", title: "Chat", icon: "●", path: chatPanelPath },
+		{ id: "dashboard", title: "Dashboard", icon: "■", path: dashboardPanelPath },
+	];
+}
+
+function resolveDomainPanels(cwd: string, domainManifest?: SpellDomain): QmlPanelConfig[] {
+	if (!domainManifest) {
+		return [];
+	}
+	return domainManifest.panels.map(panel => ({
+		id: panel.id,
+		title: panel.name,
+		icon: panel.icon ?? "",
+		path: path.resolve(cwd, panel.qmlPath),
+		armedTools: panel.armedTools,
+	}));
+}
+
+async function sendWorkspaceLayout(
+	bridge: QmlBridge,
+	domainManifest: SpellDomain,
+	workspaceId: string | undefined,
+): Promise<void> {
+	if (!workspaceId) {
+		return;
+	}
+	const workspace = domainManifest.workspaces.find(candidate => candidate.id === workspaceId);
+	if (!workspace) {
+		return;
+	}
+	await bridge.sendMessage("shell", {
+		type: "workspace_layout",
+		workspaceId: workspace.id,
+		panels: workspace.panels,
+		defaultMode: workspace.defaultMode ?? null,
+		restrictions: workspace.restrictions ?? null,
+	});
+}
+
+function toTitleCase(value: string): string {
+	return value.length === 0 ? value : `${value[0].toUpperCase()}${value.slice(1)}`;
 }
 
 /**
  * Discover QML panels from loaded skills.
  * TODO: Skills don't expose qmlPanels yet — returns empty until the Skill interface is extended.
  */
-function discoverSkillPanels(_session: AgentSession): Array<{ id: string; title: string; path: string }> {
+function discoverSkillPanels(_session: AgentSession): QmlPanelConfig[] {
 	return [];
 }
 

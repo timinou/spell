@@ -1,0 +1,46 @@
+#+TITLE: Enable always-canvas growth launch and shell routing
+#+STATE: DONE
+#+SESSION_ID: 14a9963b26961abf
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-02-43-866Z_14a9963b26961abf.jsonl]]
+#+CUSTOM_ID: FEAT-173-enable-always-canvas-growth-launch-and-s
+#+EFFORT: 7h
+#+PRIORITY: #A
+#+LAYER: ui
+#+DEPENDS: PROJ-018-wire-domain-bootstrap-into-cli-startup FEAT-172-apply-domain-prompt-and-tool-policy-in-s
+
+NOTE [2026-04-01]: Implemented during PLAN-064: added alwaysCanvas shell routing, wired manifest workspace payloads into QML launch, created growth prompt assets, and captured manual growth shell artifact after verification.
+
+* Initial Message
+
+how do I start SPell Growth?
+
+* Scope
+
+** In
+- Add explicit =alwaysCanvas= domain contract and set it in coding/growth manifests.
+- Interactive startup behavior: when active domain is always-canvas and no explicit mode override is provided, launch growth canvas shell automatically.
+- Keep non-interactive behavior unchanged (confirmed): =-p= and =--mode json|rpc= must not auto-launch QML.
+- Wire domain panel/workspace metadata into canvas launch payload so growth shell renders configured workspaces.
+
+** Out
+- Domain detection/manifest loading and error policy (handled by dependency).
+- SDK prompt/tool policy internals (handled by sibling dependency).
+
+* Sequencing
+
+- Add startup-routing tests first (interactive vs non-interactive branch behavior).
+- Add/adjust growth shell harness test coverage for domain-provided workspace payload.
+- Then implement launcher routing and mode handoff.
+
+* Acceptance Criteria
+
+- Running =spell= in a project resolved to growth opens growth shell automatically in interactive mode.
+- Running =spell -p= or =spell --mode json|rpc= in the same project does not launch QML.
+- Growth shell receives workspace/panel payload from domain manifest and renders the workspace list.
+
+* Verification
+
+- =bun test packages/coding-agent/test/main-domain-canvas-routing.test.ts=
+- =bun test domain/growth/test/panels/growth-shell.test.ts=
+- Manual artifact: save =artifacts/growth-shell-domain-launch.png= showing growth shell with workspace sidebar after launching from a growth-domain project.
+- =bun check:ts=

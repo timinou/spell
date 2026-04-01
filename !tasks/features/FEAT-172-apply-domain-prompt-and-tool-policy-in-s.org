@@ -1,0 +1,48 @@
+#+TITLE: Apply domain prompt and tool policy in SDK
+#+STATE: DONE
+#+SESSION_ID: 14a9963b26961abf
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-02-43-866Z_14a9963b26961abf.jsonl]]
+#+CUSTOM_ID: FEAT-172-apply-domain-prompt-and-tool-policy-in-s
+#+EFFORT: 7h
+#+PRIORITY: #A
+#+LAYER: infrastructure
+#+DEPENDS: PROJ-018-wire-domain-bootstrap-into-cli-startup
+
+NOTE [2026-04-01]: Implemented during PLAN-064: loaded domain prompt/context files, applied default tool filtering with explicit --tools bypass, and verified SDK/system prompt behavior.
+
+* Initial Message
+
+how do I start SPell Growth?
+
+* Scope
+
+** In
+- Extend =CreateAgentSessionOptions= with a domain manifest field and apply domain policy during tool/system-prompt construction.
+- Prompt precedence (confirmed): merge domain prompt first, then CLI/custom prompt additions after it.
+- Load =domain.systemPromptPath= and =domain.contextFiles= as startup prompt/context inputs.
+- Apply domain tool include/exclude filtering by default.
+- Preserve user override behavior (confirmed): explicit =--tools= may bypass domain exclusions.
+
+** Out
+- Domain detection/loader boot wiring (handled by dependency).
+- QML launch behavior and panel shell selection (handled by sibling item).
+
+* Sequencing
+
+- Test-first for domain policy semantics:
+  - add SDK-level tests for tool filtering default vs explicit =--tools= override
+  - add prompt-order tests proving domain prompt precedes CLI/custom prompt text
+- Then implement SDK/system-prompt wiring.
+
+* Acceptance Criteria
+
+- When growth domain is active without explicit =--tools=, excluded coding-focused tools are absent from active toolset.
+- When user explicitly passes =--tools= including excluded tools, those tools are available (bypass honored).
+- Effective system prompt includes domain prompt content before CLI/custom additions.
+- Domain context files are included in loaded context set.
+
+* Verification
+
+- =bun test packages/coding-agent/test/sdk-domain-policy.test.ts=
+- =bun test packages/coding-agent/test/system-prompt-templates.test.ts=
+- =bun check:ts=

@@ -1,0 +1,45 @@
+#+TITLE: Wire domain bootstrap into CLI startup
+#+STATE: DONE
+#+SESSION_ID: 14a9963b26961abf
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-02-43-866Z_14a9963b26961abf.jsonl]]
+#+CUSTOM_ID: PROJ-018-wire-domain-bootstrap-into-cli-startup
+#+EFFORT: 8h
+#+PRIORITY: #A
+#+LAYER: infrastructure
+
+NOTE [2026-04-01]: Implemented during PLAN-064: added --domain CLI parsing, fail-fast domain detection/loading, and session manifest threading. Verified with args and domain detection/loader tests.
+
+* Initial Message
+
+how do I start SPell Growth?
+
+* Scope
+
+** In
+- Add CLI domain override plumbing: parse =--domain <name>= into launch args and pass to startup resolution.
+- Resolve active domain before session creation using =detectDomain(cwd, cliOverride)= and =loadDomain(name, cwd)=.
+- Pass resolved domain manifest through session creation options so downstream layers can apply domain policy.
+- Enforce fail-fast policy for invalid =.spell/domain.json= or domain manifest load failures with explicit actionable error text.
+
+** Out
+- Domain-specific prompt/tool behavior changes (handled by dependent child item).
+- QML auto-launch behavior (handled by dependent child item).
+
+* Sequencing
+
+- Test-first for parser and resolution behavior:
+  - add/extend CLI arg parser tests for =--domain=
+  - add domain detection/loader startup error mapping tests
+- Then wire main startup and session option threading.
+
+* Acceptance Criteria
+
+- =spell --domain growth= selects growth domain at startup and passes the manifest into session options.
+- Invalid =.spell/domain.json= or manifest load failure exits with a clear error and non-zero status.
+- No behavior regression for coding domain startup when domain is =coding=.
+
+* Verification
+
+- =bun test packages/coding-agent/test/args.test.ts=
+- =bun test packages/coding-agent/test/domain/detection.test.ts packages/coding-agent/test/domain/loader.test.ts=
+- =bun check:ts=

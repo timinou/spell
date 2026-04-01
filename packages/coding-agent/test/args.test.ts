@@ -102,6 +102,11 @@ describe("parseArgs", () => {
 			expect(result.apiKey).toBe("sk-test-key");
 		});
 
+		test("parses --domain", () => {
+			const result = parseArgs(["--domain", "growth"]);
+			expect(result.domain).toBe("growth");
+		});
+
 		test("parses --system-prompt", () => {
 			const result = parseArgs(["--system-prompt", "You are a helpful assistant"]);
 			expect(result.systemPrompt).toBe("You are a helpful assistant");

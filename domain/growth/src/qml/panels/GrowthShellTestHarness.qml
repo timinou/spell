@@ -12,7 +12,7 @@ ApplicationWindow {
     title: "Growth Shell Test"
     color: "#111827"
 
-    property var workspaces: [
+    property var workspaces: bridge.props.workspaces || [
         { id: "general", name: "General", icon: "home", panels: [{ panelId: "chat", position: "main" }] },
         { id: "research", name: "Research", icon: "search", panels: [{ panelId: "intel", position: "main" }, { panelId: "chat", position: "secondary" }] },
         { id: "strategy", name: "Strategy", icon: "lightbulb", panels: [{ panelId: "dashboard", position: "main" }, { panelId: "chat", position: "secondary" }] },

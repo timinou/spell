@@ -39,6 +39,9 @@ export default class Index extends Command {
 		"api-key": Flags.string({
 			description: "API key (defaults to env vars)",
 		}),
+		domain: Flags.string({
+			description: "Force a Spell domain (for example: coding, growth)",
+		}),
 		"system-prompt": Flags.string({
 			description: "System prompt (default: coding assistant prompt)",
 		}),

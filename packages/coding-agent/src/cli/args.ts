@@ -18,6 +18,7 @@ export interface Args {
 	slow?: string;
 	plan?: string;
 	apiKey?: string;
+	domain?: string;
 	systemPrompt?: string;
 	appendSystemPrompt?: string;
 	thinking?: Effort;
@@ -92,6 +93,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.plan = args[++i];
 		} else if (arg === "--api-key" && i + 1 < args.length) {
 			result.apiKey = args[++i];
+		} else if (arg === "--domain" && i + 1 < args.length) {
+			result.domain = args[++i];
 		} else if (arg === "--system-prompt" && i + 1 < args.length) {
 			result.systemPrompt = args[++i];
 		} else if (arg === "--append-system-prompt" && i + 1 < args.length) {
