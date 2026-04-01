@@ -1,6 +1,5 @@
-import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import type { SpellDomain } from "./loader";
+import { getDomainBaseDir, resolveDomainPath, type SpellDomain } from "./loader";
 
 export interface LoadedDomainPromptContext {
 	systemPrompt?: string;
@@ -16,12 +15,12 @@ export async function loadDomainPromptContext(
 	}
 
 	const systemPrompt = domainManifest.systemPromptPath
-		? await readDomainFile(domainManifest.name, cwd, domainManifest.systemPromptPath, "system prompt")
+		? await readDomainFile(domainManifest, cwd, domainManifest.systemPromptPath, "system prompt")
 		: undefined;
 	const contextFiles = await Promise.all(
 		(domainManifest.contextFiles ?? []).map(async filePath => ({
 			path: filePath,
-			content: await readDomainFile(domainManifest.name, cwd, filePath, "context file"),
+			content: await readDomainFile(domainManifest, cwd, filePath, "context file"),
 		})),
 	);
 
@@ -48,16 +47,26 @@ export function applyDomainToolPolicy(
 	return includedTools.filter(name => !exclude.has(name));
 }
 
-async function readDomainFile(domainName: string, cwd: string, filePath: string, label: string): Promise<string> {
-	const resolvedPath = path.resolve(cwd, filePath);
+function getDomainFilePath(domainManifest: SpellDomain, cwd: string, filePath: string): string {
+	const baseDir = getDomainBaseDir(domainManifest, cwd);
+	return resolveDomainPath(domainManifest, baseDir, filePath);
+}
+
+async function readDomainFile(
+	domainManifest: SpellDomain,
+	cwd: string,
+	filePath: string,
+	label: string,
+): Promise<string> {
+	const resolvedPath = getDomainFilePath(domainManifest, cwd, filePath);
 	try {
 		return await Bun.file(resolvedPath).text();
 	} catch (error) {
 		if (isEnoent(error)) {
-			throw new Error(`Domain '${domainName}' ${label} not found at '${resolvedPath}'`);
+			throw new Error(`Domain '${domainManifest.name}' ${label} not found at '${resolvedPath}'`);
 		}
 		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`Failed to read domain '${domainName}' ${label} at '${resolvedPath}': ${message}`);
+		throw new Error(`Failed to read domain '${domainManifest.name}' ${label} at '${resolvedPath}': ${message}`);
 	}
 }
 

@@ -24,23 +24,30 @@ describe("loadDomain", () => {
 		expect(manifest.workspaces).toEqual([]);
 	});
 
-	it("loads a workspace domain manifest from domain/<name>/manifest.ts", async () => {
+	it("loads the built-in growth manifest when no workspace manifest exists", async () => {
+		const manifest = await loadDomain("growth", tempDir);
+
+		expect(manifest.name).toBe("growth");
+		expect(manifest.workspaces.length).toBeGreaterThan(0);
+	});
+
+	it("prefers a workspace domain manifest over the built-in one", async () => {
 		await Bun.write(
 			path.join(tempDir, "domain", "growth", "manifest.ts"),
-			'export default { name: "growth", description: "Growth", tools: {}, panels: [], workspaces: [] };',
+			'export default { name: "growth", description: "Workspace Growth", tools: {}, panels: [], workspaces: [] };',
 		);
 
 		const manifest = await loadDomain("growth", tempDir);
 
 		expect(manifest.name).toBe("growth");
-		expect(manifest.description).toBe("Growth");
+		expect(manifest.description).toBe("Workspace Growth");
 	});
 
-	it("fails fast when the domain manifest file is missing", async () => {
-		await expect(loadDomain("growth", tempDir)).rejects.toThrow("Failed to load domain manifest 'growth'");
+	it("fails fast when the domain name is unknown in both the workspace and built-in registry", async () => {
+		await expect(loadDomain("unknown-domain", tempDir)).rejects.toThrow("no workspace manifest");
 	});
 
-	it("fails fast when the manifest name does not match the requested domain", async () => {
+	it("fails fast when the workspace manifest name does not match the requested domain", async () => {
 		await Bun.write(
 			path.join(tempDir, "domain", "growth", "manifest.ts"),
 			'export default { name: "coding", description: "Mismatch", tools: {}, panels: [], workspaces: [] };',

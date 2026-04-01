@@ -5,7 +5,7 @@
 import * as path from "node:path";
 import { QmlBridge } from "@oh-my-pi/pi-qml";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { SpellDomain } from "../domain/loader";
+import { resolveDomainPath, type SpellDomain } from "../domain/loader";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { EventBus } from "../utils/event-bus";
@@ -42,7 +42,7 @@ export function buildQmlLaunchConfig(
 ): QmlLaunchConfig {
 	const panels = [...builtinPanels(), ...skillPanels, ...resolveDomainPanels(cwd, domainManifest)];
 	const shellPath = domainManifest?.shellQmlPath
-		? path.resolve(cwd, domainManifest.shellQmlPath)
+		? resolveDomainPath(domainManifest, cwd, domainManifest.shellQmlPath)
 		: path.resolve(import.meta.dir, "qml/shell.qml");
 	const title =
 		domainManifest && domainManifest.name !== "coding" ? `Spell ${toTitleCase(domainManifest.name)}` : "Spell";
@@ -157,7 +157,7 @@ function resolveDomainPanels(cwd: string, domainManifest?: SpellDomain): QmlPane
 		id: panel.id,
 		title: panel.name,
 		icon: panel.icon ?? "",
-		path: path.resolve(cwd, panel.qmlPath),
+		path: resolveDomainPath(domainManifest, cwd, panel.qmlPath),
 		armedTools: panel.armedTools,
 	}));
 }

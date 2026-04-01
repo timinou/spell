@@ -53,8 +53,6 @@ export interface SpellDomain {
   tools: DomainToolConfig;
   panels: PanelDef[];
   workspaces: WorkspaceDef[];
-  /** Start interactive sessions in canvas mode automatically. */
-  alwaysCanvas?: boolean;
   /** Custom QML shell used when launching this domain in canvas mode. */
   shellQmlPath?: string;
   /** Directory scanned for .md mode config files (relative to domain root). */

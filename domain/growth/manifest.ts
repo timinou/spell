@@ -25,7 +25,6 @@ export const growthDomain: SpellDomain = {
     { id: 'review', name: 'Review', icon: 'chart', panels: [{ panelId: 'dashboard', position: 'main' }, { panelId: 'editor', position: 'secondary' }], defaultMode: 'review' },
     { id: 'campaign', name: 'Campaign', icon: 'rocket', panels: [{ panelId: 'planner', position: 'main', flex: 2 }, { panelId: 'chat', position: 'secondary', flex: 1 }], defaultMode: 'campaign' },
   ],
-  alwaysCanvas: true,
   shellQmlPath: 'domain/growth/src/qml/panels/GrowthShell.qml',
   modesDir: 'domain/growth/modes',
   artifactTypes: ['typst', 'pdf', 'yaml'],

@@ -79,14 +79,6 @@ export function formatUnknownCanvasMessage(canvasName: string): string {
 	return `Unknown canvas: ${canvasName}. Available: chat, fluid, browse. Use: spell --canvas [fluid|chat|browse] [options] [message]`;
 }
 
-export function shouldAutoLaunchDomainCanvas(
-	isInteractive: boolean,
-	parsed: Pick<Args, "canvas">,
-	domainManifest?: SpellDomain,
-): boolean {
-	return isInteractive && !parsed.canvas && domainManifest?.alwaysCanvas === true;
-}
-
 export async function submitInteractiveInput(
 	mode: Pick<InteractiveMode, "markPendingSubmissionStarted" | "finishPendingSubmission" | "showError">,
 	session: Pick<AgentSession, "prompt">,
@@ -813,10 +805,6 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			process.stderr.write(`${chalk.red(formatUnknownCanvasMessage(canvasName))}\n`);
 			await postmortem.quit(1);
 		}
-	}
-	if (shouldAutoLaunchDomainCanvas(isInteractive, parsedArgs, domainManifest)) {
-		await launchChatCanvas();
-		return;
 	}
 
 	if (mode === "rpc") {

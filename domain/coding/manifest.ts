@@ -13,7 +13,6 @@ const manifest: SpellDomain = {
   tools: {},
   panels: [],
   workspaces: [],
-  alwaysCanvas: false,
 };
 
 export default manifest;
