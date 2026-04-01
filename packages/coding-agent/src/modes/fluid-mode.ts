@@ -17,7 +17,7 @@ import fluidPlannerRetryPrompt from "../prompts/agents/fluid-planner-retry.md" w
 import executionPromptTemplate from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { runSubprocess } from "../task/executor";
-import type { AgentDefinition, SingleResult } from "../task/types";
+import type { AgentDefinition } from "../task/types";
 import { cloneTodoPhases, findTask, hasUnresolvedBlockers, type TodoPhase } from "../tools/todo-write";
 import { type EventBus, Priority } from "../utils/event-bus";
 
@@ -27,9 +27,16 @@ export interface FluidModeOptions {
 	orchestratorManager?: CanvasOrchestratorManager;
 }
 
+interface FluidExecutionResult {
+	runtimes: Map<string, AgentRuntime>;
+	taskIdByAgentId: Map<string, string>;
+}
+
 interface ExecutionSnapshot {
 	plan: FluidPlan;
 	results: Map<string, AgentRuntime>;
+	phases: TodoPhase[];
+	taskIdByAgentId: Map<string, string>;
 }
 
 const PLAN_VALIDATION_RETRY_FALLBACK =
@@ -64,7 +71,6 @@ export async function runFluidMode(session: AgentSession, options: FluidModeOpti
 	});
 
 	const settings = Settings.instance;
-	const concurrency = settings.get("fluid.concurrency") as number;
 	const fastPlan = settings.get("fluid.fastPlan") as boolean;
 	const debug = settings.get("fluid.debug") as boolean;
 	const debugUnsub = debug
@@ -74,7 +80,7 @@ export async function runFluidMode(session: AgentSession, options: FluidModeOpti
 		: undefined;
 
 	try {
-		await processFluidEvents(session, eventBus, bridge, cwd, concurrency, fastPlan, options.initialMessage);
+		await processFluidEvents(session, eventBus, bridge, cwd, fastPlan, options.initialMessage);
 	} finally {
 		debugUnsub?.();
 		eventRouter.dispose();
@@ -92,7 +98,6 @@ async function executePlan(
 	eventBus: EventBus,
 	prompt: string,
 	cwd: string,
-	concurrency: number,
 	fastPlan: boolean,
 	signal?: AbortSignal,
 ): Promise<ExecutionSnapshot | undefined> {
@@ -152,11 +157,17 @@ async function executePlan(
 		}
 
 		await stopPlanningDrainTimer();
-		const results = await executeFluidPlan(session, eventBus, plan, cwd, concurrency, signal);
-		if (!results) {
+		const execResult = await executeFluidPlan(session, eventBus, plan, signal);
+		if (!execResult) {
 			return undefined;
 		}
-		return { plan, results };
+		const finalPhases = cloneTodoPhases(session.getTodoPhases());
+		return {
+			plan,
+			results: execResult.runtimes,
+			phases: finalPhases,
+			taskIdByAgentId: execResult.taskIdByAgentId,
+		};
 	} finally {
 		await stopPlanningDrainTimer();
 	}
@@ -284,42 +295,38 @@ async function executeFluidPlan(
 	session: AgentSession,
 	eventBus: EventBus,
 	plan: FluidPlan,
-	cwd: string,
-	concurrency: number,
 	signal?: AbortSignal,
-	presetCompletedResults?: Map<string, SingleResult>,
-): Promise<Map<string, AgentRuntime> | undefined> {
-	void cwd;
-	void concurrency;
-	const todoPlan = materializeFluidPlanToTodos(plan);
-	const phases = cloneTodoPhases(todoPlan.phases);
-	if (presetCompletedResults && presetCompletedResults.size > 0) {
-		for (const [agentId] of presetCompletedResults) {
-			const taskId = todoPlan.taskIdByAgentId.get(agentId);
-			if (!taskId) continue;
-			const task = findTask(phases, taskId);
-			if (task) {
-				task.status = "completed";
-			}
-		}
+	retryState?: { phases: TodoPhase[]; taskIdByAgentId: Map<string, string> },
+): Promise<FluidExecutionResult | undefined> {
+	let taskIdByAgentId: Map<string, string>;
+	let phases: TodoPhase[];
+	if (retryState) {
+		taskIdByAgentId = retryState.taskIdByAgentId;
+		phases = retryState.phases;
+	} else {
+		const todoPlan = materializeFluidPlanToTodos(plan);
+		taskIdByAgentId = todoPlan.taskIdByAgentId;
+		phases = cloneTodoPhases(todoPlan.phases);
 		promoteFirstRunnableTask(phases);
 	}
 	const runtimes = new Map<string, AgentRuntime>(
 		plan.agents.map(agent => {
-			const result = presetCompletedResults?.get(agent.id);
+			const taskId = taskIdByAgentId.get(agent.id);
+			const task = taskId ? findTask(phases, taskId) : undefined;
+			const isCompleted = task?.status === "completed";
 			return [
 				agent.id,
 				{
 					node: agent,
-					state: result ? "completed" : "pending",
-					result,
+					state: isCompleted ? "completed" : "pending",
+					result: undefined,
 				},
 			];
 		}),
 	);
 	let executionCompleteEmitted = false;
 	const syncRuntimeStates = (nextPhases: TodoPhase[]): void => {
-		for (const [agentId, taskId] of todoPlan.taskIdByAgentId) {
+		for (const [agentId, taskId] of taskIdByAgentId) {
 			const runtime = runtimes.get(agentId);
 			if (!runtime) continue;
 			const nextState = deriveAgentState(taskId, nextPhases);
@@ -380,7 +387,7 @@ async function executeFluidPlan(
 			eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "execution_complete", results: new Map(runtimes) }, Priority.P1);
 		}
 		await eventBus.drain();
-		return new Map(runtimes);
+		return { runtimes: new Map(runtimes), taskIdByAgentId };
 	} catch (err) {
 		if (signal?.aborted) {
 			emitExecutionCancelled(eventBus, signal);
@@ -487,7 +494,6 @@ async function processFluidEvents(
 	eventBus: EventBus,
 	bridge: QmlBridge,
 	cwd: string,
-	concurrency: number,
 	fastPlan: boolean,
 	initialPrompt?: string,
 ): Promise<void> {
@@ -495,6 +501,8 @@ async function processFluidEvents(
 	let activeExecution: Promise<void> | null = null;
 	let lastPlan: FluidPlan | undefined;
 	let lastRuntimes: Map<string, AgentRuntime> | undefined;
+	let lastPhases: TodoPhase[] | undefined;
+	let lastTaskIdByAgentId: Map<string, string> | undefined;
 
 	const startExecution = (prompt: string): void => {
 		if (activeExecution) {
@@ -502,13 +510,15 @@ async function processFluidEvents(
 		}
 		const controller = new AbortController();
 		activeController = controller;
-		activeExecution = executePlan(session, eventBus, prompt, cwd, concurrency, fastPlan, controller.signal)
+		activeExecution = executePlan(session, eventBus, prompt, cwd, fastPlan, controller.signal)
 			.then(snapshot => {
 				if (!snapshot) {
 					return;
 				}
 				lastPlan = snapshot.plan;
 				lastRuntimes = snapshot.results;
+				lastPhases = snapshot.phases;
+				lastTaskIdByAgentId = snapshot.taskIdByAgentId;
 			})
 			.catch(err => {
 				logger.error("Fluid execution failed", { error: String(err) });
@@ -526,7 +536,7 @@ async function processFluidEvents(
 		if (activeExecution) {
 			return;
 		}
-		if (!lastPlan || !lastRuntimes) {
+		if (!lastPlan || !lastRuntimes || !lastPhases || !lastTaskIdByAgentId) {
 			emitPlanError(eventBus, "No prior fluid execution to retry");
 			return;
 		}
@@ -537,24 +547,40 @@ async function processFluidEvents(
 			return;
 		}
 
-		const retrySet = collectRetrySubtree(lastPlan, new Set(retryRoots));
-		const presetCompletedResults = collectPresetCompletedResults(lastPlan, lastRuntimes, retrySet);
+		// Map failed agent IDs to task IDs
+		const failedTaskIds = new Set<string>();
+		for (const agentId of retryRoots) {
+			const taskId = lastTaskIdByAgentId.get(agentId);
+			if (taskId) failedTaskIds.add(taskId);
+		}
+
+		// Compute full retry set: failed tasks + downstream dependents
+		const retryTaskIds = computeRetryTaskIds(lastPhases, failedTaskIds);
+
+		// Patch captured phases: reset retry tasks to pending, keep completed as-is
+		const patchedPhases = cloneTodoPhases(lastPhases);
+		for (const phase of patchedPhases) {
+			for (const task of phase.tasks) {
+				if (retryTaskIds.has(task.id)) {
+					task.status = "pending";
+				}
+			}
+		}
+		promoteFirstRunnableTask(patchedPhases);
+
 		const controller = new AbortController();
 		activeController = controller;
-		activeExecution = executeFluidPlan(
-			session,
-			eventBus,
-			lastPlan,
-			cwd,
-			concurrency,
-			controller.signal,
-			presetCompletedResults,
-		)
-			.then(results => {
-				if (!results) {
+		activeExecution = executeFluidPlan(session, eventBus, lastPlan, controller.signal, {
+			phases: patchedPhases,
+			taskIdByAgentId: lastTaskIdByAgentId,
+		})
+			.then(execResult => {
+				if (!execResult) {
 					return;
 				}
-				lastRuntimes = results;
+				lastRuntimes = execResult.runtimes;
+				lastPhases = cloneTodoPhases(session.getTodoPhases());
+				lastTaskIdByAgentId = execResult.taskIdByAgentId;
 			})
 			.catch(err => {
 				logger.error("Fluid retry failed", { error: String(err) });
@@ -637,50 +663,25 @@ function resolveRetryRoots(runtimes: Map<string, AgentRuntime>, requestedAgentId
 	return roots;
 }
 
-function collectRetrySubtree(plan: FluidPlan, rootIds: Set<string>): Set<string> {
-	const retrySet = new Set<string>(rootIds);
-	const childrenByDependency = new Map<string, string[]>();
-	for (const node of plan.agents) {
-		for (const dep of node.dependsOn) {
-			const children = childrenByDependency.get(dep) ?? [];
-			children.push(node.id);
-			childrenByDependency.set(dep, children);
-		}
-	}
-
-	const queue = [...rootIds];
+/**
+ * Given a set of failed task IDs, compute the full set of tasks that need to be
+ * retried: the failed tasks plus all transitive dependents (tasks blocked by them).
+ */
+export function computeRetryTaskIds(phases: TodoPhase[], failedTaskIds: Set<string>): Set<string> {
+	const retrySet = new Set(failedTaskIds);
+	const allTasks = phases.flatMap(phase => phase.tasks);
+	const queue = [...failedTaskIds];
 	while (queue.length > 0) {
-		const current = queue.shift();
-		if (!current) {
-			continue;
-		}
-		for (const childId of childrenByDependency.get(current) ?? []) {
-			if (retrySet.has(childId)) {
-				continue;
+		const current = queue.shift()!;
+		for (const task of allTasks) {
+			if (retrySet.has(task.id)) continue;
+			if (task.blockers?.includes(current)) {
+				retrySet.add(task.id);
+				queue.push(task.id);
 			}
-			retrySet.add(childId);
-			queue.push(childId);
 		}
 	}
 	return retrySet;
-}
-
-function collectPresetCompletedResults(
-	plan: FluidPlan,
-	runtimes: Map<string, AgentRuntime>,
-	retrySet: Set<string>,
-): Map<string, SingleResult> {
-	const preset = new Map<string, SingleResult>();
-	for (const node of plan.agents) {
-		if (retrySet.has(node.id)) {
-			continue;
-		}
-		const runtime = runtimes.get(node.id);
-		if (runtime?.state === "completed" && runtime.result) {
-			preset.set(node.id, runtime.result);
-		}
-	}
-	return preset;
 }
 
 function emitPlanError(eventBus: EventBus, err: unknown): void {

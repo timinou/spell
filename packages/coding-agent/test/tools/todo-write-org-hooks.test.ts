@@ -96,13 +96,27 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 		expect(updateItemStateSpy).not.toHaveBeenCalled();
 	});
 
-	test("warn path does not fail todo_write when org item is missing", async () => {
+	test("surfaces WARN notice when org item is missing", async () => {
 		items.delete("FEAT-001");
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
 			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
 		});
 		expect(updateItemStateSpy).not.toHaveBeenCalled();
+		expect(result.details?.phases[0]?.tasks[0]?.status).toBe("in_progress");
+		const text = result.content.find(part => part.type === "text")?.text ?? "";
+		expect(text).toContain("WARN: Org item FEAT-001 not found for DOING transition.");
+	});
+
+	test("surfaces WARN notice when org transition throws", async () => {
+		vi.spyOn(orgModule, "findItemById").mockRejectedValue(new Error("connection refused"));
+		const tool = new TodoWriteTool(createSession());
+		const result = await tool.execute("call-1", {
+			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
+		});
+		const text = result.content.find(part => part.type === "text")?.text ?? "";
+		expect(text).toContain("WARN: Failed to transition org item FEAT-001 to DOING: connection refused");
+		// Task should still be in_progress despite the org hook failure
 		expect(result.details?.phases[0]?.tasks[0]?.status).toBe("in_progress");
 	});
 

@@ -255,36 +255,3 @@ export interface ComputedWave {
 	number: number;
 	items: WaveItem[];
 }
-
-// =============================================================================
-// Fluid plan types (from org-fluid-plan Elisp MCP tool)
-// =============================================================================
-
-export interface FluidPlanAgent {
-	id: string;
-	task: string;
-	dependsOn: string[];
-	orgItemId: string;
-	effort: string;
-	priority: string;
-	state: string;
-	body: string;
-	parentBody?: string;
-	deferred?: boolean;
-}
-
-export interface FluidPlanWave {
-	number: number;
-	items: string[];
-}
-
-export interface FluidPlanComponent {
-	id: string;
-	agents: FluidPlanAgent[];
-	waves: FluidPlanWave[];
-}
-
-export interface FluidPlanWithComponents {
-	components: FluidPlanComponent[];
-	warnings: string[];
-}

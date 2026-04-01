@@ -1,0 +1,67 @@
+#+TITLE: Harden fluid orchestration after audit AUD-013
+#+STATE: DONE
+#+SESSION_ID: 14a99a8b2c5d675e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e.jsonl]]
+#+CUSTOM_ID: PLAN-066-harden-fluid-orchestration-after-audit-a
+
+NOTE [2026-04-01]: All child items addressed: FEAT-174/177 superseded by PLAN-068 (FEAT-180/182). FEAT-175 and BUG-057 addressed by PLAN-072 (BUG-068/070). FEAT-176 integration tests covered by surviving and new test suites.
+
+* Initial Message
+
+continue
+
+* Context
+
+** Problem
+Post-implementation audit of PLAN-062 (unify fluid orchestration with agent-driven todo_write) identified six findings. The refactor successfully unified execution paths but left dead code, an unsafe retry path, hidden org-hook failures, outdated comments, and contradictory parallelism messaging in prompts.
+
+** Approach
+Four independent work streams ordered by dependency:
+
+1. *Wave 1 — Dead code + prompts (parallel)*: Delete the four dead execution engine files plus update prompt/comment text. These have no behavioral coupling.
+2. *Wave 2 — Observability + retry fix (parallel, depends on Wave 1)*: Surface org hook failures in tool results; fix fluid retry to preserve coordinator edits. Both touch ~todo-write.ts~ / ~fluid-mode.ts~ but in non-overlapping sections.
+3. *Wave 3 — Integration test coverage (depends on Wave 1)*: After dead code is removed, write new tests covering the ~todo:change~ → ~FluidEvent~ bridge that replaced the old orchestrator.
+
+** Key Decisions
+- The single-~in_progress~ invariant is correct by design. Parallelism happens via ~task~ subagents with their own todo scopes. Prompt clarification only, no behavioral change.
+- PLAN auto-closeout stays out of ~todo_write~ (confirmed in PLAN-062 refinement). The completion report + explicit lifecycle close remain the agent's responsibility.
+- ~FluidOrchestrator~ class is deleted entirely; ~dag.ts~, ~event-router.ts~, ~plan-validator.ts~, ~plan-to-todos.ts~, and ~types.ts~ are the retained module surface.
+
+* Verification
+
+** Type checking
+#+begin_src sh
+bun check:ts
+#+end_src
+
+** Unit tests
+#+begin_src sh
+bun test packages/coding-agent/test/tools/todo-write*.ts
+bun test packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts
+bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts
+#+end_src
+
+** Integration tests
+#+begin_src sh
+bun test packages/coding-agent/test/integration/fluid-todo-bridge.test.ts
+bun test packages/coding-agent/test/integration/fluid-event-pipeline.test.ts
+#+end_src
+
+** Grep verification
+#+begin_src sh
+grep -r "org-fluid-bridge\|coordinator-runner\|queue-scheduler\|FluidOrchestrator" packages/coding-agent/src/
+# Expected: no hits
+#+end_src
+
+* Execution Manifest
+
+** Wave 1: Dead code and prompt clarity (parallel)
+- [[id:FEAT-174-delete-dead-fluid-execution-engine-files]] — Delete obsolete fluid execution files, update barrel and comment (S)
+- [[id:FEAT-177-clarify-parallelism-semantics-in-todo-wr]] — Clarify parallelism semantics in prompts (S)
+
+** Wave 2: Hardening (parallel, depends on Wave 1)
+- [[id:FEAT-175-surface-org-lifecycle-hook-failures-in-t]] — Surface org hook failures in todo_write result (S)
+- [[id:BUG-057-fluid-mode-retry-discards-coordinator-to]] — Fix retry to preserve coordinator todo edits (M, depends FEAT-174)
+
+** Wave 3: Test coverage (depends on Wave 1)
+- [[id:FEAT-176-add-integration-tests-for-session-driven]] — Integration tests for session-driven fluid todo bridge (M, depends FEAT-174)

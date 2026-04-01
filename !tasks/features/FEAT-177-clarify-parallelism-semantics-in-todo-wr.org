@@ -1,0 +1,33 @@
+#+TITLE: Clarify parallelism semantics in todo_write and coordinator prompts
+#+STATE: DONE
+#+SESSION_ID: 14a99a8b2c5d675e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e.jsonl]]
+#+CUSTOM_ID: FEAT-177-clarify-parallelism-semantics-in-todo-wr
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: prompts
+
+NOTE [2026-04-01]: Superseded by FEAT-182 in PLAN-068. Unified plan-mode-approved.md prompt with executionItems conditional covers parallelism semantics.
+
+* Initial Message
+
+continue
+
+* Scope
+
+The prompts have a tension: ~todo-write.md~ enforces "exactly one ~in_progress~ at a time" while ~plan-mode-approved.md~ and ~coordinator.md~ encourage parallelizing independent tasks via the ~task~ tool. This is actually correct by design (subagents get their own todo contexts), but the prompts don't explain the boundary clearly enough.
+
+** Files
+- MODIFY: ~packages/coding-agent/src/prompts/tools/todo-write.md~
+  - In the Rules section, after "keep exactly one ~in_progress~", add: "Delegate parallel work to subagents via the ~task~ tool; each subagent manages its own independent todo context."
+  - In the Dependency Management section where it says "Intra-phase parallel work", clarify: "Use ~task~ subagents for concurrent execution; the parent list tracks which orchestration step is active, not which leaf work is running."
+- MODIFY: ~packages/coding-agent/src/prompts/agents/coordinator.md~
+  - The "Keep exactly one task ~in_progress~" rule should add: "— parallel leaf work runs in ~task~ subagents, each with their own todo scope."
+- MODIFY: ~packages/coding-agent/src/prompts/system/plan-mode-approved.md~
+  - The auto-initialized section already says "Use the ~task~ tool to parallelize" — no change needed, but verify the non-auto path also doesn't contradict
+- MODIFY: ~packages/coding-agent/src/modes/fluid-mode.ts~ — update file header comment (lines 1-5)
+
+* Acceptance
+- ~bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts~ passes
+- Manual read-through: no prompt file says "run multiple tasks concurrently" without qualifying that concurrency is via subagents
+- ~bun check:ts~ passes

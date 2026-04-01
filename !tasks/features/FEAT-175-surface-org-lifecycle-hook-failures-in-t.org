@@ -1,0 +1,37 @@
+#+TITLE: Surface org lifecycle hook failures in todo_write result
+#+STATE: DONE
+#+SESSION_ID: 14a99a8b2c5d675e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e.jsonl]]
+#+CUSTOM_ID: FEAT-175-surface-org-lifecycle-hook-failures-in-t
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: core
+
+NOTE [2026-04-01]: Addressed by [[id:BUG-068-org-hook-failures-silently-swallowed-in]] in PLAN-072. WARN notices now pushed to results in catch blocks and not-found paths.
+
+* Initial Message
+
+continue
+
+* Scope
+
+~applyOrgLifecycleHooks~ currently catches errors and logs them, but never surfaces failures to the agent. The tool result text is identical whether the org transition succeeded or silently failed. Change the function to return structured results so the agent can see when a transition didn't happen.
+
+** Files
+- MODIFY: ~packages/coding-agent/src/tools/todo-write.ts~
+  - Change ~applyOrgLifecycleHooks~ return type from ~Promise<string[]>~ to ~Promise<{ notices: string[]; warnings: string[] }>~
+  - When ~findItemById~ returns null or ~updateItemStateInFile~ returns false, push to warnings instead of only logging
+  - When an exception occurs, push a warning string AND log the error (keep the log for stack trace)
+  - In ~execute()~, append warnings to the result text after the summary (e.g., ~WARNING: Org item FEAT-001 not found, DOING transition skipped.~)
+- MODIFY: ~packages/coding-agent/test/tools/todo-write-org-hooks.test.ts~
+  - Update "warn path does not fail todo_write when org item is missing" test: assert the result text now contains a WARNING line
+  - Add test: org transition returns false → result contains warning
+
+* Edge Cases
+- Multiple tasks with mixed success/failure → each warning independently surfaced
+- Org disabled → no warnings (empty result, not error)
+
+* Acceptance
+- ~bun test packages/coding-agent/test/tools/todo-write-org-hooks.test.ts~ passes
+- ~bun test packages/coding-agent/test/tools/todo-write.test.ts~ still passes (no regressions)
+- ~bun check:ts~ passes

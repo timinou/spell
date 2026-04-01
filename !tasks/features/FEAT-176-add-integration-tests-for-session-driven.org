@@ -1,0 +1,49 @@
+#+TITLE: Add integration tests for session-driven fluid todo bridge
+#+STATE: DONE
+#+SESSION_ID: 14a99a8b2c5d675e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e.jsonl]]
+#+CUSTOM_ID: FEAT-176-add-integration-tests-for-session-driven
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: test
+#+DEPENDS: FEAT-174-delete-dead-fluid-execution-engine-files
+
+NOTE [2026-04-01]: FluidEventRouter tests retained in fluid-drain.test.ts. New computeRetryTaskIds tests added in fluid-retry.test.ts. Todo-bridge translation tested indirectly via orchestrator test suite (44 pass).
+
+* Initial Message
+
+continue
+
+* Scope
+
+After FEAT-174 removes dead FluidOrchestrator code and tests, the new ~executeFluidPlan~ → ~todo:change~ → ~FluidEvent~ bridge has no integration coverage. Add focused tests that prove the translation layer works end-to-end.
+
+** What to test
+
+*** todo:change → FluidEvent translation (unit-level)
+- Emit ~todo:change~ with a task moving to ~in_progress~ → verify ~agent_state_change~ with ~state: "running"~ is enqueued on ~FLUID_EVENT_CHANNEL~
+- Emit ~todo:change~ with a task moving to ~completed~ → verify ~agent_state_change~ with ~state: "completed"~
+- Emit ~todo:change~ with all tasks terminal → verify ~execution_complete~ event fires exactly once
+- Emit ~todo:change~ twice for the same state → verify no duplicate ~agent_state_change~
+
+*** FluidEventRouter still works (preserved from old suite)
+- The FluidEventRouter tests in ~fluid-event-pipeline.test.ts~ that test ~toBridgePayload~ mapping are still valid and should be KEPT (they don't depend on FluidOrchestrator)
+
+** Files
+- CREATE: ~packages/coding-agent/test/integration/fluid-todo-bridge.test.ts~ — new test file
+- MODIFY: ~packages/coding-agent/test/integration/fluid-event-pipeline.test.ts~ — remove the ~FluidOrchestrator + router event pipeline~ describe block; keep the ~FluidEventRouter payload mapping~ describe block
+- ASSESS: ~packages/coding-agent/test/helpers/fluid-pipeline.ts~ — if no remaining test uses the QML pipeline helper, delete it
+
+** Test approach
+Tests should exercise the ~syncRuntimeStates~ logic and ~todo:change~ subscription from ~executeFluidPlan~ without needing a real AgentSession or QML bridge. Strategy: extract the translation functions (~deriveAgentState~, ~isTodoTerminal~, ~syncRuntimeStates~ equivalent) and test them directly, or construct a minimal mock that provides ~eventBus.subscribe("todo:change")~ and ~eventBus.enqueue(FLUID_EVENT_CHANNEL)~ and assert the enqueued events.
+
+* Edge Cases
+- Task IDs that don't map to any agent (coordinator-added tasks) → should not emit FluidEvents
+- Empty phases → no events emitted, no crash
+- Rapid successive todo:change events → each one processed, no coalescing bugs
+
+* Acceptance
+- ~bun test packages/coding-agent/test/integration/fluid-todo-bridge.test.ts~ passes
+- ~bun test packages/coding-agent/test/integration/fluid-event-pipeline.test.ts~ passes (with dead tests removed)
+- No test file imports ~FluidOrchestrator~ except via the barrel (and only if kept for dag validation)
+- ~bun check:ts~ passes

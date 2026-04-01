@@ -28,12 +28,21 @@
 - Added `planner_stream` and `execution_cancelled` fluid events, plus a `fluid.debug` setting for fluid canvas lifecycle tracing.
 - Added an interactive fluid DAG graph component with failed-subtree retry controls and execution summary stats.
 - Added `planMode.allowedFolders` to allow plan mode and plan-mode subagents to create or update files in explicitly described folders while keeping deletes and moves blocked.
+- TodoItem delegation model: `sessionId`, `transcriptPath`, `agent`, `childPhases`, `result` fields for tracking subagent lifecycle
+- `failed` status for todo items, with normalization, formatting, rendering, and journal support
+- Bidirectional `todoRef` lifecycle: `#markTodoRefStarted`, `#finalizeTodoRef`, `#syncTodoRefChildPhases` with promise-chaining lock for concurrent mutation safety
+- Wave-based auto-init for plan execution: `extractPlanWaves` to `PlanWave[]` to `planWavesToTodoPhases` to `TodoPhase[]`
+- Result forwarding to dependent subagents via `resolvePredecessorResultsContext`
+- Unified coordinator/execution prompt `plan-mode-approved.md` with `executionItems` conditional for canvas mode
+- TUI rendering of nested child phases via `#renderChildTodoPhases` and niri overview
 
 ### Changed
 
 - Moved fluid `plan_start` emission to the planning entrypoint so users see immediate planning feedback with streaming progress and elapsed time.
 - Extended fluid execution to thread `AbortSignal` through planner/agent runs and support scheduler resume with preset completed agent results.
 - Updated fluid agent panels to show dependency status and support expandable/collapsible details.
+- Unified wave orchestration: replaced `FluidOrchestrator`, `QueueScheduler`, and `coordinator-runner` with agent-session-driven execution using `todo_write` state and `FluidEvent` translation
+- `normalizeInProgressTask` allows multiple `in_progress` tasks when guarded by delegation metadata
 
 ### Fixed
 
@@ -41,6 +50,15 @@
 - Fixed fluid agent state propagation to include failure error text plus start/completion timestamps for accurate UI status.
 - Fixed `emacs_code` daemon recovery by adding lazy restart through `EmacsSessionManager`, including dead-session detection and startup backoff.
 - Fixed unexpected exits to write a crash report JSON in `~/.spell/reports/` with error, session, model, and system context for postmortem debugging.
+- Fixed fluid-mode retry discarding coordinator todo edits by capturing live phases instead of rebuilding from plan
+- Fixed org lifecycle hook failures being silently swallowed; `applyOrgLifecycleHooks` now surfaces `WARN` notices in tool results
+
+### Removed
+
+- Deleted `FluidOrchestrator`, `QueueScheduler`, `coordinator-runner`, and `org-fluid-bridge` source files
+- Deleted `coordinator.md` prompt; coordinator behavior merged into `plan-mode-approved.md`
+- Removed `org-fluid-plan` MCP call from `exit-plan-mode.ts`
+- Removed orphaned `FluidPlanWithComponents`, `FluidPlanComponent`, `FluidPlanWave`, `FluidPlanAgent` types from `pi-org`
 
 ## [13.12.8] - 2026-03-16
 

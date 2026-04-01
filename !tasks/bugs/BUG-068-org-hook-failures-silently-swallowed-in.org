@@ -1,0 +1,35 @@
+#+TITLE: Org hook failures silently swallowed in todo_write results
+#+STATE: DONE
+#+SESSION_ID: 14a9e34cdcd46ba7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-39-27-091Z_14a9e34cdcd46ba7.jsonl]]
+#+CUSTOM_ID: BUG-068-org-hook-failures-silently-swallowed-in
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: backend
+
+NOTE [2026-04-01]: Changed transitionOrgItemIfNeeded to return OrgTransitionResult discriminant. applyOrgLifecycleHooks now pushes WARN notices for not-found items and caught exceptions. Two new tests verify WARN surfacing. 7 tests pass.
+
+* Initial Message
+
+/audit PLAN-068
+
+* Problem
+~applyOrgLifecycleHooks~ in ~packages/coding-agent/src/tools/todo-write.ts~ catches org transition errors and logs them via ~logger.error~, but never pushes a notice to the ~notices~ array. The agent sees ~INFO: Org item X auto-transitioned to DOING~ on success, but gets no feedback when the org item is missing or the transition fails. The error is silently swallowed.
+
+This was identified in PLAN-066 (FEAT-175) and claimed addressed by PLAN-068, but the ~catch~ blocks at lines 336-341 and 354-359 still only call ~logger.error~ without pushing a warning notice.
+
+* Scope
+- File: ~packages/coding-agent/src/tools/todo-write.ts~
+- In ~applyOrgLifecycleHooks~, push a ~WARN:~ notice in each ~catch~ block alongside the ~logger.error~ call
+- Example: ~notices.push(\`WARN: Failed to transition org item \${task.orgItemId} to DOING: \${error.message}\`)~
+- Also push a notice when ~transitionOrgItemIfNeeded~ returns ~false~ for a missing item (the ~findItemById~ returning null path)
+
+* Tests
+- File: ~packages/coding-agent/test/tools/todo-write-org-hooks.test.ts~
+- Update \"warn path does not fail todo_write when org item is missing\" test to assert result text contains a WARN line
+- Add test: org transition exception → result text contains WARN line
+
+* Acceptance
+- ~bun test packages/coding-agent/test/tools/todo-write-org-hooks.test.ts~ passes
+- ~bun check:ts~ passes
+- Agent sees WARN text in tool result when org hook fails

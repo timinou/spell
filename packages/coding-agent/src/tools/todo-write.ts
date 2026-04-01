@@ -283,12 +283,14 @@ function flattenTasks(phases: TodoPhase[]): TodoItem[] {
 	return phases.flatMap(phase => phase.tasks);
 }
 
+type OrgTransitionResult = "transitioned" | "not-found" | "skipped";
+
 async function transitionOrgItemIfNeeded(
 	projectRoot: string,
 	todoKeywords: string[],
 	orgItemId: string,
 	targetState: "DOING" | "DONE",
-): Promise<boolean> {
+): Promise<OrgTransitionResult> {
 	const config = { ...DEFAULT_ORG_CONFIG, todoKeywords };
 	const categories = resolveCategories(config, projectRoot);
 	const catDirs = categories.map(category => ({
@@ -299,18 +301,18 @@ async function transitionOrgItemIfNeeded(
 	const item = await findItemById(catDirs, orgItemId, todoKeywords);
 	if (!item) {
 		logger.warn("todo_write: linked org item not found", { orgItemId, targetState });
-		return false;
+		return "not-found";
 	}
 	const skipStates = targetState === "DOING" ? ORG_DOING_OR_LATER_STATES : ORG_DONE_OR_LATER_STATES;
 	if (skipStates.has(item.state)) {
-		return false;
+		return "skipped";
 	}
 	const updated = await updateItemStateInFile(item.file, orgItemId, targetState, todoKeywords);
 	if (!updated) {
 		logger.warn("todo_write: org state transition returned false", { orgItemId, targetState, file: item.file });
-		return false;
+		return "skipped";
 	}
-	return true;
+	return "transitioned";
 }
 
 async function applyOrgLifecycleHooks(
@@ -329,33 +331,36 @@ async function applyOrgLifecycleHooks(
 		const oldStatus = previousStatus.get(task.id);
 		if (task.status === "in_progress" && oldStatus !== "in_progress" && task.orgItemId) {
 			try {
-				const transitioned = await transitionOrgItemIfNeeded(projectRoot, todoKeywords, task.orgItemId, "DOING");
-				if (transitioned) {
+				const result = await transitionOrgItemIfNeeded(projectRoot, todoKeywords, task.orgItemId, "DOING");
+				if (result === "transitioned") {
 					notices.push(`INFO: Org item ${task.orgItemId} auto-transitioned to DOING.`);
+				} else if (result === "not-found") {
+					notices.push(`WARN: Org item ${task.orgItemId} not found for DOING transition.`);
 				}
 			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
 				logger.error("todo_write: failed to auto-transition org item to DOING", {
 					error,
 					orgItemId: task.orgItemId,
 				});
+				notices.push(`WARN: Failed to transition org item ${task.orgItemId} to DOING: ${msg}`);
 			}
 		}
 		if (task.status === "completed" && oldStatus !== "completed" && task.orgItemClosingId) {
 			try {
-				const transitioned = await transitionOrgItemIfNeeded(
-					projectRoot,
-					todoKeywords,
-					task.orgItemClosingId,
-					"DONE",
-				);
-				if (transitioned) {
+				const result = await transitionOrgItemIfNeeded(projectRoot, todoKeywords, task.orgItemClosingId, "DONE");
+				if (result === "transitioned") {
 					notices.push(`INFO: Org item ${task.orgItemClosingId} auto-transitioned to DONE.`);
+				} else if (result === "not-found") {
+					notices.push(`WARN: Org item ${task.orgItemClosingId} not found for DONE transition.`);
 				}
 			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
 				logger.error("todo_write: failed to auto-transition org item to DONE", {
 					error,
 					orgItemId: task.orgItemClosingId,
 				});
+				notices.push(`WARN: Failed to transition org item ${task.orgItemClosingId} to DONE: ${msg}`);
 			}
 		}
 	}

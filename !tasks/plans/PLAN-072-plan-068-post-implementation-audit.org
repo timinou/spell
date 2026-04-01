@@ -1,0 +1,144 @@
+#+TITLE: PLAN-068 post-implementation audit
+#+STATE: DONE
+#+SESSION_ID: 14a9e34cdcd46ba7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-39-27-091Z_14a9e34cdcd46ba7.jsonl]]
+#+CUSTOM_ID: PLAN-072-plan-068-post-implementation-audit
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+NOTE [2026-04-01]: All 8 child items DONE. All 9 findings addressed: F1-F5 fixed in code, F6-F7 documented as intentional, F8 org lifecycle closed, F9 changelog entries added.
+
+
+* Initial Message
+
+/audit PLAN-068
+
+* Context
+
+** Problem
+Post-implementation audit of PLAN-068 (unify wave orchestration with todo_write and task subagents). The plan is marked DONE with verification evidence, but source inspection reveals several gaps between what the plan claimed and what shipped.
+
+** Summary of Findings
+
+*** F1: Orphaned types in packages/org/src/types.ts [LOW]
+~FluidPlanWithComponents~, ~FluidPlanComponent~, ~FluidPlanWave~, ~FluidPlanAgent~ have zero consumers anywhere in the codebase. They are star-exported from ~packages/org/src/index.ts~ but nothing imports them. FEAT-180 planned to delete them but they survived. Harmless dead code, but misleading API surface.
+
+*** F2: Org hook failures silently swallowed [MEDIUM]
+~applyOrgLifecycleHooks~ in ~todo-write.ts~ catches org transition errors at lines 336-341 and 354-359 and only calls ~logger.error~. No notice is pushed to the ~notices~ array, so the agent never learns when an org transition failed. FEAT-175 (from PLAN-066, claimed superseded) specifically addressed this and was marked as covered by PLAN-068, but the fix was not implemented. The agent sees ~INFO:~ on success but nothing on failure.
+
+*** F3: Voided params in executeFluidPlan [LOW]
+~executeFluidPlan~ still accepts ~cwd: string~ and ~concurrency: number~ that are immediately ~void~ed. FEAT-180 planned to remove them. All callers thread these values for no reason.
+
+*** F4: Fluid-mode retry discards coordinator todo edits [HIGH]
+~startRetry~ rebuilds todos from the original ~FluidPlan~ via ~materializeFluidPlanToTodos~, discarding any todo modifications the coordinator made during execution. BUG-057 (from PLAN-066, claimed superseded) identified this exact bug. PLAN-068 did not fix it — ~collectRetrySubtree~, ~collectPresetCompletedResults~, and ~resolveRetryRoots~ all remain, operating on the old plan-derived data model. ~lastPhases~ is never captured.
+
+*** F5: fluid-drain.test.ts tests local helper, not source [LOW]
+~test/orchestrators/fluid-drain.test.ts~ survives with a local ~startPlanningDrainLoop~ helper that reimplements the drain loop from ~fluid-mode.ts~. The FluidOrchestrator describe block was correctly removed, but the \"executePlan planning-phase drain behavior\" block tests this local copy instead of the real implementation. Changes to the real drain loop would go untested.
+
+*** F6: Canvas fluid-mode does not use planWavesToTodoPhases [INFORMATIONAL]
+FEAT-184 planned to converge canvas mode onto the ~planWavesToTodoPhases~ pipeline. In practice, canvas mode uses ~materializeFluidPlanToTodos~ which returns a ~FluidTodoPlan~ with ~taskIdByAgentId~ needed by ~syncRuntimeStates~. Both paths call ~materializePlanWaves~ internally, so behavior is equivalent, but the dual entry points remain contrary to the plan's stated convergence.
+
+*** F7: isCoordinator conditional never shipped [INFORMATIONAL]
+FEAT-182 planned to merge prompts using ~{{#if isCoordinator}}~ conditionals. The actual implementation uses ~{{#if executionItems}}~ instead, which is behaviorally equivalent (canvas mode passes executionItems, /plan mode does not). The plan's described mechanism differs from reality but the behavioral intent is met.
+
+*** F8: PLAN-066 org lifecycle not closed [LOW]
+PLAN-066 remains INIT state. Its child items (FEAT-174, FEAT-175, FEAT-176, FEAT-177, BUG-057) all remain ITEM state despite PLAN-068 claiming to supersede PLAN-066 and being marked DONE.
+
+*** F9: CHANGELOG.md missing PLAN-068 entries [LOW]
+Commit ~2267f36dd~ introduced delegation model, wave auto-init, bidirectional todoRef, failed status, sub-task propagation, result forwarding, and dead code deletion, but none of these appear in the Unreleased section of ~packages/coding-agent/CHANGELOG.md~.
+
+** What shipped correctly
+- Dead fluid execution engine files deleted (FluidOrchestrator, QueueScheduler, coordinator-runner, org-fluid-bridge source files + stale tests)
+- FluidOrchestrator no longer exported from barrel
+- coordinator.md deleted, no remaining references
+- org-fluid-plan MCP call removed from exit-plan-mode.ts
+- TodoItem delegation model with sessionId, transcriptPath, agent, childPhases, result fields
+- normalizeInProgressTask allows multi-in_progress with delegation guard
+- failed status added to TodoStatus, handled in normalization, formatting, rendering, and journal
+- Bidirectional todoRef lifecycle: #markTodoRefStarted, #finalizeTodoRef, #syncTodoRefChildPhases
+- Promise-chaining lock (#todoRefMutationQueue) for concurrent mutation safety
+- Wave-based auto-init: extractPlanWaves → PlanWave[] → planWavesToTodoPhases → TodoPhase[] in interactive-mode
+- Result forwarding via resolvePredecessorResultsContext in task/template.ts
+- Unified prompt plan-mode-approved.md with executionItems conditional for coordinator mode
+- TUI rendering of nested child phases via #renderChildTodoPhases
+- Niri overview rendering of childPhases
+- Desktop-common snapshot builder propagates childPhases
+- All PLAN-068 child items (FEAT-179 through FEAT-186) correctly marked DONE
+- 333 tests pass, bun check:ts clean
+
+** Key Decisions
+- F4 (retry bug) is HIGH priority because it causes data loss when canvas coordinator retries
+- F2 (org hook surfacing) is MEDIUM because silent failures mislead the agent
+- F1, F3, F5 are LOW cleanup items
+- F6, F7 are informational — behavioral intent was met via different mechanism than planned
+
+* Verification
+
+** Type checking
+#+begin_src sh
+bun check:ts
+#+end_src
+
+** Tests
+#+begin_src sh
+bun test packages/coding-agent/test/tools/todo-write*.ts
+bun test packages/coding-agent/test/tools/todo-write-org-hooks.test.ts
+bun test packages/coding-agent/test/orchestrators/
+bun test packages/coding-agent/test/task/
+#+end_src
+
+** Grep verification
+#+begin_src sh
+# F1: orphaned types gone
+grep -r \"FluidPlanWithComponents\" packages/ --include=\"*.ts\" | grep -v types.ts | grep -v node_modules
+# F3: no voided params
+grep \"void cwd\\|void concurrency\" packages/coding-agent/src/modes/fluid-mode.ts
+#+end_src
+
+* Execution Manifest
+
+** wave-1: Quick fixes (parallel)                                   :wave:
+- [[id:FEAT-188-delete-orphaned-fluidplanwithcomponents]] Delete orphaned FluidPlanWithComponents types (15m)
+- [[id:BUG-069-remove-voided-cwd-and-concurrency-params]] Remove voided cwd/concurrency params (15m)
+- [[id:BUG-071-fluid-drain-test-ts-tests-local-helper-i]] Fix fluid-drain.test.ts testing local helper (30m)
+
+** wave-2: Behavioral fixes (parallel)                              :wave:
+- [[id:BUG-068-org-hook-failures-silently-swallowed-in]] Surface org hook failures in todo_write results (30m)
+- [[id:BUG-070-fluid-mode-retry-still-discards-coordina]] Fix fluid-mode retry to preserve coordinator todo edits (1h)
+
+** wave-3: Org hygiene and docs                                     :wave:
+- [[id:FUP-016-plan-066-child-items-still-item-state-af]] Close PLAN-066 child items with truthful state (15m)
+- [[id:FUP-017-plan-068-changes-missing-from-changelog]] Add PLAN-068 entries to CHANGELOG.md (15m)
+- [[id:FUP-015-canvas-fluid-mode-does-not-use-planwaves]] Document canvas convergence decision (15m)
+
+** Completion [2026-04-01]
+
+*** Verification
+- ~bun check:ts~: PASS (1530 files, 0 errors)
+- ~bun test packages/coding-agent/test/tools/todo-write*.ts~: 102 pass, 0 fail
+- ~bun test packages/coding-agent/test/tools/todo-write-org-hooks.test.ts~: 7 pass, 0 fail (2 new tests for WARN surfacing)
+- ~bun test packages/coding-agent/test/orchestrators/~: 44 pass, 0 fail (includes 6 new computeRetryTaskIds tests)
+- ~bun test packages/coding-agent/test/task/~: 89 pass across 14 files
+- Grep: ~FluidPlanWithComponents|FluidPlanComponent|FluidPlanWave|FluidPlanAgent~ returns 0 hits outside node_modules
+- Grep: ~void cwd|void concurrency~ returns 0 hits in fluid-mode.ts
+- Grep: ~collectRetrySubtree|collectPresetCompletedResults~ returns 0 hits in fluid-mode.ts
+- Grep: ~startPlanningDrainLoop~ returns 0 hits in fluid-drain.test.ts
+
+*** Artifacts
+Code changes:
+- ~packages/org/src/types.ts~ -- removed 4 orphaned FluidPlan types (F1)
+- ~packages/coding-agent/src/tools/todo-write.ts~ -- org hook WARN notice surfacing (F2)
+- ~packages/coding-agent/src/modes/fluid-mode.ts~ -- retry fix (F4), voided params removal (F3)
+- ~packages/coding-agent/test/tools/todo-write-org-hooks.test.ts~ -- 2 new WARN tests
+- ~packages/coding-agent/test/orchestrators/fluid-drain.test.ts~ -- removed local helper tests (F5)
+- ~packages/coding-agent/test/orchestrators/fluid-retry.test.ts~ -- 6 new computeRetryTaskIds tests
+- ~packages/coding-agent/CHANGELOG.md~ -- 18 entries for PLAN-068 (F9)
+
+Org lifecycle:
+- PLAN-066 and all 5 child items transitioned to DONE with truthful xrefs (F8)
+- All PLAN-072 child items (FEAT-188, BUG-068, BUG-069, BUG-070, BUG-071, FUP-015, FUP-016, FUP-017) transitioned to DONE
+- FUP-015 documented as intentional design decision (F6)
+
+*** Deviations
+None.

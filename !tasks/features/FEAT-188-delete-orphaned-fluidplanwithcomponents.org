@@ -1,0 +1,25 @@
+#+TITLE: Delete orphaned FluidPlanWithComponents types from pi-org
+#+STATE: DONE
+#+SESSION_ID: 14a9e34cdcd46ba7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-39-27-091Z_14a9e34cdcd46ba7.jsonl]]
+#+CUSTOM_ID: FEAT-188-delete-orphaned-fluidplanwithcomponents
+#+EFFORT: 15m
+#+PRIORITY: #C
+#+LAYER: types
+
+NOTE [2026-04-01]: Deleted FluidPlanAgent, FluidPlanWave, FluidPlanComponent, FluidPlanWithComponents from packages/org/src/types.ts.
+
+* Initial Message
+
+/audit PLAN-068
+
+* Problem
+~FluidPlanWithComponents~, ~FluidPlanComponent~, ~FluidPlanWave~, and ~FluidPlanAgent~ in ~packages/org/src/types.ts~ have zero consumers after PLAN-068 removed all coding-agent references. They are exported via barrel ~packages/org/src/index.ts~ → ~export * from "./types"~ but nothing imports them.
+
+* Scope
+- Delete ~FluidPlanAgent~, ~FluidPlanWave~, ~FluidPlanComponent~, ~FluidPlanWithComponents~ from ~packages/org/src/types.ts~
+- Verify no consumer exists (grep confirmed zero hits outside the definition file)
+
+* Acceptance
+- ~bun check:ts~ passes
+- ~grep -r "FluidPlanWithComponents\|FluidPlanComponent\|FluidPlanWave\|FluidPlanAgent" packages/~ returns only this org item reference

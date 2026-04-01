@@ -1,0 +1,34 @@
+#+TITLE: PLAN-066 child items still ITEM state after PLAN-068 superseded them
+#+STATE: DONE
+#+SESSION_ID: 14a9e34cdcd46ba7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-39-27-091Z_14a9e34cdcd46ba7.jsonl]]
+#+CUSTOM_ID: FUP-016-plan-066-child-items-still-item-state-af
+#+EFFORT: 15m
+#+PRIORITY: #C
+#+LAYER: org
+
+NOTE [2026-04-01]: Transitioned all PLAN-066 child items to DONE with truthful xrefs: FEAT-174/177 superseded by PLAN-068; FEAT-175/BUG-057 addressed by PLAN-072; FEAT-176 covered by surviving test suite. PLAN-066 itself moved to DONE.
+
+* Initial Message
+
+/audit PLAN-068
+
+* Problem
+PLAN-068 claims to supersede PLAN-066 in its Context section. PLAN-068 is DONE but:
+- PLAN-066 remains in INIT state (never moved to DONE or BLOCKED)
+- PLAN-066's child items (FEAT-174, FEAT-175, FEAT-176, FEAT-177, BUG-057) all remain in ITEM state
+
+Some of these were addressed by PLAN-068 (dead code deletion = FEAT-174/FEAT-180, prompt clarity = FEAT-177/FEAT-182), some were not (org hook surfacing = FEAT-175, retry fix = BUG-057), and some are partially covered (integration tests = FEAT-176).
+
+* Scope
+- Transition PLAN-066 to DONE or BLOCKED with a note explaining PLAN-068 superseded it
+- For each PLAN-066 child item:
+  - FEAT-174 (delete dead files): Superseded by FEAT-180 (DONE) → mark DONE with xref
+  - FEAT-175 (org hook surfacing): NOT addressed → keep ITEM or link to BUG-068
+  - FEAT-176 (integration tests): Partially addressed by PLAN-068 test coverage → assess and close or keep
+  - FEAT-177 (prompt clarity): Superseded by FEAT-182 (DONE) → mark DONE with xref
+  - BUG-057 (retry fix): NOT addressed → keep ITEM or link to BUG-070
+
+* Acceptance
+- All PLAN-066 child items have truthful state
+- PLAN-066 itself has truthful state

@@ -1,0 +1,32 @@
+#+TITLE: Canvas fluid-mode does not use planWavesToTodoPhases convergence path
+#+STATE: DONE
+#+SESSION_ID: 14a9e34cdcd46ba7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-39-27-091Z_14a9e34cdcd46ba7.jsonl]]
+#+CUSTOM_ID: FUP-015-canvas-fluid-mode-does-not-use-planwaves
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: backend
+
+NOTE [2026-04-01]: Decision: Accept dual entry points as intentional. Canvas mode requires ~taskIdByAgentId~ mapping for ~syncRuntimeStates~ which ~planWavesToTodoPhases~ does not return. Both paths call ~materializePlanWaves~ internally, producing identical phase structures. Convergence would require either: (a) expanding ~planWavesToTodoPhases~ return type to include the agentId mapping, or (b) computing the mapping separately at the call site. Neither provides behavioral benefit since ~materializeFluidPlanToTodos~ already encapsulates the complete canvas materialization. The dual entry points are a documentation concern, not a correctness concern.
+
+* Initial Message
+
+/audit PLAN-068
+
+* Problem
+PLAN-068 FEAT-184 (Canvas fluid mode convergence) planned to replace ~materializeFluidPlanToTodos(plan)~ in ~fluid-mode.ts~ with the canonical wave pipeline: ~computeWaveLayers(plan)~ → ~planWavesToTodoPhases(waves)~.
+
+The actual implementation uses ~materializeFluidPlanToTodos(plan)~ which internally calls ~computeWaveLayers~ → ~materializePlanWaves~ → returns ~FluidTodoPlan~ with both ~phases~ and ~taskIdByAgentId~. The additional ~taskIdByAgentId~ mapping is needed by canvas mode for the ~syncRuntimeStates~ function.
+
+This means canvas fluid-mode has a separate materialization path from the /plan auto-init path:
+- /plan path: ~extractPlanWaves~ → ~planWavesToTodoPhases~ (via ~materializePlanWaves~)
+- Canvas path: ~materializeFluidPlanToTodos~ (via ~computeWaveLayers~ + ~materializePlanWaves~)
+
+Both paths call ~materializePlanWaves~ internally but the canvas path also produces ~taskIdByAgentId~. The plan claimed convergence but the dual entry points remain.
+
+* Options
+1. Accept this as intentional — canvas needs the agentId→taskId mapping that /plan doesn't
+2. Have ~planWavesToTodoPhases~ also return the mapping, unifying the two paths
+
+* Acceptance
+- Decision documented; if convergence chosen, single entry point for both paths

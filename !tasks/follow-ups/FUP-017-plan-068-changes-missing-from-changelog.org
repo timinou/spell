@@ -1,0 +1,33 @@
+#+TITLE: PLAN-068 changes missing from CHANGELOGmd
+#+STATE: DONE
+#+SESSION_ID: 14a9e34cdcd46ba7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-39-27-091Z_14a9e34cdcd46ba7.jsonl]]
+#+CUSTOM_ID: FUP-017-plan-068-changes-missing-from-changelog
+#+EFFORT: 15m
+#+PRIORITY: #C
+#+LAYER: docs
+
+NOTE [2026-04-01]: Added 18 entries to packages/coding-agent/CHANGELOG.md under [Unreleased]: 7 Added, 2 Changed, 2 Fixed, 6 Removed entries covering delegation model, wave auto-init, failed status, result forwarding, unified prompt, retry fix, org hook fix, and dead code deletion.
+
+* Initial Message
+
+/audit PLAN-068
+
+* Problem
+Commit ~2267f36dd~ (\"refactor(coding-agent): unify wave orchestration with todo delegation\") introduced major features:
+- TodoItem delegation model with multi-in_progress
+- Bidirectional todoRef lifecycle
+- Wave-based auto-init for plan execution
+- Failed status for todo items
+- Real-time sub-task propagation via childPhases
+- Result forwarding to dependent subagents
+- Unified execution prompt (coordinator.md deleted)
+- Dead code deletion (FluidOrchestrator, QueueScheduler, etc.)
+
+None of these appear in ~packages/coding-agent/CHANGELOG.md~ under ~## [Unreleased]~.
+
+* Scope
+- Add entries to the ~### Added~, ~### Changed~, and ~### Removed~ sections under ~## [Unreleased]~ in ~packages/coding-agent/CHANGELOG.md~
+
+* Acceptance
+- Changelog accurately reflects PLAN-068 shipped features

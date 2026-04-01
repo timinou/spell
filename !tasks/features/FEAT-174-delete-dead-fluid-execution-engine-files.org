@@ -1,0 +1,45 @@
+#+TITLE: Delete dead fluid execution engine files
+#+STATE: DONE
+#+SESSION_ID: 14a99a8b2c5d675e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e.jsonl]]
+#+CUSTOM_ID: FEAT-174-delete-dead-fluid-execution-engine-files
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: core
+
+NOTE [2026-04-01]: Superseded by FEAT-180 in PLAN-068. All dead files deleted in commit 2267f36dd.
+
+* Initial Message
+
+continue
+
+* Scope
+
+Delete four files that contain the obsolete FluidOrchestrator execution engine. No runtime code imports them. Remove from barrel exports and update any remaining test imports.
+
+** Files to DELETE
+- ~packages/coding-agent/src/orchestrators/fluid/org-fluid-bridge.ts~
+- ~packages/coding-agent/src/orchestrators/fluid/coordinator-runner.ts~
+- ~packages/coding-agent/src/orchestrators/fluid/queue-scheduler.ts~
+- ~packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts~
+
+** Files to MODIFY
+- ~packages/coding-agent/src/orchestrators/fluid/index.ts~ — remove ~fluid-orchestrator~ re-export
+- ~packages/coding-agent/src/modes/fluid-mode.ts~ — update file header comment (lines 1-5) to describe the actual architecture: agent-session-driven execution with todo_write state and FluidEvent translation for QML
+
+** Test file cleanup
+- ~packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts~ — remove FluidOrchestrator import; if tests can't be adapted to the new path in this item, delete them (covered by FEAT-174)
+- ~packages/coding-agent/test/integration/fluid-event-pipeline.test.ts~ — FluidEventRouter and FluidOrchestrator tests; keep FluidEventRouter tests, remove FluidOrchestrator pipeline test
+- ~packages/coding-agent/test/orchestrators/fluid-drain.test.ts~ — tests FluidOrchestrator drain; delete entirely
+- ~packages/coding-agent/test/orchestrators/fluid-components.test.ts~ — tests splitIntoComponents (dag.ts); KEEP (dag.ts is retained)
+- ~packages/coding-agent/test/helpers/fluid-test-data.ts~ — keep (still used by retained tests)
+- ~packages/coding-agent/test/helpers/fluid-pipeline.ts~ — assess; if only used by deleted e2e test, delete
+
+* Edge Cases
+- Biome may warn about unused imports after deleting barrel entries; run ~bun fix:ts~ after deletion
+- The ~FluidOrchestrator~ type appears in barrel re-export but no runtime src consumer; verify with ~grep -r "FluidOrchestrator" packages/coding-agent/src/~ (excluding test/)
+
+* Acceptance
+- ~bun check:ts~ passes
+- ~grep -r "org-fluid-bridge\|coordinator-runner\|queue-scheduler\|FluidOrchestrator" packages/coding-agent/src/~ returns no hits
+- Remaining test suite passes: ~bun test packages/coding-agent/test/~

@@ -1,0 +1,52 @@
+#+TITLE: Fluid-mode retry discards coordinator todo edits
+#+STATE: DONE
+#+SESSION_ID: 14a99a8b2c5d675e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e.jsonl]]
+#+CUSTOM_ID: BUG-057-fluid-mode-retry-discards-coordinator-to
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: core
+#+DEPENDS: FEAT-174-delete-dead-fluid-execution-engine-files
+
+NOTE [2026-04-01]: Addressed by [[id:BUG-070-fluid-mode-retry-still-discards-coordina]] in PLAN-072. startRetry now uses captured lastPhases instead of rebuilding from plan. collectRetrySubtree and collectPresetCompletedResults replaced with computeRetryTaskIds.
+
+* Initial Message
+
+continue
+
+* Problem
+
+~startRetry~ in ~fluid-mode.ts~ calls ~executeFluidPlan(lastPlan, ...)~ which rebuilds todos from the original ~FluidPlan~ via ~materializeFluidPlanToTodos~. If the coordinator agent modified phases, added tasks, or changed blockers during execution, all those edits are silently discarded on retry.
+
+The old orchestrator path had the same shape (retry from plan, preset completed results) because agents were stateless subprocesses. The new model has a stateful coordinator whose todo edits should survive retry.
+
+* Approach
+
+Change retry to snapshot the coordinator's live todo state instead of rebuilding from the plan:
+
+1. After execution completes (success or failure), store ~lastPhases = session.getTodoPhases()~ alongside ~lastRuntimes~ and ~lastPlan~
+2. On retry:
+   - Clone ~lastPhases~
+   - Use ~lastRuntimes~ to identify failed agent IDs → find their corresponding task IDs via ~todoPlan.taskIdByAgentId~
+   - Reset failed tasks and their downstream dependents to ~pending~
+   - Re-promote the first runnable task
+   - Seed the session with these patched phases and re-invoke the coordinator prompt
+3. Remove ~collectPresetCompletedResults~ and ~collectRetrySubtree~ (they operated on the old orchestrator's data model and are no longer needed)
+4. Remove ~resolveRetryRoots~ or adapt it to operate on ~TodoPhase[]~ instead of ~Map<string, AgentRuntime>~
+
+** Files
+- MODIFY: ~packages/coding-agent/src/modes/fluid-mode.ts~
+  - ~processFluidEvents~: add ~lastPhases~ alongside ~lastPlan~ / ~lastRuntimes~
+  - ~startRetry~: rewrite to patch phases instead of rebuilding
+  - ~executeFluidPlan~: accept optional ~phases~ override; when provided, skip ~materializeFluidPlanToTodos~
+  - Delete: ~collectRetrySubtree~, ~collectPresetCompletedResults~, ~resolveRetryRoots~ (or simplify them)
+
+* Edge Cases
+- Coordinator added tasks not in the original plan → they have no agentId mapping; treat them as new tasks, keep their status as-is during retry
+- Coordinator removed original tasks → those agents have no todo representation; skip them in retry scope
+- All tasks completed but QML reports failure → no failed tasks to retry; emit error, don't retry
+
+* Acceptance
+- ~bun check:ts~ passes
+- Unit test (new or adapted): retry after coordinator edits preserves the edits
+- Unit test: retry resets only failed + downstream tasks, leaves completed tasks intact

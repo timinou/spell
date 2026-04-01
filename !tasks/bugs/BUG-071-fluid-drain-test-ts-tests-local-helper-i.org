@@ -1,0 +1,29 @@
+#+TITLE: fluid-draintestts tests local helper instead of src drain loop
+#+STATE: DONE
+#+SESSION_ID: 14a9e34cdcd46ba7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-39-27-091Z_14a9e34cdcd46ba7.jsonl]]
+#+CUSTOM_ID: BUG-071-fluid-drain-test-ts-tests-local-helper-i
+#+EFFORT: 30m
+#+PRIORITY: #C
+#+LAYER: test
+
+NOTE [2026-04-01]: Removed startPlanningDrainLoop local helper, PlanningDrainLoop interface, asRecord helper, afterEach block, and entire describe(\"executePlan planning-phase drain behavior\") suite. FluidEventRouter tests retained. 3 tests pass.
+
+* Initial Message
+
+/audit PLAN-068
+
+* Problem
+~packages/coding-agent/test/orchestrators/fluid-drain.test.ts~ defines its own ~startPlanningDrainLoop~ helper (line 32) that reimplements the drain loop from ~fluid-mode.ts~. The test's ~describe(\"executePlan planning-phase drain behavior\")~ block tests this local copy, not the actual implementation.
+
+If the real drain loop in ~fluid-mode.ts~ changes behavior (timer interval, flush logic, concurrency guard), these tests would still pass while the change goes untested.
+
+The test file was supposed to be deleted per FEAT-180 but survived with only the FluidOrchestrator describe block removed.
+
+* Options
+1. Delete the file entirely — the drain loop is an implementation detail of ~executePlan~, tested through the FluidEventRouter tests that remain elsewhere
+2. Extract the drain loop into a shared utility and test the real export
+
+* Acceptance
+- If deleting: ~bun test packages/coding-agent/test/orchestrators/~ still passes; no remaining import of deleted file
+- If extracting: test imports from src, not a local clone

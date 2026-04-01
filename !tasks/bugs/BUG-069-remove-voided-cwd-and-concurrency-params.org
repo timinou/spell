@@ -1,0 +1,31 @@
+#+TITLE: Remove voided cwd and concurrency params from executeFluidPlan
+#+STATE: DONE
+#+SESSION_ID: 14a9e34cdcd46ba7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-39-27-091Z_14a9e34cdcd46ba7.jsonl]]
+#+CUSTOM_ID: BUG-069-remove-voided-cwd-and-concurrency-params
+#+EFFORT: 15m
+#+PRIORITY: #C
+#+LAYER: backend
+
+NOTE [2026-04-01]: Removed cwd and concurrency params from executeFluidPlan, executePlan, processFluidEvents, and startRetry. Unused concurrency settings read also removed from callers.
+
+* Initial Message
+
+/audit PLAN-068
+
+* Problem
+~executeFluidPlan~ in ~packages/coding-agent/src/modes/fluid-mode.ts~ (line 283) still accepts ~cwd: string~ and ~concurrency: number~ parameters that are immediately voided (~void cwd; void concurrency;~, lines 292-293). The callers (~executePlan~ at line 155 and ~startRetry~ at line 544) thread these values through but the function never uses them.
+
+FEAT-180 planned to remove these. They survived.
+
+* Scope
+- File: ~packages/coding-agent/src/modes/fluid-mode.ts~
+- Remove ~cwd~ and ~concurrency~ params from ~executeFluidPlan~ signature
+- Remove ~void cwd; void concurrency;~ lines
+- Update callers: ~executePlan~ (line 155) and ~startRetry~ (line 544) to stop passing them
+- Also consider removing them from ~executePlan~ and ~processFluidEvents~ if they become unused in those functions after the change
+
+* Acceptance
+- ~bun check:ts~ passes
+- ~bun test packages/coding-agent/test/orchestrators/fluid-drain.test.ts~ passes
+- No ~void cwd~ or ~void concurrency~ in fluid-mode.ts
