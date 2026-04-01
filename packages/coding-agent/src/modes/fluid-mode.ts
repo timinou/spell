@@ -9,15 +9,17 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
-import { FluidEventRouter, FluidOrchestrator, validatePlan } from "../orchestrators/fluid";
+import { FluidEventRouter, materializeFluidPlanToTodos, validatePlan } from "../orchestrators/fluid";
 import { fluidPlanSchema } from "../orchestrators/fluid/plan-schema";
-import type { AgentRuntime, FluidAgentNode, FluidEvent, FluidPlan } from "../orchestrators/fluid/types";
+import type { AgentRuntime, FluidEvent, FluidPlan } from "../orchestrators/fluid/types";
 import { FLUID_EVENT_CHANNEL } from "../orchestrators/fluid/types";
+import coordinatorPromptTemplate from "../prompts/agents/coordinator.md" with { type: "text" };
 import fluidPlannerPrompt from "../prompts/agents/fluid-planner.md" with { type: "text" };
 import fluidPlannerRetryPrompt from "../prompts/agents/fluid-planner-retry.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { runSubprocess } from "../task/executor";
 import type { AgentDefinition, SingleResult } from "../task/types";
+import { findTask, hasUnresolvedBlockers, type TodoPhase } from "../tools/todo-write";
 import { type EventBus, Priority } from "../utils/event-bus";
 
 export interface FluidModeOptions {
@@ -84,7 +86,7 @@ export async function runFluidMode(session: AgentSession, options: FluidModeOpti
 
 /**
  * Run the planning agent to decompose a user prompt into a FluidPlan,
- * then execute the plan via the FluidOrchestrator.
+ * then execute the plan via the shared todo_write-driven coordinator path.
  */
 async function executePlan(
 	session: AgentSession,
@@ -228,6 +230,55 @@ async function validateAndRefinePlan(
 	return undefined;
 }
 
+function cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
+	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task })) }));
+}
+
+function promoteFirstRunnableTask(phases: TodoPhase[]): void {
+	const tasks = phases.flatMap(phase => phase.tasks);
+	for (const task of tasks) {
+		task.status = task.status === "completed" ? "completed" : "pending";
+	}
+	for (const task of tasks) {
+		if (!hasUnresolvedBlockers(task, tasks)) {
+			task.status = "in_progress";
+			return;
+		}
+	}
+}
+
+function isTodoTerminal(phases: TodoPhase[]): boolean {
+	const tasks = phases.flatMap(phase => phase.tasks);
+	return tasks.length > 0 && tasks.every(task => task.status === "completed" || task.status === "abandoned");
+}
+
+function deriveAgentState(taskId: string, phases: TodoPhase[]): AgentRuntime["state"] {
+	const task = findTask(phases, taskId);
+	if (!task) return "failed";
+	const allTasks = phases.flatMap(phase => phase.tasks);
+	if (task.status === "completed") return "completed";
+	if (task.status === "abandoned") return "failed";
+	if (task.status === "in_progress") return "running";
+	return hasUnresolvedBlockers(task, allTasks) ? "pending" : "ready";
+}
+
+function buildCoordinatorPrompt(plan: FluidPlan): string {
+	const subDagItems = plan.agents.map(agent => ({
+		id: agent.id,
+		task: agent.task,
+		dependsOn: agent.dependsOn,
+		effort: agent.effort ?? "",
+		priority: agent.priority ?? "",
+		body: agent.body ?? "",
+	}));
+	return renderPromptTemplate(coordinatorPromptTemplate, {
+		planId: "fluid-canvas",
+		subDagItems,
+		isSimple: plan.agents.length <= 2,
+		itemCount: plan.agents.length,
+	});
+}
+
 async function executeFluidPlan(
 	session: AgentSession,
 	eventBus: EventBus,
@@ -237,17 +288,98 @@ async function executeFluidPlan(
 	signal?: AbortSignal,
 	presetCompletedResults?: Map<string, SingleResult>,
 ): Promise<Map<string, AgentRuntime> | undefined> {
-	const orchestrator = new FluidOrchestrator({
-		eventBus,
-		cwd,
-		concurrency,
-		runAgent: (node, upstream, runSignal) => runFluidAgent(session, eventBus, node, upstream, cwd, runSignal),
+	void cwd;
+	void concurrency;
+	const todoPlan = materializeFluidPlanToTodos(plan);
+	const phases = cloneTodoPhases(todoPlan.phases);
+	if (presetCompletedResults && presetCompletedResults.size > 0) {
+		for (const [agentId] of presetCompletedResults) {
+			const taskId = todoPlan.taskIdByAgentId.get(agentId);
+			if (!taskId) continue;
+			const task = findTask(phases, taskId);
+			if (task) {
+				task.status = "completed";
+			}
+		}
+		promoteFirstRunnableTask(phases);
+	}
+	const runtimes = new Map<string, AgentRuntime>(
+		plan.agents.map(agent => {
+			const result = presetCompletedResults?.get(agent.id);
+			return [
+				agent.id,
+				{
+					node: agent,
+					state: result ? "completed" : "pending",
+					result,
+				},
+			];
+		}),
+	);
+	let executionCompleteEmitted = false;
+	const syncRuntimeStates = (nextPhases: TodoPhase[]): void => {
+		for (const [agentId, taskId] of todoPlan.taskIdByAgentId) {
+			const runtime = runtimes.get(agentId);
+			if (!runtime) continue;
+			const nextState = deriveAgentState(taskId, nextPhases);
+			if (runtime.state === nextState) continue;
+			const timestamp = Date.now();
+			const nextRuntime: AgentRuntime = { ...runtime, state: nextState };
+			if (nextState === "running" && !runtime.startedAt) {
+				nextRuntime.startedAt = timestamp;
+			}
+			if ((nextState === "completed" || nextState === "failed") && !runtime.completedAt) {
+				nextRuntime.completedAt = timestamp;
+			}
+			runtimes.set(agentId, nextRuntime);
+			eventBus.enqueue(
+				FLUID_EVENT_CHANNEL,
+				{
+					type: "agent_state_change",
+					agentId,
+					state: nextState,
+					result: nextRuntime.result,
+					error: nextRuntime.error,
+					startedAt: nextRuntime.startedAt,
+					completedAt: nextRuntime.completedAt,
+				},
+				Priority.P1,
+			);
+		}
+		if (!executionCompleteEmitted && isTodoTerminal(nextPhases)) {
+			executionCompleteEmitted = true;
+			eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "execution_complete", results: new Map(runtimes) }, Priority.P1);
+		}
+	};
+	const unsubscribeTodo = eventBus.subscribe("todo:change", raw => {
+		const nextPhases = (raw as { phases?: TodoPhase[] }).phases;
+		if (!nextPhases) return;
+		syncRuntimeStates(cloneTodoPhases(nextPhases));
 	});
-
+	const abortExecution = (): void => {
+		void session.abort().catch(error => {
+			logger.error("Fluid execution abort failed", { error: String(error) });
+		});
+	};
+	if (signal) {
+		signal.addEventListener("abort", abortExecution, { once: true });
+	}
 	try {
-		const results = await orchestrator.execute(plan, signal, presetCompletedResults);
+		eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_complete", plan }, Priority.P1);
+		session.setTodoPhases(phases, { reset: true });
+		eventBus.emit("todo:change", { phases });
+		await session.prompt(buildCoordinatorPrompt(plan), { synthetic: true });
+		if (signal?.aborted) {
+			emitExecutionCancelled(eventBus, signal);
+			return undefined;
+		}
+		const latestPhases = cloneTodoPhases(session.getTodoPhases());
+		syncRuntimeStates(latestPhases);
+		if (!executionCompleteEmitted) {
+			eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "execution_complete", results: new Map(runtimes) }, Priority.P1);
+		}
 		await eventBus.drain();
-		return results;
+		return new Map(runtimes);
 	} catch (err) {
 		if (signal?.aborted) {
 			emitExecutionCancelled(eventBus, signal);
@@ -256,6 +388,11 @@ async function executeFluidPlan(
 		logger.error("Fluid plan execution failed", { error: String(err) });
 		emitPlanError(eventBus, err);
 		return undefined;
+	} finally {
+		unsubscribeTodo();
+		if (signal) {
+			signal.removeEventListener("abort", abortExecution);
+		}
 	}
 }
 
@@ -324,7 +461,6 @@ async function runPlanningAgent(
 			return undefined;
 		}
 
-		// Parse the plan from the agent's structured output
 		const parsed = JSON.parse(result.output) as FluidPlan;
 		return parsed;
 	} catch (err) {
@@ -339,60 +475,6 @@ async function runPlanningAgent(
 		);
 		return undefined;
 	}
-}
-
-/**
- * Execute a single agent node as a subprocess.
- */
-async function runFluidAgent(
-	_session: AgentSession,
-	eventBus: EventBus,
-	node: FluidAgentNode,
-	upstreamResults: Map<string, SingleResult>,
-	cwd: string,
-	signal?: AbortSignal,
-): Promise<SingleResult> {
-	// Build context from upstream results
-	const contextParts: string[] = [];
-	for (const [depId, depResult] of upstreamResults) {
-		contextParts.push(`## Output from "${depId}"\n\n${depResult.output}`);
-	}
-
-	const upstreamContext =
-		contextParts.length > 0 ? `\n\n# Upstream Results\n\n${contextParts.join("\n\n---\n\n")}` : "";
-
-	const assignment = `${node.task}${upstreamContext}`;
-
-	const agent: AgentDefinition = {
-		name: `fluid-agent-${node.id}`,
-		description: `Fluid canvas agent: ${node.id}`,
-		systemPrompt:
-			"You are an agent executing a specific task as part of a larger plan. " +
-			"Complete your assigned task thoroughly. Your output will be passed to downstream agents if any depend on you.",
-		source: "bundled",
-	};
-
-	return runSubprocess({
-		cwd,
-		agent,
-		task: node.task,
-		assignment,
-		index: 0,
-		id: `fluid-${node.id}-${Date.now()}`,
-		eventBus,
-		settings: Settings.instance,
-		signal,
-		onProgress: progress => {
-			if (progress.lastIntent) {
-				eventBus.enqueue(
-					FLUID_EVENT_CHANNEL,
-					{ type: "agent_stream", agentId: node.id, text: progress.lastIntent },
-					Priority.P2,
-					`stream:${node.id}`,
-				);
-			}
-		},
-	});
 }
 
 /**

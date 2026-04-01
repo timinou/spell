@@ -90,11 +90,11 @@ task-3 and task-4 both depend on task-1 (schema). task-5 depends on both task-3 
 - `gateLlm`: Acceptance criteria the AI should self-review against.
 - `verifyCmd`: Recommended (not required) verification command.
 - `orgItemId`: Org item ID for lineage tracking. Non-gating — does not trigger verification protocol.
-- `orgItemClosingId`: Org item ID that triggers verification. When set, completion requires two-phase verified completion.
+- `orgItemClosingId`: Org item ID that triggers verification. When the task is completed with `verified: true`, todo_write automatically transitions that linked org item to `DONE`.
 - `blockers`: Array of task IDs that must complete before this task can start.
 - `deferralFupId`: FUP org item ID. Required when abandoning a task — links to the follow-up item that captures deferred work.
 
-When implementing plan items, set gate fields to track required deliverables. The tool response will inject directives when gated tasks are completed.
+When implementing plan items, set gate fields to track required deliverables. The tool response focuses on actionable verification; linked org side-effects happen automatically when applicable.
 
 ## Verification Protocol
 

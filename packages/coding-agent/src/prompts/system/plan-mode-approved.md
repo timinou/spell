@@ -52,6 +52,14 @@ Before your final turn, you **MUST**:
 You **MUST** execute this plan step by step from `{{finalPlanFilePath}}`. You have full tool access.
 You **MUST** verify each step before proceeding to the next.
 {{#has tools "todo_write"}}
+{{#if autoInitialized}}
+Your todo list has been pre-populated from the plan's execution structure.
+- You **MAY** modify, add, reorder, or remove tasks as needed while keeping progress truthful.
+- Child org item state transitions happen automatically when you update task status via `todo_write`.
+- The completion report and final PLAN closeout are still explicit steps; `todo_write` does not finish the parent plan for you.
+- Use the `task` tool to parallelize independent tasks within the same phase when it improves throughput.
+- After each completed step, you **MUST** immediately update `todo_write` so progress stays visible.
+{{else}}
 Before execution, you **MUST** initialize todo tracking for this plan with `todo_write`.
 
 {{#if waves}}
@@ -89,6 +97,7 @@ When creating todos from plan execution manifest items, set `orgItemId` on each 
 {{/if}}
 When spawning task subagents to work on a todo item, set `todoRef` on the task to the todo item's ID (e.g., `task-3`) so verification requirements are automatically injected into the subagent's context.
 After each completed step, you **MUST** immediately update `todo_write` so progress stays visible.
+{{/if}}
 If a `todo_write` call fails, you **MUST** fix the todo payload and retry before continuing silently.
 {{/has}}
 </instruction>

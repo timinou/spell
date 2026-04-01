@@ -1,14 +1,21 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { StringEnum } from "@oh-my-pi/pi-ai";
-import { writeJournal } from "@oh-my-pi/pi-org";
+import {
+	DEFAULT_ORG_CONFIG,
+	findItemById,
+	resolveCategories,
+	updateItemStateInFile,
+	writeJournal,
+} from "@oh-my-pi/pi-org";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import chalk from "chalk";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
+import { buildOrgConfig } from "../plan-mode/org-plan";
 import todoWriteDescription from "../prompts/tools/todo-write.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import type { SessionEntry } from "../session/session-manager";
@@ -224,6 +231,92 @@ function fileFromPhases(phases: TodoPhase[]): TodoFile {
 
 function clonePhases(phases: TodoPhase[]): TodoPhase[] {
 	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task })) }));
+}
+
+const ORG_DOING_OR_LATER_STATES = new Set(["DOING", "REVIEW", "DONE", "BLOCKED"]);
+const ORG_DONE_OR_LATER_STATES = new Set(["DONE", "BLOCKED"]);
+
+function flattenTasks(phases: TodoPhase[]): TodoItem[] {
+	return phases.flatMap(phase => phase.tasks);
+}
+
+async function transitionOrgItemIfNeeded(
+	projectRoot: string,
+	todoKeywords: string[],
+	orgItemId: string,
+	targetState: "DOING" | "DONE",
+): Promise<boolean> {
+	const config = { ...DEFAULT_ORG_CONFIG, todoKeywords };
+	const categories = resolveCategories(config, projectRoot);
+	const catDirs = categories.map(category => ({
+		absPath: category.absPath,
+		name: category.name,
+		dir: category.dirName,
+	}));
+	const item = await findItemById(catDirs, orgItemId, todoKeywords);
+	if (!item) {
+		logger.warn("todo_write: linked org item not found", { orgItemId, targetState });
+		return false;
+	}
+	const skipStates = targetState === "DOING" ? ORG_DOING_OR_LATER_STATES : ORG_DONE_OR_LATER_STATES;
+	if (skipStates.has(item.state)) {
+		return false;
+	}
+	const updated = await updateItemStateInFile(item.file, orgItemId, targetState, todoKeywords);
+	if (!updated) {
+		logger.warn("todo_write: org state transition returned false", { orgItemId, targetState, file: item.file });
+		return false;
+	}
+	return true;
+}
+
+async function applyOrgLifecycleHooks(
+	session: ToolSession,
+	previousPhases: TodoPhase[],
+	nextPhases: TodoPhase[],
+): Promise<string[]> {
+	if (!session.settings.get("org.enabled")) {
+		return [];
+	}
+	const projectRoot = session.cwd ?? getProjectDir();
+	const todoKeywords = [...buildOrgConfig(session.settings).todoKeywords];
+	const previousStatus = new Map(flattenTasks(previousPhases).map(task => [task.id, task.status]));
+	const notices: string[] = [];
+	for (const task of flattenTasks(nextPhases)) {
+		const oldStatus = previousStatus.get(task.id);
+		if (task.status === "in_progress" && oldStatus !== "in_progress" && task.orgItemId) {
+			try {
+				const transitioned = await transitionOrgItemIfNeeded(projectRoot, todoKeywords, task.orgItemId, "DOING");
+				if (transitioned) {
+					notices.push(`INFO: Org item ${task.orgItemId} auto-transitioned to DOING.`);
+				}
+			} catch (error) {
+				logger.error("todo_write: failed to auto-transition org item to DOING", {
+					error,
+					orgItemId: task.orgItemId,
+				});
+			}
+		}
+		if (task.status === "completed" && oldStatus !== "completed" && task.orgItemClosingId) {
+			try {
+				const transitioned = await transitionOrgItemIfNeeded(
+					projectRoot,
+					todoKeywords,
+					task.orgItemClosingId,
+					"DONE",
+				);
+				if (transitioned) {
+					notices.push(`INFO: Org item ${task.orgItemClosingId} auto-transitioned to DONE.`);
+				}
+			} catch (error) {
+				logger.error("todo_write: failed to auto-transition org item to DONE", {
+					error,
+					orgItemId: task.orgItemClosingId,
+				});
+			}
+		}
+	}
+	return notices;
 }
 
 /**
@@ -487,9 +580,6 @@ function gateDirectivesForTask(task: TodoItem): string[] {
 	if (task.gateCmd) lines.push(`REQUIRED: Run \`${task.gateCmd}\` to verify ${task.id}.`);
 	if (task.gateLlm) lines.push(`REQUIRED: Review ${task.id} against acceptance criteria: ${task.gateLlm}`);
 	if (task.verifyCmd) lines.push(`RECOMMENDED: Run \`${task.verifyCmd}\` to verify ${task.id}.`);
-	if (task.orgItemClosingId) lines.push(`REQUIRED: Update org item ${task.orgItemClosingId} to DONE for ${task.id}.`);
-	if (task.orgItemId && !task.orgItemClosingId)
-		lines.push(`INFO: Linked to org item ${task.orgItemId} (non-gating lineage).`);
 	return lines;
 }
 
@@ -621,7 +711,7 @@ export function formatSummary({
 			if (task.gateCommit) lines.push(`  [ ] Commit changes (gateCommit)`);
 			if (task.gateLlm) lines.push(`  [ ] Review against: ${task.gateLlm} (gateLlm)`);
 			if (task.orgItemClosingId)
-				lines.push(`  [ ] Update org item ${task.orgItemClosingId} to DONE (orgItemClosingId)`);
+				lines.push(`  [i] Verified completion will auto-close org item ${task.orgItemClosingId}.`);
 			lines.push("");
 			lines.push(
 				`Complete these steps, then call todo_write with {op: "update", id: "${task.id}", status: "completed", verified: true}.`,
@@ -680,8 +770,8 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 		_onUpdate?: AgentToolUpdateCallback<TodoWriteToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<TodoWriteToolDetails>> {
-		const previousPhases = this.session.getTodoPhases?.() ?? [];
-		const current = fileFromPhases(previousPhases);
+		const previousPhases = clonePhases(this.session.getTodoPhases?.() ?? []);
+		const current = fileFromPhases(clonePhases(previousPhases));
 		const {
 			file: updated,
 			errors,
@@ -692,6 +782,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 		} = applyOps(current, params.ops, previousPhases);
 		const hasReplace = params.ops.some(op => op.op === "replace");
 		this.session.setTodoPhases?.(updated.phases, hasReplace ? { reset: true } : undefined);
+		const orgLifecycleNotices = await applyOrgLifecycleHooks(this.session, previousPhases, updated.phases);
 		// Notify dashboard bridge of todo state change
 		this.session.eventBus?.emit("todo:change", { phases: updated.phases });
 		const storage = this.session.getSessionFile() ? "session" : "memory";
@@ -701,18 +792,21 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 		const projectRoot = this.session.cwd ?? getProjectDir();
 		void writeJournal(projectRoot, sessionId, updated.phases);
 
+		const summary = formatSummary({
+			phases: updated.phases,
+			errors,
+			completedPhaseIds,
+			completedGatedTasks,
+			pendingVerificationTasks,
+			pendingDeferralTasks,
+		});
+		const text = orgLifecycleNotices.length > 0 ? `${summary}\n${orgLifecycleNotices.join("\n")}` : summary;
+
 		return {
 			content: [
 				{
 					type: "text",
-					text: formatSummary({
-						phases: updated.phases,
-						errors,
-						completedPhaseIds,
-						completedGatedTasks,
-						pendingVerificationTasks,
-						pendingDeferralTasks,
-					}),
+					text,
 				},
 			],
 			details: { phases: updated.phases, storage },

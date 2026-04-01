@@ -1,0 +1,59 @@
+#+TITLE: Unify plan approval to agent-driven execution
+#+STATE: DONE
+#+SESSION_ID: 14a989b9bbdd6755
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-08-05-615Z_14a989b9bbdd6755.jsonl]]
+#+CUSTOM_ID: FEAT-167-unify-plan-approval-to-agent-driven-exec
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: core
+#+DEPENDS: FEAT-165-fluidplan-to-todophases-converter
+
+NOTE [2026-04-01]: Completed under PLAN-062. interactive-mode now pre-populates todos from FluidPlan and always falls through to the agent-driven prompt path.
+
+* Initial Message
+
+Session Info
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-03-10-333Z_14a988995f409bb6.jsonl
+ ID: 14a988995f409bb6
+
+
+can you investigate if fluid plan was used? Was it used? Is todo write the right entry point for it? I'm open, ask me a lot of questiosn until you find the gap betweent he implenetation of the fluid orchestration/plan and how agents are actually used. Thanks
+
+* Scope
+
+Remove the ~#executeViaFluidOrchestrator~ method from interactive-mode.ts. All plan execution goes through the agent-driven prompt-injection path, with todo_write auto-populated from the FluidPlan when available.
+
+** Files
+- MODIFY: ~packages/coding-agent/src/modes/interactive-mode.ts~
+
+** Changes
+
+*** Remove ~#executeViaFluidOrchestrator~ (lines 1247-1333)
+- Delete the entire method
+
+*** Modify ~#approvePlan~ (lines 1212-1241)
+- Remove the ~if (options.fluidPlan && orgPlanItem)~ branch that dispatches to FluidOrchestrator
+- Instead, when ~options.fluidPlan~ is available:
+  1. Call ~fluidPlanToTodoPhases(options.fluidPlan)~ to get TodoPhase[]
+  2. Call ~this.session.setTodoPhases(phases)~ to pre-populate
+  3. Fall through to the existing prompt injection path (renderPromptTemplate with plan-mode-approved.md)
+- The prompt template receives a new flag: ~autoInitialized: true~ when FluidPlan was used
+
+*** Remove imports
+- Remove: ~EventBus~, ~OrgFluidBridge~, ~FluidOrchestrator~, ~Semaphore~, ~CoordinatorContext~, ~runCoordinator~, ~SingleResult~
+- Add: ~fluidPlanToTodoPhases~ import
+
+** Edge Cases
+- No FluidPlan available (org disabled, MCP failed): fall through to legacy path unchanged (agent manually inits todo_write)
+- FluidPlan with warnings: log warnings, still auto-init
+- FluidPlan conversion produces empty phases (all deferred): still inject prompt, agent sees empty todos
+- Plan with waves but no FluidPlan: legacy wave-based manual init still works via prompt instructions
+
+* Acceptance
+- ~bun check:ts~ clean (no references to removed method)
+- Plan approval with org enabled → todo_write pre-populated, agent starts executing immediately
+- Plan approval with org disabled → legacy prompt injection path works as before
+- No ~FluidOrchestrator~ instantiation in interactive-mode.ts
+- No ~OrgFluidBridge~ instantiation in interactive-mode.ts

@@ -1,0 +1,92 @@
+#+TITLE: Canvas fluid-mode convergence with agent-driven model
+#+STATE: DONE
+#+SESSION_ID: 14a989b9bbdd6755
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-08-05-615Z_14a989b9bbdd6755.jsonl]]
+#+CUSTOM_ID: FEAT-170-canvas-fluid-mode-convergence-with-agent
+#+EFFORT: L
+#+PRIORITY: #A
+#+LAYER: core
+#+DEPENDS: FEAT-165-fluidplan-to-todophases-converter FEAT-166-todo-write-org-lifecycle-hooks
+
+NOTE [2026-04-01]: Completed under PLAN-062. fluid-mode now converts plans to todos, drives execution through the agent session, and translates todo state changes back into FluidEvents for QML.
+
+* Initial Message
+
+Session Info
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-03-10-333Z_14a988995f409bb6.jsonl
+ ID: 14a988995f409bb6
+
+
+can you investigate if fluid plan was used? Was it used? Is todo write the right entry point for it? I'm open, ask me a lot of questiosn until you find the gap betweent he implenetation of the fluid orchestration/plan and how agents are actually used. Thanks
+
+* Scope
+
+Refactor canvas ~fluid-mode.ts~ to use the same agent-driven execution model as /plan. Instead of ~FluidOrchestrator~ dispatching subprocess agents directly, use FluidPlan → TodoPhases → agent execution with ~task~ tool for parallelism.
+
+** Files
+- MODIFY: ~packages/coding-agent/src/modes/fluid-mode.ts~ (662 lines — major refactor)
+- MODIFY: ~packages/coding-agent/src/orchestrators/fluid/coordinator-runner.ts~
+- MODIFY: ~packages/coding-agent/src/prompts/agents/coordinator.md~
+- ASSESS: QML shell files for event source changes
+
+** Current Architecture (to replace)
+1. ~runFluidMode~ → planner agent produces FluidPlan
+2. ~FluidOrchestrator.execute()~ dispatches agents via ~runSubprocess~
+3. Each agent runs as an independent subprocess with a bare system prompt
+4. QML subscribes to ~FLUID_EVENT_CHANNEL~ for DAG progress visualization
+5. No org items, no todo_write
+
+** Target Architecture
+1. ~runFluidMode~ → planner agent produces FluidPlan (UNCHANGED)
+2. ~fluidPlanToTodoPhases()~ converts to TodoPhase[] (shared converter from FEAT-165)
+3. A coordinator agent session receives the plan + pre-populated todos
+4. Coordinator uses todo_write + ~task~ tool for parallel execution
+5. QML visualization adapts to receive events from the new model
+
+** Coordinator Refactor
+- Coordinators still wrap multi-component sub-DAGs
+- Instead of building a custom prompt and running ~runSubprocess~ directly:
+  - Convert sub-DAG to TodoPhases
+  - Coordinator agent uses todo_write + ~task~ tool internally
+  - Coordinator prompt (~coordinator.md~) updated to reference todo_write workflow
+- Single-component plans: single agent session with pre-populated todos
+
+** QML Event Adaptation
+- Current: QML receives ~FluidEvent~ types (~agent_state_change~, ~agent_stream~, ~plan_complete~)
+- New: QML needs to receive todo_write state changes
+  - Option A: Emit ~FluidEvent~-compatible events from todo_write changes (translation layer)
+  - Option B: QML subscribes to a new todo event channel
+  - Preferred: Option A (minimal QML changes, translation in TypeScript)
+
+** What Stays
+- Planner agent + ~fluidPlanSchema~ (plan generation unchanged)
+- ~validateAndRefinePlan~ flow (validation unchanged)
+- QML shell layout and visualization (adapted events only)
+- ~FluidOrchestrator~ class itself (still useful for DAG validation, component splitting)
+
+** What Goes
+- ~runFluidAgent~ function (replaced by ~task~ tool dispatching)
+- ~executeFluidPlan~ function (replaced by agent-driven execution)
+- Direct ~runSubprocess~ calls from fluid-mode
+
+** Edge Cases
+- Canvas mode with no display: already guarded (~isDisplayAvailable~)
+- Plan with cycles: still caught by ~validatePlan~ before todo conversion
+- Agent failure in subprocess: ~task~ tool reports failure, coordinator handles retry/skip
+- Large plans (>20 agents): ensure todo_write UI and QML visualization both handle scale
+
+* Test
+- Adapt existing tests:
+  - ~packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts~
+  - ~packages/coding-agent/test/integration/fluid-event-pipeline.test.ts~
+  - ~packages/coding-agent/test/integration/fluid-shell-*.test.ts~
+- New test: verify FluidPlan → TodoPhases → agent execution → QML events pipeline
+
+* Acceptance
+- Canvas fluid-mode uses ~fluidPlanToTodoPhases~ (shared with /plan path)
+- No direct ~runSubprocess~ calls in fluid-mode.ts
+- QML shell still shows DAG progress visualization
+- ~bun check:ts~ clean
+- Existing fluid integration tests adapted and passing

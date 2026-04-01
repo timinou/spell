@@ -1,0 +1,80 @@
+#+TITLE: todo_write org lifecycle hooks
+#+STATE: DONE
+#+SESSION_ID: 14a989b9bbdd6755
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-08-05-615Z_14a989b9bbdd6755.jsonl]]
+#+CUSTOM_ID: FEAT-166-todo-write-org-lifecycle-hooks
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: core
+
+NOTE [2026-04-01]: Completed under PLAN-062. todo_write now auto-transitions child org items only: orgItemId -> DOING, orgItemClosingId -> DONE after verified completion. Parent PLAN closeout remains explicit outside todo_write.
+
+* Initial Message
+
+Session Info
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-03-10-333Z_14a988995f409bb6.jsonl
+ ID: 14a988995f409bb6
+
+
+can you investigate if fluid plan was used? Was it used? Is todo write the right entry point for it? I'm open, ask me a lot of questiosn until you find the gap betweent he implenetation of the fluid orchestration/plan and how agents are actually used. Thanks
+
+* Scope
+
+Add automatic org item state transitions to todo_write, replacing the manual agent-driven ~org update~ calls and the event-based ~OrgFluidBridge~.
+
+** Files
+- MODIFY: ~packages/coding-agent/src/tools/todo-write.ts~
+- MODIFY: ~packages/coding-agent/test/tools/todo-write.test.ts~ (or new test file)
+
+** Behavior
+
+*** On task marked ~in_progress~ (with ~orgItemId~)
+- Auto-transition the linked org item to ~DOING~
+- Use ~findItemById~ + ~updateItemStateInFile~ from ~@oh-my-pi/pi-org~
+- Fire-and-forget: log errors but don't block the todo_write response
+- Only transition if the org item is not already in ~DOING~ or later state
+
+*** On task marked ~completed~ with ~orgItemClosingId~ (after verification)
+- Auto-transition the linked org item to ~DONE~
+- Same fire-and-forget pattern
+- This replaces the current directive: ~"REQUIRED: Update org item X to DONE"~ (line 490 of todo-write.ts)
+
+*** Plan-level completion
+- When ALL tasks across ALL phases are completed, and the session has an active plan reference (~session.getPlanReferencePath()~):
+  - Auto-call ~completePlanItem~ to mark the PLAN item DONE
+  - This replaces OrgFluidBridge's ~finalize()~ method
+
+** Required Access
+- todo_write tool needs access to org settings (~todoKeywords~, category resolution) via ~session.settings~
+- The ~ToolSession~ interface must expose what's needed (it already has ~settings~)
+- Need ~session.cwd~ for ~resolveCategories~ (already available)
+
+** Remove/Update
+- Remove the directive on line 490 that tells agent to manually update org: ~"REQUIRED: Update org item X to DONE for task-N"~
+- Replace with a confirmation message: ~"Org item X auto-transitioned to DONE"~
+- Keep ~orgItemId~ INFO line for non-closing lineage tracking
+
+** Edge Cases
+- Org not enabled: skip transitions silently (check if org settings exist)
+- Org item not found: log warning, don't fail the todo_write operation
+- Transition fails: log error, don't fail the todo_write operation
+- Multiple tasks sharing same ~orgItemId~ (different waves): only first ~in_progress~ triggers DOING
+- Task completed without verification (~verified: true~ required for gated tasks): transition only fires AFTER verification passes
+
+* Test
+- File: ~packages/coding-agent/test/tools/todo-write-org-hooks.test.ts~
+- Test: marking task in_progress with orgItemId calls updateItemStateInFile with DOING
+- Test: completing task with orgItemClosingId calls updateItemStateInFile with DONE
+- Test: org not configured → no error, no transition
+- Test: org item not found → warning logged, todo_write succeeds
+- Test: multiple tasks with same orgItemId → DOING only on first in_progress
+- Test: non-gated task with orgItemClosingId → transition on completion
+- Test: gated task with orgItemClosingId → transition only after verified:true
+
+* Acceptance
+- ~bun test packages/coding-agent/test/tools/todo-write-org-hooks.test.ts~ passes
+- Existing ~bun test packages/coding-agent/test/tools/todo-write.test.ts~ still passes
+- ~bun test packages/coding-agent/test/tools/todo-write-gates.test.ts~ still passes
+- ~bun check:ts~ clean

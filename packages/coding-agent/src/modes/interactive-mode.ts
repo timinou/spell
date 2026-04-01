@@ -36,7 +36,7 @@ import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensibil
 import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
-import { type CoordinatorContext, FluidOrchestrator, OrgFluidBridge, runCoordinator } from "../orchestrators/fluid";
+import { fluidPlanToTodoPhases } from "../orchestrators/fluid";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
 import { approvePlanItem, buildOrgConfig, type OrgPlanRef, resolvePlanItem } from "../plan-mode/org-plan";
 import type { UserModeState } from "../plan-mode/state";
@@ -49,10 +49,7 @@ import { getRecentSessions } from "../session/session-manager";
 import { formatExitTokenSummary } from "../session/token-summary";
 import { getModeCommandDefs, registerModeCommands } from "../slash-commands/builtin-registry";
 import { STTController, type SttState } from "../stt";
-import { Semaphore } from "../task/parallel";
-import type { SingleResult } from "../task/types";
 import type { ExitPlanModeDetails, PlanWave } from "../tools";
-import { EventBus } from "../utils/event-bus";
 import { setTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import { AuditModeOverlay } from "./components/audit-mode-overlay";
@@ -1209,127 +1206,26 @@ export class InteractiveMode implements InteractiveModeContext {
 		const planState = this.session.getPlanModeState();
 		const modeConfig = planState?.modeConfigName ? this.session.getModeConfig(planState.modeConfigName) : undefined;
 
-		// New path: FluidOrchestrator-based execution when fluidPlan is available
-		if (options.fluidPlan && orgPlanItem) {
-			try {
-				await this.#executeViaFluidOrchestrator({
-					fluidPlan: options.fluidPlan,
-					planId: orgPlanItem.id,
-					planFile: orgPlanItem.file,
-					planReferencePath,
-					auditMode: this.planModeUltraplan ? "auto" : "suggest",
-					isDesign: this.planModeFlavor === "design",
-					modeConfig,
-				});
-			} catch (error) {
-				logger.error("FluidOrchestrator execution failed", { error });
-				this.showError(`Plan execution failed: ${error instanceof Error ? error.message : String(error)}`);
+		let autoInitialized = false;
+		if (options.fluidPlan) {
+			if (options.fluidPlan.warnings.length > 0) {
+				logger.warn("Fluid plan conversion produced warnings", { warnings: options.fluidPlan.warnings });
 			}
-			return;
+			const phases = fluidPlanToTodoPhases(options.fluidPlan);
+			this.session.setTodoPhases(phases, { reset: true });
+			autoInitialized = true;
 		}
 
-		// Legacy path: prompt injection for non-org or missing fluid plan
 		const prompt = renderPromptTemplate(planModeApprovedPrompt, {
 			planContent: orgToMarkdown(planContent),
 			finalPlanFilePath: planReferencePath,
 			orgItemId: approvedOrgItemId,
 			orgItemArtifactsDir: approvedOrgItemArtifactsDir,
-			waves: options.waves,
+			waves: autoInitialized ? undefined : options.waves,
 			modeExecutionInstructions: modeConfig?.sections.instructions,
+			autoInitialized,
 		});
 		await this.session.prompt(prompt, { synthetic: true });
-	}
-
-	/**
-	 * Execute an approved plan via FluidOrchestrator with coordinator sessions.
-	 * Each connected component in the plan gets an independent coordinator.
-	 */
-	async #executeViaFluidOrchestrator(opts: {
-		fluidPlan: FluidPlanWithComponents;
-		planId: string;
-		planFile: string;
-		planReferencePath: string;
-		auditMode: "auto" | "suggest";
-		isDesign: boolean;
-		modeConfig?: { sections: { instructions?: string } };
-	}): Promise<void> {
-		const eventBus = new EventBus();
-		const cwd = this.sessionManager.getCwd();
-		const bridge = new OrgFluidBridge({
-			eventBus,
-			planId: opts.planId,
-			planFile: opts.planFile,
-			settings: this.settings,
-			projectRoot: cwd,
-			auditMode: opts.auditMode,
-			isDesign: opts.isDesign,
-		});
-
-		// Build a single FluidPlan from all components
-		const allAgents = opts.fluidPlan.components.flatMap(c =>
-			c.agents.map(a => ({
-				id: a.id,
-				task: a.task,
-				dependsOn: a.dependsOn,
-				orgItemId: a.orgItemId,
-				effort: a.effort,
-				priority: a.priority,
-				body: a.body,
-				deferred: a.deferred ?? false,
-			})),
-		);
-		const plan = { agents: allAgents };
-
-		const fluidConcurrency = (this.settings.get("fluid.concurrency") as number | undefined) ?? 5;
-		const semaphore = new Semaphore(fluidConcurrency);
-
-		const orchestrator = new FluidOrchestrator({
-			eventBus,
-			cwd,
-			concurrency: fluidConcurrency,
-			semaphore,
-			runAgent: async (node, _upstream, signal) => {
-				const makeSyntheticResult = (output: string, error?: string): SingleResult => ({
-					index: 0,
-					id: node.id,
-					agent: node.isCoordinator ? "coordinator" : "plan-executor",
-					agentSource: "bundled",
-					task: node.task,
-					exitCode: error ? 1 : 0,
-					output,
-					stderr: "",
-					truncated: false,
-					durationMs: 0,
-					tokens: 0,
-					error,
-				});
-				// Coordinator nodes: run via coordinator-runner with sub-DAG prompt
-				if (node.isCoordinator) {
-					const context: CoordinatorContext = {
-						runSubprocess: async (prompt, _sig) => {
-							await this.session.prompt(prompt, { synthetic: true });
-							return makeSyntheticResult("Coordinator execution complete");
-						},
-						planId: opts.planId,
-					};
-					return runCoordinator(node, context, signal);
-				}
-				// Non-coordinator: direct prompt injection to session
-				const taskPrompt = `Execute org item ${node.orgItemId ?? node.id}: ${node.task}`;
-				await this.session.prompt(taskPrompt, { synthetic: true });
-				return makeSyntheticResult(`Completed: ${node.id}`);
-			},
-		});
-
-		bridge.start(plan);
-		try {
-			const results = await orchestrator.execute(plan);
-			const postResult = await bridge.finalize(results);
-			logger.debug("FluidOrchestrator execution complete", { ...postResult });
-		} catch (error) {
-			logger.error("FluidOrchestrator execution error", { error });
-			throw error;
-		}
 	}
 
 	async handleModeCommand(modeName: string, prompt?: string): Promise<void> {

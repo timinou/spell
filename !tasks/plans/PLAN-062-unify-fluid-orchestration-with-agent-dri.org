@@ -1,0 +1,110 @@
+#+TITLE: Unify fluid orchestration with agent-driven todo_write execution
+#+STATE: DONE
+#+SESSION_ID: 14a989b9bbdd6755
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-08-05-615Z_14a989b9bbdd6755.jsonl]]
+#+CUSTOM_ID: PLAN-062-unify-fluid-orchestration-with-agent-dri
+
+
+NOTE [2026-04-01]: Completed with child items reconciled to DONE and verification recorded.
+
+* Initial Message
+
+Session Info
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-03-10-333Z_14a988995f409bb6.jsonl
+ ID: 14a988995f409bb6
+
+
+can you investigate if fluid plan was used? Was it used? Is todo write the right entry point for it? I'm open, ask me a lot of questiosn until you find the gap betweent he implenetation of the fluid orchestration/plan and how agents are actually used. Thanks
+
+* Context
+
+** Problem
+Plan execution has three disconnected paths:
+1. *Legacy prompt-injection* (/plan, /ultraplan): Agent receives full plan via synthetic prompt. Agent manually initializes todo_write from wave structure. Agent drives execution, manually calls ~org update~ for lifecycle transitions. This path is reached when ~fluidPlan~ is missing or org is disabled.
+2. *FluidOrchestrator path* (interactive-mode): When ~fluidPlan~ is available, ~#executeViaFluidOrchestrator~ creates a DAG scheduler. But every agent runs via ~await this.session.prompt()~, which serializes through one session (AgentBusyError guard). todo_write is completely bypassed. OrgFluidBridge transitions org items via events. Despite having a concurrent QueueScheduler, execution is sequential.
+3. *Canvas fluid-mode* (QML): A planner agent decomposes a prompt into a FluidPlan. FluidOrchestrator dispatches agents via ~runSubprocess~ (real parallelism). QML visualizes DAG progress. No org items, no todo_write. Shares the FluidOrchestrator class but nothing else.
+
+The result: three code paths doing variations of the same thing, with different levels of completeness, and no shared execution model.
+
+** Approach: Agent-Driven Model (Model B)
+The main agent session receives the full plan and drives execution via todo_write. FluidOrchestrator becomes a plan compiler/validator, not an executor.
+
+*** Flow
+1. Plan compiled → FluidPlanWithComponents (org-fluid-plan MCP or planner agent)
+2. ~fluidPlanToTodoPhases()~ converts FluidPlan → TodoPhase[] (auto-init, one phase per wave per component)
+3. Session pre-populated with todo phases before agent starts
+4. Agent receives plan prompt with "todos are pre-populated, you may modify them"
+5. Agent executes via todo_write state machine: mark in_progress → work → mark completed
+6. Agent uses ~task~ tool for parallelism (subagents with ~todoRef~)
+7. todo_write hooks auto-transition org items: in_progress → DOING (orgItemId), completed → DONE (orgItemClosingId)
+8. Plan-level completion when all phases done
+
+*** Key Decisions
+- *Model B selected*: Agent drives execution, orchestrator advises. Agent sees whole plan, makes judgment calls about parallelization, can adapt mid-execution.
+- *todo_write is the universal control plane*: In both /plan and canvas paths.
+- *Org transitions are automatic*: Triggered by todo_write status changes, not manual ~org update~ calls or OrgFluidBridge events.
+- *Auto-init with agent flexibility*: System converts FluidPlan → TodoPhases. Agent can modify structure before/during execution.
+- *Canvas converges*: Uses the same FluidPlan → TodoPhases → agent execution pipeline. QML visualization adapts to receive events from the new model.
+- *Coordinators kept*: For multi-component plans, coordinators use todo_write internally.
+
+** What FluidOrchestrator Module Becomes
+A *plan compilation and validation library*: types, DAG utilities, wave computation, plan-schema, event-router. Not an execution engine — that role moves to todo_write + agent + task tool.
+
+* Verification
+
+** Type checking
+#+begin_src sh
+bun check:ts
+#+end_src
+
+** Unit tests
+#+begin_src sh
+bun test packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts
+bun test packages/coding-agent/test/tools/todo-write-org-hooks.test.ts
+bun test packages/coding-agent/test/tools/todo-write.test.ts
+bun test packages/coding-agent/test/tools/todo-write-gates.test.ts
+#+end_src
+
+** Integration tests (adapted)
+#+begin_src sh
+bun test packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts
+bun test packages/coding-agent/test/integration/fluid-event-pipeline.test.ts
+#+end_src
+
+** Manual verification
+- Run ~/plan~ with org enabled → verify todos are pre-populated, org items transition automatically
+- Run canvas fluid mode → verify same execution model, QML still shows progress
+
+* Execution Manifest
+
+** Wave 1: Foundation (parallel)
+- [[id:FEAT-165-fluidplan-to-todophases-converter]] — FluidPlan → TodoPhases converter (S)
+- [[id:FEAT-166-todo-write-org-lifecycle-hooks]] — todo_write org lifecycle hooks (M)
+
+** Wave 2: /plan path unification (depends on Wave 1)
+- [[id:FEAT-167-unify-plan-approval-to-agent-driven-exec]] — Remove #executeViaFluidOrchestrator, auto-init todos (M, depends FEAT-165)
+- [[id:FEAT-168-update-plan-execution-prompt-for-auto-po]] — Update plan-mode-approved.md (S, depends FEAT-167)
+- [[id:FEAT-169-retire-orgfluidbridge-from-plan-executio]] — Retire OrgFluidBridge (S, depends FEAT-166 + FEAT-167)
+
+** Wave 3: Canvas convergence (depends on Wave 1)
+- [[id:FEAT-170-canvas-fluid-mode-convergence-with-agent]] — Canvas fluid-mode refactor (L, depends FEAT-165 + FEAT-166)
+
+** Wave 4: Cleanup (depends on Waves 2+3)
+- [[id:FEAT-171-clean-up-unused-fluidorchestrator-execut]] — Remove dead code from fluid module (S, depends FEAT-167 + FEAT-170)
+
+
+** Completion [2026-04-01]
+*** Verification
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts packages/coding-agent/test/tools/todo-write*.ts packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts packages/coding-agent/test/tools/org-session-manager.test.ts packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts packages/coding-agent/test/integration/fluid-event-pipeline.test.ts packages/coding-agent/test/integration/fluid-mode-display-guard.test.ts` — passed (`120 pass`, `0 fail`).
+- `bun check:ts` — passed.
+
+*** Artifacts
+- No screenshot or browser artifacts were required.
+- Key implementation files: [[file:packages/coding-agent/src/tools/todo-write.ts]], [[file:packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts]], [[file:packages/coding-agent/src/modes/interactive-mode.ts]], [[file:packages/coding-agent/src/modes/fluid-mode.ts]], [[file:packages/coding-agent/src/prompts/system/plan-mode-approved.md]].
+- Key verification files: [[file:packages/coding-agent/test/tools/todo-write-org-hooks.test.ts]], [[file:packages/coding-agent/test/tools/todo-write-gates.test.ts]], [[file:packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts]], [[file:packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts]].
+
+*** Deviations
+- `todo_write` now auto-transitions linked child org items only. Final parent PLAN closeout remains explicit outside `todo_write` so the tool stays a task-state machine rather than a plan lifecycle manager.
+- The manual `/plan` and canvas smoke checks listed in the plan were replaced with focused automated prompt/integration coverage for the same behaviors.

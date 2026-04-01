@@ -1,0 +1,61 @@
+#+TITLE: Update plan execution prompt for auto-populated todos
+#+STATE: DONE
+#+SESSION_ID: 14a989b9bbdd6755
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-08-05-615Z_14a989b9bbdd6755.jsonl]]
+#+CUSTOM_ID: FEAT-168-update-plan-execution-prompt-for-auto-po
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: prompts
+#+DEPENDS: FEAT-167-unify-plan-approval-to-agent-driven-exec
+
+NOTE [2026-04-01]: Completed under PLAN-062. plan-mode-approved prompt now distinguishes auto-initialized todos from fallback manual initialization and keeps final PLAN closeout explicit.
+
+* Initial Message
+
+Session Info
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-03-10-333Z_14a988995f409bb6.jsonl
+ ID: 14a988995f409bb6
+
+
+can you investigate if fluid plan was used? Was it used? Is todo write the right entry point for it? I'm open, ask me a lot of questiosn until you find the gap betweent he implenetation of the fluid orchestration/plan and how agents are actually used. Thanks
+
+* Scope
+
+Update ~plan-mode-approved.md~ to handle two cases:
+1. FluidPlan auto-initialized todos (new path)
+2. Manual todo_write initialization (fallback, no FluidPlan)
+
+** Files
+- MODIFY: ~packages/coding-agent/src/prompts/system/plan-mode-approved.md~
+
+** Changes
+
+*** Add ~autoInitialized~ conditional section
+When ~{{autoInitialized}}~ is true:
+- Tell agent: "Your todo list has been pre-populated from the plan's execution structure"
+- Tell agent: "You may modify, add, reorder, or remove tasks as needed"
+- Tell agent: "Org item state transitions happen automatically when you update task status via todo_write"
+- Tell agent: "Use the ~task~ tool to parallelize independent tasks within the same wave/phase"
+- Remove manual init instructions (wave-based todo initialization section)
+
+*** Keep fallback section
+When ~{{autoInitialized}}~ is false (no FluidPlan):
+- Keep existing wave-based manual todo_write initialization instructions (lines 57-89)
+- Keep manual org update instructions
+
+*** Update Completion Protocol
+- When ~autoInitialized~: remove step 4 (manual org lifecycle close) — it's automatic
+- When ~autoInitialized~: keep steps 1-3, 5-6 (verification, commit, etc.)
+- Remove: "REQUIRED: Update org item X to DONE" — handled by todo_write hooks
+
+** Edge Cases
+- ~has tools "todo_write"~ guard still applies — if todo_write is not in tool set, skip all todo instructions
+- ~autoInitialized~ false + no waves: existing behavior (simple blocker-based init)
+
+* Acceptance
+- Template renders correctly with ~autoInitialized: true~ — no manual init section
+- Template renders correctly with ~autoInitialized: false~ — manual init section present
+- No reference to manual ~org update~ for state transitions when autoInitialized
+- ~bun check:ts~ clean

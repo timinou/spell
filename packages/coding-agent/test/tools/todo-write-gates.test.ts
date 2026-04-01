@@ -494,40 +494,29 @@ describe("orgItemId field", () => {
 		expect(restored[0].tasks[0].orgItemId).toBe("FEAT-001-add-auth");
 	});
 
-	test("orgItemClosingId shows in gate directives for completed task", () => {
-		const task = makeTask({
+	test("org-linked metadata does not add non-actionable completed-task directives", () => {
+		const closingTask = makeTask({
 			id: "task-1",
 			content: "Build it",
 			status: "completed",
 			orgItemClosingId: "FEAT-001-add-auth",
 		});
-		const result = formatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
-			errors: [],
-			completedPhaseIds: [],
-			completedGatedTasks: [task],
-			pendingVerificationTasks: [],
-			pendingDeferralTasks: [],
-		});
-		expect(result).toContain("REQUIRED: Update org item FEAT-001-add-auth to DONE for task-1.");
-	});
-
-	test("orgItemId without orgItemClosingId shows non-gating info", () => {
-		const task = makeTask({
-			id: "task-1",
-			content: "Build it",
+		const lineageTask = makeTask({
+			id: "task-2",
+			content: "Track it",
 			status: "completed",
 			orgItemId: "FEAT-001-add-auth",
 		});
 		const result = formatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
+			phases: [makePhase("phase-1", "Work", [closingTask, lineageTask])],
 			errors: [],
 			completedPhaseIds: [],
-			completedGatedTasks: [task],
+			completedGatedTasks: [closingTask, lineageTask],
 			pendingVerificationTasks: [],
 			pendingDeferralTasks: [],
 		});
-		expect(result).toContain("INFO: Linked to org item FEAT-001-add-auth (non-gating lineage).");
+		expect(result).not.toContain("auto-transitions to DONE");
+		expect(result).not.toContain("Linked to org item");
 	});
 });
 
@@ -562,7 +551,7 @@ describe("two-phase gated completion via formatSummary", () => {
 		expect(result).toContain("[ ] Run `bun test` (gateCmd)");
 		expect(result).toContain("[ ] Verify artifact at dist/out.json (gateArtifact)");
 		expect(result).toContain("[ ] Commit changes (gateCommit)");
-		expect(result).toContain("[ ] Update org item FEAT-001-add-auth to DONE (orgItemClosingId)");
+		expect(result).toContain("[i] Verified completion will auto-close org item FEAT-001-add-auth.");
 		expect(result).toContain('{op: "update", id: "task-1", status: "completed", verified: true}');
 	});
 
@@ -747,8 +736,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 		expect(rejectedTasks[0]?.status).toBe("in_progress");
 
 		const rejectedSummary = rejected.content.find(part => part.type === "text")?.text ?? "";
-		expect(rejectedSummary).toContain("Verification Required");
-		expect(rejectedSummary).toContain("[ ] Update org item FEAT-001-auth to DONE (orgItemClosingId)");
+		expect(rejectedSummary).toContain("[i] Verified completion will auto-close org item FEAT-001-auth.");
 
 		// Now complete with verified: true
 		const accepted = await tool.execute("call-4", {

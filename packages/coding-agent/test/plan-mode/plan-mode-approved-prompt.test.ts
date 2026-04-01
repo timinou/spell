@@ -55,3 +55,20 @@ describe("plan-mode-approved prompt", () => {
 		expect(rendered).toContain(":DEPENDS:");
 	});
 });
+
+it("describes auto-initialized todo execution without manual initialization steps", () => {
+	const rendered = renderPromptTemplate(planModeApprovedPrompt, {
+		planContent: "1. Do work",
+		finalPlanFilePath: "org://PLAN-062-test",
+		orgItemId: "PLAN-062-test",
+		orgItemArtifactsDir: "!tasks/plans/plan-artifacts/PLAN-062-test",
+		tools: ["read", "todo_write", "edit", "task"],
+		autoInitialized: true,
+	});
+
+	expect(rendered).toContain("Your todo list has been pre-populated from the plan's execution structure.");
+	expect(rendered).toContain("Child org item state transitions happen automatically");
+	expect(rendered).toContain("`todo_write` does not finish the parent plan for you");
+	expect(rendered).not.toContain("Wave-based Todo Initialization");
+	expect(rendered).toContain("4. Close org lifecycle state truthfully:");
+});
