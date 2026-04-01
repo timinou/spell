@@ -1,11 +1,13 @@
 #+TITLE: Exclude dts files from Biome checks
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 149b941a88dbf633
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-21T15-54-42-083Z_149b941a88dbf633.jsonl]]
 #+CUSTOM_ID: BUG-001-exclude-d-ts-files-from-biome-checks
 #+EFFORT: 5m
 #+PRIORITY: A
 #+LAYER: infra
+
+NOTE [2026-04-01]: Retroactively closed — already implemented. Evidence: biome.json contains !**/*.d.ts exclusion pattern.
 
 * Initial Message
 

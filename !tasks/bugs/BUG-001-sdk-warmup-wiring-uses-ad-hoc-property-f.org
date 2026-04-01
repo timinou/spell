@@ -1,11 +1,13 @@
 #+TITLE: SDK warmup wiring uses ad-hoc property for emacs session lifecycle
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14a469a3db5e15e8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T12-35-30-285Z_14a469a3db5e15e8.jsonl]]
 #+CUSTOM_ID: BUG-001-sdk-warmup-wiring-uses-ad-hoc-property-f
 #+EFFORT: 45m
 #+PRIORITY: B
 #+LAYER: packages/coding-agent
+
+NOTE [2026-04-01]: Retroactively closed — already implemented. Evidence: packages/coding-agent/src/sdk.ts creates EmacsSessionManager and wires warmup results. tools/index.ts declares emacsSessionManager property.
 
 * Initial Message
 

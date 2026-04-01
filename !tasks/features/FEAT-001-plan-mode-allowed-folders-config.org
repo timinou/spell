@@ -1,11 +1,13 @@
 #+TITLE: Plan mode allowed folders config
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14a4713646d0fa6e
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T13-08-35-227Z_14a4713646d0fa6e.jsonl]]
 #+CUSTOM_ID: FEAT-001-plan-mode-allowed-folders-config
 #+EFFORT: 45m
 #+PRIORITY: B
 #+LAYER: config+enforcement
+
+NOTE [2026-04-01]: Retroactively closed — already implemented. Evidence: allowed-folders.ts has PlanModeAllowedFolder interface and listPlanModeAllowedFolders(). mode-guard.ts enforceModeWrite() checks allowed folders.
 
 * Scope
 

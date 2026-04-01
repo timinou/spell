@@ -1,0 +1,64 @@
+#+TITLE: Close 9 stale org items already implemented
+#+STATE: DONE
+#+SESSION_ID: 14a9823c93809bab
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T11-35-22-446Z_14a9823c93809bab.jsonl]]
+#+CUSTOM_ID: BUG-051-close-9-stale-org-items-already-implemen
+#+EFFORT: 10m
+#+PRIORITY: #B
+#+LAYER: org
+
+NOTE [2026-04-01]: All 9 stale org items transitioned to DONE with dated evidence notes.
+
+* Initial Message
+
+find somthing easy to use the fluid orchestration on
+
+* Scope
+9 org items are in ITEM state but their work has already been implemented in the codebase. They need to be transitioned to DONE with a note explaining they were retroactively closed.
+
+** In-scope
+- Transition each item from ITEM to DONE via =org update=
+- Add a note to each explaining the evidence it was already implemented
+
+** Out-of-scope
+- Any code changes (all code is already landed)
+- Verifying the implementations (already verified in planning session)
+
+* Items to close
+
+** 1. =BUG-001-exclude-d-ts-files-from-biome-checks=
+Evidence: biome.json line 49 contains =!**/*.d.ts= exclusion pattern.
+
+** 2. =BUG-001-browser-tool-ignores-screenshot-path-par=
+Evidence: browser.ts screenshot handler (line ~1363) uses =resolveScreenshotArtifactPath(params.path, this.session.cwd)=.
+
+** 3. =BUG-001-exitplanmode-missing-niri-listener-notif=
+Evidence: interactive-mode.ts =exitPlanMode= calls =this.#niriListener?.()= at line ~1078.
+
+** 4. =FEAT-001-plan-mode-allowed-folders-config=
+Evidence: =allowed-folders.ts= exists with =PlanModeAllowedFolder= interface and =listPlanModeAllowedFolders()=. =mode-guard.ts= =enforceModeWrite()= checks allowed folders.
+
+** 5. =FEAT-001-completeplanitem-helper-for-plan-lifecyc=
+Evidence: =org-plan.ts= exports =completePlanItem()= (lines 97-190) with child state reconciliation.
+
+** 6. =BUG-001-emacs-code-getsession-has-no-isalive-che=
+Evidence: =packages/emacs/src/tool.ts= line ~36: =if (!session || !session.isAlive()) return { error: true, message: "Emacs daemon unavailable" }=.
+
+** 7. =BUG-001-emacs-code-has-no-daemon-recovery-or-laz=
+Evidence: =packages/emacs/src/session-manager.ts= implements =EmacsSessionManager= with circuit breaker, lazy startup, and auto-recovery.
+
+** 8. =BUG-001-sdk-warmup-wiring-uses-ad-hoc-property-f=
+Evidence: =packages/coding-agent/src/sdk.ts= line ~897 creates =EmacsSessionManager= and wires warmup results. =tools/index.ts= declares =emacsSessionManager= property.
+
+** 9. =BUG-001-remove-dead-startemacsdaemon-and-makeema=
+Evidence: =grep= for =startEmacsDaemon= and =makeEmacsSessionFactory= in =packages/emacs/= returns zero matches — dead code already removed.
+
+* Implementation
+For each item, run:
+#+begin_src
+org update { id: "<ITEM_ID>", state: "DONE", note: "Retroactively closed — already implemented. <evidence>" }
+#+end_src
+
+* Acceptance Criteria
+- All 9 items show state =DONE= in =org query=
+- Each item has a dated note explaining the evidence

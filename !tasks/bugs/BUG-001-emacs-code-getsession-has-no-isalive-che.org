@@ -1,11 +1,13 @@
 #+TITLE: emacs_code getSession has no isAlive check before use
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14a469a3db5e15e8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T12-35-30-285Z_14a469a3db5e15e8.jsonl]]
 #+CUSTOM_ID: BUG-001-emacs-code-getsession-has-no-isalive-che
 #+EFFORT: 30m
 #+PRIORITY: A
 #+LAYER: packages/emacs
+
+NOTE [2026-04-01]: Retroactively closed — already implemented. Evidence: packages/emacs/src/tool.ts checks session.isAlive() before proceeding.
 
 * Initial Message
 

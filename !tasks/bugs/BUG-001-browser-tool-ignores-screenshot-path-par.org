@@ -1,11 +1,13 @@
 #+TITLE: Browser tool ignores screenshot path param
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14a475a741b4294e
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T13-27-59-494Z_14a475a741b4294e.jsonl]]
 #+CUSTOM_ID: BUG-001-browser-tool-ignores-screenshot-path-par
 #+EFFORT: 30m
 #+PRIORITY: #B
 #+LAYER: tool
+
+NOTE [2026-04-01]: Retroactively closed — already implemented. Evidence: browser.ts screenshot handler uses resolveScreenshotArtifactPath(params.path, this.session.cwd).
 
 * Initial Message
 

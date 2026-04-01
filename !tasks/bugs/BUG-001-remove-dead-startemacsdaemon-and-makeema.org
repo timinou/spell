@@ -1,11 +1,13 @@
 #+TITLE: Remove dead startEmacsDaemon and makeEmacsSessionFactory
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14a46b97b09e15ea
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T12-44-02-114Z_14a46b97b09e15ea.jsonl]]
 #+CUSTOM_ID: BUG-001-remove-dead-startemacsdaemon-and-makeema
 #+EFFORT: 20m
 #+PRIORITY: #C
 #+LAYER: packages/emacs
+
+NOTE [2026-04-01]: Retroactively closed — already implemented. Evidence: grep for startEmacsDaemon and makeEmacsSessionFactory in packages/emacs/ returns zero matches — dead code already removed.
 
 * Initial Message
 

@@ -1,0 +1,63 @@
+#+TITLE: Housekeeping batch and model catalog
+#+STATE: DONE
+#+SESSION_ID: 14a9823c93809bab
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T11-35-22-446Z_14a9823c93809bab.jsonl]]
+#+CUSTOM_ID: PLAN-059-housekeeping-batch-and-model-catalog
+
+NOTE [2026-04-01]: Both child items completed. Model catalog updated, 9 stale items closed.
+
+
+* Initial Message
+
+find somthing easy to use the fluid orchestration on
+
+* Context
+
+Two kinds of work bundled as a small fluid orchestration test:
+
+1. *Stale item closure*: 9 org items (5 bugs, 2 features, 2 more bugs) are still in ITEM state but their code changes already landed in the repo. They need to be transitioned to DONE with dated notes. Evidence was verified by checking the actual codebase:
+   - biome.json d.ts exclusion (line 49)
+   - browser.ts screenshot path handling (resolveScreenshotArtifactPath)
+   - interactive-mode.ts exitPlanMode niri listener call
+   - allowed-folders.ts + mode-guard.ts plan mode folders
+   - org-plan.ts completePlanItem() helper
+   - emacs tool.ts isAlive() check
+   - emacs session-manager.ts EmacsSessionManager
+   - sdk.ts EmacsSessionManager wiring
+   - Dead emacs code (startEmacsDaemon/makeEmacsSessionFactory) already removed
+
+2. *Model catalog gap*: GitHub issue #546 requests =gemini-3.1-flash-lite-preview= in the =google-gemini-cli= provider section of =packages/ai/src/models.json=. The model already exists in =google-generative-ai= (line 5955) but is missing from =google-gemini-cli= (section lines 6559-6721). The entry should mirror nearby models like =gemini-3-flash-preview= with zero costs and =google-level= thinking mode.
+
+** Key decisions
+- Both items are fully independent — max parallelism for the fluid orchestrator
+- Model catalog entry uses the =levels= array format (matching =gemini-3-flash-preview= at line 6638), not =minLevel= / =maxLevel=
+- Stale items get a uniform note format: "Retroactively closed — already implemented. Evidence: <detail>"
+
+* Verification
+
+** After execution
+- =org query todo:DONE= should include all 9 previously-stale item IDs
+- =grep "gemini-3.1-flash-lite-preview" packages/ai/src/models.json= shows entry in google-gemini-cli section
+- =bun check:ts= passes
+
+* Execution Manifest
+
+Both items are independent (Wave 1 — full parallel):
+
+- [[id:FEAT-158-add-gemini-3-1-flash-lite-preview-to-goo]] — Add gemini-3.1-flash-lite-preview to google-gemini-cli catalog (10m, closes #546)
+- [[id:BUG-051-close-9-stale-org-items-already-implemen]] — Close 9 stale org items already implemented (10m, org updates only)
+
+** Completion [2026-04-01]
+
+*** Verification
+- =grep "gemini-3.1-flash-lite-preview" packages/ai/src/models.json= — entry present at line 6721 in google-gemini-cli section (alongside existing google-generative-ai entry at line 5955)
+- =org query todo:DONE category:bugs= — all 9 stale bug items confirmed DONE
+- =org query todo:DONE category:features= — both stale feature items (FEAT-001-plan-mode-allowed-folders-config, FEAT-001-completeplanitem-helper-for-plan-lifecyc) confirmed DONE
+- =bun check:ts= — 2 pre-existing biome format errors in =packages/coding-agent/src/domain/loader.ts= and =detection.ts= (spaces vs tabs, useLiteralKeys lint). Not introduced by this change. models.json modification is clean.
+
+*** Artifacts
+- =packages/ai/src/models.json= — +29 lines (new gemini-3.1-flash-lite-preview entry in google-gemini-cli section)
+- 9 org item files transitioned from ITEM to DONE with dated evidence notes
+
+*** Deviations
+=bun check:ts= does not pass clean due to pre-existing biome lint/format issues in =packages/coding-agent/src/domain/loader.ts= and =packages/coding-agent/src/domain/detection.ts=. These are unrelated to this plan's changes.

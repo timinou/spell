@@ -1,0 +1,75 @@
+#+TITLE: Add gemini-31-flash-lite-preview to google-gemini-cli catalog
+#+STATE: DONE
+#+SESSION_ID: 14a9823c93809bab
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T11-35-22-446Z_14a9823c93809bab.jsonl]]
+#+CUSTOM_ID: FEAT-158-add-gemini-3-1-flash-lite-preview-to-goo
+#+EFFORT: 10m
+#+PRIORITY: #B
+#+LAYER: config
+
+NOTE [2026-04-01]: Added gemini-3.1-flash-lite-preview to google-gemini-cli section in models.json. Entry mirrors gemini-3-flash-preview format with levels array, zero costs, and 1048576 context window.
+
+* Initial Message
+
+find somthing easy to use the fluid orchestration on
+
+* Scope
+Add =gemini-3.1-flash-lite-preview= to the =google-gemini-cli= provider section in =packages/ai/src/models.json=. Closes GitHub issue #546.
+
+** In-scope
+- Add model entry to google-gemini-cli section (after gemini-3.1-pro-preview, before section close)
+
+** Out-of-scope
+- Other provider sections (google-generative-ai already has this model at line 5955)
+- Provider implementation changes (google-gemini-cli API support already exists)
+
+* Implementation
+** File: =packages/ai/src/models.json=
+Insert after the =gemini-3.1-pro-preview= entry (line ~6720) inside the =google-gemini-cli= section:
+
+#+begin_src json
+"gemini-3.1-flash-lite-preview": {
+    "id": "gemini-3.1-flash-lite-preview",
+    "name": "Gemini 3.1 Flash Lite Preview",
+    "api": "google-gemini-cli",
+    "provider": "google-gemini-cli",
+    "baseUrl": "https://cloudcode-pa.googleapis.com",
+    "reasoning": true,
+    "input": ["text", "image"],
+    "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 65536,
+    "thinking": {
+        "mode": "google-level",
+        "minLevel": "minimal",
+        "maxLevel": "high"
+    }
+}
+#+end_src
+
+Key differences from google-generative-ai entry:
+- =api=: =google-gemini-cli= (not =google-generative-ai=)
+- =provider=: =google-gemini-cli= (not =google=)
+- =baseUrl=: =https://cloudcode-pa.googleapis.com= (not generativelanguage.googleapis.com)
+- =cost=: all zeros (google-gemini-cli is free tier)
+- =thinking.mode=: =google-level= with =minLevel= / =maxLevel= (matches other google-gemini-cli models like gemini-3-flash-preview)
+
+Note: some google-gemini-cli models use =levels= array instead of =minLevel= / =maxLevel=. Follow the pattern from =gemini-3-flash-preview= (line 6638) which uses =google-level= mode with =levels= array. Check both formats and use whichever is consistent with nearby entries.
+
+* Tests
+No automated tests needed — JSON config file change. Verification:
+- =bun check:ts= passes (models.json is imported and type-checked)
+- =grep -c "gemini-3.1-flash-lite-preview" packages/ai/src/models.json= returns more matches than before (currently 5, should be 6+)
+
+Preferred sequencing: implementation only.
+
+* Acceptance Criteria
+- =gemini-3.1-flash-lite-preview= appears in the =google-gemini-cli= section of models.json
+- Entry has correct api, provider, baseUrl, and zero costs
+- =bun check:ts= passes
+- Commit message includes =closes #546=

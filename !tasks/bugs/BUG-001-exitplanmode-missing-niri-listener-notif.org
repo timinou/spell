@@ -1,11 +1,13 @@
 #+TITLE: exitPlanMode missing niri listener notification
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14a478ec02229bc5
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-28T13-42-16-328Z_14a478ec02229bc5.jsonl]]
 #+CUSTOM_ID: BUG-001-exitplanmode-missing-niri-listener-notif
 #+EFFORT: 10m
 #+PRIORITY: #B
 #+LAYER: integration
+
+NOTE [2026-04-01]: Retroactively closed — already implemented. Evidence: interactive-mode.ts exitPlanMode calls this.#niriListener?.() for listener notification.
 
 * Initial Message
 
