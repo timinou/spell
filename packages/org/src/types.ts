@@ -269,6 +269,8 @@ export interface FluidPlanAgent {
 	priority: string;
 	state: string;
 	body: string;
+	parentBody?: string;
+	deferred?: boolean;
 }
 
 export interface FluidPlanWave {

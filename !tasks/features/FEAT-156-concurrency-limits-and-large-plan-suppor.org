@@ -1,0 +1,42 @@
+#+TITLE: Concurrency limits and large plan support
+#+STATE: DONE
+#+SESSION_ID: 14a8bf8d3cbf231d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T21-24-46-962Z_14a8bf8d3cbf231d.jsonl]]
+#+CUSTOM_ID: FEAT-156-concurrency-limits-and-large-plan-suppor
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: backend
+#+DEPENDS: FEAT-153-deferred-node-support-in-fluidorchestrat
+
+* Initial Message
+
+continue
+
+* Scope
+
+No global subprocess concurrency cap across coordinators. Multiple coordinators each spawn parallel agents. With ~100 nodes and concurrency=5 per coordinator, this creates uncontrolled concurrent API calls.
+
+** In
+- Make MAX_RECOMMENDED_AGENT_COUNT a warning only (suppress for plans >12 nodes that are legitimate)
+- Add ~fluid.maxConcurrency~ setting (default: 5) that applies globally across all coordinators
+- Implement a shared semaphore for subprocess spawning: coordinators acquire permits before spawning, release on completion
+- Pass semaphore through CoordinatorContext so coordinator-spawned agents respect the global limit
+- Verify interactive-mode.ts passes setting value to FluidOrchestrator
+
+** Out
+- No API changes to FluidOrchestrator.execute()
+- No changes to org-fluid-plan.el
+
+* Key files
+- ~packages/coding-agent/src/orchestrators/fluid/queue-scheduler.ts~ — accept optional semaphore
+- ~packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts~ — create and pass shared semaphore
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ — read setting, pass to FluidOrchestrator
+
+* Tests
+- ~fluid-scheduler.test.ts~: verify concurrent running agents never exceed limit
+- Manual: large plan with multiple coordinators respects global cap
+
+* Acceptance
+- With default settings: no more than 5 concurrent agents system-wide
+- ~bun test test/orchestrators/~ passes
+- ~bun check:ts~ passes

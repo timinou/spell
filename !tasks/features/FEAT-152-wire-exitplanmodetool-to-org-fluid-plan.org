@@ -1,0 +1,49 @@
+#+TITLE: Wire ExitPlanModeTool to org-fluid-plan MCP
+#+STATE: DONE
+#+SESSION_ID: 14a8bf8d3cbf231d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T21-24-46-962Z_14a8bf8d3cbf231d.jsonl]]
+#+CUSTOM_ID: FEAT-152-wire-exitplanmodetool-to-org-fluid-plan
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+continue
+
+* Scope
+
+ExitPlanModeTool.execute() resolves PLAN items and child refs but never calls org-fluid-plan MCP. The ~fluidPlan~ field in ExitPlanModeDetails is always undefined, so the FluidOrchestrator path in interactive-mode.ts #approvePlan is never triggered.
+
+** In
+- Add OrgClient access to ExitPlanModeTool (via ToolSession.emacsSessionManager or by exposing org tool's internal client)
+- Call ~org-fluid-plan~ MCP with ~{plan_id: itemId}~ after child ID validation passes
+- Parse response into FluidPlanWithComponents, set on details.fluidPlan
+- Handle MCP failure gracefully: log warning, fall back to wave-based execution (fluidPlan stays undefined)
+
+** Out
+- No changes to interactive-mode.ts (already consumes fluidPlan)
+- No changes to FluidOrchestrator
+
+* Approach
+
+Expose a ~getOrgClient()~ method on ToolSession (or add it alongside existing ~emacsSessionManager~). The OrgClient is created lazily from the Emacs MCP socket. ExitPlanModeTool calls ~client.callTool("org-fluid-plan", {plan_id})~, parses JSON result into FluidPlanWithComponents.
+
+Alternative: have ExitPlanModeTool invoke the org tool internally via ~session.executeTool("org", {command: "fluid_plan", ...})~. This requires adding a fluid_plan subcommand to the org tool, which is more invasive.
+
+Preferred: direct OrgClient access via ToolSession.
+
+* Key files
+- ~packages/coding-agent/src/tools/exit-plan-mode.ts~ — add MCP call after child validation
+- ~packages/coding-agent/src/tools/index.ts~ — expose getOrgClient on ToolSession
+- ~packages/coding-agent/src/tools/org.ts~ — expose inner OrgClient or factory
+- ~packages/org/src/emacs/client.ts~ — already has callTool interface
+
+* Tests
+- ~packages/coding-agent/test/tools/exit-plan-mode-fluid.test.ts~ (new): mock OrgClient.callTool, verify fluidPlan populated on success, verify graceful fallback on failure
+- Update existing exit-plan-mode tests if interface changes
+
+* Acceptance
+- With Emacs running: exit_plan_mode with org PLAN item populates details.fluidPlan
+- Without Emacs: exit_plan_mode falls back gracefully (fluidPlan undefined, wave-based execution)
+- ~bun test test/tools/exit-plan-mode*.test.ts~ passes

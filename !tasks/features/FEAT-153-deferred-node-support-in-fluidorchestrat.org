@@ -1,0 +1,46 @@
+#+TITLE: Deferred node support in FluidOrchestrator
+#+STATE: DONE
+#+SESSION_ID: 14a8bf8d3cbf231d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T21-24-46-962Z_14a8bf8d3cbf231d.jsonl]]
+#+CUSTOM_ID: FEAT-153-deferred-node-support-in-fluidorchestrat
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+#+DEPENDS: FEAT-152-wire-exitplanmodetool-to-org-fluid-plan
+
+* Initial Message
+
+continue
+
+* Scope
+
+FUP items in a plan should be skipped during execution. Currently there is no mechanism to detect or skip deferred nodes.
+
+** In
+- Add ~deferred?: boolean~ to FluidAgentNode in types.ts
+- Emit ~deferred: true~ in org-fluid-plan.el when CUSTOM_ID starts with ~FUP-~
+- QueueScheduler: skip deferred nodes by immediately marking them completed with a synthetic result
+- Deferred nodes count as completed for dependency resolution (downstream items execute normally)
+- Add ERT test for deferred detection in org-fluid-plan.el
+
+** Out
+- No UI changes
+- No changes to coordinator prompt (deferred nodes are filtered before coordinator sees them)
+
+* Key files
+- ~packages/coding-agent/src/orchestrators/fluid/types.ts~ — add deferred field
+- ~packages/org/elisp/tools/org-fluid-plan.el~ — detect FUP- prefix, set deferred=true
+- ~packages/org/elisp/test/test-org-fluid-plan.el~ — add deferred detection test
+- ~packages/coding-agent/src/orchestrators/fluid/queue-scheduler.ts~ — skip deferred nodes in execute()
+
+* Tests
+- ERT: plan with FUP- items emits deferred=true
+- ERT: deferred items are included in component detection (still connected)
+- TS: ~fluid-scheduler.test.ts~ — deferred nodes skipped, dependents still execute
+- TS: ~fluid-components.test.ts~ — deferred nodes preserved through splitIntoComponents
+
+* Acceptance
+- FUP- items in org plan are skipped during execution
+- Downstream items of deferred nodes execute normally
+- ~bun test test/orchestrators/~ passes
+- ERT tests pass

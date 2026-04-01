@@ -1,3 +1,4 @@
+import type { Semaphore } from "../../task/parallel";
 import type { SingleResult } from "../../task/types";
 import { type EventBus, Priority } from "../../utils/event-bus";
 import { splitIntoComponents, validatePlan } from "./dag";
@@ -9,6 +10,8 @@ interface FluidOrchestratorOptions {
 	cwd: string;
 	concurrency?: number;
 	runAgent?: RunAgentFn;
+	/** Shared semaphore for global concurrency control across coordinators. */
+	semaphore?: Semaphore;
 }
 
 const defaultRunAgent: RunAgentFn = async (
@@ -24,6 +27,7 @@ export class FluidOrchestrator {
 	readonly #cwd: string;
 	readonly #concurrency: number;
 	readonly #runAgent: RunAgentFn;
+	readonly #semaphore?: Semaphore;
 	#draining = false;
 	#drainTimer?: NodeJS.Timeout;
 
@@ -32,6 +36,7 @@ export class FluidOrchestrator {
 		this.#cwd = options.cwd;
 		this.#concurrency = Math.max(1, options.concurrency ?? 5);
 		this.#runAgent = options.runAgent ?? defaultRunAgent;
+		this.#semaphore = options.semaphore;
 	}
 
 	/**
@@ -54,6 +59,21 @@ export class FluidOrchestrator {
 		// Split into connected components — single-component returns [plan] unchanged
 		const components = splitIntoComponents(plan);
 
+		// Validate each component sub-plan (only needed for multi-component; single-component was validated above)
+		if (components.length > 1) {
+			const componentErrors: string[] = [];
+			for (const [i, component] of components.entries()) {
+				const componentValidation = validatePlan(component);
+				if (!componentValidation.valid) {
+					componentErrors.push(`Component ${i + 1}: ${componentValidation.errors.join("; ")}`);
+				}
+			}
+			if (componentErrors.length > 0) {
+				const error = `Sub-plan validation failed: ${componentErrors.join(" | ")}`;
+				this.#eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_error", error }, Priority.P1);
+				throw new Error(error);
+			}
+		}
 		// Multi-component: wrap each in a coordinator node
 		const executionPlan = components.length > 1 ? this.#buildCoordinatorPlan(components) : plan;
 
@@ -67,6 +87,7 @@ export class FluidOrchestrator {
 				runAgent: this.#runAgent,
 				signal,
 				presetCompletedResults,
+				semaphore: this.#semaphore,
 				onEvent: event => {
 					this.#eventBus.enqueue(FLUID_EVENT_CHANNEL, event, Priority.P1);
 					if (event.type !== "agent_state_change" || event.state !== "completed" || !event.result) {

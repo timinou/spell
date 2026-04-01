@@ -1,0 +1,38 @@
+#+TITLE: Sub-plan validation in FluidOrchestrator
+#+STATE: DONE
+#+SESSION_ID: 14a8bf8d3cbf231d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T21-24-46-962Z_14a8bf8d3cbf231d.jsonl]]
+#+CUSTOM_ID: FEAT-155-sub-plan-validation-in-fluidorchestrator
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+continue
+
+* Scope
+
+validatePlan is only called on the top-level plan. Sub-plans inside coordinator nodes skip validation entirely. A sub-plan with cycles, missing deps, or self-referential agents would execute without error.
+
+** In
+- In FluidOrchestrator.execute(), after splitIntoComponents, validate each component sub-plan
+- Call validatePlan on each component before wrapping in coordinator nodes
+- Aggregate validation errors from all components
+- If any component is invalid, emit plan_error and throw
+
+** Out
+- No changes to validatePlan itself
+- No changes to QueueScheduler
+
+* Key files
+- ~packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts~ — add sub-plan validation loop
+
+* Tests
+- ~packages/coding-agent/test/orchestrators/fluid-drain.test.ts~ or new test: multi-component plan with one invalid component rejects entire plan
+- ~packages/coding-agent/test/orchestrators/fluid-components.test.ts~ — add test for validation on split components
+
+* Acceptance
+- Invalid sub-plans are rejected before execution starts
+- Error messages identify which component failed
+- ~bun test test/orchestrators/~ passes

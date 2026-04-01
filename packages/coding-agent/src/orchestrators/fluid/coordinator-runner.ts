@@ -29,6 +29,7 @@ export async function runCoordinator(
 		dependsOn: a.dependsOn,
 		effort: a.effort ?? "",
 		priority: a.priority ?? "",
+		body: a.body ?? "",
 	}));
 
 	const prompt = renderPromptTemplate(coordinatorPromptTemplate, {

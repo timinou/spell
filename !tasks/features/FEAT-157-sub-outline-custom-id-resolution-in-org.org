@@ -1,0 +1,41 @@
+#+TITLE: Sub-outline CUSTOM_ID resolution in org-fluid-plan
+#+STATE: DONE
+#+SESSION_ID: 14a8bf8d3cbf231d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T21-24-46-962Z_14a8bf8d3cbf231d.jsonl]]
+#+CUSTOM_ID: FEAT-157-sub-outline-custom-id-resolution-in-org
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+continue
+
+* Scope
+
+org-fluid-plan.el extracts [[id:...]] links from PLAN body. When those links contain sub-outline IDs (~PARENT-ID::sub-slug~), the current ~org-fluid-plan--collect-items-by-ids~ uses ~org-element-map~ which searches all headings by CUSTOM_ID. This works for top-level items but must be verified for nested headings with :: IDs.
+
+** In
+- Verify org-element-map finds nested headings with CUSTOM_ID containing ::
+- If not: implement fallback — for IDs containing ::, split on ::, find parent heading, search child headings
+- Emit sub-outline body: both sub-heading body content AND parent item's Scope/Tests/Acceptance sections as ~parentBody~ field
+- Add ERT tests for sub-outline resolution and body emission
+
+** Out
+- No TypeScript changes needed if org-element-map already works
+- If parentBody field added: update FluidPlanAgent type in types.ts
+
+* Key files
+- ~packages/org/elisp/tools/org-fluid-plan.el~ — verify/fix sub-outline resolution, add parentBody emission
+- ~packages/org/elisp/test/test-org-fluid-plan.el~ — add sub-outline test cases
+- ~packages/org/src/types.ts~ — add parentBody to FluidPlanAgent if needed
+
+* Tests
+- ERT: plan linking to ~FEAT-001::define-types~ resolves correctly
+- ERT: sub-outline body includes both child body and parent context
+- ERT: mixed plan with top-level + sub-outline items resolves all
+
+* Acceptance
+- Sub-outline IDs from execution manifests resolve in org-fluid-plan
+- ERT tests pass
+- ~bun check:ts~ passes (if types.ts changed)

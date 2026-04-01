@@ -1,0 +1,77 @@
+#+TITLE: Fluid Orchestration Wiring Prerequisites
+#+STATE: DONE
+#+SESSION_ID: 14a8bf8d3cbf231d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T21-24-46-962Z_14a8bf8d3cbf231d.jsonl]]
+#+CUSTOM_ID: PLAN-058-fluid-orchestration-wiring-prerequisites
+
+
+* Initial Message
+
+continue
+
+* Context
+
+PLAN-056 implemented the FluidOrchestrator infrastructure (types, DAG, scheduler, bridge, coordinator, prompts) but left critical wiring gaps. The ~fluidPlan~ field in ExitPlanModeDetails is never populated, deferred nodes aren't detected, coordinator prompts lack item body context, sub-plans skip validation, and there's no concurrency cap across coordinators. These gaps must be closed before any real plan can execute via the FluidOrchestrator path.
+
+** Approach
+Six focused features, mostly independent. The MCP wiring (FEAT-152) is the critical path — everything else can proceed in parallel after it lands. Implementation is test-first where practical: ERT tests for Elisp changes, TS tests for scheduler/orchestrator changes.
+
+** Key Decisions
+1. OrgClient access: expose via ToolSession rather than adding an org subcommand. Direct callTool is simpler and avoids the org tool dispatch overhead.
+2. Deferred detection: FUP- prefix on CUSTOM_ID. Simple, matches existing convention, no configuration needed.
+3. Concurrency: shared semaphore across coordinators rather than per-coordinator limits. Prevents runaway API calls.
+4. Sub-outline resolution: verify org-element-map first, implement fallback only if needed. Prefer not adding complexity if the existing code works.
+
+* Verification
+
+** Automated checks
+- ~bun check:ts~ — no type errors
+- ~bun lint:ts~ — no violations
+- ~emacs --batch -l test-org-fluid-plan.el -f ert-run-tests-batch-and-exit~ — all ERTs pass (including new deferred + sub-outline tests)
+- ~bun test test/orchestrators/~ — all orchestrator tests pass
+- ~bun test test/tools/exit-plan-mode*.test.ts~ — all exit-plan-mode tests pass
+
+** Manual verification
+- Start Emacs MCP server, create a PLAN with [[id:...]] links, run ~exit_plan_mode~ — verify fluidPlan populated in ExitPlanModeDetails
+- Approve plan — verify FluidOrchestrator executes (not legacy prompt injection)
+- Plan with FUP- items — verify deferred nodes skipped, downstream executes
+- Check coordinator prompt includes item body text
+
+* Execution Manifest
+
+** foundation :wave:
+- [[id:FEAT-152-wire-exitplanmodetool-to-org-fluid-plan]] Wire ExitPlanModeTool to org-fluid-plan MCP (4h, critical path)
+- [[id:FEAT-155-sub-plan-validation-in-fluidorchestrator]] Sub-plan validation in FluidOrchestrator (2h, independent)
+- [[id:FEAT-157-sub-outline-custom-id-resolution-in-org]] Sub-outline CUSTOM_ID resolution in org-fluid-plan (3h, independent)
+
+** wiring :wave:
+- [[id:FEAT-153-deferred-node-support-in-fluidorchestrat]] Deferred node support (3h, depends FEAT-152)
+- [[id:FEAT-154-coordinator-prompt-with-full-item-body-c]] Coordinator prompt with full item body (2h, depends FEAT-152)
+
+** hardening :wave:
+- [[id:FEAT-156-concurrency-limits-and-large-plan-suppor]] Concurrency limits and large plan support (3h, depends FEAT-153)
+
+** Completion [2026-04-01]
+
+*** Verification
+- ~bun check:ts~ — passed (no type errors, 1495 files checked)
+- ~bun lint:ts~ — passed (no violations)
+- ~bun test test/orchestrators/~ — 56 tests passed across 5 files
+- ~bun test test/tools/exit-plan-mode~ — 16 tests passed across 2 files
+- ERT tests — 20/20 passed (including 3 new: deferred FUP items, sub-outline direct, sub-outline fallback)
+
+*** Artifacts
+Code changes across 10 files:
+- ~packages/coding-agent/src/tools/exit-plan-mode.ts~ — FEAT-152: added org-fluid-plan MCP call, populates fluidPlan field
+- ~packages/coding-agent/src/orchestrators/fluid/types.ts~ — FEAT-153/154: added ~deferred~ and ~body~ fields to FluidAgentNode
+- ~packages/coding-agent/src/orchestrators/fluid/queue-scheduler.ts~ — FEAT-153/156: deferred node skip + shared semaphore support
+- ~packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts~ — FEAT-155/156: sub-plan validation + semaphore passthrough
+- ~packages/coding-agent/src/orchestrators/fluid/coordinator-runner.ts~ — FEAT-154: body field in subDagItems mapping
+- ~packages/coding-agent/src/prompts/agents/coordinator.md~ — FEAT-154: renders item body in coordinator prompt
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ — FEAT-152/153/154/156: propagates deferred+body fields, creates shared semaphore from fluid.concurrency setting
+- ~packages/org/elisp/tools/org-fluid-plan.el~ — FEAT-153/157: deferred field emission + sub-outline :: fallback resolution
+- ~packages/org/elisp/test/test-org-fluid-plan.el~ — 3 new ERT tests
+- ~packages/org/src/types.ts~ — added ~deferred~ and ~parentBody~ to FluidPlanAgent
+
+*** Deviations
+None.

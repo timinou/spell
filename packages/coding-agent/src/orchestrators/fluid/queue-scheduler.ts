@@ -1,3 +1,4 @@
+import type { Semaphore } from "../../task/parallel";
 import type { SingleResult } from "../../task/types";
 import { getReadyAgents } from "./dag";
 import type { AgentRuntime, FluidAgentNode, FluidEvent, FluidPlan } from "./types";
@@ -14,6 +15,8 @@ interface QueueSchedulerOptions {
 	onEvent?: (event: FluidEvent) => void;
 	signal?: AbortSignal;
 	presetCompletedResults?: Map<string, SingleResult>;
+	/** Global semaphore shared across schedulers for cross-coordinator concurrency control. */
+	semaphore?: Semaphore;
 }
 
 export class QueueScheduler {
@@ -22,6 +25,7 @@ export class QueueScheduler {
 	readonly #onEvent?: (event: FluidEvent) => void;
 	readonly #signal?: AbortSignal;
 	readonly #presetCompletedResults?: Map<string, SingleResult>;
+	readonly #semaphore?: Semaphore;
 
 	constructor(options: QueueSchedulerOptions) {
 		this.#concurrency = Math.max(1, options.concurrency);
@@ -29,6 +33,7 @@ export class QueueScheduler {
 		this.#onEvent = options.onEvent;
 		this.#signal = options.signal;
 		this.#presetCompletedResults = options.presetCompletedResults;
+		this.#semaphore = options.semaphore;
 	}
 	async execute(plan: FluidPlan): Promise<Map<string, AgentRuntime>> {
 		const runtimes = new Map<string, AgentRuntime>();
@@ -51,6 +56,36 @@ export class QueueScheduler {
 					agentId: node.id,
 					state: "completed",
 					result: presetResult,
+					completedAt,
+				});
+				continue;
+			}
+			if (node.deferred) {
+				const completedAt = Date.now();
+				runtimes.set(node.id, {
+					node,
+					state: "completed",
+					result: {
+						index: 0,
+						id: node.id,
+						agent: "deferred",
+						agentSource: "bundled",
+						task: node.task,
+						exitCode: 0,
+						output: "Deferred (FUP item — skipped)",
+						stderr: "",
+						truncated: false,
+						durationMs: 0,
+						tokens: 0,
+					},
+					completedAt,
+				});
+				completed.add(node.id);
+				this.#onEvent?.({
+					type: "agent_state_change",
+					agentId: node.id,
+					state: "completed",
+					result: runtimes.get(node.id)!.result,
 					completedAt,
 				});
 				continue;
@@ -159,7 +194,16 @@ export class QueueScheduler {
 					}
 				}
 
-				void this.#runAgent(node, upstreamResults, this.#signal)
+				const executeAgent = async (): Promise<SingleResult> => {
+					if (this.#semaphore) await this.#semaphore.acquire();
+					try {
+						return await this.#runAgent(node, upstreamResults, this.#signal);
+					} finally {
+						this.#semaphore?.release();
+					}
+				};
+
+				void executeAgent()
 					.then(result => {
 						runtime.state = "completed";
 						runtime.result = result;

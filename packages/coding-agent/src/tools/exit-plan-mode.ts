@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { extractIdLinks, type FluidPlanWithComponents } from "@oh-my-pi/pi-org";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { createOrgClient, extractIdLinks, type FluidPlanWithComponents } from "@oh-my-pi/pi-org";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { resolvePlanItem } from "../plan-mode/org-plan";
@@ -167,6 +167,24 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 			}
 			const waves = extractPlanWaves(item.body);
 
+			// Attempt to build FluidPlan via Emacs MCP (graceful fallback on failure)
+			let fluidPlan: FluidPlanWithComponents | undefined;
+			try {
+				const emacsSession = await this.session.emacsSessionManager?.getSession();
+				if (emacsSession) {
+					const client = await createOrgClient(emacsSession.socketPath);
+					if (client) {
+						const raw = await client.callTool("org-fluid-plan", { plan_id: params.itemId });
+						fluidPlan = raw as FluidPlanWithComponents;
+					}
+				}
+			} catch (err) {
+				logger.warn("Failed to build FluidPlan via org-fluid-plan MCP", {
+					itemId: params.itemId,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+
 			return {
 				content: [
 					{
@@ -184,6 +202,7 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 					planContent: item.body,
 					childItemIds,
 					waves,
+					fluidPlan,
 				},
 			};
 		}

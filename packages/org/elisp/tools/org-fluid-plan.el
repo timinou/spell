@@ -126,6 +126,46 @@ custom_id, title, state, depends (list), effort, priority, layer, body."
                                  (layer . ,layer)
                                  (body . ,body))
                                result))))))))))
+    ;; Fallback: for unresolved IDs containing "::", try parent::sub-slug resolution.
+    ;; Activates only when direct CUSTOM_ID lookup found nothing.
+    (dolist (id target-ids)
+      (when (and (not (gethash id result))
+                 (string-match "\\(.*\\)::\\(.*\\)" id))
+        (let* ((parent-id (match-string 1 id))
+               (sub-slug (match-string 2 id)))
+          (dolist (file files)
+            (with-temp-buffer
+              (insert-file-contents file)
+              (let ((buffer-file-name file))
+                (org-mode)
+                (org-tasks--setup-keywords)
+                (let ((ast (org-element-parse-buffer)))
+                  (org-element-map ast 'headline
+                    (lambda (hl)
+                      (when (equal (org-tasks--extract-property hl "CUSTOM_ID") parent-id)
+                        ;; Walk children of this parent for a title whose kebab slug matches
+                        (org-element-map hl 'headline
+                          (lambda (child-hl)
+                            (let* ((child-title (org-element-property :raw-value child-hl))
+                                   (child-slug (downcase (replace-regexp-in-string "[^a-z0-9]+" "-" (downcase child-title) t)))
+                                   (child-slug (replace-regexp-in-string "^-\\|-$" "" child-slug)))
+                              (when (and (equal child-slug sub-slug)
+                                         (not (gethash id result)))
+                                (let* ((todo (or (org-element-property :todo-keyword child-hl) ""))
+                                       (title (org-element-property :raw-value child-hl))
+                                       (body (org-tasks--extract-body child-hl))
+                                       (parent-body (org-tasks--extract-body hl)))
+                                  (puthash id
+                                           `((custom_id . ,id)
+                                             (title . ,title)
+                                             (state . ,todo)
+                                             (depends . ())
+                                             (effort . "")
+                                             (priority . "")
+                                             (layer . "")
+                                             (body . ,body)
+                                             (parentBody . ,parent-body))
+                                           result))))))))))))))))
     result))
 
 ;; ---------------------------------------------------------------------------
@@ -292,7 +332,8 @@ Returns list of ((number . N) (items . [id1 id2 ...]))."
                                              (effort . ,(cdr (assoc 'effort item)))
                                              (priority . ,(cdr (assoc 'priority item)))
                                              (state . ,(cdr (assoc 'state item)))
-                                             (body . ,(cdr (assoc 'body item))))))
+										 (body . ,(cdr (assoc 'body item)))
+										 (deferred . ,(if (string-prefix-p "FUP-" id) t :json-false)))))
                                        member-ids)))
                          (push `((id . ,(format "component-%d" comp-idx))
                                  (agents . ,(vconcat agents))

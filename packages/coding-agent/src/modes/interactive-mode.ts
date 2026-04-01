@@ -49,6 +49,7 @@ import { getRecentSessions } from "../session/session-manager";
 import { formatExitTokenSummary } from "../session/token-summary";
 import { getModeCommandDefs, registerModeCommands } from "../slash-commands/builtin-registry";
 import { STTController, type SttState } from "../stt";
+import { Semaphore } from "../task/parallel";
 import type { SingleResult } from "../task/types";
 import type { ExitPlanModeDetails, PlanWave } from "../tools";
 import { EventBus } from "../utils/event-bus";
@@ -1273,14 +1274,20 @@ export class InteractiveMode implements InteractiveModeContext {
 				orgItemId: a.orgItemId,
 				effort: a.effort,
 				priority: a.priority,
+				body: a.body,
+				deferred: a.deferred ?? false,
 			})),
 		);
 		const plan = { agents: allAgents };
 
+		const fluidConcurrency = (this.settings.get("fluid.concurrency") as number | undefined) ?? 5;
+		const semaphore = new Semaphore(fluidConcurrency);
+
 		const orchestrator = new FluidOrchestrator({
 			eventBus,
 			cwd,
-			concurrency: 3,
+			concurrency: fluidConcurrency,
+			semaphore,
 			runAgent: async (node, _upstream, signal) => {
 				const makeSyntheticResult = (output: string, error?: string): SingleResult => ({
 					index: 0,

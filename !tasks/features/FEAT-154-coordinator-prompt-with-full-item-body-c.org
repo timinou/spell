@@ -1,0 +1,39 @@
+#+TITLE: Coordinator prompt with full item body context
+#+STATE: DONE
+#+SESSION_ID: 14a8bf8d3cbf231d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T21-24-46-962Z_14a8bf8d3cbf231d.jsonl]]
+#+CUSTOM_ID: FEAT-154-coordinator-prompt-with-full-item-body-c
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: prompt
+#+DEPENDS: FEAT-152-wire-exitplanmodetool-to-org-fluid-plan
+
+* Initial Message
+
+continue
+
+* Scope
+
+coordinator-runner.ts builds subDagItems with only 5 fields: id, task, dependsOn, effort, priority. The body field from FluidAgentNode (populated by org-fluid-plan.el) is not passed. Coordinators lack scope, acceptance criteria, tests, and edge case context needed to execute items properly.
+
+** In
+- Include ~body~ in subDagItems mapping in coordinator-runner.ts
+- Update coordinator.md Handlebars template to render item body (scope, tests, acceptance criteria)
+- Body content should be in a collapsible or clearly delineated section per item
+
+** Out
+- No changes to org-fluid-plan.el (already emits body)
+- No parent body emission (that is a separate concern for sub-outlines)
+
+* Key files
+- ~packages/coding-agent/src/orchestrators/fluid/coordinator-runner.ts~ — add body to subDagItems map
+- ~packages/coding-agent/src/prompts/agents/coordinator.md~ — render body per item
+
+* Tests
+- Manual: coordinator agent receives full item body in its prompt
+- Verify prompt template renders correctly with and without body
+
+* Acceptance
+- Coordinator prompt includes item body content for each sub-DAG item
+- Empty bodies render gracefully (no empty sections)
+- ~bun check:ts~ passes

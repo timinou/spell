@@ -336,6 +336,70 @@ Binds `test-dir' to the temp directory."
         (should (eq (cdr (assoc 'error result)) t))
         (should (cdr (assoc 'message result)))))))
 
+(ert-deftest test-fp-sub-outline-direct-custom-id ()
+  "Sub-outline with :: in CUSTOM_ID resolves directly."
+  (let* ((items (concat
+                 (test-fp--make-org-item "FEAT-001" "Feature One")
+                 (test-fp--make-org-item "FEAT-001::define-types" "Define Types" '("FEAT-001"))))
+         (plan (test-fp--make-plan "test-plan-sub" "Sub Plan"
+                                   '("FEAT-001" "FEAT-001::define-types")))
+         (files `(("plan.org" . ,plan) ("items.org" . ,items))))
+    (test-fp--with-temp-tasks files
+      (let* ((result (org-fluid-plan--build-fluid-plan
+                       (org-tasks--all-org-files) "test-plan-sub"))
+             (components (cdr (assoc 'components result))))
+        (should (>= (length components) 1))
+        ;; Both items resolved — total agent count across all components is 2
+        (let* ((all-agents (apply #'append
+                                   (mapcar (lambda (c)
+                                             (append (cdr (assoc 'agents c)) nil))
+                                           (append components nil)))))
+          (should (= (length all-agents) 2)))))))
+
+(ert-deftest test-fp-sub-outline-fallback-resolution ()
+  "Sub-outline :: ID resolves via parent heading + child slug match."
+  (let* ((parent-with-child
+          (concat "* ITEM Feature One\n"
+                  ":PROPERTIES:\n"
+                  ":CUSTOM_ID: FEAT-001\n"
+                  ":END:\n\n"
+                  "** Define Types\n\n"
+                  "Type definitions for the feature.\n\n"))
+         (plan (test-fp--make-plan "test-plan-sub2" "Sub Plan"
+                                   '("FEAT-001" "FEAT-001::define-types")))
+         (files `(("plan.org" . ,plan) ("items.org" . ,parent-with-child))))
+    (test-fp--with-temp-tasks files
+      (let* ((result (org-fluid-plan--build-fluid-plan
+                       (org-tasks--all-org-files) "test-plan-sub2"))
+             (warnings (cdr (assoc 'warnings result))))
+        ;; FEAT-001::define-types resolved via fallback — no warning about it
+        (should-not (cl-some (lambda (w) (string-match-p "define-types" w))
+                             (append warnings nil)))))))
+
+(ert-deftest test-fp-deferred-fup-items ()
+  "Items with FUP- prefix are marked deferred."
+  (let* ((items (concat
+                 (test-fp--make-org-item "FEAT-001" "Task A")
+                 (test-fp--make-org-item "FUP-001-deferred" "Deferred Task" '("FEAT-001"))))
+         (plan (test-fp--make-plan "test-plan-def" "Test Plan"
+                                  '("FEAT-001" "FUP-001-deferred")))
+         (files `(("plan.org" . ,plan) ("items.org" . ,items))))
+    (test-fp--with-temp-tasks files
+      (let* ((result (org-fluid-plan--build-fluid-plan
+                      (org-tasks--all-org-files) "test-plan-def"))
+             (components (cdr (assoc 'components result)))
+             (all-agents (apply #'append
+                                (mapcar (lambda (c) (append (cdr (assoc 'agents c)) nil))
+                                        (append components nil)))))
+        ;; FEAT-001 should NOT be deferred
+        (let ((feat (cl-find-if (lambda (a) (equal (cdr (assoc 'id a)) "FEAT-001")) all-agents)))
+          (should feat)
+          (should (eq (cdr (assoc 'deferred feat)) :json-false)))
+        ;; FUP-001 SHOULD be deferred
+        (let ((fup (cl-find-if (lambda (a) (equal (cdr (assoc 'id a)) "FUP-001-deferred")) all-agents)))
+          (should fup)
+          (should (eq (cdr (assoc 'deferred fup)) t)))))))
+
 (provide 'test-org-fluid-plan)
 
 ;;; test-org-fluid-plan.el ends here
