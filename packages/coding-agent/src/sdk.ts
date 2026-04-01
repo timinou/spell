@@ -82,6 +82,14 @@ import {
 	formatDiscoverableMCPToolServerSummary,
 	summarizeDiscoverableMCPTools,
 } from "./mcp/discoverable-tool-metadata";
+import { type SpellcastSessionContext } from "./spellcast";
+import { validateSpellcastingToken } from "./spellcast/config";
+import { discoverSpellcastManifests } from "./spellcast/discovery";
+import { formatSpellcastSessionReport } from "./spellcast/session-report";
+import { checkFileAgainstManifests, extractModifiedPaths, formatSpellcastSyncNote } from "./spellcast/sync-detector";
+import { loadSpellcastPublishState } from "./spellcast/state";
+
+
 import { buildMemoryToolDeveloperInstructions, getMemoryRoot, startMemoryStartupTask } from "./memories";
 import { CanvasOrchestratorManager } from "./orchestrators/canvas-orchestrator";
 import { CanvasTaskManager } from "./orchestrators/canvas-task-manager";
@@ -240,6 +248,12 @@ export interface CreateAgentSessionResult {
 	mcpManager?: MCPManager;
 	/** Warning if session was restored with a different model than saved */
 	modelFallbackMessage?: string;
+	/** Discovered spellcast manifests and loaded publish-state for this session */
+	spellcastSessionContext?: SpellcastSessionContext;
+	/** User-facing spellcast discovery summary for session start notifications */
+	spellcastReport?: string;
+	/** Warning emitted when stored spellcasting auth is invalid or unreachable */
+	spellcastingWarning?: string;
 	/** LSP servers that were warmed up at startup */
 	lspServers?: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>;
 	/** Emacs daemon warmup result (undefined when Emacs is disabled or not attempted). */
@@ -661,7 +675,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
 		return { authStorage, modelRegistry };
 	});
-
+	const spellcastingWarning = await logger.timeAsync("validateSpellcastingToken", () => validateSpellcastingToken(authStorage));
 	const settings = await logger.timeAsync(
 		"settings",
 		async () => options.settings ?? (await Settings.init({ cwd, agentDir })),
@@ -838,13 +852,36 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	);
 
 	const domainPromptContext = await logger.timeAsync("loadDomainPromptContext", () =>
+
 		loadDomainPromptContext(options.domainManifest, cwd),
+
 	);
+
 	const baseContextFiles = await logger.timeAsync(
+
 		"discoverContextFiles",
+
 		async () => options.contextFiles ?? (await discoverContextFiles(cwd, agentDir)),
+
 	);
+
 	const contextFiles = [...domainPromptContext.contextFiles, ...baseContextFiles];
+
+	const spellcastDiscovery = await logger.timeAsync("discoverSpellcastManifests", () => discoverSpellcastManifests(cwd));
+
+	const spellcastPublishState = await logger.timeAsync("loadSpellcastPublishState", () => loadSpellcastPublishState(cwd));
+
+	const spellcastSessionContext: SpellcastSessionContext = {
+
+		discovery: spellcastDiscovery,
+
+		discoveredManifests: spellcastDiscovery.manifests,
+
+		publishState: spellcastPublishState,
+
+	};
+
+	const spellcastReport = formatSpellcastSessionReport(spellcastSessionContext) || undefined;
 	const hasExplicitToolNames = options.toolNames !== undefined;
 	const requestedBuiltInToolNames = applyDomainToolPolicy(
 		options.toolNames,
@@ -1880,6 +1917,59 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		);
 	});
 
+	const tryCanvasTidewaveFallback = async (
+		tool: string,
+		args: Record<string, unknown>,
+	): Promise<AgentToolResult<unknown> | null> => {
+		const tidewaveToolName =
+			tool === "mcp_tidewave_get_source_location"
+				? "get_source_location"
+				: tool === "mcp_tidewave_get_docs"
+					? "get_docs"
+					: null;
+		if (!tidewaveToolName) return null;
+		const reference = typeof args.reference === "string" ? args.reference.trim() : "";
+		if (!reference) {
+			throw new Error("Tidewave request is missing reference");
+		}
+		const mcpUrl =
+			typeof args.mcpUrl === "string" && args.mcpUrl.trim().length > 0
+				? args.mcpUrl.trim()
+				: "http://localhost:4000/tidewave/mcp";
+		const response = await fetch(mcpUrl, {
+			method: "POST",
+			headers: {
+				Accept: "application/json, text/event-stream",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: Date.now(),
+				method: "tools/call",
+				params: { name: tidewaveToolName, arguments: { reference } },
+			}),
+		});
+		if (!response.ok) {
+			throw new Error(`Tidewave ${tidewaveToolName} failed with ${response.status} ${response.statusText}`);
+		}
+		const payload = (await response.json()) as {
+			error?: { message?: unknown };
+			result?: { content?: Array<{ type?: unknown; text?: unknown }> };
+		};
+		if (payload.error && typeof payload.error.message === "string" && payload.error.message.trim().length > 0) {
+			throw new Error(payload.error.message.trim());
+		}
+		const text = (payload.result?.content ?? [])
+			.filter(block => block && block.type === "text" && typeof block.text === "string")
+			.map(block => String(block.text).trim())
+			.filter(Boolean)
+			.join("\n\n");
+		if (!text) {
+			throw new Error("Tidewave returned no text content.");
+		}
+		return { content: [{ type: "text", text }], details: { fallback: "tidewave-http", mcpUrl } };
+	};
+
 	// Wire QML armed tool invocations: short-circuit tool execution without an agent turn.
 	eventBus.subscribe(CANVAS_TOOL_INVOKE_CHANNEL, async (raw: unknown) => {
 		if (!session) return;
@@ -1890,7 +1980,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const errMsg = `Armed tool "${tool}" not in allowed list for window "${windowId}". Allowed: [${allowedTools.join(", ")}]`;
 			logger.warn("canvas armed tool rejected", { windowId, tool, allowedTools });
 			reply?.({ error: errMsg });
-			// Log rejection to transcript so the agent can see it if reviewing.
 			await session.sendCustomMessage({
 				customType: "canvas-tool-invoke",
 				content: `Armed tool rejected: ${tool} (window: ${windowId}) — not in allowlist`,
@@ -1901,37 +1990,48 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			return;
 		}
 
-		const agentTool = toolRegistry.get(tool);
-		if (!agentTool) {
-			const errMsg = `Armed tool "${tool}" is not registered in this session`;
-			logger.warn("canvas armed tool not found", { windowId, tool });
-			reply?.({ error: errMsg });
-			await session.sendCustomMessage({
-				customType: "canvas-tool-invoke",
-				content: `Armed tool not found: ${tool} (window: ${windowId})`,
-				display: false,
-				attribution: "agent",
-				details: { windowId, tool, args, error: errMsg },
-			});
-			return;
-		}
-
 		let result: AgentToolResult<unknown>;
 		let invokeError: string | undefined;
-		try {
-			result = await agentTool.execute(
-				`canvas-armed-${windowId}-${Date.now()}`,
-				args as Record<string, unknown>,
-				undefined,
-				undefined,
-				toolContextStore.getContext(),
-			);
-		} catch (err) {
-			invokeError = err instanceof Error ? err.message : String(err);
-			result = { content: [{ type: "text", text: invokeError }], details: {} };
+		const agentTool = toolRegistry.get(tool);
+
+		if (!agentTool) {
+			const fallbackResult = await tryCanvasTidewaveFallback(tool, args as Record<string, unknown>).catch(err => {
+				invokeError = err instanceof Error ? err.message : String(err);
+				return {
+					content: [{ type: "text", text: invokeError }],
+					details: { fallback: "tidewave-http", error: invokeError },
+				} satisfies AgentToolResult<unknown>;
+			});
+			if (fallbackResult) {
+				result = fallbackResult;
+			} else {
+				const errMsg = `Armed tool "${tool}" is not registered in this session`;
+				logger.warn("canvas armed tool not found", { windowId, tool });
+				reply?.({ error: errMsg });
+				await session.sendCustomMessage({
+					customType: "canvas-tool-invoke",
+					content: `Armed tool not found: ${tool} (window: ${windowId})`,
+					display: false,
+					attribution: "agent",
+					details: { windowId, tool, args, error: errMsg },
+				});
+				return;
+			}
+		} else {
+			try {
+				result = await agentTool.execute(
+					`canvas-armed-${windowId}-${Date.now()}`,
+					args as Record<string, unknown>,
+					undefined,
+					undefined,
+					toolContextStore.getContext(),
+				);
+			} catch (err) {
+				invokeError = err instanceof Error ? err.message : String(err);
+				result = { content: [{ type: "text", text: invokeError }], details: {} };
+			}
 		}
 
-		// Deliver result back to the QML window (fire-and-forget).
 		if (reply) {
 			const text = result.content
 				.filter((c): c is { type: "text"; text: string } => c.type === "text")
@@ -1940,7 +2040,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			reply(invokeError ? { error: invokeError } : { result: text });
 		}
 
-		// Log all armed invocations silently so the agent can review them.
 		await session.sendCustomMessage({
 			customType: "canvas-tool-invoke",
 			content: invokeError
@@ -1989,6 +2088,32 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	toolSession.orchestratorManager = orchestratorManager;
 	toolSession.taskManager = taskManager;
 
+	const spellcastModifiedPaths = new Map<string, string[]>();
+	if (spellcastSessionContext.discoveredManifests.length > 0) {
+		eventBus.subscribe("tool_execution_start", raw => {
+			const event = raw as { toolCallId: string; toolName: string; args: unknown };
+			const modifiedPaths = extractModifiedPaths(event.toolName, event.args, cwd);
+			if (modifiedPaths.length > 0) {
+				spellcastModifiedPaths.set(event.toolCallId, modifiedPaths);
+			}
+		});
+		eventBus.subscribe("tool_execution_end", async raw => {
+			if (!session) return;
+			const event = raw as { toolCallId: string; isError: boolean };
+			const modifiedPaths = spellcastModifiedPaths.get(event.toolCallId);
+			if (!modifiedPaths) return;
+			spellcastModifiedPaths.delete(event.toolCallId);
+			if (event.isError) return;
+			for (const filePath of modifiedPaths) {
+				const match = checkFileAgainstManifests(filePath, spellcastSessionContext);
+				if (match) {
+					await session.followUp(formatSpellcastSyncNote(match));
+					break;
+				}
+			}
+		});
+	}
+
 	// Wire full agent requests from canvas: route to session.followUp()
 	eventBus.subscribe(CANVAS_AGENT_CHANNEL, async (raw: unknown) => {
 		if (!session) return;
@@ -1998,18 +2123,32 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			: payload.assignment;
 		await session.followUp(`[Canvas agent request from window ${payload.windowId}]\n\n${prompt}`);
 	});
-
 	return {
+
 		session,
+
 		extensionsResult,
+
 		setToolUIContext,
+
 		mcpManager,
+
 		modelFallbackMessage,
+		spellcastSessionContext,
+		spellcastReport,
+		spellcastingWarning,
+
 		lspServers,
+
 		emacsResult,
+
 		eventBus,
+
 		orchestratorManager,
+
 		taskManager,
+
 		loopManager,
+
 	};
 }

@@ -1,6 +1,7 @@
 // ============================================================================
 // High-level API
 // ============================================================================
+import { spellcastingProvider } from "./spellcasting";
 import { refreshAnthropicToken } from "./anthropic";
 import { refreshCursorToken } from "./cursor";
 import { refreshGitHubCopilotToken } from "./github-copilot";
@@ -494,3 +495,5 @@ export function getOAuthProviders(): OAuthProviderInfo[] {
 	}));
 	return [...builtInOAuthProviders, ...customProviders];
 }
+
+registerOAuthProvider(spellcastingProvider);

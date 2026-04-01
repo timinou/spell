@@ -29,6 +29,7 @@ import { BashTool } from "./bash";
 import { BrowserTool } from "./browser";
 import { CalculatorTool } from "./calculator";
 import { CancelJobTool } from "./cancel-job";
+import { CanvasCastTool } from "./canvas-cast";
 import { CanvasTool } from "./canvas";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { EmacsTool } from "./emacs";
@@ -71,6 +72,7 @@ export * from "./browser";
 export * from "./calculator";
 export * from "./cancel-job";
 export * from "./canvas";
+export * from "./canvas-cast";
 export * from "./checkpoint";
 export * from "./emacs";
 export * from "./exit-plan-mode";
@@ -240,6 +242,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
 	canvas: s => new CanvasTool(s),
+	canvas_cast: CanvasCastTool.createIf,
 	loop_prepare: s => (s.loopManager ? new LoopPrepareTool(s) : null),
 	loop_launch: s => (s.loopManager ? new LoopLaunchTool(s) : null),
 	loop_done: s => (s.loopManager ? new LoopDoneTool(s) : null),
@@ -270,6 +273,7 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	web_search: "standard",
 	cancel_job: "standard",
 	await: "standard",
+	canvas_cast: "standard",
 
 	// Specialized — compact API descriptions to reduce token usage
 	canvas: "specialized",

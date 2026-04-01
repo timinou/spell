@@ -708,14 +708,29 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		}
 	}
 
-	const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager, eventBus, orchestratorManager } =
-		await logger.timeAsync("createAgentSession", () => createAgentSession(sessionOptions));
+	const {
+		session,
+		setToolUIContext,
+		modelFallbackMessage,
+		spellcastReport,
+		spellcastingWarning,
+		lspServers,
+		mcpManager,
+		eventBus,
+		orchestratorManager,
+	} = await logger.timeAsync("createAgentSession", () => createAgentSession(sessionOptions));
 	if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 		authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
 	}
 
 	if (modelFallbackMessage) {
 		notifs.push({ kind: "warn", message: modelFallbackMessage });
+	}
+	if (spellcastReport) {
+		notifs.push({ kind: "info", message: spellcastReport });
+	}
+	if (spellcastingWarning) {
+		notifs.push({ kind: "warn", message: spellcastingWarning });
 	}
 
 	const modelRegistryError = modelRegistry.getError();
