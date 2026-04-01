@@ -1,0 +1,76 @@
+#+TITLE: Fix org wave graph category contract and add TDD ERT coverage
+#+STATE: DONE
+#+SESSION_ID: 14a9910ffe5df734
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-40-08-953Z_14a9910ffe5df734.jsonl]]
+#+CUSTOM_ID: BUG-055-fix-org-wave-graph-category-contract-and
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: org
+#+DEPENDS: BUG-053-scope-emacs-daemon-sessions-by-socket-pr
+
+NOTE [2026-04-01]: Completed by PLAN-063: wave/graph now resolve real file sets, TS+ERT coverage passes, and manual same-session proof succeeds.
+
+* Initial Message
+
+Look at this:
+
+
+ Now let me run org wave to compute the execution waves from the dependency graph, then create the PLAN item.
+
+
+ ⏳ Org: wave
+ {"error":true,"message":"Emacs MCP error -32603: Internal error"}
+
+
+
+ ⏳ Org: graph
+ {"error":true,"message":"Emacs MCP error -32603: Internal error"}
+
+
+ The wave/graph commands aren't available. I'll compute the execution waves manually from the dependency graph:
+
+in this session:
+
+
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-01T11-09-57-247Z_14a97c6b1fdf6ead.jsonl
+ ID: 14a97c6b1fdf6ead
+
+
+
+What happened? This is recurrent
+
+Problem
+- The planner prompt explicitly tells plan mode to use `org wave` on a category, but current wave/graph handlers forward a category directory path into Elisp tools that only support a single file via `insert-file-contents`.
+- `packages/org/test/tool-wave-graph.test.ts` currently encodes the buggy contract (`category -> directory path`, `no args -> empty toolArgs`).
+- Child org items are created as separate `.org` files, so category-level wave/graph must operate over a category directory / file set, not pretend the directory itself is a file.
+
+Scope
+- `packages/org/src/tool.ts`
+- `packages/org/test/tool-wave-graph.test.ts`
+- `packages/org/elisp/tools/org-mcp-common.el`
+- `packages/org/elisp/tools/org-next-wave.el`
+- `packages/org/elisp/tools/org-dependency-graph.el`
+- `packages/org/elisp/tools/org-compute-waves.el`
+- Add a new ERT file in `packages/org/elisp/test/` for wave/graph resolution + handler behavior
+- Update any prompt/tool description text that still documents the old broken contract
+
+Preferred sequencing
+- Test first. Start with failing ERTs plus failing TS command-dispatch tests, then implement the contract.
+
+Required change
+- Define one truthful contract for `wave`/`graph`: explicit file still works; category/no-arg calls resolve to a real org target set that matches plan-mode usage across multi-file categories.
+- Update both TS and Elisp layers to support that contract end-to-end; do not leave the TypeScript adapter pretending directories are files.
+- Replace the existing buggy forwarding tests with tests for the real contract.
+- ERT coverage must exercise the Emacs-side resolution and handler behavior directly, not only TS mocks.
+
+Acceptance
+- `org wave` and `org graph` succeed from plan mode without an explicit file argument in a project with standard task categories.
+- Category calls operate on the actual org data set represented by that category, not a directory string passed to `insert-file-contents`.
+- The command contract documented in prompts/tool descriptions matches the implementation.
+
+Verification
+- `bun test packages/org/test/tool-wave-graph.test.ts`
+- New ERT batch command for the added test file, for example:
+  `cd packages/org && emacs --batch -l ert -l elisp/org-tasks.el -l elisp/mcp-server-tools.el -l elisp/tools/org-mcp-common.el -l elisp/tools/org-dependency-graph.el -l elisp/tools/org-next-wave.el -l elisp/tools/org-compute-waves.el -l elisp/test/org-wave-graph-test.el -f ert-run-tests-batch-and-exit`
+- Manual proof during implementation: from a fresh session, `org wave` and `org graph` succeed after `emacs_code` has already been used, and they return org-structured results instead of `-32603`.

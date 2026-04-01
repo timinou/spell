@@ -170,6 +170,8 @@ export interface ToolSession {
 	getTodoPhases?: () => TodoPhase[];
 	/** Replace cached todo phases for this session. */
 	setTodoPhases?: (phases: TodoPhase[], options?: { reset?: boolean }) => void;
+	/** Get the active plan reference path for auto-completion hooks. */
+	getPlanReferencePath?: () => string | undefined;
 	/** Whether MCP tool discovery is active for this session. */
 	isMCPDiscoveryEnabled?: () => boolean;
 	/** Get hidden-but-discoverable MCP tools for search_tool_bm25 prompts and fallbacks. */
@@ -186,8 +188,10 @@ export interface ToolSession {
 	getCheckpointState?: () => CheckpointState | undefined;
 	/** Set or clear active checkpoint state. */
 	setCheckpointState?: (state: CheckpointState | null) => void;
-	/** Emacs daemon lifecycle manager for lazy startup, restart, and disposal. */
+	/** Emacs daemon lifecycle manager for code-intelligence tools. */
 	emacsSessionManager?: EmacsSessionManager;
+	/** Dedicated org-mode daemon lifecycle manager for org MCP callers. */
+	orgSessionManager?: EmacsSessionManager;
 	/** Active QML remote server; when set, CanvasTool routes panels to the Android client. */
 	qmlRemoteServer?: import("@oh-my-pi/pi-qml-remote").QmlRemoteServer;
 	/** Loop orchestration manager for loop tools, slash commands, and dashboards. */

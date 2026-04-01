@@ -250,7 +250,7 @@ Every child org item body **MUST** include all sections below:
 ### Phase 3: Create Org Items Directly
 Create org items immediately after completing Metis analysis:
 1. Create children first (`state: "ITEM"`)
-2. Use `org wave` on the category to compute wave structure from the sub-outline dependency graph
+2. Use `org wave` on the relevant category or explicit org file set to compute wave structure from the sub-outline dependency graph
 3. Create PLAN last (`state: "INIT"`) with `[[id:…]]` manifest links, structured using wave headings with `:wave:` tag:
 
 ```

@@ -40,72 +40,7 @@ STATE-MAP maps id -> state string."
    ((equal priority-str "C") 2)
    (t 3)))
 
-(defun org-mcp-next-wave-handler (args)
-  "Handle org-next-wave tool call with ARGS.
-ARGS is an alist with optional key: file."
-  (condition-case err
-      (let* ((file (alist-get 'file args))
-             (resolved-file (org-mcp--resolve-file file)))
-        (unless (file-exists-p resolved-file)
-          (error "File not found: %s" resolved-file))
-        ;; Collect full item data including priority/effort/agent/layer
-        (let* ((all-items (org-mcp--collect-full-items resolved-file))
-               (graph-nodes (org-mcp--collect-graph-nodes resolved-file))
-               (edges (org-mcp--build-edges graph-nodes))
-               (dep-map (org-mcp--build-dependency-map edges))
-               (state-map (make-hash-table :test 'equal))
-               (wave-items '())
-               (blocked-items '())
-               (completed-count 0)
-               (total-count (length all-items)))
-          ;; Build state map
-          (dolist (item all-items)
-            (let ((id (cdr (assoc 'custom_id item)))
-                  (state (cdr (assoc 'state item))))
-              (puthash id state state-map)
-              (when (equal state "DONE")
-                (cl-incf completed-count))))
-          ;; Find wave candidates: not DONE/BLOCKED, all deps DONE
-          (dolist (item all-items)
-            (let ((id (cdr (assoc 'custom_id item)))
-                  (state (cdr (assoc 'state item))))
-              (cond
-               ((member state '("DONE" "BLOCKED"))
-                nil)
-               ((org-mcp--all-deps-done-p id dep-map state-map)
-                (push item wave-items))
-               (t
-                (unless (equal state "DONE")
-                  (push item blocked-items))))))
-          ;; Sort by priority (A first), then by custom_id for stability
-          (setq wave-items
-                (sort wave-items
-                      (lambda (a b)
-                        (let ((pa (org-mcp--priority-sort-value (cdr (assoc 'priority a))))
-                              (pb (org-mcp--priority-sort-value (cdr (assoc 'priority b)))))
-                          (or (< pa pb)
-                              (and (= pa pb)
-                                   (string< (cdr (assoc 'custom_id a))
-                                            (cdr (assoc 'custom_id b)))))))))
-          ;; Cap at 8
-          (when (> (length wave-items) 8)
-            (setq wave-items (cl-subseq wave-items 0 8)))
-          ;; Compute wave number (how many complete waves have passed)
-          (let ((wave-number (org-mcp--compute-wave-number
-                              all-items dep-map state-map)))
-            (json-encode
-             `((wave_number . ,wave-number)
-               (items . ,(vconcat wave-items))
-               (blocked_items . ,(vconcat blocked-items))
-               (completed_count . ,completed-count)
-               (total_count . ,total-count))))))
-    (error
-     (json-encode
-      `((error . t)
-        (code . "NEXT_WAVE_ERROR")
-        (message . ,(error-message-string err)))))))
-
-(defun org-mcp--collect-full-items (file)
+(defun org-mcp--collect-full-items-from-file (file)
   "Collect items from FILE with priority, effort, agent, layer for wave output."
   (with-temp-buffer
     (insert-file-contents file)
@@ -136,6 +71,75 @@ ARGS is an alist with optional key: file."
                             (layer . ,(or layer "")))
                           items)))))))
         (nreverse items)))))
+
+(defun org-mcp--collect-full-items (files)
+  "Collect items from FILES with priority, effort, agent, layer for wave output."
+  (let ((items '()))
+    (dolist (file files)
+      (setq items (nconc items (org-mcp--collect-full-items-from-file file))))
+    items))
+
+(defun org-mcp-next-wave-handler (args)
+  "Handle org-next-wave tool call with ARGS.
+ARGS may contain `file', `files', or no target args to scan all org files."
+  (condition-case err
+      (let* ((files (org-mcp--resolve-files args))
+             ;; Collect full item data including priority/effort/agent/layer
+             (all-items (org-mcp--collect-full-items files))
+             (graph-nodes (org-mcp--collect-graph-nodes files))
+             (edges (org-mcp--build-edges graph-nodes))
+             (dep-map (org-mcp--build-dependency-map edges))
+             (state-map (make-hash-table :test 'equal))
+             (wave-items '())
+             (blocked-items '())
+             (completed-count 0)
+             (total-count (length all-items)))
+        ;; Build state map
+        (dolist (item all-items)
+          (let ((id (cdr (assoc 'custom_id item)))
+                (state (cdr (assoc 'state item))))
+            (puthash id state state-map)
+            (when (equal state "DONE")
+              (cl-incf completed-count))))
+        ;; Find wave candidates: not DONE/BLOCKED, all deps DONE
+        (dolist (item all-items)
+          (let ((id (cdr (assoc 'custom_id item)))
+                (state (cdr (assoc 'state item))))
+            (cond
+             ((member state '("DONE" "BLOCKED"))
+              nil)
+             ((org-mcp--all-deps-done-p id dep-map state-map)
+              (push item wave-items))
+             (t
+              (unless (equal state "DONE")
+                (push item blocked-items))))))
+        ;; Sort by priority (A first), then by custom_id for stability
+        (setq wave-items
+              (sort wave-items
+                    (lambda (a b)
+                      (let ((pa (org-mcp--priority-sort-value (cdr (assoc 'priority a))))
+                            (pb (org-mcp--priority-sort-value (cdr (assoc 'priority b)))))
+                        (or (< pa pb)
+                            (and (= pa pb)
+                                 (string< (cdr (assoc 'custom_id a))
+                                          (cdr (assoc 'custom_id b)))))))))
+        ;; Cap at 8
+        (when (> (length wave-items) 8)
+          (setq wave-items (cl-subseq wave-items 0 8)))
+        ;; Compute wave number (how many complete waves have passed)
+        (let ((wave-number (org-mcp--compute-wave-number
+                            all-items dep-map state-map)))
+          (json-encode
+           `((wave_number . ,wave-number)
+             (items . ,(vconcat wave-items))
+             (blocked_items . ,(vconcat blocked-items))
+             (completed_count . ,completed-count)
+             (total_count . ,total-count)))))
+    (error
+     (json-encode
+      `((error . t)
+        (code . "NEXT_WAVE_ERROR")
+        (message . ,(error-message-string err)))))))
 
 (defun org-mcp--compute-wave-number (all-items dep-map state-map)
   "Compute current wave number based on dependency layers.
@@ -183,12 +187,14 @@ Returns the wave number of the current execution front."
  (make-mcp-server-tool
   :name "org-next-wave"
   :title "Next Execution Wave"
-  :description "Compute the next execution wave from dependency graph and current states. Returns items whose all dependencies are DONE, sorted by priority, capped at 8. Used by Atlas to determine what to execute next."
+  :description "Compute the next execution wave from dependency graph and current states across one file, a set of files, or all @tasks org files when no target is provided. Returns items whose all dependencies are DONE, sorted by priority, capped at 8."
   :input-schema '((type . "object")
                   (properties
                    . ((file . ((type . "string")
-                               (description . "Path to org file (absolute or relative to @tasks/)")))))
-                  (required . ["file"]))
+                               (description . "Path to org file or category directory (absolute or relative to @tasks/)")))
+                      (files . ((type . "array")
+                                (items . ((type . "string")))
+                                (description . "List of org file paths or category directories."))))))
   :function #'org-mcp-next-wave-handler))
 
 (provide 'org-next-wave)

@@ -37,9 +37,9 @@ export interface StartEmacsOptions {
 /**
  * Start (or return an existing) Emacs daemon for the given project + session.
  *
- * Sessions are identified by `hash(projectRoot + sessionId)`. Two calls with
- * the same inputs return the cached session without launching a second daemon.
- * Different project roots always get separate daemons.
+ * Sessions are cached by daemon flavor plus `hash(projectRoot + sessionId)`.
+ * Two calls with the same project/session but different socket prefixes MUST start
+ * distinct daemons so org callers cannot reuse the code-intelligence socket.
  *
  * @param emacsPath   - Absolute path to the emacs binary.
  * @param projectRoot - Absolute path to the project root (used for hashing).
@@ -62,34 +62,36 @@ export async function startEmacsSession(
 		evalExpressions,
 	} = options ?? {};
 
-	const key = sessionKey(projectRoot, sessionId);
 	const prefix = socketPrefix;
+	const daemonKey = sessionKey(projectRoot, sessionId);
+	const cacheKey = cacheKeyForSession(daemonKey, prefix);
 
-	const cached = sessions.get(key);
+	const cached = sessions.get(cacheKey);
 	if (cached?.isAlive()) {
-		logger.debug("[emacs-daemon] Returning cached session", { key, socketPath: cached.socketPath });
+		logger.debug("[emacs-daemon] Returning cached session", { cacheKey, socketPath: cached.socketPath });
 		return cached;
 	}
+
 	// Stale entry — remove before relaunching.
-	if (cached) sessions.delete(key);
+	if (cached) sessions.delete(cacheKey);
 
 	// Try to reattach to a daemon from a previous process.
 	if (shouldReattach) {
-		const attached = await tryAttachExisting(key, prefix);
+		const attached = await tryAttachExisting(daemonKey, prefix, cacheKey);
 		if (attached) {
-			sessions.set(key, attached);
-			logger.debug("[emacs-daemon] Reattached to existing daemon", { key, socketPath: attached.socketPath });
+			sessions.set(cacheKey, attached);
+			logger.debug("[emacs-daemon] Reattached to existing daemon", { cacheKey, socketPath: attached.socketPath });
 			return attached;
 		}
 	}
 
-	const session = await launchDaemon(emacsPath, projectRoot, elispDir, key, {
+	const session = await launchDaemon(emacsPath, projectRoot, elispDir, daemonKey, cacheKey, {
 		socketPrefix: prefix,
 		startupTimeoutMs,
 		emacsFlags,
 		evalExpressions,
 	});
-	sessions.set(key, session);
+	sessions.set(cacheKey, session);
 	return session;
 }
 
@@ -97,7 +99,7 @@ export async function startEmacsSession(
 // Internal session cache
 // ---------------------------------------------------------------------------
 
-/** Module-level cache: sessionKey → live EmacsSession. */
+/** Module-level cache: daemon flavor + session hash → live EmacsSession. */
 const sessions = new Map<string, EmacsSession>();
 
 // ---------------------------------------------------------------------------
@@ -119,6 +121,10 @@ function sessionKey(projectRoot: string, sessionId: string): string {
 	return BigInt(raw).toString(16).slice(0, 12).padStart(12, "0");
 }
 
+function cacheKeyForSession(daemonKey: string, prefix: string): string {
+	return `${prefix}${daemonKey}`;
+}
+
 /** Absolute path to the Unix socket for a given hash key. */
 function socketPathForKey(hashHex: string, prefix: string): string {
 	const dir = process.env.XDG_RUNTIME_DIR ?? "/tmp";
@@ -129,9 +135,9 @@ function socketPathForKey(hashHex: string, prefix: string): string {
  * Probe for a daemon left behind by a previous process at the known socket path.
  * Returns a reattached EmacsSession if the daemon is still live, null otherwise.
  */
-async function tryAttachExisting(key: string, prefix: string): Promise<EmacsSession | null> {
-	const sock = socketPathForKey(key, prefix);
-	const daemonName = `${prefix}${key}`;
+async function tryAttachExisting(daemonKey: string, prefix: string, cacheKey: string): Promise<EmacsSession | null> {
+	const sock = socketPathForKey(daemonKey, prefix);
+	const daemonName = `${prefix}${daemonKey}`;
 
 	// If the socket file doesn't exist, there's nothing to attach to.
 	try {
@@ -154,7 +160,7 @@ async function tryAttachExisting(key: string, prefix: string): Promise<EmacsSess
 		} catch {
 			logger.warn("[emacs-daemon] Socket disappeared — reattached daemon may have crashed", { daemonName, sock });
 			isAlive = false;
-			sessions.delete(key);
+			sessions.delete(cacheKey);
 			clearInterval(healthTimer);
 		}
 	}, HEALTH_INTERVAL_MS);
@@ -170,7 +176,7 @@ async function tryAttachExisting(key: string, prefix: string): Promise<EmacsSess
 		async stop(): Promise<void> {
 			clearInterval(healthTimer);
 			isAlive = false;
-			sessions.delete(key);
+			sessions.delete(cacheKey);
 
 			logger.debug("[emacs-daemon] Stopping reattached daemon", { daemonName });
 
@@ -205,11 +211,12 @@ async function launchDaemon(
 	emacsPath: string,
 	projectRoot: string,
 	elispDir: string,
-	key: string,
+	daemonKey: string,
+	cacheKey: string,
 	opts: LaunchOptions,
 ): Promise<EmacsSession> {
-	const daemonName = `${opts.socketPrefix}${key}`;
-	const sock = socketPathForKey(key, opts.socketPrefix);
+	const daemonName = `${opts.socketPrefix}${daemonKey}`;
+	const sock = socketPathForKey(daemonKey, opts.socketPrefix);
 
 	// Socket is stale (tryAttachExisting already confirmed it's dead) — remove before spawning.
 	try {
@@ -226,7 +233,7 @@ async function launchDaemon(
 	const command = [emacsPath, ...opts.emacsFlags, `--fg-daemon=${daemonName}`, ...evalArgs];
 
 	// Show a first-run warning so users know we're compiling tree-sitter grammars.
-	let firstRunTimer: ReturnType<typeof setTimeout> | undefined;
+	let firstRunTimer: NodeJS.Timeout | undefined;
 	if (opts.startupTimeoutMs > FIRST_RUN_WARN_MS) {
 		firstRunTimer = setTimeout(() => {
 			process.stderr.write(
@@ -240,7 +247,7 @@ async function launchDaemon(
 	let daemon: ManagedDaemon;
 	try {
 		daemon = await startDaemon({
-			name: `emacs-${key}`,
+			name: daemonName,
 			command,
 			socketPath: sock,
 			stopCommand: ["emacsclient", `--socket-name=${daemonName}`, "--eval", "(kill-emacs)"],
@@ -248,7 +255,7 @@ async function launchDaemon(
 			startupTimeoutMs: opts.startupTimeoutMs,
 			logStderr: true,
 			onCrash: () => {
-				sessions.delete(key);
+				sessions.delete(cacheKey);
 			},
 		});
 	} catch (err) {
@@ -269,7 +276,7 @@ async function launchDaemon(
 		},
 
 		async stop(): Promise<void> {
-			sessions.delete(key);
+			sessions.delete(cacheKey);
 			await daemon.stop();
 		},
 	};

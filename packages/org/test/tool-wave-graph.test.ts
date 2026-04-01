@@ -1,14 +1,3 @@
-/**
- * Tests for cmdWave and cmdGraph wiring.
- *
- * Contracts:
- *   - wave delegates to org-next-wave elisp tool
- *   - graph delegates to org-dependency-graph elisp tool
- *   - file arg is forwarded directly
- *   - category arg resolves to absPath before forwarding
- *   - no args passes empty toolArgs
- */
-
 import { afterEach, beforeEach, describe, expect, mock, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -30,6 +19,7 @@ let tmpDir: string;
 beforeEach(async () => {
 	tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-org-wave-graph-"));
 	callToolMock.mockReset();
+	callToolMock.mockResolvedValue({ success: true });
 	createOrgClientMock.mockClear();
 	mock.module("../src/emacs/client", () => ({
 		createOrgClient: createOrgClientMock,
@@ -68,12 +58,26 @@ async function makeEmacsTool(config?: OrgConfig): Promise<OrgToolDefinition> {
 	return createOrgTool(tmpDir, config ?? makeConfig(), async (): Promise<EmacsSession> => session);
 }
 
+async function writeCategoryFile(category: "plans" | "features", fileName: string): Promise<string> {
+	const dir = path.join(tmpDir, "tasks", category);
+	await fs.mkdir(dir, { recursive: true });
+	const filePath = path.join(dir, fileName);
+	await Bun.write(filePath, "#+TITLE: test\n#+CUSTOM_ID: ITEM-001\n* ITEM Example\n");
+	return filePath;
+}
+
 describe("cmdWave", () => {
-	test("calls org-next-wave with no args when none provided", async () => {
+	test("calls org-next-wave with all category files when no args are provided", async () => {
+		const plansA = await writeCategoryFile("plans", "plan-a.org");
+		const plansB = await writeCategoryFile("plans", "plan-b.org");
+		const featureA = await writeCategoryFile("features", "feature-a.org");
 		const tool = await makeEmacsTool();
+
 		await tool.execute({ command: "wave" });
 		expect(callToolMock).toHaveBeenCalledTimes(1);
-		expect(callToolMock).toHaveBeenCalledWith("org-next-wave", {});
+		expect(callToolMock).toHaveBeenCalledWith("org-next-wave", {
+			files: [featureA, plansA, plansB].sort(),
+		});
 	});
 
 	test("forwards file arg directly", async () => {
@@ -82,32 +86,51 @@ describe("cmdWave", () => {
 		expect(callToolMock).toHaveBeenCalledWith("org-next-wave", { file: "/some/path.org" });
 	});
 
-	test("resolves category to absPath", async () => {
+	test("resolves category to its org files", async () => {
+		const plansA = await writeCategoryFile("plans", "plan-a.org");
+		const plansB = await writeCategoryFile("plans", "plan-b.org");
 		const tool = await makeEmacsTool();
+
 		await tool.execute({ command: "wave", category: "plans" });
-		const expectedPath = path.join(tmpDir, "tasks", "plans");
-		expect(callToolMock).toHaveBeenCalledWith("org-next-wave", { file: expectedPath });
+		expect(callToolMock).toHaveBeenCalledWith("org-next-wave", { files: [plansA, plansB].sort() });
+	});
+
+	test("accepts category prefixes", async () => {
+		const featureA = await writeCategoryFile("features", "feature-a.org");
+		const tool = await makeEmacsTool();
+
+		await tool.execute({ command: "wave", category: "FEAT" });
+		expect(callToolMock).toHaveBeenCalledWith("org-next-wave", { files: [featureA] });
 	});
 
 	test("file takes precedence over category", async () => {
+		await writeCategoryFile("plans", "plan-a.org");
 		const tool = await makeEmacsTool();
 		await tool.execute({ command: "wave", file: "/explicit.org", category: "plans" });
 		expect(callToolMock).toHaveBeenCalledWith("org-next-wave", { file: "/explicit.org" });
 	});
 
-	test("unknown category passes empty args", async () => {
+	test("unknown category returns a tool error instead of falling through", async () => {
 		const tool = await makeEmacsTool();
-		await tool.execute({ command: "wave", category: "nonexistent" });
-		expect(callToolMock).toHaveBeenCalledWith("org-next-wave", {});
+		expect(await tool.execute({ command: "wave", category: "nonexistent" })).toEqual({
+			error: true,
+			message: "Category not found: nonexistent",
+		});
+		expect(callToolMock).not.toHaveBeenCalled();
 	});
 });
 
 describe("cmdGraph", () => {
-	test("calls org-dependency-graph with no args when none provided", async () => {
+	test("calls org-dependency-graph with all category files when no args are provided", async () => {
+		const plansA = await writeCategoryFile("plans", "plan-a.org");
+		const featureA = await writeCategoryFile("features", "feature-a.org");
 		const tool = await makeEmacsTool();
+
 		await tool.execute({ command: "graph" });
 		expect(callToolMock).toHaveBeenCalledTimes(1);
-		expect(callToolMock).toHaveBeenCalledWith("org-dependency-graph", {});
+		expect(callToolMock).toHaveBeenCalledWith("org-dependency-graph", {
+			files: [featureA, plansA].sort(),
+		});
 	});
 
 	test("forwards file arg directly", async () => {
@@ -116,10 +139,12 @@ describe("cmdGraph", () => {
 		expect(callToolMock).toHaveBeenCalledWith("org-dependency-graph", { file: "/some/path.org" });
 	});
 
-	test("resolves category to absPath", async () => {
+	test("resolves category to its org files", async () => {
+		const featureA = await writeCategoryFile("features", "feature-a.org");
+		const featureB = await writeCategoryFile("features", "feature-b.org");
 		const tool = await makeEmacsTool();
+
 		await tool.execute({ command: "graph", category: "features" });
-		const expectedPath = path.join(tmpDir, "tasks", "features");
-		expect(callToolMock).toHaveBeenCalledWith("org-dependency-graph", { file: expectedPath });
+		expect(callToolMock).toHaveBeenCalledWith("org-dependency-graph", { files: [featureA, featureB].sort() });
 	});
 });

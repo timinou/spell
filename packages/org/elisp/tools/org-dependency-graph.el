@@ -10,10 +10,9 @@
 (require 'mcp-server-tools)
 (require 'org-mcp-common)
 
-(defun org-mcp--collect-graph-nodes (file)
+(defun org-mcp--collect-graph-nodes-from-file (file)
   "Collect all task items from FILE as graph node alists.
-Returns list of ((custom_id . ID) (title . TITLE) (state . STATE)
- (depends . \"A B\") (blocks . \"C D\"))."
+Returns list entries with custom_id, title, state, depends, and blocks fields."
   (with-temp-buffer
     (insert-file-contents file)
     (let ((buffer-file-name file))
@@ -38,6 +37,13 @@ Returns list of ((custom_id . ID) (title . TITLE) (state . STATE)
                           nodes)))))))
         (nreverse nodes)))))
 
+(defun org-mcp--collect-graph-nodes (files)
+  "Collect graph nodes from FILES."
+  (let ((nodes '()))
+    (dolist (file files)
+      (setq nodes (nconc nodes (org-mcp--collect-graph-nodes-from-file file))))
+    nodes))
+
 (defun org-mcp--parse-space-separated (value)
   "Parse space-separated VALUE string into a list of trimmed tokens."
   (when (and value (not (string-empty-p (string-trim value))))
@@ -45,7 +51,7 @@ Returns list of ((custom_id . ID) (title . TITLE) (state . STATE)
 
 (defun org-mcp--build-edges (nodes)
   "Build edge list from NODES based on DEPENDS and BLOCKS properties.
-Returns list of ((from . FROM_ID) (to . TO_ID) (type . \"depends\"|\"blocks\"))."
+Returns list entries with from, to, and type fields."
   (let ((edges '())
         (id-set (make-hash-table :test 'equal)))
     ;; Build set of known IDs for validation
@@ -108,11 +114,10 @@ Uses recursive DFS with 3-color marking."
 
 (defun org-mcp-dependency-graph-handler (args)
   "Handle org-dependency-graph tool call with ARGS.
-ARGS is an alist with optional key: file."
+ARGS may contain `file', `files', or no target args to scan all org files."
   (condition-case err
-      (let* ((file (alist-get 'file args))
-             (resolved-file (org-mcp--resolve-file file))
-             (nodes (org-mcp--collect-graph-nodes resolved-file))
+      (let* ((files (org-mcp--resolve-files args))
+             (nodes (org-mcp--collect-graph-nodes files))
              (edges (org-mcp--build-edges nodes))
              (cycles (org-mcp--detect-cycles nodes edges))
              ;; Strip internal depends/blocks from node output
@@ -135,12 +140,14 @@ ARGS is an alist with optional key: file."
  (make-mcp-server-tool
   :name "org-dependency-graph"
   :title "Dependency Graph"
-  :description "Build dependency DAG from DEPENDS/BLOCKS properties. Returns nodes, edges, and detected cycles. Edge direction: from=dependency, to=dependent (e.g., A->B means B depends on A)."
+  :description "Build dependency DAG from DEPENDS/BLOCKS properties across one file, a set of files, or all @tasks org files when no target is provided. Returns nodes, edges, and detected cycles. Edge direction: from=dependency, to=dependent (e.g., A->B means B depends on A)."
   :input-schema '((type . "object")
                   (properties
                    . ((file . ((type . "string")
-                               (description . "Path to org file (absolute or relative to @tasks/)")))))
-                  (required . ["file"]))
+                               (description . "Path to org file or category directory (absolute or relative to @tasks/)")))
+                      (files . ((type . "array")
+                                (items . ((type . "string")))
+                                (description . "List of org file paths or category directories."))))))
   :function #'org-mcp-dependency-graph-handler))
 
 (provide 'org-dependency-graph)

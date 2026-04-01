@@ -12,7 +12,7 @@ import type {
 	AgentToolUpdateCallback,
 	RenderResultOptions,
 } from "@oh-my-pi/pi-agent-core";
-import { type EmacsSession, startEmacsSession } from "@oh-my-pi/pi-emacs";
+import { EmacsSessionManager, type EmacsWarmupResult, startEmacsSession } from "@oh-my-pi/pi-emacs";
 import type { OrgConfig, OrgItem, OrgSessionContext, OrgToolDefinition } from "@oh-my-pi/pi-org";
 import { createOrgTool, DEFAULT_ORG_CONFIG, detectEmacs } from "@oh-my-pi/pi-org";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -99,10 +99,13 @@ export class OrgTool implements AgentTool<typeof orgSchema, { error?: boolean },
 		const emacsPathSetting = session.settings.get("org.emacsPath") as string | undefined;
 		const emacsPath = emacsPathSetting || undefined;
 		const sessionId = session.getSessionId?.() ?? "default";
+		const orgSessionManager = session.orgSessionManager ?? createOrgSessionManager(emacsPath, projectRoot, sessionId);
 
-		this.#inner = createOrgTool(projectRoot, config, makeEmacsFactory(emacsPath, projectRoot, sessionId), () =>
-			buildSessionContext(session),
-		);
+		this.#inner = createOrgTool(projectRoot, config, {
+			emacsSessionManager: orgSessionManager,
+			ownsSessionManager: !session.orgSessionManager,
+			getSessionContext: () => buildSessionContext(session),
+		});
 		this.description = this.#inner.description;
 	}
 
@@ -162,28 +165,47 @@ export class OrgTool implements AgentTool<typeof orgSchema, { error?: boolean },
 // Helpers
 // =============================================================================
 
-function makeEmacsFactory(
+export async function warmupOrgEmacs(
 	emacsPath: string | undefined,
 	projectRoot: string,
 	sessionId: string,
-): () => Promise<EmacsSession> {
-	return async () => {
-		const detection = await detectEmacs(emacsPath);
-		if (!detection.found || !detection.meetsMinimum || !detection.socatFound) {
-			const errors =
-				detection.errors.length > 0
-					? detection.errors.join("; ")
-					: "Emacs not found or does not meet minimum version";
-			throw new Error(`org: Emacs not available — ${errors}`);
-		}
-		return startEmacsSession(detection.path!, projectRoot, sessionId, ELISP_DIR, {
+): Promise<EmacsWarmupResult> {
+	const detection = await detectEmacs(emacsPath);
+	if (!detection.found || !detection.meetsMinimum || !detection.socatFound) {
+		const errors =
+			detection.errors.length > 0 ? detection.errors.join("; ") : "Emacs not found or does not meet minimum version";
+		return {
+			status: "unavailable",
+			error: `org: Emacs not available — ${errors}`,
+			version: detection.version ?? undefined,
+			session: null,
+		};
+	}
+
+	try {
+		const session = await startEmacsSession(detection.path!, projectRoot, sessionId, ELISP_DIR, {
 			socketPrefix: "spell-org-",
 			startupTimeoutMs: 30_000,
 			tryReattach: false,
 			emacsFlags: [], // org daemon does not skip user init
 			evalExpressions: ["(require 'org-tasks-mcp)"],
 		});
-	};
+		return { status: "ready", version: detection.version ?? undefined, session };
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		logger.warn("[org-emacs-warmup] daemon startup failed", { error: msg, projectRoot });
+		return { status: "error", error: msg, version: detection.version ?? undefined, session: null };
+	}
+}
+
+export function createOrgSessionManager(
+	emacsPath: string | undefined,
+	projectRoot: string,
+	sessionId: string,
+): EmacsSessionManager {
+	return new EmacsSessionManager({
+		startSession: () => warmupOrgEmacs(emacsPath, projectRoot, sessionId),
+	});
 }
 
 function loadOrgConfig(session: ToolSession): OrgConfig {
@@ -312,53 +334,59 @@ function previewArgValue(value: unknown, width: number = TRUNCATE_LENGTHS.CONTEN
  * - Everything else (create, update, dashboard, etc.): JSON.
  */
 export function formatOrgResult(result: unknown): string {
-	if (
-		typeof result === "object" &&
-		result !== null &&
-		"items" in result &&
-		Array.isArray((result as Record<string, unknown>).items)
-	) {
-		const r = result as { items: OrgItem[]; total: number };
-		return formatOrgQueryResult(r.items, r.total ?? r.items.length);
+	const isObjectResult = typeof result === "object" && result !== null;
+	const record = isObjectResult ? (result as Record<string, unknown>) : null;
+
+	if (record && "wave_number" in record && Array.isArray(record.items)) {
+		const items = record.items as Array<Record<string, unknown>>;
+		const blockedItems = Array.isArray(record.blocked_items) ? record.blocked_items.length : 0;
+		const lines = [
+			`wave: ${String(record.wave_number)}`,
+			`ready: ${items.length}`,
+			`blocked: ${blockedItems}`,
+			`completed: ${String(record.completed_count ?? 0)}/${String(record.total_count ?? items.length)}`,
+		];
+		for (const item of items) {
+			const id = typeof item.custom_id === "string" ? item.custom_id : "unknown";
+			const title = typeof item.title === "string" ? item.title : "";
+			lines.push(`- ${id}${title ? ` ${title}` : ""}`);
+		}
+		return lines.join("\n");
 	}
 
-	if (
-		typeof result === "object" &&
-		result !== null &&
-		"fileContent" in result &&
-		typeof (result as Record<string, unknown>).fileContent === "string"
-	) {
-		return (result as { fileContent: string }).fileContent;
+	if (record && "items" in record && Array.isArray(record.items)) {
+		const firstItem = record.items[0];
+		if (typeof firstItem === "object" && firstItem !== null && "id" in firstItem && "properties" in firstItem) {
+			const r = record as { items: OrgItem[]; total: number };
+			return formatOrgQueryResult(r.items, r.total ?? r.items.length);
+		}
 	}
 
-	if (
-		typeof result === "object" &&
-		result !== null &&
-		"item" in result &&
-		typeof (result as Record<string, unknown>).item === "object"
-	) {
-		const item = (result as { item: OrgItem }).item;
+	if (record && "fileContent" in record && typeof record.fileContent === "string") {
+		return record.fileContent;
+	}
+
+	if (record && "item" in record && typeof record.item === "object" && record.item !== null) {
+		const item = record.item as OrgItem;
 		return renderItemOrg(item, true, Infinity);
 	}
 
 	// Mutation results (create, update, set, note)
-	if (typeof result === "object" && result !== null && "success" in result) {
-		const r = result as Record<string, unknown>;
+	if (record && "success" in record) {
 		const parts: string[] = [];
-		if (r.success) parts.push("success");
-		if (r.id) parts.push(`id: ${r.id}`);
-		if (Array.isArray(r.updated)) parts.push(`updated: ${(r.updated as string[]).join(", ")}`);
-		if (typeof r.file === "string") parts.push(`file: ${r.file}`);
-		if (typeof r.section === "string") parts.push(`section: ${r.section}`);
-		if (typeof r.state === "string") parts.push(`state: ${r.state}`);
-		if (typeof r.category === "string") parts.push(`category: ${r.category}`);
+		if (record.success) parts.push("success");
+		if (record.id) parts.push(`id: ${record.id}`);
+		if (Array.isArray(record.updated)) parts.push(`updated: ${(record.updated as string[]).join(", ")}`);
+		if (typeof record.file === "string") parts.push(`file: ${record.file}`);
+		if (typeof record.section === "string") parts.push(`section: ${record.section}`);
+		if (typeof record.state === "string") parts.push(`state: ${record.state}`);
+		if (typeof record.category === "string") parts.push(`category: ${record.category}`);
 		return parts.join("\n");
 	}
 
 	// Error results
-	if (typeof result === "object" && result !== null && "error" in result) {
-		const r = result as Record<string, unknown>;
-		return `error: ${r.message ?? "unknown"}${r.code ? ` (${r.code})` : ""}`;
+	if (record && "error" in record) {
+		return `error: ${record.message ?? "unknown"}${record.code ? ` (${record.code})` : ""}`;
 	}
 
 	return JSON.stringify(result, null, 2);

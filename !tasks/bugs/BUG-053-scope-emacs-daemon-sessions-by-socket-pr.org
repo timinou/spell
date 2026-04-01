@@ -1,0 +1,65 @@
+#+TITLE: Scope Emacs daemon sessions by socket prefix
+#+STATE: DONE
+#+SESSION_ID: 14a9910ffe5df734
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-40-08-953Z_14a9910ffe5df734.jsonl]]
+#+CUSTOM_ID: BUG-053-scope-emacs-daemon-sessions-by-socket-pr
+#+EFFORT: 45m
+#+PRIORITY: #A
+#+LAYER: emacs
+
+NOTE [2026-04-01]: Completed by PLAN-063: daemon cache identity now includes socket prefix and regression coverage passes.
+
+* Initial Message
+
+Look at this:
+
+
+ Now let me run org wave to compute the execution waves from the dependency graph, then create the PLAN item.
+
+
+ ⏳ Org: wave
+ {"error":true,"message":"Emacs MCP error -32603: Internal error"}
+
+
+
+ ⏳ Org: graph
+ {"error":true,"message":"Emacs MCP error -32603: Internal error"}
+
+
+ The wave/graph commands aren't available. I'll compute the execution waves manually from the dependency graph:
+
+in this session:
+
+
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-01T11-09-57-247Z_14a97c6b1fdf6ead.jsonl
+ ID: 14a97c6b1fdf6ead
+
+
+
+What happened? This is recurrent
+
+Problem
+- `startEmacsSession()` caches by `hash(projectRoot + sessionId)` and ignores `socketPrefix`, so the org tool reuses the code-intelligence daemon and calls org MCP tools against a socket that only exposes `code-read`/`code-outline`/`code-edit`.
+- Repro already verified in this session: `org wave`/`org graph` return `Emacs MCP error -32603: Internal error`, and a direct socat call against the reused `spell-emacs-*` socket returns `Tool not found: org-next-wave`.
+
+Scope
+- `packages/emacs/src/daemon.ts`
+- `packages/emacs/test/daemon-survival.test.ts`
+
+Preferred sequencing
+- Test first. Add a failing TS contract before changing the cache keying.
+
+Required change
+- Make daemon/session cache identity include daemon flavor (`socketPrefix` or equivalent) so `spell-org-*` and `spell-emacs-*` sessions never collide even when `projectRoot` and `sessionId` match.
+- Preserve existing same-prefix reattach behavior and socket naming stability.
+- Keep the fix at the daemon/session boundary; do not paper over it in org callers.
+
+Acceptance
+- Starting an emacs_code session must not satisfy a later org daemon request for the same `projectRoot` + `sessionId`.
+- Two calls with identical `projectRoot` + `sessionId` but different `socketPrefix` values resolve to distinct cache slots and distinct socket paths.
+- Same-prefix reattach/spawn behavior still works.
+
+Verification
+- `bun test packages/emacs/test/daemon-survival.test.ts`
+- Manual proof during implementation: after invoking emacs_code and then an org MCP caller in the same session, both a `spell-emacs-*.sock` and a `spell-org-*.sock` exist, and the org socket answers `tools/list` with org tools rather than only code tools.

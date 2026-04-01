@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; MCP tool that computes topological wave layers from sub-outline dependency graph.
-;; Sub-outlines are headings with CUSTOM_ID containing "::" separator.
+;; Sub-outlines are headings with CUSTOM_ID containing :: separator.
 ;; Waves emerge from topological sorting: wave 1 = items with no deps,
 ;; wave N = items whose all deps are in waves < N.
 
@@ -12,9 +12,9 @@
 (require 'mcp-server-tools)
 (require 'org-mcp-common)
 
-(defun org-mcp--collect-sub-outlines (file)
+(defun org-mcp--collect-sub-outlines-from-file (file)
   "Collect all sub-outline headings from FILE.
-Sub-outlines have CUSTOM_ID containing \"::\" separator.
+Sub-outlines have CUSTOM_ID containing :: separator.
 Returns list of alists with custom_id, parent_id, title, depends."
   (with-temp-buffer
     (insert-file-contents file)
@@ -38,6 +38,13 @@ Returns list of alists with custom_id, parent_id, title, depends."
                           (depends . ,(or depends '())))
                         items))))))
         (nreverse items)))))
+
+(defun org-mcp--collect-sub-outlines (files)
+  "Collect all sub-outlines from FILES."
+  (let ((items '()))
+    (dolist (file files)
+      (setq items (nconc items (org-mcp--collect-sub-outlines-from-file file))))
+    items))
 
 (defun org-mcp--compute-wave-layers (items)
   "Compute wave layers from ITEMS using topological sort (Kahn's algorithm).
@@ -110,20 +117,17 @@ Waves is a list of ((number . N) (items . [...]))."
 
 (defun org-mcp-compute-waves-handler (args)
   "Handle org-compute-waves tool call with ARGS.
-ARGS is an alist with key: file."
+ARGS may contain `file', `files', or no target args to scan all org files."
   (condition-case err
-      (let* ((file (alist-get 'file args))
-             (resolved-file (org-mcp--resolve-file file)))
-        (unless (file-exists-p resolved-file)
-          (error "File not found: %s" resolved-file))
-        (let* ((items (org-mcp--collect-sub-outlines resolved-file))
-               (result (org-mcp--compute-wave-layers items))
-               (waves (car result))
-               (warnings (cdr result)))
-          (json-encode
-           `((waves . ,(vconcat waves))
-             (warnings . ,(vconcat warnings))
-             (total_sub_outlines . ,(length items))))))
+      (let* ((files (org-mcp--resolve-files args))
+             (items (org-mcp--collect-sub-outlines files))
+             (result (org-mcp--compute-wave-layers items))
+             (waves (car result))
+             (warnings (cdr result)))
+        (json-encode
+         `((waves . ,(vconcat waves))
+           (warnings . ,(vconcat warnings))
+           (total_sub_outlines . ,(length items)))))
     (error
      (json-encode
       `((error . t)
@@ -134,12 +138,14 @@ ARGS is an alist with key: file."
  (make-mcp-server-tool
   :name "org-compute-waves"
   :title "Compute Waves"
-  :description "Compute topological wave layers from sub-outline dependency graph. Sub-outlines have CUSTOM_ID with :: separator. Returns waves (layers of parallelizable items), warnings, and cycle detection."
+  :description "Compute topological wave layers from the sub-outline dependency graph across one file, a set of files, or all @tasks org files when no target is provided. Sub-outlines have CUSTOM_ID with :: separator. Returns waves (layers of parallelizable items), warnings, and cycle detection."
   :input-schema '((type . "object")
                   (properties
                    . ((file . ((type . "string")
-                               (description . "Path to org file (absolute or relative to @tasks/)")))))
-                  (required . ["file"]))
+                               (description . "Path to org file or category directory (absolute or relative to @tasks/)")))
+                      (files . ((type . "array")
+                                (items . ((type . "string")))
+                                (description . "List of org file paths or category directories."))))))
   :function #'org-mcp-compute-waves-handler))
 
 (provide 'org-compute-waves)

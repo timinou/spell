@@ -1,0 +1,131 @@
+#+TITLE: Org wave graph daemon recovery
+#+STATE: DONE
+#+SESSION_ID: 14a9910ffe5df734
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-40-08-953Z_14a9910ffe5df734.jsonl]]
+#+CUSTOM_ID: PLAN-063-org-wave-graph-daemon-recovery
+
+NOTE [2026-04-01]: Execution complete: verification passed, manual same-session proof captured, and linked child items were closed.
+
+
+* Initial Message
+
+Look at this:
+
+
+ Now let me run org wave to compute the execution waves from the dependency graph, then create the PLAN item.
+
+
+ ⏳ Org: wave
+ {"error":true,"message":"Emacs MCP error -32603: Internal error"}
+
+
+
+ ⏳ Org: graph
+ {"error":true,"message":"Emacs MCP error -32603: Internal error"}
+
+
+ The wave/graph commands aren't available. I'll compute the execution waves manually from the dependency graph:
+
+in this session:
+
+
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-01T11-09-57-247Z_14a97c6b1fdf6ead.jsonl
+ ID: 14a97c6b1fdf6ead
+
+
+
+What happened? This is recurrent
+
+* Context
+`org wave` and `org graph` are failing recurrently in plan mode with `Emacs MCP error -32603: Internal error`.
+
+Verified root causes in the current repo state:
+- `packages/emacs/src/daemon.ts` caches Emacs sessions by `hash(projectRoot + sessionId)` and ignores `socketPrefix`, so org callers can reuse the code-intelligence daemon instead of starting an org daemon.
+- The reused `spell-emacs-*` daemon only exposes code tools; a direct socat call in this session returned `Tool not found: org-next-wave`.
+- `packages/org/src/tool.ts` still uses one-shot `emacsSessionPromise` / `orgClientPromise` caching, so org-side startup failures do not get the circuit-breaker + lazy-restart semantics already implemented in `EmacsSessionManager`.
+- `packages/org/test/tool-wave-graph.test.ts` currently encodes a false contract: `category` resolves to a directory path and `no args` forwards empty args, even though the Elisp handlers are file-oriented and child items live in separate `.org` files.
+- `packages/coding-agent/src/prompts/system/plan-mode-active.md` explicitly tells the planner to run `org wave` on a category, so the implementation and the planning prompt are out of sync.
+
+Recommended approach
+- Fix the daemon identity boundary first by scoping session caching by daemon flavor (`socketPrefix` or equivalent).
+- Keep `EmacsSessionManager` as the lifecycle abstraction. It is not a thin `ManagedDaemon` wrapper; it owns warmup result ingestion, lazy restart, coalescing, and cooldown behavior. Reuse it for org callers instead of bypassing it.
+- Add a dedicated org session manager path for org MCP consumers (`OrgTool`, `ExitPlanModeTool`, and any touched shared org-client entry point).
+- Repair `wave`/`graph` so category / no-arg calls resolve to a truthful org target set that matches plan-mode usage across multi-file categories, then lock that behavior down with both TS tests and new ERT coverage.
+
+Critical files
+- `packages/emacs/src/daemon.ts`
+- `packages/emacs/test/daemon-survival.test.ts`
+- `packages/emacs/src/session-manager.ts`
+- `packages/coding-agent/src/sdk.ts`
+- `packages/coding-agent/src/tools/index.ts`
+- `packages/coding-agent/src/tools/org.ts`
+- `packages/coding-agent/src/tools/exit-plan-mode.ts`
+- `packages/org/src/tool.ts`
+- `packages/org/test/tool-wave-graph.test.ts`
+- `packages/org/elisp/tools/org-mcp-common.el`
+- `packages/org/elisp/tools/org-next-wave.el`
+- `packages/org/elisp/tools/org-dependency-graph.el`
+- `packages/org/elisp/tools/org-compute-waves.el`
+- new ERT file under `packages/org/elisp/test/`
+- `packages/coding-agent/src/prompts/system/plan-mode-active.md` if prompt wording must be brought in line with the repaired contract
+
+Key decisions
+- No compatibility shim that lets org callers silently talk to the code daemon.
+- No permanent one-shot promise caching for org daemon startup.
+- Test-first implementation: TS contract tests for daemon identity and caller wiring, plus ERT coverage for Emacs-side wave/graph resolution and handler behavior.
+
+* Verification
+** Automated
+- `bun test packages/emacs/test/daemon-survival.test.ts`
+- `bun test packages/emacs/test/session-manager.test.ts`
+- `bun test packages/coding-agent/test/tools/exit-plan-mode.test.ts`
+- `bun test packages/coding-agent/test/tools/org-section-output.test.ts packages/coding-agent/test/tools/org.test.ts`
+- add and run a focused new coding-agent test file proving org callers use the org session manager independently of `emacsSessionManager`
+- `bun test packages/org/test/tool-wave-graph.test.ts`
+- new ERT batch run for the added wave/graph test file, e.g.
+  `cd packages/org && emacs --batch -l ert -l elisp/org-tasks.el -l elisp/mcp-server-tools.el -l elisp/tools/org-mcp-common.el -l elisp/tools/org-dependency-graph.el -l elisp/tools/org-next-wave.el -l elisp/tools/org-compute-waves.el -l elisp/test/org-wave-graph-test.el -f ert-run-tests-batch-and-exit`
+- `bun check:ts`
+
+** Manual proof
+- In a fresh session, use `emacs_code` first, then run `org wave` and `org graph`; both must succeed instead of returning `-32603`.
+- Verify both daemon flavors exist separately (`spell-emacs-*.sock` and `spell-org-*.sock`) and the org socket lists org MCP tools.
+- Verify `exit_plan_mode` can obtain `org-fluid-plan` through the org daemon path instead of the code daemon path.
+
+* Execution Manifest
+** wave-1 foundation                                            :wave:
+- [[id:BUG-053-scope-emacs-daemon-sessions-by-socket-pr]] Scope Emacs daemon sessions by socket prefix
+  - Depends on: none
+  - Effort: 45m
+  - Outcome: distinct cache identity for `spell-emacs-*` vs `spell-org-*` daemons
+
+** wave-2 lifecycle + contract                                  :wave:
+- [[id:BUG-054-wire-org-mcp-callers-through-dedicated-e]] Wire org MCP callers through dedicated EmacsSessionManager
+  - Depends on: [[id:BUG-053-scope-emacs-daemon-sessions-by-socket-pr]]
+  - Effort: 1h
+  - Outcome: org callers recover independently and `exit-plan-mode` reaches org MCP via the org daemon
+- [[id:BUG-055-fix-org-wave-graph-category-contract-and]] Fix org wave graph category contract and add TDD ERT coverage
+  - Depends on: [[id:BUG-053-scope-emacs-daemon-sessions-by-socket-pr]]
+  - Effort: 2h
+  - Outcome: category / no-arg wave+graph behavior matches plan-mode usage across multi-file org categories and is locked by TS + ERT tests
+
+** completion gate                                              :wave:
+- Finish only when all automated checks above pass and the manual same-session repro no longer returns `Tool not found: org-next-wave` or `-32603`.
+
+
+** Completion [2026-04-01]
+*** Verification
+- `bun test packages/emacs/test/daemon-survival.test.ts` — passed (9 tests).
+- `bun test packages/emacs/test/session-manager.test.ts` — passed (8 tests).
+- `bun test packages/coding-agent/test/tools/exit-plan-mode.test.ts` — passed (9 tests).
+- `bun test packages/coding-agent/test/tools/org-section-output.test.ts packages/coding-agent/test/tools/org.test.ts` — passed (5 tests total across the focused org adapter suites).
+- `bun test packages/coding-agent/test/tools/org-session-manager.test.ts` — passed (2 tests).
+- `bun test packages/org/test/session-manager-recovery.test.ts` — passed (1 test).
+- `bun test packages/org/test/tool-wave-graph.test.ts` — passed (9 tests).
+- `cd packages/org && emacs --batch -l elisp/org-tasks.el -l elisp/mcp-server-tools.el -l elisp/tools/org-mcp-common.el -l elisp/tools/org-dependency-graph.el -l elisp/tools/org-next-wave.el -l elisp/tools/org-compute-waves.el -l elisp/test/org-wave-graph-test.el -f ert-run-tests-batch-and-exit` — passed (4 ERTs).
+- `bun check:ts` — passed.
+- Manual same-session proof: `bun .tmp/manual-org-proof.ts` after triggering `emacs_code` first — succeeded. The proof showed `waveSucceeded: true`, `graphSucceeded: true`, distinct `spell-emacs-*` and `spell-org-*` sockets under `/run/user/1000/`, `org-next-wave`/`org-dependency-graph` present in `tools/list` on the org socket, and `ExitPlanModeTool` returning a non-empty `fluidPlan` through the org daemon path.
+*** Artifacts
+- Manual same-session proof JSON: [[file:!tasks/plans/plan-artifacts/PLAN-063-org-wave-graph-daemon-recovery/manual-proof-same-session.json]]
+*** Deviations
+- None.

@@ -34,6 +34,8 @@ import { EmacsSessionManager, type EmacsWarmupResult, warmupEmacs } from "@oh-my
 import { buildServicePromptSection } from "./browser/service-prompt-section";
 import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
+import type { SpellDomain } from "./domain/loader";
+import { applyDomainToolPolicy, loadDomainPromptContext } from "./domain/policy";
 import { TtsrManager } from "./export/ttsr";
 import {
 	type CustomCommandsLoadResult,
@@ -131,6 +133,7 @@ import {
 } from "./tools/canvas";
 import { ToolContextStore } from "./tools/context";
 import { getGeminiImageTools } from "./tools/gemini-image";
+import { createOrgSessionManager } from "./tools/org";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { PendingActionStore } from "./tools/pending-action";
 import { EventBus } from "./utils/event-bus";
@@ -185,6 +188,8 @@ export interface CreateAgentSessionOptions {
 	rules?: Rule[];
 	/** Context files (AGENTS.md content). Default: discovered walking up from cwd */
 	contextFiles?: Array<{ path: string; content: string }>;
+	/** Active domain manifest applied to this session. */
+	domainManifest?: SpellDomain;
 	/** Prompt templates. Default: discovered from cwd/.spell/prompts/ + agentDir/prompts/ */
 	promptTemplates?: PromptTemplate[];
 	/** File-based slash commands. Default: discovered from commands/ directories */
@@ -827,9 +832,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}),
 	);
 
-	const contextFiles = await logger.timeAsync(
+	const domainPromptContext = await logger.timeAsync("loadDomainPromptContext", () =>
+		loadDomainPromptContext(options.domainManifest, cwd),
+	);
+	const baseContextFiles = await logger.timeAsync(
 		"discoverContextFiles",
 		async () => options.contextFiles ?? (await discoverContextFiles(cwd, agentDir)),
+	);
+	const contextFiles = [...domainPromptContext.contextFiles, ...baseContextFiles];
+	const hasExplicitToolNames = options.toolNames !== undefined;
+	const requestedBuiltInToolNames = applyDomainToolPolicy(
+		options.toolNames,
+		Object.keys(BUILTIN_TOOLS),
+		options.domainManifest,
 	);
 
 	let agent: Agent;
@@ -889,6 +904,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const pendingActionStore = new PendingActionStore();
 	const emacsPath = settings.get("emacs.path") as string | undefined;
+	const orgEmacsPath = settings.get("org.emacsPath") as string | undefined;
 	const startEmacsWarmup = (onConnecting?: (name: string) => void): Promise<EmacsWarmupResult> =>
 		warmupEmacs(cwd, sessionId, {
 			emacsPath,
@@ -897,6 +913,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const emacsSessionManager = new EmacsSessionManager({
 		startSession: () => startEmacsWarmup(),
 	});
+	const orgSessionManager = createOrgSessionManager(orgEmacsPath, cwd, sessionId);
 
 	const loopManager = new LoopManager({
 		cwd,
@@ -916,9 +933,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		cwd,
 		hasUI: options.hasUI ?? false,
 		enableLsp,
-		get hasEditTool() {
-			return !options.toolNames || options.toolNames.includes("edit");
-		},
+		hasEditTool: requestedBuiltInToolNames.includes("edit"),
 		skipPythonPreflight: options.skipPythonPreflight,
 		contextFiles,
 		skills,
@@ -944,6 +959,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		getCompactContext: () => session.formatCompactContext(),
 		getTodoPhases: () => session.getTodoPhases(),
 		setTodoPhases: (phases, options) => session.setTodoPhases(phases, options),
+		getPlanReferencePath: () => session.getPlanReferencePath(),
 		isMCPDiscoveryEnabled: () => session.isMCPDiscoveryEnabled(),
 		getDiscoverableMCPTools: () => session.getDiscoverableMCPTools(),
 		getDiscoverableMCPSearchIndex: () => session.getDiscoverableMCPSearchIndex(),
@@ -964,6 +980,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		asyncJobManager,
 		pendingActionStore,
 		emacsSessionManager,
+		orgSessionManager,
 		loopManager,
 		gatewayClient,
 	};
@@ -1019,7 +1036,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// Fire Emacs daemon startup now so it runs in the background during MCP/Gemini/Exa init.
 	// It will be awaited alongside the LSP warmup before the session is returned.
-	const shouldStartEmacs = options.toolNames === undefined || options.toolNames.includes("emacs_code");
+	const shouldStartEmacs = requestedBuiltInToolNames.includes("emacs_code");
 	const emacsWarmupPromise: Promise<EmacsWarmupResult | undefined> = shouldStartEmacs
 		? logger.timeAsync("warmupEmacs", () =>
 				startEmacsWarmup(name => {
@@ -1031,7 +1048,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		: Promise.resolve(undefined);
 
 	// Create built-in tools (already wrapped with meta notice formatting)
-	const builtinTools = await logger.timeAsync("createAllTools", () => createTools(toolSession, options.toolNames));
+	const builtinTools = await logger.timeAsync("createAllTools", () =>
+		createTools(toolSession, requestedBuiltInToolNames),
+	);
 
 	// Discover MCP tools from .mcp.json files
 	let mcpManager: MCPManager | undefined;
@@ -1311,17 +1330,23 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			search_tool_bm25: { description: renderSearchToolBm25Description(discoverableMCPTools) },
 		});
 		const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
+		const joinPromptSections = (...sections: Array<string | undefined>): string | undefined => {
+			const parts = sections.filter(
+				(section): section is string => typeof section === "string" && section.length > 0,
+			);
+			return parts.length > 0 ? parts.join("\n\n") : undefined;
+		};
+		const appendPromptSections: string[] = [];
+		if (memoryInstructions) {
+			appendPromptSections.push(memoryInstructions);
+		}
 
-		// Build combined append prompt: memory instructions + MCP server instructions
 		const serverInstructions = mcpManager?.getServerInstructions();
-		let appendPrompt: string | undefined = memoryInstructions ?? undefined;
 		if (serverInstructions && serverInstructions.size > 0) {
 			const MAX_INSTRUCTIONS_LENGTH = 4000;
-			const parts: string[] = [];
-			if (appendPrompt) parts.push(appendPrompt);
-			parts.push(
+			const parts = [
 				"## MCP Server Instructions\n\nThe following instructions are provided by connected MCP servers. They are server-controlled and may not be verified.",
-			);
+			];
 			for (const [srvName, srvInstructions] of serverInstructions) {
 				const truncated =
 					srvInstructions.length > MAX_INSTRUCTIONS_LENGTH
@@ -1329,20 +1354,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						: srvInstructions;
 				parts.push(`### ${srvName}\n${truncated}`);
 			}
-			appendPrompt = parts.join("\n\n");
+			appendPromptSections.push(parts.join("\n\n"));
 		}
 
-		// Inject connected browser services if canvas tools available
 		if (toolNames.includes("canvas") || toolNames.includes("puppeteer")) {
 			try {
 				const serviceSection = await buildServicePromptSection();
 				if (serviceSection) {
-					appendPrompt = appendPrompt ? `${appendPrompt}\n\n${serviceSection}` : serviceSection;
+					appendPromptSections.push(serviceSection);
 				}
 			} catch {
 				// Service registry not available — skip
 			}
 		}
+		const appendPrompt = joinPromptSections(domainPromptContext.systemPrompt, ...appendPromptSections);
+		const appendPromptWithoutDomain = joinPromptSections(...appendPromptSections);
 		const defaultPrompt = await buildSystemPromptInternal({
 			cwd,
 			skills,
@@ -1363,6 +1389,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			return defaultPrompt;
 		}
 		if (typeof options.systemPrompt === "string") {
+			const customPrompt = domainPromptContext.systemPrompt
+				? `${domainPromptContext.systemPrompt}\n\n${options.systemPrompt}`
+				: options.systemPrompt;
 			return await buildSystemPromptInternal({
 				cwd,
 				skills,
@@ -1371,8 +1400,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				toolNames,
 				rules: rulebookRules,
 				skillsSettings: settings.getGroup("skills"),
-				customPrompt: options.systemPrompt,
-				appendSystemPrompt: appendPrompt,
+				customPrompt,
+				appendSystemPrompt: appendPromptWithoutDomain,
 				repeatToolDescriptions,
 				intentField,
 				mcpDiscoveryMode: hasDiscoverableMCPTools,
@@ -1384,7 +1413,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	const toolNamesFromRegistry = Array.from(toolRegistry.keys());
-	const requestedToolNames = [...(options.toolNames?.map(name => name.toLowerCase()) ?? toolNamesFromRegistry)];
+	const requestedToolNames = applyDomainToolPolicy(
+		hasExplicitToolNames ? options.toolNames : undefined,
+		toolNamesFromRegistry,
+		options.domainManifest,
+	);
 	if (
 		options.requireSubmitResultTool &&
 		toolRegistry.has("submit_result") &&
@@ -1398,7 +1431,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const requestedActiveToolNames = includeExitPlanMode
 		? normalizedRequested
 		: normalizedRequested.filter(name => name !== "exit_plan_mode");
-	const explicitlyRequestedMCPToolNames = options.toolNames
+	const explicitlyRequestedMCPToolNames = hasExplicitToolNames
 		? requestedActiveToolNames.filter(name => name.startsWith("mcp_"))
 		: [];
 	const initialToolNames = mcpDiscoveryEnabled
@@ -1685,6 +1718,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				await toolSession.emacsSessionManager.dispose();
 			} catch (err) {
 				logger.warn("emacsSessionManager dispose failed", { error: String(err) });
+			}
+		}
+		if (toolSession.orgSessionManager) {
+			try {
+				await toolSession.orgSessionManager.dispose();
+			} catch (err) {
+				logger.warn("orgSessionManager dispose failed", { error: String(err) });
 			}
 		}
 		if (toolSession.qmlRemoteServer) {

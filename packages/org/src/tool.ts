@@ -12,7 +12,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { EmacsSession } from "@oh-my-pi/pi-emacs";
+import { type EmacsSession, EmacsSessionManager, type EmacsWarmupResult } from "@oh-my-pi/pi-emacs";
 import { logger } from "@oh-my-pi/pi-utils";
 import { findCategory, resolveCategories } from "./categories";
 import type { OrgClient } from "./emacs/client";
@@ -46,10 +46,17 @@ interface OrgContext {
 	projectRoot: string;
 	/** Lazily started Emacs session. */
 	getEmacsSession(): Promise<EmacsSession>;
-	/** Lazily created OrgClient (cached after first call). */
+	/** Lazily created OrgClient (recreated when the socket path changes). */
 	getOrgClient(): Promise<OrgClient>;
 	/** Optional session metadata injected into newly created org files. */
 	getSessionContext?(): OrgSessionContext;
+}
+
+export interface CreateOrgToolOptions {
+	emacsSessionFactory?: () => Promise<EmacsSession>;
+	emacsSessionManager?: EmacsSessionManager;
+	ownsSessionManager?: boolean;
+	getSessionContext?: () => OrgSessionContext;
 }
 
 // =============================================================================
@@ -614,15 +621,42 @@ async function cmdValidate(ctx: OrgContext, args: { category?: string; file?: st
 	};
 }
 
-/** Resolve file path from file or category arg. */
-function resolveFileArg(ctx: OrgContext, args: { file?: string; category?: string }): string | undefined {
-	if (args.file) return args.file;
-	if (args.category) {
-		const categories = resolveCategories(ctx.config, ctx.projectRoot);
-		const cat = categories.find(c => c.name === args.category);
-		if (cat) return cat.absPath;
+/** Collect top-level .org files from a category directory in deterministic order. */
+async function listOrgFilesInDirectory(dir: string): Promise<string[]> {
+	let entries: string[];
+	try {
+		entries = await fs.readdir(dir);
+	} catch {
+		return [];
 	}
-	return undefined;
+
+	return entries
+		.filter(entry => entry.endsWith(".org") && entry !== "reference.org")
+		.sort()
+		.map(entry => path.join(dir, entry));
+}
+
+async function resolveWaveGraphTargets(
+	ctx: OrgContext,
+	args: { file?: string; category?: string },
+): Promise<Record<string, unknown>> {
+	if (args.file) {
+		return { file: args.file };
+	}
+
+	const categories = resolveCategories(ctx.config, ctx.projectRoot);
+	if (args.category) {
+		const category = categories.find(cat => cat.name === args.category || cat.prefix === args.category);
+		if (!category) {
+			return { error: true, message: `Category not found: ${args.category}` };
+		}
+		return { files: await listOrgFilesInDirectory(category.absPath) };
+	}
+
+	const files = (await Promise.all(categories.map(category => listOrgFilesInDirectory(category.absPath))))
+		.flat()
+		.sort();
+	return { files };
 }
 
 /** Format computed waves into org-mode Execution Manifest skeleton. */
@@ -646,9 +680,8 @@ async function cmdWave(
 	args: { file?: string; category?: string; manifest?: boolean },
 ): Promise<unknown> {
 	const client = await ctx.getOrgClient();
-	const toolArgs: Record<string, unknown> = {};
-	const resolvedFile = resolveFileArg(ctx, args);
-	if (resolvedFile) toolArgs.file = resolvedFile;
+	const toolArgs = await resolveWaveGraphTargets(ctx, args);
+	if (isToolErrorResult(toolArgs)) return toolArgs;
 
 	if (args.manifest) {
 		// Compute waves and generate skeleton Execution Manifest
@@ -672,9 +705,8 @@ async function cmdWave(
 
 async function cmdGraph(ctx: OrgContext, args: { file?: string; category?: string }): Promise<unknown> {
 	const client = await ctx.getOrgClient();
-	const toolArgs: Record<string, unknown> = {};
-	const resolvedFile = resolveFileArg(ctx, args);
-	if (resolvedFile) toolArgs.file = resolvedFile;
+	const toolArgs = await resolveWaveGraphTargets(ctx, args);
+	if (isToolErrorResult(toolArgs)) return toolArgs;
 	return client.callTool("org-dependency-graph", toolArgs);
 }
 
@@ -717,6 +749,65 @@ export interface OrgToolDefinition {
 	dispose?(): Promise<void> | void;
 }
 
+function createWarmupResultFromFactory(factory: () => Promise<EmacsSession>): () => Promise<EmacsWarmupResult> {
+	return async () => {
+		try {
+			const session = await factory();
+			if (!session.isAlive()) {
+				return {
+					status: "error",
+					error: "Org Emacs session factory returned a dead session",
+					version: undefined,
+					session: null,
+				};
+			}
+			return { status: "ready", version: undefined, session };
+		} catch (err) {
+			return {
+				status: "error",
+				error: err instanceof Error ? err.message : String(err),
+				version: undefined,
+				session: null,
+			};
+		}
+	};
+}
+
+function resolveOrgSessionManager(options: CreateOrgToolOptions): {
+	emacsSessionManager: EmacsSessionManager;
+	ownsSessionManager: boolean;
+} {
+	if (options.emacsSessionManager) {
+		return {
+			emacsSessionManager: options.emacsSessionManager,
+			ownsSessionManager: options.ownsSessionManager ?? false,
+		};
+	}
+
+	if (!options.emacsSessionFactory) {
+		throw new Error("createOrgTool requires either emacsSessionFactory or emacsSessionManager");
+	}
+
+	return {
+		emacsSessionManager: new EmacsSessionManager({
+			startSession: createWarmupResultFromFactory(options.emacsSessionFactory),
+		}),
+		ownsSessionManager: true,
+	};
+}
+
+async function closeOrgClient(client: OrgClient | null, context: string): Promise<void> {
+	if (!client) return;
+	try {
+		await client.close();
+	} catch (err) {
+		logger.warn("org client close failed", {
+			context,
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+}
+
 /**
  * Create the org tool bound to a specific project root and config.
  * The returned object is compatible with coding-agent tool registration.
@@ -724,38 +815,40 @@ export interface OrgToolDefinition {
 export function createOrgTool(
 	projectRoot: string,
 	config: OrgConfig = DEFAULT_ORG_CONFIG,
-	/** Factory for an Emacs session (provided by the Emacs bridge). */
-	emacsSessionFactory: () => Promise<EmacsSession>,
-	/** Optional factory for session context written into newly created org files. */
+	emacs: (() => Promise<EmacsSession>) | CreateOrgToolOptions,
 	getSessionContext?: () => OrgSessionContext,
 ): OrgToolDefinition {
-	// Lazy Emacs session — started only on first advanced query
-	let emacsSessionPromise: Promise<EmacsSession> | null = null;
-	// Lazy OrgClient — created once from the session socket path
-	let orgClientPromise: Promise<OrgClient> | null = null;
+	const options = typeof emacs === "function" ? { emacsSessionFactory: emacs, getSessionContext } : emacs;
+	const { emacsSessionManager, ownsSessionManager } = resolveOrgSessionManager(options);
+	let orgClient: OrgClient | null = null;
+	let orgClientSocketPath: string | null = null;
 
 	const ctx: OrgContext = {
 		config,
 		projectRoot,
-		getEmacsSession(): Promise<EmacsSession> {
-			if (!emacsSessionPromise) {
-				emacsSessionPromise = emacsSessionFactory();
+		async getEmacsSession(): Promise<EmacsSession> {
+			const session = await emacsSessionManager.getSession();
+			if (!session) {
+				throw new Error("org: Emacs session unavailable");
 			}
-			return emacsSessionPromise;
+			return session;
 		},
 		async getOrgClient(): Promise<OrgClient> {
-			if (!orgClientPromise) {
-				orgClientPromise = ctx.getEmacsSession().then(async session => {
-					const client = await createOrgClient(session.socketPath);
-					if (!client) {
-						throw new Error("socat not found — org-ql transport unavailable");
-					}
-					return client;
-				});
+			const session = await ctx.getEmacsSession();
+			if (orgClient && orgClientSocketPath === session.socketPath) {
+				return orgClient;
 			}
-			return orgClientPromise;
+
+			await closeOrgClient(orgClient, "replacing org client for restarted session");
+			const client = await createOrgClient(session.socketPath);
+			if (!client) {
+				throw new Error("socat not found — org-ql transport unavailable");
+			}
+			orgClient = client;
+			orgClientSocketPath = session.socketPath;
+			return client;
 		},
-		getSessionContext,
+		getSessionContext: options.getSessionContext,
 	};
 
 	return {
@@ -952,16 +1045,15 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 			}
 		},
 		async dispose() {
-			const sessionPromise = emacsSessionPromise;
-			emacsSessionPromise = null;
-			orgClientPromise = null;
-			if (sessionPromise) {
-				try {
-					const session = await sessionPromise;
-					await session.stop();
-				} catch {
-					// Session may have already died or never started.
-				}
+			const client = orgClient;
+			orgClient = null;
+			orgClientSocketPath = null;
+			await closeOrgClient(client, "dispose org tool");
+			if (!ownsSessionManager) return;
+			try {
+				await emacsSessionManager.dispose();
+			} catch {
+				// Session may have already died or never started.
 			}
 		},
 	};

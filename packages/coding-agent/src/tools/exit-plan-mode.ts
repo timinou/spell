@@ -170,9 +170,9 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 			// Attempt to build FluidPlan via Emacs MCP (graceful fallback on failure)
 			let fluidPlan: FluidPlanWithComponents | undefined;
 			try {
-				const emacsSession = await this.session.emacsSessionManager?.getSession();
-				if (emacsSession) {
-					const client = await createOrgClient(emacsSession.socketPath);
+				const orgSession = await this.session.orgSessionManager?.getSession();
+				if (orgSession) {
+					const client = await createOrgClient(orgSession.socketPath);
 					if (client) {
 						const raw = await client.callTool("org-fluid-plan", { plan_id: params.itemId });
 						fluidPlan = raw as FluidPlanWithComponents;

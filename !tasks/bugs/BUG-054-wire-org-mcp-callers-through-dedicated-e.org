@@ -1,0 +1,73 @@
+#+TITLE: Wire org MCP callers through dedicated EmacsSessionManager
+#+STATE: DONE
+#+SESSION_ID: 14a9910ffe5df734
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T12-40-08-953Z_14a9910ffe5df734.jsonl]]
+#+CUSTOM_ID: BUG-054-wire-org-mcp-callers-through-dedicated-e
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+#+DEPENDS: BUG-053-scope-emacs-daemon-sessions-by-socket-pr
+
+NOTE [2026-04-01]: Completed by PLAN-063: org callers now use a dedicated EmacsSessionManager path and focused recovery/wiring tests pass.
+
+* Initial Message
+
+Look at this:
+
+
+ Now let me run org wave to compute the execution waves from the dependency graph, then create the PLAN item.
+
+
+ ⏳ Org: wave
+ {"error":true,"message":"Emacs MCP error -32603: Internal error"}
+
+
+
+ ⏳ Org: graph
+ {"error":true,"message":"Emacs MCP error -32603: Internal error"}
+
+
+ The wave/graph commands aren't available. I'll compute the execution waves manually from the dependency graph:
+
+in this session:
+
+
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-01T11-09-57-247Z_14a97c6b1fdf6ead.jsonl
+ ID: 14a97c6b1fdf6ead
+
+
+
+What happened? This is recurrent
+
+Problem
+- The org tool keeps a one-shot `emacsSessionPromise`/`orgClientPromise` and never recovers after daemon failure.
+- `exit-plan-mode` currently asks `session.emacsSessionManager` for `org-fluid-plan`, which points at the code daemon rather than an org daemon.
+- Existing `EmacsSessionManager` is not a thin `ManagedDaemon` wrapper; it owns retry, cooldown, warmup ingestion, and lazy restart semantics. Reuse it for org instead of bypassing it.
+
+Scope
+- `packages/coding-agent/src/sdk.ts`
+- `packages/coding-agent/src/tools/index.ts`
+- `packages/coding-agent/src/tools/org.ts`
+- `packages/coding-agent/src/tools/exit-plan-mode.ts`
+- Add/update focused TS tests under `packages/coding-agent/test/tools/`
+
+Preferred sequencing
+- Test first. Add failing coding-agent tests before rewiring tool session state.
+
+Required change
+- Introduce a dedicated org-facing `EmacsSessionManager` (or a clearly named equivalent manager abstraction) alongside the existing code-intelligence manager.
+- Route org MCP consumers (`OrgTool`, `ExitPlanModeTool`, and any shared org-client entry points touched by this fix) through that org manager.
+- Keep warmup/recovery/dispose behavior coherent: code and org daemons must not share session state, but both must get circuit-breaker + lazy-restart semantics.
+- If any shared abstraction is extracted, make it the canonical lifecycle path and delete duplicate one-shot session caching.
+
+Acceptance
+- A failed or dead org daemon can be restarted lazily without restarting the code daemon.
+- `ExitPlanModeTool` requests `org-fluid-plan` from the org daemon path, not the code daemon path.
+- The org tool no longer caches a permanent rejected promise after one failed startup.
+
+Verification
+- `bun test packages/emacs/test/session-manager.test.ts`
+- `bun test packages/coding-agent/test/tools/exit-plan-mode.test.ts`
+- `bun test packages/coding-agent/test/tools/org-section-output.test.ts packages/coding-agent/test/tools/org.test.ts`
+- Add a focused new test file under `packages/coding-agent/test/tools/` that proves org callers use the org session manager and recover independently of `emacsSessionManager`.

@@ -170,6 +170,84 @@ describe("startEmacsSession - reattach vs spawn", () => {
 		}
 	});
 
+	it("does not reuse a cached code daemon when the socket prefix changes", async () => {
+		const projectRoot = "/tmp/spell-emacs-prefix-scope-test";
+		const sessionId = "prefix-scope-session-id";
+		const rawHash = Bun.hash(projectRoot + sessionId);
+		const key = BigInt(rawHash).toString(16).slice(0, 12).padStart(12, "0");
+		const xdgDir = process.env.XDG_RUNTIME_DIR ?? "/tmp";
+		const codeSock = path.join(xdgDir, `spell-emacs-${key}.sock`);
+		const orgSock = path.join(xdgDir, `spell-org-${key}.sock`);
+
+		for (const sock of [codeSock, orgSock]) {
+			try {
+				await fs.unlink(sock);
+			} catch {
+				// Not present — fine.
+			}
+		}
+
+		const codeReady = Promise.withResolvers<void>();
+		const codeServer = net.createServer().listen(codeSock, codeReady.resolve);
+		const orgServerReady = Promise.withResolvers<void>();
+		const orgServers: net.Server[] = [];
+		let startSpawns = 0;
+		const spawnSpy = spyOn(Bun, "spawn").mockImplementation(((command: string[]) => {
+			if (command[0] === "/usr/bin/emacs") {
+				startSpawns += 1;
+				void (async () => {
+					await Bun.sleep(50);
+					const server = net.createServer();
+					orgServers.push(server);
+					server.listen(orgSock, () => {
+						orgServerReady.resolve();
+					});
+				})();
+			}
+
+			return {
+				exitCode: null,
+				exited: Promise.resolve(0),
+				stderr: null,
+				kill: () => {},
+				pid: 99999,
+			};
+		}) as unknown as typeof Bun.spawn);
+
+		try {
+			await codeReady.promise;
+			const { startEmacsSession } = await import("../src/daemon");
+			const codeSession = await startEmacsSession("/usr/bin/emacs", projectRoot, sessionId, "/tmp/fake-elisp");
+			const orgSession = await startEmacsSession("/usr/bin/emacs", projectRoot, sessionId, "/tmp/fake-elisp", {
+				socketPrefix: "spell-org-",
+			});
+			const cachedCodeSession = await startEmacsSession("/usr/bin/emacs", projectRoot, sessionId, "/tmp/fake-elisp");
+
+			expect(codeSession.socketPath).toBe(codeSock);
+			expect(orgSession.socketPath).toBe(orgSock);
+			expect(codeSession).not.toBe(orgSession);
+			expect(cachedCodeSession).toBe(codeSession);
+			expect(startSpawns).toBe(1);
+
+			await orgServerReady.promise;
+			await orgSession.stop();
+			await codeSession.stop().catch(() => {});
+		} finally {
+			spawnSpy.mockRestore();
+			codeServer.close();
+			for (const server of orgServers) {
+				server.close();
+			}
+			for (const sock of [codeSock, orgSock]) {
+				try {
+					await fs.unlink(sock);
+				} catch {
+					// best-effort
+				}
+			}
+		}
+	});
+
 	it("Bun.spawn IS called when no socket exists (fresh daemon)", async () => {
 		const projectRoot = "/tmp/spell-emacs-fresh-test";
 		const sessionId = "fresh-session-id";
