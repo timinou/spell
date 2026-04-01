@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { TypstCompiler } from "./wasm-compiler";
 
 const FONT_EXTENSIONS = new Set([".otf", ".ttf"]);
@@ -50,7 +50,7 @@ export async function loadFonts(
     } catch (err) {
       // A corrupted or unreadable font must not abort the entire load.
       const message = err instanceof Error ? err.message : String(err);
-      console.warn(`[font-loader] skipping ${name}: ${message}`);
+      logger.warn("font-loader: skipping font", { name, error: message });
     }
   }
 

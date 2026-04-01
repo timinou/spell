@@ -1,0 +1,144 @@
+#+TITLE: Growth domain audit fixes crashes leaks convention violations
+#+STATE: DONE
+#+SESSION_ID: 14a983b223cae371
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T11-41-44-975Z_14a983b223cae371.jsonl]]
+#+CUSTOM_ID: BUG-052-growth-domain-audit-fixes-crashes-leaks
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: domain
+
+NOTE [2026-04-01]: All 8 mechanical fixes applied and verified. Additional ReturnType fixes in analysis-tool.ts and armed-tools.ts. Type check, grep checks, and 163 existing tests pass.
+
+* Initial Message
+
+you are allowed to fix the files directly and then run the org fluid plan
+
+* Scope
+
+Eight targeted fixes from AUD-012 audit. All are in =domain/growth/src/=. No behavioral changes — only correctness, resource safety, and convention compliance.
+
+* Fixes
+
+** Fix 1: Wrong logger import in scheduler (runtime crash)
+
+File: =domain/growth/src/signals/scheduler.ts:2=
+
+Change:
+#+begin_src typescript
+// BAD — imports entire module as logger, so logger.error is undefined
+import * as logger from "@oh-my-pi/pi-utils";
+
+// GOOD
+import { logger } from "@oh-my-pi/pi-utils";
+#+end_src
+
+** Fix 2: console.warn in font-loader
+
+File: =domain/growth/src/typst/font-loader.ts:53=
+
+Add =import { logger } from "@oh-my-pi/pi-utils"= at top, replace:
+#+begin_src typescript
+// BAD
+console.warn(`[font-loader] skipping ${name}: ${message}`);
+
+// GOOD
+logger.warn(`font-loader: skipping ${name}`, { error: message });
+#+end_src
+
+** Fix 3: ReturnType<typeof setTimeout> violations (3 files)
+
+Files:
+- =domain/growth/src/panels/editor/agent-sync.ts:16= — =#debounceTimer: ReturnType<typeof setTimeout> | undefined= → =#debounceTimer: NodeJS.Timeout | undefined=
+- =domain/growth/src/scraper/rate-limiter.ts:40= — =readonly #intervalHandle: ReturnType<typeof setInterval>= → =readonly #intervalHandle: NodeJS.Timeout=
+- =domain/growth/src/signals/scheduler.ts:35= — =readonly #timers = new Map<string, ReturnType<typeof setTimeout>>()= → =readonly #timers = new Map<string, NodeJS.Timeout>()=
+
+** Fix 4: Missing dispose() on three DB-owning classes
+
+=domain/growth/src/scraper/persistence.ts= — add:
+#+begin_src typescript
+dispose(): void {
+    this.#db.close();
+}
+#+end_src
+
+=domain/growth/src/signals/digest.ts= — add:
+#+begin_src typescript
+dispose(): void {
+    this.#db.close();
+}
+#+end_src
+
+=domain/growth/src/signals/scheduler.ts= — add (combines stop + close):
+#+begin_src typescript
+dispose(): void {
+    this.stop();
+    this.#db.close();
+}
+#+end_src
+
+** Fix 5: SQL identifier quoting in ScraperDatabase
+
+File: =domain/growth/src/scraper/persistence.ts=
+
+Add a helper:
+#+begin_src typescript
+function quoteId(name: string): string {
+    return `"${name.replace(/"/g, '""')}"`;
+}
+#+end_src
+
+Replace all bare identifier interpolations: =${entity.tableName}= → =${quoteId(entity.tableName)}=, =${col.name}= → =${quoteId(col.name)}=, etc. Applies to =#ensureSchema()=, =insert()=, and =query()=.
+
+** Fix 6: PanelStateManager.setState() swallows errors
+
+File: =domain/growth/src/panel-state.ts:51=
+
+Change:
+#+begin_src typescript
+// BAD
+void this.save();
+
+// GOOD
+void this.save().catch((err) =>
+    logger.warn("panel-state: save failed", { error: String(err) }),
+);
+#+end_src
+
+Add =import { logger } from "@oh-my-pi/pi-utils"= at top if not already present.
+
+** Fix 7: WorkspaceManager unused constructor arg
+
+File: =domain/growth/src/workspace-manager.ts:11-16=
+
+Store =workspacesDir= and use it as default in =loadWorkspaces()=:
+#+begin_src typescript
+readonly #workspacesDir: string;
+#current: WorkspaceLayout | null = null;
+#onSwitch?: (layout: WorkspaceLayout) => void;
+
+constructor(opts: { workspacesDir: string; onSwitch?: (layout: WorkspaceLayout) => void }) {
+    this.#workspacesDir = opts.workspacesDir;
+    this.#onSwitch = opts.onSwitch;
+}
+
+async loadWorkspaces(dir?: string): Promise<void> {
+    const target = dir ?? this.#workspacesDir;
+    // ... rest uses target instead of dir
+}
+#+end_src
+
+* Tests
+
+Run existing growth test suite to confirm no regressions:
+- =bun test domain/growth/test/scraper/= — 45 tests
+- =bun test domain/growth/test/panels/= — 21 tests
+- =bun test domain/growth/test/journeys/= — 97 tests
+
+* Acceptance Criteria
+
+- =bun check:ts= passes
+- =bun test domain/growth/test/= — 163 tests pass, 0 fail
+- No =console.log/warn/error= in =domain/growth/src/= (grep verification)
+- No =ReturnType<= in =domain/growth/src/= (grep verification)
+- No =import * as logger= in =domain/growth/src/= (grep verification)
+- Every class with a =#db: Database= field has a =dispose()= method

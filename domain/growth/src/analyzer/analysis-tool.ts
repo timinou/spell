@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { getEnvApiKey, streamSimple } from "@oh-my-pi/pi-ai";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -129,7 +129,7 @@ class AnalysisTool implements AgentTool<typeof inputSchema, CreativeAnalysis> {
 
     return this.#db
       .prepare(sql)
-      .all(...(values as Parameters<ReturnType<Database["prepare"]>["all"]>)) as AdRow[];
+      .all(...(values as SQLQueryBindings[])) as AdRow[];
   }
 
   async #runAnalysis(

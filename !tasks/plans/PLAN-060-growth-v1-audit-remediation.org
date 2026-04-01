@@ -1,0 +1,96 @@
+#+TITLE: Growth V1 Audit Remediation
+#+STATE: DONE
+#+SESSION_ID: 14a983b223cae371
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T11-41-44-975Z_14a983b223cae371.jsonl]]
+#+CUSTOM_ID: PLAN-060-growth-v1-audit-remediation
+
+NOTE [2026-04-01]: All waves complete. 208 tests pass, 0 fail. Type check clean. All acceptance criteria met.
+
+
+* Initial Message
+
+you are allowed to fix the files directly and then run the org fluid plan
+
+* Context
+
+AUD-012 identified 10 findings in the Growth V1 implementation (PLAN-057). This plan addresses 9 of them — finding #9 (regex HTML extractor fragility) is deferred as low-priority given the module's explicit scope as a test-fixture fallback.
+
+** Approach
+
+Two items executed sequentially:
+1. Bug fixes first (crashes, leaks, convention violations) — 8 targeted changes across 8 files, all mechanical.
+2. Test coverage second (depends on fixes) — 4 new test files covering untested modules.
+
+One FUP created for domain wiring (intentionally deferred from PLAN-057, now tracked).
+
+** Key decisions
+- Finding #9 (extractInnerText regex fragility) deferred: the extractor is explicitly a test-fixture fallback, not production extraction. A proper HTML parser is out of scope.
+- Finding #7 (domain wiring) tracked as [[id:FUP-014-wire-domain-detection-and-loader-into-se]] — wiring into =sdk.ts/main.ts= boot path requires its own focused PR.
+
+* Verification
+
+- =bun check:ts= passes
+- =bun test domain/growth/test/= — ≥200 tests pass, 0 fail
+- =grep -rn 'console\.\(log\|warn\|error\)' domain/growth/src/= — 0 matches
+- =grep -rn 'ReturnType<' domain/growth/src/= — 0 matches
+- =grep -rn 'import \* as logger' domain/growth/src/= — 0 matches
+- Every class holding =#db: Database= exposes =dispose()= (grep verification)
+- Existing =packages/coding-agent/test/= tests unaffected (no regression)
+
+* Execution Manifest
+
+** Wave 1: Bug fixes
+[[id:BUG-052-growth-domain-audit-fixes-crashes-leaks]] Growth domain audit fixes (2h, #A)
+- 8 mechanical fixes: logger import, console.warn, ReturnType, dispose, SQL quoting, error handling, unused arg
+- All in =domain/growth/src/=, no behavioral changes
+
+** Wave 2: Test coverage (depends on Wave 1)
+[[id:FEAT-159-growth-domain-test-coverage-pipeline-dif]] Test coverage for untested modules (4h, #B)
+- 4 new test files: pipeline lifecycle, diff engine, brand guardian, workspace manager
+- Depends on BUG-052 (dispose methods must exist for tests to exercise them)
+
+** Tracked deferrals
+[[id:FUP-014-wire-domain-detection-and-loader-into-se]] Wire domain into session boot path (4h, #A, post-plan)
+
+** Completion [2026-04-01]
+
+*** Verification
+
+| Check | Result |
+|---|---|
+| =bun check:ts= | Pass (1498 files, 0 errors) |
+| =bun test domain/growth/test/= | 208 pass, 0 fail, 373 assertions |
+| =grep console.(log|warn|error) domain/growth/src/= | 0 matches |
+| =grep ReturnType< domain/growth/src/= | 0 matches |
+| =grep 'import * as logger' domain/growth/src/= | 0 matches |
+| Every class with =#db: Database= has =dispose()= | Verified (5 classes) |
+
+*** Artifacts
+
+Wave 1 (BUG-052) \u2014 10 files modified:
+- =domain/growth/src/signals/scheduler.ts= \u2014 logger import fix, ReturnType\u2192NodeJS.Timeout, added dispose()
+- =domain/growth/src/typst/font-loader.ts= \u2014 console.warn\u2192logger.warn
+- =domain/growth/src/panels/editor/agent-sync.ts= \u2014 ReturnType\u2192NodeJS.Timeout
+- =domain/growth/src/scraper/rate-limiter.ts= \u2014 ReturnType\u2192NodeJS.Timeout
+- =domain/growth/src/scraper/persistence.ts= \u2014 SQL identifier quoting via quoteId(), added dispose(), removed ReturnType casts
+- =domain/growth/src/signals/digest.ts= \u2014 added dispose()
+- =domain/growth/src/panel-state.ts= \u2014 added logger import, fire-and-forget save() now logs errors
+- =domain/growth/src/workspace-manager.ts= \u2014 stored workspacesDir, used as default in loadWorkspaces()
+- =domain/growth/src/analyzer/analysis-tool.ts= \u2014 ReturnType\u2192SQLQueryBindings cast
+- =domain/growth/src/panels/intel/armed-tools.ts= \u2014 ReturnType\u2192SQLQueryBindings cast (3 sites)
+
+Wave 2 (FEAT-159) \u2014 4 new test files:
+- =domain/growth/test/pipeline/lifecycle.test.ts= \u2014 13 tests for DeliverableManager
+- =domain/growth/test/signals/diff-engine.test.ts= \u2014 13 tests for computeDiff
+- =domain/growth/test/typst/brand-guardian.test.ts= \u2014 11 tests for BrandGuardian.checkStructural
+- =domain/growth/test/workspace/workspace-manager.test.ts= \u2014 8 tests for WorkspaceManager
+
+Bonus fix discovered by tests:
+- =domain/growth/src/workspace-manager.ts= line 38: =path.join(dir, entry.name)= used raw =dir= param when undefined; fixed to =path.join(dir ?? this.#workspacesDir, entry.name)=
+
+*** Deviations
+
+- Finding #9 (extractInnerText regex fragility) deferred per plan \u2014 test-fixture fallback, not production
+- Finding #7 (domain wiring) tracked as [[id:FUP-014-wire-domain-detection-and-loader-into-se]]
+- Two additional ReturnType<> violations found in =analyzer/analysis-tool.ts= and =panels/intel/armed-tools.ts= \u2014 fixed in same pass to satisfy plan's grep-zero acceptance criteria"
+<parameter name="_i">Appending completion report to plan

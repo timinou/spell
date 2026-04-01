@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import * as logger from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { DiffResult, SignalConfig } from "./types.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ export class SignalScheduler {
   readonly #scraperRunner: ScraperRunner;
   readonly #db: Database;
   // Map of sourceId → active timer handle
-  readonly #timers = new Map<string, ReturnType<typeof setTimeout>>();
+  readonly #timers = new Map<string, NodeJS.Timeout>();
   // Registered diff-result listeners
   readonly #listeners: Array<(result: DiffResult) => void> = [];
 
@@ -68,6 +68,12 @@ export class SignalScheduler {
       clearTimeout(timer);
       this.#timers.delete(id);
     }
+  }
+
+  /** Release all resources: cancel pending timers and close the database. */
+  dispose(): void {
+    this.stop();
+    this.#db.close();
   }
 
   /**

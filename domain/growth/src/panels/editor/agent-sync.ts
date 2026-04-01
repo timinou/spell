@@ -13,7 +13,7 @@ import * as fs from 'node:fs';
 export class AgentEditorSync {
   #watchPath: string | null = null;
   #watcher: fs.FSWatcher | null = null;
-  #debounceTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+  #debounceTimer: NodeJS.Timeout | undefined = undefined;
   // Last text we wrote ourselves so we don't echo our own writes back.
   #lastWritten: string | null = null;
 

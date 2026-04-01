@@ -6,6 +6,11 @@ interface ScraperDatabaseOptions {
   manifest: SchemaManifest;
 }
 
+/** Double-quote a SQL identifier, escaping any embedded quotes. */
+function quoteId(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
+}
+
 /**
  * SQLite-backed persistence layer for scraped entities.
  *
@@ -50,7 +55,7 @@ export class ScraperDatabase {
     ) {
       const exists = this.#db
         .prepare(
-          `SELECT 1 FROM ${entity.tableName} WHERE platform_id = ? AND scraped_at = ? LIMIT 1`,
+          `SELECT 1 FROM ${quoteId(entity.tableName)} WHERE "platform_id" = ? AND "scraped_at" = ? LIMIT 1`,
         )
         .get(data["platform_id"] as string, data["scraped_at"] as string);
       if (exists !== null) return;
@@ -59,14 +64,15 @@ export class ScraperDatabase {
     const presentColumns = columns.filter((c) => data[c] !== undefined);
     if (presentColumns.length === 0) return;
 
+    const quotedCols = presentColumns.map(quoteId).join(", ");
     const placeholders = presentColumns.map(() => "?").join(", ");
     const values = presentColumns.map((c) => data[c] ?? null);
 
     this.#db
       .prepare(
-        `INSERT INTO ${entity.tableName} (${presentColumns.join(", ")}) VALUES (${placeholders})`,
+        `INSERT INTO ${quoteId(entity.tableName)} (${quotedCols}) VALUES (${placeholders})`,
       )
-      .run(...(values as Parameters<ReturnType<Database["prepare"]>["run"]>));
+      .run(...values);
   }
 
   /**
@@ -85,17 +91,22 @@ export class ScraperDatabase {
     const values: unknown[] = [];
 
     for (const [key, value] of Object.entries(filters ?? {})) {
-      conditions.push(`${key} = ?`);
+      conditions.push(`${quoteId(key)} = ?`);
       values.push(value);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const sql = `SELECT * FROM ${entity.tableName} ${where} LIMIT ?`;
+    const sql = `SELECT * FROM ${quoteId(entity.tableName)} ${where} LIMIT ?`;
     values.push(limit);
 
     return this.#db
       .prepare(sql)
-      .all(...(values as Parameters<ReturnType<Database["prepare"]>["all"]>));
+      .all(...values);
+  }
+
+  /** Close the underlying database connection. */
+  dispose(): void {
+    this.#db.close();
   }
 
   // ─── Private helpers ───────────────────────────────────────────────────────
@@ -106,11 +117,11 @@ export class ScraperDatabase {
       // Build column definitions
       const columnDefs = entity.columns
         .map((col) => {
-          const parts: string[] = [`${col.name} ${col.type}`];
+          const parts: string[] = [`${quoteId(col.name)} ${col.type}`];
           if (col.primary) parts.push("PRIMARY KEY");
           if (col.fk) {
             parts.push(
-              `REFERENCES ${col.fk.table}(${col.fk.column})`,
+              `REFERENCES ${quoteId(col.fk.table)}(${quoteId(col.fk.column)})`,
             );
           }
           return parts.join(" ");
@@ -118,14 +129,14 @@ export class ScraperDatabase {
         .join(",\n  ");
 
       this.#db.exec(
-        `CREATE TABLE IF NOT EXISTS ${entity.tableName} (\n  ${columnDefs}\n);`,
+        `CREATE TABLE IF NOT EXISTS ${quoteId(entity.tableName)} (\n  ${columnDefs}\n);`,
       );
 
       // Create requested indexes (composite allowed)
       for (const indexCols of entity.indexes ?? []) {
         const indexName = `idx_${entity.tableName}_${indexCols.join("_")}`;
         this.#db.exec(
-          `CREATE INDEX IF NOT EXISTS ${indexName} ON ${entity.tableName} (${indexCols.join(", ")});`,
+          `CREATE INDEX IF NOT EXISTS ${quoteId(indexName)} ON ${quoteId(entity.tableName)} (${indexCols.map(quoteId).join(", ")});`,
         );
       }
 
@@ -134,14 +145,16 @@ export class ScraperDatabase {
       const hasScrapedAt = entity.columns.some((c) => c.name === "scraped_at");
       const hasPlatformId = entity.columns.some((c) => c.name === "platform_id");
       if (hasScrapedAt && hasPlatformId) {
+        const viewName = quoteId(`latest_${entity.tableName}`);
+        const table = quoteId(entity.tableName);
         this.#db.exec(`
-          CREATE VIEW IF NOT EXISTS latest_${entity.tableName} AS
+          CREATE VIEW IF NOT EXISTS ${viewName} AS
           SELECT * FROM (
             SELECT *,
               ROW_NUMBER() OVER (
-                PARTITION BY platform_id ORDER BY scraped_at DESC
+                PARTITION BY "platform_id" ORDER BY "scraped_at" DESC
               ) AS rn
-            FROM ${entity.tableName}
+            FROM ${table}
           ) WHERE rn = 1;
         `);
       }

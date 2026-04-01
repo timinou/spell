@@ -4,6 +4,7 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import type { WorkspaceLayout } from "./workspaces/types";
 
 export class WorkspaceManager {
+  readonly #workspacesDir: string;
   #workspaces: Map<string, WorkspaceLayout> = new Map();
   #current: WorkspaceLayout | null = null;
   #onSwitch?: (layout: WorkspaceLayout) => void;
@@ -12,13 +13,14 @@ export class WorkspaceManager {
     workspacesDir: string;
     onSwitch?: (layout: WorkspaceLayout) => void;
   }) {
+    this.#workspacesDir = opts.workspacesDir;
     this.#onSwitch = opts.onSwitch;
   }
 
-  async loadWorkspaces(dir: string): Promise<void> {
+  async loadWorkspaces(dir?: string): Promise<void> {
     let entries: fs.Dirent[];
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
+      entries = await fs.readdir(dir ?? this.#workspacesDir, { withFileTypes: true });
     } catch (err) {
       if (isEnoent(err)) {
         // No workspace directory yet — start empty.
@@ -33,7 +35,7 @@ export class WorkspaceManager {
 
     await Promise.all(
       jsonFiles.map(async (entry) => {
-        const filePath = path.join(dir, entry.name);
+        const filePath = path.join(dir ?? this.#workspacesDir, entry.name)
         try {
           const layout = (await Bun.file(filePath).json()) as WorkspaceLayout;
           if (layout?.id) {

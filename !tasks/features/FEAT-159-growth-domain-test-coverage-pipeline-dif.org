@@ -1,0 +1,85 @@
+#+TITLE: Growth domain test coverage pipeline diff engine brand guardian workspace manager
+#+STATE: DONE
+#+SESSION_ID: 14a983b223cae371
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T11-41-44-975Z_14a983b223cae371.jsonl]]
+#+CUSTOM_ID: FEAT-159-growth-domain-test-coverage-pipeline-dif
+#+EFFORT: 4h
+#+PRIORITY: #B
+#+LAYER: testing
+#+DEPENDS: BUG-052-growth-domain-audit-fixes-crashes-leaks
+
+NOTE [2026-04-01]: 4 test files written: lifecycle (13 tests), diff-engine (13 tests), brand-guardian (11 tests), workspace-manager (8 tests). Total growth tests: 208. All pass.
+
+* Initial Message
+
+you are allowed to fix the files directly and then run the org fluid plan
+
+* Scope
+
+Four test files for untested Growth domain modules. Each module is well-isolated with clear contracts.
+
+IN: Unit tests for DeliverableManager, computeDiff, BrandGuardian, WorkspaceManager.
+OUT: Integration tests, QML tests, journey tests (already covered).
+
+* Test Files
+
+** domain/growth/test/pipeline/lifecycle.test.ts
+
+Test =DeliverableManager= state machine:
+- =create()= produces a BRIEF-state deliverable with valid UUID, file path, and DB row
+- =advance()= transitions BRIEF→DRAFT→REVIEW→FINAL→SENT in order
+- =advance()= rejects invalid transitions (BRIEF→FINAL, SENT→BRIEF, same-state)
+- =advance()= throws on nonexistent ID
+- =getById()= returns null for missing ID
+- =listByState()= filters correctly (seed 5 deliverables in different states)
+- =listByClient()= filters by clientId
+- File stub written to disk on =create()= (check existence via =Bun.file().exists()=)
+- =dispose()= closes DB without error
+
+Use =:memory:= DB. Override file path to a temp dir (=mkdtemp=).
+
+** domain/growth/test/signals/diff-engine.test.ts
+
+Test =computeDiff()=:
+- New: ads in current but not previous → type ='new'=
+- Removed: ads in previous but not current → type ='removed'=
+- Changed: same ID, different field values → type ='changed'= with field-level diffs
+- Unchanged: identical records → no diff entry
+- Empty inputs: both empty → empty diffs, summary all zeros
+- Summary counts match diffs array
+- Missing idField on a record → record silently skipped (not in map)
+- Field-level diff: missing field on one side treated as empty string
+
+** domain/growth/test/typst/brand-guardian.test.ts
+
+Test =BrandGuardian.checkStructural()=:
+- Content with correct import passes
+- Content without import fails with descriptive issue
+- Off-brand hex literal =#FF0000= detected
+- Brand palette hex =#7C3AED= not flagged
+- Shorthand hex =#abc= expanded and checked
+- Alpha hex =#7C3AEDFF= stripped to 6-char and passes
+- Multiple issues accumulated (both missing import AND off-brand color)
+- No false positive on hex-like strings in comments (this is a known limitation — document, don't test)
+
+** domain/growth/test/workspace/workspace-manager.test.ts
+
+Test =WorkspaceManager=:
+- =loadWorkspaces()= from a temp dir with valid JSON files → workspaces loaded
+- =loadWorkspaces()= with missing dir → returns empty, no throw
+- =loadWorkspaces()= with malformed JSON file → skips it, loads valid ones
+- =getWorkspaces()= returns all loaded
+- =switchWorkspace()= sets current and calls onSwitch callback
+- =switchWorkspace()= with unknown ID throws
+- =getCurrentWorkspace()= returns null before any switch
+
+Write fixtures to temp dir with =Bun.write()=, clean up with =fs.rm()= in =afterAll=.
+
+* Acceptance Criteria
+
+- =bun test domain/growth/test/pipeline/= passes
+- =bun test domain/growth/test/signals/diff-engine.test.ts= passes
+- =bun test domain/growth/test/typst/brand-guardian.test.ts= passes
+- =bun test domain/growth/test/workspace/= passes
+- Total growth test count ≥ 200 (163 existing + ~40 new)
+- =bun check:ts= passes

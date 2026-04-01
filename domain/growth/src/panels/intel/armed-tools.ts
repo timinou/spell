@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type { AdDetail, AdFilter } from "./types.ts";
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ export function queryAds(
   const total = (
     db
       .prepare(`SELECT COUNT(*) AS n ${baseQuery}`)
-      .get(...(params as Parameters<ReturnType<Database["prepare"]>["get"]>)) as {
+      .get(...(params as SQLQueryBindings[])) as {
       n: number;
     }
   ).n;
@@ -130,7 +130,7 @@ export function queryAds(
        LIMIT ? OFFSET ?`,
     )
     .all(
-      ...(params as Parameters<ReturnType<Database["prepare"]>["all"]>),
+      ...(params as SQLQueryBindings[]),
       limit,
       offset,
     ) as RawAdRow[];
@@ -203,7 +203,7 @@ export function annotateAd(
 
   db.prepare(
     `INSERT INTO ad_annotations (${cols.join(", ")}) VALUES (${placeholders}) ${onConflict}`,
-  ).run(...(insertVals as Parameters<ReturnType<Database["prepare"]>["run"]>));
+  ).run(...(insertVals as SQLQueryBindings[]));
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────

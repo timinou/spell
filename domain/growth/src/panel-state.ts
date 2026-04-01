@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
 export class PanelStateManager {
   #states: Map<string, Record<string, unknown>> = new Map();
@@ -48,6 +48,8 @@ export class PanelStateManager {
   setState(panelId: string, state: Record<string, unknown>): void {
     this.#states.set(panelId, state);
     // Fire-and-forget persist; callers that need durability guarantees should await save() directly.
-    void this.save();
+    void this.save().catch((err) =>
+      logger.warn("panel-state: save failed", { error: String(err) }),
+    );
   }
 }

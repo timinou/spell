@@ -37,7 +37,7 @@ export class RateLimiter {
   /** Refill rate in tokens per millisecond. */
   readonly #refillPerMs: number;
   readonly #domains = new Map<string, DomainState>();
-  readonly #intervalHandle: ReturnType<typeof setInterval>;
+  readonly #intervalHandle: NodeJS.Timeout;
 
   constructor(config: RateLimitConfig) {
     this.#requestsPerMinute = config.requestsPerMinute;

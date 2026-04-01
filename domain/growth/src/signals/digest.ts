@@ -105,6 +105,11 @@ export class DigestManager {
   markAllRead(): void {
     this.#db.prepare(`UPDATE digests SET read = 1 WHERE read = 0`).run();
   }
+
+  /** Close the underlying database connection. */
+  dispose(): void {
+    this.#db.close();
+  }
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
