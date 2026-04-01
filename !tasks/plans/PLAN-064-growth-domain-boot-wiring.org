@@ -35,6 +35,38 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 * Initial Message
 
 how do I start SPell Growth?
@@ -186,3 +218,5 @@ NOTE [2026-04-01]: Manual verification used a temporary `.spell/domain.json` to 
 NOTE [2026-04-01]: Committed plan implementation as `d8f83e41a feat(coding-agent): wire growth domain startup`. Plan state remains DOING because the required full regression gate is still red.
 
 NOTE [2026-04-01]: An earlier 30s manual launch attempt timed out while LSP servers were starting (`rust-analyzer`, `yamlls`, `taplo`); this was superseded by the later successful longer-running manual growth-shell launch captured in the completion report and screenshot artifact.
+
+NOTE [2026-04-01]: Background job bg_14a9a7ca5b161ac5 completed successfully after the earlier timeout window: the manual growth-domain launch finished and printed `Resume this session with spell --resume 14a9a7cb9826323b`, which confirms the interactive auto-canvas startup path reached a resumable session state.
