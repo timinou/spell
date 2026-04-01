@@ -1,0 +1,147 @@
+#+TITLE: GrowthShell only loads main position panels ignoring secondary chat slot
+#+STATE: DONE
+#+SESSION_ID: 14a9e2bd33b552a9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-36-59-982Z_14a9e2bd33b552a9.jsonl]]
+#+CUSTOM_ID: BUG-066-growthshell-only-loads-main-position-pan
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: qml
+
+NOTE [2026-04-01]: Replaced ColumnLayout+ChatDrawer with vertical SplitView containing mainPanelLoader and secondaryPanelLoader. loadWorkspacePanels() now resolves both main and secondary positions with flex ratios. ChatDrawer removed from layout. Error overlays added for both loaders.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-014-audit-implementation:
+
+Here are my findings:
+
+---
+
+### Finding 1: `currentPanels` is dead code
+- **What**: `currentPanels` property is assigned on `workspace_layout` message but never read by any code.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` line 17, 193. Same in test harness lines 25, 194.
+- **Why**: Misleads future readers into thinking the `workspace_layout` payload drives panel loading. In reality, `loadWorkspacePanel()` resolves everything from the local `workspaces` array + `panelRegistry`. If TS ever sends a layout override with different panels, GrowthShell silently ignores it.
+- **Effort**: trivial
+
+### Finding 2: No Loader error handling
+- **What**: `mainPanelLoader` has no `onStatusChanged` handler and no error overlay. If a panel QML file fails to load (bad path, syntax error), the user sees a blank area with no feedback.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 167–170 (Loader definition)
+- **Why**: `shell.qml` has explicit `Loader.Error` state detection and an error overlay UI. GrowthShell has none. A broken panel file silently fails — user sees "Select a workspace to begin" with no clue why.
+- **Effort**: small
+
+### Finding 3: `workspace_layout` override is documented but not implemented
+- **What**: Comment says "TS may override layout — re-resolve panels" but `loadWorkspacePanel()` only reads the static `workspaces` array, not `currentPanels`. The TS-sent layout is stored then discarded.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 192–196
+- **Why**: If the TS side ever sends a different panel arrangement via `workspace_layout` (which is the documented purpose of that message type), GrowthShell will ignore it. The comment actively misleads.
+- **Effort**: small
+
+### Finding 4: Panel loading test doesn't verify the Loader actually loaded
+- **What**: The "switching workspace loads the main panel via Loader" test verifies `currentWorkspaceId` changed and `panelRegistry` has the right path, but never checks `mainPanelLoader.source` or `mainPanelLoader.item`. It tests prerequisites, not the contract.
+- **Where**: `domain/growth/test/panels/growth-shell.test.ts` lines 88–101
+- **Why**: The core bug was "Loader never has its source set". The test doesn't assert that `source` is set. A regression that breaks the binding between registry lookup and `mainPanelLoader.source = panelPath` would pass this test.
+- **Effort**: trivial
+
+### Finding 5: `iconFor()` fully duplicated between GrowthShell.qml and test harness
+- **What**: `iconFor()`, `loadWorkspacePanel()`, `Component.onCompleted` registry builder, `panelRegistry` property — the entire panel-loading architecture is copy-pasted between the two files.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` (22–74) and `GrowthShellTestHarness.qml` (28–79)
+- **Why**: Any future fix to panel loading or icon mapping must be applied twice. The harness exists because ApplicationWindow can't be nested, but the logic could be extracted to a shared JS module imported by both.
+- **Effort**: medium
+
+### Finding 6: `iconFor` allocates a new object on every call
+- **What**: The function creates a fresh `var icons = { ... }` object literal each invocation. Called 6 times per workspace list render.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 22–34
+- **Why**: Negligible performance impact at 6 calls, but it's a code smell. The map should be a property or module constant. Low priority.
+- **Effort**: trivial
+
+* Problem
+
+=GrowthShell.qml= has a single =mainPanelLoader= and =loadWorkspacePanel()= only resolves =position === \"main\"=. Every workspace except =general= and =review= maps =chat= to =position: \"secondary\"=, which means:
+
+- =strategy=: dashboard (main) + chat (secondary) -> only dashboard loads, no chat
+- =research=: intel (main) + chat (secondary) -> only intel loads, no chat
+- =create=: editor (main) + chat (secondary) -> only editor loads, no chat
+- =campaign=: planner (main) + chat (secondary) -> only planner loads, no chat
+
+In practice, chat is only available in the =general= workspace (where it's the main panel). In all other workspaces, the user has no way to interact with the agent.
+
+* Root Cause
+
+=domain/growth/src/qml/panels/GrowthShell.qml= lines 37-61: =loadWorkspacePanel()= iterates workspace panels looking only for =position === \"main\"= and sets a single Loader. There is no secondary Loader.
+
+* Fix
+
+Replace the current ColumnLayout (main area + ChatDrawer) with a vertical =SplitView= containing two Loaders:
+
+1. =mainPanelLoader= — loads the =position: \"main\"= panel
+2. =secondaryPanelLoader= — loads the =position: \"secondary\"= panel
+
+Layout structure:
+
+#+begin_src qml
+SplitView {
+    orientation: Qt.Vertical
+    Layout.fillWidth: true
+    Layout.fillHeight: true
+
+    // Main panel
+    Rectangle {
+        SplitView.fillHeight: true
+        SplitView.preferredHeight: parent.height * mainFlex / (mainFlex + secondaryFlex)
+        color: "#111827"
+
+        Loader {
+            id: mainPanelLoader
+            anchors.fill: parent
+        }
+
+        Text {
+            visible: !mainPanelLoader.item
+            anchors.centerIn: parent
+            text: "Select a workspace to begin"
+            color: "#6B7280"
+            font.pixelSize: 16
+        }
+    }
+
+    // Secondary panel (chat, editor, etc.)
+    Rectangle {
+        SplitView.preferredHeight: parent.height * secondaryFlex / (mainFlex + secondaryFlex)
+        visible: secondaryPanelLoader.source !== ""
+        color: "#111827"
+
+        Loader {
+            id: secondaryPanelLoader
+            anchors.fill: parent
+        }
+    }
+}
+#+end_src
+
+Update =loadWorkspacePanel()= to also resolve =position === \"secondary\"= and set =secondaryPanelLoader.source=. Use workspace =flex= values (default 2:1) for the split ratio.
+
+=ChatDrawer= is removed from the layout — the secondary Loader replaces it. ChatPanel.qml (loaded as the secondary panel) provides the full chat interface including input, message history, streaming indicators, and status bar.
+
+Mirror in =GrowthShellTestHarness.qml=.
+
+* Key Details
+
+** ChatPanel.qml import resolution
+ChatPanel.qml lives at =packages/coding-agent/src/modes/qml/panels/ChatPanel.qml= and imports:
+- =import ".." as SpellUI= -> resolves to =packages/coding-agent/src/modes/qml/= (contains =qmldir= with SpellUI module)
+- =import "delegates" as Delegates= -> resolves to =panels/delegates/= subdirectory
+
+Qt resolves imports relative to the loaded file's URL, not the Loader's URL. Since =qml-mode.ts= passes the absolute path via =bridge.props.panels=, ChatPanel.qml's imports resolve correctly when loaded via Loader in GrowthShell.
+
+** Flex values from manifest
+Workspace panels have optional =flex= properties: =\{ panelId: \"dashboard\", position: \"main\", flex: 2 \}=. Use these to set the =SplitView.preferredHeight= ratio. Default flex is 1 for panels without a =flex= property.
+
+** Workspaces without secondary
+=general= has only =main= (chat). =review= has =main= (dashboard) + =secondary= (editor, not chat). The secondary Loader simply gets =source = \"\"= and is not visible when no secondary panel exists.
+
+* Acceptance Criteria
+- Switching to Strategy workspace shows GrowthDashboard in top pane and ChatPanel in bottom pane
+- Switching to General workspace shows ChatPanel full-height (no secondary)
+- ChatDrawer component is no longer in the layout
+- Visual: screenshot showing split layout with dashboard + chat panel
+- =bun test domain/growth/test/panels/growth-shell.test.ts= passes
+- =bun test domain/growth/test/panels/chat-drawer.test.ts= — either updated or removed since ChatDrawer is no longer in the shell layout

@@ -1,0 +1,99 @@
+#+TITLE: GrowthShell tests need Loader source and message forwarding assertions
+#+STATE: DONE
+#+SESSION_ID: 14a9e2bd33b552a9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-36-59-982Z_14a9e2bd33b552a9.jsonl]]
+#+CUSTOM_ID: BUG-067-growthshell-tests-need-loader-source-and
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: test
+#+DEPENDS: BUG-065-growthshell-drops-all-bridge-messages-so BUG-066-growthshell-only-loads-main-position-pan
+
+NOTE [2026-04-01]: Rewrote growth-shell.test.ts with 19 tests covering: loader source assertions, secondary panel loading for all workspace types, flex ratio verification, message forwarding to main and secondary panels, icon rendering, dead code removal. Created MockChatPanel.qml for testing handleMessage forwarding. Deleted obsolete chat-drawer.test.ts.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-014-audit-implementation:
+
+Here are my findings:
+
+---
+
+### Finding 1: `currentPanels` is dead code
+- **What**: `currentPanels` property is assigned on `workspace_layout` message but never read by any code.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` line 17, 193. Same in test harness lines 25, 194.
+- **Why**: Misleads future readers into thinking the `workspace_layout` payload drives panel loading. In reality, `loadWorkspacePanel()` resolves everything from the local `workspaces` array + `panelRegistry`. If TS ever sends a layout override with different panels, GrowthShell silently ignores it.
+- **Effort**: trivial
+
+### Finding 2: No Loader error handling
+- **What**: `mainPanelLoader` has no `onStatusChanged` handler and no error overlay. If a panel QML file fails to load (bad path, syntax error), the user sees a blank area with no feedback.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 167–170 (Loader definition)
+- **Why**: `shell.qml` has explicit `Loader.Error` state detection and an error overlay UI. GrowthShell has none. A broken panel file silently fails — user sees "Select a workspace to begin" with no clue why.
+- **Effort**: small
+
+### Finding 3: `workspace_layout` override is documented but not implemented
+- **What**: Comment says "TS may override layout — re-resolve panels" but `loadWorkspacePanel()` only reads the static `workspaces` array, not `currentPanels`. The TS-sent layout is stored then discarded.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 192–196
+- **Why**: If the TS side ever sends a different panel arrangement via `workspace_layout` (which is the documented purpose of that message type), GrowthShell will ignore it. The comment actively misleads.
+- **Effort**: small
+
+### Finding 4: Panel loading test doesn't verify the Loader actually loaded
+- **What**: The "switching workspace loads the main panel via Loader" test verifies `currentWorkspaceId` changed and `panelRegistry` has the right path, but never checks `mainPanelLoader.source` or `mainPanelLoader.item`. It tests prerequisites, not the contract.
+- **Where**: `domain/growth/test/panels/growth-shell.test.ts` lines 88–101
+- **Why**: The core bug was "Loader never has its source set". The test doesn't assert that `source` is set. A regression that breaks the binding between registry lookup and `mainPanelLoader.source = panelPath` would pass this test.
+- **Effort**: trivial
+
+### Finding 5: `iconFor()` fully duplicated between GrowthShell.qml and test harness
+- **What**: `iconFor()`, `loadWorkspacePanel()`, `Component.onCompleted` registry builder, `panelRegistry` property — the entire panel-loading architecture is copy-pasted between the two files.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` (22–74) and `GrowthShellTestHarness.qml` (28–79)
+- **Why**: Any future fix to panel loading or icon mapping must be applied twice. The harness exists because ApplicationWindow can't be nested, but the logic could be extracted to a shared JS module imported by both.
+- **Effort**: medium
+
+### Finding 6: `iconFor` allocates a new object on every call
+- **What**: The function creates a fresh `var icons = { ... }` object literal each invocation. Called 6 times per workspace list render.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 22–34
+- **Why**: Negligible performance impact at 6 calls, but it's a code smell. The map should be a property or module constant. Low priority.
+- **Effort**: trivial
+
+* Problem
+
+The existing test suite for GrowthShell does not test:
+1. That the Loader actually loads panels (Loader.source / Loader.item)
+2. That bridge messages reach loaded panels
+3. That secondary panels load for dual-panel workspaces
+4. That ChatPanel can receive and display messages when loaded in GrowthShell
+
+The =chat-drawer.test.ts= file tests ChatDrawer which is being removed from the layout.
+
+* Fix
+
+Update =domain/growth/test/panels/growth-shell.test.ts=:
+
+** New tests
+
+1. *Loader source is set after workspace switch*: switch to strategy, verify =mainPanelLoader= source contains =GrowthDashboard.qml= (use =objectName= on the Loader for reliable access)
+
+2. *Secondary Loader loads for dual-panel workspaces*: switch to strategy, verify secondary loader source contains =ChatPanel.qml=
+
+3. *General workspace loads ChatPanel full-height*: switch to general, verify main loader source contains =ChatPanel.qml=, secondary loader source is empty
+
+4. *Message forwarding reaches loaded ChatPanel*: load general workspace (ChatPanel as main), send =user_message= via =harness.sendMessage=, then evaluate ChatPanel's =messagesModel.count= through the Loader item — expect > 0
+
+5. *Agent streaming state reaches ChatPanel*: send =agent_busy= message, verify ChatPanel =isStreaming= state
+
+** Test harness updates
+
+- =GrowthShellTestHarness.qml= must mirror GrowthShell's SplitView layout, secondary loader, and message forwarding
+- Add =objectName= to both Loaders for reliable test introspection
+- Test harness reset must clear both loaders
+- The test =buildTestPanels()= already includes the builtin =chat= panel path — verify it resolves to the actual =ChatPanel.qml= in coding-agent (may need path adjustment)
+
+** chat-drawer.test.ts
+
+Since ChatDrawer is removed from the shell layout, =chat-drawer.test.ts= should be either:
+- Deleted (if ChatDrawer is removed entirely)
+- Or updated to test ChatDrawer in isolation if it remains as a standalone component
+
+* Acceptance Criteria
+- At least 5 new test cases covering panel loading, secondary panels, and message forwarding
+- =bun test domain/growth/test/panels/growth-shell.test.ts= — all pass
+- No test references ChatDrawer within the shell layout

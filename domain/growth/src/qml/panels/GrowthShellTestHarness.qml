@@ -1,7 +1,6 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
-import "../components"
 
 // The shell IS the ApplicationWindow — this harness IS GrowthShell with test data.
 ApplicationWindow {
@@ -14,32 +13,37 @@ ApplicationWindow {
 
     property var workspaces: bridge.props.workspaces || [
         { id: "general", name: "General", icon: "home", panels: [{ panelId: "chat", position: "main" }] },
-        { id: "research", name: "Research", icon: "search", panels: [{ panelId: "intel", position: "main" }, { panelId: "chat", position: "secondary" }] },
-        { id: "strategy", name: "Strategy", icon: "lightbulb", panels: [{ panelId: "dashboard", position: "main" }, { panelId: "chat", position: "secondary" }] },
-        { id: "create", name: "Create", icon: "edit", panels: [{ panelId: "editor", position: "main" }, { panelId: "chat", position: "secondary" }] },
+        { id: "research", name: "Research", icon: "search", panels: [{ panelId: "intel", position: "main", flex: 2 }, { panelId: "chat", position: "secondary", flex: 1 }] },
+        { id: "strategy", name: "Strategy", icon: "lightbulb", panels: [{ panelId: "dashboard", position: "main", flex: 2 }, { panelId: "chat", position: "secondary", flex: 1 }] },
+        { id: "create", name: "Create", icon: "edit", panels: [{ panelId: "editor", position: "main", flex: 2 }, { panelId: "chat", position: "secondary", flex: 1 }] },
         { id: "review", name: "Review", icon: "chart", panels: [{ panelId: "dashboard", position: "main" }, { panelId: "editor", position: "secondary" }] },
-        { id: "campaign", name: "Campaign", icon: "rocket", panels: [{ panelId: "planner", position: "main" }, { panelId: "chat", position: "secondary" }] }
+        { id: "campaign", name: "Campaign", icon: "rocket", panels: [{ panelId: "planner", position: "main", flex: 2 }, { panelId: "chat", position: "secondary", flex: 1 }] }
     ]
     property var panels: bridge.props.panels || []
     property string currentWorkspaceId: "general"
-    property var currentPanels: []
     property var panelRegistry: ({})
 
+    // Flex ratios for the SplitView — updated by loadWorkspacePanels().
+    property int mainFlex: 1
+    property int secondaryFlex: 1
+
+    // Constant icon map — avoids allocating per call.
+    readonly property var iconMap: ({
+        "home": "\u{1F3E0}",
+        "search": "\u{1F50D}",
+        "lightbulb": "\u{1F4A1}",
+        "edit": "\u{270F}\u{FE0F}",
+        "chart": "\u{1F4CA}",
+        "rocket": "\u{1F680}",
+        "briefcase": "\u{1F4BC}",
+        "kanban": "\u{1F4CB}"
+    })
+
     function iconFor(name: string): string {
-        var icons = {
-            "home": "\u{1F3E0}",
-            "search": "\u{1F50D}",
-            "lightbulb": "\u{1F4A1}",
-            "edit": "\u{270F}\u{FE0F}",
-            "chart": "\u{1F4CA}",
-            "rocket": "\u{1F680}",
-            "briefcase": "\u{1F4BC}",
-            "kanban": "\u{1F4CB}"
-        };
-        return icons[name] || name || "\u{25CF}";
+        return iconMap[name] || name || "\u{25CF}";
     }
 
-    function loadWorkspacePanel(): void {
+    function loadWorkspacePanels(): void {
         var ws = null;
         for (var i = 0; i < workspaces.length; i++) {
             if (workspaces[i].id === currentWorkspaceId) {
@@ -49,22 +53,42 @@ ApplicationWindow {
         }
         if (!ws || !ws.panels) {
             mainPanelLoader.source = "";
+            secondaryPanelLoader.source = "";
+            mainFlex = 1;
+            secondaryFlex = 1;
             return;
         }
 
+        var newMainSource = "";
+        var newSecondarySource = "";
+        var newMainFlex = 1;
+        var newSecondaryFlex = 1;
+
         for (var j = 0; j < ws.panels.length; j++) {
-            if (ws.panels[j].position === "main") {
-                var panelPath = panelRegistry[ws.panels[j].panelId];
-                if (panelPath) {
-                    mainPanelLoader.source = panelPath;
-                    return;
-                }
+            var panel = ws.panels[j];
+            var panelPath = panelRegistry[panel.panelId] || "";
+            if (panel.position === "main" && panelPath) {
+                newMainSource = panelPath;
+                newMainFlex = panel.flex || 1;
+            } else if (panel.position === "secondary" && panelPath) {
+                newSecondarySource = panelPath;
+                newSecondaryFlex = panel.flex || 1;
             }
         }
-        mainPanelLoader.source = "";
+
+        mainPanelLoader.source = newMainSource;
+        secondaryPanelLoader.source = newSecondarySource;
+        mainFlex = newMainFlex;
+        secondaryFlex = newSecondaryFlex;
     }
 
-    onCurrentWorkspaceIdChanged: loadWorkspacePanel()
+    function forwardToPanel(loader: var, payload: var): void {
+        if (loader.item && typeof loader.item.handleMessage === "function") {
+            loader.item.handleMessage(payload)
+        }
+    }
+
+    onCurrentWorkspaceIdChanged: loadWorkspacePanels()
 
     Component.onCompleted: {
         var reg = {};
@@ -75,7 +99,7 @@ ApplicationWindow {
             }
         }
         panelRegistry = reg;
-        loadWorkspacePanel();
+        loadWorkspacePanels();
     }
 
     RowLayout {
@@ -150,35 +174,72 @@ ApplicationWindow {
             }
         }
 
-        // Main content area
-        ColumnLayout {
+        // Main content area — vertical SplitView with main + secondary panels
+        SplitView {
+            orientation: Qt.Vertical
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 0
 
+            // Main panel
             Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
+                SplitView.fillHeight: true
+                SplitView.preferredHeight: secondaryPanelLoader.source != ""
+                    ? root.height * mainFlex / (mainFlex + secondaryFlex)
+                    : root.height
                 color: "#111827"
 
                 Loader {
                     id: mainPanelLoader
+                    objectName: "mainPanelLoader"
                     anchors.fill: parent
                 }
 
                 Text {
-                    visible: !mainPanelLoader.item
+                    visible: !mainPanelLoader.item && mainPanelLoader.status !== Loader.Error
                     anchors.centerIn: parent
                     text: "Select a workspace to begin"
                     color: "#6B7280"
                     font.pixelSize: 16
                 }
+
+                Rectangle {
+                    anchors.fill: parent
+                    color: Qt.rgba(0.067, 0.094, 0.153, 0.9)
+                    visible: mainPanelLoader.status === Loader.Error
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Failed to load panel"
+                        color: "#EF4444"
+                        font.pixelSize: 16
+                    }
+                }
             }
 
-            // ChatDrawer collapsed bar stub for layout parity
-            ChatDrawer {
-                Layout.fillWidth: true
-                expandedHeight: Math.min(400, Math.floor(parent.height * 0.5))
+            // Secondary panel
+            Rectangle {
+                visible: secondaryPanelLoader.source != ""
+                SplitView.preferredHeight: root.height * secondaryFlex / (mainFlex + secondaryFlex)
+                color: "#111827"
+
+                Loader {
+                    id: secondaryPanelLoader
+                    objectName: "secondaryPanelLoader"
+                    anchors.fill: parent
+                }
+
+                Rectangle {
+                    anchors.fill: parent
+                    color: Qt.rgba(0.067, 0.094, 0.153, 0.9)
+                    visible: secondaryPanelLoader.status === Loader.Error
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Failed to load panel"
+                        color: "#EF4444"
+                        font.pixelSize: 16
+                    }
+                }
             }
         }
     }
@@ -188,12 +249,18 @@ ApplicationWindow {
         function onMessageReceived(payload: var): void {
             if (payload.type === 'reset') {
                 currentWorkspaceId = "general"
-                mainPanelLoader.source = ""
+                mainFlex = 1
+                secondaryFlex = 1
+                loadWorkspacePanels()
                 bridge.send({ type: 'reset_done' })
             } else if (payload.type === 'workspace_layout') {
-                currentPanels = payload.panels
-                loadWorkspacePanel()
+                loadWorkspacePanels()
+            } else if (payload.type === 'switch_workspace' && payload.workspaceId) {
+                currentWorkspaceId = payload.workspaceId
             }
+            // Forward all messages to both panels — each handles what it understands.
+            forwardToPanel(mainPanelLoader, payload)
+            forwardToPanel(secondaryPanelLoader, payload)
         }
     }
 }

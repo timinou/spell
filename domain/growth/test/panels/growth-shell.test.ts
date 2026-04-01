@@ -5,14 +5,14 @@ import growthDomain from "../../manifest";
 
 const HARNESS = path.resolve(import.meta.dir, "../../src/qml/panels/GrowthShellTestHarness.qml");
 const PANELS_DIR = path.resolve(import.meta.dir, "../../src/qml/panels");
+const MOCK_CHAT = path.resolve(import.meta.dir, "MockChatPanel.qml");
 
 // Build resolved panel configs matching what qml-mode.ts would produce.
-// The test harness needs absolute paths to load panels via Loader.
+// Uses MockChatPanel for the "chat" slot so message forwarding can be verified
+// without needing SpellUI/delegate imports that ChatPanel.qml requires.
 function buildTestPanels() {
-	// Builtin panels (chat, dashboard) come from coding-agent — use the growth domain's own panels
-	// plus minimal stubs for builtins that the harness can resolve.
 	const builtins = [
-		{ id: "chat", title: "Chat", icon: "●", path: path.resolve(PANELS_DIR, "ChatDrawer.qml") },
+		{ id: "chat", title: "Chat", icon: "\u{25CF}", path: MOCK_CHAT },
 	];
 	const domainPanels = growthDomain.panels.map(p => ({
 		id: p.id,
@@ -39,6 +39,8 @@ describe.skipIf(!isBridgeAvailable())("Growth Shell", () => {
 	beforeEach(async () => {
 		await harness.reset();
 	});
+
+	// --- Basic shell structure ---
 
 	test("shell loads without error", async () => {
 		await Bun.sleep(300);
@@ -75,7 +77,7 @@ describe.skipIf(!isBridgeAvailable())("Growth Shell", () => {
 		expect(ws).toBe("general");
 	});
 
-	// --- Panel loading tests ---
+	// --- Panel registry ---
 
 	test("panel registry is populated from bridge.props.panels", async () => {
 		await Bun.sleep(300);
@@ -85,22 +87,118 @@ describe.skipIf(!isBridgeAvailable())("Growth Shell", () => {
 		expect(Object.keys(reg)).toContain("dashboard");
 	});
 
-	test("switching workspace loads the main panel via Loader", async () => {
+	// --- Main panel Loader ---
+
+	test("main Loader source is set after workspace switch to strategy", async () => {
 		await Bun.sleep(300);
-		// Switch to strategy workspace which maps dashboard panel to main position
 		await harness.evaluate("root.currentWorkspaceId = 'strategy'");
 		await Bun.sleep(500);
 
-		// Verify the workspace switched
-		const wsId = await harness.evaluate<string>("root.currentWorkspaceId");
-		expect(wsId).toBe("strategy");
-
-		// Verify panelRegistry has dashboard mapped to a real path
-		const dashPath = await harness.evaluate<string>("root.panelRegistry['dashboard'] || ''");
-		expect(dashPath).toContain("GrowthDashboard.qml");
+		const source = await harness.evaluate<string>("mainPanelLoader.source + ''");
+		expect(source).toContain("GrowthDashboard.qml");
 	});
 
-	// --- Icon rendering tests ---
+	test("general workspace loads MockChatPanel as the main panel", async () => {
+		await Bun.sleep(300);
+		// General maps chat to main position — after reset, default is general
+		const source = await harness.evaluate<string>("mainPanelLoader.source + ''");
+		expect(source).toContain("MockChatPanel.qml");
+	});
+
+	test("general workspace has no secondary panel", async () => {
+		await Bun.sleep(300);
+		const source = await harness.evaluate<string>("secondaryPanelLoader.source + ''");
+		expect(source).toBe("");
+	});
+
+	// --- Secondary panel Loader ---
+
+	test("strategy workspace loads secondary panel (chat)", async () => {
+		await Bun.sleep(300);
+		await harness.evaluate("root.currentWorkspaceId = 'strategy'");
+		await Bun.sleep(500);
+
+		const secondary = await harness.evaluate<string>("secondaryPanelLoader.source + ''");
+		expect(secondary).toContain("MockChatPanel.qml");
+	});
+
+	test("campaign workspace loads planner as main and chat as secondary", async () => {
+		await Bun.sleep(300);
+		await harness.evaluate("root.currentWorkspaceId = 'campaign'");
+		await Bun.sleep(500);
+
+		const main = await harness.evaluate<string>("mainPanelLoader.source + ''");
+		const secondary = await harness.evaluate<string>("secondaryPanelLoader.source + ''");
+		expect(main).toContain("KanbanBoard.qml");
+		expect(secondary).toContain("MockChatPanel.qml");
+	});
+
+	test("review workspace loads editor as secondary (not chat)", async () => {
+		await Bun.sleep(300);
+		await harness.evaluate("root.currentWorkspaceId = 'review'");
+		await Bun.sleep(500);
+
+		const main = await harness.evaluate<string>("mainPanelLoader.source + ''");
+		const secondary = await harness.evaluate<string>("secondaryPanelLoader.source + ''");
+		expect(main).toContain("GrowthDashboard.qml");
+		expect(secondary).toContain("EditorPanel.qml");
+	});
+
+	// --- Flex ratio ---
+
+	test("strategy workspace sets flex ratios from manifest", async () => {
+		await Bun.sleep(300);
+		await harness.evaluate("root.currentWorkspaceId = 'strategy'");
+		await Bun.sleep(300);
+
+		const mainFlex = await harness.evaluate<number>("root.mainFlex");
+		const secondaryFlex = await harness.evaluate<number>("root.secondaryFlex");
+		// Strategy: main flex=2, secondary flex=1
+		expect(mainFlex).toBe(2);
+		expect(secondaryFlex).toBe(1);
+	});
+
+	// --- Message forwarding ---
+
+	test("bridge messages are forwarded to main panel's handleMessage", async () => {
+		await Bun.sleep(500);
+		// General workspace: MockChatPanel is main panel with handleMessage
+
+		// Verify the main panel loaded
+		const loaded = await harness.evaluate<boolean>("mainPanelLoader.item !== null");
+		expect(loaded).toBe(true);
+
+		// Send a message through the bridge
+		await harness.sendMessage({ type: "user_message", text: "hello" });
+		await Bun.sleep(300);
+
+		const count = await harness.evaluate<number>("mainPanelLoader.item.messageCount");
+		expect(count).toBeGreaterThan(0);
+
+		const lastType = await harness.evaluate<string>("mainPanelLoader.item.lastMessageType");
+		expect(lastType).toBe("user_message");
+	});
+
+	test("bridge messages are forwarded to secondary panel", async () => {
+		await Bun.sleep(300);
+		await harness.evaluate("root.currentWorkspaceId = 'strategy'");
+		await Bun.sleep(500);
+
+		// Secondary panel is MockChatPanel with handleMessage
+		const loaded = await harness.evaluate<boolean>("secondaryPanelLoader.item !== null");
+		expect(loaded).toBe(true);
+
+		await harness.sendMessage({ type: "message_start", id: "msg-1", role: "assistant" });
+		await Bun.sleep(300);
+
+		const count = await harness.evaluate<number>("secondaryPanelLoader.item.messageCount");
+		expect(count).toBeGreaterThan(0);
+
+		const lastType = await harness.evaluate<string>("secondaryPanelLoader.item.lastMessageType");
+		expect(lastType).toBe("message_start");
+	});
+
+	// --- Icon rendering ---
 
 	test("sidebar renders emoji icons instead of text names", async () => {
 		await Bun.sleep(300);
@@ -109,16 +207,14 @@ describe.skipIf(!isBridgeAvailable())("Growth Shell", () => {
 			.map(item => item.properties["text"])
 			.filter((text): text is string => typeof text === "string");
 
-		// Should NOT contain raw icon names as rendered text
+		// Icon names should not appear as standalone labels
 		const iconNames = ["home", "search", "lightbulb", "edit", "chart", "rocket"];
 		for (const name of iconNames) {
-			// Icon names should not appear as standalone labels in the sidebar.
-			// They may appear within other text, but not as the sole text of a label.
 			const exactMatch = texts.some(t => t === name);
 			expect(exactMatch).toBe(false);
 		}
 
-		// Should contain emoji characters from the iconFor mapping
+		// Should contain emoji characters from the iconMap
 		const hasEmoji = texts.some(t => /[\u{1F300}-\u{1F9FF}]/u.test(t));
 		expect(hasEmoji).toBe(true);
 	});
@@ -132,28 +228,13 @@ describe.skipIf(!isBridgeAvailable())("Growth Shell", () => {
 
 	test("iconFor falls back to dot for unknown icons", async () => {
 		const fallback = await harness.evaluate<string>("root.iconFor('unknown_thing')");
-		// Unknown names pass through as-is (name || "●")
 		expect(fallback).toBe("unknown_thing");
 	});
 
-	// --- ChatDrawer tests ---
+	// --- Dead code removed ---
 
-	test("ChatDrawer has a visible accent border", async () => {
-		await Bun.sleep(300);
-		// The accent border is a 2px tall Rectangle with color #7C3AED
-		const items = await harness.findItems(
-			{ type: "QQuickRectangle", visible: true },
-			{ includeGeometry: true, properties: ["color"] },
-		);
-		const accentBorder = items.find(
-			(r) => r.geometry && r.geometry.height === 2 && String(r.properties.color) === "#7c3aed"
-		);
-		expect(accentBorder).toBeDefined();
-	});
-
-	test("ChatDrawer collapsed bar shows Chat label", async () => {
-		await Bun.sleep(300);
-		const items = await harness.findItems({ textContains: "Chat", visible: true });
-		expect(items.length).toBeGreaterThan(0);
+	test("currentPanels property does not exist (dead code removed)", async () => {
+		const exists = await harness.evaluate<boolean>("typeof root.currentPanels !== 'undefined'");
+		expect(exists).toBe(false);
 	});
 });
