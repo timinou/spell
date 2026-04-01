@@ -13,6 +13,7 @@ const manifest: SpellDomain = {
   tools: {},
   panels: [],
   workspaces: [],
+  interactiveSurface: "tui",
 };
 
 export default manifest;

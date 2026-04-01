@@ -1,0 +1,41 @@
+#+TITLE: Add canonical domain entry commands
+#+STATE: DONE
+#+SESSION_ID: 14a99b0c44161ac1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-23-46-577Z_14a99b0c44161ac1.jsonl]]
+#+CUSTOM_ID: FEAT-178-add-canonical-domain-entry-commands
+#+EFFORT: 5h
+#+PRIORITY: A
+#+LAYER: cli
+#+DEPENDS: BUG-058-normalize-domain-startup-surface-selection
+
+NOTE [2026-04-01]: Added canonical `spell domain <name>` entry, `spell growth` convenience alias, shared domain-entry argv translation, updated help/examples, and verified with focused CLI routing plus args tests.
+
+* Initial Message
+
+bro.
+
+spell should still have TUI as default
+
+and it should not do this when it's run in ana rbitrary folder:
+
+∙ spell --domain growth
+Error: Failed to load domain manifest 'growth' from '/home/user/code/ora/growth/domain/growth/manifest.ts': ResolveMessage: Cannot find module '/home/user/code/ora/growth/domain/growth/manifest.ts' from '/home/user/code/ora/spell/packages/coding-agent/src/domain/loader.ts'
+
+* Scope
+- Add a canonical command entry for domains plus a convenience alias.
+- Target files may include =packages/coding-agent/src/cli.ts=, a new domain command module under =packages/coding-agent/src/commands/=, =packages/coding-agent/src/commands/launch.ts=, and focused CLI routing/help tests.
+- Non-goals: do not redesign the domain manifest format or the SDK policy layer.
+
+* Preferred sequencing
+- Test-first: add command-routing/help coverage before wiring new command entries.
+
+* Acceptance Criteria
+- =spell domain growth= is the canonical explicit command to start the growth domain.
+- =spell growth= works as a convenience alias and routes to the same behavior as =spell domain growth=.
+- =--domain growth= and =.spell/domain.json= remain equivalent domain selectors; the new command is an explicit UX path, not a parallel runtime contract.
+- Help/examples show one consistent story for starting a domain and do not contradict the startup surface behavior.
+
+* Verification
+- =bun test packages/coding-agent/test/cli-domain-command-routing.test.ts=
+- =bun test packages/coding-agent/test/args.test.ts=
+- Manual: from the repo root, run =bun packages/coding-agent/src/cli.ts domain growth= and =bun packages/coding-agent/src/cli.ts growth= and confirm they reach the same startup path; reference the updated help/examples in =packages/coding-agent/src/commands/launch.ts= or the exact test file that proves the routing.

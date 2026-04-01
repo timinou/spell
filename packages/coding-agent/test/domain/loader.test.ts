@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { loadDomain } from "../../src/domain/loader";
+import { loadActiveDomain, loadDomain } from "../../src/domain/loader";
 
 describe("loadDomain", () => {
 	let tempDir = "";
@@ -43,6 +43,18 @@ describe("loadDomain", () => {
 		expect(manifest.description).toBe("Workspace Growth");
 	});
 
+	it("uses the built-in manifest for active built-in domain selection", async () => {
+		await Bun.write(
+			path.join(tempDir, "domain", "growth", "manifest.ts"),
+			'throw new Error("workspace manifest should not load"); export default {};',
+		);
+
+		const manifest = await loadActiveDomain("growth", tempDir);
+
+		expect(manifest.name).toBe("growth");
+		expect(manifest.description).toContain("Growth");
+	});
+
 	it("fails fast when the domain name is unknown in both the workspace and built-in registry", async () => {
 		await expect(loadDomain("unknown-domain", tempDir)).rejects.toThrow("no workspace manifest");
 	});
@@ -63,5 +75,16 @@ describe("loadDomain", () => {
 		);
 
 		await expect(loadDomain("growth", tempDir)).rejects.toThrow("field 'contextFiles' must be an array of strings");
+	});
+
+	it("fails fast when interactiveSurface is not supported", async () => {
+		await Bun.write(
+			path.join(tempDir, "domain", "growth", "manifest.ts"),
+			'export default { name: "growth", description: "Growth", tools: {}, panels: [], workspaces: [], interactiveSurface: "browser" };',
+		);
+
+		await expect(loadDomain("growth", tempDir)).rejects.toThrow(
+			"field 'interactiveSurface' must be either 'tui' or 'qml'",
+		);
 	});
 });

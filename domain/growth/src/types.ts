@@ -53,6 +53,8 @@ export interface SpellDomain {
   tools: DomainToolConfig;
   panels: PanelDef[];
   workspaces: WorkspaceDef[];
+  /** Preferred UI surface when this domain starts interactively. */
+  interactiveSurface?: "tui" | "qml";
   /** Custom QML shell used when launching this domain in canvas mode. */
   shellQmlPath?: string;
   /** Directory scanned for .md mode config files (relative to domain root). */

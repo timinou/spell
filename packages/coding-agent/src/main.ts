@@ -24,7 +24,8 @@ import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedM
 import { Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
 import { detectDomain } from "./domain/detection";
-import { loadDomain, type SpellDomain } from "./domain/loader";
+import { loadActiveDomain, type SpellDomain } from "./domain/loader";
+import { resolveStartupRoute } from "./domain/startup";
 import { exportFromFile } from "./export/html";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import { InteractiveMode, runBrowseMode, runPrintMode, runQmlMode, runRpcMode } from "./modes";
@@ -585,7 +586,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	let domainManifest: SpellDomain;
 	try {
 		const activeDomain = await logger.timeAsync("detectDomain", () => detectDomain(cwd, parsedArgs.domain));
-		domainManifest = await logger.timeAsync("loadDomain", () => loadDomain(activeDomain, cwd));
+		domainManifest = await logger.timeAsync("loadActiveDomain", () => loadActiveDomain(activeDomain, cwd));
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		process.stderr.write(`${chalk.red(`Error: ${message}`)}\n`);
@@ -611,9 +612,24 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		return { pipedInput, initialMessage, initialImages };
 	});
 	const initialMessage = initMsg;
-	const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
-	const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
-	const mode = parsedArgs.mode || "text";
+	const startupRoute = resolveStartupRoute({
+		canvas: parsedArgs.canvas,
+		displayAvailable: isDisplayAvailable(),
+		domainManifest,
+		hasPipedInput: pipedInput !== undefined,
+		mode: parsedArgs.mode,
+		print: parsedArgs.print,
+	});
+	const hasUiSurface =
+		startupRoute.kind === "canvas" ||
+		startupRoute.kind === "interactive-qml" ||
+		startupRoute.kind === "interactive-tui";
+
+	if (startupRoute.kind === "canvas-display-required") {
+		process.stderr.write(`${chalk.red(CANVAS_DISPLAY_REQUIRED_MESSAGE)}\n`);
+		await postmortem.quit(1);
+		return;
+	}
 
 	// Initialize discovery system with settings for provider persistence
 	logger.time("initializeWithSettings", () => initializeWithSettings(settings));
@@ -633,7 +649,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 
 	await logger.timeAsync("initTheme:final", () =>
 		initTheme(
-			isInteractive,
+			hasUiSurface,
 			settings.get("symbolPreset"),
 			settings.get("colorBlindMode"),
 			settings.get("theme.dark"),
@@ -677,7 +693,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	);
 	sessionOptions.authStorage = authStorage;
 	sessionOptions.modelRegistry = modelRegistry;
-	sessionOptions.hasUI = isInteractive;
+	sessionOptions.hasUI = hasUiSurface;
 
 	// Handle CLI --api-key as runtime override (not persisted)
 	if (parsedArgs.apiKey) {
@@ -732,7 +748,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		}
 	}
 
-	if (!isInteractive && !session.model) {
+	if (!hasUiSurface && !session.model) {
 		if (modelFallbackMessage) {
 			process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
 		} else {
@@ -745,18 +761,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		process.exit(1);
 	}
 
-	const ensureCanvasDisplay = async (): Promise<boolean> => {
-		if (isDisplayAvailable()) {
-			return true;
-		}
-		process.stderr.write(`${chalk.red(CANVAS_DISPLAY_REQUIRED_MESSAGE)}\n`);
-		await postmortem.quit(1);
-		return false;
-	};
-	const launchChatCanvas = async (): Promise<void> => {
-		if (!(await ensureCanvasDisplay())) {
-			return;
-		}
+	const launchQmlSurface = async (): Promise<void> => {
 		const canvasSessionId = session.sessionManager.getSessionId();
 		const canvasSessionFile = session.sessionManager.getSessionFile();
 		await runQmlMode(session, {
@@ -775,14 +780,13 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		await postmortem.quit(0);
 	};
 
-	if (parsedArgs.canvas) {
-		if (!(await ensureCanvasDisplay())) {
+	if (startupRoute.kind === "canvas") {
+		const canvasName = startupRoute.canvasName;
+		if (canvasName === "chat") {
+			await launchQmlSurface();
 			return;
 		}
-		const canvasName = parsedArgs.canvas;
-		if (canvasName === "chat") {
-			await launchChatCanvas();
-		} else if (canvasName === "fluid") {
+		if (canvasName === "fluid") {
 			await runFluidMode(session, {
 				initialMessage: initialMessage ?? parsedArgs.messages[0],
 				eventBus,
@@ -791,7 +795,9 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			await session.dispose();
 			stopThemeWatcher();
 			await postmortem.quit(0);
-		} else if (canvasName === "browse") {
+			return;
+		}
+		if (canvasName === "browse") {
 			await runBrowseMode(session, {
 				initialMessage: initialMessage ?? parsedArgs.messages[0],
 				sessionFile: session.sessionManager.getSessionFile() ?? undefined,
@@ -801,15 +807,22 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			await session.dispose();
 			stopThemeWatcher();
 			await postmortem.quit(0);
-		} else {
-			process.stderr.write(`${chalk.red(formatUnknownCanvasMessage(canvasName))}\n`);
-			await postmortem.quit(1);
+			return;
 		}
+		process.stderr.write(`${chalk.red(formatUnknownCanvasMessage(canvasName))}\n`);
+		await postmortem.quit(1);
+		return;
 	}
 
-	if (mode === "rpc") {
+	if (startupRoute.kind === "rpc") {
 		await runRpcMode(session);
-	} else if (isInteractive) {
+		return;
+	}
+	if (startupRoute.kind === "interactive-qml") {
+		await launchQmlSurface();
+		return;
+	}
+	if (startupRoute.kind === "interactive-tui") {
 		const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
 		const changelogMarkdown = await getChangelogForDisplay(parsedArgs);
 
@@ -842,17 +855,18 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			initialMessage,
 			initialImages,
 		);
-	} else {
-		await runPrintMode(session, {
-			mode,
-			messages: parsedArgs.messages,
-			initialMessage,
-			initialImages,
-		});
-		await session.dispose();
-		stopThemeWatcher();
-		await postmortem.quit(0);
+		return;
 	}
+
+	await runPrintMode(session, {
+		mode: startupRoute.mode,
+		messages: parsedArgs.messages,
+		initialMessage,
+		initialImages,
+	});
+	await session.dispose();
+	stopThemeWatcher();
+	await postmortem.quit(0);
 }
 
 export async function main(args: string[]): Promise<void> {

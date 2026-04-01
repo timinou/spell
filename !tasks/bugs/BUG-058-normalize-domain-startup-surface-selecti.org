@@ -1,0 +1,41 @@
+#+TITLE: Normalize domain startup surface selection
+#+STATE: DONE
+#+SESSION_ID: 14a99b0c44161ac1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-23-46-577Z_14a99b0c44161ac1.jsonl]]
+#+CUSTOM_ID: BUG-058-normalize-domain-startup-surface-selecti
+#+EFFORT: 4h
+#+PRIORITY: A
+#+LAYER: infrastructure
+
+NOTE [2026-04-01]: Implemented startup routing via resolveStartupRoute, removed implicit growth autodetection, reserved built-in domain loading for shipped domains, and verified with focused startup/detection/loader tests plus bun check:ts.
+
+* Initial Message
+
+bro.
+
+spell should still have TUI as default
+
+and it should not do this when it's run in ana rbitrary folder:
+
+∙ spell --domain growth
+Error: Failed to load domain manifest 'growth' from '/home/user/code/ora/growth/domain/growth/manifest.ts': ResolveMessage: Cannot find module '/home/user/code/ora/growth/domain/growth/manifest.ts' from '/home/user/code/ora/spell/packages/coding-agent/src/domain/loader.ts'
+
+* Scope
+- Target the runtime entry decision for domain-selected interactive sessions.
+- Files to inspect or update: =packages/coding-agent/src/main.ts=, =domain/growth/manifest.ts=, =packages/coding-agent/src/modes/qml-mode.ts=, and focused startup tests under =packages/coding-agent/test/=.
+- Non-goals: do not change SDK prompt/tool policy, manifest loading, or non-domain canvas modes beyond what the startup contract requires.
+
+* Preferred sequencing
+- Test-first: define or update startup-routing tests before changing runtime logic.
+
+* Acceptance Criteria
+- Interactive =spell --domain growth= auto-opens the growth UI when a graphical display is available.
+- Interactive =spell= in a project with =.spell/domain.json= set to ={"domain":"growth"}= behaves the same way.
+- Non-interactive invocations (= -p = and =--mode rpc=) remain non-UI for growth domains.
+- If a growth domain is selected but no graphical display is available, interactive startup falls back to the normal TUI instead of erroring.
+- The runtime contract for domain selection is implemented in one place rather than split across conflicting heuristics.
+
+* Verification
+- =bun test packages/coding-agent/test/main-domain-startup-behavior.test.ts=
+- =bun check:ts=
+- Manual: capture a screenshot artifact showing =spell --domain growth= opening the growth UI, and record a no-display interactive fallback run that reaches the TUI instead of a canvas error.

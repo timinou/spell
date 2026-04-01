@@ -1,4 +1,3 @@
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 
@@ -33,8 +32,7 @@ function parseDomainOverride(raw: string, overridePath: string): string {
  * Resolution order:
  * 1. `cliOverride` — explicit flag wins outright.
  * 2. `${cwd}/.spell/domain.json` — workspace-local override.
- * 3. Heuristic: presence of `domain/growth/` directory under cwd → 'growth'.
- * 4. Default: 'coding'.
+ * 3. Default: `coding`.
  *
  * @throws If `.spell/domain.json` exists but cannot be parsed or validated.
  */
@@ -52,15 +50,6 @@ export async function detectDomain(cwd: string, cliOverride?: string): Promise<s
 		if (!isEnoent(error)) {
 			throw error;
 		}
-	}
-
-	try {
-		const stat = await fs.stat(path.join(cwd, "domain", "growth"));
-		if (stat.isDirectory()) {
-			return "growth";
-		}
-	} catch {
-		// Not present — proceed to default.
 	}
 
 	return "coding";

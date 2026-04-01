@@ -22,6 +22,24 @@ const BUILTIN_DOMAIN_LOADERS: Record<string, () => Promise<DomainLoaderModule>> 
 	growth: () => import("../../../../domain/growth/manifest"),
 };
 
+function isBuiltinDomain(name: string): boolean {
+	return Object.hasOwn(BUILTIN_DOMAIN_LOADERS, name);
+}
+
+/**
+ * Load the manifest used for the active runtime domain selection.
+ *
+ * Built-in domain names are reserved for Spell's shipped domains, so an explicit
+ * selection like `growth` always resolves to the bundled manifest instead of any
+ * arbitrary `cwd/domain/growth/manifest.ts` folder.
+ */
+export async function loadActiveDomain(name: string, cwd: string): Promise<SpellDomain> {
+	if (isBuiltinDomain(name)) {
+		return await loadBuiltinDomain(name, BUILTIN_DOMAIN_LOADERS[name]);
+	}
+	return await loadDomain(name, cwd);
+}
+
 /**
  * Load and return the SpellDomain manifest for `name`.
  *
@@ -147,6 +165,9 @@ function validateManifest(name: string, manifest: unknown): void {
 	}
 	if (m.shellQmlPath !== undefined && typeof m.shellQmlPath !== "string") {
 		throw new Error(`${ctx} field 'shellQmlPath' must be a string when provided`);
+	}
+	if (m.interactiveSurface !== undefined && m.interactiveSurface !== "tui" && m.interactiveSurface !== "qml") {
+		throw new Error(`${ctx} field 'interactiveSurface' must be either 'tui' or 'qml' when provided`);
 	}
 	if (m.modesDir !== undefined && typeof m.modesDir !== "string") {
 		throw new Error(`${ctx} field 'modesDir' must be a string when provided`);

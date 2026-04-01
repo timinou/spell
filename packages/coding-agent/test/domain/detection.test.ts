@@ -41,13 +41,9 @@ describe("detectDomain", () => {
 		await expect(detectDomain(tempDir)).rejects.toThrow("expected a non-empty string field 'domain'");
 	});
 
-	it("falls back to the growth heuristic when a growth domain directory exists", async () => {
+	it("keeps coding as the default even when a growth folder exists", async () => {
 		await fs.mkdir(path.join(tempDir, "domain", "growth"), { recursive: true });
 
-		expect(await detectDomain(tempDir)).toBe("growth");
-	});
-
-	it("falls back to coding when no override or growth directory exists", async () => {
 		expect(await detectDomain(tempDir)).toBe("coding");
 	});
 });

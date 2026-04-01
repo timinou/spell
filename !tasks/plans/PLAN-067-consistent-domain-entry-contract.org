@@ -1,0 +1,93 @@
+#+TITLE: Consistent Domain Entry Contract
+#+STATE: DONE
+#+SESSION_ID: 14a99b0c44161ac1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-23-46-577Z_14a99b0c44161ac1.jsonl]]
+#+CUSTOM_ID: PLAN-067-consistent-domain-entry-contract
+
+
+NOTE [2026-04-01]: Completed after automated verification, retained the required canonical artifact, and closed linked BUG-058 / FEAT-178 items as DONE.
+
+* Initial Message
+
+bro.
+
+spell should still have TUI as default
+
+and it should not do this when it's run in ana rbitrary folder:
+
+∙ spell --domain growth
+Error: Failed to load domain manifest 'growth' from '/home/user/code/ora/growth/domain/growth/manifest.ts': ResolveMessage: Cannot find module '/home/user/code/ora/growth/domain/growth/manifest.ts' from '/home/user/code/ora/spell/packages/coding-agent/src/domain/loader.ts'
+
+* Context
+** Problem
+Domain startup semantics are currently inconsistent across the available entry paths. Today the codebase has at least three distinct knobs: domain selection (=--domain= or =.spell/domain.json=), surface selection (=--canvas=), and the default root command. The user expectation for this follow-up is explicit: selecting the growth domain should auto-open the growth UI on interactive startup, yet the CLI also needs one obvious canonical command for starting a domain directly.
+
+** Recommended approach
+Adopt one contract:
+- Domain selection (=--domain growth= or project =.spell/domain.json=) controls *which domain is active*.
+- For interactive sessions, an active domain may choose a preferred UI surface; for growth this means auto-opening the domain UI when a display is available.
+- If no display is available, interactive startup falls back to the normal TUI instead of failing.
+- Explicit domain entry becomes =spell domain <name>=, with =spell growth= as a convenience alias for the growth domain.
+
+This keeps policy selection, startup routing, and user-facing commands aligned instead of leaving each path to imply different behavior.
+
+** Key decisions
+- =spell domain growth= is the canonical explicit command; =spell growth= is a convenience alias.
+- =--domain growth= and =.spell/domain.json= keep identical runtime semantics; the CLI flag only overrides which domain is active.
+- Growth auto-opens its domain UI only for interactive sessions with a graphical display.
+- No-display interactive runs fall back to the TUI; =-p= and =--mode rpc= remain non-UI.
+
+** Critical file paths
+- =packages/coding-agent/src/cli.ts=
+- =packages/coding-agent/src/commands/launch.ts=
+- =packages/coding-agent/src/main.ts=
+- =packages/coding-agent/src/domain/detection.ts=
+- =packages/coding-agent/src/domain/loader.ts=
+- =packages/coding-agent/src/modes/qml-mode.ts=
+- =domain/growth/manifest.ts=
+- =packages/coding-agent/test/main-domain-startup-behavior.test.ts=
+- =packages/coding-agent/test/cli-domain-command-routing.test.ts=
+
+* Verification
+** Automated
+- =bun test packages/coding-agent/test/main-domain-startup-behavior.test.ts=
+- =bun test packages/coding-agent/test/cli-domain-command-routing.test.ts=
+- =bun test packages/coding-agent/test/args.test.ts=
+- =bun check:ts=
+- =bun test packages/coding-agent/test/=
+
+** Manual
+- With a display available, run =spell --domain growth= and confirm the growth UI opens automatically.
+- In a project with =.spell/domain.json= set to ={"domain":"growth"}=, run plain =spell= and confirm it reaches the same growth UI.
+- With no display available, run interactive =spell --domain growth= and confirm it falls back to the normal TUI rather than erroring.
+- Run =spell domain growth= and =spell growth= and confirm both reach the same startup behavior.
+- Required artifact: =!tasks/plans/plan-artifacts/PLAN-067-consistent-domain-entry-contract/domain-growth-entry.png= showing the canonical domain launch path opening the growth UI.
+
+* Execution Manifest
+** Wave 1
+- [[id:BUG-058-normalize-domain-startup-surface-selecti]] — Restore one consistent runtime rule for interactive domain startup, including display fallback. Effort: 4h. Layer: infrastructure.
+
+** Wave 2
+- [[id:FEAT-178-add-canonical-domain-entry-commands]] — Add =spell domain growth= plus =spell growth= alias and align help/examples with the startup contract. Depends on [[id:BUG-058-normalize-domain-startup-surface-selecti]]. Effort: 5h. Layer: cli.
+
+
+** Completion [2026-04-01]
+*** Verification
+- Automated
+  - =bun test packages/coding-agent/test/main-domain-startup-behavior.test.ts= → 6 pass, 0 fail.
+  - =bun test packages/coding-agent/test/cli-domain-command-routing.test.ts= → 4 pass, 0 fail.
+  - =bun test packages/coding-agent/test/args.test.ts= → 42 pass, 0 fail.
+  - =bun check:ts= → passed (Biome + tsgo).
+  - =bun test packages/coding-agent/test/= → 2533 pass, 395 skip, 0 fail.
+- Manual
+  - =env HOME=/tmp/plan067-growth-manual/home NO_COLOR=1 TERM=xterm-256color bun packages/coding-agent/src/cli.ts domain growth --no-session= from repo root opened the growth QML shell. Evidence: [[file:!tasks/plans/plan-artifacts/PLAN-067-consistent-domain-entry-contract/domain-growth-entry.png]].
+  - =env HOME=/tmp/plan067-growth-manual/home NO_COLOR=1 TERM=xterm-256color bun packages/coding-agent/src/cli.ts --domain growth --no-session= from repo root opened the same growth QML shell. Evidence: [[file:!tasks/plans/plan-artifacts/PLAN-067-consistent-domain-entry-contract/domain-growth-flag.png]].
+  - =env HOME=/tmp/plan067-growth-manual/home NO_COLOR=1 TERM=xterm-256color bun /home/user/code/ora/spell/packages/coding-agent/src/cli.ts --no-session= from a temp project containing =.spell/domain.json= with ={"domain":"growth"}= opened the same growth QML shell. Evidence: [[file:!tasks/plans/plan-artifacts/PLAN-067-consistent-domain-entry-contract/domain-growth-project-default.png]].
+  - =timeout 8s env -u DISPLAY -u WAYLAND_DISPLAY HOME=/tmp/plan067-growth-manual/home NO_COLOR=1 TERM=xterm-256color bun packages/coding-agent/src/cli.ts --domain growth --no-session= rendered the interactive TUI/changelog path until timeout waiting for input and did not emit the =--canvas requires a graphical display= error, confirming no-display fallback.
+  - =spell growth= was confirmed in-session by the user after the alias was wired through the same =runDomainEntryCommand()= path covered by =packages/coding-agent/test/cli-domain-command-routing.test.ts=.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-067-consistent-domain-entry-contract/domain-growth-entry.png]] — canonical =spell domain growth= launch opening Spell Growth.
+- [[file:!tasks/plans/plan-artifacts/PLAN-067-consistent-domain-entry-contract/domain-growth-flag.png]] — =spell --domain growth= opening the same growth UI.
+- [[file:!tasks/plans/plan-artifacts/PLAN-067-consistent-domain-entry-contract/domain-growth-project-default.png]] — plain =spell= in a project with =.spell/domain.json= selecting growth.
+*** Deviations
+- No separate retained screenshot for =spell growth=; the user explicitly said no additional screenshot was needed after confirming the alias worked. The required canonical artifact was still captured at [[file:!tasks/plans/plan-artifacts/PLAN-067-consistent-domain-entry-contract/domain-growth-entry.png]].
