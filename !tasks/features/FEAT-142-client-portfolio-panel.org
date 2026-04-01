@@ -1,0 +1,69 @@
+#+TITLE: Client Portfolio Panel
+#+STATE: DONE
+#+SESSION_ID: 14a899a7fc0415d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/33-CreateFeatD.jsonl]]
+#+CUSTOM_ID: FEAT-142-client-portfolio-panel
+#+EFFORT: 18h
+#+PRIORITY: #B
+#+LAYER: ui
+#+DEPENDS: PROJ-013-growth-qml-shell-and-workspace-system
+
+
+* Scope
+
+IN: Multi-client overview QML panel. Client cards (logo/avatar, name, active campaigns count, recent deliverables count, last activity date). Click client -> filter all panels to that client context (dashboard shows client metrics, intel shows client competitors, editor shows client deliverables). Client config in .spell/growth/clients.json (client list with name, description, keywords, competitors, brandColor). 'All Clients' option to remove filter.
+
+OUT: Client CRM features (FUP). Client data import (FUP).
+
+Depends on Growth Shell (PROJ-B) for panel registration and session state infrastructure.
+
+* Tests
+
+- domain/growth/test/panels/portfolio-panel.test.ts: render with clients, click client activates filter
+
+* Implementation
+
+** Define client types and config
+:PROPERTIES:
+:CUSTOM_ID: FEAT-142-client-portfolio-panel::define-client-types
+:END:
+Files: domain/growth/src/panels/portfolio/types.ts, .spell/growth/clients.json schema
+
+** Create PortfolioPanel.qml
+:PROPERTIES:
+:CUSTOM_ID: FEAT-142-client-portfolio-panel::create-panel-qml
+:DEPENDS: FEAT-142-client-portfolio-panel::define-client-types
+:END:
+Files: domain/growth/src/qml/panels/PortfolioPanel.qml
+
+** Create ClientCard.qml
+:PROPERTIES:
+:CUSTOM_ID: FEAT-142-client-portfolio-panel::create-client-card
+:END:
+Files: domain/growth/src/qml/components/ClientCard.qml
+
+** Implement client context filter
+:PROPERTIES:
+:CUSTOM_ID: FEAT-142-client-portfolio-panel::implement-context-filter
+:DEPENDS: FEAT-142-client-portfolio-panel::define-client-types
+:END:
+Files: domain/growth/src/panels/portfolio/context-filter.ts
+On client selection: store active client in session state, emit panel_context event with clientId. All armed tool queries filter by client keywords/competitors. Agent receives client context.
+
+** Write portfolio tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-142-client-portfolio-panel::write-tests
+:DEPENDS: FEAT-142-client-portfolio-panel::create-panel-qml ::implement-context-filter
+:END:
+Files: domain/growth/test/panels/portfolio-panel.test.ts
+
+* Edge Cases
+
+- No clients configured: show 'Add your first client' with config instructions
+- Client with no data: show client card with zero counts, not hidden
+
+* Acceptance Criteria
+
+- Panel shows client cards from clients.json
+- Clicking client filters other panels to that client context
+- 'All Clients' removes the filter

@@ -1,0 +1,10 @@
+module Components
+MetricCard 1.0 MetricCard.qml
+AdCard 1.0 AdCard.qml
+AdSummaryCard 1.0 AdSummaryCard.qml
+AdDetailDrawer 1.0 AdDetailDrawer.qml
+ClientCard 1.0 ClientCard.qml
+FilterToolbar 1.0 FilterToolbar.qml
+ComponentPalette 1.0 ComponentPalette.qml
+TemplateSelector 1.0 TemplateSelector.qml
+TypstFileTree 1.0 TypstFileTree.qml

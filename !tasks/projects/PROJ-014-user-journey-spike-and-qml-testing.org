@@ -1,0 +1,85 @@
+#+TITLE: User Journey Spike and QML Testing
+#+STATE: DONE
+#+SESSION_ID: 14a8992d458415c8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/29-CreateProjE.jsonl]]
+#+CUSTOM_ID: PROJ-014-user-journey-spike-and-qml-testing
+#+EFFORT: 45h
+#+PRIORITY: #A
+#+LAYER: testing
+#+DEPENDS: PROJ-012-spell-domain-system
+
+## Scope
+IN: Comprehensive user journey org file defining all growth workflows (J01-J12+). QmlJourney test implementations per workspace and panel with mocked sessions. Mock data infrastructure: SQLite fixtures (fake ad data, fake pages, fake campaigns), mock agent sessions (stub LLM responses), mock scraper results. Layer-separated testing: unit tests for data layer (SQLite queries, scraper transforms), QML component tests with mock data via bridge messages, thin E2E journey per panel, FULL lifecycle QML journey tests covering workspace switching, mode activation, panel interactions, chat drawer, multi-agent visibility.
+OUT: Live scraper integration tests (manual only). Visual pixel-perfect tests (screenshot comparison is advisory, not gating). Performance benchmarks.
+
+## Tests (this item IS the testing infrastructure)
+- domain/growth/specs/user-journeys.org: comprehensive journey definitions
+- domain/growth/test/journeys/j01-first-launch.test.ts through j12
+- domain/growth/test/fixtures/: SQLite seed data, mock HTML, stub responses
+- domain/growth/test/helpers/growth-journey.ts: GrowthJourney class extending QmlJourney
+
+## Implementation
+
+** Write user journey specifications
+:PROPERTIES:
+:CUSTOM_ID: PROJ-014-user-journey-spike-and-qml-testing::write-journey-specs
+:END:
+Files: domain/growth/specs/user-journeys.org
+12+ journeys: J01 First Launch (empty state), J02 Morning Dashboard Review (seeded data), J03 Competitive Scan (Research workspace /intel), J04 Client Proposal (/strategy -> /pitch), J05 Quick Brief (/brief), J06 Performance Review (/review), J07 Workspace Switching (mid-session layout change), J08 Multi-Agent Chat (parallel agents in drawer), J09 Mode Escalation (/review -> /strategy), J10 Typst Edit + Live Preview (editor interaction), J11 Campaign Planning (/campaign chain), J12 Template Selection and Data Hydration.
+
+** Create mock data fixtures
+:PROPERTIES:
+:CUSTOM_ID: PROJ-014-user-journey-spike-and-qml-testing::create-fixtures
+:END:
+Files: domain/growth/test/fixtures/seed-ads.sql, seed-pages.sql, mock-html/fb-ads-page.html, mock-html/fb-ad-detail.html, stub-responses/intel-response.json, stub-responses/strategy-response.json
+SQLite seed: 50 ads across 10 pages, various dates/statuses/formats. Mock HTML: realistic FB Ads Library page structure for extractor tests. Stub responses: pre-built agent response sequences for journey playback.
+
+** Create GrowthJourney test helper
+:PROPERTIES:
+:CUSTOM_ID: PROJ-014-user-journey-spike-and-qml-testing::create-growth-journey
+:DEPENDS: PROJ-014-user-journey-spike-and-qml-testing::create-fixtures
+:END:
+Files: domain/growth/test/helpers/growth-journey.ts
+Extend QmlJourney with growth-specific methods: seedDatabase(sqlFile), switchWorkspace(name), activateMode(name), expectMetricCard(label, value), expectAdCard(adId), openAdDetail(adId), setFilter(field, value), expectWorkspace(name), expectMode(name), getDrawerStatus(), sendChatMessage(text), expectAgentTab(agentId, status).
+
+** Implement J01-J03 journey tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-014-user-journey-spike-and-qml-testing::implement-j01-j03
+:DEPENDS: PROJ-014-user-journey-spike-and-qml-testing::create-growth-journey
+:END:
+Files: domain/growth/test/journeys/j01-first-launch.test.ts, j02-morning-dashboard.test.ts, j03-competitive-scan.test.ts
+J01: Launch growth shell, verify empty state UX (no data messages, quick action buttons visible). J02: Seed DB, launch, verify metric cards show correct counts, competitor feed shows latest ads, click ad card opens detail. J03: Switch to Research workspace, verify intel panel visible, trigger scan (mocked), verify results populate.
+
+** Implement J04-J06 journey tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-014-user-journey-spike-and-qml-testing::implement-j04-j06
+:DEPENDS: PROJ-014-user-journey-spike-and-qml-testing::create-growth-journey
+:END:
+Files: domain/growth/test/journeys/j04-client-proposal.test.ts, j05-quick-brief.test.ts, j06-performance-review.test.ts
+
+** Implement J07-J09 journey tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-014-user-journey-spike-and-qml-testing::implement-j07-j09
+:DEPENDS: PROJ-014-user-journey-spike-and-qml-testing::create-growth-journey PROJ-013-growth-qml-shell-and-workspace-system::implement-workspace-switching FEAT-137-growth-modes::implement-mode-workspace-coupling
+:END:
+Files: domain/growth/test/journeys/j07-workspace-switching.test.ts, j08-multi-agent-chat.test.ts, j09-mode-escalation.test.ts
+
+** Implement J10-J12 journey tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-014-user-journey-spike-and-qml-testing::implement-j10-j12
+:DEPENDS: PROJ-014-user-journey-spike-and-qml-testing::create-growth-journey FEAT-138-report-editor-panel::create-panel-qml FEAT-141-competitive-intelligence-panel::create-panel-qml FEAT-143-campaign-planner-board::create-kanban-qml
+:END:
+Files: domain/growth/test/journeys/j10-typst-editor.test.ts, j11-campaign-planning.test.ts, j12-template-hydration.test.ts
+
+## Edge Cases
+- QmlTestHarness with WebEngineView: may need Xvfb in CI. Document requirement.
+- Mock session playback: agent responses must include tool calls for realistic journey
+- SQLite seed data must be isolated per test (use temp DB path)
+- Journey tests that cross workspace boundaries need careful state tracking
+
+## Acceptance Criteria
+- user-journeys.org contains 12+ detailed journey specs with numbered steps
+- GrowthJourney helper extends QmlJourney with all growth-specific methods
+- J01-J12 tests all pass with mocked data (no network, no live LLM)
+- Mock fixtures realistic enough to exercise all panel states
+- Test suite runs in under 60 seconds total

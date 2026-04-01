@@ -1,0 +1,73 @@
+#+TITLE: Template Builder
+#+STATE: DONE
+#+SESSION_ID: 14a899a7fbc415d6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/35-CreateRemainingFeats.jsonl]]
+#+CUSTOM_ID: FEAT-146-template-builder
+#+EFFORT: 25h
+#+PRIORITY: #C
+#+LAYER: ui
+#+DEPENDS: PROJ-010-typst-integration PROJ-013-growth-qml-shell-and-workspace-system
+
+* Scope
+** In
+- Create and customize Typst templates within canvas
+- Section-level editor: add/remove/reorder template sections visually
+- Component palette: drag brand components (stat-cell, metric-strip, callout-box) into sections
+- Save to domain/growth/templates/ with metadata JSON
+- 'Template Mode' toggle extending existing editor panel
+** Out
+- Runtime Typst compilation (handled by Typst integration)
+- Brand component design/theming
+** Boundary
+- UI layer; delegates file I/O and compilation to PROJ-010 Typst integration
+
+* Tests
+- tests/features/template-builder/section-editor.test.ts
+- tests/features/template-builder/component-palette.test.ts
+- tests/features/template-builder/save-export.test.ts
+
+* Implementation
+** Design Template Format
+:PROPERTIES:
+:CUSTOM_ID: FEAT-146-template-builder::design-template-format
+:DEPENDS: PROJ-010-typst-integration
+:END:
+Define template metadata JSON schema: name, description, sections array (each with id, type, components), created_at, updated_at. Define how sections map to Typst include directives.
+
+** Create Section Editor QML
+:PROPERTIES:
+:CUSTOM_ID: FEAT-146-template-builder::create-section-editor-qml
+:DEPENDS: FEAT-146-template-builder::design-template-format PROJ-013-growth-qml-shell-and-workspace-system::extend-shell-qml FEAT-138-report-editor-panel::create-panel-qml
+:END:
+SectionEditor.qml: ListView of sections with add/remove buttons, drag handles for reorder. Section item shows type label and component count. Inline section title editing.
+
+** Create Component Palette
+:PROPERTIES:
+:CUSTOM_ID: FEAT-146-template-builder::create-component-palette
+:DEPENDS: FEAT-146-template-builder::create-section-editor-qml
+:END:
+ComponentPalette.qml: grid of available brand components with preview thumbnails. Drag component from palette into a section drop zone. Drop appends component to section's component list.
+
+** Implement Save and Export
+:PROPERTIES:
+:CUSTOM_ID: FEAT-146-template-builder::implement-save-export
+:DEPENDS: FEAT-146-template-builder::create-component-palette
+:END:
+Save button serializes template model to metadata JSON + generates Typst source file in domain/growth/templates/. Export triggers Typst compilation via PROJ-010 integration. Template selector reads from same directory.
+
+** Write Tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-146-template-builder::write-tests
+:DEPENDS: FEAT-146-template-builder::implement-save-export
+:END:
+QML headless tests for section add/remove/reorder. Drag-drop simulation tests for palette → section. Save test verifies metadata JSON and Typst file written correctly.
+
+* Edge Cases
+- Template with zero sections: save disabled, user shown inline validation message
+- Component dropped on invalid target: drop rejected, original position unchanged
+- Template name collision: append numeric suffix, do not silently overwrite
+
+* Acceptance Criteria
+- User can create a new template from component palette by dragging components into sections
+- Saved template appears in template selector for use in reports
+- Template Mode toggle in editor panel activates/deactivates builder without losing editor state

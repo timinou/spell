@@ -1,0 +1,143 @@
+#+TITLE: Fluid Orchestration Wiring Prerequisites
+#+STATE: ITEM
+#+SESSION_ID: 14a967c1db5e9eb6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T09-39-41-037Z_14a967c1db5e9eb6.jsonl]]
+#+CUSTOM_ID: FUP-012-fluid-orchestration-wiring-prerequisites
+#+EFFORT: 24h
+#+PRIORITY: #A
+#+LAYER: infrastructure
+
+
+* Initial Message
+
+Ok bro. Look at PLAN-055-spell-growth-v1 and make a plan that has the EXACT SAME SCOPE as that plan but uses the newly minted fluid orchestration instead of the old wave system (that that plan was built against). To be clear: details w.r.t the actual work to be done are to be kept exactly the same. The only difference is using the new affordances to use the fluid plan and to fluidly orchestrate. You are encouraged to ask me quesitons and to surface issues with the fluid orchestration system, as this is the first time we are going to use it
+
+* Scope
+
+** In
+Code changes needed in Spell itself before the fluid orchestrator can execute plans with sub-outline granularity (~100 nodes). This is a prerequisite for PLAN-057 (Spell Growth V1 Fluid).
+
+** Out
+Growth domain work. Plan content changes. Org item restructuring (that's PLAN-057's executor responsibility).
+
+** Boundary
+This FUP covers only the plumbing. The actual plan restructuring and sub-outline normalization is done by PLAN-057's executor.
+
+* Implementation
+
+** Wire ExitPlanModeTool to call org-fluid-plan
+:PROPERTIES:
+:CUSTOM_ID: FUP-012-fluid-orchestration-wiring-prerequisi::wire-exit-plan-mode
+:END:
+
+~ExitPlanModeTool.execute()~ currently extracts waves via ~extractPlanWaves()~ but never calls the ~org-fluid-plan~ MCP tool to build ~FluidPlanWithComponents~. The ~fluidPlan~ field in ~ExitPlanModeDetails~ is always undefined.
+
+Fix:
+- In ~exit-plan-mode.ts~, after resolving the PLAN item and extracting child IDs, call the Emacs MCP tool ~org-fluid-plan~ with ~{plan_id: params.itemId}~
+- Parse the JSON response into ~FluidPlanWithComponents~
+- Set ~details.fluidPlan~ in the return value
+- The interactive-mode ~#approvePlan~ already passes ~details.fluidPlan~ through, and ~#executeViaFluidOrchestrator~ already checks for it
+
+Files: ~packages/coding-agent/src/tools/exit-plan-mode.ts~
+
+** Add deferred flag to FluidAgentNode
+:PROPERTIES:
+:CUSTOM_ID: FUP-012-fluid-orchestration-wiring-prerequisi::add-deferred-flag
+:END:
+
+~FluidAgentNode~ in ~types.ts~ needs ~deferred?: boolean~ field.
+~org-fluid-plan.el~ needs to emit the deferred flag based on org TODO state (FUP items have state ITEM but are in followups category — use category or a tag to detect).
+
+Files: ~packages/coding-agent/src/orchestrators/fluid/types.ts~, ~packages/org/elisp/tools/org-fluid-plan.el~
+
+** Add skip/defer semantics to QueueScheduler
+:PROPERTIES:
+:CUSTOM_ID: FUP-012-fluid-orchestration-wiring-prerequisi::scheduler-defer-semantics
+:DEPENDS: FUP-012-fluid-orchestration-wiring-prerequisi::add-deferred-flag
+:END:
+
+~QueueScheduler.execute()~ should skip nodes where ~node.deferred === true~. Mark them as completed immediately with a synthetic result indicating deferral. Emit ~agent_state_change~ with state ~completed~ so downstream nodes are unblocked.
+
+Files: ~packages/coding-agent/src/orchestrators/fluid/queue-scheduler.ts~
+
+** Enhance coordinator prompt with parent item body
+:PROPERTIES:
+:CUSTOM_ID: FUP-012-fluid-orchestration-wiring-prerequisi::enhance-coordinator-prompt
+:END:
+
+~coordinator-runner.ts~ builds ~subDagItems~ with ~{id, task, dependsOn, effort, priority}~ only. The ~body~ field from ~FluidAgentNode~ (populated by ~org-fluid-plan~) is not passed to the coordinator prompt template.
+
+Fix:
+- Include ~body~ field in ~subDagItems~ mapping in ~coordinator-runner.ts~
+- Update ~coordinator.md~ Handlebars template to include item body (scope, tests, edge cases, acceptance criteria)
+- For sub-outline nodes: body is the sub-heading content; the parent item's scope/tests sections should also be available (may require org-fluid-plan to emit parent body)
+
+Files: ~packages/coding-agent/src/orchestrators/fluid/coordinator-runner.ts~, ~packages/coding-agent/src/prompts/agents/coordinator.md~
+
+** Add sub-plan validation
+:PROPERTIES:
+:CUSTOM_ID: FUP-012-fluid-orchestration-wiring-prerequisi::sub-plan-validation
+:END:
+
+~validatePlan~ is called only on the top-level coordinator plan. Sub-plans passed to coordinator nodes skip validation entirely. An 80+ node sub-plan inside one coordinator receives no cycle detection, no dependency integrity check.
+
+Fix: Run ~validatePlan~ on each component's sub-plan in ~FluidOrchestrator.execute()~ before wrapping in coordinator nodes.
+
+Files: ~packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts~, ~packages/coding-agent/src/orchestrators/fluid/dag.ts~
+
+** Configure concurrency limits
+:PROPERTIES:
+:CUSTOM_ID: FUP-012-fluid-orchestration-wiring-prerequisi::concurrency-limits
+:END:
+
+No global subprocess concurrency cap across coordinator nodes. Multiple concurrent coordinators can each spawn parallel agents. With 98 nodes and concurrency=5 per coordinator, this could create many concurrent API calls.
+
+Fix:
+- Make ~MAX_RECOMMENDED_AGENT_COUNT~ configurable via settings (~fluid.maxAgents~) or suppress for legitimate large plans
+- Consider a shared semaphore for subprocess spawning across coordinators
+- Use ~fluid.concurrency~ setting (already exists, default 5) but verify it applies to coordinator-spawned subprocesses too
+
+Files: ~packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts~, ~packages/coding-agent/src/orchestrators/fluid/queue-scheduler.ts~
+
+* Edge Cases
+- org-fluid-plan MCP call fails (Emacs not running): fall back to wave-based execution or error gracefully
+- Sub-outline CUSTOM_IDs not found: org-fluid-plan emits warnings, partial plan still executes
+- Deferred nodes with downstream dependents: dependents should still execute (deferred counts as completed)
+- Coordinator subprocess crash: QueueScheduler marks node failed, propagates to dependents
+
+* Acceptance Criteria
+- ~spell --canvas fluid~ with an org plan containing [[id:...]] links produces a FluidPlan via org-fluid-plan
+- Plan approval flow populates fluidPlan in ExitPlanModeDetails
+- FluidOrchestrator executes the plan (not legacy prompt injection)
+- FUP items with deferred flag are skipped during execution
+- Coordinator agents receive full body context for sub-outline nodes
+- Sub-plans are validated before execution
+
+* Additional Implementation Tasks (from Daedalus review)
+
+** Implement sub-outline CUSTOM_ID resolution in org-fluid-plan.el
+:PROPERTIES:
+:CUSTOM_ID: FUP-012-fluid-orchestration-wiring-prerequisi::sub-outline-id-resolution
+:END:
+
+CRITICAL: org-fluid-plan uses org-element-map which CAN find nested headings, but [[id:PARENT::sub-slug]] links may not resolve via org-id-find. Verify with sub-heading CUSTOM_IDs. If not working, implement fallback: for IDs containing ::, split on ::, find parent, search child headings.
+
+Files: packages/org/elisp/tools/org-fluid-plan.el, packages/org/elisp/test/test-org-fluid-plan.el
+
+** Implement sub-outline body emission in org-fluid-plan.el
+:PROPERTIES:
+:CUSTOM_ID: FUP-012-fluid-orchestration-wiring-prerequisi::sub-outline-body-emission
+:DEPENDS: FUP-012-fluid-orchestration-wiring-prerequisi::sub-outline-id-resolution
+:END:
+
+When resolving a sub-outline heading, emit both: (1) sub-heading body content, (2) parent item Scope/Tests/Acceptance sections as parentBody field. Coordinator prompt template needs both for adequate context.
+
+Files: packages/org/elisp/tools/org-fluid-plan.el
+
+** Specify deferred detection mechanism
+:PROPERTIES:
+:CUSTOM_ID: FUP-012-fluid-orchestration-wiring-prerequisi::deferred-detection
+:DEPENDS: FUP-012-fluid-orchestration-wiring-prerequisi::add-deferred-flag
+:END:
+
+Detection: item is deferred if CUSTOM_ID starts with FUP-. Matches existing convention. org-fluid-plan.el checks prefix and sets deferred=true in emitted JSON.

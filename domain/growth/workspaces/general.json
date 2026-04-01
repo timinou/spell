@@ -1,0 +1,8 @@
+{
+  "id": "general",
+  "name": "General",
+  "icon": "home",
+  "panels": [
+    { "panelId": "chat", "position": "main" }
+  ]
+}

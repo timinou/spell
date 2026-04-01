@@ -1,0 +1,1061 @@
+#+TITLE: Scraper Framework — Native TypeScript Extraction Engine
+#+AUTHOR: Spell Growth
+#+DATE: 2026-03-31
+#+PROPERTY: header-args :eval no
+
+* Overview
+
+The scraper framework is a native TypeScript extraction engine that ports the
+declarative YAML DSL from =~/code/ora/leadgen/configs/= into Spell's runtime.
+Configs define /what/ to scrape — selectors, transforms, pagination, error
+handling. The engine executes those configs against live pages using QML
+WebEngine (=BrowserWindow.qml=) as the browser backend.
+
+The result is a single-runtime, type-safe, declarative scraping system that
+shares Spell's build tooling, its QML canvas, and its SQLite persistence
+layer — with zero Python/pip/uv dependency overhead.
+
+* Why Not Python
+
+The =~/code/ora/leadgen/= Python scraper works. It is also a maintenance
+island: separate runtime (CPython), separate package manager (uv/pip), separate
+virtual environment, separate test infrastructure, separate CI. Every
+integration point between Spell and the Python scraper is a serialization
+boundary.
+
+Native TS eliminates all of these:
+
+| Concern            | Python (leadgen)             | TS (Spell Growth)                               |
+|--------------------+------------------------------+-------------------------------------------------|
+| Runtime            | CPython 3.11+                | Bun (already running)                            |
+| Browser automation | Playwright (separate binary) | QML WebEngine (already loaded)                   |
+| Package management | uv/pip + venv                | bun install (shared workspace)                   |
+| Config validation  | Runtime dicts                | Zod schemas with full type inference              |
+| Build system       | Separate Makefile            | Shared =tsconfig=, shared =bun test=             |
+| Data flow          | JSON over stdout/files       | Direct SQLite writes, in-process event emitters   |
+| Type safety        | None on configs              | =ScraperConfig= interface, validated at load time |
+
+The QML WebEngine reuse is especially significant. =BrowserWindow.qml=
+(=packages/coding-agent/src/modes/qml/canvas/BrowserWindow.qml=) already
+provides a full Chromium instance with the =browser:= command protocol —
+navigate, evaluate JS, observe DOM, click, fill, screenshot. The scraper engine
+sends the same commands the agent's browser tool sends. No second browser
+binary, no second process model.
+
+* Design Philosophy
+
+** Declarative Configs, Imperative Engine
+
+Configs are data. They declare:
+- Where to navigate (URL templates)
+- What to wait for (selectors)
+- What to extract (field → selector → transform)
+- How to paginate (scroll, click-next, cursor)
+- How to handle errors (retry, abort, skip)
+
+The engine is imperative TypeScript that interprets these declarations. This
+separation means:
+1. Adding a new scraping target is a YAML file, not code.
+2. The engine is tested once against the config schema; configs are tested
+   against real pages.
+3. Non-engineers can read and modify configs.
+
+** Configs Are Not Code
+
+Configs must not contain arbitrary logic. The =transform= field supports a fixed
+set of operations (regex, replace, exists, chain). If a scraping target requires
+custom extraction logic, it gets a named =ExtractorPlugin= registered in
+TypeScript — not inline code in YAML.
+
+** Fail Loud, Recover Gracefully
+
+Every field extraction either succeeds and returns typed data, or fails with a
+structured error that includes: the selector that failed, the page URL, a
+screenshot path, and the config that produced it. The =required= flag on fields
+controls whether a missing field aborts the record or produces a partial result.
+
+* Config Schema
+
+** Top-Level Config
+
+#+begin_src typescript
+interface ScraperConfig {
+  name: string;               // e.g. "facebook-ads-library"
+  version: string;            // semver, for migration
+  description?: string;
+
+  browser: BrowserConfig;
+  containers: Record<string, ContainerConfig>;
+  errorHandling: ErrorHandlingConfig;
+}
+
+interface BrowserConfig {
+  headless: boolean;          // false = use visible QML WebEngine
+  viewport: [width: number, height: number];
+  stealth: boolean;           // UA rotation, webdriver flag suppression
+  timeout: number;            // ms, global default
+}
+#+end_src
+
+** Container Config
+
+A container is a logical grouping — a page type with its own URL pattern,
+setup steps, field extractors, and pagination. The leadgen config uses
+=query= (search results page), =ads= (card list), =ad= (single card),
+=page= (Facebook page about section). Each maps to a =ContainerConfig=.
+
+#+begin_src typescript
+interface ContainerConfig {
+  url?: string;               // template: "https://...{{ page_id }}/about"
+  selector?: string;          // repeating element selector (for list containers)
+  waitFor?: string;           // selector to wait for before extraction
+  timeout?: number;           // override browser.timeout
+
+  setup?: ActionStep[];       // conditional pre-extraction actions
+  fields?: Record<string, FieldExtractor>;
+  pagination?: PaginationConfig;
+  related?: Record<string, RelatedModel>;
+  details?: DetailConfig;
+  phoneExtraction?: PhoneExtractionConfig;
+}
+#+end_src
+
+Containers form a hierarchy. =query= navigates and handles setup. =ads= selects
+repeating card elements within the query page. =ad= extracts fields from each
+card. =page= navigates to a related URL for enrichment. The engine walks this
+hierarchy depth-first.
+
+** Field Extraction
+
+#+begin_src typescript
+interface FieldExtractor {
+  selector: string;           // CSS ("css:...") or XPath ("xpath:...")
+  type: 'string' | 'integer' | 'boolean' | 'list';
+  attr?: string;              // extract attribute instead of textContent
+  transform?: Transform | Transform[];
+  required?: boolean;         // default false; true = abort record on failure
+}
+
+type Transform =
+  | { type: 'regex'; pattern: string }            // capture group 1
+  | { type: 'replace'; find: string; replaceWith: string }
+  | { type: 'exists'; value: boolean }            // selector exists → value
+  | { type: 'chain'; transforms: Transform[] }    // sequential pipeline
+  | { type: 'trim' }
+  | { type: 'lowercase' }
+  | { type: 'parseDate'; format?: string }        // string → ISO 8601
+  | { type: 'parseInt' }
+  | { type: 'parseCurrency'; locale?: string };   // "$1,234" → 1234
+#+end_src
+
+Transforms are pure functions. Each takes a =string | null= and returns
+=string | number | boolean | null=. The =chain= transform composes them
+left-to-right. If any transform in a chain returns =null=, the chain
+short-circuits and the field value is =null=.
+
+** Setup Actions
+
+#+begin_src typescript
+type ActionStep =
+  | { type: 'click'; selector: string }
+  | { type: 'fill'; selector: string; value: string }
+  | { type: 'waitTime'; ms: number }
+  | { type: 'waitSelector'; selector: string; timeout?: number }
+  | { type: 'press'; key: string }
+  | { type: 'scroll'; delta: number }
+  | { type: 'evaluate'; script: string }          // escape hatch, logged
+  | { type: 'if'; condition: Condition; then: ActionStep[]; else?: ActionStep[] };
+
+type Condition =
+  | { exists: string }        // selector exists in DOM
+  | { not: Condition }
+  | { and: Condition[] }
+  | { or: Condition[] };
+#+end_src
+
+The =if= action handles modals, cookie banners, login walls — anything that
+may or may not appear. The leadgen config uses this for cookie acceptance and
+dialog dismissal. The =evaluate= action is an escape hatch for cases where
+declarative actions are insufficient; its use is logged and flagged in config
+validation warnings.
+
+** Pagination
+
+#+begin_src typescript
+type PaginationConfig =
+  | {
+      type: 'infinite_scroll';
+      scrollContainer: string;    // selector
+      waitAfterScroll: number;    // seconds
+      maxItems: number;
+      noNewContentTimeout?: number; // ms, stop if no new items after scroll
+    }
+  | {
+      type: 'click_next';
+      selector: string;           // next button
+      waitAfterClick: number;
+      maxPages: number;
+    }
+  | {
+      type: 'cursor';
+      paramName: string;          // URL query param for cursor
+      extractCursor: FieldExtractor; // how to get next cursor from page
+      maxPages: number;
+    };
+#+end_src
+
+Facebook Ads Library uses =infinite_scroll=. The engine scrolls, waits, counts
+new elements matching the container selector, and stops when either =maxItems=
+is reached or no new content appears within =noNewContentTimeout=.
+
+** Related Models & Details
+
+#+begin_src typescript
+interface RelatedModel {
+  model: string;               // e.g. "FacebookPage" — names the SQLite table
+  fields: Record<string, FieldExtractor>;
+}
+
+interface DetailConfig {
+  trigger: {
+    click: string;             // selector to open detail view
+    wait: string;              // selector to wait for after click
+    timeout?: number;
+  };
+  fields: Record<string, FieldExtractor>;
+  close: {
+    press?: string;            // e.g. "Escape"
+    click?: string;            // fallback close button
+    wait?: number;             // ms delay after close
+  };
+}
+#+end_src
+
+Details handle the "See ad details" pattern: click to expand a dialog, extract
+spend/impressions/snapshot URL, close the dialog, move to the next card.
+
+** Phone Extraction
+
+#+begin_src typescript
+interface PhoneExtractionConfig {
+  searchFields: string[];     // field names whose values to scan
+  patterns: string[];         // regex patterns, tested in order
+  origins: Record<string, string>; // field → origin label for provenance
+
+  whatsapp?: {
+    selector: string;
+    attr: string;
+    transform: Transform;
+    origin: string;
+  };
+}
+#+end_src
+
+Phone extraction is a post-processing pass. After all fields are extracted for
+a record, the engine scans the specified fields' text values against the regex
+patterns. Matches are stored with their origin label for deduplication and
+provenance tracking.
+
+** Error Handling
+
+#+begin_src typescript
+interface ErrorHandlingConfig {
+  retries: number;
+  retryDelay: number;         // seconds
+  missingField: 'skip' | 'abort' | 'warn';
+  screenshotOnError: boolean;
+  screenshotDir: string;
+
+  rateLimit: {
+    requestsPerMinute: number;
+    backoffMultiplier: number;
+  };
+
+  errorIndicators: Array<{
+    selector: string;
+    action: 'wait_and_retry' | 'abort' | 'skip';
+    wait?: number;            // seconds (for wait_and_retry)
+    message: string;
+  }>;
+}
+#+end_src
+
+Error indicators are checked after every navigation and before extraction. If
+the page matches a known error state (rate limit banner, login wall, 404), the
+engine takes the prescribed action without attempting extraction. This prevents
+garbage data from error pages.
+
+* Engine Architecture
+
+#+begin_example
+┌─────────────────────────────────────────────────────────┐
+│                     ScraperEngine                       │
+│                                                         │
+│  ┌──────────┐  ┌───────────┐  ┌──────────┐             │
+│  │ Config   │→ │ Scheduler │→ │ Browser  │             │
+│  │ Loader   │  │           │  │ Pool     │             │
+│  └──────────┘  └─────┬─────┘  └────┬─────┘             │
+│                      │              │                    │
+│                      ▼              ▼                    │
+│  ┌──────────┐  ┌───────────┐  ┌──────────┐             │
+│  │ Rate     │← │ Extractor │← │ WebEngine│             │
+│  │ Limiter  │  │           │  │ (QML)    │             │
+│  └──────────┘  └─────┬─────┘  └──────────┘             │
+│                      │                                   │
+│         ┌────────────┼────────────┐                      │
+│         ▼            ▼            ▼                      │
+│  ┌──────────┐  ┌───────────┐  ┌──────────┐             │
+│  │Transform │  │ Paginator │  │ Phone    │             │
+│  │ Pipeline │  │           │  │ Extractor│             │
+│  └──────────┘  └───────────┘  └──────────┘             │
+│         │                                                │
+│         ▼                                                │
+│  ┌──────────┐  ┌───────────┐                            │
+│  │ Persister│→ │ SQLite    │                            │
+│  │          │  │           │                            │
+│  └──────────┘  └───────────┘                            │
+└─────────────────────────────────────────────────────────┘
+#+end_example
+
+** ConfigLoader
+
+Reads YAML or JSON config files, validates them against the Zod schema, and
+resolves template variables. Template variables use Mustache-style
+=\{\{ variable \}\}= syntax.
+
+#+begin_src typescript
+// domain/growth/src/scraper/config-loader.ts
+
+import { z } from 'zod';
+import { parse as parseYaml } from 'yaml';
+
+const ScraperConfigSchema = z.object({
+  name: z.string(),
+  version: z.string(),
+  description: z.string().optional(),
+  browser: BrowserConfigSchema,
+  containers: z.record(ContainerConfigSchema),
+  errorHandling: ErrorHandlingConfigSchema,
+});
+
+export class ConfigLoader {
+  /**
+   * Load and validate a scraper config.
+   * Throws ZodError with path-annotated messages on invalid config.
+   */
+  async load(path: string): Promise<ScraperConfig> {
+    const raw = await Bun.file(path).text();
+    const parsed = path.endsWith('.yaml') || path.endsWith('.yml')
+      ? parseYaml(raw)
+      : JSON.parse(raw);
+    return ScraperConfigSchema.parse(parsed);
+  }
+
+  /**
+   * Resolve template variables in URL strings.
+   * Variables: {{ key }} replaced from context map.
+   * Unresolved variables throw — no silent empty strings.
+   */
+  resolveUrl(template: string, vars: Record<string, string>): string {
+    return template.replace(/\{\{\s*(\w+(?:\.\w+)*)\s*\}\}/g, (match, key) => {
+      const value = key.split('.').reduce(
+        (obj: Record<string, unknown>, k: string) => obj?.[k] as Record<string, unknown>,
+        vars as Record<string, unknown>,
+      );
+      if (value === undefined) throw new Error(`Unresolved template variable: ${key}`);
+      return String(value);
+    });
+  }
+}
+#+end_src
+
+Key design decision: the Zod schema is the single source of truth for config
+validation. TypeScript interfaces are inferred from the schema via =z.infer=,
+not maintained separately. This eliminates the class of bug where the interface
+and the runtime validator disagree.
+
+** BrowserPool
+
+Manages WebEngine instances. In canvas mode, the pool wraps the QML
+=BrowserWindow.qml= instances via the =browser:= command protocol. In headless
+mode (CI, background jobs), it spawns offscreen WebEngine instances.
+
+#+begin_src typescript
+// domain/growth/src/scraper/browser-pool.ts
+
+export interface BrowserHandle {
+  readonly id: string;
+
+  goto(url: string): Promise<void>;
+  waitForSelector(selector: string, timeout: number): Promise<void>;
+  evaluate<T>(script: string): Promise<T>;
+  click(selector: string): Promise<void>;
+  fill(selector: string, value: string): Promise<void>;
+  press(key: string): Promise<void>;
+  scroll(selector: string, deltaY: number): Promise<void>;
+  screenshot(path: string): Promise<void>;
+  getText(selector: string): Promise<string | null>;
+  getAttribute(selector: string, attr: string): Promise<string | null>;
+  querySelectorAll(selector: string): Promise<number>; // count
+}
+
+export class BrowserPool {
+  private handles: Map<string, BrowserHandle> = new Map();
+  private available: BrowserHandle[] = [];
+  private maxConcurrency: number;
+
+  constructor(opts: { maxConcurrency?: number } = {}) {
+    this.maxConcurrency = opts.maxConcurrency ?? 2;
+  }
+
+  /**
+   * Acquire a browser handle. Blocks if pool is at capacity.
+   * Returns a handle that MUST be released after use.
+   */
+  async acquire(config: BrowserConfig): Promise<BrowserHandle> { /* ... */ }
+
+  /** Return a handle to the pool for reuse. */
+  release(handle: BrowserHandle): void { /* ... */ }
+
+  /** Shut down all browser instances. */
+  async dispose(): Promise<void> { /* ... */ }
+}
+#+end_src
+
+The =BrowserHandle= interface mirrors the =browser:= command protocol exactly.
+When running inside the QML canvas, =acquire()= sends a =canvas.launch= for a
+=BrowserWindow.qml= and returns a handle that forwards method calls as
+=send_message= payloads. When running headless, it uses offscreen WebEngine.
+
+Pool size defaults to 2 — enough for parallel detail-page extraction without
+overwhelming the target site. The rate limiter provides the actual throttle;
+the pool prevents resource exhaustion.
+
+** Extractor
+
+The core extraction loop. Given a container config and a browser handle
+positioned on the right page, it extracts all fields into a typed record.
+
+#+begin_src typescript
+// domain/growth/src/scraper/extractor.ts
+
+export interface ExtractionResult {
+  records: Record<string, unknown>[];
+  errors: ExtractionError[];
+  stats: { total: number; succeeded: number; failed: number; partial: number };
+}
+
+export interface ExtractionError {
+  field: string;
+  selector: string;
+  url: string;
+  message: string;
+  screenshotPath?: string;
+}
+
+export class Extractor {
+  constructor(
+    private browser: BrowserHandle,
+    private transforms: TransformPipeline,
+    private config: ErrorHandlingConfig,
+  ) {}
+
+  /**
+   * Extract all fields from the current page/element context.
+   * Handles required vs optional fields per config.
+   * Returns partial records when missingField is 'skip' or 'warn'.
+   */
+  async extractFields(
+    fields: Record<string, FieldExtractor>,
+    context: { url: string; containerName: string },
+  ): Promise<{ record: Record<string, unknown>; errors: ExtractionError[] }> {
+    const record: Record<string, unknown> = {};
+    const errors: ExtractionError[] = [];
+
+    for (const [name, extractor] of Object.entries(fields)) {
+      try {
+        const raw = extractor.attr
+          ? await this.browser.getAttribute(extractor.selector, extractor.attr)
+          : await this.browser.getText(extractor.selector);
+
+        record[name] = raw !== null
+          ? this.transforms.apply(raw, extractor.transform, extractor.type)
+          : null;
+
+        if (record[name] === null && extractor.required) {
+          throw new Error(`Required field "${name}" is null after extraction`);
+        }
+      } catch (err) {
+        const error: ExtractionError = {
+          field: name,
+          selector: extractor.selector,
+          url: context.url,
+          message: err instanceof Error ? err.message : String(err),
+        };
+
+        if (this.config.screenshotOnError) {
+          error.screenshotPath = `${this.config.screenshotDir}/${context.containerName}-${name}-${Date.now()}.png`;
+          await this.browser.screenshot(error.screenshotPath);
+        }
+
+        errors.push(error);
+
+        if (extractor.required && this.config.missingField === 'abort') {
+          break; // abort this record
+        }
+      }
+    }
+
+    return { record, errors };
+  }
+}
+#+end_src
+
+** TransformPipeline
+
+Pure-function transform chain. No side effects, no async, no DOM access.
+
+#+begin_src typescript
+// domain/growth/src/scraper/transforms.ts
+
+export class TransformPipeline {
+  apply(
+    value: string,
+    transform: Transform | Transform[] | undefined,
+    targetType: FieldExtractor['type'],
+  ): string | number | boolean | string[] | null {
+    if (!transform) return this.coerce(value, targetType);
+
+    const transforms = Array.isArray(transform) ? transform : [transform];
+    let current: string | null = value;
+
+    for (const t of transforms) {
+      if (current === null) return null; // short-circuit
+      current = this.applyOne(current, t);
+    }
+
+    return current !== null ? this.coerce(current, targetType) : null;
+  }
+
+  private applyOne(value: string, transform: Transform): string | null {
+    switch (transform.type) {
+      case 'regex': {
+        const match = value.match(new RegExp(transform.pattern));
+        // Return first capture group, or full match, or null
+        return match?.[1] ?? match?.[0] ?? null;
+      }
+      case 'replace':
+        return value.replaceAll(transform.find, transform.replaceWith);
+      case 'exists':
+        return transform.value ? 'true' : 'false'; // coerced later
+      case 'chain':
+        return transform.transforms.reduce<string | null>(
+          (v, t) => v !== null ? this.applyOne(v, t) : null,
+          value,
+        );
+      case 'trim':
+        return value.trim();
+      case 'lowercase':
+        return value.toLowerCase();
+      case 'parseDate': {
+        const date = new Date(value);
+        return isNaN(date.getTime()) ? null : date.toISOString();
+      }
+      case 'parseInt':
+        return value.replace(/[^\d-]/g, '') || null;
+      case 'parseCurrency':
+        return value.replace(/[^\d.-]/g, '') || null;
+    }
+  }
+
+  private coerce(
+    value: string,
+    type: FieldExtractor['type'],
+  ): string | number | boolean | string[] {
+    switch (type) {
+      case 'string': return value;
+      case 'integer': return parseInt(value, 10) || 0;
+      case 'boolean': return value === 'true' || value === '1';
+      case 'list': return value.split('\n').map(s => s.trim()).filter(Boolean);
+    }
+  }
+}
+#+end_src
+
+** Paginator
+
+Handles the three pagination strategies. Each returns an async iterator of
+"page-ready" signals — the caller extracts records after each signal.
+
+#+begin_src typescript
+// domain/growth/src/scraper/paginator.ts
+
+export class Paginator {
+  constructor(private browser: BrowserHandle) {}
+
+  /**
+   * Yields once per page/scroll batch.
+   * The caller extracts records after each yield.
+   * Returns total items seen for progress reporting.
+   */
+  async *paginate(
+    config: PaginationConfig,
+    containerSelector: string,
+  ): AsyncGenerator<{ itemsSoFar: number }, void, void> {
+    switch (config.type) {
+      case 'infinite_scroll':
+        yield* this.infiniteScroll(config, containerSelector);
+        break;
+      case 'click_next':
+        yield* this.clickNext(config);
+        break;
+      case 'cursor':
+        yield* this.cursorBased(config);
+        break;
+    }
+  }
+
+  private async *infiniteScroll(
+    config: Extract<PaginationConfig, { type: 'infinite_scroll' }>,
+    containerSelector: string,
+  ): AsyncGenerator<{ itemsSoFar: number }> {
+    let previousCount = 0;
+    let staleScrolls = 0;
+    const maxStale = 3; // stop after 3 scrolls with no new content
+
+    while (true) {
+      const currentCount = await this.browser.querySelectorAll(containerSelector);
+      if (currentCount >= config.maxItems) break;
+
+      if (currentCount === previousCount) {
+        staleScrolls++;
+        if (staleScrolls >= maxStale) break;
+      } else {
+        staleScrolls = 0;
+      }
+
+      previousCount = currentCount;
+      yield { itemsSoFar: currentCount };
+
+      await this.browser.scroll(
+        config.scrollContainer,
+        3000, // scroll down
+      );
+      await sleep(config.waitAfterScroll * 1000);
+    }
+  }
+
+  // clickNext and cursorBased follow the same async generator pattern
+}
+#+end_src
+
+** RateLimiter
+
+Token bucket per domain. Shared across all browser handles targeting the same
+domain.
+
+#+begin_src typescript
+// domain/growth/src/scraper/rate-limiter.ts
+
+export class RateLimiter {
+  private buckets: Map<string, TokenBucket> = new Map();
+
+  constructor(private defaults: ErrorHandlingConfig['rateLimit']) {}
+
+  /**
+   * Wait until a request to this domain is permitted.
+   * Applies exponential backoff on consecutive rate-limit hits.
+   */
+  async acquire(domain: string): Promise<void> {
+    let bucket = this.buckets.get(domain);
+    if (!bucket) {
+      bucket = new TokenBucket(this.defaults.requestsPerMinute);
+      this.buckets.set(domain, bucket);
+    }
+    await bucket.acquire();
+  }
+
+  /** Record a rate-limit response. Increases backoff for next acquire. */
+  recordRateLimit(domain: string): void {
+    const bucket = this.buckets.get(domain);
+    bucket?.backoff(this.defaults.backoffMultiplier);
+  }
+}
+
+class TokenBucket {
+  private tokens: number;
+  private lastRefill: number = Date.now();
+  private backoffMs: number = 0;
+
+  constructor(private tokensPerMinute: number) {
+    this.tokens = tokensPerMinute;
+  }
+
+  async acquire(): Promise<void> {
+    this.refill();
+    if (this.backoffMs > 0) {
+      await sleep(this.backoffMs);
+      this.backoffMs = 0;
+    }
+    while (this.tokens <= 0) {
+      await sleep(1000);
+      this.refill();
+    }
+    this.tokens--;
+  }
+
+  backoff(multiplier: number): void {
+    this.backoffMs = Math.max(this.backoffMs, 5000) * multiplier;
+  }
+
+  private refill(): void {
+    const elapsed = Date.now() - this.lastRefill;
+    const newTokens = (elapsed / 60_000) * this.tokensPerMinute;
+    this.tokens = Math.min(this.tokensPerMinute, this.tokens + newTokens);
+    this.lastRefill = Date.now();
+  }
+}
+#+end_src
+
+** Persister
+
+Writes extraction results to SQLite. Schema is derived from the config's field
+definitions — each container with fields produces a table, each field produces
+a column with the appropriate SQLite type.
+
+#+begin_src typescript
+// domain/growth/src/scraper/persister.ts
+
+import { Database } from 'bun:sqlite';
+
+export class Persister {
+  private db: Database;
+
+  constructor(dbPath: string) {
+    this.db = new Database(dbPath);
+    this.db.run('PRAGMA journal_mode = WAL');
+    this.db.run('PRAGMA foreign_keys = ON');
+  }
+
+  /**
+   * Create tables for a scraper config.
+   * Idempotent — uses CREATE TABLE IF NOT EXISTS.
+   * Adds _scraped_at, _config_version, _source_url metadata columns.
+   */
+  ensureSchema(config: ScraperConfig): void {
+    for (const [name, container] of Object.entries(config.containers)) {
+      if (!container.fields) continue;
+
+      const columns = [
+        'id INTEGER PRIMARY KEY AUTOINCREMENT',
+        '_scraped_at TEXT NOT NULL DEFAULT (datetime("now"))',
+        '_config_version TEXT NOT NULL',
+        '_source_url TEXT',
+        ...Object.entries(container.fields).map(([field, ext]) =>
+          `${field} ${sqliteType(ext.type)}${ext.required ? ' NOT NULL' : ''}`
+        ),
+      ];
+
+      this.db.run(`CREATE TABLE IF NOT EXISTS ${name} (${columns.join(', ')})`);
+
+      // Related models get their own tables with a foreign key
+      if (container.related) {
+        for (const [relName, rel] of Object.entries(container.related)) {
+          const relColumns = [
+            'id INTEGER PRIMARY KEY AUTOINCREMENT',
+            `${name}_id INTEGER REFERENCES ${name}(id)`,
+            ...Object.entries(rel.fields).map(([field, ext]) =>
+              `${field} ${sqliteType(ext.type)}${ext.required ? ' NOT NULL' : ''}`
+            ),
+          ];
+          this.db.run(
+            `CREATE TABLE IF NOT EXISTS ${rel.model} (${relColumns.join(', ')})`,
+          );
+        }
+      }
+    }
+  }
+
+  /** Insert a record. Returns the inserted row ID. */
+  insert(table: string, record: Record<string, unknown>): number {
+    const keys = Object.keys(record);
+    const placeholders = keys.map(() => '?').join(', ');
+    const stmt = this.db.prepare(
+      `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`,
+    );
+    const result = stmt.run(...keys.map(k => record[k]));
+    return Number(result.lastInsertRowid);
+  }
+}
+
+function sqliteType(fieldType: FieldExtractor['type']): string {
+  switch (fieldType) {
+    case 'string': return 'TEXT';
+    case 'integer': return 'INTEGER';
+    case 'boolean': return 'INTEGER'; // 0/1
+    case 'list': return 'TEXT';       // JSON array
+  }
+}
+#+end_src
+
+* Facebook Ads Library Config
+
+Direct port of =~/code/ora/leadgen/configs/facebook-ads-library.yaml=. This
+is the reference config that validates the framework can express everything
+the Python version handles.
+
+** Config File
+
+Located at =domain/growth/configs/scrapers/facebook-ads-library.yaml=.
+
+Key containers:
+
+| Container | Purpose                                      | Pagination      | Fields                                                       |
+|-----------+----------------------------------------------+-----------------+--------------------------------------------------------------|
+| =query=   | Navigate to search URL, handle cookie/modals | —               | — (setup only)                                               |
+| =ads=     | Repeating ad cards on search results         | infinite_scroll | —                                                            |
+| =ad=      | Single ad card extraction                    | —               | ad_id, creative_bodies, link_titles, delivery_start, active  |
+| =page=    | Facebook page enrichment (/about)            | —               | phone, email, website, address, category                     |
+
+** Field Mapping from Leadgen
+
+The leadgen config's field selectors target Facebook's dynamic DOM structure
+using XPath for structural queries and CSS for attribute-based queries. The TS
+config preserves these exactly — the selectors are data, not code.
+
+Notable transforms:
+
+- =ad_id=: Regex =(Library ID:\s*(\d+))= extracts numeric ID from label text
+- =is_active=: =exists= transform — selector matches =<strong>Active</strong>= → =true=
+- =spend_lower/upper=: Chain of regex (extract dollar amount) → replace (strip commas)
+- =page_id=: Regex on =href= attribute to extract =view_all_page_id= param
+
+** Detail Extraction
+
+The "See ad details" dialog provides spend ranges, impression ranges, and
+snapshot URLs that aren't visible in the card view. The engine:
+
+1. Clicks the trigger selector
+2. Waits for the dialog (=css:[role='dialog']=)
+3. Extracts detail fields
+4. Presses Escape to close
+5. Waits 500ms for animation
+6. Moves to next card
+
+This sequential click-extract-close loop is inherently serial per page. The
+engine parallelizes across /pages/ (multiple search queries), not within a
+single search result.
+
+** Phone Extraction
+
+Post-processing pass over =ad_creative_bodies= and =ad_creative_link_descriptions=.
+Three regex patterns in priority order:
+
+1. US format: =\+?1?[-. ]?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}=
+2. International: =\+\d{1,3}[-. ]?\d{3,4}[-. ]?\d{3,4}[-. ]?\d{3,4}=
+3. Simple: =\b\d{3}[-.]?\d{3}[-.]?\d{4}\b=
+
+WhatsApp numbers are extracted separately from =wa.me= and =whatsapp= links.
+Each extracted phone number carries an =origin= label (=AD_DESCRIPTION=,
+=WHATSAPP_CTA=, =PAGE_ABOUT=) for deduplication — the same number from
+different sources is stored once with all origins.
+
+** Error Indicators
+
+Three error states are detected before extraction:
+
+| Indicator    | Selector pattern                       | Action          | Wait  |
+|--------------+----------------------------------------+-----------------+-------|
+| Rate limited | =contains('rate limit')=               | wait_and_retry  | 120s  |
+| Login wall   | =contains('log in')=                   | abort           | —     |
+| Not found    | =contains('not available')=            | skip            | —     |
+
+Rate limit detection prevents the engine from extracting garbage data from
+error pages. The 120s wait matches Facebook's typical rate limit window.
+
+* Integration with Competitive Intel Panel
+
+** Data Flow
+
+#+begin_example
+  Scraper Engine                   SQLite                    QML Panel
+  ─────────────                    ──────                    ─────────
+  extract(config) ──→ persister.insert() ──→ ad table
+                                             │
+                                             ├──→ SELECT query ──→ Ad Gallery
+                                             ├──→ GROUP BY ──→ Trend Charts
+                                             └──→ DIFF ──→ Snapshot Compare
+#+end_example
+
+The scraper writes to SQLite. The competitive intel QML panel reads from
+SQLite. They share no in-memory state. This means:
+
+1. The panel can display stale data while a scrape is running.
+2. Multiple scrapes can run concurrently (WAL mode handles writes).
+3. The panel can query historical data without the scraper running.
+
+** Live Progress
+
+During active scraping, the engine emits progress events via the canvas
+=bridge.send()= protocol:
+
+#+begin_src typescript
+interface ScrapeProgressEvent {
+  type: 'scrape:progress';
+  config: string;           // config name
+  container: string;        // current container
+  itemsExtracted: number;
+  itemsTotal: number | null; // null for infinite scroll
+  errors: number;
+  currentUrl: string;
+}
+
+interface ScrapeCompleteEvent {
+  type: 'scrape:complete';
+  config: string;
+  stats: ExtractionResult['stats'];
+  duration: number;         // ms
+}
+#+end_src
+
+The competitive intel panel listens for these events and updates a progress
+bar / live counter. When a scrape completes, the panel refreshes its SQLite
+queries.
+
+** Snapshot Comparison
+
+Each scrape run produces a timestamped snapshot. The panel provides a diff
+view:
+
+- New ads (present in current, absent in previous by =ad_id=)
+- Removed ads (present in previous, absent in current)
+- Changed ads (same =ad_id=, different =is_active= or =spend= range)
+
+This is a SQL query, not application logic:
+
+#+begin_src sql
+-- New ads since last scan
+SELECT c.* FROM ad c
+LEFT JOIN ad p ON c.ad_id = p.ad_id
+  AND p._scraped_at = (
+    SELECT MAX(_scraped_at) FROM ad
+    WHERE _scraped_at < (SELECT MAX(_scraped_at) FROM ad)
+  )
+WHERE p.ad_id IS NULL
+  AND c._scraped_at = (SELECT MAX(_scraped_at) FROM ad);
+#+end_src
+
+* File Layout
+
+#+begin_example
+domain/growth/
+├── configs/
+│   └── scrapers/
+│       ├── facebook-ads-library.yaml    # Direct port from leadgen
+│       └── schema.json                  # JSON Schema for config validation
+├── src/
+│   └── scraper/
+│       ├── index.ts                     # Public API: runScraper(configPath, opts)
+│       ├── config-loader.ts             # YAML/JSON → validated ScraperConfig
+│       ├── engine.ts                    # Orchestrator: walks containers, coordinates components
+│       ├── browser-pool.ts              # WebEngine instance management
+│       ├── extractor.ts                 # Field extraction from DOM
+│       ├── transforms.ts                # Pure transform pipeline
+│       ├── paginator.ts                 # Infinite scroll / click-next / cursor
+│       ├── rate-limiter.ts              # Token bucket per domain
+│       ├── persister.ts                 # SQLite schema derivation + writes
+│       ├── phone-extractor.ts           # Post-processing phone/WhatsApp extraction
+│       └── error-handler.ts             # Error indicator matching + retry logic
+└── test/
+    └── scraper/
+        ├── transforms.test.ts           # Pure function tests — no DOM needed
+        ├── config-loader.test.ts        # Schema validation tests
+        ├── persister.test.ts            # SQLite schema generation tests
+        └── engine.integration.test.ts   # Full pipeline with mock BrowserHandle
+#+end_example
+
+* Public API
+
+The scraper framework exposes a single entry point:
+
+#+begin_src typescript
+// domain/growth/src/scraper/index.ts
+
+export interface ScraperOptions {
+  /** SQLite database path. Default: project .spell/growth.db */
+  dbPath?: string;
+  /** Override browser config (e.g. headless: false for debugging) */
+  browser?: Partial<BrowserConfig>;
+  /** Template variables for URL resolution */
+  vars?: Record<string, string>;
+  /** Progress callback */
+  onProgress?: (event: ScrapeProgressEvent) => void;
+  /** Max concurrent browser instances. Default: 2 */
+  concurrency?: number;
+  /** Abort signal for cancellation */
+  signal?: AbortSignal;
+}
+
+/**
+ * Run a scraper config end-to-end.
+ * Loads config, creates schema, extracts data, persists results.
+ * Returns stats and any errors encountered.
+ */
+export async function runScraper(
+  configPath: string,
+  options?: ScraperOptions,
+): Promise<ExtractionResult> { /* ... */ }
+#+end_src
+
+From the growth modes, a =/review= or =/campaign= session invokes:
+
+#+begin_src typescript
+const result = await runScraper(
+  'domain/growth/configs/scrapers/facebook-ads-library.yaml',
+  {
+    vars: { 'query.url': 'https://www.facebook.com/ads/library/?q=competitor+name' },
+    onProgress: (e) => bridge.send(e),
+    signal: AbortSignal.timeout(300_000), // 5 min max
+  },
+);
+#+end_src
+
+* Testing Strategy
+
+** Unit Tests (no browser, no DOM)
+
+- =transforms.test.ts=: Every transform type with edge cases (null input,
+  empty string, malformed regex, chain short-circuit).
+- =config-loader.test.ts=: Valid configs pass, invalid configs produce
+  actionable Zod errors with paths. Template resolution with missing vars
+  throws.
+- =persister.test.ts=: Schema derivation produces correct CREATE TABLE
+  statements. Insert/query round-trip. Related model foreign keys.
+
+** Integration Tests (mock BrowserHandle)
+
+- =engine.integration.test.ts=: Mock =BrowserHandle= that returns canned HTML
+  responses. Verifies the full pipeline: config load → setup actions → field
+  extraction → transform → pagination → persist → phone extraction.
+- Error indicator detection: mock page with rate-limit text → engine waits and
+  retries.
+- Detail extraction: mock dialog open/close cycle.
+
+** No Mocks of the Transform Pipeline
+
+Transforms are pure functions. They are tested directly with real inputs, not
+mocked. The =BrowserHandle= interface is the only test double — it represents
+an external system (the browser) that we cannot control in unit tests.
+
+* Open Questions
+
+- *Selector stability*: Facebook changes DOM structure frequently. Should
+  configs include a =selectorVersion= field with fallback selectors, or rely
+  on the error-screenshot-fix cycle?
+- *Concurrent detail extraction*: Could open multiple dialogs in separate tabs
+  to parallelize detail extraction. Worth the complexity?
+- *Config inheritance*: Multiple Facebook configs (different countries,
+  different queries) share 90% of their structure. Support =extends= in
+  configs, or use YAML anchors?
+- *Incremental scraping*: Resume a failed scrape from the last successful
+  =ad_id= instead of re-scraping everything. Requires cursor checkpointing.

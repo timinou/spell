@@ -1,0 +1,74 @@
+#+TITLE: Campaign Planner Board
+#+STATE: DONE
+#+SESSION_ID: 14a899a7fbc415d6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/35-CreateRemainingFeats.jsonl]]
+#+CUSTOM_ID: FEAT-143-campaign-planner-board
+#+EFFORT: 22h
+#+PRIORITY: #B
+#+LAYER: ui
+#+DEPENDS: PROJ-013-growth-qml-shell-and-workspace-system
+
+* Scope
+** In
+- Kanban QML component for campaign management
+- Columns: Planning, Active, Paused, Completed
+- Campaign cards: title, budget, date range, status, assigned creative briefs
+- Drag to reorder/move between columns
+- Agent creates/moves cards via armed tools
+- Data persisted in SQLite campaigns table
+** Out
+- Campaign analytics/reporting
+- Campaign budget alerting
+** Boundary
+- UI layer only; domain data access via existing SQLite bindings
+
+* Tests
+- tests/features/campaign-planner/kanban.test.ts
+- tests/features/campaign-planner/armed-tools.test.ts
+- tests/features/campaign-planner/drag-drop.test.ts
+
+* Implementation
+** Define Campaign Types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-143-campaign-planner-board::define-campaign-types
+:DEPENDS:
+:END:
+Define TypeScript types and SQLite schema for campaigns table. Fields: id, title, budget, date_range_start, date_range_end, status (enum: Planning|Active|Paused|Completed), assigned_brief_ids (JSON array).
+
+** Create Kanban QML
+:PROPERTIES:
+:CUSTOM_ID: FEAT-143-campaign-planner-board::create-kanban-qml
+:DEPENDS: FEAT-143-campaign-planner-board::define-campaign-types
+:END:
+KanbanBoard.qml with four column delegates. CampaignCard.qml showing title, budget, date range, status badge, brief count. Column headers with item count badges.
+
+** Implement Drag and Drop
+:PROPERTIES:
+:CUSTOM_ID: FEAT-143-campaign-planner-board::implement-drag-drop
+:DEPENDS: FEAT-143-campaign-planner-board::create-kanban-qml
+:END:
+QML drag-drop with DragHandler and DropArea per column. Reorder within column and move between columns. Persist new status/order on drop.
+
+** Implement Armed Tools
+:PROPERTIES:
+:CUSTOM_ID: FEAT-143-campaign-planner-board::implement-armed-tools
+:DEPENDS: FEAT-143-campaign-planner-board::define-campaign-types
+:END:
+Armed tool definitions: create_campaign, move_campaign, update_campaign. Tool invocations update SQLite and emit QML model signals.
+
+** Write Tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-143-campaign-planner-board::write-tests
+:DEPENDS: FEAT-143-campaign-planner-board::implement-drag-drop, FEAT-143-campaign-planner-board::implement-armed-tools
+:END:
+Unit tests for campaign types and SQLite operations. Integration tests for armed tool invocations. QML headless tests for drag-drop behavior.
+
+* Edge Cases
+- Empty columns render with placeholder text, not blank space
+- Drag between non-adjacent columns (e.g. Planning → Completed) updates status correctly without intermediate state
+- Card with missing/null budget renders gracefully with "—" and does not break sort
+
+* Acceptance Criteria
+- Kanban renders with all four columns populated from SQLite campaigns table
+- Dragging a card moves it to target column and persists status change
+- Agent can create a campaign card via armed tool and it appears in the correct column

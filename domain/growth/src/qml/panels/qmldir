@@ -1,0 +1,9 @@
+module Panels
+GrowthDashboard 1.0 GrowthDashboard.qml
+GrowthShell 1.0 GrowthShell.qml
+ChatDrawer 1.0 ChatDrawer.qml
+IntelPanel 1.0 IntelPanel.qml
+EditorPanel 1.0 EditorPanel.qml
+PortfolioPanel 1.0 PortfolioPanel.qml
+KanbanBoard 1.0 KanbanBoard.qml
+TemplateSectionEditor 1.0 TemplateSectionEditor.qml

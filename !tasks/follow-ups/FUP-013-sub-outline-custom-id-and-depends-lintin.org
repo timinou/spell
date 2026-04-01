@@ -1,0 +1,73 @@
+#+TITLE: Sub-outline CUSTOM_ID and DEPENDS Linting for Ultraplan
+#+STATE: INIT
+#+SESSION_ID: 14a983b223cae371
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T11-41-44-975Z_14a983b223cae371.jsonl]]
+#+CUSTOM_ID: FUP-013-sub-outline-custom-id-and-depends-lintin
+#+EFFORT: 8h
+#+PRIORITY: #B
+#+LAYER: tooling
+
+* Initial Message
+
+you are allowed to fix the files directly and then run the org fluid plan
+
+* Scope
+
+** In
+- Lint rule in ultraplan/Daedalus that validates sub-outline :PROPERTIES: drawers before plan approval
+- Validation checks:
+  1. Every ** sub-heading under Implementation must have a :PROPERTIES: drawer with :CUSTOM_ID: and :END:
+  2. :CUSTOM_ID: must be in canonical form PARENT-ID::sub-slug (not bare ::slug, not wrong-parent::slug)
+  3. :DEPENDS: references must resolve to existing CUSTOM_IDs (either top-level items or other sub-outlines)
+  4. No duplicate :CUSTOM_ID: values across all linked items in a plan
+  5. Top-level #+DEPENDS: must use full item CUSTOM_IDs (not abbreviations like PROJ-B)
+- Integration point: run as part of Momus validation pass before exit_plan_mode approval
+- Also run in org-fluid-plan.el as pre-flight check before DAG construction
+
+** Out
+- Runtime enforcement (already handled by org-fluid-plan warnings)
+- Fixing existing plans retroactively
+
+** Boundary
+- This prevents the housekeeping normalization step (Phase 0) from being needed on future plans
+
+* Problem
+PLAN-057 required extensive manual normalization of ~15 org items before org-fluid-plan could build the DAG:
+- PROJ-012 sub-outlines used wrong parent prefix (PROJ-001 instead of PROJ-012)
+- PROJ-010/011/013 used bare ::slug without parent prefix
+- PROJ-013/FEAT-137/138/139/141 had no :PROPERTIES: drawers at all (plain CUSTOM_ID: lines)
+- FEAT-140 used abbreviated prefix (FEAT-DASH instead of FEAT-140-growth-dashboard-panel)
+- FEAT-142 used placeholder DEPENDS (PROJ-B instead of full CUSTOM_ID)
+- Cross-item sub-outline DEPENDS were missing
+This cost significant executor time on mechanical fixes that should be caught at plan creation.
+
+* Implementation
+
+** Add sub-outline lint to Daedalus decomposition
+When Daedalus creates org items with sub-outline ** headings:
+- Validate each sub-heading has :PROPERTIES: drawer
+- Validate :CUSTOM_ID: starts with the parent item's CUSTOM_ID followed by ::
+- Validate all :DEPENDS: references are resolvable
+- Emit warnings/errors before writing the item
+
+** Add pre-flight validation to org-fluid-plan.el
+Before building the DAG:
+- Scan all linked items for sub-headings
+- Validate canonical CUSTOM_ID format
+- Validate DEPENDS resolution
+- Return structured warnings in the FluidPlanWithComponents JSON
+- Fail hard (not just warn) on:
+  - Missing :PROPERTIES: drawers
+  - Bare ::slug without parent prefix
+  - Unresolvable DEPENDS references
+
+** Add lint check to Momus validation
+Momus already reviews plan quality. Add structural check:
+- All [[id:...]] linked items have sub-outlines with valid :PROPERTIES:
+- Cross-item DEPENDS are complete (sub-outlines that reference panels/features from other items)
+
+* Acceptance Criteria
+- Creating a plan with bare ::slug CUSTOM_IDs triggers validation error before approval
+- Creating a plan with missing :PROPERTIES: drawers triggers validation error
+- org-fluid-plan returns error (not just warning) for malformed sub-outlines
+- Momus flags cross-item dependency gaps

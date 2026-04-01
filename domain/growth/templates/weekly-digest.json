@@ -1,0 +1,26 @@
+{
+  "name": "Weekly Growth Digest",
+  "description": "Weekly summary of growth metrics, competitor activity, and strategic recommendations.",
+  "variables": {
+    "date_range": {
+      "type": "string",
+      "required": true,
+      "description": "Human-readable date range, e.g. \"March 25 – March 31, 2025\""
+    },
+    "metrics": {
+      "type": "array",
+      "required": true,
+      "description": "Array of metric objects: { label: string, value: string, delta?: string }"
+    },
+    "competitors": {
+      "type": "array",
+      "required": false,
+      "description": "Array of competitor activity objects: { name, activity, platform, notes }"
+    },
+    "recommendations": {
+      "type": "array",
+      "required": false,
+      "description": "Array of recommendation strings"
+    }
+  }
+}

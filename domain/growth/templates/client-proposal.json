@@ -1,0 +1,51 @@
+{
+  "name": "Client Proposal",
+  "description": "Branded client-facing growth strategy proposal with cover page, approach, deliverables, timeline, and budget.",
+  "variables": {
+    "client": {
+      "type": "string",
+      "required": true,
+      "description": "Client or company name"
+    },
+    "subtitle": {
+      "type": "string",
+      "required": false,
+      "description": "Proposal subtitle shown on cover page (default: 'Growth Strategy Proposal')"
+    },
+    "date": {
+      "type": "string",
+      "required": false,
+      "description": "Display date string on cover page; defaults to today"
+    },
+    "problem": {
+      "type": "string",
+      "required": true,
+      "description": "Problem statement or opportunity description"
+    },
+    "approach": {
+      "type": "string",
+      "required": true,
+      "description": "Description of the proposed approach and methodology"
+    },
+    "deliverables": {
+      "type": "array",
+      "required": true,
+      "description": "Array of deliverable objects: { item: string, timeline: string, notes?: string }"
+    },
+    "timeline_weeks": {
+      "type": "number",
+      "required": false,
+      "description": "Engagement length in weeks for the timeline strip (default: 4)"
+    },
+    "budget": {
+      "type": "array",
+      "required": false,
+      "description": "Array of budget line items: { line: string, amount: string }"
+    },
+    "total_budget": {
+      "type": "string",
+      "required": false,
+      "description": "Total budget string displayed as the final row, e.g. \"$12,000\""
+    }
+  }
+}

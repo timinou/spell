@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Typst Editor</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #1e1e1e; }
+    #editor-container { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+
+<div id="editor-container"></div>
+
+<!-- Monaco Editor via CDN -->
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@latest/min/vs/loader.js"></script>
+
+<script>
+  'use strict';
+
+  // ── Monaco loader config ────────────────────────────────────────────────────
+
+  require.config({
+    paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@latest/min/vs' }
+  });
+
+  // ── Typst language definition ───────────────────────────────────────────────
+
+  const TYPST_LANGUAGE_ID = 'typst';
+
+  function registerTypstLanguage(monaco) {
+    monaco.languages.register({ id: TYPST_LANGUAGE_ID });
+
+    monaco.languages.setLanguageConfiguration(TYPST_LANGUAGE_ID, {
+      comments: { lineComment: '//', blockComment: ['/*', '*/'] },
+      brackets: [['{', '}'], ['[', ']'], ['(', ')']],
+      autoClosingPairs: [
+        { open: '{', close: '}' },
+        { open: '[', close: ']' },
+        { open: '(', close: ')' },
+        { open: '"', close: '"', notIn: ['string'] },
+        { open: '$', close: '$' },
+        { open: '`', close: '`' },
+      ],
+      surroundingPairs: [
+        { open: '{', close: '}' },
+        { open: '[', close: ']' },
+        { open: '(', close: ')' },
+        { open: '"', close: '"' },
+        { open: '$', close: '$' },
+        { open: '`', close: '`' },
+      ],
+    });
+
+    monaco.languages.setMonarchTokensProvider(TYPST_LANGUAGE_ID, {
+      defaultToken: '',
+      tokenPostfix: '.typst',
+
+      keywords: [
+        'let', 'set', 'show', 'import', 'include',
+        'if', 'else', 'for', 'while', 'return',
+        'in', 'not', 'and', 'or', 'none', 'auto',
+        'true', 'false',
+      ],
+
+      tokenizer: {
+        root: [
+          // Hash-keywords: #let, #set, ...
+          [/#(let|set|show|import|include|if|else|for|while|return)\b/, 'keyword'],
+          // Headings
+          [/^={1,6}(?=[^=]).*$/, 'markup.heading'],
+          // Block comments
+          [/\/\*/, 'comment', '@blockComment'],
+          // Line comments
+          [/\/\/.*$/, 'comment'],
+          // Math mode
+          [/\$\$?/, 'string.math', '@mathMode'],
+          // Strings
+          [/"/, 'string', '@string'],
+          // Raw blocks
+          [/`{3}/, 'string.raw', '@rawBlock'],
+          [/`/, 'string.raw', '@rawInline'],
+          // Functions
+          [/[a-zA-Z_][a-zA-Z0-9_]*(?=\s*\()/, 'entity.name.function'],
+          // Keywords / identifiers
+          [/[a-zA-Z_][a-zA-Z0-9_]*/, {
+            cases: {
+              '@keywords': 'keyword',
+              '@default': 'identifier',
+            }
+          }],
+          // Numbers (with optional unit)
+          [/\d+(\.\d+)?(pt|mm|cm|in|em|rem|%)?/, 'number'],
+          // Hex colors
+          [/#[0-9a-fA-F]{3,8}\b/, 'number.hex'],
+          // Hash sigil
+          [/#/, 'delimiter'],
+          // Brackets
+          [/[{}[\]()]/, 'delimiter.bracket'],
+          // Whitespace
+          [/\s+/, 'white'],
+        ],
+        blockComment: [
+          [/[^/*]+/, 'comment'],
+          [/\/\*/, 'comment', '@push'],
+          [/\*\//, 'comment', '@pop'],
+          [/[/*]/, 'comment'],
+        ],
+        mathMode: [
+          [/\$\$?/, 'string.math', '@pop'],
+          [/[a-zA-Z]+/, 'variable.math'],
+          [/[+\-*/^_]/, 'operator.math'],
+          [/[{}]/, 'delimiter.math'],
+          [/./, 'string.math'],
+        ],
+        string: [
+          [/[^"\\]+/, 'string'],
+          [/\\./, 'string.escape'],
+          [/"/, 'string', '@pop'],
+        ],
+        rawBlock: [
+          [/`{3}/, 'string.raw', '@pop'],
+          [/./, 'string.raw'],
+        ],
+        rawInline: [
+          [/`/, 'string.raw', '@pop'],
+          [/./, 'string.raw'],
+        ],
+      },
+    });
+  }
+
+  // ── Editor bootstrap ────────────────────────────────────────────────────────
+
+  /** @type {import('monaco-editor').editor.IStandaloneCodeEditor | null} */
+  let editor = null;
+  let suppressNextChange = false;
+
+  require(['vs/editor/editor.main'], (monaco) => {
+    registerTypstLanguage(monaco);
+
+    editor = monaco.editor.create(document.getElementById('editor-container'), {
+      language: TYPST_LANGUAGE_ID,
+      theme: 'vs-dark',
+      value: '',
+      automaticLayout: true,
+      minimap: { enabled: false },
+      wordWrap: 'on',
+      fontSize: 14,
+      lineNumbers: 'on',
+      scrollBeyondLastLine: false,
+      renderLineHighlight: 'all',
+    });
+
+    // ── content change → parent ──────────────────────────────────────────────
+    let changeTimer = null;
+    editor.onDidChangeModelContent(() => {
+      if (suppressNextChange) { suppressNextChange = false; return; }
+      // Debounce 200 ms to avoid flooding the parent on every keystroke.
+      clearTimeout(changeTimer);
+      changeTimer = setTimeout(() => {
+        window.parent.postMessage(
+          { type: 'content_changed', text: editor.getValue() },
+          '*'
+        );
+      }, 200);
+    });
+
+    // ── cursor move → parent ─────────────────────────────────────────────────
+    editor.onDidChangeCursorPosition((e) => {
+      window.parent.postMessage(
+        { type: 'cursor_moved', line: e.position.lineNumber },
+        '*'
+      );
+    });
+
+    // Signal ready.
+    window.parent.postMessage({ type: 'editor_ready' }, '*');
+  });
+
+  // ── public API ──────────────────────────────────────────────────────────────
+
+  /**
+   * Replace editor content without triggering a 'content_changed' message.
+   * @param {string} text
+   */
+  window.setContent = function setContent(text) {
+    if (!editor) return;
+    suppressNextChange = true;
+    editor.setValue(text ?? '');
+  };
+
+  /**
+   * Return current editor text.
+   * @returns {string}
+   */
+  window.getContent = function getContent() {
+    return editor ? editor.getValue() : '';
+  };
+
+  /**
+   * Scroll to and reveal a specific line.
+   * @param {number} line  1-based line number
+   */
+  window.goToLine = function goToLine(line) {
+    if (!editor || !line) return;
+    editor.revealLineInCenter(line);
+    editor.setPosition({ lineNumber: line, column: 1 });
+    editor.focus();
+  };
+
+  // ── inbound messages from parent ─────────────────────────────────────────
+
+  window.addEventListener('message', (evt) => {
+    const msg = evt.data;
+    if (!msg || typeof msg !== 'object') return;
+
+    if (msg.type === 'set_content') window.setContent(msg.text);
+    if (msg.type === 'goto_line')   window.goToLine(msg.line);
+  });
+</script>
+</body>
+</html>

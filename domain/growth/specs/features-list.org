@@ -1,0 +1,1023 @@
+#+TITLE: Spell Growth — Feature Specifications
+#+AUTHOR: Spell Growth Team
+#+DATE: 2026-03-31
+#+STARTUP: overview
+#+TODO: TODO DOING | DONE DEFERRED
+#+PROPERTY: PRIORITY_RANGE [#A] [#B] [#C]
+
+* Core Features (MVP)
+** TODO [#A] F01 — Growth Shell
+:PROPERTIES:
+:ID: growth-f01-shell
+:COMPLEXITY: High
+:ESTIMATE: 3 weeks
+:DEPENDS: QML Mode (packages/coding-agent/src/modes/qml-mode.ts), Canvas Tool (packages/coding-agent/src/tools/canvas.ts)
+:END:
+
+*** Description
+QML canvas-first shell for growth/marketing workflows. Replaces the coding-mode
+two-panel layout (Chat + Dashboard) with a five-panel tabbed interface:
+Chat, Dashboard, Competitive Intel, Report Editor, and Client Portfolio.
+
+The shell is always-canvas: the QML window is the primary interface, TUI serves
+only as the launcher. Chat input lives inside the canvas, not the terminal.
+
+Reuses the existing Material Design 3 shell infrastructure — SplitView layout
+(240px sidebar + main content), SessionEventMapper for agent event forwarding,
+and =discoverSkillPanels()= for panel registration.
+
+*** Key Differences from Coding Shell
+- Five tabs instead of two; tab bar must scroll or compress gracefully
+- Chat panel embedded in canvas (not TUI) — requires text input widget, message
+  history view, streaming token display, and tool-call visualization in QML
+- Sidebar shows deliverable tree (not file tree) — briefs, reports, decks grouped
+  by client and status
+- Status bar shows active scraper jobs, compilation status, pending deliverables
+- Domain detection triggers growth shell automatically (no explicit flag)
+
+*** Technical Approach
+- New =growth-mode.ts= alongside =qml-mode.ts= in =packages/coding-agent/src/modes/=
+- Panel discovery extended: =discoverSkillPanels()= scans =domain/growth/panels/=
+- Each panel is a self-contained QML component registered via manifest
+- SessionEventMapper gains growth-specific event types (scrape_complete, compile_done,
+  deliverable_status_change)
+- Chat-in-canvas uses a QML TextArea + ListView with delegate per message type
+  (user, assistant, tool_call, tool_result, deliverable_preview)
+
+*** Acceptance Criteria
+- [ ] Running =spell= from a directory with =.spell/domain.json= containing
+      ="domain": "growth"= launches the growth shell with all five tabs
+- [ ] Chat input in canvas sends messages to the agent and displays streamed responses
+- [ ] Sidebar renders deliverable tree from project state
+- [ ] Tab switching preserves panel state (no re-render on return)
+- [ ] TUI shows only launch status and a "Canvas active" indicator
+- [ ] Panel hot-reload works: editing a panel QML file updates it live
+
+** TODO [#A] F02 — Competitive Intelligence Canvas
+:PROPERTIES:
+:ID: growth-f02-competitive-intel
+:COMPLEXITY: High
+:ESTIMATE: 3 weeks
+:DEPENDS: F01 (Growth Shell), F10 (Scraper Framework)
+:END:
+
+*** Description
+A QML panel for browsing, filtering, annotating, and comparing competitor
+advertisements. Primary data source is Facebook Ads Library, extensible to
+other platforms. Ad data is persisted to SQLite for historical analysis.
+
+*** Components
+
+**** Ad Gallery View
+- Grid of ad cards (thumbnail, advertiser, date range, platform, format, status)
+- Card click expands to detail view (full creative, copy text, CTA, landing page URL)
+- Masonry or uniform grid layout, configurable density
+- Lazy loading with virtual scrolling for large result sets
+
+**** Filter Bar
+- Date range picker (preset: last 7d, 30d, 90d, custom)
+- Format filter: image, video, carousel, stories, text
+- Platform filter: Facebook, Instagram, Messenger, Audience Network
+- Advertiser search with autocomplete from SQLite advertiser table
+- Active/inactive status toggle
+- Keyword search across ad copy text
+- Filters are combinable (AND logic), persisted per session
+
+**** Annotation System
+- Select any ad card → annotation panel slides in from right
+- Free-text notes, tags (e.g. "aggressive-pricing", "social-proof", "urgency")
+- Star rating (1-5) for creative quality assessment
+- Compare mode: select 2-4 ads, side-by-side view with diff highlights on copy
+
+**** Snapshot Persistence
+- SQLite schema: =ad_snapshots= table (id, platform, advertiser_id, advertiser_name,
+  ad_id, creative_url, copy_text, cta, landing_url, format, start_date, end_date,
+  status, fetched_at, raw_json)
+- =annotations= table (id, ad_snapshot_id, note, tags JSON, rating, created_at, updated_at)
+- =comparisons= table (id, name, ad_snapshot_ids JSON, notes, created_at)
+- Background sync: new scrape results merged by ad_id, preserving annotations
+- Export: selected ads → CSV, or → Typst report section
+
+*** Acceptance Criteria
+- [ ] Gallery renders 100+ ad cards without frame drops (virtual scrolling)
+- [ ] All six filter dimensions work independently and in combination
+- [ ] Annotations persist across sessions via SQLite
+- [ ] Compare mode renders 2-4 ads side-by-side with copy text diffing
+- [ ] New scraper results appear in gallery without manual refresh
+- [ ] Export to CSV produces valid file with all visible columns
+
+** TODO [#A] F03 — Typst Report Engine
+:PROPERTIES:
+:ID: growth-f03-typst-engine
+:COMPLEXITY: Medium
+:ESTIMATE: 2 weeks
+:DEPENDS: ora-branding (~/code/ora/ora-branding/typst/ora-brand/lib.typ)
+:END:
+
+*** Description
+Programmatic Typst document generation using ORA brand components. The agent
+writes Typst source that imports =ora-brand/lib.typ=, and the engine compiles
+it to PDF. Templates provide scaffolding for common deliverable types.
+
+*** Template Library
+
+| Template             | Use Case                          | Key Components Used                              |
+|----------------------+-----------------------------------+--------------------------------------------------|
+| weekly-digest        | Weekly competitor/market summary   | metrics-strip, stat-cell, numbered-card           |
+| client-proposal      | New client pitch deck              | cover, pillar-card, flow diagram, kpi-row         |
+| competitive-analysis | Deep-dive competitor report        | stat-cell, timeline, numbered-card, callout       |
+| campaign-brief       | Campaign planning document         | cover, toc, pillar-card, onion diagram            |
+| performance-report   | Campaign/channel performance       | metrics-strip, kpi-row, graphs, stat-cell         |
+| executive-summary    | One-page strategic overview        | cover, stat-cell, callout                         |
+
+*** Technical Approach
+- Templates live in =domain/growth/typst/templates/=
+- Each template is a =.typ= file with =#import "ora-brand/lib.typ": *= and
+  parameterized functions accepting data dictionaries
+- Agent generates Typst by calling template functions with data, or writes
+  free-form Typst using ora-brand components directly
+- Compilation via =typst compile= CLI (bundled or system-installed)
+- =typst-engine.ts= in =domain/growth/src/= wraps compilation:
+  - Input: Typst source path, output PDF path, font paths, package paths
+  - Watches for changes (=typst watch= subprocess) for live preview integration
+  - Returns compilation errors with line numbers for agent self-correction
+
+*** Agent Integration
+- Growth system prompt includes Typst component reference (condensed from ora-brand docs)
+- Agent generates Typst source, engine compiles, errors fed back for correction loop
+- Deliverable pipeline tracks: source .typ, compiled .pdf, compilation status
+
+*** Acceptance Criteria
+- [ ] All six templates compile to valid PDFs with correct ORA branding
+- [ ] Agent can generate a weekly-digest from structured data (JSON → Typst → PDF)
+- [ ] Compilation errors are surfaced with source line numbers
+- [ ] =typst watch= mode triggers re-compilation on source changes within 500ms
+- [ ] Fonts (Aspekta) and colors (#192D4F, #E75E4A, #FBEACE) render correctly
+- [ ] Templates accept data dictionaries — no manual Typst editing required for standard reports
+
+** TODO [#A] F04 — Live Typst Editor
+:PROPERTIES:
+:ID: growth-f04-typst-editor
+:COMPLEXITY: High
+:ESTIMATE: 3 weeks
+:DEPENDS: F03 (Typst Report Engine), F01 (Growth Shell)
+:END:
+
+*** Description
+Split-pane QML panel: left side is a syntax-highlighted Typst editor, right
+side is a live-updating SVG preview rendered via typst-ts WASM in a WebEngineView.
+Clicking a preview element jumps the editor cursor to the corresponding source line.
+
+*** Left Pane — Editor
+- QML TextEdit (or custom text component) with tree-sitter-typst integration
+- Syntax highlighting via Qt-TreeSitterHighlighter binding to tree-sitter-typst grammar
+- Line numbers, current-line highlight, bracket matching
+- Agent can write to the editor buffer programmatically (streamed token insertion)
+- Undo/redo stack, basic find/replace
+- Gutter shows compilation error markers (red dots on error lines)
+
+*** Right Pane — Preview
+- QML WebEngineView loading a local HTML page that bundles typst-ts WASM
+- On editor change (debounced 200ms): source text sent to WASM compiler via
+  =evaluateJavaScript()= bridge
+- typst-ts renders to SVG, displayed inline in the WebEngineView
+- Page-by-page navigation for multi-page documents
+- Zoom controls (fit-width, fit-page, percentage)
+
+*** Click-to-Code
+- typst-ts sourceMapping API provides source spans for rendered elements
+- Click on preview element → JavaScript extracts source line/col from mapping
+- Bridge sends ={action: "goto_source", line: N, col: M}= to QML
+- Editor scrolls to and highlights the corresponding source region
+- Bidirectional: cursor position in editor highlights corresponding preview region
+
+*** Technical Constraints
+- typst-ts WASM bundle (~5MB) loaded once, cached in WebEngineView profile
+- Font files (Aspekta family) must be registered with both tree-sitter (for metrics)
+  and typst-ts WASM (for rendering)
+- Source mapping accuracy degrades with complex #let bindings — acceptable for MVP
+
+*** Acceptance Criteria
+- [ ] Editor displays Typst syntax highlighting for all ora-brand constructs
+- [ ] Preview updates within 300ms of editor change (debounce + compile + render)
+- [ ] Click on a preview heading jumps editor to the correct =#heading= line
+- [ ] Editor cursor on a =stat-cell= call highlights the rendered stat in preview
+- [ ] Agent-driven edits (streamed tokens) appear in editor and trigger preview update
+- [ ] Compilation errors display inline in editor gutter and as overlay on preview
+- [ ] Multi-page documents navigate correctly in preview
+
+** TODO [#A] F05 — Growth Dashboard
+:PROPERTIES:
+:ID: growth-f05-dashboard
+:COMPLEXITY: Medium
+:ESTIMATE: 2 weeks
+:DEPENDS: F01 (Growth Shell), F02 (Competitive Intel), F12 (Deliverable Pipeline)
+:END:
+
+*** Description
+Morning overview panel — the default landing view when the growth shell opens.
+Surfaces changes since last session, pending work, and key metrics at a glance.
+
+*** Sections
+
+**** New Competitor Activity
+- Count of new ads detected since last session, grouped by advertiser
+- Sparkline trend (ads/day over last 30 days) per tracked competitor
+- "Deep dive" button per competitor opens Competitive Intel tab, pre-filtered
+
+**** Metric Changes
+- Key metrics pulled from connected data sources (ad spend, impressions, CTR,
+  conversions) with delta indicators (↑↓) vs. previous period
+- Configurable metric cards — user picks which KPIs appear on dashboard
+- Threshold alerts: metric crosses user-defined boundary → highlighted card
+
+**** Pending Deliverables
+- List of in-progress deliverables from the pipeline (F12)
+- Status badges: Draft, Review, Blocked, Final
+- Due date proximity warnings (overdue = red, due today = amber, due this week = blue)
+- Click opens the deliverable in the appropriate panel (Report Editor, etc.)
+
+**** Calendar / Timeline
+- Week-at-a-glance: scheduled deliverable due dates, campaign launch dates,
+  review meetings
+- Pulled from project-local calendar file (=.spell/growth/calendar.json=)
+- Drag-to-reschedule updates the calendar file
+
+*** Data Sources
+- SQLite (ad_snapshots, deliverables tables) for competitor activity and pipeline
+- =.spell/growth/metrics.json= for connected metric sources configuration
+- =.spell/growth/calendar.json= for timeline events
+- Agent can refresh any section on demand or via background poll
+
+*** Acceptance Criteria
+- [ ] Dashboard loads within 1s of shell launch showing current state
+- [ ] New competitor ads section shows correct count and sparklines
+- [ ] Metric cards display deltas with correct directional indicators
+- [ ] Pending deliverables list matches pipeline state
+- [ ] Calendar renders week view with draggable events
+- [ ] Clicking any summary item navigates to the correct detail panel/tab
+
+* Growth Modes
+** TODO [#A] F06 — /strategy Mode
+:PROPERTIES:
+:ID: growth-f06-strategy-mode
+:COMPLEXITY: Medium
+:ESTIMATE: 1.5 weeks
+:DEPENDS: F01 (Growth Shell), Plan Modes (packages/coding-agent/src/modes/)
+:END:
+
+*** Description
+Analogous to =/plan= in coding mode. Guides the agent through market analysis
+and strategy formulation, producing a strategy brief as the deliverable.
+
+*** Workflow
+1. *Trigger*: User types =/strategy <topic>= in chat
+2. *Research phase*: Agent enters read-only exploration
+   - Web search for market data, trends, competitor moves
+   - Query SQLite for historical ad snapshot data
+   - Review existing deliverables for context
+3. *Analysis phase*: Agent synthesizes findings
+   - SWOT or similar framework applied to collected data
+   - Competitive positioning map generated
+   - Key insight extraction with supporting evidence
+4. *Strategy formulation*: Agent drafts strategy brief
+   - Uses =campaign-brief= or =executive-summary= Typst template
+   - Presents draft in Live Typst Editor for review
+5. *User review*: User edits/approves in canvas
+   - Agent incorporates feedback iteratively
+   - Final brief saved to deliverable pipeline
+
+*** Tool Restrictions
+- During research phase: web_search, fetch, grep, read, SQLite queries — no writes
+- During analysis phase: read + canvas display — no external calls
+- During formulation: Typst write + compile — full canvas access
+
+*** Mode-Specific System Prompt Additions
+- Emphasize evidence-based reasoning, cite sources
+- Structured output: every claim must reference a data point
+- Framework preference order: Jobs-to-be-Done > Porter's Five Forces > SWOT
+
+*** Acceptance Criteria
+- [ ] =/strategy= command activates strategy mode with phase indicator in status bar
+- [ ] Research phase restricts tools to read-only set
+- [ ] Analysis phase produces structured synthesis (not just a list of findings)
+- [ ] Strategy brief renders as branded PDF via Typst engine
+- [ ] Mode exits cleanly, brief enters deliverable pipeline as "Draft"
+- [ ] Phase transitions are explicit and visible in the chat panel
+
+** TODO [#A] F07 — /campaign Mode
+:PROPERTIES:
+:ID: growth-f07-campaign-mode
+:COMPLEXITY: High
+:ESTIMATE: 2 weeks
+:DEPENDS: F06 (/strategy), F02 (Competitive Intel), F10 (Scraper Framework)
+:END:
+
+*** Description
+Analogous to =/ultraplan= in coding mode. Full campaign planning with automated
+competitive scanning. Produces a campaign plan document with budget allocation,
+creative brief, timeline, and channel strategy.
+
+*** Workflow
+1. *Trigger*: User types =/campaign <objective>= in chat
+2. *Competitive scan gate*: Automatic scraper run before planning begins
+   - Scrapes current ads for specified competitors/market
+   - Results populate Competitive Intel canvas
+   - Gate blocks until scan completes or times out (5 min)
+3. *Planning phase*: Agent builds campaign plan
+   - Channel selection with rationale
+   - Budget allocation across channels (table format)
+   - Timeline with milestones (Gantt-style in Typst)
+   - Creative brief per channel (copy direction, visual direction, CTA strategy)
+   - KPI targets with measurement plan
+4. *Review subagent gate*: Automated review (like Momus in /ultraplan)
+   - Budget sanity check (no single channel > 60% unless justified)
+   - Timeline feasibility (no milestone < 3 days from previous)
+   - Creative brief completeness (all required fields populated)
+5. *Output*: Campaign plan document + campaign board entries
+
+*** Competitive Scan Gate
+- Implemented as a loop domain gate (reusing loop system infrastructure)
+- Gate definition: =competitive-scan= domain with pass criteria:
+  - Minimum N ads retrieved (configurable, default 10)
+  - Ads span at least 2 distinct advertisers
+  - No scraper errors in final result set
+- Gate failure → warning + option to proceed with stale data
+
+*** Acceptance Criteria
+- [ ] =/campaign= triggers competitive scan before planning begins
+- [ ] Scan gate blocks planning until data is available (with timeout)
+- [ ] Campaign plan includes all required sections (channels, budget, timeline, creative, KPIs)
+- [ ] Review subagent catches budget concentration > 60% single channel
+- [ ] Timeline renders as Gantt-style visualization in Typst output
+- [ ] Campaign board (F15) receives entries from completed campaign plan
+
+** TODO [#B] F08 — /creative Mode
+:PROPERTIES:
+:ID: growth-f08-creative-mode
+:COMPLEXITY: Medium
+:ESTIMATE: 1.5 weeks
+:DEPENDS: F06 (/strategy), F14 (Ad Creative Analyzer)
+:END:
+
+*** Description
+Analogous to =/design= in coding mode. Focused on creative asset planning —
+ad copy variations, visual direction briefs, and messaging frameworks. Includes
+an aesthetic gate (like Aphrodite in /design) that evaluates creative output
+against brand guidelines and competitor benchmarks.
+
+*** Workflow
+1. *Trigger*: User types =/creative <brief or campaign ref>= in chat
+2. *Context gathering*: Agent pulls brand guidelines, past creatives, competitor ads
+3. *Copy generation*: Agent produces multiple copy variations per format
+   - Headlines (5-10 variations, graded by clarity/urgency/benefit)
+   - Body copy (2-3 variations per headline winner)
+   - CTA options with rationale
+4. *Visual direction*: Mood board description, color palette, imagery style
+   - References competitor ads from SQLite (links to specific snapshots)
+   - Specifies what to avoid (competitor visual tropes to differentiate from)
+5. *Aesthetic gate*: Automated quality check
+   - Brand voice consistency (tone, vocabulary, banned terms)
+   - Readability score (Flesch-Kincaid target range)
+   - CTA strength assessment
+   - Visual direction completeness
+6. *Output*: Creative brief document with all variations and direction
+
+*** Acceptance Criteria
+- [ ] =/creative= activates creative mode with copy/visual phase indicators
+- [ ] Produces minimum 5 headline variations with quality annotations
+- [ ] Aesthetic gate flags brand voice violations with specific excerpts
+- [ ] Visual direction references actual competitor ad snapshots by ID
+- [ ] Output renders as branded creative brief PDF
+- [ ] Variations are structured for easy A/B test selection
+
+** TODO [#B] F09 — /review Mode
+:PROPERTIES:
+:ID: growth-f09-review-mode
+:COMPLEXITY: Medium
+:ESTIMATE: 1 week
+:DEPENDS: F05 (Dashboard), F02 (Competitive Intel)
+:END:
+
+*** Description
+Analogous to =/audit= in coding mode. Read-only performance review that pulls
+data, identifies trends, flags anomalies, and recommends optimizations. Never
+modifies campaign settings — only produces analysis.
+
+*** Workflow
+1. *Trigger*: User types =/review <campaign or time period>= in chat
+2. *Data pull*: Agent gathers metrics from configured sources
+   - Ad platform metrics (spend, impressions, clicks, conversions)
+   - Competitor activity from SQLite (volume, new entrants, format shifts)
+   - Deliverable history (what was produced, when, for whom)
+3. *Trend analysis*: Agent identifies patterns
+   - Period-over-period comparisons (week/month)
+   - Anomaly detection (metric deviations > 2σ from rolling mean)
+   - Competitor move correlation (their new ads → our metric changes)
+4. *Recommendations*: Prioritized list of optimization actions
+   - Each recommendation tied to a specific data point
+   - Estimated impact (high/medium/low) with reasoning
+   - Implementation complexity tag
+5. *Output*: Performance report using =performance-report= Typst template
+
+*** Read-Only Guarantee
+- Tool restrictions: no write, no edit, no canvas write, no bash destructive ops
+- Agent cannot modify any project file or database record
+- All output goes to a new deliverable (never overwrites existing)
+
+*** Acceptance Criteria
+- [ ] =/review= activates review mode with read-only indicator
+- [ ] Pulls metrics from configured data sources without errors
+- [ ] Anomaly detection flags deviations > 2σ with correct threshold
+- [ ] Recommendations reference specific data points (not generic advice)
+- [ ] Output renders as =performance-report= Typst PDF
+- [ ] No writes to project files or SQLite during review mode
+
+* Advanced Features
+** TODO [#A] F10 — Scraper Framework
+:PROPERTIES:
+:ID: growth-f10-scraper-framework
+:COMPLEXITY: High
+:ESTIMATE: 3 weeks
+:DEPENDS: Leadgen YAML DSL (~/code/ora/leadgen/configs/)
+:END:
+
+*** Description
+Native TypeScript reimplementation of the leadgen YAML DSL scraping framework.
+Declarative configuration files define scraping targets with selectors,
+transforms, pagination, and error handling. NOT a Python dependency — pure TS
+running in the Spell Node.js runtime.
+
+*** Architecture
+
+**** Config Format (YAML DSL)
+Inspired by leadgen configs but adapted for TypeScript execution:
+#+begin_src yaml
+name: facebook-ads-library
+browser:
+  headless: true
+  viewport: { width: 1920, height: 1080 }
+  user_agent: "Mozilla/5.0 ..."
+
+container:
+  selector: "div[class*='_7jvw']"
+  wait_for: "div[class*='_7jvw']"
+  min_count: 1
+
+fields:
+  advertiser_name:
+    selector: "a[class*='_7jyr']"
+    type: text
+    transform: trim
+  ad_copy:
+    selector: "div[class*='_7jws']"
+    type: text
+    transform: [trim, collapse_whitespace]
+  creative_image:
+    selector: "img[class*='_7jwy']"
+    type: attribute
+    attribute: src
+  start_date:
+    selector: "span[class*='_7jwx']"
+    type: text
+    transform: [trim, parse_date]
+  status:
+    selector: "span[class*='_7jwt']"
+    type: text
+    transform: [trim, lowercase]
+
+pagination:
+  type: infinite_scroll
+  scroll_delay: 2000
+  max_pages: 50
+  end_condition:
+    selector: "div[class*='_7jvn']"
+    text_contains: "No more results"
+
+error_handling:
+  retries: 3
+  retry_delay: 5000
+  rate_limit:
+    requests_per_minute: 30
+    backoff: exponential
+  error_indicators:
+    - selector: "div[class*='_7jvm']"
+      text_contains: "rate limit"
+      action: backoff
+    - selector: "div[class*='error']"
+      action: retry
+#+end_src
+
+**** Runtime Components
+- =ConfigLoader=: Parses YAML, validates against schema, resolves transforms
+- =BrowserPool=: Manages Puppeteer instances with configurable concurrency (default 2)
+- =Scraper=: Executes a config against a URL — container detection, field extraction, pagination
+- =TransformPipeline=: Chain of transform functions (trim, collapse_whitespace, parse_date, etc.)
+- =RateLimiter=: Token bucket per domain, exponential backoff on rate limit detection
+- =ResultStore=: Inserts scraped records into SQLite, deduplicates by platform + ad_id
+
+**** Transform Registry
+Built-in transforms:
+| Transform            | Input  | Output  | Description                       |
+|----------------------+--------+---------+-----------------------------------|
+| trim                 | string | string  | Strip leading/trailing whitespace |
+| collapse_whitespace  | string | string  | Multiple spaces → single space    |
+| lowercase            | string | string  | To lowercase                      |
+| parse_date           | string | Date    | Fuzzy date parsing                |
+| parse_number         | string | number  | Strip currency symbols, parse     |
+| extract_url          | string | string  | First URL from text               |
+| strip_html           | string | string  | Remove HTML tags                  |
+| json_parse           | string | object  | Parse JSON string                 |
+
+Custom transforms can be defined inline in YAML via JavaScript expressions.
+
+*** Acceptance Criteria
+- [ ] YAML config schema validates all fields from leadgen DSL
+- [ ] Facebook Ads Library config scrapes 50+ ads without errors
+- [ ] Pagination (infinite scroll) handles end-of-results detection
+- [ ] Rate limiter respects configured limits (verified via request timing logs)
+- [ ] Transform pipeline chains correctly (e.g. trim → parse_date)
+- [ ] Results persist to SQLite with deduplication by ad_id
+- [ ] Scraper runs headless in CI (no display required)
+- [ ] Error recovery: 3 retries with exponential backoff on transient failures
+
+** TODO [#B] F11 — Client Portfolio Dashboard
+:PROPERTIES:
+:ID: growth-f11-client-portfolio
+:COMPLEXITY: Medium
+:ESTIMATE: 1.5 weeks
+:DEPENDS: F01 (Growth Shell), F12 (Deliverable Pipeline)
+:END:
+
+*** Description
+Multi-client management panel. Each client has a profile with active campaigns,
+deliverable history, key metrics, and notes. Designed for agencies or freelancers
+managing multiple accounts.
+
+*** Data Model
+#+begin_src sql
+CREATE TABLE clients (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  industry TEXT,
+  contact_name TEXT,
+  contact_email TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE client_campaigns (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id),
+  name TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('planning','active','paused','completed')),
+  start_date TEXT,
+  end_date TEXT,
+  budget_total REAL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE client_metrics (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id),
+  metric_name TEXT NOT NULL,
+  metric_value REAL NOT NULL,
+  period_start TEXT NOT NULL,
+  period_end TEXT NOT NULL,
+  source TEXT
+);
+#+end_src
+
+*** QML Components
+- Client list (sidebar or grid) with search and industry filter
+- Client detail view: header (name, industry, contact), tabbed content
+  (Campaigns, Deliverables, Metrics, Notes)
+- Campaign cards with status badges and budget utilization bars
+- Metric charts (line/bar) per client using QML Charts module
+- Quick-add forms for new clients and campaigns
+
+*** Acceptance Criteria
+- [ ] Add/edit/archive clients with all profile fields
+- [ ] Client detail view shows campaigns, deliverables, and metrics
+- [ ] Deliverables tab filters pipeline (F12) by client
+- [ ] Metric charts render correctly with period selection
+- [ ] Client search filters by name and industry
+- [ ] Data persists to SQLite across sessions
+
+** TODO [#B] F12 — Deliverable Pipeline
+:PROPERTIES:
+:ID: growth-f12-deliverable-pipeline
+:COMPLEXITY: Medium
+:ESTIMATE: 1.5 weeks
+:DEPENDS: F01 (Growth Shell), F03 (Typst Report Engine)
+:END:
+
+*** Description
+Tracks deliverables through their lifecycle: Brief → Draft → Review → Final → Handoff.
+Each deliverable has a type, associated client, version history, and compilation status.
+
+*** Data Model
+#+begin_src sql
+CREATE TABLE deliverables (
+  id TEXT PRIMARY KEY,
+  client_id TEXT REFERENCES clients(id),
+  title TEXT NOT NULL,
+  type TEXT NOT NULL CHECK(type IN ('brief','report','deck','dashboard','analysis')),
+  status TEXT NOT NULL CHECK(status IN ('brief','draft','review','final','handed_off','archived')),
+  template TEXT,            -- Typst template name if applicable
+  source_path TEXT,         -- .typ or .md file path relative to project
+  output_path TEXT,         -- compiled .pdf path
+  due_date TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE deliverable_versions (
+  id TEXT PRIMARY KEY,
+  deliverable_id TEXT NOT NULL REFERENCES deliverables(id),
+  version INTEGER NOT NULL,
+  source_snapshot TEXT,     -- full Typst source at this version
+  compiled_pdf_path TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL
+);
+#+end_src
+
+*** Pipeline Behavior
+- Status transitions are validated: only forward moves allowed (Brief→Draft→Review→Final→Handoff)
+  except Review→Draft (revision cycle)
+- Each status change creates a version snapshot automatically
+- Agent can advance status via tool call; user can advance via canvas UI
+- "Review" status triggers notification in dashboard (F05)
+- "Final" status triggers PDF compilation if source changed since last compile
+- "Handoff" marks deliverable as delivered, moves to read-only
+
+*** QML View
+- Kanban-style board with columns per status
+- Cards show: title, client, type icon, due date, last modified
+- Drag between columns to change status (with validation)
+- Card click opens deliverable in appropriate editor (Typst → F04, Markdown → text editor)
+- Filter by client, type, due date range
+
+*** Acceptance Criteria
+- [ ] Deliverables track through all six status states
+- [ ] Version snapshots created automatically on status change
+- [ ] Kanban board renders with correct column assignment
+- [ ] Drag-to-advance validates allowed transitions (rejects invalid moves)
+- [ ] "Final" triggers PDF recompilation when source is dirty
+- [ ] Pipeline integrates with dashboard pending deliverables section (F05)
+
+** TODO [#B] F13 — Market Signal Feed
+:PROPERTIES:
+:ID: growth-f13-market-signal-feed
+:COMPLEXITY: Medium
+:ESTIMATE: 2 weeks
+:DEPENDS: F10 (Scraper Framework), F02 (Competitive Intel)
+:END:
+
+*** Description
+Background competitive monitoring system. Periodically scrapes configured
+sources, detects changes, and surfaces digest notifications. Runs as a
+background task during active sessions, and can produce summaries on demand.
+
+*** Signal Types
+| Signal            | Source             | Detection Method                          |
+|-------------------+--------------------+-------------------------------------------|
+| New competitor ad | Ad Library scrape  | New ad_id not in SQLite                   |
+| Ad volume spike   | Ad Library scrape  | Ads/day > 2σ above 30-day mean            |
+| New advertiser    | Ad Library scrape  | Advertiser_id not in SQLite               |
+| Format shift      | Ad Library scrape  | Format distribution change > 20% vs prior |
+| Copy pattern      | Ad analysis (F14)  | New high-frequency keyword or CTA         |
+
+*** Background Polling
+- Polling interval configurable per source (default: 4 hours during active session)
+- Runs as a child process managed by growth shell
+- SQLite =signals= table stores detected signals with timestamp, type, severity, payload
+- Signal deduplication: same type + same source + same day = single signal
+
+*** Digest Notification
+- New signals since last check → badge on Dashboard tab
+- Digest view in dashboard: grouped by signal type, sorted by severity
+- Each signal expandable to show raw data and recommended action
+- "Investigate" button opens relevant panel (Competitive Intel, etc.)
+
+*** Acceptance Criteria
+- [ ] Background polling runs at configured interval without blocking UI
+- [ ] New competitor ads detected and stored as signals within one poll cycle
+- [ ] Volume spike detection uses correct statistical threshold (2σ)
+- [ ] Dashboard badge shows accurate unread signal count
+- [ ] Digest view groups and sorts signals correctly
+- [ ] Polling stops cleanly on session exit (no orphan processes)
+
+** TODO [#B] F14 — Ad Creative Analyzer
+:PROPERTIES:
+:ID: growth-f14-ad-creative-analyzer
+:COMPLEXITY: Medium
+:ESTIMATE: 1.5 weeks
+:DEPENDS: F02 (Competitive Intel), F10 (Scraper Framework)
+:END:
+
+*** Description
+Pattern analysis engine for competitor ad creatives. Ingests ad snapshots from
+SQLite, extracts patterns across copy, visuals, CTAs, and offers. Produces
+structured analysis that feeds into =/creative= mode and reports.
+
+*** Analysis Dimensions
+
+**** Copy Analysis
+- Word frequency (excluding stop words) across ad copy corpus
+- Headline pattern extraction: question vs. statement vs. command
+- Emotional tone classification (urgency, fear, aspiration, social proof, authority)
+- Character/word count distributions per format
+- Unique selling proposition extraction
+
+**** CTA Analysis
+- CTA text frequency ranking
+- CTA categorization: direct ("Buy Now"), soft ("Learn More"), social ("Join 10K+")
+- CTA-to-copy alignment scoring (does the CTA match the copy's intent?)
+
+**** Offer Analysis
+- Discount/pricing pattern detection (% off, $ amount, free trial, BOGO)
+- Offer frequency by advertiser
+- Seasonal offer correlation
+
+**** Visual Pattern Analysis (via image description)
+- Agent describes creative images, tags style attributes
+- Color palette extraction from dominant colors
+- Composition patterns (product-focused, lifestyle, testimonial, UGC-style)
+- Text overlay frequency and placement
+
+*** Output Format
+Analysis results stored as JSON in SQLite =analyses= table, keyed by
+analysis run ID, date range, and advertiser filter. Consumable by:
+- =/creative= mode for competitive context
+- Typst report engine for =competitive-analysis= template
+- Dashboard for trend indicators
+
+*** Acceptance Criteria
+- [ ] Copy analysis produces word frequency and headline pattern distributions
+- [ ] CTA categorization correctly classifies 90%+ of standard CTA types
+- [ ] Analysis runs against filtered subsets (by advertiser, date range, format)
+- [ ] Results persist to SQLite and are queryable by =/creative= mode
+- [ ] Pattern trends over time are detectable (compare two analysis runs)
+- [ ] Output integrates with competitive-analysis Typst template
+
+** TODO [#C] F15 — Campaign Planner Board
+:PROPERTIES:
+:ID: growth-f15-campaign-planner
+:COMPLEXITY: Medium
+:ESTIMATE: 1.5 weeks
+:DEPENDS: F01 (Growth Shell), F11 (Client Portfolio), F12 (Deliverable Pipeline)
+:END:
+
+*** Description
+Kanban-style QML canvas for campaign lifecycle management. Campaigns move
+through stages: Ideation → Planning → In-Flight → Optimization → Complete.
+Integrates with =/campaign= mode output and deliverable pipeline.
+
+*** Board Structure
+- Columns: Ideation | Planning | In-Flight | Optimization | Complete
+- Cards: campaign name, client, budget, date range, health indicator
+- Card detail flyout: full campaign plan, linked deliverables, metrics, notes
+- Swimlanes (optional): group by client or by channel
+
+*** Interactions
+- Drag cards between columns (validated transitions)
+- Quick-add card from column header
+- Card context menu: edit, duplicate, archive, link deliverable
+- Column WIP limits (configurable, visual warning when exceeded)
+- Filter by client, date range, budget range
+
+*** Data Integration
+- =/campaign= mode output creates a card in "Planning" column
+- Linked deliverables show status badges from pipeline (F12)
+- Metrics from client portfolio (F11) shown in card detail
+- Status changes emit events for dashboard (F05) updates
+
+*** Acceptance Criteria
+- [ ] Board renders all five columns with correct card placement
+- [ ] Drag between columns validates allowed transitions
+- [ ] =/campaign= mode completion creates a board card automatically
+- [ ] Card detail shows linked deliverables with current status
+- [ ] WIP limits trigger visual warning when exceeded
+- [ ] Board state persists to SQLite across sessions
+
+** TODO [#C] F16 — Template Builder
+:PROPERTIES:
+:ID: growth-f16-template-builder
+:COMPLEXITY: Low
+:ESTIMATE: 1 week
+:DEPENDS: F03 (Typst Report Engine), F04 (Live Typst Editor)
+:END:
+
+*** Description
+Canvas interface for creating and customizing Typst report templates. Users
+can modify existing templates or build new ones from ora-brand components,
+with live preview showing sample data.
+
+*** Workflow
+1. Select base template or start blank
+2. Component palette shows available ora-brand components (drag-to-insert)
+3. Property panel for selected component (colors, sizes, content placeholders)
+4. Sample data injection — template renders with realistic placeholder data
+5. Save to =domain/growth/typst/templates/= as a new .typ file
+
+*** Component Palette
+Surfaces all ora-brand/lib.typ exports as draggable components:
+- Layout: cover, toc, section-break
+- Data: stat-cell, metrics-strip, kpi-row, numbered-card
+- Content: pillar-card, callout, pull-quote
+- Visual: flow-diagram, timeline, onion-diagram
+
+*** Acceptance Criteria
+- [ ] Component palette lists all ora-brand components
+- [ ] Drag-to-insert places component Typst code at cursor position
+- [ ] Property panel updates component parameters and preview refreshes
+- [ ] Sample data renders realistically in preview
+- [ ] Saved templates appear in Typst Report Engine template list (F03)
+- [ ] Custom templates compile without errors
+
+* Infrastructure (Spell Core Changes)
+** TODO [#A] F17 — Domain Auto-Detection
+:PROPERTIES:
+:ID: growth-f17-domain-detection
+:COMPLEXITY: Low
+:ESTIMATE: 3 days
+:DEPENDS: None
+:END:
+
+*** Description
+Spell detects the active domain from project context, switching between coding
+mode (default) and growth mode (or future domains) automatically. No CLI flag
+required — the project tells Spell what it is.
+
+*** Detection Hierarchy (first match wins)
+1. =.spell/domain.json= explicit configuration:
+   #+begin_src json
+   {
+     "domain": "growth",
+     "config": {
+       "default_client": "acme-corp",
+       "competitors": ["competitor-a", "competitor-b"],
+       "ad_platforms": ["facebook"]
+     }
+   }
+   #+end_src
+2. Project structure heuristics:
+   - =domain/growth/= directory exists → growth domain
+   - =typst/= + =clients/= directories exist → growth domain
+   - =package.json= with =spell-growth= dependency → growth domain
+3. Default: coding domain (current behavior, no change)
+
+*** Implementation
+- New module: =packages/coding-agent/src/domain/detector.ts=
+- Called during startup, before mode selection
+- Returns =DomainConfig= object: ={ domain: string, config: Record<string, unknown> }=
+- Mode selection reads =DomainConfig.domain= to choose shell (coding vs. growth)
+- Domain config passed to system prompt builder and tool registry
+
+*** Acceptance Criteria
+- [ ] =.spell/domain.json= with ="domain": "growth"= launches growth shell
+- [ ] Missing =.spell/domain.json= falls back to heuristic detection
+- [ ] No =.spell/domain.json= and no heuristic match → coding mode (default)
+- [ ] Domain config accessible to system prompt builder and mode initializer
+- [ ] Detection completes in < 50ms (no filesystem scanning beyond project root)
+
+** TODO [#A] F18 — Domain-Scoped System Prompts
+:PROPERTIES:
+:ID: growth-f18-domain-prompts
+:COMPLEXITY: Medium
+:ESTIMATE: 1 week
+:DEPENDS: F17 (Domain Auto-Detection)
+:END:
+
+*** Description
+Growth domain injects a specialized system prompt that shapes the agent's
+personality, available tools, active modes, and domain vocabulary. Replaces
+the coding-focused system prompt while retaining core agent capabilities.
+
+*** Prompt Structure
+- *Identity*: Marketing strategist and analyst (not software engineer)
+- *Vocabulary*: CTR, ROAS, CPA, creative fatigue, funnel, attribution, etc.
+- *Available tools*: Standard tools + scraper, typst_compile, ad_query, deliverable_manage
+- *Available modes*: /strategy, /campaign, /creative, /review (instead of /plan, /ultraplan, /design, /audit)
+- *Deliverable awareness*: Agent knows about briefs, reports, decks as output types
+- *Typst reference*: Condensed ora-brand component reference (names, parameters, examples)
+- *Client context*: Active client from domain config injected into prompt
+
+*** Implementation
+- =domain/growth/prompts/system.ts= exports a function that takes =DomainConfig=
+  and returns the system prompt string
+- Prompt composition: base agent capabilities + growth-specific sections
+- Typst component reference auto-generated from ora-brand/lib.typ exports
+  (build step, not runtime parsing)
+- Mode definitions registered via =domain/growth/modes/= directory
+
+*** Acceptance Criteria
+- [ ] Growth system prompt includes marketing-specific identity and vocabulary
+- [ ] Agent responds to growth queries with domain-appropriate framing
+- [ ] =/strategy=, =/campaign=, =/creative=, =/review= recognized as valid commands
+- [ ] Coding-specific modes (=/plan=, =/ultraplan=) are not available in growth domain
+- [ ] Typst component reference is accurate (matches ora-brand/lib.typ exports)
+- [ ] Client context from domain.json appears in agent's working context
+
+** TODO [#B] F19 — Growth-Specific Loop Domains
+:PROPERTIES:
+:ID: growth-f19-loop-domains
+:COMPLEXITY: Medium
+:ESTIMATE: 1 week
+:DEPENDS: F17 (Domain Auto-Detection), Loop System (packages/coding-agent/src/loop/)
+:END:
+
+*** Description
+Extends the loop system with growth-specific domains and gates. Coding loops
+use domains like "code", "test", "architecture". Growth loops use domains like
+"research", "analysis", "report-generation" with corresponding validation gates.
+
+*** New Loop Domains
+| Domain             | Description                          | Gate Type        |
+|--------------------+--------------------------------------+------------------|
+| research           | Web search, data gathering           | Data sufficiency |
+| analysis           | Data synthesis, pattern extraction   | Completeness     |
+| report-generation  | Typst compilation, formatting        | Compilation      |
+| competitive-scan   | Scraper execution, data ingestion    | Result count     |
+| brand-consistency  | ORA brand guideline adherence        | Style check      |
+| report-validation  | Output quality, data accuracy        | Accuracy check   |
+
+*** Gate Definitions
+
+**** Data Sufficiency Gate (research)
+- Minimum N distinct sources consulted
+- Key claims have supporting data points
+- No unsupported assertions in output
+
+**** Compilation Gate (report-generation)
+- Typst source compiles without errors
+- PDF output renders all pages
+- No missing fonts or broken references
+
+**** Brand Consistency Gate (brand-consistency)
+- Colors match ORA palette (navy, coral, cream only)
+- Typography uses Aspekta family exclusively
+- Component usage follows ora-brand conventions
+- Logo placement per brand guidelines
+
+**** Result Count Gate (competitive-scan)
+- Minimum N ads retrieved (configurable)
+- No scraper errors in final set
+- Data covers requested date range
+
+*** Acceptance Criteria
+- [ ] All six growth domains register with the loop system
+- [ ] Gates execute and return pass/fail with specific failure reasons
+- [ ] Compilation gate catches Typst errors and reports line numbers
+- [ ] Brand consistency gate detects non-ORA colors in Typst source
+- [ ] Growth domains are only available when domain = "growth"
+- [ ] Loop manifests can mix growth and generic domains
+
+** TODO [#B] F20 — Growth Artifact System
+:PROPERTIES:
+:ID: growth-f20-artifact-system
+:COMPLEXITY: Medium
+:ESTIMATE: 1.5 weeks
+:DEPENDS: F12 (Deliverable Pipeline), Artifact System (packages/coding-agent/src/artifacts/)
+:END:
+
+*** Description
+Extends the artifact system to treat deliverables as first-class artifacts with
+lifecycle management. Coding artifacts are session-scoped text blobs. Growth
+artifacts are persistent, versioned, typed deliverables that survive sessions
+and track through the pipeline.
+
+*** Artifact Types
+| Type       | Format     | Storage             | Versioned | Pipeline-Tracked |
+|------------+------------+---------------------+-----------+------------------|
+| brief      | Markdown   | File + SQLite meta  | Yes       | Yes              |
+| report     | Typst→PDF  | File + SQLite meta  | Yes       | Yes              |
+| deck       | Typst→PDF  | File + SQLite meta  | Yes       | Yes              |
+| analysis   | JSON       | SQLite              | Yes       | No               |
+| snapshot   | JSON       | SQLite              | No        | No               |
+| dashboard  | QML state  | File                | No        | No               |
+
+*** Lifecycle
+1. *Created*: Agent or user initiates a deliverable
+2. *Active*: Under active editing/generation
+3. *Versioned*: Status change triggers version snapshot (source + metadata)
+4. *Final*: Compiled output frozen, no further edits
+5. *Archived*: Moved to archive, queryable but not displayed in active views
+
+*** Protocol Extension
+- =deliverable://= protocol for referencing deliverables by ID
+  - =deliverable://DEL-001= → resolves to current source file
+  - =deliverable://DEL-001/v3= → resolves to version 3 snapshot
+  - =deliverable://DEL-001/pdf= → resolves to compiled PDF path
+- Agent can reference deliverables in chat: "See deliverable://DEL-001 for the analysis"
+
+*** Acceptance Criteria
+- [ ] All six artifact types create, store, and retrieve correctly
+- [ ] Version snapshots capture full source at time of status change
+- [ ] =deliverable://= protocol resolves to correct file paths
+- [ ] Archived deliverables are excluded from active queries but still accessible
+- [ ] Growth artifacts survive session restarts (persistent storage)
+- [ ] Artifact system detects domain and uses appropriate type registry

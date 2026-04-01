@@ -1,0 +1,118 @@
+name: facebook-ads-library
+url: "https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&q={{query.keyword}}"
+
+setupActions:
+  - type: navigate
+    url: "https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&q={{query.keyword}}"
+  - type: wait
+    selector: "div[role='feed']"
+    timeout: 10000
+
+containers:
+  - selector: "div[role='feed'] > div"
+    fields:
+      - name: ad_id
+        selector: "a[href*='/ads/library/']"
+        attribute: href
+        required: true
+        transforms:
+          - type: regex
+            pattern: "Library ID[:\\s]+(\\d+)"
+            group: 1
+      - name: page_name
+        selector: "a[role='link'] span"
+        attribute: innerText
+        required: true
+      - name: page_id
+        selector: "a[role='link']"
+        attribute: href
+        transforms:
+          - type: regex
+            pattern: "/ads/library/\\?.*id=(\\d+)"
+            group: 1
+      - name: creative_body
+        selector: "div._7jyr span"
+        attribute: innerText
+      - name: delivery_start_time
+        selector: "span:has-text('Started running')"
+        attribute: innerText
+        transforms:
+          - type: regex
+            pattern: "Started running on (.+)"
+            group: 1
+      - name: is_active
+        selector: "span:has-text('Active')"
+        attribute: innerText
+        transforms:
+          - type: exists
+      - name: ad_format
+        selector: "img, video"
+        attribute: tagName
+        transforms:
+          - type: replace
+            find: "IMG"
+            replaceWith: "image"
+          - type: replace
+            find: "VIDEO"
+            replaceWith: "video"
+    details:
+      trigger: "a[href*='ads/library/?id=']"
+      wait: "div._8jgv"
+      fields:
+        - name: spend_range
+          selector: "div:has-text('Amount spent') + div"
+          attribute: innerText
+        - name: impressions_range
+          selector: "div:has-text('Impressions') + div"
+          attribute: innerText
+        - name: snapshot_url
+          selector: "img._7jys"
+          attribute: src
+      close: "button[aria-label='Close']"
+
+pagination:
+  type: infinite_scroll
+  maxItems: 500
+  timeout: 5000
+
+rateLimit:
+  requestsPerMinute: 20
+  backoffMultiplier: 2.0
+  maxBackoffMs: 60000
+
+errorHandling:
+  retries: 3
+  screenshotOnError: true
+  indicators:
+    - selector: "div[role='dialog']:has-text('rate limit')"
+      action: backoff
+    - selector: "div[role='dialog']:has-text('log in')"
+      action: abort
+
+schemaManifest:
+  entities:
+    - name: pages
+      tableName: pages
+      columns:
+        - { name: page_id, type: TEXT, primary: true }
+        - { name: page_name, type: TEXT }
+        - { name: scraped_at, type: TEXT }
+      indexes:
+        - [page_name]
+    - name: ads
+      tableName: ads
+      columns:
+        - { name: ad_id, type: TEXT, primary: true }
+        - { name: page_id, type: TEXT, fk: { table: pages, column: page_id } }
+        - { name: creative_body, type: TEXT }
+        - { name: delivery_start_time, type: TEXT }
+        - { name: is_active, type: INTEGER }
+        - { name: ad_format, type: TEXT }
+        - { name: spend_range, type: TEXT }
+        - { name: impressions_range, type: TEXT }
+        - { name: snapshot_url, type: TEXT }
+        - { name: scraped_at, type: TEXT }
+      indexes:
+        - [page_id]
+        - [delivery_start_time]
+        - [is_active]

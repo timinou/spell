@@ -1,0 +1,72 @@
+#+TITLE: Market Signal Feed
+#+STATE: DONE
+#+SESSION_ID: 14a899a7fbc415d6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/35-CreateRemainingFeats.jsonl]]
+#+CUSTOM_ID: FEAT-144-market-signal-feed
+#+EFFORT: 25h
+#+PRIORITY: #B
+#+LAYER: domain
+#+DEPENDS: PROJ-011-native-ts-scraper-framework
+
+* Scope
+** In
+- Scheduled scraper runs via configurable timer (daily at 6am or on-demand)
+- Diff previous vs current scrape: new ads, removed ads, changed ads
+- Digest notification in dashboard: badge count + feed items
+- Signal sources configurable in .spell/growth/signals.json
+** Out
+- Ad creative analysis (see Ad Creative Analyzer FEAT)
+- Historical trend charting
+** Boundary
+- Depends on scraper framework for fetch/parse; owns scheduling and diffing
+
+* Tests
+- tests/features/market-signal/scheduler.test.ts
+- tests/features/market-signal/diff-engine.test.ts
+- tests/features/market-signal/digest.test.ts
+
+* Implementation
+** Implement Scheduler
+:PROPERTIES:
+:CUSTOM_ID: FEAT-144-market-signal-feed::implement-scheduler
+:DEPENDS: PROJ-011-native-ts-scraper-framework
+:END:
+Cron-style scheduler reading schedule from signals.json. Supports daily cron expressions and on-demand trigger. Persists last-run timestamp to SQLite.
+
+** Implement Diff Engine
+:PROPERTIES:
+:CUSTOM_ID: FEAT-144-market-signal-feed::implement-diff-engine
+:DEPENDS: FEAT-144-market-signal-feed::implement-scheduler
+:END:
+Compare current scrape snapshot vs previous snapshot stored in SQLite. Classify each ad as new, removed, or changed (field-level diff). Emit structured diff result with ad IDs and change types.
+
+** Implement Digest
+:PROPERTIES:
+:CUSTOM_ID: FEAT-144-market-signal-feed::implement-digest
+:DEPENDS: FEAT-144-market-signal-feed::implement-diff-engine
+:END:
+Write diff results to digest table. Dashboard badge reads unread count. Feed panel lists digest items with timestamp, source, change summary. Mark-as-read action clears badge.
+
+** Create Signal Config
+:PROPERTIES:
+:CUSTOM_ID: FEAT-144-market-signal-feed::create-signal-config
+:DEPENDS:
+:END:
+Define signals.json schema: array of signal sources with url, scraper type, schedule expression, enabled flag. Validation on load with descriptive errors.
+
+** Write Tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-144-market-signal-feed::write-tests
+:DEPENDS: FEAT-144-market-signal-feed::implement-digest, FEAT-144-market-signal-feed::create-signal-config
+:END:
+Unit tests for diff engine with fixture snapshots. Scheduler tests with mocked timer. Integration test: full run produces digest entry.
+
+* Edge Cases
+- Signal source URL unreachable: log error, skip diff, do not clear previous snapshot
+- First run (no previous snapshot): treat all scraped ads as "new"
+- signals.json missing or malformed: disable scheduling, surface config error in dashboard
+
+* Acceptance Criteria
+- Scheduled scrape runs at time configured in signals.json
+- Diff output correctly identifies new and removed ads between two snapshots
+- Dashboard badge shows count of unread digest items after a scrape run

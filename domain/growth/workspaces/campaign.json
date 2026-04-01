@@ -1,0 +1,10 @@
+{
+  "id": "campaign",
+  "name": "Campaign",
+  "icon": "rocket",
+  "panels": [
+    { "panelId": "planner", "position": "main", "flex": 2 },
+    { "panelId": "chat", "position": "secondary", "flex": 1 }
+  ],
+  "defaultMode": "campaign"
+}

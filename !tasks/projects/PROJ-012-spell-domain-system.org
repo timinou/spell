@@ -1,0 +1,155 @@
+#+TITLE: Spell Domain System
+#+STATE: DONE
+#+SESSION_ID: 14a89873efc415c2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/24-CreateProjA.jsonl]]
+#+CUSTOM_ID: PROJ-012-spell-domain-system
+#+EFFORT: 50h
+#+PRIORITY: #A
+#+LAYER: infrastructure
+
+
+## Scope
+
+IN: Domain detection (.spell/domain.json), domain-scoped system prompts (replace persona but preserve tool docs metadata injection), domain-scoped tool selection (include/exclude on BUILTIN_TOOLS), workspace/mode coupling (extend existing ModeConfigFrontmatter with workspace layout field + new .spell/workspaces/ convention), panel discovery for domain QML panels, backward-compatible (coding domain is implicit default).
+OUT: Growth-specific panels/modes/tools (those are separate FEATs). Multi-tenant domain composition. Hot-reload of domain configs.
+BOUNDARY: This item creates the SEAMS; other items fill them.
+
+## Tests
+
+- domain/growth/test/domain-detection.test.ts: detection from .spell/domain.json, CLI flag override, heuristic fallback, default to coding
+- domain/growth/test/domain-loading.test.ts: load domain manifest, resolve paths, validate schema
+- domain/growth/test/tool-filtering.test.ts: include/exclude filters on BUILTIN_TOOLS
+- domain/growth/test/prompt-assembly.test.ts: domain prompt replaces persona, preserves tool docs
+- packages/coding-agent/test/modes/workspace-mode-coupling.test.ts: workspace activates default mode
+
+## Implementation
+
+*** Define SpellDomain interface and types
+:PROPERTIES:
+:CUSTOM_ID: PROJ-012-spell-domain-system::define-domain-types
+:END:
+
+Files: domain/growth/src/types.ts
+
+Define SpellDomain interface: name, description, systemPromptPath, contextFiles, tools (include/exclude), panels (PanelDef[]), workspaces (WorkspaceDef[]), modes (path to .spell/modes/*.md), loopDomains, artifactTypes. Also WorkspaceDef: id, name, icon, panels (ids+layout), defaultMode, restrictions.
+
+*** Implement domain detection
+:PROPERTIES:
+:CUSTOM_ID: PROJ-012-spell-domain-system::implement-detection
+:DEPENDS: PROJ-012-spell-domain-system::define-domain-types
+:END:
+
+Files: packages/coding-agent/src/domain/detection.ts
+
+Check .spell/domain.json first, then CLI --domain flag, then heuristic (presence of .typ files + domain/growth/), default to 'coding'. Return domain name string.
+
+*** Implement domain loader
+:PROPERTIES:
+:CUSTOM_ID: PROJ-012-spell-domain-system::implement-loader
+:DEPENDS: PROJ-012-spell-domain-system::define-domain-types
+:END:
+
+Files: packages/coding-agent/src/domain/loader.ts
+
+Load domain manifest from domain/{name}/manifest.ts (or .json). Resolve relative paths. Validate schema. Return SpellDomain instance.
+
+*** Create coding domain manifest (backward compat)
+:PROPERTIES:
+:CUSTOM_ID: PROJ-012-spell-domain-system::coding-domain-manifest
+:DEPENDS: PROJ-012-spell-domain-system::define-domain-types
+:END:
+
+Files: domain/coding/manifest.ts
+
+Extract current implicit coding behavior into explicit SpellDomain. Tools: all BUILTIN_TOOLS. Panels: ChatPanel, DashboardPanel. No workspaces (single layout). System prompt: existing system prompt path.
+
+*** Wire domain into CreateAgentSessionOptions
+:PROPERTIES:
+:CUSTOM_ID: PROJ-012-spell-domain-system::wire-session-options
+:DEPENDS: PROJ-012-spell-domain-system::implement-detection PROJ-012-spell-domain-system::implement-loader
+:END:
+
+Files: packages/coding-agent/src/sdk.ts, packages/coding-agent/src/main.ts
+
+Add domain?: SpellDomain to CreateAgentSessionOptions. In main.ts, detect domain before session creation, load manifest, pass to createAgentSession(). In sdk.ts, use domain to configure systemPrompt, tools, customTools.
+
+*** Implement domain-scoped tool selection
+:PROPERTIES:
+:CUSTOM_ID: PROJ-012-spell-domain-system::tool-selection
+:DEPENDS: PROJ-012-spell-domain-system::wire-session-options
+:END:
+
+Files: packages/coding-agent/src/tools/index.ts
+
+Add include/exclude filtering in createTools(). If domain specifies tools.include, only load those from BUILTIN_TOOLS. If tools.exclude, load all except those. Merge domain.customTools.
+
+*** Implement domain-scoped system prompt assembly
+:PROPERTIES:
+:CUSTOM_ID: PROJ-012-spell-domain-system::prompt-assembly
+:DEPENDS: PROJ-012-spell-domain-system::wire-session-options
+:END:
+
+Files: packages/coding-agent/src/system-prompt.ts
+
+If domain.systemPromptPath is set, load that prompt as persona. Preserve tool documentation injection from buildSystemPrompt(). Merge domain.contextFiles with discovered context files.
+
+*** Implement panel discovery from domain
+:PROPERTIES:
+:CUSTOM_ID: PROJ-012-spell-domain-system::panel-discovery
+:DEPENDS: PROJ-012-spell-domain-system::implement-loader
+:END:
+
+Files: packages/coding-agent/src/modes/qml-mode.ts
+
+Replace stub discoverSkillPanels() with domain-aware discovery. Read domain.panels, resolve QML file paths, merge with default panels (Chat always present). Pass merged panel list to shell.qml via bridge.props.
+
+*** Extend ModeConfigFrontmatter for workspace coupling
+:PROPERTIES:
+:CUSTOM_ID: PROJ-012-spell-domain-system::workspace-mode-coupling
+:DEPENDS: PROJ-012-spell-domain-system::define-domain-types
+:END:
+
+Files: packages/coding-agent/src/capability/mode.ts
+
+Add optional `workspace` field to ModeConfigFrontmatter: { layout: string, panels: string[] }. When a mode with a workspace field is activated, the shell switches to that layout.
+
+*** Write domain detection tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-012-spell-domain-system::write-detection-tests
+:DEPENDS: PROJ-012-spell-domain-system::implement-detection
+:END:
+
+Files: domain/growth/test/domain-detection.test.ts
+
+*** Write domain loading tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-012-spell-domain-system::write-loading-tests
+:DEPENDS: PROJ-012-spell-domain-system::implement-loader PROJ-012-spell-domain-system::coding-domain-manifest
+:END:
+
+Files: domain/growth/test/domain-loading.test.ts
+
+*** Write tool filtering tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-012-spell-domain-system::write-tool-tests
+:DEPENDS: PROJ-012-spell-domain-system::tool-selection
+:END:
+
+Files: domain/growth/test/tool-filtering.test.ts
+
+## Edge Cases
+
+- Missing .spell/domain.json: fall back to heuristic then default
+- Invalid domain name in config: error with available domains
+- Domain manifest missing required fields: schema validation error
+- Coding domain must work identically to current behavior (no regression)
+- Domain with empty tools.include: error (agent needs at least some tools)
+
+## Acceptance Criteria
+
+- Running `spell` in a dir with `.spell/domain.json: {"domain":"growth"}` loads growth domain manifest
+- Running `spell --domain coding` in same dir overrides to coding
+- Running `spell` in a normal code dir defaults to coding with no behavior change
+- All existing tests pass (backward compatibility)
+- Domain tool filtering works: growth domain excludes coding-specific tools (lsp, ast_grep, ast_edit)
+- Domain prompt assembly replaces persona while preserving tool documentation

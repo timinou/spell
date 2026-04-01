@@ -1,0 +1,83 @@
+#+TITLE: Competitive Intelligence Panel
+#+STATE: DONE
+#+SESSION_ID: 14a899a7f74415ce
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/31-CreateFeatB.jsonl]]
+#+CUSTOM_ID: FEAT-141-competitive-intelligence-panel
+#+EFFORT: 30h
+#+PRIORITY: #A
+#+LAYER: ui
+#+DEPENDS: PROJ-011-native-ts-scraper-framework PROJ-013-growth-qml-shell-and-workspace-system
+
+
+## Scope
+IN: Ad gallery QML panel. Filter toolbar (advertiser name search, keyword filter, date range, ad format checkboxes, active/inactive toggle). Grid/list view toggle. Ad cards (thumbnail, advertiser, text preview, date, status badge, format icon). Detail side drawer on card click (full ad text, spend/impressions ranges, landing page URL, creative assets, annotation tools). Annotation: tag, note, star/favorite. 'Analyze' button triggers agent creative analysis. All data from SQLite via armed tools (no LLM round-trip for filtering/sorting).
+OUT: Scraper execution (PROJ-C). Agent analysis logic (FEAT-I). Background monitoring (FEAT-H).
+
+## Tests
+- domain/growth/test/panels/intel-panel.test.ts: render with ads, filter by advertiser, click card opens drawer
+- domain/growth/test/panels/intel-empty.test.ts: no ads, shows scan prompt
+- domain/growth/test/panels/intel-filter.test.ts: date range filter, format filter, active toggle
+
+## Implementation
+** Define intel panel types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-141-competitive-intelligence-panel::define-types
+:END:
+Files: domain/growth/src/panels/intel/types.ts
+
+** Implement armed tool for ad queries
+:PROPERTIES:
+:CUSTOM_ID: FEAT-141-competitive-intelligence-panel::implement-armed-query
+:DEPENDS: FEAT-141-competitive-intelligence-panel::define-types
+:END:
+Files: domain/growth/src/panels/intel/armed-tools.ts
+Armed tool 'ads_query': accepts filters (advertiser, keywords, dateRange, formats, isActive), pagination (offset, limit), sort (field, direction). Returns AdCard[] from SQLite. No LLM involvement.
+
+** Create IntelPanel.qml
+:PROPERTIES:
+:CUSTOM_ID: FEAT-141-competitive-intelligence-panel::create-panel-qml
+:DEPENDS: FEAT-141-competitive-intelligence-panel::define-types
+:END:
+Files: domain/growth/src/qml/panels/IntelPanel.qml
+Toolbar + grid/list + detail drawer layout.
+
+** Create FilterToolbar.qml
+:PROPERTIES:
+:CUSTOM_ID: FEAT-141-competitive-intelligence-panel::create-filter-toolbar
+:DEPENDS: FEAT-141-competitive-intelligence-panel::create-panel-qml
+:END:
+Files: domain/growth/src/qml/components/FilterToolbar.qml
+
+** Create AdCard.qml
+:PROPERTIES:
+:CUSTOM_ID: FEAT-141-competitive-intelligence-panel::create-ad-card
+:DEPENDS: FEAT-141-competitive-intelligence-panel::create-panel-qml
+:END:
+Files: domain/growth/src/qml/components/AdCard.qml
+
+** Create AdDetailDrawer.qml
+:PROPERTIES:
+:CUSTOM_ID: FEAT-141-competitive-intelligence-panel::create-detail-drawer
+:DEPENDS: FEAT-141-competitive-intelligence-panel::create-panel-qml
+:END:
+Files: domain/growth/src/qml/components/AdDetailDrawer.qml
+
+** Write intel panel tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-141-competitive-intelligence-panel::write-tests
+:DEPENDS: FEAT-141-competitive-intelligence-panel::create-panel-qml FEAT-141-competitive-intelligence-panel::implement-armed-query
+:END:
+Files: domain/growth/test/panels/intel-panel.test.ts, intel-filter.test.ts
+
+## Edge Cases
+- 1000+ ads: virtual scrolling in grid, paginated queries
+- Ad with no thumbnail: show placeholder with format icon
+- Filter returns 0 results: 'No ads match filters' message
+- Side drawer open + workspace switch: drawer closes, state preserved for return
+
+## Acceptance Criteria
+- Ad gallery renders with seeded data, cards show correct info
+- Filtering by advertiser name returns matching ads only
+- Clicking card opens detail drawer with full ad info
+- Star/tag annotation persists in SQLite
+- 'Analyze' button sends ad data to agent via chat

@@ -1,0 +1,66 @@
+#+TITLE: Ad Creative Analyzer
+#+STATE: DONE
+#+SESSION_ID: 14a899a7fbc415d6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/35-CreateRemainingFeats.jsonl]]
+#+CUSTOM_ID: FEAT-145-ad-creative-analyzer
+#+EFFORT: 18h
+#+PRIORITY: #B
+#+LAYER: domain
+#+DEPENDS: PROJ-011-native-ts-scraper-framework
+
+* Scope
+** In
+- Agent-driven creative analysis of competitor ads from SQLite
+- Copy pattern analysis: tone, length, CTA types, offers
+- Visual pattern analysis: format distribution, color usage
+- Strategic pattern analysis: targeting signals, seasonal timing
+- Output: competitive creative brief as org item or Typst document
+- 'Analyze' action in intel panel triggers analysis
+** Out
+- Real-time ad monitoring (see Market Signal Feed)
+- Automated brief publishing
+** Boundary
+- Reads ads from SQLite populated by scraper framework; does not fetch directly
+
+* Tests
+- tests/features/ad-creative-analyzer/analysis-tool.test.ts
+- tests/features/ad-creative-analyzer/brief-template.test.ts
+
+* Implementation
+** Design Analysis Prompt
+:PROPERTIES:
+:CUSTOM_ID: FEAT-145-ad-creative-analyzer::design-analysis-prompt
+:DEPENDS: PROJ-011-native-ts-scraper-framework
+:END:
+Craft structured system prompt for creative analysis. Input: array of ad records (copy, format, metadata). Output schema: copy_patterns, visual_patterns, strategic_patterns, recommendations. Prompt tested against fixture ad sets.
+
+** Implement Analysis Tool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-145-ad-creative-analyzer::implement-analysis-tool
+:DEPENDS: FEAT-145-ad-creative-analyzer::design-analysis-prompt
+:END:
+Armed tool: analyze_ad_set(ad_set_id). Fetches ads from SQLite, batches into prompt, calls agent, parses structured output. Stores analysis result in SQLite analyses table. Intel panel 'Analyze' button invokes tool.
+
+** Create Brief Template
+:PROPERTIES:
+:CUSTOM_ID: FEAT-145-ad-creative-analyzer::create-brief-template
+:DEPENDS: FEAT-145-ad-creative-analyzer::implement-analysis-tool PROJ-010-typst-integration::create-templates
+:END:
+Typst template for competitive creative brief. Sections: Executive Summary, Copy Patterns, Visual Patterns, Strategic Patterns, Recommended Creative Direction. Export as PDF or save as org item.
+
+** Write Tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-145-ad-creative-analyzer::write-tests
+:DEPENDS: FEAT-145-ad-creative-analyzer::create-brief-template
+:END:
+Unit tests for prompt construction with fixture ads. Integration test: analyze_ad_set produces structured result. Brief template renders without errors for fixture analysis.
+
+* Edge Cases
+- Ad set with fewer than 3 ads: still runs analysis, brief notes limited sample size
+- Ads with missing copy (image-only): skip copy analysis for those records, note count
+- LLM output schema mismatch: surface parse error, do not persist partial result
+
+* Acceptance Criteria
+- 'Analyze' action on an ad set produces a structured competitive creative brief
+- Brief correctly identifies copy/visual/strategic patterns across 10+ ads
+- Brief can be exported as Typst PDF or saved as an org item

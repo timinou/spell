@@ -1,0 +1,10 @@
+{
+  "id": "strategy",
+  "name": "Strategy",
+  "icon": "lightbulb",
+  "panels": [
+    { "panelId": "dashboard", "position": "main", "flex": 2 },
+    { "panelId": "chat", "position": "secondary", "flex": 1 }
+  ],
+  "defaultMode": "strategy"
+}

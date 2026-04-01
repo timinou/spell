@@ -1,0 +1,211 @@
+#+TITLE: Spell Growth — Needs Analysis
+#+AUTHOR: ORA Ventures
+#+DATE: 2026-03-31
+#+STARTUP: showall
+
+* Problem Statement                                                   :context:
+
+Growth practitioners at ORA Ventures operate across fragmented, ad-hoc tooling:
+
+- *Manual Typst authoring*: Every client report, proposal, and deck requires hand-wiring =ora-branding= components (=~/code/ora/leadgen/configs/=, =~/code/ora/ora-branding/typst/ora-brand/lib.typ=). No templates, no live preview — write Typst blind, compile, check PDF, iterate.
+- *Disconnected competitive intelligence*: Facebook Ad Library scraping lives in separate Python scripts (=~/code/ora/leadgen/=). Results land in CSVs or scattered JSON. No way to browse, compare, or track competitor ads over time without manual effort.
+- *Scattered research*: Market analysis, audience data, campaign notes live in per-client folders inside BackDesk-C with no standard structure. Finding prior work means grepping across projects.
+- *No unified workspace*: Switching between terminal (Typst compilation), browser (Ad Library), spreadsheets (metrics), and file manager (deliverables) for a single client task. Context is lost at every boundary.
+- *No deliverable lifecycle*: A brief starts as a chat message, becomes a doc somewhere, gets emailed as a PDF. No tracking from ideation to client handoff. No version history. No reuse.
+
+The result: slow turnaround, inconsistent output quality, duplicated effort across clients, and an inability to scale without adding headcount linearly.
+
+* User Needs                                                          :user:
+
+** Single Workspace for All Growth Activities
+:PROPERTIES:
+:PRIORITY: A
+:END:
+
+One environment — research, strategy, content creation, reporting — without leaving the canvas. The practitioner opens a growth project and sees everything: active campaigns, pending deliverables, competitive signals, client context.
+
+- Research: query competitive intelligence, browse ad libraries, pull market data
+- Strategy: formulate plans with agent assistance, reference prior briefs
+- Content: write and preview branded documents in real time
+- Reporting: generate client-ready PDFs from structured data
+
+No tab-switching to a browser. No terminal for compilation. No file manager for organization.
+
+** Branded Document Generation Without Manual Setup
+:PROPERTIES:
+:PRIORITY: A
+:END:
+
+Typst documents use =ora-brand= components (colors, typography, layouts from =~/code/ora/ora-branding/typst/ora-brand/lib.typ=) automatically. The practitioner describes what they need; the agent produces a branded deliverable.
+
+- Templates for common deliverables: weekly digest, client proposal, competitive analysis, campaign brief, performance report
+- Brand consistency enforced by the system, not by memory
+- Live preview as the agent writes — not compile-then-check
+- Click-to-code: click an element in the preview, jump to the Typst source
+
+** Competitive Intelligence at a Glance
+:PROPERTIES:
+:PRIORITY: A
+:END:
+
+A persistent, browsable view of competitor advertising activity. Not a one-shot scrape — a living feed.
+
+- Browse Facebook Ad Library results with filters (advertiser, date range, platform, media type)
+- Gallery view for visual comparison of creatives
+- Track changes over time: new ads, paused ads, copy/visual shifts
+- Annotate and tag ads for later reference in briefs and reports
+- Export selections directly into deliverables (embed in Typst reports)
+
+** Deliverable Tracking from Brief to Handoff
+:PROPERTIES:
+:PRIORITY: B
+:END:
+
+Every deliverable has a lifecycle: brief → draft → review → final → delivered. The system tracks this.
+
+- Kanban-style board in the canvas showing all active deliverables per client
+- Version history for each deliverable (drafts, revisions, final)
+- Status visible at a glance in the dashboard
+- Link deliverables to the research, data, and strategy that produced them
+
+** Reusable Templates and Brand Consistency
+:PROPERTIES:
+:PRIORITY: B
+:END:
+
+Templates are first-class, not copy-pasted boilerplate.
+
+- Template library: common deliverable types with pre-wired =ora-brand= components
+- Per-client brand overrides (accent colors, logos) layered on top of base templates
+- New templates created from any finished deliverable ("save as template")
+- Consistent structure across practitioners — a proposal from person A looks like one from person B
+
+* Business Needs                                                      :business:
+
+** Faster Turnaround on Client Deliverables
+:PROPERTIES:
+:PRIORITY: A
+:END:
+
+Current state: a competitive analysis report takes hours of manual research, Typst wrangling, and iteration. Target: the agent handles data collection and document assembly; the practitioner reviews, edits, and approves.
+
+- Reduce time-to-deliverable by automating research aggregation, document scaffolding, and brand formatting
+- Agent drafts deliverables from structured data and prior context, practitioner steers
+- Live preview eliminates the compile-check-fix loop
+
+** Consistent Quality Across Proposals and Reports
+:PROPERTIES:
+:PRIORITY: A
+:END:
+
+Quality variance is a brand risk. Templates and automation enforce a floor.
+
+- Every deliverable uses approved brand components — no ad-hoc formatting
+- Structured templates ensure completeness (no missing sections, no inconsistent metrics)
+- Review mode (=/review=) flags anomalies and gaps before client handoff
+
+** Competitive Advantage Through Deeper, Faster Analysis
+:PROPERTIES:
+:PRIORITY: B
+:END:
+
+Speed of insight is a differentiator. Clients value agencies that surface trends before competitors act.
+
+- Continuous competitive monitoring vs. point-in-time manual scrapes
+- Pattern detection across competitor ad creative (copy themes, visual styles, CTAs, timing)
+- Historical trend data that accumulates over time — each analysis builds on prior intelligence
+
+** Scale Growth Operations Without Proportional Headcount
+:PROPERTIES:
+:PRIORITY: A
+:END:
+
+The bottleneck is practitioner hours per client. Automation targets the mechanical work, not the strategic judgment.
+
+- One practitioner manages more clients when research/formatting/tracking is automated
+- Institutional knowledge persists in the system (templates, prior deliverables, competitive data) rather than in individual memory
+- Onboarding a new practitioner means giving them access to the workspace, not a folder of tribal knowledge
+
+* Technical Needs                                                     :technical:
+
+** Canvas-First Experience (Always QML)
+:PROPERTIES:
+:PRIORITY: A
+:END:
+
+The TUI is the launcher, not the workspace. Growth mode activates the QML canvas immediately.
+
+- Auto-detected from project context: =.spell/domain.json= with ={"domain": "growth"}= triggers canvas-first launch
+- Reuses existing QML Mode infrastructure (=packages/coding-agent/src/modes/qml-mode.ts=): Material Design 3 shell, =SplitView= layout, =SessionEventMapper=, panel discovery via =discoverSkillPanels()=
+- Chat input in the canvas, not the TUI — the TUI shows status/logs only
+- Tabbed workspace: Dashboard (home), Competitive Intel, Reports, Client Overview
+- Canvas Orchestrator provides scoped lightweight agents per panel with escalation
+
+** Live Typst Preview with Click-to-Code
+:PROPERTIES:
+:PRIORITY: A
+:END:
+
+Split-pane editor: Typst source on the left, rendered PDF on the right, updated in real time.
+
+- *Rendering*: =typst-ts= WASM compiled to WebAssembly, running in QML =WebEngineView=. Compiles Typst → PDF pages rendered to canvas.
+- *Syntax highlighting*: =Qt-TreeSitterHighlighter= with =tree-sitter-typst= grammar for the source editor pane.
+- *Click-to-code*: Click an element in the preview → source editor scrolls to and highlights the corresponding Typst source. Requires source mapping from =typst-ts= compilation.
+- *Agent integration*: As the agent streams Typst output, the preview updates incrementally. The practitioner sees the document take shape in real time.
+- *Template insertion*: Palette of =ora-brand= components (=stat-cell=, =pillar-card=, =metrics-strip=, etc.) insertable from a sidebar, wired into the source.
+
+** Native Scraping Framework (TypeScript)
+:PROPERTIES:
+:PRIORITY: A
+:END:
+
+Platform-agnostic scraper framework in TypeScript, not Python. Inspired by the YAML DSL in =~/code/ora/leadgen/configs/=.
+
+- Declarative scraping configs (YAML): browser settings, container selectors, field extraction (selector + type + transform), pagination (=infinite_scroll=), related models, detail dialogs, error handling (retries, rate limits, error indicators)
+- TypeScript runtime that interprets these configs — same patterns as leadgen but native to the Spell ecosystem
+- Starting platform: Facebook Ads Library
+- Extensible to other platforms (Google Ads Transparency, TikTok Ad Library, LinkedIn Ad Library) via new config files
+- Results stored in SQLite (see below), not scattered files
+- Scheduled/background scraping via the market signal feed
+
+** Hybrid Persistence (Files + SQLite)
+:PROPERTIES:
+:PRIORITY: A
+:END:
+
+Documents are files. Structured data is SQLite. Both live in the project directory.
+
+- *Files*: Typst sources, compiled PDFs, Markdown notes, templates, images — version-controlled, human-readable, diffable
+- *SQLite*: Ad snapshots (creative, copy, metadata, timestamps), campaign metrics, competitive timelines, deliverable status/metadata — queryable, aggregatable, efficient for time-series and filtering
+- Database lives at =.spell/growth.db= within the project directory
+- Agent reads/writes both: Typst files via filesystem tools, structured data via SQL
+- Export paths: SQLite data → Typst tables/charts → PDF; SQLite data → dashboard canvas views
+
+** Auto-Detection of Growth Projects
+:PROPERTIES:
+:PRIORITY: B
+:END:
+
+No manual mode switching. The system infers domain from project context.
+
+- Primary signal: =.spell/domain.json= in project root with ={"domain": "growth"}=
+- Activates: canvas-first launch, growth-specific modes (=/strategy=, =/campaign=, =/creative=, =/review=), growth tool palette, growth panel set
+- Fallback: explicit =spell --domain growth= flag
+- Future: heuristic detection from project contents (Typst files with =ora-brand= imports, =.spell/growth.db= presence, deliverable directory structure)
+
+* Constraints and Non-Goals                                           :scope:
+
+** In Scope (MVP)
+- Full dashboard canvas with tabs: competitive intel, report generation, client overview
+- Live Typst preview with =ora-brand= integration
+- Facebook Ads Library scraping via TS framework
+- Deliverable lifecycle tracking
+- Growth-specific modes: =/strategy=, =/campaign=, =/creative=, =/review=
+- Auto-detection via =.spell/domain.json=
+
+** Out of Scope (MVP)
+- Multi-user collaboration (single practitioner per workspace)
+- Real-time external API integrations (analytics platforms, CRMs)
+- Automated campaign execution (publishing ads, managing budgets)
+- Mobile or web deployment — desktop QML only
+- Platforms beyond Facebook Ads Library (extensible, but not in MVP)

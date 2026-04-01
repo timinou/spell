@@ -1,0 +1,426 @@
+#+TITLE: Spell Growth — User Journey Specifications
+#+AUTHOR: Spell Growth
+#+STARTUP: showall
+#+PROPERTY: FIXTURES_DIR domain/growth/test/fixtures
+#+PROPERTY: HELPERS_DIR  domain/growth/test/helpers
+
+* Overview
+
+Each journey is a numbered, end-to-end scenario that exercises one coherent user
+goal.  Steps are written in behavioural language so they can be translated
+directly into =GrowthJourney= + =QmlJourney= test bodies.
+
+Fixture references use paths relative to =domain/growth/=.
+
+* Journeys
+
+** J01 First Launch
+:PROPERTIES:
+:ID:       j01-first-launch
+:TAGS:     dashboard empty-state onboarding
+:FIXTURES: none
+:END:
+
+User opens the Growth shell for the first time.  No data has been scraped.
+The dashboard must communicate zero-state clearly and invite the first scan.
+
+*** Steps
+
+1. Launch =GrowthShell.qml= with no =dbPath= (fresh =:memory:= database, no
+   seeds applied).
+2. Assert the active panel is =dashboard=.
+3. Assert the dashboard renders a scan-prompt widget (text contains "No data yet"
+   or equivalent empty-state copy).
+4. Assert all MetricCard values are 0: =active_ads=, =total_ads=, =total_pages=.
+5. Assert no AdCard components are present in the panel.
+
+*** Expected Outcomes
+
+- Dashboard visible, no error state.
+- All numeric metrics read 0.
+- A visible call-to-action prompts the user to run their first scan.
+
+*** Required Fixtures
+
+None.  The empty database is the fixture.
+
+** J02 Morning Dashboard
+:PROPERTIES:
+:ID:       j02-morning-dashboard
+:TAGS:     dashboard metrics ad-card seeded-data
+:FIXTURES: test/fixtures/seed-pages.sql test/fixtures/seed-ads.sql
+:END:
+
+User opens the app after the overnight scrape has completed.  They check top
+metrics, then click through to an ad detail.
+
+*** Steps
+
+1. Create =GrowthJourney= and seed both fixture files.
+2. Launch =GrowthShell.qml= with the seeded =dbPath=.
+3. Assert =active_ads= metric card shows 30.
+4. Assert =total_pages= metric card shows 10.
+5. Assert =total_ads= metric card shows 50.
+6. Assert =expectAdCard("ad_001")= passes.
+7. Click the =ad_001= AdCard.
+8. Assert the detail panel/overlay becomes visible and contains the ad's
+   =creative_body= text: "Introducing the Acme Pro 3000".
+
+*** Expected Outcomes
+
+- MetricCards reflect the seed dataset totals.
+- Clicking an ad card transitions to a detail view with the correct creative.
+
+*** Required Fixtures
+
+- =test/fixtures/seed-pages.sql= — 10 pages
+- =test/fixtures/seed-ads.sql=  — 54 ads across 10 pages
+
+** J03 Competitive Scan
+:PROPERTIES:
+:ID:       j03-competitive-scan
+:TAGS:     workspace research intel-panel scraper
+:FIXTURES: test/fixtures/stub-responses/intel-response.json
+:END:
+
+User switches to the Research workspace to trigger a competitive intelligence
+scan and review the results.
+
+*** Steps
+
+1. Launch =GrowthShell.qml= with default workspace (=general=).
+2. Call =journey.switchWorkspace("Research")= and simulate the sidebar nav
+   click on the Research workspace item.
+3. Assert =journey.expectWorkspace("Research")= passes.
+4. Assert =journey.expectMode("intel")= passes (Research defaultMode = "intel").
+5. Assert the IntelPanel is the main panel in view.
+6. Simulate the agent delivering an intel-scan response from
+   =stub-responses/intel-response.json= via =QmlJourney.agentSends=.
+7. Assert the IntelPanel shows at least one result card.
+8. Assert the result card contains the competitor name from the stub response.
+
+*** Expected Outcomes
+
+- Workspace switch activates the correct layout (intel main, chat secondary).
+- Mode is set to =intel= automatically.
+- Intel results render after the agent delivers the stub payload.
+
+*** Required Fixtures
+
+- =test/fixtures/stub-responses/intel-response.json=
+
+** J04 Client Proposal
+:PROPERTIES:
+:ID:       j04-client-proposal
+:TAGS:     mode strategy pitch deliverable
+:FIXTURES: test/fixtures/stub-responses/strategy-response.json
+:END:
+
+User works through a two-phase proposal flow: first gathering competitive intel
+in =/strategy= mode, then switching to =/pitch= to produce a client-facing
+document.
+
+*** Steps
+
+1. Launch =GrowthShell.qml= with the Strategy workspace.
+2. Assert =journey.expectWorkspace("Strategy")=.
+3. Activate =/strategy= mode via the mode bar or chat command.
+4. Assert =journey.expectMode("strategy")=.
+5. Submit a prompt: "Analyse Acme Corp advertising spend for Q1 2026."
+6. Simulate the agent delivering =stub-responses/strategy-response.json=.
+7. Assert the chat drawer shows the strategy response text.
+8. Activate =/pitch= mode.
+9. Assert =journey.expectMode("pitch")=.
+10. Submit prompt: "Draft a client proposal based on the above analysis."
+11. Assert a deliverable entry appears in the pipeline with =state = "BRIEF"=.
+
+*** Expected Outcomes
+
+- Mode transitions are tracked and assertable.
+- The pipeline records a new deliverable after the pitch prompt.
+- Both agent responses are visible in the chat history.
+
+*** Required Fixtures
+
+- =test/fixtures/stub-responses/strategy-response.json=
+
+** J05 Quick Brief
+:PROPERTIES:
+:ID:       j05-quick-brief
+:TAGS:     mode brief gate editor
+:FIXTURES: none
+:END:
+
+User needs a brief document quickly.  They enter =/brief= mode, answer the
+single gate question, and the editor opens on a pre-filled template.
+
+*** Steps
+
+1. Launch =GrowthShell.qml= with the Create workspace.
+2. Activate =/brief= mode.
+3. Assert =journey.expectMode("brief")=.
+4. Assert the chat area shows the gate prompt (first gate question).
+5. Submit the gate answer: "Spring launch for Orbit Retail, target audience
+   25–35 urban professionals."
+6. Assert the gate is satisfied (no further gate prompts visible).
+7. Assert the editor panel becomes the active main panel.
+8. Assert the editor contains template-derived content (heading "Brief:" or
+   similar non-empty pre-fill).
+
+*** Expected Outcomes
+
+- =/brief= mode presents exactly one gate round.
+- After the gate, the Typst editor opens automatically with template content.
+
+*** Required Fixtures
+
+None.
+
+** J06 Performance Review
+:PROPERTIES:
+:ID:       j06-performance-review
+:TAGS:     mode review metrics analysis
+:FIXTURES: test/fixtures/seed-pages.sql test/fixtures/seed-ads.sql
+:END:
+
+User invokes =/review= to analyse the current period's campaign performance and
+receive actionable recommendations.
+
+*** Steps
+
+1. Create =GrowthJourney=, seed fixture files.
+2. Launch =GrowthShell.qml= with seeded =dbPath=.
+3. Switch to the Review workspace.
+4. Activate =/review= mode.
+5. Assert =journey.expectMode("review")=.
+6. Submit prompt: "Review Q1 2026 ad performance across all pages."
+7. Assert the agent response references at least one of: spend range, impression
+   range, or is_active status.
+8. Assert =journey.expectMetricCard("active_ads", 30)= passes against the DB.
+9. Assert at least one strategy suggestion appears in the response (text
+   contains "recommend" or "suggest").
+
+*** Expected Outcomes
+
+- =/review= mode surfaces data-backed observations.
+- MetricCard values match seed-data counts.
+- Agent provides at least one actionable recommendation.
+
+*** Required Fixtures
+
+- =test/fixtures/seed-pages.sql=
+- =test/fixtures/seed-ads.sql=
+
+** J07 Workspace Switching
+:PROPERTIES:
+:ID:       j07-workspace-switching
+:TAGS:     workspace navigation state-preservation layout
+:FIXTURES: none
+:END:
+
+User cycles through Research → Strategy → Create workspaces and verifies
+that each layout loads the correct panels and that chat history is preserved
+across switches.
+
+*** Steps
+
+1. Launch =GrowthShell.qml= with the default (=general=) workspace.
+2. Submit a chat message: "Test message before switching."
+3. Switch to the Research workspace.
+4. Assert =journey.expectWorkspace("Research")=.
+5. Assert IntelPanel is in the main slot.
+6. Switch to the Strategy workspace.
+7. Assert =journey.expectWorkspace("Strategy")=.
+8. Assert the chat history still contains "Test message before switching."
+9. Switch to the Create workspace.
+10. Assert =journey.expectWorkspace("Create")=.
+11. Assert the editor panel is the main panel.
+12. Switch back to the General workspace.
+13. Assert workspace is =general= and chat panel is visible.
+
+*** Expected Outcomes
+
+- Each workspace renders its configured panel layout.
+- Chat history survives workspace switches (state preservation).
+- Switching is non-destructive; no panel state is lost.
+
+*** Required Fixtures
+
+None.
+
+** J08 Multi-Agent Chat
+:PROPERTIES:
+:ID:       j08-multi-agent-chat
+:TAGS:     chat-drawer agents tabs task-agent
+:FIXTURES: none
+:END:
+
+User opens the chat drawer and sees both the main Spell agent tab and an
+active task-agent tab spawned for a background job.
+
+*** Steps
+
+1. Launch =GrowthShell.qml=.
+2. Assert the chat drawer has exactly one tab (main agent).
+3. Simulate the main agent spawning a task agent via a =_tool= bridge message
+   with =action: "spawn_task_agent"= and =id: "task-agent-1"=.
+4. Assert a second tab appears in the ChatDrawer with label "Task Agent" or
+   the task description.
+5. Click the second tab.
+6. Assert the active chat view switches to the task-agent conversation.
+7. Simulate the task agent sending a completion message.
+8. Assert the tab is marked complete (indicator or label change).
+9. Click back to the main agent tab.
+10. Assert the main agent conversation is still intact.
+
+*** Expected Outcomes
+
+- ChatDrawer renders one tab per active agent.
+- Tabs are independently scrollable and state-preserving.
+- Completion of a task agent is visually indicated.
+
+*** Required Fixtures
+
+None.
+
+** J09 Mode Escalation
+:PROPERTIES:
+:ID:       j09-mode-escalation
+:TAGS:     mode review strategy escalation
+:FIXTURES: test/fixtures/stub-responses/strategy-response.json
+:END:
+
+The =/review= mode identifies a strategic issue and suggests escalating to
+=/strategy=.  User accepts and the mode transitions automatically.
+
+*** Steps
+
+1. Launch =GrowthShell.qml= with the Review workspace.
+2. Activate =/review= mode.
+3. Submit prompt: "Why are Delta Systems running 6 video ads simultaneously?"
+4. Simulate the agent responding with an escalation suggestion: agent output
+   contains the text "==/strategy==" and recommends switching.
+5. Assert the escalation prompt is visible in the chat.
+6. Click the "Switch to /strategy" action button (or submit "yes").
+7. Assert =journey.expectMode("strategy")=.
+8. Assert the Strategy workspace layout is now active.
+9. Submit a follow-up: "Draft a counter-strategy for Delta Systems."
+10. Simulate =stub-responses/strategy-response.json= as the reply.
+11. Assert the response is visible in chat.
+
+*** Expected Outcomes
+
+- =/review= mode is capable of suggesting =/strategy= escalation.
+- User acceptance of the escalation triggers a mode + workspace switch.
+- The new mode is fully operational immediately after escalation.
+
+*** Required Fixtures
+
+- =test/fixtures/stub-responses/strategy-response.json=
+
+** J10 Typst Editor
+:PROPERTIES:
+:ID:       j10-typst-editor
+:TAGS:     editor typst preview hot-reload
+:FIXTURES: none
+:END:
+
+User opens the Typst editor panel, edits a =.typ= file, and confirms the
+preview updates to reflect the change.
+
+*** Steps
+
+1. Launch =GrowthShell.qml= with the Create workspace (editor is main panel).
+2. Assert the editor panel is visible.
+3. Simulate opening =templates/campaign-brief.typ= via a bridge message
+   =action: "open_file"=, =path: "templates/campaign-brief.typ"=.
+4. Assert the file tree highlights =campaign-brief.typ=.
+5. Assert the editor pane contains the file's content (non-empty).
+6. Simulate a keystroke edit: append "// test edit\n" to the document.
+7. Assert the preview panel receives an updated render (preview =version=
+   increments or =dirty= flag becomes =false= after a settle).
+8. Assert no error banner is visible in the preview pane.
+
+*** Expected Outcomes
+
+- The editor loads and displays the template file.
+- Edits trigger a preview re-render.
+- No compile errors for the unmodified template.
+
+*** Required Fixtures
+
+None (uses committed template files).
+
+** J11 Campaign Planning
+:PROPERTIES:
+:ID:       j11-campaign-planning
+:TAGS:     mode campaign kanban planner brief
+:FIXTURES: none
+:END:
+
+User enters =/campaign= mode, creates a new campaign in the Kanban planner,
+then assigns a brief deliverable to it.
+
+*** Steps
+
+1. Launch =GrowthShell.qml= with the Campaign workspace.
+2. Activate =/campaign= mode.
+3. Assert =journey.expectMode("campaign")=.
+4. Assert the KanbanBoard panel is the main panel.
+5. Click "New Campaign" (or equivalent action).
+6. Fill in campaign name: "Orbit Spring 2026".
+7. Assert a new Kanban card appears with that name in the =Planned= column.
+8. Activate =/brief= mode to create a brief for this campaign.
+9. Submit the gate answer: "Spring launch brief for Orbit Spring 2026 campaign."
+10. Assert the brief deliverable is created with a reference to "Orbit Spring 2026".
+11. Return to =/campaign= mode and assign the brief to the campaign card.
+12. Assert the Kanban card now shows an attached brief indicator.
+
+*** Expected Outcomes
+
+- Campaign creation produces a visible Kanban card.
+- Briefs created in =/brief= mode can be linked back to campaigns.
+- The Kanban board reflects the assignment without a page reload.
+
+*** Required Fixtures
+
+None.
+
+** J12 Template Hydration
+:PROPERTIES:
+:ID:       j12-template-hydration
+:TAGS:     template hydration typst data-binding render
+:FIXTURES: test/fixtures/seed-pages.sql test/fixtures/seed-ads.sql
+:END:
+
+User selects a template from the TemplateSelector, provides the required data
+fields, and verifies the rendered Typst output reflects the input.
+
+*** Steps
+
+1. Create =GrowthJourney=, seed fixture files.
+2. Launch =GrowthShell.qml= with seeded =dbPath= and the Create workspace.
+3. Open the TemplateSelector component (sidebar action or panel toolbar).
+4. Assert the selector lists at least: =campaign-brief=,
+   =competitive-analysis=, =client-proposal=, =weekly-digest=.
+5. Select =competitive-analysis=.
+6. Assert the data-entry form renders with the required fields from
+   =templates/competitive-analysis.json=.
+7. Fill in the field "client_name" with "Nexus Software".
+8. Fill in the field "competitor_name" with "Delta Systems".
+9. Submit the form (click "Generate" or equivalent).
+10. Assert the Typst editor pane shows a non-empty document.
+11. Assert the rendered document contains the text "Nexus Software".
+12. Assert the rendered document contains the text "Delta Systems".
+13. Assert no compile-error banner is visible.
+
+*** Expected Outcomes
+
+- TemplateSelector enumerates all committed templates.
+- Hydration substitutes all named fields into the Typst source.
+- The preview renders cleanly for a well-formed substitution.
+
+*** Required Fixtures
+
+- =test/fixtures/seed-pages.sql= (provides page context for ad lookups)
+- =test/fixtures/seed-ads.sql=

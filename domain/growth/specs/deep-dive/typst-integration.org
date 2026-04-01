@@ -1,0 +1,754 @@
+#+TITLE: Typst Integration — Technical Deep-Dive
+#+AUTHOR: Spell Growth
+#+DATE: 2026-03-31
+#+PROPERTY: header-args :eval no
+
+* Overview
+
+Live Typst editing with branded PDF output. Two halves: an editor with
+tree-sitter syntax highlighting, and a WebEngineView preview rendering via
+typst-ts WASM. Connected by click-to-code source mapping.
+
+The system serves two writers: a human in the editor, and the agent pushing
+text through =bridge.send()=. Both paths converge on the same TextEdit, same
+parse, same preview pipeline.
+
+* Architecture
+
+** Editor Component
+
+Qt-TreeSitterHighlighter (C++ library, Qt6) wraps tree-sitter grammars and
+applies syntax highlighting to a QML =TextEdit=.
+
+- Grammar: =uben0/tree-sitter-typst= — supports markup, code, and math modes
+  with indentation queries and folding ranges.
+- Highlighting: The C++ highlighter attaches to =TextEdit.textDocument=,
+  incrementally re-highlights on each edit. No full reparse on keystroke.
+- QML surface: =TextEdit= with =font.family: "Aspekta"=, line numbers gutter,
+  and bracket matching derived from tree-sitter node queries.
+
+#+begin_src qml
+// TypstEditor.qml — editor pane
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import TreeSitterHighlighter 1.0
+
+Item {
+    id: editorPane
+
+    property alias text: textEdit.text
+    property alias textDocument: textEdit.textDocument
+
+    signal cursorPositionRequested(int line, int column)
+
+    TreeSitterHighlighter {
+        id: highlighter
+        document: textEdit.textDocument
+        grammar: "typst"  // resolved to tree-sitter-typst.wasm or .so
+        theme: TreeSitterHighlighter.MaterialDark
+    }
+
+    Flickable {
+        anchors.fill: parent
+        contentWidth: textEdit.contentWidth
+        contentHeight: textEdit.contentHeight
+        clip: true
+
+        TextEdit {
+            id: textEdit
+            width: parent.width
+            font.family: "Aspekta"
+            font.pixelSize: 14
+            color: "#E0E0E0"
+            selectionColor: "#E75E4A"
+            wrapMode: TextEdit.Wrap
+            tabStopDistance: 28
+        }
+    }
+
+    function jumpToLine(line: int) {
+        // Move cursor to start of target line
+        let pos = textEdit.positionAt(0, line)
+        textEdit.cursorPosition = pos
+        textEdit.forceActiveFocus()
+    }
+}
+#+end_src
+
+** Preview Component
+
+=WebEngineView= loads a minimal HTML page that bootstraps the typst-ts WASM
+compiler and renderer. On each text change (debounced), the main content is
+sent into the WASM compiler which produces SVG output injected into the DOM.
+
+Key packages:
+| Package                                | Role                          |
+|----------------------------------------+-------------------------------|
+| =@myriaddreamin/typst-ts-web-compiler= | WASM module — Typst → vector IR |
+| =@myriaddreamin/typst-ts-renderer=     | Vector IR → SVG DOM           |
+| =@myriaddreamin/typst.ts=              | High-level API coordinating both |
+
+typst-ts uses Reflexo vector IR as an intermediate representation. This enables
+incremental compilation: only changed pages re-render, unchanged pages reuse
+cached IR. This is what makes 200ms debounce feel instant for most edits.
+
+#+begin_src html
+<!-- typst-preview.html — loaded into WebEngineView -->
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; background: #2b2b2b; display: flex; justify-content: center; }
+    #container { max-width: 800px; width: 100%; }
+    .typst-page { background: white; margin: 16px auto; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+    [data-source-line] { cursor: pointer; }
+    [data-source-line]:hover { outline: 2px solid #E75E4A; outline-offset: 1px; }
+  </style>
+</head>
+<body>
+  <div id="container"></div>
+  <script type="module">
+    import { createTypstCompiler } from '@myriaddreamin/typst.ts';
+
+    const compiler = await createTypstCompiler();
+    await compiler.init();
+
+    // Load ORA brand assets into virtual filesystem
+    // (populated by loadVirtualFS call from QML side)
+    window.$typst = {
+      compiler,
+      virtualFS: new Map(),
+
+      async loadFile(path, content) {
+        this.virtualFS.set(path, content);
+        compiler.addSource(path, content);
+      },
+
+      async loadFont(fontData) {
+        compiler.addFontData(fontData);
+      },
+
+      async svg(opts) {
+        compiler.addSource('/main.typ', opts.mainContent);
+        const doc = await compiler.compile({ mainFilePath: '/main.typ' });
+        if (doc.diagnostics?.length) {
+          window.bridge?.send({ type: 'typst:diagnostics', diagnostics: doc.diagnostics });
+        }
+        if (doc.result) {
+          const svg = await compiler.renderToSvg(doc.result);
+          document.getElementById('container').innerHTML = svg;
+          attachSourceMapHandlers();
+        }
+      }
+    };
+
+    function attachSourceMapHandlers() {
+      document.querySelectorAll('[data-source-line]').forEach(el => {
+        el.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const line = parseInt(el.getAttribute('data-source-line'));
+          const col = parseInt(el.getAttribute('data-source-column') || '0');
+          // Send to QML bridge — editor jumps to source
+          window.bridge?.send({ type: 'typst:goto-source', line, column: col });
+        });
+      });
+    }
+
+    // Expose render trigger for QML evaluate() calls
+    window.renderTypst = (content) => $typst.svg({ mainContent: content });
+  </script>
+</body>
+</html>
+#+end_src
+
+#+begin_src qml
+// TypstPreview.qml — preview pane
+import QtQuick 2.15
+import QtWebEngine 1.10
+
+Item {
+    id: previewPane
+    signal gotoSource(int line, int column)
+
+    WebEngineView {
+        id: webView
+        anchors.fill: parent
+        url: "qrc:/typst-preview.html"
+
+        onLoadingChanged: function(info) {
+            if (info.status === WebEngineLoadingInfo.LoadingSucceededStatus) {
+                previewPane.initVirtualFS()
+            }
+        }
+
+        // Receive messages from page JS
+        WebChannel {
+            id: channel
+        }
+    }
+
+    Connections {
+        target: bridge
+        function onMessageReceived(payload) {
+            if (payload.type === "typst:goto-source") {
+                previewPane.gotoSource(payload.line, payload.column)
+            }
+        }
+    }
+
+    function render(content: string) {
+        webView.runJavaScript(`window.renderTypst(${JSON.stringify(content)})`)
+    }
+
+    function initVirtualFS() {
+        // Called after WebEngineView loads — populates brand assets
+        // Bridge provides file list from domain/growth/templates/typst/
+        bridge.send({ type: "typst:request-virtual-fs" })
+    }
+
+    function loadFile(path: string, content: string) {
+        webView.runJavaScript(
+            `window.$typst.loadFile(${JSON.stringify(path)}, ${JSON.stringify(content)})`
+        )
+    }
+
+    function loadFont(base64Data: string) {
+        webView.runJavaScript(
+            `window.$typst.loadFont(Uint8Array.from(atob(${JSON.stringify(base64Data)}), c => c.charCodeAt(0)))`
+        )
+    }
+}
+#+end_src
+
+** Click-to-Code
+
+typst-ts source mapping works through the vector IR layer. Compiled SVG
+elements carry =data-source-line= and =data-source-column= attributes when
+source mapping is enabled in the compiler options.
+
+Flow:
+1. User clicks an element in the preview WebEngineView.
+2. JS click handler reads =data-source-line= / =data-source-column=.
+3. JS calls =window.bridge.send({ type: 'typst:goto-source', line, column })=.
+4. QML =Connections= handler on bridge receives the message.
+5. Emits =gotoSource(line, column)= signal.
+6. Parent =SplitView= calls =editor.jumpToLine(line)=.
+
+Reverse direction (cursor-to-preview scroll) is a stretch goal — requires
+mapping editor cursor position back to SVG element IDs.
+
+* Data Flow
+
+** Edit → Highlight → Preview Pipeline
+
+#+begin_src
+  ┌──────────────────┐     immediate      ┌────────────────────┐
+  │  TextEdit.text    │ ──────────────────→│ tree-sitter reparse │
+  │  (user or agent)  │                    │ (incremental)       │
+  └──────────────────┘                    └────────┬───────────┘
+                                                   │
+                                          highlight update
+                                                   │
+                                                   ▼
+  ┌──────────────────┐   debounce 200ms   ┌────────────────────┐
+  │  TextEdit.text    │ ──────────────────→│ WebEngineView      │
+  │  onTextChanged    │                    │ .runJavaScript()   │
+  └──────────────────┘                    │ → $typst.svg()     │
+                                          └────────┬───────────┘
+                                                   │
+                                          incremental compile
+                                          (Reflexo vector IR)
+                                                   │
+                                                   ▼
+                                          ┌────────────────────┐
+                                          │ SVG injected into   │
+                                          │ DOM with source map │
+                                          │ data-* attributes   │
+                                          └────────────────────┘
+#+end_src
+
+** Agent-Driven Writing
+
+The agent writes Typst through the same path as human editing:
+
+#+begin_src typescript
+// In canvas orchestrator — agent writing a report
+bridge.send({
+  type: 'typst:set-content',
+  content: `#import "ora-brand/lib.typ": *
+#show: ora-report.with(
+  title: "Weekly Competitive Analysis",
+  client: "Acme Corp",
+  date: datetime.today(),
+)
+
+= Executive Summary
+${executiveSummary}
+
+= Competitor Activity
+${competitorSection}
+`
+});
+#+end_src
+
+The QML side receives this, sets =editor.text=, which triggers the same
+highlight + preview pipeline. The agent sees the preview through canvas
+screenshots if needed.
+
+** Multi-File Projects
+
+For documents that import other files (brand library, data files, chart
+definitions), all dependencies live in the typst-ts virtual filesystem:
+
+#+begin_src
+  Virtual FS layout:
+  /main.typ                          ← active document
+  /ora-brand/lib.typ                 ← brand library entry
+  /ora-brand/colors.typ              ← brand colors
+  /ora-brand/typography.typ          ← font config
+  /ora-brand/components/*.typ        ← stat-cell, pillar-card, etc.
+  /ora-brand/layouts/*.typ           ← report, slide, whitepaper layouts
+  /ora-brand/graphs/*.typ            ← flow, timeline, onion diagrams
+  /data/metrics.json                 ← injected data (read by typst #json())
+  /data/competitors.json             ← competitor snapshot data
+#+end_src
+
+Files are loaded into the virtual FS on project open. The brand library path
+(=~/code/ora/ora-branding/typst/ora-brand/=) is resolved from =.spell/domain.json=
+or a growth-domain default.
+
+* ORA Brand Integration
+
+** Brand Assets
+
+The ORA brand system (=~/code/ora/ora-branding/typst/ora-brand/lib.typ=)
+provides production-quality components reused directly in growth deliverables.
+
+Colors:
+| Name  | Hex       | Usage                        |
+|-------+-----------+------------------------------|
+| Navy  | =#192D4F= | Headers, primary text         |
+| Coral | =#E75E4A= | Accents, CTAs, highlights     |
+| Cream | =#FBEACE= | Backgrounds, secondary fills  |
+
+Typography:
+| Font           | Weights   | Usage                 |
+|----------------+-----------+-----------------------|
+| Aspekta        | 300–950   | Body, headings        |
+| Funnel Display | —         | Display, titles       |
+
+Components available (from =ora-brand/lib.typ=):
+- =stat-cell= — single metric with label/value/delta
+- =pillar-card= — strategy pillar with icon and description
+- =numbered-card= — ordered list items with visual numbering
+- =metrics-strip= — horizontal row of KPIs
+- =kpi-row= — tabular KPI comparison row
+- =callout= — highlighted insight box
+- =cover= — report/whitepaper cover page
+- =toc= — table of contents
+- Flow diagrams, timelines, onion diagrams via =graphs/= module
+
+** Font Loading
+
+Fonts must be loaded into the WASM compiler as binary data. On project open,
+the TypeScript side reads font files and sends them to the preview:
+
+#+begin_src typescript
+// packages/coding-agent/src/domains/growth/typst-fonts.ts
+import { readFile } from 'fs/promises';
+import { resolve } from 'path';
+
+const FONT_DIR = resolve(brandingPath, 'fonts');
+
+const REQUIRED_FONTS = [
+  'Aspekta-300.woff2',
+  'Aspekta-400.woff2',
+  'Aspekta-500.woff2',
+  'Aspekta-700.woff2',
+  'Aspekta-950.woff2',
+  'FunnelDisplay-Regular.woff2',
+];
+
+export async function loadBrandFonts(
+  sendToPreview: (msg: { type: string; base64: string; name: string }) => void
+): Promise<void> {
+  for (const font of REQUIRED_FONTS) {
+    const data = await readFile(resolve(FONT_DIR, font));
+    sendToPreview({
+      type: 'typst:load-font',
+      base64: data.toString('base64'),
+      name: font,
+    });
+  }
+}
+#+end_src
+
+** Virtual Filesystem Population
+
+#+begin_src typescript
+// packages/coding-agent/src/domains/growth/typst-vfs.ts
+import { readFile, readdir } from 'fs/promises';
+import { resolve, relative } from 'path';
+
+const BRAND_ROOT = '~/code/ora/ora-branding/typst/ora-brand';
+
+export async function populateVirtualFS(
+  brandRoot: string,
+  sendToPreview: (msg: { type: string; path: string; content: string }) => void
+): Promise<void> {
+  const files = await collectTypFiles(brandRoot);
+  for (const absPath of files) {
+    const relPath = 'ora-brand/' + relative(brandRoot, absPath);
+    const content = await readFile(absPath, 'utf-8');
+    sendToPreview({ type: 'typst:load-file', path: relPath, content });
+  }
+}
+
+async function collectTypFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true, recursive: true });
+  return entries
+    .filter(e => e.isFile() && e.name.endsWith('.typ'))
+    .map(e => resolve(e.parentPath, e.name));
+}
+#+end_src
+
+* Template System
+
+** Structure
+
+Templates live in =domain/growth/templates/typst/=:
+
+#+begin_src
+domain/growth/templates/typst/
+├── weekly-digest.typ
+├── weekly-digest.json
+├── client-proposal.typ
+├── client-proposal.json
+├── competitive-analysis.typ
+├── competitive-analysis.json
+├── campaign-brief.typ
+└── campaign-brief.json
+#+end_src
+
+Each template pair:
+- =.typ= — Typst source with variable placeholders
+- =.json= — Metadata and variable schema
+
+** Metadata Format
+
+#+begin_src json
+{
+  "name": "Weekly Digest",
+  "description": "Weekly competitive intelligence and campaign performance summary",
+  "category": "report",
+  "variables": {
+    "client_name": { "type": "string", "required": true },
+    "report_date": { "type": "date", "default": "today" },
+    "period": { "type": "string", "default": "Last 7 days" },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "spend": { "type": "number" },
+        "impressions": { "type": "number" },
+        "clicks": { "type": "number" },
+        "conversions": { "type": "number" },
+        "cpa": { "type": "number" }
+      }
+    },
+    "competitors": {
+      "type": "array",
+      "items": {
+        "name": { "type": "string" },
+        "new_ads": { "type": "number" },
+        "top_creative": { "type": "string" }
+      }
+    },
+    "insights": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "preview": "weekly-digest-thumb.png"
+}
+#+end_src
+
+** Template Example: Weekly Digest
+
+#+begin_src typst
+// domain/growth/templates/typst/weekly-digest.typ
+#import "ora-brand/lib.typ": *
+
+#let client_name = json("data/variables.json").client_name
+#let metrics = json("data/variables.json").metrics
+#let competitors = json("data/variables.json").competitors
+#let insights = json("data/variables.json").insights
+
+#show: ora-report.with(
+  title: "Weekly Digest",
+  subtitle: client_name,
+  date: datetime.today(),
+)
+
+= Performance Overview
+
+#metrics-strip(
+  stat-cell("Spend", [€#metrics.spend], delta: none),
+  stat-cell("Impressions", [#metrics.impressions], delta: none),
+  stat-cell("Clicks", [#metrics.clicks], delta: none),
+  stat-cell("Conversions", [#metrics.conversions], delta: none),
+  stat-cell("CPA", [€#metrics.cpa], delta: none),
+)
+
+= Competitor Activity
+
+#for comp in competitors [
+  == #comp.name
+  - *New ads detected:* #comp.new_ads
+  - *Top creative:* #comp.top_creative
+]
+
+= Key Insights
+
+#for (i, insight) in insights.enumerate() [
+  #numbered-card(i + 1, insight)
+]
+
+= Recommendations
+
+#callout("action")[
+  Based on this week's data, the agent will generate specific
+  recommendations here based on the analysis.
+]
+#+end_src
+
+** Variable Injection
+
+The agent populates variables by writing a =data/variables.json= file into the
+virtual filesystem before compilation. This avoids string interpolation in Typst
+source — the template reads data via =#json()= which is a native Typst function.
+
+#+begin_src typescript
+// Agent populating template variables
+async function renderTemplate(
+  templateName: string,
+  variables: Record<string, unknown>,
+  sendToPreview: (msg: { type: string; path: string; content: string }) => void
+): Promise<void> {
+  // Load template source
+  const templatePath = `domain/growth/templates/typst/${templateName}.typ`;
+  const source = await readFile(templatePath, 'utf-8');
+
+  // Inject variables as JSON data file
+  sendToPreview({
+    type: 'typst:load-file',
+    path: 'data/variables.json',
+    content: JSON.stringify(variables),
+  });
+
+  // Set as main document — triggers compile + preview
+  sendToPreview({
+    type: 'typst:set-content',
+    content: source,
+  });
+}
+#+end_src
+
+** Charts via cetz
+
+typst-ts supports the =cetz= package for data visualization within documents.
+Charts are defined inline in Typst source:
+
+#+begin_src typst
+#import "@preview/cetz:0.3.4"
+
+#cetz.canvas({
+  import cetz.chart
+  import cetz.draw: *
+
+  let data = json("data/variables.json").daily_spend
+  chart.columnchart(
+    size: (12, 6),
+    data,
+    x-label: "Day",
+    y-label: "Spend (€)",
+    bar-style: (fill: rgb("#E75E4A")),
+  )
+})
+#+end_src
+
+The =cetz= package is resolved by the typst-ts compiler from the Typst package
+registry (packages are fetched and cached in the WASM virtual filesystem).
+
+* Compilation Pipeline
+
+** Development: WASM Preview
+
+Used during editing for instant feedback.
+
+#+begin_src
+  Editor text change
+       │
+       ▼ (200ms debounce)
+  WebEngineView.runJavaScript()
+       │
+       ▼
+  typst-ts WASM compiler
+  - Incremental compilation via Reflexo
+  - Virtual FS for imports
+  - Source mapping enabled
+       │
+       ▼
+  SVG output → DOM injection
+  - data-source-line attributes
+  - Page breaks as separate SVG elements
+#+end_src
+
+Limitations of WASM preview:
+- Font rendering may differ from CLI (subset vs full font files)
+- Some Typst packages may not work in WASM (those requiring filesystem access)
+- Large documents (50+ pages) may lag — mitigated by page-level incremental rendering
+
+** Export: CLI Compilation
+
+For final PDF output, shell out to =typst compile= which has full system font
+access and native performance.
+
+#+begin_src typescript
+// packages/coding-agent/src/domains/growth/typst-export.ts
+import { execFile } from 'child_process';
+import { writeFile, mkdir } from 'fs/promises';
+import { resolve, dirname } from 'path';
+
+export interface TypstExportOptions {
+  source: string;           // main .typ file path
+  output: string;           // output .pdf path
+  fontPaths?: string[];     // additional font directories
+  root?: string;            // typst project root (for imports)
+}
+
+export async function exportPDF(opts: TypstExportOptions): Promise<string> {
+  const args = ['compile', opts.source, opts.output];
+
+  if (opts.root) {
+    args.push('--root', opts.root);
+  }
+
+  for (const fp of opts.fontPaths ?? []) {
+    args.push('--font-path', fp);
+  }
+
+  await mkdir(dirname(opts.output), { recursive: true });
+
+  return new Promise((resolve, reject) => {
+    execFile('typst', args, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`typst compile failed: ${stderr}`));
+      } else {
+        resolve(opts.output);
+      }
+    });
+  });
+}
+#+end_src
+
+Usage from the agent:
+
+#+begin_src typescript
+// Export current document to PDF
+const pdfPath = await exportPDF({
+  source: resolve(projectRoot, 'reports/weekly-digest.typ'),
+  output: resolve(projectRoot, 'output/weekly-digest.pdf'),
+  fontPaths: [resolve(brandingPath, 'fonts')],
+  root: projectRoot,
+});
+#+end_src
+
+Both WASM preview and CLI export consume the same =.typ= source files.
+Discrepancies should be rare and limited to font metrics differences.
+
+* Dependencies
+
+| Dependency                              | Type     | Purpose                             |
+|-----------------------------------------+----------+-------------------------------------|
+| =uben0/tree-sitter-typst=              | Grammar  | Tree-sitter grammar for Typst       |
+| =Bzero/Qt-TreeSitterHighlighter=       | C++ lib  | Qt6 syntax highlighting via tree-sitter |
+| =@myriaddreamin/typst.ts=              | npm      | High-level typst-ts API             |
+| =@myriaddreamin/typst-ts-web-compiler= | npm/WASM | Typst → vector IR compilation       |
+| =@myriaddreamin/typst-ts-renderer=     | npm/WASM | Vector IR → SVG rendering           |
+| =typst= CLI                            | Binary   | Final PDF export                    |
+| =@preview/cetz=                        | Typst pkg | Charts and data visualization      |
+
+** Build Integration
+
+Qt-TreeSitterHighlighter is a C++ library compiled with the QML bridge:
+
+#+begin_src cmake
+# packages/qml/CMakeLists.txt additions
+find_package(TreeSitter REQUIRED)
+
+add_library(typst-highlighter
+  src/TreeSitterHighlighter.cpp
+  src/TreeSitterHighlighter.h
+)
+target_link_libraries(typst-highlighter
+  Qt6::Quick
+  tree-sitter
+  tree-sitter-typst
+)
+
+# Register as QML module
+qt_add_qml_module(typst-highlighter
+  URI TreeSitterHighlighter
+  VERSION 1.0
+)
+#+end_src
+
+The WASM modules are vendored in =packages/qml/resources/typst-wasm/= and
+loaded by the WebEngineView HTML page from =qrc:= resources.
+
+* Error Handling
+
+** Compilation Errors
+
+typst-ts returns diagnostics with source positions. These are forwarded to QML
+for inline display:
+
+#+begin_src typescript
+// Diagnostic from typst-ts compiler
+interface TypstDiagnostic {
+  severity: 'error' | 'warning';
+  message: string;
+  span: {
+    file: string;
+    start: { line: number; column: number };
+    end: { line: number; column: number };
+  };
+}
+#+end_src
+
+The editor component displays diagnostics as:
+- Red/yellow underlines on the affected range (via tree-sitter overlay)
+- Hover tooltip with the diagnostic message
+- Error count badge in the preview pane tab
+
+** WASM Failures
+
+If the WASM compiler fails to initialize (browser restrictions, memory limits):
+- Fall back to CLI compilation with =typst compile --format svg=
+- Preview updates slower (file write → compile → read SVG → inject) but works
+- Log the WASM failure for debugging
+
+* Performance Considerations
+
+| Concern                  | Mitigation                                         |
+|--------------------------+----------------------------------------------------|
+| Large documents          | Page-level incremental rendering via Reflexo IR     |
+| Frequent edits           | 200ms debounce before compile                       |
+| Font loading             | Load fonts once on project open, cache in WASM      |
+| Virtual FS size          | Lazy-load imports on first reference                |
+| WebEngineView memory     | Single WebEngineView instance, reuse across docs    |
+| Tree-sitter parse time   | Incremental parsing — O(edit size) not O(file size) |
+
+For documents exceeding ~100 pages, the preview can switch to rendering only
+the current page and its neighbors (viewport-aware rendering), with full
+document compilation deferred to export.

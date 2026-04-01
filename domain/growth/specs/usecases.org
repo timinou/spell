@@ -1,0 +1,533 @@
+#+TITLE: Spell Growth — Use Cases
+#+AUTHOR: Spell Growth Team
+#+DATE: 2026-03-31
+#+PROPERTY: header-args :eval never
+
+* Overview
+
+Concrete user stories and workflows for Spell Growth. Each use case follows a structured format: actor, preconditions, numbered main flow, alternative flows, postconditions, and related features.
+
+The primary actor across all use cases is the *Growth Practitioner* — a marketing professional managing campaigns, competitive intelligence, and client deliverables through Spell Growth's always-canvas interface.
+
+** Base Unit: Deliverables
+
+All workflows produce or consume *deliverables* — the atomic output unit in Spell Growth (equivalent to "file" in coding mode). Deliverables are typed:
+
+| Type      | Format         | Storage     | Example                          |
+|-----------+----------------+-------------+----------------------------------|
+| Brief     | Org-mode       | File        | Strategy document, creative brief |
+| Report    | Typst → PDF    | File        | Weekly digest, client report      |
+| Dashboard | QML canvas     | Session     | Metrics overview, campaign board  |
+| Deck      | Typst → PDF    | File        | Pitch deck, proposal slides       |
+
+Deliverables track lineage: which briefs fed which reports, which scans informed which strategies.
+
+* UC-01: Morning Dashboard Review
+:PROPERTIES:
+:CUSTOM_ID: uc-01-morning-dashboard
+:END:
+
+** Actor
+Growth practitioner.
+
+** Preconditions
+- Spell Growth launched from a project directory containing =.spell/domain.json= with ={"domain": "growth"}=.
+- At least one client configured with competitor watchlist in SQLite (=.spell/growth.db=).
+- Background polling has run overnight (market signal feed cron or last-session poll).
+
+** Main Flow
+1. Practitioner runs =spell= from the project directory. Domain auto-detected; QML canvas launches as primary window with TUI as launcher only.
+2. Dashboard home panel loads as default tab. Three sections render:
+   - *Competitor Activity*: New/changed ads detected since last session, grouped by competitor. Badge count on each.
+   - *Pending Deliverables*: Deliverables in-progress or awaiting review, sorted by due date.
+   - *Metric Summary*: Key metrics pulled from SQLite — spend trends, impression deltas, CTR changes.
+3. Practitioner spots a competitor ad flagged as "New" in the Competitor Activity section. Clicks the ad card.
+4. Side drawer slides in from the right showing full ad details: creative image/video thumbnail, ad copy, CTA, landing page URL, date first seen, estimated run duration, platform.
+5. Practitioner clicks "Analyze" button in the drawer header.
+6. Agent receives the ad snapshot data (ad ID from SQLite) and produces a creative analysis brief:
+   - Copy structure breakdown (hook, body, CTA pattern)
+   - Visual style classification
+   - Target audience inference
+   - Comparison against practitioner's active campaigns
+7. Brief renders in a new tab or inline panel. Practitioner reviews, optionally saves to deliverable pipeline.
+
+** Alternative Flows
+- *3a. No new competitor activity*: Dashboard shows "No changes since [last session date]". Competitor Activity section displays most recent snapshot summary instead.
+- *5a. Analyze multiple ads*: Practitioner selects multiple ad cards (checkbox mode) → "Analyze Selection" → Agent produces a comparative analysis brief covering patterns across the set.
+- *7a. Escalate to strategy*: From the analysis brief, practitioner clicks "Develop Strategy" → transitions to UC-02 with the brief as input context.
+
+** Postconditions
+- Dashboard state is session-scoped (ephemeral). Metric queries are cached in SQLite for the session.
+- Any saved briefs persist as org files in the project's =deliverables/briefs/= directory.
+- Ad snapshots viewed are marked as "seen" in SQLite (suppressed from "New" badge on next load).
+
+** Related Features
+- Market Signal Feed (background polling)
+- Competitive Intelligence Canvas (ad gallery)
+- Deliverable Pipeline (brief tracking)
+- Canvas Orchestrator (scoped agent for analysis)
+
+* UC-02: Client Proposal Creation
+:PROPERTIES:
+:CUSTOM_ID: uc-02-client-proposal
+:END:
+
+** Actor
+Growth practitioner.
+
+** Preconditions
+- Client project directory exists with =.spell/domain.json=.
+- Competitor data for the client's market exists in SQLite (from prior scans — UC-03).
+- ORA branding Typst library available at =~/code/ora/ora-branding/typst/ora-brand/lib.typ=.
+
+** Main Flow
+1. Practitioner types =/strategy MamaBox= in the canvas chat input.
+2. Agent enters strategy mode (equivalent to =/plan= in coding). Tool access restricted to research tools — no file writes until strategy is approved.
+3. Agent researches the MamaBox market:
+   a. Queries SQLite for stored competitor ad data, campaign timelines, spend estimates.
+   b. Pulls recent scan results for MamaBox's category keywords.
+   c. Summarizes market positioning: who's spending, what messaging dominates, gaps identified.
+4. Agent generates a strategy brief as an org file (=deliverables/briefs/mamabox-strategy-YYYY-MM-DD.org=). Contents:
+   - Market overview with competitor landscape
+   - SWOT or positioning analysis
+   - Recommended channels and budget allocation
+   - Proposed campaign themes with rationale
+   - Timeline and milestones
+5. Strategy brief renders in a canvas panel for review. Practitioner reads, edits inline if needed.
+6. Practitioner approves the strategy (clicks "Approve" or types =/approve=).
+7. Agent prompts: "Create deliverable from this strategy?" Practitioner selects "Proposal" from the template picker.
+8. Agent generates a Typst document using the ora-branding library:
+   - Imports =ora-brand/lib.typ= components: =cover=, =stat-cell=, =pillar-card=, =metrics-strip=, =flow= diagrams.
+   - Populates with strategy data — market stats become =stat-cell= instances, timeline becomes a =flow= diagram, recommendations become =pillar-card= sections.
+   - Writes to =deliverables/reports/mamabox-proposal-YYYY-MM-DD.typ=.
+9. Live preview activates: QML WebEngine renders the Typst document via typst-ts WASM. Split-pane layout — Typst source on left with tree-sitter-typst syntax highlighting, branded PDF preview on right.
+10. Practitioner edits Typst source. Each keystroke triggers re-render in the preview pane. Click on a PDF element highlights the corresponding Typst source line (click-to-go-to-code).
+11. Practitioner clicks "Export PDF". Typst compiles to final PDF, saved alongside the =.typ= source.
+12. Deliverable is tracked in the pipeline: status moves to "Complete", linked to the originating strategy brief.
+
+** Alternative Flows
+- *3a. Insufficient competitor data*: Agent detects sparse SQLite data for MamaBox's market. Prompts: "Limited competitor data. Run a competitive scan first?" → If yes, transitions to UC-03, then resumes at step 3.
+- *7a. Decline deliverable*: Practitioner says "not yet" — strategy brief saved but no Typst generation. Can resume later from the deliverable pipeline.
+- *9a. Template mismatch*: Practitioner switches template mid-edit via the template selector dropdown. Agent re-maps data to new template structure; preview updates.
+- *10a. Agent-assisted editing*: Practitioner highlights a section in the Typst source and types a request in chat (e.g., "make this section more data-driven"). Agent rewrites that section; diff shown in preview.
+
+** Postconditions
+- Strategy brief persisted as org file in =deliverables/briefs/=.
+- Typst source and compiled PDF persisted in =deliverables/reports/=.
+- Deliverable pipeline updated with entry linking brief → report, timestamps, and status.
+- All referenced competitor data snapshots linked by ID for reproducibility.
+
+** Related Features
+- Strategy Mode (=/strategy=)
+- Typst Report Engine (ora-branding integration)
+- Live Typst Editor (split-pane preview)
+- Deliverable Pipeline (lineage tracking)
+- Competitive Intelligence (data source)
+
+* UC-03: Competitive Scan
+:PROPERTIES:
+:CUSTOM_ID: uc-03-competitive-scan
+:END:
+
+** Actor
+Growth practitioner.
+
+** Preconditions
+- Spell Growth canvas is open.
+- Network access available for scraping targets (Facebook Ads Library).
+- Scraper framework initialized (native TS, YAML DSL configs in project).
+
+** Main Flow
+1. Practitioner navigates to the Competitive Intel panel (tab in the QML sidebar).
+2. Panel shows existing scan history (past scans with date, keyword, result count) and the ad gallery from the most recent scan.
+3. Practitioner clicks "New Scan" button.
+4. Scan configuration dialog opens:
+   - *Keywords*: Text field for search terms (e.g., "baby food organic").
+   - *Advertiser*: Optional specific advertiser name filter.
+   - *Platform*: Dropdown (Facebook Ads Library selected by default; extensible).
+   - *Date range*: Last 7/30/90 days or custom.
+   - *Region*: Country/region filter.
+5. Practitioner fills in parameters, clicks "Run Scan".
+6. Scraper executes using the native TS framework:
+   a. Loads the platform-specific YAML DSL config (e.g., =configs/facebook-ads-library.yaml=) defining container selectors, field extraction rules, pagination strategy (infinite scroll), and error handling (retries, rate limits).
+   b. Progress indicator shows in the panel: "Scanning... 47 ads found".
+   c. Each ad extracted: creative thumbnail, copy text, CTA, advertiser name, start date, platform metadata.
+7. Results populate the ad gallery view — a grid of ad cards with thumbnail, headline snippet, advertiser, and date.
+8. Practitioner applies filters:
+   - *Status*: Active only / All / Inactive.
+   - *Sort*: By date (newest first), by advertiser, by estimated spend.
+   - *Advertiser*: Checkbox filter for specific advertisers in results.
+9. Practitioner selects two ads and clicks "Compare". Side-by-side comparison view opens showing both ads with aligned fields (copy, CTA, visual style, run duration).
+10. Practitioner clicks "Save Snapshot". All scan results are persisted to SQLite:
+    - =ad_snapshots= table: ad ID, platform, advertiser, copy, CTA, creative URL, first_seen, last_seen, status, scan_id.
+    - =scans= table: scan ID, keywords, parameters, timestamp, result count.
+11. Practitioner clicks "Summarize". Agent reads the scan results from SQLite and produces a competitive intel brief:
+    - Top advertisers by volume.
+    - Common messaging patterns and CTAs.
+    - Creative style trends (carousel vs. video vs. static).
+    - Gaps and opportunities.
+
+** Alternative Flows
+- *6a. Rate limited*: Scraper encounters rate limiting. YAML DSL error handling triggers backoff. Progress indicator shows "Rate limited — retrying in 30s". Scan resumes automatically.
+- *6b. Scraper error*: Unrecoverable error (e.g., selector mismatch due to platform UI change). Scan halts with error detail. Practitioner can report issue or adjust YAML config.
+- *8a. No results match filter*: Gallery shows empty state with "No ads match current filters. Try adjusting." Filter chips shown for easy removal.
+- *10a. Incremental scan*: If a previous scan exists for the same keywords, new results are merged. Existing ads updated (last_seen, status changes); new ads inserted. Delta shown: "12 new, 3 changed, 5 removed."
+
+** Postconditions
+- Scan results stored in SQLite with full metadata.
+- Ad gallery view reflects latest scan, filterable and sortable.
+- Competitive intel brief (if generated) saved to =deliverables/briefs/=.
+- Scan parameters saved for re-run capability.
+
+** Related Features
+- Native TS Scraper Framework (YAML DSL configs)
+- Ad Creative Analyzer (analysis from scan results)
+- SQLite Data Persistence (ad_snapshots, scans tables)
+- Market Signal Feed (scheduled re-scans)
+
+* UC-04: Weekly Performance Report
+:PROPERTIES:
+:CUSTOM_ID: uc-04-weekly-report
+:END:
+
+** Actor
+Growth practitioner.
+
+** Preconditions
+- At least one week of metric data in SQLite (imported from platform exports or API pulls).
+- Previous week's report exists for comparison (optional but enables trend detection).
+- Report template configured (or default "Weekly Digest" template available).
+
+** Main Flow
+1. Practitioner types =/review= in canvas chat.
+2. Agent enters review mode (equivalent to =/audit= in coding). Read-only data access — pulls metrics but does not modify campaigns or deliverables.
+3. Agent queries SQLite for the past 7 days of metrics:
+   - Campaign-level: spend, impressions, clicks, conversions, CPA, ROAS.
+   - Ad-level: top performers, underperformers (by CTR delta from campaign average).
+   - Audience-level: demographic breakdowns if available.
+4. Agent performs trend analysis:
+   a. Week-over-week comparison against prior period.
+   b. Anomaly detection: metrics deviating >2σ from rolling 4-week average flagged.
+   c. Pacing check: current spend vs. monthly budget allocation.
+5. Agent generates a review brief (org file) with sections:
+   - *Summary*: One-paragraph executive overview.
+   - *Key Metrics*: Table of KPIs with WoW change and status indicators (↑/↓/→).
+   - *Anomalies*: Flagged items with severity and recommended action.
+   - *Top/Bottom Performers*: Ranked ads with performance data.
+   - *Recommendations*: Specific next actions (pause ad X, increase budget on campaign Y, test new creative for audience Z).
+6. Review brief renders in a canvas panel. Practitioner reviews findings.
+7. Practitioner clicks "Generate Report" button in the brief panel header.
+8. Agent selects the configured weekly report Typst template (or default). Populates template:
+   - =metrics-strip= components for KPI row.
+   - =stat-cell= for individual metric callouts.
+   - Charts rendered as Typst graphics (bar charts for spend, line charts for trends).
+   - =numbered-card= for ranked recommendations.
+   - ORA branding: navy/coral/cream palette, Aspekta typography, logo placement.
+9. Live preview renders in split-pane. Practitioner reviews the branded PDF.
+10. Practitioner makes final adjustments (reword a recommendation, adjust chart emphasis).
+11. Practitioner clicks "Export PDF". Final report compiled and saved to =deliverables/reports/weekly-YYYY-MM-DD.typ= and =.pdf=.
+
+** Alternative Flows
+- *3a. Incomplete data*: Some metric sources have gaps. Agent flags: "Missing conversion data for Campaign X (days 3-5). Report will note data gap." Report includes caveat footnote.
+- *5a. No anomalies*: Anomalies section replaced with "All metrics within expected ranges" confirmation.
+- *7a. Custom date range*: Practitioner overrides the 7-day window: "Generate report for March 1-15". Agent re-queries and regenerates.
+- *9a. Template switch*: Practitioner switches from "Weekly Digest" to "Executive Summary" template. Agent re-maps data — executive template uses fewer metrics, larger charts, more whitespace. Preview updates.
+
+** Postconditions
+- Review brief saved as org file in =deliverables/briefs/=.
+- Typst source and PDF saved in =deliverables/reports/=.
+- Report linked in deliverable pipeline with metric snapshot IDs for auditability.
+- Metric queries cached in SQLite to avoid re-computation if report is regenerated same day.
+
+** Related Features
+- Review Mode (=/review=)
+- Typst Report Engine (template population)
+- Live Typst Editor (split-pane preview)
+- SQLite Data Persistence (metrics tables)
+- Deliverable Pipeline (report tracking)
+
+* UC-05: Campaign Planning
+:PROPERTIES:
+:CUSTOM_ID: uc-05-campaign-planning
+:END:
+
+** Actor
+Growth practitioner.
+
+** Preconditions
+- Client context active (client selected in portfolio or project directory scoped to client).
+- Competitive data available in SQLite (prior scans exist).
+- Budget parameters known or estimable.
+
+** Main Flow
+1. Practitioner types =/campaign= in canvas chat.
+2. Agent enters campaign mode (equivalent to =/ultraplan= in coding). Auto-runs competitive scan as a gate before proceeding.
+3. *Competitive Scan Gate*:
+   a. Agent checks SQLite for recent scan data (< 48 hours old for the client's category).
+   b. If stale or missing: agent triggers an automated competitive scan (UC-03 steps 6-10, using saved scan parameters or client category defaults).
+   c. Gate passes when fresh competitive data is available.
+4. Agent analyzes competitive landscape and proposes a campaign structure:
+   - Campaign objective (awareness / consideration / conversion) with rationale.
+   - Audience segments (2-4 segments with targeting criteria).
+   - Channel mix with budget allocation percentages.
+   - Creative direction per segment (informed by competitive analysis — what's working, where gaps exist).
+   - Timeline: launch date, phase durations, review checkpoints.
+5. Campaign structure renders in the Kanban board panel — a QML canvas view with swim lanes:
+   - Columns: *Planning* → *Creative* → *Review* → *Live* → *Optimization*.
+   - Cards represent campaign components: each audience segment × creative variant = a card.
+   - Cards show: segment name, budget allocation, creative status, assigned dates.
+6. Practitioner edits the Kanban board:
+   - Drag cards between phases.
+   - Click card to edit: adjust budget, dates, targeting, creative direction.
+   - Add/remove cards for additional segments or variants.
+7. Practitioner assigns budget: total campaign budget entered, agent auto-distributes across segments based on proposed allocation (editable per card).
+8. Practitioner sets dates: campaign start/end dates. Agent calculates phase durations and populates card dates.
+9. Practitioner clicks "Generate Creative Brief" on a segment card.
+10. Agent produces a creative brief for that segment:
+    - Target audience persona.
+    - Key messages and value propositions.
+    - Tone and style direction (informed by competitive creative analysis).
+    - CTA options.
+    - Visual direction notes.
+11. Agent writes ad copy variations (3-5 per segment) directly from the creative brief. Variations render as cards in a creative review sub-panel.
+12. Practitioner reviews copy variations, rates them (thumbs up/down or 1-5 stars), selects winners.
+
+** Alternative Flows
+- *3b. Practitioner skips gate*: Types =/campaign --skip-scan=. Agent proceeds with existing data (however old), notes staleness in the campaign plan.
+- *6a. Restructure campaign*: Practitioner says "merge segments A and B" in chat. Agent recalculates budget allocation and updates Kanban cards.
+- *11a. Agent-generated visuals*: For segments where visual direction is clear, agent generates image prompts (for Gemini image generation) alongside copy. Practitioner can generate preview images directly.
+
+** Postconditions
+- Campaign plan saved as org file in =deliverables/briefs/campaign-[name]-YYYY-MM-DD.org=.
+- Creative briefs saved per segment in =deliverables/briefs/=.
+- Ad copy variations stored in the campaign org file under segment headings.
+- Kanban board state persisted in SQLite (=campaigns= and =campaign_cards= tables) for session continuity.
+- Competitive scan results linked to campaign plan for context.
+
+** Related Features
+- Campaign Mode (=/campaign=)
+- Campaign Planner Board (Kanban QML canvas)
+- Competitive Intelligence (gate scan)
+- Ad Creative Analyzer (competitive creative analysis)
+- Creative Mode (ad copy generation — UC-06)
+
+* UC-06: Ad Copy Iteration
+:PROPERTIES:
+:CUSTOM_ID: uc-06-ad-copy-iteration
+:END:
+
+** Actor
+Growth practitioner.
+
+** Preconditions
+- Competitive Intel panel is open with scan results loaded.
+- At least one competitor ad visible in the ad gallery.
+
+** Main Flow
+1. Practitioner browses the ad gallery in the Competitive Intel panel. Spots a high-performing competitor ad (long-running, multiple platforms).
+2. Practitioner right-clicks the ad card (or clicks the "..." menu) and selects "Write something similar".
+3. Agent receives the competitor ad data from SQLite (full snapshot: copy, CTA, visual description, platform, audience inference).
+4. Agent analyzes the competitor creative:
+   a. Deconstructs copy structure: hook type (question, stat, pain point), body pattern (story, features, social proof), CTA style (urgency, benefit, direct).
+   b. Identifies tonal register (casual, professional, aspirational, urgent).
+   c. Notes structural elements: length, emoji usage, line breaks, hashtags.
+   d. Infers target audience from messaging signals.
+5. Agent generates 5 ad copy variations, each taking a different approach:
+   - *Variation 1*: Same structure, different angle (reframes the hook).
+   - *Variation 2*: Shorter/punchier version (optimized for attention span).
+   - *Variation 3*: Story-driven rewrite (narrative approach).
+   - *Variation 4*: Data/proof-led version (stats and social proof emphasis).
+   - *Variation 5*: Contrarian take (differentiates from competitor's messaging).
+6. Variations render as a horizontal card carousel in a creative review panel. Each card shows:
+   - Variation label and approach description.
+   - Full ad copy text.
+   - Estimated character/word count.
+   - Highlighted differences from the competitor original.
+7. Practitioner reviews each variation. For each card:
+   - *Rate*: 1-5 stars or thumbs up/down.
+   - *Edit*: Click to inline-edit the copy directly on the card.
+   - *Remix*: "Combine this with variation 3" — agent merges elements.
+8. Practitioner selects a winner (or edited combination). Clicks "Save to Campaign".
+9. Dialog asks which campaign and segment to attach the copy to (dropdown of active campaigns from SQLite). Copy saved as a creative asset linked to the campaign.
+
+** Alternative Flows
+- *2a. Multiple source ads*: Practitioner selects 3 competitor ads → "Write inspired by these". Agent identifies common patterns across the set and generates variations that synthesize the best elements.
+- *5a. Platform-specific variations*: Practitioner specifies target platform (Facebook, Instagram Stories, Google Ads). Agent adjusts copy for platform constraints (character limits, format requirements).
+- *7a. Request more variations*: "Give me 3 more like variation 2 but shorter". Agent generates targeted variations branching from the selected style.
+- *9a. No active campaign*: Copy saved to a general creative library (=deliverables/creatives/=) unattached to a campaign. Can be linked later.
+
+** Postconditions
+- Selected ad copy saved to campaign (SQLite =campaign_creatives= table) or creative library (file system).
+- Competitor ad marked as "referenced" in SQLite with link to generated variations (lineage tracking).
+- All 5 variations retained (not just the winner) for future reference.
+- Rating data persisted for pattern learning (which variation styles the practitioner prefers).
+
+** Related Features
+- Competitive Intelligence Canvas (source ads)
+- Creative Mode (=/creative=)
+- Campaign Planner Board (creative attachment)
+- Deliverable Pipeline (creative asset tracking)
+
+* UC-07: Multi-Client Context Switch
+:PROPERTIES:
+:CUSTOM_ID: uc-07-multi-client-context
+:END:
+
+** Actor
+Growth practitioner.
+
+** Preconditions
+- Multiple clients configured in the project. Each client has a directory under =clients/[name]/= with its own =.spell/domain.json= and SQLite database (=.spell/growth.db=).
+- Client Portfolio panel is accessible in the sidebar.
+
+** Main Flow
+1. Practitioner navigates to the Client Portfolio panel in the QML sidebar.
+2. Portfolio view shows a card grid of all clients:
+   - Client name and logo.
+   - Active campaign count.
+   - Pending deliverable count.
+   - Key metric sparklines (spend trend, CPA trend — last 30 days).
+   - Status indicator: green (on track), yellow (needs attention), red (action required).
+3. Practitioner clicks the "MamaBox" client card.
+4. Context switch executes:
+   a. SQLite connection switches to MamaBox's =clients/mamabox/.spell/growth.db=.
+   b. All panels reload with MamaBox-scoped data:
+      - *Dashboard*: MamaBox metrics, MamaBox competitor activity.
+      - *Competitive Intel*: MamaBox competitor watchlist and scan history.
+      - *Reports*: MamaBox deliverables only.
+      - *Campaign Board*: MamaBox campaigns only.
+   c. Canvas title bar updates to show "Spell Growth — MamaBox".
+   d. Chat context updated: agent is now aware it's operating in MamaBox context. Queries reference MamaBox data.
+5. Practitioner works within MamaBox context — all UC-01 through UC-06 workflows operate against MamaBox data.
+6. Practitioner returns to Client Portfolio panel, clicks "Dar Eddaya".
+7. Context switch executes again (same as step 4, now scoped to Dar Eddaya).
+   - Any unsaved work in MamaBox context is auto-saved (session state to SQLite, draft deliverables to file system).
+   - No data leakage: MamaBox data does not appear in Dar Eddaya panels.
+
+** Alternative Flows
+- *3a. Quick switch*: Practitioner uses keyboard shortcut (Ctrl+Shift+C) or types =/client DarEddaya= in chat. Context switches without navigating to Portfolio panel.
+- *4a. New client setup*: Practitioner clicks "Add Client" in Portfolio. Wizard: enter client name, industry, competitors to track, branding preferences. Creates =clients/[name]/= directory structure and initializes SQLite database.
+- *7a. Cross-client comparison*: Practitioner selects two client cards (Shift+click). Comparison view shows side-by-side metrics, shared competitors, portfolio-level insights. No context switch — read-only cross-client view.
+
+** Postconditions
+- Active client context persisted in session state. Next =spell= launch from the same project directory restores last active client.
+- All panel data is scoped to the active client. No cross-client data contamination.
+- Session state for the previous client is preserved — switching back restores panel positions, scroll states, and filter settings.
+
+** Related Features
+- Client Portfolio Dashboard (portfolio view)
+- SQLite Data Persistence (per-client databases)
+- Canvas Orchestrator (context-aware agent scoping)
+- All panel features (context-filtered)
+
+* UC-08: Template Customization
+:PROPERTIES:
+:CUSTOM_ID: uc-08-template-customization
+:END:
+
+** Actor
+Growth practitioner.
+
+** Preconditions
+- At least one base report template exists (shipped with Spell Growth or previously created).
+- ORA branding Typst library available.
+- Live Typst Editor functional (typst-ts WASM rendering, tree-sitter-typst highlighting).
+
+** Main Flow
+1. Practitioner navigates to the Report Editor panel (via sidebar or from a deliverable in the pipeline).
+2. Clicks "Template Selector" dropdown in the editor toolbar.
+3. Template gallery opens — a grid of template preview thumbnails:
+   - *Weekly Digest*: KPI strip, trend charts, top performers table, recommendations.
+   - *Executive Summary*: Cover page, 3-5 key findings, single recommendation.
+   - *Competitive Analysis*: Competitor grid, ad gallery, positioning map.
+   - *Campaign Proposal*: Cover, market overview, strategy, timeline, budget.
+   - *Client Report*: Full-length with all sections, appendices.
+   Each thumbnail shows a miniature rendered preview of the template with sample data.
+4. Practitioner selects "Weekly Digest".
+5. Template loads in the split-pane editor:
+   - *Left pane*: Typst source with tree-sitter-typst syntax highlighting. Template uses ora-branding imports (=#import "ora-brand/lib.typ": *=).
+   - *Right pane*: Live preview rendered via typst-ts WASM with sample data populated.
+6. Practitioner customizes the template:
+   a. *Header*: Changes the report title format. Edits the =#cover()= call parameters — title text, subtitle, date format. Preview updates live.
+   b. *Metrics layout*: Rearranges the =#metrics-strip()= component — reorders KPIs, removes "Impressions", adds "ROAS". Each edit re-renders in the preview.
+   c. *Color scheme*: Overrides the default ora-branding palette for this template. Changes accent color from coral (=#E75E4A=) to client brand color. Edits the =#let accent = rgb("...")= declaration.
+   d. *Section order*: Moves the "Recommendations" section above "Top Performers" by cutting and pasting the Typst blocks.
+   e. *Custom section*: Adds a new "Client Notes" section with a freeform text area placeholder.
+7. Practitioner clicks on an element in the PDF preview. Editor cursor jumps to the corresponding Typst source line (click-to-go-to-code).
+8. Satisfied with customizations, practitioner clicks "Save As Template".
+9. Save dialog:
+   - *Template name*: "MamaBox Weekly" (pre-filled from base template name + client context).
+   - *Scope*: Project-wide (available for all clients) or Client-specific (only for current client).
+   - *Base template*: "Weekly Digest" (shown as lineage, read-only).
+10. Template saved to =templates/mamabox-weekly.typ= (or =clients/mamabox/templates/= if client-scoped).
+
+** Alternative Flows
+- *4a. Start from blank*: Practitioner clicks "Blank Template". Editor loads a minimal Typst scaffold with ora-branding imports and a single page. Practitioner builds from scratch.
+- *6a. Agent-assisted customization*: Practitioner types in chat: "Add a comparison table showing this week vs. last week for all KPIs." Agent generates the Typst code for a comparison table and inserts it at the cursor position. Preview updates.
+- *8a. Preview with real data*: Before saving, practitioner clicks "Preview with real data" — template renders with actual client metrics instead of sample data. Validates that the layout works with real values (long numbers, missing data).
+- *10a. Update existing template*: If editing a previously customized template, "Save" overwrites in place. "Save As" creates a new variant. Version history tracked in git (template files are version-controlled).
+
+** Postconditions
+- Custom template saved as a Typst file in the project's template directory.
+- Template appears in the template selector for future report generation (UC-04, UC-02).
+- Base template lineage recorded (custom template references its parent).
+- Template is immediately available — next =/review= or "Generate Report" action offers "MamaBox Weekly" as an option.
+
+** Related Features
+- Live Typst Editor (split-pane editing)
+- Typst Report Engine (template system)
+- ORA Branding (component library)
+- Deliverable Pipeline (template selection during report generation)
+
+* Cross-Cutting Concerns
+
+** Session Continuity
+All use cases operate within a session that persists across canvas interactions. Session state includes:
+- Active client context (UC-07).
+- Panel positions and scroll states.
+- In-progress deliverables (auto-saved drafts).
+- Chat history and agent context.
+
+Session state is stored in SQLite (=.spell/session.db=) and restored on next launch.
+
+** Agent Context Window
+The agent maintains context across use case transitions within a session. When UC-01 (dashboard review) leads into UC-02 (proposal creation), the agent carries forward:
+- Which competitor ads were reviewed.
+- Which metrics were notable.
+- Any analysis briefs generated.
+
+This context is managed by the Canvas Orchestrator, which scopes lightweight agents per panel but allows escalation to full agents with cross-panel context.
+
+** Error Recovery
+All use cases follow the same error pattern:
+- *Scraper failures*: Retry with backoff (YAML DSL error handling). Surface to user after max retries.
+- *Typst compilation errors*: Shown inline in the editor with line numbers. Preview shows last successful render.
+- *SQLite errors*: Logged and surfaced. No silent data loss — operations are transactional.
+- *Agent errors*: Canvas Orchestrator catches, logs, and offers retry. Partial results are preserved.
+
+** Data Flow Summary
+
+#+begin_example
+                    ┌─────────────┐
+                    │  Scraper    │
+                    │  (TS/YAML)  │
+                    └──────┬──────┘
+                           │ ad snapshots
+                           ▼
+  ┌──────────┐      ┌─────────────┐      ┌──────────────┐
+  │ Metrics  │─────▶│   SQLite    │◀─────│  Campaigns   │
+  │ Import   │      │  growth.db  │      │  (Kanban)    │
+  └──────────┘      └──────┬──────┘      └──────────────┘
+                           │ queries
+                           ▼
+                    ┌─────────────┐
+                    │   Agent     │
+                    │ (analysis)  │
+                    └──────┬──────┘
+                           │ briefs, reports
+                           ▼
+                    ┌─────────────┐      ┌──────────────┐
+                    │  Org Files  │─────▶│  Typst + PDF │
+                    │  (briefs)   │      │  (reports)   │
+                    └─────────────┘      └──────────────┘
+#+end_example

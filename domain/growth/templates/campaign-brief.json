@@ -1,0 +1,46 @@
+{
+  "name": "Campaign Brief",
+  "description": "Full campaign brief covering objective, target audience, channels, budget breakdown, timeline phases, and creative direction.",
+  "variables": {
+    "campaign_name": {
+      "type": "string",
+      "required": true,
+      "description": "Campaign name displayed in the header and title"
+    },
+    "date": {
+      "type": "string",
+      "required": false,
+      "description": "Brief date string; omit to suppress"
+    },
+    "objective": {
+      "type": "string",
+      "required": true,
+      "description": "Primary campaign objective and success metric"
+    },
+    "target_audience": {
+      "type": "object",
+      "required": true,
+      "description": "Audience definition: { demographics: string, psychographics: string, segments: string[] }"
+    },
+    "channels": {
+      "type": "array",
+      "required": true,
+      "description": "Array of channel objects: { name: string, budget_pct: number, notes?: string }"
+    },
+    "budget": {
+      "type": "object",
+      "required": false,
+      "description": "Budget object: { total: string, breakdown: { line: string, amount: string }[] }"
+    },
+    "timeline": {
+      "type": "array",
+      "required": false,
+      "description": "Array of phase objects: { phase: string, dates: string, tasks: string }"
+    },
+    "creative_direction": {
+      "type": "string",
+      "required": false,
+      "description": "Visual style, tone of voice, key messages, and brand constraints"
+    }
+  }
+}

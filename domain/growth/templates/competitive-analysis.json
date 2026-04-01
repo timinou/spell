@@ -1,0 +1,36 @@
+{
+  "name": "Competitive Analysis",
+  "description": "Market overview, competitor grid, ad creative analysis, and strategic implications.",
+  "variables": {
+    "market": {
+      "type": "string",
+      "required": true,
+      "description": "Market or vertical name, e.g. \"B2B SaaS — Project Management\""
+    },
+    "date": {
+      "type": "string",
+      "required": false,
+      "description": "Report date string; omit to suppress from header"
+    },
+    "market_overview": {
+      "type": "string",
+      "required": true,
+      "description": "Narrative overview of the competitive landscape"
+    },
+    "competitors": {
+      "type": "array",
+      "required": true,
+      "description": "Array of competitor objects: { name, positioning, strengths, weaknesses, spend_estimate }"
+    },
+    "ad_analysis": {
+      "type": "array",
+      "required": false,
+      "description": "Array of ad observation objects: { competitor, format, message, platform, observation }"
+    },
+    "strategic_implications": {
+      "type": "array",
+      "required": false,
+      "description": "Array of strategic implication strings"
+    }
+  }
+}

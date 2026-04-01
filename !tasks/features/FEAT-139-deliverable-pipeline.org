@@ -1,0 +1,51 @@
+#+TITLE: Deliverable Pipeline
+#+STATE: DONE
+#+SESSION_ID: 14a899a7fb8415d4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/34-CreateFeatF.jsonl]]
+#+CUSTOM_ID: FEAT-139-deliverable-pipeline
+#+EFFORT: 18h
+#+PRIORITY: #B
+#+LAYER: domain
+#+DEPENDS: PROJ-010-typst-integration
+
+## Scope
+IN: Lifecycle tracking for deliverables. Org items with custom TODO states (BRIEF->DRAFT->REVIEW->FINAL->SENT). Filesystem for .typ source files in deliverables/ directory. SQLite metadata (deliverable_id, org_item_id, file_path, client_id, type, created_at, updated_at). Pipeline visualization as horizontal bar in dashboard. List view in deliverable panel section.
+OUT: Versioning/diffing between versions (FUP). Client review portal (FUP).
+
+## Tests
+- domain/growth/test/pipeline/lifecycle.test.ts: create deliverable, advance states, verify org+sqlite+filesystem consistency
+
+## Implementation
+** Define deliverable types and SQLite schema
+:PROPERTIES:
+:CUSTOM_ID: FEAT-139-deliverable-pipeline::define-types
+:END:
+Files: domain/growth/src/pipeline/types.ts, domain/growth/src/pipeline/schema.sql
+
+** Implement deliverable manager
+:PROPERTIES:
+:CUSTOM_ID: FEAT-139-deliverable-pipeline::implement-manager
+:DEPENDS: FEAT-139-deliverable-pipeline::define-types
+:END:
+Files: domain/growth/src/pipeline/manager.ts
+Create deliverable (org item + file + sqlite row), advance state, query by state/client/type.
+
+** Implement pipeline visualization data
+:PROPERTIES:
+:CUSTOM_ID: FEAT-139-deliverable-pipeline::implement-viz-data
+:DEPENDS: FEAT-139-deliverable-pipeline::implement-manager
+:END:
+Files: domain/growth/src/pipeline/queries.ts
+Armed tool: pipeline_summary returns { brief: N, draft: N, review: N, final: N, sent: N }.
+
+** Write pipeline tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-139-deliverable-pipeline::write-tests
+:DEPENDS: FEAT-139-deliverable-pipeline::implement-manager
+:END:
+Files: domain/growth/test/pipeline/lifecycle.test.ts
+
+## Acceptance Criteria
+- Creating a deliverable produces: org item (BRIEF state), .typ file, SQLite row
+- Advancing to DRAFT updates all three
+- Pipeline query returns correct counts per state

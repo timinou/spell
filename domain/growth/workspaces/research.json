@@ -1,0 +1,10 @@
+{
+  "id": "research",
+  "name": "Research",
+  "icon": "search",
+  "panels": [
+    { "panelId": "intel", "position": "main", "flex": 2 },
+    { "panelId": "chat", "position": "secondary", "flex": 1 }
+  ],
+  "defaultMode": "intel"
+}

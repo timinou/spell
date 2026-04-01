@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Typst Preview</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #fff; overflow: auto; }
+    #preview {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+      gap: 16px;
+    }
+    #preview svg {
+      max-width: 100%;
+      height: auto;
+      display: block;
+      box-shadow: 0 1px 4px rgba(0,0,0,.15);
+    }
+    #error-banner {
+      display: none;
+      width: 100%;
+      background: #fee2e2;
+      color: #991b1b;
+      font-family: monospace;
+      font-size: 13px;
+      padding: 8px 12px;
+      border-left: 3px solid #ef4444;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+
+<div id="error-banner"></div>
+<div id="preview"></div>
+
+<!--
+  Typst-ts WASM renderer.
+  Replace the src below with the actual typst-ts package URL once installed:
+    https://cdn.jsdelivr.net/npm/@myriaddreamin/typst-ts-renderer@latest/pkg/...
+  For now the script tag is left as a placeholder comment.
+-->
+<!-- <script src="/typst-ts-renderer.js"></script> -->
+
+<script>
+  'use strict';
+
+  // ── internal state ──────────────────────────────────────────────────────────
+
+  /** @type {any} */
+  let renderer = null;
+  let rendererReady = false;
+
+  const previewEl = document.getElementById('preview');
+  const errorBanner = document.getElementById('error-banner');
+
+  // ── renderer init ───────────────────────────────────────────────────────────
+
+  async function initRenderer() {
+    // When typst-ts is available, initialize here.
+    // Example (shape may differ across versions):
+    //   renderer = await TypstTsModule.createRenderer();
+    //   await renderer.init({ ... });
+    rendererReady = true;
+  }
+
+  initRenderer().catch((err) => {
+    showError('Renderer init failed: ' + err.message);
+  });
+
+  // ── public API ──────────────────────────────────────────────────────────────
+
+  /**
+   * Compile `mainContent` (Typst source) and display the result.
+   * Posts { type: 'compile_error', errors } to parent on failure.
+   *
+   * @param {string} mainContent
+   */
+  window.compile = async function compile(mainContent) {
+    clearError();
+
+    if (!rendererReady) {
+      showError('Renderer not ready yet — please wait.');
+      return;
+    }
+
+    try {
+      // With a real renderer this would be:
+      //   const result = await renderer.renderToSVG(mainContent);
+      // For now we forward to the parent process to do the compilation.
+      window.parent.postMessage({ type: 'compile_request', content: mainContent }, '*');
+    } catch (err) {
+      showError(String(err));
+      window.parent.postMessage({ type: 'compile_error', error: String(err) }, '*');
+    }
+  };
+
+  /**
+   * Inject pre-compiled SVG directly into the preview pane.
+   * Attaches click handlers to elements that carry data-source-line.
+   *
+   * @param {string} svg
+   */
+  window.updateContent = function updateContent(svg) {
+    clearError();
+
+    if (!svg) {
+      previewEl.innerHTML = '';
+      return;
+    }
+
+    previewEl.innerHTML = svg;
+
+    // Attach click-to-source handlers on every element with a source line.
+    previewEl.querySelectorAll('[data-source-line]').forEach((el) => {
+      el.style.cursor = 'pointer';
+      el.addEventListener('click', (evt) => {
+        evt.stopPropagation();
+        const line = parseInt(el.getAttribute('data-source-line') || '0', 10);
+        if (line > 0) {
+          window.parent.postMessage({ type: 'goto_line', line }, '*');
+        }
+      });
+    });
+  };
+
+  // ── message bus ─────────────────────────────────────────────────────────────
+
+  // Receive compiled SVG back from the parent (when parent does the compile).
+  window.addEventListener('message', (evt) => {
+    const msg = evt.data;
+    if (!msg || typeof msg !== 'object') return;
+
+    if (msg.type === 'update_svg') {
+      window.updateContent(msg.svg || '');
+    }
+
+    if (msg.type === 'show_error') {
+      showError(msg.error || 'Unknown error');
+    }
+  });
+
+  // ── helpers ─────────────────────────────────────────────────────────────────
+
+  function showError(text) {
+    errorBanner.textContent = text;
+    errorBanner.style.display = 'block';
+  }
+
+  function clearError() {
+    errorBanner.textContent = '';
+    errorBanner.style.display = 'none';
+  }
+</script>
+</body>
+</html>

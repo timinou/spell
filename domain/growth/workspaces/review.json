@@ -1,0 +1,10 @@
+{
+  "id": "review",
+  "name": "Review",
+  "icon": "chart",
+  "panels": [
+    { "panelId": "dashboard", "position": "main", "flex": 1 },
+    { "panelId": "editor", "position": "secondary", "flex": 1 }
+  ],
+  "defaultMode": "review"
+}

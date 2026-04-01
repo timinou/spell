@@ -17,7 +17,6 @@ You are a coordinator agent managing {{itemCount}} org items for plan `{{planId}
 - **Priority**: {{this.priority}}
 {{/if}}
 {{#if this.body}}
-
 #### Scope & Details
 {{{this.body}}}
 {{/if}}

@@ -1,0 +1,1550 @@
+#+TITLE: Spell Growth — Screen & Panel Specifications
+#+AUTHOR: Spell Growth
+#+STARTUP: showall
+
+* Shell Layout
+** Overview
+
+Spell Growth runs in always-canvas mode. The QML window is the primary interface; the
+TUI serves only as the launcher. The shell reuses the existing =shell.qml= architecture
+(=packages/coding-agent/src/modes/qml/shell.qml=) — =SplitView= with sidebar + main
+content — but with growth-specific panels, a wider sidebar, and a persistent bottom chat
+bar that remains visible across all panels.
+
+** Wireframe
+#+begin_example
+┌──────────────────────────────────────────────────────────────────┐
+│  ┌─────────────┐  ┌────────────────────────────────────────────┐ │
+│  │  ◆ ORA      │  │                                            │ │
+│  │             │  │           Active Panel Content              │ │
+│  │  ● Chat     │  │                                            │ │
+│  │  ■ Dash     │  │     (Dashboard / Intel / Editor /           │ │
+│  │  ◎ Intel    │  │      Portfolio / Chat)                      │ │
+│  │  ✎ Editor   │  │                                            │ │
+│  │  ◇ Clients  │  │                                            │ │
+│  │             │  │                                            │ │
+│  │             │  │                                            │ │
+│  │             │  ├────────────────────────────────────────────┤ │
+│  │  ─────────  │  │  💬 Ask Spell...               ⌘↩ Send    │ │
+│  │  + New      │  └────────────────────────────────────────────┘ │
+│  │  ⚙ Settings │                                                │
+│  └─────────────┘                                                │
+└──────────────────────────────────────────────────────────────────┘
+       280px                          remaining
+#+end_example
+
+** QML Component Tree
+#+begin_src qml
+ApplicationWindow {                          // GrowthShell.qml
+    id: root
+    width: 1440; height: 900
+    color: SpellTheme.background
+
+    SplitView {
+        anchors.fill: parent
+        orientation: Qt.Horizontal
+
+        // --- Left Sidebar (280px fixed) ---
+        Rectangle {                          // Sidebar
+            SplitView.preferredWidth: 280
+            SplitView.minimumWidth: 280
+            SplitView.maximumWidth: 280
+            color: SpellTheme.surfaceHigh
+
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 0
+
+                // Brand header
+                SidebarHeader { }            // ORA logo + "Growth" label
+
+                // Panel navigation
+                ListView {
+                    id: panelList
+                    model: panelsModel       // ListModel populated from bridge.props.panels
+                    delegate: SidebarNavItem { }
+                }
+
+                // Spacer
+                Item { Layout.fillHeight: true }
+
+                // Bottom actions
+                SidebarFooter {              // "+ New Deliverable" button, Settings
+                    onNewDeliverable: newDeliverableModal.open()
+                }
+            }
+        }
+
+        // --- Main Content Area ---
+        ColumnLayout {
+            SplitView.fillWidth: true
+            spacing: 0
+
+            // Panel stack (Loader per panel, only active one visible)
+            StackLayout {
+                id: panelStack
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                currentIndex: root.activePanelIndex
+
+                Repeater {
+                    model: panelsModel
+                    delegate: Loader {
+                        source: model.path
+                        active: StackLayout.isCurrentItem || status === Loader.Ready
+                        visible: StackLayout.isCurrentItem
+                    }
+                }
+            }
+
+            // Persistent chat input bar
+            ChatInputBar {                   // Always visible, all panels
+                Layout.fillWidth: true
+                Layout.preferredHeight: 56
+                onSubmit: function(text) {
+                    bridge.send({ type: "user_message", text: text })
+                }
+            }
+        }
+    }
+
+    // Modals (overlay)
+    NewDeliverableModal { id: newDeliverableModal }
+    StrategyModeOverlay { id: strategyOverlay }
+}
+#+end_src
+
+** Data Flow
+- =bridge.props.panels=: Array of ={id, title, icon, path}= — bootstrapped from
+  =growth-mode.ts= analogous to =qml-mode.ts=.
+- =bridge.messageReceived=: Dispatches payloads to the active panel via
+  =handleMessage(payload)= — same pattern as coding shell.
+- =bridge.send({ type: "user_message", text })=: Chat input from persistent bar.
+- =bridge.send({ type: "panel_switch", panelId })=: Sidebar navigation click.
+- =bridge.send({ type: "new_deliverable" })=: Opens wizard modal.
+
+** Differences from Coding Shell
+| Aspect             | Coding (shell.qml)         | Growth (GrowthShell.qml)          |
+|--------------------+----------------------------+-----------------------------------|
+| Sidebar width      | 240px                      | 280px (richer nav, client badges) |
+| Chat input         | Inside ChatPanel only      | Persistent bar, all panels        |
+| Default panels     | Chat, Dashboard            | Chat, Dashboard, Intel, Editor, Clients |
+| Footer             | None                       | "+ New Deliverable", Settings     |
+| Default window     | 1280x800                   | 1440x900                          |
+
+* Panel: Chat
+** Overview
+
+Agent conversation panel. Reuses =ChatPanel.qml=
+(=packages/coding-agent/src/modes/qml/panels/ChatPanel.qml=) with zero modifications.
+Shows agent messages with markdown rendering, tool execution progress (thinking blocks,
+tool calls with status), and image results. The input bar at the bottom of the chat
+panel is supplementary to the persistent shell-level =ChatInputBar= — when the Chat
+panel is active, the shell bar delegates focus to the panel's native input.
+
+** Wireframe
+#+begin_example
+┌────────────────────────────────────────────┐
+│  Assistant ──────────────────────────────── │
+│  Here's the competitive analysis for Q1... │
+│                                            │
+│  ┌─ Tool: grep ────────────────────────┐   │
+│  │  Searching competitor-ads.db...     │   │
+│  │  ✓ Found 47 new ads since Monday    │   │
+│  └─────────────────────────────────────┘   │
+│                                            │
+│  Based on the data, I recommend...         │
+│                                            │
+│  ┌─ Image ─────────────────────────────┐   │
+│  │  [competitor_ad_analysis.png]       │   │
+│  └─────────────────────────────────────┘   │
+│                                            │
+│  User ──────────────────────────────────── │
+│  Generate the weekly report for Acme Corp  │
+│                                            │
+│  ┌── Thinking... ──────────────────────┐   │
+│  │  ▌                                  │   │
+│  └─────────────────────────────────────┘   │
+└────────────────────────────────────────────┘
+#+end_example
+
+** QML Component Tree
+
+Identical to coding's =ChatPanel.qml=:
+#+begin_src qml
+Item {                                       // ChatPanel.qml (reused as-is)
+    id: chatPanel
+    property bool isStreaming: false
+
+    ListModel { id: messagesModel }
+
+    ListView {
+        id: messageList
+        model: messagesModel
+        delegate: Loader {
+            // Dispatches to FlowUser, FlowAssistant, FlowTool, FlowImage, ThinkingBlock
+            sourceComponent: {
+                if (model.role === "user") return userDelegate
+                if (model.role === "tool") return toolDelegate
+                return assistantDelegate
+            }
+        }
+    }
+
+    // handleMessage(payload) — receives message_start, message_update, message_end,
+    // tool_start, tool_end, thinking_start, thinking_update, image_result
+}
+#+end_src
+
+** Data Flow
+| Direction | Message Type        | Payload                                    |
+|-----------+---------------------+--------------------------------------------|
+| In        | =message_start=     | ={ id, role }=                             |
+| In        | =message_update=    | ={ id, delta }= (streaming text)           |
+| In        | =message_end=       | ={ id }=                                   |
+| In        | =tool_start=        | ={ id, name, input }=                      |
+| In        | =tool_end=          | ={ id, result, error }=                    |
+| In        | =thinking_start=    | ={ id }=                                   |
+| In        | =thinking_update=   | ={ id, delta }=                             |
+| In        | =image_result=      | ={ id, path, mimeType }=                   |
+| Out       | =user_message=      | ={ text }= (via shell ChatInputBar)        |
+
+** User Interactions
+- Scroll through message history.
+- Click tool call blocks to expand/collapse details.
+- Click images to open in system viewer.
+- Shift+Enter for multi-line input (handled by ChatInputBar).
+- When Chat panel is active, Cmd+Enter or Enter submits from the persistent bar.
+
+* Panel: Dashboard
+** Overview
+
+Morning overview panel. Aggregates key metrics, recent competitor activity, deliverable
+pipeline status, and upcoming deadlines. Provides quick-action buttons for the most
+common workflows. This is the default landing panel when Growth mode starts.
+
+** Wireframe
+#+begin_example
+┌────────────────────────────────────────────────────────────────┐
+│  Good morning ─ Tuesday, March 31                             │
+│                                                               │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────────┐            │
+│  │  12 New   │  │ 3 Pending    │  │ 5 Active     │            │
+│  │  Comp Ads │  │ Deliverables │  │ Campaigns    │            │
+│  └──────────┘  └──────────────┘  └──────────────┘            │
+│                                                               │
+│  ── Competitor Activity ────────────────────────────────────── │
+│  │ ● Acme Corp   "Spring Sale 20% off"   2h ago   Active    │ │
+│  │ ● Beta Inc    "Free Trial Extended"    5h ago   Active    │ │
+│  │ ● Gamma Ltd   "New Product Launch"     1d ago   Inactive  │ │
+│  │ ● Delta Co    "Webinar Signup"         1d ago   Active    │ │
+│                                                               │
+│  ── Deliverable Pipeline ───────────────────────────────────── │
+│  │  Brief: 2  │  Draft: 3  │  Review: 1  │  Final: 7       │ │
+│  │  ████░░░░  │  ██████░░  │  ██░░░░░░  │  ████████████    │ │
+│                                                               │
+│  ── Upcoming ───────────────────────────────────────────────── │
+│  │  Apr 2   Acme Corp Weekly Report                          │ │
+│  │  Apr 4   Beta Inc Campaign Review                         │ │
+│  │  Apr 7   Q1 Performance Deck                              │ │
+│                                                               │
+│  ┌──────────────┐  ┌──────────────────┐  ┌────────────────┐  │
+│  │ + New Report  │  │ 🔍 Scan Competitors│  │ 📊 Review Perf │  │
+│  └──────────────┘  └──────────────────┘  └────────────────┘  │
+└────────────────────────────────────────────────────────────────┘
+#+end_example
+
+** QML Component Tree
+#+begin_src qml
+Item {                                       // DashboardPanel.qml
+    id: dashboardPanel
+
+    function handleMessage(payload) {
+        if (payload.type === "dashboard_update") updateMetrics(payload)
+        if (payload.type === "competitor_feed") updateFeed(payload.ads)
+        if (payload.type === "pipeline_update") updatePipeline(payload.counts)
+        if (payload.type === "calendar_update") updateCalendar(payload.events)
+    }
+
+    ScrollView {
+        anchors.fill: parent
+
+        ColumnLayout {
+            width: parent.width
+            spacing: SpellTheme.spacingXL
+
+            // Greeting + date
+            DashboardHeader { }
+
+            // Metrics cards row
+            RowLayout {
+                spacing: SpellTheme.spacingL
+
+                MetricCard {                 // Reusable card component
+                    title: "New Competitor Ads"
+                    value: metrics.newAds
+                    trend: metrics.newAdsTrend   // "up" | "down" | "flat"
+                    color: SpellTheme.coral
+                }
+                MetricCard {
+                    title: "Pending Deliverables"
+                    value: metrics.pendingDeliverables
+                    color: SpellTheme.warning
+                }
+                MetricCard {
+                    title: "Active Campaigns"
+                    value: metrics.activeCampaigns
+                    color: SpellTheme.primary
+                }
+            }
+
+            // Competitor activity feed
+            DashboardSection {
+                title: "Competitor Activity"
+
+                ListView {
+                    id: activityFeed
+                    model: competitorFeedModel  // ListModel
+                    delegate: CompetitorAdRow {
+                        advertiserName: model.advertiser
+                        adTextPreview: model.textPreview
+                        timeAgo: model.timeAgo
+                        status: model.status     // "active" | "inactive"
+                        onClicked: root.activePanelIndex =
+                            root.findPanelIndexById("intel")
+                    }
+                }
+            }
+
+            // Pipeline status
+            DashboardSection {
+                title: "Deliverable Pipeline"
+
+                PipelineBar {                // Horizontal stacked bar
+                    briefCount: pipeline.brief
+                    draftCount: pipeline.draft
+                    reviewCount: pipeline.review
+                    finalCount: pipeline.final_
+                }
+            }
+
+            // Calendar / upcoming deadlines
+            DashboardSection {
+                title: "Upcoming"
+
+                ListView {
+                    model: calendarModel     // ListModel
+                    delegate: CalendarRow {
+                        date: model.date
+                        label: model.label
+                        client: model.client
+                    }
+                }
+            }
+
+            // Quick actions
+            RowLayout {
+                spacing: SpellTheme.spacingL
+                Layout.alignment: Qt.AlignHCenter
+
+                QuickActionButton {
+                    text: "New Report"
+                    icon: "+"
+                    onClicked: bridge.send({ type: "quick_action", action: "new_report" })
+                }
+                QuickActionButton {
+                    text: "Scan Competitors"
+                    icon: "🔍"
+                    onClicked: bridge.send({ type: "quick_action", action: "scan_competitors" })
+                }
+                QuickActionButton {
+                    text: "Review Performance"
+                    icon: "📊"
+                    onClicked: bridge.send({ type: "quick_action", action: "review_performance" })
+                }
+            }
+        }
+    }
+
+    ListModel { id: competitorFeedModel }
+    ListModel { id: calendarModel }
+    property var metrics: ({ newAds: 0, newAdsTrend: "flat", pendingDeliverables: 0, activeCampaigns: 0 })
+    property var pipeline: ({ brief: 0, draft: 0, review: 0, final_: 0 })
+}
+#+end_src
+
+** Data Flow
+| Direction | Message Type          | Payload                                         |
+|-----------+-----------------------+-------------------------------------------------|
+| In        | =dashboard_update=    | ={ newAds, newAdsTrend, pendingDeliverables, activeCampaigns }= |
+| In        | =competitor_feed=     | ={ ads: [{ advertiser, textPreview, timeAgo, status }] }= |
+| In        | =pipeline_update=     | ={ counts: { brief, draft, review, final } }=  |
+| In        | =calendar_update=     | ={ events: [{ date, label, client }] }=         |
+| Out       | =quick_action=        | ={ action: "new_report" | "scan_competitors" | "review_performance" }= |
+
+** User Interactions
+- Click a metric card: navigates to the relevant panel (Intel for ads, pipeline for deliverables).
+- Click a competitor ad row: switches to Intel panel, filtered to that advertiser.
+- Click a calendar event: opens the linked deliverable in the Report Editor.
+- Quick action buttons: trigger agent commands (open modal, start scan, switch to review mode).
+- Pull-to-refresh (or button): sends =bridge.send({ type: "refresh_dashboard" })=.
+
+* Panel: Competitive Intel
+** Overview
+
+Ad gallery view for browsing, filtering, and analyzing competitor advertisements.
+Primary data source is Facebook Ads Library (via native TS scraper framework). Ad
+snapshots are persisted to SQLite (=.spell/growth/ads.db=). Supports grid and list
+layouts, side-drawer for full ad details, and agent-driven creative analysis.
+
+** Wireframe
+#+begin_example
+┌────────────────────────────────────────────────────────────────────┐
+│  ┌─ Search ──────────────────────────────────────────────────────┐│
+│  │ 🔍 advertiser or keyword    │ Date ▾ │ Format ▾ │ Status ▾  ││
+│  └───────────────────────────────────────────────────────────────┘│
+│                                                    ☷ Grid │ ☰ List│
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
+│  │ [thumbnail]  │  │ [thumbnail]  │  │ [thumbnail]  │           │
+│  │              │  │              │  │              │           │
+│  │ Acme Corp    │  │ Beta Inc     │  │ Gamma Ltd    │           │
+│  │ "Spring Sale │  │ "Try Free    │  │ "New Product │           │
+│  │  20% off..." │  │  for 30..."  │  │  Launch..."  │           │
+│  │ Mar 28 ● Act │  │ Mar 25 ● Act │  │ Mar 20 ○ End │           │
+│  │ ☆  🏷  📝    │  │ ★  🏷  📝    │  │ ☆  🏷  📝    │           │
+│  └──────────────┘  └──────────────┘  └──────────────┘           │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
+│  │ [thumbnail]  │  │ [thumbnail]  │  │ [thumbnail]  │           │
+│  │ ...          │  │ ...          │  │ ...          │           │
+│  └──────────────┘  └──────────────┘  └──────────────┘           │
+│                                                                  │
+│                    ◄  1  2  3  4  ►                              │
+└────────────────────────────────────────────────────────────────────┘
+
+Side Drawer (on card click):
+┌────────────────────────────────────────┬─────────────────────────┐
+│         (gallery continues)           │  ✕ Close                │
+│                                       │                         │
+│                                       │  [Full creative image]  │
+│                                       │                         │
+│                                       │  Acme Corp              │
+│                                       │  "Spring Sale 20% off   │
+│                                       │   all products. Shop    │
+│                                       │   now and save big..."  │
+│                                       │                         │
+│                                       │  Status: Active         │
+│                                       │  Started: Mar 28, 2026  │
+│                                       │  Format: Image          │
+│                                       │  Platform: Facebook     │
+│                                       │  Spend: $500–$999       │
+│                                       │  Impressions: 50K–100K  │
+│                                       │  Landing: acme.com/sale │
+│                                       │                         │
+│                                       │  Tags: [spring] [sale]  │
+│                                       │  Notes: ___________     │
+│                                       │                         │
+│                                       │  [★ Star] [🔍 Analyze]  │
+│                                       │                         │
+└────────────────────────────────────────┴─────────────────────────┘
+#+end_example
+
+** QML Component Tree
+#+begin_src qml
+Item {                                       // CompetitiveIntelPanel.qml
+    id: intelPanel
+
+    property string viewMode: "grid"         // "grid" | "list"
+    property var filters: ({
+        query: "",
+        dateFrom: "",
+        dateTo: "",
+        format: "",                          // "image" | "video" | "carousel" | ""
+        status: "",                          // "active" | "inactive" | ""
+        platform: "facebook"
+    })
+    property bool drawerOpen: false
+    property var selectedAd: null
+
+    function handleMessage(payload) {
+        if (payload.type === "ads_loaded") loadAds(payload.ads, payload.total)
+        if (payload.type === "ad_detail") showAdDetail(payload.ad)
+        if (payload.type === "analysis_result") appendAnalysis(payload)
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        spacing: 0
+
+        // Toolbar: search + filters
+        FilterToolbar {                      // FilterToolbar.qml
+            id: toolbar
+            Layout.fillWidth: true
+            Layout.preferredHeight: 64
+
+            searchText: filters.query
+            onSearchChanged: function(text) {
+                filters.query = text
+                requestAds()
+            }
+
+            FilterChip { label: "Date"; model: dateRangeOptions }
+            FilterChip { label: "Format"; model: ["Image", "Video", "Carousel"] }
+            FilterChip { label: "Status"; model: ["Active", "Inactive"] }
+
+            ViewToggle {                     // Grid/List toggle
+                mode: intelPanel.viewMode
+                onToggled: function(m) { intelPanel.viewMode = m }
+            }
+        }
+
+        // Ad gallery
+        SplitView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            orientation: Qt.Horizontal
+
+            // Main grid/list
+            Item {
+                SplitView.fillWidth: true
+
+                GridView {                   // Shown when viewMode === "grid"
+                    id: adGrid
+                    visible: viewMode === "grid"
+                    anchors.fill: parent
+                    cellWidth: 280
+                    cellHeight: 320
+                    model: adsModel
+                    delegate: AdCard { }
+                }
+
+                ListView {                   // Shown when viewMode === "list"
+                    id: adList
+                    visible: viewMode === "list"
+                    anchors.fill: parent
+                    model: adsModel
+                    delegate: AdListRow { }
+                }
+
+                // Pagination footer
+                PaginationBar {
+                    anchors.bottom: parent.bottom
+                    currentPage: intelPanel.currentPage
+                    totalPages: intelPanel.totalPages
+                    onPageChanged: function(p) { intelPanel.currentPage = p; requestAds() }
+                }
+            }
+
+            // Side drawer (ad detail)
+            AdDetailDrawer {
+                id: detailDrawer
+                SplitView.preferredWidth: drawerOpen ? 380 : 0
+                SplitView.minimumWidth: 0
+                SplitView.maximumWidth: 420
+                visible: drawerOpen
+                ad: selectedAd
+
+                onClose: { drawerOpen = false; selectedAd = null }
+                onStar: function(adId) {
+                    bridge.send({ type: "ad_star", adId: adId })
+                }
+                onTag: function(adId, tag) {
+                    bridge.send({ type: "ad_tag", adId: adId, tag: tag })
+                }
+                onNote: function(adId, note) {
+                    bridge.send({ type: "ad_note", adId: adId, note: note })
+                }
+                onAnalyze: function(adId) {
+                    bridge.send({ type: "ad_analyze", adId: adId })
+                }
+            }
+        }
+    }
+
+    ListModel { id: adsModel }
+    property int currentPage: 1
+    property int totalPages: 1
+
+    function requestAds() {
+        bridge.send({
+            type: "ads_request",
+            filters: filters,
+            page: currentPage
+        })
+    }
+
+    Component.onCompleted: requestAds()
+}
+#+end_src
+
+*** AdCard.qml
+#+begin_src qml
+Rectangle {                                  // AdCard.qml
+    id: adCard
+    width: adGrid.cellWidth - 16
+    height: adGrid.cellHeight - 16
+    radius: SpellTheme.cornerRadius
+    color: SpellTheme.surface
+    border.color: SpellTheme.border
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: SpellTheme.spacingM
+        spacing: SpellTheme.spacingS
+
+        // Thumbnail
+        Image {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 160
+            source: model.thumbnailUrl || ""
+            fillMode: Image.PreserveAspectCrop
+            // Placeholder for missing images
+            Rectangle {
+                visible: parent.status !== Image.Ready
+                anchors.fill: parent
+                color: SpellTheme.surfaceHigh
+                Text { anchors.centerIn: parent; text: model.format || "Ad" }
+            }
+        }
+
+        // Advertiser name
+        Text {
+            text: model.advertiser
+            font.bold: true
+            font.pixelSize: SpellTheme.fontSizeMedium
+            color: SpellTheme.textPrimary
+            elide: Text.ElideRight
+            Layout.fillWidth: true
+        }
+
+        // Ad text preview (2 lines)
+        Text {
+            text: model.textPreview
+            font.pixelSize: SpellTheme.fontSizeSmall
+            color: SpellTheme.textSecondary
+            maximumLineCount: 2
+            elide: Text.ElideRight
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+        }
+
+        // Bottom row: date, status, actions
+        RowLayout {
+            Layout.fillWidth: true
+            Text {
+                text: model.startDate
+                font.pixelSize: SpellTheme.fontSizeSmall
+                color: SpellTheme.textTertiary
+            }
+            StatusBadge { status: model.status }
+            Item { Layout.fillWidth: true }
+            IconButton { icon: model.starred ? "★" : "☆"; onClicked: toggleStar() }
+            IconButton { icon: "🏷"; onClicked: openTagPopup() }
+            IconButton { icon: "📝"; onClicked: openNotePopup() }
+        }
+    }
+
+    StateLayer {
+        anchors.fill: parent
+        onClicked: {
+            intelPanel.selectedAd = adsModel.get(index)
+            intelPanel.drawerOpen = true
+            bridge.send({ type: "ad_detail_request", adId: model.adId })
+        }
+    }
+}
+#+end_src
+
+** Data Flow
+| Direction | Message Type          | Payload                                              |
+|-----------+-----------------------+------------------------------------------------------|
+| Out       | =ads_request=         | ={ filters: {...}, page: int }=                      |
+| In        | =ads_loaded=          | ={ ads: [AdSnapshot], total: int, page: int }=       |
+| Out       | =ad_detail_request=   | ={ adId: string }=                                   |
+| In        | =ad_detail=           | ={ ad: AdDetail }= (full record with spend/impressions) |
+| Out       | =ad_star=             | ={ adId: string }=                                   |
+| Out       | =ad_tag=              | ={ adId: string, tag: string }=                      |
+| Out       | =ad_note=             | ={ adId: string, note: string }=                     |
+| Out       | =ad_analyze=          | ={ adId: string }= — triggers agent creative analysis |
+| In        | =analysis_result=     | ={ adId, analysis: string }= — markdown analysis     |
+
+*** AdSnapshot Schema (SQLite: =.spell/growth/ads.db=)
+#+begin_src sql
+CREATE TABLE ad_snapshots (
+    id          TEXT PRIMARY KEY,          -- platform-specific ad ID
+    platform    TEXT NOT NULL DEFAULT 'facebook',
+    advertiser  TEXT NOT NULL,
+    ad_text     TEXT,
+    thumbnail   TEXT,                      -- local path or URL
+    start_date  TEXT,                      -- ISO 8601
+    end_date    TEXT,
+    status      TEXT CHECK(status IN ('active', 'inactive')),
+    format      TEXT CHECK(format IN ('image', 'video', 'carousel', 'other')),
+    spend_lower INTEGER,                   -- in cents
+    spend_upper INTEGER,
+    impressions_lower INTEGER,
+    impressions_upper INTEGER,
+    landing_url TEXT,
+    starred     INTEGER DEFAULT 0,
+    tags        TEXT DEFAULT '[]',          -- JSON array
+    notes       TEXT DEFAULT '',
+    scraped_at  TEXT NOT NULL,             -- ISO 8601
+    raw_data    TEXT                        -- full JSON blob from scraper
+);
+
+CREATE INDEX idx_ads_advertiser ON ad_snapshots(advertiser);
+CREATE INDEX idx_ads_status ON ad_snapshots(status);
+CREATE INDEX idx_ads_start_date ON ad_snapshots(start_date);
+#+end_src
+
+** User Interactions
+- Type in search bar: filters ads by advertiser name or ad text (debounced 300ms).
+- Click filter chips: opens dropdown, multi-select allowed for format.
+- Toggle grid/list: switches layout. Grid is default.
+- Click an ad card: opens side drawer with full details, requests detail from SQLite.
+- Star/tag/note inline: persists to SQLite via bridge messages.
+- "Analyze" button in drawer: sends ad data to agent for creative analysis — agent
+  responds with copy patterns, CTA analysis, visual style notes as markdown in the drawer.
+- Pagination: loads next batch from SQLite (50 per page).
+
+* Panel: Report Editor
+** Overview
+
+Split-pane Typst editor with live WASM preview. Left pane is a code editor with
+tree-sitter-typst syntax highlighting via =Qt-TreeSitterHighlighter=. Right pane renders
+a live PDF preview via =typst-ts= WASM running inside an embedded =WebEngineView=. Supports
+click-to-code (clicking a preview element jumps the editor cursor to the corresponding
+source line). The agent can write Typst source directly — preview updates live.
+
+Typst projects import from =ora-brand/lib.typ= for brand-consistent output (colors,
+typography, components like stat-cell, pillar-card, metrics-strip, etc.).
+
+** Wireframe
+#+begin_example
+┌─────────────────────────────┬─────────────────────────────────────┐
+│ ┌─ Files ─────────────────┐ │                                     │
+│ │ ▼ reports/              │ │        Live PDF Preview              │
+│ │   weekly-digest.typ ●   │ │                                     │
+│ │   client-report.typ     │ │  ┌─────────────────────────────┐    │
+│ │ ▼ templates/            │ │  │     ORA                     │    │
+│ │   proposal.typ          │ │  │     Weekly Competitive      │    │
+│ │                         │ │  │     Intelligence Digest      │    │
+│ └─────────────────────────┘ │  │                             │    │
+│                             │  │     Prepared for: Acme Corp │    │
+│ ┌─ Editor ────────────────┐ │  │     March 31, 2026          │    │
+│ │ 1  #import "ora-brand/  │ │  │                             │    │
+│ │      lib.typ": *        │ │  │  ┌───────┬────────┬──────┐  │    │
+│ │ 2                       │ │  │  │ 12    │ 3      │ +24% │  │    │
+│ │ 3  #show: ora-report.   │ │  │  │ New   │ Key    │ Imp  │  │    │
+│ │      with(              │ │  │  │ Ads   │ Trends │ Chg  │  │    │
+│ │ 4    title: "Weekly...",│ │  │  └───────┴────────┴──────┘  │    │
+│ │ 5    client: "Acme",    │ │  │                             │    │
+│ │ 6    date: datetime..., │ │  │  Key Findings               │    │
+│ │ 7  )                    │ │  │  1. Competitor X launched... │    │
+│ │ 8                       │ │  │  2. Market shift toward...   │    │
+│ │ 9  = Key Findings       │ │  │                             │    │
+│ │ 10 + Competitor X...    │ │  └─────────────────────────────┘    │
+│ └─────────────────────────┘ │                                     │
+│                             │  Page 1 of 3   ◄  ►                 │
+│ Templates ▸                 │                                     │
+└─────────────────────────────┴─────────────────────────────────────┘
+#+end_example
+
+** QML Component Tree
+#+begin_src qml
+Item {                                       // ReportEditorPanel.qml
+    id: editorPanel
+
+    property string currentFile: ""
+    property bool templateSidebarOpen: false
+
+    function handleMessage(payload) {
+        if (payload.type === "file_content") loadFile(payload)
+        if (payload.type === "typst_update") applyTypstUpdate(payload)
+        if (payload.type === "file_tree") updateFileTree(payload.files)
+        if (payload.type === "template_list") updateTemplates(payload.templates)
+    }
+
+    SplitView {
+        anchors.fill: parent
+        orientation: Qt.Horizontal
+
+        // Left pane: file tree + editor
+        ColumnLayout {
+            SplitView.preferredWidth: parent.width * 0.45
+            SplitView.minimumWidth: 300
+            spacing: 0
+
+            // File tree (collapsible)
+            FileTreeView {                   // FileTreeView.qml
+                id: fileTree
+                Layout.fillWidth: true
+                Layout.preferredHeight: 150
+                Layout.maximumHeight: 250
+                model: fileTreeModel
+
+                onFileSelected: function(path) {
+                    bridge.send({ type: "open_file", path: path })
+                }
+            }
+
+            // Separator
+            Rectangle { Layout.fillWidth: true; height: 1; color: SpellTheme.border }
+
+            // Code editor
+            TypstEditor {                    // TypstEditor.qml
+                id: editor
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+
+                // Uses Qt-TreeSitterHighlighter with tree-sitter-typst grammar
+                // for syntax highlighting of Typst markup, functions, variables
+                highlighter: TreeSitterHighlighter {
+                    grammar: "typst"
+                }
+
+                onTextChanged: {
+                    // Debounce 150ms, then send to WASM renderer
+                    renderDebounce.restart()
+                }
+                onCursorPositionChanged: {
+                    // Sync highlight in preview
+                    preview.highlightSourceLine(editor.cursorLine)
+                }
+            }
+
+            // Template selector (collapsed by default)
+            TemplateSidebar {
+                id: templateSidebar
+                Layout.fillWidth: true
+                Layout.preferredHeight: templateSidebarOpen ? 200 : 36
+                collapsed: !templateSidebarOpen
+                model: templateModel
+
+                onTemplateSelected: function(templateId) {
+                    bridge.send({ type: "apply_template", templateId: templateId })
+                }
+                onToggle: templateSidebarOpen = !templateSidebarOpen
+            }
+        }
+
+        // Right pane: live preview
+        TypstPreview {                       // TypstPreview.qml
+            id: preview
+            SplitView.fillWidth: true
+            SplitView.minimumWidth: 400
+
+            // Embeds WebEngineView running typst-ts WASM
+            // Receives compiled PDF pages as rendered SVG/canvas
+            WebEngineView {
+                id: webEngine
+                anchors.fill: parent
+                url: "qrc:///typst-preview/index.html"
+
+                // Bridge: JS in WebEngine ↔ QML
+                // webEngine.runJavaScript("renderTypst(source)")
+                // webEngine.runJavaScript("scrollToLine(lineNum)")
+            }
+
+            // Click-to-code: WebEngine sends click coordinates,
+            // mapped back to source line via typst-ts source mapping
+            Connections {
+                target: webEngine
+                function onJavaScriptConsoleMessage(level, message, line, sourceId) {
+                    // Protocol: "CLICK_TO_CODE:lineNumber"
+                    if (message.startsWith("CLICK_TO_CODE:")) {
+                        var sourceLine = parseInt(message.split(":")[1])
+                        editor.goToLine(sourceLine)
+                    }
+                }
+            }
+
+            // Page navigation
+            PageNavigator {
+                anchors.bottom: parent.bottom
+                anchors.horizontalCenter: parent.horizontalCenter
+                currentPage: preview.currentPage
+                totalPages: preview.totalPages
+            }
+        }
+    }
+
+    Timer {
+        id: renderDebounce
+        interval: 150
+        repeat: false
+        onTriggered: {
+            webEngine.runJavaScript(
+                "renderTypst(" + JSON.stringify(editor.text) + ")"
+            )
+        }
+    }
+
+    ListModel { id: fileTreeModel }
+    ListModel { id: templateModel }
+}
+#+end_src
+
+** Data Flow
+| Direction | Message Type        | Payload                                          |
+|-----------+---------------------+--------------------------------------------------|
+| Out       | =open_file=          | ={ path: string }=                               |
+| In        | =file_content=       | ={ path, content, language }=                    |
+| In        | =typst_update=       | ={ content: string }= — agent-driven edit        |
+| Out       | =file_save=          | ={ path, content }=                              |
+| Out       | =apply_template=     | ={ templateId: string }=                         |
+| In        | =template_list=      | ={ templates: [{ id, name, preview }] }=         |
+| In        | =file_tree=          | ={ files: [{ path, name, modified }] }=          |
+
+*** Agent-Driven Editing Flow
+1. User requests a report via chat: "Generate weekly digest for Acme Corp"
+2. Agent creates =reports/weekly-digest.typ= using Typst with ora-brand imports
+3. Agent sends =typst_update= with content — editor populates, preview renders live
+4. User sees PDF forming in real-time as agent streams Typst source
+5. User can manually edit after agent finishes — preview updates on each keystroke
+
+*** Click-to-Code Protocol
+The =typst-ts= WASM renderer maintains a source map from rendered output coordinates
+to source line numbers. When the user clicks on the preview:
+1. WebEngine JS captures click coordinates
+2. =typst-ts= resolves coordinates → source line via its source map API
+3. JS posts =CLICK_TO_CODE:{line}= via =console.log= (intercepted by QML =Connections=)
+4. QML calls =editor.goToLine(line)= to move cursor and scroll
+
+** User Interactions
+- Edit Typst source: live preview updates after 150ms debounce.
+- Click on preview element: editor cursor jumps to corresponding source line.
+- Select file in tree: loads content into editor, triggers preview render.
+- Open template sidebar: shows available templates with thumbnail previews.
+- Apply template: agent scaffolds the selected template into a new file.
+- Cmd+S: saves current file via =bridge.send({ type: "file_save", ... })=.
+- Agent streaming: editor shows incoming text with cursor at end, preview updates incrementally.
+
+* Panel: Client Portfolio
+** Overview
+
+Multi-client overview for agencies or freelancers managing multiple accounts. Each client
+is a card showing active campaigns, recent deliverables, and key metrics. Clicking a
+client sets the global client context, filtering Dashboard, Intel, and Reports panels
+to that client's data. Client configuration is stored in =.spell/growth/clients.json=.
+
+** Wireframe
+#+begin_example
+┌────────────────────────────────────────────────────────────────┐
+│  Clients                                        [+ Add Client] │
+│                                                                │
+│  ┌─────────────────────┐  ┌─────────────────────┐             │
+│  │  [logo]  Acme Corp  │  │  [logo]  Beta Inc   │             │
+│  │                     │  │                     │             │
+│  │  3 active campaigns │  │  1 active campaign  │             │
+│  │  2 pending reports  │  │  0 pending reports  │             │
+│  │  Last: Mar 30       │  │  Last: Mar 28       │             │
+│  │                     │  │                     │             │
+│  │  ████████░░  $12K   │  │  ████░░░░░░  $4K    │             │
+│  │  monthly spend      │  │  monthly spend      │             │
+│  └─────────────────────┘  └─────────────────────┘             │
+│                                                                │
+│  ┌─────────────────────┐  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐             │
+│  │  [logo]  Gamma Ltd  │  │                      │             │
+│  │                     │  │   + Add New Client   │             │
+│  │  2 active campaigns │  │                      │             │
+│  │  1 pending report   │  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘             │
+│  │  Last: Mar 29       │                                       │
+│  │                     │                                       │
+│  │  ██████░░░░  $8K    │                                       │
+│  │  monthly spend      │                                       │
+│  └─────────────────────┘                                       │
+│                                                                │
+│  ── Active Client: Acme Corp ──────────── [Clear Filter]       │
+└────────────────────────────────────────────────────────────────┘
+#+end_example
+
+** QML Component Tree
+#+begin_src qml
+Item {                                       // ClientPortfolioPanel.qml
+    id: portfolioPanel
+
+    property string activeClientId: ""       // "" means "all clients"
+
+    function handleMessage(payload) {
+        if (payload.type === "clients_loaded") loadClients(payload.clients)
+        if (payload.type === "client_metrics") updateClientMetrics(payload)
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: SpellTheme.spacingXL
+        spacing: SpellTheme.spacingL
+
+        // Header
+        RowLayout {
+            Layout.fillWidth: true
+            Text {
+                text: "Clients"
+                font.pixelSize: SpellTheme.fontSizeTitle
+                font.bold: true
+                color: SpellTheme.textPrimary
+            }
+            Item { Layout.fillWidth: true }
+            Button {
+                text: "+ Add Client"
+                onClicked: bridge.send({ type: "add_client" })
+            }
+        }
+
+        // Client grid
+        GridView {
+            id: clientGrid
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            cellWidth: 320
+            cellHeight: 220
+            model: clientsModel
+
+            delegate: ClientCard {           // ClientCard.qml
+                clientId: model.clientId
+                name: model.name
+                logoUrl: model.logoUrl
+                activeCampaigns: model.activeCampaigns
+                pendingReports: model.pendingReports
+                lastActivity: model.lastActivity
+                monthlySpend: model.monthlySpend
+                spendBudget: model.spendBudget
+                isActive: model.clientId === portfolioPanel.activeClientId
+
+                onClicked: {
+                    portfolioPanel.activeClientId = model.clientId
+                    bridge.send({
+                        type: "set_active_client",
+                        clientId: model.clientId
+                    })
+                }
+            }
+        }
+
+        // Active client filter bar
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: activeClientId ? 48 : 0
+            visible: activeClientId !== ""
+            color: SpellTheme.withAlpha(SpellTheme.primary, 0.1)
+            radius: SpellTheme.cornerRadiusSmall
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: SpellTheme.spacingM
+
+                Text {
+                    text: "Active Client: " + getClientName(activeClientId)
+                    font.bold: true
+                    color: SpellTheme.primary
+                }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "Clear Filter"
+                    flat: true
+                    onClicked: {
+                        portfolioPanel.activeClientId = ""
+                        bridge.send({ type: "set_active_client", clientId: "" })
+                    }
+                }
+            }
+        }
+    }
+
+    ListModel { id: clientsModel }
+
+    function getClientName(id) {
+        for (var i = 0; i < clientsModel.count; i++) {
+            if (clientsModel.get(i).clientId === id) return clientsModel.get(i).name
+        }
+        return ""
+    }
+
+    Component.onCompleted: bridge.send({ type: "clients_request" })
+}
+#+end_src
+
+*** clients.json Schema
+#+begin_src json
+{
+  "clients": [
+    {
+      "id": "acme-corp",
+      "name": "Acme Corp",
+      "logo": "assets/acme-logo.png",
+      "industry": "E-commerce",
+      "competitors": ["beta-inc", "gamma-ltd"],
+      "adAccounts": {
+        "facebook": { "pageId": "123456789" }
+      },
+      "brandGuidelines": {
+        "colors": ["#1a73e8", "#ffffff"],
+        "tone": "professional, innovative"
+      }
+    }
+  ]
+}
+#+end_src
+
+** Data Flow
+| Direction | Message Type           | Payload                                      |
+|-----------+------------------------+----------------------------------------------|
+| Out       | =clients_request=      | (none)                                       |
+| In        | =clients_loaded=       | ={ clients: [ClientSummary] }=               |
+| Out       | =set_active_client=    | ={ clientId: string }= — filters all panels  |
+| In        | =client_metrics=       | ={ clientId, activeCampaigns, pendingReports, monthlySpend }= |
+| Out       | =add_client=           | (none) — opens add client flow in chat       |
+
+** User Interactions
+- Click a client card: sets global client filter. Dashboard shows only that client's
+  data, Intel filters to that client's competitors, Reports shows that client's deliverables.
+- Click "Clear Filter": removes client scope, shows all data.
+- Click "+ Add Client": agent guides through client setup via chat conversation.
+- Hover client card: shows quick stats tooltip.
+
+* Modal: New Deliverable
+** Overview
+
+Wizard modal for creating a new deliverable (brief, report, deck, analysis). Four-step
+flow with progressive disclosure. Each step validates before allowing progression.
+Launched from the sidebar "+ New Deliverable" button or Dashboard quick actions.
+
+** Wireframe
+#+begin_example
+┌─────────────────────────────────────────────────────────┐
+│                    New Deliverable                      │
+│                                                         │
+│  ① Type    ② Client    ③ Template    ④ Context          │
+│  ━━━━━━━   ───────     ───────       ───────            │
+│                                                         │
+│  Step 1: What are you creating?                         │
+│                                                         │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌──────────┐  │
+│  │  📋     │  │  📄     │  │  📊     │  │  🔍      │  │
+│  │ Brief   │  │ Report  │  │ Deck    │  │ Analysis │  │
+│  │         │  │         │  │         │  │          │  │
+│  │Strategy │  │Branded  │  │Presenta-│  │Deep-dive │  │
+│  │document │  │PDF via  │  │tion     │  │research  │  │
+│  │         │  │Typst    │  │slides   │  │document  │  │
+│  └─────────┘  └─────────┘  └─────────┘  └──────────┘  │
+│                                                         │
+│                              [Cancel]  [Next →]         │
+└─────────────────────────────────────────────────────────┘
+
+Step 3 (Template Selection):
+┌─────────────────────────────────────────────────────────┐
+│  ① Type ✓  ② Client ✓  ③ Template    ④ Context          │
+│                         ━━━━━━━━━                       │
+│                                                         │
+│  ┌──────────────────┐  ┌─────────────────────────────┐  │
+│  │ Weekly Digest    │  │  [Live Typst Preview]       │  │
+│  │ ● ───────────    │  │                             │  │
+│  │                  │  │  ┌───────────────────────┐  │  │
+│  │ Client Report    │  │  │  ORA                  │  │  │
+│  │ ○ ───────────    │  │  │  Weekly Digest        │  │  │
+│  │                  │  │  │  {client}              │  │  │
+│  │ Proposal         │  │  │                       │  │  │
+│  │ ○ ───────────    │  │  │  Metrics | Trends |   │  │  │
+│  │                  │  │  │  Recommendations      │  │  │
+│  │ Performance      │  │  └───────────────────────┘  │  │
+│  │ ○ ───────────    │  │                             │  │
+│  └──────────────────┘  └─────────────────────────────┘  │
+│                                                         │
+│                    [← Back]  [Cancel]  [Next →]         │
+└─────────────────────────────────────────────────────────┘
+#+end_example
+
+** QML Component Tree
+#+begin_src qml
+Popup {                                      // NewDeliverableModal.qml
+    id: modal
+    anchors.centerIn: parent
+    width: 720
+    height: 560
+    modal: true
+    dim: true
+
+    property int currentStep: 0              // 0–3
+    property string selectedType: ""         // "brief" | "report" | "deck" | "analysis"
+    property string selectedClientId: ""
+    property string selectedTemplateId: ""
+    property string contextPrompt: ""
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: SpellTheme.spacingXL
+        spacing: SpellTheme.spacingL
+
+        // Title
+        Text {
+            text: "New Deliverable"
+            font.pixelSize: SpellTheme.fontSizeTitle
+            font.bold: true
+            color: SpellTheme.textPrimary
+        }
+
+        // Step indicator
+        StepIndicator {                      // StepIndicator.qml
+            steps: ["Type", "Client", "Template", "Context"]
+            currentStep: modal.currentStep
+            Layout.fillWidth: true
+        }
+
+        // Step content (stacked)
+        StackLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: modal.currentStep
+
+            // Step 0: Type selection
+            TypeSelectionGrid {
+                selectedType: modal.selectedType
+                onSelected: function(type) { modal.selectedType = type }
+            }
+
+            // Step 1: Client selection
+            ClientSelector {
+                selectedClientId: modal.selectedClientId
+                onSelected: function(id) { modal.selectedClientId = id }
+            }
+
+            // Step 2: Template selection with live preview
+            SplitView {
+                orientation: Qt.Horizontal
+                TemplateList {
+                    SplitView.preferredWidth: 240
+                    selectedTemplateId: modal.selectedTemplateId
+                    filterType: modal.selectedType
+                    onSelected: function(id) { modal.selectedTemplateId = id }
+                }
+                TemplatePreview {            // Renders Typst template preview
+                    SplitView.fillWidth: true
+                    templateId: modal.selectedTemplateId
+                }
+            }
+
+            // Step 3: Context / initial prompt
+            ColumnLayout {
+                spacing: SpellTheme.spacingM
+                Text {
+                    text: "What should this deliverable cover?"
+                    font.pixelSize: SpellTheme.fontSizeMedium
+                    color: SpellTheme.textSecondary
+                }
+                TextArea {
+                    id: contextInput
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    placeholderText: "e.g., Weekly competitive analysis for Acme Corp focusing on Q1 ad spend trends..."
+                    wrapMode: TextEdit.Wrap
+                    text: modal.contextPrompt
+                    onTextChanged: modal.contextPrompt = text
+                }
+            }
+        }
+
+        // Navigation buttons
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignRight
+            spacing: SpellTheme.spacingM
+
+            Button {
+                text: "← Back"
+                visible: modal.currentStep > 0
+                flat: true
+                onClicked: modal.currentStep--
+            }
+            Item { Layout.fillWidth: true }
+            Button {
+                text: "Cancel"
+                flat: true
+                onClicked: modal.close()
+            }
+            Button {
+                text: modal.currentStep < 3 ? "Next →" : "Create"
+                enabled: stepValid()
+                highlighted: true
+                onClicked: {
+                    if (modal.currentStep < 3) {
+                        modal.currentStep++
+                    } else {
+                        createDeliverable()
+                    }
+                }
+            }
+        }
+    }
+
+    function stepValid() {
+        if (currentStep === 0) return selectedType !== ""
+        if (currentStep === 1) return selectedClientId !== ""
+        if (currentStep === 2) return selectedTemplateId !== ""
+        if (currentStep === 3) return contextPrompt.trim().length > 0
+        return false
+    }
+
+    function createDeliverable() {
+        bridge.send({
+            type: "create_deliverable",
+            deliverableType: selectedType,
+            clientId: selectedClientId,
+            templateId: selectedTemplateId,
+            context: contextPrompt
+        })
+        modal.close()
+    }
+}
+#+end_src
+
+** Data Flow
+| Direction | Message Type           | Payload                                              |
+|-----------+------------------------+------------------------------------------------------|
+| Out       | =create_deliverable=   | ={ deliverableType, clientId, templateId, context }= |
+
+The modal reads client and template data from models already populated by the shell.
+On "Create", the agent receives the deliverable spec, scaffolds the appropriate file
+(=.typ= for reports/decks, =.md= for briefs/analyses), and switches to the Report Editor
+panel.
+
+** User Interactions
+- Click a type card: selects deliverable type, enables "Next".
+- Click a client: selects client context.
+- Click a template: shows live Typst preview in right pane.
+- Type context prompt: free-form description of what the deliverable should contain.
+- "Create": submits to agent, closes modal, agent begins generating.
+- "Cancel" or click outside: closes modal, no side effects.
+- Step indicator: click completed steps to go back.
+
+* Modal: Strategy Mode
+** Overview
+
+Full-screen overlay activated when the user invokes =/strategy= mode. Provides a
+structured research → strategy formulation workflow with an approval gate. The overlay
+takes over the main content area (sidebar remains visible for navigation back).
+
+Analogous to =/plan= mode in coding — research phase produces a strategy brief that
+must be approved before execution proceeds.
+
+** Wireframe
+#+begin_example
+┌──────────────────────────────────────────────────────────────────┐
+│  ┌─────────┐  ┌──────────────────────────────────────────────┐  │
+│  │ Sidebar  │  │  /strategy — Market Analysis                 │  │
+│  │ (normal) │  │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │  │
+│  │          │  │                                              │  │
+│  │          │  │  ┌─ Research ──────┐  ┌─ Strategy Brief ───┐ │  │
+│  │          │  │  │                 │  │                     │ │  │
+│  │          │  │  │ ● Web results   │  │ # Market Position  │ │  │
+│  │          │  │  │   result 1...   │  │                     │ │  │
+│  │          │  │  │   result 2...   │  │ ## Current State    │ │  │
+│  │          │  │  │                 │  │ The market is...    │ │  │
+│  │          │  │  │ ● Competitor    │  │                     │ │  │
+│  │          │  │  │   data          │  │ ## Opportunities    │ │  │
+│  │          │  │  │   Acme: 12 ads  │  │ 1. Underserved...   │ │  │
+│  │          │  │  │   Beta: 8 ads   │  │ 2. Pricing gap...   │ │  │
+│  │          │  │  │                 │  │                     │ │  │
+│  │          │  │  │ ● Market data   │  │ ## Recommendations  │ │  │
+│  │          │  │  │   TAM: $2.4B    │  │ - Focus on...       │ │  │
+│  │          │  │  │   Growth: 12%   │  │ - Increase...       │ │  │
+│  │          │  │  └─────────────────┘  └─────────────────────┘ │  │
+│  │          │  │                                              │  │
+│  │          │  │  ── Approval Gate ───────────────────────── │  │
+│  │          │  │  ☑ Market data reviewed                     │  │
+│  │          │  │  ☑ Competitor analysis complete             │  │
+│  │          │  │  ☐ Budget implications assessed             │  │
+│  │          │  │  ☐ Timeline validated                       │  │
+│  │          │  │                                              │  │
+│  │          │  │            [Exit Strategy]  [✓ Approve]      │  │
+│  └─────────┘  └──────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
+#+end_example
+
+** QML Component Tree
+#+begin_src qml
+Rectangle {                                  // StrategyModeOverlay.qml
+    id: strategyOverlay
+    anchors.fill: parent
+    color: SpellTheme.background
+    visible: false
+    z: 100                                   // Above panel stack, below modals
+
+    property var checklist: []
+    property string briefContent: ""
+    property var researchSections: []
+
+    function handleMessage(payload) {
+        if (payload.type === "strategy_research") appendResearch(payload)
+        if (payload.type === "strategy_brief_update") updateBrief(payload.content)
+        if (payload.type === "strategy_checklist") updateChecklist(payload.items)
+        if (payload.type === "strategy_activate") activate(payload)
+        if (payload.type === "strategy_deactivate") deactivate()
+    }
+
+    function activate(payload) {
+        visible = true
+        briefContent = payload.initialBrief || ""
+        checklist = payload.checklist || defaultChecklist()
+        researchSections = []
+    }
+
+    function deactivate() {
+        visible = false
+    }
+
+    function defaultChecklist() {
+        return [
+            { id: "market", label: "Market data reviewed", checked: false },
+            { id: "competitor", label: "Competitor analysis complete", checked: false },
+            { id: "budget", label: "Budget implications assessed", checked: false },
+            { id: "timeline", label: "Timeline validated", checked: false }
+        ]
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: SpellTheme.spacingXL
+        spacing: SpellTheme.spacingL
+
+        // Header
+        RowLayout {
+            Layout.fillWidth: true
+            Text {
+                text: "/strategy — Market Analysis"
+                font.pixelSize: SpellTheme.fontSizeTitle
+                font.bold: true
+                color: SpellTheme.textPrimary
+            }
+            Item { Layout.fillWidth: true }
+        }
+
+        // Main split: research + brief
+        SplitView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            orientation: Qt.Horizontal
+
+            // Research panel
+            ScrollView {
+                SplitView.preferredWidth: parent.width * 0.45
+                SplitView.minimumWidth: 300
+
+                ColumnLayout {
+                    width: parent.width
+                    spacing: SpellTheme.spacingL
+
+                    Repeater {
+                        model: researchSections
+                        delegate: ResearchSection {  // ResearchSection.qml
+                            title: modelData.title
+                            icon: modelData.icon
+                            content: modelData.content  // Markdown rendered
+                        }
+                    }
+                }
+            }
+
+            // Strategy brief editor
+            ScrollView {
+                SplitView.fillWidth: true
+                SplitView.minimumWidth: 400
+
+                TextArea {
+                    id: briefEditor
+                    text: briefContent
+                    wrapMode: TextEdit.Wrap
+                    font.family: SpellTheme.monoFontFamily
+                    font.pixelSize: SpellTheme.fontSizeMedium
+                    color: SpellTheme.textPrimary
+                    // Agent can stream content here; user can also edit
+                    onTextChanged: briefContent = text
+                }
+            }
+        }
+
+        // Approval gate
+        Rectangle {
+            Layout.fillWidth: true
+            color: SpellTheme.surfaceHigh
+            radius: SpellTheme.cornerRadius
+            implicitHeight: gateLayout.implicitHeight + 2 * SpellTheme.spacingL
+
+            ColumnLayout {
+                id: gateLayout
+                anchors.fill: parent
+                anchors.margins: SpellTheme.spacingL
+                spacing: SpellTheme.spacingS
+
+                Text {
+                    text: "Approval Gate"
+                    font.bold: true
+                    font.pixelSize: SpellTheme.fontSizeMedium
+                    color: SpellTheme.textPrimary
+                }
+
+                Repeater {
+                    model: checklist
+                    delegate: CheckBox {
+                        text: modelData.label
+                        checked: modelData.checked
+                        onToggled: {
+                            var updated = checklist.slice()
+                            updated[index].checked = checked
+                            checklist = updated
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.alignment: Qt.AlignRight
+                    spacing: SpellTheme.spacingM
+
+                    Button {
+                        text: "Exit Strategy"
+                        flat: true
+                        onClicked: bridge.send({ type: "strategy_exit" })
+                    }
+                    Button {
+                        text: "✓ Approve"
+                        highlighted: true
+                        enabled: allChecked()
+                        onClicked: bridge.send({
+                            type: "strategy_approve",
+                            brief: briefContent
+                        })
+                    }
+                }
+            }
+        }
+    }
+
+    function allChecked() {
+        for (var i = 0; i < checklist.length; i++) {
+            if (!checklist[i].checked) return false
+        }
+        return checklist.length > 0
+    }
+}
+#+end_src
+
+** Data Flow
+| Direction | Message Type              | Payload                                     |
+|-----------+---------------------------+---------------------------------------------|
+| In        | =strategy_activate=       | ={ initialBrief, checklist }=               |
+| In        | =strategy_deactivate=     | (none)                                      |
+| In        | =strategy_research=       | ={ title, icon, content }= — append section |
+| In        | =strategy_brief_update=   | ={ content }= — agent writes brief          |
+| In        | =strategy_checklist=      | ={ items: [{ id, label, checked }] }=       |
+| Out       | =strategy_exit=           | (none) — cancel strategy mode               |
+| Out       | =strategy_approve=        | ={ brief: string }= — approved brief text   |
+
+** User Interactions
+- Scroll research panel: review web search results, competitor data, market metrics as
+  the agent populates them in real-time.
+- Edit strategy brief: user can modify the agent-generated brief before approval.
+- Check approval items: must check all items before "Approve" enables.
+- "Approve": sends brief to agent, exits strategy overlay, agent proceeds with execution.
+- "Exit Strategy": cancels without approval, returns to normal panel view.
+- Sidebar navigation: still functional — user can switch panels while strategy overlay
+  is active (overlay hides, sidebar state preserved, overlay returns when strategy panel
+  re-selected).

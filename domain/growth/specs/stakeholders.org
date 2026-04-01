@@ -1,0 +1,157 @@
+#+TITLE: Spell Growth — Stakeholders
+#+AUTHOR: ORA Ventures
+#+DATE: 2026-03-31
+
+* Primary Users: Growth Practitioners
+** Can (Growth Lead)
+:PROPERTIES:
+:ROLE: Growth strategy, competitive intelligence, campaign planning, client deliverables
+:CONTEXT: Solo operator managing multiple client accounts across verticals
+:END:
+
+*** Pain Points
+- Manual competitive research: browsing FB Ad Library by hand, screenshotting ads, pasting into docs
+- Report generation is a multi-hour copy-paste ritual: pull metrics, format in Figma/Canva/Google Docs, export PDF
+- Context switching between analytics dashboards, ad platforms, document editors, and chat tools
+- No persistent record of competitive landscape changes over time
+- Briefs and strategy docs start from scratch each time — no templated workflow
+- Client deliverables lack consistent branding without significant manual effort
+
+*** What Spell Growth Changes
+- Single canvas interface replaces the tool-switching loop
+- Competitive intel is always-on: background scraping + trend detection surfaces changes automatically
+- Reports compile from structured data to branded Typst PDFs in seconds, not hours
+- Strategy and campaign modes provide guided workflows that capture institutional knowledge
+- Deliverable pipeline tracks everything from brief to final PDF with version history
+
+*** Success Criteria
+- Weekly client report generation drops from 3+ hours to under 15 minutes
+- Competitive landscape review happens daily (automated) instead of weekly (manual)
+- All deliverables use consistent ORA branding without manual formatting
+- Can operates primarily from the canvas dashboard, not a browser tab maze
+
+** Growth Team (Future)
+:PROPERTIES:
+:ROLE: Campaign execution, creative production, performance optimization
+:CONTEXT: Team members onboarded as ORA scales; need consistent process without oral tradition
+:END:
+
+*** Pain Points (Anticipated)
+- No documented playbooks — knowledge lives in Can's head
+- Onboarding to client accounts requires shadowing, not self-service
+- Inconsistent deliverable quality across team members
+
+*** What Spell Growth Changes
+- Growth modes (=/strategy=, =/campaign=, =/creative=, =/review=) encode the workflow as executable process
+- Deliverable templates enforce quality floor — branding, structure, data requirements
+- Client context persists in project folders: history, preferences, past deliverables are always available to the agent
+
+*** Success Criteria
+- New team member produces client-ready deliverable within first week
+- Deliverable quality variance across team members is indistinguishable to clients
+
+* Secondary Users: Clients
+** Client Organizations (MamaBox, Dar Eddaya, et al.)
+:PROPERTIES:
+:ROLE: Receive deliverables — reports, strategy briefs, campaign plans, performance reviews
+:CONTEXT: Non-technical stakeholders who evaluate ORA on output quality, insight depth, and responsiveness
+:END:
+
+*** Pain Points
+- Reports arrive on inconsistent schedules
+- Deliverable formats vary — sometimes a PDF, sometimes a Google Doc, sometimes a Loom
+- Hard to compare performance across periods when report structure changes
+- No self-service access to campaign data between scheduled check-ins
+- Actionable recommendations buried in narrative text
+
+*** What Spell Growth Changes
+- Consistent branded PDF reports generated from structured data — same layout every time
+- Automated scheduling: weekly digests, monthly deep-dives, triggered alerts
+- Standardized KPI presentation (=metrics-strip=, =stat-cell=, =kpi-row= from ora-branding Typst components)
+- Clear recommendation sections with prioritized action items
+
+*** Success Criteria
+- Clients can compare any two reports side-by-side because structure is stable
+- Time from data-available to report-in-inbox under 1 hour (automated pipeline)
+- Client satisfaction with deliverable quality increases (qualitative, measured via retention)
+
+* Technical Stakeholders: Spell Core Maintainers
+** Spell Infrastructure Team
+:PROPERTIES:
+:ROLE: Maintain Spell core — QML mode, canvas tool, orchestrator, loop system, artifact system
+:CONTEXT: Growth is the first non-coding distribution; precedent-setting for domain extensibility
+:END:
+
+*** Boundary Definition
+Growth-specific code lives in =domain/growth/=. The boundary:
+
+| Layer                | Owns                                  | Growth Touches                          |
+|----------------------+---------------------------------------+-----------------------------------------|
+| QML Mode             | Shell, panel discovery, session events | Registers growth-specific panels        |
+| Canvas Tool          | Write/launch/send/close/screenshot    | Uses as-is; arms growth tools           |
+| Canvas Orchestrator  | Scoped agents, escalation             | Growth agent personality via domain.json |
+| Loop System          | Domains, gates, manifests             | Adds growth domains (research, report)  |
+| Plan Modes           | /plan, /ultraplan, /design, /audit    | Maps to /strategy, /campaign, /creative, /review |
+| Artifact System      | Blob store, canvas:// protocol        | Stores deliverables, ad snapshots       |
+| Tool Registry        | Tool discovery, schema, execution     | Registers scraper, typst, dashboard tools |
+
+*** Pain Points
+- No prior domain distribution exists — extension points are theoretical, not proven
+- Risk of growth-specific logic leaking into core packages
+- QML panel discovery assumes coding context (skill-based panels)
+- Mode system is hardcoded to plan/ultraplan/design/audit names
+
+*** What Spell Growth Changes
+- Forces domain abstraction: =.spell/domain.json= detection, mode aliasing, panel namespacing
+- Validates that QML mode, canvas orchestrator, and loop system are genuinely domain-agnostic
+- Establishes the pattern for future distributions (sales, ops, legal)
+
+*** Success Criteria
+- Zero growth-specific code in =packages/coding-agent/src/= (all in =domain/growth/=)
+- Core extension points (panel discovery, mode registration, tool registry) work without core changes
+- If core changes are needed, they are domain-agnostic generalizations, not growth-specific hacks
+
+* The Agent: Growth-Context Claude
+:PROPERTIES:
+:ROLE: AI operator executing growth workflows — research, analysis, content generation, data synthesis
+:CONTEXT: Same Claude model as coding Spell, but with growth domain knowledge, tools, and personality
+:END:
+
+*** Personality
+- Voice: Direct, data-informed, commercially aware. Not a marketer — a strategist who happens to have access to all the data.
+- Defaults to structured output: tables over prose, metrics over anecdotes, recommendations over observations.
+- Proactively surfaces anomalies: "Ad spend up 40% but CTR flat — investigate creative fatigue?"
+- Understands client context: remembers past campaigns, knows vertical dynamics, adapts tone per client.
+- Never fabricates metrics. If data is unavailable, says so and suggests how to get it.
+
+*** Capabilities
+- Competitive intelligence: scrape FB Ad Library, detect new ads/paused ads/creative pivots
+- Report generation: compile structured data into branded Typst PDFs using ora-branding components
+- Campaign planning: budget allocation, timeline generation, creative brief authoring
+- Market analysis: trend identification, audience sizing estimates, channel recommendations
+- Deliverable management: track pipeline, version history, scheduled generation
+
+*** Knowledge Requirements
+- ORA branding system (colors, typography, components, layouts)
+- Typst authoring with ora-brand library
+- Facebook Ads Library structure and patterns
+- Growth marketing fundamentals: funnel metrics, attribution, creative testing, budget pacing
+- Client verticals: e-commerce (MamaBox), beauty/wellness (Dar Eddaya), and others as onboarded
+
+*** Pain Points (as an agent)
+- No persistent memory of client history across sessions without explicit project context
+- Cannot currently access live ad platform data — needs scraper tools
+- Typst compilation requires external toolchain — needs integrated preview
+- No way to schedule or trigger itself — reactive only
+
+*** What Spell Growth Changes
+- Project-scoped context (=.spell/domain.json= + deliverable history) gives the agent persistent client knowledge
+- Scraper framework provides live competitive data as tool calls
+- Typst preview in canvas gives immediate feedback on report formatting
+- Dashboard mode with background polling enables proactive signal detection
+
+*** Success Criteria
+- Agent produces client-ready first drafts that need light editing, not rewrites
+- Agent catches competitive moves within 24 hours of appearance in ad libraries
+- Agent maintains consistent voice and quality across all client deliverables
+- Agent correctly refuses to fabricate data and clearly labels estimates vs. actuals

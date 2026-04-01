@@ -1,0 +1,10 @@
+{
+  "id": "create",
+  "name": "Create",
+  "icon": "edit",
+  "panels": [
+    { "panelId": "editor", "position": "main", "flex": 2 },
+    { "panelId": "chat", "position": "secondary", "flex": 1 }
+  ],
+  "defaultMode": "pitch"
+}

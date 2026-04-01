@@ -1,0 +1,381 @@
+#+TITLE: Spell Growth — Design Philosophy & Open Questions
+#+AUTHOR: Spell Team
+#+DATE: 2026-03-31
+
+* The Base Unit: Deliverables
+
+In coding, the file is the atomic unit. You create a file, edit it, version it, review it, ship it. The entire tool ecosystem — editors, linters, formatters, git — orbits around the file.
+
+Growth work has no equivalent native unit in existing tools. Campaigns are too coarse (they span weeks and contain heterogeneous work). Reports are too narrow (they're one output format among many). "Tasks" are process artifacts, not work products.
+
+The *deliverable* is the right base unit because it maps to what a growth practitioner actually produces and ships:
+
+- A competitive analysis brief
+- A weekly performance report (branded PDF)
+- A set of ad copy variations
+- A campaign strategy deck
+- A client-facing dashboard snapshot
+
+Each deliverable has a lifecycle: draft → review → final → delivered. Each has a type that determines its output format (Typst PDF, QML dashboard, Markdown brief). Each can be versioned, diffed, and composed.
+
+** Composition
+
+Deliverables compose upward:
+
+- A *campaign* is a collection of deliverables: the strategy brief, the creative brief, the media plan, the performance reports.
+- A *client engagement* is a collection of campaigns plus standalone deliverables (monthly reports, ad-hoc analyses).
+- A *portfolio* is a collection of client engagements.
+
+This mirrors how files compose into modules, packages, and projects in coding. The tooling at each level differs (you don't edit a campaign; you edit its constituent deliverables), but the structure is fractal.
+
+** Why Not "Campaign" as Base Unit
+
+Campaigns are inherently temporal and multi-phase. Making them the base unit would be like making "feature branch" the base unit in coding — it conflates the organizational container with the thing being worked on. You'd constantly need sub-units anyway.
+
+** Why Not "Report"
+
+Reports are one output format. A deliverable might be a report, or a dashboard, or a brief, or a deck. Making "report" the base unit would bias the system toward document generation and away from interactive/analytical work.
+
+** Persistence Model
+
+Deliverables are files on disk (the source of truth) plus metadata in SQLite (for indexing, search, status tracking). The file is the deliverable; the database is the index. This mirrors how git works: the working tree is truth, the index is derived.
+
+- Typst source files for reports/decks
+- Markdown for briefs/strategies
+- QML for dashboard definitions
+- SQLite rows for ad snapshots, metrics, timeline data that feed into deliverables
+
+* Canvas-First Philosophy
+
+Coding is text-centric. Source code is text. Diffs are text. Logs are text. The TUI is the natural habitat.
+
+Growth is visual. Ad creatives are images. Reports are branded PDFs with charts and layouts. Dashboards are interactive visualizations. Competitive intelligence is a gallery of competitor ads with annotations.
+
+Making the canvas optional (as it is in coding mode) would relegate it to "nice to have" status. Growth practitioners would default to the TUI and miss the point. The canvas must be the workspace — the primary surface where work happens.
+
+** What "Always-Canvas" Means
+
+The TUI becomes the launcher, not the workspace. Running ~spell~ from a growth project directory:
+
+1. Opens the QML canvas window immediately
+2. Presents the dashboard home (not a chat prompt)
+3. Chat input happens in the canvas sidebar (not the terminal)
+4. The TUI shows a minimal status line and log stream
+
+The canvas is not a visualization tool you invoke when you need to see something. It is the environment. Every interaction — asking a question, reviewing data, editing a deliverable, approving a report — happens in the canvas.
+
+** Why This Works for Growth but Not Coding
+
+Coding benefits from the TUI because:
+- Text editing is the primary activity
+- Terminal tools (git, npm, cargo) are the ecosystem
+- Screen real estate goes to the editor, not the agent
+
+Growth benefits from the canvas because:
+- Visual comparison is the primary analytical activity (which ads are working? how does our creative compare?)
+- Branded output requires WYSIWYG feedback (is this report layout correct?)
+- Dashboards and charts are the native representation of metrics
+- Multiple data sources need simultaneous display (ad gallery + metrics + timeline)
+
+** The Chat Paradox
+
+The agent is still conversational. You still type instructions and get responses. But in growth mode, the conversation is embedded in the canvas — a sidebar panel, not a fullscreen TUI. The agent's responses manifest as canvas changes (a new chart appears, a report updates, a dashboard refreshes) rather than as terminal text.
+
+This is the same shift that happened when IDEs embedded terminals: the terminal didn't disappear, it became one panel among many.
+
+* The Spell Boundary
+
+The critical architectural question: what belongs in Spell core, and what belongs in the growth domain? Getting this wrong means either a bloated core that every domain pays for, or a thin domain layer that can't do anything useful without reaching into core internals.
+
+** Core Responsibilities
+
+Spell core provides the *domain abstraction* — the mechanism by which a domain plugs in. A domain defines:
+
+| Aspect              | What the domain provides                                  | Core mechanism                                         |
+|---------------------+-----------------------------------------------------------+--------------------------------------------------------|
+| Detection           | ~.spell/domain.json~ with ~"domain": "growth"~           | Auto-detection at startup in project loader            |
+| System prompt       | Personality, expertise framing, behavioral directives     | Domain-scoped prompt injection                         |
+| Tools               | Domain-specific tool classes                              | Tool registry with domain filtering                    |
+| Modes               | ~/strategy~, ~/campaign~, ~/creative~, ~/review~         | Mode registry (parallel to ~/plan~, ~/ultraplan~, etc) |
+| Panels              | QML panel definitions for the canvas shell                | ~discoverSkillPanels()~ extended to domain panels      |
+| Loop domains        | Growth-specific iteration domains and gates               | Loop system domain/gate configuration                  |
+| Artifact types      | Deliverable types (brief, report, deck, dashboard)        | Artifact system type registry                          |
+| Canvas home         | Dashboard QML as the default canvas view                  | Canvas launch configuration                            |
+
+Core changes required:
+
+- *Domain auto-detection*: Read ~.spell/domain.json~, resolve domain package, inject domain configuration. This is a small, well-bounded change to the project loader in ~packages/coding-agent/src/~.
+- *Domain-scoped prompt injection*: The system prompt builder must accept domain-provided prompt segments. Currently the prompt is assembled in the coding agent; this needs a seam.
+- *Domain-scoped tool/mode registration*: Tool and mode registries must accept domain-provided entries alongside built-in ones. The existing skill/panel discovery pattern (~discoverSkillPanels~) is the right model.
+- *Canvas launch configuration*: The QML mode launcher must accept a domain-specified home panel instead of hardcoding the coding dashboard.
+
+** Growth Responsibilities
+
+Everything domain-specific lives in ~domain/growth/~:
+
+- All QML panels (competitive intel, report editor, campaign board, client portfolio, dashboard home)
+- All Typst templates and ora-branding integration
+- The scraper framework (TS-native, YAML DSL configs)
+- Growth modes (~/strategy~, ~/campaign~, ~/creative~, ~/review~)
+- Growth-specific tools (ad library search, report compilation, market signal aggregation)
+- SQLite schemas for ad snapshots, metrics, campaign state
+- The growth agent personality (system prompt)
+
+** The Boundary Test
+
+If you can remove the ~domain/growth/~ directory and Spell still works perfectly as a coding agent, the boundary is correct. If removing it breaks something in core, the boundary leaked.
+
+Conversely, if the growth domain needs to monkey-patch or subclass core internals to function, the domain abstraction is insufficient. The domain should only need to implement well-defined interfaces and register its components.
+
+* Typst as First-Class Citizen
+
+Growth output is branded, typeset, publication-quality. Clients receive PDFs, not Markdown files. The choice of document system matters enormously.
+
+** Why Not Markdown
+
+Markdown is convenient for developers and adequate for internal notes. It is not adequate for client-facing deliverables:
+
+- No native support for precise layout control
+- Styling requires CSS (a separate language with its own complexity)
+- PDF generation requires pandoc/weasyprint/puppeteer pipelines (fragile, slow)
+- No programmability (variables, functions, computed values)
+- Chart/graph embedding is an afterthought
+
+** Why Not HTML/CSS
+
+HTML/CSS can produce beautiful output but at enormous complexity cost:
+
+- Two languages (structure + style) for one output
+- PDF generation via headless browser (heavy, slow, memory-intensive)
+- No incremental compilation
+- The agent would need to maintain HTML, CSS, and possibly JS — three languages for a report
+
+** Why Typst
+
+Typst is purpose-built for this:
+
+- *Programmable*: Variables, functions, imports, loops, conditionals — all in one language. The agent writes Typst like it writes code.
+- *Beautiful*: Publication-quality typesetting out of the box. Proper kerning, ligatures, hyphenation, paragraph optimization.
+- *Fast*: Incremental compilation. Sub-second rebuilds. This enables live preview.
+- *Component library*: The ~ora-branding~ system (~~/code/ora/ora-branding/typst/ora-brand/lib.typ~) provides 14+ production components: stat cells, pillar cards, metric strips, flow diagrams, timelines, onion diagrams. The agent doesn't start from scratch.
+- *Single file, single language*: A Typst file is the complete source for a deliverable. No build pipeline, no template engine, no CSS files.
+
+** Live Preview Architecture
+
+The live preview chain:
+
+1. Agent writes/edits Typst source file
+2. File watcher detects change
+3. ~typst-ts~ WASM compiles to PDF in the QML WebEngine context
+4. Canvas renders the PDF page(s)
+5. Click-to-go-to-code: clicking a region in the preview highlights the corresponding Typst source
+
+This is analogous to LaTeX live preview but faster (Typst compiles in milliseconds) and embedded in the agent workflow (the agent sees what you see).
+
+** Editor Integration
+
+The Typst editor panel in the canvas uses:
+
+- *Qt-TreeSitterHighlighter* with ~tree-sitter-typst~ for syntax highlighting
+- Split-pane layout: source on left, rendered preview on right
+- The agent can edit the source directly (via file writes) or the user can edit in the canvas
+- Bidirectional sync: edits in either pane propagate
+
+** Font Considerations
+
+The ora-branding system uses Aspekta (weights 300–950). Font distribution is an open question (see Open Questions below), but the technical path is clear: Typst accepts font directories at compile time, and the WASM renderer can load fonts from bundled assets.
+
+* Scraping as Infrastructure
+
+Competitive intelligence requires data from ad platforms, landing pages, social media, and market research sources. This data acquisition must be reliable, configurable, and maintainable.
+
+** The Leadgen YAML DSL Pattern
+
+The existing leadgen system (~~/code/ora/leadgen/configs/~) demonstrates the right architecture:
+
+- *Declarative configs*: YAML files define what to scrape — container selectors, field extraction rules (selector + type + transform), pagination strategy, error handling policy.
+- *Engine separation*: The engine handles browser automation, rate limiting, retry logic, proxy rotation. The config never specifies HOW to navigate or wait — only WHAT to extract.
+- *Composable*: Configs reference related models (e.g., a listing config references a detail dialog config). This handles multi-step extraction (list page → detail page → sub-detail).
+
+Example pattern from leadgen:
+
+#+begin_src yaml
+container: ".ad-card"
+fields:
+  - name: headline
+    selector: ".ad-headline"
+    type: text
+  - name: spend_range
+    selector: ".spend-info"
+    type: text
+    transform: parse_currency_range
+  - name: creative_url
+    selector: ".ad-image img"
+    type: attribute
+    attribute: src
+pagination:
+  type: infinite_scroll
+  wait_selector: ".loading-spinner"
+#+end_src
+
+** Why Rewrite in TypeScript
+
+The leadgen scraper is Python. Spell is TypeScript. Rewriting is justified because:
+
+- *Ecosystem integration*: Spell's tool system, artifact store, and event pipeline are all TS. A Python scraper would need IPC bridging.
+- *Browser automation*: Spell already has Puppeteer integration (the ~puppeteer~ tool). The scraper can use the same browser pool.
+- *Type safety*: Scraper configs benefit from TypeScript's type system — a config schema as a TS type catches malformed configs at build time.
+- *Single runtime*: No Python dependency for end users. One ~bun~ process handles everything.
+
+** Architecture
+
+#+begin_example
+┌─────────────────────┐
+│  YAML Config Files   │  ← What to scrape (selectors, transforms, pagination)
+└──────────┬──────────┘
+           │ parsed by
+┌──────────▼──────────┐
+│   Config Loader      │  ← Validates, resolves references, builds execution plan
+└──────────┬──────────┘
+           │ drives
+┌──────────▼──────────┐
+│   Scraper Engine     │  ← Browser automation, rate limiting, error recovery
+│   (Puppeteer-based)  │
+└──────────┬──────────┘
+           │ produces
+┌──────────▼──────────┐
+│   Raw Extractions    │  ← Typed records per config schema
+└──────────┬──────────┘
+           │ persisted to
+┌──────────▼──────────┐
+│   SQLite + Files     │  ← Structured data + downloaded assets (images, videos)
+└─────────────────────┘
+#+end_example
+
+** Platform Configs
+
+Each ad platform gets a config directory:
+
+- ~domain/growth/scraper/configs/facebook-ads/~ — Ad Library search, ad detail, page ads
+- ~domain/growth/scraper/configs/google-ads/~ — Transparency Center
+- ~domain/growth/scraper/configs/linkedin-ads/~ — Ad Library
+- ~domain/growth/scraper/configs/tiktok-ads/~ — Creative Center
+
+The engine is platform-agnostic. Adding a new platform is writing a new YAML config, not new code.
+
+* Agent Personality
+
+The growth agent is not a developer. It is a strategist, analyst, and creative director who happens to have access to powerful tools.
+
+** Voice
+
+The coding agent speaks like a senior engineer: precise, technical, opinionated about architecture. The growth agent speaks like a senior strategist:
+
+- *Analytical*: "Competitor X increased spend 40% in Q1, primarily on video creative targeting 25-34. Their messaging shifted from feature-focused to outcome-focused. This suggests they're moving upmarket."
+- *Strategic*: "Given the competitive landscape, I recommend a flanking strategy: own the SMB segment they're abandoning. Here's a 90-day plan."
+- *Creative*: "The headline 'Transform Your Business' is generic. Here are five alternatives ranked by specificity and emotional resonance."
+- *Professional*: Client-ready language. No jargon unless the audience expects it. No hedging unless uncertainty is genuine.
+
+** Expertise Framing
+
+The system prompt positions the agent as:
+
+- A senior growth strategist with deep platform expertise
+- A competitive intelligence analyst who reads market signals
+- A creative director who understands ad copy, visual hierarchy, and persuasion
+- A data analyst who can interpret metrics and identify trends
+- A Typst author who produces publication-quality branded documents
+
+This is not a chatbot that happens to know about marketing. It is a specialist operating in its domain — the same way the coding agent is a distinguished staff engineer, not a chatbot that knows code.
+
+** Tool Usage Patterns
+
+The growth agent's tool usage is qualitatively different from the coding agent:
+
+| Coding Agent                        | Growth Agent                             |
+|-------------------------------------+------------------------------------------|
+| Reads/writes source files           | Reads market data, writes deliverables   |
+| Runs tests, builds, lints           | Runs scrapers, compiles reports          |
+| Searches code (ast_grep, grep)      | Searches ad libraries, market signals    |
+| Opens canvas for visualization      | Lives in canvas, uses TUI for logs       |
+| Plans in org-mode                   | Plans in strategy briefs (Typst)         |
+| Reviews PRs                         | Reviews campaign performance             |
+
+** Modes as Workflows
+
+The growth modes map to practitioner workflows, not to tool capabilities:
+
+- ~/strategy~: "I need to understand a market and formulate a plan." Research-heavy, produces a strategy brief deliverable.
+- ~/campaign~: "I need to plan and execute a campaign." Orchestration-heavy, produces multiple deliverables (brief, creative, media plan, timeline).
+- ~/creative~: "I need to create or evaluate creative assets." Generation-heavy, produces ad copy, visual direction, A/B test plans.
+- ~/review~: "I need to analyze what happened and recommend what's next." Data-heavy, produces performance reports with recommendations.
+
+* Open Questions
+
+** Tools vs Skills Boundary
+
+Growth-specific capabilities could be implemented as:
+
+- *Tool classes*: Registered in the tool registry, available via the standard tool invocation path. Pros: full integration with the agent loop, type-safe parameters, proper error handling. Cons: requires core changes to the tool registry for domain filtering.
+- *Skills*: Loaded as skill packs with SKILL.md documentation. Pros: hot-reloadable, no core changes, discoverable via existing skill infrastructure. Cons: skills are knowledge + templates, not executable tools. A skill can't run a scraper.
+
+The likely answer is *both*: tools for executable capabilities (scraping, Typst compilation, data queries) and skills for knowledge/templates (prompt engineering for ad copy, report templates, industry benchmarks). The question is where the boundary sits and whether we need a new primitive (a "domain tool" that's lighter than a core tool but more capable than a skill).
+
+** SQLite Persistence Depth
+
+The minimal case: SQLite stores ad snapshots (creative, copy, targeting, spend) and scrape metadata (timestamps, sources, freshness). Everything else lives in files.
+
+The maximal case: SQLite becomes a lightweight CRM — client records, campaign states, deliverable status, metric time series, scheduling, notifications. This turns Spell Growth into an application, not a tool.
+
+The right depth is probably *closer to minimal*: store what's queryable (ad snapshots, metrics, timeline events) in SQLite. Store what's authored (deliverables, templates, configurations) as files. The agent is a tool, not an application. If users need a CRM, they have CRMs. Spell Growth's value is intelligence and output, not record-keeping.
+
+One exception: deliverable metadata (status, type, creation date, client association) probably belongs in SQLite for dashboard queries, even though the deliverable content lives in files. This is the same pattern as git: content in the working tree, metadata in the index.
+
+** Scraper Framework Packaging
+
+Options:
+
+1. *Bundled in growth domain* (~domain/growth/scraper/~): Simplest. The scraper only exists for growth. No need for separate versioning or distribution.
+2. *Separate package* (~packages/scraper/~): Reusable across domains. A "research" domain could use the same scraper for academic papers. The leadgen project could adopt it.
+3. *Separate repo*: Maximum independence. But adds coordination overhead and split-brain versioning.
+
+Option 1 is correct for now. If a second consumer emerges, extract to option 2. Premature extraction is premature abstraction.
+
+** Font Distribution
+
+Aspekta is the ora-branding typeface. It's not a system font. Distribution options:
+
+1. *Bundle in the growth domain*: Include font files in ~domain/growth/assets/fonts/~. Simple, but increases distribution size (~2MB for all weights).
+2. *Fetch on first use*: Download from a known URL on first Typst compilation. Adds a network dependency and first-run latency.
+3. *Reference from ora-branding*: Point Typst at ~~/code/ora/ora-branding/typst/fonts/~. Works in development, breaks in distribution.
+4. *System font installation*: Require users to install Aspekta. High friction, unlikely to happen.
+
+Option 1 is the only viable approach for a self-contained distribution. 2MB is acceptable. The font files are assets, not code — they belong with the domain that uses them.
+
+Licensing: Aspekta is distributed under the SIL Open Font License, which permits bundling. This is a non-issue technically but should be verified for the specific variant we use.
+
+** Canvas Panel Hot-Reload
+
+Currently, QML files are loaded once. Changing a panel requires restarting the canvas. For growth UX iteration, this is painful — the dashboard layout, chart configurations, and panel interactions need rapid feedback cycles.
+
+Hot-reload options:
+
+1. *QML Loader component*: Use ~Loader~ with a file watcher to reload QML source on change. This is native Qt and works for simple cases, but state is lost on reload.
+2. *WebEngine panels*: Render panels in embedded WebEngine views. HTML/JS hot-reloads trivially. But this loses native QML performance and the Material Design 3 integration.
+3. *Hybrid*: Use QML ~Loader~ for layout/structure, WebEngine for data-heavy visualizations (charts, tables). Each reloads independently.
+
+Option 3 is likely correct: the shell and panel frames are QML (stable, rarely changed), while chart/data visualizations inside panels use WebEngine (frequently iterated, benefit from web ecosystem charting libraries).
+
+This also aligns with the Typst preview architecture: the preview pane is already a WebEngine view (for typst-ts WASM rendering). Making WebEngine a standard panel embedding mechanism is consistent.
+
+** Multi-User Workspace Sharing
+
+Can two people share a growth workspace? This matters for agencies where an analyst and a strategist collaborate.
+
+The file-based model works naturally: the workspace is a directory, collaboration happens through git (or file sync). SQLite is trickier — concurrent writes require WAL mode and careful transaction boundaries.
+
+But the deeper question is whether Spell Growth is a single-player or multiplayer tool. The coding agent is definitively single-player (one agent, one developer, one session). Growth work is inherently more collaborative (strategist + designer + analyst + client).
+
+For MVP: single-player. The workspace is one person's view. Collaboration happens outside Spell (shared git repo, exported PDFs, Slack).
+
+For future: consider a server mode where the Spell Growth canvas is a web app (QML → WebAssembly or a separate web frontend) with real-time collaboration. This is a major architectural decision that should not constrain the MVP.

@@ -1,0 +1,103 @@
+#+TITLE: Growth Modes
+#+STATE: DONE
+#+SESSION_ID: 14a8992d488415ca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/28-CreateFeatE.jsonl]]
+#+CUSTOM_ID: FEAT-137-growth-modes
+#+EFFORT: 40h
+#+PRIORITY: #A
+#+LAYER: domain
+#+DEPENDS: PROJ-012-spell-domain-system
+
+## Scope
+IN: 6 growth modes implemented as .spell/modes/*.md files using existing ModeConfigFrontmatter: /intel, /strategy, /pitch, /review, /campaign, /brief. Each mode has: tool restrictions (allow/deny), readOnly flag, workspace layout coupling (extended frontmatter), subagent gates (Greek mythology naming: Hermes for strategy, Apollo for brand, Athena for intel completeness, Ares for campaign thoroughness), mode escalation paths (guided, show recommended next step on exit). /brief: lightweight one quality-gate round then editor opens with first version.
+OUT: Panel implementations (FEATs). Workspace switching mechanics (PROJ-B). Subagent implementations beyond prompt definition (uses existing subagent infra).
+
+## Tests
+- domain/growth/test/modes/intel-mode.test.ts: entering intel restricts tools to read+scraper+web_search, exits with completeness recommendation
+- domain/growth/test/modes/strategy-mode.test.ts: entering strategy restricts to read+org, Hermes gate validates
+- domain/growth/test/modes/pitch-mode.test.ts: restricts to typst+write, Apollo brand gate runs
+- domain/growth/test/modes/brief-mode.test.ts: one gate round, then transitions to editor
+- domain/growth/test/modes/mode-escalation.test.ts: review -> suggests strategy, intel -> suggests strategy
+
+## Implementation
+
+** Create /intel mode definition
+:PROPERTIES:
+:CUSTOM_ID: FEAT-137-growth-modes::create-intel-mode
+:END:
+Files: domain/growth/modes/intel.md
+Frontmatter: name: intel, description: 'Deep research and intelligence gathering', readOnly: true, tools: { allow: [read, grep, find, web_search, fetch, scraper, calc, org] }, workspace: 'research', gate: { name: 'Athena', prompt: 'Validate completeness: all competitors covered? all channels analyzed? all market segments?' }, nextSuggestion: 'strategy'
+
+** Create /strategy mode definition
+:PROPERTIES:
+:CUSTOM_ID: FEAT-137-growth-modes::create-strategy-mode
+:END:
+Files: domain/growth/modes/strategy.md
+Frontmatter: name: strategy, readOnly: true, tools: { allow: [read, grep, find, web_search, fetch, org, calc, exit_plan_mode] }, workspace: 'strategy', gate: { name: 'Hermes', prompt: 'Validate strategic coherence: objectives SMART? channels justified by data? budget realistic? timeline feasible?' }, nextSuggestion: 'pitch'
+
+** Create /pitch mode definition
+:PROPERTIES:
+:CUSTOM_ID: FEAT-137-growth-modes::create-pitch-mode
+:END:
+Files: domain/growth/modes/pitch.md
+Frontmatter: name: pitch, tools: { allow: [read, write, typst_compile, typst_preview, org, fetch, web_search] }, allowedFolders: ['deliverables/', 'templates/'], workspace: 'create', gate: { name: 'Apollo', stages: ['structural_brand_check', 'compile_check', 'content_review'] }, nextSuggestion: null (terminal mode)
+
+** Create /review mode definition
+:PROPERTIES:
+:CUSTOM_ID: FEAT-137-growth-modes::create-review-mode
+:END:
+Files: domain/growth/modes/review.md
+Frontmatter: name: review, readOnly: true, tools: { allow: [read, grep, find, calc, org, web_search] }, workspace: 'review', gate: { name: 'Athena', prompt: 'Validate data integrity: statistically significant timeframes? fair comparisons? all relevant metrics included?' }, nextSuggestion: 'strategy', escalation: { to: 'strategy', trigger: 'strategic issues identified' }
+
+** Create /campaign mode definition
+:PROPERTIES:
+:CUSTOM_ID: FEAT-137-growth-modes::create-campaign-mode
+:DEPENDS: FEAT-137-growth-modes::create-intel-mode FEAT-137-growth-modes::create-strategy-mode FEAT-137-growth-modes::create-pitch-mode
+:END:
+Files: domain/growth/modes/campaign.md
+Frontmatter: name: campaign, tools: { allow: [read, write, grep, find, web_search, fetch, scraper, org, calc, typst_compile] }, workspace: 'campaign', chain: ['intel', 'strategy', 'pitch'], gate: { name: 'Ares', prompt: 'Validate campaign thoroughness: competitive scan complete? strategy coherent? creative on-brand? budget allocated? timeline realistic?' }
+
+** Create /brief mode definition
+:PROPERTIES:
+:CUSTOM_ID: FEAT-137-growth-modes::create-brief-mode
+:END:
+Files: domain/growth/modes/brief.md
+Frontmatter: name: brief, tools: { allow: [read, write, web_search, fetch, org, typst_compile, typst_preview] }, workspace: 'create', lightweight: true, gate: { name: 'Apollo', rounds: 1 }, onComplete: 'open_editor_with_result'
+
+** Implement mode-workspace coupling in mode loader
+:PROPERTIES:
+:CUSTOM_ID: FEAT-137-growth-modes::implement-mode-workspace-coupling
+:DEPENDS: FEAT-137-growth-modes::create-intel-mode PROJ-013-growth-qml-shell-and-workspace-system::implement-workspace-switching
+:END:
+Files: packages/coding-agent/src/capability/mode.ts, packages/coding-agent/src/modes/interactive-mode.ts
+Extend ModeConfigFrontmatter parsing to read `workspace` field. When mode is activated via slash command, if workspace field exists, emit workspace_switch event to QML shell. Implement nextSuggestion display on mode exit.
+
+** Implement mode escalation paths
+:PROPERTIES:
+:CUSTOM_ID: FEAT-137-growth-modes::implement-escalation
+:DEPENDS: FEAT-137-growth-modes::implement-mode-workspace-coupling
+:END:
+Files: packages/coding-agent/src/plan-mode/escalation.ts
+On mode exit, check nextSuggestion field. Present to user: 'Intel complete. Recommended next: /strategy. [Enter strategy mode] [Stay in general]'. If escalation.trigger matches agent findings, auto-suggest escalation.
+
+** Write mode tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-137-growth-modes::write-mode-tests
+:DEPENDS: FEAT-137-growth-modes::create-intel-mode FEAT-137-growth-modes::create-strategy-mode FEAT-137-growth-modes::create-pitch-mode FEAT-137-growth-modes::create-review-mode FEAT-137-growth-modes::create-brief-mode
+:END:
+Files: domain/growth/test/modes/intel-mode.test.ts, strategy-mode.test.ts, pitch-mode.test.ts, brief-mode.test.ts, mode-escalation.test.ts
+
+## Edge Cases
+- Entering mode while agent is mid-response: queue mode activation until turn ends
+- /campaign chains: if intel gate fails, don't proceed to strategy
+- /brief one-round gate: if gate fails, show issues but still open editor (lightweight = don't block)
+- Mode with workspace that has no panels loaded yet: load panels first, then switch
+- Slash command for mode not in growth domain: error 'mode not available in this domain'
+
+## Acceptance Criteria
+- Typing /intel in chat drawer activates intel mode + switches to Research workspace
+- In /intel mode, attempting to write a file fails with mode restriction error
+- Exiting /intel shows 'Recommended next: /strategy' suggestion
+- /pitch mode runs Apollo brand guardian gate before allowing exit
+- /brief generates one-round quality gate then opens editor with result
+- /campaign chains through intel->strategy->pitch automatically

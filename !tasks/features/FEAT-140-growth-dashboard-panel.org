@@ -1,0 +1,79 @@
+#+TITLE: Growth Dashboard Panel
+#+STATE: DONE
+#+SESSION_ID: 14a899a7fa4415d0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/30-CreateFeatA.jsonl]]
+#+CUSTOM_ID: FEAT-140-growth-dashboard-panel
+#+EFFORT: 25h
+#+PRIORITY: #A
+#+LAYER: ui
+#+DEPENDS: PROJ-011-native-ts-scraper-framework PROJ-010-typst-integration PROJ-013-growth-qml-shell-and-workspace-system
+
+Also depends on Growth Shell (PROJ-B, ID to be resolved).
+
+* Scope
+IN: Morning overview QML panel. Metric cards row (new competitor ads since last session, pending deliverables count, active campaigns count). Competitor activity feed (chronological list of latest scraped ads, clickable). Deliverable pipeline status bar (BRIEF/DRAFT/REVIEW/FINAL counts from org items). Quick action buttons (New Report, Scan Competitors, Review Performance). Calendar/timeline strip (upcoming deliverable deadlines).
+OUT: Data collection (PROJ-C), deliverable lifecycle tracking (FEAT-F), mode activation (FEAT-E).
+
+* Tests
+- domain/growth/test/panels/dashboard-panel.test.ts: render with seeded data, verify metric card values, click ad in feed
+- domain/growth/test/panels/dashboard-empty.test.ts: render with no data, verify empty state UX
+
+* Implementation
+
+** Define dashboard data model
+:PROPERTIES:
+:CUSTOM_ID: FEAT-140-growth-dashboard-panel::define-data-model
+:END:
+Files: domain/growth/src/panels/dashboard/types.ts
+DashboardData: { metrics: { newAds, pendingDeliverables, activeCampaigns }, recentAds: AdSummary[], pipeline: { brief, draft, review, final }, deadlines: Deadline[] }
+
+** Implement dashboard data queries
+:PROPERTIES:
+:CUSTOM_ID: FEAT-140-growth-dashboard-panel::implement-queries
+:DEPENDS: FEAT-140-growth-dashboard-panel::define-data-model
+:END:
+Files: domain/growth/src/panels/dashboard/queries.ts
+SQLite queries via bun:sqlite: count new ads since last_session_timestamp, count org items by state, aggregate pipeline. Exposed as armed tool 'dashboard_query'.
+
+** Create DashboardPanel.qml
+:PROPERTIES:
+:CUSTOM_ID: FEAT-140-growth-dashboard-panel::create-panel-qml
+:DEPENDS: FEAT-140-growth-dashboard-panel::define-data-model
+:END:
+Files: domain/growth/src/qml/panels/GrowthDashboard.qml
+Layout: ColumnLayout. Top: Row of 3 MetricCard components. Middle: CompetitorFeed (ListView of AdSummaryCard). Bottom-left: PipelineBar (horizontal stacked bar). Bottom-right: DeadlineStrip (horizontal scrollable dates). Quick actions: Row of buttons that emit bridge.send({ type: 'quick_action', action: 'new_report'|'scan'|'review' }).
+
+** Create MetricCard.qml component
+:PROPERTIES:
+:CUSTOM_ID: FEAT-140-growth-dashboard-panel::create-metric-card
+:DEPENDS: FEAT-140-growth-dashboard-panel::create-panel-qml
+:END:
+Files: domain/growth/src/qml/components/MetricCard.qml
+Properties: title, value, delta (change since last), icon. Styled with SpellTheme. Shows value prominently, delta as colored badge (+green/-red).
+
+** Create AdSummaryCard.qml component
+:PROPERTIES:
+:CUSTOM_ID: FEAT-140-growth-dashboard-panel::create-ad-summary-card
+:DEPENDS: FEAT-140-growth-dashboard-panel::create-panel-qml
+:END:
+Files: domain/growth/src/qml/components/AdSummaryCard.qml
+Properties: adId, pageName, adText (truncated), startDate, isActive, formatIcon. Click -> bridge.send({ type: 'open_ad_detail', adId }).
+
+** Write dashboard tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-140-growth-dashboard-panel::write-tests
+:DEPENDS: FEAT-140-growth-dashboard-panel::create-panel-qml FEAT-140-growth-dashboard-panel::implement-queries
+:END:
+Files: domain/growth/test/panels/dashboard-panel.test.ts, dashboard-empty.test.ts
+
+* Edge Cases
+- No ads in database: show 'No competitor data yet. Run a scan?' with quick action button
+- Org items not initialized: pipeline shows all zeros
+- Large number of recent ads (100+): paginate feed, show 'Load more'
+- Quick action while agent is busy: queue or show 'Agent busy' toast
+
+* Acceptance Criteria
+- Dashboard renders with seeded data showing correct metric values
+- Clicking ad in feed emits open_ad_detail event
+- Empty state shows helpful message with scan action
+- Pipeline bar correctly reflects org item state counts

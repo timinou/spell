@@ -1,0 +1,164 @@
+#+TITLE: Typst Integration
+#+STATE: DONE
+#+SESSION_ID: 14a89873f08415c6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/26-CreateProjD.jsonl]]
+#+CUSTOM_ID: PROJ-010-typst-integration
+#+EFFORT: 70h
+#+PRIORITY: #A
+#+LAYER: infrastructure
+
+
+* Scope
+
+IN: Monaco/CodeMirror editor in WebEngineView with tree-sitter-typst WASM highlighting, typst-ts WASM live SVG preview in separate WebEngineView, click-to-code source mapping (click preview element -> jump to source line), YAML data hydration for Typst templates (Typst reads YAML via =yaml()= built-in), brand guardian gate (tree-sitter AST structural check + typst compile correctness + LLM content review), Spell example branding package (lib.typ with colors, typography, logo, basic components - public repo compatible), template library (weekly-digest.typ, client-proposal.typ, competitive-analysis.typ, campaign-brief.typ), PDF export via =typst compile= CLI, font loading in WASM (custom fonts loaded into typst-ts virtual filesystem), branding package path from .spell/growth/branding.json config.
+
+OUT: Full bidirectional collaborative editing (FUP). YAML editor QML component (FUP). Template drag-and-drop builder (FEAT-J). Editor panel QML (FEAT-C).
+
+BOUNDARY: This item builds the Typst engine/preview/compilation infrastructure. FEAT-C builds the QML panel that uses it.
+
+* Tests
+
+- domain/growth/test/typst/wasm-compile.test.ts: compile simple Typst source to SVG via typst-ts
+- domain/growth/test/typst/yaml-hydration.test.ts: Typst template reads data.yaml, output contains data values
+- domain/growth/test/typst/brand-guardian.test.ts: structural check (imports lib.typ), compile check (no errors), content check (no placeholder text)
+- domain/growth/test/typst/source-mapping.test.ts: SVG elements carry data-source-line attributes
+- domain/growth/test/typst/font-loading.test.ts: custom font loads, rendering uses it (visual diff or font metric check)
+- domain/growth/test/typst/pdf-export.test.ts: typst CLI produces valid PDF from template
+- domain/growth/test/typst/spell-branding.test.ts: Spell branding lib.typ compiles, all components render
+
+* Implementation
+
+** Set up typst-ts WASM compiler infrastructure
+:PROPERTIES:
+:CUSTOM_ID: PROJ-010-typst-integration::setup-typst-wasm
+:END:
+
+Files: domain/growth/src/typst/wasm-compiler.ts, domain/growth/src/typst/preview.html
+
+Install @myriaddreamin/typst.ts, @myriaddreamin/typst-ts-web-compiler, @myriaddreamin/typst-ts-renderer npm packages. Create preview.html that loads typst-ts, exposes compile(mainContent) -> SVG function. Handle virtual filesystem for multi-file projects (addSource, addFont). Emit data-source-line attributes on SVG elements for click-to-code.
+
+** Set up Monaco editor HTML for WebEngineView
+:PROPERTIES:
+:CUSTOM_ID: PROJ-010-typst-integration::setup-monaco-editor
+:END:
+
+Files: domain/growth/src/typst/editor.html, domain/growth/src/typst/typst-language.ts
+
+Create editor.html that loads Monaco editor via CDN or bundled. Register Typst language with tree-sitter-typst WASM for syntax highlighting (monaco-editor supports TextMate grammars; alternatively use monarch tokenizer derived from tree-sitter queries). Expose API: setContent(text), getContent() -> text, onContentChange(callback), goToLine(line). Communication via window.postMessage or console.log protocol.
+
+** Implement font loading for WASM compiler
+:PROPERTIES:
+:CUSTOM_ID: PROJ-010-typst-integration::implement-font-loading
+:DEPENDS: PROJ-010-typst-integration::setup-typst-wasm
+:END:
+
+Files: domain/growth/src/typst/font-loader.ts
+
+Load font files (OTF/TTF) from branding package directory into typst-ts virtual filesystem via addFont(). Read font paths from branding package metadata. Fallback to system fonts if custom fonts not found. Aspekta weights 300-950 + Funnel Display for ORA (or equivalent for Spell branding).
+
+** Implement YAML data hydration bridge
+:PROPERTIES:
+:CUSTOM_ID: PROJ-010-typst-integration::implement-yaml-hydration
+:DEPENDS: PROJ-010-typst-integration::setup-typst-wasm
+:END:
+
+Files: domain/growth/src/typst/data-hydration.ts
+
+Typst natively supports =#yaml("data.yaml")= to read YAML files. The bridge: agent generates data.yaml, adds it to typst-ts VFS, template imports it. Also support JSON via =#json("data.json")=. Provide helper to validate YAML against a schema defined in template metadata.
+
+** Create Spell example branding package
+:PROPERTIES:
+:CUSTOM_ID: PROJ-010-typst-integration::create-spell-branding
+:END:
+
+Files: domain/growth/branding/spell-brand/lib.typ, colors.typ, typography.typ, logo.typ, components.typ, layout.typ
+
+Create a Spell-branded Typst package mirroring ora-brand structure. Colors: Spell purple (#7C3AED), Spell dark (#1E1B4B), Spell light (#F5F3FF), neutral grays. Typography: system fonts (Inter or similar open font). Components: stat-cell, section-header, metric-strip, callout-box, page-footer. Layouts: report-page, cover-page. Include a Makefile for compilation testing.
+
+** Create template library
+:PROPERTIES:
+:CUSTOM_ID: PROJ-010-typst-integration::create-templates
+:DEPENDS: PROJ-010-typst-integration::create-spell-branding ::implement-yaml-hydration
+:END:
+
+Files: domain/growth/templates/weekly-digest.typ, client-proposal.typ, competitive-analysis.typ, campaign-brief.typ, plus metadata JSON files
+
+Each template: .typ file importing spell-brand/lib.typ + reading data.yaml. Metadata .json: { name, description, variables (schema for data.yaml), preview thumbnail path }. Weekly digest: date range, key metrics table, competitor activity summary, recommendations. Client proposal: client name, problem statement, approach, deliverables, timeline, budget. Competitive analysis: market overview, competitor grid, ad analysis, strategic implications. Campaign brief: objective, target audience, channels, budget, timeline, creative direction.
+
+** Implement brand guardian gate
+:PROPERTIES:
+:CUSTOM_ID: PROJ-010-typst-integration::implement-brand-guardian
+:DEPENDS: PROJ-010-typst-integration::setup-typst-wasm ::create-spell-branding
+:END:
+
+Files: domain/growth/src/typst/brand-guardian.ts
+
+Three checks: (1) Structural: parse .typ with tree-sitter-typst WASM, verify it imports the branding lib.typ, check color literals against brand palette, check font references against brand fonts. (2) Compile: run typst compile, verify no errors. (3) Content: LLM review via agent subagent - check for placeholder text, professional tone, completeness. Return pass/fail with specific issues.
+
+** Implement PDF export
+:PROPERTIES:
+:CUSTOM_ID: PROJ-010-typst-integration::implement-pdf-export
+:DEPENDS: PROJ-010-typst-integration::setup-typst-wasm
+:END:
+
+Files: domain/growth/src/typst/pdf-export.ts
+
+Shell out to =typst compile input.typ output.pdf= with font path argument. Handle missing typst CLI (error message with install instructions). Support --font-path for custom fonts.
+
+** Implement click-to-code source mapping
+:PROPERTIES:
+:CUSTOM_ID: PROJ-010-typst-integration::implement-source-mapping
+:DEPENDS: PROJ-010-typst-integration::setup-typst-wasm ::setup-monaco-editor
+:END:
+
+Files: domain/growth/src/typst/source-mapping.ts
+
+In preview.html: SVG elements with data-source-line attributes. Click handler: extract line number from clicked element, post message to bridge. Bridge handler: forward to editor WebEngineView, call goToLine(line). Bidirectional highlight: hovering source line highlights corresponding preview region (stretch goal, implement basic version).
+
+** Write WASM compile tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-010-typst-integration::write-wasm-tests
+:DEPENDS: PROJ-010-typst-integration::setup-typst-wasm
+:END:
+
+Files: domain/growth/test/typst/wasm-compile.test.ts
+
+** Write brand guardian tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-010-typst-integration::write-guardian-tests
+:DEPENDS: PROJ-010-typst-integration::implement-brand-guardian
+:END:
+
+Files: domain/growth/test/typst/brand-guardian.test.ts
+
+Test: file with correct imports passes structural check, file with off-brand color fails, file with missing import fails, file that compiles passes compile check.
+
+** Write template tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-010-typst-integration::write-template-tests
+:DEPENDS: PROJ-010-typst-integration::create-templates
+:END:
+
+Files: domain/growth/test/typst/spell-branding.test.ts
+
+Test: all templates compile with sample data.yaml. Spell branding lib.typ compiles standalone. Each component function renders without error.
+
+* Edge Cases
+
+- typst-ts WASM fails to load: show error in preview pane, editor still works
+- Custom fonts not found: fall back to system fonts, warn in preview
+- YAML data file malformed: show error in preview, highlight offending line
+- Template references missing branding import: brand guardian catches before compile
+- Large documents (100+ pages): typst-ts incremental compilation handles this, but test performance
+- typst CLI not installed: PDF export fails gracefully with install instructions
+- Multi-file project with circular imports: typst compiler catches, surface error
+
+* Acceptance Criteria
+
+- Typst source compiles to SVG in WebEngineView via typst-ts WASM in under 500ms for a 10-page document
+- Monaco editor shows Typst syntax highlighting (keywords, strings, functions, math)
+- Clicking a paragraph in SVG preview jumps editor cursor to corresponding source line
+- YAML data.yaml values appear in rendered output
+- Spell branding package compiles and produces visually correct output (screenshot artifact)
+- Brand guardian rejects file without branding import, accepts file with correct branding
+- =typst compile= produces valid PDF from any template + sample data

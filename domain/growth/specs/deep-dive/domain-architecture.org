@@ -1,0 +1,1057 @@
+#+TITLE: Domain Architecture — Spell Multi-Domain System
+#+AUTHOR: Spell Growth
+#+DATE: 2026-03-31
+#+PROPERTY: header-args :eval no
+
+* Overview
+
+Spell currently operates as a single-domain system: the coding agent. Personality,
+tools, modes, and QML panels are all hard-wired to the coding workflow. This spec
+defines a domain abstraction that generalizes Spell into a multi-domain system where
+the same core infrastructure serves different verticals — starting with growth/marketing.
+
+The key insight: Spell's infrastructure (QML canvas, loop system, artifact store, tool
+framework, plan modes) is domain-agnostic. What makes it a /coding/ agent is a thin
+layer of domain-specific configuration: the system prompt, the tool selection, the
+slash commands, and the QML panels. Factor that layer out, make it pluggable, and
+the same agent runtime serves any domain.
+
+* Current State
+
+** Loop Domains (The Only Existing Abstraction)
+
+The only domain concept in Spell today lives in the loop system. Loop domains bundle
+validation gates and guideline templates — nothing more.
+
+Location: =packages/coding-agent/src/loop/domains/=
+
+#+begin_src typescript
+// packages/coding-agent/src/loop/domains/types.ts
+export type DomainFactory = () => LoopDomainDefinition;
+
+// packages/coding-agent/src/loop/types.ts
+export interface LoopDomainDefinition {
+  name: string;
+  description: string;
+  guidelinesTemplate: string;
+  defaultGates: LoopGateConfig[];
+  evidenceCollector?: (loop: LoopSnapshot) => Promise<string[]> | string[];
+}
+#+end_src
+
+Example — the code domain:
+
+#+begin_src typescript
+// packages/coding-agent/src/loop/domains/code.ts
+export function createCodeDomain(): LoopDomainDefinition {
+  return {
+    name: "code",
+    description: "Compile, lint, and formatting validation",
+    guidelinesTemplate: template,
+    defaultGates: [
+      { id: "code-compile", type: "command", trigger: { kind: "on-completion" }, command: "bun check:ts" },
+      { id: "code-format", type: "command", trigger: { kind: "on-completion" }, command: "bun lint:ts" },
+    ],
+  };
+}
+#+end_src
+
+Existing loop domains: =code=, =test=, =architecture=, =docs=, =security=, =ui=.
+
+** What Loop Domains Do NOT Control
+
+- Agent personality / system prompt (hard-coded in sdk.ts)
+- Available tools (BUILTIN_TOOLS is a static list)
+- Slash commands (/plan, /ultraplan, /design, /audit — hard-coded)
+- QML panels (discovered from skills only, via =discoverSkillPanels()=)
+- Artifact types (generic text artifacts)
+- Project detection (no concept of "what kind of project is this")
+
+** Session Creation
+
+=CreateAgentSessionOptions= in =packages/coding-agent/src/sdk.ts= already accepts
+many of the individual pieces a domain would configure:
+
+#+begin_src typescript
+export interface CreateAgentSessionOptions {
+  systemPrompt?: string | ((defaultPrompt: string) => string);
+  customTools?: (CustomTool | ToolDefinition)[];
+  slashCommands?: FileSlashCommand[];
+  skills?: Skill[];
+  rules?: Rule[];
+  contextFiles?: Array<{ path: string; content: string }>;
+  // ... model config, auth, MCP, LSP, etc.
+}
+#+end_src
+
+This is the seam. A domain definition populates these fields. The session creation
+code does not need to know what domain it's serving — it just receives configuration.
+
+* Proposed Domain Abstraction
+
+** The SpellDomain Interface
+
+#+begin_src typescript
+// packages/coding-agent/src/domain/types.ts
+
+/**
+ * A SpellDomain is a complete vertical configuration for the agent runtime.
+ * It controls what the agent knows (system prompt, context), what it can do
+ * (tools, modes), and what it shows (QML panels, artifact types).
+ *
+ * Domains are NOT extensions. Extensions add capabilities to any domain.
+ * Domains define the agent's identity and workflow for a specific vertical.
+ */
+export interface SpellDomain {
+  /** Unique identifier. Used in .spell/domain.json, CLI flags, directory names. */
+  name: string;
+  /** Human-readable description for logs, help text, UI chrome. */
+  description: string;
+
+  // ── Personality ──────────────────────────────────────────────
+
+  /**
+   * Path to the domain's system prompt file, relative to the domain root.
+   * This REPLACES the coding-agent system prompt entirely — it is not appended.
+   * The domain prompt is responsible for its own identity, behavior, and stakes.
+   */
+  systemPromptPath: string;
+
+  /**
+   * Additional context files injected into every conversation.
+   * Paths relative to domain root. Loaded at session creation.
+   * Analogous to AGENTS.md / contextFiles in CreateAgentSessionOptions.
+   */
+  contextFiles: string[];
+
+  // ── Tools ────────────────────────────────────────────────────
+
+  /**
+   * Allowlist of built-in tool names to include.
+   * If specified, ONLY these tools from BUILTIN_TOOLS are registered.
+   * If omitted, all BUILTIN_TOOLS are available (coding domain behavior).
+   */
+  tools?: string[];
+
+  /**
+   * Tools to explicitly exclude from builtins.
+   * Applied after `tools` allowlist. Useful when you want "all builtins minus X".
+   * Cannot be combined with `tools` — use one or the other.
+   */
+  excludeTools?: string[];
+
+  /**
+   * Domain-specific custom tools. Registered alongside built-in tools.
+   * These are tools that only make sense in this domain's context.
+   */
+  customTools?: DomainToolDef[];
+
+  // ── Modes ────────────────────────────────────────────────────
+
+  /**
+   * Slash commands specific to this domain.
+   * These REPLACE the default coding slash commands (/plan, /ultraplan, etc.)
+   * — they do not merge. The domain owns its mode vocabulary.
+   */
+  slashCommands: DomainSlashCommandDef[];
+
+  // ── QML ──────────────────────────────────────────────────────
+
+  /**
+   * QML panel definitions for the shell sidebar.
+   * Merged with skill-discovered panels. Domain panels take precedence
+   * on id collision.
+   */
+  panels: DomainPanelDef[];
+
+  /**
+   * If true, the QML canvas launches automatically on session start.
+   * Growth domain: true (always-canvas). Coding domain: false (TUI-first).
+   */
+  alwaysCanvas: boolean;
+
+  // ── Loop ─────────────────────────────────────────────────────
+
+  /**
+   * Loop domain definitions for this vertical.
+   * These replace the coding loop domains entirely.
+   */
+  loopDomains: LoopDomainDefinition[];
+
+  // ── Artifacts ────────────────────────────────────────────────
+
+  /**
+   * Typed deliverable definitions for this domain.
+   * Controls what the agent can produce, how deliverables are rendered,
+   * and what metadata they carry.
+   */
+  artifactTypes: DomainArtifactTypeDef[];
+}
+#+end_src
+
+** Supporting Types
+
+#+begin_src typescript
+// packages/coding-agent/src/domain/types.ts
+
+export interface DomainToolDef {
+  /** Tool name (unique across all tools in session). */
+  name: string;
+  /** Tool description shown to the model. */
+  description: string;
+  /** JSON Schema for tool parameters. */
+  inputSchema: Record<string, unknown>;
+  /**
+   * Tool handler. Receives parsed input, returns string result.
+   * Has access to domain context via closure over the domain definition.
+   */
+  handler: (input: Record<string, unknown>, context: ToolContext) => Promise<string>;
+}
+
+export interface DomainSlashCommandDef {
+  /** Command name without leading slash. e.g. "strategy" for /strategy */
+  name: string;
+  /** Short description shown in /help. */
+  description: string;
+  /**
+   * Path to the command prompt template, relative to domain root.
+   * Template receives {userMessage, projectContext} variables.
+   */
+  promptTemplatePath: string;
+  /**
+   * Tool restrictions while this mode is active.
+   * Same semantics as existing plan mode tool restrictions.
+   */
+  toolRestrictions?: {
+    allow?: string[];
+    deny?: string[];
+  };
+  /**
+   * Subagent gates required before mode completion.
+   * e.g. growth /strategy might require a "market-validation" gate.
+   */
+  gates?: SlashCommandGateDef[];
+}
+
+export interface SlashCommandGateDef {
+  id: string;
+  description: string;
+  /** Agent role that evaluates the gate. */
+  evaluator: string;
+  /** Prompt template for the evaluator agent. */
+  promptTemplatePath: string;
+}
+
+export interface DomainPanelDef {
+  /** Unique panel id. Used as QML tab identifier. */
+  id: string;
+  /** Display title in sidebar. */
+  title: string;
+  /** Path to the QML file, relative to domain root. */
+  qmlPath: string;
+  /** Icon name (Material Design icon set). */
+  icon?: string;
+  /**
+   * Armed tools this panel can invoke via bridge.send({ _tool: ... }).
+   * Follows the same security model as canvas armed tools.
+   */
+  armedTools?: string[];
+}
+
+export interface DomainArtifactTypeDef {
+  /** Type identifier. e.g. "brief", "report", "deck" */
+  type: string;
+  /** Human-readable label. */
+  label: string;
+  /** File extension for persisted artifacts. */
+  extension: string;
+  /**
+   * MIME type for the artifact content.
+   * "application/x-typst" for Typst sources, "text/markdown" for markdown, etc.
+   */
+  mimeType: string;
+  /**
+   * Whether this artifact type supports live preview in canvas.
+   * If true, the domain must provide a preview panel that handles this type.
+   */
+  livePreview: boolean;
+  /** Default template path, relative to domain root. Used when creating new deliverables. */
+  templatePath?: string;
+}
+#+end_src
+
+** Why Replace, Not Merge (Slash Commands)
+
+Slash commands define the agent's /workflow vocabulary/. Merging coding commands into
+a growth session creates confusion: what does =/plan= mean in a marketing context?
+The coding =/plan= enters plan mode with code-oriented tool restrictions and org
+tracking. The growth =/strategy= enters a research mode with market-analysis prompts
+and competitive-scan subagents. These are different workflows that happen to share
+infrastructure.
+
+The domain owns its command vocabulary completely. Shared infrastructure (org tracking,
+tool restrictions, subagent gates) is reused at the implementation level, not at the
+command-name level.
+
+** Why Allowlist, Not Denylist (Tools — Default)
+
+The =tools= allowlist is the safe default for new domains. A growth agent should not
+accidentally expose =lsp= or =ast_grep= — these are meaningless in a marketing
+context and waste model attention. The =excludeTools= escape hatch exists for domains
+that are "coding-plus" (e.g., a DevRel domain that needs most coding tools minus a few).
+
+Enforcement: =tools= and =excludeTools= are mutually exclusive at the type level.
+The loader validates this and throws if both are specified.
+
+* Domain Detection
+
+** Detection Hierarchy
+
+Detection runs once, at startup, before session creation. The result is a domain name
+string that determines which =SpellDomain= definition to load.
+
+#+begin_src
+Priority 1: CLI flag         spell --domain growth
+Priority 2: Project config   .spell/domain.json → { "domain": "growth" }
+Priority 3: Heuristic        File/directory pattern matching
+Priority 4: Default          "coding"
+#+end_src
+
+** Implementation
+
+#+begin_src typescript
+// packages/coding-agent/src/domain/detect.ts
+
+export interface DomainDetectionResult {
+  domain: string;
+  source: "cli" | "config" | "heuristic" | "default";
+  confidence: number; // 0-1, only meaningful for heuristic
+}
+
+/**
+ * Detect the active domain for a project directory.
+ *
+ * The detection order is intentional: explicit > configured > inferred > default.
+ * Heuristic detection is deliberately conservative — it requires multiple signals
+ * to avoid false positives on projects that happen to have a .typ file.
+ */
+export async function detectDomain(
+  cwd: string,
+  cliDomain?: string
+): Promise<DomainDetectionResult> {
+  // Priority 1: Explicit CLI flag
+  if (cliDomain) {
+    return { domain: cliDomain, source: "cli", confidence: 1 };
+  }
+
+  // Priority 2: Project config file
+  const configPath = path.join(cwd, ".spell", "domain.json");
+  if (await fileExists(configPath)) {
+    const config = JSON.parse(await fs.readFile(configPath, "utf-8"));
+    if (typeof config.domain === "string") {
+      return { domain: config.domain, source: "config", confidence: 1 };
+    }
+  }
+
+  // Priority 3: Heuristic detection
+  const heuristic = await detectDomainHeuristic(cwd);
+  if (heuristic) {
+    return heuristic;
+  }
+
+  // Priority 4: Default
+  return { domain: "coding", source: "default", confidence: 1 };
+}
+#+end_src
+
+** Heuristic Detection
+
+Heuristics run only when no explicit configuration exists. They score signals and
+require a threshold to trigger. This prevents false positives — a repo with one =.typ=
+file is not a growth project.
+
+#+begin_src typescript
+// packages/coding-agent/src/domain/detect.ts
+
+interface HeuristicSignal {
+  name: string;
+  weight: number;
+  test: (cwd: string) => Promise<boolean>;
+}
+
+const GROWTH_SIGNALS: HeuristicSignal[] = [
+  {
+    name: "growth-directory",
+    weight: 0.4,
+    test: (cwd) => directoryExists(path.join(cwd, "campaigns")),
+  },
+  {
+    name: "typst-templates",
+    weight: 0.3,
+    test: (cwd) => directoryExists(path.join(cwd, "templates")) &&
+                    globHasMatches(path.join(cwd, "templates/**/*.typ")),
+  },
+  {
+    name: "client-structure",
+    weight: 0.3,
+    test: (cwd) => directoryExists(path.join(cwd, "clients")),
+  },
+  {
+    name: "scraper-configs",
+    weight: 0.2,
+    test: (cwd) => globHasMatches(path.join(cwd, "configs/**/*.yaml")),
+  },
+  {
+    name: "deliverables-directory",
+    weight: 0.3,
+    test: (cwd) => directoryExists(path.join(cwd, "deliverables")),
+  },
+];
+
+const HEURISTIC_THRESHOLD = 0.6;
+
+async function detectDomainHeuristic(
+  cwd: string
+): Promise<DomainDetectionResult | null> {
+  let score = 0;
+  for (const signal of GROWTH_SIGNALS) {
+    if (await signal.test(cwd)) {
+      score += signal.weight;
+    }
+  }
+  if (score >= HEURISTIC_THRESHOLD) {
+    return { domain: "growth", source: "heuristic", confidence: score };
+  }
+  return null;
+}
+#+end_src
+
+** The =.spell/domain.json= File
+
+Minimal. The domain file declares intent, not configuration. Domain-specific
+configuration lives in the domain definition itself.
+
+#+begin_src json
+{
+  "domain": "growth",
+  "options": {
+    "defaultClient": "acme-corp",
+    "typstBrandPackage": "@ora/ora-brand"
+  }
+}
+#+end_src
+
+The =options= field is domain-specific and opaque to core Spell. The growth domain
+definition reads it; the coding domain ignores it. This keeps the config file simple
+while allowing domains to carry project-level preferences.
+
+* Domain Loading
+
+** Directory Structure
+
+#+begin_src
+domain/
+├── coding/
+│   ├── index.ts              # exports SpellDomain (implicit, backward-compat)
+│   └── prompts/
+│       └── system.md         # extracted from current hard-coded prompt
+│
+└── growth/
+    ├── index.ts              # exports SpellDomain definition
+    ├── prompts/
+    │   ├── system.md         # growth agent personality + behavior
+    │   ├── strategy.md       # /strategy mode prompt template
+    │   ├── campaign.md       # /campaign mode prompt template
+    │   ├── creative.md       # /creative mode prompt template
+    │   └── review.md         # /review mode prompt template
+    ├── panels/
+    │   ├── CompetitiveIntel.qml
+    │   ├── ReportBuilder.qml
+    │   ├── CampaignBoard.qml
+    │   ├── ClientPortfolio.qml
+    │   └── TypstPreview.qml
+    ├── templates/
+    │   ├── weekly-digest.typ
+    │   ├── client-report.typ
+    │   ├── competitive-analysis.typ
+    │   └── campaign-brief.typ
+    ├── configs/
+    │   ├── facebook-ads.yaml
+    │   └── google-trends.yaml
+    ├── tools/
+    │   ├── scraper.ts        # ad library scraper tool
+    │   ├── typst-compile.ts  # typst compilation tool
+    │   └── market-data.ts    # market data aggregation
+    ├── loop-domains/
+    │   ├── competitive.ts    # loop domain: competitive analysis validation
+    │   ├── deliverable.ts    # loop domain: deliverable quality gates
+    │   └── data-integrity.ts # loop domain: data freshness/accuracy
+    └── specs/                # this directory
+        └── ...
+#+end_src
+
+** Domain Loader
+
+#+begin_src typescript
+// packages/coding-agent/src/domain/loader.ts
+
+import type { SpellDomain } from "./types";
+
+/** Registry of known domains. Statically imported for tree-shaking. */
+const DOMAIN_REGISTRY: Record<string, () => Promise<SpellDomain>> = {
+  coding: () => import("../../../domain/coding").then((m) => m.default),
+  growth: () => import("../../../domain/growth").then((m) => m.default),
+};
+
+/**
+ * Load a domain definition by name.
+ *
+ * Returns the coding domain as fallback for unknown names — this is intentional.
+ * An unrecognized domain name in .spell/domain.json should degrade to coding,
+ * not crash. The user sees a warning in the TUI.
+ */
+export async function loadDomain(name: string): Promise<SpellDomain> {
+  const loader = DOMAIN_REGISTRY[name];
+  if (!loader) {
+    console.warn(`Unknown domain "${name}", falling back to coding`);
+    return loadDomain("coding");
+  }
+  const domain = await loader();
+  validateDomain(domain);
+  return domain;
+}
+
+/**
+ * Validate domain definition at load time. Fail fast on misconfiguration.
+ */
+function validateDomain(domain: SpellDomain): void {
+  if (domain.tools && domain.excludeTools) {
+    throw new Error(
+      `Domain "${domain.name}": tools and excludeTools are mutually exclusive`
+    );
+  }
+  // Validate file paths exist
+  // Validate panel QML files exist
+  // Validate slash command prompt templates exist
+  // Validate artifact type uniqueness
+}
+#+end_src
+
+** The Coding Domain (Backward Compatibility)
+
+The coding domain is the implicit default. It codifies what is currently hard-coded:
+
+#+begin_src typescript
+// domain/coding/index.ts
+
+import type { SpellDomain } from "../../packages/coding-agent/src/domain/types";
+
+const codingDomain: SpellDomain = {
+  name: "coding",
+  description: "Software engineering agent with full IDE capabilities",
+
+  systemPromptPath: "prompts/system.md",
+  contextFiles: [],
+
+  // All builtins — no filtering. This is the current behavior.
+  // tools: undefined means "all BUILTIN_TOOLS"
+  customTools: [],
+
+  slashCommands: [
+    {
+      name: "plan",
+      description: "Manual planning with org tracking",
+      promptTemplatePath: "prompts/plan.md",
+      toolRestrictions: { allow: ["read", "grep", "find", "fetch", "web_search", "ast_grep", "org"] },
+    },
+    {
+      name: "ultraplan",
+      description: "Auto-planning with Metis/Momus subagents",
+      promptTemplatePath: "prompts/ultraplan.md",
+      toolRestrictions: { allow: ["read", "grep", "find", "fetch", "web_search", "ast_grep", "org", "task"] },
+      gates: [
+        { id: "metis", description: "Architecture review", evaluator: "metis", promptTemplatePath: "prompts/gates/metis.md" },
+        { id: "momus", description: "Adversarial review", evaluator: "momus", promptTemplatePath: "prompts/gates/momus.md" },
+      ],
+    },
+    {
+      name: "design",
+      description: "UI/UX design with aesthetic review",
+      promptTemplatePath: "prompts/design.md",
+      gates: [
+        { id: "aphrodite", description: "Aesthetic review", evaluator: "aphrodite", promptTemplatePath: "prompts/gates/aphrodite.md" },
+      ],
+    },
+    {
+      name: "audit",
+      description: "Post-execution code audit",
+      promptTemplatePath: "prompts/audit.md",
+      toolRestrictions: { allow: ["read", "grep", "find", "ast_grep", "org"] },
+    },
+  ],
+
+  panels: [], // Coding domain uses skill-discovered panels only
+  alwaysCanvas: false,
+
+  loopDomains: [], // Loaded from existing packages/coding-agent/src/loop/domains/
+
+  artifactTypes: [
+    { type: "text", label: "Text", extension: "txt", mimeType: "text/plain", livePreview: false },
+    { type: "code", label: "Code", extension: "ts", mimeType: "text/typescript", livePreview: false },
+  ],
+};
+
+export default codingDomain;
+#+end_src
+
+Note: the coding domain's =loopDomains= is empty here because the existing loop domain
+registry (=packages/coding-agent/src/loop/domains/registry.ts=) already handles it.
+Migration path: move existing loop domains into =domain/coding/loop-domains/= and
+have the coding domain definition reference them. This is a future cleanup, not a
+blocker.
+
+** The Growth Domain
+
+#+begin_src typescript
+// domain/growth/index.ts
+
+import type { SpellDomain } from "../../packages/coding-agent/src/domain/types";
+import { createCompetitiveDomain } from "./loop-domains/competitive";
+import { createDeliverableDomain } from "./loop-domains/deliverable";
+import { createDataIntegrityDomain } from "./loop-domains/data-integrity";
+import { scraperTool } from "./tools/scraper";
+import { typstCompileTool } from "./tools/typst-compile";
+import { marketDataTool } from "./tools/market-data";
+
+const growthDomain: SpellDomain = {
+  name: "growth",
+  description: "Growth & marketing agent with competitive intelligence, report generation, and campaign management",
+
+  systemPromptPath: "prompts/system.md",
+  contextFiles: [
+    "context/ora-brand-reference.md",
+    "context/platform-apis.md",
+  ],
+
+  // Growth agent keeps general-purpose tools but drops code-specific ones.
+  excludeTools: ["lsp", "ast_grep", "ast_edit", "emacs_code", "notebook"],
+
+  customTools: [scraperTool, typstCompileTool, marketDataTool],
+
+  slashCommands: [
+    {
+      name: "strategy",
+      description: "Market analysis and strategy formulation",
+      promptTemplatePath: "prompts/strategy.md",
+      toolRestrictions: {
+        allow: ["read", "grep", "find", "fetch", "web_search", "org", "task", "canvas"],
+      },
+    },
+    {
+      name: "campaign",
+      description: "Campaign planning with competitive scan and timeline",
+      promptTemplatePath: "prompts/campaign.md",
+      toolRestrictions: {
+        allow: ["read", "grep", "find", "fetch", "web_search", "org", "task", "canvas", "scraper"],
+      },
+      gates: [
+        {
+          id: "competitive-scan",
+          description: "Validate competitive landscape was analyzed",
+          evaluator: "analyst",
+          promptTemplatePath: "prompts/gates/competitive-scan.md",
+        },
+      ],
+    },
+    {
+      name: "creative",
+      description: "Creative asset planning and ad copy generation",
+      promptTemplatePath: "prompts/creative.md",
+      gates: [
+        {
+          id: "brand-compliance",
+          description: "Verify brand guidelines adherence",
+          evaluator: "brand-reviewer",
+          promptTemplatePath: "prompts/gates/brand-compliance.md",
+        },
+      ],
+    },
+    {
+      name: "review",
+      description: "Performance review — data pull, trend analysis, optimization recs",
+      promptTemplatePath: "prompts/review.md",
+      toolRestrictions: {
+        allow: ["read", "grep", "find", "fetch", "web_search", "canvas", "scraper", "market-data"],
+      },
+    },
+  ],
+
+  panels: [
+    {
+      id: "competitive-intel",
+      title: "Competitive Intel",
+      qmlPath: "panels/CompetitiveIntel.qml",
+      icon: "search",
+      armedTools: ["scraper", "fetch", "web_search"],
+    },
+    {
+      id: "report-builder",
+      title: "Reports",
+      qmlPath: "panels/ReportBuilder.qml",
+      icon: "description",
+      armedTools: ["read", "write", "typst-compile"],
+    },
+    {
+      id: "campaign-board",
+      title: "Campaigns",
+      qmlPath: "panels/CampaignBoard.qml",
+      icon: "campaign",
+      armedTools: ["read", "write", "org"],
+    },
+    {
+      id: "client-portfolio",
+      title: "Clients",
+      qmlPath: "panels/ClientPortfolio.qml",
+      icon: "people",
+      armedTools: ["read", "find", "grep"],
+    },
+    {
+      id: "typst-preview",
+      title: "Preview",
+      qmlPath: "panels/TypstPreview.qml",
+      icon: "preview",
+      armedTools: ["read", "typst-compile"],
+    },
+  ],
+
+  alwaysCanvas: true,
+
+  loopDomains: [
+    createCompetitiveDomain(),
+    createDeliverableDomain(),
+    createDataIntegrityDomain(),
+  ],
+
+  artifactTypes: [
+    {
+      type: "brief",
+      label: "Strategy Brief",
+      extension: "md",
+      mimeType: "text/markdown",
+      livePreview: false,
+      templatePath: "templates/brief.md",
+    },
+    {
+      type: "report",
+      label: "Branded Report",
+      extension: "typ",
+      mimeType: "application/x-typst",
+      livePreview: true,
+      templatePath: "templates/client-report.typ",
+    },
+    {
+      type: "deck",
+      label: "Presentation Deck",
+      extension: "typ",
+      mimeType: "application/x-typst",
+      livePreview: true,
+      templatePath: "templates/deck.typ",
+    },
+    {
+      type: "dashboard",
+      label: "Dashboard View",
+      extension: "qml",
+      mimeType: "application/x-qml",
+      livePreview: true,
+    },
+  ],
+};
+
+export default growthDomain;
+#+end_src
+
+* Spell Core Changes Required
+
+** 1. Add Domain to Session Options
+
+#+begin_src typescript
+// packages/coding-agent/src/sdk.ts — additions to CreateAgentSessionOptions
+
+export interface CreateAgentSessionOptions {
+  // ... existing fields ...
+
+  /**
+   * Domain configuration. If omitted, detected from project context.
+   * Explicit domain overrides detection entirely.
+   */
+  domain?: SpellDomain;
+}
+#+end_src
+
+** 2. Domain Detection in main.ts
+
+Detection runs in =parseCliAndBuildOptions()= before session creation. The domain
+is resolved, loaded, and passed into =CreateAgentSessionOptions=.
+
+#+begin_src typescript
+// packages/coding-agent/src/main.ts — in parseCliAndBuildOptions()
+
+import { detectDomain } from "./domain/detect";
+import { loadDomain } from "./domain/loader";
+
+async function parseCliAndBuildOptions(
+  // ... existing params ...
+): Promise<{ options: CreateAgentSessionOptions }> {
+  // ... existing CLI parsing ...
+
+  // Domain detection — runs before session creation
+  const detection = await detectDomain(cwd, flags.domain);
+  const domain = await loadDomain(detection.domain);
+
+  if (detection.source === "heuristic") {
+    // Inform user when domain was auto-detected
+    log.info(`Detected ${domain.name} domain (${detection.source}, confidence: ${detection.confidence.toFixed(2)})`);
+  }
+
+  const options: CreateAgentSessionOptions = {
+    // ... existing fields ...
+    domain,
+  };
+
+  return { options };
+}
+#+end_src
+
+** 3. Domain-Scoped System Prompt Assembly
+
+The system prompt pipeline in =createAgentSession()= must respect the domain's
+prompt instead of using the hard-coded coding prompt.
+
+#+begin_src typescript
+// packages/coding-agent/src/sdk.ts — in createAgentSession()
+
+async function assembleSystemPrompt(
+  domain: SpellDomain,
+  domainRoot: string,
+  userOverride?: string | ((defaultPrompt: string) => string),
+): Promise<string> {
+  // Load domain system prompt
+  const domainPromptPath = path.join(domainRoot, domain.systemPromptPath);
+  const domainPrompt = await fs.readFile(domainPromptPath, "utf-8");
+
+  // Load domain context files
+  const contextParts: string[] = [];
+  for (const ctxFile of domain.contextFiles) {
+    const ctxPath = path.join(domainRoot, ctxFile);
+    if (await fileExists(ctxPath)) {
+      contextParts.push(await fs.readFile(ctxPath, "utf-8"));
+    }
+  }
+
+  // Assemble: domain prompt + domain context
+  let prompt = domainPrompt;
+  if (contextParts.length > 0) {
+    prompt += "\n\n" + contextParts.join("\n\n");
+  }
+
+  // Apply user override (same semantics as today)
+  if (typeof userOverride === "string") {
+    prompt = userOverride;
+  } else if (typeof userOverride === "function") {
+    prompt = userOverride(prompt);
+  }
+
+  return prompt;
+}
+#+end_src
+
+** 4. Panel Discovery — Merge Domain + Skill Panels
+
+#+begin_src typescript
+// packages/coding-agent/src/modes/qml-mode.ts — modified panel discovery
+
+function discoverPanels(
+  session: AgentSession,
+  domain: SpellDomain,
+  domainRoot: string,
+): Array<{ id: string; title: string; path: string; icon?: string; armedTools?: string[] }> {
+  // Domain panels (absolute paths)
+  const domainPanels = domain.panels.map((p) => ({
+    id: p.id,
+    title: p.title,
+    path: path.join(domainRoot, p.qmlPath),
+    icon: p.icon,
+    armedTools: p.armedTools,
+  }));
+
+  // Skill-discovered panels (existing behavior)
+  const skillPanels = discoverSkillPanels(session);
+
+  // Merge: domain panels take precedence on id collision
+  const domainIds = new Set(domainPanels.map((p) => p.id));
+  const merged = [
+    ...domainPanels,
+    ...skillPanels.filter((p) => !domainIds.has(p.id)),
+  ];
+
+  return merged;
+}
+#+end_src
+
+** 5. Tool Selection — Filter by Domain
+
+#+begin_src typescript
+// packages/coding-agent/src/sdk.ts — tool filtering
+
+function selectTools(
+  builtinTools: ToolDefinition[],
+  domain: SpellDomain,
+): ToolDefinition[] {
+  let tools: ToolDefinition[];
+
+  if (domain.tools) {
+    // Allowlist: only include named tools
+    const allowed = new Set(domain.tools);
+    tools = builtinTools.filter((t) => allowed.has(t.name));
+  } else if (domain.excludeTools) {
+    // Denylist: exclude named tools
+    const excluded = new Set(domain.excludeTools);
+    tools = builtinTools.filter((t) => !excluded.has(t.name));
+  } else {
+    // No filtering — all builtins (coding domain default)
+    tools = [...builtinTools];
+  }
+
+  // Append domain custom tools
+  if (domain.customTools) {
+    for (const ct of domain.customTools) {
+      tools.push(domainToolToDefinition(ct));
+    }
+  }
+
+  return tools;
+}
+#+end_src
+
+** 6. Slash Command Registration
+
+#+begin_src typescript
+// packages/coding-agent/src/sdk.ts — slash command merging
+
+function registerSlashCommands(
+  domain: SpellDomain,
+  domainRoot: string,
+  fileCommands: FileSlashCommand[], // from discovery (user's .spell/commands/)
+): SlashCommand[] {
+  // Domain commands — these define the mode vocabulary
+  const domainCommands = domain.slashCommands.map((def) =>
+    domainSlashCommandToRuntime(def, domainRoot)
+  );
+
+  // User file commands — always included, never overridden by domain
+  // (user can define custom commands in any domain)
+  const userCommands = fileCommands.map(fileSlashCommandToRuntime);
+
+  // Merge: user commands override domain commands on name collision
+  // (user customization wins)
+  const userNames = new Set(userCommands.map((c) => c.name));
+  return [
+    ...domainCommands.filter((c) => !userNames.has(c.name)),
+    ...userCommands,
+  ];
+}
+#+end_src
+
+* Integration Sequence
+
+How domain configuration flows through session creation:
+
+#+begin_src
+main.ts
+  │
+  ├─ parseCliAndBuildOptions()
+  │   ├─ detectDomain(cwd, flags.domain)     → DomainDetectionResult
+  │   ├─ loadDomain(result.domain)           → SpellDomain
+  │   └─ options.domain = domain
+  │
+  └─ createAgentSession(options)
+      │
+      ├─ assembleSystemPrompt(domain, ...)    → system prompt string
+      │
+      ├─ selectTools(BUILTIN_TOOLS, domain)   → filtered + custom tools
+      │
+      ├─ registerSlashCommands(domain, ...)   → merged slash commands
+      │
+      ├─ if (domain.alwaysCanvas)
+      │   └─ force QML mode
+      │
+      ├─ QML mode init:
+      │   └─ discoverPanels(session, domain)  → merged panels
+      │
+      └─ AgentSession created with domain-scoped config
+#+end_src
+
+* Backward Compatibility
+
+** Invariant: No Existing Behavior Changes
+
+The domain system is purely additive. The following must hold:
+
+1. *No =.spell/domain.json=, no =--domain= flag*: coding domain loads. Behavior identical to pre-domain Spell.
+2. *Existing slash commands*: =/plan=, =/ultraplan=, =/design=, =/audit= continue to work in coding domain with identical semantics.
+3. *Existing tools*: All BUILTIN_TOOLS available in coding domain. No filtering.
+4. *Existing QML mode*: Skill-discovered panels work. Coding domain adds no domain panels.
+5. *Existing loop domains*: code, test, architecture, docs, security, ui domains work in coding loops.
+6. *Extensions*: Extension discovery is domain-agnostic. Extensions work in all domains.
+
+** Migration Strategy
+
+The coding domain is introduced as a codification of current behavior, not a
+behavioral change. The migration is:
+
+1. *Extract*: Move hard-coded system prompt into =domain/coding/prompts/system.md=.
+2. *Define*: Create =domain/coding/index.ts= that matches current behavior exactly.
+3. *Wire*: Add domain parameter to =CreateAgentSessionOptions=, default to coding domain.
+4. *Gate*: Run full test suite — no behavior change allowed.
+5. *Add*: Create =domain/growth/= with growth-specific configuration.
+6. *Detect*: Add detection logic. Coding domain detected everywhere by default.
+
+Each step is independently deployable. Steps 1-4 are a refactor with zero user-visible
+change. Steps 5-6 add growth capability.
+
+* Open Questions
+
+** Domain-Scoped Extensions
+
+Should extensions declare domain compatibility? An extension that provides LSP
+integration is meaningless in the growth domain. Current design: extensions load
+in all domains, domain tool filtering handles irrelevant tools. This is simple but
+wasteful. A future refinement could let extensions declare =domains: ["coding"]= in
+their manifest.
+
+** Domain-Scoped Skills
+
+Skills already have a domain-like quality (QML panels, tools, prompts). The
+relationship between domains and skills needs clarification. Current proposal:
+skills are cross-domain capabilities; domains are vertical identities. A "canvas"
+skill works in both coding and growth. A "competitive-intel" skill only makes sense
+in growth — which suggests it should be a domain panel, not a skill.
+
+Rule of thumb: if it's useful across domains, it's a skill. If it's specific to one
+domain's workflow, it belongs in the domain definition.
+
+** Domain Composition
+
+Can domains compose? e.g., a "DevRel" domain that combines coding tools with growth
+deliverable types. Current design says no — domains are complete vertical slices, not
+mixins. Composition happens at the tool and panel level, not at the domain level. If
+a DevRel workflow needs coding tools + growth reports, it defines its own domain that
+explicitly includes both. This avoids the combinatorial explosion of mixin interactions.
+
+** Hot-Reload
+
+Can you switch domains mid-session? Current design says no. Domain is detected once
+at startup and fixed for the session lifetime. Switching domains would require
+rebuilding the system prompt, tool registry, and QML shell — effectively a new session.
+The cost of supporting hot-reload is high and the use case is rare. If a user needs
+to switch, they start a new session.

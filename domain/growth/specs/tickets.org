@@ -1,0 +1,1526 @@
+#+TITLE: Spell Growth — Implementation Tickets
+#+AUTHOR: ORA Engineering
+#+DATE: 2026-03-31
+#+STARTUP: overview
+#+SEQ_TODO: TODO DOING BLOCKED | DONE CANCELLED
+#+PROPERTY: Effort_ALL 1h 2h 4h 8h 16h 24h 40h
+#+COLUMNS: %40ITEM %8TODO %8PRIORITY %8Effort %12TAGS
+
+* Phase 0: Foundation (Spell Core Changes)
+:PROPERTIES:
+:DESCRIPTION: Core infrastructure changes to make Spell domain-aware. These are surgical changes to the coding-agent package that enable any domain (growth, sales, ops) to plug in without forking.
+:END:
+
+** TODO [#A] TICKET-001: Domain detection and loading system
+:PROPERTIES:
+:CUSTOM_ID: TICKET-001
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:
+:END:
+
+*** Description
+Implement automatic domain detection when Spell launches. The system reads =.spell/domain.json= from the project root (or nearest ancestor) to determine which domain to activate. If absent, defaults to =coding=.
+
+=domain.json= schema:
+#+begin_src json
+{
+  "domain": "growth",
+  "config": {
+    "defaultMode": "dashboard",
+    "clients": ["acme-corp"],
+    "adPlatforms": ["facebook"]
+  }
+}
+#+end_src
+
+The loader resolves the domain directory (=domain/<name>/=), validates it, and exposes a =DomainManifest= to the rest of the system containing: system prompt path, tool whitelist, panel glob, slash command registry, and any domain-specific config.
+
+*** Acceptance Criteria
+- [ ] =.spell/domain.json= detected at startup via upward directory walk
+- [ ] =DomainManifest= interface defined in =packages/coding-agent/src/domain/types.ts=
+- [ ] =loadDomain(projectRoot: string): DomainManifest= implemented
+- [ ] Falls back to =coding= domain when no =domain.json= exists
+- [ ] Invalid =domain.json= produces a clear error with schema hint
+- [ ] Domain config accessible via =session.domain= throughout the agent lifecycle
+
+*** Files
+- Create: =packages/coding-agent/src/domain/types.ts=
+- Create: =packages/coding-agent/src/domain/loader.ts=
+- Create: =packages/coding-agent/src/domain/index.ts=
+- Modify: =packages/coding-agent/src/session.ts= (add domain field)
+- Modify: =packages/coding-agent/src/startup.ts= (call loadDomain during init)
+
+** TODO [#A] TICKET-002: Domain-scoped system prompts
+:PROPERTIES:
+:CUSTOM_ID: TICKET-002
+:Effort:   4h
+:COMPLEXITY: S
+:DEPENDS:  TICKET-001
+:END:
+
+*** Description
+Each domain provides its own system prompt that replaces the coding-specific prompt. The domain manifest declares a =systemPrompt= path (relative to domain dir) that the prompt builder reads and injects instead of the default coding prompt.
+
+The growth system prompt lives at =domain/growth/prompt.md= and defines the growth-specific persona, tools, constraints, and output conventions. The prompt builder merges: base agent instructions (tool docs, safety) + domain prompt + session context.
+
+*** Acceptance Criteria
+- [ ] =DomainManifest.systemPrompt= field points to domain prompt file
+- [ ] Prompt builder reads domain prompt and splices it into the system message
+- [ ] Coding-specific language (file editing, code review) absent when growth domain active
+- [ ] Base tool documentation and safety rules still present regardless of domain
+- [ ] Growth prompt includes: persona, deliverable types, canvas conventions, brand voice
+
+*** Files
+- Create: =domain/growth/prompt.md=
+- Modify: =packages/coding-agent/src/prompt/builder.ts= (domain-aware prompt assembly)
+- Modify: =packages/coding-agent/src/domain/types.ts= (systemPrompt field)
+
+** TODO [#A] TICKET-003: Domain-scoped tool selection
+:PROPERTIES:
+:CUSTOM_ID: TICKET-003
+:Effort:   4h
+:COMPLEXITY: S
+:DEPENDS:  TICKET-001
+:END:
+
+*** Description
+Domains declare which tools are available. Growth doesn't need =ast_grep= or =ast_edit= but needs =scraper=, =typst=, =ad_library=. The domain manifest contains a =tools= block with =include= (whitelist) and =exclude= (blacklist from defaults) arrays, plus domain-specific tool definitions.
+
+Tool registration happens after domain load. Domain-specific tools are loaded from =domain/<name>/tools/=.
+
+*** Acceptance Criteria
+- [ ] =DomainManifest.tools= has =include=, =exclude=, and =custom= fields
+- [ ] Tool registry filters based on domain config before building tool list for Claude
+- [ ] Growth domain excludes: =ast_grep=, =ast_edit=, =emacs_code=, =lsp=
+- [ ] Growth domain includes all default tools not excluded
+- [ ] Domain custom tools loaded from =domain/<name>/tools/*.ts=
+- [ ] Tool list sent to Claude reflects domain filtering
+
+*** Files
+- Modify: =packages/coding-agent/src/domain/types.ts= (tools field)
+- Modify: =packages/coding-agent/src/tools/registry.ts= (domain-aware filtering)
+- Create: =domain/growth/tools/= (directory for growth-specific tools)
+
+** TODO [#B] TICKET-004: Panel discovery for domain QML panels
+:PROPERTIES:
+:CUSTOM_ID: TICKET-004
+:Effort:   4h
+:COMPLEXITY: S
+:DEPENDS:  TICKET-001
+:END:
+
+*** Description
+Extend =discoverSkillPanels()= (in QML mode) to also discover panels from =domain/<name>/panels/=. Domain panels appear in the sidebar alongside skill panels. Panel metadata (title, icon, order) comes from a =panel.json= in each panel directory.
+
+Panel discovery order: domain panels first (they define the primary UX), then skill panels. Domain panels can override skill panels by matching the same =panelId=.
+
+*** Acceptance Criteria
+- [ ] =discoverSkillPanels()= extended to =discoverPanels()= checking domain dir
+- [ ] Domain panels loaded from =domain/<name>/panels/<panelId>/=
+- [ ] Each panel dir contains =panel.json= (metadata) + =Main.qml= (entry point)
+- [ ] Domain panels ordered before skill panels in sidebar
+- [ ] Panel override: domain panel with same =panelId= replaces skill panel
+- [ ] Panel metadata schema: ={ id, title, icon, order, requiresCanvas: bool }=
+
+*** Files
+- Modify: =packages/coding-agent/src/modes/qml-mode.ts= (panel discovery)
+- Create: =packages/coding-agent/src/domain/panels.ts= (domain panel loader)
+- Modify: =packages/coding-agent/src/domain/types.ts= (panels field)
+
+** TODO [#B] TICKET-005: Domain-scoped slash commands
+:PROPERTIES:
+:CUSTOM_ID: TICKET-005
+:Effort:   4h
+:COMPLEXITY: S
+:DEPENDS:  TICKET-001
+:END:
+
+*** Description
+Domains register their own slash commands that replace or augment the base set. Growth registers =/strategy=, =/campaign=, =/creative=, =/review= which replace =/plan=, =/ultraplan=, =/design=, =/audit=. Commands are defined in =domain/<name>/commands/= as TS modules exporting a =CommandDefinition=.
+
+The command registry loads domain commands after base commands. Domain commands with the same name override base commands. Domain commands can also declare =replaces= to hide a base command and take its slot.
+
+*** Acceptance Criteria
+- [ ] =DomainManifest.commands= lists command module paths
+- [ ] Command registry loads domain commands, handles overrides
+- [ ] Growth domain registers: =/strategy=, =/campaign=, =/creative=, =/review=
+- [ ] Growth domain hides: =/plan=, =/ultraplan=, =/design=, =/audit= via =replaces=
+- [ ] Base commands not replaced remain available (=/help=, etc.)
+- [ ] Tab completion in TUI and canvas chat includes domain commands
+
+*** Files
+- Create: =domain/growth/commands/strategy.ts=
+- Create: =domain/growth/commands/campaign.ts=
+- Create: =domain/growth/commands/creative.ts=
+- Create: =domain/growth/commands/review.ts=
+- Modify: =packages/coding-agent/src/commands/registry.ts= (domain-aware loading)
+- Modify: =packages/coding-agent/src/domain/types.ts= (commands field)
+
+* Phase 1: Growth Shell MVP
+:PROPERTIES:
+:DESCRIPTION: The always-canvas QML shell for growth workflows. TUI becomes a thin launcher; all interaction happens in the canvas window. Reuses Material Design 3 shell from QML mode but with growth-specific sidebar, panels, and personality.
+:END:
+
+** TODO [#A] TICKET-010: Growth QML shell (sidebar + panel system)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-010
+:Effort:   16h
+:COMPLEXITY: L
+:DEPENDS:  TICKET-001 TICKET-004
+:END:
+
+*** Description
+The primary QML shell for growth mode. Always-canvas: the QML window launches immediately and is the primary interaction surface. TUI shows a minimal status line only.
+
+Shell structure:
+- *Sidebar* (240px, collapsible): Logo, client selector, navigation items (Dashboard, Competitive Intel, Reports, Campaigns, Portfolio). Active panel highlighted. Collapse to icons on narrow viewports.
+- *Main area*: Active panel fills remaining space. Panel transitions animated (fade/slide).
+- *Status bar*: Agent status (thinking/idle/error), active deliverable name, scraper status.
+
+Uses the existing Material Design 3 theme system. Growth palette: ORA navy =#192D4F= as primary, coral =#E75E4A= as accent, cream =#FBEACE= for surfaces.
+
+*** Acceptance Criteria
+- [ ] QML shell launches as always-canvas when growth domain detected
+- [ ] Sidebar with navigation items, client selector, collapse behavior
+- [ ] Panel switching with animated transitions
+- [ ] Status bar showing agent state
+- [ ] ORA brand colors applied via Material theme
+- [ ] Shell loads panels from domain panel discovery (TICKET-004)
+- [ ] Responsive: sidebar collapses to icons below 1200px width
+
+*** Files
+- Create: =domain/growth/panels/shell/Main.qml=
+- Create: =domain/growth/panels/shell/Sidebar.qml=
+- Create: =domain/growth/panels/shell/StatusBar.qml=
+- Create: =domain/growth/panels/shell/PanelStack.qml=
+- Create: =domain/growth/panels/shell/panel.json=
+- Create: =domain/growth/theme/GrowthTheme.qml=
+
+** TODO [#A] TICKET-011: Growth ChatPanel (reuse coding's with growth personality)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-011
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-010 TICKET-002
+:END:
+
+*** Description
+Chat panel for growth mode. Reuses the core chat infrastructure (message rendering, input, streaming) from the coding agent's ChatPanel but applies growth-specific:
+- Persona: Growth strategist voice, not developer
+- Quick actions: "Analyze competitor", "Generate report", "Review campaign", "Morning briefing"
+- Input hints: Growth-relevant suggestions and slash command previews
+- Message rendering: Deliverable cards inline (brief preview, report thumbnail, dashboard embed)
+
+The chat panel is always accessible as a slide-over or secondary tab, not a primary panel.
+
+*** Acceptance Criteria
+- [ ] Chat panel renders agent messages with growth-appropriate formatting
+- [ ] Quick action buttons above input for common growth tasks
+- [ ] Slash command autocomplete shows growth commands
+- [ ] Deliverable cards render inline when agent produces a brief/report/dashboard
+- [ ] Chat input sends to growth-domain agent with growth system prompt
+- [ ] Message history persisted per session
+
+*** Files
+- Create: =domain/growth/panels/chat/Main.qml=
+- Create: =domain/growth/panels/chat/QuickActions.qml=
+- Create: =domain/growth/panels/chat/DeliverableCard.qml=
+- Create: =domain/growth/panels/chat/panel.json=
+
+** TODO [#A] TICKET-012: Growth DashboardPanel (morning overview)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-012
+:Effort:   16h
+:COMPLEXITY: L
+:DEPENDS:  TICKET-010
+:END:
+
+*** Description
+The default landing panel. Shows a morning-briefing-style dashboard:
+
+- *Header*: Date, greeting, client name
+- *Active deliverables*: Cards showing in-progress briefs, reports, campaigns with status and next action
+- *Recent competitive activity*: Latest competitor ad changes (requires TICKET-022 data, shows placeholder until then)
+- *Quick start*: Large action cards — "Start Morning Brief", "New Report", "Competitive Scan", "Review Performance"
+- *Upcoming deadlines*: Timeline of deliverable due dates
+
+Data sources: local SQLite for metrics/ads (when available), filesystem for deliverables, session state for active work.
+
+*** Acceptance Criteria
+- [ ] Dashboard loads as default panel on shell open
+- [ ] Greeting with date and client context
+- [ ] Active deliverables section with status cards
+- [ ] Quick start cards that trigger appropriate agent commands
+- [ ] Competitive activity section (placeholder until Phase 2)
+- [ ] Deadline timeline (reads from =.spell/deliverables.json=)
+- [ ] Responsive grid layout (2-col on narrow, 3-col on wide)
+
+*** Files
+- Create: =domain/growth/panels/dashboard/Main.qml=
+- Create: =domain/growth/panels/dashboard/DeliverableCard.qml=
+- Create: =domain/growth/panels/dashboard/QuickStartCard.qml=
+- Create: =domain/growth/panels/dashboard/CompetitiveActivity.qml=
+- Create: =domain/growth/panels/dashboard/DeadlineTimeline.qml=
+- Create: =domain/growth/panels/dashboard/panel.json=
+
+** TODO [#B] TICKET-013: Growth system prompt and personality
+:PROPERTIES:
+:CUSTOM_ID: TICKET-013
+:Effort:   4h
+:COMPLEXITY: S
+:DEPENDS:  TICKET-002
+:END:
+
+*** Description
+The growth-specific system prompt and persona definition. This replaces the coding engineer persona with a growth/marketing strategist.
+
+Persona traits:
+- Strategic thinker, data-driven, brand-aware
+- Speaks in marketing terminology (CAC, LTV, ROAS, funnel stages)
+- Outputs structured deliverables, not code
+- Understands competitive positioning, audience segmentation, creative strategy
+- Default output format is Typst for reports, org-mode for briefs
+
+The prompt references growth-specific tools, deliverable types, and canvas conventions. It instructs the agent to use ORA brand templates for all client-facing output.
+
+*** Acceptance Criteria
+- [ ] System prompt at =domain/growth/prompt.md= fully written
+- [ ] Persona covers: voice, terminology, output conventions
+- [ ] Deliverable types documented: brief, report, dashboard, deck
+- [ ] Tool usage instructions: scraper, typst, canvas panels
+- [ ] Brand guidelines referenced: ORA colors, typography, templates
+- [ ] Prompt tested: agent responds in growth voice when domain active
+
+*** Files
+- Create: =domain/growth/prompt.md=
+
+* Phase 2: Competitive Intelligence
+:PROPERTIES:
+:DESCRIPTION: Native TypeScript scraper engine and Facebook Ads Library integration. Replaces the Python-based approach with a TS framework that uses the same YAML DSL as the leadgen project but runs natively in the Spell process.
+:END:
+
+** TODO [#A] TICKET-020: Native TS scraper engine (config loader, extractor, transformer)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-020
+:Effort:   24h
+:COMPLEXITY: XL
+:DEPENDS:  TICKET-001
+:END:
+
+*** Description
+A TypeScript scraper framework inspired by =~/code/ora/leadgen/configs/= YAML DSL. The engine is platform-agnostic and driven entirely by declarative config files.
+
+Architecture:
+- *Config Loader*: Parses YAML scraper configs. Schema matches leadgen format: browser settings, container selectors, field extraction (selector + type + transform), pagination (infinite_scroll, cursor, page_number), error handling (retries, rate limits, error indicators).
+- *Extractor*: Given a loaded config and a page (Puppeteer Page), extracts structured data per the config's field definitions. Handles: text, attribute, innerHTML, computed fields, transforms (regex, trim, date parsing).
+- *Transformer*: Post-extraction pipeline. Deduplication, normalization, enrichment (e.g., resolve shortened URLs). Outputs typed records.
+- *Scheduler*: Rate-limited execution queue. Respects per-domain rate limits. Exponential backoff on errors.
+- *Browser Pool*: Manages Puppeteer browser instances. Reuses sessions, rotates user agents, handles anti-bot detection.
+
+All scraper configs live in =domain/growth/scrapers/configs/=.
+
+*** Acceptance Criteria
+- [ ] YAML config schema defined and documented
+- [ ] Config loader validates and parses YAML into typed =ScraperConfig=
+- [ ] Extractor handles all field types: text, attribute, innerHTML, nested, list
+- [ ] Transform pipeline supports: regex, trim, date, number, url_resolve
+- [ ] Pagination strategies: infinite_scroll, cursor, page_number, none
+- [ ] Rate limiter with per-domain config and exponential backoff
+- [ ] Browser pool manages instances with cleanup on shutdown
+- [ ] Error handling: retries, error indicators from config, structured error reporting
+- [ ] Scraper run produces typed =ScrapedRecord[]= output
+
+*** Files
+- Create: =domain/growth/scrapers/engine/types.ts=
+- Create: =domain/growth/scrapers/engine/config-loader.ts=
+- Create: =domain/growth/scrapers/engine/extractor.ts=
+- Create: =domain/growth/scrapers/engine/transformer.ts=
+- Create: =domain/growth/scrapers/engine/scheduler.ts=
+- Create: =domain/growth/scrapers/engine/browser-pool.ts=
+- Create: =domain/growth/scrapers/engine/index.ts=
+
+** TODO [#A] TICKET-021: Facebook Ads Library scraper config (port from leadgen YAML)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-021
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-020
+:END:
+
+*** Description
+Port the Facebook Ads Library scraper from =~/code/ora/leadgen/configs/= to the new TS engine format. The FB Ad Library is the primary competitive intelligence source.
+
+The config defines:
+- *Entry point*: =https://www.facebook.com/ads/library/= with search params (advertiser, keyword, country, category)
+- *Container*: Ad card elements in the results grid
+- *Fields*: Ad ID, advertiser name, ad body text, media URLs (image/video), CTA text, start date, platform (FB/IG/Messenger), status (active/inactive), estimated spend range
+- *Pagination*: Infinite scroll with "See More" trigger
+- *Detail dialog*: Click-through to ad detail for full creative assets, versions, and demographic targeting
+- *Error handling*: Rate limit detection (429 + FB-specific "try again later"), CAPTCHA detection, empty results
+
+Also includes a config for searching by advertiser page URL and by keyword/topic.
+
+*** Acceptance Criteria
+- [ ] YAML config at =domain/growth/scrapers/configs/facebook-ads-library.yaml=
+- [ ] Config extracts all standard ad card fields
+- [ ] Pagination via infinite scroll works with FB's dynamic loading
+- [ ] Detail dialog extraction for full creative data
+- [ ] Rate limit handling specific to FB (rate limit banners, CAPTCHA)
+- [ ] Search modes: by advertiser, by keyword, by page URL
+- [ ] Extracted records match =AdSnapshot= schema (TICKET-022)
+
+*** Files
+- Create: =domain/growth/scrapers/configs/facebook-ads-library.yaml=
+- Create: =domain/growth/scrapers/configs/facebook-ads-library.detail.yaml=
+
+** TODO [#A] TICKET-022: SQLite persistence for ad snapshots
+:PROPERTIES:
+:CUSTOM_ID: TICKET-022
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-020
+:END:
+
+*** Description
+SQLite database for storing scraped ad data. Lives at =.spell/growth.db= in the project root. Schema designed for time-series competitive analysis: each scrape creates a snapshot, so we can track when ads appear, change, and disappear.
+
+Tables:
+- =advertisers=: id, name, page_url, platform, first_seen, last_seen
+- =ad_snapshots=: id, advertiser_id, ad_platform_id, body_text, media_urls (JSON), cta_text, status, spend_range_low, spend_range_high, platforms (JSON), scraped_at, config_hash
+- =ad_media=: id, snapshot_id, type (image/video), url, local_path (cached), width, height
+- =scrape_runs=: id, config_name, started_at, finished_at, records_found, errors (JSON), status
+- =tags=: id, snapshot_id, tag (user-applied labels for categorization)
+
+Indexes on: advertiser_id + scraped_at, status, ad_platform_id.
+
+Uses =better-sqlite3= (already a dependency pattern in the Spell codebase) for synchronous access. Migration system: numbered SQL files in =domain/growth/migrations/=.
+
+*** Acceptance Criteria
+- [ ] Database created at =.spell/growth.db= on first growth domain load
+- [ ] All tables created via migration system
+- [ ] =AdSnapshotStore= class with: insert, findByAdvertiser, findByDateRange, findActive, search
+- [ ] Deduplication: same ad_platform_id + same body_text + same media = update not insert
+- [ ] Scrape run tracking with error logging
+- [ ] Tag system for user categorization
+- [ ] Indexes on common query patterns
+- [ ] Migration runner applies pending migrations idempotently
+
+*** Files
+- Create: =domain/growth/db/store.ts=
+- Create: =domain/growth/db/migrations/001-initial.sql=
+- Create: =domain/growth/db/migrator.ts=
+- Create: =domain/growth/db/types.ts=
+
+** TODO [#A] TICKET-023: Competitive Intel QML panel (ad gallery, filters, cards)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-023
+:Effort:   24h
+:COMPLEXITY: XL
+:DEPENDS:  TICKET-010 TICKET-022
+:END:
+
+*** Description
+The primary competitive intelligence panel. Displays scraped ads in a filterable gallery view.
+
+Layout:
+- *Filter bar* (top): Advertiser dropdown, date range picker, status toggle (active/all), platform filter (FB/IG/all), keyword search, sort (newest/oldest/spend)
+- *Gallery grid*: Ad cards in a responsive grid (2-4 columns based on width). Each card shows: advertiser avatar, ad body (truncated), primary media thumbnail, platform badges, date, status indicator, spend range
+- *Summary strip*: Total ads, active count, new this week, top advertisers
+- *Bulk actions*: Select multiple → tag, export, compare
+
+Cards use ORA brand styling. Active ads have coral left border. Hover shows full body text. Click opens detail drawer (TICKET-024).
+
+Data comes from =AdSnapshotStore= (TICKET-022) via bridge messages. The panel sends query messages to the agent, which reads from SQLite and responds with paginated results.
+
+*** Acceptance Criteria
+- [ ] Gallery grid renders ad cards with thumbnails, text, metadata
+- [ ] Filter bar with all filter types, applied reactively
+- [ ] Pagination: virtual scrolling for large result sets (1000+ ads)
+- [ ] Card hover preview for full ad text
+- [ ] Card click opens detail drawer
+- [ ] Summary strip updates with filter changes
+- [ ] Bulk selection and tagging
+- [ ] Empty state with "Run a competitive scan" CTA
+- [ ] Loading skeleton while data fetches
+
+*** Files
+- Create: =domain/growth/panels/competitive/Main.qml=
+- Create: =domain/growth/panels/competitive/FilterBar.qml=
+- Create: =domain/growth/panels/competitive/AdCard.qml=
+- Create: =domain/growth/panels/competitive/AdGallery.qml=
+- Create: =domain/growth/panels/competitive/SummaryStrip.qml=
+- Create: =domain/growth/panels/competitive/panel.json=
+
+** TODO [#B] TICKET-024: Ad detail side drawer
+:PROPERTIES:
+:CUSTOM_ID: TICKET-024
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-023
+:END:
+
+*** Description
+Slide-in drawer (from right, 480px) showing full ad details when a card is clicked in the gallery.
+
+Content:
+- *Header*: Advertiser name + logo, platform, status badge
+- *Media carousel*: Full-size images/videos, swipeable
+- *Ad copy*: Full body text with copy-to-clipboard
+- *Metadata*: Start date, spend range, platforms, CTA
+- *History timeline*: All snapshots of this ad over time (shows copy/media changes)
+- *Tags*: Editable tag chips
+- *Actions*: "Analyze this ad" (sends to agent), "Add to report", "Compare with..."
+- *Similar ads*: Cards for same advertiser's other active ads
+
+*** Acceptance Criteria
+- [ ] Drawer slides in from right with animation (300ms ease-out)
+- [ ] Media carousel with swipe/arrow navigation
+- [ ] Full ad copy with clipboard action
+- [ ] History timeline showing snapshot diffs
+- [ ] Tags editable inline
+- [ ] "Analyze" action sends ad data to agent for AI analysis
+- [ ] "Add to report" queues ad for next Typst report
+- [ ] Drawer closes on outside click or Escape
+
+*** Files
+- Create: =domain/growth/panels/competitive/AdDetailDrawer.qml=
+- Create: =domain/growth/panels/competitive/MediaCarousel.qml=
+- Create: =domain/growth/panels/competitive/SnapshotTimeline.qml=
+
+** TODO [#C] TICKET-025: Scraper progress UI in panel
+:PROPERTIES:
+:CUSTOM_ID: TICKET-025
+:Effort:   4h
+:COMPLEXITY: S
+:DEPENDS:  TICKET-023 TICKET-020
+:END:
+
+*** Description
+When a scrape is running, the Competitive Intel panel shows progress inline. A collapsible progress bar appears below the filter bar showing: current page, records found, elapsed time, rate limit status. Errors appear as dismissible toasts.
+
+The scraper engine emits progress events via bridge messages. The panel subscribes and updates reactively.
+
+*** Acceptance Criteria
+- [ ] Progress bar appears when scrape is active
+- [ ] Shows: page count, records found, elapsed time, ETA
+- [ ] Rate limit pauses shown with countdown
+- [ ] Errors as toast notifications (dismissible)
+- [ ] Progress bar collapsible to minimal state
+- [ ] Auto-hides 5s after scrape completes with summary
+
+*** Files
+- Create: =domain/growth/panels/competitive/ScrapeProgress.qml=
+- Modify: =domain/growth/panels/competitive/Main.qml= (integrate progress)
+
+* Phase 3: Typst Integration
+:PROPERTIES:
+:DESCRIPTION: Live Typst editing with tree-sitter syntax highlighting, WASM-powered preview, and ORA brand templates. The report editor is the primary deliverable creation tool.
+:END:
+
+** TODO [#A] TICKET-030: tree-sitter-typst + Qt-TreeSitterHighlighter integration
+:PROPERTIES:
+:CUSTOM_ID: TICKET-030
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:
+:END:
+
+*** Description
+Integrate =tree-sitter-typst= with the =Qt-TreeSitterHighlighter= system for syntax highlighting in QML TextEdit components.
+
+Steps:
+1. Add =tree-sitter-typst= WASM grammar to the project (from =tree-sitter/tree-sitter-typst=)
+2. Configure =Qt-TreeSitterHighlighter= to load the Typst grammar
+3. Define highlight queries mapping Typst AST nodes to TextCharFormat styles:
+   - Headings: bold, scaled font size
+   - Emphasis/strong: italic/bold
+   - Code: monospace, subtle background
+   - Math: distinct color (ORA coral)
+   - Functions: ORA navy
+   - Comments: muted gray
+   - Strings: green
+   - Labels/references: purple
+4. Expose as a reusable =TypstHighlighter= QML component that wraps TextEdit
+
+*** Acceptance Criteria
+- [ ] =tree-sitter-typst.wasm= bundled in =domain/growth/assets/=
+- [ ] Highlight queries at =domain/growth/assets/typst-highlights.scm=
+- [ ] =TypstHighlighter= QML component highlights Typst syntax in real-time
+- [ ] All major Typst constructs highlighted (headings, emphasis, code, math, functions)
+- [ ] Colors match ORA brand palette
+- [ ] Performance: highlighting lag <16ms for 1000-line documents
+
+*** Files
+- Create: =domain/growth/assets/tree-sitter-typst.wasm=
+- Create: =domain/growth/assets/typst-highlights.scm=
+- Create: =domain/growth/qml/TypstHighlighter.qml=
+- Create: =domain/growth/qml/HighlightTheme.qml=
+
+** TODO [#A] TICKET-031: Typst editor QML component (TextEdit + highlighting)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-031
+:Effort:   16h
+:COMPLEXITY: L
+:DEPENDS:  TICKET-030
+:END:
+
+*** Description
+A full-featured Typst editor QML component. Not a toy — this is the primary authoring surface.
+
+Features:
+- *Syntax highlighting* via TICKET-030's TypstHighlighter
+- *Line numbers*: Gutter with line numbers, current line highlighted
+- *Auto-indent*: Context-aware (inside functions, headings, lists)
+- *Bracket matching*: Highlight matching =()=, =[]= , ={}=
+- *Basic completions*: Template variables (=${client_name}=), ORA component names (=#stat-cell=, =#pillar-card=), common Typst functions
+- *Minimap*: Optional vertical minimap for long documents
+- *Find/replace*: Ctrl+F with regex support
+- *Undo/redo*: Full undo stack
+- *Font*: Aspekta or fallback monospace at 13px
+
+Editor content is bound two-way: changes propagate to the preview (TICKET-032) and vice versa (click-to-code from TICKET-033).
+
+*** Acceptance Criteria
+- [ ] TextEdit with syntax highlighting, line numbers, current line highlight
+- [ ] Auto-indent for Typst constructs
+- [ ] Bracket matching with highlight
+- [ ] Basic completion popup for template vars and Typst functions
+- [ ] Find/replace with regex
+- [ ] Full undo/redo
+- [ ] Two-way binding: text changes emit signal with debounced content
+- [ ] Performance: smooth editing for 5000+ line documents
+
+*** Files
+- Create: =domain/growth/qml/TypstEditor.qml=
+- Create: =domain/growth/qml/LineNumberGutter.qml=
+- Create: =domain/growth/qml/CompletionPopup.qml=
+- Create: =domain/growth/qml/FindReplaceBar.qml=
+
+** TODO [#A] TICKET-032: typst-ts WASM preview in WebEngineView
+:PROPERTIES:
+:CUSTOM_ID: TICKET-032
+:Effort:   16h
+:COMPLEXITY: L
+:DEPENDS:
+:END:
+
+*** Description
+Live PDF preview using =typst-ts= (Typst's official TypeScript/WASM bindings) running inside a QML =WebEngineView=.
+
+Architecture:
+1. A minimal HTML page loads =typst-ts= WASM module
+2. QML sends Typst source to the WebEngineView via =runJavaScript()=
+3. =typst-ts= compiles to a vector representation and renders to an SVG/Canvas
+4. The preview page displays rendered pages with scroll, zoom, page navigation
+5. Compilation errors shown inline as red overlays with line numbers
+
+The preview updates on every keystroke (debounced 150ms). Incremental compilation via =typst-ts= keeps re-renders fast (<100ms for typical documents).
+
+Virtual filesystem: ORA brand package (=ora-brand/lib.typ=, fonts, logos) mounted as a virtual package in the WASM environment so =#import "@ora/brand:1.0.0"= works in preview.
+
+*** Acceptance Criteria
+- [ ] HTML harness page loads =typst-ts= WASM module
+- [ ] QML sends source, receives rendered output
+- [ ] Preview updates within 200ms of source change
+- [ ] Multi-page documents with page navigation
+- [ ] Zoom controls (fit-width, fit-page, 50%-200%)
+- [ ] Compilation errors shown inline with line number
+- [ ] ORA brand package available via virtual filesystem
+- [ ] Scroll position preserved across re-renders
+
+*** Files
+- Create: =domain/growth/assets/typst-preview.html=
+- Create: =domain/growth/assets/typst-preview.js=
+- Create: =domain/growth/qml/TypstPreview.qml=
+- Create: =domain/growth/assets/typst-vfs/= (virtual filesystem with ORA brand)
+
+** TODO [#B] TICKET-033: Click-to-code source mapping
+:PROPERTIES:
+:CUSTOM_ID: TICKET-033
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-031 TICKET-032
+:END:
+
+*** Description
+Bidirectional source mapping between the Typst editor and the rendered preview.
+
+Forward (editor → preview): Cursor position in editor highlights the corresponding rendered element in the preview. Uses =typst-ts= source mapping API to get the page + position of the compiled output.
+
+Reverse (preview → editor): Clicking an element in the preview jumps the editor cursor to the corresponding source line. The preview page captures click coordinates, maps to source span via =typst-ts=, and sends back to QML which scrolls the editor.
+
+Visual feedback: Hovered preview elements get a subtle blue outline. Corresponding source lines get a subtle background highlight.
+
+*** Acceptance Criteria
+- [ ] Click in preview → editor scrolls to and highlights source line
+- [ ] Cursor in editor → preview highlights rendered output (subtle)
+- [ ] Source mapping uses =typst-ts= API (not heuristic line matching)
+- [ ] Works for text, headings, images, tables, components
+- [ ] Visual feedback: outline in preview, background in editor
+- [ ] Mapping updates after each re-compile
+
+*** Files
+- Modify: =domain/growth/qml/TypstEditor.qml= (emit cursor position)
+- Modify: =domain/growth/qml/TypstPreview.qml= (click handler + highlight)
+- Modify: =domain/growth/assets/typst-preview.js= (source map integration)
+- Create: =domain/growth/qml/SourceMapper.qml= (coordination logic)
+
+** TODO [#A] TICKET-034: ORA brand templates in virtual filesystem
+:PROPERTIES:
+:CUSTOM_ID: TICKET-034
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-032
+:END:
+
+*** Description
+Package the ORA branding Typst system (from =~/code/ora/ora-branding/typst/ora-brand/=) as a virtual filesystem accessible to the Typst compiler.
+
+Contents to package:
+- =lib.typ=: Main entry with all components
+- Components: =stat-cell=, =pillar-card=, =numbered-card=, =metrics-strip=, =brand-header=, =brand-footer=, =section-divider=, =callout-box=, =kpi-row=, =timeline=, =flow-diagram=, =onion-diagram=, etc.
+- Fonts: Aspekta 300-950 weights
+- Logos: ORA logo variants (full, icon, white, dark)
+- Colors: Navy =#192D4F=, coral =#E75E4A=, cream =#FBEACE=, full palette
+
+Templates for common deliverables:
+- =weekly-digest.typ=: Weekly competitive intel summary
+- =client-report.typ=: Monthly client performance report
+- =campaign-proposal.typ=: Campaign pitch with budget and timeline
+- =competitive-analysis.typ=: Deep competitive landscape report
+- =performance-review.typ=: KPI review with trend analysis
+
+Each template is a parameterized Typst file: the agent fills in template variables (client name, date range, metrics, ad examples) and the compiler produces a branded PDF.
+
+*** Acceptance Criteria
+- [ ] ORA brand package accessible as =#import "@ora/brand:1.0.0"= in Typst
+- [ ] All 14+ components from =ora-branding= available
+- [ ] Aspekta fonts loaded and rendering correctly
+- [ ] 5 deliverable templates created with placeholder content
+- [ ] Templates parameterized: =#let client = "Acme Corp"= style variables
+- [ ] Templates compile to visually correct branded PDFs
+- [ ] Virtual filesystem works in both WASM preview and CLI compilation
+
+*** Files
+- Create: =domain/growth/typst/packages/ora-brand/= (vendored brand package)
+- Create: =domain/growth/typst/templates/weekly-digest.typ=
+- Create: =domain/growth/typst/templates/client-report.typ=
+- Create: =domain/growth/typst/templates/campaign-proposal.typ=
+- Create: =domain/growth/typst/templates/competitive-analysis.typ=
+- Create: =domain/growth/typst/templates/performance-review.typ=
+
+** TODO [#A] TICKET-035: Report Editor QML panel (split-pane editor + preview)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-035
+:Effort:   16h
+:COMPLEXITY: L
+:DEPENDS:  TICKET-031 TICKET-032 TICKET-033
+:END:
+
+*** Description
+The primary report authoring panel. Split-pane layout with the Typst editor on the left and live preview on the right.
+
+Layout:
+- *Toolbar* (top): Template selector, save, export PDF, undo/redo, zoom controls, toggle split direction (horizontal/vertical)
+- *Editor pane* (left/top): TypstEditor component from TICKET-031
+- *Preview pane* (right/bottom): TypstPreview component from TICKET-032
+- *Splitter*: Draggable divider, double-click to reset to 50/50
+- *Status bar* (bottom): Word count, page count, compile status, last saved
+
+The panel manages the document lifecycle: new from template, open existing, save, export. Documents are Typst files stored in the project's =deliverables/= directory.
+
+Agent integration: The agent can write/edit Typst source directly. When the agent produces Typst output, it appears in the editor and the preview updates live. The user can then manually refine.
+
+*** Acceptance Criteria
+- [ ] Split-pane with draggable divider
+- [ ] Editor and preview synchronized (typing updates preview live)
+- [ ] Toolbar with template selector, save, export, view controls
+- [ ] New document from template workflow
+- [ ] Open existing =.typ= files from =deliverables/=
+- [ ] Save to =deliverables/<name>.typ=
+- [ ] Agent-written Typst appears in editor in real-time
+- [ ] Status bar with document metrics
+- [ ] Keyboard shortcuts: Ctrl+S save, Ctrl+Shift+E export
+
+*** Files
+- Create: =domain/growth/panels/reports/Main.qml=
+- Create: =domain/growth/panels/reports/Toolbar.qml=
+- Create: =domain/growth/panels/reports/DocumentManager.qml=
+- Create: =domain/growth/panels/reports/panel.json=
+
+** TODO [#B] TICKET-036: Template selector and metadata
+:PROPERTIES:
+:CUSTOM_ID: TICKET-036
+:Effort:   4h
+:COMPLEXITY: S
+:DEPENDS:  TICKET-034 TICKET-035
+:END:
+
+*** Description
+A template picker dialog for creating new reports. Shows template cards with:
+- Thumbnail preview (pre-rendered first page)
+- Template name and description
+- Expected variables (client, date range, metrics)
+- Estimated page count
+
+Selecting a template creates a new document with variables pre-filled from project context (client name from =domain.json=, current date range, etc.).
+
+*** Acceptance Criteria
+- [ ] Dialog shows template cards in a grid
+- [ ] Each card has thumbnail, name, description
+- [ ] Selecting a template creates new document with pre-filled variables
+- [ ] Variables sourced from: =domain.json= config, current date, project state
+- [ ] Dialog accessible from toolbar "New" button and quick start
+- [ ] Template thumbnails pre-rendered as PNGs
+
+*** Files
+- Create: =domain/growth/qml/TemplatePicker.qml=
+- Create: =domain/growth/qml/TemplateCard.qml=
+- Create: =domain/growth/typst/thumbnails/= (pre-rendered template previews)
+
+** TODO [#B] TICKET-037: PDF export via typst CLI
+:PROPERTIES:
+:CUSTOM_ID: TICKET-037
+:Effort:   4h
+:COMPLEXITY: S
+:DEPENDS:  TICKET-034
+:END:
+
+*** Description
+Export finalized reports to PDF using the =typst= CLI. The WASM preview is for live editing; final export uses the CLI for full-fidelity output.
+
+The export process:
+1. Resolve all template variables
+2. Write final =.typ= source to =deliverables/<name>.typ=
+3. Run =typst compile= with =--font-path= pointing to ORA fonts, =--root= for package resolution
+4. Output PDF to =deliverables/exports/<name>.pdf=
+5. Show success notification with file path and open-in-viewer option
+
+Also supports batch export: compile all =.typ= files in =deliverables/= to PDFs.
+
+*** Acceptance Criteria
+- [ ] Single document export to PDF via =typst compile=
+- [ ] Font paths and package paths configured for ORA brand
+- [ ] Compilation errors shown in panel with line references
+- [ ] Batch export for all documents
+- [ ] Export notification with file path
+- [ ] PDF output matches WASM preview (visual parity)
+
+*** Files
+- Create: =domain/growth/tools/typst-export.ts= (agent tool for export)
+- Modify: =domain/growth/panels/reports/Toolbar.qml= (export button handler)
+
+* Phase 4: Growth Modes
+:PROPERTIES:
+:DESCRIPTION: Domain-specific slash commands that orchestrate multi-step workflows. Each mode is the growth equivalent of a coding plan mode, with domain-appropriate gates, subagents, and deliverable outputs.
+:END:
+
+** TODO [#A] TICKET-040: /strategy mode (research + strategy brief)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-040
+:Effort:   16h
+:COMPLEXITY: L
+:DEPENDS:  TICKET-005 TICKET-013 TICKET-022
+:END:
+
+*** Description
+The =/strategy= command initiates a research-heavy strategy formulation workflow (analogous to =/plan= in coding).
+
+Workflow:
+1. *Input*: User describes strategic question or objective ("How should we position against CompetitorX?", "What's our Q2 growth strategy?")
+2. *Research phase*: Agent automatically:
+   - Runs competitive scan if not recent (TICKET-020/021)
+   - Analyzes competitor positioning from ad data
+   - Web searches for market reports, industry trends
+   - Reviews existing deliverables for context
+3. *Synthesis*: Agent produces a strategy brief (org-mode deliverable):
+   - Executive summary
+   - Market landscape
+   - Competitive positioning map
+   - Strategic options (3-5 with pros/cons)
+   - Recommended approach with rationale
+   - KPIs and success metrics
+   - Timeline and next steps
+4. *Review gate*: Brief presented in canvas for user review before finalization
+
+Uses the plan mode infrastructure (org items, subagent gates) with growth-specific gates:
+- *Athena gate*: Research sufficiency — has enough data been gathered?
+- *Metis gate*: Strategic coherence — does the strategy make logical sense?
+
+*** Acceptance Criteria
+- [ ] =/strategy= command registered and triggers workflow
+- [ ] Research phase: competitive scan + web search + existing deliverable review
+- [ ] Strategy brief produced in org-mode format
+- [ ] Brief contains all required sections
+- [ ] Athena + Metis gates validate research and coherence
+- [ ] Brief displayed in canvas for interactive review
+- [ ] User can approve, request revisions, or discard
+- [ ] Approved brief saved to =deliverables/briefs/=
+
+*** Files
+- Create: =domain/growth/commands/strategy.ts=
+- Create: =domain/growth/modes/strategy-mode.ts=
+- Create: =domain/growth/modes/gates/research-sufficiency.ts=
+- Create: =domain/growth/modes/gates/strategic-coherence.ts=
+
+** TODO [#A] TICKET-041: /campaign mode (competitive scan gate + campaign planning)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-041
+:Effort:   16h
+:COMPLEXITY: L
+:DEPENDS:  TICKET-005 TICKET-013 TICKET-022 TICKET-034
+:END:
+
+*** Description
+The =/campaign= command orchestrates end-to-end campaign planning (analogous to =/ultraplan=). Auto-runs competitive analysis, then builds a comprehensive campaign plan.
+
+Workflow:
+1. *Input*: Campaign brief ("Launch awareness campaign for Product X targeting SMBs")
+2. *Auto-scan gate*: Runs competitive scan for the sector/competitors. Results inform strategy.
+3. *Planning phase*: Agent produces campaign plan:
+   - Campaign objective and KPIs
+   - Target audience segments with personas
+   - Channel strategy (paid social, content, email, etc.)
+   - Budget allocation with ROAS targets
+   - Creative brief (messaging, visual direction, CTA strategy)
+   - Content calendar (4-12 week timeline)
+   - A/B test plan
+   - Measurement framework
+4. *Creative brief sub-deliverable*: Detailed creative direction for each channel
+5. *Budget sub-deliverable*: Spreadsheet-style budget breakdown
+6. *Review*: Full plan in canvas with section-by-section approval
+
+Subagents:
+- *Analyst*: Competitive data synthesis
+- *Strategist*: Campaign architecture
+- *Creative director*: Creative brief
+- *Media planner*: Budget and channel allocation
+
+*** Acceptance Criteria
+- [ ] =/campaign= command triggers auto-scan + planning workflow
+- [ ] Competitive scan runs automatically as first gate
+- [ ] Campaign plan produced with all required sections
+- [ ] Creative brief as sub-deliverable
+- [ ] Budget breakdown as structured data
+- [ ] Content calendar with timeline visualization
+- [ ] Subagent delegation for specialized sections
+- [ ] Section-by-section review in canvas
+- [ ] Approved plan saved to =deliverables/campaigns/=
+
+*** Files
+- Create: =domain/growth/commands/campaign.ts=
+- Create: =domain/growth/modes/campaign-mode.ts=
+- Create: =domain/growth/modes/subagents/analyst.ts=
+- Create: =domain/growth/modes/subagents/strategist.ts=
+- Create: =domain/growth/modes/subagents/creative-director.ts=
+- Create: =domain/growth/modes/subagents/media-planner.ts=
+
+** TODO [#B] TICKET-042: /creative mode (creative analysis + aesthetic gate)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-042
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-005 TICKET-013
+:END:
+
+*** Description
+The =/creative= command focuses on creative asset planning and analysis (analogous to =/design=).
+
+Workflow:
+1. *Input*: Creative task ("Develop ad copy variations for summer sale", "Analyze competitor visual styles")
+2. *Analysis phase*: Reviews competitor creatives from ad database, identifies patterns
+3. *Generation phase*: Produces creative deliverables:
+   - Ad copy variations (3-5 per format: headline, body, CTA)
+   - Visual direction mood board (color palette, imagery style, typography)
+   - Format specifications (sizes, platforms, character limits)
+   - A/B test hypotheses
+4. *Aesthetic gate* (Aphrodite): Evaluates creative quality — brand alignment, emotional resonance, differentiation from competitors
+
+*** Acceptance Criteria
+- [ ] =/creative= command triggers creative workflow
+- [ ] Competitor creative analysis from ad database
+- [ ] Ad copy variations with platform-specific formatting
+- [ ] Visual direction document with references
+- [ ] Aphrodite aesthetic gate evaluates brand alignment
+- [ ] Output formatted for direct handoff to designers
+- [ ] Saved to =deliverables/creative/=
+
+*** Files
+- Create: =domain/growth/commands/creative.ts=
+- Create: =domain/growth/modes/creative-mode.ts=
+- Create: =domain/growth/modes/gates/aesthetic.ts=
+
+** TODO [#B] TICKET-043: /review mode (performance review)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-043
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-005 TICKET-013 TICKET-022
+:END:
+
+*** Description
+The =/review= command initiates a performance review workflow (analogous to =/audit=).
+
+Workflow:
+1. *Input*: Review scope ("Review Q1 campaign performance", "Weekly performance check")
+2. *Data gathering*: Pulls metrics from connected sources, ad snapshot trends from SQLite
+3. *Analysis*: Agent identifies:
+   - KPI trends (improving/declining/stable)
+   - Anomalies (sudden spend changes, CTR drops, new competitor activity)
+   - Top/bottom performers (ads, audiences, channels)
+   - Budget efficiency (spend vs. targets)
+4. *Report generation*: Produces branded Typst report:
+   - Executive summary with key metrics
+   - Trend charts (via Typst graph components)
+   - Anomaly callouts with recommendations
+   - Competitive context (what competitors changed during period)
+   - Action items prioritized by impact
+5. *Presentation*: Report opens in Report Editor panel for review
+
+*** Acceptance Criteria
+- [ ] =/review= command triggers performance review workflow
+- [ ] Data gathered from SQLite ad snapshots and any connected metrics
+- [ ] Trend analysis identifies improving/declining KPIs
+- [ ] Anomaly detection flags significant changes
+- [ ] Branded Typst report generated automatically
+- [ ] Report opens in Report Editor for review/export
+- [ ] Action items extracted and optionally created as tasks
+- [ ] Saved to =deliverables/reviews/=
+
+*** Files
+- Create: =domain/growth/commands/review.ts=
+- Create: =domain/growth/modes/review-mode.ts=
+- Create: =domain/growth/modes/analyzers/trend.ts=
+- Create: =domain/growth/modes/analyzers/anomaly.ts=
+
+* Phase 5: Advanced Features
+:PROPERTIES:
+:DESCRIPTION: Higher-level features that build on the foundation. These are individually valuable but not MVP-critical. Order within phase is flexible.
+:END:
+
+** TODO [#B] TICKET-050: Client Portfolio panel
+:PROPERTIES:
+:CUSTOM_ID: TICKET-050
+:Effort:   16h
+:COMPLEXITY: L
+:DEPENDS:  TICKET-010 TICKET-022
+:END:
+
+*** Description
+Multi-client overview panel for agencies or consultants managing multiple brands.
+
+Layout:
+- *Client cards*: Grid of client tiles showing: name, logo, active campaign count, last activity date, health indicator (green/yellow/red based on KPI trends), next deliverable due
+- *Client detail view*: Click a card to see: active campaigns timeline, recent deliverables, competitive landscape summary, KPI dashboard
+- *Client switcher*: Selecting a client sets the global context — all other panels filter to that client's data
+- *Add client*: Wizard to onboard new client (name, industry, competitors, brand assets)
+
+Data: Reads from =.spell/domain.json= client list and per-client =.spell/clients/<name>/= directories.
+
+*** Acceptance Criteria
+- [ ] Client cards in responsive grid with health indicators
+- [ ] Client detail view with campaigns, deliverables, KPIs
+- [ ] Global client context: selecting client filters all panels
+- [ ] Add client wizard with onboarding steps
+- [ ] Client data directory structure at =.spell/clients/<name>/=
+- [ ] Health indicators calculated from recent KPI data
+
+*** Files
+- Create: =domain/growth/panels/portfolio/Main.qml=
+- Create: =domain/growth/panels/portfolio/ClientCard.qml=
+- Create: =domain/growth/panels/portfolio/ClientDetail.qml=
+- Create: =domain/growth/panels/portfolio/AddClientWizard.qml=
+- Create: =domain/growth/panels/portfolio/panel.json=
+
+** TODO [#B] TICKET-051: Deliverable pipeline tracking
+:PROPERTIES:
+:CUSTOM_ID: TICKET-051
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-010
+:END:
+
+*** Description
+Track deliverables through their lifecycle: draft → review → approved → exported. A pipeline view shows all deliverables across clients with status, assignee, due date, and type.
+
+Data model stored in =.spell/deliverables.json=:
+#+begin_src json
+{
+  "deliverables": [{
+    "id": "del-001",
+    "title": "Q1 Competitive Analysis",
+    "type": "report",
+    "client": "acme-corp",
+    "status": "review",
+    "path": "deliverables/reports/q1-competitive.typ",
+    "created": "2026-03-15",
+    "due": "2026-03-31",
+    "versions": [{ "v": 1, "date": "2026-03-20", "hash": "abc123" }]
+  }]
+}
+#+end_src
+
+Pipeline view: Filterable table with sort by status, due date, client, type. Clicking opens the deliverable in the appropriate panel (report → Report Editor, brief → Chat).
+
+*** Acceptance Criteria
+- [ ] Deliverable tracking in =.spell/deliverables.json=
+- [ ] Pipeline view with status columns
+- [ ] Filter by: client, type, status, date range
+- [ ] Sort by any column
+- [ ] Click to open in appropriate panel
+- [ ] Version history per deliverable
+- [ ] Status transitions: draft → review → approved → exported
+- [ ] Overdue highlighting
+
+*** Files
+- Create: =domain/growth/panels/pipeline/Main.qml=
+- Create: =domain/growth/panels/pipeline/PipelineTable.qml=
+- Create: =domain/growth/panels/pipeline/panel.json=
+- Create: =domain/growth/db/deliverables.ts= (CRUD operations)
+
+** TODO [#C] TICKET-052: Campaign Planner Board (Kanban)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-052
+:Effort:   16h
+:COMPLEXITY: L
+:DEPENDS:  TICKET-010 TICKET-041
+:END:
+
+*** Description
+Kanban-style board for managing campaign tasks and milestones. Columns: Backlog → Planning → In Progress → Review → Complete.
+
+Cards represent campaign tasks (write copy, design creative, set up tracking, launch). Drag-and-drop between columns. Each card shows: title, assignee, due date, campaign tag, priority.
+
+Board data persisted in campaign deliverable files. Agent can create/move cards via tool calls.
+
+*** Acceptance Criteria
+- [ ] Kanban board with 5 status columns
+- [ ] Drag-and-drop card movement between columns
+- [ ] Card creation with title, assignee, due date, priority
+- [ ] Cards tagged to campaigns
+- [ ] Agent can create/move cards programmatically
+- [ ] Board state persisted in campaign files
+- [ ] Swimlane option: group by campaign
+
+*** Files
+- Create: =domain/growth/panels/planner/Main.qml=
+- Create: =domain/growth/panels/planner/KanbanBoard.qml=
+- Create: =domain/growth/panels/planner/TaskCard.qml=
+- Create: =domain/growth/panels/planner/panel.json=
+
+** TODO [#C] TICKET-053: Market Signal Feed (background polling)
+:PROPERTIES:
+:CUSTOM_ID: TICKET-053
+:Effort:   16h
+:COMPLEXITY: L
+:DEPENDS:  TICKET-020 TICKET-022
+:END:
+
+*** Description
+Aggregated intelligence feed from multiple sources with background polling. Surfaces relevant market changes without requiring manual scans.
+
+Signal sources:
+- *Ad library changes*: New ads, paused ads, spend changes (from scheduled scrapes)
+- *Web mentions*: Google Alerts-style monitoring for brand/competitor mentions
+- *Industry news*: RSS/Atom feed aggregation for configured industry sources
+- *Social signals*: Trending topics in configured niches (via web search)
+
+Architecture:
+- Background poller runs on configurable schedule (default: every 4 hours for ads, hourly for RSS)
+- Signals stored in SQLite =market_signals= table
+- Deduplication by content hash
+- Relevance scoring based on keyword matches and recency
+- Panel shows feed sorted by relevance with category filters
+
+*** Acceptance Criteria
+- [ ] Background poller with configurable schedule
+- [ ] Ad library change detection from snapshot diffs
+- [ ] RSS feed aggregation for configured sources
+- [ ] Web search monitoring for brand/competitor mentions
+- [ ] Signals stored in SQLite with relevance score
+- [ ] Feed panel with category filters and time range
+- [ ] Notification badges in sidebar for new high-relevance signals
+- [ ] Signal detail view with source link and context
+
+*** Files
+- Create: =domain/growth/signals/poller.ts=
+- Create: =domain/growth/signals/sources/ad-changes.ts=
+- Create: =domain/growth/signals/sources/rss.ts=
+- Create: =domain/growth/signals/sources/web-mentions.ts=
+- Create: =domain/growth/signals/scorer.ts=
+- Create: =domain/growth/db/migrations/002-signals.sql=
+- Create: =domain/growth/panels/signals/Main.qml=
+- Create: =domain/growth/panels/signals/SignalCard.qml=
+- Create: =domain/growth/panels/signals/panel.json=
+
+** TODO [#C] TICKET-054: Ad Creative Analyzer
+:PROPERTIES:
+:CUSTOM_ID: TICKET-054
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-022 TICKET-023
+:END:
+
+*** Description
+Feed competitor ads to the agent for structured creative analysis. Given a set of ads (selected from gallery or imported), the analyzer produces:
+
+- *Copy analysis*: Tone, reading level, emotional triggers, CTA patterns, headline formulas
+- *Visual analysis*: Color palette extraction, imagery categories (lifestyle/product/abstract), text-to-image ratio, face detection (people-centric vs. product-centric)
+- *Pattern detection*: Common themes across advertiser's ads, seasonal patterns, A/B test detection (similar ads with small variations)
+- *Competitive positioning*: How this advertiser's creative differs from others in the space
+
+Output is a structured analysis deliverable that can be included in reports or used to inform creative briefs.
+
+*** Acceptance Criteria
+- [ ] Select ads from gallery → "Analyze" action
+- [ ] Copy analysis with tone, reading level, CTA patterns
+- [ ] Pattern detection across multiple ads
+- [ ] Competitive positioning relative to other advertisers
+- [ ] Analysis saved as structured deliverable
+- [ ] Results viewable in dedicated analysis panel or inline in gallery
+
+*** Files
+- Create: =domain/growth/tools/ad-analyzer.ts=
+- Create: =domain/growth/analyzers/copy-analyzer.ts=
+- Create: =domain/growth/analyzers/pattern-detector.ts=
+- Create: =domain/growth/analyzers/positioning.ts=
+
+** TODO [#C] TICKET-055: Template Builder
+:PROPERTIES:
+:CUSTOM_ID: TICKET-055
+:Effort:   16h
+:COMPLEXITY: L
+:DEPENDS:  TICKET-034 TICKET-035
+:END:
+
+*** Description
+Visual template builder for creating new Typst report templates. Instead of writing Typst from scratch, users compose templates by arranging branded components.
+
+Approach:
+- *Component palette*: Sidebar with available ORA brand components (stat-cell, pillar-card, etc.) as draggable items
+- *Canvas*: Drop zone where components are arranged into a page layout
+- *Property panel*: When a component is selected, shows its configurable properties
+- *Preview*: Live preview of the template with sample data
+- *Export*: Generates parameterized =.typ= file saved to =domain/growth/typst/templates/=
+
+This is a stretch goal — complex but high-value for non-technical users.
+
+*** Acceptance Criteria
+- [ ] Component palette with all ORA brand components
+- [ ] Drag-and-drop onto canvas
+- [ ] Property editing for selected components
+- [ ] Live preview with sample data
+- [ ] Export as parameterized =.typ= template
+- [ ] Template saved and available in template picker (TICKET-036)
+
+*** Files
+- Create: =domain/growth/panels/template-builder/Main.qml=
+- Create: =domain/growth/panels/template-builder/ComponentPalette.qml=
+- Create: =domain/growth/panels/template-builder/DesignCanvas.qml=
+- Create: =domain/growth/panels/template-builder/PropertyPanel.qml=
+- Create: =domain/growth/panels/template-builder/panel.json=
+
+* Phase 6: Testing & Polish
+:PROPERTIES:
+:DESCRIPTION: Comprehensive test coverage using QmlJourney test infrastructure for UI, unit tests for the scraper engine, and end-to-end integration tests for the full growth workflow.
+:END:
+
+** TODO [#A] TICKET-060: QmlJourney tests for Growth shell
+:PROPERTIES:
+:CUSTOM_ID: TICKET-060
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-010 TICKET-011 TICKET-012
+:END:
+
+*** Description
+Headless QML tests for the growth shell using QmlTestHarness (offscreen rendering). Tests cover shell launch, sidebar navigation, panel switching, responsive behavior, and theme application.
+
+Test cases:
+- Shell launches with sidebar and dashboard visible
+- Sidebar navigation switches active panel
+- Sidebar collapses at narrow viewport (<1200px)
+- Client selector updates global context
+- Status bar reflects agent state changes
+- ORA brand colors applied correctly
+- Panel transitions animate without visual glitches
+
+Uses =agentSends()=, =expectVisible()=, =click()=, =type()= semantic methods.
+
+*** Acceptance Criteria
+- [ ] Test file at =domain/growth/tests/shell.journey.ts=
+- [ ] All 7 test cases pass in headless mode
+- [ ] Tests use QmlJourney semantic API, not raw Puppeteer
+- [ ] No flaky timing dependencies (proper =waitFor= usage)
+- [ ] Tests run in CI without GPU
+
+*** Files
+- Create: =domain/growth/tests/shell.journey.ts=
+- Create: =domain/growth/tests/fixtures/mock-domain.json=
+
+** TODO [#A] TICKET-061: QmlJourney tests for Competitive Intel panel
+:PROPERTIES:
+:CUSTOM_ID: TICKET-061
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-023 TICKET-024
+:END:
+
+*** Description
+Headless QML tests for the Competitive Intelligence panel.
+
+Test cases:
+- Gallery renders ad cards from mock data
+- Filter bar narrows results (advertiser, date, status, keyword)
+- Card click opens detail drawer
+- Detail drawer shows full ad info with media carousel
+- Virtual scroll handles 1000+ cards without OOM
+- Bulk select and tag operation
+- Empty state shows when no data
+- Summary strip updates with filter changes
+
+*** Acceptance Criteria
+- [ ] Test file at =domain/growth/tests/competitive.journey.ts=
+- [ ] All 8 test cases pass
+- [ ] Mock SQLite data via test fixtures
+- [ ] Performance test: 1000 cards render within 2s
+- [ ] Tests cover both gallery and detail drawer
+
+*** Files
+- Create: =domain/growth/tests/competitive.journey.ts=
+- Create: =domain/growth/tests/fixtures/mock-ads.json=
+
+** TODO [#A] TICKET-062: QmlJourney tests for Report Editor
+:PROPERTIES:
+:CUSTOM_ID: TICKET-062
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-035
+:END:
+
+*** Description
+Headless QML tests for the Report Editor panel.
+
+Test cases:
+- Split-pane renders with editor and preview
+- Typing in editor updates preview (debounced)
+- Template selector opens and creates new document
+- Save persists to filesystem
+- Syntax highlighting applies to Typst constructs
+- Click in preview jumps to editor source (TICKET-033)
+- Toolbar actions: undo, redo, zoom, export
+- Splitter drag resizes panes
+
+*** Acceptance Criteria
+- [ ] Test file at =domain/growth/tests/report-editor.journey.ts=
+- [ ] All 8 test cases pass
+- [ ] Mock Typst content for editor tests
+- [ ] Preview rendering verified (WebEngineView in headless)
+- [ ] Source mapping click test (preview click → editor scroll)
+
+*** Files
+- Create: =domain/growth/tests/report-editor.journey.ts=
+- Create: =domain/growth/tests/fixtures/sample.typ=
+
+** TODO [#A] TICKET-063: Scraper engine unit tests
+:PROPERTIES:
+:CUSTOM_ID: TICKET-063
+:Effort:   8h
+:COMPLEXITY: M
+:DEPENDS:  TICKET-020 TICKET-021
+:END:
+
+*** Description
+Unit tests for the TypeScript scraper engine. Tests run without a browser — they use mock HTML and mock Puppeteer pages.
+
+Test suites:
+- *Config loader*: Valid YAML → typed config, invalid YAML → error, schema validation
+- *Extractor*: Text extraction, attribute extraction, nested elements, list fields, transforms (regex, trim, date), missing elements (graceful handling)
+- *Transformer*: Deduplication, normalization, URL resolution
+- *Scheduler*: Rate limiting respects config, exponential backoff, queue ordering
+- *Facebook config*: Config parses without error, field definitions complete, pagination config valid
+
+*** Acceptance Criteria
+- [ ] Test file at =domain/growth/tests/scraper-engine.test.ts=
+- [ ] Config loader: 5+ test cases
+- [ ] Extractor: 8+ test cases covering all field types
+- [ ] Transformer: 4+ test cases
+- [ ] Scheduler: 3+ test cases for rate limiting
+- [ ] Facebook config validation test
+- [ ] All tests pass without network/browser access
+- [ ] Mock HTML fixtures for extraction tests
+
+*** Files
+- Create: =domain/growth/tests/scraper-engine.test.ts=
+- Create: =domain/growth/tests/fixtures/mock-ad-page.html=
+- Create: =domain/growth/tests/fixtures/test-scraper-config.yaml=
+
+** TODO [#B] TICKET-064: End-to-end integration tests
+:PROPERTIES:
+:CUSTOM_ID: TICKET-064
+:Effort:   16h
+:COMPLEXITY: L
+:DEPENDS:  TICKET-060 TICKET-061 TICKET-062 TICKET-063
+:END:
+
+*** Description
+Full integration tests that verify the complete growth workflow from domain detection to deliverable export.
+
+Test scenarios:
+1. *Domain detection*: Create project with =domain.json= → verify growth mode activates
+2. *Competitive scan*: Run =/strategy= → verify scraper runs, data stored in SQLite, results visible in panel
+3. *Report generation*: Open Report Editor → select template → agent fills content → export PDF → verify PDF exists with correct branding
+4. *Campaign workflow*: Run =/campaign= → verify all subagents execute, plan produced, saved to deliverables
+5. *Client switching*: Switch client → verify all panels update context
+6. *Persistence*: Close and reopen → verify data and state preserved
+
+These tests use the actual agent (with mock Claude responses) and real QML shell (headless). They are slow and run in a separate CI stage.
+
+*** Acceptance Criteria
+- [ ] 6 integration test scenarios passing
+- [ ] Tests use mock Claude responses (no live API calls)
+- [ ] Tests run headless in CI
+- [ ] Each test creates/tears down a fresh project directory
+- [ ] SQLite state verified after scraper tests
+- [ ] PDF output verified after export tests
+- [ ] Total suite runtime <5 minutes
+
+*** Files
+- Create: =domain/growth/tests/integration/domain-detection.test.ts=
+- Create: =domain/growth/tests/integration/competitive-scan.test.ts=
+- Create: =domain/growth/tests/integration/report-generation.test.ts=
+- Create: =domain/growth/tests/integration/campaign-workflow.test.ts=
+- Create: =domain/growth/tests/integration/client-switching.test.ts=
+- Create: =domain/growth/tests/integration/persistence.test.ts=
+- Create: =domain/growth/tests/integration/fixtures/= (mock responses, test projects)
+
+** TODO [#A] TICKET-065: Growth domain detection tests
+:PROPERTIES:
+:CUSTOM_ID: TICKET-065
+:Effort:   4h
+:COMPLEXITY: S
+:DEPENDS:  TICKET-001
+:END:
+
+*** Description
+Unit tests specifically for the domain detection and loading system (TICKET-001). These are fast, pure TS tests.
+
+Test cases:
+- =domain.json= in current directory → detected
+- =domain.json= in ancestor directory → detected via upward walk
+- No =domain.json= → defaults to =coding=
+- Invalid JSON → clear error message
+- Invalid schema (missing =domain= field) → schema error with hint
+- Unknown domain → error listing available domains
+- =DomainManifest= correctly populated from valid config
+- Domain loader resolves paths relative to domain directory
+
+*** Acceptance Criteria
+- [ ] Test file at =domain/growth/tests/domain-detection.test.ts=
+- [ ] All 8 test cases pass
+- [ ] Tests use temp directories (no filesystem pollution)
+- [ ] Error messages verified for clarity
+- [ ] Tests run in <1s
+
+*** Files
+- Create: =domain/growth/tests/domain-detection.test.ts=
+
+* Dependency Graph
+:PROPERTIES:
+:DESCRIPTION: Visual dependency map for implementation sequencing
+:END:
+
+#+begin_example
+Phase 0 (Foundation)
+  TICKET-001 ← everything depends on this
+  TICKET-002 ← TICKET-001
+  TICKET-003 ← TICKET-001
+  TICKET-004 ← TICKET-001
+  TICKET-005 ← TICKET-001
+
+Phase 1 (Shell MVP)
+  TICKET-010 ← TICKET-001, TICKET-004
+  TICKET-011 ← TICKET-010, TICKET-002
+  TICKET-012 ← TICKET-010
+  TICKET-013 ← TICKET-002
+
+Phase 2 (Competitive Intel)
+  TICKET-020 ← TICKET-001
+  TICKET-021 ← TICKET-020
+  TICKET-022 ← TICKET-020
+  TICKET-023 ← TICKET-010, TICKET-022
+  TICKET-024 ← TICKET-023
+  TICKET-025 ← TICKET-023, TICKET-020
+
+Phase 3 (Typst)
+  TICKET-030 ← (none, can start anytime)
+  TICKET-031 ← TICKET-030
+  TICKET-032 ← (none, can start anytime)
+  TICKET-033 ← TICKET-031, TICKET-032
+  TICKET-034 ← TICKET-032
+  TICKET-035 ← TICKET-031, TICKET-032, TICKET-033
+  TICKET-036 ← TICKET-034, TICKET-035
+  TICKET-037 ← TICKET-034
+
+Phase 4 (Growth Modes)
+  TICKET-040 ← TICKET-005, TICKET-013, TICKET-022
+  TICKET-041 ← TICKET-005, TICKET-013, TICKET-022, TICKET-034
+  TICKET-042 ← TICKET-005, TICKET-013
+  TICKET-043 ← TICKET-005, TICKET-013, TICKET-022
+
+Phase 5 (Advanced)
+  TICKET-050 ← TICKET-010, TICKET-022
+  TICKET-051 ← TICKET-010
+  TICKET-052 ← TICKET-010, TICKET-041
+  TICKET-053 ← TICKET-020, TICKET-022
+  TICKET-054 ← TICKET-022, TICKET-023
+  TICKET-055 ← TICKET-034, TICKET-035
+
+Phase 6 (Testing)
+  TICKET-060 ← TICKET-010, TICKET-011, TICKET-012
+  TICKET-061 ← TICKET-023, TICKET-024
+  TICKET-062 ← TICKET-035
+  TICKET-063 ← TICKET-020, TICKET-021
+  TICKET-064 ← TICKET-060, TICKET-061, TICKET-062, TICKET-063
+  TICKET-065 ← TICKET-001
+#+end_example
+
+* Critical Path
+:PROPERTIES:
+:DESCRIPTION: The minimum sequence to reach a working MVP
+:END:
+
+#+begin_example
+TICKET-001 (domain detection)
+  → TICKET-002 (domain prompts) + TICKET-004 (panel discovery) [parallel]
+    → TICKET-010 (growth shell)
+      → TICKET-012 (dashboard panel)
+      → TICKET-011 (chat panel)
+
+TICKET-001 (domain detection)
+  → TICKET-020 (scraper engine)
+    → TICKET-021 (FB config) + TICKET-022 (SQLite) [parallel]
+      → TICKET-023 (competitive intel panel)
+
+TICKET-030 (tree-sitter) + TICKET-032 (typst WASM) [parallel, no deps]
+  → TICKET-031 (typst editor) + TICKET-034 (ORA templates) [parallel]
+    → TICKET-035 (report editor panel)
+
+MVP = TICKET-001 + 002 + 004 + 010 + 011 + 012 + 013 + 020 + 021 + 022 + 023
+    = 11 tickets, ~120h estimated effort
+#+end_example
+
+* Effort Summary
+
+| Phase | Tickets | Total Effort | Complexity Mix |
+|-------+---------+--------------+----------------|
+|     0 |       5 | 24h          | 1M + 4S        |
+|     1 |       4 | 44h          | 2L + 1M + 1S   |
+|     2 |       6 | 76h          | 2XL + 3M + 1S  |
+|     3 |       8 | 80h          | 2L + 4M + 2S   |
+|     4 |       4 | 48h          | 2L + 2M        |
+|     5 |       6 | 80h          | 3L + 2M + 1S   |
+|     6 |       6 | 52h          | 1L + 4M + 1S   |
+|-------+---------+--------------+----------------|
+| Total |      39 | 404h         |                |

@@ -1,0 +1,79 @@
+#+TITLE: Report Editor Panel
+#+STATE: DONE
+#+SESSION_ID: 14a899a7fb0415d2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/32-CreateFeatC.jsonl]]
+#+CUSTOM_ID: FEAT-138-report-editor-panel
+#+EFFORT: 35h
+#+PRIORITY: #A
+#+LAYER: ui
+#+DEPENDS: PROJ-010-typst-integration PROJ-013-growth-qml-shell-and-workspace-system
+
+## Scope
+IN: Split-pane QML panel. Left: WebEngineView with Monaco/CodeMirror + tree-sitter-typst WASM syntax highlighting. Right: WebEngineView with typst-ts WASM SVG preview. Agent-editor sync protocol (agent writes to file, editor reloads; user edits in editor, agent sees changes). Template selector sidebar (collapsed by default, list of templates with preview thumbnails). File tree for multi-file Typst projects. Click-to-code: click preview element -> editor jumps to source line.
+OUT: Typst engine infrastructure (PROJ-D). Template creation (FEAT-J). Full bidirectional collab (FUP).
+
+## Tests
+- domain/growth/test/panels/editor-panel.test.ts: editor loads Typst source, preview renders SVG
+- domain/growth/test/panels/editor-sync.test.ts: agent writes to file, editor updates, preview refreshes
+- domain/growth/test/panels/editor-template.test.ts: select template, editor populates, preview shows
+
+## Implementation
+** Design editor-preview communication protocol
+:PROPERTIES:
+:CUSTOM_ID: FEAT-138-report-editor-panel::design-protocol
+:END:
+Files: domain/growth/src/panels/editor/protocol.ts
+Messages between TS bridge, editor WebEngine, and preview WebEngine. Editor->Bridge: contentChanged(text), cursorMoved(line). Bridge->Preview: compile(text). Preview->Bridge: clickedElement(sourceLine). Bridge->Editor: goToLine(line). Agent->Bridge: setContent(text, path). Bridge->Agent: contentSnapshot(text).
+
+** Create EditorPanel.qml
+:PROPERTIES:
+:CUSTOM_ID: FEAT-138-report-editor-panel::create-panel-qml
+:DEPENDS: FEAT-138-report-editor-panel::design-protocol PROJ-010-typst-integration::setup-monaco-editor
+:END:
+Files: domain/growth/src/qml/panels/EditorPanel.qml
+SplitView: left WebEngineView (editor.html), right WebEngineView (preview.html). Resize handle. Template sidebar (Drawer, left edge). File tree (TreeView above editor). Panel handles bridge messages to route between editor and preview WebEngineViews.
+
+** Implement agent-editor sync
+:PROPERTIES:
+:CUSTOM_ID: FEAT-138-report-editor-panel::implement-agent-sync
+:DEPENDS: FEAT-138-report-editor-panel::design-protocol
+:END:
+Files: domain/growth/src/panels/editor/agent-sync.ts
+Agent writes .typ file via write tool. File watcher detects change. Bridge sends updated content to editor WebEngine. Editor WebEngine triggers preview recompile. User edits: debounced content sent back to bridge, bridge writes to file (so agent's next read sees changes).
+
+** Implement template selector
+:PROPERTIES:
+:CUSTOM_ID: FEAT-138-report-editor-panel::implement-template-selector
+:DEPENDS: FEAT-138-report-editor-panel::create-panel-qml
+:END:
+Files: domain/growth/src/qml/components/TemplateSelector.qml
+List of templates from domain/growth/templates/. Each: name, description, thumbnail. Click: populate editor with template source + create data.yaml stub.
+
+** Implement file tree
+:PROPERTIES:
+:CUSTOM_ID: FEAT-138-report-editor-panel::implement-file-tree
+:DEPENDS: FEAT-138-report-editor-panel::create-panel-qml
+:END:
+Files: domain/growth/src/qml/components/TypstFileTree.qml
+TreeView showing .typ files in current deliverable directory. Click: open file in editor. Show: main.typ, data.yaml, imported modules.
+
+** Write editor panel tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-138-report-editor-panel::write-tests
+:DEPENDS: FEAT-138-report-editor-panel::create-panel-qml FEAT-138-report-editor-panel::implement-agent-sync
+:END:
+Files: domain/growth/test/panels/editor-panel.test.ts, editor-sync.test.ts, editor-template.test.ts
+
+## Edge Cases
+- Preview compilation error: show error overlay on preview pane with line numbers
+- Large document (50+ pages): throttle preview updates to max 1/sec
+- Agent and user edit simultaneously: last-write-wins on file, both see each other's changes on next sync
+- Template with missing data.yaml: show template with placeholder values, prompt to fill data
+- WebEngineView fails to load Monaco: show fallback textarea
+
+## Acceptance Criteria
+- Editor shows Typst syntax highlighting (keywords, strings, functions in different colors)
+- Preview updates within 500ms of editor change
+- Clicking preview element moves editor cursor to correct source line
+- Template selection populates editor and preview
+- Agent writing .typ file updates editor and preview in real-time

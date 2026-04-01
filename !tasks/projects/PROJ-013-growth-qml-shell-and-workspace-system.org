@@ -1,0 +1,113 @@
+#+TITLE: Growth QML Shell and Workspace System
+#+STATE: DONE
+#+SESSION_ID: 14a8992d498415cc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/27-CreateProjB.jsonl]]
+#+CUSTOM_ID: PROJ-013-growth-qml-shell-and-workspace-system
+#+EFFORT: 70h
+#+PRIORITY: #A
+#+LAYER: ui
+#+DEPENDS: PROJ-012-spell-domain-system
+
+## Scope
+IN: Configurable shell.qml via bridge.props (sidebar width 280px, panel list from domain, persistent bottom chat drawer, workspace layout switching). Workspace layout definitions (Research, Strategy, Create, Review, Campaign, General) as JSON configs in .spell/workspaces/ or domain/growth/workspaces/. Each workspace: panel arrangement (which panels visible, split ratios). Persistent bottom chat drawer: collapsible, multi-agent tabs (tab per agent, active chat focus), card overview (all agents' status summary). Panel state persistence to .spell/growth/panel-state.json (filter states, scroll positions, selections). Panel context emission: armed tools for deterministic queries (e.g. SQLite), bridge.send for visual events, agent prompt for interactive. Workspace switching activates default mode (tight coupling), overridable. Session persists across workspace switches.
+OUT: Individual panel implementations (FEAT-A through FEAT-D). Mode behavior definitions (FEAT-E). Multi-agent subprocess architecture (FUP).
+
+## Tests
+- packages/coding-agent/test/qml/growth-shell-launch.test.ts: shell launches with growth panels, sidebar shows workspace list
+- packages/coding-agent/test/qml/workspace-switching.test.ts: switch workspace, verify panel layout changes, verify previous panel state preserved
+- packages/coding-agent/test/qml/chat-drawer.test.ts: drawer expands/collapses, send message, agent tab switching
+- packages/coding-agent/test/qml/panel-state-persistence.test.ts: set filter in panel, switch workspace, switch back, filter preserved
+
+## Implementation
+
+** Define workspace layout schema
+:PROPERTIES:
+:CUSTOM_ID: PROJ-013-growth-qml-shell-and-workspace-system::define-workspace-schema
+:END:
+Files: domain/growth/src/workspaces/types.ts
+WorkspaceLayout: { id, name, icon, panels: Array<{ panelId, position: 'main'|'secondary'|'overlay', flex?: number }>, defaultMode?: string }. Six preset layouts for growth.
+
+** Create workspace layout configs
+:PROPERTIES:
+:CUSTOM_ID: PROJ-013-growth-qml-shell-and-workspace-system::create-workspace-configs
+:DEPENDS: PROJ-013-growth-qml-shell-and-workspace-system::define-workspace-schema
+:END:
+Files: domain/growth/workspaces/research.json, strategy.json, create.json, review.json, campaign.json, general.json
+Research: Chat(secondary)+Intel(main). Strategy: Chat(secondary)+Dashboard(main). Create: Chat(secondary)+Editor(main). Review: Dashboard(main)+Editor(secondary). Campaign: Chat(secondary)+Planner(main). General: Chat(main) only.
+
+** Extend shell.qml for growth configuration
+:PROPERTIES:
+:CUSTOM_ID: PROJ-013-growth-qml-shell-and-workspace-system::extend-shell-qml
+:DEPENDS: PROJ-013-growth-qml-shell-and-workspace-system::define-workspace-schema
+:END:
+Files: packages/coding-agent/src/modes/qml/shell.qml (or new GrowthShell.qml that imports and extends)
+Add: workspace sidebar (list of workspace layouts from bridge.props.workspaces), workspace switching (click workspace -> load layout -> rearrange panels via SplitView), persistent bottom chat drawer (fixed-height Rectangle at bottom, collapsible via drag handle, contains chat TabBar + agent cards).
+
+** Implement persistent bottom chat drawer
+:PROPERTIES:
+:CUSTOM_ID: PROJ-013-growth-qml-shell-and-workspace-system::implement-chat-drawer
+:DEPENDS: PROJ-013-growth-qml-shell-and-workspace-system::extend-shell-qml
+:END:
+Files: domain/growth/src/qml/panels/ChatDrawer.qml
+Collapsible bottom panel (56px collapsed, up to 50% expanded). TabBar for agent tabs. Each tab: agent name, status indicator (idle/busy/error), latest message preview. Card overview mode: grid of small agent cards. Input bar at bottom of active tab. Send message -> bridge.send({ type: 'prompt', agentId, text }).
+
+** Implement workspace switching logic in TS
+:PROPERTIES:
+:CUSTOM_ID: PROJ-013-growth-qml-shell-and-workspace-system::implement-workspace-switching
+:DEPENDS: PROJ-013-growth-qml-shell-and-workspace-system::define-workspace-schema
+:END:
+Files: domain/growth/src/workspace-manager.ts, packages/coding-agent/src/modes/qml-mode.ts
+WorkspaceManager: loadWorkspace(id), getCurrentWorkspace(), switchWorkspace(id). On switch: send layout to QML, activate default mode if workspace has one (call handlePlanModeCommand or equivalent), preserve panel states. Wire into qml-mode.ts event loop: handle 'workspace_switch' events from QML.
+
+** Implement panel state persistence
+:PROPERTIES:
+:CUSTOM_ID: PROJ-013-growth-qml-shell-and-workspace-system::implement-panel-persistence
+:DEPENDS: PROJ-013-growth-qml-shell-and-workspace-system::extend-shell-qml
+:END:
+Files: domain/growth/src/panel-state.ts
+On panel deactivation: bridge.send({ type: 'save_panel_state', panelId, state: {...} }). TS handler writes to .spell/growth/panel-state.json. On panel activation: read state, send to QML via bridge.send({ type: 'restore_panel_state', panelId, state }). Panel QML components implement save/restore handlers.
+
+** Implement panel context emission
+:PROPERTIES:
+:CUSTOM_ID: PROJ-013-growth-qml-shell-and-workspace-system::implement-panel-context
+:DEPENDS: PROJ-013-growth-qml-shell-and-workspace-system::extend-shell-qml
+:END:
+Files: domain/growth/src/panel-context.ts
+Panels emit context on activation and significant state changes: { type: 'panel_context', panelId, filters, selection, ... }. TS handler stores latest context per panel. Agent receives panel context as part of conversation context (injected into system prompt or as a context message). Armed tools pattern: panel declares spellArmedTools for deterministic operations.
+
+** Implement multi-agent tab management
+:PROPERTIES:
+:CUSTOM_ID: PROJ-013-growth-qml-shell-and-workspace-system::implement-multi-agent-tabs
+:DEPENDS: PROJ-013-growth-qml-shell-and-workspace-system::implement-chat-drawer
+:END:
+Files: domain/growth/src/agent-tab-manager.ts
+Track multiple agent sessions (main agent + spawned agents). Each agent has: id, name, status, message history. Tab switching: pause/resume message forwarding. Agent card: { id, name, status, latestMessage, tokenCount }. For MVP: main agent + task subagent visibility (read from eventBus TASK channels). Full multi-agent in FUP.
+
+** Write shell launch tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-013-growth-qml-shell-and-workspace-system::write-shell-tests
+:DEPENDS: PROJ-013-growth-qml-shell-and-workspace-system::extend-shell-qml
+:END:
+Files: packages/coding-agent/test/qml/growth-shell-launch.test.ts
+
+** Write workspace switching tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-013-growth-qml-shell-and-workspace-system::write-workspace-tests
+:DEPENDS: PROJ-013-growth-qml-shell-and-workspace-system::implement-workspace-switching
+:END:
+Files: packages/coding-agent/test/qml/workspace-switching.test.ts
+
+## Edge Cases
+- Workspace config references panel that hasn't loaded yet: show placeholder, load when available
+- Chat drawer resize beyond bounds: clamp to min 56px, max 50% of window height
+- Agent tab for finished agent: keep tab, show 'completed' status, messages still readable
+- Workspace switch during agent response: don't interrupt agent, continue receiving in background
+- Panel state file corrupted: ignore, start fresh, log warning
+
+## Acceptance Criteria
+- Growth shell launches with 280px sidebar showing 6 workspace options
+- Clicking 'Research' workspace shows Chat drawer + Intel panel in main area
+- Switching to 'Create' shows Chat drawer + Editor panel, Research panel state preserved
+- Bottom chat drawer collapses/expands, shows agent status
+- Panel state (e.g. filter selection) persists across workspace switches within session
+- Screenshot: Growth shell with workspace sidebar and chat drawer visible

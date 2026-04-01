@@ -1,0 +1,176 @@
+#+TITLE: Native TS Scraper Framework
+#+STATE: DONE
+#+SESSION_ID: 14a89873f04415c4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/25-CreateProjC.jsonl]]
+#+CUSTOM_ID: PROJ-011-native-ts-scraper-framework
+#+EFFORT: 60h
+#+PRIORITY: #A
+#+LAYER: infrastructure
+
+
+* Scope
+
+IN: YAML config schema + TypeBox validation, config loader, Puppeteer-based browser automation engine (reuse existing stealth scripts from packages/coding-agent/src/tools/puppeteer/), transform pipeline (regex, replace, chain, exists), paginator (infinite_scroll, cursor, next_button), rate limiter (token bucket per-domain), Facebook Ads Library scraper config (port from ~/code/ora/leadgen/configs/facebook-ads-library.yaml), normalized SQLite persistence with per-platform schema declared in config manifest, snapshot-per-scrape with materialized latest view, entity relationships preserved (Page FK Ad).
+
+OUT: QML panel integration (that's FEAT-B). Google/TikTok/LinkedIn configs (FUP). Anti-bot evasion research. Visual scraper builder.
+
+BOUNDARY: This item builds the engine + FB config + SQLite. Panels consume it.
+
+* Tests
+
+- domain/growth/test/scraper/config-loader.test.ts: parse YAML config, validate schema, resolve template variables
+- domain/growth/test/scraper/transform-pipeline.test.ts: regex, replace, chain, exists transforms
+- domain/growth/test/scraper/paginator.test.ts: infinite scroll simulation, cursor pagination, max items
+- domain/growth/test/scraper/rate-limiter.test.ts: token bucket, backoff, per-domain isolation
+- domain/growth/test/scraper/extractor.test.ts: extract fields from mock HTML using selectors
+- domain/growth/test/scraper/persistence.test.ts: SQLite schema creation from manifest, insert, dedup, latest view
+- domain/growth/test/scraper/fb-ads-config.test.ts: validate FB Ads Library config parses correctly
+
+* Implementation
+
+** Define scraper config TypeScript types
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::define-config-types
+:END:
+
+Files: domain/growth/src/scraper/types.ts
+
+Define ScraperConfig, ContainerConfig, FieldExtractor, SetupAction, PaginationConfig, TransformDef, ErrorConfig, RateLimitConfig, SchemaManifest (SQLite table/column definitions per entity). Use TypeBox for runtime validation. SchemaManifest declares entity name, table name, columns (name, type, primary, fk), and indexes. All types exported for use by engine and persistence layers.
+
+** Implement YAML config loader
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::implement-config-loader
+:DEPENDS: PROJ-011-native-ts-scraper-framework::define-config-types
+:END:
+
+Files: domain/growth/src/scraper/config-loader.ts
+
+Read YAML file, parse with js-yaml or Bun built-in, validate against TypeBox schema, resolve template variables ({{ query.url }}), return typed ScraperConfig. Throw descriptive errors on schema violations. Template resolution replaces {{ key.path }} tokens with values from options object passed at runtime.
+
+** Implement transform pipeline
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::implement-transforms
+:DEPENDS: PROJ-011-native-ts-scraper-framework::define-config-types
+:END:
+
+Files: domain/growth/src/scraper/transforms.ts
+
+Transform types: regex (capture group), replace (find/replace_with), exists (boolean), chain (array of transforms). Each transform is a pure function: (input: string) => string | number | boolean. Chain applies transforms left-to-right, threading output as input. Regex with no match returns null for optional fields. All transforms stateless and side-effect-free.
+
+** Implement field extractor
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::implement-extractor
+:DEPENDS: PROJ-011-native-ts-scraper-framework::implement-transforms
+:END:
+
+Files: domain/growth/src/scraper/extractor.ts
+
+Takes a Puppeteer ElementHandle + FieldExtractor config. Uses page.evaluate() with CSS/XPath selectors. Applies transforms after extraction. Returns typed value. Handles required fields (throw on missing) vs optional (return null). Attribute extraction (innerText, innerHTML, getAttribute, href). Normalizes whitespace before transforms.
+
+** Implement paginator
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::implement-paginator
+:DEPENDS: PROJ-011-native-ts-scraper-framework::define-config-types
+:END:
+
+Files: domain/growth/src/scraper/paginator.ts
+
+Three strategies: infinite_scroll (scroll container, wait, check for new items, repeat until max_items or no new items), cursor (follow next_cursor URL parameter), next_button (click selector, wait for load). Each returns AsyncIterator of page states. Infinite scroll detects stall when item count unchanged after scroll. All strategies respect max_items cap and per-config timeout.
+
+** Implement rate limiter
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::implement-rate-limiter
+:END:
+
+Files: domain/growth/src/scraper/rate-limiter.ts
+
+Token bucket algorithm. Configurable: requests_per_minute, backoff_multiplier. Per-domain isolation (different limits for facebook.com vs google.com). Async: await limiter.acquire(domain) before each request. On HTTP 429 or error indicator match, exponential backoff up to configurable max_backoff_ms. Bucket refills at rate = requests_per_minute / 60 tokens per second.
+
+** Implement SQLite persistence with schema manifest
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::implement-persistence
+:DEPENDS: PROJ-011-native-ts-scraper-framework::define-config-types
+:END:
+
+Files: domain/growth/src/scraper/persistence.ts
+
+Read SchemaManifest from config. CREATE TABLE IF NOT EXISTS for each entity. INSERT on each scrape (snapshot-per-scrape, no upsert — full history). CREATE VIEW latest_<entity> AS SELECT with ROW_NUMBER() OVER (PARTITION BY platform_id ORDER BY scraped_at DESC) WHERE rn = 1. FK relationships between entities (pages.id -> ads.page_id). Enable WAL mode and foreign keys on open. Use bun:sqlite. Dedup by platform_id + scraped_at to prevent duplicate runs.
+
+** Implement scraper engine orchestrator
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::implement-engine
+:DEPENDS: PROJ-011-native-ts-scraper-framework::implement-config-loader ::implement-extractor ::implement-paginator ::implement-rate-limiter ::implement-persistence
+:END:
+
+Files: domain/growth/src/scraper/engine.ts
+
+Main entry: runScraper(configPath, options). Loads config, launches Puppeteer (headless, reuse stealth scripts from packages/coding-agent/src/tools/puppeteer/), runs setup actions (navigate, wait, click, type), iterates containers with pagination, extracts fields per item, handles details phase (click-expand-extract-close), persists to SQLite. Emits progress events via EventEmitter for UI consumption (item_scraped, page_complete, error, done). Handles errors per errorHandling config (retries, screenshot_on_error, error_indicators).
+
+** Create Facebook Ads Library scraper config
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::fb-ads-config
+:DEPENDS: PROJ-011-native-ts-scraper-framework::define-config-types
+:END:
+
+Files: domain/growth/configs/scrapers/facebook-ads-library.yaml
+
+Port from ~/code/ora/leadgen/configs/facebook-ads-library.yaml. Adapt to new TypeScript schema. Include: containers (query page, ad cards), fields (ad_id, creative_bodies, delivery_start_time, is_active, page_name, page_id), pagination (infinite_scroll, max_items: 500), details (spend, impressions, snapshot_url), phone_extraction patterns (regex transform on creative_bodies), rate_limit (20 req/min, backoff_multiplier: 2.0), error_indicators (rate limit dialog selector, login wall). Include SQLite schema manifest: pages table (page_id PK, page_name, scraped_at), ads table (ad_id PK, page_id FK, creative_bodies, delivery_start_time, is_active, spend, impressions, snapshot_url, scraped_at).
+
+** Write config loader tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::write-config-tests
+:DEPENDS: PROJ-011-native-ts-scraper-framework::implement-config-loader
+:END:
+
+Files: domain/growth/test/scraper/config-loader.test.ts
+
+Test cases: valid YAML parses to typed ScraperConfig, missing required field throws with field name, template variable {{ query.url }} resolved from options, invalid selector type rejected by TypeBox, deeply nested config round-trips correctly.
+
+** Write transform pipeline tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::write-transform-tests
+:DEPENDS: PROJ-011-native-ts-scraper-framework::implement-transforms
+:END:
+
+Files: domain/growth/test/scraper/transform-pipeline.test.ts
+
+Test cases: regex captures correct group from 'Library ID: 12345', replace strips whitespace, exists returns true/false, chain applies transforms in order, regex no-match returns null, empty string input handled gracefully.
+
+** Write extractor tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::write-extractor-tests
+:DEPENDS: PROJ-011-native-ts-scraper-framework::implement-extractor
+:END:
+
+Files: domain/growth/test/scraper/extractor.test.ts
+
+Test with mock HTML strings, not live pages. Use JSDOM or Puppeteer with data: URL pages. Test cases: CSS selector finds element, XPath selector finds element, required field missing throws, optional field missing returns null, transform applied to extracted text, attribute extraction (href, src).
+
+** Write persistence tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-011-native-ts-scraper-framework::write-persistence-tests
+:DEPENDS: PROJ-011-native-ts-scraper-framework::implement-persistence
+:END:
+
+Files: domain/growth/test/scraper/persistence.test.ts
+
+Test schema creation, insert, dedup logic, latest view, FK integrity. Use in-memory bun:sqlite (:memory:). Test cases: schema created from manifest, rows inserted and retrievable, latest view returns only most recent per platform_id, FK constraint enforced (ad without matching page_id rejected), duplicate platform_id + scraped_at ignored, WAL mode enabled.
+
+* Edge Cases
+
+- YAML config with invalid selectors: validation error at load time, not at runtime
+- Scraper target page structure changes: extraction returns null for optional fields, throws ScraperExtractionError for required
+- Rate limit hit (HTTP 429 or FB-specific dialog selector match): exponential backoff per error_indicators config, max_backoff_ms cap
+- Pagination infinite loop: max_items cap + per-page timeout, stall detection on infinite_scroll
+- SQLite concurrent writes: WAL mode enabled on open, single writer per scraper run
+- Empty scrape result: no rows inserted, no error, done event emitted with count: 0
+- Network timeout mid-scrape: retry per errorHandling.retries, screenshot saved to disk if screenshot_on_error: true
+
+* Acceptance Criteria
+
+- =runScraper('facebook-ads-library.yaml', { query: { url: '...' } })= executes against FB Ads Library
+- Scraped ads appear in SQLite with correct schema (pages table, ads table, FK relationship preserved)
+- Transform pipeline correctly extracts ad_id from 'Library ID: 12345' text via regex
+- Rate limiter enforces 20 req/min with measurable backoff on acquire()
+- All unit tests pass without network access (mock HTML / in-memory fixtures)
+- FB Ads config YAML validates against TypeBox schema with zero errors
