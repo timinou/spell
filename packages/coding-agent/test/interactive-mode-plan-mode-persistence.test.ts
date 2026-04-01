@@ -17,7 +17,10 @@ describe("InteractiveMode plan mode session persistence", () => {
 
 		const restoreBody = source.slice(methodStart, nextMethodStart);
 		expect(restoreBody).toContain('const flavor = sessionContext.modeData?.flavor as "design" | undefined;');
-		expect(restoreBody).toContain("await this.#enterPlanMode({ planFilePath, ultraplan, flavor });");
+		expect(restoreBody).toContain(
+			"const modeConfigName = sessionContext.modeData?.modeConfigName as string | undefined;",
+		);
+		expect(restoreBody).toContain("await this.#enterPlanMode({ planFilePath, ultraplan, flavor, modeConfigName });");
 	});
 
 	it("persists ultraplan and flavor in plan mode change entries", async () => {

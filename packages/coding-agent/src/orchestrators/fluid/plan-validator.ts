@@ -1,4 +1,4 @@
-import { completeSimple, type Message } from "@oh-my-pi/pi-ai";
+import * as ai from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import { renderPromptTemplate } from "../../config/prompt-templates";
 import fluidPlanValidatorPrompt from "../../prompts/agents/fluid-plan-validator.md" with { type: "text" };
@@ -10,7 +10,7 @@ export interface SemanticPlanValidationResult {
 	critique?: string;
 }
 
-function extractTextContent(message: Message): string {
+function extractTextContent(message: ai.Message): string {
 	if (typeof message.content === "string") {
 		return message.content.trim();
 	}
@@ -77,7 +77,7 @@ export async function validatePlanSemantic(
 	});
 
 	try {
-		const response = await completeSimple(
+		const response = await ai.completeSimple(
 			model,
 			{
 				messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],

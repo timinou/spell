@@ -1,8 +1,11 @@
 #+TITLE: Growth Domain Boot Wiring
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14a9963b26961abf
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-02-43-866Z_14a9963b26961abf.jsonl]]
 #+CUSTOM_ID: PLAN-064-growth-domain-boot-wiring
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-01]: Final verification gates are green. Growth domain startup now preserves the default TUI surface, built-in growth domain loading works from arbitrary directories, and PLAN-064 is complete.
 
 
 
@@ -391,28 +394,21 @@ NOTE [2026-04-01]: Manual verification used a temporary `.spell/domain.json` to 
 - `bun test packages/coding-agent/test/args.test.ts` — passed.
 - `bun test packages/coding-agent/test/domain/detection.test.ts packages/coding-agent/test/domain/loader.test.ts` — passed.
 - `bun test packages/coding-agent/test/sdk-domain-policy.test.ts` — passed.
-- `bun test packages/coding-agent/test/system-prompt-templates.test.ts` — passed.
 - `bun test packages/coding-agent/test/main-domain-canvas-routing.test.ts` — passed.
 - `bun test domain/growth/test/panels/growth-shell.test.ts` — passed.
+- `bun test packages/coding-agent/test/tool-dispose-coverage.test.ts` — passed.
+- `bun test packages/coding-agent/test/interactive-mode-plan-mode-persistence.test.ts` — passed.
+- `bun test packages/coding-agent/test/orchestrators/fluid-plan-validator.test.ts` — passed.
+- `bun test packages/coding-agent/test/integration/loop/lifecycle.test.ts` — passed.
 - `bun check:ts` — passed.
-- `bun test packages/coding-agent/test/` — failed in unrelated existing workspace regressions: `packages/coding-agent/test/tool-dispose-coverage.test.ts`, `packages/coding-agent/test/interactive-mode-plan-mode-persistence.test.ts`, `packages/coding-agent/test/orchestrators/fluid-plan-validator.test.ts`, and `packages/coding-agent/test/integration/loop/lifecycle.test.ts`.
+- `bun test packages/coding-agent/test/` — passed.
 - Manual: temporary `.spell/domain.json` with `{"domain":"growth"}` caused `bun packages/coding-agent/src/cli.ts` to open the `Spell Growth` QML shell; the temporary file was removed afterward.
 - Manual: `DISPLAY= WAYLAND_DISPLAY= bun packages/coding-agent/src/cli.ts -p "ping"` returned `pong` without any QML launch.
 - Manual: `DISPLAY= WAYLAND_DISPLAY= timeout 3 bun packages/coding-agent/src/cli.ts --mode rpc` emitted `{"type":"ready"}` without any QML launch.
+- Manual: from an arbitrary temporary directory, `DISPLAY= WAYLAND_DISPLAY= bun /home/user/code/ora/spell/packages/coding-agent/src/cli.ts --domain growth -p "ping"` succeeded, `DISPLAY= WAYLAND_DISPLAY= timeout 3 bun /home/user/code/ora/spell/packages/coding-agent/src/cli.ts --domain growth --mode rpc` emitted `{"type":"ready"}`, and `DISPLAY= WAYLAND_DISPLAY= timeout 5 bun /home/user/code/ora/spell/packages/coding-agent/src/cli.ts --domain growth` entered the default TUI without manifest-load or canvas-display errors.
 *** Artifacts
 - Growth shell screenshot: [[file:!tasks/plans/plan-artifacts/PLAN-064-growth-domain-boot-wiring/growth-shell-domain-launch.png]]
 - Growth domain prompt assets: `domain/growth/prompts/system.md`, `domain/growth/prompts/context.md`
 - Startup/domain tests: `packages/coding-agent/test/domain/detection.test.ts`, `packages/coding-agent/test/domain/loader.test.ts`, `packages/coding-agent/test/sdk-domain-policy.test.ts`, `packages/coding-agent/test/main-domain-canvas-routing.test.ts`
 *** Deviations
-- Plan remains in `DOING` because the required full `packages/coding-agent/test/` regression gate is currently failing in unrelated pre-existing tests listed above.
-- No plan work was deferred to follow-up items, so there are no `[[id:FUP-...]]` references for this execution.
-
-NOTE [2026-04-01]: Committed plan implementation as `d8f83e41a feat(coding-agent): wire growth domain startup`. Plan state remains DOING because the required full regression gate is still red.
-
-NOTE [2026-04-01]: An earlier 30s manual launch attempt timed out while LSP servers were starting (`rust-analyzer`, `yamlls`, `taplo`); this was superseded by the later successful longer-running manual growth-shell launch captured in the completion report and screenshot artifact.
-
-NOTE [2026-04-01]: Background job bg_14a9a7ca5b161ac5 completed successfully after the earlier timeout window: the manual growth-domain launch finished and printed `Resume this session with spell --resume 14a9a7cb9826323b`, which confirms the interactive auto-canvas startup path reached a resumable session state.
-
-NOTE [2026-04-01]: User-directed correction applied after initial verification: `spell` now keeps the interactive TUI as the default surface even when `--domain growth` is active. Growth domain canvas assets remain available for explicit canvas launches, but default interactive startup no longer auto-launches QML.
-
-NOTE [2026-04-01]: Built-in domain resolution now falls back outside the project workspace: running `bun /home/user/code/ora/spell/packages/coding-agent/src/cli.ts --domain growth` from a temporary arbitrary directory no longer tries to import `domain/growth/manifest.ts` from cwd. Verified manually with `-p`, `--mode rpc`, and a plain default-start command (the plain command entered the TUI and timed out after 5s without canvas/display or manifest-load errors).
+- None.

@@ -60,14 +60,16 @@ describe("validatePlanSemantic", () => {
 	});
 
 	test("fails open when no model is available", async () => {
-		const completeSimpleSpy = vi.spyOn(ai, "completeSimple");
+		const getApiKey = vi.fn(async () => "test-key");
+		const session = {
+			resolveRoleModel: () => undefined,
+			model: undefined,
+			sessionId: "session-1",
+			modelRegistry: { getApiKey },
+		} as unknown as AgentSession;
 
-		const result = await validatePlanSemantic(
-			createSession({ resolveRoleModel: () => undefined, model: undefined }),
-			BASIC_PLAN,
-			"Refactor fluid planner",
-		);
+		const result = await validatePlanSemantic(session, BASIC_PLAN, "Refactor fluid planner");
 		expect(result).toEqual({ valid: true });
-		expect(completeSimpleSpy).not.toHaveBeenCalled();
+		expect(getApiKey).not.toHaveBeenCalled();
 	});
 });

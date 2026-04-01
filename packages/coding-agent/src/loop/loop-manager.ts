@@ -259,7 +259,12 @@ export class LoopManager {
 	}
 
 	async resume(loopId: string): Promise<LoopSnapshot> {
-		const snapshot = this.#kernel.resume(loopId);
+		let snapshot = this.#kernel.resume(loopId);
+		// High-level resume should continue into the next runnable iteration when a loop was
+		// paused after finishing prior work and landing back in planning.
+		if (snapshot.state === LOOP_STATES.planning && snapshot.iteration > 0) {
+			snapshot = this.#kernel.done(loopId);
+		}
 		await this.#flushPendingEvents();
 		return snapshot;
 	}

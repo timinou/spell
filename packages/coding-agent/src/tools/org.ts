@@ -83,7 +83,9 @@ interface OrgCallPreview {
 // Tool class
 // =============================================================================
 
-export class OrgTool implements AgentTool<typeof orgSchema, { error?: boolean }, Theme> {
+type OrgToolDetails = { error?: boolean };
+
+export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Theme> {
 	readonly name = "org";
 	readonly label = "Org";
 	readonly description: string;
