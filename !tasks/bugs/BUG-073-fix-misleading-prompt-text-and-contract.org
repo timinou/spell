@@ -1,0 +1,46 @@
+#+TITLE: Fix misleading prompt text and contract inconsistency in tool tiering
+#+STATE: DONE
+#+SESSION_ID: 14aa01d03d543273
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T20-52-45-941Z_14aa01d03d543273.jsonl]]
+#+CUSTOM_ID: BUG-073-fix-misleading-prompt-text-and-contract
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: packages/coding-agent
+#+DEPENDS: BUG-072-clean-up-dead-code-and-stale-comments-fr
+
+* Initial Message
+
+the tools should be available even if only minmally shown in the prompt. and all tools should be included, just described at differnt levenls
+
+Fix the system prompt wording and resolveUnknownTool return value
+to match the actual behavior of description compaction.
+
+* Changes
+
+** Fix misleading system prompt text
+- =packages/coding-agent/src/prompts/system/system-prompt.md= line 158:
+  Current: =Specialized tools (compact descriptions above; full docs load on first use)=
+  The "full docs load on first use" claim is false — there is no mechanism to upgrade descriptions.
+  Change to: =Specialized tools (shown with compact descriptions above)=
+
+** Fix resolveUnknownTool return value
+- =packages/coding-agent/src/sdk.ts= ~line 1628: =resolveUnknownTool= returns =toolRegistry.get(toolName)=
+  which is the original tool with full description. But =setActiveToolsByName= (called just before) wraps
+  it with a compact description. The tool returned for execution this turn should match what the agent
+  state has.
+- Fix: after =setActiveToolsByName=, look up the tool from the agent's current tools (which are the
+  compact-wrapped clones) instead of from the raw registry. Use something like:
+  =const activeTool = session?.agent.state.tools.find(t => t.name === toolName);=
+  =return activeTool ?? tool;=
+
+** Add hash documentation comment
+- =packages/coding-agent/src/session/agent-session.ts= ~line 1871: the hash-based skip computes from
+  tool names only. Add a comment documenting this assumption:
+  =// Hash covers tool name set only — tool object identity/description changes are not detected.=
+  =// This is safe because description compaction is deterministic for a given tool name.=
+
+* Verification
+- =bun check:ts= passes
+- Manual: start session, verify system prompt says "compact descriptions" without "full docs load"
+- The resolveUnknownTool path is exercised when the model calls a tool not in the active set
+  (rare for builtins since all are active, but fires for MCP edge cases)

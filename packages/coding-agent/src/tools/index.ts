@@ -166,6 +166,8 @@ export interface ToolSession {
 	getPlanModeState?: () => PlanModeState | undefined;
 	/** Active mode state (plan, audit, or user-defined) */
 	getActiveModeState?: () => ActiveModeState | undefined;
+	/** Whether the agent is currently idle (not streaming a turn). */
+	isAgentIdle?: () => boolean;
 	/** Get compact conversation context for subagents (excludes tool results, system prompts) */
 	getCompactContext?: () => string;
 	/** Get cached todo phases for this session. */
@@ -269,7 +271,7 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	cancel_job: "standard",
 	await: "standard",
 
-	// Specialized — loaded on demand when first called
+	// Specialized — compact API descriptions to reduce token usage
 	canvas: "specialized",
 	python: "specialized",
 	notebook: "specialized",
@@ -290,19 +292,6 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 /** Get the tool tier, defaulting to "standard" for unknown tools (e.g. MCP tools). */
 export function getToolTier(toolName: string): ToolTier {
 	return TOOL_TIERS[toolName] ?? "standard";
-}
-
-/** Filter tool names to those in the initial active set (core + standard). */
-export function getInitialActiveToolNames(allToolNames: string[]): string[] {
-	return allToolNames.filter(name => {
-		const tier = getToolTier(name);
-		return tier === "core" || tier === "standard";
-	});
-}
-
-/** Get tool names that are deferred (specialized tier, not initially active). */
-export function getDeferredToolNames(allToolNames: string[]): string[] {
-	return allToolNames.filter(name => getToolTier(name) === "specialized");
 }
 
 /**

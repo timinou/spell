@@ -1868,7 +1868,8 @@ export class AgentSession {
 				),
 			);
 		}
-		// Skip rebuild if the active tool set hasn't changed
+		// Hash covers tool name set only — tool object identity/description changes are not detected.
+		// This is safe because description compaction is deterministic for a given tool name.
 		const newHash = Bun.hash(validToolNames.join("\0"));
 		if (newHash === this.#activeToolSetHash) {
 			return;

@@ -961,6 +961,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		getPlanModeState: () => session?.getPlanModeState(),
 		getActiveModeState: () => session?.getActiveModeState(),
+		isAgentIdle: () => !session.isStreaming,
 		getCompactContext: () => session.formatCompactContext(),
 		getTodoPhases: () => session.getTodoPhases(),
 		setTodoPhases: (phases, options) => session.setTodoPhases(phases, options),
@@ -1444,11 +1445,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const explicitlyRequestedMCPToolNames = hasExplicitToolNames
 		? requestedActiveToolNames.filter(name => name.startsWith("mcp_"))
 		: [];
-	const allInitialToolNames = mcpDiscoveryEnabled
+	const initialToolNames = mcpDiscoveryEnabled
 		? [...requestedActiveToolNames.filter(name => !name.startsWith("mcp_")), ...explicitlyRequestedMCPToolNames]
 		: [...requestedActiveToolNames];
 	// All tools stay in the active set — tiering controls description verbosity, not availability.
-	const initialToolNames = [...allInitialToolNames];
 	const initialSelectedMCPToolNames = mcpDiscoveryEnabled ? [...explicitlyRequestedMCPToolNames] : [];
 
 	// Custom tools and extension-registered tools are always included regardless of toolNames filter
@@ -1625,7 +1625,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				await session?.setActiveToolsByName([...currentActiveNames, toolName]);
 				logger.debug("Auto-activated tool from registry", { toolName });
 			}
-			return tool;
+			// Return the tool from the agent's active set (compact-wrapped) rather than
+			// the raw registry entry, so the tool used this turn matches the agent state.
+			const activeTool = session?.agent.state.tools.find(t => t.name === toolName);
+			return activeTool ?? tool;
 		},
 	});
 	cursorEventEmitter = event => agent.emitExternalEvent(event);

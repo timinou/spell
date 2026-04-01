@@ -1,0 +1,42 @@
+#+TITLE: Clean up dead code and stale comments from tool tiering redesign
+#+STATE: DONE
+#+SESSION_ID: 14aa01d03d543273
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T20-52-45-941Z_14aa01d03d543273.jsonl]]
+#+CUSTOM_ID: BUG-072-clean-up-dead-code-and-stale-comments-fr
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: packages/coding-agent
+
+* Initial Message
+
+the tools should be available even if only minmally shown in the prompt. and all tools should be included, just described at differnt levenls
+
+Remove dead code, stale comments, and redundant variables left over from the
+deferred-loading design that was replaced by description compaction.
+
+* Changes
+
+** Remove dead helpers from tools/index.ts
+- Delete =getInitialActiveToolNames()= and =getDeferredToolNames()= — exported but unused in production.
+- Delete tests for these in =test/tools/index.test.ts= (=describe("getInitialActiveToolNames")= and =describe("getDeferredToolNames")=).
+- Keep =getToolTier()=, =TOOL_TIERS=, =compactToolDescription()= — these are used.
+
+** Remove dead task-classifier module
+- Delete =packages/coding-agent/src/task-classifier.ts= entirely — not imported anywhere in =src/=.
+- Delete =packages/coding-agent/test/task-classifier.test.ts= entirely.
+- The =applyClassification= function uses the "deferred vs active" model that no longer exists.
+  If a classifier is needed later, it should be redesigned around description compaction, not tool removal.
+
+** Fix stale comment in TOOL_TIERS
+- =packages/coding-agent/src/tools/index.ts= line 274: change
+  =// Specialized — loaded on demand when first called= to
+  =// Specialized — compact API descriptions to reduce token usage=
+
+** Collapse redundant variable in sdk.ts
+- =packages/coding-agent/src/sdk.ts= lines ~1447-1451: =allInitialToolNames= is spread into =initialToolNames=
+  with no filtering. Collapse into a single =initialToolNames= variable.
+
+* Verification
+- =bun check:ts= passes
+- =bun test packages/coding-agent/test/tools/index.test.ts= passes (dead test suites removed, remaining pass)
+- =grep -r "getInitialActiveToolNames\|getDeferredToolNames\|task-classifier\|classifyTask\|applyClassification" packages/coding-agent/src/= returns no matches

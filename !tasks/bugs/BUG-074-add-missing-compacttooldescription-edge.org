@@ -1,0 +1,44 @@
+#+TITLE: Add missing compactToolDescription edge case tests
+#+STATE: DONE
+#+SESSION_ID: 14aa01d03d543273
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T20-52-45-941Z_14aa01d03d543273.jsonl]]
+#+CUSTOM_ID: BUG-074-add-missing-compacttooldescription-edge
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: packages/coding-agent
+#+DEPENDS: BUG-072-clean-up-dead-code-and-stale-comments-fr
+
+* Initial Message
+
+the tools should be available even if only minmally shown in the prompt. and all tools should be included, just described at differnt levenls
+
+Add missing test coverage for =compactToolDescription= edge cases.
+
+* Changes
+
+** Add tests to =packages/coding-agent/test/tools/index.test.ts=
+
+In the =describe("compactToolDescription")= block, add:
+
+1. Multiline description with first sentence on first line:
+   Input: ="Reads files from local filesystem or internal URLs.
+
+<instruction>
+Use offset for large files.
+</instruction>"=
+   Expected: ="Reads files from local filesystem or internal URLs."=
+
+2. Description with abbreviation period (=e.g.=):
+   Input: ="Use e.g. offset and limit for pagination. Supports images."=
+   This tests the non-greedy regex — it will match at =e.g.= which is incorrect.
+   Document the behavior (truncates at first period) and decide:
+   - Accept it (abbreviation periods are rare in tool descriptions, first sentence is still useful)
+   - Or fix the regex to handle common abbreviations
+
+3. Description with no period at all:
+   Input: ="A tool that does something without any sentence terminator"=
+   Expected: the full string (under 120 chars)
+
+* Verification
+- =bun test packages/coding-agent/test/tools/index.test.ts= passes
+- Coverage of =compactToolDescription= includes multiline, abbreviation, and no-period cases

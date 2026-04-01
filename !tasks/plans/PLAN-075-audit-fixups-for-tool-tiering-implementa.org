@@ -1,0 +1,69 @@
+#+TITLE: Audit fixups for tool tiering implementation
+#+STATE: DONE
+#+SESSION_ID: 14aa01d03d543273
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T20-52-45-941Z_14aa01d03d543273.jsonl]]
+#+CUSTOM_ID: PLAN-075-audit-fixups-for-tool-tiering-implementa
+
+
+* Initial Message
+
+the tools should be available even if only minmally shown in the prompt. and all tools should be included, just described at differnt levenls
+
+* Context
+
+Post-implementation audit of PLAN-074 (intelligent prompt context management) found 8 issues
+across dead code, stale comments, misleading prompts, contract inconsistency, and test gaps.
+All stem from the mid-implementation pivot from "deferred tool loading" to "description compaction."
+
+The fixes are grouped into three items:
+1. Dead code and stale comment removal (bulk cleanup)
+2. Prompt text and contract fixes (correctness)
+3. Test gap coverage (hardening)
+
+All changes are confined to =packages/coding-agent=. No changes to =packages/agent= or =packages/ai=.
+
+* Verification
+
+#+begin_src sh
+bun check:ts
+bun test packages/coding-agent/test/tools/index.test.ts
+#+end_src
+
+After execution, verify:
+- =grep -r "getInitialActiveToolNames\|getDeferredToolNames\|task-classifier\|classifyTask\|applyClassification" packages/coding-agent/src/= returns no matches
+- =packages/coding-agent/src/task-classifier.ts= does not exist
+- =packages/coding-agent/test/task-classifier.test.ts= does not exist
+- System prompt template line says "compact descriptions" not "full docs load"
+
+* Execution Manifest
+
+** Wave 1: Cleanup
+- [[id:BUG-072-clean-up-dead-code-and-stale-comments-fr]] — S effort, #A priority
+  Remove dead helpers, dead classifier module, stale comments, redundant variable.
+
+** Wave 2: Correctness (depends on Wave 1)
+- [[id:BUG-073-fix-misleading-prompt-text-and-contract]] — S effort, #A priority
+  Fix prompt wording, resolveUnknownTool return value, hash documentation.
+  DEPENDS: BUG-072
+
+** Wave 3: Test coverage (depends on Wave 1)
+- [[id:BUG-074-add-missing-compacttooldescription-edge]] — S effort, #B priority
+  Add multiline, abbreviation, and no-period test cases for compactToolDescription.
+  DEPENDS: BUG-072
+
+** Completion [2026-04-01]
+*** Verification
+- =bun check:ts= — passed (1533 files, no errors)
+- =bun test packages/coding-agent/test/tools/index.test.ts= — 34 pass, 0 fail, 91 expect() calls
+- =grep -r \"getInitialActiveToolNames\\|getDeferredToolNames\\|task-classifier\\|classifyTask\\|applyClassification\" packages/coding-agent/src/= — no matches
+- =packages/coding-agent/src/task-classifier.ts= — confirmed deleted
+- =packages/coding-agent/test/task-classifier.test.ts= — confirmed deleted
+- System prompt line 158 now reads: =Specialized tools (shown with compact descriptions above)= — no \"full docs load\" claim
+
+*** Artifacts
+- BUG-072: Removed =getInitialActiveToolNames=, =getDeferredToolNames= from tools/index.ts; deleted task-classifier.ts and its test; fixed stale comment in TOOL_TIERS; collapsed =allInitialToolNames= into =initialToolNames= in sdk.ts
+- BUG-073: Fixed system-prompt.md wording; fixed =resolveUnknownTool= to return compact-wrapped tool from agent state; added hash documentation comment in agent-session.ts
+- BUG-074: Added 3 edge case tests for =compactToolDescription=: multiline extraction, abbreviation period truncation, no-period fallback
+
+*** Deviations
+None."

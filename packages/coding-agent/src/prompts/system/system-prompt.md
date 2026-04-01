@@ -155,7 +155,7 @@ You **MUST** use the following tools, as effectively as possible, to complete th
 {{/each}}
 {{/if}}
 {{#if hasSpecializedTools}}
-Specialized tools (compact descriptions above; full docs load on first use): {{#list specializedToolNames join=", "}}`{{this}}`{{/list}}
+Specialized tools (shown with compact descriptions above): {{#list specializedToolNames join=", "}}`{{this}}`{{/list}}
 {{/if}}
 
 {{#if mcpDiscoveryMode}}

@@ -4,8 +4,6 @@ import {
 	BUILTIN_TOOLS,
 	compactToolDescription,
 	createTools,
-	getDeferredToolNames,
-	getInitialActiveToolNames,
 	getToolTier,
 	HIDDEN_TOOLS,
 	TOOL_TIERS,
@@ -277,39 +275,6 @@ describe("TOOL_TIERS", () => {
 	});
 });
 
-describe("getInitialActiveToolNames", () => {
-	it("excludes specialized tools from initial set", () => {
-		const all = ["read", "edit", "canvas", "ast_grep", "python", "notebook"];
-		const initial = getInitialActiveToolNames(all);
-		expect(initial).toContain("read");
-		expect(initial).toContain("edit");
-		expect(initial).toContain("ast_grep");
-		expect(initial).not.toContain("canvas");
-		expect(initial).not.toContain("python");
-		expect(initial).not.toContain("notebook");
-	});
-
-	it("preserves order", () => {
-		const all = ["read", "canvas", "ast_grep", "edit"];
-		const initial = getInitialActiveToolNames(all);
-		expect(initial).toEqual(["read", "ast_grep", "edit"]);
-	});
-});
-
-describe("getDeferredToolNames", () => {
-	it("returns only specialized-tier tools", () => {
-		const all = ["read", "edit", "canvas", "ast_grep", "python", "notebook"];
-		const deferred = getDeferredToolNames(all);
-		expect(deferred).toEqual(["canvas", "python", "notebook"]);
-	});
-
-	it("returns empty array when no specialized tools present", () => {
-		const all = ["read", "edit", "ast_grep"];
-		const deferred = getDeferredToolNames(all);
-		expect(deferred).toEqual([]);
-	});
-});
-
 describe("compactToolDescription", () => {
 	it("extracts first sentence", () => {
 		const full = "Performs structural code search using AST matching. Supports multiple patterns and languages.";
@@ -330,6 +295,25 @@ describe("compactToolDescription", () => {
 
 	it("returns empty string for empty input", () => {
 		expect(compactToolDescription("")).toBe("");
+	});
+
+	it("extracts first sentence from multiline description", () => {
+		const full =
+			"Reads files from local filesystem or internal URLs.\n\n<instruction>\nUse offset for large files.\n</instruction>";
+		expect(compactToolDescription(full)).toBe("Reads files from local filesystem or internal URLs.");
+	});
+
+	it("truncates at first period even inside abbreviations", () => {
+		// The non-greedy regex matches at the first period boundary.
+		// Acceptable: abbreviation periods are rare in tool descriptions, and the
+		// truncated prefix is still a useful compact summary.
+		const full = "Use e.g. offset and limit for pagination. Supports images.";
+		expect(compactToolDescription(full)).toBe("Use e.g.");
+	});
+
+	it("returns full string when no sentence boundary and under 120 chars", () => {
+		const full = "A tool that does something without any sentence terminator";
+		expect(compactToolDescription(full)).toBe(full);
 	});
 });
 
