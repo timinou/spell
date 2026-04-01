@@ -1,0 +1,21 @@
+#+TITLE: Follow-up clear spellcast verification blockers for PLAN-076
+#+STATE: INIT
+#+SESSION_ID: 14aa11ec2af4b0df
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T22-03-08-843Z_14aa11ec2af4b0df.jsonl]]
+#+CUSTOM_ID: FUP-019-follow-up-clear-spellcast-verification-b
+
+Deferred from PLAN-076-fix-subagent-hang-on-provider-quota-exha verification.
+
+Problem:
+- `bun check:ts` is blocked by unrelated workspace files under `packages/coding-agent/src/spellcast/`.
+- `bun x tsgo -p tsconfig.json` currently fails on `packages/coding-agent/src/spellcast/discovery.ts` because `node:fs/promises` does not export `Dirent`.
+
+Needed:
+1. Fix the type issue in `packages/coding-agent/src/spellcast/discovery.ts`.
+2. Apply the pending Biome formatting/import organization in `packages/coding-agent/src/spellcast/discovery.ts`, `index.ts`, and `manifest.ts`.
+3. Re-run `bun check:ts`.
+4. Once green, revisit PLAN-076 and close it truthfully if no other blockers remain.
+
+Context:
+- PLAN-076 implementation changes were committed separately in `0b166390b` (`fix(coding-agent): surface subagent retry progress`).
+- This follow-up exists only to restore verification baseline so the blocked plan can be closed.

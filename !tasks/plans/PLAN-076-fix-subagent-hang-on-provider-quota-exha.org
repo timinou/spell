@@ -1,8 +1,10 @@
 #+TITLE: Surface subagent retry state in task progress
-#+STATE: DOING
+#+STATE: BLOCKED
 #+SESSION_ID: 14aa0b566674b0dd
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T21-34-22-617Z_14aa0b566674b0dd.jsonl]]
 #+CUSTOM_ID: PLAN-076-fix-subagent-hang-on-provider-quota-exha
+
+NOTE [2026-04-01]: Plan implementation is committed, but closure is blocked by unrelated workspace verification failures in packages/coding-agent/src/spellcast/; see FUP-019-follow-up-clear-spellcast-verification-b.
 
 
 * Context
@@ -74,3 +76,4 @@ bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts
 *** Deviations
 - [[id:BUG-076-async-task-errors-not-surfaced-to-user-d]] is blocked pending unrelated workspace verification failures in `packages/coding-agent/src/spellcast/`.
 - Live manual reproduction against an actual quota-exhausted provider account was not run in this session; focused regression tests cover executor progress, async forwarding, task rendering, and await output.
+- Verification closure deferred to [[id:FUP-019-follow-up-clear-spellcast-verification-b]].
