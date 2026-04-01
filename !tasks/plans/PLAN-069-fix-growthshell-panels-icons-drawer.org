@@ -1,0 +1,96 @@
+#+TITLE: Fix GrowthShell  panels icons drawer
+#+STATE: DONE
+#+SESSION_ID: 14a9c4dec1050854
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T16-26-30-020Z_14a9c4dec1050854.jsonl]]
+#+CUSTOM_ID: PLAN-069-fix-growthshell-panels-icons-drawer
+
+
+* Initial Message
+
+/tmp/tmp.S0VmCsv8JV.png
+for Spell Growth:
+1. the icons aren't showing
+2. the bottom drawer is not shown at all
+3. It always says "Select a workspace to begin"
+
+So it's unusable basically. Can you use the Spell Canvas tool to investigate yourself, and tell me what's uyp?
+
+* Context
+
+The =spell growth= command launches a QML shell (=GrowthShell.qml=) that is currently non-functional. Three bugs make it unusable:
+
+1. **Panel loading broken**: The main content area always shows "Select a workspace to begin" because =mainPanelLoader= never has its =source= set. The panel registry (=bridge.props.panels=) with resolved QML paths is completely ignored. Workspace selection triggers a round-trip to TS (=workspace_switch= → =workspace_layout=), but the returned panel slot data is stored in =currentPanels= and never used to load anything.
+
+2. **Icons render as text**: Workspace icon names ("home", "search", "lightbulb") display as literal strings instead of emoji/symbols. No icon font or name→glyph mapping exists.
+
+3. **ChatDrawer invisible/non-functional**: The 56px collapsed bar blends into the background. The drawer's =chat_message= event type is not handled by =qml-mode.ts= (which only processes ="prompt"=, ="abort"=, ="steer"=, ="workspace_switch"=, ="restart"=). Agent tab updates are never sent.
+
+** Key Architecture Context
+
+=qml-mode.ts= launches the shell with =bridge.props= containing:
+- =panels=: Array of ={ id, title, icon, path }= where =path= is an absolute filesystem path to the QML file (resolved by =resolveDomainPanels=)
+- =workspaces=: Array of ={ id, name, icon, panels: [{ panelId, position }] }= where =panelId= references the =panels= array by =id=
+
+The default =shell.qml= works because it uses =bridge.props.panels= directly with a =Repeater= + =Loader= pattern driven by =panelsModel=. GrowthShell ignored this architecture.
+
+** Approach
+
+Fix all three in =GrowthShell.qml= as a single coherent change:
+- Build a panel registry (=panelId= → QML path) from =bridge.props.panels= on startup
+- Wire workspace selection to load the main panel via the registry
+- Add icon resolver function for sidebar
+- Route =chat_message= events to =session.prompt()= in =qml-mode.ts=
+- Improve ChatDrawer collapsed-state visibility
+
+** Key Files
+- =domain/growth/src/qml/panels/GrowthShell.qml= — primary fix target
+- =domain/growth/src/qml/panels/ChatDrawer.qml= — visibility improvements
+- =packages/coding-agent/src/modes/qml-mode.ts= — add =chat_message= event handler
+- =domain/growth/src/qml/panels/GrowthShellTestHarness.qml= — update for testability
+- =domain/growth/test/panels/growth-shell.test.ts= — add functional tests
+- =domain/growth/manifest.ts= — optionally update icon values
+
+* Verification
+
+1. =bun test domain/growth/test/panels/growth-shell.test.ts= — all tests pass including new panel-loading and icon assertions
+2. Launch via Canvas tool with mock props matching =growthDomain.workspaces= and =growthDomain.panels=:
+   - Screenshot: sidebar shows emoji icons, not text
+   - Screenshot: main area shows loaded panel content (not placeholder)
+   - Screenshot: ChatDrawer collapsed bar is visually distinct
+   - Screenshot: ChatDrawer expands when drag handle clicked
+3. =bun check:ts= — no type errors introduced
+
+* Execution Manifest
+
+** Wave 1 — Core panel loading + icons (parallel)
+- [[id:BUG-059-growthshell-panel-loading-broken-main-ar]] — Panel loading (primary, ~3h)
+- [[id:BUG-060-growthshell-sidebar-icons-render-as-text]] — Icon rendering (~30m, parallel — touches different code in same file)
+
+** Wave 2 — ChatDrawer (depends on Wave 1)
+- [[id:BUG-061-growthshell-chatdrawer-nearly-invisible]] — ChatDrawer fix (~1h, depends on panel loading being wired)
+
+** Completion [2026-04-01]
+
+*** Verification
+- =bun test domain/growth/test/panels/growth-shell.test.ts= — 12 pass, 0 fail (panel registry, workspace switching, icon rendering, ChatDrawer accent border)
+- =bun test domain/growth/test/panels/chat-drawer.test.ts= — 2 pass, 0 fail (collapsed height, chat label)
+- =bun check:ts= — clean, no type errors
+- Visual screenshots captured via QmlTestHarness in offscreen mode and Canvas tool
+
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-069-fix-growthshell-panels-icons-drawer/01-default-state-general-workspace.png]] — Default state with emoji sidebar icons and ChatDrawer accent border visible
+- [[file:!tasks/plans/plan-artifacts/PLAN-069-fix-growthshell-panels-icons-drawer/02-sidebar-emoji-icons.png]] — Sidebar emoji icons (offscreen)
+- [[file:!tasks/plans/plan-artifacts/PLAN-069-fix-growthshell-panels-icons-drawer/03-strategy-workspace-panel-loaded.png]] — Strategy workspace loads GrowthDashboard panel
+- [[file:!tasks/plans/plan-artifacts/PLAN-069-fix-growthshell-panels-icons-drawer/04-campaign-workspace-panel-loaded.png]] — Campaign workspace loads KanbanBoard panel
+- [[file:!tasks/plans/plan-artifacts/PLAN-069-fix-growthshell-panels-icons-drawer/05-chatdrawer-expanded.png]] — ChatDrawer expanded state
+
+*** Changes
+- =domain/growth/src/qml/panels/GrowthShell.qml= — Added panelRegistry, iconFor(), loadWorkspacePanel(), Component.onCompleted registry init
+- =domain/growth/src/qml/panels/ChatDrawer.qml= — Added 2px purple accent border, improved drag handle bar, chat emoji label, brighter preview text
+- =packages/coding-agent/src/modes/qml-mode.ts= — Added =chat_message= case to processQmlEvents
+- =domain/growth/src/qml/panels/GrowthShellTestHarness.qml= — Mirrored panel loading and icon changes
+- =domain/growth/test/panels/growth-shell.test.ts= — Added panel registry, workspace switching, icon, ChatDrawer tests
+- =domain/growth/test/panels/chat-drawer.test.ts= — Fixed test to find ChatDrawer by custom property instead of QQuickRectangle type
+
+*** Deviations
+None.

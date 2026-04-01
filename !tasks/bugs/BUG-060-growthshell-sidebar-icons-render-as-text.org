@@ -1,0 +1,58 @@
+#+TITLE: GrowthShell sidebar icons render as text instead of symbols
+#+STATE: DONE
+#+SESSION_ID: 14a9c4dec1050854
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T16-26-30-020Z_14a9c4dec1050854.jsonl]]
+#+CUSTOM_ID: BUG-060-growthshell-sidebar-icons-render-as-text
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: qml
+
+NOTE [2026-04-01]: Added iconFor() function to GrowthShell.qml that maps semantic icon names to Unicode emoji. Sidebar labels now call iconFor(modelData.icon) instead of displaying raw text.
+
+* Initial Message
+
+/tmp/tmp.S0VmCsv8JV.png
+for Spell Growth:
+1. the icons aren't showing
+2. the bottom drawer is not shown at all
+3. It always says "Select a workspace to begin"
+
+So it's unusable basically. Can you use the Spell Canvas tool to investigate yourself, and tell me what's uyp?
+
+Workspace =icon= fields contain semantic names ("home", "search", "lightbulb", "edit", "chart", "rocket") but =GrowthShell.qml= line 70 renders them as =Label { text: modelData.icon }= — plain text, no icon font, no mapping.
+
+* Root Cause
+
+The workspace definitions in =manifest.ts= use semantic icon names. The default =shell.qml= avoids this problem by using literal Unicode symbols ("●", "■"). The Growth shell adopted semantic names but never implemented a resolver.
+
+There is no icon font loaded (Material Icons, etc.) and no name→Unicode mapping function.
+
+* Fix
+
+Add a JS icon resolver function in =GrowthShell.qml=:
+
+#+begin_src javascript
+function iconFor(name) {
+    var icons = {
+        "home": "🏠", "search": "🔍", "lightbulb": "💡",
+        "edit": "✏️", "chart": "📊", "rocket": "🚀",
+        "briefcase": "💼", "kanban": "📋"
+    };
+    return icons[name] || "●";
+}
+#+end_src
+
+Then change the icon label from:
+=text: modelData.icon || ""=
+to:
+=text: iconFor(modelData.icon)=
+
+Alternatively, change the manifest workspace definitions to use Unicode directly — simpler, no runtime mapping needed. The =ComponentPalette.qml= already uses emoji in this codebase, so it's an established pattern.
+
+* Files
+- =domain/growth/src/qml/panels/GrowthShell.qml= — add icon mapping function + update label binding
+- =domain/growth/manifest.ts= — optionally change icon values to Unicode directly
+
+* Acceptance Criteria
+- Sidebar shows emoji/symbol icons instead of text names
+- Visual: screenshot shows icon glyphs next to workspace names

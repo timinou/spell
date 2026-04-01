@@ -1,0 +1,65 @@
+#+TITLE: GrowthShell ChatDrawer nearly invisible and non-functional
+#+STATE: DONE
+#+SESSION_ID: 14a9c4dec1050854
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T16-26-30-020Z_14a9c4dec1050854.jsonl]]
+#+CUSTOM_ID: BUG-061-growthshell-chatdrawer-nearly-invisible
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: qml
+#+DEPENDS: BUG-059-growthshell-panel-loading-broken-main-ar
+
+NOTE [2026-04-01]: ChatDrawer collapsed bar improved: 2px purple accent border, lighter drag handle bar (#2D3748), emoji Chat label with expand/collapse arrow, brighter preview text (#D1D5DB). chat_message event handler added to qml-mode.ts processQmlEvents.
+
+* Initial Message
+
+/tmp/tmp.S0VmCsv8JV.png
+for Spell Growth:
+1. the icons aren't showing
+2. the bottom drawer is not shown at all
+3. It always says "Select a workspace to begin"
+
+So it's unusable basically. Can you use the Spell Canvas tool to investigate yourself, and tell me what's uyp?
+
+The ChatDrawer at the bottom of GrowthShell renders in collapsed state (56px) but:
+1. It blends into the dark background and looks like a window decoration
+2. Even when expanded, it shows "No active agents" because no =agent_tabs_update= messages are sent
+3. The chat input field has no wiring — messages sent via =bridge.send= go nowhere meaningful
+
+* Root Cause
+
+The ChatDrawer is a standalone QML component (=domain/growth/src/qml/panels/ChatDrawer.qml=) that:
+- Expects =agent_tabs_update= messages to populate tabs — these are never sent by =qml-mode.ts=
+- Has a chat input that sends ={ type: 'chat_message', text, agentId }= — but =qml-mode.ts= only handles ="prompt"=, ="abort"=, ="steer"=, ="workspace_switch"=, and ="restart"= events
+- The collapsed bar is a 56px rectangle with 12px "Chat" text in =#9CA3AF= on =#1F2937= — barely visible
+
+The =GrowthShellTestHarness.qml= replaced the ChatDrawer entirely with a static 56px rectangle, confirming it was never tested interactively.
+
+* Fix
+
+1. **Visibility**: Increase visual prominence of collapsed state:
+   - Slightly lighter background or top border accent
+   - Larger "Chat" label with an icon
+
+2. **Message routing**: Map ChatDrawer's =chat_message= events to the session's =prompt= action in =qml-mode.ts=:
+   - In =processQmlEvents=, add a =chat_message= case that calls =session.prompt(payload.text)=
+
+3. **Agent status**: Wire =agent_start/agent_end= session events to ChatDrawer:
+   - Send =agent_tabs_update= messages when agent state changes
+   - At minimum, a single "Agent" tab that shows busy/idle
+
+4. **Streaming responses**: Forward agent text output to the ChatDrawer:
+   - Send =chat_response= messages as the agent streams
+   - ChatDrawer needs a text area to display responses (currently missing)
+
+Note: Items 3-4 are larger scope. Minimum viable fix is items 1-2.
+
+* Files
+- =domain/growth/src/qml/panels/ChatDrawer.qml= — visibility improvements, response display
+- =packages/coding-agent/src/modes/qml-mode.ts= — add =chat_message= handler
+- =domain/growth/test/panels/growth-shell.test.ts= — add ChatDrawer interaction tests
+
+* Acceptance Criteria
+- ChatDrawer collapsed bar is visually distinct from the window background
+- Clicking the drag handle expands the drawer
+- Typing a message and pressing Enter/Send dispatches it to the agent session
+- Visual: screenshot shows expanded ChatDrawer with input field

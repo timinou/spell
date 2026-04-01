@@ -1,0 +1,67 @@
+#+TITLE: GrowthShell panel loading broken  main area never loads content
+#+STATE: DONE
+#+SESSION_ID: 14a9c4dec1050854
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T16-26-30-020Z_14a9c4dec1050854.jsonl]]
+#+CUSTOM_ID: BUG-059-growthshell-panel-loading-broken-main-ar
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: qml
+
+NOTE [2026-04-01]: Panel loading fixed. GrowthShell now builds a panelRegistry from bridge.props.panels on startup and resolves the main panel for each workspace via loadWorkspacePanel(). Workspace switching triggers panel loading via onCurrentWorkspaceIdChanged.
+
+* Initial Message
+
+/tmp/tmp.S0VmCsv8JV.png
+for Spell Growth:
+1. the icons aren't showing
+2. the bottom drawer is not shown at all
+3. It always says "Select a workspace to begin"
+
+So it's unusable basically. Can you use the Spell Canvas tool to investigate yourself, and tell me what's uyp?
+
+The =mainPanelLoader= in =GrowthShell.qml= never has its =source= property set. When a workspace is selected:
+1. QML sends =workspace_switch= to TS
+2. TS sends back =workspace_layout= with panel slot info (=panelId=, =position=)
+3. QML stores =currentPanels= but never maps =panelId= → QML file path
+4. =bridge.props.panels= (containing resolved paths) is completely ignored
+
+The result: "Select a workspace to begin" is always shown regardless of workspace selection.
+
+* Root Cause
+
+=GrowthShell.qml= has a =Loader= (line 108-111) with no =source= binding. The =Connections= handler (line 130-137) for =workspace_layout= updates =currentPanels= but nothing uses it to load panels. There is no panel registry mapping panel IDs to QML paths.
+
+Compare with the working =shell.qml= which:
+- Populates a =panelsModel= from =bridge.props.panels= (which includes resolved =path= fields)
+- Uses a =Repeater= with =Loader= delegates whose =source= comes from =model.path=
+- Toggles visibility via =activePanelIndex=
+
+* Fix
+
+Restructure =GrowthShell.qml= main content area:
+
+1. Add a =panelRegistry= property built from =bridge.props.panels= on =Component.onCompleted=:
+   - Map each panel's =id= to its =path= (already resolved to absolute paths by =qml-mode.ts=)
+
+2. When =currentWorkspaceId= changes, resolve panels directly from the local workspace data:
+   - Find the workspace in =workspaces= array by =currentWorkspaceId=
+   - Extract the =main= position panel slot
+   - Look up its QML file path from =panelRegistry=
+   - Set =mainPanelLoader.source= to that path
+
+3. Handle the =workspace_layout= message as an override (TS may augment layout):
+   - Same resolution: find =main= panel slot → registry lookup → set loader source
+
+4. Optionally support =secondary= panel position via a second =Loader= in a =SplitView=
+
+* Files
+- =domain/growth/src/qml/panels/GrowthShell.qml= — main fix
+- =domain/growth/src/qml/panels/GrowthShellTestHarness.qml= — update to test panel loading
+- =domain/growth/test/panels/growth-shell.test.ts= — add tests for panel loading
+
+* Acceptance Criteria
+- Selecting "General" workspace loads the chat panel in the main area
+- Selecting "Strategy" workspace loads the dashboard panel
+- Switching workspaces swaps the loaded panel
+- Test: =bun test domain/growth/test/panels/growth-shell.test.ts= passes with new panel-loading assertions
+- Visual: screenshot shows loaded panel content instead of placeholder text

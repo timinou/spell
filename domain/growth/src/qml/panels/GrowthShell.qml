@@ -4,6 +4,7 @@ import QtQuick.Layouts 1.15
 import "../components"
 
 ApplicationWindow {
+    id: root
     visible: true
     width: windowWidth
     height: windowHeight
@@ -11,8 +12,67 @@ ApplicationWindow {
     color: "#111827"
 
     property var workspaces: bridge.props.workspaces || []
+    property var panels: bridge.props.panels || []
     property string currentWorkspaceId: "general"
     property var currentPanels: []
+    // Panel registry: maps panelId -> absolute QML file path.
+    // Built once from bridge.props.panels in Component.onCompleted.
+    property var panelRegistry: ({})
+
+    function iconFor(name: string): string {
+        var icons = {
+            "home": "\u{1F3E0}",
+            "search": "\u{1F50D}",
+            "lightbulb": "\u{1F4A1}",
+            "edit": "\u{270F}\u{FE0F}",
+            "chart": "\u{1F4CA}",
+            "rocket": "\u{1F680}",
+            "briefcase": "\u{1F4BC}",
+            "kanban": "\u{1F4CB}"
+        };
+        return icons[name] || name || "\u{25CF}";
+    }
+
+    // Resolve the main panel for the current workspace and load it.
+    function loadWorkspacePanel(): void {
+        var ws = null;
+        for (var i = 0; i < workspaces.length; i++) {
+            if (workspaces[i].id === currentWorkspaceId) {
+                ws = workspaces[i];
+                break;
+            }
+        }
+        if (!ws || !ws.panels) {
+            mainPanelLoader.source = "";
+            return;
+        }
+
+        for (var j = 0; j < ws.panels.length; j++) {
+            if (ws.panels[j].position === "main") {
+                var panelPath = panelRegistry[ws.panels[j].panelId];
+                if (panelPath) {
+                    mainPanelLoader.source = panelPath;
+                    return;
+                }
+            }
+        }
+        // No main panel mapped — clear loader
+        mainPanelLoader.source = "";
+    }
+
+    onCurrentWorkspaceIdChanged: loadWorkspacePanel()
+
+    Component.onCompleted: {
+        var reg = {};
+        for (var i = 0; i < panels.length; i++) {
+            var p = panels[i];
+            if (p.id && p.path) {
+                reg[p.id] = p.path;
+            }
+        }
+        panelRegistry = reg;
+        loadWorkspacePanel();
+    }
 
     RowLayout {
         anchors.fill: parent
@@ -67,7 +127,7 @@ ApplicationWindow {
                             spacing: 8
 
                             Label {
-                                text: modelData.icon || ""
+                                text: root.iconFor(modelData.icon)
                                 font.pixelSize: 16
                                 color: modelData.id === currentWorkspaceId ? "white" : "#9CA3AF"
                             }
@@ -98,13 +158,12 @@ ApplicationWindow {
             Layout.fillHeight: true
             spacing: 0
 
-            // Panel area (panels loaded dynamically based on workspace)
+            // Panel area — Loader resolves the QML file via panelRegistry
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 color: "#111827"
 
-                // Placeholder for dynamic panel loading
                 Loader {
                     id: mainPanelLoader
                     anchors.fill: parent
@@ -132,6 +191,8 @@ ApplicationWindow {
         function onMessageReceived(payload) {
             if (payload.type === 'workspace_layout') {
                 currentPanels = payload.panels
+                // TS may override layout — re-resolve panels
+                loadWorkspacePanel()
             }
         }
     }

@@ -18,12 +18,12 @@ describe.skipIf(!isBridgeAvailable())("Chat Drawer", () => {
 		await harness.reset();
 	});
 
-	test("shell renders a chat area rectangle", async () => {
+	test("shell renders a ChatDrawer with collapsed height", async () => {
 		await Bun.sleep(300);
-		// The chat bar is a 56px-tall Rectangle in the layout
-		const rects = await harness.findItems({ type: "QQuickRectangle", visible: true }, { includeGeometry: true });
-		const chatBar = rects.find((r) => r.geometry && Math.abs(r.geometry.height - 56) < 10);
-		expect(chatBar).toBeDefined();
+		// ChatDrawer is a custom Rectangle subclass — find it via its property
+		const items = await harness.findItems({ visible: true }, { includeGeometry: true, properties: ["collapsedHeight"] });
+		const chatDrawer = items.find((r) => r.properties.collapsedHeight === 56 && r.geometry && Math.abs(r.geometry.height - 56) < 10);
+		expect(chatDrawer).toBeDefined();
 	});
 
 	test("chat label is rendered somewhere in the shell", async () => {

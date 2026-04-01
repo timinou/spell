@@ -124,6 +124,11 @@ async function processQmlEvents(session: AgentSession, bridge: QmlBridge, option
 						await sendWorkspaceLayout(bridge, options.domainManifest, event.payload.workspaceId);
 					}
 					break;
+				case "chat_message":
+					if (typeof event.payload.text === "string" && event.payload.text.trim()) {
+						await session.prompt(event.payload.text as string);
+					}
+					break;
 				case "restart":
 					await restart(session, bridge);
 					return;

@@ -15,6 +15,16 @@ Rectangle {
     height: expanded ? expandedHeight : collapsedHeight
     color: "#1F2937"
 
+    // Top accent border — makes the drawer visually distinct from the content area
+    Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: 2
+        color: "#7C3AED"
+        z: 1
+    }
+
     Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
 
     ColumnLayout {
@@ -25,12 +35,27 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 32
-            color: "#374151"
+            color: "#2D3748"
 
-            Rectangle {
-                anchors.centerIn: parent
-                width: 40; height: 4; radius: 2
-                color: "#6B7280"
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
+
+                Label {
+                    text: "\u{1F4AC} Chat"
+                    font.pixelSize: 13
+                    font.bold: true
+                    color: "#D1D5DB"
+                    Layout.fillWidth: true
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                Label {
+                    text: chatDrawer.expanded ? "\u{25BC}" : "\u{25B2}"
+                    font.pixelSize: 10
+                    color: "#9CA3AF"
+                }
             }
 
             MouseArea {
@@ -109,15 +134,16 @@ Rectangle {
         RowLayout {
             Layout.fillWidth: true
             Layout.preferredHeight: 24
-            Layout.margins: 8
+            Layout.leftMargin: 12
+            Layout.rightMargin: 12
             visible: !expanded
 
             Label {
                 text: agentTabs.length > 0 && agentTabs[activeTabIndex]
                     ? agentTabs[activeTabIndex].name + ": " + (agentTabs[activeTabIndex].latestMessage || "Idle")
-                    : "Chat"
-                color: "#9CA3AF"
-                font.pixelSize: 12
+                    : "Ready to chat"
+                color: "#D1D5DB"
+                font.pixelSize: 13
                 elide: Text.ElideRight
                 Layout.fillWidth: true
             }
