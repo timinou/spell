@@ -72,3 +72,29 @@ it("describes auto-initialized todo execution without manual initialization step
 	expect(rendered).not.toContain("Wave-based Todo Initialization");
 	expect(rendered).toContain("4. Close org lifecycle state truthfully:");
 });
+
+it("renders the coordinator execution branch when execution items are provided", () => {
+	const rendered = renderPromptTemplate(planModeApprovedPrompt, {
+		planId: "fluid-canvas",
+		executionItems: [
+			{ id: "root", task: "Gather data", dependsOn: [], effort: "S", priority: "A", body: "Inspect the code." },
+			{
+				id: "merge",
+				task: "Merge findings",
+				dependsOn: ["root"],
+				effort: "M",
+				priority: "B",
+				body: "Summarize outputs.",
+			},
+		],
+		itemCount: 2,
+		isSimple: true,
+	});
+
+	expect(rendered).toContain("# Coordinator");
+	expect(rendered).toContain("You are coordinating execution of 2 planned tasks for `fluid-canvas`.");
+	expect(rendered).toContain("### root");
+	expect(rendered).toContain("### merge");
+	expect(rendered).toContain("Keep at most one direct task `in_progress` at a time.");
+	expect(rendered).not.toContain("Plan approved. You **MUST** execute it now.");
+});

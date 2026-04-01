@@ -1,9 +1,10 @@
 import * as fs from "node:fs/promises";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { createOrgClient, extractIdLinks, type FluidPlanWithComponents } from "@oh-my-pi/pi-org";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { extractIdLinks } from "@oh-my-pi/pi-org";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
+import type { PlanWave } from "../orchestrators/fluid";
 import { resolvePlanItem } from "../plan-mode/org-plan";
 import exitPlanModeDescription from "../prompts/tools/exit-plan-mode.md" with { type: "text" };
 import type { ToolSession } from ".";
@@ -30,8 +31,6 @@ function normalizePlanTitle(title: string): { title: string; fileName: string } 
 	if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("..")) {
 		throw new ToolError("Title must not contain path separators or '..'.");
 	}
-	// Accept any extension; add .md only when none is present (backward compat for file-backed plans).
-	// Org-backed plans (itemId provided) treat fileName as vestigial.
 	const hasExtension = /\.[a-z]+$/i.test(trimmed);
 	const fileName = hasExtension ? trimmed : `${trimmed}.md`;
 	if (!/^[A-Za-z0-9_.-]+$/.test(fileName)) {
@@ -41,48 +40,28 @@ function normalizePlanTitle(title: string): { title: string; fileName: string } 
 	return { title: normalizedTitle, fileName };
 }
 
-export interface PlanWaveEntry {
-	/** Sub-outline CUSTOM_ID (e.g., FEAT-001::define-types). */
-	orgItemId: string;
-	/** Description of the step. */
-	step: string;
-}
-
-export interface PlanWave {
-	/** Wave name (e.g., "foundation", "core"). */
-	name: string;
-	/** Entries in this wave — parallelizable. */
-	entries: PlanWaveEntry[];
-}
-
 export interface ExitPlanModeDetails {
 	planFilePath: string;
 	planExists: boolean;
 	title: string;
 	finalPlanFilePath: string;
-	/** CUSTOM_ID of the org PLAN item the agent created. */
 	itemId?: string;
-	/** Absolute path to the .org file containing the PLAN item. */
 	orgItemFile?: string;
-	/** Body text of the PLAN item — used as plan content for display and finalization. */
 	planContent?: string;
-	/** Child CUSTOM_ID references extracted from [[id:...]] links in PLAN body. */
 	childItemIds?: string[];
-	/** Wave structure extracted from Execution Manifest. */
 	waves?: PlanWave[];
-	/** FluidPlan with connected components from org-fluid-plan MCP tool. */
-	fluidPlan?: FluidPlanWithComponents;
 }
 
 /**
- * Extract wave structure from plan body's Execution Manifest.
+ * Extract wave structure from the plan body's Execution Manifest.
  *
  * Looks for `** wave-name :wave:` headings followed by `- [[id:...]] description` entries.
  * Returns undefined if no wave headings are found (backward compat with flat manifests).
  */
 export function extractPlanWaves(body: string): PlanWave[] | undefined {
-	const waveRe = /^\*\*\s+(.+?)\s+:wave:\s*$/;
-	const entryRe = /^-\s+\[\[id:([^\]]+)\]\]\s+(.+)$/;
+	const waveRe = /^\s*\*\*\s+(.+?)\s+:wave:\s*$/;
+	const subheadingRe = /^\s*\*\*\s+/;
+	const entryRe = /^\s*-\s+\[\[id:([^\]]+)\]\]\s+(.+)$/;
 	const lines = body.split("\n");
 	const waves: PlanWave[] = [];
 	let current: PlanWave | null = null;
@@ -94,12 +73,23 @@ export function extractPlanWaves(body: string): PlanWave[] | undefined {
 			waves.push(current);
 			continue;
 		}
-		if (current) {
-			const entryMatch = entryRe.exec(line);
-			if (entryMatch) {
-				current.entries.push({ orgItemId: entryMatch[1], step: entryMatch[2] });
-			}
+		if (subheadingRe.test(line)) {
+			current = null;
+			continue;
 		}
+		if (!current) {
+			continue;
+		}
+		const entryMatch = entryRe.exec(line);
+		if (!entryMatch) {
+			continue;
+		}
+		const orgItemId = entryMatch[1];
+		current.entries.push({
+			id: orgItemId,
+			orgItemId,
+			step: entryMatch[2],
+		});
 	}
 
 	return waves.length > 0 ? waves : undefined;
@@ -137,7 +127,6 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 			throw new ToolError("itemId is required when org is enabled. Provide the PLAN item's CUSTOM_ID.");
 		}
 
-		// Org-backed plan: resolve PLAN item, validate child references, and return its body as plan content.
 		if (params.itemId) {
 			const item = await resolvePlanItem(this.session.settings, this.session.cwd, params.itemId);
 			if (!item) {
@@ -165,26 +154,8 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 					`PLAN item "${params.itemId}" references missing child items: ${missingChildIds.join(", ")}.`,
 				);
 			}
+
 			const waves = extractPlanWaves(item.body);
-
-			// Attempt to build FluidPlan via Emacs MCP (graceful fallback on failure)
-			let fluidPlan: FluidPlanWithComponents | undefined;
-			try {
-				const orgSession = await this.session.orgSessionManager?.getSession();
-				if (orgSession) {
-					const client = await createOrgClient(orgSession.socketPath);
-					if (client) {
-						const raw = await client.callTool("org-fluid-plan", { plan_id: params.itemId });
-						fluidPlan = raw as FluidPlanWithComponents;
-					}
-				}
-			} catch (err) {
-				logger.warn("Failed to build FluidPlan via org-fluid-plan MCP", {
-					itemId: params.itemId,
-					error: err instanceof Error ? err.message : String(err),
-				});
-			}
-
 			return {
 				content: [
 					{
@@ -202,12 +173,10 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 					planContent: item.body,
 					childItemIds,
 					waves,
-					fluidPlan,
 				},
 			};
 		}
 
-		// File-backed plan (fallback / org disabled): read from plan file.
 		let planExists = false;
 		try {
 			const stat = await fs.stat(resolvedPlanPath);

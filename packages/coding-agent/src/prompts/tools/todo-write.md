@@ -2,11 +2,11 @@ Manages a phased task list. Submit an `ops` array — each op mutates state incr
 **Primary op: `update`.** Use it to mark tasks `in_progress` or `completed`. Only reach for other ops when the structure itself needs to change.
 
 <critical>
-You **MUST** call this tool twice per task:
+You **MUST** call this tool twice per direct task you execute yourself:
 1. Before beginning — `{op: "update", id: "task-N", status: "in_progress"}`
 2. Immediately after finishing — `{op: "update", id: "task-N", status: "completed"}`
 
-You **MUST** keep exactly one task `in_progress` at all times. Mark `completed` immediately — no batching.
+You **MUST** keep at most one direct task `in_progress` at a time. Additional `in_progress` tasks are only valid when delegated through the `task` tool with `todoRef`, which records delegation metadata automatically. Mark `completed` immediately — no batching.
 </critical>
 
 <conditions>
@@ -32,16 +32,18 @@ Create a todo list when:
 |Status|Meaning|
 |---|---|
 |`pending`|Not started|
-|`in_progress`|Currently working — exactly one at a time|
+|`in_progress`|Currently working; delegated tasks may also be `in_progress` when linked via `todoRef`|
 |`completed`|Fully done|
 |`abandoned`|Deferred with follow-up — requires `deferralFupId` linking to a FUP org item|
+|`failed`|Delegated work failed and needs operator attention before dependent work can continue|
 
 ## Rules
-- You **MUST** mark `in_progress` **before** starting work, not after
+- You **MUST** mark `in_progress` **before** starting direct work, not after
 - You **MUST** mark `completed` **immediately** — never defer
-- You **MUST** keep exactly **one** task `in_progress`
+- You **MUST** keep exactly **one** direct task `in_progress`; delegated tasks linked via `task` + `todoRef` may also remain `in_progress`
+- You **MUST NOT** set delegation metadata manually unless you are implementing internal system behavior; the `task` tool owns delegation lifecycle updates
 - You **MUST** complete phases in order — do not mark later tasks `completed` while earlier ones are `pending`
-- On runtime impediments: if you hit an unexpected obstacle, keep the current task `in_progress` and add a new task describing the impediment
+- On runtime impediments: if you hit an unexpected obstacle, keep the current task `in_progress` (or mark delegated work `failed` truthfully) and add a new task describing the impediment
 - Multiple ops can be batched in one call (e.g., complete current + start next)
 </protocol>
 

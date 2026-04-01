@@ -1,0 +1,88 @@
+#+TITLE: Unified execution prompt merging plan-mode-approved and coordinator
+#+STATE: DONE
+#+SESSION_ID: 14a9c1a0a15d6787
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e/22-CreateFeatG.jsonl]]
+#+CUSTOM_ID: FEAT-182-unified-execution-prompt-merging-plan-mo
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-180-delete-dead-fluid-execution-engine-and-s FEAT-179-wave-based-auto-init-for-plan-execution
+
+NOTE [2026-04-01]: Completed in PLAN-068; see the plan completion report for verification details.
+
+* Scope
+** In scope
+- Merge =packages/coding-agent/src/prompts/system/plan-mode-approved.md= and =packages/coding-agent/src/prompts/agents/coordinator.md= into a single unified execution prompt
+- Handlebars conditionals to handle both roles:
+  - ={{#if isCoordinator}}= — lightweight sub-DAG execution (no plan context, no completion protocol)
+  - ={{#if autoInitialized}}= — todos pre-populated from waves
+  - ={{#if waves}}= — wave structure available for manual init (fallback)
+  - ={{#if planContent}}= — full plan context present (not just coordinator mode)
+- Update =interactive-mode.ts= to render the merged template
+- Update =fluid-mode.ts buildCoordinatorPrompt= to render the merged template with =isCoordinator: true=
+- Update =todo-write.md= to describe multi_in_progress delegation semantics and wave-based parallelism
+- Delete =coordinator.md= after merge
+** Out of scope
+- Behavioral changes to todo_write state machine (FEAT-B)
+- Task tool changes (FEAT-D)
+** Boundary rationale
+Prompt consolidation. One execution driver prompt with conditionals replaces two overlapping prompts.
+* Tests
+** File: =packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts= (existing, update)
+Scenarios:
+1. Render with =isCoordinator: false, autoInitialized: true= -> includes plan context, completion protocol, no manual init instructions
+2. Render with =isCoordinator: true= -> lightweight execution, no completion protocol, no plan content
+3. Render with =autoInitialized: false, waves: [...]= -> includes wave structure for manual init
+4. Render with =autoInitialized: false, waves: undefined= -> no wave section (flat plan)
+5. All renders include multi_in_progress delegation explanation
+* Implementation
+** Merge prompts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-G::merge-prompts
+:END:
+- File: =packages/coding-agent/src/prompts/system/plan-mode-approved.md=
+- Incorporate coordinator.md content under ={{#if isCoordinator}}= conditionals
+- Keep existing plan-mode-approved content under ={{#unless isCoordinator}}= or default
+- Add delegation/parallelism instructions that explain:
+  - Use =task= tool with =todoRef= to delegate wave tasks to subagents
+  - Subagent completion auto-updates the parent's todo item
+  - Agent can work on 1 task directly while N tasks are delegated
+- Delete =packages/coding-agent/src/prompts/agents/coordinator.md=
+
+** Update callers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-G::update-callers
+:DEPENDS: FEAT-G::merge-prompts
+:END:
+- File: =packages/coding-agent/src/modes/interactive-mode.ts=
+- Update =renderPromptTemplate= call to pass =isCoordinator: false= explicitly
+- File: =packages/coding-agent/src/modes/fluid-mode.ts=
+- Update =buildCoordinatorPrompt= to import and render the merged template with =isCoordinator: true=
+- Remove import of deleted =coordinator.md=
+
+** Update todo-write.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-G::update-todowrite-prompt
+:END:
+- File: =packages/coding-agent/src/prompts/tools/todo-write.md=
+- Replace "exactly one task in_progress at all times" with delegation-aware rule
+- Add explanation that =task= tool with =todoRef= handles delegation lifecycle
+- Add wave-based example showing parallel delegation
+
+** Update tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-G::update-tests
+:DEPENDS: FEAT-G::update-callers
+:END:
+- File: =packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts=
+- Cover all 5 scenarios
+* Edge Cases
+- Coordinator mode renders without plan content or waves: still includes todo_write execution instructions
+- Both isCoordinator and autoInitialized true: valid (canvas path with auto-init)
+- Template with missing variables: Handlebars handles gracefully (conditional blocks skipped)
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts= passes
+- =bun check:ts= passes
+- =coordinator.md= deleted, no remaining imports
+- =fluid-mode.ts= uses merged template for coordinator prompt
+- =interactive-mode.ts= uses merged template for plan execution

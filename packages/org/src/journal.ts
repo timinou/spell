@@ -13,6 +13,7 @@
  *   in_progress → DOING
  *   completed   → DONE
  *   abandoned   → BLOCKED (deferred with :DEFERRED_TO: property)
+ *   failed      → BLOCKED
  */
 
 import * as path from "node:path";
@@ -26,7 +27,7 @@ import { atomicWrite } from "./atomic-write";
 export interface JournalTodoItem {
 	id: string;
 	content: string;
-	status: "pending" | "in_progress" | "completed" | "abandoned";
+	status: "pending" | "in_progress" | "completed" | "abandoned" | "failed";
 	notes?: string;
 	details?: string;
 	gateCommit?: boolean;
@@ -55,6 +56,7 @@ const STATUS_TO_ORG: Record<string, string> = {
 	in_progress: "DOING",
 	completed: "DONE",
 	abandoned: "BLOCKED",
+	failed: "BLOCKED",
 };
 
 // =============================================================================

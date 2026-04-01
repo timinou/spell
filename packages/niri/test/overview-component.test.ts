@@ -514,4 +514,33 @@ describe("OverviewComponent", () => {
 		expect(plain).toContain("(4 completed)");
 		expect(plain).toContain("✓ Foundation");
 	});
+	it("renders nested delegated todo phases beneath the parent task", () => {
+		const comp = new OverviewComponent(
+			makeSnapshot({
+				todoPhases: [
+					{
+						name: "Parent",
+						doneCount: 0,
+						tasks: [
+							makeTask({
+								content: "Parent task",
+								status: "in_progress",
+								childPhases: [
+									{
+										name: "Delegated Work",
+										doneCount: 0,
+										tasks: [makeTask({ content: "Nested task", status: "pending" })],
+									},
+								],
+							}),
+						],
+					},
+				],
+			}),
+		);
+		const plain = renderPlain(comp);
+		expect(plain).toContain("Parent task");
+		expect(plain).toContain("Delegated Work");
+		expect(plain).toContain("Nested task");
+	});
 });

@@ -1,0 +1,88 @@
+#+TITLE: Wave-based auto-init for plan execution
+#+STATE: DONE
+#+SESSION_ID: 14a9c025755d6785
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e/20-CreateFeatC.jsonl]]
+#+CUSTOM_ID: FEAT-179-wave-based-auto-init-for-plan-execution
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+NOTE [2026-04-01]: Completed in PLAN-068; see the plan completion report for verification details.
+
+* Scope
+** In scope
+- New function =planWavesToTodoPhases(waves: PlanWave[], childItemIds: string[]): TodoPhase[]= that converts PlanWave[] directly to TodoPhase[]
+- Wire into =interactive-mode.ts #approvePlan=: when waves exist, auto-init todos regardless of MCP availability
+- Update canvas path in =fluid-mode.ts=: FluidPlan -> computeWaveLayers -> PlanWave[] -> planWavesToTodoPhases -> TodoPhase[]
+- Simplify =plan-to-todos.ts=: remove FluidPlanWithComponents handling, keep only FluidPlan -> PlanWave[] conversion for canvas path
+** Out of scope
+- MCP tool changes (Elisp stays as-is)
+- TodoItem delegation model (separate item)
+- Prompt changes (separate item)
+** Boundary rationale
+This item makes plan auto-init work without MCP. PlanWave becomes the canonical intermediate type for both /plan and canvas paths.
+* Tests
+** File: =packages/coding-agent/test/orchestrators/wave-to-todos.test.ts= (new)
+Scenarios:
+1. Single wave with 3 entries -> 1 phase with 3 tasks, all pending except first (promoted to in_progress)
+2. Three waves -> 3 phases, wave-2 tasks have blockers on all wave-1 tasks
+3. Wave entry with orgItemId -> sets orgItemId on TodoItem, last occurrence gets orgItemClosingId
+4. Empty wave (all entries filtered) -> skip phase
+5. Canvas path: FluidPlan with dependsOn -> computeWaveLayers -> PlanWave[] -> TodoPhase[] (round-trip)
+** File: =packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts= (existing, update)
+- Update test for autoInitialized to verify it fires from waves (not just fluidPlan)
+* Implementation
+** Define =planWavesToTodoPhases=
+:PROPERTIES:
+:CUSTOM_ID: FEAT-179-wave-based-auto-init-for-plan-execution::wave-converter
+:END:
+- File: =packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts= (or new file =packages/coding-agent/src/tools/wave-to-todos.ts=)
+- PlanWave is defined in =exit-plan-mode.ts= — may need to move to a shared types location
+- Logic:
+  1. For each wave -> create a TodoPhase with name from wave.name
+  2. For each entry -> create a TodoItem with content=entry.step, orgItemId=entry.orgItemId
+  3. Tasks in wave N get blockers referencing all task IDs from wave N-1
+  4. Last occurrence of each orgItemId gets orgItemClosingId
+  5. Promote first unblocked task to =in_progress=
+
+** Wire auto-init in interactive-mode.ts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-179-wave-based-auto-init-for-plan-execution::wire-autoinit
+:DEPENDS: FEAT-179-wave-based-auto-init-for-plan-execution::wave-converter
+:END:
+- File: =packages/coding-agent/src/modes/interactive-mode.ts=
+- In =#approvePlan=: if =options.waves= exists, call =planWavesToTodoPhases(options.waves, childItemIds)= to get TodoPhase[]
+- Set =autoInitialized = true= when waves produce phases
+- Remove the conditional that only auto-inits when =options.fluidPlan= exists
+
+** Converge canvas path
+:PROPERTIES:
+:CUSTOM_ID: FEAT-179-wave-based-auto-init-for-plan-execution::canvas-convergence
+:DEPENDS: FEAT-179-wave-based-auto-init-for-plan-execution::wave-converter
+:END:
+- File: =packages/coding-agent/src/modes/fluid-mode.ts=
+- In =executeFluidPlan=: convert FluidPlan -> PlanWave[] via computeWaveLayers, then PlanWave[] -> TodoPhase[] via planWavesToTodoPhases
+- Replace =materializeFluidPlanToTodos(plan)= call with the new pipeline
+- File: =packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts=
+- Simplify: remove =normalizeSimplePlan=, =isPlanWithComponents=, =normalizePlan= (FluidPlanWithComponents path)
+- Keep =computeWaveLayers= (FluidPlan -> wave computation) but have it return PlanWave[] instead of FluidPlanWave[]
+- Export =fluidPlanToWaves(plan: FluidPlan): PlanWave[]= as the bridge function
+
+** Write tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-179-wave-based-auto-init-for-plan-execution::write-tests
+:DEPENDS: FEAT-179-wave-based-auto-init-for-plan-execution::wave-converter
+:END:
+- File: =packages/coding-agent/test/orchestrators/wave-to-todos.test.ts=
+- Cover all 5 scenarios
+* Edge Cases
+- Plan with no :wave: headings: extractPlanWaves returns undefined -> autoInitialized stays false, agent manually creates todos (backward compat)
+- Wave entry with orgItemId that doesn't match any childItemId: proceed anyway (orgItemId is a reference, not validated here)
+- FluidPlan with cycles: computeWaveLayers throws (caught by validatePlan which runs first)
+- Empty plan (no waves, no entries): autoInitialized = false
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/orchestrators/wave-to-todos.test.ts= passes
+- =bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts= passes
+- =bun check:ts= passes
+- A plan with :wave: headings auto-initializes todos WITHOUT MCP availability
+- Canvas path still works (FluidPlan -> waves -> todos)

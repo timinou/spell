@@ -1,0 +1,62 @@
+#+TITLE: Result forwarding to dependent task subagents
+#+STATE: DONE
+#+SESSION_ID: 14a9c310801d678b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e/24-CreateFeatF.jsonl]]
+#+CUSTOM_ID: FEAT-185-result-forwarding-to-dependent-task-suba
+#+EFFORT: 3h
+#+DEPENDS: FEAT-183-bidirectional-todoref-lifecycle-in-task
+
+NOTE [2026-04-01]: Completed in PLAN-068; see the plan completion report for verification details.
+
+* Scope
+** In scope
+- When the =task= tool spawns a subagent with =todoRef=, automatically include completed predecessor task results in the subagent's context
+- Extend =resolveVerificationContext()= in =task/template.ts= to build a predecessor results section
+- Predecessor = any task whose ID appears in the current task's =blockers= list AND has =status: "completed"= with a =result= field
+- Result summary is truncated (configurable, default 2000 chars per predecessor)
+- Parent agent can augment/override via the =assignment= text in the task call
+** Out of scope
+- Storing results on TodoItem (done in FEAT-B)
+- Task tool lifecycle changes (done in FEAT-D)
+** Boundary rationale
+Result forwarding is a read-only extension of the existing =resolveVerificationContext()= mechanism. It reads from TodoItem.result (set by FEAT-D on completion) and TodoItem.blockers.
+
+* Tests
+** File: =packages/coding-agent/test/task/result-forwarding.test.ts= (new)
+Scenarios:
+1. Task with 2 completed predecessors: subagent context includes both results
+2. Task with 1 completed + 1 pending predecessor: only includes the completed one
+3. Task with no predecessors (no blockers): no result section injected
+4. Predecessor result exceeds 2000 chars: truncated with "[truncated]" marker
+5. Result forwarding coexists with verification context (both sections present)
+
+* Implementation
+** Extend resolveVerificationContext
+:PROPERTIES:
+:CUSTOM_ID: FEAT-F::extend-context
+:END:
+- File: =packages/coding-agent/src/task/template.ts=
+- After building the verification requirements section, add a predecessor results section
+- Find the task's blockers, look up each in the phases, collect completed results
+- Format: =--- Predecessor Results ---
+From task-1 (Description): <output>
+From task-2 (Description): <output>=
+- Truncate each result to MAX_PREDECESSOR_RESULT_CHARS (2000)
+
+** Write tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-F::write-tests
+:DEPENDS: FEAT-F::extend-context
+:END:
+- File: =packages/coding-agent/test/task/result-forwarding.test.ts=
+- Cover all 5 scenarios
+
+* Edge Cases
+- Predecessor completed with =result: undefined= (no output): skip it
+- Circular blocker references: resolveVerificationContext already handles by looking up IDs, not traversing
+- Very large result set (5+ predecessors): cap at 5 predecessors, total budget 10000 chars
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/task/result-forwarding.test.ts= passes
+- =bun check:ts= passes
+- Subagent spawned with todoRef automatically receives completed predecessor results in its context

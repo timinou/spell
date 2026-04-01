@@ -1,0 +1,90 @@
+#+TITLE: Real-time sub-task propagation and visible nesting
+#+STATE: DONE
+#+SESSION_ID: 14a9c31080dd678f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e/23-CreateFeatE.jsonl]]
+#+CUSTOM_ID: FEAT-186-real-time-sub-task-propagation-and-visib
+#+EFFORT: 8h
+#+PRIORITY: #A
+#+DEPENDS: FEAT-183-bidirectional-todoref-lifecycle-in-task
+#+LAYER: coding-agent
+
+NOTE [2026-04-01]: Completed in PLAN-068; see the plan completion report for verification details.
+
+* Scope
+** In scope
+- Subscribe to =TASK_SUBAGENT_EVENT_CHANNEL= for todo-related events from subagents
+- When a subagent emits =todo:change=, propagate its phases as children under the parent task in the parent's todo list
+- Add =children?: TodoPhase[]= field to =TodoItem= for nested sub-tasks
+- TUI rendering: nested sub-tasks indented under parent task in todo display
+- Niri overview: nested sub-tasks visible in the QuickShell spell status widget
+- Real-time updates: parent's todo list refreshes as subagent makes progress
+** Out of scope
+- Infinite nesting depth (limit to 1 level: parent -> children. Sub-sub-agents' todos stay in their own scope)
+- Canvas fluid QML rendering of nested todos
+** Boundary rationale
+Real-time visibility into subagent progress at exactly 1 nesting level. Deeper nesting deferred.
+* Tests
+** File: =packages/coding-agent/test/task/subtask-propagation.test.ts= (new)
+Scenarios:
+1. Subagent creates 2 todo phases -> parent's task.children has 2 phases
+2. Subagent updates a subtask status -> parent's children update in real time
+3. Subagent completes -> children frozen (no further updates)
+4. Multiple concurrent subagents -> each propagates to its own parent task independently
+5. Subagent with no todo phases -> children stays undefined (no empty array)
+** File: =packages/coding-agent/test/tui/todo-nesting-render.test.ts= (new)
+Scenarios:
+1. Task with children renders nested with indentation
+2. Task without children renders flat (backward compat)
+3. Collapsed view shows child count but not details
+* Implementation
+** Add children field to TodoItem
+:PROPERTIES:
+:CUSTOM_ID: FEAT-E::children-field
+:END:
+- File: =packages/coding-agent/src/tools/todo-write.ts=
+- Add =children?: TodoPhase[]= to =TodoItem= interface and TypeBox schema
+- This field is NOT settable via the todo_write tool (read-only, set by system)
+** Implement EventBus subscriber for subagent todo events
+:PROPERTIES:
+:CUSTOM_ID: FEAT-E::eventbus-subscriber
+:DEPENDS: FEAT-E::children-field
+:END:
+- File: =packages/coding-agent/src/task/index.ts= (or new =packages/coding-agent/src/task/todo-sync.ts=)
+- Subscribe to subagent events that include todo phase changes
+- When received: find the parent task by todoRef, set =task.children = subagentPhases=
+- Call =session.setTodoPhases= and emit =todo:change= (serialized with existing lock)
+- The subagent needs to emit its todo state on a channel the parent can receive — extend the existing =TASK_SUBAGENT_PROGRESS_CHANNEL= protocol with a =todoPhases= field, or use a dedicated =task:subagent:todo= channel
+** TUI rendering for nested todos
+:PROPERTIES:
+:CUSTOM_ID: FEAT-E::tui-rendering
+:DEPENDS: FEAT-E::eventbus-subscriber
+:END:
+- File: =packages/coding-agent/src/tools/todo-write.ts= (renderer section) or the TUI component that renders todos
+- When a task has =children=, render them indented below the parent
+- Show a summary line: "3/5 subtasks completed" when collapsed
+** Niri overview rendering
+:PROPERTIES:
+:CUSTOM_ID: FEAT-E::niri-rendering
+:DEPENDS: FEAT-E::eventbus-subscriber
+:END:
+- Find the niri overview controller/widget that shows todo progress
+- Extend it to include child task counts per delegated parent task
+- Show: "task-3 [delegated: 2/4 done]" or similar compact format
+** Write tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-E::write-tests
+:DEPENDS: FEAT-E::eventbus-subscriber
+:END:
+- Files: =packages/coding-agent/test/task/subtask-propagation.test.ts=, =packages/coding-agent/test/tui/todo-nesting-render.test.ts=
+- Cover all scenarios
+* Edge Cases
+- Subagent emits very frequent todo changes: debounce propagation (100ms)
+- Subagent's session ends abruptly: last known children state is preserved
+- Parent task completed before subagent finishes: ignore further propagation
+- Children phases serialization: must not break journal/session file format
+- Nesting depth > 1: sub-subagent todos stay in their own scope (not propagated to grandparent)
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/task/subtask-propagation.test.ts= passes
+- =bun check:ts= passes
+- Delegated parent tasks show real-time subtask progress in TUI
+- Niri overview shows delegated task progress counts

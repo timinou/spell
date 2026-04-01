@@ -1,0 +1,99 @@
+#+TITLE: TodoItem delegation model with multi_in_progress support
+#+STATE: DONE
+#+SESSION_ID: 14a9c025745d6783
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e/19-CreateFeatB.jsonl]]
+#+CUSTOM_ID: FEAT-181-todoitem-delegation-model-with-multi-in
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+NOTE [2026-04-01]: Completed in PLAN-068; see the plan completion report for verification details.
+
+* Scope
+** In scope
+- Extend =TodoItem= interface in =packages/coding-agent/src/tools/todo-write.ts= with delegation and nesting fields
+- Change =normalizeInProgressTask()= to allow multiple =in_progress= tasks when each has a =delegation= field
+- Update =todo-write.md= prompt to explain multi_in_progress semantics with delegation
+- Add =result= field to =TodoItem= for storing completion output (used by result forwarding later)
+** Out of scope
+- Task tool changes (that's the bidirectional todoRef item)
+- TUI rendering changes for nested sub-tasks
+- Actual subagent spawning logic
+** Boundary rationale
+This item changes the data model and state machine. The task tool integration is a separate item that depends on this.
+* Tests
+** File: =packages/coding-agent/test/tools/todo-write-delegation.test.ts= (new)
+Scenarios:
+1. =normalizeInProgressTask= preserves multiple delegated in_progress tasks (delegation field set)
+2. =normalizeInProgressTask= still demotes multiple direct in_progress tasks (no delegation field) to keep only 1
+3. =normalizeInProgressTask= allows 1 direct + N delegated simultaneously
+4. =normalizeInProgressTask= demotes delegated tasks with unresolved blockers
+5. TodoItem with delegation field serializes/deserializes correctly (journal round-trip)
+6. TodoItem with parentTaskId creates correct parent-child relationship
+7. =findTask= still works with nested tasks (parentTaskId present)
+** File: =packages/coding-agent/test/tools/todo-write.test.ts= (existing, update)
+- Existing tests must continue to pass unchanged (backward compat)
+* Implementation
+** Extend TodoItem interface
+:PROPERTIES:
+:CUSTOM_ID: FEAT-181-todoitem-delegation-model-with-multi-in::extend-todoitem
+:END:
+- File: =packages/coding-agent/src/tools/todo-write.ts=
+- Add fields to =TodoItem= interface:
+  #+begin_src typescript
+  delegation?: {
+    taskToolId: string;      // task subagent ID (e.g., "CreateAuth")
+    sessionId: string;       // subagent session ID for traceability
+    transcriptPath?: string; // path to session transcript
+  };
+  parentTaskId?: string;     // if this task was created by a subagent (nesting)
+  result?: {                 // stored on completion, available to dependents
+    output: string;          // truncated result summary
+    exitCode: number;
+  };
+  #+end_src
+- Add these fields to the TypeBox schema (=todoItemProperties=) as Type.Optional
+
+** Relax normalizeInProgressTask
+:PROPERTIES:
+:CUSTOM_ID: FEAT-181-todoitem-delegation-model-with-multi-in::relax-normalize
+:DEPENDS: FEAT-181-todoitem-delegation-model-with-multi-in::extend-todoitem
+:END:
+- File: =packages/coding-agent/src/tools/todo-write.ts=
+- Current logic: demote all but first =in_progress= to =pending=
+- New logic:
+  1. Separate tasks into direct (no delegation) and delegated (has delegation)
+  2. Among direct tasks: keep at most 1 =in_progress=, demote extras
+  3. Among delegated tasks: keep all =in_progress= that have no unresolved blockers
+  4. Demote any =in_progress= task (direct or delegated) that has unresolved blockers
+
+** Update todo-write.md prompt
+:PROPERTIES:
+:CUSTOM_ID: FEAT-181-todoitem-delegation-model-with-multi-in::update-prompt
+:DEPENDS: FEAT-181-todoitem-delegation-model-with-multi-in::relax-normalize
+:END:
+- File: =packages/coding-agent/src/prompts/tools/todo-write.md=
+- Update the single in_progress rule to explain:
+  - Exactly 1 direct =in_progress= (you work on it)
+  - Additional =in_progress= allowed only when delegated to =task= subagents via =todoRef=
+  - Each delegated task is linked to a subagent session for traceability
+  - Delegation is set automatically by the =task= tool — do not set it manually
+
+** Write delegation tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-181-todoitem-delegation-model-with-multi-in::write-tests
+:DEPENDS: FEAT-181-todoitem-delegation-model-with-multi-in::relax-normalize
+:END:
+- File: =packages/coding-agent/test/tools/todo-write-delegation.test.ts=
+- Cover all 7 scenarios listed in Tests section
+* Edge Cases
+- Existing sessions with no delegation field: =normalizeInProgressTask= treats them as direct (backward compat)
+- Agent manually sets =delegation= field: the prompt says don't, but code should handle it gracefully (no crash)
+- All tasks delegated, none direct: valid state (agent is only coordinating)
+- Delegated task completed but delegation.status not updated: the =status= field on TodoItem is authoritative
+- =parentTaskId= references non-existent task: ignore silently (orphaned child)
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= passes (no regressions)
+- =bun check:ts= passes
+- Prompt file updated with multi_in_progress delegation semantics

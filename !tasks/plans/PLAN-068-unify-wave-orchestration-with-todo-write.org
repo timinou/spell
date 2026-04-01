@@ -1,0 +1,127 @@
+#+TITLE: Unify wave orchestration with todo_write and task subagents
+#+STATE: DONE
+#+SESSION_ID: 14a99a8b2c5d675e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e.jsonl]]
+#+CUSTOM_ID: PLAN-068-unify-wave-orchestration-with-todo-write
+#+EFFORT: 31h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+
+NOTE [2026-04-01]: Completed with verification and completion report appended.
+
+* Initial Message
+
+ok now I want you to look back at the past plans and sessions and to look at the wave plan and the fluid orchestration and I want you to both ensure that the fluid orchestratoin plan works, that there is no dead code, and that there is on duplication. Point out all inconsistencies or incomplete work and come up with a spell workflow that makes sense.
+
+* Context
+
+** Problem
+Plan execution has three redundant systems that each own a slice of the same concern:
+1. *todo_write* — dependency graph (blockers), status tracking, gates, org hooks. But it can't spawn work and enforces single =in_progress=.
+2. *task tool* — subagent spawning and parallel execution. But =todoRef= is read-only (injects context, never writes back status). No dependency awareness.
+3. *Fluid orchestrator* (FluidOrchestrator, QueueScheduler, coordinator-runner, OrgFluidBridge) — DAG validation, wave computation, reactive dispatch. But the execution engine is dead code since PLAN-062 moved execution to =session.prompt()= + =todo_write=.
+
+The orchestrator existed solely to achieve parallelism that waves + todo_write couldn't. Now =task= subagents provide that parallelism. The orchestrator's execution engine is redundant.
+
+Additionally:
+- Auto-init of todos from plan waves depends on an MCP call (=org-fluid-plan=) that has *never successfully returned data in a real session*.
+- Two type systems (=FluidPlan= / =FluidPlanWithComponents=) and two execution prompts (=plan-mode-approved.md= / =coordinator.md=) duplicate the same concepts.
+- =normalizeInProgressTask= enforces single =in_progress=, preventing wave-level parallelism.
+
+** Approach
+Unify waves, =todo_write=, and =task= into one coherent system:
+1. *PlanWave is the canonical intermediate representation.* Both paths converge on it:
+   - =/plan= path: =extractPlanWaves()= → =PlanWave[]= → =planWavesToTodoPhases()= → =TodoPhase[]=
+   - Canvas path: =FluidPlan= → =computeWaveLayers()= → =PlanWave[]= → =planWavesToTodoPhases()= → =TodoPhase[]=
+2. *Bidirectional todoRef*: =task= tool with =todoRef= auto-marks parent's todo item =in_progress= on spawn, =completed= on finish, =failed= on error. Records sessionId + transcriptPath for traceability.
+3. *Multi in_progress*: exactly 1 direct =in_progress= (parent works on it) + N delegated =in_progress= (each linked to a subagent via delegation metadata).
+4. *Visible nesting*: subagent todo changes propagate to parent via EventBus in real time. Parent's todo list shows nested sub-tasks. TUI and niri overview render the tree.
+5. *Result forwarding*: completed predecessor results auto-included in subagent context.
+6. *One execution prompt*: merged =plan-mode-approved.md= + =coordinator.md= with Handlebars conditionals.
+
+** Key Decisions
+1. *PlanWave canonical, FluidPlanWithComponents deleted.* FluidPlan stays only as canvas planner output schema. The org-fluid-plan MCP stays in Elisp but is no longer required for auto-init.
+2. *Components deferred.* Wave-based parallelism via task subagents covers the use case. Component splitting (dedicated coordinator subagents per independent workstream) is a future optimization.
+3. *Race condition handling.* Multiple subagents completing concurrently serialize state mutations through the same lock mechanism todo_write uses.
+4. *1-level nesting.* Sub-subagent todos stay in their own scope. Only the immediate subagent's phases appear as children.
+5. *Supersedes PLAN-066* (AUD-013 audit hardening) — dead code deletion, org hook observability, integration tests, prompt clarity, and retry fix are all addressed here in a more comprehensive way.
+
+** Genealogy
+- PLAN-002-fluid-canvas: Original queue-based DAG execution design
+- PLAN-056-fluid-orchestration-unification: Built FluidOrchestrator with multi-component DAGs and coordinators
+- PLAN-058-fluid-orchestration-wiring-prerequisites: Wired MCP, deferred nodes, concurrency
+- PLAN-062-unify-fluid-orchestration-with-agent-dri: Collapsed execution into todo_write (committed 799ae035b)
+- PLAN-066-harden-fluid-orchestration-after-audit-a: Cleanup plan that never executed — superseded by this plan
+
+** Critical Files
+- =packages/coding-agent/src/tools/todo-write.ts= — state machine, normalizeInProgressTask, org hooks, TodoItem type
+- =packages/coding-agent/src/task/index.ts= — TaskTool, todoRef handling
+- =packages/coding-agent/src/task/executor.ts= — runSubprocess, session creation, event forwarding
+- =packages/coding-agent/src/task/types.ts= — TaskItem, SingleResult, AgentProgress
+- =packages/coding-agent/src/task/template.ts= — resolveVerificationContext
+- =packages/coding-agent/src/orchestrators/fluid/= — DAG utils, types, event-router, plan-to-todos
+- =packages/coding-agent/src/modes/fluid-mode.ts= — canvas fluid entry
+- =packages/coding-agent/src/modes/interactive-mode.ts= — plan approval, auto-init
+- =packages/coding-agent/src/tools/exit-plan-mode.ts= — extractPlanWaves, MCP call
+- =packages/coding-agent/src/prompts/system/plan-mode-approved.md= — execution prompt
+- =packages/coding-agent/src/prompts/agents/coordinator.md= — coordinator prompt (to be merged)
+- =packages/coding-agent/src/prompts/tools/todo-write.md= — tool prompt
+
+* Verification
+
+** Automated
+#+begin_src sh
+bun check:ts
+bun lint:ts
+bun test packages/coding-agent/test/tools/todo-write*.ts
+bun test packages/coding-agent/test/task/
+bun test packages/coding-agent/test/orchestrators/
+bun test packages/coding-agent/test/integration/
+bun test packages/coding-agent/test/plan-mode/
+#+end_src
+
+** Manual
+- Run =/plan= with :wave: headings → verify todos auto-initialize without MCP
+- Spawn task subagent with todoRef → verify parent todo auto-transitions in_progress → completed
+- Spawn 3 parallel subagents → verify all 3 parent tasks show =in_progress= with delegation
+- Verify niri overview shows delegated task progress
+- Verify TUI renders nested sub-tasks under delegated parent tasks
+- Verify canvas fluid mode still works (basic smoke test)
+- Zero imports of FluidOrchestrator, QueueScheduler, coordinator-runner, OrgFluidBridge in src/
+
+* Execution Manifest
+** cleanup                                                          :wave:
+- [[id:FEAT-180-delete-dead-fluid-execution-engine-and-s]] Delete dead fluid execution engine and stale tests (2h)
+** foundation                                                       :wave:
+- [[id:FEAT-181-todoitem-delegation-model-with-multi-in]] TodoItem delegation model with multi-in_progress support (4h)
+- [[id:FEAT-179-wave-based-auto-init-for-plan-execution]] Wave-based auto-init for plan execution (3h)
+** core                                                             :wave:
+- [[id:FEAT-183-bidirectional-todoref-lifecycle-in-task]] Bidirectional todoRef lifecycle in task tool (6h, depends FEAT-181)
+- [[id:FEAT-182-unified-execution-prompt-merging-plan-mo]] Unified execution prompt merging plan-mode-approved and coordinator (3h, depends FEAT-180 + FEAT-179)
+** integration                                                      :wave:
+- [[id:FEAT-186-real-time-sub-task-propagation-and-visib]] Real-time sub-task propagation and visible nesting (8h, depends FEAT-183)
+- [[id:FEAT-185-result-forwarding-to-dependent-task-suba]] Result forwarding to dependent task subagents (3h, depends FEAT-183)
+- [[id:FEAT-184-canvas-fluid-mode-convergence-with-unifi]] Canvas fluid mode convergence with unified engine (2h, depends FEAT-182)
+
+
+** Completion [2026-04-01]
+*** Verification
+- `bun check:ts` — passed.
+- `bun lint:ts` — passed.
+- `bun test packages/coding-agent/test/tools/todo-write*.ts` — passed (101 tests, 0 fail).
+- `bun test packages/coding-agent/test/task/` — passed (38 tests, 0 fail).
+- `bun test packages/coding-agent/test/orchestrators/` — passed (40 tests, 0 fail).
+- `bun test packages/coding-agent/test/integration/` — passed (124 tests, 0 fail).
+- `bun test packages/coding-agent/test/plan-mode/` — passed (30 tests, 0 fail).
+- `bun test packages/desktop-common/test/snapshot.test.ts` — passed (7 tests, 0 fail).
+- `bun test packages/niri/test/overview-component.test.ts` — passed (28 tests, 0 fail).
+- `grep pattern="FluidOrchestrator|QueueScheduler|OrgFluidBridge|coordinator-runner|fluid-orchestrator|queue-scheduler|org-fluid-bridge|coordinator\\.md" path="packages/coding-agent/src packages/coding-agent/test"` — no matches in source/tests for removed execution-engine imports.
+- `grep pattern="org-fluid-plan" path="packages/coding-agent/src"` — no matches.
+*** Artifacts
+- None. Verification used source/test evidence only; no browser screenshots were required or captured.
+*** Deviations
+- Nested child todo phases and delegated result summaries were stored under `TodoItem.delegation` (`childPhases`, `result`) instead of separate top-level `children`/`result` fields to keep subagent trace data grouped with delegation metadata.
+- Delegated failures now use explicit `failed` todo status instead of leaving the parent todo `in_progress`; this matches PLAN-068's approved context and required corresponding UI/journal/niri type updates.
+- Existing focused suites were updated and reused instead of creating every proposed new test filename from the child feature outlines.
+- Separate human-driven `/plan`, canvas, and niri manual sessions were not recorded; equivalent behaviors were exercised through focused automated tests and source-level verification in this execution.

@@ -12,7 +12,7 @@ export type AgentStatus =
 export interface TodoItemView {
 	id: string;
 	content: string;
-	status: "pending" | "in_progress" | "completed" | "abandoned";
+	status: "pending" | "in_progress" | "completed" | "abandoned" | "failed";
 	blockers?: string[];
 	gateCommit?: boolean;
 	gateArtifact?: string;
@@ -20,6 +20,7 @@ export interface TodoItemView {
 	gateLlm?: string;
 	verifyCmd?: string;
 	orgItemId?: string;
+	childPhases?: TodoPhaseView[];
 }
 
 /** Minimal snapshot of a todo phase visible to desktop overlays. */
@@ -33,11 +34,12 @@ export interface TodoPhaseView {
 export interface TodoItemSnapshot {
 	id: string;
 	content: string;
-	status: "pending" | "in_progress" | "completed" | "abandoned";
+	status: "pending" | "in_progress" | "completed" | "abandoned" | "failed";
 	blocked: boolean;
 	blockerLabels?: string[];
 	gateBadges?: string[];
 	orgItemId?: string;
+	childPhases?: TodoPhaseSnapshot[];
 }
 
 /** Snapshot of a single todo phase for overlay rendering. */

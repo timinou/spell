@@ -10,6 +10,7 @@ import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import type { ExitPlanModeDetails } from "../tools";
+import type { TodoItem, TodoPhase } from "../tools/todo-write";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import type { CustomEditor } from "./components/custom-editor";
@@ -22,6 +23,7 @@ import type { ToolExecutionHandle } from "./components/tool-execution";
 import type { OAuthManualInputManager } from "./oauth-manual-input";
 import type { Theme } from "./theme/theme";
 
+export type { TodoDelegation, TodoItem, TodoPhase, TodoStatus } from "../tools/todo-write";
 export type CompactionQueuedMessage = {
 	text: string;
 	mode: "steer" | "followUp";
@@ -32,30 +34,6 @@ export type SubmittedUserInput = {
 	images?: ImageContent[];
 	cancelled: boolean;
 	started: boolean;
-};
-
-export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
-
-export type TodoItem = {
-	id: string;
-	content: string;
-	status: TodoStatus;
-	details?: string;
-	notes?: string;
-	blockers?: string[];
-	gateCommit?: boolean;
-	gateArtifact?: string;
-	gateCmd?: string;
-	gateLlm?: string;
-	verifyCmd?: string;
-	orgItemId?: string;
-	orgItemClosingId?: string;
-};
-
-export type TodoPhase = {
-	id: string;
-	name: string;
-	tasks: TodoItem[];
 };
 
 export interface InteractiveModeContext {

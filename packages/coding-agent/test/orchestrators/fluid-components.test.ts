@@ -69,29 +69,6 @@ describe("splitIntoComponents", () => {
 		expect(ids).toContainEqual(["D", "E", "F"]);
 	});
 
-	test("coordinator node with subPlan and orgItemId are preserved through split", () => {
-		const subPlan: FluidPlan = { agents: [node("X"), node("Y", ["X"])] };
-		const coordinator = node("B", ["A"], {
-			isCoordinator: true,
-			subPlan,
-			orgItemId: "ORG-042",
-			priority: "A",
-			effort: "2h",
-		});
-		const p = plan(node("A"), coordinator, node("C"), node("D", ["C"]));
-		const result = splitIntoComponents(p);
-		// {A->B} and {C->D} are two components
-		expect(result).toHaveLength(2);
-		const compWithCoordinator = result.find(c => c.agents.some(a => a.id === "B"));
-		expect(compWithCoordinator).toBeDefined();
-		const b = compWithCoordinator!.agents.find(a => a.id === "B")!;
-		expect(b.isCoordinator).toBe(true);
-		expect(b.subPlan).toBe(subPlan);
-		expect(b.orgItemId).toBe("ORG-042");
-		expect(b.priority).toBe("A");
-		expect(b.effort).toBe("2h");
-	});
-
 	test("agent ordering within each component is preserved", () => {
 		// Agents declared in order; split should not reorder within a component
 		const p = plan(node("C"), node("A"), node("B", ["A"]), node("D", ["C"]));

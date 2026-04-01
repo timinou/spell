@@ -106,3 +106,34 @@ describe("buildOverviewSnapshot", () => {
 		expect(snap.todoPhases[0].tasks).toEqual([]);
 	});
 });
+
+it("preserves nested child phases on delegated tasks", () => {
+	const snap = buildOverviewSnapshot(
+		makeCtx({
+			todoPhases: [
+				{
+					id: "phase-1",
+					name: "Parent",
+					tasks: [
+						{
+							id: "t1",
+							content: "Parent task",
+							status: "in_progress",
+							childPhases: [
+								{
+									name: "Delegated Work",
+									tasks: [{ id: "c1", content: "Nested task", status: "pending" }],
+								},
+							],
+						},
+					],
+				},
+			],
+		}),
+	);
+	expect(snap.todoPhases[0].tasks[0].childPhases?.[0]?.name).toBe("Delegated Work");
+	expect(snap.todoPhases[0].tasks[0].childPhases?.[0]?.tasks[0]).toMatchObject({
+		content: "Nested task",
+		status: "pending",
+	});
+});

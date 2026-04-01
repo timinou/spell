@@ -25,6 +25,7 @@ import type { AuthStorage } from "../session/auth-storage";
 import { SessionManager } from "../session/session-manager";
 import { type ContextFileEntry, truncateTail } from "../tools";
 import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
+import { cloneTodoPhases, type TodoPhase } from "../tools/todo-write";
 import { ToolAbortError } from "../tools/tool-errors";
 import { type EventBus, Priority } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
@@ -816,6 +817,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						requestAbort("terminate");
 					}
 				}
+				if (event.toolName === "todo_write") {
+					const todoResult = event.result as { details?: { phases?: unknown } } | undefined;
+					if (Array.isArray(todoResult?.details?.phases)) {
+						progress.todoPhases = cloneTodoPhases(todoResult.details.phases as TodoPhase[]);
+					}
+				}
 				flushProgress = true;
 				break;
 			}
@@ -988,6 +995,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			});
 
 			activeSession = session;
+			progress.sessionId = session.sessionId;
+			progress.transcriptPath = sessionFile ?? undefined;
 
 			const subagentToolNames = session.getActiveToolNames();
 			const parentOwnedToolNames = new Set(["todo_write"]);
@@ -1279,6 +1288,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		error: exitCode !== 0 && stderr ? stderr : undefined,
 		aborted: wasAborted,
 		abortReason: finalAbortReason,
+		sessionId: progress.sessionId,
+		transcriptPath: progress.transcriptPath,
+		todoPhases: progress.todoPhases ? cloneTodoPhases(progress.todoPhases) : undefined,
 		usage: hasUsage ? accumulatedUsage : undefined,
 		outputPath,
 		extractedToolData: progress.extractedToolData,

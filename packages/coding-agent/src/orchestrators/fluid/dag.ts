@@ -166,9 +166,8 @@ export function getReadyAgents(plan: FluidPlan, completed: Set<string>): string[
 /**
  * Split a FluidPlan into connected components using union-find.
  *
- * Each component is an independent sub-DAG that can be executed
- * by a separate coordinator. Single-component plans return `[plan]`
- * unchanged (backward compatible).
+ * Each component is an independent sub-DAG that callers may process separately.
+ * Single-component plans return `[plan]` unchanged (backward compatible).
  */
 export function splitIntoComponents(plan: FluidPlan): FluidPlan[] {
 	if (plan.agents.length <= 1) return [plan];

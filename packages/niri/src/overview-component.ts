@@ -44,9 +44,10 @@ const TODO_ICONS: Record<TodoItemSnapshot["status"], string> = {
 	in_progress: "→",
 	completed: "✓",
 	abandoned: "✗",
+	failed: "!",
 };
 
-function renderTodoItem(item: TodoItemSnapshot, indent: string, maxWidth?: number): string {
+function renderTodoItem(item: TodoItemSnapshot, indent: string, maxWidth?: number): string[] {
 	const isDone = item.status === "completed" || item.status === "abandoned";
 	const icon = item.blocked ? "\u2298" : TODO_ICONS[item.status];
 	const dim = isDone ? DIM : "";
@@ -54,50 +55,49 @@ function renderTodoItem(item: TodoItemSnapshot, indent: string, maxWidth?: numbe
 
 	let suffix = "";
 
-	// Blocker labels — show first blocker + "+N" overflow
 	if (item.blocked && item.blockerLabels && item.blockerLabels.length > 0) {
 		const first = item.blockerLabels[0];
 		const overflow = item.blockerLabels.length > 1 ? ` +${item.blockerLabels.length - 1}` : "";
 		suffix += ` ${DIM}\u2190 ${first}${overflow}${RESET_BOLD}`;
 	}
 
-	// Gate and org badges
 	const badges: string[] = [];
 	if (item.gateBadges) {
-		for (const b of item.gateBadges) badges.push(`[${b}]`);
+		for (const badge of item.gateBadges) badges.push(`[${badge}]`);
 	}
 	if (item.orgItemId) badges.push("[org]");
 	if (badges.length > 0) {
 		suffix += ` ${DIM}${badges.join(" ")}${RESET_BOLD}`;
 	}
 
-	// Blocked pending tasks get a warning-colored icon
 	const iconStr = item.blocked ? `${YELLOW_FG}${icon}${RESET_FG}` : icon;
-
 	let line = `${indent}${dim}${iconStr} ${item.content}${suffix}${reset}`;
 	if (maxWidth !== undefined && visibleWidth(line) > maxWidth) {
 		line = sliceByColumn(line, 0, maxWidth);
 	}
-	return line;
+
+	const lines: string[] = [line];
+	for (const phase of item.childPhases ?? []) {
+		lines.push(...renderPhase(phase, maxWidth, `${indent}  `));
+	}
+	return lines;
 }
 
-function renderPhase(phase: TodoPhaseSnapshot, maxWidth?: number): string[] {
+function renderPhase(phase: TodoPhaseSnapshot, maxWidth?: number, indent = ""): string[] {
 	const totalTasks =
 		phase.tasks.length +
 		phase.doneCount -
-		phase.tasks.filter(t => t.status === "completed" || t.status === "abandoned").length;
+		phase.tasks.filter(task => task.status === "completed" || task.status === "abandoned").length;
 	const isPhantom = phase.tasks.length === 0 && phase.doneCount > 0;
 
-	// Determine phase icon from task statuses
-	const hasActive = phase.tasks.some(t => t.status === "in_progress");
+	const hasActive = phase.tasks.some(task => task.status === "in_progress");
 	const allDone =
 		isPhantom ||
-		(phase.tasks.length > 0 && phase.tasks.every(t => t.status === "completed" || t.status === "abandoned"));
+		(phase.tasks.length > 0 && phase.tasks.every(task => task.status === "completed" || task.status === "abandoned"));
 	const icon = allDone ? "\u2713" : hasActive ? "\u2192" : "\u25CB";
 	const dim = allDone ? DIM : "";
 	const reset = dim ? RESET_BOLD : "";
 
-	// Build progress suffix: "(3/5)" or "(5 completed)" for phantom phases.
 	let progress = "";
 	if (isPhantom) {
 		progress = ` (${phase.doneCount} completed)`;
@@ -105,13 +105,13 @@ function renderPhase(phase: TodoPhaseSnapshot, maxWidth?: number): string[] {
 		progress = ` (${phase.doneCount}/${totalTasks})`;
 	}
 
-	let header = `${dim}${icon} ${BOLD}${phase.name}${progress}${RESET_BOLD}${reset}`;
+	let header = `${indent}${dim}${icon} ${BOLD}${phase.name}${progress}${RESET_BOLD}${reset}`;
 	if (maxWidth !== undefined && visibleWidth(header) > maxWidth) {
 		header = sliceByColumn(header, 0, maxWidth);
 	}
 	const lines: string[] = [header];
 	for (const task of phase.tasks) {
-		lines.push(renderTodoItem(task, "  ", maxWidth));
+		lines.push(...renderTodoItem(task, `${indent}  `, maxWidth));
 	}
 	return lines;
 }

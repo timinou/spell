@@ -109,14 +109,14 @@ describe("org session manager wiring", () => {
 		await tool.dispose();
 	});
 
-	test("ExitPlanModeTool resolves org-fluid-plan through the org session manager only", async () => {
+	test("ExitPlanModeTool auto-initializes from plan waves without opening an org MCP session", async () => {
 		const resolvePlanItemSpy = spyOn(orgPlanModule, "resolvePlanItem").mockImplementation(
 			async (_settings, _projectRoot, itemId) => {
 				if (itemId === "PLAN-001-auth-initiative") {
 					return {
 						id: itemId,
 						file: path.join(tmpDir, "!tasks", "plans", `${itemId}.org`),
-						body: "* Context\nAuth rollout\n\n* Execution Manifest\n1. [[id:FEAT-001-auth-api]] (depends: none, effort: 1h)",
+						body: "* Context\nAuth rollout\n\n* Execution Manifest\n** foundation :wave:\n- [[id:FEAT-001-auth-api]] Implement auth API",
 					};
 				}
 				if (itemId === "FEAT-001-auth-api") {
@@ -132,12 +132,7 @@ describe("org session manager wiring", () => {
 
 		const codeManager = makeSessionManager("/tmp/code.sock");
 		const orgManager = makeSessionManager("/tmp/org.sock");
-		const orgFluidPlan = { components: [{ id: "component-1", agents: [], waves: [] }], warnings: [] };
-		const callTool = vi.fn(async () => orgFluidPlan);
-		const createOrgClientSpy = spyOn(orgModule, "createOrgClient").mockResolvedValue({
-			callTool,
-			close: async (): Promise<void> => {},
-		});
+		const createOrgClientSpy = spyOn(orgModule, "createOrgClient");
 		const tool = new ExitPlanModeTool(
 			createSession({
 				emacsSessionManager: codeManager.manager,
@@ -152,9 +147,13 @@ describe("org session manager wiring", () => {
 
 		expect(resolvePlanItemSpy).toHaveBeenCalled();
 		expect(codeManager.getSession).not.toHaveBeenCalled();
-		expect(orgManager.getSession).toHaveBeenCalledTimes(1);
-		expect(createOrgClientSpy).toHaveBeenCalledWith("/tmp/org.sock");
-		expect(callTool).toHaveBeenCalledWith("org-fluid-plan", { plan_id: "PLAN-001-auth-initiative" });
-		expect(result.details?.fluidPlan).toEqual(orgFluidPlan);
+		expect(orgManager.getSession).not.toHaveBeenCalled();
+		expect(createOrgClientSpy).not.toHaveBeenCalled();
+		expect(result.details?.waves).toEqual([
+			{
+				name: "foundation",
+				entries: [{ id: "FEAT-001-auth-api", orgItemId: "FEAT-001-auth-api", step: "Implement auth API" }],
+			},
+		]);
 	});
 });

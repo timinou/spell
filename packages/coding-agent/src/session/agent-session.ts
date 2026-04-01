@@ -121,7 +121,7 @@ import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
 import { resolveToCwd } from "../tools/path-utils";
 import type { PendingActionStore } from "../tools/pending-action";
-import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo-write";
+import { cloneTodoPhases, getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo-write";
 import { clampTimeout } from "../tools/tool-timeouts";
 import { parseCommandArgs } from "../utils/command-args";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
@@ -2903,10 +2903,7 @@ export class AgentSession {
 	}
 
 	#cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
-		return phases.map(phase => ({
-			...phase,
-			tasks: phase.tasks.map(task => ({ ...task })),
-		}));
+		return cloneTodoPhases(phases);
 	}
 
 	/** Schedule auto-removal of completed tasks after a delay. */

@@ -321,6 +321,9 @@ export class EventController {
 						this.ctx.pendingTools.delete(event.toolCallId);
 						this.#backgroundToolCallIds.delete(event.toolCallId);
 					}
+					if (event.toolName === "task") {
+						this.ctx.setTodos(this.ctx.session.getTodoPhases());
+					}
 					this.ctx.ui.requestRender();
 				}
 				break;
@@ -384,6 +387,9 @@ export class EventController {
 						} else {
 							this.ctx.pendingTools.delete(event.toolCallId);
 							this.#backgroundToolCallIds.delete(event.toolCallId);
+						}
+						if (event.toolName === "task") {
+							this.ctx.setTodos(this.ctx.session.getTodoPhases());
 						}
 						this.ctx.ui.requestRender();
 					}

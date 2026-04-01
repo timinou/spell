@@ -2,6 +2,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
+import type { TodoPhase } from "../tools/todo-write";
 import type { NestedRepoPatch } from "./worktree";
 
 /** Source of an agent definition */
@@ -154,6 +155,9 @@ export interface AgentProgress {
 	tokens: number;
 	durationMs: number;
 	modelOverride?: string | string[];
+	sessionId?: string;
+	transcriptPath?: string;
+	todoPhases?: TodoPhase[];
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
 	extractedToolData?: Record<string, unknown[]>;
 }
@@ -178,6 +182,9 @@ export interface SingleResult {
 	error?: string;
 	aborted?: boolean;
 	abortReason?: string;
+	sessionId?: string;
+	transcriptPath?: string;
+	todoPhases?: TodoPhase[];
 	/** Aggregated usage from the subprocess, accumulated incrementally from message_end events. */
 	usage?: Usage;
 	/** Output path for the task result */

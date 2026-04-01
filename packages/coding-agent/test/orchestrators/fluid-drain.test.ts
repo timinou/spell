@@ -4,7 +4,6 @@ import {
 	FLUID_EVENT_CHANNEL,
 	type FluidEvent,
 	FluidEventRouter,
-	FluidOrchestrator,
 	type FluidPlan,
 } from "../../src/orchestrators/fluid";
 import type { SingleResult } from "../../src/task/types";
@@ -72,125 +71,6 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 afterEach(() => {
 	vi.restoreAllMocks();
-});
-
-describe("FluidOrchestrator drain behavior", () => {
-	test("events reach event bus during execution", async () => {
-		const eventBus = new EventBus();
-		const received: FluidEvent[] = [];
-		eventBus.subscribe(FLUID_EVENT_CHANNEL, data => {
-			received.push(data as FluidEvent);
-		});
-
-		const orchestrator = new FluidOrchestrator({
-			eventBus,
-			cwd: process.cwd(),
-			runAgent: async (node, _upstreamResults, _signal) => mockResult(node.id, `done:${node.id}`),
-		});
-
-		const plan: FluidPlan = {
-			agents: [
-				{ id: "a", task: "first", dependsOn: [] },
-				{ id: "b", task: "second", dependsOn: ["a"] },
-			],
-		};
-
-		await orchestrator.execute(plan);
-		await eventBus.drain();
-
-		expect(received.some(event => event.type === "plan_start")).toBe(false);
-		expect(received.some(event => event.type === "plan_complete")).toBe(true);
-		expect(
-			received.some(
-				event => event.type === "agent_state_change" && event.agentId === "a" && event.state === "completed",
-			),
-		).toBe(true);
-		expect(
-			received.some(
-				event => event.type === "agent_state_change" && event.agentId === "b" && event.state === "completed",
-			),
-		).toBe(true);
-	});
-
-	test("drain timer fires during execution", async () => {
-		const eventBus = new EventBus();
-		const received: FluidEvent[] = [];
-		eventBus.subscribe(FLUID_EVENT_CHANNEL, data => {
-			received.push(data as FluidEvent);
-		});
-
-		const orchestrator = new FluidOrchestrator({
-			eventBus,
-			cwd: process.cwd(),
-			runAgent: async (node, _upstreamResults, _signal) => {
-				await Bun.sleep(220);
-				return mockResult(node.id, "slow");
-			},
-		});
-
-		const plan: FluidPlan = {
-			agents: [{ id: "a", task: "slow", dependsOn: [] }],
-		};
-
-		const execution = orchestrator.execute(plan);
-		await Bun.sleep(140);
-
-		expect(received.length).toBeGreaterThan(0);
-		expect(
-			received.some(
-				event => event.type === "agent_state_change" && event.agentId === "a" && event.state === "running",
-			),
-		).toBe(true);
-
-		await execution;
-	});
-
-	test("invalid DAG throws", async () => {
-		const eventBus = new EventBus();
-		const orchestrator = new FluidOrchestrator({
-			eventBus,
-			cwd: process.cwd(),
-			runAgent: async (node, _upstreamResults, _signal) => mockResult(node.id),
-		});
-
-		const cyclicPlan: FluidPlan = {
-			agents: [
-				{ id: "entry", task: "entry", dependsOn: [] },
-				{ id: "b", task: "b", dependsOn: ["c"] },
-				{ id: "c", task: "c", dependsOn: ["b"] },
-			],
-		};
-
-		await expect(orchestrator.execute(cyclicPlan)).rejects.toThrow("Plan contains dependency cycles");
-	});
-
-	test("abort during execution rejects", async () => {
-		const eventBus = new EventBus();
-		const controller = new AbortController();
-		let started = false;
-
-		const orchestrator = new FluidOrchestrator({
-			eventBus,
-			cwd: process.cwd(),
-			runAgent: async (node, _upstreamResults, _signal) => {
-				if (!started) {
-					started = true;
-					controller.abort();
-				}
-				await Bun.sleep(120);
-				return mockResult(node.id);
-			},
-		});
-
-		const plan: FluidPlan = {
-			agents: [
-				{ id: "a", task: "first", dependsOn: [] },
-				{ id: "b", task: "second", dependsOn: ["a"] },
-			],
-		};
-
-		await expect(orchestrator.execute(plan, controller.signal)).rejects.toThrow("Fluid execution aborted");
-	});
 });
 
 describe("executePlan planning-phase drain behavior", () => {

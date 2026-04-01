@@ -1,41 +1,52 @@
-import type {
-	FluidPlanComponent,
-	FluidPlanWave,
-	FluidPlanWithComponents,
-	FluidPlanAgent as OrgFluidPlanAgent,
-} from "@oh-my-pi/pi-org";
 import type { TodoItem, TodoPhase } from "../../tools/todo-write";
 import { splitIntoComponents, topologicalOrder } from "./dag";
-import type { FluidPlan } from "./types";
+import type { FluidAgentNode, FluidPlan } from "./types";
+
+export interface PlanWaveEntry {
+	id: string;
+	orgItemId?: string;
+	step: string;
+	dependsOn?: string[];
+	details?: string;
+	deferred?: boolean;
+}
+
+export interface PlanWave {
+	name: string;
+	entries: PlanWaveEntry[];
+}
 
 export interface FluidTodoPlan {
 	phases: TodoPhase[];
 	taskIdByAgentId: Map<string, string>;
 }
 
-interface PlannedTodoTask {
-	agentId: string;
-	orgItemId?: string;
-	dependsOn: string[];
-	content: string;
-	details?: string;
+interface MaterializedPlanWaves {
+	phases: TodoPhase[];
+	taskIdByEntryId: Map<string, string>;
 }
 
-interface PlannedTodoPhase {
-	name: string;
-	tasks: PlannedTodoTask[];
+function buildTaskDetails(agent: FluidAgentNode): string | undefined {
+	const lines: string[] = [];
+	const effort = agent.effort?.trim() ?? "";
+	if (effort) {
+		lines.push(`Effort: ${effort}`);
+	}
+	const priority = agent.priority?.trim() ?? "";
+	if (priority) {
+		lines.push(`Priority: ${priority}`);
+	}
+	const body = agent.body?.trim() ?? "";
+	if (body) {
+		if (lines.length > 0) {
+			lines.push("");
+		}
+		lines.push(body);
+	}
+	return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
-interface NormalizedPlan {
-	components: FluidPlanComponent[];
-	warnings: string[];
-}
-
-function isPlanWithComponents(plan: FluidPlanWithComponents | FluidPlan): plan is FluidPlanWithComponents {
-	return "components" in plan;
-}
-
-function computeWaveLayers(plan: FluidPlan): FluidPlanWave[] {
+function computeComponentWaves(plan: FluidPlan, componentPrefix?: string): PlanWave[] {
 	const nodesById = new Map(plan.agents.map(agent => [agent.id, agent]));
 	const order = topologicalOrder(plan);
 	const depthById = new Map<string, number>();
@@ -47,153 +58,118 @@ function computeWaveLayers(plan: FluidPlan): FluidPlanWave[] {
 		depthById.set(agentId, depth);
 	}
 
-	const itemsByDepth = new Map<number, string[]>();
+	const entriesByDepth = new Map<number, PlanWaveEntry[]>();
 	for (const agent of plan.agents) {
 		const depth = depthById.get(agent.id) ?? 0;
-		const items = itemsByDepth.get(depth) ?? [];
-		items.push(agent.id);
-		itemsByDepth.set(depth, items);
-	}
-
-	return [...itemsByDepth.entries()]
-		.sort((a, b) => a[0] - b[0])
-		.map(([depth, items]) => ({ number: depth + 1, items }));
-}
-
-function normalizeSimplePlan(plan: FluidPlan): NormalizedPlan {
-	const components = splitIntoComponents(plan).map((componentPlan, index) => ({
-		id: `component-${index + 1}`,
-		agents: componentPlan.agents.map(agent => ({
+		const entries = entriesByDepth.get(depth) ?? [];
+		entries.push({
 			id: agent.id,
-			task: agent.task,
-			dependsOn: agent.dependsOn,
-			orgItemId: agent.orgItemId ?? "",
-			effort: agent.effort ?? "",
-			priority: agent.priority ?? "",
-			state: "ITEM",
-			body: agent.body ?? "",
+			orgItemId: agent.orgItemId,
+			step: agent.task,
+			dependsOn: agent.dependsOn.length > 0 ? agent.dependsOn : undefined,
+			details: buildTaskDetails(agent),
 			deferred: agent.deferred,
-		})),
-		waves: computeWaveLayers(componentPlan),
-	}));
-	return { components, warnings: [] };
+		});
+		entriesByDepth.set(depth, entries);
+	}
+
+	return [...entriesByDepth.entries()]
+		.sort((a, b) => a[0] - b[0])
+		.map(([depth, entries]) => ({
+			name: componentPrefix ? `${componentPrefix}-wave-${depth + 1}` : `wave-${depth + 1}`,
+			entries,
+		}));
 }
 
-function normalizePlan(plan: FluidPlanWithComponents | FluidPlan): NormalizedPlan {
-	return isPlanWithComponents(plan) ? plan : normalizeSimplePlan(plan);
+export function computeWaveLayers(plan: FluidPlan): PlanWave[] {
+	const components = splitIntoComponents(plan);
+	const singleComponent = components.length === 1;
+	return components.flatMap((componentPlan, index) =>
+		computeComponentWaves(componentPlan, singleComponent ? undefined : `component-${index + 1}`),
+	);
 }
 
-function buildTaskDetails(agent: OrgFluidPlanAgent): string | undefined {
-	const lines: string[] = [];
-	if (agent.effort.trim()) {
-		lines.push(`Effort: ${agent.effort.trim()}`);
-	}
-	if (agent.priority.trim()) {
-		lines.push(`Priority: ${agent.priority.trim()}`);
-	}
-	const body = agent.body.trim();
-	if (body) {
-		if (lines.length > 0) {
-			lines.push("");
-		}
-		lines.push(body);
-	}
-	return lines.length > 0 ? lines.join("\n") : undefined;
-}
-
-function buildPlannedPhases(plan: NormalizedPlan): PlannedTodoPhase[] {
-	const singleComponent = plan.components.length === 1;
-	const phases: PlannedTodoPhase[] = [];
-	for (const component of plan.components) {
-		const agentsById = new Map(component.agents.map(agent => [agent.id, agent]));
-		for (const wave of component.waves) {
-			const tasks: PlannedTodoTask[] = [];
-			for (const agentId of wave.items) {
-				const agent = agentsById.get(agentId);
-				if (!agent || agent.deferred) {
-					continue;
-				}
-				tasks.push({
-					agentId: agent.id,
-					orgItemId: agent.orgItemId || undefined,
-					dependsOn: agent.dependsOn,
-					content: agent.task,
-					details: buildTaskDetails(agent),
-				});
-			}
-			if (tasks.length === 0) {
-				continue;
-			}
-			phases.push({
-				name: singleComponent ? `wave-${wave.number}` : `${component.id}-wave-${wave.number}`,
-				tasks,
-			});
-		}
-	}
-	return phases;
-}
-
-function materializePhases(phases: PlannedTodoPhase[]): FluidTodoPlan {
-	const taskIdByAgentId = new Map<string, string>();
-	let nextTaskNumber = 1;
-	for (const phase of phases) {
-		for (const task of phase.tasks) {
-			const taskId = `task-${nextTaskNumber++}`;
-			taskIdByAgentId.set(task.agentId, taskId);
-		}
+function materializePlanWaves(waves: PlanWave[]): MaterializedPlanWaves {
+	const visibleEntries = waves.flatMap(wave => wave.entries.filter(entry => !entry.deferred));
+	const taskIdByEntryId = new Map<string, string>();
+	for (const [index, entry] of visibleEntries.entries()) {
+		taskIdByEntryId.set(entry.id, `task-${index + 1}`);
 	}
 
 	const closingTaskIdByOrgItemId = new Map<string, string>();
-	for (const phase of phases) {
-		for (const task of phase.tasks) {
-			if (!task.orgItemId) continue;
-			const taskId = taskIdByAgentId.get(task.agentId);
-			if (taskId) {
-				closingTaskIdByOrgItemId.set(task.orgItemId, taskId);
-			}
+	for (const entry of visibleEntries) {
+		if (!entry.orgItemId) continue;
+		const taskId = taskIdByEntryId.get(entry.id);
+		if (taskId) {
+			closingTaskIdByOrgItemId.set(entry.orgItemId, taskId);
 		}
 	}
 
-	let currentTaskNumber = 1;
-	const materialized = phases.map((phase, phaseIndex) => ({
-		id: `phase-${phaseIndex + 1}`,
-		name: phase.name,
-		tasks: phase.tasks.map(task => {
-			const taskId = `task-${currentTaskNumber++}`;
-			const blockers = task.dependsOn
-				.map(depId => taskIdByAgentId.get(depId))
-				.filter((blockerId): blockerId is string => blockerId !== undefined);
+	const phases: TodoPhase[] = [];
+	let nextPhaseNumber = 1;
+	let previousWaveTaskIds: string[] = [];
+	for (const wave of waves) {
+		const visibleWaveEntries = wave.entries.filter(entry => !entry.deferred);
+		if (visibleWaveEntries.length === 0) {
+			continue;
+		}
+
+		const tasks: TodoItem[] = visibleWaveEntries.map(entry => {
+			const taskId = taskIdByEntryId.get(entry.id);
+			if (!taskId) {
+				throw new Error(`Missing generated task ID for wave entry ${entry.id}`);
+			}
+			const blockers = entry.dependsOn?.length
+				? entry.dependsOn
+						.map(depId => taskIdByEntryId.get(depId))
+						.filter((blockerId): blockerId is string => blockerId !== undefined)
+				: previousWaveTaskIds;
 			const item: TodoItem = {
 				id: taskId,
-				content: task.content,
+				content: entry.step,
 				status: "pending",
-				details: task.details,
+				details: entry.details,
 				blockers: blockers.length > 0 ? blockers : undefined,
-				orgItemId: task.orgItemId,
+				orgItemId: entry.orgItemId,
 			};
-			if (task.orgItemId && closingTaskIdByOrgItemId.get(task.orgItemId) === taskId) {
-				item.orgItemClosingId = task.orgItemId;
+			if (entry.orgItemId && closingTaskIdByOrgItemId.get(entry.orgItemId) === taskId) {
+				item.orgItemClosingId = entry.orgItemId;
 			}
 			return item;
-		}),
-	}));
+		});
 
-	for (const phase of materialized) {
+		phases.push({
+			id: `phase-${nextPhaseNumber++}`,
+			name: wave.name,
+			tasks,
+		});
+		previousWaveTaskIds = tasks.map(task => task.id);
+	}
+
+	for (const phase of phases) {
 		for (const task of phase.tasks) {
 			if (!task.blockers || task.blockers.length === 0) {
 				task.status = "in_progress";
-				return { phases: materialized, taskIdByAgentId };
+				return { phases, taskIdByEntryId };
 			}
 		}
 	}
 
-	return { phases: materialized, taskIdByAgentId };
+	return { phases, taskIdByEntryId };
 }
 
-export function materializeFluidPlanToTodos(plan: FluidPlanWithComponents | FluidPlan): FluidTodoPlan {
-	return materializePhases(buildPlannedPhases(normalizePlan(plan)));
+export function planWavesToTodoPhases(waves: PlanWave[]): TodoPhase[] {
+	return materializePlanWaves(waves).phases;
 }
 
-export function fluidPlanToTodoPhases(plan: FluidPlanWithComponents | FluidPlan): TodoPhase[] {
+export function materializeFluidPlanToTodos(plan: FluidPlan): FluidTodoPlan {
+	const materialized = materializePlanWaves(computeWaveLayers(plan));
+	return {
+		phases: materialized.phases,
+		taskIdByAgentId: materialized.taskIdByEntryId,
+	};
+}
+
+export function fluidPlanToTodoPhases(plan: FluidPlan): TodoPhase[] {
 	return materializeFluidPlanToTodos(plan).phases;
 }

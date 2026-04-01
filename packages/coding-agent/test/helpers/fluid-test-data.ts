@@ -17,23 +17,6 @@ export const PARALLEL_PLAN: FluidPlan = {
 	],
 };
 
-export const CANVAS_OUTPUT_PLAN: FluidPlan = {
-	agents: [
-		{
-			id: "analyze",
-			task: "Analyze",
-			dependsOn: [],
-			canvasOutput: { type: "markdown", title: "Analysis" },
-		},
-		{
-			id: "dashboard",
-			task: "Build dashboard",
-			dependsOn: ["analyze"],
-			canvasOutput: { type: "table", title: "Metrics" },
-		},
-	],
-};
-
 export function mockResult(id: string, output = ""): SingleResult {
 	return {
 		index: 0,

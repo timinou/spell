@@ -11,7 +11,11 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { renderTemplate, resolveVerificationContext } from "@oh-my-pi/pi-coding-agent/task/template";
+import {
+	renderTemplate,
+	resolvePredecessorResultsContext,
+	resolveVerificationContext,
+} from "@oh-my-pi/pi-coding-agent/task/template";
 import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo-write";
 
 function makeTask(overrides: Partial<TodoItem> & { id: string; content: string }): TodoItem {
@@ -96,6 +100,44 @@ describe("resolveVerificationContext", () => {
 		const result = resolveVerificationContext("task-1", phases)!;
 		expect(result).toContain("You SHOULD run: `bun lint` to verify.");
 		expect(result).not.toContain("You MUST");
+	});
+});
+
+describe("resolvePredecessorResultsContext", () => {
+	test("renders completed blocker outputs for dependent tasks", () => {
+		const phases = [
+			makePhase("phase-1", "Work", [
+				makeTask({
+					id: "task-1",
+					content: "Build schema",
+					status: "completed",
+					delegation: {
+						sessionId: "child-session",
+						transcriptPath: "/tmp/child.jsonl",
+						result: {
+							output: "Schema summary",
+							outputPath: "/tmp/child.md",
+						},
+					},
+				}),
+				makeTask({ id: "task-2", content: "Build API", blockers: ["task-1"] }),
+			]),
+		];
+		const result = resolvePredecessorResultsContext("task-2", phases)!;
+		expect(result).toContain("--- Predecessor Results (from task-2 blockers) ---");
+		expect(result).toContain("### task-1 — Build schema");
+		expect(result).toContain("Output artifact: /tmp/child.md");
+		expect(result).toContain("Schema summary");
+	});
+
+	test("returns undefined when blockers have no completed result data", () => {
+		const phases = [
+			makePhase("phase-1", "Work", [
+				makeTask({ id: "task-1", content: "Build schema", status: "completed" }),
+				makeTask({ id: "task-2", content: "Build API", blockers: ["task-1"] }),
+			]),
+		];
+		expect(resolvePredecessorResultsContext("task-2", phases)).toBeUndefined();
 	});
 });
 

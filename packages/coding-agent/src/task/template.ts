@@ -1,4 +1,7 @@
 import { renderPromptTemplate } from "../config/prompt-templates";
+import subagentPredecessorResultsTemplate from "../prompts/system/subagent-predecessor-results.md" with {
+	type: "text",
+};
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import { findTask, type TodoPhase } from "../tools/todo-write";
 import type { TaskItem } from "./types";
@@ -60,4 +63,28 @@ export function resolveVerificationContext(todoRef: string, phases: TodoPhase[])
 	if (lines.length === 0) return undefined;
 
 	return `--- Verification Requirements (from ${todoRef}) ---\n${lines.join("\n")}`;
+}
+
+export function resolvePredecessorResultsContext(todoRef: string, phases: TodoPhase[]): string | undefined {
+	const task = findTask(phases, todoRef);
+	if (!task?.blockers?.length) return undefined;
+
+	const predecessors = task.blockers
+		.map(blockerId => findTask(phases, blockerId))
+		.filter((blocker): blocker is NonNullable<typeof blocker> => blocker !== undefined)
+		.filter(blocker => blocker.status === "completed" && blocker.delegation?.result !== undefined)
+		.map(blocker => ({
+			todoId: blocker.id,
+			content: blocker.content,
+			outputPath: blocker.delegation?.result?.outputPath,
+			error: blocker.delegation?.result?.error,
+			output: blocker.delegation?.result?.output,
+		}));
+
+	if (predecessors.length === 0) return undefined;
+
+	return renderPromptTemplate(subagentPredecessorResultsTemplate, {
+		todoRef,
+		predecessors,
+	});
 }

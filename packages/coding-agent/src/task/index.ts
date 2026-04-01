@@ -17,7 +17,7 @@ import * as os from "node:os";
 import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { $env, Snowflake } from "@oh-my-pi/pi-utils";
+import { $env, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ToolSession } from "..";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
@@ -28,6 +28,15 @@ import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" wit
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
 import { formatBytes, formatDuration } from "../tools/render-utils";
+import {
+	cloneTodoPhases,
+	findTask,
+	type TodoDelegation,
+	type TodoDelegationResult,
+	type TodoPhase,
+	type TodoStatus,
+	TodoWriteTool,
+} from "../tools/todo-write";
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
@@ -37,7 +46,7 @@ import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { renderCall, renderResult } from "./render";
-import { renderTemplate, resolveVerificationContext } from "./template";
+import { renderTemplate, resolvePredecessorResultsContext, resolveVerificationContext } from "./template";
 import {
 	type AgentDefinition,
 	type AgentProgress,
@@ -152,6 +161,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	readonly renderResult = renderResult;
 	readonly #discoveredAgents: AgentDefinition[];
 	readonly #blockedAgent: string | undefined;
+	#todoRefMutationQueue: Promise<void> = Promise.resolve();
 
 	/** Dynamic description that reflects current disabled-agent settings */
 	get description(): string {
@@ -185,15 +195,118 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		return new TaskTool(session, agents, isolationMode !== "none");
 	}
 
-	/** Augment each task's assignment with verification context from its todoRef. */
+	/** Augment each task's assignment with todoRef-derived execution context. */
 	#injectVerificationContext(tasks: TaskItem[]): TaskItem[] {
 		const phases = this.session.getTodoPhases?.();
 		if (!phases || phases.length === 0) return tasks;
 		return tasks.map(task => {
 			if (!task.todoRef) return task;
-			const verificationBlock = resolveVerificationContext(task.todoRef, phases);
-			if (!verificationBlock) return task;
-			return { ...task, assignment: `${task.assignment.trim()}\n\n${verificationBlock}` };
+			const blocks = [
+				resolvePredecessorResultsContext(task.todoRef, phases),
+				resolveVerificationContext(task.todoRef, phases),
+			].filter((block): block is string => Boolean(block));
+			if (blocks.length === 0) return task;
+			return { ...task, assignment: `${task.assignment.trim()}\n\n${blocks.join("\n\n")}` };
+		});
+	}
+
+	#buildTodoDelegation(agent: string, sessionId?: string, transcriptPath?: string): TodoDelegation | undefined {
+		if (!sessionId) return undefined;
+		return { agent, sessionId, transcriptPath };
+	}
+
+	#buildTodoResultSummary(result: SingleResult): TodoDelegationResult {
+		const output = result.output.trim();
+		return {
+			output: output.length > 4_000 ? `${output.slice(0, 4_000)}\n\n[truncated]` : output || undefined,
+			error: result.error,
+			outputPath: result.outputPath,
+		};
+	}
+
+	#queueTodoRefMutation(action: () => Promise<void>): Promise<void> {
+		const run = async () => {
+			try {
+				await action();
+			} catch (error) {
+				logger.error("task todoRef lifecycle update failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		};
+		this.#todoRefMutationQueue = this.#todoRefMutationQueue.then(run, run);
+		return this.#todoRefMutationQueue;
+	}
+
+	#mergeTodoRefDelegation(todoRef: string, patch: Partial<TodoDelegation>): void {
+		const phases = this.session.getTodoPhases?.();
+		if (!phases) return;
+		const nextPhases = cloneTodoPhases(phases);
+		const todo = findTask(nextPhases, todoRef);
+		if (!todo) {
+			logger.warn("task todoRef delegation update skipped: todo not found", { todoRef });
+			return;
+		}
+		const nextChildPhases = patch.childPhases
+			? cloneTodoPhases(patch.childPhases).map(phase => ({
+					...phase,
+					tasks: phase.tasks.map(child => ({
+						...child,
+						delegation: child.delegation ? { ...child.delegation, childPhases: undefined } : child.delegation,
+					})),
+				}))
+			: todo.delegation?.childPhases;
+		const sessionId = patch.sessionId ?? todo.delegation?.sessionId;
+		if (!sessionId) return;
+		todo.delegation = {
+			...todo.delegation,
+			...patch,
+			sessionId,
+			childPhases: nextChildPhases,
+		};
+		this.session.setTodoPhases?.(nextPhases);
+		this.session.eventBus?.emit("todo:change", { phases: nextPhases });
+	}
+
+	async #applyTodoRefStatus(todoRef: string, status: TodoStatus): Promise<void> {
+		const result = await new TodoWriteTool(this.session).execute("task-todo-ref", {
+			ops: [{ op: "update", id: todoRef, status }],
+		});
+		const summary = result.content.find(part => part.type === "text")?.text ?? "";
+		if (summary.startsWith("Errors:")) {
+			logger.warn("task todoRef lifecycle update reported todo_write errors", { todoRef, status, summary });
+		}
+	}
+
+	#markTodoRefStarted(task: TaskItem, progress: AgentProgress, startedTodoRefs: Set<string>): void {
+		if (!task.todoRef || startedTodoRefs.has(task.id) || progress.status !== "running") return;
+		const delegation = this.#buildTodoDelegation(progress.agent, progress.sessionId, progress.transcriptPath);
+		if (!delegation) return;
+		startedTodoRefs.add(task.id);
+		void this.#queueTodoRefMutation(async () => {
+			this.#mergeTodoRefDelegation(task.todoRef!, delegation);
+			await this.#applyTodoRefStatus(task.todoRef!, "in_progress");
+		});
+	}
+
+	#syncTodoRefChildPhases(task: TaskItem, childPhases: TodoPhase[] | undefined): void {
+		if (!task.todoRef || childPhases === undefined) return;
+		void this.#queueTodoRefMutation(async () => {
+			this.#mergeTodoRefDelegation(task.todoRef!, { childPhases });
+		});
+	}
+
+	async #finalizeTodoRef(task: TaskItem, result: SingleResult): Promise<void> {
+		if (!task.todoRef) return;
+		const delegation = this.#buildTodoDelegation(result.agent, result.sessionId, result.transcriptPath);
+		const status: TodoStatus = result.exitCode === 0 && !(result.aborted ?? false) ? "completed" : "failed";
+		await this.#queueTodoRefMutation(async () => {
+			if (delegation) this.#mergeTodoRefDelegation(task.todoRef!, delegation);
+			if (result.todoPhases !== undefined) {
+				this.#mergeTodoRefDelegation(task.todoRef!, { childPhases: result.todoPhases });
+			}
+			this.#mergeTodoRefDelegation(task.todoRef!, { result: this.#buildTodoResultSummary(result) });
+			await this.#applyTodoRefStatus(task.todoRef!, status);
 		});
 	}
 
@@ -663,6 +776,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		// Initialize progress tracking
 		const progressMap = new Map<number, AgentProgress>();
+		const startedTodoRefs = new Set<string>();
 
 		// Update callback
 		const emitProgress = () => {
@@ -739,7 +853,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			const tasksWithUniqueIds = tasks.map((t, i) => ({ ...t, id: uniqueIds[i] }));
 
 			// Build full prompts with context prepended
-			const tasksWithContext = tasksWithUniqueIds.map(t => renderTemplate(context, t));
+			const tasksWithContext = tasksWithUniqueIds.map(t => ({ ...renderTemplate(context, t), todoRef: t.todoRef }));
 			const availableSkills = [...(this.session.skills ?? [])];
 			const contextFiles = this.session.contextFiles?.filter(
 				file => path.basename(file.path).toLowerCase() !== "agents.md",
@@ -769,8 +883,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			emitProgress();
 
 			const runTask = async (task: (typeof tasksWithContext)[number], index: number) => {
+				const returnWithTodoRef = async (result: SingleResult): Promise<SingleResult> => {
+					await this.#finalizeTodoRef(task, result);
+					return result;
+				};
 				if (!isIsolated) {
-					return runSubprocess({
+					const result = await runSubprocess({
 						cwd: this.session.cwd,
 						agent: effectiveAgent,
 						task: task.task,
@@ -793,6 +911,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							progressMap.set(index, {
 								...structuredClone(progress),
 							});
+							this.#markTodoRefStarted(task, progress, startedTodoRefs);
+							this.#syncTodoRefChildPhases(task, progress.todoPhases);
 							emitProgress();
 						},
 						authStorage: this.session.authStorage,
@@ -803,6 +923,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						skills: availableSkills,
 						promptTemplates,
 					});
+					return returnWithTodoRef(result);
 				}
 
 				const taskStart = Date.now();
@@ -846,6 +967,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							progressMap.set(index, {
 								...structuredClone(progress),
 							});
+							this.#markTodoRefStarted(task, progress, startedTodoRefs);
+							this.#syncTodoRefChildPhases(task, progress.todoPhases);
 							emitProgress();
 						},
 						authStorage: this.session.authStorage,
@@ -876,17 +999,17 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								task.description,
 								commitMsg,
 							);
-							return {
+							return returnWithTodoRef({
 								...result,
 								branchName: commitResult?.branchName,
 								nestedPatches: commitResult?.nestedPatches,
-							};
+							});
 						} catch (mergeErr) {
 							// Agent succeeded but branch commit failed — clean up stale branch
 							const branchName = `spell/task/${task.id}`;
 							await $`git branch -D ${branchName}`.cwd(repoRoot).quiet().nothrow();
 							const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
-							return { ...result, error: `Merge failed: ${msg}` };
+							return returnWithTodoRef({ ...result, error: `Merge failed: ${msg}` });
 						}
 					}
 					if (result.exitCode === 0) {
@@ -894,20 +1017,20 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							const delta = await captureDeltaPatch(isolationDir, taskBaseline);
 							const patchPath = path.join(effectiveArtifactsDir, `${task.id}.patch`);
 							await Bun.write(patchPath, delta.rootPatch);
-							return {
+							return returnWithTodoRef({
 								...result,
 								patchPath,
 								nestedPatches: delta.nestedPatches,
-							};
+							});
 						} catch (patchErr) {
 							const msg = patchErr instanceof Error ? patchErr.message : String(patchErr);
-							return { ...result, error: `Patch capture failed: ${msg}` };
+							return returnWithTodoRef({ ...result, error: `Patch capture failed: ${msg}` });
 						}
 					}
-					return result;
+					return returnWithTodoRef(result);
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
-					return {
+					return returnWithTodoRef({
 						index,
 						id: task.id,
 						agent: agent.name,
@@ -923,7 +1046,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						tokens: 0,
 						modelOverride,
 						error: message,
-					};
+					});
 				} finally {
 					if (isolationDir) {
 						if (effectiveIsolationMode === "fuse-overlay") {

@@ -1,0 +1,88 @@
+#+TITLE: Bidirectional todoRef lifecycle in task tool
+#+STATE: DONE
+#+SESSION_ID: 14a9c1b0b75d6789
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e/21-CreateFeatD.jsonl]]
+#+CUSTOM_ID: FEAT-183-bidirectional-todoref-lifecycle-in-task
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-181-todoitem-delegation-model-with-multi-in
+
+NOTE [2026-04-01]: Completed in PLAN-068; see the plan completion report for verification details.
+
+* Scope
+** In scope
+- When =task= tool spawns a subagent with =todoRef=, auto-mark the parent's todo item =in_progress= with delegation metadata (=sessionId=, =transcriptPath=, =taskToolId=)
+- On subagent completion: auto-mark parent's todo item =completed= with result summary
+- On subagent failure: mark parent's todo item with error info (keep status =in_progress= so parent can decide)
+- Add =sessionId= field to =SingleResult= in task types
+- Serialize todo state mutations through the existing exclusive-lock mechanism to prevent race conditions from concurrent subagent completions
+- Emit =todo:change= event after each state mutation so TUI/niri/QML update
+** Out of scope
+- Nested sub-task propagation (separate item)
+- Result forwarding to dependents (separate item)
+- Changes to normalizeInProgressTask (done in FEAT-B)
+** Boundary rationale
+This is the core bidirectional link. It makes todoRef read-write instead of read-only. Needs the delegation field from FEAT-B.
+* Tests
+** File: =packages/coding-agent/test/task/todo-ref-lifecycle.test.ts= (new)
+Scenarios:
+1. Spawning subagent with todoRef marks parent task =in_progress= with delegation metadata
+2. Subagent completion marks parent task =completed= with result summary
+3. Subagent failure marks parent task with error but keeps =in_progress= status
+4. Subagent abort marks parent task with abort reason
+5. Multiple concurrent subagents with different todoRefs: each updates its own parent task without race conditions
+6. todoRef referencing non-existent task: warn but proceed (don't crash)
+7. Parent CAN override delegated task status via manual todo_write call
+8. SessionId is present in SingleResult after subagent completes
+** File: =packages/coding-agent/test/task/template.test.ts= (existing, update if needed)
+- Existing resolveVerificationContext tests must pass
+* Implementation
+** Add sessionId to SingleResult
+:PROPERTIES:
+:CUSTOM_ID: FEAT-D::session-tracking
+:END:
+- File: =packages/coding-agent/src/task/types.ts=
+- Add =sessionId?: string= to =SingleResult= interface
+- File: =packages/coding-agent/src/task/executor.ts=
+- Capture session ID from the AgentSession created in =runSubprocess= and set it on the result
+- Capture transcript path from session's file storage
+
+** Implement todoRef state mutations
+:PROPERTIES:
+:CUSTOM_ID: FEAT-D::todo-mutations
+:DEPENDS: FEAT-D::session-tracking
+:END:
+- File: =packages/coding-agent/src/task/index.ts=
+- In the execution path (both sync and async), after spawning each subagent:
+  1. If =task.todoRef= is set, resolve the parent's todo phases via =this.session.getTodoPhases()=
+  2. Find the task by ID using =findTask=
+  3. Set =task.status = "in_progress"= and =task.delegation = { taskToolId: task.id, sessionId, transcriptPath }=
+  4. Call =this.session.setTodoPhases(phases)= and emit =todo:change=
+- After subagent completes:
+  1. Set =task.status = "completed"= and =task.result = { output: truncatedOutput, exitCode }=
+  2. Call =this.session.setTodoPhases(phases)= and emit =todo:change=
+- After subagent fails:
+  1. Set =task.delegation.error = errorMessage= (keep status in_progress)
+  2. Emit =todo:change=
+- Wrap all mutations in a serialization mechanism (lock or queue) to prevent concurrent subagent completions from corrupting state
+
+** Write lifecycle tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-D::write-tests
+:DEPENDS: FEAT-D::todo-mutations
+:END:
+- File: =packages/coding-agent/test/task/todo-ref-lifecycle.test.ts=
+- Cover all 8 scenarios
+* Edge Cases
+- Race condition: 3 subagents finish within milliseconds. State mutations must be serialized.
+- Subagent session fails to create (e.g., no API key): mark delegation with error, don't mark in_progress
+- Parent calls todo_write to mark delegated task =abandoned=: this overrides the delegation. Subagent still runs but its completion update is a no-op (task already terminal)
+- todoRef references a task in a completed phase: warn, skip mutation
+- Session has no todo phases set: todoRef is a no-op (warn in logs)
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/task/todo-ref-lifecycle.test.ts= passes
+- =bun check:ts= passes
+- SingleResult includes sessionId after subagent completes
+- Parent todo item automatically transitions in_progress -> completed when subagent succeeds
+- No manual todo_write call needed for delegated task lifecycle

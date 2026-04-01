@@ -21,10 +21,6 @@ export interface FluidAgentNode {
 	deferred?: boolean;
 	/** Body text from the org item (scope/details). */
 	body?: string;
-	/** Whether this node is a coordinator managing a sub-DAG. */
-	isCoordinator?: boolean;
-	/** Sub-plan that this coordinator manages (only set when isCoordinator=true). */
-	subPlan?: FluidPlan;
 }
 
 export interface FluidPlan {

@@ -10,11 +10,11 @@
  *   - Empty waves (heading with no entries) are preserved
  *   - Top-level IDs (no `::` separator) work as orgItemId
  *
- * Note on type hierarchy: extractPlanWaves produces PlanWave[] (text-extracted,
- * name-based). The org package has a separate ComputedWave type (elisp-computed,
- * number-based) used by formatWaveManifest. These serve different code paths:
- * ComputedWave is for elisp -> TS manifest generation, PlanWave is for
- * plan body -> executor. They don't interact and the split is intentional.
+ * PlanWave is the canonical intermediate representation for todo auto-init.
+ * `extractPlanWaves` produces PlanWave[] directly from the PLAN body so plan
+ * approval no longer depends on an org-fluid-plan MCP round-trip.
+ * Canvas mode computes its own PlanWave[] from FluidPlan DAG data.
+ * Both paths converge on the same todo materialization logic.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -38,10 +38,12 @@ describe("extractPlanWaves", () => {
 		expect(waves![0].name).toBe("foundation");
 		expect(waves![0].entries).toHaveLength(2);
 		expect(waves![0].entries[0]).toEqual({
+			id: "FEAT-001::define-types",
 			orgItemId: "FEAT-001::define-types",
 			step: "Define TypeScript interfaces",
 		});
 		expect(waves![0].entries[1]).toEqual({
+			id: "FEAT-002::define-schema",
 			orgItemId: "FEAT-002::define-schema",
 			step: "Define parser schema types",
 		});
@@ -102,31 +104,21 @@ Some other text.`;
 		expect(waves![0].entries).toHaveLength(1);
 	});
 
-	test("non-wave headings between waves accumulate entries into preceding wave", () => {
-		// This test documents current behavior: extractPlanWaves does NOT reset
-		// `current` on non-wave `**` headings. The entry regex matches any
-		// `- [[id:...]]` line while current is set, so entries under a non-wave
-		// heading are added to the last active wave.
-		//
-		// This is a known limitation (not a bug for current usage, since plan
-		// bodies are generated with waves only). If this behavior changes in the
-		// future, update this test accordingly.
+	test("non-wave headings reset the active wave section", () => {
 		const body = `** wave-1                                          :wave:
-- [[id:FEAT-001::a]] Step A
-** Some other heading
-- [[id:FEAT-002::b]] Step B
-** wave-2                                          :wave:
-- [[id:FEAT-003::c]] Step C`;
+		- [[id:FEAT-001::a]] Step A
+		** Some other heading
+		- [[id:FEAT-002::b]] Step B
+		** wave-2                                          :wave:
+		- [[id:FEAT-003::c]] Step C`;
 
 		const waves = extractPlanWaves(body);
 		expect(waves).toBeDefined();
 		expect(waves).toHaveLength(2);
 
-		// FEAT-002::b leaks into wave-1 because current is not reset on non-wave headings
 		expect(waves![0].name).toBe("wave-1");
-		expect(waves![0].entries).toHaveLength(2);
+		expect(waves![0].entries).toHaveLength(1);
 		expect(waves![0].entries[0].orgItemId).toBe("FEAT-001::a");
-		expect(waves![0].entries[1].orgItemId).toBe("FEAT-002::b");
 
 		expect(waves![1].name).toBe("wave-2");
 		expect(waves![1].entries).toHaveLength(1);
@@ -142,6 +134,7 @@ Some other text.`;
 		expect(waves).toHaveLength(1);
 		expect(waves![0].entries).toHaveLength(1);
 		expect(waves![0].entries[0]).toEqual({
+			id: "FEAT-001",
 			orgItemId: "FEAT-001",
 			step: "Full feature implementation",
 		});

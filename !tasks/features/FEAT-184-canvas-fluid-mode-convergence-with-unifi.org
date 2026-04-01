@@ -1,0 +1,72 @@
+#+TITLE: Canvas fluid mode convergence with unified engine
+#+STATE: DONE
+#+SESSION_ID: 14a9c310809d678d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e/25-CreateFeatH.jsonl]]
+#+CUSTOM_ID: FEAT-184-canvas-fluid-mode-convergence-with-unifi
+#+EFFORT: 2h
+#+DEPENDS: FEAT-182-unified-execution-prompt-merging-plan-mo
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+NOTE [2026-04-01]: Completed in PLAN-068; see the plan completion report for verification details.
+
+* Scope
+** In scope
+- Update =fluid-mode.ts= canvas path to use the unified PlanWave pipeline: FluidPlan -> computeWaveLayers -> PlanWave[] -> planWavesToTodoPhases -> TodoPhase[]
+- Use the merged execution prompt (from FEAT-G) for coordinator prompt in canvas mode
+- Verify FluidEvent bridge still works (todo:change -> agent_state_change -> QML)
+- Basic smoke test for canvas path
+** Out of scope
+- QML shell changes (visual updates)
+- Real-time nesting in canvas (use TUI implementation from FEAT-E)
+- Canvas planner subprocess changes
+** Boundary rationale
+Canvas fluid is alpha. This item ensures it uses the same engine as /plan. No new features, just convergence.
+
+* Tests
+** File: =packages/coding-agent/test/integration/fluid-mode-convergence.test.ts= (new)
+Scenarios:
+1. FluidPlan with 3 agents -> computeWaveLayers -> PlanWave[] has correct waves
+2. Canvas executeFluidPlan uses planWavesToTodoPhases (not materializeFluidPlanToTodos)
+3. FluidEvent bridge: todo:change emits agent_state_change events with correct agentId/state mapping
+4. Retry path still works: presetCompletedResults carries over
+
+* Implementation
+** Update executeFluidPlan pipeline
+:PROPERTIES:
+:CUSTOM_ID: FEAT-H::update-pipeline
+:END:
+- File: =packages/coding-agent/src/modes/fluid-mode.ts=
+- Replace =materializeFluidPlanToTodos(plan)= with:
+  1. =fluidPlanToWaves(plan)= -> PlanWave[]
+  2. =planWavesToTodoPhases(waves)= -> TodoPhase[]
+- Import from the wave-to-todos module (created in FEAT-C)
+- Remove import of =materializeFluidPlanToTodos=
+
+** Update coordinator prompt
+:PROPERTIES:
+:CUSTOM_ID: FEAT-H::update-prompt
+:DEPENDS: FEAT-H::update-pipeline
+:END:
+- File: =packages/coding-agent/src/modes/fluid-mode.ts=
+- Update =buildCoordinatorPrompt= to use the merged template with =isCoordinator: true=
+- Remove import of deleted =coordinator.md=
+
+** Write convergence tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-H::write-tests
+:DEPENDS: FEAT-H::update-pipeline
+:END:
+- File: =packages/coding-agent/test/integration/fluid-mode-convergence.test.ts=
+- Cover all 4 scenarios
+
+* Edge Cases
+- FluidPlan with cycles: validatePlan catches before reaching pipeline
+- FluidPlan with single agent: produces 1 wave, 1 phase, 1 task
+- Retry with presetCompletedResults: the wave pipeline must support marking tasks completed before execution
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/integration/fluid-mode-convergence.test.ts= passes
+- =bun check:ts= passes
+- Canvas path uses same planWavesToTodoPhases as /plan path
+- FluidEvent bridge still works (existing fluid-event-pipeline.test.ts passes)

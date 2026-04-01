@@ -7,14 +7,7 @@ import * as path from "node:path";
 import { type Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { NiriOverviewController } from "@oh-my-pi/pi-niri";
-import {
-	appendItemToFile,
-	extractIdLinks,
-	type FluidPlanWithComponents,
-	generateId,
-	orgToMarkdown,
-	resolveCategories,
-} from "@oh-my-pi/pi-org";
+import { appendItemToFile, extractIdLinks, generateId, orgToMarkdown, resolveCategories } from "@oh-my-pi/pi-org";
 import type { Component, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
 import {
 	Container,
@@ -36,7 +29,7 @@ import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensibil
 import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
-import { fluidPlanToTodoPhases } from "../orchestrators/fluid";
+import { type PlanWave, planWavesToTodoPhases } from "../orchestrators/fluid";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
 import { approvePlanItem, buildOrgConfig, type OrgPlanRef, resolvePlanItem } from "../plan-mode/org-plan";
 import type { UserModeState } from "../plan-mode/state";
@@ -49,7 +42,8 @@ import { getRecentSessions } from "../session/session-manager";
 import { formatExitTokenSummary } from "../session/token-summary";
 import { getModeCommandDefs, registerModeCommands } from "../slash-commands/builtin-registry";
 import { STTController, type SttState } from "../stt";
-import type { ExitPlanModeDetails, PlanWave } from "../tools";
+import type { ExitPlanModeDetails } from "../tools";
+import { isDelegatedTask } from "../tools/todo-write";
 import { setTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import { AuditModeOverlay } from "./components/audit-mode-overlay";
@@ -823,28 +817,58 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.renderSessionContext(context);
 	}
 
+	#renderChildTodoPhases(todo: TodoItem, prefix: string): string[] {
+		const childPhases = todo.delegation?.childPhases?.filter(phase => phase.tasks.length > 0) ?? [];
+		if (childPhases.length === 0) return [];
+		const lines: string[] = [];
+		for (const phase of childPhases) {
+			lines.push(theme.fg("muted", `${prefix}\u21B3 ${phase.name}`));
+			for (const child of phase.tasks) {
+				const nestedChild = child.delegation
+					? { ...child, delegation: { ...child.delegation, childPhases: undefined } }
+					: child;
+				lines.push(this.#formatTodoLine(nestedChild, `${prefix}  `));
+			}
+		}
+		return lines;
+	}
+
 	#formatTodoLine(todo: TodoItem, prefix: string): string {
 		const checkbox = theme.checkbox;
+		const content = isDelegatedTask(todo) ? `${todo.content} [delegated]` : todo.content;
+		const childLines = this.#renderChildTodoPhases(todo, `${prefix}  `);
 		switch (todo.status) {
 			case "completed":
-				return theme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(todo.content)}`);
+				return [
+					theme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(content)}`),
+					...childLines,
+				].join("\n");
 			case "in_progress": {
-				const main = theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`);
-				if (!todo.details) return main;
-				const detailLines = todo.details.split("\n").map(line => theme.fg("dim", `${prefix}  ${line}`));
-				return [main, ...detailLines].join("\n");
+				const main = theme.fg("accent", `${prefix}${checkbox.unchecked} ${content}`);
+				const lines = [main];
+				if (todo.details) {
+					lines.push(...todo.details.split("\n").map(line => theme.fg("dim", `${prefix}  ${line}`)));
+				}
+				return [...lines, ...childLines].join("\n");
 			}
 			case "abandoned":
-				return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`);
+				return [
+					theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(content)}`),
+					...childLines,
+				].join("\n");
+			case "failed":
+				return [theme.fg("error", `${prefix}${checkbox.unchecked} ${content}`), ...childLines].join("\n");
 			default:
-				return theme.fg("dim", `${prefix}${checkbox.unchecked} ${todo.content}`);
+				return [theme.fg("dim", `${prefix}${checkbox.unchecked} ${content}`), ...childLines].join("\n");
 		}
 	}
 
 	#getActivePhase(phases: TodoPhase[]): TodoPhase | undefined {
 		const nonEmpty = phases.filter(phase => phase.tasks.length > 0);
 		const active = nonEmpty.find(phase =>
-			phase.tasks.some(task => task.status === "pending" || task.status === "in_progress"),
+			phase.tasks.some(
+				task => task.status === "pending" || task.status === "in_progress" || task.status === "failed",
+			),
 		);
 		return active ?? nonEmpty[nonEmpty.length - 1];
 	}
@@ -1120,7 +1144,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			finalPlanFilePath: string;
 			orgItem?: { id: string; file: string };
 			waves?: PlanWave[];
-			fluidPlan?: FluidPlanWithComponents;
 		},
 	): Promise<void> {
 		const orgPlanItem: OrgPlanRef | null = options.orgItem ?? null;
@@ -1207,13 +1230,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		const modeConfig = planState?.modeConfigName ? this.session.getModeConfig(planState.modeConfigName) : undefined;
 
 		let autoInitialized = false;
-		if (options.fluidPlan) {
-			if (options.fluidPlan.warnings.length > 0) {
-				logger.warn("Fluid plan conversion produced warnings", { warnings: options.fluidPlan.warnings });
+		if ((options.waves?.length ?? 0) > 0) {
+			const phases = planWavesToTodoPhases(options.waves ?? []);
+			if (phases.length > 0) {
+				this.session.setTodoPhases(phases, { reset: true });
+				autoInitialized = true;
 			}
-			const phases = fluidPlanToTodoPhases(options.fluidPlan);
-			this.session.setTodoPhases(phases, { reset: true });
-			autoInitialized = true;
 		}
 
 		const prompt = renderPromptTemplate(planModeApprovedPrompt, {
@@ -1349,7 +1371,6 @@ export class InteractiveMode implements InteractiveModeContext {
 					finalPlanFilePath,
 					orgItem,
 					waves: details.waves,
-					fluidPlan: details.fluidPlan,
 				});
 			} catch (error) {
 				this.showError(

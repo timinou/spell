@@ -1,0 +1,88 @@
+#+TITLE: Delete dead fluid execution engine and stale tests
+#+STATE: DONE
+#+SESSION_ID: 14a9c025719d6781
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T13-21-34-386Z_14a99a8b2c5d675e/18-CreateFeatA.jsonl]]
+#+CUSTOM_ID: FEAT-180-delete-dead-fluid-execution-engine-and-s
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+NOTE [2026-04-01]: Completed in PLAN-068; see the plan completion report for verification details.
+
+* Scope
+** In scope
+- Delete 4 dead source files from =packages/coding-agent/src/orchestrators/fluid/=:
+  - =fluid-orchestrator.ts= (FluidOrchestrator class, zero runtime consumers)
+  - =queue-scheduler.ts= (QueueScheduler, only used by dead FluidOrchestrator)
+  - =coordinator-runner.ts= (runCoordinator, replaced by direct prompt building in fluid-mode.ts)
+  - =org-fluid-bridge.ts= (OrgFluidBridge, replaced by todo_write org lifecycle hooks)
+- Delete stale test files:
+  - =test/orchestrators/fluid-drain.test.ts= (tests FluidOrchestrator drain)
+  - =test/integration/fluid-pipeline-e2e.test.ts= (tests old orchestrator pipeline)
+  - =test/helpers/fluid-pipeline.ts= (helper only used by above)
+- Remove FluidOrchestrator describe block from =test/integration/fluid-event-pipeline.test.ts= (keep FluidEventRouter tests)
+- Clean barrel: remove =export * from "./fluid-orchestrator"= from =src/orchestrators/fluid/index.ts=
+- Fix stale file header in =src/modes/fluid-mode.ts= (lines 1-5 still describe queue-based scheduler)
+- Remove voided params =cwd= and =concurrency= from =executeFluidPlan()= in =src/modes/fluid-mode.ts=
+- Delete =FluidPlanWithComponents= from =packages/org/src/types.ts= (or deprecate if other consumers exist)
+- Remove =fluidPlan= field from =ExitPlanModeDetails= in =src/tools/exit-plan-mode.ts=
+- Remove MCP call block in =exit-plan-mode.ts= that tries to call =org-fluid-plan= and populate =fluidPlan=
+** Out of scope
+- =dag.ts=, =types.ts=, =event-router.ts=, =plan-to-todos.ts=, =plan-schema.ts=, =plan-validator.ts=, =code-highlight.ts= are live — do NOT delete
+- Canvas =FluidPlan= type in =src/orchestrators/fluid/types.ts= stays — it's the planner output schema
+- Functional changes to todo_write or task tool
+** Boundary rationale
+Clean removal of dead code with zero runtime consumers. Verified by grep: no production code outside fluid/ directory imports these classes.
+* Tests
+** Deletion verification
+- =bun check:ts= must pass after all deletions (no dangling imports)
+- =bun test packages/coding-agent/test/orchestrators/= must pass (remaining tests: fluid-components.test.ts, fluid-dag.test.ts, fluid-plan-to-todos.test.ts)
+- =bun test packages/coding-agent/test/integration/fluid-event-pipeline.test.ts= must pass (FluidEventRouter tests preserved)
+* Implementation
+** Delete dead source files
+:PROPERTIES:
+:CUSTOM_ID: FEAT-180-delete-dead-fluid-execution-engine-and-s::delete-source
+:END:
+- Delete =packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts=
+- Delete =packages/coding-agent/src/orchestrators/fluid/queue-scheduler.ts=
+- Delete =packages/coding-agent/src/orchestrators/fluid/coordinator-runner.ts=
+- Delete =packages/coding-agent/src/orchestrators/fluid/org-fluid-bridge.ts=
+- Remove =export * from "./fluid-orchestrator"= from =packages/coding-agent/src/orchestrators/fluid/index.ts=
+
+** Delete stale tests and helpers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-180-delete-dead-fluid-execution-engine-and-s::delete-tests
+:END:
+- Delete =packages/coding-agent/test/orchestrators/fluid-drain.test.ts=
+- Delete =packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts=
+- Delete =packages/coding-agent/test/helpers/fluid-pipeline.ts=
+- Remove FluidOrchestrator import and describe block from =packages/coding-agent/test/integration/fluid-event-pipeline.test.ts=
+
+** Remove MCP wiring and FluidPlanWithComponents
+:PROPERTIES:
+:CUSTOM_ID: FEAT-180-delete-dead-fluid-execution-engine-and-s::remove-mcp-wiring
+:DEPENDS: FEAT-180-delete-dead-fluid-execution-engine-and-s::delete-source
+:END:
+- Remove =fluidPlan= field from =ExitPlanModeDetails= in =src/tools/exit-plan-mode.ts=
+- Remove the try/catch block that calls =org-fluid-plan= MCP (lines 170-205 of exit-plan-mode.ts)
+- Remove =fluidPlan= from the return object (line 224)
+- Remove =FluidPlanWithComponents= import from =exit-plan-mode.ts=
+- Remove or deprecate =FluidPlanWithComponents=, =FluidPlanComponent=, =FluidPlanWave=, =FluidPlanAgent= from =packages/org/src/types.ts=
+- Remove =fluidPlan= prop from =#approvePlan= in =interactive-mode.ts= and the autoInitialized path that depends on it
+
+** Fix stale comments and unused params
+:PROPERTIES:
+:CUSTOM_ID: FEAT-180-delete-dead-fluid-execution-engine-and-s::fix-stale
+:END:
+- Update file header comment in =src/modes/fluid-mode.ts= (lines 1-5) to describe current architecture (todo_write-driven coordinator)
+- Remove voided =cwd= and =concurrency= params from =executeFluidPlan()= signature and the =void cwd; void concurrency;= lines
+* Edge Cases
+- =FluidPlanWithComponents= may be imported by test files — grep and update/remove all consumers
+- =org-fluid-plan.el= Elisp tool stays (it's in packages/org, not coding-agent) — just remove the TS caller
+- =plan-to-todos.ts= currently imports =FluidPlanWithComponents= from =@oh-my-pi/pi-org= — that import and the =isPlanWithComponents= type guard need updating
+* Acceptance Criteria
+- =bun check:ts= passes
+- =bun lint:ts= passes
+- =bun test packages/coding-agent/test/= passes with no regressions
+- Zero imports of FluidOrchestrator, QueueScheduler, runCoordinator, OrgFluidBridge in src/ or test/
+- =git diff --stat= shows only deletions and import cleanup

@@ -4,10 +4,9 @@ import {
 	FLUID_EVENT_CHANNEL,
 	type FluidEvent,
 	FluidEventRouter,
-	FluidOrchestrator,
 } from "../../src/orchestrators/fluid";
 import { EventBus } from "../../src/utils/event-bus";
-import { CANVAS_OUTPUT_PLAN, mockResult, PARALLEL_PLAN } from "../helpers/fluid-test-data";
+import { mockResult, PARALLEL_PLAN } from "../helpers/fluid-test-data";
 
 function asRecord(value: unknown): Record<string, unknown> {
 	return value as Record<string, unknown>;
@@ -225,96 +224,5 @@ describe("FluidEventRouter payload mapping", () => {
 		await eventBus.drain();
 
 		expect(outbound).toHaveLength(0);
-	});
-});
-
-describe("FluidOrchestrator + router event pipeline", () => {
-	test("parallel plan emits bridge events with required ordering invariants", async () => {
-		const eventBus = new EventBus();
-		const router = new FluidEventRouter(eventBus);
-
-		const outbound: Record<string, unknown>[] = [];
-		eventBus.subscribe("bridge:outbound", payload => {
-			outbound.push(asRecord(payload));
-		});
-
-		const orchestrator = new FluidOrchestrator({
-			eventBus,
-			cwd: process.cwd(),
-			concurrency: 2,
-			runAgent: async (node, _upstreamResults, _signal) => {
-				const delayById: Record<string, number> = {
-					root: 5,
-					"branch-a": 30,
-					"branch-b": 10,
-					merge: 5,
-				};
-				await Bun.sleep(delayById[node.id] ?? 0);
-				return mockResult(node.id, `out:${node.id}`);
-			},
-		});
-
-		await orchestrator.execute(PARALLEL_PLAN);
-		await eventBus.drain();
-		router.dispose();
-
-		expect(outbound.length).toBeGreaterThan(0);
-		const types = outbound.map(event => event.type);
-		const planCompleteIndex = types.indexOf("fluid:plan_complete");
-		const firstAgentIndex = types.indexOf("fluid:agent_state_change");
-		const executionCompleteIndex = types.indexOf("fluid:execution_complete");
-
-		expect(types.includes("fluid:plan_start")).toBe(false);
-		expect(planCompleteIndex).toBeGreaterThanOrEqual(0);
-		expect(firstAgentIndex).toBeGreaterThan(planCompleteIndex);
-		expect(executionCompleteIndex).toBe(types.length - 1);
-
-		for (const agent of PARALLEL_PLAN.agents) {
-			const stateSequence = outbound
-				.filter(event => event.type === "fluid:agent_state_change" && event.agentId === agent.id)
-				.map(event => event.state);
-			expect(stateSequence).toEqual(["ready", "running", "completed"]);
-		}
-	});
-
-	test("canvas_output is emitted before execution_complete with plan metadata and result content", async () => {
-		const eventBus = new EventBus();
-		const router = new FluidEventRouter(eventBus);
-
-		const outbound: Record<string, unknown>[] = [];
-		eventBus.subscribe("bridge:outbound", payload => {
-			outbound.push(asRecord(payload));
-		});
-
-		const orchestrator = new FluidOrchestrator({
-			eventBus,
-			cwd: process.cwd(),
-			runAgent: async (node, _upstreamResults, _signal) => mockResult(node.id, `canvas:${node.id}`),
-		});
-
-		await orchestrator.execute(CANVAS_OUTPUT_PLAN);
-		await eventBus.drain();
-		router.dispose();
-
-		const types = outbound.map(event => event.type);
-		const firstCanvasIndex = types.indexOf("fluid:canvas_output");
-		const executionCompleteIndex = types.indexOf("fluid:execution_complete");
-		expect(firstCanvasIndex).toBeGreaterThan(-1);
-		expect(executionCompleteIndex).toBeGreaterThan(firstCanvasIndex);
-
-		const canvasEvents = outbound.filter(event => event.type === "fluid:canvas_output");
-		expect(canvasEvents).toHaveLength(2);
-
-		for (const agent of CANVAS_OUTPUT_PLAN.agents.filter(node => node.canvasOutput)) {
-			const canvasEvent = canvasEvents.find(event => event.agentId === agent.id);
-			expect(canvasEvent).toBeDefined();
-			expect(canvasEvent).toMatchObject({
-				type: "fluid:canvas_output",
-				agentId: agent.id,
-				outputType: agent.canvasOutput!.type,
-				title: agent.canvasOutput!.title,
-				content: `canvas:${agent.id}`,
-			});
-		}
 	});
 });

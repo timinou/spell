@@ -1,7 +1,6 @@
 /**
- * Fluid canvas mode: Decomposes a prompt into a DAG of agent tasks,
- * executes them reactively via a queue-based scheduler, and streams
- * live output to QML panels.
+ * Fluid canvas mode: decomposes a prompt into a DAG of agent tasks,
+ * materializes canonical wave-based todos, and streams live output to QML panels.
  */
 import * as path from "node:path";
 import { isDisplayAvailable, QmlBridge } from "@oh-my-pi/pi-qml";
@@ -13,13 +12,13 @@ import { FluidEventRouter, materializeFluidPlanToTodos, validatePlan } from "../
 import { fluidPlanSchema } from "../orchestrators/fluid/plan-schema";
 import type { AgentRuntime, FluidEvent, FluidPlan } from "../orchestrators/fluid/types";
 import { FLUID_EVENT_CHANNEL } from "../orchestrators/fluid/types";
-import coordinatorPromptTemplate from "../prompts/agents/coordinator.md" with { type: "text" };
 import fluidPlannerPrompt from "../prompts/agents/fluid-planner.md" with { type: "text" };
 import fluidPlannerRetryPrompt from "../prompts/agents/fluid-planner-retry.md" with { type: "text" };
+import executionPromptTemplate from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { runSubprocess } from "../task/executor";
 import type { AgentDefinition, SingleResult } from "../task/types";
-import { findTask, hasUnresolvedBlockers, type TodoPhase } from "../tools/todo-write";
+import { cloneTodoPhases, findTask, hasUnresolvedBlockers, type TodoPhase } from "../tools/todo-write";
 import { type EventBus, Priority } from "../utils/event-bus";
 
 export interface FluidModeOptions {
@@ -85,8 +84,8 @@ export async function runFluidMode(session: AgentSession, options: FluidModeOpti
 }
 
 /**
- * Run the planning agent to decompose a user prompt into a FluidPlan,
- * then execute the plan via the shared todo_write-driven coordinator path.
+ * Run the planning agent to produce a FluidPlan, then execute it through the
+ * shared wave-based todo engine and unified execution prompt.
  */
 async function executePlan(
 	session: AgentSession,
@@ -230,14 +229,13 @@ async function validateAndRefinePlan(
 	return undefined;
 }
 
-function cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
-	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task })) }));
-}
-
 function promoteFirstRunnableTask(phases: TodoPhase[]): void {
 	const tasks = phases.flatMap(phase => phase.tasks);
 	for (const task of tasks) {
-		task.status = task.status === "completed" ? "completed" : "pending";
+		task.status =
+			task.status === "completed" || task.status === "abandoned" || task.status === "failed"
+				? task.status
+				: "pending";
 	}
 	for (const task of tasks) {
 		if (!hasUnresolvedBlockers(task, tasks)) {
@@ -249,7 +247,10 @@ function promoteFirstRunnableTask(phases: TodoPhase[]): void {
 
 function isTodoTerminal(phases: TodoPhase[]): boolean {
 	const tasks = phases.flatMap(phase => phase.tasks);
-	return tasks.length > 0 && tasks.every(task => task.status === "completed" || task.status === "abandoned");
+	return (
+		tasks.length > 0 &&
+		tasks.every(task => task.status === "completed" || task.status === "abandoned" || task.status === "failed")
+	);
 }
 
 function deriveAgentState(taskId: string, phases: TodoPhase[]): AgentRuntime["state"] {
@@ -257,13 +258,13 @@ function deriveAgentState(taskId: string, phases: TodoPhase[]): AgentRuntime["st
 	if (!task) return "failed";
 	const allTasks = phases.flatMap(phase => phase.tasks);
 	if (task.status === "completed") return "completed";
-	if (task.status === "abandoned") return "failed";
+	if (task.status === "abandoned" || task.status === "failed") return "failed";
 	if (task.status === "in_progress") return "running";
 	return hasUnresolvedBlockers(task, allTasks) ? "pending" : "ready";
 }
 
-function buildCoordinatorPrompt(plan: FluidPlan): string {
-	const subDagItems = plan.agents.map(agent => ({
+function buildExecutionPrompt(plan: FluidPlan): string {
+	const executionItems = plan.agents.map(agent => ({
 		id: agent.id,
 		task: agent.task,
 		dependsOn: agent.dependsOn,
@@ -271,9 +272,9 @@ function buildCoordinatorPrompt(plan: FluidPlan): string {
 		priority: agent.priority ?? "",
 		body: agent.body ?? "",
 	}));
-	return renderPromptTemplate(coordinatorPromptTemplate, {
+	return renderPromptTemplate(executionPromptTemplate, {
 		planId: "fluid-canvas",
-		subDagItems,
+		executionItems,
 		isSimple: plan.agents.length <= 2,
 		itemCount: plan.agents.length,
 	});
@@ -368,7 +369,7 @@ async function executeFluidPlan(
 		eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_complete", plan }, Priority.P1);
 		session.setTodoPhases(phases, { reset: true });
 		eventBus.emit("todo:change", { phases });
-		await session.prompt(buildCoordinatorPrompt(plan), { synthetic: true });
+		await session.prompt(buildExecutionPrompt(plan), { synthetic: true });
 		if (signal?.aborted) {
 			emitExecutionCancelled(eventBus, signal);
 			return undefined;

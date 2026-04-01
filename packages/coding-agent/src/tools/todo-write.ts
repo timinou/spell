@@ -26,7 +26,21 @@ import { PREVIEW_LIMITS } from "./render-utils";
 // Types
 // =============================================================================
 
-export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
+export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned" | "failed";
+
+export interface TodoDelegationResult {
+	output?: string;
+	error?: string;
+	outputPath?: string;
+}
+
+export interface TodoDelegation {
+	sessionId: string;
+	transcriptPath?: string;
+	agent?: string;
+	childPhases?: TodoPhase[];
+	result?: TodoDelegationResult;
+}
 
 export interface TodoItem {
 	id: string;
@@ -46,6 +60,8 @@ export interface TodoItem {
 	orgItemClosingId?: string;
 	/** FUP org item ID. Required when status=abandoned (deferral tracking). */
 	deferralFupId?: string;
+	/** Delegated subagent metadata. Delegated tasks may remain in_progress alongside one direct task. */
+	delegation?: TodoDelegation;
 }
 
 export interface TodoPhase {
@@ -63,8 +79,14 @@ export interface TodoWriteToolDetails {
 // Schema
 // =============================================================================
 
-const StatusEnum = StringEnum(["pending", "in_progress", "completed", "abandoned"] as const, {
+const StatusEnum = StringEnum(["pending", "in_progress", "completed", "abandoned", "failed"] as const, {
 	description: "Task status",
+});
+
+const DelegationSchema = Type.Object({
+	sessionId: Type.String({ description: "Delegated subagent session ID" }),
+	transcriptPath: Type.Optional(Type.String({ description: "Transcript path for the delegated subagent session" })),
+	agent: Type.Optional(Type.String({ description: "Agent type handling the delegated work" })),
 });
 
 const InputTask = Type.Object({
@@ -83,6 +105,7 @@ const InputTask = Type.Object({
 	orgItemClosingId: Type.Optional(
 		Type.String({ description: "Org item ID that triggers two-phase verified completion" }),
 	),
+	delegation: Type.Optional(DelegationSchema),
 });
 
 const InputPhase = Type.Object({
@@ -116,6 +139,7 @@ const todoWriteSchema = Type.Object({
 				blockers: Type.Optional(Type.Array(Type.String())),
 				orgItemId: Type.Optional(Type.String()),
 				orgItemClosingId: Type.Optional(Type.String()),
+				delegation: Type.Optional(DelegationSchema),
 			}),
 			Type.Object({
 				op: Type.Literal("update"),
@@ -132,6 +156,7 @@ const todoWriteSchema = Type.Object({
 				blockers: Type.Optional(Type.Array(Type.String())),
 				orgItemId: Type.Optional(Type.String()),
 				orgItemClosingId: Type.Optional(Type.String()),
+				delegation: Type.Optional(DelegationSchema),
 				verified: Type.Optional(
 					Type.Boolean({
 						description: "Set true after verifying all gate requirements. Required to complete a gated task.",
@@ -197,6 +222,7 @@ function buildPhaseFromInput(
 			blockers: t.blockers,
 			orgItemId: t.orgItemId,
 			orgItemClosingId: t.orgItemClosingId,
+			delegation: cloneTodoDelegation(t.delegation),
 		});
 	}
 	return { phase: { id: phaseId, name: input.name, tasks }, nextTaskId: tid };
@@ -229,8 +255,25 @@ function fileFromPhases(phases: TodoPhase[]): TodoFile {
 	return { phases, nextTaskId, nextPhaseId };
 }
 
-function clonePhases(phases: TodoPhase[]): TodoPhase[] {
-	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task })) }));
+function cloneTodoDelegation(delegation: TodoDelegation | undefined): TodoDelegation | undefined {
+	if (!delegation) return undefined;
+	return {
+		...delegation,
+		childPhases: delegation.childPhases ? cloneTodoPhases(delegation.childPhases) : undefined,
+		result: delegation.result ? { ...delegation.result } : undefined,
+	};
+}
+
+function cloneTodoTask(task: TodoItem): TodoItem {
+	return { ...task, delegation: cloneTodoDelegation(task.delegation) };
+}
+
+export function cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
+	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => cloneTodoTask(task)) }));
+}
+
+export function isDelegatedTask(task: TodoItem): boolean {
+	return task.delegation !== undefined;
 }
 
 const ORG_DOING_OR_LATER_STATES = new Set(["DOING", "REVIEW", "DONE", "BLOCKED"]);
@@ -343,26 +386,29 @@ function normalizeInProgressTask(phases: TodoPhase[]): void {
 	const orderedTasks = phases.flatMap(phase => phase.tasks);
 	if (orderedTasks.length === 0) return;
 
-	const inProgressTasks = orderedTasks.filter(task => task.status === "in_progress");
-	if (inProgressTasks.length > 1) {
-		for (const task of inProgressTasks.slice(1)) {
-			task.status = "pending";
-		}
-	}
-
-	// Demote in_progress tasks that have unresolved blockers (catches replace/add_phase ops)
 	for (const task of orderedTasks) {
 		if (task.status === "in_progress" && hasUnresolvedBlockers(task, orderedTasks)) {
 			task.status = "pending";
 		}
 	}
 
-	// If no task is in_progress after normalization, auto-promote first unblocked pending task
-	const stillInProgress = orderedTasks.some(task => task.status === "in_progress");
-	if (stillInProgress) return;
+	const directInProgressTasks = orderedTasks.filter(task => task.status === "in_progress" && !isDelegatedTask(task));
+	if (directInProgressTasks.length > 1) {
+		for (const task of directInProgressTasks.slice(1)) {
+			task.status = "pending";
+		}
+	}
 
-	const firstPendingTask = orderedTasks.find(task => task.status === "pending" && !isTaskBlocked(task, orderedTasks));
-	if (firstPendingTask) firstPendingTask.status = "in_progress";
+	const hasDirectInProgress = orderedTasks.some(task => task.status === "in_progress" && !isDelegatedTask(task));
+	if (hasDirectInProgress) return;
+
+	const hasFailedTask = orderedTasks.some(task => task.status === "failed");
+	if (hasFailedTask) return;
+
+	const firstPendingDirectTask = orderedTasks.find(
+		task => task.status === "pending" && !isDelegatedTask(task) && !isTaskBlocked(task, orderedTasks),
+	);
+	if (firstPendingDirectTask) firstPendingDirectTask.status = "in_progress";
 }
 
 export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPhase[] {
@@ -376,7 +422,7 @@ export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPha
 		const details = message.details as { phases?: unknown } | undefined;
 		if (!details || !Array.isArray(details.phases)) continue;
 
-		return clonePhases(details.phases as TodoPhase[]);
+		return cloneTodoPhases(details.phases as TodoPhase[]);
 	}
 
 	return [];
@@ -469,6 +515,7 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 					blockers: op.blockers,
 					orgItemId: op.orgItemId,
 					orgItemClosingId: op.orgItemClosingId,
+					delegation: cloneTodoDelegation(op.delegation),
 				});
 				break;
 			}
@@ -492,6 +539,7 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 				if (op.blockers !== undefined) task.blockers = op.blockers;
 				if (op.orgItemId !== undefined) task.orgItemId = op.orgItemId;
 				if (op.orgItemClosingId !== undefined) task.orgItemClosingId = op.orgItemClosingId;
+				if (op.delegation !== undefined) task.delegation = cloneTodoDelegation(op.delegation);
 
 				// Smart gate: reject in_progress transition when task has unresolved blockers
 				if (op.status === "in_progress") {
@@ -594,6 +642,9 @@ export interface FormatSummaryOptions {
 	pendingDeferralTasks: TodoItem[];
 }
 
+function formatTaskContent(task: TodoItem): string {
+	return isDelegatedTask(task) ? `${task.content} [delegated]` : task.content;
+}
 export function formatSummary({
 	phases,
 	errors,
@@ -608,13 +659,17 @@ export function formatSummary({
 	const remainingByPhase = phases
 		.map(phase => ({
 			name: phase.name,
-			tasks: phase.tasks.filter(task => task.status === "pending" || task.status === "in_progress"),
+			tasks: phase.tasks.filter(
+				task => task.status === "pending" || task.status === "in_progress" || task.status === "failed",
+			),
 		}))
 		.filter(phase => phase.tasks.length > 0);
 	const remainingTasks = remainingByPhase.flatMap(phase => phase.tasks.map(task => ({ ...task, phase: phase.name })));
 
 	// Find current phase
-	let currentIdx = phases.findIndex(p => p.tasks.some(t => t.status === "pending" || t.status === "in_progress"));
+	let currentIdx = phases.findIndex(p =>
+		p.tasks.some(t => t.status === "pending" || t.status === "in_progress" || t.status === "failed"),
+	);
 	if (currentIdx === -1) currentIdx = phases.length - 1;
 	const current = phases[currentIdx];
 	const done = current.tasks.filter(t => t.status === "completed" || t.status === "abandoned").length;
@@ -630,8 +685,8 @@ export function formatSummary({
 		for (const task of remainingTasks) {
 			const blocked = isTaskBlocked(task, allTasks);
 			const blockerLabel = blocked ? " [blocked]" : "";
-			lines.push(`  - ${task.id} ${task.content} [${task.status}]${blockerLabel} (${task.phase})`);
-			if (task.status === "in_progress" && task.details) {
+			lines.push(`  - ${task.id} ${formatTaskContent(task)} [${task.status}]${blockerLabel} (${task.phase})`);
+			if ((task.status === "in_progress" || task.status === "failed") && task.details) {
 				for (const line of task.details.split("\n")) {
 					lines.push(`      ${line}`);
 				}
@@ -662,10 +717,12 @@ export function formatSummary({
 						? "\u2192"
 						: task.status === "abandoned"
 							? "\u2717"
-							: blocked
-								? "\u26D4"
-								: "\u25CB";
-			lines.push(`    ${sym} ${task.id} ${task.content}`);
+							: task.status === "failed"
+								? "!"
+								: blocked
+									? "\u26D4"
+									: "\u25CB";
+			lines.push(`    ${sym} ${task.id} ${formatTaskContent(task)}`);
 		}
 	}
 
@@ -770,8 +827,8 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 		_onUpdate?: AgentToolUpdateCallback<TodoWriteToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<TodoWriteToolDetails>> {
-		const previousPhases = clonePhases(this.session.getTodoPhases?.() ?? []);
-		const current = fileFromPhases(clonePhases(previousPhases));
+		const previousPhases = cloneTodoPhases(this.session.getTodoPhases?.() ?? []);
+		const current = fileFromPhases(cloneTodoPhases(previousPhases));
 		const {
 			file: updated,
 			errors,
@@ -839,25 +896,28 @@ function renderGateBadges(item: TodoItem, uiTheme: Theme): string {
 function formatTodoLine(item: TodoItem, uiTheme: Theme, prefix: string, allTasks?: TodoItem[]): string {
 	const checkbox = uiTheme.checkbox;
 	const badges = renderGateBadges(item, uiTheme);
+	const content = formatTaskContent(item);
 
 	// Check blocked state (computed, not stored)
 	if (allTasks && isTaskBlocked(item, allTasks)) {
-		return uiTheme.fg("warning", `${prefix}${checkbox.unchecked} ${item.content} [blocked]`) + badges;
+		return uiTheme.fg("warning", `${prefix}${checkbox.unchecked} ${content} [blocked]`) + badges;
 	}
 
 	switch (item.status) {
 		case "completed":
-			return uiTheme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(item.content)}`) + badges;
+			return uiTheme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(content)}`) + badges;
 		case "in_progress": {
-			const main = uiTheme.fg("accent", `${prefix}${checkbox.unchecked} ${item.content}`) + badges;
+			const main = uiTheme.fg("accent", `${prefix}${checkbox.unchecked} ${content}`) + badges;
 			if (!item.details) return main;
 			const detailLines = item.details.split("\n").map(l => uiTheme.fg("dim", `${prefix}  ${l}`));
 			return [main, ...detailLines].join("\n");
 		}
 		case "abandoned":
-			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(item.content)}`) + badges;
+			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(content)}`) + badges;
+		case "failed":
+			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${content}`) + badges;
 		default:
-			return uiTheme.fg("dim", `${prefix}${checkbox.unchecked} ${item.content}`) + badges;
+			return uiTheme.fg("dim", `${prefix}${checkbox.unchecked} ${content}`) + badges;
 	}
 }
 
