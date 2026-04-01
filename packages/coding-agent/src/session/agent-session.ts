@@ -117,6 +117,7 @@ import planModeUiuxPrompt from "../prompts/system/plan-mode-uiux.md" with { type
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
+import { compactToolDescription, getToolTier } from "../tools";
 import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
 import { resolveToCwd } from "../tools/path-utils";
@@ -483,6 +484,7 @@ export class AgentSession {
 	#pendingRewindReport: string | undefined = undefined;
 	#promptGeneration = 0;
 	#providerSessionState = new Map<string, ProviderSessionState>();
+	#activeToolSetHash: number | bigint = 0;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -536,6 +538,13 @@ export class AgentSession {
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
 		this.#unsubscribeAgent = this.agent.subscribe(this.#handleAgentEvent);
+		// Seed the tool set hash from the initial active tools
+		this.#activeToolSetHash = Bun.hash(
+			this.agent.state.tools
+				.map(t => t.name)
+				.sort()
+				.join("\0"),
+		);
 	}
 
 	/** Model registry for API key resolution and model discovery */
@@ -1825,12 +1834,21 @@ export class AgentSession {
 	 * Changes take effect before the next model call.
 	 */
 	async setActiveToolsByName(toolNames: string[]): Promise<void> {
+		// Sort deterministically to preserve prompt cache prefix stability
+		const sorted = [...toolNames].sort();
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
-		for (const name of toolNames) {
+		for (const name of sorted) {
 			const tool = this.#toolRegistry.get(name);
 			if (tool) {
-				tools.push(tool);
+				// Specialized tools get compact API descriptions to save tokens.
+				// Clone: same prototype (execute), own props copied (name, parameters), description overridden.
+				if (getToolTier(name) === "specialized" && tool.description) {
+					const compact = compactToolDescription(tool.description);
+					tools.push(Object.assign(Object.create(Object.getPrototypeOf(tool)), tool, { description: compact }));
+				} else {
+					tools.push(tool);
+				}
 				validToolNames.push(name);
 			} else {
 				logger.warn("setActiveToolsByName: tool not in registry", { name });
@@ -1850,6 +1868,12 @@ export class AgentSession {
 				),
 			);
 		}
+		// Skip rebuild if the active tool set hasn't changed
+		const newHash = Bun.hash(validToolNames.join("\0"));
+		if (newHash === this.#activeToolSetHash) {
+			return;
+		}
+		this.#activeToolSetHash = newHash;
 		this.agent.setTools(tools);
 
 		// Rebuild base system prompt with new tool set

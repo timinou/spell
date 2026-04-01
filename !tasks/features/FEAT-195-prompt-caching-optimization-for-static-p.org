@@ -1,0 +1,73 @@
+#+TITLE: Prompt caching optimization for static prefix stability
+#+STATE: DONE
+#+SESSION_ID: 14a9f27012543263
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T19-45-35-305Z_14a9f27012543263.jsonl]]
+#+CUSTOM_ID: FEAT-195-prompt-caching-optimization-for-static-p
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: packages/ai + packages/coding-agent
+#+DEPENDS: FEAT-192-deferred-tool-loading-via-anthropic-tool
+
+NOTE [2026-04-01]: Implemented deterministic tool ordering (alphabetical sort in setActiveToolsByName), hash-based rebuild skip, and initial hash seeding in constructor. Tests passing.
+
+* Initial Message
+
+the initial prompts on the latest session in this computer are at least 50k tokens. what makes them so big? both in here and in ~/code/ora/hotelcomm/ecosystem/agentmaker
+
+Optimize prompt structure to maximize Anthropic prompt caching hit rate.
+
+* Problem
+Anthropic processes request components in order: Tools → System Message → Message History.
+Prompt caching caches the prefix — if tools change between turns, the entire cache invalidates.
+Currently, =rebuildSystemPrompt()= can be called mid-session, which changes the system message
+and invalidates the cache. Tool definitions also shift when MCP tools activate.
+
+Cached tokens are charged at 10% of normal input price — a 90% cost reduction for cached portions.
+5-minute default TTL, refreshed on each use.
+
+* Research References
+- Anthropic Prompt Caching docs: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+- "Deferred tools are not included in the system-prompt prefix. When the model discovers a deferred
+  tool through tool search, the tool definition is appended inline as a tool_reference block.
+  The prefix is untouched, so prompt caching is preserved.":
+  https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
+- Prompt caching cost structure: cache write 1.25x base, cache read 0.1x base
+
+* Approach
+
+** Stable prefix ordering
+Ensure the tool list sent to the API is deterministic and stable across turns:
+1. Core tools first (alphabetical, fixed order)
+2. Standard tools next (alphabetical, fixed order)
+3. Deferred tools last (with =defer_loading: true=, not counted in prefix)
+
+When tools are added mid-session (MCP activation, mode change), append them AFTER
+the existing tool list to preserve the prefix cache.
+
+** Cache breakpoint placement
+Use Anthropic's =cache_control= to set explicit breakpoints:
+- After the stable tool definitions block
+- After the system prompt (before dynamic conversation history)
+
+This ensures the tools + system prompt prefix (~25k tokens after FEAT-192/193 reductions)
+is cached and reused across all turns.
+
+** System prompt stability
+Avoid unnecessary =rebuildSystemPrompt()= calls. Currently rebuilt when:
+- Mode changes (plan mode on/off)
+- MCP tools activate
+- Tool set changes
+
+Optimization: only rebuild when the system prompt text actually changes.
+Add a hash check before replacing the system prompt.
+
+* Implementation
+- =packages/ai/src/providers/anthropic.ts= — Add =cache_control= to system message and tool blocks
+- =packages/coding-agent/src/sdk.ts= — Ensure tool ordering is deterministic; hash-check before rebuild
+- =packages/ai/src/types.ts= — Add optional =cacheControl= field to Tool and system prompt types
+
+* Verification
+- =bun check:ts= passes
+- Verify via Anthropic API response headers/usage that cache hits occur on turn 2+
+- Add test verifying tool order stability across turns
+- Manual: check API usage stats for =cache_creation_input_tokens= vs =cache_read_input_tokens=

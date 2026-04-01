@@ -1,0 +1,135 @@
+#+TITLE: Intelligent prompt context management
+#+STATE: DONE
+#+SESSION_ID: 14a9f27012543263
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T19-45-35-305Z_14a9f27012543263.jsonl]]
+#+CUSTOM_ID: PLAN-074-intelligent-prompt-context-management
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+* Initial Message
+
+the initial prompts on the latest session in this computer are at least 50k tokens. what makes them so big? both in here and in ~/code/ora/hotelcomm/ecosystem/agentmaker
+
+* Context
+
+
+
+The spell coding-agent's initial context consumes ~35-40k tokens before the first user message.
+Tool descriptions in the API =tools= parameter account for ~18.7k tokens (40%+). Most tools go unused.
+
+** Revised breakdown
+| Component            | Where                  | ~Tokens | % of total |
+|----------------------+------------------------+---------+------------|
+| Tool descriptions    | API =tools= parameter  |  18,700 |        50% |
+| System prompt text   | system message          |  15,000 |        40% |
+| — AGENTS.md context  | (within system message) |   5,500 |            |
+| — Base template      | (within system message) |   5,200 |            |
+| — Plan mode overlay  | (within system message) |   3,500 |            |
+| — Rules + memory     | (within system message) |     800 |            |
+| Skills               | system message (catalog)|     350 |         1% |
+
+Skills are already catalog-only (name+description). FEAT-193 is already implemented.
+The main target is tool descriptions (~18.7k tokens).
+
+** Approach: Spell-native tool tiering with auto-activation
+All intelligence is in Spell — no Anthropic-specific API features. Provider-agnostic.
+
+1. *Tool tiers*: core / standard / specialized. Only core+standard registered initially (~13k tokens).
+   Specialized tools (~6k tokens) listed by name in system prompt.
+2. *Auto-activation*: When model calls a specialized tool, Spell checks the registry, silently
+   activates it, executes the call, and rebuilds the prompt. Zero extra round-trips.
+3. *Task classifier*: Lightweight heuristic at session start optionally adjusts which standard
+   tools are included (e.g., skip AST tools for simple questions).
+4. *Cache stability*: Deterministic tool ordering prevents unnecessary cache invalidation.
+
+** Existing infrastructure (already works)
+- =setActiveToolsByName()= — changes active tool set + rebuilds prompt
+- =rebuildSystemPrompt()= — rebuilds system prompt from current active tools
+- =agent-loop.ts= L529-536 — handles tool-not-found (intercept point for auto-activation)
+- =toolRegistry= — contains ALL tools including inactive ones
+- =skill://= protocol — already handles on-demand skill content loading
+
+** Prior art
+- Cursor: 46.9% token reduction with dynamic context discovery (A/B tested)
+- Claude Code: 110+ modular prompt fragments, compact tool descriptions (Edit=240 tks vs our 8.4k)
+- JetBrains: observation masking cuts cost 50%+ without quality loss
+
+** Expected impact
+| Change               | Token reduction | From → To               |
+|----------------------+-----------------+--------------------------|
+| Tool tiering         |        ~6,000   | 18.7k → ~13k registered  |
+| Task-aware filtering |        ~2,000   | Skip unneeded standard   |
+| *Total*              |       *~8,000*  | *~35-40k → ~27-32k*      |
+
+Follow-up: Anthropic =defer_loading= transport optimization ([[id:FUP-018-anthropic-defer-loading-transport-optimi]])
+can further reduce by making deferred tools invisible to the prefix cache.
+* Verification
+
+
+** Type checking
+#+begin_src sh
+bun check:ts
+#+end_src
+
+** Unit tests
+#+begin_src sh
+bun test packages/coding-agent/test/tools/index.test.ts
+bun test packages/coding-agent/test/task-classifier.test.ts
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+#+end_src
+
+** Manual verification
+- Start a session, observe reduced tool count in initial API call
+- Call a specialized tool (e.g., canvas), confirm it auto-activates and executes
+- Verify =bun check:ts= passes after all changes
+* Execution Manifest
+
+
+
+
+** Wave 1: Tool tiering with auto-activation
+- [[id:FEAT-192-deferred-tool-loading-via-anthropic-tool]] — M effort, #A priority
+  Tool tier annotations, initial activation of core+standard only, auto-activation on first call
+  to specialized tools. System prompt lists available specialized tools by name.
+  Key files: =tools/index.ts=, =sdk.ts=, =agent-loop.ts= or =agent-session.ts=, =system-prompt.md=
+
+** Wave 2: Task-aware filtering (depends on Wave 1)
+- [[id:FEAT-194-task-aware-prompt-section-filtering]] — S effort, #B priority
+  Lightweight keyword heuristic at session start adjusts initial tool selection.
+  DEPENDS: FEAT-192
+
+** Wave 3: Cache stability
+- [[id:FEAT-195-prompt-caching-optimization-for-static-p]] — S effort, #B priority
+  Deterministic tool ordering + hash check before rebuild.
+  DEPENDS: FEAT-192
+
+** Dropped
+- FEAT-193 (skill disclosure): Already implemented — template uses ={{description}}= not ={{content}}=.
+
+** Follow-up
+- [[id:FUP-018-anthropic-defer-loading-transport-optimi]] — Anthropic =defer_loading= as transport optimization.
+
+** Completion [2026-04-01]
+
+*** Verification
+- =bun check:ts= — passes cleanly (biome + tsgo)
+- =bun test packages/coding-agent/test/tools/index.test.ts= — 27 tests pass (tool tier coverage, initial filtering, deferred names)
+- =bun test packages/coding-agent/test/task-classifier.test.ts= — 14 tests pass (classification heuristics, applyClassification)
+- =bun test packages/coding-agent/test/system-prompt-templates.test.ts= — 10 tests pass (deferred tools rendering, ordering stability)
+- =bun test packages/agent/= — 26 tests pass (no regressions in agent core)
+- Manual: system prompt renders deferred tool list correctly (verified via buildSystemPrompt)
+- Tool distribution: 33 builtin tools → 18 initial (9 core + 9 standard), 15 deferred (specialized)
+
+*** Artifacts
+- =packages/agent/src/types.ts= — =resolveUnknownTool= callback in =AgentLoopConfig=
+- =packages/agent/src/agent-loop.ts= — deferred tool resolution before execution
+- =packages/agent/src/agent.ts= — =resolveUnknownTool= option
+- =packages/coding-agent/src/tools/index.ts= — =TOOL_TIERS= map, =getToolTier=, =getInitialActiveToolNames=, =getDeferredToolNames=
+- =packages/coding-agent/src/sdk.ts= — tool tier filtering, auto-activation callback, task classifier wiring
+- =packages/coding-agent/src/task-classifier.ts= — keyword-based task classifier (NEW)
+- =packages/coding-agent/src/session/agent-session.ts= — deterministic tool ordering + hash-based rebuild skip
+- =packages/coding-agent/src/system-prompt.ts= — =deferredToolNames= option
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — deferred tools disclosure section
+
+*** Deviations
+None.

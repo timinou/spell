@@ -154,6 +154,9 @@ You **MUST** use the following tools, as effectively as possible, to complete th
 - {{#if label}}{{label}}: `{{name}}`{{else}}- `{{name}}`{{/if}}
 {{/each}}
 {{/if}}
+{{#if hasSpecializedTools}}
+Specialized tools (compact descriptions above; full docs load on first use): {{#list specializedToolNames join=", "}}`{{this}}`{{/list}}
+{{/if}}
 
 {{#if mcpDiscoveryMode}}
 ### MCP tool discovery

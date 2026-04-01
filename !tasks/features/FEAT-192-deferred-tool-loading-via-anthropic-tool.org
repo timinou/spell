@@ -1,0 +1,81 @@
+#+TITLE: Tool tiering with auto-activation in Spell
+#+STATE: DONE
+#+SESSION_ID: 14a9f27012543263
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T19-45-35-305Z_14a9f27012543263.jsonl]]
+#+CUSTOM_ID: FEAT-192-deferred-tool-loading-via-anthropic-tool
+#+EFFORT: L
+#+PRIORITY: #A
+#+LAYER: packages/ai + packages/coding-agent
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-01]: Implemented tool tiering (core/standard/specialized), auto-activation via resolveUnknownTool hook in agent-loop, system prompt deferred tool listing, and all tests passing.
+
+Spell-native tool tiering: only register core+standard tools initially. Specialized tools auto-activate on first call.
+
+* Problem
+35 tool definitions consume ~18.7k tokens in the API =tools= parameter. Most tools go unused in any session.
+The system prompt itself is relatively lean (skills already render as name+description catalog).
+
+* Approach: Tier + auto-activate
+
+** Tool tiers
+Add =tier= field to tool factory registry in =BUILTIN_TOOLS=:
+
+| Tier        | Tools                                                                                     | ~Tokens |
+|-------------+-------------------------------------------------------------------------------------------+---------|
+| core        | read, edit, write, grep, find, bash, lsp, task, ask                                       |  ~8,000 |
+| standard    | ast_grep, ast_edit, todo_write, org, emacs_code, fetch, web_search, cancel_job, await     |  ~5,000 |
+| specialized | canvas, puppeteer, notebook, render_mermaid, python, ssh, inspect_image, browser,         |  ~6,000 |
+|             | checkpoint, rewind, calc, code_search, generate_image, loop_*, gateway                    |         |
+
+Hidden tools (exit_plan_mode, resolve, submit_result, report_finding) already gated — no change needed.
+
+** Auto-activation mechanism
+When the model calls a tool not in the active set:
+1. =agent-loop.ts= L529-536 currently returns "Tool X not found" error
+2. Change: check if tool exists in =toolRegistry= (inactive but registered)
+3. If yes: activate it via =setActiveToolsByName()=, execute the call, return result
+4. The prompt rebuilds automatically (=setActiveToolsByName= calls =rebuildSystemPrompt=)
+5. Next turn, the model sees the tool's full description
+
+This is zero extra round-trips. The model calls the tool, Spell silently activates it.
+
+** System prompt update
+Add a line listing specialized tools by name so the model knows they exist:
+"Additional tools available (auto-loaded on use): canvas, puppeteer, notebook, ..."
+
+** Implementation files
+
+*** =packages/coding-agent/src/tools/index.ts=
+- Add tier annotation to =BUILTIN_TOOLS= entries
+- Export a =TOOL_TIERS= map or add tier to each factory's metadata
+- Cleanest approach: =Record<string, { factory: ToolFactory; tier: "core" | "standard" | "specialized" }>=
+
+*** =packages/coding-agent/src/sdk.ts=
+- After =createTools()=, filter active tools by tier (core + standard)
+- Store full registry (all tiers) but only activate core+standard
+- Pass specialized tool names to system prompt template as =deferredToolNames=
+
+*** =packages/agent/src/agent-loop.ts= or =packages/coding-agent/src/session/agent-session.ts=
+- Intercept tool-not-found: check if tool is in registry but not active
+- If yes: call =setActiveToolsByName()= to add it, then execute
+- This is the key change — maybe 10-15 lines of code
+
+*** =packages/coding-agent/src/prompts/system/system-prompt.md=
+- Add template section for deferred tool names:
+  ={{#if deferredToolNames.length}}Additional tools available (auto-loaded on use): ...{{/if}}=
+
+* Edge Cases
+- Mode changes (plan mode): =exit_plan_mode= is HIDDEN, already gated by mode. =todo_write= and =org=
+  are standard tier so already loaded. No issue.
+- Subagents: receive explicit tool lists. Their tools are always "core" for them. No tiering needed.
+- =hashline= is NOT a tool — it's the =edit= tool's prompt description format. No tier needed.
+- =search_tool_bm25= is conditional (MCP discovery). Not in tiers — keep as-is.
+
+* Verification
+- =bun check:ts= passes
+- Test: all tools have a tier assignment in =packages/coding-agent/test/tools/index.test.ts=
+- Test: initial active set excludes specialized tools
+- Test: calling a specialized tool auto-activates it (mock test in agent-loop or session)
+- Test: system prompt includes deferred tool names
+- Manual: start session, observe ~10k fewer tokens in API usage

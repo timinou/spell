@@ -115,6 +115,14 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	getToolContext?: (toolCall?: ToolCallContext) => AgentToolContext | undefined;
 
 	/**
+	 * Attempts to resolve a tool that was called but is not in the active set.
+	 * Used for deferred/tiered tool loading: when the model calls a tool not yet
+	 * activated, this callback can activate it and return the tool instance.
+	 * Returns the tool if resolved, or null/undefined to fall through to the default error.
+	 */
+	resolveUnknownTool?: (toolName: string) => Promise<AgentTool | null | undefined> | AgentTool | null | undefined;
+
+	/**
 	 * Refreshes prompt/tool context from live session state before each model call.
 	 * Use this when tool availability or the system prompt can change mid-turn.
 	 */

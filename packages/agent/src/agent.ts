@@ -163,6 +163,9 @@ export interface AgentOptions {
 	 */
 	getToolContext?: (toolCall?: ToolCallContext) => AgentToolContext | undefined;
 
+	/** Resolve deferred/tiered tools not in the active set. */
+	resolveUnknownTool?: (toolName: string) => Promise<AgentTool | null | undefined> | AgentTool | null | undefined;
+
 	/**
 	 * Optional transform applied to tool call arguments before execution.
 	 * Use for deobfuscating secrets or rewriting arguments.
@@ -229,6 +232,7 @@ export class Agent {
 	#serviceTier?: ServiceTier;
 	#maxRetryDelayMs?: number;
 	#getToolContext?: (toolCall?: ToolCallContext) => AgentToolContext | undefined;
+	#resolveUnknownTool?: (toolName: string) => Promise<AgentTool | null | undefined> | AgentTool | null | undefined;
 	#cursorExecHandlers?: CursorExecHandlers;
 	#cursorOnToolResult?: CursorToolResultHandler;
 	#runningPrompt?: Promise<void>;
@@ -268,6 +272,7 @@ export class Agent {
 		this.getApiKey = opts.getApiKey;
 		this.#onPayload = opts.onPayload;
 		this.#getToolContext = opts.getToolContext;
+		this.#resolveUnknownTool = opts.resolveUnknownTool;
 		this.#cursorExecHandlers = opts.cursorExecHandlers;
 		this.#cursorOnToolResult = opts.cursorOnToolResult;
 		this.#kimiApiFormat = opts.kimiApiFormat;
@@ -751,6 +756,7 @@ export class Agent {
 			onPayload: this.#onPayload,
 			getApiKey: this.getApiKey,
 			getToolContext: this.#getToolContext,
+			resolveUnknownTool: this.#resolveUnknownTool,
 			syncContextBeforeModelCall: async context => {
 				if (this.#listeners.size > 0) {
 					await Bun.sleep(0);

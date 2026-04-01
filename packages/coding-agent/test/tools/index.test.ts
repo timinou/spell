@@ -1,6 +1,16 @@
 import { describe, expect, it } from "bun:test";
 import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createTools, HIDDEN_TOOLS, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import {
+	BUILTIN_TOOLS,
+	compactToolDescription,
+	createTools,
+	getDeferredToolNames,
+	getInitialActiveToolNames,
+	getToolTier,
+	HIDDEN_TOOLS,
+	TOOL_TIERS,
+	type ToolSession,
+} from "@oh-my-pi/pi-coding-agent/tools";
 
 Bun.env.PI_PYTHON_SKIP_CHECK = "1";
 
@@ -237,5 +247,153 @@ describe("createTools", () => {
 			"resolve",
 			"submit_result",
 		]);
+	});
+});
+
+describe("TOOL_TIERS", () => {
+	it("covers every BUILTIN_TOOLS key", () => {
+		const builtinKeys = Object.keys(BUILTIN_TOOLS).sort();
+		const tieredKeys = Object.keys(TOOL_TIERS).sort();
+		expect(tieredKeys).toEqual(builtinKeys);
+	});
+
+	it("assigns core tier to essential tools", () => {
+		const coreTier: string[] = ["read", "edit", "write", "grep", "find", "bash", "lsp", "task", "ask"];
+		for (const name of coreTier) {
+			expect(getToolTier(name)).toBe("core");
+		}
+	});
+
+	it("assigns specialized tier to deferred tools", () => {
+		const specialized: string[] = ["canvas", "python", "notebook", "browser", "calc", "gateway"];
+		for (const name of specialized) {
+			expect(getToolTier(name)).toBe("specialized");
+		}
+	});
+
+	it("defaults unknown tools to standard tier", () => {
+		expect(getToolTier("mcp_some_custom_tool")).toBe("standard");
+		expect(getToolTier("unknown_tool")).toBe("standard");
+	});
+});
+
+describe("getInitialActiveToolNames", () => {
+	it("excludes specialized tools from initial set", () => {
+		const all = ["read", "edit", "canvas", "ast_grep", "python", "notebook"];
+		const initial = getInitialActiveToolNames(all);
+		expect(initial).toContain("read");
+		expect(initial).toContain("edit");
+		expect(initial).toContain("ast_grep");
+		expect(initial).not.toContain("canvas");
+		expect(initial).not.toContain("python");
+		expect(initial).not.toContain("notebook");
+	});
+
+	it("preserves order", () => {
+		const all = ["read", "canvas", "ast_grep", "edit"];
+		const initial = getInitialActiveToolNames(all);
+		expect(initial).toEqual(["read", "ast_grep", "edit"]);
+	});
+});
+
+describe("getDeferredToolNames", () => {
+	it("returns only specialized-tier tools", () => {
+		const all = ["read", "edit", "canvas", "ast_grep", "python", "notebook"];
+		const deferred = getDeferredToolNames(all);
+		expect(deferred).toEqual(["canvas", "python", "notebook"]);
+	});
+
+	it("returns empty array when no specialized tools present", () => {
+		const all = ["read", "edit", "ast_grep"];
+		const deferred = getDeferredToolNames(all);
+		expect(deferred).toEqual([]);
+	});
+});
+
+describe("compactToolDescription", () => {
+	it("extracts first sentence", () => {
+		const full = "Performs structural code search using AST matching. Supports multiple patterns and languages.";
+		expect(compactToolDescription(full)).toBe("Performs structural code search using AST matching.");
+	});
+
+	it("handles descriptions starting with XML tags", () => {
+		const full = "<instruction>\nUse this for search. It supports regex.\n</instruction>";
+		expect(compactToolDescription(full)).toBe("Use this for search.");
+	});
+
+	it("truncates long descriptions without sentence boundary", () => {
+		const full = `A${"a".repeat(200)}`;
+		const result = compactToolDescription(full);
+		expect(result.length).toBeLessThanOrEqual(120);
+		expect(result).toEndWith("...");
+	});
+
+	it("returns empty string for empty input", () => {
+		expect(compactToolDescription("")).toBe("");
+	});
+});
+
+describe("compact description wrapping on real tool objects", () => {
+	/** Helper: clone a tool the way sdk.ts and agent-session.ts do. */
+	function wrapCompact(tool: { description: string }) {
+		const compact = compactToolDescription(tool.description);
+		return Object.assign(Object.create(Object.getPrototypeOf(tool)), tool, { description: compact });
+	}
+
+	it("clone has name as own property (required by API serialization)", async () => {
+		const session = createTestSession({ settings: Settings.isolated({ "calc.enabled": true }) });
+		const tools = await createTools(session);
+		const calc = tools.find(t => t.name === "calc")!;
+		const clone = wrapCompact(calc);
+
+		// The crash: providers read tool.name and expect it as an own property.
+		// Object.create(tool) put name on the prototype — invisible to spread/JSON.
+		expect(Object.hasOwn(clone, "name")).toBe(true);
+		expect(clone.name).toBe("calc");
+		// Verify spread sees name (simulates provider serialization)
+		const spread = { ...clone };
+		expect(spread.name).toBe("calc");
+	});
+
+	it("clone preserves execute via prototype", async () => {
+		const session = createTestSession({ settings: Settings.isolated({ "calc.enabled": true }) });
+		const tools = await createTools(session);
+		const calc = tools.find(t => t.name === "calc")!;
+		const clone = wrapCompact(calc);
+
+		expect(typeof clone.execute).toBe("function");
+		expect(clone.parameters).toBe(calc.parameters);
+	});
+
+	it("clone uses compact description without mutating original", async () => {
+		const session = createTestSession({ settings: Settings.isolated({ "calc.enabled": true }) });
+		const tools = await createTools(session);
+		const calc = tools.find(t => t.name === "calc")!;
+		const originalDesc = calc.description;
+		const clone = wrapCompact(calc);
+
+		expect(clone.description.length).toBeLessThan(originalDesc.length);
+		expect(calc.description).toBe(originalDesc); // original unmodified
+	});
+
+	it("works on every specialized tool in the registry", async () => {
+		const session = createTestSession({
+			settings: Settings.isolated({
+				"browser.enabled": true,
+				"notebook.enabled": true,
+				"inspect_image.enabled": true,
+				"renderMermaid.enabled": true,
+				"calc.enabled": true,
+			}),
+		});
+		const tools = await createTools(session);
+		for (const tool of tools) {
+			if (getToolTier(tool.name) !== "specialized") continue;
+			const clone = wrapCompact(tool);
+			expect(Object.hasOwn(clone, "name")).toBe(true);
+			expect(clone.name).toBe(tool.name);
+			expect(typeof clone.execute).toBe("function");
+			expect(clone.description.length).toBeLessThanOrEqual(tool.description.length);
+		}
 	});
 });

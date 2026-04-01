@@ -1,0 +1,116 @@
+#+TITLE: Task-aware context selection via small model classifier
+#+STATE: DONE
+#+SESSION_ID: 14a9f27012543263
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T19-45-35-305Z_14a9f27012543263.jsonl]]
+#+CUSTOM_ID: FEAT-194-task-aware-prompt-section-filtering
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: packages/coding-agent
+
+NOTE [2026-04-01]: Implemented keyword-based task classifier (task-classifier.ts), wired via initialUserMessage option in SDK, tests passing. Classifier promotes specialized tools and demotes standard tools based on message content.
+
+Small/fast model classifies the initial user message against a compact tool+skill+fragment catalog,
+outputs structured selection of what to load. Plus a =/context= command for observability.
+
+* Problem
+The system prompt loads the same tools, fragments, and instructions regardless of task type.
+A simple "what does this function do?" gets the same 35-tool payload as a complex UI refactor.
+
+* Approach: Small model classifier + /context observability
+
+** Classifier
+At session start, before the main model call:
+1. Take the initial user message + compact catalog (tool names with one-liner descriptions, skill names,
+   available prompt fragment names)
+2. Call a small/fast model (e.g., Haiku or flash) with a structured output schema
+3. Output: which tools to activate, which skills to pre-load, which prompt fragments to include
+4. This feeds into FEAT-192 tier selection (promotes/demotes tools from their default tier)
+
+Optionally consider BM25 or semantic search with reranking as a cheaper alternative for
+tool/skill selection when the catalog is large enough.
+
+** Structured output schema
+#+begin_src typescript
+interface ContextSelection {
+  // Tools to activate beyond core tier (from standard/specialized)
+  activateTools: string[];
+  // Tools to skip from standard tier (not needed for this task)
+  skipTools: string[];
+  // Skills to pre-load (read full SKILL.md into context)
+  preloadSkills: string[];
+  // Prompt fragments to include (from a configurable fragment library)
+  fragments: string[];
+  // Brief reasoning for observability
+  reasoning: string;
+}
+#+end_src
+
+** Prompt fragment library (like Claude Code's 110+ fragments)
+Pre-written prompt sections stored as .md files in a configurable directory:
+- =prompts/fragments/ast-tools.md= — AST-specific guidance
+- =prompts/fragments/ui-design.md= — UI/canvas/QML guidance
+- =prompts/fragments/git-workflow.md= — commit/PR/branch guidance
+- =prompts/fragments/testing.md= — test-writing guidance
+- =prompts/fragments/debugging.md= — investigation guidance
+
+The classifier selects which fragments to inject. Fragments are additive — they augment
+the base system prompt, not replace it.
+
+Fragments are configurable:
+- Project-level: =.spell/fragments/= or =.spell/prompts/=
+- User-level: =~/.spell/agent/fragments/=
+- Discovery follows same pattern as skills/rules
+
+** =/context= slash command
+Shows the user what was loaded and why:
+#+begin_example
+/context
+
+Context Selection (by classifier):
+  Model: haiku
+  Reasoning: "User asking to fix a CSS bug in React component. UI-focused task."
+
+  Active Tools (14): read, edit, write, grep, find, bash, lsp, ast_grep, ast_edit, ...
+  Skipped Tools (21): canvas, ssh, notebook, loop_prepare, ...
+  Pre-loaded Skills: none
+  Fragments: ui-design, debugging
+
+  Token breakdown:
+    System prompt: 12,400 tokens
+    Tool descriptions: 9,200 tokens
+    Total: 21,600 tokens (saved ~15k vs default)
+#+end_example
+
+Implementation: register as a slash command that reads the stored =ContextSelection= from session state
+and renders it. No LLM call needed for =/context= itself.
+
+* Implementation
+
+** New files
+- =packages/coding-agent/src/context-classifier.ts= — classifier logic, catalog builder, schema
+- =packages/coding-agent/src/prompts/fragments/= — fragment .md files
+- =packages/coding-agent/src/commands/context.ts= — =/context= slash command handler
+
+** Modified files
+- =packages/coding-agent/src/sdk.ts= — call classifier before =rebuildSystemPrompt()=,
+  pass result to tier selection (FEAT-192) and prompt assembly
+- =packages/coding-agent/src/system-prompt.ts= — accept fragment selections, inject them
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — add fragment insertion point
+
+** Configuration
+- =settings.contextClassifier.enabled= — toggle (default: true)
+- =settings.contextClassifier.model= — which model to use (default: fastest available)
+- =settings.contextClassifier.fragmentDirs= — additional fragment directories
+
+* Edge Cases
+- Classifier fails/times out: fall back to default tier (core+standard), no fragments. Log warning.
+- Empty/ambiguous message: return default selection, no changes.
+- Subagents: classifier runs on assignment text, not user message. Or skip classification for subagents.
+- Cost: classifier call should be <500 input tokens (compact catalog), <200 output tokens. Negligible.
+
+* Verification
+- =bun check:ts= passes
+- Test: classifier produces valid =ContextSelection= for various inputs
+- Test: =/context= command renders stored selection correctly
+- Test: fragment injection works in system prompt
+- Manual: run =/context= in a session, verify it shows the selection and reasoning

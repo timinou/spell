@@ -103,11 +103,13 @@ import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } f
 import {
 	BashTool,
 	BUILTIN_TOOLS,
+	compactToolDescription,
 	createTools,
 	EditTool,
 	FindTool,
 	GrepTool,
 	getSearchTools,
+	getToolTier,
 	HIDDEN_TOOLS,
 	isCodeSearchProviderId,
 	isSearchProviderPreference,
@@ -1331,6 +1333,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const promptTools = buildSystemPromptToolMetadata(tools, {
 			search_tool_bm25: { description: renderSearchToolBm25Description(discoverableMCPTools) },
 		});
+		// Compute specialized tool names in the active set (for system prompt description tiering)
+		const specializedToolNames = !hasExplicitToolNames
+			? toolNames.filter(name => getToolTier(name) === "specialized")
+			: [];
 		const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
 		const joinPromptSections = (...sections: Array<string | undefined>): string | undefined => {
 			const parts = sections.filter(
@@ -1377,6 +1383,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			contextFiles,
 			tools: promptTools,
 			toolNames,
+			specializedToolNames,
 			rules: rulebookRules,
 			skillsSettings: settings.getGroup("skills"),
 			appendSystemPrompt: appendPrompt,
@@ -1400,6 +1407,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				contextFiles,
 				tools: promptTools,
 				toolNames,
+				specializedToolNames,
 				rules: rulebookRules,
 				skillsSettings: settings.getGroup("skills"),
 				customPrompt,
@@ -1436,9 +1444,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const explicitlyRequestedMCPToolNames = hasExplicitToolNames
 		? requestedActiveToolNames.filter(name => name.startsWith("mcp_"))
 		: [];
-	const initialToolNames = mcpDiscoveryEnabled
+	const allInitialToolNames = mcpDiscoveryEnabled
 		? [...requestedActiveToolNames.filter(name => !name.startsWith("mcp_")), ...explicitlyRequestedMCPToolNames]
 		: [...requestedActiveToolNames];
+	// All tools stay in the active set — tiering controls description verbosity, not availability.
+	const initialToolNames = [...allInitialToolNames];
 	const initialSelectedMCPToolNames = mcpDiscoveryEnabled ? [...explicitlyRequestedMCPToolNames] : [];
 
 	// Custom tools and extension-registered tools are always included regardless of toolNames filter
@@ -1532,9 +1542,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		toolContextStore.setUIContext(uiContext, hasUI);
 	};
 
+	// Build initial tool set: specialized tools get compact descriptions to reduce API token usage.
+	// Clone preserves prototype (execute method) + copies own props (name, parameters) + overrides description.
 	const initialTools = initialToolNames
-		.map(name => toolRegistry.get(name))
-		.filter((tool): tool is AgentTool => tool !== undefined);
+		.map(name => {
+			const tool = toolRegistry.get(name);
+			if (!tool) return null;
+			if (!hasExplicitToolNames && getToolTier(name) === "specialized" && tool.description) {
+				const compact = compactToolDescription(tool.description);
+				return Object.assign(Object.create(Object.getPrototypeOf(tool)), tool, {
+					description: compact,
+				}) as AgentTool;
+			}
+			return tool;
+		})
+		.filter((tool): tool is AgentTool => tool !== null);
 
 	const openaiWebsocketSetting = settings.get("providers.openaiWebsockets") ?? "auto";
 	const preferOpenAICodexWebsockets =
@@ -1593,6 +1615,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return { type: "function", name: "resolve" };
 			}
 			return session?.consumeNextToolChoiceOverride();
+		},
+		// Resolve tools in the registry but not in the active set (e.g., MCP tools added mid-session)
+		resolveUnknownTool: async (toolName: string) => {
+			const tool = toolRegistry.get(toolName);
+			if (!tool) return null;
+			const currentActiveNames = session?.getActiveToolNames() ?? [];
+			if (!currentActiveNames.includes(toolName)) {
+				await session?.setActiveToolsByName([...currentActiveNames, toolName]);
+				logger.debug("Auto-activated tool from registry", { toolName });
+			}
+			return tool;
 		},
 	});
 	cursorEventEmitter = event => agent.emitExternalEvent(event);
@@ -1950,6 +1983,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 	});
 	taskManager.start();
+	toolSession.orchestratorManager = orchestratorManager;
+	toolSession.taskManager = taskManager;
 
 	// Wire full agent requests from canvas: route to session.followUp()
 	eventBus.subscribe(CANVAS_AGENT_CHANNEL, async (raw: unknown) => {

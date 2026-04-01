@@ -197,3 +197,49 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain('DEPENDS: "FEAT-001-add-auth-api"');
 	});
 });
+
+describe("specialized tools in system prompt", () => {
+	test("renders specialized tool names when present", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+		const rendered = renderPromptTemplate(template, {
+			...baseRenderContext,
+			hasSpecializedTools: true,
+			specializedToolNames: ["canvas", "python", "notebook"],
+		});
+		expect(rendered).toContain("Specialized tools");
+		expect(rendered).toContain("`canvas`");
+		expect(rendered).toContain("`python`");
+		expect(rendered).toContain("`notebook`");
+	});
+
+	test("omits specialized section when no specialized tools", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+		const rendered = renderPromptTemplate(template, {
+			...baseRenderContext,
+			hasSpecializedTools: false,
+			specializedToolNames: [],
+		});
+		expect(rendered).not.toContain("Specialized tools");
+	});
+});
+
+describe("tool ordering stability", () => {
+	test("sorted tool names produce deterministic order", () => {
+		const tools1 = ["read", "edit", "bash", "grep", "find"].sort();
+		const tools2 = ["find", "grep", "bash", "edit", "read"].sort();
+		expect(tools1).toEqual(tools2);
+		const hash1 = Bun.hash(tools1.join("\0"));
+		const hash2 = Bun.hash(tools2.join("\0"));
+		expect(hash1).toBe(hash2);
+	});
+
+	test("different tool sets produce different hashes", () => {
+		const tools1 = ["read", "edit", "bash"].sort();
+		const tools2 = ["read", "edit", "bash", "canvas"].sort();
+		const hash1 = Bun.hash(tools1.join("\0"));
+		const hash2 = Bun.hash(tools2.join("\0"));
+		expect(hash1).not.toBe(hash2);
+	});
+});

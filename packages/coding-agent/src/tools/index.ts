@@ -13,6 +13,8 @@ import type { LoopManager } from "../loop/loop-manager";
 import { LoopDoneTool, LoopLaunchTool, LoopPrepareTool } from "../loop/loop-tools";
 import { LspTool } from "../lsp";
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
+import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
+import type { CanvasTaskManager } from "../orchestrators/canvas-task-manager";
 import { EditTool } from "../patch";
 import type { ActiveModeState, PlanModeState } from "../plan-mode/state";
 import { TaskTool } from "../task";
@@ -194,6 +196,10 @@ export interface ToolSession {
 	qmlRemoteServer?: import("@oh-my-pi/pi-qml-remote").QmlRemoteServer;
 	/** Loop orchestration manager for loop tools, slash commands, and dashboards. */
 	loopManager?: LoopManager;
+	/** Canvas orchestrator manager for canvas-backed QML windows. */
+	orchestratorManager?: CanvasOrchestratorManager;
+	/** Canvas task manager for canvas-backed QML windows. */
+	taskManager?: CanvasTaskManager;
 	/** Dispose session-owned resources (emacs daemon, QML remote server). */
 	dispose?(): Promise<void> | void;
 	/** Gateway client for managing .localhost service aliases */
@@ -237,6 +243,84 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	loop_done: s => (s.loopManager ? new LoopDoneTool(s) : null),
 	gateway: GatewayTool.createIf,
 };
+
+export type ToolTier = "core" | "standard" | "specialized";
+
+export const TOOL_TIERS: Record<string, ToolTier> = {
+	// Core — always loaded, essential for any task
+	read: "core",
+	edit: "core",
+	write: "core",
+	grep: "core",
+	find: "core",
+	bash: "core",
+	lsp: "core",
+	task: "core",
+	ask: "core",
+
+	// Standard — loaded by default, common development tools
+	ast_grep: "standard",
+	ast_edit: "standard",
+	todo_write: "standard",
+	org: "standard",
+	emacs_code: "standard",
+	fetch: "standard",
+	web_search: "standard",
+	cancel_job: "standard",
+	await: "standard",
+
+	// Specialized — loaded on demand when first called
+	canvas: "specialized",
+	python: "specialized",
+	notebook: "specialized",
+	render_mermaid: "specialized",
+	ssh: "specialized",
+	inspect_image: "specialized",
+	browser: "specialized",
+	checkpoint: "specialized",
+	rewind: "specialized",
+	calc: "specialized",
+	loop_prepare: "specialized",
+	loop_launch: "specialized",
+	loop_done: "specialized",
+	gateway: "specialized",
+	search_tool_bm25: "specialized",
+};
+
+/** Get the tool tier, defaulting to "standard" for unknown tools (e.g. MCP tools). */
+export function getToolTier(toolName: string): ToolTier {
+	return TOOL_TIERS[toolName] ?? "standard";
+}
+
+/** Filter tool names to those in the initial active set (core + standard). */
+export function getInitialActiveToolNames(allToolNames: string[]): string[] {
+	return allToolNames.filter(name => {
+		const tier = getToolTier(name);
+		return tier === "core" || tier === "standard";
+	});
+}
+
+/** Get tool names that are deferred (specialized tier, not initially active). */
+export function getDeferredToolNames(allToolNames: string[]): string[] {
+	return allToolNames.filter(name => getToolTier(name) === "specialized");
+}
+
+/**
+ * Extract a compact one-liner from a tool's full description.
+ * Returns the first sentence (up to the first period followed by whitespace/newline).
+ * Falls back to truncating at 120 chars if no sentence boundary is found.
+ */
+export function compactToolDescription(description: string): string {
+	if (!description) return "";
+	// Strip leading XML/markdown tags and whitespace
+	const cleaned = description.replace(/^\s*<[^>]+>\s*/g, "").trim();
+	// Find first sentence boundary (period followed by space, newline, or end)
+	const match = cleaned.match(/^(.+?\.)(\s|\n|$)/);
+	if (match) return match[1].trim();
+	// No sentence found — truncate
+	if (cleaned.length <= 120) return cleaned;
+	return `${cleaned.slice(0, 117)}...`;
+}
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	submit_result: s => new SubmitResultTool(s),

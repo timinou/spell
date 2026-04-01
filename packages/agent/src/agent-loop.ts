@@ -260,6 +260,7 @@ async function runLoop(
 					config.interruptMode,
 					config.transformToolCallArguments,
 					config.intentTracing,
+					config.resolveUnknownTool,
 				);
 				toolResults.push(...toolExecution.toolResults);
 				steeringAfterTools = toolExecution.steeringMessages ?? null;
@@ -437,6 +438,7 @@ async function executeToolCalls(
 	interruptMode: AgentLoopConfig["interruptMode"] = "immediate",
 	transformToolCallArguments?: AgentLoopConfig["transformToolCallArguments"],
 	intentTracing?: AgentLoopConfig["intentTracing"],
+	resolveUnknownTool?: AgentLoopConfig["resolveUnknownTool"],
 ): Promise<{ toolResults: ToolResultMessage[]; steeringMessages?: AgentMessage[] }> {
 	type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
 	const toolCalls = assistantMessage.content.filter((c): c is ToolCallContent => c.type === "toolCall");
@@ -484,6 +486,18 @@ async function executeToolCalls(
 		toolResultMessage: undefined as ToolResultMessage | undefined,
 		resultEmitted: false,
 	}));
+
+	// Resolve deferred/tiered tools that aren't in the active set
+	if (resolveUnknownTool) {
+		for (const record of records) {
+			if (!record.tool) {
+				const resolved = await resolveUnknownTool(record.toolCall.name);
+				if (resolved) {
+					record.tool = resolved;
+				}
+			}
+		}
+	}
 
 	const emitToolResult = (record: (typeof records)[number], result: AgentToolResult<any>, isError: boolean): void => {
 		if (record.resultEmitted) return;
