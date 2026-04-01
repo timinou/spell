@@ -1,0 +1,147 @@
+#+TITLE: Surface subagent retry and error state in task progress and TUI
+#+STATE: BLOCKED
+#+SESSION_ID: 14aa0b566674b0dd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T21-34-22-617Z_14aa0b566674b0dd.jsonl]]
+#+CUSTOM_ID: BUG-076-async-task-errors-not-surfaced-to-user-d
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: backend
+#+DEPENDS: BUG-075-subagent-sessions-hang-30-minutes-on-pro
+
+NOTE [2026-04-01]: Implementation is complete and focused regression tests pass. Repo-wide verification is blocked by unrelated spellcast files already present in the workspace (`bun check:ts` and `bun x tsgo -p tsconfig.json` fail outside this change set).
+
+* Problem
+
+When a delegated task subagent enters auto-retry (e.g., provider quota exhaustion with 30-minute backoff), the parent session has no visibility. The TUI shows "Running background task..." with no indication the subagent is retrying or erroring. The user sees a frozen session.
+
+The main session TUI already handles retry beautifully: =event-controller.ts= line 506-522 renders a spinner with "Retrying (1/3) in 30s... (esc to cancel)". But subagent sessions don't forward their retry state to the parent's task progress pipeline.
+
+** Root Cause
+
+1. =AgentSession= emits =auto_retry_start= / =auto_retry_end= as session events via =#emitSessionEvent()= → =#emit()=
+2. The executor (=task/executor.ts=) subscribes to agent-loop events via =session.subscribe()= at line ~1087, checking =isAgentEvent(event)=
+3. Session-level events (retry, compaction, etc.) are NOT agent-loop events — they go through a separate internal emitter
+4. The executor's =processEvent()= (line ~715) only handles agent events: =message_start=, =tool_execution_start=, =tool_execution_end=, =message_end=
+5. Result: retry state never reaches the =progress= object → never reaches the TUI
+
+** Fix
+
+*** 1. Add retry state fields to =AgentProgress= (=task/types.ts=)
+
+#+begin_src typescript
+export interface AgentProgress {
+  // ... existing fields ...
+  
+  /** Auto-retry state — set when subagent is retrying a failed model call */
+  retrying?: boolean;
+  retryAttempt?: number;
+  retryMaxAttempts?: number;
+  retryDelayMs?: number;
+  retryErrorMessage?: string;
+}
+#+end_src
+
+*** 2. Listen for session retry events in the executor (=task/executor.ts=)
+
+In =runSubprocess()=, after =activeSession = session= (line ~997), register a session event listener for retry events:
+
+#+begin_src typescript
+// Listen for retry state changes from the subagent session
+const retryListener = (event: AgentSessionEvent) => {
+  if (event.type === "auto_retry_start") {
+    progress.retrying = true;
+    progress.retryAttempt = event.attempt;
+    progress.retryMaxAttempts = event.maxAttempts;
+    progress.retryDelayMs = event.delayMs;
+    progress.retryErrorMessage = event.errorMessage;
+    scheduleProgress(true);
+  } else if (event.type === "auto_retry_end") {
+    progress.retrying = false;
+    progress.retryAttempt = undefined;
+    progress.retryMaxAttempts = undefined;
+    progress.retryDelayMs = undefined;
+    progress.retryErrorMessage = event.success ? undefined : event.finalError;
+    scheduleProgress(true);
+  }
+};
+session.on("sessionEvent", retryListener);
+#+end_src
+
+The exact subscription mechanism depends on how =AgentSession= exposes session events. Check:
+- Does =AgentSession= extend =EventEmitter=? If so, use =session.on(...)=
+- Does it have =addSessionEventListener()=? Use that
+- Alternatively, add a =onRetryStateChange()= method to =AgentSession=
+
+Clean up the listener in the =finally= block alongside =unsubscribe=.
+
+*** 3. Forward retry state in async task progress (=task/index.ts=)
+
+The async task path at line ~432 calls =#executeSync()= with =onUpdate = undefined=, so subagent progress (including retry state) doesn't reach the parent. Fix:
+
+In the async job callback, pass an =onUpdate= callback to =#executeSync= that forwards the subagent's progress to the =progressByTaskId= map:
+
+#+begin_src typescript
+const result = await this.#executeSync(
+  _toolCallId,
+  singleParams,
+  runSignal,
+  (update) => {
+    // Forward subagent progress to async progress map
+    const subProgress = update.details?.progress?.[0];
+    if (subProgress && progress) {
+      Object.assign(progress, {
+        status: subProgress.status,
+        lastIntent: subProgress.lastIntent,
+        currentTool: subProgress.currentTool,
+        recentTools: subProgress.recentTools,
+        recentOutput: subProgress.recentOutput,
+        toolCount: subProgress.toolCount,
+        tokens: subProgress.tokens,
+        durationMs: subProgress.durationMs,
+        retrying: subProgress.retrying,
+        retryAttempt: subProgress.retryAttempt,
+        retryMaxAttempts: subProgress.retryMaxAttempts,
+        retryDelayMs: subProgress.retryDelayMs,
+        retryErrorMessage: subProgress.retryErrorMessage,
+      });
+    }
+    emitAsyncUpdate("running", `Background task ${taskItem.id} in progress`);
+  },
+  [uniqueId],
+);
+#+end_src
+
+*** 4. Render retry state in TUI task progress
+
+Find the task progress renderer in the TUI (likely in =packages/coding-agent/src/tui/components/tool-execution.ts= or the task tool renderer). When =progress.retrying= is true, render the retry state:
+
+- Show "Retrying (X/Y) — <error message>" instead of blank status
+- Use =theme.fg("warning", ...)= for consistency with the main session's retry rendering
+
+*** 5. Include retry state in =await= output (=tools/await-tool.ts=)
+
+When =#buildResult()= formats "Still Running" output, if the running job's progress shows =retrying=, include that in the output:
+
+#+begin_src
+## Still Running (1)
+
+- `0-TaskToolImpl` [task] — 0-TaskToolImpl
+  ⚠ Retrying (1/3): usage limit reached, waiting 30m
+#+end_src
+
+** Key Files
+
+- =packages/coding-agent/src/task/types.ts= — =AgentProgress= type (add retry fields)
+- =packages/coding-agent/src/task/executor.ts= — =runSubprocess()= (listen for session retry events, update progress)
+- =packages/coding-agent/src/task/index.ts= — async =execute()= (forward subagent progress via =onUpdate= callback)
+- =packages/coding-agent/src/tools/await-tool.ts= — =#buildResult()= (include retry info in "Still Running" output)
+- =packages/coding-agent/src/session/agent-session.ts= — verify session event listener API for retry events
+- TUI task progress renderer — render retry state
+
+** Acceptance Criteria
+
+- When a subagent enters auto-retry, the parent task progress shows "Retrying (X/Y) — <error message>"
+- =await= output for still-running tasks includes the retry reason if the subagent is retrying
+- Async task progress updates forward subagent status in real-time (not just after completion)
+- =bun check:ts= passes
+- Existing =bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts= passes

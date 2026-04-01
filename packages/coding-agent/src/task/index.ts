@@ -381,6 +381,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			async: { state, jobId, type: "task" },
 		});
 
+		const syncAsyncProgress = (target: AgentProgress, source: AgentProgress): void => {
+			const index = target.index;
+			Object.assign(target, structuredClone(source), { index });
+		};
+
 		const emitAsyncUpdate = (state: "running" | "completed" | "failed", text: string): void => {
 			const primaryJobId = startedJobs[0]?.jobId ?? "task";
 			onUpdate?.({
@@ -429,9 +434,24 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							buildAsyncDetails("running", startedJobs[0]?.jobId ?? label) as unknown as Record<string, unknown>,
 						);
 						try {
-							const result = await this.#executeSync(_toolCallId, singleParams, runSignal, undefined, [
-								uniqueId,
-							]);
+							const result = await this.#executeSync(
+								_toolCallId,
+								singleParams,
+								runSignal,
+								update => {
+									const subProgress = update.details?.progress?.[0];
+									if (!subProgress || !progress || subProgress.status === "pending") return;
+									syncAsyncProgress(progress, subProgress);
+									void reportProgress(
+										`Running background task ${taskItem.id}...`,
+										buildAsyncDetails("running", startedJobs[0]?.jobId ?? label) as unknown as Record<
+											string,
+											unknown
+										>,
+									);
+								},
+								[uniqueId],
+							);
 							const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
 							const singleResult = result.details?.results[0];
 							if (progress) {
@@ -443,6 +463,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								progress.durationMs = singleResult?.durationMs ?? Math.max(0, Date.now() - startedAt);
 								progress.tokens = singleResult?.tokens ?? 0;
 								progress.extractedToolData = singleResult?.extractedToolData;
+								progress.retry = undefined;
 							}
 							completedJobs += 1;
 							if (singleResult && ((singleResult.aborted ?? false) || singleResult.exitCode !== 0)) {
@@ -470,6 +491,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							if (progress) {
 								progress.status = "failed";
 								progress.durationMs = Math.max(0, Date.now() - startedAt);
+								progress.retry = undefined;
 							}
 							completedJobs += 1;
 							failedJobs += 1;

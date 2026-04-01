@@ -1,0 +1,76 @@
+#+TITLE: Surface subagent retry state in task progress
+#+STATE: DOING
+#+SESSION_ID: 14aa0b566674b0dd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T21-34-22-617Z_14aa0b566674b0dd.jsonl]]
+#+CUSTOM_ID: PLAN-076-fix-subagent-hang-on-provider-quota-exha
+
+
+* Context
+
+Three user sessions appeared hung for 30+ minutes because delegated task subagents hit a provider usage-limit error (=usage_limit_reached= from OpenAI Codex). The subagent's =AgentSession= correctly classified the error as retryable and entered auto-retry with 30-minute backoff (=QUOTA_EXHAUSTED_BACKOFF_MS=). The retry behavior itself is correct — the problem is that the user had zero visibility into what was happening.
+
+** Root Cause (UX gap, not logic bug)
+
+The main session TUI already renders retry state beautifully: =event-controller.ts= shows a spinner with "Retrying (1/3) in 30s... (esc to cancel)". But subagent sessions running inside the task tool don't forward their retry state to the parent:
+
+1. =AgentSession= emits =auto_retry_start= / =auto_retry_end= as session events via =#emitSessionEvent()=
+2. The task executor subscribes only to agent-loop events (=session.subscribe()=), not session events
+3. Session-level retry events never reach the =AgentProgress= object
+4. The parent TUI shows "Running background task..." with no error/retry context
+5. =await= reports "Still Running" with no indication the subagent is blocked on retry
+
+** Approach
+
+Bridge the retry session events from subagent sessions into the task progress pipeline:
+
+1. Add retry state fields to =AgentProgress= type
+2. In the task executor, listen for session retry events and update progress
+3. Forward subagent progress in async task mode (currently =onUpdate= is =undefined=)
+4. Render retry state in TUI task progress and =await= output
+
+** Key Decisions
+
+- *Keep retry behavior as-is.* The 30-minute backoff for quota exhaustion is intentional. Provider accounts may switch; quotas may reset. Users can abort retrying subagents if they don't want to wait.
+- *No changes to =createSubagentSettings()= or =#handleRetryableError()=.* The fix is purely UX surfacing.
+- *Fix async progress forwarding as part of this.* The async task path passes =onUpdate = undefined= to =#executeSync=, which means NO subagent progress reaches the parent during execution. This is a pre-existing gap that makes retry surfacing impossible without also fixing the forwarding.
+
+* Verification
+
+#+begin_src shell
+# Type check
+bun check:ts
+
+# Existing retry tests still pass
+bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts
+
+# Manual verification:
+# 1. Start a session with a provider near its quota limit
+# 2. Launch a task subagent
+# 3. When subagent hits quota → TUI should show retry state in task progress
+# 4. await should show "Retrying (X/Y) — <error>" instead of just "Still Running"
+#+end_src
+
+* Execution Manifest
+
+** Wave 1: Surface retry state
+[[id:BUG-076-async-task-errors-not-surfaced-to-user-d]]
+- Effort: M | Priority: A | Layer: fullstack
+- Add retry fields to =AgentProgress= type
+- Bridge session retry events into executor progress tracking
+- Forward subagent progress in async task mode
+- Render retry state in TUI + =await= output
+
+
+** Completion [2026-04-01]
+*** Verification
+- `bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts packages/coding-agent/test/task/async-progress.test.ts packages/coding-agent/test/task/render-report-finding.test.ts` — passed (`16 pass`, `0 fail`).
+- `bunx @biomejs/biome check packages/coding-agent/src/async/job-manager.ts packages/coding-agent/src/task/executor.ts packages/coding-agent/src/task/index.ts packages/coding-agent/src/task/render.ts packages/coding-agent/src/task/retry-state.ts packages/coding-agent/src/task/types.ts packages/coding-agent/src/tools/await-tool.ts packages/coding-agent/test/task/async-progress.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts packages/coding-agent/test/task/render-report-finding.test.ts` — passed.
+- `bun check:ts` — failed before project type-checking on unrelated workspace files under `packages/coding-agent/src/spellcast/` (`discovery.ts`, `index.ts`, `manifest.ts`) that were already present outside this change set.
+- `bun x tsgo -p tsconfig.json` — failed on unrelated `packages/coding-agent/src/spellcast/discovery.ts` (`Namespace '"node:fs/promises"' has no exported member 'Dirent'`).
+*** Artifacts
+- Code changes: [[file:packages/coding-agent/src/async/job-manager.ts]], [[file:packages/coding-agent/src/task/executor.ts]], [[file:packages/coding-agent/src/task/index.ts]], [[file:packages/coding-agent/src/task/render.ts]], [[file:packages/coding-agent/src/task/retry-state.ts]], [[file:packages/coding-agent/src/task/types.ts]], [[file:packages/coding-agent/src/tools/await-tool.ts]].
+- Regression coverage: [[file:packages/coding-agent/test/task/executor-subagent-reminders.test.ts]], [[file:packages/coding-agent/test/task/async-progress.test.ts]], [[file:packages/coding-agent/test/task/render-report-finding.test.ts]].
+- No screenshots captured. This change affects task/await text output rather than browser UI.
+*** Deviations
+- [[id:BUG-076-async-task-errors-not-surfaced-to-user-d]] is blocked pending unrelated workspace verification failures in `packages/coding-agent/src/spellcast/`.
+- Live manual reproduction against an actual quota-exhausted provider account was not run in this session; focused regression tests cover executor progress, async forwarding, task rendering, and await output.

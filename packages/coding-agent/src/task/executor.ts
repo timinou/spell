@@ -912,6 +912,24 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		scheduleProgress(flushProgress);
 	};
 
+	const processSessionEvent = (event: AgentSessionEvent) => {
+		if (resolved) return;
+		if (event.type === "auto_retry_start") {
+			progress.retry = {
+				attempt: event.attempt,
+				maxAttempts: event.maxAttempts,
+				delayMs: event.delayMs,
+				errorMessage: event.errorMessage,
+			};
+			scheduleProgress(true);
+			return;
+		}
+		if (event.type === "auto_retry_end") {
+			progress.retry = undefined;
+			scheduleProgress(true);
+		}
+	};
+
 	const runSubagent = async (): Promise<{
 		exitCode: number;
 		error?: string;
@@ -1085,15 +1103,17 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			const MAX_SUBMIT_RESULT_RETRIES = 3;
 			unsubscribe = session.subscribe(event => {
-				if (isAgentEvent(event)) {
-					try {
+				try {
+					if (isAgentEvent(event)) {
 						processEvent(event);
-					} catch (err) {
-						logger.error("Subagent event processing failed", {
-							error: err instanceof Error ? err.message : String(err),
-						});
-						requestAbort("terminate");
+						return;
 					}
+					processSessionEvent(event);
+				} catch (err) {
+					logger.error("Subagent event processing failed", {
+						error: err instanceof Error ? err.message : String(err),
+					});
+					requestAbort("terminate");
 				}
 			});
 

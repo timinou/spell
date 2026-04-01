@@ -6,6 +6,12 @@ const DELIVERY_RETRY_JITTER_MS = 200;
 const DEFAULT_RETENTION_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_RUNNING_JOBS = 15;
 
+export interface AsyncJobProgress {
+	text: string;
+	details?: Record<string, unknown>;
+	updatedAt: number;
+}
+
 export interface AsyncJob {
 	id: string;
 	type: "bash" | "task";
@@ -16,6 +22,7 @@ export interface AsyncJob {
 	promise: Promise<void>;
 	resultText?: string;
 	errorText?: string;
+	latestProgress?: AsyncJobProgress;
 }
 
 export interface AsyncJobManagerOptions {
@@ -97,6 +104,11 @@ export class AsyncJobManager {
 		};
 
 		const reportProgress = async (text: string, details?: Record<string, unknown>): Promise<void> => {
+			job.latestProgress = {
+				text,
+				...(details ? { details } : {}),
+				updatedAt: Date.now(),
+			};
 			if (!options?.onProgress) return;
 			try {
 				await options.onProgress(text, details);

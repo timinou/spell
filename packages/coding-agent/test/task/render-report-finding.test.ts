@@ -84,4 +84,49 @@ describe("taskToolRenderer report_finding safety", () => {
 		const lines = rendered.render(120);
 		expect(lines.join("\n")).toContain("blocked by permissions");
 	});
+	it("renders retry status for running subagent progress", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 42,
+			progress: [
+				{
+					index: 0,
+					id: "1-TaskWorker",
+					agent: "task",
+					agentSource: "bundled",
+					status: "running",
+					task: "Wait for quota reset",
+					recentTools: [],
+					recentOutput: [],
+					toolCount: 0,
+					tokens: 0,
+					durationMs: 42,
+					retry: {
+						attempt: 1,
+						maxAttempts: 3,
+						delayMs: 1_800_000,
+						errorMessage: "usage limit reached",
+					},
+				},
+			],
+		};
+
+		const rendered = taskToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "" }],
+				details,
+			},
+			{ expanded: false, isPartial: true },
+			uiTheme,
+		);
+
+		const output = rendered.render(120).join("\n");
+		expect(output).toContain("Retrying (1/3)");
+		expect(output).toContain("usage limit reached");
+	});
 });

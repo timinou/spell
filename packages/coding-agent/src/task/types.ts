@@ -135,6 +135,14 @@ export interface AgentDefinition {
 	filePath?: string;
 }
 
+/** Auto-retry state for a subagent waiting to retry a failed provider call */
+export interface AgentRetryState {
+	attempt: number;
+	maxAttempts: number;
+	delayMs: number;
+	errorMessage: string;
+}
+
 /** Progress tracking for a single agent */
 export interface AgentProgress {
 	index: number;
@@ -154,6 +162,7 @@ export interface AgentProgress {
 	toolCount: number;
 	tokens: number;
 	durationMs: number;
+	retry?: AgentRetryState;
 	modelOverride?: string | string[];
 	sessionId?: string;
 	transcriptPath?: string;

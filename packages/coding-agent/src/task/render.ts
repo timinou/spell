@@ -27,6 +27,7 @@ import {
 	type SubmitReviewDetails,
 } from "../tools/review";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine } from "../tui";
+import { formatRetryStatus } from "./retry-state";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import type { AgentProgress, SingleResult, TaskParams, TaskToolDetails } from "./types";
 
@@ -543,9 +544,17 @@ function renderAgentProgress(
 
 	lines.push(...renderTaskSection(progress.assignment ?? progress.task, continuePrefix, expanded, theme));
 
-	// Current tool (if running) or most recent completed tool
+	// Current tool (if running), retry state, or most recent completed tool
+
 	if (progress.status === "running") {
-		if (progress.currentTool) {
+		if (progress.retry) {
+			lines.push(
+				`${continuePrefix}${theme.tree.hook} ${theme.fg(
+					"warning",
+					truncateToWidth(replaceTabs(formatRetryStatus(progress.retry)), 70),
+				)}`,
+			);
+		} else if (progress.currentTool) {
 			let toolLine = `${continuePrefix}${theme.tree.hook} ${theme.fg("muted", progress.currentTool)}`;
 			const toolDetail = progress.lastIntent ?? progress.currentToolArgs;
 			if (toolDetail) {

@@ -1,8 +1,12 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type Static, Type } from "@sinclair/typebox";
+import type { AsyncJob } from "../async";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import awaitDescription from "../prompts/tools/await.md" with { type: "text" };
+import { formatRetryStatus } from "../task/retry-state";
+import type { AgentRetryState, TaskToolDetails } from "../task/types";
 import type { ToolSession } from "./index";
+import { replaceTabs } from "./render-utils";
 
 const awaitSchema = Type.Object({
 	jobs: Type.Optional(
@@ -22,6 +26,17 @@ interface AwaitResult {
 	durationMs: number;
 	resultText?: string;
 	errorText?: string;
+	retry?: AgentRetryState;
+}
+
+function extractRetryState(
+	job: Pick<AsyncJob, "id" | "label" | "type" | "latestProgress">,
+): AgentRetryState | undefined {
+	if (job.type !== "task") return undefined;
+	const details = job.latestProgress?.details as TaskToolDetails | undefined;
+	if (!details?.progress) return undefined;
+	const matchingProgress = details.progress.find(progress => progress.id === job.label || progress.id === job.id);
+	return matchingProgress?.retry;
 }
 
 export interface AwaitToolDetails {
@@ -108,43 +123,44 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 
 	#buildResult(
 		manager: NonNullable<ToolSession["asyncJobManager"]>,
-		jobs: {
-			id: string;
-			type: "bash" | "task";
-			status: string;
-			label: string;
-			startTime: number;
-			resultText?: string;
-			errorText?: string;
-		}[],
+		jobs: Array<
+			Pick<
+				AsyncJob,
+				"id" | "type" | "status" | "label" | "startTime" | "resultText" | "errorText" | "latestProgress"
+			>
+		>,
 	): AgentToolResult<AwaitToolDetails> {
 		const now = Date.now();
-		const jobResults: AwaitResult[] = jobs.map(j => ({
-			id: j.id,
-			type: j.type,
-			status: j.status as AwaitResult["status"],
-			label: j.label,
-			durationMs: Math.max(0, now - j.startTime),
-			...(j.resultText ? { resultText: j.resultText } : {}),
-			...(j.errorText ? { errorText: j.errorText } : {}),
-		}));
+		const jobResults: AwaitResult[] = jobs.map(job => {
+			const retry = extractRetryState(job);
+			return {
+				id: job.id,
+				type: job.type,
+				status: job.status as AwaitResult["status"],
+				label: job.label,
+				durationMs: Math.max(0, now - job.startTime),
+				...(job.resultText ? { resultText: job.resultText } : {}),
+				...(job.errorText ? { errorText: job.errorText } : {}),
+				...(retry ? { retry } : {}),
+			};
+		});
 
-		manager.acknowledgeDeliveries(jobResults.filter(j => j.status !== "running").map(j => j.id));
+		manager.acknowledgeDeliveries(jobResults.filter(job => job.status !== "running").map(job => job.id));
 
-		const completed = jobResults.filter(j => j.status !== "running");
-		const running = jobResults.filter(j => j.status === "running");
+		const completed = jobResults.filter(job => job.status !== "running");
+		const running = jobResults.filter(job => job.status === "running");
 
 		const lines: string[] = [];
 		if (completed.length > 0) {
 			lines.push(`## Completed (${completed.length})\n`);
-			for (const j of completed) {
-				lines.push(`### ${j.id} [${j.type}] — ${j.status}`);
-				lines.push(`Label: ${j.label}`);
-				if (j.resultText) {
-					lines.push("```", j.resultText, "```");
+			for (const job of completed) {
+				lines.push(`### ${job.id} [${job.type}] — ${job.status}`);
+				lines.push(`Label: ${replaceTabs(job.label)}`);
+				if (job.resultText) {
+					lines.push("```", job.resultText, "```");
 				}
-				if (j.errorText) {
-					lines.push(`Error: ${j.errorText}`);
+				if (job.errorText) {
+					lines.push(`Error: ${replaceTabs(job.errorText)}`);
 				}
 				lines.push("");
 			}
@@ -152,8 +168,11 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 
 		if (running.length > 0) {
 			lines.push(`## Still Running (${running.length})\n`);
-			for (const j of running) {
-				lines.push(`- \`${j.id}\` [${j.type}] — ${j.label}`);
+			for (const job of running) {
+				lines.push(`- \`${job.id}\` [${job.type}] — ${replaceTabs(job.label)}`);
+				if (job.retry) {
+					lines.push(`  ${replaceTabs(formatRetryStatus(job.retry))}`);
+				}
 			}
 		}
 

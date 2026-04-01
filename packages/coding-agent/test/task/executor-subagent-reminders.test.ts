@@ -6,7 +6,7 @@ import * as sdkModule from "../../src/sdk";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "../../src/session/agent-session";
 import type { AuthStorage } from "../../src/session/auth-storage";
 import { runSubprocess, SUBAGENT_WARNING_MISSING_SUBMIT_RESULT } from "../../src/task/executor";
-import type { AgentDefinition } from "../../src/task/types";
+import type { AgentDefinition, AgentProgress } from "../../src/task/types";
 
 vi.mock("../../src/sdk", () => ({
 	createAgentSession: vi.fn(),
@@ -485,6 +485,47 @@ describe("runSubprocess submit_result reminders", () => {
 		const result = await runSubprocess({ ...baseOptions, id: "subagent-aborted-submit-result" });
 		expect(result.aborted).toBe(true);
 		expect(result.abortReason).toBe("blocked by permissions");
+	});
+
+	it("forwards auto-retry session events into progress updates", async () => {
+		const progressUpdates: AgentProgress[] = [];
+		const session = createMockSession(({ emit }) => {
+			emit({
+				type: "auto_retry_start",
+				attempt: 1,
+				maxAttempts: 3,
+				delayMs: 1_800_000,
+				errorMessage: "usage limit reached",
+			});
+			emit({ type: "auto_retry_end", success: true, attempt: 1 });
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-submit-result-retry",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		await runSubprocess({
+			...baseOptions,
+			id: "subagent-auto-retry-progress",
+			onProgress: progress => {
+				progressUpdates.push(structuredClone(progress));
+			},
+		});
+
+		expect(progressUpdates.some(progress => progress.retry?.errorMessage === "usage limit reached")).toBe(true);
+		expect(progressUpdates.at(-1)?.retry).toBeUndefined();
 	});
 
 	it("marks pre-aborted subprocess with a concrete reason", async () => {
