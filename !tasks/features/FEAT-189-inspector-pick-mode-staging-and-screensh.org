@@ -1,0 +1,57 @@
+#+TITLE: Inspector pick-mode staging and screenshot
+#+STATE: DONE
+#+SESSION_ID: 14a9ece0ca92c1fb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T19-21-17-866Z_14a9ece0ca92c1fb.jsonl]]
+#+CUSTOM_ID: FEAT-189-inspector-pick-mode-staging-and-screensh
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: extension
+
+NOTE [2026-04-01]: Implemented staged pick mode: clicking an element no longer auto-fires Tidewave resolution. Added screenshot toggle (grabToImage), Resolve button, Quick Fix button, and result panel.
+
+* Initial Message
+
+look at this session
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-01T18-43-20-840Z_14a9e431221776e6.jsonl
+ ID: 14a9e431221776e6
+
+
+look at both the canvas and canvas arming, as well as the task tools, as well as the most recent plans related to task and todos and waves and whatnot.
+
+how would I be able to 'arm' this behaviour:
+1. (QoL) when I click on an element in pick mode, it doesn't actually senf yet
+2. I can click on a button (on by default) that sends a screenshot of the elmeent I picked
+3. (most important) when I click on an element, it arms a new task using the SMOL model that runs the fix with a nice pre-loaded model about fixing a frontend task and that outputs a structured summary of work in the end + the changes/additions to the surface dsl (in the standard and the project components), the journey dsl, and the scenario dsl. the extensions is in ~/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector
+
+Decouple element pick from Tidewave resolution in the Phoenix inspector QML.
+
+* Problem
+When the user clicks an element in pick mode, the QML immediately:
+1. Disables pick mode
+2. Calls ~resolveSelectionContext()~ which fires ~bridge.send()~ for Tidewave lookups
+3. These bridge events flow through the extension event loop, potentially triggering agent turns
+
+The user wants to type their prompt BEFORE any resolution/send happens.
+
+* Changes
+
+** inspector.qml — Staged pick mode
+- On click: capture ~selectedElement~ data, show element preview, but do NOT call ~resolveSelectionContext()~
+- Keep pick mode active (or add a "re-pick" toggle that stays visible)
+- Add a "Confirm & Resolve" button that triggers Tidewave resolution
+- Alternatively: defer resolution to the "Send" / "Quick fix" button press
+
+** inspector.qml — Screenshot toggle
+- Add a boolean property ~sendScreenshot~ (default: true)
+- Add a toggle button in the action bar: "Include screenshot"
+- When enabled, capture a screenshot of the selected element's bounding rect using WebEngineView's ~grabToImage~ or ~runJavaScript~ to get a base64 PNG of the element
+- Include the screenshot data in the context sent to the task/agent
+
+* Acceptance
+- Clicking an element in pick mode shows element info but does NOT trigger Tidewave bridge events
+- A "Resolve" or "Send" action triggers the full resolution flow
+- Screenshot toggle captures the element region and includes it in the dispatch payload
+- Existing "Send to agent" flow still works after resolution

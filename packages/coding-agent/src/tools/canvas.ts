@@ -74,6 +74,9 @@ export const CANVAS_ORCHESTRATOR_CHANNEL = "canvas:orchestrator:request";
 /** Channel name for full agent requests from QML. */
 export const CANVAS_AGENT_CHANNEL = "canvas:agent:request";
 
+/** Channel name for task subagent requests from QML. */
+export const CANVAS_TASK_CHANNEL = "canvas:task:request";
+
 /** Tools that cannot be armed from QML file declarations (only from explicit agent props). */
 const CANVAS_ARMED_DENYLIST = new Set();
 
@@ -127,6 +130,24 @@ export interface CanvasAgentPayload {
 	windowId: string;
 	assignment: string;
 	context?: Record<string, unknown>;
+}
+
+/** Payload emitted on CANVAS_TASK_CHANNEL when QML sends _tier: 'task'. */
+export interface CanvasTaskPayload {
+	windowId: string;
+	assignment: string;
+	/** Model role pattern, e.g. "pi/smol". Defaults to "pi/smol". */
+	model?: string;
+	/** System prompt for the task subagent. */
+	systemPrompt?: string;
+	/** Tool names the task subagent should have. */
+	tools?: string[];
+	/** JTD output schema for structured result. */
+	outputSchema?: unknown;
+	/** Arbitrary context passed through to the subagent. */
+	context?: Record<string, unknown>;
+	/** Images to include (e.g. element screenshots). */
+	images?: Array<{ data: string; mimeType: string }>;
 }
 
 export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDetails> {
@@ -384,6 +405,25 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 								: undefined,
 					};
 					eventBus.enqueue(CANVAS_AGENT_CHANNEL, payload, Priority.P1);
+				} else if (tier === "task" && typeof p._assignment === "string") {
+					const context =
+						typeof p.context === "object" && p.context !== null
+							? (p.context as Record<string, unknown>)
+							: undefined;
+					const images = Array.isArray(p.images)
+						? (p.images as Array<{ data: string; mimeType: string }>)
+						: undefined;
+					const payload: CanvasTaskPayload = {
+						windowId: id,
+						assignment: p._assignment,
+						model: typeof p._model === "string" ? p._model : undefined,
+						systemPrompt: typeof p._systemPrompt === "string" ? p._systemPrompt : undefined,
+						tools: Array.isArray(p._tools) ? (p._tools as string[]) : undefined,
+						outputSchema: p._outputSchema,
+						context,
+						images,
+					};
+					eventBus.enqueue(CANVAS_TASK_CHANNEL, payload, Priority.P1);
 				} else {
 					// Unknown tier or missing required fields — treat as regular event.
 					regularEvents.push(ev);

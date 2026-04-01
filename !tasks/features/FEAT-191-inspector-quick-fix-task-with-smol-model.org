@@ -1,0 +1,105 @@
+#+TITLE: Inspector quick-fix task with SMOL model and structured output
+#+STATE: DONE
+#+SESSION_ID: 14a9ece0ca92c1fb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T19-21-17-866Z_14a9ece0ca92c1fb.jsonl]]
+#+CUSTOM_ID: FEAT-191-inspector-quick-fix-task-with-smol-model
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: extension
+#+DEPENDS: FEAT-189-inspector-pick-mode-staging-and-screensh FEAT-190-canvas-task-tier-dispatch-channel
+
+NOTE [2026-04-01]: Wired Quick Fix button to dispatch _tier:task with SMOL model. Created frontend-fix.md prompt and quick-fix-schema.json JTD schema. Result display panel added to inspector.
+
+* Initial Message
+
+look at this session
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-01T18-43-20-840Z_14a9e431221776e6.jsonl
+ ID: 14a9e431221776e6
+
+
+look at both the canvas and canvas arming, as well as the task tools, as well as the most recent plans related to task and todos and waves and whatnot.
+
+how would I be able to 'arm' this behaviour:
+1. (QoL) when I click on an element in pick mode, it doesn't actually senf yet
+2. I can click on a button (on by default) that sends a screenshot of the elmeent I picked
+3. (most important) when I click on an element, it arms a new task using the SMOL model that runs the fix with a nice pre-loaded model about fixing a frontend task and that outputs a structured summary of work in the end + the changes/additions to the surface dsl (in the standard and the project components), the journey dsl, and the scenario dsl. the extensions is in ~/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector
+
+Wire the Phoenix inspector's "quick fix" button to dispatch a canvas task subagent using the SMOL model, a pre-loaded frontend-fix system prompt, and a structured output schema that captures changes to the surface DSL, journey DSL, and scenario DSL.
+
+* Architecture
+
+** System prompt for frontend-fix tasks
+- File: ~agentmaker/.spell/extensions/phoenix-inspector/prompts/frontend-fix.md~ (new)
+- Pre-loaded context about:
+  - The Phoenix LiveView + DaisyUI + Tailwind stack
+  - DjinnUI component library (components in ~ecosystem/djinn_ui/lib/djinn_ui/components/~)
+  - Agentmaker-specific components and live views
+  - The surface DSL (~DjinnUI.Surface~), UI DSL (~Djinn.Dsl.UI~), journey DSL (~Agentmaker.E2E.Journey~)
+  - How to locate source via HEEx annotations and Tidewave references
+  - Instruction to make targeted, minimal edits
+  - Instruction to report changes in structured output
+
+** Structured output schema
+The task must return:
+#+begin_src json
+{
+  "properties": {
+    "summary": { "type": "string" },
+    "filesChanged": {
+      "elements": { "type": "string" }
+    },
+    "surfaceDslChanges": {
+      "properties": {
+        "standard": { "type": "string" },
+        "project": { "type": "string" }
+      }
+    },
+    "journeyDslChanges": { "type": "string" },
+    "scenarioDslChanges": { "type": "string" }
+  }
+}
+#+end_src
+
+Where:
+- ~summary~ — human-readable summary of what was done
+- ~filesChanged~ — list of file paths modified
+- ~surfaceDslChanges.standard~ — changes to DjinnUI standard components
+- ~surfaceDslChanges.project~ — changes to agentmaker-specific components
+- ~journeyDslChanges~ — changes to E2E journey test DSL
+- ~scenarioDslChanges~ — changes to scenario/test infrastructure
+
+** Inspector QML changes
+- File: ~inspector.qml~ (in the shared extension)
+- Add a "Quick Fix" button (highlighted, primary action) next to existing "Send to agent"
+- This button is enabled when an element is selected and prompt text is entered
+- On click, calls a new ~dispatchQuickFix()~ function that:
+  1. Triggers Tidewave resolution (if not already resolved)
+  2. Captures element screenshot (if toggle enabled)
+  3. Dispatches via ~bridge.send({ _tier: "task", _assignment: ..., _model: "pi/smol", ... })~
+  4. Shows a progress indicator in the inspector panel
+  5. On result: displays summary, files changed, DSL changes in a new result card
+
+** Extension index.ts changes
+- File: ~index.ts~ (shared extension)
+- The extension's bridge event loop should NOT intercept ~_tier~ events (they go through the canvas tool's event system)
+- The quick-fix prompt and schema are loaded from the agentmaker-local extension directory
+- Add a new bridge action ~"load_fix_prompt"~ that loads the prompt template from the agentmaker extension path
+
+** Agentmaker-local extension augmentation
+- File: ~agentmaker/.spell/extensions/phoenix-inspector-fix/index.ts~ (new)
+- Registers a hook or provides the prompt/schema to the shared extension
+- Loads ~frontend-fix.md~ prompt template
+- Provides the structured output JTD schema
+
+* Acceptance
+- "Quick Fix" button visible in inspector alongside "Send to agent"
+- Clicking "Quick Fix" dispatches a SMOL task subagent
+- Task runs with the frontend-fix prompt and structured output schema
+- Task has access to read, grep, find, edit, lsp, bash, ast_grep, ast_edit tools
+- Result is displayed in the inspector panel with summary and DSL change details
+- Screenshot of selected element is included in context when toggle is on
+- Tidewave resolution happens on-demand (not on pick)
+- Existing "Send to agent" flow continues to work for full-agent delegation

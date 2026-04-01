@@ -84,6 +84,7 @@ import {
 } from "./mcp/discoverable-tool-metadata";
 import { buildMemoryToolDeveloperInstructions, getMemoryRoot, startMemoryStartupTask } from "./memories";
 import { CanvasOrchestratorManager } from "./orchestrators/canvas-orchestrator";
+import { CanvasTaskManager } from "./orchestrators/canvas-task-manager";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { collectEnvSecrets, loadSecrets, obfuscateMessages, SecretObfuscator } from "./secrets";
 import { AgentSession } from "./session/agent-session";
@@ -245,6 +246,8 @@ export interface CreateAgentSessionResult {
 	eventBus?: EventBus;
 	/** Canvas orchestrator manager (undefined if no canvas support) */
 	orchestratorManager?: CanvasOrchestratorManager;
+	/** Canvas task manager for dispatching task subagents from QML windows. */
+	taskManager?: CanvasTaskManager;
 	/** Loop orchestration manager for loop lifecycle, gates, and dashboards. */
 	loopManager?: LoopManager;
 }
@@ -1936,6 +1939,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	});
 	orchestratorManager.start();
 
+	// Wire task subagent lifecycle manager.
+	// Tasks are full-capability subagents dispatched from canvas windows (e.g. quick-fix).
+	const taskManager = new CanvasTaskManager({
+		eventBus,
+		cwd: cwd ?? process.cwd(),
+		executorDefaults: {
+			settings: options.settings,
+			modelRegistry,
+		},
+	});
+	taskManager.start();
+
 	// Wire full agent requests from canvas: route to session.followUp()
 	eventBus.subscribe(CANVAS_AGENT_CHANNEL, async (raw: unknown) => {
 		if (!session) return;
@@ -1956,6 +1971,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		emacsResult,
 		eventBus,
 		orchestratorManager,
+		taskManager,
 		loopManager,
 	};
 }

@@ -1,0 +1,131 @@
+#+TITLE: Inspector quick-fix task dispatch
+#+STATE: DONE
+#+SESSION_ID: 14a9ece0ca92c1fb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T19-21-17-866Z_14a9ece0ca92c1fb.jsonl]]
+#+CUSTOM_ID: PLAN-073-inspector-quick-fix-task-dispatch
+
+NOTE [2026-04-01]: All three FEATs completed. bun check:ts passes. 11 TDD tests pass. Inspector QML staged pick + quick-fix button + screenshot toggle implemented.
+
+
+* Initial Message
+
+look at this session
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-01T18-43-20-840Z_14a9e431221776e6.jsonl
+ ID: 14a9e431221776e6
+
+
+look at both the canvas and canvas arming, as well as the task tools, as well as the most recent plans related to task and todos and waves and whatnot.
+
+how would I be able to 'arm' this behaviour:
+1. (QoL) when I click on an element in pick mode, it doesn't actually senf yet
+2. I can click on a button (on by default) that sends a screenshot of the elmeent I picked
+3. (most important) when I click on an element, it arms a new task using the SMOL model that runs the fix with a nice pre-loaded model about fixing a frontend task and that outputs a structured summary of work in the end + the changes/additions to the surface dsl (in the standard and the project components), the journey dsl, and the scenario dsl. the extensions is in ~/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector
+
+* Context
+
+The Phoenix inspector extension (~.spell/extensions/phoenix-inspector/~) lets users browse a LiveView app, pick DOM elements, resolve their source via Tidewave annotations, and send edit requests to the main agent session. Three gaps prevent it from being a self-contained frontend-fix tool:
+
+1. *Premature event dispatch.* Clicking an element in pick mode immediately fires Tidewave resolution events via ~bridge.send()~, which can trigger agent turns before the user types their request. Fix: stage the selection visually without firing bridge events until the user explicitly confirms.
+
+2. *No element screenshot.* The context sent to the agent is text-only (DOM path, annotations, styles). A screenshot of the selected element region would significantly improve the agent's understanding. Fix: add a toggle (default on) that captures the element's bounding rect as a base64 PNG.
+
+3. *No targeted task dispatch.* The only dispatch path is "Send to agent" which calls ~pi.sendUserMessage()~ to the main session (typically a large model). The user wants a "Quick Fix" button that spawns a lightweight SMOL-model subagent with a pre-loaded frontend-fix prompt and structured output describing changes to the surface DSL (~DjinnUI.Surface~), journey DSL (~Agentmaker.E2E.Journey~), standard components (~DjinnUI.Components~), and project components.
+
+** Approach: New ~canvas:task~ tier
+
+The canvas event system already supports three dispatch tiers:
+- ~_tool~: direct armed-tool invocation (fire-and-forget)
+- ~_tier: "orchestrator"~: scoped read-only subagent via ~CanvasOrchestratorManager~ → ~runSubprocess()~
+- ~_tier: "agent"~: full ~session.followUp()~ to main model
+
+Adding ~_tier: "task"~ follows the orchestrator pattern but with full flexibility: configurable model role (~pi/smol~), custom system prompt, custom tool set, and structured JTD output schema. This is a general-purpose extension to the canvas event system, not inspector-specific.
+
+** Key files
+- ~packages/coding-agent/src/tools/canvas.ts~ — add ~CANVAS_TASK_CHANNEL~, ~CanvasTaskPayload~, dispatch case
+- ~packages/coding-agent/src/orchestrators/canvas-task-manager.ts~ — new manager (mirrors orchestrator pattern)
+- ~packages/coding-agent/src/sdk.ts~ — wire manager into ~createAgentSession~
+- ~.spell/extensions/phoenix-inspector/inspector.qml~ — staged pick, screenshot, quick-fix button
+- ~.spell/extensions/phoenix-inspector/index.ts~ — minor: don't intercept ~_tier~ events
+- ~agentmaker/.spell/extensions/phoenix-inspector-fix/~ — prompt template + output schema
+
+** Structured output schema (JTD)
+#+begin_src json
+{
+  "properties": {
+    "summary": { "type": "string" },
+    "filesChanged": { "elements": { "type": "string" } }
+  },
+  "optionalProperties": {
+    "surfaceDslChanges": {
+      "properties": {
+        "standard": { "type": "string" },
+        "project": { "type": "string" }
+      }
+    },
+    "journeyDslChanges": { "type": "string" },
+    "scenarioDslChanges": { "type": "string" }
+  }
+}
+#+end_src
+
+* Verification
+
+** After FEAT-189 (pick staging + screenshot)
+- Open inspector, navigate to a page, click an element
+- Confirm: element preview appears, NO Tidewave events fire (check bridge event log / agent transcript)
+- Click "Resolve" or "Quick Fix" — then Tidewave events fire
+- Toggle screenshot on → confirm base64 PNG is captured in the dispatch payload
+
+** After FEAT-190 (canvas task tier)
+- ~bun check:ts~ passes
+- Write a minimal test: QML sends ~{ _tier: "task", _assignment: "echo hello", _model: "pi/smol" }~
+- Confirm a subprocess spawns with the SMOL model, result returns to the window
+
+** After FEAT-191 (inspector quick-fix wiring)
+- Open inspector on agentmaker frontend
+- Pick an element, type a prompt, click "Quick Fix"
+- Confirm: SMOL subagent spawns, runs with the frontend-fix prompt
+- Confirm: structured output (summary, filesChanged, DSL changes) appears in inspector panel
+- Confirm: "Send to agent" still works for full-agent delegation
+
+** Global
+- ~bun check:ts~ passes across all modified packages
+- Existing canvas orchestrator and agent tier dispatch unchanged
+- Inspector extension tests updated for new behavior
+
+* Execution Manifest
+
+** Wave 1 — Foundation (parallelizable)
+- [[id:FEAT-189-inspector-pick-mode-staging-and-screensh]] — Inspector QML: staged pick + screenshot (effort: S)
+- [[id:FEAT-190-canvas-task-tier-dispatch-channel]] — Canvas task tier: new channel + manager in coding-agent SDK (effort: M)
+
+** Wave 2 — Integration (depends on both Wave 1 items)
+- [[id:FEAT-191-inspector-quick-fix-task-with-smol-model]] — Wire inspector quick-fix button to canvas task tier with SMOL model, frontend-fix prompt, and structured output (effort: M)
+
+
+** Completion [2026-04-01]
+
+*** Verification
+- =bun check:ts= passes (biome + tsgo) — 0 errors, 0 warnings
+- =bun test packages/coding-agent/test/tools/canvas-task-tier.test.ts= — 11/11 pass (39 assertions)
+- Existing canvas tests unchanged: =canvas-event-classification= (20 pass), =canvas-event-deduplication= (9 pass)
+- Inspector QML staged pick confirmed: =payload.type === "selection"= handler no longer calls =resolveSelectionContext()=
+- Quick Fix dispatch sends =_tier: "task"= with SMOL model, tools, context, and images
+- Task result handling in QML Connections block confirmed at line 1539
+- Action buttons present: Resolve, Send to agent, Quick Fix, Include screenshot toggle
+- Frontend-fix prompt and JTD schema created and loadable
+
+*** Artifacts
+- =packages/coding-agent/src/orchestrators/canvas-task-manager.ts= — new CanvasTaskManager with injectable executor
+- =packages/coding-agent/src/tools/canvas.ts= — CANVAS_TASK_CHANNEL, CanvasTaskPayload, tier:task dispatch
+- =packages/coding-agent/src/sdk.ts= — CanvasTaskManager wired alongside CanvasOrchestratorManager
+- =packages/coding-agent/test/tools/canvas-task-tier.test.ts= — 11 TDD tests with fake executor
+- =hotelcomm/.spell/extensions/phoenix-inspector/inspector.qml= — staged pick, screenshot, quick-fix button
+- =hotelcomm/.spell/extensions/phoenix-inspector/prompts/frontend-fix.md= — SMOL model prompt
+- =hotelcomm/.spell/extensions/phoenix-inspector/prompts/quick-fix-schema.json= — JTD output schema
+
+*** Deviations
+None.

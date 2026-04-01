@@ -1,0 +1,105 @@
+#+TITLE: Canvas task tier dispatch channel
+#+STATE: DONE
+#+SESSION_ID: 14a9ece0ca92c1fb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T19-21-17-866Z_14a9ece0ca92c1fb.jsonl]]
+#+CUSTOM_ID: FEAT-190-canvas-task-tier-dispatch-channel
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: sdk
+
+NOTE [2026-04-01]: Added CANVAS_TASK_CHANNEL, CanvasTaskPayload, CanvasTaskManager with injectable executor, tier:task dispatch in flushEvents, SDK wiring. 11 TDD tests with fake executor all pass.
+
+* Initial Message
+
+look at this session
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-01T18-43-20-840Z_14a9e431221776e6.jsonl
+ ID: 14a9e431221776e6
+
+
+look at both the canvas and canvas arming, as well as the task tools, as well as the most recent plans related to task and todos and waves and whatnot.
+
+how would I be able to 'arm' this behaviour:
+1. (QoL) when I click on an element in pick mode, it doesn't actually senf yet
+2. I can click on a button (on by default) that sends a screenshot of the elmeent I picked
+3. (most important) when I click on an element, it arms a new task using the SMOL model that runs the fix with a nice pre-loaded model about fixing a frontend task and that outputs a structured summary of work in the end + the changes/additions to the surface dsl (in the standard and the project components), the journey dsl, and the scenario dsl. the extensions is in ~/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector
+
+Add a ~_tier: "task"~ dispatch path in the canvas event system, analogous to the existing ~"orchestrator"~ and ~"agent"~ tiers, but spawning a subagent subprocess with configurable model role, system prompt, tools, and structured output schema.
+
+* Motivation
+The existing canvas dispatch tiers are:
+- ~_tier: "orchestrator"~ → ~CanvasOrchestratorManager~ → ~runSubprocess()~ with scoped read-only tools
+- ~_tier: "agent"~ → ~session.followUp()~ with main model (no control over model/tools)
+
+Neither supports spawning a targeted task subagent with a specific model role (e.g. SMOL), a custom system prompt, and structured output — which is what the Phoenix inspector needs for "quick fix" dispatch.
+
+* Architecture
+
+** New channel: ~CANVAS_TASK_CHANNEL~
+- File: ~packages/coding-agent/src/tools/canvas.ts~
+- Add ~export const CANVAS_TASK_CHANNEL = "canvas:task:request"~
+- Add ~CanvasTaskPayload~ interface:
+  #+begin_src typescript
+  export interface CanvasTaskPayload {
+    windowId: string;
+    assignment: string;
+    /** Model role pattern, e.g. "pi/smol" */
+    model?: string;
+    /** System prompt for the subagent */
+    systemPrompt?: string;
+    /** Tool names the subagent should have */
+    tools?: string[];
+    /** JTD output schema for structured result */
+    outputSchema?: unknown;
+    /** Arbitrary context passed through */
+    context?: Record<string, unknown>;
+    /** Images to include (base64 screenshots) */
+    images?: Array<{ data: string; mimeType: string }>;
+  }
+  #+end_src
+
+** Dispatch in ~#flushEvents~
+- In the ~_tier~ switch block, add case ~"task"~ that constructs ~CanvasTaskPayload~ and enqueues on ~CANVAS_TASK_CHANNEL~
+
+** New manager: ~CanvasTaskManager~ (or extend ~CanvasOrchestratorManager~)
+- File: ~packages/coding-agent/src/orchestrators/canvas-task-manager.ts~
+- Subscribe to ~CANVAS_TASK_CHANNEL~
+- On each event, call ~runSubprocess()~ with:
+  - ~agent.model~ from payload's ~model~ field (default: ~"pi/smol"~)
+  - ~agent.systemPrompt~ from payload or a default frontend-fix prompt
+  - ~agent.tools~ from payload or default ~["read", "grep", "find", "edit", "lsp", "bash", "ast_grep", "ast_edit"]~
+  - ~outputSchema~ forwarded to ~ExecutorOptions.outputSchema~
+- Send result back to the originating canvas window via ~bridge.sendMessage(windowId, { action: "task_result", ... })~
+- Handle window close → abort (same pattern as orchestrator)
+
+** SDK wiring
+- File: ~packages/coding-agent/src/sdk.ts~
+- Import ~CANVAS_TASK_CHANNEL~, ~CanvasTaskPayload~
+- Subscribe to ~CANVAS_TASK_CHANNEL~ in ~createAgentSession~, similar to the existing ~CANVAS_AGENT_CHANNEL~ subscription
+- Instantiate ~CanvasTaskManager~ alongside ~CanvasOrchestratorManager~
+
+* QML protocol
+QML windows dispatch a task via:
+#+begin_src javascript
+bridge.send({
+  _tier: "task",
+  _assignment: "Fix the spacing on this component",
+  _model: "pi/smol",
+  _systemPrompt: "...",
+  _tools: ["read", "grep", "find", "edit"],
+  _outputSchema: { properties: { summary: { type: "string" } } },
+  context: { ... element data ... },
+  images: [{ data: "base64...", mimeType: "image/png" }]
+})
+#+end_src
+
+* Acceptance
+- QML can dispatch ~_tier: "task"~ events
+- Events spawn a subagent subprocess via ~runSubprocess~
+- Model role is configurable (defaults to ~pi/smol~)
+- System prompt, tools, and output schema are configurable
+- Result is sent back to the originating window
+- Window close aborts the running task
+- Existing orchestrator and agent tiers are unaffected
