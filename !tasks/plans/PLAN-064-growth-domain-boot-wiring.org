@@ -11,6 +11,14 @@
 
 
 
+
+
+
+
+
+
+
+
 * Initial Message
 
 how do I start SPell Growth?
@@ -158,3 +166,5 @@ NOTE [2026-04-01]: Manual verification used a temporary `.spell/domain.json` to 
 *** Deviations
 - Plan remains in `DOING` because the required full `packages/coding-agent/test/` regression gate is currently failing in unrelated pre-existing tests listed above.
 - No plan work was deferred to follow-up items, so there are no `[[id:FUP-...]]` references for this execution.
+
+NOTE [2026-04-01]: Committed plan implementation as `d8f83e41a feat(coding-agent): wire growth domain startup`. Plan state remains DOING because the required full regression gate is still red.
