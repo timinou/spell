@@ -2138,7 +2138,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelFallbackMessage,
 		spellcastSessionContext,
 		spellcastReport,
-		spellcastingWarning,
+		spellcastingWarning: spellcastingWarning ?? undefined,
 
 		lspServers,
 

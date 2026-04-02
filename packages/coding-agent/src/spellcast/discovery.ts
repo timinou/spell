@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { parseSpellcastManifest, type SpellcastManifest } from "./manifest";
@@ -38,11 +39,13 @@ export async function discoverSpellcastManifests(
 	const warnings: string[] = [];
 
 	async function walk(currentDir: string, depth: number): Promise<void> {
-		let entries: fs.Dirent[];
+		let entries: Dirent[];
 		try {
 			entries = await fs.readdir(currentDir, { withFileTypes: true });
 		} catch (error) {
-			warnings.push(`Failed to read directory ${currentDir}: ${error instanceof Error ? error.message : String(error)}`);
+			warnings.push(
+				`Failed to read directory ${currentDir}: ${error instanceof Error ? error.message : String(error)}`,
+			);
 			return;
 		}
 

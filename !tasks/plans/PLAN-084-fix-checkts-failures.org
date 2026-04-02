@@ -1,0 +1,101 @@
+#+TITLE: Fix checkts failures
+#+STATE: DONE
+#+SESSION_ID: 14aadd59db5c2e9a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T12-51-56-398Z_14aadd59db5c2e9a.jsonl]]
+#+CUSTOM_ID: PLAN-084-fix-checkts-failures
+
+
+* Initial Message
+
+∙ bun check:ts
+$ biome check . && tsgo -p tsconfig.json
+packages/telegram-bridge/test/log-viewer.test.ts:45:6 lint/correctness/noUnusedVariables  FIXABLE  ━━━━━━━━━━
+
+  ⚠ This variable stopServer is unused.
+
+    44 │ describe("startLogViewer", () => {
+  > 45 │        let stopServer: (() => void) | undefined;
+       │            ^^^^^^^^^^
+    46 │        let baseUrl = "";
+    47 │        let tempDir = "";
+
+  ℹ Unused variables are often the result of typos, incomplete refactors, or other sources of bugs.
+
+  ℹ Unsafe fix: If this is intentional, prepend stopServer with an underscore.
+
+     43  43 │
+     44  44 │   describe("startLogViewer", () => {
+     45     │ - → let·stopServer:·(()·=>·void)·|·undefined;
+         45 │ + → let·_stopServer:·(()·=>·void)·|·undefined;
+     46  46 │     let baseUrl = "";
+     47  47 │     let tempDir = "";
+    ······· │
+    113 113 │         const s = startLogViewer(config, provider);
+    114 114 │         if (s) {
+    115     │ - → → → → stopServer·=·()·=>·s.stop(true);
+        115 │ + → → → → _stopServer·=·()·=>·s.stop(true);
+    116 116 │           baseUrl = `http://127.0.0.1:${port}`;
+    117 117 │           break;
+
+
+Checked 1598 files in 1547ms. No fixes applied.
+Found 1 warning.
+packages/coding-agent/src/sdk.ts:2141:3 - error TS2322: Type 'string | null' is not assignable to type 'string | undefined'.
+  Type 'null' is not assignable to type 'string | undefined'.
+
+2141   spellcastingWarning,
+       ~~~~~~~~~~~~~~~~~~~
+
+  packages/coding-agent/src/sdk.ts:254:2 - The expected type comes from property 'spellcastingWarning' which is declared here on type 'CreateAgentSessionResult'
+    254  spellcastingWarning?: string;
+         ~~~~~~~~~~~~~~~~~~~
+
+packages/coding-agent/src/spellcast/discovery.ts:41:19 - error TS2694: Namespace '"node:fs/promises"' has no exported member 'Dirent'.
+
+41   let entries: fs.Dirent[];
+                     ~~~~~~
+
+
+Found 2 errors in 2 files.
+
+Errors  Files
+     1  packages/coding-agent/src/sdk.ts:2141
+     1  packages/coding-agent/src/spellcast/discovery.ts:41
+
+* Context
+=bun check:ts= reports 2 TypeScript errors and 1 Biome lint warning across three files. All are mechanical type/lint fixes requiring no design decisions.
+
+Errors:
+1. =packages/coding-agent/src/sdk.ts:2141= — =string | null= assigned to =string | undefined= property
+2. =packages/coding-agent/src/spellcast/discovery.ts:41= — =fs.Dirent= not exported from =node:fs/promises= namespace
+3. =packages/telegram-bridge/test/log-viewer.test.ts:45= — unused variable =stopServer=
+
+All three fixes are independent single-line changes (or renames in case of fix 3).
+
+* Verification
+#+begin_src bash
+bun check:ts
+#+end_src
+Must exit 0 with no errors and no warnings.
+
+* Execution Manifest
+All fixes are independent and can be applied in parallel.
+
+** Wave 1
+- [[id:BUG-087-fix-bun-checkts-failures-2-ts-errors-1-l]] — Fix all three issues (3 files, 5 changed lines total)
+
+** Completion [2026-04-02]
+*** Verification
+- =bun check:ts= → exit 0, zero errors, zero warnings
+  #+begin_example
+  Checked 1598 files in 1546ms. No fixes applied.
+  #+end_example
+
+*** Artifacts
+Three files changed:
+1. =packages/coding-agent/src/sdk.ts= line 2141: =spellcastingWarning: spellcastingWarning ?? undefined,= (null→undefined coercion)
+2. =packages/coding-agent/src/spellcast/discovery.ts= lines 1-2, 42: added =import type { Dirent } from "node:fs"= and used =Dirent[]= type annotation
+3. =packages/telegram-bridge/test/log-viewer.test.ts= lines 45, 115, 128: renamed =stopServer= → =_stopServer=
+
+*** Deviations
+None.

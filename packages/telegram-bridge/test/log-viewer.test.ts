@@ -42,7 +42,7 @@ function buildConfig(port: number): TelegramBridgeConfig {
 }
 
 describe("startLogViewer", () => {
-	let stopServer: (() => void) | undefined;
+	let _stopServer: (() => void) | undefined;
 	let baseUrl = "";
 	let tempDir = "";
 
@@ -112,7 +112,7 @@ describe("startLogViewer", () => {
 			const config = buildConfig(port);
 			const s = startLogViewer(config, provider);
 			if (s) {
-				stopServer = () => s.stop(true);
+				_stopServer = () => s.stop(true);
 				baseUrl = `http://127.0.0.1:${port}`;
 				break;
 			}
@@ -125,7 +125,7 @@ describe("startLogViewer", () => {
 	});
 
 	afterAll(async () => {
-		stopServer?.();
+		_stopServer?.();
 		if (tempDir) {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
