@@ -81,6 +81,38 @@ describe("startSpellServer lifecycle", () => {
 		}
 	});
 
+	it("passes the operator action bridge into the telegram bot service", async () => {
+		const config = await loadConfig(
+			await createConfigDir({
+				"server.kdl": VALID_SERVER_KDL,
+				"autonomy.kdl": VALID_MANIFEST_KDL,
+				"channels.kdl": FULL_CHANNELS_KDL,
+			}),
+		);
+		const fakeBotService = new FakeTelegramBotService();
+		const operatorActionHandler = () => ({
+			articleId: "article-1",
+			workflowState: "FEED_APPROVED",
+			triggeredGoals: ["feed-delivery-goal"],
+			duplicate: false,
+			downstreamJobs: [],
+		});
+		let receivedOptions: { operatorActionBridge?: unknown } | undefined;
+		const server = await startSpellServer(config, process.cwd(), {
+			operatorActionHandler,
+			createTelegramBotService: options => {
+				receivedOptions = options;
+				return fakeBotService;
+			},
+		});
+
+		try {
+			expect(receivedOptions?.operatorActionBridge).toBe(operatorActionHandler);
+		} finally {
+			await server.stop();
+		}
+	});
+
 	it("stays in notification-only mode for minimal telegram config", async () => {
 		const config = await loadConfig(
 			await createConfigDir({

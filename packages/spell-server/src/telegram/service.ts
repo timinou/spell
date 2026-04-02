@@ -1,5 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { Bot } from "grammy";
+import type { OperatorActionHandler } from "../http/routes/operator-actions";
 import type { AuthContext } from "./bot/auth";
 import { authMiddleware } from "./bot/auth";
 import { createCommandRouter, createMessageHandler, type TelegramBot } from "./bot/bot";
@@ -11,6 +12,7 @@ import type { TelegramBridgeConfig } from "./types";
 
 export interface TelegramBotServiceOptions {
 	config: TelegramBridgeConfig;
+	operatorActionBridge?: OperatorActionHandler;
 }
 
 interface TelegramBotServiceDependencies {
@@ -32,12 +34,14 @@ export class TelegramBotService {
 	#pollingTask: Promise<void> | null = null;
 	#started = false;
 	#createBot: (token: string) => TelegramBot;
+	#operatorActionBridge?: OperatorActionHandler;
 
 	constructor(options: TelegramBotServiceOptions, dependencies: TelegramBotServiceDependencies = {}) {
 		this.#config = options.config;
 		this.#processManager = new ProcessManager(this.#config);
 		this.#tokenStore = new TokenStore();
 		this.#createBot = dependencies.createBot ?? (token => new Bot<AuthContext>(token));
+		this.#operatorActionBridge = options.operatorActionBridge;
 	}
 
 	get processManager(): ProcessManager {
@@ -72,6 +76,7 @@ export class TelegramBotService {
 				config: this.#config,
 				processManager: this.#processManager,
 				telegramPrompt,
+				operatorActionBridge: this.#operatorActionBridge,
 			};
 
 			bot.use(authMiddleware(this.#config, this.#tokenStore));
