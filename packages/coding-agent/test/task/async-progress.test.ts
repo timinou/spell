@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { AsyncJobManager } from "../../src/async/job-manager";
 import { Settings } from "../../src/config/settings";
-import { TaskTool } from "../../src/task";
 import * as discoveryModule from "../../src/task/discovery";
 import * as executorModule from "../../src/task/executor";
 import type { AgentDefinition, AgentProgress, SingleResult, TaskToolDetails } from "../../src/task/types";
@@ -120,6 +119,7 @@ describe("TaskTool async retry progress", () => {
 			return createResult(options.id, transcriptPath);
 		});
 
+		const { TaskTool } = await import("../../src/task/index");
 		const tool = await TaskTool.create(session);
 		const updates: TaskToolDetails[] = [];
 		const startResult = await tool.execute(
@@ -159,5 +159,60 @@ describe("TaskTool async retry progress", () => {
 		expect(awaitText).toContain("usage limit reached");
 
 		await session.asyncJobManager.waitForAll();
+	});
+
+	it("does not double-count scheduling failures in completion text", async () => {
+		const settings = Settings.isolated({
+			"async.enabled": true,
+			"task.isolation.mode": "none",
+			"task.maxConcurrency": 3,
+			"todo.enabled": false,
+		});
+		session = createSession(tempDir, settings);
+
+		let callCount = 0;
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			callCount += 1;
+			if (callCount === 1) {
+				await Bun.sleep(30);
+				return createResult(options.id, path.join(tempDir, "artifacts", `${options.id}.jsonl`));
+			}
+			throw new Error("register failed");
+		});
+
+		const originalRegister = session.asyncJobManager.register.bind(session.asyncJobManager);
+		let registerCount = 0;
+		vi.spyOn(session.asyncJobManager, "register").mockImplementation((type, label, run, options) => {
+			registerCount += 1;
+			if (registerCount === 2) {
+				throw new Error("registration failed");
+			}
+			return originalRegister(type, label, run, options);
+		});
+
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(session);
+		const updates: { text: string }[] = [];
+		await tool.execute(
+			"call-double-count",
+			{
+				agent: "task",
+				tasks: [
+					{ id: "t1", description: "Task 1", assignment: "## Target\n- Task: 1" },
+					{ id: "t2", description: "Task 2", assignment: "## Target\n- Task: 2" },
+				],
+			},
+			undefined,
+			update => {
+				const text = update.content?.find(part => part.type === "text")?.text;
+				if (text) updates.push({ text });
+			},
+		);
+
+		await session.asyncJobManager.waitForAll();
+
+		const completionUpdate = updates.find(update => update.text.includes("Background task batch complete"));
+		expect(completionUpdate?.text).toContain("1 failed");
+		expect(completionUpdate?.text).not.toContain("2 failed");
 	});
 });

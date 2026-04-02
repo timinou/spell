@@ -1,0 +1,97 @@
+#+TITLE: Harden task auto-roster post-audit
+#+STATE: DONE
+#+SESSION_ID: 14aa280ba5c21ae8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T23-39-48-247Z_14aa280ba5c21ae8.jsonl]]
+#+CUSTOM_ID: PLAN-078-harden-task-auto-roster-post-audit
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-02]: All 5 bugs fixed, 17 new tests, 88 existing tests pass, type-check clean.
+
+
+* Context
+
+** Problem
+Post-implementation audit of PLAN-077 (task auto-roster) identified 5 bugs across 3 categories: serialization bypass, orphan state, and UX regression. All issues are in ~packages/coding-agent/src/task/index.ts~ and ~packages/coding-agent/src/tools/todo-write.ts~.
+
+** Approach
+All 5 bugs are code-independent (Metis gap analysis confirmed no real cross-dependencies). Each bug item owns its tests inline (TDD: write tests first, then implement fix). Former standalone test items (FEAT-202, FEAT-203) have been dissolved into BUG-077 and BUG-078 respectively.
+
+** Key Design Decisions
+1. *BUG-077 (reentrancy)*: Use ~AsyncLocalStorage~ from ~node:async_hooks~ instead of depth counter. A depth counter stored in a WeakMap shares state across async contexts and has the same bypass bug as the WeakSet. ALS associates state with the async execution context, correctly distinguishing nested calls (bypass) from concurrent calls (queue).
+2. *BUG-078 (orphan items)*: Guard pattern before ~#autoCreateTodoRefs~: ~if (asyncEnabled && !blocking && !asyncJobManager)~ return error. Preserves sync and async+blocking paths.
+3. *BUG-079 (double-count)*: 4 fix sites (lines 670, 674, 785, 786, 791), not 2. Use ~failedJobs~ as single source of truth; keep ~failedSchedules~ only for text content.
+4. *BUG-080 (synthetic sessionId)*: Use ~sessionId: \"skipped\"~ sentinel in ~#finalizeSkippedTodoRef~. 1-line change, no type modifications to ~TodoDelegation~.
+5. *BUG-081 (phase names)*: Exact-match skip-list for structural headings (Goal, Non-goals, Constraints, API Contract, Acceptance). No substring matching.
+
+** Critical Code Paths
+- ~packages/coding-agent/src/tools/todo-write.ts~ lines 275-301: ~queueTodoMutation~, ~activeTodoMutationSessions~
+- ~packages/coding-agent/src/task/index.ts~ lines 272-283: ~#deriveAutoRosterPhaseName~
+- ~packages/coding-agent/src/task/index.ts~ lines 285-353: ~#autoCreateTodoRefs~, line 320 seeds ~sessionId: \"pending\"~
+- ~packages/coding-agent/src/task/index.ts~ lines 382-408: ~#finalizeSkippedTodoRef~
+- ~packages/coding-agent/src/task/index.ts~ lines 410-438: ~#mergeTodoRefDelegation~, line 429 guards on sessionId
+- ~packages/coding-agent/src/task/index.ts~ lines 468-480: ~#finalizeTodoRef~
+- ~packages/coding-agent/src/task/index.ts~ lines 481-510: ~execute()~ preamble ordering
+- ~packages/coding-agent/src/task/index.ts~ lines 606-622: ~markTaskTerminal~
+- ~packages/coding-agent/src/task/index.ts~ lines 668-677: ~emitCompletionIfDone~ double-count
+- ~packages/coding-agent/src/task/index.ts~ lines 785-791: ~reportProgress~ double-count (second site)
+- ~packages/coding-agent/src/task/index.ts~ lines 828-835: schedule catch
+
+* Verification
+
+** Type checking
+#+begin_src sh
+bun check:ts
+#+end_src
+
+** New tests (per-item, TDD)
+#+begin_src sh
+bun test packages/coding-agent/test/tools/todo-write-serialization.test.ts
+bun test packages/coding-agent/test/task/auto-roster.test.ts
+bun test packages/coding-agent/test/task/async-progress.test.ts
+#+end_src
+
+** Existing test suite (no regressions)
+#+begin_src sh
+bun test packages/coding-agent/test/task/todo-ref-lifecycle.test.ts
+bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts
+bun test packages/coding-agent/test/tools/todo-write-gates.test.ts
+bun test packages/coding-agent/test/task/batch-scheduler.test.ts
+bun test packages/coding-agent/test/task/task-blockers.test.ts
+bun test packages/coding-agent/test/task/auto-roster-settings.test.ts
+bun test packages/coding-agent/test/task/schema-extensions.test.ts
+bun test packages/coding-agent/test/prompts/auto-roster-prompts.test.ts
+#+end_src
+
+* Execution Manifest
+** all-parallel                                                      :wave:
+All 5 bugs are code-independent. Each has internal sub-outline dependencies (write-tests -> fix) but no cross-item dependencies.
+- [[id:BUG-077-queuetodomutation-reentrancy-bypass-allo]] Fix queueTodoMutation reentrancy bypass (1h, #A)
+- [[id:BUG-078-auto-roster-creates-orphan-pending-items]] Fix orphan pending items when async manager missing (20m, #A)
+- [[id:BUG-079-async-completion-text-double-counts-sche]] Fix async completion double-count (15m, #B)
+- [[id:BUG-080-failed-before-spawn-roster-items-retain]] Clear synthetic sessionId on failed-before-spawn items (30m, #B)
+- [[id:BUG-081-auto-roster-phase-name-derivation-picks]] Improve phase name derivation (20m, #C)
+
+** Completion [2026-04-02]
+
+*** Verification
+
+| Command | Result |
+|---|---|
+| ~bun check:ts~ | Pass (only pre-existing errors in sdk.ts, spellcast/discovery.ts) |
+| ~bun test packages/coding-agent/test/tools/todo-write-serialization.test.ts~ | 6 pass, 0 fail |
+| ~bun test packages/coding-agent/test/task/auto-roster.test.ts~ | 17 pass, 0 fail |
+| ~bun test packages/coding-agent/test/task/async-progress.test.ts~ | 2 pass, 0 fail |
+| Existing test suite (8 files) | 88 pass, 0 fail |
+
+Total new tests: 17 (6 serialization + 3 orphan guard + 1 double-count + 2 sessionId + 5 phase names)
+
+*** Artifacts
+
+- ~packages/coding-agent/src/tools/todo-write.ts~ -- BUG-077: Replaced WeakSet with AsyncLocalStorage
+- ~packages/coding-agent/src/task/index.ts~ -- BUG-078/079/080/081: Guard reorder, double-count fix, sessionId sentinel, structural heading skip
+- ~packages/coding-agent/test/tools/todo-write-serialization.test.ts~ -- NEW: 6 serialization tests
+- ~packages/coding-agent/test/task/auto-roster.test.ts~ -- Extended: 10 new tests (orphan guard, sessionId, phase names)
+- ~packages/coding-agent/test/task/async-progress.test.ts~ -- Extended: 1 new double-count regression test
+
+*** Deviations
+None.

@@ -63,7 +63,7 @@ function createSession(
 		getArtifactsDir: () => path.join(tempDir, "artifacts"),
 		getSessionId: () => "parent-session",
 		getTodoPhases: () => phases,
-		setTodoPhases: next => {
+		setTodoPhases: (next: TodoPhase[]) => {
 			phases = structuredClone(next);
 			snapshots.push(structuredClone(next));
 		},
@@ -279,8 +279,8 @@ describe("TaskTool auto-roster", () => {
 		});
 		const session = createSession(tempDir, settings);
 		const controller = new AbortController();
-		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
-			await new Promise<never>((_, reject) => {
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(options => {
+			return new Promise<SingleResult>((_, reject) => {
 				options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
 			});
 		});
@@ -305,6 +305,80 @@ describe("TaskTool auto-roster", () => {
 		expect(finalTasks.some(task => task.status === "pending")).toBe(false);
 	});
 
+	it("abort sets delegation sessionId to skipped, not pending", async () => {
+		const settings = Settings.isolated({
+			"async.enabled": false,
+			"task.isolation.mode": "none",
+			"task.maxConcurrency": 1,
+			"todo.enabled": true,
+			"task.autoRoster": true,
+		});
+		const session = createSession(tempDir, settings);
+		const controller = new AbortController();
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(options => {
+			return new Promise<SingleResult>((_, reject) => {
+				options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+			});
+		});
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(session);
+		void Bun.sleep(10).then(() => controller.abort("stop"));
+
+		await tool.execute(
+			"call-abort-sessionid",
+			{
+				agent: "task",
+				tasks: [
+					{ id: "a", description: "A", assignment: "## Target\n- Task: A" },
+					{ id: "b", description: "B", assignment: "## Target\n- Task: B", blockers: ["a"] },
+				],
+			},
+			controller.signal,
+		);
+
+		const finalTasks = session.getCurrentPhases()[0]?.tasks ?? [];
+		for (const task of finalTasks) {
+			expect(task.delegation?.sessionId).not.toBe("pending");
+			expect(task.delegation?.sessionId).toBe("skipped");
+		}
+	});
+
+	it("failed task delegation includes error in result", async () => {
+		const settings = Settings.isolated({
+			"async.enabled": false,
+			"task.isolation.mode": "none",
+			"task.maxConcurrency": 1,
+			"todo.enabled": true,
+			"task.autoRoster": true,
+		});
+		const session = createSession(tempDir, settings);
+		const controller = new AbortController();
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(options => {
+			return new Promise<SingleResult>((_, reject) => {
+				options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+			});
+		});
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(session);
+		void Bun.sleep(10).then(() => controller.abort("immediate"));
+
+		await tool.execute(
+			"call-abort-result",
+			{
+				agent: "task",
+				tasks: [
+					{ id: "a", description: "A", assignment: "## Target\n- Task: A" },
+					{ id: "b", description: "B", assignment: "## Target\n- Task: B", blockers: ["a"] },
+				],
+			},
+			controller.signal,
+		);
+
+		const finalTasks = session.getCurrentPhases()[0]?.tasks ?? [];
+		expect(finalTasks[0]?.delegation?.result?.error).toBeDefined();
+		expect(finalTasks[1]?.delegation?.result?.error).toBeDefined();
+	});
+
 	it("suppresses auto-roster when todos are disabled", async () => {
 		const settings = Settings.isolated({
 			"async.enabled": false,
@@ -324,5 +398,188 @@ describe("TaskTool auto-roster", () => {
 		});
 
 		expect(session.getCurrentPhases()).toEqual([]);
+	});
+
+	it("returns error without orphan items when async enabled but no manager", async () => {
+		const settings = Settings.isolated({
+			"async.enabled": true,
+			"task.isolation.mode": "none",
+			"todo.enabled": true,
+			"task.autoRoster": true,
+		});
+		const session = createSession(tempDir, settings);
+		const transcriptPath = path.join(tempDir, "artifacts", "subtask.jsonl");
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(createResult("one", "Inspect", transcriptPath));
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(session);
+
+		const result = await tool.execute("call-async-no-manager", {
+			agent: "task",
+			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
+		});
+
+		const text = result.content.find(p => p.type === "text")?.text ?? "";
+		expect(text).toContain("no async job manager");
+		expect(session.getCurrentPhases()).toEqual([]);
+	});
+
+	it("sync path still auto-creates roster items after guard", async () => {
+		const settings = Settings.isolated({
+			"async.enabled": false,
+			"task.isolation.mode": "none",
+			"todo.enabled": true,
+			"task.autoRoster": true,
+		});
+		const session = createSession(tempDir, settings);
+		const transcriptPath = path.join(tempDir, "artifacts", "subtask.jsonl");
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(createResult("one", "Inspect", transcriptPath));
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(session);
+
+		await tool.execute("call-sync-auto-roster", {
+			agent: "task",
+			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
+		});
+
+		expect(session.snapshots.length).toBeGreaterThan(0);
+		expect(session.snapshots[0]?.[0]?.tasks[0]).toMatchObject({ content: "Inspect" });
+	});
+
+	it("async + blocking agent still creates roster items", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [{ ...baseAgent, blocking: true }],
+			projectAgentsDir: null,
+		});
+		const settings = Settings.isolated({
+			"async.enabled": true,
+			"task.isolation.mode": "none",
+			"todo.enabled": true,
+			"task.autoRoster": true,
+		});
+		const session = createSession(tempDir, settings);
+		const transcriptPath = path.join(tempDir, "artifacts", "subtask.jsonl");
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(createResult("one", "Inspect", transcriptPath));
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(session);
+
+		await tool.execute("call-async-blocking", {
+			agent: "task",
+			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
+		});
+
+		expect(session.snapshots.length).toBeGreaterThan(0);
+		expect(session.snapshots[0]?.[0]?.tasks[0]).toMatchObject({ content: "Inspect" });
+	});
+
+	describe("phase name derivation", () => {
+		it("skips structural heading Goal and falls back to Tasks", async () => {
+			const settings = Settings.isolated({
+				"async.enabled": false,
+				"task.isolation.mode": "none",
+				"todo.enabled": true,
+				"task.autoRoster": true,
+			});
+			const session = createSession(tempDir, settings);
+			const transcriptPath = path.join(tempDir, "artifacts", "subtask.jsonl");
+			vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(createResult("one", "Inspect", transcriptPath));
+			const { TaskTool } = await import("../../src/task/index");
+			const tool = await TaskTool.create(session);
+
+			await tool.execute("call-phase-goal", {
+				agent: "task",
+				context: "## Goal\nRename symbols",
+				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target" }],
+			});
+
+			expect(session.snapshots[0]?.[0]?.name).toBe("Tasks");
+		});
+
+		it("uses first non-structural heading", async () => {
+			const settings = Settings.isolated({
+				"async.enabled": false,
+				"task.isolation.mode": "none",
+				"todo.enabled": true,
+				"task.autoRoster": true,
+			});
+			const session = createSession(tempDir, settings);
+			const transcriptPath = path.join(tempDir, "artifacts", "subtask.jsonl");
+			vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(createResult("one", "Inspect", transcriptPath));
+			const { TaskTool } = await import("../../src/task/index");
+			const tool = await TaskTool.create(session);
+
+			await tool.execute("call-phase-investigation", {
+				agent: "task",
+				context: "# Investigation\n## Goal\nRename symbols",
+				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target" }],
+			});
+
+			expect(session.snapshots[0]?.[0]?.name).toBe("Investigation");
+		});
+
+		it("falls back to Tasks when all headings are structural", async () => {
+			const settings = Settings.isolated({
+				"async.enabled": false,
+				"task.isolation.mode": "none",
+				"todo.enabled": true,
+				"task.autoRoster": true,
+			});
+			const session = createSession(tempDir, settings);
+			const transcriptPath = path.join(tempDir, "artifacts", "subtask.jsonl");
+			vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(createResult("one", "Inspect", transcriptPath));
+			const { TaskTool } = await import("../../src/task/index");
+			const tool = await TaskTool.create(session);
+
+			await tool.execute("call-phase-all-structural", {
+				agent: "task",
+				context: "## Goal\n## Constraints\n## Acceptance",
+				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target" }],
+			});
+
+			expect(session.snapshots[0]?.[0]?.name).toBe("Tasks");
+		});
+
+		it("does not skip headings that contain skip-list word as prefix", async () => {
+			const settings = Settings.isolated({
+				"async.enabled": false,
+				"task.isolation.mode": "none",
+				"todo.enabled": true,
+				"task.autoRoster": true,
+			});
+			const session = createSession(tempDir, settings);
+			const transcriptPath = path.join(tempDir, "artifacts", "subtask.jsonl");
+			vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(createResult("one", "Inspect", transcriptPath));
+			const { TaskTool } = await import("../../src/task/index");
+			const tool = await TaskTool.create(session);
+
+			await tool.execute("call-phase-goals-prefix", {
+				agent: "task",
+				context: "## Goals for Sprint 3\nSome content",
+				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target" }],
+			});
+
+			expect(session.snapshots[0]?.[0]?.name).toBe("Goals for Sprint 3");
+		});
+
+		it("skips Non-goals and API Contract headings", async () => {
+			const settings = Settings.isolated({
+				"async.enabled": false,
+				"task.isolation.mode": "none",
+				"todo.enabled": true,
+				"task.autoRoster": true,
+			});
+			const session = createSession(tempDir, settings);
+			const transcriptPath = path.join(tempDir, "artifacts", "subtask.jsonl");
+			vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(createResult("one", "Inspect", transcriptPath));
+			const { TaskTool } = await import("../../src/task/index");
+			const tool = await TaskTool.create(session);
+
+			await tool.execute("call-phase-nogoals", {
+				agent: "task",
+				context: "## Non-goals\nDon't change tests\n## API Contract\nExact types",
+				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target" }],
+			});
+
+			expect(session.snapshots[0]?.[0]?.name).toBe("Tasks");
+		});
 	});
 });

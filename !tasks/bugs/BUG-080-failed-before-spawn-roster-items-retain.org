@@ -1,0 +1,73 @@
+#+TITLE: Failed-before-spawn roster items retain synthetic sessionId pending
+#+STATE: DONE
+#+SESSION_ID: 14aa280ba5c21ae8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T23-39-48-247Z_14aa280ba5c21ae8.jsonl]]
+#+CUSTOM_ID: BUG-080-failed-before-spawn-roster-items-retain
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: backend
+#+FILES: packages/coding-agent/src/task/index.ts
+#+DEPENDS: 
+
+NOTE [2026-04-02]: Added sessionId: skipped to finalizeSkippedTodoRef synthetic result. 2 new tests pass.
+
+* Scope
+** In scope
+- Clear synthetic ~sessionId: "pending"~ from failed-before-spawn roster items
+- Fix in ~#finalizeSkippedTodoRef~ at ~packages/coding-agent/src/task/index.ts~ (line 382-408)
+- Use ~sessionId: "skipped"~ sentinel in synthetic ~SingleResult~
+** Out of scope
+- ~TodoDelegation~ type -- ~sessionId~ stays ~string~ (required), no type change
+- ~#mergeTodoRefDelegation~ internals -- sentinel flows through existing logic
+- ~#autoCreateTodoRefs~ initial ~sessionId: "pending"~ -- correct for items that DO spawn
+** Rationale
+~#autoCreateTodoRefs~ seeds items with ~delegation: { sessionId: "pending", agent }~ (line 320). On pre-spawn failure, ~#finalizeSkippedTodoRef~ creates synthetic result without ~sessionId~. ~#buildTodoDelegation~ returns ~undefined~, so delegation merge is skipped. ~#mergeTodoRefDelegation~ patches ~result~ at line 477 but ~sessionId: "pending"~ survives.
+
+The ~"skipped"~ sentinel passes the ~if (!sessionId) return~ guard at line 429 and overwrites ~"pending"~.
+
+* Tests
+File: ~packages/coding-agent/test/task/auto-roster.test.ts~ (extend existing)
+
+** Scenario 1: Abort clears synthetic sessionId
+- Extend existing abort test (line 272) with assertion: ~delegation.sessionId !== "pending"~
+- Both task A (aborted) and B (cascade-failed) should have ~delegation.sessionId === "skipped"~
+
+** Scenario 2: Predecessor failure clears sessionId for all dependents
+- Batch: A -> B -> C. Mock A to fail.
+- B and C cascade-fail via ~failDependents~
+- Assert all have ~delegation.sessionId === "skipped"~
+
+** Scenario 3: delegation.result populated on skip
+- Assert ~delegation.result~ contains error message after finalization
+
+* Implementation
+** Write sessionId clearing tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-080::write-tests
+:END:
+- File: ~packages/coding-agent/test/task/auto-roster.test.ts~
+- Extend abort test with sessionId assertions
+- Add predecessor failure test (3-task chain)
+- Add delegation.result assertion
+
+** Add sessionId skipped to finalizeSkippedTodoRef
+:PROPERTIES:
+:CUSTOM_ID: BUG-080::fix-sessionid
+:DEPENDS: BUG-080::write-tests
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~
+- In ~#finalizeSkippedTodoRef~ (line 382-408), add ~sessionId: "skipped"~ to synthetic SingleResult at line 393
+- This makes ~#buildTodoDelegation~ return ~{ agent, sessionId: "skipped" }~ instead of ~undefined~
+- ~#mergeTodoRefDelegation~ overwrites ~"pending"~ with ~"skipped"~
+- 1-line change
+
+* Edge Cases
+- Successfully spawned tasks: ~sessionId~ overwritten with real ID by ~#markTodoRefStarted~ -- unaffected
+- ~"skipped"~ is not navigable -- UI tools should handle missing sessions gracefully
+- Schedule-failure path (line 833): also calls ~#finalizeSkippedTodoRef~ -- same fix applies
+- ~abortPendingTasks~ (line 648): also calls ~#finalizeSkippedTodoRef~ -- same fix applies
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/task/auto-roster.test.ts~ passes with new assertions
+- No auto-created task has ~delegation.sessionId === "pending"~ after failure/abort/cascade
+- ~bun check:ts~ passes

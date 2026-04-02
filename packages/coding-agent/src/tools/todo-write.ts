@@ -1,3 +1,4 @@
+import * as async_hooks from "node:async_hooks";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { StringEnum } from "@oh-my-pi/pi-ai";
 import {
@@ -273,23 +274,14 @@ export function cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
 }
 
 const todoMutationQueues = new WeakMap<ToolSession, Promise<unknown>>();
-const activeTodoMutationSessions = new WeakSet<ToolSession>();
+const todoMutationContext = new async_hooks.AsyncLocalStorage<true>();
 
 export function queueTodoMutation<T>(session: ToolSession, action: () => Promise<T>): Promise<T> {
-	if (activeTodoMutationSessions.has(session)) {
+	if (todoMutationContext.getStore()) {
 		return action();
 	}
 	const previous = todoMutationQueues.get(session) ?? Promise.resolve();
-	const next = previous
-		.catch(() => undefined)
-		.then(async () => {
-			activeTodoMutationSessions.add(session);
-			try {
-				return await action();
-			} finally {
-				activeTodoMutationSessions.delete(session);
-			}
-		});
+	const next = previous.catch(() => undefined).then(() => todoMutationContext.run(true, action));
 	todoMutationQueues.set(
 		session,
 		next.then(

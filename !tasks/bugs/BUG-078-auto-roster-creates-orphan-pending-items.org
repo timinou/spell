@@ -1,0 +1,83 @@
+#+TITLE: Auto-roster creates orphan pending items when async manager is missing
+#+STATE: DONE
+#+SESSION_ID: 14aa280ba5c21ae8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T23-39-48-247Z_14aa280ba5c21ae8.jsonl]]
+#+CUSTOM_ID: BUG-078-auto-roster-creates-orphan-pending-items
+#+EFFORT: 20m
+#+PRIORITY: #A
+#+LAYER: backend
+#+FILES: packages/coding-agent/src/task/index.ts
+#+DEPENDS: 
+
+NOTE [2026-04-02]: Added async-no-manager guard before autoCreateTodoRefs. 3 new tests pass.
+
+* Scope
+** In scope
+- Reorder ~execute()~ preamble in ~packages/coding-agent/src/task/index.ts~ to check for missing ~asyncJobManager~ BEFORE calling ~#autoCreateTodoRefs()~
+- Add guard pattern: ~if (asyncEnabled && selectedAgent?.blocking !== true && !this.session.asyncJobManager)~ return error
+** Out of scope
+- The sync execution path -- must continue to work with auto-roster
+- The ~#autoCreateTodoRefs~ method internals -- only call ordering changes
+- The ~asyncJobManager~ availability logic itself
+** Rationale
+Currently ~#autoCreateTodoRefs()~ (line 497) runs before the ~asyncJobManager~ null check (line 502). When async is enabled but no manager exists, roster items are created then abandoned on early return.
+
+* Tests
+File: ~packages/coding-agent/test/task/auto-roster.test.ts~ (extend existing)
+
+** Scenario 1: Async-no-manager returns error without orphan items
+- Session with ~async.enabled=true~, ~task.autoRoster=true~, no ~asyncJobManager~
+- Execute task dispatch
+- Assert: result text contains "no async job manager" or similar
+- Assert: session phases remain empty (no orphan pending items)
+
+** Scenario 2: Sync path still auto-creates after fix (regression guard)
+- Session with ~async.enabled=false~, ~task.autoRoster=true~
+- Execute task dispatch with mocked subprocess
+- Assert: auto-roster items created as before
+
+** Scenario 3: Async + blocking agent still auto-creates
+- Session with ~async.enabled=true~, ~task.autoRoster=true~, agent with ~blocking=true~
+- Execute task dispatch
+- Assert: sync path taken AND auto-roster items created
+
+* Implementation
+** Write async-no-manager and regression tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-078::write-tests
+:END:
+- File: ~packages/coding-agent/test/task/auto-roster.test.ts~
+- Add 3 new test cases in existing describe block
+- Scenario 1: session WITHOUT asyncJobManager, async.enabled=true
+- Scenario 2: existing pattern, add explicit dedicated test
+- Scenario 3: agent with blocking=true, async.enabled=true
+
+** Reorder execute preamble with guard pattern
+:PROPERTIES:
+:CUSTOM_ID: BUG-078::fix-ordering
+:DEPENDS: BUG-078::write-tests
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~
+- After ~taskValidationError~ check (line 491-496), add early return guard:
+  #+begin_src typescript
+  if (asyncEnabled && selectedAgent?.blocking !== true && !this.session.asyncJobManager) {
+      return {
+          content: [{ type: "text", text: "Async execution is enabled but no async job manager is available." }],
+          details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+      };
+  }
+  #+end_src
+- Keep ~#autoCreateTodoRefs()~ at current position (line 497)
+- Remove duplicate ~asyncJobManager~ null check at lines 502-507
+
+* Edge Cases
+- ~async.enabled=true~, ~blocking=true~: sync path taken, auto-roster works (guard checks blocking !== true)
+- ~async.enabled=false~: guard short-circuits, unchanged
+- ~asyncJobManager~ present: guard short-circuits, unchanged
+- Signal already aborted: ~#autoCreateTodoRefs~ handles this (line 497: ~signal?.aborted ? rawTasks : await ...~)
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/task/auto-roster.test.ts~ passes all new + existing tests
+- Session phases empty after async-no-manager path
+- Sync and async+blocking paths still create roster items
+- ~bun check:ts~ passes

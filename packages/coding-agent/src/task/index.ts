@@ -146,6 +146,8 @@ function renderDescription(
 	});
 }
 
+const STRUCTURAL_HEADINGS = new Set(["Goal", "Non-goals", "Constraints", "API Contract", "Acceptance"]);
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tool Class
 // ═══════════════════════════════════════════════════════════════════════════
@@ -272,12 +274,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	#deriveAutoRosterPhaseName(params: TaskParams): string {
 		const explicit = params.phase?.trim();
 		if (explicit) return explicit;
-		const heading = params.context
-			?.split("\n")
-			.map(line => line.trim())
-			.find(line => /^#{1,6}\s+\S/.test(line));
-		if (heading) {
-			return heading.replace(/^#{1,6}\s+/, "").trim();
+		const lines = params.context?.split("\n").map(line => line.trim()) ?? [];
+		for (const line of lines) {
+			if (!/^#{1,6}\s+\S/.test(line)) continue;
+			const text = line.replace(/^#{1,6}\s+/, "").trim();
+			if (!STRUCTURAL_HEADINGS.has(text)) return text;
 		}
 		return "Tasks";
 	}
@@ -392,6 +393,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			id: task.id,
 			agent,
 			agentSource,
+			sessionId: "skipped",
 			task: task.description,
 			assignment: task.assignment,
 			description: task.description,
@@ -495,19 +497,19 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
 			};
 		}
+		if (asyncEnabled && selectedAgent?.blocking !== true && !this.session.asyncJobManager) {
+			return {
+				content: [{ type: "text", text: "Async execution is enabled but no async job manager is available." }],
+				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+			};
+		}
 		const preparedTasks = signal?.aborted ? rawTasks : await this.#autoCreateTodoRefs(params, selectedAgent);
 		const dispatchParams = preparedTasks === params.tasks ? params : { ...params, tasks: preparedTasks };
 		if (!asyncEnabled || selectedAgent?.blocking === true) {
 			return this.#executeSync(_toolCallId, dispatchParams, signal, onUpdate);
 		}
 
-		const manager = this.session.asyncJobManager;
-		if (!manager) {
-			return {
-				content: [{ type: "text", text: "Async execution is enabled but no async job manager is available." }],
-				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
-			};
-		}
+		const manager = this.session.asyncJobManager!;
 
 		const taskItems = dispatchParams.tasks ?? [];
 		if (taskItems.length === 0) {
@@ -667,11 +669,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		const emitCompletionIfDone = (): void => {
 			if (completedJobs !== taskItems.length) return;
-			const failed = failedJobs > 0 || failedSchedules.length > 0;
+			const failed = failedJobs > 0;
 			emitAsyncUpdate(
 				failed ? "failed" : "completed",
 				failed
-					? `Background task batch complete with failures: ${failedJobs + failedSchedules.length} failed.`
+					? `Background task batch complete with failures: ${failedJobs} failed.`
 					: `Background task batch complete: ${completedJobs}/${taskItems.length} finished.`,
 			);
 		};
@@ -782,16 +784,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								const isDone = remaining === 0;
 								await reportProgress(
 									isDone
-										? failedJobs > 0 || failedSchedules.length > 0
-											? `Background task batch complete with failures: ${failedJobs + failedSchedules.length} failed.`
+										? failedJobs > 0
+											? `Background task batch complete with failures: ${failedJobs} failed.`
 											: `Background task batch complete: ${completedJobs}/${taskItems.length} finished.`
 										: `Background task batch progress: ${completedJobs}/${taskItems.length} finished (${remaining} remaining).`,
 									buildAsyncDetails(
-										isDone
-											? failedJobs > 0 || failedSchedules.length > 0
-												? "failed"
-												: "completed"
-											: "running",
+										isDone ? (failedJobs > 0 ? "failed" : "completed") : "running",
 										startedJobs[0]?.jobId ?? label,
 									) as unknown as Record<string, unknown>,
 								);

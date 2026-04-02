@@ -1,0 +1,84 @@
+#+TITLE: Auto-roster phase name derivation picks low-signal context headings
+#+STATE: DONE
+#+SESSION_ID: 14aa280ba5c21ae8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T23-39-48-247Z_14aa280ba5c21ae8.jsonl]]
+#+CUSTOM_ID: BUG-081-auto-roster-phase-name-derivation-picks
+#+EFFORT: 20m
+#+PRIORITY: #C
+#+LAYER: backend
+#+FILES: packages/coding-agent/src/task/index.ts
+
+NOTE [2026-04-02]: Added STRUCTURAL_HEADINGS skip-list to deriveAutoRosterPhaseName. 5 new tests pass.
+
+* Scope
+** In scope
+- Add skip-list of structural headings to ~#deriveAutoRosterPhaseName~ in ~packages/coding-agent/src/task/index.ts~ (lines 272-283)
+- Entries: Goal, Non-goals, Constraints, API Contract, Acceptance (exact match, not substring)
+- When all headings are structural, fall back to "Tasks"
+** Out of scope
+- Explicit ~params.phase~ path -- if provided, used directly (line 274)
+- Fallback "Tasks" default -- correct, just needs to be reached more often
+- Phase naming outside this method
+** Rationale
+The recommended context template starts with ~## Goal~, so omitted ~phase~ values frequently produce "Goal" which doesn't describe the batch.
+
+* Tests
+File: ~packages/coding-agent/test/task/auto-roster.test.ts~ (extend existing)
+
+** Scenario 1: Structural heading skipped, uses fallback
+- Context: ~## Goal
+Rename symbols~
+- Expected: "Tasks" (not "Goal")
+
+** Scenario 2: Non-structural heading used
+- Context: ~# Investigation
+## Goal
+Rename symbols~
+- Expected: "Investigation"
+
+** Scenario 3: No context at all
+- Context: undefined
+- Expected: "Tasks"
+
+** Scenario 4: All headings structural
+- Context: ~## Goal
+## Constraints
+## Acceptance~
+- Expected: "Tasks"
+
+** Scenario 5: Skip-list word as prefix NOT skipped
+- Context: ~## Goals for Sprint 3~
+- Expected: "Goals for Sprint 3" (exact match only)
+
+* Implementation
+** Write phase-name skip-list tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-081::write-tests
+:END:
+- File: ~packages/coding-agent/test/task/auto-roster.test.ts~
+- Add 5 test cases, potentially in nested describe for phase name derivation
+- Test by invoking TaskTool with various context strings and no explicit phase
+- Assert on ~session.snapshots[0]?.[0]?.name~
+
+** Add skip-list to deriveAutoRosterPhaseName
+:PROPERTIES:
+:CUSTOM_ID: BUG-081::fix-derivation
+:DEPENDS: BUG-081::write-tests
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~
+- Add constant: ~const STRUCTURAL_HEADINGS = new Set(["Goal", "Non-goals", "Constraints", "API Contract", "Acceptance"])~
+- Change ~.find()~ to loop/filter: extract heading text, skip if in STRUCTURAL_HEADINGS
+- Pick first non-structural heading; fall back to "Tasks"
+- Use exact match (Set.has), NOT substring
+
+* Edge Cases
+- Case sensitivity: exact case match ("goal" != "Goal")
+- Empty heading text after stripping: skip
+- Code blocks with ~#~ chars: regex ~^#{1,6}\s+\S~ shouldn't match (out of scope)
+- Very long heading text: no truncation needed
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/task/auto-roster.test.ts~ passes all new phase-name tests
+- Context starting with ~## Goal~ produces "Tasks"
+- Explicit ~params.phase~ still takes priority
+- ~bun check:ts~ passes

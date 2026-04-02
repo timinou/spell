@@ -1,0 +1,73 @@
+#+TITLE: Async completion text double-counts scheduling failures
+#+STATE: DONE
+#+SESSION_ID: 14aa280ba5c21ae8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T23-39-48-247Z_14aa280ba5c21ae8.jsonl]]
+#+CUSTOM_ID: BUG-079-async-completion-text-double-counts-sche
+#+EFFORT: 15m
+#+PRIORITY: #B
+#+LAYER: backend
+#+FILES: packages/coding-agent/src/task/index.ts
+
+NOTE [2026-04-02]: Fixed 5 double-count expressions using failedJobs as single source of truth. 1 new test passes.
+
+* Scope
+** In scope
+- Fix double-counting of scheduling failures in async batch completion/progress messages
+- 4 fix sites in ~packages/coding-agent/src/task/index.ts~:
+  - Line 670: boolean check -> ~failedJobs > 0~
+  - Line 674: count -> ~failedJobs~
+  - Line 785: boolean check -> ~failedJobs > 0~
+  - Line 786: count -> ~failedJobs~
+  - Line 791: shares ternary with 785 -- same boolean, same fix
+** Out of scope
+- ~failedSchedules~ array -- keep for text content at lines 846-849 and 862-863
+- ~markTaskTerminal~ function -- correctly tracks all terminal states
+- Schedule catch block at lines 828-835 -- both ~failedSchedules.push~ and ~markTaskTerminal~ needed
+** Rationale
+Scheduling failure at line 831 pushes to ~failedSchedules~ AND line 832 calls ~markTaskTerminal~ which increments ~failedJobs~. ~emitCompletionIfDone~ (line 674) and ~reportProgress~ (line 786) sum both, double-counting.
+
+* Tests
+File: ~packages/coding-agent/test/task/async-progress.test.ts~ (extend existing)
+
+** Scenario 1: Schedule failure reports correct count
+- Batch of 3 tasks where ~manager.register()~ throws for 1 task
+- Assert completion message says "1 failed" not "2 failed"
+
+** Scenario 2: Cascading failures count correctly
+- Batch: A -> B -> C. A fails to schedule.
+- A (schedule failure), B and C cascade-fail via ~failDependents~
+- Assert total failures = 3 (not 4+)
+
+* Implementation
+** Write double-count regression tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-079::write-tests
+:END:
+- File: ~packages/coding-agent/test/task/async-progress.test.ts~
+- Add 2 new test cases
+- AsyncJobManager with mocked register that throws for specific task
+- Capture onUpdate details to verify failure count
+
+** Fix 4 double-count expressions
+:PROPERTIES:
+:CUSTOM_ID: BUG-079::fix-counting
+:DEPENDS: BUG-079::write-tests
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~
+- Line 670: ~failedJobs > 0 || failedSchedules.length > 0~ -> ~failedJobs > 0~
+- Line 674: ~failedJobs + failedSchedules.length~ -> ~failedJobs~
+- Line 785: same pattern -> ~failedJobs > 0~
+- Line 786: same pattern -> ~failedJobs~
+- Line 791: shares ternary -- same boolean -> ~failedJobs > 0~
+- Leave lines 846, 849, 862-863 unchanged (text-only usage)
+
+* Edge Cases
+- No scheduling failures: ~failedJobs~ = 0, boolean check correct
+- All tasks fail to schedule: ~failedJobs~ = N, correct
+- Mixed schedule/runtime failures: ~failedJobs~ is single source of truth
+- Cascading ~failDependents~: each dependent calls ~markTaskTerminal~ once
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/task/async-progress.test.ts~ passes
+- Batch with 1 scheduling failure of 3 tasks reports exactly "1 failed"
+- ~bun check:ts~ passes

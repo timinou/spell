@@ -1,0 +1,84 @@
+#+TITLE: queueTodoMutation reentrancy bypass allows interleaved mutations
+#+STATE: DONE
+#+SESSION_ID: 14aa280ba5c21ae8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T23-39-48-247Z_14aa280ba5c21ae8.jsonl]]
+#+CUSTOM_ID: BUG-077-queuetodomutation-reentrancy-bypass-allo
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: backend
+#+FILES: packages/coding-agent/src/tools/todo-write.ts
+
+NOTE [2026-04-02]: Replaced WeakSet guard with AsyncLocalStorage. 6 serialization tests pass.
+
+* Scope
+** In scope
+- Replace the ~WeakSet<ToolSession>~ reentrancy guard in ~queueTodoMutation~ with ~AsyncLocalStorage~ from ~node:async_hooks~
+- File: ~packages/coding-agent/src/tools/todo-write.ts~ (lines 275-301)
+- The ~activeTodoMutationSessions~ WeakSet and the ~if (activeTodoMutationSessions.has(session))~ check
+** Out of scope
+- The per-session queue chain (~todoMutationQueues~ WeakMap) is correct and unchanged
+- TodoWriteTool.execute internals -- only the queue wrapper changes
+- Any changes to task/index.ts
+** Rationale
+The WeakSet is a binary per-session flag. It cannot distinguish nested calls (same async chain, should bypass) from concurrent calls (different async chain, must queue). AsyncLocalStorage associates state with the async execution context, solving this correctly.
+
+* Tests
+File: ~packages/coding-agent/test/tools/todo-write-serialization.test.ts~ (NEW)
+
+Test sequencing: write tests FIRST to define expected serialization behavior, then implement the fix.
+
+** Scenario 1: Concurrent serialization
+Fire two ~queueTodoMutation~ calls on the same session without awaiting the first. Assert the second starts only after the first completes. Use ordering arrays to prove sequencing.
+
+** Scenario 2: Nested reentrancy (no deadlock)
+A mutation that itself calls ~queueTodoMutation~ internally (simulating ~TodoWriteTool.execute~ -> ~#autoCreateTodoRefs~ -> ~TodoWriteTool.execute~). Assert nested call runs inline, no deadlock.
+
+** Scenario 3: Three-way consistency
+Three concurrent mutations that each increment a counter in session state. Assert final counter equals 3 (no lost updates).
+
+** Scenario 4: Cross-tool interleave
+Simulate ~TodoWriteTool.execute~ and ~TaskTool~ lifecycle mutation running concurrently. Assert phases are consistent after both complete.
+
+** Scenario 5: Error propagation through queue
+Queue a throwing action. Assert the caller receives the rejection. The ~.catch(() => undefined)~ at line 284 is for chaining only -- the returned promise from ~queueTodoMutation~ must still reject.
+
+** Scenario 6: Queue draining after error
+After a failed action, queue another action. Assert the second action executes (queue doesn't jam).
+
+* Implementation
+** Write serialization tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-077::write-tests
+:END:
+- File: ~packages/coding-agent/test/tools/todo-write-serialization.test.ts~
+- Create 6 test scenarios listed above
+- Import ~queueTodoMutation~ from ~../../src/tools/todo-write~
+- Use mock ToolSession objects (minimal: just needs identity for WeakMap key)
+- Use ordering arrays and timing to prove serialization
+- Satisfies: all 6 test scenarios
+
+** Replace WeakSet guard with AsyncLocalStorage
+:PROPERTIES:
+:CUSTOM_ID: BUG-077::fix-guard
+:DEPENDS: BUG-077::write-tests
+:END:
+- File: ~packages/coding-agent/src/tools/todo-write.ts~
+- Add ~import * as async_hooks from "node:async_hooks"~ (namespace import per project convention)
+- Replace:
+  - Remove ~const activeTodoMutationSessions = new WeakSet<ToolSession>()~ (line 276)
+  - Add ~const todoMutationContext = new async_hooks.AsyncLocalStorage<true>()~
+  - Replace ~if (activeTodoMutationSessions.has(session))~ with ~if (todoMutationContext.getStore())~
+  - Replace the ~.then(async () => { activeTodoMutationSessions.add(session); try { ... } finally { activeTodoMutationSessions.delete(session); } })~ with ~.then(() => todoMutationContext.run(true, action))~
+- The per-session queue chain (~todoMutationQueues~) remains unchanged
+- Satisfies: Scenario 1, 2, 3, 4, 5, 6
+
+* Edge Cases
+- Two different ToolSession instances get independent queues -- correct, they have separate todo state
+- ~action()~ throws: returned promise rejects (caller sees error), queue doesn't jam (existing ~.catch(() => undefined)~ on chain handles this)
+- Bun supports AsyncLocalStorage since v0.6 -- no compatibility risk
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/tools/todo-write-serialization.test.ts~ passes all 6 scenarios
+- ~bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts~ still passes
+- ~bun test packages/coding-agent/test/tools/todo-write-gates.test.ts~ still passes
+- ~bun check:ts~ passes
