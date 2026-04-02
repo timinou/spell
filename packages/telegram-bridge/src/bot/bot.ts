@@ -1,6 +1,14 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { Bot, type Context, type MiddlewareFn } from "grammy";
-import { type CommandContext, registerCommands } from "../commands";
+import { ResponseStreamer } from "../bridge/rpc-to-telegram";
+import { handleTelegramMessage } from "../bridge/telegram-to-rpc";
+import {
+	type CommandContext,
+	registerCommands,
+	resolveChatId,
+	resolveDefaultProject,
+	resolveModeTools,
+} from "../commands";
 import { handleBtwCommand } from "../commands/btw";
 import { handleModeCommand } from "../commands/mode";
 import { handleProjectCommand } from "../commands/project";
@@ -101,7 +109,11 @@ function createCommandRouter(
 	};
 }
 
-function createMessageHandler(processManager: ProcessManager): MiddlewareFn<AuthContext> {
+function createMessageHandler(
+	config: TelegramBridgeConfig,
+	processManager: ProcessManager,
+	telegramPrompt: string,
+): MiddlewareFn<AuthContext> {
 	return async (ctx, next) => {
 		const text = ctx.message?.text;
 		if (!text || text.startsWith("/")) {
@@ -109,13 +121,46 @@ function createMessageHandler(processManager: ProcessManager): MiddlewareFn<Auth
 			return;
 		}
 
+		const chatId = resolveChatId(ctx);
+		if (!chatId) {
+			await ctx.reply("Could not determine chat session.");
+			return;
+		}
+
+		const existingSession = processManager.getSession(chatId);
+		const project = existingSession?.project ?? resolveDefaultProject(config);
+		const mode = existingSession?.mode ?? ctx.authState.userConfig.defaultMode;
+		const tools = resolveModeTools(mode);
+
 		logger.debug("Received Telegram prompt", {
-			chatId: String(ctx.chat?.id ?? ""),
+			chatId,
 			userId: ctx.authState.userId,
 			messageLength: text.length,
 		});
 
-		void processManager;
+		try {
+			const client = await processManager.getOrCreate(chatId, ctx.authState.userId, {
+				project,
+				mode,
+				tools,
+				appendSystemPrompt: telegramPrompt,
+				sessionPath: existingSession?.sessionPath,
+			});
+
+			const session = processManager.getSession(chatId);
+			const streamer = new ResponseStreamer(ctx, session?.showThinking ?? false);
+			client.onEvent(event => {
+				void streamer.handleEvent(event).catch(error => {
+					logger.warn("Failed streaming response event", { error: String(error) });
+				});
+			});
+
+			await handleTelegramMessage(ctx, client);
+			await streamer.done;
+		} catch (error) {
+			logger.error("Failed handling message", { error: String(error), chatId });
+			await ctx.reply(`Failed to process message: ${String(error)}`);
+		}
 	};
 }
 
@@ -175,10 +220,13 @@ export async function startBot(config: TelegramBridgeConfig, processManager: Pro
 		processManager,
 	};
 
-	registerCommands(bot, cmdCtx);
+	const telegramPromptUrl = new URL("../bridge/telegram-prompt.md", import.meta.url);
+	const telegramPrompt = (await Bun.file(telegramPromptUrl).text()).trim();
+
 	bot.use(authMiddleware(config, tokenStore));
+	registerCommands(bot, cmdCtx);
 	bot.use(createCommandRouter(tokenStore, botUsername, cmdCtx));
-	bot.use(createMessageHandler(processManager));
+	bot.use(createMessageHandler(config, processManager, telegramPrompt));
 
 	const unregisterHandlers = registerShutdownHandlers(bot, processManager, tokenStore);
 	try {

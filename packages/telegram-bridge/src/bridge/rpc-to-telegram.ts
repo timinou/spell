@@ -54,11 +54,16 @@ export class ResponseStreamer {
 	#lastDraftAt = 0;
 	#draftTimer: NodeJS.Timeout | null = null;
 	#finalized = false;
+	#doneResolve: () => void;
+	#donePromise: Promise<void>;
 
 	constructor(ctx: AuthContext, showThinking: boolean) {
 		this.#ctx = ctx;
 		this.#showThinking = showThinking;
 		this.#chatId = this.#resolveChatId();
+		const { promise, resolve } = Promise.withResolvers<void>();
+		this.#donePromise = promise;
+		this.#doneResolve = resolve;
 	}
 
 	async handleEvent(event: RpcEvent): Promise<void> {
@@ -85,7 +90,13 @@ export class ResponseStreamer {
 				return;
 			}
 			case "error":
+				this.#finalized = true;
+				if (this.#draftTimer) {
+					clearTimeout(this.#draftTimer);
+					this.#draftTimer = null;
+				}
 				await this.#ctx.reply(`RPC error: ${event.message}`);
+				this.#doneResolve();
 				return;
 			case "agent_end":
 			case "message_end":
@@ -94,6 +105,10 @@ export class ResponseStreamer {
 			default:
 				return;
 		}
+	}
+
+	get done(): Promise<void> {
+		return this.#donePromise;
 	}
 
 	#resolveChatId(): number | null {
@@ -216,5 +231,6 @@ export class ResponseStreamer {
 		for (const chunk of messages) {
 			await this.#ctx.reply(chunk, { parse_mode: "HTML" });
 		}
+		this.#doneResolve();
 	}
 }

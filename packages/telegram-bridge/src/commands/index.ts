@@ -27,6 +27,7 @@ export const COMMANDS = [
 	{ command: "btw", description: "One-off question without session context" },
 ] as const;
 
+/** Canonical tool lists per mode. The bridge passes these via --tools to the RPC process. */
 const MODE_TOOLS: Record<string, string[]> = {
 	"telegram-readonly": [
 		"read",

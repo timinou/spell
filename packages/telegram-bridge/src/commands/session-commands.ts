@@ -70,7 +70,6 @@ export async function handleStatusCommand(ctx: AuthContext, cmdCtx: CommandConte
 		`Mode: ${session.mode}`,
 		`Session: active (${uptime})`,
 		`Thinking: ${session.showThinking ? "visible" : "hidden"}`,
-		"Messages: unknown",
 	];
 
 	await ctx.reply(statusLines.join("\n"));

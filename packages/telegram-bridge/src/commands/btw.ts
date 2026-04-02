@@ -13,7 +13,13 @@ import {
 
 interface BtwDependencies {
 	createClient?: (options: RpcSpawnOptions) => RpcClient;
-	createStreamer?: (ctx: AuthContext, showThinking: boolean) => { handleEvent: (event: RpcEvent) => Promise<void> };
+	createStreamer?: (
+		ctx: AuthContext,
+		showThinking: boolean,
+	) => {
+		handleEvent: (event: RpcEvent) => Promise<void>;
+		done: Promise<void>;
+	};
 	loadPrompt?: () => Promise<string>;
 }
 
@@ -75,6 +81,7 @@ export async function handleBtwCommand(
 		});
 		await ctx.reply(`Failed to run /btw: ${String(error)}`);
 	} finally {
+		await streamer.done;
 		await client.kill();
 	}
 }

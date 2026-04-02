@@ -1,4 +1,5 @@
 import type { ChatSession } from "../types";
+import { escapeHtmlAttr } from "../utils";
 
 type ToolStatus = "running" | "done" | "error";
 
@@ -14,15 +15,6 @@ type TimelineEntry = { kind: "user"; text: string } | { kind: "assistant"; text:
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
-}
-
-function escapeHtml(value: string): string {
-	return value
-		.replaceAll("&", "&amp;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;")
-		.replaceAll('"', "&quot;")
-		.replaceAll("'", "&#39;");
 }
 
 function extractUserText(event: Record<string, unknown>): string {
@@ -169,19 +161,19 @@ function parseTimeline(jsonlContent: string): TimelineEntry[] {
 
 function renderTimelineEntry(entry: TimelineEntry): string {
 	if (entry.kind === "user") {
-		return `<div class="bubble user"><div class="label">User</div><pre>${escapeHtml(entry.text)}</pre></div>`;
+		return `<div class="bubble user"><div class="label">User</div><pre>${escapeHtmlAttr(entry.text)}</pre></div>`;
 	}
 
 	if (entry.kind === "assistant") {
-		return `<div class="bubble assistant"><div class="label">Assistant</div><pre>${escapeHtml(entry.text)}</pre></div>`;
+		return `<div class="bubble assistant"><div class="label">Assistant</div><pre>${escapeHtmlAttr(entry.text)}</pre></div>`;
 	}
 
 	const statusLabel = entry.status === "error" ? "error" : entry.status === "done" ? "done" : "running";
 	const detailText = entry.details.length > 0 ? entry.details.join("\n") : "(no details)";
 	return [
 		`<details class="tool ${entry.status}">`,
-		`<summary>Tool ${escapeHtml(entry.toolName)} (${escapeHtml(entry.toolCallId)}) - ${statusLabel}</summary>`,
-		`<pre>${escapeHtml(detailText)}</pre>`,
+		`<summary>Tool ${escapeHtmlAttr(entry.toolName)} (${escapeHtmlAttr(entry.toolCallId)}) - ${statusLabel}</summary>`,
+		`<pre>${escapeHtmlAttr(detailText)}</pre>`,
 		`</details>`,
 	].join("");
 }
@@ -242,9 +234,9 @@ export function renderSessionListHtml(sessions: ChatSession[]): string {
 					.map(session => {
 						const chatId = encodeURIComponent(session.chatId);
 						return `<tr>
-							<td>${escapeHtml(session.chatId)}</td>
-							<td>${escapeHtml(session.project)}</td>
-							<td>${escapeHtml(formatTimestamp(session.lastActiveAt))}</td>
+							<td>${escapeHtmlAttr(session.chatId)}</td>
+							<td>${escapeHtmlAttr(session.project)}</td>
+							<td>${escapeHtmlAttr(formatTimestamp(session.lastActiveAt))}</td>
 							<td><a href="/session/${chatId}">view</a> · <a href="/session/${chatId}/raw">raw</a></td>
 						</tr>`;
 					})

@@ -1,3 +1,5 @@
+import { escapeHtmlText } from "../utils";
+
 /**
  * Markdown to Telegram HTML converter.
  *
@@ -5,10 +7,7 @@
  * This converts a common subset of Markdown to that format.
  */
 
-/** Escape HTML special chars for Telegram HTML mode */
-export function escapeHtml(input: string): string {
-	return input.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
+export { escapeHtmlText as escapeHtml } from "../utils";
 
 /** Convert Markdown to Telegram-compatible HTML */
 export function markdownToTelegramHtml(markdown: string): string {
@@ -17,7 +16,7 @@ export function markdownToTelegramHtml(markdown: string): string {
 	// Phase 1: Extract and protect code blocks (```...```)
 	const codeBlocks: string[] = [];
 	let text = markdown.replace(/```(\w*)\n?([\s\S]*?)```/g, (_match, lang: string, code: string) => {
-		const escapedCode = escapeHtml(code.replace(/\n$/, ""));
+		const escapedCode = escapeHtmlText(code.replace(/\n$/, ""));
 		const langAttr = lang ? ` class="language-${lang}"` : "";
 		const placeholder = `\x00CODEBLOCK${codeBlocks.length}\x00`;
 		codeBlocks.push(`<pre><code${langAttr}>${escapedCode}\n</code></pre>`);
@@ -28,12 +27,12 @@ export function markdownToTelegramHtml(markdown: string): string {
 	const inlineCodes: string[] = [];
 	text = text.replace(/`([^`\n]+)`/g, (_match, code: string) => {
 		const placeholder = `\x00INLINE${inlineCodes.length}\x00`;
-		inlineCodes.push(`<code>${escapeHtml(code)}</code>`);
+		inlineCodes.push(`<code>${escapeHtmlText(code)}</code>`);
 		return placeholder;
 	});
 
 	// Phase 3: Escape HTML in remaining text
-	text = escapeHtml(text);
+	text = escapeHtmlText(text);
 
 	// Phase 4: Convert markdown formatting
 	// Bold: **text** and __text__

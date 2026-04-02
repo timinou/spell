@@ -344,7 +344,6 @@ describe("telegram command handlers", () => {
 		expect(text).toContain("Mode: telegram-readonly");
 		expect(text).toContain("Session: active");
 		expect(text).toContain("Thinking: hidden");
-		expect(text).toContain("Messages:");
 	});
 
 	it("/status shows no session when inactive", async () => {
@@ -371,11 +370,18 @@ describe("telegram command handlers", () => {
 				client.spawnOptions = options;
 				return client as unknown as RpcClient;
 			},
-			createStreamer: () => ({
-				handleEvent: async (event: RpcEvent) => {
-					streamerEvents.push(event);
-				},
-			}),
+			createStreamer: () => {
+				const { promise, resolve } = Promise.withResolvers<void>();
+				return {
+					handleEvent: async (event: RpcEvent) => {
+						streamerEvents.push(event);
+						if (event.type === "message_end" || event.type === "agent_end") {
+							resolve();
+						}
+					},
+					done: promise,
+				};
+			},
 			loadPrompt: async () => "Telegram prompt",
 		});
 

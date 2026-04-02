@@ -15,6 +15,7 @@ interface SessionOptions {
 	project: string;
 	mode: string;
 	tools: string[];
+	appendSystemPrompt?: string;
 	sessionPath?: string;
 }
 
@@ -76,6 +77,7 @@ export class ProcessManager {
 		const spawnOptions: RpcSpawnOptions = {
 			cwd,
 			tools: options.tools,
+			appendSystemPrompt: options.appendSystemPrompt,
 			sessionPath,
 		};
 

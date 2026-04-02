@@ -1,3 +1,5 @@
+import type { UserConfig } from "./config/types";
+
 /**
  * Shared types for the Telegram bridge runtime state.
  */
@@ -31,7 +33,7 @@ export interface AuthState {
 	/** Whether this is the bot owner (in whitelist) */
 	isOwner: boolean;
 	/** Resolved user config (merged with defaults) */
-	userConfig: import("./config/types").UserConfig;
+	userConfig: UserConfig;
 }
 
 /** Temporary auth token for guest access */

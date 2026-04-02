@@ -116,7 +116,11 @@ async function downloadTelegramFile(
 }
 
 function pickLargestPhoto(photos: TelegramPhoto[]): TelegramPhoto {
-	let largest = photos[0];
+	if (photos.length === 0) {
+		throw new Error("pickLargestPhoto requires a non-empty array");
+	}
+
+	let largest = photos[0]!;
 	for (const photo of photos) {
 		if ((photo.file_size ?? 0) > (largest.file_size ?? 0)) {
 			largest = photo;
