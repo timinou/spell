@@ -1,7 +1,7 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { Bot, type Context, type MiddlewareFn } from "grammy";
 import type { RpcEvent } from "../../rpc/types";
-import { ResponseStreamer } from "../bridge/rpc-to-telegram";
+import { awaitStreamerCompletion, ResponseStreamer } from "../bridge/rpc-to-telegram";
 import { handleTelegramMessage } from "../bridge/telegram-to-rpc";
 import {
 	type CommandContext,
@@ -169,9 +169,8 @@ export function createMessageHandler(cmdCtx: CommandContext): MiddlewareFn<AuthC
 			try {
 				await handleTelegramMessage(ctx, client);
 			} finally {
-				streamer.cancel();
-				await streamer.done;
-				client.offEvent(listener);
+				await awaitStreamerCompletion(streamer);
+				client.offEvent?.(listener);
 			}
 		} catch (error) {
 			logger.error("Failed handling message", { error: String(error), chatId });

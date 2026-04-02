@@ -23,8 +23,15 @@ export interface ImageContentRef {
 /** Assistant stop reasons mirrored from the AI package */
 export type RpcStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
+export interface RpcAssistantContentBlock {
+	type?: string;
+	text?: string;
+	thinking?: string;
+}
+
 export interface RpcAssistantMessage {
 	role?: string;
+	content?: RpcAssistantContentBlock[];
 	stopReason?: RpcStopReason;
 	errorMessage?: string;
 }

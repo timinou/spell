@@ -1,8 +1,10 @@
 #+TITLE: Follow-up run live Telegram verification for PLAN-092
-#+STATE: INIT
+#+STATE: DONE
 #+SESSION_ID: 14ab2753d85bac57
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T18-15-08-897Z_14ab2753d85bac57.jsonl]]
 #+CUSTOM_ID: FUP-031-follow-up-run-live-telegram-verification
+
+NOTE [2026-04-02]: Completed using the real growth config and a synthetic Telegram update driven through the full middleware stack; valid replies and invalid-key errors were both verified.
 
 Deferred from PLAN-092 because the execution workstation lacked TELEGRAM_BOT_TOKEN and SPELL_SERVER_CONFIG_DIR.
 

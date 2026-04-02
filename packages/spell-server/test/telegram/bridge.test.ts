@@ -5,7 +5,7 @@ import type { AssistantEvent, ImageContentRef, RpcEvent } from "../../src/rpc/ty
 import type { AuthContext } from "../../src/telegram/bot/auth";
 import { markdownToTelegramHtml } from "../../src/telegram/bridge/markdown-html";
 import { splitMessage } from "../../src/telegram/bridge/message-splitter";
-import { ResponseStreamer } from "../../src/telegram/bridge/rpc-to-telegram";
+import { awaitStreamerCompletion, ResponseStreamer } from "../../src/telegram/bridge/rpc-to-telegram";
 import { handleTelegramMessage } from "../../src/telegram/bridge/telegram-to-rpc";
 
 interface MockReply {
@@ -176,6 +176,79 @@ describe("bridge streaming", () => {
 		expect(ctx._replies.length).toBeGreaterThan(1);
 	});
 
+	it("ignores non-assistant message_end events before the assistant reply arrives", async () => {
+		const ctx = mockAuthContext({ chatId: 46 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
+
+		await streamer.handleEvent({
+			type: "message_end",
+			message: { role: "user", content: [{ type: "text", text: "hi" }] },
+		});
+		expect(ctx._replies).toHaveLength(0);
+
+		await streamer.handleEvent({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text: "Hi." }],
+			},
+		});
+
+		expect(ctx._replies[0]?.text).toBe(markdownToTelegramHtml("Hi."));
+		expect(ctx._replies[0]?.options).toEqual({ parse_mode: "HTML" });
+	});
+
+	it("uses final message_end text when the provider omits text delta events", async () => {
+		const ctx = mockAuthContext({ chatId: 46 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
+
+		await streamer.handleEvent({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text: "Hi." }],
+			},
+		});
+
+		expect(ctx._replies[0]?.text).toBe(markdownToTelegramHtml("Hi."));
+		expect(ctx._replies[0]?.options).toEqual({ parse_mode: "HTML" });
+	});
+
+	it("waits for the final assistant message after toolUse segments", async () => {
+		const ctx = mockAuthContext({ chatId: 46 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
+
+		await streamer.handleEvent({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				stopReason: "toolUse",
+				content: [{ type: "text", text: "Let me inspect" }, { type: "toolCall" }],
+			},
+		});
+		expect(ctx._replies).toHaveLength(0);
+
+		await streamer.handleEvent({
+			type: "message_end",
+			message: { role: "toolResult", content: [{ type: "text", text: "Read one file" }] },
+		});
+		expect(ctx._replies).toHaveLength(0);
+
+		await streamer.handleEvent({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text: "the repo and fix it." }],
+			},
+		});
+
+		expect(ctx._replies[0]?.text).toBe(markdownToTelegramHtml("Let me inspect the repo and fix it."));
+		expect(ctx._replies[0]?.options).toEqual({ parse_mode: "HTML" });
+	});
+
 	it("sends fallback summary when response has no assistant text", async () => {
 		const ctx = mockAuthContext({ chatId: 46 });
 		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
@@ -272,6 +345,42 @@ describe("bridge streaming", () => {
 		await expect(streamer.handleEvent({ type: "message_end" })).rejects.toThrow("reply failed");
 		await expectDoneToResolve(streamer);
 		expect(replyCalls).toBe(1);
+	});
+
+	it("awaitStreamerCompletion waits for natural completion", async () => {
+		const deferred = Promise.withResolvers<void>();
+		let cancelCalls = 0;
+
+		setTimeout(() => deferred.resolve(), 10);
+		await awaitStreamerCompletion(
+			{
+				done: deferred.promise,
+				cancel: () => {
+					cancelCalls += 1;
+				},
+			},
+			50,
+		);
+
+		expect(cancelCalls).toBe(0);
+	});
+
+	it("awaitStreamerCompletion cancels stalled streamers", async () => {
+		const deferred = Promise.withResolvers<void>();
+		let cancelCalls = 0;
+
+		await awaitStreamerCompletion(
+			{
+				done: deferred.promise,
+				cancel: () => {
+					cancelCalls += 1;
+					deferred.resolve();
+				},
+			},
+			5,
+		);
+
+		expect(cancelCalls).toBe(1);
 	});
 
 	it("cancel remains idempotent after error events", async () => {
