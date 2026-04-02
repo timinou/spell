@@ -1,0 +1,62 @@
+#+TITLE: Fix task dispatch auto-roster corruption and subagent runaway
+#+STATE: DONE
+#+SESSION_ID: 14aacbc725447238
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-35-09-717Z_14aacbc725447238.jsonl]]
+#+CUSTOM_ID: PLAN-079-fix-task-dispatch-auto-roster-corruption
+
+
+* Initial Message
+
+File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl
+ ID: 14aac2bfa1d2ab39
+
+Look at this session, it fucked up the todowrite and put a \n in the todo titile...
+
+* Context
+Two bugs observed in session ~14aac2bfa1d2ab39~ during a Telegram bridge planning session:
+
+** Bug 1: Literal ~
+~ in auto-roster phase name
+The model generated a ~task~ call with literal backslash-n (~
+~ as two characters) in the ~context~ field instead of real newlines. ~#deriveAutoRosterPhaseName~ in ~packages/coding-agent/src/task/index.ts~ splits on real newlines, gets one giant line, extracts the entire context string as the phase name. The phase name ended up with embedded literal ~
+~ characters.
+
+Fix: normalize literal ~
+~ to real newlines before splitting, truncate heading to 80 chars, sanitize description used as todo content.
+
+** Bug 2: Subagent hangs indefinitely
+The agent loop (~packages/agent/src/agent-loop.ts~) has no turn/tool budget — it runs ~while (true)~ as long as the model keeps producing tool calls. The ~submit_result~ reminder mechanism in ~executor.ts~ only runs AFTER ~session.prompt()~ returns, which never happens when the model keeps exploring. A ~task~ subagent made 97 tool calls over 12 minutes without converging.
+
+Fix: enforce a configurable tool call budget (~task.maxToolCalls~, default 200) in the executor's event handler. When exceeded, ~requestAbort("terminate")~ breaks the loop and the existing ~submit_result~ reminder flow handles graceful degradation.
+
+** Key files
+- ~packages/coding-agent/src/task/index.ts~ — ~#deriveAutoRosterPhaseName~, auto-roster content creation
+- ~packages/coding-agent/src/task/executor.ts~ — ~processEvent~, ~requestAbort~, submit_result enforcement
+- ~packages/coding-agent/src/config/settings-schema.ts~ — settings definitions
+
+* Verification
+- ~bun test packages/coding-agent/test/task/auto-roster-sanitize.test.ts~ — sanitization tests
+- ~bun test packages/coding-agent/test/task/tool-budget.test.ts~ — budget enforcement tests
+- ~bun check:ts~ — type check passes
+
+* Execution Manifest
+** foundation                                                      :wave:
+- [[id:BUG-082-auto-roster-phase-name-corrupted-by-lite]] Fix auto-roster phase name corruption (1h)
+- [[id:BUG-083-subagent-hangs-indefinitely-when-model-n]] Add subagent tool call budget (2h)
+These two items are independent and can execute in parallel.
+
+** Completion [2026-04-02]
+*** Verification
+- ~bun test packages/coding-agent/test/task/~ — 98 tests pass across 15 files (0 failures)
+- ~bun test packages/coding-agent/test/task/auto-roster-sanitize.test.ts~ — 11 tests pass
+- ~bun test packages/coding-agent/test/task/tool-budget.test.ts~ — 5 tests pass
+- ~bun check:ts~ — biome check clean; tsgo shows only pre-existing errors (sdk.ts:2141 null/undefined mismatch, spellcast/discovery.ts:41 missing Dirent type)
+*** Artifacts
+- ~packages/coding-agent/src/task/sanitize.ts~ — new file; extracted sanitization helpers to avoid circular imports
+- ~packages/coding-agent/src/task/index.ts~ — imports from sanitize.ts, re-exports via ~export *~
+- ~packages/coding-agent/src/task/executor.ts~ — reads ~task.maxToolCalls~, enforces budget at ~tool_execution_end~
+- ~packages/coding-agent/src/config/settings-schema.ts~ — added ~task.maxToolCalls~ setting (default 200)
+- ~packages/coding-agent/test/task/auto-roster-sanitize.test.ts~ — 11 tests for phase name derivation and content sanitization
+- ~packages/coding-agent/test/task/tool-budget.test.ts~ — 5 tests for budget enforcement, edge cases, and defaults
+*** Deviations
+None.

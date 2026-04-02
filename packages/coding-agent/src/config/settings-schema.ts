@@ -1253,6 +1253,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.maxToolCalls": {
+		type: "number",
+		default: 200,
+		ui: {
+			tab: "tasks",
+			label: "Max Tool Calls per Subagent",
+			description: "Maximum tool calls per subagent before forced termination. Set 0 to disable.",
+			submenu: true,
+		},
+	},
+
 	"task.disabledAgents": {
 		type: "array",
 		default: [] as string[],

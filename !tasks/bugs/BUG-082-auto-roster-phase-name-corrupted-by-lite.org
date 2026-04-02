@@ -1,0 +1,90 @@
+#+TITLE: Auto-roster phase name corrupted by literal backslash-n in context
+#+STATE: DONE
+#+SESSION_ID: 14aacbc725447238
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-35-09-717Z_14aacbc725447238.jsonl]]
+#+CUSTOM_ID: BUG-082-auto-roster-phase-name-corrupted-by-lite
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: task
+
+NOTE [2026-04-02]: Fixed: extracted sanitize helpers to packages/coding-agent/src/task/sanitize.ts. deriveAutoRosterPhaseNameFromContext normalizes literal \\n, truncates to 80 chars. sanitizeTaskContent strips newlines from descriptions. 11 tests in auto-roster-sanitize.test.ts.
+
+* Initial Message
+
+File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl
+ ID: 14aac2bfa1d2ab39
+
+Look at this session, it fucked up the todowrite and put a \n in the todo titile...
+
+* Scope
+- IN: ~#deriveAutoRosterPhaseName~ and auto-roster content sanitization in ~packages/coding-agent/src/task/index.ts~
+- IN: Defensive normalization of literal ~
+~ (two-char backslash-n) in ~context~ and ~description~ fields
+- OUT: Changing how the model generates JSON arguments (model-side fix not possible)
+
+* Root Cause
+When the model generates a ~task~ tool call, it sometimes produces literal ~
+~ (backslash + n characters) in the ~context~ JSON string value instead of real newline characters. This is a known LLM JSON output artifact.
+
+~#deriveAutoRosterPhaseName~ splits ~context~ on real ~
+~ (newline), but with literal ~
+~ characters there are no real newlines, so ~split("
+")~ produces one giant line. The heading regex matches ~## Background
+We are planning...~ and extracts everything after ~## ~ as the phase name — a massive string with embedded literal ~
+~ characters.
+
+** Observed in session
+Session ~14aac2bfa1d2ab39~, second ~task~ call (MetisAnalysis). Context field contained literal ~
+~ throughout. Phase name became the entire context string minus the ~## ~ prefix.
+
+* Tests
+- File: ~packages/coding-agent/test/task/auto-roster-sanitize.test.ts~
+- Scenario 1: ~#deriveAutoRosterPhaseName~ with context containing literal ~
+~ should extract only the heading text
+- Scenario 2: ~#deriveAutoRosterPhaseName~ with heading text longer than 80 chars should be truncated
+- Scenario 3: Task description with embedded newlines (real or literal) should be stripped in todo content
+- Scenario 4: Normal context with real newlines continues to work (regression guard)
+
+* Implementation
+
+** Normalize literal backslash-n in deriveAutoRosterPhaseName
+:PROPERTIES:
+:CUSTOM_ID: BUG-001::normalize-context
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~, method ~#deriveAutoRosterPhaseName~
+- Before ~split("
+")~, replace literal two-char sequences ~
+~ with real newlines: ~params.context?.replace(/\
+/g, "
+")~
+- Also truncate the extracted heading to 80 chars max: ~text.slice(0, 80)~
+
+** Sanitize todo content from description
+:PROPERTIES:
+:CUSTOM_ID: BUG-001::sanitize-content
+:DEPENDS: BUG-001::normalize-context
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~, line 319
+- Replace newlines (real and literal) in ~task.description~ before using as content: ~task.description.replace(/\
+|
+/g, " ").trim()~
+
+** Write tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-001::write-tests
+:DEPENDS: BUG-001::sanitize-content
+:END:
+- File: ~packages/coding-agent/test/task/auto-roster-sanitize.test.ts~
+- Test each scenario listed above
+
+* Edge Cases
+- Context with ONLY literal ~
+~ and no markdown headings → should fall through to default "Tasks"
+- Description that is entirely newlines → should fall back to ~task.id~
+- Mixed real and literal newlines in context → both should be handled
+
+* Acceptance Criteria
+- Phase name from context with literal ~
+~ is clean, short, single-line
+- Todo item content never contains newlines
+- ~bun test packages/coding-agent/test/task/auto-roster-sanitize.test.ts~ passes

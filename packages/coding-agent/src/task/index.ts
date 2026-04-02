@@ -48,6 +48,7 @@ import { runSubprocess } from "./executor";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
 import { renderCall, renderResult } from "./render";
+import { deriveAutoRosterPhaseNameFromContext, sanitizeTaskContent } from "./sanitize";
 import { renderTemplate, resolvePredecessorResultsContext, resolveVerificationContext } from "./template";
 import {
 	type AgentDefinition,
@@ -146,8 +147,7 @@ function renderDescription(
 	});
 }
 
-const STRUCTURAL_HEADINGS = new Set(["Goal", "Non-goals", "Constraints", "API Contract", "Acceptance"]);
-
+export * from "./sanitize";
 // ═══════════════════════════════════════════════════════════════════════════
 // Tool Class
 // ═══════════════════════════════════════════════════════════════════════════
@@ -272,15 +272,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	}
 
 	#deriveAutoRosterPhaseName(params: TaskParams): string {
-		const explicit = params.phase?.trim();
-		if (explicit) return explicit;
-		const lines = params.context?.split("\n").map(line => line.trim()) ?? [];
-		for (const line of lines) {
-			if (!/^#{1,6}\s+\S/.test(line)) continue;
-			const text = line.replace(/^#{1,6}\s+/, "").trim();
-			if (!STRUCTURAL_HEADINGS.has(text)) return text;
-		}
-		return "Tasks";
+		return deriveAutoRosterPhaseNameFromContext(params.context, params.phase);
 	}
 
 	async #autoCreateTodoRefs(params: TaskParams, agent: AgentDefinition | undefined): Promise<TaskItem[]> {
@@ -316,7 +308,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								});
 							}
 							return {
-								content: task.description.trim() || task.id,
+								content: sanitizeTaskContent(task.description, task.id),
 								blockers: blockerTodoRefs.length > 0 ? blockerTodoRefs : undefined,
 								delegation: { sessionId: "pending", agent: agentName },
 							};

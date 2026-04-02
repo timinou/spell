@@ -1,0 +1,83 @@
+#+TITLE: Subagent hangs indefinitely when model never calls submit_result
+#+STATE: DONE
+#+SESSION_ID: 14aacbc725447238
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-35-09-717Z_14aacbc725447238.jsonl]]
+#+CUSTOM_ID: BUG-083-subagent-hangs-indefinitely-when-model-n
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: task
+
+NOTE [2026-04-02]: Fixed: added task.maxToolCalls setting (default 200). Executor enforces budget at tool_execution_end via requestAbort(terminate). submit_result reminders still fire after forced termination. 5 tests in tool-budget.test.ts.
+
+* Initial Message
+
+File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl
+ ID: 14aac2bfa1d2ab39
+
+Look at this session, it fucked up the todowrite and put a \n in the todo titile...
+
+* Scope
+- IN: Tool call budget enforcement in ~packages/coding-agent/src/task/executor.ts~
+- IN: Configurable ~task.maxToolCalls~ setting in ~packages/coding-agent/src/config/settings-schema.ts~
+- OUT: Changes to the core agent loop in ~packages/agent/src/agent-loop.ts~ (keep budget enforcement in the executor layer)
+
+* Root Cause
+The agent loop in ~packages/agent/src/agent-loop.ts~ runs ~while (true)~ with no turn or tool-call budget. The only exits are: model produces end_turn (no tool calls), error, or external abort.
+
+The ~submit_result~ enforcement mechanism in ~executor.ts~ (lines 1129-1156) runs AFTER ~session.prompt(task)~ returns. But ~session.prompt~ delegates to the agent loop, which never returns if the model keeps producing tool calls in every turn.
+
+In the observed session, a ~task~ subagent given a gap-analysis assignment made 97 tool calls over 12 minutes without converging. No timeout or budget stopped it.
+
+** Observed in session
+Session ~14aac2bfa1d2ab39~, subagent ~4-MetisAnalysis~ (agent type: ~task~). 97 tool calls (36 read, 30 grep, 13 find, 13 fetch, 5 web_search). Never called ~submit_result~. Session was manually aborted by user.
+
+* Tests
+- File: ~packages/coding-agent/test/task/tool-budget.test.ts~
+- Scenario 1: Subagent exceeding tool call budget triggers abort, then ~submit_result~ reminders fire
+- Scenario 2: Subagent completing within budget is not affected
+- Scenario 3: Custom budget via setting overrides the default
+- Scenario 4: Budget of 0 disables enforcement (unlimited)
+
+* Implementation
+
+** Add task.maxToolCalls setting
+:PROPERTIES:
+:CUSTOM_ID: BUG-002::add-setting
+:END:
+- File: ~packages/coding-agent/src/config/settings-schema.ts~
+- Add ~task.maxToolCalls~ setting with default 200, type number
+- Description: "Maximum tool calls per subagent before forced termination. Set 0 to disable."
+
+** Enforce tool call budget in executor processEvent
+:PROPERTIES:
+:CUSTOM_ID: BUG-002::enforce-budget
+:DEPENDS: BUG-002::add-setting
+:END:
+- File: ~packages/coding-agent/src/task/executor.ts~
+- In ~executeAgent~ function, read ~task.maxToolCalls~ from settings (passed via options or read from session settings)
+- In ~processEvent~ at the ~tool_execution_end~ case (after line 832), check ~progress.toolCount >= maxToolCalls~ (when maxToolCalls > 0)
+- When exceeded, call ~requestAbort("terminate")~ to break the agent loop
+- Log a warning: ~logger.warn("Subagent exceeded tool call budget", { toolCount, maxToolCalls, agentId })~
+- The existing post-prompt ~submit_result~ reminder loop will handle extracting whatever output the agent has
+
+** Write tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-002::write-tests
+:DEPENDS: BUG-002::enforce-budget
+:END:
+- File: ~packages/coding-agent/test/task/tool-budget.test.ts~
+- Mock a subagent session that produces tool calls without end_turn
+- Verify budget triggers abort at the right count
+- Verify existing ~submit_result~ flow still works when budget is not reached
+
+* Edge Cases
+- Agent that calls exactly maxToolCalls tools → should NOT abort (abort on exceed, not equal)
+- Agent that calls submit_result at tool call N-1 → budget check should be bypassed since ~submitResultCalled~ is true
+- Budget set to 0 → no limit enforced (backwards compatible)
+- Recursive subagents → each gets its own budget (already the case since each gets its own executor)
+
+* Acceptance Criteria
+- Subagent exceeding 200 (default) tool calls is forcibly terminated
+- After forced termination, ~submit_result~ reminders fire and the result is returned to the parent
+- ~bun test packages/coding-agent/test/task/tool-budget.test.ts~ passes
+- No change to behavior for subagents that complete within budget

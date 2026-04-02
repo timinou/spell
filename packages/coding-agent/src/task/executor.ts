@@ -506,10 +506,17 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	const settings = options.settings ?? Settings.isolated();
 	const subagentSettings = createSubagentSettings(settings);
-	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 2;
+	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 4;
+	const maxToolCalls = settings.get("task.maxToolCalls") ?? 200;
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;
 	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
+	logger.debug("Subagent spawn", {
+		agent: agent.name,
+		childDepth,
+		maxRecursionDepth,
+		atMaxDepth,
+	});
 
 	// Add tools if specified
 	let toolNames: string[] | undefined;
@@ -824,6 +831,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					}
 				}
 				flushProgress = true;
+				// Enforce tool call budget
+				if (maxToolCalls > 0 && !submitResultCalled && progress.toolCount > maxToolCalls) {
+					logger.warn("Subagent exceeded tool call budget", {
+						toolCount: progress.toolCount,
+						maxToolCalls,
+						agentId: id,
+					});
+					requestAbort("terminate");
+				}
 				break;
 			}
 
@@ -1123,7 +1139,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const reminderToolChoice = buildNamedToolChoice("submit_result", session.model);
 
 			let retryCount = 0;
-			while (!submitResultCalled && retryCount < MAX_SUBMIT_RESULT_RETRIES && !abortSignal.aborted) {
+			while (
+				!submitResultCalled &&
+				retryCount < MAX_SUBMIT_RESULT_RETRIES &&
+				(!abortSignal.aborted || abortReason === "terminate")
+			) {
 				try {
 					retryCount++;
 					const isLastRetry = retryCount === MAX_SUBMIT_RESULT_RETRIES;
@@ -1150,7 +1170,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			await session.waitForIdle();
-			if (!submitResultCalled && !abortSignal.aborted) {
+			if (!submitResultCalled && (!abortSignal.aborted || abortReason === "terminate")) {
 				abortReasonText ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
 				error ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
 			}
