@@ -1,0 +1,78 @@
+#+TITLE: Wire file-level items into org-next-wave
+#+STATE: DONE
+#+SESSION_ID: 14aae3865f74957d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-18-54-845Z_14aae3865f74957d.jsonl]]
+#+CUSTOM_ID: FEAT-226-wire-file-level-items-into-org-next-wave
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: backend
+#+FILES: packages/org/elisp/tools/org-next-wave.el
+#+DEPENDS: FEAT-225-elisp-file-level-item-parser-for-wave-an
+
+NOTE [2026-04-02]: Wired org-mcp--collect-full-items-from-file to use unified collector; eliminated redundant graph-nodes collection in handler.
+
+* Initial Message
+
+⏳ Org: wave
+ wave: 1
+ ready: 1
+ blocked: 0
+ completed: 0/1
+ - TSK-001-test Test Task
+
+
+
+ ⏳ Org: graph
+ {
+   "nodes": [
+     {
+       "custom_id": "TSK-001-test",
+       "title": "Test Task",
+       "state": "ITEM"
+     }
+   ],
+   "edges": [],
+   "cycles": []
+ }
+
+
+in session:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa.jsonl
+ ID: 14aac3ad63d8f8fa
+
+
+
+Why???? this is fucked up, it means the org wave and graph are stubs. WTF?
+
+* Problem
+
+~org-mcp--collect-full-items-from-file~ in ~org-next-wave.el~ only scans for headlines with TODO keywords via ~org-element-parse-buffer~. File-level items (~#+STATE:~ frontmatter) are invisible.
+
+* Implementation
+
+Replace the item collection in ~org-mcp-next-wave-handler~ to use the unified collector from FEAT-225:
+
+** Update ~org-mcp--collect-full-items-from-file~
+
+1. Call ~org-tasks--parse-file-frontmatter~ first
+2. If file-level item found, include it in results
+3. Also scan heading-level items (for sub-outline support inside plan files)
+4. Return combined list, deduplicating by custom_id
+
+The dependency map building and wave filtering logic remain unchanged — they already operate on the alist shape that both parsers produce.
+
+** Handle state filtering correctly
+
+File-level items use ~#+STATE:~ which may contain ~INIT~. Ensure the ~org-tasks-todo-keywords~ list includes ~INIT~ (see BUG item).
+
+* Acceptance Criteria
+- ~org wave~ returns file-level items with correct state/priority/effort
+- ~org wave~ on features category returns real FEAT items in ITEM state, not just TSK-001-test
+- Dependency edges from ~#+DEPENDS:~ on file-level items are correctly wired
+- Wave number computation works across file-level and heading-level items
+- No timeout on the full corpus (~!tasks/~ with 672+ files)
+- ERT test: mixed file-level + heading-level wave computation
+- ERT test: file-level DEPENDS creates correct edges in wave computation

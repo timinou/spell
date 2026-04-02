@@ -1,0 +1,74 @@
+#+TITLE: Wire file-level items into org-dependency-graph
+#+STATE: DONE
+#+SESSION_ID: 14aae3865f74957d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-18-54-845Z_14aae3865f74957d.jsonl]]
+#+CUSTOM_ID: FEAT-227-wire-file-level-items-into-org-dependenc
+#+EFFORT: 1h30m
+#+PRIORITY: #A
+#+LAYER: backend
+#+FILES: packages/org/elisp/tools/org-dependency-graph.el
+#+DEPENDS: FEAT-225-elisp-file-level-item-parser-for-wave-an
+
+NOTE [2026-04-02]: Wired org-mcp--collect-graph-nodes-from-file to use unified collector.
+
+* Initial Message
+
+⏳ Org: wave
+ wave: 1
+ ready: 1
+ blocked: 0
+ completed: 0/1
+ - TSK-001-test Test Task
+
+
+
+ ⏳ Org: graph
+ {
+   "nodes": [
+     {
+       "custom_id": "TSK-001-test",
+       "title": "Test Task",
+       "state": "ITEM"
+     }
+   ],
+   "edges": [],
+   "cycles": []
+ }
+
+
+in session:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa.jsonl
+ ID: 14aac3ad63d8f8fa
+
+
+
+Why???? this is fucked up, it means the org wave and graph are stubs. WTF?
+
+* Problem
+
+~org-mcp--collect-graph-nodes-from-file~ in ~org-dependency-graph.el~ only scans for headlines with TODO keywords. File-level items with ~#+DEPENDS:~ are invisible to the dependency graph.
+
+* Implementation
+
+** Update ~org-mcp--collect-graph-nodes-from-file~
+
+Mirror the change in org-next-wave.el:
+1. Call ~org-tasks--parse-file-frontmatter~ first
+2. If file-level item found, include it as a graph node
+3. Also scan heading-level items for sub-outline support
+4. Return combined nodes, deduplicating by custom_id
+
+** Ensure edge building handles both formats
+
+~org-mcp--build-edges~ already parses DEPENDS/BLOCKS from the alist ~depends~ and ~blocks~ fields using ~org-mcp--parse-space-separated~. File-level items set these fields from ~#+DEPENDS:~ / ~#+BLOCKS:~, so edge building should work without modification.
+
+* Acceptance Criteria
+- ~org graph~ returns nodes for file-level items
+- Edges from ~#+DEPENDS:~ on file-level items appear in the graph
+- Cycle detection works across file-level and heading-level items
+- No timeout on full corpus
+- ERT test: graph with file-level DEPENDS edges
+- ERT test: cycle detection across file-level items

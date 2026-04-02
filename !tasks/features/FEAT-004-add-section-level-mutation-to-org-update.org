@@ -123,7 +123,7 @@ Use the ~org-tasks-test--with-org-file~ macro pattern from ~org-tasks-test.el~.
 
 Test fixtures: item with multiple sections:
 #+begin_example
-* ITEM Test Task
+,* ITEM Test Task
 :PROPERTIES:
 :CUSTOM_ID: TSK-001-test
 :EFFORT: 1h

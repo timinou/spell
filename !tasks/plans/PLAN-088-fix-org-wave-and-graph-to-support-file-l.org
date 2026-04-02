@@ -1,0 +1,125 @@
+#+TITLE: Fix org wave and graph to support file-level items
+#+STATE: DONE
+#+SESSION_ID: 14aae3865f74957d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-18-54-845Z_14aae3865f74957d.jsonl]]
+#+CUSTOM_ID: PLAN-088-fix-org-wave-and-graph-to-support-file-l
+#+EFFORT: 9h
+#+PRIORITY: #A
+#+LAYER: backend
+
+
+NOTE [2026-04-02]: Plan complete. All 7 child items DONE. 44/44 ERT tests pass. Real corpus: 704 items in 0.61s.
+
+* Initial Message
+
+⏳ Org: wave
+ wave: 1
+ ready: 1
+ blocked: 0
+ completed: 0/1
+ - TSK-001-test Test Task
+
+
+
+ ⏳ Org: graph
+ {
+   "nodes": [
+     {
+       "custom_id": "TSK-001-test",
+       "title": "Test Task",
+       "state": "ITEM"
+     }
+   ],
+   "edges": [],
+   "cycles": []
+ }
+
+
+in session:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa.jsonl
+ ID: 14aac3ad63d8f8fa
+
+
+
+Why???? this is fucked up, it means the org wave and graph are stubs. WTF?
+
+* Context
+
+Org wave and graph commands return near-empty results because 97% of items (672 of 688) use the file-level format (~#+CUSTOM_ID:~, ~#+STATE:~ frontmatter) which the Elisp tools do not support. The Elisp ~org-mcp--collect-full-items-from-file~ and ~org-mcp--collect-graph-nodes-from-file~ only scan for heading-level items (~* STATE Title~ with ~:PROPERTIES:~ drawer).
+
+The only item visible to wave/graph was a phantom test fixture (~TSK-001-test~) leaking from a ~#+begin_example~ block — org-element treats ~* ITEM~ at column 0 as a headline regardless of block context.
+
+Additional issues discovered:
+- ~INIT~ state missing from ~org-tasks-todo-keywords~
+- ~org-tasks--find-directory~ looks for ~@tasks~ but the directory is ~!tasks~
+- Full org-element parsing of 672 files exceeds the 30s MCP timeout
+
+** Approach
+
+Add a lightweight frontmatter parser (~org-tasks--parse-file-frontmatter~) to ~org-tasks.el~ that extracts item metadata from ~#+KEY: value~ lines without ~org-element-parse-buffer~. Wire it into wave and graph node collection as a fast-path. Keep heading-level scanning for sub-outline support.
+
+** Key decisions
+- Fast-path: regex-based ~#+KEY:~ scanner reads first 2KB of each file, handles 97% of items in <1ms per file
+- Slow-path: ~org-element-parse-buffer~ used only for the 16 files with heading-level items
+- Both paths produce the same alist shape — downstream wave/graph logic unchanged
+- ERT tests validate both paths and mixed scenarios
+
+* Verification
+
+#+begin_src sh
+# ERT tests (all wave/graph tests including new file-level tests)
+emacs --batch -l ert \
+  -l packages/org/elisp/org-tasks.el \
+  -l packages/org/elisp/mcp-server.el \
+  -l packages/org/elisp/tools/org-mcp-common.el \
+  -l packages/org/elisp/tools/org-dependency-graph.el \
+  -l packages/org/elisp/tools/org-next-wave.el \
+  -l packages/org/elisp/test/org-wave-graph-test.el \
+  -f ert-run-tests-batch-and-exit
+
+# Manual verification: org wave must return real items, not TSK-001-test
+# Call org wave on features category — expect FEAT items in ITEM state
+# Call org graph — expect edges from #+DEPENDS: properties
+# Call org wave (all) — must complete within 30s timeout
+#+end_src
+
+* Execution Manifest
+
+** foundation                                      :wave:
+- [[id:BUG-093-add-init-to-org-tasks-todo-keywords-and]] Add INIT to org-tasks-todo-keywords (15m)
+- [[id:BUG-094-fix-phantom-tsk-001-test-parsed-from-exa]] Fix phantom TSK-001-test (10m)
+- [[id:BUG-095-fix-org-tasks-find-directory-to-use-pi-p]] Fix org-tasks--find-directory (15m)
+
+** core                                            :wave:
+- [[id:FEAT-225-elisp-file-level-item-parser-for-wave-an]] Elisp file-level item parser (3h, depends BUG-093)
+
+** wiring                                          :wave:
+- [[id:FEAT-226-wire-file-level-items-into-org-next-wave]] Wire into org-next-wave (2h, depends FEAT-225)
+- [[id:FEAT-227-wire-file-level-items-into-org-dependenc]] Wire into org-dependency-graph (1h30m, depends FEAT-225)
+
+** verify                                          :wave:
+- [[id:FEAT-228-ert-test-suite-for-file-level-wave-and-g]] ERT test suite (2h, depends FEAT-225)
+
+** Completion [2026-04-02]
+
+*** Verification
+- ERT tests: 44/44 pass (11 new file-level + 4 existing wave/graph + 29 existing org-tasks/edit-section)
+- Real corpus: 701 files scanned, 704 items found in 0.61s (was 1 phantom item)
+- Wave: 704 total items, 508 completed, 8 wave items, 10 blocked, wave number 9
+- Graph: 704 nodes, 145 edges, 0 cycles in 0.57s
+- Phantom TSK-001-test: eliminated from all files
+- INIT state: recognized by wave/graph/transitions
+
+*** Artifacts
+- Modified: =packages/org/elisp/org-tasks.el= (frontmatter parser, INIT keyword, !tasks path, valid-transitions)
+- Modified: =packages/org/elisp/tools/org-next-wave.el= (wired to unified collector)
+- Modified: =packages/org/elisp/tools/org-dependency-graph.el= (wired to unified collector)
+- Modified: =packages/org/elisp/test/org-wave-graph-test.el= (11 new ERT tests)
+- Modified: =!tasks/features/FEAT-004-add-section-level-mutation-to-org-update.org= (escaped phantom headline)
+- Modified: =!tasks/bugs/BUG-094-fix-phantom-tsk-001-test-parsed-from-exa.org= (escaped phantom headline)
+
+*** Deviations
+None.

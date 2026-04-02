@@ -1,0 +1,81 @@
+#+TITLE: Fix org-tasks--find-directory to use pi-project-root and tasks path
+#+STATE: DONE
+#+SESSION_ID: 14aae3865f74957d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-18-54-845Z_14aae3865f74957d.jsonl]]
+#+CUSTOM_ID: BUG-095-fix-org-tasks-find-directory-to-use-pi-p
+#+EFFORT: 15m
+#+PRIORITY: #B
+#+LAYER: backend
+#+FILES: packages/org/elisp/org-tasks.el
+
+NOTE [2026-04-02]: Updated find-directory to use !tasks and pi-project-root; updated all @tasks references to !tasks.
+
+* Initial Message
+
+⏳ Org: wave
+ wave: 1
+ ready: 1
+ blocked: 0
+ completed: 0/1
+ - TSK-001-test Test Task
+
+
+
+ ⏳ Org: graph
+ {
+   "nodes": [
+     {
+       "custom_id": "TSK-001-test",
+       "title": "Test Task",
+       "state": "ITEM"
+     }
+   ],
+   "edges": [],
+   "cycles": []
+ }
+
+
+in session:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa.jsonl
+ ID: 14aac3ad63d8f8fa
+
+
+
+Why???? this is fucked up, it means the org wave and graph are stubs. WTF?
+
+* Problem
+
+~org-tasks--find-directory~ looks for ~@tasks~ via ~locate-dominating-file~, but the actual directory is ~!tasks~. The function also doesn't use ~pi-project-root~ which is set by the daemon launcher.
+
+Currently this is masked because the TypeScript layer always passes explicit file paths to Emacs MCP tools. But any Elisp code that falls back to ~org-tasks--all-org-files~ will fail to find items.
+
+* Fix
+
+Update ~org-tasks--find-directory~ to:
+1. Check ~org-tasks-directory~ (existing, unchanged)
+2. Check ~(expand-file-name "!tasks" pi-project-root)~ when ~pi-project-root~ is bound
+3. Fall back to ~locate-dominating-file~ for ~!tasks~ (not ~@tasks~)
+4. Final fallback to git root + ~!tasks~
+
+#+begin_src elisp
+(defun org-tasks--find-directory ()
+  "Find the tasks directory."
+  (or org-tasks-directory
+      (when (and (boundp 'pi-project-root) pi-project-root)
+        (let ((dir (expand-file-name "!tasks" pi-project-root)))
+          (when (file-directory-p dir) dir)))
+      (when-let ((current (or buffer-file-name default-directory)))
+        (when-let ((parent (locate-dominating-file current "!tasks")))
+          (expand-file-name "!tasks" parent)))
+      (let ((git-root (locate-dominating-file default-directory ".git")))
+        (when git-root
+          (expand-file-name "!tasks" git-root)))))
+#+end_src
+
+* Acceptance Criteria
+- ~org-tasks--directory~ returns ~!tasks/~ path when ~pi-project-root~ is set
+- Falls back to ~locate-dominating-file~ for ~!tasks~ when ~pi-project-root~ is unset
+- No ERT regressions

@@ -1,0 +1,78 @@
+#+TITLE: Fix phantom TSK-001-test parsed from example block in FEAT-004
+#+STATE: DONE
+#+SESSION_ID: 14aae3865f74957d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-18-54-845Z_14aae3865f74957d.jsonl]]
+#+CUSTOM_ID: BUG-094-fix-phantom-tsk-001-test-parsed-from-exa
+#+EFFORT: 10m
+#+PRIORITY: #B
+#+LAYER: backend
+#+FILES: !tasks/features/FEAT-004-add-section-level-mutation-to-org-update.org
+
+NOTE [2026-04-02]: Escaped headlines in example blocks in FEAT-004 and BUG-094 itself using comma prefix.
+
+* Initial Message
+
+⏳ Org: wave
+ wave: 1
+ ready: 1
+ blocked: 0
+ completed: 0/1
+ - TSK-001-test Test Task
+
+
+
+ ⏳ Org: graph
+ {
+   "nodes": [
+     {
+       "custom_id": "TSK-001-test",
+       "title": "Test Task",
+       "state": "ITEM"
+     }
+   ],
+   "edges": [],
+   "cycles": []
+ }
+
+
+in session:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa.jsonl
+ ID: 14aac3ad63d8f8fa
+
+
+
+Why???? this is fucked up, it means the org wave and graph are stubs. WTF?
+
+* Problem
+
+~FEAT-004-add-section-level-mutation-to-org-update.org~ contains a test fixture inside a ~#+begin_example~ block at line 125-142:
+
+#+begin_example
+,* ITEM Test Task
+:PROPERTIES:
+:CUSTOM_ID: TSK-001-test
+:EFFORT: 1h
+:END:
+#+end_example
+
+In org-mode, headlines (~* ...~) always take precedence over blocks. The ~org-element-parse-buffer~ parser treats ~* ITEM Test Task~ as a real heading, terminating the example block. This creates a phantom item that pollutes wave/graph results.
+
+The TypeScript ~org-reader.ts~ also has this bug — it does not skip ~#+begin_example~ blocks during line-by-line scanning.
+
+* Fix
+
+Indent the ~*~ inside the example block to prevent headline parsing:
+
+#+begin_example
+,* ITEM Test Task
+#+end_example
+
+Using the org-mode comma escape prefix (~,*~) is the canonical way to include literal headline-like text inside blocks. When rendered, the comma is stripped. When parsed, it is not a headline.
+
+* Acceptance Criteria
+- ~org wave --file FEAT-004...org~ returns 0 items (file-level item is DONE state)
+- TSK-001-test no longer appears in any wave/graph output
+- The example block content still renders correctly when viewed

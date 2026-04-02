@@ -1,0 +1,128 @@
+#+TITLE: Elisp file-level item parser for wave and graph
+#+STATE: DONE
+#+SESSION_ID: 14aae3865f74957d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-18-54-845Z_14aae3865f74957d.jsonl]]
+#+CUSTOM_ID: FEAT-225-elisp-file-level-item-parser-for-wave-an
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+#+FILES: packages/org/elisp/org-tasks.el packages/org/elisp/tools/org-mcp-common.el
+
+NOTE [2026-04-02]: Added org-tasks--parse-file-frontmatter, org-tasks--collect-heading-items-from-file, and org-tasks--collect-items-from-file to org-tasks.el.
+
+* Initial Message
+
+⏳ Org: wave
+ wave: 1
+ ready: 1
+ blocked: 0
+ completed: 0/1
+ - TSK-001-test Test Task
+
+
+
+ ⏳ Org: graph
+ {
+   "nodes": [
+     {
+       "custom_id": "TSK-001-test",
+       "title": "Test Task",
+       "state": "ITEM"
+     }
+   ],
+   "edges": [],
+   "cycles": []
+ }
+
+
+in session:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa.jsonl
+ ID: 14aac3ad63d8f8fa
+
+
+
+Why???? this is fucked up, it means the org wave and graph are stubs. WTF?
+
+* Problem
+
+97% of org items (672 of 688) use file-level format:
+#+begin_example
+#+TITLE: My Feature
+#+STATE: ITEM
+#+CUSTOM_ID: FEAT-001-my-feature
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: backend
+#+DEPENDS: FEAT-002 FEAT-003
+#+end_example
+
+The Elisp wave/graph tools (~org-mcp--collect-full-items-from-file~, ~org-mcp--collect-graph-nodes-from-file~) only scan heading-level items (~* STATE Title~ with ~:PROPERTIES:~ drawer). They miss all file-level items.
+
+* Design
+
+Add a new function ~org-tasks--parse-file-frontmatter~ to ~org-tasks.el~ that:
+
+1. Scans ~#+KEY: value~ lines at the top of the file (fast regex, no ~org-element-parse-buffer~)
+2. Extracts: ~CUSTOM_ID~, ~STATE~, ~TITLE~, ~DEPENDS~, ~BLOCKS~, ~PRIORITY~, ~EFFORT~, ~AGENT~, ~LAYER~
+3. Returns an alist matching the existing item shape, or nil if no ~#+CUSTOM_ID:~ found
+
+Performance rationale: ~org-element-parse-buffer~ costs ~30-50ms per file. For 672 files that's 20-34 seconds, exceeding the 30s timeout. A regex-based scanner handles the frontmatter in <1ms per file.
+
+Add a higher-level ~org-tasks--collect-items-from-file~ that:
+1. Tries file-level parsing first (fast path for 97% of files)
+2. Falls back to heading-level ~org-element-parse-buffer~ only when needed
+3. Returns unified item alist shape regardless of source
+
+* Implementation
+
+** org-tasks.el: ~org-tasks--parse-file-frontmatter~
+
+#+begin_src elisp
+(defun org-tasks--parse-file-frontmatter (file)
+  "Parse file-level #+KEY: value frontmatter from FILE.
+Returns alist with custom_id, title, state, priority, effort,
+agent, layer, depends, blocks — or nil if no #+CUSTOM_ID found."
+  (with-temp-buffer
+    (insert-file-contents file nil 0 2048) ; only read first 2KB
+    (goto-char (point-min))
+    (let ((props (make-hash-table :test 'equal)))
+      (while (looking-at "^#\\+\\([A-Za-z_]+\\):\\s-*\\(.*\\)$")
+        (puthash (upcase (match-string 1)) (string-trim (match-string 2)) props)
+        (forward-line 1))
+      (when-let ((custom-id (gethash "CUSTOM_ID" props)))
+        (let* ((state-str (gethash "STATE" props))
+               (state (when (and state-str
+                                (member state-str org-tasks-todo-keywords))
+                        state-str))
+               (priority-raw (gethash "PRIORITY" props))
+               (priority (when priority-raw
+                          (replace-regexp-in-string "^#" "" priority-raw))))
+          `((custom_id . ,custom-id)
+            (title . ,(or (gethash "TITLE" props) ""))
+            (state . ,(or state ""))
+            (priority . ,(or priority ""))
+            (effort . ,(or (gethash "EFFORT" props) ""))
+            (agent . ,(or (gethash "AGENT" props) ""))
+            (layer . ,(or (gethash "LAYER" props) ""))
+            (depends . ,(or (gethash "DEPENDS" props) ""))
+            (blocks . ,(or (gethash "BLOCKS" props) ""))))))))
+#+end_src
+
+** org-mcp-common.el: unified collector
+
+Add ~org-mcp--collect-items-from-file~ that:
+1. Calls ~org-tasks--parse-file-frontmatter~ (fast)
+2. If that returns an item, wraps it in a list
+3. Also scans for heading-level items (needed for files with sub-outline items, e.g. PLAN files with heading-level children)
+4. Deduplicates by CUSTOM_ID
+
+* Acceptance Criteria
+- ~org-tasks--parse-file-frontmatter~ returns correct alist for file-level items
+- Returns nil for heading-level-only files
+- Parses DEPENDS as raw string (space-separated IDs, consumed by edge-building)
+- Handles missing optional fields gracefully (empty string defaults)
+- ~org-element-parse-buffer~ is NOT called for file-level-only items
+- ERT tests cover: file-level item, heading-level item, mixed file, missing frontmatter, DEPENDS parsing, PRIORITY format normalization

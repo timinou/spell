@@ -1,0 +1,65 @@
+#+TITLE: Add INIT to org-tasks-todo-keywords and setup-keywords
+#+STATE: DONE
+#+SESSION_ID: 14aae3865f74957d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-18-54-845Z_14aae3865f74957d.jsonl]]
+#+CUSTOM_ID: BUG-093-add-init-to-org-tasks-todo-keywords-and
+#+EFFORT: 15m
+#+PRIORITY: #A
+#+LAYER: backend
+#+FILES: packages/org/elisp/org-tasks.el
+
+NOTE [2026-04-02]: Added INIT as first keyword in org-tasks-todo-keywords, setup-keywords, and valid-transitions.
+
+* Initial Message
+
+⏳ Org: wave
+ wave: 1
+ ready: 1
+ blocked: 0
+ completed: 0/1
+ - TSK-001-test Test Task
+
+
+
+ ⏳ Org: graph
+ {
+   "nodes": [
+     {
+       "custom_id": "TSK-001-test",
+       "title": "Test Task",
+       "state": "ITEM"
+     }
+   ],
+   "edges": [],
+   "cycles": []
+ }
+
+
+in session:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa.jsonl
+ ID: 14aac3ad63d8f8fa
+
+
+
+Why???? this is fucked up, it means the org wave and graph are stubs. WTF?
+
+* Problem
+
+~org-tasks-todo-keywords~ is ~("ITEM" "DOING" "REVIEW" "DONE" "BLOCKED")~ but the TypeScript ~DEFAULT_TODO_KEYWORDS~ includes ~"INIT"~. The Elisp ~org-tasks--setup-keywords~ also omits INIT from the ~#+TODO:~ declaration it inserts.
+
+Items with ~#+STATE: INIT~ or heading ~* INIT Title~ are invisible to all Elisp tools.
+
+* Fix
+
+1. Add ~"INIT"~ to ~org-tasks-todo-keywords~ defcustom default
+2. Add ~"INIT(I)"~ to the ~#+TODO:~ line in ~org-tasks--setup-keywords~
+3. Add ~"INIT(I)"~ to the ~org-todo-keywords~ setq-local in ~org-tasks--setup-keywords~
+
+* Acceptance Criteria
+- ~org-tasks-todo-keywords~ default value includes "INIT"
+- ~org-tasks--setup-keywords~ inserts ~#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)~
+- Items in INIT state are found by wave/graph/dashboard Elisp tools
+- No ERT regressions from existing tests

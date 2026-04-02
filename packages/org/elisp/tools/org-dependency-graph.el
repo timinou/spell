@@ -12,30 +12,10 @@
 
 (defun org-mcp--collect-graph-nodes-from-file (file)
   "Collect all task items from FILE as graph node alists.
+Uses fast frontmatter path for file-level items, falls back to org-element
+for heading-level items.
 Returns list entries with custom_id, title, state, depends, and blocks fields."
-  (with-temp-buffer
-    (insert-file-contents file)
-    (let ((buffer-file-name file))
-      (org-mode)
-      (org-tasks--setup-keywords)
-      (let ((ast (org-element-parse-buffer))
-            (nodes '()))
-        (org-element-map ast 'headline
-          (lambda (hl)
-            (when-let ((todo (org-element-property :todo-keyword hl)))
-              (when (member todo org-tasks-todo-keywords)
-                (let ((custom-id (org-tasks--extract-property hl "CUSTOM_ID"))
-                      (title (org-element-property :raw-value hl))
-                      (depends (org-tasks--extract-property hl "DEPENDS"))
-                      (blocks (org-tasks--extract-property hl "BLOCKS")))
-                  (when custom-id
-                    (push `((custom_id . ,custom-id)
-                            (title . ,title)
-                            (state . ,todo)
-                            (depends . ,(or depends ""))
-                            (blocks . ,(or blocks "")))
-                          nodes)))))))
-        (nreverse nodes)))))
+  (org-tasks--collect-items-from-file file))
 
 (defun org-mcp--collect-graph-nodes (files)
   "Collect graph nodes from FILES."

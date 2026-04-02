@@ -41,36 +41,10 @@ STATE-MAP maps id -> state string."
    (t 3)))
 
 (defun org-mcp--collect-full-items-from-file (file)
-  "Collect items from FILE with priority, effort, agent, layer for wave output."
-  (with-temp-buffer
-    (insert-file-contents file)
-    (let ((buffer-file-name file))
-      (org-mode)
-      (org-tasks--setup-keywords)
-      (let ((ast (org-element-parse-buffer))
-            (items '()))
-        (org-element-map ast 'headline
-          (lambda (hl)
-            (when-let ((todo (org-element-property :todo-keyword hl)))
-              (when (member todo org-tasks-todo-keywords)
-                (let ((custom-id (org-tasks--extract-property hl "CUSTOM_ID"))
-                      (title (org-element-property :raw-value hl))
-                      (priority-val (org-element-property :priority hl))
-                      (effort (org-tasks--extract-property hl "EFFORT"))
-                      (agent (org-tasks--extract-property hl "AGENT"))
-                      (layer (org-tasks--extract-property hl "LAYER")))
-                  (when custom-id
-                    (push `((custom_id . ,custom-id)
-                            (title . ,title)
-                            (state . ,todo)
-                            (priority . ,(if priority-val
-                                            (char-to-string priority-val)
-                                          ""))
-                            (effort . ,(or effort ""))
-                            (agent . ,(or agent ""))
-                            (layer . ,(or layer "")))
-                          items)))))))
-        (nreverse items)))))
+  "Collect items from FILE with priority, effort, agent, layer for wave output.
+Uses fast frontmatter path for file-level items, falls back to org-element
+for heading-level items."
+  (org-tasks--collect-items-from-file file))
 
 (defun org-mcp--collect-full-items (files)
   "Collect items from FILES with priority, effort, agent, layer for wave output."
@@ -85,9 +59,9 @@ ARGS may contain `file', `files', or no target args to scan all org files."
   (condition-case err
       (let* ((files (org-mcp--resolve-files args))
              ;; Collect full item data including priority/effort/agent/layer
+             ;; Items now include depends/blocks from unified collector
              (all-items (org-mcp--collect-full-items files))
-             (graph-nodes (org-mcp--collect-graph-nodes files))
-             (edges (org-mcp--build-edges graph-nodes))
+             (edges (org-mcp--build-edges all-items))
              (dep-map (org-mcp--build-dependency-map edges))
              (state-map (make-hash-table :test 'equal))
              (wave-items '())

@@ -1,0 +1,101 @@
+#+TITLE: ERT test suite for file-level wave and graph
+#+STATE: DONE
+#+SESSION_ID: 14aae3865f74957d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-18-54-845Z_14aae3865f74957d.jsonl]]
+#+CUSTOM_ID: FEAT-228-ert-test-suite-for-file-level-wave-and-g
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: test
+#+FILES: packages/org/elisp/test/org-wave-graph-test.el
+#+DEPENDS: FEAT-225-elisp-file-level-item-parser-for-wave-an
+
+NOTE [2026-04-02]: Added 11 new file-level ERT tests; all 44 tests pass including 4 existing heading-level tests.
+
+* Initial Message
+
+⏳ Org: wave
+ wave: 1
+ ready: 1
+ blocked: 0
+ completed: 0/1
+ - TSK-001-test Test Task
+
+
+
+ ⏳ Org: graph
+ {
+   "nodes": [
+     {
+       "custom_id": "TSK-001-test",
+       "title": "Test Task",
+       "state": "ITEM"
+     }
+   ],
+   "edges": [],
+   "cycles": []
+ }
+
+
+in session:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa.jsonl
+ ID: 14aac3ad63d8f8fa
+
+
+
+Why???? this is fucked up, it means the org wave and graph are stubs. WTF?
+
+* Problem
+
+The existing ~org-wave-graph-test.el~ only tests heading-level items. No coverage for file-level items. The test fixture pattern (~test-owg--with-temp-tasks~ macro) creates heading-level items.
+
+* Implementation
+
+** Add file-level fixture helper
+
+#+begin_src elisp
+(defun test-owg--file-level-task (title custom-id state &optional props)
+  "Build file-level task content string.
+PROPS is alist of extra #+KEY: value properties."
+  (let ((lines (list (format "#+TITLE: %s" title)
+                     (format "#+STATE: %s" state)
+                     (format "#+CUSTOM_ID: %s" custom-id))))
+    (dolist (prop props)
+      (push (format "#+%s: %s" (car prop) (cdr prop)) lines))
+    (mapconcat #'identity (nreverse lines) "
+")))
+#+end_src
+
+** Test cases
+
+1. ~file-level/frontmatter-parse~ — parse a file-level item, verify all fields extracted
+2. ~file-level/wave-includes-file-items~ — wave computation includes file-level ITEM items
+3. ~file-level/wave-excludes-done~ — file-level DONE items excluded from wave
+4. ~file-level/depends-creates-edges~ — ~#+DEPENDS: ID1 ID2~ creates correct edges
+5. ~file-level/wave-respects-depends~ — item with unresolved deps is blocked, not in wave
+6. ~file-level/graph-nodes-include-file-items~ — dependency graph shows file-level nodes
+7. ~file-level/graph-edges-from-depends~ — graph edges from ~#+DEPENDS:~
+8. ~file-level/mixed-heading-and-file~ — file with file-level item + heading-level children (plan pattern)
+9. ~file-level/priority-sort~ — wave sorts file-level items by priority
+10. ~file-level/init-state-recognized~ — INIT state items appear in wave (after BUG-093 fix)
+11. ~file-level/no-custom-id-skipped~ — files without ~#+CUSTOM_ID~ produce no items
+
+** Run command
+
+#+begin_example
+emacs --batch -l ert \
+  -l packages/org/elisp/org-tasks.el \
+  -l packages/org/elisp/mcp-server.el \
+  -l packages/org/elisp/tools/org-mcp-common.el \
+  -l packages/org/elisp/tools/org-dependency-graph.el \
+  -l packages/org/elisp/tools/org-next-wave.el \
+  -l packages/org/elisp/test/org-wave-graph-test.el \
+  -f ert-run-tests-batch-and-exit
+#+end_example
+
+* Acceptance Criteria
+- All 11 ERT tests pass
+- No regressions in existing heading-level tests
+- Test fixture pattern is clean and reusable

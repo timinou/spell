@@ -9,7 +9,7 @@
 ;;; Commentary:
 
 ;; Generalized org-mode task management engine for OMO.
-;; Provides parsing, validation, and query functions for @tasks/ org files.
+;; Provides parsing, validation, and query functions for !tasks/ org files.
 ;; Designed to be called by MCP tool handlers.
 ;;
 ;; Entry points (all return JSON strings):
@@ -17,7 +17,7 @@
 ;;   - `org-tasks-get-item'      - Single item by CUSTOM_ID (with body)
 ;;   - `org-tasks-get-progress'  - Progress counts by state
 ;;   - `org-tasks-validate-file' - Validate single file
-;;   - `org-tasks-validate-all'  - Validate all @tasks files
+;;   - `org-tasks-validate-all'  - Validate all !tasks files
 ;;   - `org-tasks-dashboard'     - Aggregate metrics
 
 ;;; Code:
@@ -36,7 +36,7 @@
   :prefix "org-tasks-")
 
 (defcustom org-tasks-directory nil
-  "Directory containing @tasks files.
+  "Directory containing !tasks files.
 If nil, auto-detected from project root."
   :type '(choice (const nil) directory)
   :group 'org-tasks)
@@ -66,8 +66,8 @@ If nil, auto-detected from project root."
   :group 'org-tasks)
 
 (defcustom org-tasks-todo-keywords
-  '("ITEM" "DOING" "REVIEW" "DONE" "BLOCKED")
-  "TODO keywords used in @tasks files."
+  '("INIT" "ITEM" "DOING" "REVIEW" "DONE" "BLOCKED")
+  "TODO keywords used in !tasks files."
   :type '(repeat string)
   :group 'org-tasks)
 
@@ -87,26 +87,138 @@ If nil, auto-detected from project root."
 ;;; Directory Management
 
 (defun org-tasks--find-directory ()
-  "Find the @tasks directory."
+  "Find the !tasks directory."
   (or org-tasks-directory
+      (when (and (boundp 'pi-project-root) pi-project-root)
+        (let ((dir (expand-file-name "!tasks" pi-project-root)))
+          (when (file-directory-p dir) dir)))
       (when-let ((current (or buffer-file-name default-directory)))
-        (when-let ((parent (locate-dominating-file current "@tasks")))
-          (expand-file-name "@tasks" parent)))
+        (when-let ((parent (locate-dominating-file current "!tasks")))
+          (expand-file-name "!tasks" parent)))
       (let ((git-root (locate-dominating-file default-directory ".git")))
         (when git-root
-          (expand-file-name "@tasks" git-root)))))
+          (expand-file-name "!tasks" git-root)))))
 
 (defun org-tasks--directory ()
-  "Return the @tasks directory path, ensuring it exists."
+  "Return the !tasks directory path, ensuring it exists."
   (let ((dir (org-tasks--find-directory)))
     (if (and dir (file-directory-p dir))
         (file-name-as-directory dir)
-      (error "Cannot find @tasks directory"))))
+      (error "Cannot find !tasks directory"))))
 
 (defun org-tasks--all-org-files ()
-  "Return list of all org files in @tasks directory tree."
+  "Return list of all org files in !tasks directory tree."
   (let ((dir (org-tasks--directory)))
     (directory-files-recursively dir "\\.org$")))
+
+;;; File-Level Frontmatter Parsing
+
+(defun org-tasks--parse-file-frontmatter (file)
+  "Parse file-level #+KEY: value frontmatter from FILE.
+Returns alist with custom_id, title, state, priority, effort,
+agent, layer, depends, blocks -- or nil if no #+CUSTOM_ID found."
+  (with-temp-buffer
+    (insert-file-contents file nil 0 2048)
+    (goto-char (point-min))
+    (let ((props (make-hash-table :test 'equal)))
+      (while (and (not (eobp))
+                  (looking-at "^#\\+\\([A-Za-z_]+\\):\\s-*\\(.*\\)$"))
+        (puthash (upcase (match-string 1)) (string-trim (match-string 2)) props)
+        (forward-line 1))
+      ;; Skip blank lines between frontmatter block and body
+      (while (and (not (eobp)) (looking-at "^\\s-*$"))
+        (forward-line 1))
+      ;; Check for heading-level items after frontmatter
+      (let ((has-heading-items nil))
+        (save-excursion
+          (while (and (not (eobp)) (not has-heading-items))
+            (when (looking-at (concat "^\\*+\\s-+\\("
+                                     (regexp-opt org-tasks-todo-keywords)
+                                     "\\)\\s-+"))
+              (setq has-heading-items t))
+            (forward-line 1)))
+        (let ((custom-id (gethash "CUSTOM_ID" props))
+              (file-level-item nil))
+          ;; Build file-level item if CUSTOM_ID exists
+          (when custom-id
+            (let* ((state-str (gethash "STATE" props))
+                   (state (when (and state-str
+                                    (member state-str org-tasks-todo-keywords))
+                            state-str))
+                   (priority-raw (gethash "PRIORITY" props))
+                   (priority (when priority-raw
+                               (replace-regexp-in-string "^#" "" priority-raw))))
+              (setq file-level-item
+                    `((custom_id . ,custom-id)
+                      (title . ,(or (gethash "TITLE" props) ""))
+                      (state . ,(or state ""))
+                      (priority . ,(or priority ""))
+                      (effort . ,(or (gethash "EFFORT" props) ""))
+                      (agent . ,(or (gethash "AGENT" props) ""))
+                      (layer . ,(or (gethash "LAYER" props) ""))
+                      (depends . ,(or (gethash "DEPENDS" props) ""))
+                      (blocks . ,(or (gethash "BLOCKS" props) ""))))))
+          (list file-level-item has-heading-items))))))
+
+(defun org-tasks--collect-heading-items-from-file (file)
+  "Collect heading-level items from FILE using org-element-parse-buffer.
+Returns list of item alists with custom_id, title, state, priority,
+effort, agent, layer, depends, blocks fields."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let ((buffer-file-name file))
+      (org-mode)
+      (org-tasks--setup-keywords)
+      (let ((ast (org-element-parse-buffer))
+            (items '()))
+        (org-element-map ast 'headline
+          (lambda (hl)
+            (when-let ((todo (org-element-property :todo-keyword hl)))
+              (when (member todo org-tasks-todo-keywords)
+                (let ((custom-id (org-tasks--extract-property hl "CUSTOM_ID"))
+                      (title (org-element-property :raw-value hl))
+                      (priority-val (org-element-property :priority hl))
+                      (effort (org-tasks--extract-property hl "EFFORT"))
+                      (agent (org-tasks--extract-property hl "AGENT"))
+                      (layer (org-tasks--extract-property hl "LAYER"))
+                      (depends (org-tasks--extract-property hl "DEPENDS"))
+                      (blocks (org-tasks--extract-property hl "BLOCKS")))
+                  (when custom-id
+                    (push `((custom_id . ,custom-id)
+                            (title . ,title)
+                            (state . ,todo)
+                            (priority . ,(if priority-val
+                                            (char-to-string priority-val)
+                                          ""))
+                            (effort . ,(or effort ""))
+                            (agent . ,(or agent ""))
+                            (layer . ,(or layer ""))
+                            (depends . ,(or depends ""))
+                            (blocks . ,(or blocks "")))
+                          items)))))))
+        (nreverse items)))))
+
+(defun org-tasks--collect-items-from-file (file)
+  "Collect all items from FILE, using fast frontmatter path when possible.
+Returns list of item alists.  Deduplicates by custom_id."
+  (let* ((parsed (org-tasks--parse-file-frontmatter file))
+         (file-item (car parsed))
+         (has-headings (cadr parsed))
+         (items '())
+         (seen (make-hash-table :test 'equal)))
+    ;; Add file-level item if present and has valid state
+    (when (and file-item (not (string-empty-p (cdr (assoc 'custom_id file-item)))))
+      (puthash (cdr (assoc 'custom_id file-item)) t seen)
+      (push file-item items))
+    ;; Only parse heading-level items when the file has headings with TODO keywords
+    (when has-headings
+      (dolist (item (org-tasks--collect-heading-items-from-file file))
+        (let ((id (cdr (assoc 'custom_id item))))
+          (unless (gethash id seen)
+            (puthash id t seen)
+            (push item items)))))
+    (nreverse items)))
+
 
 ;;; Org Element Extraction
 
@@ -175,9 +287,9 @@ Checks both direct properties and property drawers."
       (goto-char (point-min))
       (while (looking-at "^#\\+")
         (forward-line 1))
-      (insert "#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)\n")))
+      (insert "#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)\n")))
   (setq-local org-todo-keywords
-              '((sequence "ITEM(i)" "DOING(d)" "REVIEW(r)" "|" "DONE(D)" "BLOCKED(b)")))
+              '((sequence "INIT(I)" "ITEM(i)" "DOING(d)" "REVIEW(r)" "|" "DONE(D)" "BLOCKED(b)")))
   (org-set-regexps-and-options))
 
 ;;; Core Query Functions
@@ -383,7 +495,7 @@ Includes body text."
              (file . ,file))))))))
 
 (defun org-tasks-validate-all ()
-  "Validate all @tasks files and return JSON string."
+  "Validate all !tasks files and return JSON string."
   (let ((all-errors '()))
     (dolist (file (org-tasks--all-org-files))
       (with-temp-buffer
@@ -484,10 +596,11 @@ Includes body text."
 ;;; Mutation Functions
 
 (defconst org-tasks-valid-transitions
-  '(("ITEM"    . ("DOING" "BLOCKED" "DONE"))
+  '(("INIT"    . ("DOING" "REVIEW" "BLOCKED"))
+    ("ITEM"    . ("DOING" "BLOCKED" "DONE"))
     ("DOING"   . ("REVIEW" "DONE" "BLOCKED" "ITEM"))
     ("REVIEW"  . ("DONE" "DOING" "BLOCKED"))
-    ("BLOCKED" . ("ITEM" "DOING"))
+    ("BLOCKED" . ("INIT" "ITEM" "DOING"))
     ("DONE"    . ("ITEM")))
   "Alist of valid state transitions. Key=current state, value=list of allowed target states.")
 
