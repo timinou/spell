@@ -1,13 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { GoalResult } from "../../src/executor";
-import type { HookContext } from "../../src/hooks";
-import {
-	createNotificationSender,
-	NoopNotificationSender,
-	type NotificationSender,
-	TelegramHookExecutor,
-	TelegramNotificationSender,
-} from "../../src/hooks";
+import type { HookContext, TelegramMessage } from "../../src/hooks";
+import { TelegramHookExecutor } from "../../src/hooks";
 import type { TelegramHook } from "../../src/manifest";
 
 const BASE_RESULT: GoalResult = {
@@ -23,101 +17,22 @@ const BASE_CONTEXT: HookContext = {
 	timestamp: new Date("2026-04-02T12:34:56.000Z"),
 };
 
-class RecordingSender implements NotificationSender {
-	calls: Array<{ chatId: number; text: string }> = [];
+class RecordingSender {
+	calls: Array<{ chatId: number; message: TelegramMessage }> = [];
 
-	async sendMessage(chatId: number, text: string): Promise<void> {
-		this.calls.push({ chatId, text });
+	async sendMessage(chatId: number, message: TelegramMessage): Promise<void> {
+		this.calls.push({ chatId, message });
 	}
 }
 
-class FailingSender implements NotificationSender {
+class FailingSender {
 	async sendMessage(): Promise<void> {
 		throw new Error("telegram offline");
 	}
 }
 
-async function withServer(
-	handler: (request: Request) => Response | Promise<Response>,
-	run: (url: string) => Promise<void>,
-): Promise<void> {
-	const server = Bun.serve({
-		port: 0,
-		fetch: handler,
-	});
-
-	try {
-		await run(server.url.toString().replace(/\/$/, ""));
-	} finally {
-		await server.stop(true);
-	}
-}
-
-describe("notification sender wiring", () => {
-	it("returns a noop sender when telegram channels are not configured", () => {
-		const sender = createNotificationSender({});
-		expect(sender).toBeInstanceOf(NoopNotificationSender);
-	});
-
-	it("creates a telegram sender that posts configured messages", async () => {
-		const requests: Array<{ path: string; body: { chat_id: number; text: string } }> = [];
-
-		await withServer(
-			async request => {
-				requests.push({
-					path: new URL(request.url).pathname,
-					body: (await request.json()) as { chat_id: number; text: string },
-				});
-				return new Response("ok");
-			},
-			async url => {
-				const sender = createNotificationSender(
-					{
-						telegram: {
-							botToken: "123456:ABC",
-							owners: [42],
-							uploadDir: "/tmp/test-uploads",
-							idleTimeout: 300,
-							maxSessions: 3,
-							projects: {},
-							users: {},
-						},
-					},
-					{ apiBaseUrl: url },
-				);
-				expect(sender).toBeInstanceOf(TelegramNotificationSender);
-				await sender.sendMessage(42, "Goal failed");
-			},
-		);
-
-		expect(requests).toEqual([
-			{
-				path: "/bot123456:ABC/sendMessage",
-				body: { chat_id: 42, text: "Goal failed" },
-			},
-		]);
-	});
-
-	it("skips unauthorized telegram recipients", async () => {
-		let requestCount = 0;
-
-		await withServer(
-			() => {
-				requestCount += 1;
-				return new Response("ok");
-			},
-			async url => {
-				const sender = new TelegramNotificationSender("123456:ABC", new Set([42]), { apiBaseUrl: url });
-				await sender.sendMessage(99, "ignore me");
-			},
-		);
-
-		expect(requestCount).toBe(0);
-	});
-});
-
 describe("TelegramHookExecutor", () => {
-	it("formats and sends hook messages", async () => {
+	it("formats legacy goal notifications without changing the summary text", async () => {
 		const sender = new RecordingSender();
 		const executor = new TelegramHookExecutor(sender);
 		const target: TelegramHook = { type: "telegram", chatId: 42 };
@@ -127,13 +42,43 @@ describe("TelegramHookExecutor", () => {
 		expect(sender.calls).toEqual([
 			{
 				chatId: 42,
-				text: ["Goal: nightly", "Status: success", "Duration: 321ms", "Summary: All checks passed"].join("\n"),
+				message: {
+					text: ["Goal: nightly", "Status: success", "Duration: 321ms", "Summary: All checks passed"].join("\n"),
+				},
+			},
+		]);
+	});
+
+	it("passes through prebuilt telegram payloads", async () => {
+		const sender = new RecordingSender();
+		const executor = new TelegramHookExecutor(sender);
+		const target: TelegramHook = { type: "telegram", chatId: 42 };
+		const richContext: HookContext = {
+			...BASE_CONTEXT,
+			telegramMessage: {
+				text: "<b>Nightly digest</b>",
+				parseMode: "HTML",
+				replyMarkup: {
+					inlineKeyboard: [[{ text: "Open run", url: "https://example.test/runs/1" }]],
+				},
+				linkPreviewOptions: {
+					isDisabled: true,
+				},
+			},
+		};
+
+		await executor.execute(target, BASE_RESULT, richContext);
+
+		expect(sender.calls).toEqual([
+			{
+				chatId: 42,
+				message: richContext.telegramMessage!,
 			},
 		]);
 	});
 
 	it("swallows sender failures", async () => {
-		const executor = new TelegramHookExecutor(new FailingSender());
+		const executor = new TelegramHookExecutor(new FailingSender() as never);
 		const target: TelegramHook = { type: "telegram", chatId: 42 };
 
 		await expect(executor.execute(target, BASE_RESULT, BASE_CONTEXT)).resolves.toBeUndefined();
