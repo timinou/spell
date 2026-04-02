@@ -14,10 +14,15 @@ export default class Server extends Command {
 			char: "c",
 			description: "Path to config directory containing server.kdl, channels.kdl, autonomy.kdl",
 		}),
+		debug: Flags.boolean({
+			description: "Mirror spell-server logs to stderr while preserving file logging",
+		}),
 	};
 
 	async run(): Promise<void> {
 		const { flags } = await this.parse(Server);
+
+		logger.setStderrDebugEnabled(flags.debug === true);
 
 		const configDir = flags["config-dir"] ? path.resolve(flags["config-dir"]) : await resolveDefaultConfigDir();
 

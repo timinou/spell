@@ -17,19 +17,23 @@ function parseBridgeState(raw: unknown): BridgeState {
 	for (const [chatId, entry] of Object.entries(rawSessions)) {
 		if (!entry || typeof entry !== "object") continue;
 		const value = entry as Record<string, unknown>;
-		if (
-			typeof value.sessionPath === "string" &&
-			typeof value.project === "string" &&
-			typeof value.mode === "string" &&
-			typeof value.userId === "string"
-		) {
-			sessions[chatId] = {
-				sessionPath: value.sessionPath,
-				project: value.project,
-				mode: value.mode,
-				userId: value.userId,
-			};
+		if (typeof value.project !== "string" || typeof value.mode !== "string" || typeof value.userId !== "string") {
+			continue;
 		}
+
+		const sessionPath = typeof value.sessionPath === "string" ? value.sessionPath : undefined;
+		const transcriptPath = typeof value.transcriptPath === "string" ? value.transcriptPath : undefined;
+		if (!sessionPath && !transcriptPath) {
+			continue;
+		}
+
+		sessions[chatId] = {
+			sessionPath,
+			transcriptPath,
+			project: value.project,
+			mode: value.mode,
+			userId: value.userId,
+		};
 	}
 
 	return { sessions };
@@ -39,9 +43,10 @@ export async function saveBridgeState(sessions: Map<string, ChatSession>): Promi
 	const state: BridgeState = { sessions: {} };
 
 	for (const [chatId, session] of sessions) {
-		if (!session.sessionPath) continue;
+		if (!session.sessionPath && !session.transcriptPath) continue;
 		state.sessions[chatId] = {
 			sessionPath: session.sessionPath,
+			transcriptPath: session.transcriptPath,
 			project: session.project,
 			mode: session.mode,
 			userId: session.userId,

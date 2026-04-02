@@ -4,10 +4,12 @@ import { RpcClient } from "../rpc/rpc-client";
 import { loadBridgeState, saveBridgeState } from "../rpc/state";
 import type { RpcSpawnOptions } from "../rpc/types";
 import type { TelegramBridgeConfig } from "./types";
+import { createRpcTranscriptWriter, type RpcTranscriptWriter } from "./transcript-store";
 
 interface SessionEntry {
 	client: RpcClient;
 	session: ChatSession;
+	transcript: RpcTranscriptWriter;
 	timer?: Timer;
 }
 
@@ -21,6 +23,7 @@ interface SessionOptions {
 
 interface ProcessManagerDependencies {
 	createClient?: (options: RpcSpawnOptions) => RpcClient;
+	createTranscriptWriter?: (chatId: string, createdAt: number, restoredPath?: string) => Promise<RpcTranscriptWriter>;
 	saveState?: (sessions: Map<string, ChatSession>) => Promise<void>;
 	loadState?: () => Promise<BridgeState>;
 	now?: () => number;
@@ -28,9 +31,10 @@ interface ProcessManagerDependencies {
 
 export class ProcessManager {
 	#config: TelegramBridgeConfig;
-	#sessions: Map<string, { client: RpcClient; session: ChatSession; timer?: Timer }> = new Map();
+	#sessions: Map<string, SessionEntry> = new Map();
 	#restoredSessions: BridgeState["sessions"] = {};
 	#createClient: (options: RpcSpawnOptions) => RpcClient;
+	#createTranscriptWriter: (chatId: string, createdAt: number, restoredPath?: string) => Promise<RpcTranscriptWriter>;
 	#saveState: (sessions: Map<string, ChatSession>) => Promise<void>;
 	#loadState: () => Promise<BridgeState>;
 	#now: () => number;
@@ -38,6 +42,10 @@ export class ProcessManager {
 	constructor(config: TelegramBridgeConfig, dependencies: ProcessManagerDependencies = {}) {
 		this.#config = config;
 		this.#createClient = dependencies.createClient ?? (options => new RpcClient(options));
+		this.#createTranscriptWriter =
+			dependencies.createTranscriptWriter ??
+			((chatId, createdAt, restoredPath) =>
+				createRpcTranscriptWriter(this.#config.uploadDir, chatId, createdAt, restoredPath));
 		this.#saveState = dependencies.saveState ?? saveBridgeState;
 		this.#loadState = dependencies.loadState ?? loadBridgeState;
 		this.#now = dependencies.now ?? (() => Date.now());
@@ -74,6 +82,8 @@ export class ProcessManager {
 
 		const restored = this.#restoredSessions[chatId];
 		const sessionPath = options.sessionPath ?? restored?.sessionPath;
+		const now = this.#now();
+		const transcript = await this.#createTranscriptWriter(chatId, now, restored?.transcriptPath);
 		const spawnOptions: RpcSpawnOptions = {
 			cwd,
 			tools: options.tools,
@@ -85,7 +95,6 @@ export class ProcessManager {
 		const client = this.#createClient(spawnOptions);
 		await client.start();
 
-		const now = this.#now();
 		const session: ChatSession = {
 			chatId,
 			userId,
@@ -94,16 +103,18 @@ export class ProcessManager {
 			mode: options.mode,
 			showThinking: false,
 			sessionPath,
+			transcriptPath: transcript.path,
 			createdAt: now,
 			lastActiveAt: now,
 		};
 
-		const entry: SessionEntry = { client, session };
+		const entry: SessionEntry = { client, session, transcript };
 		this.#sessions.set(chatId, entry);
 
 		client.onEvent(event => {
 			const current = this.#sessions.get(chatId);
 			if (!current) return;
+			current.transcript.append(event);
 			current.session.lastActiveAt = this.#now();
 			if (event.type === "error") {
 				this.#clearIdleTimer(current);
@@ -129,6 +140,7 @@ export class ProcessManager {
 		delete this.#restoredSessions[chatId];
 
 		await entry.client.kill();
+		await entry.transcript.flush();
 		await this.#persistState();
 	}
 
@@ -142,6 +154,7 @@ export class ProcessManager {
 		}
 
 		await Promise.allSettled(entries.map(entry => entry.client.kill()));
+		await Promise.allSettled(entries.map(entry => entry.transcript.flush()));
 		await this.#persistState();
 	}
 
@@ -168,9 +181,9 @@ export class ProcessManager {
 		return [...this.getActiveSessions().values()];
 	}
 
-	/** Get session path for a chat (implements SessionProvider) */
-	getSessionPath(chatId: string): string | undefined {
-		return this.#sessions.get(chatId)?.session.sessionPath;
+	/** Get transcript path for a chat (implements SessionProvider) */
+	getTranscriptPath(chatId: string): string | undefined {
+		return this.#sessions.get(chatId)?.session.transcriptPath;
 	}
 
 	#resolveIdleTimeout(userId: string): number | null {

@@ -19,7 +19,7 @@ class MockSessionProvider implements SessionProvider {
 		return [...this.#sessions];
 	}
 
-	getSessionPath(chatId: string): string | undefined {
+	getTranscriptPath(chatId: string): string | undefined {
 		return this.#paths.get(chatId);
 	}
 }
@@ -49,7 +49,7 @@ describe("startLogViewer", () => {
 
 	beforeAll(async () => {
 		tempDir = path.join(os.tmpdir(), `telegram-log-viewer-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-		const sessionPath = path.join(tempDir, "chat-1001.jsonl");
+		const transcriptPath = path.join(tempDir, "chat-1001.jsonl");
 		const transcript = [
 			JSON.stringify({
 				type: "message_start",
@@ -60,10 +60,22 @@ describe("startLogViewer", () => {
 				assistantMessageEvent: { type: "text_delta", delta: "hello from assistant" },
 			}),
 			JSON.stringify({
+				type: "message_update",
+				assistantMessageEvent: { type: "thinking_delta", delta: "Inspecting transcript" },
+			}),
+			JSON.stringify({
 				type: "tool_execution_start",
 				toolCallId: "tool-1",
 				toolName: "read",
 				intent: "inspect config",
+			}),
+			JSON.stringify({
+				type: "tool_execution_update",
+				toolCallId: "tool-1",
+				toolName: "read",
+				partialResult: {
+					content: [{ type: "text", text: "packages/spell-server/src/telegram/log-viewer/server.ts" }],
+				},
 			}),
 			JSON.stringify({
 				type: "tool_execution_end",
@@ -73,7 +85,7 @@ describe("startLogViewer", () => {
 			}),
 			"{not valid json}",
 		].join("\n");
-		await Bun.write(sessionPath, transcript);
+		await Bun.write(transcriptPath, transcript);
 
 		const now = Date.now();
 		const sessions: ChatSession[] = [
@@ -84,7 +96,7 @@ describe("startLogViewer", () => {
 				cwd: "/tmp/spell",
 				mode: "telegram-readonly",
 				showThinking: false,
-				sessionPath,
+				transcriptPath,
 				createdAt: now - 60_000,
 				lastActiveAt: now,
 			},
@@ -95,7 +107,7 @@ describe("startLogViewer", () => {
 				cwd: "/tmp/infra",
 				mode: "telegram-full",
 				showThinking: true,
-				sessionPath: path.join(tempDir, "missing.jsonl"),
+				transcriptPath: path.join(tempDir, "missing.jsonl"),
 				createdAt: now - 120_000,
 				lastActiveAt: now - 30_000,
 			},
@@ -103,7 +115,7 @@ describe("startLogViewer", () => {
 		const provider = new MockSessionProvider(
 			sessions,
 			new Map([
-				["1001", sessionPath],
+				["1001", transcriptPath],
 				["2002", path.join(tempDir, "missing.jsonl")],
 			]),
 		);
@@ -151,7 +163,9 @@ describe("startLogViewer", () => {
 		const html = await response.text();
 		expect(html).toContain("hello from user");
 		expect(html).toContain("hello from assistant");
+		expect(html).toContain("Inspecting transcript");
 		expect(html).toContain("Tool read");
+		expect(html).toContain("packages/spell-server/src/telegram/log-viewer/server.ts");
 	});
 
 	it("renders empty state when session file is missing", async () => {

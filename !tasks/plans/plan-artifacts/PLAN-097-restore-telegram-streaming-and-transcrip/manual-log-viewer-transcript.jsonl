@@ -1,0 +1,6 @@
+{"type":"message_start","message":{"role":"user","content":"Inspect the repo"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"Checking transcript rendering"}}
+{"type":"tool_execution_start","toolCallId":"tool-1","toolName":"read","intent":"inspect process manager"}
+{"type":"tool_execution_update","toolCallId":"tool-1","toolName":"read","partialResult":{"content":[{"type":"text","text":"packages/spell-server/src/telegram/process-manager.ts"}]}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Ready to report back."}}
+{"type":"tool_execution_end","toolCallId":"tool-1","toolName":"read","isError":false}

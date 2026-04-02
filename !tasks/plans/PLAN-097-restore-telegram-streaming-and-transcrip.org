@@ -1,0 +1,87 @@
+#+TITLE: Restore Telegram streaming and transcript logging
+#+STATE: DONE
+#+SESSION_ID: 14ab40f1e1297c0f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T20-07-04-324Z_14ab40f1e1297c0f.jsonl]]
+#+CUSTOM_ID: PLAN-097-restore-telegram-streaming-and-transcrip
+#+EFFORT: 5h
+#+PRIORITY: #A
+
+NOTE [2026-04-02]: Completed Telegram intermediate streaming restoration, transcript persistence, log-viewer wiring, debug stderr logging, and recorded verification artifacts.
+
+
+* Initial Message
+
+the latest versions of ../growth do not show me the in-between tthoughts and messages before the final answer. Why?
+
+* Context
+** Problem
+- The Telegram bridge currently handles only a narrow subset of RPC events in =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts=. Intermediate tool progress is dropped because =packages/spell-server/src/rpc/types.ts= does not model everything the coding-agent RPC stream can emit, especially =tool_execution_update=.
+- =packages/spell-server/src/telegram/log-viewer/renderer.ts= already expects a JSONL event timeline, but spell-server does not currently persist that event stream for new Telegram sessions. =packages/spell-server/src/telegram/process-manager.ts= only carries =sessionPath= for resumed sessions, so the log viewer has infrastructure without a default transcript source.
+- =packages/utils/src/logger.ts= writes debug logs to rotating files only, and =packages/coding-agent/src/commands/server.ts= has no explicit terminal-debug sink for =spell server --debug=.
+
+** Recommended Approach
+Use a spell-server-owned per-chat JSONL event transcript as the canonical record for Telegram conversations. Feed Telegram streaming behavior and the log viewer from the same event vocabulary.
+
+This is the recommended approach because reusing coding-agent session files would not satisfy the requirement: those files preserve finalized conversation state, not the full =message_update=/=tool_execution_update= streaming history the user wants restored and persisted.
+
+Implementation should stay TDD-first:
+1. Extend failing Telegram bridge tests for missing intermediate events.
+2. Add failing transcript/log-viewer persistence tests.
+3. Add failing =spell server --debug= terminal logging coverage.
+4. Implement in dependency order below.
+
+** Key Decisions
+- Persist full Telegram conversations by default, including streamed intermediate assistant and tool events.
+- Keep transcript ownership in spell-server, while separately retaining the coding-agent session path for resume/debug metadata when available.
+- Keep normal =spell server= startup quiet; =--debug= adds a terminal stderr sink without replacing file logging.
+
+** Critical Files
+- =packages/spell-server/src/rpc/types.ts=
+- =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts=
+- =packages/spell-server/src/rpc/rpc-client.ts=
+- =packages/spell-server/src/telegram/process-manager.ts=
+- =packages/spell-server/src/telegram/log-viewer/renderer.ts=
+- =packages/spell-server/src/telegram/log-viewer/server.ts=
+- =packages/coding-agent/src/commands/server.ts=
+- =packages/utils/src/logger.ts=
+
+* Verification
+1. Run: =bun test packages/spell-server/test/telegram/bridge.test.ts=
+2. Run: =bun test packages/spell-server/test/telegram/process-manager.test.ts=
+3. Run: =bun test packages/spell-server/test/telegram/log-viewer.test.ts=
+4. Run: =bun test packages/coding-agent/test/server-command.test.ts=
+5. If RPC event parsing changes, also run: =bun test packages/spell-server/test/rpc/rpc-client.test.ts=
+6. Manual proof after implementation:
+   - A tool-heavy Telegram prompt shows intermediate assistant/tool progress before the final answer.
+   - A fresh Telegram session creates a persistent transcript that the log viewer =/raw= and HTML views can read.
+   - =spell server --debug= prints debug logs to terminal stderr, while plain =spell server= remains quiet.
+
+* Execution Manifest
+** Wave 1 — restore missing surface behavior (parallel)
+- [[id:BUG-113-restore-telegram-intermediate-stream-eve]] — Restore Telegram intermediate stream events (EFFORT: M, PRIORITY: #A, LAYER: backend)
+- [[id:FEAT-242-expose-spell-server-debug-logs-on-termin]] — Expose spell server debug logs on terminal with =--debug= (EFFORT: S, PRIORITY: #B, LAYER: cli)
+
+** Wave 2 — persist and inspect the full event stream
+- [[id:FEAT-241-persist-telegram-session-event-transcrip]] — Persist Telegram session event transcripts by default (EFFORT: M, PRIORITY: #A, LAYER: backend, depends on [[id:BUG-113-restore-telegram-intermediate-stream-eve]])
+
+
+** Completion [2026-04-02]
+*** Verification
+- `bun test packages/spell-server/test/telegram/bridge.test.ts` -> passed (20 tests)
+- `bun test packages/spell-server/test/telegram/process-manager.test.ts` -> passed (7 tests)
+- `bun test packages/spell-server/test/telegram/log-viewer.test.ts` -> passed (4 tests)
+- `bun test packages/coding-agent/test/server-command.test.ts` -> passed (6 tests)
+- `bun test packages/spell-server/test/rpc/rpc-client.test.ts` -> passed (11 tests)
+- `bun test packages/spell-server/test/telegram/bridge.test.ts && bun test packages/spell-server/test/telegram/process-manager.test.ts && bun test packages/spell-server/test/telegram/log-viewer.test.ts && bun test packages/coding-agent/test/server-command.test.ts && bun test packages/spell-server/test/rpc/rpc-client.test.ts` -> passed as final focused verification sweep
+- Manual streaming proof: a local `ResponseStreamer` simulation produced intermediate draft updates before the final assistant reply; saved output shows tool progress arriving before the final answer.
+- Manual transcript/log-viewer proof: a local log-viewer instance served `/session/manual-chat/raw` from a persisted transcript and rendered thinking plus tool-update details in the HTML view.
+- Manual debug logging proof: a local `spell server` launch emitted empty stderr by default and structured debug lines with `--debug`.
+*** Artifacts
+- Telegram streaming proof: [[file:!tasks/plans/plan-artifacts/PLAN-097-restore-telegram-streaming-and-transcrip/telegram-streaming-proof.json]]
+- Persisted manual transcript used by the log viewer: [[file:!tasks/plans/plan-artifacts/PLAN-097-restore-telegram-streaming-and-transcrip/manual-log-viewer-transcript.jsonl]]
+- Log viewer raw transcript response: [[file:!tasks/plans/plan-artifacts/PLAN-097-restore-telegram-streaming-and-transcrip/log-viewer-raw-response.txt]]
+- Log viewer HTML screenshot: [[file:!tasks/plans/plan-artifacts/PLAN-097-restore-telegram-streaming-and-transcrip/log-viewer-transcript-page.png]]
+- Log viewer expanded tool-details screenshot: [[file:!tasks/plans/plan-artifacts/PLAN-097-restore-telegram-streaming-and-transcrip/log-viewer-transcript-expanded.png]]
+- Debug stderr proof (plain vs `--debug`): [[file:!tasks/plans/plan-artifacts/PLAN-097-restore-telegram-streaming-and-transcrip/server-debug-stderr-proof.json]]
+*** Deviations
+- None.

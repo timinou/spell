@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { RpcClient } from "../../src/rpc/rpc-client";
 import type { BridgeRpcCommand, ImageContentRef, RpcEvent, RpcSpawnOptions } from "../../src/rpc/types";
 import { ProcessManager } from "../../src/telegram/process-manager";
@@ -109,6 +112,51 @@ describe("ProcessManager", () => {
 		expect(sessions.get("chat-1")?.project).toBe("spell");
 
 		await manager.killAll();
+	});
+
+	it("creates transcript files for new sessions and appends streamed events", async () => {
+		const clients: MockRpcClient[] = [];
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-telegram-transcripts-"));
+		const manager = new ProcessManager(createConfig({ uploadDir: tempDir }), {
+			createClient: options => {
+				const client = new MockRpcClient(options);
+				clients.push(client);
+				return client;
+			},
+			now: () => 1_700_000_000_000,
+		});
+
+		try {
+			await manager.getOrCreate("chat-1", "user-1", {
+				project: "spell",
+				mode: "telegram-readonly",
+				tools: ["read"],
+			});
+
+			const transcriptPath = manager.getSession("chat-1")?.transcriptPath;
+			expect(transcriptPath).toBeDefined();
+
+			clients[0]?.emit({
+				type: "message_update",
+				assistantMessageEvent: { type: "text_delta", delta: "hello" },
+			});
+			clients[0]?.emit({
+				type: "tool_execution_update",
+				toolCallId: "tool-1",
+				toolName: "read",
+				partialResult: {
+					content: [{ type: "text", text: "packages/spell-server/src/telegram/process-manager.ts" }],
+				},
+			} as RpcEvent);
+
+			await manager.killAll();
+
+			const transcript = await Bun.file(transcriptPath!).text();
+			expect(transcript).toContain('"type":"message_update"');
+			expect(transcript).toContain('"type":"tool_execution_update"');
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
 	});
 
 	it("returns existing session for known chat id", async () => {
@@ -244,7 +292,7 @@ describe("ProcessManager", () => {
 
 	it("loads prior state and persists session changes", async () => {
 		const clients: MockRpcClient[] = [];
-		const savedSnapshots: Array<Record<string, string | undefined>> = [];
+		const savedSnapshots: Array<Record<string, { sessionPath?: string; transcriptPath?: string }>> = [];
 		const manager = new ProcessManager(createConfig(), {
 			createClient: options => {
 				const client = new MockRpcClient(options);
@@ -255,6 +303,7 @@ describe("ProcessManager", () => {
 				sessions: {
 					"chat-1": {
 						sessionPath: "/tmp/restored-session.json",
+						transcriptPath: "/tmp/restored-transcript.jsonl",
 						project: "spell",
 						mode: "telegram-readonly",
 						userId: "user-1",
@@ -262,9 +311,12 @@ describe("ProcessManager", () => {
 				},
 			}),
 			saveState: async sessions => {
-				const snapshot: Record<string, string | undefined> = {};
+				const snapshot: Record<string, { sessionPath?: string; transcriptPath?: string }> = {};
 				for (const [chatId, session] of sessions) {
-					snapshot[chatId] = session.sessionPath;
+					snapshot[chatId] = {
+						sessionPath: session.sessionPath,
+						transcriptPath: session.transcriptPath,
+					};
 				}
 				savedSnapshots.push(snapshot);
 			},
@@ -278,8 +330,12 @@ describe("ProcessManager", () => {
 		});
 
 		expect(clients[0]?.spawnOptions.sessionPath).toBe("/tmp/restored-session.json");
+		expect(manager.getSession("chat-1")?.transcriptPath).toBe("/tmp/restored-transcript.jsonl");
 		expect(savedSnapshots.length).toBeGreaterThan(0);
-		expect(savedSnapshots.at(-1)?.["chat-1"]).toBe("/tmp/restored-session.json");
+		expect(savedSnapshots.at(-1)?.["chat-1"]).toEqual({
+			sessionPath: "/tmp/restored-session.json",
+			transcriptPath: "/tmp/restored-transcript.jsonl",
+		});
 
 		await manager.killAll();
 	});

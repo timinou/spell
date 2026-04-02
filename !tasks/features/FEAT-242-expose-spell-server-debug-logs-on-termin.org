@@ -1,0 +1,40 @@
+#+TITLE: Expose spell server debug logs on terminal with --debug
+#+STATE: DONE
+#+SESSION_ID: 14ab40f1e1297c0f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T20-07-04-324Z_14ab40f1e1297c0f.jsonl]]
+#+CUSTOM_ID: FEAT-242-expose-spell-server-debug-logs-on-termin
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: cli
+
+NOTE [2026-04-02]: Added `spell server --debug` stderr mirroring on top of file logging and verified the quiet default/debug behavior with focused CLI tests.
+
+* Initial Message
+
+the latest versions of ../growth do not show me the in-between tthoughts and messages before the final answer. Why?
+
+* Goal
+Make `spell server --debug` show spell-server debug logs on terminal stderr while preserving the existing rotating file logs.
+
+* Scope
+- packages/coding-agent/src/commands/server.ts
+- packages/spell-server/src/main.ts
+- packages/utils/src/logger.ts (or a new focused helper beside it)
+- packages/coding-agent/test/server-command.test.ts
+- packages/spell-server/test/cli/server-start.test.ts if the standalone spell-server entrypoint also gains coverage
+
+* Implementation
+- TDD first: add failing coverage that `spell server --debug` enables terminal debug output and that default startup stays quiet.
+- Add explicit debug-flag plumbing for the top-level `spell server` command, and mirror it in the standalone `spell-server` entrypoint if both launch paths are expected to support the same behavior.
+- Extend logger infrastructure with an opt-in stderr transport/switch rather than ad-hoc console logging; file logging must remain enabled.
+- Keep non-debug startup behavior unchanged except for existing fatal/error output.
+
+* Acceptance
+- `spell server --debug` emits spell-server debug logs to terminal stderr.
+- Running without `--debug` preserves the current quiet terminal behavior.
+- File logging still works; debug mode adds a terminal sink instead of replacing the file sink.
+
+* Verification
+- Add the failing tests first, then make them pass.
+- Run: bun test packages/coding-agent/test/server-command.test.ts
+- Run package-local coverage for any standalone spell-server entrypoint changes (for example packages/spell-server/test/cli/server-start.test.ts if touched).

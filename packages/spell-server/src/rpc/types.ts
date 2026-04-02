@@ -36,6 +36,18 @@ export interface RpcAssistantMessage {
 	errorMessage?: string;
 }
 
+export interface RpcToolResultContentBlock {
+	type?: string;
+	text?: string;
+	data?: string;
+	mimeType?: string;
+}
+
+export interface RpcToolResult {
+	content?: RpcToolResultContentBlock[];
+	details?: unknown;
+}
+
 export type RpcResponseEvent =
 	| { type: "response"; command: string; success: true; data?: unknown }
 	| { type: "response"; command: string; success: false; error: string };
@@ -50,8 +62,15 @@ export type RpcEvent =
 	| { type: "message_start" }
 	| { type: "message_update"; assistantMessageEvent: AssistantEvent }
 	| { type: "message_end"; message?: RpcAssistantMessage }
-	| { type: "tool_execution_start"; toolCallId: string; toolName: string; intent?: string }
-	| { type: "tool_execution_end"; toolCallId: string; toolName: string; isError?: boolean }
+	| { type: "tool_execution_start"; toolCallId: string; toolName: string; intent?: string; args?: unknown }
+	| {
+			type: "tool_execution_update";
+			toolCallId: string;
+			toolName: string;
+			args?: unknown;
+			partialResult: RpcToolResult;
+	  }
+	| { type: "tool_execution_end"; toolCallId: string; toolName: string; isError?: boolean; result?: RpcToolResult }
 	| RpcResponseEvent
 	| { type: "error"; message: string };
 

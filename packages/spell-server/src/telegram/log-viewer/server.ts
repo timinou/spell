@@ -5,7 +5,7 @@ import { renderSessionHtml, renderSessionListHtml } from "./renderer";
 
 export interface SessionProvider {
 	getAllSessions(): ChatSession[];
-	getSessionPath(chatId: string): string | undefined;
+	getTranscriptPath(chatId: string): string | undefined;
 }
 
 function getBearerToken(authorization: string | null): string | undefined {
@@ -60,9 +60,9 @@ function isAuthorized(request: Request, authToken: string): boolean {
 	return bearerToken !== undefined && bearerToken === authToken;
 }
 
-async function readSessionJsonl(sessionPath: string): Promise<string | undefined> {
+async function readTranscriptJsonl(transcriptPath: string): Promise<string | undefined> {
 	try {
-		return await Bun.file(sessionPath).text();
+		return await Bun.file(transcriptPath).text();
 	} catch (err) {
 		if (isEnoent(err)) {
 			return undefined;
@@ -115,12 +115,12 @@ export function startLogViewer(config: TelegramBridgeConfig, processManager: Ses
 							return notFound();
 						}
 
-						const sessionPath = processManager.getSessionPath(chatId);
-						if (!sessionPath) {
+						const transcriptPath = processManager.getTranscriptPath(chatId);
+						if (!transcriptPath) {
 							return notFound();
 						}
 
-						const jsonlContent = await readSessionJsonl(sessionPath);
+						const jsonlContent = await readTranscriptJsonl(transcriptPath);
 						if (match[2] === "/raw") {
 							return new Response(jsonlContent ?? "no messages yet\n", {
 								status: 200,
