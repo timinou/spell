@@ -1,9 +1,9 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { LoadedConfig } from "./config/loader";
-import { GoalExecutionController } from "./executor/goal-executor";
+import { cleanupStaleSandboxPolicies, GoalExecutionController } from "./executor";
 import type { GoalResult } from "./executor/types";
 import { HookDispatcher } from "./hooks/dispatcher";
-import { NoopNotificationSender, type NotificationSender } from "./hooks/notification-sender";
+import { createNotificationSender } from "./hooks/notification-sender";
 import { OrgHookExecutor } from "./hooks/org";
 import { TelegramHookExecutor } from "./hooks/telegram";
 import type { HookExecutor } from "./hooks/types";
@@ -17,6 +17,8 @@ export interface SpellServer {
 	stop(): Promise<void>;
 }
 
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 30_000;
+
 export async function startSpellServer(config: LoadedConfig, cwd: string): Promise<SpellServer> {
 	const lifecycle = new AutonomyLifecycle();
 	const sessionManager = new SessionManager<string>({
@@ -24,7 +26,11 @@ export async function startSpellServer(config: LoadedConfig, cwd: string): Promi
 		keyToString: key => key,
 	});
 	const scheduler = new GoalScheduler();
-	const notificationSender = createNotificationSender(config);
+	const removedSandboxPolicies = await cleanupStaleSandboxPolicies();
+	if (removedSandboxPolicies.length > 0) {
+		logger.warn("Removed stale sandbox policy files", { count: removedSandboxPolicies.length });
+	}
+	const notificationSender = createNotificationSender(config.channels);
 	const hookExecutors = new Map<string, HookExecutor>([
 		["webhook", new WebhookHookExecutor() as HookExecutor],
 		["telegram", new TelegramHookExecutor(notificationSender) as HookExecutor],
@@ -96,18 +102,24 @@ export async function startSpellServer(config: LoadedConfig, cwd: string): Promi
 		async stop(): Promise<void> {
 			scheduler.stop();
 			httpServer.stop();
+			const inflightGoals = executor.getInflightGoalNames();
+			if (inflightGoals.length > 0) {
+				logger.warn("Waiting for inflight goals before shutdown", {
+					goalNames: inflightGoals,
+					timeoutMs: SHUTDOWN_DRAIN_TIMEOUT_MS,
+				});
+				const drainResult = await executor.waitForInflightGoals(SHUTDOWN_DRAIN_TIMEOUT_MS);
+				if (!drainResult.drained) {
+					logger.warn("Force-killing inflight goals after shutdown timeout", {
+						goalNames: drainResult.activeGoals,
+						timeoutMs: SHUTDOWN_DRAIN_TIMEOUT_MS,
+					});
+				}
+			}
 			await sessionManager.killAll();
 			logger.debug("Spell server stopped");
 		},
 	};
-}
-
-function createNotificationSender(config: LoadedConfig): NotificationSender {
-	const telegramConfig = config.channels.telegram;
-	if (!telegramConfig) {
-		return new NoopNotificationSender();
-	}
-	return new TelegramNotificationSender(telegramConfig.botToken, new Set(telegramConfig.owners));
 }
 
 function parseDurationToMs(value: string | undefined): number {
@@ -126,33 +138,4 @@ function parseDurationToMs(value: string | undefined): number {
 	if (unit === "m") return amount * 60_000;
 	if (unit === "h") return amount * 3_600_000;
 	return amount * 86_400_000;
-}
-
-class TelegramNotificationSender implements NotificationSender {
-	#botToken: string;
-	#owners: Set<number>;
-
-	constructor(botToken: string, owners: Set<number>) {
-		this.#botToken = botToken;
-		this.#owners = owners;
-	}
-
-	async sendMessage(chatId: number, text: string): Promise<void> {
-		if (!this.#owners.has(chatId)) {
-			logger.warn("Skipping Telegram notification for unauthorized chat", { chatId });
-			return;
-		}
-
-		const response = await fetch(`https://api.telegram.org/bot${this.#botToken}/sendMessage`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ chat_id: chatId, text }),
-		});
-		if (response.ok) {
-			return;
-		}
-
-		const responseText = await response.text();
-		throw new Error(`Telegram send failed with ${response.status}: ${responseText}`);
-	}
 }

@@ -154,6 +154,45 @@ describe("HTTP router", () => {
 		expect(payload.runs).toHaveLength(1);
 	});
 
+	it("returns full run history from the logs endpoint", async () => {
+		const response = await fetch(`${baseUrl}/api/goals/ship-it/logs`, {
+			headers: { Authorization: `Basic ${Buffer.from("spell:secret").toString("base64")}` },
+		});
+		expect(response.status).toBe(200);
+		const payload = (await response.json()) as Array<{
+			runId: string;
+			startedAt: string;
+			completedAt?: string;
+			status: string;
+			error?: string;
+			attempt: number;
+		}>;
+		expect(payload).toEqual([
+			expect.objectContaining({
+				runId: "ship-it-1",
+				startedAt: "2026-04-02T11:59:00.000Z",
+				completedAt: "2026-04-02T12:00:00.000Z",
+				status: "completed",
+				attempt: 1,
+			}),
+		]);
+	});
+
+	it("returns an empty logs array when a goal has no runs", async () => {
+		const response = await fetch(`${baseUrl}/api/goals/incoming/logs`, {
+			headers: { Authorization: `Basic ${Buffer.from("spell:secret").toString("base64")}` },
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual([]);
+	});
+
+	it("returns 404 for missing goal logs", async () => {
+		const response = await fetch(`${baseUrl}/api/goals/missing/logs`, {
+			headers: { Authorization: `Basic ${Buffer.from("spell:secret").toString("base64")}` },
+		});
+		expect(response.status).toBe(404);
+	});
+
 	it("triggers execution for a known goal", async () => {
 		const response = await fetch(`${baseUrl}/trigger/ship-it`, { method: "POST" });
 		expect(response.status).toBe(202);

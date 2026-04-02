@@ -1,0 +1,28 @@
+{
+  "builtinHasAutonomyState": false,
+  "hiddenHasAutonomyState": true,
+  "defaultHasAutonomyState": false,
+  "defaultToolNames": [
+    "ast_edit",
+    "ast_grep",
+    "bash",
+    "canvas",
+    "edit",
+    "emacs_code",
+    "exit_plan_mode",
+    "fetch",
+    "find",
+    "grep",
+    "lsp",
+    "notebook",
+    "org",
+    "puppeteer",
+    "python",
+    "read",
+    "resolve",
+    "task",
+    "todo_write",
+    "web_search",
+    "write"
+  ]
+}

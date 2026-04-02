@@ -1,0 +1,88 @@
+#+TITLE: Move autonomy_state to HIDDEN_TOOLS and gate on env var
+#+STATE: DONE
+#+SESSION_ID: 14aae4092b4b141e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-21-08-781Z_14aae4092b4b141e.jsonl]]
+#+CUSTOM_ID: BUG-096-move-autonomy-state-to-hidden-tools-and
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: packages/coding-agent
+
+NOTE [2026-04-02]: Completed in PLAN-089 on 2026-04-02. autonomy_state moved to hidden activation-only registry with default-session verification.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-020-audit-implementation:
+
+- **What**: Dashboard defaults to `admin:admin` credentials and offers no in-UI way to enter the real Basic Auth secret.
+  - **Where**: `packages/spell-server/src/http/frontend/index.html`, top-level `App()` fetch header setup.
+  - **Why**: On any real deployment the dashboard will start in a 401 state with no recovery path except editing `localStorage` manually; this makes the new surface look broken out of the box.
+  - **Effort**: `small`
+
+- **What**: `autonomy_state` was added to the public tool registries instead of a hidden/activation-only path.
+  - **Where**: `packages/coding-agent/src/tools/index.ts`, `BUILTIN_TOOLS` / `TOOL_TIERS` registration for `autonomy_state`.
+  - **Why**: This violates the stated contract that the tool remain hidden unless explicitly activated via `--tools`; it broadens the default tool surface and can expose persistent state mutation to ordinary sessions unexpectedly.
+  - **Effort**: `small`
+
+- **What**: Org hooks appear to degrade to logging instead of creating org items, and there is no org-hook test coverage.
+  - **Where**: `packages/spell-server/src/hooks/org.ts`; missing corresponding coverage under `packages/spell-server/test/hooks/`.
+  - **Why**: A configured `org` hook can look supported while silently failing to create BUG/follow-up records, which breaks escalation/audit trails exactly when a goal fails.
+  - **Effort**: `medium`
+
+- **What**: `channels.kdl` / Telegram configuration is likely parsed but not fully wired into runtime startup and notification delivery.
+  - **Where**: `packages/spell-server/src/server.ts`, `packages/spell-server/src/config/channels-parser.ts`, hook sender wiring in `packages/spell-server/src/hooks/notification-sender.ts`.
+  - **Why**: Telegram-enabled deployments may still behave like Telegram is disabled, turning configured channels into dead config and leaving failure notifications unsent.
+  - **Effort**: `medium`
+
+- **What**: Shutdown handling looks immediate rather than “wait up to 30s for inflight goals, then kill”.
+  - **Where**: `packages/spell-server/src/server.ts` and `packages/spell-server/src/main.ts`, shutdown path.
+  - **Why**: Restarts/upgrades can abruptly terminate active goals instead of allowing a controlled drain, which risks partial work, confusing state, and hard-to-reproduce failures.
+  - **Effort**: `medium`
+
+- **What**: Session lifecycle logic now exists in two parallel implementations instead of one shared abstraction.
+  - **Where**: `packages/spell-server/src/session/session-manager.ts` and `packages/telegram-bridge/src/rpc/process-manager.ts`.
+  - **Why**: Fixes to idle timeouts, crash cleanup, spawn args, or persistence can drift between Telegram and autonomy modes, increasing long-term maintenance cost and behavior skew.
+  - **Effort**: `medium`
+
+- **What**: Sandbox policy temp files likely do not have crash-time/postmortem cleanup.
+  - **Where**: `packages/spell-server/src/executor/sandbox-writer.ts` and its use from `packages/spell-server/src/executor/goal-executor.ts`.
+  - **Why**: Forced exits or daemon crashes can leak `/tmp/spell-sandbox-*.json` files over time, including policy details that were meant to be ephemeral.
+  - **Effort**: `small`
+
+- **What**: Transcript/log viewing is not well verified, and the log/session-viewer contract may be incomplete.
+  - **Where**: `packages/spell-server/src/http/routes/goals.ts`, `packages/spell-server/src/http/server.ts`, and `packages/spell-server/test/http/router.test.ts`.
+  - **Why**: Operators may have no reliable path from a failed run to its transcript, which weakens one of the main observability promises of the server.
+  - **Effort**: `small`
+
+- **What**: Telegram and org hook paths are under-tested compared with webhook/dispatcher paths.
+  - **Where**: `packages/spell-server/test/hooks/` only covers dispatcher and webhook behavior.
+  - **Why**: The least exercised code paths are the ones most likely to break in production, especially optional integrations that depend on deployment-specific configuration.
+  - **Effort**: `small`
+
+- **What**: The plan was marked DONE without the manual verification/artifact capture the completion protocol required.
+  - **Where**: `!tasks/plans/PLAN-086-spell-autonomy-manifest-system.org`, `** Completion [2026-04-02]` section.
+  - **Why**: HTTP boot, curl auth, cron firing, webhook trigger, sandbox denial, persistence across runs, Telegram notification, and graceful shutdown were not observed end-to-end before closing the plan, so first-user validation still carries integration risk.
+  - **Effort**: `small`
+
+* Scope
+=autonomy_state= is registered in =BUILTIN_TOOLS= at line 246 and =TOOL_TIERS= at line 281 as ="standard"=. When no =--tools= filter is specified, ALL =BUILTIN_TOOLS= entries load (=createTools= line 487-488). This means every normal interactive session creates the tool, which:
+- Broadens the default tool surface unnecessarily
+- Can expose persistent state mutation to ordinary sessions
+- Contradicts the FEAT-217 contract: "hidden unless explicitly activated through =--tools="
+
+** Fix
+- Move =autonomy_state= entry from =BUILTIN_TOOLS= to =HIDDEN_TOOLS= in =packages/coding-agent/src/tools/index.ts=
+- Remove =autonomy_state= from =TOOL_TIERS=
+- Gate the factory on =SPELL_AUTONOMY_STATE_DB= env var: return =null= if unset
+- Update the existing =packages/coding-agent/test/tools/autonomy-state.test.ts= to verify tool is NOT in =BUILTIN_TOOLS= and IS in =HIDDEN_TOOLS=
+
+* Tests
+- File: =packages/coding-agent/test/tools/autonomy-state.test.ts=
+- Scenario: =autonomy_state= not in =BUILTIN_TOOLS= registry
+- Scenario: =autonomy_state= in =HIDDEN_TOOLS= registry
+- Scenario: factory returns =null= when =SPELL_AUTONOMY_STATE_DB= unset
+- Existing store/schema tests must still pass
+
+* Acceptance
+- =bun test packages/coding-agent/test/tools/autonomy-state.test.ts= passes
+- =bun check:ts= clean
+- =autonomy_state= absent from =Object.keys(BUILTIN_TOOLS)= and =TOOL_TIERS=

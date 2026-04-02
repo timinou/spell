@@ -7,7 +7,7 @@ import { APP_NAME, CONFIG_DIR_NAME, logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import type { SandboxPolicy } from "../sandbox";
 import { parseEffort } from "../thinking";
-import { BUILTIN_TOOLS } from "../tools";
+import { BUILTIN_TOOLS, HIDDEN_TOOLS } from "../tools";
 
 export type Mode = "text" | "json" | "rpc";
 
@@ -161,14 +161,15 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 				.split(",")
 				.map(s => s.trim().toLowerCase())
 				.filter(Boolean);
+			const explicitToolNames = new Set([...Object.keys(BUILTIN_TOOLS), ...Object.keys(HIDDEN_TOOLS)]);
 			const validTools: string[] = [];
 			for (const name of toolNames) {
-				if (name in BUILTIN_TOOLS) {
+				if (explicitToolNames.has(name)) {
 					validTools.push(name);
 				} else {
 					logger.warn("Unknown tool passed to --tools", {
 						tool: name,
-						validTools: Object.keys(BUILTIN_TOOLS),
+						validTools: Array.from(explicitToolNames),
 					});
 				}
 			}

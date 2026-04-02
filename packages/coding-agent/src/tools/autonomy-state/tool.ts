@@ -62,8 +62,8 @@ export class AutonomyStateTool implements AgentTool<typeof autonomyStateSchema, 
 	#store: AutonomyStateStore | undefined;
 	#schema: StateSchemaColumn[] | undefined;
 
-	constructor(_session: ToolSession) {
-		// Session reserved for future tool-context access.
+	static createIf(_session: ToolSession): AutonomyStateTool | null {
+		return Bun.env.SPELL_AUTONOMY_STATE_DB ? new AutonomyStateTool() : null;
 	}
 
 	async execute(

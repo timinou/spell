@@ -58,20 +58,31 @@
     import { html } from 'htm/preact';
 
     const POLL_INTERVAL = 10000;
-    const DEFAULT_AUTH = 'admin:admin';
 
     function getStoredAuth() {
-      return localStorage.getItem('spell_auth') || DEFAULT_AUTH;
+      return localStorage.getItem('spell_auth') || '';
     }
 
-    function createAuthHeaders() {
-      return { Authorization: 'Basic ' + btoa(getStoredAuth()) };
+    function persistAuth(value) {
+      if (value) {
+        localStorage.setItem('spell_auth', value);
+        return;
+      }
+      localStorage.removeItem('spell_auth');
     }
 
-    async function fetchJson(path) {
-      const response = await fetch(path, { headers: createAuthHeaders() });
+    function createAuthHeaders(authValue) {
+      return authValue ? { Authorization: 'Basic ' + btoa(authValue) } : {};
+    }
+
+    function isUnauthorizedError(error) {
+      return Boolean(error && typeof error === 'object' && error.status === 401);
+    }
+
+    async function fetchJson(path, authValue) {
+      const response = await fetch(path, { headers: createAuthHeaders(authValue) });
       if (response.status === 401) {
-        throw new Error('Authentication failed. Set credentials.');
+        throw Object.assign(new Error('Authentication failed. Enter valid credentials.'), { status: 401 });
       }
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -80,78 +91,125 @@
     }
 
     function App() {
+      const storedAuth = getStoredAuth();
       const [view, setView] = useState('list');
       const [selectedGoal, setSelectedGoal] = useState(null);
       const [goals, setGoals] = useState(null);
       const [goalDetail, setGoalDetail] = useState(null);
       const [manifest, setManifest] = useState(null);
       const [error, setError] = useState(null);
-      const [loading, setLoading] = useState(true);
-      const [authValue, setAuthValue] = useState(getStoredAuth());
+      const [loading, setLoading] = useState(Boolean(storedAuth));
+      const [authValue, setAuthValue] = useState(storedAuth);
+      const [activeAuth, setActiveAuth] = useState(storedAuth);
+      const [authRequired, setAuthRequired] = useState(!storedAuth);
 
-      const fetchGoals = useCallback(async () => {
+      const clearAuth = useCallback((message = null) => {
+        persistAuth('');
+        setActiveAuth('');
+        setAuthRequired(true);
+        setGoals(null);
+        setManifest(null);
+        setGoalDetail(null);
+        setError(message);
+      }, []);
+
+      const fetchGoals = useCallback(async (authValue) => {
+        const payload = await fetchJson('/api/goals', authValue);
+        setGoals(Array.isArray(payload) ? payload : []);
+      }, []);
+
+      const fetchManifest = useCallback(async (authValue) => {
+        const payload = await fetchJson('/api/manifest', authValue);
+        setManifest(payload);
+      }, []);
+
+      const fetchDetail = useCallback(async (name, authValue = activeAuth) => {
+        const [goal, allRuns] = await Promise.all([
+          fetchJson(`/api/goals/${encodeURIComponent(name)}`, authValue),
+          fetchJson(`/api/goals/${encodeURIComponent(name)}/runs`, authValue),
+        ]);
+        setGoalDetail({ ...goal, allRuns });
+      }, [activeAuth]);
+
+      const refreshDashboard = useCallback(async (authValue, options = {}) => {
+        if (!authValue) {
+          clearAuth();
+          setLoading(false);
+          return false;
+        }
+        setLoading(true);
         try {
-          const payload = await fetchJson('/api/goals');
-          setGoals(Array.isArray(payload) ? payload : []);
+          await Promise.all([fetchGoals(authValue), fetchManifest(authValue)]);
+          if (view === 'detail' && selectedGoal) {
+            await fetchDetail(selectedGoal, authValue);
+          }
+          setActiveAuth(authValue);
+          setAuthRequired(false);
           setError(null);
+          if (options.persist) {
+            persistAuth(authValue);
+          }
+          return true;
         } catch (err) {
+          if (isUnauthorizedError(err)) {
+            clearAuth(err.message);
+            return false;
+          }
           setError(String(err));
+          return false;
         } finally {
           setLoading(false);
         }
-      }, []);
+      }, [clearAuth, fetchDetail, fetchGoals, fetchManifest, selectedGoal, view]);
 
-      const fetchManifest = useCallback(async () => {
-        try {
-          const payload = await fetchJson('/api/manifest');
-          setManifest(payload);
-        } catch (err) {
-          setError(String(err));
+      const refreshDetail = useCallback(async (name, authValue = activeAuth) => {
+        if (!authValue) {
+          clearAuth();
+          return false;
         }
-      }, []);
-
-      const fetchDetail = useCallback(async (name) => {
         try {
-          const [goal, allRuns] = await Promise.all([
-            fetchJson(`/api/goals/${encodeURIComponent(name)}`),
-            fetchJson(`/api/goals/${encodeURIComponent(name)}/runs`),
-          ]);
-          setGoalDetail({ ...goal, allRuns });
+          await fetchDetail(name, authValue);
           setError(null);
+          return true;
         } catch (err) {
+          if (isUnauthorizedError(err)) {
+            clearAuth(err.message);
+            return false;
+          }
           setError(String(err));
+          return false;
         }
-      }, []);
+      }, [activeAuth, clearAuth, fetchDetail]);
 
       useEffect(() => {
-        void fetchGoals();
-        void fetchManifest();
+        if (!activeAuth) {
+          setLoading(false);
+          return;
+        }
+        void refreshDashboard(activeAuth);
         const timer = setInterval(() => {
-          void fetchGoals();
-          if (view === 'detail' && selectedGoal) {
-            void fetchDetail(selectedGoal);
-          }
+          void refreshDashboard(activeAuth);
         }, POLL_INTERVAL);
         return () => clearInterval(timer);
-      }, [fetchGoals, fetchManifest, fetchDetail, view, selectedGoal]);
+      }, [activeAuth, refreshDashboard]);
 
-      const saveAuth = useCallback((event) => {
+      const saveAuth = useCallback(async (event) => {
         event.preventDefault();
-        localStorage.setItem('spell_auth', authValue || DEFAULT_AUTH);
-        setLoading(true);
-        void fetchGoals();
-        void fetchManifest();
-        if (view === 'detail' && selectedGoal) {
-          void fetchDetail(selectedGoal);
+        const nextAuth = authValue.trim();
+        if (!nextAuth) {
+          clearAuth('Enter credentials in username:password format.');
+          setLoading(false);
+          return;
         }
-      }, [authValue, fetchDetail, fetchGoals, fetchManifest, selectedGoal, view]);
+        await refreshDashboard(nextAuth, { persist: true });
+      }, [authValue, clearAuth, refreshDashboard]);
 
       const showDetail = useCallback((name) => {
         setSelectedGoal(name);
         setGoalDetail(null);
         setView('detail');
-        void fetchDetail(name);
-      }, [fetchDetail]);
+        void refreshDetail(name);
+      }, [refreshDetail]);
 
       const showList = useCallback(() => {
         setView('list');
@@ -163,43 +221,60 @@
         try {
           const response = await fetch(`/trigger/${encodeURIComponent(name)}`, {
             method: 'POST',
-            headers: createAuthHeaders(),
+            headers: createAuthHeaders(activeAuth),
           });
           if (!response.ok) {
             throw new Error(`Trigger failed with HTTP ${response.status}`);
           }
           setTimeout(() => {
-            void fetchGoals();
+            void refreshDashboard(activeAuth);
           }, 1000);
           if (view === 'detail') {
-            void fetchDetail(name);
+            void refreshDetail(name);
           }
           setError(null);
         } catch (err) {
           setError(String(err));
         }
-      }, [fetchDetail, fetchGoals, view]);
+      }, [activeAuth, refreshDashboard, refreshDetail, view]);
+
+      const authHeader = html`
+        <div class="header">
+          <h1>Spell Server Dashboard</h1>
+          <form class="row" onSubmit=${saveAuth}>
+            <input
+              class="input"
+              type="text"
+              value=${authValue}
+              onInput=${(event) => setAuthValue(event.currentTarget.value)}
+              placeholder="username:password"
+              aria-label="Basic auth credentials"
+            />
+            <button class="btn" type="submit">${activeAuth ? 'Update Credentials' : 'Sign In'}</button>
+          </form>
+        </div>
+      `;
 
       if (loading) {
-        return html`<div class="container"><div class="loading">Loading...</div></div>`;
+        return html`<div class="container stack">${authHeader}<div class="loading">Loading...</div></div>`;
+      }
+
+      if (authRequired) {
+        return html`
+          <div class="container stack">
+            ${authHeader}
+            ${error && html`<div class="error">${error}</div>`}
+            <div class="panel stack">
+              <h2>Authentication required</h2>
+              <div class="meta">Enter the dashboard Basic Auth credentials to load goals, runs, and manifest data.</div>
+            </div>
+          </div>
+        `;
       }
 
       return html`
         <div class="container stack">
-          <div class="header">
-            <h1>Spell Server Dashboard</h1>
-            <form class="row" onSubmit=${saveAuth}>
-              <input
-                class="input"
-                type="text"
-                value=${authValue}
-                onInput=${(event) => setAuthValue(event.currentTarget.value)}
-                placeholder="username:password"
-                aria-label="Basic auth credentials"
-              />
-              <button class="btn" type="submit">Save Credentials</button>
-            </form>
-          </div>
+          ${authHeader}
           ${error && html`<div class="error">${error}</div>`}
           ${view === 'list' ? html`
             <${ManifestPanel} manifest=${manifest} />

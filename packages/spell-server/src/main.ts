@@ -16,6 +16,10 @@ function resolveConfigDir(args: string[]): string {
 	return path.resolve(configDir);
 }
 
+function exitCodeForSignal(signal: NodeJS.Signals): number {
+	return signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 1;
+}
+
 async function main(): Promise<void> {
 	const configDir = resolveConfigDir(process.argv.slice(2));
 	const config = await loadConfig(configDir);
@@ -24,7 +28,8 @@ async function main(): Promise<void> {
 	let shuttingDown = false;
 	const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
 		if (shuttingDown) {
-			return;
+			logger.warn("Received second shutdown signal; exiting immediately", { signal });
+			process.exit(exitCodeForSignal(signal));
 		}
 		shuttingDown = true;
 		logger.debug("Shutting down spell server", { signal });

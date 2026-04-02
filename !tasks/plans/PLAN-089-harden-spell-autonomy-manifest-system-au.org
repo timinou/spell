@@ -1,0 +1,124 @@
+#+TITLE: Harden Spell Autonomy Manifest System AUD-020
+#+STATE: DONE
+#+SESSION_ID: 14aae4092b4b141e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-21-08-781Z_14aae4092b4b141e.jsonl]]
+#+CUSTOM_ID: PLAN-089-harden-spell-autonomy-manifest-system-au
+
+NOTE [2026-04-02]: Completed on 2026-04-02 with automated and manual verification recorded in the completion section. FUP-029 remains blocked as the sole deferred deviation.
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-020-audit-implementation:
+
+- **What**: Dashboard defaults to `admin:admin` credentials and offers no in-UI way to enter the real Basic Auth secret.
+  - **Where**: `packages/spell-server/src/http/frontend/index.html`, top-level `App()` fetch header setup.
+  - **Why**: On any real deployment the dashboard will start in a 401 state with no recovery path except editing `localStorage` manually; this makes the new surface look broken out of the box.
+  - **Effort**: `small`
+
+- **What**: `autonomy_state` was added to the public tool registries instead of a hidden/activation-only path.
+  - **Where**: `packages/coding-agent/src/tools/index.ts`, `BUILTIN_TOOLS` / `TOOL_TIERS` registration for `autonomy_state`.
+  - **Why**: This violates the stated contract that the tool remain hidden unless explicitly activated via `--tools`; it broadens the default tool surface and can expose persistent state mutation to ordinary sessions unexpectedly.
+  - **Effort**: `small`
+
+- **What**: Org hooks appear to degrade to logging instead of creating org items, and there is no org-hook test coverage.
+  - **Where**: `packages/spell-server/src/hooks/org.ts`; missing corresponding coverage under `packages/spell-server/test/hooks/`.
+  - **Why**: A configured `org` hook can look supported while silently failing to create BUG/follow-up records, which breaks escalation/audit trails exactly when a goal fails.
+  - **Effort**: `medium`
+
+- **What**: `channels.kdl` / Telegram configuration is likely parsed but not fully wired into runtime startup and notification delivery.
+  - **Where**: `packages/spell-server/src/server.ts`, `packages/spell-server/src/config/channels-parser.ts`, hook sender wiring in `packages/spell-server/src/hooks/notification-sender.ts`.
+  - **Why**: Telegram-enabled deployments may still behave like Telegram is disabled, turning configured channels into dead config and leaving failure notifications unsent.
+  - **Effort**: `medium`
+
+- **What**: Shutdown handling looks immediate rather than “wait up to 30s for inflight goals, then kill”.
+  - **Where**: `packages/spell-server/src/server.ts` and `packages/spell-server/src/main.ts`, shutdown path.
+  - **Why**: Restarts/upgrades can abruptly terminate active goals instead of allowing a controlled drain, which risks partial work, confusing state, and hard-to-reproduce failures.
+  - **Effort**: `medium`
+
+- **What**: Session lifecycle logic now exists in two parallel implementations instead of one shared abstraction.
+  - **Where**: `packages/spell-server/src/session/session-manager.ts` and `packages/telegram-bridge/src/rpc/process-manager.ts`.
+  - **Why**: Fixes to idle timeouts, crash cleanup, spawn args, or persistence can drift between Telegram and autonomy modes, increasing long-term maintenance cost and behavior skew.
+  - **Effort**: `medium`
+
+- **What**: Sandbox policy temp files likely do not have crash-time/postmortem cleanup.
+  - **Where**: `packages/spell-server/src/executor/sandbox-writer.ts` and its use from `packages/spell-server/src/executor/goal-executor.ts`.
+  - **Why**: Forced exits or daemon crashes can leak `/tmp/spell-sandbox-*.json` files over time, including policy details that were meant to be ephemeral.
+  - **Effort**: `small`
+
+- **What**: Transcript/log viewing is not well verified, and the log/session-viewer contract may be incomplete.
+  - **Where**: `packages/spell-server/src/http/routes/goals.ts`, `packages/spell-server/src/http/server.ts`, and `packages/spell-server/test/http/router.test.ts`.
+  - **Why**: Operators may have no reliable path from a failed run to its transcript, which weakens one of the main observability promises of the server.
+  - **Effort**: `small`
+
+- **What**: Telegram and org hook paths are under-tested compared with webhook/dispatcher paths.
+  - **Where**: `packages/spell-server/test/hooks/` only covers dispatcher and webhook behavior.
+  - **Why**: The least exercised code paths are the ones most likely to break in production, especially optional integrations that depend on deployment-specific configuration.
+  - **Effort**: `small`
+
+- **What**: The plan was marked DONE without the manual verification/artifact capture the completion protocol required.
+  - **Where**: `!tasks/plans/PLAN-086-spell-autonomy-manifest-system.org`, `** Completion [2026-04-02]` section.
+  - **Why**: HTTP boot, curl auth, cron firing, webhook trigger, sandbox denial, persistence across runs, Telegram notification, and graceful shutdown were not observed end-to-end before closing the plan, so first-user validation still carries integration risk.
+  - **Effort**: `small`
+
+* Context
+** Problem
+AUD-020 identified 10 hardening issues in the PLAN-086 Spell Autonomy Manifest System implementation. Issues range from contract violations (=autonomy_state= exposed in all sessions, dashboard broken on real deployments) to missing error handling (no graceful shutdown drain) to test gaps (telegram/org hooks untested) to resource leaks (sandbox temp files on crash).
+
+** Approach
+Address 8 of 10 findings directly. Defer session lifecycle deduplication to [[id:FUP-029-deduplicate-sessionmanager-and-processma]] (conscious deviation documented in PLAN-086). Finding 10 (missing manual verification) is a process observation that resolves itself when the hardening plan runs its own verification.
+
+** Key Decisions
+- =autonomy_state= moves to =HIDDEN_TOOLS= and gates on env var — this restores the FEAT-217 contract
+- Dashboard gets a proper auth-first flow: empty default, 401 shows login form, successful auth persists
+- OrgHookExecutor gets real implementation using =Bun.$= subprocess to call org CLI
+- =TelegramNotificationSender= extracted from =server.ts= into exported module for testability
+- Graceful shutdown: stop scheduler, drain inflight goals (30s timeout), then force-kill. Second signal forces immediate exit.
+- Sandbox cleanup: register temp files with deterministic naming and clean stale files on startup
+
+* Verification
+** Automated
+- =bun test packages/spell-server/test/= — all tests pass (existing + new hook/route/cli tests)
+- =bun test packages/coding-agent/test/tools/autonomy-state.test.ts= — registry assertions pass
+- =bun check:ts= — no type errors across workspace
+
+** Manual
+- Confirm =autonomy_state= absent from default tool listing in a normal =spell= session
+- Confirm dashboard shows login form on first visit (no =admin:admin= default)
+
+** Required Artifacts
+- =packages/spell-server/test/hooks/telegram-hook.test.ts= exists
+- =packages/spell-server/test/hooks/org-hook.test.ts= exists
+- =autonomy_state= not in =Object.keys(BUILTIN_TOOLS)=
+
+* Execution Manifest
+** quick-fixes                                                      :wave:
+- [[id:BUG-096-move-autonomy-state-to-hidden-tools-and]] Move autonomy_state to HIDDEN_TOOLS (1h)
+- [[id:BUG-097-fix-dashboard-auth-ux-prompt-on-401-inst]] Fix dashboard auth UX (1h)
+- [[id:BUG-098-add-postmortem-cleanup-for-sandbox-polic]] Sandbox postmortem cleanup (1h)
+- [[id:BUG-099-fix-logs-route-to-return-run-transcript]] Fix logs route and add test (1h)
+
+** hardening                                                        :wave:
+- [[id:FEAT-229-implement-real-orghookexecutor-with-org]] Real OrgHookExecutor (2h, depends BUG-099)
+- [[id:FEAT-231-add-telegram-and-org-hook-test-coverage]] Hook test coverage + sender extraction (2h, depends FEAT-229)
+- [[id:FEAT-230-add-graceful-shutdown-with-30s-drain-tim]] Graceful shutdown drain (2h)
+
+** follow-ups                                                       :wave:
+- [[id:FUP-029-deduplicate-sessionmanager-and-processma]] Session lifecycle dedup (4h, deferred)
+
+** Total Effort: ~10h implementation + 4h FUP
+
+
+** Completion [2026-04-02]
+*** Verification
+- `bun test packages/coding-agent/test/tools/autonomy-state.test.ts packages/coding-agent/test/tools/index.test.ts packages/coding-agent/test/args.test.ts` — passed (89 tests, 0 failures).
+- `bun test packages/spell-server/test/` — passed (100 tests, 0 failures).
+- `bun check:ts` — passed.
+- Manual dashboard verification: launched `bun run src/main.ts --config-dir /tmp/spell-plan089-manual`, opened `http://127.0.0.1:4312/`, confirmed first render showed the auth-required screen with an empty credential field, then signed in with configured `spell:secret` credentials and confirmed the dashboard loaded manifest + goal data.
+- Manual tool-surface verification: ran `PI_PYTHON_SKIP_CHECK=1 bun -e 'import { Settings } from "./packages/coding-agent/src/config/settings.ts"; import { BUILTIN_TOOLS, HIDDEN_TOOLS, createTools } from "./packages/coding-agent/src/tools/index.ts"; const session = { cwd: process.cwd(), hasUI: false, getSessionFile: () => null, getSessionSpawns: () => "*", settings: Settings.isolated() }; const tools = await createTools(session); const toolNames = tools.map(tool => tool.name).sort(); console.log(JSON.stringify({ builtinHasAutonomyState: Object.hasOwn(BUILTIN_TOOLS, "autonomy_state"), hiddenHasAutonomyState: Object.hasOwn(HIDDEN_TOOLS, "autonomy_state"), defaultHasAutonomyState: toolNames.includes("autonomy_state"), defaultToolNames: toolNames }, null, 2));'` and confirmed `autonomy_state` is hidden-only and absent from the default tool list.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-089-harden-spell-autonomy-manifest-system-au/dashboard-auth-required.png]] — first dashboard load showing the auth-required state with no `admin:admin` default.
+- [[file:!tasks/plans/plan-artifacts/PLAN-089-harden-spell-autonomy-manifest-system-au/dashboard-authenticated-after-login.png]] — dashboard after entering the configured Basic Auth credentials.
+- [[file:!tasks/plans/plan-artifacts/PLAN-089-harden-spell-autonomy-manifest-system-au/autonomy-state-default-tool-list.txt]] — default tool inventory proving `autonomy_state` is hidden-only and absent from `BUILTIN_TOOLS`/default tool creation.
+*** Deviations
+- Session lifecycle deduplication remains deferred and tracked in [[id:FUP-029-deduplicate-sessionmanager-and-processma]]. No other deviations.

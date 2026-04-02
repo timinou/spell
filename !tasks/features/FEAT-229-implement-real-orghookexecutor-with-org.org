@@ -1,0 +1,95 @@
+#+TITLE: Implement real OrgHookExecutor with org item creation
+#+STATE: DONE
+#+SESSION_ID: 14aae4092b4b141e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-21-08-781Z_14aae4092b4b141e.jsonl]]
+#+CUSTOM_ID: FEAT-229-implement-real-orghookexecutor-with-org
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: packages/spell-server
+
+NOTE [2026-04-02]: Completed in PLAN-089 on 2026-04-02. Org hooks now create org items via spell org CLI with graceful degradation.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-020-audit-implementation:
+
+- **What**: Dashboard defaults to `admin:admin` credentials and offers no in-UI way to enter the real Basic Auth secret.
+  - **Where**: `packages/spell-server/src/http/frontend/index.html`, top-level `App()` fetch header setup.
+  - **Why**: On any real deployment the dashboard will start in a 401 state with no recovery path except editing `localStorage` manually; this makes the new surface look broken out of the box.
+  - **Effort**: `small`
+
+- **What**: `autonomy_state` was added to the public tool registries instead of a hidden/activation-only path.
+  - **Where**: `packages/coding-agent/src/tools/index.ts`, `BUILTIN_TOOLS` / `TOOL_TIERS` registration for `autonomy_state`.
+  - **Why**: This violates the stated contract that the tool remain hidden unless explicitly activated via `--tools`; it broadens the default tool surface and can expose persistent state mutation to ordinary sessions unexpectedly.
+  - **Effort**: `small`
+
+- **What**: Org hooks appear to degrade to logging instead of creating org items, and there is no org-hook test coverage.
+  - **Where**: `packages/spell-server/src/hooks/org.ts`; missing corresponding coverage under `packages/spell-server/test/hooks/`.
+  - **Why**: A configured `org` hook can look supported while silently failing to create BUG/follow-up records, which breaks escalation/audit trails exactly when a goal fails.
+  - **Effort**: `medium`
+
+- **What**: `channels.kdl` / Telegram configuration is likely parsed but not fully wired into runtime startup and notification delivery.
+  - **Where**: `packages/spell-server/src/server.ts`, `packages/spell-server/src/config/channels-parser.ts`, hook sender wiring in `packages/spell-server/src/hooks/notification-sender.ts`.
+  - **Why**: Telegram-enabled deployments may still behave like Telegram is disabled, turning configured channels into dead config and leaving failure notifications unsent.
+  - **Effort**: `medium`
+
+- **What**: Shutdown handling looks immediate rather than “wait up to 30s for inflight goals, then kill”.
+  - **Where**: `packages/spell-server/src/server.ts` and `packages/spell-server/src/main.ts`, shutdown path.
+  - **Why**: Restarts/upgrades can abruptly terminate active goals instead of allowing a controlled drain, which risks partial work, confusing state, and hard-to-reproduce failures.
+  - **Effort**: `medium`
+
+- **What**: Session lifecycle logic now exists in two parallel implementations instead of one shared abstraction.
+  - **Where**: `packages/spell-server/src/session/session-manager.ts` and `packages/telegram-bridge/src/rpc/process-manager.ts`.
+  - **Why**: Fixes to idle timeouts, crash cleanup, spawn args, or persistence can drift between Telegram and autonomy modes, increasing long-term maintenance cost and behavior skew.
+  - **Effort**: `medium`
+
+- **What**: Sandbox policy temp files likely do not have crash-time/postmortem cleanup.
+  - **Where**: `packages/spell-server/src/executor/sandbox-writer.ts` and its use from `packages/spell-server/src/executor/goal-executor.ts`.
+  - **Why**: Forced exits or daemon crashes can leak `/tmp/spell-sandbox-*.json` files over time, including policy details that were meant to be ephemeral.
+  - **Effort**: `small`
+
+- **What**: Transcript/log viewing is not well verified, and the log/session-viewer contract may be incomplete.
+  - **Where**: `packages/spell-server/src/http/routes/goals.ts`, `packages/spell-server/src/http/server.ts`, and `packages/spell-server/test/http/router.test.ts`.
+  - **Why**: Operators may have no reliable path from a failed run to its transcript, which weakens one of the main observability promises of the server.
+  - **Effort**: `small`
+
+- **What**: Telegram and org hook paths are under-tested compared with webhook/dispatcher paths.
+  - **Where**: `packages/spell-server/test/hooks/` only covers dispatcher and webhook behavior.
+  - **Why**: The least exercised code paths are the ones most likely to break in production, especially optional integrations that depend on deployment-specific configuration.
+  - **Effort**: `small`
+
+- **What**: The plan was marked DONE without the manual verification/artifact capture the completion protocol required.
+  - **Where**: `!tasks/plans/PLAN-086-spell-autonomy-manifest-system.org`, `** Completion [2026-04-02]` section.
+  - **Why**: HTTP boot, curl auth, cron firing, webhook trigger, sandbox denial, persistence across runs, Telegram notification, and graceful shutdown were not observed end-to-end before closing the plan, so first-user validation still carries integration risk.
+  - **Effort**: `small`
+
+* Scope
+=OrgHookExecutor= in =packages/spell-server/src/hooks/org.ts= is a stub that only logs debug messages. It never creates org items. A configured =org= hook silently does nothing, breaking the escalation/audit trail contract.
+
+** Fix
+- Implement real org item creation using =Bun.spawn= to call the =spell= CLI with org subcommands, or use the org API from =@oh-my-pi/pi-emacs= if available
+- On failure: create a BUG org item with goal name, error message, run ID in body
+- On success/complete: create a feature note or skip (configurable via =target.category=)
+- Graceful degradation: if org tooling is unavailable (not installed, no .tasks/ dir), log a warning and skip — do not crash the hook chain
+- Add test coverage for both creation and degradation paths
+
+The simplest reliable approach: use =Bun.$= to run =spell org create= as a subprocess, catching errors for graceful degradation.
+
+* Tests
+- File: =packages/spell-server/test/hooks/org-hook.test.ts=
+- Scenario: on failure status, attempts to create BUG org item (mock or spy on spawn)
+- Scenario: on success status with category, attempts to create feature item
+- Scenario: when org CLI unavailable, logs warning and does not throw
+- Scenario: error in org creation does not propagate to caller
+
+* Implementation
+** Write org-hook tests first
+Test-first: define the expected behavior for BUG creation, feature creation, and degradation paths before implementing.
+
+** Implement OrgHookExecutor
+Replace the stub with real org item creation via subprocess or API call. Keep the try/catch wrapper for graceful degradation.
+
+* Acceptance
+- =bun test packages/spell-server/test/hooks/org-hook.test.ts= passes
+- =bun test packages/spell-server/test/hooks/= all pass
+- OrgHookExecutor creates real org items when org tooling is available

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
 import type { RpcEvent, RpcSpawnOptions } from "@oh-my-pi/telegram-bridge";
 import { GoalExecutionController } from "../../src/executor";
 import type { GoalResult } from "../../src/executor/types";
@@ -131,9 +132,11 @@ describe("GoalExecutionController", () => {
 
 		const result = await controller.executeGoal("ship-it", "/repo/project");
 
+		const sandboxPolicyPath = client.options.sandboxPolicyPath;
 		expect(client.options.cwd).toBe("/repo/project");
 		expect(client.options.tools).toEqual(["read", "grep"]);
-		expect(client.options.sandboxPolicyPath).toMatch(/^\/tmp\/spell-sandbox-/);
+		expect(sandboxPolicyPath).toMatch(/^\/tmp\/spell-sandbox-/);
+		await expect(fs.access(sandboxPolicyPath!)).rejects.toThrow();
 		expect(client.promptMessages).toEqual(["Line one\nLine two"]);
 		expect(result.status).toBe("success");
 		expect(controller.getState("ship-it")).toBe("completed");
@@ -243,6 +246,27 @@ describe("GoalExecutionController", () => {
 		const result = await firstRun;
 		expect(result.status).toBe("success");
 		expect(controller.getState("ship-it")).toBe("completed");
+	});
+
+	it("reports inflight goals while drain waits are pending", async () => {
+		const client = new MockRpcClient({ cwd: "", tools: [] });
+		const deferred = Promise.withResolvers<void>();
+		client.setPromptImpl(() => deferred.promise);
+		const controller = new GoalExecutionController({
+			sessionManager: createManager([client]),
+			manifest: createManifest(),
+			now: () => 5_500,
+		});
+
+		const firstRun = controller.executeGoal("ship-it", "/repo/project");
+		expect(controller.getInflightGoalNames()).toEqual(["ship-it"]);
+		await expect(controller.waitForInflightGoals(10)).resolves.toEqual({
+			drained: false,
+			activeGoals: ["ship-it"],
+		});
+		deferred.resolve();
+		await firstRun;
+		expect(controller.getInflightGoalNames()).toEqual([]);
 	});
 
 	it("rejects execution after escalation pauses the goal", async () => {

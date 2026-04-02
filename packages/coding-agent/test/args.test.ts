@@ -210,6 +210,11 @@ describe("parseArgs", () => {
 			const result = parseArgs(["--tools", "Read,Grep"]);
 			expect(result.tools).toEqual(["read", "grep"]);
 		});
+
+		test("accepts hidden tool names passed to --tools", () => {
+			const result = parseArgs(["--tools", "autonomy_state"]);
+			expect(result.tools).toEqual(["autonomy_state"]);
+		});
 	});
 
 	describe("--no-lsp flag", () => {

@@ -109,6 +109,10 @@ describe("HTTP frontend", () => {
 		expect(body).toContain("import { h, render } from 'preact';");
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: checking actual HTM template syntax in HTML output
 		expect(body).toContain("render(html`<${App} />`, document.getElementById('app'));");
+		expect(body).not.toContain("admin:admin");
+		expect(body).toContain("Authentication required");
+		expect(body).toContain("Enter the dashboard Basic Auth credentials to load goals, runs, and manifest data.");
+		expect(body).toContain("Sign In");
 	});
 
 	it("returns a json-safe manifest payload from the api", async () => {

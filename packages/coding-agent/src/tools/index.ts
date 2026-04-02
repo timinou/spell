@@ -243,7 +243,6 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	todo_write: s => new TodoWriteTool(s),
 	org: s => new OrgTool(s),
 	emacs_code: s => new EmacsTool(s),
-	autonomy_state: s => new AutonomyStateTool(s),
 	fetch: s => new FetchTool(s),
 	web_search: s => new SearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
@@ -278,7 +277,6 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	emacs_code: "standard",
 	fetch: "standard",
 	web_search: "standard",
-	autonomy_state: "standard",
 	cancel_job: "standard",
 	await: "standard",
 	canvas_cast: "standard",
@@ -324,6 +322,7 @@ export function compactToolDescription(description: string): string {
 }
 
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
+	autonomy_state: AutonomyStateTool.createIf,
 	submit_result: s => new SubmitResultTool(s),
 	report_finding: () => reportFindingTool,
 	exit_plan_mode: s => new ExitPlanModeTool(s),

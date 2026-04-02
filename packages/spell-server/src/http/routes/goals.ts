@@ -116,11 +116,7 @@ export function handleGetGoalLogs(
 		return Response.json({ error: "Goal not found" }, { status: 404 });
 	}
 
-	const logs = executor
-		.getRunHistory(goalName)
-		.map(run => ({ runId: run.runId, error: run.error }))
-		.filter(entry => entry.error !== undefined);
-	return Response.json(logs);
+	return Response.json(executor.getRunHistory(goalName).map(toRunEntry));
 }
 
 export function handleGetManifest(manifest: AutonomyManifest): Response {

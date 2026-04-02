@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { loadConfig } from "../../src/config/loader";
+import { startSpellServer } from "../../src/server";
 
 const VALID_SERVER_KDL = `http {
 	port 0
@@ -99,6 +100,25 @@ goal "nightly" {
 		});
 
 		await expect(loadConfig(configDir)).rejects.toThrow(/Unknown setup/);
+	});
+});
+
+describe("spell-server startup", () => {
+	it("cleans stale sandbox policy files on startup", async () => {
+		const configDir = await createConfigDir({
+			"server.kdl": VALID_SERVER_KDL,
+			"autonomy.kdl": VALID_MANIFEST_KDL,
+		});
+		const stalePolicyPath = path.join(os.tmpdir(), `spell-sandbox-999999-stale-${Date.now()}.json`);
+		await Bun.write(stalePolicyPath, "{}");
+		const config = await loadConfig(configDir);
+		const server = await startSpellServer(config, process.cwd());
+		try {
+			await expect(fs.access(stalePolicyPath)).rejects.toThrow();
+		} finally {
+			await server.stop();
+			await fs.rm(stalePolicyPath, { force: true });
+		}
 	});
 });
 

@@ -71,6 +71,7 @@ describe("createTools", () => {
 		expect(names).toContain("fetch");
 		expect(names).toContain("web_search");
 		expect(names).toContain("exit_plan_mode");
+		expect(names).not.toContain("autonomy_state");
 	});
 
 	it("includes bash and python when python mode is both", async () => {
@@ -238,8 +239,9 @@ describe("createTools", () => {
 		expect(names).toContain("search_tool_bm25");
 	});
 
-	it("HIDDEN_TOOLS contains review tools", () => {
+	it("HIDDEN_TOOLS contains explicit-only tools", () => {
 		expect(Object.keys(HIDDEN_TOOLS).sort()).toEqual([
+			"autonomy_state",
 			"exit_plan_mode",
 			"report_finding",
 			"resolve",

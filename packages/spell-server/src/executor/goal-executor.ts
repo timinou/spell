@@ -31,6 +31,7 @@ export class GoalExecutionController {
 	#states = new Map<string, GoalExecutionState>();
 	#runs = new Map<string, GoalRun[]>();
 	#activeSandboxFiles = new Map<string, string>();
+	#inflightRuns = new Map<string, Promise<GoalResult>>();
 	#onHook?: (goalName: string, result: GoalResult) => void | Promise<void>;
 	#onEscalation?: (goalName: string, error: string) => void | Promise<void>;
 	#now: () => number;
@@ -67,7 +68,15 @@ export class GoalExecutionController {
 			this.#states.set(goalName, "pending");
 		}
 
-		return this.#runWithRetry(goalName, goal, setup, cwd);
+		const runPromise = this.#runWithRetry(goalName, goal, setup, cwd);
+		this.#inflightRuns.set(goalName, runPromise);
+		try {
+			return await runPromise;
+		} finally {
+			if (this.#inflightRuns.get(goalName) === runPromise) {
+				this.#inflightRuns.delete(goalName);
+			}
+		}
 	}
 
 	getState(goalName: string): GoalExecutionState {
@@ -81,6 +90,25 @@ export class GoalExecutionController {
 
 	getAllGoalStates(): Map<string, GoalExecutionState> {
 		return new Map(this.#states);
+	}
+
+	getInflightGoalNames(): string[] {
+		return [...this.#inflightRuns.keys()].sort();
+	}
+
+	async waitForInflightGoals(timeoutMs: number): Promise<{ drained: boolean; activeGoals: string[] }> {
+		const inflightRuns = [...this.#inflightRuns.values()];
+		if (inflightRuns.length === 0) {
+			return { drained: true, activeGoals: [] };
+		}
+		const outcome = await Promise.race([
+			Promise.allSettled(inflightRuns).then(() => "drained" as const),
+			Bun.sleep(timeoutMs).then(() => "timeout" as const),
+		]);
+		if (outcome === "drained") {
+			return { drained: true, activeGoals: [] };
+		}
+		return { drained: false, activeGoals: this.getInflightGoalNames() };
 	}
 
 	async #runWithRetry(goalName: string, goal: ManifestGoal, setup: ManifestSetup, cwd: string): Promise<GoalResult> {
@@ -168,7 +196,7 @@ export class GoalExecutionController {
 		setup: ManifestSetup,
 		cwd: string,
 	): Promise<AttemptResult> {
-		const sandboxPolicyPath = setup.sandbox ? await writeSandboxPolicy(setup.sandbox) : undefined;
+		const sandboxPolicyPath = setup.sandbox ? await writeSandboxPolicy(goalName, setup.sandbox) : undefined;
 		if (sandboxPolicyPath) {
 			this.#activeSandboxFiles.set(goalName, sandboxPolicyPath);
 		}
