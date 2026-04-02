@@ -1,5 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { Bot, type Context, type MiddlewareFn } from "grammy";
+import type { OperatorActionHandler } from "../../http/routes/operator-actions";
 import type { RpcEvent } from "../../rpc/types";
 import { awaitStreamerCompletion, ResponseStreamer } from "../bridge/rpc-to-telegram";
 import { handleTelegramMessage } from "../bridge/telegram-to-rpc";
@@ -216,7 +217,11 @@ function registerShutdownHandlers(
 	};
 }
 
-export async function startBot(config: TelegramBridgeConfig, processManager: ProcessManager): Promise<TelegramBot> {
+export async function startBot(
+	config: TelegramBridgeConfig,
+	processManager: ProcessManager,
+	operatorActionBridge?: OperatorActionHandler,
+): Promise<TelegramBot> {
 	const bot = new Bot<AuthContext>(config.botToken);
 	const tokenStore = new TokenStore();
 	await tokenStore.load();
@@ -236,6 +241,7 @@ export async function startBot(config: TelegramBridgeConfig, processManager: Pro
 		config,
 		processManager,
 		telegramPrompt,
+		operatorActionBridge,
 	};
 
 	bot.use(authMiddleware(config, tokenStore));
