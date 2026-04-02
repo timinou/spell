@@ -4,7 +4,7 @@ import type { RpcClient } from "../../src/rpc/rpc-client";
 import type { BridgeRpcCommand, RpcEvent, RpcSpawnOptions } from "../../src/rpc/types";
 import type { AuthContext } from "../../src/telegram/bot/auth";
 import { COMMANDS, type CommandContext } from "../../src/telegram/commands";
-import { handleApprovalCallback, parseApprovalCallbackData } from "../../src/telegram/commands/approval";
+import { buildApprovalCallbackData, handleApprovalCallback, parseApprovalCallbackData } from "../../src/telegram/commands/approval";
 import { handleBtwCommand } from "../../src/telegram/commands/btw";
 import { handleModeCommand } from "../../src/telegram/commands/mode";
 import { handleProjectCommand } from "../../src/telegram/commands/project";
@@ -533,10 +533,15 @@ it("/mode telegram-full respawns with telegram prompt", async () => {
 
 describe("telegram approval callbacks", () => {
 	it("parses approval callback data", () => {
-		expect(parseApprovalCallbackData("approval:approve-feed:article-1:cb-1")).toEqual({
+		const callbackData = buildApprovalCallbackData({
 			action: "approve-feed",
 			articleId: "article-1",
-			callbackId: "cb-1",
+			requestId: "cb-1",
+		});
+		expect(parseApprovalCallbackData(callbackData)).toEqual({
+			action: "approve-feed",
+			articleId: "article-1",
+			requestId: "cb-1",
 		});
 		expect(parseApprovalCallbackData("approval:nope:article-1:cb-1")).toBeNull();
 	});
@@ -551,10 +556,16 @@ describe("telegram approval callbacks", () => {
 				workflowState: "FEED_APPROVED",
 				triggeredGoals: ["feed-delivery-goal"],
 				duplicate: false,
+				downstreamJobs: [],
 			};
 		};
-		const ctx = mockAuthContext({ callbackData: "approval:approve-feed:article-1:cb-1", callbackMessageId: 17 });
-		const parsed = parseApprovalCallbackData("approval:approve-feed:article-1:cb-1");
+		const callbackData = buildApprovalCallbackData({
+			action: "approve-feed",
+			articleId: "article-1",
+			requestId: "cb-1",
+		});
+		const ctx = mockAuthContext({ callbackData, callbackMessageId: 17 });
+		const parsed = parseApprovalCallbackData(callbackData);
 		if (!parsed) throw new Error("expected parsed callback");
 
 		await handleApprovalCallback(ctx, cmdCtx, parsed);
@@ -562,7 +573,7 @@ describe("telegram approval callbacks", () => {
 		expect(requests).toEqual([
 			{
 				source: "telegram",
-				callbackId: "cb-1",
+				requestId: "cb-1",
 				articleId: "article-1",
 				action: "approve-feed",
 				actor: { userId: "123456789", chatId: 12345, messageId: 17 },
@@ -580,9 +591,15 @@ describe("telegram approval callbacks", () => {
 			workflowState: "FEED_APPROVED",
 			triggeredGoals: [],
 			duplicate: true,
+			downstreamJobs: [],
 		});
-		const ctx = mockAuthContext({ callbackData: "approval:approve-feed:article-1:cb-dup" });
-		const parsed = parseApprovalCallbackData("approval:approve-feed:article-1:cb-dup");
+		const callbackData = buildApprovalCallbackData({
+			action: "approve-feed",
+			articleId: "article-1",
+			requestId: "cb-dup",
+		});
+		const ctx = mockAuthContext({ callbackData });
+		const parsed = parseApprovalCallbackData(callbackData);
 		if (!parsed) throw new Error("expected parsed callback");
 
 		await handleApprovalCallback(ctx, cmdCtx, parsed);

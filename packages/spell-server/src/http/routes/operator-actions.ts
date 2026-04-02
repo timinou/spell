@@ -1,15 +1,34 @@
+export type OperatorActionSource = "telegram" | "review-queue";
 export type OperatorApprovalAction = "approve-feed" | "approve-publication" | "reject" | "defer";
 
-export interface OperatorActionRequest {
-	source: "telegram";
-	callbackId: string;
+export interface OperatorActionActor {
+	userId: string;
+	chatId?: number;
+	messageId?: number;
+}
+
+interface OperatorActionRequestBase {
+	source: OperatorActionSource;
+	requestId: string;
 	articleId: string;
 	action: OperatorApprovalAction;
-	actor: {
-		userId: string;
-		chatId: number;
-		messageId?: number;
-	};
+}
+
+export type OperatorActionRequest =
+|	(OperatorActionRequestBase & {
+		source: "telegram";
+		actor: OperatorActionActor & { chatId: number };
+	})
+|	(OperatorActionRequestBase & {
+		source: "review-queue";
+		actor: OperatorActionActor;
+	});
+
+export interface OperatorActionDownstreamJob {
+	jobId: string;
+	kind: "feed-delivery" | "publication-export";
+	status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+	retryEligible: boolean;
 }
 
 export interface OperatorActionResult {
@@ -17,12 +36,14 @@ export interface OperatorActionResult {
 	workflowState: string;
 	triggeredGoals: string[];
 	duplicate: boolean;
+	downstreamJobs: OperatorActionDownstreamJob[];
 }
 
 export type OperatorActionHandler = (
 	request: OperatorActionRequest,
 ) => Promise<OperatorActionResult> | OperatorActionResult;
 
+const VALID_SOURCES = new Set<OperatorActionSource>(["telegram", "review-queue"]);
 const VALID_ACTIONS = new Set<OperatorApprovalAction>(["approve-feed", "approve-publication", "reject", "defer"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -33,10 +54,10 @@ function parseOperatorActionRequest(value: unknown): OperatorActionRequest | nul
 	if (!isRecord(value)) {
 		return null;
 	}
-	if (value.source !== "telegram") {
+	if (typeof value.source !== "string" || !VALID_SOURCES.has(value.source as OperatorActionSource)) {
 		return null;
 	}
-	if (typeof value.callbackId !== "string" || value.callbackId.length === 0) {
+	if (typeof value.requestId !== "string" || value.requestId.length === 0) {
 		return null;
 	}
 	if (typeof value.articleId !== "string" || value.articleId.length === 0) {
@@ -51,7 +72,7 @@ function parseOperatorActionRequest(value: unknown): OperatorActionRequest | nul
 	if (typeof value.actor.userId !== "string" || value.actor.userId.length === 0) {
 		return null;
 	}
-	if (typeof value.actor.chatId !== "number" || !Number.isFinite(value.actor.chatId)) {
+	if (value.actor.chatId !== undefined && (typeof value.actor.chatId !== "number" || !Number.isFinite(value.actor.chatId))) {
 		return null;
 	}
 	if (
@@ -61,16 +82,35 @@ function parseOperatorActionRequest(value: unknown): OperatorActionRequest | nul
 		return null;
 	}
 
+	const actor = {
+		userId: value.actor.userId,
+		...(value.actor.chatId !== undefined ? { chatId: value.actor.chatId } : {}),
+		...(value.actor.messageId !== undefined ? { messageId: value.actor.messageId } : {}),
+	} satisfies OperatorActionActor;
+
+	if (value.source === "telegram") {
+		if (actor.chatId === undefined) {
+			return null;
+		}
+		return {
+			source: "telegram",
+			requestId: value.requestId,
+			articleId: value.articleId,
+			action: value.action as OperatorApprovalAction,
+			actor: {
+				userId: actor.userId,
+				chatId: actor.chatId,
+				...(actor.messageId !== undefined ? { messageId: actor.messageId } : {}),
+			},
+		};
+	}
+
 	return {
-		source: "telegram",
-		callbackId: value.callbackId,
+		source: "review-queue",
+		requestId: value.requestId,
 		articleId: value.articleId,
 		action: value.action as OperatorApprovalAction,
-		actor: {
-			userId: value.actor.userId,
-			chatId: value.actor.chatId,
-			...(value.actor.messageId !== undefined ? { messageId: value.actor.messageId } : {}),
-		},
+		actor,
 	};
 }
 

@@ -1,3 +1,6 @@
+import { access } from "node:fs/promises";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { LoadedConfig } from "./config/loader";
 import type { TelegramChannelConfig } from "./config/types";
@@ -9,6 +12,7 @@ import { OrgHookExecutor } from "./hooks/org";
 import { TelegramHookExecutor } from "./hooks/telegram";
 import type { HookExecutor } from "./hooks/types";
 import { WebhookHookExecutor } from "./hooks/webhook";
+import type { OperatorActionHandler } from "./http/routes/operator-actions";
 import { startHttpServer } from "./http/server";
 import { GoalScheduler } from "./scheduler/goal-scheduler";
 import { AutonomyLifecycle } from "./session/autonomy-lifecycle";
@@ -22,6 +26,35 @@ export interface SpellServer {
 
 interface SpellServerStartDependencies {
 	createTelegramBotService?: (options: TelegramBotServiceOptions) => Pick<TelegramBotService, "start" | "stop">;
+	operatorActionHandler?: OperatorActionHandler;
+	startHttpServer?: typeof startHttpServer;
+}
+
+const PROJECT_OPERATOR_ACTION_HANDLER_PATH = "src/review/operator-action-handler.ts";
+
+interface OperatorActionHandlerModule {
+	createOperatorActionHandler?: (options: { cwd: string }) => Promise<OperatorActionHandler> | OperatorActionHandler;
+}
+
+async function loadProjectOperatorActionHandler(cwd: string): Promise<OperatorActionHandler | undefined> {
+	const modulePath = join(cwd, PROJECT_OPERATOR_ACTION_HANDLER_PATH);
+	try {
+		await access(modulePath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			return undefined;
+		}
+		throw error;
+	}
+
+	const module = (await import(pathToFileURL(modulePath).href)) as OperatorActionHandlerModule;
+	if (typeof module.createOperatorActionHandler !== "function") {
+		throw new Error(`Operator action handler module '${modulePath}' must export createOperatorActionHandler(options)`);
+	}
+
+	const handler = await module.createOperatorActionHandler({ cwd });
+	logger.debug("Loaded project operator action bridge", { modulePath });
+	return handler;
 }
 
 const SHUTDOWN_DRAIN_TIMEOUT_MS = 30_000;
@@ -89,7 +122,9 @@ export async function startSpellServer(
 		});
 	}
 
-	const httpServer = startHttpServer({
+	const operatorActionHandler = dependencies.operatorActionHandler ?? (await loadProjectOperatorActionHandler(cwd));
+	const startHttpServerImpl = dependencies.startHttpServer ?? startHttpServer;
+	const httpServer = startHttpServerImpl({
 		executor,
 		scheduler,
 		manifest: config.manifest,
@@ -100,14 +135,19 @@ export async function startSpellServer(
 			goalTokens: config.server.http.goalTokens,
 		},
 		cwd,
+		operatorActionHandler,
 	});
 	const createTelegramBotService =
+
 		dependencies.createTelegramBotService ?? (options => new TelegramBotService(options));
 	let telegramBot: Pick<TelegramBotService, "start" | "stop"> | null = null;
 	let telegramBotActive = false;
 	try {
 		if (hasFullTelegramConfig(config.channels.telegram)) {
-			telegramBot = createTelegramBotService({ config: config.channels.telegram });
+			telegramBot = createTelegramBotService({
+				config: config.channels.telegram,
+				operatorActionBridge: operatorActionHandler,
+			});
 			await telegramBot.start();
 			telegramBotActive = true;
 			logger.debug("Telegram bot service started");
