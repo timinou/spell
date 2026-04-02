@@ -10,6 +10,7 @@ export * from "./hook-fetch";
 export * from "./indent";
 export * from "./json";
 export * as logger from "./logger";
+export * from "./managed-daemon";
 export * from "./mermaid-ascii";
 export * as postmortem from "./postmortem";
 export * as procmgr from "./procmgr";

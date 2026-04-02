@@ -21,7 +21,7 @@ export async function createTarball(baseDir: string, files: readonly string[]): 
 			if (!stat.isFile()) {
 				throw new Error(`${relative} is not a file`);
 			}
-		} catch (error) {
+		} catch (_error) {
 			throw new Error(`Spellcast file not found: ${relative}`);
 		}
 	}

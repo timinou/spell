@@ -1,8 +1,8 @@
 import type { DiscoveredSpellcastManifest, SpellcastManifestDiscoveryResult } from "./discovery";
 import type { SpellcastManifestVisibility } from "./manifest";
 
-export * from "./manifest";
 export * from "./discovery";
+export * from "./manifest";
 
 export interface SpellcastPublishState {
 	manifestPath: string;

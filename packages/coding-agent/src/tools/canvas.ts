@@ -150,6 +150,18 @@ export interface CanvasTaskPayload {
 	images?: Array<{ data: string; mimeType: string }>;
 }
 
+export function drainCanvasTierEventsNow(
+	eventBus: { drain: (maxItems?: number) => Promise<number> } | undefined,
+	isAgentIdle?: () => boolean,
+	onError: (error: unknown) => void = err => {
+		logger.error("Canvas immediate event drain failed", { error: String(err) });
+	},
+): void {
+	if (!eventBus) return;
+	if (isAgentIdle?.() === false) return;
+	void eventBus.drain().catch(onError);
+}
+
 export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDetails> {
 	readonly name = "canvas";
 	readonly label = "Canvas";
@@ -221,6 +233,58 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 			this.#bridge = new QmlBridge();
 		}
 		return this.#bridge;
+	}
+
+	#syncManagerBridge(bridge: QmlBridge | RemoteQmlBridge | undefined): void {
+		this.session.orchestratorManager?.setBridge(bridge);
+		this.session.taskManager?.setBridge(bridge);
+	}
+
+	#drainQueuedCanvasEvents(eventBus: typeof this.session.eventBus): void {
+		drainCanvasTierEventsNow(eventBus, this.session.isAgentIdle);
+	}
+
+	async #maybeAugmentPhoenixInspectorLaunchProps(
+		absPath: string,
+		props: Record<string, unknown>,
+	): Promise<Record<string, unknown>> {
+		if (
+			!absPath.endsWith(`${path.sep}.spell${path.sep}extensions${path.sep}phoenix-inspector${path.sep}inspector.qml`)
+		) {
+			return props;
+		}
+
+		const nextProps = { ...props };
+		const inspectorDir = path.dirname(absPath);
+		nextProps.backendMode = "canvas";
+		if (typeof nextProps.quickFixSystemPrompt !== "string") {
+			try {
+				nextProps.quickFixSystemPrompt = await Bun.file(path.join(inspectorDir, "prompts/frontend-fix.md")).text();
+			} catch {}
+		}
+		if (nextProps.quickFixOutputSchema === undefined) {
+			try {
+				nextProps.quickFixOutputSchema = await Bun.file(
+					path.join(inspectorDir, "prompts/quick-fix-schema.json"),
+				).json();
+			} catch {}
+		}
+		if (typeof nextProps.tidewaveMcpUrl !== "string") {
+			let dir = path.dirname(inspectorDir);
+			while (dir && dir !== path.dirname(dir)) {
+				try {
+					const raw = await Bun.file(path.join(dir, ".spell/mcp.json")).text();
+					const parsed = JSON.parse(raw) as { mcpServers?: Record<string, { url?: unknown }> };
+					const url = parsed.mcpServers?.tidewave?.url;
+					if (typeof url === "string" && url.trim().length > 0) {
+						nextProps.tidewaveMcpUrl = url.trim();
+						break;
+					}
+				} catch {}
+				dir = path.dirname(dir);
+			}
+		}
+		return nextProps;
 	}
 
 	/**
@@ -395,6 +459,7 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 								: undefined,
 					};
 					eventBus.enqueue(CANVAS_ORCHESTRATOR_CHANNEL, payload, Priority.P1);
+					this.#drainQueuedCanvasEvents(eventBus);
 				} else if (tier === "agent" && typeof p._assignment === "string") {
 					const payload: CanvasAgentPayload = {
 						windowId: id,
@@ -405,6 +470,7 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 								: undefined,
 					};
 					eventBus.enqueue(CANVAS_AGENT_CHANNEL, payload, Priority.P1);
+					this.#drainQueuedCanvasEvents(eventBus);
 				} else if (tier === "task" && typeof p._assignment === "string") {
 					const context =
 						typeof p.context === "object" && p.context !== null
@@ -424,6 +490,7 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 						images,
 					};
 					eventBus.enqueue(CANVAS_TASK_CHANNEL, payload, Priority.P1);
+					this.#drainQueuedCanvasEvents(eventBus);
 				} else {
 					// Unknown tier or missing required fields — treat as regular event.
 					regularEvents.push(ev);
@@ -527,15 +594,20 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 					// Remote mode: read the local QML file and push its content to Android.
 					const abs = await this.#resolveLaunchPath(filePath);
 					const content = await Bun.file(abs).text();
+					const props = await this.#maybeAugmentPhoenixInspectorLaunchProps(
+						abs,
+						(params.props as Record<string, unknown> | undefined) ?? {},
+					);
 					const win = remote.launch(id, content, {
 						title: params.title,
 						width: params.width,
 						height: params.height,
-						props: params.props as Record<string, unknown> | undefined,
+						props,
 					});
+					this.#syncManagerBridge(remote);
 					const events = remote.drainEvents(id);
 					// Merge armed tools: explicit props override; remote has no file-declared tools yet.
-					const propsArmed = params.props?._armedTools;
+					const propsArmed = props._armedTools;
 					let armedList: string[];
 					if (Array.isArray(propsArmed)) {
 						armedList = propsArmed.filter((t): t is string => typeof t === "string");
@@ -558,7 +630,7 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 				const bridge = this.#ensureBridge();
 
 				// Service-aware launch: resolve storageName from registry
-				const props = (params.props as Record<string, unknown> | undefined) ?? {};
+				let props = (params.props as Record<string, unknown> | undefined) ?? {};
 				if (typeof props.serviceName === "string" && props.serviceName) {
 					try {
 						const registry = new ServiceRegistry();
@@ -576,6 +648,7 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 						});
 					}
 				}
+				props = await this.#maybeAugmentPhoenixInspectorLaunchProps(abs, props);
 
 				const win = await bridge.launch(id, abs, {
 					title: params.title,
@@ -583,9 +656,10 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 					height: params.height,
 					props,
 				});
+				this.#syncManagerBridge(bridge);
 				const events = bridge.drainEvents(id);
 				// Merge armed tools: explicit props override, then file-declared (with denylist).
-				const propsArmed = params.props?._armedTools;
+				const propsArmed = props._armedTools;
 				let armedList: string[];
 				if (Array.isArray(propsArmed)) {
 					armedList = propsArmed.filter((t): t is string => typeof t === "string");
@@ -614,12 +688,18 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 				const remote = this.#remoteBridge();
 				if (remote) {
 					remote.close(id);
+					if (remote.listWindows().length === 0) {
+						this.#syncManagerBridge(undefined);
+					}
 					const details: CanvasToolDetails = { action: "close", windowId: id };
 					return toolResult(details).text(`Panel '${id}' closed on Android`).done();
 				}
 
 				const bridge = this.#ensureBridge();
 				await bridge.close(id);
+				if (bridge.listWindows().filter(w => w.state !== "closed").length === 0) {
+					this.#syncManagerBridge(undefined);
+				}
 				const details: CanvasToolDetails = { action: "close", windowId: id };
 				return toolResult(details).text(`Window '${id}' closed`).done();
 			}

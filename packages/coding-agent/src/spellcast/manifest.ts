@@ -2,7 +2,17 @@ import * as path from "node:path";
 import { YAML } from "bun";
 
 export const DEFAULT_SPELLCAST_TOOLS = ["read"] as const;
-export const DEFAULT_SPELLCAST_VALID_TOOLS = ["read", "write", "delete", "list", "grep", "find", "fetch", "web_search", "canvas"] as const;
+export const DEFAULT_SPELLCAST_VALID_TOOLS = [
+	"read",
+	"write",
+	"delete",
+	"list",
+	"grep",
+	"find",
+	"fetch",
+	"web_search",
+	"canvas",
+] as const;
 export const DEFAULT_SPELLCAST_VISIBILITY = "unlisted" as const;
 
 export type SpellcastManifestVisibility = "public" | "unlisted";
@@ -94,7 +104,10 @@ function validateToolList(tools: unknown, validTools: Set<string>, issues: strin
 	return parsed;
 }
 
-export function parseSpellcastManifest(rawYaml: string, options: ParseSpellcastManifestOptions = {}): SpellcastManifest {
+export function parseSpellcastManifest(
+	rawYaml: string,
+	options: ParseSpellcastManifestOptions = {},
+): SpellcastManifest {
 	let parsedYaml: unknown;
 	try {
 		parsedYaml = YAML.parse(rawYaml);

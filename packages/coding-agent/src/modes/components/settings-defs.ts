@@ -131,6 +131,7 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "1", label: "Single" },
 		{ value: "2", label: "Double" },
 		{ value: "3", label: "Triple" },
+		{ value: "4", label: "Quadruple" },
 	],
 	// Task isolation mode
 	"task.isolation.mode": [

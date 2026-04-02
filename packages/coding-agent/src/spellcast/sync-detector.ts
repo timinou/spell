@@ -8,7 +8,10 @@ export interface SpellcastSyncMatch {
 	filePath: string;
 }
 
-export function checkFileAgainstManifests(filePath: string, context: SpellcastSessionContext): SpellcastSyncMatch | null {
+export function checkFileAgainstManifests(
+	filePath: string,
+	context: SpellcastSessionContext,
+): SpellcastSyncMatch | null {
 	const resolvedFilePath = path.resolve(filePath);
 	for (const discovered of context.discoveredManifests) {
 		const publishState = context.publishState[discovered.manifestPath];

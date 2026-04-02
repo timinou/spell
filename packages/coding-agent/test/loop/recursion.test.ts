@@ -45,10 +45,10 @@ function createParent(depth = 0): LoopSnapshot {
 describe("loop recursion", () => {
 	it("spawns children until the depth limit and then escalates", () => {
 		const dag = new LoopDag();
-		const spawner = new ChildSpawner(dag, 3);
-		const allowed = spawner.prepareChild(createParent(2), { name: "child", id: "LOOP-3" });
+		const spawner = new ChildSpawner(dag, 4);
+		const allowed = spawner.prepareChild(createParent(3), { name: "child", id: "LOOP-4" });
 		expect(allowed.allowed).toBe(true);
-		const denied = spawner.prepareChild(createParent(3), { name: "child", id: "LOOP-4" });
+		const denied = spawner.prepareChild(createParent(4), { name: "child", id: "LOOP-5" });
 		expect(denied.allowed).toBe(false);
 		expect(denied.escalate).toBe(true);
 	});

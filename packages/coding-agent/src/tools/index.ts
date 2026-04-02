@@ -29,8 +29,8 @@ import { BashTool } from "./bash";
 import { BrowserTool } from "./browser";
 import { CalculatorTool } from "./calculator";
 import { CancelJobTool } from "./cancel-job";
-import { CanvasCastTool } from "./canvas-cast";
 import { CanvasTool } from "./canvas";
+import { CanvasCastTool } from "./canvas-cast";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { EmacsTool } from "./emacs";
 import { ExitPlanModeTool } from "./exit-plan-mode";
@@ -462,7 +462,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
 		if (name === "task") {
-			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
+			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 4;
 			const currentDepth = session.taskDepth ?? 0;
 			return maxDepth < 0 || currentDepth < maxDepth;
 		}

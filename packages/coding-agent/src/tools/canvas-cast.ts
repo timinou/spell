@@ -2,8 +2,8 @@ import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type Static, Type } from "@sinclair/typebox";
 import canvasCastDescription from "../prompts/tools/canvas-cast.md" with { type: "text" };
-import { discoverSpellcastManifests } from "../spellcast/discovery";
 import { getSpellcastingServerUrl } from "../spellcast/config";
+import { discoverSpellcastManifests } from "../spellcast/discovery";
 import { parseSpellcastManifest } from "../spellcast/manifest";
 import { loadSpellcastPublishState, writeSpellcastPublishState } from "../spellcast/state";
 import { createTarball } from "../spellcast/tarball";
@@ -139,7 +139,9 @@ export class CanvasCastTool implements AgentTool<typeof canvasCastSchema> {
 		return toolResult().text(lines.join("\n")).done();
 	}
 
-	async #prepareManifestUpload(manifestPath: string): Promise<{ manifest: ReturnType<typeof parseSpellcastManifest>; tarball: Buffer }> {
+	async #prepareManifestUpload(
+		manifestPath: string,
+	): Promise<{ manifest: ReturnType<typeof parseSpellcastManifest>; tarball: Buffer }> {
 		const raw = await Bun.file(manifestPath).text();
 		const manifest = parseSpellcastManifest(raw, { sourcePath: manifestPath });
 		const tarball = await createTarball(path.dirname(manifestPath), manifest.files);
@@ -147,7 +149,10 @@ export class CanvasCastTool implements AgentTool<typeof canvasCastSchema> {
 	}
 
 	async #requireToken(): Promise<string> {
-		const token = await this.#session.authStorage?.getApiKey("spellcasting", this.#session.getSessionId?.() ?? undefined);
+		const token = await this.#session.authStorage?.getApiKey(
+			"spellcasting",
+			this.#session.getSessionId?.() ?? undefined,
+		);
 		if (!token) {
 			throw new Error("Not authenticated. Run /login spellcasting first.");
 		}

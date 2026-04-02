@@ -17,16 +17,12 @@ export function formatSpellcastSessionReport(context: SpellcastSessionContext): 
 			: `Found ${discoveredManifests.length} ${pluralize(discoveredManifests.length, "spellcast", "spellcasts")}: ${discoveredManifests
 					.map(item => {
 						const state = publishState[item.manifestPath];
-						return state
-							? `${item.manifest.name} (published, ${state.appUrl})`
-							: `${item.manifest.name} (draft)`;
+						return state ? `${item.manifest.name} (published, ${state.appUrl})` : `${item.manifest.name} (draft)`;
 					})
 					.join(", ")}`;
 
 	const warningSummary =
-		warnings.length === 0
-			? ""
-			: `Spellcast warnings (${warnings.length}): ${warnings.join(" | ")}`;
+		warnings.length === 0 ? "" : `Spellcast warnings (${warnings.length}): ${warnings.join(" | ")}`;
 
 	return [manifestSummary, warningSummary].filter(Boolean).join("\n");
 }
