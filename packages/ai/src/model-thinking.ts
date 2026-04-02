@@ -289,6 +289,15 @@ function applyAnthropicCatalogPolicy(model: ApiModel<Api>, parsedModel: Anthropi
 		model.contextWindow = 1000000;
 		model.maxTokens = 128000;
 	}
+
+	// Bedrock Sonnet 4.6: catalog metadata can lag and under-report context windows.
+	if (
+		model.provider === "amazon-bedrock" &&
+		parsedModel.kind === "sonnet" &&
+		semverEqual(parsedModel.version, "4.6")
+	) {
+		model.contextWindow = 1000000;
+	}
 }
 
 function applyOpenAICatalogPolicy(model: ApiModel<Api>, parsedModel: OpenAIModel): void {

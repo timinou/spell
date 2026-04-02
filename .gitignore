@@ -69,3 +69,6 @@ packages/qml/native/omp-qml-bridge
 # Tree-sitter compiled grammars (platform-specific, managed by pi-prelude)
 packages/emacs/elisp/vendor/tree-sitter/*.so
 packages/qml/native/
+
+
+.ancillary/

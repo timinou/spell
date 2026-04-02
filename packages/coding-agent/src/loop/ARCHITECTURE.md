@@ -803,7 +803,7 @@ The parser builds a dependency graph and produces a topological sort for executi
 
 Located in `recursion/spawner.ts`. Validates child creation:
 
-1. `enforceDepthLimit(parentDepth, limit)` -- Checks `nextDepth <= limit` (default limit: 3). Returns `{ allowed, nextDepth, escalate, reason }`. If exceeded, `escalate` is set to request human approval.
+1. `enforceDepthLimit(parentDepth, limit)` -- Checks `nextDepth <= limit` (default limit: 4). Returns `{ allowed, nextDepth, escalate, reason }`. If exceeded, `escalate` is set to request human approval.
 2. `dag.createsCycle(parentId, childId)` -- DAG cycle check (DFS)
 3. If both pass, `registerChild()` adds an edge to the DAG
 
@@ -973,7 +973,7 @@ All constants from `constants.ts`:
 | `LOOP_SCHEMA_VERSION` | `"1.0.0"` | Schema version stamped on every `LoopEvent` |
 | `DEFAULT_LOOP_MAX_ITERATIONS` | `200` | Maximum iterations before forced validation |
 | `DEFAULT_LOOP_REFLECT_EVERY` | `3` | Reflect every N iterations |
-| `DEFAULT_LOOP_DEPTH_LIMIT` | `3` | Maximum child loop nesting depth |
+| `DEFAULT_LOOP_DEPTH_LIMIT` | `4` | Maximum child loop nesting depth |
 | `DEFAULT_LOOP_CONCURRENCY_LIMIT` | `2` | Maximum simultaneously active loops |
 | `DEFAULT_HUMAN_GATE_TIMEOUT_MS` | `300000` (5 min) | Auto-approve timeout for human gates |
 | `DEFAULT_BUDGET_LIMITS.wallClockMs` | `14400000` (4 hours) | Maximum wall-clock time per loop |

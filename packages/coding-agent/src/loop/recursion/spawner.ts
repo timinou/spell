@@ -1,3 +1,4 @@
+import { DEFAULT_LOOP_DEPTH_LIMIT } from "../constants";
 import type { LoopRetryPolicy, LoopSnapshot, StartLoopOptions } from "../types";
 import type { LoopDag } from "./dag";
 import { enforceDepthLimit } from "./depth-guard";
@@ -18,7 +19,7 @@ export class ChildSpawner {
 	readonly #dag: LoopDag;
 	readonly #depthLimit: number;
 
-	constructor(dag: LoopDag, depthLimit = 3) {
+	constructor(dag: LoopDag, depthLimit = DEFAULT_LOOP_DEPTH_LIMIT) {
 		this.#dag = dag;
 		this.#depthLimit = depthLimit;
 	}

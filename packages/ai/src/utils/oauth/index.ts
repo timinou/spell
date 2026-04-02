@@ -1,7 +1,7 @@
 // ============================================================================
 // High-level API
 // ============================================================================
-import { spellcastingProvider } from "./spellcasting";
+
 import { refreshAnthropicToken } from "./anthropic";
 import { refreshCursorToken } from "./cursor";
 import { refreshGitHubCopilotToken } from "./github-copilot";
@@ -10,6 +10,7 @@ import { refreshAntigravityToken } from "./google-antigravity";
 import { refreshGoogleCloudToken } from "./google-gemini-cli";
 import { refreshKimiToken } from "./kimi";
 import { refreshOpenAICodexToken } from "./openai-codex";
+import { spellcastingProvider } from "./spellcasting";
 import type {
 	OAuthCredentials,
 	OAuthProvider,

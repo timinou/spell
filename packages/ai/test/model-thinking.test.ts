@@ -144,7 +144,19 @@ describe("generated model policies", () => {
 				reasoning: true,
 				input: ["text"],
 				cost: { input: 0, output: 0, cacheRead: 1.5, cacheWrite: 18.75 },
-				contextWindow: 1000000,
+				contextWindow: 200000,
+				maxTokens: 32000,
+			},
+			{
+				id: "eu.anthropic.claude-sonnet-4-6",
+				name: "Claude Sonnet 4.6 (EU)",
+				api: "bedrock-converse-stream",
+				provider: "amazon-bedrock",
+				baseUrl: "https://example.com",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 1.5, cacheWrite: 18.75 },
+				contextWindow: 200000,
 				maxTokens: 32000,
 			},
 			{
@@ -178,7 +190,8 @@ describe("generated model policies", () => {
 		expect(models[1]?.cost.cacheRead).toBe(0.5);
 		expect(models[1]?.cost.cacheWrite).toBe(6.25);
 		expect(models[1]?.contextWindow).toBe(1000000);
-		expect(models[2]?.contextWindow).toBe(272000);
+		expect(models[2]?.contextWindow).toBe(1000000);
+		expect(models[3]?.contextWindow).toBe(272000);
 	});
 
 	it("links spark variants to their base models", () => {

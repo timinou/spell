@@ -38,6 +38,7 @@
 
 ### Changed
 
+- Changed default `task.maxRecursionDepth` from `2` to `4`, and `DEFAULT_LOOP_DEPTH_LIMIT` from `3` to `4`.
 - Moved fluid `plan_start` emission to the planning entrypoint so users see immediate planning feedback with streaming progress and elapsed time.
 - Extended fluid execution to thread `AbortSignal` through planner/agent runs and support scheduler resume with preset completed agent results.
 - Updated fluid agent panels to show dependency status and support expandable/collapsible details.

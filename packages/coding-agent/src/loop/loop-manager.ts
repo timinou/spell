@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import { validateLoopPrerequisites } from "../config/loop-prerequisites";
 import type { EventBus } from "../utils/event-bus";
+import { DEFAULT_LOOP_DEPTH_LIMIT } from "./constants";
 import { type ChildCompletionSignal, type GateDecision, LOOP_STATES, type LoopEvent } from "./contracts";
 import { LoopDashboardBridge } from "./dashboard-bridge";
 import { LoopDomainRegistry } from "./domains/registry";
@@ -90,7 +91,7 @@ export class LoopManager {
 		this.#eventBus = options.eventBus;
 		this.#reviewer = options.reviewer;
 		this.#roleResolver = options.roleResolver;
-		this.#spawner = new ChildSpawner(this.#dag, 3);
+		this.#spawner = new ChildSpawner(this.#dag, DEFAULT_LOOP_DEPTH_LIMIT);
 		this.#humanExecutor = new HumanGateExecutor(new RealClock(), {
 			getAutoApproveTimeoutMs: () => {
 				const val = this.#settings.get?.("loop.autoApproveTimeoutMs");
