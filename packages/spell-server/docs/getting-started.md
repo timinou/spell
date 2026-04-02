@@ -100,15 +100,20 @@ goal "nightly-tests" {
 
 ### 3. Optionally create `.spell/channels.kdl`
 
-If you want Telegram notifications, declare the bot token and owner chat IDs:
+If you want Telegram notifications, declare the bot token (or a token file), owner chat IDs, and the default model used for Telegram-started sessions:
 
 ```kdl
-telegram bot-token="123456:replace-me" {
+telegram {
+  bot-token "123456:replace-me"
   owners 123456789 987654321
+  default-model "claude-sonnet-4-5"
+  user 987654321 {
+    idle-timeout #null
+  }
 }
 ```
 
-The hooks layer can then send completion or failure messages to configured chats.
+Use strict KDL child nodes inside `telegram { ... }`. Nullable values are written as `#null`, not bare `null`. The hooks layer can then send completion or failure messages to configured chats.
 
 For richer delivery, downstream code may call the notification sender with a structured payload instead of plain text. The reusable sender now accepts `{ text, parseMode, replyMarkup, linkPreviewOptions }`, so a domain can ship HTML/Markdown digests, inline approval buttons, and explicit preview controls while still using the same Telegram channel configuration.
 

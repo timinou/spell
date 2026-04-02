@@ -73,7 +73,7 @@ telegram {
 }
 ```
 
-If the `telegram` node is absent entirely, Telegram delivery is disabled. If the node is present, `default-model`, authentication (`bot-token` or `bot-token-file`), and `owners` are required.
+If the `telegram` node is absent entirely, Telegram delivery is disabled. If the node is present, `default-model`, authentication (`bot-token` or `bot-token-file`), and `owners` are required. Use the KDL null literal `#null` for nullable fields such as `user { idle-timeout #null }`; bare `null` is not accepted.
 
 ## `.spell/autonomy.kdl`
 
