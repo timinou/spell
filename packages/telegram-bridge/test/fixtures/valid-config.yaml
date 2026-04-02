@@ -1,0 +1,28 @@
+bot_token_file: ./bot-token.txt
+upload_dir: /tmp/test-uploads
+log_viewer_port: 8080
+idle_timeout: 1800
+max_sessions: 2
+default_project: spell
+
+projects:
+   spell: /home/user/code/ora/spell
+   infra: /home/user/code/infra
+
+users:
+   123456789:
+      modes:
+         - telegram-readonly
+         - telegram-full
+      default_mode: telegram-readonly
+      idle_timeout: null
+      projects:
+         - spell
+         - infra
+   987654321:
+      modes:
+         - telegram-readonly
+      default_mode: telegram-readonly
+      idle_timeout: 600
+      projects:
+         - spell

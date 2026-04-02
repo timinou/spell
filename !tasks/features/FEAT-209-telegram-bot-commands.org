@@ -1,0 +1,128 @@
+#+TITLE: Telegram bot commands
+#+STATE: DONE
+#+SESSION_ID: 14aac2bfa1d2ab39
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl]]
+#+CUSTOM_ID: FEAT-209-telegram-bot-commands
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: packages/telegram-bridge
+#+DEPENDS: FEAT-208-message-bridge-and-streaming-for-telegra
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+What's the easiest way to set up a Telegram session with Spell? Look online at oh my pi and pi extensions, and tell me
+1. how I would be able to set it up from my computer
+2. how I wuold be able to have a long-running session on e.g. a Hetzner computer (configured through Nix like in ~/code/infra, though the instructions for that will be left in a FUP), so that I can always talk to the client
+3. how to use the Telegram session like a mode with a whitelist of tools I can do
+4. how to set up a super simple server that manages these connections. If the easiest is typescript or if we go off of Gleam like .ancillary/spellcasting
+
+* Scope
+** In scope
+- All bot commands: /start, /help, /unlock, /lock, /project, /mode, /think, /clear, /status, /invite
+- Inline keyboard interactions for confirmations and selections
+- /btw support (one-off throwaway question without session context)
+- Register commands with BotFather via =bot.api.setMyCommands=
+** Out of scope
+- /invite implementation (already in FEAT: bot core auth -- this item wires it into the command list)
+- Auth logic (FEAT: bot core -- commands call auth primitives)
+- Message processing (FEAT: message bridge)
+
+* Tests
+- File: =packages/telegram-bridge/test/commands.test.ts=
+- Scenario: /help returns formatted list of all commands
+- Scenario: /unlock from owner sends confirmation keyboard, confirm activates full mode
+- Scenario: /unlock from guest is rejected
+- Scenario: /lock switches back to readonly mode and confirms
+- Scenario: /project with no args shows inline keyboard of available projects
+- Scenario: /project spell switches CWD and restarts RPC process
+- Scenario: /mode shows available modes as inline keyboard
+- Scenario: /mode readonly switches tool set and confirms
+- Scenario: /think toggles thinking visibility, replies with current state
+- Scenario: /clear sends new_session RPC command, confirms
+- Scenario: /status shows current project, mode, session stats, process uptime
+- Scenario: /btw "quick question" spawns throwaway session (no-session mode), answers, disposes
+
+* Implementation
+Note: TDD sequencing — write command tests first (mock grammy context + mock ProcessManager), then implement each command handler to satisfy them. Command handlers are independent of each other and can be implemented in parallel after the framework step.
+
+** Implement command handler framework
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-telegram-bot-commands::command-framework
+:DEPENDS: FEAT-208-message-bridge-and-streaming-for-telegra::telegram-to-rpc FEAT-206-telegram-bot-core-and-auth-middleware::bot-setup
+:END:
+- File: =packages/telegram-bridge/src/commands/index.ts=
+- Register all commands on grammy bot, register with BotFather via =bot.api.setMyCommands=
+- Export =registerCommands(bot, processManager, config)=
+
+** Write command tests (TDD: before command implementation)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-telegram-bot-commands::command-tests
+:DEPENDS: FEAT-209-telegram-bot-commands::command-framework
+:END:
+- File: =packages/telegram-bridge/test/commands.test.ts=
+- Mock grammy context + mock ProcessManager
+- All 12 scenarios from Tests section written as failing tests
+
+** Implement /start and /help (satisfies tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-telegram-bot-commands::start-help
+:DEPENDS: FEAT-209-telegram-bot-commands::command-tests
+:END:
+- File: =packages/telegram-bridge/src/commands/start-help.ts=
+
+** Implement /unlock and /lock (satisfies tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-telegram-bot-commands::unlock-lock
+:DEPENDS: FEAT-209-telegram-bot-commands::command-tests
+:END:
+- File: =packages/telegram-bridge/src/commands/unlock-lock.ts=
+- Inline keyboard confirmation for /unlock. Kill + respawn RPC with different --tools.
+
+** Implement /project (satisfies tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-telegram-bot-commands::project
+:DEPENDS: FEAT-209-telegram-bot-commands::command-tests
+:END:
+- File: =packages/telegram-bridge/src/commands/project.ts=
+- Inline keyboard for selection. Kill + respawn RPC with new CWD.
+
+** Implement /mode (satisfies tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-telegram-bot-commands::mode
+:DEPENDS: FEAT-209-telegram-bot-commands::command-tests
+:END:
+- File: =packages/telegram-bridge/src/commands/mode.ts=
+- Parse mode .md frontmatter for tool list. Kill + respawn.
+
+** Implement /think, /clear, /status (satisfies tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-telegram-bot-commands::think-clear-status
+:DEPENDS: FEAT-209-telegram-bot-commands::command-tests
+:END:
+- File: =packages/telegram-bridge/src/commands/session-commands.ts=
+
+** Implement /btw (satisfies tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-telegram-bot-commands::btw
+:DEPENDS: FEAT-209-telegram-bot-commands::command-tests FEAT-205-rpc-process-manager-for-telegram-bridge::process-manager
+:END:
+- File: =packages/telegram-bridge/src/commands/btw.ts=
+- Spawn throwaway =--no-session= RPC process, stream response, dispose
+* Edge Cases
+- /unlock when already unlocked: reply "Already in full access mode"
+- /lock when already locked: reply "Already in read-only mode"
+- /project with unknown name: reply "Unknown project. Available: spell, infra"
+- /mode with unknown name: reply "Unknown mode. Available: telegram-readonly, telegram-full"
+- /clear while agent is streaming: abort first, then clear
+- /btw with very long question: truncate to reasonable length (4096 chars)
+- Inline keyboard callback after timeout: reply "Selection expired, try again"
+- Multiple rapid command presses: grammy handles sequentially per chat
+
+* Acceptance Criteria
+- =bun test packages/telegram-bridge/test/commands.test.ts= passes
+- Manual: /help shows all 10 commands with descriptions
+- Manual: /unlock shows confirmation keyboard, confirming switches tools
+- Manual: /project shows project list keyboard, selecting switches CWD
+- Manual: /status shows formatted session info
+- Manual: /btw "what is 2+2" responds without affecting main session

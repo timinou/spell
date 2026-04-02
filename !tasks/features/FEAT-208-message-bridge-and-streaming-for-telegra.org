@@ -1,0 +1,138 @@
+#+TITLE: Message bridge and streaming for Telegram
+#+STATE: DONE
+#+SESSION_ID: 14aac2bfa1d2ab39
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl]]
+#+CUSTOM_ID: FEAT-208-message-bridge-and-streaming-for-telegra
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: packages/telegram-bridge
+#+DEPENDS: FEAT-205-rpc-process-manager-for-telegram-bridge FEAT-206-telegram-bot-core-and-auth-middleware
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+What's the easiest way to set up a Telegram session with Spell? Look online at oh my pi and pi extensions, and tell me
+1. how I would be able to set it up from my computer
+2. how I wuold be able to have a long-running session on e.g. a Hetzner computer (configured through Nix like in ~/code/infra, though the instructions for that will be left in a FUP), so that I can always talk to the client
+3. how to use the Telegram session like a mode with a whitelist of tools I can do
+4. how to set up a super simple server that manages these connections. If the easiest is typescript or if we go off of Gleam like .ancillary/spellcasting
+
+* Scope
+** In scope
+- Telegram message -> RPC prompt command translation (text, images, file attachments)
+- RPC streaming events -> Telegram sendMessageDraft + sendMessage flow
+- Markdown -> Telegram HTML converter
+- Message splitting for >4096 char responses
+- Thinking summary extraction (1-line summary from thinking_delta events)
+- Tool execution status formatting for ephemeral draft display
+- Custom system prompt appendix for concise Telegram-style responses
+** Out of scope
+- /commands (FEAT: bot commands) -- this handles only free-form messages
+- Bot setup and auth (FEAT: bot core)
+- Process spawning (FEAT: RPC manager)
+
+* Tests
+- File: =packages/telegram-bridge/test/markdown-html.test.ts=
+- Scenario: code blocks convert to =<pre><code>= with language class
+- Scenario: inline code converts to =<code>=
+- Scenario: bold/italic convert to =<b>= / =<i>=
+- Scenario: links convert to =<a href>= tags
+- Scenario: headers strip to bold text (Telegram has no header support)
+- Scenario: special HTML chars (&, <, >) in code blocks are escaped
+- Scenario: nested formatting (bold inside italic) handles correctly
+- Scenario: raw text with no markdown passes through with HTML escaping
+- File: =packages/telegram-bridge/test/message-splitter.test.ts=
+- Scenario: message under 4096 chars returns single chunk
+- Scenario: long message splits at paragraph boundary
+- Scenario: code block not split mid-block (kept whole or moved to next chunk)
+- Scenario: split messages have correct HTML tag closure/reopening
+- File: =packages/telegram-bridge/test/bridge.test.ts=
+- Scenario: text message creates RPC prompt, streams text_delta events back via mock sendMessageDraft
+- Scenario: image attachment downloads file and includes ImageContent in prompt
+- Scenario: tool_execution_start/end events produce ephemeral status in draft
+- Scenario: thinking_delta events produce 1-line summary in draft
+- Scenario: final text_end event triggers sendMessage to finalize
+- Scenario: error event sends error message to chat
+
+* Implementation
+Note: TDD sequencing — markdown-html and message-splitter are pure functions; write tests first, implement second. These two have NO cross-item deps and can start immediately within this item. The bridge integration tests (bridge.test.ts) are written after both directions are implemented since they test the wired-up flow.
+
+** Write markdown-html tests (TDD: first)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-208-message-bridge-and-streaming-for-telegra::markdown-html-tests
+:END:
+- File: =packages/telegram-bridge/test/markdown-html.test.ts=
+- All scenarios from Tests section as failing tests
+
+** Implement Markdown to Telegram HTML converter (satisfies tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-208-message-bridge-and-streaming-for-telegra::markdown-html
+:DEPENDS: FEAT-208-message-bridge-and-streaming-for-telegra::markdown-html-tests
+:END:
+- File: =packages/telegram-bridge/src/bridge/markdown-html.ts=
+- =markdownToTelegramHtml(md: string): string=
+- Process code blocks first (protect from markdown transforms), then inline code, bold, italic, links, headers->bold, HTML escape
+
+** Write message-splitter tests (TDD: first)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-208-message-bridge-and-streaming-for-telegra::splitter-tests
+:END:
+- File: =packages/telegram-bridge/test/message-splitter.test.ts=
+- All scenarios from Tests section as failing tests
+
+** Implement message splitter (satisfies tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-208-message-bridge-and-streaming-for-telegra::message-splitter
+:DEPENDS: FEAT-208-message-bridge-and-streaming-for-telegra::splitter-tests
+:END:
+- File: =packages/telegram-bridge/src/bridge/message-splitter.ts=
+- =splitMessage(html: string, maxLen = 4096): string[]=
+- Split at paragraph boundaries, track HTML tag state, never split inside =<pre>=
+
+** Add Telegram system prompt appendix
+:PROPERTIES:
+:CUSTOM_ID: FEAT-208-message-bridge-and-streaming-for-telegra::system-prompt
+:END:
+- File: =packages/telegram-bridge/src/bridge/telegram-prompt.md=
+- Concise instructions for mobile-friendly responses
+
+** Implement Telegram-to-RPC direction
+:PROPERTIES:
+:CUSTOM_ID: FEAT-208-message-bridge-and-streaming-for-telegra::telegram-to-rpc
+:DEPENDS: FEAT-205-rpc-process-manager-for-telegram-bridge::rpc-client FEAT-206-telegram-bot-core-and-auth-middleware::auth-middleware
+:END:
+- File: =packages/telegram-bridge/src/bridge/telegram-to-rpc.ts=
+- =handleMessage(ctx, processManager)=: extract text/images/documents, build RPC prompt
+
+** Implement RPC-to-Telegram streaming direction
+:PROPERTIES:
+:CUSTOM_ID: FEAT-208-message-bridge-and-streaming-for-telegra::rpc-to-telegram
+:DEPENDS: FEAT-208-message-bridge-and-streaming-for-telegra::markdown-html FEAT-208-message-bridge-and-streaming-for-telegra::message-splitter FEAT-208-message-bridge-and-streaming-for-telegra::telegram-to-rpc
+:END:
+- File: =packages/telegram-bridge/src/bridge/rpc-to-telegram.ts=
+- Class =ResponseStreamer=: accumulate text_delta, show tool status in draft, thinking summary, throttle sendMessageDraft to 3/sec, finalize with sendMessage in HTML
+
+** Write bridge integration tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-208-message-bridge-and-streaming-for-telegra::bridge-tests
+:DEPENDS: FEAT-208-message-bridge-and-streaming-for-telegra::rpc-to-telegram
+:END:
+- File: =packages/telegram-bridge/test/bridge.test.ts=
+- Mock RpcClient + grammy context. Test full flow: message in -> RPC events -> Telegram output
+* Edge Cases
+- sendMessageDraft not supported by grammy yet: use =ctx.api.raw.sendMessageDraft= or direct fetch to Bot API
+- Draft text is plain text (not HTML): stream plain text in draft, convert to HTML only for final sendMessage
+- Image download fails (Telegram CDN timeout): send error message, skip image
+- File too large for upload dir: reject with size limit error (configurable, default 10MB)
+- Agent produces empty response (only tool calls, no text): send summary of what tools did
+- Rate limiting from Telegram (429 error): grammy auto-retries, but throttle draft updates proactively
+- Multiple turn_end events in one agent_end (multi-turn tool loops): accumulate all text, send once at agent_end
+- Unicode/emoji in responses: HTML mode handles these correctly
+
+* Acceptance Criteria
+- =bun test packages/telegram-bridge/test/markdown-html.test.ts= passes
+- =bun test packages/telegram-bridge/test/message-splitter.test.ts= passes
+- =bun test packages/telegram-bridge/test/bridge.test.ts= passes
+- Manual: send "what files are in src/" to bot, see streaming tool status then final answer
+- Manual: send image to bot, bot acknowledges and describes it
+- Manual: long response (>4096 chars) arrives as multiple messages without corruption

@@ -1,0 +1,4 @@
+upload_dir: /tmp/test-uploads
+# Missing bot_token_file
+users:
+  not_a_number: {}

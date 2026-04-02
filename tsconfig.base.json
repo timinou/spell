@@ -51,6 +51,8 @@
 			"@oh-my-pi/pi-desktop-common/*": ["./packages/desktop-common/src/*"],
 			"@oh-my-pi/pi-macos": ["./packages/macos/src/index.ts"],
 			"@oh-my-pi/pi-macos/*": ["./packages/macos/src/*"],
+			"@oh-my-pi/telegram-bridge": ["./packages/telegram-bridge/src/index.ts"],
+			"@oh-my-pi/telegram-bridge/*": ["./packages/telegram-bridge/src/*"],
 			"@sinclair/typebox": ["./node_modules/@sinclair/typebox/build/esm/index.d.mts"],
 			"@sinclair/typebox/*": ["./node_modules/@sinclair/typebox/build/esm/*"]
 		}

@@ -1,0 +1,46 @@
+#+TITLE: Hetzner NixOS deployment for Telegram bridge
+#+STATE: ITEM
+#+SESSION_ID: 14aac2bfa1d2ab39
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl]]
+#+CUSTOM_ID: FUP-021-hetzner-nixos-deployment-for-telegram-br
+#+EFFORT: 4h
+#+PRIORITY: #B
+#+LAYER: infra
+#+DEPENDS: FEAT-204-telegram-bridge-package-scaffold-and-con FEAT-205-rpc-process-manager-for-telegram-bridge FEAT-206-telegram-bot-core-and-auth-middleware FEAT-208-message-bridge-and-streaming-for-telegra FEAT-209-telegram-bot-commands FEAT-207-session-log-viewer-http-server
+
+* Initial Message
+
+What's the easiest way to set up a Telegram session with Spell? Look online at oh my pi and pi extensions, and tell me
+1. how I would be able to set it up from my computer
+2. how I wuold be able to have a long-running session on e.g. a Hetzner computer (configured through Nix like in ~/code/infra, though the instructions for that will be left in a FUP), so that I can always talk to the client
+3. how to use the Telegram session like a mode with a whitelist of tools I can do
+4. how to set up a super simple server that manages these connections. If the easiest is typescript or if we go off of Gleam like .ancillary/spellcasting
+
+* Scope
+** In scope
+- NixOS module for telegram-bridge systemd service (following ~/code/infra patterns)
+- sops-nix secret for bot token
+- Caddy reverse proxy for log viewer + webhook endpoint
+- Webhook mode support (vs long-polling) for production
+- Service hardening (ProtectSystem, NoNewPrivileges, etc.)
+** Out of scope
+- The Telegram bridge code itself (done in FEAT items)
+- Infrastructure provisioning (Hetzner Cloud VM already exists)
+- This is a follow-up item: instructions and module templates only, deployment by user
+
+* Key details for implementation
+- Follow patterns from =~/code/infra/chat/modules/spell/default.nix= (systemd service, sops env, hardening)
+- Follow patterns from =~/code/infra/huly/modules/huly/integrations/telegram.nix= (Telegram-specific config)
+- Follow =.ancillary/spellcasting/infrastructure/configuration.nix= (Caddy, systemd, tmpfiles)
+- Bot token via sops: =/run/secrets/telegram-bridge/bot_token=
+- Service: =systemd.services.telegram-bridge= running =bun run packages/telegram-bridge/src/index.ts=
+- Caddy virtual host for log viewer: =https://tg-logs.spell.dev= -> =127.0.0.1:<logViewerPort>=
+- Webhook endpoint via Caddy: =https://tg.spell.dev/webhook= -> bridge webhook handler
+- grammy webhook mode: =bot.api.setWebhook(url)= + =webhookCallback(bot)= handler
+
+* Acceptance Criteria
+- NixOS module builds without errors
+- =nixos-rebuild switch= deploys the service
+- =systemctl status telegram-bridge= shows active
+- Bot responds to messages via webhook (not long-polling)
+- Log viewer accessible via HTTPS

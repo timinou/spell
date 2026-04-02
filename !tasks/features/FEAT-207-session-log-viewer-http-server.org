@@ -1,0 +1,79 @@
+#+TITLE: Session log viewer HTTP server
+#+STATE: DONE
+#+SESSION_ID: 14aac2bfa1d2ab39
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl]]
+#+CUSTOM_ID: FEAT-207-session-log-viewer-http-server
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: packages/telegram-bridge
+#+DEPENDS: FEAT-204-telegram-bridge-package-scaffold-and-con
+
+* Initial Message
+
+What's the easiest way to set up a Telegram session with Spell? Look online at oh my pi and pi extensions, and tell me
+1. how I would be able to set it up from my computer
+2. how I wuold be able to have a long-running session on e.g. a Hetzner computer (configured through Nix like in ~/code/infra, though the instructions for that will be left in a FUP), so that I can always talk to the client
+3. how to use the Telegram session like a mode with a whitelist of tools I can do
+4. how to set up a super simple server that manages these connections. If the easiest is typescript or if we go off of Gleam like .ancillary/spellcasting
+
+* Scope
+** In scope
+- Bun.serve() HTTP server on configurable port (from config.logViewerPort)
+- Serve session transcript logs as rendered HTML
+- List active sessions with links
+- Basic auth token or localhost-only restriction
+** Out of scope
+- Real-time streaming of logs (just serve current state on refresh)
+- Fancy UI (basic functional HTML is sufficient)
+- Integration with Telegram (no links sent to Telegram yet; commands item may add /log command later)
+
+* Tests
+- File: =packages/telegram-bridge/test/log-viewer.test.ts=
+- Scenario: GET / returns HTML list of active sessions
+- Scenario: GET /session/:chatId returns rendered session transcript
+- Scenario: request from non-localhost without auth token returns 401
+- Scenario: server not started when logViewerPort is undefined in config
+
+* Implementation
+** Implement log viewer server
+:PROPERTIES:
+:CUSTOM_ID: FEAT-207-session-log-viewer-http-server::server
+:DEPENDS: FEAT-204-telegram-bridge-package-scaffold-and-con::config-types FEAT-204-telegram-bridge-package-scaffold-and-con::shared-types
+:END:
+- File: =packages/telegram-bridge/src/log-viewer/server.ts=
+- =startLogViewer(config, sessionMap)=:
+  - =Bun.serve()= on =config.logViewerPort=
+  - Routes:
+    - =GET /=: list active sessions (chat ID, project, uptime) as HTML
+    - =GET /session/:chatId=: read session file, render as HTML
+    - =GET /session/:chatId/raw=: return raw JSONL session file
+  - Auth: check =Authorization: Bearer <token>= header or restrict to 127.0.0.1
+  - Return if =logViewerPort= is undefined (feature disabled)
+
+** Implement session renderer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-207-session-log-viewer-http-server::renderer
+:DEPENDS: FEAT-207-session-log-viewer-http-server::server
+:END:
+- File: =packages/telegram-bridge/src/log-viewer/renderer.ts=
+- Read JSONL session file (=Bun.JSONL.parse=)
+- Render as simple HTML: user messages, assistant text, tool calls (collapsed), thinking (collapsed)
+- Minimal CSS for readability (inline styles, no external deps)
+
+** Write log viewer tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-207-session-log-viewer-http-server::tests
+:DEPENDS: FEAT-207-session-log-viewer-http-server::renderer
+:END:
+- File: =packages/telegram-bridge/test/log-viewer.test.ts=
+
+* Edge Cases
+- Session file doesn't exist yet (new chat, no messages): show "no messages yet"
+- Very large session file: stream response, don't load entire file into memory
+- Port already in use: catch EADDRINUSE, log clear error, continue without log viewer
+- Concurrent requests while session is being written: read snapshot, don't lock
+
+* Acceptance Criteria
+- =bun test packages/telegram-bridge/test/log-viewer.test.ts= passes
+- Manual: open =http://localhost:8080/= in browser, see list of sessions
+- Manual: click session link, see rendered conversation transcript

@@ -1,0 +1,123 @@
+#+TITLE: Telegram bridge package scaffold and config
+#+STATE: DONE
+#+SESSION_ID: 14aac2bfa1d2ab39
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl]]
+#+CUSTOM_ID: FEAT-204-telegram-bridge-package-scaffold-and-con
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: packages/telegram-bridge
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+What's the easiest way to set up a Telegram session with Spell? Look online at oh my pi and pi extensions, and tell me
+1. how I would be able to set it up from my computer
+2. how I wuold be able to have a long-running session on e.g. a Hetzner computer (configured through Nix like in ~/code/infra, though the instructions for that will be left in a FUP), so that I can always talk to the client
+3. how to use the Telegram session like a mode with a whitelist of tools I can do
+4. how to set up a super simple server that manages these connections. If the easiest is typescript or if we go off of Gleam like .ancillary/spellcasting
+
+* Scope
+** In scope
+- New =packages/telegram-bridge/= monorepo package: package.json, tsconfig.json, biome config
+- Config schema and loader for =~/.spell/telegram.yaml=
+- All shared TypeScript types (config, session state, auth)
+- CLI entry point (=bin/telegram-bridge=) that boots the bridge
+- Mode definition files: =.spell/modes/telegram-readonly.md=, =.spell/modes/telegram-full.md=
+** Out of scope
+- grammy bot setup (FEAT: bot core)
+- RPC process spawning (FEAT: RPC manager)
+- Any runtime behavior beyond config loading and process entry
+
+* Tests
+- File: =packages/telegram-bridge/test/config.test.ts=
+- Scenario: load valid yaml config, verify all fields parsed correctly
+- Scenario: missing bot_token_file errors with clear message
+- Scenario: invalid user ID in users map throws validation error
+- Scenario: default user config merges with per-user overrides
+- Scenario: project whitelist resolves absolute paths
+- File: =packages/telegram-bridge/test/types.test.ts=
+- Scenario: type-level tests ensuring config types match yaml schema
+
+* Implementation
+Note: scaffold-first sequencing — package.json/tsconfig must exist before tests can run. TDD applies from config-types onward: define types, write test stubs, then implement loader.
+
+** Create package scaffold
+:PROPERTIES:
+:CUSTOM_ID: FEAT-204-telegram-bridge-package-scaffold-and-con::scaffold
+:END:
+- File: =packages/telegram-bridge/package.json= (name: =@oh-my-pi/telegram-bridge=, deps: grammy, yaml, qrcode; dependencies on =@oh-my-pi/pi-utils=)
+- File: =packages/telegram-bridge/tsconfig.json= (extends monorepo base)
+- File: =packages/telegram-bridge/src/index.ts= (CLI entry: parse args, load config, boot bridge)
+- Register in root workspace
+
+** Define config types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-204-telegram-bridge-package-scaffold-and-con::config-types
+:DEPENDS: FEAT-204-telegram-bridge-package-scaffold-and-con::scaffold
+:END:
+- File: =packages/telegram-bridge/src/config/types.ts=
+- =TelegramBridgeConfig= interface:
+  #+begin_src typescript
+  interface TelegramBridgeConfig {
+    botTokenFile: string;
+    uploadDir: string;
+    logViewerPort?: number;
+    idleTimeout: number;
+    projects: Record<string, string>;
+    users: Record<string, UserConfig>;
+  }
+  interface UserConfig {
+    modes: string[];
+    defaultMode: string;
+    idleTimeout?: number | null;
+    projects?: string[];
+  }
+  #+end_src
+
+** Define shared types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-204-telegram-bridge-package-scaffold-and-con::shared-types
+:DEPENDS: FEAT-204-telegram-bridge-package-scaffold-and-con::scaffold
+:END:
+- File: =packages/telegram-bridge/src/types.ts=
+- =ChatSession=, =AuthState=, =BridgeState= types
+
+** Write config tests (TDD: before implementation)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-204-telegram-bridge-package-scaffold-and-con::tests
+:DEPENDS: FEAT-204-telegram-bridge-package-scaffold-and-con::config-types
+:END:
+- File: =packages/telegram-bridge/test/config.test.ts=
+- Test fixtures: =packages/telegram-bridge/test/fixtures/valid-config.yaml=, =invalid-config.yaml=
+- All scenarios from Tests section written as failing tests first
+
+** Implement config loader (satisfies tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-204-telegram-bridge-package-scaffold-and-con::config-loader
+:DEPENDS: FEAT-204-telegram-bridge-package-scaffold-and-con::tests
+:END:
+- File: =packages/telegram-bridge/src/config/loader.ts=
+- Load =~/.spell/telegram.yaml= via =Bun.file().text()= + yaml parser
+- Validate required fields, resolve paths, merge defaults
+- Read bot token from =botTokenFile= path
+- Implementation must make all test scenarios pass
+
+** Create mode definition files
+:PROPERTIES:
+:CUSTOM_ID: FEAT-204-telegram-bridge-package-scaffold-and-con::mode-files
+:DEPENDS: FEAT-204-telegram-bridge-package-scaffold-and-con::scaffold
+:END:
+- File: =.spell/modes/telegram-readonly.md= (tools.allow: read, grep, find, lsp, ast_grep, web_search, fetch, org, calc, code_search)
+- File: =.spell/modes/telegram-full.md= (adds: edit, write, bash, ast_edit, task, todo_write, emacs_code, notebook, generate_image)
+* Edge Cases
+- Config file missing: exit with clear error and example config path
+- Bot token file missing or unreadable: exit with permission-specific error
+- Project path doesn't exist: warn but don't fail (might be created later)
+- User ID as string vs number: yaml may parse bare numbers; coerce to string
+- Empty users map: bridge starts but rejects all messages with "not authorized"
+
+* Acceptance Criteria
+- =bun check:ts= passes with the new package included
+- =bun test packages/telegram-bridge/test/config.test.ts= passes
+- =packages/telegram-bridge/src/index.ts= is executable and exits cleanly with "config loaded" when valid config exists
+- Mode files exist at =.spell/modes/telegram-readonly.md= and =.spell/modes/telegram-full.md= with valid frontmatter

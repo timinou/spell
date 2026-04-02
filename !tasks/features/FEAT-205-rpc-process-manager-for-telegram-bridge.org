@@ -1,0 +1,113 @@
+#+TITLE: RPC process manager for Telegram bridge
+#+STATE: DONE
+#+SESSION_ID: 14aac2bfa1d2ab39
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl]]
+#+CUSTOM_ID: FEAT-205-rpc-process-manager-for-telegram-bridge
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: packages/telegram-bridge
+#+DEPENDS: FEAT-204-telegram-bridge-package-scaffold-and-con
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+What's the easiest way to set up a Telegram session with Spell? Look online at oh my pi and pi extensions, and tell me
+1. how I would be able to set it up from my computer
+2. how I wuold be able to have a long-running session on e.g. a Hetzner computer (configured through Nix like in ~/code/infra, though the instructions for that will be left in a FUP), so that I can always talk to the client
+3. how to use the Telegram session like a mode with a whitelist of tools I can do
+4. how to set up a super simple server that manages these connections. If the easiest is typescript or if we go off of Gleam like .ancillary/spellcasting
+
+* Scope
+** In scope
+- Spawn =spell --mode rpc --tools <list> --resume <session-path> --session-dir <dir>= child processes via =Bun.spawn=
+- Manage process lifecycle: spawn on demand, track by chat ID, kill on idle timeout
+- JSON line protocol client: write commands to stdin, parse events from stdout
+- Session persistence: maintain a state file mapping chat ID -> session path so restarts can resume
+- Typed RPC client wrapping the raw stdin/stdout protocol
+** Out of scope
+- Telegram bot (FEAT: bot core)
+- Deciding when to spawn/kill (that's the bridge layer)
+- Mode file content (FEAT: scaffold)
+
+* Tests
+- File: =packages/telegram-bridge/test/rpc-client.test.ts=
+- Scenario: RpcClient sends prompt command, receives ready + streamed events
+- Scenario: RpcClient handles process crash gracefully (emits error event, marks dead)
+- Scenario: RpcClient abort() sends abort command and waits for confirmation
+- Scenario: JSON parse error on stdout doesn't crash the client
+- File: =packages/telegram-bridge/test/process-manager.test.ts=
+- Scenario: spawn new session for unknown chat ID
+- Scenario: reuse existing session for known chat ID
+- Scenario: idle timeout kills process after configured duration
+- Scenario: owner sessions (idleTimeout: null) never auto-kill
+- Scenario: state file persists and loads chat->session mapping across restarts
+- Scenario: resume session on restart uses =--resume= flag
+
+* Implementation
+Note: TDD sequencing — define types, write test stubs (using mock child process), then implement RPC client and process manager to satisfy tests. RpcClient tests mock Bun.spawn; ProcessManager tests mock RpcClient.
+
+** Define RPC client types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-205-rpc-process-manager-for-telegram-bridge::rpc-types
+:END:
+- File: =packages/telegram-bridge/src/rpc/types.ts=
+- Import/re-export relevant types from =packages/coding-agent/src/modes/rpc/rpc-types.ts= or define compatible subset
+- =RpcEvent= union: ready | AgentEvent | RpcResponse
+- =RpcClientOptions=: cwd, tools list, sessionPath, sessionDir, env
+
+** Write RPC client tests (TDD: before implementation)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-205-rpc-process-manager-for-telegram-bridge::rpc-client-tests
+:DEPENDS: FEAT-205-rpc-process-manager-for-telegram-bridge::rpc-types
+:END:
+- File: =packages/telegram-bridge/test/rpc-client.test.ts=
+- Mock: create a fake process that writes JSON lines to stdout (simulates spell rpc)
+- Scenarios: prompt + events, crash handling, abort, JSON parse error
+
+** Implement RPC client (satisfies rpc-client tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-205-rpc-process-manager-for-telegram-bridge::rpc-client
+:DEPENDS: FEAT-205-rpc-process-manager-for-telegram-bridge::rpc-client-tests
+:END:
+- File: =packages/telegram-bridge/src/rpc/rpc-client.ts=
+- Class =RpcClient=: spawn, stdin/stdout JSON, event emitter, dispose
+- Wait for ={type: "ready"}= before accepting commands
+
+** Write process manager tests (TDD: before implementation)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-205-rpc-process-manager-for-telegram-bridge::pm-tests
+:DEPENDS: FEAT-205-rpc-process-manager-for-telegram-bridge::rpc-types FEAT-204-telegram-bridge-package-scaffold-and-con::config-types
+:END:
+- File: =packages/telegram-bridge/test/process-manager.test.ts=
+- Mock: RpcClient (don't spawn real processes in tests)
+- Scenarios: spawn new, reuse existing, idle timeout, owner never-timeout, state persistence, resume
+
+** Implement process manager (satisfies pm tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-205-rpc-process-manager-for-telegram-bridge::process-manager
+:DEPENDS: FEAT-205-rpc-process-manager-for-telegram-bridge::rpc-client FEAT-205-rpc-process-manager-for-telegram-bridge::pm-tests
+:END:
+- File: =packages/telegram-bridge/src/rpc/process-manager.ts=
+- Class =ProcessManager=: Map of sessions, getOrCreate, kill, idle timeout
+
+** Implement state persistence
+:PROPERTIES:
+:CUSTOM_ID: FEAT-205-rpc-process-manager-for-telegram-bridge::state-persistence
+:DEPENDS: FEAT-205-rpc-process-manager-for-telegram-bridge::process-manager
+:END:
+- File: =packages/telegram-bridge/src/rpc/state.ts=
+- Persist chat->session mapping to =~/.spell/telegram-state.json=
+- Load on startup, respawn with =--resume=
+* Edge Cases
+- spell binary not found: check =Bun.which("spell")= at startup, fail fast
+- Process crashes mid-response: detect exit code, emit error to bridge, attempt respawn
+- Stdin write after process died: catch EPIPE, mark session dead
+- Multiple rapid messages to same chat: queue in RpcClient, process sequentially
+- stdout buffer contains partial JSON line: buffer until newline
+- Session file corrupted: catch JSON parse error, start fresh
+
+* Acceptance Criteria
+- =bun test packages/telegram-bridge/test/rpc-client.test.ts= passes
+- =bun test packages/telegram-bridge/test/process-manager.test.ts= passes
+- Manual: spawning a process via ProcessManager and sending a prompt yields streaming events back
+- State file at =~/.spell/telegram-state.json= persists across process manager restart

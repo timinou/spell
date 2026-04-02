@@ -1,0 +1,114 @@
+#+TITLE: Telegram bot core and auth middleware
+#+STATE: DONE
+#+SESSION_ID: 14aac2bfa1d2ab39
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl]]
+#+CUSTOM_ID: FEAT-206-telegram-bot-core-and-auth-middleware
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: packages/telegram-bridge
+#+DEPENDS: FEAT-204-telegram-bridge-package-scaffold-and-con
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+What's the easiest way to set up a Telegram session with Spell? Look online at oh my pi and pi extensions, and tell me
+1. how I would be able to set it up from my computer
+2. how I wuold be able to have a long-running session on e.g. a Hetzner computer (configured through Nix like in ~/code/infra, though the instructions for that will be left in a FUP), so that I can always talk to the client
+3. how to use the Telegram session like a mode with a whitelist of tools I can do
+4. how to set up a super simple server that manages these connections. If the easiest is typescript or if we go off of Gleam like .ancillary/spellcasting
+
+* Scope
+** In scope
+- grammy bot setup with long-polling
+- Auth middleware: chat ID whitelist for owners, temp token validation for guests
+- Temp token generation, storage, and expiry
+- /invite command generating deep link URL (=https://t.me/BotName?start=TOKEN=)
+- QR code generation for invite links (send as photo in Telegram)
+- Command registration structure (handlers defined here, wired in FEAT: bot commands)
+** Out of scope
+- Message processing logic (FEAT: message bridge)
+- Bot commands beyond /start and /invite (FEAT: bot commands)
+- Webhook mode (FUP: Hetzner deployment)
+
+* Tests
+- File: =packages/telegram-bridge/test/auth.test.ts=
+- Scenario: owner chat ID in whitelist passes auth middleware
+- Scenario: unknown chat ID without token is rejected with "not authorized" message
+- Scenario: guest with valid temp token passes auth and gets guest UserConfig
+- Scenario: expired temp token is rejected
+- Scenario: token used by wrong user ID (token bound to first user who claims it)
+- File: =packages/telegram-bridge/test/bot.test.ts=
+- Scenario: bot starts and connects (mock grammy Bot with test mode)
+- Scenario: /start for authorized user sends welcome message
+- Scenario: /start with deep link token param auths the user
+
+* Implementation
+Note: TDD sequencing — auth middleware and token system are testable with grammy's test mode (no real Telegram API needed). Write auth tests before implementing auth middleware. Bot setup is infrastructure that must exist first.
+
+** Set up grammy bot
+:PROPERTIES:
+:CUSTOM_ID: FEAT-206-telegram-bot-core-and-auth-middleware::bot-setup
+:DEPENDS: FEAT-204-telegram-bridge-package-scaffold-and-con::config-loader
+:END:
+- File: =packages/telegram-bridge/src/bot/bot.ts=
+- Create =Bot= instance with token from config
+- Register middleware chain: auth -> command router -> message handler
+- =startBot(config)=: create bot, register handlers, call =bot.start()= for long-polling
+- Graceful shutdown on SIGINT/SIGTERM
+
+** Write auth tests (TDD: before auth implementation)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-206-telegram-bot-core-and-auth-middleware::auth-tests
+:DEPENDS: FEAT-206-telegram-bot-core-and-auth-middleware::bot-setup FEAT-204-telegram-bridge-package-scaffold-and-con::shared-types
+:END:
+- File: =packages/telegram-bridge/test/auth.test.ts=
+- Use grammy test utilities to simulate messages from different user IDs
+- All auth scenarios as failing tests: whitelist pass, reject unknown, temp token valid/expired/claimed
+
+** Implement auth middleware (satisfies auth tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-206-telegram-bot-core-and-auth-middleware::auth-middleware
+:DEPENDS: FEAT-206-telegram-bot-core-and-auth-middleware::auth-tests
+:END:
+- File: =packages/telegram-bridge/src/bot/auth.ts=
+- grammy middleware: check ctx.from.id against whitelist, validate temp tokens
+- =AuthContext= type extending grammy Context with =userConfig= and =authState=
+
+** Implement temp token system
+:PROPERTIES:
+:CUSTOM_ID: FEAT-206-telegram-bot-core-and-auth-middleware::token-system
+:DEPENDS: FEAT-206-telegram-bot-core-and-auth-middleware::auth-middleware
+:END:
+- File: =packages/telegram-bridge/src/bot/tokens.ts=
+- =TokenStore=: generate (16 bytes base64url), validate, revoke, persist to =~/.spell/telegram-tokens.json=
+
+** Implement QR invite
+:PROPERTIES:
+:CUSTOM_ID: FEAT-206-telegram-bot-core-and-auth-middleware::qr-invite
+:DEPENDS: FEAT-206-telegram-bot-core-and-auth-middleware::token-system
+:END:
+- File: =packages/telegram-bridge/src/bot/invite.ts=
+- /invite handler: generate token, build deep link =https://t.me/{botUsername}?start={token}=, generate QR PNG, send to owner
+- CLI: =telegram-bridge invite= prints QR to terminal
+
+** Write bot integration tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-206-telegram-bot-core-and-auth-middleware::bot-tests
+:DEPENDS: FEAT-206-telegram-bot-core-and-auth-middleware::qr-invite
+:END:
+- File: =packages/telegram-bridge/test/bot.test.ts=
+- Test /start flow, deep link token claiming, bot startup
+* Edge Cases
+- Bot token invalid: grammy throws on bot.start(), catch and show clear error
+- Telegram API unreachable: grammy handles retries, but log failures
+- Race: two guests claim same token simultaneously: first wins, second gets "token already claimed"
+- Owner sends /invite in group chat: only allow in private chat with bot
+- Token file corrupted: catch parse error, start fresh (tokens are ephemeral)
+- grammy + Bun compatibility: grammy uses node:http under the hood; Bun supports this but test early
+
+* Acceptance Criteria
+- =bun test packages/telegram-bridge/test/auth.test.ts= passes
+- =bun test packages/telegram-bridge/test/bot.test.ts= passes
+- Manual: send message to bot from whitelisted user ID, get response
+- Manual: /invite generates QR code image sent back to owner
+- Manual: scanning QR / clicking deep link from new user grants temporary access

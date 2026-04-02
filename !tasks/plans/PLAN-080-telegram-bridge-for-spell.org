@@ -1,0 +1,155 @@
+#+TITLE: Telegram Bridge for Spell
+#+STATE: DONE
+#+SESSION_ID: 14aac2bfa1d2ab39
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl]]
+#+CUSTOM_ID: PLAN-080-telegram-bridge-for-spell
+#+EFFORT: 22h
+#+PRIORITY: #A
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+* Initial Message
+
+What's the easiest way to set up a Telegram session with Spell? Look online at oh my pi and pi extensions, and tell me
+1. how I would be able to set it up from my computer
+2. how I wuold be able to have a long-running session on e.g. a Hetzner computer (configured through Nix like in ~/code/infra, though the instructions for that will be left in a FUP), so that I can always talk to the client
+3. how to use the Telegram session like a mode with a whitelist of tools I can do
+4. how to set up a super simple server that manages these connections. If the easiest is typescript or if we go off of Gleam like .ancillary/spellcasting
+
+* Context
+
+Spell needs a Telegram transport so the user can interact with the coding agent from any device via Telegram. The bridge is a new =packages/telegram-bridge/= TypeScript package that connects Telegram Bot API to Spell's existing RPC mode.
+
+
+
+** TDD Strategy
+All items follow test-first ordering in their sub-outlines:
+1. Define types/interfaces
+2. Write failing tests against those types (=::*-tests= sub-outlines)
+3. Implement to satisfy tests (=::impl= sub-outlines depend on =::tests=)
+
+Pure utility functions (markdown-html, message-splitter) are the strongest TDD fit -- tests define exact input/output contracts before any code exists.
+
+For infrastructure steps (package scaffold, grammy bot setup) that must exist before tests can run, the TDD boundary starts at the first testable layer (config loading, auth middleware).
+
+** Parallelization
+Cross-item parallelism (wave structure):
+- Wave 1 (foundation): FEAT-204 alone
+- Wave 2 (core): FEAT-205 + FEAT-206 + FEAT-207 run in parallel (all depend only on FEAT-204)
+- Wave 3 (bridge): FEAT-208 (depends on 205 + 206)
+- Wave 4 (commands): FEAT-209 (depends on 208)
+
+Intra-item parallelism within FEAT-208 (the largest item):
+- markdown-html-tests and splitter-tests have ZERO cross-item deps -- they can start the moment the FEAT-204 scaffold exists, even while FEAT-205 and FEAT-206 are still in progress
+- telegram-to-rpc and rpc-to-telegram wait for cross-item deps
+- This means ~40% of FEAT-208's work can overlap with wave 2
+
+Intra-item parallelism within FEAT-209:
+- All command implementations (start-help, unlock-lock, project, mode, think-clear-status, btw) are independent of each other after command-tests completes
+** Architecture
+#+begin_example
+Telegram <-> grammy Bot <-> Bridge Layer <-> Bun.spawn("spell --mode rpc") <-> Spell Agent
+#+end_example
+
+The bridge spawns =spell --mode rpc --tools <list> --resume <session-path>= child processes, one per authorized Telegram chat. It translates Telegram messages to RPC =prompt= commands and streams RPC events back as Telegram messages using =sendMessageDraft= (Bot API 9.5) for real-time streaming.
+
+** Key Decisions
+- *Language*: TypeScript + grammy (mature framework, shared types with Spell, Bun runtime)
+- *Process model*: 2-3 concurrent sessions max. Spawn on demand, idle timeout (default 1hr, configurable, null for owner = never)
+- *Tool access*: Tiered via Spell mode files. Read-only default (=telegram-readonly= mode), /unlock for full access (=telegram-full= mode). Tool list passed via =--tools= CLI flag at spawn time.
+- *Auth*: Chat ID whitelist for auto-auth (owner). Temp tokens with QR deep links for guests. Per-user config with mode lists + project whitelist.
+- *Config*: =~/.spell/telegram.yaml= for bridge config. =.spell/modes/*.md= for tool access tiers (reuses Spell's existing mode system).
+- *Streaming*: =sendMessageDraft= for ephemeral tool status + response streaming. Finalize with =sendMessage= in HTML parse_mode. Throttle drafts to 3/sec max.
+- *Response format*: Telegram HTML mode. Markdown-to-HTML converter. Messages >4096 chars split at paragraph boundaries.
+- *Thinking*: 1-line summary by default. /think command to toggle full thinking visibility.
+- *Session persistence*: Via Spell's existing SessionManager (=--resume= flag). Bridge maintains =~/.spell/telegram-state.json= mapping chat IDs to session paths.
+- *File handling*: Text + images + documents. Uploads go to configurable dir (default =/tmp/telegram-uploads=).
+- *Log viewer*: =Bun.serve()= on configurable port. Renders session transcripts as HTML.
+- *Commands*: /start /help /unlock /lock /project /mode /think /clear /status /invite /btw
+
+** Critical Codebase References
+- RPC mode: =packages/coding-agent/src/modes/rpc/rpc-mode.ts=, =rpc-types.ts=
+- CLI args: =packages/coding-agent/src/cli/args.ts= (=--mode rpc=, =--tools=, =--resume=, =--session-dir=, =--append-system-prompt=, =--no-session=)
+- Mode system: =packages/coding-agent/src/capability/mode.ts=, =packages/coding-agent/src/discovery/mode-helpers.ts=
+- Agent events: =packages/agent/src/types.ts= (AgentEvent), =packages/ai/src/types.ts= (AssistantMessageEvent: text_delta, thinking_delta, toolcall_start/end)
+- Existing infra patterns: =~/code/infra/chat/modules/spell/default.nix=, =.ancillary/spellcasting/infrastructure/configuration.nix=
+
+** Gaps Addressed
+- grammy may not have sendMessageDraft types yet (Bot API 9.5, March 2026): use =ctx.api.raw.sendMessageDraft= or direct fetch fallback
+- Draft text is plain text (not HTML): stream plain text in draft, convert to HTML only for final =sendMessage=
+- YAML config parsing: use a yaml parser (=yaml= npm package) since =Bun.JSON5= doesn't parse YAML
+- No RPC command for mode/tool switching at runtime: not needed -- bridge kills process and respawns with new =--tools= flag on /unlock, /lock, /mode, /project changes
+
+* Verification
+- =bun check:ts= passes with =packages/telegram-bridge= included
+- =bun test packages/telegram-bridge/= -- all test files pass:
+  - =test/config.test.ts=
+  - =test/rpc-client.test.ts=
+  - =test/process-manager.test.ts=
+  - =test/auth.test.ts=
+  - =test/bot.test.ts=
+  - =test/markdown-html.test.ts=
+  - =test/message-splitter.test.ts=
+  - =test/bridge.test.ts=
+  - =test/commands.test.ts=
+  - =test/log-viewer.test.ts=
+- Manual verification:
+  1. Create =~/.spell/telegram.yaml= with bot token, user ID, project paths
+  2. Run =bun packages/telegram-bridge/src/index.ts=
+  3. Send text message to bot -- get streamed response
+  4. Send /help -- see command list
+  5. Send /unlock -- confirm via inline keyboard -- verify tool set changes
+  6. Send /project -- see project keyboard -- switch project
+  7. Send /status -- see session info
+  8. Send /invite -- receive QR code image
+  9. Open =http://localhost:8080/= -- see session list
+
+* Execution Manifest
+** foundation                                                              :wave:
+- [[id:FEAT-204-telegram-bridge-package-scaffold-and-con]] Package scaffold, config schema, types, mode files (3h)
+
+** core                                                                    :wave:
+- [[id:FEAT-205-rpc-process-manager-for-telegram-bridge]] RPC process manager -- spawn, lifecycle, resume, idle timeout (4h, depends FEAT-204 config types)
+- [[id:FEAT-206-telegram-bot-core-and-auth-middleware]] grammy bot setup, auth middleware, temp tokens, QR invite (3h, depends FEAT-204 config types)
+- [[id:FEAT-207-session-log-viewer-http-server]] Bun.serve() log viewer for session transcripts (2h, depends FEAT-204 types)
+
+** bridge                                                                  :wave:
+- [[id:FEAT-208-message-bridge-and-streaming-for-telegra]] Telegram<->RPC translation, sendMessageDraft streaming, Markdown->HTML, message splitting (6h, depends FEAT-205 RPC client + FEAT-206 bot)
+
+** commands                                                                :wave:
+- [[id:FEAT-209-telegram-bot-commands]] /start /help /unlock /lock /project /mode /think /clear /status /invite /btw (4h, depends FEAT-208 bridge)
+
+** deployment                                                              :wave:
+- [[id:FUP-021-hetzner-nixos-deployment-for-telegram-br]] NixOS module, systemd, sops, Caddy, webhook mode (4h, deferred FUP -- depends all FEATs)
+
+** Completion [2026-04-02]
+
+*** Verification
+- =bun check:ts=: biome check passes (1598 files, 0 fixes). tsgo reports 0 errors in telegram-bridge (2 pre-existing errors in coding-agent/sdk.ts and spellcast/discovery.ts unrelated to this plan)
+- =bun test packages/telegram-bridge/=: *74 tests pass, 0 fail, 191 expect() calls* across 10 test files:
+  - =test/config.test.ts= (7 tests) -- config loading, validation, defaults, error paths
+  - =test/rpc-client.test.ts= (5 tests) -- JSON line protocol, event parsing, lifecycle
+  - =test/process-manager.test.ts= (5 tests) -- session management, idle timeout, state persistence
+  - =test/auth.test.ts= (4 tests) -- owner whitelist, guest tokens, expired tokens
+  - =test/bot.test.ts= (2 tests) -- bot exports, integration
+  - =test/markdown-html.test.ts= (14 tests) -- code blocks, inline code, bold/italic, links, headers, escaping, nested formatting, edge cases
+  - =test/message-splitter.test.ts= (8 tests) -- paragraph splitting, code block integrity, tag close/reopen, word splitting
+  - =test/bridge.test.ts= (8 tests) -- streaming, tool status, thinking, long message splitting, error handling
+  - =test/commands.test.ts= (16 tests) -- all 10 commands tested including edge cases
+  - =test/log-viewer.test.ts= (5 tests) -- session list, transcript rendering, empty state, 404
+
+*** Artifacts
+- Package: =packages/telegram-bridge/= (new monorepo package)
+- Config types: =src/config/types.ts=, =src/config/loader.ts=
+- RPC layer: =src/rpc/rpc-client.ts=, =src/rpc/process-manager.ts=, =src/rpc/state.ts=, =src/rpc/types.ts=
+- Bot layer: =src/bot/bot.ts=, =src/bot/auth.ts=, =src/bot/tokens.ts=, =src/bot/invite.ts=
+- Bridge: =src/bridge/markdown-html.ts=, =src/bridge/message-splitter.ts=, =src/bridge/telegram-to-rpc.ts=, =src/bridge/rpc-to-telegram.ts=, =src/bridge/telegram-prompt.md=
+- Commands: =src/commands/index.ts=, =start-help.ts=, =unlock-lock.ts=, =project.ts=, =mode.ts=, =session-commands.ts=, =btw.ts=
+- Log viewer: =src/log-viewer/server.ts=, =src/log-viewer/renderer.ts=
+- Mode files: =.spell/modes/telegram-readonly.md=, =.spell/modes/telegram-full.md=
+- Entry point: =src/index.ts=, =package.json=, =tsconfig.json=
+
+*** Deviations
+- [[id:FUP-021-hetzner-nixos-deployment-for-telegram-br]] remains in ITEM state as planned (deferred follow-up for NixOS deployment)
+- Manual verification (sending real messages to Telegram bot) was not performed since no bot token is configured in the test environment. All behavior is verified through unit/integration tests with mock grammy contexts and mock RPC processes.
+- Pre-existing type errors in =coding-agent/sdk.ts= (TS2322) and =spellcast/discovery.ts= (TS2694) are unrelated to this plan."
