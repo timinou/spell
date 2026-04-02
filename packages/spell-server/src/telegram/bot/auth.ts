@@ -21,10 +21,10 @@ function extractStartToken(ctx: Context): string | null {
 	return token ? token : null;
 }
 
-function resolveGuestConfig(config: TelegramBridgeConfig): UserConfig {
-	const firstOwnerConfig = Object.values(config.users)[0];
-	if (firstOwnerConfig) {
-		return firstOwnerConfig;
+function resolveFallbackUserConfig(config: TelegramBridgeConfig): UserConfig {
+	const firstConfiguredUser = Object.values(config.users)[0];
+	if (firstConfiguredUser) {
+		return firstConfiguredUser;
 	}
 	return {
 		modes: [DEFAULT_GUEST_MODE],
@@ -44,12 +44,13 @@ export function authMiddleware(config: TelegramBridgeConfig, tokenStore: TokenSt
 		}
 
 		const userId = String(ctx.from.id);
-		const ownerConfig = config.users[userId];
-		if (ownerConfig) {
+		const configuredUser = config.users[userId];
+		const isOwner = config.owners.includes(ctx.from.id);
+		if (configuredUser || isOwner) {
 			applyAuthState(ctx, {
 				userId,
-				isOwner: true,
-				userConfig: ownerConfig,
+				isOwner,
+				userConfig: configuredUser ?? resolveFallbackUserConfig(config),
 			});
 			await next();
 			return;
@@ -62,7 +63,7 @@ export function authMiddleware(config: TelegramBridgeConfig, tokenStore: TokenSt
 				applyAuthState(ctx, {
 					userId,
 					isOwner: false,
-					userConfig: resolveGuestConfig(config),
+					userConfig: resolveFallbackUserConfig(config),
 				});
 				await tokenStore.save();
 				await next();
@@ -75,7 +76,7 @@ export function authMiddleware(config: TelegramBridgeConfig, tokenStore: TokenSt
 			applyAuthState(ctx, {
 				userId,
 				isOwner: false,
-				userConfig: resolveGuestConfig(config),
+				userConfig: resolveFallbackUserConfig(config),
 			});
 			await next();
 			return;

@@ -1,12 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { AutonomyLifecycle, TelegramLifecycle } from "../../src/session";
+import { AutonomyLifecycle } from "../../src/session";
 
 describe("session lifecycles", () => {
-	it("TelegramLifecycle returns configured idle timeout", () => {
-		const lifecycle = new TelegramLifecycle(12_345);
-		expect(lifecycle.getIdleTimeout("chat-1")).toBe(12_345);
-	});
-
 	it("AutonomyLifecycle returns no idle timeout", () => {
 		const lifecycle = new AutonomyLifecycle();
 		expect(lifecycle.getIdleTimeout("nightly-tests")).toBeNull();

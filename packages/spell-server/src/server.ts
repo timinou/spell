@@ -13,15 +13,24 @@ import { startHttpServer } from "./http/server";
 import { GoalScheduler } from "./scheduler/goal-scheduler";
 import { AutonomyLifecycle } from "./session/autonomy-lifecycle";
 import { SessionManager } from "./session/session-manager";
-import { TelegramBotService } from "./telegram/service";
+import { TelegramBotService, type TelegramBotServiceOptions } from "./telegram/service";
 
 export interface SpellServer {
+	telegramBotActive: boolean;
 	stop(): Promise<void>;
+}
+
+interface SpellServerStartDependencies {
+	createTelegramBotService?: (options: TelegramBotServiceOptions) => Pick<TelegramBotService, "start" | "stop">;
 }
 
 const SHUTDOWN_DRAIN_TIMEOUT_MS = 30_000;
 
-export async function startSpellServer(config: LoadedConfig, cwd: string): Promise<SpellServer> {
+export async function startSpellServer(
+	config: LoadedConfig,
+	cwd: string,
+	dependencies: SpellServerStartDependencies = {},
+): Promise<SpellServer> {
 	const lifecycle = new AutonomyLifecycle();
 	const sessionManager = new SessionManager<string>({
 		lifecycle,
@@ -92,57 +101,66 @@ export async function startSpellServer(config: LoadedConfig, cwd: string): Promi
 		},
 		cwd,
 	});
-	// Conditionally start Telegram bot when full config is present
-	let telegramBot: TelegramBotService | null = null;
-	if (hasFullTelegramConfig(config.channels.telegram)) {
-		telegramBot = new TelegramBotService({ config: config.channels.telegram });
-		try {
+	const createTelegramBotService =
+		dependencies.createTelegramBotService ?? (options => new TelegramBotService(options));
+	let telegramBot: Pick<TelegramBotService, "start" | "stop"> | null = null;
+	let telegramBotActive = false;
+	try {
+		if (hasFullTelegramConfig(config.channels.telegram)) {
+			telegramBot = createTelegramBotService({ config: config.channels.telegram });
 			await telegramBot.start();
+			telegramBotActive = true;
 			logger.debug("Telegram bot service started");
-		} catch (error) {
-			logger.error("Failed to start Telegram bot service", { error: String(error) });
-			telegramBot = null;
+		} else if (config.channels.telegram) {
+			logger.debug("Telegram notification-only mode (no users/projects configured)");
 		}
-	} else if (config.channels.telegram) {
-		logger.debug("Telegram notification-only mode (no users/projects configured)");
-	}
 
-	scheduler.start();
-	logger.debug("Spell server started", {
-		port: httpServer.server.port,
-		configuredPort: config.server.http.port,
-		goals: config.manifest.goals.size,
-		telegramBot: telegramBot !== null,
-	});
+		scheduler.start();
+		logger.debug("Spell server started", {
+			port: httpServer.server.port,
+			configuredPort: config.server.http.port,
+			goals: config.manifest.goals.size,
+			telegramBotActive,
+		});
 
-	return {
-		async stop(): Promise<void> {
-			scheduler.stop();
-			httpServer.stop();
+		return {
+			telegramBotActive,
+			async stop(): Promise<void> {
+				scheduler.stop();
+				httpServer.stop();
 
-			// Stop telegram bot before killing autonomy sessions
-			if (telegramBot) {
-				await telegramBot.stop();
-			}
+				if (telegramBot) {
+					await telegramBot.stop();
+				}
 
-			const inflightGoals = executor.getInflightGoalNames();
-			if (inflightGoals.length > 0) {
-				logger.warn("Waiting for inflight goals before shutdown", {
-					goalNames: inflightGoals,
-					timeoutMs: SHUTDOWN_DRAIN_TIMEOUT_MS,
-				});
-				const drainResult = await executor.waitForInflightGoals(SHUTDOWN_DRAIN_TIMEOUT_MS);
-				if (!drainResult.drained) {
-					logger.warn("Force-killing inflight goals after shutdown timeout", {
-						goalNames: drainResult.activeGoals,
+				const inflightGoals = executor.getInflightGoalNames();
+				if (inflightGoals.length > 0) {
+					logger.warn("Waiting for inflight goals before shutdown", {
+						goalNames: inflightGoals,
 						timeoutMs: SHUTDOWN_DRAIN_TIMEOUT_MS,
 					});
+					const drainResult = await executor.waitForInflightGoals(SHUTDOWN_DRAIN_TIMEOUT_MS);
+					if (!drainResult.drained) {
+						logger.warn("Force-killing inflight goals after shutdown timeout", {
+							goalNames: drainResult.activeGoals,
+							timeoutMs: SHUTDOWN_DRAIN_TIMEOUT_MS,
+						});
+					}
 				}
-			}
+				await sessionManager.killAll();
+				logger.debug("Spell server stopped");
+			},
+		};
+	} catch (error) {
+		scheduler.stop();
+		httpServer.stop();
+		if (telegramBot) {
+			await Promise.allSettled([telegramBot.stop(), sessionManager.killAll()]);
+		} else {
 			await sessionManager.killAll();
-			logger.debug("Spell server stopped");
-		},
-	};
+		}
+		throw error;
+	}
 }
 
 function parseDurationToMs(value: string | undefined): number {

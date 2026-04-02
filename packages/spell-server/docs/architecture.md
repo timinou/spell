@@ -77,13 +77,11 @@ Important `SessionManager` behaviors:
 - Per-session event listeners reset idle timers on activity and translate RPC `error` events into lifecycle callbacks.
 - `kill()` and `killAll()` dispose clients, remove listeners, clear timers, and optionally invoke lifecycle completion hooks.
 
-Two lifecycle strategies already exist.
-
-`TelegramLifecycle` is optimized for chat sessions. It forwards the provided spawn options and returns a finite idle timeout, defaulting to five minutes. This is appropriate when a chat session should expire after inactivity.
+The session module currently exposes a single lifecycle strategy.
 
 `AutonomyLifecycle` is optimized for daemon-owned goal execution. It never expires sessions due to idle time and automatically injects the `autonomy_state` tool if it is missing from the requested tool list. That matters because stateful goals may need persistent state access even if the manifest’s explicit tool allow-list forgot to include it.
 
-The practical difference is simple: Telegram sessions are conversational and bounded by idle time, while autonomy sessions are goal-centric and durable until the daemon shuts them down.
+Telegram chat sessions do not use `SessionManager` lifecycles today. The Telegram bridge owns its own `ProcessManager`, which applies per-user idle timeouts and session cleanup directly.
 
 ## Scheduler
 

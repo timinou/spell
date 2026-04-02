@@ -16,8 +16,8 @@ function testConfig(): TelegramBridgeConfig {
 			spell: "/home/user/code/ora/spell",
 		},
 		users: {
-			"123456": {
-				modes: ["telegram-readonly"],
+			"234567": {
+				modes: ["telegram-readonly", "telegram-full"],
 				defaultMode: "telegram-readonly",
 			},
 		},
@@ -62,7 +62,7 @@ function createTokenStore(label: string): TokenStore {
 }
 
 describe("authMiddleware", () => {
-	it("allows whitelisted owner and calls next", async () => {
+	it("allows owner IDs from the owners list even without a matching user block", async () => {
 		const config = testConfig();
 		const store = createTokenStore("owner");
 		const middleware = authMiddleware(config, store);
@@ -76,6 +76,26 @@ describe("authMiddleware", () => {
 		expect(nextCalled).toBe(true);
 		expect(ctx._replies).toEqual([]);
 		expect(ctx.authState?.isOwner).toBe(true);
+	});
+
+	it("allows configured non-owner users without granting owner access", async () => {
+		const config = testConfig();
+		const store = createTokenStore("configured-user");
+		const middleware = authMiddleware(config, store);
+		const ctx = mockContext({ userId: 234567, chatId: 14 });
+
+		let nextCalled = false;
+		await middleware(ctx as unknown as AuthContext, async () => {
+			nextCalled = true;
+		});
+
+		expect(nextCalled).toBe(true);
+		expect(ctx._replies).toEqual([]);
+		expect(ctx.authState?.isOwner).toBe(false);
+		expect(ctx.authState?.userConfig).toEqual({
+			modes: ["telegram-readonly", "telegram-full"],
+			defaultMode: "telegram-readonly",
+		});
 	});
 
 	it("rejects unknown user without token", async () => {

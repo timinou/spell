@@ -1,0 +1,127 @@
+#+TITLE: Harden telegram-bridge merge AUD-021
+#+STATE: DONE
+#+SESSION_ID: 14ab2067d6748f3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T17-44-54-361Z_14ab2067d6748f3d.jsonl]]
+#+CUSTOM_ID: PLAN-093-harden-telegram-bridge-merge-aud-021
+
+
+NOTE [2026-04-02]: Completed with verification evidence and child items reconciled.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-021-audit-implementation:
+
+- **What**: Telegram KDL defaults still use the old YAML values (`idleTimeout = 3600`, `maxSessions = 3`) instead of the planned KDL defaults (`300`, `10`)
+  - **Where**: `packages/spell-server/src/config/channels-parser.ts`, top-level default constants
+  - **Why**: Minimal `channels.kdl` configs now behave differently than the merged design promised, affecting session expiry and capacity in user-visible ways
+  - **Effort**: `trivial`
+
+- **What**: Owner authorization ignores the new `owners` list and instead treats any configured `user` as an owner
+  - **Where**: `packages/spell-server/src/telegram/bot/auth.ts`, around `config.users[userId]` / `isOwner: true`
+  - **Why**: Owner-only commands like `/unlock` are granted to all configured users, while IDs listed in `owners` but not duplicated under `user` are not recognized as owners; this breaks the new config contract
+  - **Effort**: `medium`
+
+- **What**: `spell server` does not implement the planned fallback from `./.spell/` to `~/.spell/`
+  - **Where**: `packages/coding-agent/src/commands/server.ts`, `resolveDefaultConfigDir()`
+  - **Why**: Running the command outside a project-local config dir will fail instead of finding the home config, which is a direct CLI behavior regression from the planned contract
+  - **Effort**: `trivial`
+
+- **What**: `TelegramBotService.start()` fires `bot.start()` without awaiting or tracking its promise
+  - **Where**: `packages/spell-server/src/telegram/service.ts`, near `bot.start({ onStart: ... })`
+  - **Why**: The service reports startup success before long polling is actually established, and polling failures can surface as unobserved async failures instead of a clean startup error
+  - **Effort**: `small`
+
+- **What**: Server startup swallows Telegram bot startup failures and silently continues in degraded mode
+  - **Where**: `packages/spell-server/src/server.ts`, around the `await telegramBot.start()` `try/catch`
+  - **Why**: With full Telegram config present, callers cannot tell whether they got “server + bot” or “server without bot”; production deployments may look healthy while the interactive bot is down
+  - **Effort**: `small`
+
+- **What**: The merge kept `ProcessManager` instead of completing the planned unification onto `SessionManager` + `TelegramLifecycle`
+  - **Where**: `packages/spell-server/src/telegram/process-manager.ts`, `packages/spell-server/src/telegram/service.ts`, and `packages/spell-server/src/session/telegram-lifecycle.ts`
+  - **Why**: Two parallel session-management abstractions now coexist, preserving duplicated lifecycle logic and increasing drift risk for future fixes
+  - **Effort**: `medium`
+
+- **What**: `TelegramLifecycle` is effectively leftover dead architecture after the merge
+  - **Where**: `packages/spell-server/src/session/telegram-lifecycle.ts`
+  - **Why**: It suggests Telegram sessions are managed through `SessionManager` when the actual runtime still goes through `ProcessManager`, which misleads maintainers
+  - **Effort**: `small`
+
+- **What**: New `channels.kdl` parser branches lack focused tests for the merged schema
+  - **Where**: `packages/spell-server/src/config/channels-parser.ts`; current coverage is only indirect through `packages/spell-server/test/cli/server-start.test.ts`
+  - **Why**: There is no regression coverage for `bot-token-file`, `project` nodes, `user` blocks, `idle-timeout null`, or the `bot-token`/`bot-token-file` mutual-exclusion error path
+  - **Effort**: `small`
+
+- **What**: Server lifecycle behavior for full/minimal/no Telegram config is not directly tested
+  - **Where**: `packages/spell-server/src/server.ts`
+  - **Why**: The core merge behavior — full bot startup vs notification-only mode vs no-telegram mode, plus shutdown ordering — can regress without any targeted test failure
+  - **Effort**: `medium`
+
+- **What**: Schema documentation was not updated for the expanded Telegram KDL format
+  - **Where**: `packages/spell-server/docs/kdl-schema-reference.md`
+  - **Why**: Users do not have an authoritative reference for `user`, `project`, `bot-token-file`, `log-viewer-port`, and related merged config fields
+  - **Effort**: `small`
+
+* Context
+
+Post-merge audit (AUD-021) of PLAN-091 identified 10 issues across config defaults, auth semantics, bot lifecycle, dead code, test gaps, and documentation. This plan addresses all actionable findings, deferring only the ProcessManager-to-SessionManager unification (tracked as [[id:FUP-030-unify-processmanager-onto-sessionmanager]]).
+
+** Key decisions
+- The =owners= array in KDL config becomes the source of truth for =isOwner= (not the =users= map)
+- Default idle timeout changes from 3600s to 300s; max sessions from 3 to 10 (matching plan spec)
+- =bot.start()= is properly awaited via =Promise.withResolvers= to catch early polling failures
+- =SpellServer= interface gains =telegramBotActive= boolean for observability
+- =TelegramLifecycle= is deleted as dead code since ProcessManager is the active session abstraction
+- ProcessManager-to-SessionManager unification is deferred to [[id:FUP-030-unify-processmanager-onto-sessionmanager]] due to scope
+
+* Verification
+
+After all items complete:
+1. =bun check:ts= — passes across entire workspace
+2. =bun test packages/spell-server/= — all tests pass including new parser tests
+3. =grep -n 'DEFAULT_IDLE_TIMEOUT' packages/spell-server/src/config/channels-parser.ts= — shows 300
+4. =grep -n 'DEFAULT_MAX_SESSIONS' packages/spell-server/src/config/channels-parser.ts= — shows 10
+5. =grep -r TelegramLifecycle packages/spell-server/src/= — zero results
+6. KDL schema reference docs contain =user=, =project=, =bot-token-file=, =log-viewer-port= entries
+7. Auth test file contains tests for owner-vs-user distinction
+
+* Execution Manifest
+
+** Wave 1: Trivial fixes + parser tests [parallelizable]
+- [[id:BUG-102-fix-kdl-parser-defaults-and-cli-config-d]] — Fix KDL defaults (300/10) and CLI config-dir fallback [S effort]
+- [[id:FEAT-239-add-channels-kdl-parser-tests-for-merged]] — Add channels.kdl parser tests (11 cases) [S effort, depends on BUG-102]
+
+** Wave 2: Auth fix [depends on W1]
+- [[id:BUG-103-fix-owner-auth-to-use-owners-array-not-u]] — Fix owner auth to use owners array [M effort]
+
+** Wave 3: Bot lifecycle + cleanup [depends on W2]
+- [[id:BUG-104-fix-bot-start-fire-and-forget-and-server]] — Fix bot.start() fire-and-forget, add telegramBotActive [S effort]
+- [[id:FEAT-240-remove-dead-telegramlifecycle-and-update]] — Remove TelegramLifecycle, update KDL schema docs [S effort, depends on BUG-103]
+
+** Deferred
+- [[id:FUP-030-unify-processmanager-onto-sessionmanager]] — Unify ProcessManager onto SessionManager [L effort, tracked as follow-up]
+
+
+** Completion [2026-04-02]
+*** Verification
+- `bun test packages/spell-server/test/cli/server-start.test.ts packages/coding-agent/test/server-command.test.ts` — passed (defaults + `spell server` config-dir fallback coverage).
+- `bun test packages/spell-server/test/config/channels-parser.test.ts packages/spell-server/test/cli/server-start.test.ts` — passed (merged channels.kdl parser coverage and updated defaults).
+- `bun test packages/spell-server/test/telegram/auth.test.ts` — passed (owner-vs-user distinction coverage).
+- `bun test packages/spell-server/test/telegram/service.test.ts packages/spell-server/test/server-lifecycle.test.ts` — passed (awaited polling startup, startup failure propagation, full/minimal/no Telegram lifecycle coverage, shutdown wait behavior).
+- `bun test packages/spell-server/test/session/lifecycle.test.ts packages/spell-server/test/telegram/service.test.ts packages/spell-server/test/server-lifecycle.test.ts` — passed after final TelegramLifecycle cleanup.
+- `bun check:ts` — passed.
+- `bun test packages/spell-server/` — passed (`201 pass`, `0 fail`).
+- Structural checks:
+  - `grep DEFAULT_IDLE_TIMEOUT|DEFAULT_MAX_SESSIONS packages/spell-server/src/config/channels-parser.ts` showed `300` and `10`.
+  - `grep TelegramLifecycle packages/spell-server` returned no matches.
+  - `grep bot-token-file|project|user|log-viewer-port packages/spell-server/docs/kdl-schema-reference.md` found the merged Telegram schema entries.
+  - `grep owners list|configured non-owner users packages/spell-server/test/telegram/auth.test.ts` found the owner-vs-user regression tests.
+*** Artifacts
+- CLI fallback implementation: [[file:packages/coding-agent/src/commands/server.ts]]
+- CLI fallback regression test: [[file:packages/coding-agent/test/server-command.test.ts]]
+- Parser implementation: [[file:packages/spell-server/src/config/channels-parser.ts]]
+- Parser regression tests: [[file:packages/spell-server/test/config/channels-parser.test.ts]]
+- Auth implementation and tests: [[file:packages/spell-server/src/telegram/bot/auth.ts]], [[file:packages/spell-server/test/telegram/auth.test.ts]]
+- Bot lifecycle implementation and tests: [[file:packages/spell-server/src/telegram/service.ts]], [[file:packages/spell-server/src/server.ts]], [[file:packages/spell-server/test/telegram/service.test.ts]], [[file:packages/spell-server/test/server-lifecycle.test.ts]]
+- Dead lifecycle cleanup and schema docs: [[file:packages/spell-server/src/session/index.ts]], [[file:packages/spell-server/docs/architecture.md]], [[file:packages/spell-server/docs/kdl-schema-reference.md]], [[file:packages/spell-server/test/session/lifecycle.test.ts]]
+*** Deviations
+- None.

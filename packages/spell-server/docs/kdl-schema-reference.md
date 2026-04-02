@@ -38,20 +38,42 @@ If you use bearer-authenticated webhook goals, your server-side loader may also 
 
 ### `telegram` node
 
-Properties and children:
+`channels.kdl` now carries the complete Telegram runtime configuration surface. The node itself takes no properties; configure it with children:
 
-- `bot-token=<string>`: Telegram bot token.
-- child `owners` node with one or more numeric chat IDs.
+- `bot-token "<token>"` or `bot-token-file "<path>"`: required unless the whole Telegram node is omitted. These forms are mutually exclusive. `bot-token-file` is resolved relative to the config directory when loaded.
+- `owners <chat-id>...`: required numeric Telegram user IDs that are allowed to receive admin notifications and owner privileges.
+- `upload-dir "<path>"`: optional upload staging directory. Defaults to `"/tmp/spell-telegram-uploads"`.
+- `idle-timeout <seconds>`: optional default session idle timeout. Defaults to `300`.
+- `max-sessions <number>`: optional concurrent Telegram session cap. Defaults to `10`.
+- `log-viewer-port <number>`: optional HTTP port for the Telegram log viewer. Omit it to disable the viewer.
+- `default-model "<model>"`: required model slug passed to spawned RPC sessions.
+- `project "<name>" "<path>"`: optional named project roots. Relative paths are resolved against the config directory.
+- `default-project "<name>"`: optional default project name. If omitted and at least one `project` node exists, the first declared project becomes the default.
+- `user <telegram-user-id> { ... }`: optional per-user overrides. Supported children are `modes "<mode>"...`, `default-mode "<mode>"`, `idle-timeout <seconds>|#null`, and `projects "<project-name>"...`. If `default-mode` is omitted it falls back to the first listed mode; if `modes` is omitted it defaults to `"telegram-readonly"`.
 
 Example:
 
 ```kdl
-telegram bot-token="123456789:replace-me" {
+telegram {
+  bot-token-file "secrets/bot-token.txt"
   owners 123456789 987654321
+  default-model "claude-sonnet-4-5"
+  log-viewer-port 4312
+  project "spell" "../spell"
+  project "docs" "./docs"
+  default-project "spell"
+  user 123456789 {
+    modes "telegram-readonly" "coding"
+    default-mode "coding"
+    projects "spell" "docs"
+  }
+  user 987654321 {
+    idle-timeout #null
+  }
 }
 ```
 
-A deployment can use these owners as the default administrative recipients for failure notifications or operator interactions.
+If the `telegram` node is absent entirely, Telegram delivery is disabled. If the node is present, `default-model`, authentication (`bot-token` or `bot-token-file`), and `owners` are required.
 
 ## `.spell/autonomy.kdl`
 
@@ -215,6 +237,8 @@ webhook "https://hooks.example.invalid/spell/events" method="POST"
 telegram chat-id=123456789
 ```
 
+The KDL hook target still only selects the destination chat. Rich Telegram options are supplied by the runtime sender API: domains may pass a structured payload with `text`, `parseMode`, optional inline-keyboard `replyMarkup`, and `linkPreviewOptions`, while legacy text-only hook formatting keeps working unchanged.
+
 #### Org hook
 
 - node name: `org`
@@ -256,8 +280,25 @@ http port=8787 webhook-secret="replace-with-a-long-random-secret" { // pragma: a
 ### Full `channels.kdl`
 
 ```kdl
-telegram bot-token="123456789:replace-me" {
+telegram {
+  bot-token-file "secrets/bot-token.txt"
   owners 123456789 987654321
+  upload-dir "/tmp/spell-telegram-uploads"
+  idle-timeout 300
+  max-sessions 10
+  log-viewer-port 4312
+  default-model "claude-sonnet-4-5"
+  project "spell" "../spell"
+  project "docs" "./docs"
+  default-project "spell"
+  user 123456789 {
+    modes "telegram-readonly" "coding"
+    default-mode "coding"
+    projects "spell" "docs"
+  }
+  user 987654321 {
+    idle-timeout #null
+  }
 }
 ```
 

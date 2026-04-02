@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
@@ -17,7 +19,7 @@ export default class Server extends Command {
 	async run(): Promise<void> {
 		const { flags } = await this.parse(Server);
 
-		const configDir = flags["config-dir"] ? path.resolve(flags["config-dir"]) : resolveDefaultConfigDir();
+		const configDir = flags["config-dir"] ? path.resolve(flags["config-dir"]) : await resolveDefaultConfigDir();
 
 		const config = await loadConfig(configDir);
 		const server = await startSpellServer(config, process.cwd());
@@ -50,8 +52,13 @@ export default class Server extends Command {
 	}
 }
 
-function resolveDefaultConfigDir(): string {
+async function resolveDefaultConfigDir(): Promise<string> {
 	const cwdConfig = path.join(process.cwd(), ".spell");
-	// Prefer .spell/ in cwd; fall back to ~/.spell/
-	return cwdConfig;
+	try {
+		const stats = await fs.stat(cwdConfig);
+		if (stats.isDirectory()) {
+			return cwdConfig;
+		}
+	} catch {}
+	return path.join(os.homedir(), ".spell");
 }

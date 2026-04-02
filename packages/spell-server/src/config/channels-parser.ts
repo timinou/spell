@@ -4,8 +4,8 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import type { ChannelsConfig, TelegramUserConfig } from "./types";
 
 const DEFAULT_UPLOAD_DIR = "/tmp/spell-telegram-uploads";
-const DEFAULT_IDLE_TIMEOUT = 3600; // 1 hour
-const DEFAULT_MAX_SESSIONS = 3;
+const DEFAULT_IDLE_TIMEOUT = 300; // 5 minutes
+const DEFAULT_MAX_SESSIONS = 10;
 
 export function parseChannelsConfig(kdlText: string, configDir?: string): ChannelsConfig {
 	const document = parse(kdlText);

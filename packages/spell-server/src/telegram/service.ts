@@ -13,6 +13,10 @@ export interface TelegramBotServiceOptions {
 	config: TelegramBridgeConfig;
 }
 
+interface TelegramBotServiceDependencies {
+	createBot?: (token: string) => TelegramBot;
+}
+
 /**
  * Top-level lifecycle wrapper for the Telegram bot subsystem.
  *
@@ -25,12 +29,15 @@ export class TelegramBotService {
 	#tokenStore: TokenStore;
 	#bot: TelegramBot | null = null;
 	#logViewerServer: { stop(): void } | null = null;
+	#pollingTask: Promise<void> | null = null;
 	#started = false;
+	#createBot: (token: string) => TelegramBot;
 
-	constructor(options: TelegramBotServiceOptions) {
+	constructor(options: TelegramBotServiceOptions, dependencies: TelegramBotServiceDependencies = {}) {
 		this.#config = options.config;
 		this.#processManager = new ProcessManager(this.#config);
 		this.#tokenStore = new TokenStore();
+		this.#createBot = dependencies.createBot ?? (token => new Bot<AuthContext>(token));
 	}
 
 	get processManager(): ProcessManager {
@@ -43,47 +50,76 @@ export class TelegramBotService {
 		}
 		this.#started = true;
 
-		await this.#processManager.loadState();
-		await this.#tokenStore.load();
+		try {
+			await this.#processManager.loadState();
+			await this.#tokenStore.load();
 
-		const bot = new Bot<AuthContext>(this.#config.botToken);
+			const bot = this.#createBot(this.#config.botToken);
 
-		bot.catch(err => {
-			logger.error("Telegram bot middleware error", {
-				error: String(err.error),
-				updateId: err.ctx.update.update_id,
+			bot.catch(err => {
+				logger.error("Telegram bot middleware error", {
+					error: String(err.error),
+					updateId: err.ctx.update.update_id,
+				});
 			});
-		});
 
-		const me = await bot.api.getMe();
-		const botUsername = me.username ?? "";
-		const telegramPromptUrl = new URL("./bridge/telegram-prompt.md", import.meta.url);
-		const telegramPrompt = (await Bun.file(telegramPromptUrl).text()).trim();
+			const me = await bot.api.getMe();
+			const botUsername = me.username ?? "";
+			const telegramPromptUrl = new URL("./bridge/telegram-prompt.md", import.meta.url);
+			const telegramPrompt = (await Bun.file(telegramPromptUrl).text()).trim();
 
-		const cmdCtx: CommandContext = {
-			config: this.#config,
-			processManager: this.#processManager,
-			telegramPrompt,
-		};
+			const cmdCtx: CommandContext = {
+				config: this.#config,
+				processManager: this.#processManager,
+				telegramPrompt,
+			};
 
-		bot.use(authMiddleware(this.#config, this.#tokenStore));
-		registerCommands(bot, cmdCtx);
-		bot.use(createCommandRouter(this.#tokenStore, botUsername, cmdCtx));
-		bot.use(createMessageHandler(cmdCtx));
+			bot.use(authMiddleware(this.#config, this.#tokenStore));
+			registerCommands(bot, cmdCtx);
+			bot.use(createCommandRouter(this.#tokenStore, botUsername, cmdCtx));
+			bot.use(createMessageHandler(cmdCtx));
 
-		this.#bot = bot;
+			this.#bot = bot;
 
-		// Start log viewer if configured
-		if (this.#config.logViewerPort) {
-			this.#logViewerServer = startLogViewer(this.#config, this.#processManager) ?? null;
+			if (this.#config.logViewerPort) {
+				this.#logViewerServer = startLogViewer(this.#config, this.#processManager) ?? null;
+			}
+
+			const {
+				promise: pollingStarted,
+				resolve: markPollingStarted,
+				reject: failPollingStarted,
+			} = Promise.withResolvers<void>();
+			let startupSettled = false;
+			this.#pollingTask = bot
+				.start({
+					onStart: () => {
+						logger.debug("Telegram bot started polling", { username: botUsername });
+						startupSettled = true;
+						markPollingStarted();
+					},
+				})
+				.then(() => {
+					if (startupSettled) {
+						return;
+					}
+					startupSettled = true;
+					failPollingStarted(new Error("Telegram bot polling stopped before startup completed"));
+				})
+				.catch(error => {
+					if (!startupSettled) {
+						startupSettled = true;
+						failPollingStarted(error);
+						return;
+					}
+					logger.error("Telegram bot polling stopped unexpectedly", { error: String(error) });
+				});
+
+			await pollingStarted;
+		} catch (error) {
+			await this.#cleanupFailedStart();
+			throw error;
 		}
-
-		// Start polling (non-blocking)
-		bot.start({
-			onStart: () => {
-				logger.debug("Telegram bot started polling", { username: botUsername });
-			},
-		});
 	}
 
 	async stop(): Promise<void> {
@@ -92,9 +128,15 @@ export class TelegramBotService {
 
 		logger.debug("Stopping Telegram bot service");
 
-		if (this.#bot) {
-			this.#bot.stop();
-			this.#bot = null;
+		const bot = this.#bot;
+		this.#bot = null;
+		if (bot) {
+			await bot.stop();
+		}
+		const pollingTask = this.#pollingTask;
+		this.#pollingTask = null;
+		if (pollingTask) {
+			await pollingTask;
 		}
 
 		if (this.#logViewerServer) {
@@ -107,5 +149,27 @@ export class TelegramBotService {
 			this.#processManager.saveState(),
 			this.#processManager.killAll(),
 		]);
+	}
+
+	async #cleanupFailedStart(): Promise<void> {
+		this.#started = false;
+		const bot = this.#bot;
+		this.#bot = null;
+		if (bot) {
+			try {
+				await bot.stop();
+			} catch (error) {
+				logger.warn("Ignoring Telegram bot stop failure during startup cleanup", { error: String(error) });
+			}
+		}
+		const pollingTask = this.#pollingTask;
+		this.#pollingTask = null;
+		if (pollingTask) {
+			await pollingTask;
+		}
+		if (this.#logViewerServer) {
+			this.#logViewerServer.stop();
+			this.#logViewerServer = null;
+		}
 	}
 }

@@ -1,0 +1,127 @@
+#+TITLE: Fix owner auth to use owners array not users map
+#+STATE: DONE
+#+SESSION_ID: 14ab2067d6748f3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T17-44-54-361Z_14ab2067d6748f3d.jsonl]]
+#+CUSTOM_ID: BUG-103-fix-owner-auth-to-use-owners-array-not-u
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: core
+
+NOTE [2026-04-02]: Completed in PLAN-093: auth now derives owner status from config.owners while preserving configured non-owner users.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-021-audit-implementation:
+
+- **What**: Telegram KDL defaults still use the old YAML values (`idleTimeout = 3600`, `maxSessions = 3`) instead of the planned KDL defaults (`300`, `10`)
+  - **Where**: `packages/spell-server/src/config/channels-parser.ts`, top-level default constants
+  - **Why**: Minimal `channels.kdl` configs now behave differently than the merged design promised, affecting session expiry and capacity in user-visible ways
+  - **Effort**: `trivial`
+
+- **What**: Owner authorization ignores the new `owners` list and instead treats any configured `user` as an owner
+  - **Where**: `packages/spell-server/src/telegram/bot/auth.ts`, around `config.users[userId]` / `isOwner: true`
+  - **Why**: Owner-only commands like `/unlock` are granted to all configured users, while IDs listed in `owners` but not duplicated under `user` are not recognized as owners; this breaks the new config contract
+  - **Effort**: `medium`
+
+- **What**: `spell server` does not implement the planned fallback from `./.spell/` to `~/.spell/`
+  - **Where**: `packages/coding-agent/src/commands/server.ts`, `resolveDefaultConfigDir()`
+  - **Why**: Running the command outside a project-local config dir will fail instead of finding the home config, which is a direct CLI behavior regression from the planned contract
+  - **Effort**: `trivial`
+
+- **What**: `TelegramBotService.start()` fires `bot.start()` without awaiting or tracking its promise
+  - **Where**: `packages/spell-server/src/telegram/service.ts`, near `bot.start({ onStart: ... })`
+  - **Why**: The service reports startup success before long polling is actually established, and polling failures can surface as unobserved async failures instead of a clean startup error
+  - **Effort**: `small`
+
+- **What**: Server startup swallows Telegram bot startup failures and silently continues in degraded mode
+  - **Where**: `packages/spell-server/src/server.ts`, around the `await telegramBot.start()` `try/catch`
+  - **Why**: With full Telegram config present, callers cannot tell whether they got “server + bot” or “server without bot”; production deployments may look healthy while the interactive bot is down
+  - **Effort**: `small`
+
+- **What**: The merge kept `ProcessManager` instead of completing the planned unification onto `SessionManager` + `TelegramLifecycle`
+  - **Where**: `packages/spell-server/src/telegram/process-manager.ts`, `packages/spell-server/src/telegram/service.ts`, and `packages/spell-server/src/session/telegram-lifecycle.ts`
+  - **Why**: Two parallel session-management abstractions now coexist, preserving duplicated lifecycle logic and increasing drift risk for future fixes
+  - **Effort**: `medium`
+
+- **What**: `TelegramLifecycle` is effectively leftover dead architecture after the merge
+  - **Where**: `packages/spell-server/src/session/telegram-lifecycle.ts`
+  - **Why**: It suggests Telegram sessions are managed through `SessionManager` when the actual runtime still goes through `ProcessManager`, which misleads maintainers
+  - **Effort**: `small`
+
+- **What**: New `channels.kdl` parser branches lack focused tests for the merged schema
+  - **Where**: `packages/spell-server/src/config/channels-parser.ts`; current coverage is only indirect through `packages/spell-server/test/cli/server-start.test.ts`
+  - **Why**: There is no regression coverage for `bot-token-file`, `project` nodes, `user` blocks, `idle-timeout null`, or the `bot-token`/`bot-token-file` mutual-exclusion error path
+  - **Effort**: `small`
+
+- **What**: Server lifecycle behavior for full/minimal/no Telegram config is not directly tested
+  - **Where**: `packages/spell-server/src/server.ts`
+  - **Why**: The core merge behavior — full bot startup vs notification-only mode vs no-telegram mode, plus shutdown ordering — can regress without any targeted test failure
+  - **Effort**: `medium`
+
+- **What**: Schema documentation was not updated for the expanded Telegram KDL format
+  - **Where**: `packages/spell-server/docs/kdl-schema-reference.md`
+  - **Why**: Users do not have an authoritative reference for `user`, `project`, `bot-token-file`, `log-viewer-port`, and related merged config fields
+  - **Effort**: `small`
+
+The merged Telegram auth middleware determines =isOwner= by checking =config.users[userId]=, treating every configured user as an owner. In the new KDL schema, =owners= is a separate list (numeric Telegram IDs for notification recipients and =/unlock= access), while =users= is the map of all authorized users.
+
+The auth middleware must distinguish:
+- Owner: userId is in =config.owners= array (can =/unlock=, receives notifications)
+- Authorized user: userId is in =config.users= map (can interact with bot, permissions defined by UserConfig)
+- Guest: valid token claim (fallback config, =isOwner: false=)
+
+* Scope
+File: =packages/spell-server/src/telegram/bot/auth.ts=
+
+** Current (wrong)
+#+begin_src typescript
+const ownerConfig = config.users[userId];
+if (ownerConfig) {
+  applyAuthState(ctx, { userId, isOwner: true, userConfig: ownerConfig });
+  await next();
+  return;
+}
+#+end_src
+
+** Correct
+#+begin_src typescript
+const userConfig = config.users[userId];
+const isOwner = config.owners.includes(Number(userId));
+
+if (userConfig) {
+  applyAuthState(ctx, { userId, isOwner, userConfig });
+  await next();
+  return;
+}
+
+// Owner who is not in users map — grant with guest-level config
+if (isOwner) {
+  applyAuthState(ctx, { userId, isOwner: true, userConfig: resolveGuestConfig(config) });
+  await next();
+  return;
+}
+#+end_src
+
+This means:
+1. A user in =users= map gets their configured permissions; =isOwner= is true only if also in =owners= array
+2. An owner not in =users= map still gets access with guest-level config
+3. Token-based guests remain =isOwner: false=
+
+** Test updates
+File: =packages/spell-server/test/telegram/auth.test.ts=
+
+Update existing tests and add:
+- Test: user in =users= map but NOT in =owners= array gets =isOwner: false=
+- Test: user in =owners= array but NOT in =users= map gets =isOwner: true= with guest config
+- Test: user in BOTH =owners= and =users= gets =isOwner: true= with their user config
+
+* Sub-outline
+1. Update =authMiddleware= to check =config.owners.includes(Number(userId))= for =isOwner=
+2. Add owner-not-in-users fallback path
+3. Add/update 3 test cases in auth.test.ts
+4. Run =bun test packages/spell-server/test/telegram/auth.test.ts=
+
+* Verification
+- =bun check:ts= passes
+- =bun test packages/spell-server/test/telegram/auth.test.ts= passes with new test cases
+- Owner-only commands (=/unlock=) are only granted to IDs in =owners= array
