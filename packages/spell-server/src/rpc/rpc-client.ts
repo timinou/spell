@@ -342,7 +342,7 @@ export class RpcClient {
 			}
 		}
 
-		if (parsed.type === "agent_end" || parsed.type === "turn_end") {
+		if (parsed.type === "agent_end") {
 			this.#resolvePromptCompletion();
 		}
 

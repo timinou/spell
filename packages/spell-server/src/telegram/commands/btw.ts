@@ -2,7 +2,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { RpcClient } from "../../rpc/rpc-client";
 import type { RpcEvent, RpcSpawnOptions } from "../../rpc/types";
 import type { AuthContext } from "../bot/auth";
-import { ResponseStreamer } from "../bridge/rpc-to-telegram";
+import { awaitStreamerCompletion, ResponseStreamer } from "../bridge/rpc-to-telegram";
 import {
 	type CommandContext,
 	parseCommandArgument,
@@ -67,11 +67,12 @@ export async function handleBtwCommand(
 	});
 	const streamer = createStreamer(ctx, false);
 
-	client.onEvent(event => {
+	const listener = (event: RpcEvent): void => {
 		void streamer.handleEvent(event).catch(error => {
 			logger.warn("Failed streaming /btw response event", { error: String(error) });
 		});
-	});
+	};
+	client.onEvent(listener);
 
 	try {
 		await client.start();
@@ -83,7 +84,8 @@ export async function handleBtwCommand(
 		});
 		await ctx.reply(`Failed to run /btw: ${String(error)}`);
 	} finally {
-		streamer.cancel();
+		await awaitStreamerCompletion(streamer);
+		client.offEvent?.(listener);
 		await client.kill();
 	}
 }

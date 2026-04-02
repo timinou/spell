@@ -87,6 +87,14 @@ describe("RpcClient", () => {
 		        });
 		        continue;
 		      }
+		      if (scenario === "turn-end-before-agent-end") {
+		        send({ type: "turn_end" });
+		        setTimeout(() => {
+		          send({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "ok" } });
+		          send({ type: "agent_end" });
+		        }, 20);
+		        continue;
+		      }
 		      send({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "ok" } });
 		      send({ type: "agent_end" });
 		    }
@@ -279,6 +287,35 @@ describe("RpcClient", () => {
 			type: "message_end",
 			message: { role: "assistant", stopReason: "error", errorMessage: "Invalid API key" },
 		});
+
+		await client.kill();
+	});
+
+	it("waits for agent_end instead of resolving on turn_end", async () => {
+		const client = new RpcClient(
+			{
+				cwd: import.meta.dir,
+				tools: ["read"],
+				appendSystemPrompt: "turn-end-before-agent-end",
+			},
+			{ command: spellPath },
+		);
+		const events: RpcEvent[] = [];
+		client.onEvent(event => {
+			events.push(event);
+		});
+
+		await client.start();
+		await Promise.race([
+			client.prompt("hello rpc"),
+			Bun.sleep(TEST_TIMEOUT_MS).then(() => {
+				throw new Error("Timed out waiting for agent_end after turn_end");
+			}),
+		]);
+
+		expect(events.some(event => eventWithType(event, "turn_end"))).toBe(true);
+		expect(events.some(event => eventWithType(event, "agent_end"))).toBe(true);
+		expect(events.some(event => eventWithType(event, "message_update"))).toBe(true);
 
 		await client.kill();
 	});

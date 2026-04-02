@@ -1,10 +1,11 @@
-import type { AssistantEvent, RpcEvent } from "../../rpc/types";
+import type { AssistantEvent, RpcAssistantMessage, RpcEvent } from "../../rpc/types";
 import type { AuthContext } from "../bot/auth";
 import { markdownToTelegramHtml } from "./markdown-html";
 import { splitMessage } from "./message-splitter";
 
 const DRAFT_INTERVAL_MS = 334;
 const MAX_DRAFT_LENGTH = 4000;
+const STREAM_DONE_TIMEOUT_MS = 5_000;
 
 interface DraftApiRaw {
 	sendMessageDraft?: (args: { chat_id: number; text: string }) => Promise<unknown>;
@@ -41,6 +42,60 @@ function trimDraft(text: string): string {
 	return text.slice(text.length - MAX_DRAFT_LENGTH);
 }
 
+function extractAssistantText(message: RpcAssistantMessage | undefined): string {
+	if (!message?.content) {
+		return "";
+	}
+	return message.content
+		.filter(block => block.type === "text" && typeof block.text === "string")
+		.map(block => block.text?.trim() ?? "")
+		.filter(Boolean)
+		.join("\n\n");
+}
+
+function mergeAssistantText(currentText: string, incomingText: string): string {
+	const current = currentText.trim();
+	const incoming = incomingText.trim();
+	if (!current) {
+		return incoming;
+	}
+	if (!incoming) {
+		return current;
+	}
+	if (current === incoming) {
+		return current;
+	}
+	if (incoming.startsWith(current)) {
+		return incoming;
+	}
+	if (current.endsWith(incoming)) {
+		return current;
+	}
+	const separator = current.endsWith(":") ? "\n\n" : " ";
+	return `${current}${separator}${incoming}`;
+}
+
+function shouldFinalizeOnMessageEnd(message: RpcAssistantMessage | undefined): boolean {
+	if (!message) {
+		return true;
+	}
+	if (message.role && message.role !== "assistant") {
+		return false;
+	}
+	return message.stopReason !== "toolUse";
+}
+
+export async function awaitStreamerCompletion(
+	streamer: { done: Promise<void>; cancel: () => void },
+	timeoutMs = STREAM_DONE_TIMEOUT_MS,
+): Promise<void> {
+	const completed = await Promise.race([streamer.done.then(() => true), Bun.sleep(timeoutMs).then(() => false)]);
+	if (completed) {
+		return;
+	}
+	streamer.cancel();
+	await streamer.done;
+}
 export class ResponseStreamer {
 	#ctx: AuthContext;
 	#showThinking: boolean;
@@ -105,13 +160,25 @@ export class ResponseStreamer {
 					await this.#finalize();
 				}
 				return;
-			case "message_end":
+			case "message_end": {
+				if (event.message?.role && event.message.role !== "assistant") {
+					return;
+				}
+				const finalText = extractAssistantText(event.message);
+				if (finalText) {
+					this.#text = mergeAssistantText(this.#text, finalText);
+				}
 				if (event.message?.stopReason === "error" || event.message?.stopReason === "aborted") {
 					this.#errorMessage =
 						event.message.errorMessage ?? (this.#errorMessage || `Assistant ${event.message.stopReason}`);
+					await this.#finalize();
+					return;
 				}
-				await this.#finalize();
+				if (shouldFinalizeOnMessageEnd(event.message)) {
+					await this.#finalize();
+				}
 				return;
+			}
 			case "agent_end":
 				await this.#finalize();
 				return;
