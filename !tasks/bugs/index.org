@@ -1,0 +1,70 @@
+#+TITLE: Phoenix Inspector agent handoff stays open
+#+STATE: DONE
+#+SESSION_ID: 14ab509cc331e880
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T21-15-31-468Z_14ab509cc331e880.jsonl]]
+#+CUSTOM_ID: BUG-117-phoenix-inspector-agent-handoff-stays-op
+
+NOTE [2026-04-02]: Completed via PLAN-099. Send-to-agent now replies through the explicit `agent_handoff_result` contract, preserves the long-lived window flow, and has regression coverage plus headless QML verification.
+
+* Initial Message
+
+File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-02T21-11-00-390Z_14
+ ab4f9409618c2f.jsonl
+ ID: 14ab4f9409618c2f
+
+
+
+when I clicked on send to agent, the qml windoz closed and nothign worked
+
+:PROPERTIES:
+:EFFORT: 4h
+:PRIORITY: A
+:LAYER: UI
+:END:
+
+* Context
+The Phoenix Inspector's "Send to agent" action in `~/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector/inspector.qml` is meant to hand the current selection off to the active agent session and then leave the inspector open for continued use.
+
+* Implementation
+** Audit the send-to-agent click path and the `_tier: "agent"` payload flow.
+** Keep the window long-lived: the click path must not route through any close/dispose logic.
+** Preserve the pending -> success/queued -> error state updates for `pendingAgentHandoffRid` so the UI gives a visible acknowledgment instead of seeming to do nothing.
+
+* Acceptance
+** Clicking "Send to agent" keeps the inspector window open.
+** The status text/label updates to a visible pending state, then to success/queued or error after the reply.
+** No close action is emitted by the send-to-agent path.
+
+* Verification
+** Add or update a regression test that exercises the send-to-agent path and asserts the bridge payload plus reply handling.
+** Manual repro note required: launch Phoenix Inspector, click "Send to agent", confirm the window stays open and the status text changes.
+* DONE Phoenix Inspector quick fix enables task tier
+:PROPERTIES:
+:CUSTOM_ID: BUG-118-phoenix-inspector-quick-fix-enables-task
+:END:
+
+  NOTE [2026-04-02]: Completed via PLAN-099. Canonical launch props now advertise task-tier support, the direct extension runtime dispatches quick-fix subagent work, and regression coverage plus headless QML verification cover the `task_result` flow.
+
+:PROPERTIES:
+:EFFORT: 4h
+:PRIORITY: A
+:LAYER: Runtime
+:END:
+
+* Context
+The Phoenix Inspector's "Quick Fix" button in `~/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector/inspector.qml` is gated on task-tier support from the launch props. The current launch contract does not expose that capability, so the button degrades to the "requires canvas-backed inspector launch" error path.
+
+* Implementation
+** Update the launch contract in `helpers.ts` / `index.ts` so the canonical Phoenix Inspector launch advertises task-tier support.
+** Keep `dispatchQuickFix()` gated on the real capability flag, not a placeholder default.
+** Add regression coverage for the launch props and the `_tier: "task"` payload / `task_result` reply handling.
+
+* Acceptance
+** Quick Fix is enabled for the canonical Phoenix Inspector launch.
+** Clicking Quick Fix sends a task-tier dispatch instead of failing the canvas-backed-launch gate.
+** The result text continues to update from `task_result` replies.
+
+* Verification
+** Add or update a unit test covering the launch props and a dispatch test covering success/error reply handling.
+** Manual repro note required: launch the inspector from `.spell/extensions/phoenix-inspector`, select an element, click Quick Fix, confirm the request leaves the window and the result text updates.
