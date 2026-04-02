@@ -1,0 +1,7 @@
+Commands and outcomes:
+- bunx biome check packages/coding-agent/src/modes/controllers/event-controller.ts packages/coding-agent/src/prompts/tools/task.md packages/coding-agent/src/task/index.ts packages/coding-agent/src/task/render.ts packages/coding-agent/test/task/render-report-finding.test.ts packages/coding-agent/test/task/task-payload-validation.test.ts
+  Result: pass
+- bun test packages/coding-agent/test/task/task-payload-validation.test.ts
+  Result: pass (2 tests)
+- bun test packages/coding-agent/test/task/render-report-finding.test.ts
+  Result: pass (6 tests)

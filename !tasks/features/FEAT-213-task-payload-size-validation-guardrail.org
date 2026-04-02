@@ -1,0 +1,82 @@
+#+TITLE: Task payload size validation guardrail
+#+STATE: DONE
+#+SESSION_ID: 14aacef787550ffe
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-49-05-693Z_14aacef787550ffe.jsonl]]
+#+CUSTOM_ID: FEAT-213-task-payload-size-validation-guardrail
+#+EFFORT: 20m
+#+PRIORITY: #B
+#+LAYER: tools
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-02]: Completed via PLAN-082. TaskTool now rejects oversized incoming task payloads before internal task mutation, with focused byte-based validation tests.
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl
+ ID: 14aac2bfa1d2ab39
+
+
+Why is the task tool failing there?
+
+* Scope
+Add a hard size limit on task tool call arguments to prevent the LLM from generating
+enormous payloads that take minutes to stream. Historical data shows:
+- Median payload: 4.6KB, p90: 18.3KB, p95: 21.3KB, max successful: 29.7KB
+- The failing session attempted ~40KB (7 org item bodies embedded in assignments)
+- 50KB threshold: above every observed successful call, catches the pattern that caused the failure
+
+Files:
+- ~packages/coding-agent/src/task/index.ts~ (#validateTaskBatch or execute method)
+- ~packages/coding-agent/src/task/types.ts~ (constant definition)
+* Tests
+** Test file: ~packages/coding-agent/test/tools/task-payload-validation.test.ts~
+*** Scenario 1: payload under 50KB passes validation
+Create a TaskParams with ~context~ (2KB) + 5 tasks with ~assignment~ (5KB each) = ~27KB total.
+Expect: no validation error returned.
+*** Scenario 2: payload over 50KB is rejected
+Create a TaskParams with ~context~ (20KB) + 3 tasks with ~assignment~ (15KB each) = ~65KB total.
+Expect: validation error string containing \"payload\" and the actual size in KB.
+*** Scenario 3: empty tasks array passes
+Create a TaskParams with only ~context~ (1KB) and empty ~tasks~ array.
+Expect: no validation error returned.
+* Implementation
+** FEAT-213::payload-size-constant
+In ~types.ts~, add:
+#+begin_src typescript
+/** Maximum total argument payload size (context + all assignments) before rejection */
+export const MAX_PAYLOAD_BYTES = parseNumber($env.PI_TASK_MAX_PAYLOAD_BYTES, 50_000);
+#+end_src
+
+** FEAT-213::payload-size-check
+In ~index.ts~, add a size check in the ~execute~ method after ~#validateTaskBatch~ (around line 486):
+#+begin_src typescript
+const payloadSize = (params.context?.length ?? 0) + rawTasks.reduce((sum, t) => sum + (t.assignment?.length ?? 0), 0);
+if (payloadSize > MAX_PAYLOAD_BYTES) {
+  const sizeKb = (payloadSize / 1_000).toFixed(0);
+  const limitKb = (MAX_PAYLOAD_BYTES / 1_000).toFixed(0);
+  return {
+    content: [{
+      type: \"text\",
+      text: `Task payload too large (${sizeKb}KB, limit ${limitKb}KB). ` +
+            `Write large content to local://<path> files and pass paths in context instead of embedding content in assignments.`,
+    }],
+    details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+  };
+}
+#+end_src
+
+The error message tells the model exactly how to fix it (use local:// paths).
+* Edge Cases
+- Size measured in chars (JS string length), not bytes - close enough for this guardrail
+- ~params.context~ is optional, guard with ~?.length ?? 0~
+- ~assignment~ could theoretically be empty string - handled by ~?.length ?? 0~
+- The ~schema~ field is not counted - it's typically small and structured
+
+* Acceptance Criteria
+- Task calls with total payload under 1MB execute normally
+- Task calls with total payload over 1MB return an error with actionable guidance
+- Threshold configurable via ~PI_TASK_MAX_PAYLOAD_BYTES~ env var
+- ~bun check:ts~ passes
+- Test file passes: ~bun test packages/coding-agent/test/tools/task-payload-validation.test.ts~

@@ -10,7 +10,7 @@ Subagents lack your conversation history. Every decision, file content, and user
 <parameters>
 - `agent`: Agent type for all tasks.
 - `phase`: Optional phase name for the auto-created roster phase (for example `Investigation`).
-- `context`: Shared background prepended to every assignment. Session-specific info only.
+- `context`: Shared background prepended to every assignment. Session-specific info only; put cross-task constraints here so each `assignment` stays lean.
 - `schema`: JTD schema for expected output. Format lives here — **MUST NOT** be duplicated in assignments.
 - `tasks`: Tasks to execute in parallel.
   - `.id`: CamelCase identifier, max 32 chars
@@ -28,9 +28,9 @@ Auto-roster is disabled in this session. Use `.todoRef` when you want delegated 
 {{/if}}
 
 <critical>
-- **MUST NOT** duplicate shared constraints across assignments — put them in `context` once.
-- **MUST NOT** tell tasks to run project-wide build/test/lint. Parallel agents share the working tree; each task edits, stops. Caller verifies after all complete.
-- For large payloads (traces, JSON blobs), write to `local://<path>` and pass the path in context.
+- **MUST NOT** duplicate shared constraints across assignments — put them in `context` once and keep each `assignment` limited to task-specific execution steps.
+- Keep task payloads lean; avoid pasting long traces, logs, or large JSON directly into `context`/`assignment`.
+- For large payloads (traces, JSON blobs), write to `local://<path>` and pass the path in `context` instead of embedding the blob in the task call.
 - Prefer `task` agents that investigate **and** edit in one pass. Only launch a dedicated read-only discovery step when the affected files are genuinely unknown and cannot be inferred from the task description.
 </critical>
 

@@ -1,0 +1,8 @@
+Command: PATH="/home/user/code/ora/spell/node_modules/.bin:$PATH" bun check:ts
+Context: clean detached worktree at HEAD, before applying PLAN-082 changes.
+Outcome: failed with pre-existing unrelated repo issues.
+Representative diagnostics:
+- packages/coding-agent/src/spellcast/tarball.ts:24 unused catch variable `error`
+- packages/ai/src/utils/oauth/index.ts import ordering
+- packages/coding-agent/src/spellcast/discovery.ts formatting
+- packages/coding-agent/src/spellcast/index.ts import ordering

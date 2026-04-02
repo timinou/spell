@@ -1,0 +1,52 @@
+#+TITLE: Task tool renderCall crash on partial streaming args
+#+STATE: DONE
+#+SESSION_ID: 14aacef787550ffe
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-49-05-693Z_14aacef787550ffe.jsonl]]
+#+CUSTOM_ID: BUG-084-task-tool-rendercall-crash-on-partial-st
+#+EFFORT: 10m
+#+PRIORITY: #A
+#+LAYER: tui
+
+NOTE [2026-04-02]: Completed via PLAN-082. Task renderCall now guards partial streamed args and renders a stable 0-agent preview instead of falling back to a bare label.
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl
+ ID: 14aac2bfa1d2ab39
+
+
+Why is the task tool failing there?
+
+* Scope
+During streaming of a task tool call, ~renderCall~ receives partial JSON args from ~parseStreamingJson~.
+The ~tasks~ field may not be parsed yet, causing ~args.tasks.length~ to throw ~TypeError: Cannot read property 'length' of undefined~.
+The error is caught by the try-catch in ~ToolExecutionComponent~, but the user sees only a bare "Task" label instead of the structured preview.
+
+Files:
+- ~packages/coding-agent/src/task/render.ts~ (lines 474, 481)
+
+* Tests
+Implementation-first (trivial defensive fix, no new test file needed). Verify by:
+- Manual: stream a task call and confirm the preview shows "Tasks: 0 agents" during early streaming, not a fallback.
+- The existing ~renderCall~ is already try-caught, so no crash in production, but fix eliminates the logged warning.
+
+* Implementation
+** BUG-210::guard-tasks-length
+In ~renderCall~ function (~render.ts~ line 455), replace both ~args.tasks.length~ references:
+#+begin_src typescript
+// Line 474 and 481: guard against undefined tasks during streaming
+const taskCount = args.tasks?.length ?? 0;
+#+end_src
+
+Use ~taskCount~ in both template string interpolations.
+
+* Edge Cases
+- ~args.tasks~ could be ~undefined~ (not yet parsed), ~null~ (malformed JSON), or ~[]~ (empty array) - all handled by ~?.length ?? 0~
+- ~args.context~ could also be undefined during early streaming - already handled by ~args.context ?? ""~ on line 459
+
+* Acceptance Criteria
+- ~args.tasks.length~ never accessed without optional chaining in ~render.ts~
+- ~bun check:ts~ passes
+- No ~logger.warn("Tool renderer failed")~ emitted during streaming of a task tool call

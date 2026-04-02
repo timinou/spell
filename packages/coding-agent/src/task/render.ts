@@ -463,6 +463,8 @@ export function renderCall(args: TaskParams, _options: RenderResultOptions, them
 	const last = theme.fg("dim", theme.tree.last);
 	const vertical = theme.fg("dim", theme.tree.vertical);
 	const showIsolated = "isolated" in args && args.isolated === true;
+	const taskCount = Array.isArray(args.tasks) ? args.tasks.length : 0;
+	const taskSummary = `${taskCount} agents`;
 
 	if (hasContext) {
 		lines.push(` ${branch} ${theme.fg("dim", "Context")}`);
@@ -471,14 +473,14 @@ export function renderCall(args: TaskParams, _options: RenderResultOptions, them
 			lines.push(` ${vertical}  ${content}`);
 		}
 		const taskPrefix = showIsolated ? branch : last;
-		lines.push(` ${taskPrefix} ${theme.fg("dim", "Tasks")}: ${theme.fg("muted", `${args.tasks.length} agents`)}`);
+		lines.push(` ${taskPrefix} ${theme.fg("dim", "Tasks")}: ${theme.fg("muted", taskSummary)}`);
 		if (showIsolated) {
 			lines.push(` ${last} ${theme.fg("dim", "Isolated")}: ${theme.fg("muted", "true")}`);
 		}
 		return new Text(lines.join("\n"), 0, 0);
 	}
 
-	lines.push(`${theme.fg("dim", "Tasks")}: ${theme.fg("muted", `${args.tasks.length} agents`)}`);
+	lines.push(`${theme.fg("dim", "Tasks")}: ${theme.fg("muted", taskSummary)}`);
 	if (showIsolated) {
 		lines.push(`${theme.fg("dim", "Isolated")}: ${theme.fg("muted", "true")}`);
 	}

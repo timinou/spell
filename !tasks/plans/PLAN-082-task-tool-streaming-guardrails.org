@@ -1,0 +1,76 @@
+#+TITLE: Task Tool Streaming Guardrails
+#+STATE: DONE
+#+SESSION_ID: 14aacef787550ffe
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-49-05-693Z_14aacef787550ffe.jsonl]]
+#+CUSTOM_ID: PLAN-082-task-tool-streaming-guardrails
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl
+ ID: 14aac2bfa1d2ab39
+
+
+Why is the task tool failing there?
+
+* Context
+In session ~14aac2bfa1d2ab39~ (2026-04-02), the task tool failed three consecutive times during
+an ultraplan org item creation workflow. Root cause analysis reveals:
+
+1. The LLM attempted to generate a task call with 7 subtasks, each containing a full org item body
+   (~40KB total payload, ~10K output tokens)
+2. During streaming, the user pressed ESC after 1-3 minutes of waiting with no visible progress
+3. The abort interrupted the JSON generation mid-stream, leaving only ~{agent, context}~ parsed
+4. The tool handler received incomplete args and returned \"Tool execution was aborted\"
+
+Three contributing factors:
+- *No streaming feedback*: The TUI showed only \"Working... (esc to interrupt)\" because the ~_i~
+  intent field hadn't been parsed yet from the partial JSON
+- *No payload guardrail*: Nothing prevented the model from embedding ~40KB of content in a
+  single tool call's arguments
+- *Render crash on partial args*: ~renderCall~ accesses ~args.tasks.length~ without guarding
+  against undefined, causing a caught error that degrades the preview to a bare \"Task\" label
+
+Historical payload analysis (63 task calls across 50 sessions):
+- Median: 4.6KB, p90: 18.3KB, p95: 21.3KB, max successful: 29.7KB (took ~2.5 min)
+- 30KB calls succeed but take ~2.5 minutes to generate at ~60-80 tokens/sec
+
+Key decision: 50KB hard guardrail (above every observed successful call, catches the ~40KB pattern that caused the failure), plus prompt guidance to keep assignments lean.
+* Verification
+#+begin_src shell
+bun check:ts
+bun test packages/coding-agent/test/tools/task-payload-validation.test.ts
+#+end_src
+Manual verification:
+- Stream a task call and confirm working message shows tool name + byte progress before ~_i~ is parsed
+- Confirm task preview shows "Tasks: 0 agents" during early streaming (not a fallback error)
+
+* Execution Manifest
+All items are independent and can execute in parallel.
+
+| Wave | Item | Effort | Description |
+|------+------+--------+-------------|
+| 1 | [[id:BUG-084-task-tool-rendercall-crash-on-partial-st]] | 10m | Guard args.tasks.length in renderCall |
+| 1 | [[id:FEAT-212-streaming-progress-feedback-for-long-too]] | 30m | Show tool name + byte count in working message |
+| 1 | [[id:FEAT-213-task-payload-size-validation-guardrail]] | 20m | 50KB hard limit on task payload size |
+| 1 | [[id:FEAT-214-prompt-guidance-for-task-payload-size]] | 10m | Add size guidance to task.md prompt |
+
+Total effort: ~1h10m. All items are in Wave 1 (no cross-dependencies except FEAT-212 depends on BUG-084 for clean render during streaming).
+
+
+** Completion [2026-04-02]
+*** Verification
+- `bunx biome check packages/coding-agent/src/modes/controllers/event-controller.ts packages/coding-agent/src/prompts/tools/task.md packages/coding-agent/src/task/index.ts packages/coding-agent/src/task/render.ts packages/coding-agent/test/task/render-report-finding.test.ts packages/coding-agent/test/task/task-payload-validation.test.ts` → passed.
+- `bun test packages/coding-agent/test/task/task-payload-validation.test.ts` → passed (2 tests).
+- `bun test packages/coding-agent/test/task/render-report-finding.test.ts` → passed (6 tests).
+- Manual streaming verification via a direct Bun harness confirmed two observable contracts: (1) early partial task previews render `Tasks: 0 agents`, and (2) the working message shows tool-name plus byte-progress before `_i` is parsed, then switches to the intent message once `_i` arrives.
+- `PATH="/home/user/code/ora/spell/node_modules/.bin:$PATH" bun check:ts` in the active workspace still fails, and the same command in a clean detached HEAD worktree fails with the same unrelated baseline diagnostics in `packages/ai/src/utils/oauth/index.ts` and `packages/coding-agent/src/spellcast/{tarball.ts,discovery.ts,index.ts}`.
+*** Artifacts
+- Manual streaming verification: [[file:!tasks/plans/plan-artifacts/PLAN-082-task-tool-streaming-guardrails/manual-streaming-preview.json]]
+- Focused verification command log: [[file:!tasks/plans/plan-artifacts/PLAN-082-task-tool-streaming-guardrails/focused-verification.txt]]
+- Baseline `bun check:ts` failure record: [[file:!tasks/plans/plan-artifacts/PLAN-082-task-tool-streaming-guardrails/preexisting-bun-check-ts-failure.txt]]
+*** Deviations
+- Repo-wide `bun check:ts` could not be used as a green final gate because clean HEAD already fails on unrelated baseline issues outside PLAN-082. Focused PLAN-082 verification and manual streaming validation were used to prove the task-tool changes instead.

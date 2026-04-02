@@ -1,0 +1,54 @@
+#+TITLE: Prompt guidance for task payload size
+#+STATE: DONE
+#+SESSION_ID: 14aacef787550ffe
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-49-05-693Z_14aacef787550ffe.jsonl]]
+#+CUSTOM_ID: FEAT-214-prompt-guidance-for-task-payload-size
+#+EFFORT: 10m
+#+PRIORITY: #C
+#+LAYER: prompts
+
+NOTE [2026-04-02]: Completed via PLAN-082. Task tool prompt now explicitly tells the model to keep task payloads lean and move bulky data to local:// references.
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl
+ ID: 14aac2bfa1d2ab39
+
+
+Why is the task tool failing there?
+
+* Scope
+Add concise prompt guidance to ~task.md~ to steer the model away from embedding large
+document bodies in task assignments. The existing guidance ("For large payloads, write to
+local:// and pass the path in context") is there but buried and not specific enough about
+what "large" means.
+
+Files:
+- ~packages/coding-agent/src/prompts/tools/task.md~ (inside ~<scope>~ or ~<critical>~ section)
+
+* Tests
+No automated test - prompt changes are verified by reviewing the rendered tool description.
+Verify by checking that ~bun check:ts~ passes (prompt is imported as text).
+
+* Implementation
+** FEAT-214::prompt-size-guidance
+Add to the ~<scope>~ section (after line 38) or the ~<critical>~ section:
+#+begin_src markdown
+- Keep each `assignment` under ~2KB. Assignments are generated token-by-token; large assignments
+  (full file contents, org item bodies, long specifications) stall the stream for minutes.
+  Write large content to `local://<path>` and reference the path instead.
+#+end_src
+
+This is deliberately small - a single bullet point, not a new section. The model already
+follows the existing guidance reasonably well; this just makes the size expectation explicit.
+
+* Edge Cases
+- The guidance should not discourage detailed assignments (which are required by the template)
+- It should specifically call out "full file contents, org item bodies, long specifications"
+  as the anti-pattern, since those are what caused the actual failure
+
+* Acceptance Criteria
+- ~task.md~ contains explicit size guidance for assignments
+- ~bun check:ts~ passes

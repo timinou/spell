@@ -11,12 +11,14 @@ import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import type { ExitPlanModeDetails } from "../../tools";
+import { formatBytes } from "../../tools/render-utils";
 
 export class EventController {
 	#lastReadGroup: ReadToolGroupComponent | undefined = undefined;
 	#lastThinkingCount = 0;
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
+	#lastWorkingMessage: string | undefined = undefined;
 	#backgroundToolCallIds = new Set<string>();
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
@@ -71,11 +73,26 @@ export class EventController {
 		assistantComponent.setToolResultImages(toolCallId, images);
 		return true;
 	}
+	#setWorkingMessage(message: string): void {
+		const text = `${message} (esc to interrupt)`;
+		if (text === this.#lastWorkingMessage) return;
+		this.#lastWorkingMessage = text;
+		this.ctx.setWorkingMessage(text);
+	}
+
 	#updateWorkingMessageFromIntent(intent: string | undefined): void {
 		const trimmed = intent?.trim();
 		if (!trimmed || trimmed === this.#lastIntent) return;
 		this.#lastIntent = trimmed;
-		this.ctx.setWorkingMessage(`${trimmed} (esc to interrupt)`);
+		this.#setWorkingMessage(trimmed);
+	}
+
+	#updateWorkingMessageFromPartialToolArgs(toolName: unknown, partialJson: unknown): void {
+		if (this.#lastIntent) return;
+		if (typeof partialJson !== "string") return;
+		const bytes = Buffer.byteLength(partialJson, "utf8");
+		const normalizedToolName = typeof toolName === "string" && toolName.trim().length > 0 ? toolName.trim() : "tool";
+		this.#setWorkingMessage(`${normalizedToolName} args ${formatBytes(bytes)}`);
 	}
 
 	subscribeToAgent(): void {
@@ -96,6 +113,7 @@ export class EventController {
 			case "agent_start":
 				this.#lastIntent = undefined;
 				this.#readToolCallArgs.clear();
+				this.#lastWorkingMessage = undefined;
 				this.#readToolCallAssistantComponents.clear();
 				this.#lastAssistantComponent = undefined;
 				this.ctx.clearUserPaused();
@@ -217,12 +235,16 @@ export class EventController {
 						}
 					}
 
-					// Update working message with intent from streamed tool arguments
+					// Prefer intent once available; until then, show streamed tool-argument byte progress.
 					for (const content of this.ctx.streamingMessage.content) {
 						if (content.type !== "toolCall") continue;
 						const args = content.arguments;
-						if (!args || typeof args !== "object" || !(INTENT_FIELD in args)) continue;
-						this.#updateWorkingMessageFromIntent(args[INTENT_FIELD] as string | undefined);
+						if (args && typeof args === "object" && INTENT_FIELD in args) {
+							this.#updateWorkingMessageFromIntent(args[INTENT_FIELD] as string | undefined);
+							if (this.#lastIntent) continue;
+						}
+						const partialJson = "partialJson" in content ? content.partialJson : undefined;
+						this.#updateWorkingMessageFromPartialToolArgs(content.name, partialJson);
 					}
 
 					this.ctx.ui.requestRender();

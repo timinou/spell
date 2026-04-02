@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { EventController } from "../../src/modes/controllers/event-controller";
 import { taskToolRenderer } from "../../src/task/render";
 import type { TaskToolDetails } from "../../src/task/types";
+import { formatBytes } from "../../src/tools/render-utils";
 
 describe("taskToolRenderer report_finding safety", () => {
 	it("renders progress without crashing when report_finding payload is malformed", async () => {
@@ -128,5 +131,112 @@ describe("taskToolRenderer report_finding safety", () => {
 		const output = rendered.render(120).join("\n");
 		expect(output).toContain("Retrying (1/3)");
 		expect(output).toContain("usage limit reached");
+	});
+	it("renders task call previews with zero agents when tasks are not streamed yet", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+
+		const renderedCall = taskToolRenderer.renderCall(
+			{ agent: "task" } as never,
+			{ expanded: false, isPartial: true },
+			uiTheme,
+		);
+
+		expect(renderedCall.render(120).join("\n")).toContain("0 agents");
+	});
+
+	it("renders context previews with zero agents when tasks are not streamed yet", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+
+		const renderedCall = taskToolRenderer.renderCall(
+			{ agent: "task", context: "## Goal\nStreamed preview" } as never,
+			{ expanded: false, isPartial: true },
+			uiTheme,
+		);
+
+		const output = renderedCall.render(120).join("\n");
+		expect(output).toContain("Context");
+		expect(output).toContain("0 agents");
+	});
+});
+
+describe("EventController streamed task working message", () => {
+	it("shows byte-progress fallback until intent is available", async () => {
+		const setMessages: string[] = [];
+		const pendingTool = {
+			updateArgs: () => {},
+		};
+		const pendingTools = new Map<string, typeof pendingTool>([["tool-1", pendingTool]]);
+		const ctx = {
+			isInitialized: true,
+			init: async () => {},
+			statusLine: { invalidate: () => {} },
+			updateEditorTopBorder: () => {},
+			streamingComponent: { updateContent: () => {} },
+			streamingMessage: undefined,
+			pendingTools,
+			ui: { requestRender: () => {} },
+			setWorkingMessage: (message?: string) => {
+				if (message) setMessages.push(message);
+			},
+		} as unknown as ConstructorParameters<typeof EventController>[0];
+
+		const controller = new EventController(ctx);
+		const partialJson = '{"task":"é"}';
+		const bytes = Buffer.byteLength(partialJson, "utf8");
+
+		await controller.handleEvent({
+			type: "message_update",
+			message: {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tool-1",
+						name: "task",
+						arguments: {},
+						partialJson,
+					},
+				],
+			},
+		} as never);
+		expect(setMessages.at(-1)).toBe(`task args ${formatBytes(bytes)} (esc to interrupt)`);
+
+		await controller.handleEvent({
+			type: "message_update",
+			message: {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tool-1",
+						name: "task",
+						arguments: { [INTENT_FIELD]: "Summarizing streamed args" },
+						partialJson,
+					},
+				],
+			},
+		} as never);
+		expect(setMessages.at(-1)).toBe("Summarizing streamed args (esc to interrupt)");
+
+		await controller.handleEvent({
+			type: "message_update",
+			message: {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tool-1",
+						name: "task",
+						arguments: {},
+						partialJson: '{"task":"é","extra":"δ"}',
+					},
+				],
+			},
+		} as never);
+		expect(setMessages.at(-1)).toBe("Summarizing streamed args (esc to interrupt)");
 	});
 });

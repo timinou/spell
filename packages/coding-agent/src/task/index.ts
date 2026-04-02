@@ -79,6 +79,8 @@ import {
 	type WorktreeBaseline,
 } from "./worktree";
 
+const MAX_TASK_PARAMS_BYTES = 50 * 1024;
+
 function createUsageTotals(): Usage {
 	return {
 		input: 0,
@@ -259,6 +261,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			problems.push(error instanceof Error ? error.message : String(error));
 		}
 		return problems.length > 0 ? problems.join(". ") : undefined;
+	}
+
+	#validateTaskPayloadSize(params: TaskParams): string | undefined {
+		const payloadBytes = Buffer.byteLength(JSON.stringify(params), "utf-8");
+		if (payloadBytes <= MAX_TASK_PARAMS_BYTES) return undefined;
+		return `Task payload size ${formatBytes(payloadBytes)} exceeds ${formatBytes(MAX_TASK_PARAMS_BYTES)} limit. Keep assignments lean and move shared context out of per-task payloads.`;
 	}
 
 	#shouldAutoCreateRoster(agent: AgentDefinition | undefined, tasks: TaskItem[]): boolean {
@@ -480,8 +488,15 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const asyncEnabled = this.session.settings.get("async.enabled");
-		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
 		const rawTasks = params.tasks ?? [];
+		const taskPayloadValidationError = this.#validateTaskPayloadSize(params);
+		if (taskPayloadValidationError) {
+			return {
+				content: [{ type: "text", text: `Invalid tasks: ${taskPayloadValidationError}` }],
+				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+			};
+		}
+		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
 		const taskValidationError = this.#validateTaskBatch(rawTasks);
 		if (taskValidationError) {
 			return {

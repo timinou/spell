@@ -1,0 +1,12 @@
+{
+  "scenario": "partial task tool streaming preview and working message fallback",
+  "preview": "⏳ Task: task\nTasks: 0 agents",
+  "workingMessages": [
+    "task args 13B (esc to interrupt)",
+    "Summarizing streamed args (esc to interrupt)"
+  ],
+  "notes": [
+    "The first working message confirms the tool-name plus byte-progress fallback before _i is parsed.",
+    "The second working message confirms the intent message takes over once _i is available."
+  ]
+}

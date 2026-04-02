@@ -1,0 +1,76 @@
+#+TITLE: Streaming progress feedback for long tool call generation
+#+STATE: DONE
+#+SESSION_ID: 14aacef787550ffe
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-49-05-693Z_14aacef787550ffe.jsonl]]
+#+CUSTOM_ID: FEAT-212-streaming-progress-feedback-for-long-too
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: tui
+#+DEPENDS: BUG-084-task-tool-rendercall-crash-on-partial-st
+
+NOTE [2026-04-02]: Completed via PLAN-082. EventController now shows a byte-progress fallback from partial tool-call JSON until _i is parsed, then preserves the intent-based working message.
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl
+ ID: 14aac2bfa1d2ab39
+
+
+Why is the task tool failing there?
+
+* Scope
+When the LLM generates a large tool call (e.g. task with 7 subtasks), the JSON streaming
+takes 1-3 minutes. During this time the TUI shows only "Working... (esc to interrupt)" unless
+the ~_i~ (intent) field has been parsed from the partial JSON. Users mistake this for a hang
+and abort prematurely.
+
+Fix: show the tool name and streaming byte count in the working message as a fallback when
+~_i~ hasn't been parsed yet.
+
+Files:
+- ~packages/coding-agent/src/modes/controllers/event-controller.ts~
+
+* Tests
+Implementation-first (TUI feedback change, no testable contract change). Verify by:
+- Manual: stream a task tool call and confirm the working message shows e.g. "task (1.2KB) (esc to interrupt)" before _i is parsed
+- After _i is parsed, the working message switches to the intent text as before
+
+* Implementation
+** FEAT-210::streaming-byte-progress
+In ~event-controller.ts~, in the ~message_update~ handler (around line 220-226), after the
+existing intent extraction loop, add a fallback that sets the working message based on the
+streaming tool call metadata when no intent has been parsed yet:
+
+#+begin_src typescript
+// After existing intent extraction (lines 220-226):
+// Fallback: show tool name + byte count if no intent parsed yet
+if (!this.#lastIntent) {
+  for (const content of this.ctx.streamingMessage.content) {
+    if (content.type !== "toolCall") continue;
+    const partialJson = "partialJson" in content ? (content as any).partialJson : undefined;
+    if (partialJson && typeof partialJson === "string" && partialJson.length > 100) {
+      const sizeKb = (partialJson.length / 1024).toFixed(1);
+      this.ctx.setWorkingMessage(`${content.name} (${sizeKb}KB) (esc to interrupt)`);
+      break;
+    }
+  }
+}
+#+end_src
+
+Key decisions:
+- Only show byte progress when ~partialJson.length > 100~ to avoid flicker for small calls
+- Use tool ~name~ not ~_i~ since that's what we're falling back from
+- Once ~_i~ is parsed (via ~#updateWorkingMessageFromIntent~), it takes priority
+  because ~#lastIntent~ will be set and the fallback won't trigger
+
+* Edge Cases
+- Multiple tool calls in one message: show the first one's progress
+- Very fast tool calls (<100 bytes): don't show byte count, just "Working..."
+- ~partialJson~ may not exist on all content types - guard with ~"partialJson" in content~
+
+* Acceptance Criteria
+- During streaming of a task tool call, the working message shows tool name + byte count before ~_i~ is parsed
+- Once ~_i~ is parsed, the working message switches to the intent text
+- ~bun check:ts~ passes
