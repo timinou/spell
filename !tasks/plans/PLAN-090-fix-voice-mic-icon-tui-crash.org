@@ -1,0 +1,80 @@
+#+TITLE: Fix Voice Mic Icon TUI Crash
+#+STATE: DONE
+#+SESSION_ID: 14ab0f819997c0c6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T16-31-04-294Z_14ab0f819997c0c6.jsonl]]
+#+CUSTOM_ID: PLAN-090-fix-voice-mic-icon-tui-crash
+
+NOTE [2026-04-02]: All child items DONE. Fix verified via bun check:ts and manual width confirmation.
+
+
+* Initial Message
+
+╭── ✦  > ⬢ GPT-5.4 · ◉ xhi > 📁 ~/code/ora/spell > ⑂ main *18 ?102 > ◫ 27.1%/1.0M ⟲ > 🪙 19M > (sub) ▶─────────────────────────────────────────╮
+│                                                                                                                                              │
+│                                                                                                                                              │
+╰─                                                                                                                                            ─╯
+
+[Uncaught Exception] Error: Rendered line 3783 exceeds terminal width (145 > 144).
+
+This is likely caused by a custom TUI component not truncating its output.
+Use visibleWidth() to measure and truncateToWidth() to truncate lines.
+
+Debug log written to: /home/user/.spell/agent/spell-crash.log
+
+This is likely caused by a custom TUI component not truncating its output.
+Use visibleWidth() to measure and truncateToWidth() to truncate lines.
+
+Debug log written to: /home/user/.spell/agent/spell-crash.log
+    at #doRender (/home/user/code/ora/spell/packages/tui/src/tui.ts:1224:15)
+    at <anonymous> (/home/user/code/ora/spell/packages/tui/src/tui.ts:580:9)
+    at processTicksAndRejections (native:7:39)
+Crash report written to /home/user/.spell/reports/crash-2026-04-02T16-31-03-400Z.json
+
+
+File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T15-51-51-657Z_14ab06881a4b1445.jsonl
+ ID: 14ab06881a4b1445
+
+why?
+
+* Context
+The TUI crashes with ~Rendered line 3783 exceeds terminal width (145 > 144)~
+when the voice-agent is in recording/transcribing state. The mic icon (🎤) is
+placed in the editor's bottom border via ~cursorOverride~, but
+~cursorOverrideWidth~ is hardcoded to 1. The 🎤 emoji is 2 columns wide,
+creating a 1-column padding overshoot that exceeds terminal width.
+
+** Key Files
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ — sets ~cursorOverrideWidth = 1~ at lines 1724 and 1737
+- ~packages/tui/src/components/editor.ts~ — uses ~cursorOverrideWidth~ at line 637, defaults to 1 via ~?? 1~
+- ~packages/coding-agent/src/modes/theme/theme.ts~ — defines ~"icon.mic": "🎤"~ (width 2)
+
+** Approach
+1. Fix ~interactive-mode.ts~ to use ~visibleWidth(theme.icon.mic)~ instead of hardcoded 1
+2. Fix ~editor.ts~ fallback: when ~cursorOverrideWidth~ is undefined, compute it from ~visibleWidth(this.cursorOverride)~ instead of defaulting to 1
+
+* Verification
+- ~bun check:ts~ must pass
+- Manually verify with ~Bun.stringWidth("🎤")~ returns 2 (confirms the emoji is indeed 2 columns)
+- Confirm both callsites in ~interactive-mode.ts~ use dynamic width
+- Confirm ~editor.ts~ fallback computes from override content, not hardcoded 1
+
+* Execution Manifest
+1. [[id:BUG-100-fix-tui-crash-from-incorrect-cursoroverr]] — Fix cursorOverrideWidth for mic emoji (1h, #A)
+   - Change two hardcoded ~= 1~ to ~= visibleWidth(theme.icon.mic)~ in interactive-mode.ts
+   - Change ~?? 1~ fallback in editor.ts to ~?? visibleWidth(this.cursorOverride)~
+   - Run ~bun check:ts~
+
+** Completion [2026-04-02]
+*** Verification
+- ~bun check:ts~ — passed (0 errors, 1666 files checked)
+- ~Bun.stringWidth("🎤")~ — returns 2, confirming emoji is 2 columns wide
+- ~interactive-mode.ts:1724~ — now uses ~visibleWidth(theme.icon.mic)~ (transcribing state)
+- ~interactive-mode.ts:1737~ — now uses ~visibleWidth(theme.icon.mic)~ (recording animation)
+- ~editor.ts:637~ — fallback now uses ~visibleWidth(this.cursorOverride)~ instead of hardcoded 1
+
+*** Artifacts
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ — two cursorOverrideWidth assignments fixed
+- ~packages/tui/src/components/editor.ts~ — fallback width computation fixed
+
+*** Deviations
+None.

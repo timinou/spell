@@ -1,0 +1,70 @@
+#+TITLE: Fix TUI crash from incorrect cursorOverrideWidth for mic emoji
+#+STATE: DONE
+#+SESSION_ID: 14ab0f819997c0c6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T16-31-04-294Z_14ab0f819997c0c6.jsonl]]
+#+CUSTOM_ID: BUG-100-fix-tui-crash-from-incorrect-cursoroverr
+#+EFFORT: 1h
+#+LAYER: tui
+
+NOTE [2026-04-02]: Fixed: both cursorOverrideWidth assignments in interactive-mode.ts now use visibleWidth(theme.icon.mic), and editor.ts fallback computes from visibleWidth(this.cursorOverride) instead of hardcoded 1. bun check:ts passes clean.
+
+* Initial Message
+
+╭── ✦  > ⬢ GPT-5.4 · ◉ xhi > 📁 ~/code/ora/spell > ⑂ main *18 ?102 > ◫ 27.1%/1.0M ⟲ > 🪙 19M > (sub) ▶─────────────────────────────────────────╮
+│                                                                                                                                              │
+│                                                                                                                                              │
+╰─                                                                                                                                            ─╯
+
+[Uncaught Exception] Error: Rendered line 3783 exceeds terminal width (145 > 144).
+
+This is likely caused by a custom TUI component not truncating its output.
+Use visibleWidth() to measure and truncateToWidth() to truncate lines.
+
+Debug log written to: /home/user/.spell/agent/spell-crash.log
+
+This is likely caused by a custom TUI component not truncating its output.
+Use visibleWidth() to measure and truncateToWidth() to truncate lines.
+
+Debug log written to: /home/user/.spell/agent/spell-crash.log
+    at #doRender (/home/user/code/ora/spell/packages/tui/src/tui.ts:1224:15)
+    at <anonymous> (/home/user/code/ora/spell/packages/tui/src/tui.ts:580:9)
+    at processTicksAndRejections (native:7:39)
+Crash report written to /home/user/.spell/reports/crash-2026-04-02T16-31-03-400Z.json
+
+
+File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T15-51-51-657Z_14ab06881a4b1445.jsonl
+ ID: 14ab06881a4b1445
+
+why?
+
+The voice-agent's mic icon (🎤) causes a TUI crash when the rendered bottom
+border line exceeds terminal width by 1 column. Root cause:
+~cursorOverrideWidth~ is hardcoded to 1, but the emoji occupies 2 terminal
+columns. The 1-column undercount propagates through padding math, producing a
+145-column line in a 144-column terminal.
+
+* Root Cause
+- ~interactive-mode.ts:1724,1737~: ~this.editor.cursorOverrideWidth = 1~
+- ~theme.ts:284~: ~"icon.mic": "🎤"~ — actual width is 2
+- Width varies by theme: 🎤=2, nerd ~\uf130~=1, ASCII "MIC"=3
+- Hardcoded 1 is wrong for default and ASCII themes
+
+* Fix — Two Layers
+** Layer 1: Fix the caller (interactive-mode.ts)
+Replace both hardcoded ~cursorOverrideWidth = 1~ assignments with
+~visibleWidth(theme.icon.mic)~.
+
+Files:
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ (lines 1724, 1737)
+
+** Layer 2: Defense-in-depth in editor (editor.ts)
+When ~cursorOverrideWidth~ is not provided, auto-compute it from
+~visibleWidth(this.cursorOverride)~ instead of defaulting to 1.
+
+Files:
+- ~packages/tui/src/components/editor.ts~ (line 637)
+
+* Acceptance
+- With default theme (🎤 emoji), voice recording state must not crash
+- ~bun check:ts~ passes
+- visibleWidth of the rendered bottom border line must equal terminal width

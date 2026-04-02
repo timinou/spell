@@ -1721,7 +1721,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				} else if (state === "transcribing") {
 					this.#stopMicAnimation();
 					this.editor.cursorOverride = `\x1b[38;2;200;200;200m${theme.icon.mic}\x1b[0m`;
-					this.editor.cursorOverrideWidth = 1;
+					this.editor.cursorOverrideWidth = visibleWidth(theme.icon.mic);
 				} else {
 					this.#cleanupMicAnimation();
 				}
@@ -1734,7 +1734,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#updateMicIcon(): void {
 		const { r, g, b } = hsvToRgb({ h: this.#voiceHue, s: 0.9, v: 1.0 });
 		this.editor.cursorOverride = `\x1b[38;2;${r};${g};${b}m${theme.icon.mic}\x1b[0m`;
-		this.editor.cursorOverrideWidth = 1;
+		this.editor.cursorOverrideWidth = visibleWidth(theme.icon.mic);
 	}
 
 	#startMicAnimation(): void {

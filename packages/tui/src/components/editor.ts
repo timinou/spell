@@ -634,7 +634,7 @@ export class Editor implements Component, Focusable {
 					// displayWidth stays the same - we're replacing, not adding
 				} else if (this.cursorOverride) {
 					// Cursor override replaces the normal end-of-text cursor glyph
-					const overrideWidth = this.cursorOverrideWidth ?? 1;
+					const overrideWidth = this.cursorOverrideWidth ?? visibleWidth(this.cursorOverride);
 					if (inlineHint) {
 						const availWidth = Math.max(0, lineContentWidth - displayWidth - overrideWidth);
 						const hintText = hintStyle(truncateToWidth(inlineHint, availWidth));
