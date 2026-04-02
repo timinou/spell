@@ -1,0 +1,62 @@
+#+TITLE: PLAN-093 closeout deviations section omits FUP-030 deferral
+#+STATE: DONE
+#+SESSION_ID: 14ab27e96ef48f5c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T18-17-42-075Z_14ab27e96ef48f5c.jsonl]]
+#+CUSTOM_ID: BUG-110-plan-093-closeout-deviations-section-omi
+#+EFFORT: XS
+#+PRIORITY: B
+#+LAYER: process
+
+NOTE [2026-04-02]: Corrected PLAN-093 deviations to reference [[id:FUP-030-unify-processmanager-onto-sessionmanager]] and verified the org link via grep.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-022-audit-implementation:
+
+- **What**: Owner IDs that appear in `owners` but not in a matching `user` block inherit an arbitrary non-owner user policy  
+  **Where**: `packages/spell-server/src/telegram/bot/auth.ts`, around `resolveFallbackUserConfig()` and `configuredUser ?? resolveFallbackUserConfig(config)`  
+  **Why**: The auth fix corrected `isOwner`, but an owner without an explicit `user` entry still gets the first configured user's `defaultMode` and `projects`. That makes owner behavior depend on unrelated map insertion order and can silently restrict or distort owner access. The new tests only assert `isOwner`, not the resolved config for this case.  
+  **Effort**: small
+
+- **What**: Local `.spell` discovery now suppresses all `fs.stat` failures instead of only falling back on “not found”  
+  **Where**: `packages/coding-agent/src/commands/server.ts`, `resolveDefaultConfigDir()` catch block  
+  **Why**: The planned contract was “fall back when `./.spell/` is absent”. The implementation also falls back on permission errors, transient I/O errors, and other unexpected stat failures, which can hide a broken project-local config and make `spell server` load the wrong config directory without telling the caller.  
+  **Effort**: trivial
+
+- **What**: The deferred ProcessManager-to-SessionManager unification is not truthfully recorded in the plan closeout artifacts  
+  **Where**: `!tasks/plans/PLAN-093-harden-telegram-bridge-merge-aud-021.org`, `** Completion [2026-04-02]` → `*** Deviations`; related follow-up `!tasks/follow-ups/FUP-030-unify-processmanager-onto-sessionmanager.org` was left outside the committed plan set  
+  **Why**: The completion report says `None.` under deviations even though the plan explicitly deferred `FUP-030`. That weakens audit traceability: a validator reading the committed plan record cannot reliably see which work was intentionally left outstanding.  
+  **Effort**: trivial
+
+* Problem
+
+=PLAN-093-harden-telegram-bridge-merge-aud-021.org= has =*** Deviations= → =- None.= in its completion report, despite the plan explicitly deferring the ProcessManager-to-SessionManager unification to =[[id:FUP-030-unify-processmanager-onto-sessionmanager]]=. A validator reading the committed plan record cannot see which work was intentionally deferred.
+
+Additionally, the FUP-030 org file was not staged with the plan commit, so it exists only as an untracked file in the workspace.
+
+* Scope
+
+** Target files
+- =!tasks/plans/PLAN-093-harden-telegram-bridge-merge-aud-021.org= — =*** Deviations= subsection
+- =!tasks/follow-ups/FUP-030-unify-processmanager-onto-sessionmanager.org= — stage with commit
+
+** Change
+1. Use =org update= with =section= to replace the =*** Deviations= content, changing =- None.= to:
+   #+begin_example
+   - ProcessManager-to-SessionManager unification deferred to [[id:FUP-030-unify-processmanager-onto-sessionmanager]] (scope constraint).
+   #+end_example
+2. Stage and commit both the updated PLAN-093 org file and the FUP-030 follow-up org file.
+
+** Non-goals
+- Do not modify any other section of PLAN-093.
+- Do not change FUP-030 content.
+
+* Sub-outline
+1. Update =*** Deviations= section via =org update=
+2. =git add= both org files
+3. =git commit= with message referencing the correction
+
+* Verification
+- =grep "FUP-030" !tasks/plans/PLAN-093-harden-telegram-bridge-merge-aud-021.org= returns the deferral entry
+- =git log --oneline -1= shows the correction commit
+- =git status= shows FUP-030 org file is no longer untracked
