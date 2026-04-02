@@ -49,8 +49,17 @@ async function readRequiredConfigFile(configDir: string, fileName: string): Prom
 	}
 }
 
+const CHANNELS_NULL_KEYWORD_ERROR = /Invalid keyword "null"/;
+
 function wrapConfigError(fileName: string, error: unknown): Error {
-	return error instanceof Error
-		? new Error(`Failed to load ${fileName}: ${error.message}`)
-		: new Error(`Failed to load ${fileName}: ${String(error)}`);
+	const message = error instanceof Error ? error.message : String(error);
+	return new Error(`Failed to load ${fileName}: ${formatConfigErrorMessage(fileName, message)}`);
+}
+
+function formatConfigErrorMessage(fileName: string, message: string): string {
+	if (fileName === "channels.kdl" && CHANNELS_NULL_KEYWORD_ERROR.test(message)) {
+		return `${message}. In channels.kdl, use #null for null values, for example idle-timeout #null.`;
+	}
+
+	return message;
 }

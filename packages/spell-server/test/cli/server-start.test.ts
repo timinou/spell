@@ -90,6 +90,25 @@ describe("spell-server config loading", () => {
 		);
 	});
 
+	it("reports bare null values in channels.kdl with #null guidance", async () => {
+		const configDir = await createConfigDir({
+			"server.kdl": VALID_SERVER_KDL,
+			"autonomy.kdl": VALID_MANIFEST_KDL,
+			"channels.kdl": `telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				user 999 {
+					idle-timeout null
+				}
+			}`,
+		});
+
+		await expect(loadConfig(configDir)).rejects.toThrow(
+			/Failed to load channels\.kdl: Invalid keyword "null"[\s\S]*In channels\.kdl, use #null for null values, for example idle-timeout #null\./,
+		);
+	});
+
 	it("allows channels.kdl to be omitted", async () => {
 		const configDir = await createConfigDir({
 			"server.kdl": VALID_SERVER_KDL,

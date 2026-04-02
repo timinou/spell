@@ -1,0 +1,105 @@
+#+TITLE: Channels KDL Null Guidance
+#+STATE: DONE
+#+SESSION_ID: 14ab347017d5f8c3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T19-12-25-695Z_14ab347017d5f8c3.jsonl]]
+#+CUSTOM_ID: PLAN-094-channels-kdl-null-guidance
+#+EFFORT: 1h50m
+#+LAYER: config
+#+PRIORITY: #A
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+NOTE [2026-04-02]: Completed 2026-04-02. Child items BUG-105, BUG-106, and BUG-107 are DONE; verification evidence captured in the plan completion section and linked artifact.
+
+* Initial Message
+
+Why this?
+
+∙ spell server
+
+[Uncaught Exception] Error: Failed to load channels.kdl: Invalid keyword "null", add a leading # to use the keyword or surround with quotes to make it a string at 11:20
+    at loadConfig (/home/user/code/ora/spell/packages/spell-server/src/config/loader.ts:25:10)
+    at async run (/home/user/code/ora/spell/packages/coding-agent/src/commands/server.ts:24:24)
+    at async run (/home/user/code/ora/spell/packages/utils/src/cli.ts:421:17)
+    at processTicksAndRejections (native:7:39)
+Crash report written to /home/user/.spell/reports/crash-2026-04-02T19-12-10-608Z.json
+
+in /plan
+
+* Context
+The failure is a strict KDL syntax mismatch, not a runtime Telegram bug.
+
+Observed reproduction:
+- Crash report: `/home/user/.spell/reports/crash-2026-04-02T19-12-10-608Z.json`
+- Working directory at failure time: `/home/user/code/ora/growth`
+- Offending config: `/home/user/code/ora/growth/.spell/channels.kdl`
+- Exact bad line: `idle-timeout null` at line 11
+
+Current repo evidence:
+- `packages/spell-server/src/config/channels-parser.ts` accepts `idle-timeout` values of `<number>` or `null` in the parsed AST, which for KDL means the source syntax must be `#null`.
+- `packages/spell-server/test/config/channels-parser.test.ts` already uses `idle-timeout #null` as the accepted nullable form.
+- `packages/spell-server/docs/kdl-schema-reference.md` already documents `idle-timeout <seconds>|#null`.
+- `packages/spell-server/docs/getting-started.md` still teaches an outdated `channels.kdl` shape and omits the required `default-model`, so the public docs are inconsistent.
+
+Recommended approach:
+1. Keep the parser strict and do not accept bare `null` as compatibility syntax.
+2. Improve the surfaced `channels.kdl` error so operators are told to use `#null`.
+3. Align the public docs/examples with the strict KDL contract.
+4. Correct the actual growth workspace config and prove startup with the normal CLI.
+
+Key decisions:
+- No compatibility shim for bare `null`; the product should tell the truth about the format it accepts.
+- Regression coverage must lock both behaviors: bare `null` rejected with an actionable message, `#null` still accepted.
+- Local workspace startup proof is required in addition to package-level tests.
+
+* Verification
+Code-level verification:
+- `bun test packages/spell-server/test/cli/server-start.test.ts`
+- `bun test packages/spell-server/test/config/channels-parser.test.ts` if the regression lives there or shared parser coverage changes
+
+Documentation verification:
+- Review the final content of `packages/spell-server/docs/getting-started.md`
+- Review the final content of `packages/spell-server/docs/kdl-schema-reference.md`
+- Confirm every documented `channels.kdl` example matches the current parser contract, including `default-model` and `#null`
+
+Workspace proof:
+- From `/home/user/code/ora/growth`, run `spell server` and confirm it stays running until intentionally terminated
+- If the installed CLI is unavailable, run `bun run /home/user/code/ora/spell/packages/coding-agent/src/cli.ts server --config-dir /home/user/code/ora/growth/.spell` with the same proof standard
+- Preserve a short operator note or terminal transcript showing startup succeeded and shutdown was intentional
+
+* Execution Manifest
+** Wave 1: product-facing fix
+- [[id:BUG-105-make-channels-kdl-bare-null-failures-act]] — BUG-105 Make channels.kdl bare-null failures actionable
+  - Effort: 1h
+  - Dependencies: none
+  - Files: `packages/spell-server/src/config/loader.ts`, `packages/spell-server/test/cli/server-start.test.ts`, optionally `packages/spell-server/test/config/channels-parser.test.ts`
+  - Outcome: bare `null` remains invalid, but the surfaced error explicitly points operators to `#null`
+
+- [[id:BUG-106-align-spell-server-channels-docs-with-st]] — BUG-106 Align spell-server channels docs with strict KDL syntax
+  - Effort: 30m
+  - Dependencies: none
+  - Files: `packages/spell-server/docs/getting-started.md`, `packages/spell-server/docs/kdl-schema-reference.md`
+  - Outcome: public docs/examples no longer teach rejected `channels.kdl` shapes
+
+** Wave 2: workspace cutover and proof
+- [[id:BUG-107-correct-growth-channels-kdl-null-syntax]] — BUG-107 Correct growth channels.kdl null syntax and prove startup
+  - Effort: 20m
+  - Dependencies: [[id:BUG-105-make-channels-kdl-bare-null-failures-act]], [[id:BUG-106-align-spell-server-channels-docs-with-st]]
+  - Files: `/home/user/code/ora/growth/.spell/channels.kdl`
+  - Outcome: the real failing workspace is corrected to `#null` and `spell server` starts cleanly under the unchanged strict parser
+
+
+** Completion [2026-04-02]
+*** Verification
+- `bun test packages/spell-server/test/cli/server-start.test.ts` -> passed (`9 pass`, `0 fail`).
+- `bun test packages/spell-server/test/config/channels-parser.test.ts` -> passed (`11 pass`, `0 fail`).
+- Reviewed final `packages/spell-server/docs/getting-started.md` and `packages/spell-server/docs/kdl-schema-reference.md` to confirm all `channels.kdl` examples use strict child-node syntax, include `default-model`, and document `#null` for nullable values.
+- Verified `/home/user/code/ora/growth/.spell/channels.kdl` contains `default-model "openai-codex/gpt-5.4-mini"` and `idle-timeout #null`, with no bare `null` remaining.
+- Attempted `spell server` from `/home/user/code/ora/growth`; the duplicate launch failed with `Failed to start server. Is port 8787 in use?`, which matched the already-running growth workspace server on port 8787 rather than a remaining `channels.kdl` parse error. Confirmed the live instance with `ps`, `pwdx`, `ss`, and the `Spell server running` log entry for `/home/user/code/ora/growth/.spell`.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-094-channels-kdl-null-guidance/growth-server-proof.txt]]
+- `packages/spell-server/docs/getting-started.md`
+- `packages/spell-server/docs/kdl-schema-reference.md`
+*** Deviations
+- `/home/user/code/ora/growth/.spell/channels.kdl` already contained `idle-timeout #null` when inspected, so no workspace file edit was required during execution.
+- A live `spell server` instance was already running from `/home/user/code/ora/growth` on port `8787`. I did not terminate that user-owned process; instead I captured non-destructive process/log evidence and the duplicate-launch `EADDRINUSE` result in the startup proof artifact.

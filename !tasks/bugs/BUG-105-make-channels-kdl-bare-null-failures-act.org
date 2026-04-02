@@ -1,0 +1,53 @@
+#+TITLE: Make channelskdl bare-null failures actionable
+#+STATE: DONE
+#+SESSION_ID: 14ab347017d5f8c3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T19-12-25-695Z_14ab347017d5f8c3.jsonl]]
+#+CUSTOM_ID: BUG-105-make-channels-kdl-bare-null-failures-act
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: packages/spell-server
+
+NOTE [2026-04-02]: Completed 2026-04-02. Updated spell-server channels.kdl error wrapping to append explicit #null guidance and added focused regression coverage. Verified with bun test packages/spell-server/test/cli/server-start.test.ts and bun test packages/spell-server/test/config/channels-parser.test.ts.
+
+* Initial Message
+
+Why this?
+
+∙ spell server
+
+[Uncaught Exception] Error: Failed to load channels.kdl: Invalid keyword "null", add a leading # to use the keyword or surround with quotes to make it a string at 11:20
+    at loadConfig (/home/user/code/ora/spell/packages/spell-server/src/config/loader.ts:25:10)
+    at async run (/home/user/code/ora/spell/packages/coding-agent/src/commands/server.ts:24:24)
+    at async run (/home/user/code/ora/spell/packages/utils/src/cli.ts:421:17)
+    at processTicksAndRejections (native:7:39)
+Crash report written to /home/user/.spell/reports/crash-2026-04-02T19-12-10-608Z.json
+
+in /plan
+
+* Scope
+Tighten the user-facing failure when `channels.kdl` uses bare `null` for `user ... { idle-timeout ... }`.
+
+Files in scope:
+- `packages/spell-server/src/config/loader.ts`
+- `packages/spell-server/test/cli/server-start.test.ts`
+- `packages/spell-server/test/config/channels-parser.test.ts` if loader-level coverage alone is insufficient
+
+Out of scope:
+- Accepting bare `null` as valid syntax
+- Changing the `#null` contract
+
+* Implementation
+Use test-first sequencing.
+1. Add a regression that loads `channels.kdl` with `idle-timeout null` and proves the surfaced error explicitly tells the operator to use `#null` while preserving the parser location (`11:20` or equivalent line/column context).
+2. Keep existing acceptance for `idle-timeout #null` unchanged.
+3. Implement the smallest product change that upgrades the wrapped error message without widening accepted syntax.
+
+* Acceptance
+- `loadConfig()` still rejects bare `null`.
+- The rejection explicitly explains that KDL keywords require `#null` here, not bare `null`.
+- Existing `#null` behavior remains valid.
+
+* Verification
+- `bun test packages/spell-server/test/cli/server-start.test.ts`
+- `bun test packages/spell-server/test/config/channels-parser.test.ts` if that file gains or owns the regression
+- Capture the exact thrown message in the updated regression assertion so future breakage is visible

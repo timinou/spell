@@ -1,0 +1,51 @@
+#+TITLE: Correct growth channelskdl null syntax and prove startup
+#+STATE: DONE
+#+SESSION_ID: 14ab347017d5f8c3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T19-12-25-695Z_14ab347017d5f8c3.jsonl]]
+#+CUSTOM_ID: BUG-107-correct-growth-channels-kdl-null-syntax
+#+EFFORT: 20m
+#+DEPENDS: BUG-105-make-channels-kdl-bare-null-failures-act BUG-106-align-spell-server-channels-docs-with-st
+#+LAYER: workspace-config
+#+PRIORITY: #A
+
+NOTE [2026-04-02]: Completed 2026-04-02. Verified /home/user/code/ora/growth/.spell/channels.kdl contains idle-timeout #null with no bare null. Startup proof used a non-destructive check because a spell server was already running from /home/user/code/ora/growth on port 8787; duplicate launch failed with EADDRINUSE rather than a channels.kdl parse error. Evidence captured in !tasks/plans/plan-artifacts/PLAN-094-channels-kdl-null-guidance/growth-server-proof.txt.
+
+* Initial Message
+
+Why this?
+
+∙ spell server
+
+[Uncaught Exception] Error: Failed to load channels.kdl: Invalid keyword "null", add a leading # to use the keyword or surround with quotes to make it a string at 11:20
+    at loadConfig (/home/user/code/ora/spell/packages/spell-server/src/config/loader.ts:25:10)
+    at async run (/home/user/code/ora/spell/packages/coding-agent/src/commands/server.ts:24:24)
+    at async run (/home/user/code/ora/spell/packages/utils/src/cli.ts:421:17)
+    at processTicksAndRejections (native:7:39)
+Crash report written to /home/user/.spell/reports/crash-2026-04-02T19-12-10-608Z.json
+
+in /plan
+
+* Scope
+Fix the actual failing workspace config and produce startup proof against the strict parser.
+
+Files in scope:
+- `/home/user/code/ora/growth/.spell/channels.kdl`
+
+Out of scope:
+- spell-server parser behavior changes beyond consuming the fixed config
+- unrelated growth workspace config cleanup
+
+* Implementation
+1. Replace bare `null` with `#null` in `/home/user/code/ora/growth/.spell/channels.kdl`.
+2. Re-check the surrounding Telegram config for current required fields (`default-model`, owners, token shape) before claiming success.
+3. Start the server from `/home/user/code/ora/growth` using the normal CLI entrypoint, confirm it stays up past config load, then stop it cleanly.
+
+* Acceptance
+- `/home/user/code/ora/growth/.spell/channels.kdl` contains `idle-timeout #null` for the affected user override.
+- No bare `null` remains in that file.
+- `spell server` no longer exits with `Failed to load channels.kdl` for this workspace.
+
+* Verification
+- Run `spell server` from `/home/user/code/ora/growth` and confirm it stays running until intentionally terminated.
+- If the environment prefers the repo CLI, use `bun run /home/user/code/ora/spell/packages/coding-agent/src/cli.ts server --config-dir /home/user/code/ora/growth/.spell` and apply the same proof standard.
+- Preserve a short terminal transcript or equivalent operator note showing startup succeeded and shutdown was intentional

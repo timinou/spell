@@ -1,0 +1,20 @@
+PLAN-094 growth workspace startup proof
+Date: 2026-04-02
+
+Workspace config check:
+- /home/user/code/ora/growth/.spell/channels.kdl currently contains `idle-timeout #null` and no bare `null`.
+
+Observed runtime proof:
+- `ps -p 454549 -o pid=,ppid=,cmd=` -> `454549  436273 bun /home/user/.local/share/reflex/bun/bin/spell server`
+- `pwdx 454549` -> `454549: /home/user/code/ora/growth`
+- `ss -ltnp '( sport = :8787 )'` -> `LISTEN 0 512 *:8787 *:* users:(("bun",pid=454549,fd=13))`
+- `~/.spell/logs/spell.2026-04-02.log` contains:
+  - `{"timestamp":"2026-04-02T19:07:16.303+01:00","level":"debug","pid":377850,"message":"Spell server started","port":8787,"configuredPort":8787,"goals":1,"telegramBot":false}`
+  - `{"timestamp":"2026-04-02T19:07:16.303+01:00","level":"debug","pid":377850,"message":"Spell server running","configDir":"/home/user/code/ora/growth/.spell","configuredPort":8787,"goals":1}`
+
+Duplicate-launch check:
+- Running `spell server` again from `/home/user/code/ora/growth` failed with `Failed to start server. Is port 8787 in use?` and crash report `/home/user/.spell/reports/crash-2026-04-02T19-32-29-507Z.json`.
+- This is consistent with the already-running growth workspace server owning port 8787, not with a remaining `channels.kdl` parse failure.
+
+Operator note:
+- I did not terminate the existing growth workspace server because it appears user-owned and already serving the verified config.
