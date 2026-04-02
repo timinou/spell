@@ -4,6 +4,8 @@ import type { BridgeRpcCommand, ImageContentRef, RpcEvent, RpcSpawnOptions } fro
 
 const READY_TIMEOUT_MS = 30_000;
 const PROMPT_TIMEOUT_MS = 5 * 60_000;
+const STDERR_RING_SIZE = 20;
+const EXIT_WAIT_MS = 500;
 
 type RpcEventListener = (event: RpcEvent) => void;
 
@@ -43,6 +45,7 @@ export class RpcClient {
 	#closed = false;
 	#command: string;
 	#spawn: typeof Bun.spawn;
+	#stderrLines: string[] = [];
 
 	constructor(options: RpcSpawnOptions, dependencies: RpcClientDependencies = {}) {
 		this.#options = options;
@@ -107,6 +110,7 @@ export class RpcClient {
 		this.#alive = true;
 		this.#closed = false;
 		this.#stdoutBuffer = "";
+		this.#stderrLines = [];
 
 		const ready = Promise.withResolvers<void>();
 		this.#readyWaiter = {
@@ -115,7 +119,7 @@ export class RpcClient {
 			settled: false,
 		};
 
-		this.#consumeStdout(child.stdout as ReadableStream<Uint8Array>);
+		this.#consumeStdout(child.stdout as ReadableStream<Uint8Array>, child);
 		this.#consumeStderr(child.stderr as ReadableStream<Uint8Array>);
 
 		void child.exited
@@ -267,7 +271,7 @@ export class RpcClient {
 		}
 	}
 
-	#consumeStdout(stream: ReadableStream<Uint8Array>): void {
+	#consumeStdout(stream: ReadableStream<Uint8Array>, child: Subprocess): void {
 		const decoder = new TextDecoder();
 		void (async () => {
 			for await (const chunk of stream) {
@@ -278,7 +282,14 @@ export class RpcClient {
 				this.#handleStdoutLine(this.#stdoutBuffer.trim());
 				this.#stdoutBuffer = "";
 			}
-			this.#markDead("RPC stdout closed");
+			// Stdout EOF often fires before child.exited resolves.
+			// Defer briefly so the exit handler can provide the real exit code.
+			const code = await Promise.race([child.exited, Bun.sleep(EXIT_WAIT_MS).then(() => undefined)]);
+			if (code !== undefined) {
+				this.#markDead(`RPC process exited with code ${code}`);
+			} else {
+				this.#markDead("RPC stdout closed");
+			}
 		})().catch(error => {
 			this.#markDead(`RPC stdout reader failed: ${String(error)}`);
 		});
@@ -342,9 +353,15 @@ export class RpcClient {
 		const decoder = new TextDecoder();
 		void (async () => {
 			for await (const chunk of stream) {
-				const text = decoder.decode(chunk, { stream: true }).trim();
-				if (text) {
-					logger.debug("[spell-server:rpc] stderr", { text });
+				const text = decoder.decode(chunk, { stream: true });
+				for (const line of text.split("\n")) {
+					const trimmed = line.trim();
+					if (!trimmed) continue;
+					logger.debug("[spell-server:rpc] stderr", { text: trimmed });
+					this.#stderrLines.push(trimmed);
+					if (this.#stderrLines.length > STDERR_RING_SIZE) {
+						this.#stderrLines.shift();
+					}
 				}
 			}
 		})().catch(error => {
@@ -365,19 +382,21 @@ export class RpcClient {
 	#markDead(reason: string): void {
 		if (!this.#alive && this.#process === null) return;
 
+		const fullReason = this.#stderrLines.length > 0 ? `${reason}\n${this.#stderrLines.join("\n")}` : reason;
+
 		this.#alive = false;
 		this.#process = null;
 
 		if (this.#readyWaiter && !this.#readyWaiter.settled) {
 			this.#readyWaiter.settled = true;
-			this.#readyWaiter.reject(new Error(reason));
+			this.#readyWaiter.reject(new Error(fullReason));
 		}
 		this.#readyWaiter = null;
 
-		this.#clearPromptCompletion(new Error(reason));
+		this.#clearPromptCompletion(new Error(fullReason));
 
 		if (this.#closed) return;
 		this.#closed = true;
-		this.#emitEvent({ type: "error", message: reason });
+		this.#emitEvent({ type: "error", message: fullReason });
 	}
 }
