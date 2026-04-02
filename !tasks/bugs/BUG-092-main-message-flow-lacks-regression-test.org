@@ -1,0 +1,48 @@
+#+TITLE: Main message flow lacks regression test
+#+STATE: DOING
+#+SESSION_ID: 14aae0e4276d8b54
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-07-24-445Z_14aae0e4276d8b54.jsonl]]
+#+CUSTOM_ID: BUG-092-main-message-flow-lacks-regression-test
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: packages/telegram-bridge
+#+DEPENDS: BUG-090-responsestreamer-done-hang-and-event-lis BUG-091-system-prompt-missing-from-respawned-ses
+
+* Scope
+The primary non-command bot message flow (text message → RPC prompt → streamed response → Telegram reply) has no direct test. The exact regression this plan was meant to fix — a no-op main message handler — can recur without a failing test. Current coverage covers =/btw=, streaming helpers, and status formatting, but not the main user path.
+
+* Sequencing
+This item writes tests that exercise code already fixed by BUG-090 and BUG-091. Tests should pass on first run since they verify already-implemented behavior. The photo-only message test also lives here (deferred from BUG-091 because it requires the exported =createMessageHandler=).
+
+* Approach
+Export =createMessageHandler= from =bot.ts= (done in BUG-091) and test it directly with the existing mock infrastructure (=MockProcessManager=, =MockRpcClient=, =mockAuthContext=) already in =commands.test.ts=.
+
+* Tests
+File: =packages/telegram-bridge/test/bot.test.ts=
+
+** Scenario: text message produces streamed response
+1. Build a =CommandContext= with a mock process manager (including =telegramPrompt=)
+2. Call =createMessageHandler(cmdCtx)= to get the middleware
+3. Invoke it with a mock context containing =text: "hello"= (no =/= prefix)
+4. Verify:
+   - =processManager.getOrCreate= was called with the correct chatId, userId, project, mode, tools, and =appendSystemPrompt=
+   - The mock client received a =prompt()= call with the message text
+   - The response streamer produced a reply via =ctx.reply=
+
+** Scenario: photo-only message reaches the bridge (does not call next)
+1. Same setup but mock context has =photo= array and no =text=
+2. Verify =next()= was NOT called (message was handled, not passed through)
+3. Verify =processManager.getOrCreate= was called (message entered the bridge pipeline)
+
+** Scenario: command message is passed to next middleware
+1. Mock context with =text: "/help"=
+2. Verify =next()= was called (message skipped by the handler)
+
+** Scenario: =processManager.getOrCreate= failure replies with error
+1. Mock =getOrCreate= to throw
+2. Verify =ctx.reply= was called with an error message
+3. Verify no hang (=cancel()= resolves the streamer if it was created)
+
+* Acceptance
+- =bun test packages/telegram-bridge/test/bot.test.ts= passes with all new scenarios
+- Tests exercise the wired message handler, not just individual components

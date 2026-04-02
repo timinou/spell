@@ -1,5 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { LoadedConfig } from "./config/loader";
+import type { TelegramChannelConfig } from "./config/types";
 import { cleanupStaleSandboxPolicies, GoalExecutionController } from "./executor";
 import type { GoalResult } from "./executor/types";
 import { HookDispatcher } from "./hooks/dispatcher";
@@ -12,6 +13,7 @@ import { startHttpServer } from "./http/server";
 import { GoalScheduler } from "./scheduler/goal-scheduler";
 import { AutonomyLifecycle } from "./session/autonomy-lifecycle";
 import { SessionManager } from "./session/session-manager";
+import { TelegramBotService } from "./telegram/service";
 
 export interface SpellServer {
 	stop(): Promise<void>;
@@ -90,18 +92,39 @@ export async function startSpellServer(config: LoadedConfig, cwd: string): Promi
 		},
 		cwd,
 	});
+	// Conditionally start Telegram bot when full config is present
+	let telegramBot: TelegramBotService | null = null;
+	if (hasFullTelegramConfig(config.channels.telegram)) {
+		telegramBot = new TelegramBotService({ config: config.channels.telegram });
+		try {
+			await telegramBot.start();
+			logger.debug("Telegram bot service started");
+		} catch (error) {
+			logger.error("Failed to start Telegram bot service", { error: String(error) });
+			telegramBot = null;
+		}
+	} else if (config.channels.telegram) {
+		logger.debug("Telegram notification-only mode (no users/projects configured)");
+	}
 
 	scheduler.start();
 	logger.debug("Spell server started", {
 		port: httpServer.server.port,
 		configuredPort: config.server.http.port,
 		goals: config.manifest.goals.size,
+		telegramBot: telegramBot !== null,
 	});
 
 	return {
 		async stop(): Promise<void> {
 			scheduler.stop();
 			httpServer.stop();
+
+			// Stop telegram bot before killing autonomy sessions
+			if (telegramBot) {
+				await telegramBot.stop();
+			}
+
 			const inflightGoals = executor.getInflightGoalNames();
 			if (inflightGoals.length > 0) {
 				logger.warn("Waiting for inflight goals before shutdown", {
@@ -138,4 +161,12 @@ function parseDurationToMs(value: string | undefined): number {
 	if (unit === "m") return amount * 60_000;
 	if (unit === "h") return amount * 3_600_000;
 	return amount * 86_400_000;
+}
+
+/** Full bot startup requires token + at least one user + at least one project */
+function hasFullTelegramConfig(telegram: TelegramChannelConfig | undefined): telegram is TelegramChannelConfig {
+	if (!telegram) return false;
+	return (
+		Boolean(telegram.botToken) && Object.keys(telegram.users).length > 0 && Object.keys(telegram.projects).length > 0
+	);
 }

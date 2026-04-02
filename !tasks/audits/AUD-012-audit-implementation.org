@@ -1,0 +1,76 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-012-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+I have enough data. Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. Wrong logger import in scheduler — runtime crash
+- **What**: `import * as logger from "@oh-my-pi/pi-utils"` makes `logger.error(...)` resolve to `undefined()` at runtime. The module exports `logger` as a nested namespace (`export * as logger from "./logger"`), so correct usage is `import { logger } from "@oh-my-pi/pi-utils"`.
+- **Where**: `domain/growth/src/signals/scheduler.ts:2`
+- **Why**: Runtime crash on first scheduled scrape failure or on startup logging. The `logger.error(...)` and `logger.info(...)` calls on lines 105 and 114 will throw `TypeError: logger.error is not a function`.
+- **Effort**: trivial
+
+### 2. `console.warn` in font-loader violates coding-agent convention
+- **What**: Uses `console.warn` instead of `logger` from `@oh-my-pi/pi-utils`. Will corrupt TUI rendering if this code is loaded in the coding-agent process.
+- **Where**: `domain/growth/src/typst/font-loader.ts:53`
+- **Why**: Console output breaks TUI. The growth domain code is loaded into the same process.
+- **Effort**: trivial
+
+### 3. Three `ReturnType<typeof setTimeout>` violations
+- **What**: AGENTS.md says "NEVER use `ReturnType<>`" — use `NodeJS.Timeout` instead.
+- **Where**: `domain/growth/src/panels/editor/agent-sync.ts:16`, `domain/growth/src/scraper/rate-limiter.ts:40`, `domain/growth/src/signals/scheduler.ts:35`
+- **Why**: Codebase convention violation. Low runtime risk but inconsistent with project rules.
+- **Effort**: trivial
+
+### 4. Missing `dispose()` on three DB-owning classes
+- **What**: `ScraperDatabase`, `DigestManager`, and `SignalScheduler` each hold a `bun:sqlite` Database but expose no `dispose()` or `close()` method. `DeliverableManager` and `AnalysisTool` correctly have them.
+- **Where**: `domain/growth/src/scraper/persistence.ts`, `domain/growth/src/signals/digest.ts`, `domain/growth/src/signals/scheduler.ts`
+- **Why**: Resource leak — SQLite connections left open. `SignalScheduler` is worse: it also has timers (via `stop()`) but no way to close its DB. Callers have no way to clean up.
+- **Effort**: small (add `dispose()` method to each, close DB and clear timers)
+
+### 5. SQL table/column names interpolated from manifest without sanitization
+- **What**: `ScraperDatabase.#ensureSchema()`, `insert()`, and `query()` interpolate `entity.tableName`, column names, and index names directly into SQL strings. While values are parameterized, identifiers are not.
+- **Where**: `domain/growth/src/scraper/persistence.ts:53,67,93,121,127-128,138,144`
+- **Why**: If a scraper YAML config has a malicious `tableName` like `"ads; DROP TABLE pages;"`, it executes. Risk is low (configs are developer-authored, not user-supplied) but the defense-in-depth fix is simple: quote identifiers with double-quotes.
+- **Effort**: small
+
+### 6. `PanelStateManager.setState()` swallows save errors silently
+- **What**: `void this.save()` fire-and-forgets the persist. If `Bun.write()` fails (disk full, permissions), the error is swallowed as an unhandled promise rejection.
+- **Where**: `domain/growth/src/panel-state.ts:51`
+- **Why**: Unhandled promise rejection can crash the process in strict runtimes. Panel state loss goes undetected.
+- **Effort**: small (add `.catch(err => logger.warn(...))`)
+
+### 7. Domain wiring not connected to session boot path
+- **What**: `packages/coding-agent/src/domain/detection.ts` and `loader.ts` exist but are not called from `sdk.ts` or `main.ts`. The domain system is built but not wired.
+- **Where**: `packages/coding-agent/src/domain/index.ts` — unused exports
+- **Why**: Documented in completion report as intentional deferral (risk of regression), but there's no FUP org item tracking this. If it stays unwired, the entire domain system is dead code.
+- **Effort**: small (create FUP to track; the wiring itself is medium)
+
+### 8. `WorkspaceManager` constructor stores `workspacesDir` but never uses it
+- **What**: The constructor takes `{ workspacesDir }` but only stores `onSwitch`. `loadWorkspaces(dir)` takes a separate `dir` parameter. The constructor arg is misleading dead state.
+- **Where**: `domain/growth/src/workspace-manager.ts:11-16`
+- **Why**: API confusion — callers may expect the constructor arg to be used automatically.
+- **Effort**: trivial (either use it in a default `load()` or remove the parameter)
+
+### 9. Scraper `extractInnerText` regex approach fragile with nested same-tag elements
+- **What**: The `extractInnerText` function tracks open/close tag depth but resets `openRe.lastIndex` and `closeRe.lastIndex` manually. `RegExp` with `g` flag + manual `lastIndex` manipulation is error-prone when open and close tags overlap in surprising ways.
+- **Where**: `domain/growth/src/scraper/extractor.ts:218-260`
+- **Why**: False extraction for HTML like `<div><div>inner</div></div>` could return incomplete text. Low risk since this is explicitly a test-fixture fallback, not production extraction.
+- **Effort**: medium (would need a proper HTML parser; low priority given intended scope)
+
+### 10. No tests for pipeline manager, diff engine, brand guardian, or workspace manager
+- **What**: The 163 tests cover scraper (transforms, rate-limiter, persistence, config-loader), QML panels, and journeys. But `DeliverableManager`, `computeDiff`, `BrandGuardian`, and `WorkspaceManager` have zero test coverage.
+- **Where**: `domain/growth/src/pipeline/manager.ts`, `domain/growth/src/signals/diff-engine.ts`, `domain/growth/src/typst/brand-guardian.ts`, `domain/growth/src/workspace-manager.ts`
+- **Why**: State machine bugs in DeliverableManager (state transition logic), diff correctness, and brand-check false positives/negatives won't be caught.
+- **Effort**: medium (each needs a focused test file — the modules are well-isolated so tests are straightforward)

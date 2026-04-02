@@ -1,0 +1,89 @@
+#+TITLE: Add Loader error overlay to GrowthShell panel area
+#+STATE: ITEM
+#+SESSION_ID: 14a9e2bd33b552a9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-36-59-982Z_14a9e2bd33b552a9.jsonl]]
+#+CUSTOM_ID: BUG-063-add-loader-error-overlay-to-growthshell
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: qml
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-014-audit-implementation:
+
+Here are my findings:
+
+---
+
+### Finding 1: `currentPanels` is dead code
+- **What**: `currentPanels` property is assigned on `workspace_layout` message but never read by any code.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` line 17, 193. Same in test harness lines 25, 194.
+- **Why**: Misleads future readers into thinking the `workspace_layout` payload drives panel loading. In reality, `loadWorkspacePanel()` resolves everything from the local `workspaces` array + `panelRegistry`. If TS ever sends a layout override with different panels, GrowthShell silently ignores it.
+- **Effort**: trivial
+
+### Finding 2: No Loader error handling
+- **What**: `mainPanelLoader` has no `onStatusChanged` handler and no error overlay. If a panel QML file fails to load (bad path, syntax error), the user sees a blank area with no feedback.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 167–170 (Loader definition)
+- **Why**: `shell.qml` has explicit `Loader.Error` state detection and an error overlay UI. GrowthShell has none. A broken panel file silently fails — user sees "Select a workspace to begin" with no clue why.
+- **Effort**: small
+
+### Finding 3: `workspace_layout` override is documented but not implemented
+- **What**: Comment says "TS may override layout — re-resolve panels" but `loadWorkspacePanel()` only reads the static `workspaces` array, not `currentPanels`. The TS-sent layout is stored then discarded.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 192–196
+- **Why**: If the TS side ever sends a different panel arrangement via `workspace_layout` (which is the documented purpose of that message type), GrowthShell will ignore it. The comment actively misleads.
+- **Effort**: small
+
+### Finding 4: Panel loading test doesn't verify the Loader actually loaded
+- **What**: The "switching workspace loads the main panel via Loader" test verifies `currentWorkspaceId` changed and `panelRegistry` has the right path, but never checks `mainPanelLoader.source` or `mainPanelLoader.item`. It tests prerequisites, not the contract.
+- **Where**: `domain/growth/test/panels/growth-shell.test.ts` lines 88–101
+- **Why**: The core bug was "Loader never has its source set". The test doesn't assert that `source` is set. A regression that breaks the binding between registry lookup and `mainPanelLoader.source = panelPath` would pass this test.
+- **Effort**: trivial
+
+### Finding 5: `iconFor()` fully duplicated between GrowthShell.qml and test harness
+- **What**: `iconFor()`, `loadWorkspacePanel()`, `Component.onCompleted` registry builder, `panelRegistry` property — the entire panel-loading architecture is copy-pasted between the two files.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` (22–74) and `GrowthShellTestHarness.qml` (28–79)
+- **Why**: Any future fix to panel loading or icon mapping must be applied twice. The harness exists because ApplicationWindow can't be nested, but the logic could be extracted to a shared JS module imported by both.
+- **Effort**: medium
+
+### Finding 6: `iconFor` allocates a new object on every call
+- **What**: The function creates a fresh `var icons = { ... }` object literal each invocation. Called 6 times per workspace list render.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 22–34
+- **Why**: Negligible performance impact at 6 calls, but it's a code smell. The map should be a property or module constant. Low priority.
+- **Effort**: trivial
+
+Addresses audit finding 2.
+
+* Problem
+
+=mainPanelLoader= in =GrowthShell.qml= has no =onStatusChanged= handler or error overlay. If a panel QML file fails to load (bad path, syntax error, import failure), the user sees the placeholder "Select a workspace to begin" with no error feedback.
+
+The default =shell.qml= (=packages/coding-agent/src/modes/qml/shell.qml= lines 269-329) has:
+- =onStatusChanged= on each Loader delegate that tracks =activePanelLoaderStatus=
+- An error overlay (=Rectangle= with "Failed to load panel", the failed source path, and a "Retry" button)
+
+GrowthShell needs a simplified version since it has a single Loader instead of a Repeater.
+
+* Fix
+
+In =domain/growth/src/qml/panels/GrowthShell.qml=, add to the panel area Rectangle (after =mainPanelLoader=):
+
+1. Add =property int panelLoaderStatus: Loader.Null= at root level
+2. Add =onStatusChanged: root.panelLoaderStatus = status= to =mainPanelLoader=
+3. Add error overlay Rectangle after the placeholder Text:
+   - Visible when =panelLoaderStatus === Loader.Error=
+   - Shows "Failed to load panel" in =#EF4444= (error red)
+   - Shows the failed source path in monospace
+   - Has a "Retry" button that clears and re-sets Loader source
+
+Mirror in =GrowthShellTestHarness.qml=.
+
+* Reference
+
+=packages/coding-agent/src/modes/qml/shell.qml= lines 14-19 (=activePanelLoaderStatus=), 269-271 (=onStatusChanged=), 277-330 (error overlay).
+
+GrowthShell does NOT use SpellUI theme, so use hardcoded colors matching the existing palette (=#111827= background, =#EF4444= error, =#6B7280= secondary text).
+
+* Acceptance Criteria
+- When =mainPanelLoader.source= points to a non-existent file, the error overlay shows "Failed to load panel" (test via =harness.evaluate=)
+- =bun test domain/growth/test/panels/growth-shell.test.ts= passes
+- New test: set Loader source to a bad path, assert error text is visible

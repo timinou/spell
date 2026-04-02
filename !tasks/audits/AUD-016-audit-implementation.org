@@ -1,0 +1,45 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-016-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+1. **What**: Session-level todo serialization is still bypassable during an active mutation  
+   **Where**: `packages/coding-agent/src/tools/todo-write.ts`, `queueTodoMutation()` around the `activeTodoMutationSessions` guard  
+   **Why**: Any second mutation that arrives while one mutation is already active returns `action()` immediately instead of joining the queue. That means manual `todo_write` calls and task lifecycle updates can still interleave and overwrite each other, which was one of the core hardening risks this plan was supposed to close.  
+   **Effort**: medium
+
+2. **What**: Auto-roster can create orphan pending items when async is enabled but no async job manager exists  
+   **Where**: `packages/coding-agent/src/task/index.ts`, `execute()` preamble before the `asyncJobManager` null check  
+   **Why**: `#autoCreateTodoRefs()` runs before the early return for missing `asyncJobManager`. If that branch is hit, the roster is mutated but no work is scheduled, leaving newly created items behind with no execution attached.  
+   **Effort**: small
+
+3. **What**: Async completion text double-counts scheduling failures  
+   **Where**: `packages/coding-agent/src/task/index.ts`, async branch completion/progress reporting around `failedJobs + failedSchedules.length`  
+   **Why**: A scheduling failure increments both `failedJobs` and `failedSchedules`, so the progress/completion message can report more failed tasks than actually exist. That undermines operator trust in the batch status.  
+   **Effort**: trivial
+
+4. **What**: Failed-before-spawn roster items keep the synthetic `sessionId: "pending"` delegation marker  
+   **Where**: `packages/coding-agent/src/task/index.ts`, interaction between `#autoCreateTodoRefs()`, `#finalizeSkippedTodoRef()`, and `#mergeTodoRefDelegation()`  
+   **Why**: For tasks that never successfully spawn, the placeholder delegation metadata survives failure finalization. The resulting todo item looks like it has a real delegated session when it does not, which is misleading for UI/debugging flows that treat `sessionId` as meaningful.  
+   **Effort**: small
+
+5. **What**: Default phase-name derivation will often produce low-signal names like `Goal`  
+   **Where**: `packages/coding-agent/src/task/index.ts`, `#deriveAutoRosterPhaseName()`  
+   **Why**: The helper grabs the first markdown heading from shared context. The recommended context template starts with headings such as `## Goal`, so omitted `phase` values will frequently generate poor roster labels that do not describe the actual batch.  
+   **Effort**: small
+
+6. **What**: There is no regression test for concurrent `todo_write` and task-lifecycle mutation interleaving  
+   **Where**: test coverage gap around `packages/coding-agent/src/tools/todo-write.ts` / `packages/coding-agent/src/task/index.ts`  
+   **Why**: The serialization bug above slipped through because current coverage is sequential. Without an explicit concurrent test, future refactors can keep regressing the exact race this plan set out to harden.  
+   **Effort**: small
+
+7. **What**: There is no test for the “async enabled, no async manager” auto-roster failure path  
+   **Where**: `packages/coding-agent/test/task/auto-roster.test.ts` and async task-tool coverage  
+   **Why**: The orphan-pending path on early async setup failure is currently untested, so a user-visible failure mode exists with no guardrail.  
+   **Effort**: trivial

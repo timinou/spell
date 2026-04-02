@@ -61,6 +61,13 @@ describe("spell-server config loading", () => {
 			telegram: {
 				botToken: "123456:ABC-DEF",
 				owners: [12345, 67890],
+				uploadDir: "/tmp/spell-telegram-uploads",
+				idleTimeout: 3600,
+				maxSessions: 3,
+				logViewerPort: undefined,
+				defaultProject: undefined,
+				projects: {},
+				users: {},
 			},
 		});
 		expect(loaded.manifest.goals.has("nightly")).toBe(true);

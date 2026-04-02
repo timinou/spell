@@ -1,0 +1,60 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-020-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+- **What**: Dashboard defaults to `admin:admin` credentials and offers no in-UI way to enter the real Basic Auth secret.
+  - **Where**: `packages/spell-server/src/http/frontend/index.html`, top-level `App()` fetch header setup.
+  - **Why**: On any real deployment the dashboard will start in a 401 state with no recovery path except editing `localStorage` manually; this makes the new surface look broken out of the box.
+  - **Effort**: `small`
+
+- **What**: `autonomy_state` was added to the public tool registries instead of a hidden/activation-only path.
+  - **Where**: `packages/coding-agent/src/tools/index.ts`, `BUILTIN_TOOLS` / `TOOL_TIERS` registration for `autonomy_state`.
+  - **Why**: This violates the stated contract that the tool remain hidden unless explicitly activated via `--tools`; it broadens the default tool surface and can expose persistent state mutation to ordinary sessions unexpectedly.
+  - **Effort**: `small`
+
+- **What**: Org hooks appear to degrade to logging instead of creating org items, and there is no org-hook test coverage.
+  - **Where**: `packages/spell-server/src/hooks/org.ts`; missing corresponding coverage under `packages/spell-server/test/hooks/`.
+  - **Why**: A configured `org` hook can look supported while silently failing to create BUG/follow-up records, which breaks escalation/audit trails exactly when a goal fails.
+  - **Effort**: `medium`
+
+- **What**: `channels.kdl` / Telegram configuration is likely parsed but not fully wired into runtime startup and notification delivery.
+  - **Where**: `packages/spell-server/src/server.ts`, `packages/spell-server/src/config/channels-parser.ts`, hook sender wiring in `packages/spell-server/src/hooks/notification-sender.ts`.
+  - **Why**: Telegram-enabled deployments may still behave like Telegram is disabled, turning configured channels into dead config and leaving failure notifications unsent.
+  - **Effort**: `medium`
+
+- **What**: Shutdown handling looks immediate rather than “wait up to 30s for inflight goals, then kill”.
+  - **Where**: `packages/spell-server/src/server.ts` and `packages/spell-server/src/main.ts`, shutdown path.
+  - **Why**: Restarts/upgrades can abruptly terminate active goals instead of allowing a controlled drain, which risks partial work, confusing state, and hard-to-reproduce failures.
+  - **Effort**: `medium`
+
+- **What**: Session lifecycle logic now exists in two parallel implementations instead of one shared abstraction.
+  - **Where**: `packages/spell-server/src/session/session-manager.ts` and `packages/telegram-bridge/src/rpc/process-manager.ts`.
+  - **Why**: Fixes to idle timeouts, crash cleanup, spawn args, or persistence can drift between Telegram and autonomy modes, increasing long-term maintenance cost and behavior skew.
+  - **Effort**: `medium`
+
+- **What**: Sandbox policy temp files likely do not have crash-time/postmortem cleanup.
+  - **Where**: `packages/spell-server/src/executor/sandbox-writer.ts` and its use from `packages/spell-server/src/executor/goal-executor.ts`.
+  - **Why**: Forced exits or daemon crashes can leak `/tmp/spell-sandbox-*.json` files over time, including policy details that were meant to be ephemeral.
+  - **Effort**: `small`
+
+- **What**: Transcript/log viewing is not well verified, and the log/session-viewer contract may be incomplete.
+  - **Where**: `packages/spell-server/src/http/routes/goals.ts`, `packages/spell-server/src/http/server.ts`, and `packages/spell-server/test/http/router.test.ts`.
+  - **Why**: Operators may have no reliable path from a failed run to its transcript, which weakens one of the main observability promises of the server.
+  - **Effort**: `small`
+
+- **What**: Telegram and org hook paths are under-tested compared with webhook/dispatcher paths.
+  - **Where**: `packages/spell-server/test/hooks/` only covers dispatcher and webhook behavior.
+  - **Why**: The least exercised code paths are the ones most likely to break in production, especially optional integrations that depend on deployment-specific configuration.
+  - **Effort**: `small`
+
+- **What**: The plan was marked DONE without the manual verification/artifact capture the completion protocol required.
+  - **Where**: `!tasks/plans/PLAN-086-spell-autonomy-manifest-system.org`, `** Completion [2026-04-02]` section.
+  - **Why**: HTTP boot, curl auth, cron firing, webhook trigger, sandbox denial, persistence across runs, Telegram notification, and graceful shutdown were not observed end-to-end before closing the plan, so first-user validation still carries integration risk.
+  - **Effort**: `small`

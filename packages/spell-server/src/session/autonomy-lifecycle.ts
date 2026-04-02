@@ -1,4 +1,4 @@
-import type { RpcSpawnOptions } from "@oh-my-pi/telegram-bridge";
+import type { RpcSpawnOptions } from "../rpc";
 import type { BaseSpawnOptions, SessionLifecycle } from "./types";
 
 export class AutonomyLifecycle implements SessionLifecycle<string> {

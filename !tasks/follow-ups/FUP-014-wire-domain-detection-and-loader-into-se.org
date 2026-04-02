@@ -1,0 +1,34 @@
+#+TITLE: Wire domain detection and loader into session boot path
+#+STATE: ITEM
+#+SESSION_ID: 14a983b223cae371
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T11-41-44-975Z_14a983b223cae371.jsonl]]
+#+CUSTOM_ID: FUP-014-wire-domain-detection-and-loader-into-se
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: infrastructure
+
+* Initial Message
+
+you are allowed to fix the files directly and then run the org fluid plan
+
+* Problem
+
+=packages/coding-agent/src/domain/detection.ts= and =loader.ts= exist but are never called. The domain system is dead code until wired into =sdk.ts= and =main.ts=.
+
+This was intentionally deferred from PLAN-057 to avoid regression risk in the session boot path.
+
+* Scope
+
+- Add =domain?: SpellDomain= to =CreateAgentSessionOptions=
+- In =main.ts=: call =detectDomain()= before session creation, =loadDomain()= to get manifest, pass to =createAgentSession()=
+- In =sdk.ts=: use =domain= to configure system prompt (=domain.systemPromptPath=), tool filtering (=domain.tools.include/exclude= applied to =BUILTIN_TOOLS=), and custom panel discovery
+- In =system-prompt.ts=: if =domain.systemPromptPath= set, load that prompt as persona while preserving tool docs injection
+- Backward compat: when no =.spell/domain.json= exists and heuristic returns ='coding'=, behavior must be identical to current
+
+* Acceptance Criteria
+
+- Running =spell= in a dir with =.spell/domain.json: {"domain":"growth"}= loads growth domain manifest
+- Running =spell --domain coding= overrides to coding
+- Running =spell= in a normal code dir defaults to coding with no behavior change
+- All existing =packages/coding-agent/test/= tests pass
+- Domain tool filtering works: growth domain excludes coding-specific tools

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { RpcEvent, RpcSpawnOptions } from "@oh-my-pi/telegram-bridge";
+import type { RpcEvent, RpcSpawnOptions } from "../../src/rpc";
 import { type BaseSpawnOptions, type SessionLifecycle, SessionManager } from "../../src/session";
 
 class MockRpcClient {

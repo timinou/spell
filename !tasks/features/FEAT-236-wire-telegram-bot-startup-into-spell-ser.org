@@ -1,0 +1,59 @@
+#+TITLE: Wire Telegram bot startup into spell-server lifecycle
+#+STATE: DONE
+#+SESSION_ID: 14ab1aa0b4b48f2e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T17-19-39-730Z_14ab1aa0b4b48f2e.jsonl]]
+#+CUSTOM_ID: FEAT-236-wire-telegram-bot-startup-into-spell-ser
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: core
+#+DEPENDS: FEAT-234-merge-telegram-config-from-yaml-into-cha
+
+* Initial Message
+
+i want the telegram-bridge command to be folded into spell server. ask me questions
+
+Update =startSpellServer()= to conditionally start the Telegram bot when channels.kdl contains a telegram section with bot-token, users, and projects configured. The bot becomes a subsystem alongside the existing scheduler, executor, and HTTP server.
+
+* Scope
+** server.ts changes
+In =packages/spell-server/src/server.ts= =startSpellServer()=:
+1. After loading config, check if =config.channels.telegram= has full bot config (botToken + at least one user + at least one project)
+2. If yes, create TelegramBotService with the TelegramChannelConfig
+3. Call =telegramBot.start()= alongside scheduler.start()
+4. In =stop()=, call =telegramBot.stop()= during shutdown sequence
+
+** Bot as subsystem
+TelegramBotService (from FEAT-233) integrates with spell-server's existing SessionManager pattern:
+- The bot gets its OWN SessionManager<string> with TelegramLifecycle (separate from the autonomy SessionManager)
+- Session idle timeouts come from TelegramChannelConfig per-user settings
+- Bot sessions are conversational (5min idle default), autonomy sessions are persistent (no idle)
+
+** Notification sender coexistence
+The existing =createNotificationSender()= for goal hooks only needs botToken + owners. The full bot (grammy instance) is separate. They share the same bot token but serve different purposes:
+- NotificationSender: one-way notifications for goal completion (existing, unchanged)
+- TelegramBotService: two-way interactive bot with commands and RPC sessions (new)
+
+Both can coexist — NotificationSender uses raw HTTP API, bot uses grammy long-polling. This is fine; grammy handles updates via getUpdates while NotificationSender just calls sendMessage.
+
+** Log viewer consolidation
+The log-viewer HTTP server from telegram-bridge can either:
+- Run on its own port (as before, via log-viewer-port config)
+- OR be folded into the main spell-server HTTP server as additional routes
+
+Keep it on its own port for now — simpler, no route conflicts. The main HTTP server handles goal dashboard + API + webhooks; log-viewer handles session browsing.
+
+* Sub-outline
+1. Update =startSpellServer()= to detect full telegram config and create TelegramBotService
+2. Wire TelegramBotService.start() into server startup
+3. Wire TelegramBotService.stop() into server shutdown (before session killAll)
+4. Ensure dual SessionManager instances work (one for autonomy, one for telegram bot)
+5. Test: server starts with telegram config → bot polls Telegram API
+6. Test: server starts without telegram config → no bot, hooks still work if bot-token + owners present
+
+* Verification
+- =bun check:ts= passes
+- =bun test packages/spell-server/= passes
+- With full telegram config: server starts bot, log-viewer, scheduler, HTTP all together
+- With minimal telegram config (just bot-token + owners): notification hooks work, no bot started
+- With no telegram config: server starts normally (scheduler + HTTP only)
+- Shutdown stops bot before killing sessions

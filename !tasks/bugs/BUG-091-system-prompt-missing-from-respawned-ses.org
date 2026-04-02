@@ -1,0 +1,102 @@
+#+TITLE: System prompt missing from respawned sessions and photo-only messages dropped
+#+STATE: DOING
+#+SESSION_ID: 14aae0e4276d8b54
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-07-24-445Z_14aae0e4276d8b54.jsonl]]
+#+CUSTOM_ID: BUG-091-system-prompt-missing-from-respawned-ses
+#+EFFORT: 45m
+#+PRIORITY: #A
+#+LAYER: packages/telegram-bridge
+
+* Scope
+Two defects in the Telegram bridge message routing that silently degrade the user experience.
+
+** Finding 3: =respawnSession= omits Telegram system prompt
+=respawnSession()= in =commands/index.ts= calls =processManager.getOrCreate()= without =appendSystemPrompt=. Sessions created by =/project=, =/mode=, =/lock=, =/unlock= start without the mobile-optimized Telegram prompt. Later messages reuse these sessions, so responses remain un-optimized for the rest of the session's lifetime. This means audit finding #9 from PLAN-085 is only partially fixed.
+
+** Finding 4: Photo-only and document-only messages silently dropped
+=createMessageHandler= in =bot.ts= gates on =ctx.message?.text= and passes to =next()= if text is absent. Messages containing only a photo or only a document never reach the bridge pipeline, even though =handleTelegramMessage= in =telegram-to-rpc.ts= already handles photo extraction (=collectImages=) and document extraction (=readDocumentContext=), including the fallback prompt "User sent an image without text."
+
+* Sequencing: test-first
+Write failing tests that demonstrate both defects *before* implementing the fixes. Implementation makes the tests pass.
+
+* Tests (write first -- these must fail before the fix)
+
+** =packages/telegram-bridge/test/commands.test.ts=
+Prerequisites: update =mockCommandContext()= to include =telegramPrompt: "Test telegram prompt"= and update =MockProcessManager.getOrCreate= / =createdSessions= type to capture =appendSystemPrompt=.
+
+- Scenario: =/project spell= respawn passes =appendSystemPrompt= in =getOrCreate= options — assert =createdSessions[0].options.appendSystemPrompt= equals the test telegram prompt
+- Scenario: =/mode telegram-full= respawn passes =appendSystemPrompt= — same assertion via mode switch flow
+
+These fail initially because =respawnSession= does not pass =appendSystemPrompt= today.
+
+** Photo-only message test
+Since =createMessageHandler= is not yet exported (BUG-092 exports it), the photo-only test goes in BUG-092's test file. Note this dependency.
+
+* Fix (makes tests pass)
+
+** Add =telegramPrompt= to =CommandContext=
+The telegram prompt is already loaded once in =startBot()=. Instead of passing it as a separate parameter through =createMessageHandler=, add it to =CommandContext=:
+#+BEGIN_SRC typescript
+export interface CommandContext {
+    config: TelegramBridgeConfig;
+    processManager: ProcessManager;
+    telegramPrompt: string;
+}
+#+END_SRC
+
+In =startBot()=:
+#+BEGIN_SRC typescript
+const cmdCtx: CommandContext = {
+    config,
+    processManager,
+    telegramPrompt,
+};
+#+END_SRC
+
+** Simplify =createMessageHandler= signature
+Change from =createMessageHandler(config, processManager, telegramPrompt)= to =createMessageHandler(cmdCtx: CommandContext)=. The handler body uses =cmdCtx.config=, =cmdCtx.processManager=, =cmdCtx.telegramPrompt= directly. Export the function for testing (used by BUG-092).
+
+In =startBot=: =bot.use(createMessageHandler(cmdCtx))=
+
+** Pass prompt in =respawnSession=
+#+BEGIN_SRC typescript
+await cmdCtx.processManager.getOrCreate(chatId, ctx.authState.userId, {
+    project,
+    mode,
+    tools: resolveModeTools(mode),
+    appendSystemPrompt: cmdCtx.telegramPrompt,
+    sessionPath: existingSession?.sessionPath,
+});
+#+END_SRC
+
+** Loosen message guard for attachments
+Replace the text-only gate in =createMessageHandler=:
+#+BEGIN_SRC typescript
+const message = ctx.message;
+if (!message) {
+    await next();
+    return;
+}
+// Skip commands
+if (message.text?.startsWith("/")) {
+    await next();
+    return;
+}
+// Only process messages with text, photos, or documents
+const hasContent = message.text || (message.photo && message.photo.length > 0) || message.document;
+if (!hasContent) {
+    await next();
+    return;
+}
+#+END_SRC
+
+Adjust logging: =messageLength: message.text?.length ?? 0=
+
+* Files
+- =packages/telegram-bridge/src/commands/index.ts= — add =telegramPrompt= to =CommandContext=, pass it in =respawnSession=
+- =packages/telegram-bridge/src/bot/bot.ts= — simplify =createMessageHandler= to use =cmdCtx=, export it, loosen message guard, set =telegramPrompt= in cmdCtx
+
+* Acceptance
+- =bun test packages/telegram-bridge/= passes with updated mocks and new assertions
+- =respawnSession= calls =getOrCreate= with =appendSystemPrompt=
+- Messages with photos or documents (no text) reach =handleTelegramMessage=

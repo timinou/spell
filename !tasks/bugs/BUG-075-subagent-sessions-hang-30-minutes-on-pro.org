@@ -1,0 +1,110 @@
+#+TITLE: Subagent sessions hang 30 minutes on provider quota exhaustion
+#+STATE: ITEM
+#+SESSION_ID: 14aa0b566674b0dd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T21-34-22-617Z_14aa0b566674b0dd.jsonl]]
+#+CUSTOM_ID: BUG-075-subagent-sessions-hang-30-minutes-on-pro
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+Session Info
+
+   File:
+  /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T20-58-51-693Z_14aa03356b538e1c.jsonl
+   ID: 14aa03356b538e1c
+
+  Session Info
+
+   File:
+   /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-ag
+   entmaker/2026-04-01T19-58-52-952Z_14a9f57b0610906f.jsonl
+   ID: 14a9f57b0610906f
+
+  yeah those sessions are both wrong
+
+ ```
+                                                                   File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-ag
+ entmaker/2026-04-01T20-47-30-523Z_14aa009c36e7611a.jsonl
+ ```
+
+  ID: 14aa009c36e7611a
+
+ Why did all these sessions hang?
+
+* Problem
+
+When a delegated task subagent's model provider returns a usage-limit error (=usage_limit_reached=, =quota_exceeded=, etc.), the subagent session enters a 30-minute retry sleep per attempt (up to 90 minutes total with 3 retries). The parent async job stays in =running= state, =await= reports "Still Running", and the user sees a hung session with no actionable information.
+
+** Root Cause Chain
+
+1. Model returns =usage_limit_reached= error event
+2. =AgentSession.#isRetryableError()= matches =usage.?limit= pattern → classifies it as retryable
+3. =AgentSession.#handleRetryableError()= computes backoff via =calculateRateLimitBackoffMs("QUOTA_EXHAUSTED")= → returns =QUOTA_EXHAUSTED_BACKOFF_MS = 30 * 60 * 1000= (30 minutes)
+4. =markUsageLimitReached()= returns =false= (subagent has no alternative provider configured)
+5. Code path at line 4864-4867: =delayMs = retryAfterMs= → 30 minutes
+6. =abortableSleep(30min)= blocks, =waitForIdle()= awaits =#retryPromise=, parent =await= sees job as =running=
+7. After sleep, retry fires, same thing × =maxRetries= (default 3) = ~90 minutes total
+
+** Key Files
+
+- =packages/coding-agent/src/task/executor.ts= — =createSubagentSettings()= at line ~430 (subagent settings inherit parent retry config without overrides)
+- =packages/coding-agent/src/session/agent-session.ts= — =#handleRetryableError()= at line ~4819, =#isUsageLimitErrorMessage()= at line ~4765
+- =packages/ai/src/rate-limit-utils.ts= — =QUOTA_EXHAUSTED_BACKOFF_MS = 30 * 60 * 1000= at line 13
+
+** Fix
+
+*** 1. Disable auto-retry for subagent sessions
+
+In =createSubagentSettings()= (=executor.ts= line ~430), override retry settings:
+
+#+begin_src typescript
+return Settings.isolated({ 
+  ...snapshot, 
+  "async.enabled": false,
+  "retry.enabled": false,  // Subagents should fail fast — parent handles retry/reminder logic
+});
+#+end_src
+
+Rationale: Subagents already have their own error recovery (the executor's submit_result reminder loop at line 1086-1130, which catches errors and retries 3 times). The agent-session's auto-retry is redundant and harmful for subagents because: (a) the parent is blocked waiting, (b) there's no alternative provider to switch to, (c) quota errors won't resolve in the retry budget.
+
+*** 2. Cap usage-limit delay when no provider switch is available
+
+In =#handleRetryableError()= (=agent-session.ts= line ~4862), add a cap for non-switched usage-limit delays:
+
+#+begin_src typescript
+if (switched) {
+  delayMs = 0;
+} else if (retryAfterMs > MAX_USAGE_LIMIT_WAIT_MS) {
+  // No alternative provider and delay exceeds cap — fail immediately
+  this.#resolveRetry();
+  await this.#emitSessionEvent({
+    type: "auto_retry_end",
+    success: false,
+    attempt: this.#retryAttempt,
+    finalError: `Provider quota exhausted (retry delay ${Math.round(retryAfterMs / 1000)}s exceeds cap)`,
+  });
+  this.#retryAttempt = 0;
+  return false;
+} else if (retryAfterMs > delayMs) {
+  delayMs = retryAfterMs;
+}
+#+end_src
+
+Use =MAX_USAGE_LIMIT_WAIT_MS = 60_000= (1 minute). This is the defense-in-depth fix for the main session too — even for non-subagent sessions, waiting 30 minutes for a quota reset that won't happen for hours is not useful.
+
+** Acceptance Criteria
+
+- A subagent that hits =usage_limit_reached= on its first model call terminates within 30 seconds (not 30 minutes)
+- The parent =await= reports the task as "failed" with the error message, not "Still Running"
+- Existing retry behavior for transient errors (502, 503, connection errors) in the *main* session is unaffected
+- =bun check:ts= passes
+- =bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts= passes
+
+** Test
+
+Add to =packages/coding-agent/test/task/executor-subagent-reminders.test.ts= or new file:
+- Test that =createSubagentSettings= produces settings with =retry.enabled === false=
+- Test that a subagent session mock returning =usage_limit_reached= on every call exits within seconds (timeout test)

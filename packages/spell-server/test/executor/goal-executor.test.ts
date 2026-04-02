@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
-import type { RpcEvent, RpcSpawnOptions } from "@oh-my-pi/telegram-bridge";
 import { GoalExecutionController } from "../../src/executor";
 import type { GoalResult } from "../../src/executor/types";
 import type { AutonomyManifest, ManifestGoal, ManifestSetup } from "../../src/manifest";
+import type { RpcEvent, RpcSpawnOptions } from "../../src/rpc";
 import { type SessionLifecycle, SessionManager } from "../../src/session";
 
 class MockRpcClient {

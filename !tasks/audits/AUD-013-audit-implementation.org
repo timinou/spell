@@ -1,0 +1,40 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-013-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+1. **What**: `todo_write` still enforces a single `in_progress` task, but the new fluid/coordinator prompts tell agents to parallelize independent work.
+   - **Where**: `packages/coding-agent/src/tools/todo-write.ts` around `normalizeInProgressTask`; also `packages/coding-agent/src/prompts/tools/todo-write.md`, `packages/coding-agent/src/prompts/agents/coordinator.md`, and `packages/coding-agent/src/prompts/system/plan-mode-approved.md`
+   - **Why**: The execution model now advertises parallelism it cannot represent truthfully. Agents must either serialize work or lie to the todo state machine, which undermines the whole “todo_write as control plane” contract.
+   - **Effort**: medium
+
+2. **What**: Fluid-mode retry rebuilds todos from the original `FluidPlan` instead of resuming the coordinator’s live todo structure.
+   - **Where**: `packages/coding-agent/src/modes/fluid-mode.ts` around `startRetry()` and `executeFluidPlan()`
+   - **Why**: If the coordinator modified phases/tasks/blockers during execution, retry silently discards those changes. That makes retry semantically unsafe and can reintroduce stale dependencies or lose added work.
+   - **Effort**: medium
+
+3. **What**: The old fluid execution engine is still present as dead or misleading code after the refactor.
+   - **Where**: `packages/coding-agent/src/orchestrators/fluid/org-fluid-bridge.ts`, `packages/coding-agent/src/orchestrators/fluid/coordinator-runner.ts`, `packages/coding-agent/src/orchestrators/fluid/queue-scheduler.ts`, and `packages/coding-agent/src/orchestrators/fluid/fluid-orchestrator.ts`
+   - **Why**: These files preserve the obsolete execution model the plan was supposed to collapse. Even with some barrel exports pruned, future maintainers can still extend the wrong path or mistake tests for production usage.
+   - **Effort**: small
+
+4. **What**: The updated integration tests still mostly validate the old orchestrator/event path rather than the new session-driven todo path.
+   - **Where**: `packages/coding-agent/test/integration/fluid-pipeline-e2e.test.ts` and `packages/coding-agent/test/integration/fluid-event-pipeline.test.ts`
+   - **Why**: The highest-risk change was moving canvas execution onto `session.prompt` + `todo:change` translation. Current tests passing does not prove that path is correct end-to-end, so regressions in the new execution bridge can slip through.
+   - **Effort**: medium
+
+5. **What**: `todo_write` hides child-org hook failures from the caller except in logs.
+   - **Where**: `packages/coding-agent/src/tools/todo-write.ts` in `applyOrgLifecycleHooks()`
+   - **Why**: The tool now performs important side effects, but callers cannot distinguish “task completed and org item updated” from “task completed but org transition failed.” That weakens observability and makes the contract harder to trust.
+   - **Effort**: small
+
+6. **What**: The fluid-mode file header still describes queue-scheduler execution even though the file now routes execution through the main agent session and todo state.
+   - **Where**: `packages/coding-agent/src/modes/fluid-mode.ts` top-of-file comment
+   - **Why**: This is a small polish issue, but it will mislead the next maintainer reading the file and obscures the actual architecture change.
+   - **Effort**: trivial

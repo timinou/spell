@@ -1,0 +1,25 @@
+#+TITLE: Anthropic defer_loading transport optimization
+#+STATE: ITEM
+#+SESSION_ID: 14a9f27012543263
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T19-45-35-305Z_14a9f27012543263.jsonl]]
+#+CUSTOM_ID: FUP-018-anthropic-defer-loading-transport-optimi
+#+EFFORT: M
+#+PRIORITY: #C
+#+LAYER: packages/ai + packages/coding-agent
+#+DEPENDS: FEAT-192-deferred-tool-loading-via-anthropic-tool
+
+* Initial Message
+
+the initial prompts on the latest session in this computer are at least 50k tokens. what makes them so big? both in here and in ~/code/ora/hotelcomm/ecosystem/agentmaker
+
+After Spell-native tool tiering (FEAT-192) is in place, add Anthropic's =defer_loading: true=
+as a transport optimization. Deferred tools stay in the API payload but are excluded from the
+prefix, improving prompt caching.
+
+- Add =deferLoading?: boolean= to =Tool= interface in =packages/ai/src/types.ts=
+- Anthropic provider emits =defer_loading: true= when flag is set
+- Handle =server_tool_use= / =tool_search_tool_result= / =tool_reference= in streaming parser
+- Optionally register =tool_search_tool_bm25_20251119= server-side tool
+- Non-Anthropic providers ignore the flag
+
+Full API docs: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool

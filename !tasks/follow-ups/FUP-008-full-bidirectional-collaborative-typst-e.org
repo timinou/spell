@@ -1,0 +1,18 @@
+#+TITLE: Full Bidirectional Collaborative Typst Editing
+#+STATE: ITEM
+#+SESSION_ID: 14a899a7fbc415d6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/35-CreateRemainingFeats.jsonl]]
+#+CUSTOM_ID: FUP-008-full-bidirectional-collaborative-typst-e
+#+EFFORT: 40h
+#+PRIORITY: #C
+#+LAYER: infrastructure
+
+* Scope
+- Agent and human edit the same Typst document simultaneously with conflict resolution
+- Operational transform or CRDT for concurrent edits
+- Cursor presence indicators
+- Section locking to prevent edit collisions
+- Real-time diff visualization
+
+* Rationale for Deferral
+MVP agent-first + human-tweak workflow (agent drafts, human adjusts) is sufficient for V1. Full collaborative editing requires OT or CRDT infrastructure that does not exist in the current stack. This is a significant engineering investment justified only after V1 validates the workflow pattern.

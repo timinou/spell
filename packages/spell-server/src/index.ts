@@ -3,6 +3,7 @@ export * from "./executor";
 export * from "./hooks";
 export * from "./http";
 export * from "./manifest";
+export * from "./rpc";
 export * from "./scheduler";
 export * from "./server";
 export * from "./session";

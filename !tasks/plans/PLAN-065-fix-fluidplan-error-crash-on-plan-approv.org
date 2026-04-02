@@ -1,0 +1,47 @@
+#+TITLE: Fix FluidPlan error crash on plan approval
+#+STATE: DOING
+#+SESSION_ID: 14a9b1dffdf5a05d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T15-03-30-551Z_14a9b1dffdf5a05d.jsonl]]
+#+CUSTOM_ID: PLAN-065-fix-fluidplan-error-crash-on-plan-approv
+
+* Initial Message
+
+Error: Failed to finalize approved plan: undefined is not an object (evaluating
+ 'options.fluidPlan.warnings.length')
+
+ Session Info
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-01T15-03-14-486Z_14
+ a9b1d04db87ebe.jsonl
+ ID: 14a9b1d04db87ebe
+
+wtf?
+
+* Context
+
+When =exit_plan_mode= triggers =org-fluid-plan= via Emacs MCP, the Elisp error handler returns an in-band error JSON (not a JSON-RPC error). The =callToolOnce= function parses it as valid JSON and returns it. The TypeScript side then casts it unsafely to =FluidPlanWithComponents=, producing a truthy object that lacks =warnings= and =components= fields. This crashes during plan approval with:
+
+: undefined is not an object (evaluating 'options.fluidPlan.warnings.length')
+
+Root cause chain:
+1. =org-fluid-plan.el= returns errors as content text, not JSON-RPC errors
+2. =exit-plan-mode.ts= uses an unsafe =as= cast without shape validation
+3. =interactive-mode.ts= accesses =.warnings.length= without defensive guard
+
+The fix validates the MCP response shape in =exit-plan-mode.ts= (primary fix) and adds optional chaining in =interactive-mode.ts= (defense in depth). When the response is invalid, the system falls back to wave-based plan initialization (the existing fallback path when =fluidPlan= is =undefined=).
+
+Files:
+- =packages/coding-agent/src/tools/exit-plan-mode.ts= (lines 171-186)
+- =packages/coding-agent/src/modes/interactive-mode.ts= (line 1211)
+
+* Verification
+
+- =bun check:ts= passes
+- Manually verify: when =org-fluid-plan= errors (e.g., PLAN item not found), plan approval proceeds via wave fallback without crash
+
+* Execution Manifest
+
+** wave-1
+
+- [[id:BUG-056-fluidplan-error-response-treated-as-vali]] Validate MCP response and add defensive guard

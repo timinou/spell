@@ -1,0 +1,31 @@
+#+TITLE: Unify fluid-mode wave execution with task auto-roster path
+#+STATE: ITEM
+#+SESSION_ID: 14aa253432021ade
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T21-38-20-786Z_14aa0c3efc821ad9/5-CreateFUP1.jsonl]]
+#+CUSTOM_ID: FUP-020-unify-fluid-mode-wave-execution-with-tas
+#+DEPENDS: FEAT-196-task-schema-and-agent-definition-extensi FEAT-199-intra-batch-dag-scheduler-for-task-tool FEAT-197-auto-roster-bridge-from-task-dispatch-to FEAT-200-auto-roster-settings-and-agent-level-sup FEAT-198-prompt-updates-for-task-auto-roster-and
+
+:PROPERTIES:
+:EFFORT: M
+:LAYER: core
+:DEPENDS: FEAT-196-task-schema-and-agent-definition-extensi
+:END:
+
+* Scope
+~packages/coding-agent/src/modes/fluid-mode.ts~ and ~packages/coding-agent/src/orchestrators/fluid/~ currently use ~materializeFluidPlanToTodos~ and ~fluidPlanToTodoPhases~ to map FluidPlan DAG nodes into todo phases, then dispatch tasks separately.
+
+After task-tool auto-roster + DAG scheduling lands, fluid mode can potentially use the same unified dispatch path by sending tasks with ~phase~ and ~blockers~ and letting auto-roster create/manage todos.
+
+Analysis must cover:
+- Fluid orchestrator retry behavior and interaction with todo state transitions
+- Canvas output handling via ~canvasOutput~ on ~FluidAgentNode~
+- Event lifecycle compatibility across ~FluidEvent~ types
+- Runtime tracking correctness for ~taskIdByAgentId~ mapping
+
+Deferred intentionally: current fluid-mode flow is stable, and auto-roster can ship without this unification.
+
+* Acceptance Criteria
+- Fluid mode uses the same task dispatch path as agent-driven work
+- ~plan-to-todos.ts~ utilities remain available but are no longer the primary consumer path
+- Fluid-mode retry logic remains correct with auto-roster-created items
+- Canvas output handling behavior is preserved

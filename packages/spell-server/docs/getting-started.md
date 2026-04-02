@@ -1,6 +1,6 @@
 # Spell Server Getting Started
 
-Spell Server runs scheduled or webhook-triggered autonomous goals from a project-local `.spell/` directory. It combines three things that already exist elsewhere in the Spell stack: KDL configuration parsing, long-lived agent sessions built on `@oh-my-pi/telegram-bridge`, and a lightweight Bun HTTP server with a browser dashboard. The result is a foreground daemon you can supervise with systemd, launch locally during development, or embed in a larger automation environment.
+Spell Server runs scheduled or webhook-triggered autonomous goals from a project-local `.spell/` directory. It combines KDL configuration parsing, long-lived agent sessions via the internal RPC module, an optional Telegram bot for interactive chat, and a lightweight Bun HTTP server with a browser dashboard. The result is a foreground daemon you can supervise with systemd, launch locally during development, or embed in a larger automation environment.
 
 This guide walks through the smallest useful setup: install the package, create the three configuration files, start the server, verify the HTTP API, and define a first nightly goal.
 

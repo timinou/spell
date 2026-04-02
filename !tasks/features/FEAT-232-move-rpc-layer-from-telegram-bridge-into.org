@@ -1,0 +1,50 @@
+#+TITLE: Move RPC layer from telegram-bridge into spell-server
+#+STATE: DONE
+#+SESSION_ID: 14ab1aa0b4b48f2e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T17-19-39-730Z_14ab1aa0b4b48f2e.jsonl]]
+#+CUSTOM_ID: FEAT-232-move-rpc-layer-from-telegram-bridge-into
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: core
+
+* Initial Message
+
+i want the telegram-bridge command to be folded into spell server. ask me questions
+
+Move the RPC subsystem (rpc-client.ts, types.ts, state.ts) from =packages/telegram-bridge/src/rpc/= into =packages/spell-server/src/rpc/=. This is the foundation that all other work depends on.
+
+* Scope
+- Move =packages/telegram-bridge/src/rpc/rpc-client.ts= → =packages/spell-server/src/rpc/rpc-client.ts=
+- Move =packages/telegram-bridge/src/rpc/types.ts= → =packages/spell-server/src/rpc/types.ts=
+- Move =packages/telegram-bridge/src/rpc/state.ts= → =packages/spell-server/src/rpc/state.ts=
+- Create =packages/spell-server/src/rpc/index.ts= barrel that re-exports: RpcClient, RpcEvent, RpcSpawnOptions, BridgeRpcCommand, AssistantEvent, ImageContentRef, saveBridgeState, loadBridgeState
+- Update all spell-server internal imports from =@oh-my-pi/telegram-bridge= to local =./rpc= or =../rpc= paths
+
+* Files to update imports in
+- =packages/spell-server/src/session/types.ts= — =import type { RpcClient, RpcSpawnOptions }=
+- =packages/spell-server/src/session/session-manager.ts= — =import { RpcClient, type RpcEvent, type RpcSpawnOptions }=
+- =packages/spell-server/src/session/autonomy-lifecycle.ts= — =import type { RpcSpawnOptions }=
+- =packages/spell-server/src/session/telegram-lifecycle.ts= — =import type { RpcSpawnOptions }=
+- =packages/spell-server/src/executor/goal-executor.ts= — =import type { RpcClient, RpcEvent }=
+- =packages/spell-server/test/executor/goal-executor.test.ts= — =import type { RpcEvent, RpcSpawnOptions }=
+- =packages/spell-server/test/session/session-manager.test.ts= — =import type { RpcEvent, RpcSpawnOptions }=
+
+* Edge cases
+- =rpc-client.ts= imports from =@oh-my-pi/pi-utils= and =bun= — no change needed
+- =state.ts= imports =BridgeState= and =ChatSession= from =../types.ts= — the types.ts from telegram-bridge also needs to move (see sibling item for bridge types)
+- state.ts hardcodes =~/.spell/telegram-state.json= — keep as-is for now, it's correct for the merged state file
+- rpc-client.ts stderr logs reference =[telegram-bridge:rpc]= — rename to =[spell-server:rpc]=
+
+* Sub-outline
+1. Copy the three RPC source files into =packages/spell-server/src/rpc/=
+2. Copy =packages/telegram-bridge/src/types.ts= → =packages/spell-server/src/rpc/bridge-types.ts= (ChatSession, AuthState, TempToken, BridgeState)
+3. Update internal imports within copied files (rpc-client → types, state → bridge-types)
+4. Create =packages/spell-server/src/rpc/index.ts= barrel
+5. Update all 7 spell-server source + test files to import from local =../rpc= paths
+6. Move =packages/telegram-bridge/test/rpc-client.test.ts= → =packages/spell-server/test/rpc/rpc-client.test.ts=, update its imports
+7. Move =packages/telegram-bridge/test/process-manager.test.ts= is NOT needed here — process-manager stays with telegram bot subsystem
+
+* Verification
+- =bun check:ts= passes with no type errors in packages/spell-server
+- All existing spell-server tests pass: =bun test packages/spell-server/=
+- No remaining imports of =@oh-my-pi/telegram-bridge= in spell-server source (grep check)

@@ -1,0 +1,43 @@
+#+TITLE: Fix Telegram bot empty response on errors
+#+STATE: INIT
+#+SESSION_ID: 14ab1285ae9bac4d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T16-44-14-906Z_14ab1285ae9bac4d.jsonl]]
+#+CUSTOM_ID: PLAN-092-fix-telegram-bot-empty-response-on-error
+
+* Initial Message
+
+hi. how do I test the telegram bot? I have cloudflared
+
+* Context
+
+The Telegram bridge bot replies with "Assistant completed without a text response" when the agent encounters any error during prompt handling. This affects all error paths: missing model, missing API key, LLM auth failure, rate limiting, or any LLM error that produces =stopReason=error=.
+
+Root cause: three interacting defects in the bridge's RPC event handling:
+
+1. =ResponseStreamer= (=packages/telegram-bridge/src/bridge/rpc-to-telegram.ts=) only collects text from =text_delta= / =text_end= assistant events. When the LLM errors, the error info is in =message_end='s message payload (=errorMessage=, =stopReason=), but the streamer ignores the payload.
+
+2. When =session.prompt()= throws (no model/API key), =rpc-mode= outputs ={ type: "response", success: false, error: "..." }=. The streamer ignores =type: response= entirely. Additionally, =rpc-client= (=packages/telegram-bridge/src/rpc/rpc-client.ts=) only resolves =promptCompletion= on =agent_end= / =turn_end=, so a failed prompt command causes a 5-minute hang.
+
+3. The bridge's =RpcEvent= types (=packages/telegram-bridge/src/rpc/types.ts=) define =message_end= without a message payload, hiding the error data that the RPC process actually sends.
+
+Approach: widen the =RpcEvent= types, handle error responses in =rpc-client=, surface errors in =ResponseStreamer=, and add test coverage.
+
+Key files:
+- =packages/telegram-bridge/src/rpc/types.ts= — RPC event type definitions
+- =packages/telegram-bridge/src/rpc/rpc-client.ts= — prompt completion resolution
+- =packages/telegram-bridge/src/bridge/rpc-to-telegram.ts= — ResponseStreamer
+- =packages/telegram-bridge/src/bot/bot.ts= — message handler wiring (read-only, for context)
+- =packages/coding-agent/src/modes/rpc/rpc-mode.ts= — RPC mode prompt handling (read-only, for context)
+
+* Verification
+
+- =bun test packages/telegram-bridge/test/= — new and existing tests pass
+- =bun check:ts= — no type errors
+- Manual smoke test: start bridge with no API key, send "hi", verify error is surfaced
+- Manual smoke test: start bridge with valid key, send "hi", verify text response works
+
+* Execution Manifest
+
+| Wave | Item | Effort | Depends |
+|------+-------------------------------------------+--------+---------|
+|    1 | [[id:BUG-101-responsestreamer-swallows-llm-and-prompt]] | 2h | — |

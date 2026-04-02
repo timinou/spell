@@ -1,4 +1,4 @@
-import type { RpcClient, RpcSpawnOptions } from "@oh-my-pi/telegram-bridge";
+import type { RpcClient, RpcSpawnOptions } from "../rpc";
 
 export interface SessionLifecycle<K> {
 	buildSpawnOptions(key: K, baseOptions: BaseSpawnOptions): RpcSpawnOptions;

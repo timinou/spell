@@ -1,0 +1,49 @@
+#+TITLE: Bump task max recursion depth default to 4
+#+STATE: ITEM
+#+SESSION_ID: 14aa1b96d07a6547
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T22-45-22-881Z_14aa1b96d07a6547.jsonl]]
+#+CUSTOM_ID: FEAT-201-bump-task-max-recursion-depth-default-to
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: config
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell-.ancillary-spellcasting/2026-04-01T21-49-51-889Z_14aa0ee1e45ab57a.jsonl
+ ID: 14aa0ee1e45ab57a
+
+
+
+check if todo write and the task tool had recursive task delegatyion happening
+
+Change the default ~task.maxRecursionDepth~ from 2 to 4 across all touch points.
+
+Sequencing: implementation-first (no new tests needed for a default change; existing test structure covers the logic).
+
+** Files to modify
+- ~packages/coding-agent/src/config/settings-schema.ts~ line 1237: ~default: 2~ -> ~default: 4~
+- ~packages/coding-agent/src/task/executor.ts~ line 509: ~?? 2~ -> ~?? 4~
+- ~packages/coding-agent/src/tools/index.ts~ line 465: ~?? 2~ -> ~?? 4~
+- ~packages/coding-agent/src/modes/components/settings-defs.ts~ lines 128-134: add ~{ value: "4", label: "Quadruple" }~ option to the dropdown
+
+** Align loop depth limit
+- ~packages/coding-agent/src/loop/constants.ts~ line 4: ~DEFAULT_LOOP_DEPTH_LIMIT = 3~ -> ~= 4~
+- ~packages/coding-agent/src/loop/loop-manager.ts~ line 93: replace hardcoded ~3~ with ~DEFAULT_LOOP_DEPTH_LIMIT~ import
+- ~packages/coding-agent/src/loop/recursion/spawner.ts~ line 21: default param ~depthLimit = 3~ -> ~depthLimit = DEFAULT_LOOP_DEPTH_LIMIT~ (import the constant)
+
+** Update existing tests
+- ~packages/coding-agent/test/loop/recursion.test.ts~ line 48: ~new ChildSpawner(dag, 3)~ -- update test to use 4 as the limit and adjust depth assertions accordingly
+
+** Add spawn depth logging
+- ~packages/coding-agent/src/task/executor.ts~: add ~logger.debug("Subagent spawn", { agent: agent.name, childDepth, maxRecursionDepth, atMaxDepth })~ after the depth computation block (around line 512)
+
+** CHANGELOG
+- ~packages/coding-agent/CHANGELOG.md~: add under ~### Changed~ in ~[Unreleased]~: "Changed default ~task.maxRecursionDepth~ from 2 to 4 and ~DEFAULT_LOOP_DEPTH_LIMIT~ from 3 to 4"
+
+** Verification
+- ~bun check:ts~ passes
+- ~bun test packages/coding-agent/test/loop/recursion.test.ts~ passes
+- grep confirms no remaining ~?? 2~ fallbacks for maxRecursionDepth
+- grep confirms no remaining hardcoded ~3~ for loop depth limit (except in tests that explicitly test a custom limit)

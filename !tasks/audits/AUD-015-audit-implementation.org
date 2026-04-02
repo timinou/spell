@@ -1,0 +1,54 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-015-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Here are the findings:
+
+---
+
+**1. Dead code: `getInitialActiveToolNames` and `getDeferredToolNames` are exported but unused in production**
+- **Where**: `packages/coding-agent/src/tools/index.ts` lines 296-306
+- **Why**: These were part of the original "remove specialized tools from active set" design that was reverted. They're only consumed by tests now. Exported dead code misleads future readers into thinking there's a deferred-loading mechanism that doesn't exist.
+- **Effort**: trivial
+
+**2. Dead code: `task-classifier.ts` is entirely unused in production**
+- **Where**: `packages/coding-agent/src/task-classifier.ts` — `classifyTask` and `applyClassification` are not imported anywhere in `src/`
+- **Why**: The SDK wiring (`initialUserMessage` option + classifier call) was removed during the redesign, but the module and its tests survived. 170 lines of code + 118 lines of tests with zero production callers. The `applyClassification` function still uses the "deferred vs active" conceptual model that no longer exists.
+- **Effort**: small (decide: delete or wire it)
+
+**3. Stale comment: "loaded on demand when first called"**
+- **Where**: `packages/coding-agent/src/tools/index.ts` line 274
+- **Why**: This comment describes the original deferred-loading design. Specialized tools are now always loaded — they just get compact descriptions. Comment is misleading.
+- **Effort**: trivial
+
+**4. Misleading system prompt: "full docs load on first use"**
+- **Where**: `packages/coding-agent/src/prompts/system/system-prompt.md` line 158
+- **Why**: The prompt tells the model "full docs load on first use" but there's no mechanism that upgrades a compact description to a full one after first use. The compact description stays for the entire session. This is a false promise to the model.
+- **Effort**: trivial (change wording to match reality)
+
+**5. `resolveUnknownTool` returns the original tool, not the compact-wrapped clone**
+- **Where**: `packages/coding-agent/src/sdk.ts` line 1628
+- **Why**: When `resolveUnknownTool` fires (e.g., for an MCP tool), it returns `toolRegistry.get(toolName)` — the original with full description. But `setActiveToolsByName` (called on line 1625) creates a compact-wrapped clone. The tool returned to the agent-loop for execution is the original, while the agent's state has the clone. Inconsistency between what executes this turn and what the agent sees next turn. Unlikely to cause bugs (the original tool works fine for execution), but it's a contract smell.
+- **Effort**: trivial
+
+**6. No test for `compactToolDescription` with multiline first sentence**
+- **Where**: `packages/coding-agent/test/tools/index.test.ts` around line 313
+- **Why**: The regex `^(.+?\.)(\s|\n|$)` is non-greedy and matches the first period. But tool descriptions often start with things like "Reads files from local filesystem or internal URLs.\n\n<instruction>..." — the test doesn't cover this multiline case. If a description's first "sentence" contains a period in an abbreviation (e.g., "e.g."), the compact version would be truncated incorrectly.
+- **Effort**: trivial (add test case)
+
+**7. `allInitialToolNames` → `initialToolNames` copy is redundant**
+- **Where**: `packages/coding-agent/src/sdk.ts` lines 1447-1451
+- **Why**: `allInitialToolNames` is constructed as a new array, then immediately spread into `initialToolNames`. The intermediate variable serves no filtering purpose anymore (the `getInitialActiveToolNames` call was removed). The two variables could be collapsed into one.
+- **Effort**: trivial
+
+**8. Hash-based skip in `setActiveToolsByName` can prevent necessary `setTools` calls**
+- **Where**: `packages/coding-agent/src/session/agent-session.ts` lines 1871-1875
+- **Why**: The hash is computed from tool names only. If the same tool names are requested but the tool objects have changed (e.g., an extension updated a tool's schema mid-session), the hash matches and the rebuild is skipped. This is unlikely with current usage but is a latent correctness issue.
+- **Effort**: small (document the assumption or include description in hash)

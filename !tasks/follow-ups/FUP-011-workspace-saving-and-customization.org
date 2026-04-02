@@ -1,0 +1,17 @@
+#+TITLE: Workspace Saving and Customization
+#+STATE: ITEM
+#+SESSION_ID: 14a899a7fbc415d6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/35-CreateRemainingFeats.jsonl]]
+#+CUSTOM_ID: FUP-011-workspace-saving-and-customization
+#+EFFORT: 15h
+#+PRIORITY: #C
+#+LAYER: ui
+
+* Scope
+- Save custom workspace layouts with user-defined names
+- Share workspace configs across sessions
+- Auto-create workspace from agent interaction context
+- Named workspace switching
+
+* Rationale for Deferral
+V1 uses preset workspace layouts per mode (Growth Shell defines fixed pane arrangement). Customization and persistence is polish that adds value only after users have established their own workflows with the preset layouts.

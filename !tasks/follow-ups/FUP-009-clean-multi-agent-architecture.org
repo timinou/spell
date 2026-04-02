@@ -1,0 +1,18 @@
+#+TITLE: Clean Multi-Agent Architecture
+#+STATE: ITEM
+#+SESSION_ID: 14a899a7fbc415d6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/35-CreateRemainingFeats.jsonl]]
+#+CUSTOM_ID: FUP-009-clean-multi-agent-architecture
+#+EFFORT: 30h
+#+PRIORITY: #B
+#+LAYER: infrastructure
+
+* Scope
+- True multi-agent sessions: independent agents with own tool sets and conversation histories running in parallel
+- Agent session multiplexing
+- Shared workspace locking to prevent concurrent write conflicts
+- Inter-agent communication protocol
+- QML tab routing per agent for independent UI surfaces
+
+* Rationale for Deferral
+MVP uses main agent + task subagent (subprocess visibility) which handles the majority of workflows. Promoting to first-class multi-agent sessions requires rearchitecting session management, which is out of scope until the single-agent growth workflows are validated.

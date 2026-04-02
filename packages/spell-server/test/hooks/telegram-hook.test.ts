@@ -72,7 +72,17 @@ describe("notification sender wiring", () => {
 			},
 			async url => {
 				const sender = createNotificationSender(
-					{ telegram: { botToken: "123456:ABC", owners: [42] } },
+					{
+						telegram: {
+							botToken: "123456:ABC",
+							owners: [42],
+							uploadDir: "/tmp/test-uploads",
+							idleTimeout: 300,
+							maxSessions: 3,
+							projects: {},
+							users: {},
+						},
+					},
 					{ apiBaseUrl: url },
 				);
 				expect(sender).toBeInstanceOf(TelegramNotificationSender);

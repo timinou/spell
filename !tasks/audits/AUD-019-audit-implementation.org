@@ -1,0 +1,37 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-019-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+1. **What**: `streamer.done` can hang forever on start/prompt/reply failures because it only resolves on terminal RPC events and after successful final replies.  
+   **Where**: `packages/telegram-bridge/src/bridge/rpc-to-telegram.ts` around `handleEvent()` / `#finalize()`, with waits in `packages/telegram-bridge/src/commands/btw.ts` and `packages/telegram-bridge/src/bot/bot.ts`.  
+   **Why**: If `client.start()`, `rpcClient.prompt()`, or `ctx.reply()` fails before a terminal event, both `/btw` and normal chat handling can block indefinitely waiting on `streamer.done`, leaving cleanup stuck and the user without a trustworthy completion path.  
+   **Effort**: small
+
+2. **What**: The main chat flow leaks RPC event listeners by registering a new `client.onEvent(...)` callback for every message and never removing it.  
+   **Where**: `packages/telegram-bridge/src/bot/bot.ts` in `createMessageHandler()` around the `client.onEvent(...)` registration; `packages/telegram-bridge/src/rpc/rpc-client.ts` stores listeners in an append-only array.  
+   **Why**: Long-lived sessions accumulate stale listeners, so every later event fans out to every old streamer. That increases memory use and per-event work over time, especially in active chats.  
+   **Effort**: small
+
+3. **What**: Sessions respawned via `/project`, `/mode`, `/lock`, or `/unlock` still start without the Telegram system prompt.  
+   **Where**: `packages/telegram-bridge/src/commands/index.ts` in `respawnSession()` around the `processManager.getOrCreate(...)` call.  
+   **Why**: The Telegram prompt is only passed from the main message handler. After a respawn command creates a new live session, later messages reuse that session, so the mobile-optimized prompt is silently missing. This means audit finding #9 is only partially fixed.  
+   **Effort**: small
+
+4. **What**: The new main message handler still silently drops photo-only and document-only messages.  
+   **Where**: `packages/telegram-bridge/src/bot/bot.ts` in `createMessageHandler()` at the early `ctx.message?.text` guard; downstream attachment handling already exists in `packages/telegram-bridge/src/bridge/telegram-to-rpc.ts`.  
+   **Why**: Users who send an image or text document without a text body get no response, even though the bridge already knows how to convert those inputs into an RPC prompt.  
+   **Effort**: small
+
+5. **What**: The primary non-command bot message flow still has no direct regression test.  
+   **Where**: missing coverage in `packages/telegram-bridge/test/bot.test.ts` / `packages/telegram-bridge/test/bridge.test.ts` for `createMessageHandler` or `startBot` handling a normal chat message.  
+   **Why**: The exact regression this plan was meant to fix—a no-op main message handler—can recur without a failing test. Current updates cover `/btw`, helpers, and status formatting, but not the main user path.  
+   **Effort**: medium
+
+Deferred work review: no abandoned tasks or missing FUP tracking issues were evident in the completed plan records.

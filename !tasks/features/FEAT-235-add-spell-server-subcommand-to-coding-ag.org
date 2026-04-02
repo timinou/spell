@@ -1,0 +1,50 @@
+#+TITLE: Add spell server subcommand to coding-agent CLI
+#+STATE: DONE
+#+SESSION_ID: 14ab1aa0b4b48f2e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T17-19-39-730Z_14ab1aa0b4b48f2e.jsonl]]
+#+CUSTOM_ID: FEAT-235-add-spell-server-subcommand-to-coding-ag
+#+EFFORT: S
+#+PRIORITY: A
+#+LAYER: cli
+#+DEPENDS: FEAT-233-move-telegram-bot-subsystem-into-spell-s
+
+* Initial Message
+
+i want the telegram-bridge command to be folded into spell server. ask me questions
+
+Register =spell server= as a subcommand in the main =spell= CLI (packages/coding-agent). This replaces both the standalone =spell-server= and =telegram-bridge= binaries.
+
+* Scope
+** New command file
+Create =packages/coding-agent/src/commands/server.ts=:
+- Define a =server= command that loads spell-server config and starts the server
+- Accept =--config-dir= flag (default: =.spell/= in cwd)
+- Delegate to =startSpellServer()= from =@oh-my-pi/spell-server=
+- Handle SIGINT/SIGTERM gracefully (same logic as current spell-server main.ts)
+
+** CLI registration
+Update =packages/coding-agent/src/cli.ts=:
+- Add ={ name: \"server\", load: () => import(\"./commands/server\").then(m => m.default) }= to commands array
+
+** Dependency
+Add =@oh-my-pi/spell-server= as a workspace dependency of =packages/coding-agent/package.json=
+
+** spell-server main.ts
+Keep =packages/spell-server/src/main.ts= as a standalone entry point for development but the primary user-facing entry is now =spell server=. The spell-server package.json bin entry can remain for backwards compat but the canonical way is =spell server=.
+
+* Sub-outline
+1. Create =packages/coding-agent/src/commands/server.ts= with command definition
+2. Register in =packages/coding-agent/src/cli.ts=
+3. Add =@oh-my-pi/spell-server= dependency to coding-agent package.json
+4. Test: =spell server --help= shows usage
+
+* Edge cases
+- =spell server= with no config dir should look for =.spell/= in cwd, then fall back to =~/.spell/=
+- Server command must NOT import heavy dependencies at module level (grammy, etc.) — lazy load via the command entry pattern
+- The server runs in foreground (blocking) — consistent with how =spell-server= worked
+
+* Verification
+- =bun check:ts= passes
+- =spell server --help= prints usage
+- =spell --help= lists =server= as a subcommand
+- Server starts and serves HTTP dashboard when valid config exists

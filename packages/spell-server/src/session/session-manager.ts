@@ -1,5 +1,5 @@
 import { logger } from "@oh-my-pi/pi-utils";
-import { RpcClient, type RpcEvent, type RpcSpawnOptions } from "@oh-my-pi/telegram-bridge";
+import { RpcClient, type RpcEvent, type RpcSpawnOptions } from "../rpc";
 import type { BaseSpawnOptions, SessionEntry, SessionLifecycle } from "./types";
 
 interface SessionManagerOptions<K> {

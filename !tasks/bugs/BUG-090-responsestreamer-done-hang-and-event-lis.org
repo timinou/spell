@@ -1,0 +1,72 @@
+#+TITLE: ResponseStreamer done hang and event listener leak
+#+STATE: DOING
+#+SESSION_ID: 14aae0e4276d8b54
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-07-24-445Z_14aae0e4276d8b54.jsonl]]
+#+CUSTOM_ID: BUG-090-responsestreamer-done-hang-and-event-lis
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: packages/telegram-bridge
+
+* Scope
+Two related lifecycle defects in the Telegram bridge streaming pipeline.
+
+** Finding 1: =streamer.done= hangs forever on failures
+=ResponseStreamer.#donePromise= resolves only via =#finalize()= (terminal RPC events) or the =error= handler. Three paths leave it unresolved:
+1. =client.start()= throws before any events are emitted (=/btw= finally block hangs)
+2. =ctx.reply()= inside =#finalize()= or the =error= handler throws — =#doneResolve()= is never reached
+3. Prompt timeout in the main flow: =handleTelegramMessage= catches the error internally and returns, but no terminal event is emitted, so =await streamer.done= in =bot.ts= hangs
+
+** Finding 2: Event listeners accumulate on long-lived RPC clients
+=createMessageHandler= in =bot.ts= registers a new =client.onEvent(...)= callback for every incoming message. =RpcClient.#eventListeners= is append-only — no =offEvent= method exists. Old listeners fire on every subsequent event (returning early due to =#finalized= flag, but still traversed). Memory and per-event work grow linearly with message count per session.
+
+* Sequencing: test-first
+Write failing tests that demonstrate each defect *before* implementing the fixes. Implementation makes the tests pass.
+
+* Tests (write first -- these must fail before the fix)
+
+** =packages/telegram-bridge/test/bridge.test.ts=
+- Scenario: =cancel()= on a fresh (never-finalized) streamer resolves =done= immediately — demonstrates that =cancel()= exists and terminates the lifecycle
+- Scenario: =cancel()= after =message_end= finalization is idempotent — =done= already resolved, no double-resolve
+- Scenario: =ctx.reply= throws during finalize, =done= still resolves — the try/finally contract
+- Scenario: =cancel()= after error event is idempotent
+
+** =packages/telegram-bridge/test/rpc-client.test.ts=
+- Scenario: =offEvent= removes a previously registered listener — after removal, emitting events does not call the removed callback
+
+* Fix (makes tests pass)
+
+** ResponseStreamer: =cancel()= method + try/finally in =#finalize()=
+1. Add a public =cancel(): void= method that idempotently marks =#finalized=, clears the draft timer, and calls =#doneResolve()=. Does nothing if already finalized.
+2. Wrap the body of =#finalize()= after the guard and timer cleanup in =try/finally=, moving =#doneResolve()= into the =finally= block so it always runs even if =ctx.reply()= throws.
+3. Same try/finally pattern for the =error= event handler branch.
+
+** RpcClient: =offEvent()= method
+Add =offEvent(callback)= to =RpcClient= that removes the given callback from =#eventListeners= (by reference, using =indexOf= + =splice=).
+
+** bot.ts: Use cancel + offEvent
+In =createMessageHandler=:
+- Store the listener in a named variable
+- After =handleTelegramMessage= returns, call =streamer.cancel()= (no-op if finalize already ran)
+- =await streamer.done= (now guaranteed to resolve)
+- Remove the listener with =client.offEvent(listener)= in a =finally= block around the stream lifecycle
+
+** btw.ts: Use cancel in finally
+Replace the finally block:
+#+BEGIN_SRC typescript
+} finally {
+    streamer.cancel();
+    await client.kill();
+}
+#+END_SRC
+=cancel()= resolves =done= if it hasn't already, then =kill()= runs. No separate =await streamer.done= needed.
+
+* Files
+- =packages/telegram-bridge/src/bridge/rpc-to-telegram.ts= — =cancel()= method, try/finally in =#finalize()= and error handler
+- =packages/telegram-bridge/src/rpc/rpc-client.ts= — =offEvent()= method
+- =packages/telegram-bridge/src/bot/bot.ts= — restructure message handler listener lifecycle
+- =packages/telegram-bridge/src/commands/btw.ts= — simplify finally block with =cancel()=
+
+* Acceptance
+- =bun test packages/telegram-bridge/= passes with new tests
+- =streamer.done= resolves in all code paths (cancel, finalize, error)
+- No listener accumulation: =offEvent= removes listener after each message

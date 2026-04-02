@@ -1,0 +1,88 @@
+#+TITLE: Harden GrowthShell after audit
+#+STATE: INIT
+#+SESSION_ID: 14a9e2bd33b552a9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-36-59-982Z_14a9e2bd33b552a9.jsonl]]
+#+CUSTOM_ID: PLAN-070-harden-growthshell-after-audit
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-014-audit-implementation:
+
+Here are my findings:
+
+---
+
+### Finding 1: `currentPanels` is dead code
+- **What**: `currentPanels` property is assigned on `workspace_layout` message but never read by any code.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` line 17, 193. Same in test harness lines 25, 194.
+- **Why**: Misleads future readers into thinking the `workspace_layout` payload drives panel loading. In reality, `loadWorkspacePanel()` resolves everything from the local `workspaces` array + `panelRegistry`. If TS ever sends a layout override with different panels, GrowthShell silently ignores it.
+- **Effort**: trivial
+
+### Finding 2: No Loader error handling
+- **What**: `mainPanelLoader` has no `onStatusChanged` handler and no error overlay. If a panel QML file fails to load (bad path, syntax error), the user sees a blank area with no feedback.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 167–170 (Loader definition)
+- **Why**: `shell.qml` has explicit `Loader.Error` state detection and an error overlay UI. GrowthShell has none. A broken panel file silently fails — user sees "Select a workspace to begin" with no clue why.
+- **Effort**: small
+
+### Finding 3: `workspace_layout` override is documented but not implemented
+- **What**: Comment says "TS may override layout — re-resolve panels" but `loadWorkspacePanel()` only reads the static `workspaces` array, not `currentPanels`. The TS-sent layout is stored then discarded.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 192–196
+- **Why**: If the TS side ever sends a different panel arrangement via `workspace_layout` (which is the documented purpose of that message type), GrowthShell will ignore it. The comment actively misleads.
+- **Effort**: small
+
+### Finding 4: Panel loading test doesn't verify the Loader actually loaded
+- **What**: The "switching workspace loads the main panel via Loader" test verifies `currentWorkspaceId` changed and `panelRegistry` has the right path, but never checks `mainPanelLoader.source` or `mainPanelLoader.item`. It tests prerequisites, not the contract.
+- **Where**: `domain/growth/test/panels/growth-shell.test.ts` lines 88–101
+- **Why**: The core bug was "Loader never has its source set". The test doesn't assert that `source` is set. A regression that breaks the binding between registry lookup and `mainPanelLoader.source = panelPath` would pass this test.
+- **Effort**: trivial
+
+### Finding 5: `iconFor()` fully duplicated between GrowthShell.qml and test harness
+- **What**: `iconFor()`, `loadWorkspacePanel()`, `Component.onCompleted` registry builder, `panelRegistry` property — the entire panel-loading architecture is copy-pasted between the two files.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` (22–74) and `GrowthShellTestHarness.qml` (28–79)
+- **Why**: Any future fix to panel loading or icon mapping must be applied twice. The harness exists because ApplicationWindow can't be nested, but the logic could be extracted to a shared JS module imported by both.
+- **Effort**: medium
+
+### Finding 6: `iconFor` allocates a new object on every call
+- **What**: The function creates a fresh `var icons = { ... }` object literal each invocation. Called 6 times per workspace list render.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 22–34
+- **Why**: Negligible performance impact at 6 calls, but it's a code smell. The map should be a property or module constant. Low priority.
+- **Effort**: trivial
+
+* Context
+
+Post-implementation audit of PLAN-069 (GrowthShell panel loading, icons, ChatDrawer) identified six findings. This plan addresses all of them in dependency order:
+
+1. Dead =currentPanels= property, misleading =workspace_layout= comment, and per-call =iconFor= allocation (trivial cleanup)
+2. Missing Loader error overlay — silent failure when panel QML can't load (hardening)
+3. Panel loading test doesn't verify Loader.source (test gap)
+4. Full logic duplication between GrowthShell.qml and its test harness (medium refactor — extract shared JS module)
+
+** Approach
+
+Wave 1 handles the trivial cleanup and test gap fix in parallel — they touch non-overlapping concerns. Wave 2 adds the Loader error overlay (depends on cleanup being done so error handling code isn't built on top of dead code). Wave 3 extracts the shared module (depends on Waves 1-2 so the logic being extracted is in its final shape).
+
+** Key Files
+- =domain/growth/src/qml/panels/GrowthShell.qml= — primary target
+- =domain/growth/src/qml/panels/GrowthShellTestHarness.qml= — mirrors GrowthShell
+- =domain/growth/test/panels/growth-shell.test.ts= — test fixes and new error overlay test
+- =domain/growth/src/qml/panels/GrowthShellLogic.js= — new shared JS module (Wave 3)
+
+* Verification
+
+1. =bun test domain/growth/test/panels/growth-shell.test.ts= — all tests pass including new Loader.source and error overlay assertions
+2. =bun test domain/growth/test/panels/chat-drawer.test.ts= — existing tests still pass
+3. =bun check:ts= — no type errors
+4. =grep -c currentPanels domain/growth/src/qml/panels/GrowthShell.qml= returns 0
+5. =GrowthShell.qml= and =GrowthShellTestHarness.qml= both import =GrowthShellLogic.js= and contain no duplicated icon/panel logic
+
+* Execution Manifest
+
+** Wave 1 — Cleanup + test gap (parallel)
+- [[id:BUG-062-remove-dead-currentpanels-property-and-f]] — Remove dead currentPanels, fix comment, hoist iconMap (15m)
+- [[id:BUG-064-panel-loading-test-should-verify-loader]] — Fix test to verify Loader.source (10m)
+
+** Wave 2 — Loader error handling (depends on Wave 1)
+- [[id:BUG-063-add-loader-error-overlay-to-growthshell]] — Add error overlay matching shell.qml pattern (30m)
+
+** Wave 3 — Extract shared module (depends on Waves 1-2)
+- [[id:FEAT-187-extract-shared-growthshell-logic-into-qm]] — Create GrowthShellLogic.js, refactor both QML files (1h)

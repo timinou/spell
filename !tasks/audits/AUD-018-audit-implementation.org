@@ -1,0 +1,76 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-018-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Here's my comprehensive audit:
+
+---
+
+## Audit Findings
+
+### 1. Message handler is a no-op stub
+- **What**: `createMessageHandler` in `bot.ts` logs the message then does nothing (`void processManager`). The `handleTelegramMessage` function from `bridge/telegram-to-rpc.ts` and `ResponseStreamer` from `bridge/rpc-to-telegram.ts` are never wired into the main message flow.
+- **Where**: `packages/telegram-bridge/src/bot/bot.ts` lines 104-120
+- **Why**: The core feature -- sending a text message to the bot and getting a streamed AI response -- does not work. Only `/btw` (throwaway questions) actually invokes the bridge. This is the primary user flow.
+- **Effort**: `small` (wire `handleTelegramMessage` + `ResponseStreamer` into `createMessageHandler`, call `processManager.getOrCreate` with appropriate options, pipe events through `ResponseStreamer`)
+
+### 2. `/btw` race condition: client killed before streaming completes
+- **What**: `handleBtwCommand` calls `client.prompt(question)`, which resolves on `agent_end`/`turn_end`. But `ResponseStreamer.handleEvent` runs via `onEvent` callbacks and `#finalize()` (which sends `ctx.reply()`) may not have completed by the time `finally { await client.kill() }` runs. If the streamer is mid-finalize when the client dies, the last reply is lost.
+- **Where**: `packages/telegram-bridge/src/commands/btw.ts` lines 62-79
+- **Why**: User sends `/btw "question"`, gets no response or a truncated response intermittently.
+- **Effort**: `small` (await a `finalized` promise on the streamer before killing the client, or await a short delay)
+
+### 3. Inline import in types.ts violates AGENTS.md
+- **What**: `userConfig: import("./config/types").UserConfig` uses an inline import in a type position.
+- **Where**: `packages/telegram-bridge/src/types.ts` line 34
+- **Why**: AGENTS.md rule: "NEVER use inline imports -- no `import("pkg").Type` in type positions". Use a standard top-level import.
+- **Effort**: `trivial`
+
+### 4. MODE_TOOLS hardcodes tool lists that duplicate .spell/modes/ files
+- **What**: `commands/index.ts` has a hardcoded `MODE_TOOLS` map with tool lists for `telegram-readonly` and `telegram-full`. These duplicate the `tools.allow` lists in `.spell/modes/telegram-readonly.md` and `.spell/modes/telegram-full.md`. They will inevitably drift.
+- **Where**: `packages/telegram-bridge/src/commands/index.ts` lines 30-64
+- **Why**: Adding a tool to the mode file won't affect the bridge (or vice versa). The plan says tool lists come from Spell's mode system via `--tools`, making the hardcoded map the actual source of truth despite the mode files existing.
+- **Effort**: `medium` (parse mode file frontmatter at startup, or just delete the mode files since they're not actually read)
+
+### 5. `escapeHtml` duplicated across two files with different behavior
+- **What**: `bridge/markdown-html.ts` exports `escapeHtml` (escapes `&`, `<`, `>`). `log-viewer/renderer.ts` has a private `escapeHtml` that also escapes `"` and `'`. The renderer doesn't import the shared one.
+- **Where**: `packages/telegram-bridge/src/bridge/markdown-html.ts` line 9, `packages/telegram-bridge/src/log-viewer/renderer.ts` line 19
+- **Why**: DRY-at-2 violation. The behavioral difference (quote escaping) is intentional for the HTML attribute context in the renderer, but this should be one function with an option, or two functions with distinct names.
+- **Effort**: `trivial`
+
+### 6. `pickLargestPhoto` has unsound return type
+- **What**: `photos[0]` can be `undefined` (TypeScript strict: `TelegramPhoto | undefined`), but the function's return type is `TelegramPhoto`. The caller guards with `photos.length === 0` before calling, but the function itself is type-unsound.
+- **Where**: `packages/telegram-bridge/src/bridge/telegram-to-rpc.ts` line 119
+- **Why**: If called with an empty array (bypassing the guard), it returns `undefined` typed as `TelegramPhoto`. Low risk since the only caller guards, but a latent bug.
+- **Effort**: `trivial` (add `!` assertion or narrow with a guard)
+
+### 7. `/status` shows "Messages: unknown" hardcoded
+- **What**: The `/status` command shows `Messages: unknown` because it never queries the RPC process for session stats.
+- **Where**: `packages/telegram-bridge/src/commands/session-commands.ts` line 73
+- **Why**: User-facing rough edge. The `get_session_stats` RPC command exists and could provide this. Not broken, but misleading.
+- **Effort**: `small`
+
+### 8. No test coverage for the main message flow
+- **What**: No test exercises a non-command text message going through the bot and producing a response. The `createMessageHandler` is untested, and since it's a no-op (finding #1), testing it would just prove it does nothing.
+- **Where**: Missing test in `packages/telegram-bridge/test/`
+- **Why**: The primary feature of the bridge has zero test coverage.
+- **Effort**: `medium` (depends on fixing finding #1 first)
+
+### 9. `telegram-prompt.md` not loaded for main message flow
+- **What**: The Telegram system prompt (`telegram-prompt.md`) is only loaded and passed via `--append-system-prompt` in the `/btw` command. The main message flow (once wired) would spawn processes without this prompt.
+- **Where**: `packages/telegram-bridge/src/commands/btw.ts` line 20 (only usage)
+- **Why**: Main flow responses won't be mobile-optimized. The plan specifies "Custom system prompt appendix for concise Telegram-style responses" as a requirement.
+- **Effort**: `trivial` (pass `appendSystemPrompt` in the `getOrCreate` spawn options)
+
+### 10. `registerCommands` called before auth middleware
+- **What**: In `startBot`, `registerCommands(bot, cmdCtx)` (line 178) is called before `bot.use(authMiddleware(...))` (line 179). `registerCommands` registers callback query handlers via `bot.callbackQuery(...)`. grammy processes middleware in registration order, so callback queries may bypass auth.
+- **Where**: `packages/telegram-bridge/src/bot/bot.ts` lines 178-181
+- **Why**: An unauthorized user could potentially trigger callback query handlers (unlock confirm, project select, mode select) without passing auth middleware.
+- **Effort**: `trivial` (swap the order: auth middleware first, then registerCommands)

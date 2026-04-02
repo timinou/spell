@@ -1,0 +1,80 @@
+#+TITLE: ResponseStreamer swallows LLM and prompt errors showing generic fallback
+#+STATE: ITEM
+#+SESSION_ID: 14ab1285ae9bac4d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T16-44-14-906Z_14ab1285ae9bac4d.jsonl]]
+#+CUSTOM_ID: BUG-101-responsestreamer-swallows-llm-and-prompt
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: packages/telegram-bridge
+
+* Initial Message
+
+hi. how do I test the telegram bot? I have cloudflared
+
+* Scope
+
+When the Telegram bridge bot receives a message and the agent produces no text (LLM error, missing API key, auth failure, rate limit), the user sees "Assistant completed without a text response" with no indication of what went wrong. Three interacting defects cause this:
+
+1. =ResponseStreamer= only accumulates text from =text_delta= / =text_end= assistant events. When the LLM fails (=stopReason=error=), the error info is in the =message_end= event's message payload, but =ResponseStreamer= ignores =message_end='s payload entirely.
+
+2. When =session.prompt()= throws before the LLM runs (no model, no API key), =rpc-mode= outputs a ={ type: "response", success: false, error: "..." }= event. =ResponseStreamer= falls through to =default= case and ignores it. Additionally, =rpc-client= does not resolve =promptCompletion= for ={type: response}= events, causing =rpcClient.prompt()= to hang for 5 minutes (=PROMPT_TIMEOUT_MS=) until timeout.
+
+3. The bridge's =RpcEvent= type for =message_end= drops the message payload (defined as ={ type: "message_end" }=), while the actual JSON from the RPC process includes the full =AgentMessage= with =stopReason= and =errorMessage=. The TypeScript types hide available data.
+
+* Root Cause
+
+In =rpc-client.ts= =handleStdoutLine()= (line 320): only =agent_end= and =turn_end= resolve prompt completion. A ={type: response, success: false}= event (from =session.prompt()= rejection) is neither of those, so =promptCompletion= is never resolved.
+
+In =rpc-to-telegram.ts= =handleEvent()= (line 101-104): =message_end= and =agent_end= both call =#finalize()= without inspecting the event payload. =#buildFinalMarkdown()= returns the bare fallback if =#text= is empty.
+
+In =rpc-to-telegram.ts= =handleEvent()= (line 105-106): =type: response= falls to =default= case — silently discarded.
+
+* Implementation
+
+** 1. Widen RpcEvent types to carry error info
+
+File: =packages/telegram-bridge/src/rpc/types.ts=
+
+- Add =message?: { stopReason?: string; errorMessage?: string }= to =message_end= variant
+- Add =error?: string= to ={ type: "response" }= (already has it, but document it)
+- Optionally add =errorMessage?: string= to =agent_end= variant
+
+** 2. Handle prompt-command error responses in rpc-client
+
+File: =packages/telegram-bridge/src/rpc/rpc-client.ts=
+
+In =handleStdoutLine()=, after the =agent_end= / =turn_end= check:
+- If =parsed.type === "response"= and =parsed.success === false= and the =parsed.command === "prompt"=, reject the pending =promptCompletion= with an error containing =parsed.error=.
+- This fixes the 5-minute hang when =session.prompt()= throws.
+
+** 3. Surface errors in ResponseStreamer
+
+File: =packages/telegram-bridge/src/bridge/rpc-to-telegram.ts=
+
+- In =handleEvent()=, add a =case "response"= that checks =event.success === false= and stores the error message in a new =#errorMessage= field.
+- In =handleEvent()= =case "message_end"=, extract the message payload's =errorMessage= and =stopReason= if present, and store them.
+- In =#buildFinalMarkdown()=, if =#text= is empty but =#errorMessage= is set, return a meaningful error message like ="Agent error: <errorMessage>"= instead of the generic fallback.
+
+** 4. Add test coverage
+
+File: =packages/telegram-bridge/test/rpc-to-telegram.test.ts= (new or existing)
+
+- Test: =ResponseStreamer= shows LLM error when =message_end= carries =errorMessage=
+- Test: =ResponseStreamer= shows prompt error when =type: response, success: false= arrives
+- Test: existing text flow still works (=text_delta= → =text_end= → =message_end=)
+
+File: =packages/telegram-bridge/test/rpc-client.test.ts= (existing or new)
+
+- Test: =rpc-client.prompt()= rejects when a ={type: response, success: false, command: "prompt"}= arrives
+- Test: =rpc-client.prompt()= resolves normally on =agent_end=
+
+* Sequencing note
+
+The RPC client fix (step 2) and ResponseStreamer fix (step 3) can be done in parallel since they touch different files. The RpcEvent type change (step 1) must come first since both depend on it. Tests (step 4) depend on all three.
+
+* Verification
+
+- =bun test packages/telegram-bridge/test/= passes with new tests
+- Manual: start the bridge against a project with no API key configured; send "hi"; verify the Telegram reply shows "No model selected" or "No API key found" instead of the generic fallback
+- Manual: start the bridge against a project with an invalid API key; send "hi"; verify the Telegram reply shows the actual LLM error
+- =bun check:ts= passes

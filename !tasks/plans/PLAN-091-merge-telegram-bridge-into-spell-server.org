@@ -1,0 +1,96 @@
+#+TITLE: Merge telegram-bridge into spell-server
+#+STATE: DOING
+#+SESSION_ID: 14ab1aa0b4b48f2e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T17-19-39-730Z_14ab1aa0b4b48f2e.jsonl]]
+#+CUSTOM_ID: PLAN-091-merge-telegram-bridge-into-spell-server
+
+* Initial Message
+
+i want the telegram-bridge command to be folded into spell server. ask me questions
+
+* Context
+
+The =telegram-bridge= package is a standalone Telegram bot that connects to Spell via RPC. The =spell-server= package is an autonomy daemon with scheduling, goal execution, HTTP dashboard, and hooks. spell-server already depends on telegram-bridge for its RPC layer (RpcClient, RpcEvent, RpcSpawnOptions) and for notification sending.
+
+The user wants to merge telegram-bridge entirely into spell-server: one package, one binary (=spell server= subcommand), one config format (KDL). The telegram-bridge package gets deleted.
+
+** Key decisions
+- *Config format*: All telegram config moves from =~/.spell/telegram.yaml= (YAML) into =channels.kdl= (KDL). The =yaml= dependency is dropped. The KDL schema extends the existing =telegram= node with users, projects, modes, idle-timeouts, etc.
+- *Package structure*: telegram bot, bridge, commands, log-viewer move into =packages/spell-server/src/telegram/=. RPC layer moves into =packages/spell-server/src/rpc/=.
+- *Session management*: telegram-bridge's =ProcessManager= is replaced by spell-server's existing =SessionManager<K>= with =TelegramLifecycle=. A new =TelegramBotService= class wraps SessionManager + grammy bot + log-viewer into a single lifecycle unit.
+- *CLI entry*: =spell server= becomes a subcommand of the main =spell= CLI in coding-agent. The standalone =spell-server= binary remains as a development convenience.
+- *Bot startup*: The bot starts automatically when channels.kdl has a full telegram config (bot-token + users + projects). With just bot-token + owners (minimal config), only notification hooks work — no interactive bot.
+- *Dependencies*: =grammy=, =qrcode=, =@types/qrcode= move to spell-server's package.json. =yaml= is dropped entirely.
+
+** Architecture after merge
+
+#+begin_example
+packages/spell-server/
+  src/
+    config/         # KDL config loaders (server.kdl, channels.kdl, autonomy.kdl)
+    rpc/            # RPC client + types (from telegram-bridge)
+    session/        # SessionManager, lifecycles
+    scheduler/      # Cron-based goal scheduling
+    executor/       # Goal execution controller
+    hooks/          # Hook dispatch (webhook, telegram, org)
+    http/           # HTTP server + dashboard
+    telegram/       # NEW: bot, bridge, commands, log-viewer, service
+    manifest/       # Autonomy manifest parsing
+    server.ts       # Main factory (now includes conditional bot startup)
+    main.ts         # Standalone entry point
+    index.ts        # Public exports
+
+packages/coding-agent/
+  src/commands/
+    server.ts       # NEW: spell server subcommand
+#+end_example
+
+** File movement summary
+
+| Source (telegram-bridge) | Destination (spell-server) |
+|--+-|
+| src/rpc/rpc-client.ts | src/rpc/rpc-client.ts |
+| src/rpc/types.ts | src/rpc/types.ts |
+| src/rpc/state.ts | src/rpc/state.ts |
+| src/types.ts | src/rpc/bridge-types.ts |
+| src/bot/* | src/telegram/bot/* |
+| src/bridge/* | src/telegram/bridge/* |
+| src/commands/* | src/telegram/commands/* |
+| src/log-viewer/* | src/telegram/log-viewer/* |
+| src/utils.ts | src/telegram/utils.ts |
+| src/config/* | DELETED (replaced by KDL config) |
+
+* Verification
+
+After all items complete:
+
+1. =bun check:ts= — passes across entire workspace
+2. =bun test packages/spell-server/= — all tests pass (including moved telegram tests)
+3. =grep -r '@oh-my-pi/telegram-bridge'= — zero results outside git history
+4. =grep -r 'telegram.yaml'= — zero results in source files
+5. =packages/telegram-bridge/= directory does not exist
+6. =spell server --help= prints usage
+7. =spell --help= lists =server= subcommand
+8. With full channels.kdl telegram config: server starts bot + scheduler + HTTP
+9. With minimal channels.kdl (bot-token + owners only): notification hooks work, no bot
+10. With no channels.kdl: server starts with scheduler + HTTP only
+
+* Execution Manifest
+
+Execution order is strictly sequential due to cascading dependencies:
+
+** Wave 1: Foundation
+- [[id:FEAT-232-move-rpc-layer-from-telegram-bridge-into]] — Move RPC layer (types, client, state) into spell-server [M effort]
+
+** Wave 2: Bot subsystem + CLI
+- [[id:FEAT-233-move-telegram-bot-subsystem-into-spell-s]] — Move bot, bridge, commands, log-viewer into spell-server/telegram/ [L effort, depends on W1]
+- [[id:FEAT-235-add-spell-server-subcommand-to-coding-ag]] — Register =spell server= CLI subcommand [S effort, depends on W1 transitively via FEAT-233 but can start once FEAT-233's service.ts interface is defined]
+
+** Wave 3: Config migration
+- [[id:FEAT-234-merge-telegram-config-from-yaml-into-cha]] — Extend channels.kdl parser for full telegram config [M effort, depends on W2]
+
+** Wave 4: Integration
+- [[id:FEAT-236-wire-telegram-bot-startup-into-spell-ser]] — Wire TelegramBotService into server lifecycle [M effort, depends on W3]
+
+** Wave 5: Cleanup
+- [[id:FEAT-237-delete-telegram-bridge-package-and-clean]] — Delete telegram-bridge package, clean workspace refs [S effort, depends on W4]

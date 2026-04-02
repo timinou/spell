@@ -1,0 +1,96 @@
+#+TITLE: FluidPlan error response treated as valid plan
+#+STATE: ITEM
+#+SESSION_ID: 14a9b1dffdf5a05d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T15-03-30-551Z_14a9b1dffdf5a05d.jsonl]]
+#+CUSTOM_ID: BUG-056-fluidplan-error-response-treated-as-vali
+#+EFFORT: S
+#+PRIORITY: A
+#+LAYER: tool
+
+* Initial Message
+
+Error: Failed to finalize approved plan: undefined is not an object (evaluating
+ 'options.fluidPlan.warnings.length')
+
+ Session Info
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-01T15-03-14-486Z_14
+ a9b1d04db87ebe.jsonl
+ ID: 14a9b1d04db87ebe
+
+wtf?
+
+When =org-fluid-plan= Elisp MCP tool errors, it returns an in-band error object:
+#+begin_src json
+{ "error": true, "code": "FLUID_PLAN_ERROR", "message": "..." }
+#+end_src
+
+This is returned as a text content block (not a JSON-RPC error), so =callToolOnce= in =packages/org/src/emacs/client.ts= parses it as valid JSON and returns it.
+
+In =packages/coding-agent/src/tools/exit-plan-mode.ts= line 177-178:
+#+begin_src typescript
+const raw = await client.callTool("org-fluid-plan", { plan_id: params.itemId });
+fluidPlan = raw as FluidPlanWithComponents;
+#+end_src
+
+The unsafe =as= cast produces a truthy object lacking =components= and =warnings= fields. When =interactive-mode.ts= line 1210-1211 accesses:
+#+begin_src typescript
+if (options.fluidPlan) {           // truthy — passes
+    if (options.fluidPlan.warnings.length > 0) {  // undefined.length — BOOM
+#+end_src
+
+* Fix
+
+Two locations need changes:
+
+** 1. exit-plan-mode.ts — validate MCP response shape
+
+After =callTool= returns, check for the in-band error pattern and validate the expected shape before assigning to =fluidPlan=.
+
+File: =packages/coding-agent/src/tools/exit-plan-mode.ts= (around line 177)
+
+Replace:
+#+begin_src typescript
+const raw = await client.callTool("org-fluid-plan", { plan_id: params.itemId });
+fluidPlan = raw as FluidPlanWithComponents;
+#+end_src
+
+With validation:
+#+begin_src typescript
+const raw = await client.callTool("org-fluid-plan", { plan_id: params.itemId });
+if (
+    raw != null &&
+    typeof raw === "object" &&
+    "components" in raw &&
+    Array.isArray((raw as FluidPlanWithComponents).components) &&
+    Array.isArray((raw as FluidPlanWithComponents).warnings)
+) {
+    fluidPlan = raw as FluidPlanWithComponents;
+} else {
+    const msg = raw != null && typeof raw === "object" && "message" in raw
+        ? (raw as { message: string }).message
+        : "unexpected shape";
+    logger.warn("org-fluid-plan returned invalid FluidPlan, falling back to wave-based plan", {
+        itemId: params.itemId,
+        reason: msg,
+    });
+}
+#+end_src
+
+** 2. interactive-mode.ts — add defensive guard
+
+File: =packages/coding-agent/src/modes/interactive-mode.ts= (line 1211)
+
+Add optional chaining as a belt-and-suspenders guard:
+#+begin_src typescript
+if ((options.fluidPlan?.warnings?.length ?? 0) > 0) {
+#+end_src
+
+* Acceptance Criteria
+
+- When =org-fluid-plan= returns an error object, plan approval must succeed using wave-based fallback (no crash).
+- A warning is logged when the MCP response is invalid.
+- =fluidPlan= remains =undefined= when the response shape is wrong.
+- When =org-fluid-plan= returns a valid response, behavior is unchanged.
+- =bun check:ts= passes.

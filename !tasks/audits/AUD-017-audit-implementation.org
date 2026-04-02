@@ -1,0 +1,35 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-017-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+1. **What**: PLAN-079 was marked `DONE` even though the required `bun check:ts` gate did not pass  
+   **Where**: `!tasks/plans/PLAN-079-fix-task-dispatch-auto-roster-corruption.org`, `** Completion [2026-04-02]` section / final org state  
+   **Why**: The completion record now claims validated work despite a failed required verification step. That weakens plan-state trust and can let regressions ship behind a false green status.  
+   **Effort**: small
+
+2. **What**: Explicit `phase` input still bypasses newline sanitization and the 80-character cap  
+   **Where**: `packages/coding-agent/src/task/sanitize.ts`, `deriveAutoRosterPhaseNameFromContext()` early `explicitPhase` return  
+   **Why**: The original corruption class is still reachable through `params.phase`: a model- or user-supplied explicit phase can still contain embedded newlines or oversized text and create malformed roster phase names.  
+   **Effort**: small
+
+3. **What**: Budget-overrun recovery depends on being able to prompt a session after `requestAbort("terminate")`  
+   **Where**: `packages/coding-agent/src/task/executor.ts`, `requestAbort()` and the post-`session.prompt()` submit_result reminder loop  
+   **Why**: The new graceful-degradation path is only proven with a permissive mock. If a real `AgentSession.abort()` makes the session non-interactive, forced budget termination will not recover via `submit_result` as intended.  
+   **Effort**: medium
+
+4. **What**: The new auto-roster sanitization coverage is helper-only; there is no TaskTool-level regression test for literal `\n` inputs  
+   **Where**: `packages/coding-agent/test/task/auto-roster-sanitize.test.ts` and missing case in `packages/coding-agent/test/task/auto-roster.test.ts`  
+   **Why**: Direct helper tests still pass if production wiring breaks. That already happened during implementation: the whole-task suite caught a wiring failure that the helper tests did not. Without an integration test, future refactors can disconnect sanitization from actual roster creation silently.  
+   **Effort**: small
+
+5. **What**: Sanitization only normalizes literal `\n`, not literal `\r\n` sequences  
+   **Where**: `packages/coding-agent/src/task/sanitize.ts`, both `deriveAutoRosterPhaseNameFromContext()` and `sanitizeTaskContent()`  
+   **Why**: CRLF-style escaped input can still leak `\\r` fragments into phase names or todo titles, producing odd display artifacts and partially malformed auto-roster content.  
+   **Effort**: trivial

@@ -1,0 +1,49 @@
+#+TITLE: Delete telegram-bridge package and clean up workspace
+#+STATE: DONE
+#+SESSION_ID: 14ab1aa0b4b48f2e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T17-19-39-730Z_14ab1aa0b4b48f2e.jsonl]]
+#+CUSTOM_ID: FEAT-237-delete-telegram-bridge-package-and-clean
+#+EFFORT: S
+#+PRIORITY: A
+#+LAYER: infra
+#+DEPENDS: FEAT-236-wire-telegram-bot-startup-into-spell-ser
+
+* Initial Message
+
+i want the telegram-bridge command to be folded into spell server. ask me questions
+
+Remove the =packages/telegram-bridge/= package entirely and clean up all workspace references.
+
+* Scope
+** Delete package
+- =rm -rf packages/telegram-bridge/= — entire package directory
+
+** Workspace cleanup
+- =tsconfig.base.json= — remove =@oh-my-pi/telegram-bridge= and =@oh-my-pi/telegram-bridge/*= path aliases
+- =package.json= (root) — if telegram-bridge is listed in workspace patterns, it will be auto-excluded by deletion
+- Run =bun install= to regenerate =bun.lock= without telegram-bridge
+- =biome.jsonc= — check if telegram-bridge paths are referenced
+
+** Documentation updates
+- =packages/spell-server/docs/architecture.md= — update to reflect merged architecture (no external telegram-bridge dependency)
+- =packages/spell-server/docs/getting-started.md= — update to reference channels.kdl for full telegram config
+- =packages/spell-server/docs/kdl-schema-reference.md= — update channels.kdl schema docs with new fields
+
+** spell-server package.json cleanup
+- Remove =@oh-my-pi/telegram-bridge= from dependencies (already done in FEAT-232, verify)
+- Add =grammy=, =qrcode= deps if not already added in FEAT-233
+
+* Sub-outline
+1. Delete =packages/telegram-bridge/= directory
+2. Remove tsconfig path aliases
+3. Run =bun install= to update lock file
+4. Update spell-server documentation
+5. Verify no dangling references with =grep -r telegram-bridge= across repo
+
+* Verification
+- =grep -r '@oh-my-pi/telegram-bridge' .= returns zero results (excluding git history)
+- =grep -r 'telegram-bridge' . --include='*.json' --include='*.ts' --include='*.kdl'= returns zero results
+- =bun install= succeeds
+- =bun check:ts= passes across entire workspace
+- =bun test packages/spell-server/= passes
+- No broken imports anywhere

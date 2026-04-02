@@ -3,7 +3,7 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import { parseManifestKdl } from "../manifest/parser";
 import type { AutonomyManifest } from "../manifest/types";
 import { validateManifest } from "../manifest/validator";
-import { parseChannelsConfig } from "./channels-parser";
+import { parseChannelsConfig, resolveChannelsBotToken } from "./channels-parser";
 import { parseServerConfig } from "./server-parser";
 import type { ChannelsConfig, SpellServerConfig } from "./types";
 
@@ -18,7 +18,8 @@ export async function loadConfig(configDir: string): Promise<LoadedConfig> {
 
 	let channels: ChannelsConfig = {};
 	try {
-		channels = parseChannelsConfig(await Bun.file(path.join(configDir, "channels.kdl")).text());
+		channels = parseChannelsConfig(await Bun.file(path.join(configDir, "channels.kdl")).text(), configDir);
+		channels = await resolveChannelsBotToken(channels, configDir);
 	} catch (error) {
 		if (!isEnoent(error)) {
 			throw wrapConfigError("channels.kdl", error);

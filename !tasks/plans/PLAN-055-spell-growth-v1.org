@@ -1,0 +1,133 @@
+#+TITLE: Spell Growth V1
+#+STATE: INIT
+#+SESSION_ID: 14a8626c39c41591
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591.jsonl]]
+#+CUSTOM_ID: PLAN-055-spell-growth-v1
+#+EFFORT: 600h
+#+PRIORITY: #A
+
+* Context
+
+Spell Growth is a non-coding distribution of Spell that transforms the coding agent into a growth/marketing workspace. Canvas-first QML desktop app with workspace layouts tightly coupled to behavioral modes, native TypeScript scraper framework, live Typst document editing with WASM preview, and comprehensive competitive intelligence capabilities.
+
+** Problem
+Growth practitioners at ORA Ventures use fragmented tools: manual Typst creation, separate Python FB Ad Library scrapers, scattered files across BackDesk-C, no unified workspace.
+
+** Approach
+Build domain abstraction layer in Spell core, then build growth infrastructure (scraper, Typst, QML shell) in parallel, then wire panels and modes.
+
+** Key Decisions
+- Distribution: Auto-detected from .spell/domain.json. Internal ORA tool, architected for extraction.
+- Canvas: Always-canvas. QML primary, TUI launcher. Chat is persistent bottom drawer.
+- Workspace = Mode (tight coupling): Switching workspace activates default mode. Overridable.
+- Scraper: Native TS with Puppeteer (reuse stealth scripts). YAML configs. Platform-native normalized SQLite.
+- Typst Editor: Monaco/CodeMirror in WebEngineView + tree-sitter-typst WASM. typst-ts WASM SVG preview. Click-to-code.
+- Modes: .spell/modes/*.md using existing ModeConfigFrontmatter. 6 modes: /intel, /strategy, /pitch, /review, /campaign, /brief.
+- Subagent Gates: Athena (completeness), Hermes (strategy), Apollo (brand), Ares (campaign).
+- Data Hydration: YAML files for Typst via built-in yaml() function.
+- Brand Guardian: Full gate (tree-sitter + compile + LLM). Configurable via rules.
+- Example Branding: Spell brand (public repo). ORA brand via .spell/growth/branding.json config path.
+- Deliverable Lifecycle: Org items (state) + filesystem (.typ) + SQLite (metadata).
+- Testing: Layer separation + user journey org spike + QmlJourney E2E + full lifecycle tests.
+- Config: .spell/domain.json + .spell/growth/ directory.
+- Font Loading: Custom fonts in typst-ts WASM VFS. Part of Typst integration.
+- Scope: Full V1 including all panels, modes, scraper, editor, planner, signals, analyzer, template builder.
+
+** Spec Files
+- domain/growth/specs/needs.org, stakeholders.org, features-list.org, screens.org, usecases.org, thoughts.org, tickets.org
+- domain/growth/specs/deep-dive/typst-integration.org, scraper-framework.org, domain-architecture.org
+
+** Critical Integration Points
+- sdk.ts: CreateAgentSessionOptions for domain injection
+- tools/index.ts: BUILTIN_TOOLS domain filtering
+- qml-mode.ts: Shell launch + panel discovery
+- system-prompt.ts: Domain prompt injection
+- capability/mode.ts: ModeConfigFrontmatter workspace coupling
+- tools/puppeteer/: Stealth scripts for scraper
+
+* Verification
+
+- ~bun check:ts~ passes with all changes
+- ~bun test domain/growth/test/~ all scraper, typst, pipeline, mode tests pass
+- ~bun test domain/growth/test/journeys/~ all J01-J12 journey tests pass
+- Launch spell with .spell/domain.json growth: shell opens with workspace sidebar
+- Switch workspaces: layout changes, panel state preserved
+- Competitive scan: ads in Intel panel from SQLite
+- Report Editor: Monaco + Typst highlighting + live SVG preview
+- Click preview element: editor jumps to source line
+- /strategy: Research workspace activates, tools restricted
+- Weekly report: template + data.yaml, PDF exports
+- ~bun test packages/coding-agent/test/~ existing tests still pass
+- Running spell in code dir: unchanged behavior
+
+* Execution Manifest
+
+Each wave lists parent org items. Sub-task parallelism is defined within each item's sub-outline (::slug format). Executor should start all sub-tasks within a wave that have their dependencies satisfied.
+
+** foundation                                                              :wave:
+No cross-item dependencies. All items start their first sub-tasks in parallel.
+
+- [[id:PROJ-012-spell-domain-system]] start ::define-domain-types (4h)
+- [[id:PROJ-011-native-ts-scraper-framework]] start ::define-config-types + ::implement-rate-limiter (7h parallel)
+- [[id:PROJ-010-typst-integration]] start ::setup-typst-wasm + ::setup-monaco-editor + ::create-spell-branding (22h parallel)
+- [[id:PROJ-014-user-journey-spike-and-qml-testing]] start ::write-journey-specs + ::create-fixtures (13h parallel)
+- [[id:FEAT-137-growth-modes]] start all 5 mode .md files: ::create-intel/strategy/pitch/review/brief-mode (10h parallel)
+- [[id:FEAT-140-growth-dashboard-panel]] start ::define-data-model (2h)
+- [[id:FEAT-141-competitive-intelligence-panel]] start ::define-types (2h)
+- [[id:FEAT-138-report-editor-panel]] start ::design-protocol (3h)
+- [[id:FEAT-139-deliverable-pipeline]] start ::define-types (3h)
+- [[id:FEAT-142-client-portfolio-panel]] start ::define-client-types (2h)
+- [[id:FEAT-143-campaign-planner-board]] start ::define-campaign-types (2h)
+
+** core-infra                                                              :wave:
+Continue each item's sub-outline where foundation types are ready.
+
+- [[id:PROJ-012-spell-domain-system]] ::implement-detection + ::implement-loader + ::coding-domain-manifest (16h parallel)
+- [[id:PROJ-011-native-ts-scraper-framework]] ::implement-config-loader + ::implement-transforms + ::implement-paginator + ::implement-persistence (19h parallel)
+- [[id:PROJ-010-typst-integration]] ::implement-font-loading + ::implement-yaml-hydration + ::implement-pdf-export (10h parallel)
+- [[id:PROJ-013-growth-qml-shell-and-workspace-system]] start ::define-workspace-schema + ::create-workspace-configs (6h)
+- [[id:FEAT-141-competitive-intelligence-panel]] ::implement-armed-query (4h)
+- [[id:FEAT-140-growth-dashboard-panel]] ::implement-queries (3h)
+- [[id:FEAT-139-deliverable-pipeline]] ::implement-manager (5h)
+- [[id:FEAT-142-client-portfolio-panel]] ::implement-context-filter (3h)
+
+** core-wiring                                                             :wave:
+Wire domain into Spell core. Assemble scraper engine. Typst advanced features.
+
+- [[id:PROJ-012-spell-domain-system]] ::wire-session-options then ::tool-selection + ::prompt-assembly + ::panel-discovery + ::workspace-mode-coupling (27h)
+- [[id:PROJ-011-native-ts-scraper-framework]] ::implement-extractor then ::implement-engine + ::fb-ads-config (21h)
+- [[id:PROJ-010-typst-integration]] ::create-templates + ::implement-brand-guardian + ::implement-source-mapping (17h parallel)
+- [[id:FEAT-137-growth-modes]] ::create-campaign-mode + ::implement-mode-workspace-coupling + ::implement-escalation (12h)
+- [[id:FEAT-139-deliverable-pipeline]] ::implement-viz-data (2h)
+- [[id:FEAT-144-market-signal-feed]] start ::implement-diff-engine (4h)
+
+** shell-build                                                             :wave:
+Growth QML shell. Depends on panel discovery + workspace configs.
+
+- [[id:PROJ-013-growth-qml-shell-and-workspace-system]] ::extend-shell-qml + ::implement-workspace-switching + ::implement-panel-persistence + ::implement-panel-context + ::implement-chat-drawer + ::implement-multi-agent-tabs (40h)
+
+** panels                                                                  :wave:
+All QML panels in parallel. Each depends on shell + its data layer.
+
+- [[id:FEAT-140-growth-dashboard-panel]] ::create-panel-qml + ::create-metric-card + ::create-ad-summary-card (10h)
+- [[id:FEAT-141-competitive-intelligence-panel]] ::create-panel-qml + ::create-filter-toolbar + ::create-ad-card + ::create-detail-drawer (16h)
+- [[id:FEAT-138-report-editor-panel]] ::create-panel-qml + ::implement-agent-sync + ::implement-template-selector + ::implement-file-tree (19h)
+- [[id:FEAT-142-client-portfolio-panel]] ::create-panel-qml + ::create-client-card (6h)
+- [[id:FEAT-143-campaign-planner-board]] ::create-kanban-qml + ::implement-drag-drop + ::implement-armed-tools (13h)
+- [[id:FEAT-144-market-signal-feed]] ::implement-scheduler + ::implement-digest + ::create-signal-config (9h)
+- [[id:FEAT-145-ad-creative-analyzer]] all sub-tasks (10h)
+- [[id:FEAT-146-template-builder]] all sub-tasks (16h)
+
+** testing                                                                 :wave:
+Journey tests + all unit tests.
+
+- [[id:PROJ-014-user-journey-spike-and-qml-testing]] ::create-growth-journey then J01-J12 journey tests in parallel (38h)
+- All items: run ::write-*-tests sub-tasks (~55h total, all parallel)
+
+** followups                                                               :wave:
+Post-V1 deferred items.
+
+- [[id:FUP-008-full-bidirectional-collaborative-typst-e]] Bidirectional collaborative Typst editing (40h)
+- [[id:FUP-009-clean-multi-agent-architecture]] Clean multi-agent architecture (30h)
+- [[id:FUP-010-growth-data-import-and-api-connections]] Data import and API connections (20h)
+- [[id:FUP-011-workspace-saving-and-customization]] Workspace saving and customization (15h)

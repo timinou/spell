@@ -1,0 +1,74 @@
+#+TITLE: Move Telegram bot subsystem into spell-server
+#+STATE: DONE
+#+SESSION_ID: 14ab1aa0b4b48f2e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T17-19-39-730Z_14ab1aa0b4b48f2e.jsonl]]
+#+CUSTOM_ID: FEAT-233-move-telegram-bot-subsystem-into-spell-s
+#+EFFORT: L
+#+PRIORITY: A
+#+LAYER: core
+#+DEPENDS: FEAT-232-move-rpc-layer-from-telegram-bridge-into
+
+* Initial Message
+
+i want the telegram-bridge command to be folded into spell server. ask me questions
+
+Move the entire Telegram bot, bridge, commands, and log-viewer from =packages/telegram-bridge/= into =packages/spell-server/src/telegram/=. This is the largest piece of the merge.
+
+* Scope
+
+Move these directories from =packages/telegram-bridge/src/= into =packages/spell-server/src/telegram/=:
+- =bot/= (bot.ts, auth.ts, tokens.ts, invite.ts)
+- =bridge/= (telegram-to-rpc.ts, rpc-to-telegram.ts, markdown-html.ts, message-splitter.ts, telegram-prompt.md)
+- =commands/= (index.ts, mode.ts, project.ts, session-commands.ts, start-help.ts, unlock-lock.ts, btw.ts)
+- =log-viewer/= (server.ts, renderer.ts, index.ts)
+- =types.ts= → already moved as bridge-types.ts in FEAT-232; update imports to reference =../rpc/bridge-types=
+- =utils.ts= (HTML escaping)
+
+* Dependencies to add to spell-server/package.json
+- =grammy= (^1.35) — Telegram bot framework
+- =yaml= (^2.7) — still needed temporarily for config migration period? NO — config moves to KDL, drop yaml entirely
+- =qrcode= (^1.5) — QR code for /invite command
+- =@types/qrcode= (^1.5) — devDependency
+
+* Import rewiring
+All internal imports within the moved files need rewiring:
+- =../config/types= → =./config/types= (new KDL-based config types, see FEAT-234)
+- =../rpc/process-manager= → the ProcessManager concept merges with spell-server's SessionManager or becomes a thin adapter on top of it
+- =../rpc/rpc-client= → =../rpc/rpc-client=
+- =../rpc/types= → =../rpc=
+- =../types= → =../rpc/bridge-types=
+
+* ProcessManager consolidation
+telegram-bridge's ProcessManager and spell-server's SessionManager overlap significantly:
+- Both manage RpcClient instances keyed by a string
+- Both handle idle timeouts
+- Both handle lifecycle (create/kill/killAll)
+- ProcessManager adds: project resolution, session state persistence, mode tools
+- SessionManager adds: generic type parameter, lifecycle strategy pattern, pending dedup
+
+Strategy: Keep SessionManager<K> as the core abstraction. Create a =TelegramBotService= class in =packages/spell-server/src/telegram/service.ts= that:
+1. Owns a =SessionManager<string>= with =TelegramLifecycle=
+2. Wraps session state persistence (load/save bridge state)
+3. Provides the CommandContext (config, processManager facade, telegramPrompt)
+4. Starts/stops the grammy bot
+5. Starts/stops the log-viewer HTTP server (if configured)
+
+The existing ProcessManager interface (getOrCreate, kill, getSession, etc.) becomes a thin facade over SessionManager with project resolution logic.
+
+* Sub-outline
+1. Add =grammy=, =qrcode= deps to =packages/spell-server/package.json=; add =@types/qrcode= to devDeps
+2. Copy =bot/=, =bridge/=, =commands/=, =log-viewer/=, =utils.ts= into =packages/spell-server/src/telegram/=
+3. Create =packages/spell-server/src/telegram/service.ts= — TelegramBotService class
+4. Create =packages/spell-server/src/telegram/index.ts= barrel
+5. Rewire all internal imports within copied files
+6. Replace ProcessManager usage in bot/commands with SessionManager-backed facade
+7. Update =packages/spell-server/src/server.ts= — conditionally start TelegramBotService when channels config has telegram section
+8. Move relevant tests from =packages/telegram-bridge/test/= to =packages/spell-server/test/telegram/=
+9. Update test imports
+
+* Verification
+- =bun check:ts= passes
+- =bun test packages/spell-server/= — all tests pass including moved telegram tests
+- Bot commands (start, help, mode, project, etc.) are wired and accessible
+- TelegramBotService.start() calls grammy bot.start() and log-viewer
+- TelegramBotService.stop() gracefully stops bot and kills all sessions

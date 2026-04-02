@@ -1,0 +1,23 @@
+#+TITLE: Progressive skill disclosure (already implemented)
+#+STATE: ITEM
+#+SESSION_ID: 14a9f27012543263
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T19-45-35-305Z_14a9f27012543263.jsonl]]
+#+CUSTOM_ID: FEAT-193-progressive-skill-disclosure-with-lazy-l
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: packages/coding-agent
+
+* Status: Already implemented
+Investigation revealed the system prompt template already renders skills as name+description catalog:
+#+begin_src handlebars
+{{#each skills}}
+## {{name}}
+{{description}}
+{{/each}}
+#+end_src
+(=system-prompt.md= lines 121-124)
+
+Full SKILL.md content is loaded on demand via =skill://name= protocol, which is already resolved by
+the =read= tool through =InternalUrlRouter= → =SkillProtocolHandler=.
+
+No work needed. Drop from execution manifest.

@@ -1,6 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
-import type { RpcClient, RpcEvent } from "@oh-my-pi/telegram-bridge";
 import type { AutonomyManifest, FilterConfig, ManifestGoal, ManifestSetup } from "../manifest/types";
+import type { RpcClient, RpcEvent } from "../rpc";
 import type { SessionManager } from "../session/session-manager";
 import type { BaseSpawnOptions } from "../session/types";
 import { removeSandboxPolicy, writeSandboxPolicy } from "./sandbox-writer";

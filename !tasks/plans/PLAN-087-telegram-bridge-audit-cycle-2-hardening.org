@@ -1,0 +1,52 @@
+#+TITLE: Telegram bridge audit cycle 2 hardening
+#+STATE: DOING
+#+SESSION_ID: 14aae0e4276d8b54
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-07-24-445Z_14aae0e4276d8b54.jsonl]]
+#+CUSTOM_ID: PLAN-087-telegram-bridge-audit-cycle-2-hardening
+#+EFFORT: 2h15m
+#+PRIORITY: #A
+
+* Context
+Post-implementation audit (cycle 1) of PLAN-085 found 5 defects. The most critical: =ResponseStreamer.done= can hang forever when the RPC lifecycle fails before emitting terminal events, blocking cleanup in both the main message flow and =/btw=. Additionally, every message leaks an event listener on the shared RPC client, respawned sessions lose the Telegram system prompt, and photo/document-only messages are silently dropped despite the bridge already supporting them.
+
+** Approach
+Test-first: each bug-fix item writes failing tests that demonstrate the defect, then implements the fix to make them pass. Three items, two waves.
+
+1. *Wave 1* (sequential — shared =bot.ts=): BUG-090 writes tests for =cancel()=/=offEvent()= and the finalize-throw scenario, then implements. BUG-091 writes tests for respawn prompt propagation, then implements =CommandContext= changes + message guard loosening.
+2. *Wave 2*: BUG-092 writes message handler integration tests that verify already-fixed behavior (should pass immediately).
+
+** Key Decisions
+- =ResponseStreamer= gets a public =cancel(): void= that idempotently resolves =done=. Callers use it in catch/finally paths. =#finalize()= and the error handler use try/finally so =#doneResolve()= always runs.
+- =RpcClient= gets =offEvent(callback)= for listener removal. The message handler stores its listener ref and removes it after the streaming cycle.
+- =telegramPrompt= moves into =CommandContext= so all command handlers (including =respawnSession=) have access. This simplifies =createMessageHandler= from 3 params to 1 (=cmdCtx=).
+- The message guard is loosened: messages with =text=, =photo=, or =document= are accepted. Other message types (stickers, voice, etc.) pass to =next()=.
+- =createMessageHandler= is exported for direct testing. Tests verify the wired pipeline: mock context → process manager → streamer → reply.
+
+** Critical Codebase References
+- ResponseStreamer: =packages/telegram-bridge/src/bridge/rpc-to-telegram.ts= (=#finalize=, =handleEvent= error branch, =done= getter)
+- RpcClient listeners: =packages/telegram-bridge/src/rpc/rpc-client.ts= (=#eventListeners=, =#emitEvent=)
+- Message handler: =packages/telegram-bridge/src/bot/bot.ts= (=createMessageHandler=, =startBot=)
+- /btw command: =packages/telegram-bridge/src/commands/btw.ts= (finally block)
+- CommandContext + respawnSession: =packages/telegram-bridge/src/commands/index.ts=
+- Mock infrastructure: =packages/telegram-bridge/test/commands.test.ts= (=MockProcessManager=, =MockRpcClient=, =mockCommandContext=)
+- Bridge tests: =packages/telegram-bridge/test/bridge.test.ts=
+
+* Verification
+- =bun test packages/telegram-bridge/= -- all tests pass including new ones
+- =bun check:ts= -- no new errors in =packages/telegram-bridge/=
+- Manual code review:
+  - =ResponseStreamer= has a =cancel()= method and =#finalize()= uses try/finally
+  - =RpcClient= has =offEvent()= and the message handler calls it
+  - =respawnSession= passes =appendSystemPrompt= from =cmdCtx.telegramPrompt=
+  - =createMessageHandler= accepts photo-only and document-only messages
+  - New test in =bot.test.ts= exercises a text message through the message handler
+  - No =void processManager= or other stubs remain
+
+* Execution Manifest
+
+** wave-1                                                                  :wave:
+- [[id:BUG-090-responsestreamer-done-hang-and-event-lis]] ResponseStreamer done hang + event listener leak (1h, test-first)
+- [[id:BUG-091-system-prompt-missing-from-respawned-ses]] System prompt for respawned sessions + photo/doc messages (45m, test-first, follows BUG-090 due to shared bot.ts)
+
+** wave-2                                                                  :wave:
+- [[id:BUG-092-main-message-flow-lacks-regression-test]] Main message flow regression test (30m, depends BUG-090 + BUG-091, verification tests)

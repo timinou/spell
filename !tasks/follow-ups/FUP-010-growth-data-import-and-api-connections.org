@@ -1,0 +1,16 @@
+#+TITLE: Growth Data Import and API Connections
+#+STATE: ITEM
+#+SESSION_ID: 14a899a7fbc415d6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-03-31T14-37-53-767Z_14a8626c39c41591/35-CreateRemainingFeats.jsonl]]
+#+CUSTOM_ID: FUP-010-growth-data-import-and-api-connections
+#+EFFORT: 20h
+#+PRIORITY: #C
+#+LAYER: domain
+
+* Scope
+- Import existing BackDesk files into growth SQLite
+- Connect to external APIs: Facebook Ads Manager, Google Analytics via MCP servers
+- YAML table/record editor QML component for manual data entry
+
+* Rationale for Deferral
+V1 creates the growth data infrastructure from scratch (SQLite schema, scraper-populated data). Import and external API connections are a separate concern that depends on the schema being stable. Tackling import before schema is proven risks repeated migration work.

@@ -9,7 +9,8 @@ At a high level, Spell Server answers one question: given a repository with a `.
 The package is structured around a few cooperating subsystems:
 
 - `manifest/` parses and validates `autonomy.kdl` into typed in-memory structures.
-- `session/` manages long-lived RPC clients backed by `@oh-my-pi/telegram-bridge`.
+- `session/` manages long-lived RPC clients via the internal `rpc/` module.
+- `telegram/` contains the Telegram bot, bridge, commands, and log-viewer (merged from the former `telegram-bridge` package).
 - `scheduler/` uses Croner to evaluate cron schedules and invoke callbacks.
 - `executor/` runs a goal, tracks its state machine, applies retry policy, and writes sandbox policy files.
 - `hooks/` delivers run results to webhook, Telegram, or org executors.
@@ -201,12 +202,11 @@ The manifest schema supports per-goal state with `state persist=<bool>` and opti
 
 That means Spell Server’s responsibility is to declare and pass state capability through the runtime contract. The package does not currently open SQLite directly inside `packages/spell-server/src`; persistence is delegated to the underlying autonomy state tool and the wider runtime. When documenting deployments, it is best to think of state as per-goal persisted runtime state whose schema is declared in the manifest, rather than as an HTTP-server-owned database.
 
-## Relationship with `@oh-my-pi/telegram-bridge`
+## RPC Layer
 
-Spell Server reuses `@oh-my-pi/telegram-bridge` as a general RPC transport layer, not only for Telegram chat features. The imported `RpcClient`, `RpcSpawnOptions`, and event stream types are the basis for both session management and prompt execution.
+The `rpc/` module contains `RpcClient`, `RpcSpawnOptions`, and event stream types that form the basis for both session management and prompt execution. These were originally part of the `telegram-bridge` package and are now internal to spell-server.
 
-This reuse matters because it avoids inventing a second process protocol. The same library already knows how to spawn, stream updates, emit lifecycle events, and terminate remote clients. Spell Server stays focused on daemon concerns: scheduling, policy, retries, hooks, and observability.
-
+This reuse matters because it avoids inventing a second process protocol. The same module knows how to spawn, stream updates, emit lifecycle events, and terminate remote clients. Spell Server stays focused on daemon concerns: scheduling, policy, retries, hooks, and observability.
 ## Graceful Shutdown
 
 The graceful shutdown story is split across explicit primitives rather than hidden in one monolithic server class.

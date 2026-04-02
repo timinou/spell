@@ -1,0 +1,87 @@
+#+TITLE: Panel loading test should verify Loadersource is set
+#+STATE: ITEM
+#+SESSION_ID: 14a9e2bd33b552a9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T18-36-59-982Z_14a9e2bd33b552a9.jsonl]]
+#+CUSTOM_ID: BUG-064-panel-loading-test-should-verify-loader
+#+EFFORT: 10m
+#+PRIORITY: #B
+#+LAYER: test
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-014-audit-implementation:
+
+Here are my findings:
+
+---
+
+### Finding 1: `currentPanels` is dead code
+- **What**: `currentPanels` property is assigned on `workspace_layout` message but never read by any code.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` line 17, 193. Same in test harness lines 25, 194.
+- **Why**: Misleads future readers into thinking the `workspace_layout` payload drives panel loading. In reality, `loadWorkspacePanel()` resolves everything from the local `workspaces` array + `panelRegistry`. If TS ever sends a layout override with different panels, GrowthShell silently ignores it.
+- **Effort**: trivial
+
+### Finding 2: No Loader error handling
+- **What**: `mainPanelLoader` has no `onStatusChanged` handler and no error overlay. If a panel QML file fails to load (bad path, syntax error), the user sees a blank area with no feedback.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 167–170 (Loader definition)
+- **Why**: `shell.qml` has explicit `Loader.Error` state detection and an error overlay UI. GrowthShell has none. A broken panel file silently fails — user sees "Select a workspace to begin" with no clue why.
+- **Effort**: small
+
+### Finding 3: `workspace_layout` override is documented but not implemented
+- **What**: Comment says "TS may override layout — re-resolve panels" but `loadWorkspacePanel()` only reads the static `workspaces` array, not `currentPanels`. The TS-sent layout is stored then discarded.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 192–196
+- **Why**: If the TS side ever sends a different panel arrangement via `workspace_layout` (which is the documented purpose of that message type), GrowthShell will ignore it. The comment actively misleads.
+- **Effort**: small
+
+### Finding 4: Panel loading test doesn't verify the Loader actually loaded
+- **What**: The "switching workspace loads the main panel via Loader" test verifies `currentWorkspaceId` changed and `panelRegistry` has the right path, but never checks `mainPanelLoader.source` or `mainPanelLoader.item`. It tests prerequisites, not the contract.
+- **Where**: `domain/growth/test/panels/growth-shell.test.ts` lines 88–101
+- **Why**: The core bug was "Loader never has its source set". The test doesn't assert that `source` is set. A regression that breaks the binding between registry lookup and `mainPanelLoader.source = panelPath` would pass this test.
+- **Effort**: trivial
+
+### Finding 5: `iconFor()` fully duplicated between GrowthShell.qml and test harness
+- **What**: `iconFor()`, `loadWorkspacePanel()`, `Component.onCompleted` registry builder, `panelRegistry` property — the entire panel-loading architecture is copy-pasted between the two files.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` (22–74) and `GrowthShellTestHarness.qml` (28–79)
+- **Why**: Any future fix to panel loading or icon mapping must be applied twice. The harness exists because ApplicationWindow can't be nested, but the logic could be extracted to a shared JS module imported by both.
+- **Effort**: medium
+
+### Finding 6: `iconFor` allocates a new object on every call
+- **What**: The function creates a fresh `var icons = { ... }` object literal each invocation. Called 6 times per workspace list render.
+- **Where**: `domain/growth/src/qml/panels/GrowthShell.qml` lines 22–34
+- **Why**: Negligible performance impact at 6 calls, but it's a code smell. The map should be a property or module constant. Low priority.
+- **Effort**: trivial
+
+Addresses audit finding 4.
+
+* Problem
+
+The "switching workspace loads the main panel via Loader" test in =growth-shell.test.ts= (lines 88-101) verifies:
+- =currentWorkspaceId= changed to "strategy"
+- =panelRegistry['dashboard']= contains "GrowthDashboard.qml"
+
+But it never checks that =mainPanelLoader.source= was actually set. The core contract tested by this suite is "Loader loads content when workspace is selected". A regression that breaks the =mainPanelLoader.source = panelPath= assignment would pass this test.
+
+* Fix
+
+In =domain/growth/test/panels/growth-shell.test.ts=, in the "switching workspace loads the main panel via Loader" test, after the existing assertions add:
+
+#+begin_src typescript
+// Verify the Loader source was actually set to the dashboard panel path
+const loaderSource = await harness.evaluate<string>(
+  "JSON.stringify(root.contentItem.children[0].children[1].children[0].children[0].source)"
+);
+// ... or use a named approach:
+const source = await harness.evaluate<string>(
+  "(function(){ var items = root.contentItem.children;" +
+  "for(var i=0;i<items.length;i++){for(var j=0;j<items[i].children.length;j++){" +
+  "var c=items[i].children[j];for(var k=0;k<c.children.length;k++){" +
+  "var l=c.children[k]; if(l.objectName==='mainPanelLoader' || (l.source !== undefined && l.source !== '')) return String(l.source);}}} return '';})()"
+);
+expect(source).toContain("GrowthDashboard.qml");
+#+end_src
+
+A cleaner approach: give mainPanelLoader an =objectName: "mainPanelLoader"= in both GrowthShell.qml and the test harness, then use =findItems({ objectName: "mainPanelLoader" }, { properties: ["source"] })= to read it. This is more robust than tree traversal.
+
+* Acceptance Criteria
+- The test asserts that the Loader's =source= property contains the expected panel QML path after workspace switch
+- =bun test domain/growth/test/panels/growth-shell.test.ts= passes

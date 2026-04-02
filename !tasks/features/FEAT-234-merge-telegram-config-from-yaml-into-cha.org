@@ -1,0 +1,117 @@
+#+TITLE: Merge telegram config from YAML into channelskdl
+#+STATE: DONE
+#+SESSION_ID: 14ab1aa0b4b48f2e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T17-19-39-730Z_14ab1aa0b4b48f2e.jsonl]]
+#+CUSTOM_ID: FEAT-234-merge-telegram-config-from-yaml-into-cha
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: config
+#+DEPENDS: FEAT-233-move-telegram-bot-subsystem-into-spell-s
+
+* Initial Message
+
+i want the telegram-bridge command to be folded into spell server. ask me questions
+
+Extend channels.kdl to support the full telegram-bridge configuration that was previously in ~/.spell/telegram.yaml. Drop the YAML config format entirely.
+
+* Current channels.kdl schema
+#+begin_src kdl
+telegram {
+  bot-token \"123456:ABC-DEF\"
+  owners 12345 67890
+}
+#+end_src
+
+* New channels.kdl schema
+#+begin_src kdl
+telegram {
+  bot-token \"123456:ABC-DEF\"
+  // Or read from file: bot-token-file \"/path/to/token\"
+
+  upload-dir \"/tmp/spell-uploads\"
+  idle-timeout 300
+  max-sessions 10
+  log-viewer-port 8081
+
+  project \"myproject\" \"/home/user/code/myproject\"
+  project \"dotfiles\" \"/home/user/dotfiles\"
+  default-project \"myproject\"
+
+  user 12345 {
+    modes \"full\" \"readonly\"
+    default-mode \"full\"
+    idle-timeout null  // null = never timeout (owner)
+    projects \"myproject\" \"dotfiles\"
+  }
+  user 67890 {
+    modes \"readonly\"
+    default-mode \"readonly\"
+    idle-timeout 120
+  }
+}
+#+end_src
+
+* Scope
+** Config types
+Extend =packages/spell-server/src/config/types.ts= ChannelsConfig.telegram:
+#+begin_src typescript
+export interface TelegramChannelConfig {
+  botToken: string;
+  owners: number[];
+  // New fields from telegram-bridge:
+  uploadDir: string;
+  idleTimeout: number;
+  maxSessions: number;
+  logViewerPort?: number;
+  defaultProject?: string;
+  projects: Record<string, string>;
+  users: Record<string, TelegramUserConfig>;
+}
+
+export interface TelegramUserConfig {
+  modes: string[];
+  defaultMode: string;
+  idleTimeout?: number | null;
+  projects?: string[];
+}
+
+export interface ChannelsConfig {
+  telegram?: TelegramChannelConfig;
+}
+#+end_src
+
+** Parser changes
+Update =packages/spell-server/src/config/channels-parser.ts= to parse new KDL nodes:
+- =upload-dir= — string argument, default =/tmp/spell-telegram-uploads=
+- =idle-timeout= — number argument in seconds, default 300
+- =max-sessions= — number argument, default 10
+- =log-viewer-port= — optional number argument
+- =default-project= — optional string argument
+- =project= nodes — name + path arguments (repeatable)
+- =user= nodes — numeric ID argument with children: modes, default-mode, idle-timeout, projects
+- =bot-token-file= — alternative to inline bot-token; read token from file at load time
+
+** Backwards compatibility
+The minimal existing format (just bot-token + owners) MUST still work — all new fields have sensible defaults. When only bot-token and owners are present, the bot starts with defaults (no projects configured → the bot won't be useful for chat sessions, but notification hooks still work).
+
+* Sub-outline
+1. Define =TelegramChannelConfig= and =TelegramUserConfig= types
+2. Update channels-parser.ts to parse new nodes with validation
+3. Add bot-token-file support (read from file, trim whitespace)
+4. Update TelegramBotService to consume TelegramChannelConfig instead of TelegramBridgeConfig
+5. Update TelegramLifecycle to read idle-timeout from channel config
+6. Delete =packages/telegram-bridge/src/config/= (loader.ts, types.ts) — no longer needed
+7. Write parser tests for new KDL fields
+
+* Edge cases
+- =bot-token= and =bot-token-file= are mutually exclusive — error if both present
+- =bot-token-file= path must be absolute or relative to config dir
+- =user= IDs are numeric Telegram user IDs but declared as KDL arguments — must parse as integers
+- =idle-timeout null= on a user means never timeout — KDL supports null arguments
+- =projects= on a user node is optional — empty means all projects allowed
+
+* Verification
+- =bun check:ts= passes
+- =bun test packages/spell-server/test/= passes
+- New parser tests cover: minimal config (backwards compat), full config, bot-token-file, user config, validation errors
+- No references to =telegram.yaml= or =yaml= package remain in spell-server
