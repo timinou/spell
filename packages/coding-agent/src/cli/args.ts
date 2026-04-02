@@ -1,9 +1,11 @@
 /**
  * CLI argument parsing and help display
  */
+import * as path from "node:path";
 import { type Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { APP_NAME, CONFIG_DIR_NAME, logger } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
+import type { SandboxPolicy } from "../sandbox";
 import { parseEffort } from "../thinking";
 import { BUILTIN_TOOLS } from "../tools";
 
@@ -45,10 +47,51 @@ export interface Args {
 	noRules?: boolean;
 	listModels?: string | true;
 	noTitle?: boolean;
+	sandboxPolicyPath?: string;
+	sandboxPolicy?: SandboxPolicy;
 	messages: string[];
 	fileArgs: string[];
 	/** Unknown flags (potentially extension flags) - map of flag name to value */
 	unknownFlags: Map<string, boolean | string>;
+}
+
+function isStringArray(value: unknown): value is string[] {
+	return Array.isArray(value) && value.every(item => typeof item === "string");
+}
+
+function isSandboxPolicy(value: unknown): value is SandboxPolicy {
+	if (typeof value !== "object" || value === null) return false;
+	const candidate = value as Record<string, unknown>;
+	return (
+		isStringArray(candidate.pathsWrite) && isStringArray(candidate.bashAllow) && isStringArray(candidate.bashDeny)
+	);
+}
+
+export async function loadSandboxPolicy(policyPath: string, cwd: string): Promise<SandboxPolicy> {
+	const resolvedPath = path.resolve(cwd, policyPath);
+	let rawText: string;
+	try {
+		rawText = await Bun.file(resolvedPath).text();
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Failed to read sandbox policy file '${policyPath}': ${message}`);
+	}
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(rawText);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Invalid JSON in sandbox policy file '${policyPath}': ${message}`);
+	}
+
+	if (!isSandboxPolicy(parsed)) {
+		throw new Error(
+			`Invalid sandbox policy in '${policyPath}': expected object with string[] fields pathsWrite, bashAllow, bashDeny`,
+		);
+	}
+
+	return parsed;
 }
 
 export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
@@ -111,6 +154,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.noLsp = true;
 		} else if (arg === "--no-pty") {
 			result.noPty = true;
+		} else if (arg === "--sandbox-policy" && i + 1 < args.length) {
+			result.sandboxPolicyPath = args[++i];
 		} else if (arg === "--tools" && i + 1 < args.length) {
 			const toolNames = args[++i]
 				.split(",")

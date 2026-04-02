@@ -59,6 +59,8 @@ export interface RpcSpawnOptions {
 	sessionDir?: string;
 	/** Additional system prompt text */
 	appendSystemPrompt?: string;
+	/** Sandbox policy path passed to spell */
+	sandboxPolicyPath?: string;
 	/** Whether to skip session persistence */
 	noSession?: boolean;
 }

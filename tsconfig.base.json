@@ -53,6 +53,8 @@
 			"@oh-my-pi/pi-macos/*": ["./packages/macos/src/*"],
 			"@oh-my-pi/telegram-bridge": ["./packages/telegram-bridge/src/index.ts"],
 			"@oh-my-pi/telegram-bridge/*": ["./packages/telegram-bridge/src/*"],
+			"@oh-my-pi/spell-server": ["./packages/spell-server/src/index.ts"],
+			"@oh-my-pi/spell-server/*": ["./packages/spell-server/src/*"],
 			"@sinclair/typebox": ["./node_modules/@sinclair/typebox/build/esm/index.d.mts"],
 			"@sinclair/typebox/*": ["./node_modules/@sinclair/typebox/build/esm/*"]
 		}

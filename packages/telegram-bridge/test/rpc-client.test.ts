@@ -171,4 +171,34 @@ process.stdin.on("data", chunk => {
 
 		await client.kill();
 	});
+
+	it("removes event listeners by reference", async () => {
+		const client = new RpcClient(
+			{
+				cwd: import.meta.dir,
+				tools: ["read"],
+				appendSystemPrompt: "startup-events",
+			},
+			{ command: spellPath },
+		);
+		const removedEvents: RpcEvent[] = [];
+		const retainedEvents: RpcEvent[] = [];
+		const removedListener = (event: RpcEvent): void => {
+			removedEvents.push(event);
+		};
+
+		client.onEvent(removedListener);
+		(client as unknown as { offEvent?: (callback: (event: RpcEvent) => void) => void }).offEvent?.(removedListener);
+		client.onEvent(event => {
+			retainedEvents.push(event);
+		});
+
+		await client.start();
+		await Bun.sleep(30);
+
+		expect(retainedEvents.some(event => eventWithType(event, "message_end"))).toBe(true);
+		expect(removedEvents).toEqual([]);
+
+		await client.kill();
+	});
 });

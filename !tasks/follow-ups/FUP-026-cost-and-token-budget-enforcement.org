@@ -1,0 +1,64 @@
+#+TITLE: Cost and Token Budget Enforcement
+#+STATE: ITEM
+#+SESSION_ID: 14aae19d4898f91c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/16-CreateFups.jsonl]]
+#+CUSTOM_ID: FUP-026-cost-and-token-budget-enforcement
+#+EFFORT: 3h
+#+DEPENDS: FEAT-autonomy-usage-tracking
+
+* Scope
+Enforce =max_cost_usd= budgets on setups and goals. Usage is already tracked in state from RPC events; this work closes the loop by consuming token counts from =message_update= events, computing spend, and failing/escalating goals when configured budgets are exceeded. Exceeding budget should count as goal failure and follow the standard escalation path: Telegram notification, BUG org item creation, then pause.
+
+* Tests
+** Add usage-accounting tests for token and cost aggregation from RPC event streams
+:PROPERTIES:
+:CUSTOM_ID: FUP-026-cost-and-token-budget-enforcement::usage-accounting-tests
+:END:
+Cover per-message token deltas, partial streams, and multiple model events rolling into one run total.
+
+** Add enforcement tests proving setup and goal budgets fail closed
+:PROPERTIES:
+:CUSTOM_ID: FUP-026-cost-and-token-budget-enforcement::budget-enforcement-tests
+:DEPENDS: FUP-026-cost-and-token-budget-enforcement::usage-accounting-tests
+:END:
+Assert runs stop once a budget is exceeded and produce the expected failure status.
+
+** Add escalation-path tests before wiring runtime behavior
+:PROPERTIES:
+:CUSTOM_ID: FUP-026-cost-and-token-budget-enforcement::budget-escalation-tests
+:DEPENDS: FUP-026-cost-and-token-budget-enforcement::budget-enforcement-tests
+:END:
+Verify Telegram notification remains optional but BUG item creation and paused state happen according to configured hooks and failure policy.
+
+* Implementation
+** Normalize spend accounting for setup and goal scopes
+:PROPERTIES:
+:CUSTOM_ID: FUP-026-cost-and-token-budget-enforcement::normalize-budget-accounting
+:DEPENDS: FUP-026-cost-and-token-budget-enforcement::budget-escalation-tests
+:END:
+One accounting path should feed both scopes so there is no drift between setup and goal enforcement.
+
+** Enforce budget ceilings inside the run/executor lifecycle
+:PROPERTIES:
+:CUSTOM_ID: FUP-026-cost-and-token-budget-enforcement::enforce-budget-ceilings
+:DEPENDS: FUP-026-cost-and-token-budget-enforcement::normalize-budget-accounting
+:END:
+Stop execution as soon as the budget boundary is crossed and mark the run with a budget-exceeded failure reason.
+
+** Wire failure escalation through notification and org integrations
+:PROPERTIES:
+:CUSTOM_ID: FUP-026-cost-and-token-budget-enforcement::wire-budget-escalation
+:DEPENDS: FUP-026-cost-and-token-budget-enforcement::enforce-budget-ceilings
+:END:
+Use the same failure pipeline as other autonomy run failures so operators get consistent behavior.
+
+* Edge Cases
+- Missing token metadata in some =message_update= events should not undercount silently.
+- Setup-level and goal-level budgets may both apply to the same run; smaller remaining allowance wins.
+- Retried runs need clear rules for whether budget resets per run or accumulates within a schedule window.
+- Optional Telegram integration should not block BUG item creation or pause behavior.
+
+* Acceptance Criteria
+- Budget ceilings are enforced, not merely tracked.
+- Over-budget runs fail with explicit reason codes and trigger escalation.
+- Tests prove accounting correctness from raw RPC event streams.

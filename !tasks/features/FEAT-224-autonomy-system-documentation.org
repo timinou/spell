@@ -1,0 +1,58 @@
+#+TITLE: Autonomy System Documentation
+#+STATE: DONE
+#+SESSION_ID: 14aae19d4858f91a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/15-CreateDocs.jsonl]]
+#+CUSTOM_ID: FEAT-224-autonomy-system-documentation
+#+DEPENDS: FEAT-220-spell-server-start-cli-entrypoint
+#+EFFORT: 3h
+#+LAYER: packages/spell-server
+#+PRIORITY: #B
+
+NOTE [2026-04-02]: Created getting-started.md (996 words), architecture.md (2124 words), kdl-schema-reference.md (1190 words) with coding, sales, and marketing domain examples.
+
+* Scope
+- In: Three documents: =packages/spell-server/docs/getting-started.md=, =packages/spell-server/docs/architecture.md=, and =packages/spell-server/docs/kdl-schema-reference.md=.
+- Out: Video tutorials, blog posts, external docs site.
+- Boundary: Docs are internal reference for team and cofounders.
+- Sequencing: Documentation is implementation-last, not TDD. Write after the feature set is stable and =FEAT-215-kdl-manifest-schema-and-parser=, =FEAT-216-sandbox-path-write-and-bash-command-enfo=, =FEAT-217-autonomy-state-builtin-tool=, =FEAT-218-cron-scheduler-engine=, =FEAT-219-goal-executor-with-retry-and-escalation=, =FEAT-220-spell-server-start-cli-entrypoint=, =FEAT-221-unified-http-api-router-and-endpoints=, =FEAT-222-post-completion-hooks-for-autonomy-goals=, and =FEAT-223-preact-mini-frontend-dashboard= are complete.
+
+* Tests
+- No unit tests for docs.
+- Verification: all 3 files exist at expected paths.
+- Verification: all KDL examples in =packages/spell-server/docs/kdl-schema-reference.md= parse without error.
+
+* Implementation
+** Write Getting Started guide
+:PROPERTIES:
+:CUSTOM_ID: FEAT-224-autonomy-system-documentation::getting-started
+:END:
+- File: =packages/spell-server/docs/getting-started.md=
+- Covers: install, create =.spell/server.kdl=, create =.spell/autonomy.kdl= with first goal, run =spell server start=, verify goal runs, configure Telegram optionally, and trigger webhook goal via =curl=.
+
+** Write Architecture doc
+:PROPERTIES:
+:CUSTOM_ID: FEAT-224-autonomy-system-documentation::architecture
+:DEPENDS: FEAT-224-autonomy-system-documentation::getting-started
+:END:
+- File: =packages/spell-server/docs/architecture.md=
+- Covers: daemon composition and component wiring, =SessionManager= lifecycle strategies, scheduler flow, executor state machine, hook dispatch, HTTP routing, config loading, and relationship with =telegram-bridge=.
+
+** Write KDL Schema Reference
+:PROPERTIES:
+:CUSTOM_ID: FEAT-224-autonomy-system-documentation::schema-reference
+:DEPENDS: FEAT-224-autonomy-system-documentation::getting-started
+:END:
+- File: =packages/spell-server/docs/kdl-schema-reference.md=
+- Full reference for all 3 config files: =server.kdl=, =channels.kdl=, =autonomy.kdl=.
+- Document every field with type, default, and example.
+- Include full examples for coding, sales, and marketing domains.
+- Include prompt examples showing how to reference state schema fields.
+
+* Edge Cases
+- N/A for documentation.
+
+* Acceptance Criteria
+- =packages/spell-server/docs/getting-started.md= exists and is >500 words.
+- =packages/spell-server/docs/architecture.md= exists and is >800 words.
+- =packages/spell-server/docs/kdl-schema-reference.md= exists and includes examples for all 3 config files.
+- All KDL code blocks in the reference doc are valid KDL and parseable by =@bgotink/kdl=.

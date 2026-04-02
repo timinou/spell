@@ -111,6 +111,11 @@ function messageUpdate(assistantMessageEvent: AssistantEvent): RpcEvent {
 	return { type: "message_update", assistantMessageEvent };
 }
 
+async function expectDoneToResolve(streamer: ResponseStreamer): Promise<void> {
+	const result = await Promise.race([streamer.done.then(() => "resolved"), Bun.sleep(50).then(() => "timeout")]);
+	expect(result).toBe("resolved");
+}
+
 describe("bridge streaming", () => {
 	it("accumulates text deltas and sends final HTML output", async () => {
 		const ctx = mockAuthContext({ chatId: 42 });
@@ -200,6 +205,63 @@ describe("bridge streaming", () => {
 		await streamer.handleEvent({ type: "error", message: "Process crashed" });
 
 		expect(ctx._replies[0]?.text).toBe("RPC error: Process crashed");
+	});
+
+	it("cancel resolves done even before terminal events", async () => {
+		const ctx = mockAuthContext({ chatId: 48 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
+		const cancel = (streamer as unknown as { cancel?: () => void }).cancel;
+
+		expect(typeof cancel).toBe("function");
+		cancel?.call(streamer);
+		await expectDoneToResolve(streamer);
+	});
+
+	it("cancel remains idempotent after finalization", async () => {
+		const ctx = mockAuthContext({ chatId: 49 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
+		const cancel = (streamer as unknown as { cancel?: () => void }).cancel;
+
+		await streamer.handleEvent(messageUpdate({ type: "text_end", content: "hello" }));
+		await streamer.handleEvent({ type: "message_end" });
+		expect(typeof cancel).toBe("function");
+		cancel?.call(streamer);
+		cancel?.call(streamer);
+		await expectDoneToResolve(streamer);
+		expect(ctx._replies).toHaveLength(1);
+	});
+
+	it("resolves done when final reply throws", async () => {
+		const ctx = mockAuthContext({ chatId: 50 });
+		let replyCalls = 0;
+		const streamer = new ResponseStreamer(
+			{
+				...ctx,
+				reply: async () => {
+					replyCalls += 1;
+					throw new Error("reply failed");
+				},
+			} as unknown as AuthContext,
+			true,
+		);
+
+		await streamer.handleEvent(messageUpdate({ type: "text_end", content: "hello" }));
+		await expect(streamer.handleEvent({ type: "message_end" })).rejects.toThrow("reply failed");
+		await expectDoneToResolve(streamer);
+		expect(replyCalls).toBe(1);
+	});
+
+	it("cancel remains idempotent after error events", async () => {
+		const ctx = mockAuthContext({ chatId: 51 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
+		const cancel = (streamer as unknown as { cancel?: () => void }).cancel;
+
+		await streamer.handleEvent({ type: "error", message: "Process crashed" });
+		expect(typeof cancel).toBe("function");
+		cancel?.call(streamer);
+		cancel?.call(streamer);
+		await expectDoneToResolve(streamer);
+		expect(ctx._replies).toHaveLength(1);
 	});
 });
 

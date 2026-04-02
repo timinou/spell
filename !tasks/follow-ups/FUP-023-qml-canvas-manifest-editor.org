@@ -1,0 +1,65 @@
+#+TITLE: QML Canvas Manifest Editor
+#+STATE: ITEM
+#+SESSION_ID: 14aae19d4898f91c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/16-CreateFups.jsonl]]
+#+CUSTOM_ID: FUP-023-qml-canvas-manifest-editor
+#+EFFORT: 8h
+#+DEPENDS: FEAT-215-kdl-manifest-schema-and-parser
+
+* Scope
+Build a form-based QML canvas editor for =.spell/autonomy.kdl=. The editor should load and parse the manifest via the KDL manifest stack, expose key fields as form controls, and serialize back to KDL while preserving formatting as much as the serializer contract allows. This is for non-technical operators managing autonomy manifests through Spell-native UI.
+
+* Tests
+** Add parser-to-form mapping tests for autonomy manifest fields
+:PROPERTIES:
+:CUSTOM_ID: FUP-023-qml-canvas-manifest-editor::parser-to-form-mapping-tests
+:END:
+Prove goals, setups, schedules, tool whitelists, sandbox policy, and hook configuration map into stable UI state.
+
+** Add form-edit round-trip serialization tests before UI wiring
+:PROPERTIES:
+:CUSTOM_ID: FUP-023-qml-canvas-manifest-editor::form-roundtrip-serialization-tests
+:DEPENDS: FUP-023-qml-canvas-manifest-editor::parser-to-form-mapping-tests
+:END:
+Cover load -> edit -> serialize -> parse again so field edits survive without semantic drift.
+
+** Add QML journey tests for create, edit, validation, and save flows
+:PROPERTIES:
+:CUSTOM_ID: FUP-023-qml-canvas-manifest-editor::qml-journey-tests
+:DEPENDS: FUP-023-qml-canvas-manifest-editor::form-roundtrip-serialization-tests
+:END:
+Exercise the actual form controls, validation surfaces, and save/cancel behavior in the canvas window.
+
+* Implementation
+** Define a view-model translating autonomy KDL documents into form sections
+:PROPERTIES:
+:CUSTOM_ID: FUP-023-qml-canvas-manifest-editor::define-editor-viewmodel
+:DEPENDS: FUP-023-qml-canvas-manifest-editor::qml-journey-tests
+:END:
+Keep one source of truth between parser output and UI widgets rather than duplicating manifest logic in QML.
+
+** Build canvas form components for setups, goals, schedules, tools, sandbox, and hooks
+:PROPERTIES:
+:CUSTOM_ID: FUP-023-qml-canvas-manifest-editor::build-form-components
+:DEPENDS: FUP-023-qml-canvas-manifest-editor::define-editor-viewmodel
+:END:
+Prefer composable field groups so future manifest sections can reuse the same editing patterns.
+
+** Wire save flow through KDL serializer with formatting-preservation strategy
+:PROPERTIES:
+:CUSTOM_ID: FUP-023-qml-canvas-manifest-editor::wire-save-flow
+:DEPENDS: FUP-023-qml-canvas-manifest-editor::build-form-components
+:END:
+Serialize back to =autonomy.kdl=, preserve stable ordering/comments when supported, and surface validation errors before write.
+
+* Edge Cases
+- Unknown manifest nodes should round-trip without silent loss or be surfaced as unsupported.
+- Partial invalid documents should render recoverable validation errors rather than crashing the editor.
+- Concurrent file changes between load and save need stale-write detection.
+- Optional Telegram configuration remains optional in the form and output.
+
+* Acceptance Criteria
+- A user can load =.spell/autonomy.kdl=, edit supported fields, and save a valid manifest.
+- Round-trip tests prove semantic preservation for supported fields.
+- QML journey coverage proves the editor is usable end-to-end.
+- Unsupported or invalid manifest content is surfaced explicitly, not discarded.

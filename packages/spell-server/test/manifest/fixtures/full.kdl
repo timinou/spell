@@ -1,0 +1,59 @@
+name "Spell Ünicode"
+version "2.5"
+
+setup "readonly-reviewer" {
+	domain "coding"
+	mode "reviewer"
+	skills {
+		allow "coding" "qml-testing"
+		deny "voice-agent"
+	}
+	tools {
+		allow "read" "grep" "find"
+		deny "bash"
+	}
+	sandbox {
+		paths-write "src/" "test/"
+		bash-allow "bun test*" "git status"
+		bash-deny "rm -rf*"
+	}
+	timeout "30m"
+	max-cost-usd 12.5
+}
+
+setup "executor" {
+	domain "coding"
+	mode "worker"
+}
+
+goal "nightly-tests" {
+	setup "readonly-reviewer"
+	schedule type="cron" expression="0 2 * * *" timezone="UTC" jitter="5m"
+	prompt """
+Run the full test suite.
+Include unicode: café.
+"""
+	state persist=#true {
+		schema "summary" type="string"
+		schema "metrics" type="json"
+	}
+	hooks {
+		on-success {
+			webhook "https://hooks.slack.com/services/T000/B000/Ü" method="POST"
+			org category="AUTONOMY"
+		}
+		on-failure {
+			telegram chat-id=12345
+		}
+		on-complete {
+			webhook "https://example.com/complete" method="GET"
+		}
+	}
+	retry max-retries=3 initial-delay-ms=1000 multiplier=2
+}
+
+goal "followup" {
+	setup "executor"
+	schedule type="webhook" path="/hooks/build" auth="hmac"
+	prompt "React to build webhooks."
+}

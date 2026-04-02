@@ -1,0 +1,12 @@
+name "spell-invalid"
+version "1.0"
+
+setup "readonly-reviewer" {
+	domain "coding"
+}
+
+goal "nightly-tests" {
+	setup "readonly-reviewer"
+	schedule type="cron" expression="60 * * * *"
+	prompt "Run tests"
+}

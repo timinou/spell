@@ -1,0 +1,50 @@
+#+TITLE: Condition-Gated Scheduling Research SPIKE
+#+STATE: ITEM
+#+SESSION_ID: 14aae19d4898f91c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/16-CreateFups.jsonl]]
+#+CUSTOM_ID: FUP-027-condition-gated-scheduling-research-spik
+#+EFFORT: 2h
+#+DEPENDS: FEAT-215-kdl-manifest-schema-and-parser
+
+* Scope
+Research how autonomy goals can support schedules like "run every hour, but only if X is true." Evaluate at least four gating mechanisms: pre-execution LLM check, bash command gate, file existence gate, and API endpoint gate. Produce a design recommendation for a future implementation in spell-server.
+
+* Tests
+** Define evaluation rubric and acceptance questions before research write-up
+:PROPERTIES:
+:CUSTOM_ID: FUP-027-condition-gated-scheduling-research-spik::define-research-rubric
+:END:
+Establish the criteria up front: security, determinism, operator ergonomics, cost, debuggability, and fit with unattended execution.
+
+* Implementation
+** Survey gating options against autonomy runtime constraints
+:PROPERTIES:
+:CUSTOM_ID: FUP-027-condition-gated-scheduling-research-spik::survey-gating-options
+:DEPENDS: FUP-027-condition-gated-scheduling-research-spik::define-research-rubric
+:END:
+Compare where each gate runs, what sandboxing it needs, and how it composes with existing schedules and retries.
+
+** Recommend one primary design and one fallback design
+:PROPERTIES:
+:CUSTOM_ID: FUP-027-condition-gated-scheduling-research-spik::recommend-design
+:DEPENDS: FUP-027-condition-gated-scheduling-research-spik::survey-gating-options
+:END:
+Call out why the preferred approach best matches Spell's daemon model, manifest style, and failure semantics.
+
+** Capture follow-up implementation slices
+:PROPERTIES:
+:CUSTOM_ID: FUP-027-condition-gated-scheduling-research-spik::capture-followups
+:DEPENDS: FUP-027-condition-gated-scheduling-research-spik::recommend-design
+:END:
+Break future delivery into parser/schema work, runtime checks, HTTP observability, and security hardening tasks.
+
+* Edge Cases
+- Gates that are nondeterministic or costly may not be appropriate on every schedule tick.
+- Remote API gates introduce timeout, auth, and cache coherency questions.
+- Bash/file gates can become covert permission escalations if sandboxing is weak.
+- Skipped runs need observability distinct from failures.
+
+* Acceptance Criteria
+- A written design doc compares all four gate types against a fixed rubric.
+- Recommendation includes manifest shape, runtime semantics, and hardening implications.
+- Follow-up work is decomposed enough to implement later without rediscovery.

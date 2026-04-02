@@ -219,6 +219,13 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--sandbox-policy flag", () => {
+		test("parses --sandbox-policy path", () => {
+			const result = parseArgs(["--sandbox-policy", "sandbox-policy.json"]);
+			expect(result.sandboxPolicyPath).toBe("sandbox-policy.json");
+		});
+	});
+
 	describe("messages and file args", () => {
 		test("parses plain text messages", () => {
 			const result = parseArgs(["hello", "world"]);

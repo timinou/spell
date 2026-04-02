@@ -1,0 +1,57 @@
+#+TITLE: Goal Dependencies
+#+STATE: ITEM
+#+SESSION_ID: 14aae19d4898f91c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/16-CreateFups.jsonl]]
+#+CUSTOM_ID: FUP-025-goal-dependencies
+#+EFFORT: 3h
+#+DEPENDS: FEAT-215-kdl-manifest-schema-and-parser
+
+* Scope
+Add a =depends_on= field to autonomy goal config. Before scheduling a goal run, the scheduler should check the last-run status of every dependency and only fire when all dependencies most recently succeeded. This also requires DAG cycle detection at manifest validation time.
+
+* Tests
+** Add manifest validation tests for =depends_on= schema and cycle detection
+:PROPERTIES:
+:CUSTOM_ID: FUP-025-goal-dependencies::manifest-cycle-tests
+:END:
+Cover self-dependencies, multi-node cycles, unknown dependency IDs, and valid DAGs.
+
+** Add scheduler tests for last-run success gating before implementation
+:PROPERTIES:
+:CUSTOM_ID: FUP-025-goal-dependencies::scheduler-gating-tests
+:DEPENDS: FUP-025-goal-dependencies::manifest-cycle-tests
+:END:
+Prove goals run only when all dependencies' last runs succeeded and stay blocked after failed or missing dependency runs.
+
+* Implementation
+** Extend autonomy goal schema and parser with =depends_on=
+:PROPERTIES:
+:CUSTOM_ID: FUP-025-goal-dependencies::extend-goal-schema
+:DEPENDS: FUP-025-goal-dependencies::scheduler-gating-tests
+:END:
+Use the existing KDL manifest stack so dependencies become first-class config, not ad hoc metadata.
+
+** Add DAG validation over parsed goals
+:PROPERTIES:
+:CUSTOM_ID: FUP-025-goal-dependencies::add-dag-validation
+:DEPENDS: FUP-025-goal-dependencies::extend-goal-schema
+:END:
+Reject cycles and unknown references during validation, before runtime scheduling starts.
+
+** Gate scheduler dispatch on dependency run status
+:PROPERTIES:
+:CUSTOM_ID: FUP-025-goal-dependencies::gate-scheduler-dispatch
+:DEPENDS: FUP-025-goal-dependencies::add-dag-validation
+:END:
+Use persisted last-run state consistently so dependency semantics survive daemon restarts.
+
+* Edge Cases
+- A dependency with no prior run should block dependents unless explicitly seeded.
+- Multiple dependencies should require all-success semantics, not any-success.
+- Manual restart/resume flows must respect dependency state instead of bypassing it silently.
+- Cycle errors should point to the actual dependency chain.
+
+* Acceptance Criteria
+- Manifest validation rejects cyclic or unknown dependencies.
+- Scheduler dispatch is blocked until all dependency last runs succeeded.
+- Dependency checks use persisted state so behavior is stable across restarts.

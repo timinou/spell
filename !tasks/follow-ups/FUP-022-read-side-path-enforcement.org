@@ -1,0 +1,65 @@
+#+TITLE: Read-Side Path Enforcement
+#+STATE: ITEM
+#+SESSION_ID: 14aae19d4898f91c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/16-CreateFups.jsonl]]
+#+CUSTOM_ID: FUP-022-read-side-path-enforcement
+#+EFFORT: 4h
+#+DEPENDS: FEAT-sandbox-policy-enforcement
+
+* Scope
+Implement =paths_read= enforcement in sandbox policy so read-side tools cannot escape declared boundaries. Cover =read=, =grep=, =find=, and =bash= code paths where read-like access can be inferred from arguments. This is hardening work for unattended autonomy runs and should land only after the sandbox-policy enforcement feature is complete.
+
+* Tests
+** Verify =read= rejects absolute and relative paths outside =paths_read=
+:PROPERTIES:
+:CUSTOM_ID: FUP-022-read-side-path-enforcement::read-rejects-outside-paths
+:END:
+Add focused tests that prove allowed paths succeed and disallowed paths fail with explicit boundary errors.
+
+** Verify =grep= and =find= scope expansion cannot cross allowed roots
+:PROPERTIES:
+:CUSTOM_ID: FUP-022-read-side-path-enforcement::search-tools-respect-path-boundaries
+:DEPENDS: FUP-022-read-side-path-enforcement::read-rejects-outside-paths
+:END:
+Cover direct paths, glob patterns, comma-separated path lists, and parent-directory traversal attempts.
+
+** Verify =bash= read-side file access is denied outside policy
+:PROPERTIES:
+:CUSTOM_ID: FUP-022-read-side-path-enforcement::bash-readlike-access-enforced
+:DEPENDS: FUP-022-read-side-path-enforcement::search-tools-respect-path-boundaries
+:END:
+Add behavioral cases for commands that try to read files outside the sandbox through shell invocation, matching the existing sandbox enforcement model.
+
+* Implementation
+** Extend sandbox policy model with explicit =paths_read= matcher semantics
+:PROPERTIES:
+:CUSTOM_ID: FUP-022-read-side-path-enforcement::extend-read-policy-model
+:DEPENDS: FUP-022-read-side-path-enforcement::bash-readlike-access-enforced
+:END:
+Define normalization, root matching, and error reporting once so all tool adapters use the same contract.
+
+** Wire read-side boundary checks into =read=, =grep=, and =find=
+:PROPERTIES:
+:CUSTOM_ID: FUP-022-read-side-path-enforcement::wire-tool-boundary-checks
+:DEPENDS: FUP-022-read-side-path-enforcement::extend-read-policy-model
+:END:
+Apply checks before tool execution so no out-of-bounds filesystem work occurs.
+
+** Reconcile =bash= sandbox enforcement with read-only path policy
+:PROPERTIES:
+:CUSTOM_ID: FUP-022-read-side-path-enforcement::reconcile-bash-enforcement
+:DEPENDS: FUP-022-read-side-path-enforcement::wire-tool-boundary-checks
+:END:
+Keep one representation of allowed read roots and ensure shell enforcement tells callers the truth when access is denied.
+
+* Edge Cases
+- Symlink traversal resolving from an allowed root into a disallowed target.
+- Globs that expand partly inside and partly outside allowed roots.
+- Empty =paths_read= meaning no filesystem reads, not unrestricted reads.
+- Tools that infer cwd or default search paths when the caller omits a path.
+
+* Acceptance Criteria
+- All read-side filesystem tools fail closed outside =paths_read=.
+- Errors identify the rejected path and policy boundary.
+- Shared matcher logic prevents drift between tool implementations.
+- Tests prove traversal, globbing, and shell-based escapes are blocked.

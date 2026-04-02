@@ -1,0 +1,115 @@
+#+TITLE: Goal Executor with Retry and Escalation
+#+STATE: DONE
+#+SESSION_ID: 14aae19d4798f910
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/10-CreateExecutor.jsonl]]
+#+CUSTOM_ID: FEAT-219-goal-executor-with-retry-and-escalation
+#+EFFORT: 6h
+#+LAYER: packages/spell-server
+#+PRIORITY: #A
+#+DEPENDS: PROJ-019-generalized-sessionmanager-for-spell-ser FEAT-216-sandbox-path-write-and-bash-command-enfo FEAT-218-cron-scheduler-engine FEAT-215-kdl-manifest-schema-and-parser
+
+NOTE [2026-04-02]: Implemented GoalExecutionController with state machine, retry/backoff, timeout, escalation. Tests passing.
+
+* Scope
+- In :: GoalExecutionController that spawns RPC sessions via SessionManager, applies setup constraints, manages goal lifecycle state machine (=pending -> running -> completed/failed -> retrying -> escalated -> paused=), retries with exponential backoff, enforces timeouts, and fires hook callbacks on state transitions.
+- Out :: Hook execution details (separate FEAT), HTTP API, scheduling decisions.
+- Boundary :: Executor owns HOW goals run. Scheduler tells it WHEN. Hooks tell it WHAT HAPPENS AFTER.
+- Dependencies :: Depends on SessionManager project, Sandbox FEAT, Scheduler FEAT, and =FEAT-215-kdl-manifest-schema-and-parser= for manifest-backed goal setup and execution inputs.
+
+* Tests
+File: =packages/spell-server/test/executor/goal-executor.test.ts=
+- Scenario: execute goal spawns RPC session via SessionManager with correct setup params.
+- Scenario: setup tools filter passed through to session spawn args.
+- Scenario: setup sandbox config written to temp JSON, path passed to session.
+- Scenario: session timeout kills RPC process after configured duration.
+- Scenario: successful completion transitions to =completed= state.
+- Scenario: RPC process failure transitions to =failed= state.
+- Scenario: failed goal retries up to =maxRetries= with exponential backoff.
+- Scenario: backoff doubles each retry (=5000 -> 10000 -> 20000=).
+- Scenario: exceed =maxRetries= transitions to =escalated=.
+- Scenario: escalated state fires escalation callback.
+- Scenario: escalated transitions to =paused=.
+- Scenario: paused goal does not accept new executions.
+- Scenario: concurrent goals on different =cwd=s run independently.
+- Scenario: prompt text from goal config sent as first RPC prompt.
+
+File: =packages/spell-server/test/executor/execution-state.test.ts=
+- Scenario: valid transitions: =pending->running=, =running->completed=, =running->failed=, =failed->retrying=, =retrying->running=, =retrying->escalated=, =escalated->paused=.
+- Scenario: invalid transitions rejected: =paused->completed=, =completed->running=.
+- Scenario: state machine serializable to JSON for persistence.
+
+* Implementation
+** Write tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-219-goal-executor-with-retry-and-escalation::write-tests
+:END:
+- Create =packages/spell-server/test/executor/goal-executor.test.ts= with the executor lifecycle, retry, timeout, concurrency, sandbox, and prompt-delivery scenarios before implementation.
+- Create =packages/spell-server/test/executor/execution-state.test.ts= with valid transition, invalid transition, and JSON serialization coverage before implementation.
+
+** Define execution state machine
+:PROPERTIES:
+:CUSTOM_ID: FEAT-219-goal-executor-with-retry-and-escalation::state-machine
+:DEPENDS: FEAT-219-goal-executor-with-retry-and-escalation::write-tests
+:END:
+- File: =packages/spell-server/src/executor/state.ts=
+- Define =GoalExecutionState= enum and transition validator used by controller and persistence.
+
+** Implement GoalExecutionController
+:PROPERTIES:
+:CUSTOM_ID: FEAT-219-goal-executor-with-retry-and-escalation::controller
+:DEPENDS: FEAT-219-goal-executor-with-retry-and-escalation::state-machine
+:END:
+- File: =packages/spell-server/src/executor/goal-executor.ts=
+- Inject SessionManager and GoalScheduler references.
+- Implement =executeGoal(goalName, config)=, =getState(goalName)=, and =getRunHistory(goalName)=.
+- Resolve execution inputs from manifest-backed goal config produced by the manifest parser feature and respect Scheduler ownership of trigger timing.
+
+** Implement retry/backoff logic
+:PROPERTIES:
+:CUSTOM_ID: FEAT-219-goal-executor-with-retry-and-escalation::retry-logic
+:DEPENDS: FEAT-219-goal-executor-with-retry-and-escalation::controller
+:END:
+- File: =packages/spell-server/src/executor/goal-executor.ts=
+- Add exponential backoff with configurable initial delay and multiplier.
+- Track attempt count per goal and stop at escalation threshold.
+- On exhausted retries, hand off to escalation hooks defined by the NotificationSender-facing hook feature.
+
+** Implement timeout enforcement
+:PROPERTIES:
+:CUSTOM_ID: FEAT-219-goal-executor-with-retry-and-escalation::timeout
+:DEPENDS: FEAT-219-goal-executor-with-retry-and-escalation::controller
+:END:
+- File: =packages/spell-server/src/executor/goal-executor.ts=
+- Parse =setup.timeout= to milliseconds and kill the RPC session via =SessionManager.kill()= on timeout.
+
+** Implement sandbox policy file writer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-219-goal-executor-with-retry-and-escalation::sandbox-writer
+:DEPENDS: FEAT-219-goal-executor-with-retry-and-escalation::controller
+:END:
+- File: =packages/spell-server/src/executor/sandbox-writer.ts=
+- Write SandboxPolicy JSON to a temp file for the =--sandbox-policy= CLI flag and return the path.
+- Register cleanup so temp files are removed after session end and after crash recovery.
+
+** Wire scheduler callback to executor
+:PROPERTIES:
+:CUSTOM_ID: FEAT-219-goal-executor-with-retry-and-escalation::wire-scheduler
+:DEPENDS: FEAT-219-goal-executor-with-retry-and-escalation::controller
+:END:
+- Connect GoalScheduler callback flow so scheduler triggers call =executor.executeGoal()=.
+- Keep execution ownership in the executor and scheduling ownership in the scheduler.
+
+* Edge Cases
+- Goal triggered while already running :: skip execution and log =goal already active=.
+- RPC process exits with code 0 but no completion event :: treat as success.
+- RPC process exits with non-zero code :: treat as failure.
+- Temp sandbox file cleanup on crash :: use postmortem registration.
+- Goal prompt is multi-line :: pass full text to RPC prompt command without normalization loss.
+- State DB for goal history :: SQLite at =~/.spell/spell-server/goal-history.db=.
+- Failure policy :: retry N times with backoff, then escalate via Telegram-capable hooks, create BUG org item, and pause execution.
+
+* Acceptance Criteria
+- =bun test packages/spell-server/test/executor/goal-executor.test.ts= passes.
+- =bun test packages/spell-server/test/executor/execution-state.test.ts= passes.
+- State machine transitions match documented diagram.
+- Tests land before implementation changes in the same feature sequence.

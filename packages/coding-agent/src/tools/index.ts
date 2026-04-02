@@ -17,6 +17,7 @@ import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestr
 import type { CanvasTaskManager } from "../orchestrators/canvas-task-manager";
 import { EditTool } from "../patch";
 import type { ActiveModeState, PlanModeState } from "../plan-mode/state";
+import type { SandboxPolicy } from "../sandbox";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
 import type { EventBus } from "../utils/event-bus";
@@ -24,6 +25,7 @@ import { SearchTool } from "../web/search";
 import { AskTool } from "./ask";
 import { AstEditTool } from "./ast-edit";
 import { AstGrepTool } from "./ast-grep";
+import { AutonomyStateTool } from "./autonomy-state";
 import { AwaitTool } from "./await-tool";
 import { BashTool } from "./bash";
 import { BrowserTool } from "./browser";
@@ -60,12 +62,14 @@ export type * from "../exa/types";
 export * from "../loop/loop-tools";
 export * from "../lsp";
 export * from "../patch";
+export * from "../sandbox";
 export * from "../session/streaming-output";
 export * from "../task";
 export * from "../web/search";
 export * from "./ask";
 export * from "./ast-edit";
 export * from "./ast-grep";
+export * from "./autonomy-state";
 export * from "./await-tool";
 export * from "./bash";
 export * from "./browser";
@@ -122,6 +126,8 @@ export interface ToolSession {
 	promptTemplates?: PromptTemplate[];
 	/** Whether LSP integrations are enabled */
 	enableLsp?: boolean;
+	/** Optional sandbox policy constraining file writes and bash commands */
+	sandboxPolicy?: SandboxPolicy;
 	/** Whether the edit tool is available in this session (controls hashline output) */
 	hasEditTool?: boolean;
 	/** Event bus for tool/extension communication */
@@ -237,6 +243,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	todo_write: s => new TodoWriteTool(s),
 	org: s => new OrgTool(s),
 	emacs_code: s => new EmacsTool(s),
+	autonomy_state: s => new AutonomyStateTool(s),
 	fetch: s => new FetchTool(s),
 	web_search: s => new SearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
@@ -271,6 +278,7 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	emacs_code: "standard",
 	fetch: "standard",
 	web_search: "standard",
+	autonomy_state: "standard",
 	cancel_job: "standard",
 	await: "standard",
 	canvas_cast: "standard",

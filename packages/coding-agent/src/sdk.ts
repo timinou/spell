@@ -209,6 +209,8 @@ export interface CreateAgentSessionOptions {
 
 	/** Enable LSP integration (tool, formatting, diagnostics, warmup). Default: true */
 	enableLsp?: boolean;
+	/** Optional sandbox policy constraining file writes and bash commands for this session */
+	sandboxPolicy?: import("./sandbox").SandboxPolicy;
 	/** Skip Python kernel availability check and prelude warmup */
 	skipPythonPreflight?: boolean;
 
@@ -975,6 +977,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		cwd,
 		hasUI: options.hasUI ?? false,
 		enableLsp,
+		sandboxPolicy: options.sandboxPolicy,
 		hasEditTool: requestedBuiltInToolNames.includes("edit"),
 		skipPythonPreflight: options.skipPythonPreflight,
 		contextFiles,

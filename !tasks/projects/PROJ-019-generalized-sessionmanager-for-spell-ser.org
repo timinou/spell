@@ -1,0 +1,105 @@
+#+TITLE: Generalized SessionManager for Spell Server
+#+STATE: DONE
+#+SESSION_ID: 14aae19d4398f908
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/6-CreateSessionMgr.jsonl]]
+#+CUSTOM_ID: PROJ-019-generalized-sessionmanager-for-spell-ser
+#+EFFORT: 6h
+#+DEPENDS: FEAT-215-kdl-manifest-schema-and-parser
+#+LAYER: packages/spell-server
+#+PRIORITY: #A
+
+NOTE [2026-04-02]: Implemented generic SessionManager<K> with TelegramLifecycle and AutonomyLifecycle. Session tests passing.
+
+* Scope
+** In scope
+- Generic =SessionManager<K>= with pluggable lifecycle strategies
+- Refactor =telegram-bridge= =ProcessManager= to use it
+- Both Telegram (=chatId= key, idle timeout) and autonomy (=goalName= key, completion-based) instantiate it
+** Out of scope
+- Goal scheduling (separate FEAT)
+- Hook execution
+- HTTP API
+** Boundary
+- =SessionManager= owns spawn/track/kill/resume of RPC sessions
+- It does not decide when to spawn
+
+* Tests
+** File: =packages/spell-server/test/session/session-manager.test.ts=
+- Scenario: create session with string key, session is alive
+- Scenario: get existing session returns same client
+- Scenario: get non-existent session returns =undefined=
+- Scenario: kill session terminates RPC client
+- Scenario: idle timeout fires after configured duration
+- Scenario: no idle timeout when lifecycle returns =null=
+- Scenario: session crash detected, entry removed from map
+- Scenario: state persistence saves and restores sessions across restart
+- Scenario: max sessions limit rejects new sessions
+- Scenario: additional tools passed to RPC spawn args
+- Scenario: sandbox policy path passed to RPC spawn args
+** File: =packages/spell-server/test/session/lifecycle.test.ts=
+- Scenario: =TelegramLifecycle= returns idle timeout based on user config
+- Scenario: =AutonomyLifecycle= returns =null= idle timeout
+- Scenario: =AutonomyLifecycle= includes =autonomy_state= in =additionalTools=
+
+* Implementation
+** Define =SessionLifecycle<K>= interface
+:PROPERTIES:
+:CUSTOM_ID: PROJ-019-generalized-sessionmanager-for-spell-ser::lifecycle-interface
+:END:
+- File: =packages/spell-server/src/session/types.ts=
+- Define lifecycle contract for session keys, spawn arguments, idle timeout policy, persistence metadata, and exit handling
+
+** Write all tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-019-generalized-sessionmanager-for-spell-ser::write-tests
+:END:
+- Files listed in Tests section above
+- Tests written first per TDD; implementation follows only after failing coverage exists
+
+** Implement =SessionManager<K>= class
+:PROPERTIES:
+:CUSTOM_ID: PROJ-019-generalized-sessionmanager-for-spell-ser::session-manager
+:DEPENDS: PROJ-019-generalized-sessionmanager-for-spell-ser::lifecycle-interface PROJ-019-generalized-sessionmanager-for-spell-ser::write-tests
+:END:
+- File: =packages/spell-server/src/session/session-manager.ts=
+- Reuse =RpcClient= from =@oh-my-pi/telegram-bridge=
+- Maintain =Map<K, SessionEntry>= with =getOrCreate=, =kill=, =killAll=, =getActive=, =persistState=
+- Ensure concurrent =getOrCreate= for same key coalesces into one spawn
+
+** Implement =TelegramLifecycle=
+:PROPERTIES:
+:CUSTOM_ID: PROJ-019-generalized-sessionmanager-for-spell-ser::telegram-lifecycle
+:DEPENDS: PROJ-019-generalized-sessionmanager-for-spell-ser::lifecycle-interface PROJ-019-generalized-sessionmanager-for-spell-ser::write-tests
+:END:
+- File: =packages/spell-server/src/session/telegram-lifecycle.ts=
+- Wrap existing =ProcessManager= behavior: =chatId=-keyed sessions with idle-timeout lifecycle
+
+** Implement =AutonomyLifecycle=
+:PROPERTIES:
+:CUSTOM_ID: PROJ-019-generalized-sessionmanager-for-spell-ser::autonomy-lifecycle
+:DEPENDS: PROJ-019-generalized-sessionmanager-for-spell-ser::lifecycle-interface PROJ-019-generalized-sessionmanager-for-spell-ser::write-tests
+:END:
+- File: =packages/spell-server/src/session/autonomy-lifecycle.ts=
+- Add =--sandbox-policy= flag using temp JSON file
+- Inject hidden builtin tool =autonomy_state= via =--tools=
+- Use completion-based lifecycle with no idle timeout
+
+** Migrate =telegram-bridge= to use =SessionManager=
+:PROPERTIES:
+:CUSTOM_ID: PROJ-019-generalized-sessionmanager-for-spell-ser::migrate-telegram
+:DEPENDS: PROJ-019-generalized-sessionmanager-for-spell-ser::telegram-lifecycle PROJ-019-generalized-sessionmanager-for-spell-ser::session-manager
+:END:
+- Update =packages/telegram-bridge/src/rpc/process-manager.ts= to delegate to or wrap =SessionManager=
+- Preserve existing externally visible behavior while removing duplicate lifecycle logic
+
+* Edge Cases
+- RPC client crashes mid-session: =SessionManager= detects via exited promise, removes entry, persists state
+- Concurrent =getOrCreate= for same key: second call waits for first spawn to complete; no double-spawn
+- State file corrupted: catch parse error, start fresh with empty map
+- Max sessions reached: throw descriptive error; caller handles
+
+* Acceptance Criteria
+- =bun test packages/spell-server/test/session/session-manager.test.ts= passes
+- =bun test packages/spell-server/test/session/lifecycle.test.ts= passes
+- Existing =telegram-bridge= tests still pass after migration
+- =SessionManager= is generic enough that adding a third session type requires only a new lifecycle implementation

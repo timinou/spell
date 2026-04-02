@@ -1,0 +1,103 @@
+#+TITLE: Autonomy State Builtin Tool
+#+STATE: DONE
+#+SESSION_ID: 14aae19d4658f90a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/8-CreateStateTool.jsonl]]
+#+CUSTOM_ID: FEAT-217-autonomy-state-builtin-tool
+#+LAYER: packages/coding-agent
+#+DEPENDS: FEAT-215-kdl-manifest-schema-and-parser
+#+EFFORT: 4h
+#+PRIORITY: #A
+
+NOTE [2026-04-02]: Implemented autonomy_state hidden builtin tool with SQLite KV store, schema validation, registered in BUILTIN_TOOLS. Tests passing.
+
+* Scope
+- In: Register =autonomy_state= as hidden builtin tool, per-goal SQLite DB with daemon metadata table (=run_id=, =started_at=, =status=, =duration=, =output_summary=) and agent KV store (=get/set/list/delete=), optional typed schema validation from manifest config
+- Out: Shared setup-level state (FUP), complex SQL queries, state migration tooling
+- Boundary: The tool is registered in =BUILTIN_TOOLS= but hidden from =--help=. Activated when =--tools= includes =autonomy_state=. DB path passed via env var =SPELL_AUTONOMY_STATE_DB=.
+
+* Tests
+- TDD file: =packages/coding-agent/test/tools/autonomy-state.test.ts=
+- Scenario: =get= returns =null= for non-existent key
+- Scenario: =set= stores string value, =get= retrieves it
+- Scenario: =set= stores JSON object value, =get= retrieves parsed object
+- Scenario: =set= overwrites existing key
+- Scenario: =list= returns all keys sorted alphabetically
+- Scenario: =delete= removes key, subsequent =get= returns =null=
+- Scenario: =delete= non-existent key is no-op (no error)
+- Scenario: metadata table has =run_id= and =started_at= populated
+- Scenario: typed schema rejects write with wrong type (number field gets string)
+- Scenario: typed schema allows write with correct type
+- Scenario: no schema configured allows any key-value
+- Scenario: tool not in =--tools= list is not available to agent
+- Scenario: tool in =--tools= list is available and functional
+- Tests written BEFORE implementation steps below
+
+* Implementation
+** Define tool schema and types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-217-autonomy-state-builtin-tool::tool-types
+:END:
+- File: =packages/coding-agent/src/tools/autonomy-state/types.ts=
+- Operations: =get(key)=, =set(key, value)=, =list()=, =delete(key)=, =get_metadata()=
+- Define request/response shapes shared by tests, tool handler, and store API
+
+** Write failing tool tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-217-autonomy-state-builtin-tool::write-tests
+:DEPENDS: FEAT-217-autonomy-state-builtin-tool::tool-types
+:END:
+- File: =packages/coding-agent/test/tools/autonomy-state.test.ts=
+- Add availability gating assertions for =--tools= and functional coverage for KV + metadata + schema validation
+- Lock TDD order: tests land before store, schema, handler, and registry wiring
+
+** Implement SQLite state store
+:PROPERTIES:
+:CUSTOM_ID: FEAT-217-autonomy-state-builtin-tool::state-store
+:DEPENDS: FEAT-217-autonomy-state-builtin-tool::write-tests
+:END:
+- File: =packages/coding-agent/src/tools/autonomy-state/store.ts=
+- Use =bun:sqlite=
+- Create DB at =SPELL_AUTONOMY_STATE_DB= path
+- Tables: =_metadata(run_id, started_at, status, duration, output_summary)= and =kv_store(key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)=
+- Enable WAL mode for concurrent safety
+
+** Implement optional schema validator
+:PROPERTIES:
+:CUSTOM_ID: FEAT-217-autonomy-state-builtin-tool::schema-validator
+:DEPENDS: FEAT-217-autonomy-state-builtin-tool::write-tests
+:END:
+- File: =packages/coding-agent/src/tools/autonomy-state/schema.ts=
+- Load schema from =SPELL_AUTONOMY_STATE_SCHEMA= env var (JSON)
+- Validate value types on =set()=
+- On manifest/schema drift, log warning and allow write to avoid breaking a running goal
+
+** Implement tool handler
+:PROPERTIES:
+:CUSTOM_ID: FEAT-217-autonomy-state-builtin-tool::tool-handler
+:DEPENDS: FEAT-217-autonomy-state-builtin-tool::state-store FEAT-217-autonomy-state-builtin-tool::schema-validator
+:END:
+- File: =packages/coding-agent/src/tools/autonomy-state/tool.ts=
+- Follow standard tool registration pattern for builtin tools
+- Expose KV operations plus =get_metadata=
+
+** Register as hidden builtin
+:PROPERTIES:
+:CUSTOM_ID: FEAT-217-autonomy-state-builtin-tool::register-builtin
+:DEPENDS: FEAT-217-autonomy-state-builtin-tool::tool-handler
+:END:
+- File: =packages/coding-agent/src/tools/index.ts=
+- Add =autonomy_state= to =BUILTIN_TOOLS=
+- Keep hidden from help/listing unless explicitly activated through =--tools=
+
+* Edge Cases
+- DB file doesn't exist: create with schema on first access
+- DB file exists from previous run: open, reuse data (state persists across runs)
+- Concurrent writes from bash subprocess: WAL mode handles this
+- Very large values (>1MB): allow but log warning
+- Schema mismatch after manifest change: log warning, allow write (don't break running goal)
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/tools/autonomy-state.test.ts= passes
+- =autonomy_state= tool appears in =BUILTIN_TOOLS= registry
+- Tool is NOT shown in =--help= or tool listing unless explicitly activated
+- =bun check:ts= passes with new tool code

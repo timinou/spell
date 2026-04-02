@@ -1,0 +1,103 @@
+#+TITLE: Preact Mini Frontend Dashboard
+#+STATE: DONE
+#+SESSION_ID: 14aae19d4818f918
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/13-CreateFrontend.jsonl]]
+#+CUSTOM_ID: FEAT-223-preact-mini-frontend-dashboard
+#+EFFORT: 4h
+#+DEPENDS: FEAT-221-unified-http-api-router-and-endpoints
+
+NOTE [2026-04-02]: Implemented inline Preact/HTM dashboard with goals list, detail view, trigger buttons, polling. Tests passing.
+
+* Scope
+- In: Single-page Preact/HTM app served inline from =Bun.serve()= with no build step and ESM imports from =esm.sh=. Pages: goals dashboard (list with status badges, next fire, last run), goal detail (run history, trigger button), session log viewer (reuse existing HTML renderer pattern), manifest viewer (formatted parsed KDL config), live status via polling every 10s.
+- Out: Real-time SSE/WebSocket updates, editing manifest from the frontend, session management actions beyond trigger/FUP workflows.
+- Boundary: Frontend is read-only plus trigger buttons. All data comes from =/api/*= endpoints exposed by the HTTP API FEAT.
+
+* Tests
+- File: =packages/spell-server/test/http/frontend.test.ts=
+- Scenario: =GET /= returns HTML containing the Preact bootstrap script.
+- Scenario: HTML includes an import map for =preact= and =htm/preact= loaded from =esm.sh= CDN.
+- Scenario: =GET /api/goals= returns data shape the dashboard JS expects and renders.
+- Scenario: frontend JS is served inline; no external script file dependency exists.
+- Scenario: root response sets =content-type: text/html; charset=utf-8=.
+- TDD order: write these tests before creating the inline HTML template or router wiring.
+
+* Implementation
+** Write frontend HTTP tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-223-preact-mini-frontend-dashboard::write-tests
+:END:
+- File: =packages/spell-server/test/http/frontend.test.ts=
+- Lock down root HTML contract, inline script delivery, import map presence, and content-type before implementation.
+- Add a render-level assertion that the page shell contains a mounting node and bootstrap entrypoint the browser can execute.
+
+** Create inline HTML template
+:PROPERTIES:
+:CUSTOM_ID: FEAT-223-preact-mini-frontend-dashboard::html-template
+:DEPENDS: FEAT-223-preact-mini-frontend-dashboard::write-tests
+:END:
+- File: =packages/spell-server/src/http/frontend/index.html=
+- Inline Preact/HTM app shell and import map:
+  - ="preact": "https://esm.sh/preact"=
+  - ="preact/hooks": "https://esm.sh/preact/hooks"=
+  - ="htm/preact": "https://esm.sh/htm/preact"=
+- Keep all JS inline so Bun serves a single HTML document with no asset pipeline.
+- Include visible loading and error regions so CDN or fetch failures surface honestly instead of blank-screening.
+
+** Implement goals dashboard component
+:PROPERTIES:
+:CUSTOM_ID: FEAT-223-preact-mini-frontend-dashboard::dashboard
+:DEPENDS: FEAT-223-preact-mini-frontend-dashboard::html-template
+:END:
+- Inline JS in =index.html= fetches =/api/goals= and renders a table with columns: Name, Setup, Schedule, Status, Last Run, Next Fire.
+- Status renders as color badges derived from API status values, with text remaining readable in no-CSS fallback.
+- Poll every 10 seconds; replace data atomically so stale and fresh rows do not interleave.
+- Empty state renders =No goals configured= with a docs link.
+
+** Implement goal detail view
+:PROPERTIES:
+:CUSTOM_ID: FEAT-223-preact-mini-frontend-dashboard::detail-view
+:DEPENDS: FEAT-223-preact-mini-frontend-dashboard::dashboard
+:END:
+- Clicking a goal name routes to a detail panel/view that fetches =/api/goals/:id= and =/api/goals/:id/runs=.
+- Show goal config summary, run history table, and trigger button for webhook-scheduled goals.
+- Hide the trigger button for non-webhook goals unless the API explicitly supports manual triggering for all goals.
+- Limit run history to the most recent 50 entries unless pagination is added in the endpoint contract.
+
+** Implement manifest viewer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-223-preact-mini-frontend-dashboard::manifest-viewer
+:DEPENDS: FEAT-223-preact-mini-frontend-dashboard::html-template
+:END:
+- Add =/api/manifest= consumption path and render the parsed manifest JSON/KDL tree in a readable formatted viewer.
+- Keep viewer read-only and resilient to large nested structures by collapsing or chunking sections if needed.
+
+** Implement session log viewer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-223-preact-mini-frontend-dashboard::log-viewer
+:DEPENDS: FEAT-223-preact-mini-frontend-dashboard::detail-view
+:END:
+- Clicking a run fetches =/api/goals/:id/logs= and renders the HTML transcript using the same rendering approach as =FEAT-207-session-log-viewer-http-server::renderer=.
+- Preserve transcript HTML isolation so frontend chrome does not corrupt rendered session content.
+
+** Wire HTML serving in router
+:PROPERTIES:
+:CUSTOM_ID: FEAT-223-preact-mini-frontend-dashboard::wire-router
+:DEPENDS: FEAT-223-preact-mini-frontend-dashboard::dashboard FEAT-223-preact-mini-frontend-dashboard::detail-view FEAT-223-preact-mini-frontend-dashboard::manifest-viewer FEAT-223-preact-mini-frontend-dashboard::log-viewer FEAT-221-unified-http-api-router-and-endpoints
+:END:
+- Serve =index.html= from =GET /= in the unified Bun router.
+- Add =GET /api/manifest= endpoint returning parsed manifest JSON for the viewer.
+- Ensure HTML serving stays aligned with the existing =/api/goals= and related endpoint contracts from the HTTP API FEAT.
+
+* Edge Cases
+- CDN unreachable: page shows an explicit error message and the server still serves HTML successfully.
+- No goals configured: dashboard shows =No goals configured= instead of an empty table.
+- Very long run history: limit to last 50 runs or paginate; do not render unbounded history.
+- Goal with no runs yet: render =Never run= in dashboard and detail views.
+- Trigger button for non-webhook goals: hidden unless manual trigger semantics are intentionally exposed by the API.
+
+* Acceptance Criteria
+- =bun test packages/spell-server/test/http/frontend.test.ts= passes.
+- Manual: open =http://localhost:8090/= and see the goals dashboard with status badges and polling updates.
+- Manual: click a goal and see detail view with run history.
+- Manual: click trigger button for a webhook goal, the goal fires, and status updates on the next poll.

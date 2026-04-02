@@ -104,6 +104,14 @@ class MockRpcClient {
 	}
 }
 
+type CreatedSessionOptions = {
+	project: string;
+	mode: string;
+	tools: string[];
+	appendSystemPrompt?: string;
+	sessionPath?: string;
+};
+
 class MockProcessManager {
 	sessions = new Map<string, ChatSession>();
 	clients = new Map<string, MockRpcClient>();
@@ -111,7 +119,7 @@ class MockProcessManager {
 	createdSessions: Array<{
 		chatId: string;
 		userId: string;
-		options: { project: string; mode: string; tools: string[] };
+		options: CreatedSessionOptions;
 	}> = [];
 	saveStateCalls = 0;
 
@@ -120,11 +128,7 @@ class MockProcessManager {
 		return client as unknown as RpcClient;
 	}
 
-	async getOrCreate(
-		chatId: string,
-		userId: string,
-		options: { project: string; mode: string; tools: string[] },
-	): Promise<RpcClient> {
+	async getOrCreate(chatId: string, userId: string, options: CreatedSessionOptions): Promise<RpcClient> {
 		this.createdSessions.push({ chatId, userId, options });
 		const client = this.clients.get(chatId) ?? new MockRpcClient();
 		this.clients.set(chatId, client);
@@ -170,7 +174,8 @@ class MockProcessManager {
 function mockCommandContext(): {
 	config: TelegramBridgeConfig;
 	processManager: MockProcessManager;
-	cmdCtx: CommandContext;
+	cmdCtx: CommandContext & { telegramPrompt: string };
+	telegramPrompt: string;
 } {
 	const config: TelegramBridgeConfig = {
 		botTokenFile: "/tmp/bot-token.txt",
@@ -191,8 +196,13 @@ function mockCommandContext(): {
 		defaultProject: "spell",
 	};
 	const processManager = new MockProcessManager();
-	const cmdCtx = { config, processManager: processManager as unknown as ProcessManager };
-	return { config, processManager, cmdCtx };
+	const telegramPrompt = "Test telegram prompt";
+	const cmdCtx: CommandContext & { telegramPrompt: string } = {
+		config,
+		processManager: processManager as unknown as ProcessManager,
+		telegramPrompt,
+	};
+	return { config, processManager, cmdCtx, telegramPrompt };
 }
 
 describe("telegram command handlers", () => {
@@ -294,6 +304,26 @@ describe("telegram command handlers", () => {
 		expect((ctx as { _replies: MockReply[] })._replies[0]?.text).toBe("Switched to project: spell");
 	});
 
+	it("/project spell respawns with telegram prompt", async () => {
+		const { cmdCtx, processManager, telegramPrompt } = mockCommandContext();
+		const ctx = mockAuthContext({ text: "/project spell" });
+		processManager.sessions.set("12345", {
+			chatId: "12345",
+			userId: "123456789",
+			project: "infra",
+			cwd: "/tmp/infra",
+			mode: "telegram-readonly",
+			showThinking: false,
+			createdAt: Date.now(),
+			lastActiveAt: Date.now(),
+		});
+		processManager.clients.set("12345", new MockRpcClient());
+
+		await handleProjectCommand(ctx, cmdCtx);
+
+		expect(processManager.createdSessions[0]?.options.appendSystemPrompt).toBe(telegramPrompt);
+	});
+
 	it("/think toggles and shows current state", async () => {
 		const { cmdCtx, processManager } = mockCommandContext();
 		const ctx = mockAuthContext({ text: "/think" });
@@ -380,6 +410,7 @@ describe("telegram command handlers", () => {
 						}
 					},
 					done: promise,
+					cancel: () => resolve(),
 				};
 			},
 			loadPrompt: async () => "Telegram prompt",
@@ -456,4 +487,25 @@ describe("telegram command handlers", () => {
 
 		expect((ctx as { _replies: MockReply[] })._replies[0]?.text).toContain("Available modes:");
 	});
+});
+
+it("/mode telegram-full respawns with telegram prompt", async () => {
+	const { cmdCtx, processManager, telegramPrompt } = mockCommandContext();
+	const ctx = mockAuthContext({ text: "/mode telegram-full" });
+	processManager.sessions.set("12345", {
+		chatId: "12345",
+		userId: "123456789",
+		project: "spell",
+		cwd: "/tmp/spell",
+		mode: "telegram-readonly",
+		showThinking: false,
+		createdAt: Date.now(),
+		lastActiveAt: Date.now(),
+	});
+	processManager.clients.set("12345", new MockRpcClient());
+
+	await handleModeCommand(ctx, cmdCtx);
+
+	expect(processManager.createdSessions[0]?.options.mode).toBe("telegram-full");
+	expect(processManager.createdSessions[0]?.options.appendSystemPrompt).toBe(telegramPrompt);
 });

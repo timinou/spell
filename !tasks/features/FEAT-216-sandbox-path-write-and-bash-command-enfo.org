@@ -1,0 +1,116 @@
+#+TITLE: Sandbox Path Write and Bash Command Enforcement
+#+STATE: DONE
+#+SESSION_ID: 14aae19d4718f90c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/7-CreateSandbox.jsonl]]
+#+CUSTOM_ID: FEAT-216-sandbox-path-write-and-bash-command-enfo
+#+EFFORT: 4h
+#+LAYER: packages/coding-agent
+#+PRIORITY: #A
+
+NOTE [2026-04-02]: Implemented SandboxPolicy, enforcePathWrite, enforceBashCommand, --sandbox-policy CLI flag, wired into write/edit/bash tools. 12 tests passing.
+
+* Scope
+** In scope
+- SandboxPolicy type, =enforcePathWrite= guard extending existing =enforceModeWrite= patterns, =BashSandboxPolicy= with allow/deny regex or glob lists, and =--sandbox-policy= CLI flag to load policy from a JSON file
+- Guard wiring in the spawned RPC child so write/edit/bash enforcement happens where tools execute
+- Temporary JSON handoff from daemon to child process for sandbox activation
+** Out of scope
+- Read-side path enforcement (follow-up)
+- Network restrictions
+- Cost enforcement
+** Boundary
+- Sandbox enforcement runs inside the spawned RPC child process.
+- The daemon writes a temp JSON file with the policy; the child loads it at startup.
+- Backward compatibility is preserved when no sandbox policy is loaded.
+
+* Tests
+** File: =packages/coding-agent/test/tools/sandbox-enforcement.test.ts=
+- Scenario: =enforcePathWrite= allows write to path in =paths_write= list
+- Scenario: =enforcePathWrite= blocks write to path not in =paths_write= list
+- Scenario: =enforcePathWrite= blocks all writes when =paths_write= is empty array
+- Scenario: =enforcePathWrite= with no sandbox policy loaded allows all writes (backward compat)
+- Scenario: paths with trailing slash match subdirectories (=src/= matches =src/foo/bar.ts=)
+- Scenario: relative paths resolve against cwd before checking
+** File: =packages/coding-agent/test/tools/bash-sandbox.test.ts=
+- Scenario: =BashSandboxPolicy= allows command matching =bash_allow= pattern
+- Scenario: =BashSandboxPolicy= blocks command not matching any =bash_allow= pattern
+- Scenario: =BashSandboxPolicy= blocks command matching =bash_deny= even if =bash_allow= matches
+- Scenario: =BashSandboxPolicy= with no restrictions allows all commands
+- Scenario: glob patterns work (=bun test*= matches =bun test src/foo.test.ts=)
+** File: =packages/coding-agent/test/cli/sandbox-flag.test.ts=
+- Scenario: =--sandbox-policy= flag loads JSON file and activates enforcement
+- Scenario: =--sandbox-policy= with non-existent file exits with error
+- Scenario: =--sandbox-policy= with invalid JSON exits with descriptive error
+** TDD order
+- Write all tests before implementation.
+- Keep test coverage ahead of each implementation step.
+
+* Implementation
+** Write failing tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-216-sandbox-path-write-and-bash-command-enfo::write-tests
+:END:
+- Files listed in the Tests section above
+- Establish red-state coverage for path guard, bash guard, and CLI flag loading before production changes
+
+** Define SandboxPolicy type
+:PROPERTIES:
+:CUSTOM_ID: FEAT-216-sandbox-path-write-and-bash-command-enfo::sandbox-types
+:DEPENDS: FEAT-216-sandbox-path-write-and-bash-command-enfo::write-tests
+:END:
+- File: =packages/coding-agent/src/sandbox/types.ts=
+- Fields: =paths_write: string[]=, =bash_allow: string[]=, =bash_deny: string[]=
+- Keep representation aligned with daemon-emitted JSON and future manifest sandbox config from =FEAT-215-kdl-manifest-schema-and-parser=
+
+** Implement enforcePathWrite
+:PROPERTIES:
+:CUSTOM_ID: FEAT-216-sandbox-path-write-and-bash-command-enfo::enforce-path-write
+:DEPENDS: FEAT-216-sandbox-path-write-and-bash-command-enfo::sandbox-types
+:END:
+- File: =packages/coding-agent/src/sandbox/path-guard.ts=
+- Extend existing =enforceModeWrite= style guard semantics for sandbox policy
+- Resolve cwd-relative input, normalize trailing slash handling, and resolve real paths before comparing against =paths_write=
+- Called from write/edit tool flows
+
+** Implement BashSandboxPolicy
+:PROPERTIES:
+:CUSTOM_ID: FEAT-216-sandbox-path-write-and-bash-command-enfo::bash-sandbox
+:DEPENDS: FEAT-216-sandbox-path-write-and-bash-command-enfo::sandbox-types
+:END:
+- File: =packages/coding-agent/src/sandbox/bash-guard.ts=
+- Pre-execution guard in bash tool
+- Deny takes precedence over allow
+- Support glob matching via =Bun.Glob= or =minimatch=, choosing the codebase-consistent option during implementation
+
+** Add --sandbox-policy CLI flag
+:PROPERTIES:
+:CUSTOM_ID: FEAT-216-sandbox-path-write-and-bash-command-enfo::cli-flag
+:DEPENDS: FEAT-216-sandbox-path-write-and-bash-command-enfo::sandbox-types
+:END:
+- File: =packages/coding-agent/src/cli/args.ts=
+- Parse =--sandbox-policy=, load JSON from disk, validate shape, and store the resulting policy in session config
+- Non-existent file and invalid JSON must fail fast with descriptive errors
+
+** Wire guards into tool execution
+:PROPERTIES:
+:CUSTOM_ID: FEAT-216-sandbox-path-write-and-bash-command-enfo::wire-guards
+:DEPENDS: FEAT-216-sandbox-path-write-and-bash-command-enfo::enforce-path-write FEAT-216-sandbox-path-write-and-bash-command-enfo::bash-sandbox FEAT-216-sandbox-path-write-and-bash-command-enfo::cli-flag
+:END:
+- Update =write.ts=, =edit.ts=, and =bash.ts= to invoke sandbox guards whenever a sandbox policy is active
+- Ensure enforcement happens in the child RPC process, not only in daemon-side orchestration
+
+* Edge Cases
+- Symlinks: resolve real path before checking against policy
+- Trailing slash policy entries match nested descendants, not sibling prefixes
+- Relative paths resolve against cwd before policy checks
+- Bash pipes: command =echo foo | grep bar= checks first command segment for allow semantics
+- Bash subshells: =$(rm -rf /)= embedded in an otherwise allowed command still checks full command string against deny patterns
+- Empty =paths_write= blocks all writes when sandbox policy is active
+- Empty =bash_allow= with non-empty =bash_deny=: all commands allowed except denied ones
+- Empty both bash lists: no bash restrictions (backward compat)
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/tools/sandbox-enforcement.test.ts= passes
+- =bun test packages/coding-agent/test/tools/bash-sandbox.test.ts= passes
+- =bun test packages/coding-agent/test/cli/sandbox-flag.test.ts= passes
+- Existing mode-guard tests still pass (no regression)

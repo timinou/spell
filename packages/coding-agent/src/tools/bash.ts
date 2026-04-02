@@ -11,6 +11,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import type { Theme } from "../modes/theme/theme";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
+import { enforceBashCommand } from "../sandbox";
 import { DEFAULT_MAX_BYTES, TailBuffer } from "../session/streaming-output";
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
@@ -296,6 +297,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				throw new ToolError(interception.message ?? "Command blocked");
 			}
 		}
+
+		const sandboxError = enforceBashCommand(command, this.session.sandboxPolicy);
+		if (sandboxError) throw new ToolError(sandboxError);
 
 		const internalUrlOptions: InternalUrlExpansionOptions = {
 			skills: this.session.skills ?? [],

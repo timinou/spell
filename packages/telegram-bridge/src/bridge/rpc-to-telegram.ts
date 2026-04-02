@@ -91,12 +91,12 @@ export class ResponseStreamer {
 			}
 			case "error":
 				this.#finalized = true;
-				if (this.#draftTimer) {
-					clearTimeout(this.#draftTimer);
-					this.#draftTimer = null;
+				this.#clearDraftTimer();
+				try {
+					await this.#ctx.reply(`RPC error: ${event.message}`);
+				} finally {
+					this.#doneResolve();
 				}
-				await this.#ctx.reply(`RPC error: ${event.message}`);
-				this.#doneResolve();
 				return;
 			case "agent_end":
 			case "message_end":
@@ -109,6 +109,22 @@ export class ResponseStreamer {
 
 	get done(): Promise<void> {
 		return this.#donePromise;
+	}
+
+	cancel(): void {
+		if (this.#finalized) {
+			return;
+		}
+		this.#finalized = true;
+		this.#clearDraftTimer();
+		this.#doneResolve();
+	}
+
+	#clearDraftTimer(): void {
+		if (this.#draftTimer) {
+			clearTimeout(this.#draftTimer);
+			this.#draftTimer = null;
+		}
 	}
 
 	#resolveChatId(): number | null {
@@ -221,16 +237,16 @@ export class ResponseStreamer {
 			return;
 		}
 		this.#finalized = true;
-		if (this.#draftTimer) {
-			clearTimeout(this.#draftTimer);
-			this.#draftTimer = null;
-		}
+		this.#clearDraftTimer();
 
-		const html = markdownToTelegramHtml(this.#buildFinalMarkdown());
-		const messages = splitMessage(html || "Assistant completed without a text response.");
-		for (const chunk of messages) {
-			await this.#ctx.reply(chunk, { parse_mode: "HTML" });
+		try {
+			const html = markdownToTelegramHtml(this.#buildFinalMarkdown());
+			const messages = splitMessage(html || "Assistant completed without a text response.");
+			for (const chunk of messages) {
+				await this.#ctx.reply(chunk, { parse_mode: "HTML" });
+			}
+		} finally {
+			this.#doneResolve();
 		}
-		this.#doneResolve();
 	}
 }

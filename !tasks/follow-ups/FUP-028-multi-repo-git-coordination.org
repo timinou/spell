@@ -1,0 +1,64 @@
+#+TITLE: Multi-Repo Git Coordination
+#+STATE: ITEM
+#+SESSION_ID: 14aae19d4898f91c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/16-CreateFups.jsonl]]
+#+CUSTOM_ID: FUP-028-multi-repo-git-coordination
+#+EFFORT: 4h
+#+DEPENDS: FEAT-autonomy-git-execution FEAT-loop-worktree-pattern
+
+* Scope
+When multiple autonomy goals share the same =cwd=, coordinate git operations safely. Reuse the loop-system worktree pattern for concurrent execution, serialize =git pull= per repo with a mutex, and pause/notify affected goals when repo sync fails.
+
+* Tests
+** Add concurrency tests for shared-repo execution and worktree isolation
+:PROPERTIES:
+:CUSTOM_ID: FUP-028-multi-repo-git-coordination::shared-repo-concurrency-tests
+:END:
+Prove overlapping goals in the same repository get isolated working directories rather than trampling one another.
+
+** Add mutex tests for serialized =git pull= before runtime changes
+:PROPERTIES:
+:CUSTOM_ID: FUP-028-multi-repo-git-coordination::git-pull-mutex-tests
+:DEPENDS: FUP-028-multi-repo-git-coordination::shared-repo-concurrency-tests
+:END:
+Cover concurrent pull attempts, lock release on failure, and starvation avoidance.
+
+** Add failure-handling tests for pull errors and affected-goal pausing
+:PROPERTIES:
+:CUSTOM_ID: FUP-028-multi-repo-git-coordination::git-failure-handling-tests
+:DEPENDS: FUP-028-multi-repo-git-coordination::git-pull-mutex-tests
+:END:
+Assert failed syncs pause the right goals and emit notifications instead of continuing on stale state.
+
+* Implementation
+** Extract or reuse shared worktree lifecycle from the loop system
+:PROPERTIES:
+:CUSTOM_ID: FUP-028-multi-repo-git-coordination::reuse-worktree-lifecycle
+:DEPENDS: FUP-028-multi-repo-git-coordination::git-failure-handling-tests
+:END:
+Prefer one canonical worktree strategy rather than introducing a second concurrent git abstraction.
+
+** Introduce per-repo pull coordination with mutex-protected sync
+:PROPERTIES:
+:CUSTOM_ID: FUP-028-multi-repo-git-coordination::introduce-pull-coordination
+:DEPENDS: FUP-028-multi-repo-git-coordination::reuse-worktree-lifecycle
+:END:
+Scope coordination by canonical repo root so goals sharing a repository serialize only the pull phase.
+
+** Wire sync failures into pause + notification behavior
+:PROPERTIES:
+:CUSTOM_ID: FUP-028-multi-repo-git-coordination::wire-sync-failure-escalation
+:DEPENDS: FUP-028-multi-repo-git-coordination::introduce-pull-coordination
+:END:
+On pull failure, pause only impacted goals, surface the repo error, and notify through the autonomy failure pipeline.
+
+* Edge Cases
+- Goals pointing at nested paths inside the same repo must collapse to one repo lock domain.
+- A repo already mid-run when another schedule fires should avoid duplicate pull work.
+- Worktree cleanup must happen even when goal execution crashes.
+- Pull failure handling must distinguish auth/network errors from merge/conflict failures.
+
+* Acceptance Criteria
+- Shared-repo goals run in isolated worktrees with coordinated pulls.
+- =git pull= happens once at a time per repo root.
+- Pull failures pause and notify only the affected goals, with clear diagnostics.

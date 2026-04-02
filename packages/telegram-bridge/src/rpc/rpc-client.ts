@@ -72,6 +72,9 @@ export class RpcClient {
 		if (this.#options.appendSystemPrompt) {
 			args.push("--append-system-prompt", this.#options.appendSystemPrompt);
 		}
+		if (this.#options.sandboxPolicyPath) {
+			args.push("--sandbox-policy", this.#options.sandboxPolicyPath);
+		}
 
 		let child: Subprocess;
 		try {
@@ -163,6 +166,14 @@ export class RpcClient {
 
 	onEvent(callback: (event: RpcEvent) => void): void {
 		this.#eventListeners.push(callback);
+	}
+
+	offEvent(callback: RpcEventListener): void {
+		const index = this.#eventListeners.indexOf(callback);
+		if (index === -1) {
+			return;
+		}
+		this.#eventListeners.splice(index, 1);
 	}
 
 	async prompt(message: string, images?: ImageContentRef[]): Promise<void> {

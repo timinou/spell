@@ -1,0 +1,130 @@
+#+TITLE: Post-Completion Hooks for Autonomy Goals
+#+STATE: DONE
+#+SESSION_ID: 14aae19d4798f912
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/11-CreateHooks.jsonl]]
+#+CUSTOM_ID: FEAT-222-post-completion-hooks-for-autonomy-goals
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+DEPENDS: FEAT-219-goal-executor-with-retry-and-escalation FEAT-215-kdl-manifest-schema-and-parser
+#+LAYER: packages/spell-server
+
+NOTE [2026-04-02]: Implemented HookDispatcher with WebhookHookExecutor, TelegramHookExecutor, OrgHookExecutor, NotificationSender. Tests passing.
+
+* Scope
+** In scope
+- HookDispatcher orchestration for post-completion hook execution after goal completion
+- WebhookHookExecutor for HTTP POST/GET with simple template substitution
+- TelegramHookExecutor via NotificationSender interface
+- OrgHookExecutor for BUG/feature org item creation based on run outcome
+- Hook ordering guarantees: fire sequentially in config order; one failure does not block later hooks
+** Out of scope
+- Agent-driven hooks
+- Complex conditional hook routing
+- Slack/Discord executors (follow-up via NotificationSender interface)
+** Boundary
+- Hooks execute only after goal completion; Goal Executor hands GoalResult to HookDispatcher
+- Depends on FEAT-219 Goal Executor and FEAT-215 manifest schema/types
+
+* Tests
+- Tests written before implementation.
+- File: =packages/spell-server/test/hooks/webhook-hook.test.ts=
+  - Scenario: POST to configured URL with JSON body containing goal name, status, duration
+  - Scenario: template substitution: ={{summary}}= replaced with goal output summary, ={{status}}= with =success=/=failure=, ={{date}}= with ISO date
+  - Scenario: GET method supported for heartbeat-style webhooks
+  - Scenario: webhook timeout (5s default) does not block hook chain
+  - Scenario: non-2xx response logged as warning and does not throw
+- File: =packages/spell-server/test/hooks/telegram-hook.test.ts=
+  - Scenario: sends formatted message to configured =chat_id= via NotificationSender
+  - Scenario: NotificationSender is a no-op when Telegram is not configured and does not error
+  - Scenario: long message splits at 4096 chars by reusing telegram-bridge splitter
+- File: =packages/spell-server/test/hooks/org-hook.test.ts=
+  - Scenario: =on_failure= creates BUG org item with goal name, error message, and =run_id= in body
+  - Scenario: =on_complete= creates feature org item with findings
+  - Scenario: org not configured for repo logs warning and skips gracefully
+- File: =packages/spell-server/test/hooks/hook-dispatcher.test.ts=
+  - Scenario: =on_success= hooks fire only when status is =success=
+  - Scenario: =on_failure= hooks fire only when status is =failure=
+  - Scenario: =on_complete= hooks fire regardless of status
+  - Scenario: multiple hooks in same category fire in order
+  - Scenario: hook failure does not prevent subsequent hooks from firing
+  - Scenario: empty hooks config means no hooks fire and no error
+
+* Implementation
+** Define hook test suites first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-222-post-completion-hooks-for-autonomy-goals::write-tests
+:END:
+- Create the four test files listed in the Tests section before implementation code.
+- Use mock HTTP server coverage for webhook behavior; no real external calls.
+- Reuse existing telegram-bridge splitting behavior instead of introducing a parallel implementation.
+
+** Define HookExecutor interface and hook types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-222-post-completion-hooks-for-autonomy-goals::hook-types
+:DEPENDS: FEAT-222-post-completion-hooks-for-autonomy-goals::write-tests FEAT-215-kdl-manifest-schema-and-parser
+:END:
+- File: =packages/spell-server/src/hooks/types.ts=
+- Define =HookExecutor<T>=, =GoalResult=, and =HookDispatchConfig= with the minimum typed surface the Goal Executor and dispatcher need.
+- Preserve manifest distinctions so executor selection does not reconstruct hook semantics from loose strings.
+
+** Define NotificationSender interface
+:PROPERTIES:
+:CUSTOM_ID: FEAT-222-post-completion-hooks-for-autonomy-goals::notification-sender
+:DEPENDS: FEAT-222-post-completion-hooks-for-autonomy-goals::hook-types
+:END:
+- File: =packages/spell-server/src/hooks/notification-sender.ts=
+- Define =sendMessage(chatId, text): Promise<void>=.
+- Provide =TelegramNotificationSender= wrapping =bot.api.sendMessage=.
+- Provide =NoopNotificationSender= for Telegram-disabled deployments.
+
+** Implement WebhookHookExecutor
+:PROPERTIES:
+:CUSTOM_ID: FEAT-222-post-completion-hooks-for-autonomy-goals::webhook-executor
+:DEPENDS: FEAT-222-post-completion-hooks-for-autonomy-goals::hook-types
+:END:
+- File: =packages/spell-server/src/hooks/webhook.ts=
+- Use =fetch()= with default 5s timeout.
+- Implement simple ={{key}}= substitution that leaves unknown variables literal.
+- Log warnings for non-2xx responses/timeouts; never abort the dispatcher chain.
+
+** Implement TelegramHookExecutor
+:PROPERTIES:
+:CUSTOM_ID: FEAT-222-post-completion-hooks-for-autonomy-goals::telegram-executor
+:DEPENDS: FEAT-222-post-completion-hooks-for-autonomy-goals::notification-sender
+:END:
+- File: =packages/spell-server/src/hooks/telegram.ts=
+- Format GoalResult into a user-readable message.
+- Route all Telegram delivery through NotificationSender so Telegram remains optional.
+- Reuse telegram-bridge message splitting instead of duplicating 4096-char chunking logic.
+
+** Implement OrgHookExecutor
+:PROPERTIES:
+:CUSTOM_ID: FEAT-222-post-completion-hooks-for-autonomy-goals::org-executor
+:DEPENDS: FEAT-222-post-completion-hooks-for-autonomy-goals::hook-types
+:END:
+- File: =packages/spell-server/src/hooks/org.ts=
+- Import =@oh-my-pi/pi-org= directly, not through the agent tool wrapper.
+- Create BUG items on failure and feature items on completion, with enough run context for postmortem follow-up.
+- Catch missing package/configuration errors and degrade gracefully with warning logs.
+
+** Implement HookDispatcher
+:PROPERTIES:
+:CUSTOM_ID: FEAT-222-post-completion-hooks-for-autonomy-goals::dispatcher
+:DEPENDS: FEAT-222-post-completion-hooks-for-autonomy-goals::webhook-executor FEAT-222-post-completion-hooks-for-autonomy-goals::telegram-executor FEAT-222-post-completion-hooks-for-autonomy-goals::org-executor
+:END:
+- File: =packages/spell-server/src/hooks/dispatcher.ts=
+- Dispatch sequentially in configured order.
+- Filter by =on_success=/=on_failure=/=on_complete= against GoalResult status.
+- Catch executor failures per hook and continue to the next hook.
+
+* Edge Cases
+- Webhook URL unreachable: timeout after 5s, log warning, continue
+- Template variable not found: leave ={{unknown}}= literal in output
+- Org package not installed or repo not configured: catch import/config error and skip gracefully
+- Telegram rate limit (429): rely on grammy retry behavior, but log if delivery exceeds 5s
+- Hook fires during daemon shutdown: best-effort only; shutdown path does not wait for hook completion
+
+* Acceptance Criteria
+- All 4 hook test files pass
+- =bun check:ts= passes
+- Webhook executor coverage uses a mock HTTP server, never a real external call

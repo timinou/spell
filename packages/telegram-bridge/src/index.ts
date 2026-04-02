@@ -5,6 +5,8 @@
  * Connects Telegram Bot API to Spell's RPC mode, allowing interaction
  * with the coding agent from any device via Telegram.
  */
+export * from "./rpc";
+
 import { logger } from "@oh-my-pi/pi-utils";
 import { loadConfig } from "./config/loader";
 
@@ -49,4 +51,6 @@ async function main() {
 	}
 }
 
-main();
+if (import.meta.main) {
+	main();
+}

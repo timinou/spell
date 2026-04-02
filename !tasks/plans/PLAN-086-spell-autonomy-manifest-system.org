@@ -1,0 +1,178 @@
+#+TITLE: Spell Autonomy Manifest System
+#+STATE: DONE
+#+SESSION_ID: 14aac3ad63d8f8fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa.jsonl]]
+#+CUSTOM_ID: PLAN-086-spell-autonomy-manifest-system
+
+NOTE [2026-04-02]: All 11 implementation items completed. 106 tests passing. Type checks clean. Documentation delivered.
+
+
+* Initial Message
+
+ok bro. this is importnat. please tell me how I can have recurring actions that happen on a remote server. Look up oh my pi and pi coding extensions online (I think they use a heartbeat for this type of stuff).
+
+Ask me as many questions as possible, challenge me, do an initial research so you know what you're talking about. Ideally, I'd like to have a new concept for this which would be a 'Spell Autonomy Manifest', which would show what gets done and when, with a skill whitelist and a post-completion set of hooks with goals and intentions. THis is an open questions, we're making it together
+
+* Context
+** Problem
+Non-technical cofounders need to set up recurring automated workflows (test suites, security reviews, deployments) that run unattended on a remote server. Today, Spell is interactive-only with no scheduling, unattended execution, or declarative workflow specification. The Telegram bridge (PLAN-080, FEAT-204-208) provides the RPC session management foundation but has no autonomy capability.
+
+** Approach
+Build a unified =packages/spell-server/= daemon that imports =packages/telegram-bridge/= as a library and adds autonomy scheduling, execution, and observability. The daemon runs as a foreground process managed by systemd/supervisor on the remote server. It loads three KDL config files, optionally starts the Telegram bot, schedules goals via cron, accepts webhook triggers, and exposes an HTTP dashboard.
+
+** Key Decisions (all settled)
+*** Architecture
+- One unified daemon: =packages/spell-server/= imports =packages/telegram-bridge/= as library
+- telegram-bridge exports: RpcClient, ProcessManager, bot setup, message bridge, log viewer renderer
+- Telegram fully optional -- daemon works autonomy-only, telegram-only, or both
+- CLI: =spell server start= foreground process, managed by systemd on remote box
+
+*** Config (3 files, all KDL via @bgotink/kdl)
+- =.spell/server.kdl= -- deployment-specific (HTTP port, auth credentials)
+- =.spell/channels.kdl= -- notification channels (Telegram config, future Slack/Discord)
+- =.spell/autonomy.kdl= -- repo-checked-in manifest (setups, goals) -- syncs to server via git pull webhook
+
+*** Manifest Hierarchy
+Reusable =setups= (domain, mode, skills, tools, sandbox, timeout, cost) crossed with =goals= (setup ref, schedule, prompt, state, hooks, retry). Full KDL schema documented in FEAT-224.
+
+*** SessionManager
+Generic =SessionManager<K>= with pluggable lifecycle strategies. Telegram instantiates with chatId key + idle timeout. Autonomy instantiates with goalName key + completion-based lifecycle. Both use RpcClient from telegram-bridge.
+
+*** Sandbox Enforcement
+- CLI flag: =--sandbox-policy /tmp/spell-sandbox-XXXX.json= (daemon writes temp file, child loads at startup)
+- Enforces: path write restrictions + bash allow/deny regex
+- paths_read enforcement deferred to FUP-022
+
+*** Hooks
+- NotificationSender interface: direct ref, no-op when Telegram unconfigured
+- Three executors: WebhookHookExecutor, TelegramHookExecutor, OrgHookExecutor
+- Failure escalation: retry N with backoff -> Telegram + auto-create BUG org item -> goal paused
+
+*** State
+- Per-goal SQLite: daemon metadata table + agent KV store + optional typed schema
+- =autonomy_state= hidden builtin tool, activated via =--tools=
+- DB path via =SPELL_AUTONOMY_STATE_DB= env var
+
+*** Scheduling
+- croner library for cron with timezone/jitter
+- Webhook triggers via =POST /trigger/:goal= with HMAC or bearer auth
+
+*** Frontend
+- Preact/HTM (no build step, ESM imports from esm.sh CDN)
+- Dashboard: goals list with status, run history, manifest viewer, trigger buttons, live polling
+
+** Prerequisites
+- PLAN-080 (Telegram bridge) fully completed -- all FEAT-204 through FEAT-208 merged and working
+- =packages/telegram-bridge/= exports RpcClient, ProcessManager, bot, log-viewer renderer as library
+
+** Metis Gap Analysis Summary
+Critical gaps addressed:
+- GAP-01: paths_read -- deferred to FUP-022 (most goals read broadly, write narrowly)
+- GAP-02: bash sandbox -- new BashSandboxPolicy layer, not extension of interceptor
+- GAP-03: autonomy_state injection -- register as hidden builtin, activate via =--tools=
+- GAP-10: sequencing -- sandbox enforcement ships BEFORE scheduling goes live
+
+* Verification
+** Automated
+- =bun test packages/spell-server/test/= -- all tests pass
+- =bun test packages/coding-agent/test/tools/sandbox-enforcement.test.ts= -- sandbox tests pass
+- =bun test packages/coding-agent/test/tools/bash-sandbox.test.ts= -- bash sandbox tests pass
+- =bun test packages/coding-agent/test/tools/autonomy-state.test.ts= -- state tool tests pass
+- =bun check:ts= -- no type errors across workspace
+
+** Manual Verification
+- Start server: =bun run packages/spell-server/src/main.ts= boots without error
+- HTTP dashboard: =curl -u admin:pass http://localhost:8090/api/goals= returns JSON goal list
+- Frontend: open =http://localhost:8090/= in browser, see goals dashboard
+- Cron scheduling: configure a 1-minute cron goal, observe it fires within 2 minutes
+- Webhook trigger: =curl -X POST http://localhost:8090/trigger/test-goal= fires the goal
+- Sandbox: goal with empty paths_write cannot create files
+- State persistence: run goal twice, second run can read state from first run
+- Telegram notification: configure Telegram channel, fail a goal, receive notification
+- Graceful shutdown: SIGTERM stops scheduler, waits for running goals, exits clean
+
+** Required Artifacts
+- =packages/spell-server/package.json= exists with correct dependencies
+- =packages/spell-server/docs/getting-started.md= exists (>500 words)
+- =packages/spell-server/docs/architecture.md= exists (>800 words)
+- =packages/spell-server/docs/kdl-schema-reference.md= exists with examples for coding, sales, and marketing domains
+
+* Execution Manifest
+** foundation                                                       :wave:
+- [[id:FEAT-215-kdl-manifest-schema-and-parser]] KDL Manifest Schema and Parser (6h)
+- [[id:FEAT-216-sandbox-path-write-and-bash-command-enfo]] Sandbox Path Write and Bash Command Enforcement (4h)
+
+** core-services                                                    :wave:
+- [[id:PROJ-019-generalized-sessionmanager-for-spell-ser]] Generalized SessionManager (6h, depends FEAT-215)
+- [[id:FEAT-217-autonomy-state-builtin-tool]] Autonomy State Builtin Tool (4h, depends FEAT-215)
+- [[id:FEAT-218-cron-scheduler-engine]] Cron Scheduler Engine (3h, depends FEAT-215)
+
+** execution                                                        :wave:
+- [[id:FEAT-219-goal-executor-with-retry-and-escalation]] Goal Executor with Retry/Escalation (6h, depends PROJ-019 + FEAT-216 + FEAT-218 + FEAT-215)
+
+** integration                                                      :wave:
+- [[id:FEAT-222-post-completion-hooks-for-autonomy-goals]] Post-Completion Hooks (4h, depends FEAT-219 + FEAT-215)
+- [[id:FEAT-221-unified-http-api-router-and-endpoints]] Unified HTTP API Router (5h, depends FEAT-219 + FEAT-218 + FEAT-222 + FEAT-215)
+
+** surface                                                          :wave:
+- [[id:FEAT-223-preact-mini-frontend-dashboard]] Preact Mini Frontend Dashboard (4h, depends FEAT-221)
+
+** delivery                                                         :wave:
+- [[id:FEAT-220-spell-server-start-cli-entrypoint]] spell server start CLI Entrypoint (4h, depends PROJ-019 + FEAT-215 + FEAT-218 + FEAT-219 + FEAT-222 + FEAT-221 + FEAT-223)
+- [[id:FEAT-224-autonomy-system-documentation]] Documentation: Getting Started + Architecture + Schema Reference (3h, depends FEAT-220)
+
+** follow-ups                                                       :wave:
+- [[id:FUP-022-read-side-path-enforcement]] Read-Side Path Enforcement (4h)
+- [[id:FUP-023-qml-canvas-manifest-editor]] QML Canvas Manifest Editor (8h)
+- [[id:FUP-024-http-session-management-endpoints]] HTTP Session Management Endpoints (2h)
+- [[id:FUP-025-goal-dependencies]] Goal Dependencies (3h)
+- [[id:FUP-026-cost-and-token-budget-enforcement]] Cost/Token Budget Enforcement (3h)
+- [[id:FUP-027-condition-gated-scheduling-research-spik]] Condition-Gated Scheduling SPIKE (2h)
+- [[id:FUP-028-multi-repo-git-coordination]] Multi-Repo Git Coordination (4h)
+
+** Total Effort: ~49h implementation + 26h FUPs
+
+** Completion [2026-04-02]
+*** Verification
+**** Automated Tests
+All 106 tests pass across 16 test files:
+- =bun test packages/spell-server/test/= — 84 pass, 0 fail
+  - manifest/ (parser + types): 17 tests
+  - session/ (session-manager + lifecycle): 14 tests
+  - scheduler/ (cron-scheduler): 6 tests
+  - executor/ (goal-executor + execution-state): 11 tests
+  - hooks/ (dispatcher + webhook): 12 tests
+  - http/ (router + webhook-auth + frontend): 15 tests
+  - cli/ (server-start): 9 tests
+- =bun test packages/coding-agent/test/tools/sandbox-enforcement.test.ts= — 6 pass
+- =bun test packages/coding-agent/test/tools/bash-sandbox.test.ts= — 6 pass
+- =bun test packages/coding-agent/test/tools/autonomy-state.test.ts= — 10 pass
+
+**** Type Checking
+- =bun check:ts= passes: 0 errors, 0 warnings across workspace (1663 files)
+
+**** Required Artifacts
+- =packages/spell-server/package.json= exists with @bgotink/kdl, croner, telegram-bridge dependencies
+- =packages/spell-server/docs/getting-started.md= exists (996 words, >500 required)
+- =packages/spell-server/docs/architecture.md= exists (2124 words, >800 required)
+- =packages/spell-server/docs/kdl-schema-reference.md= exists with coding, sales, and marketing domain examples
+
+*** Artifacts
+- Package scaffold: =packages/spell-server/package.json=, =packages/spell-server/tsconfig.json=
+- Manifest module: =packages/spell-server/src/manifest/= (types, parser, validator, serializer)
+- Session module: =packages/spell-server/src/session/= (session-manager, lifecycle strategies)
+- Scheduler module: =packages/spell-server/src/scheduler/= (goal-scheduler)
+- Executor module: =packages/spell-server/src/executor/= (goal-executor, state machine, sandbox-writer)
+- Hooks module: =packages/spell-server/src/hooks/= (dispatcher, webhook, telegram, org, notification-sender)
+- HTTP module: =packages/spell-server/src/http/= (server, auth, routes, frontend dashboard)
+- Config module: =packages/spell-server/src/config/= (loader, server-parser, channels-parser)
+- Composition root: =packages/spell-server/src/server.ts=, =packages/spell-server/src/main.ts=
+- Sandbox enforcement: =packages/coding-agent/src/sandbox/= (types, path-guard, bash-guard)
+- Autonomy state tool: =packages/coding-agent/src/tools/autonomy-state/= (tool, store, schema)
+- Documentation: =packages/spell-server/docs/= (getting-started, architecture, kdl-schema-reference)
+- Test fixtures: =packages/spell-server/test/manifest/fixtures/*.kdl=
+
+*** Deviations
+- Follow-up items (FUP-022 through FUP-028) remain in ITEM state as planned — they were scoped as post-delivery.
+- Manual verification items (live server boot, curl tests, Telegram notification, cron fire observation) are deferred to first production deployment since they require a running server with config files.
+- The telegram-bridge ProcessManager was not refactored to use SessionManager as PROJ-019 originally specified; instead SessionManager was built as a standalone component alongside ProcessManager. This avoids breaking changes to the existing telegram-bridge and achieves the same goal of having a generic session manager available for the autonomy daemon.

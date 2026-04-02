@@ -19,6 +19,7 @@ interface BtwDependencies {
 	) => {
 		handleEvent: (event: RpcEvent) => Promise<void>;
 		done: Promise<void>;
+		cancel: () => void;
 	};
 	loadPrompt?: () => Promise<string>;
 }
@@ -81,7 +82,7 @@ export async function handleBtwCommand(
 		});
 		await ctx.reply(`Failed to run /btw: ${String(error)}`);
 	} finally {
-		await streamer.done;
+		streamer.cancel();
 		await client.kill();
 	}
 }

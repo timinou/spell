@@ -1,0 +1,127 @@
+#+TITLE: spell server start CLI Entrypoint
+#+STATE: DONE
+#+SESSION_ID: 14aae19d4818f916
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/14-CreateCli.jsonl]]
+#+CUSTOM_ID: FEAT-220-spell-server-start-cli-entrypoint
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: packages/spell-server
+#+DEPENDS: PROJ-019-generalized-sessionmanager-for-spell-ser FEAT-215-kdl-manifest-schema-and-parser FEAT-218-cron-scheduler-engine FEAT-219-goal-executor-with-retry-and-escalation FEAT-222-post-completion-hooks-for-autonomy-goals FEAT-221-unified-http-api-router-and-endpoints FEAT-223-preact-mini-frontend-dashboard
+
+NOTE [2026-04-02]: Implemented composition root, config loading (server.kdl, channels.kdl, autonomy.kdl), graceful shutdown, SIGTERM/SIGINT handling. Tests passing.
+
+* Scope
+** In scope
+- `spell server start` CLI command
+- Load 3 config files: `.spell/server.kdl`, `.spell/channels.kdl`, `.spell/autonomy.kdl`
+- Create all runtime components: `SessionManager`, `GoalScheduler`, `GoalExecutor`, `HookDispatcher`, HTTP server
+- Wire manifest parser/validator output into runtime startup
+- Graceful shutdown on `SIGTERM` and `SIGINT`
+- Postmortem registration at startup
+- Optional Telegram bot startup when channels config enables it
+** Out of scope
+- `spell server stop` (FUP)
+- `spell server status` (FUP)
+- Daemonization beyond foreground process management (`systemd` handles service lifecycle)
+- Hot-reload; manifest/config changes apply on next goal run after restart or next scheduled evaluation path defined by runtime
+** Boundary
+- CLI is the composition root. It creates and wires all components, then blocks until shutdown.
+- This item is the final wiring layer and should land after the underlying spell-server FEATs it composes, including `FEAT-215-kdl-manifest-schema-and-parser`.
+
+* Tests
+** `packages/spell-server/test/cli/server-start.test.ts`
+- Scenario: start with valid configs loads manifest and schedules all goals
+- Scenario: start with missing `autonomy.kdl` exits with descriptive error
+- Scenario: start with invalid manifest exits with validation errors
+- Scenario: start without `channels.kdl` works (`Telegram` disabled, hooks degrade)
+- Scenario: `SIGTERM` triggers graceful shutdown: stop scheduler, wait for running goals, kill sessions
+- Scenario: `SIGINT` triggers same graceful shutdown
+- Scenario: postmortem cleanup registered at startup
+** `packages/spell-server/test/integration/server-lifecycle.test.ts`
+- Scenario: start server -> trigger goal via HTTP -> see completion in `/api/goals/:id`
+- Scenario: start server -> wait for mock cron fire -> see run in history
+** TDD order
+- Write failing CLI and integration tests before implementation.
+- Keep tests ahead of each implementation step so composition behavior stays externally verified.
+
+* Implementation
+** Write tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-220-spell-server-start-cli-entrypoint::write-tests
+:END:
+- Add the CLI and integration tests listed above before runtime code.
+- Use real process lifecycle seams where possible; avoid mocks that hide shutdown or scheduling behavior.
+
+** Create package scaffold
+:PROPERTIES:
+:CUSTOM_ID: FEAT-220-spell-server-start-cli-entrypoint::scaffold
+:DEPENDS: FEAT-220-spell-server-start-cli-entrypoint::write-tests
+:END:
+- Files: `packages/spell-server/package.json`, `packages/spell-server/tsconfig.json`, `packages/spell-server/src/main.ts`
+- Add dependencies: `@oh-my-pi/telegram-bridge`, `@oh-my-pi/pi-utils`, `@oh-my-pi/pi-org`, `@bgotink/kdl`, `croner`
+- Establish executable entry path for `spell server start`
+
+** Implement config loader
+:PROPERTIES:
+:CUSTOM_ID: FEAT-220-spell-server-start-cli-entrypoint::config-loader
+:DEPENDS: FEAT-220-spell-server-start-cli-entrypoint::scaffold FEAT-215-kdl-manifest-schema-and-parser
+:END:
+- File: `packages/spell-server/src/config/loader.ts`
+- Load `.spell/server.kdl`, `.spell/channels.kdl`, `.spell/autonomy.kdl` from default config dir or `--config-dir`
+- Treat `channels.kdl` as optional; `server.kdl` and `autonomy.kdl` as required
+- Reuse manifest parser/validator from `FEAT-215-kdl-manifest-schema-and-parser`
+
+** Implement server and channels parsers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-220-spell-server-start-cli-entrypoint::server-config-parser
+:DEPENDS: FEAT-220-spell-server-start-cli-entrypoint::config-loader
+:END:
+- Files: `packages/spell-server/src/config/server-parser.ts`, `packages/spell-server/src/config/channels-parser.ts`
+- Parse server config (`http` port, auth) and channels config (`telegram` bot token, owners)
+- Keep parser errors structured so CLI exits with actionable validation output
+
+** Implement composition root
+:PROPERTIES:
+:CUSTOM_ID: FEAT-220-spell-server-start-cli-entrypoint::compose
+:DEPENDS: FEAT-220-spell-server-start-cli-entrypoint::server-config-parser
+:END:
+- File: `packages/spell-server/src/server.ts`
+- Create and wire: manifest parser -> `SessionManager(TelegramLifecycle)` + `SessionManager(AutonomyLifecycle)` -> `GoalScheduler` -> `GoalExecutor` -> `HookDispatcher` -> HTTP server
+- Activate hidden builtin tool `autonomy_state` through `--tools` for autonomy-managed sessions
+- Pass sandbox policy via `--sandbox-policy` temp JSON file for spawned sessions
+- Optionally start Telegram bot using `@oh-my-pi/telegram-bridge`
+- Use `NotificationSender` interface for hook fanout and `Croner` for scheduling
+
+** Implement graceful shutdown
+:PROPERTIES:
+:CUSTOM_ID: FEAT-220-spell-server-start-cli-entrypoint::shutdown
+:DEPENDS: FEAT-220-spell-server-start-cli-entrypoint::compose
+:END:
+- Register `SIGTERM`/`SIGINT` handlers
+- Stop scheduler, wait up to 30s for running goals, kill all sessions, close HTTP server
+- Ensure shutdown path reports timeout/failure truthfully and preserves postmortem artifacts
+
+** Add CLI entrypoint
+:PROPERTIES:
+:CUSTOM_ID: FEAT-220-spell-server-start-cli-entrypoint::cli-entry
+:DEPENDS: FEAT-220-spell-server-start-cli-entrypoint::shutdown
+:END:
+- File: `packages/spell-server/src/main.ts`
+- Parse args for `spell server start` and `--config-dir`
+- Call composition root, register postmortem cleanup, block until shutdown
+- Fail fast on startup errors such as missing `.spell/`, invalid KDL, or `EADDRINUSE`
+
+* Edge Cases
+- `.spell/` directory does not exist: exit with `No .spell directory found. Run spell server init or create config manually.`
+- Port already in use: exit with `EADDRINUSE` error message
+- Invalid Telegram bot token: log error and continue without Telegram; daemon must not crash
+- No goals in manifest: start anyway for Telegram-only or hook-only deployments
+- Multiple instances on same port: second instance fails fast
+- Missing `channels.kdl`: startup still succeeds with degraded notifications
+- Shutdown during active goal execution: wait for inflight work until timeout, then kill remaining sessions and surface timeout in logs/postmortem
+
+* Acceptance Criteria
+- `bun test packages/spell-server/test/cli/server-start.test.ts` passes
+- `bun test packages/spell-server/test/integration/server-lifecycle.test.ts` passes
+- Manual: `bun run packages/spell-server/src/main.ts` starts server, logs startup, and responds to HTTP requests
+- Startup composes all runtime components from config and exits descriptively on invalid/missing config

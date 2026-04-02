@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spell Server Dashboard</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "preact": "https://esm.sh/preact@10.25.4",
+      "preact/hooks": "https://esm.sh/preact@10.25.4/hooks",
+      "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact"
+    }
+  }
+  </script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #c9d1d9; line-height: 1.5; }
+    a { color: inherit; }
+    button, input { font: inherit; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    .header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+    h1 { font-size: 1.5rem; color: #f0f6fc; }
+    h2, h3 { color: #f0f6fc; }
+    table { width: 100%; border-collapse: collapse; background: #161b22; border-radius: 8px; overflow: hidden; }
+    th { text-align: left; padding: 12px 16px; background: #21262d; color: #8b949e; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    td { padding: 12px 16px; border-top: 1px solid #21262d; vertical-align: top; }
+    tr:hover td { background: #1c2128; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; text-transform: capitalize; }
+    .badge-completed, .badge-success { background: #238636; color: #fff; }
+    .badge-running { background: #1f6feb; color: #fff; }
+    .badge-failed, .badge-failure { background: #da3633; color: #fff; }
+    .badge-pending { background: #6e7681; color: #fff; }
+    .badge-paused { background: #d29922; color: #000; }
+    .badge-escalated { background: #f85149; color: #fff; }
+    .btn { padding: 6px 14px; border: 1px solid #30363d; border-radius: 6px; background: #21262d; color: #c9d1d9; cursor: pointer; font-size: 0.85rem; }
+    .btn:hover { background: #30363d; border-color: #8b949e; }
+    .btn-primary { background: #238636; border-color: #238636; color: #fff; }
+    .btn-primary:hover { background: #2ea043; }
+    .detail-panel, .panel { background: #161b22; border-radius: 8px; padding: 20px; }
+    .back-link { color: #58a6ff; text-decoration: none; font-size: 0.9rem; }
+    .back-link:hover { text-decoration: underline; }
+    .empty, .loading { text-align: center; padding: 40px; color: #8b949e; }
+    .error { background: rgba(218, 54, 51, 0.1); border: 1px solid #da3633; padding: 12px; border-radius: 6px; margin-bottom: 16px; }
+    .meta { color: #8b949e; font-size: 0.85rem; }
+    .run-list, .section { margin-top: 16px; }
+    .stack { display: flex; flex-direction: column; gap: 12px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .input { min-width: 240px; padding: 8px 10px; border-radius: 6px; border: 1px solid #30363d; background: #0d1117; color: #c9d1d9; }
+    pre { white-space: pre-wrap; word-break: break-word; font-size: 0.85rem; background: #0d1117; padding: 12px; border-radius: 6px; border: 1px solid #21262d; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module">
+    import { h, render } from 'preact';
+    import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
+    import { html } from 'htm/preact';
+
+    const POLL_INTERVAL = 10000;
+    const DEFAULT_AUTH = 'admin:admin';
+
+    function getStoredAuth() {
+      return localStorage.getItem('spell_auth') || DEFAULT_AUTH;
+    }
+
+    function createAuthHeaders() {
+      return { Authorization: 'Basic ' + btoa(getStoredAuth()) };
+    }
+
+    async function fetchJson(path) {
+      const response = await fetch(path, { headers: createAuthHeaders() });
+      if (response.status === 401) {
+        throw new Error('Authentication failed. Set credentials.');
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return await response.json();
+    }
+
+    function App() {
+      const [view, setView] = useState('list');
+      const [selectedGoal, setSelectedGoal] = useState(null);
+      const [goals, setGoals] = useState(null);
+      const [goalDetail, setGoalDetail] = useState(null);
+      const [manifest, setManifest] = useState(null);
+      const [error, setError] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [authValue, setAuthValue] = useState(getStoredAuth());
+
+      const fetchGoals = useCallback(async () => {
+        try {
+          const payload = await fetchJson('/api/goals');
+          setGoals(Array.isArray(payload) ? payload : []);
+          setError(null);
+        } catch (err) {
+          setError(String(err));
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      const fetchManifest = useCallback(async () => {
+        try {
+          const payload = await fetchJson('/api/manifest');
+          setManifest(payload);
+        } catch (err) {
+          setError(String(err));
+        }
+      }, []);
+
+      const fetchDetail = useCallback(async (name) => {
+        try {
+          const [goal, allRuns] = await Promise.all([
+            fetchJson(`/api/goals/${encodeURIComponent(name)}`),
+            fetchJson(`/api/goals/${encodeURIComponent(name)}/runs`),
+          ]);
+          setGoalDetail({ ...goal, allRuns });
+          setError(null);
+        } catch (err) {
+          setError(String(err));
+        }
+      }, []);
+
+      useEffect(() => {
+        void fetchGoals();
+        void fetchManifest();
+        const timer = setInterval(() => {
+          void fetchGoals();
+          if (view === 'detail' && selectedGoal) {
+            void fetchDetail(selectedGoal);
+          }
+        }, POLL_INTERVAL);
+        return () => clearInterval(timer);
+      }, [fetchGoals, fetchManifest, fetchDetail, view, selectedGoal]);
+
+      const saveAuth = useCallback((event) => {
+        event.preventDefault();
+        localStorage.setItem('spell_auth', authValue || DEFAULT_AUTH);
+        setLoading(true);
+        void fetchGoals();
+        void fetchManifest();
+        if (view === 'detail' && selectedGoal) {
+          void fetchDetail(selectedGoal);
+        }
+      }, [authValue, fetchDetail, fetchGoals, fetchManifest, selectedGoal, view]);
+
+      const showDetail = useCallback((name) => {
+        setSelectedGoal(name);
+        setGoalDetail(null);
+        setView('detail');
+        void fetchDetail(name);
+      }, [fetchDetail]);
+
+      const showList = useCallback(() => {
+        setView('list');
+        setGoalDetail(null);
+        setError(null);
+      }, []);
+
+      const triggerGoal = useCallback(async (name) => {
+        try {
+          const response = await fetch(`/trigger/${encodeURIComponent(name)}`, {
+            method: 'POST',
+            headers: createAuthHeaders(),
+          });
+          if (!response.ok) {
+            throw new Error(`Trigger failed with HTTP ${response.status}`);
+          }
+          setTimeout(() => {
+            void fetchGoals();
+          }, 1000);
+          if (view === 'detail') {
+            void fetchDetail(name);
+          }
+          setError(null);
+        } catch (err) {
+          setError(String(err));
+        }
+      }, [fetchDetail, fetchGoals, view]);
+
+      if (loading) {
+        return html`<div class="container"><div class="loading">Loading...</div></div>`;
+      }
+
+      return html`
+        <div class="container stack">
+          <div class="header">
+            <h1>Spell Server Dashboard</h1>
+            <form class="row" onSubmit=${saveAuth}>
+              <input
+                class="input"
+                type="text"
+                value=${authValue}
+                onInput=${(event) => setAuthValue(event.currentTarget.value)}
+                placeholder="username:password"
+                aria-label="Basic auth credentials"
+              />
+              <button class="btn" type="submit">Save Credentials</button>
+            </form>
+          </div>
+          ${error && html`<div class="error">${error}</div>`}
+          ${view === 'list' ? html`
+            <${ManifestPanel} manifest=${manifest} />
+            <${GoalList} goals=${goals} onSelect=${showDetail} onTrigger=${triggerGoal} />
+          ` : null}
+          ${view === 'detail' ? html`
+            <${GoalDetailView}
+              goal=${goalDetail}
+              name=${selectedGoal}
+              onBack=${showList}
+              onTrigger=${triggerGoal}
+            />
+          ` : null}
+        </div>
+      `;
+    }
+
+    function ManifestPanel({ manifest }) {
+      if (!manifest) {
+        return null;
+      }
+      const goalCount = Object.keys(manifest.goals || {}).length;
+      const setupCount = Object.keys(manifest.setups || {}).length;
+      return html`
+        <div class="panel">
+          <div class="row" style="justify-content: space-between; align-items: flex-start;">
+            <div>
+              <h2>${manifest.name || 'Manifest'}</h2>
+              <div class="meta">Version ${manifest.version || '-'}</div>
+            </div>
+            <div class="meta">${setupCount} setup${setupCount === 1 ? '' : 's'} · ${goalCount} goal${goalCount === 1 ? '' : 's'}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function GoalList({ goals, onSelect, onTrigger }) {
+      if (!goals || goals.length === 0) {
+        return html`<div class="empty">No goals configured. Check the <a href="https://github.com/can1357/oh-my-pi" style="color:#58a6ff">documentation</a>.</div>`;
+      }
+      return html`
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Setup</th>
+              <th>Schedule</th>
+              <th>Status</th>
+              <th>Last Run</th>
+              <th>Next Fire</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${goals.map(goal => html`
+              <tr key=${goal.name}>
+                <td>
+                  <a href="#" onClick=${(event) => { event.preventDefault(); onSelect(goal.name); }} style="color:#58a6ff;text-decoration:none">
+                    ${goal.name}
+                  </a>
+                </td>
+                <td>${goal.setup}</td>
+                <td class="meta">${goal.schedule}</td>
+                <td><span class=${`badge badge-${goal.status}`}>${goal.status}</span></td>
+                <td class="meta">${goal.lastRun ? new Date(goal.lastRun.completedAt).toLocaleString() : 'Never'}</td>
+                <td class="meta">${goal.nextFire ? new Date(goal.nextFire).toLocaleString() : '-'}</td>
+                <td><button class="btn" onClick=${() => onTrigger(goal.name)}>Trigger</button></td>
+              </tr>
+            `)}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function GoalDetailView({ goal, name, onBack, onTrigger }) {
+      const visibleRuns = useMemo(() => (goal?.allRuns || []).slice(0, 50), [goal]);
+      if (!goal) {
+        return html`<div class="loading">Loading detail...</div>`;
+      }
+      return html`
+        <div>
+          <a href="#" class="back-link" onClick=${(event) => { event.preventDefault(); onBack(); }}>Back to goals</a>
+          <div class="detail-panel section" style="margin-top: 12px;">
+            <div class="row" style="justify-content: space-between; align-items: flex-start;">
+              <div>
+                <h2 style="margin-bottom: 12px;">${name}</h2>
+                <div class="meta" style="margin-bottom: 12px;">
+                  <span>Setup: ${goal.setup}</span>
+                  <span> | Schedule: ${goal.schedule}</span>
+                  <span> | Status: </span><span class=${`badge badge-${goal.status}`}>${goal.status}</span>
+                </div>
+              </div>
+              <button class="btn btn-primary" onClick=${() => onTrigger(name)}>Trigger Now</button>
+            </div>
+            <div class="section">
+              <h3 style="margin-bottom: 8px;">Config</h3>
+              <pre>${JSON.stringify(goal.config, null, 2)}</pre>
+            </div>
+          </div>
+          <div class="run-list">
+            <h3 style="margin: 16px 0 8px;">Run History</h3>
+            ${visibleRuns.length === 0 ? html`<div class="meta">No runs yet.</div>` : html`
+              <table>
+                <thead>
+                  <tr>
+                    <th>Run ID</th>
+                    <th>Started</th>
+                    <th>Completed</th>
+                    <th>Status</th>
+                    <th>Attempt</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${visibleRuns.map(run => html`
+                    <tr key=${run.runId}>
+                      <td class="meta">${run.runId}</td>
+                      <td class="meta">${new Date(run.startedAt).toLocaleString()}</td>
+                      <td class="meta">${run.completedAt ? new Date(run.completedAt).toLocaleString() : '-'}</td>
+                      <td><span class=${`badge badge-${run.status}`}>${run.status}</span></td>
+                      <td>${run.attempt}</td>
+                    </tr>
+                  `)}
+                </tbody>
+              </table>
+            `}
+          </div>
+        </div>
+      `;
+    }
+
+    render(html`<${App} />`, document.getElementById('app'));
+  </script>
+</body>
+</html>

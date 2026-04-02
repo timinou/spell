@@ -10,6 +10,7 @@ import { registerUnlockLockCallbacks } from "./unlock-lock";
 export interface CommandContext {
 	config: TelegramBridgeConfig;
 	processManager: ProcessManager;
+	telegramPrompt: string;
 }
 
 export type CommandHandler = (ctx: AuthContext, cmdCtx: CommandContext) => Promise<void>;
@@ -139,6 +140,7 @@ export async function respawnSession(
 		project,
 		mode,
 		tools: resolveModeTools(mode),
+		appendSystemPrompt: cmdCtx.telegramPrompt,
 		sessionPath: existingSession?.sessionPath,
 	});
 }

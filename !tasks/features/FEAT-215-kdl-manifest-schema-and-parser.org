@@ -1,0 +1,134 @@
+#+TITLE: KDL Manifest Schema and Parser
+#+STATE: DONE
+#+SESSION_ID: 14aac3ad63d8f8fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa.jsonl]]
+#+CUSTOM_ID: FEAT-215-kdl-manifest-schema-and-parser
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: packages/spell-server
+
+NOTE [2026-04-02]: Implemented KDL manifest schema, parser, validator, serializer with 17 tests passing.
+
+* Initial Message
+
+ok bro. this is importnat. please tell me how I can have recurring actions that happen on a remote server. Look up oh my pi and pi coding extensions online (I think they use a heartbeat for this type of stuff).
+
+Ask me as many questions as possible, challenge me, do an initial research so you know what you're talking about. Ideally, I'd like to have a new concept for this which would be a 'Spell Autonomy Manifest', which would show what gets done and when, with a skill whitelist and a post-completion set of hooks with goals and intentions. THis is an open questions, we're making it together
+
+* Scope
+** In scope
+- TypeScript interfaces for full autonomy manifest: =AutonomyManifest=, =Setup=, =Goal=, =CronSchedule=, =WebhookSchedule=, =HookConfig=, =SandboxConfig=, =StateConfig=, =ObservabilityConfig=
+- KDL parser using =@bgotink/kdl= (format-preserving roundtrip)
+- Manifest validation: required fields, referential integrity (goal references existing setup), cron expression validation
+- KDL serializer for future QML canvas editing
+- Install =@bgotink/kdl= as dependency
+** Out of scope
+- Runtime execution of goals (FEAT: Goal Executor)
+- HTTP serving (FEAT: Unified HTTP API)
+- Any tool implementation
+- YAML/TOML alternative formats
+** Boundary rationale
+Parser and types are the foundation all other autonomy features depend on. Clean separation ensures types stabilize before consumers are built.
+
+* Tests
+- File: =packages/spell-server/test/manifest/parser.test.ts=
+- Scenario: parse valid minimal manifest — one setup with domain+tools, one goal with cron schedule and prompt
+- Scenario: parse full manifest — multiple setups, multiple goals, hooks (on_success/on_failure/on_complete with webhook+telegram targets), observability config, state config
+- Scenario: reject manifest missing required =name= field
+- Scenario: reject manifest missing required =version= field
+- Scenario: reject goal referencing non-existent setup name
+- Scenario: reject invalid cron expression in schedule (=60 * * * *= should fail)
+- Scenario: reject duplicate setup names
+- Scenario: reject duplicate goal names
+- Scenario: parse webhook schedule type with path and auth method
+- Scenario: parse state config with =persist true= and optional typed schema (columns with types)
+- Scenario: roundtrip serialize then re-parse preserves all fields (deep equality)
+- Scenario: parse setup with sandbox config (paths_write, bash_allow, bash_deny)
+- Scenario: parse setup with tool filter config (allow list, deny list)
+- File: =packages/spell-server/test/manifest/types.test.ts=
+- Scenario: =isValidSetup= type guard accepts valid shape
+- Scenario: =isValidSetup= type guard rejects missing domain field
+- Scenario: =isValidGoal= type guard accepts valid shape
+- Scenario: =isValidGoal= type guard rejects missing prompt field
+
+* Implementation
+** Define TypeScript interfaces for manifest schema
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-kdl-manifest-schema-and-parser::define-types
+:END:
+- File: =packages/spell-server/src/manifest/types.ts=
+- Interfaces: =AutonomyManifest=, =ManifestSetup=, =ManifestGoal=, =CronSchedule=, =WebhookSchedule=, =ManifestHookConfig=, =WebhookHook=, =TelegramHook=, =OrgHook=, =SandboxConfig=, =ToolFilterConfig=, =StateConfig=, =ObservabilityConfig=
+- =ManifestSetup=: domain, mode?, skills?(allow/deny), tools?(allow/deny), sandbox?(paths_write, bash_allow, bash_deny), timeout?, max_cost_usd?
+- =ManifestGoal=: setup (string ref), schedule (cron|webhook), prompt, hooks?(on_success, on_failure, on_complete), state?(persist, schema?)
+- Type guards: =isValidSetup()=, =isValidGoal()=, =isValidManifest()=
+
+** Implement KDL parser
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-kdl-manifest-schema-and-parser::implement-parser
+:DEPENDS: FEAT-209-kdl-manifest-schema-and-parser::define-types
+:END:
+- File: =packages/spell-server/src/manifest/parser.ts=
+- =parseManifestKdl(kdlText: string): AutonomyManifest= — converts KDL document to typed manifest
+- Uses =@bgotink/kdl= parse function, walks KDL nodes, maps to TypeScript types
+- KDL node structure:
+  #+begin_example
+  setup "readonly-reviewer" {
+    domain "coding"
+    mode "reviewer"
+    tools { allow "read" "grep" "find" }
+    sandbox { paths-write "src/" "test/"; bash-allow "bun test*" }
+    timeout "30m"
+  }
+  goal "nightly-tests" {
+    setup "readonly-reviewer"
+    schedule type="cron" expression="0 2 * * *" jitter="5m"
+    prompt "Run the full test suite."
+    state persist=true
+    hooks {
+      on-success { webhook "https://hooks.slack.com/..." }
+      on-failure { telegram chat-id=12345 }
+    }
+  }
+  #+end_example
+
+** Implement manifest validator
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-kdl-manifest-schema-and-parser::implement-validator
+:DEPENDS: FEAT-209-kdl-manifest-schema-and-parser::implement-parser
+:END:
+- File: =packages/spell-server/src/manifest/validator.ts=
+- =validateManifest(manifest: AutonomyManifest): ValidationResult=
+- Checks: required fields present, referential integrity (goal.setup exists in setups map), cron expression parseable by croner, no duplicate names, webhook paths start with =/=
+- Returns structured errors with path to invalid field
+
+** Implement KDL serializer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-kdl-manifest-schema-and-parser::implement-serializer
+:DEPENDS: FEAT-209-kdl-manifest-schema-and-parser::define-types
+:END:
+- File: =packages/spell-server/src/manifest/serializer.ts=
+- =serializeManifestKdl(manifest: AutonomyManifest): string= — converts typed manifest back to KDL text
+- Uses =@bgotink/kdl= stringify for format-preserving output
+- Enables future QML canvas editing: parse -> modify -> serialize
+
+** Write parser and type tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-209-kdl-manifest-schema-and-parser::write-tests
+:END:
+- Files listed in Tests section above
+- Tests written FIRST, implementation makes them pass
+- Include fixture files: =packages/spell-server/test/manifest/fixtures/minimal.kdl=, =full.kdl=, =invalid-*.kdl=
+
+* Edge Cases
+- KDL comments (=//= and =/-= slash-dash) must be preserved during roundtrip
+- Empty setup (no optional fields) must be valid if domain is set
+- Goal with only required fields (setup + schedule + prompt) must be valid
+- Unicode in prompt text and webhook URLs must survive roundtrip
+- Very long prompts (multi-line KDL strings) must parse correctly
+- Duplicate properties in KDL (same key twice) — @bgotink/kdl preserves them, but our validator should reject them
+
+* Acceptance Criteria
+- =bun test packages/spell-server/test/manifest/parser.test.ts= passes
+- =bun test packages/spell-server/test/manifest/types.test.ts= passes
+- =@bgotink/kdl= installed in packages/spell-server/package.json
+- Roundtrip test proves no data loss: parse(serialize(parse(fixture))) deep-equals parse(fixture)

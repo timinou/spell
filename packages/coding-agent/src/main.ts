@@ -15,6 +15,7 @@ import { isDisplayAvailable } from "@oh-my-pi/pi-qml";
 import { $env, getProjectDir, logger, postmortem, setProjectDir, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import type { Args } from "./cli/args";
+import { loadSandboxPolicy } from "./cli/args";
 import { processFileArguments } from "./cli/file-processor";
 import { listModels } from "./cli/list-models";
 import { selectSession } from "./cli/session-picker";
@@ -505,6 +506,10 @@ async function buildSessionOptions(
 		options.enableLsp = false;
 	}
 
+	if (parsed.sandboxPolicy) {
+		options.sandboxPolicy = parsed.sandboxPolicy;
+	}
+
 	// Skills
 	if (parsed.noSkills) {
 		options.skills = [];
@@ -595,6 +600,11 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	await logger.timeAsync("settings:init", () => Settings.init({ cwd }));
 	if (parsedArgs.noPty) {
 		Bun.env.PI_NO_PTY = "1";
+	}
+	if (parsedArgs.sandboxPolicyPath) {
+		parsedArgs.sandboxPolicy = await logger.timeAsync("loadSandboxPolicy", () =>
+			loadSandboxPolicy(parsedArgs.sandboxPolicyPath!, cwd),
+		);
 	}
 	const {
 		pipedInput,

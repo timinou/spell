@@ -17,6 +17,7 @@ import { handleHelpCommand, handleStartCommand } from "../commands/start-help";
 import { handleLockCommand, handleUnlockCommand } from "../commands/unlock-lock";
 import type { TelegramBridgeConfig } from "../config/types";
 import type { ProcessManager } from "../rpc/process-manager";
+import type { RpcEvent } from "../rpc/types";
 import { type AuthContext, authMiddleware } from "./auth";
 import { handleInviteCommand } from "./invite";
 import { TokenStore } from "./tokens";
@@ -109,14 +110,23 @@ function createCommandRouter(
 	};
 }
 
-function createMessageHandler(
-	config: TelegramBridgeConfig,
-	processManager: ProcessManager,
-	telegramPrompt: string,
-): MiddlewareFn<AuthContext> {
+export function createMessageHandler(cmdCtx: CommandContext): MiddlewareFn<AuthContext> {
 	return async (ctx, next) => {
-		const text = ctx.message?.text;
-		if (!text || text.startsWith("/")) {
+		const message = ctx.message;
+		if (!message) {
+			await next();
+			return;
+		}
+
+		const text = "text" in message ? message.text : undefined;
+		if (text?.startsWith("/")) {
+			await next();
+			return;
+		}
+
+		const hasPhoto = "photo" in message && Array.isArray(message.photo) && message.photo.length > 0;
+		const hasDocument = "document" in message && Boolean(message.document);
+		if (!text && !hasPhoto && !hasDocument) {
 			await next();
 			return;
 		}
@@ -127,36 +137,42 @@ function createMessageHandler(
 			return;
 		}
 
-		const existingSession = processManager.getSession(chatId);
-		const project = existingSession?.project ?? resolveDefaultProject(config);
+		const existingSession = cmdCtx.processManager.getSession(chatId);
+		const project = existingSession?.project ?? resolveDefaultProject(cmdCtx.config);
 		const mode = existingSession?.mode ?? ctx.authState.userConfig.defaultMode;
 		const tools = resolveModeTools(mode);
 
 		logger.debug("Received Telegram prompt", {
 			chatId,
 			userId: ctx.authState.userId,
-			messageLength: text.length,
+			messageLength: text?.length ?? 0,
 		});
 
 		try {
-			const client = await processManager.getOrCreate(chatId, ctx.authState.userId, {
+			const client = await cmdCtx.processManager.getOrCreate(chatId, ctx.authState.userId, {
 				project,
 				mode,
 				tools,
-				appendSystemPrompt: telegramPrompt,
+				appendSystemPrompt: cmdCtx.telegramPrompt,
 				sessionPath: existingSession?.sessionPath,
 			});
 
-			const session = processManager.getSession(chatId);
+			const session = cmdCtx.processManager.getSession(chatId);
 			const streamer = new ResponseStreamer(ctx, session?.showThinking ?? false);
-			client.onEvent(event => {
+			const listener = (event: RpcEvent): void => {
 				void streamer.handleEvent(event).catch(error => {
 					logger.warn("Failed streaming response event", { error: String(error) });
 				});
-			});
+			};
 
-			await handleTelegramMessage(ctx, client);
-			await streamer.done;
+			client.onEvent(listener);
+			try {
+				await handleTelegramMessage(ctx, client);
+			} finally {
+				streamer.cancel();
+				await streamer.done;
+				client.offEvent(listener);
+			}
 		} catch (error) {
 			logger.error("Failed handling message", { error: String(error), chatId });
 			await ctx.reply(`Failed to process message: ${String(error)}`);
@@ -215,18 +231,18 @@ export async function startBot(config: TelegramBridgeConfig, processManager: Pro
 
 	const me = await bot.api.getMe();
 	const botUsername = me.username ?? "";
+	const telegramPromptUrl = new URL("../bridge/telegram-prompt.md", import.meta.url);
+	const telegramPrompt = (await Bun.file(telegramPromptUrl).text()).trim();
 	const cmdCtx: CommandContext = {
 		config,
 		processManager,
+		telegramPrompt,
 	};
-
-	const telegramPromptUrl = new URL("../bridge/telegram-prompt.md", import.meta.url);
-	const telegramPrompt = (await Bun.file(telegramPromptUrl).text()).trim();
 
 	bot.use(authMiddleware(config, tokenStore));
 	registerCommands(bot, cmdCtx);
 	bot.use(createCommandRouter(tokenStore, botUsername, cmdCtx));
-	bot.use(createMessageHandler(config, processManager, telegramPrompt));
+	bot.use(createMessageHandler(cmdCtx));
 
 	const unregisterHandlers = registerShutdownHandlers(bot, processManager, tokenStore);
 	try {

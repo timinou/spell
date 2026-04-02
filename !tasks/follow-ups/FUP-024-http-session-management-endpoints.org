@@ -1,0 +1,50 @@
+#+TITLE: HTTP Session Management Endpoints
+#+STATE: ITEM
+#+SESSION_ID: 14aae19d4898f91c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/16-CreateFups.jsonl]]
+#+CUSTOM_ID: FUP-024-http-session-management-endpoints
+#+EFFORT: 2h
+#+DEPENDS: FEAT-autonomy-executor-state-machine
+
+* Scope
+Add HTTP session lifecycle endpoints to the spell-server API: =POST /api/goals/:id/pause=, =POST /api/goals/:id/resume=, =POST /api/goals/:id/restart=, and =DELETE /api/goals/:id=. These endpoints need executor state-machine support so API responses reflect real lifecycle transitions instead of shallow flag flips.
+
+* Tests
+** Add API contract tests for pause, resume, restart, and delete routes
+:PROPERTIES:
+:CUSTOM_ID: FUP-024-http-session-management-endpoints::api-contract-tests
+:END:
+Assert status codes, response payloads, and error cases for missing goals or invalid transitions.
+
+** Add executor state-machine tests covering lifecycle transitions first
+:PROPERTIES:
+:CUSTOM_ID: FUP-024-http-session-management-endpoints::executor-lifecycle-tests
+:DEPENDS: FUP-024-http-session-management-endpoints::api-contract-tests
+:END:
+Prove pause/resume/restart/delete semantics at the core executor layer before wiring the transport.
+
+* Implementation
+** Extend executor lifecycle model for paused, resumed, restarted, and deleted goals
+:PROPERTIES:
+:CUSTOM_ID: FUP-024-http-session-management-endpoints::extend-executor-lifecycle
+:DEPENDS: FUP-024-http-session-management-endpoints::executor-lifecycle-tests
+:END:
+Define legal transitions, idempotency expectations, and cleanup behavior for in-flight sessions.
+
+** Expose lifecycle actions through HTTP handlers
+:PROPERTIES:
+:CUSTOM_ID: FUP-024-http-session-management-endpoints::expose-http-handlers
+:DEPENDS: FUP-024-http-session-management-endpoints::extend-executor-lifecycle
+:END:
+Map route handlers directly onto executor actions and return truthful transition results.
+
+* Edge Cases
+- Restart on a currently running goal should be explicit about whether it cancels and relaunches or queues a restart.
+- Delete must clean up scheduler state and any persisted run metadata.
+- Pause/resume should be idempotent for already-paused or already-active goals.
+- Invalid state transitions must return machine-readable errors.
+
+* Acceptance Criteria
+- All four endpoints exist and are covered by transport and executor tests.
+- State transitions are enforced centrally in the executor, not duplicated in handlers.
+- Responses tell operators whether a transition was applied, ignored as idempotent, or rejected.

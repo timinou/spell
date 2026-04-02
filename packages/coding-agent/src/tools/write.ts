@@ -14,6 +14,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { createLspWritethrough, type FileDiagnosticsResult, type WritethroughCallback, writethroughNoop } from "../lsp";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
+import { enforcePathWrite } from "../sandbox";
 import type { ToolSession } from "../sdk";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
@@ -99,6 +100,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		return untilAborted(signal, async () => {
 			enforceModeWrite(this.session, path, { op: "create" });
+			const sandboxError = enforcePathWrite(path, this.session.cwd, this.session.sandboxPolicy);
+			if (sandboxError) throw new Error(sandboxError);
 			const absolutePath = resolvePlanPath(this.session, path);
 			const batchRequest = getLspBatchRequest(context?.toolCall);
 

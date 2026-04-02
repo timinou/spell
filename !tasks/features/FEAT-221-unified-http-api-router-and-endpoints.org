@@ -1,0 +1,127 @@
+#+TITLE: Unified HTTP API Router and Endpoints
+#+STATE: DONE
+#+SESSION_ID: 14aae19d47d8f914
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/12-CreateHttpApi.jsonl]]
+#+CUSTOM_ID: FEAT-221-unified-http-api-router-and-endpoints
+#+EFFORT: 5h
+#+LAYER: packages/spell-server
+#+DEPENDS: FEAT-219-goal-executor-with-retry-and-escalation FEAT-218-cron-scheduler-engine FEAT-222-post-completion-hooks-for-autonomy-goals FEAT-215-kdl-manifest-schema-and-parser
+#+PRIORITY: #A
+
+NOTE [2026-04-02]: Implemented Bun.serve() router with Basic Auth, HMAC, bearer auth. Goals API, trigger routes, CORS headers. Tests passing.
+
+* Scope
+** In scope
+- Single =Bun.serve()= router in =packages/spell-server/= that dispatches frontend index, goals API, trigger routes, and reused session log viewer routes
+- Reuse log viewer renderer from =@oh-my-pi/telegram-bridge= for =/sessions/*= transcript pages instead of duplicating rendering logic
+- Goals API endpoints: =GET /api/goals=, =GET /api/goals/:id=, =GET /api/goals/:id/runs=, =GET /api/goals/:id/logs=
+- Trigger endpoints: =POST /trigger/:goal= for executor-driven manual or webhook activation
+- Auth middleware for three cases: Basic Auth on API routes, HMAC signature verification for webhook trigger requests, per-goal bearer token support
+- Local-dev response headers for API and trigger routes
+** Out of scope
+- Session restart endpoints (follow-up FUP)
+- Pause/resume/delete management endpoints (follow-up FUP)
+- WebSocket or SSE streaming
+** Boundary
+- HTTP API is the external interface for autonomy.
+- Router reads state from scheduler and executor, and trigger routes call executor to start work.
+- Dedup/conflict decisions remain owned by executor; the API surfaces executor truth as HTTP status codes.
+
+* Tests
+- File: =packages/spell-server/test/http/router.test.ts=
+- Scenario: =GET /= serves frontend HTML index page
+- Scenario: unauthenticated =GET /api/goals= returns =401=
+- Scenario: valid Basic Auth on =GET /api/goals= returns =200=
+- Scenario: invalid Basic Auth on =GET /api/goals= returns =401=
+- Scenario: =GET /api/goals= returns JSON array with =name=, =status=, =lastRun=, =nextFire= for each goal
+- Scenario: =GET /api/goals/:id= returns goal detail with config, state, and last 10 runs
+- Scenario: =GET /api/goals/:id/runs= returns run history array
+- Scenario: =GET /api/goals/:id/logs= returns session transcript text
+- Scenario: =POST /trigger/:goalName= fires goal execution and returns =202 Accepted=
+- Scenario: =POST /trigger/nonexistent= returns =404=
+- Scenario: unknown route returns JSON =404=
+- Scenario: malformed JSON body on trigger POST returns =400= with error message
+- Scenario: request body larger than 1MB is rejected
+- Scenario: concurrent trigger for already-running goal returns =409 Conflict=
+- Scenario: auth header missing vs malformed produces distinct =401= messages
+- Scenario: API responses include local-dev access-control headers
+- File: =packages/spell-server/test/http/webhook-auth.test.ts=
+- Scenario: =POST /trigger/:goal= with valid HMAC signature returns =202=
+- Scenario: =POST /trigger/:goal= with invalid HMAC signature returns =403=
+- Scenario: =POST /trigger/:goal= with valid bearer token returns =202=
+- Scenario: HMAC is computed over the raw request body with SHA256
+- Scenario: bearer token is scoped to the addressed goal only
+- All tests written BEFORE implementation.
+
+* Implementation
+** Write failing HTTP router and webhook auth tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-221-unified-http-api-router-and-endpoints::write-tests
+:END:
+- Files: =packages/spell-server/test/http/router.test.ts= and =packages/spell-server/test/http/webhook-auth.test.ts=
+- Cover all scenarios in the Tests section before production code is added
+- Build helpers around fake executor/scheduler state without mocking network behavior away
+
+** Define HTTP API types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-221-unified-http-api-router-and-endpoints::api-types
+:DEPENDS: FEAT-221-unified-http-api-router-and-endpoints::write-tests FEAT-215-kdl-manifest-schema-and-parser
+:END:
+- File: =packages/spell-server/src/http/types.ts=
+- Define =GoalSummary=, =GoalDetail=, =RunEntry=, =AuthConfig=, plus route-facing payload types needed by tests
+- Make response shapes preserve distinctions the frontend/router callers need: schedule-derived =nextFire=, executor state, and recent run metadata
+
+** Implement auth middleware
+:PROPERTIES:
+:CUSTOM_ID: FEAT-221-unified-http-api-router-and-endpoints::auth-middleware
+:DEPENDS: FEAT-221-unified-http-api-router-and-endpoints::write-tests FEAT-221-unified-http-api-router-and-endpoints::api-types
+:END:
+- File: =packages/spell-server/src/http/auth.ts=
+- Implement Basic Auth parser for API routes, HMAC SHA256 verifier over raw request body for webhooks, and per-goal bearer token checks
+- Return truthful =401= vs =403= failures with route-appropriate messages
+- Enforce 1MB raw-body limit where signature verification needs body access
+
+** Implement goals API routes
+:PROPERTIES:
+:CUSTOM_ID: FEAT-221-unified-http-api-router-and-endpoints::goals-api
+:DEPENDS: FEAT-221-unified-http-api-router-and-endpoints::write-tests FEAT-221-unified-http-api-router-and-endpoints::api-types FEAT-221-unified-http-api-router-and-endpoints::auth-middleware FEAT-218-cron-scheduler-engine FEAT-219-goal-executor-with-retry-and-escalation
+:END:
+- File: =packages/spell-server/src/http/routes/goals.ts=
+- Implement =GET /api/goals=, =GET /api/goals/:id=, =GET /api/goals/:id/runs=, =GET /api/goals/:id/logs=
+- Compose scheduler next-fire data with executor run/state data without re-encoding the domain in route handlers
+- Limit detail endpoint run list to last 10 entries; full history lives at =/runs=
+
+** Implement trigger routes
+:PROPERTIES:
+:CUSTOM_ID: FEAT-221-unified-http-api-router-and-endpoints::trigger-routes
+:DEPENDS: FEAT-221-unified-http-api-router-and-endpoints::write-tests FEAT-221-unified-http-api-router-and-endpoints::auth-middleware FEAT-219-goal-executor-with-retry-and-escalation
+:END:
+- File: =packages/spell-server/src/http/routes/triggers.ts=
+- Implement =POST /trigger/:goal=
+- Accept webhook payloads that authenticate via HMAC or per-goal bearer token
+- Validate goal existence before execution, forward trigger request to executor, map executor dedup result to =202= or =409=
+
+** Implement unified router
+:PROPERTIES:
+:CUSTOM_ID: FEAT-221-unified-http-api-router-and-endpoints::router
+:DEPENDS: FEAT-221-unified-http-api-router-and-endpoints::write-tests FEAT-221-unified-http-api-router-and-endpoints::goals-api FEAT-221-unified-http-api-router-and-endpoints::trigger-routes FEAT-207-session-log-viewer-http-server::renderer
+:END:
+- File: =packages/spell-server/src/http/server.ts=
+- Own single =Bun.serve()= entry point and pathname-based dispatch
+- Serve frontend HTML on =/=, API JSON under =/api/*=, trigger routes under =/trigger/*=, and transcript viewer routes under =/sessions/*=
+- Apply shared JSON error helpers, =404= handling, and local-dev access-control headers consistently
+
+* Edge Cases
+- Request to unknown route returns JSON =404= response
+- Malformed JSON body in trigger POST returns =400= with explicit error message
+- Very large request body is rejected above 1MB before full buffering
+- Concurrent triggers for same goal rely on executor dedup; API returns =409 Conflict=
+- Missing auth header vs malformed auth header remain distinguishable to callers
+- HMAC must use exact raw bytes received, not parsed/re-serialized JSON
+- CORS is not required for production/internal use, but local-dev access-control headers should be present
+
+* Acceptance Criteria
+- =bun test packages/spell-server/test/http/router.test.ts= passes
+- =bun test packages/spell-server/test/http/webhook-auth.test.ts= passes
+- Manual: =curl -u admin:pass http://localhost:8090/api/goals= returns JSON
+- =/sessions/*= routes reuse the existing telegram bridge renderer instead of duplicating transcript formatting

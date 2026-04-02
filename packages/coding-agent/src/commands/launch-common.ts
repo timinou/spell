@@ -72,6 +72,9 @@ export const baseLaunchFlags = {
 	"no-pty": Flags.boolean({
 		description: "Disable PTY-based interactive bash execution",
 	}),
+	"sandbox-policy": Flags.string({
+		description: "Path to a JSON sandbox policy file for constraining writes and bash commands",
+	}),
 	tools: Flags.string({
 		description: "Comma-separated list of tools to enable (default: all)",
 	}),

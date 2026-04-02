@@ -1,0 +1,88 @@
+#+TITLE: Cron Scheduler Engine
+#+STATE: DONE
+#+SESSION_ID: 14aae19d4758f90e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-59-46-191Z_14aac3ad63d8f8fa/9-CreateScheduler.jsonl]]
+#+CUSTOM_ID: FEAT-218-cron-scheduler-engine
+#+EFFORT: 3h
+#+DEPENDS: FEAT-215-kdl-manifest-schema-and-parser
+
+NOTE [2026-04-02]: Implemented GoalScheduler with croner, jitter, overlap protection. Tests passing.
+
+* Scope
+- In: GoalScheduler class using croner library, cron expression evaluation with timezone support, jitter (random offset within range), register/unregister goals, compute next fire times, fire callback on schedule
+- Out: Webhook triggers (separate HTTP FEAT), goal execution (separate FEAT), manifest loading
+- Boundary: Scheduler owns WHEN goals fire. It calls a callback; it does NOT spawn sessions.
+
+* Tests
+- File: =packages/spell-server/test/scheduler/cron-scheduler.test.ts=
+- Scenario: register goal with cron expression, =getNextFireTime()= returns correct time
+- Scenario: timezone handling — schedule =0 2 * * *= in =Europe/Vienna=, server in UTC, next fire is correct
+- Scenario: jitter adds random offset within configured range (verify offset <= jitter value)
+- Scenario: registered goal fires callback at scheduled time (use fake timers)
+- Scenario: unregister goal stops future firing
+- Scenario: re-register goal with different expression updates schedule
+- Scenario: invalid cron expression throws at registration
+- Scenario: multiple goals each fire independently at their own schedule
+- Scenario: =scheduler.start()= begins ticking, =scheduler.stop()= halts all
+- Scenario: scheduler survives no registered goals (no crash on tick)
+- Scenario: =getScheduledGoals()= returns all registered goals with next fire times
+- Tests written before implementation; fake timers must cover start/stop and pending jitter timeout cleanup
+
+* Implementation
+** Install =croner= dependency
+:PROPERTIES:
+:CUSTOM_ID: FEAT-218-cron-scheduler-engine::install-croner
+:END:
+- Add =croner= to =packages/spell-server/package.json=
+
+** Write scheduler tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-218-cron-scheduler-engine::write-tests
+:DEPENDS: FEAT-218-cron-scheduler-engine::install-croner
+:END:
+- Create =packages/spell-server/test/scheduler/cron-scheduler.test.ts=
+- Cover every scenario in the Tests section before implementation begins
+- Use fake timers to verify callbacks, stop behavior, and pending jitter timer cleanup
+
+** Define scheduler types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-218-cron-scheduler-engine::scheduler-types
+:DEPENDS: FEAT-218-cron-scheduler-engine::write-tests
+:END:
+- File: =packages/spell-server/src/scheduler/types.ts=
+- Define =GoalScheduleEntry=: =goalName=, =cronExpression=, =timezone=, =jitterMs=, =callback=
+- Add any internal scheduler metadata types required by tests, but keep scheduling boundary focused on WHEN execution should happen
+
+** Implement =GoalScheduler=
+:PROPERTIES:
+:CUSTOM_ID: FEAT-218-cron-scheduler-engine::goal-scheduler
+:DEPENDS: FEAT-218-cron-scheduler-engine::scheduler-types FEAT-218-cron-scheduler-engine::install-croner FEAT-215-kdl-manifest-schema-and-parser
+:END:
+- File: =packages/spell-server/src/scheduler/goal-scheduler.ts=
+- Use =Cron= from =croner=
+- Maintain map of =goalName -> Cron= instance and enough metadata to answer =getNextFireTime()= and =getScheduledGoals()=
+- Implement =start()=, =stop()=, =register()=, =unregister()=, =getNextFireTime()=, =getScheduledGoals()=
+- Re-registering the same goal name replaces the prior schedule instead of running both
+- Boundary stays strict: callback only, no session spawning
+
+** Implement jitter and in-flight protection
+:PROPERTIES:
+:CUSTOM_ID: FEAT-218-cron-scheduler-engine::jitter
+:DEPENDS: FEAT-218-cron-scheduler-engine::goal-scheduler
+:END:
+- Apply random delay with =setTimeout(callback, Math.random() * jitterMs)= when =jitterMs > 0=
+- Zero jitter fires immediately
+- Track pending jitter timers so =stop()= clears them all
+- If cron fires while previous run is still active, skip and log warning rather than queueing overlapping runs
+
+* Edge Cases
+- Cron fires while previous run still active: skip (log warning, do not queue)
+- System clock change (NTP sync): croner handles this internally
+- Timezone DST transition: croner handles DST (verify with test)
+- =scheduler.stop()= with pending jitter timers: clear all pending timeouts
+- Zero jitter: fire immediately, no =setTimeout=
+
+* Acceptance Criteria
+- =bun test packages/spell-server/test/scheduler/cron-scheduler.test.ts= passes
+- =croner= in =packages/spell-server/package.json=
+- =bun check:ts= passes

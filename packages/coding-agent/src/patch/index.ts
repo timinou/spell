@@ -24,6 +24,7 @@ import {
 import hashlineDescription from "../prompts/tools/hashline.md" with { type: "text" };
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
+import { enforcePathWrite } from "../sandbox";
 import type { ToolSession } from "../tools";
 import {
 	invalidateFsScanAfterDelete,
@@ -468,6 +469,12 @@ export class EditTool implements AgentTool<TInput> {
 			const { path, edits, delete: deleteFile, move } = params;
 
 			enforceModeWrite(this.session, path, { op: deleteFile ? "delete" : "update", move });
+			const sandboxError = enforcePathWrite(path, this.session.cwd, this.session.sandboxPolicy);
+			if (sandboxError) throw new Error(sandboxError);
+			if (move) {
+				const sandboxMoveError = enforcePathWrite(move, this.session.cwd, this.session.sandboxPolicy);
+				if (sandboxMoveError) throw new Error(sandboxMoveError);
+			}
 
 			if (path.endsWith(".ipynb") && edits?.length > 0) {
 				throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
@@ -675,6 +682,12 @@ export class EditTool implements AgentTool<TInput> {
 			const op: Operation = rawOp === "create" || rawOp === "delete" ? rawOp : "update";
 
 			enforceModeWrite(this.session, path, { op, move: rename });
+			const sandboxError = enforcePathWrite(path, this.session.cwd, this.session.sandboxPolicy);
+			if (sandboxError) throw new Error(sandboxError);
+			if (rename) {
+				const sandboxRenameError = enforcePathWrite(rename, this.session.cwd, this.session.sandboxPolicy);
+				if (sandboxRenameError) throw new Error(sandboxRenameError);
+			}
 			const resolvedPath = resolvePlanPath(this.session, path);
 			const resolvedRename = rename ? resolvePlanPath(this.session, rename) : undefined;
 
@@ -760,6 +773,8 @@ export class EditTool implements AgentTool<TInput> {
 		const { path, old_text, new_text, all } = params;
 
 		enforceModeWrite(this.session, path);
+		const sandboxError = enforcePathWrite(path, this.session.cwd, this.session.sandboxPolicy);
+		if (sandboxError) throw new Error(sandboxError);
 
 		if (path.endsWith(".ipynb")) {
 			throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
