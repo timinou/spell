@@ -1,0 +1,41 @@
+#+TITLE: Normalize Phoenix Inspector canvas launches
+#+STATE: DONE
+#+SESSION_ID: 14ab3a534ed05f14
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T19-38-09-083Z_14ab3a534ed05f14.jsonl]]
+#+CUSTOM_ID: BUG-114-normalize-phoenix-inspector-canvas-launc
+
+NOTE [2026-04-02]: Completed by PLAN-098: shared canvas launch normalization and regression coverage landed.
+
+* Initial Message
+
+In this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-02T19-36-31-475Z_14ab39f3fce8c68f.jsonl
+ ID: 14ab39f3fce8c68f
+
+the canvas did not send the irght thing, probably because of the canvas vs extension mode. can you fix this structurally?
+
+:PROPERTIES:
+:EFFORT: 3h
+:PRIORITY: A
+:LAYER: runtime
+:END:
+
+* Problem
+The referenced session `14ab39f3fce8c68f` tried to open Phoenix Inspector with `{"action":"open","path":".spell/extensions/phoenix-inspector/"}` and then with `launch` but no `id`. Shared Spell canvas launch handling currently requires the exact `launch + id + concrete QML path` shape, even when the intent is deterministically mappable.
+
+* Scope
+- Repo: `/home/user/code/ora/spell`
+- Files: `packages/coding-agent/src/tools/canvas.ts` and targeted tests under `packages/coding-agent/test/tools/`
+- Non-goals: do not change downstream Phoenix Inspector QML/backend logic here
+
+* Change
+- Canonicalize deterministic launch variants before execution instead of relying on the model to emit the exact final wire shape.
+- Handle obvious launch aliases such as `open` only when they map unambiguously to the canvas launch action.
+- Resolve deterministic extension-directory targets such as `.spell/extensions/phoenix-inspector/` to the concrete QML entrypoint and stable window id, while preserving explicit errors for ambiguous inputs.
+- Keep Phoenix-specific prop augmentation on the canonical resolved launch path so the normalization and augmentation paths cannot drift.
+
+* Acceptance
+- A targeted regression reproduces the broken session launch intent and proves the canvas tool succeeds without the intermediate validation/id failures.
+- Ambiguous launch inputs still fail with an explicit error instead of a guessed payload.
+- Verification command: `bun test packages/coding-agent/test/tools/canvas-launch-normalization.test.ts`

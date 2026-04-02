@@ -1,0 +1,85 @@
+#+TITLE: Phoenix Inspector Canvas Protocol Unification
+#+STATE: DONE
+#+SESSION_ID: 14ab3a534ed05f14
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T19-38-09-083Z_14ab3a534ed05f14.jsonl]]
+#+CUSTOM_ID: PLAN-098-phoenix-inspector-canvas-protocol-unific
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-02]: Completed with the final spell commit for PLAN-098 and hotelcomm commit 6d9d291.
+
+
+* Initial Message
+
+In this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-02T19-36-31-475Z_14ab39f3fce8c68f.jsonl
+ ID: 14ab39f3fce8c68f
+
+the canvas did not send the irght thing, probably because of the canvas vs extension mode. can you fix this structurally?
+
+* Context
+The failure in session `14ab39f3fce8c68f` is two-layered.
+
+1. Shared Spell canvas launch handling is too literal for a deterministic user intent. The failing session first emitted `{"action":"open","path":".spell/extensions/phoenix-inspector/"}` and then `launch` without an `id`, which forced the model into a recovery loop before it finally found `inspector.qml`.
+2. Phoenix Inspector itself duplicates transport semantics by backend mode. Current repo evidence shows `packages/coding-agent/src/tools/canvas.ts` only routes canvas-native `_tier` / `_tool` envelopes, while `/home/user/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector/inspector.qml` switches to extension-only action payloads such as `send_to_agent`, `read_source_excerpt`, and `tidewave_get_docs` when `bridge.props.backendMode === "extension"`.
+
+Recommended approach:
+- Treat the canvas-native request envelope as canonical.
+- Normalize deterministic launch variants at the shared Spell boundary so the exact broken session shape is handled explicitly.
+- Adapt the Phoenix Inspector extension runtime to the canonical envelope and remove backend-specific payload construction from QML.
+
+Why this approach:
+- It fixes the exact transcript regression.
+- It removes the root cause of future drift: duplicated request shaping in QML.
+- It follows the mode-system caution captured in `memory://root/memory_summary.md`, and that concern is corroborated by the current mode split in the two files above.
+
+Not recommended:
+- Prompt-only fixes or compact-description tweaks alone. They may reduce the odds of `open` versus `launch`, but they do not make the runtime truthful or eliminate mode divergence.
+
+Critical files:
+- Spell: `packages/coding-agent/src/tools/canvas.ts`
+- Spell tests: `packages/coding-agent/test/tools/`
+- Agentmaker extension: `.spell/extensions/phoenix-inspector/inspector.qml`
+- Agentmaker adapter/tests: `.spell/extensions/phoenix-inspector/index.ts`, `.spell/extensions/phoenix-inspector/helpers.ts`, `.spell/extensions/phoenix-inspector/index.test.ts`
+
+* Verification
+- Shared Spell regression: `bun test packages/coding-agent/test/tools/canvas-launch-normalization.test.ts`
+- Phoenix Inspector regression: `bun test .spell/extensions/phoenix-inspector/index.test.ts`
+- Manual replay from `/home/user/code/ora/hotelcomm/ecosystem/agentmaker` with the original intent: `open the phoenix-inspector canvas at .spell/extensions/phoenix-inspector/`
+- Required manual proof:
+  - fresh session transcript path or session id for the replay
+  - screenshot or transcript excerpt proving Phoenix Inspector opened directly from the directory target without the initial invalid `open` / missing-`id` recovery loop
+  - proof that follow-up inspector requests used the canonical request path rather than separate extension-vs-canvas payload shapes
+
+* Execution Manifest
+** [[id:BUG-114-normalize-phoenix-inspector-canvas-launc]] Normalize Phoenix Inspector canvas launches
+- Effort: 3h
+- Dependency: none
+- Deliverable: shared Spell canvas launch normalization for deterministic aliases/directory targets, plus a targeted regression proving the broken session shape now resolves cleanly.
+
+** [[id:BUG-115-unify-phoenix-inspector-backend-request]] Unify Phoenix Inspector backend request protocol
+- Effort: 4h
+- Dependency: [[id:BUG-114-normalize-phoenix-inspector-canvas-launc]]
+- Deliverable: Phoenix Inspector QML emits one canonical request shape, and the extension runtime adapts that shape instead of requiring a second backend-specific protocol.
+- Sequencing note: implementation follows BUG-114 so the downstream adapter targets the finalized shared launch/request contract rather than an intermediate one.
+
+** [[id:BUG-116-prove-phoenix-inspector-mode-parity-regr]] Prove Phoenix Inspector mode parity regression
+- Effort: 2h
+- Dependency: [[id:BUG-114-normalize-phoenix-inspector-canvas-launc]], [[id:BUG-115-unify-phoenix-inspector-backend-request]]
+- Deliverable: automated regressions in both repos and a focused manual replay artifact proving the user-visible workflow now behaves correctly.
+
+
+** Completion [2026-04-02]
+*** Verification
+- `bun test packages/coding-agent/test/tools/canvas-launch-normalization.test.ts` -> passed (`3 pass, 0 fail`).
+- `bun test ./.spell/extensions/phoenix-inspector/index.test.ts` (from `/home/user/code/ora/hotelcomm/ecosystem/agentmaker`) -> passed (`23 pass, 0 fail`).
+- Manual replay from `/home/user/code/ora/hotelcomm/ecosystem/agentmaker` with `bun /home/user/code/ora/spell/packages/coding-agent/src/cli.ts --print --no-title --session-dir /home/user/code/ora/spell/!tasks/plans/plan-artifacts/PLAN-098-phoenix-inspector-canvas-protocol-unific/replay-session-live "Open the phoenix-inspector canvas at .spell/extensions/phoenix-inspector/. After it opens, send three canvas messages to the phoenix-inspector window in this order: {action:'set_prompt', text:'Summarize this selected UI element'}, {action:'inspect_selector', selector:'body'}, then {action:'trigger_send_to_agent'}. After those messages are sent, stop."` -> direct launch succeeded and all three follow-up messages were delivered without the original invalid `open` / missing-`id` recovery loop.
+- Manual screenshot capture from the same repo with `bun /home/user/code/ora/spell/packages/coding-agent/src/cli.ts --print --no-title --session-dir /home/user/code/ora/spell/!tasks/plans/plan-artifacts/PLAN-098-phoenix-inspector-canvas-protocol-unific/replay-session-screenshot "Open the phoenix-inspector canvas at .spell/extensions/phoenix-inspector/. After it opens, use the canvas screenshot action to save a screenshot to /home/user/code/ora/spell/!tasks/plans/plan-artifacts/PLAN-098-phoenix-inspector-canvas-protocol-unific/phoenix-inspector-launch.png, then stop."` -> screenshot saved and shows the inspector window rendering the AgentMaker app.
+*** Artifacts
+- Launch replay transcript excerpt: [[file:!tasks/plans/plan-artifacts/PLAN-098-phoenix-inspector-canvas-protocol-unific/launch-replay-excerpt.txt]]
+- Live replay transcript: [[file:!tasks/plans/plan-artifacts/PLAN-098-phoenix-inspector-canvas-protocol-unific/replay-session-live/2026-04-02T20-54-20-935Z_14ab4bc401da239f.jsonl]]
+- Screenshot replay transcript: [[file:!tasks/plans/plan-artifacts/PLAN-098-phoenix-inspector-canvas-protocol-unific/replay-session-screenshot/2026-04-02T21-04-16-276Z_14ab4e0964ea4623.jsonl]]
+- Inspector launch screenshot: [[file:!tasks/plans/plan-artifacts/PLAN-098-phoenix-inspector-canvas-protocol-unific/phoenix-inspector-launch.png]]
+- Canonical protocol evidence: [[file:!tasks/plans/plan-artifacts/PLAN-098-phoenix-inspector-canvas-protocol-unific/canonical-request-protocol-evidence.txt]]
+*** Deviations
+- Manual replay proved direct directory launch and message delivery, but the canonical `_tier` / `_tool` request envelope itself was verified by targeted extension regressions and the saved protocol evidence artifact rather than by a rendered follow-up transcript from the inspector window.
