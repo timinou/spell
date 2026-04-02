@@ -1,0 +1,113 @@
+#+TITLE: Task Auto-Roster
+#+STATE: DOING
+#+SESSION_ID: 14aa0c3efc821ad9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T21-38-20-786Z_14aa0c3efc821ad9.jsonl]]
+#+CUSTOM_ID: PLAN-077-task-auto-roster
+#+EFFORT: L
+#+LAYER: core
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+* Initial Message
+
+with th erecent improvement to waves and dags and tasks, can several task requests be sent asynchronously and added to the overall
+ roster, with or without a todo write?
+
+* Context
+
+** Problem
+The coding-agent has two disconnected tracking surfaces for delegated work:
+1. The *todo roster* (~todo_write~ tool) — phases, tasks, statuses, gates, blockers, delegation, org links. Visible in TUI sidebar and injected into prompts.
+2. The *job roster* (~AsyncJobManager~) — background job tracking. Visible via ~jobs://~ and ~/jobs~ command.
+
+These are connected only by the manual ~todoRef~ bridge: the agent must first create todo items via ~todo_write~, then dispatch tasks with ~todoRef~ pointing to those items. Without this bridge, async work is invisible to the todo system.
+
+This two-step ceremony (create items, then dispatch with ~todoRef~) is the friction. Wave-based plan execution requires: ~todo_write replace~ to create phases from waves → ~task~ dispatch with ~todoRef~ to link each subagent. The intent is one operation but requires two tools.
+
+** Approach: Task-First Model (Model A)
+Every ~task~ dispatch auto-creates todo roster entries. The task tool becomes the primary entry point for parallel work, and the todo system is the canonical view.
+
+- ~task~ = "run this work" (roster entry is automatic)
+- ~todo_write~ = "structure the roster" (pre-plan, add gates, reorganize)
+- Both write to the same data. One creates items by dispatching. The other curates them.
+
+** Key Design Decisions
+1. *Task-first*: Every dispatch auto-creates roster entries in the existing todo system. ~todo_write~ remains for pre-structuring/upgrading.
+2. *Hybrid DAG scheduling*: Task tool handles intra-batch DAG scheduling (within one ~task~ call using ~blockers~ on task items). Agent manages cross-batch orchestration via todo state.
+3. *Phase naming*: New ~phase~ parameter on task tool names the auto-created phase.
+4. *Agent-level suppression*: ~AgentDefinition.roster~ boolean; ~quick_task~ defaults to ~roster: false~. Global ~task.autoRoster~ setting is the kill switch.
+5. *Progressive lifecycle*: Auto-created items start with status + delegation metadata. Agent upgrades via ~todo_write update~ (add gates, org links, blockers).
+6. *Unified wave path*: Plan mode prompt changes to use task dispatch with ~phase~ + ~blockers~ instead of manual ~todo_write~ + ~todoRef~ ceremony. ~plan-to-todos.ts~ utility remains for fluid-mode consumers.
+7. *~jobs://~ unchanged*: Remains a low-level debugging view. The todo roster is the primary tracking surface.
+
+** Critical Code Paths
+- ~packages/coding-agent/src/task/index.ts~ — TaskTool class, dispatch flow, todoRef lifecycle hooks
+- ~packages/coding-agent/src/task/types.ts~ — TaskItem/TaskParams schemas, AgentDefinition
+- ~packages/coding-agent/src/tools/todo-write.ts~ — TodoWriteTool, normalization, delegation model
+- ~packages/coding-agent/src/async/job-manager.ts~ — AsyncJobManager
+- ~packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts~ — wave materialization (kept for fluid-mode)
+- ~packages/coding-agent/src/discovery/helpers.ts~ — agent frontmatter parsing
+- ~packages/coding-agent/src/task/agents.ts~ — bundled agent definitions
+- ~packages/coding-agent/src/config/settings-schema.ts~ — settings definitions
+
+** Key Risks (from Metis gap analysis)
+- *Mutation serialization*: ~#todoRefMutationQueue~ is per-TaskTool instance, not session-global. Concurrent manual ~todo_write~ + task lifecycle updates can interleave. Fix: session-level lock.
+- *Normalization edge case*: Auto-created items without delegation metadata are "direct" and trigger the one-direct-in_progress rule. Fix: set minimal delegation object at creation time.
+- *Async delivery mismatch*: Current model is per-job delivery but batch-style UX. Decision: keep per-job delivery but include batch correlation in progress text.
+- *Cancellation orphans*: Auto-create then abort leaves orphan pending items. Fix: compensation handler marks orphans as failed.
+
+* Verification
+
+** Type checking
+#+begin_src sh
+bun check:ts
+#+end_src
+
+** Unit tests
+#+begin_src sh
+bun test packages/coding-agent/test/task/schema-extensions.test.ts
+bun test packages/coding-agent/test/task/batch-scheduler.test.ts
+bun test packages/coding-agent/test/task/auto-roster.test.ts
+bun test packages/coding-agent/test/task/auto-roster-settings.test.ts
+#+end_src
+
+** Existing test suite (no regressions)
+#+begin_src sh
+bun test packages/coding-agent/test/task/todo-ref-lifecycle.test.ts
+bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts
+bun test packages/coding-agent/test/tools/todo-write-gates.test.ts
+bun test packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts
+#+end_src
+
+** Manual verification
+- Dispatch tasks without ~todoRef~ in a live session: confirm todo entries appear in TUI sidebar
+- Dispatch with ~phase: "Investigation"~: confirm phase name in sidebar
+- Dispatch with ~blockers~: confirm tasks execute in topological order
+- Dispatch with ~quick_task~ agent: confirm NO roster entries created (suppressed)
+- Set ~task.autoRoster=false~: confirm no auto-roster on next dispatch
+- Abort a dispatched batch: confirm no orphan ~pending~ items remain
+
+* Execution Manifest
+** foundation                                                        :wave:
+- [[id:FEAT-196-task-schema-and-agent-definition-extensi]] Task schema and agent definition extensions (S)
+** core                                                              :wave:
+- [[id:FEAT-199-intra-batch-dag-scheduler-for-task-tool]] Intra-batch DAG scheduler (L, depends FEAT-196)
+- [[id:FEAT-200-auto-roster-settings-and-agent-level-sup]] Auto-roster settings and suppression (S, depends FEAT-196)
+** integration                                                       :wave:
+- [[id:FEAT-197-auto-roster-bridge-from-task-dispatch-to]] Auto-roster bridge from task to todo (M, depends FEAT-196 FEAT-199 FEAT-200)
+** documentation                                                     :wave:
+- [[id:FEAT-198-prompt-updates-for-task-auto-roster-and]] Prompt updates for auto-roster (S, depends FEAT-196 FEAT-199 FEAT-197 FEAT-200)
+** deferred                                                          :wave:
+- [[id:FUP-020-unify-fluid-mode-wave-execution-with-tas]] Fluid-mode wave path unification (M, deferred)
+
+
+** Completion [2026-04-01]
+*** Verification
+- `bun test packages/coding-agent/test/task/schema-extensions.test.ts packages/coding-agent/test/task/batch-scheduler.test.ts packages/coding-agent/test/task/task-blockers.test.ts packages/coding-agent/test/task/auto-roster.test.ts packages/coding-agent/test/task/auto-roster-settings.test.ts packages/coding-agent/test/task/todo-ref-lifecycle.test.ts packages/coding-agent/test/task/async-progress.test.ts packages/coding-agent/test/tools/todo-write-delegation.test.ts packages/coding-agent/test/tools/todo-write-gates.test.ts packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts packages/coding-agent/test/prompts/auto-roster-prompts.test.ts packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts packages/coding-agent/test/system-prompt-templates.test.ts` — passed (`114 pass`, `0 fail`).
+- `bun check:ts` — failed due pre-existing unrelated lint/format issues in `packages/coding-agent/src/spellcast/tarball.ts`, `packages/ai/src/utils/oauth/index.ts`, `packages/coding-agent/src/spellcast/discovery.ts`, `packages/coding-agent/src/spellcast/index.ts`, `packages/coding-agent/src/spellcast/manifest.ts`, `packages/coding-agent/src/spellcast/session-report.ts`, `packages/coding-agent/src/spellcast/sync-detector.ts`, `packages/coding-agent/src/tools/canvas-cast.ts`, and `packages/coding-agent/src/tools/index.ts`. No plan-owned file was reported after targeted formatting.
+- Scripted scenario coverage in `packages/coding-agent/test/task/auto-roster.test.ts` and `packages/coding-agent/test/task/task-blockers.test.ts` confirmed auto-created todo entries without `todoRef`, phase naming, DAG ordering, quick_task suppression, `task.autoRoster`/`todo.enabled` suppression, and abort cleanup without orphan pending tasks.
+*** Artifacts
+- None. Text-based verification only; see `packages/coding-agent/test/task/auto-roster.test.ts`, `packages/coding-agent/test/task/task-blockers.test.ts`, and `packages/coding-agent/test/prompts/auto-roster-prompts.test.ts`.
+*** Deviations
+- Repo-wide `bun check:ts` is currently blocked by unrelated existing lint/format debt outside the plan-owned change set, so PLAN-077 remains open pending baseline cleanup.
+- Deferred follow-up remains open: [[id:FUP-020-unify-fluid-mode-wave-execution-with-tas]].

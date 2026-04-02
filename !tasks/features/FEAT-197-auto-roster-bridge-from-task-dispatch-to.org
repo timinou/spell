@@ -1,0 +1,139 @@
+#+TITLE: Auto-roster bridge from task dispatch to todo system
+#+STATE: DONE
+#+SESSION_ID: 14aa253433421ae0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T21-38-20-786Z_14aa0c3efc821ad9/2-CreateFeat3.jsonl]]
+#+CUSTOM_ID: FEAT-197-auto-roster-bridge-from-task-dispatch-to
+#+DEPENDS: FEAT-196-task-schema-and-agent-definition-extensi FEAT-199-intra-batch-dag-scheduler-for-task-tool FEAT-200-auto-roster-settings-and-agent-level-sup
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-02]: Completed via PLAN-077 task auto-roster execution.
+
+:PROPERTIES:
+:EFFORT: M
+:LAYER: core
+:DEPENDS: FEAT-196-task-schema-and-agent-definition-extensi
+:END:
+
+* Scope
+In scope:
+- Auto-create todo phase + items when task dispatches lack ~todoRef~
+- Auto-assign ~todoRef~ to task items after creation
+- Session-wide mutation serialization (upgrade ~#todoRefMutationQueue~ from per-instance to session-level)
+- Cancellation compensation: on abort, mark auto-created items as failed
+- Suppression checks: agent ~roster~ flag, ~todo.enabled~, ~task.autoRoster~ setting
+
+Out of scope:
+- DAG scheduling logic (separate item)
+- Settings definition (separate item)
+- Prompt changes (separate item)
+- Per-dispatch ~roster~ override parameter (deferred to FUP)
+
+Boundary rationale: This is the integration layer between task execution and todo tracking. It creates the bridge that makes every dispatch a roster operation. Suppression checks are included because they guard the bridge entry point.
+
+Additional dependency note: This work also depends on the DAG scheduler item (ID pending). DEPENDS is set only to ~FEAT-196-task-schema-and-agent-definition-extensi~ for now; execution manifest captures full ordering.
+
+* Tests
+- File: ~packages/coding-agent/test/task/auto-roster.test.ts~
+1. Task dispatch without ~todoRef~ auto-creates a phase + items in session todo phases
+2. Auto-created items have ~delegation~ metadata after subagent starts running
+3. Auto-created items marked ~completed~ when subagent succeeds
+4. Auto-created items marked ~failed~ when subagent fails
+5. Mixed batch: tasks with existing ~todoRef~ preserved, only missing ones auto-created
+6. ~phase~ parameter names the auto-created phase
+7. No ~phase~ parameter derives name from batch context or uses ~"Tasks"~ default
+8. Cancellation marks auto-created items as ~failed~ (no orphan ~pending~)
+9. When todo phases already exist, new phase is appended (not replaced)
+10. Agent with ~roster: false~ skips auto-creation entirely
+11. ~todo.enabled=false~ skips auto-creation
+12. ~task.autoRoster=false~ skips auto-creation
+13. Auto-created items participate in normalization correctly (treated as delegated)
+
+
+
+14. Deterministic mapping: task items at indices 0,1,2 map to created todo IDs task-N, task-N+1, task-N+2 in order
+15. Partial creation failure: if ~TodoWriteTool~ returns errors, dispatch proceeds without roster entries for failed items
+16. Nested task calls: ~taskDepth > 0~ suppresses auto-roster creation (subagent does not pollute parent roster)
+17. Duplicate task IDs in batch: rejected before auto-creation (existing validation in task tool catches this)
+18. Retry idempotency: re-dispatching the same batch creates a new phase (not duplicate items in existing phase)
+* Implementation
+
+** FEAT-197-auto-roster-bridge-from-task-dispatch-to::deterministic-mapping - Deterministic task-to-todo ID mapping
+- DEPENDS: auto-create-logic
+- Strategy: Create todo items in the same order as the ~tasks~ array. The internal ~todo_write add_phase~ call produces sequential IDs (~task-N~). Use the item creation order to build a stable index mapping: ~tasks[i] → created_todo_ids[i]~.
+- Store the mapping in a ~Map<string, string>~ (task item ID → todo item ID) for ~todoRef~ assignment.
+- If ~add_phase~ returns items in a different order (unlikely but defensive), fall back to content-matching by task description.
+- Edge case: mixed batch with some existing ~todoRef~ — only unmapped tasks participate in the index mapping.
+
+** FEAT-197-auto-roster-bridge-from-task-dispatch-to::partial-create-rollback - Partial creation failure handling
+- DEPENDS: auto-create-logic
+- If internal ~TodoWriteTool~ call fails (returns errors):
+  - Log the error
+  - Do NOT abort the dispatch — proceed without roster entries for the failed subset
+  - The dispatch itself is more important than tracking; tracking failure is recoverable
+- If the call partially succeeds (some items created, some failed):
+  - Assign ~todoRef~ only to successfully created items
+  - Log which items could not be tracked
+** FEAT-XXX::auto-create-logic - Core auto-creation in TaskTool.execute
+- File: ~packages/coding-agent/src/task/index.ts~
+- Before dispatch (after validation, before ~#executeSync~ or async registration):
+  - Check suppression: ~todo.enabled~, ~task.autoRoster~, agent ~roster~ flag
+  - Identify tasks lacking ~todoRef~
+  - Build phase name from ~params.phase~ or derive from context
+  - Call internal ~TodoWriteTool~ to create phase + items via ~add_phase~ + items
+  - Each created item gets: ~content~ from task description, ~status: pending~, ~blockers~ mapped from task blockers
+- Requires: access to session todo phases and ~TodoWriteTool~
+
+** FEAT-XXX::todoref-assignment - Assign generated todoRef to tasks
+- DEPENDS: auto-create-logic
+- After phase creation, map created task IDs back to task items
+- Mutate the tasks array to set ~todoRef~ on each auto-created item
+- Existing ~todoRef~ values preserved
+
+** FEAT-XXX::mutation-lock - Session-wide mutation serialization
+- File: ~packages/coding-agent/src/task/index.ts~
+- Currently ~#todoRefMutationQueue~ is per-TaskTool instance (line 164)
+- Move to session-level: store on ~ToolSession~ or use a shared lock
+- All TaskTool instances and internal ~TodoWriteTool~ calls serialize through the same queue
+- This prevents interleaving between concurrent auto-roster writes and manual ~todo_write~ calls
+
+** FEAT-XXX::cancellation-compensation - Clean up on abort
+- DEPENDS: auto-create-logic
+- When task dispatch is aborted (~signal.aborted~) after auto-creation but before all tasks complete:
+  - For each auto-created item that is still ~pending~ or ~in_progress~, mark as ~failed~
+  - Use internal ~TodoWriteTool~ update call
+- Register cleanup in the abort handler or finally block
+
+** FEAT-XXX::suppression-check - Gate auto-creation
+- DEPENDS: auto-create-logic
+- Check order: ~todo.enabled~ → ~task.autoRoster~ → agent ~roster~ flag
+- If any check fails, skip auto-creation; dispatch proceeds without roster entries
+- Log suppression reason at debug level
+
+** FEAT-XXX::delegation-metadata-timing - Ensure delegation is set before normalization
+- DEPENDS: auto-create-logic todoref-assignment
+- Auto-created items must have ~delegation~ metadata set immediately (not just on subagent start)
+- Set a minimal ~delegation~ object at creation time so normalization treats them as delegated
+- This prevents the "one direct in_progress" rule from incorrectly demoting them
+
+** FEAT-XXX::tests - Auto-roster integration tests
+- DEPENDS: auto-create-logic todoref-assignment cancellation-compensation
+- File: ~packages/coding-agent/test/task/auto-roster.test.ts~
+
+* Edge Cases
+- Concurrent auto-roster creation from multiple async batches: mutation lock prevents interleaving
+- Auto-created items coexisting with manually-created ones: normalization treats auto-created as delegated (has delegation metadata from creation)
+- Race between auto-create and user's manual ~todo_write~: serialized via mutation lock
+- Very large batch (50+ tasks): single internal ~todo_write~ call with ~add_phase~ is atomic enough
+- Nested task calls: child subagent's task dispatch should NOT auto-create in parent's roster (check ~taskDepth > 0~)
+- Phase name collision: if phase with same name exists, append numeric suffix or create new phase
+- Empty task description: use task ID as fallback content
+
+* Acceptance Criteria
+- Every task dispatch (sync or async) creates roster entries unless suppressed
+- Auto-created items appear in session todo phases immediately after creation
+- Lifecycle hooks (~in_progress~, ~completed~, ~failed~, ~childPhases~) work on auto-created items identically to manually-created ones
+- Cancellation produces clean state (no orphan ~pending~ items)
+- No interleaving with concurrent manual ~todo_write~ updates
+- Normalization treats auto-created items as delegated (not direct)
+- ~bun check:ts~ passes
+- ~bun test packages/coding-agent/test/task/auto-roster.test.ts~ passes

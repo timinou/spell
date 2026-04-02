@@ -228,7 +228,7 @@ function buildPhaseFromInput(
 	return { phase: { id: phaseId, name: input.name, tasks }, nextTaskId: tid };
 }
 
-function getNextIds(phases: TodoPhase[]): { nextTaskId: number; nextPhaseId: number } {
+export function getNextTodoIds(phases: TodoPhase[]): { nextTaskId: number; nextPhaseId: number } {
 	let maxTaskId = 0;
 	let maxPhaseId = 0;
 
@@ -251,7 +251,7 @@ function getNextIds(phases: TodoPhase[]): { nextTaskId: number; nextPhaseId: num
 }
 
 function fileFromPhases(phases: TodoPhase[]): TodoFile {
-	const { nextTaskId, nextPhaseId } = getNextIds(phases);
+	const { nextTaskId, nextPhaseId } = getNextTodoIds(phases);
 	return { phases, nextTaskId, nextPhaseId };
 }
 
@@ -270,6 +270,34 @@ function cloneTodoTask(task: TodoItem): TodoItem {
 
 export function cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
 	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => cloneTodoTask(task)) }));
+}
+
+const todoMutationQueues = new WeakMap<ToolSession, Promise<unknown>>();
+const activeTodoMutationSessions = new WeakSet<ToolSession>();
+
+export function queueTodoMutation<T>(session: ToolSession, action: () => Promise<T>): Promise<T> {
+	if (activeTodoMutationSessions.has(session)) {
+		return action();
+	}
+	const previous = todoMutationQueues.get(session) ?? Promise.resolve();
+	const next = previous
+		.catch(() => undefined)
+		.then(async () => {
+			activeTodoMutationSessions.add(session);
+			try {
+				return await action();
+			} finally {
+				activeTodoMutationSessions.delete(session);
+			}
+		});
+	todoMutationQueues.set(
+		session,
+		next.then(
+			() => undefined,
+			() => undefined,
+		),
+	);
+	return next;
 }
 
 export function isDelegatedTask(task: TodoItem): boolean {
@@ -832,47 +860,49 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 		_onUpdate?: AgentToolUpdateCallback<TodoWriteToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<TodoWriteToolDetails>> {
-		const previousPhases = cloneTodoPhases(this.session.getTodoPhases?.() ?? []);
-		const current = fileFromPhases(cloneTodoPhases(previousPhases));
-		const {
-			file: updated,
-			errors,
-			completedPhaseIds,
-			completedGatedTasks,
-			pendingVerificationTasks,
-			pendingDeferralTasks,
-		} = applyOps(current, params.ops, previousPhases);
-		const hasReplace = params.ops.some(op => op.op === "replace");
-		this.session.setTodoPhases?.(updated.phases, hasReplace ? { reset: true } : undefined);
-		const orgLifecycleNotices = await applyOrgLifecycleHooks(this.session, previousPhases, updated.phases);
-		// Notify dashboard bridge of todo state change
-		this.session.eventBus?.emit("todo:change", { phases: updated.phases });
-		const storage = this.session.getSessionFile() ? "session" : "memory";
+		return await queueTodoMutation(this.session, async () => {
+			const previousPhases = cloneTodoPhases(this.session.getTodoPhases?.() ?? []);
+			const current = fileFromPhases(cloneTodoPhases(previousPhases));
+			const {
+				file: updated,
+				errors,
+				completedPhaseIds,
+				completedGatedTasks,
+				pendingVerificationTasks,
+				pendingDeferralTasks,
+			} = applyOps(current, params.ops, previousPhases);
+			const hasReplace = params.ops.some(op => op.op === "replace");
+			this.session.setTodoPhases?.(updated.phases, hasReplace ? { reset: true } : undefined);
+			const orgLifecycleNotices = await applyOrgLifecycleHooks(this.session, previousPhases, updated.phases);
+			// Notify dashboard bridge of todo state change
+			this.session.eventBus?.emit("todo:change", { phases: updated.phases });
+			const storage = this.session.getSessionFile() ? "session" : "memory";
 
-		// Best-effort journal write to .local/!journal/todos/
-		const sessionId = this.session.getSessionId?.() ?? "default";
-		const projectRoot = this.session.cwd ?? getProjectDir();
-		void writeJournal(projectRoot, sessionId, updated.phases);
+			// Best-effort journal write to .local/!journal/todos/
+			const sessionId = this.session.getSessionId?.() ?? "default";
+			const projectRoot = this.session.cwd ?? getProjectDir();
+			void writeJournal(projectRoot, sessionId, updated.phases);
 
-		const summary = formatSummary({
-			phases: updated.phases,
-			errors,
-			completedPhaseIds,
-			completedGatedTasks,
-			pendingVerificationTasks,
-			pendingDeferralTasks,
+			const summary = formatSummary({
+				phases: updated.phases,
+				errors,
+				completedPhaseIds,
+				completedGatedTasks,
+				pendingVerificationTasks,
+				pendingDeferralTasks,
+			});
+			const text = orgLifecycleNotices.length > 0 ? `${summary}\n${orgLifecycleNotices.join("\n")}` : summary;
+
+			return {
+				content: [
+					{
+						type: "text",
+						text,
+					},
+				],
+				details: { phases: updated.phases, storage },
+			};
 		});
-		const text = orgLifecycleNotices.length > 0 ? `${summary}\n${orgLifecycleNotices.join("\n")}` : summary;
-
-		return {
-			content: [
-				{
-					type: "text",
-					text,
-				},
-			],
-			details: { phases: updated.phases, storage },
-		};
 	}
 }
 

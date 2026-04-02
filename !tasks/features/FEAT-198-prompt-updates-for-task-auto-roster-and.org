@@ -1,0 +1,100 @@
+#+TITLE: Prompt updates for task auto-roster and unified wave dispatch
+#+STATE: DONE
+#+SESSION_ID: 14aa253434c21ae4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T21-38-20-786Z_14aa0c3efc821ad9/4-CreateFeat5.jsonl]]
+#+CUSTOM_ID: FEAT-198-prompt-updates-for-task-auto-roster-and
+#+DEPENDS: FEAT-196-task-schema-and-agent-definition-extensi FEAT-199-intra-batch-dag-scheduler-for-task-tool FEAT-197-auto-roster-bridge-from-task-dispatch-to FEAT-200-auto-roster-settings-and-agent-level-sup
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-02]: Completed via PLAN-077 task auto-roster execution.
+
+:PROPERTIES:
+:EFFORT: S
+:LAYER: docs
+:DEPENDS: FEAT-196-task-schema-and-agent-definition-extensi
+:END:
+
+* Scope
+In scope:
+- Update ~packages/coding-agent/src/prompts/tools/task.md~ — document ~phase~, ~blockers~, auto-roster behavior, suppression
+- Update ~packages/coding-agent/src/prompts/tools/todo-write.md~ — document coexistence with auto-roster
+- Update ~packages/coding-agent/src/prompts/system/plan-mode-approved.md~ — remove manual ~todo_write replace~ + ~todoRef~ ceremony for wave-based execution; replace with unified task dispatch
+- Update ~packages/coding-agent/src/prompts/system/eager-todo.md~ — add conditional rendering for auto-roster active state
+- Update ~packages/coding-agent/src/prompts/system/system-prompt.md~ if task tool description needs changes
+
+Out of scope:
+- Code changes (covered by other items)
+- Agent definition prompts (frontmatter template changes covered by FEAT-1)
+
+Boundary rationale: Prompts are the agent-facing documentation layer. They must be updated AFTER all behavioral changes are implemented, since they describe the final behavior.
+
+* Tests
+- Verification is manual review of rendered prompts via ~renderPromptTemplate~
+- No automated test file — prompt content is validated by the agent's ability to use the features correctly
+- Verify: no contradictory instructions between prompts (e.g., manual ~todoRef~ ceremony AND auto-roster)
+
+This item follows implementation-first sequencing since prompts describe behavior that must exist first.
+
+
+
+Additionally:
+- File: ~packages/coding-agent/test/prompts/auto-roster-prompts.test.ts~
+- Scenario 1: Render ~task.md~ with ~autoRosterEnabled: true~ — output contains ~phase~ parameter documentation and auto-roster behavior description
+- Scenario 2: Render ~task.md~ with ~autoRosterEnabled: false~ — output contains legacy ~todoRef~ instructions
+- Scenario 3: Render ~plan-mode-approved.md~ with ~autoRosterEnabled: true~ and ~waves: true~ — output does NOT contain manual ~todo_write replace~ ceremony; contains unified task dispatch instructions
+- Scenario 4: Render ~eager-todo.md~ with ~autoRosterEnabled: true~ — output does NOT force upfront ~todo_write replace~
+- Scenario 5: No prompt contains both "you MUST use todoRef" AND "auto-roster creates entries automatically" simultaneously (contradiction check)
+* Implementation
+1. ~FEAT-XXX::task-prompt~ - Update ~task.md~
+   - File: ~packages/coding-agent/src/prompts/tools/task.md~
+   - Add to parameters section:
+     - ~phase~: optional string for naming auto-created roster phase
+     - ~blockers~ on task items: array of task IDs for intra-batch DAG scheduling
+   - Document auto-roster behavior: dispatching auto-creates todo entries
+   - Document suppression: agent-level ~roster: false~, ~task.autoRoster~ setting
+   - Update examples to show ~phase~ and ~blockers~ usage
+   - Remove/update guidance about manual ~todoRef~ — it's now auto-assigned when omitted
+2. ~FEAT-XXX::todo-prompt~ - Update ~todo-write.md~
+   - DEPENDS: ~task-prompt~
+   - File: ~packages/coding-agent/src/prompts/tools/todo-write.md~
+   - Add note: task dispatches may auto-create phases and items; these behave identically to manually-created ones
+   - Update the delegation section to note auto-roster items are automatically delegated
+   - Keep existing manual workflow documented for cases where pre-structuring is desired
+3. ~FEAT-XXX::plan-mode-prompt~ - Update ~plan-mode-approved.md~
+   - DEPENDS: ~task-prompt~
+   - File: ~packages/coding-agent/src/prompts/system/plan-mode-approved.md~
+   - The wave-based todo initialization section (lines 114-149) currently instructs:
+     1. Create todo phases via ~todo_write replace~ with one phase per wave
+     2. Then dispatch tasks with ~todoRef~
+   - Replace with unified instruction: dispatch tasks with ~phase~ and ~blockers~, auto-roster handles the rest
+   - Keep manual ~todo_write~ as an option for pre-structuring with gates/org links
+   - Use Handlebars conditional ~{{#if autoRosterEnabled}}~ for the new path
+4. ~FEAT-XXX::eager-prompt~ - Update ~eager-todo.md~
+   - DEPENDS: ~task-prompt~
+   - File: ~packages/coding-agent/src/prompts/system/eager-todo.md~
+   - Add conditional: when ~task.autoRoster~ is active, reduce emphasis on upfront ~todo_write replace~
+   - The agent should still plan structure when useful, but not be forced to create it before dispatching
+   - Use Handlebars conditional rendering
+5. ~FEAT-XXX::system-prompt-section~ - Update ~system-prompt.md~ if needed
+   - DEPENDS: ~task-prompt~
+   - File: ~packages/coding-agent/src/prompts/system/system-prompt.md~
+   - Review task tool description section; update if it contradicts auto-roster behavior
+   - Likely minimal changes since the detailed docs live in tool-specific prompts
+
+* Edge Cases
+- Handlebars conditionals for ~autoRosterEnabled~ must be passed from the prompt rendering context
+- Need to check what template variables are available in each prompt file
+- Backward compatibility: if ~task.autoRoster=false~, old manual ceremony prompts should still render
+- Plan mode active + auto-roster: plan mode restricts tools, but task tool is available in plan mode for exploration
+
+* Acceptance Criteria
+- ~task.md~ documents ~phase~, ~blockers~, and auto-roster behavior clearly
+- ~plan-mode-approved.md~ uses unified task dispatch for wave execution (no manual ~todo_write~ + ~todoRef~ ceremony)
+- ~eager-todo.md~ reconciled with auto-roster (conditional rendering)
+- ~todo-write.md~ notes auto-roster coexistence
+- No contradictory instructions between prompts (e.g., must do manual ~todoRef~ AND auto-roster is default)
+- All prompts render correctly with ~renderPromptTemplate~ (no broken Handlebars)
+
+#+begin_src text
+Dependency note: This work depends on all other Task Auto-Roster items; only FEAT-196 is encoded here. Full execution ordering is captured in the PLAN execution manifest.
+#+end_src

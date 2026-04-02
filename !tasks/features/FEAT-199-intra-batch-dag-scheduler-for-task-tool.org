@@ -1,0 +1,135 @@
+#+TITLE: Intra-batch DAG scheduler for task tool
+#+STATE: DONE
+#+SESSION_ID: 14aa25342bc21adc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T21-38-20-786Z_14aa0c3efc821ad9/1-CreateFeat2.jsonl]]
+#+CUSTOM_ID: FEAT-199-intra-batch-dag-scheduler-for-task-tool
+#+EFFORT: L
+#+LAYER: core
+#+DEPENDS: FEAT-196-task-schema-and-agent-definition-extensi
+
+NOTE [2026-04-02]: Completed via PLAN-077 task auto-roster execution.
+
+* Scope
+** In scope
+- New module ~packages/coding-agent/src/task/batch-scheduler.ts~ providing a DAG-aware batch scheduler
+- Blocker validation: detect missing refs, self-references, cycles before dispatch
+- Ready-queue: maintain set of dispatchable tasks, dispatch when predecessors complete
+- Failed predecessor policy: mark dependents as failed with skip reason, do NOT dispatch them
+- Integration with sync dispatch path in ~TaskTool.#executeSync~ (replaces flat ~Promise.allSettled~ at line ~907-1090~ of ~packages/coding-agent/src/task/index.ts~)
+- Integration with async dispatch path (replaces flat for-loop job registration at lines ~395-517~)
+
+** Out of scope
+- Auto-roster creation (FEAT-3)
+- Cross-batch orchestration (agent manages this via ~todo_write~)
+- Schema changes (FEAT-1, already created)
+
+** Boundary rationale
+The scheduler is a pure execution-ordering abstraction. It takes a set of tasks with blockers, validates the DAG, and dispatches in topological order. It does not know about the todo system.
+
+* Tests
+- File: ~packages/coding-agent/test/task/batch-scheduler.test.ts~
+- Scenario 1: Tasks without blockers dispatch immediately (all runnable, preserves existing behavior)
+- Scenario 2: Linear chain (A→B→C) dispatches in order
+- Scenario 3: Diamond dependency (A→B, A→C, B+C→D) dispatches A first, then B+C in parallel, then D
+- Scenario 4: Cycle detection (A→B→A) rejects batch with clear error message before any dispatch
+- Scenario 5: Missing blocker reference rejects batch with error listing the missing ID
+- Scenario 6: Failed task A causes dependent B to be marked failed with ~error: "Predecessor A failed"~
+- Scenario 7: Independent branch continues when parallel branch fails (A→B fails, C→D succeeds)
+- Scenario 8: Concurrency limit respected (~maxConcurrency=2~ with 4 ready tasks: only 2 run at a time)
+- Scenario 9: Abort signal stops pending tasks; running tasks receive signal; no new tasks dispatched
+- Scenario 10: Empty batch returns immediately
+- Scenario 11: Single task (no blockers) behaves identically to current single-task dispatch
+
+Test-first sequencing: define scheduler interface and test scenarios before implementing the core logic.
+
+* Implementation
+
+** FEAT-XXX::scheduler-interface - Define the BatchScheduler interface and types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-XXX::scheduler-interface
+:END:
+- File: ~packages/coding-agent/src/task/batch-scheduler.ts~
+- Types: ~BatchTask~ (id, blockers, run function), ~BatchResult~ (id, status, result/error), ~BatchSchedulerOptions~ (maxConcurrency, signal)
+- Export: ~scheduleBatch(tasks: BatchTask[], options: BatchSchedulerOptions): Promise<BatchResult[]>~
+- Reference signature:
+#+begin_src typescript
+export async function scheduleBatch(
+  tasks: BatchTask[],
+  options: BatchSchedulerOptions,
+): Promise<BatchResult[]>
+#+end_src
+
+** FEAT-XXX::blocker-validation - Validate DAG before dispatch
+:PROPERTIES:
+:CUSTOM_ID: FEAT-XXX::blocker-validation
+:DEPENDS: FEAT-XXX::scheduler-interface
+:END:
+- Validate: no missing refs, no self-refs, no cycles (topological sort)
+- Return clear error messages listing specific problems
+- Reuse topological sort approach from ~packages/coding-agent/src/orchestrators/fluid/dag.ts~ (Kahn's algorithm)
+
+** FEAT-XXX::ready-queue - Implement ready-queue dispatch loop
+:PROPERTIES:
+:CUSTOM_ID: FEAT-XXX::ready-queue
+:DEPENDS: FEAT-XXX::blocker-validation
+:END:
+- Track completed/failed tasks
+- After each completion, check if new tasks become unblocked
+- Dispatch newly ready tasks up to concurrency limit
+- Use existing ~Semaphore~ from ~packages/coding-agent/src/task/parallel.ts~
+
+** FEAT-XXX::failure-policy - Handle failed predecessors
+:PROPERTIES:
+:CUSTOM_ID: FEAT-XXX::failure-policy
+:DEPENDS: FEAT-XXX::ready-queue
+:END:
+- When a task fails, find all transitive dependents
+- Mark them failed with error: ~Predecessor {id} failed~
+- Remove from ready queue consideration
+- Independent branches continue unaffected
+
+** FEAT-XXX::integrate-sync - Wire into sync dispatch path
+:PROPERTIES:
+:CUSTOM_ID: FEAT-XXX::integrate-sync
+:DEPENDS: FEAT-XXX::ready-queue FEAT-XXX::failure-policy
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~
+- Replace the ~runTask~ + ~Promise.allSettled~ pattern (lines ~907-1090~) with ~scheduleBatch~ call
+- Map TaskTool's ~runTask~ function to ~BatchTask.run~
+- Preserve progress tracking, ~todoRef~ hooks, isolation support
+
+** FEAT-XXX::integrate-async - Wire into async dispatch path
+:PROPERTIES:
+:CUSTOM_ID: FEAT-XXX::integrate-async
+:DEPENDS: FEAT-XXX::ready-queue FEAT-XXX::failure-policy
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~
+- Replace the for-loop job registration (lines ~395-517~) with DAG-aware async registration
+- Each ready task gets registered as a job; dependent tasks wait
+- Progress reporting includes DAG state (pending/ready/running/done)
+
+** FEAT-XXX::tests - Write batch scheduler tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-XXX::tests
+:DEPENDS: FEAT-XXX::scheduler-interface
+:END:
+- File: ~packages/coding-agent/test/task/batch-scheduler.test.ts~
+
+* Edge Cases
+- Empty blockers array ~[]~: same as ~undefined~ (no dependencies)
+- Self-referencing blocker ~{id: "A", blockers: ["A"]}~: cycle detection catches it
+- Diamond dependency: task dispatched only when ALL predecessors complete
+- All tasks have blockers but no root: cycle detection catches it
+- Abort during mid-batch: pending tasks not dispatched, running tasks get abort signal, results collected for completed/failed
+- Task completes after abort signal: result still collected, dependent dispatch suppressed
+- ~maxConcurrency=1~: purely sequential execution
+
+* Acceptance Criteria
+- Tasks with blocker DAG execute in correct topological order
+- Cycles and missing refs produce clear error messages before any dispatch
+- Failed task cascades to dependents (marked failed with reason, not dispatched)
+- Semaphore/concurrency limit still constrains active tasks
+- Abort signal respected at dispatch boundaries
+- Existing tests for flat parallel dispatch (no blockers) still pass
+- ~bun check:ts~ passes
+- ~bun test packages/coding-agent/test/task/batch-scheduler.test.ts~ passes

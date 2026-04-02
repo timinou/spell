@@ -1,6 +1,12 @@
 Manages a phased task list. Submit an `ops` array — each op mutates state incrementally.
 **Primary op: `update`.** Use it to mark tasks `in_progress` or `completed`. Only reach for other ops when the structure itself needs to change.
 
+{{#if autoRosterEnabled}}
+Task dispatches may auto-create phases and delegated items in this same roster. Use `todo_write` to pre-structure work, add gates or org links, or revise the auto-created plan after dispatch. Auto-created items behave the same as manual ones once they exist.
+{{else}}
+Use `todo_write` when you want roster tracking, gates, or blockers before delegating work.
+{{/if}}
+
 <critical>
 You **MUST** call this tool twice per direct task you execute yourself:
 1. Before beginning — `{op: "update", id: "task-N", status: "in_progress"}`

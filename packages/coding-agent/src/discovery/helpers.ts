@@ -203,6 +203,7 @@ export interface ParsedAgentFields {
 	output?: unknown;
 	thinkingLevel?: ThinkingLevel;
 	blocking?: boolean;
+	roster?: boolean;
 }
 
 /**
@@ -255,7 +256,8 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	const thinkingLevel = parseThinkingLevel(rawThinkingLevel);
 	const model = parseModelList(frontmatter.model);
 	const blocking = parseBoolean(frontmatter.blocking);
-	return { name, description, tools, spawns, model, output, thinkingLevel, blocking };
+	const roster = parseBoolean(frontmatter.roster);
+	return { name, description, tools, spawns, model, output, thinkingLevel, blocking, roster };
 }
 
 async function globIf(

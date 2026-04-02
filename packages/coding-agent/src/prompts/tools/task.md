@@ -9,15 +9,23 @@ Subagents lack your conversation history. Every decision, file content, and user
 
 <parameters>
 - `agent`: Agent type for all tasks.
-  - `.id`: CamelCase, max 32 chars
-  - `.description`: UI display only — subagent never sees it
-  - `.assignment`: Complete self-contained instructions. One-liners PROHIBITED; missing acceptance criteria = too vague.
-  - `.todoRef`: Optional todo item ID (e.g. `task-3`). When set, the subagent receives the linked todo's verification requirements (gates, orgItemId) automatically injected into its context. Use this when delegating a todo item to a subagent.
+- `phase`: Optional phase name for the auto-created roster phase (for example `Investigation`).
 - `context`: Shared background prepended to every assignment. Session-specific info only.
 - `schema`: JTD schema for expected output. Format lives here — **MUST NOT** be duplicated in assignments.
 - `tasks`: Tasks to execute in parallel.
+  - `.id`: CamelCase identifier, max 32 chars
+  - `.description`: UI display only — subagent never sees it
+  - `.assignment`: Complete self-contained instructions. One-liners PROHIBITED; missing acceptance criteria = too vague.
+  - `.blockers`: Optional task IDs within this batch that must complete before this task starts. Use for intra-batch DAG scheduling.
+  - `.todoRef`: Optional todo item ID (e.g. `task-3`). When set, the subagent receives the linked todo's verification requirements (gates, orgItemId) automatically injected into its context. Use this when delegating to an existing structured todo item.
 - `isolated`: Run in isolated environment; returns patches. Use when tasks edit overlapping files.
 </parameters>
+
+{{#if autoRosterEnabled}}
+Task dispatch auto-creates todo roster entries unless suppressed by `todo.enabled=false`, `task.autoRoster=false`, or agent frontmatter `roster: false`. Omit `.todoRef` to create new roster items automatically. Set `.todoRef` only when linking the dispatched work to an existing structured todo item.
+{{else}}
+Auto-roster is disabled in this session. Use `.todoRef` when you want delegated work linked to todo items you created separately via `todo_write`.
+{{/if}}
 
 <critical>
 - **MUST NOT** duplicate shared constraints across assignments — put them in `context` once.
@@ -123,6 +131,29 @@ Caller runs `bun check:ts` after both tasks complete. Tasks must NOT run it.
     </assignment>
   </task>
 </tasks>
+</example>
+
+<example label="Auto-roster batch with blockers">
+A single `task` call can both schedule the work and populate the roster:
+```
+{
+  agent: "task",
+  phase: "Investigation",
+  tasks: [
+    {
+      id: "ReadSchema",
+      description: "Inspect schema",
+      assignment: "## Target\n- File: src/schema.ts\n\n## Change\n- Read the current parser behavior\n\n## Edge Cases\n- Note hidden invariants\n\n## Acceptance\n- Return a concise summary"
+    },
+    {
+      id: "TraceConsumers",
+      description: "Trace callers",
+      blockers: ["ReadSchema"],
+      assignment: "## Target\n- Files: src/api.ts, src/worker.ts\n\n## Change\n- Trace every caller that depends on the schema\n\n## Edge Cases\n- Include indirect adapters\n\n## Acceptance\n- Return the caller list with risks"
+    }
+  ]
+}
+```
 </example>
 
 {{#list agents join="\n"}}

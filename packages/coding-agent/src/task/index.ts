@@ -31,6 +31,8 @@ import { formatBytes, formatDuration } from "../tools/render-utils";
 import {
 	cloneTodoPhases,
 	findTask,
+	getNextTodoIds,
+	queueTodoMutation,
 	type TodoDelegation,
 	type TodoDelegationResult,
 	type TodoPhase,
@@ -40,11 +42,11 @@ import {
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
+import { type BatchGraph, buildBatchGraph, scheduleBatch } from "./batch-scheduler";
 import { discoverAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
-import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { renderCall, renderResult } from "./render";
 import { renderTemplate, resolvePredecessorResultsContext, resolveVerificationContext } from "./template";
 import {
@@ -131,6 +133,7 @@ function renderDescription(
 	maxConcurrency: number,
 	isolationEnabled: boolean,
 	asyncEnabled: boolean,
+	autoRosterEnabled: boolean,
 	disabledAgents: string[],
 ): string {
 	const filteredAgents = disabledAgents.length > 0 ? agents.filter(a => !disabledAgents.includes(a.name)) : agents;
@@ -139,6 +142,7 @@ function renderDescription(
 		MAX_CONCURRENCY: maxConcurrency,
 		isolationEnabled,
 		asyncEnabled,
+		autoRosterEnabled,
 	});
 }
 
@@ -161,18 +165,20 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	readonly renderResult = renderResult;
 	readonly #discoveredAgents: AgentDefinition[];
 	readonly #blockedAgent: string | undefined;
-	#todoRefMutationQueue: Promise<void> = Promise.resolve();
 
 	/** Dynamic description that reflects current disabled-agent settings */
 	get description(): string {
 		const disabledAgents = this.session.settings.get("task.disabledAgents") as string[];
 		const maxConcurrency = this.session.settings.get("task.maxConcurrency");
 		const isolationMode = this.session.settings.get("task.isolation.mode");
+		const autoRosterEnabled =
+			this.session.settings.get("todo.enabled") && this.session.settings.get("task.autoRoster");
 		return renderDescription(
 			this.#discoveredAgents,
 			maxConcurrency,
 			isolationMode !== "none",
 			this.session.settings.get("async.enabled"),
+			autoRosterEnabled,
 			disabledAgents,
 		);
 	}
@@ -210,6 +216,142 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		});
 	}
 
+	#validateTaskBatch(tasks: TaskItem[]): string | undefined {
+		const missingTaskIndexes: number[] = [];
+		const idIndexes = new Map<string, number[]>();
+		for (let index = 0; index < tasks.length; index++) {
+			const id = tasks[index]?.id;
+			if (typeof id !== "string" || id.trim() === "") {
+				missingTaskIndexes.push(index);
+				continue;
+			}
+			const normalizedId = id.toLowerCase();
+			const indexes = idIndexes.get(normalizedId);
+			if (indexes) {
+				indexes.push(index);
+			} else {
+				idIndexes.set(normalizedId, [index]);
+			}
+		}
+		const problems: string[] = [];
+		if (missingTaskIndexes.length > 0) {
+			problems.push(`Missing task ids at indexes: ${missingTaskIndexes.join(", ")}`);
+		}
+		const duplicateIds: Array<{ id: string; indexes: number[] }> = [];
+		for (const [normalizedId, indexes] of idIndexes.entries()) {
+			if (indexes.length > 1) {
+				duplicateIds.push({
+					id: tasks[indexes[0]]?.id ?? normalizedId,
+					indexes,
+				});
+			}
+		}
+		if (duplicateIds.length > 0) {
+			const details = duplicateIds.map(entry => `${entry.id} (indexes ${entry.indexes.join(", ")})`).join("; ");
+			problems.push(`Duplicate task ids detected (case-insensitive): ${details}`);
+		}
+		if (problems.length > 0) return problems.join(". ");
+		try {
+			buildBatchGraph(tasks.map(task => ({ id: task.id, blockers: task.blockers })));
+		} catch (error) {
+			problems.push(error instanceof Error ? error.message : String(error));
+		}
+		return problems.length > 0 ? problems.join(". ") : undefined;
+	}
+
+	#shouldAutoCreateRoster(agent: AgentDefinition | undefined, tasks: TaskItem[]): boolean {
+		if (!agent || tasks.length === 0) return false;
+		if (!this.session.getTodoPhases || !this.session.setTodoPhases) return false;
+		if ((this.session.taskDepth ?? 0) > 0) return false;
+		if (!this.session.settings.get("todo.enabled")) return false;
+		if (!this.session.settings.get("task.autoRoster")) return false;
+		if (agent.roster === false) return false;
+		return true;
+	}
+
+	#deriveAutoRosterPhaseName(params: TaskParams): string {
+		const explicit = params.phase?.trim();
+		if (explicit) return explicit;
+		const heading = params.context
+			?.split("\n")
+			.map(line => line.trim())
+			.find(line => /^#{1,6}\s+\S/.test(line));
+		if (heading) {
+			return heading.replace(/^#{1,6}\s+/, "").trim();
+		}
+		return "Tasks";
+	}
+
+	async #autoCreateTodoRefs(params: TaskParams, agent: AgentDefinition | undefined): Promise<TaskItem[]> {
+		const taskItems = params.tasks ?? [];
+		if (!this.#shouldAutoCreateRoster(agent, taskItems)) return taskItems;
+		const tasksToCreate = taskItems.filter(task => !task.todoRef);
+		if (tasksToCreate.length === 0) return taskItems;
+		const agentName = agent?.name ?? params.agent;
+		const phaseName = this.#deriveAutoRosterPhaseName(params);
+		const createdTodoRefs = await queueTodoMutation(this.session, async () => {
+			const phases = cloneTodoPhases(this.session.getTodoPhases?.() ?? []);
+			const { nextTaskId } = getNextTodoIds(phases);
+			const predictedTodoRefByTaskId = new Map<string, string>();
+			for (const task of taskItems) {
+				if (task.todoRef) predictedTodoRefByTaskId.set(task.id, task.todoRef);
+			}
+			for (const [index, task] of tasksToCreate.entries()) {
+				predictedTodoRefByTaskId.set(task.id, `task-${nextTaskId + index}`);
+			}
+			const result = await new TodoWriteTool(this.session).execute("task-auto-roster-create", {
+				ops: [
+					{
+						op: "add_phase",
+						name: phaseName,
+						tasks: tasksToCreate.map(task => {
+							const blockerTodoRefs = (task.blockers ?? [])
+								.map(blockerId => predictedTodoRefByTaskId.get(blockerId))
+								.filter((blockerId): blockerId is string => blockerId !== undefined);
+							if ((task.blockers?.length ?? 0) !== blockerTodoRefs.length) {
+								logger.warn("task auto-roster blocker mapping incomplete", {
+									taskId: task.id,
+									blockers: task.blockers,
+								});
+							}
+							return {
+								content: task.description.trim() || task.id,
+								blockers: blockerTodoRefs.length > 0 ? blockerTodoRefs : undefined,
+								delegation: { sessionId: "pending", agent: agentName },
+							};
+						}),
+					},
+				],
+			});
+			const summary = result.content.find(part => part.type === "text")?.text ?? "";
+			if (summary.startsWith("Errors:")) {
+				logger.warn("task auto-roster creation reported todo_write errors", { summary });
+			}
+			const createdPhase = result.details?.phases.at(-1);
+			const mapping = new Map<string, string>();
+			if (!createdPhase) {
+				logger.warn("task auto-roster creation missing created phase", { phaseName });
+				return mapping;
+			}
+			for (let index = 0; index < tasksToCreate.length; index++) {
+				const todo = createdPhase.tasks[index];
+				const task = tasksToCreate[index];
+				if (!todo || !task) {
+					logger.warn("task auto-roster creation missing mapped todo", { phaseName, index });
+					continue;
+				}
+				mapping.set(task.id, todo.id);
+			}
+			return mapping;
+		});
+		if (!createdTodoRefs || createdTodoRefs.size === 0) return taskItems;
+		return taskItems.map(task => {
+			if (task.todoRef) return task;
+			const todoRef = createdTodoRefs.get(task.id);
+			return todoRef ? { ...task, todoRef } : task;
+		});
+	}
+
 	#buildTodoDelegation(agent: string, sessionId?: string, transcriptPath?: string): TodoDelegation | undefined {
 		if (!sessionId) return undefined;
 		return { agent, sessionId, transcriptPath };
@@ -224,18 +366,45 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		};
 	}
 
-	#queueTodoRefMutation(action: () => Promise<void>): Promise<void> {
-		const run = async () => {
+	async #queueTodoRefMutation<T>(action: () => Promise<T>): Promise<T | undefined> {
+		return await queueTodoMutation(this.session, async () => {
 			try {
-				await action();
+				return await action();
 			} catch (error) {
 				logger.error("task todoRef lifecycle update failed", {
 					error: error instanceof Error ? error.message : String(error),
 				});
+				return undefined;
 			}
-		};
-		this.#todoRefMutationQueue = this.#todoRefMutationQueue.then(run, run);
-		return this.#todoRefMutationQueue;
+		});
+	}
+
+	async #finalizeSkippedTodoRef(
+		task: TaskItem,
+		agent: string,
+		agentSource: SingleResult["agentSource"],
+		errorMessage: string,
+		aborted: boolean = false,
+	): Promise<void> {
+		if (!task.todoRef) return;
+		await this.#finalizeTodoRef(task, {
+			index: 0,
+			id: task.id,
+			agent,
+			agentSource,
+			task: task.description,
+			assignment: task.assignment,
+			description: task.description,
+			exitCode: 1,
+			output: "",
+			stderr: errorMessage,
+			truncated: false,
+			durationMs: 0,
+			tokens: 0,
+			error: errorMessage,
+			aborted: aborted || undefined,
+			abortReason: aborted ? errorMessage : undefined,
+		});
 	}
 
 	#mergeTodoRefDelegation(todoRef: string, patch: Partial<TodoDelegation>): void {
@@ -318,8 +487,18 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const asyncEnabled = this.session.settings.get("async.enabled");
 		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
+		const rawTasks = params.tasks ?? [];
+		const taskValidationError = this.#validateTaskBatch(rawTasks);
+		if (taskValidationError) {
+			return {
+				content: [{ type: "text", text: `Invalid tasks: ${taskValidationError}` }],
+				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+			};
+		}
+		const preparedTasks = signal?.aborted ? rawTasks : await this.#autoCreateTodoRefs(params, selectedAgent);
+		const dispatchParams = preparedTasks === params.tasks ? params : { ...params, tasks: preparedTasks };
 		if (!asyncEnabled || selectedAgent?.blocking === true) {
-			return this.#executeSync(_toolCallId, params, signal, onUpdate);
+			return this.#executeSync(_toolCallId, dispatchParams, signal, onUpdate);
 		}
 
 		const manager = this.session.asyncJobManager;
@@ -330,30 +509,49 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			};
 		}
 
-		const taskItems = params.tasks ?? [];
+		const taskItems = dispatchParams.tasks ?? [];
 		if (taskItems.length === 0) {
-			return this.#executeSync(_toolCallId, params, signal, onUpdate);
+			return this.#executeSync(_toolCallId, dispatchParams, signal, onUpdate);
 		}
 
 		const outputManager =
 			this.session.agentOutputManager ?? new AgentOutputManager(this.session.getArtifactsDir ?? (() => null));
 		const uniqueIds = await outputManager.allocateBatch(taskItems.map(t => t.id));
-		const fallbackAgentSource =
-			this.#discoveredAgents.find(agent => agent.name === params.agent)?.source ?? "bundled";
+		const fallbackAgentSource = selectedAgent?.source ?? "bundled";
 		const augmentedTasks = this.#injectVerificationContext(taskItems);
-		const renderedTasks = augmentedTasks.map(taskItem => renderTemplate(params.context, taskItem));
+		const taskExecutions = augmentedTasks.map((taskItem, index) => ({
+			logicalId: taskItem.id,
+			executionId: uniqueIds[index] ?? taskItem.id,
+			blockers: taskItem.blockers,
+			...renderTemplate(params.context, taskItem),
+		}));
+		let batchGraph: BatchGraph;
+		try {
+			batchGraph = buildBatchGraph(
+				taskExecutions.map(taskExecution => ({
+					id: taskExecution.logicalId,
+					blockers: taskExecution.blockers,
+				})),
+			);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return {
+				content: [{ type: "text", text: `Invalid task blockers: ${message}` }],
+				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+			};
+		}
 		const progressByTaskId = new Map<string, AgentProgress>();
-		for (let index = 0; index < renderedTasks.length; index++) {
-			const renderedTask = renderedTasks[index];
-			progressByTaskId.set(renderedTask.id, {
+		for (let index = 0; index < taskExecutions.length; index++) {
+			const taskExecution = taskExecutions[index];
+			progressByTaskId.set(taskExecution.logicalId, {
 				index,
-				id: renderedTask.id,
+				id: taskExecution.logicalId,
 				agent: params.agent,
 				agentSource: fallbackAgentSource,
 				status: "pending",
-				task: renderedTask.task,
-				assignment: renderedTask.assignment,
-				description: renderedTask.description,
+				task: taskExecution.task,
+				assignment: taskExecution.assignment,
+				description: taskExecution.description,
 				recentTools: [],
 				recentOutput: [],
 				toolCount: 0,
@@ -364,6 +562,16 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		const startedJobs: Array<{ jobId: string; taskId: string }> = [];
 		const failedSchedules: string[] = [];
+		const completedTaskIds = new Set<string>();
+		const runningTaskIds = new Set<string>();
+		const remainingBlockers = new Map<string, number>();
+		for (const taskExecution of taskExecutions) {
+			remainingBlockers.set(
+				taskExecution.logicalId,
+				batchGraph.blockersById.get(taskExecution.logicalId)?.length ?? 0,
+			);
+		}
+		const readyQueue = batchGraph.order.filter(id => (batchGraph.blockersById.get(id)?.length ?? 0) === 0);
 		let completedJobs = 0;
 		let failedJobs = 0;
 
@@ -383,7 +591,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		const syncAsyncProgress = (target: AgentProgress, source: AgentProgress): void => {
 			const index = target.index;
-			Object.assign(target, structuredClone(source), { index });
+			const logicalId = target.id;
+			Object.assign(target, structuredClone(source), { index, id: logicalId });
 		};
 
 		const emitAsyncUpdate = (state: "running" | "completed" | "failed", text: string): void => {
@@ -394,161 +603,259 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			});
 		};
 
-		const maxConcurrency = this.session.settings.get("task.maxConcurrency");
-		const semaphore = new Semaphore(maxConcurrency);
-
-		for (let i = 0; i < taskItems.length; i++) {
-			const taskItem = taskItems[i];
-			if (signal?.aborted) {
-				failedSchedules.push(`${taskItem.id}: cancelled before scheduling`);
-				const progress = progressByTaskId.get(taskItem.id);
-				if (progress) {
-					progress.status = "aborted";
-				}
-				continue;
+		const markTaskTerminal = (logicalId: string, status: AgentProgress["status"], errorMessage?: string): boolean => {
+			if (completedTaskIds.has(logicalId)) return false;
+			completedTaskIds.add(logicalId);
+			completedJobs += 1;
+			if (status !== "completed") {
+				failedJobs += 1;
 			}
+			const progress = progressByTaskId.get(logicalId);
+			if (progress) {
+				progress.status = status;
+				progress.retry = undefined;
+				if (errorMessage) {
+					progress.recentOutput = [errorMessage];
+				}
+			}
+			return true;
+		};
 
-			const uniqueId = uniqueIds[i];
-			const singleParams: TaskParams = { ...params, tasks: [taskItem] };
-			const label = uniqueId;
-			try {
-				const jobId = manager.register(
-					"task",
-					label,
-					async ({ signal: runSignal, reportProgress }) => {
-						const startedAt = Date.now();
-						const progress = progressByTaskId.get(taskItem.id);
-						await semaphore.acquire();
-						if (runSignal.aborted) {
-							semaphore.release();
-							if (progress) {
-								progress.status = "aborted";
-							}
-							throw new Error("Aborted before execution");
-						}
-						if (progress) {
-							progress.status = "running";
-						}
-						await reportProgress(
-							`Running background task ${taskItem.id}...`,
-							buildAsyncDetails("running", startedJobs[0]?.jobId ?? label) as unknown as Record<string, unknown>,
+		const failDependents = (failedPredecessorId: string): void => {
+			const queue = [...(batchGraph.dependentsById.get(failedPredecessorId) ?? [])];
+			const seen = new Set<string>();
+			while (queue.length > 0) {
+				const dependentId = queue.shift();
+				if (!dependentId || seen.has(dependentId)) continue;
+				seen.add(dependentId);
+				if (runningTaskIds.has(dependentId)) continue;
+				const errorMessage = `Predecessor ${failedPredecessorId} failed`;
+				if (markTaskTerminal(dependentId, "failed", errorMessage)) {
+					const dependentIndex = batchGraph.indexById.get(dependentId);
+					if (dependentIndex !== undefined) {
+						void this.#finalizeSkippedTodoRef(
+							augmentedTasks[dependentIndex]!,
+							params.agent,
+							fallbackAgentSource,
+							errorMessage,
 						);
-						try {
-							const result = await this.#executeSync(
-								_toolCallId,
-								singleParams,
-								runSignal,
-								update => {
-									const subProgress = update.details?.progress?.[0];
-									if (!subProgress || !progress || subProgress.status === "pending") return;
-									syncAsyncProgress(progress, subProgress);
-									void reportProgress(
-										`Running background task ${taskItem.id}...`,
-										buildAsyncDetails("running", startedJobs[0]?.jobId ?? label) as unknown as Record<
-											string,
-											unknown
-										>,
-									);
-								},
-								[uniqueId],
-							);
-							const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
-							const singleResult = result.details?.results[0];
-							if (progress) {
-								progress.status = singleResult?.aborted
-									? "aborted"
-									: (singleResult?.exitCode ?? 0) === 0
-										? "completed"
-										: "failed";
-								progress.durationMs = singleResult?.durationMs ?? Math.max(0, Date.now() - startedAt);
-								progress.tokens = singleResult?.tokens ?? 0;
-								progress.extractedToolData = singleResult?.extractedToolData;
-								progress.retry = undefined;
-							}
-							completedJobs += 1;
-							if (singleResult && ((singleResult.aborted ?? false) || singleResult.exitCode !== 0)) {
-								failedJobs += 1;
-							}
-							const remaining = taskItems.length - completedJobs;
-							const isDone = remaining === 0;
-							await reportProgress(
-								isDone
-									? `Background task batch complete: ${completedJobs}/${taskItems.length} finished.`
-									: `Background task batch progress: ${completedJobs}/${taskItems.length} finished (${remaining} running).`,
-								buildAsyncDetails(
-									isDone ? (failedJobs > 0 || failedSchedules.length > 0 ? "failed" : "completed") : "running",
-									startedJobs[0]?.jobId ?? label,
-								) as unknown as Record<string, unknown>,
-							);
-							if (isDone) {
-								emitAsyncUpdate(
-									failedJobs > 0 || failedSchedules.length > 0 ? "failed" : "completed",
-									`Background task batch complete: ${completedJobs}/${taskItems.length} finished.`,
-								);
-							}
-							return finalText;
-						} catch (error) {
-							if (progress) {
-								progress.status = "failed";
-								progress.durationMs = Math.max(0, Date.now() - startedAt);
-								progress.retry = undefined;
-							}
-							completedJobs += 1;
-							failedJobs += 1;
-							const remaining = taskItems.length - completedJobs;
-							const isDone = remaining === 0;
-							await reportProgress(
-								isDone
-									? `Background task batch complete with failures: ${failedJobs} failed.`
-									: `Background task batch progress: ${completedJobs}/${taskItems.length} finished (${remaining} running).`,
-								buildAsyncDetails(
-									isDone ? "failed" : "running",
-									startedJobs[0]?.jobId ?? label,
-								) as unknown as Record<string, unknown>,
-							);
-							if (isDone) {
-								emitAsyncUpdate(
-									"failed",
-									`Background task batch complete with failures: ${failedJobs} failed.`,
-								);
-							}
-							throw error;
-						} finally {
-							semaphore.release();
-						}
-					},
-					{
-						id: label,
-						onProgress: (text, details) => {
-							const progressDetails =
-								(details as TaskToolDetails | undefined) ??
-								buildAsyncDetails("running", startedJobs[0]?.jobId ?? label);
-							onUpdate?.({ content: [{ type: "text", text }], details: progressDetails });
-						},
-					},
-				);
-				startedJobs.push({ jobId, taskId: taskItem.id });
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				failedSchedules.push(`${taskItem.id}: ${message}`);
-				const progress = progressByTaskId.get(taskItem.id);
-				if (progress) {
-					progress.status = "failed";
+					}
+					queue.push(...(batchGraph.dependentsById.get(dependentId) ?? []));
 				}
 			}
-		}
+		};
 
+		const abortPendingTasks = (): void => {
+			for (const taskExecution of taskExecutions) {
+				if (runningTaskIds.has(taskExecution.logicalId)) continue;
+				if (markTaskTerminal(taskExecution.logicalId, "aborted", "Cancelled before start")) {
+					const taskIndex = batchGraph.indexById.get(taskExecution.logicalId);
+					if (taskIndex !== undefined) {
+						void this.#finalizeSkippedTodoRef(
+							augmentedTasks[taskIndex]!,
+							params.agent,
+							fallbackAgentSource,
+							"Cancelled before start",
+							true,
+						);
+					}
+				}
+			}
+		};
+
+		const maxConcurrency = this.session.settings.get("task.maxConcurrency");
+
+		const emitCompletionIfDone = (): void => {
+			if (completedJobs !== taskItems.length) return;
+			const failed = failedJobs > 0 || failedSchedules.length > 0;
+			emitAsyncUpdate(
+				failed ? "failed" : "completed",
+				failed
+					? `Background task batch complete with failures: ${failedJobs + failedSchedules.length} failed.`
+					: `Background task batch complete: ${completedJobs}/${taskItems.length} finished.`,
+			);
+		};
+
+		const scheduleReadyTasks = (): void => {
+			if (signal?.aborted) {
+				abortPendingTasks();
+				emitCompletionIfDone();
+				return;
+			}
+			while (runningTaskIds.size < maxConcurrency && readyQueue.length > 0) {
+				const logicalId = readyQueue.shift();
+				if (!logicalId || completedTaskIds.has(logicalId) || runningTaskIds.has(logicalId)) continue;
+				const taskIndex = batchGraph.indexById.get(logicalId);
+				if (taskIndex === undefined) {
+					markTaskTerminal(logicalId, "failed", `Task ${logicalId} missing from async batch graph`);
+					continue;
+				}
+				const taskExecution = taskExecutions[taskIndex]!;
+				const taskItem = augmentedTasks[taskIndex]!;
+				const singleParams: TaskParams = {
+					...dispatchParams,
+					tasks: [{ ...taskItem, blockers: undefined }],
+				};
+				const label = taskExecution.executionId;
+				try {
+					runningTaskIds.add(logicalId);
+					const jobId = manager.register(
+						"task",
+						label,
+						async ({ signal: runSignal, reportProgress }) => {
+							const startedAt = Date.now();
+							const progress = progressByTaskId.get(logicalId);
+							if (progress) {
+								progress.status = "running";
+							}
+							await reportProgress(
+								`Running background task ${logicalId} (batch ${startedJobs[0]?.jobId ?? label})...`,
+								buildAsyncDetails("running", startedJobs[0]?.jobId ?? label) as unknown as Record<
+									string,
+									unknown
+								>,
+							);
+							try {
+								const result = await this.#executeSync(
+									_toolCallId,
+									singleParams,
+									runSignal,
+									update => {
+										const subProgress = update.details?.progress?.[0];
+										if (!subProgress || !progress || subProgress.status === "pending") return;
+										syncAsyncProgress(progress, subProgress);
+										void reportProgress(
+											`Running background task ${logicalId} (batch ${startedJobs[0]?.jobId ?? label})...`,
+											buildAsyncDetails("running", startedJobs[0]?.jobId ?? label) as unknown as Record<
+												string,
+												unknown
+											>,
+										);
+									},
+									[label],
+								);
+								const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
+								const singleResult = result.details?.results[0];
+								if (progress) {
+									progress.durationMs = singleResult?.durationMs ?? Math.max(0, Date.now() - startedAt);
+									progress.tokens = singleResult?.tokens ?? 0;
+									progress.extractedToolData = singleResult?.extractedToolData;
+									progress.retry = undefined;
+								}
+								if (!singleResult) {
+									markTaskTerminal(logicalId, "failed", "Background task finished without a result");
+									failDependents(logicalId);
+								} else if (singleResult.aborted ?? false) {
+									markTaskTerminal(
+										logicalId,
+										"aborted",
+										singleResult.abortReason ?? singleResult.error ?? "Aborted",
+									);
+								} else if (singleResult.exitCode === 0) {
+									markTaskTerminal(logicalId, "completed");
+									if (!signal?.aborted) {
+										for (const dependentId of batchGraph.dependentsById.get(logicalId) ?? []) {
+											if (completedTaskIds.has(dependentId)) continue;
+											const nextCount = (remainingBlockers.get(dependentId) ?? 0) - 1;
+											remainingBlockers.set(dependentId, nextCount);
+											if (nextCount === 0) {
+												readyQueue.push(dependentId);
+											}
+										}
+									}
+								} else {
+									markTaskTerminal(
+										logicalId,
+										"failed",
+										singleResult.error ??
+											singleResult.stderr ??
+											`Task failed with exit ${singleResult.exitCode}`,
+									);
+									failDependents(logicalId);
+								}
+								runningTaskIds.delete(logicalId);
+								if (signal?.aborted) {
+									abortPendingTasks();
+								}
+								scheduleReadyTasks();
+								const remaining = taskItems.length - completedJobs;
+								const isDone = remaining === 0;
+								await reportProgress(
+									isDone
+										? failedJobs > 0 || failedSchedules.length > 0
+											? `Background task batch complete with failures: ${failedJobs + failedSchedules.length} failed.`
+											: `Background task batch complete: ${completedJobs}/${taskItems.length} finished.`
+										: `Background task batch progress: ${completedJobs}/${taskItems.length} finished (${remaining} remaining).`,
+									buildAsyncDetails(
+										isDone
+											? failedJobs > 0 || failedSchedules.length > 0
+												? "failed"
+												: "completed"
+											: "running",
+										startedJobs[0]?.jobId ?? label,
+									) as unknown as Record<string, unknown>,
+								);
+								emitCompletionIfDone();
+								return finalText;
+							} catch (error) {
+								runningTaskIds.delete(logicalId);
+								markTaskTerminal(
+									logicalId,
+									signal?.aborted ? "aborted" : "failed",
+									error instanceof Error ? error.message : String(error),
+								);
+								if (!signal?.aborted) {
+									failDependents(logicalId);
+								} else {
+									abortPendingTasks();
+								}
+								scheduleReadyTasks();
+								emitCompletionIfDone();
+								throw error;
+							}
+						},
+						{
+							id: label,
+							onProgress: (text, details) => {
+								const progressDetails =
+									(details as TaskToolDetails | undefined) ??
+									buildAsyncDetails("running", startedJobs[0]?.jobId ?? label);
+								onUpdate?.({ content: [{ type: "text", text }], details: progressDetails });
+							},
+						},
+					);
+					startedJobs.push({ jobId, taskId: logicalId });
+				} catch (error) {
+					runningTaskIds.delete(logicalId);
+					const message = error instanceof Error ? error.message : String(error);
+					failedSchedules.push(`${logicalId}: ${message}`);
+					markTaskTerminal(logicalId, "failed", message);
+					void this.#finalizeSkippedTodoRef(taskItem, params.agent, fallbackAgentSource, message);
+					failDependents(logicalId);
+				}
+			}
+			emitCompletionIfDone();
+		};
+
+		scheduleReadyTasks();
 		if (startedJobs.length === 0) {
-			const failureText = `Failed to start background task jobs: ${failedSchedules.join("; ")}`;
+			const failureText =
+				completedJobs === taskItems.length
+					? signal?.aborted
+						? "Background task batch cancelled before scheduling."
+						: failedSchedules.length > 0
+							? `Failed to start background task jobs: ${failedSchedules.join("; ")}`
+							: "No background task jobs were started."
+					: `Failed to start background task jobs: ${failedSchedules.join("; ")}`;
 			return {
 				content: [{ type: "text", text: failureText }],
-				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+				details: { projectAgentsDir: null, results: [], totalDurationMs: 0, progress: getProgressSnapshot() },
 			};
 		}
 
 		emitAsyncUpdate(
 			"running",
-			`Launching ${startedJobs.length} background ${startedJobs.length === 1 ? "task" : "tasks"}...`,
+			`Launching ${startedJobs.length} background ${startedJobs.length === 1 ? "task" : "tasks"} with DAG scheduling...`,
 		);
 
 		const scheduleFailureSummary =
@@ -696,45 +1003,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		}
 
 		const tasks = this.#injectVerificationContext(params.tasks);
-		const missingTaskIndexes: number[] = [];
-		const idIndexes = new Map<string, number[]>();
-
-		for (let i = 0; i < tasks.length; i++) {
-			const id = tasks[i]?.id;
-			if (typeof id !== "string" || id.trim() === "") {
-				missingTaskIndexes.push(i);
-				continue;
-			}
-			const normalizedId = id.toLowerCase();
-			const indexes = idIndexes.get(normalizedId);
-			if (indexes) {
-				indexes.push(i);
-			} else {
-				idIndexes.set(normalizedId, [i]);
-			}
-		}
-
-		const duplicateIds: Array<{ id: string; indexes: number[] }> = [];
-		for (const [normalizedId, indexes] of idIndexes.entries()) {
-			if (indexes.length > 1) {
-				duplicateIds.push({
-					id: tasks[indexes[0]]?.id ?? normalizedId,
-					indexes,
-				});
-			}
-		}
-
-		if (missingTaskIndexes.length > 0 || duplicateIds.length > 0) {
-			const problems: string[] = [];
-			if (missingTaskIndexes.length > 0) {
-				problems.push(`Missing task ids at indexes: ${missingTaskIndexes.join(", ")}`);
-			}
-			if (duplicateIds.length > 0) {
-				const details = duplicateIds.map(entry => `${entry.id} (indexes ${entry.indexes.join(", ")})`).join("; ");
-				problems.push(`Duplicate task ids detected (case-insensitive): ${details}`);
-			}
+		const taskValidationError = this.#validateTaskBatch(tasks);
+		if (taskValidationError) {
 			return {
-				content: [{ type: "text", text: `Invalid tasks: ${problems.join(". ")}` }],
+				content: [{ type: "text", text: `Invalid tasks: ${taskValidationError}` }],
 				details: {
 					projectAgentsDir,
 					results: [],
@@ -862,7 +1134,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				await Bun.write(contextFilePath, compactContext);
 			}
 
-			// Build full prompts with context prepended
 			// Allocate unique IDs across the session to prevent artifact collisions
 			let uniqueIds: string[];
 			if (preAllocatedIds && preAllocatedIds.length === tasks.length) {
@@ -872,10 +1143,13 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					this.session.agentOutputManager ?? new AgentOutputManager(this.session.getArtifactsDir ?? (() => null));
 				uniqueIds = await outputManager.allocateBatch(tasks.map(t => t.id));
 			}
-			const tasksWithUniqueIds = tasks.map((t, i) => ({ ...t, id: uniqueIds[i] }));
-
-			// Build full prompts with context prepended
-			const tasksWithContext = tasksWithUniqueIds.map(t => ({ ...renderTemplate(context, t), todoRef: t.todoRef }));
+			const taskExecutions = tasks.map((task, index) => ({
+				logicalId: task.id,
+				executionId: uniqueIds[index] ?? task.id,
+				blockers: task.blockers,
+				todoRef: task.todoRef,
+				...renderTemplate(context, task),
+			}));
 			const availableSkills = [...(this.session.skills ?? [])];
 			const contextFiles = this.session.contextFiles?.filter(
 				file => path.basename(file.path).toLowerCase() !== "agents.md",
@@ -883,41 +1157,56 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			const promptTemplates = this.session.promptTemplates;
 
 			// Initialize progress for all tasks
-			for (let i = 0; i < tasksWithContext.length; i++) {
-				const t = tasksWithContext[i];
+			for (let i = 0; i < taskExecutions.length; i++) {
+				const taskExecution = taskExecutions[i];
 				progressMap.set(i, {
 					index: i,
-					id: t.id,
+					id: taskExecution.logicalId,
 					agent: agentName,
 					agentSource: agent.source,
 					status: "pending",
-					task: t.task,
-					assignment: t.assignment,
+					task: taskExecution.task,
+					assignment: taskExecution.assignment,
 					recentTools: [],
 					recentOutput: [],
 					toolCount: 0,
 					tokens: 0,
 					durationMs: 0,
 					modelOverride,
-					description: t.description,
+					description: taskExecution.description,
 				});
 			}
 			emitProgress();
 
-			const runTask = async (task: (typeof tasksWithContext)[number], index: number) => {
+			const runTask = async (
+				taskExecution: (typeof taskExecutions)[number],
+				index: number,
+				runSignal: AbortSignal,
+			) => {
+				const originalTask = tasks[index]!;
 				const returnWithTodoRef = async (result: SingleResult): Promise<SingleResult> => {
-					await this.#finalizeTodoRef(task, result);
+					await this.#finalizeTodoRef(originalTask, result);
 					return result;
+				};
+				const updateProgress = (progress: AgentProgress): void => {
+					progressMap.set(index, {
+						...structuredClone(progress),
+						index,
+						id: taskExecution.logicalId,
+					});
+					this.#markTodoRefStarted(originalTask, progress, startedTodoRefs);
+					this.#syncTodoRefChildPhases(originalTask, progress.todoPhases);
+					emitProgress();
 				};
 				if (!isIsolated) {
 					const result = await runSubprocess({
 						cwd: this.session.cwd,
 						agent: effectiveAgent,
-						task: task.task,
-						assignment: task.assignment,
-						description: task.description,
+						task: taskExecution.task,
+						assignment: taskExecution.assignment,
+						description: taskExecution.description,
 						index,
-						id: task.id,
+						id: taskExecution.executionId,
 						taskDepth,
 						modelOverride,
 						thinkingLevel: thinkingLevelOverride,
@@ -927,16 +1216,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						artifactsDir: effectiveArtifactsDir,
 						contextFile: contextFilePath,
 						enableLsp: false,
-						signal,
+						signal: runSignal,
 						eventBus: undefined,
-						onProgress: progress => {
-							progressMap.set(index, {
-								...structuredClone(progress),
-							});
-							this.#markTodoRefStarted(task, progress, startedTodoRefs);
-							this.#syncTodoRefChildPhases(task, progress.todoPhases);
-							emitProgress();
-						},
+						onProgress: updateProgress,
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
@@ -957,11 +1239,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					const taskBaseline = structuredClone(baseline);
 
 					if (effectiveIsolationMode === "fuse-overlay") {
-						isolationDir = await ensureFuseOverlay(repoRoot, task.id);
+						isolationDir = await ensureFuseOverlay(repoRoot, taskExecution.executionId);
 					} else if (effectiveIsolationMode === "fuse-projfs") {
-						isolationDir = await ensureProjfsOverlay(repoRoot, task.id);
+						isolationDir = await ensureProjfsOverlay(repoRoot, taskExecution.executionId);
 					} else {
-						isolationDir = await ensureWorktree(repoRoot, task.id);
+						isolationDir = await ensureWorktree(repoRoot, taskExecution.executionId);
 						await applyBaseline(isolationDir, taskBaseline);
 					}
 
@@ -969,11 +1251,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						cwd: this.session.cwd,
 						worktree: isolationDir,
 						agent: effectiveAgent,
-						task: task.task,
-						assignment: task.assignment,
-						description: task.description,
+						task: taskExecution.task,
+						assignment: taskExecution.assignment,
+						description: taskExecution.description,
 						index,
-						id: task.id,
+						id: taskExecution.executionId,
 						taskDepth,
 						modelOverride,
 						thinkingLevel: thinkingLevelOverride,
@@ -983,16 +1265,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						artifactsDir: effectiveArtifactsDir,
 						contextFile: contextFilePath,
 						enableLsp: false,
-						signal,
+						signal: runSignal,
 						eventBus: undefined,
-						onProgress: progress => {
-							progressMap.set(index, {
-								...structuredClone(progress),
-							});
-							this.#markTodoRefStarted(task, progress, startedTodoRefs);
-							this.#syncTodoRefChildPhases(task, progress.todoPhases);
-							emitProgress();
-						},
+						onProgress: updateProgress,
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
@@ -1017,8 +1292,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							const commitResult = await commitToBranch(
 								isolationDir,
 								taskBaseline,
-								task.id,
-								task.description,
+								taskExecution.executionId,
+								taskExecution.description,
 								commitMsg,
 							);
 							return returnWithTodoRef({
@@ -1028,7 +1303,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							});
 						} catch (mergeErr) {
 							// Agent succeeded but branch commit failed — clean up stale branch
-							const branchName = `spell/task/${task.id}`;
+							const branchName = `spell/task/${taskExecution.executionId}`;
 							await $`git branch -D ${branchName}`.cwd(repoRoot).quiet().nothrow();
 							const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
 							return returnWithTodoRef({ ...result, error: `Merge failed: ${msg}` });
@@ -1037,7 +1312,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					if (result.exitCode === 0) {
 						try {
 							const delta = await captureDeltaPatch(isolationDir, taskBaseline);
-							const patchPath = path.join(effectiveArtifactsDir, `${task.id}.patch`);
+							const patchPath = path.join(effectiveArtifactsDir, `${taskExecution.executionId}.patch`);
 							await Bun.write(patchPath, delta.rootPatch);
 							return returnWithTodoRef({
 								...result,
@@ -1054,12 +1329,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					const message = err instanceof Error ? err.message : String(err);
 					return returnWithTodoRef({
 						index,
-						id: task.id,
+						id: taskExecution.executionId,
 						agent: agent.name,
 						agentSource: agent.source,
-						task: task.task,
-						assignment: task.assignment,
-						description: task.description,
+						task: taskExecution.task,
+						assignment: taskExecution.assignment,
+						description: taskExecution.description,
 						exitCode: 1,
 						output: "",
 						stderr: message,
@@ -1082,40 +1357,53 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				}
 			};
 
-			// Execute in parallel with concurrency limit
-			const { results: partialResults, aborted } = await mapWithConcurrencyLimit(
-				tasksWithContext,
-				maxConcurrency,
-				runTask,
-				signal,
+			const batchResults = await scheduleBatch(
+				taskExecutions.map((taskExecution, index) => ({
+					id: taskExecution.logicalId,
+					blockers: taskExecution.blockers,
+					run: runSignal => runTask(taskExecution, index, runSignal),
+				})),
+				{ maxConcurrency, signal },
 			);
-
-			// Fill in skipped tasks (undefined entries from abort) with placeholder results
-			const results: SingleResult[] = partialResults.map((result, index) => {
-				if (result !== undefined) {
-					return result;
+			const results: SingleResult[] = batchResults.map((batchResult, index) => {
+				if (batchResult.status === "completed" && batchResult.result) {
+					return batchResult.result;
 				}
-				const task = tasksWithContext[index];
+				const taskExecution = taskExecutions[index]!;
+				const errorMessage = batchResult.error ?? "Task execution failed";
+				const aborted = batchResult.status === "aborted";
 				return {
 					index,
-					id: task.id,
+					id: taskExecution.executionId,
 					agent: agentName,
 					agentSource: agent.source,
-					task: task.task,
-					assignment: task.assignment,
-					description: task.description,
+					task: taskExecution.task,
+					assignment: taskExecution.assignment,
+					description: taskExecution.description,
 					exitCode: 1,
 					output: "",
-					stderr: "Skipped (cancelled before start)",
+					stderr: errorMessage,
 					truncated: false,
 					durationMs: 0,
 					tokens: 0,
 					modelOverride,
-					error: "Cancelled before start",
-					aborted: true,
-					abortReason: "Cancelled before start",
+					error: errorMessage,
+					aborted: aborted || undefined,
+					abortReason: aborted ? errorMessage : undefined,
 				};
 			});
+			const aborted = batchResults.some(batchResult => batchResult.status === "aborted");
+			for (let index = 0; index < batchResults.length; index++) {
+				const batchResult = batchResults[index]!;
+				if (batchResult.status === "completed") continue;
+				await this.#finalizeSkippedTodoRef(
+					tasks[index]!,
+					agentName,
+					agent.source,
+					batchResult.error ?? "Task execution failed",
+					batchResult.status === "aborted",
+				);
+			}
 
 			// Aggregate usage from executor results (already accumulated incrementally)
 			const aggregatedUsage = createUsageTotals();

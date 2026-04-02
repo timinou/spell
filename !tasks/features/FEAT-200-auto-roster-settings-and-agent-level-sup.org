@@ -1,0 +1,109 @@
+#+TITLE: Auto-roster settings and agent-level suppression
+#+STATE: DONE
+#+SESSION_ID: 14aa253433821ae2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T21-38-20-786Z_14aa0c3efc821ad9/3-CreateFeat4.jsonl]]
+#+CUSTOM_ID: FEAT-200-auto-roster-settings-and-agent-level-sup
+#+EFFORT: S
+#+LAYER: config
+#+DEPENDS: FEAT-196-task-schema-and-agent-definition-extensi
+#+TODO: ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-02]: Completed via PLAN-077 task auto-roster execution.
+
+* Scope
+** In scope
+- Add ~task.autoRoster~ boolean setting (default: ~true~) to settings schema.
+- Define precedence: ~todo.enabled~ > ~task.autoRoster~ > agent ~roster~ field.
+- Reconcile ~todo.eager~ with auto-roster (they coexist, not conflict).
+- Wire agent ~roster~ field check into task dispatch suppression path.
+
+** Out of scope
+- Per-dispatch ~roster~ override parameter (deferred).
+- Auto-roster creation logic itself (FEAT-3).
+- Prompt changes (FEAT-5).
+
+** Boundary rationale
+Settings are a configuration concern. They define what is enabled, not how it works. Keeping them separate allows the auto-roster logic to be implemented against a clear config interface.
+
+* Tests
+- File: ~packages/coding-agent/test/task/auto-roster-settings.test.ts~
+- Scenario 1: ~task.autoRoster~ defaults to ~true~.
+- Scenario 2: ~task.autoRoster=false~ is respected in ~Settings.isolated()~.
+- Scenario 3: ~todo.enabled=false~ takes precedence over ~task.autoRoster=true~.
+- Scenario 4: ~todo.eager=true~ and ~task.autoRoster=true~ coexist (eager creates initial structure on user message, auto-roster adds batch phases during dispatch).
+- Scenario 5: Setting validation accepts boolean for ~task.autoRoster~.
+
+* Implementation
+
+
+** FEAT-200-auto-roster-settings-and-agent-level-sup::prompt-context-wiring - Supply autoRosterEnabled to prompt rendering context
+- File: ~packages/coding-agent/src/sdk.ts~ (where prompt template variables are assembled)
+- Add ~autoRosterEnabled: settings.get("task.autoRoster") && settings.get("todo.enabled")~ to the template context passed to ~renderPromptTemplate~ calls for system prompts and tool prompts.
+- This enables Handlebars conditionals in prompts (FEAT-198) to toggle auto-roster instructions.
+- Also wire into ~packages/coding-agent/src/tools/index.ts~ where tool descriptions are rendered, so task tool prompt gets the flag.
+** Add setting to schema
+:PROPERTIES:
+:CUSTOM_ID: FEAT-200-auto-roster-settings-and-agent-level-sup::auto-roster-setting
+:END:
+- File: ~packages/coding-agent/src/config/settings-schema.ts~
+- Add ~task.autoRoster~ in the task settings section (near line 1176, after delegation settings):
+  #+begin_src typescript
+  autoRoster: Type.Boolean({
+    default: true,
+    ui: {
+      tab: "tasks",
+      label: "Auto-Roster",
+      description: "Automatically create todo roster entries when dispatching tasks",
+    },
+  }),
+  #+end_src
+
+** Define coexistence policy
+:PROPERTIES:
+:CUSTOM_ID: FEAT-200-auto-roster-settings-and-agent-level-sup::eager-reconciliation
+:DEPENDS: FEAT-200-auto-roster-settings-and-agent-level-sup::auto-roster-setting
+:END:
+- ~todo.eager~ prompts initial ~todo_write replace~ on first user message.
+- ~task.autoRoster~ adds phases during dispatch.
+- These do not conflict: eager sets up the initial plan structure, auto-roster appends batch phases.
+- No code change needed here; verify the model and document in prompt work tracked under FEAT-5.
+
+** Gate on todo.enabled
+:PROPERTIES:
+:CUSTOM_ID: FEAT-200-auto-roster-settings-and-agent-level-sup::disabled-policy
+:DEPENDS: FEAT-200-auto-roster-settings-and-agent-level-sup::auto-roster-setting
+:END:
+- In the auto-roster check chain (FEAT-3), ~todo.enabled=false~ disables auto-roster entirely.
+- Internal ~TodoWriteTool~ calls for ~todoRef~ status updates (~#applyTodoRefStatus~) still work when ~todo.enabled=false~ since they are lifecycle updates, not new creations.
+- Decision: ~todo.enabled~ only gates auto-creation of NEW items, not lifecycle updates of existing ones.
+
+** Wire roster field
+:PROPERTIES:
+:CUSTOM_ID: FEAT-200-auto-roster-settings-and-agent-level-sup::agent-suppression-wiring
+:DEPENDS: FEAT-200-auto-roster-settings-and-agent-level-sup::auto-roster-setting
+:END:
+- In ~TaskTool.execute()~, after resolving the agent definition, check ~agent.roster !== false~.
+- If ~false~, skip auto-roster creation (dispatch proceeds without roster entries).
+- This check is consumed by FEAT-3 suppression logic.
+
+** Settings tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-200-auto-roster-settings-and-agent-level-sup::tests
+:DEPENDS: FEAT-200-auto-roster-settings-and-agent-level-sup::auto-roster-setting FEAT-200-auto-roster-settings-and-agent-level-sup::agent-suppression-wiring
+:END:
+- File: ~packages/coding-agent/test/task/auto-roster-settings.test.ts~.
+
+* Edge Cases
+- Setting changed mid-session via ~/config~: auto-roster behavior reflects current value on next dispatch.
+- ~async.enabled=false~ + ~task.autoRoster=true~: sync dispatch still creates roster entries.
+- ~task.autoRoster=true~ + agent ~roster: false~: suppressed (agent-level overrides global).
+- ~task.autoRoster=false~ + agent ~roster: true~: suppressed (global overrides agent; global is the kill switch).
+
+* Acceptance Criteria
+- ~task.autoRoster~ setting exists with default ~true~, appears in settings UI under ~tasks~ tab.
+- Setting ~task.autoRoster=false~ prevents auto-roster creation.
+- ~todo.enabled=false~ takes precedence over ~task.autoRoster=true~.
+- Agent ~roster: false~ suppresses auto-roster for that agent.
+- ~todo.eager~ and ~task.autoRoster~ coexist without conflict.
+- ~bun check:ts~ passes.
+- ~bun test packages/coding-agent/test/task/auto-roster-settings.test.ts~ passes.

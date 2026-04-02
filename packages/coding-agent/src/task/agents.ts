@@ -26,6 +26,7 @@ interface AgentFrontmatter {
 	model?: string | string[];
 	thinkingLevel?: string;
 	blocking?: boolean;
+	roster?: boolean;
 }
 
 interface EmbeddedAgentDef {
@@ -65,6 +66,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			description: "Low-reasoning agent for strictly mechanical updates or data collection only",
 			model: "pi/smol",
 			thinkingLevel: Effort.Minimal,
+			roster: false,
 		},
 		template: taskMd,
 	},

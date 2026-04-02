@@ -82,14 +82,6 @@ import {
 	formatDiscoverableMCPToolServerSummary,
 	summarizeDiscoverableMCPTools,
 } from "./mcp/discoverable-tool-metadata";
-import { type SpellcastSessionContext } from "./spellcast";
-import { validateSpellcastingToken } from "./spellcast/config";
-import { discoverSpellcastManifests } from "./spellcast/discovery";
-import { formatSpellcastSessionReport } from "./spellcast/session-report";
-import { checkFileAgainstManifests, extractModifiedPaths, formatSpellcastSyncNote } from "./spellcast/sync-detector";
-import { loadSpellcastPublishState } from "./spellcast/state";
-
-
 import { buildMemoryToolDeveloperInstructions, getMemoryRoot, startMemoryStartupTask } from "./memories";
 import { CanvasOrchestratorManager } from "./orchestrators/canvas-orchestrator";
 import { CanvasTaskManager } from "./orchestrators/canvas-task-manager";
@@ -99,6 +91,12 @@ import { AgentSession } from "./session/agent-session";
 import { AuthStorage } from "./session/auth-storage";
 import { convertToLlm } from "./session/messages";
 import { SessionManager } from "./session/session-manager";
+import type { SpellcastSessionContext } from "./spellcast";
+import { validateSpellcastingToken } from "./spellcast/config";
+import { discoverSpellcastManifests } from "./spellcast/discovery";
+import { formatSpellcastSessionReport } from "./spellcast/session-report";
+import { loadSpellcastPublishState } from "./spellcast/state";
+import { checkFileAgainstManifests, extractModifiedPaths, formatSpellcastSyncNote } from "./spellcast/sync-detector";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
@@ -405,6 +403,7 @@ export interface BuildSystemPromptOptions {
 	cwd?: string;
 	appendPrompt?: string;
 	repeatToolDescriptions?: boolean;
+	autoRosterEnabled?: boolean;
 }
 
 /**
@@ -417,6 +416,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		contextFiles: options.contextFiles,
 		appendSystemPrompt: options.appendPrompt,
 		repeatToolDescriptions: options.repeatToolDescriptions,
+		autoRosterEnabled: options.autoRosterEnabled,
 	});
 }
 
@@ -675,7 +675,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
 		return { authStorage, modelRegistry };
 	});
-	const spellcastingWarning = await logger.timeAsync("validateSpellcastingToken", () => validateSpellcastingToken(authStorage));
+	const spellcastingWarning = await logger.timeAsync("validateSpellcastingToken", () =>
+		validateSpellcastingToken(authStorage),
+	);
 	const settings = await logger.timeAsync(
 		"settings",
 		async () => options.settings ?? (await Settings.init({ cwd, agentDir })),
@@ -852,33 +854,31 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	);
 
 	const domainPromptContext = await logger.timeAsync("loadDomainPromptContext", () =>
-
 		loadDomainPromptContext(options.domainManifest, cwd),
-
 	);
 
 	const baseContextFiles = await logger.timeAsync(
-
 		"discoverContextFiles",
 
 		async () => options.contextFiles ?? (await discoverContextFiles(cwd, agentDir)),
-
 	);
 
 	const contextFiles = [...domainPromptContext.contextFiles, ...baseContextFiles];
 
-	const spellcastDiscovery = await logger.timeAsync("discoverSpellcastManifests", () => discoverSpellcastManifests(cwd));
+	const spellcastDiscovery = await logger.timeAsync("discoverSpellcastManifests", () =>
+		discoverSpellcastManifests(cwd),
+	);
 
-	const spellcastPublishState = await logger.timeAsync("loadSpellcastPublishState", () => loadSpellcastPublishState(cwd));
+	const spellcastPublishState = await logger.timeAsync("loadSpellcastPublishState", () =>
+		loadSpellcastPublishState(cwd),
+	);
 
 	const spellcastSessionContext: SpellcastSessionContext = {
-
 		discovery: spellcastDiscovery,
 
 		discoveredManifests: spellcastDiscovery.manifests,
 
 		publishState: spellcastPublishState,
-
 	};
 
 	const spellcastReport = formatSpellcastSessionReport(spellcastSessionContext) || undefined;
@@ -1415,6 +1415,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 		const appendPrompt = joinPromptSections(domainPromptContext.systemPrompt, ...appendPromptSections);
 		const appendPromptWithoutDomain = joinPromptSections(...appendPromptSections);
+		const autoRosterEnabled = settings.get("todo.enabled") && settings.get("task.autoRoster");
 		const defaultPrompt = await buildSystemPromptInternal({
 			cwd,
 			skills,
@@ -1430,6 +1431,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			mcpDiscoveryMode: hasDiscoverableMCPTools,
 			mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
 			eagerTasks,
+			autoRosterEnabled,
 		});
 
 		if (options.systemPrompt === undefined) {
@@ -1455,6 +1457,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				mcpDiscoveryMode: hasDiscoverableMCPTools,
 				mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
 				eagerTasks,
+				autoRosterEnabled,
 			});
 		}
 		return options.systemPrompt(defaultPrompt);
@@ -2124,7 +2127,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		await session.followUp(`[Canvas agent request from window ${payload.windowId}]\n\n${prompt}`);
 	});
 	return {
-
 		session,
 
 		extensionsResult,
@@ -2149,6 +2151,5 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		taskManager,
 
 		loopManager,
-
 	};
 }

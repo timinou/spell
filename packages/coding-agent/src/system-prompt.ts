@@ -370,6 +370,8 @@ export interface BuildSystemPromptOptions {
 	mcpDiscoveryServerSummaries?: string[];
 	/** Encourage the agent to delegate via tasks unless changes are trivial. */
 	eagerTasks?: boolean;
+	/** Whether task dispatches auto-create roster entries in this session. */
+	autoRosterEnabled?: boolean;
 	/** Tool names classified as specialized tier (get compact descriptions in prompt). */
 	specializedToolNames?: string[];
 }
@@ -395,6 +397,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		mcpDiscoveryMode = false,
 		mcpDiscoveryServerSummaries = [],
 		eagerTasks = false,
+		autoRosterEnabled = false,
 		specializedToolNames = [],
 	} = options;
 	const resolvedCwd = cwd ?? getProjectDir();
@@ -533,6 +536,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		hasMCPDiscoveryServers: mcpDiscoveryServerSummaries.length > 0,
 		mcpDiscoveryServerSummaries,
 		eagerTasks,
+		autoRosterEnabled,
 		specializedToolNames,
 		hasSpecializedTools: specializedToolNames.length > 0,
 	};

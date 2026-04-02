@@ -1221,6 +1221,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.autoRoster": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tasks",
+			label: "Auto-Roster",
+			description: "Automatically create todo roster entries when dispatching tasks",
+		},
+	},
+
 	"task.maxConcurrency": {
 		type: "number",
 		default: 32,
@@ -1234,7 +1244,7 @@ export const SETTINGS_SCHEMA = {
 
 	"task.maxRecursionDepth": {
 		type: "number",
-		default: 2,
+		default: 4,
 		ui: {
 			tab: "tasks",
 			label: "Max Task Recursion",

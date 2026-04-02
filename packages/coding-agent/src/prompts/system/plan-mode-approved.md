@@ -109,11 +109,40 @@ Your todo list has been pre-populated from the plan's execution structure.
 - Use the `task` tool to parallelize independent tasks within the same phase when it improves throughput.
 - After each completed step, you **MUST** immediately update `todo_write` so progress stays visible.
 {{else}}
+{{#if autoRosterEnabled}}
+Before execution, you **SHOULD** initialize todos with `todo_write` only when you need gates, org links, or a manually curated roster before dispatch.
+
+{{#if waves}}
+### Wave-based Task Dispatch
+The plan's Execution Manifest uses wave structure. Prefer dispatching work through `task` batches and let auto-roster create the visible phases/items:
+1. **Set `phase` to the wave name** — for example `foundation`, `core`, or `verify`
+2. **One task per wave entry** — carry the execution-manifest item into the `task.tasks[]` array
+3. **Use `blockers` for intra-batch dependencies** — express DAG edges with logical task IDs inside the batch
+4. **Omit `todoRef` for new work** — task dispatch auto-creates the roster entries
+5. **Use `todoRef` only to link to pre-existing manual todo items** — for example when you created gated/org-linked items via `todo_write` first
+6. **Use `todo_write` after dispatch when you need to add gates, org links, or notes to the auto-created roster**
+7. **Read child org items** — use `org get` on each child item's CUSTOM_ID to populate task `details` from matching sub-outline steps when you need richer execution context
+
+Example:
+```
+task {
+  agent: "task",
+  phase: "foundation",
+  tasks: [
+    { id: "DefineTypes", description: "Define type interfaces", assignment: "..." },
+    { id: "DefineSchema", description: "Define parser schema", blockers: ["DefineTypes"], assignment: "..." }
+  ]
+}
+```
+{{else}}
+When the plan's execution manifest specifies dependencies between items (via `[[id:…]` links or `:DEPENDS:` properties), express these as `blockers` in the `task` batch so the dependency gate enforces correct execution order. Set `phase` to name the auto-created roster phase. Use `todo_write` only when you need pre-structured gates or org links; otherwise omit `todoRef` and let auto-roster create the tracking items.
+{{/if}}
+After each completed step, you **MUST** immediately update `todo_write` if you are using it so progress stays visible.
+{{else}}
 Before execution, you **MUST** initialize todo tracking for this plan with `todo_write`.
 
 {{#if waves}}
 ### Wave-based Todo Initialization
-
 The plan's Execution Manifest uses wave structure. Create one todo phase per wave, with tasks from each wave entry:
 1. **One phase per wave** — name each phase after the wave (e.g., `foundation`, `core`, `verify`)
 2. **One task per wave entry** — each `[[id:…]]` entry in a wave becomes a task in that phase
@@ -146,6 +175,7 @@ When creating todos from plan execution manifest items, set `orgItemId` on each 
 {{/if}}
 When spawning task subagents to work on a todo item, set `todoRef` on the task to the todo item's ID (e.g., `task-3`) so verification requirements are automatically injected into the subagent's context.
 After each completed step, you **MUST** immediately update `todo_write` so progress stays visible.
+{{/if}}
 {{/if}}
 If a `todo_write` call fails, you **MUST** fix the todo payload and retry before continuing silently.
 {{/has}}

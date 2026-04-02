@@ -45,6 +45,12 @@ export const taskItemSchema = Type.Object({
 		description:
 			"Complete per-task instructions the subagent executes. Must follow the Target/Change/Edge Cases/Acceptance structure. Only include per-task deltas — shared background belongs in `context`.",
 	}),
+	blockers: Type.Optional(
+		Type.Array(Type.String(), {
+			description:
+				"Task IDs within this batch that must complete before this task starts. Enables intra-batch DAG scheduling.",
+		}),
+	),
 	todoRef: Type.Optional(
 		Type.String({
 			description:
@@ -57,6 +63,12 @@ export type TaskItem = Static<typeof taskItemSchema>;
 const createTaskSchema = (options: { isolationEnabled: boolean }) => {
 	const properties = {
 		agent: Type.String({ description: "Agent type for all tasks in this batch" }),
+		phase: Type.Optional(
+			Type.String({
+				description:
+					"Phase name for auto-created roster entries (e.g. 'Investigation'). When omitted, a name is derived from the batch context.",
+			}),
+		),
 		context: Type.Optional(
 			Type.String({
 				description:
@@ -131,6 +143,8 @@ export interface AgentDefinition {
 	thinkingLevel?: ThinkingLevel;
 	output?: unknown;
 	blocking?: boolean;
+	/** Whether task dispatches using this agent auto-create todo roster entries. Default: true. */
+	roster?: boolean;
 	source: AgentSource;
 	filePath?: string;
 }

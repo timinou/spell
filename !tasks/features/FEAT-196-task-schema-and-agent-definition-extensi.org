@@ -1,0 +1,141 @@
+#+TITLE: Task schema and agent definition extensions for auto-roster
+#+STATE: DONE
+#+SESSION_ID: 14aa0c3efc821ad9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-01T21-38-20-786Z_14aa0c3efc821ad9.jsonl]]
+#+CUSTOM_ID: FEAT-196-task-schema-and-agent-definition-extensi
+#+EFFORT: S
+#+LAYER: core
+
+NOTE [2026-04-02]: Completed via PLAN-077 task auto-roster execution.
+
+* Initial Message
+
+with th erecent improvement to waves and dags and tasks, can several task requests be sent asynchronously and added to the overall
+ roster, with or without a todo write?
+
+* Scope
+** In scope
+- Add ~blockers?: string[]~ to ~taskItemSchema~ in ~packages/coding-agent/src/task/types.ts~
+- Add ~phase?: string~ to ~TaskParams~ via ~createTaskSchema~ in ~packages/coding-agent/src/task/types.ts~
+- Add ~roster?: boolean~ to ~AgentDefinition~ interface in ~packages/coding-agent/src/task/types.ts~
+- Update agent frontmatter parsing in ~packages/coding-agent/src/discovery/helpers.ts~ to extract ~roster~ field
+- Set ~roster: false~ on ~quick_task~ bundled agent definition in ~packages/coding-agent/src/task/agents.ts~
+- Update task.md prompt to document new schema fields
+
+** Out of scope
+- Dispatch logic changes (FEAT-2)
+- Auto-roster creation logic (FEAT-3)
+- Settings integration (FEAT-4)
+
+** Boundary rationale
+Schema is the foundation layer. All other items depend on these type definitions existing. Keeping schema changes isolated ensures the type system is correct before behavior is wired.
+
+* Tests
+- File: ~packages/coding-agent/test/task/schema-extensions.test.ts~
+- Scenario 1: ~taskItemSchema~ validates objects with optional ~blockers~ array of strings
+- Scenario 2: ~taskItemSchema~ validates objects without ~blockers~ (backward compatible)
+- Scenario 3: Task params schema accepts optional ~phase~ string
+- Scenario 4: Agent frontmatter with ~roster: false~ parsed into ~AgentDefinition.roster = false~
+- Scenario 5: Agent frontmatter without ~roster~ field results in ~roster~ being ~undefined~ (default truthy)
+- Scenario 6: Bundled ~quick_task~ agent definition has ~roster: false~
+
+Implementation-first sequencing is preferred here since schema definitions must exist before tests can reference the types.
+
+* Implementation
+
+** Add blockers field to TaskItem schema
+:PROPERTIES:
+:CUSTOM_ID: FEAT-001-task-schema-extensions::task-item-blockers
+:END:
+- File: ~packages/coding-agent/src/task/types.ts~
+- Add to ~taskItemSchema~ (line 36-54):
+  #+begin_src typescript
+  blockers: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Task IDs within this batch that must complete before this task starts. Enables intra-batch DAG scheduling.",
+    }),
+  ),
+  #+end_src
+- This is additive; existing callers that omit ~blockers~ are unaffected.
+
+** Add phase field to TaskParams
+:PROPERTIES:
+:CUSTOM_ID: FEAT-001-task-schema-extensions::task-params-phase
+:END:
+- File: ~packages/coding-agent/src/task/types.ts~
+- Add to ~createTaskSchema~ properties object (line 58-76):
+  #+begin_src typescript
+  phase: Type.Optional(
+    Type.String({
+      description: "Phase name for auto-created roster entries (e.g., 'Investigation'). When omitted, a name is derived from the batch context.",
+    }),
+  ),
+  #+end_src
+
+** Add roster field to AgentDefinition
+:PROPERTIES:
+:CUSTOM_ID: FEAT-001-task-schema-extensions::agent-roster-field
+:END:
+- File: ~packages/coding-agent/src/task/types.ts~
+- Add to ~AgentDefinition~ interface (line 124-136):
+  #+begin_src typescript
+  /** Whether task dispatches using this agent auto-create todo roster entries. Default: true. */
+  roster?: boolean;
+  #+end_src
+
+** Update frontmatter parsing
+:PROPERTIES:
+:CUSTOM_ID: FEAT-001-task-schema-extensions::frontmatter-parsing
+:DEPENDS: FEAT-001-task-schema-extensions::agent-roster-field
+:END:
+- File: ~packages/coding-agent/src/discovery/helpers.ts~
+- In ~parseAgentFields~ (around line 212-258), extract ~roster~ from frontmatter:
+  #+begin_src typescript
+  roster: typeof raw.roster === "boolean" ? raw.roster : undefined,
+  #+end_src
+- Also add ~roster~ to ~ParsedAgentFields~ interface (line 197-205).
+
+** Set quick_task roster default
+:PROPERTIES:
+:CUSTOM_ID: FEAT-001-task-schema-extensions::bundled-agents
+:DEPENDS: FEAT-001-task-schema-extensions::agent-roster-field
+:END:
+- File: ~packages/coding-agent/src/task/agents.ts~
+- In the ~quick_task~ embedded definition (around line 62-68), set ~roster: false~.
+
+** Update task prompt schema docs
+:PROPERTIES:
+:CUSTOM_ID: FEAT-001-task-schema-extensions::task-prompt-schema
+:DEPENDS: FEAT-001-task-schema-extensions::task-item-blockers FEAT-001-task-schema-extensions::task-params-phase
+:END:
+- File: ~packages/coding-agent/src/prompts/tools/task.md~
+- Add ~phase~ to parameters section.
+- Add ~blockers~ to task item parameters.
+- Brief description only; full auto-roster docs deferred to FEAT-5.
+
+** Write schema and parsing tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-001-task-schema-extensions::tests
+:DEPENDS: FEAT-001-task-schema-extensions::frontmatter-parsing FEAT-001-task-schema-extensions::bundled-agents
+:END:
+- File: ~packages/coding-agent/test/task/schema-extensions.test.ts~
+- Test TypeBox schema validation for new optional fields.
+- Test agent frontmatter parsing for ~roster~ field.
+- Test bundled agent defaults.
+
+* Edge Cases
+- Missing ~blockers~ field: treated as no dependencies (backward compatible, ~undefined~)
+- ~blockers: []~: treated same as ~undefined~ (no dependencies)
+- ~phase~ not provided: downstream logic (FEAT-3) handles default naming
+- ~roster~ undefined on agent: default behavior is ~true~ (auto-roster enabled)
+- Existing agent definitions without ~roster~ in frontmatter: unchanged behavior
+
+* Acceptance Criteria
+- ~TaskItem~ type includes optional ~blockers: string[]~ field
+- ~TaskParams~ type includes optional ~phase: string~ field
+- ~AgentDefinition~ interface includes optional ~roster: boolean~ field
+- TypeBox schema validation passes for objects with and without new fields
+- Agent frontmatter with ~roster: false~ parsed correctly into ~AgentDefinition~
+- ~quick_task~ bundled agent has ~roster: false~
+- ~bun check:ts~ passes with no new type errors
+- All existing tests in ~packages/coding-agent/test/task/~ continue to pass
