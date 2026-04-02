@@ -1,0 +1,43 @@
+#+TITLE: Unify Phoenix Inspector backend request protocol
+#+STATE: DONE
+#+SESSION_ID: 14ab3a534ed05f14
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T19-38-09-083Z_14ab3a534ed05f14.jsonl]]
+#+CUSTOM_ID: BUG-115-unify-phoenix-inspector-backend-request
+#+DEPENDS: BUG-114-normalize-phoenix-inspector-canvas-launc
+
+NOTE [2026-04-02]: Completed by PLAN-098: Phoenix Inspector now emits canonical agent/tool envelopes and the runtime adapts them.
+
+* Initial Message
+
+In this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-02T19-36-31-475Z_14ab39f3fce8c68f.jsonl
+ ID: 14ab39f3fce8c68f
+
+the canvas did not send the irght thing, probably because of the canvas vs extension mode. can you fix this structurally?
+
+:PROPERTIES:
+:EFFORT: 4h
+:PRIORITY: A
+:LAYER: integration
+:END:
+
+* Problem
+`inspector.qml` currently emits different request payloads depending on backend mode: extension launches use action-based payloads like `send_to_agent`, `read_source_excerpt`, and `tidewave_get_docs`, while canvas launches use the canvas-native `_tier` and `_tool` envelopes. This duplicates transport logic in QML and makes mode-specific drift inevitable.
+
+* Scope
+- Repo: `/home/user/code/ora/hotelcomm/ecosystem/agentmaker`
+- Files: `.spell/extensions/phoenix-inspector/inspector.qml`, `.spell/extensions/phoenix-inspector/index.ts`, `.spell/extensions/phoenix-inspector/helpers.ts`, and targeted tests in `.spell/extensions/phoenix-inspector/index.test.ts`
+- Non-goals: do not redesign Phoenix Inspector UI or broaden Tidewave behavior beyond protocol unification
+
+* Change
+- Make one request envelope canonical in QML for agent handoff, source reads, Tidewave lookups, and quick-fix dispatch.
+- Remove backend-specific payload construction from `inspector.qml`; backend differences may remain only in capability checks or response adaptation.
+- Update the extension runtime adapter in `index.ts` to consume the canonical requests and either execute them or return an explicit structured error when the capability is unavailable.
+- Update helper types so launch props describe capabilities without reintroducing transport-specific branching.
+
+* Acceptance
+- `inspector.qml` no longer constructs one payload shape for extension mode and a different payload shape for canvas mode.
+- Extension-backed launches still handle source excerpts, Tidewave lookups, and agent handoff through the canonical request path.
+- Unsupported capabilities, if any remain, surface explicit structured errors via the same reply protocol rather than silent divergence.
+- Verification command: `bun test .spell/extensions/phoenix-inspector/index.test.ts`

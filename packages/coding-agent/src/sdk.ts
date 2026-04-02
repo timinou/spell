@@ -2120,14 +2120,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 	}
 
-	// Wire full agent requests from canvas: route to session.followUp()
+	// Wire full agent requests from canvas: route to session.followUp() and acknowledge optional replies.
 	eventBus.subscribe(CANVAS_AGENT_CHANNEL, async (raw: unknown) => {
-		if (!session) return;
 		const payload = raw as CanvasAgentPayload;
-		const prompt = payload.context
-			? `${payload.assignment}\n\nContext: ${JSON.stringify(payload.context)}`
-			: payload.assignment;
-		await session.followUp(`[Canvas agent request from window ${payload.windowId}]\n\n${prompt}`);
+		if (!session) {
+			payload.reply?.({ error: "Canvas agent request failed: no active session." });
+			return;
+		}
+		try {
+			const prompt = payload.context
+				? `${payload.assignment}\n\nContext: ${JSON.stringify(payload.context)}`
+				: payload.assignment;
+			await session.followUp(`[Canvas agent request from window ${payload.windowId}]\n\n${prompt}`);
+			payload.reply?.({
+				ok: true,
+				status: "submitted",
+				message: "Submitted the Phoenix inspector request to the active agent session.",
+			});
+		} catch (error) {
+			payload.reply?.({
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	});
 	return {
 		session,

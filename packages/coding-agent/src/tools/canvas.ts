@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { WindowInfo } from "@oh-my-pi/pi-qml";
@@ -24,6 +25,7 @@ const canvasSchema = Type.Object({
 		[
 			Type.Literal("write"),
 			Type.Literal("launch"),
+			Type.Literal("open"),
 			Type.Literal("close"),
 			Type.Literal("send_message"),
 			Type.Literal("list_windows"),
@@ -60,6 +62,67 @@ export interface CanvasToolDetails {
 	lintWarnings?: number;
 	lintErrors?: number;
 	meta?: OutputMeta;
+}
+
+type CanvasLaunchSourceKind = "file" | "directory";
+
+export interface NormalizedCanvasLaunchRequest {
+	action: "launch";
+	id: string;
+	path: string;
+}
+
+async function tryStatCanvasPath(filePath: string): Promise<fs.Stats | null> {
+	try {
+		return await fs.promises.stat(filePath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+		throw error;
+	}
+}
+
+function defaultCanvasWindowId(filePath: string, sourceKind: CanvasLaunchSourceKind): string {
+	if (sourceKind === "directory") return path.basename(path.dirname(filePath));
+	const baseName = path.basename(filePath, path.extname(filePath));
+	return baseName === "inspector" ? path.basename(path.dirname(filePath)) : baseName;
+}
+
+async function resolveCanvasDirectoryEntrypoint(dirPath: string): Promise<string> {
+	const directoryName = path.basename(dirPath);
+	const preferredEntries = ["inspector.qml", `${directoryName}.qml`];
+	for (const entryName of preferredEntries) {
+		const candidatePath = path.join(dirPath, entryName);
+		const candidateStat = await tryStatCanvasPath(candidatePath);
+		if (candidateStat?.isFile()) return candidatePath;
+	}
+
+	const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+	const qmlFiles = entries.filter(entry => entry.isFile() && entry.name.endsWith(".qml"));
+	if (qmlFiles.length === 1) return path.join(dirPath, qmlFiles[0].name);
+
+	throw new ToolError(
+		`launch target '${dirPath}' is a directory. Provide a .qml file or include a deterministic entrypoint (inspector.qml, ${directoryName}.qml, or a single .qml file).`,
+	);
+}
+
+export async function normalizeCanvasLaunchRequest(
+	params: Pick<CanvasToolInput, "action" | "id" | "path">,
+	resolvePath: (filePath: string) => Promise<string>,
+): Promise<NormalizedCanvasLaunchRequest | null> {
+	if (params.action !== "launch" && params.action !== "open") return null;
+	if (!params.path) throw new ToolError(`${params.action} action requires 'path'`);
+
+	const requestedPath = await resolvePath(params.path);
+	const requestedStat = await tryStatCanvasPath(requestedPath);
+	const sourceKind: CanvasLaunchSourceKind = requestedStat?.isDirectory() ? "directory" : "file";
+	const launchPath =
+		sourceKind === "directory" ? await resolveCanvasDirectoryEntrypoint(requestedPath) : requestedPath;
+	const id =
+		typeof params.id === "string" && params.id.trim().length > 0
+			? params.id.trim()
+			: defaultCanvasWindowId(launchPath, sourceKind);
+
+	return { action: "launch", id, path: launchPath };
 }
 
 /** Channel name for QML window events emitted to the EventBus. */
@@ -130,6 +193,8 @@ export interface CanvasAgentPayload {
 	windowId: string;
 	assignment: string;
 	context?: Record<string, unknown>;
+	/** Optional callback to deliver submission status back to the originating window. */
+	reply?: (result: Record<string, unknown>) => void;
 }
 
 /** Payload emitted on CANVAS_TASK_CHANNEL when QML sends _tier: 'task'. */
@@ -256,7 +321,7 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 
 		const nextProps = { ...props };
 		const inspectorDir = path.dirname(absPath);
-		nextProps.backendMode = "canvas";
+		nextProps.taskTierSupported = true;
 		if (typeof nextProps.quickFixSystemPrompt !== "string") {
 			try {
 				nextProps.quickFixSystemPrompt = await Bun.file(path.join(inspectorDir, "prompts/frontend-fix.md")).text();
@@ -461,6 +526,8 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 					eventBus.enqueue(CANVAS_ORCHESTRATOR_CHANNEL, payload, Priority.P1);
 					this.#drainQueuedCanvasEvents(eventBus);
 				} else if (tier === "agent" && typeof p._assignment === "string") {
+					const rid = typeof p._rid === "string" ? p._rid : undefined;
+					const agentBridge = getBridge();
 					const payload: CanvasAgentPayload = {
 						windowId: id,
 						assignment: p._assignment,
@@ -468,6 +535,11 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 							typeof p.context === "object" && p.context !== null
 								? (p.context as Record<string, unknown>)
 								: undefined,
+						reply: rid
+							? result => {
+									void agentBridge.sendMessage(id, { _rid: rid, ...result });
+								}
+							: undefined,
 					};
 					eventBus.enqueue(CANVAS_AGENT_CHANNEL, payload, Priority.P1);
 					this.#drainQueuedCanvasEvents(eventBus);
@@ -556,7 +628,10 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 		_onUpdate?: AgentToolUpdateCallback<CanvasToolDetails>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<CanvasToolDetails>> {
-		const { action } = params;
+		const normalizedLaunch = await normalizeCanvasLaunchRequest(params, filePath =>
+			this.#resolveLaunchPath(filePath),
+		);
+		const action = normalizedLaunch?.action ?? params.action;
 
 		// For actions that can use a remote Android device, ensure Spell is connected.
 		// write and screenshot are local-only; all others can route to Android.
@@ -584,15 +659,15 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 			}
 
 			case "launch": {
-				const id = params.id;
-				const filePath = params.path;
+				const id = normalizedLaunch?.id ?? params.id;
+				const filePath = normalizedLaunch?.path ?? params.path;
 				if (!id) throw new ToolError("launch action requires 'id'");
 				if (!filePath) throw new ToolError("launch action requires 'path'");
 
 				const remote = this.#remoteBridge();
 				if (remote) {
 					// Remote mode: read the local QML file and push its content to Android.
-					const abs = await this.#resolveLaunchPath(filePath);
+					const abs = filePath;
 					const content = await Bun.file(abs).text();
 					const props = await this.#maybeAugmentPhoenixInspectorLaunchProps(
 						abs,
@@ -626,7 +701,7 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 					return toolResult(details).text(text).done();
 				}
 
-				const abs = await this.#resolveLaunchPath(filePath);
+				const abs = filePath;
 				const bridge = this.#ensureBridge();
 
 				// Service-aware launch: resolve storageName from registry

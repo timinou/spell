@@ -1,0 +1,41 @@
+#+TITLE: Prove Phoenix Inspector mode parity regression
+#+STATE: DONE
+#+SESSION_ID: 14ab3a534ed05f14
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T19-38-09-083Z_14ab3a534ed05f14.jsonl]]
+#+CUSTOM_ID: BUG-116-prove-phoenix-inspector-mode-parity-regr
+#+DEPENDS: BUG-114-normalize-phoenix-inspector-canvas-launc BUG-115-unify-phoenix-inspector-backend-request
+
+NOTE [2026-04-02]: Completed by PLAN-098: focused regressions and manual replay artifacts captured for launch/protocol parity.
+
+* Initial Message
+
+In this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-02T19-36-31-475Z_14ab39f3fce8c68f.jsonl
+ ID: 14ab39f3fce8c68f
+
+the canvas did not send the irght thing, probably because of the canvas vs extension mode. can you fix this structurally?
+
+:PROPERTIES:
+:EFFORT: 2h
+:PRIORITY: A
+:LAYER: verification
+:END:
+
+* Problem
+The failure is only trustworthy when both halves are proven together: the shared Spell canvas layer must accept the broken launch intent from session `14ab39f3fce8c68f`, and Phoenix Inspector must emit the same request semantics regardless of extension-backed or canvas-backed launch.
+
+* Scope
+- Repos: `/home/user/code/ora/spell` and `/home/user/code/ora/hotelcomm/ecosystem/agentmaker`
+- Files: new or updated targeted tests plus a manual proof artifact from a fresh replay
+- Non-goals: do not add broad end-to-end suites unrelated to Phoenix Inspector launch/protocol parity
+
+* Change
+- Add/extend targeted automated tests proving launch normalization in Spell and protocol unification in Phoenix Inspector.
+- Perform a focused manual replay from the agentmaker repo using the same user intent: `open the phoenix-inspector canvas at .spell/extensions/phoenix-inspector/`.
+- Capture proof that the inspector opens from the directory path without the initial `canvas` validation failure and that follow-up inspector requests use the canonical protocol path.
+
+* Acceptance
+- Automated proof exists in both repos for the regression-prone contracts touched by BUG-114 and BUG-115.
+- Manual proof includes: (1) the fresh session transcript path or session id, and (2) a screenshot or transcript excerpt proving Phoenix Inspector opened directly from the directory target without the earlier invalid `open`/missing-`id` recovery loop.
+- Verification commands: `bun test packages/coding-agent/test/tools/canvas-launch-normalization.test.ts` and `bun test .spell/extensions/phoenix-inspector/index.test.ts`
