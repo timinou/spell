@@ -4,8 +4,8 @@ import type { RpcClient } from "../../src/rpc/rpc-client";
 import type { BridgeRpcCommand, RpcEvent, RpcSpawnOptions } from "../../src/rpc/types";
 import type { AuthContext } from "../../src/telegram/bot/auth";
 import { COMMANDS, type CommandContext } from "../../src/telegram/commands";
-import { handleBtwCommand } from "../../src/telegram/commands/btw";
 import { handleApprovalCallback, parseApprovalCallbackData } from "../../src/telegram/commands/approval";
+import { handleBtwCommand } from "../../src/telegram/commands/btw";
 import { handleModeCommand } from "../../src/telegram/commands/mode";
 import { handleProjectCommand } from "../../src/telegram/commands/project";
 import {
@@ -57,14 +57,14 @@ function mockAuthContext(opts: MockAuthContextOptions): MockAuthContext {
 		},
 		callbackQuery: callbackData
 			? {
-				id: "callback-1",
-				data: callbackData,
-				message: {
-					message_id: opts.callbackMessageId ?? 7,
-					chat: { id: chatId, type: "private" as const },
-					date: Math.floor(Date.now() / 1000),
-				},
-			}
+					id: "callback-1",
+					data: callbackData,
+					message: {
+						message_id: opts.callbackMessageId ?? 7,
+						chat: { id: chatId, type: "private" as const },
+						date: Math.floor(Date.now() / 1000),
+					},
+				}
 			: undefined,
 		reply: async (text: string, options?: Record<string, unknown>) => {
 			replies.push({ text, options });

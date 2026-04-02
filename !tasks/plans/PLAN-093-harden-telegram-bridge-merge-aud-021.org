@@ -124,4 +124,4 @@ After all items complete:
 - Bot lifecycle implementation and tests: [[file:packages/spell-server/src/telegram/service.ts]], [[file:packages/spell-server/src/server.ts]], [[file:packages/spell-server/test/telegram/service.test.ts]], [[file:packages/spell-server/test/server-lifecycle.test.ts]]
 - Dead lifecycle cleanup and schema docs: [[file:packages/spell-server/src/session/index.ts]], [[file:packages/spell-server/docs/architecture.md]], [[file:packages/spell-server/docs/kdl-schema-reference.md]], [[file:packages/spell-server/test/session/lifecycle.test.ts]]
 *** Deviations
-- None.
+- Deferred ProcessManager-to-SessionManager unification remains outstanding as [[id:FUP-030-unify-processmanager-onto-sessionmanager]].

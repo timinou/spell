@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { resolveDefaultConfigDir } from "../src/commands/server";
 
 const CLI_PATH = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -39,6 +40,7 @@ const VALID_CHANNELS_KDL = `telegram {
 const tempDirs = new Set<string>();
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	await Promise.allSettled(
 		[...tempDirs].map(async tempDir => {
 			tempDirs.delete(tempDir);
@@ -93,6 +95,25 @@ describe("server command config discovery", () => {
 			process.kill("SIGTERM");
 			expect([0, 143]).toContain(await process.exited);
 		}
+	});
+});
+
+describe("resolveDefaultConfigDir", () => {
+	it("falls back to ~/.spell on ENOENT from ./.spell", async () => {
+		const homeDir = "/tmp/home-spell";
+		vi.spyOn(process, "cwd").mockReturnValue("/tmp/workspace");
+		vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+		vi.spyOn(fs, "stat").mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
+
+		await expect(resolveDefaultConfigDir()).resolves.toBe(path.join(homeDir, ".spell"));
+	});
+
+	it("rethrows non-ENOENT errors from ./.spell stat", async () => {
+		const failure = Object.assign(new Error("permission denied"), { code: "EACCES" });
+		vi.spyOn(process, "cwd").mockReturnValue("/tmp/workspace");
+		vi.spyOn(fs, "stat").mockRejectedValue(failure);
+
+		await expect(resolveDefaultConfigDir()).rejects.toBe(failure);
 	});
 });
 

@@ -1,0 +1,86 @@
+#+TITLE: Unify ProcessManager onto SessionManager for telegram bot
+#+STATE: ITEM
+#+SESSION_ID: 14ab2067d6748f3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T17-44-54-361Z_14ab2067d6748f3d.jsonl]]
+#+CUSTOM_ID: FUP-030-unify-processmanager-onto-sessionmanager
+#+EFFORT: L
+#+PRIORITY: B
+#+LAYER: core
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-021-audit-implementation:
+
+- **What**: Telegram KDL defaults still use the old YAML values (`idleTimeout = 3600`, `maxSessions = 3`) instead of the planned KDL defaults (`300`, `10`)
+  - **Where**: `packages/spell-server/src/config/channels-parser.ts`, top-level default constants
+  - **Why**: Minimal `channels.kdl` configs now behave differently than the merged design promised, affecting session expiry and capacity in user-visible ways
+  - **Effort**: `trivial`
+
+- **What**: Owner authorization ignores the new `owners` list and instead treats any configured `user` as an owner
+  - **Where**: `packages/spell-server/src/telegram/bot/auth.ts`, around `config.users[userId]` / `isOwner: true`
+  - **Why**: Owner-only commands like `/unlock` are granted to all configured users, while IDs listed in `owners` but not duplicated under `user` are not recognized as owners; this breaks the new config contract
+  - **Effort**: `medium`
+
+- **What**: `spell server` does not implement the planned fallback from `./.spell/` to `~/.spell/`
+  - **Where**: `packages/coding-agent/src/commands/server.ts`, `resolveDefaultConfigDir()`
+  - **Why**: Running the command outside a project-local config dir will fail instead of finding the home config, which is a direct CLI behavior regression from the planned contract
+  - **Effort**: `trivial`
+
+- **What**: `TelegramBotService.start()` fires `bot.start()` without awaiting or tracking its promise
+  - **Where**: `packages/spell-server/src/telegram/service.ts`, near `bot.start({ onStart: ... })`
+  - **Why**: The service reports startup success before long polling is actually established, and polling failures can surface as unobserved async failures instead of a clean startup error
+  - **Effort**: `small`
+
+- **What**: Server startup swallows Telegram bot startup failures and silently continues in degraded mode
+  - **Where**: `packages/spell-server/src/server.ts`, around the `await telegramBot.start()` `try/catch`
+  - **Why**: With full Telegram config present, callers cannot tell whether they got “server + bot” or “server without bot”; production deployments may look healthy while the interactive bot is down
+  - **Effort**: `small`
+
+- **What**: The merge kept `ProcessManager` instead of completing the planned unification onto `SessionManager` + `TelegramLifecycle`
+  - **Where**: `packages/spell-server/src/telegram/process-manager.ts`, `packages/spell-server/src/telegram/service.ts`, and `packages/spell-server/src/session/telegram-lifecycle.ts`
+  - **Why**: Two parallel session-management abstractions now coexist, preserving duplicated lifecycle logic and increasing drift risk for future fixes
+  - **Effort**: `medium`
+
+- **What**: `TelegramLifecycle` is effectively leftover dead architecture after the merge
+  - **Where**: `packages/spell-server/src/session/telegram-lifecycle.ts`
+  - **Why**: It suggests Telegram sessions are managed through `SessionManager` when the actual runtime still goes through `ProcessManager`, which misleads maintainers
+  - **Effort**: `small`
+
+- **What**: New `channels.kdl` parser branches lack focused tests for the merged schema
+  - **Where**: `packages/spell-server/src/config/channels-parser.ts`; current coverage is only indirect through `packages/spell-server/test/cli/server-start.test.ts`
+  - **Why**: There is no regression coverage for `bot-token-file`, `project` nodes, `user` blocks, `idle-timeout null`, or the `bot-token`/`bot-token-file` mutual-exclusion error path
+  - **Effort**: `small`
+
+- **What**: Server lifecycle behavior for full/minimal/no Telegram config is not directly tested
+  - **Where**: `packages/spell-server/src/server.ts`
+  - **Why**: The core merge behavior — full bot startup vs notification-only mode vs no-telegram mode, plus shutdown ordering — can regress without any targeted test failure
+  - **Effort**: `medium`
+
+- **What**: Schema documentation was not updated for the expanded Telegram KDL format
+  - **Where**: `packages/spell-server/docs/kdl-schema-reference.md`
+  - **Why**: Users do not have an authoritative reference for `user`, `project`, `bot-token-file`, `log-viewer-port`, and related merged config fields
+  - **Effort**: `small`
+
+The merge from telegram-bridge into spell-server kept =ProcessManager= as a separate session management abstraction alongside =SessionManager<K>=. This was an intentional deferral to avoid scope creep during the merge.
+
+The two classes share 80%+ of their logic (idle timeouts, create/kill/killAll, pending dedup in SessionManager). The remaining delta is:
+- ProcessManager adds project resolution, mode/tool resolution, session state persistence
+- SessionManager adds lifecycle strategy pattern, pending promise dedup, typed keys
+
+The planned design was to replace ProcessManager with =SessionManager<string>= using a telegram-specific lifecycle. This would:
+- Eliminate duplicated idle timer, kill, and killAll logic
+- Consolidate testing onto one abstraction
+- Make TelegramBotService thinner (delegates to SessionManager + a persistence layer)
+
+* Implementation sketch
+1. Extend =TelegramLifecycle= (or a replacement) to handle project resolution, mode/tool config, state persistence
+2. Create a =TelegramSessionManager= that composes =SessionManager<string>= with persistence (saveBridgeState/loadBridgeState)
+3. Replace =ProcessManager= in =TelegramBotService= with =TelegramSessionManager=
+4. Delete =ProcessManager= and its dedicated test file
+5. Move process-manager.test.ts assertions into session-manager tests
+
+* Files affected
+- =packages/spell-server/src/telegram/process-manager.ts= — delete
+- =packages/spell-server/src/telegram/service.ts= — use SessionManager
+- =packages/spell-server/src/session/telegram-lifecycle.ts= — restore/extend
+- =packages/spell-server/test/telegram/process-manager.test.ts= — migrate to session tests

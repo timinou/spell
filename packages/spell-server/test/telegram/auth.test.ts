@@ -75,7 +75,35 @@ describe("authMiddleware", () => {
 
 		expect(nextCalled).toBe(true);
 		expect(ctx._replies).toEqual([]);
-		expect(ctx.authState?.isOwner).toBe(true);
+		expect(ctx.authState).toEqual({
+			userId: "123456",
+			isOwner: true,
+			userConfig: {
+				modes: ["telegram-full"],
+				defaultMode: "telegram-full",
+				idleTimeout: null,
+			},
+		});
+	});
+
+	it("uses the same owner fallback when the users map is empty", async () => {
+		const config = { ...testConfig(), users: {} };
+		const store = createTokenStore("owner-empty-users");
+		const middleware = authMiddleware(config, store);
+		const ctx = mockContext({ userId: 123456, chatId: 15 });
+
+		let nextCalled = false;
+		await middleware(ctx as unknown as AuthContext, async () => {
+			nextCalled = true;
+		});
+
+		expect(nextCalled).toBe(true);
+		expect(ctx._replies).toEqual([]);
+		expect(ctx.authState?.userConfig).toEqual({
+			modes: ["telegram-full"],
+			defaultMode: "telegram-full",
+			idleTimeout: null,
+		});
 	});
 
 	it("allows configured non-owner users without granting owner access", async () => {

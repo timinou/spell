@@ -1,0 +1,62 @@
+#+TITLE: Owner without user block inherits arbitrary non-owner user config
+#+STATE: DONE
+#+SESSION_ID: 14ab27e96ef48f5c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T18-17-42-075Z_14ab27e96ef48f5c.jsonl]]
+#+CUSTOM_ID: BUG-108-owner-without-user-block-inherits-arbitr
+#+EFFORT: S
+#+PRIORITY: A
+#+LAYER: app
+
+NOTE [2026-04-02]: Implemented stable owner fallback config in packages/spell-server/src/telegram/bot/auth.ts and verified with `bun test packages/spell-server/test/telegram/auth.test.ts` (7 pass, 0 fail).
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-022-audit-implementation:
+
+- **What**: Owner IDs that appear in `owners` but not in a matching `user` block inherit an arbitrary non-owner user policy  
+  **Where**: `packages/spell-server/src/telegram/bot/auth.ts`, around `resolveFallbackUserConfig()` and `configuredUser ?? resolveFallbackUserConfig(config)`  
+  **Why**: The auth fix corrected `isOwner`, but an owner without an explicit `user` entry still gets the first configured user's `defaultMode` and `projects`. That makes owner behavior depend on unrelated map insertion order and can silently restrict or distort owner access. The new tests only assert `isOwner`, not the resolved config for this case.  
+  **Effort**: small
+
+- **What**: Local `.spell` discovery now suppresses all `fs.stat` failures instead of only falling back on “not found”  
+  **Where**: `packages/coding-agent/src/commands/server.ts`, `resolveDefaultConfigDir()` catch block  
+  **Why**: The planned contract was “fall back when `./.spell/` is absent”. The implementation also falls back on permission errors, transient I/O errors, and other unexpected stat failures, which can hide a broken project-local config and make `spell server` load the wrong config directory without telling the caller.  
+  **Effort**: trivial
+
+- **What**: The deferred ProcessManager-to-SessionManager unification is not truthfully recorded in the plan closeout artifacts  
+  **Where**: `!tasks/plans/PLAN-093-harden-telegram-bridge-merge-aud-021.org`, `** Completion [2026-04-02]` → `*** Deviations`; related follow-up `!tasks/follow-ups/FUP-030-unify-processmanager-onto-sessionmanager.org` was left outside the committed plan set  
+  **Why**: The completion report says `None.` under deviations even though the plan explicitly deferred `FUP-030`. That weakens audit traceability: a validator reading the committed plan record cannot reliably see which work was intentionally left outstanding.  
+  **Effort**: trivial
+
+* Problem
+
+When an owner ID appears in =config.owners= but has no matching =user= block, the auth middleware resolves their =userConfig= via =resolveFallbackUserConfig()=, which returns =Object.values(config.users)[0]=. This makes the owner's =defaultMode=, =modes=, =projects=, and =idleTimeout= depend on an unrelated non-owner user's insertion order in the =users= map.
+
+The existing test asserts =isOwner= for this case but does not assert the resolved =userConfig=, so the distortion is invisible to regression coverage.
+
+* Scope
+
+** Target files
+- =packages/spell-server/src/telegram/bot/auth.ts= — =resolveFallbackUserConfig()= and the owner branch at line ~49-53
+- =packages/spell-server/test/telegram/auth.test.ts= — the "allows owner IDs from the owners list" test case
+
+** Change
+1. Introduce a =resolveOwnerDefaultConfig()= helper (or inline) that returns a stable owner-appropriate config with full tool access: =modes: [DEFAULT_GUEST_MODE, "telegram-full"]=, =defaultMode: DEFAULT_GUEST_MODE=, no project restriction, no idle timeout.
+2. In the owner branch (=configuredUser ?? ...=), when =isOwner= is true and =configuredUser= is absent, use the owner default config instead of the guest fallback.
+3. When =isOwner= is true and =configuredUser= is present, keep the existing behavior (use the user-configured config).
+4. Update the auth test for owners-without-user-block to assert the full resolved =userConfig= shape, not just =isOwner=.
+
+** Non-goals
+- Do not change guest (token-based) config resolution — =resolveFallbackUserConfig= remains correct for that path.
+- Do not change behavior for owners that have an explicit =user= block.
+
+* Sub-outline
+1. Update =resolveOwnerDefaultConfig()= or inline logic in auth.ts
+2. Update owner branch to use owner-specific config when no =configuredUser= exists
+3. Update "allows owner IDs from the owners list" test to assert =userConfig.modes=, =userConfig.defaultMode=
+4. Run =bun test packages/spell-server/test/telegram/auth.test.ts=
+
+* Verification
+- =bun test packages/spell-server/test/telegram/auth.test.ts= passes
+- =bun check:ts= passes
+- The test for "allows owner IDs from the owners list" asserts the full =userConfig= shape (modes, defaultMode), not just =isOwner=

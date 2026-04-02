@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { loadConfig } from "@oh-my-pi/spell-server/config/loader";
 import { startSpellServer } from "@oh-my-pi/spell-server/server";
@@ -52,13 +52,15 @@ export default class Server extends Command {
 	}
 }
 
-async function resolveDefaultConfigDir(): Promise<string> {
+export async function resolveDefaultConfigDir(): Promise<string> {
 	const cwdConfig = path.join(process.cwd(), ".spell");
 	try {
 		const stats = await fs.stat(cwdConfig);
 		if (stats.isDirectory()) {
 			return cwdConfig;
 		}
-	} catch {}
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
 	return path.join(os.homedir(), ".spell");
 }

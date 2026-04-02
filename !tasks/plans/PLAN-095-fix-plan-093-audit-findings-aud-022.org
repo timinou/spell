@@ -1,0 +1,71 @@
+#+TITLE: Fix PLAN-093 audit findings AUD-022
+#+STATE: DONE
+#+SESSION_ID: 14ab27e96ef48f5c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T18-17-42-075Z_14ab27e96ef48f5c.jsonl]]
+#+CUSTOM_ID: PLAN-095-fix-plan-093-audit-findings-aud-022
+
+NOTE [2026-04-02]: Completed AUD-022 follow-up fixes, corrected PLAN-093 deviations/FUP staging, and captured verification in the completion section.
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-022-audit-implementation:
+
+- **What**: Owner IDs that appear in `owners` but not in a matching `user` block inherit an arbitrary non-owner user policy  
+  **Where**: `packages/spell-server/src/telegram/bot/auth.ts`, around `resolveFallbackUserConfig()` and `configuredUser ?? resolveFallbackUserConfig(config)`  
+  **Why**: The auth fix corrected `isOwner`, but an owner without an explicit `user` entry still gets the first configured user's `defaultMode` and `projects`. That makes owner behavior depend on unrelated map insertion order and can silently restrict or distort owner access. The new tests only assert `isOwner`, not the resolved config for this case.  
+  **Effort**: small
+
+- **What**: Local `.spell` discovery now suppresses all `fs.stat` failures instead of only falling back on “not found”  
+  **Where**: `packages/coding-agent/src/commands/server.ts`, `resolveDefaultConfigDir()` catch block  
+  **Why**: The planned contract was “fall back when `./.spell/` is absent”. The implementation also falls back on permission errors, transient I/O errors, and other unexpected stat failures, which can hide a broken project-local config and make `spell server` load the wrong config directory without telling the caller.  
+  **Effort**: trivial
+
+- **What**: The deferred ProcessManager-to-SessionManager unification is not truthfully recorded in the plan closeout artifacts  
+  **Where**: `!tasks/plans/PLAN-093-harden-telegram-bridge-merge-aud-021.org`, `** Completion [2026-04-02]` → `*** Deviations`; related follow-up `!tasks/follow-ups/FUP-030-unify-processmanager-onto-sessionmanager.org` was left outside the committed plan set  
+  **Why**: The completion report says `None.` under deviations even though the plan explicitly deferred `FUP-030`. That weakens audit traceability: a validator reading the committed plan record cannot reliably see which work was intentionally left outstanding.  
+  **Effort**: trivial
+
+* Context
+
+Post-implementation audit (AUD-022) of PLAN-093 identified three findings. All are low-effort fixes that address correctness gaps and process traceability issues introduced during the telegram bridge hardening work.
+
+** Key decisions
+- Owners without an explicit =user= block get a stable owner-appropriate default config (full modes, no restrictions) instead of inheriting the first non-owner user's config from map insertion order.
+- The =resolveDefaultConfigDir()= catch block uses =isEnoent= to re-throw non-ENOENT stat errors, matching the codebase's established pattern.
+- PLAN-093's deviations section is corrected to reference the deferred =FUP-030= follow-up, and the FUP-030 org file is staged into version control.
+
+* Verification
+
+After all items complete:
+1. =bun check:ts= — passes
+2. =bun test packages/spell-server/test/telegram/auth.test.ts= — passes; owner-without-user-block test asserts full =userConfig= shape
+3. =bun test packages/coding-agent/test/server-command.test.ts= — passes
+4. =grep "FUP-030" !tasks/plans/PLAN-093-harden-telegram-bridge-merge-aud-021.org= — returns the deferral entry in Deviations
+5. =git status= — FUP-030 org file is no longer untracked
+
+* Execution Manifest
+
+** Wave 1: Code fixes [parallelizable]
+- [[id:BUG-108-owner-without-user-block-inherits-arbitr]] — Fix owner fallback config to use stable owner defaults [S effort]
+- [[id:BUG-109-config-dir-fallback-suppresses-non-enoen]] — Guard stat catch with isEnoent [XS effort]
+
+** Wave 2: Process fix [depends on W1]
+- [[id:BUG-110-plan-093-closeout-deviations-section-omi]] — Correct PLAN-093 deviations section and stage FUP-030 [XS effort]
+
+
+** Completion [2026-04-02]
+*** Verification
+- `bun test packages/spell-server/test/telegram/auth.test.ts` — passed (`7 pass`, `0 fail`); owner-without-user-block coverage now asserts the full resolved `userConfig`.
+- `bun test packages/coding-agent/test/server-command.test.ts` — passed (`4 pass`, `0 fail`); covers ENOENT fallback and non-ENOENT rethrow.
+- `grep "FUP-030" !tasks/plans/PLAN-093-harden-telegram-bridge-merge-aud-021.org` — returned the deferred follow-up entry in the completion record.
+- `bun check:ts` — passed after restoring pre-existing Biome/typecheck blockers in operator-action files so workspace verification matched the requested contract.
+- `git status --short` — showed `A  !tasks/follow-ups/FUP-030-unify-processmanager-onto-sessionmanager.org`, confirming the follow-up file is tracked rather than untracked.
+*** Artifacts
+- Owner fallback implementation and regression test: [[file:packages/spell-server/src/telegram/bot/auth.ts]], [[file:packages/spell-server/test/telegram/auth.test.ts]]
+- Config-dir fallback implementation and regression test: [[file:packages/coding-agent/src/commands/server.ts]], [[file:packages/coding-agent/test/server-command.test.ts]]
+- PLAN-093 closeout correction and staged follow-up: [[file:!tasks/plans/PLAN-093-harden-telegram-bridge-merge-aud-021.org]], [[file:!tasks/follow-ups/FUP-030-unify-processmanager-onto-sessionmanager.org]]
+- Linked child items closed by this execution: [[file:!tasks/bugs/BUG-108-owner-without-user-block-inherits-arbitr.org]], [[file:!tasks/bugs/BUG-109-config-dir-fallback-suppresses-non-enoen.org]], [[file:!tasks/bugs/BUG-110-plan-093-closeout-deviations-section-omi.org]]
+- Verification-baseline fixes required for `bun check:ts`: [[file:packages/spell-server/src/http/routes/operator-actions.ts]], [[file:packages/spell-server/src/telegram/commands/approval.ts]], [[file:packages/spell-server/test/http/operator-actions.test.ts]], [[file:packages/spell-server/test/telegram/commands.test.ts]]
+*** Deviations
+- No PLAN-095 work was deferred. To satisfy the required `bun check:ts` gate, this execution also fixed pre-existing Biome/typecheck issues in the operator-action files listed above; those issues were outside AUD-022's original scope but blocked truthful verification.
