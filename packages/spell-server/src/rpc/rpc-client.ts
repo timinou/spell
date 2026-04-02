@@ -60,6 +60,9 @@ export class RpcClient {
 		}
 
 		const args = ["--mode", "rpc", "--tools", this.#options.tools.join(",")];
+		if (this.#options.model) {
+			args.push("--model", this.#options.model);
+		}
 		if (this.#options.sessionPath) {
 			args.push("--resume", this.#options.sessionPath);
 		}
@@ -314,6 +317,17 @@ export class RpcClient {
 			if (this.#readyWaiter && !this.#readyWaiter.settled) {
 				this.#readyWaiter.settled = true;
 				this.#readyWaiter.resolve();
+			}
+		}
+
+		if (parsed.type === "response" && parsed.command === "prompt" && !parsed.success) {
+			this.#resolvePromptCompletion();
+		}
+
+		if (parsed.type === "message_end") {
+			const stopReason = parsed.message?.stopReason;
+			if (stopReason === "error" || stopReason === "aborted") {
+				this.#resolvePromptCompletion();
 			}
 		}
 

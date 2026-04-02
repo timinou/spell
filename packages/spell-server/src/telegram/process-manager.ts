@@ -78,6 +78,7 @@ export class ProcessManager {
 			cwd,
 			tools: options.tools,
 			appendSystemPrompt: options.appendSystemPrompt,
+			model: this.#config.defaultModel,
 			sessionPath,
 		};
 

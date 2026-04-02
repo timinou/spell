@@ -20,6 +20,19 @@ export interface ImageContentRef {
 	data: string;
 }
 
+/** Assistant stop reasons mirrored from the AI package */
+export type RpcStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+
+export interface RpcAssistantMessage {
+	role?: string;
+	stopReason?: RpcStopReason;
+	errorMessage?: string;
+}
+
+export type RpcResponseEvent =
+	| { type: "response"; command: string; success: true; data?: unknown }
+	| { type: "response"; command: string; success: false; error: string };
+
 /** Events the bridge reads from spell's stdout (JSON lines) */
 export type RpcEvent =
 	| { type: "ready" }
@@ -29,10 +42,10 @@ export type RpcEvent =
 	| { type: "turn_end" }
 	| { type: "message_start" }
 	| { type: "message_update"; assistantMessageEvent: AssistantEvent }
-	| { type: "message_end" }
+	| { type: "message_end"; message?: RpcAssistantMessage }
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; intent?: string }
 	| { type: "tool_execution_end"; toolCallId: string; toolName: string; isError?: boolean }
-	| { type: "response"; command: string; success: boolean; data?: unknown; error?: string }
+	| RpcResponseEvent
 	| { type: "error"; message: string };
 
 /** Subset of AssistantMessageEvent we care about for streaming */
@@ -45,7 +58,7 @@ export type AssistantEvent =
 	| { type: "toolcall_end" }
 	| { type: "start" }
 	| { type: "done" }
-	| { type: "error" };
+	| { type: "error"; reason?: Extract<RpcStopReason, "aborted" | "error">; error?: RpcAssistantMessage };
 
 /** Options for spawning an RPC process */
 export interface RpcSpawnOptions {
@@ -53,6 +66,8 @@ export interface RpcSpawnOptions {
 	cwd: string;
 	/** Tool names to allow (passed via --tools) */
 	tools: string[];
+	/** Explicit model slug passed via --model */
+	model?: string;
 	/** Path to resume a previous session */
 	sessionPath?: string;
 	/** Session directory for new sessions */

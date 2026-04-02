@@ -62,6 +62,7 @@ function createConfig(overrides: Partial<TelegramBridgeConfig> = {}): TelegramBr
 		uploadDir: "/tmp/uploads",
 		idleTimeout: 60,
 		maxSessions: 3,
+		defaultModel: "claude-sonnet-4-5",
 		projects: {
 			spell: "/tmp/project-spell",
 			infra: "/tmp/project-infra",
@@ -101,6 +102,7 @@ describe("ProcessManager", () => {
 
 		expect(client).toBe(clients[0]);
 		expect(clients[0]?.startCalls).toBe(1);
+		expect(clients[0]?.spawnOptions.model).toBe("claude-sonnet-4-5");
 
 		const sessions = manager.getActiveSessions();
 		expect(sessions.size).toBe(1);

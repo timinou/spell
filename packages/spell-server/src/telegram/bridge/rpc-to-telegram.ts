@@ -46,6 +46,7 @@ export class ResponseStreamer {
 	#showThinking: boolean;
 	#chatId: number | null;
 	#text = "";
+	#errorMessage = "";
 	#thinking = "";
 	#thinkingStatus = "";
 	#toolStatus = "";
@@ -98,8 +99,20 @@ export class ResponseStreamer {
 					this.#doneResolve();
 				}
 				return;
-			case "agent_end":
+			case "response":
+				if (!event.success) {
+					this.#errorMessage = event.error;
+					await this.#finalize();
+				}
+				return;
 			case "message_end":
+				if (event.message?.stopReason === "error" || event.message?.stopReason === "aborted") {
+					this.#errorMessage =
+						event.message.errorMessage ?? (this.#errorMessage || `Assistant ${event.message.stopReason}`);
+				}
+				await this.#finalize();
+				return;
+			case "agent_end":
 				await this.#finalize();
 				return;
 			default:
@@ -167,6 +180,11 @@ export class ResponseStreamer {
 				this.#thinkingStatus = lastNonEmptyLine(event.content) || this.#thinkingStatus;
 				await this.#scheduleDraftUpdate();
 				return;
+			case "error":
+				this.#errorMessage =
+					event.error?.errorMessage ?? (this.#errorMessage || `Assistant ${event.reason ?? "error"}`);
+				await this.#scheduleDraftUpdate();
+				return;
 			default:
 				return;
 		}
@@ -220,8 +238,14 @@ export class ResponseStreamer {
 
 	#buildFinalMarkdown(): string {
 		const text = this.#text.trim();
+		if (text && this.#errorMessage) {
+			return `${text}\n\nError: ${this.#errorMessage}`;
+		}
 		if (text) {
 			return text;
+		}
+		if (this.#errorMessage) {
+			return `Assistant error: ${this.#errorMessage}`;
 		}
 		if (this.#toolHistory.length > 0) {
 			return `Assistant completed without a text response.\n\nTool activity:\n- ${this.#toolHistory.join("\n- ")}`;

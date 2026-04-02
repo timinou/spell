@@ -1,11 +1,14 @@
 #+TITLE: ResponseStreamer swallows LLM and prompt errors showing generic fallback
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14ab1285ae9bac4d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T16-44-14-906Z_14ab1285ae9bac4d.jsonl]]
 #+CUSTOM_ID: BUG-101-responsestreamer-swallows-llm-and-prompt
 #+EFFORT: 2h
 #+PRIORITY: #A
 #+LAYER: packages/telegram-bridge
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-02]: Implemented in spell-server rpc and telegram bridge with focused regression tests; automated verification passed.
 
 * Initial Message
 
@@ -31,25 +34,26 @@ In =rpc-to-telegram.ts= =handleEvent()= (line 105-106): =type: response= falls t
 
 * Implementation
 
+NOTE: The telegram-bridge package was merged into spell-server. All file paths are under =packages/spell-server/=.
+
 ** 1. Widen RpcEvent types to carry error info
 
-File: =packages/telegram-bridge/src/rpc/types.ts=
+File: =packages/spell-server/src/rpc/types.ts=
 
 - Add =message?: { stopReason?: string; errorMessage?: string }= to =message_end= variant
-- Add =error?: string= to ={ type: "response" }= (already has it, but document it)
 - Optionally add =errorMessage?: string= to =agent_end= variant
 
 ** 2. Handle prompt-command error responses in rpc-client
 
-File: =packages/telegram-bridge/src/rpc/rpc-client.ts=
+File: =packages/spell-server/src/rpc/rpc-client.ts=
 
 In =handleStdoutLine()=, after the =agent_end= / =turn_end= check:
-- If =parsed.type === "response"= and =parsed.success === false= and the =parsed.command === "prompt"=, reject the pending =promptCompletion= with an error containing =parsed.error=.
+- If =parsed.type === "response"= and =parsed.success === false= and =parsed.command === "prompt"=, reject the pending =promptCompletion= with an error containing =parsed.error=.
 - This fixes the 5-minute hang when =session.prompt()= throws.
 
 ** 3. Surface errors in ResponseStreamer
 
-File: =packages/telegram-bridge/src/bridge/rpc-to-telegram.ts=
+File: =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts=
 
 - In =handleEvent()=, add a =case "response"= that checks =event.success === false= and stores the error message in a new =#errorMessage= field.
 - In =handleEvent()= =case "message_end"=, extract the message payload's =errorMessage= and =stopReason= if present, and store them.
@@ -57,17 +61,16 @@ File: =packages/telegram-bridge/src/bridge/rpc-to-telegram.ts=
 
 ** 4. Add test coverage
 
-File: =packages/telegram-bridge/test/rpc-to-telegram.test.ts= (new or existing)
+File: =packages/spell-server/test/telegram/rpc-to-telegram.test.ts= (new)
 
 - Test: =ResponseStreamer= shows LLM error when =message_end= carries =errorMessage=
 - Test: =ResponseStreamer= shows prompt error when =type: response, success: false= arrives
 - Test: existing text flow still works (=text_delta= → =text_end= → =message_end=)
 
-File: =packages/telegram-bridge/test/rpc-client.test.ts= (existing or new)
+File: =packages/spell-server/test/rpc/rpc-client.test.ts= (new or existing)
 
-- Test: =rpc-client.prompt()= rejects when a ={type: response, success: false, command: "prompt"}= arrives
-- Test: =rpc-client.prompt()= resolves normally on =agent_end=
-
+- Test: prompt rejects when ={type: response, success: false, command: "prompt"}= arrives
+- Test: prompt resolves normally on =agent_end=
 * Sequencing note
 
 The RPC client fix (step 2) and ResponseStreamer fix (step 3) can be done in parallel since they touch different files. The RpcEvent type change (step 1) must come first since both depend on it. Tests (step 4) depend on all three.

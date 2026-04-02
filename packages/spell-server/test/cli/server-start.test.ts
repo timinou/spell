@@ -31,6 +31,7 @@ goal "nightly" {
 
 const VALID_CHANNELS_KDL = `telegram {
 	bot-token "123456:ABC-DEF"
+	default-model "claude-sonnet-4-5"
 	owners 12345 67890
 }
 `;
@@ -65,12 +66,28 @@ describe("spell-server config loading", () => {
 				idleTimeout: 3600,
 				maxSessions: 3,
 				logViewerPort: undefined,
+				defaultModel: "claude-sonnet-4-5",
 				defaultProject: undefined,
 				projects: {},
 				users: {},
 			},
 		});
 		expect(loaded.manifest.goals.has("nightly")).toBe(true);
+	});
+
+	it("rejects telegram channel config without default-model", async () => {
+		const configDir = await createConfigDir({
+			"server.kdl": VALID_SERVER_KDL,
+			"autonomy.kdl": VALID_MANIFEST_KDL,
+			"channels.kdl": `telegram {
+				bot-token "123456:ABC-DEF"
+				owners 12345
+			}`,
+		});
+
+		await expect(loadConfig(configDir)).rejects.toThrow(
+			"Failed to load channels.kdl: channels.telegram.default-model is required",
+		);
 	});
 
 	it("allows channels.kdl to be omitted", async () => {

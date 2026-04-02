@@ -22,48 +22,64 @@ describe("RpcClient", () => {
 		spellBinDir = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-rpc-client-"));
 		spellPath = path.join(spellBinDir, "spell");
 		const mockScript = `#!/usr/bin/env bun
-const args = process.argv.slice(2);
-const promptFlag = args.indexOf("--append-system-prompt");
-const scenario = promptFlag >= 0 && args[promptFlag + 1] ? args[promptFlag + 1] : "default";
+		const args = process.argv.slice(2);
+		const promptFlag = args.indexOf("--append-system-prompt");
+		const modelFlag = args.indexOf("--model");
+		const scenario = promptFlag >= 0 && args[promptFlag + 1] ? args[promptFlag + 1] : "default";
+		const selectedModel = modelFlag >= 0 && args[modelFlag + 1] ? args[modelFlag + 1] : null;
 
-const send = event => process.stdout.write(JSON.stringify(event) + "\\n");
-send({ type: "ready" });
+		const send = event => process.stdout.write(JSON.stringify(event) + "\\n");
+		send({ type: "ready" });
 
-if (scenario === "startup-events") {
-  send({ type: "message_start" });
-  send({ type: "message_end" });
-}
-if (scenario === "partial-line") {
-  process.stdout.write('{"type":"tool_execution_start","toolCallId":"tool-1",');
-  process.stdout.write('"toolName":"bash"}\\n');
-}
-if (scenario === "exit-soon") {
-  setTimeout(() => process.exit(2), 20);
-}
+		if (scenario === "startup-events") {
+		  send({ type: "message_start" });
+		  send({ type: "message_end" });
+		}
+		if (scenario === "partial-line") {
+		  process.stdout.write('{"type":"tool_execution_start","toolCallId":"tool-1",');
+		  process.stdout.write('"toolName":"bash"}\\n');
+		}
+		if (scenario === "exit-soon") {
+		  setTimeout(() => process.exit(2), 20);
+		}
 
-let stdinBuffer = "";
-process.stdin.setEncoding("utf8");
-process.stdin.resume();
-process.stdin.on("data", chunk => {
-  stdinBuffer += chunk;
-  while (true) {
-    const newline = stdinBuffer.indexOf("\\n");
-    if (newline === -1) break;
-    const line = stdinBuffer.slice(0, newline).trim();
-    stdinBuffer = stdinBuffer.slice(newline + 1);
-    if (!line) continue;
+		let stdinBuffer = "";
+		process.stdin.setEncoding("utf8");
+		process.stdin.resume();
+		process.stdin.on("data", chunk => {
+		  stdinBuffer += chunk;
+		  while (true) {
+		    const newline = stdinBuffer.indexOf("\\n");
+		    if (newline === -1) break;
+		    const line = stdinBuffer.slice(0, newline).trim();
+		    stdinBuffer = stdinBuffer.slice(newline + 1);
+		    if (!line) continue;
 
-    const command = JSON.parse(line);
-    send({ type: "response", command: "echo", success: true, data: command });
+		    const command = JSON.parse(line);
+		    if (scenario === "model-flag") {
+		      send({ type: "response", command: "echo", success: true, data: { command, args, selectedModel } });
+		    } else if (scenario === "prompt-response-error" && command.type === "prompt") {
+		      send({ type: "response", command: "prompt", success: false, error: "No model selected" });
+		      continue;
+		    } else {
+		      send({ type: "response", command: "echo", success: true, data: command });
+		    }
 
-    if (command.type === "prompt") {
-      send({ type: "agent_start" });
-      send({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "ok" } });
-      send({ type: "agent_end" });
-    }
-  }
-});
-`;
+		    if (command.type === "prompt") {
+		      send({ type: "agent_start" });
+		      if (scenario === "assistant-error-message-end") {
+		        send({
+		          type: "message_end",
+		          message: { role: "assistant", stopReason: "error", errorMessage: "Invalid API key" },
+		        });
+		        continue;
+		      }
+		      send({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "ok" } });
+		      send({ type: "agent_end" });
+		    }
+		  }
+		});
+		`;
 		await Bun.write(spellPath, mockScript);
 		await fs.chmod(spellPath, 0o755);
 	});
@@ -91,8 +107,51 @@ process.stdin.on("data", chunk => {
 
 		const responses = events.filter(event => eventWithType(event, "response"));
 		const echoResponse = responses.find(event => event.command === "echo");
-		expect(echoResponse).toBeDefined();
-		expect(echoResponse?.data).toEqual({ type: "prompt", message: "hello rpc" });
+		if (!echoResponse || !echoResponse.success) {
+			throw new Error("Expected successful echo response");
+		}
+		expect(echoResponse.data).toEqual({ type: "prompt", message: "hello rpc" });
+
+		await client.kill();
+	});
+
+	it("passes explicit model flag to the spawned spell process", async () => {
+		const client = new RpcClient(
+			{
+				cwd: import.meta.dir,
+				tools: ["read", "grep"],
+				model: "claude-sonnet-4-5",
+				appendSystemPrompt: "model-flag",
+			},
+			{ command: spellPath },
+		);
+		const events: RpcEvent[] = [];
+		client.onEvent(event => {
+			events.push(event);
+		});
+
+		await client.start();
+		await client.prompt("hello rpc");
+
+		const responses = events.filter(event => eventWithType(event, "response"));
+		const echoResponse = responses.find(event => event.command === "echo");
+		if (!echoResponse || !echoResponse.success) {
+			throw new Error("Expected successful echo response");
+		}
+		expect(echoResponse.data).toEqual({
+			command: { type: "prompt", message: "hello rpc" },
+			args: [
+				"--mode",
+				"rpc",
+				"--tools",
+				"read,grep",
+				"--model",
+				"claude-sonnet-4-5",
+				"--append-system-prompt",
+				"model-flag",
+			],
+			selectedModel: "claude-sonnet-4-5",
+		});
 
 		await client.kill();
 	});
@@ -145,6 +204,70 @@ process.stdin.on("data", chunk => {
 		]);
 
 		expect(client.alive).toBe(false);
+	});
+
+	it("resolves prompt completion when prompt command returns an error response", async () => {
+		const client = new RpcClient(
+			{
+				cwd: import.meta.dir,
+				tools: ["read"],
+				appendSystemPrompt: "prompt-response-error",
+			},
+			{ command: spellPath },
+		);
+		const events: RpcEvent[] = [];
+		client.onEvent(event => {
+			events.push(event);
+		});
+
+		await client.start();
+		await Promise.race([
+			client.prompt("hello rpc"),
+			Bun.sleep(TEST_TIMEOUT_MS).then(() => {
+				throw new Error("Timed out waiting for prompt error response");
+			}),
+		]);
+
+		const responses = events.filter(event => eventWithType(event, "response"));
+		expect(responses).toContainEqual({
+			type: "response",
+			command: "prompt",
+			success: false,
+			error: "No model selected",
+		});
+
+		await client.kill();
+	});
+
+	it("resolves prompt completion when assistant message ends with an error", async () => {
+		const client = new RpcClient(
+			{
+				cwd: import.meta.dir,
+				tools: ["read"],
+				appendSystemPrompt: "assistant-error-message-end",
+			},
+			{ command: spellPath },
+		);
+		const events: RpcEvent[] = [];
+		client.onEvent(event => {
+			events.push(event);
+		});
+
+		await client.start();
+		await Promise.race([
+			client.prompt("hello rpc"),
+			Bun.sleep(TEST_TIMEOUT_MS).then(() => {
+				throw new Error("Timed out waiting for assistant error message_end");
+			}),
+		]);
+
+		const messageEnd = events.find(event => eventWithType(event, "message_end"));
+		expect(messageEnd).toEqual({
+			type: "message_end",
+			message: { role: "assistant", stopReason: "error", errorMessage: "Invalid API key" },
+		});
+
+		await client.kill();
 	});
 
 	it("buffers partial JSON lines correctly", async () => {

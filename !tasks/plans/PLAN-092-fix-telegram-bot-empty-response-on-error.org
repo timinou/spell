@@ -1,43 +1,60 @@
 #+TITLE: Fix Telegram bot empty response on errors
-#+STATE: INIT
+#+STATE: DOING
 #+SESSION_ID: 14ab1285ae9bac4d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T16-44-14-906Z_14ab1285ae9bac4d.jsonl]]
 #+CUSTOM_ID: PLAN-092-fix-telegram-bot-empty-response-on-error
 
-* Initial Message
-
-hi. how do I test the telegram bot? I have cloudflared
 
 * Context
 
-The Telegram bridge bot replies with "Assistant completed without a text response" when the agent encounters any error during prompt handling. This affects all error paths: missing model, missing API key, LLM auth failure, rate limiting, or any LLM error that produces =stopReason=error=.
+The spell-server's Telegram bot (code now in =packages/spell-server/src/telegram/= and =packages/spell-server/src/rpc/=, merged from the former =telegram-bridge= package) replies with "Assistant completed without a text response" when the agent encounters any error. Two distinct issues cause this:
 
-Root cause: three interacting defects in the bridge's RPC event handling:
+** Issue 1: No model slug passed to the RPC process
 
-1. =ResponseStreamer= (=packages/telegram-bridge/src/bridge/rpc-to-telegram.ts=) only collects text from =text_delta= / =text_end= assistant events. When the LLM errors, the error info is in =message_end='s message payload (=errorMessage=, =stopReason=), but the streamer ignores the payload.
+The RPC client (=packages/spell-server/src/rpc/rpc-client.ts=) spawns =spell --mode rpc= without a =--model= flag. The spawned process relies on whatever model the user has in =~/.spell/agent.db=. If none is configured, =session.prompt()= throws "No model selected" instantly and the user gets a meaningless error.
 
-2. When =session.prompt()= throws (no model/API key), =rpc-mode= outputs ={ type: "response", success: false, error: "..." }=. The streamer ignores =type: response= entirely. Additionally, =rpc-client= (=packages/telegram-bridge/src/rpc/rpc-client.ts=) only resolves =promptCompletion= on =agent_end= / =turn_end=, so a failed prompt command causes a 5-minute hang.
+Fix: add a required =default-model= field to the telegram block in =channels.kdl=. Validate at config load (fail startup if missing). Pass as =--model <slug>= to the spawned process.
 
-3. The bridge's =RpcEvent= types (=packages/telegram-bridge/src/rpc/types.ts=) define =message_end= without a message payload, hiding the error data that the RPC process actually sends.
+** Issue 2: Errors are silently swallowed by ResponseStreamer
 
-Approach: widen the =RpcEvent= types, handle error responses in =rpc-client=, surface errors in =ResponseStreamer=, and add test coverage.
+Even when the LLM is configured, runtime errors (auth failure, rate limit, =stopReason=error=) produce no text events. =ResponseStreamer= (=packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts=) only collects text from =text_delta= / =text_end=. Error info in =message_end= payload and ={type: response, success: false}= events is ignored. Additionally, a failed prompt-command response doesn't resolve =promptCompletion= in =rpc-client.ts=, causing a 5-minute hang.
 
-Key files:
-- =packages/telegram-bridge/src/rpc/types.ts= — RPC event type definitions
-- =packages/telegram-bridge/src/rpc/rpc-client.ts= — prompt completion resolution
-- =packages/telegram-bridge/src/bridge/rpc-to-telegram.ts= — ResponseStreamer
-- =packages/telegram-bridge/src/bot/bot.ts= — message handler wiring (read-only, for context)
-- =packages/coding-agent/src/modes/rpc/rpc-mode.ts= — RPC mode prompt handling (read-only, for context)
+Fix: widen =RpcEvent= types, handle error responses in =rpc-client=, surface errors in =ResponseStreamer=.
+
+Key files (all under =packages/spell-server/=):
+- =src/config/types.ts= — =TelegramChannelConfig= type
+- =src/config/channels-parser.ts= — KDL parser for channels.kdl
+- =src/rpc/types.ts= — RPC event type definitions
+- =src/rpc/rpc-client.ts= — prompt completion resolution, =--model= flag
+- =src/telegram/bridge/rpc-to-telegram.ts= — ResponseStreamer
+- =src/telegram/process-manager.ts= — threads config to RPC spawn options
 
 * Verification
 
-- =bun test packages/telegram-bridge/test/= — new and existing tests pass
+- =bun test packages/spell-server/test/= — all tests pass
 - =bun check:ts= — no type errors
-- Manual smoke test: start bridge with no API key, send "hi", verify error is surfaced
-- Manual smoke test: start bridge with valid key, send "hi", verify text response works
+- Server refuses to start if =channels.kdl= telegram block exists without =default-model=
+- Manual: start spell-server with valid =default-model= and API key, send "hi" to bot, verify text reply
+- Manual: start spell-server with invalid API key, send "hi", verify error message is surfaced (not "Assistant completed without a text response")
 
 * Execution Manifest
 
 | Wave | Item | Effort | Depends |
-|------+-------------------------------------------+--------+---------|
-|    1 | [[id:BUG-101-responsestreamer-swallows-llm-and-prompt]] | 2h | — |
+|------+------------------------------------------------------+--------+---------|
+|    1 | [[id:FEAT-238-add-required-default-model-to-telegram-c]] | 1h | — |
+|    2 | [[id:BUG-101-responsestreamer-swallows-llm-and-prompt]] | 2h | FEAT-238 |
+
+Wave 1 makes the bot functional (model slug reaches the agent). Wave 2 improves error surfacing so future failures are visible.
+
+
+** Completion [2026-04-02]
+*** Verification
+- `bun test packages/spell-server/test/cli/server-start.test.ts packages/spell-server/test/telegram/process-manager.test.ts packages/spell-server/test/telegram/commands.test.ts packages/spell-server/test/telegram/auth.test.ts packages/spell-server/test/telegram/bot.test.ts packages/spell-server/test/telegram/log-viewer.test.ts packages/spell-server/test/hooks/notification-sender.test.ts` -> passed (47 tests, 0 failures).
+- `bun test packages/spell-server/test/rpc/rpc-client.test.ts packages/spell-server/test/telegram/bridge.test.ts` -> passed (22 tests, 0 failures).
+- `bun test packages/spell-server/test/` -> passed (194 tests, 0 failures).
+- `bun check:ts` -> passed after resolving workspace check blockers (`packages/spell-server/test/hooks/telegram-hook.test.ts`, `packages/coding-agent/test/server-command.test.ts`) so the repo-wide verifier completed cleanly.
+- `for name in TELEGRAM_BOT_TOKEN SPELL_SERVER_CONFIG_DIR ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY; do ...; done` -> `TELEGRAM_BOT_TOKEN=unset`, `SPELL_SERVER_CONFIG_DIR=unset`, so workstation lacks the bot credentials/config needed for the plan's live Telegram end-to-end checks.
+*** Artifacts
+- None.
+*** Deviations
+- Live Telegram manual verification (valid bot reply, invalid API key surfaced through the real bot) was not run in this session because the workstation has no configured Telegram bot token or spell-server config directory. Automated coverage for the same behavior was added and passed, but external end-to-end verification remains pending.

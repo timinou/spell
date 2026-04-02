@@ -22,6 +22,7 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 	let maxSessions = DEFAULT_MAX_SESSIONS;
 	let logViewerPort: number | undefined;
 	let defaultProject: string | undefined;
+	let defaultModel: string | undefined;
 	const projects: Record<string, string> = {};
 	const users: Record<string, TelegramUserConfig> = {};
 
@@ -100,6 +101,15 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 			continue;
 		}
 
+		if (name === "default-model") {
+			const value = child.getArgument(0);
+			if (typeof value !== "string" || value.length === 0) {
+				throw new Error("channels.telegram.default-model must have a non-empty string argument");
+			}
+			defaultModel = value;
+			continue;
+		}
+
 		if (name === "project") {
 			const args = child.getArguments();
 			if (args.length !== 2 || typeof args[0] !== "string" || typeof args[1] !== "string") {
@@ -118,6 +128,10 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 	// Validate mutual exclusivity
 	if (botToken && botTokenFile) {
 		throw new Error("channels.telegram: bot-token and bot-token-file are mutually exclusive");
+	}
+
+	if (!defaultModel) {
+		throw new Error("channels.telegram.default-model is required");
 	}
 
 	if (!botToken && !botTokenFile && !owners) {
@@ -142,6 +156,7 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 			idleTimeout,
 			maxSessions,
 			logViewerPort,
+			defaultModel,
 			defaultProject: defaultProject ?? Object.keys(projects)[0],
 			projects,
 			users,

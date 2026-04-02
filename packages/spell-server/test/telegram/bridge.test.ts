@@ -198,6 +198,29 @@ describe("bridge streaming", () => {
 		expect(ctx._replies[0]?.text).toContain("Running: grep project");
 	});
 
+	it("surfaces failed prompt responses instead of the empty-response fallback", async () => {
+		const ctx = mockAuthContext({ chatId: 47 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
+
+		await streamer.handleEvent({ type: "response", command: "prompt", success: false, error: "No model selected" });
+
+		expect(ctx._replies[0]?.text).toContain("Assistant error: No model selected");
+		expect(ctx._replies[0]?.options).toEqual({ parse_mode: "HTML" });
+	});
+
+	it("surfaces assistant message_end errors instead of the empty-response fallback", async () => {
+		const ctx = mockAuthContext({ chatId: 48 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
+
+		await streamer.handleEvent({
+			type: "message_end",
+			message: { role: "assistant", stopReason: "error", errorMessage: "Invalid API key" },
+		});
+
+		expect(ctx._replies[0]?.text).toContain("Assistant error: Invalid API key");
+		expect(ctx._replies[0]?.options).toEqual({ parse_mode: "HTML" });
+	});
+
 	it("forwards RPC error events to Telegram chat", async () => {
 		const ctx = mockAuthContext({ chatId: 47 });
 		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);

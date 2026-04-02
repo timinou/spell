@@ -187,6 +187,7 @@ function mockCommandContext(): {
 		uploadDir: "/tmp/uploads",
 		idleTimeout: 60,
 		maxSessions: 2,
+		defaultModel: "claude-sonnet-4-5",
 		projects: {
 			spell: "/tmp/spell",
 			infra: "/tmp/infra",
@@ -425,6 +426,7 @@ describe("telegram command handlers", () => {
 		expect(client.killCalls).toBe(1);
 		expect(streamerEvents.some(event => event.type === "message_end")).toBe(true);
 		expect(spawnOptions?.noSession).toBe(true);
+		expect(spawnOptions?.model).toBe("claude-sonnet-4-5");
 	});
 
 	it("/unlock when already unlocked reports already", async () => {

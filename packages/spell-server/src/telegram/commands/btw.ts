@@ -62,6 +62,7 @@ export async function handleBtwCommand(
 		cwd,
 		tools,
 		noSession: true,
+		model: cmdCtx.config.defaultModel,
 		appendSystemPrompt: promptText,
 	});
 	const streamer = createStreamer(ctx, false);

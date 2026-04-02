@@ -1,0 +1,100 @@
+#+TITLE: Add required default-model to telegram channels config
+#+STATE: DONE
+#+SESSION_ID: 14ab1285ae9bac4d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T16-44-14-906Z_14ab1285ae9bac4d.jsonl]]
+#+CUSTOM_ID: FEAT-238-add-required-default-model-to-telegram-c
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: packages/spell-server
+
+NOTE [2026-04-02]: Implemented in packages/spell-server config/rpc/telegram paths; automated verification passed.
+
+* Initial Message
+
+hi. how do I test the telegram bot? I have cloudflared
+
+* Scope
+
+The spell-server's telegram bot spawns =spell --mode rpc= without a =--model= flag. The spawned process relies on whatever model is in =~/.spell/agent.db= or env vars. If nothing is configured, =session.prompt()= throws "No model selected" and the user gets a silent failure ("Assistant completed without a text response").
+
+Fix: add a required =default-model= field to the telegram block in =channels.kdl=, validate it at config load time, and pass it as =--model <slug>= when spawning the RPC process.
+
+* Implementation
+
+** 1. Add =defaultModel= to =TelegramChannelConfig=
+
+File: =packages/spell-server/src/config/types.ts=
+
+#+begin_src typescript
+export interface TelegramChannelConfig {
+    // ... existing fields ...
+    /** Model slug to use for RPC sessions (required) */
+    defaultModel: string;
+}
+#+end_src
+
+** 2. Parse and validate =default-model= in channels parser
+
+File: =packages/spell-server/src/config/channels-parser.ts=
+
+- Add parsing for =default-model= KDL node (string argument, non-empty)
+- After building the telegram config, throw if =defaultModel= is missing: ="channels.telegram.default-model is required"=
+- This makes the server fail at startup if the field is absent
+
+** 3. Add =model= to =RpcSpawnOptions= and pass =--model= flag
+
+File: =packages/spell-server/src/rpc/types.ts=
+
+Add optional =model?: string= to =RpcSpawnOptions=.
+
+File: =packages/spell-server/src/rpc/rpc-client.ts=
+
+In the =start()= method args assembly (around line 62):
+#+begin_src typescript
+if (this.#options.model) {
+    args.push("--model", this.#options.model);
+}
+#+end_src
+
+** 4. Thread =defaultModel= from config through to RPC spawn
+
+File: =packages/spell-server/src/telegram/process-manager.ts=
+
+In =getOrCreate()= (line 77), include model in spawn options:
+#+begin_src typescript
+const spawnOptions: RpcSpawnOptions = {
+    cwd,
+    tools: options.tools,
+    model: this.#config.defaultModel,
+    appendSystemPrompt: options.appendSystemPrompt,
+    sessionPath,
+};
+#+end_src
+
+** 5. Update existing tests
+
+File: =packages/spell-server/test/cli/server-start.test.ts=
+
+Add =default-model "claude-sonnet-4-20250514"= to the =VALID_CHANNELS_KDL= fixture.
+
+File: =packages/spell-server/test/config/channels-parser.test.ts= (if exists, or create)
+
+- Test: parsing succeeds with =default-model= present
+- Test: parsing throws when =default-model= is missing but other telegram fields are present
+
+** 6. Update user's local config
+
+File: =~/code/ora/growth/.spell/channels.kdl=
+
+Add =default-model= line to the telegram block.
+
+* Sequencing note
+
+Steps 1-3 can be done together (type → parser → rpc-client). Step 4 depends on all three. Tests depend on all four.
+
+* Verification
+
+- =bun test packages/spell-server/test/= passes
+- =bun check:ts= passes
+- Server refuses to start if =channels.kdl= telegram block exists without =default-model=
+- Manual: start bot, send "hi", verify the spawned spell process receives =--model= flag

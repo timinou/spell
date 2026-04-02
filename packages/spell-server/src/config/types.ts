@@ -36,6 +36,8 @@ export interface TelegramChannelConfig {
 	maxSessions: number;
 	/** Port for the log viewer HTTP server. undefined = disabled. */
 	logViewerPort?: number;
+	/** Default model slug passed to spawned spell RPC sessions */
+	defaultModel: string;
 	/** Default project name */
 	defaultProject?: string;
 	/** Named projects: name -> absolute path */
