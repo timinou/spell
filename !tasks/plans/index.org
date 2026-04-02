@@ -1,0 +1,59 @@
+#+TITLE: Phoenix Inspector Action Dispatch Fix
+#+STATE: DONE
+#+SESSION_ID: 14ab509cc331e880
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T21-15-31-468Z_14ab509cc331e880.jsonl]]
+#+CUSTOM_ID: PLAN-099-phoenix-inspector-action-dispatch-fix
+
+NOTE [2026-04-02]: Completed. Verification evidence recorded in the completion section; child BUG items moved to DONE.
+
+
+* Initial Message
+
+File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-02T21-11-00-390Z_14
+ ab4f9409618c2f.jsonl
+ ID: 14ab4f9409618c2f
+
+
+
+when I clicked on send to agent, the qml windoz closed and nothign worked
+
+* Context
+Phoenix Inspector in `~/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector/` has two broken user-visible send flows:
+- `Send to agent` must hand the selection to the active Spell session and keep the inspector window alive.
+- `Quick Fix` must dispatch task-tier work, which requires the launch contract to advertise task-tier support instead of failing the canvas-backed-launch gate.
+
+Recommended approach: keep the inspector long-lived, harden the agent-handoff reply/state path, and expose task-tier support from the launch props used by the canonical Phoenix Inspector launch. Avoid compatibility shims; the resulting design should make the action contract explicit in code and tests.
+
+* Verification
+** Automated checks
+- Run the Phoenix Inspector unit/regression tests in `~/code/ora/hotelcomm/ecosystem/agentmaker` covering handoff prompt/status behavior and quick-fix dispatch/launch props.
+- Add one test proving the `Send to agent` path emits the agent-tier payload and updates the visible handoff state after the reply.
+- Add one test proving the canonical launch props enable task-tier dispatch and that `Quick Fix` accepts a task_result reply path.
+
+** Manual proof
+- Launch the inspector from `~/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector`.
+- Click `Send to agent`; confirm the window stays open and the status text changes from pending to success/queued or error.
+- Click `Quick Fix`; confirm the request is dispatched, the window remains open, and the result text updates.
+
+* Execution Manifest
+** [[id:BUG-117-phoenix-inspector-agent-handoff-stays-op]]
+   - Fix the send-to-agent UI/reply path first; this establishes the long-lived window behavior and visible acknowledgment flow.
+   - Files: `~/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector/inspector.qml`, its regression test(s).
+** [[id:BUG-118-phoenix-inspector-quick-fix-enables-task]]
+   - After the handoff flow is stable, enable task-tier dispatch from the launch contract and add the quick-fix regression test.
+   - Files: `~/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector/helpers.ts`, `index.ts`, quick-fix regression test(s).
+
+
+** Completion [2026-04-02]
+*** Verification
+- `bun test ./.spell/extensions/phoenix-inspector/index.test.ts` (cwd `/home/user/code/ora/hotelcomm/ecosystem/agentmaker`) — 24 passing tests, 0 failures.
+- `bun !tasks/plans/plan-artifacts/PLAN-099-phoenix-inspector-action-dispatch-fix/verify-send-to-agent.ts` (cwd `/home/user/code/ora/spell`) — headless QmlTestHarness run against the live Phoenix Inspector QML emitted the `_tier: "agent"` payload, accepted the `action: "agent_handoff_result"` reply, cleared `pendingAgentHandoffRid`, and updated the visible status text to submitted/success while the window remained queryable after the reply.
+- `bun !tasks/plans/plan-artifacts/PLAN-099-phoenix-inspector-action-dispatch-fix/verify-quick-fix.ts` (cwd `/home/user/code/ora/spell`) — headless QmlTestHarness run against the live Phoenix Inspector QML emitted the `_tier: "task"` payload, accepted the `action: "task_result"` reply, and updated the visible quick-fix result text to success while the window remained queryable after the reply.
+*** Artifacts
+- `[[file:!tasks/plans/plan-artifacts/PLAN-099-phoenix-inspector-action-dispatch-fix/verify-send-to-agent.ts]]` — reproducible headless send-to-agent verification script.
+- `[[file:!tasks/plans/plan-artifacts/PLAN-099-phoenix-inspector-action-dispatch-fix/send-to-agent-success.png]]` — Phoenix Inspector showing the submitted/success handoff acknowledgement after reply.
+- `[[file:!tasks/plans/plan-artifacts/PLAN-099-phoenix-inspector-action-dispatch-fix/verify-quick-fix.ts]]` — reproducible headless quick-fix verification script.
+- `[[file:!tasks/plans/plan-artifacts/PLAN-099-phoenix-inspector-action-dispatch-fix/quick-fix-success.png]]` — Phoenix Inspector showing the quick-fix success result after `task_result`.
+*** Deviations
+- Code changes landed in the hotelcomm workspace repo while the plan/org tracking files live in the spell repo, so the required code commit and plan/org/artifact commit had to be recorded in separate repositories.
