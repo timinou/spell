@@ -1,4 +1,6 @@
+import { parseJsonlLenient } from "@oh-my-pi/pi-utils";
 import type { ChatSession } from "../../rpc/bridge-types";
+import { summarizeToolPartialResult } from "../tool-progress";
 import { escapeHtmlAttr } from "../utils";
 
 type ToolStatus = "running" | "done" | "error";
@@ -11,13 +13,32 @@ type ToolTimelineEntry = {
 	details: string[];
 };
 
-type TimelineEntry = { kind: "user"; text: string } | { kind: "assistant"; text: string } | ToolTimelineEntry;
+type TimelineEntry =
+	| { kind: "user"; text: string }
+	| { kind: "assistant"; text: string }
+	| { kind: "thinking"; text: string }
+	| ToolTimelineEntry;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-function extractUserText(event: Record<string, unknown>): string {
+function extractTextParts(value: unknown): string[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+
+	const textParts: string[] = [];
+	for (const part of value) {
+		if (!isRecord(part) || typeof part.text !== "string") {
+			continue;
+		}
+		textParts.push(part.text);
+	}
+	return textParts;
+}
+
+function extractMessageText(event: Record<string, unknown>): string {
 	const message = isRecord(event.message) ? event.message : undefined;
 	if (!message) {
 		return "";
@@ -26,32 +47,50 @@ function extractUserText(event: Record<string, unknown>): string {
 	if (typeof message.text === "string") {
 		return message.text;
 	}
-
 	if (typeof message.content === "string") {
 		return message.content;
 	}
+	return extractTextParts(message.content).join("\n");
+}
 
-	if (!Array.isArray(message.content)) {
-		return "";
+function appendUniqueDetail(entry: ToolTimelineEntry, detail: string): void {
+	const trimmed = detail.trim();
+	if (!trimmed || entry.details.at(-1) === trimmed) {
+		return;
+	}
+	entry.details.push(trimmed);
+}
+
+function getToolEntry(
+	entries: TimelineEntry[],
+	toolById: Map<string, number>,
+	toolCallId: string,
+	toolName: string,
+): ToolTimelineEntry {
+	const index = toolById.get(toolCallId);
+	const existing = index === undefined ? undefined : entries[index];
+	if (existing?.kind === "tool") {
+		existing.toolName = toolName;
+		return existing;
 	}
 
-	const textParts: string[] = [];
-	for (const part of message.content) {
-		if (!isRecord(part)) {
-			continue;
-		}
-		if (typeof part.text === "string") {
-			textParts.push(part.text);
-		}
-	}
-
-	return textParts.join("\n");
+	const entry: ToolTimelineEntry = {
+		kind: "tool",
+		toolName,
+		toolCallId,
+		status: "running",
+		details: [],
+	};
+	entries.push(entry);
+	toolById.set(toolCallId, entries.length - 1);
+	return entry;
 }
 
 function parseTimeline(jsonlContent: string): TimelineEntry[] {
 	const entries: TimelineEntry[] = [];
 	const toolById = new Map<string, number>();
 	let assistantBuffer = "";
+	let thinkingBuffer = "";
 
 	const flushAssistant = () => {
 		const trimmed = assistantBuffer.trim();
@@ -63,20 +102,18 @@ function parseTimeline(jsonlContent: string): TimelineEntry[] {
 		assistantBuffer = "";
 	};
 
-	for (const rawLine of jsonlContent.split("\n")) {
-		const line = rawLine.trim();
-		if (!line) {
-			continue;
+	const flushThinking = () => {
+		const trimmed = thinkingBuffer.trim();
+		if (!trimmed) {
+			thinkingBuffer = "";
+			return;
 		}
+		entries.push({ kind: "thinking", text: trimmed });
+		thinkingBuffer = "";
+	};
 
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(line);
-		} catch {
-			continue;
-		}
-
-		if (!isRecord(parsed) || typeof parsed.type !== "string") {
+	for (const parsed of parseJsonlLenient<Record<string, unknown>>(jsonlContent)) {
+		if (typeof parsed.type !== "string") {
 			continue;
 		}
 
@@ -84,8 +121,9 @@ function parseTimeline(jsonlContent: string): TimelineEntry[] {
 			case "message_start": {
 				const message = isRecord(parsed.message) ? parsed.message : undefined;
 				if (message?.role === "user") {
+					flushThinking();
 					flushAssistant();
-					const text = extractUserText(parsed);
+					const text = extractMessageText(parsed);
 					entries.push({ kind: "user", text: text || "(user message)" });
 				}
 				break;
@@ -102,52 +140,54 @@ function parseTimeline(jsonlContent: string): TimelineEntry[] {
 				if (assistantEvent.type === "text_end" && typeof assistantEvent.content === "string") {
 					assistantBuffer = assistantEvent.content;
 					flushAssistant();
+					break;
+				}
+				if (assistantEvent.type === "thinking_delta" && typeof assistantEvent.delta === "string") {
+					thinkingBuffer += assistantEvent.delta;
+					break;
+				}
+				if (assistantEvent.type === "thinking_end" && typeof assistantEvent.content === "string") {
+					thinkingBuffer = assistantEvent.content;
+					flushThinking();
 				}
 				break;
 			}
 			case "message_end": {
+				flushThinking();
 				flushAssistant();
 				break;
 			}
 			case "tool_execution_start": {
+				flushThinking();
 				flushAssistant();
 				const toolCallId = typeof parsed.toolCallId === "string" ? parsed.toolCallId : `tool-${entries.length}`;
 				const toolName = typeof parsed.toolName === "string" ? parsed.toolName : "unknown";
-				const details: string[] = [];
+				const entry = getToolEntry(entries, toolById, toolCallId, toolName);
+				entry.status = "running";
 				if (typeof parsed.intent === "string" && parsed.intent.trim()) {
-					details.push(`intent: ${parsed.intent}`);
+					appendUniqueDetail(entry, `intent: ${parsed.intent}`);
 				}
-				entries.push({
-					kind: "tool",
-					toolName,
-					toolCallId,
-					status: "running",
-					details,
-				});
-				toolById.set(toolCallId, entries.length - 1);
+				break;
+			}
+			case "tool_execution_update": {
+				flushThinking();
+				flushAssistant();
+				const toolCallId = typeof parsed.toolCallId === "string" ? parsed.toolCallId : `tool-${entries.length}`;
+				const toolName = typeof parsed.toolName === "string" ? parsed.toolName : "unknown";
+				const entry = getToolEntry(entries, toolById, toolCallId, toolName);
+				entry.status = "running";
+				appendUniqueDetail(entry, summarizeToolPartialResult(parsed.partialResult));
 				break;
 			}
 			case "tool_execution_end": {
+				flushThinking();
 				flushAssistant();
-				const toolCallId = typeof parsed.toolCallId === "string" ? parsed.toolCallId : "unknown";
+				const toolCallId = typeof parsed.toolCallId === "string" ? parsed.toolCallId : `tool-${entries.length}`;
 				const toolName = typeof parsed.toolName === "string" ? parsed.toolName : "unknown";
-				const status: ToolStatus = parsed.isError ? "error" : "done";
-				const index = toolById.get(toolCallId);
-				if (index === undefined) {
-					entries.push({
-						kind: "tool",
-						toolName,
-						toolCallId,
-						status,
-						details: [],
-					});
-					break;
-				}
-				const existing = entries[index];
-				if (existing?.kind === "tool") {
-					existing.status = status;
-					existing.details.push(status === "error" ? "result: failed" : "result: ok");
-				}
+				const entry = getToolEntry(entries, toolById, toolCallId, toolName);
+				entry.status = parsed.isError ? "error" : "done";
+				appendUniqueDetail(entry, summarizeToolPartialResult(parsed.result));
+				appendUniqueDetail(entry, entry.status === "error" ? "result: failed" : "result: ok");
 				break;
 			}
 			default:
@@ -155,6 +195,7 @@ function parseTimeline(jsonlContent: string): TimelineEntry[] {
 		}
 	}
 
+	flushThinking();
 	flushAssistant();
 	return entries;
 }
@@ -166,6 +207,10 @@ function renderTimelineEntry(entry: TimelineEntry): string {
 
 	if (entry.kind === "assistant") {
 		return `<div class="bubble assistant"><div class="label">Assistant</div><pre>${escapeHtmlAttr(entry.text)}</pre></div>`;
+	}
+
+	if (entry.kind === "thinking") {
+		return `<div class="bubble thinking"><div class="label">Thinking</div><pre>${escapeHtmlAttr(entry.text)}</pre></div>`;
 	}
 
 	const statusLabel = entry.status === "error" ? "error" : entry.status === "done" ? "done" : "running";
@@ -198,6 +243,7 @@ export function renderSessionHtml(jsonlContent: string): string {
 		.bubble { border-radius: 12px; padding: 12px; border: 1px solid #374151; }
 		.bubble.user { background: #1f2937; }
 		.bubble.assistant { background: #111827; }
+		.bubble.thinking { background: #16101f; border-color: #6d28d9; }
 		.label { font-size: 0.8rem; color: #93c5fd; margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 		pre { white-space: pre-wrap; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.4; }
 		details.tool { border: 1px solid #4b5563; border-radius: 8px; padding: 10px 12px; background: #111827; }

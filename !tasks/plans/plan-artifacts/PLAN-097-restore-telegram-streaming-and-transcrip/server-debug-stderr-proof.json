@@ -1,0 +1,4 @@
+{
+  "plainStderr": "",
+  "debugStderr": "{\"timestamp\":\"2026-04-02T21:43:09.813+01:00\",\"level\":\"debug\",\"pid\":567774,\"message\":\"Telegram notification-only mode (no users/projects configured)\"}\n{\"timestamp\":\"2026-04-02T21:43:09.816+01:00\",\"level\":\"debug\",\"pid\":567774,\"message\":\"Spell server started\",\"port\":32837,\"configuredPort\":0,\"goals\":1,\"telegramBotActive\":false}\n{\"timestamp\":\"2026-04-02T21:43:09.816+01:00\",\"level\":\"debug\",\"pid\":567774,\"message\":\"Spell server running\",\"configDir\":\"/tmp/spell-server-debug-proof-wkmTtb/home/.spell\",\"configuredPort\":0,\"goals\":1}\n{\"timestamp\":\"2026-04-02T21:43:09.838+01:00\",\"level\":\"debug\",\"pid\":567774,\"message\":\"Shutting down spell server\",\"signal\":\"SIGTERM\"}\n"
+}

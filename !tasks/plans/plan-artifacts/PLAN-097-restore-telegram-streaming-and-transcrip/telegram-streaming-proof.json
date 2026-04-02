@@ -1,0 +1,20 @@
+{
+  "drafts": [
+    {
+      "chat_id": 42,
+      "text": "Running: read inspect config"
+    },
+    {
+      "chat_id": 42,
+      "text": "Running: read\npackages/spell-server/src/telegram/process-manager.ts\n\nReady to report back."
+    }
+  ],
+  "replies": [
+    {
+      "text": "Ready to report back.",
+      "options": {
+        "parse_mode": "HTML"
+      }
+    }
+  ]
+}

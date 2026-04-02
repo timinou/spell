@@ -147,6 +147,30 @@ describe("bridge streaming", () => {
 		expect(ctx._replies[0]?.text).toBe(markdownToTelegramHtml("Done"));
 	});
 
+	it("surfaces tool execution updates in drafts and fallback summaries", async () => {
+		const ctx = mockAuthContext({ chatId: 43, text: "run" });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
+
+		await streamer.handleEvent({
+			type: "tool_execution_start",
+			toolCallId: "tool-1",
+			toolName: "read",
+			intent: "inspect config",
+		});
+		await streamer.handleEvent({
+			type: "tool_execution_update",
+			toolCallId: "tool-1",
+			toolName: "read",
+			partialResult: {
+				content: [{ type: "text", text: "src/config/server.kdl\nsrc/config/channels.kdl" }],
+			},
+		} as unknown as RpcEvent);
+		await streamer.handleEvent({ type: "agent_end" });
+
+		expect(ctx._drafts.some(draft => draft.text.includes("src/config/channels.kdl"))).toBe(true);
+		expect(ctx._replies[0]?.text).toContain("src/config/channels.kdl");
+	});
+
 	it("uses a one-line thinking summary when thinking output is hidden", async () => {
 		const ctx = mockAuthContext({ chatId: 44 });
 		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, false);
@@ -477,5 +501,102 @@ describe("telegram to rpc bridge", () => {
 		expect(prompts[0]?.message).toBe("No image please");
 		expect(prompts[0]?.images).toBeUndefined();
 		expect(ctx._replies).toHaveLength(0);
+	});
+	it("includes non-text file uploads as attachment context when no text is provided", async () => {
+		const ctx = mockAuthContext({
+			chatId: 62,
+			document: { file_id: "doc-binary", file_name: "payload.bin", mime_type: "application/octet-stream" },
+			fileMap: { "doc-binary": "payload.bin" },
+		});
+
+		const prompts: Array<{ message: string; images?: ImageContentRef[] }> = [];
+		const rpcClient = {
+			prompt: async (message: string, images?: ImageContentRef[]) => {
+				prompts.push({ message, images });
+			},
+		} as unknown as RpcClient;
+
+		using _hook = hookFetch(input => {
+			const url = String(input);
+			if (url.includes("/payload.bin")) {
+				return new Response(new Uint8Array([0, 159, 255, 12]), {
+					status: 200,
+					headers: { "content-type": "application/octet-stream" },
+				});
+			}
+			return new Response("missing", { status: 404 });
+		});
+
+		await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient);
+
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]?.message).toContain("Attached file (payload.bin): Unable to parse as text.");
+		expect(prompts[0]?.message).toContain("mime=application/octet-stream");
+		expect(prompts[0]?.message).toContain("size=4 bytes");
+		expect(prompts[0]?.message).not.toBe("User sent an empty message.");
+		expect(prompts[0]?.images).toBeUndefined();
+	});
+
+	it("surfaces attachment metadata when document download fails", async () => {
+		const ctx = mockAuthContext({
+			chatId: 63,
+			document: { file_id: "doc-missing", file_name: "missing.pdf", mime_type: "application/pdf" },
+			fileMap: { "doc-missing": "missing.pdf" },
+		});
+
+		const prompts: Array<{ message: string; images?: ImageContentRef[] }> = [];
+		const rpcClient = {
+			prompt: async (message: string, images?: ImageContentRef[]) => {
+				prompts.push({ message, images });
+			},
+		} as unknown as RpcClient;
+
+		using _hook = hookFetch(() => new Response("failed", { status: 500 }));
+
+		await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient);
+
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]?.message).toContain("Attached file (missing.pdf): Failed to download attachment.");
+		expect(prompts[0]?.message).toContain("mime=application/pdf");
+		expect(prompts[0]?.message).toContain("size=0 bytes");
+		expect(prompts[0]?.message).not.toBe("User sent an empty message.");
+		expect(prompts[0]?.images).toBeUndefined();
+	});
+
+	it("uses attachment summary for oversized text file uploads", async () => {
+		const oversizedBytes = new Uint8Array(512 * 1024 + 1);
+		oversizedBytes.fill(65);
+
+		const ctx = mockAuthContext({
+			chatId: 64,
+			document: { file_id: "doc-large", file_name: "large.txt", mime_type: "text/plain" },
+			fileMap: { "doc-large": "large.txt" },
+		});
+
+		const prompts: Array<{ message: string; images?: ImageContentRef[] }> = [];
+		const rpcClient = {
+			prompt: async (message: string, images?: ImageContentRef[]) => {
+				prompts.push({ message, images });
+			},
+		} as unknown as RpcClient;
+
+		using _hook = hookFetch(input => {
+			const url = String(input);
+			if (url.includes("/large.txt")) {
+				return new Response(oversizedBytes, {
+					status: 200,
+					headers: { "content-type": "text/plain" },
+				});
+			}
+			return new Response("missing", { status: 404 });
+		});
+
+		await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient);
+
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]?.message).toContain("Attached file (large.txt): Unable to inline due to size limit.");
+		expect(prompts[0]?.message).toContain("mime=text/plain");
+		expect(prompts[0]?.message).toContain(`size=${oversizedBytes.length} bytes`);
+		expect(prompts[0]?.images).toBeUndefined();
 	});
 });

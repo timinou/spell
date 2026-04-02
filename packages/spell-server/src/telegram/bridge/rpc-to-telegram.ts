@@ -2,6 +2,7 @@ import type { AssistantEvent, RpcAssistantMessage, RpcEvent } from "../../rpc/ty
 import type { AuthContext } from "../bot/auth";
 import { markdownToTelegramHtml } from "./markdown-html";
 import { splitMessage } from "./message-splitter";
+import { summarizeToolPartialResult } from "../tool-progress";
 
 const DRAFT_INTERVAL_MS = 334;
 const MAX_DRAFT_LENGTH = 4000;
@@ -51,6 +52,14 @@ function extractAssistantText(message: RpcAssistantMessage | undefined): string 
 		.map(block => block.text?.trim() ?? "")
 		.filter(Boolean)
 		.join("\n\n");
+}
+
+function recordToolHistory(toolHistory: string[], status: string): void {
+	if (!status || toolHistory.at(-1) === status) {
+		return;
+	}
+
+	toolHistory.push(status);
 }
 
 function mergeAssistantText(currentText: string, incomingText: string): string {
@@ -133,16 +142,19 @@ export class ResponseStreamer {
 				return;
 			case "tool_execution_start": {
 				const detail = event.intent ? `${event.toolName} ${event.intent}` : event.toolName;
-				this.#toolStatus = `Running: ${detail}`;
-				this.#toolHistory.push(this.#toolStatus);
-				await this.#scheduleDraftUpdate();
+				await this.#setToolStatus(`Running: ${detail}`);
+				return;
+			}
+			case "tool_execution_update": {
+				const summary = summarizeToolPartialResult(event.partialResult);
+				if (summary) {
+					await this.#setToolStatus(`Running: ${event.toolName}\n${summary}`);
+				}
 				return;
 			}
 			case "tool_execution_end": {
 				const state = event.isError ? "Failed" : "Done";
-				this.#toolStatus = `${state}: ${event.toolName}`;
-				this.#toolHistory.push(this.#toolStatus);
-				await this.#scheduleDraftUpdate();
+				await this.#setToolStatus(`${state}: ${event.toolName}`);
 				return;
 			}
 			case "error":
@@ -216,6 +228,12 @@ export class ResponseStreamer {
 			return maybeMessage.chat.id;
 		}
 		return null;
+	}
+
+	async #setToolStatus(status: string): Promise<void> {
+		this.#toolStatus = status;
+		recordToolHistory(this.#toolHistory, status);
+		await this.#scheduleDraftUpdate();
 	}
 
 	async #handleAssistantEvent(event: AssistantEvent): Promise<void> {
@@ -328,9 +346,13 @@ export class ResponseStreamer {
 			return;
 		}
 		this.#finalized = true;
+		const shouldFlushPendingDraft = this.#draftTimer !== null;
 		this.#clearDraftTimer();
 
 		try {
+			if (shouldFlushPendingDraft) {
+				await this.#flushDraft();
+			}
 			const html = markdownToTelegramHtml(this.#buildFinalMarkdown());
 			const messages = splitMessage(html || "Assistant completed without a text response.");
 			for (const chunk of messages) {

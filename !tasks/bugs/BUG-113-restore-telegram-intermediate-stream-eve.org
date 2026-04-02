@@ -1,0 +1,39 @@
+#+TITLE: Restore Telegram intermediate stream events
+#+STATE: DONE
+#+SESSION_ID: 14ab40f1e1297c0f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T20-07-04-324Z_14ab40f1e1297c0f.jsonl]]
+#+CUSTOM_ID: BUG-113-restore-telegram-intermediate-stream-eve
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: backend
+
+NOTE [2026-04-02]: Implemented bridge support for intermediate tool updates, expanded local RPC event typing, and verified with bridge/rpc-client focused tests.
+
+* Initial Message
+
+the latest versions of ../growth do not show me the in-between tthoughts and messages before the final answer. Why?
+
+* Goal
+Restore the Telegram bridge so chat recipients see truthful in-between assistant and tool activity before the final answer, instead of only the final collapsed response.
+
+* Scope
+- packages/spell-server/src/rpc/types.ts
+- packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts
+- packages/spell-server/test/telegram/bridge.test.ts
+- packages/spell-server/test/rpc/rpc-client.test.ts (only if event parsing coverage is needed)
+
+* Implementation
+- TDD first: add failing bridge tests for intermediate tool updates, multi-step assistant output, and thinking visibility/hidden-summary behavior.
+- Expand spell-server's RPC event subset to model the intermediate events emitted by coding-agent RPC, especially tool_execution_update.
+- Update ResponseStreamer so drafts/final replies preserve intermediate assistant/tool progress instead of silently dropping it.
+- Keep the final Telegram reply concise and mobile-friendly, but do not fabricate progress or collapse distinct intermediate events into a misleading summary.
+
+* Acceptance
+- Telegram sessions surface intermediate assistant/tool activity before the final answer.
+- No supported intermediate RPC event needed by Telegram is silently discarded by spell-server's local RPC schema.
+- Final replies still complete correctly across toolUse cycles without duplicating already-streamed content incorrectly.
+
+* Verification
+- Add the failing tests first, then make them pass.
+- Run: bun test packages/spell-server/test/telegram/bridge.test.ts
+- If RPC parser coverage changes, also run: bun test packages/spell-server/test/rpc/rpc-client.test.ts

@@ -1,0 +1,43 @@
+#+TITLE: Persist Telegram session event transcripts by default
+#+STATE: DONE
+#+SESSION_ID: 14ab40f1e1297c0f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T20-07-04-324Z_14ab40f1e1297c0f.jsonl]]
+#+CUSTOM_ID: FEAT-241-persist-telegram-session-event-transcrip
+#+EFFORT: M
+#+LAYER: backend
+#+PRIORITY: #A
+#+DEPENDS: BUG-113-restore-telegram-intermediate-stream-eve
+
+NOTE [2026-04-02]: Implemented spell-server-owned Telegram JSONL transcripts, persisted transcript metadata, switched the log viewer to transcript paths, and verified with process-manager/log-viewer tests.
+
+* Initial Message
+
+the latest versions of ../growth do not show me the in-between tthoughts and messages before the final answer. Why?
+
+* Goal
+Persist full Telegram conversations by default, including streamed intermediate assistant and tool events, in a spell-server-owned transcript that survives restarts and feeds the log viewer.
+
+* Scope
+- packages/spell-server/src/rpc/rpc-client.ts
+- packages/spell-server/src/telegram/process-manager.ts
+- packages/spell-server/src/telegram/log-viewer/renderer.ts
+- packages/spell-server/src/telegram/log-viewer/server.ts
+- New helper(s) for transcript writing if needed under packages/spell-server/src/telegram/
+- packages/spell-server/test/telegram/process-manager.test.ts
+- packages/spell-server/test/telegram/log-viewer.test.ts
+
+* Implementation
+- TDD first: add failing tests for transcript-path creation, event appends, restart/resume behavior, and log-viewer rendering of persisted intermediate events.
+- Persist raw Telegram-session RPC events in a server-owned JSONL transcript. Do not rely on coding-agent session files for this requirement, because they do not preserve message_update/tool_execution_update streaming history.
+- Capture and retain the coding-agent session path separately for resume/debug metadata when available, but keep transcript persistence under spell-server control.
+- Ensure the log viewer reads the persisted transcript and renders thinking/tool updates from the saved event stream, not only the terminal assistant text.
+
+* Acceptance
+- New Telegram sessions create a persistent transcript automatically and append intermediate assistant/tool events as they stream.
+- Restored sessions continue to resume correctly and keep their transcript metadata.
+- The log viewer raw and HTML views reflect the persisted event stream, including intermediate events.
+
+* Verification
+- Add the failing tests first, then make them pass.
+- Run: bun test packages/spell-server/test/telegram/process-manager.test.ts
+- Run: bun test packages/spell-server/test/telegram/log-viewer.test.ts

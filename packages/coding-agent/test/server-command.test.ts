@@ -96,6 +96,58 @@ describe("server command config discovery", () => {
 			expect([0, 143]).toContain(await process.exited);
 		}
 	});
+
+	it("keeps stderr quiet by default", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-server-command-"));
+		tempDirs.add(tempDir);
+		const workspaceDir = path.join(tempDir, "workspace");
+		const homeDir = path.join(tempDir, "home");
+		await fs.mkdir(workspaceDir, { recursive: true });
+		await fs.mkdir(homeDir, { recursive: true });
+		await writeConfigDir(path.join(homeDir, ".spell"), {
+			"server.kdl": VALID_SERVER_KDL,
+			"autonomy.kdl": VALID_MANIFEST_KDL,
+			"channels.kdl": VALID_CHANNELS_KDL,
+		});
+
+		const process = spawnServerCommand(workspaceDir, homeDir);
+		try {
+			await expectProcessToKeepRunning(process);
+			await Bun.sleep(700);
+		} finally {
+			process.kill("SIGTERM");
+		}
+
+		expect([0, 143]).toContain(await process.exited);
+		expect(await readPipe(process.stderr)).toBe("");
+	});
+
+	it("mirrors debug logs to stderr when --debug is set", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-server-command-"));
+		tempDirs.add(tempDir);
+		const workspaceDir = path.join(tempDir, "workspace");
+		const homeDir = path.join(tempDir, "home");
+		await fs.mkdir(workspaceDir, { recursive: true });
+		await fs.mkdir(homeDir, { recursive: true });
+		await writeConfigDir(path.join(homeDir, ".spell"), {
+			"server.kdl": VALID_SERVER_KDL,
+			"autonomy.kdl": VALID_MANIFEST_KDL,
+			"channels.kdl": VALID_CHANNELS_KDL,
+		});
+
+		const process = spawnServerCommand(workspaceDir, homeDir, ["--debug"]);
+		try {
+			await expectProcessToKeepRunning(process);
+			await Bun.sleep(700);
+		} finally {
+			process.kill("SIGTERM");
+		}
+
+		expect([0, 143]).toContain(await process.exited);
+		const stderr = await readPipe(process.stderr);
+		expect(stderr).toContain('"message":"Spell server running"');
+		expect(stderr).toContain('"message":"Shutting down spell server"');
+	});
 });
 
 describe("resolveDefaultConfigDir", () => {
@@ -117,8 +169,12 @@ describe("resolveDefaultConfigDir", () => {
 	});
 });
 
-function spawnServerCommand(cwd: string, homeDir: string): Bun.Subprocess<"ignore", "pipe", "pipe"> {
-	return Bun.spawn([process.execPath, CLI_PATH, "server"], {
+function spawnServerCommand(
+	cwd: string,
+	homeDir: string,
+	extraArgs: string[] = [],
+): Bun.Subprocess<"ignore", "pipe", "pipe"> {
+	return Bun.spawn([process.execPath, CLI_PATH, "server", ...extraArgs], {
 		cwd,
 		env: {
 			HOME: homeDir,
@@ -141,9 +197,16 @@ async function expectProcessToKeepRunning(process: Bun.Subprocess<"ignore", "pip
 	if (earlyExit.type === "running") {
 		return;
 	}
-	const stdout = await new Response(process.stdout).text();
-	const stderr = await new Response(process.stderr).text();
+	const stdout = await readPipe(process.stdout);
+	const stderr = await readPipe(process.stderr);
 	throw new Error(`server command exited early with code ${earlyExit.code}: stdout=${stdout} stderr=${stderr}`);
+}
+
+async function readPipe(stream: ReadableStream<Uint8Array> | null): Promise<string> {
+	if (!stream) {
+		return "";
+	}
+	return await new Response(stream).text();
 }
 
 async function writeConfigDir(configDir: string, files: Record<string, string>): Promise<void> {

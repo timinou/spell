@@ -30,6 +30,8 @@ export interface ChatSession {
 	showThinking: boolean;
 	/** Path to the Spell session file for --resume */
 	sessionPath?: string;
+	/** Path to the spell-server-owned Telegram event transcript */
+	transcriptPath?: string;
 	/** When the session was created */
 	createdAt: number;
 	/** When the last message was processed */
@@ -60,11 +62,12 @@ export interface TempToken {
 
 /** Bridge-level state persisted to telegram-state.json */
 export interface BridgeState {
-	/** Map of chat ID -> session info for resume */
+	/** Map of chat ID -> session info for resume and transcript lookup */
 	sessions: Record<
 		string,
 		{
-			sessionPath: string;
+			sessionPath?: string;
+			transcriptPath?: string;
 			project: string;
 			mode: string;
 			userId: string;
