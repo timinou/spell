@@ -120,6 +120,33 @@ describe("TaskTool auto-roster", () => {
 		});
 	});
 
+	it("sanitizes literal newline inputs before creating auto-roster entries", async () => {
+		const settings = Settings.isolated({
+			"async.enabled": false,
+			"task.isolation.mode": "none",
+			"todo.enabled": true,
+			"task.autoRoster": true,
+		});
+		const session = createSession(tempDir, settings);
+		const transcriptPath = path.join(tempDir, "artifacts", "subtask.jsonl");
+		const heading =
+			"Investigate auto roster sanitization integration with literal newline inputs across task dispatch";
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(createResult("one", "Verify stuff", transcriptPath));
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(session);
+
+		await tool.execute("call-sanitize-integration", {
+			agent: "task",
+			context: `## ${heading}\\n## Goal\\nFix dispatch`,
+			tasks: [{ id: "verify", description: "Verify\\nstuff", assignment: "## Target\n- Task: Verify" }],
+		});
+
+		const createdPhase = session.snapshots[0]?.[0];
+		expect(createdPhase?.name).toBe(heading.slice(0, 80));
+		expect(createdPhase?.name).toHaveLength(80);
+		expect(createdPhase?.tasks[0]?.content).toBe("Verify stuff");
+	});
+
 	it("marks auto-created tasks in_progress and completed with delegated metadata", async () => {
 		const settings = Settings.isolated({
 			"async.enabled": false,

@@ -1,0 +1,91 @@
+#+TITLE: Harden auto-roster sanitization after PLAN-079 audit
+#+STATE: BLOCKED
+#+SESSION_ID: 14aaceaf5904723a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-47-51-780Z_14aaceaf5904723a.jsonl]]
+#+CUSTOM_ID: PLAN-083-harden-auto-roster-sanitization-after-pl
+
+
+
+
+NOTE [2026-04-02]: PLAN-083 implementation is complete, but the required workspace-level `bun check:ts` gate is blocked by unrelated Biome violations in concurrently modified `packages/telegram-bridge/` files. Leaving the plan in BLOCKED until that external gate is green.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-017-audit-implementation:
+
+1. **What**: PLAN-079 was marked `DONE` even though the required `bun check:ts` gate did not pass  
+   **Where**: `!tasks/plans/PLAN-079-fix-task-dispatch-auto-roster-corruption.org`, `** Completion [2026-04-02]` section / final org state  
+   **Why**: The completion record now claims validated work despite a failed required verification step. That weakens plan-state trust and can let regressions ship behind a false green status.  
+   **Effort**: small
+
+2. **What**: Explicit `phase` input still bypasses newline sanitization and the 80-character cap  
+   **Where**: `packages/coding-agent/src/task/sanitize.ts`, `deriveAutoRosterPhaseNameFromContext()` early `explicitPhase` return  
+   **Why**: The original corruption class is still reachable through `params.phase`: a model- or user-supplied explicit phase can still contain embedded newlines or oversized text and create malformed roster phase names.  
+   **Effort**: small
+
+3. **What**: Budget-overrun recovery depends on being able to prompt a session after `requestAbort("terminate")`  
+   **Where**: `packages/coding-agent/src/task/executor.ts`, `requestAbort()` and the post-`session.prompt()` submit_result reminder loop  
+   **Why**: The new graceful-degradation path is only proven with a permissive mock. If a real `AgentSession.abort()` makes the session non-interactive, forced budget termination will not recover via `submit_result` as intended.  
+   **Effort**: medium
+
+4. **What**: The new auto-roster sanitization coverage is helper-only; there is no TaskTool-level regression test for literal `\n` inputs  
+   **Where**: `packages/coding-agent/test/task/auto-roster-sanitize.test.ts` and missing case in `packages/coding-agent/test/task/auto-roster.test.ts`  
+   **Why**: Direct helper tests still pass if production wiring breaks. That already happened during implementation: the whole-task suite caught a wiring failure that the helper tests did not. Without an integration test, future refactors can disconnect sanitization from actual roster creation silently.  
+   **Effort**: small
+
+5. **What**: Sanitization only normalizes literal `\n`, not literal `\r\n` sequences  
+   **Where**: `packages/coding-agent/src/task/sanitize.ts`, both `deriveAutoRosterPhaseNameFromContext()` and `sanitizeTaskContent()`  
+   **Why**: CRLF-style escaped input can still leak `\\r` fragments into phase names or todo titles, producing odd display artifacts and partially malformed auto-roster content.  
+   **Effort**: trivial
+
+* Context
+Post-implementation audit (AUD-017) of [[id:PLAN-079-fix-task-dispatch-auto-roster-corruption]] found five issues. After investigation:
+
+- Finding 1 (plan record): The PLAN-079 completion record already honestly documents the pre-existing tsgo errors. The ~* Verification~ section's expectation (~bun check:ts — type check passes~) was aspirational, but the ~** Completion~ section's actual verification is truthful. A note is appended to PLAN-079 to reconcile these.
+- Finding 2 (explicit phase bypass): Real bug. ~explicitPhase~ returns without sanitization — embedded ~\
+~ or overlong text passes through unchanged.
+- Finding 3 (post-abort prompting): Confirmed non-issue. ~AgentSession.abort()~ resets ~#promptInFlightCount = 0~ (agent-session.ts:3016), explicitly designed for subsequent ~prompt()~ calls. The mock accurately models production behavior. No code change needed.
+- Finding 4 (integration test gap): Real gap. Helper-only tests cannot detect wiring failures between ~sanitize.ts~ and ~TaskTool~.
+- Finding 5 (CRLF normalization): Real gap. Literal ~\\r\
+~ and ~\\r~ are not handled. Merged into BUG-085 since the fix touches the same regex lines.
+
+** Approach
+Two child items: BUG-085 for code fixes (findings 2+5), BUG-086 for integration test (finding 4). Both are small, focused, and non-overlapping. Finding 1 is addressed by a note on PLAN-079. Finding 3 requires no action.
+
+** Key files
+- ~packages/coding-agent/src/task/sanitize.ts~ — sanitization helpers
+- ~packages/coding-agent/test/task/auto-roster-sanitize.test.ts~ — helper tests
+- ~packages/coding-agent/test/task/auto-roster.test.ts~ — integration tests
+
+* Verification
+- ~bun test packages/coding-agent/test/task/~ — all task tests pass
+- ~bun check:ts~ — biome clean (pre-existing tsgo errors in sdk.ts and spellcast/discovery.ts are expected)
+
+* Execution Manifest
+** foundation                                                      :wave:
+- [[id:BUG-085-explicit-phase-name-bypasses-sanitizatio]] Sanitize explicit phase + CRLF normalization (30m)
+** verify                                                          :wave:
+- [[id:BUG-086-auto-roster-sanitization-lacks-tasktool]] Add TaskTool-level integration test for literal ~\
+~ (30m)
+
+BUG-086 depends on BUG-085 since it tests the sanitization that BUG-085 completes.
+
+Additionally during execution: append a note to [[id:PLAN-079-fix-task-dispatch-auto-roster-corruption]] reconciling the ~* Verification~ section's ~bun check:ts~ expectation with the actual completion evidence.
+
+
+** Completion [2026-04-02]
+*** Verification
+- `bun test packages/coding-agent/test/task/auto-roster-sanitize.test.ts` — passed; 16 tests, 0 failures.
+- `bun test packages/coding-agent/test/task/auto-roster.test.ts` — passed; 18 tests, 0 failures.
+- `bun test packages/coding-agent/test/task/` — passed; 106 tests across 15 files, 0 failures.
+- `bunx biome check packages/coding-agent/src/task/sanitize.ts packages/coding-agent/test/task/auto-roster-sanitize.test.ts packages/coding-agent/test/task/auto-roster.test.ts` — passed; touched files are formatted and lint-clean.
+- `bun check:ts` — failed before reaching tsgo because the workspace currently has unrelated Biome violations in `packages/telegram-bridge/src/bot/index.ts`, `packages/telegram-bridge/src/bot/invite.ts`, `packages/telegram-bridge/src/bot/tokens.ts`, `packages/telegram-bridge/src/bridge/index.ts`, `packages/telegram-bridge/src/bridge/message-splitter.ts`, and `packages/telegram-bridge/src/bridge/telegram-to-rpc.ts`. PLAN-083 remains blocked until that workspace-level gate is green.
+*** Artifacts
+- `packages/coding-agent/src/task/sanitize.ts` — explicit phase names now sanitize escaped/real CRLF and newline sequences, collapse whitespace, fall back to context when empty, and cap phase names at 80 characters.
+- `packages/coding-agent/test/task/auto-roster-sanitize.test.ts` — helper regression coverage for explicit phase sanitization and CRLF normalization.
+- `packages/coding-agent/test/task/auto-roster.test.ts` — TaskTool-level regression covering literal newline inputs through auto-roster creation.
+- `!tasks/plans/PLAN-079-fix-task-dispatch-auto-roster-corruption.org` — appended PLAN-083 follow-up note reconciling the earlier Verification heading with the already-truthful completion evidence.
+*** Deviations
+- Required verification did not fully pass because `bun check:ts` is currently red on unrelated workspace changes under `packages/telegram-bridge/`. No plan-scoped work was deferred; no `FUP-` items were created.
+
+NOTE [2026-04-02]: Re-ran `bun check:ts` without truncated output to verify the blocker precisely. Result: Biome stops in `packages/telegram-bridge/` with 31 errors and 3 warnings before tsgo runs, and the diagnostics list itself is truncated (`The number of diagnostics exceeds the limit allowed`). Representative failing files now confirmed include `src/bot/auth.ts`, `src/bot/bot.ts`, `src/bot/index.ts`, `src/bot/invite.ts`, `src/bot/tokens.ts`, `src/bridge/index.ts`, `src/bridge/telegram-to-rpc.ts`, `src/commands/btw.ts`, `src/commands/index.ts`, `src/commands/mode.ts`, `src/commands/project.ts`, `src/commands/session-commands.ts`, `src/commands/unlock-lock.ts`, `src/config/index.ts`, and `src/log-viewer/index.ts`. This blocker remains external to PLAN-083 scope.

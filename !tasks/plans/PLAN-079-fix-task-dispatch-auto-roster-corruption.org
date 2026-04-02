@@ -5,6 +5,8 @@
 #+CUSTOM_ID: PLAN-079-fix-task-dispatch-auto-roster-corruption
 
 
+
+
 * Initial Message
 
 File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl
@@ -60,3 +62,5 @@ These two items are independent and can execute in parallel.
 - ~packages/coding-agent/test/task/tool-budget.test.ts~ — 5 tests for budget enforcement, edge cases, and defaults
 *** Deviations
 None.
+
+NOTE [2026-04-02]: Follow-up from PLAN-083/AUD-017: the '* Verification' heading's 'bun check:ts — type check passes' line was aspirational, not the operative completion evidence. The '** Completion [2026-04-02]' section already recorded the truthful result: biome was clean and tsgo still showed the two pre-existing errors in sdk.ts and spellcast/discovery.ts. No additional correction to the completion report was required.

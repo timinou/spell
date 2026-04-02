@@ -1,0 +1,98 @@
+#+TITLE: Explicit phase name bypasses sanitization in deriveAutoRosterPhaseNameFromContext
+#+STATE: DONE
+#+SESSION_ID: 14aaceaf5904723a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-47-51-780Z_14aaceaf5904723a.jsonl]]
+#+CUSTOM_ID: BUG-085-explicit-phase-name-bypasses-sanitizatio
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: task
+
+NOTE [2026-04-02]: Completed in PLAN-083. Explicit phase names now sanitize escaped and real CRLF/newline sequences, fall back to context when empty after sanitization, and are capped at 80 chars. Verified with `bun test packages/coding-agent/test/task/auto-roster-sanitize.test.ts` (16 passing tests) and later the full task suite (`bun test packages/coding-agent/test/task/`).
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-017-audit-implementation:
+
+1. **What**: PLAN-079 was marked `DONE` even though the required `bun check:ts` gate did not pass  
+   **Where**: `!tasks/plans/PLAN-079-fix-task-dispatch-auto-roster-corruption.org`, `** Completion [2026-04-02]` section / final org state  
+   **Why**: The completion record now claims validated work despite a failed required verification step. That weakens plan-state trust and can let regressions ship behind a false green status.  
+   **Effort**: small
+
+2. **What**: Explicit `phase` input still bypasses newline sanitization and the 80-character cap  
+   **Where**: `packages/coding-agent/src/task/sanitize.ts`, `deriveAutoRosterPhaseNameFromContext()` early `explicitPhase` return  
+   **Why**: The original corruption class is still reachable through `params.phase`: a model- or user-supplied explicit phase can still contain embedded newlines or oversized text and create malformed roster phase names.  
+   **Effort**: small
+
+3. **What**: Budget-overrun recovery depends on being able to prompt a session after `requestAbort("terminate")`  
+   **Where**: `packages/coding-agent/src/task/executor.ts`, `requestAbort()` and the post-`session.prompt()` submit_result reminder loop  
+   **Why**: The new graceful-degradation path is only proven with a permissive mock. If a real `AgentSession.abort()` makes the session non-interactive, forced budget termination will not recover via `submit_result` as intended.  
+   **Effort**: medium
+
+4. **What**: The new auto-roster sanitization coverage is helper-only; there is no TaskTool-level regression test for literal `\n` inputs  
+   **Where**: `packages/coding-agent/test/task/auto-roster-sanitize.test.ts` and missing case in `packages/coding-agent/test/task/auto-roster.test.ts`  
+   **Why**: Direct helper tests still pass if production wiring breaks. That already happened during implementation: the whole-task suite caught a wiring failure that the helper tests did not. Without an integration test, future refactors can disconnect sanitization from actual roster creation silently.  
+   **Effort**: small
+
+5. **What**: Sanitization only normalizes literal `\n`, not literal `\r\n` sequences  
+   **Where**: `packages/coding-agent/src/task/sanitize.ts`, both `deriveAutoRosterPhaseNameFromContext()` and `sanitizeTaskContent()`  
+   **Why**: CRLF-style escaped input can still leak `\\r` fragments into phase names or todo titles, producing odd display artifacts and partially malformed auto-roster content.  
+   **Effort**: trivial
+
+* Scope
+- IN: ~packages/coding-agent/src/task/sanitize.ts~, ~deriveAutoRosterPhaseNameFromContext()~
+- IN: ~packages/coding-agent/test/task/auto-roster-sanitize.test.ts~
+- OUT: No changes to ~index.ts~ or ~executor.ts~
+
+* Root Cause
+~deriveAutoRosterPhaseNameFromContext~ returns ~explicitPhase~ immediately after trimming, without normalizing embedded literal ~
+~, stripping real newlines, or enforcing the 80-char cap. A model-supplied ~params.phase~ with literal ~
+~ or overlong text passes through unchanged and creates a malformed todo phase name — the same corruption class the function was created to fix.
+
+* Implementation
+
+** Sanitize explicit phase the same as derived phase
+- In ~deriveAutoRosterPhaseNameFromContext~, after ~const explicit = explicitPhase?.trim()~, apply the same sanitization before returning:
+  1. Replace literal ~\
+~ and ~\\r\
+~ and ~\\r~ with space (not newline — explicit phase should be single-line)
+  2. Replace real newlines (~
+~, ~\r
+~, ~\r~) with space
+  3. Collapse multiple consecutive spaces to single space
+  4. Trim
+  5. Truncate to 80 chars
+  6. Return if non-empty, otherwise fall through to context-based derivation
+
+Extract a shared ~sanitizePhaseName(raw: string): string~ helper used by both the explicit and the derived path. The derived path already splits on newlines, so it only needs the truncation; but the explicit path needs full single-line sanitization.
+
+** Also normalize CRLF in the context normalization path (finding 5)
+- Change the context normalization regex from ~/\\\
+/g~ to ~/\\\\r\\\
+|\\\\r|\\\
+/g~ so literal ~\r
+~ and ~\r~ are also handled
+- Same for ~sanitizeTaskContent~: change ~/\\\
+|\
+/g~ to ~/\\\\r\\\
+|\\\\r|\\\
+|\\r\
+|\\r|\
+/g~
+
+** Add tests
+Add to ~packages/coding-agent/test/task/auto-roster-sanitize.test.ts~:
+- Explicit phase with literal ~\
+~ is sanitized to single-line
+- Explicit phase longer than 80 chars is truncated
+- Explicit phase that is only whitespace/newlines falls through to context derivation
+- Context with literal ~\\r\
+~ is handled (CRLF normalization)
+- ~sanitizeTaskContent~ with literal ~\\r\
+~ strips correctly
+
+* Acceptance Criteria
+- Explicit phase with ~\
+~ or >80 chars produces clean, capped output
+- Literal CRLF in context and description is normalized
+- All existing tests still pass (regression guard)
+- ~bun test packages/coding-agent/test/task/auto-roster-sanitize.test.ts~ passes

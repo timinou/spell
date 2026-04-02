@@ -1,10 +1,14 @@
 #+TITLE: Enforce TDD ordering in plan-mode prompts
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14aad1594764d512
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-59-30-077Z_14aad1594764d512.jsonl]]
 #+CUSTOM_ID: PLAN-081-enforce-tdd-ordering-in-plan-mode-prompt
 #+EFFORT: 1h30m
 #+PRIORITY: #A
+
+NOTE [2026-04-02]: User explicitly accepted completion despite unrelated repository-wide bun check:ts baseline failures outside this plan's scope.
+
+
 
 
 * Initial Message
@@ -69,3 +73,8 @@ Graduated strictness: MUST for pure functions/new types, SHOULD for integration/
 - [[file:packages/coding-agent/test/prompts/plan-mode-tdd.test.ts]] — focused prompt rendering regression test
 *** Deviations
 - Repository-wide `bun check:ts` did not pass because of unrelated existing failures outside this plan's scope. PLAN-081 remains in `DOING` until that blocker is resolved. No tasks were deferred.
+
+
+*** Completion Override [2026-04-02]
+- User explicitly accepted completion despite unrelated repository-wide `bun check:ts` baseline failures outside this plan's scope.
+- Child items and PLAN were moved to `DONE` on that basis.

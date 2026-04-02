@@ -1,0 +1,77 @@
+#+TITLE: Auto-roster sanitization lacks TaskTool-level integration test
+#+STATE: DONE
+#+SESSION_ID: 14aaceaf5904723a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-47-51-780Z_14aaceaf5904723a.jsonl]]
+#+CUSTOM_ID: BUG-086-auto-roster-sanitization-lacks-tasktool
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: task
+#+DEPENDS: BUG-085-explicit-phase-name-bypasses-sanitizatio
+
+NOTE [2026-04-02]: Completed in PLAN-083. Added TaskTool-level regression coverage for literal newline inputs across auto-roster phase creation and todo content sanitization. Verified with `bun test packages/coding-agent/test/task/auto-roster.test.ts` (18 passing tests) and later the full task suite (`bun test packages/coding-agent/test/task/`).
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-017-audit-implementation:
+
+1. **What**: PLAN-079 was marked `DONE` even though the required `bun check:ts` gate did not pass  
+   **Where**: `!tasks/plans/PLAN-079-fix-task-dispatch-auto-roster-corruption.org`, `** Completion [2026-04-02]` section / final org state  
+   **Why**: The completion record now claims validated work despite a failed required verification step. That weakens plan-state trust and can let regressions ship behind a false green status.  
+   **Effort**: small
+
+2. **What**: Explicit `phase` input still bypasses newline sanitization and the 80-character cap  
+   **Where**: `packages/coding-agent/src/task/sanitize.ts`, `deriveAutoRosterPhaseNameFromContext()` early `explicitPhase` return  
+   **Why**: The original corruption class is still reachable through `params.phase`: a model- or user-supplied explicit phase can still contain embedded newlines or oversized text and create malformed roster phase names.  
+   **Effort**: small
+
+3. **What**: Budget-overrun recovery depends on being able to prompt a session after `requestAbort("terminate")`  
+   **Where**: `packages/coding-agent/src/task/executor.ts`, `requestAbort()` and the post-`session.prompt()` submit_result reminder loop  
+   **Why**: The new graceful-degradation path is only proven with a permissive mock. If a real `AgentSession.abort()` makes the session non-interactive, forced budget termination will not recover via `submit_result` as intended.  
+   **Effort**: medium
+
+4. **What**: The new auto-roster sanitization coverage is helper-only; there is no TaskTool-level regression test for literal `\n` inputs  
+   **Where**: `packages/coding-agent/test/task/auto-roster-sanitize.test.ts` and missing case in `packages/coding-agent/test/task/auto-roster.test.ts`  
+   **Why**: Direct helper tests still pass if production wiring breaks. That already happened during implementation: the whole-task suite caught a wiring failure that the helper tests did not. Without an integration test, future refactors can disconnect sanitization from actual roster creation silently.  
+   **Effort**: small
+
+5. **What**: Sanitization only normalizes literal `\n`, not literal `\r\n` sequences  
+   **Where**: `packages/coding-agent/src/task/sanitize.ts`, both `deriveAutoRosterPhaseNameFromContext()` and `sanitizeTaskContent()`  
+   **Why**: CRLF-style escaped input can still leak `\\r` fragments into phase names or todo titles, producing odd display artifacts and partially malformed auto-roster content.  
+   **Effort**: trivial
+
+* Scope
+- IN: ~packages/coding-agent/test/task/auto-roster.test.ts~ — add new test case
+- OUT: No source changes; this is test-only
+
+* Root Cause
+The PLAN-079 sanitization tests only cover the exported helper functions directly. During implementation, a wiring failure (re-export without local import) caused all 14 existing ~auto-roster.test.ts~ integration tests to fail while the helper-only tests passed. This proves that helper tests alone cannot guard against disconnection between the sanitize module and ~TaskTool~.
+
+* Implementation
+
+** Add integration test case to auto-roster.test.ts
+Add a new test inside the ~TaskTool auto-roster~ describe block:
+- Context field containing literal ~\
+~ throughout (mimicking the model behavior from session ~14aac2bfa1d2ab39~)
+- Verify the created phase name is clean, single-line, and capped at 80 chars
+- Verify task description content in the todo entry has no embedded newlines
+
+Pattern: follow the existing test at line 96 (~auto-creates pending delegated todo entries~), but supply a context with literal ~\
+~:
+#+begin_src typescript
+await tool.execute("call-sanitize-integration", {
+  agent: "task",
+  context: "## Investigation\
+## Goal\
+Fix dispatch",
+  tasks: [{ id: "verify", description: "Verify\
+stuff", assignment: "## Target" }],
+});
+const snapshot = session.snapshots[0];
+expect(snapshot?.[0]?.name).toBe("Investigation");
+expect(snapshot?.[0]?.tasks[0]?.content).toBe("Verify stuff");
+#+end_src
+
+* Acceptance Criteria
+- New integration test passes and exercises the full ~TaskTool.execute → #autoCreateTodoRefs → sanitize~ path
+- Existing 14 auto-roster tests still pass
+- ~bun test packages/coding-agent/test/task/auto-roster.test.ts~ passes
