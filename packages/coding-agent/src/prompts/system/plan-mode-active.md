@@ -50,7 +50,7 @@ Child item requirements (`org create`):
 - Use concrete, executable acceptance criteria
 - Keep scopes non-overlapping
 - Include verification criteria: exact tests, checks, or manual proof the executor must produce
-- Test-first planning is preferred when practical: define test scenarios and test file paths before detailing implementation; for refactors or infrastructure work where that sequencing is not the best fit, note the preferred sequencing explicitly
+- Test-first sub-outline ordering is **REQUIRED** for pure functions and new types: test sub-items **MUST** depend only on types/interfaces, and implementation sub-items **MUST** depend on their corresponding test sub-items. For integration or orchestration code where infrastructure must exist before tests can run, test-first ordering is **RECOMMENDED**; when not used, add an explicit sequencing note in the Implementation section explaining why.
 - If UI, browser, or visual behavior matters, name the required screenshot/artifact and what it must prove
 - For documentation artifacts (org items, spec files, config files), verification is a reference to the created file path or org item ID — screenshots are not needed
 - When a child item depends on another child item, set `:DEPENDS:` property via `properties: { DEPENDS: "ITEM-ID-1 ITEM-ID-2" }` in the `org create` call (space-separated CUSTOM_IDs)
@@ -223,7 +223,7 @@ Every child org item body **MUST** include these sections:
 ### Org Item Body Standard
 Every child org item body **MUST** include all sections below:
 - **Scope** — explicit in-scope and out-of-scope boundaries, with the boundary rationale
-- **Tests** — per-item unit/integration/E2E (for example Playwright) test requirements with file paths and concrete scenarios; define the scenarios and paths before implementation details when practical so they drive design; you **MUST NOT** lump tests into a single separate testing item
+- **Tests** — per-item unit/integration/E2E (for example Playwright) test requirements with file paths and concrete scenarios. Test sub-outline items **MUST** appear before their corresponding implementation sub-items in the dependency graph (test depends on types, implementation depends on test). You **MUST NOT** lump tests into a single separate testing item.
 - **Implementation** — each step has a sub-heading with `:CUSTOM_ID: PARENT-ID::sub-slug` and optional `:DEPENDS:` property. Steps reference test scenarios they satisfy. Example:
   ```
   ** Define TypeScript interfaces
@@ -232,10 +232,18 @@ Every child org item body **MUST** include all sections below:
   :END:
   - File: src/types/foo.ts
 
-  ** Implement core parser
+  ** Write parser tests (TDD: before implementation)
+  :PROPERTIES:
+  :CUSTOM_ID: FEAT-001::parser-tests
+  :DEPENDS: FEAT-001::define-types
+  :END:
+  - File: test/parser.test.ts
+  - Scenarios from Tests section as initially-failing tests
+
+  ** Implement core parser (satisfies parser-tests)
   :PROPERTIES:
   :CUSTOM_ID: FEAT-001::implement-parser
-  :DEPENDS: FEAT-001::define-types
+  :DEPENDS: FEAT-001::parser-tests
   :END:
   - File: src/parser.ts
   ```
@@ -256,15 +264,19 @@ Create org items immediately after completing Metis analysis:
 ```
 * Execution Manifest
 ** foundation                                      :wave:
-- [[id:FEAT-001::define-types]] Define TypeScript interfaces (2h)
+- [[id:FEAT-001::define-types]] Define TypeScript interfaces (1h)
 - [[id:FEAT-002::define-schema]] Define parser schema types (1h)
+** test-contracts                                  :wave:
+- [[id:FEAT-001::parser-tests]] Write parser tests (1h, depends FEAT-001::define-types)
+- [[id:FEAT-002::validator-tests]] Write validator tests (1h, depends FEAT-002::define-schema)
 ** core                                            :wave:
-- [[id:FEAT-001::implement-parser]] Implement parser logic (3h, depends FEAT-001::define-types)
-- [[id:FEAT-002::implement-validator]] Implement validation (2h, depends FEAT-002::define-schema)
-** verify                                          :wave:
-- [[id:FEAT-001::write-tests]] Write parser tests (1h, depends FEAT-001::implement-parser)
-- [[id:FEAT-002::write-tests]] Write validator tests (1h, depends FEAT-002::implement-validator)
+- [[id:FEAT-001::implement-parser]] Implement parser logic (3h, depends FEAT-001::parser-tests)
+- [[id:FEAT-002::implement-validator]] Implement validation (2h, depends FEAT-002::validator-tests)
 ```
+
+<caution>
+**Anti-pattern: tests-last ordering.** Do NOT place `::tests` or `::*-tests` sub-items at the end of the dependency chain depending on all implementation items. For new code, the correct ordering is: types/interfaces → tests → implementation. If the sub-outline has tests depending on implementation, the dependency graph is backwards.
+</caution>
 
 Waves are NOT manually assigned. They emerge from topological sorting of the sub-outline dependency graph. The `org wave` command computes them. Wave names are chosen by the planner to be descriptive.
 

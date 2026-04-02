@@ -1,0 +1,71 @@
+#+TITLE: Enforce TDD ordering in plan-mode prompts
+#+STATE: DOING
+#+SESSION_ID: 14aad1594764d512
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-59-30-077Z_14aad1594764d512.jsonl]]
+#+CUSTOM_ID: PLAN-081-enforce-tdd-ordering-in-plan-mode-prompt
+#+EFFORT: 1h30m
+#+PRIORITY: #A
+
+
+* Initial Message
+
+What prompt/system improvements can you do to make sure sessions like this are encouraged to do TDD? File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl
+ ID: 14aac2bfa1d2ab39
+
+Let's brainstorm
+
+* Context
+
+Session =14aac2bfa1d2ab39= exposed a systematic failure: the agent created 6 FEAT org items where every sub-outline placed =::tests= as the final dependency, after all implementation items. Despite existing prompt guidance saying "test-first planning is preferred when practical", the agent defaulted to implementation-first ordering. The user had to manually intervene to fix every item.
+
+** Root causes
+1. Weak modal language ("preferred when practical") in =plan-mode-active.md= line 53
+2. The implementation example (lines 228-241) shows types -> implementation with no test step — the agent mimicked it exactly
+3. The wave example (lines 256-267) puts tests in a "verify" wave depending on implementation — teaching tests-last
+4. Daedalus and Metis mention testing but with advisory/hedged language that doesn't flag the structural anti-pattern
+
+** Approach
+Three prompt files changed, no runtime code changes:
+1. =plan-mode-active.md= — fix examples and language (HIGH impact, primary fix)
+2. =daedalus.md= — add TDD ordering as structural review criterion (MEDIUM, defense-in-depth)
+3. =metis.md= — strengthen testing check from conversational to structural (LOW-MEDIUM)
+
+Graduated strictness: MUST for pure functions/new types, SHOULD for integration/orchestration with explicit sequencing note.
+
+** Key file paths
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= (lines 53, 226, 228-241, 256-267)
+- =packages/coding-agent/src/prompts/agents/daedalus.md= (lines 58-59)
+- =packages/coding-agent/src/prompts/agents/metis.md= (line 40)
+- =packages/coding-agent/test/prompts/plan-mode-tdd.test.ts= (new test file)
+
+* Verification
+- =bun check:ts= passes
+- =bun test packages/coding-agent/test/prompts/plan-mode-tdd.test.ts= passes
+- Manual inspection: rendered plan-mode-active template shows types -> tests -> implementation in both the sub-outline example and the wave example
+- Manual inspection: daedalus.md contains "TDD sub-outline ordering" section
+- Manual inspection: metis.md testing question references dependency graph ordering
+
+* Execution Manifest
+** primary                                                                 :wave:
+- [[id:FEAT-210-fix-tdd-ordering-in-plan-mode-active-pro]] Fix plan-mode-active.md examples and TDD language (1h)
+
+** reinforcement                                                           :wave:
+- [[id:FEAT-211-strengthen-tdd-checks-in-daedalus-and-me]] Strengthen TDD checks in daedalus and metis agent prompts (30m, depends FEAT-210)
+
+
+** Completion [2026-04-02]
+*** Verification
+- `bun test packages/coding-agent/test/prompts/plan-mode-tdd.test.ts` — passed
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts` — passed
+- `./node_modules/.bin/biome check packages/coding-agent/test/prompts/plan-mode-tdd.test.ts` — passed
+- `bun -e 'import { formatPromptContent } from "./packages/coding-agent/src/utils/prompt-format"; const files = ["packages/coding-agent/src/prompts/system/plan-mode-active.md", "packages/coding-agent/src/prompts/agents/daedalus.md", "packages/coding-agent/src/prompts/agents/metis.md"]; ...'` — passed; all three prompt files match formatter output
+- `bun -e 'import { renderPromptTemplate } from "./packages/coding-agent/src/config/prompt-templates"; ...'` — passed; rendered prompt contained the TDD ordering guidance, parser-tests example, test-contracts wave, and tests-last caution block
+- `bun check:ts` — failed in `/home/user/code/ora/spell` due unrelated existing issues outside this plan's scope, including `packages/telegram-bridge/src/bot/*.ts`, `packages/telegram-bridge/src/bridge/*.ts`, `packages/ai/src/utils/oauth/index.ts`, `packages/coding-agent/src/spellcast/*.ts`, and `packages/coding-agent/src/tools/canvas-cast.ts`
+- `bun check:ts` in clean detached worktree `/tmp/plan081-check-7QDWUL` after applying only this plan's prompt changes — failed due unrelated repository baseline issues in `packages/ai/src/utils/oauth/index.ts`, `packages/coding-agent/src/spellcast/*.ts`, and `packages/coding-agent/src/tools/canvas-cast.ts`
+*** Artifacts
+- [[file:packages/coding-agent/src/prompts/system/plan-mode-active.md]] — primary TDD ordering guidance and examples
+- [[file:packages/coding-agent/src/prompts/agents/daedalus.md]] — TDD sub-outline ordering review criteria
+- [[file:packages/coding-agent/src/prompts/agents/metis.md]] — dependency-graph TDD questioning guidance
+- [[file:packages/coding-agent/test/prompts/plan-mode-tdd.test.ts]] — focused prompt rendering regression test
+*** Deviations
+- Repository-wide `bun check:ts` did not pass because of unrelated existing failures outside this plan's scope. PLAN-081 remains in `DOING` until that blocker is resolved. No tasks were deferred.

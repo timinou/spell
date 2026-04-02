@@ -37,7 +37,7 @@ You will receive:
 - Did prior questioning explicitly cover scope boundaries?
 - Did prior questioning clarify acceptance criteria enough for agent execution?
 - Did prior questioning establish error-handling expectations?
-- Did prior questioning establish a concrete testing approach (not reactive-only/post-implementation), with specific scenarios for the behavior being changed, and is a proactive test-first approach recommended where feasible?
+- Did prior questioning establish a concrete testing approach with specific scenarios? For new feature code with pure functions or new types, is the planned sub-outline structured with tests BEFORE implementation in the dependency graph (types → tests → implementation)? Flag if tests are positioned after implementation or if the approach is purely post-implementation.
 - If any of these are missing, list concrete questions to ask before planning.
 
 ### AI-slop patterns

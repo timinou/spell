@@ -1,0 +1,86 @@
+#+TITLE: Strengthen TDD checks in daedalus and metis agents
+#+STATE: REVIEW
+#+SESSION_ID: 14aad1594764d512
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-59-30-077Z_14aad1594764d512.jsonl]]
+#+CUSTOM_ID: FEAT-211-strengthen-tdd-checks-in-daedalus-and-me
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: packages/coding-agent/src/prompts
+#+DEPENDS: FEAT-210-fix-tdd-ordering-in-plan-mode-active-pro
+
+NOTE [2026-04-02]: Prompt reinforcement changes complete. Manual prompt inspection passed. Final plan verification remains blocked by unrelated repository-wide bun check:ts failures; see PLAN-081 completion entry.
+
+* Initial Message
+
+What prompt/system improvements can you do to make sure sessions like this are encouraged to do TDD? File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl
+ ID: 14aac2bfa1d2ab39
+
+Let's brainstorm
+
+* Scope
+** In scope
+- Strengthen =packages/coding-agent/src/prompts/agents/daedalus.md= TDD ordering check from advisory observation to structural constraint
+- Strengthen =packages/coding-agent/src/prompts/agents/metis.md= testing check from conversational question to dependency-graph directive
+** Out of scope
+- plan-mode-active.md (handled by FEAT-210)
+- Runtime enforcement (no code changes)
+- AGENTS.md changes (deferred)
+
+* Motivation
+Daedalus and Metis both mention test ordering but with weak language. Daedalus says "flag afterthought testing patterns where test scenarios appear to be defined after implementation steps" (advisory, hedged with "appear to be"). Metis asks "Did prior questioning establish a concrete testing approach?" (checks the conversation, not the structural output). Both need to check the sub-outline dependency graph directly.
+
+* Tests
+- No dedicated test file — these are small prompt text changes. Verified by reading the updated prompt files and confirming the language matches.
+- Verification: =bun check:ts= passes (prompt files are imported as text)
+
+* Implementation
+
+** Strengthen Daedalus TDD review criterion
+:PROPERTIES:
+:CUSTOM_ID: FEAT-211-tdd-reviewer-agents::daedalus-fix
+:END:
+- File: =packages/coding-agent/src/prompts/agents/daedalus.md=
+- In "### 5. Acceptance criteria quality" (line 58-59), replace:
+  #+begin_example
+  Each item should include concrete, agent-executable verification. Note vague checks like "works" or "looks good". Flag afterthought testing patterns where test scenarios appear to be defined after implementation steps rather than alongside or before them.
+  #+end_example
+- With:
+  #+begin_example
+  Each item should include concrete, agent-executable verification. Note vague checks like "works" or "looks good".
+  #+end_example
+- Add a new section after "### 5":
+  #+begin_example
+  ### 5b. TDD sub-outline ordering
+  For new feature items with pure functions or new types, verify that test sub-outline items (=::*-tests=, =::tests=) depend only on types, interfaces, or scaffolding — NOT on implementation sub-items. Implementation sub-items should depend on their corresponding test sub-items. This is a structural constraint reflecting the plan-mode TDD policy.
+
+  Flag as HIGH any item where:
+  - A =::tests= or =::*-tests= sub-item depends on an implementation sub-item
+  - Implementation sub-items do not depend on their corresponding test sub-items
+  - The item contains pure functions (converters, parsers, formatters) but has no test-first ordering
+
+  For integration or orchestration items, test-first ordering is recommended but not required. If not used, the item should include an explicit note explaining why.
+  #+end_example
+
+** Strengthen Metis testing check
+:PROPERTIES:
+:CUSTOM_ID: FEAT-211-tdd-reviewer-agents::metis-fix
+:END:
+- File: =packages/coding-agent/src/prompts/agents/metis.md=
+- Line 40, replace:
+  #+begin_example
+  - Did prior questioning establish a concrete testing approach (not reactive-only/post-implementation), with specific scenarios for the behavior being changed, and is a proactive test-first approach recommended where feasible?
+  #+end_example
+- With:
+  #+begin_example
+  - Did prior questioning establish a concrete testing approach with specific scenarios? For new feature code with pure functions or new types, is the planned sub-outline structured with tests BEFORE implementation in the dependency graph (types -> tests -> implementation)? Flag if tests are positioned after implementation or if the approach is purely post-implementation.
+  #+end_example
+
+* Edge Cases
+- Daedalus numbering: adding "5b" avoids renumbering existing sections (6, 7). If the section numbering style changes in future, this may need adjustment.
+- Metis operates before org items exist: it checks the proposed approach, not actual org items. The strengthened language directs Metis to recommend TDD sub-outline ordering, which the planner then applies when creating items.
+
+* Acceptance Criteria
+- =bun check:ts= passes
+- =daedalus.md= contains "TDD sub-outline ordering" section with HIGH severity flagging criteria
+- =metis.md= testing question references dependency graph ordering (types -> tests -> implementation)
+- Neither file contains the old weak language ("appear to be defined after" in daedalus, "proactive test-first approach recommended where feasible" in metis)

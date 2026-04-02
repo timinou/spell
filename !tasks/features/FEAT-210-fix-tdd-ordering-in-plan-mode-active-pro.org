@@ -1,0 +1,161 @@
+#+TITLE: Fix TDD ordering in plan-mode-active prompt
+#+STATE: REVIEW
+#+SESSION_ID: 14aad1594764d512
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T11-59-30-077Z_14aad1594764d512.jsonl]]
+#+CUSTOM_ID: FEAT-210-fix-tdd-ordering-in-plan-mode-active-pro
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: packages/coding-agent/src/prompts
+
+NOTE [2026-04-02]: Scoped prompt changes complete. Focused prompt tests pass. Final plan verification remains blocked by unrelated repository-wide bun check:ts failures; see PLAN-081 completion entry.
+
+* Initial Message
+
+What prompt/system improvements can you do to make sure sessions like this are encouraged to do TDD? File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T10-55-42-728Z_14aac2bfa1d2ab39.jsonl
+ ID: 14aac2bfa1d2ab39
+
+Let's brainstorm
+
+* Scope
+** In scope
+- Fix =packages/coding-agent/src/prompts/system/plan-mode-active.md= to enforce TDD ordering in org item sub-outlines
+- Change "preferred when practical" to graduated MUST/SHOULD language
+- Fix the implementation example (lines 228-241) to show tests-before-implementation
+- Fix the wave example (lines 256-267) to show tests in an earlier wave than implementation
+- Add explicit anti-pattern warning about tests-last ordering
+** Out of scope
+- AGENTS.md changes (deferred)
+- Runtime enforcement or validation (no code changes)
+- Changes to plan execution behavior — only prompt guidance
+
+* Motivation
+Session =14aac2bfa1d2ab39= demonstrates the failure mode: the agent created 6 FEAT items with =::tests= as the last dependency (after all implementation). The user had to manually intervene to fix the ordering. The root cause is (a) weak "preferred when practical" language, (b) examples that teach implementation-first ordering, and (c) a wave example showing =::write-tests= depending on =::implement-parser=.
+
+* Tests
+- File: =packages/coding-agent/test/prompts/plan-mode-tdd.test.ts=
+- Scenario: rendered plan-mode-active template contains "MUST" (not just "preferred") for TDD ordering of pure functions
+- Scenario: the implementation sub-outline example includes a test step between types and implementation
+- Scenario: the test step in the example depends on types, NOT on implementation
+- Scenario: the wave example shows tests in an earlier or same wave as implementation, not in a later "verify" wave
+- Scenario: anti-pattern warning text is present in the rendered output
+
+* Implementation
+
+** Fix child item requirements TDD language
+:PROPERTIES:
+:CUSTOM_ID: FEAT-TDD-plan-prompt::fix-tdd-language
+:END:
+- File: =packages/coding-agent/src/prompts/system/plan-mode-active.md=, line 53
+- Replace:
+  #+begin_example
+  - Test-first planning is preferred when practical: define test scenarios and test file paths before detailing implementation; for refactors or infrastructure work where that sequencing is not the best fit, note the preferred sequencing explicitly
+  #+end_example
+- With graduated language:
+  #+begin_example
+  - Test-first sub-outline ordering is **REQUIRED** for pure functions and new types: test sub-items **MUST** depend only on types/interfaces, and implementation sub-items **MUST** depend on their corresponding test sub-items. For integration or orchestration code where infrastructure must exist before tests can run, test-first ordering is **RECOMMENDED**; when not used, add an explicit sequencing note in the Implementation section explaining why.
+  #+end_example
+
+** Fix implementation example to show TDD
+:PROPERTIES:
+:CUSTOM_ID: FEAT-TDD-plan-prompt::fix-impl-example
+:DEPENDS: FEAT-TDD-plan-prompt::fix-tdd-language
+:END:
+- File: =packages/coding-agent/src/prompts/system/plan-mode-active.md=, lines 228-241
+- Replace the current example (which shows only types -> implementation with no test step) with:
+  #+begin_example
+  ** Define TypeScript interfaces
+  :PROPERTIES:
+  :CUSTOM_ID: FEAT-001::define-types
+  :END:
+  - File: src/types/foo.ts
+
+  ** Write parser tests (TDD: before implementation)
+  :PROPERTIES:
+  :CUSTOM_ID: FEAT-001::parser-tests
+  :DEPENDS: FEAT-001::define-types
+  :END:
+  - File: test/parser.test.ts
+  - Scenarios from Tests section as initially-failing tests
+
+  ** Implement core parser (satisfies parser-tests)
+  :PROPERTIES:
+  :CUSTOM_ID: FEAT-001::implement-parser
+  :DEPENDS: FEAT-001::parser-tests
+  :END:
+  - File: src/parser.ts
+  #+end_example
+- The key structural change: =parser-tests= depends on =define-types=, =implement-parser= depends on =parser-tests=
+
+** Fix wave example to show tests-first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-TDD-plan-prompt::fix-wave-example
+:DEPENDS: FEAT-TDD-plan-prompt::fix-impl-example
+:END:
+- File: =packages/coding-agent/src/prompts/system/plan-mode-active.md=, lines 256-267
+- Replace the current wave example (which puts tests in a "verify" wave after implementation) with:
+  #+begin_example
+  * Execution Manifest
+  ** foundation                                      :wave:
+  - [[id:FEAT-001::define-types]] Define TypeScript interfaces (1h)
+  - [[id:FEAT-002::define-schema]] Define parser schema types (1h)
+  ** test-contracts                                  :wave:
+  - [[id:FEAT-001::parser-tests]] Write parser tests (1h, depends FEAT-001::define-types)
+  - [[id:FEAT-002::validator-tests]] Write validator tests (1h, depends FEAT-002::define-schema)
+  ** core                                            :wave:
+  - [[id:FEAT-001::implement-parser]] Implement parser logic (3h, depends FEAT-001::parser-tests)
+  - [[id:FEAT-002::implement-validator]] Implement validation (2h, depends FEAT-002::validator-tests)
+  #+end_example
+
+** Fix Tests section guidance
+:PROPERTIES:
+:CUSTOM_ID: FEAT-TDD-plan-prompt::fix-tests-section
+:DEPENDS: FEAT-TDD-plan-prompt::fix-tdd-language
+:END:
+- File: =packages/coding-agent/src/prompts/system/plan-mode-active.md=, line 226
+- Replace:
+  #+begin_example
+  - **Tests** — per-item unit/integration/E2E (for example Playwright) test requirements with file paths and concrete scenarios; define the scenarios and paths before implementation details when practical so they drive design; you **MUST NOT** lump tests into a single separate testing item
+  #+end_example
+- With:
+  #+begin_example
+  - **Tests** — per-item unit/integration/E2E (for example Playwright) test requirements with file paths and concrete scenarios. Test sub-outline items **MUST** appear before their corresponding implementation sub-items in the dependency graph (test depends on types, implementation depends on test). You **MUST NOT** lump tests into a single separate testing item.
+  #+end_example
+
+** Add anti-pattern warning
+:PROPERTIES:
+:CUSTOM_ID: FEAT-TDD-plan-prompt::add-antipattern
+:DEPENDS: FEAT-TDD-plan-prompt::fix-wave-example
+:END:
+- File: =packages/coding-agent/src/prompts/system/plan-mode-active.md=
+- After the wave example block (after the closing =```=), add:
+  #+begin_example
+  <caution>
+  **Anti-pattern: tests-last ordering.** Do NOT place =::tests= or =::*-tests= sub-items at the end of the dependency chain depending on all implementation items. For new code, the correct ordering is: types/interfaces -> tests -> implementation. If the sub-outline has tests depending on implementation, the dependency graph is backwards.
+  </caution>
+  #+end_example
+
+** Write verification tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-TDD-plan-prompt::write-tests
+:DEPENDS: FEAT-TDD-plan-prompt::add-antipattern
+:END:
+- File: =packages/coding-agent/test/prompts/plan-mode-tdd.test.ts=
+- Render the plan-mode-active.md template with ultraplan=true, orgEnabled=true
+- Assert the rendered output contains the graduated TDD language (MUST/REQUIRED for pure functions)
+- Assert the implementation example includes a test sub-item between types and implementation
+- Assert the wave example does not have a "verify" wave that depends on implementation
+- Assert the anti-pattern caution block is present
+
+* Edge Cases
+- Handlebars conditionals: the implementation example and wave example are inside ={{#if}}= blocks (ultraplan). Verify the changes only appear when the relevant template conditions are active.
+- The =Tests= guidance at line 226 is inside ={{else}}= branch of ={{#if customDecomposition}}=. Ensure changes don't affect custom decomposition mode.
+- Existing plans created before this change: no impact (prompt changes only affect future sessions)
+- The anti-pattern warning should use =<caution>= tag to match the surrounding prompt style
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/prompts/plan-mode-tdd.test.ts= passes
+- =bun check:ts= passes
+- The rendered plan-mode-active template (with ultraplan=true) contains "REQUIRED" for TDD ordering
+- The implementation example shows types -> tests -> implementation dependency ordering
+- The wave example shows tests before implementation, not after
+- The anti-pattern warning is present in the output

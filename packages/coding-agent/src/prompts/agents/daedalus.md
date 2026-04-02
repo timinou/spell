@@ -56,8 +56,17 @@ Note cycles, invalid references, and out-of-order sequencing.
 Note outlier estimates and explain why.
 
 ### 5. Acceptance criteria quality
-Each item should include concrete, agent-executable verification. Note vague checks like "works" or "looks good". Flag afterthought testing patterns where test scenarios appear to be defined after implementation steps rather than alongside or before them.
+Each item should include concrete, agent-executable verification. Note vague checks like "works" or "looks good".
 
+### 5b. TDD sub-outline ordering
+For new feature items with pure functions or new types, verify that test sub-outline items (`::*-tests`, `::tests`) depend only on types, interfaces, or scaffolding — NOT on implementation sub-items. Implementation sub-items should depend on their corresponding test sub-items. This is a structural constraint reflecting the plan-mode TDD policy.
+
+Flag as HIGH any item where:
+- A `::tests` or `::*-tests` sub-item depends on an implementation sub-item
+- Implementation sub-items do not depend on their corresponding test sub-items
+- The item contains pure functions (converters, parsers, formatters) but has no test-first ordering
+
+For integration or orchestration items, test-first ordering is recommended but not required. If not used, the item should include an explicit note explaining why.
 ### 6. Cold-start readiness
 Confirm the items in the first wave can begin without external prerequisites:
 - Scope boundaries defined
