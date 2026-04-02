@@ -1,0 +1,45 @@
+#+TITLE: RPC death tests for stderr capture and exit code race
+#+STATE: DONE
+#+SESSION_ID: 14ab35957e1346f0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T19-17-26-136Z_14ab35957e1346f0.jsonl]]
+#+CUSTOM_ID: BUG-112-rpc-death-tests-for-stderr-capture-and-e
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: infra
+#+DEPENDS: BUG-111-rpc-death-reason-loses-stderr-and-exit-c
+
+NOTE [2026-04-02]: Added two test scenarios: stderr-then-exit (startup failure with stderr+exit code), exit-after-ready (mid-session death with stderr+exit code). All 10 tests pass.
+
+* Initial Message
+
+Failed to process message: Error: RPC stdout closed
+
+in ../growth under spell server.
+
+What's up?
+
+Add test scenarios for the improved RPC death reporting to
+=packages/spell-server/test/rpc/rpc-client.test.ts=.
+
+* Acceptance Criteria
+- Test: process that writes to stderr then exits with code 1 — error event
+  includes both exit code and stderr content
+- Test: process that exits with non-zero code — error event includes
+  "exited with code N" not "stdout closed"
+- Test: process that exits cleanly (code 0 after stdout close) does not
+  produce a misleading error about code 0
+
+* Sub-outline
+
+** Add "stderr-then-exit" scenario to mock script
+Mock script scenario: writes diagnostic text to stderr, then exits with
+code 1 (never sends "ready" or exits after ready). The test asserts the
+error event message contains both the exit code and the stderr text.
+
+** Add "exit-code-wins-race" scenario
+Mock script scenario: sends "ready", then exits with code 2 after a short
+delay. The test asserts the error event message contains "exited with code 2"
+rather than "stdout closed".
+
+* Verification
+- =bun test packages/spell-server/test/rpc/rpc-client.test.ts=

@@ -1,0 +1,70 @@
+#+TITLE: RPC error reporting improvement
+#+STATE: DONE
+#+SESSION_ID: 14ab35957e1346f0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T19-17-26-136Z_14ab35957e1346f0.jsonl]]
+#+CUSTOM_ID: PLAN-096-rpc-error-reporting-improvement
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-02]: All child items DONE, tests pass, implementation verified.
+
+
+* Initial Message
+
+Failed to process message: Error: RPC stdout closed
+
+in ../growth under spell server.
+
+What's up?
+
+* Context
+
+When a spell RPC child process dies, the parent (spell-server) surfaces the
+opaque message "RPC stdout closed" to callers (Telegram bot, goal executor).
+The actual cause — exit code and stderr output — is available but lost:
+
+- stderr is logged at debug level and discarded
+- stdout close is detected before =child.exited= resolves, so the exit code
+  message from the exit handler never fires (=#markDead= guard short-circuits)
+
+Concrete recent failure: Telegram user got "Failed to process message: Error:
+RPC stdout closed" when the real cause was =Model "gpt-5.4-mini" not found=
+printed to stderr before the process exited with code 1.
+
+Approach: buffer recent stderr lines, resolve the stdout-close / exit-code
+race by deferring briefly, and enrich =#markDead= to append stderr context.
+
+Files:
+- =packages/spell-server/src/rpc/rpc-client.ts= — implementation
+- =packages/spell-server/test/rpc/rpc-client.test.ts= — tests
+
+* Verification
+
+#+begin_src sh
+bun test packages/spell-server/test/rpc/rpc-client.test.ts
+#+end_src
+
+After deploy, trigger a Telegram message with an invalid model configured.
+The error reply should include the model-not-found stderr message instead of
+the opaque "RPC stdout closed".
+
+* Execution Manifest
+
+** Wave 1
+- [[id:BUG-111-rpc-death-reason-loses-stderr-and-exit-c]] — RPC death reason loses stderr and exit code (S)
+
+** Wave 2
+- [[id:BUG-112-rpc-death-tests-for-stderr-capture-and-e]] — RPC death tests for stderr capture and exit code race (S, depends BUG-111)
+
+** Completion [2026-04-02]
+
+*** Verification
+- =bun test packages/spell-server/test/rpc/rpc-client.test.ts= — 10/10 pass (8 existing + 2 new)
+- Type check: =bunx tsgo --noEmit= on spell-server — rpc-client.ts clean (pre-existing error in unrelated operator-actions.ts)
+- Formatting: =bunx biome format --write= — no fixes needed
+
+*** Artifacts
+- =packages/spell-server/src/rpc/rpc-client.ts= — implementation changes
+- =packages/spell-server/test/rpc/rpc-client.test.ts= — two new test scenarios
+
+*** Deviations
+None.

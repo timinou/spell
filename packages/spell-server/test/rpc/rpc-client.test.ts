@@ -29,6 +29,13 @@ describe("RpcClient", () => {
 		const selectedModel = modelFlag >= 0 && args[modelFlag + 1] ? args[modelFlag + 1] : null;
 
 		const send = event => process.stdout.write(JSON.stringify(event) + "\\n");
+
+		if (scenario === "stderr-then-exit") {
+		  process.stderr.write('Model "gpt-5.4-mini" not found\\n');
+		  process.stderr.write('Check your configuration\\n');
+		  process.exit(1);
+		}
+
 		send({ type: "ready" });
 
 		if (scenario === "startup-events") {
@@ -41,6 +48,12 @@ describe("RpcClient", () => {
 		}
 		if (scenario === "exit-soon") {
 		  setTimeout(() => process.exit(2), 20);
+		}
+		if (scenario === "exit-after-ready") {
+		  setTimeout(() => {
+		    process.stderr.write("Fatal: connection lost\\n");
+		    process.exit(2);
+		  }, 20);
 		}
 
 		let stdinBuffer = "";
@@ -323,5 +336,58 @@ describe("RpcClient", () => {
 		expect(removedEvents).toEqual([]);
 
 		await client.kill();
+	});
+
+	it("includes stderr and exit code when process writes to stderr then dies", async () => {
+		const client = new RpcClient(
+			{
+				cwd: import.meta.dir,
+				tools: ["read"],
+				appendSystemPrompt: "stderr-then-exit",
+			},
+			{ command: spellPath },
+		);
+
+		try {
+			await client.start();
+			throw new Error("Expected start() to throw");
+		} catch (err) {
+			const message = (err as Error).message;
+			expect(message).toContain("exited with code 1");
+			expect(message).toContain('Model "gpt-5.4-mini" not found');
+			expect(message).toContain("Check your configuration");
+		}
+	});
+
+	it("includes exit code and stderr in error event when process dies after ready", async () => {
+		const client = new RpcClient(
+			{
+				cwd: import.meta.dir,
+				tools: ["read"],
+				appendSystemPrompt: "exit-after-ready",
+			},
+			{ command: spellPath },
+		);
+		const errorEvent = Promise.withResolvers<RpcEvent>();
+		client.onEvent(event => {
+			if (eventWithType(event, "error")) {
+				errorEvent.resolve(event);
+			}
+		});
+
+		await client.start();
+		const event = await Promise.race([
+			errorEvent.promise,
+			Bun.sleep(TEST_TIMEOUT_MS).then(() => {
+				throw new Error("Timed out waiting for error event");
+			}),
+		]);
+
+		expect(event.type).toBe("error");
+		if (event.type === "error") {
+			expect(event.message).toContain("exited with code 2");
+			expect(event.message).toContain("Fatal: connection lost");
+		}
+		expect(client.alive).toBe(false);
 	});
 });

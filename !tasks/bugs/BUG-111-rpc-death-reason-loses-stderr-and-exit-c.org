@@ -1,0 +1,59 @@
+#+TITLE: RPC death reason loses stderr and exit code
+#+STATE: DONE
+#+SESSION_ID: 14ab35957e1346f0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T19-17-26-136Z_14ab35957e1346f0.jsonl]]
+#+CUSTOM_ID: BUG-111-rpc-death-reason-loses-stderr-and-exit-c
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: infra
+
+NOTE [2026-04-02]: Implemented: stderr ring buffer (20 lines), stdout-close/exit-code race fix via Promise.race, markDead enrichment with stderr context.
+
+* Initial Message
+
+Failed to process message: Error: RPC stdout closed
+
+in ../growth under spell server.
+
+What's up?
+
+When a spell RPC child process dies, the parent reports the opaque message
+"RPC stdout closed" instead of including the exit code and stderr output.
+
+Root cause: ~#consumeStdout~ EOF races with ~child.exited~ handler — stdout
+close is detected first, so the exit code message never wins. Additionally,
+~#consumeStderr~ logs stderr at debug level but doesn't buffer it for
+inclusion in the death message.
+
+* Acceptance Criteria
+- Error events emitted by RpcClient include the process exit code when available
+- Error events include recent stderr lines (last N lines) when available
+- The stdout-close path no longer races with the exit handler — it defers
+  briefly to let ~child.exited~ provide the exit code
+- Existing tests continue to pass
+
+* Scope
+- File: =packages/spell-server/src/rpc/rpc-client.ts=
+
+* Sub-outline
+
+** Add stderr ring buffer
+Add =#stderrLines: string[]= field (capped at 20 lines).
+Modify =#consumeStderr= to push trimmed non-empty lines.
+
+** Fix stdout-close / exit-code race
+In =#consumeStdout= EOF handler, instead of immediately calling
+=#markDead("RPC stdout closed")=, wait briefly for =child.exited= via
+=Promise.race([child.exited, Bun.sleep(500)])=. If exit code available, use
+"RPC process exited with code N". Otherwise fall back to "RPC stdout closed".
+Need to capture process reference before the async loop since =#process= may
+be nulled.
+
+** Enrich markDead with stderr context
+Modify =#markDead= to append buffered stderr lines to the reason string.
+Format: =reason + "
+" + stderrLines.join("
+")= when non-empty.
+
+* Verification
+- =bun test packages/spell-server/test/rpc/rpc-client.test.ts=
