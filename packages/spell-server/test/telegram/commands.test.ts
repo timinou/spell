@@ -5,6 +5,7 @@ import type { BridgeRpcCommand, RpcEvent, RpcSpawnOptions } from "../../src/rpc/
 import type { AuthContext } from "../../src/telegram/bot/auth";
 import { COMMANDS, type CommandContext } from "../../src/telegram/commands";
 import { handleBtwCommand } from "../../src/telegram/commands/btw";
+import { handleApprovalCallback, parseApprovalCallbackData } from "../../src/telegram/commands/approval";
 import { handleModeCommand } from "../../src/telegram/commands/mode";
 import { handleProjectCommand } from "../../src/telegram/commands/project";
 import {
@@ -24,6 +25,8 @@ interface MockAuthContextOptions {
 	text?: string;
 	modes?: string[];
 	defaultMode?: string;
+	callbackData?: string;
+	callbackMessageId?: number;
 }
 
 interface MockReply {
@@ -41,6 +44,7 @@ function mockAuthContext(opts: MockAuthContextOptions): MockAuthContext {
 	const editedMessages: MockReply[] = [];
 	const userId = opts.userId ?? "123456789";
 	const chatId = opts.chatId ?? 12345;
+	const callbackData = opts.callbackData;
 
 	return {
 		from: { id: Number(userId) },
@@ -51,6 +55,17 @@ function mockAuthContext(opts: MockAuthContextOptions): MockAuthContext {
 			date: Math.floor(Date.now() / 1000),
 			chat: { id: chatId, type: "private" as const },
 		},
+		callbackQuery: callbackData
+			? {
+				id: "callback-1",
+				data: callbackData,
+				message: {
+					message_id: opts.callbackMessageId ?? 7,
+					chat: { id: chatId, type: "private" as const },
+					date: Math.floor(Date.now() / 1000),
+				},
+			}
+			: undefined,
 		reply: async (text: string, options?: Record<string, unknown>) => {
 			replies.push({ text, options });
 			return { message_id: 2, chat: { id: chatId }, date: Math.floor(Date.now() / 1000) };
@@ -514,4 +529,66 @@ it("/mode telegram-full respawns with telegram prompt", async () => {
 
 	expect(processManager.createdSessions[0]?.options.mode).toBe("telegram-full");
 	expect(processManager.createdSessions[0]?.options.appendSystemPrompt).toBe(telegramPrompt);
+});
+
+describe("telegram approval callbacks", () => {
+	it("parses approval callback data", () => {
+		expect(parseApprovalCallbackData("approval:approve-feed:article-1:cb-1")).toEqual({
+			action: "approve-feed",
+			articleId: "article-1",
+			callbackId: "cb-1",
+		});
+		expect(parseApprovalCallbackData("approval:nope:article-1:cb-1")).toBeNull();
+	});
+
+	it("delegates approval callbacks through the operator action bridge", async () => {
+		const { cmdCtx } = mockCommandContext();
+		const requests: unknown[] = [];
+		cmdCtx.operatorActionBridge = async request => {
+			requests.push(request);
+			return {
+				articleId: request.articleId,
+				workflowState: "FEED_APPROVED",
+				triggeredGoals: ["feed-delivery-goal"],
+				duplicate: false,
+			};
+		};
+		const ctx = mockAuthContext({ callbackData: "approval:approve-feed:article-1:cb-1", callbackMessageId: 17 });
+		const parsed = parseApprovalCallbackData("approval:approve-feed:article-1:cb-1");
+		if (!parsed) throw new Error("expected parsed callback");
+
+		await handleApprovalCallback(ctx, cmdCtx, parsed);
+
+		expect(requests).toEqual([
+			{
+				source: "telegram",
+				callbackId: "cb-1",
+				articleId: "article-1",
+				action: "approve-feed",
+				actor: { userId: "123456789", chatId: 12345, messageId: 17 },
+			},
+		]);
+		expect((ctx as { _editedMessages: MockReply[] })._editedMessages[0]?.text).toBe(
+			"Approved for feed. Triggered: feed-delivery-goal.",
+		);
+	});
+
+	it("reports duplicate approval callbacks without triggering again", async () => {
+		const { cmdCtx } = mockCommandContext();
+		cmdCtx.operatorActionBridge = async request => ({
+			articleId: request.articleId,
+			workflowState: "FEED_APPROVED",
+			triggeredGoals: [],
+			duplicate: true,
+		});
+		const ctx = mockAuthContext({ callbackData: "approval:approve-feed:article-1:cb-dup" });
+		const parsed = parseApprovalCallbackData("approval:approve-feed:article-1:cb-dup");
+		if (!parsed) throw new Error("expected parsed callback");
+
+		await handleApprovalCallback(ctx, cmdCtx, parsed);
+
+		expect((ctx as { _editedMessages: MockReply[] })._editedMessages[0]?.text).toBe(
+			"Approved for feed already applied.",
+		);
+	});
 });

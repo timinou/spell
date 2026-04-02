@@ -200,6 +200,16 @@ describe("HTTP router", () => {
 		expect(payload.goalName).toBe("ship-it");
 	});
 
+	it("keeps direct trigger routes working for webhook goals when legacy callers include auth", async () => {
+		const response = await fetch(`${baseUrl}/trigger/incoming`, {
+			method: "POST",
+			headers: { Authorization: "Bearer goal-token" },
+		});
+		expect(response.status).toBe(202);
+		const payload = (await response.json()) as { goalName: string };
+		expect(payload.goalName).toBe("incoming");
+	});
+
 	it("returns 404 for missing trigger goal", async () => {
 		const response = await fetch(`${baseUrl}/trigger/missing`, { method: "POST" });
 		expect(response.status).toBe(404);

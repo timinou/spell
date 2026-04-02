@@ -110,6 +110,8 @@ telegram bot-token="123456:replace-me" {
 
 The hooks layer can then send completion or failure messages to configured chats.
 
+For richer delivery, downstream code may call the notification sender with a structured payload instead of plain text. The reusable sender now accepts `{ text, parseMode, replyMarkup, linkPreviewOptions }`, so a domain can ship HTML/Markdown digests, inline approval buttons, and explicit preview controls while still using the same Telegram channel configuration.
+
 ## Running the Server
 
 From the monorepo:

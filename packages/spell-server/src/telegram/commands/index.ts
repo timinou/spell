@@ -1,8 +1,10 @@
 import { logger } from "@oh-my-pi/pi-utils";
+import type { OperatorActionHandler } from "../../http/routes/operator-actions";
 import type { AuthContext } from "../bot/auth";
 import type { TelegramBot } from "../bot/bot";
 import type { ProcessManager } from "../process-manager";
 import type { TelegramBridgeConfig, UserConfig } from "../types";
+import { registerApprovalCallbacks } from "./approval";
 import { registerModeCallbacks } from "./mode";
 import { registerProjectCallbacks } from "./project";
 import { registerUnlockLockCallbacks } from "./unlock-lock";
@@ -11,6 +13,7 @@ export interface CommandContext {
 	config: TelegramBridgeConfig;
 	processManager: ProcessManager;
 	telegramPrompt: string;
+	operatorActionBridge?: OperatorActionHandler;
 }
 
 export type CommandHandler = (ctx: AuthContext, cmdCtx: CommandContext) => Promise<void>;
@@ -149,6 +152,7 @@ export function registerCommands(bot: TelegramBot, cmdCtx: CommandContext): void
 	registerUnlockLockCallbacks(bot, cmdCtx);
 	registerProjectCallbacks(bot, cmdCtx);
 	registerModeCallbacks(bot, cmdCtx);
+	registerApprovalCallbacks(bot, cmdCtx);
 
 	void bot.api.setMyCommands(COMMANDS).catch(error => {
 		logger.warn("Failed to register Telegram bot commands", { error: String(error) });

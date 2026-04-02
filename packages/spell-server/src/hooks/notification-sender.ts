@@ -1,8 +1,15 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ChannelsConfig } from "../config/types";
+import type {
+	TelegramInlineKeyboardButton,
+	TelegramInlineKeyboardMarkup,
+	TelegramLinkPreviewOptions,
+	TelegramMessage,
+	TelegramMessagePayload,
+} from "./types";
 
 export interface NotificationSender {
-	sendMessage(chatId: number, text: string): Promise<void>;
+	sendMessage(chatId: number, message: TelegramMessage): Promise<void>;
 }
 
 export interface TelegramNotificationSenderOptions {
@@ -10,8 +17,73 @@ export interface TelegramNotificationSenderOptions {
 	fetchImpl?: typeof fetch;
 }
 
+interface TelegramSendMessageRequestBody {
+	chat_id: number;
+	text: string;
+	parse_mode?: TelegramMessagePayload["parseMode"];
+	reply_markup?: {
+		inline_keyboard: Array<Array<{ text: string; url?: string; callback_data?: string }>>;
+	};
+	link_preview_options?: {
+		is_disabled?: boolean;
+		url?: string;
+		prefer_small_media?: boolean;
+		prefer_large_media?: boolean;
+		show_above_text?: boolean;
+	};
+}
+
+function normalizeMessage(message: TelegramMessage): TelegramMessagePayload {
+	return typeof message === "string" ? { text: message } : message;
+}
+
+function toInlineKeyboardButton(button: TelegramInlineKeyboardButton): {
+	text: string;
+	url?: string;
+	callback_data?: string;
+} {
+	return {
+		text: button.text,
+		...(button.url ? { url: button.url } : {}),
+		...(button.callbackData ? { callback_data: button.callbackData } : {}),
+	};
+}
+
+function toReplyMarkup(replyMarkup: TelegramInlineKeyboardMarkup): TelegramSendMessageRequestBody["reply_markup"] {
+	return {
+		inline_keyboard: replyMarkup.inlineKeyboard.map(row => row.map(button => toInlineKeyboardButton(button))),
+	};
+}
+
+function toLinkPreviewOptions(
+	linkPreviewOptions: TelegramLinkPreviewOptions,
+): TelegramSendMessageRequestBody["link_preview_options"] {
+	return {
+		...(linkPreviewOptions.isDisabled !== undefined ? { is_disabled: linkPreviewOptions.isDisabled } : {}),
+		...(linkPreviewOptions.url ? { url: linkPreviewOptions.url } : {}),
+		...(linkPreviewOptions.preferSmallMedia !== undefined
+			? { prefer_small_media: linkPreviewOptions.preferSmallMedia }
+			: {}),
+		...(linkPreviewOptions.preferLargeMedia !== undefined
+			? { prefer_large_media: linkPreviewOptions.preferLargeMedia }
+			: {}),
+		...(linkPreviewOptions.showAboveText !== undefined ? { show_above_text: linkPreviewOptions.showAboveText } : {}),
+	};
+}
+
+function toRequestBody(chatId: number, message: TelegramMessage): TelegramSendMessageRequestBody {
+	const payload = normalizeMessage(message);
+	return {
+		chat_id: chatId,
+		text: payload.text,
+		...(payload.parseMode ? { parse_mode: payload.parseMode } : {}),
+		...(payload.replyMarkup ? { reply_markup: toReplyMarkup(payload.replyMarkup) } : {}),
+		...(payload.linkPreviewOptions ? { link_preview_options: toLinkPreviewOptions(payload.linkPreviewOptions) } : {}),
+	};
+}
+
 export class NoopNotificationSender implements NotificationSender {
-	async sendMessage(_chatId: number, _text: string): Promise<void> {
+	async sendMessage(_chatId: number, _message: TelegramMessage): Promise<void> {
 		// No-op when Telegram is not configured.
 	}
 }
@@ -29,7 +101,7 @@ export class TelegramNotificationSender implements NotificationSender {
 		this.#fetchImpl = options.fetchImpl ?? fetch;
 	}
 
-	async sendMessage(chatId: number, text: string): Promise<void> {
+	async sendMessage(chatId: number, message: TelegramMessage): Promise<void> {
 		if (!this.#owners.has(chatId)) {
 			logger.warn("Skipping Telegram notification for unauthorized chat", { chatId });
 			return;
@@ -38,7 +110,7 @@ export class TelegramNotificationSender implements NotificationSender {
 		const response = await this.#fetchImpl(`${this.#apiBaseUrl}/bot${this.#botToken}/sendMessage`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ chat_id: chatId, text }),
+			body: JSON.stringify(toRequestBody(chatId, message)),
 		});
 		if (response.ok) {
 			return;

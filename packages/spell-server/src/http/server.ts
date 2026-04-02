@@ -5,6 +5,7 @@ import type { GoalScheduler } from "../scheduler/goal-scheduler";
 import { verifyBasicAuth } from "./auth";
 import frontendHtml from "./frontend/index.html" with { type: "text" };
 import { handleGetGoal, handleGetGoalLogs, handleGetGoalRuns, handleGetGoals, handleGetManifest } from "./routes/goals";
+import { handleOperatorActionsRoute, type OperatorActionHandler } from "./routes/operator-actions";
 import { handleTriggerRoute } from "./routes/triggers";
 import type { ServerConfig } from "./types";
 
@@ -15,6 +16,7 @@ export interface SpellServerDeps {
 	config: ServerConfig;
 	cwd: string;
 	frontendHtml?: string;
+	operatorActionHandler?: OperatorActionHandler;
 }
 
 const CORS_HEADERS = {
@@ -82,6 +84,9 @@ export async function handleRequest(request: Request, deps: SpellServerDeps): Pr
 	if (path.startsWith("/api/")) {
 		if (!verifyBasicAuth(request, deps.config)) {
 			return withCors(unauthorizedResponse());
+		}
+		if (path === "/api/operator-actions") {
+			return withCors(await handleOperatorActionsRoute(request, deps.operatorActionHandler));
 		}
 		return withCors(await handleApiRoute(path, deps));
 	}
