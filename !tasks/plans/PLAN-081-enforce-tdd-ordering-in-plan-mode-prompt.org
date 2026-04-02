@@ -6,6 +6,7 @@
 #+EFFORT: 1h30m
 #+PRIORITY: #A
 
+
 NOTE [2026-04-02]: User explicitly accepted completion despite unrelated repository-wide bun check:ts baseline failures outside this plan's scope.
 
 
@@ -78,3 +79,9 @@ Graduated strictness: MUST for pure functions/new types, SHOULD for integration/
 *** Completion Override [2026-04-02]
 - User explicitly accepted completion despite unrelated repository-wide `bun check:ts` baseline failures outside this plan's scope.
 - Child items and PLAN were moved to `DONE` on that basis.
+
+
+*** Closure Verification [2026-04-02]
+- `bun check:ts` now passes in `/home/user/code/ora/spell`.
+- The earlier repository-wide baseline blocker has been resolved by subsequent unrelated fixes in the repository.
+- PLAN-081 closure is now fully verified.
