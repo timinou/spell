@@ -1,0 +1,17 @@
+#+TITLE: Follow-up run live Telegram verification for PLAN-092
+#+STATE: INIT
+#+SESSION_ID: 14ab2753d85bac57
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T18-15-08-897Z_14ab2753d85bac57.jsonl]]
+#+CUSTOM_ID: FUP-031-follow-up-run-live-telegram-verification
+
+Deferred from PLAN-092 because the execution workstation lacked TELEGRAM_BOT_TOKEN and SPELL_SERVER_CONFIG_DIR.
+
+Scope:
+- Start spell-server with a real Telegram bot token and channels.kdl containing default-model.
+- Verify a normal "hi" message returns assistant text.
+- Re-run with an invalid API key and verify the Telegram reply surfaces the real error instead of "Assistant completed without a text response".
+
+Verification prerequisites:
+- TELEGRAM_BOT_TOKEN configured
+- SPELL_SERVER_CONFIG_DIR pointing at a real spell-server config directory
+- Reachable Telegram chat for the configured bot
