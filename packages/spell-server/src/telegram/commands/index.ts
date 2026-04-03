@@ -44,6 +44,7 @@ const MODE_TOOLS: Record<string, string[]> = {
 		"org",
 		"calc",
 		"code_search",
+		"send_file",
 	],
 	"telegram-full": [
 		"read",
@@ -65,6 +66,7 @@ const MODE_TOOLS: Record<string, string[]> = {
 		"emacs_code",
 		"notebook",
 		"generate_image",
+		"send_file",
 	],
 };
 

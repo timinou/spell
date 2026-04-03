@@ -159,7 +159,7 @@ export function createMessageHandler(cmdCtx: CommandContext): MiddlewareFn<AuthC
 			});
 
 			const session = cmdCtx.processManager.getSession(chatId);
-			const streamer = new ResponseStreamer(ctx, session?.showThinking ?? false);
+			const streamer = new ResponseStreamer(ctx, session?.showThinking ?? false, cmdCtx.config.autoSendImages);
 			const listener = (event: RpcEvent): void => {
 				void streamer.handleEvent(event).catch(error => {
 					logger.warn("Failed streaming response event", { error: String(error) });

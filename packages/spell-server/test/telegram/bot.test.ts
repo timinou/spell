@@ -44,6 +44,7 @@ function testConfig(): TelegramBridgeConfig {
 		uploadDir: "/tmp/uploads",
 		idleTimeout: 60,
 		maxSessions: 2,
+		autoSendImages: true,
 		defaultModel: "claude-sonnet-4-5",
 		projects: {
 			spell: "/home/user/code/ora/spell",

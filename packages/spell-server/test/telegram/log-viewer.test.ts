@@ -36,6 +36,7 @@ function buildConfig(port: number): TelegramBridgeConfig {
 		logViewerPort: port,
 		idleTimeout: 600,
 		maxSessions: 2,
+		autoSendImages: true,
 		defaultModel: "claude-sonnet-4-5",
 		projects: { spell: "/tmp/spell" },
 		users: {},

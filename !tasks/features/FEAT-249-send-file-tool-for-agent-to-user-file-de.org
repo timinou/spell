@@ -1,0 +1,85 @@
+#+TITLE: send_file tool for agent-to-user file delivery
+#+STATE: DOING
+#+SESSION_ID: 14ac069b96bbdfba
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-30-40-474Z_14ac069b96bbdfba.jsonl]]
+#+CUSTOM_ID: FEAT-249-send-file-tool-for-agent-to-user-file-de
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: application
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+the telegram pdf upload to the user does not work my man. it should. I want it to work. is it registered through a tool call? how does the telegram bridge handle giving ht eability to send tool calls?
+
+* Scope
+New builtin tool =send_file= in coding-agent that allows the agent to explicitly send files (PDFs, images, CSVs, any type) to the user. In Telegram context, the bridge intercepts the tool result and delivers via Telegram Bot API. Outside Telegram, the tool still works but just reports metadata.
+
+* Design
+** Tool parameters
+- =path= (required string): File path relative to CWD or absolute
+- =caption= (optional string): Text caption to accompany the file in Telegram
+- =filename= (optional string): Override display filename (defaults to basename of path)
+
+** Tool result shape
+Returns path-based delivery metadata in =details= (no base64 through the JSON pipe):
+#+begin_src typescript
+{
+  content: [{ type: "text", text: "File queued for delivery: report.pdf (245KB)" }],
+  details: {
+    delivery: {
+      type: "document" | "photo",
+      absolutePath: "/abs/path/to/file",
+      fileName: "report.pdf",
+      mimeType: "application/pdf",
+      caption: "Monthly report",
+      fileSize: 251000,
+    }
+  }
+}
+#+end_src
+
+** Validation
+- File must exist (ENOENT -> tool error)
+- File size <= 50MB (Telegram bot limit)
+- MIME type inferred from file extension via lookup table; fallback =application/octet-stream=
+- Image MIME types (=image/*=) produce =type: "photo"=; all else =type: "document"=
+
+** Registration
+- Add =SendFileTool= to =BUILTIN_TOOLS= in =tools/index.ts=
+- Add =send_file= to =TOOL_TIERS= as ="specialized"=
+- Export from =tools/index.ts=
+- Add =send_file= to both =telegram-readonly= and =telegram-full= in spell-server's =MODE_TOOLS=
+
+* Files
+- NEW: =packages/coding-agent/src/tools/send-file.ts=
+- NEW: =packages/coding-agent/src/prompts/tools/send-file.md=
+- MODIFY: =packages/coding-agent/src/tools/index.ts= (register + export)
+- MODIFY: =packages/spell-server/src/telegram/commands/index.ts= (MODE_TOOLS)
+
+* Sub-outline
+Test-first ordering. The =SendFileTool= is a pure function (file validation + metadata construction) — tests depend only on types, implementation depends on tests.
+
+1. Define =FileDelivery= type and =SendFileResult= type (shared contract with FEAT-250)
+2. Write =send-file.test.ts= covering:
+   - Returns =delivery.type === "document"= with correct MIME for =.pdf=, =.csv=, =.txt=
+   - Returns =delivery.type === "photo"= for =.png=, =.jpg=, =.gif=
+   - Returns =delivery.mimeType === "application/octet-stream"= for unknown extensions
+   - Errors on missing file (=ENOENT=)
+   - Errors on file > 50MB
+   - =filename= override works (=delivery.fileName= uses override, not basename)
+   - =caption= flows through to =delivery.caption=
+   - =absolutePath= is fully resolved from CWD-relative input
+   - Content text includes human-readable file size
+3. Write tool description prompt (=send-file.md=)
+4. Implement =SendFileTool= class — make tests pass
+5. Register in =BUILTIN_TOOLS=, =TOOL_TIERS=, barrel exports
+6. Add to =MODE_TOOLS= for both telegram modes
+
+* Test file
+- NEW: =packages/coding-agent/test/tools/send-file.test.ts=
+* Acceptance
+- =send_file= appears in tool list when =--tools send_file= is passed
+- Tool returns delivery metadata with correct MIME type for =.pdf=, =.png=, =.csv=, =.txt=
+- Tool errors clearly on missing file and on files > 50MB
+- =bun check:ts= passes

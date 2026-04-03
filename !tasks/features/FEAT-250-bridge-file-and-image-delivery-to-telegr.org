@@ -1,0 +1,127 @@
+#+TITLE: Bridge file and image delivery to Telegram users
+#+STATE: DOING
+#+SESSION_ID: 14ac069b96bbdfba
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-30-40-474Z_14ac069b96bbdfba.jsonl]]
+#+CUSTOM_ID: FEAT-250-bridge-file-and-image-delivery-to-telegr
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: application
+#+DEPENDS: FEAT-249-send-file-tool-for-agent-to-user-file-de
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+the telegram pdf upload to the user does not work my man. it should. I want it to work. is it registered through a tool call? how does the telegram bridge handle giving ht eability to send tool calls?
+
+* Scope
+Modify the Telegram bridge's =ResponseStreamer= to intercept tool results containing file/image data and deliver them to the user via Telegram Bot API. Two delivery paths:
+
+1. *Explicit*: =send_file= tool results -> =replyWithDocument()= / =replyWithPhoto()=
+2. *Auto*: =generate_image= tool results -> =replyWithPhoto()= for each generated image (configurable via KDL)
+
+* Design
+** ResponseStreamer changes (=rpc-to-telegram.ts=)
+In =handleEvent()=, the =tool_execution_end= case currently only updates status text. Add delivery logic:
+
+#+begin_src typescript
+case "tool_execution_end": {
+  // Explicit file delivery from send_file
+  if (!event.isError && event.toolName === "send_file") {
+    await this.#deliverFile(event.result?.details);
+  }
+  // Auto-send generated images
+  if (!event.isError && event.toolName === "generate_image" && this.#autoSendImages) {
+    await this.#deliverGeneratedImages(event.result?.details);
+  }
+  // Existing status update
+  const state = event.isError ? "Failed" : "Done";
+  await this.#setToolStatus(`${state}: ${event.toolName}`);
+  return;
+}
+#+end_src
+
+** =deliverFile= method
+- Extract =delivery= from =result.details=
+- Validate =absolutePath= exists and is readable
+- Determine whether to use =replyWithDocument= or =replyWithPhoto= based on =delivery.type=
+- Read file from disk using =Bun.file()= / =fs.readFile()=
+- Create grammy =InputFile(buffer, fileName)=
+- Call =ctx.replyWithDocument()= or =ctx.replyWithPhoto()= with optional caption
+- Catch errors and log warning (don't break the response flow)
+
+** =deliverGeneratedImages= method
+- Extract =imagePaths: string[]= from =result.details=
+- For each path, read the image file
+- Send via =ctx.replyWithPhoto(new InputFile(buffer, basename))=
+- On error, log warning and skip individual images
+
+** Config: =autoSendImages=
+- Add =autoSendImages: boolean= (default =true=) to =TelegramChannelConfig=
+- Parse =auto-send-images= boolean in =channels-parser.ts=
+- Thread through =CommandContext= -> =createMessageHandler= -> =ResponseStreamer= constructor
+- =ResponseStreamer= stores and checks =this.#autoSendImages= flag
+
+** Type updates (=rpc/types.ts=)
+Add =FileDelivery= interface to bridge types so the details shape is documented:
+#+begin_src typescript
+export interface FileDelivery {
+  type: "document" | "photo";
+  absolutePath: string;
+  fileName: string;
+  mimeType: string;
+  caption?: string;
+  fileSize: number;
+}
+#+end_src
+
+* Files
+- MODIFY: =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts= (delivery methods + constructor change)
+- MODIFY: =packages/spell-server/src/rpc/types.ts= (=FileDelivery= interface)
+- MODIFY: =packages/spell-server/src/config/types.ts= (=autoSendImages= field)
+- MODIFY: =packages/spell-server/src/config/channels-parser.ts= (parse =auto-send-images=)
+- MODIFY: =packages/spell-server/src/telegram/bot/bot.ts= (thread config to ResponseStreamer)
+- MODIFY: =packages/spell-server/src/telegram/commands/index.ts= (CommandContext update if needed)
+
+* Sub-outline
+Test-first where possible. Config parsing is a pure function — test first. =ResponseStreamer= delivery is integration-level (requires grammy mock context) — tests written first using the established mock pattern from =bridge.test.ts=, then implementation to satisfy them.
+
+Note: The =ResponseStreamer= constructor currently takes =(ctx, showThinking)=. Adding =autoSendImages= as a third parameter is a signature change, so the existing test callsites (=new ResponseStreamer(ctx, true)=) will need an update. The new tests will use the 3-arg form; existing tests can default the third arg.
+
+1. Add =FileDelivery= interface to =rpc/types.ts= (pure type, no behavior)
+2. Add =autoSendImages= field to =TelegramChannelConfig= type
+3. Write =channels-parser.test.ts= additions:
+   - Default config has =autoSendImages === true=
+   - =auto-send-images false= parses to =autoSendImages: false=
+   - =auto-send-images true= parses to =autoSendImages: true=
+4. Implement KDL parsing for =auto-send-images= in =channels-parser.ts= — make parser tests pass
+5. Write =bridge.test.ts= additions for file delivery:
+   - =tool_execution_end= for =send_file= with =details.delivery= calls =replyWithDocument= (mock ctx needs =replyWithDocument=)
+   - =tool_execution_end= for =send_file= with =delivery.type === "photo"= calls =replyWithPhoto=
+   - =tool_execution_end= for =send_file= with =isError: true= does NOT attempt delivery
+   - =tool_execution_end= for =send_file= with missing =details.delivery= does NOT crash
+   - File delivery error (read failure) logs warning, does not break text response
+   - =tool_execution_end= for =generate_image= with =autoSendImages=true= sends images from =details.imagePaths=
+   - =tool_execution_end= for =generate_image= with =autoSendImages=false= does NOT send images
+   - =tool_execution_end= for =generate_image= with 0 images is a no-op
+6. Modify =ResponseStreamer= constructor to accept =autoSendImages= flag (default =true=)
+7. Implement =deliverFile()= and =deliverGeneratedImages()= — make bridge tests pass
+8. Thread config: =CommandContext= -> =createMessageHandler= -> =ResponseStreamer= constructor
+9. Update =bot.ts= to pass =autoSendImages= from config
+
+* Test files
+- MODIFY: =packages/spell-server/test/config/channels-parser.test.ts= (new =auto-send-images= tests)
+- MODIFY: =packages/spell-server/test/telegram/bridge.test.ts= (new file delivery tests)
+- MODIFY: mock =mockAuthContext= to add =replyWithDocument= / =replyWithPhoto= mock methods
+* Edge Cases
+- File deleted between tool execution and bridge delivery -> log warning, skip
+- Telegram API rate limit / error -> log, don't crash response flow
+- =generate_image= returns 0 images -> no-op (already handled by tool returning text-only result)
+- Very large files approaching 50MB -> Telegram may reject; tool validates but Telegram upload can still fail
+- Multiple images from one =generate_image= call -> send each as separate photo message
+
+* Acceptance
+- Agent calling =send_file= on a PDF results in the PDF appearing in the Telegram chat
+- Agent calling =generate_image= results in the image appearing in the Telegram chat (when =auto-send-images= is true/default)
+- Setting =auto-send-images false= in KDL suppresses auto-send of generated images
+- File delivery errors are logged but don't break the text response flow
+- =bun check:ts= passes

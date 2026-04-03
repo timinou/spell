@@ -49,6 +49,7 @@ describe("notification sender wiring", () => {
 							idleTimeout: 300,
 							maxSessions: 3,
 							defaultModel: "claude-sonnet-4-5",
+							autoSendImages: true,
 							projects: {},
 							users: {},
 						},

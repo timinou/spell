@@ -65,6 +65,7 @@ function createConfig(overrides: Partial<TelegramBridgeConfig> = {}): TelegramBr
 		uploadDir: "/tmp/uploads",
 		idleTimeout: 60,
 		maxSessions: 3,
+		autoSendImages: true,
 		defaultModel: "claude-sonnet-4-5",
 		projects: {
 			spell: "/tmp/project-spell",

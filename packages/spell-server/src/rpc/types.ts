@@ -105,3 +105,13 @@ export interface RpcSpawnOptions {
 	/** Whether to skip session persistence */
 	noSession?: boolean;
 }
+
+/** Delivery metadata from send_file tool result */
+export interface FileDelivery {
+	type: "document" | "photo";
+	absolutePath: string;
+	fileName: string;
+	mimeType: string;
+	caption?: string;
+	fileSize: number;
+}
