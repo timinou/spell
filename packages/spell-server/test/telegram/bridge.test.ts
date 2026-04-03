@@ -451,6 +451,20 @@ describe("bridge streaming", () => {
 		await Bun.sleep(50);
 		expect(ctx._chatActions.length).toBe(actionsBefore);
 	});
+
+	it("clears typing interval on error event without leaks", async () => {
+		const ctx = mockAuthContext({ chatId: 54 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
+		await Bun.sleep(0);
+		const actionsBefore = ctx._chatActions.length;
+
+		await streamer.handleEvent({ type: "error", message: "Process crashed" });
+		await expectDoneToResolve(streamer);
+
+		// After error + wait, no new typing actions should fire
+		await Bun.sleep(50);
+		expect(ctx._chatActions.length).toBe(actionsBefore);
+	});
 });
 
 describe("telegram to rpc bridge", () => {

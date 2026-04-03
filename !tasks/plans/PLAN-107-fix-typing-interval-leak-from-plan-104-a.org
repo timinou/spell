@@ -1,0 +1,75 @@
+#+TITLE: Fix typing interval leak from PLAN-104 audit
+#+STATE: DONE
+#+SESSION_ID: 14ac03cb9be4ae24
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-18-23-215Z_14ac03cb9be4ae24.jsonl]]
+#+CUSTOM_ID: PLAN-107-fix-typing-interval-leak-from-plan-104-a
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-024-audit-implementation:
+
+Good, fully cleaned up.
+
+Now let me verify the `#chatId` field — `sendDraft` no longer uses it but `replyWithDraft` uses `this.chatId` internally. The field is still used to guard `#startTypingIndicator`, `#scheduleDraftUpdate`, and `#flushDraft`, which is correct — without a chatId you can't send anything.
+
+Let me look more closely at `replyWithDraft` — it uses `orThrow(this.chatId, ...)` internally. If `chatId` is null (the context has no chat), it would throw. Our code guards against this with the `#chatId` check in `#flushDraft` and `#startTypingIndicator`, but `sendDraft` wraps the call in try/catch so even if the guard failed, the error would be caught and logged. Defense in depth is fine.
+
+Now let me summarize my findings.
+
+---
+
+## Audit Findings
+
+### Finding 1: Typing interval leak on `error` event
+
+- **What**: The inline `error` event handler (line 152-160) sets `#finalized = true` and clears the draft timer, but does **not** call `#clearTypingInterval()`. This is a separate code path from `#finalize()` — the `setInterval` continues firing indefinitely after an RPC error.
+- **Where**: `packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts`, line 154 (the `case "error":` handler)
+- **Why**: Leaked `setInterval` calling `replyWithChatAction("typing")` indefinitely on a dead conversation. Each tick hits the Telegram API and logs a warning if it fails. In long-running bot processes, leaked intervals accumulate per errored conversation. This is a real resource leak.
+- **Effort**: `trivial` — add `this.#clearTypingInterval();` after `this.#clearDraftTimer();` on line 154.
+
+### Finding 2: No test for typing interval cleanup on `error` event path
+
+- **What**: The `error` event path (finding 1) has no test asserting typing cleanup. The existing "forwards RPC error events" test (line 325) doesn't check `_chatActions` or interval behavior.
+- **Where**: `packages/spell-server/test/telegram/bridge.test.ts`, around the "forwards RPC error events" test
+- **Why**: The leak in finding 1 went undetected because this path has no typing-related coverage. A test sending an error event then waiting 50ms and asserting no new typing actions would catch this.
+- **Effort**: `trivial` — add similar assertions to the existing error event test or create a dedicated test.
+
+### Finding 3: `#chatId` field is now only used as a guard, not passed to any API
+
+- **What**: `#chatId` was previously passed as an argument to `sendDraft(ctx, chatId, text)`. After the fix, it's only used as a null-check guard in three places. The `replyWithDraft`/`replyWithChatAction` context methods resolve `chatId` from their own `this.chatId`. The field still serves its purpose (preventing calls when no chat context exists), but the field name and the `#resolveChatId()` fallback logic (checking `ctx.message.chat.id` via cast) may be doing redundant work since grammY's context will throw internally if `chatId` is missing.
+- **Where**: `packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts`, lines 101, 237-246
+- **Why**: Not a bug, but the dual resolution (our manual check + grammY's internal `orThrow`) is redundant. Low priority — the guard short-circuits work before building draft text, which is a minor optimization. Leave as-is.
+- **Effort**: `small` — could simplify by trusting grammY's internal guard, but the short-circuit is marginally useful.
+
+* Context
+
+Post-implementation audit of PLAN-104 (Telegram streaming and typing indicators) found that the ~case "error":~ handler in ~ResponseStreamer.handleEvent()~ bypasses ~#finalize()~ with an inline finalization path. This path clears the draft timer but not the typing interval, leaking a ~setInterval~ that fires ~replyWithChatAction("typing")~ every 4 seconds indefinitely on errored conversations.
+
+The fix is a one-line addition (~this.#clearTypingInterval()~) plus a test to cover the path. The audit also noted that ~#chatId~ is now only used as a guard (no longer passed to APIs) but concluded this is a useful short-circuit optimization — no action needed.
+
+** Key file
+=packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts= — line 154, the ~case "error":~ handler needs ~#clearTypingInterval()~ after ~#clearDraftTimer()~.
+
+* Verification
+
+- ~bun test packages/spell-server/test/telegram/bridge.test.ts~ — all tests pass including new error-path typing test
+- ~bunx biome check packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts packages/spell-server/test/telegram/bridge.test.ts~ — clean
+
+* Execution Manifest
+
+** Wave 1: Fix leak and add test
+[[id:BUG-131-fix-typing-interval-leak-on-rpc-error-ev]] (15m, #A)
+
+** Completion [2026-04-03]
+
+*** Verification
+- ~bun test packages/spell-server/test/telegram/bridge.test.ts~ — 26 pass, 0 fail (327ms)
+- ~bunx biome check packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts packages/spell-server/test/telegram/bridge.test.ts~ — clean, no fixes applied
+
+*** Artifacts
+- =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts= — added ~this.#clearTypingInterval()~ after ~this.#clearDraftTimer()~ in ~case \"error\":~ handler (line 155)
+- =packages/spell-server/test/telegram/bridge.test.ts= — added \"clears typing interval on error event without leaks\" test (same pattern as the cancel-path leak test)
+
+*** Deviations
+None.
