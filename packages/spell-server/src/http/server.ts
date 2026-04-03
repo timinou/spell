@@ -1,4 +1,5 @@
 import { logger } from "@oh-my-pi/pi-utils";
+import type { StateStoreManager } from "../state/store-manager";
 import type { GoalExecutionController } from "../executor/goal-executor";
 import type { AutonomyManifest } from "../manifest/types";
 import type { GoalScheduler } from "../scheduler/goal-scheduler";
@@ -16,6 +17,7 @@ import {
 import { handleGetDownstreamJob, handleListDownstreamJobs } from "./routes/downstream-jobs";
 import { handleGetGoal, handleGetGoalLogs, handleGetGoalRuns, handleGetGoals, handleGetManifest } from "./routes/goals";
 import { handleOperatorActionsRoute, type OperatorActionHandler } from "./routes/operator-actions";
+import { handleListStores, handleListTables, handleQueryTable, handleTableCount } from "./routes/state";
 import { handleTriggerRoute } from "./routes/triggers";
 import type { ServerConfig } from "./types";
 
@@ -27,6 +29,7 @@ export interface SpellServerDeps {
 	cwd: string;
 	frontendHtml?: string;
 	operatorActionHandler?: OperatorActionHandler;
+	stateStoreManager?: StateStoreManager;
 	workflowEngine?: WorkflowEngine;
 }
 
@@ -66,6 +69,16 @@ async function handleApiRoute(request: Request, path: string, deps: SpellServerD
 	if (path === "/api/manifest") {
 		return handleGetManifest(deps.manifest);
 	}
+	if (path === "/api/state") {
+		const stateStoreManager = deps.stateStoreManager;
+		if (!stateStoreManager) {
+			return Response.json({ error: "State store manager is not configured" }, { status: 501 });
+		}
+		if (request.method === "GET") {
+			return handleListStores(stateStoreManager);
+		}
+		return Response.json({ error: "Method not allowed" }, { status: 405 });
+	}
 	if (path === "/api/operator-actions") {
 		return await handleOperatorActionsRoute(request, deps.operatorActionHandler);
 	}
@@ -88,6 +101,26 @@ async function handleApiRoute(request: Request, path: string, deps: SpellServerD
 	}
 
 	const segments = path.split("/").filter(Boolean);
+	if (segments[1] === "state") {
+		const stateStoreManager = deps.stateStoreManager;
+		if (!stateStoreManager) {
+			return Response.json({ error: "State store manager is not configured" }, { status: 501 });
+		}
+		const storeName = segments[2];
+		const tableSegment = segments[3];
+		const tableName = segments[4];
+		const action = segments[5];
+		if (segments.length === 4 && tableSegment === "tables" && request.method === "GET" && storeName) {
+			return handleListTables(storeName, stateStoreManager);
+		}
+		if (segments.length === 5 && tableSegment === "tables" && request.method === "GET" && storeName && tableName) {
+			return handleQueryTable(storeName, tableName, request, stateStoreManager);
+		}
+		if (segments.length === 6 && tableSegment === "tables" && action === "count" && request.method === "GET" && storeName && tableName) {
+			return handleTableCount(storeName, tableName, stateStoreManager);
+		}
+		return Response.json({ error: "Not found" }, { status: 404 });
+	}
 	if (segments[1] === "goals") {
 		const goalName = segments[2];
 		const action = segments[3];

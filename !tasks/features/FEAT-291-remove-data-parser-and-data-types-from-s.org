@@ -1,0 +1,40 @@
+#+TITLE: Remove data-parser and data-types from spell-server
+#+STATE: DONE
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-291-remove-data-parser-and-data-types-from-s
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: backend
+#+DEPENDS: FEAT-290-migrate-growth-domain-data-from-kdl-to-s
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+=config/data-parser.ts= and =config/data-types.ts= formalize domain-specific types (Persona, Person, Source, DataConfig) into the spell-server platform layer. The platform shouldn't know about personas — it should provide generic state access. Now that growth's domain data lives in SQLite (FEAT-290), these files have no purpose.
+
+=config/index.ts= re-exports them. =test/config/data-parser.test.ts= tests them. No runtime code uses them — =loadConfig()= never calls =loadDataDirectory()=.
+
+* Approach
+Delete the files and their test, remove re-exports from =config/index.ts=.
+
+** Sub-outline
+1. Delete =packages/spell-server/src/config/data-parser.ts=
+2. Delete =packages/spell-server/src/config/data-types.ts=
+3. Delete =packages/spell-server/test/config/data-parser.test.ts=
+4. Remove re-exports from =packages/spell-server/src/config/index.ts=
+5. Grep for any remaining imports of these modules and remove them
+6. =bun check:ts= passes
+
+** Scope
+- =packages/spell-server/src/config/data-parser.ts= (delete)
+- =packages/spell-server/src/config/data-types.ts= (delete)
+- =packages/spell-server/test/config/data-parser.test.ts= (delete)
+- =packages/spell-server/src/config/index.ts= (edit)
+
+** Acceptance
+- Neither file exists
+- =bun check:ts= passes
+- No imports of =data-parser= or =data-types= remain in the codebase

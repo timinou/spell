@@ -1,0 +1,48 @@
+#+TITLE: Frontend downstream jobs and export targets panel
+#+STATE: DONE
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-286-frontend-downstream-jobs-and-export-targ
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: frontend
+#+DEPENDS: FEAT-284-frontend-tab-navigation-with-badge-count
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+After articles are approved, downstream jobs (feed delivery, CMS export, web repo export) execute asynchronously. Their status is in =/api/downstream-jobs= but invisible to operators. When delivery fails, no one knows until they manually check. The manifest also declares =exportTargets= (ora-web git-repo, telegram-digest http, outbox filesystem) that describe where content goes — this context is unavailable.
+
+* Usefulness
+- *Execution truthfulness*: operators see QUEUED/RUNNING/SUCCEEDED/FAILED status for every downstream job, grouped by kind
+- *Error visibility*: failed jobs show the error message from the last attempt — no log diving
+- *Retry awareness*: =retryEligible= flag is visible, showing which failures can be retried
+- *Attempt history*: expandable per-job attempt list shows start/finish times, errors, artifact paths
+- *Export target context*: the manifest's =exportTargets= array is rendered as a reference card showing where content goes (git repo path, HTTP URL, filesystem path) and in what format (markdown, html)
+- *Cross-linking*: each job links back to its source approval item
+
+* Approach
+Build =DownstreamJobsPanel= (grouped table) and =DownstreamJobDetail= (attempt history) components. Use manifest =exportTargets= to render a reference sidebar showing configured export destinations.
+
+** Sub-outline
+1. =DownstreamJobsPanel= component: table grouped by =kind= with status badges
+2. Badge classes: =badge-success= (SUCCEEDED), =badge-failed= (FAILED), =badge-running= (RUNNING), =badge-pending= (QUEUED)
+3. =DownstreamJobDetail=: expandable attempt history with timestamps and error text
+4. Export targets reference card from =manifest.exportTargets=
+5. Link from approval detail to related downstream jobs (by =itemId=)
+6. Test: screenshot of jobs tab with grouped layout
+
+** Scope
+- File: =packages/spell-server/src/http/frontend/index.html= (Jobs tab content)
+- Uses =/api/downstream-jobs= and =/api/downstream-jobs/:id= endpoints
+- Uses =manifest.exportTargets= from =/api/manifest=
+- Does NOT modify backend code
+
+** Acceptance
+- Jobs tab renders downstream jobs grouped by kind
+- Status badges match existing CSS classes
+- Failed jobs display error text inline
+- Attempt history expandable per job
+- Export targets reference card shows destinations from manifest

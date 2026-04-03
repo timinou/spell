@@ -14,6 +14,7 @@ import type { HookExecutor } from "./hooks/types";
 import { WebhookHookExecutor } from "./hooks/webhook";
 import type { OperatorActionHandler } from "./http/routes/operator-actions";
 import { startHttpServer } from "./http/server";
+import { StateStoreManager } from "./state/store-manager";
 import { GoalScheduler } from "./scheduler/goal-scheduler";
 import { AutonomyLifecycle } from "./session/autonomy-lifecycle";
 import { SessionManager } from "./session/session-manager";
@@ -126,6 +127,7 @@ export async function startSpellServer(
 	}
 
 	const workflowEngine = new WorkflowEngine();
+	const stateStoreManager = new StateStoreManager(config.manifest, cwd);
 	const operatorActionHandler = dependencies.operatorActionHandler ?? (await loadProjectOperatorActionHandler(cwd));
 	const startHttpServerImpl = dependencies.startHttpServer ?? startHttpServer;
 	const httpServer = startHttpServerImpl({
@@ -140,6 +142,7 @@ export async function startSpellServer(
 		},
 		cwd,
 		operatorActionHandler,
+		stateStoreManager,
 		workflowEngine,
 	});
 	const createTelegramBotService =
@@ -172,6 +175,7 @@ export async function startSpellServer(
 			async stop(): Promise<void> {
 				scheduler.stop();
 				httpServer.stop();
+				stateStoreManager.close();
 
 				if (telegramBot) {
 					await telegramBot.stop();
@@ -198,6 +202,7 @@ export async function startSpellServer(
 	} catch (error) {
 		scheduler.stop();
 		httpServer.stop();
+		stateStoreManager.close();
 		if (telegramBot) {
 			await Promise.allSettled([telegramBot.stop(), sessionManager.killAll()]);
 		} else {

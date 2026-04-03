@@ -1,0 +1,47 @@
+#+TITLE: Frontend tab navigation with badge counts
+#+STATE: DONE
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-284-frontend-tab-navigation-with-badge-count
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: frontend
+#+DEPENDS: FEAT-283-complete-manifest-api-serialization-and
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+The current frontend has a two-state router (=list= / =detail=) that only shows goals. Adding approval queue, downstream jobs, data config, and manifest detail panels requires proper navigation. The frontend also only fetches goals and a minimal manifest — it ignores all other API endpoints.
+
+* Usefulness
+- Tab bar lets operators switch between Goals, Approvals, Jobs, Config without losing context
+- Badge counts on Approvals (pending count) and Jobs (failed count) surface urgency at a glance
+- Data fetching covers all API endpoints (=/api/goals=, =/api/approvals=, =/api/downstream-jobs=, =/api/manifest=, =/api/data=)
+
+* Approach
+Replace the =view= state with an =activeTab= + =detailView= model. Add a horizontal tab bar below the header. Each tab has an associated data fetch. Badge counts derive from fetched data.
+
+** Sub-outline
+1. Add CSS for tab bar: horizontal tabs, active state, badge pill styling
+2. Replace =view/selectedGoal= state with =activeTab= (=goals|approvals|jobs|config=) + optional =detailId=
+3. Add =fetchApprovals=, =fetchDownstreamJobs=, =fetchDataConfig= helpers
+4. Wire all fetches into the polling loop (already fetches goals + manifest)
+5. Add =TabBar= component rendering 4 tabs with optional badge counts
+6. Render tab content: Goals tab reuses existing =GoalList= / =GoalDetailView=
+7. Approvals/Jobs/Config tabs render placeholder text pending their panel features
+8. Test: screenshot of dashboard with tab bar, badge counts, switching between tabs
+
+** Scope
+- File: =packages/spell-server/src/http/frontend/index.html=
+- Structural refactor of the =App= component
+- Does NOT add panel content for Approvals/Jobs/Config tabs (those are separate features)
+- Depends on FEAT-283 for =/api/data= endpoint availability
+
+** Acceptance
+- Tab bar renders with 4 tabs: Goals, Approvals, Jobs, Config
+- Active tab is visually highlighted
+- Switching tabs preserves fetched data (no reset)
+- Badge counts appear when data is available (approvals pending count, jobs failed count)
+- Screenshot showing tab bar with Goals active and at least one badge count

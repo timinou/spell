@@ -19,7 +19,7 @@
     a { color: inherit; }
     button, input { font: inherit; }
     .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-    .header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+    .header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 0; flex-wrap: wrap; }
     h1 { font-size: 1.5rem; color: #f0f6fc; }
     h2, h3 { color: #f0f6fc; }
     table { width: 100%; border-collapse: collapse; background: #161b22; border-radius: 8px; overflow: hidden; }
@@ -27,16 +27,22 @@
     td { padding: 12px 16px; border-top: 1px solid #21262d; vertical-align: top; }
     tr:hover td { background: #1c2128; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; text-transform: capitalize; }
-    .badge-completed, .badge-success { background: #238636; color: #fff; }
-    .badge-running { background: #1f6feb; color: #fff; }
-    .badge-failed, .badge-failure { background: #da3633; color: #fff; }
-    .badge-pending { background: #6e7681; color: #fff; }
+    .badge-completed, .badge-success, .badge-SUCCEEDED { background: #238636; color: #fff; }
+    .badge-running, .badge-RUNNING { background: #1f6feb; color: #fff; }
+    .badge-failed, .badge-failure, .badge-FAILED { background: #da3633; color: #fff; }
+    .badge-pending, .badge-QUEUED { background: #6e7681; color: #fff; }
     .badge-paused { background: #d29922; color: #000; }
     .badge-escalated { background: #f85149; color: #fff; }
+    .badge-approved { background: #238636; color: #fff; }
+    .badge-rejected { background: #da3633; color: #fff; }
+    .badge-needs-revision { background: #d29922; color: #000; }
     .btn { padding: 6px 14px; border: 1px solid #30363d; border-radius: 6px; background: #21262d; color: #c9d1d9; cursor: pointer; font-size: 0.85rem; }
     .btn:hover { background: #30363d; border-color: #8b949e; }
     .btn-primary { background: #238636; border-color: #238636; color: #fff; }
     .btn-primary:hover { background: #2ea043; }
+    .btn-danger { background: #da3633; border-color: #da3633; color: #fff; }
+    .btn-danger:hover { background: #f85149; }
+    .btn-sm { padding: 4px 10px; font-size: 0.8rem; }
     .detail-panel, .panel { background: #161b22; border-radius: 8px; padding: 20px; }
     .back-link { color: #58a6ff; text-decoration: none; font-size: 0.9rem; }
     .back-link:hover { text-decoration: underline; }
@@ -48,6 +54,50 @@
     .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
     .input { min-width: 240px; padding: 8px 10px; border-radius: 6px; border: 1px solid #30363d; background: #0d1117; color: #c9d1d9; }
     pre { white-space: pre-wrap; word-break: break-word; font-size: 0.85rem; background: #0d1117; padding: 12px; border-radius: 6px; border: 1px solid #21262d; }
+
+    /* Tab navigation */
+    .tab-bar { display: flex; gap: 0; border-bottom: 1px solid #21262d; margin: 16px 0; }
+    .tab-item { padding: 10px 20px; cursor: pointer; border-bottom: 2px solid transparent; color: #8b949e; font-size: 0.9rem; font-weight: 500; display: flex; align-items: center; gap: 8px; transition: color 0.15s, border-color 0.15s; user-select: none; }
+    .tab-item:hover { color: #c9d1d9; }
+    .tab-item.active { color: #f0f6fc; border-bottom-color: #f78166; }
+    .tab-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; font-size: 0.7rem; font-weight: 700; }
+    .tab-badge-warn { background: #da3633; color: #fff; }
+    .tab-badge-info { background: #6e7681; color: #fff; }
+
+    /* Cards */
+    .card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px; }
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+    .card h4 { color: #f0f6fc; margin-bottom: 8px; }
+
+    /* Collapsible sections */
+    .collapsible-header { cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 12px 0; user-select: none; }
+    .collapsible-header:hover { color: #f0f6fc; }
+    .collapsible-arrow { transition: transform 0.2s; font-size: 0.75rem; }
+    .collapsible-arrow.open { transform: rotate(90deg); }
+
+    /* State machine diagram */
+    .state-machine { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px; background: #0d1117; border-radius: 6px; border: 1px solid #21262d; }
+    .state-node { padding: 6px 14px; border-radius: 16px; font-size: 0.8rem; font-weight: 600; border: 2px solid #30363d; background: #161b22; color: #c9d1d9; }
+    .state-node.initial { border-color: #1f6feb; color: #58a6ff; }
+    .state-node.terminal { border-color: #238636; color: #3fb950; }
+    .state-transition { color: #8b949e; font-size: 0.75rem; display: flex; align-items: center; gap: 4px; }
+    .state-transition-arrow { color: #6e7681; }
+
+    /* Inline tags */
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; background: #21262d; color: #8b949e; margin: 2px; }
+
+    /* Hook list */
+    .hook-group { margin-top: 8px; }
+    .hook-group-title { font-size: 0.8rem; text-transform: uppercase; color: #8b949e; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .hook-item { padding: 4px 8px; font-size: 0.85rem; border-left: 3px solid #30363d; margin-bottom: 4px; padding-left: 12px; }
+    .hook-item.on-success { border-left-color: #238636; }
+    .hook-item.on-failure { border-left-color: #da3633; }
+    .hook-item.on-complete { border-left-color: #1f6feb; }
+
+    /* Attempt history */
+    .attempt-row { font-size: 0.85rem; padding: 8px 12px; border-left: 3px solid #30363d; margin-bottom: 4px; }
+    .attempt-row.success { border-left-color: #238636; }
+    .attempt-row.failure { border-left-color: #da3633; }
   </style>
 </head>
 <body>
@@ -90,13 +140,38 @@
       return await response.json();
     }
 
+    async function postJson(path, authValue, body = {}) {
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: { ...createAuthHeaders(authValue), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (response.status === 401) {
+        throw Object.assign(new Error('Authentication failed.'), { status: 401 });
+      }
+      return response;
+    }
+
+    function relativeTime(dateStr) {
+      if (!dateStr) return '-';
+      const diff = Date.now() - new Date(dateStr).getTime();
+      if (diff < 60000) return 'just now';
+      if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+      if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+      return Math.floor(diff / 86400000) + 'd ago';
+    }
+
+    // ─── App ──────────────────────────────────────────────────────────
     function App() {
       const storedAuth = getStoredAuth();
-      const [view, setView] = useState('list');
-      const [selectedGoal, setSelectedGoal] = useState(null);
+      const [activeTab, setActiveTab] = useState('goals');
+      const [detailView, setDetailView] = useState(null); // { type: 'goal'|'approval', id: string }
       const [goals, setGoals] = useState(null);
       const [goalDetail, setGoalDetail] = useState(null);
       const [manifest, setManifest] = useState(null);
+      const [approvals, setApprovals] = useState(null);
+      const [downstreamJobs, setDownstreamJobs] = useState(null);
+      const [stateStores, setStateStores] = useState(null);
       const [error, setError] = useState(null);
       const [loading, setLoading] = useState(Boolean(storedAuth));
       const [authValue, setAuthValue] = useState(storedAuth);
@@ -110,109 +185,83 @@
         setGoals(null);
         setManifest(null);
         setGoalDetail(null);
+        setApprovals(null);
+        setDownstreamJobs(null);
+        setStateStores(null);
         setError(message);
       }, []);
 
-      const fetchGoals = useCallback(async (authValue) => {
-        const payload = await fetchJson('/api/goals', authValue);
-        setGoals(Array.isArray(payload) ? payload : []);
+      const fetchAll = useCallback(async (auth) => {
+        const [goalsData, manifestData, approvalsData, jobsData, storesData] = await Promise.all([
+          fetchJson('/api/goals', auth),
+          fetchJson('/api/manifest', auth),
+          fetchJson('/api/approvals', auth).catch(() => []),
+          fetchJson('/api/downstream-jobs', auth).catch(() => []),
+          fetchJson('/api/state', auth).catch(() => []),
+        ]);
+        setGoals(Array.isArray(goalsData) ? goalsData : []);
+        setManifest(manifestData);
+        setApprovals(Array.isArray(approvalsData) ? approvalsData : []);
+        setDownstreamJobs(Array.isArray(jobsData) ? jobsData : []);
+        setStateStores(Array.isArray(storesData) ? storesData : []);
       }, []);
 
-      const fetchManifest = useCallback(async (authValue) => {
-        const payload = await fetchJson('/api/manifest', authValue);
-        setManifest(payload);
-      }, []);
-
-      const fetchDetail = useCallback(async (name, authValue = activeAuth) => {
+      const fetchDetail = useCallback(async (name, authValue) => {
         const [goal, allRuns] = await Promise.all([
           fetchJson(`/api/goals/${encodeURIComponent(name)}`, authValue),
           fetchJson(`/api/goals/${encodeURIComponent(name)}/runs`, authValue),
         ]);
         setGoalDetail({ ...goal, allRuns });
-      }, [activeAuth]);
+      }, []);
 
       const refreshDashboard = useCallback(async (authValue, options = {}) => {
-        if (!authValue) {
-          clearAuth();
-          setLoading(false);
-          return false;
-        }
+        if (!authValue) { clearAuth(); setLoading(false); return false; }
         setLoading(true);
         try {
-          await Promise.all([fetchGoals(authValue), fetchManifest(authValue)]);
-          if (view === 'detail' && selectedGoal) {
-            await fetchDetail(selectedGoal, authValue);
+          await fetchAll(authValue);
+          if (detailView?.type === 'goal') {
+            await fetchDetail(detailView.id, authValue);
           }
           setActiveAuth(authValue);
           setAuthRequired(false);
           setError(null);
-          if (options.persist) {
-            persistAuth(authValue);
-          }
+          if (options.persist) persistAuth(authValue);
           return true;
         } catch (err) {
-          if (isUnauthorizedError(err)) {
-            clearAuth(err.message);
-            return false;
-          }
+          if (isUnauthorizedError(err)) { clearAuth(err.message); return false; }
           setError(String(err));
           return false;
         } finally {
           setLoading(false);
         }
-      }, [clearAuth, fetchDetail, fetchGoals, fetchManifest, selectedGoal, view]);
-
-      const refreshDetail = useCallback(async (name, authValue = activeAuth) => {
-        if (!authValue) {
-          clearAuth();
-          return false;
-        }
-        try {
-          await fetchDetail(name, authValue);
-          setError(null);
-          return true;
-        } catch (err) {
-          if (isUnauthorizedError(err)) {
-            clearAuth(err.message);
-            return false;
-          }
-          setError(String(err));
-          return false;
-        }
-      }, [activeAuth, clearAuth, fetchDetail]);
+      }, [clearAuth, fetchAll, fetchDetail, detailView]);
 
       useEffect(() => {
-        if (!activeAuth) {
-          setLoading(false);
-          return;
-        }
+        if (!activeAuth) { setLoading(false); return; }
         void refreshDashboard(activeAuth);
-        const timer = setInterval(() => {
-          void refreshDashboard(activeAuth);
-        }, POLL_INTERVAL);
+        const timer = setInterval(() => void refreshDashboard(activeAuth), POLL_INTERVAL);
         return () => clearInterval(timer);
       }, [activeAuth, refreshDashboard]);
 
       const saveAuth = useCallback(async (event) => {
         event.preventDefault();
         const nextAuth = authValue.trim();
-        if (!nextAuth) {
-          clearAuth('Enter credentials in username:password format.');
-          setLoading(false);
-          return;
-        }
+        if (!nextAuth) { clearAuth('Enter credentials in username:password format.'); setLoading(false); return; }
         await refreshDashboard(nextAuth, { persist: true });
       }, [authValue, clearAuth, refreshDashboard]);
 
-      const showDetail = useCallback((name) => {
-        setSelectedGoal(name);
+      const showGoalDetail = useCallback((name) => {
+        setDetailView({ type: 'goal', id: name });
         setGoalDetail(null);
-        setView('detail');
-        void refreshDetail(name);
-      }, [refreshDetail]);
+        fetchDetail(name, activeAuth).catch(err => setError(String(err)));
+      }, [activeAuth, fetchDetail]);
 
-      const showList = useCallback(() => {
-        setView('list');
+      const showApprovalDetail = useCallback((id) => {
+        setDetailView({ type: 'approval', id });
+      }, []);
+
+      const clearDetail = useCallback(() => {
+        setDetailView(null);
         setGoalDetail(null);
         setError(null);
       }, []);
@@ -220,37 +269,28 @@
       const triggerGoal = useCallback(async (name) => {
         try {
           const response = await fetch(`/trigger/${encodeURIComponent(name)}`, {
-            method: 'POST',
-            headers: createAuthHeaders(activeAuth),
+            method: 'POST', headers: createAuthHeaders(activeAuth),
           });
-          if (!response.ok) {
-            throw new Error(`Trigger failed with HTTP ${response.status}`);
-          }
-          setTimeout(() => {
-            void refreshDashboard(activeAuth);
-          }, 1000);
-          if (view === 'detail') {
-            void refreshDetail(name);
-          }
+          if (!response.ok) throw new Error(`Trigger failed: HTTP ${response.status}`);
+          setTimeout(() => void refreshDashboard(activeAuth), 1000);
           setError(null);
         } catch (err) {
           setError(String(err));
         }
-      }, [activeAuth, refreshDashboard, refreshDetail, view]);
+      }, [activeAuth, refreshDashboard]);
+
+      // Badge counts
+      const pendingApprovals = useMemo(() => (approvals || []).filter(a => a.state === 'pending').length, [approvals]);
+      const failedJobs = useMemo(() => (downstreamJobs || []).filter(j => j.status === 'FAILED').length, [downstreamJobs]);
 
       const authHeader = html`
         <div class="header">
-          <h1>Spell Server Dashboard</h1>
+          <h1>Spell Dashboard</h1>
           <form class="row" onSubmit=${saveAuth}>
-            <input
-              class="input"
-              type="text"
-              value=${authValue}
-              onInput=${(event) => setAuthValue(event.currentTarget.value)}
-              placeholder="username:password"
-              aria-label="Basic auth credentials"
-            />
-            <button class="btn" type="submit">${activeAuth ? 'Update Credentials' : 'Sign In'}</button>
+            <input class="input" type="text" value=${authValue}
+              onInput=${(e) => setAuthValue(e.currentTarget.value)}
+              placeholder="username:password" aria-label="Basic auth credentials" />
+            <button class="btn" type="submit">${activeAuth ? 'Update' : 'Sign In'}</button>
           </form>
         </div>
       `;
@@ -258,44 +298,57 @@
       if (loading) {
         return html`<div class="container stack">${authHeader}<div class="loading">Loading...</div></div>`;
       }
-
       if (authRequired) {
-        return html`
-          <div class="container stack">
-            ${authHeader}
-            ${error && html`<div class="error">${error}</div>`}
-            <div class="panel stack">
-              <h2>Authentication required</h2>
-              <div class="meta">Enter the dashboard Basic Auth credentials to load goals, runs, and manifest data.</div>
-            </div>
-          </div>
-        `;
+        return html`<div class="container stack">${authHeader}
+          ${error && html`<div class="error">${error}</div>`}
+          <div class="panel stack"><h2>Authentication required</h2>
+            <div class="meta">Enter Basic Auth credentials to access the dashboard.</div>
+          </div></div>`;
       }
+
+      // Tab bar
+      const tabs = [
+        { id: 'goals', label: 'Goals', badge: null },
+        { id: 'approvals', label: 'Approvals', badge: pendingApprovals > 0 ? { count: pendingApprovals, type: 'warn' } : null },
+        { id: 'jobs', label: 'Jobs', badge: failedJobs > 0 ? { count: failedJobs, type: 'warn' } : null },
+        { id: 'config', label: 'Config', badge: null },
+      ];
 
       return html`
         <div class="container stack">
           ${authHeader}
           ${error && html`<div class="error">${error}</div>`}
-          ${view === 'list' ? html`
-            <${ManifestPanel} manifest=${manifest} />
-            <${GoalList} goals=${goals} onSelect=${showDetail} onTrigger=${triggerGoal} />
-          ` : null}
-          ${view === 'detail' ? html`
-            <${GoalDetailView}
-              goal=${goalDetail}
-              name=${selectedGoal}
-              onBack=${showList}
-              onTrigger=${triggerGoal}
-            />
+          <div class="tab-bar">
+            ${tabs.map(tab => html`
+              <div class=${`tab-item ${activeTab === tab.id ? 'active' : ''}`}
+                onClick=${() => { setActiveTab(tab.id); clearDetail(); }}>
+                ${tab.label}
+                ${tab.badge ? html`<span class=${`tab-badge tab-badge-${tab.badge.type}`}>${tab.badge.count}</span>` : null}
+              </div>
+            `)}
+          </div>
+
+          ${detailView?.type === 'goal' ? html`
+            <${GoalDetailView} goal=${goalDetail} name=${detailView.id} onBack=${clearDetail} onTrigger=${triggerGoal} manifest=${manifest} />
+          ` : detailView?.type === 'approval' ? html`
+            <${ApprovalDetailView} approvalId=${detailView.id} auth=${activeAuth} onBack=${clearDetail} manifest=${manifest} onRefresh=${() => refreshDashboard(activeAuth)} />
+          ` : activeTab === 'goals' ? html`
+            <${ManifestSummary} manifest=${manifest} />
+            <${GoalList} goals=${goals} onSelect=${showGoalDetail} onTrigger=${triggerGoal} />
+          ` : activeTab === 'approvals' ? html`
+            <${ApprovalsPanel} approvals=${approvals} manifest=${manifest} onSelect=${showApprovalDetail} />
+          ` : activeTab === 'jobs' ? html`
+            <${DownstreamJobsPanel} jobs=${downstreamJobs} manifest=${manifest} />
+          ` : activeTab === 'config' ? html`
+            <${ConfigPanel} manifest=${manifest} stateStores=${stateStores} auth=${activeAuth} />
           ` : null}
         </div>
       `;
     }
 
-    function ManifestPanel({ manifest }) {
-      if (!manifest) {
-        return null;
-      }
+    // ─── ManifestSummary ──────────────────────────────────────────────
+    function ManifestSummary({ manifest }) {
+      if (!manifest) return null;
       const goalCount = Object.keys(manifest.goals || {}).length;
       const setupCount = Object.keys(manifest.setups || {}).length;
       return html`
@@ -311,37 +364,24 @@
       `;
     }
 
+    // ─── GoalList ────────────────────────────────────────────────────
     function GoalList({ goals, onSelect, onTrigger }) {
       if (!goals || goals.length === 0) {
-        return html`<div class="empty">No goals configured. Check the <a href="https://github.com/can1357/oh-my-pi" style="color:#58a6ff">documentation</a>.</div>`;
+        return html`<div class="empty">No goals configured.</div>`;
       }
       return html`
         <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Setup</th>
-              <th>Schedule</th>
-              <th>Status</th>
-              <th>Last Run</th>
-              <th>Next Fire</th>
-              <th></th>
-            </tr>
-          </thead>
+          <thead><tr><th>Name</th><th>Setup</th><th>Schedule</th><th>Status</th><th>Last Run</th><th>Next Fire</th><th></th></tr></thead>
           <tbody>
             ${goals.map(goal => html`
               <tr key=${goal.name}>
-                <td>
-                  <a href="#" onClick=${(event) => { event.preventDefault(); onSelect(goal.name); }} style="color:#58a6ff;text-decoration:none">
-                    ${goal.name}
-                  </a>
-                </td>
+                <td><a href="#" onClick=${(e) => { e.preventDefault(); onSelect(goal.name); }} style="color:#58a6ff;text-decoration:none">${goal.name}</a></td>
                 <td>${goal.setup}</td>
                 <td class="meta">${goal.schedule}</td>
                 <td><span class=${`badge badge-${goal.status}`}>${goal.status}</span></td>
-                <td class="meta">${goal.lastRun ? new Date(goal.lastRun.completedAt).toLocaleString() : 'Never'}</td>
+                <td class="meta">${goal.lastRun ? relativeTime(goal.lastRun.completedAt) : 'Never'}</td>
                 <td class="meta">${goal.nextFire ? new Date(goal.nextFire).toLocaleString() : '-'}</td>
-                <td><button class="btn" onClick=${() => onTrigger(goal.name)}>Trigger</button></td>
+                <td><button class="btn btn-sm" onClick=${() => onTrigger(goal.name)}>Trigger</button></td>
               </tr>
             `)}
           </tbody>
@@ -349,58 +389,615 @@
       `;
     }
 
-    function GoalDetailView({ goal, name, onBack, onTrigger }) {
+    // ─── GoalDetailView (FEAT-288: structured config rendering) ─────
+    function GoalDetailView({ goal, name, onBack, onTrigger, manifest }) {
       const visibleRuns = useMemo(() => (goal?.allRuns || []).slice(0, 50), [goal]);
-      if (!goal) {
-        return html`<div class="loading">Loading detail...</div>`;
-      }
+      if (!goal) return html`<div class="loading">Loading detail...</div>`;
+
+      const config = goal.config || {};
+      const hooks = config.hooks;
+      const retry = config.retry;
+      const action = config.action;
+      const schedule = config.schedule;
+
       return html`
         <div>
-          <a href="#" class="back-link" onClick=${(event) => { event.preventDefault(); onBack(); }}>Back to goals</a>
+          <a href="#" class="back-link" onClick=${(e) => { e.preventDefault(); onBack(); }}>Back to goals</a>
           <div class="detail-panel section" style="margin-top: 12px;">
             <div class="row" style="justify-content: space-between; align-items: flex-start;">
               <div>
-                <h2 style="margin-bottom: 12px;">${name}</h2>
-                <div class="meta" style="margin-bottom: 12px;">
-                  <span>Setup: ${goal.setup}</span>
-                  <span> | Schedule: ${goal.schedule}</span>
-                  <span> | Status: </span><span class=${`badge badge-${goal.status}`}>${goal.status}</span>
+                <h2 style="margin-bottom: 8px;">${name}</h2>
+                <div class="meta">
+                  Setup: ${goal.setup} | Status: <span class=${`badge badge-${goal.status}`}>${goal.status}</span>
                 </div>
               </div>
               <button class="btn btn-primary" onClick=${() => onTrigger(name)}>Trigger Now</button>
             </div>
-            <div class="section">
-              <h3 style="margin-bottom: 8px;">Config</h3>
-              <pre>${JSON.stringify(goal.config, null, 2)}</pre>
-            </div>
+
+            ${schedule ? html`
+              <div class="section">
+                <h3 style="margin-bottom: 8px;">Schedule</h3>
+                <div class="card">
+                  ${schedule.type === 'cron' ? html`
+                    <div><strong>Cron:</strong> <code>${schedule.expression}</code></div>
+                    ${schedule.timezone ? html`<div class="meta">Timezone: ${schedule.timezone}</div>` : null}
+                    ${schedule.jitter ? html`<div class="meta">Jitter: ${schedule.jitter}</div>` : null}
+                    ${goal.nextFire ? html`<div class="meta">Next: ${new Date(goal.nextFire).toLocaleString()}</div>` : null}
+                  ` : html`
+                    <div><strong>Webhook</strong></div>
+                    ${schedule.path ? html`<div class="meta">Path: <code>${schedule.path}</code></div>` : null}
+                    ${schedule.auth ? html`<div class="meta">Auth: ${schedule.auth}</div>` : null}
+                  `}
+                </div>
+              </div>
+            ` : null}
+
+            ${action ? html`
+              <div class="section">
+                <h3 style="margin-bottom: 8px;">Action</h3>
+                <div class="card">
+                  <div><strong>${action.id}</strong></div>
+                  ${action.params && Object.keys(action.params).length > 0 ? html`
+                    <div class="meta" style="margin-top: 4px;">
+                      ${Object.entries(action.params).map(([k, v]) => html`<span class="tag">${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>`)}
+                    </div>
+                  ` : null}
+                </div>
+              </div>
+            ` : null}
+
+            ${hooks ? html`
+              <div class="section">
+                <h3 style="margin-bottom: 8px;">Hooks</h3>
+                ${renderHookGroup('on-success', hooks.onSuccess)}
+                ${renderHookGroup('on-failure', hooks.onFailure)}
+                ${renderHookGroup('on-complete', hooks.onComplete)}
+              </div>
+            ` : null}
+
+            ${retry ? html`
+              <div class="section">
+                <h3 style="margin-bottom: 8px;">Retry Config</h3>
+                <div class="card">
+                  ${retry.maxRetries !== undefined ? html`<div>Max retries: <strong>${retry.maxRetries}</strong></div>` : null}
+                  ${retry.initialDelayMs !== undefined ? html`<div>Initial delay: <strong>${retry.initialDelayMs}ms</strong></div>` : null}
+                  ${retry.multiplier !== undefined ? html`<div>Backoff multiplier: <strong>${retry.multiplier}x</strong></div>` : null}
+                </div>
+              </div>
+            ` : null}
           </div>
+
           <div class="run-list">
-            <h3 style="margin: 16px 0 8px;">Run History</h3>
+            <h3 style="margin: 16px 0 8px;">Run History (${visibleRuns.length})</h3>
             ${visibleRuns.length === 0 ? html`<div class="meta">No runs yet.</div>` : html`
               <table>
-                <thead>
-                  <tr>
-                    <th>Run ID</th>
-                    <th>Started</th>
-                    <th>Completed</th>
-                    <th>Status</th>
-                    <th>Attempt</th>
-                  </tr>
-                </thead>
+                <thead><tr><th>Run ID</th><th>Started</th><th>Completed</th><th>Status</th><th>Attempt</th><th>Error</th></tr></thead>
                 <tbody>
                   ${visibleRuns.map(run => html`
                     <tr key=${run.runId}>
-                      <td class="meta">${run.runId}</td>
-                      <td class="meta">${new Date(run.startedAt).toLocaleString()}</td>
-                      <td class="meta">${run.completedAt ? new Date(run.completedAt).toLocaleString() : '-'}</td>
+                      <td class="meta" style="font-family: monospace; font-size: 0.8rem;">${run.runId.slice(0, 8)}</td>
+                      <td class="meta">${relativeTime(run.startedAt)}</td>
+                      <td class="meta">${run.completedAt ? relativeTime(run.completedAt) : '-'}</td>
                       <td><span class=${`badge badge-${run.status}`}>${run.status}</span></td>
                       <td>${run.attempt}</td>
+                      <td class="meta">${run.error ? html`<span style="color:#f85149">${run.error}</span>` : '-'}</td>
                     </tr>
                   `)}
                 </tbody>
               </table>
             `}
           </div>
+        </div>
+      `;
+    }
+
+    function renderHookGroup(groupName, targets) {
+      if (!targets || targets.length === 0) return null;
+      const labelMap = { 'on-success': 'On Success', 'on-failure': 'On Failure', 'on-complete': 'On Complete' };
+      return html`
+        <div class="hook-group">
+          <div class="hook-group-title">${labelMap[groupName] || groupName}</div>
+          ${targets.map(target => html`
+            <div class=${`hook-item ${groupName}`}>
+              ${target.type === 'telegram' ? `Telegram chat ${target.chatId}` :
+                target.type === 'webhook' ? `Webhook ${target.method || 'POST'} ${target.url}` :
+                target.type === 'org' ? `Org${target.category ? ` (${target.category})` : ''}` :
+                JSON.stringify(target)}
+            </div>
+          `)}
+        </div>
+      `;
+    }
+
+    // ─── ApprovalsPanel (FEAT-285) ──────────────────────────────────
+    function ApprovalsPanel({ approvals, manifest, onSelect }) {
+      const reviewPolicy = manifest?.reviewPolicies?.[0];
+
+      return html`
+        <div class="stack">
+          ${reviewPolicy ? html`
+            <div class="panel">
+              <h3 style="margin-bottom: 8px;">Review Policy: ${reviewPolicy.id}</h3>
+              <${StateMachineDiagram} policy=${reviewPolicy} />
+            </div>
+          ` : null}
+          ${(!approvals || approvals.length === 0) ? html`
+            <div class="panel empty">
+              <div style="font-size: 2rem; margin-bottom: 8px; opacity: 0.3;">No pending approvals</div>
+              <div class="meta">Items needing review will appear here when articles enter the approval workflow.</div>
+            </div>
+          ` : html`
+            <table>
+              <thead><tr><th>Title</th><th>State</th><th>Kind</th><th>Updated</th><th></th></tr></thead>
+              <tbody>
+                ${approvals.map(item => html`
+                  <tr key=${item.id}>
+                    <td>
+                      <a href="#" onClick=${(e) => { e.preventDefault(); onSelect(item.id); }} style="color:#58a6ff;text-decoration:none">
+                        ${item.title || item.id}
+                      </a>
+                    </td>
+                    <td><span class=${`badge badge-${item.state}`}>${item.state}</span></td>
+                    <td class="meta">${item.kind || '-'}</td>
+                    <td class="meta">${relativeTime(item.updatedAt)}</td>
+                    <td><button class="btn btn-sm" onClick=${(e) => { e.preventDefault(); onSelect(item.id); }}>Review</button></td>
+                  </tr>
+                `)}
+              </tbody>
+            </table>
+          `}
+        </div>
+      `;
+    }
+
+    function StateMachineDiagram({ policy }) {
+      if (!policy) return null;
+      return html`
+        <div class="state-machine">
+          ${policy.states.map((state, i) => html`
+            <span class=${`state-node ${state.initial ? 'initial' : ''} ${state.terminal ? 'terminal' : ''}`}>
+              ${state.name}${state.initial ? ' (start)' : ''}${state.terminal ? ' (end)' : ''}
+            </span>
+            ${i < policy.states.length - 1 ? html`<span class="state-transition-arrow">\u2192</span>` : null}
+          `)}
+        </div>
+        ${policy.transitions.length > 0 ? html`
+          <div style="margin-top: 8px;">
+            ${policy.transitions.map(t => html`
+              <div class="meta" style="padding: 2px 0;">
+                <span class="tag">${t.from}</span> <span class="state-transition-arrow">\u2192</span>
+                <span class="tag">${t.to}</span>
+                <span style="margin-left: 8px; color: #58a6ff; font-size: 0.8rem;">${t.action}</span>
+              </div>
+            `)}
+          </div>
+        ` : null}
+      `;
+    }
+
+    // ─── ApprovalDetailView ─────────────────────────────────────────
+    function ApprovalDetailView({ approvalId, auth, onBack, manifest, onRefresh }) {
+      const [detail, setDetail] = useState(null);
+      const [actionError, setActionError] = useState(null);
+
+      useEffect(() => {
+        fetchJson(`/api/approvals/${approvalId}`, auth).then(setDetail).catch(err => setActionError(String(err)));
+        // Claim on open
+        postJson(`/api/approvals/${approvalId}/claim`, auth, { actor: 'web-operator' }).catch(() => {});
+        return () => {
+          // Release on close
+          fetch(`/api/approvals/${approvalId}/claim`, {
+            method: 'DELETE', headers: createAuthHeaders(auth),
+          }).catch(() => {});
+        };
+      }, [approvalId, auth]);
+
+      const performAction = useCallback(async (actionId) => {
+        try {
+          setActionError(null);
+          await postJson(`/api/approvals/${approvalId}/actions`, auth, { actionId, actor: 'web-operator' });
+          const updated = await fetchJson(`/api/approvals/${approvalId}`, auth);
+          setDetail(updated);
+          onRefresh();
+        } catch (err) {
+          setActionError(String(err));
+        }
+      }, [approvalId, auth, onRefresh]);
+
+      if (!detail) return html`<div class="loading">Loading approval...</div>`;
+
+      const reviewPolicy = manifest?.reviewPolicies?.[0];
+      const availableActions = reviewPolicy?.transitions?.filter(t => t.from === detail.state) || [];
+
+      return html`
+        <div>
+          <a href="#" class="back-link" onClick=${(e) => { e.preventDefault(); onBack(); }}>Back to approvals</a>
+          <div class="detail-panel section" style="margin-top: 12px;">
+            <h2 style="margin-bottom: 8px;">${detail.title || detail.id}</h2>
+            <div class="meta" style="margin-bottom: 12px;">
+              State: <span class=${`badge badge-${detail.state}`}>${detail.state}</span>
+              ${detail.kind ? html` | Kind: ${detail.kind}` : null}
+              ${detail.claimedBy ? html` | Claimed by: ${detail.claimedBy}` : null}
+            </div>
+            ${detail.summary ? html`<div style="margin-bottom: 12px;">${detail.summary}</div>` : null}
+            ${actionError ? html`<div class="error">${actionError}</div>` : null}
+            ${availableActions.length > 0 ? html`
+              <div class="row" style="margin-top: 12px;">
+                ${availableActions.map(action => html`
+                  <button class=${`btn ${action.to === 'approved' ? 'btn-primary' : action.to === 'rejected' ? 'btn-danger' : ''}`}
+                    onClick=${() => performAction(action.action)}>
+                    ${action.action}
+                  </button>
+                `)}
+              </div>
+            ` : null}
+            ${detail.auditLog && detail.auditLog.length > 0 ? html`
+              <div class="section">
+                <h3 style="margin-bottom: 8px;">Audit Log</h3>
+                ${detail.auditLog.map(entry => html`
+                  <div class="attempt-row">
+                    <strong>${entry.action || entry.type}</strong> by ${entry.actor || '-'}
+                    <span class="meta"> ${relativeTime(entry.timestamp)}</span>
+                    ${entry.reason ? html`<div class="meta">${entry.reason}</div>` : null}
+                  </div>
+                `)}
+              </div>
+            ` : null}
+          </div>
+        </div>
+      `;
+    }
+
+    // ─── DownstreamJobsPanel (FEAT-286) ─────────────────────────────
+    function DownstreamJobsPanel({ jobs, manifest }) {
+      const exportTargets = manifest?.exportTargets || [];
+      const groupedJobs = useMemo(() => {
+        if (!jobs || jobs.length === 0) return {};
+        return jobs.reduce((acc, job) => {
+          const kind = job.kind || 'unknown';
+          if (!acc[kind]) acc[kind] = [];
+          acc[kind].push(job);
+          return acc;
+        }, {});
+      }, [jobs]);
+
+      return html`
+        <div class="stack">
+          ${exportTargets.length > 0 ? html`
+            <div class="panel">
+              <h3 style="margin-bottom: 12px;">Export Targets</h3>
+              <div class="card-grid">
+                ${exportTargets.map(target => html`
+                  <div class="card">
+                    <h4>${target.id}</h4>
+                    <div class="meta">
+                      Kind: <span class="tag">${target.kind}</span>
+                      ${target.format ? html` Format: <span class="tag">${target.format}</span>` : null}
+                    </div>
+                    ${target.path ? html`<div class="meta" style="margin-top: 4px;">Path: <code>${target.path}</code></div>` : null}
+                    ${target.url ? html`<div class="meta" style="margin-top: 4px;">URL: <code>${target.url}</code></div>` : null}
+                  </div>
+                `)}
+              </div>
+            </div>
+          ` : null}
+
+          ${(!jobs || jobs.length === 0) ? html`
+            <div class="panel empty">
+              <div style="font-size: 2rem; margin-bottom: 8px; opacity: 0.3;">No downstream jobs</div>
+              <div class="meta">Jobs will appear here when articles are approved and exported.</div>
+            </div>
+          ` : html`
+            <div class="stack">
+              ${Object.entries(groupedJobs).map(([kind, kindJobs]) => html`
+                <div class="panel">
+                  <h3 style="margin-bottom: 8px;">${kind} <span class="meta">(${kindJobs.length})</span></h3>
+                  <table>
+                    <thead><tr><th>Job ID</th><th>Status</th><th>Item</th><th>Created</th><th>Retry</th></tr></thead>
+                    <tbody>
+                      ${kindJobs.map(job => html`
+                        <tr key=${job.id}>
+                          <td class="meta" style="font-family: monospace;">${(job.id || '').slice(0, 8)}</td>
+                          <td><span class=${`badge badge-${job.status}`}>${job.status}</span></td>
+                          <td class="meta">${job.itemId || '-'}</td>
+                          <td class="meta">${relativeTime(job.createdAt)}</td>
+                          <td>${job.retryEligible ? html`<span class="tag">eligible</span>` : '-'}</td>
+                        </tr>
+                        ${job.error ? html`
+                          <tr><td colspan="5" style="color: #f85149; font-size: 0.85rem; padding-top: 0;">${job.error}</td></tr>
+                        ` : null}
+                        ${job.attempts && job.attempts.length > 0 ? html`
+                          <tr><td colspan="5" style="padding-top: 0;">
+                            <${CollapsibleSection} title="Attempts (${job.attempts.length})" defaultOpen=${false}>
+                              ${job.attempts.map((attempt, i) => html`
+                                <div class=${`attempt-row ${attempt.status === 'success' ? 'success' : 'failure'}`}>
+                                  <strong>#${i + 1}</strong> ${attempt.status || '-'}
+                                  <span class="meta"> ${relativeTime(attempt.startedAt)} - ${relativeTime(attempt.finishedAt)}</span>
+                                  ${attempt.error ? html`<div style="color: #f85149; margin-top: 4px;">${attempt.error}</div>` : null}
+                                </div>
+                              `)}
+                            </${CollapsibleSection}>
+                          </td></tr>
+                        ` : null}
+                      `)}
+                    </tbody>
+                  </table>
+                </div>
+              `)}
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    // ─── ConfigPanel (FEAT-287) ─────────────────────────────────────
+    function ConfigPanel({ manifest, stateStores, auth }) {
+      if (!manifest) return html`<div class="loading">Loading config...</div>`;
+
+      return html`
+        <div class="stack">
+          ${manifest.reviewPolicies?.length > 0 ? html`
+            <${CollapsibleSection} title="Review Policies (${manifest.reviewPolicies.length})" defaultOpen=${true}>
+              ${manifest.reviewPolicies.map(policy => html`
+                <div class="card" style="margin-bottom: 8px;">
+                  <h4>${policy.id}</h4>
+                  <${StateMachineDiagram} policy=${policy} />
+                </div>
+              `)}
+            </${CollapsibleSection}>
+          ` : null}
+
+          ${manifest.checkpoints?.length > 0 ? html`
+            <${CollapsibleSection} title="Checkpoints (${manifest.checkpoints.length})">
+              <div class="card-grid">
+                ${manifest.checkpoints.map(cp => html`
+                  <div class="card">
+                    <h4>${cp.id}</h4>
+                    ${cp.requires.map(req => html`
+                      <div class="meta" style="margin-top: 4px;">
+                        <span class="tag">${req.kind}</span> ${req.name}
+                        ${req.policy ? html` policy: <em>${req.policy}</em>` : null}
+                        ${req.state ? html` state: <em>${req.state}</em>` : null}
+                      </div>
+                    `)}
+                  </div>
+                `)}
+              </div>
+            </${CollapsibleSection}>
+          ` : null}
+
+          ${manifest.exportTargets?.length > 0 ? html`
+            <${CollapsibleSection} title="Export Targets (${manifest.exportTargets.length})">
+              <div class="card-grid">
+                ${manifest.exportTargets.map(target => html`
+                  <div class="card">
+                    <h4>${target.id}</h4>
+                    <div class="meta">Kind: <span class="tag">${target.kind}</span>
+                      ${target.format ? html` Format: <span class="tag">${target.format}</span>` : null}
+                    </div>
+                    ${target.path ? html`<div class="meta">Path: <code>${target.path}</code></div>` : null}
+                    ${target.url ? html`<div class="meta">URL: <code>${target.url}</code></div>` : null}
+                  </div>
+                `)}
+              </div>
+            </${CollapsibleSection}>
+          ` : null}
+
+          ${manifest.notificationRoutes?.length > 0 ? html`
+            <${CollapsibleSection} title="Notification Routes (${manifest.notificationRoutes.length})">
+              <table>
+                <thead><tr><th>ID</th><th>Channel</th><th>Event</th><th>Target</th></tr></thead>
+                <tbody>
+                  ${manifest.notificationRoutes.map(route => html`
+                    <tr key=${route.id}>
+                      <td>${route.id}</td>
+                      <td><span class="tag">${route.channel}</span></td>
+                      <td class="meta">${route.on}</td>
+                      <td class="meta">${route.chatId ? `Chat ${route.chatId}` : route.url || route.category || '-'}</td>
+                    </tr>
+                  `)}
+                </tbody>
+              </table>
+            </${CollapsibleSection}>
+          ` : null}
+
+          ${manifest.stateSchemas?.length > 0 ? html`
+            <${CollapsibleSection} title="State Schemas (${manifest.stateSchemas.length})">
+              ${manifest.stateSchemas.map(schema => html`
+                <div class="card" style="margin-bottom: 8px;">
+                  <h4>${schema.id} <span class="meta">(${schema.backend})</span></h4>
+                  ${schema.tables.map(table => html`
+                    <div style="margin-top: 8px;">
+                      <strong style="font-size: 0.9rem;">${table.name}</strong>
+                      <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px;">
+                        ${table.columns.map(col => html`
+                          <span class="tag">${col.name} <em style="opacity: 0.6">${col.type}</em>${col.primary ? ' PK' : ''}</span>
+                        `)}
+                      </div>
+                    </div>
+                  `)}
+                </div>
+              `)}
+            </${CollapsibleSection}>
+          ` : null}
+
+          ${manifest.panels?.length > 0 ? html`
+            <${CollapsibleSection} title="Panels (${manifest.panels.length})">
+              <div class="card-grid">
+                ${manifest.panels.map(panel => html`
+                  <div class="card">
+                    <h4>${panel.id}</h4>
+                    <div class="meta">Source: ${panel.source}</div>
+                    <div style="margin-top: 4px;">
+                      ${panel.columns.map(col => html`<span class="tag">${col.name}: ${col.type}</span>`)}
+                    </div>
+                    ${panel.actions.length > 0 ? html`
+                      <div style="margin-top: 4px;">
+                        ${panel.actions.map(action => html`<span class="tag">${action.label}</span>`)}
+                      </div>
+                    ` : null}
+                  </div>
+                `)}
+              </div>
+            </${CollapsibleSection}>
+          ` : null}
+
+          ${manifest.layouts?.length > 0 ? html`
+            <${CollapsibleSection} title="Layouts (${manifest.layouts.length})">
+              ${manifest.layouts.map(layout => html`
+                <div class="card" style="margin-bottom: 8px;">
+                  <h4>${layout.id}</h4>
+                  <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    ${layout.regions.map(region => html`
+                      <div class="tag">${region.name} \u2192 ${region.panel}</div>
+                    `)}
+                  </div>
+                </div>
+              `)}
+            </${CollapsibleSection}>
+          ` : null}
+
+          ${manifest.syncCollections?.length > 0 ? html`
+            <${CollapsibleSection} title="Sync Collections (${manifest.syncCollections.length})">
+              <table>
+                <thead><tr><th>ID</th><th>Source</th><th>Filter</th></tr></thead>
+                <tbody>
+                  ${manifest.syncCollections.map(sync => html`
+                    <tr key=${sync.id}>
+                      <td>${sync.id}</td>
+                      <td class="meta">${sync.source}</td>
+                      <td class="meta">${sync.filter || '-'}</td>
+                    </tr>
+                  `)}
+                </tbody>
+              </table>
+            </${CollapsibleSection}>
+          ` : null}
+
+          ${Object.keys(manifest.setups || {}).length > 0 ? html`
+            <${CollapsibleSection} title="Setups (${Object.keys(manifest.setups).length})">
+              ${Object.entries(manifest.setups).map(([name, setup]) => html`
+                <div class="card" style="margin-bottom: 8px;">
+                  <h4>${name}</h4>
+                  <div class="meta">Domain: ${setup.domain}${setup.mode ? ` | Mode: ${setup.mode}` : ''}${setup.timeout ? ` | Timeout: ${setup.timeout}` : ''}</div>
+                  ${setup.skills ? html`<div style="margin-top: 4px;">Skills: ${renderFilterConfig(setup.skills)}</div>` : null}
+                  ${setup.tools ? html`<div style="margin-top: 4px;">Tools: ${renderFilterConfig(setup.tools)}</div>` : null}
+                  ${setup.sandbox ? html`<div style="margin-top: 4px;" class="meta">Sandbox configured</div>` : null}
+                </div>
+              `)}
+            </${CollapsibleSection}>
+          ` : null}
+
+          ${stateStores && stateStores.length > 0 ? html`
+            <${CollapsibleSection} title="State Store Data" defaultOpen=${true}>
+              ${stateStores.filter(s => s.backend === 'sqlite').map(store => html`
+                <${StateStoreDataBrowser} key=${store.name} storeName=${store.name} storeBackend=${store.backend} auth=${auth} />
+              `)}
+            </${CollapsibleSection}>
+          ` : null}
+        </div>
+      `;
+    }
+
+    function renderFilterConfig(config) {
+      if (!config) return '-';
+      const parts = [];
+      if (config.allow) parts.push(html`allow: ${config.allow.map(s => html`<span class="tag">${s}</span>`)}`);
+      if (config.deny) parts.push(html`deny: ${config.deny.map(s => html`<span class="tag">${s}</span>`)}`);
+      return parts.length > 0 ? parts : '-';
+    }
+
+    // ─── StateStoreDataBrowser ──────────────────────────────────────
+    function StateStoreDataBrowser({ storeName, storeBackend, auth }) {
+      const [tables, setTables] = useState(null);
+      const [activeTable, setActiveTable] = useState(null);
+      const [tableData, setTableData] = useState(null);
+      const [loadingData, setLoadingData] = useState(false);
+
+      useEffect(() => {
+        fetchJson(`/api/state/${encodeURIComponent(storeName)}/tables`, auth)
+          .then(setTables).catch(() => setTables([]));
+      }, [storeName, auth]);
+
+      const loadTable = useCallback(async (tableName) => {
+        setActiveTable(tableName);
+        setLoadingData(true);
+        try {
+          const data = await fetchJson(`/api/state/${encodeURIComponent(storeName)}/tables/${encodeURIComponent(tableName)}?limit=100`, auth);
+          setTableData(data);
+        } catch {
+          setTableData(null);
+        } finally {
+          setLoadingData(false);
+        }
+      }, [storeName, auth]);
+
+      return html`
+        <div class="card" style="margin-bottom: 8px;">
+          <h4>${storeName} <span class="meta">(${storeBackend})</span></h4>
+          ${tables === null ? html`<div class="meta">Loading tables...</div>` : html`
+            <div class="row" style="margin-top: 8px;">
+              ${tables.map(table => html`
+                <button class=${`btn btn-sm ${activeTable === table.name ? 'btn-primary' : ''}`}
+                  onClick=${() => loadTable(table.name)}>
+                  ${table.name}
+                </button>
+              `)}
+            </div>
+          `}
+          ${loadingData ? html`<div class="meta" style="margin-top: 8px;">Loading...</div>` : null}
+          ${tableData && !loadingData ? html`
+            <div style="margin-top: 8px; overflow-x: auto;">
+              <div class="meta" style="margin-bottom: 4px;">${tableData.total} rows total</div>
+              ${tableData.rows.length === 0 ? html`<div class="meta">Empty table</div>` : html`
+                <table>
+                  <thead><tr>${tableData.columns.map(col => html`<th>${col}</th>`)}</tr></thead>
+                  <tbody>
+                    ${tableData.rows.map((row, i) => html`
+                      <tr key=${i}>
+                        ${tableData.columns.map(col => html`
+                          <td class="meta" style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">
+                            ${renderCellValue(row[col])}
+                          </td>
+                        `)}
+                      </tr>
+                    `)}
+                  </tbody>
+                </table>
+              `}
+            </div>
+          ` : null}
+        </div>
+      `;
+    }
+
+    function renderCellValue(value) {
+      if (value === null || value === undefined) return html`<span style="opacity: 0.3">null</span>`;
+      if (typeof value === 'string' && value.startsWith('[')) {
+        try {
+          const arr = JSON.parse(value);
+          if (Array.isArray(arr)) return arr.map(item => html`<span class="tag">${String(item)}</span>`);
+        } catch { /* not JSON */ }
+      }
+      if (typeof value === 'string' && value.startsWith('{')) {
+        try {
+          JSON.parse(value);
+          return html`<details style="cursor: pointer"><summary class="meta">JSON object</summary><pre>${JSON.stringify(JSON.parse(value), null, 2)}</pre></details>`;
+        } catch { /* not JSON */ }
+      }
+      return String(value);
+    }
+
+    // ─── CollapsibleSection ─────────────────────────────────────────
+    function CollapsibleSection({ title, defaultOpen, children }) {
+      const [open, setOpen] = useState(defaultOpen ?? false);
+      return html`
+        <div class="panel">
+          <div class="collapsible-header" onClick=${() => setOpen(!open)}>
+            <span class=${`collapsible-arrow ${open ? 'open' : ''}`}>\u25B6</span>
+            <h3 style="font-size: 1rem;">${title}</h3>
+          </div>
+          ${open ? html`<div>${children}</div>` : null}
         </div>
       `;
     }

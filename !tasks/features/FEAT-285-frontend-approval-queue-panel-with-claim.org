@@ -1,0 +1,50 @@
+#+TITLE: Frontend approval queue panel with claim-based review
+#+STATE: DONE
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-285-frontend-approval-queue-panel-with-claim
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: frontend
+#+DEPENDS: FEAT-284-frontend-tab-navigation-with-badge-count
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+The backend has a full approval workflow API (=/api/approvals= list, =/api/approvals/:id= detail, claim/release/apply actions) but the web dashboard shows none of it. Operators must use Telegram inline buttons or the QML desktop panel to review and approve articles. The web dashboard is the most accessible surface and should be a first-class approval surface.
+
+* Usefulness
+- *Browser-based article review*: operators see pending approvals with title, summary, state, linked goal, artifact count — no Telegram or QML required
+- *Claim-based concurrency*: clicking an approval claims it (POST =/api/approvals/:id/claim=), preventing another operator from acting on the same item. Navigating away releases the claim.
+- *Action buttons derived from KDL review policy*: the manifest's =reviewPolicies= define states and transitions (pending→approved, pending→rejected, pending→needs-revision). The panel renders action buttons matching =allowedActions= from the API, labeled using the manifest's transition data.
+- *Audit trail*: the detail view shows the audit log (who claimed, who acted, when) and artifact references
+- *Downstream job links*: after acting, downstream jobs spawned by the action are shown inline
+
+* Approach
+Build =ApprovalQueue= (list) and =ApprovalDetailView= (detail) components in the frontend SPA. The list polls =/api/approvals=. Clicking an item claims it and opens the detail view. Action buttons POST to =/api/approvals/:id/actions=. The manifest's =reviewPolicies= are used to enrich action labels and show the state machine.
+
+** Sub-outline
+1. =ApprovalQueue= component: table of approvals with columns [title, state, linked goal, updated, actions]
+2. State badge rendering reuses existing CSS badge classes
+3. =ApprovalDetailView= component: full item with metadata, summary, artifacts, audit log
+4. Claim flow: on open detail, POST claim; on navigate away, DELETE claim
+5. Action submission: POST =/api/approvals/:id/actions= with actionId, actor (=web-operator=), optional reason
+6. After action: refresh approval list and show spawned downstream jobs
+7. Use manifest =reviewPolicies[0]= to render state machine visualization (states as circles, transitions as arrows)
+8. Test: screenshot of approval list view, screenshot of detail view with audit entries
+
+** Scope
+- File: =packages/spell-server/src/http/frontend/index.html= (the Approvals tab content)
+- Uses existing API endpoints only (=/api/approvals=, =/api/approvals/:id=, claim, release, actions)
+- Uses manifest =reviewPolicies= for state machine rendering
+- Does NOT modify backend code
+
+** Acceptance
+- Approvals tab shows list of approval items with correct state badges
+- Clicking an item opens detail with metadata, artifacts, audit log
+- Action buttons call correct API endpoints
+- State machine diagram renders from the =article-approval= review policy
+- Screenshot of approval list with at least the empty-state component rendering
+- Screenshot of detail view (can be mocked data for proof)

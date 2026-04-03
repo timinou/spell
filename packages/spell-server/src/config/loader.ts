@@ -4,8 +4,6 @@ import { createBuiltinActionRegistry } from "../actions";
 import type { ActionRegistry } from "../actions/registry";
 import { loadManifestFromFile } from "../manifest/import-resolver";
 import type { AutonomyManifest } from "../manifest/types";
-import { loadDataDirectory } from "./data-parser";
-import type { DataConfig } from "./data-types";
 import { parseChannelsConfig, resolveChannelsBotToken } from "./channels-parser";
 import { type EnvReferenceInfo, formatEnvReport, scanEnvReferences, validateEnvReferences } from "./env-resolver";
 import { type DotenvConfig, parseDotenvConfig, parseServerConfig } from "./server-parser";
@@ -16,7 +14,6 @@ export interface LoadedConfig {
 	channels: ChannelsConfig;
 	manifest: AutonomyManifest;
 	actionRegistry: ActionRegistry;
-	data?: DataConfig;
 }
 
 export async function loadConfig(configDir: string): Promise<LoadedConfig> {
@@ -52,17 +49,7 @@ export async function loadConfig(configDir: string): Promise<LoadedConfig> {
 		env,
 	});
 
-	// Phase 5: Load data directory if it exists
-	let data: DataConfig | undefined;
-	try {
-		data = await loadDataDirectory(path.join(configDir, "data"), { env });
-	} catch (error) {
-		if (!isEnoent(error)) {
-			throw wrapConfigError("data/", error);
-		}
-	}
-
-	return { server, channels, manifest, actionRegistry, data };
+	return { server, channels, manifest, actionRegistry };
 }
 
 // -- Dotenv loading --

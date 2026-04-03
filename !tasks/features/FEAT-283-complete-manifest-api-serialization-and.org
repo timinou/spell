@@ -1,0 +1,33 @@
+#+TITLE: Complete manifest API serialization for all domain types
+#+STATE: DONE
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-283-complete-manifest-api-serialization-and
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Problem
+The manifest parser correctly parses all KDL domain types (panels, layouts, syncCollections, stateSchemas, reviewPolicies, checkpoints, exportTargets, notificationRoutes) into =AutonomyManifest=. But =toManifestJson()= in =goals.ts= only serializes =name=, =version=, =setups=, =goals=. All 8 new domain type arrays are silently dropped. The frontend receives a gutted manifest.
+
+* Approach
+Extend =toManifestJson()= to include all manifest domain types. No data config loading — domain data is served from state stores (FEAT-292), not from KDL.
+
+** Sub-outline
+1. Extend =toManifestJson()= return type to include all 8 domain arrays
+2. Serialize each domain type array (panels, layouts, syncCollections, stateSchemas, reviewPolicies, checkpoints, exportTargets, notificationRoutes)
+3. Extend manifest parser test to verify =toManifestJson()= includes all domain types
+4. =bun check:ts= passes
+
+** Scope
+- =packages/spell-server/src/http/routes/goals.ts= (=toManifestJson= extension)
+- =packages/spell-server/test/manifest/parser.test.ts= (extended)
+- Does NOT touch manifest parser or types (already correct)
+- Does NOT add =/api/data= endpoint (removed — domain data comes from state stores via FEAT-292)
+
+** Acceptance
+- =curl -u spell:secret http://localhost:8787/api/manifest | jq '.panels'= returns the 2 panels
+- =curl -u spell:secret http://localhost:8787/api/manifest | jq '.reviewPolicies'= returns the article-approval policy
+- =curl -u spell:secret http://localhost:8787/api/manifest | jq '.stateSchemas | length'= returns 3
+- =curl -u spell:secret http://localhost:8787/api/manifest | jq '.exportTargets | length'= returns 3
+- =bun check:ts= passes

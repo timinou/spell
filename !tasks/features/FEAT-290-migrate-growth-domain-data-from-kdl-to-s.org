@@ -1,0 +1,73 @@
+#+TITLE: Migrate growth domain data from KDL to SQLite canonical source
+#+STATE: DONE
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-290-migrate-growth-domain-data-from-kdl-to-s
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: data
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+Growth has domain data duplicated between two sources:
+1. =.spell/data/personas.kdl=, =.spell/data/people.kdl=, =.spell/data/sources.kdl= — KDL config files parsed by spell-server's =data-parser.ts=
+2. =data/growth.sqlite= — SQLite DB with personas, people, person_sources, articles, approvals, etc.
+
+These are *already out of sync*:
+- KDL personas: growth-operator, finance-buyer, founder-ceo
+- SQLite personas: smb-founder-operator, revenue-growth-lead, operations-process-lead
+- KDL people: 4 people (Dunford, Verna, Rachitsky, Hughes Johnson)
+- SQLite people: 1 person (April Dunford) with 4 sources
+- KDL sources: 6 non-person sources (First Round Review, Reforge, etc.)
+- SQLite: no =sources= table exists for non-person content sources
+
+KDL is for infrastructure config, not domain data. The SQLite DB is the canonical state.
+
+* Approach
+1. Delete =.spell/data/personas.kdl=, =.spell/data/people.kdl=, =.spell/data/sources.kdl=
+2. Add a =sources= table to growth.sqlite for non-person content sources
+3. Add SQL seed file for the 6 non-person sources
+4. Update =test/cutover/data-config.test.ts= to validate SQLite data instead of KDL parsing
+5. Remove =import= of data directory from =autonomy.kdl= if present (it's not currently imported via manifest, loaded separately)
+
+** SQLite sources table schema
+#+begin_src sql
+CREATE TABLE sources (
+  id TEXT NOT NULL PRIMARY KEY,
+  label TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  value TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_sources_priority ON sources(priority);
+#+end_src
+
+** Seed data
+Either a SQL seed file (=data/seeds/sources.sql=) or the data gets inserted by the discovery goal on first run. The existing personas and people data in SQLite stays as-is (it's already the real data).
+
+** Sub-outline
+1. Create =data/seeds/sources.sql= with INSERT statements for the 6 non-person sources
+2. Add =sources= table creation to growth.sqlite (or extend the schema migration)
+3. Delete =.spell/data/personas.kdl=
+4. Delete =.spell/data/people.kdl=
+5. Delete =.spell/data/sources.kdl=
+6. Update =test/cutover/data-config.test.ts= to query SQLite instead of parsing KDL
+7. Verify no other code references the deleted KDL files
+
+** Scope
+- =../growth/.spell/data/= directory (deletions)
+- =../growth/data/growth.sqlite= (add sources table)
+- =../growth/test/cutover/data-config.test.ts= (rewrite)
+- Does NOT touch spell-server code
+
+** Acceptance
+- =.spell/data/personas.kdl=, =.spell/data/people.kdl=, =.spell/data/sources.kdl= no longer exist
+- =sqlite3 ../growth/data/growth.sqlite "SELECT count(*) FROM sources"= returns 6
+- =sqlite3 ../growth/data/growth.sqlite "SELECT count(*) FROM personas"= returns 3
+- =test/cutover/data-config.test.ts= passes against SQLite
+- =bun test test/cutover/= passes in growth directory

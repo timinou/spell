@@ -1,0 +1,70 @@
+#+TITLE: Generic state store query API for spell-server
+#+STATE: DONE
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-292-generic-state-store-query-api-for-spell
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: backend
+#+DEPENDS: FEAT-291-remove-data-parser-and-data-types-from-s
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+The manifest declares state stores (=state-store "workflow" backend="sqlite" path="./data/workflow.db"=) and state schemas (=state-schema "workflow-db" backend="sqlite"= with table definitions), but:
+1. No runtime code materializes SQLite connections for these stores
+2. No API endpoint exposes state data to the frontend
+3. The manifest's =stateSchemas= describe what tables/columns exist but nothing reads from them
+
+The dashboard needs to show domain data (personas, people, sources, articles) that lives in the project's SQLite databases. It should do this generically using the declared schemas, not with domain-specific types.
+
+* Approach
+Add a state store access layer that:
+1. On server startup, opens read-only SQLite connections for each declared =sqlite= state store
+2. Exposes a generic query API that reads rows from declared tables
+3. Uses =stateSchemas= to validate that requested tables exist and to provide column metadata
+
+** API routes
+- =GET /api/state= — list available state stores with their backend/path and declared schemas
+- =GET /api/state/:storeName/tables= — list tables in a store (from stateSchemas)
+- =GET /api/state/:storeName/tables/:tableName= — query rows with pagination (?limit=50&offset=0)
+- =GET /api/state/:storeName/tables/:tableName/count= — row count
+
+** Security: read-only, no raw SQL
+- SQLite connections opened with =readonly: true=
+- Only tables declared in =stateSchemas= are queryable (no arbitrary table access)
+- Queries are parameterized =SELECT * FROM <validated_table_name> LIMIT ? OFFSET ?=
+- No user-supplied SQL, no WHERE clauses in v1 (simple table browsing)
+
+** Implementation note (sequencing)
+State store connections depend on manifest being loaded (state-store paths resolved). The query handler depends on connections. Tests depend on a fixture SQLite DB. Implementation order: connection manager → route handler → tests.
+
+** Sub-outline
+1. Create =packages/spell-server/src/state/store-manager.ts=: manages read-only SQLite connections keyed by store name
+2. Create =packages/spell-server/src/state/types.ts=: =StateStoreManager= interface, =StateQueryResult= type
+3. Wire =StateStoreManager= creation in =server.ts= startup from manifest state stores + =cwd= for path resolution
+4. Add =StateStoreManager= to =SpellServerDeps=
+5. Create =packages/spell-server/src/http/routes/state.ts=: route handlers for =/api/state= endpoints
+6. Wire routes in =http/server.ts=
+7. Test: fixture SQLite DB with known data → query via API → verify response shape and data
+8. Test: requesting unknown store/table returns 404
+9. Test: pagination works (limit/offset)
+
+** Scope
+- New: =packages/spell-server/src/state/store-manager.ts=, =types.ts=
+- New: =packages/spell-server/src/http/routes/state.ts=
+- Edit: =packages/spell-server/src/http/server.ts= (new routes + deps)
+- Edit: =packages/spell-server/src/server.ts= (create StateStoreManager on startup)
+- New test: =packages/spell-server/test/http/state.test.ts=
+- Uses =bun:sqlite= for read-only connections
+
+** Acceptance
+- =curl -u spell:secret http://localhost:8787/api/state= returns list of state stores with schemas
+- =curl -u spell:secret http://localhost:8787/api/state/workflow/tables= returns table names from stateSchemas
+- =curl -u spell:secret http://localhost:8787/api/state/workflow/tables/personas= returns rows from growth.sqlite
+- Requesting unknown store returns 404
+- Requesting undeclared table returns 404
+- =bun check:ts= passes
+- State query test passes

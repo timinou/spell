@@ -1,0 +1,47 @@
+#+TITLE: Complete serializeManifestKdl round-trip for all domain types
+#+STATE: DONE
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-289-complete-serializemanifestkdl-round-trip
+#+EFFORT: 2h
+#+PRIORITY: #C
+#+LAYER: backend
+
+NOTE [2026-04-03]: Already implemented: serializeManifestKdl() at lines 381-404 already wires all 8 domain type arrays (exportTargets, notificationRoutes, reviewPolicies, checkpoints, panels, layouts, syncCollections, stateSchemas).
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+=serializeManifestKdl()= in =manifest/serializer.ts= only handles =setups= and =goals=. The 8 new domain type arrays (exportTargets, notificationRoutes, reviewPolicies, checkpoints, panels, layouts, syncCollections, stateSchemas) are not serialized. This means KDL round-trip (parse → serialize → parse) loses data.
+
+While less critical than the API serialization (handled in FEAT-283), round-trip correctness matters for:
+- Export/backup of resolved manifests
+- Debugging: ability to dump the fully resolved manifest as KDL
+- Future config generation tools
+
+* Approach
+Add serializer functions for each domain type and wire them into =serializeManifestKdl()=. Follow the same pattern as =createSetupNode()= / =createGoalNode()=.
+
+** Sub-outline (test-first, types already exist)
+1. Add test cases: parse a full manifest KDL with all domain types → serialize → re-parse → assert structural equality
+2. Add =createExportTargetNode()= for export-target nodes
+3. Add =createNotificationRouteNode()= for notification-route nodes
+4. Add =createReviewPolicyNode()= with state and transition children
+5. Add =createCheckpointNode()= with require children
+6. Add =createPanelNode()= with column and action children
+7. Add =createLayoutNode()= with region children
+8. Add =createSyncCollectionNode()= for sync-collection nodes
+9. Add =createStateSchemaNode()= with table and column children
+10. Wire all into =serializeManifestKdl()=
+
+** Scope
+- =packages/spell-server/src/manifest/serializer.ts=
+- =packages/spell-server/test/manifest/parser.test.ts= (round-trip test extension)
+- Does NOT touch parser or types
+
+** Acceptance
+- Full round-trip test: parse → serialize → re-parse produces structurally identical manifest
+- All 8 domain type arrays survive serialization
+- =bun check:ts= passes
