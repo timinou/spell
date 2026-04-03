@@ -790,8 +790,8 @@ export class SelectorController {
 				eventBus: this.ctx.eventBus!,
 				ui: this.ctx.ui,
 				cwd: this.ctx.sessionManager.getCwd(),
-				terminalRows: this.ctx.ui.terminal.rows,
 				onClose: () => {
+					viewer.dispose();
 					done();
 					this.ctx.ui.requestRender();
 				},
