@@ -1,0 +1,60 @@
+#+TITLE: Explore Mode
+#+STATE: DONE
+#+SESSION_ID: 14ac84f2a5326403
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T19-42-39-764Z_14ac84f2a5326403.jsonl]]
+#+CUSTOM_ID: PLAN-129-explore-mode
+
+NOTE [2026-04-03]: All child items DONE. Explore mode implemented: MODE.md + builtin discovery wiring.
+
+
+* Initial Message
+
+can you make an exlpore mode that is super super simple (the regular system prompt + read-only)?
+
+* Context
+
+Add a builtin "explore" mode — the simplest possible mode. It keeps the regular system prompt and enforces read-only file access. No plan-mode templates, no audit lifecycle, no tool filtering. Just the normal agent experience with file writes blocked.
+
+** Key Design Decisions
+- Standalone user mode (no ~extends~ — does not extend plan or audit)
+- ~readOnly: true~ in frontmatter — leverages existing ~enforceModeWrite~ in ~mode-guard.ts~
+- All tools remain available — read-only enforcement happens at the tool execution layer (write/edit/ast_edit/notebook throw ~ToolError~), not by removing tools from the active set
+- Activated via ~/explore~ slash command (via ~command: /explore~ in frontmatter)
+- Lives in a new ~src/modes/builtins/~ directory to separate builtin modes from base/example definitions
+- Builtin mode directory uses same structure as user modes (~<name>/MODE.md~), scanned by existing ~scanModesDir~
+
+** Architecture
+- The mode system already supports standalone user modes via ~UserModeState~ with ~readOnly: true~
+- ~enforceModeWrite~ in ~tools/mode-guard.ts~ already checks ~isUserMode(state) && state.readOnly~ and throws ~ToolError~
+- ~handleModeCommand~ in ~interactive-mode.ts~ already creates ~UserModeState~ for non-plan, non-audit modes
+- Mode slash commands are registered from ~frontmatter.command~ via ~registerModeCommands~ in ~builtin-registry.ts~
+- The only missing piece: mode discovery (~discovery/builtin.ts~) only scans ~.spell/modes/~ directories, not package builtins
+
+** Files
+- New: ~packages/coding-agent/src/modes/builtins/explore/MODE.md~ — mode definition
+- Modified: ~packages/coding-agent/src/discovery/builtin.ts~ — scan builtins dir in ~loadModes~
+
+* Verification
+- ~bun check:ts~ passes
+- ~/explore~ slash command activates read-only mode
+- File writes (write, edit tools) throw ~ToolError~ when explore mode is active
+- System prompt is the regular agent prompt (no plan-mode-active.md injection)
+
+* Execution Manifest
+1. [[id:FEAT-307-add-builtin-explore-mode]] — Create explore MODE.md + wire builtin mode loading (effort: S)
+
+** Completion [2026-04-03]
+*** Verification
+- =bun check:ts=: tsgo passes for coding-agent package (0 errors). Pre-existing errors in spell-server/ and utils/ are unrelated.
+- =biome check=: passes for modified files.
+- =/explore= frontmatter: =command: /explore= present in MODE.md, will be registered by =registerModeCommands= which reads =config.frontmatter.command=.
+- Read-only enforcement: =readOnly: true= in frontmatter → =handleModeCommand= creates =UserModeState= with =readOnly: true= → =enforceModeWrite= in mode-guard.ts throws =ToolError= on write/edit/ast_edit/notebook.
+- System prompt: standalone user mode (no =extends=) → no plan-mode-active.md or audit template injection. Regular agent system prompt applies.
+- Builtin priority: builtins scanned last in =loadModes= → first-wins dedup ensures user/project modes override builtin modes with same name.
+
+*** Artifacts
+- =packages/coding-agent/src/modes/builtins/explore/MODE.md= — new mode definition
+- =packages/coding-agent/src/discovery/builtin.ts= — added builtin modes directory scan (3 lines)
+
+*** Deviations
+None.

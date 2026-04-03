@@ -873,6 +873,10 @@ async function loadModes(ctx: LoadContext): Promise<LoadResult<ModeConfig>> {
 	const userModesDir = path.join(ctx.home, PATHS.userAgent, "modes");
 	await scanModesDir(userModesDir, "user", items, warnings);
 
+	// Scan package-level builtin modes (lowest priority — user/project modes override)
+	const builtinModesDir = path.resolve(import.meta.dir, "../modes/builtins");
+	await scanModesDir(builtinModesDir, "user", items, warnings);
+
 	return { items, warnings };
 }
 
