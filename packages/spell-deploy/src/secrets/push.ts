@@ -1,4 +1,5 @@
 import { buildSshArgs } from "../sync/ssh";
+import { buildQuotedPath } from "../sync/utils";
 import type { SecretPushOptions } from "./types";
 
 /** Build command to push secrets via SSH stdin (no plaintext on disk during transfer) */
@@ -7,8 +8,9 @@ export function buildSecretPushCommand(opts: SecretPushOptions): {
 	stdin: string;
 	description: string;
 } {
-	const remoteTmp = `${opts.remotePath}.tmp`;
-	const remoteScript = `cat > ${remoteTmp} && chmod 600 ${remoteTmp} && mv ${remoteTmp} ${opts.remotePath}`;
+	const quotedTmp = buildQuotedPath(`${opts.remotePath}.tmp`);
+	const quotedPath = buildQuotedPath(opts.remotePath);
+	const remoteScript = `cat > ${quotedTmp} && chmod 600 ${quotedTmp} && mv ${quotedTmp} ${quotedPath}`;
 	return {
 		args: [...buildSshArgs(opts.sshOptions), remoteScript],
 		stdin: opts.envContent,

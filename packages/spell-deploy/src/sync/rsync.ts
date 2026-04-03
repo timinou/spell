@@ -1,7 +1,7 @@
 import type { RsyncArgs, SshOptions } from "./types";
 
 function buildRsyncSshTransport(sshOptions: SshOptions): string {
-	const keyPart = sshOptions.sshKey ? ` -i ${sshOptions.sshKey}` : "";
+	const keyPart = sshOptions.sshKey ? ` -i '${sshOptions.sshKey}'` : "";
 	return `ssh -p ${sshOptions.port}${keyPart} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=${sshOptions.connectTimeout}`;
 }
 

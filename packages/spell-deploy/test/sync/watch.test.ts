@@ -52,6 +52,12 @@ describe("shouldExclude", () => {
 		expect(shouldExclude("node_modules", ["node_modules/"])).toBe(true);
 		expect(shouldExclude(".git", [".git/"])).toBe(true);
 	});
+
+	it("does not false-positive on directories whose names share a prefix with an excluded dir", () => {
+		expect(shouldExclude("node_modules_backup/foo", ["node_modules/"])).toBe(false);
+		expect(shouldExclude("node_modules_old", ["node_modules"])).toBe(false);
+		expect(shouldExclude(".github/workflows/ci.yml", [".git/"])).toBe(false);
+	});
 });
 
 describe("WatchOrchestrator", () => {

@@ -6,8 +6,3 @@ export interface DeployContext {
 	/** Dry-run mode */
 	dryRun: boolean;
 }
-
-export interface CommandResult {
-	success: boolean;
-	message: string;
-}

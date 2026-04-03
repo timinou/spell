@@ -1,6 +1,6 @@
 import type { SystemdUnitConfig } from "./types";
 
-function sanitizeUnitName(unitName: string): string {
+export function sanitizeUnitName(unitName: string): string {
 	return unitName.replace(/[^A-Za-z0-9@_.-]+/g, "-");
 }
 

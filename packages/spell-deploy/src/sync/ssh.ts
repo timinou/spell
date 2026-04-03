@@ -37,7 +37,7 @@ export function sshOptionsFromTarget(target: SyncTarget): SshOptions {
 }
 
 /** Execute an SSH command via Bun shell. Returns CommandResult. */
-export async function execSsh(command: SshCommand): Promise<CommandResult> {
+export function execSsh(command: SshCommand): CommandResult {
 	const result = Bun.spawnSync(command.args, {
 		stdout: "pipe",
 		stderr: "pipe",

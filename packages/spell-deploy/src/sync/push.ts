@@ -1,22 +1,7 @@
 import { buildPushRsyncArgs } from "./rsync";
 import { buildSshCommand, execSsh, sshOptionsFromTarget } from "./ssh";
-import type { AtomicSwapPlan, PushOptions, RsyncArgs } from "./types";
-
-function buildQuotedPath(path: string): string {
-	return `'${path.replaceAll("'", `'\\''`)}'`;
-}
-
-function executeRsync(command: RsyncArgs): void {
-	const result = Bun.spawnSync(command.args, {
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	if (result.exitCode !== 0) {
-		const stderr = result.stderr.toString();
-		const stdout = result.stdout.toString();
-		throw new Error(`${command.description} failed: ${stderr || stdout || `exit code ${result.exitCode}`}`);
-	}
-}
+import type { AtomicSwapPlan, PushOptions } from "./types";
+import { buildQuotedPath, executeRsync } from "./utils";
 
 /** Build the full atomic swap plan for a push operation */
 export function buildPushPlan(opts: PushOptions): AtomicSwapPlan {

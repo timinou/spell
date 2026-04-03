@@ -3,7 +3,7 @@ export * from "./bundle/cache";
 export * from "./bundle/types";
 export * from "./bundle/upload";
 export * from "./cli/commands";
-export type { DeployContext } from "./cli/types";
+export * from "./cli/types";
 export * from "./config/loader";
 export * from "./config/sync-parser";
 export * from "./config/types";
@@ -19,15 +19,8 @@ export * from "./sync/pull";
 export * from "./sync/push";
 export * from "./sync/rsync";
 export * from "./sync/ssh";
-export type {
-	AtomicSwapPlan,
-	CommandResult,
-	PullOptions,
-	PushOptions,
-	RsyncArgs,
-	SshCommand,
-	SshOptions,
-} from "./sync/types";
+export * from "./sync/types";
+export * from "./sync/utils";
 export * from "./sync/watch";
 export * from "./sync/watch-types";
 export * from "./sync/watcher";
