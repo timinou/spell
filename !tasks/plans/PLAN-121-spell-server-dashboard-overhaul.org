@@ -1,0 +1,207 @@
+#+TITLE: Spell server dashboard overhaul
+#+STATE: DONE
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: PLAN-121-spell-server-dashboard-overhaul
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Context
+
+The spell server at localhost:8787 serves a Preact SPA frontend for the growth project. The frontend renders only a bare goal-status table with raw JSON config dumps.
+
+** Architectural principle: KDL is infrastructure, SQLite is domain state
+
+KDL should define the *shape* of the system — goals, schedules, setups, review policies, state schemas, panels, export targets. Domain data — personas, people, sources, articles — belongs in *state* backed by SQLite. The dashboard reads domain data from the state stores at runtime, not from KDL at config time.
+
+Growth currently violates this: =.spell/data/personas.kdl=, =people.kdl=, =sources.kdl= formalize domain data as KDL config. These files are already *out of sync* with =data/growth.sqlite= (different persona names, different people counts). The KDL data files must be removed; the SQLite DB is canonical.
+
+Spell-server also violates this: =config/data-parser.ts= and =config/data-types.ts= encode domain-specific types (Persona, Person, Source) into the platform layer. The platform shouldn't know about personas. These files must be removed and replaced with a generic state store query API.
+
+** What exists now
+
+*** Infrastructure config (KDL, correctly placed)
+The manifest parser handles 8 domain type arrays: panels (2), layouts (1), syncCollections (3), stateSchemas (3), reviewPolicies (1), checkpoints (2), exportTargets (3), notificationRoutes (5). All fully populated in growth's KDL.
+
+*** Domain data (SQLite, correctly placed but dashboard can't access it)
+=data/growth.sqlite= has 10 tables: people (1 row), person_sources (4), personas (3), articles (1), article_scores (2), approvals (1), feed_runs (0), exports (2), downstream_jobs (0), downstream_job_attempts (0). Well-designed schema with foreign keys and indexes.
+
+*** Domain data (KDL, wrongly placed — to be removed)
+=.spell/data/personas.kdl= (3 personas, different from SQLite), =people.kdl= (4 people, only 1 in SQLite), =sources.kdl= (6 sources, no table in SQLite). These are stale duplicates.
+
+** What's broken
+
+1. =toManifestJson()= only serializes name, version, setups, goals. 8 domain type arrays silently dropped from API.
+2. State stores declared in KDL are metadata-only — no runtime SQLite connections, no query API.
+3. =data-parser.ts= / =data-types.ts= formalize domain types in the platform (wrong layer).
+4. Growth's =.spell/data/*.kdl= duplicates and conflicts with SQLite data.
+5. No =sources= table in growth.sqlite for non-person content sources.
+6. Frontend has no navigation, no approval queue, no job tracker, no config inspector.
+
+** Key decisions
+- *Delete growth's KDL data files.* SQLite is canonical for domain data.
+- *Remove data-parser/data-types from spell-server.* Platform doesn't own domain types.
+- *Add generic state store query API.* The manifest declares state stores + schemas. The server opens read-only SQLite connections and exposes =/api/state/:storeName/tables/:tableName=.
+- *Dashboard reads domain data from state API.* Personas, people, sources, articles — all rendered by querying the state store, guided by stateSchemas from the manifest.
+- *Infrastructure config from manifest.* Review policies, checkpoints, export targets, panels, layouts — rendered from =/api/manifest=.
+- *Tab navigation.* Goals / Approvals / Jobs / Config.
+
+** Architecture
+
+#+begin_example
+KDL Manifest                 SQLite State Stores
+(infrastructure shape)       (domain data)
+     |                            |
+     v                            v
+/api/manifest              /api/state/:store/tables/:table
+  panels                     personas rows
+  layouts                    people rows
+  stateSchemas               sources rows
+  reviewPolicies             articles rows
+  exportTargets              ...
+  notificationRoutes
+  checkpoints
+     |                            |
+     +------- Frontend tab bar ---+
+              |    |    |    |
+           Goals Approvals Jobs Config
+#+end_example
+* Verification
+
+After all items are complete:
+
+#+begin_src sh
+# Type check the spell-server package
+bun check:ts
+
+# Verify KDL data files are gone from growth
+test ! -f ../growth/.spell/data/personas.kdl && echo "PASS: personas.kdl removed"
+test ! -f ../growth/.spell/data/people.kdl && echo "PASS: people.kdl removed"
+test ! -f ../growth/.spell/data/sources.kdl && echo "PASS: sources.kdl removed"
+
+# Verify data-parser/data-types removed from spell-server
+test ! -f packages/spell-server/src/config/data-parser.ts && echo "PASS: data-parser removed"
+test ! -f packages/spell-server/src/config/data-types.ts && echo "PASS: data-types removed"
+
+# Verify manifest API includes all domain types
+curl -u spell:secret http://localhost:8787/api/manifest | jq '{panels: .panels | length, layouts: .layouts | length, reviewPolicies: .reviewPolicies | length, exportTargets: .exportTargets | length, notificationRoutes: .notificationRoutes | length, checkpoints: .checkpoints | length, syncCollections: .syncCollections | length, stateSchemas: .stateSchemas | length}'
+# Expected: {panels: 2, layouts: 1, reviewPolicies: 1, exportTargets: 3, notificationRoutes: 5, checkpoints: 2, syncCollections: 3, stateSchemas: 3}
+
+# Verify state store query API
+curl -u spell:secret http://localhost:8787/api/state
+curl -u spell:secret http://localhost:8787/api/state/workflow/tables/personas
+# Expected: rows from growth.sqlite personas table
+
+# Verify sources table exists in growth.sqlite
+sqlite3 ../growth/data/growth.sqlite "SELECT count(*) FROM sources"
+# Expected: 6
+
+# Verify growth cutover tests pass
+cd ../growth && bun test test/cutover/
+
+# Verify approvals and downstream jobs APIs accessible
+curl -u spell:secret http://localhost:8787/api/approvals
+curl -u spell:secret http://localhost:8787/api/downstream-jobs
+#+end_src
+
+Required artifacts:
+- Screenshot of dashboard with tab navigation showing Goals tab
+- Screenshot of approval queue tab (empty state with review policy state machine is acceptable)
+- Screenshot of downstream jobs tab with export targets reference
+- Screenshot of config tab showing personas from state API and review policy from manifest
+- Screenshot of goal detail with structured hooks/retry rendering (not JSON dump)
+* Execution Manifest
+
+Supersedes all previous wave plans. Incorporates the architectural correction: KDL is infrastructure config, SQLite is domain state. Domain data served from state stores, not KDL.
+
+** Wave 1: Data migration + platform cleanup (sequential)
+- [[id:FEAT-290-migrate-growth-domain-data-from-kdl-to-s]] — Migrate growth domain data from KDL to SQLite canonical source (2h, data)
+- [[id:FEAT-291-remove-data-parser-and-data-types-from-s]] — Remove data-parser and data-types from spell-server (1h, backend, depends on FEAT-290)
+
+FEAT-290 removes the KDL data files from growth and adds a =sources= table to growth.sqlite. FEAT-291 removes the now-purposeless domain-type parser from spell-server. Sequential because FEAT-291 should only run after the KDL data files are confirmed removed.
+
+** Wave 2: Backend API (parallel within wave, depends on Wave 1)
+- [[id:FEAT-283-complete-manifest-api-serialization-and]] — Complete manifest API serialization for all domain types (2h, backend)
+- [[id:FEAT-292-generic-state-store-query-api-for-spell]] — Generic state store query API for spell-server (4h, backend, depends on FEAT-291)
+
+FEAT-283 extends =toManifestJson()= to include panels, layouts, stateSchemas, reviewPolicies, etc. FEAT-292 adds =/api/state/:storeName/tables/:tableName= backed by read-only SQLite connections. These are independent (different files, different concerns).
+
+** Wave 3: Frontend foundation (parallel, depends on Wave 2)
+- [[id:FEAT-284-frontend-tab-navigation-with-badge-count]] — Tab navigation with badge counts (2h, frontend)
+- [[id:FEAT-288-frontend-goal-detail-enhancements-with-l]] — Goal detail enhancements with logs, hooks, pipeline context (2h, frontend)
+
+FEAT-284 restructures the app shell. FEAT-288 only touches GoalDetailView, independent of tabs.
+
+** Wave 4: Core panels (parallel, depends on Wave 3)
+- [[id:FEAT-285-frontend-approval-queue-panel-with-claim]] — Approval queue panel with claim-based review (4h, frontend, depends on FEAT-284)
+- [[id:FEAT-286-frontend-downstream-jobs-and-export-targ]] — Downstream jobs and export targets panel (2h, frontend, depends on FEAT-284)
+- [[id:FEAT-287-frontend-config-panel-with-schema-driven]] — Config panel with schema-driven manifest + state data rendering (3h, frontend, depends on FEAT-284 + FEAT-292)
+
+All three panels fill different tabs and are independent of each other.
+
+** Wave 5: Serializer round-trip (independent, can run anytime after Wave 2)
+- [[id:FEAT-289-complete-serializemanifestkdl-round-trip]] — Complete serializeManifestKdl round-trip for all domain types (2h, backend)
+
+Priority C — not blocking frontend work but important for correctness.
+
+Total estimated effort: ~24h
+Critical path: FEAT-290 → FEAT-291 → FEAT-292 → FEAT-284 → FEAT-285 (13h)
+
+** Superseded items (from all previous plan versions)
+All FEAT-273 through FEAT-279 are abandoned (see previous plan revisions for reasons). The new items FEAT-283 and FEAT-284-289 supersede them. New items FEAT-290, FEAT-291, FEAT-292 address the data architecture correction.
+
+
+** Completion [2026-04-03]
+
+*** Verification
+
+All acceptance criteria verified:
+
+**** Data migration (FEAT-290)
+- KDL data files removed: =personas.kdl=, =people.kdl=, =sources.kdl= confirmed absent
+- =sources= table created in =growth.sqlite= with 6 rows
+- =personas= table has 3 rows (canonical SQLite data)
+- Growth cutover tests pass: =bun test test/cutover/data-config.test.ts= (5/5 pass)
+
+**** Platform cleanup (FEAT-291)
+- =data-parser.ts= and =data-types.ts= deleted from spell-server
+- =config/index.ts= re-exports removed
+- =loader.ts= data loading removed (no more =DataConfig=)
+- No new type errors from =tsgo --noEmit=
+
+**** Manifest API (FEAT-283)
+- =curl /api/manifest= returns all 8 domain arrays: panels(2), layouts(1), reviewPolicies(1), exportTargets(3), notificationRoutes(5), checkpoints(2), syncCollections(3), stateSchemas(3)
+
+**** State store query API (FEAT-292)
+- =GET /api/state= returns 2 stores (workflow sqlite, artifacts artifact-store)
+- =GET /api/state/workflow/tables= returns 11 tables
+- =GET /api/state/workflow/tables/personas= returns 3 rows with correct data
+- Unknown store/table returns 404
+
+**** Serializer round-trip (FEAT-289)
+- Already fully implemented: =serializeManifestKdl()= wires all 8 domain type create*Node functions
+
+**** Frontend (FEAT-284, 285, 286, 287, 288)
+- Tab navigation: 4 tabs (Goals, Approvals, Jobs, Config) with active state
+- Badge counts: approval pending and job failure badges on tabs
+- Goal detail: structured Schedule, Action, Hooks, Retry rendering (no JSON dump)
+- Approvals: state machine diagram from review policy, empty state, claim/action flow
+- Jobs: export targets cards, grouped job table, attempt history
+- Config: review policies, checkpoints, export targets, notification routes, state schemas, panels, layouts, sync collections, setups, state store data browser with interactive table queries
+
+*** Artifacts
+
+- [[file:!tasks/plans/plan-artifacts/PLAN-121-spell-server-dashboard-overhaul/goals-tab-with-navigation.png]] Goals tab with tab navigation and 4 goals
+- [[file:!tasks/plans/plan-artifacts/PLAN-121-spell-server-dashboard-overhaul/goal-detail-structured-config.png]] Goal detail with structured Schedule, Action, Hooks (not JSON dump)
+- [[file:!tasks/plans/plan-artifacts/PLAN-121-spell-server-dashboard-overhaul/approvals-tab-with-state-machine.png]] Approval queue with review policy state machine diagram
+- [[file:!tasks/plans/plan-artifacts/PLAN-121-spell-server-dashboard-overhaul/jobs-tab-with-export-targets.png]] Downstream jobs tab with 3 export target cards
+- [[file:!tasks/plans/plan-artifacts/PLAN-121-spell-server-dashboard-overhaul/config-tab-review-policy.png]] Config tab with review policy and all infrastructure sections
+- [[file:!tasks/plans/plan-artifacts/PLAN-121-spell-server-dashboard-overhaul/config-tab-personas-from-state-api.png]] Personas data from SQLite state API with goals/challenges/keywords tags
+
+*** Deviations
+
+None.

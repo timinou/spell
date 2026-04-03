@@ -9,12 +9,28 @@ function toManifestJson(manifest: AutonomyManifest): {
 	version: string;
 	setups: Record<string, unknown>;
 	goals: Record<string, unknown>;
+	panels: AutonomyManifest["panels"];
+	layouts: AutonomyManifest["layouts"];
+	syncCollections: AutonomyManifest["syncCollections"];
+	stateSchemas: AutonomyManifest["stateSchemas"];
+	reviewPolicies: AutonomyManifest["reviewPolicies"];
+	checkpoints: AutonomyManifest["checkpoints"];
+	exportTargets: AutonomyManifest["exportTargets"];
+	notificationRoutes: AutonomyManifest["notificationRoutes"];
 } {
 	return {
 		name: manifest.name,
 		version: manifest.version,
 		setups: Object.fromEntries(manifest.setups),
 		goals: Object.fromEntries(manifest.goals),
+		panels: manifest.panels,
+		layouts: manifest.layouts,
+		syncCollections: manifest.syncCollections,
+		stateSchemas: manifest.stateSchemas,
+		reviewPolicies: manifest.reviewPolicies,
+		checkpoints: manifest.checkpoints,
+		exportTargets: manifest.exportTargets,
+		notificationRoutes: manifest.notificationRoutes,
 	};
 }
 

@@ -1,0 +1,57 @@
+#+TITLE: Frontend config panel with schema-driven manifest and data rendering
+#+STATE: DONE
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-287-frontend-config-panel-with-schema-driven
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: frontend
+#+DEPENDS: FEAT-284-frontend-tab-navigation-with-badge-count
+
+* Problem
+The manifest panel currently shows only "name . version . N setups . M goals" as a one-liner. The full manifest now includes 8 domain type arrays (panels, layouts, syncCollections, stateSchemas, reviewPolicies, checkpoints, exportTargets, notificationRoutes) that are invisible. Domain data (personas, people, sources) lives in SQLite state stores, queryable via =/api/state/=.
+
+* Usefulness
+- *Content strategy visibility*: persona cards show goals, challenges, keywords — operators see who they're curating for. Data comes FROM SQLite via =/api/state/workflow/tables/personas=, not from KDL.
+- *Source catalog*: people and sources rendered as reference tables — operators see where content comes from. Data from =/api/state/workflow/tables/people= and =/api/state/workflow/tables/sources=.
+- *Workflow config transparency*: review policy state machine, checkpoint requirements, notification routing — from manifest
+- *State schema documentation*: table schemas rendered as a data dictionary — from manifest =stateSchemas=
+- *Panel/layout preview*: show what the QML desktop surface is configured to display — from manifest
+- *Setup details*: domain, mode, timeout, tool permissions, sandbox paths — from manifest
+
+* Approach
+Build a =ConfigPanel= component for the Config tab. Infrastructure config (panels, layouts, review policies, checkpoints, export targets, notifications, state schemas, setups) comes from =/api/manifest=. Domain data (personas, people, sources, articles) comes from =/api/state/:storeName/tables/:tableName=. The =stateSchemas= from the manifest tell the frontend what tables exist and what columns they have, so the UI can auto-render generic data tables for any declared state store.
+
+** Sub-outline
+1. Infrastructure sections (from manifest):
+   - Review policy: state machine visualization (states as nodes, transitions as labeled edges)
+   - Checkpoints: card per checkpoint with requirements list
+   - Export targets: card per target with kind, path/url, format
+   - Notification routes: table with id, channel, on-event, target
+   - State schemas: collapsible per schema with table/column definitions
+   - Panels: table showing panel ID, source, columns, actions
+   - Layouts: show regions mapped to panels
+   - Sync collections: table with id, source, filter
+   - Setup details: existing setup config rendered structurally
+2. Domain data sections (from state API, driven by stateSchemas):
+   - For each state store with a schema, render a section
+   - For each table in the schema, offer a collapsible data browser
+   - Personas table: render with goals/challenges/keywords parsed from JSON columns
+   - People + person_sources: render as cards with sources sub-table
+   - Sources table: simple data table
+   - Articles: table with status badges for queue_state
+3. All sections default to collapsed; expand on click
+4. Test: screenshot of config panel with review policy and personas sections expanded
+
+** Scope
+- File: =packages/spell-server/src/http/frontend/index.html= (Config tab content)
+- Reads from =/api/manifest= (infrastructure config) and =/api/state/= (domain data)
+- Does NOT modify backend code
+
+** Acceptance
+- Config tab renders infrastructure sections from manifest
+- Config tab renders domain data tables from state API
+- Personas show goals, challenges, keywords parsed from JSON columns
+- Review policy renders as a state machine diagram
+- State schemas render as a data dictionary
+- Screenshot of config panel with at least 3 sections expanded

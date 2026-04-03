@@ -1,0 +1,47 @@
+#+TITLE: Frontend goal detail enhancements with logs hooks and pipeline context
+#+STATE: DONE
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-288-frontend-goal-detail-enhancements-with-l
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: frontend
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+The goal detail view shows a raw JSON dump of goal config and a flat run history table. The API exposes =/api/goals/:name/logs= (currently returning run entries — same as runs). The manifest now includes rich goal config: hooks (onSuccess/onFailure/onComplete with telegram targets), retry config, action descriptors, checkpoint dependencies, and notification routing. None of this context is rendered structurally.
+
+* Usefulness
+- *Hook visibility*: see which Telegram chats get notified on failure/success/complete for each goal
+- *Retry config*: see maxRetries, backoff multiplier, initial delay — understand retry behavior
+- *Action descriptor link*: see which action runs (=growth.discovery=, =growth.feed.send=, etc.) and whether it's project-scoped
+- *Run log viewer*: expandable log section per run (even if currently identical to run entries, the infrastructure for richer logs is in place)
+- *Pipeline position*: show which checkpoints and export targets are related to this goal's action
+- Replaces the current raw =JSON.stringify(goal.config)= with structured rendering
+
+* Approach
+Enhance =GoalDetailView= to render config sections structurally instead of as a JSON blob.
+
+** Sub-outline
+1. Replace =<pre>${JSON.stringify(goal.config, null, 2)}</pre>= with structured sections
+2. Schedule section: cron expression with timezone and next fire time, or webhook path with auth type
+3. Hooks section: render each hook group (onSuccess/onFailure/onComplete) with target descriptions
+4. Retry section: show retry params if configured
+5. Action section: show action ID, whether it's project-scoped, link to relevant export targets
+6. Run log viewer: expandable =<pre>= section per run with scroll, error highlighting
+7. Test: screenshot of goal detail with structured config sections visible
+
+** Scope
+- File: =packages/spell-server/src/http/frontend/index.html= (=GoalDetailView= component)
+- Uses existing =/api/goals/:name= response and manifest data
+- Does NOT modify backend code
+
+** Acceptance
+- Goal detail shows structured config sections instead of JSON dump
+- Hooks render with target descriptions (e.g. "Telegram chat 12345 on failure")
+- Retry config renders if present
+- Run entries show expandable log/error section
+- Screenshot of goal detail with hooks and retry visible
