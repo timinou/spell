@@ -6,3 +6,6 @@ export * from "./process-manager";
 export * from "./service";
 export * from "./types";
 export * from "./utils";
+
+export * from "./workflow-inbox";
+export * from "./workflow-notifications";

@@ -1,8 +1,9 @@
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { parseManifestKdl } from "../manifest/parser";
+import { createServerActionRegistry } from "../actions";
+import type { ActionRegistry } from "../actions/registry";
+import { loadManifestFromFile } from "../manifest/import-resolver";
 import type { AutonomyManifest } from "../manifest/types";
-import { validateManifest } from "../manifest/validator";
 import { parseChannelsConfig, resolveChannelsBotToken } from "./channels-parser";
 import { parseServerConfig } from "./server-parser";
 import type { ChannelsConfig, SpellServerConfig } from "./types";
@@ -11,6 +12,7 @@ export interface LoadedConfig {
 	server: SpellServerConfig;
 	channels: ChannelsConfig;
 	manifest: AutonomyManifest;
+	actionRegistry: ActionRegistry;
 }
 
 export async function loadConfig(configDir: string): Promise<LoadedConfig> {
@@ -26,16 +28,14 @@ export async function loadConfig(configDir: string): Promise<LoadedConfig> {
 		}
 	}
 
-	const manifestText = await readRequiredConfigFile(configDir, "autonomy.kdl");
-	const manifest = parseManifestKdl(manifestText);
-	const validation = validateManifest(manifest);
-	if (!validation.valid) {
-		throw new Error(
-			`Invalid manifest: ${validation.errors.map(error => `${error.path}: ${error.message}`).join(", ")}`,
-		);
-	}
+	const actionRegistry = createServerActionRegistry();
+	const manifestPath = path.join(configDir, "autonomy.kdl");
+	const manifest = await loadManifestFromFile(manifestPath, {
+		registry: actionRegistry,
+		env: process.env,
+	});
 
-	return { server, channels, manifest };
+	return { server, channels, manifest, actionRegistry };
 }
 
 async function readRequiredConfigFile(configDir: string, fileName: string): Promise<string> {

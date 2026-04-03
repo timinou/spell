@@ -1,0 +1,11 @@
+{
+  "id": "job-1",
+  "itemId": "approval-1",
+  "kind": "feed-send",
+  "status": "QUEUED",
+  "retryEligible": true,
+  "payload": {},
+  "createdAt": "2026-04-03T01:19:11.937Z",
+  "updatedAt": "2026-04-03T01:19:11.937Z",
+  "attempts": []
+}

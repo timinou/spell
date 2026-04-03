@@ -206,7 +206,7 @@ export class GoalExecutionController {
 				goalName,
 				this.#buildSpawnOptions(goal, setup, cwd, sandboxPolicyPath),
 			);
-			return await this.#promptUntilSettled(goalName, client, goal.prompt, setup.timeout);
+			return await this.#promptUntilSettled(goalName, client, resolveGoalPrompt(goal), setup.timeout);
 		} finally {
 			await this.#cleanupSandbox(goalName);
 		}
@@ -350,4 +350,19 @@ function parseTimeoutMs(value: string): number {
 	const unitMultiplier =
 		unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : unit === "h" ? 3_600_000 : 86_400_000;
 	return amount * unitMultiplier;
+}
+
+function resolveGoalPrompt(goal: ManifestGoal): string {
+	if (goal.prompt) {
+		return goal.prompt;
+	}
+	if (goal.action?.id === "spell.prompt") {
+		const promptParam = goal.action.params.prompt;
+		if (typeof promptParam === "string" && promptParam.length > 0) {
+			return promptParam;
+		}
+	}
+	throw new Error(
+		`Goal '${goal.setup}' is configured with an action-only workflow that GoalExecutionController does not execute yet`,
+	);
 }

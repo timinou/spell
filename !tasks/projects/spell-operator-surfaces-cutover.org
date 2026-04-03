@@ -1,0 +1,98 @@
+#+TITLE: Spell Operator Surfaces And Shared Sync State
+#+STATE: DONE
+#+SESSION_ID: 14ab6894eaa2d281
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-00-14-890Z_14ab6894eaa2d281.jsonl]]
+#+CUSTOM_ID: PROJ-023-spell-operator-surfaces-and-shared-sync
+#+EFFORT: 24h
+#+LAYER: integration
+#+PRIORITY: #A
+#+DEPENDS: PROJ-021-spell-workflow-engine-for-generic-approv::implement-apis
+
+NOTE [2026-04-03]: Completed under PLAN-101. QML shared-state models, Telegram quick-action helpers, and coding-agent surface clients landed with focused surface verification passed.
+
+* Scope
+** In scope
+- Build the operator-facing surfaces that sit on top of the canonical workflow engine:
+  - reusable QML approval/checkpoint surface and reusable goals panel in `packages/qml`
+  - Telegram quick-action inbox, callbacks, and notifications in `packages/spell-server/src/telegram/*`
+  - coding-agent goals/approvals tools in `packages/coding-agent/src/tools/*`
+- Keep HTTP APIs as the canonical integration boundary, with optional shared client/helpers that preserve the same wire contracts.
+- Ensure all surfaces consume the same sync-folder artifacts and item ids.
+** Out of scope
+- Core workflow persistence semantics, growth-specific discovery/feed/export logic, and rewriting the growth repo manifests themselves.
+** Boundary rationale
+- This item owns presentation and operator interaction only. It must not invent a parallel state model or bypass canonical HTTP contracts.
+
+* Tests
+- `packages/qml/test/approval-surface.test.ts`
+  - Approval/checkpoint list/detail rendering from sync snapshots.
+  - Action application refreshes visible state.
+  - Reject/revision reason prompts and lightweight custom param prompts render correctly.
+- `packages/qml/test/goals-panel.test.ts`
+  - Goals list, detail, runs, and manual trigger affordances render from canonical APIs/snapshots.
+- `packages/spell-server/test/telegram/approval-inbox.test.ts`
+  - Telegram lists pending items, claim state, and action options from canonical workflow APIs.
+- `packages/spell-server/test/telegram/approval-callbacks.test.ts`
+  - Quick actions succeed once, stale/conflicting callbacks fail truthfully, and lightweight reason/text replies are collected.
+- `packages/spell-server/test/telegram/notifications.test.ts`
+  - Start/success/failure/checkpoint/job notifications use the generic routing model.
+- `packages/coding-agent/test/tools/goals-tool.test.ts`
+  - List/inspect/trigger goal operations hit the canonical HTTP contract.
+- `packages/coding-agent/test/tools/approvals-tool.test.ts`
+  - Claim/act/retry/audit/artifact operations hit the canonical HTTP contract.
+- `packages/qml/test/shared-sync-state.test.ts`
+  - Telegram and QML observe the same item id/state transitions from the sync folder without shape drift.
+
+* Implementation
+** Define shared surface contracts
+:PROPERTIES:
+:CUSTOM_ID: PROJ-023-spell-operator-surfaces-and-shared-sync::define-contracts
+:DEPENDS: PROJ-021-spell-workflow-engine-for-generic-approv::implement-apis
+:END:
+- Files: `packages/qml/src/protocol.ts`, `packages/spell-server/src/http/types.ts`, `packages/coding-agent/src/tools/http-client.ts`
+- Freeze the HTTP-backed surface contract for approval items, checkpoint items, goals, audit entries, artifact refs, and sync-folder indexes.
+
+** Write surface integration tests (TDD: before implementation)
+:PROPERTIES:
+:CUSTOM_ID: PROJ-023-spell-operator-surfaces-and-shared-sync::surface-tests
+:DEPENDS: PROJ-023-spell-operator-surfaces-and-shared-sync::define-contracts
+:END:
+- Files: `packages/qml/test/approval-surface.test.ts`, `packages/qml/test/goals-panel.test.ts`, `packages/qml/test/shared-sync-state.test.ts`, `packages/spell-server/test/telegram/approval-inbox.test.ts`, `packages/spell-server/test/telegram/approval-callbacks.test.ts`, `packages/spell-server/test/telegram/notifications.test.ts`, `packages/coding-agent/test/tools/goals-tool.test.ts`, `packages/coding-agent/test/tools/approvals-tool.test.ts`
+- Encode the scenarios from the Tests section as initially failing integration tests.
+
+** Implement QML shared surfaces and sync readers
+:PROPERTIES:
+:CUSTOM_ID: PROJ-023-spell-operator-surfaces-and-shared-sync::implement-qml
+:DEPENDS: PROJ-023-spell-operator-surfaces-and-shared-sync::surface-tests
+:END:
+- Files: `packages/qml/src/surfaces/approval-surface.ts`, `packages/qml/src/surfaces/goals-panel.ts`, `packages/qml/src/sync/loaders.ts`, `packages/qml/src/index.ts`
+- Implement reusable QML/runtime primitives for approval/checkpoint review and goal inspection against canonical sync data.
+
+** Implement Telegram quick-action and notification surface
+:PROPERTIES:
+:CUSTOM_ID: PROJ-023-spell-operator-surfaces-and-shared-sync::implement-telegram
+:DEPENDS: PROJ-023-spell-operator-surfaces-and-shared-sync::surface-tests
+:END:
+- Files: `packages/spell-server/src/telegram/commands/approval.ts`, `packages/spell-server/src/telegram/commands/index.ts`, `packages/spell-server/src/telegram/service.ts`, `packages/spell-server/src/hooks/notification-sender.ts`
+- Replace growth-local quick-action assumptions with generic inbox/callback/notification flows using canonical item ids and shared action payload schemas.
+
+** Implement coding-agent goals and approvals tools
+:PROPERTIES:
+:CUSTOM_ID: PROJ-023-spell-operator-surfaces-and-shared-sync::implement-tools
+:DEPENDS: PROJ-023-spell-operator-surfaces-and-shared-sync::surface-tests PROJ-022-spell-growth-action-pack-and-canonical-r::register-actions
+:END:
+- Files: `packages/coding-agent/src/tools/goals.ts`, `packages/coding-agent/src/tools/approvals.ts`, `packages/coding-agent/src/tools/index.ts`, `packages/coding-agent/test/tools/goals-tool.test.ts`, `packages/coding-agent/test/tools/approvals-tool.test.ts`
+- Implement HTTP-backed tools for goal inspection/triggering and approval claim/action/retry/audit/artifact inspection.
+
+* Edge Cases
+- Telegram remains quick-action only: no rich multi-field editing beyond lightweight reason/text or small shared action parameters.
+- Surfaces must surface claim conflicts and stale actions truthfully rather than hiding them.
+- QML and tools must not depend on direct DB access; sync folder and HTTP responses are the only source of truth.
+- Notifications failing to deliver must not imply workflow failure.
+- If `domain/growth/manifest.ts` or `domain/growth/src/qml/panels/*` are still referenced for accepted flows, replace those references with shared built-ins plus config-driven layouts before cutover is considered done.
+
+* Acceptance Criteria
+- Telegram, QML, and coding-agent tools can all inspect and act on the same canonical item ids through the shared HTTP/sync contracts.
+- QML runs as a separate session and refreshes from sync snapshots without sharing runtime internals with Telegram.
+- Coding-agent tools provide full claim/act/trigger/retry plus audit/artifact inspection parity with server permissions.
+- Verification: `bun test packages/qml/test/approval-surface.test.ts packages/qml/test/goals-panel.test.ts packages/qml/test/shared-sync-state.test.ts packages/spell-server/test/telegram/approval-inbox.test.ts packages/spell-server/test/telegram/approval-callbacks.test.ts packages/spell-server/test/telegram/notifications.test.ts packages/coding-agent/test/tools/goals-tool.test.ts packages/coding-agent/test/tools/approvals-tool.test.ts` passes. Required artifacts: QML approval surface screenshot, QML goals panel screenshot, Telegram transcript/screenshots, and sync-folder tree snapshot proving shared canonical state.

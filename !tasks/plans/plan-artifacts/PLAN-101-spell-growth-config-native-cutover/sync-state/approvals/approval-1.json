@@ -1,0 +1,67 @@
+{
+  "id": "approval-1",
+  "kind": "approval",
+  "workflowId": "growth-review",
+  "targetId": "https://ora.example/post",
+  "title": "Approve digest",
+  "summary": "Automation for finance teams.",
+  "state": "feed-approved",
+  "actions": [
+    {
+      "id": "approve-feed",
+      "label": "Approve for feed",
+      "fromStates": [
+        "pending"
+      ],
+      "toState": "feed-approved",
+      "downstreamJobs": [
+        {
+          "kind": "feed-send"
+        }
+      ]
+    },
+    {
+      "id": "approve-publication",
+      "label": "Approve for publication",
+      "fromStates": [
+        "pending"
+      ],
+      "toState": "publication-approved",
+      "downstreamJobs": [
+        {
+          "kind": "publication-export"
+        }
+      ]
+    },
+    {
+      "id": "reject",
+      "label": "Reject",
+      "fromStates": [
+        "pending"
+      ],
+      "toState": "rejected",
+      "requiresReason": true
+    },
+    {
+      "id": "defer",
+      "label": "Defer",
+      "fromStates": [
+        "pending"
+      ],
+      "toState": "deferred"
+    }
+  ],
+  "metadata": {},
+  "artifacts": [
+    {
+      "id": "artifact-1",
+      "label": "Draft",
+      "path": "/home/user/code/ora/spell/!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/draft.md"
+    }
+  ],
+  "notificationRoutes": [],
+  "claimLeaseMs": 300000,
+  "createdAt": "2026-04-03T01:19:11.935Z",
+  "updatedAt": "2026-04-03T01:19:11.937Z",
+  "completedAt": "2026-04-03T01:19:11.937Z"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "audit-3",
+  "at": "2026-04-03T01:19:11.936Z",
+  "kind": "claim-acquired",
+  "itemId": "approval-1",
+  "actor": {
+    "actorId": "telegram-user",
+    "source": "telegram"
+  },
+  "requestId": "claim:telegram-approve-1",
+  "message": "Claim acquired by telegram-user"
+}

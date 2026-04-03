@@ -1,0 +1,17 @@
+{
+  "messages": [
+    {
+      "text": "Automation for Finance Teams\nPersona: finance\nAutomation removes manual reporting for finance teams.\nhttps://ora.example/post",
+      "replyMarkup": {
+        "inlineKeyboard": [
+          [
+            {
+              "text": "Approve publication",
+              "callbackData": "publish:approval-1"
+            }
+          ]
+        ]
+      }
+    }
+  ]
+}

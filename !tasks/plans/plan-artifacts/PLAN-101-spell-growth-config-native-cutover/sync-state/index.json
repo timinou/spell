@@ -1,0 +1,24 @@
+{
+  "approvals": [
+    "approval-1"
+  ],
+  "checkpoints": [
+    "checkpoint-2"
+  ],
+  "downstreamJobs": [
+    "job-1"
+  ],
+  "audit": [
+    "audit-1",
+    "audit-2",
+    "audit-3",
+    "audit-4",
+    "audit-5",
+    "audit-6",
+    "audit-7"
+  ],
+  "goals": [
+    "discovery-goal",
+    "feed-delivery-goal"
+  ]
+}

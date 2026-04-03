@@ -1,0 +1,12 @@
+{
+  "id": "audit-6",
+  "at": "2026-04-03T01:19:11.937Z",
+  "kind": "claim-acquired",
+  "itemId": "checkpoint-2",
+  "actor": {
+    "actorId": "operator-1",
+    "source": "telegram"
+  },
+  "requestId": "claim-resume",
+  "message": "Claim acquired by operator-1"
+}

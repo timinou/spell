@@ -1,105 +1,174 @@
 # Spell Server KDL Schema Reference
 
-This reference documents the three KDL configuration files used by Spell Server:
+This reference documents the three KDL files Spell Server loads from `.spell/`:
 
-- `.spell/server.kdl`
-- `.spell/channels.kdl`
-- `.spell/autonomy.kdl`
+- `server.kdl` for daemon/runtime HTTP settings
+- `channels.kdl` for transport integrations such as Telegram
+- `autonomy.kdl` for workflow manifest structure
 
-Examples below are written to match the shapes accepted by the current manifest parser and surrounding server types. All secrets and URLs are sanitized.
+The manifest layer now supports multi-file imports, explicit overrides, `env(...)` resolution, typed `action` blocks, and named state stores.
 
-## `.spell/server.kdl`
+## `server.kdl`
 
-`server.kdl` configures the HTTP listener and server-side authentication.
+`server.kdl` remains deployment-scoped runtime config.
+
+```kdl
+http port=8787 webhook-secret="replace-with-a-long-random-secret" { // pragma: allowlist secret
+  auth username="admin" password="change-me-now" // pragma: allowlist secret
+  goal-token "incoming" "trigger-token" // pragma: allowlist secret
+}
+```
 
 ### `http` node
 
 Properties and children:
 
-- `port=<number>`: Bun listen port.
-- `webhook-secret=<string>`: shared HMAC secret for webhook schedules that use `auth="hmac"`.
-- child `auth` node with:
-  - `username=<string>`
-  - `password=<string>`
+- `port <number>` required
+- `webhook-secret "<string>"` optional
+- `goal-token "<goal>" "<token>"` optional, repeatable
+- `auth { username "<string>"; password "<string>" }` required
 
-Example:
+## `channels.kdl`
 
-```kdl
-http port=8787 webhook-secret="replace-with-a-long-random-secret" { // pragma: allowlist secret
-  auth username="admin" password="change-me-now" // pragma: allowlist secret
-}
-```
-
-If you use bearer-authenticated webhook goals, your server-side loader may also provide per-goal bearer tokens to the runtime `goalTokens` map represented by the HTTP config type.
-
-## `.spell/channels.kdl`
-
-`channels.kdl` defines external notification channels. Telegram is the primary example.
-
-### `telegram` node
-
-`channels.kdl` now carries the complete Telegram runtime configuration surface. The node itself takes no properties; configure it with children:
-
-- `bot-token "<token>"` or `bot-token-file "<path>"`: required unless the whole Telegram node is omitted. These forms are mutually exclusive. `bot-token-file` is resolved relative to the config directory when loaded.
-- `owners <chat-id>...`: required numeric Telegram user IDs that are allowed to receive admin notifications and owner privileges.
-- `upload-dir "<path>"`: optional upload staging directory. Defaults to `"/tmp/spell-telegram-uploads"`.
-- `idle-timeout <seconds>`: optional default session idle timeout. Defaults to `300`.
-- `max-sessions <number>`: optional concurrent Telegram session cap. Defaults to `10`.
-- `log-viewer-port <number>`: optional HTTP port for the Telegram log viewer. Omit it to disable the viewer.
-- `default-model "<model>"`: required model slug passed to spawned RPC sessions.
-- `project "<name>" "<path>"`: optional named project roots. Relative paths are resolved against the config directory.
-- `default-project "<name>"`: optional default project name. If omitted and at least one `project` node exists, the first declared project becomes the default.
-- `user <telegram-user-id> { ... }`: optional per-user overrides. Supported children are `modes "<mode>"...`, `default-mode "<mode>"`, `idle-timeout <seconds>|#null`, and `projects "<project-name>"...`. If `default-mode` is omitted it falls back to the first listed mode; if `modes` is omitted it defaults to `"telegram-readonly"`.
-
-Example:
+`channels.kdl` remains transport-focused. It does not carry workflow definitions.
 
 ```kdl
 telegram {
   bot-token-file "secrets/bot-token.txt"
   owners 123456789 987654321
   default-model "claude-sonnet-4-5"
+  upload-dir "/tmp/spell-telegram-uploads"
+  idle-timeout 300
+  max-sessions 10
   log-viewer-port 4312
   project "spell" "../spell"
-  project "docs" "./docs"
   default-project "spell"
   user 123456789 {
     modes "telegram-readonly" "coding"
     default-mode "coding"
-    projects "spell" "docs"
-  }
-  user 987654321 {
-    idle-timeout #null
+    projects "spell"
   }
 }
 ```
 
-If the `telegram` node is absent entirely, Telegram delivery is disabled. If the node is present, `default-model`, authentication (`bot-token` or `bot-token-file`), and `owners` are required. Use the KDL null literal `#null` for nullable fields such as `user { idle-timeout #null }`; bare `null` is not accepted.
+Important rules:
 
-## `.spell/autonomy.kdl`
+- Omit the whole `telegram` node to disable Telegram.
+- `default-model`, `owners`, and either `bot-token` or `bot-token-file` are required when `telegram` is present.
+- Use `#null`, not bare `null`, for nullable values such as `idle-timeout #null`.
 
-`autonomy.kdl` is the core manifest read by `parseManifestKdl()`.
+## `autonomy.kdl`
+
+`autonomy.kdl` is the canonical workflow manifest. It may import other KDL files.
 
 ### Top-level nodes
 
-#### `name`
+- `name "<string>"` required in the root manifest only
+- `version "<string>"` required in the root manifest only
+- `import "<relative-path>" as="<alias>"` optional, repeatable
+- `setup "<name>" { ... }` optional, repeatable
+- `goal "<name>" { ... }` optional, repeatable
+- `override "setup"|"goal" "<name>" from="<ref>" strategy="replace"|"merge" { ... }` optional, repeatable
 
-String argument. Human-readable manifest name.
+Local symbol names must not contain `.`. Dotted names are reserved for imported aliases such as `workflow.worker`.
+
+### Imports
+
+Imports resolve relative to the file that declares them.
 
 ```kdl
-name "project-autonomy"
+name "growth"
+version "1.0.0"
+import "./workflow/base.kdl" as="workflow"
+
+goal "dispatch" {
+  setup "workflow.worker"
+  schedule type="cron" expression="0 6 * * *" timezone="UTC"
+  action "spell.noop"
+}
 ```
 
-#### `version`
+Imported symbols are available under the alias namespace:
 
-String argument. Manifest version label.
+- `workflow.worker`
+- `workflow.scan`
+- `workflow.inner.goal` for nested imports
+
+Import cycles fail with the full chain.
+
+### Overrides
+
+Overrides materialize a new local symbol from an existing local or imported symbol reference.
+
+#### Whole-symbol replace
+
+Use `strategy="replace"` when you want to restate the full symbol explicitly.
 
 ```kdl
-version "1.0"
+override "setup" "worker" from="workflow.worker" strategy="replace" {
+  domain "coding"
+  mode "worker"
+  tools {
+    allow "read" "grep"
+  }
+}
 ```
 
-#### `setup "<name>" { ... }`
+#### Field-level merge
 
-Reusable execution policy. A goal references a setup by name.
+Use `strategy="merge"` when you want schema-aware merging.
+
+```kdl
+override "setup" "worker" from="workflow.worker" strategy="merge" {
+  tools {
+    allow "read"
+  }
+  sandbox {
+    paths-write "outbox/"
+  }
+  timeout "15m"
+}
+```
+
+Merge rules are schema-driven:
+
+- scalar fields such as `timeout` replace
+- filter collections such as `tools.allow` append uniquely
+- sandbox collections append uniquely
+- named state stores merge by store name
+- non-mergeable goal fields such as `schedule` and `action` must use whole-symbol replace
+
+### `env(...)` references
+
+String-valued fields may use `env(...)` for load-time resolution.
+
+Supported forms:
+
+- `env(NAME)` — required
+- `env(NAME, type=number)`
+- `env(NAME, type=boolean)`
+- `env(NAME, default=cache-db)`
+- `env(NAME, default="./data/cache.db")`
+- `env(NAME, optional)`
+
+Examples:
+
+```kdl
+max-cost-usd "env(MAX_COST_USD, type=number)"
+state-store "workflow" backend="sqlite" path="env(WORKFLOW_DB)"
+param "enabled" "env(DRY_RUN, type=boolean)"
+```
+
+Rules:
+
+- missing required env values fail manifest load
+- empty strings do not silently satisfy required values
+- defaults are applied before type coercion
+- coercion happens at the config boundary, not lazily during execution
+
+### `setup "<name>" { ... }`
+
+A setup defines reusable execution policy.
 
 Supported children:
 
@@ -108,371 +177,166 @@ Supported children:
 - `skills { allow ...; deny ... }` optional
 - `tools { allow ...; deny ... }` optional
 - `sandbox { paths-write ...; bash-allow ...; bash-deny ... }` optional
-- `timeout "<duration>"` optional, for example `"30m"`, `"15s"`, `"1h"`
-- `max-cost-usd <number>` optional
+- `timeout "<duration>"` optional
+- `max-cost-usd <number>|"env(...)"` optional
+- `state-store "<name>" backend="sqlite"|"artifact-store" path="<path>|env(...)" schema="<schema>"` optional, repeatable
 
 Example:
 
 ```kdl
-setup "test-runner" {
+setup "worker" {
   domain "coding"
-  mode "reviewer"
-  skills {
-    allow "coding" "qml-testing"
-  }
+  mode "worker"
   tools {
-    allow "read" "grep" "find" "bash" "lsp"
-    deny "write"
+    allow "read" "grep" "find"
+    deny "bash"
   }
   sandbox {
-    paths-write "coverage/" "test-results/"
-    bash-allow "bun test*" "bun run lint*"
-    bash-deny "rm -rf *"
+    paths-write "data/" "artifacts/"
   }
-  timeout "30m"
-  max-cost-usd 3.5
+  timeout "20m"
+  state-store "workflow" backend="sqlite" path="env(WORKFLOW_DB)" schema="workflow"
+  state-store "artifacts" backend="artifact-store" path="./artifacts"
 }
 ```
 
-#### `goal "<name>" { ... }`
+### `goal "<name>" { ... }`
 
-Concrete scheduled or webhook-triggered work.
+A goal defines scheduled or webhook-triggered work.
 
 Supported children:
 
 - `setup "<setup-name>"` required
 - `schedule ...` required
-- `prompt "<text>"` required
+- `prompt "<text>"` optional legacy path
+- `action "<id>" { ... }` optional typed path
+- at least one of `prompt` or `action` is required
 - `hooks { ... }` optional
-- `state persist=<bool> { ... }` optional
-- `retry ...` optional
+- `state persist=#true|#false { schema ... }` optional legacy persisted state declaration
+- `state-store ...` optional, repeatable — goal-local additions/overrides on top of the referenced setup
+- `retry max-retries=<n> initial-delay-ms=<n> multiplier=<n>` optional
 
 Example:
 
 ```kdl
-goal "nightly-tests" {
-  setup "test-runner"
-  schedule type="cron" expression="0 2 * * *" timezone="UTC" jitter="5m"
-  prompt "Run the full test suite. Report failures with file paths and actionable summaries."
-  hooks {
-    on-success {
-      webhook "https://hooks.example.invalid/spell/success"
-    }
-    on-failure {
-      telegram chat-id=123456789
-      webhook "https://hooks.example.invalid/spell/failure" method="POST"
-    }
-    on-complete {
-      org category="engineering"
-    }
-  }
-  state persist=#true {
-    schema "last_result" type="string"
-    schema "failure_count" type="number"
-    schema "details" type="json"
-  }
-  retry max-retries=2 initial-delay-ms=10000 multiplier=2
+goal "daily-discovery" {
+  setup "worker"
+  schedule type="cron" expression="0 6 * * *" timezone="UTC"
+  action "spell.noop"
+  state-store "workflow" backend="sqlite" path="./data/discovery.db" schema="discovery"
+  retry max-retries=2 initial-delay-ms=300000 multiplier=2
 }
 ```
 
-### Schedule types
+### Typed `action` blocks
 
-The parser accepts two schedule kinds.
+An action block is validated against the first-party action registry available at load time.
 
-#### Cron schedule
+Children:
 
-Properties:
-
-- `type="cron"`
-- `expression="<cron expression>"` required
-- `timezone="<iana zone>"` optional
-- `jitter="<duration>"` optional in manifest shape
+- `param "<name>" <scalar>`
+- `param-list "<name>" <value>...`
+- `prompt "<slot-name>" "<inline-text>"`
+- `prompt-file "<slot-name>" "<relative-or-absolute-path>"`
 
 Example:
+
+```kdl
+action "test.review" {
+  param "limit" 5
+  param "dryRun" #true
+  prompt "review" "Review the staged digest."
+}
+```
+
+Rules:
+
+- unknown action ids fail validation
+- unknown params fail validation
+- missing required params or prompt slots fail validation
+- prompt-file paths resolve relative to the file that declares them
+- first-party registration is the only supported v1 registry source
+
+### Schedule node
+
+#### Cron schedule
 
 ```kdl
 schedule type="cron" expression="0 2 * * *" timezone="UTC" jitter="5m"
 ```
 
+Fields:
+
+- `type="cron"`
+- `expression="<cron expression>"` required
+- `timezone="<iana zone>"` optional
+- `jitter="<duration>"` optional
+
 #### Webhook schedule
 
-Properties:
+```kdl
+schedule type="webhook" path="growth/export-approved" auth="bearer"
+```
+
+Fields:
 
 - `type="webhook"`
-- `path="<trigger-path>"` optional; if omitted, the goal name can be used as the trigger id
-- `auth="hmac" | "bearer"` optional
+- `path="<trigger-path>"` optional
+- `auth="hmac"|"bearer"` optional
 
-Example:
+### Hooks
 
-```kdl
-schedule type="webhook" path="manual-test-run" auth="hmac"
-```
-
-### Hook types
-
-Hooks live inside a `hooks` node under one or more event groups:
-
-- `on-success`
-- `on-failure`
-- `on-complete`
-
-Each event group contains zero or more target nodes.
-
-#### Webhook hook
-
-- node name: `webhook`
-- string argument: destination URL
-- optional `method="POST" | "GET"`
+Hooks remain event-group based.
 
 ```kdl
-webhook "https://hooks.example.invalid/spell/events" method="POST"
+hooks {
+  on-success {
+    webhook "https://hooks.example.invalid/spell/success" method="POST"
+  }
+  on-failure {
+    telegram chat-id=123456789
+  }
+  on-complete {
+    org category="engineering"
+  }
+}
 ```
 
-#### Telegram hook
+Supported targets:
 
-- node name: `telegram`
-- property `chat-id=<number>`
+- `webhook "<url>" method="POST"|"GET"`
+- `telegram chat-id=<number>`
+- `org category="<string>"`
 
-```kdl
-telegram chat-id=123456789
-```
+### Legacy `state` node
 
-The KDL hook target still only selects the destination chat. Rich Telegram options are supplied by the runtime sender API: domains may pass a structured payload with `text`, `parseMode`, optional inline-keyboard `replyMarkup`, and `linkPreviewOptions`, while legacy text-only hook formatting keeps working unchanged.
-
-#### Org hook
-
-- node name: `org`
-- optional property `category="<string>"`
-
-```kdl
-org category="marketing"
-```
-
-### State config
-
-State is declared inside a goal:
-
-- `persist=#true | #false` required
-- optional repeated `schema` child nodes
-- each `schema` node takes a string argument column name and `type="string" | "number" | "boolean" | "json"`
-
-Example:
+Legacy goal-scoped persisted state remains supported for backward compatibility.
 
 ```kdl
 state persist=#true {
-  schema "last_sync_date" type="string"
-  schema "total_pipeline_value" type="number"
-  schema "is_healthy" type="boolean"
-  schema "raw_payload" type="json"
+  schema "last_result" type="string"
+  schema "metrics" type="json"
 }
 ```
 
-## Full Config Examples
-
-### Full `server.kdl`
+### Full config-native example
 
 ```kdl
-http port=8787 webhook-secret="replace-with-a-long-random-secret" { // pragma: allowlist secret
-  auth username="admin" password="change-me-now" // pragma: allowlist secret
-}
-```
+name "growth"
+version "1.0.0"
+import "./workflow/base.kdl" as="workflow"
 
-### Full `channels.kdl`
-
-```kdl
-telegram {
-  bot-token-file "secrets/bot-token.txt"
-  owners 123456789 987654321
-  upload-dir "/tmp/spell-telegram-uploads"
-  idle-timeout 300
-  max-sessions 10
-  log-viewer-port 4312
-  default-model "claude-sonnet-4-5"
-  project "spell" "../spell"
-  project "docs" "./docs"
-  default-project "spell"
-  user 123456789 {
-    modes "telegram-readonly" "coding"
-    default-mode "coding"
-    projects "spell" "docs"
-  }
-  user 987654321 {
-    idle-timeout #null
-  }
-}
-```
-
-### Full `autonomy.kdl`
-
-```kdl
-name "example-autonomy"
-version "1.0"
-
-setup "test-runner" {
-  domain "coding"
-  mode "reviewer"
-  tools {
-    allow "read" "grep" "find" "bash" "lsp"
-  }
-  sandbox {
-    paths-write "coverage/" "test-results/"
-    bash-allow "bun test*" "bun run lint*"
-  }
-  timeout "30m"
-}
-
-goal "nightly-tests" {
-  setup "test-runner"
-  schedule type="cron" expression="0 2 * * *" timezone="UTC"
-  prompt "Run the full test suite. Report failures with file paths and actionable summaries."
-  hooks {
-    on-success {
-      webhook "https://hooks.example.invalid/spell/success"
-    }
-    on-failure {
-      telegram chat-id=123456789
-      webhook "https://hooks.example.invalid/spell/failure"
-    }
-    on-complete {
-      org category="engineering"
-    }
-  }
-  state persist=#true {
-    schema "last_result" type="string"
-    schema "failure_count" type="number"
-  }
-  retry max-retries=2 initial-delay-ms=10000 multiplier=2
-}
-```
-
-## Domain Examples
-
-### Coding domain
-
-```kdl
-name "coding-automation"
-version "1.0"
-
-setup "test-runner" {
-  domain "coding"
-  mode "reviewer"
-  tools {
-    allow "read" "grep" "find" "bash" "lsp"
-  }
-  sandbox {
-    paths-write "test/" "coverage/"
-    bash-allow "bun test*" "bun run lint*"
-  }
-  timeout "30m"
-}
-
-goal "nightly-tests" {
-  setup "test-runner"
-  schedule type="cron" expression="0 2 * * *" timezone="UTC"
-  prompt "Run the full test suite. Report failures with file paths and error messages."
-  hooks {
-    on-success {
-      webhook "https://hooks.example.invalid/slack/success"
-    }
-    on-failure {
-      telegram chat-id=12345
-      webhook "https://hooks.example.invalid/pagerduty/failure"
-    }
-  }
-}
-
-goal "security-review" {
-  setup "test-runner"
-  schedule type="cron" expression="0 3 * * 1" timezone="UTC"
-  prompt "Review the changed code for security-sensitive issues and summarize only high-confidence findings."
-}
-
-goal "lint-checker" {
-  setup "test-runner"
-  schedule type="webhook" path="lint-checker" auth="bearer"
-  prompt "Run lint checks and report the first failing files with the exact command output."
-}
-```
-
-### Sales domain
-
-```kdl
-name "sales-automation"
-version "1.0"
-
-setup "sales-analyst" {
-  domain "sales"
-  tools {
-    allow "read" "grep" "find" "web_search" "fetch"
-  }
-  timeout "15m"
-}
-
-goal "weekly-pipeline-report" {
-  setup "sales-analyst"
-  schedule type="cron" expression="0 8 * * 1" timezone="America/New_York"
-  prompt "Generate a weekly sales pipeline report with stage breakdown, top opportunities, and notable changes from last week."
-  state persist=#true {
-    schema "last_sync_date" type="string"
-    schema "total_pipeline_value" type="number"
-  }
-  hooks {
-    on-complete {
-      telegram chat-id=67890
-    }
-  }
-}
-
-goal "lead-scoring" {
-  setup "sales-analyst"
-  schedule type="cron" expression="0 9 * * *" timezone="America/New_York"
-  prompt "Review new inbound leads, score them by fit and urgency, and produce a prioritized follow-up list."
-}
-
-goal "crm-sync-review" {
-  setup "sales-analyst"
-  schedule type="webhook" path="crm-sync-review" auth="hmac"
-  prompt "Validate the latest CRM import, identify duplicate or malformed records, and summarize the issues."
-}
-```
-
-### Marketing domain
-
-```kdl
-name "marketing-automation"
-version "1.0"
-
-setup "content-reviewer" {
-  domain "marketing"
-  tools {
-    allow "read" "grep" "find" "web_search" "fetch"
-  }
+override "setup" "worker" from="workflow.worker" strategy="merge" {
   timeout "20m"
-}
-
-goal "daily-seo-audit" {
-  setup "content-reviewer"
-  schedule type="cron" expression="0 6 * * *" timezone="Europe/London"
-  prompt "Audit our website pages for SEO issues, including missing titles, weak meta descriptions, and broken internal links."
-  hooks {
-    on-failure {
-      webhook "https://hooks.example.invalid/slack/seo-failure"
-    }
-    on-complete {
-      org category="marketing"
-    }
+  tools {
+    allow "read"
   }
+  state-store "audit" backend="artifact-store" path="./artifacts/audit"
 }
 
-goal "content-review" {
-  setup "content-reviewer"
-  schedule type="cron" expression="0 10 * * 1-5" timezone="Europe/London"
-  prompt "Review draft content for clarity, brand consistency, and risky claims that need human approval."
-}
-
-goal "social-scheduler" {
-  setup "content-reviewer"
-  schedule type="webhook" path="social-scheduler" auth="bearer"
-  prompt "Prepare a short social posting schedule from the supplied campaign context and note any missing assets."
+goal "dispatch" {
+  setup "worker"
+  schedule type="cron" expression="0 6 * * *" timezone="UTC"
+  action "spell.noop"
 }
 ```

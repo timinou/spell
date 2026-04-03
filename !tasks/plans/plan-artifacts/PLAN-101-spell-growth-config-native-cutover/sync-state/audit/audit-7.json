@@ -1,0 +1,16 @@
+{
+  "id": "audit-7",
+  "at": "2026-04-03T01:19:11.937Z",
+  "kind": "action-applied",
+  "itemId": "checkpoint-2",
+  "actor": {
+    "actorId": "operator-1",
+    "source": "telegram"
+  },
+  "requestId": "resume-1",
+  "message": "Applied resume -> completed",
+  "data": {
+    "actionId": "resume",
+    "toState": "completed"
+  }
+}
