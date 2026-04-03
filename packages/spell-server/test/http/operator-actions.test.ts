@@ -109,7 +109,6 @@ async function createProjectDir(files: Record<string, string>): Promise<string> 
 	return tempDir;
 }
 
-
 describe("operator actions route", () => {
 	let stop: (() => void) | undefined;
 	let baseUrl = "";
@@ -298,6 +297,4 @@ describe("operator actions route", () => {
 
 		expect(fakeBotService.stopCalls).toBe(1);
 	});
-
-
 });

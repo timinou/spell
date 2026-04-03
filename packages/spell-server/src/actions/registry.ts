@@ -52,7 +52,7 @@ function validatePromptSlot(
 	errors: string[],
 ): void {
 	if (descriptor?.required && !present) {
-		errors.push(`Missing required prompt slot \"${slotName}\"`);
+		errors.push(`Missing required prompt slot "${slotName}"`);
 	}
 }
 
@@ -60,8 +60,8 @@ export class ActionRegistry {
 	#actions = new Map<string, ActionDescriptor>();
 
 	register(descriptor: ActionDescriptor): void {
-		if (descriptor.source !== "first-party") {
-			throw new Error(`Action registry accepts first-party descriptors only: ${descriptor.id}`);
+		if (descriptor.source !== "first-party" && descriptor.source !== "project") {
+			throw new Error(`Action registry accepts first-party or project descriptors only: ${descriptor.id}`);
 		}
 		if (this.#actions.has(descriptor.id)) {
 			throw new Error(`Action already registered: ${descriptor.id}`);
@@ -90,7 +90,7 @@ export class ActionRegistry {
 	validateAction(action: ManifestAction): string[] {
 		const descriptor = this.#actions.get(action.id);
 		if (!descriptor) {
-			return [`Unknown action id \"${action.id}\"`];
+			return [`Unknown action id "${action.id}"`];
 		}
 
 		const errors: string[] = [];
@@ -99,18 +99,18 @@ export class ActionRegistry {
 			const value = action.params[paramName];
 			if (value === undefined) {
 				if (paramDescriptor.required) {
-					errors.push(`Missing required action param \"${paramName}\"`);
+					errors.push(`Missing required action param "${paramName}"`);
 				}
 				continue;
 			}
 			if (!matchesDescriptor(value, paramDescriptor)) {
-				errors.push(`Action param \"${paramName}\" must be ${paramDescriptor.type}`);
+				errors.push(`Action param "${paramName}" must be ${paramDescriptor.type}`);
 			}
 		}
 
 		for (const paramName of Object.keys(action.params)) {
 			if (!declaredParams[paramName]) {
-				errors.push(`Unknown action param \"${paramName}\"`);
+				errors.push(`Unknown action param "${paramName}"`);
 			}
 		}
 
@@ -120,7 +120,7 @@ export class ActionRegistry {
 		}
 		for (const slotName of Object.keys(action.promptSlots)) {
 			if (!declaredPromptSlots[slotName]) {
-				errors.push(`Unknown prompt slot \"${slotName}\"`);
+				errors.push(`Unknown prompt slot "${slotName}"`);
 			}
 		}
 

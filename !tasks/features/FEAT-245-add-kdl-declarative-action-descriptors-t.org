@@ -1,0 +1,82 @@
+#+TITLE: Add KDL-declarative action descriptors to spell-server manifest
+#+STATE: DONE
+#+SESSION_ID: 14abf8daee6f2d2b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-30-35-321Z_14abf8daee6f2d2b.jsonl]]
+#+CUSTOM_ID: FEAT-245-add-kdl-declarative-action-descriptors-t
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: packages/spell-server
+
+NOTE [2026-04-03]: Added action-descriptor top-level KDL node support with project source, registry changes, parser integration, and 3 new tests.
+
+* Initial Message
+
+what is part of spell-gworth (packages/spell-growth)? what is the purpose of the code? Why can't it be an extension in ../growth?
+
+* Scope
+Add a new top-level KDL node ~action-descriptor~ to the manifest parser so projects can declare action descriptors directly in autonomy.kdl (or imported KDL files) instead of requiring imperative TypeScript registration.
+
+** Current state
+- Action descriptors are defined in TypeScript via ~ActionDescriptor~ objects and registered via ~ActionRegistry.register()~
+- ~ActionRegistry~ enforces ~source === "first-party"~ on all registrations
+- ~createServerActionRegistry()~ in ~packages/spell-server/src/actions/index.ts~ hardcodes a call to ~registerGrowthActions()~ from ~@oh-my-pi/spell-growth~
+- The manifest parser already knows how to parse ~action~ blocks inside goals (params, param-list, param-json, prompt, prompt-file)
+- The validator already validates action params against the registry
+
+** Design
+Add a new top-level node ~action-descriptor~ to the manifest grammar:
+
+#+begin_src kdl
+action-descriptor "growth.discovery" source="project"
+action-descriptor "growth.feed.send" source="project" {
+    param "maxItems" type="number"
+    param "dryRun" type="boolean"
+    prompt-slot "context" required=#true
+}
+#+end_src
+
+*** Parser changes
+In ~parseManifestModuleDocument()~ (parser.ts), add a new branch for ~nodeName === "action-descriptor"~:
+- Parse the action ID as the first string argument
+- Parse ~source~ property (default ~"project"~)
+- Parse child ~param~ nodes into ~ActionParameterDescriptor~ (type + required)
+- Parse child ~prompt-slot~ nodes into ~ActionPromptSlotDescriptor~ (required)
+- Store descriptors in a new ~actionDescriptors~ field on ~ParsedManifestModule~
+
+*** Registry changes
+- Widen ~ActionDescriptor.source~ type from ~"first-party"~ to ~"first-party" | "project"~
+- ~ActionRegistry.register()~: accept both ~"first-party"~ and ~"project"~ source values
+- Keep ~createBuiltinActionRegistry()~ unchanged (only built-in actions)
+- Remove ~createServerActionRegistry()~ entirely (it was only for hardcoding growth)
+
+*** Import resolver changes
+In ~resolveManifestModule()~ (import-resolver.ts):
+- After parsing the module, register any ~action-descriptor~ nodes into the ~context.registry~ before validating goals
+- Imported modules can declare action descriptors that become available to the importing module's goals
+- Prefix imported action descriptors with the import alias (e.g., ~growth.discovery~ from ~import "./growth.kdl" as="growth"~)
+
+*** Config loader changes
+In ~loadConfig()~ (config/loader.ts):
+- Replace ~createServerActionRegistry()~ with ~createBuiltinActionRegistry()~
+- The manifest loader now registers project-declared descriptors during parsing
+
+** Sub-outline
+1. Add ~action-descriptor~ parsing to ~parseManifestModuleDocument()~
+2. Widen ~ActionDescriptor.source~ type to ~"first-party" | "project"~
+3. Update ~ActionRegistry.register()~ to accept ~"project"~ source
+4. Register parsed action descriptors in ~resolveManifestModule()~ before goal validation
+5. Update ~loadConfig()~ to use ~createBuiltinActionRegistry()~ instead of ~createServerActionRegistry()~
+6. Add test: KDL-declared action descriptor validates goal params
+7. Add test: imported module declares action descriptor used by importer goal
+8. Add test: action descriptor with param/prompt-slot schema rejects invalid goals
+9. Update KDL schema reference doc
+
+** Sequencing note
+Infrastructure (parser + registry changes) must exist before tests can validate KDL-declared descriptors. Test-after ordering is required because the KDL parsing infrastructure does not exist yet.
+
+* Acceptance
+- ~bun test packages/spell-server/test/manifest/action-registry.test.ts~ passes with new tests
+- A manifest with ~action-descriptor "my.action" source="project"~ loads successfully
+- A goal referencing an undeclared action still fails validation
+- Existing ~"first-party"~ builtin actions (~spell.noop~, ~spell.prompt~) continue working
+- The ~createServerActionRegistry()~ function no longer exists

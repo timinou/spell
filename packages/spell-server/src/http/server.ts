@@ -13,7 +13,7 @@ import {
 	handleListApprovals,
 	handleReleaseApprovalClaim,
 } from "./routes/approvals";
-import { handleListDownstreamJobs, handleGetDownstreamJob } from "./routes/downstream-jobs";
+import { handleGetDownstreamJob, handleListDownstreamJobs } from "./routes/downstream-jobs";
 import { handleGetGoal, handleGetGoalLogs, handleGetGoalRuns, handleGetGoals, handleGetManifest } from "./routes/goals";
 import { handleOperatorActionsRoute, type OperatorActionHandler } from "./routes/operator-actions";
 import { handleTriggerRoute } from "./routes/triggers";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { WorkflowEngine } from "../../src/workflow";
 import { buildTelegramApprovalInbox } from "../../src/telegram/workflow-inbox";
+import { WorkflowEngine } from "../../src/workflow";
 import { createApprovalInput, createCheckpointInput } from "../workflow/test-helpers";
 
 describe("telegram approval inbox", () => {

@@ -4,7 +4,11 @@ import type { RpcClient } from "../../src/rpc/rpc-client";
 import type { BridgeRpcCommand, RpcEvent, RpcSpawnOptions } from "../../src/rpc/types";
 import type { AuthContext } from "../../src/telegram/bot/auth";
 import { COMMANDS, type CommandContext } from "../../src/telegram/commands";
-import { buildApprovalCallbackData, handleApprovalCallback, parseApprovalCallbackData } from "../../src/telegram/commands/approval";
+import {
+	buildApprovalCallbackData,
+	handleApprovalCallback,
+	parseApprovalCallbackData,
+} from "../../src/telegram/commands/approval";
 import { handleBtwCommand } from "../../src/telegram/commands/btw";
 import { handleModeCommand } from "../../src/telegram/commands/mode";
 import { handleProjectCommand } from "../../src/telegram/commands/project";

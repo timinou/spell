@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { createServerActionRegistry } from "../actions";
+import { createBuiltinActionRegistry } from "../actions";
 import type { ActionRegistry } from "../actions/registry";
 import { loadManifestFromFile } from "../manifest/import-resolver";
 import type { AutonomyManifest } from "../manifest/types";
@@ -28,7 +28,7 @@ export async function loadConfig(configDir: string): Promise<LoadedConfig> {
 		}
 	}
 
-	const actionRegistry = createServerActionRegistry();
+	const actionRegistry = createBuiltinActionRegistry();
 	const manifestPath = path.join(configDir, "autonomy.kdl");
 	const manifest = await loadManifestFromFile(manifestPath, {
 		registry: actionRegistry,

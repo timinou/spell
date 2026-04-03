@@ -1,4 +1,3 @@
-import { registerGrowthActions } from "@oh-my-pi/spell-growth";
 import { ActionRegistry } from "./registry";
 import type { ActionDescriptor } from "./types";
 
@@ -30,10 +29,4 @@ export function createBuiltinActionRegistry(): ActionRegistry {
 
 export function getBuiltinActionDescriptors(): ActionDescriptor[] {
 	return BUILTIN_ACTION_DESCRIPTORS.map(descriptor => structuredClone(descriptor));
-}
-
-export function createServerActionRegistry(): ActionRegistry {
-	const registry = createBuiltinActionRegistry();
-	registerGrowthActions(registry);
-	return registry;
 }

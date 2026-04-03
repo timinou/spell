@@ -1,0 +1,55 @@
+#+TITLE: Update growth project to use KDL-declarative action descriptors
+#+STATE: DONE
+#+SESSION_ID: 14abf8daee6f2d2b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-30-35-321Z_14abf8daee6f2d2b.jsonl]]
+#+CUSTOM_ID: FEAT-247-update-growth-project-to-use-kdl-declara
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: growth
+#+DEPENDS: FEAT-245-add-kdl-declarative-action-descriptors-t FEAT-246-remove-spell-growth-package-and-decouple
+
+NOTE [2026-04-03]: Added 4 action-descriptor nodes to growth autonomy.kdl, deleted obsolete cutover tests, updated manifest-load test to verify KDL descriptors.
+
+* Initial Message
+
+what is part of spell-gworth (packages/spell-growth)? what is the purpose of the code? Why can't it be an extension in ../growth?
+
+* Scope
+Update ~../growth/.spell/autonomy.kdl~ to declare its action descriptors in KDL, replacing the deleted TypeScript registration.
+
+** Current autonomy.kdl
+The file already references action IDs like ~action "growth.discovery"~ in goals. After spell-growth is deleted, these action IDs are no longer registered in any registry.
+
+** Changes
+Add ~action-descriptor~ nodes to ~autonomy.kdl~ (or a new imported ~actions.kdl~):
+
+#+begin_src kdl
+action-descriptor "growth.discovery" source="project"
+action-descriptor "growth.feed.send" source="project"
+action-descriptor "growth.export.publish" source="project"
+action-descriptor "growth.curation.writeback" source="project"
+#+end_src
+
+** Cutover test updates
+The cutover tests in ~../growth/test/cutover/~ import from spell-growth:
+- ~discovery-to-feed.test.ts~: imports ~sendGrowthFeed~, ~InMemoryReviewStore~, ~ingestDiscoveryCandidates~, ~loadPersonaRegistry~, ~loadSourceRegistry~
+- ~checkpoint-to-export.test.ts~: imports ~exportPublicationArtifacts~
+
+These tests must be updated or removed since spell-growth no longer exists:
+- ~manifest-load.test.ts~: update to verify the new KDL-declarative action descriptors load correctly
+- ~discovery-to-feed.test.ts~: delete (the TS action code it tests no longer exists)
+- ~checkpoint-to-export.test.ts~: delete (the TS action code it tests no longer exists)
+- ~shared-surface-state.test.ts~: keep (only imports from spell-server, not spell-growth)
+- ~no-legacy-bridge.test.ts~: keep (only reads KDL files, doesn't import spell-growth)
+
+** Sub-outline
+1. Add ~action-descriptor~ declarations to ~../growth/.spell/autonomy.kdl~
+2. Delete ~discovery-to-feed.test.ts~ and ~checkpoint-to-export.test.ts~
+3. Update ~manifest-load.test.ts~ to verify KDL action descriptors load
+4. Update ~../growth/package.json~ check/test scripts to remove deleted test files
+5. Verify ~bun test~ in ~../growth/~ passes
+
+* Acceptance
+- ~../growth/.spell/autonomy.kdl~ contains ~action-descriptor~ nodes for all four growth actions
+- ~bun test~ in ~../growth/~ passes with no references to ~spell-growth~
+- ~manifest-load.test.ts~ validates that action descriptors from KDL are recognized during manifest loading

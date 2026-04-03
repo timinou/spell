@@ -1,30 +1,20 @@
+import { logger } from "@oh-my-pi/pi-utils";
 import type { AssistantEvent, RpcAssistantMessage, RpcEvent } from "../../rpc/types";
 import type { AuthContext } from "../bot/auth";
+import { summarizeToolPartialResult } from "../tool-progress";
 import { markdownToTelegramHtml } from "./markdown-html";
 import { splitMessage } from "./message-splitter";
-import { summarizeToolPartialResult } from "../tool-progress";
 
 const DRAFT_INTERVAL_MS = 334;
 const MAX_DRAFT_LENGTH = 4000;
 const STREAM_DONE_TIMEOUT_MS = 5_000;
+const TYPING_INTERVAL_MS = 4_000;
 
-interface DraftApiRaw {
-	sendMessageDraft?: (args: { chat_id: number; text: string }) => Promise<unknown>;
-}
-
-interface DraftCapableApi {
-	raw?: DraftApiRaw;
-}
-
-async function sendDraft(ctx: AuthContext, chatId: number, text: string): Promise<void> {
+async function sendDraft(ctx: AuthContext, text: string): Promise<void> {
 	try {
-		const rawApi = (ctx.api as unknown as DraftCapableApi).raw;
-		if (!rawApi?.sendMessageDraft) {
-			return;
-		}
-		await rawApi.sendMessageDraft({ chat_id: chatId, text });
-	} catch {
-		// Fallback: skip drafts and rely on final messages.
+		await ctx.replyWithDraft(text);
+	} catch (err) {
+		logger.warn("Failed to send draft", { error: err });
 	}
 }
 
@@ -118,6 +108,7 @@ export class ResponseStreamer {
 	#lastDraft = "";
 	#lastDraftAt = 0;
 	#draftTimer: NodeJS.Timeout | null = null;
+	#typingInterval: NodeJS.Timeout | null = null;
 	#finalized = false;
 	#doneResolve: () => void;
 	#donePromise: Promise<void>;
@@ -129,6 +120,7 @@ export class ResponseStreamer {
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#donePromise = promise;
 		this.#doneResolve = resolve;
+		this.#startTypingIndicator();
 	}
 
 	async handleEvent(event: RpcEvent): Promise<void> {
@@ -209,6 +201,7 @@ export class ResponseStreamer {
 		}
 		this.#finalized = true;
 		this.#clearDraftTimer();
+		this.#clearTypingInterval();
 		this.#doneResolve();
 	}
 
@@ -216,6 +209,28 @@ export class ResponseStreamer {
 		if (this.#draftTimer) {
 			clearTimeout(this.#draftTimer);
 			this.#draftTimer = null;
+		}
+	}
+
+	#startTypingIndicator(): void {
+		if (!this.#chatId) {
+			return;
+		}
+		// Fire immediately, then refresh every 4s (Telegram typing expires after 5s)
+		this.#sendTypingAction();
+		this.#typingInterval = setInterval(() => this.#sendTypingAction(), TYPING_INTERVAL_MS);
+	}
+
+	#sendTypingAction(): void {
+		this.#ctx.replyWithChatAction("typing").catch(err => {
+			logger.warn("Failed to send typing action", { error: err });
+		});
+	}
+
+	#clearTypingInterval(): void {
+		if (this.#typingInterval) {
+			clearInterval(this.#typingInterval);
+			this.#typingInterval = null;
 		}
 	}
 
@@ -318,7 +333,9 @@ export class ResponseStreamer {
 		}
 		this.#lastDraft = draft;
 		this.#lastDraftAt = Date.now();
-		await sendDraft(this.#ctx, this.#chatId, draft);
+		await sendDraft(this.#ctx, draft);
+		// Drafts provide their own visual feedback; stop typing indicator
+		this.#clearTypingInterval();
 	}
 
 	#buildFinalMarkdown(): string {
@@ -348,6 +365,7 @@ export class ResponseStreamer {
 		this.#finalized = true;
 		const shouldFlushPendingDraft = this.#draftTimer !== null;
 		this.#clearDraftTimer();
+		this.#clearTypingInterval();
 
 		try {
 			if (shouldFlushPendingDraft) {

@@ -32,6 +32,8 @@ interface FileLinkApi {
 	token?: string;
 }
 
+const MAX_TEXT_DOCUMENT_BYTES = 512 * 1024;
+const MAX_TEXT_SCAN_BYTES = 4096;
 const TEXT_FILE_EXTENSIONS = new Set([
 	".txt",
 	".md",
@@ -61,6 +63,56 @@ const TEXT_FILE_EXTENSIONS = new Set([
 	".log",
 ]);
 
+function isTextMimeType(mimeType: string | undefined): boolean {
+	if (!mimeType) {
+		return false;
+	}
+
+	if (mimeType.startsWith("text/")) {
+		return true;
+	}
+
+	const normalized = mimeType.toLowerCase();
+	return (
+		normalized === "application/json" ||
+		normalized === "application/xml" ||
+		normalized === "application/x-yaml" ||
+		normalized === "application/yaml"
+	);
+}
+
+function appearsTextual(bytes: Uint8Array): boolean {
+	if (bytes.length === 0) {
+		return false;
+	}
+
+	const scanned = bytes.slice(0, Math.min(bytes.length, MAX_TEXT_SCAN_BYTES));
+	let isInvalidUtf8 = false;
+	let controlBytes = 0;
+
+	for (const byte of scanned) {
+		if (byte === 0x00) {
+			return false;
+		}
+		if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) {
+			controlBytes += 1;
+		}
+	}
+
+	const controlRatio = controlBytes / scanned.length;
+	if (controlRatio > 0.05) {
+		return false;
+	}
+
+	try {
+		new TextDecoder("utf-8", { fatal: true }).decode(scanned);
+	} catch {
+		isInvalidUtf8 = true;
+	}
+
+	return !isInvalidUtf8;
+}
+
 function getIncomingMessage(ctx: Context): TelegramIncomingMessage | null {
 	const message = ctx.message;
 	if (!message || typeof message !== "object") {
@@ -70,13 +122,24 @@ function getIncomingMessage(ctx: Context): TelegramIncomingMessage | null {
 }
 
 function isTextDocument(document: TelegramDocument): boolean {
-	if (document.mime_type?.startsWith("text/")) {
+	if (isTextMimeType(document.mime_type)) {
 		return true;
 	}
 	if (!document.file_name) {
 		return false;
 	}
 	return TEXT_FILE_EXTENSIONS.has(path.extname(document.file_name).toLowerCase());
+}
+
+function unsupportedDocumentMessage(
+	document: TelegramDocument,
+	fileSize: number,
+	mediaType: string,
+	reason: string,
+): string {
+	const fileName = document.file_name ?? "document";
+	const mimeType = document.mime_type ?? mediaType;
+	return `Attached file (${fileName}): ${reason}. mime=${mimeType}, size=${fileSize} bytes.`;
 }
 
 async function resolveFileUrl(ctx: AuthContext, fileId: string, filePath: string): Promise<string> {
@@ -155,24 +218,59 @@ async function collectImages(ctx: AuthContext, message: TelegramIncomingMessage)
 
 async function readDocumentContext(ctx: AuthContext, message: TelegramIncomingMessage): Promise<string | null> {
 	const document = message.document;
-	if (!document || !isTextDocument(document)) {
+	if (!document) {
 		return null;
 	}
 
 	const fileName = document.file_name ?? "document";
 	try {
 		const downloaded = await downloadTelegramFile(ctx, document.file_id, document.mime_type ?? "text/plain");
-		const documentText = new TextDecoder().decode(downloaded.bytes).trim();
+		if (downloaded.bytes.length > MAX_TEXT_DOCUMENT_BYTES) {
+			return unsupportedDocumentMessage(
+				document,
+				downloaded.bytes.length,
+				downloaded.mediaType,
+				"Unable to inline due to size limit",
+			);
+		}
+
+		if (!isTextDocument(document) && !appearsTextual(downloaded.bytes)) {
+			return unsupportedDocumentMessage(
+				document,
+				downloaded.bytes.length,
+				downloaded.mediaType,
+				"Unable to parse as text",
+			);
+		}
+
+		let documentText: string;
+		try {
+			documentText = new TextDecoder("utf-8", { fatal: true }).decode(downloaded.bytes).trim();
+		} catch {
+			return unsupportedDocumentMessage(
+				document,
+				downloaded.bytes.length,
+				downloaded.mediaType,
+				"Unable to decode as UTF-8 text",
+			);
+		}
+
 		if (!documentText) {
 			return null;
 		}
+
 		return `Attached file (${fileName}):\n${documentText}`;
 	} catch (error) {
-		logger.warn("Failed to download Telegram document context, skipping document", {
+		logger.warn("Failed to download Telegram document, using attachment summary", {
 			error: String(error),
 			fileId: document.file_id,
 		});
-		return null;
+		return unsupportedDocumentMessage(
+			document,
+			0,
+			document.mime_type ?? "text/plain",
+			"Failed to download attachment",
+		);
 	}
 }
 

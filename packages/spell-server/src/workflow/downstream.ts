@@ -1,10 +1,10 @@
+import type { WorkflowStore } from "./store";
 import type {
 	WorkflowAuditEntry,
 	WorkflowDownstreamAttempt,
 	WorkflowDownstreamJob,
 	WorkflowDownstreamSpec,
 } from "./types";
-import { WorkflowStore } from "./store";
 
 export interface DownstreamQueueConfig {
 	globalLimit?: number;
