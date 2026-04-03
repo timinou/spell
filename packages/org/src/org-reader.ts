@@ -199,32 +199,35 @@ function parseOrgFile(content: string, todoKeywords: Set<string>): ParsedItem[] 
 		const heading = parseHeadingLine(line, i + 1, todoKeywords);
 
 		if (heading !== null) {
-			// Only collect items with a TODO state
-			if (heading.state !== null) {
-				const item: ParsedItem = {
-					level: heading.level,
-					state: heading.state,
-					title: heading.title,
-					lineNum: heading.lineNum,
-					properties: {},
-					bodyLines: [],
-					childIndices: [],
-				};
+			const item: ParsedItem = {
+				level: heading.level,
+				state: heading.state,
+				title: heading.title,
+				lineNum: heading.lineNum,
+				properties: {},
+				bodyLines: [],
+				childIndices: [],
+			};
 
-				// Parse PROPERTIES drawer immediately following the heading
-				let j = i + 1;
-				if (j < lines.length && lines[j].trim() === ":PROPERTIES:") {
-					j++;
-					while (j < lines.length && lines[j].trim() !== ":END:") {
-						const propMatch = /^\s*:([^:]+):\s*(.*)$/.exec(lines[j]);
-						if (propMatch) {
-							item.properties[propMatch[1].trim()] = propMatch[2].trim();
-						}
-						j++;
+			// Parse PROPERTIES drawer immediately following the heading
+			let j = i + 1;
+			if (j < lines.length && lines[j].trim() === ":PROPERTIES:") {
+				j++;
+				while (j < lines.length && lines[j].trim() !== ":END:") {
+					const propMatch = /^\s*:([^:]+):\s*(.*)$/.exec(lines[j]);
+					if (propMatch) {
+						item.properties[propMatch[1].trim()] = propMatch[2].trim();
 					}
-					if (j < lines.length) j++; // skip :END:
+					j++;
 				}
+				if (j < lines.length) j++; // skip :END:
+			}
 
+			// Include as an item if it has a TODO state or a CUSTOM_ID.
+			// Sub-outline headings (e.g. plan sub-items) have CUSTOM_ID but no TODO state.
+			const isItem = heading.state !== null || item.properties.CUSTOM_ID !== undefined;
+
+			if (isItem) {
 				// Collect body lines until the next heading (any level).
 				while (j < lines.length) {
 					const nextHeading = parseHeadingLine(lines[j], j + 1, todoKeywords);
@@ -258,7 +261,7 @@ function parseOrgFile(content: string, todoKeywords: Set<string>): ParsedItem[] 
 				i = j;
 				continue;
 			} else {
-				// Non-task heading: still affects the stack for hierarchy
+				// Non-task, non-identified heading: still affects the stack for hierarchy
 				while (stack.length > 0 && stack[stack.length - 1].item.level >= heading.level) {
 					stack.pop();
 				}

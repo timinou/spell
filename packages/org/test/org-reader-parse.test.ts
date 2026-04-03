@@ -341,3 +341,94 @@ describe("readOrgFile — nested headings", () => {
 		expect(items[1].level).toBe(2);
 	});
 });
+
+describe("readOrgFile — sub-outline headings (no TODO state)", () => {
+	test("headings with CUSTOM_ID but no TODO state are included as items", async () => {
+		const p = await writeOrg(
+			"sub-outline.org",
+			`#+TITLE: Plan item
+#+CUSTOM_ID: PLAN-001-example
+#+STATE: ITEM
+
+* Tests
+
+** Test: first scenario
+:PROPERTIES:
+:CUSTOM_ID: PLAN-001-example::test-first
+:DEPENDS: PLAN-001-example::impl
+:END:
+- File: src/foo.test.ts
+
+* Implementation
+
+** Add feature X
+:PROPERTIES:
+:CUSTOM_ID: PLAN-001-example::impl
+:END:
+- File: src/foo.ts
+`,
+		);
+		const items = await readOrgFile({
+			filePath: p,
+			category: "plans",
+			dir: "tasks",
+			todoKeywords: TODO_KEYWORDS,
+			includeBody: true,
+		});
+
+		// File-level item + 2 sub-outline headings
+		expect(items).toHaveLength(3);
+
+		// File-level item (level 0)
+		expect(items[0].id).toBe("PLAN-001-example");
+		expect(items[0].level).toBe(0);
+		expect(items[0].state).toBe("ITEM");
+
+		// Sub-outline without TODO state (level 2)
+		expect(items[1].id).toBe("PLAN-001-example::test-first");
+		expect(items[1].level).toBe(2);
+		expect(items[1].state).toBe("");
+		expect(items[1].properties.DEPENDS).toBe("PLAN-001-example::impl");
+		expect(items[1].body).toContain("File: src/foo.test.ts");
+
+		expect(items[2].id).toBe("PLAN-001-example::impl");
+		expect(items[2].level).toBe(2);
+		expect(items[2].state).toBe("");
+	});
+
+	test("structural headings without CUSTOM_ID are still excluded", async () => {
+		const p = await writeOrg(
+			"structural-mixed.org",
+			`
+* ITEM Real task
+:PROPERTIES:
+:CUSTOM_ID: BUG-001
+:END:
+
+* Background
+Some context.
+
+** Details
+More context.
+
+** Sub-item with ID
+:PROPERTIES:
+:CUSTOM_ID: BUG-001::detail
+:END:
+- Specific detail
+`,
+		);
+		const items = await readOrgFile({
+			filePath: p,
+			category: "bugs",
+			dir: "tasks",
+			todoKeywords: TODO_KEYWORDS,
+			includeBody: true,
+		});
+
+		// Only the TODO item and the CUSTOM_ID sub-item; structural headings excluded
+		expect(items).toHaveLength(2);
+		expect(items[0].id).toBe("BUG-001");
+		expect(items[1].id).toBe("BUG-001::detail");
+	});
+});
