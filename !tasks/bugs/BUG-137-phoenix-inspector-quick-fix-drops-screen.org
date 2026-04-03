@@ -1,0 +1,58 @@
+#+TITLE: Phoenix Inspector quick-fix drops screenshot images and lacks runtime guard
+#+STATE: DONE
+#+SESSION_ID: 14ab5933cab1e881
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T21-53-03-274Z_14ab5933cab1e881.jsonl]]
+#+CUSTOM_ID: BUG-137-phoenix-inspector-quick-fix-drops-screen
+#+EFFORT: 1h
+#+PRIORITY: A
+#+LAYER: Runtime
+
+NOTE [2026-04-03]: Completed by PLAN-115-phoenix-inspector-quick-fix-hardening.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-028-audit-implementation:
+
+1. **What:** Quick Fix captures screenshots, but the backend discards them.
+   **Where:** `.spell/extensions/phoenix-inspector/inspector.qml` in `dispatchQuickFix()` and `.spell/extensions/phoenix-inspector/index.ts` in `runQuickFixTask()`.
+   **Why:** The “Include screenshot” affordance becomes misleading, and the task agent loses visual context for UI fixes.
+   **Effort:** small
+
+2. **What:** The new quick-fix backend depends on a non-contract `pi.pi.runSubprocess` API.
+   **Where:** `.spell/extensions/phoenix-inspector/index.ts` in `runQuickFixTask()` / task-tier handling.
+   **Why:** The focused tests pass because the harness stubs this method, but a real launch can fail if the host does not inject that exact runtime hook. That makes Quick Fix brittle outside the test harness.
+   **Effort:** medium
+
+3. **What:** Quick-fix error handling is not regression-tested.
+   **Where:** `.spell/extensions/phoenix-inspector/index.test.ts`, the new `dispatches canonical quick-fix tasks...` case only covers success.
+   **Why:** A failed task result could regress to stale or incorrect UI messaging without any test catching it.
+   **Effort:** small
+
+* Context
+The Phoenix Inspector ~dispatchQuickFix()~ in QML captures element screenshots and sends them in the ~images~ field of the ~_tier: "task"~ payload. The TypeScript backend (~runQuickFixTask~ in ~index.ts~) ignores this field entirely. The task agent never learns a screenshot was captured, making the "Include screenshot" checkbox misleading.
+
+Additionally, ~runQuickFixTask~ calls ~pi.pi.runSubprocess(...)~ without a runtime guard. While this IS a public contract (the ~pi.pi~ namespace is ~typeof piCodingAgent~), a defensive check with a clear error message prevents cryptic failures if the runtime shape changes.
+
+* Implementation
+** Extract images from the task payload in ~runQuickFixTask()~
+   Parse the ~images~ field from the bridge payload using a new ~payloadImageArray()~ helper or inline extraction.
+
+** Append image metadata to the assignment text
+   Match the ~canvas-task-manager.ts~ pattern (line 176-178): when images are present, append ~"
+
+N screenshot(s) attached."~ to the assignment text. This is the canonical framework pattern; structural image forwarding is tracked by [[id:FUP-035-thread-images-through-executoroptions-to]].
+
+** Add a runtime guard before calling ~pi.pi.runSubprocess~
+   Check ~typeof (pi.pi as Record<string, unknown>).runSubprocess === "function"~ before the call. On failure, throw a descriptive error: ~"Quick Fix task dispatch requires pi.pi.runSubprocess, which is not available in this runtime."~
+
+* Files
+- ~/home/user/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector/index.ts~ — ~runQuickFixTask()~
+
+* Acceptance
+- When ~sendScreenshot~ is enabled and an element screenshot is captured, the task assignment text includes the image count note.
+- When ~pi.pi.runSubprocess~ is not a function, the error message is clear and the ~task_result~ reply is ~ok: false~.
+- Existing tests continue to pass.
+
+* Verification
+- The existing quick-fix test should be updated to emit images in the task payload and assert the assignment includes the screenshot note.
+- Add a test case where ~runSubprocess~ is undefined/missing on the pi object; assert the error reply.

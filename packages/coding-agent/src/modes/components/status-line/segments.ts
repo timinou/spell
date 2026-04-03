@@ -191,8 +191,7 @@ const canvasTasksSegment: StatusLineSegment = {
 			return { content: "", visible: false };
 		}
 		const label = ctx.canvasTaskCount === 1 ? "1 task" : `${ctx.canvasTaskCount} tasks`;
-		const canvasIcon = (theme.icon as typeof theme.icon & { canvas?: string }).canvas ?? "";
-		const content = withIcon(canvasIcon, label);
+		const content = withIcon("", label);
 		return { content: theme.fg("statusLineSubagents", content), visible: true };
 	},
 };
