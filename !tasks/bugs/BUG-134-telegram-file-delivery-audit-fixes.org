@@ -1,0 +1,118 @@
+#+TITLE: Telegram file delivery audit fixes
+#+STATE: DONE
+#+SESSION_ID: 14ac0d60ab7bdfbf
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-00-15-149Z_14ac0d60ab7bdfbf.jsonl]]
+#+CUSTOM_ID: BUG-134-telegram-file-delivery-audit-fixes
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: application
+
+NOTE [2026-04-03]: All 6 audit fixes applied and verified. Tests pass.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-026-audit-implementation:
+
+Here are my findings:
+
+---
+
+### Finding 1: `/btw` command ignores `autoSendImages` config
+
+- **What**: The `/btw` command's `ResponseStreamer` is constructed with only 2 args, defaulting `autoSendImages` to `true` regardless of the KDL config setting.
+- **Where**: `packages/spell-server/src/telegram/commands/btw.ts` line 57
+- **Why**: If a user sets `auto-send-images false` in `channels.kdl`, the main message handler respects it but `/btw` does not — `generate_image` results in `/btw` will always auto-send. Config promise broken in one code path.
+- **Effort**: `trivial` — pass `cmdCtx.config.autoSendImages` as the third arg in the default factory, and update the `BtwDependencies.createStreamer` interface to accept 3 params.
+
+### Finding 2: Duplicate `FileDelivery` interface across packages
+
+- **What**: `FileDelivery` is defined identically in `coding-agent/src/tools/send-file.ts` and `spell-server/src/rpc/types.ts` with no shared source of truth.
+- **Where**: Both files, lines 47 and 110 respectively.
+- **Why**: Intentional per plan design (separate packages, no cross-dependency), but the two copies can drift silently. If a field is added to one but not the other, the bridge will silently ignore the new data. Low risk today, growing risk over time.
+- **Effort**: `small` — add a code comment in both files referencing the other as the counterpart, or extract to a shared types package in the future.
+
+### Finding 3: Empty string `caption` is silently dropped
+
+- **What**: `...(params.caption ? { caption: params.caption } : {})` uses truthiness, so `caption: ""` is silently stripped from the delivery payload.
+- **Where**: `packages/coding-agent/src/tools/send-file.ts` line 120
+- **Why**: Minor — empty caption is semantically meaningless, and the schema marks it optional. But the conditional spread hides the intent. Using `params.caption != null` would be more precise if the intent is "only include if provided."
+- **Effort**: `trivial`
+
+### Finding 4: No test for directory path error
+
+- **What**: `stat.isFile()` check at line 105 throws `ToolError("Not a file: ...")` when given a directory, but no test covers this branch.
+- **Where**: `packages/coding-agent/test/tools/send-file.test.ts` — missing test case
+- **Why**: Untested error path. If someone refactors the stat logic, this branch could regress without detection.
+- **Effort**: `trivial` — 5-line test: `mkdir` a dir, call execute, `expect(...).rejects.toThrow(/not a file/i)`.
+
+### Finding 5: No test for invalid `auto-send-images` KDL value
+
+- **What**: The parser throws `"must be a boolean"` when `auto-send-images` receives a non-boolean (e.g., string `"yes"`), but no test covers this error path.
+- **Where**: `packages/spell-server/test/config/channels-parser.test.ts` — missing test case
+- **Why**: Parser validation exists but is unverified. Low risk since KDL typing naturally constrains arguments, but regressions in validation would go undetected.
+- **Effort**: `trivial`
+
+### Finding 6: SVG files classified as `type: "photo"` 
+
+- **What**: SVG (`image/svg+xml`) matches `isImageMime()` and gets `type: "photo"`, but Telegram's `replyWithPhoto()` does not support SVG. The bridge's try-catch handles the failure gracefully, but the agent sees "File queued for delivery" while the user receives nothing.
+- **Where**: `packages/coding-agent/src/tools/send-file.ts` line 66 (`isImageMime` function)
+- **Why**: User confusion — agent reports success, user sees no file. The bridge logs a warning, but the agent has no feedback mechanism to know delivery failed. Low frequency (SVG sends are rare in Telegram context).
+- **Effort**: `small` — exclude `image/svg+xml` from the photo classification, or send SVGs as documents.
+
+* Scope
+Six post-implementation fixes for the Telegram file delivery feature (PLAN-106). All are polish, hardening, or missing test coverage — no new features.
+
+* Fixes
+
+** Fix 1: /btw command ignores autoSendImages config
+- File: =packages/spell-server/src/telegram/commands/btw.ts=
+- The =BtwDependencies.createStreamer= interface takes 2 params =(ctx, showThinking)=. The default factory at line 57 constructs =new ResponseStreamer(authCtx, showThinking)= without passing =autoSendImages=, so it always defaults to =true=.
+- Change the =createStreamer= interface to accept 3 params: =(ctx: AuthContext, showThinking: boolean, autoSendImages: boolean)=
+- Update the default factory to: =(authCtx, showThinking, autoSendImages) => new ResponseStreamer(authCtx, showThinking, autoSendImages)=
+- Update the callsite at line 68: =createStreamer(ctx, false, cmdCtx.config.autoSendImages)=
+
+** Fix 2: Add drift-guard comments to duplicate FileDelivery types
+- File 1: =packages/coding-agent/src/tools/send-file.ts= (line 47)
+- File 2: =packages/spell-server/src/rpc/types.ts= (line 110)
+- Add a comment above each =FileDelivery= interface:
+  - In coding-agent: =// SYNC: Mirrored in packages/spell-server/src/rpc/types.ts — keep in sync=
+  - In spell-server: =// SYNC: Mirrored in packages/coding-agent/src/tools/send-file.ts — keep in sync=
+
+** Fix 3: Caption conditional spread uses truthiness instead of nullish check
+- File: =packages/coding-agent/src/tools/send-file.ts= (line 120)
+- Change =...(params.caption ? { caption: params.caption } : {})= to =...(params.caption != null ? { caption: params.caption } : {})=
+- This preserves the intent (only include if provided) while not silently dropping empty strings
+
+** Fix 4: Add test for directory path error
+- File: =packages/coding-agent/test/tools/send-file.test.ts=
+- Add test case that creates a directory, passes its path to =execute()=, and asserts =rejects.toThrow(/not a file/i)=
+
+** Fix 5: Add test for invalid auto-send-images KDL value
+- File: =packages/spell-server/test/config/channels-parser.test.ts=
+- Add test case with =auto-send-images "yes"= (string instead of boolean), assert it throws =must be a boolean=
+
+** Fix 6: SVG files sent as document instead of photo
+- File: =packages/coding-agent/src/tools/send-file.ts= (line 66)
+- Change =isImageMime= to exclude =image/svg+xml=: =return mimeType.startsWith("image/") && mimeType !== "image/svg+xml"=
+- Telegram does not support SVG in =replyWithPhoto()=; sending as document is correct behavior
+
+* Sub-outline
+All fixes are independent — no ordering constraints. Can be done in a single pass.
+
+1. Apply fix 1 (btw.ts interface + callsite)
+2. Apply fix 2 (comments in both files)
+3. Apply fix 3 (caption nullish check)
+4. Apply fix 4 (directory test)
+5. Apply fix 5 (KDL validation test)
+6. Apply fix 6 (SVG exclusion)
+
+* Test files
+- MODIFY: =packages/coding-agent/test/tools/send-file.test.ts= (fix 4)
+- MODIFY: =packages/spell-server/test/config/channels-parser.test.ts= (fix 5)
+
+* Acceptance
+- =bun check:ts= has no new type errors
+- =bun test packages/coding-agent/test/tools/send-file.test.ts= passes (including new directory test)
+- =bun test packages/spell-server/test/config/channels-parser.test.ts= passes (including new KDL validation test)
+- =bun test packages/spell-server/test/telegram/bridge.test.ts= still passes
+- =/btw= code path passes =cmdCtx.config.autoSendImages= to =ResponseStreamer=

@@ -107,6 +107,7 @@ export interface RpcSpawnOptions {
 }
 
 /** Delivery metadata from send_file tool result */
+// SYNC: Mirrored in packages/coding-agent/src/tools/send-file.ts — keep in sync
 export interface FileDelivery {
 	type: "document" | "photo";
 	absolutePath: string;
