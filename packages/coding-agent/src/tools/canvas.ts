@@ -201,7 +201,7 @@ export interface CanvasAgentPayload {
 export interface CanvasTaskPayload {
 	windowId: string;
 	assignment: string;
-	/** Model role pattern, e.g. "pi/smol". Defaults to "pi/smol". */
+	/** Model role pattern, e.g. "pi/sniper". Defaults to "pi/sniper". */
 	model?: string;
 	/** System prompt for the task subagent. */
 	systemPrompt?: string;
@@ -213,6 +213,8 @@ export interface CanvasTaskPayload {
 	context?: Record<string, unknown>;
 	/** Images to include (e.g. element screenshots). */
 	images?: Array<{ data: string; mimeType: string }>;
+	/** Optional callback to deliver task acknowledgment back to the QML window. Present only when the QML payload included a `_rid` field. */
+	reply?: (result: Record<string, unknown>) => void;
 }
 
 export function drainCanvasTierEventsNow(
@@ -544,6 +546,8 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 					eventBus.enqueue(CANVAS_AGENT_CHANNEL, payload, Priority.P1);
 					this.#drainQueuedCanvasEvents(eventBus);
 				} else if (tier === "task" && typeof p._assignment === "string") {
+					const rid = typeof p._rid === "string" ? p._rid : undefined;
+					const taskBridge = getBridge();
 					const context =
 						typeof p.context === "object" && p.context !== null
 							? (p.context as Record<string, unknown>)
@@ -560,6 +564,11 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 						outputSchema: p._outputSchema,
 						context,
 						images,
+						reply: rid
+							? result => {
+									void taskBridge.sendMessage(id, { _rid: rid, ...result });
+								}
+							: undefined,
 					};
 					eventBus.enqueue(CANVAS_TASK_CHANNEL, payload, Priority.P1);
 					this.#drainQueuedCanvasEvents(eventBus);

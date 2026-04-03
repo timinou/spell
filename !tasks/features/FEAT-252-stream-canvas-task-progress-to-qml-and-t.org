@@ -1,0 +1,42 @@
+#+TITLE: Stream canvas task progress to QML and TUI
+#+STATE: DONE
+#+SESSION_ID: 14abfe457e8c8aba
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-54-15-162Z_14abfe457e8c8aba.jsonl]]
+#+CUSTOM_ID: FEAT-252-stream-canvas-task-progress-to-qml-and-t
+#+EFFORT: 4h
+#+PRIORITY: #B
+#+LAYER: runtime
+#+DEPENDS: BUG-130-canvas-task-subagent-hangs-silently-at-s
+
+NOTE [2026-04-03]: CanvasTaskManager subscribes to TASK_SUBAGENT_PROGRESS_CHANNEL, forwards matching progress to QML as task_progress messages (status, currentTool, lastIntent, toolCount, tokens, durationMs). Added canvas_tasks StatusLine segment and SegmentContext wiring. All tests pass.
+
+* Initial Message
+
+ok so give me the tree of cases w.r.t the buttons that get clicked and what happens in the TUI agent session
+
+The executor emits progress on ~TASK_SUBAGENT_PROGRESS_CHANNEL~ and events on
+~TASK_SUBAGENT_EVENT_CHANNEL~ but nothing subscribes. Canvas tasks run invisibly.
+
+* Scope
+
+** QML progress stream
+- Subscribe to ~TASK_SUBAGENT_PROGRESS_CHANNEL~ in CanvasTaskManager
+- Forward progress as ~bridge.sendMessage(windowId, { action: \"task_progress\", ... })~
+- QML handler: show model name, current tool, token count, elapsed time
+- QML UI: replace static spinner with live progress panel
+
+** TUI status indicator
+- Subscribe to canvas task lifecycle in the TUI status bar
+- Show badge when canvas task is running (count, agent name)
+- Integrate with existing task subagent display if present
+
+* Sub-outline
+** Add progress forwarding in CanvasTaskManager (subscribe + bridge relay)
+** Add task_progress handler in inspector.qml with live progress UI
+** Add TUI status badge for active canvas tasks
+** Write tests: progress relay, QML state updates
+
+* Acceptance
+- While Quick Fix runs, QML shows: model name, current tool call, elapsed time
+- TUI shows a badge/indicator when canvas tasks are active
+- Progress updates at least every 500ms during active tool use

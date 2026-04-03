@@ -37,7 +37,7 @@ export function isAuthenticated(apiKey: string | undefined | null): apiKey is st
 	return Boolean(apiKey) && apiKey !== kNoAuth;
 }
 
-export type ModelRole = "default" | "smol" | "slow" | "vision" | "plan" | "review" | "commit" | "task";
+export type ModelRole = "default" | "smol" | "slow" | "vision" | "plan" | "review" | "commit" | "task" | "sniper";
 
 export interface ModelRoleInfo {
 	tag?: string;
@@ -54,9 +54,20 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	review: { tag: "REVIEW", name: "Review", color: "accent" },
 	commit: { tag: "COMMIT", name: "Commit", color: "dim" },
 	task: { tag: "TASK", name: "Subtask", color: "muted" },
+	sniper: { tag: "SNIPER", name: "Sniper", color: "success" },
 };
 
-export const MODEL_ROLE_IDS: ModelRole[] = ["default", "smol", "slow", "vision", "plan", "review", "commit", "task"];
+export const MODEL_ROLE_IDS: ModelRole[] = [
+	"default",
+	"smol",
+	"slow",
+	"vision",
+	"plan",
+	"review",
+	"commit",
+	"task",
+	"sniper",
+];
 
 const OpenRouterRoutingSchema = Type.Object({
 	only: Type.Optional(Type.Array(Type.String())),

@@ -1,0 +1,34 @@
+#+TITLE: Add pisniper model role for canvas quick-task
+#+STATE: DONE
+#+SESSION_ID: 14abfe457e8c8aba
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-54-15-162Z_14abfe457e8c8aba.jsonl]]
+#+CUSTOM_ID: FEAT-251-add-pi-sniper-model-role-for-canvas-quic
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: config
+
+NOTE [2026-04-03]: Added sniper to ModelRole type, MODEL_ROLES, MODEL_ROLE_IDS. Added sniper priority chain in priority.json (gpt-5.3-codex-spark primary, codex/smol fallbacks). Updated DEFAULT_MODEL from pi/smol to pi/sniper. All tests pass.
+
+* Initial Message
+
+ok so give me the tree of cases w.r.t the buttons that get clicked and what happens in the TUI agent session
+
+Add ~pi/sniper~ model role that resolves to ~openai-codex/gpt-5.3-codex-spark~ with
+fallback to ~pi/smol~. This is the preferred model for canvas quick-task operations.
+
+* Scope
+- Add ~sniper~ role to model-resolver.ts role resolution chain
+- Configure ~openai-codex/gpt-5.3-codex-spark~ as primary, ~pi/smol~ as fallback
+- Update ~CanvasTaskManager~ to use ~pi/sniper~ as DEFAULT_MODEL instead of ~pi/smol~
+- Update inspector.qml to send ~_model: \"pi/sniper\"~
+
+* Sub-outline
+** Add sniper role to resolveConfiguredRolePattern and MODEL_PRIO
+** Update DEFAULT_MODEL in canvas-task-manager.ts from pi/smol to pi/sniper
+** Update inspector.qml _model field
+** Write test: pi/sniper resolves correctly, fallback works
+
+* Acceptance
+- ~expandRoleAlias(\"pi/sniper\")~ returns ~openai-codex/gpt-5.3-codex-spark~
+- Canvas tasks default to pi/sniper
+- When codex-spark unavailable, falls back to pi/smol model chain

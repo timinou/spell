@@ -1,0 +1,36 @@
+#+TITLE: Canvas task subagent hangs silently at sessionprompt
+#+STATE: DONE
+#+SESSION_ID: 14abfe457e8c8aba
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-54-15-162Z_14abfe457e8c8aba.jsonl]]
+#+CUSTOM_ID: BUG-130-canvas-task-subagent-hangs-silently-at-s
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: runtime
+
+NOTE [2026-04-03]: Implemented: timeout guard (120s default, configurable), lifecycle logging (start/complete/timeout/abort/error), immediate QML ack via reply callback, combined AbortSignal.any for timeout + window-close abort. All tests pass.
+
+* Initial Message
+
+ok so give me the tree of cases w.r.t the buttons that get clicked and what happens in the TUI agent session
+
+Canvas quick-task spawns run through ~createAgentSession~ / tool init but then hang
+at ~session.prompt()~ without logging errors. Logs show 6 spawns today, zero completions,
+zero errors. The QML shows a spinner forever.
+
+* Scope
+- Add timeout + error logging around the prompt call in ~CanvasTaskManager.#handleRequest~
+- Add structured logging for task lifecycle: start, prompt-sent, prompt-returned, result-sent, error
+- Add ~reply~ callback to ~CanvasTaskPayload~ so QML gets immediate acknowledgment (like agent tier)
+- Surface task-manager errors in QML (currently silent)
+
+* Sub-outline
+** Diagnose: add lifecycle logging to CanvasTaskManager
+** Add timeout guard around executor call (configurable, default 120s)
+** Wire immediate QML acknowledgment via _rid reply callback
+** Write regression tests: timeout, error propagation, lifecycle logging
+** Manual verify: click Quick Fix, see immediate QML state change + eventual result or error
+
+* Acceptance
+- Quick Fix click produces visible feedback within 2 seconds
+- Task timeout produces a clear error in QML and logs
+- No silent hangs: every task spawn has a logged outcome (success/error/timeout/abort)
