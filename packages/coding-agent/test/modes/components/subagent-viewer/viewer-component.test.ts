@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import { SubagentViewerComponent } from "../../../../src/modes/components/subagent-viewer/viewer-component";
@@ -50,7 +50,7 @@ function makeAssistantEvent(type: "message_start" | "message_update" | "message_
 	return { type, message } as AgentEvent;
 }
 
-function _makeToolEvent(
+function makeToolEvent(
 	type: "tool_execution_start" | "tool_execution_end",
 	toolCallId: string,
 	toolName: string,
@@ -77,7 +77,6 @@ describe("SubagentViewerComponent", () => {
 			eventBus,
 			ui,
 			cwd: "/test",
-			terminalRows: 24,
 			onClose: () => {
 				closeCalled = true;
 			},
@@ -85,6 +84,10 @@ describe("SubagentViewerComponent", () => {
 				renderRequested = true;
 			},
 		});
+	});
+
+	afterEach(() => {
+		viewer.dispose();
 	});
 
 	test("renders empty state when no agents", () => {
@@ -304,5 +307,29 @@ describe("SubagentViewerComponent", () => {
 		expect(joined).not.toContain("agent 0 content");
 		// Should now show AgentB in header
 		expect(joined).toContain("AgentB");
+	});
+
+	test("forwards tool events to event handler", () => {
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
+			index: 0,
+			agent: "task",
+			progress: makeProgress(0),
+		});
+
+		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, {
+			index: 0,
+			agent: "task",
+			event: makeToolEvent("tool_execution_start", "tc1", "edit"),
+		});
+		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, {
+			index: 0,
+			agent: "task",
+			event: makeToolEvent("tool_execution_end", "tc1", "edit"),
+		});
+
+		const lines = viewer.render(80);
+		const joined = lines.join("\n");
+		// ToolExecutionComponent capitalizes and renders the tool name
+		expect(joined).toContain("Edit");
 	});
 });

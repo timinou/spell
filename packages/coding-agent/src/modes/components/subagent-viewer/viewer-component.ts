@@ -20,6 +20,9 @@ import type { SubagentViewerContext } from "./types";
 interface SubagentEventPayload {
 	index: number;
 	agent: string;
+	agentSource: string;
+	task: string;
+	assignment?: string;
 	event: AgentEvent;
 }
 
@@ -27,6 +30,9 @@ interface SubagentEventPayload {
 interface SubagentProgressPayload {
 	index: number;
 	agent: string;
+	agentSource: string;
+	task: string;
+	assignment?: string;
 	progress: AgentProgress;
 }
 
@@ -34,7 +40,6 @@ export interface SubagentViewerOptions {
 	eventBus: EventBus;
 	ui: TUI;
 	cwd: string;
-	terminalRows: number;
 	onClose: () => void;
 	onRequestRender: () => void;
 }
@@ -43,7 +48,6 @@ export class SubagentViewerComponent implements Component {
 	#eventBus: EventBus;
 	#ui: TUI;
 	#cwd: string;
-	#terminalRows: number;
 	#onClose: () => void;
 	#onRequestRender: () => void;
 
@@ -60,7 +64,6 @@ export class SubagentViewerComponent implements Component {
 		this.#eventBus = options.eventBus;
 		this.#ui = options.ui;
 		this.#cwd = options.cwd;
-		this.#terminalRows = options.terminalRows;
 		this.#onClose = options.onClose;
 		this.#onRequestRender = options.onRequestRender;
 
@@ -138,7 +141,6 @@ export class SubagentViewerComponent implements Component {
 	handleInput(data: string): void {
 		// Close
 		if (matchesKey(data, "escape") || matchesKey(data, "esc")) {
-			this.dispose();
 			this.#onClose();
 			return;
 		}
@@ -266,7 +268,7 @@ export class SubagentViewerComponent implements Component {
 
 	#bodyHeight(): number {
 		// header(1) + separator(1) + separator(1) + footer(1) + bottom(1) = 5 chrome lines
-		return Math.max(3, this.#terminalRows - 5);
+		return Math.max(3, this.#ui.terminal.rows - 5);
 	}
 
 	#renderHeader(innerWidth: number): string {
@@ -289,7 +291,9 @@ export class SubagentViewerComponent implements Component {
 		const gapWidth = Math.max(1, innerWidth - leftWidth - hintsWidth);
 
 		const headerContent = `${leftContent}${padding(gapWidth)}${hints}`;
-		return `${theme.boxSharp.topLeft}${truncateToWidth(headerContent, innerWidth)}${padding(Math.max(0, innerWidth - visibleWidth(truncateToWidth(headerContent, innerWidth))))}${theme.boxSharp.topRight}`;
+		const truncated = truncateToWidth(headerContent, innerWidth);
+		const remaining = Math.max(0, innerWidth - visibleWidth(truncated));
+		return `${theme.boxSharp.topLeft}${truncated}${padding(remaining)}${theme.boxSharp.topRight}`;
 	}
 
 	#renderFooter(innerWidth: number): string {
