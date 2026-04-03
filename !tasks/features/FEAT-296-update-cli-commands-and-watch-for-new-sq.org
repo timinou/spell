@@ -1,0 +1,56 @@
+#+TITLE: Update CLI commands and watch for new sqlite sync
+#+STATE: DONE
+#+SESSION_ID: 14ac5f84047cbf0c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T16-59-07-153Z_14ac5f84047cbf0c.jsonl]]
+#+CUSTOM_ID: FEAT-296-update-cli-commands-and-watch-for-new-sq
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: cli
+#+DEPENDS: FEAT-295-integrate-sqlite3-rsync-into-pull-and-pu
+
+NOTE [2026-04-03]: Added requireSqlite3Rsync binary check to push/pull/watch commands. Updated dry-run output to show sqlite3-rsync commands. Removed backups dir from init.
+
+* Initial Message
+
+can you use this https://til.simonwillison.net/sqlite/compile-sqlite3-rsync or libsqlite or something else to make the rsync simpler for sqlites in spell-deploy?
+
+* Scope
+Update the CLI command handlers and =WatchOrchestrator= to pass =sqliteFiles= from the
+loaded config through to the push/pull functions. Also update dry-run output to show
+sqlite3-rsync commands.
+
+* Design
+
+** CLI commands (=commands.ts=)
+- =pushCommand=: pass =config.sync.sqliteFiles= through to =executePush=
+- =pullCommand=: pass =config.sync.sqliteFiles= through to =executePull=
+- Dry-run output should show the sqlite3-rsync commands that would be executed
+
+** Watch (=watch.ts=)
+- =WatchOrchestrator.#handlePush= and =WatchOrchestrator.#handlePull= already call
+  =executePush/executePull= — they need to pass =sqliteFiles= from =sync= config.
+- =WatchOptions= already includes =SyncSettings=, so =sqliteFiles= flows through automatically
+  once =SyncSettings= is updated (done in FEAT-293).
+
+** Validation
+Add a startup check: if =sqliteFiles= is non-empty, verify =sqlite3-rsync= is on the local =$PATH=.
+Use =Bun.which("sqlite3-rsync")= and throw a clear error if missing.
+
+* Sub-outline
+1. Add =sqlite3-rsync= binary check at command resolution time
+2. Update =pushCommand= / =pullCommand= to thread =sqliteFiles=
+3. Update =WatchOrchestrator= to pass =sqliteFiles= through
+4. Update CLI dry-run output for sqlite3-rsync commands
+5. Update =commands.test.ts= and =watch.test.ts=
+
+* Files
+- =packages/spell-deploy/src/cli/commands.ts=
+- =packages/spell-deploy/src/sync/watch.ts=
+- =packages/spell-deploy/test/cli/commands.test.ts=
+- =packages/spell-deploy/test/sync/watch.test.ts=
+
+* Acceptance
+- Running =spell deploy push= with =sqlite-files= configured and no =sqlite3-rsync= binary errors with a clear message
+- Dry-run shows sqlite3-rsync commands
+- Watch orchestrator handles sqlite files in both push and pull
+- Tests pass: =bun test packages/spell-deploy/test/cli/ packages/spell-deploy/test/sync/watch.test.ts=

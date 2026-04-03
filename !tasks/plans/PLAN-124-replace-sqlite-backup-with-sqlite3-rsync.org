@@ -1,0 +1,124 @@
+#+TITLE: Replace SQLite backup with sqlite3-rsync in spell-deploy
+#+STATE: DONE
+#+SESSION_ID: 14ac5f84047cbf0c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T16-59-07-153Z_14ac5f84047cbf0c.jsonl]]
+#+CUSTOM_ID: PLAN-124-replace-sqlite-backup-with-sqlite3-rsync
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-03]: All 4 child items DONE. 154 tests pass, 0 type errors in spell-deploy. sqlite3-rsync replaces sqlite3 .backup for all SQLite sync operations.
+
+
+* Initial Message
+
+can you use this https://til.simonwillison.net/sqlite/compile-sqlite3-rsync or libsqlite or something else to make the rsync simpler for sqlites in spell-deploy?
+
+* Context
+
+** Problem
+spell-deploy currently syncs SQLite databases using a two-step approach:
+1. On pull: SSH into remote, run =sqlite3 .backup= for each =data/*.sqlite= (full copy), then plain rsync the directories (including the SQLite files).
+2. On push: SQLite files are excluded via target config (=*.sqlite=, =*.sqlite-wal= in exclude list).
+
+This has several issues:
+- Full backup copy every pull, even if only a few pages changed — wasteful bandwidth
+- =.backup= creates timestamped copies on remote, accumulating disk usage
+- Plain rsync of live SQLite databases can produce corrupt copies if writes happen during sync
+- Push excludes SQLite entirely, making bidirectional SQLite sync impossible
+- The =sqlite-backup= config boolean is a crude on/off with no file-level control
+
+** Approach: sqlite3-rsync with auto-discovery
+=sqlite3-rsync= is SQLite's official remote-copy tool (stable since SQLite 3.50.0, May 2025). It:
+- Syncs SQLite databases page-by-page with hash-based diffing (~0.01% bandwidth for similar DBs)
+- Works over SSH natively (=sqlite3-rsync user@host:remote.db local.db=)
+- Is WAL-aware and safe against concurrent writers on both sides
+- Supports both pull and push directions
+- Available via Homebrew (=sqlite-rsync= v3.51.3) and Nixpkgs (=pkgs.sqlite.out=)
+- Supports =--ssh PATH= flag for custom SSH program (handles non-standard port/key)
+
+SQLite files are *auto-discovered* — any =*.sqlite= file found in a synced directory is
+automatically handled via =sqlite3-rsync=. No per-file config needed. Discovery uses
+SSH =find= on the remote (for pull) and local fs scanning (for push).
+
+** Alternatives considered
+- *SQLite Backup API via Bun's =node:sqlite=*: Not incremental (full DB copy), no remote support, equivalent to current =.backup= approach. Rejected.
+- *Litestream*: Continuous WAL streaming replication. Requires background daemon, different operational model. Overkill for periodic sync. Rejected.
+- *Custom VFS over SSH*: Maximum control but enormous complexity for no benefit over sqlite3-rsync. Rejected.
+
+** Key decisions
+1. *Require sqlite3-rsync* — error if not found. No fallback to backup+rsync.
+2. *Both directions* — push and pull SQLite files via sqlite3-rsync.
+3. *Auto-discovery* — any =*.sqlite= in synced dirs is handled automatically. No config field needed.
+4. *Remove =sqlite-backup= config* — the boolean and its =normalizeKdlBooleans= hack are deleted.
+5. *SSH wrapper script* — generate temp script for non-standard port/key, pass via =--ssh= flag.
+6. *Don't touch NixOS module* — the =spell-backup-*= systemd timer is independent.
+* Verification
+
+** Type checking
+: bun check --filter spell-deploy
+
+** Tests
+: bun test packages/spell-deploy/
+
+** Specific test files
+: bun test packages/spell-deploy/test/config/sync-parser.test.ts
+: bun test packages/spell-deploy/test/sync/sqlite-rsync.test.ts
+: bun test packages/spell-deploy/test/sync/pull.test.ts
+: bun test packages/spell-deploy/test/sync/push.test.ts
+: bun test packages/spell-deploy/test/sync/watch.test.ts
+: bun test packages/spell-deploy/test/cli/commands.test.ts
+
+** Manual verification
+- =Bun.which("sqlite3-rsync")= returns a path (binary is installed)
+- Dry-run output shows sqlite3-rsync commands for configured files
+
+* Execution Manifest
+
+** Wave 1: Remove old config (no deps)
+- [[id:FEAT-293-config-schema-sqlite-files-in-sync-kdl]] — Remove =sqliteBackup= from =SyncSettings=, delete =normalizeKdlBooleans= hack, update all test fixtures [S]
+
+** Wave 2: sqlite3-rsync module (depends on Wave 1 for clean types)
+- [[id:FEAT-294-sqlite3-rsync-command-builder-and-execut]] — New =sqlite-rsync.ts= module: auto-discovery (remote SSH find + local fs scan), SSH wrapper generation, command builder, executor [M]
+
+** Wave 3: Integration (depends on Wave 1 + Wave 2)
+- [[id:FEAT-295-integrate-sqlite3-rsync-into-pull-and-pu]] — Wire sqlite3-rsync into =pull.ts= and =push.ts=: auto-exclude =*.sqlite= from rsync, discover+sync SQLite files via sqlite3-rsync, remove =backupCommand= [M]
+
+** Wave 4: CLI + Watch (depends on Wave 3)
+- [[id:FEAT-296-update-cli-commands-and-watch-for-new-sq]] — Add =sqlite3-rsync= binary check at startup, update dry-run output, thread through watch orchestrator [S]
+
+
+** Completion [2026-04-03]
+*** Verification
+- =bun test packages/spell-deploy/= — 154 pass, 0 fail, 2 skip (270 expect calls across 19 files)
+- =bunx tsgo --noEmit= on packages/spell-deploy — 0 type errors (pre-existing error in packages/utils/src/logger.ts:109 is unrelated)
+- =bunx biome check= — 0 lint errors after auto-fix of import ordering
+- All specific test files verified:
+  - =sync-parser.test.ts= — 7 pass (config parsing without sqliteBackup)
+  - =sqlite-rsync.test.ts= — 14 pass (SSH wrapper, command builder, discovery, lifecycle)
+  - =pull.test.ts= — 4 pass (rsync with sqlite excludes, sqlite3-rsync commands)
+  - =push.test.ts= — 6 pass (atomic swap plan with sqlite3-rsync commands)
+  - =rsync.test.ts= — 7 pass (sqlite exclude patterns in pull rsync)
+  - =watch.test.ts= — 8 pass (duration parser, exclude matcher, orchestrator)
+  - =commands.test.ts= — 7 pass (requireSqlite3Rsync check, push/pull/bootstrap orchestration)
+
+*** Artifacts
+Source files changed:
+- =packages/spell-deploy/src/config/types.ts= — removed =sqliteBackup= from =SyncSettings=
+- =packages/spell-deploy/src/config/sync-parser.ts= — deleted =normalizeKdlBooleans=, =expectBooleanArgument=, =sqlite-backup= parsing
+- =packages/spell-deploy/src/sync/sqlite-rsync.ts= — new module: SSH wrapper, command builder, discovery, executor
+- =packages/spell-deploy/src/sync/rsync.ts= — added =SQLITE_EXCLUDES= to pull rsync args
+- =packages/spell-deploy/src/sync/pull.ts= — removed =backupCommand=, added =sqliteRsyncCommands=, wired discovery+sqlite3-rsync
+- =packages/spell-deploy/src/sync/push.ts= — added =sqliteRsyncCommands=, wired discovery+sqlite3-rsync after atomic swap
+- =packages/spell-deploy/src/cli/commands.ts= — added =requireSqlite3Rsync= binary check, dry-run output for sqlite3-rsync, removed backups dir from init
+- =packages/spell-deploy/src/index.ts= — added =sqlite-rsync= export
+
+Test files changed:
+- =packages/spell-deploy/test/config/sync-parser.test.ts= — removed =sqliteBackup= from fixtures/assertions
+- =packages/spell-deploy/test/sync/sqlite-rsync.test.ts= — new: 14 tests for SSH wrapper, commands, discovery, lifecycle
+- =packages/spell-deploy/test/sync/pull.test.ts= — rewritten: tests sqlite excludes and sqlite3-rsync commands
+- =packages/spell-deploy/test/sync/push.test.ts= — added sqlite3-rsync command assertions
+- =packages/spell-deploy/test/sync/rsync.test.ts= — added sqlite exclude verification test
+- =packages/spell-deploy/test/sync/watch.test.ts= — removed =sqliteBackup= from fixture
+- =packages/spell-deploy/test/cli/commands.test.ts= — added =requireSqlite3Rsync= test, updated mocks for new push/pull plan shape
+
+*** Deviations
+None.

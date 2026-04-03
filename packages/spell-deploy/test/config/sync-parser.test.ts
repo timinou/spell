@@ -19,7 +19,6 @@ sync {
 	push-debounce "2s"
 	pull "data/" "artifacts/" "shared-sync/"
 	pull-interval "30s"
-	sqlite-backup true
 }
 
 bundle {
@@ -54,7 +53,6 @@ describe("parseSyncConfig", () => {
 			pushDebounce: "2s",
 			pull: ["data/", "artifacts/", "shared-sync/"],
 			pullInterval: "30s",
-			sqliteBackup: true,
 		});
 		expect(config.bundle).toEqual({
 			platform: "linux-x64",
@@ -82,7 +80,6 @@ describe("parseSyncConfig", () => {
 			pushDebounce: "2s",
 			pull: [],
 			pullInterval: "30s",
-			sqliteBackup: false,
 		});
 		expect(config.bundle).toEqual({
 			platform: "linux-x64",

@@ -5,12 +5,21 @@ import { decryptAge } from "../secrets/age";
 import { executeSecretPush } from "../secrets/push";
 import { buildInstallUnitCommand, buildServiceCommand, serviceAction } from "../service/lifecycle";
 import { buildUnitConfig, generateSystemdUnit } from "../service/systemd";
-import { executePull } from "../sync/pull";
-import { executePush } from "../sync/push";
+import { buildPullPlan, executePull } from "../sync/pull";
+import { buildPushPlan, executePush } from "../sync/push";
 import { buildSshCommand, execSsh, sshOptionsFromTarget } from "../sync/ssh";
 import { buildQuotedPath } from "../sync/utils";
 import { WatchOrchestrator } from "../sync/watch";
 import type { DeployContext } from "./types";
+
+/** Verify sqlite3-rsync is installed locally */
+export function requireSqlite3Rsync(): void {
+	if (!Bun.which("sqlite3-rsync")) {
+		throw new Error(
+			"sqlite3-rsync binary not found. Install it via: brew install sqlite-rsync (macOS) or nix-env -iA nixpkgs.sqlite (NixOS)",
+		);
+	}
+}
 
 export async function resolveContext(opts: {
 	projectRoot?: string;
@@ -33,6 +42,7 @@ export async function resolveContext(opts: {
 }
 
 export async function pushCommand(ctx: DeployContext, _config: SyncConfig, target: SyncTarget): Promise<void> {
+	requireSqlite3Rsync();
 	const sshOpts = sshOptionsFromTarget(target);
 
 	if (target.service) {
@@ -44,11 +54,18 @@ export async function pushCommand(ctx: DeployContext, _config: SyncConfig, targe
 		}
 	}
 
-	await executePush({
-		target,
-		localRoot: ctx.projectRoot,
-		dryRun: ctx.dryRun,
-	});
+	if (ctx.dryRun) {
+		const plan = buildPushPlan({ target, localRoot: ctx.projectRoot, dryRun: true });
+		console.error(`[dry-run] ${plan.rsyncToStaging.description}`);
+		for (const cmd of plan.swapCommands) {
+			console.error(`[dry-run] ${cmd.description}`);
+		}
+		for (const cmd of plan.sqliteRsyncCommands) {
+			console.error(`[dry-run] ${cmd.description}`);
+		}
+	} else {
+		await executePush({ target, localRoot: ctx.projectRoot, dryRun: false });
+	}
 
 	if (target.service) {
 		if (ctx.dryRun) {
@@ -61,12 +78,19 @@ export async function pushCommand(ctx: DeployContext, _config: SyncConfig, targe
 }
 
 export async function pullCommand(ctx: DeployContext, config: SyncConfig, target: SyncTarget): Promise<void> {
-	await executePull({
-		target,
-		sync: config.sync,
-		localRoot: ctx.projectRoot,
-		dryRun: ctx.dryRun,
-	});
+	requireSqlite3Rsync();
+
+	if (ctx.dryRun) {
+		const plan = buildPullPlan({ target, sync: config.sync, localRoot: ctx.projectRoot, dryRun: true });
+		for (const cmd of plan.rsyncCommands) {
+			console.error(`[dry-run] ${cmd.description}`);
+		}
+		for (const cmd of plan.sqliteRsyncCommands) {
+			console.error(`[dry-run] ${cmd.description}`);
+		}
+	} else {
+		await executePull({ target, sync: config.sync, localRoot: ctx.projectRoot, dryRun: false });
+	}
 }
 
 export async function statusCommand(
@@ -119,6 +143,7 @@ export async function secretsCommand(ctx: DeployContext, _config: SyncConfig, ta
 }
 
 export function watchCommand(ctx: DeployContext, config: SyncConfig, target: SyncTarget): WatchOrchestrator {
+	requireSqlite3Rsync();
 	return new WatchOrchestrator({
 		target,
 		sync: config.sync,
@@ -135,7 +160,7 @@ export function watchCommand(ctx: DeployContext, config: SyncConfig, target: Syn
 export async function initCommand(ctx: DeployContext, _config: SyncConfig, target: SyncTarget): Promise<void> {
 	const sshOpts = sshOptionsFromTarget(target);
 	const qRoot = buildQuotedPath(target.projectRoot);
-	const mkdirCmd = buildSshCommand(sshOpts, `mkdir -p ${qRoot} ${qRoot}/data ${qRoot}/artifacts ${qRoot}/backups`);
+	const mkdirCmd = buildSshCommand(sshOpts, `mkdir -p ${qRoot} ${qRoot}/data ${qRoot}/artifacts`);
 	if (ctx.dryRun) {
 		console.error(`[dry-run] ${mkdirCmd.description}`);
 		return;

@@ -1,0 +1,63 @@
+#+TITLE: Remove sqliteBackup from config and parser
+#+STATE: DONE
+#+SESSION_ID: 14ac5f84047cbf0c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T16-59-07-153Z_14ac5f84047cbf0c.jsonl]]
+#+CUSTOM_ID: FEAT-293-config-schema-sqlite-files-in-sync-kdl
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: config
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-03]: Removed sqliteBackup from SyncSettings, deleted normalizeKdlBooleans hack, removed sqlite-backup parsing from parseSyncNode. All test fixtures updated.
+
+* Initial Message
+
+can you use this https://til.simonwillison.net/sqlite/compile-sqlite3-rsync or libsqlite or something else to make the rsync simpler for sqlites in spell-deploy?
+
+* Scope
+Remove the =sqlite-backup= boolean from the =sync.kdl= schema. SQLite files no longer need
+explicit declaration — any =*.sqlite= file found in a synced directory is automatically
+handled via =sqlite3-rsync=.
+
+This item only removes the old config surface. No new config field is added.
+
+Before:
+#+begin_example
+sync {
+  sqlite-backup true
+  pull \"data/\" \"artifacts/\"
+}
+#+end_example
+
+After:
+#+begin_example
+sync {
+  pull \"data/\" \"artifacts/\"
+}
+#+end_example
+
+Changes:
+- Remove =sqliteBackup: boolean= from =SyncSettings= type
+- Remove =sqlite-backup= parsing from =parseSyncNode= in =sync-parser.ts=
+- Delete the =normalizeKdlBooleans= regex hack (only existed for =sqlite-backup=)
+- Update all test fixtures that reference =sqliteBackup= or =sqlite-backup=
+* Sub-outline
+1. Remove =sqliteBackup: boolean= from =SyncSettings= type
+2. Remove =sqlite-backup= node parsing from =parseSyncNode= in =sync-parser.ts=
+3. Delete =normalizeKdlBooleans= function and its call in =parseSyncConfig=
+4. Remove =sqliteBackup= from default =SyncSettings= in =parseSyncConfig=
+5. Update all test fixtures: remove =sqliteBackup= field from =SyncSettings= objects, remove =sqlite-backup= from KDL test strings, remove/rewrite tests that assert =sqliteBackup= behavior
+* Files
+- =packages/spell-deploy/src/config/types.ts=
+- =packages/spell-deploy/src/config/sync-parser.ts=
+- =packages/spell-deploy/test/config/sync-parser.test.ts=
+- =packages/spell-deploy/test/sync/pull.test.ts= (fixture updates)
+- =packages/spell-deploy/test/sync/watch.test.ts= (fixture updates)
+- =packages/spell-deploy/test/cli/commands.test.ts= (fixture updates)
+
+* Acceptance
+- =sqliteBackup= is gone from =SyncSettings= type
+- =normalizeKdlBooleans= function is deleted
+- =sqlite-backup= parsing code is deleted from =parseSyncNode=
+- All test fixtures no longer reference =sqliteBackup= or =sqlite-backup=
+- Tests pass: =bun test packages/spell-deploy/test/config/ packages/spell-deploy/test/sync/pull.test.ts packages/spell-deploy/test/sync/watch.test.ts packages/spell-deploy/test/cli/commands.test.ts=

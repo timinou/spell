@@ -23,7 +23,6 @@ export interface SyncSettings {
 	pushDebounce: string;
 	pull: string[];
 	pullInterval: string;
-	sqliteBackup: boolean;
 }
 
 /** Bundle configuration */

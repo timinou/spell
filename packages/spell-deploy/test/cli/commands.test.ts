@@ -34,7 +34,6 @@ const config: SyncConfig = {
 		pushDebounce: "2s",
 		pull: [],
 		pullInterval: "30s",
-		sqliteBackup: false,
 	},
 	bundle: {
 		platform: "linux-x64",
@@ -53,6 +52,15 @@ const target: SyncTarget = {
 	include: [],
 	exclude: [],
 };
+
+/** Stub Bun.which to return a path for sqlite3-rsync */
+function stubSqlite3Rsync() {
+	const original = Bun.which;
+	vi.spyOn(Bun, "which").mockImplementation((cmd, ...args) => {
+		if (cmd === "sqlite3-rsync") return "/usr/bin/sqlite3-rsync";
+		return original.call(Bun, cmd, ...args);
+	});
+}
 
 describe("cli commands", () => {
 	let tempDirs: string[];
@@ -101,7 +109,15 @@ describe("cli commands", () => {
 		await expect(resolveContext({ projectRoot: tmpDir, dryRun: false })).rejects.toThrow(/sync\.kdl/);
 	});
 
+	it("requireSqlite3Rsync throws when binary is missing", async () => {
+		vi.spyOn(Bun, "which").mockReturnValue(null);
+		const { requireSqlite3Rsync } = await importCommands("require-check");
+
+		expect(() => requireSqlite3Rsync()).toThrow("sqlite3-rsync binary not found");
+	});
+
 	it("pushCommand orchestrates stop, push, start in order", async () => {
+		stubSqlite3Rsync();
 		const steps: string[] = [];
 		mock.module("../../src/service/lifecycle", () => ({
 			buildServiceCommand: (_sshOptions: unknown, unitName: string, action: string) => ({
@@ -118,6 +134,11 @@ describe("cli commands", () => {
 			}),
 		}));
 		mock.module("../../src/sync/push", () => ({
+			buildPushPlan: () => ({
+				rsyncToStaging: { args: [], description: "rsync push" },
+				swapCommands: [],
+				sqliteRsyncCommands: [],
+			}),
 			executePush: async (opts: { target: { name: string } }) => {
 				steps.push(`push:${opts.target.name}`);
 			},
@@ -130,6 +151,7 @@ describe("cli commands", () => {
 	});
 
 	it("bootstrapCommand runs init, secrets, push in sequence", async () => {
+		stubSqlite3Rsync();
 		const steps: string[] = [];
 		mock.module("../../src/sync/ssh", () => ({
 			sshOptionsFromTarget: () => ({ host: "test.example.com", user: "spell", port: 22, connectTimeout: 10 }),
@@ -153,6 +175,11 @@ describe("cli commands", () => {
 			buildInstallUnitCommand: () => ({ args: ["true"], stdin: "", description: "install unit" }),
 		}));
 		mock.module("../../src/sync/push", () => ({
+			buildPushPlan: () => ({
+				rsyncToStaging: { args: [], description: "rsync push" },
+				swapCommands: [],
+				sqliteRsyncCommands: [],
+			}),
 			executePush: async () => {
 				steps.push("push");
 			},
@@ -163,6 +190,7 @@ describe("cli commands", () => {
 
 		expect(steps).toEqual(["init", "secrets", "push"]);
 	});
+
 	it("main routes push and forwards parsed options", async () => {
 		const calls: string[] = [];
 		mock.module("../../src/cli/commands", () => ({
@@ -187,6 +215,7 @@ describe("cli commands", () => {
 			secretsCommand: async () => {},
 			watchCommand: () => ({ start() {}, stop() {} }),
 			bootstrapCommand: async () => {},
+			requireSqlite3Rsync: () => {},
 		}));
 		const { main } = await import(`../../src/cli/main?main-route-${Date.now()}`);
 

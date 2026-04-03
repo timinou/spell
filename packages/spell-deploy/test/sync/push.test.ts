@@ -53,4 +53,21 @@ describe("buildPushPlan", () => {
 		expect(combined).not.toContain(" start ");
 		expect(combined).not.toContain(" restart ");
 	});
+
+	it("produces sqlite3-rsync commands when sqliteFiles are provided", () => {
+		const plan = buildPushPlan({
+			...pushOptions,
+			sqliteFiles: ["data/main.sqlite"],
+		});
+
+		expect(plan.sqliteRsyncCommands).toHaveLength(1);
+		expect(plan.sqliteRsyncCommands[0]!.args).toContain("sqlite3-rsync");
+		expect(plan.sqliteRsyncCommands[0]!.description).toBe("sqlite3-rsync push data/main.sqlite");
+	});
+
+	it("produces no sqlite3-rsync commands when sqliteFiles not provided", () => {
+		const plan = buildPushPlan(pushOptions);
+
+		expect(plan.sqliteRsyncCommands).toEqual([]);
+	});
 });
