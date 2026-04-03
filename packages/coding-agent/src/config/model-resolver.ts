@@ -517,6 +517,37 @@ export function resolveModelFromSettings(options: {
 }
 
 /**
+ * Resolve a list of override patterns to ordered candidate models.
+ */
+export interface ResolvedModelCandidate {
+	model: Model<Api>;
+	thinkingLevel?: ThinkingLevel;
+	explicitThinkingLevel: boolean;
+	pattern: string;
+}
+
+export function resolveModelCandidates(
+	modelPatterns: string[],
+	modelRegistry: ModelRegistry,
+	settings?: Settings,
+): ResolvedModelCandidate[] {
+	if (modelPatterns.length === 0) return [];
+	const availableModels = modelRegistry.getAvailable();
+	const matchPreferences = { usageOrder: settings?.getStorage()?.getModelUsageOrder() };
+	const candidates: ResolvedModelCandidate[] = [];
+	for (const pattern of modelPatterns) {
+		const { model, thinkingLevel, explicitThinkingLevel } = resolveModelRoleValue(pattern, availableModels, {
+			settings,
+			matchPreferences,
+		});
+		if (!model) continue;
+		if (candidates.some(candidate => modelsAreEqual(candidate.model, model))) continue;
+		candidates.push({ model, thinkingLevel, explicitThinkingLevel, pattern });
+	}
+	return candidates;
+}
+
+/**
  * Resolve a list of override patterns to the first matching model.
  */
 export function resolveModelOverride(
@@ -524,19 +555,13 @@ export function resolveModelOverride(
 	modelRegistry: ModelRegistry,
 	settings?: Settings,
 ): { model?: Model<Api>; thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } {
-	if (modelPatterns.length === 0) return { explicitThinkingLevel: false };
-	const availableModels = modelRegistry.getAvailable();
-	const matchPreferences = { usageOrder: settings?.getStorage()?.getModelUsageOrder() };
-	for (const pattern of modelPatterns) {
-		const { model, thinkingLevel, explicitThinkingLevel } = resolveModelRoleValue(pattern, availableModels, {
-			settings,
-			matchPreferences,
-		});
-		if (model) {
-			return { model, thinkingLevel, explicitThinkingLevel };
-		}
-	}
-	return { explicitThinkingLevel: false };
+	const [candidate] = resolveModelCandidates(modelPatterns, modelRegistry, settings);
+	if (!candidate) return { explicitThinkingLevel: false };
+	return {
+		model: candidate.model,
+		thinkingLevel: candidate.thinkingLevel,
+		explicitThinkingLevel: candidate.explicitThinkingLevel,
+	};
 }
 
 /**

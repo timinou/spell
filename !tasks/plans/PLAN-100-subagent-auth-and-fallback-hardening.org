@@ -1,0 +1,78 @@
+#+TITLE: Subagent auth and fallback hardening
+#+STATE: DONE
+#+SESSION_ID: 14ab73259adfee1f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-46-24-491Z_14ab73259adfee1f.jsonl]]
+#+CUSTOM_ID: PLAN-100-subagent-auth-and-fallback-hardening
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+NOTE [2026-04-03]: Completed plan execution, verified focused auth/task regressions, captured delegated fallback reproduction artifacts, and closed linked bug items.
+
+* Initial Message
+
+File:
+ /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-00-14-890Z_14ab6894eaa2d281.jsonl
+ ID: 14ab6894eaa2d281
+
+
+Why did Metis fail repeatedly?
+
+* Context
+The repeated “Metis failed” behavior in session `14ab6894eaa2d281` was a layered failure, not one defect. First, the session never launched a real `metis` agent; it substituted delegated `plan` and `oracle` subagents. Second, both delegated sessions died before the first tool call with Anthropic `401 Invalid bearer token`, so the failure happened at model startup, not during analysis. Third, the task layer rewrote that startup failure into a misleading missing-`submit_result` warning, which hid the real cause and made repeated failures look like a Metis/planning defect.
+
+Recommended approach:
+- Repair Anthropic delegated-session credential invalidation / refresh so a known-bad bearer token is not reused.
+- Preserve the real pre-submit startup failure in task results instead of collapsing it into the generic missing-`submit_result` warning.
+- Add constrained delegated-model fallback that only walks the already-allowed candidate list implied by agent/settings patterns; do not broaden into unrelated provider roulette.
+
+Key decisions:
+- Auth repair is isolated in `packages/ai` and lands before task-layer fallback.
+- Failure surfacing is a separate task-layer fix so auth defects remain diagnosable even when fallback is unavailable.
+- Fallback only applies to startup-time auth/provider-availability failures and only across pre-resolved allowed candidates.
+- Adjacent quota/retry work already exists in `BUG-075-subagent-sessions-hang-30-minutes-on-pro` and `BUG-076-async-task-errors-not-surfaced-to-user-d`; this plan focuses specifically on auth-invalid startup failures and truthful fallback behavior.
+
+Child items:
+- [[id:BUG-119-fix-delegated-anthropic-invalid-bearer-h]]
+- [[id:BUG-120-preserve-subagent-auth-failures-in-task]]
+- [[id:BUG-121-add-delegated-model-fallback-on-auth-inv]]
+
+* Verification
+- Run auth-path tests:
+  - `bun test packages/ai/test/anthropic-oauth.test.ts packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`
+- Run task-layer regression tests:
+  - `bun test packages/coding-agent/test/task/executor-warnings.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts packages/coding-agent/test/task/model-fallback.test.ts`
+- Manual proof:
+  - Reproduce a delegated task with the task role pointed at an Anthropic candidate that currently fails auth.
+  - Confirm one of two truthful outcomes:
+    1. auth repair succeeds and the delegated run proceeds, or
+    2. fallback selects the next allowed candidate, or
+    3. if no candidate works, the parent task result shows the real auth/provider error rather than `SYSTEM WARNING: Subagent exited without calling submit_result tool after 3 reminders.`
+- Required artifact:
+  - Save the reproduced parent-session transcript path and the delegated child transcript path showing either repaired auth, a fallback handoff, or the preserved root auth failure.
+
+* Execution Manifest
+** foundation                                      :wave:
+- [[id:BUG-119-fix-delegated-anthropic-invalid-bearer-h]] Fix delegated Anthropic invalid bearer handling (S)
+  - Internal sequence: invalid-bearer tests -> auth selection repair -> provider contract verification
+- [[id:BUG-120-preserve-subagent-auth-failures-in-task]] Preserve subagent auth failures in task results (S)
+  - Internal sequence: pre-submit failure tests -> preserve root error -> surface truthful task failure
+
+** fallback                                        :wave:
+- [[id:BUG-121-add-delegated-model-fallback-on-auth-inv]] Add delegated model fallback on auth-invalid startup (M, depends `BUG-119-fix-delegated-anthropic-invalid-bearer-h` and `BUG-120-preserve-subagent-auth-failures-in-task`)
+  - Internal sequence: fallback tests -> candidate resolution -> startup fallback
+
+
+** Completion [2026-04-03]
+*** Verification
+- `bun test packages/ai/test/anthropic-oauth.test.ts packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`
+  - Passed: 11 tests, 0 failures.
+- `bun test packages/coding-agent/test/task/executor-warnings.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts packages/coding-agent/test/task/model-fallback.test.ts`
+  - Passed: 24 tests, 0 failures.
+- `bun test ./.tmp/plan100-manual-repro.test.ts`
+  - Passed: 1 test, 0 failures. Captured a delegated startup fallback reproduction that preserved the Anthropic `401 Invalid bearer token` failure on the first candidate and selected the next allowed candidate successfully.
+*** Artifacts
+- Parent reproduction transcript: [[file:!tasks/plans/plan-artifacts/PLAN-100-subagent-auth-and-fallback-hardening/manual-parent-fallback-session.jsonl]]
+- Child fallback transcript: [[file:!tasks/plans/plan-artifacts/PLAN-100-subagent-auth-and-fallback-hardening/manual-child-fallback-session.jsonl]]
+- Child final output snapshot: [[file:!tasks/plans/plan-artifacts/PLAN-100-subagent-auth-and-fallback-hardening/manual-child-fallback-session.md]]
+*** Deviations
+- None.

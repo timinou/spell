@@ -1,0 +1,83 @@
+#+TITLE: Preserve subagent auth failures in task results
+#+STATE: DONE
+#+SESSION_ID: 14ab73259adfee1f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-46-24-491Z_14ab73259adfee1f.jsonl]]
+#+CUSTOM_ID: BUG-120-preserve-subagent-auth-failures-in-task
+#+EFFORT: S
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+#+PRIORITY: #A
+#+LAYER: task
+
+NOTE [2026-04-03]: Preserved pre-submit auth/provider startup failures in task execution and verified with bun test packages/coding-agent/test/task/executor-warnings.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts.
+
+* Initial Message
+
+File:
+ /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-00-14-890Z_14ab6894eaa2d281.jsonl
+ ID: 14ab6894eaa2d281
+
+
+Why did Metis fail repeatedly?
+
+* Scope
+- In scope:
+  - `packages/coding-agent/src/task/executor.ts`
+  - `packages/coding-agent/src/task/render.ts`
+  - `packages/coding-agent/src/task/index.ts` if needed to preserve the underlying subagent error in sync and async summaries
+  - `packages/coding-agent/test/task/executor-warnings.test.ts`
+  - `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+- Out of scope:
+  - Repairing Anthropic credentials themselves
+  - Choosing alternate models/providers after an auth failure
+  - General TUI polish unrelated to subagent failure truthfulness
+- Boundary rationale: the task layer must tell the truth when a delegated agent dies before any tool call.
+
+* Tests
+- `packages/coding-agent/test/task/executor-warnings.test.ts`
+  - Add failing coverage for a delegated subagent that exits non-zero with a provider auth error and never reaches `submit_result`.
+  - Assert the executor preserves the real stderr / error classification and does not rewrite it into `SYSTEM WARNING: Subagent exited without calling submit_result tool after 3 reminders.`
+- `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+  - Add an integration-style case where `createAgentSession` or the first delegated prompt fails with an auth error before any tool execution.
+  - Assert the returned task result is failed with the underlying auth message and transcript/session metadata preserved for debugging.
+- Verification command:
+  - `bun test packages/coding-agent/test/task/executor-warnings.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+
+* Implementation
+- Sequencing note: lock the failure contract in tests first. This bug is about truthful error propagation, not happy-path behavior.
+
+** Capture pre-submit auth failure behavior in tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-120-preserve-subagent-auth-failures-in-task::pre-submit-failure-tests
+:END:
+- File: `packages/coding-agent/test/task/executor-warnings.test.ts`
+- File: `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+- Model the observed case: the delegated model returns an auth error before any tool call, so `submit_result` is impossible.
+
+** Preserve original executor failure classification
+:PROPERTIES:
+:CUSTOM_ID: BUG-120-preserve-subagent-auth-failures-in-task::preserve-root-error
+:DEPENDS: BUG-120-preserve-subagent-auth-failures-in-task::pre-submit-failure-tests
+:END:
+- File: `packages/coding-agent/src/task/executor.ts`
+- Stop overwriting a real pre-tool / pre-submit failure with the generic missing-`submit_result` warning.
+- Only emit the missing-submit warning when the delegated model actually ran to a clean stop or recoverable no-submit case.
+
+** Surface the preserved failure in task summaries
+:PROPERTIES:
+:CUSTOM_ID: BUG-120-preserve-subagent-auth-failures-in-task::surface-task-failure
+:DEPENDS: BUG-120-preserve-subagent-auth-failures-in-task::preserve-root-error
+:END:
+- File: `packages/coding-agent/src/task/index.ts`
+- File: `packages/coding-agent/src/task/render.ts`
+- Ensure sync and async task summaries show the preserved auth/provider error instead of a misleading submit-result warning banner.
+* Edge Cases
+- Clean exit with plain-text analysis and no `submit_result` should still warn exactly as today
+- Explicit aborted `submit_result` must keep aborted semantics
+- JSON fallback extraction for valid raw completion output must remain unchanged
+- Child sessions with zero tool calls but non-auth runtime errors should still preserve the original error, not be bucketed as missing-submit
+
+* Acceptance Criteria
+- A delegated session that fails immediately with `401 Invalid bearer token` is surfaced as an auth failure in the parent task result.
+- The generic missing-`submit_result` warning is reserved for genuine no-submit cases, not pre-tool provider failures.
+- Sync and async task summaries preserve the real failure text and transcript/session metadata.
+- `bun test packages/coding-agent/test/task/executor-warnings.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts` passes.

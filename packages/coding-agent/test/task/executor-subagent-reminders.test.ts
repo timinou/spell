@@ -33,6 +33,14 @@ function createAssistantStopMessage(text: string): AssistantMessage {
 	};
 }
 
+function createAssistantErrorMessage(errorMessage: string, text: string = errorMessage): AssistantMessage {
+	return {
+		...createAssistantStopMessage(text),
+		stopReason: "error",
+		errorMessage,
+	};
+}
+
 function createMockSession(
 	onPrompt: (params: {
 		text: string;
@@ -52,6 +60,7 @@ function createMockSession(
 	};
 
 	const session = {
+		sessionId: "mock-subagent-session",
 		state,
 		agent: { state: { systemPrompt: "test" } },
 		model,
@@ -526,6 +535,37 @@ describe("runSubprocess submit_result reminders", () => {
 
 		expect(progressUpdates.some(progress => progress.retry?.errorMessage === "usage limit reached")).toBe(true);
 		expect(progressUpdates.at(-1)?.retry).toBeUndefined();
+	});
+
+	it("preserves pre-submit auth failures instead of rewriting them into missing-submit warnings", async () => {
+		const session = createMockSession(({ promptIndex, emit, state }) => {
+			if (promptIndex !== 1) return;
+			const assistant = createAssistantErrorMessage("401 Invalid bearer token", "delegated model startup failed");
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-auth-failure-before-submit-result",
+			artifactsDir: "/tmp",
+			persistArtifacts: true,
+			outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.aborted).toBe(false);
+		expect(result.stderr).toBe("401 Invalid bearer token");
+		expect(result.error).toBe("401 Invalid bearer token");
+		expect(result.output).not.toContain(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+		expect(result.sessionId).toBe("mock-subagent-session");
+		expect(result.transcriptPath).toBe("/tmp/subagent-auth-failure-before-submit-result.jsonl");
 	});
 
 	it("marks pre-aborted subprocess with a concrete reason", async () => {

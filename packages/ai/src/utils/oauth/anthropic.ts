@@ -13,6 +13,30 @@ const CALLBACK_PORT = 54545;
 const CALLBACK_PATH = "/callback";
 const SCOPES = "org:create_api_key user:profile user:inference";
 
+type AnthropicOAuthErrorPayload = {
+	error?: string | { message?: unknown };
+	message?: unknown;
+	error_description?: unknown;
+};
+
+async function readAnthropicOAuthError(response: Response): Promise<string> {
+	const raw = (await response.text()).trim();
+	if (!raw) return `HTTP ${response.status}`;
+	try {
+		const parsed = JSON.parse(raw) as AnthropicOAuthErrorPayload;
+		if (typeof parsed.error === "string" && parsed.error.trim()) return parsed.error.trim();
+		if (parsed.error && typeof parsed.error === "object" && typeof parsed.error.message === "string") {
+			const message = parsed.error.message.trim();
+			if (message) return message;
+		}
+		if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message.trim();
+		if (typeof parsed.error_description === "string" && parsed.error_description.trim()) {
+			return parsed.error_description.trim();
+		}
+	} catch {}
+	return raw;
+}
+
 export class AnthropicOAuthFlow extends OAuthCallbackFlow {
 	#verifier: string = "";
 	#challenge: string = "";
@@ -116,8 +140,8 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
 	});
 
 	if (!response.ok) {
-		const error = await response.text();
-		throw new Error(`Anthropic token refresh failed: ${error}`);
+		const error = await readAnthropicOAuthError(response);
+		throw new Error(`Anthropic token refresh failed (${response.status}): ${error}`);
 	}
 
 	const data = (await response.json()) as {
