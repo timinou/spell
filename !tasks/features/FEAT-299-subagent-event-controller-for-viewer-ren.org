@@ -1,0 +1,83 @@
+#+TITLE: Subagent event controller for viewer rendering
+#+STATE: DONE
+#+SESSION_ID: 14ac791f73fb92d2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T18-50-59-919Z_14ac791f73fb92d2.jsonl]]
+#+CUSTOM_ID: FEAT-299-subagent-event-controller-for-viewer-ren
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: ui
+
+* Initial Message
+
+is there a way for me to see what agents are doing beyond the one-line sumary in the task box in the TUI?
+
+* Scope
+Create a stripped-down event controller that translates raw subagent events into TUI component creation/updates. This is the rendering engine for the subagent viewer -- it bridges ~TASK_SUBAGENT_EVENT_CHANNEL~ events to the existing stateless rendering components (~AssistantMessageComponent~, ~ToolExecutionComponent~, ~ReadToolGroupComponent~).
+
+* Design
+
+** ViewerContext interface
+A minimal facade that the event handler needs. NOT ~InteractiveModeContext~.
+
+#+begin_src typescript
+interface SubagentViewerContext {
+    chatContainer: Container;
+    ui: TUI;
+    toolOutputExpanded: boolean;
+    cwd: string;
+}
+#+end_src
+
+** Event subset
+Only handle the 6 rendering-relevant event types from the raw ~AgentEvent~ (not ~AgentSessionEvent~):
+- ~message_start~ (role=assistant) -> create ~AssistantMessageComponent~
+- ~message_update~ -> call ~updateContent()~
+- ~message_end~ -> finalize, clear streaming state
+- ~tool_execution_start~ -> create ~ToolExecutionComponent~ or ~ReadToolGroupComponent~
+- ~tool_execution_update~ -> call ~updateResult()~
+- ~tool_execution_end~ -> finalize, delete from pending map
+
+Skip all orchestration events: ~agent_start~, ~agent_end~, ~auto_compaction_*~, ~auto_retry_*~, ~ttsr_triggered~, ~todo_reminder~, ~todo_auto_clear~, ~audit_*~.
+
+** Tool component creation
+Reuse existing components directly:
+- ~ToolExecutionComponent~ constructor: ~(toolName, args, options, tool, ui, cwd)~
+  - ~tool~ param is ~AgentTool | undefined~ -- pass ~undefined~ since viewer doesn't have access to the subagent's tool registry. Renderers still work (they fall back to generic rendering).
+- ~ReadToolGroupComponent~ for batched read calls
+- ~AssistantMessageComponent~ for assistant text + thinking blocks
+
+* Implementation
+** Define ~SubagentViewerContext~ interface
+File: ~packages/coding-agent/src/modes/components/subagent-viewer/types.ts~
+
+** Implement ~SubagentViewerEventHandler~ class
+File: ~packages/coding-agent/src/modes/components/subagent-viewer/event-handler.ts~
+- Constructor takes ~SubagentViewerContext~
+- ~handleEvent(event: AgentEvent): void~ method
+- Manages ~#pendingTools: Map<string, ToolExecutionHandle>~
+- Manages ~#streamingComponent: AssistantMessageComponent | undefined~
+- Manages ~#lastReadGroup: ReadToolGroupComponent | undefined~
+- Calls ~this.ctx.ui.requestRender()~ after each handled event
+- Provides ~clear(): void~ to reset all state (when switching agents)
+- Provides ~setExpanded(expanded: boolean): void~ to toggle all tool output
+
+** Test: ~SubagentViewerEventHandler~
+File: ~packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts~
+
+Tests (test-first -- these drive the implementation):
+1. ~message_start~ with role=assistant creates AssistantMessageComponent, adds to container
+2. ~message_update~ calls updateContent on streaming component
+3. ~message_end~ finalizes streaming, clears streaming state
+4. ~tool_execution_start~ creates ToolExecutionComponent, adds to container
+5. ~tool_execution_start~ with toolName=read creates ReadToolGroupComponent
+6. ~tool_execution_end~ calls updateResult, removes from pending
+7. ~clear()~ resets all internal state, does not clear container (caller manages)
+8. Events for unknown types are silently ignored (no crash)
+
+Test approach: create real Container + mock TUI, feed events, assert children added/updated.
+
+* Acceptance
+- ~bun test packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts~ passes
+- ~bun check:ts~ passes
+- Event handler creates correct component types for each event
+- No dependency on ~InteractiveModeContext~

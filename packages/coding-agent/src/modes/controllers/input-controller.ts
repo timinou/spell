@@ -144,6 +144,9 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("toggleUserPause")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleToggleUserPause());
 		}
+		for (const key of this.ctx.keybindings.getKeys("subagentViewer")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showSubagentViewer());
+		}
 		for (const key of this.ctx.keybindings.getKeys("copyLine")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.handleCopyCurrentLine());
 		}

@@ -41,6 +41,7 @@
 - Canvas task progress streaming to QML via `task_progress` bridge messages
 - `canvas_tasks` status line segment with TUI badge wired to `CanvasTaskManager.getActive()` count
 - Enriched `task_result` payloads: `model`, `tokens`, `durationMs`, `usage`, `retryable` fields
+- Subagent viewer (`Ctrl+Tab`) for drilling into running agents with full chat rendering, scroll, and agent switching
 
 ### Changed
 

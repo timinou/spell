@@ -39,6 +39,7 @@ import type { AgentSession } from "./session/agent-session";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
 import { resolvePromptInput } from "./system-prompt";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
+import type { EventBus } from "./utils/event-bus";
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
 	try {
@@ -78,7 +79,7 @@ export const CANVAS_DISPLAY_REQUIRED_MESSAGE =
 	"--canvas requires a graphical display (DISPLAY or WAYLAND_DISPLAY must be set)";
 
 export function formatUnknownCanvasMessage(canvasName: string): string {
-	return `Unknown canvas: ${canvasName}. Available: chat, fluid, browse. Use: spell --canvas [fluid|chat|browse] [options] [message]`;
+	return `Unknown canvas: ${canvasName}. Available: chat, fluid, browse. Use: spell --canvas [chat|fluid|browse] [options] [message]`;
 }
 
 export async function submitInteractiveInput(
@@ -115,6 +116,7 @@ async function runInteractiveMode(
 	lspServers: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }> | undefined,
 	mcpManager: import("./mcp").MCPManager | undefined,
 	taskManager: import("./orchestrators/canvas-task-manager").CanvasTaskManager | undefined,
+	eventBus: EventBus | undefined,
 	initialMessage?: string,
 	initialImages?: ImageContent[],
 ): Promise<void> {
@@ -126,6 +128,7 @@ async function runInteractiveMode(
 		lspServers,
 		mcpManager,
 		taskManager,
+		eventBus,
 	);
 
 	await mode.init();
@@ -599,8 +602,16 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	const cwd = getProjectDir();
 	let domainManifest: SpellDomain;
 	try {
-		const activeDomain = await logger.timeAsync("detectDomain", () => detectDomain(cwd, parsedArgs.domain));
+		// Bare --canvas (no mode argument) forces the growth domain's QML shell.
+		// Explicit --canvas <name> keeps the named canvas mode regardless of domain.
+		const domainOverride = parsedArgs.canvas === "" ? "growth" : parsedArgs.domain;
+		const activeDomain = await logger.timeAsync("detectDomain", () => detectDomain(cwd, domainOverride));
 		domainManifest = await logger.timeAsync("loadActiveDomain", () => loadActiveDomain(activeDomain, cwd));
+		if (parsedArgs.canvas === "") {
+			// Clear the canvas sentinel so startup route falls through to domain-driven
+			// interactive-qml (growth domain has interactiveSurface: 'qml').
+			parsedArgs.canvas = undefined;
+		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		process.stderr.write(`${chalk.red(`Error: ${message}`)}\n`);
@@ -888,6 +899,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			lspServers,
 			mcpManager,
 			taskManager,
+			eventBus,
 			initialMessage,
 			initialImages,
 		);

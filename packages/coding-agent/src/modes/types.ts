@@ -12,6 +12,7 @@ import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import type { ExitPlanModeDetails } from "../tools";
 import type { TodoItem, TodoPhase } from "../tools/todo-write";
+import type { EventBus } from "../utils/event-bus";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import type { CustomEditor } from "./components/custom-editor";
@@ -58,6 +59,7 @@ export interface InteractiveModeContext {
 	historyStorage?: HistoryStorage;
 	mcpManager?: MCPManager;
 	taskManager?: CanvasTaskManager;
+	eventBus?: EventBus;
 	lspServers?: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>;
 
 	// State
@@ -189,6 +191,7 @@ export interface InteractiveModeContext {
 	showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void>;
 	showHookConfirm(title: string, message: string): Promise<boolean>;
 	showDebugSelector(): void;
+	showSubagentViewer(): void;
 
 	// Input handling
 	handleCtrlC(): void;
