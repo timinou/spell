@@ -1,3 +1,4 @@
+import type { ActionParameterDescriptor, ActionPromptSlotDescriptor } from "@oh-my-pi/spell-server";
 import type {
 	GrowthDiscoveredCandidate,
 	GrowthFeedDigestItem,
@@ -6,7 +7,7 @@ import type {
 	GrowthSourceRecord,
 	GrowthPublicationItem,
 } from "../types";
-import type { WorkflowEngine } from "../../../spell-server/src/workflow";
+import type { WorkflowEngine } from "@oh-my-pi/spell-server";
 
 export interface GrowthDiscoveryActionInput {
 	engine: WorkflowEngine;
@@ -39,3 +40,6 @@ export interface GrowthReviewUpsertStore {
 	set(record: GrowthReviewRecord): void;
 	list(): GrowthReviewRecord[];
 }
+
+export const EMPTY_GROWTH_ACTION_PARAMS = {} satisfies Record<string, ActionParameterDescriptor>;
+export const EMPTY_GROWTH_ACTION_PROMPT_SLOTS = {} satisfies Record<string, ActionPromptSlotDescriptor>;

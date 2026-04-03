@@ -16,13 +16,30 @@ describe("telegram approval callbacks", () => {
 			requestId: "telegram-1",
 		});
 		expect(applied.item.state).toBe("approved");
+		expect(applied.item.claim).toBeUndefined();
+	});
 
-		const duplicate = await engine.applyAction({
+	it("clears the transient claim when a completed callback is replayed", async () => {
+		const engine = new WorkflowEngine();
+		const approval = engine.createApproval(createApprovalInput({ title: "Approve digest" }));
+		const actor = createActor("telegram-user");
+
+		await applyTelegramQuickAction(engine, {
 			itemId: approval.id,
 			actionId: "approve",
 			actor,
 			requestId: "telegram-1",
 		});
+
+		const duplicate = await applyTelegramQuickAction(engine, {
+			itemId: approval.id,
+			actionId: "approve",
+			actor,
+			requestId: "telegram-1",
+		});
+
 		expect(duplicate.duplicate).toBe(true);
+		expect(duplicate.item.claim).toBeUndefined();
+		expect(engine.requireItem(approval.id).claim).toBeUndefined();
 	});
 });

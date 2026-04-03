@@ -166,8 +166,18 @@ export class WorkflowEngine {
 	async applyAction(input: WorkflowApplyActionInput): Promise<WorkflowApplyActionResult> {
 		const duplicate = this.#store.getRequest(input.itemId, input.requestId);
 		if (duplicate) {
+			const item = this.#refreshExpiredClaim(this.#store.requireItem(input.itemId));
+			this.#audit({
+				id: this.#store.nextAuditId(),
+				at: this.#now().toISOString(),
+				kind: "request-duplicate",
+				itemId: item.id,
+				actor: input.actor,
+				requestId: input.requestId,
+				message: `Duplicate action ${input.actionId} ignored`,
+			});
 			return {
-				item: this.#refreshExpiredClaim(this.#store.requireItem(input.itemId)),
+				item,
 				duplicate: true,
 				stale: false,
 				triggeredGoals: [],

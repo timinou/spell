@@ -1,4 +1,4 @@
-import type { WorkflowActionDefinition } from "../../../spell-server/src/workflow";
+import type { WorkflowActionDefinition } from "@oh-my-pi/spell-server";
 
 export function createGrowthReviewApprovalActions(): WorkflowActionDefinition[] {
 	return [

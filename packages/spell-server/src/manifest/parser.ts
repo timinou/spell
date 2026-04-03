@@ -465,6 +465,16 @@ function resolveActionListValue(
 	return rawValues.map((value, index) => resolveActionScalarValue(value, undefined, `${pathLabel}.${index}`, options));
 }
 
+function parseActionJsonValue(node: Node, pathLabel: string, options: ParseManifestOptions): ActionValue {
+	const jsonText = expectStringArgument(node, pathLabel, 1, options);
+	try {
+		return JSON.parse(jsonText) as ActionValue;
+	} catch (error) {
+		const details = error instanceof Error ? `: ${error.message}` : "";
+		throw new Error(`${pathLabel} must be valid JSON${details}`);
+	}
+}
+
 function parseActionNode(node: Node, pathLabel: string, options: ParseManifestOptions): ManifestAction {
 	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
 	const descriptor = options.registry?.get(id);
@@ -496,6 +506,11 @@ function parseActionNode(node: Node, pathLabel: string, options: ParseManifestOp
 				`${pathLabel}.param-list.${paramName}`,
 				options,
 			);
+			continue;
+		}
+		if (childName === "param-json") {
+			const paramName = expectStringArgument(child, `${pathLabel}.param-json.name`, 0, options);
+			action.params[paramName] = parseActionJsonValue(child, `${pathLabel}.param-json.${paramName}`, options);
 			continue;
 		}
 		if (childName === "prompt") {

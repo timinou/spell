@@ -1,8 +1,10 @@
 import { logger } from "@oh-my-pi/pi-utils";
+import type { ManifestAction } from "../actions";
 import type { AutonomyManifest, FilterConfig, ManifestGoal, ManifestSetup } from "../manifest/types";
 import type { RpcClient, RpcEvent } from "../rpc";
 import type { SessionManager } from "../session/session-manager";
 import type { BaseSpawnOptions } from "../session/types";
+import actionGoalPromptTemplate from "./action-goal-prompt.md" with { type: "text" };
 import { removeSandboxPolicy, writeSandboxPolicy } from "./sandbox-writer";
 import { type GoalExecutionState, transition } from "./state";
 import type { GoalResult, GoalRun, GoalRunStatus } from "./types";
@@ -362,7 +364,42 @@ function resolveGoalPrompt(goal: ManifestGoal): string {
 			return promptParam;
 		}
 	}
-	throw new Error(
-		`Goal '${goal.setup}' is configured with an action-only workflow that GoalExecutionController does not execute yet`,
+	if (goal.action) {
+		return renderActionGoalPrompt(goal.action);
+	}
+	throw new Error(`Goal '${goal.setup}' is missing prompt and action content`);
+}
+
+function renderActionGoalPrompt(action: ManifestAction): string {
+	return actionGoalPromptTemplate.replace("{{ACTION_SPEC_JSON}}", formatActionGoalPayload(action));
+}
+
+function formatActionGoalPayload(action: ManifestAction): string {
+	return stableJsonStringify({
+		actionId: action.id,
+		params: action.params,
+		promptSlots: sortRecordEntries(action.promptSlots),
+	});
+}
+
+function stableJsonStringify(value: unknown): string {
+	return JSON.stringify(toStableJsonValue(value), null, 2);
+}
+
+function toStableJsonValue(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(item => toStableJsonValue(item));
+	}
+	if (!value || typeof value !== "object") {
+		return value;
+	}
+	return sortRecordEntries(value as Record<string, unknown>);
+}
+
+function sortRecordEntries(value: Record<string, unknown>): Record<string, unknown> {
+	return Object.fromEntries(
+		Object.entries(value)
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([key, entryValue]) => [key, toStableJsonValue(entryValue)]),
 	);
 }

@@ -1,4 +1,4 @@
-import type { WorkflowEngine } from "../../../spell-server/src/workflow";
+import type { WorkflowEngine } from "@oh-my-pi/spell-server";
 import type { GrowthDiscoveryActionInput, GrowthReviewUpsertStore } from "./types";
 import type { GrowthReviewRecord } from "../types";
 import { dedupeCandidates } from "../discovery/canonicalize";

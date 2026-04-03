@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { ActionRegistry, createBuiltinActionRegistry } from "../../src/actions";
-import { loadManifestFromFile } from "../../src/manifest";
+import { loadManifestFromFile, parseManifestKdl, serializeManifestKdl } from "../../src/manifest";
 import { cleanupManifestProject, createManifestProject } from "./test-helpers";
 
 const tempDirs = new Set<string>();
@@ -84,6 +84,72 @@ goal "run" {
 		await expect(loadManifestFromFile(invalidProject.manifestPath, { registry })).rejects.toThrow(
 			/must be a number/i,
 		);
+	});
+
+	it("parses and round-trips json params", async () => {
+		const registry = new ActionRegistry();
+		registry.register({
+			id: "test.review-json",
+			source: "first-party",
+			params: {
+				payload: { type: "json", required: true },
+			},
+		});
+		const { dir, manifestPath } = await createManifestProject({
+			"autonomy.kdl": `name "typed-action-json"
+	version "1.0.0"
+	setup "worker" { domain "coding" }
+	goal "run" {
+		setup "worker"
+		schedule type="cron" expression="0 1 * * *"
+		action "test.review-json" {
+			param-json "payload" "{\\"summary\\":\\"ok\\",\\"metrics\\":[1,{\\"passed\\":true}],\\"details\\":{\\"owner\\":\\"qa\\"}}"
+		}
+	}
+	`,
+		});
+		tempDirs.add(dir);
+
+		const manifest = await loadManifestFromFile(manifestPath, { registry });
+		expect(manifest.goals.get("run")?.action?.params).toEqual({
+			payload: {
+				summary: "ok",
+				metrics: [1, { passed: true }],
+				details: { owner: "qa" },
+			},
+		});
+
+		const rendered = serializeManifestKdl(manifest);
+		expect(rendered).toContain("param-json payload");
+		const reparsed = parseManifestKdl(rendered, { registry });
+		expect(reparsed.goals.get("run")?.action?.params).toEqual(manifest.goals.get("run")?.action?.params);
+	});
+
+	it("rejects invalid json param payloads", async () => {
+		const registry = new ActionRegistry();
+		registry.register({
+			id: "test.review-json",
+			source: "first-party",
+			params: {
+				payload: { type: "json", required: true },
+			},
+		});
+		const { dir, manifestPath } = await createManifestProject({
+			"autonomy.kdl": `name "typed-action-json-invalid"
+	version "1.0.0"
+	setup "worker" { domain "coding" }
+	goal "run" {
+		setup "worker"
+		schedule type="cron" expression="0 1 * * *"
+		action "test.review-json" {
+			param-json "payload" "{not valid json}"
+		}
+	}
+	`,
+		});
+		tempDirs.add(dir);
+
+		await expect(loadManifestFromFile(manifestPath, { registry })).rejects.toThrow(/must be valid JSON/i);
 	});
 
 	it("keeps built-in registry first-party only", () => {

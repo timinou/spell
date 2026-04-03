@@ -1,0 +1,100 @@
+#+TITLE: Register goals and approvals as coding-agent built-in tools
+#+STATE: DONE
+#+SESSION_ID: 14ab788ccb62d28c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T00-10-00-877Z_14ab788ccb62d28c.jsonl]]
+#+CUSTOM_ID: FEAT-243-register-goals-and-approvals-as-coding-a
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-023-audit-implementation:
+
+1. **What**: Action-only goals still do not execute through Spell Server; they only validate and then fail at runtime  
+   **Where**: `packages/spell-server/src/executor/goal-executor.ts`, near `#executeAttempt()` and `resolveGoalPrompt()`  
+   **Why**: `growth.discovery`, `growth.feed.send`, `growth.export.publish`, and `growth.curation.writeback` load successfully, but actual execution still goes through prompt-only flow. Any triggered action-only goal will throw instead of running, so the cutover contract is not actually honored by the live server.  
+   **Effort**: `medium`
+
+2. **What**: Telegram quick-action replay can leave completed items claimed  
+   **Where**: `packages/spell-server/src/telegram/workflow-inbox.ts`, `applyTelegramQuickAction()`  
+   **Why**: The helper claims the item before dedupe/state checks. A duplicated Telegram callback can re-claim an already-completed item and then return a duplicate result, leaving stale claim state behind. That can block later operators or create misleading shared state.  
+   **Effort**: `small`
+
+3. **What**: Duplicate workflow requests are not audited even though the audit contract defines `request-duplicate`  
+   **Where**: `packages/spell-server/src/workflow/engine.ts`, top duplicate branch in `applyAction()`  
+   **Why**: The engine returns `duplicate: true` but does not append a `request-duplicate` audit entry. This weakens the idempotency/audit story and makes duplicate replays invisible in the canonical history.  
+   **Effort**: `trivial`
+
+4. **What**: Coding-agent “goals” and “approvals” surfaces are helpers only, not real registered tools  
+   **Where**: `packages/coding-agent/src/tools/goals-tool.ts`, `packages/coding-agent/src/tools/approvals-tool.ts`, and `packages/coding-agent/src/tools/index.ts`  
+   **Why**: The new modules exist and are tested directly, but they are not wired into `BUILTIN_TOOLS`. In real sessions there is still no reusable goals/approvals tool surface for operators.  
+   **Effort**: `small`
+
+5. **What**: `growth.*` actions are registered without typed parameter schemas  
+   **Where**: `packages/spell-growth/src/index.ts`, `GROWTH_ACTIONS`  
+   **Why**: The manifest/action system now claims typed action validation, but all growth actions are registered as bare IDs with no param or prompt-slot contracts. Invalid growth action configs can pass load-time validation and fail only later.  
+   **Effort**: `small`
+
+6. **What**: Action parameter contract advertises `json` support that the manifest parser/serializer does not actually implement  
+   **Where**: `packages/spell-server/src/actions/types.ts`, `packages/spell-server/src/manifest/parser.ts` near `parseActionNode()` / `resolveActionScalarValue()`, and `packages/spell-server/src/manifest/serializer.ts` near `appendActionChildren()`  
+   **Why**: `ActionParameterType` includes `"json"`, but the parser only handles scalars and scalar lists, while the serializer stringifies objects on output. That means the public contract is misleading and round-trip behavior is lossy.  
+   **Effort**: `small`
+
+7. **What**: Approvals API accepts shallowly validated payloads and then casts them into workflow objects  
+   **Where**: `packages/spell-server/src/http/routes/approvals.ts`, `parseCreatePayload()` and `parseActionPayload()`  
+   **Why**: Only top-level fields are checked. Nested `actions`, `artifacts`, and related structures are trusted via casts. A malformed client can create broken workflow items that persist successfully and fail later in harder-to-debug ways.  
+   **Effort**: `small`
+
+8. **What**: Feed digest approval metadata is chunk-level and can point at the wrong item when a message contains multiple articles  
+   **Where**: `packages/spell-growth/src/actions/feed-send.ts`, around `previousItem = input.items[messages.length] ?? item` and final inline keyboard construction  
+   **Why**: The callback target is derived from message count rather than the actual items accumulated in the chunk. Once chunking happens, the approval button can map to the wrong article.  
+   **Effort**: `small`
+
+9. **What**: `spell-growth` depends on `spell-server` internals via relative source imports instead of a stable package boundary  
+   **Where**: `packages/spell-growth/src/index.ts`, `packages/spell-growth/src/actions/discovery.ts`, `packages/spell-growth/src/actions/types.ts`, `packages/spell-growth/src/workflow/presets.ts`  
+   **Why**: This creates brittle cross-package coupling to `packages/spell-server/src/...` layout. Refactors, packaging, or external consumption can break `spell-growth` even when the intended public contract has not changed.  
+   **Effort**: `medium`
+
+* Scope
+** In scope
+- Convert ~fetchGoalsToolView~ and ~fetchApprovalsToolView~ from plain helper functions into proper ~Tool~ subclasses following the coding-agent tool pattern.
+- Register them in ~BUILTIN_TOOLS~ and ~TOOL_TIERS~.
+- Each tool needs: input schema, description, execute method that calls the spell-server HTTP API, and a renderer.
+- Tools should be conditional on session having a configured spell-server URL (similar to how ~LoopPrepareTool~ checks ~s.loopManager~).
+** Out of scope
+- The spell-server HTTP contract itself (already implemented in PLAN-101).
+- QML integration.
+
+* Tests
+Tests use the existing ~Tool~ test patterns in the coding-agent package. Since tools require session infrastructure to construct, test-first ordering is not used here; the HTTP client helpers are already tested. The tool tests validate the integration contract.
+
+** Write tool integration tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-033-register-goals-and-approvals-as-coding-a::tests
+:END:
+- File: ~packages/coding-agent/test/tools/goals-tool.test.ts~
+  - Extend existing test to verify ~BUILTIN_TOOLS.goals~ exists and produces a Tool instance when session has a spell-server URL.
+  - Verify it returns ~null~ when no spell-server URL is configured.
+- File: ~packages/coding-agent/test/tools/approvals-tool.test.ts~
+  - Same structure as goals.
+
+* Implementation
+** Implement Tool subclasses and register
+:PROPERTIES:
+:CUSTOM_ID: FEAT-033-register-goals-and-approvals-as-coding-a::implement
+:END:
+- File: ~packages/coding-agent/src/tools/goals-tool.ts~
+  - Convert to a ~GoalsTool~ class extending ~Tool~ with ~inputSchema~, ~description~, and ~execute()~ that calls ~fetchGoalsToolView~.
+  - Export a ~createIf~ factory: returns ~GoalsTool~ if session has spell-server config, ~null~ otherwise.
+- File: ~packages/coding-agent/src/tools/approvals-tool.ts~
+  - Same pattern: ~ApprovalsTool~ class.
+- File: ~packages/coding-agent/src/tools/index.ts~
+  - Add ~goals: GoalsTool.createIf~ and ~approvals: ApprovalsTool.createIf~ to ~BUILTIN_TOOLS~.
+  - Add ~goals: "specialized"~ and ~approvals: "specialized"~ to ~TOOL_TIERS~.
+- Deduplicate the ~authHeader()~ helper into a shared function imported by both tools.
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/tools/goals-tool.test.ts packages/coding-agent/test/tools/approvals-tool.test.ts~ passes.
+- ~BUILTIN_TOOLS~ contains ~goals~ and ~approvals~ entries.
+- Tools appear in ~TOOL_TIERS~ as ~"specialized"~.

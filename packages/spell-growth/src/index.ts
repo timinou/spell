@@ -1,4 +1,4 @@
-import type { ActionDescriptor, ActionRegistry } from "../../spell-server/src/actions";
+import type { ActionDescriptor, ActionRegistry } from "@oh-my-pi/spell-server";
 
 export * from "./actions/curation-writeback";
 export * from "./actions/discovery";
@@ -15,11 +15,33 @@ export * from "./scoring/lexical";
 export * from "./types";
 export * from "./workflow/presets";
 
+import { EMPTY_GROWTH_ACTION_PARAMS, EMPTY_GROWTH_ACTION_PROMPT_SLOTS } from "./actions/types";
+
 const GROWTH_ACTIONS: ActionDescriptor[] = [
-	{ id: "growth.discovery", source: "first-party" },
-	{ id: "growth.feed.send", source: "first-party" },
-	{ id: "growth.export.publish", source: "first-party" },
-	{ id: "growth.curation.writeback", source: "first-party" },
+	{
+		id: "growth.discovery",
+		source: "first-party",
+		params: EMPTY_GROWTH_ACTION_PARAMS,
+		promptSlots: EMPTY_GROWTH_ACTION_PROMPT_SLOTS,
+	},
+	{
+		id: "growth.feed.send",
+		source: "first-party",
+		params: EMPTY_GROWTH_ACTION_PARAMS,
+		promptSlots: EMPTY_GROWTH_ACTION_PROMPT_SLOTS,
+	},
+	{
+		id: "growth.export.publish",
+		source: "first-party",
+		params: EMPTY_GROWTH_ACTION_PARAMS,
+		promptSlots: EMPTY_GROWTH_ACTION_PROMPT_SLOTS,
+	},
+	{
+		id: "growth.curation.writeback",
+		source: "first-party",
+		params: EMPTY_GROWTH_ACTION_PARAMS,
+		promptSlots: EMPTY_GROWTH_ACTION_PROMPT_SLOTS,
+	},
 ];
 
 export function registerGrowthActions(registry: ActionRegistry): void {

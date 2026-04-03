@@ -2,7 +2,7 @@ export type ActionScalar = string | number | boolean | null;
 
 export type ActionValue =
 	| ActionScalar
-	| ActionScalar[]
+	| ActionValue[]
 	| {
 			[key: string]: ActionValue;
 	  };
