@@ -4,6 +4,7 @@ import type { AuthContext } from "../bot/auth";
 import type { TelegramBot } from "../bot/bot";
 import type { ProcessManager } from "../process-manager";
 import type { TelegramBridgeConfig, UserConfig } from "../types";
+import type { SttProvider, TtsProvider } from "../voice";
 import { registerApprovalCallbacks } from "./approval";
 import { registerModeCallbacks } from "./mode";
 import { registerProjectCallbacks } from "./project";
@@ -14,6 +15,8 @@ export interface CommandContext {
 	processManager: ProcessManager;
 	telegramPrompt: string;
 	operatorActionBridge?: OperatorActionHandler;
+	sttProvider?: SttProvider;
+	ttsProvider?: TtsProvider;
 }
 
 export type CommandHandler = (ctx: AuthContext, cmdCtx: CommandContext) => Promise<void>;
@@ -29,6 +32,7 @@ export const COMMANDS = [
 	{ command: "clear", description: "Start new session" },
 	{ command: "status", description: "Show session status" },
 	{ command: "btw", description: "One-off question without session context" },
+	{ command: "voice", description: "Toggle voice reply mode" },
 ] as const;
 
 /** Canonical tool lists per mode. The bridge passes these via --tools to the RPC process. */

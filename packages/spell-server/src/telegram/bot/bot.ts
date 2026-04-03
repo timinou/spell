@@ -2,7 +2,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { Bot, type Context, type MiddlewareFn } from "grammy";
 import type { OperatorActionHandler } from "../../http/routes/operator-actions";
 import type { RpcEvent } from "../../rpc/types";
-import { awaitStreamerCompletion, ResponseStreamer } from "../bridge/rpc-to-telegram";
+import { awaitStreamerCompletion, ResponseStreamer, resolveVoiceReply } from "../bridge/rpc-to-telegram";
 import { handleTelegramMessage } from "../bridge/telegram-to-rpc";
 import {
 	type CommandContext,
@@ -17,8 +17,10 @@ import { handleProjectCommand } from "../commands/project";
 import { handleClearCommand, handleStatusCommand, handleThinkCommand } from "../commands/session-commands";
 import { handleHelpCommand, handleStartCommand } from "../commands/start-help";
 import { handleLockCommand, handleUnlockCommand } from "../commands/unlock-lock";
+import { handleVoiceCommand } from "../commands/voice";
 import type { ProcessManager } from "../process-manager";
 import type { TelegramBridgeConfig } from "../types";
+import { createSttProvider, createTtsProvider, type SttProvider, type TtsProvider } from "../voice";
 import { type AuthContext, authMiddleware } from "./auth";
 import { handleInviteCommand } from "./invite";
 import { TokenStore } from "./tokens";
@@ -93,6 +95,9 @@ export function createCommandRouter(
 			case "btw":
 				await handleBtwCommand(ctx, cmdCtx);
 				return;
+			case "voice":
+				await handleVoiceCommand(ctx, cmdCtx);
+				return;
 			case "invite": {
 				if (!ctx.authState.isOwner) {
 					await ctx.reply("Not authorized");
@@ -127,7 +132,10 @@ export function createMessageHandler(cmdCtx: CommandContext): MiddlewareFn<AuthC
 
 		const hasPhoto = "photo" in message && Array.isArray(message.photo) && message.photo.length > 0;
 		const hasDocument = "document" in message && Boolean(message.document);
-		if (!text && !hasPhoto && !hasDocument) {
+		const hasVoice = "voice" in message && Boolean(message.voice);
+		const hasVideoNote = "video_note" in message && Boolean(message.video_note);
+		const hasAudio = "audio" in message && Boolean(message.audio);
+		if (!text && !hasPhoto && !hasDocument && !hasVoice && !hasVideoNote && !hasAudio) {
 			await next();
 			return;
 		}
@@ -147,6 +155,9 @@ export function createMessageHandler(cmdCtx: CommandContext): MiddlewareFn<AuthC
 			chatId,
 			userId: ctx.authState.userId,
 			messageLength: text?.length ?? 0,
+			hasVoice,
+			hasVideoNote,
+			hasAudio,
 		});
 
 		try {
@@ -159,7 +170,26 @@ export function createMessageHandler(cmdCtx: CommandContext): MiddlewareFn<AuthC
 			});
 
 			const session = cmdCtx.processManager.getSession(chatId);
-			const streamer = new ResponseStreamer(ctx, session?.showThinking ?? false, cmdCtx.config.autoSendImages);
+			const incomingWasVoice = hasVoice || hasVideoNote || hasAudio;
+			const voiceReplyDecision = cmdCtx.config.voice
+				? resolveVoiceReply({
+						globalMode: cmdCtx.config.voice.replyMode,
+						userMode: cmdCtx.config.users[ctx.authState.userId]?.voice?.replyMode,
+						sessionOverride: session?.voiceReplyOverride,
+						incomingWasVoice,
+					})
+				: ("text" as const);
+			const ttsVoice = cmdCtx.config.users[ctx.authState.userId]?.voice?.ttsVoice;
+			const draftHeader = incomingWasVoice ? "[Voice message received]" : "";
+			const streamer = new ResponseStreamer(
+				ctx,
+				session?.showThinking ?? false,
+				cmdCtx.config.autoSendImages,
+				cmdCtx.ttsProvider,
+				voiceReplyDecision,
+				draftHeader,
+				ttsVoice,
+			);
 			const listener = (event: RpcEvent): void => {
 				void streamer.handleEvent(event).catch(error => {
 					logger.warn("Failed streaming response event", { error: String(error) });
@@ -168,7 +198,10 @@ export function createMessageHandler(cmdCtx: CommandContext): MiddlewareFn<AuthC
 
 			client.onEvent(listener);
 			try {
-				await handleTelegramMessage(ctx, client);
+				await handleTelegramMessage(ctx, client, {
+					sttProvider: cmdCtx.sttProvider,
+					voiceConfig: cmdCtx.config.voice,
+				});
 			} finally {
 				await awaitStreamerCompletion(streamer);
 				client.offEvent?.(listener);
@@ -237,11 +270,21 @@ export async function startBot(
 	const botUsername = me.username ?? "";
 	const telegramPromptUrl = new URL("../bridge/telegram-prompt.md", import.meta.url);
 	const telegramPrompt = (await Bun.file(telegramPromptUrl).text()).trim();
+	let sttProvider: SttProvider | undefined;
+	if (config.voice?.stt) {
+		sttProvider = createSttProvider(config.voice.stt);
+	}
+	let ttsProvider: TtsProvider | undefined;
+	if (config.voice?.tts) {
+		ttsProvider = createTtsProvider(config.voice.tts);
+	}
 	const cmdCtx: CommandContext = {
 		config,
 		processManager,
 		telegramPrompt,
 		operatorActionBridge,
+		sttProvider,
+		ttsProvider,
 	};
 
 	bot.use(authMiddleware(config, tokenStore));

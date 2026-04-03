@@ -2,9 +2,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { InputFile } from "grammy";
+import type { VoiceReplyMode } from "../../config/types";
 import type { AssistantEvent, FileDelivery, RpcAssistantMessage, RpcEvent } from "../../rpc/types";
 import type { AuthContext } from "../bot/auth";
 import { summarizeToolPartialResult } from "../tool-progress";
+import type { TtsProvider } from "../voice";
 import { markdownToTelegramHtml } from "./markdown-html";
 import { splitMessage } from "./message-splitter";
 
@@ -87,6 +89,25 @@ function shouldFinalizeOnMessageEnd(message: RpcAssistantMessage | undefined): b
 	return message.stopReason !== "toolUse";
 }
 
+export type VoiceReplyDecision = "voice" | "text";
+
+export function resolveVoiceReply(opts: {
+	globalMode: VoiceReplyMode;
+	userMode?: VoiceReplyMode;
+	sessionOverride?: VoiceReplyMode;
+	incomingWasVoice: boolean;
+}): VoiceReplyDecision {
+	const effectiveMode = opts.sessionOverride ?? opts.userMode ?? opts.globalMode;
+	switch (effectiveMode) {
+		case "always":
+			return "voice";
+		case "never":
+			return "text";
+		case "mirror":
+			return opts.incomingWasVoice ? "voice" : "text";
+	}
+}
+
 export async function awaitStreamerCompletion(
 	streamer: { done: Promise<void>; cancel: () => void },
 	timeoutMs = STREAM_DONE_TIMEOUT_MS,
@@ -102,6 +123,10 @@ export class ResponseStreamer {
 	#ctx: AuthContext;
 	#showThinking: boolean;
 	#autoSendImages: boolean;
+	#ttsProvider: TtsProvider | null;
+	#voiceReplyDecision: VoiceReplyDecision;
+	#draftHeader: string;
+	#ttsVoice?: string;
 	#chatId: number | null;
 	#text = "";
 	#errorMessage = "";
@@ -117,10 +142,22 @@ export class ResponseStreamer {
 	#doneResolve: () => void;
 	#donePromise: Promise<void>;
 
-	constructor(ctx: AuthContext, showThinking: boolean, autoSendImages = true) {
+	constructor(
+		ctx: AuthContext,
+		showThinking: boolean,
+		autoSendImages = true,
+		ttsProvider?: TtsProvider | null,
+		voiceReplyDecision?: VoiceReplyDecision,
+		draftHeader?: string,
+		ttsVoice?: string,
+	) {
 		this.#ctx = ctx;
 		this.#showThinking = showThinking;
 		this.#autoSendImages = autoSendImages;
+		this.#ttsProvider = ttsProvider ?? null;
+		this.#voiceReplyDecision = voiceReplyDecision ?? "text";
+		this.#draftHeader = draftHeader ?? "";
+		this.#ttsVoice = ttsVoice;
 		this.#chatId = this.#resolveChatId();
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#donePromise = promise;
@@ -304,6 +341,9 @@ export class ResponseStreamer {
 
 	#buildDraftText(): string {
 		const parts: string[] = [];
+		if (this.#draftHeader) {
+			parts.push(this.#draftHeader);
+		}
 		if (this.#toolStatus) {
 			parts.push(this.#toolStatus);
 		}
@@ -428,10 +468,21 @@ export class ResponseStreamer {
 			if (shouldFlushPendingDraft) {
 				await this.#flushDraft();
 			}
-			const html = markdownToTelegramHtml(this.#buildFinalMarkdown());
+			const finalMarkdown = this.#buildFinalMarkdown();
+			const html = markdownToTelegramHtml(finalMarkdown);
 			const messages = splitMessage(html || "Assistant completed without a text response.");
 			for (const chunk of messages) {
 				await this.#ctx.reply(chunk, { parse_mode: "HTML" });
+			}
+
+			if (this.#voiceReplyDecision === "voice" && this.#ttsProvider && this.#text.trim()) {
+				try {
+					const ttsResult = await this.#ttsProvider.synthesize(this.#text.trim(), { voice: this.#ttsVoice });
+					const voiceFile = new InputFile(ttsResult.audio, "voice.ogg");
+					await this.#ctx.replyWithVoice(voiceFile);
+				} catch (err) {
+					logger.warn("TTS synthesis failed, falling back to text-only", { error: String(err) });
+				}
 			}
 		} finally {
 			this.#doneResolve();

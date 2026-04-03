@@ -1,0 +1,94 @@
+#+TITLE: TTS voice reply in response streamer
+#+STATE: DONE
+#+SESSION_ID: 14ac0d19f5a01fa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-59-02-742Z_14ac0d19f5a01fa2.jsonl]]
+#+CUSTOM_ID: FEAT-258-tts-voice-reply-in-response-streamer
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: bridge
+#+DEPENDS: FEAT-256-tts-provider-abstraction-and-implementat
+
+NOTE [2026-04-03]: Added resolveVoiceReply, extended ResponseStreamer with TTS synthesis in #finalize(), draftHeader support, per-user voice override. 11 tests pass.
+
+* Initial Message
+
+Telegram bridge: How would you enable voice? Spell already has STT btw. But be broad. Look up online. Tell me what makes sense. Thanks!!!!!!
+
+* Scope
+Extend the =ResponseStreamer= in =rpc-to-telegram.ts= to optionally send the agent's final text response as a voice message via Telegram's =sendVoice=, in addition to (or instead of) the text reply.
+
+* Design
+
+** Reply Mode Resolution
+Resolve the effective reply mode for the current message. Inputs:
+1. Global =voice.replyMode= from config (default: ="mirror"=)
+2. Per-user =voice.replyMode= override from config
+3. Per-session =/voice= toggle override (stored in =ChatSession=)
+4. Whether the incoming message was a voice/audio/video_note (for "mirror" mode)
+
+Resolution order: session toggle > per-user config > global config.
+
+#+begin_src typescript
+type VoiceReplyDecision = "voice" | "text";
+
+function resolveVoiceReply(opts: {
+  globalMode: VoiceReplyMode;
+  userMode?: VoiceReplyMode;
+  sessionOverride?: VoiceReplyMode;
+  incomingWasVoice: boolean;
+}): VoiceReplyDecision;
+#+end_src
+
+** Integration into ResponseStreamer
+
+The =ResponseStreamer= needs two new inputs:
+1. =ttsProvider: TtsProvider | null= -- null when TTS not configured
+2. =voiceReplyDecision: VoiceReplyDecision= -- resolved before streamer creation
+
+In =#finalize()=:
+1. If =voiceReplyDecision === "text"= or =ttsProvider === null=: current behavior (text only)
+2. If =voiceReplyDecision === "voice"=:
+   a. Synthesize the final text via =ttsProvider.synthesize(text, { voice })=
+   b. Send voice message: =ctx.replyWithVoice(new InputFile(audioBuffer, "voice.ogg"))=
+   c. Still send the text reply as well (voice + text, so user has searchable text)
+   d. If TTS fails: log error, fall back to text-only reply (never lose the response)
+
+** Voice ID Resolution
+Per-user =ttsVoice= overrides the global =tts.voice=. The =TtsProvider.synthesize()= accepts an optional =voice= override.
+
+** Draft Header for Voice Input
+When the incoming message was voice, the draft should start with a header line like:
+#+begin_example
+[Voice] <transcription text>
+
+<agent response streaming...>
+#+end_example
+
+This is set by the caller (in =bot.ts=) by passing a =draftHeader= string to =ResponseStreamer=.
+
+* Files
+- =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts= -- extend =ResponseStreamer= constructor, modify =#finalize()=, add voice reply logic
+- =packages/spell-server/src/telegram/bot/bot.ts= -- resolve voice reply decision, pass to =ResponseStreamer=
+
+* Sub-outline
+1. Write =resolveVoiceReply()= pure function
+2. Test =resolveVoiceReply()= for all mode combinations (mirror+voice, mirror+text, always, never, session override)
+3. Extend =ResponseStreamer= constructor to accept =TtsProvider= and =VoiceReplyDecision=
+4. Modify =#finalize()= to synthesize and send voice message
+5. Add =draftHeader= support for voice transcription echo
+6. Wire in =bot.ts=: determine if incoming was voice, resolve reply mode, pass to streamer
+7. Test finalization with mock TTS provider
+
+* Edge Cases
+- TTS synthesis fails: fall back to text-only, log error
+- Empty agent response: skip TTS (nothing to synthesize)
+- Very long response: truncate to TTS provider's limit before synthesis, still send full text
+- =ttsProvider= is null (not configured): always text reply, no error
+
+* Acceptance
+- Voice replies sent when reply mode resolves to "voice"
+- Text reply always sent alongside voice (dual delivery)
+- TTS failure falls back gracefully to text-only
+- =resolveVoiceReply()= correctly handles all mode×input combinations
+- Draft shows =[Voice] transcription= header when incoming was voice
+- =bun check:ts= passes

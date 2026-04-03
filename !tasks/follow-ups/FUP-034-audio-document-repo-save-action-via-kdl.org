@@ -1,0 +1,115 @@
+#+TITLE: Audio document repo-save action via KDL
+#+STATE: ITEM
+#+SESSION_ID: 14ac0d19f5a01fa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-59-02-742Z_14ac0d19f5a01fa2.jsonl]]
+#+CUSTOM_ID: FUP-034-audio-document-repo-save-action-via-kdl
+#+EFFORT: 4h
+#+PRIORITY: #C
+#+LAYER: bridge+manifest
+
+* Initial Message
+
+Telegram bridge: How would you enable voice? Spell already has STT btw. But be broad. Look up online. Tell me what makes sense. Thanks!!!!!!
+
+* Scope
+When an audio document (not a voice message -- these are music files, podcast clips, recordings sent as attachments) arrives in Telegram, trigger a configurable action that can save the file to the project repo or invoke deeper processing. This bridges the Telegram channel layer with the autonomy manifest's action system.
+
+* Motivation
+Voice messages are ephemeral input (transcribe and discard). But audio *documents* (MP3 files, WAV recordings, podcast clips) may be artifacts the user wants to keep. Rather than hardcoding "save to disk", this should be a KDL-configured action the project defines, just like goals and setups.
+
+* KDL Design
+
+** Channel-Side Configuration (=channels.kdl=)
+The =voice {}= block gets an =on-audio-document= child that references an action defined in =autonomy.kdl=:
+
+#+begin_src kdl
+telegram {
+  voice {
+    stt-provider "deepgram"
+    stt-api-key "env(DEEPGRAM_API_KEY)"
+
+    // Triggered when an audio document (not voice message) is received
+    on-audio-document {
+      action "telegram.audio-received"
+      // Optional: also transcribe the audio and include transcription in action context
+      transcribe #true
+    }
+  }
+}
+#+end_src
+
+** Action-Side Configuration (=autonomy.kdl=)
+The action descriptor defines what parameters are available:
+
+#+begin_src kdl
+action-descriptor "telegram.audio-received" source="project" {
+  param "filePath" type="string"      // temp path where audio is saved
+  param "fileName" type="string"      // original filename
+  param "duration" type="number"      // seconds
+  param "mimeType" type="string"      // audio/mpeg, audio/ogg, etc.
+  param "fileSize" type="number"      // bytes
+  param "senderId" type="string"      // Telegram user ID
+  prompt-slot "context" required=#true // includes transcription if enabled
+}
+#+end_src
+
+** Action Prompt Template
+The project provides a prompt file that tells the agent what to do:
+
+#+begin_example
+# Audio Document Received
+
+An audio file was sent to the Telegram channel.
+
+File: {{filePath}}
+Name: {{fileName}}
+Duration: {{duration}}s
+Format: {{mimeType}}
+
+{{#if transcription}}
+## Transcription
+{{transcription}}
+{{/if}}
+
+Save this file to the project's `assets/audio/` directory with an appropriate name.
+If a transcription is available, create a companion `.txt` file with the transcription.
+#+end_example
+
+* Implementation Architecture
+
+** Flow
+1. Audio document arrives in Telegram (=message.audio= or =message.document= with audio MIME)
+2. =telegram-to-rpc.ts= detects it's an audio document (not voice message)
+3. Check if =on-audio-document= is configured in voice config
+4. If not configured: fall back to current behavior (treat as text document or ignore)
+5. If configured:
+   a. Download the audio file to =uploadDir=
+   b. Optionally transcribe via STT (if =transcribe= is set)
+   c. Look up the action descriptor in the manifest's action registry
+   d. Invoke the action via the RPC client with params (filePath, fileName, duration, mimeType, fileSize, senderId) and prompt context (transcription if available)
+
+** Key Integration Points
+- =packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts= -- detect audio documents, trigger action flow
+- =packages/spell-server/src/config/channels-parser.ts= -- parse =on-audio-document= block
+- =packages/spell-server/src/config/types.ts= -- =OnAudioDocumentConfig= type
+- =packages/spell-server/src/telegram/service.ts= -- wire action registry access
+- Potentially: =packages/spell-server/src/rpc/rpc-client.ts= -- may need an =executeAction()= method or reuse existing =prompt()= with action params
+
+** Distinction: Voice Message vs Audio Document
+- *Voice message* (=message.voice=): recorded via Telegram's microphone button, always OGG Opus, short duration, ephemeral input → always transcribe, never trigger action
+- *Audio document* (=message.audio= or =message.document= with audio/* MIME): an attached file, may be long, is an artifact → optionally transcribe, trigger configured action
+- The detection is based on Telegram's own message field (=voice= vs =audio= vs =document=)
+
+* Implementation Notes
+- The action system already supports =action-descriptor= blocks in =autonomy.kdl= and registered actions via the registry
+- The main challenge is bridging from the channel layer (Telegram) to the manifest layer (actions) -- these are currently separate concerns
+- One approach: the action is triggered as a lightweight goal execution (reuse goal infrastructure with an ephemeral goal)
+- Alternative: add a dedicated "channel action" concept that's simpler than a full goal but uses the action registry for validation
+
+* Acceptance Criteria (for implementation, not this FUP)
+- Audio documents trigger the configured action
+- Action receives correct params (filePath, fileName, duration, mimeType, fileSize, senderId)
+- Transcription is included in context when =transcribe= is enabled
+- Missing action config falls back to current behavior (no crash)
+- Action descriptor validation happens at config load time (fail fast on bad action reference)
+- User receives confirmation that the audio is being processed

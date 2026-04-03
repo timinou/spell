@@ -1,7 +1,17 @@
 import * as path from "node:path";
 import { type Node, parse } from "@bgotink/kdl";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import type { ChannelsConfig, TelegramUserConfig } from "./types";
+import type {
+	ChannelsConfig,
+	SttConfig,
+	SttProvider,
+	TelegramUserConfig,
+	TtsConfig,
+	TtsProvider,
+	UserVoiceConfig,
+	VoiceConfig,
+	VoiceReplyMode,
+} from "./types";
 
 const DEFAULT_UPLOAD_DIR = "/tmp/spell-telegram-uploads";
 const DEFAULT_IDLE_TIMEOUT = 300; // 5 minutes
@@ -26,6 +36,7 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 	const projects: Record<string, string> = {};
 	const users: Record<string, TelegramUserConfig> = {};
 	let autoSendImages = true;
+	let voice: VoiceConfig | undefined;
 
 	for (const child of telegramNode.children?.nodes ?? []) {
 		const name = child.getName();
@@ -123,6 +134,7 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 
 		if (name === "user") {
 			parseUserNode(child, users);
+			continue;
 		}
 		if (name === "auto-send-images") {
 			const value = child.getArgument(0);
@@ -130,6 +142,10 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 				throw new Error("channels.telegram.auto-send-images must be a boolean");
 			}
 			autoSendImages = value;
+			continue;
+		}
+		if (name === "voice") {
+			voice = parseVoiceNode(child, "channels.telegram.voice");
 		}
 	}
 
@@ -169,6 +185,7 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 			projects,
 			users,
 			autoSendImages,
+			voice,
 		},
 	};
 }
@@ -218,6 +235,7 @@ function parseUserNode(node: Node, users: Record<string, TelegramUserConfig>): v
 	let defaultMode: string | undefined;
 	let idleTimeout: number | null | undefined;
 	let userProjects: string[] | undefined;
+	let userVoice: UserVoiceConfig | undefined;
 
 	for (const child of node.children?.nodes ?? []) {
 		const name = child.getName();
@@ -258,6 +276,10 @@ function parseUserNode(node: Node, users: Record<string, TelegramUserConfig>): v
 				throw new Error(`channels.telegram.user[${userId}].projects must be strings`);
 			}
 			userProjects = values as string[];
+			continue;
+		}
+		if (name === "voice") {
+			userVoice = parseUserVoiceNode(child, `channels.telegram.user[${userId}].voice`);
 		}
 	}
 
@@ -266,5 +288,154 @@ function parseUserNode(node: Node, users: Record<string, TelegramUserConfig>): v
 		defaultMode: defaultMode ?? modes[0],
 		idleTimeout,
 		projects: userProjects,
+		voice: userVoice,
 	};
+}
+
+const VALID_STT_PROVIDERS = new Set(["deepgram", "openai"]);
+const VALID_TTS_PROVIDERS = new Set(["elevenlabs", "deepgram"]);
+const VALID_REPLY_MODES = new Set(["mirror", "always", "never"]);
+
+/**
+ * Resolve env() references in string values.
+ * Supports: env(NAME) and env(NAME, default=fallback)
+ */
+export function resolveEnvValue(raw: string): string {
+	const match = raw.match(/^env\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:,\s*default\s*=\s*(.+?))?\s*\)$/);
+	if (!match) {
+		return raw;
+	}
+	const envName = match[1]!;
+	const defaultValue = match[2];
+	const envValue = process.env[envName];
+	if (envValue !== undefined && envValue !== "") {
+		return envValue;
+	}
+	if (defaultValue !== undefined) {
+		return defaultValue;
+	}
+	throw new Error(`Environment variable ${envName} is not set and no default provided`);
+}
+
+function requireString(node: Node, field: string, context: string): string {
+	const value = node.getArgument(0);
+	if (typeof value !== "string" || value.length === 0) {
+		throw new Error(`${context}.${field} must have a non-empty string argument`);
+	}
+	return value;
+}
+
+function parseVoiceNode(node: Node, context: string): VoiceConfig {
+	let sttProvider: SttProvider | undefined;
+	let sttApiKey: string | undefined;
+	let sttModel: string | undefined;
+	let sttLanguage = "en";
+	let ttsProvider: TtsProvider | undefined;
+	let ttsApiKey: string | undefined;
+	let ttsModel: string | undefined;
+	let ttsVoice: string | undefined;
+	let replyMode: VoiceReplyMode = "mirror";
+
+	for (const child of node.children?.nodes ?? []) {
+		const name = child.getName();
+
+		if (name === "stt-provider") {
+			const value = requireString(child, "stt-provider", context);
+			if (!VALID_STT_PROVIDERS.has(value)) {
+				throw new Error(`${context}.stt-provider must be one of: ${[...VALID_STT_PROVIDERS].join(", ")}`);
+			}
+			sttProvider = value as SttProvider;
+			continue;
+		}
+		if (name === "stt-api-key") {
+			sttApiKey = resolveEnvValue(requireString(child, "stt-api-key", context));
+			continue;
+		}
+		if (name === "stt-model") {
+			sttModel = requireString(child, "stt-model", context);
+			continue;
+		}
+		if (name === "stt-language") {
+			sttLanguage = requireString(child, "stt-language", context);
+			continue;
+		}
+		if (name === "tts-provider") {
+			const value = requireString(child, "tts-provider", context);
+			if (!VALID_TTS_PROVIDERS.has(value)) {
+				throw new Error(`${context}.tts-provider must be one of: ${[...VALID_TTS_PROVIDERS].join(", ")}`);
+			}
+			ttsProvider = value as TtsProvider;
+			continue;
+		}
+		if (name === "tts-api-key") {
+			ttsApiKey = resolveEnvValue(requireString(child, "tts-api-key", context));
+			continue;
+		}
+		if (name === "tts-model") {
+			ttsModel = requireString(child, "tts-model", context);
+			continue;
+		}
+		if (name === "tts-voice") {
+			ttsVoice = requireString(child, "tts-voice", context);
+			continue;
+		}
+		if (name === "reply-mode") {
+			const value = requireString(child, "reply-mode", context);
+			if (!VALID_REPLY_MODES.has(value)) {
+				throw new Error(`${context}.reply-mode must be one of: ${[...VALID_REPLY_MODES].join(", ")}`);
+			}
+			replyMode = value as VoiceReplyMode;
+		}
+	}
+
+	// Validate stt-provider and stt-api-key are paired
+	if (sttProvider && !sttApiKey) {
+		throw new Error(`${context}: stt-api-key is required when stt-provider is set`);
+	}
+	if (sttApiKey && !sttProvider) {
+		throw new Error(`${context}: stt-provider is required when stt-api-key is set`);
+	}
+
+	// Validate tts-provider and tts-api-key are paired
+	if (ttsProvider && !ttsApiKey) {
+		throw new Error(`${context}: tts-api-key is required when tts-provider is set`);
+	}
+	if (ttsApiKey && !ttsProvider) {
+		throw new Error(`${context}: tts-provider is required when tts-api-key is set`);
+	}
+
+	let stt: SttConfig | undefined;
+	if (sttProvider && sttApiKey) {
+		stt = { provider: sttProvider, apiKey: sttApiKey, model: sttModel, language: sttLanguage };
+	}
+
+	let tts: TtsConfig | undefined;
+	if (ttsProvider && ttsApiKey) {
+		tts = { provider: ttsProvider, apiKey: ttsApiKey, model: ttsModel, voice: ttsVoice };
+	}
+
+	return { stt, tts, replyMode };
+}
+
+function parseUserVoiceNode(node: Node, context: string): UserVoiceConfig {
+	let replyMode: VoiceReplyMode | undefined;
+	let ttsVoice: string | undefined;
+
+	for (const child of node.children?.nodes ?? []) {
+		const name = child.getName();
+
+		if (name === "reply-mode") {
+			const value = requireString(child, "reply-mode", context);
+			if (!VALID_REPLY_MODES.has(value)) {
+				throw new Error(`${context}.reply-mode must be one of: ${[...VALID_REPLY_MODES].join(", ")}`);
+			}
+			replyMode = value as VoiceReplyMode;
+			continue;
+		}
+		if (name === "tts-voice") {
+			ttsVoice = requireString(child, "tts-voice", context);
+		}
+	}
+
+	return { replyMode, ttsVoice };
 }

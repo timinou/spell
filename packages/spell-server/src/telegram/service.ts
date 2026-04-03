@@ -9,6 +9,7 @@ import { type CommandContext, registerCommands } from "./commands";
 import { startLogViewer } from "./log-viewer/server";
 import { ProcessManager } from "./process-manager";
 import type { TelegramBridgeConfig } from "./types";
+import { createSttProvider, createTtsProvider, type SttProvider, type TtsProvider } from "./voice";
 
 export interface TelegramBotServiceOptions {
 	config: TelegramBridgeConfig;
@@ -71,12 +72,22 @@ export class TelegramBotService {
 			const botUsername = me.username ?? "";
 			const telegramPromptUrl = new URL("./bridge/telegram-prompt.md", import.meta.url);
 			const telegramPrompt = (await Bun.file(telegramPromptUrl).text()).trim();
+			let sttProvider: SttProvider | undefined;
+			if (this.#config.voice?.stt) {
+				sttProvider = createSttProvider(this.#config.voice.stt);
+			}
+			let ttsProvider: TtsProvider | undefined;
+			if (this.#config.voice?.tts) {
+				ttsProvider = createTtsProvider(this.#config.voice.tts);
+			}
 
 			const cmdCtx: CommandContext = {
 				config: this.#config,
 				processManager: this.#processManager,
 				telegramPrompt,
 				operatorActionBridge: this.#operatorActionBridge,
+				sttProvider,
+				ttsProvider,
 			};
 
 			bot.use(authMiddleware(this.#config, this.#tokenStore));

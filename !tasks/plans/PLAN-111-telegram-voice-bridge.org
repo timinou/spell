@@ -1,0 +1,132 @@
+#+TITLE: Telegram Voice Bridge
+#+STATE: DONE
+#+SESSION_ID: 14ac0d19f5a01fa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-59-02-742Z_14ac0d19f5a01fa2.jsonl]]
+#+CUSTOM_ID: PLAN-111-telegram-voice-bridge
+
+NOTE [2026-04-03]: All 6 execution items completed, 149 tests pass, no regressions, no new type errors.
+
+
+* Initial Message
+
+Telegram bridge: How would you enable voice? Spell already has STT btw. But be broad. Look up online. Tell me what makes sense. Thanks!!!!!!
+
+* Context
+The Telegram bridge in =spell-server= currently handles text, photos, and text documents. Voice messages, audio files, and video notes are silently ignored. This plan adds bidirectional voice support:
+
+- *Inbound*: Voice messages, video notes, and audio documents are downloaded, transcribed via configurable STT (Deepgram or OpenAI Whisper API), and passed as text to the agent.
+- *Outbound*: Agent responses can optionally be synthesized to voice via configurable TTS (ElevenLabs or Deepgram Aura) and sent as Telegram voice messages alongside text.
+- *Configuration*: A new =voice {}= KDL block in =channels.kdl= with global defaults and per-user overrides. API keys support =env()= resolution.
+- *Session control*: A =/voice= command lets users toggle reply mode per-session.
+
+** Key Design Decisions
+1. *Provider abstraction*: Both STT and TTS use a provider interface + factory pattern. Adding new providers later is a single-file addition.
+2. *No ffmpeg for voice/audio*: STT providers natively accept OGG Opus, MP3, WAV. ffmpeg is only needed for video note audio extraction (MP4 → OGG).
+3. *Dual delivery*: Voice replies always include a text message too (searchable, accessible).
+4. *Transparent to agent*: Transcription is passed as plain text. The =[Voice]= prefix appears only in the Telegram draft preview, not in the agent prompt.
+5. *Graceful degradation*: Missing STT config → friendly error reply. Missing TTS config → text-only replies. Missing ffmpeg → video notes can't be transcribed (but voice messages still work).
+6. *Audio document actions deferred*: Saving audio documents to the repo via KDL-defined actions is a follow-up ([[id:FUP-034-audio-document-repo-save-action-via-kdl]]). This plan handles transcription of audio documents but not repo-save actions.
+
+** Architecture
+New code lives in =packages/spell-server/src/telegram/voice/=:
+- =stt.ts=, =tts.ts= -- interfaces + factories
+- =providers/deepgram-stt.ts=, =providers/openai-stt.ts= -- STT implementations
+- =providers/elevenlabs-tts.ts=, =providers/deepgram-tts.ts= -- TTS implementations
+- =audio-extract.ts= -- ffmpeg video note extraction
+
+Existing files modified:
+- =config/types.ts= -- voice config types
+- =config/channels-parser.ts= -- voice block parsing
+- =bridge/telegram-to-rpc.ts= -- incoming voice/audio/video_note handling
+- =bridge/rpc-to-telegram.ts= -- voice reply in finalization
+- =bot/bot.ts= -- routing, =/voice= command registration
+- =rpc/bridge-types.ts= -- session voice state
+- =service.ts= -- provider instantiation at startup
+
+* Verification
+** Type check
+=bun check:ts= from repo root -- must pass.
+
+** Unit tests
+Run: =bun test packages/spell-server/test/= (scoped to new/modified test files).
+
+Tests to verify:
+1. KDL parser: valid voice config, env() resolution, per-user overrides, missing config cases, invalid config errors
+2. STT providers: Deepgram and OpenAI Whisper request/response mocking
+3. TTS providers: ElevenLabs and Deepgram Aura request/response mocking
+4. Voice transcription flow: mocked Telegram file download → mocked STT → text output
+5. Voice reply mode resolution: all mode×input combinations
+6. =/voice= command: toggle cycling, explicit mode setting
+
+** Manual verification
+1. Send a voice message to the bot → bot transcribes and responds with text
+2. Send a video note → bot extracts audio, transcribes, responds
+3. =/voice on= → bot responds with voice + text
+4. =/voice off= → bot responds with text only
+5. Remove STT config → voice message gets friendly error reply
+
+* Execution Manifest
+
+** Wave 1: Foundation (config + types)
+- [[id:FEAT-254-voice-kdl-config-schema-parser-and-types]] (2h, config layer)
+
+** Wave 2: Provider abstractions (parallel)
+- [[id:FEAT-255-stt-provider-abstraction-and-implementat]] (3h, depends on FEAT-254)
+- [[id:FEAT-256-tts-provider-abstraction-and-implementat]] (3h, depends on FEAT-254)
+- [[id:FEAT-259-voice-command-and-session-voice-state]] (1h, depends on FEAT-254)
+
+** Wave 3: Integration (parallel after their provider dep)
+- [[id:FEAT-257-incoming-voice-audio-and-video-note-hand]] (3h, depends on FEAT-255)
+- [[id:FEAT-258-tts-voice-reply-in-response-streamer]] (2h, depends on FEAT-256)
+
+** Deferred
+- [[id:FUP-034-audio-document-repo-save-action-via-kdl]] (4h, follow-up, not in this plan's execution)
+
+Total estimated effort: 14h across 3 waves. Waves 2 and 3 each contain parallelizable items.
+
+** Completion [2026-04-03]
+
+*** Verification
+
+- =bun check:ts= from repo root: PASS (no new type errors; pre-existing errors in approvals.ts, tool-progress.ts, logger.ts unchanged)
+- =bun fmt:ts=: PASS (all files formatted)
+- Test results (149 pass, 0 fail across 11 test files):
+  - =packages/spell-server/test/config/voice-config-parser.test.ts=: 18 pass (KDL parsing, env() resolution, validation errors, per-user overrides)
+  - =packages/spell-server/test/telegram/voice-stt.test.ts=: 8 pass (Deepgram/OpenAI request shaping, HTTP errors, factory, empty transcription)
+  - =packages/spell-server/test/telegram/voice-tts.test.ts=: 7 pass (ElevenLabs/Deepgram request shaping, voice override, truncation, HTTP errors, empty text rejection)
+  - =packages/spell-server/test/telegram/voice-command.test.ts=: 6 pass (toggle cycling, on/off/mirror, status, no-session, /clear reset)
+  - =packages/spell-server/test/telegram/voice-incoming.test.ts=: 6 pass (voice transcription, video note extraction, audio document, missing STT, empty transcription with caption)
+  - =packages/spell-server/test/telegram/voice-reply.test.ts=: 11 pass (resolveVoiceReply all mode combinations, TTS finalization, graceful degradation, draftHeader)
+  - Existing tests (93 pass, 0 fail): bridge.test.ts, bot.test.ts, service.test.ts, commands.test.ts, channels-parser.test.ts all pass without regression
+
+*** Artifacts
+
+New files created:
+- =packages/spell-server/src/config/types.ts= -- VoiceConfig, SttConfig, TtsConfig, UserVoiceConfig, VoiceReplyMode types
+- =packages/spell-server/src/telegram/voice/stt.ts= -- SttProvider interface, SttResult, createSttProvider factory
+- =packages/spell-server/src/telegram/voice/tts.ts= -- TtsProvider interface, TtsResult, createTtsProvider factory
+- =packages/spell-server/src/telegram/voice/providers/deepgram-stt.ts= -- Deepgram STT implementation
+- =packages/spell-server/src/telegram/voice/providers/openai-stt.ts= -- OpenAI Whisper STT implementation
+- =packages/spell-server/src/telegram/voice/providers/elevenlabs-tts.ts= -- ElevenLabs TTS implementation
+- =packages/spell-server/src/telegram/voice/providers/deepgram-tts.ts= -- Deepgram Aura TTS implementation
+- =packages/spell-server/src/telegram/voice/audio-extract.ts= -- ffmpeg video note audio extraction
+- =packages/spell-server/src/telegram/voice/index.ts= -- barrel re-exports
+- =packages/spell-server/src/telegram/commands/voice.ts= -- /voice command handler
+- 6 test files covering all new functionality
+
+Modified files:
+- =packages/spell-server/src/config/types.ts= -- added voice config type interfaces
+- =packages/spell-server/src/config/channels-parser.ts= -- parseVoiceNode, parseUserVoiceNode, resolveEnvValue
+- =packages/spell-server/src/rpc/bridge-types.ts= -- voiceReplyOverride on ChatSession
+- =packages/spell-server/src/telegram/bot/bot.ts= -- voice command routing, voice message detection, TTS-aware ResponseStreamer creation
+- =packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts= -- voice/video_note/audio message handling, collectVoiceTranscription
+- =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts= -- resolveVoiceReply, ResponseStreamer TTS synthesis in finalize, draftHeader
+- =packages/spell-server/src/telegram/service.ts= -- STT and TTS provider instantiation at startup
+- =packages/spell-server/src/telegram/commands/index.ts= -- sttProvider/ttsProvider in CommandContext, /voice in COMMANDS
+- =packages/spell-server/src/telegram/commands/session-commands.ts= -- clear voiceReplyOverride on /clear
+
+*** Deviations
+
+- [[id:FUP-034-audio-document-repo-save-action-via-kdl]] was deferred as planned (audio document repo-save actions are not in this plan's scope).
+- KDL schema reference documentation (=packages/spell-server/docs/kdl-schema-reference.md=) was not created as no such file currently exists in the repo. The KDL syntax is documented in the FEAT-254 org item.
+- Manual verification (sending actual voice messages to a running bot) was not performed as no live bot instance was available. All behavior is covered by unit tests with mocked dependencies.

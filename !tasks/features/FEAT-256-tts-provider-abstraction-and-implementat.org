@@ -1,0 +1,93 @@
+#+TITLE: TTS provider abstraction and implementations
+#+STATE: DONE
+#+SESSION_ID: 14ac0d19f5a01fa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-59-02-742Z_14ac0d19f5a01fa2.jsonl]]
+#+CUSTOM_ID: FEAT-256-tts-provider-abstraction-and-implementat
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: voice
+#+DEPENDS: FEAT-254-voice-kdl-config-schema-parser-and-types
+
+NOTE [2026-04-03]: Implemented TtsProvider interface, createTtsProvider factory, ElevenLabsTtsProvider and DeepgramTtsProvider with text truncation and Opus output. 7 tests pass.
+
+* Initial Message
+
+Telegram bridge: How would you enable voice? Spell already has STT btw. But be broad. Look up online. Tell me what makes sense. Thanks!!!!!!
+
+* Scope
+Create a TTS provider interface and two implementations: ElevenLabs and Deepgram Aura. These accept text and return audio bytes suitable for Telegram's =sendVoice= (OGG Opus preferred, MP3 fallback).
+
+* Design
+
+** Interface
+
+#+begin_src typescript
+interface TtsResult {
+  audio: Buffer;
+  mimeType: string;  // "audio/ogg" or "audio/mpeg"
+  duration?: number; // seconds, if known
+}
+
+interface TtsProvider {
+  /** Synthesize text to audio */
+  synthesize(text: string, options?: {
+    voice?: string;  // override default voice
+  }): Promise<TtsResult>;
+}
+#+end_src
+
+** Factory
+
+#+begin_src typescript
+function createTtsProvider(config: TtsConfig): TtsProvider;
+#+end_src
+
+** ElevenLabs Implementation
+- HTTP POST to =https://api.elevenlabs.io/v1/text-to-speech/{voice_id}=
+- Headers: =xi-api-key: <api-key>=, =Content-Type: application/json=, =Accept: audio/mpeg=
+- Body: ={"text": "...", "model_id": "<model>", "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}=
+- Response: raw audio bytes (MP3 by default)
+- Voice ID resolution: =config.voice= is the voice ID string (e.g. ="rachel"=, ="21m00Tcm4TlvDq8ikWAM"=)
+- For OGG output: set =output_format=opus_48000= query parameter (ElevenLabs supports direct Opus)
+
+** Deepgram Aura Implementation
+- HTTP POST to =https://api.deepgram.com/v1/speak=
+- Headers: =Authorization: Token <api-key>=, =Content-Type: application/json=
+- Query params: =model= (e.g. =aura-asteria-en=)
+- Body: ={"text": "..."}=
+- Response: raw audio bytes
+- Default output is MP3; for OGG Opus, add =encoding=opus= and =container=ogg= query params
+
+** Audio Format Strategy
+- Telegram's =sendVoice= prefers OGG Opus (displays as voice bubble)
+- Both ElevenLabs and Deepgram Aura support direct Opus output
+- Request OGG Opus from providers directly -- no ffmpeg conversion needed
+- Fallback: if provider returns MP3, send as-is (Telegram accepts it but may display differently)
+
+** Telegram Message Length Constraint
+- Long agent responses should be truncated before TTS (providers have text limits)
+- ElevenLabs: ~5000 chars per request
+- Deepgram Aura: ~2000 chars per request
+- Truncate with ellipsis if needed, log a warning
+
+* Files
+- =packages/spell-server/src/telegram/voice/tts.ts= -- =TtsProvider= interface, =TtsResult= type, =createTtsProvider()= factory
+- =packages/spell-server/src/telegram/voice/providers/elevenlabs-tts.ts= -- ElevenLabs implementation
+- =packages/spell-server/src/telegram/voice/providers/deepgram-tts.ts= -- Deepgram Aura implementation
+
+* Sub-outline
+1. Define =TtsProvider= interface and =TtsResult= type
+2. Write tests for ElevenLabs TTS (mock HTTP, verify request shape, check audio output)
+3. Implement ElevenLabs TTS provider
+4. Write tests for Deepgram Aura TTS (mock HTTP, verify request shape)
+5. Implement Deepgram Aura TTS provider
+6. Write =createTtsProvider()= factory
+7. Test text truncation for long inputs
+
+* Acceptance
+- Both providers synthesize from mock text input and return =TtsResult= with audio bytes
+- Request format matches each provider's API spec
+- OGG Opus is requested where possible
+- Text exceeding provider limits is truncated with warning
+- HTTP errors produce descriptive wrapped errors
+- =bun check:ts= passes
