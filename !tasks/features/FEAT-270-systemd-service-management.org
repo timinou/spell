@@ -1,0 +1,56 @@
+#+TITLE: Systemd Service Management
+#+STATE: DONE
+#+SESSION_ID: 14ac2c5146bb8cbd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T12-12-59-484Z_14ac1e06b73b8ca4/10-CreateFeat5.jsonl]]
+#+CUSTOM_ID: FEAT-270-systemd-service-management
+#+LAYER: infrastructure
+#+PRIORITY: A
+#+EFFORT: 4h
+#+DEPENDS: FEAT-267-ssh-and-rsync-operations-module
+
+NOTE [2026-04-03]: Completed: Systemd unit generator with full hardening, lifecycle commands, health check. Tests verify all security fields.
+
+* Scope
+- IN: Generate systemd template unit (spell@.service), install unit on remote via SSH, start/stop/restart/status commands, health check via HTTP API, multi-project support via template instances
+- OUT: NixOS module (separate item), Docker deployment, process managers other than systemd
+
+* Tests
+- File: packages/spell-deploy/test/service/systemd.test.ts
+- Scenarios:
+  1. Generate template unit file with correct hardening options
+  2. Unit references correct ExecStart path (/srv/spell/.spell-bundle/spell)
+  3. ReadWritePaths scoped to project data dirs
+  4. EnvironmentFile points to project .env
+  5. Install unit via SSH (correct scp + systemctl commands)
+  6. Health check via HTTP (mock response, verify Basic auth)
+  7. Service lifecycle commands (start/stop/restart/enable)
+
+* Implementation
+1. Define service types (FEAT-270-systemd-service-management::define-types)
+   - File: packages/spell-deploy/src/service/types.ts
+2. Write systemd tests (FEAT-270-systemd-service-management::systemd-tests, depends on define-types)
+   - File: packages/spell-deploy/test/service/systemd.test.ts
+3. Implement unit generator (FEAT-270-systemd-service-management::implement-generator, depends on systemd-tests)
+   - File: packages/spell-deploy/src/service/systemd.ts
+   - Template unit: spell@.service with %i substitution
+   - Security hardening matching spellcasting patterns
+4. Implement service lifecycle (FEAT-270-systemd-service-management::implement-lifecycle, depends on implement-generator)
+   - File: packages/spell-deploy/src/service/lifecycle.ts
+   - SSH commands for systemctl enable/start/stop/restart/status
+5. Implement health check (FEAT-270-systemd-service-management::implement-health, depends on implement-lifecycle)
+   - File: packages/spell-deploy/src/service/health.ts
+   - HTTP request to remote /api/goals with Basic auth
+   - Retry with backoff after restart
+
+* Edge Cases
+- Service user doesn't exist (init command creates it)
+- systemd not available (error with message)
+- Health check timeout after restart
+- Multiple instances on same port (detect conflict)
+- Service already exists (update vs create)
+
+* Acceptance Criteria
+- Generated unit matches spellcasting hardening standards
+- Unit installs correctly via SSH
+- Health check confirms service is running after restart
+- Multi-project: spell@growth and spell@another-project both work

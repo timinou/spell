@@ -1,0 +1,59 @@
+#+TITLE: Compiled Binary Bundle Builder
+#+STATE: DONE
+#+SESSION_ID: 14ac2c5146bb8cbb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T12-12-59-484Z_14ac1e06b73b8ca4/8-CreateFeat3.jsonl]]
+#+CUSTOM_ID: FEAT-268-compiled-binary-bundle-builder
+#+PRIORITY: A
+#+EFFORT: 8h
+#+LAYER: build
+#+DEPENDS: FEAT-265-sync-kdl-config-schema-and-parser FEAT-267-ssh-and-rsync-operations-module
+
+NOTE [2026-04-03]: Completed: Bundle builder, manifest generation, upload commands, cache management. 8 tests passing.
+
+* Scope
+- IN: Cross-compile spell binary via `bun build --compile --target=bun-linux-x64`, bundle manifest with version/hash, upload bundle to remote, cache to skip rebuild, wrapper script generation
+- OUT: Project file sync (handled by rsync module), service management, NixOS packaging
+
+* Tests
+- File: `packages/spell-deploy/test/bundle/builder.test.ts`
+- Scenarios:
+  1. Bundle manifest generation (version, target platform, hash)
+  2. Build command construction with correct `--target` flag
+  3. Cache hit detection (bundle hash matches remote)
+  4. Upload command generation (scp/rsync)
+  5. Remote extraction and symlink setup
+  6. Wrapper script content validation (correct `ExecStart` path)
+
+* Implementation
+1. Define bundle types (FEAT-268-compiled-binary-bundle-builder::define-types)
+   - File: `packages/spell-deploy/src/bundle/types.ts`
+   - Types: `BundleManifest`, `BundleTarget`, `BundleBuildOptions`
+2. Write builder tests (FEAT-268-compiled-binary-bundle-builder::builder-tests, depends on define-types)
+   - File: `packages/spell-deploy/test/bundle/builder.test.ts`
+3. Implement bundle builder (FEAT-268-compiled-binary-bundle-builder::implement-builder, depends on builder-tests)
+   - File: `packages/spell-deploy/src/bundle/builder.ts`
+   - Reuses existing `build:binary` pipeline: `embed:native` → `bun build --compile`
+   - Adds `--target` flag for cross-compilation
+   - Produces versioned bundle with hash
+4. Implement bundle upload (FEAT-268-compiled-binary-bundle-builder::implement-upload, depends on implement-builder)
+   - File: `packages/spell-deploy/src/bundle/upload.ts`
+   - SCP binary to remote `/srv/spell/.spell-bundle/`
+   - Verify remote hash matches local
+5. Bundle cache management (FEAT-268-compiled-binary-bundle-builder::cache, depends on implement-builder)
+   - File: `packages/spell-deploy/src/bundle/cache.ts`
+   - Local cache in `.spell/bundle-cache/`
+   - Skip rebuild if source hash unchanged
+
+* Edge Cases
+- Native addon build failure on headless CI (arboard/wayland deps)
+- Disk space during build (compiled binary ~120MB)
+- Remote architecture mismatch detection
+- Interrupted upload (partial binary on remote = crash)
+- Version format: use `git describe` or `package.json` version + commit hash
+
+* Acceptance Criteria
+- Bundle build produces working compiled binary
+- Binary runs `spell server start` successfully on target platform
+- Cache correctly skips rebuild on no-change
+- Upload is atomic (temp file → rename)
+- Bundle version is tracked and mismatch is detected

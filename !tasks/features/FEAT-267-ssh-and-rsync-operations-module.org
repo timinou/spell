@@ -1,0 +1,102 @@
+#+TITLE: SSH and Rsync Operations Module
+#+STATE: DONE
+#+SESSION_ID: 14ac2c5146fb8cbf
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T12-12-59-484Z_14ac1e06b73b8ca4/7-CreateFeat2.jsonl]]
+#+CUSTOM_ID: FEAT-267-ssh-and-rsync-operations-module
+#+LAYER: library
+#+EFFORT: 6h
+#+PRIORITY: A
+#+DEPENDS: FEAT-265-sync-kdl-config-schema-and-parser
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-03]: Completed: SSH client, rsync command builder, push with atomic swap, pull with SQLite backup. 13 tests passing. Push plan verified to never contain service lifecycle commands.
+
+* Scope
+- IN: SSH command execution via Bun.spawn, rsync command builder (include/exclude/SSH opts), push operation (local→staging→swap), pull operation (remote→local), atomic swap logic, dry-run mode
+- OUT: File watching, service management, CLI commands, secrets
+- Push semantics: rsync local content to a staging directory on the remote host, then atomically swap staging into place as current. Push has no service lifecycle awareness; stop/start orchestration belongs to CLI commands in FEAT-272.
+
+* Tests
+- File: ~packages/spell-deploy/test/sync/rsync.test.ts~, ~push.test.ts~, ~pull.test.ts~
+- Scenarios:
+  1. Rsync push command builder: correct args for include/exclude/SSH key/port
+  2. Rsync pull command builder: correct args for state directories
+  3. Atomic swap SSH command sequence: mkdir staging → rsync to staging → mv current to .old → mv staging to current
+  4. Dry-run mode produces command list without executing
+  5. SSH connection test (verify host reachability)
+  6. Handle rsync partial failure (non-zero exit code)
+  7. SQLite backup command generation (ssh sqlite3 db '.backup path')
+  8. Push path never emits ~systemctl~ or other service lifecycle commands; orchestration lives in FEAT-272 CLI commands
+
+* Implementation
+** TODO Define operation types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-267-ssh-and-rsync-operations-module::define-types
+:END:
+- File: ~packages/spell-deploy/src/sync/types.ts~
+- Types: ~PushOptions~, ~PullOptions~, ~RsyncArgs~, ~SshCommand~, ~AtomicSwapPlan~
+
+** TODO Write rsync builder tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-267-ssh-and-rsync-operations-module::rsync-tests
+:DEPENDS: FEAT-267-ssh-and-rsync-operations-module::define-types
+:END:
+- File: ~packages/spell-deploy/test/sync/rsync.test.ts~
+
+** TODO Implement rsync command builder
+:PROPERTIES:
+:CUSTOM_ID: FEAT-267-ssh-and-rsync-operations-module::implement-rsync
+:DEPENDS: FEAT-267-ssh-and-rsync-operations-module::rsync-tests
+:END:
+- File: ~packages/spell-deploy/src/sync/rsync.ts~
+- Build rsync command arrays from SyncTarget config
+
+** TODO Write push/pull tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-267-ssh-and-rsync-operations-module::push-pull-tests
+:DEPENDS: FEAT-267-ssh-and-rsync-operations-module::implement-rsync
+:END:
+- Files: ~packages/spell-deploy/test/sync/push.test.ts~, ~packages/spell-deploy/test/sync/pull.test.ts~
+
+** TODO Implement push with atomic swap
+:PROPERTIES:
+:CUSTOM_ID: FEAT-267-ssh-and-rsync-operations-module::implement-push
+:DEPENDS: FEAT-267-ssh-and-rsync-operations-module::push-pull-tests
+:END:
+- File: ~packages/spell-deploy/src/sync/push.ts~
+- Sequence: mkdir staging dir → rsync to staging dir → mv current to .old → mv staging to current
+- No service stop/start in this module; CLI orchestration owns lifecycle sequencing around push
+- Uses the shared SSH client abstraction for remote mkdir and dir-swap commands, with rsync handling file transfer
+
+** TODO Implement pull with SQLite backup
+:PROPERTIES:
+:CUSTOM_ID: FEAT-267-ssh-and-rsync-operations-module::implement-pull
+:DEPENDS: FEAT-267-ssh-and-rsync-operations-module::push-pull-tests
+:END:
+- File: ~packages/spell-deploy/src/sync/pull.ts~
+- Run ~.backup~ via SSH before rsync pull
+
+** TODO SSH client abstraction
+:PROPERTIES:
+:CUSTOM_ID: FEAT-267-ssh-and-rsync-operations-module::ssh-client
+:DEPENDS: FEAT-267-ssh-and-rsync-operations-module::define-types
+:END:
+- File: ~packages/spell-deploy/src/ssh/client.ts~
+- Wraps ~Bun.spawn~ for SSH commands
+- Testable via dependency injection
+
+* Edge Cases
+- SSH connection timeout (configurable, default 10s)
+- rsync interrupted mid-transfer (partial files, retry logic)
+- Atomic swap failure (old dir not moved back if new dir move fails)
+- Remote directory doesn't exist on first push
+- Large file sync (~--checksum~ vs ~--times~ tradeoff)
+- SSH agent forwarding vs key file
+
+* Acceptance Criteria
+- All rsync/push/pull tests pass
+- Rsync commands are correct for the canonical ~sync.kdl~
+- Atomic swap produces correct SSH command sequence with staging + dir swap only
+- Push never emits service lifecycle commands; CLI orchestration in FEAT-272 owns stop/start around deploy flows
+- Dry-run mode shows all commands without executing
+- SQLite backup runs before pull
