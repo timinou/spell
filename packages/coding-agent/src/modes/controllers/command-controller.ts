@@ -510,12 +510,14 @@ export class CommandController {
 		const sttKey = this.ctx.keybindings.getDisplayString("toggleSTT") || "Alt+H";
 		const copyLineKey = this.ctx.keybindings.getDisplayString("copyLine") || "Alt+Shift+L";
 		const copyPromptKey = this.ctx.keybindings.getDisplayString("copyPrompt") || "Alt+Shift+C";
+		const subagentViewerKey = this.ctx.keybindings.getDisplayString("subagentViewer") || "Ctrl+Tab";
 		const hotkeys = buildHotkeysMarkdown({
 			expandToolsKey,
 			planModeKey,
 			sttKey,
 			copyLineKey,
 			copyPromptKey,
+			subagentViewerKey,
 		});
 		this.ctx.chatContainer.addChild(new Spacer(1));
 		this.ctx.chatContainer.addChild(new DynamicBorder());

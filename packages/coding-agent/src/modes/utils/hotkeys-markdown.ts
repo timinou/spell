@@ -4,10 +4,11 @@ export interface HotkeysMarkdownBindings {
 	sttKey: string;
 	copyLineKey: string;
 	copyPromptKey: string;
+	subagentViewerKey: string;
 }
 
 export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string {
-	const { expandToolsKey, planModeKey, sttKey, copyLineKey, copyPromptKey } = bindings;
+	const { expandToolsKey, planModeKey, sttKey, copyLineKey, copyPromptKey, subagentViewerKey } = bindings;
 	return [
 		"**Navigation**",
 		"| Key | Action |",
@@ -44,6 +45,7 @@ export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string 
 		`| \`${planModeKey}\` | Toggle plan mode |`,
 		"| `Ctrl+R` | Search prompt history |",
 		`| \`${expandToolsKey}\` | Toggle tool output expansion |`,
+		`| \`${subagentViewerKey}\` | View running subagents |`,
 		"| `Ctrl+T` | Toggle todo list expansion |",
 		"| `Ctrl+G` | Edit message in external editor |",
 		`| \`${sttKey}\` | Toggle speech-to-text recording |`,

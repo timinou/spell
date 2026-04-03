@@ -1,0 +1,49 @@
+#+TITLE: Subagent viewer integration testing and polish
+#+STATE: DONE
+#+SESSION_ID: 14ac791f73fb92d2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T18-50-59-919Z_14ac791f73fb92d2.jsonl]]
+#+CUSTOM_ID: FEAT-301-subagent-viewer-integration-testing-and
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: integration
+#+DEPENDS: FEAT-300-subagent-viewer-component-with-scroll-an
+
+* Initial Message
+
+is there a way for me to see what agents are doing beyond the one-line sumary in the task box in the TUI?
+
+* Scope
+End-to-end verification, edge cases, and polish for the subagent viewer.
+
+* Implementation
+
+** Verify full type check
+- Run ~bun check:ts~ with all new files
+- Fix any type errors from component integration
+
+** Verify keybinding wiring end-to-end
+- Ensure ~Ctrl+Tab~ opens viewer from interactive mode
+- If ~Ctrl+Tab~ is not capturable in the target terminal (Ghostty), switch default to ~alt+a~ and document
+
+** Edge cases to handle
+- Viewer opened when no task tool is running -> show "No active agents" with instructions
+- Agent completes while viewer is open -> update status badge, keep content visible, auto-select next running agent if available
+- All agents complete while viewer is open -> show completion state, don't auto-close
+- Viewer opened during non-task work -> same as "no agents" case
+- Multiple task tool invocations (nested) -> show agents from all active task invocations
+- Theme changes while viewer is open -> call ~invalidate()~, re-render
+
+** Status line integration
+File: ~packages/coding-agent/src/modes/components/status-line/segments.ts~
+- The existing ~subagents~ segment shows count. Consider adding a hint when viewer is available (e.g., the keybinding)
+
+** Changelog
+File: ~packages/coding-agent/CHANGELOG.md~
+- Add entry under ~## [Unreleased]~ / ~### Added~: "Subagent viewer (Ctrl+Tab) -- drill into running agents with full chat rendering, scroll, and agent switching"
+
+* Acceptance
+- ~bun check:ts~ passes
+- ~bun lint:ts~ passes
+- All tests in ~packages/coding-agent/test/modes/components/subagent-viewer/~ pass
+- Viewer handles all listed edge cases without crashes
+- CHANGELOG updated

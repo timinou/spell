@@ -1,0 +1,87 @@
+#+TITLE: Subagent Viewer
+#+STATE: DOING
+#+SESSION_ID: 14ac791f73fb92d2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T18-50-59-919Z_14ac791f73fb92d2.jsonl]]
+#+CUSTOM_ID: PLAN-127-subagent-viewer
+
+* Initial Message
+
+is there a way for me to see what agents are doing beyond the one-line sumary in the task box in the TUI?
+
+* Context
+** Problem
+The TUI shows a one-line summary per subagent in the task tool box. ~Ctrl+O~ expands tool output inline but doesn't give a full view of what a specific agent is doing. Users have no way to drill into a running agent and see its full chat (assistant text, tool calls with rendered output, thinking blocks) in real-time.
+
+** Approach: High-fidelity modal viewer
+Build a modal overlay (opened via ~Ctrl+Tab~) that renders a running subagent's full activity using the existing stateless rendering components (~AssistantMessageComponent~, ~ToolExecutionComponent~, ~ReadToolGroupComponent~). These components are already decoupled from ~InteractiveModeContext~ -- they only need a ~Container~ to live in, a ~TUI~ reference, and a ~cwd~.
+
+** Key architectural decisions
+1. *Stripped event controller, not reused EventController.* The main ~EventController~ handles 18 event types and calls 30+ methods on ~InteractiveModeContext~. The viewer only needs 6 rendering-relevant event types (~message_start/update/end~, ~tool_execution_start/update/end~). A new ~SubagentViewerEventHandler~ class (~150 lines) handles just these, operating against a 4-field ~SubagentViewerContext~ interface instead of the 50+ field ~InteractiveModeContext~.
+
+2. *EventBus subscription, not session access.* The viewer subscribes to ~TASK_SUBAGENT_EVENT_CHANNEL~ (raw ~AgentEvent~ objects forwarded at P1 priority) and ~TASK_SUBAGENT_PROGRESS_CHANNEL~ (coalesced progress snapshots). It filters by agent index. No direct access to subagent ~AgentSession~ instances needed.
+
+3. *Line-based scroll viewport.* pi-tui has no ~ScrollView~ primitive. Follow the ~DebugLogViewerComponent~ pattern: render all children to lines, track a ~#scrollOffset~ integer, slice the visible window. Auto-follow mode tracks the bottom unless user scrolls up.
+
+4. *Modal via showSelector().* Uses the existing ~showSelector()~ factory pattern (same as model selector, agent dashboard, history search). Swaps ~editorContainer~ children, routes keyboard input, restores editor on close.
+
+5. *Tool definition unavailable.* ~ToolExecutionComponent~ accepts ~AgentTool | undefined~. Subagent tools aren't accessible from the parent session, so pass ~undefined~. Renderers fall back to generic rendering -- still shows args, results, and status correctly for all 25+ built-in tools since rendering is driven by ~renderers.ts~ (keyed by tool name string, not ~AgentTool~).
+
+** Key files (existing, to modify)
+- ~packages/coding-agent/src/config/keybindings.ts~ -- add ~subagentViewer~ action
+- ~packages/coding-agent/src/modes/types.ts~ -- add ~showSubagentViewer()~ to context
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ -- delegate to selector-controller
+- ~packages/coding-agent/src/modes/controllers/input-controller.ts~ -- wire keybinding
+- ~packages/coding-agent/src/modes/controllers/selector-controller.ts~ -- mount viewer component
+- ~packages/coding-agent/src/modes/utils/hotkeys-markdown.ts~ -- add to help
+
+** Key files (new)
+- ~packages/coding-agent/src/modes/components/subagent-viewer/types.ts~ -- SubagentViewerContext
+- ~packages/coding-agent/src/modes/components/subagent-viewer/event-handler.ts~ -- stripped event controller
+- ~packages/coding-agent/src/modes/components/subagent-viewer/viewer-component.ts~ -- main modal
+- ~packages/coding-agent/src/modes/components/subagent-viewer/index.ts~ -- barrel
+- ~packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts~
+- ~packages/coding-agent/test/modes/components/subagent-viewer/viewer-component.test.ts~
+
+** Terminal key capture note
+~Ctrl+Tab~ requires the Kitty keyboard protocol or CSI u mode. Ghostty 1.3.0 supports this. Most modern terminals (Kitty, WezTerm, Ghostty, foot) do. Older terminals (plain xterm, macOS Terminal.app) may not capture it. The keybinding is user-configurable via ~keybindings.json~, so users on older terminals can remap.
+
+* Verification
+** Type check
+#+begin_src shell
+bun check:ts
+#+end_src
+
+** Lint
+#+begin_src shell
+bun lint:ts
+#+end_src
+
+** Unit tests
+#+begin_src shell
+bun test packages/coding-agent/test/modes/components/subagent-viewer/
+#+end_src
+
+** Manual verification
+- Open spell, dispatch a multi-agent task
+- Press Ctrl+Tab while agents are running
+- Verify: full chat rendering visible (assistant text, tool calls with formatted output)
+- Verify: scroll up/down works, auto-follow resumes on End
+- Verify: Tab switches between agents
+- Verify: Esc closes viewer and restores editor
+- Verify: Ctrl+O toggles tool output expansion within viewer
+
+* Execution Manifest
+
+** Wave 1: Foundation (parallel)
+- [[id:FEAT-298-subagent-viewer-keybinding-and-config]] -- keybinding + config + wiring stubs (S)
+- [[id:FEAT-299-subagent-event-controller-for-viewer-ren]] -- event handler + tests (M)
+
+These are independent: FEAT-298 touches config/keybinding/mode files; FEAT-299 creates new files in ~subagent-viewer/~ with no overlap. FEAT-298 stubs ~showSubagentViewer()~ in selector-controller; FEAT-300 fills it in.
+
+** Wave 2: Main component
+- [[id:FEAT-300-subagent-viewer-component-with-scroll-an]] -- viewer modal + scroll + agent picker + tests (L)
+  Depends on both Wave 1 items: needs the keybinding wiring from FEAT-298 and the event handler from FEAT-299.
+
+** Wave 3: Polish
+- [[id:FEAT-301-subagent-viewer-integration-testing-and]] -- edge cases, integration test, changelog (S)
+  Depends on FEAT-300.

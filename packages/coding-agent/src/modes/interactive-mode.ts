@@ -44,6 +44,7 @@ import { getModeCommandDefs, registerModeCommands } from "../slash-commands/buil
 import { STTController, type SttState } from "../stt";
 import type { ExitPlanModeDetails } from "../tools";
 import { isDelegatedTask } from "../tools/todo-write";
+import type { EventBus } from "../utils/event-bus";
 import { setTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import { AuditModeOverlay } from "./components/audit-mode-overlay";
@@ -248,6 +249,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		| undefined = undefined;
 	mcpManager?: import("../mcp").MCPManager;
 	taskManager?: import("../orchestrators/canvas-task-manager").CanvasTaskManager;
+	eventBus?: EventBus;
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 
 	readonly #btwController: BtwController;
@@ -276,6 +278,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			| undefined = undefined,
 		mcpManager?: import("../mcp").MCPManager,
 		taskManager?: import("../orchestrators/canvas-task-manager").CanvasTaskManager,
+		eventBus?: EventBus,
 	) {
 		this.session = session;
 		this.sessionManager = session.sessionManager;
@@ -288,6 +291,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.lspServers = lspServers;
 		this.mcpManager = mcpManager;
 		this.taskManager = taskManager;
+		this.eventBus = eventBus;
 
 		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
 		this.ui.setClearOnShrink(settings.get("clearOnShrink"));
@@ -1777,6 +1781,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showDebugSelector(): void {
 		this.#selectorController.showDebugSelector();
+	}
+
+	showSubagentViewer(): void {
+		this.#selectorController.showSubagentViewer();
 	}
 
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void> {

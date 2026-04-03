@@ -38,7 +38,8 @@ export type AppAction =
 	| "fork"
 	| "resume"
 	| "toggleSTT"
-	| "toggleUserPause";
+	| "toggleUserPause"
+	| "subagentViewer";
 
 /**
  * All configurable actions.
@@ -81,6 +82,7 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	resume: [],
 	toggleSTT: "alt+h",
 	toggleUserPause: "alt+shift+u",
+	subagentViewer: "ctrl+tab",
 };
 
 /**
@@ -118,6 +120,7 @@ const APP_ACTIONS: AppAction[] = [
 	"resume",
 	"toggleSTT",
 	"toggleUserPause",
+	"subagentViewer",
 ];
 
 function isAppAction(action: string): action is AppAction {

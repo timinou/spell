@@ -1,0 +1,53 @@
+#+TITLE: Subagent viewer keybinding and config
+#+STATE: DONE
+#+SESSION_ID: 14ac791f73fb92d2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T18-50-59-919Z_14ac791f73fb92d2.jsonl]]
+#+CUSTOM_ID: FEAT-298-subagent-viewer-keybinding-and-config
+#+EFFORT: S
+#+PRIORITY: #C
+#+LAYER: config
+
+* Initial Message
+
+is there a way for me to see what agents are doing beyond the one-line sumary in the task box in the TUI?
+
+* Scope
+Add ~subagentViewer~ action to keybinding system and wire it to open the viewer modal.
+
+* Implementation
+** Add ~subagentViewer~ to ~AppAction~ union type
+File: ~packages/coding-agent/src/config/keybindings.ts~
+- Add ~"subagentViewer"~ to ~AppAction~ type union (after ~"toggleUserPause"~)
+- Add to ~APP_ACTIONS~ array
+- Add default binding in ~DEFAULT_APP_KEYBINDINGS~: ~subagentViewer: "ctrl+tab"~
+  - Note: ~ctrl+tab~ may not be capturable in all terminals. Ghostty and Kitty support it. If testing reveals issues, fall back to ~alt+a~ or ~alt+tab~.
+
+** Wire keybinding in input-controller
+File: ~packages/coding-agent/src/modes/controllers/input-controller.ts~
+- In ~setupKeyHandlers()~, add handler for ~subagentViewer~ action
+- Follow the pattern of ~expandToolsKeys~ / ~dequeueKeys~: get keys from keybindings manager, wire via ~setCustomKeyHandler~
+- Handler calls ~this.ctx.showSubagentViewer()~
+
+** Add ~showSubagentViewer()~ to InteractiveModeContext
+File: ~packages/coding-agent/src/modes/types.ts~
+- Add ~showSubagentViewer(): void~ method to ~InteractiveModeContext~ interface (in the selector section)
+
+** Delegate from InteractiveMode
+File: ~packages/coding-agent/src/modes/interactive-mode.ts~
+- Add ~showSubagentViewer()~ method that delegates to ~#selectorController.showSubagentViewer()~
+- Follow exact pattern of ~showAgentsDashboard()~ / ~showModelSelector()~
+
+** Add to selector-controller
+File: ~packages/coding-agent/src/modes/controllers/selector-controller.ts~
+- Add ~showSubagentViewer()~ method
+- Uses ~showSelector()~ factory to mount the ~SubagentViewerComponent~
+- Wires ~onClose~ and ~onRequestRender~ callbacks
+
+** Update hotkeys help
+File: ~packages/coding-agent/src/modes/utils/hotkeys-markdown.ts~
+- Add subagent viewer entry to hotkeys table
+
+* Acceptance
+- ~bun check:ts~ passes with the new action type and all wiring
+- Keybinding appears in ~/hotkeys~ output
+- ~SubagentViewerComponent~ constructor is called when keybinding is pressed (can be a stub that just shows "Subagent Viewer" text and closes on Escape)

@@ -1,0 +1,134 @@
+#+TITLE: Subagent viewer component with scroll and agent picker
+#+STATE: DONE
+#+SESSION_ID: 14ac791f73fb92d2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T18-50-59-919Z_14ac791f73fb92d2.jsonl]]
+#+CUSTOM_ID: FEAT-300-subagent-viewer-component-with-scroll-an
+#+EFFORT: L
+#+PRIORITY: #A
+#+LAYER: ui
+#+DEPENDS: FEAT-298-subagent-viewer-keybinding-and-config FEAT-299-subagent-event-controller-for-viewer-ren
+
+* Initial Message
+
+is there a way for me to see what agents are doing beyond the one-line sumary in the task box in the TUI?
+
+* Scope
+The main viewer component: a modal that shows live, high-fidelity rendering of a running subagent's activity. Subscribes to EventBus, renders via ~SubagentViewerEventHandler~, provides scrolling and agent switching.
+
+* Design
+
+** Layout
+#+begin_example
+┌─ Subagent Viewer ─── [1/3] ReadSchema (running) ── Ctrl+Tab: next · Esc: close ─┐
+│                                                                                    │
+│  [assistant message component]                                                     │
+│  [tool execution component - grep]                                                 │
+│  [tool execution component - read]                                                 │
+│  [assistant message component - continued]                                         │
+│  [tool execution component - edit]  <-- auto-scroll follows this                   │
+│                                                                                    │
+└──────────────────────────────────── 42 tools · 12.3k tokens · 1m23s ──────────────┘
+#+end_example
+
+** Core architecture
+- Extends ~Container~, implements ~Component.handleInput~
+- Header: border + agent selector (current agent label, navigation hint)
+- Body: scrollable viewport over a ~Container~ that holds the rendered chat
+- Footer: border + stats (tools, tokens, duration)
+
+** Agent selection
+- Track all active agents from ~TASK_SUBAGENT_PROGRESS_CHANNEL~ progress events
+- Left/Right arrows or Tab cycle through agents
+- When switching: unsubscribe from current event channel, clear body container, subscribe to new agent's events
+- If only one agent, show it directly; if zero agents running, show "No active agents" placeholder
+
+** Scrolling
+Follow the ~DebugLogViewerComponent~ pattern from ~packages/coding-agent/src/debug/log-viewer.ts~:
+- Track ~#scrollOffset~ integer (line-based)
+- ~render(width)~ renders all children to lines, then slices ~[scrollOffset, scrollOffset + bodyHeight]~
+- Up/Down/PageUp/PageDown adjust scroll offset
+- Auto-follow mode: when scrolled to bottom, new content auto-scrolls. When user scrolls up, auto-follow pauses. Pressing End or G resumes auto-follow.
+
+** EventBus subscription
+- Subscribe to ~TASK_SUBAGENT_EVENT_CHANNEL~ in constructor
+- Filter events by ~event.index~ matching the selected agent's index
+- Forward matching ~event.event~ (the raw ~AgentEvent~) to ~SubagentViewerEventHandler.handleEvent()~
+- Subscribe to ~TASK_SUBAGENT_PROGRESS_CHANNEL~ for agent list updates and stats (tokens, tools, duration)
+- Unsubscribe both on close/dispose
+
+** Keyboard handling
+| Key | Action |
+|-----+--------|
+| Esc | Close viewer |
+| Tab / Ctrl+Tab | Next agent |
+| Shift+Tab | Previous agent |
+| Up / k | Scroll up |
+| Down / j | Scroll down |
+| PageUp | Scroll up by page |
+| PageDown | Scroll down by page |
+| Home / g | Scroll to top |
+| End / G | Scroll to bottom + resume auto-follow |
+| Ctrl+O | Toggle expanded tool output |
+
+** Lifecycle
+1. Constructor receives ~EventBus~, ~TUI~, ~cwd~, ~terminalRows~
+2. Static ~create(eventBus, ui, cwd)~ factory
+3. Subscribe to progress channel immediately to discover agents
+4. Auto-select first running agent
+5. On close: unsubscribe all, call ~onClose~ callback
+
+* Implementation
+** File: ~packages/coding-agent/src/modes/components/subagent-viewer/viewer-component.ts~
+
+*** ~SubagentViewerComponent~ class
+- ~#agents: AgentProgress[]~ -- tracked from progress channel
+- ~#selectedIndex: number~
+- ~#eventHandler: SubagentViewerEventHandler~
+- ~#chatContainer: Container~ -- holds rendered components
+- ~#scrollOffset: number~
+- ~#autoFollow: boolean~ (default true)
+- ~#eventUnsubscribe: (() => void)[]~
+- ~#expanded: boolean~
+
+*** Key methods
+- ~static create(eventBus, ui, cwd, terminalRows)~
+- ~handleInput(data: string): void~ -- keyboard dispatch
+- ~render(width: number): string[]~ -- header + scrolled body + footer
+- ~#selectAgent(index: number): void~ -- switch agents, reconnect events
+- ~#onProgressUpdate(progress: AgentProgress): void~ -- update agent list and stats
+- ~#onSubagentEvent(event): void~ -- filter by selected agent, forward to event handler
+- ~dispose(): void~ -- cleanup subscriptions
+
+** File: ~packages/coding-agent/src/modes/components/subagent-viewer/index.ts~
+Barrel re-export.
+
+** Update selector-controller
+File: ~packages/coding-agent/src/modes/controllers/selector-controller.ts~
+- Implement ~showSubagentViewer()~ body (stubbed in FEAT-298)
+- Create ~SubagentViewerComponent~ via factory, wire callbacks
+
+* Test strategy
+File: ~packages/coding-agent/test/modes/components/subagent-viewer/viewer-component.test.ts~
+
+Tests:
+1. Renders header with agent name and navigation hints
+2. Renders footer with stats from progress updates
+3. Scrolling: Up/Down moves ~#scrollOffset~, PageUp/PageDown moves by page height
+4. Auto-follow: new content auto-scrolls when at bottom; pauses when scrolled up; End resumes
+5. Agent switching: Tab cycles ~#selectedIndex~, clears body, resubscribes
+6. Event filtering: only events matching selected agent index are forwarded
+7. Escape calls ~onClose~ callback
+8. Ctrl+O toggles expanded state on all tool components
+9. Empty state: shows placeholder when no agents are running
+10. Progress updates: agent list refreshes when new agents appear/complete
+
+Test approach: mock EventBus (emit events manually), create real TUI with mock terminal, assert rendered output contains expected content.
+
+* Acceptance
+- ~bun test packages/coding-agent/test/modes/components/subagent-viewer/~ passes
+- ~bun check:ts~ passes
+- Viewer opens on Ctrl+Tab, shows running agents with full chat rendering
+- Scrolling works: up/down/pageup/pagedown/home/end
+- Agent switching works: tab cycles between agents
+- Auto-follow tracks new content
+- Esc closes viewer and restores editor

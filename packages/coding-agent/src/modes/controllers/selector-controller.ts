@@ -33,6 +33,7 @@ import { ModelSelectorComponent } from "../components/model-selector";
 import { OAuthSelectorComponent } from "../components/oauth-selector";
 import { SessionSelectorComponent } from "../components/session-selector";
 import { SettingsSelectorComponent } from "../components/settings-selector";
+import { SubagentViewerComponent } from "../components/subagent-viewer";
 import { ToolExecutionComponent } from "../components/tool-execution";
 import { TreeSelectorComponent } from "../components/tree-selector";
 import { UserMessageSelectorComponent } from "../components/user-message-selector";
@@ -779,6 +780,26 @@ export class SelectorController {
 		this.showSelector(done => {
 			const selector = new DebugSelectorComponent(this.ctx, done);
 			return { component: selector, focus: selector };
+		});
+	}
+
+	showSubagentViewer(): void {
+		if (!this.ctx.eventBus) return;
+		this.showSelector(done => {
+			const viewer = new SubagentViewerComponent({
+				eventBus: this.ctx.eventBus!,
+				ui: this.ctx.ui,
+				cwd: this.ctx.sessionManager.getCwd(),
+				terminalRows: this.ctx.ui.terminal.rows,
+				onClose: () => {
+					done();
+					this.ctx.ui.requestRender();
+				},
+				onRequestRender: () => {
+					this.ctx.ui.requestRender();
+				},
+			});
+			return { component: viewer, focus: viewer };
 		});
 	}
 }
