@@ -1,0 +1,49 @@
+#+TITLE: Guard pipi namespace in runQuickFixTask
+#+STATE: DONE
+#+SESSION_ID: 14ac16255d31e889
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-38-33-716Z_14ac16255d31e889.jsonl]]
+#+CUSTOM_ID: PLAN-116-guard-pi-pi-namespace-in-runquickfixtask
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-030-audit-implementation:
+
+- **What:** `runQuickFixTask()` still dereferences `pi.pi` before the runtime guard, so a missing `pi.pi` namespace throws a raw TypeError instead of the intended descriptive failure.
+  **Where:** `.spell/extensions/phoenix-inspector/index.ts`, `runQuickFixTask()` around the `const runtime = pi.pi as ...` / `runtime.runSubprocess` guard.
+  **Why:** The hardening only covers a missing `runSubprocess` method, not a missing `pi.pi` object. If the host runtime shape regresses further, Quick Fix will fail cryptically again and bypass the user-facing error path.
+  **Effort:** small
+
+* Context
+Audit AUD-030 identified that ~runQuickFixTask()~ in the Phoenix Inspector extension dereferences ~pi.pi~ before the ~runSubprocess~ runtime guard. The type cast ~const runtime = pi.pi as ...~ is safe, but the subsequent ~runtime.runSubprocess~ property access on line 214 would throw a raw ~TypeError~ if ~pi.pi~ were ~undefined~.
+
+~getQmlRuntime(pi)~ validates ~pi.pi~ at extension initialization, so this only fires if the namespace regresses after init. The fix is adding ~!runtime ||~ to the existing guard condition — a one-line change with no signature, return type, or error shape changes.
+
+Key decisions:
+- No new test needed. The existing "fails quick fix when the runtime lacks runSubprocess" test already exercises this error path via the catch block in ~handleBridgePayload~. The guard message is unchanged.
+- No structural changes to ~pi.pi~ typing or the extension API contract.
+
+All changes are in ~/home/user/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/index.ts~ (1 file, 1 line).
+
+* Verification
+** Automated
+- ~bun test ./.spell/extensions/phoenix-inspector/index.test.ts~ (cwd ~/home/user/code/ora/hotelcomm/ecosystem/agentmaker~) — all 28 tests pass.
+
+* Execution Manifest
+** [[id:BUG-139-guard-pi-pi-namespace-before-runsubproce]]
+- Add ~!runtime ||~ to the guard condition in ~runQuickFixTask()~, line 214.
+- File: ~index.ts~.
+- Effort: 30m.
+
+
+
+** Completion [2026-04-02]
+*** Verification
+- Applied the one-line guard update in `.spell/extensions/phoenix-inspector/index.ts` so `runQuickFixTask()` now checks `!runtime || typeof runtime.runSubprocess !== "function"`.
+- Ran `bun test ./.spell/extensions/phoenix-inspector/index.test.ts` in `/home/user/code/ora/hotelcomm/ecosystem/agentmaker`.
+- Result: 28 tests passed, 0 failed.
+*** Artifacts
+- Code change: `~/home/user/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/index.ts`
+- Verification output: focused test run reported `28 pass / 0 fail`.
+*** Deviations
+- None.

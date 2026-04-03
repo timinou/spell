@@ -1,0 +1,56 @@
+#+TITLE: Guard pipi namespace before runSubprocess check in runQuickFixTask
+#+STATE: DONE
+#+SESSION_ID: 14ac16255d31e889
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-38-33-716Z_14ac16255d31e889.jsonl]]
+#+CUSTOM_ID: BUG-139-guard-pi-pi-namespace-before-runsubproce
+#+EFFORT: 30m
+#+PRIORITY: B
+#+LAYER: Runtime
+
+NOTE [2026-04-03]: Completed by PLAN-116 after adding the null guard in runQuickFixTask() and verifying bun test ./.spell/extensions/phoenix-inspector/index.test.ts in ~/home/user/code/ora/hotelcomm/ecosystem/agentmaker. The quick-fix runtime guard now covers a missing pi.pi namespace as well as a missing runSubprocess method.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-030-audit-implementation:
+
+- **What:** `runQuickFixTask()` still dereferences `pi.pi` before the runtime guard, so a missing `pi.pi` namespace throws a raw TypeError instead of the intended descriptive failure.
+  **Where:** `.spell/extensions/phoenix-inspector/index.ts`, `runQuickFixTask()` around the `const runtime = pi.pi as ...` / `runtime.runSubprocess` guard.
+  **Why:** The hardening only covers a missing `runSubprocess` method, not a missing `pi.pi` object. If the host runtime shape regresses further, Quick Fix will fail cryptically again and bypass the user-facing error path.
+  **Effort:** small
+
+* Problem
+~runQuickFixTask()~ in ~index.ts~ line 213-214 does:
+#+begin_src typescript
+const runtime = pi.pi as QmlRuntime & { runSubprocess?: ... };
+if (typeof runtime.runSubprocess !== "function") {
+#+end_src
+
+The type cast on line 213 is safe (just aliasing), but line 214 dereferences ~runtime.runSubprocess~. If ~pi.pi~ is ~undefined~ or ~null~, this throws a raw ~TypeError: Cannot read properties of undefined (reading 'runSubprocess')~ instead of the descriptive guard message.
+
+~getQmlRuntime(pi)~ validates ~pi.pi~ at extension init, so this only fires if ~pi.pi~ regresses after initialization. Unlikely but the whole point of the guard was to prevent cryptic failures.
+
+* Implementation
+** Add null guard to the existing condition
+In ~runQuickFixTask()~, change line 214 from:
+#+begin_src typescript
+if (typeof runtime.runSubprocess !== "function") {
+#+end_src
+to:
+#+begin_src typescript
+if (!runtime || typeof runtime.runSubprocess !== "function") {
+#+end_src
+
+This makes the guard cover both a missing namespace and a missing method in a single condition. The error message remains the same.
+
+No other callers or downstream code are affected — the function signature, return type, and error shape are unchanged.
+
+* Files
+- ~/home/user/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/index.ts~ — ~runQuickFixTask()~, line 214
+
+* Acceptance
+- The guard condition includes ~!runtime ||~ before the ~typeof~ check.
+- Existing tests continue to pass unchanged (~bun test ./.spell/extensions/phoenix-inspector/index.test.ts~ in ~/home/user/code/ora/hotelcomm/ecosystem/agentmaker~).
+- The existing "fails quick fix when the runtime lacks runSubprocess" test still passes (it tests ~runSubprocess~ absence, which is the same error path).
+
+* Verification
+- ~bun test ./.spell/extensions/phoenix-inspector/index.test.ts~ (cwd ~/home/user/code/ora/hotelcomm/ecosystem/agentmaker~) — all 28 tests pass.
