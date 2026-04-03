@@ -44,6 +44,14 @@ export function createManifest(goals: Map<string, ManifestGoal>): AutonomyManife
 		version: "1.0.0",
 		setups: new Map([["default", defaultSetup]]),
 		goals,
+		exportTargets: [],
+		notificationRoutes: [],
+		reviewPolicies: [],
+		checkpoints: [],
+		panels: [],
+		layouts: [],
+		syncCollections: [],
+		stateSchemas: [],
 	};
 }
 

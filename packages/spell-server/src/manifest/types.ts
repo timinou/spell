@@ -5,6 +5,14 @@ export interface AutonomyManifest {
 	version: string;
 	setups: Map<string, ManifestSetup>;
 	goals: Map<string, ManifestGoal>;
+	exportTargets: ExportTarget[];
+	notificationRoutes: NotificationRoute[];
+	reviewPolicies: ReviewPolicy[];
+	checkpoints: Checkpoint[];
+	panels: Panel[];
+	layouts: Layout[];
+	syncCollections: SyncCollection[];
+	stateSchemas: StateSchema[];
 }
 
 export interface ManifestImport {
@@ -22,6 +30,14 @@ export interface ParsedManifestModule {
 	goals: Map<string, ManifestGoal>;
 	overrides: ManifestOverride[];
 	actionDescriptors: ActionDescriptor[];
+	exportTargets: ExportTarget[];
+	notificationRoutes: NotificationRoute[];
+	reviewPolicies: ReviewPolicy[];
+	checkpoints: Checkpoint[];
+	panels: Panel[];
+	layouts: Layout[];
+	syncCollections: SyncCollection[];
+	stateSchemas: StateSchema[];
 }
 
 export type ManifestOverride = SetupOverride | GoalOverride;
@@ -163,6 +179,105 @@ const WEBHOOK_AUTH_TYPES = new Set(["hmac", "bearer"]);
 const WEBHOOK_METHODS = new Set(["POST", "GET"]);
 const STATE_STORE_BACKENDS = new Set<StateStoreBackend>(["sqlite", "artifact-store"]);
 
+export interface ExportTarget {
+	id: string;
+	kind: string;
+	url?: string;
+	path?: string;
+	format?: string;
+}
+
+export interface NotificationRoute {
+	id: string;
+	channel: string;
+	on: string;
+	chatId?: number;
+	url?: string;
+	category?: string;
+}
+
+export interface ReviewPolicy {
+	id: string;
+	states: ReviewPolicyState[];
+	transitions: ReviewPolicyTransition[];
+}
+
+export interface ReviewPolicyState {
+	name: string;
+	initial?: boolean;
+	terminal?: boolean;
+}
+
+export interface ReviewPolicyTransition {
+	from: string;
+	to: string;
+	action: string;
+}
+
+export interface Checkpoint {
+	id: string;
+	requires: CheckpointRequirement[];
+}
+
+export interface CheckpointRequirement {
+	name: string;
+	kind: string;
+	policy?: string;
+	state?: string;
+	scope?: string;
+}
+
+export interface Panel {
+	id: string;
+	source: string;
+	columns: PanelColumn[];
+	actions: PanelAction[];
+}
+
+export interface PanelColumn {
+	name: string;
+	type: string;
+}
+
+export interface PanelAction {
+	name: string;
+	label: string;
+}
+
+export interface Layout {
+	id: string;
+	regions: LayoutRegion[];
+}
+
+export interface LayoutRegion {
+	name: string;
+	panel: string;
+}
+
+export interface SyncCollection {
+	id: string;
+	source: string;
+	filter?: string;
+}
+
+export interface StateSchema {
+	id: string;
+	backend: string;
+	tables: StateSchemaTable[];
+}
+
+export interface StateSchemaTable {
+	name: string;
+	columns: StateSchemaTableColumn[];
+}
+
+export interface StateSchemaTableColumn {
+	name: string;
+	type: string;
+	primary?: boolean;
+}
+
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
@@ -286,6 +401,180 @@ function isValidHooks(value: unknown): value is ManifestHookConfig {
 	);
 }
 
+export function isValidExportTarget(value: unknown): value is ExportTarget {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.id === "string" &&
+		value.id.length > 0 &&
+		typeof value.kind === "string" &&
+		value.kind.length > 0 &&
+		(value.url === undefined || typeof value.url === "string") &&
+		(value.path === undefined || typeof value.path === "string") &&
+		(value.format === undefined || typeof value.format === "string")
+	);
+}
+
+export function isValidNotificationRoute(value: unknown): value is NotificationRoute {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.id === "string" &&
+		value.id.length > 0 &&
+		typeof value.channel === "string" &&
+		value.channel.length > 0 &&
+		typeof value.on === "string" &&
+		value.on.length > 0 &&
+		isOptionalFiniteNumber(value.chatId) &&
+		(value.url === undefined || typeof value.url === "string") &&
+		(value.category === undefined || typeof value.category === "string")
+	);
+}
+
+export function isValidReviewPolicyState(value: unknown): value is ReviewPolicyState {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.name === "string" &&
+		value.name.length > 0 &&
+		(value.initial === undefined || typeof value.initial === "boolean") &&
+		(value.terminal === undefined || typeof value.terminal === "boolean")
+	);
+}
+
+export function isValidReviewPolicyTransition(value: unknown): value is ReviewPolicyTransition {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.from === "string" &&
+		value.from.length > 0 &&
+		typeof value.to === "string" &&
+		value.to.length > 0 &&
+		typeof value.action === "string" &&
+		value.action.length > 0
+	);
+}
+
+export function isValidReviewPolicy(value: unknown): value is ReviewPolicy {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.id === "string" &&
+		value.id.length > 0 &&
+		Array.isArray(value.states) &&
+		value.states.every(state => isValidReviewPolicyState(state)) &&
+		Array.isArray(value.transitions) &&
+		value.transitions.every(transition => isValidReviewPolicyTransition(transition))
+	);
+}
+
+export function isValidCheckpointRequirement(value: unknown): value is CheckpointRequirement {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.name === "string" &&
+		value.name.length > 0 &&
+		typeof value.kind === "string" &&
+		value.kind.length > 0 &&
+		(value.policy === undefined || typeof value.policy === "string") &&
+		(value.state === undefined || typeof value.state === "string") &&
+		(value.scope === undefined || typeof value.scope === "string")
+	);
+}
+
+export function isValidCheckpoint(value: unknown): value is Checkpoint {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.id === "string" &&
+		value.id.length > 0 &&
+		Array.isArray(value.requires) &&
+		value.requires.every(requirement => isValidCheckpointRequirement(requirement))
+	);
+}
+
+export function isValidPanelColumn(value: unknown): value is PanelColumn {
+	if (!isRecord(value)) return false;
+	return typeof value.name === "string" && value.name.length > 0 && typeof value.type === "string" && value.type.length > 0;
+}
+
+export function isValidPanelAction(value: unknown): value is PanelAction {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.name === "string" &&
+		value.name.length > 0 &&
+		typeof value.label === "string" &&
+		value.label.length > 0
+	);
+}
+
+export function isValidPanel(value: unknown): value is Panel {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.id === "string" &&
+		value.id.length > 0 &&
+		typeof value.source === "string" &&
+		value.source.length > 0 &&
+		Array.isArray(value.columns) &&
+		value.columns.every(column => isValidPanelColumn(column)) &&
+		Array.isArray(value.actions) &&
+		value.actions.every(action => isValidPanelAction(action))
+	);
+}
+
+export function isValidLayoutRegion(value: unknown): value is LayoutRegion {
+	if (!isRecord(value)) return false;
+	return typeof value.name === "string" && value.name.length > 0 && typeof value.panel === "string" && value.panel.length > 0;
+}
+
+export function isValidLayout(value: unknown): value is Layout {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.id === "string" &&
+		value.id.length > 0 &&
+		Array.isArray(value.regions) &&
+		value.regions.every(region => isValidLayoutRegion(region))
+	);
+}
+
+export function isValidSyncCollection(value: unknown): value is SyncCollection {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.id === "string" &&
+		value.id.length > 0 &&
+		typeof value.source === "string" &&
+		value.source.length > 0 &&
+		(value.filter === undefined || typeof value.filter === "string")
+	);
+}
+
+export function isValidStateSchemaTableColumn(value: unknown): value is StateSchemaTableColumn {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.name === "string" &&
+		value.name.length > 0 &&
+		typeof value.type === "string" &&
+		value.type.length > 0 &&
+		(value.primary === undefined || typeof value.primary === "boolean")
+	);
+}
+
+export function isValidStateSchemaTable(value: unknown): value is StateSchemaTable {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.name === "string" &&
+		value.name.length > 0 &&
+		Array.isArray(value.columns) &&
+		value.columns.every(column => isValidStateSchemaTableColumn(column))
+	);
+}
+
+export function isValidStateSchema(value: unknown): value is StateSchema {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.id === "string" &&
+		value.id.length > 0 &&
+		typeof value.backend === "string" &&
+		value.backend.length > 0 &&
+		Array.isArray(value.tables) &&
+		value.tables.every(table => isValidStateSchemaTable(table))
+	);
+}
+
+
 function isValidState(value: unknown): value is StateConfig {
 	if (!isRecord(value) || typeof value.persist !== "boolean") return false;
 	if (value.schema === undefined) return true;
@@ -343,8 +632,24 @@ export function isValidManifest(value: unknown): value is AutonomyManifest {
 	if (typeof value.name !== "string" || typeof value.version !== "string") return false;
 	if (!(value.setups instanceof Map) || !(value.goals instanceof Map)) return false;
 	return (
+		Array.isArray(value.exportTargets) &&
+		Array.isArray(value.notificationRoutes) &&
+		Array.isArray(value.reviewPolicies) &&
+		Array.isArray(value.checkpoints) &&
+		Array.isArray(value.panels) &&
+		Array.isArray(value.layouts) &&
+		Array.isArray(value.syncCollections) &&
+		Array.isArray(value.stateSchemas) &&
 		[...value.setups.entries()].every(([name, setup]) => typeof name === "string" && isValidSetup(setup)) &&
-		[...value.goals.entries()].every(([name, goal]) => typeof name === "string" && isValidGoal(goal))
+		[...value.goals.entries()].every(([name, goal]) => typeof name === "string" && isValidGoal(goal)) &&
+		value.exportTargets.every(target => isValidExportTarget(target)) &&
+		value.notificationRoutes.every(route => isValidNotificationRoute(route)) &&
+		value.reviewPolicies.every(policy => isValidReviewPolicy(policy)) &&
+		value.checkpoints.every(checkpoint => isValidCheckpoint(checkpoint)) &&
+		value.panels.every(panel => isValidPanel(panel)) &&
+		value.layouts.every(layout => isValidLayout(layout)) &&
+		value.syncCollections.every(collection => isValidSyncCollection(collection)) &&
+		value.stateSchemas.every(schema => isValidStateSchema(schema))
 	);
 }
 

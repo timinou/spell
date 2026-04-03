@@ -55,6 +55,14 @@ describe("manifest type guards", () => {
 						},
 					],
 				]),
+				exportTargets: [],
+				notificationRoutes: [],
+				reviewPolicies: [],
+				checkpoints: [],
+				panels: [],
+				layouts: [],
+				syncCollections: [],
+				stateSchemas: [],
 			}),
 		).toBe(true);
 	});

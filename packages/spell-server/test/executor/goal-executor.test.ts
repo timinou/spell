@@ -103,6 +103,14 @@ function createManifest(
 		version: "1.0.0",
 		setups: new Map([["default", setup]]),
 		goals: new Map([["ship-it", goal]]),
+		exportTargets: [],
+		notificationRoutes: [],
+		reviewPolicies: [],
+		checkpoints: [],
+		panels: [],
+		layouts: [],
+		syncCollections: [],
+		stateSchemas: [],
 	};
 }
 

@@ -14,11 +14,16 @@ import type {
 import { parseEnvReference, resolveEnvValue as resolveEnvIfNeeded } from "../config/env-resolver";
 import {
 	type AutonomyManifest,
+	type Checkpoint,
+	type CheckpointRequirement,
 	type CronSchedule,
+	type ExportTarget,
 	type FilterConfig,
 	type GoalOverride,
 	type HookTarget,
 	isValidManifest,
+	type Layout,
+	type LayoutRegion,
 	type ManifestGoal,
 	type ManifestGoalPatch,
 	type ManifestHookConfig,
@@ -28,13 +33,24 @@ import {
 	type ManifestSetup,
 	type ManifestSetupPatch,
 	type NamedStateStore,
+	type NotificationRoute,
 	type OrgHook,
+	type Panel,
+	type PanelAction,
+	type PanelColumn,
 	type ParsedManifestModule,
 	type RetryConfig,
+	type ReviewPolicy,
+	type ReviewPolicyState,
+	type ReviewPolicyTransition,
 	type SandboxConfig,
 	type SetupOverride,
 	type StateConfig,
+	type StateSchema,
 	type StateSchemaColumn,
+	type StateSchemaTable,
+	type StateSchemaTableColumn,
+	type SyncCollection,
 	type TelegramHook,
 	type WebhookHook,
 	type WebhookSchedule,
@@ -567,6 +583,201 @@ function parseOverrideNode(node: Node, pathLabel: string, options: ParseManifest
 	throw new Error(`${pathLabel}.kind must be "setup" or "goal"`);
 }
 
+function parseExportTargetNode(node: Node, pathLabel: string, options: ParseManifestOptions): ExportTarget {
+	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
+	const kind = resolveOptionalStringProperty(node, "kind", pathLabel, options);
+	if (!kind) {
+		throw new Error(`${pathLabel}.kind is required`);
+	}
+	const url = resolveOptionalStringProperty(node, "url", pathLabel, options);
+	const targetPath = resolveOptionalStringProperty(node, "path", pathLabel, options);
+	const format = resolveOptionalStringProperty(node, "format", pathLabel, options);
+	return {
+		id,
+		kind,
+		...(url !== undefined ? { url } : {}),
+		...(targetPath !== undefined ? { path: targetPath } : {}),
+		...(format !== undefined ? { format } : {}),
+	} satisfies ExportTarget;
+}
+
+function parseNotificationRouteNode(node: Node, pathLabel: string, options: ParseManifestOptions): NotificationRoute {
+	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
+	const channel = resolveOptionalStringProperty(node, "channel", pathLabel, options);
+	const on = resolveOptionalStringProperty(node, "on", pathLabel, options);
+	if (!channel) {
+		throw new Error(`${pathLabel}.channel is required`);
+	}
+	if (!on) {
+		throw new Error(`${pathLabel}.on is required`);
+	}
+	const chatId = resolveOptionalNumberProperty(node, "chat-id", pathLabel, options);
+	const url = resolveOptionalStringProperty(node, "url", pathLabel, options);
+	const category = resolveOptionalStringProperty(node, "category", pathLabel, options);
+	return {
+		id,
+		channel,
+		on,
+		...(chatId !== undefined ? { chatId } : {}),
+		...(url !== undefined ? { url } : {}),
+		...(category !== undefined ? { category } : {}),
+	} satisfies NotificationRoute;
+}
+
+function parseReviewPolicyNode(node: Node, pathLabel: string, options: ParseManifestOptions): ReviewPolicy {
+	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
+	const states: ReviewPolicyState[] = [];
+	const transitions: ReviewPolicyTransition[] = [];
+	for (const [index, child] of (node.children?.nodes ?? []).entries()) {
+		const childName = getNodeName(child);
+		if (childName === "state") {
+			const name = expectStringArgument(child, `${pathLabel}.state.${states.length}.name`, 0, options);
+			const initial = resolveOptionalBooleanProperty(child, "initial", `${pathLabel}.state.${states.length}`, options);
+			const terminal = resolveOptionalBooleanProperty(child, "terminal", `${pathLabel}.state.${states.length}`, options);
+			states.push({
+				name,
+				...(initial !== undefined ? { initial } : {}),
+				...(terminal !== undefined ? { terminal } : {}),
+			} satisfies ReviewPolicyState);
+			continue;
+		}
+		if (childName === "transition") {
+			const transitionPath = `${pathLabel}.transition.${transitions.length}`;
+			const from = resolveOptionalStringProperty(child, "from", transitionPath, options);
+			const to = resolveOptionalStringProperty(child, "to", transitionPath, options);
+			const action = resolveOptionalStringProperty(child, "action", transitionPath, options);
+			if (!from) throw new Error(`${transitionPath}.from is required`);
+			if (!to) throw new Error(`${transitionPath}.to is required`);
+			if (!action) throw new Error(`${transitionPath}.action is required`);
+			transitions.push({ from, to, action } satisfies ReviewPolicyTransition);
+			continue;
+		}
+		throw new Error(`${pathLabel} has unsupported child "${childName}" at index ${index}`);
+	}
+	return { id, states, transitions } satisfies ReviewPolicy;
+}
+
+function parseCheckpointNode(node: Node, pathLabel: string, options: ParseManifestOptions): Checkpoint {
+	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
+	const requires: CheckpointRequirement[] = [];
+	for (const [index, child] of (node.children?.nodes ?? []).entries()) {
+		const childName = getNodeName(child);
+		if (childName !== "require") {
+			throw new Error(`${pathLabel} has unsupported child "${childName}" at index ${index}`);
+		}
+		const requirePath = `${pathLabel}.require.${requires.length}`;
+		const name = expectStringArgument(child, `${requirePath}.name`, 0, options);
+		const kind = resolveOptionalStringProperty(child, "kind", requirePath, options);
+		if (!kind) throw new Error(`${requirePath}.kind is required`);
+		const policy = resolveOptionalStringProperty(child, "policy", requirePath, options);
+		const state = resolveOptionalStringProperty(child, "state", requirePath, options);
+		const scope = resolveOptionalStringProperty(child, "scope", requirePath, options);
+		requires.push({
+			name,
+			kind,
+			...(policy !== undefined ? { policy } : {}),
+			...(state !== undefined ? { state } : {}),
+			...(scope !== undefined ? { scope } : {}),
+		} satisfies CheckpointRequirement);
+	}
+	return { id, requires } satisfies Checkpoint;
+}
+
+function parsePanelNode(node: Node, pathLabel: string, options: ParseManifestOptions): Panel {
+	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
+	const source = resolveOptionalStringProperty(node, "source", pathLabel, options);
+	if (!source) {
+		throw new Error(`${pathLabel}.source is required`);
+	}
+	const columns: PanelColumn[] = [];
+	const actions: PanelAction[] = [];
+	for (const [index, child] of (node.children?.nodes ?? []).entries()) {
+		const childName = getNodeName(child);
+		if (childName === "column") {
+			const columnPath = `${pathLabel}.column.${columns.length}`;
+			const name = expectStringArgument(child, `${columnPath}.name`, 0, options);
+			const type = resolveOptionalStringProperty(child, "type", columnPath, options);
+			if (!type) throw new Error(`${columnPath}.type is required`);
+			columns.push({ name, type } satisfies PanelColumn);
+			continue;
+		}
+		if (childName === "action") {
+			const actionPath = `${pathLabel}.action.${actions.length}`;
+			const name = expectStringArgument(child, `${actionPath}.name`, 0, options);
+			const label = resolveOptionalStringProperty(child, "label", actionPath, options);
+			if (!label) throw new Error(`${actionPath}.label is required`);
+			actions.push({ name, label } satisfies PanelAction);
+			continue;
+		}
+		throw new Error(`${pathLabel} has unsupported child "${childName}" at index ${index}`);
+	}
+	return { id, source, columns, actions } satisfies Panel;
+}
+
+function parseLayoutNode(node: Node, pathLabel: string, options: ParseManifestOptions): Layout {
+	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
+	const regions: LayoutRegion[] = [];
+	for (const [index, child] of (node.children?.nodes ?? []).entries()) {
+		const childName = getNodeName(child);
+		if (childName !== "region") {
+			throw new Error(`${pathLabel} has unsupported child "${childName}" at index ${index}`);
+		}
+		const regionPath = `${pathLabel}.region.${regions.length}`;
+		const name = expectStringArgument(child, `${regionPath}.name`, 0, options);
+		const panel = resolveOptionalStringProperty(child, "panel", regionPath, options);
+		if (!panel) throw new Error(`${regionPath}.panel is required`);
+		regions.push({ name, panel } satisfies LayoutRegion);
+	}
+	return { id, regions } satisfies Layout;
+}
+
+function parseSyncCollectionNode(node: Node, pathLabel: string, options: ParseManifestOptions): SyncCollection {
+	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
+	const source = resolveOptionalStringProperty(node, "source", pathLabel, options);
+	if (!source) {
+		throw new Error(`${pathLabel}.source is required`);
+	}
+	const filter = resolveOptionalStringProperty(node, "filter", pathLabel, options);
+	return { id, source, ...(filter !== undefined ? { filter } : {}) } satisfies SyncCollection;
+}
+
+function parseStateSchemaNode(node: Node, pathLabel: string, options: ParseManifestOptions): StateSchema {
+	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
+	const backend = resolveOptionalStringProperty(node, "backend", pathLabel, options);
+	if (!backend) {
+		throw new Error(`${pathLabel}.backend is required`);
+	}
+	const tables: StateSchemaTable[] = [];
+	for (const [tableIndex, tableNode] of (node.children?.nodes ?? []).entries()) {
+		const childName = getNodeName(tableNode);
+		if (childName !== "table") {
+			throw new Error(`${pathLabel} has unsupported child "${childName}" at index ${tableIndex}`);
+		}
+		const tablePath = `${pathLabel}.table.${tables.length}`;
+		const name = expectStringArgument(tableNode, `${tablePath}.name`, 0, options);
+		const columns: StateSchemaTableColumn[] = [];
+		for (const [columnIndex, columnNode] of (tableNode.children?.nodes ?? []).entries()) {
+			const columnName = getNodeName(columnNode);
+			if (columnName !== "column") {
+				throw new Error(`${tablePath} has unsupported child "${columnName}" at index ${columnIndex}`);
+			}
+			const columnPath = `${tablePath}.column.${columns.length}`;
+			const columnId = expectStringArgument(columnNode, `${columnPath}.name`, 0, options);
+			const type = resolveOptionalStringProperty(columnNode, "type", columnPath, options);
+			if (!type) throw new Error(`${columnPath}.type is required`);
+			const primary = resolveOptionalBooleanProperty(columnNode, "primary", columnPath, options);
+			columns.push({
+				name: columnId,
+				type,
+				...(primary !== undefined ? { primary } : {}),
+			} satisfies StateSchemaTableColumn);
+		}
+		tables.push({ name, columns } satisfies StateSchemaTable);
+	}
+	return { id, backend, tables } satisfies StateSchema;
+}
+
+
 export function parseManifestModuleDocument(
 	document: Document,
 	options: ParseManifestOptions = {},
@@ -579,6 +790,14 @@ export function parseManifestModuleDocument(
 	const goals = new Map<string, ManifestGoal>();
 	const overrides: ManifestOverride[] = [];
 	const actionDescriptors: ActionDescriptor[] = [];
+	const exportTargets: ExportTarget[] = [];
+	const notificationRoutes: NotificationRoute[] = [];
+	const reviewPolicies: ReviewPolicy[] = [];
+	const checkpoints: Checkpoint[] = [];
+	const panels: Panel[] = [];
+	const layouts: Layout[] = [];
+	const syncCollections: SyncCollection[] = [];
+	const stateSchemas: StateSchema[] = [];
 
 	for (const [index, node] of document.nodes.entries()) {
 		const nodeName = getNodeName(node);
@@ -626,6 +845,42 @@ export function parseManifestModuleDocument(
 				);
 				continue;
 			}
+			if (nodeName === "export-target") {
+				exportTargets.push(parseExportTargetNode(node, `export-target.${exportTargets.length}`, options));
+				continue;
+			}
+			if (nodeName === "notification-route") {
+				notificationRoutes.push(
+					parseNotificationRouteNode(node, `notification-route.${notificationRoutes.length}`, options),
+				);
+				continue;
+			}
+			if (nodeName === "review-policy") {
+				reviewPolicies.push(parseReviewPolicyNode(node, `review-policy.${reviewPolicies.length}`, options));
+				continue;
+			}
+			if (nodeName === "checkpoint") {
+				checkpoints.push(parseCheckpointNode(node, `checkpoint.${checkpoints.length}`, options));
+				continue;
+			}
+			if (nodeName === "panel") {
+				panels.push(parsePanelNode(node, `panel.${panels.length}`, options));
+				continue;
+			}
+			if (nodeName === "layout") {
+				layouts.push(parseLayoutNode(node, `layout.${layouts.length}`, options));
+				continue;
+			}
+			if (nodeName === "sync-collection") {
+				syncCollections.push(
+					parseSyncCollectionNode(node, `sync-collection.${syncCollections.length}`, options),
+				);
+				continue;
+			}
+			if (nodeName === "state-schema") {
+				stateSchemas.push(parseStateSchemaNode(node, `state-schema.${stateSchemas.length}`, options));
+				continue;
+			}
 			throw new Error(`Unsupported top-level node "${nodeName}" at index ${index}`);
 		} catch (error) {
 			errors.push(error instanceof Error ? error.message : String(error));
@@ -636,7 +891,23 @@ export function parseManifestModuleDocument(
 		throw new Error(errors.join("\n"));
 	}
 
-	return { name, version, imports, setups, goals, overrides, actionDescriptors };
+	return {
+		name,
+		version,
+		imports,
+		setups,
+		goals,
+		overrides,
+		actionDescriptors,
+		exportTargets,
+		notificationRoutes,
+		reviewPolicies,
+		checkpoints,
+		panels,
+		layouts,
+		syncCollections,
+		stateSchemas,
+	};
 }
 
 function hydrateManifest(manifestModule: ParsedManifestModule): AutonomyManifest {
@@ -651,6 +922,14 @@ function hydrateManifest(manifestModule: ParsedManifestModule): AutonomyManifest
 		version: manifestModule.version,
 		setups: manifestModule.setups,
 		goals: manifestModule.goals,
+		exportTargets: manifestModule.exportTargets,
+		notificationRoutes: manifestModule.notificationRoutes,
+		reviewPolicies: manifestModule.reviewPolicies,
+		checkpoints: manifestModule.checkpoints,
+		panels: manifestModule.panels,
+		layouts: manifestModule.layouts,
+		syncCollections: manifestModule.syncCollections,
+		stateSchemas: manifestModule.stateSchemas,
 	};
 }
 
