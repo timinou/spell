@@ -101,3 +101,245 @@ NOTE [2026-04-02]: Implemented autonomy_state hidden builtin tool with SQLite KV
 - =autonomy_state= tool appears in =BUILTIN_TOOLS= registry
 - Tool is NOT shown in =--help= or tool listing unless explicitly activated
 - =bun check:ts= passes with new tool code
+* DONE CLI Commands and Package Setup
+:PROPERTIES:
+:CUSTOM_ID: FEAT-272-cli-commands-and-package-setup
+:EFFORT: 6h
+:PRIORITY: A
+:LAYER: application
+:DEPENDS: FEAT-265-sync-kdl-config-schema-and-parser FEAT-267-ssh-and-rsync-operations-module FEAT-268-compiled-binary-bundle-builder FEAT-269-secret-management-with-age-encryption FEAT-270-systemd-service-management FEAT-271-continuous-bidirectional-watch-mode
+:END:
+
+  NOTE [2026-04-03]: Completed: CLI entry point, subcommand routing (init/push/pull/watch/status/secrets/bootstrap), resolveContext with target validation. Tests pass.
+
+### Scope
+- IN: Package scaffolding (package.json, tsconfig.json), CLI entry point (main.ts), subcommand routing (init/push/pull/watch/status/secrets/bootstrap), integration with coding-agent `spell deploy`, terminal output formatting, error handling, dry-run support
+- OUT: Underlying module implementations (handled by FEAT-265 through FEAT-271)
+
+### Tests
+- File: packages/spell-deploy/test/cli/commands.test.ts
+- Scenarios:
+  1. Parse `spell deploy push production` resolves correct target from sync.kdl
+  2. Default target used when target name omitted
+  3. Unknown subcommand produces help text
+  4. Missing .spell/sync.kdl produces actionable error
+  5. Unknown target name lists available targets
+  6. --dry-run flag propagated to all operations
+  7. Bootstrap runs init + secrets + push in sequence
+  8. Push orchestration: stop service -> atomic push -> start service -> health check
+
+### Implementation
+** Package scaffolding
+:PROPERTIES:
+:CUSTOM_ID: FEAT-272-cli-commands-and-package-setup::scaffold
+:END:
+- Files: packages/spell-deploy/package.json, tsconfig.json, src/index.ts
+- Workspace deps: @oh-my-pi/pi-utils, @bgotink/kdl
+- Binary: spell-deploy in package.json bin
+- Register in root workspace
+
+** CLI entry and arg parsing
+:PROPERTIES:
+:CUSTOM_ID: FEAT-272-cli-commands-and-package-setup::cli-entry
+:DEPENDS: FEAT-272-cli-commands-and-package-setup::scaffold
+:END:
+- File: packages/spell-deploy/src/main.ts
+- Subcommands: init, push, pull, watch, status, secrets, bootstrap
+- Flags: --target, --dry-run, --config-dir, --verbose
+
+** CLI tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-272-cli-commands-and-package-setup::cli-tests
+:DEPENDS: FEAT-272-cli-commands-and-package-setup::cli-entry
+:END:
+- File: packages/spell-deploy/test/cli/commands.test.ts
+
+** Push command orchestration
+:PROPERTIES:
+:CUSTOM_ID: FEAT-272-cli-commands-and-package-setup::cmd-push
+:DEPENDS: FEAT-272-cli-commands-and-package-setup::cli-tests
+:END:
+- Composes: config loader + service stop + rsync push + dir swap + service start + health check
+- Handles errors at each step with rollback guidance
+
+** Init command
+:PROPERTIES:
+:CUSTOM_ID: FEAT-272-cli-commands-and-package-setup::cmd-init
+:DEPENDS: FEAT-272-cli-commands-and-package-setup::cli-tests
+:END:
+- Creates remote dirs, user, pushes bundle, installs systemd unit
+
+** Pull command
+:PROPERTIES:
+:CUSTOM_ID: FEAT-272-cli-commands-and-package-setup::cmd-pull
+:DEPENDS: FEAT-272-cli-commands-and-package-setup::cli-tests
+:END:
+- Composes: config loader + SQLite backup + rsync pull
+
+** Watch command
+:PROPERTIES:
+:CUSTOM_ID: FEAT-272-cli-commands-and-package-setup::cmd-watch
+:DEPENDS: FEAT-272-cli-commands-and-package-setup::cli-tests
+:END:
+- Starts continuous sync, handles SIGINT for graceful shutdown
+
+** Status command
+:PROPERTIES:
+:CUSTOM_ID: FEAT-272-cli-commands-and-package-setup::cmd-status
+:DEPENDS: FEAT-272-cli-commands-and-package-setup::cli-tests
+:END:
+- Remote service status via systemctl + health check via HTTP
+
+** Secrets command
+:PROPERTIES:
+:CUSTOM_ID: FEAT-272-cli-commands-and-package-setup::cmd-secrets
+:DEPENDS: FEAT-272-cli-commands-and-package-setup::cli-tests
+:END:
+- Decrypt .env.age and push to remote
+
+** Bootstrap command
+:PROPERTIES:
+:CUSTOM_ID: FEAT-272-cli-commands-and-package-setup::cmd-bootstrap
+:DEPENDS: FEAT-272-cli-commands-and-package-setup::cmd-init FEAT-272-cli-commands-and-package-setup::cmd-secrets FEAT-272-cli-commands-and-package-setup::cmd-push
+:END:
+- Orchestrates init -> secrets -> push in sequence
+
+** Coding-agent integration
+:PROPERTIES:
+:CUSTOM_ID: FEAT-272-cli-commands-and-package-setup::spell-integration
+:DEPENDS: FEAT-272-cli-commands-and-package-setup::cmd-push
+:END:
+- File: packages/coding-agent/src/commands/deploy.ts
+- `spell deploy` delegates to spell-deploy binary
+
+### Edge Cases
+- Running from wrong directory (no .spell/sync.kdl)
+- Ctrl+C during watch mode (graceful shutdown)
+- Multiple concurrent deploy commands to same target (advisory lock via /tmp/spell-deploy-{target}.lock)
+- Exit codes: 0=success, 1=error, 2=partial (push succeeded but health check failed)
+
+### Acceptance Criteria
+- All CLI tests pass
+- `spell deploy push production` runs full orchestrated push cycle
+- `spell deploy bootstrap production` runs init+secrets+push
+- `spell deploy watch production` starts continuous sync
+- --dry-run shows commands without executing
+- Errors include actionable suggestions
+
+* Scope
+- IN: Package scaffolding (package.json, tsconfig.json), CLI entry point (main.ts), all deploy subcommands (init, push, pull, watch, status, secrets, bootstrap), integration with coding-agent's =spell deploy= command, terminal output formatting, error handling
+- OUT: Implementation of underlying operations (handled by other modules), NixOS module
+
+* Tests
+- File: =packages/spell-deploy/test/cli/commands.test.ts=
+- Scenarios:
+  1. Parse CLI args: =spell deploy push production= resolves correct target
+  2. Default target used when target name omitted
+  3. Unknown subcommand produces help text
+  4. Missing =sync.kdl= produces actionable error
+  5. Unknown target name produces error with available targets
+  6. =--dry-run= flag propagated to operations
+  7. Bootstrap runs init + secrets + push in sequence
+
+* Implementation
+1. Package scaffolding (=FEAT-272-cli-commands-and-package-setup::scaffold=)
+   - Files: =packages/spell-deploy/package.json=, =tsconfig.json=, =src/index.ts=
+   - Workspace dependency on =@oh-my-pi/pi-utils=, =@bgotink/kdl=
+   - Binary: =spell-deploy=
+2. CLI entry and arg parsing (=FEAT-272-cli-commands-and-package-setup::cli-entry=, depends on =FEAT-272-cli-commands-and-package-setup::scaffold=)
+   - File: =packages/spell-deploy/src/main.ts=
+   - Subcommands: =init=, =push=, =pull=, =watch=, =status=, =secrets=, =bootstrap=
+   - =--target= flag, =--dry-run= flag, =--config-dir= flag
+3. Write CLI tests (=FEAT-272-cli-commands-and-package-setup::cli-tests=, depends on =FEAT-272-cli-commands-and-package-setup::cli-entry=)
+   - File: =packages/spell-deploy/test/cli/commands.test.ts=
+4. Implement init command (=FEAT-272-cli-commands-and-package-setup::cmd-init=, depends on =FEAT-272-cli-commands-and-package-setup::cli-tests=)
+   - Create remote dirs, push bundle, install systemd unit, create user
+5. Implement push command (=FEAT-272-cli-commands-and-package-setup::cmd-push=, depends on =FEAT-272-cli-commands-and-package-setup::cli-tests=)
+   - Load config, atomic push, restart service, health check
+6. Implement pull command (=FEAT-272-cli-commands-and-package-setup::cmd-pull=, depends on =FEAT-272-cli-commands-and-package-setup::cli-tests=)
+   - Load config, SQLite backup, rsync pull
+7. Implement watch command (=FEAT-272-cli-commands-and-package-setup::cmd-watch=, depends on =FEAT-272-cli-commands-and-package-setup::cli-tests=)
+   - Start continuous sync, handle SIGINT
+8. Implement status command (=FEAT-272-cli-commands-and-package-setup::cmd-status=, depends on =FEAT-272-cli-commands-and-package-setup::cli-tests=)
+   - Remote service status + health check
+9. Implement secrets command (=FEAT-272-cli-commands-and-package-setup::cmd-secrets=, depends on =FEAT-272-cli-commands-and-package-setup::cli-tests=)
+   - Decrypt and push =.env=
+10. Implement bootstrap command (=FEAT-272-cli-commands-and-package-setup::cmd-bootstrap=, depends on =FEAT-272-cli-commands-and-package-setup::cmd-init=, =FEAT-272-cli-commands-and-package-setup::cmd-secrets=, =FEAT-272-cli-commands-and-package-setup::cmd-push=)
+    - Orchestrate =init= → =secrets= → =push=
+11. Integration with coding-agent (=FEAT-272-cli-commands-and-package-setup::spell-integration=, depends on =FEAT-272-cli-commands-and-package-setup::cmd-push=)
+    - File: =packages/coding-agent/src/commands/deploy.ts=
+    - =spell deploy= delegates to =spell-deploy=
+
+* Edge Cases
+- Running from wrong directory (no =.spell/sync.kdl=)
+- Ctrl+C during watch mode (graceful shutdown)
+- Multiple concurrent deploy commands to same target (lock file)
+- stdout vs stderr: progress to stderr, results to stdout
+- Exit codes: 0=success, 1=error, 2=partial failure
+
+* Acceptance Criteria
+- All CLI tests pass
+- =spell deploy push production= runs full push cycle
+- =spell deploy bootstrap production= runs init+secrets+push
+- =spell deploy watch production= starts continuous sync
+- Errors produce actionable messages with suggestions
+- =--dry-run= shows what would happen without executing
+
+* Scope
+- IN: Package scaffolding (package.json, tsconfig.json), CLI entry point (main.ts), all deploy subcommands (init, push, pull, watch, status, secrets, bootstrap), integration with coding-agent's =spell deploy= command, terminal output formatting, error handling
+- OUT: Implementation of underlying operations (handled by other modules), NixOS module
+
+* Tests
+- File: =packages/spell-deploy/test/cli/commands.test.ts=
+- Scenarios:
+  1. Parse CLI args: =spell deploy push production= resolves correct target
+  2. Default target used when target name omitted
+  3. Unknown subcommand produces help text
+  4. Missing =sync.kdl= produces actionable error
+  5. Unknown target name produces error with available targets
+  6. =--dry-run= flag propagated to operations
+  7. Bootstrap runs init + secrets + push in sequence
+
+* Implementation
+1. Package scaffolding (=PARENT-ID::scaffold=)
+   - Files: =packages/spell-deploy/package.json=, =tsconfig.json=, =src/index.ts=
+   - Workspace dependency on =@oh-my-pi/pi-utils=, =@bgotink/kdl=
+   - Binary: =spell-deploy=
+2. CLI entry and arg parsing (=PARENT-ID::cli-entry=, depends on =PARENT-ID::scaffold=)
+   - File: =packages/spell-deploy/src/main.ts=
+   - Subcommands: =init=, =push=, =pull=, =watch=, =status=, =secrets=, =bootstrap=
+   - =--target= flag, =--dry-run= flag, =--config-dir= flag
+3. Write CLI tests (=PARENT-ID::cli-tests=, depends on =PARENT-ID::cli-entry=)
+   - File: =packages/spell-deploy/test/cli/commands.test.ts=
+4. Implement init command (=PARENT-ID::cmd-init=, depends on =PARENT-ID::cli-tests=)
+   - Create remote dirs, push bundle, install systemd unit, create user
+5. Implement push command (=PARENT-ID::cmd-push=, depends on =PARENT-ID::cli-tests=)
+   - Load config, atomic push, restart service, health check
+6. Implement pull command (=PARENT-ID::cmd-pull=, depends on =PARENT-ID::cli-tests=)
+   - Load config, SQLite backup, rsync pull
+7. Implement watch command (=PARENT-ID::cmd-watch=, depends on =PARENT-ID::cli-tests=)
+   - Start continuous sync, handle SIGINT
+8. Implement status command (=PARENT-ID::cmd-status=, depends on =PARENT-ID::cli-tests=)
+   - Remote service status + health check
+9. Implement secrets command (=PARENT-ID::cmd-secrets=, depends on =PARENT-ID::cli-tests=)
+   - Decrypt and push =.env=
+10. Implement bootstrap command (=PARENT-ID::cmd-bootstrap=, depends on =PARENT-ID::cmd-init=, =PARENT-ID::cmd-secrets=, =PARENT-ID::cmd-push=)
+    - Orchestrate =init= → =secrets= → =push=
+11. Integration with coding-agent (=PARENT-ID::spell-integration=, depends on =PARENT-ID::cmd-push=)
+    - File: =packages/coding-agent/src/commands/deploy.ts=
+    - =spell deploy= delegates to =spell-deploy=
+
+* Edge Cases
+- Running from wrong directory (no =.spell/sync.kdl=)
+- Ctrl+C during watch mode (graceful shutdown)
+- Multiple concurrent deploy commands to same target (lock file)
+- stdout vs stderr: progress to stderr, results to stdout
+- Exit codes: 0=success, 1=error, 2=partial failure
+
+* Acceptance Criteria
+- All CLI tests pass
+- =spell deploy push production= runs full push cycle
+- =spell deploy bootstrap production= runs init+secrets+push
+- =spell deploy watch production= starts continuous sync
+- Errors produce actionable messages with suggestions
+- =--dry-run= shows what would happen without executing

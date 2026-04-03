@@ -1,0 +1,71 @@
+#+TITLE: synckdl Config Schema and Parser
+#+STATE: DONE
+#+SESSION_ID: 14ac2c5145bb8cb1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T12-12-59-484Z_14ac1e06b73b8ca4/6-CreateFeat1.jsonl]]
+#+CUSTOM_ID: FEAT-265-sync-kdl-config-schema-and-parser
+#+EFFORT: 4h
+#+LAYER: library
+#+PRIORITY: A
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-03]: Completed: Created packages/spell-deploy/ with SyncConfig types, sync-parser.ts, loader.ts. 8 parser tests passing.
+
+* Scope
+- IN: KDL type definitions (SyncConfig, SyncTarget, SyncSettings, BundleConfig), sync-parser.ts, config validation, default values, env() resolution for SSH paths
+- OUT: Actual rsync execution, SSH client, CLI commands, service management
+
+* Tests
+- File: packages/spell-deploy/test/config/sync-parser.test.ts
+- Scenarios:
+  1. Parse valid sync.kdl with all fields
+  2. Parse minimal sync.kdl (only required fields, verify defaults)
+  3. Reject missing required fields (host, project-root)
+  4. Multiple targets with default-target
+  5. Env var resolution in SSH key paths
+  6. Invalid KDL syntax produces clear error
+
+* Implementation
+** Define TypeScript types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-265-sync-kdl-config-schema-and-parser::define-types
+:END:
+- File: packages/spell-deploy/src/config/types.ts
+- Types: SyncConfig, SyncTarget, SyncSettings, BundleConfig, ServiceConfig
+
+** Write parser tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-265-sync-kdl-config-schema-and-parser::parser-tests
+:DEPENDS: FEAT-265-sync-kdl-config-schema-and-parser::define-types
+:END:
+- File: packages/spell-deploy/test/config/sync-parser.test.ts
+- Initially failing tests for all scenarios in Tests section
+
+** Implement KDL parser
+:PROPERTIES:
+:CUSTOM_ID: FEAT-265-sync-kdl-config-schema-and-parser::implement-parser
+:DEPENDS: FEAT-265-sync-kdl-config-schema-and-parser::parser-tests
+:END:
+- File: packages/spell-deploy/src/config/sync-parser.ts
+- Use @bgotink/kdl (add as dependency to spell-deploy)
+- Follow patterns from packages/spell-server/src/config/server-parser.ts
+
+** Config loader with validation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-265-sync-kdl-config-schema-and-parser::config-loader
+:DEPENDS: FEAT-265-sync-kdl-config-schema-and-parser::implement-parser
+:END:
+- File: packages/spell-deploy/src/config/loader.ts
+- Load sync.kdl from .spell/ directory
+- Validate required fields, apply defaults
+* Edge Cases
+- Missing optional fields get sensible defaults (port=22, push-debounce="2s", pull-interval="30s")
+- ssh-key path with ~ expansion
+- sync.kdl not found in .spell/ produces helpful error
+- Invalid port range
+- Duplicate target names
+
+* Acceptance Criteria
+- All parser tests pass
+- Can parse the canonical sync.kdl schema from the design doc
+- Type-safe access to all config fields
+- Error messages include KDL line numbers

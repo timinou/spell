@@ -1,0 +1,95 @@
+#+TITLE: Continuous Bidirectional Watch Mode
+#+STATE: DONE
+#+SESSION_ID: 14ac2c51467b8cb9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T12-12-59-484Z_14ac1e06b73b8ca4/11-CreateFeat6.jsonl]]
+#+CUSTOM_ID: FEAT-271-continuous-bidirectional-watch-mode
+#+EFFORT: 6h
+#+PRIORITY: A
+#+LAYER: library
+#+DEPENDS: FEAT-267-ssh-and-rsync-operations-module
+
+NOTE [2026-04-03]: Completed: FileWatcher with Bun native fs.watch, PullPoller, WatchOrchestrator with sync lock, duration parser. Tests pass.
+
+* Scope
+** In-scope
+- Local file watcher using Bun native =fs.watch= (not chokidar; Bun already uses =fs.watch= throughout the codebase)
+- Debounced push on local file changes
+- Periodic pull on configured interval
+- Combined watch process lifecycle management
+- Graceful shutdown of the watch process
+- Reconnection on SSH failure
+** Out-of-scope
+- CLI command wiring for =spell deploy watch <target>= (separate item)
+- Initial push/pull behavior (owned by push/pull modules)
+- Service management and restart flow
+
+* Tests
+- File: =packages/spell-deploy/test/sync/watch.test.ts=
+- Scenario: file change triggers push after debounce
+- Scenario: rapid changes are coalesced into a single push
+- Scenario: pull fires at the configured interval
+- Scenario: watch ignores excluded paths (=node_modules=, =.git=)
+- Scenario: graceful stop cleans up watchers and timers
+- Scenario: SSH failure triggers a reconnection attempt
+- Scenario: push and pull never overlap (mutex/lock)
+
+* Implementation
+** Define watch types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-271-continuous-bidirectional-watch-mode::define-types
+:END:
+- File: =packages/spell-deploy/src/sync/watch-types.ts=
+- Define =WatchOptions=, =WatchState=, and =SyncEvent=
+
+** Write watch tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-271-continuous-bidirectional-watch-mode::watch-tests
+:DEPENDS:  FEAT-271-continuous-bidirectional-watch-mode::define-types
+:END:
+- File: =packages/spell-deploy/test/sync/watch.test.ts=
+- Establish the dependency ordering so tests define the contract before runtime orchestration code lands
+
+** Implement file watcher
+:PROPERTIES:
+:CUSTOM_ID: FEAT-271-continuous-bidirectional-watch-mode::implement-watcher
+:DEPENDS:  FEAT-271-continuous-bidirectional-watch-mode::watch-tests
+:END:
+- File: =packages/spell-deploy/src/sync/watcher.ts=
+- Use Bun native =fs.watch= with recursive option
+- Debounce via configurable timer (default =2s=)
+- Apply exclude patterns from sync config before scheduling push work
+
+** Implement pull poller
+:PROPERTIES:
+:CUSTOM_ID: FEAT-271-continuous-bidirectional-watch-mode::implement-poller
+:DEPENDS:  FEAT-271-continuous-bidirectional-watch-mode::watch-tests
+:END:
+- File: =packages/spell-deploy/src/sync/poller.ts=
+- Use =setInterval= for pull scheduling
+- Trigger SQLite backup before each pull
+
+** Implement watch orchestrator
+:PROPERTIES:
+:CUSTOM_ID: FEAT-271-continuous-bidirectional-watch-mode::implement-orchestrator
+:DEPENDS:  FEAT-271-continuous-bidirectional-watch-mode::implement-watcher FEAT-271-continuous-bidirectional-watch-mode::implement-poller
+:END:
+- File: =packages/spell-deploy/src/sync/watch.ts=
+- Combine watcher and poller into one lifecycle-managed process
+- Enforce mutex/lock so push and pull never run concurrently
+- Retry/reconnect on SSH failure
+- Use =AbortController= for clean shutdown
+
+* Edge Cases
+- =fs.watch= can emit multiple events for one save (tmp-file writes, rename bursts)
+- Pull may run while the remote goal is actively writing SQLite state; backup step must preserve consistency
+- Network disconnect during push can leave partial rsync output in transit
+- Watch roots may include symlinked directories
+- Very large change bursts (for example =git checkout= or =bun install=) must not schedule unbounded overlapping work
+- Push-then-immediate-pull race: a local push must not immediately pull the same remote-side change back as noise
+
+* Acceptance Criteria
+- Local file changes trigger push within the configured debounce window
+- Pull executes at the configured interval
+- Push and pull never overlap
+- Clean shutdown releases all watchers, timers, and pending abortable work
+- SSH failures trigger reconnection behavior instead of leaving watch mode dead

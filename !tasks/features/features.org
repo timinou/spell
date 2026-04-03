@@ -1,0 +1,34 @@
+#+TITLE: serverkdl env Secret Resolution Migration
+#+STATE: DONE
+#+SESSION_ID: 14ac2c51467b8cb7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T12-12-59-484Z_14ac1e06b73b8ca4/13-CreateFeat8.jsonl]]
+#+CUSTOM_ID: FEAT-264-server-kdl-env-secret-resolution-migrati
+#+EFFORT: 30m
+#+LAYER: library
+#+PRIORITY: A
+
+NOTE [2026-04-03]: Completed: Updated growth server.kdl.example to use env() for auth.password, webhook-secret, and goal-tokens. Added 5 regression tests in server-env-resolution.test.ts.
+
+* Scope
+- Context: `packages/spell-server/src/config/server-parser.ts` already resolves `env()` values through the existing `resolveEnvValue()` path. No parser implementation work remains.
+- IN: add explicit test coverage proving current `env()` behavior in server parser, and update growth's `server.kdl.example` to demonstrate `env()` for secrets.
+- OUT: parser refactor, new env-resolution logic, channels/autonomy/sync config changes, or any follow-on blocking dependency work.
+- Note: this item is not blocking other work; it is a documentation/example cleanup plus missing regression coverage.
+
+* Tests
+- File: `packages/spell-server/test/config/server-env-resolution.test.ts`
+- Add coverage that confirms existing `env()` resolution behavior in `server-parser.ts`, including secret-bearing fields already supported by `resolveEnvValue()`.
+- Verify `env()` works for `auth.password` and `webhook-secret` so future regressions fail loudly.
+
+* Implementation
+1. Add regression test coverage for existing `env()` handling in `packages/spell-server/src/config/server-parser.ts`.
+   - Confirm `env(VAR_NAME)` resolves correctly in server config parsing.
+   - Include assertions for `auth.password` and `webhook-secret`.
+2. Update growth example config to use `env()` syntax.
+   - File: `../growth/.spell/server.kdl.example`
+   - Replace literal examples with `env()` for `auth.password` and `webhook-secret`.
+
+* Acceptance Criteria
+- FEAT-264 adds test coverage that proves `server-parser.ts` already resolves `env()` values.
+- Growth `server.kdl.example` uses `env()` for `auth.password` and `webhook-secret`.
+- Item remains scoped as documentation/example improvement only and does not block other work.

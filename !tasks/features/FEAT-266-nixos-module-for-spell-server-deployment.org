@@ -1,0 +1,43 @@
+#+TITLE: NixOS Module for Spell Server Deployment
+#+STATE: DONE
+#+SESSION_ID: 14ac2c51463b8cb5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T12-12-59-484Z_14ac1e06b73b8ca4/14-CreateFeat9.jsonl]]
+#+CUSTOM_ID: FEAT-266-nixos-module-for-spell-server-deployment
+#+EFFORT: 4h
+#+PRIORITY: C
+#+LAYER: infrastructure
+#+DEPENDS: FEAT-270-systemd-service-management
+
+NOTE [2026-04-03]: Completed: NixOS module with multi-project support, Caddy reverse proxy, SQLite backup timers, hardened systemd units. Module parses. Example config and deploy script included.
+
+* Scope
+- IN: NixOS module for provisioning spell-server on Hetzner. Creates system user, data directories, Caddy reverse proxy with TLS, firewall rules, daily SQLite backups. Optional: one-time bootstrap script.
+- OUT: systemd unit generation (handled by service module), bundle building (handled by bundle module), non-NixOS deployment
+
+* Tests
+- No automated tests for NixOS module (manual verification on Hetzner instance)
+- Validation: =nix eval= to check module syntax
+- Acceptance: deploy to test Hetzner instance, verify Caddy + systemd + backup timer
+
+* Implementation
+1. NixOS module definition (FEAT-266-nixos-module-for-spell-server-deployment::nix-module)
+   - File: =packages/spell-deploy/nix/module.nix=
+   - Options: =projects= (list of project configs), =spell-bundle-path=, =caddy domains=
+   - Based on =.ancillary/spellcasting/infrastructure/configuration.nix= patterns
+2. Example configuration (FEAT-266-nixos-module-for-spell-server-deployment::nix-example, depends on nix-module)
+   - File: =packages/spell-deploy/nix/example-configuration.nix=
+   - Demonstrates multi-project setup
+3. Deploy script (FEAT-266-nixos-module-for-spell-server-deployment::deploy-script, depends on nix-module)
+   - File: =packages/spell-deploy/scripts/deploy-nixos.sh=
+   - Push =configuration.nix=, =nixos-rebuild switch=
+
+* Edge Cases
+- Multiple projects on same port (Caddy path-based routing vs subdomain)
+- Backup timer for multiple SQLite DBs
+- User/group creation idempotency
+- Caddy ACME rate limits during testing
+
+* Acceptance Criteria
+- NixOS module evaluates without errors
+- Example configuration demonstrates multi-project setup
+- Deploy script provisions a working spell-server on Hetzner

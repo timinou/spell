@@ -1,0 +1,206 @@
+#+TITLE: Spell Deploy  Remote Server Sync and Deployment
+#+STATE: DONE
+#+SESSION_ID: 14ac1e06b73b8ca4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T12-12-59-484Z_14ac1e06b73b8ca4.jsonl]]
+#+CUSTOM_ID: PLAN-119-spell-deploy-remote-server-sync-and-depl
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-03]: All 9 child items completed. 68 tests passing. Package fully scaffolded with config, sync, bundle, service, secrets, CLI, and NixOS modules.
+
+
+* Initial Message
+
+Imagine there's a persistent spell server on a place like Hetzner (through NixOS) or exe.dev (easier to start but whatever you want to choose).
+
+i want you to come up with a local setup, TDD, that lets me do the spell server thing where I have files rsynced between the local repo of the server and the remote server, turned on through a configuration in the server. Think about security and sandboxing and how you wnat to send that information in easily. Right now this is an internal product, so I don't need much fancy stuff.
+
+Thank you thanks! Do a deep deep research and think like an architect before you come back to me with questions and challenges and ideas. Very much ideas. Thkn about crafting a nice nice solution that works with the whole expected domain usage of spell server. An example of a running one is ../growth
+
+* Context
+
+** Problem
+Spell-server runs autonomous goals from a project-local =.spell/= directory. Growth (=../growth/=) is a running instance with cron goals, Telegram integration, and workflow state. Currently all execution is local. We need persistent remote execution on Hetzner (NixOS) or any VPS, with bidirectional sync between the developer's local repo and the remote server.
+
+** Approach
+New =packages/spell-deploy/= package with =spell deploy= CLI. The design separates concerns cleanly:
+
+- *Config*: =.spell/sync.kdl= defines deployment targets and sync behavior (KDL format, committed to git)
+- *Bundle*: Compiled binary via =bun build --compile --target=bun-linux-x64= — one standalone ~120MB =spell= binary shipped to remote. No node_modules, no bun installation on remote, native addon embedded.
+- *Sync*: Bidirectional — push (local->remote) config+code via rsync/SSH, pull (remote->local) state/artifacts via rsync. Continuous watch mode with Bun native =fs.watch= + debounce.
+- *Restart*: Atomic swap — rsync to staging dir, stop service, swap directories, restart. Push itself only does rsync+dir-swap; service stop/start is orchestrated by CLI commands (separation of concerns).
+- *Secrets*: Age-encrypted =.env.age= files per target. Decrypt locally, pipe to remote via SSH stdin (no plaintext on disk during transfer).
+- *Service*: Systemd template units =spell@.service= per project. Hardened (NoNewPrivileges, ProtectSystem=strict, ProtectHome, scoped ReadWritePaths, PrivateTmp).
+- *Multi-project*: One remote hosts multiple spell-server instances, each with own systemd unit, data dir, secrets.
+- *NixOS*: Optional module for Hetzner provisioning (Caddy reverse proxy, user creation, directory setup).
+
+** Key Decisions
+1. =server.kdl= already supports =env()= for all fields via =resolveEnvValue()=. FEAT-264 is a minor chore (update growth example + add test coverage). Not blocking.
+2. Compiled binary eliminates most complexity: no node_modules shipping, no path resolution, no bun installation, Rust native addon embedded.
+3. Push and pull file sets are completely disjoint — no bidirectional conflict on same files.
+4. SQLite pull safety: run =.backup= command via SSH before rsync.
+5. Watch mode uses Bun native =fs.watch= (already used throughout codebase), not chokidar.
+6. Push operation is pure rsync+dir-swap (no service awareness). Service stop->push->start orchestrated by CLI commands. This avoids scope overlap between FEAT-267 (rsync) and FEAT-270 (systemd).
+
+** Remote Filesystem Layout
+#+begin_example
+/srv/spell/
+|-- growth/                    # Project directory
+|   |-- .spell/                # Pushed config
+|   |-- src/                   # Pushed source
+|   |-- data/                  # Remote-owned state (pulled)
+|   |-- artifacts/             # Remote-owned (pulled)
+|   |-- backups/               # SQLite backups
+|   |-- .env                   # Decrypted secrets
+|   `-- package.json
+|-- another-project/           # Another instance
+`-- .spell-bundle/
+    `-- spell                  # Compiled binary
+#+end_example
+
+** sync.kdl Schema
+#+begin_src kdl
+default-target "production"
+
+target "production" {
+    host "spell.example.com"
+    user "spell"
+    port 22
+    ssh-key "~/.ssh/id_ed25519"
+    project-root "/srv/spell/growth"
+    service type="systemd" unit="spell-growth"
+    secrets ".spell/secrets/production.env.age"
+    include "src/" "package.json" "bun.lock"
+    exclude "node_modules/" ".git/" "*.sqlite" "*.sqlite-wal" ".env"
+}
+
+sync {
+    push-debounce "2s"
+    pull "data/" "artifacts/" "shared-sync/"
+    pull-interval "30s"
+    sqlite-backup true
+}
+
+bundle {
+    platform "linux-x64"
+    cache-dir ".spell/bundle-cache/"
+}
+#+end_src
+
+** CLI Commands
+- =spell deploy init <target>= — provision remote (dirs, bundle, systemd unit, user)
+- =spell deploy push <target>= — stop service + atomic push + start service + health check
+- =spell deploy pull <target>= — SQLite backup + rsync pull state
+- =spell deploy watch <target>= — continuous bidirectional sync
+- =spell deploy status <target>= — check remote health
+- =spell deploy secrets <target>= — decrypt and push .env
+- =spell deploy bootstrap <target>= — init + secrets + push
+
+** Critical Risks (from Metis analysis)
+1. *Native addon on headless server*: arboard (clipboard) depends on Wayland. Compiled binary embeds it but server won't use it. Lazy loading prevents crash.
+2. *Atomic swap failure recovery*: If =mv staging current= fails, =.old= backup exists for manual recovery.
+3. *Version mismatch*: Bundle version marker prevents pushing config that references features absent from the remote binary.
+4. *Process management during sync*: Atomic swap with service stop eliminates partial-read races.
+5. *Session/log management on remote*: Session dirs grow unbounded; remote log rotation needed (future improvement).
+* Verification
+
+** Type Check
+#+begin_src shell
+bun check:ts
+#+end_src
+
+** Package Tests
+#+begin_src shell
+bun test packages/spell-deploy/test/
+#+end_src
+
+** Server Parser Tests (env migration)
+#+begin_src shell
+bun test packages/spell-server/test/config/server-env-resolution.test.ts
+#+end_src
+
+** Integration Smoke Test
+1. Build compiled binary: =bun run --cwd packages/coding-agent build:binary=
+2. Parse canonical sync.kdl without errors
+3. Generate systemd unit file, verify hardening fields
+4. Rsync command builder produces correct args for push/pull
+5. Age encrypt/decrypt roundtrip
+
+** Manual Verification
+- Deploy to test Hetzner instance
+- Run =spell deploy bootstrap production=
+- Verify spell-server running via =spell deploy status production=
+- Trigger a goal, pull state, confirm artifacts arrive locally
+
+* Execution Manifest
+** foundation                                                       :wave:
+- [[id:FEAT-264-server-kdl-env-secret-resolution-migrati]] server.kdl env() example migration (30m, already implemented, just example+test)
+- [[id:FEAT-265-sync-kdl-config-schema-and-parser]] sync.kdl config schema and parser (4h)
+** transport                                                        :wave:
+- [[id:FEAT-267-ssh-and-rsync-operations-module]] SSH and rsync operations (6h, depends FEAT-265)
+** parallel-modules                                                 :wave:
+- [[id:FEAT-268-compiled-binary-bundle-builder]] Compiled binary bundle builder (5h, depends FEAT-265, FEAT-267)
+- [[id:FEAT-269-secret-management-with-age-encryption]] Secret management with age (4h, depends FEAT-267)
+- [[id:FEAT-270-systemd-service-management]] Systemd service management (4h, depends FEAT-267)
+- [[id:FEAT-271-continuous-bidirectional-watch-mode]] Continuous bidirectional watch mode (6h, depends FEAT-267)
+** integration                                                      :wave:
+- [[id:FEAT-272-cli-commands-and-package-setup]] CLI commands and package setup (6h, depends all of wave 3)
+- [[id:FEAT-266-nixos-module-for-spell-server-deployment]] NixOS module for Hetzner (4h, depends FEAT-270)
+
+** Effort Summary
+| Wave | Items | Total Effort |
+|------+-------+--------------|
+| foundation | 2 | 4.5h |
+| transport | 1 | 6h |
+| parallel-modules | 4 | 19h |
+| integration | 2 | 10h |
+| *Total* | *9* | *~40h* |
+
+** Parallelization Notes
+- Wave 1 (foundation): FEAT-264 and FEAT-265 are independent, can run in parallel
+- Wave 2 (transport): FEAT-267 blocks on FEAT-265 for config types
+- Wave 3 (parallel-modules): All 4 items can run in parallel once FEAT-267 is done
+- Wave 4 (integration): FEAT-272 integrates all modules; FEAT-266 (NixOS) only needs FEAT-270
+- Push operation (FEAT-267) is pure rsync+dir-swap. Service lifecycle orchestration (stop->push->start) is in FEAT-272 CLI commands, using FEAT-270's service module.
+
+** Completion [2026-04-03]
+
+*** Verification
+
+All automated verification passed:
+
+- =bun test packages/spell-deploy/test/= — 63 pass, 1 skip, 0 fail (9 test files)
+- =bun test packages/spell-server/test/config/server-env-resolution.test.ts= — 5 pass, 0 fail
+- =bunx tsgo -p packages/spell-deploy/tsconfig.json= — 0 errors in spell-deploy (1 pre-existing error in utils/logger.ts)
+- =bunx biome check packages/spell-deploy/= — clean after auto-fix
+- =nix-instantiate --parse packages/spell-deploy/nix/module.nix= — parses successfully
+
+Test breakdown by module:
+| Module | Tests | File |
+|--------+-------+------|
+| Config parser | 8 | test/config/sync-parser.test.ts |
+| Rsync builder | 5 | test/sync/rsync.test.ts |
+| Push plan | 4 | test/sync/push.test.ts |
+| Pull plan | 4 | test/sync/pull.test.ts |
+| Watch mode | 11 | test/sync/watch.test.ts |
+| Bundle builder | 8 | test/bundle/builder.test.ts |
+| Secrets | 7 (1 skip) | test/secrets/age.test.ts |
+| Systemd | 12 | test/service/systemd.test.ts |
+| CLI commands | 5 | test/cli/commands.test.ts |
+
+*** Artifacts
+
+Package structure (40 files):
+- =packages/spell-deploy/src/config/= — types.ts, sync-parser.ts, loader.ts
+- =packages/spell-deploy/src/sync/= — types.ts, ssh.ts, rsync.ts, push.ts, pull.ts, watcher.ts, poller.ts, watch.ts, watch-types.ts
+- =packages/spell-deploy/src/bundle/= — types.ts, builder.ts, upload.ts, cache.ts
+- =packages/spell-deploy/src/service/= — types.ts, systemd.ts, lifecycle.ts, health.ts
+- =packages/spell-deploy/src/secrets/= — types.ts, age.ts, push.ts
+- =packages/spell-deploy/src/cli/= — types.ts, commands.ts, main.ts
+- =packages/spell-deploy/nix/= — module.nix, example-configuration.nix
+- =packages/spell-deploy/scripts/= — deploy-nixos.sh
+- =../growth/.spell/server.kdl.example= — updated with env()
+- =packages/spell-server/test/config/server-env-resolution.test.ts= — new regression tests
+- =tsconfig.base.json= — added spell-deploy path aliases
+
+*** Deviations
+None.
