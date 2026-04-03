@@ -1,0 +1,122 @@
+#+TITLE: dotenv toggle and env support in serverkdl
+#+STATE: DONE
+#+SESSION_ID: 14ac1a701fd08506
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-57-18-847Z_14ac1a701fd08506.jsonl]]
+#+CUSTOM_ID: FEAT-261-dotenv-toggle-and-env-support-in-server
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: config
+#+DEPENDS: FEAT-260-shared-env-resolution-module-and-env-uti
+
+
+
+
+NOTE [2026-04-03]: Started Wave 2 server parser env() work: adding dotenv parsing, threading env maps through server parser, and adding focused bun tests.
+
+* Initial Message
+
+enable reading from the local .env with a setting toggle on the server kdl when i run spell server and the right config is on in the kdl. show at the start which env variables have been got and which ones are missing. fail if any env required by the kdl is missing, explain with a message which config I need to add
+
+* Scope
+Add a =dotenv= top-level node to =server.kdl= that enables loading a =.env= file from the config directory. Extend =server-parser.ts= to support =env()= references in all fields using the shared resolver.
+
+* KDL Syntax
+#+begin_example
+dotenv true
+
+http {
+  port 8787
+  auth {
+    username "admin"
+    password "env(HTTP_PASSWORD)"
+  }
+  webhook-secret "env(WEBHOOK_SECRET)"
+  goal-token "incoming" "env(GOAL_TOKEN_INCOMING)"
+}
+#+end_example
+
+=dotenv true= loads =<configDir>/.env=. =dotenv "./secrets/.env"= loads from a path relative to the config directory.
+
+When =dotenv= is absent, no .env loading occurs (backward compatible). The =env()= references still resolve against =process.env= regardless of dotenv toggle — the toggle only controls whether a .env file is loaded before resolution.
+
+* Design
+
+** =parseDotenvConfig= (separate from server config)
+The dotenv setting is loader-level config, not server runtime config. It does NOT belong in =SpellServerConfig=.
+
+#+begin_src typescript
+interface DotenvConfig {
+  enabled: boolean;
+  /** Relative path to .env file, defaults to ".env" */
+  path: string;
+}
+
+function parseDotenvConfig(kdlText: string): DotenvConfig | null;
+#+end_src
+
+** server-parser env support
+=parseServerConfig= gains an =env= parameter:
+#+begin_src typescript
+function parseServerConfig(
+  kdlText: string,
+  env?: Record<string, string | undefined>
+): SpellServerConfig;
+#+end_src
+
+All =expectStringArgument= / =expectNumberArgument= calls delegate to =resolveEnvIfNeeded= from the shared module.
+
+** loader two-pass flow
+In =loadConfig()=:
+1. Read =server.kdl= text
+2. Call =parseDotenvConfig(text)= to extract dotenv setting
+3. If enabled, load =.env= from config dir using =parseEnvFile= into =process.env=
+4. Build env map from =process.env=
+5. Parse =server.kdl= / =channels.kdl= / =autonomy.kdl= with the env map
+
+* Sub-outline
+
+** define-parseDotenvConfig
+Add =parseDotenvConfig()= to =server-parser.ts=. Parses the =dotenv= node from KDL text.
+
+** write-tests
+In =test/config/server-env.test.ts=:
+- =dotenv true= detected by =parseDotenvConfig=
+- =dotenv "./secrets/.env"= returns custom path
+- No =dotenv= node returns null
+- =env(NAME)= resolves in port (type=number), auth.username, auth.password, webhook-secret, goal-token
+- Missing required env var throws with variable name in error
+- =env(NAME, default=fallback)= works for optional fields
+- Literal values still work (backward compat)
+
+** update-server-parser
+Refactor =parseServerConfig= to accept env map. Replace local =expectStringArgument= / =expectNumberArgument= with shared =resolveEnvIfNeeded=.
+
+** update-loader
+Two-pass server.kdl loading. .env file loading when dotenv is enabled.
+
+* Acceptance
+- =parseDotenvConfig= correctly extracts dotenv settings
+- =parseServerConfig= resolves =env()= references against provided env map
+- Existing server config tests pass with no env parameter (backward compat)
+- New env() tests pass
+- =loadConfig()= loads .env before parsing when dotenv is enabled
+
+* Files
+| File | Change |
+|---+---|
+| =packages/spell-server/src/config/server-parser.ts= | modify (add env support, parseDotenvConfig) |
+| =packages/spell-server/src/config/loader.ts= | modify (two-pass loading, .env loading) |
+| =packages/spell-server/test/config/server-env.test.ts= | new |
+| =packages/spell-server/test/cli/server-start.test.ts= | modify (add dotenv integration test) |
+
+
+- Added `DotenvConfig` + `parseDotenvConfig()` to `server-parser.ts`.
+- Threaded optional env map through `parseServerConfig()` helpers so port/auth/webhook-secret/goal-token fields resolve shared `env()` references.
+- Added focused `server-env.test.ts` coverage for dotenv parsing, env map resolution, missing env failures, defaults, and literal backward compatibility.
+
+
+Completion report (server parser wave):
+- Exported `DotenvConfig` and `parseDotenvConfig()` from `packages/spell-server/src/config/server-parser.ts`.
+- `parseServerConfig(kdlText, env?)` now resolves env-backed port/auth/webhook-secret/goal-token values through the shared env resolver.
+- Added `packages/spell-server/test/config/server-env.test.ts` covering dotenv parsing, env resolution, missing vars, defaults, and literal backward compatibility.
+- Verified with `bun test packages/spell-server/test/config/server-env.test.ts` (pass).

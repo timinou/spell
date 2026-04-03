@@ -1,0 +1,106 @@
+#+TITLE: Server dotenv loading and env validation
+#+STATE: DONE
+#+SESSION_ID: 14ac1a701fd08506
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-57-18-847Z_14ac1a701fd08506.jsonl]]
+#+CUSTOM_ID: PLAN-118-server-dotenv-loading-and-env-validation
+
+
+* Initial Message
+
+enable reading from the local .env with a setting toggle on the server kdl when i run spell server and the right config is on in the kdl. show at the start which env variables have been got and which ones are missing. fail if any env required by the kdl is missing, explain with a message which config I need to add
+
+* Context
+The spell-server KDL config supports =env()= references in =autonomy.kdl= (full syntax with type coercion, defaults, optional) and partially in =channels.kdl= (voice API keys only, via a local =resolveEnvValue()= function). The =server.kdl= parser has no env support at all — values are always literal.
+
+The user wants to:
+1. Toggle =.env= loading from the config directory via a KDL setting
+2. See at startup which env vars were loaded and which are missing
+3. Fail hard if any required env var is missing, with an actionable error message
+
+** Approach
+- Add =dotenv true= top-level node to =server.kdl= to enable .env loading from config dir
+- Extract shared env resolution module from =manifest/parser.ts= (DRY — three parsers need it)
+- Extend =env()= syntax support to =server.kdl= and generalize in =channels.kdl=
+- Pre-validation scan: before parsing configs, regex-scan all KDL files for =env()= refs, validate them all at once, report found/missing, fail with an aggregated error listing all missing vars (not one at a time)
+- The dotenv toggle controls .env file loading. =env()= syntax always resolves against =process.env= regardless of toggle — the toggle just populates process.env from a file first
+
+** Key decisions
+- =dotenv= config is loader-level, not part of =SpellServerConfig= (it's meta-config about how to load config)
+- =parseDotenvConfig= is a separate function, extracted first from server.kdl text before full parsing
+- Pre-validation scan runs only when dotenv is enabled (when disabled, parser-level errors handle missing vars as before)
+- =parseEnvFile= exported from =@oh-my-pi/pi-utils= for reuse (DRY with existing implementation)
+- Startup report uses =console.error= (stderr) — spell-server is a daemon, not TUI
+
+** KDL syntax example
+#+begin_example
+dotenv true
+
+http {
+  port 8787
+  auth {
+    username "admin"
+    password "env(HTTP_PASSWORD)"
+  }
+  webhook-secret "env(WEBHOOK_SECRET)"
+}
+#+end_example
+
+* Verification
+- =bun test packages/spell-server/test/config/env-resolver.test.ts= — shared module tests
+- =bun test packages/spell-server/test/config/server-env.test.ts= — server.kdl env() tests
+- =bun test packages/spell-server/test/config/channels-parser.test.ts= — channels.kdl env() tests
+- =bun test packages/spell-server/test/config/voice-config-parser.test.ts= — voice config regression
+- =bun test packages/spell-server/test/config/env-startup-validation.test.ts= — startup validation tests
+- =bun test packages/spell-server/test/cli/server-start.test.ts= — integration regression
+- =bun test packages/spell-server/test/manifest/env-resolution.test.ts= — manifest regression
+- =bun check:ts= — type-check passes
+
+* Execution Manifest
+
+** Wave 1: Foundation
+[[id:FEAT-260-shared-env-resolution-module-and-env-uti]] (2h)
+Extract shared env resolver, add scanner/validator, export =parseEnvFile=. No dependencies.
+
+** Wave 2: Parser integration (parallel)
+[[id:FEAT-261-dotenv-toggle-and-env-support-in-server]] (2h) depends on FEAT-260
+[[id:FEAT-262-unify-env-resolution-in-channels-kdl-par]] (1h) depends on FEAT-260
+
+** Wave 3: Reporting
+[[id:FEAT-263-startup-env-validation-and-reporting]] (2h) depends on FEAT-261, FEAT-262
+Scan + validate + report at startup. The final integration piece.
+
+Total estimated effort: 7h across 3 waves.
+
+** Completion [2026-04-03]
+
+*** Verification
+All 105 tests pass across 7 files:
+- =bun test packages/spell-server/test/config/env-resolver.test.ts= — 37 pass (shared module: parsing, scanning, validation, formatting)
+- =bun test packages/spell-server/test/config/server-env.test.ts= — 8 pass (dotenv toggle, env() in server.kdl)
+- =bun test packages/spell-server/test/config/channels-parser.test.ts= — 20 pass (env() in channels.kdl)
+- =bun test packages/spell-server/test/config/voice-config-parser.test.ts= — 19 pass (voice config regression with injected env)
+- =bun test packages/spell-server/test/config/env-startup-validation.test.ts= — 9 pass (startup scanning, validation, reporting, missing var errors)
+- =bun test packages/spell-server/test/cli/server-start.test.ts= — 9 pass (integration regression)
+- =bun test packages/spell-server/test/manifest/env-resolution.test.ts= — 3 pass (manifest regression)
+- =bun check:ts= — passes (pre-existing errors in approvals.ts/tool-progress.ts/logger.ts are unrelated)
+
+*** Artifacts
+Files created:
+- =packages/spell-server/src/config/env-resolver.ts= — shared env resolution module
+- =packages/spell-server/test/config/env-resolver.test.ts= — shared module tests
+- =packages/spell-server/test/config/server-env.test.ts= — server.kdl env tests
+- =packages/spell-server/test/config/env-startup-validation.test.ts= — startup validation tests
+
+Files modified:
+- =packages/spell-server/src/config/server-parser.ts= — added DotenvConfig, parseDotenvConfig, env param to parseServerConfig
+- =packages/spell-server/src/config/channels-parser.ts= — removed local resolveEnvValue, uses shared resolver, env param
+- =packages/spell-server/src/config/loader.ts= — two-pass loading with dotenv, startup env validation
+- =packages/spell-server/src/config/index.ts= — added env-resolver export
+- =packages/spell-server/src/manifest/parser.ts= — uses shared env-resolver instead of local functions
+- =packages/utils/src/env.ts= — exported parseEnvFile
+- =packages/spell-server/test/config/channels-parser.test.ts= — added env() tests
+- =packages/spell-server/test/config/voice-config-parser.test.ts= — migrated from process.env to injected env
+
+*** Deviations
+None."
+<parameter name="_i">Appending completion report to plan

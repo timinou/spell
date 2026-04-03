@@ -1,33 +1,47 @@
 import type { Node } from "@bgotink/kdl";
 import { parse } from "@bgotink/kdl";
+import { resolveEnvValue } from "./env-resolver";
 import type { SpellServerConfig } from "./types";
 
-function expectStringArgument(node: Node, path: string): string {
-	const value = node.getArgument(0);
-	if (typeof value !== "string") {
+export interface DotenvConfig {
+	enabled: boolean;
+	/** Relative path to .env file, defaults to ".env" */
+	path: string;
+}
+
+function expectStringArgument(
+	node: Node,
+	path: string,
+	env?: Record<string, string | undefined>,
+	argumentIndex = 0,
+): string {
+	const value = node.getArgument(argumentIndex);
+	const resolved = resolveEnvValue<string>(value, "string", path, env);
+	if (resolved.length === 0) {
 		throw new Error(`${path} must have a string argument`);
 	}
-	return value;
+	return resolved;
 }
 
-function expectNumberArgument(node: Node, path: string): number {
+function expectNumberArgument(node: Node, path: string, env?: Record<string, string | undefined>): number {
 	const value = node.getArgument(0);
-	if (typeof value !== "number" || !Number.isFinite(value)) {
-		throw new Error(`${path} must have a finite numeric argument`);
-	}
-	return value;
+	return resolveEnvValue<number>(value, "number", path, env);
 }
 
-function parseAuthNode(node: Node, path: string): SpellServerConfig["http"]["auth"] {
+function parseAuthNode(
+	node: Node,
+	path: string,
+	env?: Record<string, string | undefined>,
+): SpellServerConfig["http"]["auth"] {
 	let username: string | undefined;
 	let password: string | undefined;
 
 	for (const child of node.children?.nodes ?? []) {
 		if (child.getName() === "username") {
-			username = expectStringArgument(child, `${path}.username`);
+			username = expectStringArgument(child, `${path}.username`, env);
 		}
 		if (child.getName() === "password") {
-			password = expectStringArgument(child, `${path}.password`);
+			password = expectStringArgument(child, `${path}.password`, env);
 		}
 	}
 
@@ -41,7 +55,23 @@ function parseAuthNode(node: Node, path: string): SpellServerConfig["http"]["aut
 	return { username, password };
 }
 
-export function parseServerConfig(kdlText: string): SpellServerConfig {
+export function parseDotenvConfig(kdlText: string): DotenvConfig | null {
+	const normalizedKdl = kdlText.replace(/(^|\n)(\s*dotenv\s+)(true|false)(?=\s*(?:\n|$))/g, "$1$2#$3");
+	const document = parse(normalizedKdl);
+	const dotenvNode = document.findNodeByName("dotenv");
+	if (!dotenvNode) return null;
+
+	const arg = dotenvNode.getArgument(0);
+	if (typeof arg === "boolean") {
+		return { enabled: arg, path: ".env" };
+	}
+	if (typeof arg === "string") {
+		return { enabled: true, path: arg };
+	}
+	throw new Error("dotenv must be a boolean or a path string");
+}
+
+export function parseServerConfig(kdlText: string, env?: Record<string, string | undefined>): SpellServerConfig {
 	const document = parse(kdlText);
 	const httpNode = document.findNodeByName("http");
 	if (!httpNode) {
@@ -55,26 +85,20 @@ export function parseServerConfig(kdlText: string): SpellServerConfig {
 
 	for (const child of httpNode.children?.nodes ?? []) {
 		if (child.getName() === "port") {
-			port = expectNumberArgument(child, "server.http.port");
+			port = expectNumberArgument(child, "server.http.port", env);
 			continue;
 		}
 		if (child.getName() === "auth") {
-			auth = parseAuthNode(child, "server.http.auth");
+			auth = parseAuthNode(child, "server.http.auth", env);
 			continue;
 		}
 		if (child.getName() === "webhook-secret") {
-			webhookSecret = expectStringArgument(child, "server.http.webhookSecret");
+			webhookSecret = expectStringArgument(child, "server.http.webhookSecret", env);
 			continue;
 		}
 		if (child.getName() === "goal-token") {
-			const goalName = child.getArgument(0);
-			const token = child.getArgument(1);
-			if (typeof goalName !== "string" || goalName.length === 0) {
-				throw new Error("server.http.goalTokens entries must start with a non-empty goal name");
-			}
-			if (typeof token !== "string" || token.length === 0) {
-				throw new Error(`server.http.goalTokens.${goalName} must have a non-empty token`);
-			}
+			const goalName = expectStringArgument(child, "server.http.goalTokens entry name", env, 0);
+			const token = expectStringArgument(child, `server.http.goalTokens.${goalName}`, env, 1);
 			goalTokens[goalName] = token;
 		}
 	}

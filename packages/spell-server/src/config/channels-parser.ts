@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { type Node, parse } from "@bgotink/kdl";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { resolveEnvString } from "./env-resolver";
 import type {
 	ChannelsConfig,
 	SttConfig,
@@ -17,7 +18,11 @@ const DEFAULT_UPLOAD_DIR = "/tmp/spell-telegram-uploads";
 const DEFAULT_IDLE_TIMEOUT = 300; // 5 minutes
 const DEFAULT_MAX_SESSIONS = 10;
 
-export function parseChannelsConfig(kdlText: string, configDir?: string): ChannelsConfig {
+export function parseChannelsConfig(
+	kdlText: string,
+	configDir?: string,
+	env?: Record<string, string | undefined>,
+): ChannelsConfig {
 	const document = parse(kdlText);
 	const telegramNode = document.findNodeByName("telegram");
 	if (!telegramNode) {
@@ -46,7 +51,7 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 			if (typeof value !== "string" || value.length === 0) {
 				throw new Error("channels.telegram.bot-token must have a non-empty string argument");
 			}
-			botToken = value;
+			botToken = resolveEnvString(value, "channels.telegram.bot-token", env);
 			continue;
 		}
 
@@ -73,7 +78,7 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 			if (typeof value !== "string" || value.length === 0) {
 				throw new Error("channels.telegram.upload-dir must have a non-empty string argument");
 			}
-			uploadDir = value;
+			uploadDir = resolveEnvString(value, "channels.telegram.upload-dir", env);
 			continue;
 		}
 
@@ -109,7 +114,7 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 			if (typeof value !== "string" || value.length === 0) {
 				throw new Error("channels.telegram.default-project must have a non-empty string argument");
 			}
-			defaultProject = value;
+			defaultProject = resolveEnvString(value, "channels.telegram.default-project", env);
 			continue;
 		}
 
@@ -118,7 +123,7 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 			if (typeof value !== "string" || value.length === 0) {
 				throw new Error("channels.telegram.default-model must have a non-empty string argument");
 			}
-			defaultModel = value;
+			defaultModel = resolveEnvString(value, "channels.telegram.default-model", env);
 			continue;
 		}
 
@@ -145,7 +150,7 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 			continue;
 		}
 		if (name === "voice") {
-			voice = parseVoiceNode(child, "channels.telegram.voice");
+			voice = parseVoiceNode(child, "channels.telegram.voice", env);
 		}
 	}
 
@@ -296,27 +301,6 @@ const VALID_STT_PROVIDERS = new Set(["deepgram", "openai"]);
 const VALID_TTS_PROVIDERS = new Set(["elevenlabs", "deepgram"]);
 const VALID_REPLY_MODES = new Set(["mirror", "always", "never"]);
 
-/**
- * Resolve env() references in string values.
- * Supports: env(NAME) and env(NAME, default=fallback)
- */
-export function resolveEnvValue(raw: string): string {
-	const match = raw.match(/^env\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:,\s*default\s*=\s*(.+?))?\s*\)$/);
-	if (!match) {
-		return raw;
-	}
-	const envName = match[1]!;
-	const defaultValue = match[2];
-	const envValue = process.env[envName];
-	if (envValue !== undefined && envValue !== "") {
-		return envValue;
-	}
-	if (defaultValue !== undefined) {
-		return defaultValue;
-	}
-	throw new Error(`Environment variable ${envName} is not set and no default provided`);
-}
-
 function requireString(node: Node, field: string, context: string): string {
 	const value = node.getArgument(0);
 	if (typeof value !== "string" || value.length === 0) {
@@ -325,7 +309,7 @@ function requireString(node: Node, field: string, context: string): string {
 	return value;
 }
 
-function parseVoiceNode(node: Node, context: string): VoiceConfig {
+function parseVoiceNode(node: Node, context: string, env?: Record<string, string | undefined>): VoiceConfig {
 	let sttProvider: SttProvider | undefined;
 	let sttApiKey: string | undefined;
 	let sttModel: string | undefined;
@@ -348,7 +332,7 @@ function parseVoiceNode(node: Node, context: string): VoiceConfig {
 			continue;
 		}
 		if (name === "stt-api-key") {
-			sttApiKey = resolveEnvValue(requireString(child, "stt-api-key", context));
+			sttApiKey = resolveEnvString(requireString(child, "stt-api-key", context), `${context}.stt-api-key`, env);
 			continue;
 		}
 		if (name === "stt-model") {
@@ -368,7 +352,7 @@ function parseVoiceNode(node: Node, context: string): VoiceConfig {
 			continue;
 		}
 		if (name === "tts-api-key") {
-			ttsApiKey = resolveEnvValue(requireString(child, "tts-api-key", context));
+			ttsApiKey = resolveEnvString(requireString(child, "tts-api-key", context), `${context}.tts-api-key`, env);
 			continue;
 		}
 		if (name === "tts-model") {

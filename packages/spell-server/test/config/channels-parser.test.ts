@@ -178,6 +178,86 @@ describe("parseChannelsConfig", () => {
 			}`),
 		).toThrow(/must be a boolean/i);
 	});
+
+	it("resolves env(NAME) in bot-token", () => {
+		const config = parseChannelsConfig(
+			`telegram {
+				bot-token "env(TELEGRAM_BOT_TOKEN)"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+			}`,
+			undefined,
+			{ TELEGRAM_BOT_TOKEN: "123456:ENV-ABC" },
+		);
+
+		expect(config.telegram?.botToken).toBe("123456:ENV-ABC");
+	});
+
+	it("resolves env(NAME) in upload-dir", () => {
+		const config = parseChannelsConfig(
+			`telegram {
+				bot-token "123456:ABC-DEF"
+				upload-dir "env(TELEGRAM_UPLOAD_DIR)"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+			}`,
+			undefined,
+			{ TELEGRAM_UPLOAD_DIR: "/var/spell/uploads" },
+		);
+
+		expect(config.telegram?.uploadDir).toBe("/var/spell/uploads");
+	});
+
+	it("resolves env(NAME) in default-model and default-project", () => {
+		const config = parseChannelsConfig(
+			`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "env(TELEGRAM_DEFAULT_MODEL)"
+				default-project "env(TELEGRAM_DEFAULT_PROJECT)"
+				owners 12345
+				project "spell" "/tmp/spell"
+				project "docs" "/tmp/docs"
+			}`,
+			undefined,
+			{
+				TELEGRAM_DEFAULT_MODEL: "gpt-4.1-mini",
+				TELEGRAM_DEFAULT_PROJECT: "docs",
+			},
+		);
+
+		expect(config.telegram?.defaultModel).toBe("gpt-4.1-mini");
+		expect(config.telegram?.defaultProject).toBe("docs");
+	});
+
+	it("throws when a required env-backed field is missing", () => {
+		expect(() =>
+			parseChannelsConfig(
+				`telegram {
+					bot-token "env(TELEGRAM_BOT_TOKEN)"
+					default-model "claude-sonnet-4-5"
+					owners 12345
+				}`,
+				undefined,
+				{},
+			),
+		).toThrow("channels.telegram.bot-token requires environment variable TELEGRAM_BOT_TOKEN");
+	});
+
+	it("keeps literal string fields working without an env map", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			upload-dir "/tmp/literal-uploads"
+			default-model "claude-sonnet-4-5"
+			default-project "spell"
+			owners 12345
+			project "spell" "/tmp/spell"
+		}`);
+
+		expect(config.telegram?.botToken).toBe("123456:ABC-DEF");
+		expect(config.telegram?.uploadDir).toBe("/tmp/literal-uploads");
+		expect(config.telegram?.defaultModel).toBe("claude-sonnet-4-5");
+		expect(config.telegram?.defaultProject).toBe("spell");
+	});
 });
 
 describe("resolveChannelsBotToken", () => {
