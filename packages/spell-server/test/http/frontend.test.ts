@@ -119,7 +119,7 @@ describe("HTTP frontend", () => {
 		expect(body).toContain("render(html`<${App} />`, document.getElementById('app'));");
 		expect(body).not.toContain("admin:admin");
 		expect(body).toContain("Authentication required");
-		expect(body).toContain("Enter the dashboard Basic Auth credentials to load goals, runs, and manifest data.");
+		expect(body).toContain("Enter Basic Auth credentials to access the dashboard.");
 		expect(body).toContain("Sign In");
 	});
 
@@ -143,6 +143,14 @@ describe("HTTP frontend", () => {
 					prompt: "do the thing",
 				},
 			},
+			exportTargets: [],
+			notificationRoutes: [],
+			reviewPolicies: [],
+			checkpoints: [],
+			panels: [],
+			layouts: [],
+			syncCollections: [],
+			stateSchemas: [],
 		});
 	});
 });

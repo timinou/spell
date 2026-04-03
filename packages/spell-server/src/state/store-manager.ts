@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { Database } from "bun:sqlite";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { AutonomyManifest, NamedStateStore, StateSchema, StateSchemaTable } from "../manifest/types";
 
 interface StateStoreSummary {
@@ -26,18 +27,32 @@ export class StateStoreManager {
 			this.#schemas.set(schema.id, schema);
 		}
 
-		for (const setup of manifest.setups.values()) {
-			for (const [storeName, store] of setup.stateStores ?? []) {
+		const collectStores = (stores: Map<string, NamedStateStore> | undefined) => {
+			for (const [storeName, store] of stores ?? []) {
+				if (this.#stores.has(storeName)) continue;
 				this.#stores.set(storeName, store);
 				if (store.schema) {
 					this.#storeSchemaMap.set(storeName, store.schema);
 				}
-				if (store.backend !== "sqlite") {
-					continue;
-				}
+				if (store.backend !== "sqlite") continue;
 				const resolvedPath = path.resolve(cwd, store.path);
-				this.#connections.set(storeName, new Database(resolvedPath, { readonly: true }));
+				try {
+					this.#connections.set(storeName, new Database(resolvedPath, { readonly: true }));
+				} catch (err) {
+					logger.warn("State store DB not found, skipping connection", {
+						store: storeName,
+						path: resolvedPath,
+						error: String(err),
+					});
+				}
 			}
+		};
+
+		for (const setup of manifest.setups.values()) {
+			collectStores(setup.stateStores);
+		}
+		for (const goal of manifest.goals.values()) {
+			collectStores(goal.stateStores);
 		}
 	}
 
@@ -84,18 +99,35 @@ export class StateStoreManager {
 		}
 
 		const escapedTableName = table.name.replaceAll('"', '""');
-		const rows = database
-			.query(`SELECT * FROM "${escapedTableName}" LIMIT ? OFFSET ?`)
-			.all(limit, offset) as Record<string, unknown>[];
-		const countRow = database
-			.query(`SELECT count(*) as count FROM "${escapedTableName}"`)
-			.get() as { count: number } | null;
+		const rows = database.query(`SELECT * FROM "${escapedTableName}" LIMIT ? OFFSET ?`).all(limit, offset) as Record<
+			string,
+			unknown
+		>[];
+		const countRow = database.query(`SELECT count(*) as count FROM "${escapedTableName}"`).get() as {
+			count: number;
+		} | null;
 
 		return {
-			columns: table.columns.map(column => column.name),
+			columns: rows.length > 0 ? Object.keys(rows[0]) : table.columns.map(column => column.name),
 			rows,
 			total: countRow?.count ?? 0,
 		};
+	}
+
+	countTable(storeName: string, tableName: string): number | null {
+		const store = this.#stores.get(storeName);
+		if (!store) return null;
+		const tables = this.getTablesForStore(storeName);
+		if (!tables) return null;
+		const table = tables.find(candidate => candidate.name === tableName);
+		if (!table) return null;
+		const database = this.#connections.get(storeName);
+		if (!database) return 0;
+		const escapedTableName = table.name.replaceAll('"', '""');
+		const row = database.query(`SELECT count(*) as count FROM "${escapedTableName}"`).get() as {
+			count: number;
+		} | null;
+		return row?.count ?? 0;
 	}
 
 	close(): void {

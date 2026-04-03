@@ -1,0 +1,149 @@
+#+TITLE: Harden StateStoreManager robustness
+#+STATE: DONE
+#+SESSION_ID: 14ac5caee772dbc3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T16-46-44-637Z_14ac5caee772dbc3.jsonl]]
+#+CUSTOM_ID: BUG-148-harden-statestoremanager-robustness
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: backend
+#+DEPENDS: BUG-147-fix-broken-frontend-tests-and-manifest-m
+
+NOTE [2026-04-03]: Fixed all 5 issues: constructor try/catch for missing SQLite, goal-level store collection, column derivation from actual rows, dedicated countTable() method, renderCellValue double-parse eliminated.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-033-audit-implementation:
+
+`ManifestGoal.stateStores` is a `Map` — `JSON.stringify` will serialize it as `{}` (empty object), silently losing the data. Same for `ManifestSetup.stateStores`. The `Object.fromEntries(manifest.goals)` in `toManifestJson` converts the top-level Map, but the nested Maps inside each goal/setup remain as Maps and won't serialize correctly.
+
+This was actually a pre-existing issue (the old code also did `Object.fromEntries(manifest.goals)` without handling nested Maps), but the new manifest fields also have the same risk. Let me check the setup serialization:
+
+The `toManifestJson` does `setups: Object.fromEntries(manifest.setups)` which converts the top-level Map, but each `ManifestSetup` value may contain `stateStores: Map<string, NamedStateStore>`. `JSON.stringify` on a Map produces `{}`. This is pre-existing but worth noting.
+
+Let me now compile my findings:
+
+---
+
+## Audit Findings
+
+### 1. Two existing tests broken by manifest API change
+
+- **What**: `test/http/frontend.test.ts` has 2 failing tests: (a) the manifest API test expects only `name/version/setups/goals` but now gets 8 additional arrays; (b) the frontend HTML test expects the old auth prompt text "Enter the dashboard Basic Auth credentials to load goals, runs, and manifest data." but the new frontend says "Enter Basic Auth credentials to access the dashboard."
+- **Where**: `packages/spell-server/test/http/frontend.test.ts`, lines 122 and 133
+- **Why**: These tests fail right now. Any CI run will catch this. The commit shipped broken tests.
+- **Effort**: `trivial` — add the 8 empty arrays to the expected manifest object; update the expected auth prompt string
+
+### 2. `StateStoreManager` constructor throws on missing SQLite file
+
+- **What**: `new Database(resolvedPath, { readonly: true })` throws a synchronous error if the file doesn't exist. The constructor has no try/catch. If a KDL manifest declares a state store pointing to a not-yet-created database, the entire server startup crashes.
+- **Where**: `packages/spell-server/src/state/store-manager.ts`, line 39
+- **Why**: Production crash if the state store path is wrong or the DB hasn't been created yet. Startup failure prevents the entire server from running, including goals unrelated to state stores.
+- **Effort**: `small` — wrap in try/catch, log warning, skip the connection
+
+### 3. State store manager only collects from setups, misses goal-level state stores
+
+- **What**: The constructor iterates `manifest.setups.values()` but `ManifestGoal` also has an optional `stateStores` field. Goal-level state stores are silently ignored.
+- **Where**: `packages/spell-server/src/state/store-manager.ts`, lines 29-41
+- **Why**: If a project declares state stores at goal level, they won't appear in the API. Currently growth doesn't use goal-level state stores, so no immediate impact, but the contract is incomplete.
+- **Effort**: `small` — add a second loop over `manifest.goals.values()`
+
+### 4. `queryTable` columns come from schema, not actual DB — possible mismatch
+
+- **What**: `queryTable` returns `columns: table.columns.map(c => c.name)` from the KDL schema, but `rows` come from `SELECT *` on the actual SQLite table. If the schema is out of sync with the real table (e.g., a column was added via migration but not declared in KDL), the `columns` array won't match the row keys, and the frontend will render blank cells for undeclared columns.
+- **Where**: `packages/spell-server/src/state/store-manager.ts`, lines 95 and 87-89
+- **Why**: Silent data loss in the UI. Users see rows with data in columns not listed in the header.
+- **Effort**: `small` — derive columns from `Object.keys(rows[0])` when rows exist, fall back to schema
+
+### 5. `renderCellValue` double-parses JSON objects
+
+- **What**: For strings starting with `{`, the function calls `JSON.parse(value)` on line 984 to validate, then calls `JSON.parse(value)` again on line 985 inside the template. Wastes CPU on every JSON cell render.
+- **Where**: `packages/spell-server/src/http/frontend/index.html`, lines 984-985
+- **Why**: Minor perf issue. Doubles parse cost for every JSON-valued cell in the state store data browser.
+- **Effort**: `trivial` — capture the result of the first parse
+
+### 6. `handleTableCount` runs a full `SELECT *` query just for count
+
+- **What**: `handleTableCount` calls `manager.queryTable(storeName, tableName, 0, 0)` which executes both `SELECT * ... LIMIT 0 OFFSET 0` and `SELECT count(*)`. The `LIMIT 0` query is harmless but unnecessary. A dedicated count method would be cleaner.
+- **Where**: `packages/spell-server/src/http/routes/state.ts`, line 51
+- **Why**: Negligible impact since `LIMIT 0` returns no rows, but the pattern is misleading — it looks like it queries data when it only needs a count.
+- **Effort**: `trivial` — either accept the current approach (it works) or add a `countTable` method
+
+### 7. `toManifestJson` serializes Maps inside goals/setups as `{}`
+
+- **What**: `Object.fromEntries(manifest.goals)` converts the top-level Map, but each `ManifestGoal` and `ManifestSetup` contains nested `stateStores: Map<string, NamedStateStore>`. `JSON.stringify` on a `Map` produces `{}`. State stores declared at goal/setup level are silently lost in the API response.
+- **Where**: `packages/spell-server/src/http/routes/goals.ts`, lines 24-25
+- **Why**: Frontend consumers never see state store configurations per goal/setup. This is pre-existing (the old code had the same issue), but now that the manifest API is the primary data source for the dashboard, the information gap is more visible.
+- **Effort**: `medium` — need a recursive serializer that converts nested Maps to plain objects
+
+### 8. No tests for the state store query API
+
+- **What**: No test file for `state.ts` routes or `store-manager.ts`. The state store API was verified manually via curl but has no automated test coverage.
+- **Where**: Missing `packages/spell-server/test/http/state.test.ts` and `packages/spell-server/test/state/store-manager.test.ts`
+- **Why**: Regression risk — future changes to routing or query logic have no safety net. The FEAT-292 acceptance criteria called for tests.
+- **Effort**: `medium` — need a fixture SQLite DB, tests for happy path, 404s, pagination, count
+
+** Problem
+
+Five robustness issues in =StateStoreManager= (=packages/spell-server/src/state/store-manager.ts=) and state routes (=packages/spell-server/src/http/routes/state.ts=):
+
+*** 1. Constructor throws on missing SQLite file (line 39)
+=new Database(resolvedPath, { readonly: true })= throws synchronously if the file doesn't exist. No try/catch. A KDL manifest declaring a state store pointing to a not-yet-created database crashes the entire server startup, including goals unrelated to state stores.
+
+*** 2. Goal-level stateStores ignored (lines 29-41)
+The constructor only iterates =manifest.setups.values()=, but =ManifestGoal= also has an optional =stateStores= field. Goal-level state stores are silently omitted from the API.
+
+*** 3. Column mismatch between schema and actual DB (line 95)
+=queryTable()= returns =columns: table.columns.map(c => c.name)= from the KDL schema, but =rows= come from =SELECT *= on the actual SQLite table. If the DB has columns not declared in KDL, the frontend renders blank cells for undeclared columns. If KDL declares columns the DB lacks, the header lists non-existent columns.
+
+*** 4. Double JSON.parse in frontend renderCellValue (frontend index.html, lines 984-985)
+For strings starting with ={=, the function calls =JSON.parse(value)= to validate (line 984), discards the result, then calls =JSON.parse(value)= again (line 985) inside =JSON.stringify()=. Wastes CPU on every JSON cell.
+
+*** 5. handleTableCount inefficiency (state.ts, line 51)
+=handleTableCount= calls =manager.queryTable(storeName, tableName, 0, 0)= which runs both =SELECT * ... LIMIT 0= and =SELECT count(*)=. The =LIMIT 0= query is harmless but misleading. A dedicated =countTable()= method would be cleaner and self-documenting.
+
+** Scope
+
+*** Constructor error handling
+- File: =packages/spell-server/src/state/store-manager.ts=, constructor
+- Wrap =new Database()= in try/catch
+- On error: log warning via =logger.warn()=, skip the connection (do not add to =#connections=)
+- The store still appears in =#stores= (it was declared), but queries will return the empty fallback (columns from schema, rows: [], total: 0)
+
+*** Goal-level store collection
+- Same file, constructor
+- After the setup loop, add a second loop over =manifest.goals.values()=
+- For each goal with =stateStores=, register them the same way
+- If a store name collides with a setup-level store, skip silently (setup takes precedence)
+
+*** Column derivation from actual DB
+- Same file, =queryTable()= method
+- When =rows.length > 0=, derive columns from =Object.keys(rows[0])=
+- When =rows.length === 0=, fall back to schema columns
+
+*** Frontend double parse fix
+- File: =packages/spell-server/src/http/frontend/index.html=, =renderCellValue= function
+- Capture first =JSON.parse(value)= result, reuse in =JSON.stringify()=
+
+*** Dedicated countTable method
+- File: =packages/spell-server/src/state/store-manager.ts=
+- Add =countTable(storeName, tableName): number | null= — runs only =SELECT count(*)=
+- File: =packages/spell-server/src/http/routes/state.ts=
+- Update =handleTableCount= to call =manager.countTable()= instead of =manager.queryTable(name, table, 0, 0)=
+
+** Acceptance
+
+- Server starts without crash even if a declared state store path does not exist (log warning, serve other stores)
+- Goal-level stateStores appear in =/api/state= response
+- =queryTable()= returns actual DB columns when rows exist
+- =renderCellValue= parses JSON once
+- =handleTableCount= runs only count query
+- No new type errors from =bunx --bun tsgo --noEmit= in =packages/spell-server=
+
+** Sub-outline
+
+1. Constructor: try/catch + logger.warn on Database open failure
+2. Constructor: add goal-level stateStores loop
+3. =queryTable=: derive columns from row keys when available
+4. Add =countTable()= method, update =handleTableCount= route
+5. Frontend: fix renderCellValue double parse
+6. Verify: server startup with missing DB path
