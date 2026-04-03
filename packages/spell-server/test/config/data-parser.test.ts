@@ -123,6 +123,14 @@ describe("parseDataConfigKdl", () => {
 			sources: [],
 		});
 	});
+
+	it("rejects unknown child nodes in person", () => {
+		expect(() =>
+			parseDataConfigKdl(`person "x" name="X" {
+				sources kind="x" value="y"
+			}`),
+		).toThrow(/unsupported child "sources"/);
+	});
 });
 
 describe("loadDataDirectory", () => {
