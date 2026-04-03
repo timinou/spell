@@ -533,10 +533,12 @@ const PROVIDER_BASE_DELAY_MS = 2000;
  * Includes malformed JSON stream-envelope parse errors seen from some
  * Anthropic-compatible proxy endpoints.
  */
-/** Transient stream corruption errors where the response was truncated mid-JSON. */
+/** Transient stream corruption errors: truncated JSON or out-of-order SSE events. */
 function isTransientStreamParseError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
-	return /json parse error|unterminated string|unexpected end of json input/i.test(error.message);
+	return /json parse error|unterminated string|unexpected end of json input|unexpected event order/i.test(
+		error.message,
+	);
 }
 
 export function isProviderRetryableError(error: unknown): boolean {

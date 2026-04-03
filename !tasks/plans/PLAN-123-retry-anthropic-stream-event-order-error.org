@@ -1,0 +1,54 @@
+#+TITLE: Retry Anthropic stream event order error
+#+STATE: DONE
+#+SESSION_ID: 14ac5eecb0d3683f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T16-56-32-195Z_14ac5eecb0d3683f.jsonl]]
+#+CUSTOM_ID: PLAN-123-retry-anthropic-stream-event-order-error
+
+
+* Initial Message
+
+Error: Unexpected event order, got message_start before receiving "message_stop"
+
+
+In e.g.  /home/user/.spell/agent/sessions/-code-ora-hotelcomm/2026-04-03T16-48-31-715Z_14ac5d1778ce71c1.jsonl   ID: 14ac5d1778ce71c1
+
+
+
+Make it retry
+
+* Context
+
+Anthropic API occasionally sends a second ~message_start~ SSE event before the previous message's ~message_stop~. The SDK throws ~AnthropicError("Unexpected event order, ...")~ which our retry loop in ~streamAnthropic~ does not recognize as retryable. The stream is corrupted and the partial response unusable — the same situation as truncated JSON parse errors, which we already retry.
+
+Approach: add ~unexpected event order~ to the ~isTransientStreamParseError~ regex in ~packages/ai/src/providers/anthropic.ts~. This is the minimal, correct fix — it classifies the error the same way as other corrupted-stream conditions, enabling retry with clean state reset even after content has started streaming.
+
+Key files:
+- ~packages/ai/src/providers/anthropic.ts~ (lines 537-540: ~isTransientStreamParseError~)
+- ~packages/ai/test/anthropic-retry.test.ts~ (existing test suite)
+
+* Verification
+
+#+begin_src bash
+bun test packages/ai/test/anthropic-retry.test.ts
+#+end_src
+
+* Execution Manifest
+
+| Wave | Item | Effort |
+|------+------+--------|
+|    1 | [[id:BUG-146-retry-on-anthropic-sdk-stream-event-orde]] | 0.25h |
+
+
+** Completion [2026-04-03]
+
+*** Verification
+- ~bun test packages/ai/test/anthropic-retry.test.ts~ — 5 pass, 0 fail, 8 expect() calls
+- New test confirms ~isProviderRetryableError~ returns ~true~ for ~'Unexpected event order, got message_start before receiving "message_stop"'~
+- Existing tests unaffected (JSON parse error, unterminated string, rate limit, HTTP/2 stream error, non-transient rejection)
+
+*** Artifacts
+- ~packages/ai/src/providers/anthropic.ts~ — added ~unexpected event order~ to ~isTransientStreamParseError~ regex (line 539), updated docstring
+- ~packages/ai/test/anthropic-retry.test.ts~ — added test case ~retries on unexpected event order (corrupted stream)~
+
+*** Deviations
+None.

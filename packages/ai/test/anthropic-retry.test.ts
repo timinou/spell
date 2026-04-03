@@ -18,6 +18,14 @@ describe("isProviderRetryableError", () => {
 		).toBe(true);
 	});
 
+	it("retries on unexpected event order (corrupted stream)", () => {
+		expect(
+			isProviderRetryableError(
+				new Error('Unexpected event order, got message_start before receiving "message_stop"'),
+			),
+		).toBe(true);
+	});
+
 	it("does not retry non-transient validation errors", () => {
 		expect(isProviderRetryableError(new Error("Invalid tool schema"))).toBe(false);
 		expect(isProviderRetryableError(new Error("Bad request"))).toBe(false);
