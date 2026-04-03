@@ -5,7 +5,7 @@ import { parse } from "@bgotink/kdl";
 import { resolveEnvValue } from "./env-resolver";
 import { type DataConfig, type Persona, type Person, type PersonSource, type Source, isValidDataConfig } from "./data-types";
 
-interface ParseDataOptions {
+export interface ParseDataOptions {
 	env?: Record<string, string | undefined>;
 }
 
@@ -96,9 +96,14 @@ function parsePersonNode(node: Node, pathLabel: string, options: ParseDataOption
 	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
 	const role = resolveOptionalStringProperty(node, "role", pathLabel, options);
 	const url = resolveOptionalStringProperty(node, "url", pathLabel, options);
-	const sources = (node.children?.nodes ?? [])
-		.filter(child => getNodeName(child) === "source")
-		.map((child, index) => parsePersonSourceNode(child, `${pathLabel}.source.${index}`, options));
+	const sources: PersonSource[] = [];
+	for (const [index, child] of (node.children?.nodes ?? []).entries()) {
+		const childName = getNodeName(child);
+		if (childName !== "source") {
+			throw new Error(`${pathLabel} has unsupported child "${childName}" at index ${index}`);
+		}
+		sources.push(parsePersonSourceNode(child, `${pathLabel}.source.${sources.length}`, options));
+	}
 	return {
 		id,
 		name: requireStringProperty(node, "name", pathLabel, options),
@@ -131,11 +136,10 @@ function setUniqueEntry<T>(map: Map<string, T>, id: string, value: T, label: str
 	map.set(id, value);
 }
 
-export function parseDataConfigKdl(kdlText: string): DataConfig {
+export function parseDataConfigKdl(kdlText: string, options: ParseDataOptions = {}): DataConfig {
 	const document = parse(kdlText);
 	const config = createEmptyDataConfig();
 	const errors: string[] = [];
-	const options: ParseDataOptions = {};
 
 	for (const [index, node] of document.nodes.entries()) {
 		const nodeName = getNodeName(node);
@@ -199,7 +203,7 @@ function mergeDataConfig(target: DataConfig, incoming: DataConfig, sourcePath: s
 	}
 }
 
-export async function loadDataDirectory(dirPath: string): Promise<DataConfig> {
+export async function loadDataDirectory(dirPath: string, options: ParseDataOptions = {}): Promise<DataConfig> {
 	const config = createEmptyDataConfig();
 	const entries = await fs.readdir(dirPath, { withFileTypes: true });
 	const fileNames = entries
@@ -210,7 +214,7 @@ export async function loadDataDirectory(dirPath: string): Promise<DataConfig> {
 	for (const fileName of fileNames) {
 		const filePath = path.join(dirPath, fileName);
 		const kdlText = await fs.readFile(filePath, "utf8");
-		const parsed = parseDataConfigKdl(kdlText);
+		const parsed = parseDataConfigKdl(kdlText, options);
 		mergeDataConfig(config, parsed, filePath);
 	}
 

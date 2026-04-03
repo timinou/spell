@@ -1,0 +1,64 @@
+name "Spell Extended"
+version "3.0"
+
+setup "worker" {
+	domain "coding"
+	mode "executor"
+}
+
+goal "daily-check" {
+	setup "worker"
+	schedule type="cron" expression="0 9 * * *" timezone="UTC"
+	prompt "Run daily checks."
+}
+
+export-target "web-feed" kind="http" url="https://example.com/feed" format="json"
+export-target "repo-mirror" kind="git-repo" path="out/content" format="markdown"
+
+notification-route "ops-alert" channel="telegram" on="failure" chat-id=99999
+notification-route "audit-log" channel="webhook" on="complete" url="https://hooks.example.com/audit"
+
+review-policy "content-flow" {
+	state "draft" initial=#true
+	state "in-review"
+	state "approved" terminal=#true
+	state "rejected" terminal=#true
+	transition from="draft" to="in-review" action="submit"
+	transition from="in-review" to="approved" action="approve"
+	transition from="in-review" to="rejected" action="reject"
+	transition from="rejected" to="draft" action="revise"
+}
+
+checkpoint "pre-publish" {
+	require "editorial" kind="review" policy="content-flow" state="approved"
+	require "legal" kind="approval" scope="release"
+}
+
+panel "article-queue" source="articles" {
+	column "title" type="string"
+	column "author" type="string"
+	column "score" type="number"
+	action "approve" label="Approve"
+	action "reject" label="Reject"
+}
+
+layout "editor-workspace" {
+	region "main" panel="article-queue"
+	region "sidebar" panel="details"
+}
+
+sync-collection "published" source="cms.posts" filter="status=published"
+sync-collection "drafts" source="cms.posts"
+
+state-schema "content-db" backend="sqlite" {
+	table "articles" {
+		column "id" type="text" primary=#true
+		column "title" type="text"
+		column "status" type="text"
+	}
+	table "reviews" {
+		column "article_id" type="text"
+		column "reviewer" type="text"
+		column "decision" type="text"
+	}
+}

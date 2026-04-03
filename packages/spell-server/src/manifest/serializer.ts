@@ -2,15 +2,23 @@ import { Document, format, Node } from "@bgotink/kdl";
 import type { ActionScalar, ManifestAction } from "../actions/types";
 import type {
 	AutonomyManifest,
+	Checkpoint,
+	ExportTarget,
 	FilterConfig,
 	HookTarget,
+	Layout,
 	ManifestGoal,
 	ManifestHookConfig,
 	ManifestSetup,
 	NamedStateStore,
+	NotificationRoute,
+	Panel,
 	RetryConfig,
+	ReviewPolicy,
 	SandboxConfig,
 	StateConfig,
+	StateSchema,
+	SyncCollection,
 } from "./types";
 
 function createNode(name: string): Node {
@@ -250,6 +258,126 @@ function createGoalNode(name: string, goal: ManifestGoal): Node {
 	return node;
 }
 
+function createExportTargetNode(target: ExportTarget): Node {
+	const node = createNode("export-target");
+	node.addArgument(target.id);
+	node.setProperty("kind", target.kind);
+	if (target.url !== undefined) node.setProperty("url", target.url);
+	if (target.path !== undefined) node.setProperty("path", target.path);
+	if (target.format !== undefined) node.setProperty("format", target.format);
+	return node;
+}
+
+function createNotificationRouteNode(route: NotificationRoute): Node {
+	const node = createNode("notification-route");
+	node.addArgument(route.id);
+	node.setProperty("channel", route.channel);
+	node.setProperty("on", route.on);
+	if (route.chatId !== undefined) node.setProperty("chat-id", route.chatId);
+	if (route.url !== undefined) node.setProperty("url", route.url);
+	if (route.category !== undefined) node.setProperty("category", route.category);
+	return node;
+}
+
+function createReviewPolicyNode(policy: ReviewPolicy): Node {
+	const node = createNode("review-policy");
+	node.addArgument(policy.id);
+	node.children = new Document();
+	for (const state of policy.states) {
+		const stateNode = createNode("state");
+		stateNode.addArgument(state.name);
+		if (state.initial !== undefined) stateNode.setProperty("initial", state.initial);
+		if (state.terminal !== undefined) stateNode.setProperty("terminal", state.terminal);
+		node.children.appendNode(stateNode);
+	}
+	for (const transition of policy.transitions) {
+		const transitionNode = createNode("transition");
+		transitionNode.setProperty("from", transition.from);
+		transitionNode.setProperty("to", transition.to);
+		transitionNode.setProperty("action", transition.action);
+		node.children.appendNode(transitionNode);
+	}
+	return node;
+}
+
+function createCheckpointNode(checkpoint: Checkpoint): Node {
+	const node = createNode("checkpoint");
+	node.addArgument(checkpoint.id);
+	node.children = new Document();
+	for (const req of checkpoint.requires) {
+		const reqNode = createNode("require");
+		reqNode.addArgument(req.name);
+		reqNode.setProperty("kind", req.kind);
+		if (req.policy !== undefined) reqNode.setProperty("policy", req.policy);
+		if (req.state !== undefined) reqNode.setProperty("state", req.state);
+		if (req.scope !== undefined) reqNode.setProperty("scope", req.scope);
+		node.children.appendNode(reqNode);
+	}
+	return node;
+}
+
+function createPanelNode(panel: Panel): Node {
+	const node = createNode("panel");
+	node.addArgument(panel.id);
+	node.setProperty("source", panel.source);
+	node.children = new Document();
+	for (const column of panel.columns) {
+		const columnNode = createNode("column");
+		columnNode.addArgument(column.name);
+		columnNode.setProperty("type", column.type);
+		node.children.appendNode(columnNode);
+	}
+	for (const action of panel.actions) {
+		const actionNode = createNode("action");
+		actionNode.addArgument(action.name);
+		actionNode.setProperty("label", action.label);
+		node.children.appendNode(actionNode);
+	}
+	return node;
+}
+
+function createLayoutNode(layout: Layout): Node {
+	const node = createNode("layout");
+	node.addArgument(layout.id);
+	node.children = new Document();
+	for (const region of layout.regions) {
+		const regionNode = createNode("region");
+		regionNode.addArgument(region.name);
+		regionNode.setProperty("panel", region.panel);
+		node.children.appendNode(regionNode);
+	}
+	return node;
+}
+
+function createSyncCollectionNode(sync: SyncCollection): Node {
+	const node = createNode("sync-collection");
+	node.addArgument(sync.id);
+	node.setProperty("source", sync.source);
+	if (sync.filter !== undefined) node.setProperty("filter", sync.filter);
+	return node;
+}
+
+function createStateSchemaNode(schema: StateSchema): Node {
+	const node = createNode("state-schema");
+	node.addArgument(schema.id);
+	node.setProperty("backend", schema.backend);
+	node.children = new Document();
+	for (const table of schema.tables) {
+		const tableNode = createNode("table");
+		tableNode.addArgument(table.name);
+		tableNode.children = new Document();
+		for (const column of table.columns) {
+			const columnNode = createNode("column");
+			columnNode.addArgument(column.name);
+			columnNode.setProperty("type", column.type);
+			if (column.primary !== undefined) columnNode.setProperty("primary", column.primary);
+			tableNode.children.appendNode(columnNode);
+		}
+		node.children.appendNode(tableNode);
+	}
+	return node;
+}
+
 export function serializeManifestKdl(manifest: AutonomyManifest): string {
 	const document = new Document();
 	const nameNode = createNode("name");
@@ -264,5 +392,13 @@ export function serializeManifestKdl(manifest: AutonomyManifest): string {
 	for (const [name, goal] of manifest.goals) {
 		document.appendNode(createGoalNode(name, goal));
 	}
+	for (const target of manifest.exportTargets) document.appendNode(createExportTargetNode(target));
+	for (const route of manifest.notificationRoutes) document.appendNode(createNotificationRouteNode(route));
+	for (const policy of manifest.reviewPolicies) document.appendNode(createReviewPolicyNode(policy));
+	for (const checkpoint of manifest.checkpoints) document.appendNode(createCheckpointNode(checkpoint));
+	for (const panel of manifest.panels) document.appendNode(createPanelNode(panel));
+	for (const layout of manifest.layouts) document.appendNode(createLayoutNode(layout));
+	for (const sync of manifest.syncCollections) document.appendNode(createSyncCollectionNode(sync));
+	for (const schema of manifest.stateSchemas) document.appendNode(createStateSchemaNode(schema));
 	return format(document);
 }

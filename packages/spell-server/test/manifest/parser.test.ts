@@ -132,6 +132,13 @@ describe("parseManifestKdl", () => {
 		expect(normalizeManifest(reparsed)).toEqual(normalizeManifest(original));
 	});
 
+	it("round-trips extended manifest with all declaration types", async () => {
+		const original = parseManifestKdl(await readFixture("full-extended.kdl"));
+		const rendered = serializeManifestKdl(original);
+		const reparsed = parseManifestKdl(rendered);
+		expect(normalizeManifest(reparsed)).toEqual(normalizeManifest(original));
+	});
+
 	it("parses state with persist and schema columns", () => {
 		const manifest = parseManifestKdl(
 			`name "stateful"\nversion "1.0"\nsetup "a" { domain "coding" }\ngoal "g" {\n\tsetup "a"\n\tschedule type="cron" expression="0 1 * * *"\n\tprompt "ok"\n\tstate persist=#true {\n\t\tschema "enabled" type="boolean"\n\t\tschema "count" type="number"\n\t}\n}\n`,
