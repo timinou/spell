@@ -18,6 +18,7 @@ export * from "./sync/poller";
 export * from "./sync/pull";
 export * from "./sync/push";
 export * from "./sync/rsync";
+export * from "./sync/sqlite-rsync";
 export * from "./sync/ssh";
 export * from "./sync/types";
 export * from "./sync/utils";

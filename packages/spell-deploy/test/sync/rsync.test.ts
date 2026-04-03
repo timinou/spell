@@ -80,6 +80,23 @@ describe("rsync command builders", () => {
 		expect(commands[1]?.args.at(-2)).toBe("spell@spell.example.com:/srv/spell/app/artifacts/");
 	});
 
+	it("excludes sqlite files from pull rsync commands", () => {
+		const commands = buildPullRsyncArgs({
+			sshOptions,
+			remoteProjectRoot: "/srv/spell/app",
+			localRoot: "/workspace/app",
+			pullDirs: ["data/"],
+		});
+
+		const args = commands[0]!.args;
+		expect(args).toContain("*.sqlite");
+		expect(args).toContain("*.sqlite-wal");
+		expect(args).toContain("*.sqlite-shm");
+		// Each sqlite pattern should be preceded by --exclude
+		const sqliteIdx = args.indexOf("*.sqlite");
+		expect(args[sqliteIdx - 1]).toBe("--exclude");
+	});
+
 	it("omits SSH key from pull transport when not configured", () => {
 		const commands = buildPullRsyncArgs({
 			sshOptions: {

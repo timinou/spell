@@ -17,7 +17,6 @@ const watchOptions: WatchOptions = {
 		pushDebounce: "2s",
 		pull: ["data/", "artifacts/"],
 		pullInterval: "30s",
-		sqliteBackup: true,
 	},
 	localRoot: "/workspace/app",
 };

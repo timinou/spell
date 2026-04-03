@@ -2,10 +2,6 @@ import type { Node } from "@bgotink/kdl";
 import { parse } from "@bgotink/kdl";
 import type { BundleConfig, ServiceConfig, SyncConfig, SyncSettings, SyncTarget } from "./types";
 
-function normalizeKdlBooleans(kdlText: string): string {
-	return kdlText.replace(/(^|\n)(\s*sqlite-backup\s+)(true|false)(?=\s*(?:\n|$))/g, "$1$2#$3");
-}
-
 const DEFAULT_PUSH_DEBOUNCE = "2s";
 const DEFAULT_PULL_INTERVAL = "30s";
 const DEFAULT_BUNDLE_PLATFORM = "linux-x64";
@@ -25,14 +21,6 @@ function expectNumberArgument(node: Node, pathLabel: string, argumentIndex = 0):
 	const value = node.getArgument(argumentIndex);
 	if (typeof value !== "number" || !Number.isFinite(value)) {
 		throw new Error(`${pathLabel} must have a finite number argument`);
-	}
-	return value;
-}
-
-function expectBooleanArgument(node: Node, pathLabel: string, argumentIndex = 0): boolean {
-	const value = node.getArgument(argumentIndex);
-	if (typeof value !== "boolean") {
-		throw new Error(`${pathLabel} must have a boolean argument`);
 	}
 	return value;
 }
@@ -140,7 +128,6 @@ function parseSyncNode(node: Node, pathLabel: string): SyncSettings {
 	let pushDebounce = DEFAULT_PUSH_DEBOUNCE;
 	let pull: string[] = [];
 	let pullInterval = DEFAULT_PULL_INTERVAL;
-	let sqliteBackup = false;
 
 	for (const child of node.children?.nodes ?? []) {
 		const childName = child.getName();
@@ -154,14 +141,10 @@ function parseSyncNode(node: Node, pathLabel: string): SyncSettings {
 		}
 		if (childName === "pull-interval") {
 			pullInterval = expectStringArgument(child, `${pathLabel}.pullInterval`);
-			continue;
-		}
-		if (childName === "sqlite-backup") {
-			sqliteBackup = expectBooleanArgument(child, `${pathLabel}.sqliteBackup`);
 		}
 	}
 
-	return { pushDebounce, pull, pullInterval, sqliteBackup };
+	return { pushDebounce, pull, pullInterval };
 }
 
 function parseBundleNode(node: Node, pathLabel: string): BundleConfig {
@@ -183,14 +166,13 @@ function parseBundleNode(node: Node, pathLabel: string): BundleConfig {
 }
 
 export function parseSyncConfig(kdlText: string): SyncConfig {
-	const document = parse(normalizeKdlBooleans(kdlText));
+	const document = parse(kdlText);
 	let defaultTarget: string | undefined;
 	const targets = new Map<string, SyncTarget>();
 	let sync: SyncSettings = {
 		pushDebounce: DEFAULT_PUSH_DEBOUNCE,
 		pull: [],
 		pullInterval: DEFAULT_PULL_INTERVAL,
-		sqliteBackup: false,
 	};
 	let bundle: BundleConfig = {
 		platform: DEFAULT_BUNDLE_PLATFORM,

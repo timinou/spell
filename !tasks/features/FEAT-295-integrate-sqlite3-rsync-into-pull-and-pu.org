@@ -1,0 +1,81 @@
+#+TITLE: Integrate sqlite3-rsync into pull and push flows
+#+STATE: DONE
+#+SESSION_ID: 14ac5f84047cbf0c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T16-59-07-153Z_14ac5f84047cbf0c.jsonl]]
+#+CUSTOM_ID: FEAT-295-integrate-sqlite3-rsync-into-pull-and-pu
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: sync
+#+DEPENDS: FEAT-293-config-schema-sqlite-files-in-sync-kdl FEAT-294-sqlite3-rsync-command-builder-and-execut
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-03]: Wired sqlite3-rsync into pull.ts and push.ts. Auto-excludes *.sqlite from rsync, discovers SQLite files, syncs via sqlite3-rsync with SSH wrapper lifecycle.
+
+* Initial Message
+
+can you use this https://til.simonwillison.net/sqlite/compile-sqlite3-rsync or libsqlite or something else to make the rsync simpler for sqlites in spell-deploy?
+
+* Scope
+Wire =sqlite3-rsync= commands into the existing pull and push flows, replacing the old
+=sqlite3 .backup= approach. SQLite files are auto-discovered (any =*.sqlite= in synced dirs)
+and synced via =sqlite3-rsync=. Non-SQLite files continue to use plain rsync.
+* Design
+
+** Pull flow changes (=pull.ts=)
+Before (=buildPullPlan=):
+1. Optionally: SSH =sqlite3 .backup= for each =data/*.sqlite= → creates timestamped backups
+2. rsync pull each pull dir (which includes the SQLite files)
+
+After (=executePull=):
+1. Discover =*.sqlite= files on remote via =discoverRemoteSqliteFiles(pullDirs)=
+2. rsync pull each pull dir with =--exclude *.sqlite --exclude *.sqlite-wal --exclude *.sqlite-shm=
+3. =sqlite3-rsync= pull for each discovered sqlite file
+
+- Remove =backupCommand= from pull plan
+- The rsync step now auto-excludes SQLite files and their WAL/SHM companions
+- The sqlite3-rsync step handles them properly with page-level incremental sync
+- If no =*.sqlite= files are found by discovery, the exclude flags are still added (harmless) and no sqlite3-rsync runs
+
+** Push flow changes (=push.ts=)
+Before (=buildPushPlan=):
+1. rsync push to staging (already excludes SQLite via target config)
+2. Atomic swap
+
+After (=executePush=):
+1. Discover =*.sqlite= files locally via =discoverLocalSqliteFiles(includeDirs)=
+2. rsync push to staging (keep existing excludes; the exclude list in target config likely already has =*.sqlite=, but we add it defensively)
+3. Atomic swap
+4. =sqlite3-rsync= push for each discovered sqlite file (directly to projectRoot, not staging)
+
+SQLite files are pushed directly (not through staging/swap) because =sqlite3-rsync= already
+handles live database safety. They go to the final location, not the staging dir.
+
+** SSH wrapper lifecycle
+The SSH wrapper script (if needed) is created once at the start of push/pull,
+used by all sqlite3-rsync commands, then cleaned up in a =finally= block.
+
+** Types changes (=types.ts=)
+- Remove =backupCommand= from pull plan return type
+- =executePull= and =executePush= become the main orchestration points (discovery + rsync + sqlite3-rsync)
+* Sub-outline
+1. Update =buildPullRsyncArgs= to always add =--exclude *.sqlite --exclude *.sqlite-wal --exclude *.sqlite-shm=
+2. Rewrite =buildPullPlan=: remove =backupCommand=, keep rsync commands (now with excludes)
+3. Rewrite =executePull=: discover remote sqlite files, run rsync, then sqlite3-rsync per file (with SSH wrapper lifecycle)
+4. Rewrite =executePush=: discover local sqlite files, run existing rsync+swap, then sqlite3-rsync per file
+5. Clean up =types.ts=: remove =backupCommand= from pull plan return shape
+6. Update tests for =buildPullPlan= (no more backup, rsync has excludes), update =push.test.ts=
+
+Note: =buildPushPlan= and =buildPullPlan= remain pure (no I/O). Discovery and sqlite3-rsync execution happen in =executePull/executePush=, keeping plan building testable.
+* Files
+- =packages/spell-deploy/src/sync/pull.ts=
+- =packages/spell-deploy/src/sync/push.ts=
+- =packages/spell-deploy/src/sync/types.ts=
+- =packages/spell-deploy/test/sync/pull.test.ts=
+- =packages/spell-deploy/test/sync/push.test.ts=
+
+* Acceptance
+- =buildPullPlan= no longer produces =backupCommand=, produces =sqliteRsyncCommands=
+- Pull rsync commands include =--exclude *.sqlite --exclude *.sqlite-wal --exclude *.sqlite-shm=
+- =buildPushPlan= includes sqlite3-rsync commands when =sqliteFiles= is non-empty
+- =executePull= and =executePush= run sqlite3-rsync after rsync
+- All pull/push tests updated and passing: =bun test packages/spell-deploy/test/sync/=

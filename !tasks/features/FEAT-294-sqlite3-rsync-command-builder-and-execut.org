@@ -1,0 +1,114 @@
+#+TITLE: sqlite3-rsync command builder and executor
+#+STATE: DONE
+#+SESSION_ID: 14ac5f84047cbf0c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T16-59-07-153Z_14ac5f84047cbf0c.jsonl]]
+#+CUSTOM_ID: FEAT-294-sqlite3-rsync-command-builder-and-execut
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: sync
+#+DEPENDS: FEAT-293-config-schema-sqlite-files-in-sync-kdl
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-03]: Created sqlite-rsync.ts with SSH wrapper generation, command builder (pull/push), local/remote discovery, executor. 14 tests passing.
+
+* Initial Message
+
+can you use this https://til.simonwillison.net/sqlite/compile-sqlite3-rsync or libsqlite or something else to make the rsync simpler for sqlites in spell-deploy?
+
+* Scope
+New module =packages/spell-deploy/src/sync/sqlite-rsync.ts= that builds and executes =sqlite3-rsync= commands
+for syncing SQLite files over SSH.
+
+SQLite files are auto-discovered: any =*.sqlite= file under a synced directory is handled via
+=sqlite3-rsync= instead of plain rsync. Discovery uses SSH =find= on the remote for pull,
+and local =find= for push.
+
+This module replaces the old =sqlite3 .backup= shell command approach with the official SQLite remote-copy tool.
+* Design
+
+=sqlite3-rsync= works over SSH natively: =sqlite3-rsync USER@HOST:PATH LOCAL_PATH= (pull) or =sqlite3-rsync LOCAL_PATH USER@HOST:PATH= (push).
+The binary must be in =$PATH= on both local and remote (or use =--exe= for remote path).
+
+** Auto-discovery
+SQLite files are discovered automatically — no config needed.
+
+For pull: SSH =find= on remote to list =*.sqlite= files under each pull dir:
+: ssh user@host "find /srv/spell/app/data -name '*.sqlite' -type f"
+
+For push: local =find= (via =node:fs=) to list =*.sqlite= files under push-included dirs.
+
+Discovery returns relative paths (e.g. =data/main.sqlite=), which are then passed to the command builders.
+
+** SSH transport
+=sqlite3-rsync= supports =--ssh PATH= to specify a custom SSH program. Since spell-deploy already knows the SSH options
+(port, key, StrictHostKeyChecking, ConnectTimeout), we generate a small wrapper script:
+
+#+begin_src bash
+#!/bin/sh
+exec ssh -p PORT -i KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \"$@\"
+#+end_src
+
+Write this to a temp file, pass it via =--ssh /tmp/spell-ssh-wrapper-XXXX=, clean up after.
+This is the same pattern rsync's =-e= flag uses, but adapted for sqlite3-rsync's =--ssh= flag.
+
+If port is 22 and no custom key, skip the wrapper entirely (default SSH is fine).
+
+** Command shape
+For pull (remote -> local):
+: sqlite3-rsync --ssh /tmp/wrapper spell@host:/srv/spell/app/data/main.sqlite /workspace/app/data/main.sqlite
+
+For push (local -> remote):
+: sqlite3-rsync --ssh /tmp/wrapper /workspace/app/data/main.sqlite spell@host:/srv/spell/app/data/main.sqlite
+
+** Interface
+#+begin_src typescript
+interface SqliteRsyncCommand {
+  args: string[];
+  description: string;
+}
+
+/** Build SSH wrapper script content for sqlite3-rsync --ssh flag */
+function buildSshWrapperScript(opts: SshOptions): string | null;
+
+/** Discover *.sqlite files on remote under given dirs */
+function discoverRemoteSqliteFiles(opts: {
+  sshOptions: SshOptions;
+  remoteProjectRoot: string;
+  dirs: string[];
+}): Promise<string[]>;
+
+/** Discover *.sqlite files locally under given dirs */
+function discoverLocalSqliteFiles(opts: {
+  localRoot: string;
+  dirs: string[];
+}): Promise<string[]>;
+
+function buildSqliteRsyncCommands(opts: {
+  sshOptions: SshOptions;
+  remoteProjectRoot: string;
+  localRoot: string;
+  sqliteFiles: string[];   // relative paths from discovery
+  direction: \"pull\" | \"push\";
+  sshWrapperPath?: string;
+}): SqliteRsyncCommand[];
+
+function executeSqliteRsync(command: SqliteRsyncCommand): void;
+#+end_src
+* Sub-outline
+1. Write tests for =buildSshWrapperScript=, =buildSqliteRsyncCommands=, =discoverLocalSqliteFiles=
+2. Implement =sqlite-rsync.ts=: SSH wrapper generation, command builder (unified pull/push via =direction= param), executor
+3. Implement =discoverRemoteSqliteFiles= (SSH find) and =discoverLocalSqliteFiles= (node:fs readdir recursive)
+4. Export from =index.ts=
+
+Note: =discoverRemoteSqliteFiles= is hard to unit test (requires SSH). Test the command it builds. Integration tested via pull/push flows.
+* Files
+- =packages/spell-deploy/src/sync/sqlite-rsync.ts= (new)
+- =packages/spell-deploy/test/sync/sqlite-rsync.test.ts= (new)
+- =packages/spell-deploy/src/index.ts= (add export)
+
+* Acceptance
+- =buildSqliteRsyncPullCommands= returns one command per sqlite file, correct remote path format
+- =buildSqliteRsyncPushCommands= returns one command per sqlite file, correct direction
+- SSH transport wrapper handles custom port and key
+- =executeSqliteRsync= calls =Bun.spawnSync= and throws on non-zero exit
+- Tests pass: =bun test packages/spell-deploy/test/sync/sqlite-rsync.test.ts=
