@@ -1,0 +1,72 @@
+#+TITLE: Fix parseManifestKdl action-descriptor contract gap
+#+STATE: DONE
+#+SESSION_ID: 14ac0917686f2d39
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-41-31-553Z_14ac0917686f2d39.jsonl]]
+#+CUSTOM_ID: BUG-132-fix-parsemanifestkdl-action-descriptor-c
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: packages/spell-server
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-025-audit-implementation:
+
+I've completed a thorough read of all changed files. Here are my findings:
+
+---
+
+### Finding 1: `parseManifestKdl` silently drops action descriptors
+
+- **What**: `parseManifestKdl()` parses `action-descriptor` nodes into `manifestModule.actionDescriptors` but never registers them in the registry. Only the `loadManifestFromFile` path (via import-resolver) performs registration.
+- **Where**: `packages/spell-server/src/manifest/parser.ts:801-816`
+- **Why**: If someone calls `parseManifestKdl()` with a self-contained KDL string that has both `action-descriptor` and a goal referencing it, validation will fail with "Unknown action id" — the descriptors are parsed but silently discarded. This is a contract inconsistency: the function accepts the nodes without error but doesn't honor them. The round-trip tests (which use `parseManifestKdl` + `serializeManifestKdl`) won't hit this because they only test manifests with pre-registered actions.
+- **Effort**: `small` — add 3 lines mirroring the import-resolver's registration loop before the `validateManifest` call.
+
+---
+
+### Finding 2: `validTypes` Set allocated inside loop body
+
+- **What**: The `validTypes` Set is recreated on every `param` child iteration inside `parseActionDescriptorNode`.
+- **Where**: `packages/spell-server/src/manifest/parser.ts:504-512` (inside the `for` loop starting at line 496)
+- **Why**: Inconsistent with existing codebase pattern — the file already defines module-level constants for this exact purpose (`STATE_SCHEMA_TYPES`, `WEBHOOK_AUTH_TYPES`, `WEBHOOK_METHODS` at lines 160-163). Not a bug, but it's a repeated allocation on a hot-ish path and a readability miss.
+- **Effort**: `trivial` — hoist to module-level `const ACTION_PARAM_TYPES = new Set<ActionParameterType>([...])`.
+
+---
+
+### Finding 3: No test for `parseManifestKdl` + `action-descriptor` behavior
+
+- **What**: All new action-descriptor tests use `loadManifestFromFile`. There's no test documenting the expected behavior of `parseManifestKdl` when `action-descriptor` nodes are present.
+- **Where**: `packages/spell-server/test/manifest/action-registry.test.ts`
+- **Why**: The gap from Finding 1 means this path will silently break for anyone who uses the direct-parse API. A test would either (a) prove it works after Finding 1 is fixed, or (b) document that it intentionally doesn't support action-descriptors and throws a clear error (parallel to the existing `"Imports and overrides require loadManifestFromFile()"` guard at line 804).
+- **Effort**: `trivial` — one test case, either asserting success or the expected rejection.
+
+* Scope
+Fix three related issues from PLAN-105 audit (AUD-025) in the spell-server manifest parser.
+
+** Finding 1: ~parseManifestKdl~ silently drops action descriptors
+~parseManifestKdl()~ parses ~action-descriptor~ nodes into ~manifestModule.actionDescriptors~ but never registers them in the registry. Only the ~loadManifestFromFile~ path (import-resolver) registers them. A self-contained KDL string with both ~action-descriptor~ and a goal referencing it will fail validation with "Unknown action id".
+
+Fix: register parsed action descriptors into ~options.registry~ (creating a builtin registry if none provided) before validation, mirroring the import-resolver pattern.
+
+** Finding 2: ~validTypes~ Set allocated inside loop
+The ~validTypes~ Set in ~parseActionDescriptorNode~ is recreated on every ~param~ child iteration. The codebase already uses module-level constants for this pattern (~STATE_SCHEMA_TYPES~ etc. in types.ts).
+
+Fix: hoist to module-level ~const ACTION_PARAM_TYPES~.
+
+** Finding 3: No test for ~parseManifestKdl~ + ~action-descriptor~
+All new action-descriptor tests use ~loadManifestFromFile~. No test covers the ~parseManifestKdl~ path.
+
+Fix: add a test proving ~parseManifestKdl~ with action-descriptor + goal works after Finding 1 is fixed.
+
+** Sub-outline
+1. Hoist ~validTypes~ to module-level ~ACTION_PARAM_TYPES~ constant in ~parser.ts~
+2. Register ~manifestModule.actionDescriptors~ in ~parseManifestKdl~ before validation
+3. Add test: ~parseManifestKdl~ with inline ~action-descriptor~ + goal succeeds
+
+Sequencing note: test-after is required because Finding 1 (the registration fix) must exist before the test can pass.
+
+* Acceptance
+- ~bun test packages/spell-server/test/manifest/action-registry.test.ts~ passes with the new test
+- ~bun test packages/spell-server/test/manifest/parser.test.ts~ passes unchanged
+- ~ACTION_PARAM_TYPES~ is a module-level constant, not inside the loop
+- A manifest parsed via ~parseManifestKdl~ with ~action-descriptor~ + goal referencing it loads without error
