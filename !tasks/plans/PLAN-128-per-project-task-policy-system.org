@@ -1,0 +1,139 @@
+#+TITLE: Per-Project Task Policy System
+#+STATE: DONE
+#+SESSION_ID: 14ac7cd4e228b35c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T19-07-12-136Z_14ac7cd4e228b35c.jsonl]]
+#+CUSTOM_ID: PLAN-128-per-project-task-policy-system
+
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-03T18-29-08-543Z_14ac741ecff69fa5.jsonl
+ ID: 14ac741ecff69fa5
+
+
+In this session for example, i would have liked all frontend tasks to have had a gate or sth to ensure that journey tests are fully written alongside self-documenting code to explain the story associated to it. How would you improve the planning mode and the todo write and task tools to allow for this to naturally happen? YOu're also allowed to think or find config paths so I can write my requriemetns per-projects. Thanks
+
+* Context
+
+** Problem
+Tasks created during planning have no automatic gate enforcement based on their nature. Frontend tasks get dispatched without journey test requirements, API tasks without contract test requirements. The planner and executor must manually remember to set gates — and they don't. In the hotelcomm session (FEAT-063, -065, -067), all three frontend tasks were created with DEPENDS relationships but zero gates for journey tests or self-documenting code.
+
+** Approach: Layer-Based Task Policies
+A two-level config (project + mode) that:
+1. Declares the project's layer vocabulary (what ~:LAYER:~ values mean in this project)
+2. Associates gates and contextual guidance per layer
+3. Auto-injects those gates at every task creation point in the pipeline
+
+Config lives in two places:
+- ~.spell/task-policies.yml~ — project-level defaults
+- Mode frontmatter ~taskPolicies~ field — mode-specific overrides (mode wins by name)
+
+** Key Decisions
+- LAYER matching, not content/tag matching — ~:LAYER:~ on org items is the primary signal
+- Sub-outline items (~FEAT-001::implement-ui~) can carry their own ~:LAYER:~ property, overriding parent's LAYER. This allows a single feature to span layers (e.g., frontend UI + API endpoint).
+- Hard + soft enforcement: gates are auto-injected (block completion without verification), AND policy text is injected into prompts and subagent context for guidance
+- Explicit gates always take precedence over policy defaults — the agent can override
+- ~layers:~ in the config file defines the vocabulary AND provides descriptions shown to the planner
+
+** Config Schema
+#+begin_example
+# .spell/task-policies.yml
+version: 1
+layers:
+  frontend:
+    description: "LiveView pages, components, browser interactions"
+  api:
+    description: "REST/GraphQL endpoints, request/response contracts"
+policies:
+  - name: frontend-journey-tests
+    match:
+      layer: frontend
+    gates:
+      gateLlm: "Journey tests covering complete user flow..."
+      gateCmd: "mix test test/journey/"
+    inject: |
+      Write journey tests in test/journey/.
+#+end_example
+
+** Execution Pipeline
+The LAYER property flows through four stages:
+1. Planning: prompt shows layers + policies → planner sets ~:LAYER:~ on org items and sub-outline items
+2. Approval: ~extractPlanWaves~ enriches wave entries with resolved LAYER from org item properties (sub-outline checked first, parent as fallback)
+3. Auto-init: ~planWavesToTodoPhases~ carries ~layer~ into ~TodoItem~ → ~TodoWriteTool~ auto-injects gates
+4. Dispatch: task dispatch passes ~layer~ to auto-roster → ~TodoWriteTool~ auto-injects gates → subagent receives gate requirements + policy inject text
+
+** Files Changed Summary
+| Area | Files | Change |
+|------+-------+--------|
+| Types + Loader | ~config/task-policies.ts~ (new), ~capability/mode.ts~ | TaskPolicy types, YAML parser, matcher, merger, layer resolver |
+| Discovery | ~discovery/builtin.ts~ | Load ~.spell/task-policies.yml~ |
+| Planning | ~plan-mode-active.md~, ~agent-session.ts~ | Inject layers + policies into planner prompt |
+| Execution | ~plan-mode-approved.md~, ~interactive-mode.ts~ | Policy reminder in executor prompt |
+| Todo Write | ~todo-write.ts~, ~todo-write.md~ | ~layer~ field, policy gate injection on create |
+| Wave Pipeline | ~exit-plan-mode.ts~, ~plan-to-todos.ts~, ~org-plan.ts~ | Resolve LAYER from org properties, carry through waves |
+| Task Dispatch | ~task/types.ts~, ~task/index.ts~, ~task/template.ts~ | ~layer~ on TaskItem, auto-roster propagation, subagent inject text |
+
+* Verification
+
+- ~bun test packages/coding-agent/test/config/task-policies.test.ts~ — policy parsing, matching, merging, gate resolution, layer resolution
+- ~bun test packages/coding-agent/test/prompts/plan-mode-policies.test.ts~ — prompt rendering with/without policies
+- ~bun test packages/coding-agent/test/tools/todo-write-policies.test.ts~ — layer field, gate injection, explicit gate precedence
+- ~bun test packages/coding-agent/test/orchestrators/wave-layer-resolution.test.ts~ — wave entry layer resolution, todo materialization
+- ~bun test packages/coding-agent/test/task/task-layer-propagation.test.ts~ — task dispatch layer propagation, subagent context injection
+- ~bun test packages/coding-agent/test/plan-mode/org-plan-properties.test.ts~ — resolvePlanItem returns properties
+- ~bun check:ts~ — full type check passes
+- Manual: create ~.spell/task-policies.yml~ with a frontend policy, enter plan mode, verify prompt shows layers and policies
+
+* Execution Manifest
+** foundation                                          :wave:
+- [[id:FEAT-302-task-policy-config-schema-types-and-load]] Task Policy Config Schema Types and Loader (3h)
+** prompt-injection                                    :wave:
+- [[id:FEAT-303-planning-prompt-policy-injection]] Planning Prompt Policy Injection (2h, depends FEAT-302)
+** enforcement                                         :wave:
+- [[id:FEAT-304-todo-write-layer-field-and-policy-gate-i]] Todo Write Layer Field and Policy Gate Injection (3h, depends FEAT-302)
+** pipeline-integration                                :wave:
+- [[id:FEAT-305-wave-pipeline-layer-resolution-and-auto]] Wave Pipeline Layer Resolution and Auto-Init Gate Injection (3h, depends FEAT-302 FEAT-304)
+- [[id:FEAT-306-task-dispatch-layer-propagation-and-suba]] Task Dispatch Layer Propagation and Subagent Policy Context (2h, depends FEAT-302 FEAT-304)
+
+** Completion [2026-04-03]
+
+*** Verification
+- ~bun test packages/coding-agent/test/config/task-policies.test.ts~ — 34 pass, 0 fail (parsing, matching, merging, gate resolution, layer resolution)
+- ~bun test packages/coding-agent/test/prompts/plan-mode-policies.test.ts~ — 5 pass, 0 fail (prompt rendering with/without policies)
+- ~bun test packages/coding-agent/test/tools/todo-write-policies.test.ts~ — 6 pass, 0 fail (layer field, gate injection, explicit gate precedence)
+- ~bun test packages/coding-agent/test/orchestrators/wave-layer-resolution.test.ts~ — 2 pass, 0 fail (wave entry layer carry-through to TodoItem)
+- ~bun test packages/coding-agent/test/plan-mode/org-plan-properties.test.ts~ — 1 pass, 0 fail (resolvePlanItem returns properties)
+- ~bun test packages/coding-agent/test/task/task-layer-propagation.test.ts~ — 6 pass, 0 fail (verification context with policy inject, taskItemSchema layer field)
+- ~bun check:ts~ — biome passes clean; tsgo errors are pre-existing in spell-server/utils packages (unrelated)
+- All 114 existing todo-write tests continue to pass
+- All 149 existing task/plan-mode tests continue to pass (1 pre-existing failure in render-report-finding.test.ts confirmed pre-existing on main)
+
+*** Artifacts
+**** New files
+- ~packages/coding-agent/src/config/task-policies.ts~ — types, parser, matcher, merger, gate resolver, layer resolver
+- ~packages/coding-agent/test/config/task-policies.test.ts~ — 34 tests
+- ~packages/coding-agent/test/prompts/plan-mode-policies.test.ts~ — 5 tests
+- ~packages/coding-agent/test/tools/todo-write-policies.test.ts~ — 6 tests
+- ~packages/coding-agent/test/orchestrators/wave-layer-resolution.test.ts~ — 2 tests
+- ~packages/coding-agent/test/plan-mode/org-plan-properties.test.ts~ — 1 test
+- ~packages/coding-agent/test/task/task-layer-propagation.test.ts~ — 6 tests
+
+**** Modified files
+- ~packages/coding-agent/src/capability/mode.ts~ — added ~taskPolicies?: TaskPolicy[]~ to ModeConfigFrontmatter
+- ~packages/coding-agent/src/prompts/system/plan-mode-active.md~ — added conditional task policies section with layer table and policy blocks
+- ~packages/coding-agent/src/prompts/system/plan-mode-approved.md~ — added conditional active task policies reminder
+- ~packages/coding-agent/src/session/agent-session.ts~ — loads and merges task policies, passes to plan-mode-active template
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ — loads and merges task policies, passes to plan-mode-approved template
+- ~packages/coding-agent/src/tools/todo-write.ts~ — added layer field to TodoItem + all schemas, injectPolicyGates function, policy gate injection in applyOps
+- ~packages/coding-agent/src/prompts/tools/todo-write.md~ — documented layer field
+- ~packages/coding-agent/src/plan-mode/org-plan.ts~ — resolvePlanItem now returns properties
+- ~packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts~ — added layer to PlanWaveEntry, carried through to TodoItem
+- ~packages/coding-agent/src/tools/exit-plan-mode.ts~ — resolves LAYER from org item properties during wave extraction
+- ~packages/coding-agent/src/task/types.ts~ — added layer to taskItemSchema
+- ~packages/coding-agent/src/task/index.ts~ — propagates layer in auto-roster creation, passes policies to resolveVerificationContext
+- ~packages/coding-agent/src/task/template.ts~ — resolveVerificationContext injects policy inject text
+
+*** Deviations
+None.

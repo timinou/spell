@@ -1,0 +1,107 @@
+#+TITLE: Todo Write Layer Field and Policy Gate Injection
+#+STATE: DONE
+#+SESSION_ID: 14ac7cd4e228b35c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T19-07-12-136Z_14ac7cd4e228b35c.jsonl]]
+#+CUSTOM_ID: FEAT-304-todo-write-layer-field-and-policy-gate-i
+#+EFFORT: 3h
+#+LAYER: infra
+#+DEPENDS: FEAT-302-task-policy-config-schema-types-and-load
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-03T18-29-08-543Z_14ac741ecff69fa5.jsonl
+ ID: 14ac741ecff69fa5
+
+
+In this session for example, i would have liked all frontend tasks to have had a gate or sth to ensure that journey tests are fully written alongside self-documenting code to explain the story associated to it. How would you improve the planning mode and the todo write and task tools to allow for this to naturally happen? YOu're also allowed to think or find config paths so I can write my requriemetns per-projects. Thanks
+
+* Scope
+- IN: Add ~layer~ field to ~TodoItem~, auto-inject gates from matching policies when tasks are created with a ~layer~ value, update todo-write prompt documentation
+- OUT: Task dispatch layer propagation, wave pipeline integration, subagent context (separate items)
+- Key constraint: Explicit gates set by the user always take precedence over policy defaults. Policy gates are additive — they fill in missing gate fields, never overwrite existing ones.
+
+* Tests (TDD — before implementation)
+** Write todo-write policy injection tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-304::inject-tests
+:LAYER: test
+:END:
+- File: ~packages/coding-agent/test/tools/todo-write-policies.test.ts~
+- Scenarios:
+  - ~replace~ op: task with ~layer: "frontend"~ gets policy gates auto-injected
+  - ~add_task~ op: task with ~layer: "frontend"~ gets policy gates auto-injected
+  - ~add_phase~ op: tasks with ~layer~ get policy gates auto-injected
+  - Task with ~layer: "frontend"~ and explicit ~gateCmd~ → explicit ~gateCmd~ preserved, other policy gates injected
+  - Task with ~layer: "unknown"~ → no gates injected (no matching policy)
+  - Task without ~layer~ → no gates injected (no layer to match)
+  - Task with ~layer: "frontend"~ but no active policies → no gates injected
+  - Multiple policies matching same layer → gates accumulated (gateCmd from first, gateLlm from second)
+  - ~update~ op setting ~layer~ on existing task → gates injected on the update
+  - Gate injection does not overwrite existing gates on the task (idempotent)
+
+** Write TodoItem layer field tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-304::layer-field-tests
+:LAYER: test
+:END:
+- File: ~packages/coding-agent/test/tools/todo-write-policies.test.ts~ (same file)
+- Scenarios:
+  - ~layer~ field persists through ~replace~ → ~update~ → read cycle
+  - ~layer~ field appears in ~formatSummary~ output (shown to user)
+  - ~layer~ field accepted by zod schema validation
+  - ~layer~ field is optional (missing = no error)
+
+* Implementation
+** Add layer field to TodoItem and schema
+:PROPERTIES:
+:CUSTOM_ID: FEAT-304::add-layer-field
+:DEPENDS: FEAT-304::layer-field-tests
+:END:
+- File: ~packages/coding-agent/src/tools/todo-write.ts~
+- Add ~layer?: string~ to ~TodoItem~ interface (line ~46~)
+- Add ~layer~ to the zod schema for all op types that create tasks: ~replace~ task schema, ~add_task~ schema, ~add_phase~ task schema, ~update~ schema
+- Add ~layer~ to ~formatSummary~ output — show ~[layer]~ tag alongside ~[org]~ tag
+
+** Implement policy gate injection in execute()
+:PROPERTIES:
+:CUSTOM_ID: FEAT-304::implement-injection
+:DEPENDS: FEAT-304::add-layer-field FEAT-304::inject-tests
+:END:
+- File: ~packages/coding-agent/src/tools/todo-write.ts~
+- Import ~matchPolicies~, ~resolveGates~, ~applyPolicyGates~ from ~../config/task-policies~
+- Access resolved policies from session (via ~this.session~ — need to decide storage: settings, session state, or inline load)
+- For each task created via ~replace~, ~add_phase~, or ~add_task~:
+  - If task has ~layer~ set, call ~matchPolicies(layer, activePolicies)~
+  - Call ~applyPolicyGates~ to merge policy gates with existing explicit gates
+  - Inject gates onto the task object before it enters the phases array
+- For ~update~ op setting ~layer~:
+  - Same gate injection logic applies — resolve and inject missing gates
+- Sequencing note: gate injection must happen BEFORE ~hasRequiredGate~ checks, so injected gates participate in two-phase verification
+
+** Update todo-write prompt documentation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-304::update-prompt
+:DEPENDS: FEAT-304::implement-injection
+:END:
+- File: ~packages/coding-agent/src/prompts/tools/todo-write.md~
+- Document ~layer~ field in task anatomy section
+- Add example showing ~layer~ usage with automatic gate injection
+- Explain: "When ~layer~ is set and project task policies are active, matching policy gates are auto-injected. Explicit gates take precedence."
+
+* Edge Cases
+- Policy loaded but no matching layer → no injection, task created as-is
+- Policy loaded, matching layer, but all gate fields already set explicitly → no changes (idempotent)
+- ~layer~ set on ~update~ op for existing task that already has gates → only fills missing gate fields
+- Policy config file deleted between session start and task creation → graceful (no injection, no error)
+- Session without policies (no ~.spell/task-policies.yml~, no mode policies) → todo_write works exactly as before
+- Policy with ~inject~ text: this is NOT injected into todo items (it goes into subagent context via task template)
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/tools/todo-write-policies.test.ts~ passes
+- ~bun check:ts~ passes
+- Creating a todo task with ~layer: "frontend"~ auto-injects gates from matching policies
+- Existing explicit gates are never overwritten by policy defaults
+- Todo summary shows ~[frontend]~ layer tag for tasks with layer set
+- No behavioral change when no policies are configured

@@ -57,6 +57,11 @@ export const taskItemSchema = Type.Object({
 				"Todo item ID (e.g. 'task-3') to link this subagent to. Resolves verification requirements (gates, orgItemId) and injects them into the subagent context automatically.",
 		}),
 	),
+	layer: Type.Optional(
+		Type.String({
+			description: "Layer for policy-based gate injection. Propagated to auto-roster todo items.",
+		}),
+	),
 });
 export type TaskItem = Static<typeof taskItemSchema>;
 

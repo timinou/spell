@@ -1,0 +1,128 @@
+#+TITLE: Wave Pipeline Layer Resolution and Auto-Init Gate Injection
+#+STATE: DONE
+#+SESSION_ID: 14ac7cd4e228b35c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T19-07-12-136Z_14ac7cd4e228b35c.jsonl]]
+#+CUSTOM_ID: FEAT-305-wave-pipeline-layer-resolution-and-auto
+#+EFFORT: 3h
+#+LAYER: infra
+#+DEPENDS: FEAT-302-task-policy-config-schema-types-and-load FEAT-304-todo-write-layer-field-and-policy-gate-i
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-03T18-29-08-543Z_14ac741ecff69fa5.jsonl
+ ID: 14ac741ecff69fa5
+
+
+In this session for example, i would have liked all frontend tasks to have had a gate or sth to ensure that journey tests are fully written alongside self-documenting code to explain the story associated to it. How would you improve the planning mode and the todo write and task tools to allow for this to naturally happen? YOu're also allowed to think or find config paths so I can write my requriemetns per-projects. Thanks
+
+* Scope
+- IN: Extend the wave-to-todo pipeline so org item LAYER properties flow through to auto-initialized todo items. When plan approval auto-initializes todos from wave entries, each todo item gets its ~layer~ set from the corresponding org item's ~:LAYER:~ property (sub-outline item checked first, parent item as fallback). This triggers policy gate injection via FEAT-304's todo_write integration.
+- OUT: Manual todo_write calls (handled by FEAT-304), subagent context injection (separate item), planning prompt (handled by FEAT-303)
+- Key files: ~exit-plan-mode.ts~ (wave extraction), ~plan-to-todos.ts~ (wave materialization), ~interactive-mode.ts~ (plan approval), ~org-plan.ts~ (item resolution)
+
+* Background
+The execution pipeline for org-backed plans:
+1. ~extractPlanWaves~ (exit-plan-mode.ts) → parses plan body into ~PlanWave[]~ with ~PlanWaveEntry~ objects
+2. ~planWavesToTodoPhases~ (plan-to-todos.ts) → converts ~PlanWave[]~ into ~TodoPhase[]~ with ~TodoItem~ objects
+3. ~setTodoPhases~ (interactive-mode.ts line 1243) → auto-initializes todo list
+
+Currently, LAYER property is NOT carried through this pipeline. ~PlanWaveEntry~ has no ~layer~ field. ~resolvePlanItem~ returns ~{ id, file, body }~ but discards ~properties~.
+
+* Tests (TDD — before implementation)
+** Write wave entry layer resolution tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-305::wave-layer-tests
+:LAYER: test
+:END:
+- File: ~packages/coding-agent/test/orchestrators/wave-layer-resolution.test.ts~
+- Scenarios:
+  - Wave entry with orgItemId ~FEAT-001::implement-ui~ where sub-outline has ~LAYER=frontend~ → entry.layer = ~frontend~
+  - Wave entry with orgItemId ~FEAT-001::implement-ui~ where sub-outline has no LAYER but parent FEAT-001 has ~LAYER=frontend~ → entry.layer = ~frontend~
+  - Wave entry with orgItemId ~FEAT-001~ (top-level, no ~::~) where item has ~LAYER=api~ → entry.layer = ~api~
+  - Wave entry where neither sub-outline nor parent has LAYER → entry.layer = undefined
+  - Sub-outline LAYER overrides parent LAYER (sub-outline ~api~, parent ~frontend~ → ~api~)
+
+** Write todo materialization with layer tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-305::materialize-tests
+:DEPENDS: FEAT-305::wave-layer-tests
+:END:
+- File: ~packages/coding-agent/test/orchestrators/wave-layer-resolution.test.ts~ (same file)
+- Scenarios:
+  - ~materializePlanWaves~ carries ~layer~ from ~PlanWaveEntry~ to ~TodoItem~
+  - TodoItem created from wave entry with ~layer: "frontend"~ has ~layer: "frontend"~
+  - TodoItem created from wave entry without ~layer~ has ~layer: undefined~
+
+** Write resolvePlanItem properties tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-305::resolve-props-tests
+:LAYER: test
+:END:
+- File: ~packages/coding-agent/test/plan-mode/org-plan-properties.test.ts~
+- Scenarios:
+  - ~resolvePlanItem~ returns ~properties~ field with LAYER, DEPENDS, etc.
+  - ~resolvePlanItem~ for item without LAYER → properties.LAYER is undefined
+
+* Implementation
+** Extend resolvePlanItem to return properties
+:PROPERTIES:
+:CUSTOM_ID: FEAT-305::extend-resolve
+:DEPENDS: FEAT-305::resolve-props-tests
+:LAYER: infra
+:END:
+- File: ~packages/coding-agent/src/plan-mode/org-plan.ts~
+- Change ~resolvePlanItem~ return type from ~{ id, file, body }~ to ~{ id, file, body, properties }~
+- ~findItemById~ already returns full ~OrgItem~ with ~properties~ — just include it in the return
+- Update all callers (exit-plan-mode.ts, agent-session.ts, interactive-mode.ts) — they already destructure so this is backward-compatible (new field is additive)
+
+** Add layer to PlanWaveEntry
+:PROPERTIES:
+:CUSTOM_ID: FEAT-305::extend-wave-entry
+:DEPENDS: FEAT-305::extend-resolve
+:LAYER: infra
+:END:
+- File: ~packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts~
+- Add ~layer?: string~ to ~PlanWaveEntry~ interface
+- ~materializePlanWaves~: carry ~entry.layer~ into ~TodoItem.layer~ when constructing todo items (line ~127~)
+
+** Resolve layer during wave extraction
+:PROPERTIES:
+:CUSTOM_ID: FEAT-305::resolve-in-waves
+:DEPENDS: FEAT-305::extend-wave-entry FEAT-305::wave-layer-tests
+:LAYER: infra
+:END:
+- File: ~packages/coding-agent/src/tools/exit-plan-mode.ts~
+- After ~extractPlanWaves~ (line ~158~), iterate wave entries and resolve each entry's layer:
+  - Call ~resolvePlanItem~ for the entry's ~orgItemId~ to get its ~properties.LAYER~
+  - If no LAYER on that item and the ID contains ~::~, derive parent ID and call ~resolvePlanItem~ on parent
+  - Set ~entry.layer~ from resolved LAYER
+- Alternative approach: use ~resolveLayerFromOrgId~ from FEAT-302 with a lookup function that calls ~resolvePlanItem~
+- Note: this adds async org lookups during plan approval — acceptable since plan approval is already async and reads child items
+
+** Verify auto-init carries layer through
+:PROPERTIES:
+:CUSTOM_ID: FEAT-305::verify-auto-init
+:DEPENDS: FEAT-305::resolve-in-waves
+:LAYER: test
+:END:
+- Verify in ~interactive-mode.ts~ line ~1241~: ~planWavesToTodoPhases(options.waves)~ now produces ~TodoPhase[]~ where each ~TodoItem~ has ~layer~ set from the resolved org item LAYER
+- When ~setTodoPhases~ is called, FEAT-304's policy gate injection kicks in automatically (gates are injected during todo_write execution)
+- No changes needed in interactive-mode.ts itself — the layer flows through the pipeline
+
+* Edge Cases
+- Org item with no LAYER property → todo item has no layer → no policy gates injected (correct)
+- Sub-outline CUSTOM_ID with ~::~ where parent doesn't exist → falls back to undefined (no error)
+- Wave entry without ~orgItemId~ → no layer resolution attempted
+- ~resolvePlanItem~ returning null for a wave entry → layer stays undefined (entry itself was already validated as existing during exit-plan-mode)
+- Mixed waves: some entries have layer, some don't → only layer-bearing entries get policy gates
+- ~extractPlanWaves~ is called in exit-plan-mode.ts BEFORE plan approval; the layer resolution enrichment happens there too, so waves passed to ~#approvePlan~ already have layers
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/orchestrators/wave-layer-resolution.test.ts~ passes
+- ~bun test packages/coding-agent/test/plan-mode/org-plan-properties.test.ts~ passes
+- ~bun check:ts~ passes
+- Plan approval with wave-structured execution manifest produces todo items with ~layer~ set from org item LAYER
+- Policy gates are auto-injected on auto-initialized todo items via FEAT-304 integration
+- No behavioral change for plans without LAYER on org items

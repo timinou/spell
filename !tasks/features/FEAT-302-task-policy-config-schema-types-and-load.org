@@ -1,0 +1,170 @@
+#+TITLE: Task Policy Config Schema Types and Loader
+#+STATE: DONE
+#+SESSION_ID: 14ac7cd4e228b35c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T19-07-12-136Z_14ac7cd4e228b35c.jsonl]]
+#+CUSTOM_ID: FEAT-302-task-policy-config-schema-types-and-load
+#+EFFORT: 3h
+#+LAYER: infra
+
+* Scope
+- IN: TaskPolicy type, TaskPolicyConfig type, YAML loader, schema validation, project+mode policy merger, layer resolution from sub-outline items
+- OUT: Prompt injection, todo_write integration, task dispatch integration, wave pipeline integration (separate items)
+- Boundary: This item produces the pure-function foundation that all other items depend on
+
+* Tests (TDD — before implementation)
+** Write policy parsing tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-302::parse-tests
+:END:
+- File: ~packages/coding-agent/test/config/task-policies.test.ts~
+- Scenarios:
+  - Parse valid ~task-policies.yml~ with layers + policies → returns TaskPolicyConfig
+  - Parse YAML with missing ~version~ field → returns validation error
+  - Parse YAML with unknown gate fields → ignores unknown fields, returns valid policies
+  - Parse YAML with empty ~policies~ array → returns config with empty policies
+  - Parse YAML with ~layers~ only (no policies) → returns config with layers, empty policies
+  - Parse invalid YAML → returns parse error
+  - File does not exist → returns undefined (ENOENT)
+
+** Write policy matching tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-302::match-tests
+:DEPENDS: FEAT-302::parse-tests
+:END:
+- File: ~packages/coding-agent/test/config/task-policies.test.ts~ (same file, separate describe block)
+- Scenarios:
+  - ~matchPolicies("frontend", policies)~ returns policies where ~match.layer === "frontend"~
+  - ~matchPolicies("api", policies)~ returns only api-matching policies
+  - ~matchPolicies("unknown", policies)~ returns empty array
+  - ~matchPolicies(undefined, policies)~ returns empty array
+
+** Write policy merging tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-302::merge-tests
+:DEPENDS: FEAT-302::parse-tests
+:END:
+- File: ~packages/coding-agent/test/config/task-policies.test.ts~ (same file, separate describe block)
+- Scenarios:
+  - Mode policy with same ~name~ overrides project policy entirely
+  - Mode policy with different ~name~ accumulates alongside project policies
+  - Mode layers merge with project layers (mode wins on conflict)
+  - Empty mode policies → project policies pass through unchanged
+  - Empty project policies → mode policies pass through unchanged
+
+** Write gate resolution tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-302::resolve-tests
+:DEPENDS: FEAT-302::match-tests
+:END:
+- File: ~packages/coding-agent/test/config/task-policies.test.ts~ (same file, separate describe block)
+- Scenarios:
+  - ~resolveGates("frontend", policies)~ returns merged gate fields from all matching policies
+  - Multiple policies for same layer: gates accumulate (gateCmd from one, gateLlm from other)
+  - Multiple policies setting same gate field: last match wins
+  - Explicit gates on task take precedence (tested via ~applyPolicyGates~ with pre-existing gates)
+
+** Write layer resolution tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-302::layer-resolve-tests
+:DEPENDS: FEAT-302::parse-tests
+:END:
+- File: ~packages/coding-agent/test/config/task-policies.test.ts~ (same file, separate describe block)
+- Scenarios:
+  - ~resolveLayerFromOrgId("FEAT-001::implement-ui", lookupFn)~ → returns sub-outline item's own LAYER if set
+  - ~resolveLayerFromOrgId("FEAT-001::implement-ui", lookupFn)~ → falls back to parent item (FEAT-001) LAYER if sub-outline has no LAYER
+  - ~resolveLayerFromOrgId("FEAT-001", lookupFn)~ → returns top-level item LAYER directly
+  - ~resolveLayerFromOrgId(undefined, lookupFn)~ → returns undefined
+  - Sub-outline LAYER overrides parent LAYER (sub-outline sets ~api~, parent sets ~frontend~ → ~api~ wins)
+
+* Implementation
+** Define TaskPolicy types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-302::define-types
+:DEPENDS: FEAT-302::parse-tests
+:END:
+- File: ~packages/coding-agent/src/config/task-policies.ts~ (new)
+- Types:
+  #+begin_src typescript
+  interface LayerDefinition {
+    description: string;
+  }
+
+  interface TaskPolicyMatch {
+    layer: string;
+  }
+
+  interface TaskPolicyGates {
+    gateCommit?: boolean;
+    gateArtifact?: string;
+    gateCmd?: string;
+    gateLlm?: string;
+    verifyCmd?: string;
+  }
+
+  interface TaskPolicy {
+    name: string;
+    description?: string;
+    match: TaskPolicyMatch;
+    gates: TaskPolicyGates;
+    inject?: string;
+  }
+
+  interface TaskPolicyConfig {
+    version: number;
+    layers: Record<string, LayerDefinition>;
+    policies: TaskPolicy[];
+  }
+  #+end_src
+
+** Implement loader, matcher, and layer resolver
+:PROPERTIES:
+:CUSTOM_ID: FEAT-302::implement-loader
+:DEPENDS: FEAT-302::define-types FEAT-302::match-tests FEAT-302::merge-tests FEAT-302::resolve-tests FEAT-302::layer-resolve-tests
+:END:
+- File: ~packages/coding-agent/src/config/task-policies.ts~
+- Functions:
+  - ~parseTaskPolicies(yamlContent: string): TaskPolicyConfig | undefined~ — parse and validate
+  - ~loadTaskPolicies(projectDir: string): Promise<TaskPolicyConfig | undefined>~ — load from ~.spell/task-policies.yml~
+  - ~matchPolicies(layer: string | undefined, policies: TaskPolicy[]): TaskPolicy[]~ — filter by layer
+  - ~mergePolicies(project: TaskPolicyConfig | undefined, mode: TaskPolicy[] | undefined): TaskPolicyConfig~ — merge project + mode; mode overrides by name, layers merge with mode winning on conflict
+  - ~resolveGates(layer: string | undefined, policies: TaskPolicy[]): TaskPolicyGates~ — compute merged gates for a layer
+  - ~applyPolicyGates(task: { layer?: string }, policies: TaskPolicy[], existingGates: TaskPolicyGates): TaskPolicyGates~ — apply gates, existing explicit gates win
+  - ~resolveLayerFromOrgId(orgItemId: string | undefined, lookupFn: (id: string) => Record<string, string> | undefined): string | undefined~ — resolve LAYER from org item properties, with fallback to parent item (splits on ~::~ to derive parent ID)
+
+** Extend ModeConfigFrontmatter
+:PROPERTIES:
+:CUSTOM_ID: FEAT-302::extend-frontmatter
+:DEPENDS: FEAT-302::define-types
+:END:
+- File: ~packages/coding-agent/src/capability/mode.ts~
+- Add ~taskPolicies?: TaskPolicy[]~ to ~ModeConfigFrontmatter~ interface
+- Import ~TaskPolicy~ type from ~../config/task-policies~
+
+** Register discovery loader
+:PROPERTIES:
+:CUSTOM_ID: FEAT-302::register-loader
+:DEPENDS: FEAT-302::implement-loader
+:END:
+- File: ~packages/coding-agent/src/discovery/builtin.ts~
+- Add ~loadTaskPolicies~ function following the ~loadSettings~ pattern
+- Load ~.spell/task-policies.yml~ at project level using ~readFile~ + ~parseTaskPolicies~
+- NOT a capability provider (single config file, not a collection) — store on session state or resolve inline
+- Sequencing note: discovery runs before session init, so policies are available for prompt rendering
+
+* Edge Cases
+- YAML file with only ~layers~ and no ~policies~ is valid — layers still get injected into planning prompt
+- Mode frontmatter with ~taskPolicies~ but no project-level file is valid
+- Circular or contradictory policies (same name, different layers) — last definition wins silently
+- ~layer~ field values are case-sensitive and must match exactly
+- Missing ~match~ field on a policy → validation error, skip that policy with warning
+- Sub-outline item with own LAYER overrides parent's LAYER — the sub-outline is the authoritative source
+- ~resolveLayerFromOrgId~ with a ~::~ ID where parent doesn't exist → returns undefined
+- ~layers~ declared in task-policies.yml extend the default ~VALID_LAYERS~ from pi-org, they don't replace them
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/config/task-policies.test.ts~ passes
+- ~bun check:ts~ passes with new types
+- ~TaskPolicyConfig~ type is exported and importable from ~config/task-policies~
+- ~parseTaskPolicies~ handles all test scenarios correctly
+- ~mergePolicies~ correctly resolves project + mode policies
+- ~resolveLayerFromOrgId~ correctly resolves layer from sub-outline items with parent fallback

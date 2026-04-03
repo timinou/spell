@@ -22,6 +22,7 @@ import { $ } from "bun";
 import type { ToolSession } from "..";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
+import { loadTaskPolicies, mergePolicies } from "../config/task-policies";
 import type { Theme } from "../modes/theme/theme";
 import { listPlanModeAllowedFolders } from "../plan-mode/allowed-folders";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
@@ -206,14 +207,16 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	}
 
 	/** Augment each task's assignment with todoRef-derived execution context. */
-	#injectVerificationContext(tasks: TaskItem[]): TaskItem[] {
+	async #injectVerificationContext(tasks: TaskItem[]): Promise<TaskItem[]> {
 		const phases = this.session.getTodoPhases?.();
 		if (!phases || phases.length === 0) return tasks;
+		const projectPolicies = await loadTaskPolicies(this.session.cwd ?? "");
+		const activePolicies = mergePolicies(projectPolicies, undefined).policies;
 		return tasks.map(task => {
 			if (!task.todoRef) return task;
 			const blocks = [
 				resolvePredecessorResultsContext(task.todoRef, phases),
-				resolveVerificationContext(task.todoRef, phases),
+				resolveVerificationContext(task.todoRef, phases, activePolicies),
 			].filter((block): block is string => Boolean(block));
 			if (blocks.length === 0) return task;
 			return { ...task, assignment: `${task.assignment.trim()}\n\n${blocks.join("\n\n")}` };
@@ -319,6 +322,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								content: sanitizeTaskContent(task.description, task.id),
 								blockers: blockerTodoRefs.length > 0 ? blockerTodoRefs : undefined,
 								delegation: { sessionId: "pending", agent: agentName },
+								layer: task.layer,
 							};
 						}),
 					},
@@ -527,7 +531,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			this.session.agentOutputManager ?? new AgentOutputManager(this.session.getArtifactsDir ?? (() => null));
 		const uniqueIds = await outputManager.allocateBatch(taskItems.map(t => t.id));
 		const fallbackAgentSource = selectedAgent?.source ?? "bundled";
-		const augmentedTasks = this.#injectVerificationContext(taskItems);
+		const augmentedTasks = await this.#injectVerificationContext(taskItems);
 		const taskExecutions = augmentedTasks.map((taskItem, index) => ({
 			logicalId: taskItem.id,
 			executionId: uniqueIds[index] ?? taskItem.id,
@@ -1007,7 +1011,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			};
 		}
 
-		const tasks = this.#injectVerificationContext(params.tasks);
+		const tasks = await this.#injectVerificationContext(params.tasks);
 		const taskValidationError = this.#validateTaskBatch(tasks);
 		if (taskValidationError) {
 			return {

@@ -89,6 +89,32 @@ You **MUST** use `{{editToolName}}` for incremental updates; use `{{writeToolNam
 When complete, call `{{exitToolName}}` with `title` (SCREAMING_SNAKE_CASE plan name).
 {{/if}}
 
+{{#if taskPolicies}}
+## Project Task Policies
+
+This project declares layer-based task policies. Set `:LAYER:` on org items and sub-outline items from the declared layers below. Matching policy gates are auto-enforced during execution.
+
+### Declared Layers
+|Layer|Description|
+|---|---|
+{{#each taskPolicyLayers}}
+|`{{@key}}`|{{this.description}}|
+{{/each}}
+
+### Active Policies
+{{#each taskPolicyList}}
+**{{this.name}}** (layer: `{{this.match.layer}}`)
+{{#if this.gates.gateCmd}}- Gate command: `{{this.gates.gateCmd}}`
+{{/if}}{{#if this.gates.gateLlm}}- LLM review: {{this.gates.gateLlm}}
+{{/if}}{{#if this.gates.gateCommit}}- Requires commit
+{{/if}}{{#if this.gates.gateArtifact}}- Required artifact: `{{this.gates.gateArtifact}}`
+{{/if}}{{#if this.gates.verifyCmd}}- Verify command: `{{this.gates.verifyCmd}}`
+{{/if}}{{#if this.inject}}- Guidance: {{this.inject}}{{/if}}
+{{/each}}
+
+For sub-outline items that share the parent's layer, `:LAYER:` is inherited automatically — only set it explicitly when the sub-item has a different layer.
+{{/if}}
+
 {{#has tools "todo_write"}}
 You **MUST** use `todo_write` to set up task phases that capture the plan's work breakdown. Do this before calling `{{exitToolName}}`.
 {{/has}}
