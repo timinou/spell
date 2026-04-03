@@ -2124,7 +2124,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	eventBus.subscribe(CANVAS_AGENT_CHANNEL, async (raw: unknown) => {
 		const payload = raw as CanvasAgentPayload;
 		if (!session) {
-			payload.reply?.({ error: "Canvas agent request failed: no active session." });
+			payload.reply?.({
+				action: "agent_handoff_result",
+				ok: false,
+				error: "Canvas agent request failed: no active session.",
+			});
 			return;
 		}
 		try {
@@ -2133,12 +2137,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				: payload.assignment;
 			await session.followUp(`[Canvas agent request from window ${payload.windowId}]\n\n${prompt}`);
 			payload.reply?.({
+				action: "agent_handoff_result",
 				ok: true,
 				status: "submitted",
 				message: "Submitted the Phoenix inspector request to the active agent session.",
 			});
 		} catch (error) {
 			payload.reply?.({
+				action: "agent_handoff_result",
+				ok: false,
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}

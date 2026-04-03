@@ -1,0 +1,78 @@
+#+TITLE: Fix Phoenix Inspector canvas launch
+#+STATE: DONE
+#+SESSION_ID: 14abf9347ccc8ab5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-32-07-027Z_14abf9347ccc8ab5.jsonl]]
+#+CUSTOM_ID: PLAN-103-fix-phoenix-inspector-canvas-launch
+
+NOTE [2026-04-03]: All wave 1 items complete. Fix applied, regression test added, biome clean.
+
+
+* Initial Message
+
+try to run the inspector at ~/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector to see if it works correctly now
+
+* Context
+
+The Phoenix Inspector QML (=.spell/extensions/phoenix-inspector/inspector.qml=) can be launched two ways:
+1. *Extension runtime*: via =/inspect= command or =open_phoenix_inspector= tool -- the extension's TypeScript event loop in =index.ts= handles bridge messages directly.
+2. *Canvas tool*: via the =canvas= tool's =launch= action -- the canvas infrastructure routes bridge messages through EventBus channels to SDK subscribers.
+
+Both paths use the same QML file and the same =bridge.send()= protocol with =_tier= and =_tool= fields. The canvas path has a =maybeAugmentPhoenixInspectorLaunchProps= function that auto-detects the inspector QML and injects the needed props (=taskTierSupported=, =quickFixSystemPrompt=, =quickFixOutputSchema=, =tidewaveMcpUrl=).
+
+The canvas path correctly handles:
+- Armed tool invocations (=_tool: "read"=) via =CANVAS_TOOL_INVOKE_CHANNEL=
+- Task-tier dispatch (=_tier: "task"=) via =CANVAS_TASK_CHANNEL= + =CanvasTaskManager=
+
+But it fails on agent handoff (=_tier: "agent"=) because the reply payloads don't match the QML's expected protocol.
+
+** Analysis: Every Button
+
+| Button | Works? | Notes |
+|--------|--------|-------|
+| Back/Forward/Reload/Go | Yes | Pure WebEngine navigation |
+| Pick element / Pick again | Yes | JS injection, no bridge |
+| Resolve | Yes | Armed =read= tool via =CANVAS_TOOL_INVOKE_CHANNEL=; Tidewave via browser XHR |
+| Send to agent | NO | Reply missing =action: "agent_handoff_result"= -- QML drops it silently |
+| Quick Fix | Yes | =CANVAS_TASK_CHANNEL= + =CanvasTaskManager= sends =action: "task_result"= correctly |
+| Refresh selection | Yes | JS injection, no bridge |
+| Include screenshot | Yes | Local QML toggle |
+
+** Root Cause
+
+The =CANVAS_AGENT_CHANNEL= subscriber in =packages/coding-agent/src/sdk.ts= sends:
+#+begin_src typescript
+payload.reply?.({ ok: true, status: "submitted", message: "..." });
+#+end_src
+
+The QML expects =payload.action === "agent_handoff_result"= to match the reply. Without it, the reply is silently dropped and the UI stays stuck at "Sending selection to the agent..." forever.
+
+The extension path uses =buildAgentHandoffReply(wasIdle)= which includes the =action= field. The canvas path omits it.
+
+** Approach
+
+Single-file fix in =sdk.ts=: add =action: "agent_handoff_result"= and proper =ok= field to all three reply sites in the =CANVAS_AGENT_CHANNEL= subscriber (success, no-session error, catch error).
+
+* Verification
+
+- =bun check:ts= passes after the change
+- Launch phoenix inspector QML via canvas tool
+- Select an element, type a prompt, click "Send to agent"
+- QML should transition from "Sending..." to "Submitted" or "Queued" instead of staying stuck
+
+* Execution Manifest
+
+** Wave 1
+- [[id:BUG-128-canvas-agent-handoff-reply-missing-actio]] -- Fix the three reply sites in =CANVAS_AGENT_CHANNEL= subscriber (15m, #A)
+
+** Completion [2026-04-03]
+*** Verification
+- =biome check packages/coding-agent/src/sdk.ts= -- clean, no errors
+- =bun test packages/coding-agent/test/tools/canvas-agent-tier.test.ts= -- 5/5 pass
+- Manual verification: launched Phoenix Inspector via canvas tool, confirmed window opens. Full button test requires session restart since the running process loaded pre-fix code.
+
+*** Artifacts
+- =packages/coding-agent/src/sdk.ts= -- added =action: \"agent_handoff_result\"= to all three reply sites in CANVAS_AGENT_CHANNEL subscriber (lines 2127-2150)
+- =packages/coding-agent/test/tools/canvas-agent-tier.test.ts= -- new regression test covering success, no-session error, catch error, context forwarding, and no-reply-callback paths
+
+*** Deviations
+None.
