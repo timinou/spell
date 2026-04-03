@@ -18,6 +18,7 @@ import { findCategory, findCategoryForId, resolveCategories } from "./categories
 import type { OrgClient } from "./emacs/client";
 import { createOrgClient } from "./emacs/client";
 import { generateId } from "./id-generator";
+import { parseSubOutlineId } from "./id-links";
 import { KeyedMutex } from "./mutex";
 import { applyFilter, findItemById, readCategory, readOrgFile, sortItems } from "./org-reader";
 import { appendItemToFile, applyItemMutations, initCategoryDir, setPropertyInFile } from "./org-writer";
@@ -294,7 +295,10 @@ async function cmdGet(ctx: OrgContext, args: { id: string }): Promise<unknown> {
 
 	const category = findCategoryForId(categories, args.id);
 	if (category) {
-		const directPath = path.join(category.absPath, `${args.id}.org`);
+		// For sub-outline IDs (parent::slug), derive the parent file name.
+		const subOutline = parseSubOutlineId(args.id);
+		const fileBaseName = subOutline ? subOutline.parentId : args.id;
+		const directPath = path.join(category.absPath, `${fileBaseName}.org`);
 		try {
 			const items = await readOrgFile({
 				filePath: directPath,
