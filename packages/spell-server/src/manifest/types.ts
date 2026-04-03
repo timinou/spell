@@ -212,9 +212,7 @@ function isValidActionValue(value: unknown): value is ActionValue {
 	if (value === null) return true;
 	if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return true;
 	if (Array.isArray(value)) {
-		return value.every(
-			item => item === null || typeof item === "string" || typeof item === "number" || typeof item === "boolean",
-		);
+		return value.every(item => isValidActionValue(item));
 	}
 	if (!isRecord(value)) return false;
 	return Object.values(value).every(item => isValidActionValue(item));

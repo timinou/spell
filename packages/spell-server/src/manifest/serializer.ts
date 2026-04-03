@@ -1,5 +1,5 @@
 import { Document, format, Node } from "@bgotink/kdl";
-import type { ManifestAction } from "../actions/types";
+import type { ActionScalar, ManifestAction } from "../actions/types";
 import type {
 	AutonomyManifest,
 	FilterConfig,
@@ -123,12 +123,20 @@ function createRetryNode(retry: RetryConfig): Node | undefined {
 	return node.entries.length === 0 ? undefined : node;
 }
 
+function isActionScalar(value: ManifestAction["params"][string]): value is ActionScalar {
+	return value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+function isScalarList(value: ManifestAction["params"][string]): value is ActionScalar[] {
+	return Array.isArray(value) && value.every(entry => isActionScalar(entry));
+}
+
 function appendActionChildren(parent: Node, action: ManifestAction): void {
 	const actionNode = createNode("action");
 	actionNode.addArgument(action.id);
 	actionNode.children = new Document();
 	for (const [name, value] of Object.entries(action.params)) {
-		if (Array.isArray(value)) {
+		if (isScalarList(value)) {
 			const paramListNode = createNode("param-list");
 			paramListNode.addArgument(name);
 			for (const entry of value) {
@@ -137,9 +145,16 @@ function appendActionChildren(parent: Node, action: ManifestAction): void {
 			actionNode.children.appendNode(paramListNode);
 			continue;
 		}
+		if (Array.isArray(value) || (typeof value === "object" && value !== null)) {
+			const paramJsonNode = createNode("param-json");
+			paramJsonNode.addArgument(name);
+			paramJsonNode.addArgument(JSON.stringify(value));
+			actionNode.children.appendNode(paramJsonNode);
+			continue;
+		}
 		const paramNode = createNode("param");
 		paramNode.addArgument(name);
-		paramNode.addArgument(typeof value === "object" && value !== null ? JSON.stringify(value) : value);
+		paramNode.addArgument(value);
 		actionNode.children.appendNode(paramNode);
 	}
 	for (const [slotName, slot] of Object.entries(action.promptSlots)) {

@@ -22,27 +22,29 @@ export async function sendGrowthFeed(input: GrowthFeedActionInput): Promise<Grow
 	const maxCharacters = input.maxCharacters ?? 4_000;
 	const messages: GrowthFeedMessage[] = [];
 	let currentText = "";
+	let currentTargetItemId: string | null = null;
 	for (const item of input.items) {
-		const nextText = `${currentText}${currentText ? "\n\n" : ""}${buildMessageText(item)}`;
+		const itemText = buildMessageText(item);
+		const nextText = `${currentText}${currentText ? "\n\n" : ""}${itemText}`;
 		if (nextText.length > maxCharacters && currentText) {
-			const previousItem = input.items[messages.length] ?? item;
 			messages.push({
 				text: currentText,
 				replyMarkup: {
-					inlineKeyboard: [[{ text: "Approve publication", callbackData: `publish:${previousItem.id}` }]],
+					inlineKeyboard: [[{ text: "Approve publication", callbackData: `publish:${currentTargetItemId!}` }]],
 				},
 			});
-			currentText = buildMessageText(item);
+			currentText = itemText.slice(0, maxCharacters);
+			currentTargetItemId = item.id;
 			continue;
 		}
 		currentText = nextText.slice(0, maxCharacters);
+		currentTargetItemId = item.id;
 	}
 	if (currentText) {
-		const lastItem = input.items.at(-1)!;
 		messages.push({
 			text: currentText,
 			replyMarkup: {
-				inlineKeyboard: [[{ text: "Approve publication", callbackData: `publish:${lastItem.id}` }]],
+				inlineKeyboard: [[{ text: "Approve publication", callbackData: `publish:${currentTargetItemId!}` }]],
 			},
 		});
 	}

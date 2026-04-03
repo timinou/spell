@@ -1,30 +1,23 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import * as path from "node:path";
-import { loadConfig } from "../../spell-server/src/config/loader";
-import { cleanupTempDir, createTempDir } from "./test-helpers";
-
-const tempDirs = new Set<string>();
-
-afterEach(async () => {
-	await Promise.allSettled([...tempDirs].map(async dir => cleanupTempDir(dir)));
-	tempDirs.clear();
-});
+import { describe, expect, it } from "bun:test";
+import { createServerActionRegistry } from "../../spell-server/src/actions";
+import { getGrowthActionDescriptors } from "../src/index";
 
 describe("action registration", () => {
-	it("resolves growth actions through the server bootstrap registry", async () => {
-		const dir = await createTempDir("spell-growth-config-");
-		tempDirs.add(dir);
-		await Bun.write(
-			path.join(dir, "server.kdl"),
-			`http {\n\tport 0\n\tauth {\n\t\tusername \"spell\"\n\t\tpassword \"secret\"\n\t}\n}`,
+	it("loads growth actions with explicit empty param and prompt contracts", () => {
+		const registry = createServerActionRegistry();
+		expect(registry.get("growth.discovery")).toEqual({
+			id: "growth.discovery",
+			source: "first-party",
+			params: {},
+			promptSlots: {},
+		});
+		expect(getGrowthActionDescriptors()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "growth.discovery", params: {}, promptSlots: {} }),
+				expect.objectContaining({ id: "growth.feed.send", params: {}, promptSlots: {} }),
+				expect.objectContaining({ id: "growth.export.publish", params: {}, promptSlots: {} }),
+				expect.objectContaining({ id: "growth.curation.writeback", params: {}, promptSlots: {} }),
+			]),
 		);
-		await Bun.write(
-			path.join(dir, "autonomy.kdl"),
-			`name \"growth\"\nversion \"1.0.0\"\nsetup \"worker\" {\n\tdomain \"coding\"\n}\ngoal \"discover\" {\n\tsetup \"worker\"\n\tschedule type=\"cron\" expression=\"0 1 * * *\"\n\taction \"growth.discovery\"\n}`,
-		);
-
-		const loaded = await loadConfig(dir);
-		expect(loaded.actionRegistry.has("growth.discovery")).toBe(true);
-		expect(loaded.manifest.goals.get("discover")?.action?.id).toBe("growth.discovery");
 	});
 });

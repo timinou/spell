@@ -84,4 +84,64 @@ describe("approvals api", () => {
 			}),
 		);
 	});
+	it("rejects malformed nested create payloads without persisting items", async () => {
+		const workflowEngine = new WorkflowEngine();
+		const server = startWorkflowHttpServer({ workflowEngine });
+		stop = server.stop;
+
+		const response = await fetch(`${server.baseUrl}/api/approvals`, {
+			method: "POST",
+			headers: { ...authHeaders(), "content-type": "application/json" },
+			body: JSON.stringify({
+				kind: "checkpoint",
+				...createCheckpointInput(),
+				actions: [
+					{
+						...createCheckpointInput().actions[0],
+						checkpointEffect: {
+							type: "create-approval",
+							approval: { workflowId: "growth", targetId: "article-2", title: "Broken", actions: "nope" },
+						},
+					},
+				],
+			}),
+		});
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({
+			error: "Invalid create payload: actions[0].checkpointEffect.approval.actions must be an array",
+		});
+		expect(workflowEngine.listItems()).toEqual([]);
+	});
+
+	it("rejects malformed action artifacts while preserving the existing item", async () => {
+		const workflowEngine = new WorkflowEngine();
+		const approval = workflowEngine.createApproval(createApprovalInput());
+		const server = startWorkflowHttpServer({ workflowEngine });
+		stop = server.stop;
+
+		const claimed = await fetch(`${server.baseUrl}/api/approvals/${approval.id}/claim`, {
+			method: "POST",
+			headers: { ...authHeaders(), "content-type": "application/json" },
+			body: JSON.stringify({ requestId: "claim-1", actor: createActor("operator-1") }),
+		});
+		expect(claimed.status).toBe(200);
+
+		const response = await fetch(`${server.baseUrl}/api/approvals/${approval.id}/actions`, {
+			method: "POST",
+			headers: { ...authHeaders(), "content-type": "application/json" },
+			body: JSON.stringify({
+				requestId: "approve-1",
+				actionId: "approve",
+				actor: createActor("operator-1"),
+				artifacts: [{ id: "artifact-1", label: "Draft", path: 42 }],
+			}),
+		});
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({
+			error: "Invalid action payload: artifacts[0].path must be a string",
+		});
+		expect(workflowEngine.getItem(approval.id)).toEqual(expect.objectContaining({ state: "pending" }));
+	});
 });

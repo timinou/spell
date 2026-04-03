@@ -1,0 +1,97 @@
+#+TITLE: Replace spell-growth relative imports with stable package boundary
+#+STATE: DONE
+#+SESSION_ID: 14ab788ccb62d28c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T00-10-00-877Z_14ab788ccb62d28c.jsonl]]
+#+CUSTOM_ID: PROJ-025-replace-spell-growth-relative-imports-wi
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-023-audit-implementation:
+
+1. **What**: Action-only goals still do not execute through Spell Server; they only validate and then fail at runtime  
+   **Where**: `packages/spell-server/src/executor/goal-executor.ts`, near `#executeAttempt()` and `resolveGoalPrompt()`  
+   **Why**: `growth.discovery`, `growth.feed.send`, `growth.export.publish`, and `growth.curation.writeback` load successfully, but actual execution still goes through prompt-only flow. Any triggered action-only goal will throw instead of running, so the cutover contract is not actually honored by the live server.  
+   **Effort**: `medium`
+
+2. **What**: Telegram quick-action replay can leave completed items claimed  
+   **Where**: `packages/spell-server/src/telegram/workflow-inbox.ts`, `applyTelegramQuickAction()`  
+   **Why**: The helper claims the item before dedupe/state checks. A duplicated Telegram callback can re-claim an already-completed item and then return a duplicate result, leaving stale claim state behind. That can block later operators or create misleading shared state.  
+   **Effort**: `small`
+
+3. **What**: Duplicate workflow requests are not audited even though the audit contract defines `request-duplicate`  
+   **Where**: `packages/spell-server/src/workflow/engine.ts`, top duplicate branch in `applyAction()`  
+   **Why**: The engine returns `duplicate: true` but does not append a `request-duplicate` audit entry. This weakens the idempotency/audit story and makes duplicate replays invisible in the canonical history.  
+   **Effort**: `trivial`
+
+4. **What**: Coding-agent “goals” and “approvals” surfaces are helpers only, not real registered tools  
+   **Where**: `packages/coding-agent/src/tools/goals-tool.ts`, `packages/coding-agent/src/tools/approvals-tool.ts`, and `packages/coding-agent/src/tools/index.ts`  
+   **Why**: The new modules exist and are tested directly, but they are not wired into `BUILTIN_TOOLS`. In real sessions there is still no reusable goals/approvals tool surface for operators.  
+   **Effort**: `small`
+
+5. **What**: `growth.*` actions are registered without typed parameter schemas  
+   **Where**: `packages/spell-growth/src/index.ts`, `GROWTH_ACTIONS`  
+   **Why**: The manifest/action system now claims typed action validation, but all growth actions are registered as bare IDs with no param or prompt-slot contracts. Invalid growth action configs can pass load-time validation and fail only later.  
+   **Effort**: `small`
+
+6. **What**: Action parameter contract advertises `json` support that the manifest parser/serializer does not actually implement  
+   **Where**: `packages/spell-server/src/actions/types.ts`, `packages/spell-server/src/manifest/parser.ts` near `parseActionNode()` / `resolveActionScalarValue()`, and `packages/spell-server/src/manifest/serializer.ts` near `appendActionChildren()`  
+   **Why**: `ActionParameterType` includes `"json"`, but the parser only handles scalars and scalar lists, while the serializer stringifies objects on output. That means the public contract is misleading and round-trip behavior is lossy.  
+   **Effort**: `small`
+
+7. **What**: Approvals API accepts shallowly validated payloads and then casts them into workflow objects  
+   **Where**: `packages/spell-server/src/http/routes/approvals.ts`, `parseCreatePayload()` and `parseActionPayload()`  
+   **Why**: Only top-level fields are checked. Nested `actions`, `artifacts`, and related structures are trusted via casts. A malformed client can create broken workflow items that persist successfully and fail later in harder-to-debug ways.  
+   **Effort**: `small`
+
+8. **What**: Feed digest approval metadata is chunk-level and can point at the wrong item when a message contains multiple articles  
+   **Where**: `packages/spell-growth/src/actions/feed-send.ts`, around `previousItem = input.items[messages.length] ?? item` and final inline keyboard construction  
+   **Why**: The callback target is derived from message count rather than the actual items accumulated in the chunk. Once chunking happens, the approval button can map to the wrong article.  
+   **Effort**: `small`
+
+9. **What**: `spell-growth` depends on `spell-server` internals via relative source imports instead of a stable package boundary  
+   **Where**: `packages/spell-growth/src/index.ts`, `packages/spell-growth/src/actions/discovery.ts`, `packages/spell-growth/src/actions/types.ts`, `packages/spell-growth/src/workflow/presets.ts`  
+   **Why**: This creates brittle cross-package coupling to `packages/spell-server/src/...` layout. Refactors, packaging, or external consumption can break `spell-growth` even when the intended public contract has not changed.  
+   **Effort**: `medium`
+
+* Scope
+** In scope
+- Replace all ~../../spell-server/src/...~ and ~../../../spell-server/src/...~ imports in ~packages/spell-growth/~ with ~@oh-my-pi/spell-server~ package imports.
+- Add ~@oh-my-pi/spell-server~ as a workspace dependency in ~packages/spell-growth/package.json~.
+- Verify that no circular runtime dependency exists (spell-server depends on spell-growth for registration; spell-growth depends on spell-server for types — this is safe because the registration import is the only runtime link and it runs one-directionally at server startup).
+** Out of scope
+- Changing the growth test files that import from ~../../spell-server/...~ (tests are not published; they can keep relative imports for now).
+
+* Affected files
+Source files with relative cross-package imports:
+- ~packages/spell-growth/src/index.ts~ — imports ~ActionDescriptor~, ~ActionRegistry~ from ~../../spell-server/src/actions~
+- ~packages/spell-growth/src/actions/discovery.ts~ — imports ~WorkflowEngine~ from ~../../../spell-server/src/workflow~
+- ~packages/spell-growth/src/actions/types.ts~ — imports ~WorkflowEngine~ from ~../../../spell-server/src/workflow~
+- ~packages/spell-growth/src/workflow/presets.ts~ — imports ~WorkflowActionDefinition~ from ~../../../spell-server/src/workflow~
+
+* Tests
+** Write test verifying package imports resolve
+:PROPERTIES:
+:CUSTOM_ID: PROJ-025-replace-spell-growth-relative-imports-wi::test
+:END:
+- File: ~packages/spell-growth/test/action-registration.test.ts~
+- After the import rewrite, the existing ~"resolves growth actions through the server bootstrap registry"~ test must still pass.
+- Add a grep-based assertion: scan ~packages/spell-growth/src/**/*.ts~ for ~spell-server/src/~ and assert zero matches.
+
+** Rewrite imports
+:PROPERTIES:
+:CUSTOM_ID: PROJ-025-replace-spell-growth-relative-imports-wi::fix
+:DEPENDS: PROJ-025-replace-spell-growth-relative-imports-wi::test
+:END:
+- In ~packages/spell-growth/package.json~, add ~"@oh-my-pi/spell-server": "workspace:*"~ to ~dependencies~.
+- In each of the 4 source files listed above, replace the relative import with the package specifier:
+  - ~from "../../spell-server/src/actions"~ → ~from "@oh-my-pi/spell-server"~
+  - ~from "../../../spell-server/src/workflow"~ → ~from "@oh-my-pi/spell-server"~
+- Run ~bun install~ to link the workspace dependency.
+
+* Acceptance Criteria
+- ~bun test packages/spell-growth/test/action-registration.test.ts~ passes.
+- ~grep -r 'spell-server/src/' packages/spell-growth/src/~ returns no matches.
+- ~packages/spell-growth/package.json~ lists ~@oh-my-pi/spell-server~ in dependencies.

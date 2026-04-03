@@ -22,6 +22,22 @@ export function buildTelegramApprovalInbox(engine: WorkflowEngine): TelegramAppr
 		.sort((left, right) => left.title.localeCompare(right.title));
 }
 
+function releaseTelegramClaim(
+	engine: WorkflowEngine,
+	input: { itemId: string; actor: WorkflowActor; requestId: string },
+) {
+	const item = engine.getItem(input.itemId);
+	if (!item?.claim || item.claim.actor.actorId !== input.actor.actorId) {
+		return item;
+	}
+
+	return engine.releaseClaim({
+		itemId: input.itemId,
+		actor: input.actor,
+		requestId: `release:${input.requestId}`,
+	});
+}
+
 export async function applyTelegramQuickAction(
 	engine: WorkflowEngine,
 	input: { itemId: string; actionId: string; actor: WorkflowActor; requestId: string; reason?: string },
@@ -31,11 +47,25 @@ export async function applyTelegramQuickAction(
 		actor: input.actor,
 		requestId: `claim:${input.requestId}`,
 	});
-	return engine.applyAction({
-		itemId: input.itemId,
-		actionId: input.actionId,
-		actor: input.actor,
-		requestId: input.requestId,
-		...(input.reason ? { reason: input.reason } : {}),
-	});
+
+	try {
+		const result = await engine.applyAction({
+			itemId: input.itemId,
+			actionId: input.actionId,
+			actor: input.actor,
+			requestId: input.requestId,
+			...(input.reason ? { reason: input.reason } : {}),
+		});
+		if (!result.duplicate && !result.stale) {
+			return result;
+		}
+
+		return {
+			...result,
+			item: releaseTelegramClaim(engine, input) ?? result.item,
+		};
+	} catch (error) {
+		releaseTelegramClaim(engine, input);
+		throw error;
+	}
 }

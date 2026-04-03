@@ -30,7 +30,14 @@ describe("workflow action idempotency", () => {
 		expect(first.duplicate).toBe(false);
 		expect(duplicate.duplicate).toBe(true);
 		expect(stale.stale).toBe(true);
-		expect(engine.listAudit(approval.id).filter(entry => entry.kind === "action-applied")).toHaveLength(1);
-		expect(engine.listAudit(approval.id).filter(entry => entry.kind === "request-stale")).toHaveLength(1);
+		const audit = engine.listAudit(approval.id);
+		expect(audit.filter(entry => entry.kind === "action-applied")).toHaveLength(1);
+		expect(audit.filter(entry => entry.kind === "request-duplicate")).toHaveLength(1);
+		expect(audit.filter(entry => entry.kind === "request-stale")).toHaveLength(1);
+		expect(audit.slice(-3).map(entry => entry.kind)).toEqual([
+			"action-applied",
+			"request-duplicate",
+			"request-stale",
+		]);
 	});
 });

@@ -18,9 +18,7 @@ function isJsonValue(value: ActionValue): boolean {
 		return true;
 	}
 	if (Array.isArray(value)) {
-		return value.every(
-			item => item === null || typeof item === "string" || typeof item === "number" || typeof item === "boolean",
-		);
+		return value.every(item => isJsonValue(item));
 	}
 	if (!isRecord(value)) {
 		return false;

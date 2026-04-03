@@ -121,6 +121,14 @@ function createManager(clients: MockRpcClient[]): SessionManager<string> {
 	});
 }
 
+function parseActionPrompt(message: string): Record<string, unknown> {
+	const match = /BEGIN_ACTION_SPEC_JSON\n([\s\S]*?)\nEND_ACTION_SPEC_JSON/.exec(message);
+	if (!match) {
+		throw new Error(`Missing action payload markers in prompt: ${message}`);
+	}
+	return JSON.parse(match[1]) as Record<string, unknown>;
+}
+
 describe("GoalExecutionController", () => {
 	it("spawns a session with resolved setup params and passes the full prompt", async () => {
 		const client = new MockRpcClient({ cwd: "", tools: [] }, async () => {});
@@ -226,6 +234,69 @@ describe("GoalExecutionController", () => {
 		expect(result.error).toBe("RPC process exited with code 1");
 		expect(controller.getState("ship-it")).toBe("paused");
 		expect(onEscalation).toHaveBeenCalledWith("ship-it", "RPC process exited with code 1");
+	});
+
+	it("executes action-only goals through the prompt flow with a deterministic structured payload", async () => {
+		const client = new MockRpcClient({ cwd: "", tools: [] }, async () => {});
+		const controller = new GoalExecutionController({
+			sessionManager: createManager([client]),
+			manifest: createManifest({
+				prompt: undefined,
+				action: {
+					id: "spell.noop",
+					params: { zeta: 1, alpha: { beta: true }, items: ["keep", 2] },
+					promptSlots: {
+						review: { name: "review", kind: "inline", content: "Review the staged digest." },
+						attachment: {
+							name: "attachment",
+							kind: "file",
+							path: "/repo/project/prompts/attachment.md",
+							content: "File-backed guidance.",
+						},
+					},
+				},
+			}),
+			now: () => 5_250,
+		});
+
+		const result = await controller.executeGoal("ship-it", "/repo/project");
+		const payload = parseActionPrompt(client.promptMessages[0]!);
+
+		expect(result.status).toBe("success");
+		expect(payload).toEqual({
+			actionId: "spell.noop",
+			params: { alpha: { beta: true }, items: ["keep", 2], zeta: 1 },
+			promptSlots: {
+				attachment: {
+					content: "File-backed guidance.",
+					kind: "file",
+					name: "attachment",
+					path: "/repo/project/prompts/attachment.md",
+				},
+				review: { content: "Review the staged digest.", kind: "inline", name: "review" },
+			},
+		});
+		expect(client.promptMessages[0]).not.toContain("does not execute yet");
+	});
+
+	it("keeps empty action params and prompt slots truthful in the generated payload", async () => {
+		const client = new MockRpcClient({ cwd: "", tools: [] }, async () => {});
+		const controller = new GoalExecutionController({
+			sessionManager: createManager([client]),
+			manifest: createManifest({
+				prompt: undefined,
+				action: { id: "spell.noop", params: {}, promptSlots: {} },
+			}),
+			now: () => 5_400,
+		});
+
+		await controller.executeGoal("ship-it", "/repo/project");
+
+		expect(parseActionPrompt(client.promptMessages[0]!)).toEqual({
+			actionId: "spell.noop",
+			params: {},
+			promptSlots: {},
+		});
 	});
 
 	it("rejects execution while a goal is already running", async () => {

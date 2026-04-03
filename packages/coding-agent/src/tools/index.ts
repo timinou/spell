@@ -23,6 +23,7 @@ import type { AgentOutputManager } from "../task/output-manager";
 import type { EventBus } from "../utils/event-bus";
 import { SearchTool } from "../web/search";
 import { AskTool } from "./ask";
+import { ApprovalsTool } from "./approvals-tool";
 import { AstEditTool } from "./ast-edit";
 import { AstGrepTool } from "./ast-grep";
 import { AutonomyStateTool } from "./autonomy-state";
@@ -39,6 +40,7 @@ import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
 import { FindTool } from "./find";
 import { GatewayTool } from "./gateway";
+import { GoalsTool } from "./goals-tool";
 import { GrepTool } from "./grep";
 import { InspectImageTool } from "./inspect-image";
 import { NotebookTool } from "./notebook";
@@ -67,6 +69,7 @@ export * from "../session/streaming-output";
 export * from "../task";
 export * from "../web/search";
 export * from "./ask";
+export * from "./approvals-tool";
 export * from "./ast-edit";
 export * from "./ast-grep";
 export * from "./autonomy-state";
@@ -84,6 +87,7 @@ export * from "./fetch";
 export * from "./find";
 export * from "./gateway";
 export * from "./gemini-image";
+export * from "./goals-tool";
 export * from "./grep";
 export * from "./inspect-image";
 export * from "./notebook";
@@ -246,6 +250,8 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	fetch: s => new FetchTool(s),
 	web_search: s => new SearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
+	goals: GoalsTool.createIf,
+	approvals: ApprovalsTool.createIf,
 	write: s => new WriteTool(s),
 	canvas: s => new CanvasTool(s),
 	canvas_cast: CanvasCastTool.createIf,
@@ -280,6 +286,8 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	cancel_job: "standard",
 	await: "standard",
 	canvas_cast: "standard",
+	goals: "standard",
+	approvals: "standard",
 
 	// Specialized — compact API descriptions to reduce token usage
 	canvas: "specialized",
