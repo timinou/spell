@@ -1,0 +1,60 @@
+#+TITLE: Retry on Anthropic SDK stream event order error
+#+STATE: DONE
+#+SESSION_ID: 14ac5eecb0d3683f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T16-56-32-195Z_14ac5eecb0d3683f.jsonl]]
+#+CUSTOM_ID: BUG-146-retry-on-anthropic-sdk-stream-event-orde
+#+EFFORT: 0.25h
+#+PRIORITY: #A
+#+LAYER: packages/ai
+
+* Initial Message
+
+Error: Unexpected event order, got message_start before receiving "message_stop"
+
+
+In e.g.  /home/user/.spell/agent/sessions/-code-ora-hotelcomm/2026-04-03T16-48-31-715Z_14ac5d1778ce71c1.jsonl   ID: 14ac5d1778ce71c1
+
+
+
+Make it retry
+
+** Problem
+
+The Anthropic SDK throws ~AnthropicError("Unexpected event order, got message_start before receiving \"message_stop\"")~ when its internal ~MessageStream._accumulateMessage()~ receives a second ~message_start~ SSE event before the first message's ~message_stop~. This indicates a corrupted/overlapping server-side stream.
+
+The error is caught by our retry loop in ~streamAnthropic~ but is *not* recognized as retryable:
+- ~isTransientStreamParseError~ only matches JSON parse errors
+- ~isProviderRetryableError~ doesn't match this message pattern
+- Since ~firstTokenTime~ is already set (content was streaming), the non-transient path throws immediately
+
+The partial response is unusable (the stream was interrupted mid-flight), so this *should* be classified as transient — eligible for retry even after content has started.
+
+Source: ~node_modules/@anthropic-ai/sdk/lib/MessageStream.mjs:435~
+Thrown as ~AnthropicError~ (extends ~Error~, not ~APIError~).
+
+** Fix
+
+Add ~unexpected event order~ to the regex in ~isTransientStreamParseError()~ in ~packages/ai/src/providers/anthropic.ts~:
+
+#+begin_src typescript
+function isTransientStreamParseError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    return /json parse error|unterminated string|unexpected end of json input|unexpected event order/i.test(error.message);
+}
+#+end_src
+
+This classifies it as transient, so the retry loop:
+1. Retries even after ~firstTokenTime~ is set (partial response is unusable anyway)
+2. Resets ~output.content~, ~stopReason~, ~firstTokenTime~, and ~started~ for a clean retry
+3. Respects ~PROVIDER_MAX_RETRIES~ (3) with exponential backoff (2s, 4s, 8s)
+
+** Sub-outline
+
+1. Modify ~isTransientStreamParseError~ regex — add ~unexpected event order~ alternate
+2. Add test case to ~packages/ai/test/anthropic-retry.test.ts~
+
+** Acceptance
+
+- ~isProviderRetryableError(new Error('Unexpected event order, got message_start before receiving "message_stop"'))~ returns ~true~
+- ~isTransientStreamParseError~ recognizes the error as transient (triggering retry-after-content-started path)
+- Existing retry tests pass: ~bun test packages/ai/test/anthropic-retry.test.ts~
