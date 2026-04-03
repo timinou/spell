@@ -247,6 +247,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		| Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>
 		| undefined = undefined;
 	mcpManager?: import("../mcp").MCPManager;
+	taskManager?: import("../orchestrators/canvas-task-manager").CanvasTaskManager;
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 
 	readonly #btwController: BtwController;
@@ -274,6 +275,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			| Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>
 			| undefined = undefined,
 		mcpManager?: import("../mcp").MCPManager,
+		taskManager?: import("../orchestrators/canvas-task-manager").CanvasTaskManager,
 	) {
 		this.session = session;
 		this.sessionManager = session.sessionManager;
@@ -285,6 +287,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#toolUiContextSetter = setToolUIContext;
 		this.lspServers = lspServers;
 		this.mcpManager = mcpManager;
+		this.taskManager = taskManager;
 
 		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
 		this.ui.setClearOnShrink(settings.get("clearOnShrink"));

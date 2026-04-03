@@ -114,10 +114,19 @@ async function runInteractiveMode(
 	setExtensionUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
 	lspServers: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }> | undefined,
 	mcpManager: import("./mcp").MCPManager | undefined,
+	taskManager: import("./orchestrators/canvas-task-manager").CanvasTaskManager | undefined,
 	initialMessage?: string,
 	initialImages?: ImageContent[],
 ): Promise<void> {
-	const mode = new InteractiveMode(session, version, changelogMarkdown, setExtensionUIContext, lspServers, mcpManager);
+	const mode = new InteractiveMode(
+		session,
+		version,
+		changelogMarkdown,
+		setExtensionUIContext,
+		lspServers,
+		mcpManager,
+		taskManager,
+	);
 
 	await mode.init();
 
@@ -728,6 +737,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		mcpManager,
 		eventBus,
 		orchestratorManager,
+		taskManager,
 	} = await logger.timeAsync("createAgentSession", () => createAgentSession(sessionOptions));
 	if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 		authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
@@ -877,6 +887,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			setToolUIContext,
 			lspServers,
 			mcpManager,
+			taskManager,
 			initialMessage,
 			initialImages,
 		);

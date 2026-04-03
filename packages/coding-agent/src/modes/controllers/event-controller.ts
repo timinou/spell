@@ -106,6 +106,7 @@ export class EventController {
 			await this.ctx.init();
 		}
 
+		this.ctx.statusLine.setCanvasTaskCount(this.ctx.taskManager?.getActive().length ?? 0);
 		this.ctx.statusLine.invalidate();
 		this.ctx.updateEditorTopBorder();
 

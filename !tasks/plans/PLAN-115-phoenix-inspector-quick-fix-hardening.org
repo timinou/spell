@@ -1,0 +1,72 @@
+#+TITLE: Phoenix Inspector Quick-Fix Hardening
+#+STATE: DONE
+#+SESSION_ID: 14ab5933cab1e881
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T21-53-03-274Z_14ab5933cab1e881.jsonl]]
+#+CUSTOM_ID: PLAN-115-phoenix-inspector-quick-fix-hardening
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-028-audit-implementation:
+
+1. **What:** Quick Fix captures screenshots, but the backend discards them.
+   **Where:** `.spell/extensions/phoenix-inspector/inspector.qml` in `dispatchQuickFix()` and `.spell/extensions/phoenix-inspector/index.ts` in `runQuickFixTask()`.
+   **Why:** The “Include screenshot” affordance becomes misleading, and the task agent loses visual context for UI fixes.
+   **Effort:** small
+
+2. **What:** The new quick-fix backend depends on a non-contract `pi.pi.runSubprocess` API.
+   **Where:** `.spell/extensions/phoenix-inspector/index.ts` in `runQuickFixTask()` / task-tier handling.
+   **Why:** The focused tests pass because the harness stubs this method, but a real launch can fail if the host does not inject that exact runtime hook. That makes Quick Fix brittle outside the test harness.
+   **Effort:** medium
+
+3. **What:** Quick-fix error handling is not regression-tested.
+   **Where:** `.spell/extensions/phoenix-inspector/index.test.ts`, the new `dispatches canonical quick-fix tasks...` case only covers success.
+   **Why:** A failed task result could regress to stale or incorrect UI messaging without any test catching it.
+   **Effort:** small
+
+* Context
+Audit AUD-028 identified three gaps in the Phoenix Inspector quick-fix dispatch implemented by PLAN-099:
+1. Screenshots captured by the QML ~dispatchQuickFix()~ are silently dropped by the TypeScript backend (~runQuickFixTask~ never extracts the ~images~ field).
+2. ~pi.pi.runSubprocess~ is called without a runtime guard; a missing export would produce a cryptic error.
+3. Only the success path of quick-fix dispatch and agent handoff has regression test coverage.
+
+Approach: apply the canonical ~canvas-task-manager~ pattern for image metadata (append a text note to the assignment), add a defensive runtime check, and add three focused error-path tests. Full structural image forwarding through ~ExecutorOptions~ is tracked separately as [[id:FUP-035-thread-images-through-executoroptions-to]].
+
+Key decisions:
+- Images are noted in assignment text, not structurally forwarded. This matches the framework pattern in ~canvas-task-manager.ts~ lines 176-178 and is honest about the current limitation.
+- The runtime guard is a typeof check with a descriptive throw, not a graceful degradation. Quick Fix should fail visibly if the API is absent.
+- Error-path tests depend on the code fixes landing first (the image extraction changes the assignment shape that tests assert against).
+
+All changes are in ~/home/user/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector/~ (same 2 files: ~index.ts~ and ~index.test.ts~).
+
+* Verification
+** Automated
+- ~bun test ./.spell/extensions/phoenix-inspector/index.test.ts~ (cwd ~/home/user/code/ora/hotelcomm/ecosystem/agentmaker~) — all tests pass with at least 27 total (24 existing + 3 new error-path tests).
+- The existing quick-fix success test is updated to include images in the emitted payload and assert the assignment contains the screenshot note.
+** Manual
+- Run ~bun !tasks/plans/plan-artifacts/PLAN-099-phoenix-inspector-action-dispatch-fix/verify-quick-fix.ts~ (cwd ~/home/user/code/ora/spell~) — confirm the flow still works end-to-end with the modified ~runQuickFixTask~.
+
+* Execution Manifest
+** [[id:BUG-137-phoenix-inspector-quick-fix-drops-screen]]
+   - Extract images from payload, append count note to assignment, add runtime guard for ~runSubprocess~.
+   - File: ~index.ts~ — ~runQuickFixTask()~.
+   - Effort: 1h.
+** [[id:BUG-138-phoenix-inspector-quick-fix-and-handoff]]
+   - Add three error-path regression tests (task failure, task exception, agent handoff no-model).
+   - File: ~index.test.ts~.
+   - Depends on BUG-137 (the image extraction changes the assignment shape).
+   - Effort: 1h.
+
+
+
+** Completion [2026-04-02]
+*** Verification
+- `bun test ./.spell/extensions/phoenix-inspector/index.test.ts` (cwd `/home/user/code/ora/hotelcomm/ecosystem/agentmaker`) — passed, 28 tests total.
+- `bun !tasks/plans/plan-artifacts/PLAN-099-phoenix-inspector-action-dispatch-fix/verify-quick-fix.ts` (cwd `/home/user/code/ora/spell`) — passed; end-to-end quick-fix replay still completed successfully.
+- Regression coverage now includes the success path, screenshot-note forwarding, quick-fix subprocess failure, quick-fix subprocess exception, missing `runSubprocess` guard, and agent handoff without an active model.
+*** Artifacts
+- `[[file:/home/user/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector/index.ts]]`
+- `[[file:/home/user/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector/index.test.ts]]`
+- `[[file:!tasks/plans/plan-artifacts/PLAN-099-phoenix-inspector-action-dispatch-fix/quick-fix-success.png]]` from the replay verification script.
+*** Deviations
+None.

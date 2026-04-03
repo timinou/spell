@@ -15,8 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { QmlBridge } from "@oh-my-pi/pi-qml";
 import { type CanvasTaskExecutor, CanvasTaskManager } from "../../src/orchestrators/canvas-task-manager";
-import type { AgentProgress, SingleResult } from "../../src/task/types";
-import { TASK_SUBAGENT_PROGRESS_CHANNEL } from "../../src/task/types";
+import { type AgentProgress, type SingleResult, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../../src/task/types";
 import {
 	CANVAS_EVENTS_CHANNEL,
 	CANVAS_TASK_CHANNEL,

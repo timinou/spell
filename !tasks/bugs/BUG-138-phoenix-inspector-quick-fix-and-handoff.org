@@ -1,0 +1,56 @@
+#+TITLE: Phoenix Inspector quick-fix and handoff error paths lack regression tests
+#+STATE: DONE
+#+SESSION_ID: 14ab5933cab1e881
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T21-53-03-274Z_14ab5933cab1e881.jsonl]]
+#+CUSTOM_ID: BUG-138-phoenix-inspector-quick-fix-and-handoff
+#+EFFORT: 1h
+#+PRIORITY: A
+#+LAYER: Testing
+#+DEPENDS: BUG-137-phoenix-inspector-quick-fix-drops-screen
+
+NOTE [2026-04-03]: Completed by PLAN-115-phoenix-inspector-quick-fix-hardening.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-028-audit-implementation:
+
+1. **What:** Quick Fix captures screenshots, but the backend discards them.
+   **Where:** `.spell/extensions/phoenix-inspector/inspector.qml` in `dispatchQuickFix()` and `.spell/extensions/phoenix-inspector/index.ts` in `runQuickFixTask()`.
+   **Why:** The “Include screenshot” affordance becomes misleading, and the task agent loses visual context for UI fixes.
+   **Effort:** small
+
+2. **What:** The new quick-fix backend depends on a non-contract `pi.pi.runSubprocess` API.
+   **Where:** `.spell/extensions/phoenix-inspector/index.ts` in `runQuickFixTask()` / task-tier handling.
+   **Why:** The focused tests pass because the harness stubs this method, but a real launch can fail if the host does not inject that exact runtime hook. That makes Quick Fix brittle outside the test harness.
+   **Effort:** medium
+
+3. **What:** Quick-fix error handling is not regression-tested.
+   **Where:** `.spell/extensions/phoenix-inspector/index.test.ts`, the new `dispatches canonical quick-fix tasks...` case only covers success.
+   **Why:** A failed task result could regress to stale or incorrect UI messaging without any test catching it.
+   **Effort:** small
+
+* Context
+The quick-fix dispatch test added in PLAN-099 covers only the success path (~exitCode === 0~, not aborted). The error branch (~exitCode !== 0~ or ~runSubprocess~ throws) and the agent handoff error branch (no active model) have no regression coverage. A change to the error reply shape would regress silently.
+
+The test harness already supports ~piOverrides.runSubprocess~ for injecting custom behavior and ~ctxOverrides~ for removing the model, so adding error-path coverage is low-friction.
+
+* Implementation
+** Test: task failure sends ~task_result~ with ~ok: false~
+   Use ~piOverrides.runSubprocess~ to return ~{ exitCode: 1, error: "Build failed", stderr: "compilation error", ... }~. Assert the bridge reply is ~{ action: "task_result", ok: false, error: "Build failed" }~.
+
+** Test: task dispatch exception sends ~task_result~ with ~ok: false~
+   Use ~piOverrides.runSubprocess~ that throws ~new Error("Runtime unavailable")~. Assert the bridge reply is ~{ action: "task_result", ok: false, error: "Runtime unavailable" }~ and a UI notification is emitted.
+
+** Test: agent handoff without a model sends ~agent_handoff_result~ with ~ok: false~
+   Use ~ctxOverrides: { model: undefined }~. Emit an agent-tier payload. Assert the bridge reply is ~{ action: "agent_handoff_result", ok: false, error: /no active model/i }~.
+
+* Files
+- ~/home/user/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector/index.test.ts~
+
+* Acceptance
+- Three new test cases pass.
+- Each test asserts the exact reply payload shape on the bridge mock.
+- The agent handoff error test also asserts that ~sentUserMessages~ remains empty (no message was sent to the agent).
+
+* Verification
+- ~bun test ./.spell/extensions/phoenix-inspector/index.test.ts~ — all tests pass, new test count is at least 27 (24 existing + 3 new).

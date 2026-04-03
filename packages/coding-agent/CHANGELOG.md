@@ -35,6 +35,12 @@
 - Result forwarding to dependent subagents via `resolvePredecessorResultsContext`
 - Unified coordinator/execution prompt `plan-mode-approved.md` with `executionItems` conditional for canvas mode
 - TUI rendering of nested child phases via `#renderChildTodoPhases` and niri overview
+- `pi/sniper` model role for canvas quick-task with configurable primary model and fallback chain
+- Canvas task timeout (120s default, configurable) with `AbortSignal.any` guard
+- Immediate QML acknowledgment (`task_ack`) and `_rid`-based reply callback for canvas task tier
+- Canvas task progress streaming to QML via `task_progress` bridge messages
+- `canvas_tasks` status line segment with TUI badge wired to `CanvasTaskManager.getActive()` count
+- Enriched `task_result` payloads: `model`, `tokens`, `durationMs`, `usage`, `retryable` fields
 
 ### Changed
 
@@ -53,6 +59,7 @@
 - Fixed unexpected exits to write a crash report JSON in `~/.spell/reports/` with error, session, model, and system context for postmortem debugging.
 - Fixed fluid-mode retry discarding coordinator todo edits by capturing live phases instead of rebuilding from plan
 - Fixed org lifecycle hook failures being silently swallowed; `applyOrgLifecycleHooks` now surfaces `WARN` notices in tool results
+- Canvas task subagent silent hang: tasks now timeout instead of hanging indefinitely
 
 ### Removed
 

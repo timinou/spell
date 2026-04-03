@@ -13,8 +13,12 @@
 import type { QmlBridge } from "@oh-my-pi/pi-qml";
 import type { RemoteQmlBridge } from "@oh-my-pi/pi-qml-remote";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { AgentDefinition, AgentProgress, SingleResult } from "../task/types";
-import { TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
+import {
+	type AgentDefinition,
+	type AgentProgress,
+	type SingleResult,
+	TASK_SUBAGENT_PROGRESS_CHANNEL,
+} from "../task/types";
 import {
 	CANVAS_EVENTS_CHANNEL,
 	CANVAS_TASK_CHANNEL,
@@ -204,10 +208,11 @@ export class CanvasTaskManager {
 			// Don't send result if the task was aborted (window closed).
 			if (ac.signal.aborted) return;
 
+			const durationMs = Date.now() - startTime;
 			logger.debug("Canvas task completed", {
 				windowId,
 				id: executorOptions.id,
-				durationMs: Date.now() - startTime,
+				durationMs,
 			});
 
 			const bridge = this.#bridge;
@@ -219,7 +224,7 @@ export class CanvasTaskManager {
 					output,
 					model: resolvedModel,
 					tokens: result.tokens,
-					durationMs: Date.now() - startTime,
+					durationMs,
 					usage: result.usage ?? null,
 				});
 			}
