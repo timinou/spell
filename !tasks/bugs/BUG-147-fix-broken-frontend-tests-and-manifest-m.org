@@ -1,0 +1,127 @@
+#+TITLE: Fix broken frontend tests and manifest Map serialization
+#+STATE: DONE
+#+SESSION_ID: 14ac5caee772dbc3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T16-46-44-637Z_14ac5caee772dbc3.jsonl]]
+#+CUSTOM_ID: BUG-147-fix-broken-frontend-tests-and-manifest-m
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: backend
+
+NOTE [2026-04-03]: Fixed: updated frontend test auth prompt string, added 8 new array fields to manifest API test expectation, added recursive serializeValue() for nested Map serialization in toManifestJson() and handleGetGoal().
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-033-audit-implementation:
+
+`ManifestGoal.stateStores` is a `Map` — `JSON.stringify` will serialize it as `{}` (empty object), silently losing the data. Same for `ManifestSetup.stateStores`. The `Object.fromEntries(manifest.goals)` in `toManifestJson` converts the top-level Map, but the nested Maps inside each goal/setup remain as Maps and won't serialize correctly.
+
+This was actually a pre-existing issue (the old code also did `Object.fromEntries(manifest.goals)` without handling nested Maps), but the new manifest fields also have the same risk. Let me check the setup serialization:
+
+The `toManifestJson` does `setups: Object.fromEntries(manifest.setups)` which converts the top-level Map, but each `ManifestSetup` value may contain `stateStores: Map<string, NamedStateStore>`. `JSON.stringify` on a Map produces `{}`. This is pre-existing but worth noting.
+
+Let me now compile my findings:
+
+---
+
+## Audit Findings
+
+### 1. Two existing tests broken by manifest API change
+
+- **What**: `test/http/frontend.test.ts` has 2 failing tests: (a) the manifest API test expects only `name/version/setups/goals` but now gets 8 additional arrays; (b) the frontend HTML test expects the old auth prompt text "Enter the dashboard Basic Auth credentials to load goals, runs, and manifest data." but the new frontend says "Enter Basic Auth credentials to access the dashboard."
+- **Where**: `packages/spell-server/test/http/frontend.test.ts`, lines 122 and 133
+- **Why**: These tests fail right now. Any CI run will catch this. The commit shipped broken tests.
+- **Effort**: `trivial` — add the 8 empty arrays to the expected manifest object; update the expected auth prompt string
+
+### 2. `StateStoreManager` constructor throws on missing SQLite file
+
+- **What**: `new Database(resolvedPath, { readonly: true })` throws a synchronous error if the file doesn't exist. The constructor has no try/catch. If a KDL manifest declares a state store pointing to a not-yet-created database, the entire server startup crashes.
+- **Where**: `packages/spell-server/src/state/store-manager.ts`, line 39
+- **Why**: Production crash if the state store path is wrong or the DB hasn't been created yet. Startup failure prevents the entire server from running, including goals unrelated to state stores.
+- **Effort**: `small` — wrap in try/catch, log warning, skip the connection
+
+### 3. State store manager only collects from setups, misses goal-level state stores
+
+- **What**: The constructor iterates `manifest.setups.values()` but `ManifestGoal` also has an optional `stateStores` field. Goal-level state stores are silently ignored.
+- **Where**: `packages/spell-server/src/state/store-manager.ts`, lines 29-41
+- **Why**: If a project declares state stores at goal level, they won't appear in the API. Currently growth doesn't use goal-level state stores, so no immediate impact, but the contract is incomplete.
+- **Effort**: `small` — add a second loop over `manifest.goals.values()`
+
+### 4. `queryTable` columns come from schema, not actual DB — possible mismatch
+
+- **What**: `queryTable` returns `columns: table.columns.map(c => c.name)` from the KDL schema, but `rows` come from `SELECT *` on the actual SQLite table. If the schema is out of sync with the real table (e.g., a column was added via migration but not declared in KDL), the `columns` array won't match the row keys, and the frontend will render blank cells for undeclared columns.
+- **Where**: `packages/spell-server/src/state/store-manager.ts`, lines 95 and 87-89
+- **Why**: Silent data loss in the UI. Users see rows with data in columns not listed in the header.
+- **Effort**: `small` — derive columns from `Object.keys(rows[0])` when rows exist, fall back to schema
+
+### 5. `renderCellValue` double-parses JSON objects
+
+- **What**: For strings starting with `{`, the function calls `JSON.parse(value)` on line 984 to validate, then calls `JSON.parse(value)` again on line 985 inside the template. Wastes CPU on every JSON cell render.
+- **Where**: `packages/spell-server/src/http/frontend/index.html`, lines 984-985
+- **Why**: Minor perf issue. Doubles parse cost for every JSON-valued cell in the state store data browser.
+- **Effort**: `trivial` — capture the result of the first parse
+
+### 6. `handleTableCount` runs a full `SELECT *` query just for count
+
+- **What**: `handleTableCount` calls `manager.queryTable(storeName, tableName, 0, 0)` which executes both `SELECT * ... LIMIT 0 OFFSET 0` and `SELECT count(*)`. The `LIMIT 0` query is harmless but unnecessary. A dedicated count method would be cleaner.
+- **Where**: `packages/spell-server/src/http/routes/state.ts`, line 51
+- **Why**: Negligible impact since `LIMIT 0` returns no rows, but the pattern is misleading — it looks like it queries data when it only needs a count.
+- **Effort**: `trivial` — either accept the current approach (it works) or add a `countTable` method
+
+### 7. `toManifestJson` serializes Maps inside goals/setups as `{}`
+
+- **What**: `Object.fromEntries(manifest.goals)` converts the top-level Map, but each `ManifestGoal` and `ManifestSetup` contains nested `stateStores: Map<string, NamedStateStore>`. `JSON.stringify` on a `Map` produces `{}`. State stores declared at goal/setup level are silently lost in the API response.
+- **Where**: `packages/spell-server/src/http/routes/goals.ts`, lines 24-25
+- **Why**: Frontend consumers never see state store configurations per goal/setup. This is pre-existing (the old code had the same issue), but now that the manifest API is the primary data source for the dashboard, the information gap is more visible.
+- **Effort**: `medium` — need a recursive serializer that converts nested Maps to plain objects
+
+### 8. No tests for the state store query API
+
+- **What**: No test file for `state.ts` routes or `store-manager.ts`. The state store API was verified manually via curl but has no automated test coverage.
+- **Where**: Missing `packages/spell-server/test/http/state.test.ts` and `packages/spell-server/test/state/store-manager.test.ts`
+- **Why**: Regression risk — future changes to routing or query logic have no safety net. The FEAT-292 acceptance criteria called for tests.
+- **Effort**: `medium` — need a fixture SQLite DB, tests for happy path, 404s, pagination, count
+
+** Problem
+
+Two test failures in =packages/spell-server/test/http/frontend.test.ts= shipped in commit a37a16c02:
+
+1. Manifest API test expects only =name/version/setups/goals= but =toManifestJson()= now returns 8 additional arrays (panels, layouts, etc.). The =toEqual= assertion fails because the expected object lacks these fields.
+
+2. Frontend HTML test expects auth prompt text "Enter the dashboard Basic Auth credentials to load goals, runs, and manifest data." but the rewritten frontend says "Enter Basic Auth credentials to access the dashboard."
+
+Additionally, =toManifestJson()= and =handleGetGoal()= have a silent data loss bug: nested =Map<string, NamedStateStore>= fields inside =ManifestSetup= and =ManifestGoal= are passed directly to =Response.json()=, which calls =JSON.stringify()=. =JSON.stringify= on a =Map= produces ={}= (empty object), silently dropping all state store configuration from the API response.
+
+Affected Map fields:
+- =ManifestSetup.stateStores?: Map<string, NamedStateStore>=
+- =ManifestGoal.stateStores?: Map<string, NamedStateStore>=
+
+** Scope
+
+*** Fix broken test expectations
+- File: =packages/spell-server/test/http/frontend.test.ts=
+- Line 122: Update expected auth prompt string to match new frontend
+- Lines 133-146: Add 8 empty arrays to expected manifest JSON object
+
+*** Add recursive Map-to-object serializer
+- File: =packages/spell-server/src/http/routes/goals.ts=
+- Create =serializeValue(value: unknown): unknown= — recursively converts Maps to plain objects, passes through arrays and primitives. The only =Map= fields are =stateStores= on setups/goals; all other manifest types use arrays/primitives.
+- Apply to =toManifestJson()=: wrap setups and goals through the serializer
+- Apply to =handleGetGoal()=: serialize =goal= before assigning to =config= field
+
+*** Test the serializer
+- Add a test case in =frontend.test.ts= (or a new unit test) that creates a manifest with =stateStores= Maps on both a setup and a goal, calls the manifest API, and asserts the stateStores appear as plain objects (not ={}=).
+
+** Acceptance
+
+- =bun test packages/spell-server/test/http/frontend.test.ts= passes (0 failures)
+- Manifest API returns stateStores as plain objects when present
+- =handleGetGoal()= config field serializes stateStores correctly
+- No new type errors from =bunx --bun tsgo --noEmit= in =packages/spell-server=
+
+** Sub-outline
+
+1. Write =serializeValue()= recursive helper in =goals.ts=
+2. Wire into =toManifestJson()= and =handleGetGoal()=
+3. Update test expectations in =frontend.test.ts=
+4. Add Map serialization test case
+5. Verify: =bun test packages/spell-server/test/http/frontend.test.ts=

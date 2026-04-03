@@ -4,6 +4,28 @@ import type { AutonomyManifest, ManifestGoal } from "../../manifest/types";
 import type { GoalScheduler } from "../../scheduler/goal-scheduler";
 import type { GoalDetail, GoalSummary, RunEntry } from "../types";
 
+/** Recursively convert Map instances to plain objects for JSON serialization. */
+function serializeValue(value: unknown): unknown {
+	if (value instanceof Map) {
+		const obj: Record<string, unknown> = {};
+		for (const [k, v] of value) {
+			obj[k] = serializeValue(v);
+		}
+		return obj;
+	}
+	if (Array.isArray(value)) {
+		return value.map(serializeValue);
+	}
+	if (typeof value === "object" && value !== null && !(value instanceof Date)) {
+		const obj: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(value)) {
+			obj[k] = serializeValue(v);
+		}
+		return obj;
+	}
+	return value;
+}
+
 function toManifestJson(manifest: AutonomyManifest): {
 	name: string;
 	version: string;
@@ -21,8 +43,8 @@ function toManifestJson(manifest: AutonomyManifest): {
 	return {
 		name: manifest.name,
 		version: manifest.version,
-		setups: Object.fromEntries(manifest.setups),
-		goals: Object.fromEntries(manifest.goals),
+		setups: serializeValue(manifest.setups) as Record<string, unknown>,
+		goals: serializeValue(manifest.goals) as Record<string, unknown>,
 		panels: manifest.panels,
 		layouts: manifest.layouts,
 		syncCollections: manifest.syncCollections,
@@ -118,7 +140,7 @@ export function handleGetGoal(
 
 	const detail: GoalDetail = {
 		...buildGoalSummary(goalName, goal, executor, scheduler),
-		config: goal,
+		config: serializeValue(goal) as ManifestGoal,
 		runs: executor.getRunHistory(goalName).map(toRunEntry),
 	};
 	return Response.json(detail);

@@ -981,8 +981,8 @@
       }
       if (typeof value === 'string' && value.startsWith('{')) {
         try {
-          JSON.parse(value);
-          return html`<details style="cursor: pointer"><summary class="meta">JSON object</summary><pre>${JSON.stringify(JSON.parse(value), null, 2)}</pre></details>`;
+          const parsed = JSON.parse(value);
+          return html`<details style="cursor: pointer"><summary class="meta">JSON object</summary><pre>${JSON.stringify(parsed, null, 2)}</pre></details>`;
         } catch { /* not JSON */ }
       }
       return String(value);

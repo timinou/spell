@@ -28,7 +28,12 @@ export function handleListTables(storeName: string, manager: StateStoreManager):
 	return Response.json(tables);
 }
 
-export function handleQueryTable(storeName: string, tableName: string, request: Request, manager: StateStoreManager): Response {
+export function handleQueryTable(
+	storeName: string,
+	tableName: string,
+	request: Request,
+	manager: StateStoreManager,
+): Response {
 	const tables = manager.getTablesForStore(storeName);
 	if (tables === null) {
 		return notFound("Store not found");
@@ -41,13 +46,9 @@ export function handleQueryTable(storeName: string, tableName: string, request: 
 }
 
 export function handleTableCount(storeName: string, tableName: string, manager: StateStoreManager): Response {
-	const tables = manager.getTablesForStore(storeName);
-	if (tables === null) {
-		return notFound("Store not found");
+	const count = manager.countTable(storeName, tableName);
+	if (count === null) {
+		return notFound("Store or table not found");
 	}
-	if (!tables.some(table => table.name === tableName)) {
-		return notFound("Table not found");
-	}
-	const result = manager.queryTable(storeName, tableName, 0, 0);
-	return Response.json({ total: result?.total ?? 0 });
+	return Response.json({ total: count });
 }
