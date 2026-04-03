@@ -1,0 +1,45 @@
+#+TITLE: Add builtin explore mode
+#+STATE: DONE
+#+SESSION_ID: 14ac84f2a5326403
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T19-42-39-764Z_14ac84f2a5326403.jsonl]]
+#+CUSTOM_ID: FEAT-307-add-builtin-explore-mode
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: agent
+
+NOTE [2026-04-03]: Implemented. Created MODE.md with readOnly: true and command: /explore. Wired builtin mode scanning in discovery/builtin.ts as lowest-priority scan after user/project modes.
+
+* Initial Message
+
+can you make an exlpore mode that is super super simple (the regular system prompt + read-only)?
+
+Implement a builtin "explore" mode — the simplest possible mode that uses the regular system prompt with read-only file enforcement.
+
+* Behavior
+- Regular system prompt (no plan mode template, no audit template — just the normal agent prompt)
+- Read-only: file writes blocked via ~enforceModeWrite~ (write, edit, ast_edit, notebook tools throw errors on modify)
+- All tools remain available (no tool filtering) — bash, grep, find, read, lsp, etc. all work normally
+- Activated via ~/explore~ slash command
+- Session-permanent once activated (consistent with how user modes work)
+
+* Implementation
+
+** Create builtin mode definition
+- File: ~packages/coding-agent/src/modes/builtins/explore/MODE.md~
+- Frontmatter: ~name: explore~, ~readOnly: true~, ~command: /explore~, ~description~
+- Context section: brief explanation of read-only exploration
+- Instructions section: focus on understanding/explaining
+
+** Load builtin modes in discovery
+- File: ~packages/coding-agent/src/discovery/builtin.ts~
+- In ~loadModes~, after scanning project/user directories, scan the builtins directory at ~path.resolve(import.meta.dir, "../modes/builtins")~
+- Use existing ~scanModesDir~ (same directory structure: ~<name>/MODE.md~)
+- Builtin modes have lowest priority — user/project modes with same name override them
+- Only inject builtin modes that aren't already defined by user/project configs
+
+* Verification
+- ~bun check:ts~ passes
+- ~/explore~ command appears in slash command autocomplete
+- When activated, ~enforceModeWrite~ throws on file write attempts
+- System prompt remains the regular agent prompt (no plan/audit injection)
+- All read-only tools work normally (grep, find, read, lsp, bash)
