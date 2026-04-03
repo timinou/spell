@@ -136,12 +136,11 @@ describe("incoming voice transcription", () => {
 			return new Response("missing", { status: 404 });
 		});
 
-		const result = await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient, {
+		await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient, {
 			sttProvider,
 			voiceConfig: createVoiceConfig(),
 		});
 
-		expect(result).toEqual({ isVoice: true, transcription: "transcribed voice" });
 		expect(transcribe).toHaveBeenCalledTimes(1);
 		expect(prompts).toEqual(["Voice transcription:\ntranscribed voice"]);
 		expect(ctx._replies).toEqual([]);
@@ -232,13 +231,12 @@ describe("incoming voice transcription", () => {
 			},
 		} as unknown as RpcClient;
 
-		const result = await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient, {});
+		await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient, {});
 
-		expect(result).toEqual({ isVoice: true });
 		expect(ctx._replies).toEqual([MISSING_STT_MESSAGE]);
 	});
 
-	it("keeps empty transcriptions and caption text in the prompt", async () => {
+	it("shows placeholder when transcription is empty and keeps caption", async () => {
 		const { handleTelegramMessage } = await loadBridgeModule();
 		const ctx = createMockCtx({
 			caption: "Caption survives",
@@ -264,12 +262,45 @@ describe("incoming voice transcription", () => {
 			return new Response("missing", { status: 404 });
 		});
 
-		const result = await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient, {
+		await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient, {
 			sttProvider,
 			voiceConfig: createVoiceConfig(),
 		});
 
-		expect(result).toEqual({ isVoice: true, transcription: "" });
-		expect(prompts).toEqual(["Voice transcription:\n\n\nCaption survives"]);
+		expect(prompts).toEqual(["[Voice message could not be transcribed]\n\nCaption survives"]);
+	});
+
+	it("sends friendly error when STT provider throws", async () => {
+		const { handleTelegramMessage } = await loadBridgeModule();
+		const ctx = createMockCtx({
+			voice: { file_id: "voice-err", mime_type: "audio/ogg" },
+			fileMap: { "voice-err": "voice-err.ogg" },
+		});
+		const transcribe = mock(async () => {
+			throw new Error("Deepgram STT request failed with status 500");
+		});
+		const sttProvider: SttProvider = { transcribe };
+		const rpcClient = {
+			prompt: async () => {
+				throw new Error("RPC should not be called");
+			},
+		} as unknown as RpcClient;
+
+		using _hook = hookFetch(input => {
+			if (String(input).includes("voice-err.ogg")) {
+				return new Response(Buffer.from("voice-bytes"), {
+					status: 200,
+					headers: { "content-type": "audio/ogg" },
+				});
+			}
+			return new Response("missing", { status: 404 });
+		});
+
+		await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient, {
+			sttProvider,
+			voiceConfig: createVoiceConfig(),
+		});
+
+		expect(ctx._replies).toEqual(["Voice transcription failed. Please try again."]);
 	});
 });

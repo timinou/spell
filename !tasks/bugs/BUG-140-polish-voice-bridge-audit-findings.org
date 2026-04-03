@@ -1,0 +1,174 @@
+#+TITLE: Polish voice bridge audit findings
+#+STATE: DONE
+#+SESSION_ID: 14ac1301d5e01fab
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-24-50-903Z_14ac1301d5e01fab.jsonl]]
+#+CUSTOM_ID: BUG-140-polish-voice-bridge-audit-findings
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: voice
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-031-audit-implementation:
+
+Good — imports from config/types.ts which is the canonical location.
+
+Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. Missing `continue` on last branches in parser loops
+- **What**: The `voice` case in `parseChannelsConfig`, `parseUserNode`; `reply-mode` in `parseVoiceNode`; `tts-voice` in `parseUserVoiceNode` all lack `continue` statements, unlike every other branch in their respective loops.
+- **Where**: `packages/spell-server/src/config/channels-parser.ts` lines 147-149, 281-283, 386-388, 435-437
+- **Why**: Not a bug (they're the last branches), but inconsistent with every other `if` block in the same loops. A future developer adding a new field after one of these blocks will get silent fall-through behavior. Low risk but free to fix.
+- **Effort**: `trivial`
+
+### 2. `DeepgramTtsProvider.synthesize` omits `options` parameter from signature
+- **What**: `DeepgramTtsProvider.synthesize(text: string)` doesn't declare the `options?: { voice?: string }` parameter that the `TtsProvider` interface specifies. Per-user `ttsVoice` overrides passed by `ResponseStreamer#finalize()` are silently discarded for Deepgram users.
+- **Where**: `packages/spell-server/src/telegram/voice/providers/deepgram-tts.ts` line 27
+- **Why**: Silent contract violation. A user who configures per-user `tts-voice` in channels.kdl and uses Deepgram Aura gets no error and no effect. The interface promises the option exists; the implementation ignores it. Should at minimum log a warning if `options.voice` is passed, or accept the parameter and document that Deepgram uses model-level voices.
+- **Effort**: `trivial`
+
+### 3. `handleTelegramMessage` return value unused in bot.ts
+- **What**: `handleTelegramMessage` returns `HandleMessageResult` with `isVoice` and `transcription`, but the caller in `bot.ts` line 201 discards the return value with a bare `await`.
+- **Where**: `packages/spell-server/src/telegram/bot/bot.ts` line 201
+- **Why**: Dead return type. The `isVoice` information is computed independently in bot.ts (line 173: `incomingWasVoice`), making the function's return contract misleading — it looks like callers should use it, but none do. Either remove the return type or use it to eliminate the duplicate detection.
+- **Effort**: `small`
+
+### 4. `/status` command doesn't show voice mode
+- **What**: The `/status` command displays project, mode, session uptime, and thinking visibility, but not the current effective voice reply mode.
+- **Where**: `packages/spell-server/src/telegram/commands/session-commands.ts` lines 73-78
+- **Why**: User runs `/voice on`, then `/status` — the voice setting is invisible. Inconsistent with `/voice status` which does show it. Users may not know `/voice status` exists.
+- **Effort**: `trivial`
+
+### 5. `voiceReplyOverride` not persisted across server restarts
+- **What**: The `voiceReplyOverride` field on `ChatSession` is not included in `BridgeState` serialization (`saveBridgeState` in `rpc/state.ts` lines 42-57). Server restarts lose per-session voice overrides.
+- **Where**: `packages/spell-server/src/rpc/state.ts` lines 47-53; `packages/spell-server/src/rpc/bridge-types.ts` `BridgeState` type
+- **Why**: Acceptable for session-transient state — session overrides are meant to be temporary. But there's no documentation or test proving this is intentional. If a user sets `/voice always` and the server restarts, they'll be surprised when it reverts to config default without feedback.
+- **Effort**: `small` (either persist it or document the behavior)
+
+### 6. Empty transcription produces awkward prompt text
+- **What**: When STT returns empty text (`""`), the voice context becomes `"Voice transcription:\n"` — a header with no content, resulting in a double-newline before any caption text.
+- **Where**: `packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts` lines 481-486
+- **Why**: The agent receives `"Voice transcription:\n\n\nCaption survives"` (confirmed by test at line 273 of voice-incoming.test.ts). The extra blank lines are noise. Should either omit the voice context when transcription is empty, or produce `"[Voice message: could not transcribe]"`.
+- **Effort**: `trivial`
+
+### 7. No test for STT provider error propagation in `collectVoiceTranscription`
+- **What**: Tests cover missing STT config and ffmpeg errors, but there's no test for when `sttProvider.transcribe()` itself throws (e.g., HTTP 500 from provider). This error propagates through `handleTelegramMessage`'s catch-all and sends the raw error string to the user.
+- **Where**: `packages/spell-server/test/telegram/voice-incoming.test.ts`
+- **Why**: An STT API failure would produce a user-facing message like `"Failed to send message to assistant: Deepgram STT request failed with status 500"` — leaking provider details. Should have a dedicated error handling path that sends a friendlier message.
+- **Effort**: `small`
+
+### 8. `collectVoiceTranscription` exported but only used internally
+- **What**: `collectVoiceTranscription` is exported from `telegram-to-rpc.ts` but only called from within the same file (inside `handleTelegramMessage`). 
+- **Where**: `packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts` line 389
+- **Why**: Unnecessarily public API surface. Tests use it indirectly through `handleTelegramMessage`. If it needs to be tested directly later, it can be exported then. Minor.
+- **Effort**: `trivial`
+
+### 9. No timeout on STT/TTS HTTP requests
+- **What**: The `fetch()` calls in all four provider implementations have no `AbortSignal` timeout. A hung STT/TTS API will block the Telegram message handling indefinitely.
+- **Where**: `packages/spell-server/src/telegram/voice/providers/deepgram-stt.ts` line 33, `openai-stt.ts` line 22, `elevenlabs-tts.ts` line 37, `deepgram-tts.ts` line 37
+- **Why**: If Deepgram or ElevenLabs has a latency spike, the user's Telegram message handler hangs. Telegram typing indicator will expire after 5s, leaving the user staring at silence. A 30s timeout with `AbortSignal.timeout(30_000)` is a reasonable default.
+- **Effort**: `small`
+
+### 10. `truncateText` duplicated across two TTS providers
+- **What**: Both `elevenlabs-tts.ts` and `deepgram-tts.ts` define their own `truncateText` function with identical structure, differing only in the limit constant and log message.
+- **Where**: `elevenlabs-tts.ts` lines 9-19, `deepgram-tts.ts` lines 8-18
+- **Why**: DRY at 2 — two copies of the same pattern. A shared `truncateForTts(text: string, limit: number, providerName: string): string` helper would be cleaner and testable in one place.
+- **Effort**: `trivial`
+
+* Scope
+Implement all 10 audit findings from the voice bridge implementation. These are polish, hardening, and consistency fixes — no new features.
+
+* Findings
+
+** 1. Missing =continue= on last branches in parser loops (trivial)
+- =channels-parser.ts=: voice case in =parseChannelsConfig= (line ~149), voice case in =parseUserNode= (line ~283), =reply-mode= in =parseVoiceNode= (line ~388), =tts-voice= in =parseUserVoiceNode= (line ~437)
+- Add =continue;= to each, matching every other branch in the same loops
+
+** 2. =DeepgramTtsProvider.synthesize= omits =options= parameter (trivial)
+- =deepgram-tts.ts= line 27: signature is =synthesize(text: string)= but interface is =synthesize(text: string, options?: { voice?: string })=
+- Accept the parameter. Deepgram uses model-level voices, not per-request — log a warning if =options.voice= is passed so the user knows it's not supported, don't silently discard it.
+
+** 3. =handleTelegramMessage= return value unused (small)
+- =telegram-to-rpc.ts= exports =HandleMessageResult= with =isVoice= and =transcription=
+- =bot.ts= line ~201 discards the return value
+- The =isVoice= detection is already done independently in =bot.ts= line ~173 (=incomingWasVoice=)
+- Resolution: remove the return type. Change =handleTelegramMessage= to return =Promise<void>=. Remove =HandleMessageResult= and =VoiceTranscriptionResult= types. The function's job is to send the prompt — callers don't need a result.
+- Remove the =VoiceTranscriptionResult= internal type too.
+- Update the test file (=voice-incoming.test.ts=) to not assert the return value.
+
+** 4. =/status= doesn't show voice mode (trivial)
+- =session-commands.ts= lines ~73-78
+- Add: =`Voice: ${session.voiceReplyOverride ?? "default"}`= to =statusLines= array
+- Show "default" when no override is set (the actual default depends on config which isn't available here — "default" communicates that config is being used)
+
+** 5. =voiceReplyOverride= not persisted — document intent (trivial)
+- This is intentional: session overrides are transient. No code change needed.
+- Add a JSDoc comment on the =voiceReplyOverride= field in =bridge-types.ts= clarifying this is session-transient and not persisted across restarts.
+
+** 6. Empty transcription produces awkward prompt text (trivial)
+- =telegram-to-rpc.ts= lines ~481-486: empty transcription produces ="Voice transcription:
+"=
+- Fix: when transcription is empty string, produce =[Voice message could not be transcribed]= instead of the header-with-no-content pattern
+- Update the test in =voice-incoming.test.ts= accordingly
+
+** 7. No test for STT provider error propagation (small)
+- =voice-incoming.test.ts= lacks a test where =sttProvider.transcribe()= throws
+- Add a test: mock transcribe to throw, verify the user gets a friendly error (not raw provider details)
+- Also add a catch in =handleTelegramMessage= for STT errors specifically, wrapping them with a user-friendly message like "Voice transcription failed. Please try again." instead of leaking ="Deepgram STT request failed with status 500"=
+
+** 8. =collectVoiceTranscription= exported but only used internally (trivial)
+- =telegram-to-rpc.ts= line ~389: remove =export= keyword
+- Function is only called internally by =handleTelegramMessage= in the same file
+
+** 9. No timeout on STT/TTS HTTP requests (small)
+- All 4 providers: add =signal: AbortSignal.timeout(30_000)= to fetch calls
+- Add a constant =const PROVIDER_TIMEOUT_MS = 30_000;= in each provider file
+- Wrap timeout errors with a provider-specific message
+
+** 10. =truncateText= duplicated across two TTS providers (trivial)
+- Extract shared helper: =truncateForTts(text: string, limit: number, providerName: string): string= 
+- Place in =packages/spell-server/src/telegram/voice/tts-utils.ts=
+- Re-export from =voice/index.ts=
+- Both providers import and use it
+
+* Sub-outline
+1. Add =continue= statements to channels-parser.ts (finding 1)
+2. Accept =options= param in DeepgramTtsProvider, log warning for voice override (finding 2)
+3. Extract shared =truncateForTts= helper (finding 10) — must do before the timeout changes touch provider files
+4. Add timeout to all 4 provider fetch calls (finding 9)
+5. Change =handleTelegramMessage= return type to void, remove dead types (finding 3)
+6. Add voice mode to =/status= output (finding 4)
+7. Document =voiceReplyOverride= transience (finding 5)
+8. Fix empty transcription prompt text (finding 6)
+9. Un-export =collectVoiceTranscription= (finding 8)
+10. Add STT error handling and test (finding 7)
+11. Update existing tests for changed signatures/behavior (findings 3, 6, 7)
+
+* Files
+- =packages/spell-server/src/config/channels-parser.ts= — findings 1
+- =packages/spell-server/src/telegram/voice/providers/deepgram-tts.ts= — findings 2, 9, 10
+- =packages/spell-server/src/telegram/voice/providers/elevenlabs-tts.ts= — findings 9, 10
+- =packages/spell-server/src/telegram/voice/providers/deepgram-stt.ts= — finding 9
+- =packages/spell-server/src/telegram/voice/providers/openai-stt.ts= — finding 9
+- =packages/spell-server/src/telegram/voice/tts-utils.ts= — finding 10 (new)
+- =packages/spell-server/src/telegram/voice/index.ts= — finding 10 (add re-export)
+- =packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts= — findings 3, 6, 7, 8
+- =packages/spell-server/src/telegram/commands/session-commands.ts= — finding 4
+- =packages/spell-server/src/rpc/bridge-types.ts= — finding 5
+- =packages/spell-server/test/telegram/voice-incoming.test.ts= — findings 3, 6, 7
+
+* Acceptance
+- =bun check:ts= passes (no new type errors)
+- =bun test packages/spell-server/test/config/voice-config-parser.test.ts packages/spell-server/test/telegram/voice-stt.test.ts packages/spell-server/test/telegram/voice-tts.test.ts packages/spell-server/test/telegram/voice-command.test.ts packages/spell-server/test/telegram/voice-incoming.test.ts packages/spell-server/test/telegram/voice-reply.test.ts= — all pass
+- =bun test packages/spell-server/test/telegram/bridge.test.ts packages/spell-server/test/telegram/bot.test.ts packages/spell-server/test/telegram/service.test.ts packages/spell-server/test/telegram/commands.test.ts= — all pass (no regressions)
+- New test: STT provider error produces user-friendly reply (not raw provider error)
+- =handleTelegramMessage= returns void
+- =collectVoiceTranscription= is not exported
+- All fetch calls in providers have AbortSignal.timeout
+- =/status= shows voice mode
+- Empty transcription says "[Voice message could not be transcribed]" not "Voice transcription:
+"

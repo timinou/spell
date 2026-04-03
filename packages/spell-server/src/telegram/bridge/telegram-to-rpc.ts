@@ -65,16 +65,6 @@ export interface HandleMessageOptions {
 	voiceConfig?: VoiceConfig;
 }
 
-export interface HandleMessageResult {
-	isVoice: boolean;
-	transcription?: string;
-}
-
-interface VoiceTranscriptionResult {
-	transcription: string;
-	isVoice: true;
-}
-
 const MAX_TEXT_DOCUMENT_BYTES = 512 * 1024;
 const MAX_TEXT_SCAN_BYTES = 4096;
 const TEXT_FILE_EXTENSIONS = new Set([
@@ -386,12 +376,12 @@ function isVoiceMessage(message: TelegramIncomingMessage): boolean {
 	);
 }
 
-export async function collectVoiceTranscription(
+async function collectVoiceTranscription(
 	ctx: AuthContext,
 	message: TelegramIncomingMessage,
 	sttProvider: SttProvider,
 	voiceConfig: VoiceConfig,
-): Promise<VoiceTranscriptionResult | null> {
+): Promise<string | null> {
 	const sttLanguage = voiceConfig.stt?.language;
 
 	if (message.voice) {
@@ -400,7 +390,7 @@ export async function collectVoiceTranscription(
 			mimeType: downloaded.mediaType,
 			language: sttLanguage,
 		});
-		return { transcription: result.text, isVoice: true };
+		return result.text;
 	}
 
 	if (message.video_note) {
@@ -410,7 +400,7 @@ export async function collectVoiceTranscription(
 			mimeType: "audio/ogg",
 			language: sttLanguage,
 		});
-		return { transcription: result.text, isVoice: true };
+		return result.text;
 	}
 
 	if (message.audio) {
@@ -423,7 +413,7 @@ export async function collectVoiceTranscription(
 			mimeType: downloaded.mediaType,
 			language: sttLanguage,
 		});
-		return { transcription: result.text, isVoice: true };
+		return result.text;
 	}
 
 	if (message.document && isAudioMimeType(message.document.mime_type)) {
@@ -436,7 +426,7 @@ export async function collectVoiceTranscription(
 			mimeType: downloaded.mediaType,
 			language: sttLanguage,
 		});
-		return { transcription: result.text, isVoice: true };
+		return result.text;
 	}
 
 	return null;
@@ -446,12 +436,12 @@ export async function handleTelegramMessage(
 	ctx: AuthContext,
 	rpcClient: RpcClient,
 	options: HandleMessageOptions = {},
-): Promise<HandleMessageResult> {
+): Promise<void> {
 	try {
 		const message = getIncomingMessage(ctx);
 		if (!message) {
 			await ctx.reply("Could not process this message.");
-			return { isVoice: false };
+			return;
 		}
 
 		const isVoice = isVoiceMessage(message);
@@ -463,18 +453,20 @@ export async function handleTelegramMessage(
 		if (isVoice) {
 			if (!options.sttProvider || !options.voiceConfig?.stt) {
 				await ctx.reply(MISSING_STT_MESSAGE);
-				return { isVoice: true };
+				return;
 			}
 
 			try {
-				const voiceResult = await collectVoiceTranscription(ctx, message, options.sttProvider, options.voiceConfig);
-				transcription = voiceResult?.transcription;
+				transcription =
+					(await collectVoiceTranscription(ctx, message, options.sttProvider, options.voiceConfig)) ?? undefined;
 			} catch (error) {
 				if (error instanceof Error && error.message.includes("ffmpeg is not installed")) {
 					await ctx.reply(VIDEO_NOTE_FFMPEG_MESSAGE);
-					return { isVoice: true };
+					return;
 				}
-				throw error;
+				logger.warn("Voice transcription failed", { error: String(error) });
+				await ctx.reply("Voice transcription failed. Please try again.");
+				return;
 			}
 		}
 
@@ -483,7 +475,7 @@ export async function handleTelegramMessage(
 				? null
 				: transcription.length > 0
 					? `Voice transcription:\n${transcription}`
-					: "Voice transcription:\n";
+					: "[Voice message could not be transcribed]";
 		const promptBody = [voiceContext, documentContext, text]
 			.filter((part): part is string => Boolean(part))
 			.join("\n\n")
@@ -497,10 +489,8 @@ export async function handleTelegramMessage(
 					: "User sent an empty message.");
 
 		await rpcClient.prompt(promptMessage, images.length > 0 ? images : undefined);
-		return { isVoice, transcription };
 	} catch (error) {
 		logger.error("Failed handling Telegram message", { error: String(error) });
 		await ctx.reply(`Failed to send message to assistant: ${String(error)}`);
-		return { isVoice: false };
 	}
 }

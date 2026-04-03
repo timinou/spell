@@ -75,6 +75,7 @@ export async function handleStatusCommand(ctx: AuthContext, cmdCtx: CommandConte
 		`Mode: ${session.mode}`,
 		`Session: active (${uptime})`,
 		`Thinking: ${session.showThinking ? "visible" : "hidden"}`,
+		`Voice: ${session.voiceReplyOverride ?? "default"}`,
 	];
 
 	await ctx.reply(statusLines.join("\n"));

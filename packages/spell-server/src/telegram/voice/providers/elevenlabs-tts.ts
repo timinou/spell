@@ -1,22 +1,11 @@
-import { logger } from "@oh-my-pi/pi-utils";
 import type { TtsConfig } from "../../../config/types";
 import type { TtsProvider, TtsResult } from "../tts";
+import { truncateForTts } from "../tts-utils";
 
 const ELEVENLABS_TEXT_LIMIT = 5_000;
 const ELEVENLABS_DEFAULT_MODEL = "eleven_multilingual_v2";
 const ELEVENLABS_DEFAULT_VOICE = "rachel";
-
-function truncateText(text: string): string {
-	if (text.length <= ELEVENLABS_TEXT_LIMIT) {
-		return text;
-	}
-
-	logger.warn("Truncating ElevenLabs TTS input text to provider limit", {
-		originalLength: text.length,
-		truncatedLength: ELEVENLABS_TEXT_LIMIT,
-	});
-	return `${text.slice(0, ELEVENLABS_TEXT_LIMIT - 3)}...`;
-}
+const PROVIDER_TIMEOUT_MS = 30_000;
 
 export class ElevenLabsTtsProvider implements TtsProvider {
 	#config: TtsConfig;
@@ -42,9 +31,10 @@ export class ElevenLabsTtsProvider implements TtsProvider {
 				Accept: "audio/mpeg",
 			},
 			body: JSON.stringify({
-				text: truncateText(text),
+				text: truncateForTts(text, ELEVENLABS_TEXT_LIMIT, "ElevenLabs"),
 				model_id: this.#config.model ?? ELEVENLABS_DEFAULT_MODEL,
 			}),
+			signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
 		});
 
 		if (!response.ok) {

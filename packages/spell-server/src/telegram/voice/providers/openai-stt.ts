@@ -5,6 +5,8 @@ interface OpenAiTranscriptionResponse {
 	text?: string;
 }
 
+const PROVIDER_TIMEOUT_MS = 30_000;
+
 export class OpenAiSttProvider implements SttProvider {
 	#config: SttConfig;
 
@@ -25,6 +27,7 @@ export class OpenAiSttProvider implements SttProvider {
 				Authorization: `Bearer ${this.#config.apiKey}`,
 			},
 			body: formData,
+			signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
 		});
 
 		if (!response.ok) {
