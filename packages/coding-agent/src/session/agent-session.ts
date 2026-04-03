@@ -57,6 +57,7 @@ import { MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "../config/mo
 import { extractExplicitThinkingSelector, parseModelString, resolveModelRoleValue } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate, renderPromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
+import { loadTaskPolicies, mergePolicies } from "../config/task-policies";
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
 import { exportSessionToHtml } from "../export/html";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
@@ -2242,9 +2243,15 @@ export class AgentSession {
 		// Mode todo.phases are consumed by the agent via prompt instructions.
 		// Wave-derived phases take precedence over todo.phases when plan has waves.
 		const modeConfig = state.modeConfigName ? this.getModeConfig(state.modeConfigName) : undefined;
+		const projectPolicies = await loadTaskPolicies(this.sessionManager.getCwd());
+		const mergedPolicies = mergePolicies(projectPolicies, modeConfig?.frontmatter.taskPolicies);
+		const hasTaskPolicies = mergedPolicies.policies.length > 0 || Object.keys(mergedPolicies.layers).length > 0;
 		const content = renderPromptTemplate(planModeActivePrompt, {
 			planFilePath: displayPlanPath,
 			planExists,
+			taskPolicies: hasTaskPolicies ? mergedPolicies : undefined,
+			taskPolicyLayers: hasTaskPolicies ? mergedPolicies.layers : undefined,
+			taskPolicyList: hasTaskPolicies ? mergedPolicies.policies : undefined,
 			askToolName: "ask",
 			writeToolName: "write",
 			editToolName: "edit",

@@ -9,6 +9,7 @@ export interface PlanWaveEntry {
 	dependsOn?: string[];
 	details?: string;
 	deferred?: boolean;
+	layer?: string;
 }
 
 export interface PlanWave {
@@ -131,6 +132,7 @@ function materializePlanWaves(waves: PlanWave[]): MaterializedPlanWaves {
 				details: entry.details,
 				blockers: blockers.length > 0 ? blockers : undefined,
 				orgItemId: entry.orgItemId,
+				layer: entry.layer,
 			};
 			if (entry.orgItemId && closingTaskIdByOrgItemId.get(entry.orgItemId) === taskId) {
 				item.orgItemClosingId = entry.orgItemId;

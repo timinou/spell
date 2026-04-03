@@ -97,6 +97,18 @@ Before your final turn, you **MUST**:
 {{{modeExecutionInstructions}}}
 {{/if}}
 
+{{#if taskPolicies}}
+## Active Task Policies
+
+The following layer-based policies are active. Set `layer` on todo items and task dispatch items to trigger automatic gate injection.
+
+{{#each taskPolicyList}}
+- **{{this.name}}** (layer: `{{this.match.layer}}`): {{#if this.gates.gateCmd}}`{{this.gates.gateCmd}}`{{/if}}{{#if this.gates.gateLlm}} + LLM review{{/if}}{{#if this.gates.gateCommit}} + commit{{/if}}
+{{/each}}
+
+For org-linked tasks, layer is resolved automatically from the org item's `:LAYER:` property (sub-outline items checked first, then parent).
+{{/if}}
+
 <instruction>
 You **MUST** execute this plan step by step from `{{finalPlanFilePath}}`. You have full tool access.
 You **MUST** verify each step before proceeding to the next.

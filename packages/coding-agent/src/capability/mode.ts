@@ -1,3 +1,4 @@
+import type { TaskPolicy } from "../config/task-policies";
 import { defineCapability } from ".";
 import type { SourceMeta } from "./types";
 
@@ -41,6 +42,7 @@ export interface ModeConfigFrontmatter {
 	afterComplete?: string;
 	contextPolicy?: "fresh" | "carry" | { type: "summarize"; description: string };
 	model?: string;
+	taskPolicies?: TaskPolicy[];
 }
 
 export interface ModeConfigSections {

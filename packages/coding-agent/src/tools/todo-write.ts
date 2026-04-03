@@ -14,6 +14,14 @@ import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import chalk from "chalk";
 import { renderPromptTemplate } from "../config/prompt-templates";
+import {
+	applyPolicyGates,
+	loadTaskPolicies,
+	matchPolicies,
+	mergePolicies,
+	type TaskPolicy,
+	type TaskPolicyGates,
+} from "../config/task-policies";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import { buildOrgConfig } from "../plan-mode/org-plan";
@@ -63,6 +71,8 @@ export interface TodoItem {
 	deferralFupId?: string;
 	/** Delegated subagent metadata. Delegated tasks may remain in_progress alongside one direct task. */
 	delegation?: TodoDelegation;
+	/** Layer for policy-based gate injection. When set, matching policy gates are auto-injected. */
+	layer?: string;
 }
 
 export interface TodoPhase {
@@ -107,6 +117,7 @@ const InputTask = Type.Object({
 		Type.String({ description: "Org item ID that triggers two-phase verified completion" }),
 	),
 	delegation: Type.Optional(DelegationSchema),
+	layer: Type.Optional(Type.String({ description: "Layer for policy-based gate injection" })),
 });
 
 const InputPhase = Type.Object({
@@ -141,6 +152,7 @@ const todoWriteSchema = Type.Object({
 				orgItemId: Type.Optional(Type.String()),
 				orgItemClosingId: Type.Optional(Type.String()),
 				delegation: Type.Optional(DelegationSchema),
+				layer: Type.Optional(Type.String({ description: "Layer for policy-based gate injection" })),
 			}),
 			Type.Object({
 				op: Type.Literal("update"),
@@ -158,6 +170,7 @@ const todoWriteSchema = Type.Object({
 				orgItemId: Type.Optional(Type.String()),
 				orgItemClosingId: Type.Optional(Type.String()),
 				delegation: Type.Optional(DelegationSchema),
+				layer: Type.Optional(Type.String({ description: "Layer for policy-based gate injection" })),
 				verified: Type.Optional(
 					Type.Boolean({
 						description: "Set true after verifying all gate requirements. Required to complete a gated task.",
@@ -205,11 +218,12 @@ function buildPhaseFromInput(
 	input: { name: string; tasks?: Array<Static<typeof InputTask>> },
 	phaseId: string,
 	nextTaskId: number,
+	policies: TaskPolicy[],
 ): { phase: TodoPhase; nextTaskId: number } {
 	const tasks: TodoItem[] = [];
 	let tid = nextTaskId;
 	for (const t of input.tasks ?? []) {
-		tasks.push({
+		const task: TodoItem = {
 			id: `task-${tid++}`,
 			content: t.content,
 			status: "pending",
@@ -224,7 +238,10 @@ function buildPhaseFromInput(
 			orgItemId: t.orgItemId,
 			orgItemClosingId: t.orgItemClosingId,
 			delegation: cloneTodoDelegation(t.delegation),
-		});
+			layer: t.layer,
+		};
+		injectPolicyGates(task, policies);
+		tasks.push(task);
 	}
 	return { phase: { id: phaseId, name: input.name, tasks }, nextTaskId: tid };
 }
@@ -251,7 +268,7 @@ export function getNextTodoIds(phases: TodoPhase[]): { nextTaskId: number; nextP
 	return { nextTaskId: maxTaskId + 1, nextPhaseId: maxPhaseId + 1 };
 }
 
-function fileFromPhases(phases: TodoPhase[]): TodoFile {
+export function fileFromPhases(phases: TodoPhase[]): TodoFile {
 	const { nextTaskId, nextPhaseId } = getNextTodoIds(phases);
 	return { phases, nextTaskId, nextPhaseId };
 }
@@ -271,6 +288,26 @@ function cloneTodoTask(task: TodoItem): TodoItem {
 
 export function cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
 	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => cloneTodoTask(task)) }));
+}
+
+export function injectPolicyGates(task: TodoItem, policies: TaskPolicy[]): void {
+	if (!task.layer || policies.length === 0 || matchPolicies(task.layer, policies).length === 0) return;
+	const resolved = applyPolicyGates(
+		{
+			gateCommit: task.gateCommit,
+			gateArtifact: task.gateArtifact,
+			gateCmd: task.gateCmd,
+			gateLlm: task.gateLlm,
+			verifyCmd: task.verifyCmd,
+		} satisfies TaskPolicyGates,
+		task.layer,
+		policies,
+	);
+	task.gateCommit = resolved.gateCommit;
+	task.gateArtifact = resolved.gateArtifact;
+	task.gateCmd = resolved.gateCmd;
+	task.gateLlm = resolved.gateLlm;
+	task.verifyCmd = resolved.verifyCmd;
 }
 
 const todoMutationQueues = new WeakMap<ToolSession, Promise<unknown>>();
@@ -479,23 +516,24 @@ export function hasRequiredGate(task: TodoItem): boolean {
 	return !!(task.gateCommit || task.gateArtifact || task.gateCmd || task.gateLlm || task.orgItemClosingId);
 }
 
-function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: TodoPhase[]): ApplyOpsResult {
+export function applyOps(
+	file: TodoFile,
+	ops: TodoWriteParams["ops"],
+	previousPhases: TodoPhase[],
+	policies: TaskPolicy[],
+): ApplyOpsResult {
 	const errors: string[] = [];
 	const pendingVerificationTasks: TodoItem[] = [];
 	const pendingDeferralTasks: TodoItem[] = [];
 
-	// Snapshot which phases were already complete before this call
 	const wasComplete = new Map<string, boolean>();
 	for (const phase of previousPhases) {
 		wasComplete.set(phase.id, isPhaseComplete(phase));
 	}
 
-	// Track tasks that existed before to detect status transitions
 	const previousStatus = new Map<string, TodoStatus>();
 	for (const phase of previousPhases) {
-		for (const task of phase.tasks) {
-			previousStatus.set(task.id, task.status);
-		}
+		for (const task of phase.tasks) previousStatus.set(task.id, task.status);
 	}
 
 	for (const op of ops) {
@@ -504,29 +542,27 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 				const next = makeEmptyFile();
 				for (const inputPhase of op.phases) {
 					const phaseId = `phase-${next.nextPhaseId++}`;
-					const { phase, nextTaskId } = buildPhaseFromInput(inputPhase, phaseId, next.nextTaskId);
+					const { phase, nextTaskId } = buildPhaseFromInput(inputPhase, phaseId, next.nextTaskId, policies);
 					next.phases.push(phase);
 					next.nextTaskId = nextTaskId;
 				}
 				file = next;
 				break;
 			}
-
 			case "add_phase": {
 				const phaseId = `phase-${file.nextPhaseId++}`;
-				const { phase, nextTaskId } = buildPhaseFromInput(op, phaseId, file.nextTaskId);
+				const { phase, nextTaskId } = buildPhaseFromInput(op, phaseId, file.nextTaskId, policies);
 				file.phases.push(phase);
 				file.nextTaskId = nextTaskId;
 				break;
 			}
-
 			case "add_task": {
 				const target = file.phases.find(p => p.id === op.phase);
 				if (!target) {
 					errors.push(`Phase "${op.phase}" not found`);
 					break;
 				}
-				target.tasks.push({
+				const task: TodoItem = {
 					id: `task-${file.nextTaskId++}`,
 					content: op.content,
 					status: "pending",
@@ -541,18 +577,18 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 					orgItemId: op.orgItemId,
 					orgItemClosingId: op.orgItemClosingId,
 					delegation: cloneTodoDelegation(op.delegation),
-				});
+					layer: op.layer,
+				};
+				injectPolicyGates(task, policies);
+				target.tasks.push(task);
 				break;
 			}
-
 			case "update": {
 				const task = findTask(file.phases, op.id);
 				if (!task) {
 					errors.push(`Task "${op.id}" not found`);
 					break;
 				}
-
-				// Apply non-status fields first (preserved even if gate rejects status transition)
 				if (op.content !== undefined) task.content = op.content;
 				if (op.notes !== undefined) task.notes = op.notes;
 				if (op.details !== undefined) task.details = op.details;
@@ -565,40 +601,35 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 				if (op.orgItemId !== undefined) task.orgItemId = op.orgItemId;
 				if (op.orgItemClosingId !== undefined) task.orgItemClosingId = op.orgItemClosingId;
 				if (op.delegation !== undefined) task.delegation = cloneTodoDelegation(op.delegation);
-
-				// Smart gate: reject in_progress transition when task has unresolved blockers
-				if (op.status === "in_progress") {
-					if (task.blockers?.length) {
-						const allTasks = file.phases.flatMap(p => p.tasks);
-						if (hasUnresolvedBlockers(task, allTasks)) {
-							const unresolvedDetails = task.blockers
-								.map(id => {
-									const b = allTasks.find(t => t.id === id);
-									return b && b.status !== "completed" && b.status !== "abandoned"
-										? `${id} (${b.status})`
-										: null;
-								})
-								.filter(Boolean)
-								.join(", ");
-							errors.push(`Cannot start ${op.id}: blocked by ${unresolvedDetails}`);
-							break;
-						}
+				if (op.layer !== undefined) {
+					task.layer = op.layer;
+					injectPolicyGates(task, policies);
+				}
+				if (op.status === "in_progress" && task.blockers?.length) {
+					const allTasks = file.phases.flatMap(p => p.tasks);
+					if (hasUnresolvedBlockers(task, allTasks)) {
+						const unresolvedDetails = task.blockers
+							.map(id => {
+								const blocker = allTasks.find(t => t.id === id);
+								return blocker && blocker.status !== "completed" && blocker.status !== "abandoned"
+									? `${id} (${blocker.status})`
+									: null;
+							})
+							.filter(Boolean)
+							.join(", ");
+						errors.push(`Cannot start ${op.id}: blocked by ${unresolvedDetails}`);
+						break;
 					}
 				}
-
-				// Two-phase gated completion: reject completion without verification
 				if (op.status === "completed" && hasRequiredGate(task) && !op.verified) {
 					pendingVerificationTasks.push(task);
 					break;
 				}
-
-				// Deferral gate: abandoned requires deferralFupId
 				if (op.status === "abandoned" && (!op.deferralFupId || op.deferralFupId.trim() === "")) {
 					pendingDeferralTasks.push(task);
 					break;
 				}
 				if (op.deferralFupId) task.deferralFupId = op.deferralFupId;
-
 				if (op.status !== undefined) task.status = op.status;
 				break;
 			}
@@ -607,28 +638,21 @@ function applyOps(file: TodoFile, ops: TodoWriteParams["ops"], previousPhases: T
 
 	normalizeInProgressTask(file.phases);
 
-	// Validate dangling blocker refs — warn but don't change behavior (missing = resolved)
 	const allTaskIds = new Set(file.phases.flatMap(p => p.tasks.map(t => t.id)));
 	for (const phase of file.phases) {
 		for (const task of phase.tasks) {
 			if (!task.blockers?.length) continue;
 			for (const blockerId of task.blockers) {
-				if (!allTaskIds.has(blockerId)) {
-					errors.push(`${task.id} references non-existent blocker ${blockerId}`);
-				}
+				if (!allTaskIds.has(blockerId)) errors.push(`${task.id} references non-existent blocker ${blockerId}`);
 			}
 		}
 	}
 
-	// Detect newly completed phases
 	const completedPhaseIds: string[] = [];
 	for (const phase of file.phases) {
-		if (isPhaseComplete(phase) && !wasComplete.get(phase.id)) {
-			completedPhaseIds.push(phase.id);
-		}
+		if (isPhaseComplete(phase) && !wasComplete.get(phase.id)) completedPhaseIds.push(phase.id);
 	}
 
-	// Detect tasks that transitioned to completed and have gates
 	const completedGatedTasks: TodoItem[] = [];
 	for (const phase of file.phases) {
 		for (const task of phase.tasks) {
@@ -710,11 +734,12 @@ export function formatSummary({
 		for (const task of remainingTasks) {
 			const blocked = isTaskBlocked(task, allTasks);
 			const blockerLabel = blocked ? " [blocked]" : "";
-			lines.push(`  - ${task.id} ${formatTaskContent(task)} [${task.status}]${blockerLabel} (${task.phase})`);
+			const layerLabel = task.layer ? ` [${task.layer}]` : "";
+			lines.push(
+				`  - ${task.id} ${formatTaskContent(task)} [${task.status}]${layerLabel}${blockerLabel} (${task.phase})`,
+			);
 			if ((task.status === "in_progress" || task.status === "failed") && task.details) {
-				for (const line of task.details.split("\n")) {
-					lines.push(`      ${line}`);
-				}
+				for (const line of task.details.split("\n")) lines.push(`      ${line}`);
 			}
 		}
 	}
@@ -855,6 +880,8 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 		return await queueTodoMutation(this.session, async () => {
 			const previousPhases = cloneTodoPhases(this.session.getTodoPhases?.() ?? []);
 			const current = fileFromPhases(cloneTodoPhases(previousPhases));
+			const projectPolicies = await loadTaskPolicies(this.session.cwd ?? "");
+			const activePolicies = mergePolicies(projectPolicies, undefined).policies;
 			const {
 				file: updated,
 				errors,
@@ -862,7 +889,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 				completedGatedTasks,
 				pendingVerificationTasks,
 				pendingDeferralTasks,
-			} = applyOps(current, params.ops, previousPhases);
+			} = applyOps(current, params.ops, previousPhases, activePolicies);
 			const hasReplace = params.ops.some(op => op.op === "replace");
 			this.session.setTodoPhases?.(updated.phases, hasReplace ? { reset: true } : undefined);
 			const orgLifecycleNotices = await applyOrgLifecycleHooks(this.session, previousPhases, updated.phases);
@@ -914,6 +941,7 @@ function renderGateBadges(item: TodoItem, uiTheme: Theme): string {
 	if (item.gateCmd) badges.push("[cmd]");
 	if (item.gateLlm) badges.push("[llm]");
 	if (item.verifyCmd) badges.push("[verify]");
+	if (item.layer) badges.push(`[${item.layer}]`);
 	if (item.orgItemClosingId) badges.push(`[org-closing: ${item.orgItemClosingId}]`);
 	if (item.orgItemId && !item.orgItemClosingId) badges.push(`[org: ${item.orgItemId}]`);
 	if (badges.length === 0) return "";

@@ -1,4 +1,5 @@
 import { renderPromptTemplate } from "../config/prompt-templates";
+import { resolveInjectText, type TaskPolicy } from "../config/task-policies";
 import subagentPredecessorResultsTemplate from "../prompts/system/subagent-predecessor-results.md" with {
 	type: "text",
 };
@@ -41,7 +42,11 @@ export function renderTemplate(context: string | undefined, task: TaskItem): Ren
  * requirements section for the subagent. Returns undefined if the ref is
  * unresolvable or the todo has no gates worth injecting.
  */
-export function resolveVerificationContext(todoRef: string, phases: TodoPhase[]): string | undefined {
+export function resolveVerificationContext(
+	todoRef: string,
+	phases: TodoPhase[],
+	policies?: TaskPolicy[],
+): string | undefined {
 	const task = findTask(phases, todoRef);
 	if (!task) return undefined;
 
@@ -58,6 +63,15 @@ export function resolveVerificationContext(todoRef: string, phases: TodoPhase[])
 	}
 	if (task.orgItemId && !task.orgItemClosingId) {
 		lines.push(`Linked to org item ${task.orgItemId} for lineage tracking (non-gating).`);
+	}
+
+	if (policies && task.layer) {
+		const injectText = resolveInjectText(task.layer, policies);
+		if (injectText) {
+			lines.push("");
+			lines.push(`--- Policy Guidance (layer: ${task.layer}) ---`);
+			lines.push(injectText);
+		}
 	}
 
 	if (lines.length === 0) return undefined;

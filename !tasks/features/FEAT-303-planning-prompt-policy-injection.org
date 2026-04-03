@@ -1,0 +1,93 @@
+#+TITLE: Planning Prompt Policy Injection
+#+STATE: DONE
+#+SESSION_ID: 14ac7cd4e228b35c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T19-07-12-136Z_14ac7cd4e228b35c.jsonl]]
+#+CUSTOM_ID: FEAT-303-planning-prompt-policy-injection
+#+EFFORT: 2h
+#+LAYER: infra
+#+DEPENDS: FEAT-302-task-policy-config-schema-types-and-load
+
+* Scope
+- IN: Inject resolved task policies (layers + policies) into ~plan-mode-active.md~ so the planner sees available layers, knows what gates are auto-enforced, and sets ~:LAYER:~ on org items AND sub-outline items accordingly
+- IN: Inject policy summary into ~plan-mode-approved.md~ so the executor is reminded to set ~layer~ on todo items
+- OUT: Todo_write enforcement, task dispatch integration, wave pipeline integration (separate items)
+- Key insight: ~:LAYER:~ should be set on BOTH top-level org items AND sub-outline items (~FEAT-001::implement-ui~). Sub-outline LAYER overrides parent LAYER for policy matching.
+
+* Tests (TDD)
+** Write prompt rendering tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-303::prompt-tests
+:END:
+- File: ~packages/coding-agent/test/prompts/plan-mode-policies.test.ts~
+- Scenarios:
+  - Render ~plan-mode-active.md~ with ~taskPolicies~ set → output contains layer table and policy gate descriptions
+  - Render ~plan-mode-active.md~ without ~taskPolicies~ → no policy section in output
+  - Render ~plan-mode-approved.md~ with ~taskPolicies~ set → output contains policy reminder section
+  - Render ~plan-mode-approved.md~ without ~taskPolicies~ → no policy section in output
+  - Layers with descriptions render as a readable reference table
+  - Policy gates render with their match criteria and gate field names
+  - Prompt instructs setting ~:LAYER:~ on sub-outline items, not just top-level items
+
+* Implementation
+** Add taskPolicies section to plan-mode-active.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-303::active-prompt
+:DEPENDS: FEAT-303::prompt-tests
+:END:
+- File: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+- Add ~{{#if taskPolicies}}~ conditional section after the child item requirements section
+- Content:
+  - ~## Project Task Policies~ heading
+  - Layer vocabulary table: each layer name + description from ~layers~ config
+  - Per-policy block: name, matching layer, gates that will be auto-enforced, inject text summary
+  - Instruction: "When creating org items, set ~:LAYER:~ from the declared layers. Sub-outline items (~PARENT::sub-slug~) SHOULD also set ~:LAYER:~ when their layer differs from the parent. Matching policy gates are auto-enforced during execution."
+  - Instruction: "For sub-outline items that share the parent's layer, ~:LAYER:~ is inherited automatically — only set it explicitly when the sub-item has a different layer."
+
+** Pass policies to plan-mode-active template
+:PROPERTIES:
+:CUSTOM_ID: FEAT-303::active-params
+:DEPENDS: FEAT-303::active-prompt
+:END:
+- File: ~packages/coding-agent/src/session/agent-session.ts~
+- In ~renderPromptTemplate~ call at line ~2245~:
+  - Load task policies: call ~loadTaskPolicies~ for project-level, get mode-level from ~modeConfig?.frontmatter.taskPolicies~
+  - Merge via ~mergePolicies~
+  - Pass ~taskPolicies~ (the merged config, or undefined if none) to the template
+  - Pass ~taskPolicyLayers~ (the layers object) for the vocabulary table
+  - Pass ~taskPolicyList~ (the policies array) for the per-policy blocks
+
+** Add taskPolicies section to plan-mode-approved.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-303::approved-prompt
+:DEPENDS: FEAT-303::prompt-tests
+:END:
+- File: ~packages/coding-agent/src/prompts/system/plan-mode-approved.md~
+- Add ~{{#if taskPolicies}}~ conditional section in the Protocol area
+- Content:
+  - ~## Active Task Policies~ heading
+  - Compact summary of active policies: layer → gates
+  - Instruction: "Set ~layer~ on todo items and task dispatch items to trigger automatic gate injection from these policies. For org-linked tasks, layer is resolved automatically from the org item's ~:LAYER:~ property (sub-outline items checked first, then parent)."
+
+** Pass policies to plan-mode-approved template
+:PROPERTIES:
+:CUSTOM_ID: FEAT-303::approved-params
+:DEPENDS: FEAT-303::approved-prompt
+:END:
+- File: ~packages/coding-agent/src/modes/interactive-mode.ts~
+- In ~renderPromptTemplate~ call at line ~1248~:
+  - Resolve task policies (same merge logic as active prompt)
+  - Pass ~taskPolicies~ to template
+
+* Edge Cases
+- No policies configured → no section rendered, planning works as before
+- Policies exist but active mode overrides all of them → only mode policies shown
+- Large number of policies → prompt still readable (policies are compact summaries, not full text)
+- Sub-outline items without explicit LAYER inherit from parent — prompt makes this clear
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/prompts/plan-mode-policies.test.ts~ passes
+- ~bun check:ts~ passes
+- Planning prompt contains layer vocabulary and policy descriptions when ~.spell/task-policies.yml~ exists
+- Planning prompt instructs setting LAYER on sub-outline items
+- Execution prompt contains policy reminder when policies are active
+- No prompt changes when no policies are configured

@@ -1,0 +1,110 @@
+#+TITLE: Task Dispatch Layer Propagation and Subagent Policy Context
+#+STATE: DONE
+#+SESSION_ID: 14ac7cd4e228b35c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T19-07-12-136Z_14ac7cd4e228b35c.jsonl]]
+#+CUSTOM_ID: FEAT-306-task-dispatch-layer-propagation-and-suba
+#+EFFORT: 2h
+#+LAYER: infra
+#+DEPENDS: FEAT-302-task-policy-config-schema-types-and-load FEAT-304-todo-write-layer-field-and-policy-gate-i
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-03T18-29-08-543Z_14ac741ecff69fa5.jsonl
+ ID: 14ac741ecff69fa5
+
+
+In this session for example, i would have liked all frontend tasks to have had a gate or sth to ensure that journey tests are fully written alongside self-documenting code to explain the story associated to it. How would you improve the planning mode and the todo write and task tools to allow for this to naturally happen? YOu're also allowed to think or find config paths so I can write my requriemetns per-projects. Thanks
+
+* Scope
+- IN: Add ~layer~ field to ~TaskItem~ schema (task dispatch), propagate ~layer~ through auto-roster creation, inject policy ~inject~ text into subagent verification context
+- OUT: Todo_write gate injection (handled by FEAT-304 — auto-roster creates items via TodoWriteTool which handles injection), wave pipeline (handled by FEAT-305)
+- Key insight: auto-roster creates todo items via ~TodoWriteTool.execute()~. If we pass ~layer~ through to the created todo item, FEAT-304's injection logic handles the gates automatically. We also inject the policy's ~inject~ text into subagent prompts via ~resolveVerificationContext~.
+
+* Tests (TDD — before implementation)
+** Write task item layer propagation tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-306::propagation-tests
+:LAYER: test
+:END:
+- File: ~packages/coding-agent/test/task/task-layer-propagation.test.ts~
+- Scenarios:
+  - Task dispatch with ~layer: "frontend"~ → auto-roster creates todo item with ~layer: "frontend"~
+  - Task dispatch without ~layer~ → auto-roster creates todo item without layer (existing behavior)
+  - Task dispatch with ~layer~ and ~todoRef~ → layer is ignored (todoRef takes precedence, existing todo item)
+
+** Write subagent policy context injection tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-306::context-tests
+:DEPENDS: FEAT-306::propagation-tests
+:LAYER: test
+:END:
+- File: ~packages/coding-agent/test/task/task-layer-propagation.test.ts~ (same file)
+- Scenarios:
+  - ~resolveVerificationContext~ for todo item with ~layer: "frontend"~ and active policies → includes policy ~inject~ text in output
+  - ~resolveVerificationContext~ for todo item without ~layer~ → no policy inject text (existing behavior)
+  - ~resolveVerificationContext~ for todo item with ~layer~ but no matching policies → no policy inject text
+  - Policy inject text appears AFTER gate requirements in verification context (gates are enforcement, inject is guidance)
+
+* Implementation
+** Add layer to TaskItem schema
+:PROPERTIES:
+:CUSTOM_ID: FEAT-306::add-layer-schema
+:DEPENDS: FEAT-306::propagation-tests
+:LAYER: infra
+:END:
+- File: ~packages/coding-agent/src/task/types.ts~
+- Add ~layer: Type.Optional(Type.String({ description: "Layer for policy-based gate injection. Propagated to auto-roster todo items." }))~ to ~taskItemSchema~ (line ~36~)
+- This makes ~TaskItem.layer~ available in the dispatch params
+
+** Propagate layer in auto-roster
+:PROPERTIES:
+:CUSTOM_ID: FEAT-306::propagate-auto-roster
+:DEPENDS: FEAT-306::add-layer-schema
+:LAYER: infra
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~
+- In ~#autoCreateTodoRefs~ (line ~286~), when building the ~TodoWriteTool.execute~ call:
+  - Current code creates tasks with ~{ content, blockers, delegation }~ (line ~318~)
+  - Add ~layer: task.layer~ to the task object passed to todo_write
+  - FEAT-304's injection logic in TodoWriteTool handles the rest
+
+** Inject policy context into subagent prompts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-306::inject-subagent-context
+:DEPENDS: FEAT-306::context-tests
+:LAYER: infra
+:END:
+- File: ~packages/coding-agent/src/task/template.ts~
+- In ~resolveVerificationContext~ (line ~44~):
+  - After building gate requirement lines, check if the task has a ~layer~ field
+  - If layer is set, resolve matching policies via ~matchPolicies~
+  - For each matching policy with an ~inject~ field, append the inject text to the verification context
+  - Format: ~--- Policy Guidance (from layer: frontend) ---
+{inject text}~
+- Need access to active policies in ~resolveVerificationContext~ — add ~policies~ parameter or resolve inline
+
+** Update task tool prompt
+:PROPERTIES:
+:CUSTOM_ID: FEAT-306::update-task-prompt
+:DEPENDS: FEAT-306::propagate-auto-roster
+:LAYER: infra
+:END:
+- File: ~packages/coding-agent/src/prompts/tools/task.md~ (if exists, or the relevant task tool prompt)
+- Document ~layer~ field on TaskItem
+- Example: "Set ~layer~ to propagate project task policies to auto-roster items"
+
+* Edge Cases
+- Task with ~layer~ and ~todoRef~ → ~todoRef~ takes precedence; layer from the existing todo item is used for policy resolution (not from task dispatch params)
+- Task with ~layer~ but auto-roster disabled → layer has no effect (no todo item created)
+- Policy ~inject~ text is empty string → skip injection
+- Multiple matching policies with inject text → concatenate with newlines
+- ~resolveVerificationContext~ called with todo item that has layer but no active session policies → returns existing behavior (gate lines only)
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/task/task-layer-propagation.test.ts~ passes
+- ~bun check:ts~ passes
+- Task dispatch with ~layer: "frontend"~ creates auto-roster todo item with ~layer: "frontend"~ and policy gates
+- Subagent receives policy inject text when working on a layer-tagged todo item
+- No behavioral change when no policies are configured or no layer is set

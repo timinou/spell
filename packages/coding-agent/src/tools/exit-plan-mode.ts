@@ -4,6 +4,7 @@ import { extractIdLinks } from "@oh-my-pi/pi-org";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
+import { resolveLayerFromProperties } from "../config/task-policies";
 import type { PlanWave } from "../orchestrators/fluid";
 import { resolvePlanItem } from "../plan-mode/org-plan";
 import exitPlanModeDescription from "../prompts/tools/exit-plan-mode.md" with { type: "text" };
@@ -156,6 +157,32 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 			}
 
 			const waves = extractPlanWaves(item.body);
+			if (waves) {
+				const propertiesByItemId = new Map<string, Record<string, string>>();
+				const loadProperties = async (itemId: string): Promise<Record<string, string> | undefined> => {
+					const cached = propertiesByItemId.get(itemId);
+					if (cached) return cached;
+
+					const resolved = await resolvePlanItem(this.session.settings, this.session.cwd, itemId);
+					const properties = resolved?.properties;
+					if (properties) {
+						propertiesByItemId.set(itemId, properties);
+					}
+					return properties;
+				};
+
+				for (const wave of waves) {
+					for (const entry of wave.entries) {
+						if (!entry.orgItemId) continue;
+						await loadProperties(entry.orgItemId);
+						const separatorIndex = entry.orgItemId.indexOf("::");
+						if (separatorIndex !== -1) {
+							await loadProperties(entry.orgItemId.slice(0, separatorIndex));
+						}
+						entry.layer = resolveLayerFromProperties(entry.orgItemId, itemId => propertiesByItemId.get(itemId));
+					}
+				}
+			}
 			return {
 				content: [
 					{

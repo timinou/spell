@@ -97,6 +97,7 @@ task-3 and task-4 both depend on task-1 (schema). task-5 depends on both task-3 
 - `gateCmd`: Command that must pass to verify the task (e.g., `bun test test/foo.test.ts`).
 - `gateLlm`: Acceptance criteria the AI should self-review against.
 - `verifyCmd`: Recommended (not required) verification command.
+- `layer`: Layer for policy-based gate injection (e.g., `frontend`, `api`). When set and project task policies are active, matching policy gates are auto-injected. Explicit gates take precedence over policy defaults.
 - `orgItemId`: Org item ID for lineage tracking. Non-gating — does not trigger verification protocol.
 - `orgItemClosingId`: Org item ID that triggers verification. When the task is completed with `verified: true`, todo_write automatically transitions that linked org item to `DONE`.
 - `blockers`: Array of task IDs that must complete before this task can start.

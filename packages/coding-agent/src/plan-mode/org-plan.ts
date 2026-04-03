@@ -194,7 +194,7 @@ export async function resolvePlanItem(
 	settings: Settings,
 	projectRoot: string,
 	itemId: string,
-): Promise<{ id: string; file: string; body: string } | null> {
+): Promise<{ id: string; file: string; body: string; properties: Record<string, string> } | null> {
 	if (!settings.get("org.enabled")) return null;
 
 	const config = buildOrgConfig(settings);
@@ -204,5 +204,5 @@ export async function resolvePlanItem(
 	const item = await findItemById(catDirs, itemId, config.todoKeywords);
 	if (!item) return null;
 
-	return { id: item.id, file: item.file, body: item.body ?? "" };
+	return { id: item.id, file: item.file, body: item.body ?? "", properties: item.properties ?? {} };
 }

@@ -25,6 +25,7 @@ import chalk from "chalk";
 import { KeybindingsManager } from "../config/keybindings";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { type Settings, settings } from "../config/settings";
+import { loadTaskPolicies, mergePolicies } from "../config/task-policies";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensibility/extensions";
 import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
@@ -1235,6 +1236,9 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		const planState = this.session.getPlanModeState();
 		const modeConfig = planState?.modeConfigName ? this.session.getModeConfig(planState.modeConfigName) : undefined;
+		const projectPolicies = await loadTaskPolicies(this.sessionManager.getCwd());
+		const mergedPolicies = mergePolicies(projectPolicies, modeConfig?.frontmatter.taskPolicies);
+		const hasTaskPolicies = mergedPolicies.policies.length > 0 || Object.keys(mergedPolicies.layers).length > 0;
 
 		let autoInitialized = false;
 		if ((options.waves?.length ?? 0) > 0) {
@@ -1253,6 +1257,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			waves: autoInitialized ? undefined : options.waves,
 			modeExecutionInstructions: modeConfig?.sections.instructions,
 			autoInitialized,
+			taskPolicies: hasTaskPolicies ? mergedPolicies : undefined,
+			taskPolicyList: hasTaskPolicies ? mergedPolicies.policies : undefined,
 		});
 		await this.session.prompt(prompt, { synthetic: true });
 	}
