@@ -1,0 +1,118 @@
+#+TITLE: Incoming voice audio and video note handling
+#+STATE: DONE
+#+SESSION_ID: 14ac0d19f5a01fa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-59-02-742Z_14ac0d19f5a01fa2.jsonl]]
+#+CUSTOM_ID: FEAT-257-incoming-voice-audio-and-video-note-hand
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: bridge
+#+DEPENDS: FEAT-255-stt-provider-abstraction-and-implementat
+
+NOTE [2026-04-03]: Extended telegram-to-rpc.ts for voice/video_note/audio messages, created audio-extract.ts with ffmpeg support, wired STT provider through service.ts/bot.ts. 6 tests pass.
+
+* Initial Message
+
+Telegram bridge: How would you enable voice? Spell already has STT btw. But be broad. Look up online. Tell me what makes sense. Thanks!!!!!!
+
+* Scope
+Extend =telegram-to-rpc.ts= to handle three new Telegram message types: voice messages, video notes (round circles), and audio file documents. Download media, extract audio if needed, transcribe via STT, and pass text to the agent.
+
+* Message Types
+
+** Voice Messages (=message.voice=)
+- Telegram type: =Voice= object with =file_id=, =duration=, =mime_type= (=audio/ogg=), =file_size=
+- Download via =getFile= → raw OGG Opus bytes
+- Send directly to STT provider (all providers accept OGG)
+
+** Video Notes (=message.video_note=)
+- Telegram type: =VideoNote= object with =file_id=, =length= (diameter), =duration=, =file_size=
+- Download via =getFile= → MP4 video file
+- Extract audio track with ffmpeg: =ffmpeg -i input.mp4 -vn -acodec libopus -f ogg pipe:1=
+- Send extracted audio to STT provider
+- Requires ffmpeg on the server (check at startup, log warning if missing)
+
+** Audio Documents (=message.audio=)
+- Telegram type: =Audio= object with =file_id=, =duration=, =performer=, =title=, =mime_type=, =file_size=
+- Download via =getFile= → raw audio bytes (MP3, M4A, OGG, etc.)
+- Send directly to STT (providers accept common formats)
+- Also applies to audio files sent as documents (=message.document= with audio MIME type)
+
+* Implementation
+
+** Extended Interface
+
+#+begin_src typescript
+interface TelegramIncomingMessage {
+  text?: string;
+  photo?: TelegramPhoto[];
+  document?: TelegramDocument;
+  // New:
+  voice?: { file_id: string; duration: number; mime_type?: string; file_size?: number };
+  video_note?: { file_id: string; duration: number; length: number; file_size?: number };
+  audio?: { file_id: string; duration: number; mime_type?: string; file_size?: number; title?: string };
+}
+#+end_src
+
+** Audio Extraction Utility
+
+#+begin_src typescript
+// packages/spell-server/src/telegram/voice/audio-extract.ts
+async function extractAudioFromVideo(videoBytes: Buffer): Promise<Buffer>;
+// Uses ffmpeg via Bun.spawn, pipes input/output
+// Returns OGG Opus audio bytes
+#+end_src
+
+** Transcription Flow in =handleTelegramMessage=
+
+#+begin_src
+1. Check if message has voice/video_note/audio
+2. If voice config has no STT configured → reply "Voice messages require STT configuration. Add a voice { stt-provider ... } block to channels.kdl"
+3. Download media bytes
+4. If video_note → extractAudioFromVideo()
+5. Call sttProvider.transcribe(audioBytes, { mimeType, language })
+6. If transcription empty → reply "Could not transcribe voice message"
+7. Prepend transcription to prompt text (transparent to agent)
+8. Pass to rpcClient.prompt() as normal text
+#+end_src
+
+** Draft Display
+- When voice/video_note/audio is being processed, show "Transcribing..." as draft/typing status
+- After transcription, the ResponseStreamer's draft should show =[Voice] transcription text= as a header line before the agent's response streams in
+- This is cosmetic for the user's benefit in the Telegram typing preview; the agent receives plain text
+
+** Config Plumbing
+- =handleTelegramMessage= needs access to the =VoiceConfig= and instantiated =SttProvider=
+- Options: pass through =AuthContext= (extend it), or pass as explicit parameter
+- Recommended: create an =SttProvider= instance at bot startup (in =service.ts=), store on the command context, thread through to =handleTelegramMessage=
+
+* Files
+- =packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts= -- extend =TelegramIncomingMessage=, add =collectVoiceTranscription()=, integrate into =handleTelegramMessage=
+- =packages/spell-server/src/telegram/voice/audio-extract.ts= -- ffmpeg audio extraction from video bytes
+- =packages/spell-server/src/telegram/service.ts= -- instantiate =SttProvider= from config at startup
+- =packages/spell-server/src/telegram/bot/bot.ts= -- thread STT provider to message handler
+
+* Sub-outline
+1. Write audio extraction utility (ffmpeg pipe, error handling for missing ffmpeg)
+2. Test audio extraction with a small fixture
+3. Extend =TelegramIncomingMessage= with voice/video_note/audio fields
+4. Write =collectVoiceTranscription()= -- download, extract if needed, transcribe
+5. Integrate into =handleTelegramMessage= flow
+6. Wire SttProvider instantiation in =service.ts= → bot → handler
+7. Test full flow with mocked Telegram file download and mocked STT provider
+
+* Edge Cases
+- ffmpeg not installed: log error, reply with "Video note transcription requires ffmpeg"
+- STT not configured: friendly reply with config hint
+- Transcription returns empty: reply "Could not understand voice message"
+- Large audio files (>20MB Telegram limit already enforces, but add reasonable timeout)
+- Voice message with caption text: combine caption + transcription
+
+* Acceptance
+- Voice messages are transcribed and passed as text to the agent
+- Video notes have audio extracted and transcribed
+- Audio documents/files are transcribed
+- Missing STT config produces a helpful error message (not a crash)
+- Missing ffmpeg is handled gracefully for video notes
+- Draft shows transcription status during processing
+- =bun check:ts= passes
+- Unit tests cover: voice transcription flow, video note extraction, audio document handling, missing config error path

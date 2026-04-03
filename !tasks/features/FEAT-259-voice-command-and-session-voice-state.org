@@ -1,0 +1,60 @@
+#+TITLE: Voice command and session voice state
+#+STATE: DONE
+#+SESSION_ID: 14ac0d19f5a01fa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-59-02-742Z_14ac0d19f5a01fa2.jsonl]]
+#+CUSTOM_ID: FEAT-259-voice-command-and-session-voice-state
+#+EFFORT: 1h
+#+PRIORITY: #C
+#+LAYER: bot
+#+DEPENDS: FEAT-254-voice-kdl-config-schema-parser-and-types
+
+NOTE [2026-04-03]: Added voiceReplyOverride to ChatSession, created /voice command with toggle/on/off/mirror/status, registered in bot.ts, clears on /clear. 6 tests pass.
+
+* Initial Message
+
+Telegram bridge: How would you enable voice? Spell already has STT btw. But be broad. Look up online. Tell me what makes sense. Thanks!!!!!!
+
+* Scope
+Add a =/voice= toggle command and per-session voice state to the Telegram bot. This lets users override the KDL-configured reply mode on a per-session basis.
+
+* Design
+
+** Session State Extension
+Add =voiceReplyOverride?: VoiceReplyMode= to =ChatSession= in =bridge-types.ts=.
+
+When set, this overrides both global and per-user voice reply mode for the session. Cleared on =/clear=.
+
+** =/voice= Command
+
+#+begin_example
+/voice         -- toggle: off → mirror → always → off
+/voice on      -- set to "always" (always reply with voice)
+/voice off     -- set to "never" (never reply with voice)
+/voice mirror  -- set to "mirror" (voice reply only to voice input)
+/voice status  -- show current effective mode
+#+end_example
+
+Replies with a confirmation message showing the new effective mode.
+
+** Command Registration
+Add ="voice"= to the command router in =bot.ts= alongside existing commands. Follow the same pattern as =handleThinkCommand= (resolve chatId, get session, update state, save, confirm).
+
+* Files
+- =packages/spell-server/src/rpc/bridge-types.ts= -- add =voiceReplyOverride= to =ChatSession=
+- =packages/spell-server/src/telegram/commands/voice.ts= -- new command handler
+- =packages/spell-server/src/telegram/commands/index.ts= -- export
+- =packages/spell-server/src/telegram/bot/bot.ts= -- register =/voice= in command router
+
+* Sub-outline
+1. Add =voiceReplyOverride= field to =ChatSession=
+2. Create =voice.ts= command handler following =session-commands.ts= pattern
+3. Register in =bot.ts= command router
+4. Clear =voiceReplyOverride= in =/clear= handler
+5. Test: toggle cycling, explicit mode setting, status display
+
+* Acceptance
+- =/voice= cycles through modes
+- =/voice on|off|mirror= sets explicit mode
+- =/voice status= shows current effective mode (considering global, per-user, and session)
+- Session state persists across messages but clears on =/clear=
+- =bun check:ts= passes

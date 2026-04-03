@@ -1,3 +1,5 @@
+import type { VoiceReplyMode } from "../config/types";
+
 /**
  * Shared types for the Telegram bridge runtime state.
  */
@@ -32,6 +34,8 @@ export interface ChatSession {
 	sessionPath?: string;
 	/** Path to the spell-server-owned Telegram event transcript */
 	transcriptPath?: string;
+	/** Per-session voice reply mode override, set by /voice command */
+	voiceReplyOverride?: VoiceReplyMode;
 	/** When the session was created */
 	createdAt: number;
 	/** When the last message was processed */

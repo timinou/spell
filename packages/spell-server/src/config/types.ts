@@ -10,6 +10,39 @@ export interface SpellServerConfig {
 	};
 }
 
+// -- Voice configuration types --
+
+export type SttProvider = "deepgram" | "openai";
+export type TtsProvider = "elevenlabs" | "deepgram";
+export type VoiceReplyMode = "mirror" | "always" | "never";
+
+export interface SttConfig {
+	provider: SttProvider;
+	apiKey: string;
+	model?: string;
+	language: string; // BCP-47, default "en"
+}
+
+export interface TtsConfig {
+	provider: TtsProvider;
+	apiKey: string;
+	model?: string;
+	voice?: string;
+}
+
+export interface VoiceConfig {
+	stt?: SttConfig;
+	tts?: TtsConfig;
+	replyMode: VoiceReplyMode; // default "mirror"
+}
+
+export interface UserVoiceConfig {
+	replyMode?: VoiceReplyMode;
+	ttsVoice?: string;
+}
+
+// -- Telegram user and channel configuration --
+
 /** Per-user Telegram access configuration */
 export interface TelegramUserConfig {
 	/** Allowed mode names (references .spell/modes/*.md files) */
@@ -20,6 +53,8 @@ export interface TelegramUserConfig {
 	idleTimeout?: number | null;
 	/** Allowed project names (keys from top-level projects map). Empty = all. */
 	projects?: string[];
+	/** Per-user voice configuration overrides */
+	voice?: UserVoiceConfig;
 }
 
 /** Full Telegram channel configuration parsed from channels.kdl */
@@ -46,6 +81,8 @@ export interface TelegramChannelConfig {
 	users: Record<string, TelegramUserConfig>;
 	/** Auto-send generated images to chat. Default: true. */
 	autoSendImages: boolean;
+	/** Voice configuration (STT/TTS) */
+	voice?: VoiceConfig;
 }
 
 export interface ChannelsConfig {

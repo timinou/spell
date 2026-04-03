@@ -1,0 +1,108 @@
+#+TITLE: Voice KDL config schema parser and types
+#+STATE: DONE
+#+SESSION_ID: 14ac0d19f5a01fa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-59-02-742Z_14ac0d19f5a01fa2.jsonl]]
+#+CUSTOM_ID: FEAT-254-voice-kdl-config-schema-parser-and-types
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: config
+
+NOTE [2026-04-03]: Implemented VoiceConfig/SttConfig/TtsConfig/UserVoiceConfig types in config/types.ts, parseVoiceNode/parseUserVoiceNode/resolveEnvValue in channels-parser.ts. 18 tests pass.
+
+* Initial Message
+
+Telegram bridge: How would you enable voice? Spell already has STT btw. But be broad. Look up online. Tell me what makes sense. Thanks!!!!!!
+
+* Scope
+Add =voice { }= block support to =channels.kdl= parser, define typed config interfaces, update KDL schema docs. Support =env()= resolution for API key fields.
+
+* KDL Syntax
+
+#+begin_src kdl
+telegram {
+  voice {
+    // STT -- incoming voice/audio transcription
+    stt-provider "deepgram"           // "deepgram" | "openai"
+    stt-api-key "env(DEEPGRAM_API_KEY)"
+    stt-model "nova-2"                // provider-specific, optional
+    stt-language "en"                 // BCP-47, optional (default "en")
+
+    // TTS -- outgoing voice reply synthesis
+    tts-provider "elevenlabs"         // "elevenlabs" | "deepgram"
+    tts-api-key "env(ELEVENLABS_API_KEY)"
+    tts-model "eleven_multilingual_v2" // provider-specific, optional
+    tts-voice "rachel"                // voice ID/name, optional
+
+    // Reply behavior
+    reply-mode "mirror"               // "mirror" | "always" | "never"
+  }
+
+  user 123456789 {
+    voice {
+      reply-mode "always"             // per-user override
+      tts-voice "adam"                // per-user voice preference
+    }
+  }
+}
+#+end_src
+
+** Semantics
+- =stt-provider= and =stt-api-key= are required together; if both missing, voice messages get a friendly "Voice not configured" reply
+- =tts-provider= and =tts-api-key= are required together; if both missing, reply-mode is forced to ="never"=
+- =reply-mode= defaults to ="mirror"= (reply with voice only when user sent voice)
+- Per-user =voice {}= overrides merge on top of global: any field set in user overrides the global value
+- =env()= support: parse string fields, check for =env(NAME)= or =env(NAME, default=...)= pattern, resolve from =process.env=
+
+* Files
+- =packages/spell-server/src/config/types.ts= -- add =VoiceConfig=, =SttConfig=, =TtsConfig=, =UserVoiceConfig= interfaces; add =voice?: VoiceConfig= to =TelegramChannelConfig=; add =voice?: UserVoiceConfig= to =TelegramUserConfig=
+- =packages/spell-server/src/config/channels-parser.ts= -- add =parseVoiceNode()= and =parseUserVoiceNode()= functions; add =env()= resolver utility
+- =packages/spell-server/docs/kdl-schema-reference.md= -- document the =voice {}= block under =channels.kdl= section
+
+* Type Definitions
+
+#+begin_src typescript
+type SttProvider = "deepgram" | "openai";
+type TtsProvider = "elevenlabs" | "deepgram";
+type VoiceReplyMode = "mirror" | "always" | "never";
+
+interface SttConfig {
+  provider: SttProvider;
+  apiKey: string;
+  model?: string;
+  language: string; // default "en"
+}
+
+interface TtsConfig {
+  provider: TtsProvider;
+  apiKey: string;
+  model?: string;
+  voice?: string;
+}
+
+interface VoiceConfig {
+  stt?: SttConfig;
+  tts?: TtsConfig;
+  replyMode: VoiceReplyMode; // default "mirror"
+}
+
+interface UserVoiceConfig {
+  replyMode?: VoiceReplyMode;
+  ttsVoice?: string;
+}
+#+end_src
+
+* Sub-outline
+1. Define type interfaces in =types.ts=
+2. Write =parseVoiceNode()= -- iterate children of =voice {}= node, validate and extract stt/tts/reply-mode fields
+3. Write =resolveEnvValue(raw: string): string= utility -- matches =env(NAME)= / =env(NAME, default=X)= patterns, resolves from process.env, throws on missing required
+4. Wire =parseVoiceNode= into =parseChannelsConfig= and =parseUserNode=
+5. Update =kdl-schema-reference.md=
+
+* Acceptance
+- Parser correctly extracts voice config from KDL with all fields
+- Parser resolves =env()= references in api-key fields
+- Parser throws descriptive errors for invalid voice config (missing api-key when provider set, unknown provider, etc.)
+- Parser handles absent =voice {}= block (returns undefined)
+- Per-user voice overrides parse correctly
+- Types compile without errors: =bun check:ts=
+- Unit tests: valid full config, valid minimal config, missing provider+key pair error, env() resolution, per-user overrides

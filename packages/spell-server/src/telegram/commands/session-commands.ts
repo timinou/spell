@@ -45,6 +45,11 @@ export async function handleClearCommand(ctx: AuthContext, cmdCtx: CommandContex
 
 	try {
 		client.send({ type: "new_session" });
+		const session = cmdCtx.processManager.getSession(chatId);
+		if (session) {
+			session.voiceReplyOverride = undefined;
+			await cmdCtx.processManager.saveState();
+		}
 		await ctx.reply("Started a new session.");
 	} catch (error) {
 		await ctx.reply(`Failed to clear session: ${String(error)}`);

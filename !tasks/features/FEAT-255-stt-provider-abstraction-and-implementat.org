@@ -1,0 +1,90 @@
+#+TITLE: STT provider abstraction and implementations
+#+STATE: DONE
+#+SESSION_ID: 14ac0d19f5a01fa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-59-02-742Z_14ac0d19f5a01fa2.jsonl]]
+#+CUSTOM_ID: FEAT-255-stt-provider-abstraction-and-implementat
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: voice
+#+DEPENDS: FEAT-254-voice-kdl-config-schema-parser-and-types
+
+NOTE [2026-04-03]: Implemented SttProvider interface, createSttProvider factory, DeepgramSttProvider and OpenAiSttProvider. 8 tests pass.
+
+* Initial Message
+
+Telegram bridge: How would you enable voice? Spell already has STT btw. But be broad. Look up online. Tell me what makes sense. Thanks!!!!!!
+
+* Scope
+Create an STT provider interface and two implementations: Deepgram (HTTP batch) and OpenAI Whisper API. These accept raw audio bytes and return transcription text.
+
+* Design
+
+** Interface
+
+#+begin_src typescript
+interface SttResult {
+  text: string;
+  confidence?: number;
+  language?: string;
+}
+
+interface SttProvider {
+  /** Transcribe audio bytes to text */
+  transcribe(audio: Buffer, options: {
+    mimeType: string;      // e.g. "audio/ogg", "audio/mpeg"
+    language?: string;     // BCP-47 hint
+  }): Promise<SttResult>;
+}
+#+end_src
+
+** Factory
+
+#+begin_src typescript
+function createSttProvider(config: SttConfig): SttProvider;
+#+end_src
+
+Dispatches on =config.provider= to instantiate the right implementation.
+
+** Deepgram Implementation
+- HTTP POST to =https://api.deepgram.com/v1/listen=
+- Headers: =Authorization: Token <api-key>=, =Content-Type: <mimeType>=
+- Query params: =model= (default =nova-2=), =language=, =smart_format=true=, =punctuate=true=
+- Body: raw audio bytes
+- Response: JSON with =results.channels[0].alternatives[0].transcript=
+- Deepgram natively handles OGG Opus, MP3, WAV, M4A -- no format conversion needed
+
+** OpenAI Whisper Implementation
+- HTTP POST multipart to =https://api.openai.com/v1/audio/transcriptions=
+- Headers: =Authorization: Bearer <api-key>=
+- Form fields: =file= (audio blob), =model= (default =whisper-1=), =language=, =response_format=json=
+- Response: JSON with =text= field
+- Whisper accepts OGG, MP3, WAV, M4A, WebM, FLAC -- no format conversion needed
+
+** Error Handling
+- Network/HTTP errors: wrap in descriptive error with provider name and HTTP status
+- Empty transcription: return ={text: ""}= (caller decides how to handle)
+- Rate limiting: log warning, propagate error to caller
+- Invalid audio: propagate provider error message
+
+* Files
+- =packages/spell-server/src/telegram/voice/stt.ts= -- =SttProvider= interface, =SttResult= type, =createSttProvider()= factory
+- =packages/spell-server/src/telegram/voice/providers/deepgram-stt.ts= -- Deepgram batch HTTP implementation
+- =packages/spell-server/src/telegram/voice/providers/openai-stt.ts= -- OpenAI Whisper API implementation
+- =packages/spell-server/src/telegram/voice/index.ts= -- barrel re-exports
+
+* Sub-outline
+1. Define =SttProvider= interface and =SttResult= type
+2. Write tests for Deepgram STT (mock HTTP, verify request shape, parse response)
+3. Implement Deepgram STT provider
+4. Write tests for OpenAI STT (mock HTTP, verify multipart form, parse response)
+5. Implement OpenAI Whisper STT provider
+6. Write =createSttProvider()= factory with exhaustive provider switch
+7. Test factory dispatches correctly and throws on unknown provider
+
+* Acceptance
+- Both providers transcribe a mock audio buffer and return =SttResult=
+- Request format matches each provider's API spec (verified by mock assertions)
+- HTTP errors produce descriptive wrapped errors
+- =createSttProvider()= returns correct implementation per provider string
+- Unknown provider throws at factory call time
+- =bun check:ts= passes
