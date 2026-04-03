@@ -1,0 +1,49 @@
+#+TITLE: Duplicate CUSTOM_ID and metadata noise in renderItemOrg output
+#+STATE: DONE
+#+SESSION_ID: 14ac498659bebe1a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-23-02-374Z_14ac498659bebe1a.jsonl]]
+#+CUSTOM_ID: BUG-143-duplicate-custom-id-and-metadata-noise-i
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Initial Message
+
+the org get and search tools provide wrong ITEMs and not well ordered. PLease try the tool and tell me the querying improvements you'd make
+
+* Problem
+=renderItemOrg= in =packages/coding-agent/src/tools/org-format.ts= always emits
+=:CUSTOM_ID: ${item.id}= as the first property, then iterates =item.properties=
+which ALSO contains CUSTOM_ID (the TS reader puts it there from frontmatter).
+The filter only excludes "TAGS", so CUSTOM_ID appears twice in every rendered item.
+
+Additionally, SESSION_ID and TRANSCRIPT_PATH from frontmatter appear as properties
+in the rendered output, wasting LLM context tokens on internal metadata.
+
+** Root Cause
+Line 41: =.filter(([k]) => k !== "TAGS")= should also exclude CUSTOM_ID and
+metadata keys (SESSION_ID, TRANSCRIPT_PATH).
+
+* Implementation
+
+*** ITEM Write test proving CUSTOM_ID deduplication
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+In =packages/coding-agent/test/org-output.test.ts=, add a test that creates an item
+with =properties: { CUSTOM_ID: "PROJ-042-auth", EFFORT: "2h" }= and asserts that
+the rendered output contains exactly ONE =:CUSTOM_ID:= line, not two.
+Also add a test with SESSION_ID/TRANSCRIPT_PATH in properties and assert they are
+excluded from the rendered output.
+
+*** ITEM Fix renderItemOrg property filtering
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+In =packages/coding-agent/src/tools/org-format.ts= line 41, change the filter to:
+=.filter(([k]) => k !== "TAGS" && k !== "CUSTOM_ID" && k !== "SESSION_ID" && k !== "TRANSCRIPT_PATH")=
+
+* Verification
+- =bun test packages/coding-agent/test/org-output.test.ts= passes
+- =bun check:ts= passes for packages/coding-agent
+- Manual: =org get PLAN-087-telegram-bridge-audit-cycle-2-hardening= shows exactly one CUSTOM_ID line and no SESSION_ID/TRANSCRIPT_PATH

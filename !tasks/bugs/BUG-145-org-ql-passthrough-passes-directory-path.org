@@ -1,0 +1,59 @@
+#+TITLE: org-ql passthrough passes directory paths instead of file paths
+#+STATE: DONE
+#+SESSION_ID: 14ac498659bebe1a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-23-02-374Z_14ac498659bebe1a.jsonl]]
+#+CUSTOM_ID: BUG-145-org-ql-passthrough-passes-directory-path
+#+EFFORT: 20m
+#+PRIORITY: #B
+#+LAYER: backend
+
+* Initial Message
+
+the org get and search tools provide wrong ITEMs and not well ordered. PLease try the tool and tell me the querying improvements you'd make
+
+* Problem
+In =packages/org/src/tool.ts= =cmdQuery=, the org-ql passthrough paths (lines 221-226
+and 242) pass =cat.absPath= (directory paths) as the =files= parameter to the
+=org-ql-query= MCP tool. The comment on line 222-223 says "we pass the directory
+path and let the elisp side enumerate files" but =org-ql-query.el= does NOT
+resolve directories — it passes them directly to =org-ql-select= which expects
+file paths or buffers.
+
+=org-ql-select= calls =find-file-noselect= on each string, and a directory path
+either fails silently (warning) or opens a dired buffer that matches nothing.
+
+The wave/graph commands correctly use =listOrgFilesInDirectory= to enumerate
+.org files before passing to MCP tools.
+
+* Implementation
+
+*** ITEM Fix org-ql file resolution in cmdQuery
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+In =packages/org/src/tool.ts=, replace both org-ql file resolution blocks.
+
+For the =ql= passthrough (line 221-225):
+#+begin_src typescript
+const files = (await Promise.all(targetCats.map(cat => listOrgFilesInDirectory(cat.absPath)))).flat();
+#+end_src
+
+For the keyword query Emacs path (line 242):
+#+begin_src typescript
+const files = (await Promise.all(targetCats.map(cat => listOrgFilesInDirectory(cat.absPath)))).flat();
+#+end_src
+
+Also pass the =sort= parameter from the tool args through to the org-ql-query call
+(this connects with the sort feature item).
+
+*** ITEM Add sort forwarding to org-ql query calls
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+In both org-ql callTool sites, pass =sort: filter.sort= (or the tool-level sort param)
+to the =org-ql-query= MCP tool so that Emacs-side sorting is available.
+
+* Verification
+- =bun check:ts= passes for packages/org
+- Manual: =org query ql:\"(todo \\\"DOING\\\")\" category:plans= returns non-empty results
+- Manual: =org query ql:\"(todo \\\"DOING\\\")\" category:plans sort:priority= returns sorted results

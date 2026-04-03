@@ -1,0 +1,95 @@
+#+TITLE: Sub-heading items pollute query and dashboard results
+#+STATE: DONE
+#+SESSION_ID: 14ac498659bebe1a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-23-02-374Z_14ac498659bebe1a.jsonl]]
+#+CUSTOM_ID: BUG-144-sub-heading-items-pollute-query-and-dash
+#+EFFORT: 1h30m
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+the org get and search tools provide wrong ITEMs and not well ordered. PLease try the tool and tell me the querying improvements you'd make
+
+* Problem
+=readCategory= in =packages/org/src/org-reader.ts= returns ALL parsed items from
+every .org file: file-level (level 0) AND heading-level children (level > 0).
+=cmdQuery= and =cmdDashboard= in =packages/org/src/tool.ts= pass these through
+without level filtering. Result:
+
+- 50.3% of query results are sub-heading noise (846 of 1681 items)
+- When querying =todo:ITEM=, 91.5% of results are sub-headings (842 of 920)
+- Dashboard DOING list includes child headings with empty IDs
+- Many sub-headings have empty CUSTOM_IDs (=id: \"\"=), providing no useful reference
+
+The Emacs-side =org-tasks--collect-heading-items-from-file= correctly filters
+items to only those WITH a CUSTOM_ID (line 186: =when custom-id=), but the TS
+reader does not.
+
+* Implementation
+
+*** ITEM Add level filter to OrgQueryFilter type
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+In =packages/org/src/types.ts=, add to =OrgQueryFilter=:
+#+begin_src typescript
+/** Filter by heading level. 0 = file-level items only. */
+level?: number;
+#+end_src
+
+*** ITEM Write tests for level filtering in applyFilter
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+In =packages/org/test/org-reader.test.ts=, add tests:
+1. =applyFilter= with =level: 0= returns only level-0 items
+2. =applyFilter= with no level filter returns all items (backward compat)
+3. Items with empty id and level > 0 are excluded when level=0
+
+*** ITEM Implement level filter in applyFilter
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+In =packages/org/src/org-reader.ts=, add level check to =applyFilter=:
+#+begin_src typescript
+if (filter.level !== undefined) {
+  if (item.level !== filter.level) return false;
+}
+#+end_src
+
+*** ITEM Default cmdQuery to file-level items only
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+In =packages/org/src/tool.ts= =cmdQuery=, before calling =applyFilter=, inject
+=level: 0= into the filter when no explicit level is set. This makes queries
+return only file-level items by default. The LLM can pass =level: 1= or omit
+level filtering via =ql= passthrough for sub-heading access.
+
+Add =level= to the tool schema in both inner (=tool.ts= line 914+) and outer
+(=packages/coding-agent/src/tools/org.ts= line 36+).
+
+*** ITEM Fix cmdDashboard to count only file-level items
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+In =packages/org/src/tool.ts= =cmdDashboard=, after =readCategory=, filter
+items to =level === 0= before counting states and building inProgress/blocked lists.
+
+*** ITEM Write test for query level=0 default behavior
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+In =packages/org/test/tool-commands.test.ts=, add a test that:
+1. Creates a plan file with file-level item + sub-heading ITEM children
+2. Calls =command: \"query\"= without level filter
+3. Asserts only the file-level item is returned (not sub-headings)
+4. Calls =command: \"query\", level: 1= and asserts sub-headings are returned
+
+* Verification
+- =bun test packages/org/test/org-reader.test.ts= passes
+- =bun test packages/org/test/tool-commands.test.ts= passes
+- =bun check:ts= passes for packages/org and packages/coding-agent
+- Manual: =org query category:plans= returns ~200 items (not ~600)
+- Manual: =org dashboard= DOING list shows ~75 plans (not sub-headings)

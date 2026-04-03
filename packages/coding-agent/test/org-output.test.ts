@@ -53,6 +53,28 @@ describe("renderItemOrg", () => {
 		expect(out).toContain(":PRIORITY: #A");
 	});
 
+	test("filters duplicate and internal properties from drawer", () => {
+		const item = makeItem({
+			id: "PROJ-099-clean-drawer",
+			properties: {
+				CUSTOM_ID: "PROJ-099-clean-drawer",
+				SESSION_ID: "sess-123",
+				TRANSCRIPT_PATH: "/tmp/transcript.org",
+				EFFORT: "2h",
+				PRIORITY: "#A",
+				TAGS: "backend:auth",
+			},
+		});
+		const out = renderItemOrg(item, false, 0);
+
+		expect(out.match(/^:CUSTOM_ID:/gm)).toHaveLength(1);
+		expect(out).not.toContain(":SESSION_ID:");
+		expect(out).not.toContain(":TRANSCRIPT_PATH:");
+		expect(out).toContain(":EFFORT: 2h");
+		expect(out).toContain(":PRIORITY: #A");
+		expect(out).toMatch(/^\* ITEM Test item\s+:backend:auth:/m);
+	});
+
 	test("includes body when includeBody is true", () => {
 		const item = makeItem({ body: "This is the body." });
 		const out = renderItemOrg(item, true, 10_000);

@@ -1,0 +1,65 @@
+#+TITLE: Add limit and offset to org query
+#+STATE: DONE
+#+SESSION_ID: 14ac498659bebe1a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-23-02-374Z_14ac498659bebe1a.jsonl]]
+#+CUSTOM_ID: FEAT-282-add-limit-and-offset-to-org-query
+#+EFFORT: 30m
+#+PRIORITY: #C
+#+LAYER: backend
+#+DEPENDS: BUG-144-sub-heading-items-pollute-query-and-dash FEAT-280-sort-support-for-org-query-results
+
+* Initial Message
+
+the org get and search tools provide wrong ITEMs and not well ordered. PLease try the tool and tell me the querying improvements you'd make
+
+* Problem
+Queries can return 835+ items (after sub-heading fix) with no pagination.
+The budget-based formatter caps LLM output at 80KB, but the backend still parses
+all files. Adding limit/offset allows queries to short-circuit and enables
+paginated exploration.
+
+* Implementation
+
+*** ITEM Add limit and offset to OrgQueryFilter
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+In =packages/org/src/types.ts=, add to =OrgQueryFilter=:
+#+begin_src typescript
+/** Max items to return. */
+limit?: number;
+/** Skip first N items (applied after filter and sort). */
+offset?: number;
+#+end_src
+
+*** ITEM Apply limit/offset after filter and sort in cmdQuery
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+In =packages/org/src/tool.ts= =cmdQuery=, after filtering and sorting, apply:
+#+begin_src typescript
+const sliced = filtered.slice(filter.offset ?? 0, (filter.offset ?? 0) + (filter.limit ?? filtered.length));
+return { items: sliced, total: filtered.length };
+#+end_src
+Note: =total= still reports the full count so the caller knows there are more.
+
+*** ITEM Add limit/offset to tool schemas
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+Add =limit= and =offset= parameters to both inner (=tool.ts=) and outer
+(=packages/coding-agent/src/tools/org.ts=) schemas. Forward through execute dispatch.
+
+*** ITEM Write test for limit/offset
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+In =packages/org/test/org-reader.test.ts= or =tool-commands.test.ts=:
+1. Create 5 items, query with =limit: 2= → returns 2 items, total=5
+2. Query with =offset: 2, limit: 2= → returns items 3-4
+3. Query with =offset: 10= → returns empty, total=5
+
+* Verification
+- =bun test packages/org/= passes
+- =bun check:ts= passes for packages/org and packages/coding-agent
+- Manual: =org query category:plans limit:5= returns exactly 5 items

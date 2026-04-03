@@ -169,6 +169,14 @@ export interface OrgQueryFilter {
 	agent?: string;
 	/** Include item body in results. Default false. */
 	includeBody?: boolean;
+	/** Filter by heading level. 0 = file-level items only. Omit for all levels. */
+	level?: number;
+	/** Sort key(s). Default: priority > state > id. Space-separated for multi-key. */
+	sort?: string;
+	/** Maximum number of items to return. */
+	limit?: number;
+	/** Number of items to skip before returning results. */
+	offset?: number;
 }
 
 // =============================================================================
