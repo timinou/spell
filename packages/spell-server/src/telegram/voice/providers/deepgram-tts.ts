@@ -1,21 +1,11 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { TtsConfig } from "../../../config/types";
 import type { TtsProvider, TtsResult } from "../tts";
+import { truncateForTts } from "../tts-utils";
 
 const DEEPGRAM_TEXT_LIMIT = 2_000;
 const DEEPGRAM_DEFAULT_MODEL = "aura-asteria-en";
-
-function truncateText(text: string): string {
-	if (text.length <= DEEPGRAM_TEXT_LIMIT) {
-		return text;
-	}
-
-	logger.warn("Truncating Deepgram TTS input text to provider limit", {
-		originalLength: text.length,
-		truncatedLength: DEEPGRAM_TEXT_LIMIT,
-	});
-	return `${text.slice(0, DEEPGRAM_TEXT_LIMIT - 3)}...`;
-}
+const PROVIDER_TIMEOUT_MS = 30_000;
 
 export class DeepgramTtsProvider implements TtsProvider {
 	#config: TtsConfig;
@@ -24,9 +14,16 @@ export class DeepgramTtsProvider implements TtsProvider {
 		this.#config = config;
 	}
 
-	async synthesize(text: string): Promise<TtsResult> {
+	async synthesize(text: string, options?: { voice?: string }): Promise<TtsResult> {
 		if (text.length === 0) {
 			throw new Error("Deepgram TTS requires non-empty text");
+		}
+
+		if (options?.voice) {
+			logger.warn("Deepgram Aura uses model-level voices; per-request voice override is not supported", {
+				requestedVoice: options.voice,
+				model: this.#config.model ?? DEEPGRAM_DEFAULT_MODEL,
+			});
 		}
 
 		const url = new URL("https://api.deepgram.com/v1/speak");
@@ -40,7 +37,8 @@ export class DeepgramTtsProvider implements TtsProvider {
 				Authorization: `Token ${this.#config.apiKey}`,
 				"Content-Type": "application/json",
 			},
-			body: JSON.stringify({ text: truncateText(text) }),
+			body: JSON.stringify({ text: truncateForTts(text, DEEPGRAM_TEXT_LIMIT, "Deepgram") }),
+			signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
 		});
 
 		if (!response.ok) {

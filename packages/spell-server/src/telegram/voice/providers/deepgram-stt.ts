@@ -16,6 +16,8 @@ interface DeepgramResponse {
 	};
 }
 
+const PROVIDER_TIMEOUT_MS = 30_000;
+
 export class DeepgramSttProvider implements SttProvider {
 	#config: SttConfig;
 
@@ -37,6 +39,7 @@ export class DeepgramSttProvider implements SttProvider {
 				"Content-Type": options.mimeType,
 			},
 			body: audio,
+			signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
 		});
 
 		if (!response.ok) {

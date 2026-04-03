@@ -34,7 +34,11 @@ export interface ChatSession {
 	sessionPath?: string;
 	/** Path to the spell-server-owned Telegram event transcript */
 	transcriptPath?: string;
-	/** Per-session voice reply mode override, set by /voice command */
+	/**
+	 * Per-session voice reply mode override, set by /voice command.
+	 * Intentionally not persisted across server restarts — session overrides are
+	 * transient. On restart, voice reply mode reverts to the config default.
+	 */
 	voiceReplyOverride?: VoiceReplyMode;
 	/** When the session was created */
 	createdAt: number;
