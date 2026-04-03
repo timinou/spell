@@ -1,0 +1,101 @@
+#+TITLE: Spell Manifest Foundation For Config Native Workflows
+#+STATE: DONE
+#+SESSION_ID: 14ab6894eaa2d281
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-00-14-890Z_14ab6894eaa2d281.jsonl]]
+#+CUSTOM_ID: PROJ-020-spell-manifest-foundation-for-config-nat
+#+EFFORT: 18h
+#+LAYER: backend
+#+PRIORITY: #A
+
+NOTE [2026-04-03]: Completed under PLAN-101. Manifest foundation landed with import/override/env/action/state support and focused manifest verification passed.
+
+* Scope
+** In scope
+- Extend `packages/spell-server/src/manifest/types.ts`, `packages/spell-server/src/manifest/parser.ts`, `packages/spell-server/src/manifest/validator.ts`, `packages/spell-server/src/manifest/serializer.ts`, and `packages/spell-server/src/config/loader.ts` to support:
+  - multi-file KDL import alias syntax with namespace-qualified references
+  - explicit override blocks with whole-symbol replace and schema-declared field-level merge
+  - `env(...)` resolution at config load/reload time
+  - typed `action` blocks
+  - named state declarations and setup/goal inheritance
+  - a first-party built-in action registry abstraction
+- Add supporting files such as `packages/spell-server/src/manifest/import-resolver.ts`, `packages/spell-server/src/actions/types.ts`, `packages/spell-server/src/actions/registry.ts`, and `packages/spell-server/src/actions/index.ts` if needed.
+- Update `packages/spell-server/docs/kdl-schema-reference.md` and manifest fixtures under `packages/spell-server/test/manifest/fixtures/`.
+** Out of scope
+- Approval lifecycle, checkpoints, downstream jobs, Telegram/QML/tool surfaces, and growth-specific discovery/feed/export behavior.
+** Boundary rationale
+- This item ends at config loading and typed runtime contracts so later items can build on a stable manifest and registry surface without reworking parsing semantics.
+
+* Tests
+- `packages/spell-server/test/manifest/imports.test.ts`
+  - Alias imports resolve relative paths from the importing file.
+  - Namespace-qualified references like `growth.discovery` bind to the imported alias only.
+  - Cyclic imports fail with an explicit chain.
+  - Duplicate symbol collisions fail unless an explicit override is present.
+- `packages/spell-server/test/manifest/merge-strategies.test.ts`
+  - Whole-symbol replace and schema-declared field-level merge both work.
+  - Collection merge behavior is driven by target-type schema metadata, not importer heuristics.
+  - Non-mergeable fields reject attempted field merges.
+- `packages/spell-server/test/manifest/env-resolution.test.ts`
+  - Required `env(...)` values fail at load/reload time.
+  - Optional/defaulted values resolve without silent empty-string coercion.
+  - String/number/bool coercion is validated at the config boundary.
+- `packages/spell-server/test/manifest/action-registry.test.ts`
+  - Unknown action ids fail validation.
+  - Typed action params validate against the registered schema.
+  - Built-in registry wiring remains first-party only in v1.
+- `packages/spell-server/test/manifest/named-states.test.ts`
+  - Setup-level named states are inherited.
+  - Goal-level state overrides/additions resolve deterministically.
+  - Invalid backend references fail fast.
+
+* Implementation
+** Define manifest and registry types
+:PROPERTIES:
+:CUSTOM_ID: PROJ-020-spell-manifest-foundation-for-config-nat::define-types
+:END:
+- Files: `packages/spell-server/src/manifest/types.ts`, `packages/spell-server/src/actions/types.ts`, `packages/spell-server/src/actions/registry.ts`
+- Define import alias nodes, override metadata, merge strategy metadata, typed action descriptors, named-state declarations, and first-party action registration contracts.
+
+** Write manifest contract tests (TDD: before implementation)
+:PROPERTIES:
+:CUSTOM_ID: PROJ-020-spell-manifest-foundation-for-config-nat::manifest-tests
+:DEPENDS: PROJ-020-spell-manifest-foundation-for-config-nat::define-types
+:END:
+- Files: `packages/spell-server/test/manifest/imports.test.ts`, `packages/spell-server/test/manifest/merge-strategies.test.ts`, `packages/spell-server/test/manifest/env-resolution.test.ts`, `packages/spell-server/test/manifest/action-registry.test.ts`, `packages/spell-server/test/manifest/named-states.test.ts`
+- Encode the scenarios from the Tests section as initially failing tests.
+
+** Implement import, override, env, and named-state resolution
+:PROPERTIES:
+:CUSTOM_ID: PROJ-020-spell-manifest-foundation-for-config-nat::implement-loader
+:DEPENDS: PROJ-020-spell-manifest-foundation-for-config-nat::manifest-tests
+:END:
+- Files: `packages/spell-server/src/manifest/parser.ts`, `packages/spell-server/src/manifest/validator.ts`, `packages/spell-server/src/manifest/import-resolver.ts`, `packages/spell-server/src/config/loader.ts`
+- Implement relative import resolution, namespace binding, explicit override handling, and load-time `env(...)` resolution.
+
+** Implement typed action registry and serializer support
+:PROPERTIES:
+:CUSTOM_ID: PROJ-020-spell-manifest-foundation-for-config-nat::implement-registry
+:DEPENDS: PROJ-020-spell-manifest-foundation-for-config-nat::manifest-tests
+:END:
+- Files: `packages/spell-server/src/actions/index.ts`, `packages/spell-server/src/actions/registry.ts`, `packages/spell-server/src/manifest/serializer.ts`
+- Wire the first-party action registry abstraction into manifest loading and preserve round-trippable serialization for new nodes.
+
+** Document the manifest contract
+:PROPERTIES:
+:CUSTOM_ID: PROJ-020-spell-manifest-foundation-for-config-nat::document-schema
+:DEPENDS: PROJ-020-spell-manifest-foundation-for-config-nat::implement-loader PROJ-020-spell-manifest-foundation-for-config-nat::implement-registry
+:END:
+- Files: `packages/spell-server/docs/kdl-schema-reference.md`, `packages/spell-server/test/manifest/fixtures/full.kdl`
+- Document import alias syntax, override rules, `env(...)`, typed actions, and named states with fixtures that match the final parser.
+
+* Edge Cases
+- Imported aliases must not shadow local symbols silently.
+- Merge strategy mismatches must point at the exact KDL node and target field.
+- Config reload must re-evaluate `env(...)` without requiring process restart, while first-party package registration still remains restart-bound.
+- `channels.kdl` and `server.kdl` parsing must remain backward-compatible where new features are not used.
+
+* Acceptance Criteria
+- `packages/spell-server/src/manifest/types.ts` no longer models goals as prompt-only objects.
+- A multi-file manifest fixture using alias imports, `env(...)`, typed actions, and named states loads successfully through `packages/spell-server/src/config/loader.ts`.
+- Invalid import collisions, cycles, missing env vars, and unknown action ids fail with targeted diagnostics.
+- Verification: `bun test packages/spell-server/test/manifest/imports.test.ts packages/spell-server/test/manifest/merge-strategies.test.ts packages/spell-server/test/manifest/env-resolution.test.ts packages/spell-server/test/manifest/action-registry.test.ts packages/spell-server/test/manifest/named-states.test.ts` passes.

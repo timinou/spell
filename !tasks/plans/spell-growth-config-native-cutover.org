@@ -1,0 +1,115 @@
+#+TITLE: Spell Growth Config Native Cutover
+#+STATE: DONE
+#+SESSION_ID: 14ab6894eaa2d281
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-00-14-890Z_14ab6894eaa2d281.jsonl]]
+#+CUSTOM_ID: PLAN-101-spell-growth-config-native-cutover
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-03]: Execution complete. Focused verification passed, artifacts captured, legacy growth orchestration deleted, and linked child items closed.
+
+
+* Initial Message
+
+read .local/realisations.md .local/cutover.org and ask me many many questions until everything is clear
+
+* Context
+- Problem: `packages/spell-server` is still a prompt-centric daemon (`packages/spell-server/src/manifest/types.ts`, `packages/spell-server/docs/architecture.md`), `packages/spell-server/src/http/routes/operator-actions.ts` hardcodes growth approval actions, `packages/qml/src/qml-bridge.ts` is only a bridge/runtime, and `../growth/.spell/autonomy.kdl` still shells out to `bun run src/cli.ts` for discovery, feed, export, and approval workflows.
+- Goal: replace the accepted growth workflow paths with KDL-native configuration, a generic Spell workflow engine, first-party growth actions in `packages/spell-growth`, canonical HTTP/sync contracts, and reusable operator surfaces.
+- Recommended approach: build outside-in in five stages — manifest foundation, generic workflow runtime, first-party growth action pack, operator surfaces, then final growth repo cutover and legacy deletion.
+- Key decisions frozen:
+  - canonical workflow constructs live in a dedicated workflow KDL family imported by `../growth/.spell/autonomy.kdl`; `../growth/.spell/channels.kdl` stays transport-focused
+  - approvals and checkpoints are separate item types with a shared base contract
+  - KDL remains canonical; DB stores runtime materializations/caches only
+  - imports use alias syntax with namespace-qualified references; collisions hard-fail unless an explicit override is used
+  - writeback auto-merge is limited to schema-aware single-record merges and non-overlapping record updates in designated registry files
+  - server uses a server-global downstream worker pool with per-job-kind limits and an optional global cap
+  - HTTP is the canonical integration boundary for tools/surfaces, with optional helpers behind the same contracts
+  - PROJ-021 explicitly owns canonical goal list/inspect/trigger/run-history APIs so surfaces do not fork the contract
+  - PROJ-022 explicitly owns first-party `growth.*` action registration into the live server/runtime path
+  - Telegram is quick-action only; rich editing lives in QML/tools
+  - external action packages are deferred to [[id:FUP-032-sandboxed-external-action-package-suppor]]
+- Child items:
+  - [[id:PROJ-020-spell-manifest-foundation-for-config-nat]] manifest foundation
+  - [[id:PROJ-021-spell-workflow-engine-for-generic-approv]] generic workflow engine
+  - [[id:PROJ-022-spell-growth-action-pack-and-canonical-r]] growth action pack and KDL writeback
+  - [[id:PROJ-023-spell-operator-surfaces-and-shared-sync]] operator surfaces and shared sync state
+  - [[id:PROJ-024-growth-repo-config-cutover-and-legacy-de]] growth repo cutover and legacy deletion
+* Verification
+- Focused package-local verification commands:
+  - `bun test packages/spell-server/test/manifest/imports.test.ts packages/spell-server/test/manifest/merge-strategies.test.ts packages/spell-server/test/manifest/env-resolution.test.ts packages/spell-server/test/manifest/action-registry.test.ts packages/spell-server/test/manifest/named-states.test.ts`
+  - `bun test packages/spell-server/test/workflow/approval-lifecycle.test.ts packages/spell-server/test/workflow/claims.test.ts packages/spell-server/test/workflow/idempotency.test.ts packages/spell-server/test/workflow/checkpoints.test.ts packages/spell-server/test/workflow/downstream-queue.test.ts packages/spell-server/test/workflow/audit-trail.test.ts packages/spell-server/test/workflow/notification-routing.test.ts packages/spell-server/test/workflow/sync-snapshot-emitter.test.ts packages/spell-server/test/http/approvals-api.test.ts packages/spell-server/test/http/downstream-jobs-api.test.ts packages/spell-server/test/http/goals-api.test.ts`
+  - `bun test packages/spell-growth/test/source-registry.test.ts packages/spell-growth/test/persona-registry.test.ts packages/spell-growth/test/discovery-planner.test.ts packages/spell-growth/test/provider-contracts/exa.test.ts packages/spell-growth/test/canonicalization.test.ts packages/spell-growth/test/scoring.test.ts packages/spell-growth/test/review-item-creation.test.ts packages/spell-growth/test/feed-action.test.ts packages/spell-growth/test/publication-export.test.ts packages/spell-growth/test/curation-writeback.test.ts packages/spell-growth/test/action-registration.test.ts`
+  - `bun test packages/qml/test/approval-surface.test.ts packages/qml/test/goals-panel.test.ts packages/qml/test/shared-sync-state.test.ts packages/spell-server/test/telegram/approval-inbox.test.ts packages/spell-server/test/telegram/approval-callbacks.test.ts packages/spell-server/test/telegram/notifications.test.ts packages/coding-agent/test/tools/goals-tool.test.ts packages/coding-agent/test/tools/approvals-tool.test.ts`
+  - `bun test ../growth/test/cutover/manifest-load.test.ts ../growth/test/cutover/discovery-to-feed.test.ts ../growth/test/cutover/checkpoint-to-export.test.ts ../growth/test/cutover/shared-surface-state.test.ts ../growth/test/cutover/no-legacy-bridge.test.ts`
+- Manual proof/artifacts required to declare the cutover done:
+  - QML approval/checkpoint surface screenshot
+  - QML goals panel screenshot
+  - Telegram transcript or screenshots covering quick-action approval flow
+  - sync-folder tree snapshot proving shared canonical state
+  - exported artifact proof for the checkpoint-resume-to-export flow
+  - negative proof that accepted flows no longer depend on `../growth/.spell/autonomy.kdl` shellouts or the local `../growth/src/review/*`, `../growth/src/goals/*`, `../growth/src/feed/*`, `../growth/src/publication/*`, and `../growth/src/state/repositories/*` orchestration paths
+- Acceptance demo must cover all three scenarios:
+  - discovery -> review item -> Telegram approval -> feed send
+  - discovery -> checkpoint approval -> resume same run -> export artifact
+  - Telegram and QML operating on the same canonical item from shared state
+* Execution Manifest
+** foundation                                          :wave:
+- [[id:PROJ-020-spell-manifest-foundation-for-config-nat]] Manifest foundation: import aliases, overrides, `env(...)`, typed actions, named states, and first-party registry contracts (18h, no blockers)
+** workflow-core                                       :wave:
+- [[id:PROJ-021-spell-workflow-engine-for-generic-approv]] Generic workflow engine: separate approval/checkpoint items, canonical goal APIs, claims, idempotency, checkpoints, downstream jobs, audit, and sync snapshots (depends PROJ-020)
+** growth-action-pack                                  :wave:
+- [[id:PROJ-022-spell-growth-action-pack-and-canonical-r]] First-party growth action pack: registries, discovery, scoring, feed/export actions, curation writeback, and live `growth.*` runtime registration (depends PROJ-020, PROJ-021)
+** operator-surfaces                                   :wave:
+- [[id:PROJ-023-spell-operator-surfaces-and-shared-sync]] QML, Telegram, and coding-agent surfaces on canonical HTTP/sync contracts (depends PROJ-021, with tool/runtime binding completed after PROJ-022 registration)
+** growth-cutover                                      :wave:
+- [[id:PROJ-024-growth-repo-config-cutover-and-legacy-de]] Growth repo migration: early black-box cutover specs, multi-file KDL tree, typed flow migration, and legacy deletion with no shims (depends PROJ-020, PROJ-021, PROJ-022, PROJ-023)
+** deferred follow-up
+- [[id:FUP-032-sandboxed-external-action-package-suppor]] External plugin support remains explicitly out of the v1 cutover path.
+
+
+** Completion [2026-04-03]
+*** Verification
+- `bun test packages/spell-server/test/manifest/imports.test.ts packages/spell-server/test/manifest/merge-strategies.test.ts packages/spell-server/test/manifest/env-resolution.test.ts packages/spell-server/test/manifest/action-registry.test.ts packages/spell-server/test/manifest/named-states.test.ts`
+  - Passed: 14 tests, 0 failures.
+- `bun test packages/spell-server/test/workflow/approval-lifecycle.test.ts packages/spell-server/test/workflow/claims.test.ts packages/spell-server/test/workflow/idempotency.test.ts packages/spell-server/test/workflow/checkpoints.test.ts packages/spell-server/test/workflow/downstream-queue.test.ts packages/spell-server/test/workflow/audit-trail.test.ts packages/spell-server/test/workflow/notification-routing.test.ts packages/spell-server/test/workflow/sync-snapshot-emitter.test.ts packages/spell-server/test/http/approvals-api.test.ts packages/spell-server/test/http/downstream-jobs-api.test.ts packages/spell-server/test/http/goals-api.test.ts`
+  - Passed: 14 tests, 0 failures.
+- `bun test packages/spell-growth/test/source-registry.test.ts packages/spell-growth/test/persona-registry.test.ts packages/spell-growth/test/discovery-planner.test.ts packages/spell-growth/test/provider-contracts/exa.test.ts packages/spell-growth/test/canonicalization.test.ts packages/spell-growth/test/scoring.test.ts packages/spell-growth/test/review-item-creation.test.ts packages/spell-growth/test/feed-action.test.ts packages/spell-growth/test/publication-export.test.ts packages/spell-growth/test/curation-writeback.test.ts packages/spell-growth/test/action-registration.test.ts`
+  - Passed: 11 tests, 0 failures.
+- `bun test packages/qml/test/approval-surface.test.ts packages/qml/test/goals-panel.test.ts packages/qml/test/shared-sync-state.test.ts packages/spell-server/test/telegram/approval-inbox.test.ts packages/spell-server/test/telegram/approval-callbacks.test.ts packages/spell-server/test/telegram/notifications.test.ts packages/coding-agent/test/tools/goals-tool.test.ts packages/coding-agent/test/tools/approvals-tool.test.ts`
+  - Passed: 8 tests, 0 failures.
+- `bun test ../growth/test/cutover/manifest-load.test.ts ../growth/test/cutover/discovery-to-feed.test.ts ../growth/test/cutover/checkpoint-to-export.test.ts ../growth/test/cutover/shared-surface-state.test.ts ../growth/test/cutover/no-legacy-bridge.test.ts`
+  - Passed: 5 tests, 0 failures.
+- `cd /home/user/code/ora/growth && bun run check`
+  - Passed: re-ran the same five cutover tests through the growth package script.
+- `cd /home/user/code/ora/spell/packages/spell-server && bun run check`
+  - Failed outside cutover scope due pre-existing unrelated type errors in `src/telegram/tool-progress.ts` and `../utils/src/logger.ts`.
+- Manual/artifact-backed verification completed for:
+  - discovery -> review item -> Telegram approval -> feed send
+  - discovery -> checkpoint approval -> resume same run -> export artifact
+  - Telegram and QML reading the same canonical sync snapshot state
+- Canonical config files now live under:
+  - `../growth/.spell/autonomy.kdl`
+  - `../growth/.spell/workflows/base-worker.kdl`
+  - `../growth/.spell/workflows/review-policy.kdl`
+  - `../growth/.spell/workflows/checkpoints.kdl`
+  - `../growth/.spell/workflows/notifications.kdl`
+  - `../growth/.spell/workflows/exports.kdl`
+  - `../growth/.spell/data/sources.kdl`
+  - `../growth/.spell/data/personas.kdl`
+  - `../growth/.spell/states/workflow-db.kdl`
+  - `../growth/.spell/states/audit-db.kdl`
+  - `../growth/.spell/states/artifact-store.kdl`
+  - `../growth/.spell/qml/panels.kdl`
+  - `../growth/.spell/qml/layouts.kdl`
+  - `../growth/.spell/qml/sync.kdl`
+*** Artifacts
+- QML approval/checkpoint surface: [[file:!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/qml-approval-surface.png]]
+- QML goals panel: [[file:!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/qml-goals-panel.png]]
+- Telegram quick-action transcript: [[file:!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/telegram-quick-action-transcript.txt]]
+- Shared sync-folder tree snapshot: [[file:!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/sync-state-tree.txt]]
+- Feed artifact proof: [[file:!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/feed-digest.json]]
+- Export artifact proof: [[file:!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/export-proof/publication-export.json]]
+- Exported draft artifact: [[file:!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/export-proof/automation-for-finance-teams.md]]
+- Artifact index: [[file:!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/artifact-summary.json]]
+*** Deviations
+- Extra package-wide `packages/spell-server` type-check remains red on unrelated pre-existing issues in `packages/spell-server/src/telegram/tool-progress.ts` and `packages/utils/src/logger.ts`. Focused cutover verification passed and no plan work was deferred.

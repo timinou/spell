@@ -12,6 +12,7 @@ import { OrgHookExecutor } from "./hooks/org";
 import { TelegramHookExecutor } from "./hooks/telegram";
 import type { HookExecutor } from "./hooks/types";
 import { WebhookHookExecutor } from "./hooks/webhook";
+import { WorkflowEngine } from "./workflow";
 import type { OperatorActionHandler } from "./http/routes/operator-actions";
 import { startHttpServer } from "./http/server";
 import { GoalScheduler } from "./scheduler/goal-scheduler";
@@ -49,7 +50,9 @@ async function loadProjectOperatorActionHandler(cwd: string): Promise<OperatorAc
 
 	const module = (await import(pathToFileURL(modulePath).href)) as OperatorActionHandlerModule;
 	if (typeof module.createOperatorActionHandler !== "function") {
-		throw new Error(`Operator action handler module '${modulePath}' must export createOperatorActionHandler(options)`);
+		throw new Error(
+			`Operator action handler module '${modulePath}' must export createOperatorActionHandler(options)`,
+		);
 	}
 
 	const handler = await module.createOperatorActionHandler({ cwd });
@@ -122,6 +125,7 @@ export async function startSpellServer(
 		});
 	}
 
+	const workflowEngine = new WorkflowEngine();
 	const operatorActionHandler = dependencies.operatorActionHandler ?? (await loadProjectOperatorActionHandler(cwd));
 	const startHttpServerImpl = dependencies.startHttpServer ?? startHttpServer;
 	const httpServer = startHttpServerImpl({
@@ -136,9 +140,9 @@ export async function startSpellServer(
 		},
 		cwd,
 		operatorActionHandler,
+		workflowEngine,
 	});
 	const createTelegramBotService =
-
 		dependencies.createTelegramBotService ?? (options => new TelegramBotService(options));
 	let telegramBot: Pick<TelegramBotService, "start" | "stop"> | null = null;
 	let telegramBotActive = false;

@@ -1,0 +1,16 @@
+{
+  "id": "audit-4",
+  "at": "2026-04-03T01:19:11.937Z",
+  "kind": "action-applied",
+  "itemId": "approval-1",
+  "actor": {
+    "actorId": "telegram-user",
+    "source": "telegram"
+  },
+  "requestId": "telegram-approve-1",
+  "message": "Applied approve-feed -> feed-approved",
+  "data": {
+    "actionId": "approve-feed",
+    "toState": "feed-approved"
+  }
+}

@@ -1,285 +1,730 @@
+import * as path from "node:path";
 import type { Document, Node } from "@bgotink/kdl";
 import { parse } from "@bgotink/kdl";
+import type { ActionRegistry } from "../actions/registry";
+import type { ActionParameterType, ActionScalar, ActionValue, ManifestAction } from "../actions/types";
 import {
 	type AutonomyManifest,
+	type CronSchedule,
 	type FilterConfig,
+	type GoalOverride,
 	type HookTarget,
 	isValidManifest,
 	type ManifestGoal,
+	type ManifestGoalPatch,
 	type ManifestHookConfig,
+	type ManifestImport,
+	type ManifestOverride,
+	type ManifestOverrideStrategy,
 	type ManifestSetup,
+	type ManifestSetupPatch,
+	type NamedStateStore,
+	type OrgHook,
+	type ParsedManifestModule,
 	type RetryConfig,
 	type SandboxConfig,
+	type SetupOverride,
 	type StateConfig,
 	type StateSchemaColumn,
+	type TelegramHook,
+	type WebhookHook,
+	type WebhookSchedule,
 } from "./types";
 import { validateManifest } from "./validator";
 
-function expectStringArgument(node: Node, path: string): string {
-	const value = node.getArgument(0);
-	if (typeof value !== "string") {
-		throw new Error(`${path} must have a string argument`);
-	}
-	return value;
+export interface ParseManifestOptions {
+	filePath?: string;
+	env?: Record<string, string | undefined>;
+	registry?: ActionRegistry;
 }
 
-function expectNumberProperty(node: Node, property: string, path: string): number {
+interface EnvReference {
+	name: string;
+	optional: boolean;
+	defaultValue?: string | number | boolean;
+	type?: "string" | "number" | "boolean";
+}
+
+type ScalarExpectedType = "string" | "number" | "boolean";
+
+function getNodeName(node: Node): string {
+	return node.getName();
+}
+
+function splitEnvTokens(content: string): string[] {
+	const tokens: string[] = [];
+	let current = "";
+	let inQuotes = false;
+
+	for (let index = 0; index < content.length; index += 1) {
+		const char = content[index];
+		if (char === '"' && content[index - 1] !== "\\") {
+			inQuotes = !inQuotes;
+			current += char;
+			continue;
+		}
+		if (char === "," && !inQuotes) {
+			if (current.trim()) {
+				tokens.push(current.trim());
+			}
+			current = "";
+			continue;
+		}
+		current += char;
+	}
+
+	if (current.trim()) {
+		tokens.push(current.trim());
+	}
+
+	return tokens;
+}
+
+function parseDefaultValue(raw: string): string | number | boolean {
+	if (raw.startsWith('"') && raw.endsWith('"')) {
+		return JSON.parse(raw) as string;
+	}
+	if (raw === "true") return true;
+	if (raw === "false") return false;
+	const numeric = Number(raw);
+	if (!Number.isNaN(numeric) && raw.trim().length > 0) {
+		return numeric;
+	}
+	return raw;
+}
+
+function parseEnvReference(value: string): EnvReference | null {
+	const match = /^env\((.*)\)$/.exec(value.trim());
+	if (!match) {
+		return null;
+	}
+	const tokens = splitEnvTokens(match[1]);
+	if (tokens.length === 0) {
+		throw new Error("env() requires a variable name");
+	}
+	const envReference: EnvReference = {
+		name: tokens[0],
+		optional: false,
+	};
+	for (const token of tokens.slice(1)) {
+		if (token === "optional") {
+			envReference.optional = true;
+			continue;
+		}
+		if (token.startsWith("default=")) {
+			envReference.defaultValue = parseDefaultValue(token.slice("default=".length));
+			continue;
+		}
+		if (token.startsWith("type=")) {
+			const typeValue = token.slice("type=".length);
+			if (typeValue !== "string" && typeValue !== "number" && typeValue !== "boolean") {
+				throw new Error(`Unsupported env() type: ${typeValue}`);
+			}
+			envReference.type = typeValue;
+			continue;
+		}
+		throw new Error(`Unsupported env() option: ${token}`);
+	}
+	return envReference;
+}
+
+function coerceEnvValue(
+	envReference: EnvReference,
+	rawValue: string | number | boolean,
+	expectedType: ScalarExpectedType,
+	pathLabel: string,
+): string | number | boolean {
+	const targetType = envReference.type ?? expectedType;
+	if (targetType === "string") {
+		return String(rawValue);
+	}
+	if (targetType === "number") {
+		const numericValue = typeof rawValue === "number" ? rawValue : Number(rawValue);
+		if (!Number.isFinite(numericValue)) {
+			throw new Error(`${pathLabel} expected env(${envReference.name}) to resolve to a finite number`);
+		}
+		return numericValue;
+	}
+	if (typeof rawValue === "boolean") {
+		return rawValue;
+	}
+	if (rawValue === "true") return true;
+	if (rawValue === "false") return false;
+	throw new Error(`${pathLabel} expected env(${envReference.name}) to resolve to a boolean`);
+}
+
+function resolveEnvIfNeeded<T extends string | number | boolean>(
+	value: unknown,
+	expectedType: ScalarExpectedType,
+	pathLabel: string,
+	options: ParseManifestOptions,
+): T {
+	if (typeof value === "string") {
+		const envReference = parseEnvReference(value);
+		if (envReference) {
+			const envValue = options.env?.[envReference.name];
+			if (envValue === undefined || envValue === "") {
+				if (envReference.defaultValue !== undefined) {
+					return coerceEnvValue(envReference, envReference.defaultValue, expectedType, pathLabel) as T;
+				}
+				if (envReference.optional) {
+					throw new Error(
+						`${pathLabel} used optional env(${envReference.name}) where a ${expectedType} value is required`,
+					);
+				}
+				throw new Error(`${pathLabel} requires environment variable ${envReference.name}`);
+			}
+			return coerceEnvValue(envReference, envValue, expectedType, pathLabel) as T;
+		}
+		if (expectedType === "string") {
+			return value as T;
+		}
+		throw new Error(`${pathLabel} must be a ${expectedType}`);
+	}
+	if (typeof value === expectedType) {
+		if (expectedType === "number" && !Number.isFinite(value)) {
+			throw new Error(`${pathLabel} must be a finite number`);
+		}
+		return value as T;
+	}
+	throw new Error(`${pathLabel} must be a ${expectedType}`);
+}
+
+function resolveOptionalStringProperty(
+	node: Node,
+	property: string,
+	pathLabel: string,
+	options: ParseManifestOptions,
+): string | undefined {
 	const value = node.getProperty(property);
-	if (typeof value !== "number" || !Number.isFinite(value)) {
-		throw new Error(`${path}.${property} must be a finite number`);
+	if (value === undefined) return undefined;
+	return resolveEnvIfNeeded<string>(value, "string", `${pathLabel}.${property}`, options);
+}
+
+function resolveOptionalNumberProperty(
+	node: Node,
+	property: string,
+	pathLabel: string,
+	options: ParseManifestOptions,
+): number | undefined {
+	const value = node.getProperty(property);
+	if (value === undefined) return undefined;
+	return resolveEnvIfNeeded<number>(value, "number", `${pathLabel}.${property}`, options);
+}
+
+function resolveOptionalBooleanProperty(
+	node: Node,
+	property: string,
+	pathLabel: string,
+	options: ParseManifestOptions,
+): boolean | undefined {
+	const value = node.getProperty(property);
+	if (value === undefined) return undefined;
+	return resolveEnvIfNeeded<boolean>(value, "boolean", `${pathLabel}.${property}`, options);
+}
+
+function expectStringArgument(node: Node, pathLabel: string, index: number, options: ParseManifestOptions): string {
+	return resolveEnvIfNeeded<string>(node.getArgument(index), "string", pathLabel, options);
+}
+
+function expectNumberArgument(node: Node, pathLabel: string, index: number, options: ParseManifestOptions): number {
+	return resolveEnvIfNeeded<number>(node.getArgument(index), "number", pathLabel, options);
+}
+
+function expectBooleanProperty(
+	node: Node,
+	property: string,
+	pathLabel: string,
+	options: ParseManifestOptions,
+): boolean {
+	const value = resolveOptionalBooleanProperty(node, property, pathLabel, options);
+	if (value === undefined) {
+		throw new Error(`${pathLabel}.${property} must be a boolean`);
 	}
 	return value;
 }
 
-function parseFilterNode(node: Node, path: string): FilterConfig {
+function parseStringArguments(node: Node, pathLabel: string, options: ParseManifestOptions, startIndex = 0): string[] {
+	const values = node.getArguments().slice(startIndex);
+	return values.map((_, index) => expectStringArgument(node, `${pathLabel}.${index}`, startIndex + index, options));
+}
+
+function parseFilterNode(node: Node, pathLabel: string, options: ParseManifestOptions): FilterConfig {
 	const allowNode = node.children?.findNodeByName("allow");
 	const denyNode = node.children?.findNodeByName("deny");
 	const filter: FilterConfig = {};
 
 	if (allowNode) {
-		const values = allowNode.getArguments();
-		if (!values.every(value => typeof value === "string")) {
-			throw new Error(`${path}.allow must contain only strings`);
-		}
-		filter.allow = values;
+		filter.allow = parseStringArguments(allowNode, `${pathLabel}.allow`, options);
 	}
 	if (denyNode) {
-		const values = denyNode.getArguments();
-		if (!values.every(value => typeof value === "string")) {
-			throw new Error(`${path}.deny must contain only strings`);
-		}
-		filter.deny = values;
+		filter.deny = parseStringArguments(denyNode, `${pathLabel}.deny`, options);
 	}
 
 	return filter;
 }
 
-function parseSandboxNode(node: Node, path: string): SandboxConfig {
+function parseSandboxNode(node: Node, pathLabel: string, options: ParseManifestOptions): SandboxConfig {
 	const sandbox: SandboxConfig = {};
 	for (const child of node.children?.nodes ?? []) {
-		const values = child.getArguments();
-		if (!values.every(value => typeof value === "string")) {
-			throw new Error(`${path}.${child.getName()} must contain only strings`);
-		}
-		if (child.getName() === "paths-write") sandbox.pathsWrite = values;
-		if (child.getName() === "bash-allow") sandbox.bashAllow = values;
-		if (child.getName() === "bash-deny") sandbox.bashDeny = values;
+		const childName = getNodeName(child);
+		const values = parseStringArguments(child, `${pathLabel}.${childName}`, options);
+		if (childName === "paths-write") sandbox.pathsWrite = values;
+		if (childName === "bash-allow") sandbox.bashAllow = values;
+		if (childName === "bash-deny") sandbox.bashDeny = values;
 	}
 	return sandbox;
 }
 
-function parseHookTarget(node: Node, path: string): HookTarget {
-	const name = node.getName();
+function parseStateStoreNode(node: Node, pathLabel: string, options: ParseManifestOptions): [string, NamedStateStore] {
+	const name = expectStringArgument(node, `${pathLabel}.name`, 0, options);
+	const backend = resolveOptionalStringProperty(node, "backend", pathLabel, options);
+	const stateStorePath = resolveOptionalStringProperty(node, "path", pathLabel, options);
+	const schema = resolveOptionalStringProperty(node, "schema", pathLabel, options);
+	if (!backend) {
+		throw new Error(`${pathLabel}.backend is required`);
+	}
+	if (backend !== "sqlite" && backend !== "artifact-store") {
+		throw new Error(`${pathLabel}.backend must be sqlite or artifact-store`);
+	}
+	if (!stateStorePath) {
+		throw new Error(`${pathLabel}.path is required`);
+	}
+	return [name, { backend, path: stateStorePath, ...(schema !== undefined ? { schema } : {}) }];
+}
+
+function parseStateStoreChildren(
+	node: Node,
+	pathLabel: string,
+	options: ParseManifestOptions,
+): Map<string, NamedStateStore> | undefined {
+	const stateStores = new Map<string, NamedStateStore>();
+	for (const child of node.children?.nodes ?? []) {
+		if (getNodeName(child) !== "state-store") continue;
+		const [name, stateStore] = parseStateStoreNode(child, `${pathLabel}.state-store.${stateStores.size}`, options);
+		stateStores.set(name, stateStore);
+	}
+	return stateStores.size === 0 ? undefined : stateStores;
+}
+
+function parseHookTarget(node: Node, pathLabel: string, options: ParseManifestOptions): HookTarget {
+	const name = getNodeName(node);
 	if (name === "webhook") {
-		const methodValue = node.getProperty("method");
-		if (methodValue !== undefined && methodValue !== "POST" && methodValue !== "GET") {
-			throw new Error(`${path}.method must be POST or GET`);
+		const method = resolveOptionalStringProperty(node, "method", pathLabel, options);
+		if (method !== undefined && method !== "POST" && method !== "GET") {
+			throw new Error(`${pathLabel}.method must be POST or GET`);
 		}
 		return {
 			type: "webhook",
-			url: expectStringArgument(node, path),
-			method: methodValue,
-		};
+			url: expectStringArgument(node, pathLabel, 0, options),
+			...(method !== undefined ? { method } : {}),
+		} satisfies WebhookHook;
 	}
 	if (name === "telegram") {
-		return { type: "telegram", chatId: expectNumberProperty(node, "chat-id", path) };
+		const chatId = resolveOptionalNumberProperty(node, "chat-id", pathLabel, options);
+		if (chatId === undefined) {
+			throw new Error(`${pathLabel}.chat-id must be a finite number`);
+		}
+		return { type: "telegram", chatId } satisfies TelegramHook;
 	}
 	if (name === "org") {
-		const category = node.getProperty("category");
-		if (category !== undefined && typeof category !== "string") {
-			throw new Error(`${path}.category must be a string`);
-		}
-		return { type: "org", category };
+		const category = resolveOptionalStringProperty(node, "category", pathLabel, options);
+		return { type: "org", ...(category !== undefined ? { category } : {}) } satisfies OrgHook;
 	}
-	throw new Error(`${path} has unsupported hook target "${name}"`);
+	throw new Error(`${pathLabel} has unsupported hook target \"${name}\"`);
 }
 
-function parseHooksNode(node: Node, path: string): ManifestHookConfig {
+function parseHooksNode(node: Node, pathLabel: string, options: ParseManifestOptions): ManifestHookConfig {
 	const hooks: ManifestHookConfig = {};
 	for (const child of node.children?.nodes ?? []) {
 		const targets = (child.children?.nodes ?? []).map((target, index) =>
-			parseHookTarget(target, `${path}.${child.getName()}.${index}`),
+			parseHookTarget(target, `${pathLabel}.${getNodeName(child)}.${index}`, options),
 		);
-		if (child.getName() === "on-success") hooks.onSuccess = targets;
-		if (child.getName() === "on-failure") hooks.onFailure = targets;
-		if (child.getName() === "on-complete") hooks.onComplete = targets;
+		if (getNodeName(child) === "on-success") hooks.onSuccess = targets;
+		if (getNodeName(child) === "on-failure") hooks.onFailure = targets;
+		if (getNodeName(child) === "on-complete") hooks.onComplete = targets;
 	}
 	return hooks;
 }
 
-function parseStateNode(node: Node, path: string): StateConfig {
-	const persist = node.getProperty("persist");
-	if (typeof persist !== "boolean") {
-		throw new Error(`${path}.persist must be a boolean`);
-	}
+function parseStateNode(node: Node, pathLabel: string, options: ParseManifestOptions): StateConfig {
+	const persist = expectBooleanProperty(node, "persist", pathLabel, options);
 	const schema = (node.children?.findNodesByName("schema") ?? []).map((schemaNode, index) => {
-		const name = expectStringArgument(schemaNode, `${path}.schema.${index}`);
-		const typeValue = schemaNode.getProperty("type");
+		const name = expectStringArgument(schemaNode, `${pathLabel}.schema.${index}.name`, 0, options);
+		const typeValue = resolveOptionalStringProperty(schemaNode, "type", `${pathLabel}.schema.${index}`, options);
 		if (typeValue !== "string" && typeValue !== "number" && typeValue !== "boolean" && typeValue !== "json") {
-			throw new Error(`${path}.schema.${index}.type must be one of string, number, boolean, json`);
+			throw new Error(`${pathLabel}.schema.${index}.type must be one of string, number, boolean, json`);
 		}
 		return { name, type: typeValue } satisfies StateSchemaColumn;
 	});
 	return schema.length === 0 ? { persist } : { persist, schema };
 }
 
-function parseRetryNode(node: Node, path: string): RetryConfig {
+function parseRetryNode(node: Node, pathLabel: string, options: ParseManifestOptions): RetryConfig {
 	const retry: RetryConfig = {};
-	const maxRetries = node.getProperty("max-retries");
-	if (maxRetries !== undefined) {
-		if (typeof maxRetries !== "number" || !Number.isFinite(maxRetries)) {
-			throw new Error(`${path}.max-retries must be a finite number`);
-		}
-		retry.maxRetries = maxRetries;
-	}
-	const initialDelayMs = node.getProperty("initial-delay-ms");
-	if (initialDelayMs !== undefined) {
-		if (typeof initialDelayMs !== "number" || !Number.isFinite(initialDelayMs)) {
-			throw new Error(`${path}.initial-delay-ms must be a finite number`);
-		}
-		retry.initialDelayMs = initialDelayMs;
-	}
-	const multiplier = node.getProperty("multiplier");
-	if (multiplier !== undefined) {
-		if (typeof multiplier !== "number" || !Number.isFinite(multiplier)) {
-			throw new Error(`${path}.multiplier must be a finite number`);
-		}
-		retry.multiplier = multiplier;
-	}
+	const maxRetries = resolveOptionalNumberProperty(node, "max-retries", pathLabel, options);
+	if (maxRetries !== undefined) retry.maxRetries = maxRetries;
+	const initialDelayMs = resolveOptionalNumberProperty(node, "initial-delay-ms", pathLabel, options);
+	if (initialDelayMs !== undefined) retry.initialDelayMs = initialDelayMs;
+	const multiplier = resolveOptionalNumberProperty(node, "multiplier", pathLabel, options);
+	if (multiplier !== undefined) retry.multiplier = multiplier;
 	return retry;
 }
 
-function parseScheduleNode(node: Node, path: string): ManifestGoal["schedule"] {
-	const type = node.getProperty("type");
+function parseScheduleNode(
+	node: Node,
+	pathLabel: string,
+	options: ParseManifestOptions,
+): CronSchedule | WebhookSchedule {
+	const type = resolveOptionalStringProperty(node, "type", pathLabel, options);
 	if (type === "cron") {
-		const expression = node.getProperty("expression");
-		if (typeof expression !== "string") {
-			throw new Error(`${path}.expression must be a string`);
+		const expression = resolveOptionalStringProperty(node, "expression", pathLabel, options);
+		if (!expression) {
+			throw new Error(`${pathLabel}.expression must be a string`);
 		}
-		const timezone = node.getProperty("timezone");
-		const jitter = node.getProperty("jitter");
-		if (timezone !== undefined && typeof timezone !== "string") {
-			throw new Error(`${path}.timezone must be a string`);
-		}
-		if (jitter !== undefined && typeof jitter !== "string") {
-			throw new Error(`${path}.jitter must be a string`);
-		}
-		return { type, expression, timezone, jitter };
+		const timezone = resolveOptionalStringProperty(node, "timezone", pathLabel, options);
+		const jitter = resolveOptionalStringProperty(node, "jitter", pathLabel, options);
+		return {
+			type,
+			expression,
+			...(timezone !== undefined ? { timezone } : {}),
+			...(jitter !== undefined ? { jitter } : {}),
+		};
 	}
 	if (type === "webhook") {
-		const pathValue = node.getProperty("path");
-		const auth = node.getProperty("auth");
-		if (pathValue !== undefined && typeof pathValue !== "string") {
-			throw new Error(`${path}.path must be a string`);
-		}
+		const pathValue = resolveOptionalStringProperty(node, "path", pathLabel, options);
+		const auth = resolveOptionalStringProperty(node, "auth", pathLabel, options);
 		if (auth !== undefined && auth !== "hmac" && auth !== "bearer") {
-			throw new Error(`${path}.auth must be hmac or bearer`);
+			throw new Error(`${pathLabel}.auth must be hmac or bearer`);
 		}
-		return { type, path: pathValue, auth };
+		return { type, ...(pathValue !== undefined ? { path: pathValue } : {}), ...(auth !== undefined ? { auth } : {}) };
 	}
-	throw new Error(`${path}.type must be cron or webhook`);
+	throw new Error(`${pathLabel}.type must be cron or webhook`);
 }
 
-function parseSetupNode(node: Node, path: string): ManifestSetup {
-	const setup: ManifestSetup = { domain: "" };
-	for (const child of node.children?.nodes ?? []) {
-		if (child.getName() === "domain") setup.domain = expectStringArgument(child, `${path}.domain`);
-		if (child.getName() === "mode") setup.mode = expectStringArgument(child, `${path}.mode`);
-		if (child.getName() === "skills") setup.skills = parseFilterNode(child, `${path}.skills`);
-		if (child.getName() === "tools") setup.tools = parseFilterNode(child, `${path}.tools`);
-		if (child.getName() === "sandbox") setup.sandbox = parseSandboxNode(child, `${path}.sandbox`);
-		if (child.getName() === "timeout") setup.timeout = expectStringArgument(child, `${path}.timeout`);
-		if (child.getName() === "max-cost-usd") {
-			const value = child.getArgument(0);
-			if (typeof value !== "number" || !Number.isFinite(value)) {
-				throw new Error(`${path}.max-cost-usd must have a finite numeric argument`);
-			}
-			setup.maxCostUsd = value;
+function resolveActionScalarValue(
+	value: unknown,
+	descriptorType: ActionParameterType | undefined,
+	pathLabel: string,
+	options: ParseManifestOptions,
+): ActionScalar {
+	if (descriptorType === "number") {
+		return resolveEnvIfNeeded<number>(value, "number", pathLabel, options);
+	}
+	if (descriptorType === "boolean") {
+		return resolveEnvIfNeeded<boolean>(value, "boolean", pathLabel, options);
+	}
+	if (descriptorType === "string") {
+		return resolveEnvIfNeeded<string>(value, "string", pathLabel, options);
+	}
+	if (typeof value === "string") {
+		const envReference = parseEnvReference(value);
+		if (!envReference) {
+			return value;
 		}
+		const envValue = options.env?.[envReference.name];
+		if (envValue === undefined || envValue === "") {
+			if (envReference.defaultValue !== undefined) {
+				return envReference.defaultValue;
+			}
+			if (envReference.optional) {
+				return "";
+			}
+			throw new Error(`${pathLabel} requires environment variable ${envReference.name}`);
+		}
+		return envValue;
 	}
-	if (setup.domain.length === 0) {
-		throw new Error(`${path}.domain is required`);
+	if (value === null || typeof value === "number" || typeof value === "boolean") {
+		return value;
 	}
+	throw new Error(`${pathLabel} must be a scalar action value`);
+}
+
+function resolveActionListValue(
+	node: Node,
+	descriptorType: ActionParameterType | undefined,
+	pathLabel: string,
+	options: ParseManifestOptions,
+): ActionScalar[] {
+	const rawValues = node.getArguments().slice(1);
+	if (descriptorType === "string[]") {
+		return rawValues.map((_, index) =>
+			resolveEnvIfNeeded<string>(node.getArgument(index + 1), "string", `${pathLabel}.${index}`, options),
+		);
+	}
+	if (descriptorType === "number[]") {
+		return rawValues.map((_, index) =>
+			resolveEnvIfNeeded<number>(node.getArgument(index + 1), "number", `${pathLabel}.${index}`, options),
+		);
+	}
+	if (descriptorType === "boolean[]") {
+		return rawValues.map((_, index) =>
+			resolveEnvIfNeeded<boolean>(node.getArgument(index + 1), "boolean", `${pathLabel}.${index}`, options),
+		);
+	}
+	return rawValues.map((value, index) => resolveActionScalarValue(value, undefined, `${pathLabel}.${index}`, options));
+}
+
+function parseActionNode(node: Node, pathLabel: string, options: ParseManifestOptions): ManifestAction {
+	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
+	const descriptor = options.registry?.get(id);
+	const action: ManifestAction = {
+		id,
+		params: {},
+		promptSlots: {},
+	};
+
+	for (const child of node.children?.nodes ?? []) {
+		const childName = getNodeName(child);
+		if (childName === "param") {
+			const paramName = expectStringArgument(child, `${pathLabel}.param.name`, 0, options);
+			const descriptorType = descriptor?.params?.[paramName]?.type;
+			action.params[paramName] = resolveActionScalarValue(
+				child.getArgument(1),
+				descriptorType,
+				`${pathLabel}.param.${paramName}`,
+				options,
+			);
+			continue;
+		}
+		if (childName === "param-list") {
+			const paramName = expectStringArgument(child, `${pathLabel}.param-list.name`, 0, options);
+			const descriptorType = descriptor?.params?.[paramName]?.type;
+			action.params[paramName] = resolveActionListValue(
+				child,
+				descriptorType,
+				`${pathLabel}.param-list.${paramName}`,
+				options,
+			);
+			continue;
+		}
+		if (childName === "prompt") {
+			const slotName = expectStringArgument(child, `${pathLabel}.prompt.name`, 0, options);
+			action.promptSlots[slotName] = {
+				name: slotName,
+				kind: "inline",
+				content: expectStringArgument(child, `${pathLabel}.prompt.${slotName}`, 1, options),
+			};
+			continue;
+		}
+		if (childName === "prompt-file") {
+			const slotName = expectStringArgument(child, `${pathLabel}.prompt-file.name`, 0, options);
+			const slotPath = expectStringArgument(child, `${pathLabel}.prompt-file.${slotName}`, 1, options);
+			action.promptSlots[slotName] = {
+				name: slotName,
+				kind: "file",
+				path: options.filePath ? path.resolve(path.dirname(options.filePath), slotPath) : slotPath,
+			};
+			continue;
+		}
+		throw new Error(`${pathLabel} has unsupported action child \"${childName}\"`);
+	}
+
+	return action;
+}
+
+function parseSetupPatch(node: Node, pathLabel: string, options: ParseManifestOptions): ManifestSetupPatch {
+	const setup: ManifestSetupPatch = {};
+	for (const child of node.children?.nodes ?? []) {
+		const childName = getNodeName(child);
+		if (childName === "domain") setup.domain = expectStringArgument(child, `${pathLabel}.domain`, 0, options);
+		if (childName === "mode") setup.mode = expectStringArgument(child, `${pathLabel}.mode`, 0, options);
+		if (childName === "skills") setup.skills = parseFilterNode(child, `${pathLabel}.skills`, options);
+		if (childName === "tools") setup.tools = parseFilterNode(child, `${pathLabel}.tools`, options);
+		if (childName === "sandbox") setup.sandbox = parseSandboxNode(child, `${pathLabel}.sandbox`, options);
+		if (childName === "timeout") setup.timeout = expectStringArgument(child, `${pathLabel}.timeout`, 0, options);
+		if (childName === "max-cost-usd")
+			setup.maxCostUsd = expectNumberArgument(child, `${pathLabel}.max-cost-usd`, 0, options);
+	}
+	setup.stateStores = parseStateStoreChildren(node, pathLabel, options);
 	return setup;
 }
 
-function parseGoalNode(node: Node, path: string): ManifestGoal {
-	let setup: string | undefined;
-	let schedule: ManifestGoal["schedule"] | undefined;
-	let prompt: string | undefined;
-	let hooks: ManifestHookConfig | undefined;
-	let state: StateConfig | undefined;
-	let retry: RetryConfig | undefined;
-
-	for (const child of node.children?.nodes ?? []) {
-		if (child.getName() === "setup") setup = expectStringArgument(child, `${path}.setup`);
-		if (child.getName() === "schedule") schedule = parseScheduleNode(child, `${path}.schedule`);
-		if (child.getName() === "prompt") prompt = expectStringArgument(child, `${path}.prompt`);
-		if (child.getName() === "hooks") hooks = parseHooksNode(child, `${path}.hooks`);
-		if (child.getName() === "state") state = parseStateNode(child, `${path}.state`);
-		if (child.getName() === "retry") retry = parseRetryNode(child, `${path}.retry`);
+function finalizeSetup(patch: ManifestSetupPatch, pathLabel: string): ManifestSetup {
+	if (!patch.domain) {
+		throw new Error(`${pathLabel}.domain is required`);
 	}
-
-	if (!setup) throw new Error(`${path}.setup is required`);
-	if (!schedule) throw new Error(`${path}.schedule is required`);
-	if (!prompt) throw new Error(`${path}.prompt is required`);
-
-	return { setup, schedule, prompt, hooks, state, retry };
+	return {
+		domain: patch.domain,
+		...(patch.mode !== undefined ? { mode: patch.mode } : {}),
+		...(patch.skills !== undefined ? { skills: patch.skills } : {}),
+		...(patch.tools !== undefined ? { tools: patch.tools } : {}),
+		...(patch.sandbox !== undefined ? { sandbox: patch.sandbox } : {}),
+		...(patch.timeout !== undefined ? { timeout: patch.timeout } : {}),
+		...(patch.maxCostUsd !== undefined ? { maxCostUsd: patch.maxCostUsd } : {}),
+		...(patch.stateStores !== undefined ? { stateStores: patch.stateStores } : {}),
+	};
 }
 
-function parseDocumentManifest(document: Document): AutonomyManifest {
+function parseGoalPatch(node: Node, pathLabel: string, options: ParseManifestOptions): ManifestGoalPatch {
+	const goal: ManifestGoalPatch = {};
+	for (const child of node.children?.nodes ?? []) {
+		const childName = getNodeName(child);
+		if (childName === "setup") goal.setup = expectStringArgument(child, `${pathLabel}.setup`, 0, options);
+		if (childName === "schedule") goal.schedule = parseScheduleNode(child, `${pathLabel}.schedule`, options);
+		if (childName === "prompt") goal.prompt = expectStringArgument(child, `${pathLabel}.prompt`, 0, options);
+		if (childName === "action") goal.action = parseActionNode(child, `${pathLabel}.action`, options);
+		if (childName === "hooks") goal.hooks = parseHooksNode(child, `${pathLabel}.hooks`, options);
+		if (childName === "state") goal.state = parseStateNode(child, `${pathLabel}.state`, options);
+		if (childName === "retry") goal.retry = parseRetryNode(child, `${pathLabel}.retry`, options);
+	}
+	goal.stateStores = parseStateStoreChildren(node, pathLabel, options);
+	return goal;
+}
+
+function finalizeGoal(patch: ManifestGoalPatch, pathLabel: string): ManifestGoal {
+	if (!patch.setup) throw new Error(`${pathLabel}.setup is required`);
+	if (!patch.schedule) throw new Error(`${pathLabel}.schedule is required`);
+	if (!patch.prompt && !patch.action) throw new Error(`${pathLabel} must define prompt or action`);
+	return {
+		setup: patch.setup,
+		schedule: patch.schedule,
+		...(patch.prompt !== undefined ? { prompt: patch.prompt } : {}),
+		...(patch.action !== undefined ? { action: patch.action } : {}),
+		...(patch.hooks !== undefined ? { hooks: patch.hooks } : {}),
+		...(patch.state !== undefined ? { state: patch.state } : {}),
+		...(patch.stateStores !== undefined ? { stateStores: patch.stateStores } : {}),
+		...(patch.retry !== undefined ? { retry: patch.retry } : {}),
+	};
+}
+
+function validateSymbolName(name: string, pathLabel: string): void {
+	if (name.includes(".")) {
+		throw new Error(`${pathLabel} must not contain '.' because dotted names are reserved for imported aliases`);
+	}
+}
+
+function parseImportNode(node: Node, pathLabel: string, options: ParseManifestOptions): ManifestImport {
+	const source = expectStringArgument(node, `${pathLabel}.source`, 0, options);
+	const alias = resolveOptionalStringProperty(node, "as", pathLabel, options);
+	if (!alias) {
+		throw new Error(`${pathLabel}.as is required`);
+	}
+	validateSymbolName(alias, `${pathLabel}.as`);
+	return { source, alias };
+}
+
+function parseOverrideStrategy(node: Node, pathLabel: string, options: ParseManifestOptions): ManifestOverrideStrategy {
+	const strategy = resolveOptionalStringProperty(node, "strategy", pathLabel, options);
+	if (strategy !== "replace" && strategy !== "merge") {
+		throw new Error(`${pathLabel}.strategy must be replace or merge`);
+	}
+	return strategy;
+}
+
+function parseOverrideNode(node: Node, pathLabel: string, options: ParseManifestOptions): ManifestOverride {
+	const kind = expectStringArgument(node, `${pathLabel}.kind`, 0, options);
+	const name = expectStringArgument(node, `${pathLabel}.name`, 1, options);
+	validateSymbolName(name, `${pathLabel}.name`);
+	const from = resolveOptionalStringProperty(node, "from", pathLabel, options);
+	if (!from) {
+		throw new Error(`${pathLabel}.from is required`);
+	}
+	const strategy = parseOverrideStrategy(node, pathLabel, options);
+	if (kind === "setup") {
+		const value = parseSetupPatch(node, pathLabel, options);
+		return { kind, name, from, strategy, value } satisfies SetupOverride;
+	}
+	if (kind === "goal") {
+		const value = parseGoalPatch(node, pathLabel, options);
+		return { kind, name, from, strategy, value } satisfies GoalOverride;
+	}
+	throw new Error(`${pathLabel}.kind must be \"setup\" or \"goal\"`);
+}
+
+export function parseManifestModuleDocument(
+	document: Document,
+	options: ParseManifestOptions = {},
+): ParsedManifestModule {
 	const errors: string[] = [];
 	let name: string | undefined;
 	let version: string | undefined;
+	const imports: ManifestImport[] = [];
 	const setups = new Map<string, ManifestSetup>();
 	const goals = new Map<string, ManifestGoal>();
+	const overrides: ManifestOverride[] = [];
 
-	for (const node of document.nodes) {
-		if (node.getName() === "name") {
-			name = expectStringArgument(node, "name");
-			continue;
+	for (const [index, node] of document.nodes.entries()) {
+		const nodeName = getNodeName(node);
+		try {
+			if (nodeName === "name") {
+				name = expectStringArgument(node, "name", 0, options);
+				continue;
+			}
+			if (nodeName === "version") {
+				version = expectStringArgument(node, "version", 0, options);
+				continue;
+			}
+			if (nodeName === "import") {
+				imports.push(parseImportNode(node, `import.${imports.length}`, options));
+				continue;
+			}
+			if (nodeName === "setup") {
+				const setupName = expectStringArgument(node, "setup.name", 0, options);
+				validateSymbolName(setupName, "setup.name");
+				if (setups.has(setupName)) {
+					throw new Error(`Duplicate setup \"${setupName}\"`);
+				}
+				setups.set(
+					setupName,
+					finalizeSetup(parseSetupPatch(node, `setups.${setupName}`, options), `setups.${setupName}`),
+				);
+				continue;
+			}
+			if (nodeName === "goal") {
+				const goalName = expectStringArgument(node, "goal.name", 0, options);
+				validateSymbolName(goalName, "goal.name");
+				if (goals.has(goalName)) {
+					throw new Error(`Duplicate goal \"${goalName}\"`);
+				}
+				goals.set(goalName, finalizeGoal(parseGoalPatch(node, `goals.${goalName}`, options), `goals.${goalName}`));
+				continue;
+			}
+			if (nodeName === "override") {
+				overrides.push(parseOverrideNode(node, `overrides.${overrides.length}`, options));
+				continue;
+			}
+			throw new Error(`Unsupported top-level node \"${nodeName}\" at index ${index}`);
+		} catch (error) {
+			errors.push(error instanceof Error ? error.message : String(error));
 		}
-		if (node.getName() === "version") {
-			version = expectStringArgument(node, "version");
-			continue;
-		}
-		if (node.getName() === "setup") {
-			const setupName = expectStringArgument(node, "setup");
-			if (setups.has(setupName)) errors.push(`Duplicate setup "${setupName}"`);
-			else setups.set(setupName, parseSetupNode(node, `setups.${setupName}`));
-			continue;
-		}
-		if (node.getName() === "goal") {
-			const goalName = expectStringArgument(node, "goal");
-			if (goals.has(goalName)) errors.push(`Duplicate goal "${goalName}"`);
-			else goals.set(goalName, parseGoalNode(node, `goals.${goalName}`));
-		}
-	}
-
-	const manifest: AutonomyManifest = {
-		name: name ?? "",
-		version: version ?? "",
-		setups,
-		goals,
-	};
-
-	if (!isValidManifest(manifest)) {
-		errors.push("Parsed manifest does not match manifest schema");
-	}
-
-	const validation = validateManifest(manifest);
-	if (!validation.valid) {
-		errors.push(...validation.errors.map(error => `${error.path}: ${error.message}`));
 	}
 
 	if (errors.length > 0) {
 		throw new Error(errors.join("\n"));
 	}
 
-	return manifest;
+	return { name, version, imports, setups, goals, overrides };
 }
 
-export function parseManifestKdl(kdlText: string): AutonomyManifest {
+function hydrateManifest(manifestModule: ParsedManifestModule): AutonomyManifest {
+	if (!manifestModule.name) {
+		throw new Error("name is required");
+	}
+	if (!manifestModule.version) {
+		throw new Error("version is required");
+	}
+	return {
+		name: manifestModule.name,
+		version: manifestModule.version,
+		setups: manifestModule.setups,
+		goals: manifestModule.goals,
+	};
+}
+
+export function parseManifestKdl(kdlText: string, options: ParseManifestOptions = {}): AutonomyManifest {
 	const document = parse(kdlText);
-	return parseDocumentManifest(document);
+	const manifestModule = parseManifestModuleDocument(document, options);
+	if (manifestModule.imports.length > 0 || manifestModule.overrides.length > 0) {
+		throw new Error("Imports and overrides require loadManifestFromFile()");
+	}
+	const manifest = hydrateManifest(manifestModule);
+	if (!isValidManifest(manifest)) {
+		throw new Error("Parsed manifest does not match manifest schema");
+	}
+	const validation = validateManifest(manifest, options.registry);
+	if (!validation.valid) {
+		throw new Error(validation.errors.map(error => `${error.path}: ${error.message}`).join("\n"));
+	}
+	return manifest;
 }

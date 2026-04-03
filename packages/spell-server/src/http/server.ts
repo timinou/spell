@@ -2,8 +2,18 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { GoalExecutionController } from "../executor/goal-executor";
 import type { AutonomyManifest } from "../manifest/types";
 import type { GoalScheduler } from "../scheduler/goal-scheduler";
+import type { WorkflowEngine } from "../workflow/engine";
 import { verifyBasicAuth } from "./auth";
 import frontendHtml from "./frontend/index.html" with { type: "text" };
+import {
+	handleApplyApprovalAction,
+	handleClaimApproval,
+	handleCreateApproval,
+	handleGetApproval,
+	handleListApprovals,
+	handleReleaseApprovalClaim,
+} from "./routes/approvals";
+import { handleListDownstreamJobs, handleGetDownstreamJob } from "./routes/downstream-jobs";
 import { handleGetGoal, handleGetGoalLogs, handleGetGoalRuns, handleGetGoals, handleGetManifest } from "./routes/goals";
 import { handleOperatorActionsRoute, type OperatorActionHandler } from "./routes/operator-actions";
 import { handleTriggerRoute } from "./routes/triggers";
@@ -17,11 +27,12 @@ export interface SpellServerDeps {
 	cwd: string;
 	frontendHtml?: string;
 	operatorActionHandler?: OperatorActionHandler;
+	workflowEngine?: WorkflowEngine;
 }
 
 const CORS_HEADERS = {
 	"Access-Control-Allow-Origin": "*",
-	"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+	"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
 	"Access-Control-Allow-Headers": "Authorization, Content-Type, X-Signature-256",
 };
 
@@ -41,28 +52,90 @@ function unauthorizedResponse(): Response {
 	return Response.json({ error: "Unauthorized" }, { status: 401 });
 }
 
-async function handleApiRoute(path: string, deps: SpellServerDeps): Promise<Response> {
+function requireWorkflowEngine(engine: WorkflowEngine | undefined): WorkflowEngine {
+	if (!engine) {
+		throw new Error("Workflow engine is not configured");
+	}
+	return engine;
+}
+
+async function handleApiRoute(request: Request, path: string, deps: SpellServerDeps): Promise<Response> {
 	if (path === "/api/goals") {
 		return handleGetGoals(deps.executor, deps.scheduler, deps.manifest);
 	}
 	if (path === "/api/manifest") {
 		return handleGetManifest(deps.manifest);
 	}
+	if (path === "/api/operator-actions") {
+		return await handleOperatorActionsRoute(request, deps.operatorActionHandler);
+	}
+	if (path === "/api/approvals") {
+		const workflowEngine = requireWorkflowEngine(deps.workflowEngine);
+		if (request.method === "GET") {
+			return handleListApprovals(request, workflowEngine);
+		}
+		if (request.method === "POST") {
+			return await handleCreateApproval(request, workflowEngine);
+		}
+		return Response.json({ error: "Method not allowed" }, { status: 405 });
+	}
+	if (path === "/api/downstream-jobs") {
+		const workflowEngine = requireWorkflowEngine(deps.workflowEngine);
+		if (request.method === "GET") {
+			return handleListDownstreamJobs(request, workflowEngine);
+		}
+		return Response.json({ error: "Method not allowed" }, { status: 405 });
+	}
 
 	const segments = path.split("/").filter(Boolean);
-	const goalName = segments[2];
-	const action = segments[3];
-	if (!goalName) {
+	if (segments[1] === "goals") {
+		const goalName = segments[2];
+		const action = segments[3];
+		if (!goalName) {
+			return Response.json({ error: "Not found" }, { status: 404 });
+		}
+		if (segments.length === 3) {
+			return handleGetGoal(goalName, deps.executor, deps.scheduler, deps.manifest);
+		}
+		if (segments.length === 4 && action === "runs") {
+			return handleGetGoalRuns(goalName, deps.executor, deps.manifest);
+		}
+		if (segments.length === 4 && action === "logs") {
+			return handleGetGoalLogs(goalName, deps.executor, deps.manifest);
+		}
 		return Response.json({ error: "Not found" }, { status: 404 });
 	}
-	if (segments.length === 3) {
-		return handleGetGoal(goalName, deps.executor, deps.scheduler, deps.manifest);
+	if (segments[1] === "approvals") {
+		const workflowEngine = requireWorkflowEngine(deps.workflowEngine);
+		const itemId = segments[2];
+		const action = segments[3];
+		if (!itemId) {
+			return Response.json({ error: "Not found" }, { status: 404 });
+		}
+		if (segments.length === 3 && request.method === "GET") {
+			return handleGetApproval(itemId, workflowEngine);
+		}
+		if (segments.length === 4 && action === "claim" && request.method === "POST") {
+			return await handleClaimApproval(itemId, request, workflowEngine);
+		}
+		if (segments.length === 4 && action === "claim" && request.method === "DELETE") {
+			return await handleReleaseApprovalClaim(itemId, request, workflowEngine);
+		}
+		if (segments.length === 4 && action === "actions" && request.method === "POST") {
+			return await handleApplyApprovalAction(itemId, request, workflowEngine);
+		}
+		return Response.json({ error: "Not found" }, { status: 404 });
 	}
-	if (segments.length === 4 && action === "runs") {
-		return handleGetGoalRuns(goalName, deps.executor, deps.manifest);
-	}
-	if (segments.length === 4 && action === "logs") {
-		return handleGetGoalLogs(goalName, deps.executor, deps.manifest);
+	if (segments[1] === "downstream-jobs") {
+		const workflowEngine = requireWorkflowEngine(deps.workflowEngine);
+		const jobId = segments[2];
+		if (!jobId) {
+			return Response.json({ error: "Not found" }, { status: 404 });
+		}
+		if (segments.length === 3 && request.method === "GET") {
+			return handleGetDownstreamJob(jobId, workflowEngine);
+		}
+		return Response.json({ error: "Not found" }, { status: 404 });
 	}
 	return Response.json({ error: "Not found" }, { status: 404 });
 }
@@ -85,10 +158,23 @@ export async function handleRequest(request: Request, deps: SpellServerDeps): Pr
 		if (!verifyBasicAuth(request, deps.config)) {
 			return withCors(unauthorizedResponse());
 		}
-		if (path === "/api/operator-actions") {
-			return withCors(await handleOperatorActionsRoute(request, deps.operatorActionHandler));
+		try {
+			return withCors(await handleApiRoute(request, path, deps));
+		} catch (error) {
+			if (error instanceof Error && error.message === "Workflow engine is not configured") {
+				return withCors(Response.json({ error: error.message }, { status: 501 }));
+			}
+			if (
+				error instanceof Error &&
+				/^Invalid .*payload|Invalid JSON body|Action .* requires a reason|Unknown workflow/.test(error.message)
+			) {
+				return withCors(Response.json({ error: error.message }, { status: 400 }));
+			}
+			if (error instanceof Error && /must be claimed|already claimed|claimed by/.test(error.message)) {
+				return withCors(Response.json({ error: error.message }, { status: 409 }));
+			}
+			throw error;
 		}
-		return withCors(await handleApiRoute(path, deps));
 	}
 	if (path.startsWith("/trigger/") && request.method === "POST") {
 		const triggerId = path.slice("/trigger/".length);

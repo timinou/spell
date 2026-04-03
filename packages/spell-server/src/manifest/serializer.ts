@@ -1,4 +1,5 @@
 import { Document, format, Node } from "@bgotink/kdl";
+import type { ManifestAction } from "../actions/types";
 import type {
 	AutonomyManifest,
 	FilterConfig,
@@ -6,6 +7,7 @@ import type {
 	ManifestGoal,
 	ManifestHookConfig,
 	ManifestSetup,
+	NamedStateStore,
 	RetryConfig,
 	SandboxConfig,
 	StateConfig,
@@ -27,6 +29,19 @@ function appendFilterChildren(parent: Node, config: FilterConfig | undefined): v
 		const denyNode = createNode("deny");
 		for (const value of config.deny) denyNode.addArgument(value);
 		parent.children.appendNode(denyNode);
+	}
+}
+
+function appendStateStoreChildren(parent: Node, stateStores: Map<string, NamedStateStore> | undefined): void {
+	if (!stateStores || stateStores.size === 0) return;
+	parent.children ??= new Document();
+	for (const [name, stateStore] of stateStores) {
+		const node = createNode("state-store");
+		node.addArgument(name);
+		node.setProperty("backend", stateStore.backend);
+		node.setProperty("path", stateStore.path);
+		if (stateStore.schema) node.setProperty("schema", stateStore.schema);
+		parent.children.appendNode(node);
 	}
 }
 
@@ -72,7 +87,7 @@ function appendHookGroup(parent: Node, name: string, targets: HookTarget[] | und
 	if (!targets || targets.length === 0) return;
 	const group = createNode(name);
 	group.children = new Document();
-	for (const target of targets) group.children!.appendNode(createHookTargetNode(target));
+	for (const target of targets) group.children.appendNode(createHookTargetNode(target));
 	parent.children!.appendNode(group);
 }
 
@@ -106,6 +121,34 @@ function createRetryNode(retry: RetryConfig): Node | undefined {
 	if (retry.initialDelayMs !== undefined) node.setProperty("initial-delay-ms", retry.initialDelayMs);
 	if (retry.multiplier !== undefined) node.setProperty("multiplier", retry.multiplier);
 	return node.entries.length === 0 ? undefined : node;
+}
+
+function appendActionChildren(parent: Node, action: ManifestAction): void {
+	const actionNode = createNode("action");
+	actionNode.addArgument(action.id);
+	actionNode.children = new Document();
+	for (const [name, value] of Object.entries(action.params)) {
+		if (Array.isArray(value)) {
+			const paramListNode = createNode("param-list");
+			paramListNode.addArgument(name);
+			for (const entry of value) {
+				paramListNode.addArgument(entry);
+			}
+			actionNode.children.appendNode(paramListNode);
+			continue;
+		}
+		const paramNode = createNode("param");
+		paramNode.addArgument(name);
+		paramNode.addArgument(typeof value === "object" && value !== null ? JSON.stringify(value) : value);
+		actionNode.children.appendNode(paramNode);
+	}
+	for (const [slotName, slot] of Object.entries(action.promptSlots)) {
+		const slotNode = createNode(slot.kind === "file" ? "prompt-file" : "prompt");
+		slotNode.addArgument(slotName);
+		slotNode.addArgument(slot.kind === "file" ? (slot.path ?? "") : (slot.content ?? ""));
+		actionNode.children.appendNode(slotNode);
+	}
+	parent.children!.appendNode(actionNode);
 }
 
 function createSetupNode(name: string, setup: ManifestSetup): Node {
@@ -144,6 +187,7 @@ function createSetupNode(name: string, setup: ManifestSetup): Node {
 		maxCostNode.addArgument(setup.maxCostUsd);
 		node.children.appendNode(maxCostNode);
 	}
+	appendStateStoreChildren(node, setup.stateStores);
 	return node;
 }
 
@@ -170,14 +214,20 @@ function createGoalNode(name: string, goal: ManifestGoal): Node {
 	setupNode.addArgument(goal.setup);
 	node.children.appendNode(setupNode);
 	node.children.appendNode(createScheduleNode(goal.schedule));
-	const promptNode = createNode("prompt");
-	promptNode.addArgument(goal.prompt);
-	node.children.appendNode(promptNode);
+	if (goal.prompt) {
+		const promptNode = createNode("prompt");
+		promptNode.addArgument(goal.prompt);
+		node.children.appendNode(promptNode);
+	}
+	if (goal.action) {
+		appendActionChildren(node, goal.action);
+	}
 	if (goal.hooks) {
 		const hooksNode = createHooksNode(goal.hooks);
 		if (hooksNode) node.children.appendNode(hooksNode);
 	}
 	if (goal.state) node.children.appendNode(createStateNode(goal.state));
+	appendStateStoreChildren(node, goal.stateStores);
 	if (goal.retry) {
 		const retryNode = createRetryNode(goal.retry);
 		if (retryNode) node.children.appendNode(retryNode);

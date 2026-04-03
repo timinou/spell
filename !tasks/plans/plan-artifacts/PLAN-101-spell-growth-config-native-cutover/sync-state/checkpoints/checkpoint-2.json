@@ -1,0 +1,30 @@
+{
+  "id": "checkpoint-2",
+  "kind": "checkpoint",
+  "workflowId": "growth-export",
+  "targetId": "article-1",
+  "title": "Export checkpoint",
+  "state": "completed",
+  "actions": [
+    {
+      "id": "resume",
+      "label": "Resume",
+      "fromStates": [
+        "pending"
+      ],
+      "toState": "completed",
+      "checkpointEffect": {
+        "type": "resume-run"
+      }
+    }
+  ],
+  "metadata": {},
+  "artifacts": [],
+  "notificationRoutes": [],
+  "claimLeaseMs": 300000,
+  "linkedRunId": "run-42",
+  "runStatus": "resumed",
+  "createdAt": "2026-04-03T01:19:11.936Z",
+  "updatedAt": "2026-04-03T01:19:11.937Z",
+  "completedAt": "2026-04-03T01:19:11.937Z"
+}

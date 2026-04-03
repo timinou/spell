@@ -1,0 +1,106 @@
+#+TITLE: Growth Repo Config Cutover And Legacy Deletion
+#+STATE: DONE
+#+SESSION_ID: 14ab6894eaa2d281
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-00-14-890Z_14ab6894eaa2d281.jsonl]]
+#+CUSTOM_ID: PROJ-024-growth-repo-config-cutover-and-legacy-de
+#+EFFORT: 16h
+#+LAYER: integration
+#+PRIORITY: #A
+#+DEPENDS: PROJ-020-spell-manifest-foundation-for-config-nat::document-schema PROJ-021-spell-workflow-engine-for-generic-approv::implement-apis PROJ-022-spell-growth-action-pack-and-canonical-r::register-actions PROJ-023-spell-operator-surfaces-and-shared-sync::implement-qml PROJ-023-spell-operator-surfaces-and-shared-sync::implement-telegram PROJ-023-spell-operator-surfaces-and-shared-sync::implement-tools
+
+NOTE [2026-04-03]: Completed under PLAN-101. Growth repo now uses config-native Spell workflows, focused cutover tests pass, and legacy local orchestration files were deleted.
+
+* Scope
+** In scope
+- Rewrite the growth repo from prompt shellouts and local orchestration to config-native Spell usage.
+- Replace `../growth/.spell/autonomy.kdl` with typed action goals and import it into a dedicated workflow KDL family under explicit files such as:
+  - `../growth/.spell/workflows/review-policy.kdl`
+  - `../growth/.spell/workflows/checkpoints.kdl`
+  - `../growth/.spell/workflows/notifications.kdl`
+  - `../growth/.spell/workflows/exports.kdl`
+  - `../growth/.spell/data/sources.kdl`
+  - `../growth/.spell/data/personas.kdl`
+  - `../growth/.spell/states/workflow-db.kdl`
+  - `../growth/.spell/states/audit-db.kdl`
+  - `../growth/.spell/states/artifact-store.kdl`
+  - `../growth/.spell/qml/panels.kdl`
+  - `../growth/.spell/qml/layouts.kdl`
+  - `../growth/.spell/qml/sync.kdl`
+- Keep `../growth/.spell/channels.kdl` transport-focused.
+- Remove accepted-flow dependencies on local growth orchestration code under:
+  - `../growth/src/goals/discovery-goal.ts`
+  - `../growth/src/goals/feed-delivery-goal.ts`
+  - `../growth/src/goals/export-goal.ts`
+  - `../growth/src/review/operator-action-handler.ts`
+  - `../growth/src/review/queue-service.ts`
+  - `../growth/src/review/downstream-approval-jobs.ts`
+  - `../growth/src/review/telegram-approval-sync.ts`
+  - `../growth/src/review/review-window-state.ts`
+  - `../growth/src/review/review-surface-actions.ts`
+  - `../growth/src/review/review-surface-controller.ts`
+  - `../growth/src/review/launch-review-queue.ts`
+  - `../growth/src/feed/send-feed.ts`
+  - `../growth/src/publication/export-approved-articles.ts`
+  - `../growth/src/state/db.ts`
+  - `../growth/src/state/repositories/*`
+** Out of scope
+- Historical data migration or archival; the cutover is clean-slate by user decision.
+** Boundary rationale
+- This item is the final cutover and deletion pass. It should consume completed shared platform work instead of redefining it.
+
+* Tests
+- `../growth/test/cutover/manifest-load.test.ts`
+  - New multi-file KDL tree loads through Spell without CLI shellouts.
+- `../growth/test/cutover/discovery-to-feed.test.ts`
+  - Discovery creates review items and Telegram approval can drive feed delivery through the generic engine.
+- `../growth/test/cutover/checkpoint-to-export.test.ts`
+  - Checkpoint approval resumes the same run and emits export artifacts.
+- `../growth/test/cutover/shared-surface-state.test.ts`
+  - Telegram and QML observe and act on the same canonical item from shared sync data.
+- `../growth/test/cutover/no-legacy-bridge.test.ts`
+  - Accepted flows no longer depend on local review/operator/downstream bridge code.
+
+* Implementation
+** Write cutover acceptance tests (TDD: before migration)
+:PROPERTIES:
+:CUSTOM_ID: PROJ-024-growth-repo-config-cutover-and-legacy-de::cutover-tests
+:DEPENDS: PROJ-020-spell-manifest-foundation-for-config-nat::document-schema PROJ-021-spell-workflow-engine-for-generic-approv::implement-apis PROJ-022-spell-growth-action-pack-and-canonical-r::register-actions
+:END:
+- Files: `../growth/test/cutover/manifest-load.test.ts`, `../growth/test/cutover/discovery-to-feed.test.ts`, `../growth/test/cutover/checkpoint-to-export.test.ts`, `../growth/test/cutover/shared-surface-state.test.ts`, `../growth/test/cutover/no-legacy-bridge.test.ts`
+- Author the black-box cutover specs early against canonical contracts so later items drive them green rather than inventing test expectations after implementation.
+
+** Build the growth KDL tree
+:PROPERTIES:
+:CUSTOM_ID: PROJ-024-growth-repo-config-cutover-and-legacy-de::build-kdl-tree
+:DEPENDS: PROJ-024-growth-repo-config-cutover-and-legacy-de::cutover-tests
+:END:
+- Files: `../growth/.spell/autonomy.kdl`, `../growth/.spell/workflows/review-policy.kdl`, `../growth/.spell/workflows/checkpoints.kdl`, `../growth/.spell/workflows/notifications.kdl`, `../growth/.spell/workflows/exports.kdl`, `../growth/.spell/data/sources.kdl`, `../growth/.spell/data/personas.kdl`, `../growth/.spell/states/workflow-db.kdl`, `../growth/.spell/states/audit-db.kdl`, `../growth/.spell/states/artifact-store.kdl`, `../growth/.spell/qml/panels.kdl`, `../growth/.spell/qml/layouts.kdl`, `../growth/.spell/qml/sync.kdl`
+- Replace shell prompts with typed action blocks, alias imports, explicit env references, and designated registry/state files.
+
+** Migrate growth workflows onto generic runtime
+:PROPERTIES:
+:CUSTOM_ID: PROJ-024-growth-repo-config-cutover-and-legacy-de::migrate-flows
+:DEPENDS: PROJ-024-growth-repo-config-cutover-and-legacy-de::build-kdl-tree PROJ-023-spell-operator-surfaces-and-shared-sync::implement-qml PROJ-023-spell-operator-surfaces-and-shared-sync::implement-telegram PROJ-023-spell-operator-surfaces-and-shared-sync::implement-tools
+:END:
+- Files: `../growth/.spell/channels.kdl`, `../growth/.spell/server.kdl`, `../growth/.spell/autonomy.kdl`
+- Wire discovery, feed, export, checkpoints, notifications, and manual/operator-safe goal triggering to the new generic runtime and canonical operator surfaces.
+
+** Delete legacy orchestration paths
+:PROPERTIES:
+:CUSTOM_ID: PROJ-024-growth-repo-config-cutover-and-legacy-de::delete-legacy
+:DEPENDS: PROJ-024-growth-repo-config-cutover-and-legacy-de::migrate-flows
+:END:
+- Files: `../growth/src/goals/discovery-goal.ts`, `../growth/src/goals/feed-delivery-goal.ts`, `../growth/src/goals/export-goal.ts`, `../growth/src/review/operator-action-handler.ts`, `../growth/src/review/queue-service.ts`, `../growth/src/review/downstream-approval-jobs.ts`, `../growth/src/review/telegram-approval-sync.ts`, `../growth/src/review/review-window-state.ts`, `../growth/src/review/review-surface-actions.ts`, `../growth/src/review/review-surface-controller.ts`, `../growth/src/review/launch-review-queue.ts`, `../growth/src/feed/send-feed.ts`, `../growth/src/publication/export-approved-articles.ts`, `../growth/src/state/db.ts`, `../growth/src/state/repositories/*`
+- Remove old orchestration and persistence layers rather than leaving compatibility shims.
+
+* Edge Cases
+- `../growth/.spell/channels.kdl` already has `default-model`; do not regress transport config while restructuring workflow config.
+- Canonical source/persona KDL files remain the source of truth; runtime DB rows are only materializations/caches.
+- The final cutover must not secretly rely on growth-local review window state or operator webhook bridges.
+- Clean-slate cutover means no legacy state migration task should creep back in.
+
+* Acceptance Criteria
+- `../growth/.spell/autonomy.kdl` no longer shells out to `bun run src/cli.ts` for accepted flows.
+- All accepted flows run through typed action blocks plus the dedicated workflow KDL family imported by `autonomy.kdl`.
+- Accepted flows no longer depend on `../growth/src/review/*`, `../growth/src/goals/*`, `../growth/src/feed/*`, `../growth/src/publication/*`, or local repository bootstrapping as the active orchestration layer.
+- Verification: `bun test ../growth/test/cutover/manifest-load.test.ts ../growth/test/cutover/discovery-to-feed.test.ts ../growth/test/cutover/checkpoint-to-export.test.ts ../growth/test/cutover/shared-surface-state.test.ts ../growth/test/cutover/no-legacy-bridge.test.ts` passes. Required artifacts: QML approval surface screenshot, QML goals panel screenshot, Telegram transcript/screenshots, sync-folder tree snapshot, and exported artifact proof for the checkpoint-resume flow.

@@ -1,0 +1,109 @@
+#+TITLE: Spell Growth Action Pack And Canonical Registry Writeback
+#+STATE: DONE
+#+SESSION_ID: 14ab6894eaa2d281
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-00-14-890Z_14ab6894eaa2d281.jsonl]]
+#+CUSTOM_ID: PROJ-022-spell-growth-action-pack-and-canonical-r
+#+EFFORT: 28h
+#+LAYER: backend
+#+PRIORITY: #A
+#+DEPENDS: PROJ-020-spell-manifest-foundation-for-config-nat::implement-loader PROJ-021-spell-workflow-engine-for-generic-approv::implement-engine PROJ-021-spell-workflow-engine-for-generic-approv::implement-apis
+
+NOTE [2026-04-03]: Completed under PLAN-101. packages/spell-growth landed with registry/discovery/feed/export/writeback logic and focused action-pack verification passed.
+
+* Scope
+** In scope
+- Create `packages/spell-growth` as the first-party growth action pack containing the canonical source/persona registry loaders, discovery planning, provider contracts, canonicalization/dedupe, scoring, review-item creation, feed digest action, publication export action, workflow presets, and source/persona curation writeback helpers.
+- Keep canonical source/persona definitions in designated KDL registry files and implement direct writeback only for append/update within those files.
+- Produce curation review artifacts containing both a normalized proposed record and a KDL diff/patch artifact.
+- Own the explicit first-party action registration step that makes manifest-loaded `growth.*` actions resolve through the canonical Spell runtime.
+** Out of scope
+- Generic workflow persistence/contracts, reusable QML panels, coding-agent tool shells, and actual migration of `../growth/.spell/*`.
+** Boundary rationale
+- This item owns growth-specific deterministic behavior and canonical KDL registry mutation logic while leaving reusable runtime behavior in shared Spell packages.
+
+* Tests
+- `packages/spell-growth/test/source-registry.test.ts`
+  - Parse source registries from KDL, preserve priority ordering, and reject duplicate slugs/source collisions.
+- `packages/spell-growth/test/persona-registry.test.ts`
+  - Parse persona registries, validate required fields, and keep stable ordering.
+- `packages/spell-growth/test/discovery-planner.test.ts`
+  - Direct-source, fallback, and adjacent-theme query generation is deterministic with stable query ids.
+- `packages/spell-growth/test/provider-contracts/exa.test.ts`
+  - Exa connector normalizes results, handles provider failures, and preserves empty-result semantics.
+- `packages/spell-growth/test/canonicalization.test.ts`
+  - URL normalization, tracking-param stripping, published-at normalization, and provenance precedence behave deterministically.
+- `packages/spell-growth/test/scoring.test.ts`
+  - Lexical scoring math, tie-break ordering, and matched keyword/challenge capture stay deterministic.
+- `packages/spell-growth/test/review-item-creation.test.ts`
+  - Discovery ingest creates or upserts canonical candidates and links them to workflow review items.
+- `packages/spell-growth/test/feed-action.test.ts`
+  - Digest grouping, truncation, inline approval button metadata, Telegram length limits, and sent-artifact linkage.
+- `packages/spell-growth/test/publication-export.test.ts`
+  - Publication contract validation, slug generation, CMS outbox writing, repo draft writing, and failure semantics.
+- `packages/spell-growth/test/curation-writeback.test.ts`
+  - Canonical KDL append/update, normalized artifact generation, diff/patch artifact generation, and schema-aware single-record/non-overlapping auto-merge safety.
+- `packages/spell-growth/test/action-registration.test.ts`
+  - A manifest-loaded `growth.*` action resolves through the first-party runtime registry in a real server/bootstrap path.
+
+* Implementation
+** Define growth package contracts
+:PROPERTIES:
+:CUSTOM_ID: PROJ-022-spell-growth-action-pack-and-canonical-r::define-types
+:DEPENDS: PROJ-020-spell-manifest-foundation-for-config-nat::implement-loader PROJ-021-spell-workflow-engine-for-generic-approv::implement-engine
+:END:
+- Files: `packages/spell-growth/src/types.ts`, `packages/spell-growth/src/actions/types.ts`, `packages/spell-growth/src/registries/types.ts`
+- Define source/persona schemas, discovery result contracts, score types, action payloads, export contracts, and curation writeback models.
+
+** Write registry and discovery tests (TDD: before implementation)
+:PROPERTIES:
+:CUSTOM_ID: PROJ-022-spell-growth-action-pack-and-canonical-r::registry-tests
+:DEPENDS: PROJ-022-spell-growth-action-pack-and-canonical-r::define-types
+:END:
+- Files: `packages/spell-growth/test/source-registry.test.ts`, `packages/spell-growth/test/persona-registry.test.ts`, `packages/spell-growth/test/discovery-planner.test.ts`, `packages/spell-growth/test/provider-contracts/exa.test.ts`, `packages/spell-growth/test/canonicalization.test.ts`, `packages/spell-growth/test/scoring.test.ts`
+- Encode the deterministic registry, planning, provider, canonicalization, and scoring scenarios from the Tests section as initially failing tests.
+
+** Implement registries, planner, providers, and scoring
+:PROPERTIES:
+:CUSTOM_ID: PROJ-022-spell-growth-action-pack-and-canonical-r::implement-core
+:DEPENDS: PROJ-022-spell-growth-action-pack-and-canonical-r::registry-tests
+:END:
+- Files: `packages/spell-growth/src/registries/source-loader.ts`, `packages/spell-growth/src/registries/persona-loader.ts`, `packages/spell-growth/src/discovery/planner.ts`, `packages/spell-growth/src/discovery/providers/exa.ts`, `packages/spell-growth/src/discovery/canonicalize.ts`, `packages/spell-growth/src/scoring/lexical.ts`
+- Implement the deterministic growth core without model-provider calls in the base path.
+
+** Write action and writeback tests (TDD: before implementation)
+:PROPERTIES:
+:CUSTOM_ID: PROJ-022-spell-growth-action-pack-and-canonical-r::action-tests
+:DEPENDS: PROJ-022-spell-growth-action-pack-and-canonical-r::define-types PROJ-021-spell-workflow-engine-for-generic-approv::implement-apis
+:END:
+- Files: `packages/spell-growth/test/review-item-creation.test.ts`, `packages/spell-growth/test/feed-action.test.ts`, `packages/spell-growth/test/publication-export.test.ts`, `packages/spell-growth/test/curation-writeback.test.ts`, `packages/spell-growth/test/action-registration.test.ts`
+- Encode review-item creation, feed send, publication export, canonical KDL writeback, and first-party registration behavior as initially failing tests.
+
+** Implement growth actions, presets, and KDL writeback
+:PROPERTIES:
+:CUSTOM_ID: PROJ-022-spell-growth-action-pack-and-canonical-r::implement-actions
+:DEPENDS: PROJ-022-spell-growth-action-pack-and-canonical-r::implement-core PROJ-022-spell-growth-action-pack-and-canonical-r::action-tests
+:END:
+- Files: `packages/spell-growth/src/actions/discovery.ts`, `packages/spell-growth/src/actions/feed-send.ts`, `packages/spell-growth/src/actions/export-publish.ts`, `packages/spell-growth/src/actions/curation-writeback.ts`, `packages/spell-growth/src/workflow/presets.ts`
+- Implement growth discovery, feed, export, and curation actions plus workflow preset mappings to the generic core.
+
+** Register first-party growth actions with the server runtime
+:PROPERTIES:
+:CUSTOM_ID: PROJ-022-spell-growth-action-pack-and-canonical-r::register-actions
+:DEPENDS: PROJ-022-spell-growth-action-pack-and-canonical-r::implement-actions
+:END:
+- Files: `packages/spell-server/src/actions/index.ts`, `packages/spell-server/src/server.ts`, `packages/spell-growth/src/index.ts`
+- Make `growth.*` actions resolve through the first-party registry in the real server/bootstrap path and verify manifest-loaded action execution uses the canonical registry.
+
+* Edge Cases
+- Canonical writeback must touch only designated registry files and must not reorganize unrelated KDL blocks.
+- Safe auto-merge is limited to schema-aware updates within a single target record and non-overlapping record updates.
+- Review-item upserts must not duplicate canonical URLs or persona/source slugs.
+- Feed/export actions must record artifacts and downstream linkage without pretending success after partial failure.
+- Source/persona curation must preserve full audit history even when replacing the active artifact set for a later approval step.
+
+* Acceptance Criteria
+- `packages/spell-growth` exists as the only first-party home for growth-specific deterministic workflow logic.
+- Growth discovery/feed/export behavior runs through typed actions and workflow APIs, not project-local CLI shellouts.
+- Source/persona curation produces both normalized proposal artifacts and KDL diff/patch artifacts, then writes canonical KDL in-place for approved append/update cases.
+- A manifest-loaded `growth.*` action resolves through the canonical runtime registry in a real server path.
+- Verification: `bun test packages/spell-growth/test/source-registry.test.ts packages/spell-growth/test/persona-registry.test.ts packages/spell-growth/test/discovery-planner.test.ts packages/spell-growth/test/provider-contracts/exa.test.ts packages/spell-growth/test/canonicalization.test.ts packages/spell-growth/test/scoring.test.ts packages/spell-growth/test/review-item-creation.test.ts packages/spell-growth/test/feed-action.test.ts packages/spell-growth/test/publication-export.test.ts packages/spell-growth/test/curation-writeback.test.ts packages/spell-growth/test/action-registration.test.ts` passes.

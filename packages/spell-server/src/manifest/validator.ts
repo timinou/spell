@@ -1,4 +1,5 @@
 import { Cron } from "croner";
+import type { ActionRegistry } from "../actions/registry";
 import type { AutonomyManifest, HookTarget } from "./types";
 
 export type ValidationError = {
@@ -18,7 +19,7 @@ function validateHookTarget(target: HookTarget, path: string, errors: Validation
 	}
 }
 
-export function validateManifest(manifest: AutonomyManifest): ValidationResult {
+export function validateManifest(manifest: AutonomyManifest, registry?: ActionRegistry): ValidationResult {
 	const errors: ValidationError[] = [];
 
 	if (manifest.name.trim().length === 0) {
@@ -30,7 +31,11 @@ export function validateManifest(manifest: AutonomyManifest): ValidationResult {
 
 	for (const [goalName, goal] of manifest.goals) {
 		if (!manifest.setups.has(goal.setup)) {
-			errors.push({ path: `goals.${goalName}.setup`, message: `Unknown setup "${goal.setup}"` });
+			errors.push({ path: `goals.${goalName}.setup`, message: `Unknown setup \"${goal.setup}\"` });
+		}
+
+		if (!goal.prompt && !goal.action) {
+			errors.push({ path: `goals.${goalName}`, message: "Goal must define either prompt or action" });
 		}
 
 		if (goal.schedule.type === "cron") {
@@ -54,6 +59,26 @@ export function validateManifest(manifest: AutonomyManifest): ValidationResult {
 				targets.forEach((target, index) => {
 					validateHookTarget(target, `goals.${goalName}.hooks.${eventName}.${index}`, errors);
 				});
+			}
+		}
+
+		if (goal.action && registry) {
+			for (const message of registry.validateAction(goal.action)) {
+				errors.push({ path: `goals.${goalName}.action`, message });
+			}
+			for (const [slotName, slot] of Object.entries(goal.action.promptSlots)) {
+				if (slot.kind === "inline" && typeof slot.content !== "string") {
+					errors.push({
+						path: `goals.${goalName}.action.promptSlots.${slotName}`,
+						message: "Inline prompt slots must carry content",
+					});
+				}
+				if (slot.kind === "file" && typeof slot.path !== "string") {
+					errors.push({
+						path: `goals.${goalName}.action.promptSlots.${slotName}`,
+						message: "File prompt slots must carry a file path",
+					});
+				}
 			}
 		}
 	}

@@ -1,0 +1,106 @@
+#+TITLE: Spell Workflow Engine For Generic Approvals And Checkpoints
+#+STATE: DONE
+#+SESSION_ID: 14ab6894eaa2d281
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-00-14-890Z_14ab6894eaa2d281.jsonl]]
+#+CUSTOM_ID: PROJ-021-spell-workflow-engine-for-generic-approv
+#+EFFORT: 32h
+#+LAYER: backend
+#+PRIORITY: #A
+#+DEPENDS: PROJ-020-spell-manifest-foundation-for-config-nat::implement-loader PROJ-020-spell-manifest-foundation-for-config-nat::implement-registry
+
+NOTE [2026-04-03]: Completed under PLAN-101. Generic workflow engine, canonical approval/downstream/goals APIs, and focused workflow/http verification passed.
+
+* Scope
+** In scope
+- Build the generic Spell workflow engine in `packages/spell-server` for approval items, checkpoint items, action catalogs, per-workflow role matrices, claims, idempotent action processing, downstream jobs, audit trails, notification routing, canonical goal APIs, workflow APIs, and the server-owned sync snapshot emitter.
+- Add the dedicated workflow persistence layer and schema under files such as `packages/spell-server/src/workflow/types.ts`, `packages/spell-server/src/workflow/store.ts`, `packages/spell-server/src/workflow/engine.ts`, `packages/spell-server/src/workflow/checkpoints.ts`, `packages/spell-server/src/workflow/downstream.ts`, `packages/spell-server/src/workflow/audit.ts`, and `packages/spell-server/src/workflow/sync-snapshot.ts`.
+- Own the canonical backend contracts for goal list/inspect/trigger/run-history semantics so QML, Telegram, and coding-agent tools do not grow parallel goal surfaces.
+- Replace the current hardcoded growth operator action route in `packages/spell-server/src/http/routes/operator-actions.ts` with a generic workflow-facing contract or retire it if superseded by clearer APIs.
+** Out of scope
+- Growth-specific discovery/feed/export logic, QML panel implementation, coding-agent tool UI, and actual growth repo migration.
+** Boundary rationale
+- This item creates the canonical workflow and goal model that every later surface and domain action must share.
+
+* Tests
+- `packages/spell-server/test/workflow/approval-lifecycle.test.ts`
+  - Create, load, list, and filter approval items.
+  - Allowed actions change by state and workflow policy.
+  - Reason-required semantics are configurable for any action.
+- `packages/spell-server/test/workflow/claims.test.ts`
+  - Claim, release, expiry, and admin override semantics.
+  - Per-workflow lease overrides use the server default only when absent.
+- `packages/spell-server/test/workflow/idempotency.test.ts`
+  - Exact duplicate request ids are no-ops.
+  - Stale requests are audited without replaying transitions.
+- `packages/spell-server/test/workflow/checkpoints.test.ts`
+  - Pause-and-resume, fail-run, follow-up-goal, and create-another-approval policies all work.
+  - Per-action artifact mutability modes are enforced atomically with the state transition.
+- `packages/spell-server/test/workflow/downstream-queue.test.ts`
+  - Queue lifecycle, per-job-kind concurrency limits, retry eligibility, and attempt history.
+- `packages/spell-server/test/workflow/audit-trail.test.ts`
+  - Full reconstruction of claim/action/retry/writeback history.
+- `packages/spell-server/test/http/approvals-api.test.ts`
+  - Stable serialization for approvals, claims, checkpoints, audit history, and linked artifacts.
+- `packages/spell-server/test/http/downstream-jobs-api.test.ts`
+  - Filtered downstream job views and attempt serialization.
+- `packages/spell-server/test/http/goals-api.test.ts`
+  - Canonical goal list, detail, trigger, and run-history shapes stay stable for all operator surfaces.
+- `packages/spell-server/test/workflow/notification-routing.test.ts`
+  - Telegram and generic-channel routing decisions do not corrupt workflow state on delivery failure.
+- `packages/spell-server/test/workflow/sync-snapshot-emitter.test.ts`
+  - Stable folder tree with JSON indexes and per-record JSON files emits current state only and supports rsync-friendly incremental updates.
+
+* Implementation
+** Define workflow schema and contracts
+:PROPERTIES:
+:CUSTOM_ID: PROJ-021-spell-workflow-engine-for-generic-approv::define-types
+:DEPENDS: PROJ-020-spell-manifest-foundation-for-config-nat::implement-loader PROJ-020-spell-manifest-foundation-for-config-nat::implement-registry
+:END:
+- Files: `packages/spell-server/src/workflow/types.ts`, `packages/spell-server/src/workflow/schema.ts`, `packages/spell-server/src/workflow/permissions.ts`, `packages/spell-server/src/http/types.ts`
+- Define separate approval-item and checkpoint-item types with a shared base contract, plus goal summary/detail/run types, action payload schemas, per-workflow role matrices, audit entries, downstream jobs, and sync snapshot record types.
+
+** Write workflow contract tests (TDD: before implementation)
+:PROPERTIES:
+:CUSTOM_ID: PROJ-021-spell-workflow-engine-for-generic-approv::workflow-tests
+:DEPENDS: PROJ-021-spell-workflow-engine-for-generic-approv::define-types
+:END:
+- Files: `packages/spell-server/test/workflow/approval-lifecycle.test.ts`, `packages/spell-server/test/workflow/claims.test.ts`, `packages/spell-server/test/workflow/idempotency.test.ts`, `packages/spell-server/test/workflow/checkpoints.test.ts`, `packages/spell-server/test/workflow/downstream-queue.test.ts`, `packages/spell-server/test/workflow/audit-trail.test.ts`, `packages/spell-server/test/workflow/notification-routing.test.ts`, `packages/spell-server/test/workflow/sync-snapshot-emitter.test.ts`
+- Encode the scenarios from the Tests section as initially failing tests.
+
+** Implement persistence and workflow engine
+:PROPERTIES:
+:CUSTOM_ID: PROJ-021-spell-workflow-engine-for-generic-approv::implement-engine
+:DEPENDS: PROJ-021-spell-workflow-engine-for-generic-approv::workflow-tests
+:END:
+- Files: `packages/spell-server/src/workflow/store.ts`, `packages/spell-server/src/workflow/engine.ts`, `packages/spell-server/src/workflow/checkpoints.ts`, `packages/spell-server/src/workflow/downstream.ts`, `packages/spell-server/src/workflow/audit.ts`
+- Implement the dedicated workflow schema, atomic transition handling, request-id idempotency, claim leases, downstream queue execution, and per-action artifact mutation policies.
+
+** Write API contract tests (TDD: before route implementation)
+:PROPERTIES:
+:CUSTOM_ID: PROJ-021-spell-workflow-engine-for-generic-approv::api-tests
+:DEPENDS: PROJ-021-spell-workflow-engine-for-generic-approv::define-types
+:END:
+- Files: `packages/spell-server/test/http/approvals-api.test.ts`, `packages/spell-server/test/http/downstream-jobs-api.test.ts`, `packages/spell-server/test/http/goals-api.test.ts`
+- Assert stable response shapes for approvals, checkpoints, downstream jobs, attempts, goal summaries/details/runs, audit history, and sync snapshot references.
+
+** Implement HTTP APIs and sync snapshot emitter
+:PROPERTIES:
+:CUSTOM_ID: PROJ-021-spell-workflow-engine-for-generic-approv::implement-apis
+:DEPENDS: PROJ-021-spell-workflow-engine-for-generic-approv::implement-engine PROJ-021-spell-workflow-engine-for-generic-approv::api-tests
+:END:
+- Files: `packages/spell-server/src/http/routes/approvals.ts`, `packages/spell-server/src/http/routes/downstream-jobs.ts`, `packages/spell-server/src/http/routes/goals.ts`, `packages/spell-server/src/http/server.ts`, `packages/spell-server/src/workflow/sync-snapshot.ts`
+- Expose canonical approval, downstream-job, and goal APIs; retire or adapt the narrow operator-actions endpoint; and emit a deterministic sync folder suitable for rsync-style transport.
+
+* Edge Cases
+- Claim expiry and action submission must not race into double transitions.
+- Action payload validation must be shared across APIs, Telegram, QML, and coding-agent tools.
+- Artifact replacement must preserve full audit history and superseded references.
+- Notification failures, downstream job failures, and KDL writeback failures must surface truthfully without corrupting workflow state.
+- Atomicity model: state transition, audit append, artifact mutation, and writeback bookkeeping should commit together or fail together.
+
+* Acceptance Criteria
+- `packages/spell-server/src/http/routes/operator-actions.ts` is no longer the canonical growth-specific approval contract.
+- Spell server exposes stable approval, downstream-job, and goal APIs backed by a dedicated workflow schema.
+- Checkpoints can pause/resume runs, fail runs, launch follow-up goals, or create further approvals according to policy.
+- The sync folder emitter produces JSON indexes and per-record JSON files that a separate QML session can consume without DB access.
+- Verification: `bun test packages/spell-server/test/workflow/approval-lifecycle.test.ts packages/spell-server/test/workflow/claims.test.ts packages/spell-server/test/workflow/idempotency.test.ts packages/spell-server/test/workflow/checkpoints.test.ts packages/spell-server/test/workflow/downstream-queue.test.ts packages/spell-server/test/workflow/audit-trail.test.ts packages/spell-server/test/workflow/notification-routing.test.ts packages/spell-server/test/workflow/sync-snapshot-emitter.test.ts packages/spell-server/test/http/approvals-api.test.ts packages/spell-server/test/http/downstream-jobs-api.test.ts packages/spell-server/test/http/goals-api.test.ts` passes.

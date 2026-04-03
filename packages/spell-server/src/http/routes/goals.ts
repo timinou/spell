@@ -40,6 +40,16 @@ function toRunEntry(run: GoalRun): RunEntry {
 	};
 }
 
+function getActionId(goal: ManifestGoal): string | undefined {
+	if (goal.action) {
+		return goal.action.id;
+	}
+	if (goal.prompt) {
+		return "spell.prompt";
+	}
+	return undefined;
+}
+
 function buildGoalSummary(
 	name: string,
 	goal: ManifestGoal,
@@ -53,6 +63,7 @@ function buildGoalSummary(
 		name,
 		setup: goal.setup,
 		schedule: describeSchedule(goal),
+		actionId: getActionId(goal),
 		status: executor.getState(name),
 		lastRun:
 			lastRun?.completedAt === undefined
@@ -62,6 +73,7 @@ function buildGoalSummary(
 						status: lastRun.status,
 					},
 		nextFire: nextFire?.toISOString(),
+		runCount: runs.length,
 	};
 }
 

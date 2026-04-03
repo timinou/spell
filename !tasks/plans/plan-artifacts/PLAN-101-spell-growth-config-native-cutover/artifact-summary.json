@@ -1,0 +1,13 @@
+{
+  "approvalScreenshot": "/home/user/code/ora/spell/!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/qml-approval-surface.png",
+  "goalsScreenshot": "/home/user/code/ora/spell/!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/qml-goals-panel.png",
+  "telegramTranscript": "/home/user/code/ora/spell/!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/telegram-quick-action-transcript.txt",
+  "syncTree": "/home/user/code/ora/spell/!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/sync-state-tree.txt",
+  "feedArtifact": "/home/user/code/ora/spell/!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/feed-digest.json",
+  "exportArtifacts": {
+    "cmsPath": "/home/user/code/ora/spell/!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/export-proof/publication-export.json",
+    "draftPaths": [
+      "/home/user/code/ora/spell/!tasks/plans/plan-artifacts/PLAN-101-spell-growth-config-native-cutover/export-proof/automation-for-finance-teams.md"
+    ]
+  }
+}
