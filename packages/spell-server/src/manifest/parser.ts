@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { Document, Node } from "@bgotink/kdl";
 import { parse } from "@bgotink/kdl";
-import type { ActionRegistry } from "../actions/registry";
+import { ActionRegistry } from "../actions/registry";
 import type {
 	ActionDescriptor,
 	ActionParameterDescriptor,
@@ -54,6 +54,16 @@ interface EnvReference {
 }
 
 type ScalarExpectedType = "string" | "number" | "boolean";
+
+const ACTION_PARAM_TYPES = new Set<ActionParameterType>([
+	"string",
+	"number",
+	"boolean",
+	"string[]",
+	"number[]",
+	"boolean[]",
+	"json",
+]);
 
 function getNodeName(node: Node): string {
 	return node.getName();
@@ -501,17 +511,10 @@ function parseActionDescriptorNode(node: Node, pathLabel: string, options: Parse
 			if (!typeValue) {
 				throw new Error(`${pathLabel}.param.${paramName}.type is required`);
 			}
-			const validTypes = new Set<ActionParameterType>([
-				"string",
-				"number",
-				"boolean",
-				"string[]",
-				"number[]",
-				"boolean[]",
-				"json",
-			]);
-			if (!validTypes.has(typeValue as ActionParameterType)) {
-				throw new Error(`${pathLabel}.param.${paramName}.type must be one of: ${[...validTypes].join(", ")}`);
+			if (!ACTION_PARAM_TYPES.has(typeValue as ActionParameterType)) {
+				throw new Error(
+					`${pathLabel}.param.${paramName}.type must be one of: ${[...ACTION_PARAM_TYPES].join(", ")}`,
+				);
 			}
 			const required = resolveOptionalBooleanProperty(child, "required", `${pathLabel}.param.${paramName}`, options);
 			params[paramName] = {
@@ -804,11 +807,20 @@ export function parseManifestKdl(kdlText: string, options: ParseManifestOptions 
 	if (manifestModule.imports.length > 0 || manifestModule.overrides.length > 0) {
 		throw new Error("Imports and overrides require loadManifestFromFile()");
 	}
+	const registry =
+		options.registry ?? (manifestModule.actionDescriptors.length > 0 ? new ActionRegistry() : undefined);
+	if (registry) {
+		for (const descriptor of manifestModule.actionDescriptors) {
+			if (!registry.has(descriptor.id)) {
+				registry.register(descriptor);
+			}
+		}
+	}
 	const manifest = hydrateManifest(manifestModule);
 	if (!isValidManifest(manifest)) {
 		throw new Error("Parsed manifest does not match manifest schema");
 	}
-	const validation = validateManifest(manifest, options.registry);
+	const validation = validateManifest(manifest, registry);
 	if (!validation.valid) {
 		throw new Error(validation.errors.map(error => `${error.path}: ${error.message}`).join("\n"));
 	}

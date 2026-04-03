@@ -232,4 +232,23 @@ goal "run" {
 			}),
 		).toThrow(/first-party or project descriptors only/);
 	});
+
+	it("parseManifestKdl registers inline action descriptors", () => {
+		const manifest = parseManifestKdl(`name "inline-actions"
+version "1.0.0"
+action-descriptor "my.action" source="project" {
+	param "limit" type="number" required=#true
+}
+setup "worker" { domain "coding" }
+goal "run" {
+	setup "worker"
+	schedule type="cron" expression="0 1 * * *"
+	action "my.action" {
+		param "limit" 42
+	}
+}
+`);
+		expect(manifest.goals.get("run")?.action?.id).toBe("my.action");
+		expect(manifest.goals.get("run")?.action?.params).toEqual({ limit: 42 });
+	});
 });
