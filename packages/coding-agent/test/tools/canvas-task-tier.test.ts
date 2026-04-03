@@ -9,10 +9,14 @@
  * - Window close aborts the running task
  * - Duplicate window requests abort the previous task
  * - Dispose cleans up everything
+ * - Task submissions acknowledge QML immediately and time out cleanly
  */
+
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { QmlBridge } from "@oh-my-pi/pi-qml";
 import { type CanvasTaskExecutor, CanvasTaskManager } from "../../src/orchestrators/canvas-task-manager";
-import type { SingleResult } from "../../src/task/types";
+import type { AgentProgress, SingleResult } from "../../src/task/types";
+import { TASK_SUBAGENT_PROGRESS_CHANNEL } from "../../src/task/types";
 import {
 	CANVAS_EVENTS_CHANNEL,
 	CANVAS_TASK_CHANNEL,
@@ -20,10 +24,6 @@ import {
 	type CanvasWindowEventsPayload,
 } from "../../src/tools/canvas";
 import { EventBus, Priority } from "../../src/utils/event-bus";
-
-// ---------------------------------------------------------------------------
-// Fake executor
-// ---------------------------------------------------------------------------
 
 interface FakeCall {
 	id: string;
@@ -35,7 +35,22 @@ interface FakeCall {
 	reject: (err: Error) => void;
 }
 
-function createFakeExecutor() {
+interface FakeExecutorState {
+	calls: FakeCall[];
+	executor: CanvasTaskExecutor;
+}
+
+interface BridgeMessage {
+	windowId: string;
+	payload: Record<string, unknown>;
+}
+
+interface FakeBridge {
+	sent: BridgeMessage[];
+	sendMessage(id: string, payload: Record<string, unknown>): void;
+}
+
+function createFakeExecutor(): FakeExecutorState {
 	const calls: FakeCall[] = [];
 
 	const executor: CanvasTaskExecutor = options => {
@@ -74,12 +89,27 @@ function createFakeExecutor() {
 	return { calls, executor };
 }
 
-// ---------------------------------------------------------------------------
-// Fake bridge
-// ---------------------------------------------------------------------------
+function createAbortAwareExecutor(onCall?: (signal: AbortSignal) => void): CanvasTaskExecutor {
+	return options => {
+		onCall?.(options.signal!);
+		const { promise, reject } = Promise.withResolvers<SingleResult>();
+		options.signal?.addEventListener(
+			"abort",
+			() => {
+				reject(
+					options.signal?.reason instanceof Error
+						? options.signal.reason
+						: new Error(String(options.signal?.reason)),
+				);
+			},
+			{ once: true },
+		);
+		return promise;
+	};
+}
 
-function createFakeBridge() {
-	const sent: Array<{ windowId: string; payload: Record<string, unknown> }> = [];
+function createFakeBridge(): FakeBridge {
+	const sent: BridgeMessage[] = [];
 	return {
 		sent,
 		sendMessage(id: string, payload: Record<string, unknown>) {
@@ -88,16 +118,10 @@ function createFakeBridge() {
 	};
 }
 
-/** Drain EventBus and yield to let fire-and-forget handlers settle. */
 async function drainAndSettle(eventBus: EventBus) {
 	await eventBus.drain();
-	// The task handler is fire-and-forget; yield so the async body runs.
 	await Bun.sleep(5);
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe("CANVAS_TASK_CHANNEL", () => {
 	it("is a distinct non-empty string", () => {
@@ -107,8 +131,8 @@ describe("CANVAS_TASK_CHANNEL", () => {
 
 describe("CanvasTaskManager", () => {
 	let eventBus: EventBus;
-	let bridge: ReturnType<typeof createFakeBridge>;
-	let fake: ReturnType<typeof createFakeExecutor>;
+	let bridge: FakeBridge;
+	let fake: FakeExecutorState;
 	let manager: CanvasTaskManager;
 
 	function emit(payload: CanvasTaskPayload) {
@@ -125,6 +149,18 @@ describe("CanvasTaskManager", () => {
 		eventBus.emit(CANVAS_EVENTS_CHANNEL, p);
 	}
 
+	function recreateManager(executor: CanvasTaskExecutor, timeoutMs?: number) {
+		manager.dispose();
+		manager = new CanvasTaskManager({
+			eventBus,
+			cwd: "/tmp/test-cwd",
+			executor,
+			timeoutMs,
+		});
+		manager.setBridge(bridge as unknown as QmlBridge);
+		manager.start();
+	}
+
 	beforeEach(() => {
 		eventBus = new EventBus();
 		bridge = createFakeBridge();
@@ -134,7 +170,7 @@ describe("CanvasTaskManager", () => {
 			cwd: "/tmp/test-cwd",
 			executor: fake.executor,
 		});
-		manager.setBridge(bridge as any);
+		manager.setBridge(bridge as unknown as QmlBridge);
 		manager.start();
 	});
 
@@ -149,7 +185,7 @@ describe("CanvasTaskManager", () => {
 		expect(fake.calls).toHaveLength(1);
 		const call = fake.calls[0];
 		expect(call.assignment).toContain("Fix the button spacing");
-		expect(call.agent.model).toEqual(["pi/smol"]);
+		expect(call.agent.model).toEqual(["pi/sniper"]);
 		expect(call.agent.name).toBe("canvas-task");
 	});
 
@@ -173,6 +209,36 @@ describe("CanvasTaskManager", () => {
 		expect(call.outputSchema).toEqual(schema);
 	});
 
+	it("calls reply callback with ack before executing", async () => {
+		const ordering: string[] = [];
+		recreateManager(_options => {
+			ordering.push("executor");
+			const { promise } = Promise.withResolvers<SingleResult>();
+			return promise;
+		});
+
+		const replies: Record<string, unknown>[] = [];
+		emit({
+			windowId: "w-ack",
+			assignment: "Fix the dialog layout",
+			reply: result => {
+				ordering.push("reply");
+				replies.push(result);
+			},
+		});
+		await drainAndSettle(eventBus);
+
+		expect(replies).toHaveLength(1);
+		expect(replies[0]).toMatchObject({
+			action: "task_ack",
+			ok: true,
+			status: "processing",
+			model: "pi/sniper",
+		});
+		expect(String(replies[0].message)).toContain("Task received:");
+		expect(ordering).toEqual(["reply", "executor"]);
+	});
+
 	it("sends result back to originating window on completion", async () => {
 		emit({ windowId: "w3", assignment: "Fix it" });
 		await drainAndSettle(eventBus);
@@ -185,6 +251,9 @@ describe("CanvasTaskManager", () => {
 		expect(bridge.sent[0].payload.action).toBe("task_result");
 		expect(bridge.sent[0].payload.output).toBe("Changed 2 files.");
 		expect(bridge.sent[0].payload.ok).toBe(true);
+		expect(bridge.sent[0].payload.model).toBe("pi/sniper");
+		expect(bridge.sent[0].payload.tokens).toBe(0);
+		expect(typeof bridge.sent[0].payload.durationMs).toBe("number");
 	});
 
 	it("sends error back to window on executor failure", async () => {
@@ -198,6 +267,9 @@ describe("CanvasTaskManager", () => {
 		expect(bridge.sent[0].windowId).toBe("w4");
 		expect(bridge.sent[0].payload.ok).toBe(false);
 		expect(bridge.sent[0].payload.error).toBe("Model unavailable");
+		expect(bridge.sent[0].payload.model).toBe("pi/sniper");
+		expect(bridge.sent[0].payload.retryable).toBe(true);
+		expect(typeof bridge.sent[0].payload.durationMs).toBe("number");
 	});
 
 	it("aborts running task when window closes", async () => {
@@ -280,5 +352,122 @@ describe("CanvasTaskManager", () => {
 		expect(call.assignment).toContain("Fix it");
 		expect(call.assignment).toContain("Context:");
 		expect(call.assignment).toContain("1 screenshot(s) attached");
+	});
+
+	it("includes model in result for custom model requests", async () => {
+		emit({ windowId: "w-model-result", assignment: "Fix it", model: "pi/slow" });
+		await drainAndSettle(eventBus);
+
+		fake.calls[0].resolve("Done.");
+		await Bun.sleep(10);
+
+		expect(bridge.sent[0].payload.model).toBe("pi/slow");
+		expect(bridge.sent[0].payload.ok).toBe(true);
+	});
+
+	it("forwards progress events to the originating window", async () => {
+		emit({ windowId: "w-progress", assignment: "Build thing" });
+		await drainAndSettle(eventBus);
+
+		const taskId = fake.calls[0].id;
+		const progress: AgentProgress = {
+			index: 0,
+			id: taskId,
+			agent: "canvas-task",
+			agentSource: "bundled",
+			status: "running",
+			task: "Build thing",
+			assignment: "Build thing",
+			currentTool: "edit",
+			lastIntent: "Fixing layout",
+			recentTools: [],
+			recentOutput: [],
+			toolCount: 3,
+			tokens: 1500,
+			durationMs: 4200,
+		};
+
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
+			index: 0,
+			agent: "canvas-task",
+			agentSource: "bundled",
+			task: "Build thing",
+			assignment: "Build thing",
+			progress,
+		});
+
+		expect(bridge.sent).toHaveLength(1);
+		expect(bridge.sent[0].windowId).toBe("w-progress");
+		expect(bridge.sent[0].payload).toMatchObject({
+			action: "task_progress",
+			status: "running",
+			currentTool: "edit",
+			toolCount: 3,
+		});
+	});
+
+	it("ignores progress events for unknown tasks", () => {
+		const progress: AgentProgress = {
+			index: 0,
+			id: "canvas-task-nonexistent-123",
+			agent: "canvas-task",
+			agentSource: "bundled",
+			status: "running",
+			task: "unknown",
+			assignment: "unknown",
+			currentTool: "read",
+			recentTools: [],
+			recentOutput: [],
+			toolCount: 1,
+			tokens: 100,
+			durationMs: 500,
+		};
+
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
+			index: 0,
+			agent: "canvas-task",
+			agentSource: "bundled",
+			task: "unknown",
+			assignment: "unknown",
+			progress,
+		});
+
+		expect(bridge.sent).toHaveLength(0);
+	});
+
+	it("aborts executor signal when task exceeds configured timeout", async () => {
+		let timeoutSignal: AbortSignal | undefined;
+		recreateManager(
+			createAbortAwareExecutor(signal => {
+				timeoutSignal = signal;
+			}),
+			20,
+		);
+
+		emit({ windowId: "w-timeout-signal", assignment: "Wait forever" });
+		await drainAndSettle(eventBus);
+		await Bun.sleep(40);
+
+		expect(timeoutSignal).toBeDefined();
+		expect(timeoutSignal?.aborted).toBe(true);
+	});
+
+	it("sends timeout error to QML when task exceeds limit", async () => {
+		recreateManager(createAbortAwareExecutor(), 20);
+
+		emit({ windowId: "w-timeout", assignment: "Wait forever" });
+		await drainAndSettle(eventBus);
+		await Bun.sleep(40);
+
+		expect(bridge.sent).toHaveLength(1);
+		expect(bridge.sent[0].windowId).toBe("w-timeout");
+		expect(bridge.sent[0].payload).toMatchObject({
+			action: "task_result",
+			ok: false,
+			timedOut: true,
+			error: "Task timed out after 0.02s",
+			model: "pi/sniper",
+			retryable: true,
+		});
 	});
 });

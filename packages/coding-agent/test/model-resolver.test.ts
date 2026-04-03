@@ -627,4 +627,11 @@ describe("expandRoleAlias", () => {
 
 		expect(expandRoleAlias("pi/vision", settings)).toBe("pi/vision");
 	});
+
+	test("keeps pi/sniper alias when sniper role is unset", () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
+
+		expect(expandRoleAlias("pi/sniper", settings)).toBe("pi/sniper");
+	});
 });

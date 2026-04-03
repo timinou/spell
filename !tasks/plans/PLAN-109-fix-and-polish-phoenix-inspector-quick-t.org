@@ -1,0 +1,121 @@
+#+TITLE: Fix and polish Phoenix Inspector Quick Task
+#+STATE: DONE
+#+SESSION_ID: 14abfe457e8c8aba
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-54-15-162Z_14abfe457e8c8aba.jsonl]]
+#+CUSTOM_ID: PLAN-109-fix-and-polish-phoenix-inspector-quick-t
+
+
+* Initial Message
+
+ok so give me the tree of cases w.r.t the buttons that get clicked and what happens in the TUI agent session
+
+* Context
+
+The Phoenix Inspector's \"Quick Fix\" button dispatches a task-tier event through the canvas
+bridge (=_tier: \"task\"=) which routes to =CanvasTaskManager= via =CANVAS_TASK_CHANNEL=. The
+infrastructure is wired end-to-end: QML sends the payload, canvas.ts classifies and enqueues
+it, the task manager spawns an executor via =runSubprocess=, and the result should flow back
+via =bridge.sendMessage= with =action: \"task_result\"=.
+
+** What's broken
+
+The task subagent spawns (confirmed: 6 spawns in today's logs) but *never completes*. Zero
+completion logs, zero error logs, zero abort logs. The task initializes fully (~200ms for
+tools + prompt) then goes silent — the =session.prompt()= call appears to hang indefinitely.
+
+Root causes (in order of likelihood):
+1. *Silent hang at API call*: =pi/smol= resolves but the provider connection hangs without
+   timeout. No error surfaces because there's no timeout guard around the executor call.
+2. *No lifecycle logging*: CanvasTaskManager has zero structured logging between spawn and
+   result. Impossible to diagnose without adding instrumentation.
+3. *No immediate QML feedback*: unlike the agent tier which sends an immediate reply via
+   =_rid= callback, the task tier has no acknowledgment — QML shows a spinner with no
+   confirmation that the request was received.
+
+** Approach
+
+Four items, executed in dependency order:
+1. *Fix the hang* ([[id:BUG-130-canvas-task-subagent-hangs-silently-at-s]]): add timeout, lifecycle logging,
+   immediate QML ack. This is the P0 — without it, nothing else matters.
+2. *Add pi/sniper model role* ([[id:FEAT-251-add-pi-sniper-model-role-for-canvas-quic]]): configure
+   =openai-codex/gpt-5.3-codex-spark= as the default canvas-task model with =pi/smol= fallback.
+3. *Stream progress to QML + TUI* ([[id:FEAT-252-stream-canvas-task-progress-to-qml-and-t]]): subscribe
+   to executor progress events and relay them to QML as =task_progress= messages, plus TUI badge.
+4. *Polish Quick Fix UX* ([[id:FEAT-253-polish-quick-fix-ux-result-display-retry]]): structured result
+   display, retry button, model picker.
+
+** Key decisions
+- *pi/sniper* is the new model role name for canvas quick-task, resolving to
+  =openai-codex/gpt-5.3-codex-spark= with =pi/smol= fallback chain.
+- *Reply-before-turn* pattern: QML gets immediate ack before expensive work starts
+  (same pattern as the agent tier fix in commit b94f0944d).
+- *Timeout*: 120s default, configurable via settings. After timeout, task is aborted
+  and QML receives a clear error.
+
+* Verification
+
+#+begin_src bash
+# Type checks
+bun check:ts
+
+# Unit tests for task tier
+bun test packages/coding-agent/test/tools/canvas-task-tier.test.ts
+bun test packages/coding-agent/test/tools/canvas-agent-tier.test.ts
+
+# Model resolver tests (for pi/sniper)
+bun test packages/coding-agent/test/config/model-resolver.test.ts
+
+# Manual: launch inspector, click Quick Fix, observe:
+# 1. Immediate QML state change (\"Processing...\")
+# 2. Progress updates in QML panel
+# 3. TUI badge showing active canvas task
+# 4. Result or timeout error within 120s
+#+end_src
+
+* Execution Manifest
+
+| Wave | Item | Effort | Depends |
+|------+----------------------------------------------------------+--------+---------|
+|    1 | [[id:BUG-130-canvas-task-subagent-hangs-silently-at-s]]   | 3h     | -       |
+|    1 | [[id:FEAT-251-add-pi-sniper-model-role-for-canvas-quic]] | 1h     | -       |
+|    2 | [[id:FEAT-252-stream-canvas-task-progress-to-qml-and-t]] | 4h     | BUG-130 |
+|    3 | [[id:FEAT-253-polish-quick-fix-ux-result-display-retry]] | 3h     | FEAT-252|
+
+Wave 1 items are independent and can be parallelized.
+Wave 2 depends on the hang fix (progress streaming is pointless if tasks never run).
+Wave 3 depends on progress streaming (UX polish builds on progress infrastructure).
+
+Total effort: ~11h
+
+
+** Completion [2026-04-03]
+
+*** Verification
+
+| Check | Result |
+|------+--------|
+| =bun test test/tools/canvas-task-tier.test.ts= | 17 pass, 0 fail, 60 assertions |
+| =bun test test/tools/canvas-agent-tier.test.ts= | 4 pass, 0 fail, 15 assertions |
+| =bun test test/model-resolver.test.ts= | 49 pass, 0 fail, 164 assertions |
+| =bun test test/status-line-path.test.ts= | 1 pass, 0 fail, 4 assertions |
+| =bun check:ts= (biome + tsgo) | biome clean; 9 pre-existing tsgo errors in spell-server/utils only, 0 in coding-agent |
+
+*** Artifacts
+
+Changed files:
+- =packages/coding-agent/src/orchestrators/canvas-task-manager.ts= — timeout, lifecycle logging, ack reply, progress forwarding, enriched payloads
+- =packages/coding-agent/src/tools/canvas.ts= — reply callback wiring in task tier dispatch, updated doc comments
+- =packages/coding-agent/src/config/model-registry.ts= — added sniper role to ModelRole, MODEL_ROLES, MODEL_ROLE_IDS
+- =packages/coding-agent/src/priority.json= — added sniper priority chain
+- =packages/coding-agent/src/config/settings-schema.ts= — added canvas_tasks to StatusLineSegmentId
+- =packages/coding-agent/src/modes/components/status-line/segments.ts= — added canvasTasksSegment
+- =packages/coding-agent/src/modes/components/status-line/types.ts= — added canvasTaskCount to SegmentContext
+- =packages/coding-agent/src/modes/components/status-line.ts= — added setCanvasTaskCount setter and render wiring
+- =packages/coding-agent/src/modes/components/status-line-segment-editor.ts= — added canvas_tasks metadata
+- =packages/coding-agent/test/tools/canvas-task-tier.test.ts= — 17 tests covering ack, timeout, progress, enriched payloads
+- =packages/coding-agent/test/model-resolver.test.ts= — pi/sniper role resolution test
+- =packages/coding-agent/test/status-line-path.test.ts= — updated SegmentContext fixture
+
+*** Deviations
+
+None.

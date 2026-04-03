@@ -184,6 +184,19 @@ const subagentsSegment: StatusLineSegment = {
 	},
 };
 
+const canvasTasksSegment: StatusLineSegment = {
+	id: "canvas_tasks",
+	render(ctx) {
+		if (ctx.canvasTaskCount === 0) {
+			return { content: "", visible: false };
+		}
+		const label = ctx.canvasTaskCount === 1 ? "1 task" : `${ctx.canvasTaskCount} tasks`;
+		const canvasIcon = (theme.icon as typeof theme.icon & { canvas?: string }).canvas ?? "";
+		const content = withIcon(canvasIcon, label);
+		return { content: theme.fg("statusLineSubagents", content), visible: true };
+	},
+};
+
 const tokenInSegment: StatusLineSegment = {
 	id: "token_in",
 	render(ctx) {
@@ -377,6 +390,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	git: gitSegment,
 	pr: prSegment,
 	subagents: subagentsSegment,
+	canvas_tasks: canvasTasksSegment,
 	token_in: tokenInSegment,
 	token_out: tokenOutSegment,
 	token_total: tokenTotalSegment,

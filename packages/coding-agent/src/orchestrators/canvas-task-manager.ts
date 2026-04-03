@@ -13,7 +13,8 @@
 import type { QmlBridge } from "@oh-my-pi/pi-qml";
 import type { RemoteQmlBridge } from "@oh-my-pi/pi-qml-remote";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { AgentDefinition, SingleResult } from "../task/types";
+import type { AgentDefinition, AgentProgress, SingleResult } from "../task/types";
+import { TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
 import {
 	CANVAS_EVENTS_CHANNEL,
 	CANVAS_TASK_CHANNEL,
@@ -22,8 +23,9 @@ import {
 } from "../tools/canvas";
 import type { EventBus } from "../utils/event-bus";
 
-const DEFAULT_MODEL = "pi/smol";
+const DEFAULT_MODEL = "pi/sniper";
 const DEFAULT_TOOLS = ["read", "grep", "find", "edit", "lsp", "bash", "ast_grep", "ast_edit"];
+const DEFAULT_TASK_TIMEOUT_MS = 120_000;
 
 /** Minimal executor contract — same shape as runSubprocess from task/executor. */
 export type CanvasTaskExecutor = (options: {
@@ -42,6 +44,7 @@ export type CanvasTaskExecutor = (options: {
 interface TaskEntry {
 	windowId: string;
 	assignment: string;
+	taskId: string;
 	ac: AbortController;
 	promise: Promise<SingleResult>;
 }
@@ -53,6 +56,8 @@ export interface CanvasTaskManagerOptions {
 	executor?: CanvasTaskExecutor;
 	/** Base executor options inherited by task sessions (settings, modelRegistry, etc.). */
 	executorDefaults?: Record<string, unknown>;
+	/** Task timeout in ms. Default: 120_000 (120s). */
+	timeoutMs?: number;
 }
 
 /**
@@ -67,6 +72,7 @@ export class CanvasTaskManager {
 	#executor: CanvasTaskExecutor;
 	#unsubTask?: () => void;
 	#unsubClose?: () => void;
+	#unsubProgress?: () => void;
 	#bridge?: QmlBridge | RemoteQmlBridge;
 
 	constructor(options: CanvasTaskManagerOptions) {
@@ -105,12 +111,18 @@ export class CanvasTaskManager {
 				this.#abortTask(payload.windowId);
 			}
 		});
+
+		this.#unsubProgress = eventBus.subscribe(TASK_SUBAGENT_PROGRESS_CHANNEL, (raw: unknown) => {
+			const data = raw as { progress: AgentProgress };
+			this.#forwardProgress(data.progress);
+		});
 	}
 
 	/** Stop all tasks and unsubscribe. */
 	dispose(): void {
 		this.#unsubTask?.();
 		this.#unsubClose?.();
+		this.#unsubProgress?.();
 		for (const [, entry] of this.#active) {
 			entry.ac.abort();
 		}
@@ -126,12 +138,26 @@ export class CanvasTaskManager {
 	}
 
 	async #handleRequest(payload: CanvasTaskPayload): Promise<void> {
-		const { windowId, assignment, model, systemPrompt, tools, outputSchema, context, images } = payload;
+		const { windowId, assignment, model, systemPrompt, tools, outputSchema, context, images, reply } = payload;
+		const resolvedModel = model ?? DEFAULT_MODEL;
 
 		// Abort any existing task for this window.
 		this.#abortTask(windowId);
 
+		logger.debug("Canvas task received", { windowId, assignment: assignment.slice(0, 80) });
+		reply?.({
+			action: "task_ack",
+			ok: true,
+			status: "processing",
+			model: resolvedModel,
+			message: `Task received: ${assignment.slice(0, 60)}`,
+		});
+
 		const ac = new AbortController();
+		const taskTimeoutMs = this.#options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS;
+		const timeoutSignal = AbortSignal.timeout(taskTimeoutMs);
+		const combinedSignal = AbortSignal.any([ac.signal, timeoutSignal]);
+		const startTime = Date.now();
 
 		const agent: AgentDefinition = {
 			name: "canvas-task",
@@ -139,7 +165,7 @@ export class CanvasTaskManager {
 			systemPrompt: systemPrompt ?? "",
 			source: "bundled",
 			tools: tools ?? DEFAULT_TOOLS,
-			model: [model ?? DEFAULT_MODEL],
+			model: [resolvedModel],
 		};
 
 		// Build assignment text with context and image references.
@@ -159,14 +185,16 @@ export class CanvasTaskManager {
 			assignment: fullAssignment,
 			index: 0,
 			id: `canvas-task-${windowId}-${Date.now()}`,
-			signal: ac.signal,
+			signal: combinedSignal,
 			eventBus: this.#options.eventBus,
 			outputSchema,
 		};
 
+		logger.debug("Canvas task started", { windowId, id: executorOptions.id, model: agent.model });
 		const promise = this.#executor(executorOptions);
+		const taskId = executorOptions.id;
 
-		const entry: TaskEntry = { windowId, assignment, ac, promise };
+		const entry: TaskEntry = { windowId, assignment, taskId, ac, promise };
 		this.#active.set(windowId, entry);
 
 		try {
@@ -176,6 +204,12 @@ export class CanvasTaskManager {
 			// Don't send result if the task was aborted (window closed).
 			if (ac.signal.aborted) return;
 
+			logger.debug("Canvas task completed", {
+				windowId,
+				id: executorOptions.id,
+				durationMs: Date.now() - startTime,
+			});
+
 			const bridge = this.#bridge;
 			if (bridge) {
 				const output = result.output || "Task completed with no output.";
@@ -183,16 +217,43 @@ export class CanvasTaskManager {
 					action: "task_result",
 					ok: true,
 					output,
+					model: resolvedModel,
+					tokens: result.tokens,
+					durationMs: Date.now() - startTime,
+					usage: result.usage ?? null,
 				});
 			}
 		} catch (err) {
 			this.#active.delete(windowId);
-			if (ac.signal.aborted) {
-				logger.debug("Canvas task aborted", { windowId, assignment });
+			if (timeoutSignal.aborted && !ac.signal.aborted) {
+				logger.warn("Canvas task timed out", {
+					windowId,
+					id: executorOptions.id,
+					assignment: assignment.slice(0, 80),
+					timeoutMs: taskTimeoutMs,
+				});
+
+				const bridge = this.#bridge;
+				if (bridge) {
+					bridge.sendMessage(windowId, {
+						action: "task_result",
+						ok: false,
+						error: `Task timed out after ${taskTimeoutMs / 1000}s`,
+						timedOut: true,
+						model: resolvedModel,
+						durationMs: Date.now() - startTime,
+						retryable: true,
+					});
+				}
 				return;
 			}
 
-			logger.error("Canvas task failed", { windowId, assignment, error: String(err) });
+			if (ac.signal.aborted) {
+				logger.debug("Canvas task aborted", { windowId, assignment, id: executorOptions.id });
+				return;
+			}
+
+			logger.error("Canvas task failed", { windowId, assignment, id: executorOptions.id, error: String(err) });
 
 			const bridge = this.#bridge;
 			if (bridge) {
@@ -200,6 +261,9 @@ export class CanvasTaskManager {
 					action: "task_result",
 					ok: false,
 					error: err instanceof Error ? err.message : String(err),
+					model: resolvedModel,
+					durationMs: Date.now() - startTime,
+					retryable: true,
 				});
 			}
 		}
@@ -211,5 +275,30 @@ export class CanvasTaskManager {
 			existing.ac.abort();
 			this.#active.delete(windowId);
 		}
+	}
+
+	#findWindowByTaskId(taskId: string): string | undefined {
+		for (const [windowId, entry] of this.#active) {
+			if (entry.taskId === taskId) return windowId;
+		}
+		return undefined;
+	}
+
+	#forwardProgress(progress: AgentProgress): void {
+		const windowId = this.#findWindowByTaskId(progress.id);
+		if (!windowId) return;
+
+		const bridge = this.#bridge;
+		if (!bridge) return;
+
+		bridge.sendMessage(windowId, {
+			action: "task_progress",
+			status: progress.status,
+			currentTool: progress.currentTool ?? null,
+			lastIntent: progress.lastIntent ?? null,
+			toolCount: progress.toolCount,
+			tokens: progress.tokens,
+			durationMs: progress.durationMs,
+		});
 	}
 }

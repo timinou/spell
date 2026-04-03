@@ -62,6 +62,7 @@ export type StatusLineSegmentId =
 	| "git"
 	| "pr"
 	| "subagents"
+	| "canvas_tasks"
 	| "token_in"
 	| "token_out"
 	| "token_total"

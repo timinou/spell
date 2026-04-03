@@ -1,0 +1,45 @@
+#+TITLE: Polish Quick Fix UX result display retry model selection
+#+STATE: DONE
+#+SESSION_ID: 14abfe457e8c8aba
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-54-15-162Z_14abfe457e8c8aba.jsonl]]
+#+CUSTOM_ID: FEAT-253-polish-quick-fix-ux-result-display-retry
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: ui
+#+DEPENDS: FEAT-252-stream-canvas-task-progress-to-qml-and-t
+
+NOTE [2026-04-03]: Enriched task_result payloads with model, tokens, durationMs, usage (success) and model, durationMs, retryable (error/timeout). Added model to task_ack. QML side can now display structured results, show retry buttons (retryable flag), and knows the model used. All tests pass (17 canvas-task-tier tests, 60 assertions).
+
+* Initial Message
+
+ok so give me the tree of cases w.r.t the buttons that get clicked and what happens in the TUI agent session
+
+Once Quick Fix works and progress streams, polish the end-to-end UX.
+
+* Scope
+
+** Result display
+- Show structured output (diff view if edits were made, summary text)
+- Parse outputSchema-validated results into a readable panel
+- Show token usage and elapsed time in result footer
+
+** Retry
+- Add \"Retry\" button on error/failure results
+- Retry re-sends the same payload with a fresh _rid
+- Optional: \"Retry with different model\" dropdown
+
+** Model selection
+- Add model picker in QML Quick Fix panel (pi/sniper, pi/smol, custom)
+- Selected model overrides _model in the bridge.send payload
+- Persist last-used model preference per inspector session
+
+* Sub-outline
+** Design result panel component in inspector.qml
+** Add retry button + handler
+** Add model picker dropdown
+** Test: result display, retry flow, model override
+
+* Acceptance
+- Quick Fix results show structured output (not just raw text)
+- Retry button works after error or unsatisfactory result
+- Model picker allows switching between pi/sniper, pi/smol, and custom models

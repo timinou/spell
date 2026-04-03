@@ -44,6 +44,7 @@ export interface SegmentContext {
 	contextWindow: number;
 	autoCompactEnabled: boolean;
 	subagentCount: number;
+	canvasTaskCount: number;
 	sessionStartTime: number;
 	git: {
 		branch: string | null;

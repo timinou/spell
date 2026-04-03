@@ -25,5 +25,14 @@
 		"opus-4.1",
 		"opus-4-1",
 		"pro"
+	],
+	"sniper": [
+		"gpt-5.3-codex-spark",
+		"gpt-5.3-codex",
+		"codex",
+		"cerebras/zai-glm-4.7",
+		"haiku",
+		"flash",
+		"mini"
 	]
 }
