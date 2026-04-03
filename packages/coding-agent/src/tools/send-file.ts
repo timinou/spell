@@ -44,6 +44,7 @@ const sendFileSchema = Type.Object({
 
 type SendFileInput = Static<typeof sendFileSchema>;
 
+// SYNC: Mirrored in packages/spell-server/src/rpc/types.ts — keep in sync
 export interface FileDelivery {
 	type: "document" | "photo";
 	absolutePath: string;
@@ -64,7 +65,7 @@ function inferMimeType(filePath: string): string {
 }
 
 function isImageMime(mimeType: string): boolean {
-	return mimeType.startsWith("image/");
+	return mimeType.startsWith("image/") && mimeType !== "image/svg+xml";
 }
 
 function formatFileSize(bytes: number): string {
@@ -117,7 +118,7 @@ export class SendFileTool implements AgentTool<typeof sendFileSchema, SendFileDe
 			absolutePath,
 			fileName,
 			mimeType,
-			...(params.caption ? { caption: params.caption } : {}),
+			...(params.caption != null ? { caption: params.caption } : {}),
 			fileSize: stat.size,
 		};
 

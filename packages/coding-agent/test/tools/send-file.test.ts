@@ -71,6 +71,14 @@ describe("SendFileTool", () => {
 		await expect(tool.execute("call-4", { path: "missing.pdf" })).rejects.toThrow(/not found/i);
 	});
 
+	it("errors when the path is a directory", async () => {
+		const dir = path.join(tempDir, "subdir");
+		await fs.mkdir(dir);
+		const tool = new SendFileTool(makeSession(tempDir));
+
+		await expect(tool.execute("call-dir", { path: "subdir" })).rejects.toThrow(/not a file/i);
+	});
+
 	it("errors when the file exceeds the Telegram size limit", async () => {
 		const filePath = path.join(tempDir, "big.bin");
 		await Bun.write(filePath, "x");
@@ -132,5 +140,16 @@ describe("SendFileTool", () => {
 		}
 		expect(textBlock.text).toContain("tiny.txt");
 		expect(textBlock.text).toContain("3B");
+	});
+
+	it("classifies SVG as document, not photo", async () => {
+		const filePath = path.join(tempDir, "icon.svg");
+		await Bun.write(filePath, "<svg></svg>");
+		const tool = new SendFileTool(makeSession(tempDir));
+
+		const result = await tool.execute("call-svg", { path: "icon.svg" });
+
+		expect(result.details?.delivery.type).toBe("document");
+		expect(result.details?.delivery.mimeType).toBe("image/svg+xml");
 	});
 });

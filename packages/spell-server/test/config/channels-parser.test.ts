@@ -167,6 +167,17 @@ describe("parseChannelsConfig", () => {
 			}`),
 		).toThrow("channels.telegram: bot-token and bot-token-file are mutually exclusive");
 	});
+
+	it("rejects non-boolean auto-send-images value", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				auto-send-images "yes"
+			}`),
+		).toThrow(/must be a boolean/i);
+	});
 });
 
 describe("resolveChannelsBotToken", () => {

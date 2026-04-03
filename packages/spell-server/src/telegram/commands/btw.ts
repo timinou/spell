@@ -16,6 +16,7 @@ interface BtwDependencies {
 	createStreamer?: (
 		ctx: AuthContext,
 		showThinking: boolean,
+		autoSendImages: boolean,
 	) => {
 		handleEvent: (event: RpcEvent) => Promise<void>;
 		done: Promise<void>;
@@ -54,7 +55,8 @@ export async function handleBtwCommand(
 	const tools = resolveModeTools(mode);
 	const createClient = dependencies.createClient ?? (options => new RpcClient(options));
 	const createStreamer =
-		dependencies.createStreamer ?? ((authCtx, showThinking) => new ResponseStreamer(authCtx, showThinking));
+		dependencies.createStreamer ??
+		((authCtx, showThinking, autoSendImages) => new ResponseStreamer(authCtx, showThinking, autoSendImages));
 	const loadPrompt = dependencies.loadPrompt ?? loadTelegramPrompt;
 	const promptText = await loadPrompt();
 
@@ -65,7 +67,7 @@ export async function handleBtwCommand(
 		model: cmdCtx.config.defaultModel,
 		appendSystemPrompt: promptText,
 	});
-	const streamer = createStreamer(ctx, false);
+	const streamer = createStreamer(ctx, false, cmdCtx.config.autoSendImages);
 
 	const listener = (event: RpcEvent): void => {
 		void streamer.handleEvent(event).catch(error => {
