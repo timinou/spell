@@ -22,8 +22,8 @@ import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
 import type { EventBus } from "../utils/event-bus";
 import { SearchTool } from "../web/search";
-import { AskTool } from "./ask";
 import { ApprovalsTool } from "./approvals-tool";
+import { AskTool } from "./ask";
 import { AstEditTool } from "./ast-edit";
 import { AstGrepTool } from "./ast-grep";
 import { AutonomyStateTool } from "./autonomy-state";
@@ -52,6 +52,7 @@ import { RenderMermaidTool } from "./render-mermaid";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
+import { SendFileTool } from "./send-file";
 import { loadSshTool } from "./ssh";
 import { SubmitResultTool } from "./submit-result";
 import { type TodoPhase, TodoWriteTool } from "./todo-write";
@@ -68,8 +69,8 @@ export * from "../sandbox";
 export * from "../session/streaming-output";
 export * from "../task";
 export * from "../web/search";
-export * from "./ask";
 export * from "./approvals-tool";
+export * from "./ask";
 export * from "./ast-edit";
 export * from "./ast-grep";
 export * from "./autonomy-state";
@@ -98,6 +99,7 @@ export * from "./render-mermaid";
 export * from "./resolve";
 export * from "./review";
 export * from "./search-tool-bm25";
+export * from "./send-file";
 export * from "./ssh";
 export * from "./submit-result";
 export * from "./todo-write";
@@ -253,6 +255,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	goals: GoalsTool.createIf,
 	approvals: ApprovalsTool.createIf,
 	write: s => new WriteTool(s),
+	send_file: s => new SendFileTool(s),
 	canvas: s => new CanvasTool(s),
 	canvas_cast: CanvasCastTool.createIf,
 	loop_prepare: s => (s.loopManager ? new LoopPrepareTool(s) : null),
@@ -305,6 +308,7 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	loop_done: "specialized",
 	gateway: "specialized",
 	search_tool_bm25: "specialized",
+	send_file: "specialized",
 };
 
 /** Get the tool tier, defaulting to "standard" for unknown tools (e.g. MCP tools). */

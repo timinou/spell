@@ -36,6 +36,7 @@ describe("parseChannelsConfig", () => {
 				maxSessions: 10,
 				logViewerPort: undefined,
 				defaultModel: "claude-sonnet-4-5",
+				autoSendImages: true,
 				defaultProject: undefined,
 				projects: {},
 				users: {},
@@ -51,6 +52,35 @@ describe("parseChannelsConfig", () => {
 		}`);
 
 		expect(config.telegram?.botToken).toBe("file:secrets/bot-token.txt");
+	});
+
+	it("defaults autoSendImages to true", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+		}`);
+		expect(config.telegram?.autoSendImages).toBe(true);
+	});
+
+	it("parses auto-send-images false", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			auto-send-images #false
+		}`);
+		expect(config.telegram?.autoSendImages).toBe(false);
+	});
+
+	it("parses auto-send-images true", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			auto-send-images #true
+		}`);
+		expect(config.telegram?.autoSendImages).toBe(true);
 	});
 
 	it("resolves relative project paths and infers the first project as default", () => {

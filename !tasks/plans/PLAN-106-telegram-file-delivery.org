@@ -1,0 +1,68 @@
+#+TITLE: Telegram file delivery
+#+STATE: DOING
+#+SESSION_ID: 14ac069b96bbdfba
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-30-40-474Z_14ac069b96bbdfba.jsonl]]
+#+CUSTOM_ID: PLAN-106-telegram-file-delivery
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+the telegram pdf upload to the user does not work my man. it should. I want it to work. is it registered through a tool call? how does the telegram bridge handle giving ht eability to send tool calls?
+
+* Context
+The Telegram bridge currently handles only text responses. When the agent generates files (PDFs, images, CSVs) or uses =generate_image=, the user sees only a text summary — the actual file never reaches them.
+
+The root cause: =ResponseStreamer= in =rpc-to-telegram.ts= only builds text/HTML and calls =ctx.reply()=. It never extracts file/image data from =tool_execution_end= events, despite the RPC protocol already carrying full =details= payloads (including =imagePaths= and =images= for =generate_image=).
+
+** Approach
+Two delivery mechanisms:
+1. *Explicit*: New =send_file= builtin tool lets the agent explicitly send any file. Tool validates the file (exists, <=50MB), returns path-based metadata in =details=. Bridge intercepts =tool_execution_end= for this tool, reads the file from disk, sends via grammy =replyWithDocument()= / =replyWithPhoto()=.
+2. *Auto*: Bridge intercepts =generate_image= results and auto-sends images via =replyWithPhoto()=. Controlled by =auto-send-images= KDL config (default: true).
+
+** Key Decisions
+- *Path-based delivery* (not base64): Both processes run on the same machine. Sending absolute paths through RPC avoids 50MB+ base64 payloads through the JSON pipe. Bridge reads files directly from disk.
+- *Two-layer approach*: Explicit tool for general files + auto-intercept for images. Agent keeps explicit control for documents; images from =generate_image= are always visual and always intended for the user.
+- *Graceful degradation*: File delivery errors are logged but never break the text response flow. The agent's text response still arrives even if file delivery fails.
+- *Tool works outside Telegram*: =send_file= returns delivery metadata regardless of context. Only the bridge acts on it. In non-Telegram modes the tool is simply not available (not in =MODE_TOOLS=).
+
+** Architecture
+#+begin_example
+Agent calls send_file("report.pdf")
+  -> Tool validates file, returns { details: { delivery: { absolutePath, mimeType, ... } } }
+  -> RPC event: tool_execution_end { toolName: "send_file", result: { details: ... } }
+  -> Bridge ResponseStreamer intercepts event
+  -> Reads file from absolutePath via Bun.file()
+  -> Sends via ctx.replyWithDocument(new InputFile(buffer, filename))
+
+Agent calls generate_image(...)
+  -> Tool generates image, saves to /tmp, returns { details: { imagePaths: [...] } }
+  -> RPC event: tool_execution_end { toolName: "generate_image", result: { details: ... } }
+  -> Bridge ResponseStreamer intercepts event (if autoSendImages=true)
+  -> Reads each image from imagePaths
+  -> Sends via ctx.replyWithPhoto(new InputFile(buffer, basename))
+#+end_example
+
+* Verification
+** Type check
+- =bun check:ts= passes for both =packages/coding-agent= and =packages/spell-server=
+
+** Unit tests (TDD — written first, then implementation)
+- =bun test packages/coding-agent/test/tools/send-file.test.ts= — send_file tool validation, MIME detection, error handling
+- =bun test packages/spell-server/test/config/channels-parser.test.ts= — auto-send-images KDL parsing
+- =bun test packages/spell-server/test/telegram/bridge.test.ts= — ResponseStreamer file/image delivery
+
+** Functional verification
+- =send_file= tool appears in tool list when =--tools send_file= is passed
+- =send_file= tool returns correct delivery metadata for PDF, PNG, CSV files
+- =send_file= tool errors clearly on missing file and files > 50MB
+
+** Manual verification (post-deploy)
+- Send a message to Telegram bot in =telegram-full= mode asking it to create and send a PDF -> PDF appears in chat
+- Ask Telegram bot to generate an image -> image appears in chat
+- Setting =auto-send-images false= in =channels.kdl= suppresses image auto-send
+* Execution Manifest
+** Wave 1 (parallel — no cross-package dependency)
+- [[id:FEAT-249-send-file-tool-for-agent-to-user-file-de]] — =send_file= tool in coding-agent (M effort)
+- [[id:FEAT-250-bridge-file-and-image-delivery-to-telegr]] — Bridge delivery + KDL config in spell-server (M effort)
+
+Both items are in separate packages and can be implemented in parallel. FEAT-249 defines the tool result shape; FEAT-250 consumes it. The interface contract (=FileDelivery= type in =details.delivery=) is specified in both items.

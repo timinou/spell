@@ -44,6 +44,8 @@ export interface TelegramChannelConfig {
 	projects: Record<string, string>;
 	/** Authorized users: Telegram user ID (string) -> config */
 	users: Record<string, TelegramUserConfig>;
+	/** Auto-send generated images to chat. Default: true. */
+	autoSendImages: boolean;
 }
 
 export interface ChannelsConfig {

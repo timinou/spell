@@ -1,5 +1,8 @@
-import { logger } from "@oh-my-pi/pi-utils";
-import type { AssistantEvent, RpcAssistantMessage, RpcEvent } from "../../rpc/types";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { InputFile } from "grammy";
+import type { AssistantEvent, FileDelivery, RpcAssistantMessage, RpcEvent } from "../../rpc/types";
 import type { AuthContext } from "../bot/auth";
 import { summarizeToolPartialResult } from "../tool-progress";
 import { markdownToTelegramHtml } from "./markdown-html";
@@ -98,6 +101,7 @@ export async function awaitStreamerCompletion(
 export class ResponseStreamer {
 	#ctx: AuthContext;
 	#showThinking: boolean;
+	#autoSendImages: boolean;
 	#chatId: number | null;
 	#text = "";
 	#errorMessage = "";
@@ -113,9 +117,10 @@ export class ResponseStreamer {
 	#doneResolve: () => void;
 	#donePromise: Promise<void>;
 
-	constructor(ctx: AuthContext, showThinking: boolean) {
+	constructor(ctx: AuthContext, showThinking: boolean, autoSendImages = true) {
 		this.#ctx = ctx;
 		this.#showThinking = showThinking;
+		this.#autoSendImages = autoSendImages;
 		this.#chatId = this.#resolveChatId();
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#donePromise = promise;
@@ -145,6 +150,12 @@ export class ResponseStreamer {
 				return;
 			}
 			case "tool_execution_end": {
+				if (!event.isError && event.toolName === "send_file") {
+					await this.#deliverFile(event.result?.details);
+				}
+				if (!event.isError && event.toolName === "generate_image" && this.#autoSendImages) {
+					await this.#deliverGeneratedImages(event.result?.details);
+				}
 				const state = event.isError ? "Failed" : "Done";
 				await this.#setToolStatus(`${state}: ${event.toolName}`);
 				return;
@@ -357,6 +368,51 @@ export class ResponseStreamer {
 			return `Assistant completed without a text response.\n\nLast status: ${this.#thinkingStatus}`;
 		}
 		return "Assistant completed without a text response.";
+	}
+
+	async #deliverFile(details: unknown): Promise<void> {
+		try {
+			const delivery = (details as Record<string, unknown> | undefined)?.delivery as FileDelivery | undefined;
+			if (!delivery?.absolutePath) {
+				return;
+			}
+			const buffer = await fs.readFile(delivery.absolutePath);
+			const file = new InputFile(buffer, delivery.fileName);
+			if (delivery.type === "photo") {
+				await this.#ctx.replyWithPhoto(file, { caption: delivery.caption });
+				return;
+			}
+			await this.#ctx.replyWithDocument(file, { caption: delivery.caption });
+		} catch (err) {
+			logger.warn("Failed to deliver file to Telegram", {
+				error: err,
+				kind: isEnoent(err) ? "enoent" : "read-or-send-failed",
+			});
+		}
+	}
+
+	async #deliverGeneratedImages(details: unknown): Promise<void> {
+		try {
+			const imagePaths = (details as Record<string, unknown> | undefined)?.imagePaths as string[] | undefined;
+			if (!imagePaths?.length) {
+				return;
+			}
+			for (const imagePath of imagePaths) {
+				try {
+					const buffer = await fs.readFile(imagePath);
+					const file = new InputFile(buffer, path.basename(imagePath));
+					await this.#ctx.replyWithPhoto(file);
+				} catch (err) {
+					logger.warn("Failed to deliver generated image", {
+						error: err,
+						path: imagePath,
+						kind: isEnoent(err) ? "enoent" : "read-or-send-failed",
+					});
+				}
+			}
+		} catch (err) {
+			logger.warn("Failed to process generated images", { error: err });
+		}
 	}
 
 	async #finalize(): Promise<void> {

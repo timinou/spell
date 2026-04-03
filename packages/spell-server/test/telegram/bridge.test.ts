@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { hookFetch } from "@oh-my-pi/pi-utils";
 import type { RpcClient } from "../../src/rpc/rpc-client";
 import type { AssistantEvent, ImageContentRef, RpcEvent } from "../../src/rpc/types";
@@ -62,12 +65,17 @@ interface MockAuthContext extends Record<string, unknown> {
 	_replies: MockReply[];
 	_drafts: MockDraft[];
 	_chatActions: string[];
+	_documents: Array<{ file: unknown; options?: Record<string, unknown> }>;
+	_photos: Array<{ file: unknown; options?: Record<string, unknown> }>;
+	replyWithDocument: (file: unknown, options?: Record<string, unknown>) => Promise<{ message_id: number }>;
+	replyWithPhoto: (file: unknown, options?: Record<string, unknown>) => Promise<{ message_id: number }>;
 }
-
 function mockAuthContext(opts: MockAuthContextOptions): MockAuthContext {
 	const replies: MockReply[] = [];
 	const drafts: MockDraft[] = [];
 	const chatActions: string[] = [];
+	const documents: Array<{ file: unknown; options?: Record<string, unknown> }> = [];
+	const photos: Array<{ file: unknown; options?: Record<string, unknown> }> = [];
 	const fileMap = opts.fileMap ?? {
 		photo: "photo.jpg",
 		doc: "notes.txt",
@@ -96,6 +104,14 @@ function mockAuthContext(opts: MockAuthContextOptions): MockAuthContext {
 			chatActions.push(action);
 			return true as const;
 		},
+		replyWithDocument: async (file: unknown, options?: Record<string, unknown>) => {
+			documents.push({ file, options });
+			return { message_id: documents.length + 100 };
+		},
+		replyWithPhoto: async (file: unknown, options?: Record<string, unknown>) => {
+			photos.push({ file, options });
+			return { message_id: photos.length + 200 };
+		},
 		api: {
 			token: "test-bot-token",
 			getFile: async (fileId: string) => ({ file_path: fileMap[fileId] ?? "unknown.bin" }),
@@ -108,6 +124,8 @@ function mockAuthContext(opts: MockAuthContextOptions): MockAuthContext {
 		_replies: replies,
 		_drafts: drafts,
 		_chatActions: chatActions,
+		_documents: documents,
+		_photos: photos,
 	};
 }
 
@@ -464,6 +482,174 @@ describe("bridge streaming", () => {
 		// After error + wait, no new typing actions should fire
 		await Bun.sleep(50);
 		expect(ctx._chatActions.length).toBe(actionsBefore);
+	});
+});
+
+describe("file delivery", () => {
+	it("delivers document via replyWithDocument for send_file", async () => {
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-test-"));
+		const testFile = path.join(tmpDir, "report.pdf");
+		await Bun.write(testFile, "fake pdf content");
+
+		try {
+			const ctx = mockAuthContext({ chatId: 100 });
+			const streamer = new ResponseStreamer(ctx as unknown as AuthContext, false);
+
+			await streamer.handleEvent({
+				type: "tool_execution_end",
+				toolCallId: "tc-1",
+				toolName: "send_file",
+				isError: false,
+				result: {
+					content: [{ type: "text", text: "File queued" }],
+					details: {
+						delivery: {
+							type: "document",
+							absolutePath: testFile,
+							fileName: "report.pdf",
+							mimeType: "application/pdf",
+							caption: "Monthly report",
+							fileSize: 16,
+						},
+					},
+				},
+			});
+
+			expect(ctx._documents).toHaveLength(1);
+			expect(ctx._documents[0]?.options?.caption).toBe("Monthly report");
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("delivers photo via replyWithPhoto for send_file with photo type", async () => {
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-test-"));
+		const testFile = path.join(tmpDir, "image.png");
+		await Bun.write(testFile, "fake png");
+
+		try {
+			const ctx = mockAuthContext({ chatId: 101 });
+			const streamer = new ResponseStreamer(ctx as unknown as AuthContext, false);
+
+			await streamer.handleEvent({
+				type: "tool_execution_end",
+				toolCallId: "tc-2",
+				toolName: "send_file",
+				isError: false,
+				result: {
+					content: [{ type: "text", text: "File queued" }],
+					details: {
+						delivery: {
+							type: "photo",
+							absolutePath: testFile,
+							fileName: "image.png",
+							mimeType: "image/png",
+							fileSize: 8,
+						},
+					},
+				},
+			});
+
+			expect(ctx._photos).toHaveLength(1);
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not deliver file on error", async () => {
+		const ctx = mockAuthContext({ chatId: 102 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, false);
+
+		await streamer.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "tc-3",
+			toolName: "send_file",
+			isError: true,
+			result: { content: [{ type: "text", text: "Error" }] },
+		});
+
+		expect(ctx._documents).toHaveLength(0);
+		expect(ctx._photos).toHaveLength(0);
+	});
+
+	it("does not crash when delivery details are missing", async () => {
+		const ctx = mockAuthContext({ chatId: 103 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, false);
+
+		await streamer.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "tc-4",
+			toolName: "send_file",
+			isError: false,
+			result: { content: [{ type: "text", text: "No details" }] },
+		});
+
+		expect(ctx._documents).toHaveLength(0);
+		expect(ctx._photos).toHaveLength(0);
+	});
+
+	it("auto-sends generated images when autoSendImages is true", async () => {
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-test-"));
+		const img1 = path.join(tmpDir, "gen1.png");
+		const img2 = path.join(tmpDir, "gen2.png");
+		await Bun.write(img1, "image1");
+		await Bun.write(img2, "image2");
+
+		try {
+			const ctx = mockAuthContext({ chatId: 104 });
+			const streamer = new ResponseStreamer(ctx as unknown as AuthContext, false, true);
+
+			await streamer.handleEvent({
+				type: "tool_execution_end",
+				toolCallId: "tc-5",
+				toolName: "generate_image",
+				isError: false,
+				result: {
+					content: [{ type: "text", text: "Generated" }],
+					details: { imagePaths: [img1, img2] },
+				},
+			});
+
+			expect(ctx._photos).toHaveLength(2);
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not auto-send generated images when autoSendImages is false", async () => {
+		const ctx = mockAuthContext({ chatId: 105 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, false, false);
+
+		await streamer.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "tc-6",
+			toolName: "generate_image",
+			isError: false,
+			result: {
+				content: [{ type: "text", text: "Generated" }],
+				details: { imagePaths: ["/tmp/nonexistent.png"] },
+			},
+		});
+
+		expect(ctx._photos).toHaveLength(0);
+	});
+
+	it("handles missing imagePaths gracefully", async () => {
+		const ctx = mockAuthContext({ chatId: 106 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, false, true);
+
+		await streamer.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "tc-7",
+			toolName: "generate_image",
+			isError: false,
+			result: {
+				content: [{ type: "text", text: "Generated" }],
+				details: { imageCount: 0, imagePaths: [] },
+			},
+		});
+
+		expect(ctx._photos).toHaveLength(0);
 	});
 });
 

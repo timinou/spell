@@ -67,6 +67,7 @@ describe("spell-server config loading", () => {
 				maxSessions: 10,
 				logViewerPort: undefined,
 				defaultModel: "claude-sonnet-4-5",
+				autoSendImages: true,
 				defaultProject: undefined,
 				projects: {},
 				users: {},

@@ -25,6 +25,7 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 	let defaultModel: string | undefined;
 	const projects: Record<string, string> = {};
 	const users: Record<string, TelegramUserConfig> = {};
+	let autoSendImages = true;
 
 	for (const child of telegramNode.children?.nodes ?? []) {
 		const name = child.getName();
@@ -123,6 +124,13 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 		if (name === "user") {
 			parseUserNode(child, users);
 		}
+		if (name === "auto-send-images") {
+			const value = child.getArgument(0);
+			if (typeof value !== "boolean") {
+				throw new Error("channels.telegram.auto-send-images must be a boolean");
+			}
+			autoSendImages = value;
+		}
 	}
 
 	// Validate mutual exclusivity
@@ -160,6 +168,7 @@ export function parseChannelsConfig(kdlText: string, configDir?: string): Channe
 			defaultProject: defaultProject ?? Object.keys(projects)[0],
 			projects,
 			users,
+			autoSendImages,
 		},
 	};
 }
