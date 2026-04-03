@@ -65,6 +65,13 @@ const orgSchema = Type.Object({
 	query: Type.Optional(Type.String({ description: "Keyword query syntax: 'todo:DOING tags:auth priority:>=B'" })),
 	ql: Type.Optional(Type.String({ description: "Raw org-ql sexp for advanced queries (e.g. '(effort >= \"2h\")')" })),
 	includeBody: Type.Optional(Type.Boolean({ description: "Include body text in query results" })),
+	sort: Type.Optional(
+		Type.String({
+			description: "Sort key(s), space-separated: priority, state/todo, id, category. Default: priority state id",
+		}),
+	),
+	limit: Type.Optional(Type.Number({ description: "Max items to return" })),
+	offset: Type.Optional(Type.Number({ description: "Number of items to skip before returning" })),
 	// get/update/set/note params
 	id: Type.Optional(Type.String({ description: "Task CUSTOM_ID" })),
 	note: Type.Optional(Type.String({ description: "Dated note text (note cmd, or appended on state change)" })),
@@ -253,6 +260,9 @@ function buildOrgCallPreview(args: Record<string, unknown>): OrgCallPreview {
 			pushMeta(meta, "layer", args.layer, TRUNCATE_LENGTHS.SHORT);
 			pushMeta(meta, "agent", args.agent, TRUNCATE_LENGTHS.SHORT);
 			if (args.includeBody === true) meta.push("includeBody:true");
+			pushMeta(meta, "sort", args.sort, TRUNCATE_LENGTHS.SHORT);
+			if (typeof args.limit === "number") meta.push(`limit:${args.limit}`);
+			if (typeof args.offset === "number") meta.push(`offset:${args.offset}`);
 			break;
 		case "get":
 		case "note":

@@ -38,7 +38,7 @@ export function renderItemOrg(item: OrgItem, includeBody: boolean, maxBodyBytes:
 	// Build properties drawer. CUSTOM_ID is always first, then all other
 	// properties from the item's properties map.
 	const extraProps = Object.entries(item.properties)
-		.filter(([k]) => k !== "TAGS") // TAGS rendered on heading line
+		.filter(([k]) => !["TAGS", "CUSTOM_ID", "SESSION_ID", "TRANSCRIPT_PATH"].includes(k))
 		.map(([k, v]) => `:${k}: ${v}`)
 		.join("\n");
 	const drawerBody = extraProps ? `:CUSTOM_ID: ${item.id}\n${extraProps}` : `:CUSTOM_ID: ${item.id}`;

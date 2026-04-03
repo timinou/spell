@@ -359,6 +359,9 @@ export async function readCategory(
  */
 export function applyFilter(items: OrgItem[], filter: OrgQueryFilter): OrgItem[] {
 	return items.filter(item => {
+		if (filter.level !== undefined) {
+			if (item.level !== filter.level) return false;
+		}
 		if (filter.state) {
 			const states = Array.isArray(filter.state) ? filter.state : [filter.state];
 			if (!states.includes(item.state)) return false;
@@ -386,6 +389,70 @@ export function applyFilter(items: OrgItem[], filter: OrgQueryFilter): OrgItem[]
 			if (itemAgent !== filter.agent) return false;
 		}
 		return true;
+	});
+}
+
+// Priority sort order: #A < #B < #C (lower = higher priority).
+const PRIORITY_ORDER: Record<string, number> = { "#A": 0, "#B": 1, "#C": 2 };
+
+// State sort order: active states first, then terminal.
+const STATE_ORDER: Record<string, number> = {
+	INIT: 0,
+	DOING: 1,
+	REVIEW: 2,
+	ITEM: 3,
+	BLOCKED: 4,
+	DONE: 5,
+};
+
+/**
+ * Compare two items by a single sort key.
+ *
+ * Supported keys:
+ *   - `priority` — by PRIORITY property (#A < #B < #C, missing last)
+ *   - `state` / `todo` — by TODO state workflow order
+ *   - `id` — lexicographic by CUSTOM_ID
+ *   - `category` — lexicographic by category name
+ */
+function compareByKey(a: OrgItem, b: OrgItem, key: string): number {
+	switch (key) {
+		case "priority": {
+			const ap = PRIORITY_ORDER[a.properties.PRIORITY] ?? 99;
+			const bp = PRIORITY_ORDER[b.properties.PRIORITY] ?? 99;
+			return ap - bp;
+		}
+		case "state":
+		case "todo": {
+			const as = STATE_ORDER[a.state] ?? 99;
+			const bs = STATE_ORDER[b.state] ?? 99;
+			return as - bs;
+		}
+		case "id":
+			return a.id.localeCompare(b.id);
+		case "category":
+			return a.category.localeCompare(b.category);
+		default:
+			return 0;
+	}
+}
+
+/**
+ * Sort items by one or more keys.
+ *
+ * @param items  The items to sort (mutated in place and returned).
+ * @param sort   Space-separated sort keys, e.g. `"priority todo id"`.
+ *               When undefined, applies the default: `priority state id`.
+ */
+export function sortItems(items: OrgItem[], sort?: string): OrgItem[] {
+	const keys = sort ? sort.split(/\s+/).filter(Boolean) : ["priority", "state", "id"];
+	if (keys.length === 0) return items;
+
+	return items.sort((a, b) => {
+		for (const key of keys) {
+			const cmp = compareByKey(a, b, key);
+			if (cmp !== 0) return cmp;
+		}
+		return 0;
 	});
 }
 

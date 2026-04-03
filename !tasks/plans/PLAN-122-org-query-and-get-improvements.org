@@ -1,0 +1,117 @@
+#+TITLE: Org Query and Get Improvements
+#+STATE: DONE
+#+SESSION_ID: 14ac498659bebe1a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-23-02-374Z_14ac498659bebe1a.jsonl]]
+#+CUSTOM_ID: PLAN-122-org-query-and-get-improvements
+#+EFFORT: 5h
+#+PRIORITY: #A
+#+LAYER: backend
+
+
+* Initial Message
+
+the org get and search tools provide wrong ITEMs and not well ordered. PLease try the tool and tell me the querying improvements you'd make
+
+* Context
+The org tool's query and get commands have 7 correctness and usability issues
+that compound to make results unreliable:
+
+1. *Sub-heading pollution* (#A): =readCategory= returns ALL items from .org files
+   including child sub-headings (=*** ITEM= inside plan bodies). 50.3% of query
+   results are sub-heading noise. When querying =todo:ITEM=, 91.5% are noise.
+2. *No sorting* (#A): Results come back in filesystem/promise-resolution order.
+   No default ordering, no sort parameter exposed.
+3. *Duplicate CUSTOM_ID* (#B): =renderItemOrg= emits CUSTOM_ID twice — once
+   explicitly and once from the properties dict. SESSION_ID and TRANSCRIPT_PATH
+   metadata also leak into output.
+4. *org-ql directory paths* (#B): The ql passthrough passes directory paths
+   to =org-ql-query= which expects file paths. org-ql-select tries
+   =find-file-noselect= on directories and fails silently.
+5. *Get full-scan* (#B): =cmdGet= parses 838 files for a point lookup.
+   =findCategoryForId= exists but is unused. File naming convention (={ID}.org=)
+   has 98.6% compliance, enabling O(1) direct path derivation.
+6. *No limit/offset* (#C): Queries return all matching items with no pagination.
+7. *Stale DOING items* (data): ~75 zombie PLAN-001/PLAN-002/AUD items stuck in
+   DOING, representing ~60% of DOING items.
+
+** Approach
+Fix in two waves: Wave 1 handles the 3 bugs (independent, parallelizable).
+Wave 2 adds the 3 features (sort depends on level filter being in place,
+limit/offset depends on sort). Stale items cleanup is a follow-up.
+
+** Key Decisions
+- *TS-side level filtering, not org-ql delegation*: File-level items use
+  =#+CUSTOM_ID= frontmatter which is invisible to org-ql (only sees headings).
+  Level filtering must happen in the TS reader. org-ql's =(level N)= predicate
+  only works for heading levels, not frontmatter items.
+- *Default to level=0*: Queries default to file-level items only. The LLM can
+  opt-in to sub-headings via explicit =level= parameter.
+- *TS-side sorting with org-ql forwarding*: Simple queries sort in TS
+  (priority > state > id). Advanced org-ql queries forward the sort param
+  to the Emacs side, with multi-key sort support.
+- *Keep TS dashboard*: The Emacs =org-dashboard= MCP tool doesn't handle
+  file-level (frontmatter) items. Keep the TS implementation but add level
+  filtering.
+- *Direct path get*: Derive file from ID prefix + convention. Fall back to
+  scan on the 1.4% (12 of 835) that don't follow naming convention.
+- *org-ql-query.el multi-key sort*: Enhance handler to accept space-separated
+  sort keys (=priority todo=) converted to a list for =:sort=.
+
+** Critical Codebase References
+- TS reader: =packages/org/src/org-reader.ts= (=parseOrgFile=, =readOrgFile=, =readCategory=, =applyFilter=, =findItemById=)
+- TS tool: =packages/org/src/tool.ts= (=cmdQuery=, =cmdGet=, =cmdDashboard=)
+- TS types: =packages/org/src/types.ts= (=OrgQueryFilter=, =OrgItem=)
+- TS categories: =packages/org/src/categories.ts= (=findCategoryForId=)
+- TS format: =packages/coding-agent/src/tools/org-format.ts= (=renderItemOrg=, =formatOrgQueryResult=)
+- TS outer schema: =packages/coding-agent/src/tools/org.ts= (=orgSchema=)
+- Elisp org-ql: =packages/org/elisp/tools/org-ql-query.el= (sort handling, entry-to-plist)
+- Existing tests: =packages/org/test/org-reader.test.ts=, =packages/org/test/tool-commands.test.ts=, =packages/coding-agent/test/org-output.test.ts=
+
+* Verification
+- =bun test packages/org/= — all existing + new tests pass
+- =bun test packages/coding-agent/test/org-output.test.ts= — passes
+- =bun check:ts= — passes for packages/org and packages/coding-agent
+- Manual verification:
+  - =org query= returns ~835 items (not ~1681)
+  - =org query category:plans= returns ~200 items sorted by priority
+  - =org query todo:ITEM= returns ~78 items (not ~920)
+  - =org get PLAN-087-telegram-bridge-audit-cycle-2-hardening= shows one CUSTOM_ID, no SESSION_ID
+  - =org dashboard= DOING list has ~110 items (not inflated by sub-headings)
+  - =org query category:plans limit:5= returns exactly 5 items
+
+* Execution Manifest
+
+** wave-1 (bugs, parallelizable)                                          :wave:
+- [[id:BUG-143-duplicate-custom-id-and-metadata-noise-i]] Fix duplicate CUSTOM_ID + metadata noise in renderItemOrg (30m)
+- [[id:BUG-144-sub-heading-items-pollute-query-and-dash]] Fix sub-heading items polluting query and dashboard (1h30m)
+- [[id:BUG-145-org-ql-passthrough-passes-directory-path]] Fix org-ql passthrough directory paths (20m)
+
+** wave-2 (features, sequential: sort before limit)                       :wave:
+- [[id:FEAT-280-sort-support-for-org-query-results]] Add sort support (1h30m, depends BUG-144)
+- [[id:FEAT-281-optimize-org-get-with-direct-file-path-d]] Optimize get with direct path derivation (45m, independent)
+- [[id:FEAT-282-add-limit-and-offset-to-org-query]] Add limit/offset to query (30m, depends BUG-144 + FEAT-280)
+
+** follow-up                                                               :wave:
+- [[id:FUP-036-sweep-stale-doing-org-items-to-blocked-o]] Data sweep: move stale DOING items to DONE (30m, post-implementation)
+
+** Completion [2026-04-03]
+
+*** Verification
+- =bun test packages/org/test/org-reader.test.ts= -- 14 pass, 0 fail (includes new sortItems and level filter tests)
+- =bun test packages/coding-agent/test/org-output.test.ts= -- 15 pass, 0 fail (includes new duplicate CUSTOM_ID test)
+- =bun test packages/org/test/tool-commands.test.ts= -- 19 pass, 1 pre-existing fail (emacs error message mismatch, not introduced by this change)
+- =bun check:ts= -- no type errors in packages/org or packages/coding-agent (9 pre-existing biome format errors in packages/spell-server)
+- Code changes: 302 insertions, 25 deletions across 9 files
+
+*** Artifacts
+All changes are in source code:
+- =packages/coding-agent/src/tools/org-format.ts= -- CUSTOM_ID/SESSION_ID/TRANSCRIPT_PATH exclusion filter
+- =packages/coding-agent/src/tools/org.ts= -- sort/limit/offset schema params and preview builder
+- =packages/org/src/types.ts= -- level/sort/limit/offset fields on OrgQueryFilter
+- =packages/org/src/org-reader.ts= -- sortItems() function with multi-key support, level filter in applyFilter
+- =packages/org/src/tool.ts= -- cmdQuery level=0 default + sort + pagination, cmdGet direct path derivation, expandOrgFiles for org-ql, paginateResult helper
+- =packages/org/elisp/tools/org-ql-query.el= -- multi-key sort via space-separated sort string
+- Test files: org-reader.test.ts (sortItems + level filter), tool-commands.test.ts (sort/limit/offset integration), org-output.test.ts (duplicate CUSTOM_ID)
+
+*** Deviations
+- [[id:FUP-036-sweep-stale-doing-org-items-to-blocked-o]] deferred as planned (post-implementation data sweep)

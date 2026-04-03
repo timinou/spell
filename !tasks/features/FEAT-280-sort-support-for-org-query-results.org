@@ -1,0 +1,85 @@
+#+TITLE: Sort support for org query results
+#+STATE: DONE
+#+SESSION_ID: 14ac498659bebe1a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-23-02-374Z_14ac498659bebe1a.jsonl]]
+#+CUSTOM_ID: FEAT-280-sort-support-for-org-query-results
+#+EFFORT: 1h30m
+#+PRIORITY: #A
+#+LAYER: backend
+#+DEPENDS: BUG-144-sub-heading-items-pollute-query-and-dash
+
+* Initial Message
+
+the org get and search tools provide wrong ITEMs and not well ordered. PLease try the tool and tell me the querying improvements you'd make
+
+* Problem
+Query results come back in =fs.readdir= order x =Promise.all= resolution order —
+effectively random. There is no sort parameter exposed, no default ordering, and
+no way for the LLM to request sorted output. The org-ql-query MCP tool already
+accepts a =sort= parameter but the TS code never passes it.
+
+* Design
+Two layers of sort support:
+
+1. *TS-side default sort*: After =applyFilter=, sort by priority (#A > #B > #C > none),
+   then by state (DOING > REVIEW > ITEM > BLOCKED > DONE > INIT), then by ID
+   (natural sort so PLAN-087 > PLAN-001). This applies to simple TS-path queries.
+
+2. *org-ql sort forwarding*: When queries route to Emacs (=ql= or advanced keyword
+   queries), pass the =sort= param through to =org-ql-query= MCP tool.
+
+3. *Elisp multi-key sort*: Enhance =org-ql-query.el= to accept space-separated sort
+   keys (e.g. =priority todo=) and pass them as a list to =org-ql-select :sort=.
+
+* Implementation
+
+*** ITEM Write tests for TS-side sorting
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+In =packages/org/test/org-reader.test.ts=, add tests for a new =sortItems= function:
+1. Sorts by priority descending (#A before #B before #C before none)
+2. Sorts by state in canonical order (DOING, REVIEW, ITEM, BLOCKED, DONE, INIT)
+3. Sorts by ID naturally (PLAN-087 after PLAN-002)
+4. Combined: priority first, then state, then ID
+
+*** ITEM Implement sortItems in org-reader
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+In =packages/org/src/org-reader.ts=, add an exported =sortItems= function that
+applies the default sort order (priority > state > id). Define priority/state
+ordering maps as module-level constants.
+
+*** ITEM Wire sort into cmdQuery
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+In =packages/org/src/tool.ts= =cmdQuery=, after =applyFilter=:
+1. If a =sort= param is provided for org-ql path, forward it to the MCP call
+2. For TS-path queries, apply =sortItems= to the filtered results
+Add =sort= parameter to the tool schema (both inner and outer).
+
+*** ITEM Enhance org-ql-query.el for multi-key sort
+:PROPERTIES:
+:EFFORT: 15m
+:END:
+In =packages/org/elisp/tools/org-ql-query.el=, change the sort handling:
+- Accept space-separated sort keys: =priority todo= or =reverse priority=
+- Split on spaces, intern each, pass list to =:sort=
+- Single key still works (backward compatible)
+Update the input-schema description to document multi-key support.
+
+*** ITEM Add sort parameter to outer tool schema
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+In =packages/coding-agent/src/tools/org.ts=, add =sort= to =orgSchema= as
+=Type.Optional(Type.String({ description: \"Sort key(s), e.g. priority, todo, date\" }))=.
+Forward it through the execute dispatch to =cmdQuery=.
+
+* Verification
+- =bun test packages/org/test/org-reader.test.ts= passes with sort tests
+- =bun check:ts= passes for packages/org and packages/coding-agent
+- Manual: =org query category:plans= returns items sorted by priority then state
+- Manual: =org query category:plans sort:priority= uses explicit sort

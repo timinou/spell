@@ -1,0 +1,65 @@
+#+TITLE: Optimize org get with direct file path derivation
+#+STATE: DONE
+#+SESSION_ID: 14ac498659bebe1a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-23-02-374Z_14ac498659bebe1a.jsonl]]
+#+CUSTOM_ID: FEAT-281-optimize-org-get-with-direct-file-path-d
+#+EFFORT: 45m
+#+PRIORITY: #B
+#+LAYER: backend
+
+* Initial Message
+
+the org get and search tools provide wrong ITEMs and not well ordered. PLease try the tool and tell me the querying improvements you'd make
+
+* Problem
+=cmdGet= calls =findItemById= which loops through ALL categories, calling
+=readCategory= for each (reads and parses ALL .org files in every directory).
+For a point lookup of =PLAN-087-...=, this parses 838 files across 7 categories.
+
+The ID prefix identifies the category (=findCategoryForId= already exists but is
+unused), and the file naming convention is ={ID}.org= (98.6% compliance, 823/835).
+
+* Design
+1. Parse prefix from ID → find category via =findCategoryForId=
+2. Construct expected path: =category.absPath/{id}.org=
+3. Try reading that single file
+4. On miss (1.4% of cases), fall back to single-category scan, then full scan
+
+This reduces get from O(all files) to O(1) for 98.6% of lookups.
+
+* Implementation
+
+*** ITEM Write test for direct file path get
+:PROPERTIES:
+:EFFORT: 10m
+:END:
+In =packages/org/test/tool-commands.test.ts=, add a test that:
+1. Creates an item via =command: \"create\"= with a known category
+2. Calls =command: \"get\", id: <returned-id>=
+3. Asserts the item is returned with correct id, title, state, and body
+
+*** ITEM Implement optimized cmdGet
+:PROPERTIES:
+:EFFORT: 20m
+:END:
+In =packages/org/src/tool.ts= =cmdGet=:
+1. Use =findCategoryForId(categories, args.id)= to derive category
+2. Construct path: =path.join(cat.absPath, args.id + \".org\")=
+3. Call =readOrgFile= on that single file with =includeBody: true=
+4. Find item by id in the result
+5. On miss, fall back to =readCategory= for that single category
+6. On miss, fall back to =findItemById= across all categories
+Return the first match.
+
+*** ITEM Remove unused full-scan in fetchItem
+:PROPERTIES:
+:EFFORT: 5m
+:END:
+The =fetchItem= helper (used by mutation response echoes) calls =findItemById=
+which is the same full-scan path. Update it to use the same optimized lookup.
+
+* Verification
+- =bun test packages/org/test/tool-commands.test.ts= passes
+- =bun check:ts= passes for packages/org
+- Manual: =org get PLAN-087-telegram-bridge-audit-cycle-2-hardening= returns correctly
+- Manual: =org get PLAN-099-phoenix-inspector-action-dispatch-fix= returns correctly (index.org, non-standard name)

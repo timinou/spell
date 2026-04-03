@@ -13,13 +13,13 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type EmacsSession, EmacsSessionManager, type EmacsWarmupResult } from "@oh-my-pi/pi-emacs";
-import { logger } from "@oh-my-pi/pi-utils";
-import { findCategory, resolveCategories } from "./categories";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { findCategory, findCategoryForId, resolveCategories } from "./categories";
 import type { OrgClient } from "./emacs/client";
 import { createOrgClient } from "./emacs/client";
 import { generateId } from "./id-generator";
 import { KeyedMutex } from "./mutex";
-import { applyFilter, findItemById, readCategory } from "./org-reader";
+import { applyFilter, findItemById, readCategory, readOrgFile, sortItems } from "./org-reader";
 import { appendItemToFile, applyItemMutations, initCategoryDir, setPropertyInFile } from "./org-writer";
 import { buildOrgQlSexp, parseKeywordQuery, requiresEmacs } from "./query-builder";
 import { DEFAULT_ORG_CONFIG, EFFORT_REGEXP, PRIORITY_REGEXP, REQUIRED_PROPERTIES } from "./schema/defaults";
@@ -71,6 +71,26 @@ async function fetchItem(ctx: OrgContext, id: string): Promise<OrgItem | undefin
 		id,
 		ctx.config.todoKeywords,
 	);
+}
+
+/** Expand category directories to individual .org file paths for org-ql. */
+async function expandOrgFiles(categories: Array<{ absPath: string }>): Promise<string[]> {
+	const fileGroups = await Promise.all(categories.map(async cat => listOrgFilesInDirectory(cat.absPath)));
+	return fileGroups.flat();
+}
+
+/** Apply limit/offset pagination to a result set. */
+function paginateResult(
+	items: unknown[],
+	totalBeforePagination: number,
+	limit?: number,
+	offset?: number,
+): { items: unknown[]; total: number } {
+	let result = items;
+	const start = offset && offset > 0 ? offset : 0;
+	if (start > 0) result = result.slice(start);
+	if (limit !== undefined && limit >= 0) result = result.slice(0, limit);
+	return { items: result, total: totalBeforePagination };
 }
 
 /** Build a standard mutation response, optionally including the full item or full file text. */
@@ -204,7 +224,10 @@ async function cmdCreate(
 	};
 }
 
-async function cmdQuery(ctx: OrgContext, filter: OrgQueryFilter & { query?: string; ql?: string }): Promise<unknown> {
+async function cmdQuery(
+	ctx: OrgContext,
+	filter: OrgQueryFilter & { query?: string; ql?: string; sort?: string; limit?: number; offset?: number },
+): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 
 	// Determine which categories to scan
@@ -218,14 +241,11 @@ async function cmdQuery(ctx: OrgContext, filter: OrgQueryFilter & { query?: stri
 	// Raw org-ql sexp passthrough — bypasses keyword parsing entirely
 	if (filter.ql) {
 		const client = await ctx.getOrgClient();
-		const files = targetCats.flatMap(cat => {
-			// List .org files synchronously — we don't have async iteration here,
-			// so we pass the directory path and let the elisp side enumerate files.
-			return [cat.absPath];
-		});
-		const result = await client.callTool("org-ql-query", { files, query: filter.ql });
+		const files = await expandOrgFiles(targetCats);
+		const sortParam = filter.sort ?? "priority todo";
+		const result = await client.callTool("org-ql-query", { files, query: filter.ql, sort: sortParam });
 		const items = Array.isArray(result) ? result : [];
-		return { items, total: items.length };
+		return paginateResult(items, items.length, filter.limit, filter.offset);
 	}
 
 	// Support keyword query syntax, e.g. "todo:DOING tags:auth"
@@ -239,11 +259,12 @@ async function cmdQuery(ctx: OrgContext, filter: OrgQueryFilter & { query?: stri
 	// Advanced queries (dateRange, clocked, effort, numeric property ops) route to org-ql
 	if (qlFilter && requiresEmacs(qlFilter)) {
 		const client = await ctx.getOrgClient();
-		const files = targetCats.map(cat => cat.absPath);
+		const files = await expandOrgFiles(targetCats);
 		const sexp = buildOrgQlSexp(qlFilter);
-		const result = await client.callTool("org-ql-query", { files, query: sexp });
+		const sortParam = filter.sort ?? "priority todo";
+		const result = await client.callTool("org-ql-query", { files, query: sexp, sort: sortParam });
 		const items = Array.isArray(result) ? result : [];
-		return { items, total: items.length };
+		return paginateResult(items, items.length, filter.limit, filter.offset);
 	}
 
 	// Simple queries: TS path (fast, no IPC overhead)
@@ -262,12 +283,32 @@ async function cmdQuery(ctx: OrgContext, filter: OrgQueryFilter & { query?: stri
 		}),
 	);
 
-	const filtered = applyFilter(allItems, filter);
-	return { items: filtered, total: filtered.length };
+	const filterWithLevel = { level: 0, ...filter };
+	const filtered = applyFilter(allItems, filterWithLevel);
+	sortItems(filtered, filter.sort);
+	return paginateResult(filtered, filtered.length, filter.limit, filter.offset);
 }
 
 async function cmdGet(ctx: OrgContext, args: { id: string }): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
+
+	const category = findCategoryForId(categories, args.id);
+	if (category) {
+		const directPath = path.join(category.absPath, `${args.id}.org`);
+		try {
+			const items = await readOrgFile({
+				filePath: directPath,
+				category: category.name,
+				dir: category.dirName,
+				todoKeywords: ctx.config.todoKeywords,
+				includeBody: true,
+			});
+			const found = items.find(item => item.id === args.id);
+			if (found) return { item: found };
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+		}
+	}
 
 	const item = await findItemById(
 		categories.map(c => ({ absPath: c.absPath, name: c.name, dir: c.dirName })),
@@ -539,10 +580,11 @@ async function cmdDashboard(ctx: OrgContext): Promise<unknown> {
 	}
 
 	for (const cat of categories) {
-		const items = await readCategory(cat.absPath, cat.name, cat.dirName, ctx.config.todoKeywords);
+		const allItems = await readCategory(cat.absPath, cat.name, cat.dirName, ctx.config.todoKeywords);
+		const topLevelItems = allItems.filter(item => item.level === 0);
 		const byState: Record<string, number> = {};
 
-		for (const item of items) {
+		for (const item of topLevelItems) {
 			byState[item.state] = (byState[item.state] ?? 0) + 1;
 			totals[item.state] = (totals[item.state] ?? 0) + 1;
 			if (item.state === "DOING" || item.state === "REVIEW") inProgress.push(item);
@@ -552,7 +594,7 @@ async function cmdDashboard(ctx: OrgContext): Promise<unknown> {
 		catMetrics.push({
 			category: cat.name,
 			prefix: cat.prefix,
-			total: items.length,
+			total: topLevelItems.length,
 			byState,
 		});
 	}
@@ -626,8 +668,9 @@ async function listOrgFilesInDirectory(dir: string): Promise<string[]> {
 	let entries: string[];
 	try {
 		entries = await fs.readdir(dir);
-	} catch {
-		return [];
+	} catch (err) {
+		if (isEnoent(err)) return [];
+		throw err;
 	}
 
 	return entries
@@ -962,6 +1005,9 @@ query supports keyword syntax via the 'query' param: 'todo:DOING tags:auth prior
 						includeBody: args.includeBody as boolean | undefined,
 						query: args.query as string | undefined,
 						ql: args.ql as string | undefined,
+						sort: args.sort as string | undefined,
+						limit: args.limit as number | undefined,
+						offset: args.offset as number | undefined,
 					});
 
 				case "get": {

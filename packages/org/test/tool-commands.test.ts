@@ -404,3 +404,67 @@ describe("set with file hint", () => {
 		expect(result.file).toBe(filePath);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Query: sort, limit, offset
+// ---------------------------------------------------------------------------
+
+describe("query sort and pagination", () => {
+	test("query returns items sorted by priority by default", async () => {
+		await seedItem("drafts", "DRAFT-100-low", "Low priority", { state: "ITEM" });
+		await seedItem("drafts", "DRAFT-101-high", "High priority", { state: "ITEM" });
+		// Manually set priorities via frontmatter
+		const lowPath = path.join(tmpDir, "tasks", "drafts", "DRAFT-100-low.org");
+		const highPath = path.join(tmpDir, "tasks", "drafts", "DRAFT-101-high.org");
+		await Bun.write(lowPath, `#+TITLE: Low priority\n#+STATE: ITEM\n#+CUSTOM_ID: DRAFT-100-low\n#+PRIORITY: #C\n`);
+		await Bun.write(highPath, `#+TITLE: High priority\n#+STATE: ITEM\n#+CUSTOM_ID: DRAFT-101-high\n#+PRIORITY: #A\n`);
+
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "query", category: "drafts" })) as {
+			items: Array<{ id: string }>;
+			total: number;
+		};
+
+		expect(result.items.length).toBeGreaterThanOrEqual(2);
+		const ids = result.items.map(i => i.id);
+		const highIdx = ids.indexOf("DRAFT-101-high");
+		const lowIdx = ids.indexOf("DRAFT-100-low");
+		expect(highIdx).toBeLessThan(lowIdx);
+	});
+
+	test("query with limit returns at most N items", async () => {
+		for (let i = 0; i < 5; i++) {
+			await seedItem("drafts", `DRAFT-20${i}-lim`, `Limit test ${i}`, { state: "ITEM" });
+		}
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "query", category: "drafts", limit: 3 })) as {
+			items: unknown[];
+			total: number;
+		};
+
+		expect(result.items.length).toBe(3);
+		expect(result.total).toBeGreaterThanOrEqual(5);
+	});
+
+	test("query with offset skips items", async () => {
+		for (let i = 0; i < 5; i++) {
+			await seedItem("projects", `PROJ-30${i}-off`, `Offset test ${i}`, { state: "ITEM" });
+		}
+		const tool = makeTool();
+
+		const all = (await tool.execute({ command: "query", category: "projects" })) as {
+			items: Array<{ id: string }>;
+			total: number;
+		};
+		const paginated = (await tool.execute({ command: "query", category: "projects", offset: 2, limit: 2 })) as {
+			items: Array<{ id: string }>;
+			total: number;
+		};
+
+		expect(paginated.items.length).toBe(2);
+		expect(paginated.total).toBe(all.total);
+		// Items should be offset by 2 from the full sorted list
+		expect(paginated.items[0].id).toBe(all.items[2].id);
+		expect(paginated.items[1].id).toBe(all.items[3].id);
+	});
+});

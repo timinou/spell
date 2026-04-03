@@ -93,13 +93,15 @@
       (setq files (list files)))
 
     (let* ((query-sexp (car (read-from-string query)))
-           (sort-sym   (when sort (intern sort)))
+           ;; Support space-separated multi-key sort, e.g. "priority todo"
+           (sort-fns   (when (and sort (not (string-empty-p sort)))
+                         (mapcar #'intern (split-string sort))))
            (results
             (org-ql-select
               files
               query-sexp
               :action #'org-ql-query--entry-to-plist
-              :sort (when sort-sym (list sort-sym)))))
+              :sort sort-fns)))
 
       (json-encode (mapcar #'org-ql-query--plist-to-alist results)))))
 
