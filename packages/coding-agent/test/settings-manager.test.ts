@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { reset as resetCapabilityCache } from "@oh-my-pi/pi-coding-agent/discovery";
 import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 
@@ -119,6 +120,67 @@ describe("Settings", () => {
 
 			const savedSettings = await readSettings();
 			expect(savedSettings.defaultThinkingLevel).toBe(Effort.High);
+		});
+	});
+
+	describe("project-level config.yml loading", () => {
+		const writeProjectYaml = async (data: Record<string, unknown>) => {
+			const yamlDir = path.join(getProjectAgentDir(projectDir), "agent");
+			fs.mkdirSync(yamlDir, { recursive: true });
+			await Bun.write(path.join(yamlDir, "config.yml"), YAML.stringify(data, null, 2));
+		};
+
+		beforeEach(() => {
+			// Clear capability FS cache so each test reads fresh files
+			resetCapabilityCache();
+		});
+
+		it("should load planMode.allowedFolders from project .spell/agent/config.yml", async () => {
+			await writeProjectYaml({
+				planMode: {
+					allowedFolders: { "./specs": "Spec files" },
+				},
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("planMode.allowedFolders")).toEqual({ "./specs": "Spec files" });
+		});
+
+		it("should merge project YAML with global config without clobbering", async () => {
+			// Global config sets theme
+			await writeSettings({ theme: { dark: "anthracite" } });
+			// Project YAML sets planMode
+			await writeProjectYaml({
+				planMode: {
+					allowedFolders: { "./specs": "Spec files" },
+				},
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			// Global setting preserved
+			expect(settings.get("theme.dark")).toBe("anthracite");
+			// Project YAML setting merged in
+			expect(settings.get("planMode.allowedFolders")).toEqual({ "./specs": "Spec files" });
+		});
+
+		it("should load from both settings.json and config.yml at project level", async () => {
+			// Write project-level settings.json (in .spell/ dir)
+			await Bun.write(
+				path.join(getProjectAgentDir(projectDir), "settings.json"),
+				JSON.stringify({ shellPath: "/bin/zsh" }),
+			);
+			// Write project-level config.yml (in .spell/agent/ dir)
+			await writeProjectYaml({
+				planMode: {
+					allowedFolders: { "./docs": "Documentation" },
+				},
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			// JSON settings.json value present
+			expect(settings.get("shellPath")).toBe("/bin/zsh");
+			// YAML config.yml value also present
+			expect(settings.get("planMode.allowedFolders")).toEqual({ "./docs": "Documentation" });
 		});
 	});
 });

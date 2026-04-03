@@ -1,0 +1,81 @@
+#+TITLE: Fix project-level configyml settings loading
+#+STATE: DONE
+#+SESSION_ID: 14ac7279914b4cdb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T18-21-57-189Z_14ac7279914b4cdb.jsonl]]
+#+CUSTOM_ID: PLAN-126-fix-project-level-config-yml-settings-lo
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+#+EFFORT: 2h
+#+PRIORITY: #B
+
+NOTE [2026-04-03]: All tasks complete. BUG-149 DONE. FUP-037 deferred (not in scope).
+
+
+* Initial Message
+
+But wait — I'm in plan mode. I can't write files. I can only create org items and the plan. Let me focus on that.
+
+ Let me first research the Marketing Messages API since the user specifically asked for it, and check the existing webhook/media infrastructure.
+
+ Now I'm realizing the constraints: the workspace is read-only except for the plan file, and plan output needs to be org-native. So I'll structure this as org items across four phases, with each phase
+ containing its own projects and features—starting with template CRUD completion, moving through template composition and real-time status tracking, and finishing with AI strategist and analytics capabilities.
+ Looking at this scope, I realize I need to organize it more strategically. The user wants me to move forward with creating the plan, so let me group these into logical projects with features underneath rather
+ than listing everything flat. I should also quickly verify the Marketing Messages API details before finalizing the structure, but I'll start organizing the major work streams now.
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-03T18-04-03-154Z_14ac6e60b4b69f94.jsonl
+ ID: 14ac6e60b4b69f94
+
+
+
+
+my friend, the allowedFolders of the config does not seem to be registered by plan modes. Why?
+
+* Context
+
+Users place =planMode.allowedFolders= (and other settings) in =.spell/agent/config.yml= at the project level, mirroring the global =~/.spell/agent/config.yml= convention. This file is silently ignored because the builtin settings discovery provider only loads =.spell/settings.json= (JSON format from the =.spell/= root).
+
+The global config path works because =Settings.#loadYaml()= reads directly from =~/.spell/agent/config.yml=. But project-level settings go through the capability system's =loadCapability(settingsCapability.id)=, and the builtin provider's =loadSettings()= function (=builtin.ts= line 763) only reads =settings.json=.
+
+** Approach
+Add YAML =config.yml= loading to the builtin =loadSettings()= function. For each config directory returned by =getConfigDirs()=, also check for =agent/config.yml= (exact mirror of global path structure, per user decision). Parse with =Bun.YAML.parse()= and push as a settings capability item. JSON items are pushed first, YAML second — so YAML wins on key conflicts within the same level via =Settings.#deepMerge()=.
+
+** Key decisions
+- Project config.yml path: =.spell/agent/config.yml= (exact mirror of global =~/.spell/agent/config.yml=)
+- Format consolidation deferred to follow-up (FUP-037)
+- Both =settings.json= and =config.yml= coexist; deep merge handles overlap
+- Project YAML is read-only (no write/persistence changes)
+
+** Key files
+- =packages/coding-agent/src/discovery/builtin.ts= — =loadSettings()= function (line 763)
+- =packages/coding-agent/src/config/settings.ts= — =Settings.#loadProjectSettings()= (line 433)
+- =packages/coding-agent/test/settings-manager.test.ts= — existing settings tests
+- =packages/coding-agent/test/tools/plan-mode-guard.test.ts= — existing mode guard tests
+
+* Verification
+- =bun test packages/coding-agent/test/settings-manager.test.ts= — new tests for project YAML loading
+- =bun check:ts= — type check passes
+- Manual: create =.spell/agent/config.yml= with =planMode.allowedFolders= in a project, enter plan mode, verify allowed folders appear in system prompt
+
+* Execution Manifest
+** foundation                                      :wave:
+- [[id:BUG-149-project-level-config-yml-not-loaded-by-s::test-yaml-merge]] Test project-level config.yml merges into Settings (1h)
+- [[id:BUG-149-project-level-config-yml-not-loaded-by-s::test-merge-precedence]] Test project YAML + global merge (30min, depends test-yaml-merge)
+- [[id:BUG-149-project-level-config-yml-not-loaded-by-s::test-json-compat]] Test JSON + YAML coexistence (30min, depends test-yaml-merge)
+** core                                            :wave:
+- [[id:BUG-149-project-level-config-yml-not-loaded-by-s::impl-builtin-yaml]] Add YAML loading to builtin loadSettings (1h, depends all tests)
+** deferred                                        :wave:
+- [[id:FUP-037-consolidate-project-settings-format-asym]] Consolidate project settings format (4h, deferred follow-up)
+
+** Completion [2026-04-03]
+*** Verification
+- =bun test packages/coding-agent/test/settings-manager.test.ts= — 6/6 pass (3 existing + 3 new)
+- =bunx biome check= on modified files — clean
+- =bunx tsgo -p tsconfig.json= — no new type errors (pre-existing errors in spell-server and utils only)
+
+*** Artifacts
+- =packages/coding-agent/src/discovery/builtin.ts= — added YAML config.yml loading to =loadSettings()= for project-level dirs
+- =packages/coding-agent/test/settings-manager.test.ts= — added 3 tests covering YAML merge, global+project merge, and JSON+YAML coexistence
+
+*** Deviations
+None.
