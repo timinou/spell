@@ -15,8 +15,8 @@ export type BridgeRpcCommand =
 
 /** Image content reference matching coding-agent's ImageContent */
 export interface ImageContentRef {
-	type: "base64";
-	media_type: string;
+	type: "image";
+	mimeType: string;
 	data: string;
 }
 

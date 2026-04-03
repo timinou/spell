@@ -1,0 +1,46 @@
+#+TITLE: Fix Telegram bridge image uploads
+#+STATE: DONE
+#+SESSION_ID: 14ac0ccc942812b6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-57-43-504Z_14ac0ccc942812b6.jsonl]]
+#+CUSTOM_ID: PLAN-110-fix-telegram-bridge-image-uploads
+
+NOTE [2026-04-03]: All child items DONE. Verification passed.
+
+
+* Initial Message
+
+Telegram bridge: issue when uploading images
+
+Othman, [2026-04-03 11:57 a.m.]
+Can you read this?
+
+SpellBot, [2026-04-03 11:57 a.m.]
+Assistant error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.0.content.1.image.source.base64.media_type: Field required"},"request_id":"req_011CZgib4r6j31qJdXS5oSzu"}
+raw-http-request=/home/user/.spell/logs/http-400-requests/1775213831842-288cpaw1r1gju.json
+
+* Context
+Telegram image uploads fail with Anthropic API 400 error: =media_type: Field required=. Root cause is a type mismatch between =spell-server='s =ImageContentRef= and =coding-agent='s expected =ImageContent= (from =@oh-my-pi/pi-ai=). Two fields are wrong: =type= discriminant (="base64"= vs ="image"=) and mime type field (=media_type= vs =mimeType=).
+
+The comment on =ImageContentRef= says "matching coding-agent's ImageContent" but it doesn't actually match. The fix aligns the local type definition with the real contract. No new dependency on =@oh-my-pi/pi-ai= is needed — the existing "compatible subset" pattern is preserved, just corrected.
+
+* Verification
+- =bun check:ts= passes (type alignment is correct)
+- =bun test packages/spell-server/test/telegram/bridge.test.ts= passes (assertions updated)
+
+* Execution Manifest
+** Wave 1
+- [[id:BUG-133-telegram-bridge-imagecontentref-type-mis]] — Fix ImageContentRef type, collectImages function, and test assertions (3 files, ~1h)
+
+** Completion [2026-04-03]
+*** Verification
+- =bun check:ts=: biome passes clean; tsgo has pre-existing errors in =approvals.ts=, =tool-progress.ts=, =logger.ts= — none in changed files, no new errors introduced
+- =bun test packages/spell-server/test/telegram/bridge.test.ts=: 26/26 pass, 0 fail, 73 expect() calls
+
+*** Artifacts
+Three files changed:
+- =packages/spell-server/src/rpc/types.ts= — =ImageContentRef.type= changed from ="base64"= to ="image"=, =media_type= renamed to =mimeType=
+- =packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts= — =collectImages= output aligned to corrected type
+- =packages/spell-server/test/telegram/bridge.test.ts= — test assertions updated to expect correct shape
+
+*** Deviations
+None.
