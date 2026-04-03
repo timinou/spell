@@ -1,0 +1,61 @@
+#+TITLE: Fix AgentBusyError crash in audit slash command during streaming
+#+STATE: DONE
+#+SESSION_ID: 14ac8c492f78e848
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T20-14-43-389Z_14ac8c492f78e848.jsonl]]
+#+CUSTOM_ID: BUG-151-fix-agentbusyerror-crash-in-audit-slash
+#+EFFORT: 15m
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+NOTE [2026-04-03]: Fixed: added streaming guard in handleAuditCommand() before state mutation. bun check:ts passes (no new errors).
+
+* Initial Message
+
+╰─                                                                                                                                      ─╯
+[Unhandled Rejection] AgentBusyError: Agent is already processing. Use steer() or followUp() to queue messages, or wait for completion.
+    at prompt (/home/user/code/ora/spell/packages/coding-agent/src/session/agent-session.ts:2326:11)
+    at handleAuditCommand (/home/user/code/ora/spell/packages/coding-agent/src/modes/interactive-mode.ts:745:22)
+    at <anonymous> (/home/user/code/ora/spell/packages/coding-agent/src/slash-commands/builtin-registry.ts:118:22)
+    at executeBuiltinSlashCommand (/home/user/code/ora/spell/packages/coding-agent/src/slash-commands/builtin-registry.ts:647:16)
+    at <anonymous> (/home/user/code/ora/spell/packages/coding-agent/src/modes/controllers/input-controller.ts:212:11)
+    at #submitValue (/home/user/code/ora/spell/packages/tui/src/components/editor.ts:1420:27)
+    at handleInput (/home/user/code/ora/spell/packages/tui/src/components/editor.ts:941:9)
+    at handleInput (/home/user/code/ora/spell/packages/coding-agent/src/modes/components/custom-editor.ts:179:9)
+    at #handleInput (/home/user/code/ora/spell/packages/tui/src/tui.ts:637:27)
+    at <anonymous> (/home/user/code/ora/spell/packages/tui/src/terminal.ts:343:10)
+Crash report written to /home/user/.spell/reports/crash-2026-04-03T20-14-24-147Z.json
+
+* Problem
+~handleAuditCommand()~ in ~interactive-mode.ts~ calls ~session.prompt(prompt, { synthetic: true })~ without a ~streamingBehavior~ option. When the agent is already streaming (e.g. processing a previous prompt), ~prompt()~ throws ~AgentBusyError~ which is unhandled, crashing the process.
+
+Compounding issue: the method mutates audit state (~setAuditState~, ~showAuditOverlay~) *before* the prompt call. So the crash leaves audit state corrupted:
+- Overlay shows but no audit runs
+- Re-running ~/audit~ says "Audit already in progress" because ~active~ is ~true~
+
+* Fix
+Add a streaming guard at the top of ~handleAuditCommand()~ (after plan mode and active-audit checks), *before* any state mutation.
+
+** Target
+~packages/coding-agent/src/modes/interactive-mode.ts~ — ~handleAuditCommand()~ method (line ~735).
+
+** Change
+Insert after the ~getAuditState().active~ guard:
+#+begin_src typescript
+if (this.session.isStreaming) {
+    this.showWarning("Cannot audit while agent is processing.");
+    return;
+}
+#+end_src
+
+** Design rationale
+- *Warn-and-bail over followUp queueing*: The ~followUp~ path hardcodes ~role: "user"~ / ~attribution: "user"~, but audit prompts require ~synthetic: true~ (→ ~role: "developer"~, ~attribution: "agent"~). Queueing via followUp would misrepresent the prompt.
+- *Guard before state mutation*: The streaming check must precede ~setAuditState~ and ~showAuditOverlay~ to avoid corrupted state on early return.
+- Consistent with codebase pattern: ~input-controller.ts~ checks ~session.isStreaming~ before calling ~prompt()~.
+
+* Verification
+- ~bun check:ts~ passes
+- Manual: start agent processing, type ~/audit~ — should see warning instead of crash
+- Audit state should remain clean (re-running ~/audit~ after agent finishes should work)
+
+* Notes
+Lines 1411 and 1418 (Momus/Athena review) also call ~session.prompt()~ without ~streamingBehavior~, but they run after ~session.abort()~ + user selector interaction, so ~isStreaming~ is guaranteed false. No fix needed there.

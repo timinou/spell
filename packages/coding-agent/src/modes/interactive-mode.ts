@@ -741,6 +741,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("Audit already in progress.");
 			return;
 		}
+		if (this.session.isStreaming) {
+			this.showWarning("Cannot audit while agent is processing.");
+			return;
+		}
 		this.session.setAuditState({ type: "audit", pending: false, active: true });
 		this.showAuditOverlay();
 		const prompt = renderPromptTemplate(planAuditPrompt, {
