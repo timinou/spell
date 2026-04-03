@@ -1,23 +1,22 @@
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
 import { parse } from "@bgotink/kdl";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import { createBuiltinActionRegistry } from "../actions";
 import type { ActionRegistry } from "../actions/registry";
-import { parseManifestModuleDocument, type ParseManifestOptions } from "./parser";
+import { type ParseManifestOptions, parseManifestModuleDocument } from "./parser";
 import {
 	type AutonomyManifest,
 	type FilterConfig,
+	isValidManifest,
 	type ManifestGoal,
 	type ManifestGoalPatch,
 	type ManifestHookConfig,
 	type ManifestSetup,
 	type ManifestSetupPatch,
 	type NamedStateStore,
-	type ParsedManifestModule,
 	type RetryConfig,
 	type SandboxConfig,
 	type StateConfig,
-	isValidManifest,
 } from "./types";
 import { validateManifest } from "./validator";
 
@@ -238,9 +237,7 @@ function mergeGoal(base: ManifestGoal, patch: ManifestGoalPatch, pathLabel: stri
 			continue;
 		}
 		if (strategy === "nonMergeable") {
-			throw new Error(
-				`${pathLabel}.${field} is not mergeable; use strategy=\"replace\" on the whole symbol instead`,
-			);
+			throw new Error(`${pathLabel}.${field} is not mergeable; use strategy="replace" on the whole symbol instead`);
 		}
 	}
 	return merged;
@@ -333,13 +330,19 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 	};
 	const manifestText = await readManifestText(absolutePath);
 	const manifestModule = parseManifestModuleDocument(parse(manifestText), parseOptions);
+	for (const descriptor of manifestModule.actionDescriptors) {
+		if (!context.registry.has(descriptor.id)) {
+			context.registry.register(descriptor);
+		}
+	}
+
 	const setups = new Map<string, ManifestSetup>();
 	const goals = new Map<string, ManifestGoal>();
 	const aliasSet = new Set<string>();
 
 	for (const manifestImport of manifestModule.imports) {
 		if (aliasSet.has(manifestImport.alias)) {
-			throw new Error(`Duplicate import alias \"${manifestImport.alias}\" in ${absolutePath}`);
+			throw new Error(`Duplicate import alias "${manifestImport.alias}" in ${absolutePath}`);
 		}
 		aliasSet.add(manifestImport.alias);
 		const imported = await resolveManifestModule(path.resolve(path.dirname(absolutePath), manifestImport.source), {
@@ -358,14 +361,14 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 		);
 	}
 
-	mergePrefixedSymbols(setups, manifestModule.setups, name => `Duplicate setup \"${name}\"`);
-	mergePrefixedSymbols(goals, manifestModule.goals, name => `Duplicate goal \"${name}\"`);
+	mergePrefixedSymbols(setups, manifestModule.setups, name => `Duplicate setup "${name}"`);
+	mergePrefixedSymbols(goals, manifestModule.goals, name => `Duplicate goal "${name}"`);
 
 	for (const [index, override] of manifestModule.overrides.entries()) {
 		if (override.kind === "setup") {
 			const target = setups.get(override.from);
 			if (!target) {
-				throw new Error(`overrides.${index}.from references unknown setup \"${override.from}\"`);
+				throw new Error(`overrides.${index}.from references unknown setup "${override.from}"`);
 			}
 			setups.set(
 				override.name,
@@ -377,7 +380,7 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 		}
 		const target = goals.get(override.from);
 		if (!target) {
-			throw new Error(`overrides.${index}.from references unknown goal \"${override.from}\"`);
+			throw new Error(`overrides.${index}.from references unknown goal "${override.from}"`);
 		}
 		goals.set(
 			override.name,

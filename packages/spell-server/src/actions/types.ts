@@ -20,7 +20,7 @@ export interface ActionPromptSlotDescriptor {
 
 export interface ActionDescriptor {
 	id: string;
-	source: "first-party";
+	source: "first-party" | "project";
 	params?: Record<string, ActionParameterDescriptor>;
 	promptSlots?: Record<string, ActionPromptSlotDescriptor>;
 }

@@ -152,6 +152,76 @@ goal "run" {
 		await expect(loadManifestFromFile(manifestPath, { registry })).rejects.toThrow(/must be valid JSON/i);
 	});
 
+	it("loads KDL-declared action descriptors with project source", async () => {
+		const { dir, manifestPath } = await createManifestProject({
+			"autonomy.kdl": `name "kdl-actions"
+version "1.0.0"
+action-descriptor "my.action" source="project"
+setup "worker" { domain "coding" }
+goal "run" {
+	setup "worker"
+	schedule type="cron" expression="0 1 * * *"
+	action "my.action"
+}
+`,
+		});
+		tempDirs.add(dir);
+		const registry = createBuiltinActionRegistry();
+		const manifest = await loadManifestFromFile(manifestPath, { registry });
+		expect(manifest.goals.get("run")?.action?.id).toBe("my.action");
+		expect(registry.get("my.action")?.source).toBe("project");
+	});
+
+	it("validates params declared in KDL action descriptors", async () => {
+		const { dir, manifestPath } = await createManifestProject({
+			"autonomy.kdl": `name "kdl-action-params"
+version "1.0.0"
+action-descriptor "my.typed" source="project" {
+	param "limit" type="number" required=#true
+	prompt-slot "context" required=#true
+}
+setup "worker" { domain "coding" }
+goal "run" {
+	setup "worker"
+	schedule type="cron" expression="0 1 * * *"
+	action "my.typed" {
+		param "limit" "not-a-number"
+	}
+}
+`,
+		});
+		tempDirs.add(dir);
+		await expect(loadManifestFromFile(manifestPath, { registry: createBuiltinActionRegistry() })).rejects.toThrow(
+			/Action param "limit" must be number/i,
+		);
+	});
+
+	it("registers action descriptors from imported modules", async () => {
+		const { dir, manifestPath } = await createManifestProject({
+			"actions.kdl": `action-descriptor "custom.review" source="project" {
+	param "maxItems" type="number"
+}
+`,
+			"autonomy.kdl": `name "imported-actions"
+version "1.0.0"
+import "./actions.kdl" as="ext"
+setup "worker" { domain "coding" }
+goal "run" {
+	setup "worker"
+	schedule type="cron" expression="0 1 * * *"
+	action "custom.review" {
+		param "maxItems" 10
+	}
+}
+`,
+		});
+		tempDirs.add(dir);
+		const registry = createBuiltinActionRegistry();
+		const manifest = await loadManifestFromFile(manifestPath, { registry });
+		expect(manifest.goals.get("run")?.action?.params).toEqual({ maxItems: 10 });
+		expect(registry.get("custom.review")?.source).toBe("project");
+	});
+
 	it("keeps built-in registry first-party only", () => {
 		const registry = createBuiltinActionRegistry();
 		expect(registry.list().every(descriptor => descriptor.source === "first-party")).toBe(true);
@@ -160,6 +230,6 @@ goal "run" {
 				id: "external.review",
 				source: "external" as never,
 			}),
-		).toThrow(/first-party descriptors only/);
+		).toThrow(/first-party or project descriptors only/);
 	});
 });

@@ -2,7 +2,15 @@ import * as path from "node:path";
 import type { Document, Node } from "@bgotink/kdl";
 import { parse } from "@bgotink/kdl";
 import type { ActionRegistry } from "../actions/registry";
-import type { ActionParameterType, ActionScalar, ActionValue, ManifestAction } from "../actions/types";
+import type {
+	ActionDescriptor,
+	ActionParameterDescriptor,
+	ActionParameterType,
+	ActionPromptSlotDescriptor,
+	ActionScalar,
+	ActionValue,
+	ManifestAction,
+} from "../actions/types";
 import {
 	type AutonomyManifest,
 	type CronSchedule,
@@ -331,7 +339,7 @@ function parseHookTarget(node: Node, pathLabel: string, options: ParseManifestOp
 		const category = resolveOptionalStringProperty(node, "category", pathLabel, options);
 		return { type: "org", ...(category !== undefined ? { category } : {}) } satisfies OrgHook;
 	}
-	throw new Error(`${pathLabel} has unsupported hook target \"${name}\"`);
+	throw new Error(`${pathLabel} has unsupported hook target "${name}"`);
 }
 
 function parseHooksNode(node: Node, pathLabel: string, options: ParseManifestOptions): ManifestHookConfig {
@@ -475,6 +483,62 @@ function parseActionJsonValue(node: Node, pathLabel: string, options: ParseManif
 	}
 }
 
+function parseActionDescriptorNode(node: Node, pathLabel: string, options: ParseManifestOptions): ActionDescriptor {
+	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
+	const source = resolveOptionalStringProperty(node, "source", pathLabel, options) ?? "project";
+	if (source !== "first-party" && source !== "project") {
+		throw new Error(`${pathLabel}.source must be "first-party" or "project"`);
+	}
+	const descriptor: ActionDescriptor = { id, source };
+	const params: Record<string, ActionParameterDescriptor> = {};
+	const promptSlots: Record<string, ActionPromptSlotDescriptor> = {};
+
+	for (const child of node.children?.nodes ?? []) {
+		const childName = getNodeName(child);
+		if (childName === "param") {
+			const paramName = expectStringArgument(child, `${pathLabel}.param.name`, 0, options);
+			const typeValue = resolveOptionalStringProperty(child, "type", `${pathLabel}.param.${paramName}`, options);
+			if (!typeValue) {
+				throw new Error(`${pathLabel}.param.${paramName}.type is required`);
+			}
+			const validTypes = new Set<ActionParameterType>([
+				"string",
+				"number",
+				"boolean",
+				"string[]",
+				"number[]",
+				"boolean[]",
+				"json",
+			]);
+			if (!validTypes.has(typeValue as ActionParameterType)) {
+				throw new Error(`${pathLabel}.param.${paramName}.type must be one of: ${[...validTypes].join(", ")}`);
+			}
+			const required = resolveOptionalBooleanProperty(child, "required", `${pathLabel}.param.${paramName}`, options);
+			params[paramName] = {
+				type: typeValue as ActionParameterType,
+				...(required !== undefined ? { required } : {}),
+			};
+			continue;
+		}
+		if (childName === "prompt-slot") {
+			const slotName = expectStringArgument(child, `${pathLabel}.prompt-slot.name`, 0, options);
+			const required = resolveOptionalBooleanProperty(
+				child,
+				"required",
+				`${pathLabel}.prompt-slot.${slotName}`,
+				options,
+			);
+			promptSlots[slotName] = { ...(required !== undefined ? { required } : {}) };
+			continue;
+		}
+		throw new Error(`${pathLabel} has unsupported child "${childName}"`);
+	}
+
+	if (Object.keys(params).length > 0) descriptor.params = params;
+	if (Object.keys(promptSlots).length > 0) descriptor.promptSlots = promptSlots;
+	return descriptor;
+}
+
 function parseActionNode(node: Node, pathLabel: string, options: ParseManifestOptions): ManifestAction {
 	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
 	const descriptor = options.registry?.get(id);
@@ -532,7 +596,7 @@ function parseActionNode(node: Node, pathLabel: string, options: ParseManifestOp
 			};
 			continue;
 		}
-		throw new Error(`${pathLabel} has unsupported action child \"${childName}\"`);
+		throw new Error(`${pathLabel} has unsupported action child "${childName}"`);
 	}
 
 	return action;
@@ -644,7 +708,7 @@ function parseOverrideNode(node: Node, pathLabel: string, options: ParseManifest
 		const value = parseGoalPatch(node, pathLabel, options);
 		return { kind, name, from, strategy, value } satisfies GoalOverride;
 	}
-	throw new Error(`${pathLabel}.kind must be \"setup\" or \"goal\"`);
+	throw new Error(`${pathLabel}.kind must be "setup" or "goal"`);
 }
 
 export function parseManifestModuleDocument(
@@ -658,6 +722,7 @@ export function parseManifestModuleDocument(
 	const setups = new Map<string, ManifestSetup>();
 	const goals = new Map<string, ManifestGoal>();
 	const overrides: ManifestOverride[] = [];
+	const actionDescriptors: ActionDescriptor[] = [];
 
 	for (const [index, node] of document.nodes.entries()) {
 		const nodeName = getNodeName(node);
@@ -678,7 +743,7 @@ export function parseManifestModuleDocument(
 				const setupName = expectStringArgument(node, "setup.name", 0, options);
 				validateSymbolName(setupName, "setup.name");
 				if (setups.has(setupName)) {
-					throw new Error(`Duplicate setup \"${setupName}\"`);
+					throw new Error(`Duplicate setup "${setupName}"`);
 				}
 				setups.set(
 					setupName,
@@ -690,7 +755,7 @@ export function parseManifestModuleDocument(
 				const goalName = expectStringArgument(node, "goal.name", 0, options);
 				validateSymbolName(goalName, "goal.name");
 				if (goals.has(goalName)) {
-					throw new Error(`Duplicate goal \"${goalName}\"`);
+					throw new Error(`Duplicate goal "${goalName}"`);
 				}
 				goals.set(goalName, finalizeGoal(parseGoalPatch(node, `goals.${goalName}`, options), `goals.${goalName}`));
 				continue;
@@ -699,7 +764,13 @@ export function parseManifestModuleDocument(
 				overrides.push(parseOverrideNode(node, `overrides.${overrides.length}`, options));
 				continue;
 			}
-			throw new Error(`Unsupported top-level node \"${nodeName}\" at index ${index}`);
+			if (nodeName === "action-descriptor") {
+				actionDescriptors.push(
+					parseActionDescriptorNode(node, `action-descriptor.${actionDescriptors.length}`, options),
+				);
+				continue;
+			}
+			throw new Error(`Unsupported top-level node "${nodeName}" at index ${index}`);
 		} catch (error) {
 			errors.push(error instanceof Error ? error.message : String(error));
 		}
@@ -709,7 +780,7 @@ export function parseManifestModuleDocument(
 		throw new Error(errors.join("\n"));
 	}
 
-	return { name, version, imports, setups, goals, overrides };
+	return { name, version, imports, setups, goals, overrides, actionDescriptors };
 }
 
 function hydrateManifest(manifestModule: ParsedManifestModule): AutonomyManifest {

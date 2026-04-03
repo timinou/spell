@@ -3,8 +3,8 @@ import type { BridgeState, ChatSession } from "../rpc/bridge-types";
 import { RpcClient } from "../rpc/rpc-client";
 import { loadBridgeState, saveBridgeState } from "../rpc/state";
 import type { RpcSpawnOptions } from "../rpc/types";
-import type { TelegramBridgeConfig } from "./types";
 import { createRpcTranscriptWriter, type RpcTranscriptWriter } from "./transcript-store";
+import type { TelegramBridgeConfig } from "./types";
 
 interface SessionEntry {
 	client: RpcClient;

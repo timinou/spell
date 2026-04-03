@@ -31,7 +31,7 @@ export function validateManifest(manifest: AutonomyManifest, registry?: ActionRe
 
 	for (const [goalName, goal] of manifest.goals) {
 		if (!manifest.setups.has(goal.setup)) {
-			errors.push({ path: `goals.${goalName}.setup`, message: `Unknown setup \"${goal.setup}\"` });
+			errors.push({ path: `goals.${goalName}.setup`, message: `Unknown setup "${goal.setup}"` });
 		}
 
 		if (!goal.prompt && !goal.action) {

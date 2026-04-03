@@ -1,0 +1,46 @@
+#+TITLE: Remove spell-growth package and decouple from spell-server
+#+STATE: DONE
+#+SESSION_ID: 14abf8daee6f2d2b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-30-35-321Z_14abf8daee6f2d2b.jsonl]]
+#+CUSTOM_ID: FEAT-246-remove-spell-growth-package-and-decouple
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: packages/spell-server packages/spell-growth
+#+DEPENDS: FEAT-245-add-kdl-declarative-action-descriptors-t
+
+NOTE [2026-04-03]: Deleted packages/spell-growth/, removed dependency from spell-server, updated config loader to use createBuiltinActionRegistry(). Zero spell-growth references remain.
+
+* Initial Message
+
+what is part of spell-gworth (packages/spell-growth)? what is the purpose of the code? Why can't it be an extension in ../growth?
+
+* Scope
+Delete ~packages/spell-growth~ entirely and remove the hardcoded coupling from ~spell-server~.
+
+** Files to modify
+- ~packages/spell-server/src/actions/index.ts~: remove ~import { registerGrowthActions }~, delete ~createServerActionRegistry()~, keep ~createBuiltinActionRegistry()~ and ~getBuiltinActionDescriptors()~
+- ~packages/spell-server/package.json~: remove ~@oh-my-pi/spell-growth~ from dependencies
+- ~packages/spell-server/src/config/loader.ts~: change ~createServerActionRegistry()~ to ~createBuiltinActionRegistry()~
+- ~packages/spell-server/test/manifest/action-registry.test.ts~: update test that references ~createServerActionRegistry~; test should verify builtin registry has only ~spell.noop~ and ~spell.prompt~, no growth actions
+
+** Files to delete
+- ~packages/spell-growth/~ (entire directory)
+
+** Lockfile and workspace
+- Run ~bun install~ to regenerate lockfile without spell-growth
+- Verify ~packages/*~ workspace glob no longer matches spell-growth
+
+** Sub-outline
+1. Remove ~@oh-my-pi/spell-growth~ from ~spell-server/package.json~ dependencies
+2. Remove ~registerGrowthActions~ import and ~createServerActionRegistry()~ from ~actions/index.ts~
+3. Update ~config/loader.ts~ to use ~createBuiltinActionRegistry()~
+4. Update ~action-registry.test.ts~ to not reference growth actions
+5. Delete ~packages/spell-growth/~ directory
+6. Run ~bun install~ to update lockfile
+7. Run ~bun check:ts~ to verify no broken imports
+
+* Acceptance
+- ~bun check:ts~ passes with no references to ~spell-growth~
+- ~bun test packages/spell-server/~ passes
+- ~grep -r "spell-growth" packages/~ returns zero matches (except possibly changelogs)
+- ~packages/spell-growth/~ does not exist

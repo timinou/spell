@@ -12,13 +12,13 @@ import { OrgHookExecutor } from "./hooks/org";
 import { TelegramHookExecutor } from "./hooks/telegram";
 import type { HookExecutor } from "./hooks/types";
 import { WebhookHookExecutor } from "./hooks/webhook";
-import { WorkflowEngine } from "./workflow";
 import type { OperatorActionHandler } from "./http/routes/operator-actions";
 import { startHttpServer } from "./http/server";
 import { GoalScheduler } from "./scheduler/goal-scheduler";
 import { AutonomyLifecycle } from "./session/autonomy-lifecycle";
 import { SessionManager } from "./session/session-manager";
 import { TelegramBotService, type TelegramBotServiceOptions } from "./telegram/service";
+import { WorkflowEngine } from "./workflow";
 
 export interface SpellServer {
 	telegramBotActive: boolean;

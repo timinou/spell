@@ -180,7 +180,7 @@ function parseNotificationRoutes(value: unknown, message: string): WorkflowCreat
 		}
 		const channel = parseString(route.channel, `${routeMessage}.channel must be a string`);
 		if (channel !== "telegram" && channel !== "generic") {
-			return invalidPayload(`${routeMessage}.channel must be \"telegram\" or \"generic\"`);
+			return invalidPayload(`${routeMessage}.channel must be "telegram" or "generic"`);
 		}
 		const template = parseOptionalString(route.template, `${routeMessage}.template must be a string`);
 		return {

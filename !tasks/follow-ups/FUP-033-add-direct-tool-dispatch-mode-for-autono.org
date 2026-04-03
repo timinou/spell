@@ -1,0 +1,49 @@
+#+TITLE: Add direct tool dispatch mode for autonomy actions
+#+STATE: ITEM
+#+SESSION_ID: 14abf8daee6f2d2b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-30-35-321Z_14abf8daee6f2d2b.jsonl]]
+#+CUSTOM_ID: FUP-033-add-direct-tool-dispatch-mode-for-autono
+#+EFFORT: 4h
+#+PRIORITY: #C
+#+LAYER: packages/spell-server
+
+* Initial Message
+
+what is part of spell-gworth (packages/spell-growth)? what is the purpose of the code? Why can't it be an extension in ../growth?
+
+* Scope
+Add an alternative execution mode for autonomy actions where the executor runs a sequence of tool calls directly, without spawning an LLM agent session. This enables deterministic, token-free execution of mechanical workflows.
+
+** Design sketch
+Action descriptors gain an optional ~mode~ property (~"agent"~ default, ~"tools"~ for direct dispatch).
+
+KDL syntax:
+#+begin_src kdl
+action-descriptor "growth.discovery" source="project" mode="tools" {
+    step "web_search" {
+        param "query" "$source_query"
+    }
+    step "write" {
+        param "path" "./outbox/results.json"
+    }
+}
+#+end_src
+
+The executor would:
+1. Resolve step params (including variable interpolation from goal params)
+2. Execute each tool call in sequence via the existing tool infrastructure
+3. Pass output from one step as context to the next
+4. On failure, stop and report which step failed
+
+** Open design questions
+- How do steps reference outputs from previous steps?
+- Error handling: fail-fast vs. continue-on-error?
+- Variable interpolation syntax for goal params in step params
+- Should steps support conditional branching?
+
+** Why FUP
+This is independent from the spell-growth decoupling. The agent-prompted execution path works today. This adds an optimization for mechanical, deterministic workflows.
+
+* Acceptance
+- Design doc with resolved open questions
+- Implementation plan with specific file changes

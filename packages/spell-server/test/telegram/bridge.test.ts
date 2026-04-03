@@ -14,7 +14,6 @@ interface MockReply {
 }
 
 interface MockDraft {
-	chat_id: number;
 	text: string;
 }
 
@@ -49,10 +48,9 @@ interface MockAuthContext extends Record<string, unknown> {
 		chat: { id: number; type: "private" };
 	};
 	reply: (text: string, options?: Record<string, unknown>) => Promise<{ message_id: number }>;
+	replyWithDraft: (text: string) => Promise<true>;
+	replyWithChatAction: (action: string) => Promise<true>;
 	api: {
-		raw: {
-			sendMessageDraft: (args: MockDraft) => Promise<void>;
-		};
 		token: string;
 		getFile: (fileId: string) => Promise<{ file_path: string }>;
 	};
@@ -63,11 +61,13 @@ interface MockAuthContext extends Record<string, unknown> {
 	};
 	_replies: MockReply[];
 	_drafts: MockDraft[];
+	_chatActions: string[];
 }
 
 function mockAuthContext(opts: MockAuthContextOptions): MockAuthContext {
 	const replies: MockReply[] = [];
 	const drafts: MockDraft[] = [];
+	const chatActions: string[] = [];
 	const fileMap = opts.fileMap ?? {
 		photo: "photo.jpg",
 		doc: "notes.txt",
@@ -88,12 +88,15 @@ function mockAuthContext(opts: MockAuthContextOptions): MockAuthContext {
 			replies.push({ text, options });
 			return { message_id: replies.length + 1 };
 		},
+		replyWithDraft: async (text: string) => {
+			drafts.push({ text });
+			return true as const;
+		},
+		replyWithChatAction: async (action: string) => {
+			chatActions.push(action);
+			return true as const;
+		},
 		api: {
-			raw: {
-				sendMessageDraft: async (args: MockDraft) => {
-					drafts.push(args);
-				},
-			},
 			token: "test-bot-token",
 			getFile: async (fileId: string) => ({ file_path: fileMap[fileId] ?? "unknown.bin" }),
 		},
@@ -104,6 +107,7 @@ function mockAuthContext(opts: MockAuthContextOptions): MockAuthContext {
 		},
 		_replies: replies,
 		_drafts: drafts,
+		_chatActions: chatActions,
 	};
 }
 
@@ -418,6 +422,34 @@ describe("bridge streaming", () => {
 		cancel?.call(streamer);
 		await expectDoneToResolve(streamer);
 		expect(ctx._replies).toHaveLength(1);
+	});
+
+	it("sends typing action immediately on construction", async () => {
+		const ctx = mockAuthContext({ chatId: 52 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
+
+		// Typing action fires synchronously (via fire-and-forget promise) during construction
+		// Flush the microtask queue so the mock records it
+		await Bun.sleep(0);
+		expect(ctx._chatActions.length).toBeGreaterThanOrEqual(1);
+		expect(ctx._chatActions[0]).toBe("typing");
+
+		await streamer.handleEvent(messageUpdate({ type: "text_end", content: "done" }));
+		await streamer.handleEvent({ type: "message_end" });
+	});
+
+	it("clears typing interval on cancel without leaks", async () => {
+		const ctx = mockAuthContext({ chatId: 53 });
+		const streamer = new ResponseStreamer(ctx as unknown as AuthContext, true);
+		await Bun.sleep(0);
+		const actionsBefore = ctx._chatActions.length;
+
+		streamer.cancel();
+		await expectDoneToResolve(streamer);
+
+		// After cancel + wait, no new typing actions should fire
+		await Bun.sleep(50);
+		expect(ctx._chatActions.length).toBe(actionsBefore);
 	});
 });
 

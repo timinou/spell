@@ -1,4 +1,4 @@
-import type { ManifestAction, ManifestActionPromptSlot, ActionValue } from "../actions/types";
+import type { ActionDescriptor, ActionValue, ManifestAction, ManifestActionPromptSlot } from "../actions/types";
 
 export interface AutonomyManifest {
 	name: string;
@@ -21,6 +21,7 @@ export interface ParsedManifestModule {
 	setups: Map<string, ManifestSetup>;
 	goals: Map<string, ManifestGoal>;
 	overrides: ManifestOverride[];
+	actionDescriptors: ActionDescriptor[];
 }
 
 export type ManifestOverride = SetupOverride | GoalOverride;

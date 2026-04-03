@@ -1,0 +1,49 @@
+#+TITLE: Move URL canonicalization to pi-utils
+#+STATE: DONE
+#+SESSION_ID: 14abf8daee6f2d2b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-30-35-321Z_14abf8daee6f2d2b.jsonl]]
+#+CUSTOM_ID: FEAT-248-move-url-canonicalization-to-pi-utils
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: packages/utils
+#+DEPENDS: FEAT-246-remove-spell-growth-package-and-decouple
+
+NOTE [2026-04-03]: Extracted normalizeCanonicalUrl and normalizePublishedAt to packages/utils/src/url.ts with full test coverage.
+
+* Initial Message
+
+what is part of spell-gworth (packages/spell-growth)? what is the purpose of the code? Why can't it be an extension in ../growth?
+
+* Scope
+Extract the URL canonicalization utility from spell-growth into ~packages/utils~ as a reusable helper before spell-growth is deleted.
+
+** What to extract
+From ~packages/spell-growth/src/discovery/canonicalize.ts~:
+- ~normalizeCanonicalUrl(url: string): string | undefined~ -- strips UTM params, ~ref~, ~source~ query params, and hash fragments
+- ~normalizePublishedAt(publishedAt?: string): string | undefined~ -- normalizes date strings to ISO 8601
+
+These are domain-agnostic URL/date utilities. The growth-specific functions (~canonicalizeCandidate~, ~dedupeCandidates~, ~precedence~) are NOT extracted -- they die with spell-growth.
+
+** Existing similar code in the monorepo
+- ~packages/coding-agent/src/modes/browse-findings.ts~: ~normalizeUrlForDedup()~ -- strips www and trailing slash but NOT UTM params
+- ~packages/coding-agent/src/tools/fetch.ts~: ~normalizeUrl()~ -- only adds https:// scheme
+
+The pi-utils version is more comprehensive (UTM stripping, hash removal, search cleanup).
+
+** Target file
+~packages/utils/src/url.ts~ -- new file containing:
+- ~normalizeCanonicalUrl~
+- ~normalizePublishedAt~
+
+Re-export from ~packages/utils/src/index.ts~.
+
+** Sub-outline
+1. Write tests for ~normalizeCanonicalUrl~ and ~normalizePublishedAt~ in ~packages/utils/test/url.test.ts~
+2. Create ~packages/utils/src/url.ts~ with the two functions
+3. Add ~export * from "./url"~ to ~packages/utils/src/index.ts~
+4. Verify ~bun test packages/utils/test/url.test.ts~ passes
+
+* Acceptance
+- ~packages/utils/src/url.ts~ exports ~normalizeCanonicalUrl~ and ~normalizePublishedAt~
+- ~bun test packages/utils/test/url.test.ts~ passes
+- ~bun check:ts~ passes

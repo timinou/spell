@@ -1,10 +1,10 @@
+import { WorkflowEngine } from "../../src/workflow";
 import type {
 	WorkflowActionDefinition,
 	WorkflowActor,
 	WorkflowCreateCheckpointInput,
 	WorkflowCreateItemInput,
 } from "../../src/workflow/types";
-import { WorkflowEngine } from "../../src/workflow";
 
 export function createClock(initial = "2026-04-02T00:00:00.000Z"): {
 	now: () => Date;

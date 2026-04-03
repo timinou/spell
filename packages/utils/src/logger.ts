@@ -113,7 +113,6 @@ export function setStderrDebugEnabled(enabled: boolean): void {
 	}
 }
 
-
 /**
  * Log an error message.
  * @param message - The message to log.

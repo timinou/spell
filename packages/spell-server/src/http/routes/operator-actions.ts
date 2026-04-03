@@ -15,14 +15,14 @@ interface OperatorActionRequestBase {
 }
 
 export type OperatorActionRequest =
-|	(OperatorActionRequestBase & {
-		source: "telegram";
-		actor: OperatorActionActor & { chatId: number };
-	})
-|	(OperatorActionRequestBase & {
-		source: "review-queue";
-		actor: OperatorActionActor;
-	});
+	| (OperatorActionRequestBase & {
+			source: "telegram";
+			actor: OperatorActionActor & { chatId: number };
+	  })
+	| (OperatorActionRequestBase & {
+			source: "review-queue";
+			actor: OperatorActionActor;
+	  });
 
 export interface OperatorActionDownstreamJob {
 	jobId: string;
@@ -72,7 +72,10 @@ function parseOperatorActionRequest(value: unknown): OperatorActionRequest | nul
 	if (typeof value.actor.userId !== "string" || value.actor.userId.length === 0) {
 		return null;
 	}
-	if (value.actor.chatId !== undefined && (typeof value.actor.chatId !== "number" || !Number.isFinite(value.actor.chatId))) {
+	if (
+		value.actor.chatId !== undefined &&
+		(typeof value.actor.chatId !== "number" || !Number.isFinite(value.actor.chatId))
+	) {
 		return null;
 	}
 	if (

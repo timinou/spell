@@ -1,0 +1,95 @@
+#+TITLE: Decouple spell-growth from spell-server
+#+STATE: DONE
+#+SESSION_ID: 14abf8daee6f2d2b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-30-35-321Z_14abf8daee6f2d2b.jsonl]]
+#+CUSTOM_ID: PLAN-105-decouple-spell-growth-from-spell-server
+
+
+* Initial Message
+
+what is part of spell-gworth (packages/spell-growth)? what is the purpose of the code? Why can't it be an extension in ../growth?
+
+* Context
+~packages/spell-growth~ is a first-party action pack containing growth-specific business logic (article discovery, persona scoring, feed sending, publication export, curation writeback). It is hardcoded into ~spell-server~ via ~registerGrowthActions()~ called from ~createServerActionRegistry()~ in ~packages/spell-server/src/actions/index.ts~. This means every spell-server instance loads growth actions regardless of whether it runs a growth project.
+
+The growth business logic in spell-growth is effectively dead code in the runtime path: the ~GoalExecutionController~ converts action specs into prompts for a coding-agent session. The typed TS functions (~ingestDiscoveryCandidates~, ~sendGrowthFeed~, etc.) are never called by the executor. They serve only as test fixtures and typed specifications.
+
+** Approach
+1. Add KDL-declarative action descriptor support to the manifest parser, so projects can declare their own actions in ~autonomy.kdl~ without TypeScript registration
+2. Remove the hardcoded ~spell-growth~ dependency from ~spell-server~
+3. Delete ~packages/spell-growth/~ entirely
+4. Update ~../growth/~ to declare action descriptors in KDL
+5. Extract the URL canonicalization utility to ~pi-utils~ before deletion
+
+** Key decisions
+- Action descriptors use ~source="project"~ (not ~"first-party"~) when declared in KDL
+- No TypeScript action handler code anywhere -- the agent-prompted execution model continues unchanged
+- Direct tool dispatch (executing tool sequences without LLM) is deferred to a follow-up
+- URL canonicalization (~normalizeCanonicalUrl~, ~normalizePublishedAt~) moves to ~pi-utils~; all other spell-growth code dies
+- Growth cutover tests that imported spell-growth TS code are deleted (they tested code that no longer exists)
+- Exa client in spell-growth is deleted (duplicates existing Exa integration in coding-agent)
+
+** Key files
+- ~packages/spell-server/src/actions/index.ts~ -- remove growth coupling
+- ~packages/spell-server/src/actions/types.ts~ -- widen ~ActionDescriptor.source~ type
+- ~packages/spell-server/src/actions/registry.ts~ -- accept ~"project"~ source
+- ~packages/spell-server/src/manifest/parser.ts~ -- add ~action-descriptor~ node parsing
+- ~packages/spell-server/src/manifest/import-resolver.ts~ -- register parsed descriptors
+- ~packages/spell-server/src/config/loader.ts~ -- use ~createBuiltinActionRegistry()~
+- ~packages/spell-server/src/manifest/types.ts~ -- add ~actionDescriptors~ to ~ParsedManifestModule~
+- ~packages/spell-server/docs/kdl-schema-reference.md~ -- document new syntax
+- ~../growth/.spell/autonomy.kdl~ -- add ~action-descriptor~ declarations
+- ~packages/utils/src/url.ts~ -- new file for URL canonicalization
+
+* Verification
+- ~bun check:ts~ passes across the monorepo
+- ~bun test packages/spell-server/~ passes (including new action-descriptor tests)
+- ~bun test packages/utils/test/url.test.ts~ passes
+- ~bun test~ in ~../growth/~ passes (updated cutover tests)
+- ~grep -r "spell-growth" packages/~ returns zero matches
+- ~packages/spell-growth/~ does not exist
+- ~../growth/.spell/autonomy.kdl~ contains ~action-descriptor~ nodes
+
+* Execution Manifest
+** Wave 1: Foundation (parallelizable)
+- [[id:FEAT-248-move-url-canonicalization-to-pi-utils]] (30m) -- extract URL utils before deletion
+- [[id:FEAT-245-add-kdl-declarative-action-descriptors-t]] (2h) -- add KDL action descriptor support to spell-server
+
+** Wave 2: Deletion (depends on Wave 1)
+- [[id:FEAT-246-remove-spell-growth-package-and-decouple]] (1h) -- remove spell-growth package and spell-server coupling
+  - Depends on: FEAT-245 (so builtin registry works without growth)
+
+** Wave 3: Migration (depends on Wave 2)
+- [[id:FEAT-247-update-growth-project-to-use-kdl-declara]] (30m) -- update growth project to KDL descriptors
+  - Depends on: FEAT-245, FEAT-246
+
+** Follow-up (not part of this plan)
+- [[id:FUP-033-add-direct-tool-dispatch-mode-for-autono]] -- direct tool dispatch mode for actions
+
+** Completion [2026-04-03]
+*** Verification
+- ~bun check:ts~ (biome lint): Clean. All tsgo errors are pre-existing (approvals.ts, tool-progress.ts, logger.ts).
+- ~bun test packages/spell-server/~: 267 pass, 0 fail (includes 3 new action-descriptor tests)
+- ~bun test packages/utils/test/url.test.ts~: 8 pass, 0 fail
+- ~bun test test/cutover/~ (growth): 4 pass, 0 fail (manifest-load updated, discovery-to-feed and checkpoint-to-export deleted)
+- ~grep -r "spell-growth" packages/~: Zero matches
+- ~packages/spell-growth/~: Deleted
+- ~../growth/.spell/autonomy.kdl~: Contains 4 ~action-descriptor~ nodes
+
+*** Artifacts
+- ~packages/utils/src/url.ts~: normalizeCanonicalUrl, normalizePublishedAt
+- ~packages/utils/test/url.test.ts~: 8 test cases
+- ~packages/spell-server/src/actions/types.ts~: source widened to ~\"first-party\" | \"project\"~
+- ~packages/spell-server/src/actions/registry.ts~: accepts ~\"project\"~ source
+- ~packages/spell-server/src/manifest/types.ts~: ~actionDescriptors~ field on ParsedManifestModule
+- ~packages/spell-server/src/manifest/parser.ts~: ~action-descriptor~ KDL node parsing
+- ~packages/spell-server/src/manifest/import-resolver.ts~: registers parsed descriptors before goal validation
+- ~packages/spell-server/src/actions/index.ts~: removed ~createServerActionRegistry()~ and growth import
+- ~packages/spell-server/src/config/loader.ts~: uses ~createBuiltinActionRegistry()~
+- ~packages/spell-server/docs/kdl-schema-reference.md~: documented action-descriptor syntax
+- ~../growth/.spell/autonomy.kdl~: 4 action-descriptor declarations
+- ~../growth/test/cutover/manifest-load.test.ts~: updated to verify KDL descriptors
+
+*** Deviations
+- Fixed pre-existing test in ~packages/spell-server/test/cli/server-start.test.ts~: expected error message was ~\"Missing required config file\"~ but actual message from ~loadManifestFromFile~ is ~\"Missing manifest file\"~. Updated assertion to match actual behavior.
+- Biome auto-fix applied to several files with pre-existing import ordering and formatting issues (not introduced by this plan).

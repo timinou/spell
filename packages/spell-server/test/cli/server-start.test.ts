@@ -124,7 +124,7 @@ describe("spell-server config loading", () => {
 		const configDir = await createConfigDir({ "server.kdl": VALID_SERVER_KDL });
 
 		await expect(loadConfig(configDir)).rejects.toThrow(
-			`Missing required config file: ${path.join(configDir, "autonomy.kdl")}`,
+			`Missing manifest file: ${path.join(configDir, "autonomy.kdl")}`,
 		);
 	});
 

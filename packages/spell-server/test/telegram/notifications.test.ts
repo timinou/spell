@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { WorkflowEngine } from "../../src/workflow";
 import { buildWorkflowNotificationText } from "../../src/telegram/workflow-notifications";
+import { WorkflowEngine } from "../../src/workflow";
 import { createApprovalInput } from "../workflow/test-helpers";
 
 describe("telegram notifications", () => {

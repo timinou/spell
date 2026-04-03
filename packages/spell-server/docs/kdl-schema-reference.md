@@ -69,8 +69,37 @@ Important rules:
 - `setup "<name>" { ... }` optional, repeatable
 - `goal "<name>" { ... }` optional, repeatable
 - `override "setup"|"goal" "<name>" from="<ref>" strategy="replace"|"merge" { ... }` optional, repeatable
+- `action-descriptor "<id>" source="project"` optional, repeatable
 
 Local symbol names must not contain `.`. Dotted names are reserved for imported aliases such as `workflow.worker`.
+
+### Action Descriptors
+
+Declare project-specific action descriptors directly in KDL instead of requiring TypeScript registration.
+
+```kdl
+action-descriptor "growth.discovery" source="project"
+action-descriptor "growth.feed.send" source="project" {
+  param "maxItems" type="number"
+  param "dryRun" type="boolean"
+  prompt-slot "context" required=#true
+}
+```
+
+Properties:
+
+- First argument: action ID string (required)
+- `source` property: `"project"` (default) or `"first-party"`
+
+Child nodes:
+
+- `param "<name>" type="<type>"` — declare a typed parameter
+  - `type`: one of `string`, `number`, `boolean`, `string[]`, `number[]`, `boolean[]`, `json`
+  - `required=#true` — mark as required
+- `prompt-slot "<name>"` — declare a prompt slot
+  - `required=#true` — mark as required
+
+Action descriptors declared in imported modules are automatically registered and available to goals in the importing module.
 
 ### Imports
 
@@ -230,7 +259,7 @@ goal "daily-discovery" {
 
 ### Typed `action` blocks
 
-An action block is validated against the first-party action registry available at load time.
+An action block is validated against the action registry available at load time, including built-in first-party actions and project action descriptors declared in KDL.
 
 Children:
 
@@ -255,8 +284,7 @@ Rules:
 - unknown params fail validation
 - missing required params or prompt slots fail validation
 - prompt-file paths resolve relative to the file that declares them
-- first-party registration is the only supported v1 registry source
-
+- action descriptors may come from first-party registration or project KDL declarations
 ### Schedule node
 
 #### Cron schedule
