@@ -2135,13 +2135,25 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const prompt = payload.context
 				? `${payload.assignment}\n\nContext: ${JSON.stringify(payload.context)}`
 				: payload.assignment;
-			await session.followUp(`[Canvas agent request from window ${payload.windowId}]\n\n${prompt}`);
+			const content = `[Canvas agent request from window ${payload.windowId}]\n\n${prompt}`;
+			// Reply immediately so QML transitions out of "Sending..." before the turn starts.
 			payload.reply?.({
 				action: "agent_handoff_result",
 				ok: true,
 				status: "submitted",
 				message: "Submitted the Phoenix inspector request to the active agent session.",
 			});
+			// triggerTurn: true starts a new agent turn; plain followUp() only queues.
+			await session.sendCustomMessage(
+				{
+					customType: "canvas-agent-request",
+					content,
+					display: true,
+					attribution: "user",
+					details: { windowId: payload.windowId },
+				},
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
 		} catch (error) {
 			payload.reply?.({
 				action: "agent_handoff_result",
