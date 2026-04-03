@@ -1,0 +1,102 @@
+#+TITLE: Startup env validation and reporting
+#+STATE: DONE
+#+SESSION_ID: 14ac1a701fd08506
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-57-18-847Z_14ac1a701fd08506.jsonl]]
+#+CUSTOM_ID: FEAT-263-startup-env-validation-and-reporting
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: config
+#+DEPENDS: FEAT-260-shared-env-resolution-module-and-env-uti FEAT-261-dotenv-toggle-and-env-support-in-server FEAT-262-unify-env-resolution-in-channels-kdl-par
+
+* Initial Message
+
+enable reading from the local .env with a setting toggle on the server kdl when i run spell server and the right config is on in the kdl. show at the start which env variables have been got and which ones are missing. fail if any env required by the kdl is missing, explain with a message which config I need to add
+
+* Scope
+After loading =.env= (if dotenv enabled) and before fully parsing configs, scan all KDL files for =env()= references, validate against =process.env=, print a formatted status report, and fail with an actionable error listing missing variables and the =.env= path to add them to.
+
+* Output format
+
+When dotenv is enabled and some vars are missing:
+#+begin_example
+spell-server: loaded .env from /home/user/project/.spell/.env (3 variables)
+spell-server: environment check:
+  HTTP_PASSWORD        loaded
+  WEBHOOK_SECRET       loaded
+  DEEPGRAM_API_KEY     MISSING (required by channels.kdl)
+  MAX_COST             loaded (default: 10)
+
+Error: missing required environment variables:
+
+  DEEPGRAM_API_KEY     required by channels.kdl
+
+Add to /home/user/project/.spell/.env:
+
+  DEEPGRAM_API_KEY=
+#+end_example
+
+When all vars are present:
+#+begin_example
+spell-server: loaded .env from /home/user/project/.spell/.env (3 variables)
+spell-server: all 4 env references resolved
+#+end_example
+
+When dotenv is disabled but env() references exist and all resolve from process.env:
+No output (silent success, backward compatible).
+
+When dotenv is disabled and env() references are missing:
+Normal parser errors (unchanged behavior — individual parser throws on first missing var).
+
+The pre-validation scan runs only when dotenv is enabled. When disabled, the existing parser-level validation handles missing vars as before.
+
+* Design
+
+** Scan flow (in =loader.ts=)
+After dotenv loading, before full config parsing:
+1. Read all three KDL file texts (server.kdl, channels.kdl, autonomy.kdl)
+2. For =autonomy.kdl=, regex-extract =import "<path>"= directives and read those files too
+3. Call =scanEnvReferences(text, sourceLabel)= on each
+4. Deduplicate by env var name (keep first source)
+5. Call =validateEnvReferences(refs, process.env)=
+6. If =result.missing.length > 0=: print report via =console.error=, throw aggregated error
+7. If all present: =logger.debug(...)=
+
+** Import following
+Simple regex: =/^import\s+"([^"]+)"/gm= on autonomy.kdl text. Resolve relative to config dir. No recursive following of nested imports — the manifest parser catches those at parse time.
+
+** Error message
+The thrown error includes:
+- Count of missing vars
+- Each missing var name and which KDL file references it
+- The .env file path where the user should add them
+- Skeleton entries (=VAR_NAME==) ready to copy-paste
+
+* Sub-outline
+
+** write-tests
+In =test/config/env-startup-validation.test.ts=:
+- Full config dir with dotenv enabled + all vars present: loads successfully, no error
+- Full config dir with dotenv enabled + missing required var: throws with var name and source file
+- Full config dir with dotenv enabled + var with default: loads successfully (default used)
+- Multiple missing vars: error message lists all of them, not just the first
+- Manifest with =import= directive: imported file's env() refs are also scanned
+- No dotenv node: no .env loading, env() resolves from process.env directly
+- .env file missing when dotenv enabled: warns but continues (the .env file itself is optional — it's the env vars that are required)
+
+** implement-scan-step
+In =loader.ts=, add the scan flow between dotenv loading and config parsing.
+
+** implement-report
+Wire =formatEnvReport= and error throwing in =loader.ts=.
+
+* Acceptance
+- =spell server= with dotenv enabled and all vars present: server starts, log shows env loaded count
+- =spell server= with dotenv enabled and missing required var: server fails with clear error listing all missing vars, their source files, and .env path
+- =spell server= without dotenv: no behavioral change (backward compat)
+- All missing vars shown in one error (not one-at-a-time failures)
+
+* Files
+| File | Change |
+|---+---|
+| =packages/spell-server/src/config/loader.ts= | modify (scan + validate + report) |
+| =packages/spell-server/test/config/env-startup-validation.test.ts= | new |

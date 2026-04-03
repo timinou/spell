@@ -1,0 +1,76 @@
+#+TITLE: Unify env resolution in channelskdl parser
+#+STATE: DONE
+#+SESSION_ID: 14ac1a701fd08506
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-57-18-847Z_14ac1a701fd08506.jsonl]]
+#+CUSTOM_ID: FEAT-262-unify-env-resolution-in-channels-kdl-par
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: config
+#+DEPENDS: FEAT-260-shared-env-resolution-module-and-env-uti
+
+
+
+
+NOTE [2026-04-03]: Started delegated implementation for Wave 2: replace channels parser local env resolution with shared env-resolver, thread injected env through parser/tests, and verify targeted Bun tests.
+
+* Initial Message
+
+enable reading from the local .env with a setting toggle on the server kdl when i run spell server and the right config is on in the kdl. show at the start which env variables have been got and which ones are missing. fail if any env required by the kdl is missing, explain with a message which config I need to add
+
+* Scope
+Replace the local =resolveEnvValue()= in =channels-parser.ts= with the shared resolver from =config/env-resolver.ts=. Extend =env()= support to all string-valued fields in channels.kdl, not just voice API keys.
+
+Currently =channels-parser.ts= has its own simpler =resolveEnvValue()= that:
+- Only handles =env(NAME)= and =env(NAME, default=fallback)=
+- Reads directly from =process.env= (no injected env map)
+- Only applied to voice config API keys
+
+After this change:
+- Uses shared =resolveEnvIfNeeded= from =env-resolver.ts=
+- Accepts an injected =env= map parameter (like manifest parser)
+- =env()= works in all string fields: =bot-token=, =upload-dir=, =default-model=, voice API keys, etc.
+- Full =env()= syntax including =type== and =optional= flags
+
+* Sub-outline
+
+** write-tests
+In =test/config/channels-parser.test.ts= (extend existing):
+- =env(NAME)= resolves in =bot-token=
+- =env(NAME)= resolves in =upload-dir=
+- =env(NAME)= resolves in =default-model=
+- =env(NAME)= resolves in voice API keys (migration of existing voice-config tests)
+- Missing required env var throws
+- Literal values still work (backward compat)
+
+** update-parser
+- Add =env= parameter to =parseChannelsConfig= signature
+- Delete local =resolveEnvValue()= function
+- Replace all calls with shared =resolveEnvIfNeeded= or a thin string-specific wrapper
+- Thread env through to voice config parsing
+
+** update-loader
+Pass env map to =parseChannelsConfig()= from =loader.ts=.
+
+** update-existing-tests
+=test/config/voice-config-parser.test.ts= — update to use injected env instead of =process.env= manipulation.
+
+* Acceptance
+- Local =resolveEnvValue= removed from =channels-parser.ts=
+- =parseChannelsConfig= accepts and uses injected env map
+- All existing =test/config/channels-parser.test.ts= tests pass
+- All existing =test/config/voice-config-parser.test.ts= tests pass
+- New env() tests for bot-token, upload-dir, default-model pass
+
+* Files
+| File | Change |
+|---+---|
+| =packages/spell-server/src/config/channels-parser.ts= | modify (use shared resolver, add env param) |
+| =packages/spell-server/src/config/loader.ts= | modify (pass env to channels parser) |
+| =packages/spell-server/test/config/channels-parser.test.ts= | modify |
+| =packages/spell-server/test/config/voice-config-parser.test.ts= | modify |
+
+NOTE [2026-04-03]: Implemented channels-parser env injection: parseChannelsConfig now accepts optional env map, string fields bot-token/upload-dir/default-model/default-project resolve via shared resolveEnvString, voice API keys use shared resolver, and channels-specific local resolveEnvValue has been removed. Updated channels/voice parser tests to use injected env maps and added parser coverage for env-backed telegram string fields.
+
+
+- Completion report (2026-04-03): Replaced channels-parser local env() resolver with shared env-resolver usage, threaded optional env maps through parseChannelsConfig/voice parsing, added telegram string-field env coverage in channels-parser tests, and migrated voice parser tests away from process.env mutation to explicit injected env maps.
+- Verification: `bun test packages/spell-server/test/config/channels-parser.test.ts && bun test packages/spell-server/test/config/voice-config-parser.test.ts`

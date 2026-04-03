@@ -9,7 +9,7 @@ import { getAgentDir, getConfigRootDir } from "./dirs";
  * Allows values to be quoted with single or double quotes.
  * Returns an object of key-value pairs.
  */
-function parseEnvFile(filePath: string): Record<string, string> {
+export function parseEnvFile(filePath: string): Record<string, string> {
 	const result: Record<string, string> = {};
 	try {
 		const content = fs.readFileSync(filePath, "utf-8");

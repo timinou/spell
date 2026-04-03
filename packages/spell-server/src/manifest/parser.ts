@@ -11,6 +11,7 @@ import type {
 	ActionValue,
 	ManifestAction,
 } from "../actions/types";
+import { parseEnvReference, resolveEnvValue as resolveEnvIfNeeded } from "../config/env-resolver";
 import {
 	type AutonomyManifest,
 	type CronSchedule,
@@ -46,15 +47,6 @@ export interface ParseManifestOptions {
 	registry?: ActionRegistry;
 }
 
-interface EnvReference {
-	name: string;
-	optional: boolean;
-	defaultValue?: string | number | boolean;
-	type?: "string" | "number" | "boolean";
-}
-
-type ScalarExpectedType = "string" | "number" | "boolean";
-
 const ACTION_PARAM_TYPES = new Set<ActionParameterType>([
 	"string",
 	"number",
@@ -69,145 +61,6 @@ function getNodeName(node: Node): string {
 	return node.getName();
 }
 
-function splitEnvTokens(content: string): string[] {
-	const tokens: string[] = [];
-	let current = "";
-	let inQuotes = false;
-
-	for (let index = 0; index < content.length; index += 1) {
-		const char = content[index];
-		if (char === '"' && content[index - 1] !== "\\") {
-			inQuotes = !inQuotes;
-			current += char;
-			continue;
-		}
-		if (char === "," && !inQuotes) {
-			if (current.trim()) {
-				tokens.push(current.trim());
-			}
-			current = "";
-			continue;
-		}
-		current += char;
-	}
-
-	if (current.trim()) {
-		tokens.push(current.trim());
-	}
-
-	return tokens;
-}
-
-function parseDefaultValue(raw: string): string | number | boolean {
-	if (raw.startsWith('"') && raw.endsWith('"')) {
-		return JSON.parse(raw) as string;
-	}
-	if (raw === "true") return true;
-	if (raw === "false") return false;
-	const numeric = Number(raw);
-	if (!Number.isNaN(numeric) && raw.trim().length > 0) {
-		return numeric;
-	}
-	return raw;
-}
-
-function parseEnvReference(value: string): EnvReference | null {
-	const match = /^env\((.*)\)$/.exec(value.trim());
-	if (!match) {
-		return null;
-	}
-	const tokens = splitEnvTokens(match[1]);
-	if (tokens.length === 0) {
-		throw new Error("env() requires a variable name");
-	}
-	const envReference: EnvReference = {
-		name: tokens[0],
-		optional: false,
-	};
-	for (const token of tokens.slice(1)) {
-		if (token === "optional") {
-			envReference.optional = true;
-			continue;
-		}
-		if (token.startsWith("default=")) {
-			envReference.defaultValue = parseDefaultValue(token.slice("default=".length));
-			continue;
-		}
-		if (token.startsWith("type=")) {
-			const typeValue = token.slice("type=".length);
-			if (typeValue !== "string" && typeValue !== "number" && typeValue !== "boolean") {
-				throw new Error(`Unsupported env() type: ${typeValue}`);
-			}
-			envReference.type = typeValue;
-			continue;
-		}
-		throw new Error(`Unsupported env() option: ${token}`);
-	}
-	return envReference;
-}
-
-function coerceEnvValue(
-	envReference: EnvReference,
-	rawValue: string | number | boolean,
-	expectedType: ScalarExpectedType,
-	pathLabel: string,
-): string | number | boolean {
-	const targetType = envReference.type ?? expectedType;
-	if (targetType === "string") {
-		return String(rawValue);
-	}
-	if (targetType === "number") {
-		const numericValue = typeof rawValue === "number" ? rawValue : Number(rawValue);
-		if (!Number.isFinite(numericValue)) {
-			throw new Error(`${pathLabel} expected env(${envReference.name}) to resolve to a finite number`);
-		}
-		return numericValue;
-	}
-	if (typeof rawValue === "boolean") {
-		return rawValue;
-	}
-	if (rawValue === "true") return true;
-	if (rawValue === "false") return false;
-	throw new Error(`${pathLabel} expected env(${envReference.name}) to resolve to a boolean`);
-}
-
-function resolveEnvIfNeeded<T extends string | number | boolean>(
-	value: unknown,
-	expectedType: ScalarExpectedType,
-	pathLabel: string,
-	options: ParseManifestOptions,
-): T {
-	if (typeof value === "string") {
-		const envReference = parseEnvReference(value);
-		if (envReference) {
-			const envValue = options.env?.[envReference.name];
-			if (envValue === undefined || envValue === "") {
-				if (envReference.defaultValue !== undefined) {
-					return coerceEnvValue(envReference, envReference.defaultValue, expectedType, pathLabel) as T;
-				}
-				if (envReference.optional) {
-					throw new Error(
-						`${pathLabel} used optional env(${envReference.name}) where a ${expectedType} value is required`,
-					);
-				}
-				throw new Error(`${pathLabel} requires environment variable ${envReference.name}`);
-			}
-			return coerceEnvValue(envReference, envValue, expectedType, pathLabel) as T;
-		}
-		if (expectedType === "string") {
-			return value as T;
-		}
-		throw new Error(`${pathLabel} must be a ${expectedType}`);
-	}
-	if (typeof value === expectedType) {
-		if (expectedType === "number" && !Number.isFinite(value)) {
-			throw new Error(`${pathLabel} must be a finite number`);
-		}
-		return value as T;
-	}
-	throw new Error(`${pathLabel} must be a ${expectedType}`);
-}
-
 function resolveOptionalStringProperty(
 	node: Node,
 	property: string,
@@ -216,7 +69,7 @@ function resolveOptionalStringProperty(
 ): string | undefined {
 	const value = node.getProperty(property);
 	if (value === undefined) return undefined;
-	return resolveEnvIfNeeded<string>(value, "string", `${pathLabel}.${property}`, options);
+	return resolveEnvIfNeeded<string>(value, "string", `${pathLabel}.${property}`, options.env);
 }
 
 function resolveOptionalNumberProperty(
@@ -227,7 +80,7 @@ function resolveOptionalNumberProperty(
 ): number | undefined {
 	const value = node.getProperty(property);
 	if (value === undefined) return undefined;
-	return resolveEnvIfNeeded<number>(value, "number", `${pathLabel}.${property}`, options);
+	return resolveEnvIfNeeded<number>(value, "number", `${pathLabel}.${property}`, options.env);
 }
 
 function resolveOptionalBooleanProperty(
@@ -238,15 +91,15 @@ function resolveOptionalBooleanProperty(
 ): boolean | undefined {
 	const value = node.getProperty(property);
 	if (value === undefined) return undefined;
-	return resolveEnvIfNeeded<boolean>(value, "boolean", `${pathLabel}.${property}`, options);
+	return resolveEnvIfNeeded<boolean>(value, "boolean", `${pathLabel}.${property}`, options.env);
 }
 
 function expectStringArgument(node: Node, pathLabel: string, index: number, options: ParseManifestOptions): string {
-	return resolveEnvIfNeeded<string>(node.getArgument(index), "string", pathLabel, options);
+	return resolveEnvIfNeeded<string>(node.getArgument(index), "string", pathLabel, options.env);
 }
 
 function expectNumberArgument(node: Node, pathLabel: string, index: number, options: ParseManifestOptions): number {
-	return resolveEnvIfNeeded<number>(node.getArgument(index), "number", pathLabel, options);
+	return resolveEnvIfNeeded<number>(node.getArgument(index), "number", pathLabel, options.env);
 }
 
 function expectBooleanProperty(
@@ -427,13 +280,13 @@ function resolveActionScalarValue(
 	options: ParseManifestOptions,
 ): ActionScalar {
 	if (descriptorType === "number") {
-		return resolveEnvIfNeeded<number>(value, "number", pathLabel, options);
+		return resolveEnvIfNeeded<number>(value, "number", pathLabel, options.env);
 	}
 	if (descriptorType === "boolean") {
-		return resolveEnvIfNeeded<boolean>(value, "boolean", pathLabel, options);
+		return resolveEnvIfNeeded<boolean>(value, "boolean", pathLabel, options.env);
 	}
 	if (descriptorType === "string") {
-		return resolveEnvIfNeeded<string>(value, "string", pathLabel, options);
+		return resolveEnvIfNeeded<string>(value, "string", pathLabel, options.env);
 	}
 	if (typeof value === "string") {
 		const envReference = parseEnvReference(value);
@@ -467,17 +320,17 @@ function resolveActionListValue(
 	const rawValues = node.getArguments().slice(1);
 	if (descriptorType === "string[]") {
 		return rawValues.map((_, index) =>
-			resolveEnvIfNeeded<string>(node.getArgument(index + 1), "string", `${pathLabel}.${index}`, options),
+			resolveEnvIfNeeded<string>(node.getArgument(index + 1), "string", `${pathLabel}.${index}`, options.env),
 		);
 	}
 	if (descriptorType === "number[]") {
 		return rawValues.map((_, index) =>
-			resolveEnvIfNeeded<number>(node.getArgument(index + 1), "number", `${pathLabel}.${index}`, options),
+			resolveEnvIfNeeded<number>(node.getArgument(index + 1), "number", `${pathLabel}.${index}`, options.env),
 		);
 	}
 	if (descriptorType === "boolean[]") {
 		return rawValues.map((_, index) =>
-			resolveEnvIfNeeded<boolean>(node.getArgument(index + 1), "boolean", `${pathLabel}.${index}`, options),
+			resolveEnvIfNeeded<boolean>(node.getArgument(index + 1), "boolean", `${pathLabel}.${index}`, options.env),
 		);
 	}
 	return rawValues.map((value, index) => resolveActionScalarValue(value, undefined, `${pathLabel}.${index}`, options));

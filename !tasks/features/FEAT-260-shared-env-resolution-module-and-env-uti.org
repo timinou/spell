@@ -1,0 +1,73 @@
+#+TITLE: Shared env resolution module and env utilities
+#+STATE: DONE
+#+SESSION_ID: 14ac1a701fd08506
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-57-18-847Z_14ac1a701fd08506.jsonl]]
+#+CUSTOM_ID: FEAT-260-shared-env-resolution-module-and-env-uti
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: lib
+
+* Initial Message
+
+enable reading from the local .env with a setting toggle on the server kdl when i run spell server and the right config is on in the kdl. show at the start which env variables have been got and which ones are missing. fail if any env required by the kdl is missing, explain with a message which config I need to add
+
+* Scope
+Extract env resolution logic from =manifest/parser.ts= into a reusable module at =config/env-resolver.ts=. Export =parseEnvFile= from =pi-utils= for .env file loading. Add env reference scanning and validation utilities used by the startup reporter.
+
+* Design
+
+** Shared resolver (=config/env-resolver.ts=)
+Moved from =manifest/parser.ts=:
+- =EnvReference= type (name, optional, defaultValue, type)
+- =parseEnvReference(value: string): EnvReference | null=
+- =splitEnvTokens(content: string): string[]=
+- =parseDefaultValue(raw: string): string | number | boolean=
+- =coerceEnvValue(ref, rawValue, expectedType, pathLabel)=
+- =resolveEnvIfNeeded<T>(value, expectedType, pathLabel, env)=
+
+New additions:
+- =EnvReferenceInfo= — =EnvReference= + =source: string= (which KDL file)
+- =scanEnvReferences(text: string, source: string): EnvReferenceInfo[]= — regex-based =env(...)= extraction from raw KDL text
+- =EnvValidationResult= — ={ loaded: EnvReferenceInfo[]; missing: EnvReferenceInfo[]; defaulted: EnvReferenceInfo[] }=
+- =validateEnvReferences(refs: EnvReferenceInfo[], env: Record<string, string | undefined>): EnvValidationResult=
+- =formatEnvReport(result: EnvValidationResult, configDir: string): string= — human-readable startup table
+
+** Export =parseEnvFile= from pi-utils
+=packages/utils/src/env.ts= — change =parseEnvFile= from module-private function to named export. No behavior change.
+
+* Sub-outline (test-first for pure functions)
+
+** define-types
+Types: =EnvReferenceInfo=, =EnvValidationResult=. File: =config/env-resolver.ts=.
+
+** write-tests
+Test the scanner, validator, and formatter in =test/config/env-resolver.test.ts=:
+- Scanner extracts =env(NAME)=, =env(NAME, default=x)=, =env(NAME, optional)=, =env(NAME, type=number)= from KDL text
+- Scanner ignores =env(= inside KDL comments (lines starting with =//-=)
+- Scanner attaches source label
+- Validator classifies refs as loaded / missing / defaulted
+- Formatter produces expected table output
+- =parseEnvFile= export works (import test)
+
+** extract-resolver
+Move functions from =manifest/parser.ts= to =config/env-resolver.ts=. Update =manifest/parser.ts= to import from the new module. Existing manifest tests must still pass.
+
+** implement-scanner-validator
+Implement =scanEnvReferences=, =validateEnvReferences=, =formatEnvReport=.
+
+** export-parseEnvFile
+Export =parseEnvFile= from =packages/utils/src/env.ts=.
+
+* Acceptance
+- =manifest/parser.ts= imports resolution functions from =config/env-resolver.ts= — no duplicated logic
+- All existing =test/manifest/env-resolution.test.ts= tests pass unchanged
+- New =test/config/env-resolver.test.ts= tests pass
+- =parseEnvFile= importable from =@oh-my-pi/pi-utils=
+
+* Files
+| File | Change |
+|---+---|
+| =packages/spell-server/src/config/env-resolver.ts= | new |
+| =packages/spell-server/src/manifest/parser.ts= | modify (import from env-resolver) |
+| =packages/utils/src/env.ts= | modify (export parseEnvFile) |
+| =packages/spell-server/test/config/env-resolver.test.ts= | new |

@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { parseChannelsConfig, resolveEnvValue } from "../../src/config/channels-parser";
+import { describe, expect, it } from "bun:test";
+import { parseChannelsConfig } from "../../src/config/channels-parser";
+import { resolveEnvString } from "../../src/config/env-resolver";
 
 const BASE_KDL = (voiceBlock: string) => `telegram {
 	bot-token "123456:ABC-DEF"
@@ -8,57 +9,44 @@ const BASE_KDL = (voiceBlock: string) => `telegram {
 	${voiceBlock}
 }`;
 
-describe("resolveEnvValue", () => {
-	const originalEnv = { ...process.env };
-
-	afterEach(() => {
-		process.env = { ...originalEnv };
-	});
-
+describe("resolveEnvString", () => {
 	it("returns plain strings unchanged", () => {
-		expect(resolveEnvValue("my-api-key")).toBe("my-api-key");
+		expect(resolveEnvString("my-api-key", "channels.telegram.voice.stt-api-key")).toBe("my-api-key");
 	});
 
-	it("resolves env(NAME) from process.env", () => {
-		process.env.TEST_KEY_123 = "secret-value";
-		expect(resolveEnvValue("env(TEST_KEY_123)")).toBe("secret-value");
+	it("resolves env(NAME) from provided env map", () => {
+		expect(
+			resolveEnvString("env(TEST_KEY_123)", "channels.telegram.voice.stt-api-key", { TEST_KEY_123: "secret-value" }),
+		).toBe("secret-value");
 	});
 
 	it("resolves env(NAME, default=fallback) when env is set", () => {
-		process.env.TEST_KEY_456 = "real-value";
-		expect(resolveEnvValue("env(TEST_KEY_456, default=fallback)")).toBe("real-value");
+		expect(
+			resolveEnvString("env(TEST_KEY_456, default=fallback)", "channels.telegram.voice.stt-api-key", {
+				TEST_KEY_456: "real-value",
+			}),
+		).toBe("real-value");
 	});
 
 	it("uses default when env is not set", () => {
-		delete process.env.MISSING_KEY_XYZ;
-		expect(resolveEnvValue("env(MISSING_KEY_XYZ, default=my-fallback)")).toBe("my-fallback");
+		expect(
+			resolveEnvString("env(MISSING_KEY_XYZ, default=my-fallback)", "channels.telegram.voice.stt-api-key", {}),
+		).toBe("my-fallback");
 	});
 
 	it("throws when env is not set and no default", () => {
-		delete process.env.MISSING_KEY_ABC;
-		expect(() => resolveEnvValue("env(MISSING_KEY_ABC)")).toThrow(
-			"Environment variable MISSING_KEY_ABC is not set and no default provided",
+		expect(() => resolveEnvString("env(MISSING_KEY_ABC)", "channels.telegram.voice.stt-api-key", {})).toThrow(
+			"channels.telegram.voice.stt-api-key requires environment variable MISSING_KEY_ABC",
 		);
 	});
 
 	it("does not match partial env() patterns", () => {
-		expect(resolveEnvValue("notenv(FOO)")).toBe("notenv(FOO)");
-		expect(resolveEnvValue("env(FOO) extra")).toBe("env(FOO) extra");
+		expect(resolveEnvString("notenv(FOO)", "channels.telegram.voice.stt-api-key")).toBe("notenv(FOO)");
+		expect(resolveEnvString("env(FOO) extra", "channels.telegram.voice.stt-api-key")).toBe("env(FOO) extra");
 	});
 });
 
 describe("parseChannelsConfig voice block", () => {
-	const originalEnv = { ...process.env };
-
-	beforeEach(() => {
-		process.env.TEST_DEEPGRAM_KEY = "dg-test-key";
-		process.env.TEST_ELEVENLABS_KEY = "el-test-key";
-	});
-
-	afterEach(() => {
-		process.env = { ...originalEnv };
-	});
-
 	it("parses a full voice config with STT and TTS", () => {
 		const config = parseChannelsConfig(
 			BASE_KDL(`voice {
@@ -72,6 +60,8 @@ describe("parseChannelsConfig voice block", () => {
 				tts-voice "rachel"
 				reply-mode "always"
 			}`),
+			undefined,
+			{ TEST_DEEPGRAM_KEY: "dg-test-key", TEST_ELEVENLABS_KEY: "el-test-key" },
 		);
 
 		expect(config.telegram?.voice).toEqual({
@@ -124,6 +114,19 @@ describe("parseChannelsConfig voice block", () => {
 				}`),
 			),
 		).toThrow("stt-api-key is required when stt-provider is set");
+	});
+
+	it("throws on missing env-backed stt api key", () => {
+		expect(() =>
+			parseChannelsConfig(
+				BASE_KDL(`voice {
+					stt-provider "deepgram"
+					stt-api-key "env(TEST_DEEPGRAM_KEY)"
+				}`),
+				undefined,
+				{},
+			),
+		).toThrow("channels.telegram.voice.stt-api-key requires environment variable TEST_DEEPGRAM_KEY");
 	});
 
 	it("throws on stt-api-key without stt-provider", () => {
