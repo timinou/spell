@@ -9,7 +9,7 @@ import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import Ajv, { type ValidateFunction } from "ajv";
 import { ModelRegistry } from "../config/model-registry";
-import { resolveModelOverride } from "../config/model-resolver";
+import { resolveModelCandidates, resolveModelOverride } from "../config/model-resolver";
 import { type PromptTemplate, renderPromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
@@ -70,6 +70,39 @@ function normalizeModelPatterns(value: string | string[] | undefined): string[] 
 		.split(",")
 		.map(entry => entry.trim())
 		.filter(Boolean);
+}
+
+type StartupFallbackAttempt = {
+	model: string;
+	error: string;
+};
+
+function formatStartupCandidate(model: { provider: string; id: string } | undefined): string {
+	return model ? `${model.provider}/${model.id}` : "default model";
+}
+
+function isStartupAuthFailureMessage(message: string): boolean {
+	return /\b401\b|\b403\b|invalid bearer token|invalid[_ ]token|invalid[_ ]grant|unauthorized|forbidden|authentication(?:[_ ]error| failed|required)|oauth token/i.test(
+		message,
+	);
+}
+
+function isStartupProviderUnavailableMessage(message: string): boolean {
+	return /provider unavailable|service unavailable|temporarily unavailable|model or endpoint not found|connection is unavailable|resource temporarily unavailable|requires authentication|no api key/i.test(
+		message,
+	);
+}
+
+function shouldFallbackStartupFailure(message: string): boolean {
+	return isStartupAuthFailureMessage(message) || isStartupProviderUnavailableMessage(message);
+}
+
+function summarizeStartupFallbackFailures(attempts: StartupFallbackAttempt[]): string {
+	const [firstAttempt] = attempts;
+	if (!firstAttempt) return "Subagent startup failed";
+	if (attempts.length === 1) return firstAttempt.error;
+	const details = attempts.map(attempt => `- ${attempt.model}: ${attempt.error}`).join("\n");
+	return `${firstAttempt.error}\nFallback attempts:\n${details}`;
 }
 
 function withAbortTimeout<T>(promise: Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
@@ -953,7 +986,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		abortReason?: string;
 		durationMs: number;
 	}> => {
-		const sessionAbortController = new AbortController();
+		let sessionAbortController = new AbortController();
 		let exitCode = 0;
 		let error: string | undefined;
 		let aborted = false;
@@ -968,6 +1001,33 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				throw new ToolAbortError();
 			}
 		};
+		const resetStartupOutput = () => {
+			outputChunks.length = 0;
+			finalOutputChunks.length = 0;
+			recentOutputTail = "";
+			progress.recentOutput = [];
+		};
+		const closeActiveSession = async () => {
+			sessionAbortController.abort();
+			sessionAbortController = new AbortController();
+			if (unsubscribe) {
+				try {
+					unsubscribe();
+				} catch {
+					// Ignore unsubscribe errors
+				}
+				unsubscribe = null;
+			}
+			if (activeSession) {
+				const session = activeSession;
+				activeSession = null;
+				try {
+					await untilAborted(AbortSignal.timeout(5000), () => session.dispose());
+				} catch {
+					// Ignore cleanup errors
+				}
+			}
+		};
 
 		try {
 			checkAbort();
@@ -977,216 +1037,297 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			await modelRegistry.refresh();
 			checkAbort();
 
-			const {
-				model,
-				thinkingLevel: resolvedThinkingLevel,
-				explicitThinkingLevel,
-			} = resolveModelOverride(modelPatterns, modelRegistry, settings);
-			const effectiveThinkingLevel = explicitThinkingLevel
-				? resolvedThinkingLevel
-				: (thinkingLevel ?? resolvedThinkingLevel);
-
-			const sessionManager = sessionFile
-				? await SessionManager.open(sessionFile)
-				: SessionManager.inMemory(worktree ?? cwd);
-
+			const resolvedCandidates = resolveModelCandidates(modelPatterns, modelRegistry, settings);
+			const startupCandidates: Array<{
+				model: (typeof resolvedCandidates)[number]["model"] | undefined;
+				thinkingLevel?: ThinkingLevel;
+				explicitThinkingLevel: boolean;
+				pattern: string;
+			}> =
+				resolvedCandidates.length > 0
+					? resolvedCandidates
+					: [{ model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, pattern: "" }];
 			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 			const allCustomTools = [...mcpProxyTools, ...(options.customTools ?? [])];
 			const enableMCP = !options.mcpManager;
-
 			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
-
-			const { session } = await createAgentSession({
-				cwd: worktree ?? cwd,
-				authStorage,
-				modelRegistry,
-				settings: subagentSettings,
-				model,
-				thinkingLevel: effectiveThinkingLevel,
-				toolNames,
-				outputSchema,
-				requireSubmitResultTool: true,
-				contextFiles: options.contextFiles,
-				skills: options.skills,
-				promptTemplates: options.promptTemplates,
-				systemPrompt: defaultPrompt =>
-					renderPromptTemplate(subagentSystemPromptTemplate, {
-						base: defaultPrompt,
-						agent: agent.systemPrompt,
-						worktree: worktree ?? "",
-						outputSchema: normalizedOutputSchema,
-						contextFile: options.contextFile,
-					}),
-				sessionManager,
-				hasUI: false,
-				spawns: spawnsEnv,
-				taskDepth: childDepth,
-				parentTaskPrefix: id,
-				enableLsp: lspEnabled,
-				skipPythonPreflight,
-				enableMCP,
-				customTools: allCustomTools.length > 0 ? allCustomTools : undefined,
-			});
-
-			activeSession = session;
-			progress.sessionId = session.sessionId;
-			progress.transcriptPath = sessionFile ?? undefined;
-
-			const subagentToolNames = session.getActiveToolNames();
 			const parentOwnedToolNames = new Set(["todo_write"]);
-			const filteredSubagentTools = subagentToolNames.filter(name => !parentOwnedToolNames.has(name));
-			if (filteredSubagentTools.length !== subagentToolNames.length) {
-				await session.setActiveToolsByName(filteredSubagentTools);
-			}
-
-			session.sessionManager.appendSessionInit({
-				systemPrompt: session.agent.state.systemPrompt,
-				task,
-				tools: session.getActiveToolNames(),
-				outputSchema,
-			});
-
-			abortSignal.addEventListener(
-				"abort",
-				() => {
-					void session.abort();
-				},
-				{ once: true, signal: sessionAbortController.signal },
-			);
-
-			const extensionRunner = session.extensionRunner;
-			if (extensionRunner) {
-				extensionRunner.initialize(
-					{
-						sendMessage: (message, options) => {
-							session.sendCustomMessage(message, options).catch(e => {
-								logger.error("Extension sendMessage failed", {
-									error: e instanceof Error ? e.message : String(e),
-								});
-							});
-						},
-						sendUserMessage: (content, options) => {
-							session.sendUserMessage(content, options).catch(e => {
-								logger.error("Extension sendUserMessage failed", {
-									error: e instanceof Error ? e.message : String(e),
-								});
-							});
-						},
-						appendEntry: (customType, data) => {
-							session.sessionManager.appendCustomEntry(customType, data);
-						},
-						setLabel: (targetId, label) => {
-							session.sessionManager.appendLabelChange(targetId, label);
-						},
-						getActiveTools: () => session.getActiveToolNames(),
-						getAllTools: () => session.getAllToolNames(),
-						setActiveTools: (toolNames: string[]) =>
-							session.setActiveToolsByName(toolNames.filter(name => !parentOwnedToolNames.has(name))),
-						getCommands: () => [],
-						setModel: async model => {
-							const key = await session.modelRegistry.getApiKey(model);
-							if (!key) return false;
-							await session.setModel(model);
-							return true;
-						},
-						getThinkingLevel: () => session.thinkingLevel,
-						setThinkingLevel: level => session.setThinkingLevel(level),
-					},
-					{
-						getModel: () => session.model,
-						isIdle: () => !session.isStreaming,
-						abort: () => session.abort(),
-						hasPendingMessages: () => session.queuedMessageCount > 0,
-						shutdown: () => {},
-						getContextUsage: () => session.getContextUsage(),
-						getSystemPrompt: () => session.systemPrompt,
-						getFirstUserMessage: () => session.getFirstUserMessage(),
-						compact: async instructionsOrOptions => {
-							const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-							const options =
-								instructionsOrOptions && typeof instructionsOrOptions === "object"
-									? instructionsOrOptions
-									: undefined;
-							await session.compact(instructions, options);
-						},
-					},
-				);
-				extensionRunner.onError(err => {
-					logger.error("Extension error", { path: err.extensionPath, error: err.error });
-				});
-				await extensionRunner.emit({ type: "session_start" });
-			}
-
 			const MAX_SUBMIT_RESULT_RETRIES = 3;
-			unsubscribe = session.subscribe(event => {
-				try {
-					if (isAgentEvent(event)) {
-						processEvent(event);
-						return;
+			const fallbackAttempts: StartupFallbackAttempt[] = [];
+
+			candidateLoop: for (let candidateIndex = 0; candidateIndex < startupCandidates.length; candidateIndex++) {
+				const candidate = startupCandidates[candidateIndex]!;
+				const candidateModel = candidate.model;
+				const candidateLabel = formatStartupCandidate(candidateModel);
+				const effectiveThinkingLevel = candidate.explicitThinkingLevel
+					? candidate.thinkingLevel
+					: (thinkingLevel ?? candidate.thinkingLevel);
+				let allowRepairRetry = true;
+
+				while (true) {
+					checkAbort();
+					progress.modelOverride = candidateLabel;
+					const sessionManager = sessionFile
+						? await SessionManager.open(sessionFile)
+						: SessionManager.inMemory(worktree ?? cwd);
+					let startupErrorMessage: string | undefined;
+					try {
+						const { session } = await createAgentSession({
+							cwd: worktree ?? cwd,
+							authStorage,
+							modelRegistry,
+							settings: subagentSettings,
+							model: candidateModel,
+							thinkingLevel: effectiveThinkingLevel,
+							toolNames,
+							outputSchema,
+							requireSubmitResultTool: true,
+							contextFiles: options.contextFiles,
+							skills: options.skills,
+							promptTemplates: options.promptTemplates,
+							systemPrompt: defaultPrompt =>
+								renderPromptTemplate(subagentSystemPromptTemplate, {
+									base: defaultPrompt,
+									agent: agent.systemPrompt,
+									worktree: worktree ?? "",
+									outputSchema: normalizedOutputSchema,
+									contextFile: options.contextFile,
+								}),
+							sessionManager,
+							hasUI: false,
+							spawns: spawnsEnv,
+							taskDepth: childDepth,
+							parentTaskPrefix: id,
+							enableLsp: lspEnabled,
+							skipPythonPreflight,
+							enableMCP,
+							customTools: allCustomTools.length > 0 ? allCustomTools : undefined,
+						});
+
+						activeSession = session;
+						progress.sessionId = session.sessionId;
+						progress.transcriptPath = sessionFile ?? undefined;
+
+						const subagentToolNames = session.getActiveToolNames();
+						const filteredSubagentTools = subagentToolNames.filter(name => !parentOwnedToolNames.has(name));
+						if (filteredSubagentTools.length !== subagentToolNames.length) {
+							await session.setActiveToolsByName(filteredSubagentTools);
+						}
+
+						session.sessionManager.appendSessionInit({
+							systemPrompt: session.agent.state.systemPrompt,
+							task,
+							tools: session.getActiveToolNames(),
+							outputSchema,
+						});
+
+						abortSignal.addEventListener(
+							"abort",
+							() => {
+								void session.abort();
+							},
+							{ once: true, signal: sessionAbortController.signal },
+						);
+
+						const extensionRunner = session.extensionRunner;
+						if (extensionRunner) {
+							extensionRunner.initialize(
+								{
+									sendMessage: (message, options) => {
+										session.sendCustomMessage(message, options).catch(e => {
+											logger.error("Extension sendMessage failed", {
+												error: e instanceof Error ? e.message : String(e),
+											});
+										});
+									},
+									sendUserMessage: (content, options) => {
+										session.sendUserMessage(content, options).catch(e => {
+											logger.error("Extension sendUserMessage failed", {
+												error: e instanceof Error ? e.message : String(e),
+											});
+										});
+									},
+									appendEntry: (customType, data) => {
+										session.sessionManager.appendCustomEntry(customType, data);
+									},
+									setLabel: (targetId, label) => {
+										session.sessionManager.appendLabelChange(targetId, label);
+									},
+									getActiveTools: () => session.getActiveToolNames(),
+									getAllTools: () => session.getAllToolNames(),
+									setActiveTools: (toolNames: string[]) =>
+										session.setActiveToolsByName(toolNames.filter(name => !parentOwnedToolNames.has(name))),
+									getCommands: () => [],
+									setModel: async model => {
+										const key = await session.modelRegistry.getApiKey(model);
+										if (!key) return false;
+										await session.setModel(model);
+										return true;
+									},
+									getThinkingLevel: () => session.thinkingLevel,
+									setThinkingLevel: level => session.setThinkingLevel(level),
+								},
+								{
+									getModel: () => session.model,
+									isIdle: () => !session.isStreaming,
+									abort: () => session.abort(),
+									hasPendingMessages: () => session.queuedMessageCount > 0,
+									shutdown: () => {},
+									getContextUsage: () => session.getContextUsage(),
+									getSystemPrompt: () => session.systemPrompt,
+									getFirstUserMessage: () => session.getFirstUserMessage(),
+									compact: async instructionsOrOptions => {
+										const instructions =
+											typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
+										const options =
+											instructionsOrOptions && typeof instructionsOrOptions === "object"
+												? instructionsOrOptions
+												: undefined;
+										await session.compact(instructions, options);
+									},
+								},
+							);
+							extensionRunner.onError(err => {
+								logger.error("Extension error", { path: err.extensionPath, error: err.error });
+							});
+							await extensionRunner.emit({ type: "session_start" });
+						}
+
+						unsubscribe = session.subscribe(event => {
+							try {
+								if (isAgentEvent(event)) {
+									processEvent(event);
+									return;
+								}
+								processSessionEvent(event);
+							} catch (err) {
+								logger.error("Subagent event processing failed", {
+									error: err instanceof Error ? err.message : String(err),
+								});
+								requestAbort("terminate");
+							}
+						});
+
+						await session.prompt(task, { attribution: "agent" });
+						await session.waitForIdle();
+						const startupAssistant = session.getLastAssistantMessage();
+						if (!submitResultCalled && progress.toolCount === 0 && startupAssistant?.stopReason === "error") {
+							startupErrorMessage = startupAssistant.errorMessage || "Subagent failed";
+						}
+					} catch (err) {
+						startupErrorMessage = err instanceof Error ? err.stack || err.message : String(err);
 					}
-					processSessionEvent(event);
-				} catch (err) {
-					logger.error("Subagent event processing failed", {
-						error: err instanceof Error ? err.message : String(err),
-					});
-					requestAbort("terminate");
-				}
-			});
 
-			await session.prompt(task, { attribution: "agent" });
-			await session.waitForIdle();
-
-			const reminderToolChoice = buildNamedToolChoice("submit_result", session.model);
-
-			let retryCount = 0;
-			while (
-				!submitResultCalled &&
-				retryCount < MAX_SUBMIT_RESULT_RETRIES &&
-				(!abortSignal.aborted || abortReason === "terminate")
-			) {
-				try {
-					retryCount++;
-					const isLastRetry = retryCount === MAX_SUBMIT_RESULT_RETRIES;
-					const reminder = renderPromptTemplate(submitReminderTemplate, {
-						retryCount,
-						maxRetries: MAX_SUBMIT_RESULT_RETRIES,
-						isLastRetry,
-					});
-
-					// Give models that reject forced tool choice one last plain-text recovery attempt.
-					const shouldForceSubmitResultToolChoice = !isLastRetry;
-					await session.prompt(reminder, {
-						attribution: "agent",
-						...(shouldForceSubmitResultToolChoice && reminderToolChoice
-							? { toolChoice: reminderToolChoice }
-							: {}),
-					});
-					await session.waitForIdle();
-				} catch (err) {
-					logger.error("Subagent prompt failed", {
-						error: err instanceof Error ? err.message : String(err),
-					});
-				}
-			}
-
-			await session.waitForIdle();
-			if (!submitResultCalled && (!abortSignal.aborted || abortReason === "terminate")) {
-				abortReasonText ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
-				error ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
-			}
-
-			const lastAssistant = session.getLastAssistantMessage();
-			if (lastAssistant) {
-				if (lastAssistant.stopReason === "aborted") {
-					aborted = abortReason === "signal" || abortReason === undefined;
-					if (aborted) {
-						abortReasonText ??= resolveSignalAbortReason();
+					if (!startupErrorMessage) {
+						break;
 					}
+
+					if (
+						!submitResultCalled &&
+						progress.toolCount === 0 &&
+						shouldFallbackStartupFailure(startupErrorMessage)
+					) {
+						fallbackAttempts.push({ model: candidateLabel, error: startupErrorMessage });
+						const repaired =
+							isStartupAuthFailureMessage(startupErrorMessage) &&
+							typeof authStorage.markAuthFailure === "function"
+								? await authStorage.markAuthFailure(
+										candidateModel?.provider ?? "",
+										progress.sessionId,
+										startupErrorMessage,
+										{
+											baseUrl: candidateModel?.baseUrl,
+											modelId: candidateModel?.id,
+										},
+									)
+								: false;
+						await closeActiveSession();
+						resetStartupOutput();
+						if (repaired && allowRepairRetry) {
+							allowRepairRetry = false;
+							continue;
+						}
+						if (candidateIndex < startupCandidates.length - 1) {
+							continue candidateLoop;
+						}
+						error = summarizeStartupFallbackFailures(fallbackAttempts);
+						exitCode = 1;
+						break candidateLoop;
+					}
+
+					error =
+						fallbackAttempts.length > 0
+							? summarizeStartupFallbackFailures([
+									...fallbackAttempts,
+									{ model: candidateLabel, error: startupErrorMessage },
+								])
+							: startupErrorMessage;
 					exitCode = 1;
-				} else if (lastAssistant.stopReason === "error") {
-					exitCode = 1;
-					error ??= lastAssistant.errorMessage || "Subagent failed";
+					break candidateLoop;
 				}
+
+				if (error) {
+					break;
+				}
+
+				const session = activeSession;
+				if (!session) {
+					error = "Subagent failed to initialize";
+					exitCode = 1;
+					break;
+				}
+
+				const reminderToolChoice = buildNamedToolChoice("submit_result", session.model);
+				let retryCount = 0;
+				while (
+					!submitResultCalled &&
+					retryCount < MAX_SUBMIT_RESULT_RETRIES &&
+					(!abortSignal.aborted || abortReason === "terminate")
+				) {
+					try {
+						retryCount++;
+						const isLastRetry = retryCount === MAX_SUBMIT_RESULT_RETRIES;
+						const reminder = renderPromptTemplate(submitReminderTemplate, {
+							retryCount,
+							maxRetries: MAX_SUBMIT_RESULT_RETRIES,
+							isLastRetry,
+						});
+
+						// Give models that reject forced tool choice one last plain-text recovery attempt.
+						const shouldForceSubmitResultToolChoice = !isLastRetry;
+						await session.prompt(reminder, {
+							attribution: "agent",
+							...(shouldForceSubmitResultToolChoice && reminderToolChoice
+								? { toolChoice: reminderToolChoice }
+								: {}),
+						});
+						await session.waitForIdle();
+					} catch (err) {
+						logger.error("Subagent prompt failed", {
+							error: err instanceof Error ? err.message : String(err),
+						});
+					}
+				}
+
+				await session.waitForIdle();
+				const lastAssistant = session.getLastAssistantMessage();
+				if (lastAssistant) {
+					if (lastAssistant.stopReason === "aborted") {
+						aborted = abortReason === "signal" || abortReason === undefined;
+						if (aborted) {
+							abortReasonText ??= resolveSignalAbortReason();
+						}
+						exitCode = 1;
+					} else if (lastAssistant.stopReason === "error") {
+						exitCode = 1;
+						error ??= lastAssistant.errorMessage || "Subagent failed";
+					}
+				}
+				if (!submitResultCalled && (!abortSignal.aborted || abortReason === "terminate") && !aborted && !error) {
+					abortReasonText ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
+					error = SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
+				}
+				break;
 			}
 		} catch (err) {
 			exitCode = 1;

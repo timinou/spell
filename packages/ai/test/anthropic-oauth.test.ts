@@ -240,3 +240,19 @@ describe("anthropic auth resolution", () => {
 		}
 	});
 });
+
+describe("anthropic oauth refresh errors", () => {
+	it("surfaces invalid bearer refresh failures with status and message", async () => {
+		global.fetch = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ error: { type: "authentication_error", message: "Invalid bearer token" } }), {
+					status: 401,
+					headers: { "Content-Type": "application/json" },
+				}),
+		) as unknown as typeof fetch;
+
+		await expect(refreshAnthropicToken("refresh-123")).rejects.toThrow(
+			"Anthropic token refresh failed (401): Invalid bearer token",
+		);
+	});
+});

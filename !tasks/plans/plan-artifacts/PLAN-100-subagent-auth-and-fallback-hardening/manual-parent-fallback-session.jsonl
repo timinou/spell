@@ -1,0 +1,2 @@
+{"type":"session","id":"manual-parent-fallback-session","timestamp":"2026-04-03T00:21:55.406Z","cwd":"/home/user/code/ora/spell"}
+{"type":"subagent_result","selectedSessionId":"manual-child-fallback-success","transcriptPath":"/home/user/code/ora/spell/!tasks/plans/plan-artifacts/PLAN-100-subagent-auth-and-fallback-hardening/manual-child-fallback-session.jsonl","exitCode":0,"output":"{\n  \"ok\": true,\n  \"path\": \"fallback-selected\"\n}"}

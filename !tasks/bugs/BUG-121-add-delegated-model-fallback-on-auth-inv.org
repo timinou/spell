@@ -1,0 +1,83 @@
+#+TITLE: Add delegated model fallback on auth-invalid startup
+#+STATE: DONE
+#+SESSION_ID: 14ab73259adfee1f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-46-24-491Z_14ab73259adfee1f.jsonl]]
+#+CUSTOM_ID: BUG-121-add-delegated-model-fallback-on-auth-inv
+#+EFFORT: M
+#+DEPENDS: BUG-119-fix-delegated-anthropic-invalid-bearer-h BUG-120-preserve-subagent-auth-failures-in-task
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+#+LAYER: task
+#+PRIORITY: #A
+
+NOTE [2026-04-03]: Added constrained delegated startup fallback plus ordered candidate resolution and verified with bun test packages/coding-agent/test/task/model-fallback.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts.
+
+* Initial Message
+
+File:
+ /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-00-14-890Z_14ab6894eaa2d281.jsonl
+ ID: 14ab6894eaa2d281
+
+
+Why did Metis fail repeatedly?
+
+* Scope
+- In scope:
+  - `packages/coding-agent/src/task/executor.ts`
+  - `packages/coding-agent/src/config/model-resolver.ts`
+  - `packages/coding-agent/src/task/agents.ts` if agent model pattern expansion needs adjustment
+  - `packages/coding-agent/test/task/model-fallback.test.ts`
+  - Any minimal task-summary updates needed to explain fallback attempts when all candidates fail
+- Out of scope:
+  - Repairing provider credentials themselves
+  - Generic provider roulette across unrelated models not already allowed by the agent/settings patterns
+  - Prompt content changes unrelated to delegated model fallback
+- Boundary rationale: fallback policy belongs in delegated model resolution and startup, not in the provider auth layer.
+
+* Tests
+- `packages/coding-agent/test/task/model-fallback.test.ts`
+  - Add failing coverage for a delegated agent whose first configured model/provider candidate fails immediately with an auth-invalid or provider-unavailable startup error.
+  - Verify the executor selects the next permitted candidate from the resolved agent/settings pattern list instead of hard-failing on the first model.
+- `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+  - Add or extend a case showing fallback is skipped when no alternate candidate exists, and the surfaced failure still preserves the real auth error.
+- Verification command:
+  - `bun test packages/coding-agent/test/task/model-fallback.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+
+* Implementation
+- Sequencing note: keep fallback policy constrained to already-resolved candidate patterns. Do not invent an open-ended provider search that changes agent intent silently.
+
+** Capture delegated startup fallback rules in tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-121-add-delegated-model-fallback-on-auth-inv::fallback-tests
+:END:
+- File: `packages/coding-agent/test/task/model-fallback.test.ts`
+- File: `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+- Encode both branches: alternate candidate available, and alternate candidate absent.
+
+** Resolve an ordered candidate list for delegated agents
+:PROPERTIES:
+:CUSTOM_ID: BUG-121-add-delegated-model-fallback-on-auth-inv::candidate-resolution
+:DEPENDS: BUG-121-add-delegated-model-fallback-on-auth-inv::fallback-tests
+:END:
+- File: `packages/coding-agent/src/config/model-resolver.ts`
+- File: `packages/coding-agent/src/task/agents.ts`
+- Make delegated execution keep the ordered list of allowed model/provider candidates implied by the agent model pattern, role alias, and session fallback model instead of collapsing immediately to a single model.
+
+** Retry startup across allowed candidates on auth-invalid failure
+:PROPERTIES:
+:CUSTOM_ID: BUG-121-add-delegated-model-fallback-on-auth-inv::startup-fallback
+:DEPENDS: BUG-121-add-delegated-model-fallback-on-auth-inv::candidate-resolution
+:END:
+- File: `packages/coding-agent/src/task/executor.ts`
+- When delegated startup fails before useful work begins because the chosen model/provider is auth-invalid or unavailable, retry once per remaining allowed candidate.
+- Preserve the first/root error and report the fallback attempts if every candidate fails.
+* Edge Cases
+- Explicit single-model overrides should not silently jump to unrelated providers
+- Fallback should trigger only for startup-time auth / provider-availability failures, not for ordinary model-quality issues mid-task
+- If the primary candidate succeeds after BUG-119 auth repair, fallback should never activate
+- Async and sync task paths must report the same chosen candidate and final error
+
+* Acceptance Criteria
+- When the primary delegated model fails at startup with an auth-invalid or unavailable-provider error and an alternate configured candidate exists, the executor retries on the next allowed candidate automatically.
+- When no alternate candidate exists, the task fails fast with the preserved root auth/provider error.
+- The fallback path does not broaden beyond the agent/settings candidate list already implied by the request.
+- `bun test packages/coding-agent/test/task/model-fallback.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts` passes.

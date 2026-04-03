@@ -1,0 +1,84 @@
+#+TITLE: Fix delegated Anthropic invalid bearer handling
+#+STATE: DONE
+#+SESSION_ID: 14ab73259adfee1f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-46-24-491Z_14ab73259adfee1f.jsonl]]
+#+CUSTOM_ID: BUG-119-fix-delegated-anthropic-invalid-bearer-h
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+#+EFFORT: S
+#+LAYER: ai
+#+PRIORITY: #A
+
+NOTE [2026-04-03]: Implemented Anthropic OAuth invalid-bearer repair in packages/ai and verified with bun test packages/ai/test/anthropic-oauth.test.ts packages/ai/test/auth-storage-anthropic-invalid-token.test.ts.
+
+* Initial Message
+
+File:
+ /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-00-14-890Z_14ab6894eaa2d281.jsonl
+ ID: 14ab6894eaa2d281
+
+
+Why did Metis fail repeatedly?
+
+* Scope
+- In scope:
+  - `packages/ai/src/auth-storage.ts`
+  - `packages/ai/src/utils/oauth/index.ts`
+  - `packages/ai/src/utils/oauth/anthropic.ts`
+  - `packages/ai/src/providers/anthropic.ts`
+  - Any minimal wiring needed so delegated task sessions stop reusing a stale Anthropic bearer token.
+- Out of scope:
+  - Task-tool fallback policy and agent/model selection
+  - Task result rendering or warning text changes
+  - Non-Anthropic provider auth flows
+- Boundary rationale: repair the root credential failure first, independent of task fallback behavior.
+
+* Tests
+- `packages/ai/test/anthropic-oauth.test.ts`
+  - Add a failing case for an Anthropic OAuth credential that reaches the provider with a stale bearer token and receives `401 Invalid bearer token`.
+  - Verify refresh / revalidation behavior updates persisted credentials or marks the credential unusable instead of handing the same bad token back to the next delegated session.
+- `packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`
+  - Add focused AuthStorage coverage for session-scoped Anthropic credential selection after an auth-invalid response.
+  - Verify a session does not stay pinned to a known-bad credential when another valid credential or a refreshed credential is available.
+- Verification command:
+  - `bun test packages/ai/test/anthropic-oauth.test.ts packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`
+
+* Implementation
+- Sequencing note: this is auth/runtime repair work, not a pure-function addition. Keep tests first, then implementation, so the failure contract is locked before changing credential reuse.
+
+** Capture the invalid-bearer contract in tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-119-fix-delegated-anthropic-invalid-bearer-h::invalid-bearer-tests
+:END:
+- File: `packages/ai/test/anthropic-oauth.test.ts`
+- File: `packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`
+- Encode the observed delegated-session failure mode: immediate Anthropic `401 Invalid bearer token` before any tool call.
+
+** Repair Anthropic credential refresh and invalidation
+:PROPERTIES:
+:CUSTOM_ID: BUG-119-fix-delegated-anthropic-invalid-bearer-h::repair-auth-selection
+:DEPENDS: BUG-119-fix-delegated-anthropic-invalid-bearer-h::invalid-bearer-tests
+:END:
+- File: `packages/ai/src/auth-storage.ts`
+- File: `packages/ai/src/utils/oauth/index.ts`
+- File: `packages/ai/src/utils/oauth/anthropic.ts`
+- Ensure an auth-invalid Anthropic OAuth credential is either refreshed successfully or marked unusable so the next selection attempt does not reuse the same dead bearer token.
+- Preserve current precedence rules for explicit API keys, Foundry overrides, and non-Anthropic providers.
+
+** Verify Anthropic provider request contract after refresh
+:PROPERTIES:
+:CUSTOM_ID: BUG-119-fix-delegated-anthropic-invalid-bearer-h::verify-provider-contract
+:DEPENDS: BUG-119-fix-delegated-anthropic-invalid-bearer-h::repair-auth-selection
+:END:
+- File: `packages/ai/src/providers/anthropic.ts`
+- Confirm the refreshed / replacement credential reaches the Anthropic client with the expected bearer-vs-api-key header mode and base URL handling.
+* Edge Cases
+- Expired credentials where refresh succeeds but returns the same access token string
+- Refresh failure paths where no alternate Anthropic credential exists
+- Foundry environment overrides must still bypass stored OAuth credentials cleanly
+- Session affinity must not pin a dead OAuth credential forever once it is proven invalid
+
+* Acceptance Criteria
+- A delegated session hitting Anthropic `401 Invalid bearer token` does not keep retrying the same stale bearer token on the next selection attempt.
+- If refresh succeeds, the refreshed credential is persisted and reused.
+- If refresh or replacement is impossible, the auth layer returns a truthful auth failure instead of silently pretending the credential is still usable.
+- `bun test packages/ai/test/anthropic-oauth.test.ts packages/ai/test/auth-storage-anthropic-invalid-token.test.ts` passes.

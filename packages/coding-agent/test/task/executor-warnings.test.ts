@@ -83,6 +83,22 @@ describe("subagent warning injection", () => {
 		expect(result.exitCode).toBe(1);
 	});
 
+	it("does not inject missing-submit warning when startup auth fails before any tool call", () => {
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 1,
+			stderr: "401 Invalid bearer token",
+			doneAborted: false,
+			signalAborted: false,
+			submitResultItems: undefined,
+			outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+		});
+
+		expect(result.rawOutput).toBe("");
+		expect(result.stderr).toBe("401 Invalid bearer token");
+		expect(result.exitCode).toBe(1);
+	});
+
 	it("normalizes explicit aborted submit_result into aborted payload", () => {
 		const result = finalizeSubprocessOutput({
 			rawOutput: "partial output",

@@ -1,0 +1,2 @@
+{"type":"delegated_startup_failure","sessionId":"manual-child-auth-fail","model":"anthropic/claude-opus-4-6","error":"401 Invalid bearer token"}
+{"type":"delegated_fallback_success","sessionId":"manual-child-fallback-success","model":"openai/gpt-4o","output":"{\n  \"ok\": true,\n  \"path\": \"fallback-selected\"\n}"}

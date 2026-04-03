@@ -1481,6 +1481,48 @@ export class AuthStorage {
 		return remainingCredentials.some(candidate => !this.#isCredentialBlocked(providerKey, candidate.index));
 	}
 
+	/**
+	 * Marks a session-pinned Anthropic OAuth credential as rejected by the provider.
+	 *
+	 * Returns true when refresh or fallback produced another usable credential for the same session.
+	 */
+	async markAuthFailure(
+		provider: string,
+		sessionId: string | undefined,
+		reason: string,
+		options?: AuthApiKeyOptions,
+	): Promise<boolean> {
+		if (provider !== "anthropic") return false;
+		const sessionCredential = this.#getSessionCredential(provider, sessionId);
+		if (!sessionCredential || sessionCredential.type !== "oauth") return false;
+
+		const credential = this.#getCredentialsForProvider(provider)[sessionCredential.index];
+		if (!credential || credential.type !== "oauth") return false;
+
+		const normalizedReason = reason.trim() || "provider rejected credential";
+		const disabledCause = `oauth rejected by provider: ${normalizedReason}`;
+
+		try {
+			const refreshed = await this.#refreshOAuthCredential(provider, credential, { force: true });
+			if (refreshed.access === credential.access) {
+				this.#disableCredentialAt(provider, sessionCredential.index, disabledCause);
+			} else {
+				this.#replaceCredentialAt(provider, sessionCredential.index, {
+					...credential,
+					...refreshed,
+					type: "oauth",
+				});
+				this.#recordSessionCredential(provider, sessionId, "oauth", sessionCredential.index);
+				return true;
+			}
+		} catch (error) {
+			const errorMsg = error instanceof Error ? error.message : String(error);
+			this.#disableCredentialAt(provider, sessionCredential.index, `${disabledCause}; refresh failed: ${errorMsg}`);
+		}
+
+		return (await this.getApiKey(provider, sessionId, options)) !== undefined;
+	}
+
 	#resolveWindowResetAt(window: UsageLimit["window"]): number | undefined {
 		if (!window) return undefined;
 		if (typeof window.resetsAt === "number" && Number.isFinite(window.resetsAt)) {
@@ -1721,8 +1763,12 @@ export class AuthStorage {
 		return undefined;
 	}
 
-	async #refreshOAuthCredential(provider: Provider, credential: OAuthCredential): Promise<OAuthCredentials> {
-		if (Date.now() < credential.expires) return credential;
+	async #refreshOAuthCredential(
+		provider: Provider,
+		credential: OAuthCredential,
+		options?: { force?: boolean },
+	): Promise<OAuthCredentials> {
+		if (!options?.force && Date.now() < credential.expires) return credential;
 		const customProvider = getOAuthProvider(provider);
 		let refreshPromise: Promise<OAuthCredentials>;
 		if (customProvider) {
