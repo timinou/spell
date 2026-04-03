@@ -3,8 +3,10 @@
  *
  * Primary provider for Spell native configs. Supports all capabilities.
  */
+
 import * as path from "node:path";
 import { logger, tryParseJson } from "@oh-my-pi/pi-utils";
+import { YAML } from "bun";
 import { registerProvider } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
 import { type Extension, type ExtensionManifest, extensionCapability } from "../capability/extension";
@@ -765,22 +767,44 @@ async function loadSettings(ctx: LoadContext): Promise<LoadResult<Settings>> {
 	const warnings: string[] = [];
 
 	for (const { dir, level } of await getConfigDirs(ctx)) {
+		// JSON: settings.json in config dir
 		const settingsPath = path.join(dir, "settings.json");
-		const content = await readFile(settingsPath);
-		if (!content) continue;
-
-		const data = tryParseJson<Record<string, unknown>>(content);
-		if (!data) {
-			warnings.push(`Failed to parse ${settingsPath}`);
-			continue;
+		const jsonContent = await readFile(settingsPath);
+		if (jsonContent) {
+			const data = tryParseJson<Record<string, unknown>>(jsonContent);
+			if (!data) {
+				warnings.push(`Failed to parse ${settingsPath}`);
+			} else {
+				items.push({
+					path: settingsPath,
+					data,
+					level,
+					_source: createSourceMeta(PROVIDER_ID, settingsPath, level),
+				});
+			}
 		}
 
-		items.push({
-			path: settingsPath,
-			data,
-			level,
-			_source: createSourceMeta(PROVIDER_ID, settingsPath, level),
-		});
+		// YAML: agent/config.yml in config dir (project-level only;
+		// user-level YAML is loaded directly by Settings.#loadYaml)
+		if (level === "project") {
+			const yamlPath = path.join(dir, "agent", "config.yml");
+			const yamlContent = await readFile(yamlPath);
+			if (yamlContent) {
+				try {
+					const parsed = YAML.parse(yamlContent);
+					if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+						items.push({
+							path: yamlPath,
+							data: parsed as Record<string, unknown>,
+							level,
+							_source: createSourceMeta(PROVIDER_ID, yamlPath, level),
+						});
+					}
+				} catch {
+					warnings.push(`Failed to parse ${yamlPath}`);
+				}
+			}
+		}
 	}
 
 	return { items, warnings };

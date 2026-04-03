@@ -1,0 +1,118 @@
+#+TITLE: Project-level configyml not loaded by settings capability
+#+STATE: DONE
+#+SESSION_ID: 14ac7279914b4cdb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T18-21-57-189Z_14ac7279914b4cdb.jsonl]]
+#+CUSTOM_ID: BUG-149-project-level-config-yml-not-loaded-by-s
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-03]: Fixed: builtin loadSettings() now loads .spell/agent/config.yml at project level. Tests pass.
+
+* Initial Message
+
+But wait — I'm in plan mode. I can't write files. I can only create org items and the plan. Let me focus on that.
+
+ Let me first research the Marketing Messages API since the user specifically asked for it, and check the existing webhook/media infrastructure.
+
+ Now I'm realizing the constraints: the workspace is read-only except for the plan file, and plan output needs to be org-native. So I'll structure this as org items across four phases, with each phase
+ containing its own projects and features—starting with template CRUD completion, moving through template composition and real-time status tracking, and finishing with AI strategist and analytics capabilities.
+ Looking at this scope, I realize I need to organize it more strategically. The user wants me to move forward with creating the plan, so let me group these into logical projects with features underneath rather
+ than listing everything flat. I should also quickly verify the Marketing Messages API details before finalizing the structure, but I'll start organizing the major work streams now.
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-03T18-04-03-154Z_14ac6e60b4b69f94.jsonl
+ ID: 14ac6e60b4b69f94
+
+
+
+
+my friend, the allowedFolders of the config does not seem to be registered by plan modes. Why?
+
+* Scope
+** In scope
+- Modify =builtin.ts= =loadSettings()= to also load =.spell/agent/config.yml= as YAML at the project level
+- Add =tryParseYaml= helper alongside =tryParseJson= in =@oh-my-pi/pi-utils= (or inline in builtin.ts)
+- Add tests proving project-level YAML settings merge into the Settings singleton
+- Add test proving =planMode.allowedFolders= from project =.spell/agent/config.yml= surfaces in plan mode prompt and mode guard
+
+** Out of scope
+- Changing global config loading (already works via =Settings.#loadYaml=)
+- Changing other discovery providers (claude, codex, gemini, etc.)
+- Settings UI changes
+- Save/persistence for project-level YAML (read-only for now)
+
+* Root Cause
+
+The builtin settings discovery provider (=packages/coding-agent/src/discovery/builtin.ts=, =loadSettings()= at line 763) only looks for =settings.json= in directories returned by =getConfigDirs()=. For the native provider, =getConfigDirs()= returns:
+1. =<cwd>/.spell/= (project level) — looks for =.spell/settings.json=
+2. =~/.spell/agent/= (user level) — looks for =settings.json=
+
+The =Settings= class loads global config from =~/.spell/agent/config.yml= via =#loadYaml()=, which works. But there is no equivalent project-level YAML path. Users who place =.spell/agent/config.yml= in their project directory (mirroring the global convention) get a dead file that nothing reads.
+
+The =Settings.#loadProjectSettings()= method calls =loadCapability(settingsCapability.id)= and filters for =level === "project"=. Since the builtin provider never produces a project-level YAML item, project YAML settings are invisible.
+
+* Tests
+
+
+** Test: project-level config.yml merges into Settings (test-first)
+:PROPERTIES:
+:CUSTOM_ID: BUG-149-project-level-config-yml-not-loaded-by-s::test-yaml-merge
+:END:
+- File: =packages/coding-agent/test/settings-manager.test.ts=
+- Scenario: Write a =config.yml= to =<projectDir>/.spell/agent/config.yml=, initialize Settings, assert =settings.get("planMode.allowedFolders")= returns the configured value
+- Must use =Settings.init({ cwd: projectDir, agentDir })= pattern from existing tests
+- Must run capability loader (not =Settings.isolated()=) to exercise the real discovery path
+
+** Test: project YAML settings merge with global (test-first)
+:PROPERTIES:
+:CUSTOM_ID: BUG-149-project-level-config-yml-not-loaded-by-s::test-merge-precedence
+:DEPENDS: BUG-149-project-level-config-yml-not-loaded-by-s::test-yaml-merge
+:END:
+- File: =packages/coding-agent/test/settings-manager.test.ts=
+- Scenario: Global =config.yml= sets =theme.dark: "anthracite"=, project =.spell/agent/config.yml= sets =planMode.allowedFolders: {"./specs": "Spec files"}=. Both values must be accessible from the merged Settings.
+- Verifies deep merge does not clobber unrelated keys.
+
+** Test: JSON settings.json still works alongside YAML (test-first)
+:PROPERTIES:
+:CUSTOM_ID: BUG-149-project-level-config-yml-not-loaded-by-s::test-json-compat
+:DEPENDS: BUG-149-project-level-config-yml-not-loaded-by-s::test-yaml-merge
+:END:
+- File: =packages/coding-agent/test/settings-manager.test.ts=
+- Scenario: Project has both =.spell/settings.json= and =.spell/agent/config.yml=. Both contribute settings. Verify settings from both files are accessible.
+* Implementation
+
+
+** Add YAML loading to builtin =loadSettings()=
+:PROPERTIES:
+:CUSTOM_ID: BUG-149-project-level-config-yml-not-loaded-by-s::impl-builtin-yaml
+:DEPENDS: BUG-149-project-level-config-yml-not-loaded-by-s::test-yaml-merge BUG-149-project-level-config-yml-not-loaded-by-s::test-merge-precedence BUG-149-project-level-config-yml-not-loaded-by-s::test-json-compat
+:END:
+- File: =packages/coding-agent/src/discovery/builtin.ts=
+- In =loadSettings()= (line 763), after the existing =settings.json= loop, add a second pass that looks for =config.yml= in the =agent/= subdirectory of each config dir:
+  - For each ={dir, level}= from =getConfigDirs(ctx)=:
+    - Read =path.join(dir, "agent", "config.yml")=
+    - Parse with =YAML.parse()= from =bun=
+    - If valid object, push as a =Settings= item with the same =level=
+  - Import =YAML= from ="bun"= at module top
+- The YAML item is pushed AFTER the JSON item so =Settings.#loadProjectSettings()= deep-merges them (JSON first, YAML second — YAML wins on conflicts within same level, matching user expectation that =config.yml= is the primary format)
+- Validate parsed result is a non-null, non-array object (same guard as =Settings.#loadYaml=)
+- On parse error, push warning (same pattern as JSON parse failure)
+
+** Sequencing note
+Implementation must come after tests because =loadSettings()= is part of the discovery capability system which requires real file I/O to test. However, the test infrastructure for Settings already exists (=settings-manager.test.ts= sets up temp dirs with =getProjectAgentDir()= and writes =config.yml= via =Bun.write=). The tests can be written to fail first, then the implementation makes them pass.
+* Edge Cases
+- Empty =config.yml= → parsed as =null= by YAML.parse → skip (valid, produces no item)
+- Malformed YAML → push warning, skip (same as JSON parse failure path)
+- Both =.spell/settings.json= and =.spell/agent/config.yml= exist → both contribute items; =Settings.#loadProjectSettings()= deep-merges all project items, so YAML values override JSON values for same keys
+- =.spell/agent/= directory doesn't exist → =readFile= returns null, nothing added
+- Array YAML root → skip (guard: =!parsed || typeof parsed !== "object" || Array.isArray(parsed)=)
+
+* Acceptance Criteria
+- =planMode.allowedFolders= in =.spell/agent/config.yml= surfaces in plan mode system prompt (allowed folders listed)
+- =enforceModeWrite= allows writes to folders configured in project-level =.spell/agent/config.yml=
+- Existing =.spell/settings.json= loading is unaffected (no regression)
+- =bun test packages/coding-agent/test/settings-manager.test.ts= passes
+- =bun check:ts= passes
