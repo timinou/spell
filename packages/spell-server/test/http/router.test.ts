@@ -57,6 +57,14 @@ function createManifest(): AutonomyManifest {
 			["ship-it", cronGoal],
 			["incoming", webhookGoal],
 		]),
+		exportTargets: [],
+		notificationRoutes: [],
+		reviewPolicies: [],
+		checkpoints: [],
+		panels: [],
+		layouts: [],
+		syncCollections: [],
+		stateSchemas: [],
 	};
 }
 

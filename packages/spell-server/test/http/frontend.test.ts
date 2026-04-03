@@ -47,6 +47,14 @@ function createManifest(): AutonomyManifest {
 		version: "1.0.0",
 		setups: new Map([["default", defaultSetup]]),
 		goals: new Map([["ship-it", cronGoal]]),
+		exportTargets: [],
+		notificationRoutes: [],
+		reviewPolicies: [],
+		checkpoints: [],
+		panels: [],
+		layouts: [],
+		syncCollections: [],
+		stateSchemas: [],
 	};
 }
 
