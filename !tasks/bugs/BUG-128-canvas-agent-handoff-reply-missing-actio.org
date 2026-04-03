@@ -1,0 +1,64 @@
+#+TITLE: Canvas agent handoff reply missing action field breaks QML inspector
+#+STATE: DONE
+#+SESSION_ID: 14abf9347ccc8ab5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-32-07-027Z_14abf9347ccc8ab5.jsonl]]
+#+CUSTOM_ID: BUG-128-canvas-agent-handoff-reply-missing-actio
+#+EFFORT: 15m
+#+LAYER: coding-agent
+
+NOTE [2026-04-03]: Fixed all three reply sites in CANVAS_AGENT_CHANNEL subscriber (sdk.ts). Added regression test (canvas-agent-tier.test.ts, 5/5 pass). Biome clean.
+
+* Initial Message
+
+try to run the inspector at ~/code/ora/hotelcomm/ecosystem/agentmaker/.spell/extensions/phoenix-inspector to see if it works correctly now
+
+The =CANVAS_AGENT_CHANNEL= subscriber in =sdk.ts= sends reply payloads that lack the =action: "agent_handoff_result"= field. The Phoenix Inspector QML (and any future canvas QML using the agent handoff protocol) gates reply processing on =payload.action === "agent_handoff_result"=. Without it, replies are silently dropped and the UI stays permanently stuck at "Sending selection to the agent..."
+
+** Affected Code
+- File: =packages/coding-agent/src/sdk.ts= (lines 2124-2145)
+- The =CANVAS_AGENT_CHANNEL= event subscriber
+
+** Current Behavior
+Success reply sends:
+#+begin_src typescript
+payload.reply?.({
+    ok: true,
+    status: "submitted",
+    message: "Submitted the Phoenix inspector request to the active agent session.",
+});
+#+end_src
+
+Error replies send:
+#+begin_src typescript
+payload.reply?.({ error: "Canvas agent request failed: no active session." });
+// or
+payload.reply?.({ error: error.message });
+#+end_src
+
+The =reply= callback in =canvas.ts= wraps this as ={ _rid: rid, ...result }=. The QML receives ={ _rid, ok, status, message }= but no =action= field.
+
+** Expected Behavior
+The =reply= callback should include the =action= field the QML expects, matching the extension path's =buildAgentHandoffReply()= / =buildAgentHandoffReplyFailure()= contract:
+
+Success: =action: "agent_handoff_result", ok: true, status: "submitted"|"queued", message: "..."=
+Error: =action: "agent_handoff_result", ok: false, error: "..."=
+
+** Fix
+In =packages/coding-agent/src/sdk.ts=, update the =CANVAS_AGENT_CHANNEL= subscriber:
+
+1. Success reply (line 2135): add =action: "agent_handoff_result"=
+2. No-session error (line 2127): add =action: "agent_handoff_result", ok: false=
+3. Catch error (line 2141): add =action: "agent_handoff_result", ok: false=
+
+The existing helpers =buildAgentHandoffReply= and =buildAgentHandoffReplyFailure= from the inspector extension's =helpers.ts= define the exact shape. The SDK should match it. Alternatively, the SDK can inline the same shape since importing from a project extension is not appropriate.
+
+** Sub-outline
+1. Edit the three reply sites in the =CANVAS_AGENT_CHANNEL= subscriber to include =action: "agent_handoff_result"= and proper =ok= field
+2. Run =bun check:ts= to confirm no type issues
+3. Verify: launch the phoenix inspector QML via canvas, select an element, type a prompt, click "Send to agent" — QML should show "Submitted" or "Queued" instead of staying stuck
+
+** Acceptance
+- All three reply paths in =CANVAS_AGENT_CHANNEL= include =action: "agent_handoff_result"=
+- Success replies include =ok: true=
+- Error replies include =ok: false=
+- =bun check:ts= passes
