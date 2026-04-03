@@ -1,0 +1,49 @@
+#+TITLE: Telegram bridge ImageContentRef type mismatch breaks image uploads
+#+STATE: DONE
+#+SESSION_ID: 14ac0ccc942812b6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-57-43-504Z_14ac0ccc942812b6.jsonl]]
+#+CUSTOM_ID: BUG-133-telegram-bridge-imagecontentref-type-mis
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: integration
+
+NOTE [2026-04-03]: Fixed all three files. Type: base64->image, media_type->mimeType. Tests pass 26/26.
+
+* Initial Message
+
+Telegram bridge: issue when uploading images
+
+Othman, [2026-04-03 11:57 a.m.]
+Can you read this?
+
+SpellBot, [2026-04-03 11:57 a.m.]
+Assistant error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.0.content.1.image.source.base64.media_type: Field required"},"request_id":"req_011CZgib4r6j31qJdXS5oSzu"}
+raw-http-request=/home/user/.spell/logs/http-400-requests/1775213831842-288cpaw1r1gju.json
+
+* Problem
+The =ImageContentRef= type in =spell-server= does not match the =ImageContent= type from =@oh-my-pi/pi-ai= that =coding-agent= expects. Two fields diverge:
+- =type= discriminant: ="base64"= vs ="image"=
+- mime type field name: =media_type= vs =mimeType=
+
+When Telegram sends a photo, the bridge creates an =ImageContentRef= with the wrong shape. The coding-agent RPC mode passes =command.images= directly to =session.prompt()= without transformation. The Anthropic provider reads =block.mimeType= (undefined) and sends the API request missing =media_type=, causing a 400 error.
+
+* Scope
+Three files in =spell-server= need changes:
+1. =packages/spell-server/src/rpc/types.ts= — Fix =ImageContentRef= interface to match =ImageContent= shape
+2. =packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts= — Fix =collectImages= to produce correct field names
+3. =packages/spell-server/test/telegram/bridge.test.ts= — Fix test assertions to expect correct shape
+
+* Sub-Outline
+** Fix =ImageContentRef= type definition
+Change interface from ={ type: "base64"; media_type: string; data: string }= to ={ type: "image"; mimeType: string; data: string }=.
+
+** Fix =collectImages= function
+Change the object literal from =type: "base64", media_type: downloaded.mediaType= to =type: "image", mimeType: downloaded.mediaType=.
+
+** Fix test assertions
+Update =bridge.test.ts= assertion at ~line 517-522 from =type: "base64", media_type: "image/jpeg"= to =type: "image", mimeType: "image/jpeg"=.
+
+* Acceptance
+- =bun check:ts= passes
+- =bun test packages/spell-server/test/telegram/bridge.test.ts= passes
+- The image content block sent to the Anthropic API includes =media_type= with the correct value

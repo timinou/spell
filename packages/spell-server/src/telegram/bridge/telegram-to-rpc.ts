@@ -202,8 +202,8 @@ async function collectImages(ctx: AuthContext, message: TelegramIncomingMessage)
 		const downloaded = await downloadTelegramFile(ctx, selectedPhoto.file_id, "image/jpeg");
 		return [
 			{
-				type: "base64",
-				media_type: downloaded.mediaType,
+				type: "image",
+				mimeType: downloaded.mediaType,
 				data: Buffer.from(downloaded.bytes).toString("base64"),
 			},
 		];

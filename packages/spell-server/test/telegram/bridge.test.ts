@@ -516,8 +516,8 @@ describe("telegram to rpc bridge", () => {
 		expect(prompts[0]?.message).toContain("Please review");
 		expect(prompts[0]?.images).toEqual([
 			{
-				type: "base64",
-				media_type: "image/jpeg",
+				type: "image",
+				mimeType: "image/jpeg",
 				data: "AQID",
 			},
 		]);
