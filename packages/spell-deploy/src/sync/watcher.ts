@@ -14,7 +14,7 @@ export interface FileWatcherOptions {
 export function shouldExclude(filePath: string, patterns: string[]): boolean {
 	return patterns.some(pattern => {
 		const normalized = pattern.replace(/\/$/, "");
-		return filePath.startsWith(`${normalized}/`) || filePath === normalized || filePath.startsWith(normalized);
+		return filePath.startsWith(`${normalized}/`) || filePath === normalized;
 	});
 }
 

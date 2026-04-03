@@ -1,0 +1,159 @@
+#+TITLE: DRY violations and dead code cleanup in spell-deploy
+#+STATE: DONE
+#+SESSION_ID: 14ac30ed20bb8cd1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T13-35-34-018Z_14ac30ed20bb8cd1.jsonl]]
+#+CUSTOM_ID: BUG-142-dry-violations-and-dead-code-cleanup-in
+#+EFFORT: 1h
+#+PRIORITY: B
+#+LAYER: library
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-032-audit-implementation:
+
+`sanitizeUnitName` is only in `systemd.ts`. The `lifecycle.ts` `buildInstallUnitCommand` takes raw `unitName` and interpolates it directly into a shell string without sanitization. And `buildServiceCommand` does `sudo systemctl ${action} ${unitName}` — also unsanitized. Since unit names come from user config (sync.kdl `service unit="spell-growth"`), a malicious value like `foo; rm -rf /` would be injectable.
+
+Now I have enough findings. Let me compile the report.
+
+---
+
+## Audit Findings
+
+### 1. Duplicated `buildQuotedPath` and `executeRsync` helpers
+- **What**: Identical implementations of `buildQuotedPath()` and `executeRsync()` exist in both `push.ts` and `pull.ts`
+- **Where**: `packages/spell-deploy/src/sync/push.ts:5-19` and `packages/spell-deploy/src/sync/pull.ts:5-19`
+- **Why**: Violates DRY-at-2 rule from AGENTS.md. When one copy gets fixed (e.g., a bug in quoting or error reporting), the other stays broken. Extract to a shared `sync/utils.ts`.
+- **Effort**: `trivial`
+
+### 2. Barrel uses `export type { ... } from` instead of `export *`
+- **What**: `src/index.ts` uses `export type { DeployContext } from "./cli/types"` and named re-exports from `./sync/types`, violating AGENTS.md star re-export rule
+- **Where**: `packages/spell-deploy/src/index.ts:6,22-30`
+- **Why**: The named re-export exists to avoid a `CommandResult` name collision between `cli/types.ts` and `sync/types.ts`. The fix is to remove the dead `CommandResult` from `cli/types.ts` (it's unused), then use `export *` for both modules.
+- **Effort**: `trivial`
+
+### 3. Dead `CommandResult` interface in `cli/types.ts`
+- **What**: `CommandResult` is defined in `cli/types.ts` but never imported or used anywhere
+- **Where**: `packages/spell-deploy/src/cli/types.ts:10-13`
+- **Why**: Dead code that caused the barrel to use named re-exports to avoid collision. Delete it.
+- **Effort**: `trivial`
+
+### 4. `execSsh` is `async` but uses `Bun.spawnSync`
+- **What**: Function is declared `async` and returns `Promise<CommandResult>` but only uses synchronous `Bun.spawnSync`. The `async` keyword is misleading.
+- **Where**: `packages/spell-deploy/src/sync/ssh.ts:40`
+- **Why**: Contract confusion — callers `await` a function that never yields. Either drop `async`/`Promise` (if intentional sync) or switch to `Bun.spawn` with `await proc.exited` (if truly async is desired). Currently both `push.ts` and `pull.ts` call `executeRsync` (which is sync) but then `await execSsh` for swap commands — the mixture is inconsistent.
+- **Effort**: `small`
+
+### 5. Shell injection in `initCommand` — unquoted `projectRoot`
+- **What**: `initCommand` interpolates `target.projectRoot` directly into a remote shell command without quoting: `mkdir -p ${target.projectRoot} ...`
+- **Where**: `packages/spell-deploy/src/cli/commands.ts:138`
+- **Why**: If `projectRoot` contains spaces or shell metacharacters, the command breaks or executes unintended code. The push/pull modules use `buildQuotedPath` for this exact reason, but the init command skips it.
+- **Effort**: `small`
+
+### 6. Shell injection in `buildSecretPushCommand` — unquoted `remotePath`
+- **What**: `remotePath` and `remoteTmp` are interpolated into a remote shell command without quoting: `cat > ${remoteTmp} && chmod 600 ${remoteTmp} && mv ...`
+- **Where**: `packages/spell-deploy/src/secrets/push.ts:10-11`
+- **Why**: Same quoting issue as finding 5. Paths with spaces would break the remote command.
+- **Effort**: `small`
+
+### 7. Unsanitized `unitName` in `lifecycle.ts` remote commands
+- **What**: `buildServiceCommand` and `buildInstallUnitCommand` interpolate `unitName` into shell strings without sanitization, while `systemd.ts` has a `sanitizeUnitName` function that only runs in the unit generator
+- **Where**: `packages/spell-deploy/src/service/lifecycle.ts:7,27`
+- **Why**: A unit name from config containing shell metacharacters would be injected into `sudo systemctl ${action} ${unitName}` and `sudo tee ${remotePath}`. Since values come from user-controlled `sync.kdl`, this is a defense-in-depth gap. Apply `sanitizeUnitName` at the boundary or when building the command.
+- **Effort**: `small`
+
+### 8. `BundleUploadOptions` type is exported but never used
+- **What**: `BundleUploadOptions` interface exists in `bundle/types.ts` but no function signature references it
+- **Where**: `packages/spell-deploy/src/bundle/types.ts:20-24`
+- **Why**: Dead type. `buildUploadCommands` uses an inline opts type instead. Either use the exported type or delete it.
+- **Effort**: `trivial`
+
+### 9. SSH key path with spaces breaks rsync `-e` transport
+- **What**: `buildRsyncSshTransport` interpolates `sshOptions.sshKey` into a single string passed as rsync's `-e` flag. If the key path contains spaces, the resulting ssh command becomes malformed because rsync parses the `-e` value with shell word splitting.
+- **Where**: `packages/spell-deploy/src/sync/rsync.ts:4`
+- **Why**: Paths like `~/.ssh/my key` would produce `-e "ssh -p 22 -i /home/user/.ssh/my key ..."` where `key` becomes a separate argument. Should quote the key path.
+- **Effort**: `small`
+
+### 10. `shouldExclude` is too broad — matches prefix rather than path segments
+- **What**: `shouldExclude("node_modules_backup/foo", ["node_modules/"])` returns `true` because the check `filePath.startsWith(normalized)` matches `node_modules` as a prefix of `node_modules_backup`. The `||` branch `filePath.startsWith(normalized)` subsumes and weakens the segment-aware `filePath.startsWith(normalized + "/")` branch.
+- **Where**: `packages/spell-deploy/src/sync/watcher.ts:17`
+- **Why**: False-positive exclusions — files in directories whose names begin with an excluded prefix are silently skipped from sync.
+- **Effort**: `small`
+
+* Scope
+- IN: Extract duplicated =buildQuotedPath= and =executeRsync= from =push.ts= and =pull.ts= into a shared =sync/utils.ts=
+- IN: Remove dead =CommandResult= interface from =cli/types.ts=
+- IN: Remove unused =BundleUploadOptions= interface from =bundle/types.ts=
+- IN: Convert barrel =index.ts= from named re-exports to =export *= (possible after removing =CommandResult= collision)
+- IN: Fix =shouldExclude= false-positive prefix matching in =watcher.ts=
+- IN: Fix =execSsh= async/sync mismatch in =ssh.ts=
+- OUT: No behavioral changes to push/pull/sync operations
+
+* Tests
+- File: =packages/spell-deploy/test/sync/watch.test.ts=
+  - Add: =shouldExclude("node_modules_backup/foo", ["node_modules/"])= returns =false= (regression test for prefix bug)
+  - Existing tests for =shouldExclude("node_modules/pkg/index.js", ...)= continue to pass
+- File: =packages/spell-deploy/test/sync/push.test.ts= — existing tests continue to pass (import path may change to shared utils)
+- File: =packages/spell-deploy/test/sync/pull.test.ts= — existing tests continue to pass
+
+Test ordering: the =shouldExclude= regression test can be written first (TDD) since it tests a pure function. DRY extraction is a refactor — existing tests are the safety net.
+
+* Implementation
+** Create =sync/utils.ts= with shared helpers
+:PROPERTIES:
+:CUSTOM_ID: BUG-xxx-dry::create-utils
+:END:
+- File: =packages/spell-deploy/src/sync/utils.ts=
+- Move =buildQuotedPath= and =executeRsync= here
+- Export both
+
+** Update =push.ts= and =pull.ts= to import from =utils.ts=
+:PROPERTIES:
+:CUSTOM_ID: BUG-xxx-dry::update-imports
+:DEPENDS: BUG-xxx-dry::create-utils
+:END:
+- Remove local definitions of =buildQuotedPath= and =executeRsync=
+- Import from =./utils=
+
+** Remove dead =CommandResult= from =cli/types.ts=
+:PROPERTIES:
+:CUSTOM_ID: BUG-xxx-dry::remove-dead-command-result
+:END:
+Delete the unused =CommandResult= interface (lines 10-13).
+
+** Remove unused =BundleUploadOptions= from =bundle/types.ts=
+:PROPERTIES:
+:CUSTOM_ID: BUG-xxx-dry::remove-dead-upload-options
+:END:
+Delete =BundleUploadOptions= interface (lines 20-24). Also remove the unused =import type { SshOptions }= that only =BundleUploadOptions= needed.
+
+** Convert barrel to =export *= everywhere
+:PROPERTIES:
+:CUSTOM_ID: BUG-xxx-dry::fix-barrel
+:DEPENDS: BUG-xxx-dry::remove-dead-command-result
+:END:
+- Replace =export type { DeployContext } from "./cli/types"= with =export * from "./cli/types"=
+- Replace =export type { AtomicSwapPlan, ... } from "./sync/types"= with =export * from "./sync/types"=
+- Add =export * from "./sync/utils"= for the new shared module
+
+** Fix =shouldExclude= prefix matching
+:PROPERTIES:
+:CUSTOM_ID: BUG-xxx-dry::fix-should-exclude
+:END:
+In =watcher.ts= =shouldExclude=, remove the third =||= branch (=filePath.startsWith(normalized)=) which over-matches. The correct logic is:
+#+begin_src typescript
+return filePath.startsWith(`${normalized}/`) || filePath === normalized;
+#+end_src
+
+** Fix =execSsh= async/sync mismatch
+:PROPERTIES:
+:CUSTOM_ID: BUG-xxx-dry::fix-exec-ssh
+:END:
+Remove =async= keyword from =execSsh= and change return type from =Promise<CommandResult>= to =CommandResult=. Update callers: in =push.ts= change =await execSsh(command)= to =execSsh(command)=; in =pull.ts= (if any =await= exists); in =cli/commands.ts= =initCommand= (has =await execSsh=). Also remove =async= from =executePush= and =executePull= if they no longer await anything (they call sync =executeRsync= and the now-sync =execSsh=). But wait — these are called from CLI commands with =await=, so keeping them as =Promise<void>= is fine as long as callers work with sync returns too. Simplest: just drop =async= from =execSsh= itself and let callers continue to =await= the sync return (=await= on a non-promise is a no-op).
+
+* Acceptance Criteria
+- No duplicated =buildQuotedPath= or =executeRsync= in the codebase
+- No dead types (=CommandResult= in cli/types, =BundleUploadOptions= in bundle/types)
+- Barrel uses only =export *= re-exports
+- =shouldExclude("node_modules_backup/foo", ["node_modules/"])= returns =false=
+- =execSsh= is synchronous (no misleading =async=)
+- All tests pass: =bun test packages/spell-deploy/test/=

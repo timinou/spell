@@ -23,7 +23,7 @@ describe("rsync command builders", () => {
 		expect(command.args).toContain("rsync");
 		expect(command.args).toContain("-e");
 		expect(command.args).toContain(
-			"ssh -p 2222 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10",
+			"ssh -p 2222 -i '~/.ssh/id_ed25519' -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10",
 		);
 	});
 
@@ -41,7 +41,7 @@ describe("rsync command builders", () => {
 			"-avz",
 			"--delete",
 			"-e",
-			"ssh -p 2222 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10",
+			"ssh -p 2222 -i '~/.ssh/id_ed25519' -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10",
 			"--include",
 			"src/",
 			"--include",
@@ -95,5 +95,25 @@ describe("rsync command builders", () => {
 
 		expect(commands[0]?.args).toContain("ssh -p 22 -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10");
 		expect(commands[0]?.args.join(" ")).not.toContain(" -i ");
+	});
+
+	it("quotes SSH key path containing spaces in -e transport", () => {
+		const command = buildPushRsyncArgs({
+			sshOptions: {
+				host: "example.com",
+				user: "deploy",
+				port: 22,
+				sshKey: "/home/user/.ssh/my key",
+				connectTimeout: 10,
+			},
+			localRoot: "/tmp/build",
+			remoteStaging: "/srv/app.staging",
+			include: [],
+			exclude: [],
+		});
+
+		expect(command.args).toContain(
+			"ssh -p 22 -i '/home/user/.ssh/my key' -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10",
+		);
 	});
 });

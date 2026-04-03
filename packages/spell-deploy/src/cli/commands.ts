@@ -8,6 +8,7 @@ import { buildUnitConfig, generateSystemdUnit } from "../service/systemd";
 import { executePull } from "../sync/pull";
 import { executePush } from "../sync/push";
 import { buildSshCommand, execSsh, sshOptionsFromTarget } from "../sync/ssh";
+import { buildQuotedPath } from "../sync/utils";
 import { WatchOrchestrator } from "../sync/watch";
 import type { DeployContext } from "./types";
 
@@ -133,10 +134,8 @@ export function watchCommand(ctx: DeployContext, config: SyncConfig, target: Syn
 
 export async function initCommand(ctx: DeployContext, _config: SyncConfig, target: SyncTarget): Promise<void> {
 	const sshOpts = sshOptionsFromTarget(target);
-	const mkdirCmd = buildSshCommand(
-		sshOpts,
-		`mkdir -p ${target.projectRoot} ${target.projectRoot}/data ${target.projectRoot}/artifacts ${target.projectRoot}/backups`,
-	);
+	const qRoot = buildQuotedPath(target.projectRoot);
+	const mkdirCmd = buildSshCommand(sshOpts, `mkdir -p ${qRoot} ${qRoot}/data ${qRoot}/artifacts ${qRoot}/backups`);
 	if (ctx.dryRun) {
 		console.error(`[dry-run] ${mkdirCmd.description}`);
 		return;

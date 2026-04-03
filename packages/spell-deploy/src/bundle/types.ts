@@ -1,5 +1,3 @@
-import type { SshOptions } from "../sync/types";
-
 export interface BundleManifest {
 	version: string;
 	platform: string;
@@ -15,10 +13,4 @@ export interface BundleBuildOptions {
 	outputPath: string;
 	/** Entry point to compile */
 	entryPoint: string;
-}
-
-export interface BundleUploadOptions {
-	localBinaryPath: string;
-	remoteBundleDir: string;
-	sshOptions: SshOptions;
 }

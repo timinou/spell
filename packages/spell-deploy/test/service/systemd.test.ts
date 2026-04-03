@@ -146,4 +146,20 @@ describe("service lifecycle commands", () => {
 		expect(command.stdin).toBe(unitContent);
 		expect(command.description).toBe("Install systemd unit spell-growth");
 	});
+
+	it("sanitizes shell metacharacters in unit name for systemctl", () => {
+		const command = buildServiceCommand(sshOptions, "foo; rm -rf /", "start");
+		const remoteCmd = command.args.at(-1) ?? "";
+
+		expect(remoteCmd).not.toContain(";");
+		expect(remoteCmd).toBe("sudo systemctl start foo-rm--rf-");
+	});
+
+	it("sanitizes unit name in install command remote path", () => {
+		const command = buildInstallUnitCommand(sshOptions, "[Unit]\n", "evil;name");
+		const remoteCmd = command.args.at(-1) ?? "";
+
+		expect(remoteCmd).toContain("/etc/systemd/system/evil-name.service");
+		expect(remoteCmd).not.toContain(";");
+	});
 });

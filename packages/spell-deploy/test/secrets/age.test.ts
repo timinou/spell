@@ -39,7 +39,7 @@ describe("buildSecretPushCommand", () => {
 			"-i",
 			"~/.ssh/id_ed25519",
 			"spell@spell.example.com",
-			"cat > /srv/spell/app/.env.tmp && chmod 600 /srv/spell/app/.env.tmp && mv /srv/spell/app/.env.tmp /srv/spell/app/.env",
+			"cat > '/srv/spell/app/.env.tmp' && chmod 600 '/srv/spell/app/.env.tmp' && mv '/srv/spell/app/.env.tmp' '/srv/spell/app/.env'",
 		]);
 	});
 
@@ -60,7 +60,7 @@ describe("buildSecretPushCommand", () => {
 			sshOptions,
 		});
 
-		expect(command.args.at(-1)).toContain("chmod 600 /srv/spell/app/.env.tmp");
+		expect(command.args.at(-1)).toContain("chmod 600 '/srv/spell/app/.env.tmp'");
 	});
 
 	it("uses an atomic tmp and mv pattern on the remote host", () => {
@@ -71,7 +71,7 @@ describe("buildSecretPushCommand", () => {
 		});
 
 		expect(command.args.at(-1)).toBe(
-			"cat > /srv/spell/app/.env.tmp && chmod 600 /srv/spell/app/.env.tmp && mv /srv/spell/app/.env.tmp /srv/spell/app/.env",
+			"cat > '/srv/spell/app/.env.tmp' && chmod 600 '/srv/spell/app/.env.tmp' && mv '/srv/spell/app/.env.tmp' '/srv/spell/app/.env'",
 		);
 	});
 
@@ -97,8 +97,22 @@ describe("buildSecretPushCommand", () => {
 			"-p",
 			"22",
 			"spell@spell.example.com",
-			"cat > /srv/spell/app/.env.tmp && chmod 600 /srv/spell/app/.env.tmp && mv /srv/spell/app/.env.tmp /srv/spell/app/.env",
+			"cat > '/srv/spell/app/.env.tmp' && chmod 600 '/srv/spell/app/.env.tmp' && mv '/srv/spell/app/.env.tmp' '/srv/spell/app/.env'",
 		]);
+	});
+
+	it("quotes remote paths containing spaces", () => {
+		const command = buildSecretPushCommand({
+			envContent: "A=1\n",
+			remotePath: "/srv/my app/.env",
+			sshOptions,
+		});
+
+		const script = command.args.at(-1) ?? "";
+		expect(script).toContain("'/srv/my app/.env.tmp'");
+		expect(script).toContain("'/srv/my app/.env'");
+		// No unquoted path fragments
+		expect(script).not.toMatch(/cat > \/srv/);
 	});
 });
 

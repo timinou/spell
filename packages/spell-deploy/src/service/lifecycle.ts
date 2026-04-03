@@ -1,10 +1,12 @@
 import { buildSshArgs, buildSshCommand, execSsh } from "../sync/ssh";
 import type { SshCommand, SshOptions } from "../sync/types";
+import { sanitizeUnitName } from "./systemd";
 import type { ServiceAction } from "./types";
 
 /** Build systemctl command for a service action */
 export function buildServiceCommand(sshOptions: SshOptions, unitName: string, action: ServiceAction): SshCommand {
-	return buildSshCommand(sshOptions, `sudo systemctl ${action} ${unitName}`);
+	const safe = sanitizeUnitName(unitName);
+	return buildSshCommand(sshOptions, `sudo systemctl ${action} ${safe}`);
 }
 
 /** Execute a service action on remote */
@@ -23,7 +25,8 @@ export function buildInstallUnitCommand(
 	stdin: string;
 	description: string;
 } {
-	const remotePath = `/etc/systemd/system/${unitName}.service`;
+	const safe = sanitizeUnitName(unitName);
+	const remotePath = `/etc/systemd/system/${safe}.service`;
 	const remoteScript = `sudo tee ${remotePath} > /dev/null && sudo systemctl daemon-reload`;
 	return {
 		args: [...buildSshArgs(sshOptions), remoteScript],
