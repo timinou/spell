@@ -1,0 +1,85 @@
+#+TITLE: Telegram bridge sends invalid image media type to Anthropic API
+#+STATE: DONE
+#+SESSION_ID: 14ac0e3466e812bd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-03-51-963Z_14ac0e3466e812bd.jsonl]]
+#+CUSTOM_ID: BUG-135-telegram-bridge-sends-invalid-image-medi
+#+EFFORT: 1h
+#+LAYER: integration
+
+NOTE [2026-04-03]: Implemented detectImageTypeFromBytes + normalizeImageMediaType, wired into collectImages. All tests pass.
+
+* Initial Message
+
+reza.ns.cloudflare.com
+
+* Problem
+Telegram's file download API returns =application/octet-stream= as =Content-Type= for photo files. The bridge passes this through to =ImageContentRef.mimeType=, which flows unchecked to the Anthropic provider. The provider unsafely casts it (line 306: =block.mimeType as "image/jpeg" | ...=) and sends it to the API, which rejects it with: =media_type: Input should be 'image/jpeg', 'image/png', 'image/gif' or 'image/webp'=.
+
+Evidence from raw HTTP log (=1775215658404-2jmi8xr2b0rjl.json=):
+#+begin_example
+"type": "image",
+"source": {
+  "type": "base64",
+  "media_type": "application/octet-stream",  <-- wrong
+  ...
+}
+#+end_example
+
+* Root Cause
+=downloadTelegramFile= in =telegram-to-rpc.ts= uses =response.headers.get("content-type") ?? fallbackMediaType=. The fallback (="image/jpeg"=) is only used when the header is =null=, not when it's a non-image type like =application/octet-stream=. No validation or normalization exists anywhere in the path.
+
+* Scope
+Two files in =spell-server=:
+1. =packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts= — add =normalizeImageMediaType()= with magic-byte detection, wire into =collectImages=
+2. =packages/spell-server/test/telegram/bridge.test.ts= — TDD: write tests first for pure functions, then integration test
+
+No changes to =packages/ai= — the unsafe cast in the Anthropic provider is a separate concern. This fix ensures the bridge always sends valid media types.
+
+* Sub-Outline
+** Write tests for =detectImageTypeFromBytes= and =normalizeImageMediaType=
+These are pure functions. Tests go first per TDD. Export them for testing (or test via the integration path).
+
+Test cases for =detectImageTypeFromBytes=:
+- JPEG bytes (=FF D8 FF=) -> ="image/jpeg"=
+- PNG bytes (=89 50 4E 47 0D 0A 1A 0A=) -> ="image/png"=
+- GIF bytes (=47 49 46 38=) -> ="image/gif"=
+- WebP bytes (=52 49 46 46 xx xx xx xx 57 45 42 50=) -> ="image/webp"=
+- Empty/unknown bytes -> =null=
+
+Test cases for =normalizeImageMediaType=:
+- Valid type passes through: ="image/jpeg"= -> ="image/jpeg"=
+- Strips charset: ="image/png; charset=utf-8"= -> ="image/png"=
+- Generic type + JPEG bytes -> ="image/jpeg"= (via detection)
+- Generic type + unknown bytes -> fallback ="image/jpeg"=
+- =null= header -> fallback
+
+** Write integration test: =collectImages= with =application/octet-stream= response
+Mock fetch returns =application/octet-stream= content-type with JPEG magic bytes. Assert the resulting =ImageContentRef.mimeType= is ="image/jpeg"=, not ="application/octet-stream"=.
+
+** Implement =detectImageTypeFromBytes= pure function
+Align with existing =detectMimeFromBytes= in =packages/coding-agent/src/utils/mime.ts= for byte signatures. Operates on =Uint8Array= (not =Buffer=). Magic byte checks for JPEG, PNG, GIF, WebP.
+
+** Implement =normalizeImageMediaType= pure function
+#+begin_src typescript
+const VALID_IMAGE_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
+function normalizeImageMediaType(bytes: Uint8Array, headerMediaType: string, fallback: string): string {
+    const stripped = headerMediaType.split(";")[0]!.trim().toLowerCase();
+    if (VALID_IMAGE_MEDIA_TYPES.has(stripped)) return stripped;
+    return detectImageTypeFromBytes(bytes) ?? fallback;
+}
+#+end_src
+
+** Wire =normalizeImageMediaType= into =collectImages=
+Change line ~206 from:
+: mimeType: downloaded.mediaType,
+to:
+: mimeType: normalizeImageMediaType(downloaded.bytes, downloaded.mediaType, "image/jpeg"),
+
+The functions (=detectImageTypeFromBytes=, =normalizeImageMediaType=, =VALID_IMAGE_MEDIA_TYPES=) should be exported for direct unit testing. They are added to =telegram-to-rpc.ts= since they are only used there.
+
+* Acceptance
+- =bun test packages/spell-server/test/telegram/bridge.test.ts= passes with all new and existing tests
+- =bun check:ts= introduces no new type errors
+- New test proves =application/octet-stream= content-type with JPEG bytes produces =mimeType: "image/jpeg"= in the prompt call
+- New unit tests cover all magic byte signatures and normalization edge cases

@@ -1,9 +1,11 @@
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Context } from "grammy";
+import type { VoiceConfig } from "../../config/types";
 import type { RpcClient } from "../../rpc/rpc-client";
 import type { ImageContentRef } from "../../rpc/types";
 import type { AuthContext } from "../bot/auth";
+import { extractAudioFromVideo, type SttProvider } from "../voice";
 
 interface TelegramPhoto {
 	file_id: string;
@@ -16,10 +18,36 @@ interface TelegramDocument {
 	mime_type?: string;
 }
 
+interface TelegramVoice {
+	file_id: string;
+	duration: number;
+	mime_type?: string;
+	file_size?: number;
+}
+
+interface TelegramVideoNote {
+	file_id: string;
+	duration: number;
+	length: number;
+	file_size?: number;
+}
+
+interface TelegramAudio {
+	file_id: string;
+	duration: number;
+	mime_type?: string;
+	file_size?: number;
+	title?: string;
+}
+
 interface TelegramIncomingMessage {
 	text?: string;
+	caption?: string;
 	photo?: TelegramPhoto[];
 	document?: TelegramDocument;
+	voice?: TelegramVoice;
+	video_note?: TelegramVideoNote;
+	audio?: TelegramAudio;
 }
 
 interface FileDownloadResult {
@@ -30,6 +58,21 @@ interface FileDownloadResult {
 interface FileLinkApi {
 	getFileLink?: (fileId: string) => Promise<URL>;
 	token?: string;
+}
+
+export interface HandleMessageOptions {
+	sttProvider?: SttProvider;
+	voiceConfig?: VoiceConfig;
+}
+
+export interface HandleMessageResult {
+	isVoice: boolean;
+	transcription?: string;
+}
+
+interface VoiceTranscriptionResult {
+	transcription: string;
+	isVoice: true;
 }
 
 const MAX_TEXT_DOCUMENT_BYTES = 512 * 1024;
@@ -63,6 +106,62 @@ const TEXT_FILE_EXTENSIONS = new Set([
 	".log",
 ]);
 
+const VALID_IMAGE_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+const MISSING_STT_MESSAGE =
+	"Voice messages require STT configuration. Add a voice { stt-provider ... } block to channels.kdl";
+const VIDEO_NOTE_FFMPEG_MESSAGE =
+	"Video note transcription requires ffmpeg. Install ffmpeg on the server and try again.";
+
+function detectImageTypeFromBytes(bytes: Uint8Array): string | null {
+	if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+		return "image/jpeg";
+	}
+	if (
+		bytes.length >= 8 &&
+		bytes[0] === 0x89 &&
+		bytes[1] === 0x50 &&
+		bytes[2] === 0x4e &&
+		bytes[3] === 0x47 &&
+		bytes[4] === 0x0d &&
+		bytes[5] === 0x0a &&
+		bytes[6] === 0x1a &&
+		bytes[7] === 0x0a
+	) {
+		return "image/png";
+	}
+	if (bytes.length >= 4 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
+		return "image/gif";
+	}
+	if (
+		bytes.length >= 12 &&
+		bytes[0] === 0x52 &&
+		bytes[1] === 0x49 &&
+		bytes[2] === 0x46 &&
+		bytes[3] === 0x46 &&
+		bytes[8] === 0x57 &&
+		bytes[9] === 0x45 &&
+		bytes[10] === 0x42 &&
+		bytes[11] === 0x50
+	) {
+		return "image/webp";
+	}
+	return null;
+}
+
+function normalizeImageMediaType(bytes: Uint8Array, headerMediaType: string, fallback: string): string {
+	const stripped = headerMediaType.split(";")[0]!.trim().toLowerCase();
+	if (VALID_IMAGE_MEDIA_TYPES.has(stripped)) return stripped;
+	return detectImageTypeFromBytes(bytes) ?? fallback;
+}
+
+export {
+	detectImageTypeFromBytes,
+	MISSING_STT_MESSAGE,
+	normalizeImageMediaType,
+	VALID_IMAGE_MEDIA_TYPES,
+	VIDEO_NOTE_FFMPEG_MESSAGE,
+};
+
 function isTextMimeType(mimeType: string | undefined): boolean {
 	if (!mimeType) {
 		return false;
@@ -79,6 +178,10 @@ function isTextMimeType(mimeType: string | undefined): boolean {
 		normalized === "application/x-yaml" ||
 		normalized === "application/yaml"
 	);
+}
+
+function isAudioMimeType(mimeType: string | undefined): boolean {
+	return typeof mimeType === "string" && mimeType.toLowerCase().startsWith("audio/");
 }
 
 function appearsTextual(bytes: Uint8Array): boolean {
@@ -157,7 +260,7 @@ async function resolveFileUrl(ctx: AuthContext, fileId: string, filePath: string
 	return filePath;
 }
 
-async function downloadTelegramFile(
+export async function downloadTelegramFile(
 	ctx: AuthContext,
 	fileId: string,
 	fallbackMediaType: string,
@@ -203,7 +306,7 @@ async function collectImages(ctx: AuthContext, message: TelegramIncomingMessage)
 		return [
 			{
 				type: "image",
-				mimeType: downloaded.mediaType,
+				mimeType: normalizeImageMediaType(downloaded.bytes, downloaded.mediaType, "image/jpeg"),
 				data: Buffer.from(downloaded.bytes).toString("base64"),
 			},
 		];
@@ -218,7 +321,7 @@ async function collectImages(ctx: AuthContext, message: TelegramIncomingMessage)
 
 async function readDocumentContext(ctx: AuthContext, message: TelegramIncomingMessage): Promise<string | null> {
 	const document = message.document;
-	if (!document) {
+	if (!document || isAudioMimeType(document.mime_type)) {
 		return null;
 	}
 
@@ -274,28 +377,130 @@ async function readDocumentContext(ctx: AuthContext, message: TelegramIncomingMe
 	}
 }
 
-export async function handleTelegramMessage(ctx: AuthContext, rpcClient: RpcClient): Promise<void> {
+function isVoiceMessage(message: TelegramIncomingMessage): boolean {
+	return Boolean(
+		message.voice ||
+			message.video_note ||
+			message.audio ||
+			(message.document && isAudioMimeType(message.document.mime_type)),
+	);
+}
+
+export async function collectVoiceTranscription(
+	ctx: AuthContext,
+	message: TelegramIncomingMessage,
+	sttProvider: SttProvider,
+	voiceConfig: VoiceConfig,
+): Promise<VoiceTranscriptionResult | null> {
+	const sttLanguage = voiceConfig.stt?.language;
+
+	if (message.voice) {
+		const downloaded = await downloadTelegramFile(ctx, message.voice.file_id, message.voice.mime_type ?? "audio/ogg");
+		const result = await sttProvider.transcribe(Buffer.from(downloaded.bytes), {
+			mimeType: downloaded.mediaType,
+			language: sttLanguage,
+		});
+		return { transcription: result.text, isVoice: true };
+	}
+
+	if (message.video_note) {
+		const downloaded = await downloadTelegramFile(ctx, message.video_note.file_id, "video/mp4");
+		const extractedAudio = await extractAudioFromVideo(Buffer.from(downloaded.bytes));
+		const result = await sttProvider.transcribe(extractedAudio, {
+			mimeType: "audio/ogg",
+			language: sttLanguage,
+		});
+		return { transcription: result.text, isVoice: true };
+	}
+
+	if (message.audio) {
+		const downloaded = await downloadTelegramFile(
+			ctx,
+			message.audio.file_id,
+			message.audio.mime_type ?? "audio/mpeg",
+		);
+		const result = await sttProvider.transcribe(Buffer.from(downloaded.bytes), {
+			mimeType: downloaded.mediaType,
+			language: sttLanguage,
+		});
+		return { transcription: result.text, isVoice: true };
+	}
+
+	if (message.document && isAudioMimeType(message.document.mime_type)) {
+		const downloaded = await downloadTelegramFile(
+			ctx,
+			message.document.file_id,
+			message.document.mime_type ?? "application/octet-stream",
+		);
+		const result = await sttProvider.transcribe(Buffer.from(downloaded.bytes), {
+			mimeType: downloaded.mediaType,
+			language: sttLanguage,
+		});
+		return { transcription: result.text, isVoice: true };
+	}
+
+	return null;
+}
+
+export async function handleTelegramMessage(
+	ctx: AuthContext,
+	rpcClient: RpcClient,
+	options: HandleMessageOptions = {},
+): Promise<HandleMessageResult> {
 	try {
 		const message = getIncomingMessage(ctx);
 		if (!message) {
 			await ctx.reply("Could not process this message.");
-			return;
+			return { isVoice: false };
 		}
 
-		const text = message.text?.trim() ?? "";
+		const isVoice = isVoiceMessage(message);
+		const text = message.text?.trim() ?? message.caption?.trim() ?? "";
 		const images = await collectImages(ctx, message);
 		const documentContext = await readDocumentContext(ctx, message);
+		let transcription: string | undefined;
 
-		const promptBody = [documentContext, text]
-			.filter(part => Boolean(part))
+		if (isVoice) {
+			if (!options.sttProvider || !options.voiceConfig?.stt) {
+				await ctx.reply(MISSING_STT_MESSAGE);
+				return { isVoice: true };
+			}
+
+			try {
+				const voiceResult = await collectVoiceTranscription(ctx, message, options.sttProvider, options.voiceConfig);
+				transcription = voiceResult?.transcription;
+			} catch (error) {
+				if (error instanceof Error && error.message.includes("ffmpeg is not installed")) {
+					await ctx.reply(VIDEO_NOTE_FFMPEG_MESSAGE);
+					return { isVoice: true };
+				}
+				throw error;
+			}
+		}
+
+		const voiceContext =
+			transcription === undefined
+				? null
+				: transcription.length > 0
+					? `Voice transcription:\n${transcription}`
+					: "Voice transcription:\n";
+		const promptBody = [voiceContext, documentContext, text]
+			.filter((part): part is string => Boolean(part))
 			.join("\n\n")
 			.trim();
 		const promptMessage =
-			promptBody || (images.length > 0 ? "User sent an image without text." : "User sent an empty message.");
+			promptBody ||
+			(images.length > 0
+				? "User sent an image without text."
+				: isVoice
+					? "User sent a voice message without text."
+					: "User sent an empty message.");
 
 		await rpcClient.prompt(promptMessage, images.length > 0 ? images : undefined);
+		return { isVoice, transcription };
 	} catch (error) {
 		logger.error("Failed handling Telegram message", { error: String(error) });
 		await ctx.reply(`Failed to send message to assistant: ${String(error)}`);
+		return { isVoice: false };
 	}
 }

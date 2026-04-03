@@ -1,0 +1,56 @@
+#+TITLE: Fix Telegram bridge invalid image media type
+#+STATE: DONE
+#+SESSION_ID: 14ac0e3466e812bd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-03-51-963Z_14ac0e3466e812bd.jsonl]]
+#+CUSTOM_ID: PLAN-113-fix-telegram-bridge-invalid-image-media
+
+NOTE [2026-04-03]: All wave 1 items complete. Tests pass, no new type errors.
+
+
+* Initial Message
+
+reza.ns.cloudflare.com
+
+* Context
+Telegram's file download API returns =application/octet-stream= as =Content-Type= for photo files. After the previous fix ([[id:BUG-133-telegram-bridge-imagecontentref-type-mis]]) aligned field names, image uploads now reach the Anthropic API but with an invalid =media_type= value. The API rejects any value outside ={image/jpeg, image/png, image/gif, image/webp}=.
+
+The fix adds magic-byte detection and media type normalization in the Telegram bridge's =collectImages= function (=packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts=). This is the right fix location because:
+- The bridge is the entry point where external (untrusted) Content-Type headers arrive
+- The Anthropic provider's unsafe cast (line 306 in =anthropic.ts=) is a separate concern — it should never receive invalid types from internal callers
+- Magic-byte detection is robust: even if Telegram changes Content-Type behavior, the bytes are authoritative
+
+Approach: TDD. Write failing tests for pure functions first, then implement, then wire in and add integration test.
+
+Key files:
+- =packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts= — source of the bug, receives the fix
+- =packages/spell-server/test/telegram/bridge.test.ts= — test file
+- =packages/coding-agent/src/utils/mime.ts= — reference for magic byte signatures (do not modify)
+- =packages/ai/src/providers/anthropic.ts= line 306 — the unsafe cast (out of scope for this plan)
+
+* Verification
+- =bun check:ts= introduces no new type errors (pre-existing errors in =approvals.ts=, =tool-progress.ts=, =logger.ts= are known)
+- =bun test packages/spell-server/test/telegram/bridge.test.ts= passes with all new and existing tests
+- New integration test proves: fetch returning =application/octet-stream= with JPEG magic bytes produces =mimeType: "image/jpeg"= in the prompt call
+- New unit tests cover JPEG, PNG, GIF, WebP magic byte detection and all normalization edge cases
+
+* Execution Manifest
+** Wave 1
+- [[id:BUG-135-telegram-bridge-sends-invalid-image-medi]] — Add media type normalization with TDD (2 files, ~1h)
+
+** Completion [2026-04-03]
+*** Verification
+- =bun test packages/spell-server/test/telegram/bridge.test.ts= — 53 tests pass, 109 assertions, 0 failures
+- =bun check:ts= — no new errors in modified files (pre-existing errors in =channels-parser.ts=, =bot.ts=, =rpc-to-telegram.ts=, =voice-*.ts=, =canvas-task-manager.ts= are unrelated)
+- New unit tests cover: JPEG, PNG, GIF, WebP magic byte detection; empty/short/truncated bytes returning null
+- New unit tests cover: valid type passthrough, charset stripping, case normalization, =application/octet-stream= detection from bytes, fallback for unknown bytes, fallback for non-image types
+- Integration test proves: fetch returning =application/octet-stream= with JPEG magic bytes produces =mimeType: \"image/jpeg\"= in the prompt call
+- Integration test proves: fetch returning =application/octet-stream= with PNG magic bytes produces =mimeType: \"image/png\"= in the prompt call
+- Integration test proves: valid =image/jpeg= content-type is preserved unchanged
+
+*** Artifacts
+- =packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts= — added =detectImageTypeFromBytes=, =normalizeImageMediaType=, =VALID_IMAGE_MEDIA_TYPES=; wired =normalizeImageMediaType= into =collectImages=
+- =packages/spell-server/test/telegram/bridge.test.ts= — added 3 =describe= blocks with 17 new test cases
+
+*** Deviations
+None."
+<parameter name="_i">Adding completion report

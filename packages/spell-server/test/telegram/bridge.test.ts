@@ -9,7 +9,12 @@ import type { AuthContext } from "../../src/telegram/bot/auth";
 import { markdownToTelegramHtml } from "../../src/telegram/bridge/markdown-html";
 import { splitMessage } from "../../src/telegram/bridge/message-splitter";
 import { awaitStreamerCompletion, ResponseStreamer } from "../../src/telegram/bridge/rpc-to-telegram";
-import { handleTelegramMessage } from "../../src/telegram/bridge/telegram-to-rpc";
+import {
+	detectImageTypeFromBytes,
+	handleTelegramMessage,
+	normalizeImageMediaType,
+	VALID_IMAGE_MEDIA_TYPES,
+} from "../../src/telegram/bridge/telegram-to-rpc";
 
 interface MockReply {
 	text: string;
@@ -830,5 +835,196 @@ describe("telegram to rpc bridge", () => {
 		expect(prompts[0]?.message).toContain("mime=text/plain");
 		expect(prompts[0]?.message).toContain(`size=${oversizedBytes.length} bytes`);
 		expect(prompts[0]?.images).toBeUndefined();
+	});
+});
+
+describe("detectImageTypeFromBytes", () => {
+	it("detects JPEG from magic bytes", () => {
+		const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+		expect(detectImageTypeFromBytes(bytes)).toBe("image/jpeg");
+	});
+
+	it("detects PNG from magic bytes", () => {
+		const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+		expect(detectImageTypeFromBytes(bytes)).toBe("image/png");
+	});
+
+	it("detects GIF from magic bytes", () => {
+		const bytes = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+		expect(detectImageTypeFromBytes(bytes)).toBe("image/gif");
+	});
+
+	it("detects WebP from magic bytes", () => {
+		// RIFF....WEBP
+		const bytes = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]);
+		expect(detectImageTypeFromBytes(bytes)).toBe("image/webp");
+	});
+
+	it("returns null for empty bytes", () => {
+		expect(detectImageTypeFromBytes(new Uint8Array([]))).toBeNull();
+	});
+
+	it("returns null for unknown/short bytes", () => {
+		expect(detectImageTypeFromBytes(new Uint8Array([0x00, 0x01]))).toBeNull();
+	});
+
+	it("returns null for truncated PNG header", () => {
+		// Only 4 bytes of PNG header instead of 8
+		expect(detectImageTypeFromBytes(new Uint8Array([0x89, 0x50, 0x4e, 0x47]))).toBeNull();
+	});
+});
+
+describe("normalizeImageMediaType", () => {
+	const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+	const unknownBytes = new Uint8Array([0x00, 0x01, 0x02]);
+
+	it("passes through valid image/jpeg", () => {
+		expect(normalizeImageMediaType(jpegBytes, "image/jpeg", "image/jpeg")).toBe("image/jpeg");
+	});
+
+	it("passes through valid image/png", () => {
+		expect(normalizeImageMediaType(unknownBytes, "image/png", "image/jpeg")).toBe("image/png");
+	});
+
+	it("passes through valid image/gif", () => {
+		expect(normalizeImageMediaType(unknownBytes, "image/gif", "image/jpeg")).toBe("image/gif");
+	});
+
+	it("passes through valid image/webp", () => {
+		expect(normalizeImageMediaType(unknownBytes, "image/webp", "image/jpeg")).toBe("image/webp");
+	});
+
+	it("strips charset suffix before checking", () => {
+		expect(normalizeImageMediaType(unknownBytes, "image/png; charset=utf-8", "image/jpeg")).toBe("image/png");
+	});
+
+	it("normalizes case", () => {
+		expect(normalizeImageMediaType(unknownBytes, "Image/JPEG", "image/jpeg")).toBe("image/jpeg");
+	});
+
+	it("detects from bytes when header is application/octet-stream", () => {
+		expect(normalizeImageMediaType(jpegBytes, "application/octet-stream", "image/jpeg")).toBe("image/jpeg");
+	});
+
+	it("falls back when header is generic and bytes are unrecognized", () => {
+		expect(normalizeImageMediaType(unknownBytes, "application/octet-stream", "image/jpeg")).toBe("image/jpeg");
+	});
+
+	it("falls back when header is a non-image type", () => {
+		expect(normalizeImageMediaType(unknownBytes, "text/html", "image/jpeg")).toBe("image/jpeg");
+	});
+});
+
+describe("VALID_IMAGE_MEDIA_TYPES", () => {
+	it("contains exactly the four Anthropic-accepted types", () => {
+		expect(VALID_IMAGE_MEDIA_TYPES).toEqual(new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]));
+	});
+});
+
+describe("telegram to rpc bridge — image media type normalization", () => {
+	it("normalizes application/octet-stream to image/jpeg via magic bytes", async () => {
+		// JPEG magic bytes: FF D8 FF
+		const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+
+		const ctx = mockAuthContext({
+			chatId: 70,
+			text: "Describe this image",
+			photo: [{ file_id: "photo-octet", file_size: 500 }],
+			fileMap: { "photo-octet": "photo.jpg" },
+		});
+
+		const prompts: Array<{ message: string; images?: ImageContentRef[] }> = [];
+		const rpcClient = {
+			prompt: async (message: string, images?: ImageContentRef[]) => {
+				prompts.push({ message, images });
+			},
+		} as unknown as RpcClient;
+
+		using _hook = hookFetch(input => {
+			const url = String(input);
+			if (url.includes("/photo.jpg")) {
+				return new Response(jpegBytes, {
+					status: 200,
+					headers: { "content-type": "application/octet-stream" },
+				});
+			}
+			return new Response("missing", { status: 404 });
+		});
+
+		await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient);
+
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]?.images).toHaveLength(1);
+		expect(prompts[0]?.images?.[0]?.mimeType).toBe("image/jpeg");
+	});
+
+	it("normalizes application/octet-stream to image/png when bytes are PNG", async () => {
+		const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
+
+		const ctx = mockAuthContext({
+			chatId: 71,
+			text: "What is this?",
+			photo: [{ file_id: "photo-png", file_size: 400 }],
+			fileMap: { "photo-png": "photo.png" },
+		});
+
+		const prompts: Array<{ message: string; images?: ImageContentRef[] }> = [];
+		const rpcClient = {
+			prompt: async (message: string, images?: ImageContentRef[]) => {
+				prompts.push({ message, images });
+			},
+		} as unknown as RpcClient;
+
+		using _hook = hookFetch(input => {
+			const url = String(input);
+			if (url.includes("/photo.png")) {
+				return new Response(pngBytes, {
+					status: 200,
+					headers: { "content-type": "application/octet-stream" },
+				});
+			}
+			return new Response("missing", { status: 404 });
+		});
+
+		await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient);
+
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]?.images).toHaveLength(1);
+		expect(prompts[0]?.images?.[0]?.mimeType).toBe("image/png");
+	});
+
+	it("preserves valid image/jpeg content-type without modification", async () => {
+		const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe1]);
+
+		const ctx = mockAuthContext({
+			chatId: 72,
+			text: "Check this",
+			photo: [{ file_id: "photo-valid", file_size: 300 }],
+			fileMap: { "photo-valid": "good.jpg" },
+		});
+
+		const prompts: Array<{ message: string; images?: ImageContentRef[] }> = [];
+		const rpcClient = {
+			prompt: async (message: string, images?: ImageContentRef[]) => {
+				prompts.push({ message, images });
+			},
+		} as unknown as RpcClient;
+
+		using _hook = hookFetch(input => {
+			const url = String(input);
+			if (url.includes("/good.jpg")) {
+				return new Response(jpegBytes, {
+					status: 200,
+					headers: { "content-type": "image/jpeg" },
+				});
+			}
+			return new Response("missing", { status: 404 });
+		});
+
+		await handleTelegramMessage(ctx as unknown as AuthContext, rpcClient);
+
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]?.images).toHaveLength(1);
+		expect(prompts[0]?.images?.[0]?.mimeType).toBe("image/jpeg");
 	});
 });
