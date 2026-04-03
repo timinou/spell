@@ -152,6 +152,7 @@ export class ResponseStreamer {
 			case "error":
 				this.#finalized = true;
 				this.#clearDraftTimer();
+				this.#clearTypingInterval();
 				try {
 					await this.#ctx.reply(`RPC error: ${event.message}`);
 				} finally {
