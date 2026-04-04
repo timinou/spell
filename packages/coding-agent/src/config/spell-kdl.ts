@@ -28,8 +28,10 @@ export interface SpellProjectConfig {
  *
  * Resolves `import` references against built-in templates and merges
  * them in order. Local layer/policy nodes override imported ones.
+ * On KDL parse error, returns an empty config (domain undefined, no
+ * layers/policies) and logs a warning — never throws.
  */
-export function parseSpellKdl(content: string): SpellProjectConfig | undefined {
+export function parseSpellKdl(content: string): SpellProjectConfig {
 	let document: Document;
 	try {
 		document = parse(content);

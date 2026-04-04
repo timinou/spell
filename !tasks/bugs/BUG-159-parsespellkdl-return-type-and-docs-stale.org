@@ -1,0 +1,97 @@
+#+TITLE: parseSpellKdl return type and docs stale after BUG-154
+#+STATE: DONE
+#+SESSION_ID: 14ad72d2d9d9739e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-04T13-01-57-479Z_14ad72d2d9d9739e.jsonl]]
+#+CUSTOM_ID: BUG-159-parsespellkdl-return-type-and-docs-stale
+#+EFFORT: XS
+#+LAYER: config
+
+NOTE [2026-04-04]: All three fixes applied and verified: return type tightened, JSDoc updated, double-parse comment added, test assertions cleaned up. All 65 tests pass.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-037-audit-implementation:
+
+`Document` is correctly a type-only import and used only in a type annotation for a `let` declaration. Good — no issue here.
+
+---
+
+Here are my audit findings:
+
+### 1. `parseSpellKdl` return type is stale — promises `undefined` it never delivers
+* **What**: `parseSpellKdl` signature declares `SpellProjectConfig | undefined` but no code path returns `undefined` anymore. The catch block was changed to return an empty config, and the happy path always returns a populated config. The `| undefined` is dead type surface.
+* **Where**: `packages/coding-agent/src/config/spell-kdl.ts:32`
+* **Why**: Contract lie. Callers use `!` non-null assertions and `?.` optional chaining on a value that's never nullable. The next reader sees `| undefined` in the type and either (a) adds defensive checks for a case that can't happen, or (b) misunderstands the function's guarantees. In `detection.ts:60`, `spellConfig?.domain` operates under false uncertainty.
+* **Effort**: `trivial` — remove `| undefined` from the return type; callers only become simpler (less `!`, less `?.`). `loadSpellKdl`'s own `| undefined` stays correct since it has its own `return undefined` paths.
+
+### 2. `parseSpellKdl` JSDoc does not document the new empty-config-on-error behavior
+* **What**: The JSDoc (lines 26-31) describes import resolution and merge semantics but says nothing about what happens on parse failure. The `loadSpellKdl` JSDoc was correctly updated to document both outcomes, but `parseSpellKdl`'s JSDoc was not. Since `parseSpellKdl` is the function whose behavior actually changed, this is a gap.
+* **Where**: `packages/coding-agent/src/config/spell-kdl.ts:26-31`
+* **Why**: A reader looking at `parseSpellKdl`'s doc to understand its contract gets no indication that invalid KDL returns an empty config rather than `undefined` (especially confusing given the stale `| undefined` in the return type).
+* **Effort**: `trivial`
+
+### 3. `detectDomain` double-parses KDL content with no explanatory comment
+* **What**: `detectDomain` calls `parse(spellKdlContent)` (line 54) to pre-validate syntax, then calls `parseSpellKdl(spellKdlContent)` (line 59) which internally calls `parse()` again. The pre-check exists to distinguish "broken KDL" (return "coding") from "valid KDL with no domain" (fall through to domain.json), which is a legitimate distinction. But there's no comment explaining *why* this double-parse is necessary.
+* **Where**: `packages/coding-agent/src/domain/detection.ts:52-60`
+* **Why**: Without a comment, the next reader sees two `parse()` calls on the same content and either (a) removes the "redundant" pre-check (reintroducing the bug), or (b) wastes time understanding the subtlety. A two-line comment would make the intent survivable.
+* **Effort**: `trivial`
+
+After PLAN-134 changed =parseSpellKdl= to return empty config on parse error, three artifacts were left stale:
+
+1. Return type says =SpellProjectConfig | undefined= but no code path returns =undefined=.
+2. JSDoc describes import resolution but omits the empty-config-on-error contract.
+3. =detectDomain= double-parses KDL content with no comment explaining why.
+
+* Approach
+
+Single-pass fix touching three files. All changes are mechanical — no behavioral change.
+
+** Fix 1: return type (spell-kdl.ts:32)
+Remove =| undefined= from =parseSpellKdl= signature. This is safe:
+- =loadSpellKdl= calls =return parseSpellKdl(content)= — its own return type =SpellProjectConfig | undefined= stays correct because it has separate =return undefined= paths for ENOENT and I/O errors.
+- =detection.ts:59= calls =parseSpellKdl= then =spellConfig?.domain= — the =?.= becomes unnecessary; change to =spellConfig.domain=.
+- Test files use =result!.domain=, =result!.policies= — the =!= becomes unnecessary but is harmless. Clean up in the =parseSpellKdl= describe block since those are the direct callers.
+
+** Fix 2: JSDoc (spell-kdl.ts:26-31)
+Update =parseSpellKdl= JSDoc to document:
+- Always returns a =SpellProjectConfig=
+- On KDL parse error, returns an empty config (=domain: undefined=, empty policies) with a warning logged
+- On valid KDL, returns the fully resolved config with imports merged
+
+** Fix 3: comment in detection.ts (detection.ts:52-57)
+Add a comment above the inner =try { parse(spellKdlContent) }= explaining:
+- The pre-check distinguishes broken KDL (return "coding" immediately) from valid KDL with no domain (fall through to domain.json)
+- =parseSpellKdl= returns empty config for both cases, so the raw =parse()= call is needed to differentiate
+- Remove the now-unnecessary =?.= on =spellConfig?.domain= → =spellConfig.domain=
+
+* Sub-outline
+
+** update parseSpellKdl return type and JSDoc
+In =packages/coding-agent/src/config/spell-kdl.ts=:
+- Change signature from =SpellProjectConfig | undefined= to =SpellProjectConfig=
+- Update JSDoc (lines 26-31) to document the always-returns contract and empty-config-on-error behavior
+
+** update detectDomain to remove dead optional chaining and add comment
+In =packages/coding-agent/src/domain/detection.ts=:
+- Add comment above lines 53-57 explaining why double-parse is needed
+- Change =spellConfig?.domain= to =spellConfig.domain= (line 60)
+- Remove =parse= import from =@bgotink/kdl= if no longer needed after... wait, it's still needed for the pre-check. Keep it.
+
+** clean up non-null assertions in parseSpellKdl tests
+In =packages/coding-agent/test/config/spell-kdl.test.ts=:
+- In the =parseSpellKdl= describe block only (not =loadSpellKdl=, which still returns =| undefined=): remove =result!= in favor of =result.= since the type is no longer nullable
+- Remove =expect(result).toBeDefined()= lines in =parseSpellKdl= tests — they're tautological now
+- Keep =result!= in =loadSpellKdl= tests — its return type is still =| undefined=
+
+** clean up non-null assertions in init-command tests
+In =packages/coding-agent/test/cli/init-command.test.ts=:
+- =parseSpellKdl(content)= is called directly (not via =loadSpellKdl=), so result is always defined
+- Remove =expect(...).toBeDefined()= calls after =parseSpellKdl=
+- Change =config!.domain= to =config.domain= and =config!.policies= to =config.policies=
+
+* Verification
+- =bun check:ts= passes (no type errors from return type change; callers become simpler)
+- =bun test packages/coding-agent/test/config/spell-kdl.test.ts= passes
+- =bun test packages/coding-agent/test/config/config-loading-hierarchy.test.ts= passes
+- =bun test packages/coding-agent/test/cli/init-command.test.ts= passes
+- =bun test packages/coding-agent/test/config/task-policies.test.ts= passes (unaffected but verifies no regression)
