@@ -1,0 +1,90 @@
+#+TITLE: Smart Project Detection Module
+#+STATE: DONE
+#+SESSION_ID: 14ac8e691fd97376
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T20-24-00-383Z_14ac8e691fd97376.jsonl]]
+#+CUSTOM_ID: FEAT-311-smart-project-detection-module
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: config
+
+* Initial Message
+
+I want to set up task policies in kdl with a command when I enter a new repository. like some sort of onboarding thing. what could that look like? finish with your completed summary
+
+Extract project detection into a reusable module that detects not just language/framework but the actual development toolchain — test runners, type checkers, linters. Used by =spell init= to generate =spell.kdl= with real =gate-cmd= values instead of placeholders.
+
+* Detection Output
+
+#+begin_src typescript
+// packages/coding-agent/src/config/project-detection.ts
+type ProjectLanguage = "typescript" | "javascript" | "rust" | "python" | "go" | "ruby" | "jvm" | "unknown";
+
+interface DetectedToolchain {
+    testCmd?: string;    // "bun test", "cargo test", "pytest"
+    checkCmd?: string;   // "tsgo", "cargo clippy", "mypy"
+    lintCmd?: string;    // "biome check", "eslint", "ruff"
+    formatCmd?: string;  // "biome format", "cargo fmt", "black"
+}
+
+interface DetectedProject {
+    name: string;
+    language: ProjectLanguage;
+    frameworks: string[];
+    toolchain: DetectedToolchain;
+    packageManager?: string; // "bun", "npm", "yarn", "cargo", "pip"
+    monorepo: boolean;
+}
+
+export async function detectProject(cwd: string): Promise<DetectedProject>;
+#+end_src
+
+* Detection Strategy (coding domain only)
+
+** TypeScript/JavaScript
+Read =package.json=:
+- =scripts.test= → testCmd (look for bun test, jest, vitest, mocha)
+- =scripts.check= or =scripts.typecheck= → checkCmd
+- =scripts.lint= → lintCmd
+- Detect package manager from lockfile: =bun.lock= → bun, =package-lock.json= → npm, =yarn.lock= → yarn, =pnpm-lock.yaml= → pnpm
+- Framework detection from deps: next, react, vue, svelte, express, fastify, hono
+- Monorepo: =workspaces= field in package.json
+- Type checker: presence of =tsgo.json= → tsgo, =tsconfig.json= → tsc
+- Linter: =biome.json= → biome, =eslint.config.*= or =.eslintrc.*= → eslint
+
+** Rust
+- =Cargo.toml= exists → testCmd = "cargo test", checkCmd = "cargo clippy", formatCmd = "cargo fmt"
+- =workspace.members= in Cargo.toml → monorepo
+
+** Python
+- =pyproject.toml= or =setup.py= → testCmd from =tool.pytest= section or default "pytest"
+- =tool.mypy= → checkCmd = "mypy"
+- =tool.ruff= → lintCmd = "ruff check", formatCmd = "ruff format"
+
+** Go
+- =go.mod= exists → testCmd = "go test ./...", checkCmd = "go vet ./..."
+
+* Existing Code
+
+=packages/coding-agent/src/cli/init-cli.ts= has a basic =detectProject= that checks for marker files and reads framework deps. The new module should replace it with the richer =DetectedProject= type. The init-cli should import from the new module instead.
+
+* Sub-outline
+
+** write detection tests
+=packages/coding-agent/test/config/project-detection.test.ts=:
+- Set up temp directories with marker files (package.json, Cargo.toml, etc.)
+- TypeScript project with bun scripts → detects testCmd, checkCmd, lintCmd
+- Rust project → detects cargo toolchain
+- Python project with pyproject.toml → detects pytest, mypy, ruff
+- Empty directory → unknown language, empty toolchain
+- Monorepo detection from workspaces field
+- Framework detection from dependencies (next, react, etc.)
+
+** implement detection module
+=packages/coding-agent/src/config/project-detection.ts=:
+- One public =detectProject(cwd)= function
+- Internal helpers per language for parsing config files
+- Try-catch around every file read (graceful degradation)
+
+* Verification
+- =bun test packages/coding-agent/test/config/project-detection.test.ts= passes
+- =bun check:ts= passes for the new module

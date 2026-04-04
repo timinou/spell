@@ -1,0 +1,171 @@
+#+TITLE: spell init Onboarding Command
+#+STATE: DONE
+#+SESSION_ID: 14ac8e691fd97376
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T20-24-00-383Z_14ac8e691fd97376.jsonl]]
+#+CUSTOM_ID: FEAT-312-spell-init-onboarding-command
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: cli
+#+DEPENDS: FEAT-309-built-in-policy-templates-as-kdl-files FEAT-310-spell-kdl-parser-with-import-system FEAT-311-smart-project-detection-module
+
+* Initial Message
+
+I want to set up task policies in kdl with a command when I enter a new repository. like some sort of onboarding thing. what could that look like? finish with your completed summary
+
+The =spell init= command — the entry point when you enter a new repository. Detects the project, picks the right template, generates =spell.kdl= with smart defaults, and scaffolds =.spell/AGENTS.md=.
+
+* User Experience
+
+#+begin_example
+$ cd ~/my-saas-app
+$ spell init
+
+  Detected: TypeScript (Next.js, Prisma)
+  Test:     bun test
+  Check:    tsgo
+  Lint:     biome
+
+  Created: spell.kdl
+    domain "coding"
+    import "spell.coding.typescript"
+    + 3 project-specific policies with detected toolchain
+
+  Created: .spell/AGENTS.md
+    Project context stub — edit to add conventions
+
+  Run `spell` to start a session with policies active.
+#+end_example
+
+For a growth project (no coding toolchain detected, or user specifies):
+#+begin_example
+$ spell init --domain growth
+
+  Created: spell.kdl
+    domain "growth"
+    import "spell.growth.default"
+
+  Created: .spell/AGENTS.md
+#+end_example
+
+* What Gets Generated
+
+** spell.kdl (project root)
+
+For a detected TypeScript/Next.js project with =bun test= and =tsgo=:
+
+#+begin_src kdl
+// Spell project configuration
+// Docs: https://github.com/can1357/oh-my-pi
+
+domain "coding"
+import "spell.coding.typescript"
+
+// Project-specific policy overrides
+// The imported template provides base layers and policies.
+// Layers and policies declared here override the template by name.
+
+policy "api-quality" layer="api" {
+    gate-commit true
+    gate-cmd "bun test"
+    verify-cmd "tsgo"
+}
+
+policy "ui-quality" layer="ui" {
+    gate-commit true
+    gate-cmd "bun test"
+}
+#+end_src
+
+Key: the =gate-cmd= values come from project detection, not canned strings. If detection finds =bun test= in scripts.test, that's what goes in the policy.
+
+For a Rust project:
+#+begin_src kdl
+domain "coding"
+import "spell.coding.rust"
+
+policy "core-quality" layer="core" {
+    gate-commit true
+    gate-cmd "cargo test"
+    verify-cmd "cargo clippy -- -D warnings"
+}
+#+end_src
+
+** .spell/AGENTS.md
+
+#+begin_src markdown
+# Project Context
+
+## Overview
+my-saas-app — TypeScript (Next.js, Prisma)
+
+## Development
+- Test: `bun test`
+- Check: `tsgo`
+- Lint: `biome check`
+
+## Conventions
+<!-- Add project-specific conventions here -->
+#+end_src
+
+* CLI Interface
+
+#+begin_src
+spell init [--force] [--domain <name>]
+#+end_src
+
+| Flag       | Description                                      |
+|------------+--------------------------------------------------|
+| =--force=  | Overwrite existing spell.kdl and AGENTS.md       |
+| =--domain= | Override detected domain (e.g. =growth=)         |
+
+* Behavior
+
+1. Check if =spell.kdl= exists at project root
+   - If exists and no =--force=: print message, exit
+2. Run project detection via =detectProject(cwd)=
+3. Select template namespace based on detection:
+   - TypeScript/JavaScript → =spell.coding.typescript=
+   - Rust → =spell.coding.rust=
+   - Python → =spell.coding.python=
+   - Go → =spell.coding.go=
+   - If =--domain growth= → =spell.growth.default=
+   - Unknown → no import, just =domain "coding"= with empty layers
+4. Generate =spell.kdl= with domain, import, and project-specific policy overrides using detected toolchain commands
+5. Generate =.spell/AGENTS.md= stub with detected project info
+6. Print colored summary
+
+* Existing Code
+
+=packages/coding-agent/src/commands/init.ts= and =packages/coding-agent/src/cli/init-cli.ts= already exist from a prior session. The command class is fine. The CLI handler needs rework:
+- Replace =renderTaskPoliciesKdl= with =spell.kdl= generation (domain + import + overrides)
+- Replace basic detection with =detectProject= from the new detection module
+- Add =AGENTS.md= generation
+- Add =--domain= flag
+- Change output path from =.spell/task-policies.kdl= to =spell.kdl= at project root
+- Remove the =fileExists= helper (use try-catch pattern per AGENTS.md)
+
+The CLI registration in =cli.ts= is already done (line 54).
+
+* Sub-outline
+
+** implement spell.kdl generator
+The KDL generation function that takes =DetectedProject= + template namespace and produces the =spell.kdl= content string. This is string building (not AST serialization) — simple and correct.
+
+** implement AGENTS.md generator
+Takes =DetectedProject= and produces the markdown stub.
+
+** rework init-cli.ts
+Integrate detection module, spell.kdl generator, AGENTS.md generator. Add =--domain= flag to =commands/init.ts=. Update output paths.
+
+** write integration test
+=packages/coding-agent/test/cli/init-command.test.ts=:
+- Create temp dir with package.json containing scripts.test = "bun test"
+- Run =runInitCommand= (the function, not the CLI binary)
+- Verify spell.kdl exists at temp dir root with correct domain and import
+- Verify =.spell/AGENTS.md= exists with project name
+- Verify =--force= overwrites existing spell.kdl
+- Verify without =--force=, existing spell.kdl is not overwritten
+
+* Verification
+- =bun test packages/coding-agent/test/cli/init-command.test.ts= passes
+- Manual: run =spell init= in a temp directory with a package.json and verify output

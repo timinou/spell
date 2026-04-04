@@ -1,0 +1,18 @@
+layer "core" description="Core library and business logic"
+layer "api" description="Service boundaries and integration points"
+layer "cli" description="Command-line interfaces and binaries"
+
+policy "core-quality" layer="core" {
+    gate-commit #true
+    gate-cmd "cargo test"
+}
+
+policy "api-quality" layer="api" {
+    gate-commit #true
+    gate-cmd "cargo test"
+    verify-cmd "cargo clippy -- -D warnings"
+}
+
+policy "cli-quality" layer="cli" {
+    gate-commit #true
+}

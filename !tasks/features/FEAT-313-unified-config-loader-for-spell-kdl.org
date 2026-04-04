@@ -1,0 +1,101 @@
+#+TITLE: Unified Config Loader for spellkdl
+#+STATE: DONE
+#+SESSION_ID: 14ac8e691fd97376
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T20-24-00-383Z_14ac8e691fd97376.jsonl]]
+#+CUSTOM_ID: FEAT-313-unified-config-loader-for-spell-kdl
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: config
+#+DEPENDS: FEAT-310-spell-kdl-parser-with-import-system
+
+* Initial Message
+
+I want to set up task policies in kdl with a command when I enter a new repository. like some sort of onboarding thing. what could that look like? finish with your completed summary
+
+Wire =spell.kdl= into the existing config loading pipeline so that task policies and domain detection read from the new unified file, with backward-compatible fallback to the existing files.
+
+* Loading Hierarchy
+
+** Task Policies
+1. =<projectDir>/spell.kdl= → extract =policies= from =SpellProjectConfig=
+2. =<projectDir>/.spell/task-policies.kdl= → parse via =parseTaskPoliciesKdl= (existing)
+3. =<projectDir>/.spell/task-policies.yml= → parse via =parseTaskPolicies= (existing)
+
+First file found wins. No merging across file formats.
+
+** Domain Detection
+1. CLI override (=--domain= flag) — always wins
+2. =<cwd>/spell.kdl= → extract =domain= field
+3. =<cwd>/.spell/domain.json= → existing behavior, but log deprecation warning
+4. Default: "coding"
+
+* Changes to Existing Code
+
+** packages/coding-agent/src/config/task-policies.ts — loadTaskPolicies
+Currently tries =.spell/task-policies.kdl= then =.spell/task-policies.yml=. Update to try =spell.kdl= first via =loadSpellKdl=:
+
+#+begin_src typescript
+export async function loadTaskPolicies(projectDir: string): Promise<TaskPolicyConfig | undefined> {
+    // 1. Try spell.kdl (unified project config)
+    const spellConfig = await loadSpellKdl(projectDir);
+    if (spellConfig) return spellConfig.policies;
+
+    // 2. Try .spell/task-policies.kdl (standalone)
+    // ... existing KDL fallback ...
+
+    // 3. Try .spell/task-policies.yml (legacy)
+    // ... existing YAML fallback ...
+}
+#+end_src
+
+** packages/coding-agent/src/domain/detection.ts — detectDomain
+Currently reads =.spell/domain.json=. Update to try =spell.kdl= first:
+
+#+begin_src typescript
+export async function detectDomain(cwd: string, cliOverride?: string): Promise<string> {
+    if (cliOverride?.trim()) return cliOverride.trim();
+
+    // 1. Try spell.kdl
+    const spellConfig = await loadSpellKdl(cwd);
+    if (spellConfig?.domain) return spellConfig.domain;
+
+    // 2. Try .spell/domain.json (legacy, with deprecation warning)
+    // ... existing behavior + logger.warn about deprecation ...
+
+    return "coding";
+}
+#+end_src
+
+* Callsites (no changes needed)
+
+These call =loadTaskPolicies= or =detectDomain= and get the new behavior transparently:
+- =packages/coding-agent/src/sdk.ts= (line 978) — =loadTaskPolicies(cwd)=
+- =packages/coding-agent/src/modes/interactive-mode.ts= (line 1243) — =loadTaskPolicies=
+- =packages/coding-agent/src/session/agent-session.ts= (line 2246) — =loadTaskPolicies=
+- =packages/coding-agent/src/main.ts= (line 608) — =detectDomain(cwd, domainOverride)=
+
+* Caching Consideration
+
+=loadSpellKdl= may be called twice — once from =detectDomain= and once from =loadTaskPolicies= — for the same file. Both are called early in session init. This is acceptable: the file is tiny, reads are fast, and the code paths are separate concerns. If it becomes a problem later, a session-level cache can be added (not in this item).
+
+* Sub-outline
+
+** update loadTaskPolicies to try spell.kdl first
+Modify =packages/coding-agent/src/config/task-policies.ts=. Import =loadSpellKdl= from =spell-kdl.ts=. Add spell.kdl as first resolution step. Keep existing KDL and YAML fallbacks.
+
+** update detectDomain to try spell.kdl first
+Modify =packages/coding-agent/src/domain/detection.ts=. Import =loadSpellKdl= from =../config/spell-kdl=. Add spell.kdl as second resolution step (after CLI override). Log deprecation warning when =domain.json= is used.
+
+** write integration tests for loading hierarchy
+=packages/coding-agent/test/config/config-loading-hierarchy.test.ts=:
+- spell.kdl present → loadTaskPolicies returns its policies
+- spell.kdl absent, task-policies.kdl present → returns task-policies.kdl policies
+- spell.kdl absent, task-policies.kdl absent, task-policies.yml present → returns YAML policies
+- spell.kdl with domain → detectDomain returns it
+- spell.kdl without domain, domain.json present → detectDomain falls back
+- Neither file → detectDomain returns "coding"
+
+* Verification
+- =bun test packages/coding-agent/test/config/config-loading-hierarchy.test.ts= passes
+- =bun check:ts= passes for modified files
+- Existing tests still pass: =bun test packages/coding-agent/test/config/task-policies.test.ts= and =bun test packages/coding-agent/test/config/task-policies-kdl.test.ts=

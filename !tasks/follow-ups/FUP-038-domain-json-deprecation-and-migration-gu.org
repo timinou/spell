@@ -1,0 +1,22 @@
+#+TITLE: domainjson Deprecation and Migration Guide
+#+STATE: ITEM
+#+SESSION_ID: 14ac8e691fd97376
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T20-24-00-383Z_14ac8e691fd97376.jsonl]]
+#+CUSTOM_ID: FUP-038-domain-json-deprecation-and-migration-gu
+#+EFFORT: S
+#+PRIORITY: #C
+#+LAYER: docs
+#+DEPENDS: FEAT-313-unified-config-loader-for-spell-kdl
+
+* Initial Message
+
+I want to set up task policies in kdl with a command when I enter a new repository. like some sort of onboarding thing. what could that look like? finish with your completed summary
+
+After the unified config loader ships, =.spell/domain.json= becomes a legacy fallback. This follow-up tracks:
+
+1. Adding a deprecation log warning in =detectDomain= when =domain.json= is used (done as part of FEAT-313)
+2. Updating any documentation that references =domain.json= to point to =spell.kdl=
+3. Eventually removing =domain.json= support (not in this plan — requires a major version bump)
+
+* Not Blocking
+This is informational. The deprecation warning ships with FEAT-313. Full removal is a separate future decision.

@@ -26,3 +26,9 @@ declare module "*.qml" {
 	const content: string;
 	export default content;
 }
+
+// KDL files imported as text
+declare module "*.kdl" {
+	const content: string;
+	export default content;
+}

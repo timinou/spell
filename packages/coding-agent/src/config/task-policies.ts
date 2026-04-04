@@ -2,13 +2,16 @@
  * Per-project task policy system.
  *
  * Policies associate layer-based gates and guidance with org items. Projects
- * declare their layer vocabulary in `.spell/task-policies.yml`; modes can
- * override or extend via frontmatter `taskPolicies`. Gates are auto-injected
- * whenever a task is created with a matching `layer` value.
+ * declare their layer vocabulary in `.spell/task-policies.kdl` (preferred) or
+ * `.spell/task-policies.yml`; modes can override or extend via frontmatter
+ * `taskPolicies`. Gates are auto-injected whenever a task is created with a
+ * matching `layer` value.
  */
 
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
+import { loadSpellKdl } from "./spell-kdl";
+import { parseTaskPoliciesKdl } from "./task-policies-kdl";
 
 // Types
 // =============================================================================
@@ -126,18 +129,44 @@ export function parseTaskPolicies(yamlContent: string): TaskPolicyConfig | undef
 }
 
 /**
- * Load task policies from `.spell/task-policies.yml` in the project root.
- * Returns undefined if the file does not exist or fails to parse.
+ * Load task policies from the project root.
+ *
+ * Resolution order:
+ * 1. `spell.kdl` at project root (unified config)
+ * 2. `.spell/task-policies.kdl` (standalone KDL)
+ * 3. `.spell/task-policies.yml` (legacy YAML)
+ *
+ * First file found wins. No merging across formats.
  */
 export async function loadTaskPolicies(projectDir: string): Promise<TaskPolicyConfig | undefined> {
-	const filePath = `${projectDir}/.spell/task-policies.yml`;
+	// 1. Try spell.kdl (unified project config)
+	const spellConfig = await loadSpellKdl(projectDir);
+	if (spellConfig) return spellConfig.policies;
+
+	// 2. Try .spell/task-policies.kdl
+	const kdlPath = `${projectDir}/.spell/task-policies.kdl`;
 	try {
-		const content = await Bun.file(filePath).text();
-		return parseTaskPolicies(content);
+		const kdlContent = await Bun.file(kdlPath).text();
+		return parseTaskPoliciesKdl(kdlContent);
+	} catch (error) {
+		if (!isEnoent(error)) {
+			logger.warn("task-policies: failed to load KDL", {
+				filePath: kdlPath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return undefined;
+		}
+	}
+
+	// 3. Fall back to .spell/task-policies.yml
+	const yamlPath = `${projectDir}/.spell/task-policies.yml`;
+	try {
+		const yamlContent = await Bun.file(yamlPath).text();
+		return parseTaskPolicies(yamlContent);
 	} catch (error) {
 		if (isEnoent(error)) return undefined;
-		logger.warn("task-policies: failed to load", {
-			filePath,
+		logger.warn("task-policies: failed to load YAML", {
+			filePath: yamlPath,
 			error: error instanceof Error ? error.message : String(error),
 		});
 		return undefined;
