@@ -57,6 +57,24 @@ export class QmlBridge {
 			return;
 		}
 
+		// Socket disconnect: push a synthetic event into every active window's queue
+		// to wake pending waitForEvent listeners. Do NOT mark windows as closed —
+		// they survive on the daemon side and can be reclaimed on reconnect.
+		if (event.type === "socket_disconnected") {
+			logger.warn("QmlBridge: socket disconnected", { message: event.message });
+			for (const win of this.#windows.values()) {
+				if (win.state !== "closed") {
+					win.events.push({ name: "socket_disconnected", payload: { message: event.message } });
+					if (win.events.length > 100) win.events.shift();
+				}
+			}
+			return;
+		}
+
+		// Heartbeat: no action needed at bridge level. Liveness tracking happens
+		// in QmlProcess (#lastDataReceived updated on raw socket data).
+		if (event.type === "heartbeat") return;
+
 		// State event: used by reconnect() via waitFor, but also handle here
 		// in case it arrives outside a reconnect flow.
 		if (event.type === "state") return;
@@ -245,6 +263,10 @@ export class QmlBridge {
 			}
 			// Also wake when stderr events are pushed into this window's queue
 			if (event.type === "error" && event.id === "__stderr__" && win.events.length > 0) {
+				done(win.events.splice(0));
+			}
+			// Wake on socket disconnect so callers can detect and retry
+			if (event.type === "socket_disconnected" && win.events.length > 0) {
 				done(win.events.splice(0));
 			}
 		});

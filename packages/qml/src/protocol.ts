@@ -112,10 +112,15 @@ export type BridgeEvent =
 			/** Characters typed (for type commands) */
 			length?: number;
 	  }
-	| { type: "state"; windows: Array<{ id: string; path: string; state: string; armedTools?: string[] }> }
+	| {
+			type: "state";
+			windows: Array<{ id: string; path: string; state: string; armedTools?: string[]; orphaned?: boolean }>;
+	  }
 	| { type: "systray_click"; id: "__systray__"; itemId: string }
 	| { type: "systray_activated"; id: "__systray__" }
-	| { type: "hotkey_triggered"; id: "__hotkey__"; hotkeyId: string };
+	| { type: "hotkey_triggered"; id: "__hotkey__"; hotkeyId: string }
+	| { type: "socket_disconnected"; id: "__socket__"; message: string }
+	| { type: "heartbeat" };
 
 /** State of a managed window */
 export type WindowState = "loading" | "ready" | "closed" | "error";

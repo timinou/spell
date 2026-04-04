@@ -1,0 +1,120 @@
+#+TITLE: QML bridge daemon orphans windows on client disconnect
+#+STATE: DONE
+#+SESSION_ID: 14ad66157311f882
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-04T12-06-17-804Z_14ad66157311f882.jsonl]]
+#+CUSTOM_ID: BUG-156-qml-bridge-daemon-orphans-windows-on-cli
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: qml
+
+NOTE [2026-04-04]: C++ daemon changes complete: DisconnectCallback in SocketServer, orphanWindows/claimOrphans in WindowManager, systray/hotkey pointer safety via m_systrayOwner/m_hotkeyOwner, WM-close orphan handling, getWindowStates includes orphaned windows with flag.
+
+When a client disconnects from the daemon, its windows keep their old ~owner~ pointer (now a dangling ~QLocalSocket*~). On reconnect, ~getWindowStates(newClient)~ returns empty because the new client pointer doesn't match the dead owner. Windows are alive but unreachable.
+
+* Scope
+** In scope
+- C++ daemon: disconnect callback, orphan windows, re-ownership on reconnect, orphan inclusion in state snapshots
+- C++ daemon: systray/hotkey lambda client pointer safety (GAP-03)
+- C++ daemon: WM-close of orphaned windows handling (GAP-13)
+- Multi-session orphan arbitration strategy (GAP-05)
+- Tests for all C++ daemon changes (via fake daemon in TS)
+** Out of scope
+- TypeScript auto-reconnect (BUG-157)
+- Heartbeat (FEAT-315)
+- Spawn lock (BUG-158)
+- Phoenix-inspector extension event loop (project-level extension, not in spell packages)
+
+* Problem
+- ~SocketServer::onClientDisconnected()~ removes the client from ~m_clients~ but does NOT notify ~WindowManager~ to orphan the windows.
+- ~WindowManager::getWindowStates(client)~ filters by ~it->owner != client~ — so a reconnecting client gets an empty state snapshot.
+- Events emitted by orphaned windows route to the dead owner pointer (no-op via ~writeEvent~ null guard), silently lost.
+- Systray/hotkey signal lambdas (windowmanager.cpp:107-119, 134-140) capture ~client~ by value. After disconnect + ~deleteLater()~, the pointer dangles — undefined behavior on next systray/hotkey event.
+- When a user closes an orphaned window via WM (X button), ~QQuickWindow::closing~ lambda captures ~owner~ (nullptr for orphans) and calls ~writeEvent(nullptr, ev)~ — silently dropped. After reconnect, state snapshot still reports the window as alive.
+
+* Tests
+All tests in ~packages/qml/test/reconnect.test.ts~:
+1. "orphaned windows appear in reconnect state snapshot" — fake daemon tracks connection order, first client gets windows, disconnect, second connect receives state with orphaned windows.
+2. "multi-session orphan arbitration: only matching window IDs are claimed" — two clients connect, client A owns window X, client A disconnects, client B (which had window Y) reconnects, state snapshot for B includes orphaned X with ~orphaned: true~ flag. B's QmlBridge only claims X if it was in B's #windows map.
+3. "WM-close of orphaned window removes it from state" — fake daemon tracks window removal, orphaned window closed by WM, next reconnect state snapshot excludes it.
+4. Existing multi-client isolation tests must still pass.
+
+* Implementation
+
+** Add DisconnectCallback to SocketServer
+:PROPERTIES:
+:CUSTOM_ID: BUG-156::disconnect-callback
+:END:
+- File: ~packages/qml/bridge/socketserver.h~
+  - Add ~using DisconnectCallback = std::function<void(QLocalSocket *)>;~
+  - Add ~void setDisconnectCallback(DisconnectCallback cb);~
+  - Add ~DisconnectCallback m_disconnect;~ member
+- File: ~packages/qml/bridge/socketserver.cpp~
+  - ~setDisconnectCallback~: store callback
+  - ~onClientDisconnected~: invoke ~m_disconnect(client)~ BEFORE ~client->deleteLater()~
+
+** Add orphanWindows and ownership reassignment to WindowManager
+:PROPERTIES:
+:CUSTOM_ID: BUG-156::orphan-windows
+:DEPENDS: BUG-156::disconnect-callback
+:END:
+- File: ~packages/qml/bridge/windowmanager.h~
+  - Add ~void orphanWindows(QLocalSocket* deadClient);~
+  - Add ~void claimOrphans(QLocalSocket* newClient, const QStringList& windowIds);~
+- File: ~packages/qml/bridge/windowmanager.cpp~
+  - ~orphanWindows~: iterate ~m_windows~, set ~owner = nullptr~ for entries where ~owner == deadClient~
+  - ~claimOrphans~: iterate provided IDs, if window exists and ~owner == nullptr~, set ~owner = newClient~
+  - ~getWindowStates~: when ~client != nullptr~, include windows where ~owner == client~ OR ~owner == nullptr~. Add ~"orphaned": true~ JSON field for nullptr-owned windows so the TS side can distinguish.
+
+** Fix systray/hotkey client pointer safety
+:PROPERTIES:
+:CUSTOM_ID: BUG-156::systray-hotkey-safety
+:DEPENDS: BUG-156::orphan-windows
+:END:
+- File: ~packages/qml/bridge/windowmanager.h~
+  - Add ~QLocalSocket* m_systrayOwner = nullptr;~ member
+  - Add ~QLocalSocket* m_hotkeyOwner = nullptr;~ member
+- File: ~packages/qml/bridge/windowmanager.cpp~
+  - Systray/hotkey lambdas: use ~m_systrayOwner~/~m_hotkeyOwner~ member variable instead of captured ~client~ pointer
+  - ~orphanWindows~: if ~deadClient == m_systrayOwner~, set ~m_systrayOwner = nullptr~
+  - ~claimOrphans~: if ~m_systrayOwner == nullptr~ and new client claims windows, set ~m_systrayOwner = newClient~
+
+** Handle WM-close of orphaned windows
+:PROPERTIES:
+:CUSTOM_ID: BUG-156::wm-close-orphan
+:DEPENDS: BUG-156::orphan-windows
+:END:
+- File: ~packages/qml/bridge/windowmanager.cpp~
+  - ~QQuickWindow::closing~ lambda: when ~owner == nullptr~ (orphaned), still remove from ~m_windows~ and clean up engine. The closed event is silently dropped (no client to route to). On next reconnect, the window's absence from the state snapshot communicates its closure.
+
+** Wire disconnect callback in main.cpp
+:PROPERTIES:
+:CUSTOM_ID: BUG-156::wire-main
+:DEPENDS: BUG-156::disconnect-callback BUG-156::orphan-windows
+:END:
+- File: ~packages/qml/bridge/main.cpp~
+  - Add ~server->setDisconnectCallback(...)~ calling ~manager.orphanWindows(client)~
+  - Update reconnect callback: after sending state snapshot, call ~manager.claimOrphans(client, windowIds)~ where ~windowIds~ comes from the set of windows the client had (or just claim all orphans for single-session simplicity — TS side filters via its #windows map)
+
+** Write orphan reconnect tests (test-first)
+:PROPERTIES:
+:CUSTOM_ID: BUG-156::orphan-tests
+:DEPENDS: BUG-156::disconnect-callback
+:END:
+Sequencing note: these tests use fake daemons (TS net.Server) to simulate the C++ daemon's behavior. They test the protocol contract, not the C++ implementation directly. The C++ changes are verified by ~bun run build:bridge~ (compilation) and the existing reconnect tests.
+- File: ~packages/qml/test/reconnect.test.ts~
+  - Test 1: orphaned windows in reconnect snapshot
+  - Test 2: multi-session orphan arbitration with ~orphaned: true~ flag
+  - Test 3: WM-close of orphan removes from state
+
+* Edge Cases
+- *Dangling pointer UB*: ~orphanWindows~ must be called BEFORE ~deleteLater()~ to avoid accessing freed memory.
+- *Multi-session orphan claim*: TS-side QmlBridge only re-adds windows from state snapshot if ~win.id~ is in its existing ~#windows~ map OR if the window is orphaned and no other client has claimed it. The ~orphaned: true~ flag enables this.
+- *Rapid reconnect*: A client disconnects and reconnects within the same Qt event loop iteration. ~orphanWindows~ runs synchronously in ~onClientDisconnected~, so the orphaning happens before the reconnect callback.
+- *WM-close during disconnect*: The closing lambda fires while owner is nullptr. Window is removed from ~m_windows~. No event routed. State snapshot on reconnect excludes it.
+
+* Acceptance Criteria
+- ~cd packages/qml && bun run build:bridge~ compiles without error
+- ~bun test packages/qml/test/reconnect.test.ts~ passes (new + existing tests)
+- Orphaned windows appear in reconnect state snapshot with ~orphaned: true~ flag
+- Systray/hotkey events route correctly after client reconnect (no crash, no silent drop)
+- WM-closed orphan windows are excluded from reconnect state snapshot

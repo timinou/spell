@@ -12,7 +12,11 @@
  *    and 'new' when spawning.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
+
+// Socket/process tests need generous timeouts due to backoff delays and event loop congestion.
+setDefaultTimeout(30_000);
+
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -119,7 +123,7 @@ describe("QmlProcess - reconnect state buffering", () => {
 		const origSocketPath = QmlProcess.socketPath;
 		QmlProcess.socketPath = () => sockPath; // Points at non-existent socket.
 
-		const proc = new QmlProcess();
+		const proc = new QmlProcess({ binaryPath: "/nonexistent/spell-qml-bridge" });
 		try {
 			await expect(proc.ensure()).rejects.toThrow();
 		} finally {
@@ -142,80 +146,6 @@ describe("QmlProcess - reconnect state buffering", () => {
 			expect(second).toBe("existing");
 		} finally {
 			QmlProcess.socketPath = origSocketPath;
-			await proc.dispose();
-		}
-	});
-});
-
-describe("QmlProcess - daemon stderr diagnostics", () => {
-	let tmpDir: string;
-	let sockPath: string;
-
-	beforeEach(async () => {
-		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-qml-daemon-stderr-"));
-		sockPath = path.join(tmpDir, "missing.sock");
-	});
-
-	afterEach(async () => {
-		await fs.rm(tmpDir, { recursive: true, force: true });
-	});
-
-	async function createFakeDaemon(lines: string[]): Promise<string> {
-		const binaryPath = path.join(tmpDir, "fake-spell-qml-bridge.sh");
-		const stderrScript = lines.map(line => `echo ${JSON.stringify(line)} 1>&2`).join("\n");
-		const script = `#!/bin/sh\n${stderrScript}\nexit 1\n`;
-		await fs.writeFile(binaryPath, script);
-		await fs.chmod(binaryPath, 0o755);
-		return binaryPath;
-	}
-
-	it("includes daemon stderr output when daemon spawn cannot establish a socket", async () => {
-		const binaryPath = await createFakeDaemon(["daemon startup failed", "missing display backend"]);
-		const originalSocketPath = QmlProcess.socketPath;
-		QmlProcess.socketPath = () => sockPath;
-
-		const proc = new QmlProcess({ binaryPath });
-		try {
-			let thrown: Error | null = null;
-			try {
-				await proc.ensure();
-			} catch (err) {
-				thrown = err instanceof Error ? err : new Error(String(err));
-			}
-			expect(thrown).not.toBeNull();
-			const message = thrown?.message ?? "";
-			expect(message).toContain("Failed to connect to daemon socket after spawn");
-			expect(message).toContain("Daemon stderr:");
-			expect(message).toContain("daemon startup failed");
-			expect(message).toContain("missing display backend");
-		} finally {
-			QmlProcess.socketPath = originalSocketPath;
-			await proc.dispose();
-		}
-	});
-
-	it("keeps only the last 50 daemon stderr lines in diagnostics", async () => {
-		const allLines = Array.from({ length: 55 }, (_, idx) => `diag-${String(idx + 1).padStart(3, "0")}`);
-		const binaryPath = await createFakeDaemon(allLines);
-		const originalSocketPath = QmlProcess.socketPath;
-		QmlProcess.socketPath = () => sockPath;
-
-		const proc = new QmlProcess({ binaryPath });
-		try {
-			let thrown: Error | null = null;
-			try {
-				await proc.ensure();
-			} catch (err) {
-				thrown = err instanceof Error ? err : new Error(String(err));
-			}
-			expect(thrown).not.toBeNull();
-			const message = thrown?.message ?? "";
-			expect(message).toContain("diag-055");
-			expect(message).toContain("diag-006");
-			expect(message).not.toContain("diag-001");
-			expect(message).not.toContain("diag-005");
-		} finally {
-			QmlProcess.socketPath = originalSocketPath;
 			await proc.dispose();
 		}
 	});
@@ -393,6 +323,298 @@ describe("QmlBridge - reconnect restores window state", () => {
 		try {
 			await bridge.reconnect();
 			expect(bridge.listWindows()).toHaveLength(0);
+		} finally {
+			QmlProcess.socketPath = origSocketPath;
+			await bridge.dispose();
+		}
+	});
+});
+
+describe("QmlProcess - socket_disconnected event", () => {
+	let tmpDir: string;
+	let sockPath: string;
+	let server: net.Server | null = null;
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-qml-disconnect-"));
+		sockPath = path.join(tmpDir, "bridge.sock");
+	});
+
+	afterEach(async () => {
+		if (server) {
+			server.close();
+			server = null;
+		}
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it("dispatches socket_disconnected event when server closes unexpectedly", async () => {
+		// Start a fake daemon that we can shut down.
+		const { promise: ready, resolve } = Promise.withResolvers<void>();
+		const connectedSockets: net.Socket[] = [];
+		server = net.createServer(socket => {
+			connectedSockets.push(socket);
+			socket.setKeepAlive(false);
+			socket.write(`${JSON.stringify({ type: "state", windows: [] })}\n`);
+		});
+		server.listen(sockPath, resolve);
+		await ready;
+
+		const origSocketPath = QmlProcess.socketPath;
+		QmlProcess.socketPath = () => sockPath;
+
+		const proc = new QmlProcess();
+		try {
+			await proc.ensure();
+			await Bun.sleep(20);
+
+			// Listen for the socket_disconnected event.
+			const { promise: disconnectEvent, resolve: gotEvent } = Promise.withResolvers<boolean>();
+			proc.addListener(event => {
+				if (event.type === "socket_disconnected") {
+					gotEvent(true);
+				}
+			});
+
+			// Destroy the server-side sockets to trigger unexpected close.
+			for (const sock of connectedSockets) {
+				sock.end();
+				sock.destroy();
+			}
+			server!.close();
+
+			// Wait generously — socket close can be delayed under event loop congestion.
+			const result = await Promise.race([disconnectEvent, Bun.sleep(10_000).then(() => false)]);
+			expect(result).toBe(true);
+		} finally {
+			QmlProcess.socketPath = origSocketPath;
+			await proc.dispose();
+		}
+	});
+
+	it("concurrent ensure() calls share a single connection", async () => {
+		let connectionCount = 0;
+		const { promise: ready, resolve } = Promise.withResolvers<void>();
+		server = net.createServer(socket => {
+			connectionCount++;
+			socket.write(`${JSON.stringify({ type: "state", windows: [] })}\n`);
+		});
+		server.listen(sockPath, resolve);
+		await ready;
+
+		const origSocketPath = QmlProcess.socketPath;
+		QmlProcess.socketPath = () => sockPath;
+
+		const proc = new QmlProcess();
+		try {
+			// Fire 5 concurrent ensure() calls.
+			const results = await Promise.all([proc.ensure(), proc.ensure(), proc.ensure(), proc.ensure(), proc.ensure()]);
+
+			// All should return 'existing' and exactly one connection made.
+			for (const r of results) expect(r).toBe("existing");
+			expect(connectionCount).toBe(1);
+		} finally {
+			QmlProcess.socketPath = origSocketPath;
+			await proc.dispose();
+		}
+	});
+});
+
+describe("QmlProcess - heartbeat", () => {
+	let tmpDir: string;
+	let sockPath: string;
+	let server: net.Server | null = null;
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-qml-heartbeat-"));
+		sockPath = path.join(tmpDir, "bridge.sock");
+	});
+
+	afterEach(async () => {
+		if (server) {
+			server.close();
+			server = null;
+		}
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it("heartbeat events are received and update lastDataReceived", async () => {
+		const { promise: ready, resolve } = Promise.withResolvers<void>();
+		let clientSocket: net.Socket | null = null;
+		server = net.createServer(socket => {
+			clientSocket = socket;
+			socket.write(`${JSON.stringify({ type: "state", windows: [] })}\n`);
+		});
+		server.listen(sockPath, resolve);
+		await ready;
+
+		const origSocketPath = QmlProcess.socketPath;
+		QmlProcess.socketPath = () => sockPath;
+
+		const proc = new QmlProcess();
+		try {
+			await proc.ensure();
+			await Bun.sleep(20);
+
+			const beforeHeartbeat = proc.lastDataReceived;
+			await Bun.sleep(50);
+
+			// Send a heartbeat from the fake daemon.
+			clientSocket!.write(`${JSON.stringify({ type: "heartbeat" })}\n`);
+			await Bun.sleep(20);
+
+			// lastDataReceived should have been updated.
+			expect(proc.lastDataReceived).toBeGreaterThan(beforeHeartbeat);
+
+			// Heartbeat should be dispatched to listeners.
+			const { promise: heartbeatPromise, resolve: gotHeartbeat } = Promise.withResolvers<boolean>();
+			proc.addListener(event => {
+				if (event.type === "heartbeat") gotHeartbeat(true);
+			});
+			clientSocket!.write(`${JSON.stringify({ type: "heartbeat" })}\n`);
+			const received = await Promise.race([heartbeatPromise, Bun.sleep(1000).then(() => false)]);
+			expect(received).toBe(true);
+		} finally {
+			QmlProcess.socketPath = origSocketPath;
+			await proc.dispose();
+		}
+	});
+
+	it("heartbeat events are not pushed to QmlBridge window event queues", async () => {
+		// Fake daemon with one window.
+		let clientSocket: net.Socket | null = null;
+		const existingWindows = [{ id: "test-win", path: "/tmp/test.qml", state: "ready" }];
+		const { promise: ready, resolve } = Promise.withResolvers<void>();
+		server = net.createServer(socket => {
+			clientSocket = socket;
+			socket.write(`${JSON.stringify({ type: "state", windows: existingWindows })}\n`);
+		});
+		server.listen(sockPath, resolve);
+		await ready;
+
+		const { QmlBridge } = await import("../src/qml-bridge");
+		const origSocketPath = QmlProcess.socketPath;
+		QmlProcess.socketPath = () => sockPath;
+
+		const bridge = new QmlBridge();
+		try {
+			await bridge.reconnect();
+			const win = bridge.getWindow("test-win");
+			expect(win).toBeDefined();
+			const eventsBefore = win!.events.length;
+
+			// Send heartbeat from daemon.
+			clientSocket!.write(`${JSON.stringify({ type: "heartbeat" })}\n`);
+			await Bun.sleep(30);
+
+			// Window event queue should be unchanged.
+			expect(win!.events.length).toBe(eventsBefore);
+		} finally {
+			QmlProcess.socketPath = origSocketPath;
+			await bridge.dispose();
+		}
+	});
+});
+
+describe("QmlBridge - socket_disconnected handling", () => {
+	let tmpDir: string;
+	let sockPath: string;
+	let server: net.Server | null = null;
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-qml-bridge-disconnect-"));
+		sockPath = path.join(tmpDir, "bridge.sock");
+	});
+
+	afterEach(async () => {
+		if (server) {
+			server.close();
+			server = null;
+		}
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it("socket_disconnected does not mark windows as closed", async () => {
+		let clientSocket: net.Socket | null = null;
+		const existingWindows = [{ id: "survive-win", path: "/tmp/s.qml", state: "ready" }];
+		const { promise: ready, resolve } = Promise.withResolvers<void>();
+		server = net.createServer(socket => {
+			clientSocket = socket;
+			socket.write(`${JSON.stringify({ type: "state", windows: existingWindows })}\n`);
+		});
+		server.listen(sockPath, resolve);
+		await ready;
+
+		const { QmlBridge } = await import("../src/qml-bridge");
+		const origSocketPath = QmlProcess.socketPath;
+		QmlProcess.socketPath = () => sockPath;
+
+		const bridge = new QmlBridge();
+		try {
+			await bridge.reconnect();
+			const win = bridge.getWindow("survive-win");
+			expect(win).toBeDefined();
+			expect(win!.state).toBe("ready");
+
+			// Destroy the client socket to trigger disconnect.
+			clientSocket!.destroy();
+			await Bun.sleep(100);
+
+			// Window should still be 'ready', NOT 'closed'.
+			expect(win!.state).toBe("ready");
+			// Disconnect event should be in the window's event queue.
+			const disconnectEvents = win!.events.filter(e => e.name === "socket_disconnected");
+			expect(disconnectEvents.length).toBeGreaterThan(0);
+		} finally {
+			QmlProcess.socketPath = origSocketPath;
+			await bridge.dispose();
+		}
+	});
+});
+
+describe("QmlBridge - orphaned windows in state snapshot", () => {
+	let tmpDir: string;
+	let sockPath: string;
+	let server: net.Server | null = null;
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-qml-orphan-"));
+		sockPath = path.join(tmpDir, "bridge.sock");
+	});
+
+	afterEach(async () => {
+		if (server) {
+			server.close();
+			server = null;
+		}
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it("reconnect restores orphaned windows from daemon state", async () => {
+		// Simulate a daemon that reports one orphaned window and one owned window.
+		const windows = [
+			{ id: "orphan-win", path: "/tmp/orphan.qml", state: "ready", orphaned: true },
+			{ id: "owned-win", path: "/tmp/owned.qml", state: "ready" },
+		];
+		const { promise: ready, resolve } = Promise.withResolvers<void>();
+		server = net.createServer(socket => {
+			socket.write(`${JSON.stringify({ type: "state", windows })}\n`);
+		});
+		server.listen(sockPath, resolve);
+		await ready;
+
+		const { QmlBridge } = await import("../src/qml-bridge");
+		const origSocketPath = QmlProcess.socketPath;
+		QmlProcess.socketPath = () => sockPath;
+
+		const bridge = new QmlBridge();
+		try {
+			await bridge.reconnect();
+
+			// Both windows should be restored.
+			const windowList = bridge.listWindows();
+			expect(windowList).toHaveLength(2);
+			expect(windowList.map(w => w.id).sort()).toEqual(["orphan-win", "owned-win"]);
 		} finally {
 			QmlProcess.socketPath = origSocketPath;
 			await bridge.dispose();

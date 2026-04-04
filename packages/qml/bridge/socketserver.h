@@ -5,6 +5,13 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QObject>
+#include <QTimer>
+#include <functional>
+#include <QJsonObject>
+#include <QList>
+#include <QLocalServer>
+#include <QLocalSocket>
+#include <QObject>
 #include <functional>
 
 /**
@@ -19,6 +26,7 @@ class SocketServer : public QObject {
 public:
     using DispatchCallback = std::function<void(QLocalSocket *, const QByteArray &)>;
     using ReconnectCallback = std::function<void(QLocalSocket *)>;
+    using DisconnectCallback = std::function<void(QLocalSocket *)>;
 
     explicit SocketServer(QObject *parent = nullptr);
     ~SocketServer() override;
@@ -31,6 +39,13 @@ public:
 
     void setDispatchCallback(DispatchCallback cb);
     void setReconnectCallback(ReconnectCallback cb);
+    void setDisconnectCallback(DisconnectCallback cb);
+
+    /// Send a JSON event to every connected client.
+    void broadcastEvent(const QJsonObject &event);
+
+    /// Start a periodic heartbeat broadcast to all clients.
+    void startHeartbeat(int intervalMs = 30000);
 
 private slots:
     void onNewConnection();
@@ -47,4 +62,6 @@ private:
     QHash<QLocalSocket *, QByteArray> m_readBuffers;
     DispatchCallback m_dispatch;
     ReconnectCallback m_reconnect;
+    DisconnectCallback m_disconnect;
+    QTimer *m_heartbeatTimer = nullptr;
 };

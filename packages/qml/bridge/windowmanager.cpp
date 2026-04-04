@@ -28,14 +28,17 @@ void WindowManager::setEventWriter(std::function<void(QLocalSocket *, const QJso
 QJsonArray WindowManager::getWindowStates(QLocalSocket *client) const {
     QJsonArray arr;
     for (auto it = m_windows.constBegin(); it != m_windows.constEnd(); ++it) {
-        // In daemon mode, only return windows belonging to this client.
         // In stdio mode (client == nullptr), return all windows.
-        if (client != nullptr && it->owner != client) continue;
+        // In daemon mode, return windows owned by this client AND orphaned windows.
+        if (client != nullptr && it->owner != nullptr && it->owner != client) continue;
 
         QJsonObject obj;
         obj["id"] = it.key();
         obj["path"] = it->path;
         obj["state"] = it->state;
+        if (it->owner == nullptr && client != nullptr) {
+            obj["orphaned"] = true;
+        }
         if (!it->armedTools.isEmpty()) {
             QJsonArray toolsArr;
             for (const auto &t : it->armedTools) toolsArr.append(t);
@@ -44,6 +47,29 @@ QJsonArray WindowManager::getWindowStates(QLocalSocket *client) const {
         arr.append(obj);
     }
     return arr;
+}
+
+void WindowManager::orphanWindows(QLocalSocket *deadClient) {
+    for (auto it = m_windows.begin(); it != m_windows.end(); ++it) {
+        if (it->owner == deadClient) {
+            it->owner = nullptr;
+        }
+    }
+    if (m_systrayOwner == deadClient) m_systrayOwner = nullptr;
+    if (m_hotkeyOwner == deadClient) m_hotkeyOwner = nullptr;
+    fprintf(stderr, "Orphaned windows for disconnected client\n");
+}
+
+void WindowManager::claimOrphans(QLocalSocket *newClient, const QStringList &windowIds) {
+    const bool claimAll = windowIds.isEmpty();
+    for (auto it = m_windows.begin(); it != m_windows.end(); ++it) {
+        if (it->owner != nullptr) continue; // Not orphaned
+        if (claimAll || windowIds.contains(it.key())) {
+            it->owner = newClient;
+        }
+    }
+    if (m_systrayOwner == nullptr) m_systrayOwner = newClient;
+    if (m_hotkeyOwner == nullptr) m_hotkeyOwner = newClient;
 }
 
 void WindowManager::dispatch(QLocalSocket *client, const QByteArray &jsonLine) {
@@ -104,18 +130,19 @@ void WindowManager::dispatch(QLocalSocket *client, const QByteArray &jsonLine) {
     } else if (type == "create_systray") {
         if (!m_systray) {
             m_systray = new SystrayManager(this);
-            connect(m_systray, &SystrayManager::menuItemClicked, this, [this, client](const QString &itemId) {
+            m_systrayOwner = client;
+            connect(m_systray, &SystrayManager::menuItemClicked, this, [this](const QString &itemId) {
                 QJsonObject evt;
                 evt["type"] = "systray_click";
                 evt["itemId"] = itemId;
                 evt["id"] = "__systray__";
-                writeEvent(client, evt);
+                writeEvent(m_systrayOwner, evt);
             });
-            connect(m_systray, &SystrayManager::activated, this, [this, client]() {
+            connect(m_systray, &SystrayManager::activated, this, [this]() {
                 QJsonObject evt;
                 evt["type"] = "systray_activated";
                 evt["id"] = "__systray__";
-                writeEvent(client, evt);
+                writeEvent(m_systrayOwner, evt);
             });
         }
         m_systray->create(msg["icon"].toString(), msg["tooltip"].toString());
@@ -131,12 +158,13 @@ void WindowManager::dispatch(QLocalSocket *client, const QByteArray &jsonLine) {
     } else if (type == "register_hotkey") {
         if (!m_hotkey) {
             m_hotkey = new HotkeyManager(this);
-            connect(m_hotkey, &HotkeyManager::hotkeyTriggered, this, [this, client](const QString &hotkeyId) {
+            m_hotkeyOwner = client;
+            connect(m_hotkey, &HotkeyManager::hotkeyTriggered, this, [this](const QString &hotkeyId) {
                 QJsonObject evt;
                 evt["type"] = "hotkey_triggered";
                 evt["id"] = "__hotkey__";
                 evt["hotkeyId"] = hotkeyId;
-                writeEvent(client, evt);
+                writeEvent(m_hotkeyOwner, evt);
             });
         }
         const QString hotkeyId = msg["hotkeyId"].toString();
@@ -229,6 +257,9 @@ void WindowManager::loadWindow(QLocalSocket *client, const QString &id, const QS
             QLocalSocket *owner = m_windows[id].owner; // capture before removal
             delete m_windows[id].engine;
             m_windows.remove(id);
+            // If orphaned (owner == nullptr), silently remove — no client to notify.
+            // On next reconnect, absence from state snapshot signals closure.
+            if (!owner) return;
             QJsonObject ev;
             ev["type"] = "closed";
             ev["id"] = id;
