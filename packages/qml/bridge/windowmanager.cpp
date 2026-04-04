@@ -154,6 +154,7 @@ void WindowManager::dispatch(QLocalSocket *client, const QByteArray &jsonLine) {
             m_systray->destroy();
             m_systray->deleteLater();
             m_systray = nullptr;
+            m_systrayOwner = nullptr;
         }
     } else if (type == "register_hotkey") {
         if (!m_hotkey) {

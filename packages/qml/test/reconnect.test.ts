@@ -621,3 +621,236 @@ describe("QmlBridge - orphaned windows in state snapshot", () => {
 		}
 	});
 });
+
+describe("QmlProcess - auto-reconnect success", () => {
+	let tmpDir: string;
+	let sockPath: string;
+	let server: net.Server | null = null;
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-qml-autoreconnect-"));
+		sockPath = path.join(tmpDir, "bridge.sock");
+	});
+
+	afterEach(async () => {
+		if (server) {
+			server.close();
+			server = null;
+		}
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it("auto-reconnect re-establishes connection after server-side socket close", async () => {
+		const connectedSockets: net.Socket[] = [];
+		const { promise: firstConnect, resolve: resolveFirst } = Promise.withResolvers<void>();
+		server = net.createServer(socket => {
+			connectedSockets.push(socket);
+			socket.write(
+				`${JSON.stringify({ type: "state", windows: [{ id: "w1", path: "/tmp/w1.qml", state: "ready" }] })}\n`,
+			);
+			if (connectedSockets.length === 1) resolveFirst();
+		});
+		await new Promise<void>(r => server!.listen(sockPath, r));
+
+		const origSocketPath = QmlProcess.socketPath;
+		QmlProcess.socketPath = () => sockPath;
+
+		const proc = new QmlProcess();
+		try {
+			await proc.ensure();
+			await firstConnect;
+			await Bun.sleep(20);
+
+			// Kill the first server and destroy all sockets.
+			for (const sock of connectedSockets) sock.destroy();
+			server!.close();
+			server = null;
+			connectedSockets.length = 0;
+
+			// Start a new fake daemon on the same path.
+			const { promise: secondConnect, resolve: resolveSecond } = Promise.withResolvers<void>();
+			server = net.createServer(socket => {
+				connectedSockets.push(socket);
+				socket.write(
+					`${JSON.stringify({ type: "state", windows: [{ id: "w2", path: "/tmp/w2.qml", state: "ready" }] })}\n`,
+				);
+				resolveSecond();
+			});
+			await new Promise<void>(r => server!.listen(sockPath, r));
+
+			// Wait for auto-reconnect to connect to the new server.
+			await secondConnect;
+			await Bun.sleep(30);
+
+			expect(proc.isDaemon).toBe(true);
+			const state = proc.takeReconnectState();
+			expect(state).not.toBeNull();
+			if (state?.type === "state") {
+				expect(state.windows[0].id).toBe("w2");
+			}
+		} finally {
+			QmlProcess.socketPath = origSocketPath;
+			await proc.dispose();
+		}
+	});
+});
+
+describe("QmlProcess - stale detection", () => {
+	let tmpDir: string;
+	let sockPath: string;
+	let server: net.Server | null = null;
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-qml-stale-"));
+		sockPath = path.join(tmpDir, "bridge.sock");
+	});
+
+	afterEach(async () => {
+		if (server) {
+			server.close();
+			server = null;
+		}
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it("stale detection reconnects without dispatching socket_disconnected", async () => {
+		let connectionCount = 0;
+		server = net.createServer(socket => {
+			connectionCount++;
+			const windows =
+				connectionCount === 1
+					? [{ id: "old", path: "/tmp/old.qml", state: "ready" }]
+					: [{ id: "new", path: "/tmp/new.qml", state: "ready" }];
+			socket.write(`${JSON.stringify({ type: "state", windows })}\n`);
+		});
+		await new Promise<void>(r => server!.listen(sockPath, r));
+
+		const origSocketPath = QmlProcess.socketPath;
+		QmlProcess.socketPath = () => sockPath;
+
+		// Use a very short heartbeat timeout so the test doesn't wait 90s.
+		const proc = new QmlProcess({ heartbeatTimeoutMs: 100 });
+		try {
+			await proc.ensure();
+			await Bun.sleep(20); // let state event deliver
+
+			// Consume first reconnect state so it doesn't confuse assertions.
+			proc.takeReconnectState();
+
+			// Track socket_disconnected events — none should fire.
+			let disconnectFired = false;
+			proc.addListener(event => {
+				if (event.type === "socket_disconnected") disconnectFired = true;
+			});
+
+			// Wait for heartbeat timeout to elapse.
+			await Bun.sleep(150);
+
+			// ensure() should detect stale socket and reconnect via #doEnsure.
+			const result = await proc.ensure();
+			await Bun.sleep(30); // let close handler fire asynchronously
+
+			expect(result).toBe("existing");
+			expect(disconnectFired).toBe(false);
+			expect(connectionCount).toBe(2);
+
+			// New state from second connection should be available.
+			const state = proc.takeReconnectState();
+			expect(state).not.toBeNull();
+			if (state?.type === "state") {
+				expect(state.windows[0].id).toBe("new");
+			}
+		} finally {
+			QmlProcess.socketPath = origSocketPath;
+			await proc.dispose();
+		}
+	});
+});
+
+describe("QmlBridge - full disconnect-reconnect-resume cycle", () => {
+	let tmpDir: string;
+	let sockPath: string;
+	let server: net.Server | null = null;
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-qml-fullcycle-"));
+		sockPath = path.join(tmpDir, "bridge.sock");
+	});
+
+	afterEach(async () => {
+		if (server) {
+			server.close();
+			server = null;
+		}
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it("windows survive disconnect and events resume after reconnect", async () => {
+		const connectedSockets: net.Socket[] = [];
+		const { promise: firstConnect, resolve: resolveFirst } = Promise.withResolvers<void>();
+		server = net.createServer(socket => {
+			connectedSockets.push(socket);
+			// Report one window in daemon state.
+			socket.write(
+				`${JSON.stringify({ type: "state", windows: [{ id: "persist-win", path: "/tmp/p.qml", state: "ready" }] })}\n`,
+			);
+			if (connectedSockets.length === 1) resolveFirst();
+		});
+		await new Promise<void>(r => server!.listen(sockPath, r));
+
+		const { QmlBridge } = await import("../src/qml-bridge");
+		const origSocketPath = QmlProcess.socketPath;
+		QmlProcess.socketPath = () => sockPath;
+
+		const bridge = new QmlBridge();
+		try {
+			await bridge.reconnect();
+			await firstConnect;
+			expect(bridge.listWindows()).toHaveLength(1);
+			expect(bridge.getWindow("persist-win")!.state).toBe("ready");
+
+			// Kill the server and destroy all sockets (simulating daemon crash).
+			for (const sock of connectedSockets) sock.destroy();
+			server!.close();
+			server = null;
+			connectedSockets.length = 0;
+
+			// Brief pause to let disconnect event propagate.
+			await Bun.sleep(50);
+
+			// Window should survive disconnect — NOT marked closed.
+			expect(bridge.getWindow("persist-win")!.state).toBe("ready");
+
+			// Start a new daemon that reports the same window plus sends a custom event.
+			const { promise: secondConnect, resolve: resolveSecond } = Promise.withResolvers<void>();
+			server = net.createServer(socket => {
+				connectedSockets.push(socket);
+				socket.write(
+					`${JSON.stringify({ type: "state", windows: [{ id: "persist-win", path: "/tmp/p.qml", state: "ready" }] })}\n`,
+				);
+				// Send a custom event after a brief delay.
+				setTimeout(() => {
+					socket.write(
+						`${JSON.stringify({ type: "event", id: "persist-win", name: "post-reconnect", payload: { value: 42 } })}\n`,
+					);
+				}, 50);
+				resolveSecond();
+			});
+			await new Promise<void>(r => server!.listen(sockPath, r));
+
+			// Wait for auto-reconnect to establish new connection.
+			await secondConnect;
+			await Bun.sleep(150); // let event deliver
+
+			// Window should still be tracked and event should have arrived.
+			const win = bridge.getWindow("persist-win")!;
+			expect(win.state).toBe("ready");
+			const postReconnectEvents = win.events.filter(e => e.name === "post-reconnect");
+			expect(postReconnectEvents.length).toBeGreaterThan(0);
+			expect(postReconnectEvents[0].payload).toEqual({ value: 42 });
+		} finally {
+			QmlProcess.socketPath = origSocketPath;
+			await bridge.dispose();
+		}
+	});
+});

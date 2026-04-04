@@ -1,0 +1,105 @@
+#+TITLE: Stale detection in ensure triggers double-reconnect race
+#+STATE: DONE
+#+SESSION_ID: 14ad78a42951f88e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-04T13-27-22-533Z_14ad78a42951f88e.jsonl]]
+#+CUSTOM_ID: BUG-161-stale-detection-in-ensure-triggers-doubl
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: qml
+
+NOTE [2026-04-04]: Added #intentionalDisconnect flag and heartbeatTimeoutMs constructor option. Close handler checks flag to suppress auto-reconnect on stale detection path.
+
+* Initial Message
+
+continue
+
+When ~ensure()~ detects a stale socket (no data for 90s), it calls ~this.#socket.destroy()~ and falls through to ~#doEnsure()~. The socket ~close~ event fires asynchronously and, since ~#stopping~ is false, triggers ~#autoReconnect~. This creates two concurrent reconnection paths racing to establish a new socket.
+
+* Problem
+~ensure()~ at line 108-112:
+#+begin_src typescript
+if (Date.now() - this.#lastDataReceived > HEARTBEAT_TIMEOUT_MS) {
+    this.#socket.destroy();  // triggers close handler → autoReconnect
+    this.#socket = null;
+    // falls through to #doEnsure → also reconnects
+}
+#+end_src
+
+The close handler at line 340 checks ~!this.#stopping~ which is still false (stale detection is not a shutdown). So it dispatches ~socket_disconnected~ and starts ~#autoReconnect~. Meanwhile ~ensure()~ falls through to ~#doEnsure()~ which also calls ~#connectSocket()~.
+
+The ~#connectingPromise~ guard in ~ensure()~ does NOT protect here because the first ~ensure()~ call has already entered ~#doEnsure~ by the time ~#autoReconnect~ fires.
+
+* Fix
+Add a ~#staleDisconnecting~ flag. Set it to ~true~ before calling ~destroy()~ in the stale path. Check it in the close handler alongside ~#stopping~. Clear it after the close event fires or in ~#doEnsure~ entry.
+
+Simpler alternative: just abort any existing auto-reconnect before entering ~#doEnsure~:
+#+begin_src typescript
+// In ensure(), stale path:
+this.#reconnectAbort?.abort();
+this.#socket.destroy();
+this.#socket = null;
+#+end_src
+
+This kills any in-flight auto-reconnect. When the close handler fires, ~wasUnexpected~ is true, so it starts a new auto-reconnect. But ~#doEnsure~ is already running. If ~#autoReconnect~ tries ~#connectSocket~, it races with ~#doEnsure~'s ~#connectSocket~. Both would succeed or one would fail.
+
+Best approach: set ~this.#stopping = true~ temporarily in the stale path, then restore it after ~destroy()~ fires:
+#+begin_src typescript
+if (Date.now() - this.#lastDataReceived > HEARTBEAT_TIMEOUT_MS) {
+    logger.warn("Socket appears stale (no data for 90s), forcing reconnect");
+    // Suppress close handler's auto-reconnect — we'll reconnect via #doEnsure.
+    this.#stopping = true;
+    this.#socket.destroy();
+    this.#socket = null;
+    this.#stopping = false;
+    // Fall through to reconnect logic below
+}
+#+end_src
+
+The close handler fires asynchronously (after current microtask), so ~#stopping~ is false when it runs. That doesn't work either.
+
+Correct approach: use a dedicated flag:
+#+begin_src typescript
+#intentionalDisconnect = false;
+// ...
+// In stale path:
+this.#intentionalDisconnect = true;
+this.#socket.destroy();
+this.#socket = null;
+
+// In close handler:
+const wasUnexpected = !this.#stopping && !this.#intentionalDisconnect;
+this.#intentionalDisconnect = false;
+#+end_src
+
+* Implementation
+
+** Add #intentionalDisconnect flag
+:PROPERTIES:
+:CUSTOM_ID: BUG-161::flag
+:END:
+- File: ~packages/qml/src/qml-process.ts~
+- Add ~#intentionalDisconnect = false~ field
+- In ~ensure()~ stale path (line 108-112): set ~#intentionalDisconnect = true~ before ~destroy()~
+- In close handler (line 341): ~const wasUnexpected = !this.#stopping && !this.#intentionalDisconnect;~
+- After the wasUnexpected check: ~this.#intentionalDisconnect = false;~
+
+** Test: stale detection does not fire socket_disconnected
+:PROPERTIES:
+:CUSTOM_ID: BUG-161::test
+:DEPENDS: BUG-161::flag
+:END:
+Sequencing note: flag must exist before test can verify it.
+- File: ~packages/qml/test/reconnect.test.ts~
+- Test: connect to fake daemon, manually set ~#lastDataReceived~ to far past via exposed getter/setter or by waiting, call ~ensure()~, verify no ~socket_disconnected~ event is dispatched, verify ~ensure()~ returns ~"existing"~ (reconnected via #doEnsure)
+- Challenge: ~#lastDataReceived~ is a private field. Options:
+  (a) Export ~HEARTBEAT_TIMEOUT_MS~ and use a very short override. Not great — it's a module constant.
+  (b) Use ~Object.defineProperty~ hack to override the getter. Fragile.
+  (c) Add a test-only ~_setLastDataReceived(ts: number)~ method. Violates code quality rules.
+  (d) Wait 90+ seconds. Too slow.
+  (e) Make the timeout configurable via constructor options. Clean, useful for tests.
+- Recommended: option (e) — add ~heartbeatTimeoutMs?: number~ to ~QmlProcessOptions~, default to ~HEARTBEAT_TIMEOUT_MS~. Test passes a short value (100ms), sleeps 150ms, calls ensure(). Verify no socket_disconnected dispatched.
+
+* Acceptance Criteria
+- ~bun test packages/qml/test/reconnect.test.ts~ passes including new stale-detection test
+- No ~socket_disconnected~ event dispatched when ~ensure()~ triggers stale reconnect
+- No ~#autoReconnect~ started from stale disconnect path

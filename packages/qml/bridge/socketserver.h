@@ -7,12 +7,6 @@
 #include <QObject>
 #include <QTimer>
 #include <functional>
-#include <QJsonObject>
-#include <QList>
-#include <QLocalServer>
-#include <QLocalSocket>
-#include <QObject>
-#include <functional>
 
 /**
  * Unix domain socket server for daemon mode.

@@ -52,6 +52,8 @@ export interface QmlProcessOptions {
 	env?: Record<string, string>;
 	/** Optional bridge binary override (primarily for tests). */
 	binaryPath?: string;
+	/** Override heartbeat staleness timeout in ms (default: 90000). Primarily for tests. */
+	heartbeatTimeoutMs?: number;
 }
 
 /**
@@ -73,14 +75,17 @@ export class QmlProcess {
 	#buffer = "";
 	#stderrBuffer = "";
 	#stopping = false;
+	#intentionalDisconnect = false;
 	#connectingPromise: Promise<"existing" | "new"> | null = null;
 	#reconnectPromise: Promise<void> | null = null;
 	#reconnectAbort: AbortController | null = null;
 	#lastDataReceived = Date.now();
+	#heartbeatTimeoutMs: number;
 
 	constructor(options?: QmlProcessOptions) {
 		this.#env = options?.env;
 		this.#binaryPath = options?.binaryPath ?? bridgeBinaryPath();
+		this.#heartbeatTimeoutMs = options?.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
 	}
 
 	/** Returns the unix socket path for daemon mode. */
@@ -95,6 +100,12 @@ export class QmlProcess {
 		return `${QmlProcess.socketPath()}.lock`;
 	}
 
+	/** Instance-level lock path: uses resolved socket path when available. */
+	#lockPath(): string {
+		const base = this.#resolvedSocketPath ?? QmlProcess.socketPath();
+		return `${base}.lock`;
+	}
+
 	/** Timestamp of the last data received on the socket (heartbeat or event). */
 	get lastDataReceived(): number {
 		return this.#lastDataReceived;
@@ -105,8 +116,10 @@ export class QmlProcess {
 		// Already connected via socket
 		if (this.#socket && !this.#socket.destroyed) {
 			// Stale detection: if no data received for 3 missed heartbeats, treat as dead.
-			if (Date.now() - this.#lastDataReceived > HEARTBEAT_TIMEOUT_MS) {
+			if (Date.now() - this.#lastDataReceived > this.#heartbeatTimeoutMs) {
 				logger.warn("Socket appears stale (no data for 90s), forcing reconnect");
+				// Suppress close handler's auto-reconnect — we'll reconnect via #doEnsure.
+				this.#intentionalDisconnect = true;
 				this.#socket.destroy();
 				this.#socket = null;
 				// Fall through to reconnect logic below
@@ -178,7 +191,7 @@ export class QmlProcess {
 			const delays = [100, 200, 400, 500];
 			let lastError: Error | undefined;
 			for (const delay of delays) {
-				await Bun.sleep(delay);
+				await unrefSleep(delay);
 				try {
 					await this.#connectSocket();
 					// Release stderr pipe so daemon isn't blocked by full buffer
@@ -338,7 +351,8 @@ export class QmlProcess {
 		});
 
 		socket.on("close", () => {
-			const wasUnexpected = !this.#stopping;
+			const wasUnexpected = !this.#stopping && !this.#intentionalDisconnect;
+			this.#intentionalDisconnect = false;
 			if (wasUnexpected) {
 				logger.warn("Daemon socket closed unexpectedly");
 				// Dispatch synthetic event before nulling socket so listeners see it.
@@ -425,13 +439,7 @@ export class QmlProcess {
 			logger.warn("spell-qml-bridge: invalid JSON line", { line });
 			return;
 		}
-		for (const listener of this.#listeners) {
-			try {
-				listener(event);
-			} catch (err) {
-				logger.error("QmlProcess event listener threw", { error: String(err) });
-			}
-		}
+		this.#dispatchEvent(event);
 	}
 
 	/** Dispatch a pre-parsed event to all listeners. Used for synthetic events. */
@@ -469,7 +477,7 @@ export class QmlProcess {
 	 * false if we waited for the lock and should retry connecting.
 	 */
 	async #acquireSpawnLock(): Promise<boolean> {
-		const lockDir = QmlProcess.lockPath();
+		const lockDir = this.#lockPath();
 		const maxRetries = 3;
 		const retryDelay = 200;
 		const staleTimeout = 10_000;
@@ -505,7 +513,7 @@ export class QmlProcess {
 
 	/** Release the spawn lock directory. */
 	#releaseSpawnLock(): void {
-		const lockDir = QmlProcess.lockPath();
+		const lockDir = this.#lockPath();
 		try {
 			fs.rmdirSync(lockDir);
 		} catch {
@@ -598,10 +606,14 @@ export class QmlProcess {
 			// Brief delay to let the quit flush
 			await Bun.sleep(100);
 		}
+		this.#reconnectAbort?.abort();
 		this.#stopping = true;
 		if (this.#socket) {
 			this.#socket.destroy();
 			this.#socket = null;
+		}
+		if (this.#reconnectPromise) {
+			await this.#reconnectPromise.catch(() => {});
 		}
 	}
 
