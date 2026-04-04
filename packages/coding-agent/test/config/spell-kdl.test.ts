@@ -104,9 +104,11 @@ layer "custom" description="A custom layer"
 		expect(result!.policies).toEqual({ version: 1, layers: {}, policies: [] });
 	});
 
-	it("returns undefined for invalid KDL", () => {
+	it("returns empty config for invalid KDL", () => {
 		const result = parseSpellKdl('domain "broken" {');
-		expect(result).toBeUndefined();
+		expect(result).toBeDefined();
+		expect(result!.domain).toBeUndefined();
+		expect(result!.policies).toEqual({ version: 1, layers: {}, policies: [] });
 	});
 
 	it("handles domain without imports or policies", () => {
@@ -142,9 +144,11 @@ describe("loadSpellKdl", () => {
 		expect(Object.keys(result!.policies.layers).length).toBeGreaterThan(0);
 	});
 
-	it("returns undefined for invalid KDL file", async () => {
+	it("returns empty config for invalid KDL file", async () => {
 		await Bun.write(path.join(tmpDir, "spell.kdl"), "this is not { valid kdl");
 		const result = await loadSpellKdl(tmpDir);
-		expect(result).toBeUndefined();
+		expect(result).toBeDefined();
+		expect(result!.domain).toBeUndefined();
+		expect(result!.policies).toEqual({ version: 1, layers: {}, policies: [] });
 	});
 });

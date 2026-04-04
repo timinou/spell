@@ -131,21 +131,18 @@ function formatProjectOverview(project: DetectedProject): string {
 }
 
 function generateAgentsMd(project: DetectedProject): string {
-	const lines: string[] = [
-		"# Project Context",
-		"",
-		"## Overview",
-		formatProjectOverview(project),
-		"",
-		"## Development",
-	];
+	const lines: string[] = ["# Project Context", "", "## Overview", formatProjectOverview(project), ""];
 
-	if (project.toolchain.testCmd) lines.push(`- Test: \`${project.toolchain.testCmd}\``);
-	if (project.toolchain.checkCmd) lines.push(`- Check: \`${project.toolchain.checkCmd}\``);
-	if (project.toolchain.lintCmd) lines.push(`- Lint: \`${project.toolchain.lintCmd}\``);
-	if (project.toolchain.formatCmd) lines.push(`- Format: \`${project.toolchain.formatCmd}\``);
+	const devCmds: string[] = [];
+	if (project.toolchain.testCmd) devCmds.push(`- Test: \`${project.toolchain.testCmd}\``);
+	if (project.toolchain.checkCmd) devCmds.push(`- Check: \`${project.toolchain.checkCmd}\``);
+	if (project.toolchain.lintCmd) devCmds.push(`- Lint: \`${project.toolchain.lintCmd}\``);
+	if (project.toolchain.formatCmd) devCmds.push(`- Format: \`${project.toolchain.formatCmd}\``);
 
-	lines.push("");
+	if (devCmds.length > 0) {
+		lines.push("## Development", ...devCmds, "");
+	}
+
 	lines.push("## Conventions");
 	lines.push("<!-- Add project-specific conventions here -->");
 	lines.push("");

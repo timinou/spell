@@ -63,6 +63,20 @@ describe("config loading hierarchy", () => {
 			const result = await loadTaskPolicies(tmpDir);
 			expect(result).toBeUndefined();
 		});
+
+		it("malformed spell.kdl prevents fallthrough to legacy .spell/task-policies.kdl", async () => {
+			await Bun.write(path.join(tmpDir, "spell.kdl"), 'domain "broken" {');
+			await Bun.write(
+				path.join(tmpDir, ".spell", "task-policies.kdl"),
+				`layer "old" description="Should not appear"\npolicy "old-policy" layer="old" {\n    gate-commit #true\n}\n`,
+			);
+
+			const result = await loadTaskPolicies(tmpDir);
+
+			expect(result).toBeDefined();
+			expect(result!.layers.old).toBeUndefined();
+			expect(result!.policies).toEqual([]);
+		});
 	});
 
 	describe("detectDomain", () => {
@@ -99,6 +113,15 @@ describe("config loading hierarchy", () => {
 
 		it("returns 'coding' when neither file exists", async () => {
 			const result = await detectDomain(tmpDir);
+			expect(result).toBe("coding");
+		});
+
+		it("malformed spell.kdl prevents fallthrough to domain.json", async () => {
+			await Bun.write(path.join(tmpDir, "spell.kdl"), 'domain "broken" {');
+			await Bun.write(path.join(tmpDir, ".spell", "domain.json"), '{"domain": "growth"}');
+
+			const result = await detectDomain(tmpDir);
+
 			expect(result).toBe("coding");
 		});
 	});

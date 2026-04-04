@@ -108,4 +108,23 @@ describe("runInitCommand", () => {
 		expect(content).not.toContain("import ");
 		expect(parseSpellKdl(content)).toBeDefined();
 	});
+
+	it("uses language template for arbitrary custom domain", async () => {
+		const tempDir = await createTempDir();
+		await Bun.write(
+			path.join(tempDir, "package.json"),
+			JSON.stringify({ name: "ops-app", devDependencies: { typescript: "^5" } }),
+		);
+		spyOn(process, "cwd").mockReturnValue(tempDir);
+
+		await runInitCommand({ flags: { domain: "ops" } });
+
+		const content = await Bun.file(path.join(tempDir, "spell.kdl")).text();
+		expect(content).toContain('domain "ops"');
+		// Custom non-growth domain still uses language-specific template
+		expect(content).toContain('import "spell.coding.typescript"');
+		const config = parseSpellKdl(content);
+		expect(config).toBeDefined();
+		expect(config!.domain).toBe("ops");
+	});
 });

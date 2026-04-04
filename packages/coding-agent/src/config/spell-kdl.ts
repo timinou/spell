@@ -16,16 +16,11 @@ import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
 import { resolveTemplate } from "../templates";
 import type { TaskPolicyConfig } from "./task-policies";
-import { parseTaskPoliciesKdl } from "./task-policies-kdl";
+import { getStringArgument, parseTaskPoliciesKdl } from "./task-policies-kdl";
 
 export interface SpellProjectConfig {
 	domain?: string;
 	policies: TaskPolicyConfig;
-}
-
-function getStringArgument(node: Node, index = 0): string | undefined {
-	const value = node.getArgument(index);
-	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 /**
@@ -42,7 +37,10 @@ export function parseSpellKdl(content: string): SpellProjectConfig | undefined {
 		logger.warn("spell-kdl: parse error", {
 			error: error instanceof Error ? error.message : String(error),
 		});
-		return undefined;
+		return {
+			domain: undefined,
+			policies: { version: 1, layers: {}, policies: [] },
+		};
 	}
 
 	let domain: string | undefined;
@@ -119,7 +117,9 @@ export function parseSpellKdl(content: string): SpellProjectConfig | undefined {
 
 /**
  * Load and parse spell.kdl from a project directory.
- * Returns undefined if the file doesn't exist.
+ *
+ * Returns undefined if the file doesn't exist or an I/O error occurs.
+ * Returns an empty config (with warning logged) if the file exists but has invalid KDL.
  */
 export async function loadSpellKdl(projectDir: string): Promise<SpellProjectConfig | undefined> {
 	const spellKdlPath = `${projectDir}/spell.kdl`;
