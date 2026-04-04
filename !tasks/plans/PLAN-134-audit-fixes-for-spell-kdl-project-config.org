@@ -1,0 +1,124 @@
+#+TITLE: Audit fixes for spellkdl project config AUD-036
+#+STATE: DONE
+#+SESSION_ID: 14ad6124c099738d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-04T11-44-42-754Z_14ad6124c099738d.jsonl]]
+#+CUSTOM_ID: PLAN-134-audit-fixes-for-spell-kdl-project-config
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-036-audit-implementation:
+
+Good — `Node` is type-only import, `Document`/`format`/`parse` are value imports. All used correctly.
+
+Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. Silent degradation on malformed spell.kdl
+- **What**: If `spell.kdl` exists but has invalid KDL syntax, `loadSpellKdl` returns `undefined`, causing both `loadTaskPolicies` and `detectDomain` to silently fall through to legacy config files. The user's primary config file is broken but they get stale policies from `.spell/task-policies.kdl` or `.spell/task-policies.yml` without any obvious signal.
+- **Where**: `packages/coding-agent/src/config/spell-kdl.ts:127-128` — `parseSpellKdl` returns `undefined` for parse errors, which `loadSpellKdl` returns to callers as indistinguishable from "file doesn't exist"
+- **Why**: User writes `spell.kdl`, makes a typo, and silently gets old config. The warning goes to the log file, but the session behavior changes without explanation. Distinguishing "file absent" from "file broken" at the return boundary would let callers decide whether to fall through.
+- **Effort**: small
+
+### 2. Stale module docstring in task-policies.ts
+- **What**: Module-level JSDoc still says "Projects declare their layer vocabulary in `.spell/task-policies.kdl` (preferred) or `.spell/task-policies.yml`" — should now mention `spell.kdl` as the preferred/primary source.
+- **Where**: `packages/coding-agent/src/config/task-policies.ts:4-6`
+- **Why**: Misleads the next reader about where to configure policies.
+- **Effort**: trivial
+
+### 3. Duplicated `getStringArgument` helper
+- **What**: Identical `getStringArgument(node, index)` function exists in both `spell-kdl.ts:26` and `task-policies-kdl.ts:7`. Same signature, same body.
+- **Where**: `packages/coding-agent/src/config/spell-kdl.ts:26-29` and `packages/coding-agent/src/config/task-policies-kdl.ts:7-10`
+- **Why**: DRY violation. Two copies to maintain. Extract to a shared KDL utility or have `spell-kdl.ts` import the helpers from `task-policies-kdl.ts` (would require exporting them).
+- **Effort**: trivial
+
+### 4. `detectProject` swallows malformed package.json without checking other languages
+- **What**: When `package.json` exists but is malformed JSON, the catch branch returns `createUnknownProject(cwd)` immediately without checking for `Cargo.toml`, `go.mod`, etc. A project with both a broken `package.json` (e.g. leftover from `npm init`) and a `Cargo.toml` is detected as "unknown" rather than "rust".
+- **Where**: `packages/coding-agent/src/config/project-detection.ts:209-212`
+- **Why**: Edge case, but real in monorepos or projects that evolved from one language to another. The fix would be to `continue` to the next detection step instead of returning early.
+- **Effort**: small
+
+### 5. No test for arbitrary `--domain` value (non-growth)
+- **What**: Tests cover `--domain growth` and default `coding`, but not an arbitrary custom domain like `--domain ops`. The `selectTemplate` function returns `LANGUAGE_TEMPLATES[project.language]` for non-growth domains, so `spell init --domain ops` would produce `domain "ops"` with a language-specific import (e.g. `import "spell.coding.typescript"`), which is valid but potentially surprising.
+- **Where**: `packages/coding-agent/test/cli/init-command.test.ts`
+- **Why**: Untested behavior path. If someone passes `--domain marketing`, they'd get coding-language templates injected, which may not be what they want. At minimum, the behavior should be documented by a test.
+- **Effort**: trivial
+
+### 6. `loadSpellKdl` docstring incomplete
+- **What**: Docstring says "Returns undefined if the file doesn't exist" but it also returns undefined for I/O errors and for invalid KDL (via `parseSpellKdl` returning undefined). The contract is broader than documented.
+- **Where**: `packages/coding-agent/src/config/spell-kdl.ts:120-123`
+- **Why**: Callers can't distinguish "no file" from "broken file" — see finding #1. At minimum the doc should be truthful about all undefined paths.
+- **Effort**: trivial
+
+### 7. `generateAgentsMd` produces empty "## Development" section for unknown projects
+- **What**: When no toolchain commands are detected (unknown project), the AGENTS.md contains `## Development\n` with nothing under it, followed by `## Conventions`.
+- **Where**: `packages/coding-agent/src/cli/init-cli.ts:133-153`
+- **Why**: Minor polish — an empty section looks unfinished. Either omit it when there are no commands or add a placeholder comment.
+- **Effort**: trivial
+
+* Initial Message
+
+Implement audit findings from AUD-036 against the spell.kdl project config (PLAN-133). Seven findings: 2 bugs (silent degradation, detectProject error swallowing), 5 trivial polish items (stale docstrings, duplicated helper, missing test, empty AGENTS.md section).
+
+* Context
+
+** Problem
+The spell.kdl implementation (PLAN-133) shipped with 93 passing tests but the post-implementation audit identified two behavioral defects and five polish items:
+
+1. *Silent degradation*: A malformed =spell.kdl= returns =undefined= from =loadSpellKdl=, causing =loadTaskPolicies= and =detectDomain= to silently fall through to legacy =.spell/task-policies.kdl= / =domain.json=. Users get stale config without knowing their primary config is broken.
+2. *Swallowed error*: =detectProject= returns "unknown" when =package.json= is malformed, even if =Cargo.toml= or =go.mod= exist alongside it.
+3. *Duplicated helper*: =getStringArgument= is identical in =spell-kdl.ts= and =task-policies-kdl.ts=.
+4. *Stale docstrings*: =task-policies.ts= module doc and =loadSpellKdl= JSDoc are incorrect after spell.kdl became the primary source.
+5. *Missing test*: No test for =--domain ops= (arbitrary non-growth domain).
+6. *Empty section*: =generateAgentsMd= outputs an empty "## Development" for unknown projects.
+
+** Approach
+Three items, two waves. The bugs are independent of each other and independent of the polish item.
+
+** Key Decisions
+- For finding #1: =parseSpellKdl= returns an empty config (not =undefined=) on parse error. This means a broken =spell.kdl= acts as "no policies" rather than "pretend I don't exist." Legacy files are correctly skipped. A warning is logged.
+- For finding #4: =detectProject= falls through to other language checks when =package.json= is malformed, instead of returning "unknown" immediately.
+- Findings #2, #3, #5, #6, #7 are batched into a single polish item since they touch different files with no interdependency.
+
+* Verification
+- =bun check:ts= passes (no type errors in modified files; pre-existing spell-server/utils errors are unrelated)
+- =bun test packages/coding-agent/test/config/config-loading-hierarchy.test.ts= — passes with 2 new malformed spell.kdl tests
+- =bun test packages/coding-agent/test/config/spell-kdl.test.ts= — passes (updated expectation for invalid KDL)
+- =bun test packages/coding-agent/test/config/project-detection.test.ts= — passes with updated malformed-package.json test
+- =bun test packages/coding-agent/test/cli/init-command.test.ts= — passes with new custom domain test
+- =bun test packages/coding-agent/test/config/task-policies.test.ts= — still passes
+- =bun test packages/coding-agent/test/config/task-policies-kdl.test.ts= — still passes
+- =bun test packages/coding-agent/test/tools/todo-write-policies.test.ts= — still passes
+
+* Execution Manifest
+
+** Wave 1 — Bugs (parallelizable)
+- [[id:BUG-154-silent-degradation-on-malformed-spell-kd]] — Fix silent degradation on malformed spell.kdl (effort: S)
+- [[id:BUG-155-detectproject-swallows-malformed-package]] — Fix detectProject error swallowing (effort: S)
+
+** Wave 2 — Polish (depends on Wave 1 for clean test baseline)
+- [[id:FEAT-314-polish-spell-kdl-implementation-deduplic]] — Deduplicate helpers, fix docstrings, add test coverage (effort: S, depends: BUG-154, BUG-155)
+
+Total effort: S (3 items, 2 waves)
+
+** Completion [2026-04-03]
+
+*** Verification
+- =bun check:ts= — biome clean, tsgo clean for coding-agent (pre-existing spell-server/utils errors unrelated)
+- =bun test packages/coding-agent/test/config/config-loading-hierarchy.test.ts= — 13 pass (2 new: malformed spell.kdl blocks fallthrough to legacy policies + domain.json)
+- =bun test packages/coding-agent/test/config/spell-kdl.test.ts= — 11 pass (updated: invalid KDL returns empty config)
+- =bun test packages/coding-agent/test/config/project-detection.test.ts= — 12 pass (updated: malformed package.json falls through to Rust; new: malformed alone = unknown)
+- =bun test packages/coding-agent/test/cli/init-command.test.ts= — 8 pass (new: custom domain "ops" test)
+- =bun test packages/coding-agent/test/config/task-policies.test.ts= — 22 pass
+- =bun test packages/coding-agent/test/config/task-policies-kdl.test.ts= — 19 pass
+- =bun test packages/coding-agent/test/tools/todo-write-policies.test.ts= — 19 pass
+- Total: 94 tests across 7 files, 0 failures
+
+*** Artifacts
+No screenshot artifacts needed — all changes are behavioral/config code, verified by automated tests.
+
+*** Deviations
+None.

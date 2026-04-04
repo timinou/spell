@@ -2,8 +2,8 @@
  * Per-project task policy system.
  *
  * Policies associate layer-based gates and guidance with org items. Projects
- * declare their layer vocabulary in `.spell/task-policies.kdl` (preferred) or
- * `.spell/task-policies.yml`; modes can override or extend via frontmatter
+ * declare their layer vocabulary in `spell.kdl` (preferred), `.spell/task-policies.kdl`,
+ * or `.spell/task-policies.yml`; modes can override or extend via frontmatter
  * `taskPolicies`. Gates are auto-injected whenever a task is created with a
  * matching `layer` value.
  */

@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
 export type ProjectLanguage = "typescript" | "javascript" | "rust" | "python" | "go" | "unknown";
 
@@ -208,7 +208,9 @@ export async function detectProject(cwd: string): Promise<DetectedProject> {
 		return await detectJavaScriptProject(cwd, packageJson);
 	} catch (error) {
 		if (!isEnoent(error)) {
-			return createUnknownProject(cwd);
+			logger.warn("project-detection: malformed package.json, checking other languages", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 

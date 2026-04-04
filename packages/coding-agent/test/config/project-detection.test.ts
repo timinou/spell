@@ -181,20 +181,24 @@ describe("detectProject", () => {
 		expect(project.monorepo).toBe(true);
 	});
 
-	it("falls back to unknown for malformed package.json", async () => {
+	it("falls through to Rust when package.json is malformed", async () => {
 		const tempDir = await createTempDir();
 		await Bun.write(path.join(tempDir, "package.json"), "{ invalid json");
-		await Bun.write(path.join(tempDir, "Cargo.toml"), '[package]\nname = "ignored"\n');
+		await Bun.write(path.join(tempDir, "Cargo.toml"), '[package]\nname = "detected"\n');
 
 		const project = await detectProject(tempDir);
 
-		expect(project).toEqual({
-			name: path.basename(tempDir),
-			language: "unknown",
-			frameworks: [],
-			toolchain: {},
-			monorepo: false,
-		});
+		expect(project.language).toBe("rust");
+		expect(project.toolchain.testCmd).toBe("cargo test");
+	});
+
+	it("returns unknown for malformed package.json with no other language markers", async () => {
+		const tempDir = await createTempDir();
+		await Bun.write(path.join(tempDir, "package.json"), "not json at all");
+
+		const project = await detectProject(tempDir);
+
+		expect(project.language).toBe("unknown");
 	});
 
 	it("prefers bun when multiple JavaScript lockfiles exist", async () => {

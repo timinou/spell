@@ -4,17 +4,17 @@ import { logger } from "@oh-my-pi/pi-utils";
 
 import type { LayerDefinition, TaskPolicy, TaskPolicyConfig, TaskPolicyGates } from "./task-policies";
 
-function getStringArgument(node: Node, index = 0): string | undefined {
+export function getStringArgument(node: Node, index = 0): string | undefined {
 	const value = node.getArgument(index);
 	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function getBooleanArgument(node: Node, index = 0): boolean | undefined {
+export function getBooleanArgument(node: Node, index = 0): boolean | undefined {
 	const value = node.getArgument(index);
 	return typeof value === "boolean" ? value : undefined;
 }
 
-function getStringProperty(node: Node, name: string): string | undefined {
+export function getStringProperty(node: Node, name: string): string | undefined {
 	const value = node.getProperty(name);
 	return typeof value === "string" && value.length > 0 ? value : undefined;
 }

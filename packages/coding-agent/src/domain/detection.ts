@@ -1,7 +1,8 @@
 import * as path from "node:path";
+import { parse } from "@bgotink/kdl";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
-import { loadSpellKdl } from "../config/spell-kdl";
+import { parseSpellKdl } from "../config/spell-kdl";
 
 /** Shape of the optional `.spell/domain.json` override file. */
 interface DomainOverrideFile {
@@ -46,8 +47,25 @@ export async function detectDomain(cwd: string, cliOverride?: string): Promise<s
 	}
 
 	// 2. Try spell.kdl domain field
-	const spellConfig = await loadSpellKdl(cwd);
-	if (spellConfig?.domain) return spellConfig.domain;
+	const spellKdlPath = path.join(cwd, "spell.kdl");
+	try {
+		const spellKdlContent = await Bun.file(spellKdlPath).text();
+		try {
+			parse(spellKdlContent);
+		} catch {
+			return "coding";
+		}
+
+		const spellConfig = parseSpellKdl(spellKdlContent);
+		if (spellConfig?.domain) return spellConfig.domain;
+	} catch (error) {
+		if (!isEnoent(error)) {
+			logger.warn("spell-kdl: failed to load spell.kdl", {
+				filePath: spellKdlPath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
 
 	// 3. Legacy: .spell/domain.json (with deprecation warning)
 	const overridePath = path.join(cwd, ".spell", "domain.json");
