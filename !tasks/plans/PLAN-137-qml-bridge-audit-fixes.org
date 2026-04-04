@@ -1,0 +1,72 @@
+#+TITLE: QML bridge audit fixes
+#+STATE: DONE
+#+SESSION_ID: 14ad78a42951f88e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-04T13-27-22-533Z_14ad78a42951f88e.jsonl]]
+#+CUSTOM_ID: PLAN-137-qml-bridge-audit-fixes
+
+NOTE [2026-04-04]: All 4 waves complete. All child items DONE. All verification passed.
+
+
+* Initial Message
+
+continue
+
+* Context
+
+Post-implementation audit of [[id:PLAN-135-qml-bridge-daemon-socket-stability]] identified 9 findings across polish, hardening, and test gaps. This plan addresses all of them in dependency order.
+
+** Key decisions
+- The stale detection race (finding #2) is the only real bug — it creates two concurrent reconnection paths. Fixed with a ~#intentionalDisconnect~ flag rather than temporary ~#stopping~ (which would be cleared before the async close handler fires).
+- Stale detection testability requires a configurable ~heartbeatTimeoutMs~ constructor option. This is clean and useful beyond tests.
+- The lock path inconsistency (finding #5) is folded into BUG-162 since it touches the same area (~kill~, ~dispose~, ~#spawnDaemon~).
+- Finding #7 (unrefSleep in spawnDaemon) is folded into BUG-160 (trivial polish).
+- Finding #4 (destroy_systray owner) is trivial C++ fix folded into BUG-160.
+
+** Critical files
+
+| File | Changes |
+|------|---------|
+| ~packages/qml/bridge/socketserver.h~ | Remove duplicate includes |
+| ~packages/qml/bridge/windowmanager.cpp~ | Clear m_systrayOwner on destroy |
+| ~packages/qml/src/qml-process.ts~ | #intentionalDisconnect flag, #dispatch DRY, unrefSleep in spawn, kill() abort, lock path fix, heartbeatTimeoutMs option |
+| ~packages/qml/test/reconnect.test.ts~ | 3 new tests: reconnect success, stale detection, full cycle |
+
+* Verification
+- ~cd packages/qml && bun run build:bridge~ (C++ compiles)
+- ~bun test packages/qml/test/reconnect.test.ts~ (all existing + new tests pass)
+- ~bun test packages/qml/test/daemon-stderr.test.ts~ (existing tests pass)
+- ~bun test packages/coding-agent/test/tools/canvas-event-classification.test.ts~ (existing tests pass)
+- ~bun check:ts~ (no new type errors)
+
+* Execution Manifest
+
+** Wave 1: Trivial polish (no dependencies)                  :wave:
+- [[id:BUG-160-qml-bridge-audit-polish-duplicate-includ]] — Duplicate includes, dispatch DRY, owner cleanup, unrefSleep in spawn (S, #B)
+
+** Wave 2: Stale detection race fix                          :wave:
+- [[id:BUG-161-stale-detection-in-ensure-triggers-doubl]] — #intentionalDisconnect flag + heartbeatTimeoutMs option (S, #A)
+
+** Wave 3: kill() abort + lock path (depends BUG-161)        :wave:
+- [[id:BUG-162-kill-does-not-abort-in-flight-auto-recon]] — kill() reconnect abort + lock path consistency (XS, #B, depends BUG-161)
+
+** Wave 4: Test coverage (depends BUG-161, BUG-162)          :wave:
+- [[id:FEAT-316-auto-reconnect-and-stale-detection-test]] — Auto-reconnect success, stale detection, full cycle tests (M, #A, depends BUG-161 BUG-162)
+
+
+** Completion [2026-04-04]
+
+*** Verification
+- ~cd packages/qml && bun run build:bridge~ — C++ compiles clean (0 warnings)
+- ~bun test packages/qml/test/reconnect.test.ts~ — 18 tests pass (15 existing + 3 new), 54 expect() calls
+- ~bun test packages/qml/test/daemon-stderr.test.ts~ — 2 tests pass
+- ~bun test packages/coding-agent/test/tools/canvas-event-classification.test.ts~ — 20 tests pass
+- ~bun check:ts~ — no new type errors introduced (pre-existing errors in spell-server and utils only)
+
+*** Artifacts
+- ~packages/qml/bridge/socketserver.h~ — removed 6 duplicate include lines
+- ~packages/qml/bridge/windowmanager.cpp~ — added ~m_systrayOwner = nullptr~ in destroy_systray handler
+- ~packages/qml/src/qml-process.ts~ — #intentionalDisconnect flag, heartbeatTimeoutMs option, DRY #dispatch, unrefSleep in spawnDaemon, kill() reconnect abort, #lockPath() instance method
+- ~packages/qml/test/reconnect.test.ts~ — 3 new test cases (auto-reconnect success, stale detection, full disconnect-reconnect-resume cycle)
+
+*** Deviations
+None.

@@ -1,0 +1,56 @@
+#+TITLE: Auto-reconnect and stale detection test coverage
+#+STATE: DONE
+#+SESSION_ID: 14ad78a42951f88e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-04T13-27-22-533Z_14ad78a42951f88e.jsonl]]
+#+CUSTOM_ID: FEAT-316-auto-reconnect-and-stale-detection-test
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: qml
+#+DEPENDS: BUG-161-stale-detection-in-ensure-triggers-doubl BUG-162-kill-does-not-abort-in-flight-auto-recon
+
+NOTE [2026-04-04]: Added 3 tests: auto-reconnect success, stale detection without socket_disconnected, full disconnect-reconnect-resume cycle. All 18 tests pass.
+
+* Initial Message
+
+continue
+
+The auto-reconnect success path and stale detection reconnect path have no test coverage. These are the two most critical new behaviors from PLAN-135.
+
+* Tests
+
+** Auto-reconnect success test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-316::reconnect-success
+:END:
+- File: ~packages/qml/test/reconnect.test.ts~
+- Contract: after socket close, auto-reconnect re-establishes connection within backoff window
+- Setup: fake daemon on sockPath, connect QmlProcess, destroy server-side socket (triggers disconnect + auto-reconnect), start NEW fake daemon on same sockPath, wait for reconnect
+- Assert: ~proc.isDaemon~ is true, ~proc.takeReconnectState()~ contains the new state from the restarted daemon
+- Edge case: the auto-reconnect delays are [100, 200, 400, 800, 1600]ms. The new server must be ready before the first retry fires. Start the new server immediately after destroying old sockets.
+
+** Stale detection test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-316::stale-detection
+:DEPENDS: BUG-161-stale-detection-in-ensure-triggers-doubl
+:END:
+Sequencing note: requires BUG-161's ~heartbeatTimeoutMs~ constructor option and ~#intentionalDisconnect~ flag for testability.
+- File: ~packages/qml/test/reconnect.test.ts~
+- Contract: ~ensure()~ detects stale socket and reconnects without dispatching ~socket_disconnected~
+- Setup: fake daemon, connect with ~heartbeatTimeoutMs: 100~, sleep 150ms, call ~ensure()~
+- Assert:
+  1. No ~socket_disconnected~ event dispatched (register listener, verify not called)
+  2. ~ensure()~ returns ~"existing"~ (reconnected)
+  3. New state from daemon is available via ~takeReconnectState()~
+
+** Full disconnect-reconnect-resume cycle test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-316::full-cycle
+:END:
+- File: ~packages/qml/test/reconnect.test.ts~
+- Contract: QmlBridge survives disconnect, windows survive, events resume after reconnect
+- Setup: fake daemon sends state with window, QmlBridge reconnects, destroy server-side socket (disconnect), start new fake daemon, wait for auto-reconnect, send event through new daemon
+- Assert: bridge window map survives disconnect, new events arrive after reconnect
+
+* Acceptance Criteria
+- ~bun test packages/qml/test/reconnect.test.ts~ passes with 3 new tests
+- All new tests verify contracts that were specified but unimplemented in PLAN-135

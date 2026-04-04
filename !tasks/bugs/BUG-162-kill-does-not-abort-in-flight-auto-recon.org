@@ -1,0 +1,48 @@
+#+TITLE: kill does not abort in-flight auto-reconnect
+#+STATE: DONE
+#+SESSION_ID: 14ad78a42951f88e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-04T13-27-22-533Z_14ad78a42951f88e.jsonl]]
+#+CUSTOM_ID: BUG-162-kill-does-not-abort-in-flight-auto-recon
+#+EFFORT: XS
+#+PRIORITY: #B
+#+LAYER: qml
+#+DEPENDS: BUG-161-stale-detection-in-ensure-triggers-doubl
+
+NOTE [2026-04-04]: kill() now aborts in-flight reconnect and awaits its completion. Lock path uses instance-level #lockPath() for consistency with #resolvedSocketPath.
+
+* Initial Message
+
+continue
+
+~kill()~ sets ~#stopping = true~ and destroys the socket but does not abort ~#reconnectAbort~ or await ~#reconnectPromise~. The ~dispose()~ method has this fix; ~kill()~ was missed.
+
+* Implementation
+
+** Add reconnect abort to kill()
+:PROPERTIES:
+:CUSTOM_ID: BUG-162::fix
+:END:
+- File: ~packages/qml/src/qml-process.ts~
+- In ~kill()~, before ~this.#stopping = true~:
+  #+begin_src typescript
+  this.#reconnectAbort?.abort();
+  #+end_src
+- After socket cleanup, await reconnect:
+  #+begin_src typescript
+  if (this.#reconnectPromise) {
+      await this.#reconnectPromise.catch(() => {});
+  }
+  #+end_src
+
+** Add lock path consistency
+:PROPERTIES:
+:CUSTOM_ID: BUG-162::lock-path
+:END:
+While touching kill()/dispose(), also fix the lock path inconsistency (audit finding #5):
+- ~#acquireSpawnLock~ and ~#releaseSpawnLock~ should use ~this.#resolvedSocketPath~ when available, falling back to ~QmlProcess.socketPath()~
+- Change ~#releaseSpawnLock~ to accept the lock path as parameter (captured at acquire time)
+- In ~#spawnDaemon~: capture ~lockDir~ before acquire, pass to release in finally
+
+* Acceptance Criteria
+- ~bun test packages/qml/test/reconnect.test.ts~ passes
+- ~kill()~ no longer leaves dangling auto-reconnect timers
