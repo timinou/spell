@@ -1,0 +1,22 @@
+layer "content" description="Blog posts, landing pages, copy"
+layer "analytics" description="Tracking, metrics, A/B tests"
+layer "outreach" description="Email campaigns, social, ads"
+layer "design" description="Brand assets, visual materials"
+
+policy "content-review" layer="content" {
+    gate-llm "Verify tone matches brand voice guidelines"
+    gate-commit #true
+}
+
+policy "analytics-review" layer="analytics" {
+    gate-commit #true
+}
+
+policy "outreach-review" layer="outreach" {
+    gate-llm "Check messaging consistency across channels"
+    gate-commit #true
+}
+
+policy "design-review" layer="design" {
+    gate-commit #true
+}

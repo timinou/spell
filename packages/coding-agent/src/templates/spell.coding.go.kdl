@@ -1,0 +1,18 @@
+layer "core" description="Core packages and services"
+layer "api" description="HTTP and RPC handlers"
+layer "cmd" description="Executable entrypoints"
+
+policy "core-quality" layer="core" {
+    gate-commit #true
+    gate-cmd "go test ./..."
+}
+
+policy "api-quality" layer="api" {
+    gate-commit #true
+    gate-cmd "go test ./..."
+    verify-cmd "go vet ./..."
+}
+
+policy "cmd-quality" layer="cmd" {
+    gate-commit #true
+}

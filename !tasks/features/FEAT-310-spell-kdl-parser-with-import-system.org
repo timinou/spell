@@ -1,0 +1,111 @@
+#+TITLE: spellkdl Parser with Import System
+#+STATE: DONE
+#+SESSION_ID: 14ac8e691fd97376
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T20-24-00-383Z_14ac8e691fd97376.jsonl]]
+#+CUSTOM_ID: FEAT-310-spell-kdl-parser-with-import-system
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: config
+#+DEPENDS: FEAT-309-built-in-policy-templates-as-kdl-files
+
+* Initial Message
+
+I want to set up task policies in kdl with a command when I enter a new repository. like some sort of onboarding thing. what could that look like? finish with your completed summary
+
+Parse =spell.kdl= — the unified project configuration file that replaces =.spell/domain.json= and =.spell/task-policies.yml= with a single KDL source of truth. Includes an import system that resolves dot-namespaced references (=spell.coding.typescript=) to built-in template files.
+
+* spell.kdl Format
+
+#+begin_src kdl
+// spell.kdl — project root
+domain "coding"
+import "spell.coding.typescript"
+
+layer "frontend" description="React components and pages"
+layer "api" description="tRPC routers and middleware"
+
+policy "frontend-quality" layer="frontend" {
+    gate-commit true
+    gate-cmd "bun test test/components/"
+    gate-llm "Verify accessibility and responsive design"
+    inject "Use design tokens from src/theme/"
+}
+#+end_src
+
+Minimal example (three lines):
+#+begin_src kdl
+domain "coding"
+import "spell.coding.typescript"
+#+end_src
+
+* Node Types
+
+| Node     | Arguments        | Properties    | Children       |
+|----------+------------------+---------------+----------------|
+| =domain= | name (string)    | —             | —              |
+| =import= | namespace (string) | —           | —              |
+| =layer=  | name (string)    | description   | —              |
+| =policy= | name (string)    | layer         | gate-*, inject |
+
+Policy children are identical to existing =task-policies-kdl.ts= format: =gate-commit=, =gate-cmd=, =gate-artifact=, =gate-llm=, =verify-cmd=, =inject=, =description=.
+
+* Import Resolution
+
+1. Parse =spell.kdl= top-level nodes
+2. Collect =import= nodes, extract namespace strings
+3. For each namespace, call =resolveTemplate(namespace)= from templates index
+4. Parse each template with =parseTaskPoliciesKdl= (reuse existing parser)
+5. Merge: template layers/policies form the base; local declarations override by name
+   - Same merge semantics as existing =mergePolicies=: local overrides template by policy name
+   - Layers: local wins on key conflict
+   - Multiple imports: applied in order, each extends the accumulated base
+6. Unknown import namespace → log warning, skip (not fatal)
+
+* Types
+
+#+begin_src typescript
+// packages/coding-agent/src/config/spell-kdl.ts
+export interface SpellProjectConfig {
+    domain?: string;
+    policies: TaskPolicyConfig; // reuse existing type
+}
+export function parseSpellKdl(content: string): SpellProjectConfig | undefined;
+export async function loadSpellKdl(projectDir: string): Promise<SpellProjectConfig | undefined>;
+#+end_src
+
+=loadSpellKdl= reads =<projectDir>/spell.kdl=, parses it, resolves imports, returns merged config. Returns undefined if file doesn't exist.
+
+* Existing Code to Reuse
+
+The partially implemented =packages/coding-agent/src/config/task-policies-kdl.ts= already handles layer/policy KDL parsing. The new parser:
+1. Delegates layer/policy parsing to existing =parseTaskPoliciesKdl= logic (extract it into shared helpers or call it on the document subset)
+2. Adds =domain= and =import= node handling on top
+3. Handles the import resolution + merge step
+
+Note: =task-policies-kdl.ts= already exists from a prior session. Its =parseTaskPoliciesKdl= function parses a KDL document with =layer= and =policy= top-level nodes into =TaskPolicyConfig=. Reuse this for template parsing and for the layer/policy subset of spell.kdl.
+
+* Sub-outline
+
+** write parser tests
+=packages/coding-agent/test/config/spell-kdl.test.ts=:
+- Parses domain node
+- Parses layers and policies (same as existing kdl parser tests but through =parseSpellKdl=)
+- Resolves single import — merged layers/policies include template content
+- Local policy overrides imported policy by name
+- Local layer overrides imported layer by key
+- Multiple imports merge in order
+- Unknown import namespace is skipped (returns config without those policies)
+- Missing spell.kdl returns undefined from =loadSpellKdl=
+- Empty spell.kdl returns config with no domain, empty policies
+- Invalid KDL returns undefined
+
+** implement parser and import resolver
+=packages/coding-agent/src/config/spell-kdl.ts=:
+- Parse top-level nodes: =domain=, =import=, =layer=, =policy=
+- Reuse =parseTaskPoliciesKdl= for layer/policy parsing of templates
+- Import resolution via =resolveTemplate= from templates index
+- Merge logic: accumulated base from imports, local overrides on top
+
+* Verification
+- =bun test packages/coding-agent/test/config/spell-kdl.test.ts= passes
+- =bun check:ts= passes for =packages/coding-agent/src/config/spell-kdl.ts=

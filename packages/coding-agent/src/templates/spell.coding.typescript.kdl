@@ -1,0 +1,23 @@
+layer "core" description="Core business logic and shared types"
+layer "api" description="API endpoints, routes, and middleware"
+layer "ui" description="Frontend components and pages"
+layer "data" description="Database models, migrations, and queries"
+
+policy "core-quality" layer="core" {
+    gate-commit #true
+}
+
+policy "api-quality" layer="api" {
+    gate-commit #true
+    gate-cmd "bun test"
+}
+
+policy "ui-quality" layer="ui" {
+    gate-commit #true
+    gate-cmd "bun test"
+}
+
+policy "data-safety" layer="data" {
+    gate-commit #true
+    gate-llm "Verify migration safety and reversibility"
+}

@@ -1,0 +1,19 @@
+layer "core" description="Core application logic"
+layer "api" description="API services and routes"
+layer "data" description="Data models and persistence"
+
+policy "core-quality" layer="core" {
+    gate-commit #true
+    gate-cmd "pytest"
+}
+
+policy "api-quality" layer="api" {
+    gate-commit #true
+    gate-cmd "pytest"
+    verify-cmd "mypy"
+}
+
+policy "data-safety" layer="data" {
+    gate-commit #true
+    gate-llm "Verify migration safety and reversibility"
+}

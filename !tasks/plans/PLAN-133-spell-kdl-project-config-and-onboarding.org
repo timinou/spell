@@ -1,0 +1,121 @@
+#+TITLE: spellkdl Project Config and Onboarding
+#+STATE: DONE
+#+SESSION_ID: 14ac8e691fd97376
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T20-24-00-383Z_14ac8e691fd97376.jsonl]]
+#+CUSTOM_ID: PLAN-133-spell-kdl-project-config-and-onboarding
+
+
+* Initial Message
+
+I want to set up task policies in kdl with a command when I enter a new repository. like some sort of onboarding thing. what could that look like? finish with your completed summary
+
+* Context
+
+** Problem
+Spell has no onboarding story. When you enter a new repo, there is no =spell init=. Task policies — one of the most powerful features (automatic gate injection per layer) — require manually creating =.spell/task-policies.yml= with an undocumented YAML schema. Domain selection requires a separate =.spell/domain.json=. Configuration is scattered across multiple files with no unified entry point.
+
+** Approach: spell.kdl as the project manifest
+Introduce =spell.kdl= at the project root as the single entry point for project configuration. It replaces =.spell/domain.json= (domain selection) and =.spell/task-policies.yml= (policy definitions) with a unified KDL file that reads like documentation:
+
+#+begin_src kdl
+domain "coding"
+import "spell.coding.typescript"
+
+policy "api-quality" layer="api" {
+    gate-commit true
+    gate-cmd "bun test"
+    verify-cmd "tsgo"
+}
+#+end_src
+
+Three lines gets you full policies. The =import= system uses dot-namespaced references (=spell.coding.typescript=, =spell.growth.default=) to pull in built-in template files that provide default layers and policies for common project types.
+
+=spell init= becomes the entry point — detects the project's language, frameworks, and actual toolchain (test runner, type checker, linter), picks the right template, and generates =spell.kdl= with real gate commands from the detected toolchain.
+
+** Key Decisions
+- *File location*: =spell.kdl= at project root (not inside =.spell/=) — visible, version-controlled, like =package.json= or =Cargo.toml=
+- *Import namespace*: dot-notation (=spell.coding.typescript=) — module-style, extensible
+- *Merge semantics*: imports provide base layers/policies; local declarations override by name (reuses existing =mergePolicies= logic)
+- *Backward compat*: =spell.kdl= → =.spell/task-policies.kdl= → =.spell/task-policies.yml= fallback chain. Existing YAML configs keep working.
+- *Domain deprecation*: =spell.kdl= =domain= node replaces =.spell/domain.json=. domain.json still works but logs a deprecation warning.
+- *Detection scope*: Smart toolchain detection (test/check/lint commands) for coding projects only. Growth and other domains get template defaults.
+- *Partial implementation*: A prior session created =task-policies-kdl.ts= (KDL parser), =init-cli.ts= (basic init), =commands/init.ts= (CLI class), and registered the init command in =cli.ts=. The executor should build on this, not start from scratch. =@bgotink/kdl= is already a dependency.
+
+** What This Makes Possible
+- *Zero-config onboarding*: =spell init= → working policies in seconds
+- *Template ecosystem*: =spell.coding.typescript=, =spell.growth.default=, eventually user-defined templates
+- *Single source of truth*: One file tells you everything about how spell is configured for this project
+- *Smart gates*: Policies reference the project's actual test/check commands, not placeholders
+- *Domain-aware*: Growth projects get content/analytics/outreach layers; coding projects get frontend/api/data layers
+- *Composable*: Import a base template, override what you need, done
+
+* Verification
+- =bun check:ts= passes (no type errors in modified/new files)
+- =bun test packages/coding-agent/test/config/template-resolution.test.ts= — template loading
+- =bun test packages/coding-agent/test/config/spell-kdl.test.ts= — spell.kdl parsing + imports
+- =bun test packages/coding-agent/test/config/project-detection.test.ts= — toolchain detection
+- =bun test packages/coding-agent/test/cli/init-command.test.ts= — end-to-end init flow
+- =bun test packages/coding-agent/test/config/config-loading-hierarchy.test.ts= — loading fallback chain
+- Existing tests still pass: =bun test packages/coding-agent/test/config/task-policies.test.ts= and =bun test packages/coding-agent/test/config/task-policies-kdl.test.ts= and =bun test packages/coding-agent/test/tools/todo-write-policies.test.ts=
+- Manual: create a temp directory with =package.json= containing test scripts, run =spell init=, verify =spell.kdl= contains detected commands
+
+* Execution Manifest
+
+** Wave 1 — Foundation (parallelizable)
+- [[id:FEAT-309-built-in-policy-templates-as-kdl-files]] — Ship built-in KDL templates (effort: S)
+- [[id:FEAT-311-smart-project-detection-module]] — Smart project detection (effort: M)
+
+** Wave 2 — Parser (depends on templates)
+- [[id:FEAT-310-spell-kdl-parser-with-import-system]] — spell.kdl parser with import resolution (effort: M, depends: FEAT-309)
+
+** Wave 3 — Integration (depends on parser)
+- [[id:FEAT-313-unified-config-loader-for-spell-kdl]] — Wire spell.kdl into existing loading pipeline (effort: M, depends: FEAT-310)
+- [[id:FEAT-312-spell-init-onboarding-command]] — =spell init= command (effort: M, depends: FEAT-309, FEAT-310, FEAT-311)
+
+** Follow-up
+- [[id:FUP-038-domain-json-deprecation-and-migration-gu]] — domain.json deprecation guide (effort: S, depends: FEAT-313)
+
+Total effort: ~M-L (5 items, 3 waves)
+
+** Completion [2026-04-03]
+*** Verification
+- =bun check:ts= passes — no type errors in modified/new files (pre-existing errors in spell-server and utils packages are unrelated)
+- =bun test packages/coding-agent/test/config/template-resolution.test.ts= — 5 pass
+- =bun test packages/coding-agent/test/config/spell-kdl.test.ts= — 13 pass
+- =bun test packages/coding-agent/test/config/project-detection.test.ts= — 11 pass
+- =bun test packages/coding-agent/test/cli/init-command.test.ts= — 6 pass
+- =bun test packages/coding-agent/test/config/config-loading-hierarchy.test.ts= — 9 pass
+- =bun test packages/coding-agent/test/config/task-policies.test.ts= — 20 pass
+- =bun test packages/coding-agent/test/config/task-policies-kdl.test.ts= — 10 pass (fixed KDL v2 boolean syntax: =true= to =#true=)
+- =bun test packages/coding-agent/test/tools/todo-write-policies.test.ts= — 19 pass
+- Total: 93 tests, 0 failures across 8 files
+- Manual verification: created temp dir with package.json, ran =spell init=, verified =spell.kdl= contains detected domain, import, and toolchain-aware policies; =.spell/AGENTS.md= generated with project overview
+
+*** Artifacts
+**** Source files created
+- =packages/coding-agent/src/templates/spell.coding.typescript.kdl= — TypeScript template
+- =packages/coding-agent/src/templates/spell.coding.rust.kdl= — Rust template
+- =packages/coding-agent/src/templates/spell.coding.python.kdl= — Python template
+- =packages/coding-agent/src/templates/spell.coding.go.kdl= — Go template
+- =packages/coding-agent/src/templates/spell.growth.default.kdl= — Growth template
+- =packages/coding-agent/src/templates/index.ts= — Template barrel with =resolveTemplate()=
+- =packages/coding-agent/src/config/project-detection.ts= — Smart project detection
+- =packages/coding-agent/src/config/spell-kdl.ts= — spell.kdl parser with import resolution
+
+**** Source files modified
+- =packages/coding-agent/src/config/task-policies.ts= — =loadTaskPolicies= now tries =spell.kdl= first
+- =packages/coding-agent/src/domain/detection.ts= — =detectDomain= now tries =spell.kdl= first, domain.json gets deprecation warning
+- =packages/coding-agent/src/cli/init-cli.ts= — Completely rewritten: uses =detectProject=, generates =spell.kdl= + =.spell/AGENTS.md=
+- =packages/coding-agent/src/commands/init.ts= — Added =--domain= flag
+- =packages/coding-agent/test/config/task-policies-kdl.test.ts= — Fixed KDL v2 boolean syntax
+
+**** Test files created
+- =packages/coding-agent/test/config/template-resolution.test.ts=
+- =packages/coding-agent/test/config/project-detection.test.ts=
+- =packages/coding-agent/test/config/spell-kdl.test.ts=
+- =packages/coding-agent/test/config/config-loading-hierarchy.test.ts=
+- =packages/coding-agent/test/cli/init-command.test.ts=
+
+*** Deviations
+- Fixed pre-existing KDL v2 syntax issue in =task-policies-kdl.test.ts= (bare =true= to =#true=)
+- FUP-038 (domain.json deprecation guide) deferred per plan as follow-up"
