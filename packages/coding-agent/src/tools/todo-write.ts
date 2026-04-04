@@ -14,14 +14,7 @@ import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import chalk from "chalk";
 import { renderPromptTemplate } from "../config/prompt-templates";
-import {
-	applyPolicyGates,
-	loadTaskPolicies,
-	matchPolicies,
-	mergePolicies,
-	type TaskPolicy,
-	type TaskPolicyGates,
-} from "../config/task-policies";
+import { applyPolicyGates, type TaskPolicy, type TaskPolicyGates } from "../config/task-policies";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import { buildOrgConfig } from "../plan-mode/org-plan";
@@ -268,7 +261,7 @@ export function getNextTodoIds(phases: TodoPhase[]): { nextTaskId: number; nextP
 	return { nextTaskId: maxTaskId + 1, nextPhaseId: maxPhaseId + 1 };
 }
 
-export function fileFromPhases(phases: TodoPhase[]): TodoFile {
+function fileFromPhases(phases: TodoPhase[]): TodoFile {
 	const { nextTaskId, nextPhaseId } = getNextTodoIds(phases);
 	return { phases, nextTaskId, nextPhaseId };
 }
@@ -291,7 +284,7 @@ export function cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
 }
 
 export function injectPolicyGates(task: TodoItem, policies: TaskPolicy[]): void {
-	if (!task.layer || policies.length === 0 || matchPolicies(task.layer, policies).length === 0) return;
+	if (!task.layer || policies.length === 0) return;
 	const resolved = applyPolicyGates(
 		{
 			gateCommit: task.gateCommit,
@@ -589,6 +582,7 @@ export function applyOps(
 					errors.push(`Task "${op.id}" not found`);
 					break;
 				}
+				// Apply non-status fields first (preserved even if gate rejects status transition)
 				if (op.content !== undefined) task.content = op.content;
 				if (op.notes !== undefined) task.notes = op.notes;
 				if (op.details !== undefined) task.details = op.details;
@@ -601,10 +595,12 @@ export function applyOps(
 				if (op.orgItemId !== undefined) task.orgItemId = op.orgItemId;
 				if (op.orgItemClosingId !== undefined) task.orgItemClosingId = op.orgItemClosingId;
 				if (op.delegation !== undefined) task.delegation = cloneTodoDelegation(op.delegation);
+				// Policy gates: inject when layer is set via update
 				if (op.layer !== undefined) {
 					task.layer = op.layer;
 					injectPolicyGates(task, policies);
 				}
+				// Smart gate: reject in_progress transition when task has unresolved blockers
 				if (op.status === "in_progress" && task.blockers?.length) {
 					const allTasks = file.phases.flatMap(p => p.tasks);
 					if (hasUnresolvedBlockers(task, allTasks)) {
@@ -621,10 +617,12 @@ export function applyOps(
 						break;
 					}
 				}
+				// Two-phase gated completion: reject completion without verification
 				if (op.status === "completed" && hasRequiredGate(task) && !op.verified) {
 					pendingVerificationTasks.push(task);
 					break;
 				}
+				// Deferral gate: abandoned requires deferralFupId
 				if (op.status === "abandoned" && (!op.deferralFupId || op.deferralFupId.trim() === "")) {
 					pendingDeferralTasks.push(task);
 					break;
@@ -638,6 +636,7 @@ export function applyOps(
 
 	normalizeInProgressTask(file.phases);
 
+	// Validate dangling blocker refs — warn but don't change behavior (missing = resolved)
 	const allTaskIds = new Set(file.phases.flatMap(p => p.tasks.map(t => t.id)));
 	for (const phase of file.phases) {
 		for (const task of phase.tasks) {
@@ -648,11 +647,13 @@ export function applyOps(
 		}
 	}
 
+	// Detect newly completed phases
 	const completedPhaseIds: string[] = [];
 	for (const phase of file.phases) {
 		if (isPhaseComplete(phase) && !wasComplete.get(phase.id)) completedPhaseIds.push(phase.id);
 	}
 
+	// Detect tasks that transitioned to completed and have gates
 	const completedGatedTasks: TodoItem[] = [];
 	for (const phase of file.phases) {
 		for (const task of phase.tasks) {
@@ -880,8 +881,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 		return await queueTodoMutation(this.session, async () => {
 			const previousPhases = cloneTodoPhases(this.session.getTodoPhases?.() ?? []);
 			const current = fileFromPhases(cloneTodoPhases(previousPhases));
-			const projectPolicies = await loadTaskPolicies(this.session.cwd ?? "");
-			const activePolicies = mergePolicies(projectPolicies, undefined).policies;
+			const activePolicies = this.session.getResolvedTaskPolicies?.() ?? [];
 			const {
 				file: updated,
 				errors,

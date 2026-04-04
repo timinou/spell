@@ -101,6 +101,7 @@ This project declares layer-based task policies. Set `:LAYER:` on org items and 
 |`{{@key}}`|{{this.description}}|
 {{/each}}
 
+{{#if taskPolicyList.length}}
 ### Active Policies
 {{#each taskPolicyList}}
 **{{this.name}}** (layer: `{{this.match.layer}}`)
@@ -111,6 +112,7 @@ This project declares layer-based task policies. Set `:LAYER:` on org items and 
 {{/if}}{{#if this.gates.verifyCmd}}- Verify command: `{{this.gates.verifyCmd}}`
 {{/if}}{{#if this.inject}}- Guidance: {{this.inject}}{{/if}}
 {{/each}}
+{{/if}}
 
 For sub-outline items that share the parent's layer, `:LAYER:` is inherited automatically — only set it explicitly when the sub-item has a different layer.
 {{/if}}

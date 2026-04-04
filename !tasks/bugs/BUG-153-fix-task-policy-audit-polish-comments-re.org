@@ -1,0 +1,143 @@
+#+TITLE: Fix task policy audit polish comments redundant match test gaps prompt guard
+#+STATE: DONE
+#+SESSION_ID: 14ac873c4f4d89a3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T19-52-39-485Z_14ac873c4f4d89a3.jsonl]]
+#+CUSTOM_ID: BUG-153-fix-task-policy-audit-polish-comments-re
+#+EFFORT: 1h
+#+PRIORITY: B
+#+LAYER: infra
+
+NOTE [2026-04-04]: Fixed: redundant matchPolicies guard, restored applyOps comments, un-exported fileFromPhases, added add_phase test, guarded Active Policies heading.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-035-audit-implementation:
+
+Now I have a thorough picture. Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. Mode-level policies not merged at enforcement time
+- **What**: `TodoWriteTool.execute()` and `TaskTool.#injectVerificationContext()` both call `mergePolicies(projectPolicies, undefined)` — the second argument is hardcoded `undefined` instead of pulling mode-level `taskPolicies` from the frontmatter. The prompts (agent-session.ts, interactive-mode.ts) correctly merge mode policies, but the enforcement points don't.
+- **Where**: `packages/coding-agent/src/tools/todo-write.ts:884`, `packages/coding-agent/src/task/index.ts:214`
+- **Why**: If a user defines mode-specific policies via frontmatter `taskPolicies`, those policies appear in the planner's prompt but are not enforced at gate injection time. The planner sees the policy, sets `:LAYER:` accordingly, but when the task executes, only project-level policies apply. This is a contract mismatch — the system promises enforcement it cannot deliver. The `ToolSession` interface doesn't expose mode config, so resolving this requires either threading mode policies through session state or adding a `getActivePolicies()` accessor.
+- **Effort**: `medium`
+
+### 2. `loadTaskPolicies` called on every `todo_write` execution
+- **What**: Every todo mutation (including trivial `update` ops like marking a task in_progress) triggers a filesystem read of `.spell/task-policies.yml`. The file is re-read from disk on every `execute()` call.
+- **Where**: `packages/coding-agent/src/tools/todo-write.ts:883`, `packages/coding-agent/src/task/index.ts:213`
+- **Why**: For sessions with high todo mutation frequency, this means dozens of redundant file reads per session. The file rarely changes during a session. A session-scoped cache (load once, invalidate on config change) would eliminate the overhead.
+- **Effort**: `small`
+
+### 3. `injectPolicyGates` calls `matchPolicies` redundantly
+- **What**: `injectPolicyGates` (line 294) calls `matchPolicies` as a guard, then calls `applyPolicyGates` which internally calls `resolveGates` which calls `matchPolicies` again with the same arguments.
+- **Where**: `packages/coding-agent/src/tools/todo-write.ts:294` → `packages/coding-agent/src/config/task-policies.ts:189`
+- **Why**: Minor performance waste — two array filters on every task creation with a layer. Not a bug, but an unnecessary DRY violation in the hot path. The early-return guard in `injectPolicyGates` could just check `!task.layer || policies.length === 0` and let `applyPolicyGates` handle the no-match case (it already returns a no-op result when nothing matches).
+- **Effort**: `trivial`
+
+### 4. Subagent removed comments from `applyOps` in todo-write.ts
+- **What**: The subagent stripped inline comments from the `update` case in `applyOps`: "Apply non-status fields first", "Smart gate: reject in_progress…", "Two-phase gated completion", "Deferral gate: abandoned requires…", "Validate dangling blocker refs", "Detect newly completed phases", "Detect tasks that transitioned to completed". These comments documented the intent of sequential gate checks.
+- **Where**: `packages/coding-agent/src/tools/todo-write.ts`, applyOps function body (lines 590-660)
+- **Why**: The `applyOps` function has a complex flow where ordering of checks matters (non-status fields applied first, then blocker check, then gate check, then deferral check). Without comments, the next editor must reverse-engineer why the ordering matters. Maintenance cost.
+- **Effort**: `small`
+
+### 5. `fileFromPhases` exported without justification
+- **What**: `fileFromPhases` was changed from a private function to `export function` to make it accessible in tests.
+- **Where**: `packages/coding-agent/src/tools/todo-write.ts:268`
+- **Why**: The function is an internal implementation detail (creates a `TodoFile` struct from phases). Exporting it to tests couples the test to internal structure. The tests could construct the input differently, or the function could be left private and tested indirectly through `applyOps` (which was also exported). Minor — not a bug, but an API surface expansion that isn't necessary.
+- **Effort**: `trivial`
+
+### 6. No test for `add_phase` op with layer + policy injection
+- **What**: The `applyOps` tests cover `replace` and `update` ops with policy injection, but not `add_phase`. The `add_phase` code path goes through `buildPhaseFromInput` which calls `injectPolicyGates`, so it should work, but there's no direct test proving it.
+- **Where**: `packages/coding-agent/test/tools/todo-write-policies.test.ts`
+- **Why**: If someone refactors `buildPhaseFromInput` or changes how `add_phase` constructs tasks, the gap would go unnoticed. Low risk since `replace` and `add_phase` share the same code path via `buildPhaseFromInput`, but the plan's test matrix listed `add_phase` as a required scenario.
+- **Effort**: `trivial`
+
+### 7. Prompt renders empty "Active Policies" section when layers exist but no policies
+- **What**: `hasTaskPolicies` is true when `Object.keys(mergedPolicies.layers).length > 0`, even if `policies` is empty. This renders the `## Project Task Policies` section with a layers table but an empty "### Active Policies" section (the `{{#each taskPolicyList}}` block produces nothing).
+- **Where**: `packages/coding-agent/src/session/agent-session.ts:2248`, `packages/coding-agent/src/prompts/system/plan-mode-active.md:104-113`
+- **Why**: The planner sees a "### Active Policies" heading with nothing beneath it. Not broken, but confusing. The intent was to show layers as a vocabulary reference even without policies, which is reasonable — but the empty heading could be guarded with `{{#if taskPolicyList.length}}` or similar.
+- **Effort**: `trivial`
+
+### 8. `exit-plan-mode.ts` layer resolution does N+1 org lookups without batching
+- **What**: For each wave entry, `loadProperties` calls `resolvePlanItem` which does `findItemById` with a full category scan. For sub-outline items, it does a second lookup for the parent. With 20 wave entries spanning 10 parent items, this is 30 sequential async org lookups.
+- **Where**: `packages/coding-agent/src/tools/exit-plan-mode.ts:160-184`
+- **Why**: The caching map (`propertiesByItemId`) prevents duplicate lookups for the same ID, which helps when multiple sub-outlines share a parent. But the lookups are still sequential (`await` in a loop). For large plans, this adds latency to plan approval. Could batch-resolve all unique IDs upfront. Low urgency since plan approval is already a slow path with child validation.
+- **Effort**: `small`
+
+* Problem
+Six trivial/small issues from PLAN-128 audit that can be fixed in one pass:
+
+1. *Redundant matchPolicies call*: ~injectPolicyGates~ (todo-write.ts:294) calls ~matchPolicies~ as an early-exit guard, then ~applyPolicyGates~ calls ~resolveGates~ which calls ~matchPolicies~ again with the same arguments. Remove the guard's ~matchPolicies~ call and let ~applyPolicyGates~ handle the no-match case.
+
+2. *Removed comments in applyOps*: The PLAN-128 subagent stripped inline comments from the ~update~ case in ~applyOps~: "Apply non-status fields first", "Smart gate: reject in_progress transition…", "Two-phase gated completion", "Deferral gate: abandoned requires…", "Validate dangling blocker refs", "Detect newly completed phases", "Detect tasks that transitioned to completed". Restore these.
+
+3. *Unnecessary export of fileFromPhases*: ~fileFromPhases~ was made ~export~ for tests. Tests can use ~applyOps~ (already exported) which constructs the file internally. Un-export ~fileFromPhases~ and update test to use ~applyOps~ or import via test path.
+
+4. *No test for add_phase with layer + policy injection*: Tests cover ~replace~ and ~update~ ops but not ~add_phase~. The code path shares ~buildPhaseFromInput~ but the plan's test matrix listed ~add_phase~ as required.
+
+5. *Empty "Active Policies" heading when only layers declared*: ~hasTaskPolicies~ is true when layers exist but policies array is empty, rendering a heading with no content beneath it. Guard the "Active Policies" sub-heading with ~{{#if taskPolicyList.length}}~ (Handlebars evaluates ~.length~ as truthy when > 0).
+
+6. *matchPolicies import in todo-write.ts*: After fix #1, ~matchPolicies~ import in todo-write.ts is no longer needed. Remove it.
+
+* Implementation
+
+** Fix injectPolicyGates redundant guard
+:PROPERTIES:
+:CUSTOM_ID: BUG-153::fix-guard
+:END:
+- File: ~packages/coding-agent/src/tools/todo-write.ts~ line 294
+- Change: ~if (!task.layer || policies.length === 0 || matchPolicies(task.layer, policies).length === 0) return;~
+- To: ~if (!task.layer || policies.length === 0) return;~
+- Remove ~matchPolicies~ import since it's no longer used
+
+** Restore applyOps comments
+:PROPERTIES:
+:CUSTOM_ID: BUG-153::restore-comments
+:END:
+- File: ~packages/coding-agent/src/tools/todo-write.ts~ applyOps function
+- Add inline comments documenting the ordering contract:
+  - Before non-status field updates: ~// Apply non-status fields first (preserved even if gate rejects status transition)~
+  - Before layer injection: ~// Policy gates: inject when layer is set via update~
+  - Before blocker check: ~// Smart gate: reject in_progress transition when task has unresolved blockers~
+  - Before verification check: ~// Two-phase gated completion: reject completion without verification~
+  - Before deferral check: ~// Deferral gate: abandoned requires deferralFupId~
+  - Before blocker ref validation: ~// Validate dangling blocker refs — warn but don't change behavior (missing = resolved)~
+  - Before phase completion detection: ~// Detect newly completed phases~
+  - Before gated task detection: ~// Detect tasks that transitioned to completed and have gates~
+
+** Un-export fileFromPhases
+:PROPERTIES:
+:CUSTOM_ID: BUG-153::unexport
+:END:
+- File: ~packages/coding-agent/src/tools/todo-write.ts~ line 271
+- Change: ~export function fileFromPhases~ → ~function fileFromPhases~
+- Update test to not import it: ~test/tools/todo-write-policies.test.ts~ — replace ~fileFromPhases~ usage with equivalent inline construction or use ~applyOps~ which internally creates the file
+
+** Add add_phase policy injection test
+:PROPERTIES:
+:CUSTOM_ID: BUG-153::add-phase-test
+:END:
+- File: ~packages/coding-agent/test/tools/todo-write-policies.test.ts~
+- Add test: ~applyOps~ with ~add_phase~ op containing task with ~layer: "frontend"~ → verify gates injected
+
+** Guard Active Policies heading
+:PROPERTIES:
+:CUSTOM_ID: BUG-153::guard-heading
+:END:
+- File: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~ line 104
+- Change: ~### Active Policies~ followed by ~{{#each taskPolicyList}}~
+- To: ~{{#if taskPolicyList.length}}~ before heading, ~{{/if}}~ after ~{{/each}}~
+
+* Edge Cases
+- ~applyPolicyGates~ with no matching policies returns the existing gates unchanged — safe to remove the guard
+- Tests importing ~fileFromPhases~ — verify no other test files import it
+
+* Acceptance Criteria
+- ~bun test packages/coding-agent/test/tools/todo-write-policies.test.ts~ passes (including new add_phase test)
+- ~bun test packages/coding-agent/test/prompts/plan-mode-policies.test.ts~ passes
+- ~bun check:ts~ passes (coding-agent package)
+- ~fileFromPhases~ is no longer exported
+- No ~matchPolicies~ import in todo-write.ts

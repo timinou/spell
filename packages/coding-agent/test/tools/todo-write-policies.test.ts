@@ -9,8 +9,8 @@ import type { TaskPolicy } from "../../src/config/task-policies";
 import {
 	applyOps,
 	type FormatSummaryOptions,
-	fileFromPhases,
 	formatSummary,
+	getNextTodoIds,
 	injectPolicyGates,
 	type TodoItem,
 	type TodoStatus,
@@ -24,7 +24,12 @@ function makePhase(id: string, name: string, tasks: TodoItem[]): TodoPhase {
 	return { id, name, tasks };
 }
 
-function createSession(cwd: string, initialPhases: TodoPhase[] = []): ToolSession {
+function fileFromPhases(phases: TodoPhase[]) {
+	const { nextTaskId, nextPhaseId } = getNextTodoIds(phases);
+	return { phases, nextTaskId, nextPhaseId };
+}
+
+function createSession(cwd: string, initialPhases: TodoPhase[] = [], policies?: TaskPolicy[]): ToolSession {
 	let phases = initialPhases;
 	return {
 		cwd,
@@ -36,6 +41,7 @@ function createSession(cwd: string, initialPhases: TodoPhase[] = []): ToolSessio
 		setTodoPhases: next => {
 			phases = next;
 		},
+		getResolvedTaskPolicies: policies ? () => policies : undefined,
 	};
 }
 
@@ -142,30 +148,43 @@ describe("applyOps policy injection", () => {
 		expect(task.gateCommit).toBe(true);
 		expect(task.verifyCmd).toBe("bun check packages/coding-agent/src/tools/todo-write.ts");
 	});
-});
 
-describe("TodoWriteTool policy loading", () => {
-	it("loads project policies and injects gates during execute", async () => {
-		await fs.mkdir(path.join(tempDir, ".spell"), { recursive: true });
-		await fs.writeFile(
-			path.join(tempDir, ".spell", "task-policies.yml"),
-			[
-				"version: 1",
-				"layers:",
-				"  frontend:",
-				"    description: Frontend work",
-				"policies:",
-				"  - name: frontend-gates",
-				"    match:",
-				"      layer: frontend",
-				"    gates:",
-				"      gateCommit: true",
-				"      gateCmd: bun test packages/coding-agent/test/tools/todo-write-policies.test.ts",
-				"      verifyCmd: bun check packages/coding-agent/src/tools/todo-write.ts",
-			].join("\n"),
+	it("injects policy gates on add_phase with layer", () => {
+		const initial = fileFromPhases([
+			makePhase("phase-1", "Existing", [makeTask({ id: "task-1", content: "Setup" })]),
+		]);
+		const result = applyOps(
+			initial,
+			[{ op: "add_phase", name: "Frontend", tasks: [{ content: "Build UI", layer: "frontend" }] }],
+			initial.phases,
+			frontendPolicies,
 		);
 
-		const tool = new TodoWriteTool(createSession(tempDir));
+		const addedPhase = result.file.phases[1];
+		if (!addedPhase) throw new Error("Expected added phase");
+		const task = addedPhase.tasks[0];
+		if (!task) throw new Error("Expected task in added phase");
+		expect(task.layer).toBe("frontend");
+		expect(task.gateCommit).toBe(true);
+		expect(task.gateCmd).toBe("bun test packages/coding-agent/test/tools/todo-write-policies.test.ts");
+		expect(task.verifyCmd).toBe("bun check packages/coding-agent/src/tools/todo-write.ts");
+	});
+});
+
+describe("TodoWriteTool session policy injection", () => {
+	it("uses session-provided policies to inject gates during execute", async () => {
+		const sessionPolicies: TaskPolicy[] = [
+			{
+				name: "frontend-gates",
+				match: { layer: "frontend" },
+				gates: {
+					gateCommit: true,
+					gateCmd: "bun test packages/coding-agent/test/tools/todo-write-policies.test.ts",
+					verifyCmd: "bun check packages/coding-agent/src/tools/todo-write.ts",
+				},
+			},
+		];
+		const tool = new TodoWriteTool(createSession(tempDir, [], sessionPolicies));
 		const result = await tool.execute("call-1", {
 			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Implement UI", layer: "frontend" }] }] }],
 		});

@@ -33,6 +33,7 @@ import "./discovery";
 import { EmacsSessionManager, type EmacsWarmupResult, warmupEmacs } from "@oh-my-pi/pi-emacs";
 import { buildServicePromptSection } from "./browser/service-prompt-section";
 import { resolveConfigValue } from "./config/resolve-config-value";
+import { loadTaskPolicies, mergePolicies, type TaskPolicy } from "./config/task-policies";
 import { initializeWithSettings } from "./discovery";
 import type { SpellDomain } from "./domain/loader";
 import { applyDomainToolPolicy, loadDomainPromptContext } from "./domain/policy";
@@ -973,6 +974,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const gatewayClient = taskDepth === 0 ? new GatewayClient({ autoSpawn: false }) : undefined;
 
+	// Load project-level task policies once per session (cached in the closure below)
+	const projectTaskPolicies = await loadTaskPolicies(cwd);
+
 	const toolSession: ToolSession = {
 		cwd,
 		hasUI: options.hasUI ?? false,
@@ -1028,6 +1032,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		orgSessionManager,
 		loopManager,
 		gatewayClient,
+		getResolvedTaskPolicies: (() => {
+			let cached: TaskPolicy[] | undefined;
+			return () => {
+				if (cached !== undefined) return cached;
+				const modeState = session?.getActiveModeState();
+				let modePolicies: TaskPolicy[] | undefined;
+				if (modeState?.type === "plan" && modeState.modeConfigName) {
+					modePolicies = session?.getModeConfig(modeState.modeConfigName)?.frontmatter?.taskPolicies;
+				} else if (modeState?.type === "user") {
+					modePolicies = modeState.config?.frontmatter?.taskPolicies;
+				}
+				cached = mergePolicies(projectTaskPolicies, modePolicies).policies;
+				return cached;
+			};
+		})(),
 	};
 
 	// Initialize internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, local://)

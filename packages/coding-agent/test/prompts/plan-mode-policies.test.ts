@@ -112,6 +112,7 @@ describe("plan-mode task policy prompts", () => {
 		expect(rendered).toContain("## Project Task Policies");
 		expect(rendered).toContain("### Declared Layers");
 		expect(rendered).toContain("|`app`|Application logic and workflows|");
+		expect(rendered).not.toContain("### Active Policies");
 	});
 
 	it("renders plan-mode-approved task policies when configured", () => {
