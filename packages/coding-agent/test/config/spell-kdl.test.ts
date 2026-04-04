@@ -8,9 +8,8 @@ import { loadSpellKdl, parseSpellKdl } from "../../src/config/spell-kdl";
 describe("parseSpellKdl", () => {
 	it("parses domain node", () => {
 		const result = parseSpellKdl('domain "coding"');
-		expect(result).toBeDefined();
-		expect(result!.domain).toBe("coding");
-		expect(result!.policies.policies).toEqual([]);
+		expect(result.domain).toBe("coding");
+		expect(result.policies.policies).toEqual([]);
 	});
 
 	it("parses layers and policies directly", () => {
@@ -22,12 +21,11 @@ policy "api-quality" layer="api" {
     gate-cmd "bun test"
 }
 `);
-		expect(result).toBeDefined();
-		expect(result!.policies.layers).toEqual({ api: { description: "API endpoints" } });
-		expect(result!.policies.policies).toHaveLength(1);
-		expect(result!.policies.policies[0].name).toBe("api-quality");
-		expect(result!.policies.policies[0].gates.gateCommit).toBe(true);
-		expect(result!.policies.policies[0].gates.gateCmd).toBe("bun test");
+		expect(result.policies.layers).toEqual({ api: { description: "API endpoints" } });
+		expect(result.policies.policies).toHaveLength(1);
+		expect(result.policies.policies[0].name).toBe("api-quality");
+		expect(result.policies.policies[0].gates.gateCommit).toBe(true);
+		expect(result.policies.policies[0].gates.gateCmd).toBe("bun test");
 	});
 
 	it("resolves a single import", () => {
@@ -35,12 +33,11 @@ policy "api-quality" layer="api" {
 domain "coding"
 import "spell.coding.typescript"
 `);
-		expect(result).toBeDefined();
-		expect(result!.domain).toBe("coding");
+		expect(result.domain).toBe("coding");
 		// Template provides core, api, ui, data layers
-		expect(Object.keys(result!.policies.layers)).toEqual(expect.arrayContaining(["core", "api", "ui", "data"]));
+		expect(Object.keys(result.policies.layers)).toEqual(expect.arrayContaining(["core", "api", "ui", "data"]));
 		// Template provides policies
-		expect(result!.policies.policies.length).toBeGreaterThanOrEqual(1);
+		expect(result.policies.policies.length).toBeGreaterThanOrEqual(1);
 	});
 
 	it("local policy overrides imported policy by name", () => {
@@ -51,8 +48,7 @@ policy "api-quality" layer="api" {
     gate-cmd "bun test src/api/"
 }
 `);
-		expect(result).toBeDefined();
-		const apiPolicy = result!.policies.policies.find(p => p.name === "api-quality");
+		const apiPolicy = result.policies.policies.find(p => p.name === "api-quality");
 		expect(apiPolicy).toBeDefined();
 		// Local override replaces the template's gate-cmd
 		expect(apiPolicy!.gates.gateCmd).toBe("bun test src/api/");
@@ -66,10 +62,9 @@ import "spell.coding.typescript"
 
 layer "api" description="Custom API description"
 `);
-		expect(result).toBeDefined();
-		expect(result!.policies.layers.api).toEqual({ description: "Custom API description" });
+		expect(result.policies.layers.api).toEqual({ description: "Custom API description" });
 		// Other imported layers still present
-		expect(result!.policies.layers.core).toBeDefined();
+		expect(result.policies.layers.core).toBeDefined();
 	});
 
 	it("multiple imports merge in order", () => {
@@ -77,11 +72,10 @@ layer "api" description="Custom API description"
 import "spell.coding.typescript"
 import "spell.growth.default"
 `);
-		expect(result).toBeDefined();
 		// Has layers from both templates
-		expect(result!.policies.layers.core).toBeDefined(); // from typescript
-		expect(result!.policies.layers.content).toBeDefined(); // from growth
-		expect(result!.policies.layers.analytics).toBeDefined(); // from growth
+		expect(result.policies.layers.core).toBeDefined(); // from typescript
+		expect(result.policies.layers.content).toBeDefined(); // from growth
+		expect(result.policies.layers.analytics).toBeDefined(); // from growth
 	});
 
 	it("unknown import namespace is skipped", () => {
@@ -91,32 +85,28 @@ import "spell.nonexistent.template"
 
 layer "custom" description="A custom layer"
 `);
-		expect(result).toBeDefined();
-		expect(result!.domain).toBe("coding");
+		expect(result.domain).toBe("coding");
 		// Only the local layer is present, no template layers
-		expect(Object.keys(result!.policies.layers)).toEqual(["custom"]);
+		expect(Object.keys(result.policies.layers)).toEqual(["custom"]);
 	});
 
 	it("returns config with no domain for empty document", () => {
 		const result = parseSpellKdl("");
-		expect(result).toBeDefined();
-		expect(result!.domain).toBeUndefined();
-		expect(result!.policies).toEqual({ version: 1, layers: {}, policies: [] });
+		expect(result.domain).toBeUndefined();
+		expect(result.policies).toEqual({ version: 1, layers: {}, policies: [] });
 	});
 
 	it("returns empty config for invalid KDL", () => {
 		const result = parseSpellKdl('domain "broken" {');
-		expect(result).toBeDefined();
-		expect(result!.domain).toBeUndefined();
-		expect(result!.policies).toEqual({ version: 1, layers: {}, policies: [] });
+		expect(result.domain).toBeUndefined();
+		expect(result.policies).toEqual({ version: 1, layers: {}, policies: [] });
 	});
 
 	it("handles domain without imports or policies", () => {
 		const result = parseSpellKdl('domain "growth"');
-		expect(result).toBeDefined();
-		expect(result!.domain).toBe("growth");
-		expect(result!.policies.layers).toEqual({});
-		expect(result!.policies.policies).toEqual([]);
+		expect(result.domain).toBe("growth");
+		expect(result.policies.layers).toEqual({});
+		expect(result.policies.policies).toEqual([]);
 	});
 });
 

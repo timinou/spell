@@ -50,6 +50,11 @@ export async function detectDomain(cwd: string, cliOverride?: string): Promise<s
 	const spellKdlPath = path.join(cwd, "spell.kdl");
 	try {
 		const spellKdlContent = await Bun.file(spellKdlPath).text();
+		// Pre-validate KDL syntax before calling parseSpellKdl. parseSpellKdl
+		// returns an empty config for both broken KDL and valid KDL with no
+		// domain — but we need to distinguish them: broken KDL should fall
+		// back to "coding" immediately, while valid KDL with no domain should
+		// fall through to domain.json.
 		try {
 			parse(spellKdlContent);
 		} catch {
@@ -57,7 +62,7 @@ export async function detectDomain(cwd: string, cliOverride?: string): Promise<s
 		}
 
 		const spellConfig = parseSpellKdl(spellKdlContent);
-		if (spellConfig?.domain) return spellConfig.domain;
+		if (spellConfig.domain) return spellConfig.domain;
 	} catch (error) {
 		if (!isEnoent(error)) {
 			logger.warn("spell-kdl: failed to load spell.kdl", {
