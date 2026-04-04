@@ -5,6 +5,7 @@ import { $env, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
+import type { TaskPolicy } from "../config/task-policies";
 import type { Skill } from "../extensibility/skills";
 import type { InternalUrlRouter } from "../internal-urls";
 import { getPreludeDocs, warmPythonEnvironment } from "../ipy/executor";
@@ -220,6 +221,8 @@ export interface ToolSession {
 	dispose?(): Promise<void> | void;
 	/** Gateway client for managing .localhost service aliases */
 	gatewayClient?: GatewayClient;
+	/** Resolved task policies (project + mode merged). Cached per session. */
+	getResolvedTaskPolicies?: () => TaskPolicy[];
 }
 
 type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;

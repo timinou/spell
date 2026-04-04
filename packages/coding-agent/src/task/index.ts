@@ -22,7 +22,6 @@ import { $ } from "bun";
 import type { ToolSession } from "..";
 import { resolveAgentModelPatterns } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
-import { loadTaskPolicies, mergePolicies } from "../config/task-policies";
 import type { Theme } from "../modes/theme/theme";
 import { listPlanModeAllowedFolders } from "../plan-mode/allowed-folders";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
@@ -210,8 +209,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	async #injectVerificationContext(tasks: TaskItem[]): Promise<TaskItem[]> {
 		const phases = this.session.getTodoPhases?.();
 		if (!phases || phases.length === 0) return tasks;
-		const projectPolicies = await loadTaskPolicies(this.session.cwd ?? "");
-		const activePolicies = mergePolicies(projectPolicies, undefined).policies;
+		const activePolicies = this.session.getResolvedTaskPolicies?.() ?? [];
 		return tasks.map(task => {
 			if (!task.todoRef) return task;
 			const blocks = [
