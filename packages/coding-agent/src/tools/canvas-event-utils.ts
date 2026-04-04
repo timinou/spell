@@ -17,6 +17,12 @@ export function classifyEvent(event: WindowInfo["events"][number]): EventClassif
 	// QML-side opt-in silence.
 	if (payload.silent === true) return "silent";
 
+	// Heartbeat events are daemon liveness pings — never surface to agent.
+	if (name === "heartbeat") return "silent";
+
+	// Socket disconnect is handled by the event loop retry logic, not surfaced as a turn.
+	if (name === "socket_disconnected") return "silent";
+
 	// close is always loud.
 	if (name === "close" || payload.action === "close") return "loud";
 

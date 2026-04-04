@@ -41,14 +41,23 @@ int main(int argc, char *argv[]) {
             server->writeEvent(client, event);
         });
 
+        server->setDisconnectCallback([&manager](QLocalSocket *client) {
+            manager.orphanWindows(client);
+        });
+
         server->setReconnectCallback([server, &manager](QLocalSocket *client) {
-            // Send state snapshot containing only windows owned by this client.
-            // A brand-new client will receive an empty list.
+            // Claim all orphaned windows for this client.
+            // TS side filters via its #windows map — only tracks windows it recognizes.
+            manager.claimOrphans(client);
+
+            // Send state snapshot including newly claimed + any remaining orphaned windows.
             QJsonObject snapshot;
             snapshot["type"] = "state";
             snapshot["windows"] = manager.getWindowStates(client);
             server->writeEvent(client, snapshot);
         });
+
+        server->startHeartbeat();
     } else {
         // Stdio mode: read JSON lines from stdin (backward compat)
         QByteArray buffer;

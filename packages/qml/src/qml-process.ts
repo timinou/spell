@@ -1,9 +1,31 @@
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import type { BridgeCommand, BridgeEvent } from "./protocol";
+
+const HEARTBEAT_TIMEOUT_MS = 90_000;
+const RECONNECT_DELAYS = [100, 200, 400, 800, 1600];
+
+/** Sleep that doesn't keep the event loop alive. Resolves early if signal is aborted. */
+function unrefSleep(ms: number, signal?: AbortSignal): Promise<void> {
+	if (signal?.aborted) return Promise.resolve();
+	const { promise, resolve } = Promise.withResolvers<void>();
+	const timer = setTimeout(resolve, ms);
+	if (typeof timer === "object" && "unref" in timer) (timer as NodeJS.Timeout).unref();
+	if (signal) {
+		const onAbort = () => {
+			clearTimeout(timer);
+			resolve();
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		// Clean up listener once timer fires naturally.
+		promise.then(() => signal.removeEventListener("abort", onAbort));
+	}
+	return promise;
+}
 
 /** Resolves the path to the compiled bridge binary. */
 export function bridgeBinaryPath(): string {
@@ -41,6 +63,7 @@ export interface QmlProcessOptions {
 export class QmlProcess {
 	#binaryPath: string;
 	#env: Record<string, string> | undefined;
+	#resolvedSocketPath: string | null = null;
 	#proc: Subprocess<"pipe", "pipe", "pipe"> | null = null;
 	#stdin: Bun.FileSink | null = null;
 	#socket: net.Socket | null = null;
@@ -50,6 +73,10 @@ export class QmlProcess {
 	#buffer = "";
 	#stderrBuffer = "";
 	#stopping = false;
+	#connectingPromise: Promise<"existing" | "new"> | null = null;
+	#reconnectPromise: Promise<void> | null = null;
+	#reconnectAbort: AbortController | null = null;
+	#lastDataReceived = Date.now();
 
 	constructor(options?: QmlProcessOptions) {
 		this.#env = options?.env;
@@ -63,14 +90,46 @@ export class QmlProcess {
 		return `/tmp/spell-qml-bridge-${process.getuid?.() ?? 0}.sock`;
 	}
 
+	/** Returns the lock file path used to prevent concurrent daemon spawns. */
+	static lockPath(): string {
+		return `${QmlProcess.socketPath()}.lock`;
+	}
+
+	/** Timestamp of the last data received on the socket (heartbeat or event). */
+	get lastDataReceived(): number {
+		return this.#lastDataReceived;
+	}
+
 	/** Spawn or connect to the bridge. */
 	async ensure(): Promise<"existing" | "new"> {
 		// Already connected via socket
-		if (this.#socket && !this.#socket.destroyed) return "existing";
+		if (this.#socket && !this.#socket.destroyed) {
+			// Stale detection: if no data received for 3 missed heartbeats, treat as dead.
+			if (Date.now() - this.#lastDataReceived > HEARTBEAT_TIMEOUT_MS) {
+				logger.warn("Socket appears stale (no data for 90s), forcing reconnect");
+				this.#socket.destroy();
+				this.#socket = null;
+				// Fall through to reconnect logic below
+			} else {
+				return "existing";
+			}
+		}
 		// Already running as child process
 		if (this.#proc && this.#proc.exitCode === null) return "new";
 		if (this.#stopping) throw new Error("QmlProcess is shutting down");
 
+		// Concurrency guard: if another caller is already connecting, share the promise.
+		if (this.#connectingPromise) return this.#connectingPromise;
+
+		this.#connectingPromise = this.#doEnsure();
+		try {
+			return await this.#connectingPromise;
+		} finally {
+			this.#connectingPromise = null;
+		}
+	}
+
+	async #doEnsure(): Promise<"existing" | "new"> {
 		// Try daemon socket first, fall back to spawning
 		try {
 			await this.#connectSocket();
@@ -93,35 +152,52 @@ export class QmlProcess {
 			);
 		}
 
-		// Spawn daemon — capture stderr for diagnostics if connection fails.
-		const daemonProc = Bun.spawn([binary, "--daemon"], {
-			stdin: "ignore",
-			stdout: "ignore",
-			stderr: "pipe",
-			env: this.#env ? { ...process.env, ...this.#env } : undefined,
-		});
-
-		// Retry connect with exponential backoff
-		const delays = [100, 200, 400, 500];
-		let lastError: Error | undefined;
-		for (const delay of delays) {
-			await Bun.sleep(delay);
-			try {
-				await this.#connectSocket();
-				// Release stderr pipe so daemon isn't blocked by full buffer
-				void daemonProc.stderr.cancel().catch(() => {});
-				return;
-			} catch (err) {
-				lastError = err instanceof Error ? err : new Error(String(err));
+		// Acquire spawn lock to prevent concurrent daemon starts.
+		const lockAcquired = await this.#acquireSpawnLock();
+		try {
+			// If the lock was contended (another process held it), they may have
+			// already spawned a daemon. Retry connecting before spawning a new one.
+			if (!lockAcquired) {
+				try {
+					await this.#connectSocket();
+					return;
+				} catch {
+					// Still no daemon — proceed to spawn.
+				}
 			}
-		}
 
-		// Connection failed — drain daemon stderr for diagnostics
-		const stderrText = await this.#drainStderrBounded(daemonProc.stderr, 200, 50);
-		const stderrSuffix = stderrText ? `\nDaemon stderr:\n${stderrText}` : "";
-		throw new Error(
-			`Failed to connect to daemon socket after spawn: ${lastError?.message ?? "unknown error"}${stderrSuffix}`,
-		);
+			// Spawn daemon — capture stderr for diagnostics if connection fails.
+			const daemonProc = Bun.spawn([binary, "--daemon"], {
+				stdin: "ignore",
+				stdout: "ignore",
+				stderr: "pipe",
+				env: this.#env ? { ...process.env, ...this.#env } : undefined,
+			});
+
+			// Retry connect with exponential backoff
+			const delays = [100, 200, 400, 500];
+			let lastError: Error | undefined;
+			for (const delay of delays) {
+				await Bun.sleep(delay);
+				try {
+					await this.#connectSocket();
+					// Release stderr pipe so daemon isn't blocked by full buffer
+					void daemonProc.stderr.cancel().catch(() => {});
+					return;
+				} catch (err) {
+					lastError = err instanceof Error ? err : new Error(String(err));
+				}
+			}
+
+			// Connection failed — drain daemon stderr for diagnostics
+			const stderrText = await this.#drainStderrBounded(daemonProc.stderr, 200, 50);
+			const stderrSuffix = stderrText ? `\nDaemon stderr:\n${stderrText}` : "";
+			throw new Error(
+				`Failed to connect to daemon socket after spawn: ${lastError?.message ?? "unknown error"}${stderrSuffix}`,
+			);
+		} finally {
+			this.#releaseSpawnLock();
+		}
 	}
 
 	/** Read up to `maxLines` from a stderr stream with a timeout. */
@@ -194,18 +270,36 @@ export class QmlProcess {
 	 * Connect to the daemon's unix domain socket.
 	 * Rejects if connection fails within 5 seconds.
 	 */
-	#connectSocket(): Promise<void> {
-		const socketPath = QmlProcess.socketPath();
+	#connectSocket(signal?: AbortSignal): Promise<void> {
+		if (this.#stopping) return Promise.reject(new Error("QmlProcess is shutting down"));
+		if (signal?.aborted) return Promise.reject(new Error("Aborted"));
+		// Capture socket path on first connect; reuse for auto-reconnect so it
+		// doesn't read a stale/overridden static value after the caller restores it.
+		if (!this.#resolvedSocketPath) this.#resolvedSocketPath = QmlProcess.socketPath();
+		const socketPath = this.#resolvedSocketPath;
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
 
 		const socket = net.createConnection(socketPath);
+		// Unref so in-flight connections don't prevent process exit during test teardown.
+		socket.unref();
 		const timeout = setTimeout(() => {
 			socket.destroy();
 			reject(new Error("Socket connection timed out (5s)"));
 		}, 5000);
+		if (typeof timeout === "object" && "unref" in timeout) timeout.unref();
+
+		// Abort handler: immediately kill the connection attempt.
+		const onAbort = () => {
+			clearTimeout(timeout);
+			socket.destroy();
+			reject(new Error("Connection aborted"));
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
 
 		socket.on("connect", () => {
 			clearTimeout(timeout);
+			signal?.removeEventListener("abort", onAbort);
+			socket.ref(); // Re-ref so the active connection keeps the process alive.
 			this.#socket = socket;
 			this.#socketBuffer = "";
 
@@ -226,11 +320,13 @@ export class QmlProcess {
 
 		socket.on("error", (err: NodeJS.ErrnoException) => {
 			clearTimeout(timeout);
+			signal?.removeEventListener("abort", onAbort);
 			socket.destroy();
 			reject(err);
 		});
 
 		socket.on("data", (chunk: Buffer) => {
+			this.#lastDataReceived = Date.now();
 			this.#socketBuffer += chunk.toString("utf8");
 			for (;;) {
 				const nl = this.#socketBuffer.indexOf("\n");
@@ -242,10 +338,24 @@ export class QmlProcess {
 		});
 
 		socket.on("close", () => {
-			if (!this.#stopping) {
+			const wasUnexpected = !this.#stopping;
+			if (wasUnexpected) {
 				logger.warn("Daemon socket closed unexpectedly");
+				// Dispatch synthetic event before nulling socket so listeners see it.
+				this.#dispatchEvent({
+					type: "socket_disconnected",
+					id: "__socket__",
+					message: "Daemon socket closed unexpectedly",
+				});
 			}
 			this.#socket = null;
+			if (wasUnexpected) {
+				this.#reconnectAbort = new AbortController();
+				this.#reconnectPromise = this.#autoReconnect(this.#reconnectAbort.signal).finally(() => {
+					this.#reconnectPromise = null;
+					this.#reconnectAbort = null;
+				});
+			}
 		});
 
 		return promise;
@@ -324,6 +434,85 @@ export class QmlProcess {
 		}
 	}
 
+	/** Dispatch a pre-parsed event to all listeners. Used for synthetic events. */
+	#dispatchEvent(event: BridgeEvent): void {
+		for (const listener of this.#listeners) {
+			try {
+				listener(event);
+			} catch (err) {
+				logger.error("QmlProcess synthetic event listener threw", { error: String(err) });
+			}
+		}
+	}
+
+	/** Auto-reconnect to daemon with exponential backoff after unexpected disconnect. */
+	async #autoReconnect(signal: AbortSignal): Promise<void> {
+		for (const delay of RECONNECT_DELAYS) {
+			if (this.#stopping || signal.aborted) return;
+			await unrefSleep(delay, signal);
+			if (this.#stopping || signal.aborted) return;
+			try {
+				await this.#connectSocket(signal);
+				logger.debug("Auto-reconnect to daemon succeeded");
+				return;
+			} catch {
+				if (signal.aborted) return;
+				logger.debug("Auto-reconnect attempt failed", { nextDelay: delay * 2 });
+			}
+		}
+		logger.warn("Auto-reconnect exhausted all attempts");
+	}
+
+	/**
+	 * Acquire a mkdir-based filesystem lock for daemon spawn.
+	 * Returns true if the lock was acquired (we should proceed to spawn),
+	 * false if we waited for the lock and should retry connecting.
+	 */
+	async #acquireSpawnLock(): Promise<boolean> {
+		const lockDir = QmlProcess.lockPath();
+		const maxRetries = 3;
+		const retryDelay = 200;
+		const staleTimeout = 10_000;
+
+		for (let i = 0; i < maxRetries; i++) {
+			try {
+				await fsp.mkdir(lockDir, { recursive: false });
+				return true; // Lock acquired
+			} catch (err) {
+				const code = (err as NodeJS.ErrnoException).code;
+				// ENOENT: parent directory was deleted (test cleanup). Skip lock.
+				if (code === "ENOENT") return false;
+				if (code !== "EEXIST") throw err;
+				// Lock exists — check staleness
+				try {
+					const stat = await fsp.stat(lockDir);
+					if (Date.now() - stat.mtimeMs > staleTimeout) {
+						// Stale lock — remove and retry
+						await fsp.rmdir(lockDir).catch(() => {});
+						continue;
+					}
+				} catch {
+					// Lock dir disappeared between exists and stat — retry
+					continue;
+				}
+				// Lock is held by another process — wait and retry connect
+				await unrefSleep(retryDelay * (i + 1));
+			}
+		}
+		// Couldn't acquire after retries — proceed without lock (best effort)
+		return false;
+	}
+
+	/** Release the spawn lock directory. */
+	#releaseSpawnLock(): void {
+		const lockDir = QmlProcess.lockPath();
+		try {
+			fs.rmdirSync(lockDir);
+		} catch {
+			// Lock may have been released by timeout cleanup
+		}
+	}
+
 	/** Consume the state event buffered during socket connect. Returns null if none buffered. */
 	takeReconnectState(): BridgeEvent | null {
 		const state = this.#pendingReconnectState;
@@ -373,11 +562,17 @@ export class QmlProcess {
 	/** Gracefully shut down the bridge process (stdio mode) or disconnect (daemon mode). */
 	async dispose(): Promise<void> {
 		this.#stopping = true;
+		this.#listeners.clear(); // Prevent any further event dispatching.
 
 		if (this.#socket) {
 			this.#socket.destroy();
 			this.#socket = null;
-			return;
+		}
+
+		// Abort and wait for any in-flight auto-reconnect to exit.
+		this.#reconnectAbort?.abort();
+		if (this.#reconnectPromise) {
+			await this.#reconnectPromise.catch(() => {});
 		}
 
 		if (this.#proc) {

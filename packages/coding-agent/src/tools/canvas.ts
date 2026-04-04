@@ -393,6 +393,7 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 		let pendingSilent: WindowInfo["events"] = [];
 
 		// Fire-and-forget: errors are logged, not thrown, since there's no caller to propagate to.
+		let reconnectAttempts = 0;
 		void (async () => {
 			try {
 				while (!signal.aborted) {
@@ -401,6 +402,20 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 					const raw = await bridge.waitForEvent(id);
 
 					if (signal.aborted) break;
+
+					// Handle socket disconnect: wait for auto-reconnect, then retry.
+					const hasDisconnect = raw.some(e => e.name === "socket_disconnected");
+					if (hasDisconnect) {
+						reconnectAttempts++;
+						if (reconnectAttempts > 3) {
+							logger.warn("Canvas event loop: max reconnect retries reached", { id });
+							break;
+						}
+						// QmlProcess auto-reconnect runs in background. Wait for it to finish.
+						await Bun.sleep(2000);
+						continue;
+					}
+					reconnectAttempts = 0; // Reset on successful event delivery
 
 					const userInitiatedClose = raw.some(e => (e.payload as { action?: string }).action === "close");
 					const wmClose = bridge.getWindow(id)?.state === "closed" && !userInitiatedClose;

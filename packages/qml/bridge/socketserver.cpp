@@ -88,6 +88,27 @@ void SocketServer::setReconnectCallback(ReconnectCallback cb) {
     m_reconnect = std::move(cb);
 }
 
+void SocketServer::setDisconnectCallback(DisconnectCallback cb) {
+    m_disconnect = std::move(cb);
+}
+
+void SocketServer::broadcastEvent(const QJsonObject &event) {
+    for (QLocalSocket *client : std::as_const(m_clients)) {
+        writeEvent(client, event);
+    }
+}
+
+void SocketServer::startHeartbeat(int intervalMs) {
+    if (m_heartbeatTimer) return;
+    m_heartbeatTimer = new QTimer(this);
+    connect(m_heartbeatTimer, &QTimer::timeout, this, [this]() {
+        QJsonObject ev;
+        ev["type"] = "heartbeat";
+        broadcastEvent(ev);
+    });
+    m_heartbeatTimer->start(intervalMs);
+}
+
 void SocketServer::onNewConnection() {
     QLocalSocket *incoming = m_server->nextPendingConnection();
     if (!incoming) return;
@@ -127,10 +148,14 @@ void SocketServer::onClientDisconnected() {
     auto *client = qobject_cast<QLocalSocket *>(sender());
     if (!client) return;
 
+    // Notify before cleanup so WindowManager can orphan windows while pointer is valid.
+    if (m_disconnect) {
+        m_disconnect(client);
+    }
+
     m_clients.removeOne(client);
     m_readBuffers.remove(client);
     client->deleteLater();
 
     fprintf(stderr, "Client disconnected (%d remaining)\n", m_clients.size());
-    // Server keeps running — windows stay alive for reconnect
 }

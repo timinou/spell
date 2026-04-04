@@ -116,4 +116,14 @@ describe("classifyEvent", () => {
 			expect(classifyEvent(mkEvent({ name: "close", payload: { silent: true } }))).toBe("silent");
 		});
 	});
+
+	describe("bridge protocol events", () => {
+		it("classifies heartbeat as silent", () => {
+			expect(classifyEvent(mkEvent({ name: "heartbeat" }))).toBe("silent");
+		});
+
+		it("classifies socket_disconnected as silent", () => {
+			expect(classifyEvent(mkEvent({ name: "socket_disconnected", payload: { message: "gone" } }))).toBe("silent");
+		});
+	});
 });

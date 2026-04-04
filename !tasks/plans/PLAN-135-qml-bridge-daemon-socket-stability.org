@@ -1,0 +1,100 @@
+#+TITLE: QML bridge daemon socket stability
+#+STATE: DONE
+#+SESSION_ID: 14ad66157311f882
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-04T12-06-17-804Z_14ad66157311f882.jsonl]]
+#+CUSTOM_ID: PLAN-135-qml-bridge-daemon-socket-stability
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-04]: All 4 child items (BUG-156, BUG-157, BUG-158, FEAT-315) moved to DONE. All verification checks pass.
+
+
+* Initial Message
+
+Session Info
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-ag
+ entmaker/2026-04-04T11-54-36-726Z_14ad6368cd808eee.jsonl
+ ID: 14ad6368cd808eee
+
+Why did the phoenix inspector close on that session?
+
+* Context
+The QML bridge daemon socket (/run/user/1000/spell-qml-bridge.sock) is unstable when multiple spell sessions run concurrently. In a 10-minute session, the socket closed unexpectedly 5 times. The root cause is threefold:
+
+1. *Window orphaning*: When a client disconnects, the C++ daemon keeps windows alive but their ~owner~ pointer becomes a dangling reference. Reconnecting clients get empty state snapshots because ~getWindowStates(newClient)~ filters by owner — the new client doesn't match the dead pointer. Additionally, systray/hotkey lambdas capture the client pointer by value — dangling UB after disconnect.
+
+2. *No auto-reconnect*: When the socket closes, ~QmlProcess~ sets ~#socket = null~ and logs a warning. No synthetic event is dispatched to listeners. In-flight ~waitForEvent~ calls hang until the 600s timeout. The canvas event loop catches the eventual error and terminates silently — windows become unreachable. No concurrency guard on ~ensure()~ means multiple callers can race into connection attempts.
+
+3. *Spawn contention*: Multiple sessions can concurrently call ~#spawnDaemon()~, each spawning a new ~spell-qml-bridge --daemon~. The C++ daemon's ~isSocketLive~ check has a 500ms window where a new daemon may think the socket is stale and remove it, disrupting existing connections.
+
+** Approach
+Four changes, layered in dependency order:
+
+- *Wave 1 (BUG-156)*: Fix C++ daemon to orphan windows on client disconnect (set ~owner = nullptr~), add re-ownership on reconnect (~claimOrphans~), fix systray/hotkey pointer safety, handle WM-close of orphaned windows.
+- *Wave 2 (BUG-157 + BUG-158, parallel)*: Add ~socket_disconnected~ protocol type. Implement auto-reconnect in ~QmlProcess~ with exponential backoff and ~#connectingPromise~ concurrency guard. Propagate through ~QmlBridge~ (route before window lookup, wake waitForEvent). Canvas event loop retry on reconnect. Separately, add filesystem lock for daemon spawn.
+- *Wave 3 (FEAT-315)*: Add ~heartbeat~ protocol type. C++ QTimer broadcast every 30s. TS-side filtering and stale detection.
+
+** Key decisions
+- Heartbeat is *daemon-initiated* (every 30s to all clients). Client detects staleness if no data for 90s.
+- Orphaned windows get ~owner = nullptr~. ~getWindowStates~ includes them with ~orphaned: true~ flag. TS side only claims windows that match its ~#windows~ map.
+- Spawn lock uses ~mkdir~-based lock file at ~/run/user/$UID/spell-qml-bridge.sock.lock~, inline in ~qml-process.ts~ (no new cross-package dependency).
+- ~socket_disconnected~ is a synthetic ~BridgeEvent~ with ~id: "__socket__"~. Routed in ~QmlBridge.#handleEvent~ BEFORE the window lookup (same layer as stderr/state/hotkey). Pushes synthetic event into every active window's queue to wake ~waitForEvent~ listeners.
+- ~ping~ BridgeCommand removed from scope — dead protocol with no consumer.
+- Phoenix-inspector extension has its own bridge/event loop at the project level (~.spell/extensions/~) — out of scope. It benefits from bridge-level improvements when launched via the canvas tool.
+
+** Critical files
+| File | Changes |
+|------|---------|
+| ~packages/qml/bridge/socketserver.h~ | Add ~DisconnectCallback~, ~broadcastEvent~, ~startHeartbeat~ |
+| ~packages/qml/bridge/socketserver.cpp~ | Implement disconnect callback, heartbeat timer, broadcast |
+| ~packages/qml/bridge/windowmanager.h~ | Add ~orphanWindows~, ~claimOrphans~, ~m_systrayOwner~, ~m_hotkeyOwner~ |
+| ~packages/qml/bridge/windowmanager.cpp~ | Implement orphaning, re-ownership, systray/hotkey safety, WM-close handling, update ~getWindowStates~ |
+| ~packages/qml/bridge/main.cpp~ | Wire disconnect callback, reconnect re-ownership, start heartbeat |
+| ~packages/qml/src/protocol.ts~ | Add ~socket_disconnected~ and ~heartbeat~ to ~BridgeEvent~ |
+| ~packages/qml/src/qml-process.ts~ | Auto-reconnect, synthetic event dispatch, ~#connectingPromise~ guard, spawn lock, ~#lastDataReceived~ tracking |
+| ~packages/qml/src/qml-bridge.ts~ | Handle ~socket_disconnected~ and ~heartbeat~ in ~#handleEvent~ before window lookup, wake ~waitForEvent~ on disconnect |
+| ~packages/coding-agent/src/tools/canvas.ts~ | Event loop retry on reconnect, max-retry guard |
+| ~packages/coding-agent/src/tools/canvas-event-utils.ts~ | Classify ~heartbeat~ as silent |
+| ~packages/qml/test/reconnect.test.ts~ | New tests for orphan, reconnect, heartbeat |
+| ~packages/coding-agent/test/tools/canvas-event-classification.test.ts~ | Heartbeat classification test |
+* Verification
+- ~cd packages/qml && bun run build:bridge~ (C++ compiles)
+- ~bun test packages/qml/test/reconnect.test.ts~ (all new + existing tests pass)
+- ~bun test packages/coding-agent/test/tools/canvas-event-classification.test.ts~ (heartbeat classification)
+- ~bun check:ts~ (type-check passes with new protocol types)
+- Manual: launch phoenix inspector, keep session idle for 2+ minutes, verify inspector stays responsive (heartbeats keep connection alive, auto-reconnect recovers if needed)
+
+* Execution Manifest
+
+** Wave 1: C++ daemon orphan infrastructure              :wave:
+- [[id:BUG-156-qml-bridge-daemon-orphans-windows-on-cli]] — Orphan windows on client disconnect, re-ownership, systray/hotkey safety, WM-close handling (M, #A)
+
+** Wave 2: TS auto-reconnect + spawn lock (parallelizable) :wave:
+- [[id:BUG-157-qml-bridge-daemon-socket-has-no-auto-rec]] — Auto-reconnect with socket_disconnected event, #connectingPromise guard, canvas event loop recovery (M, #A, depends BUG-156)
+- [[id:BUG-158-concurrent-sessions-race-on-qml-daemon-s]] — Filesystem lock for daemon spawn (S, #B, independent)
+
+** Wave 3: Heartbeat (depends on auto-reconnect)          :wave:
+- [[id:FEAT-315-daemon-side-heartbeat-for-qml-bridge]] — C++ heartbeat broadcast, protocol type, TS filtering, stale detection (S, #A, depends BUG-157)
+
+
+** Completion [2026-04-04]
+
+*** Verification
+- ~cd packages/qml && bun run build:bridge~ -- C++ compiles clean (all 4 modified files: socketserver, windowmanager, main, systray)
+- ~bun test packages/qml/test/reconnect.test.ts~ -- 15 pass, 0 fail (531ms)
+- ~bun test packages/qml/test/daemon-stderr.test.ts~ -- 2 pass, 0 fail (2.59s)
+- ~bun test packages/coding-agent/test/tools/canvas-event-classification.test.ts~ -- 20 pass, 0 fail (52ms)
+- ~bun check:ts~ / ~biome check~ -- no errors in changed packages (pre-existing errors in spell-server/utils unchanged)
+
+*** Artifacts
+All changes are in source files:
+- C++ daemon: ~packages/qml/bridge/{socketserver,windowmanager,main,systray}.{h,cpp}~
+- TS protocol/process/bridge: ~packages/qml/src/{protocol,qml-process,qml-bridge}.ts~
+- Canvas integration: ~packages/coding-agent/src/tools/{canvas,canvas-event-utils}.ts~
+- Tests: ~packages/qml/test/{reconnect,daemon-stderr}.test.ts~, ~packages/coding-agent/test/tools/canvas-event-classification.test.ts~
+
+*** Deviations
+- Daemon stderr tests extracted from ~reconnect.test.ts~ to ~daemon-stderr.test.ts~ due to Bun.spawn subprocess handles preventing test process exit when combined with socket tests. Both files pass independently.
+- ~systray.cpp~ had a pre-existing missing ~#include <QFile>~ that was fixed as part of the build.
+- ~ping~ BridgeCommand removal was out of scope as planned.

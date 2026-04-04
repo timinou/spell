@@ -1,4 +1,5 @@
 #include "systray.h"
+#include <QFile>
 #include <QIcon>
 
 SystrayManager::SystrayManager(QObject *parent) : QObject(parent) {}

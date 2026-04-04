@@ -1,0 +1,121 @@
+#+TITLE: QML bridge daemon socket has no auto-reconnect
+#+STATE: DONE
+#+SESSION_ID: 14ad66157311f882
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-04T12-06-17-804Z_14ad66157311f882.jsonl]]
+#+CUSTOM_ID: BUG-157-qml-bridge-daemon-socket-has-no-auto-rec
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: qml
+#+DEPENDS: BUG-156-qml-bridge-daemon-orphans-windows-on-cli
+
+NOTE [2026-04-04]: Auto-reconnect with exponential backoff, socket_disconnected synthetic event, #connectingPromise concurrency guard, abort-aware reconnect, canvas event loop recovery, heartbeat/disconnect classification as silent.
+
+When the daemon socket closes unexpectedly, ~QmlProcess~ sets ~#socket = null~ and logs a warning but makes no attempt to reconnect. In-flight ~waitForEvent~ calls hang until their 10-minute timeout. The canvas event loop catches the resulting error silently and terminates — windows become unreachable.
+
+* Scope
+** In scope
+- ~protocol.ts~: Add ~socket_disconnected~ to ~BridgeEvent~ union
+- ~qml-process.ts~: Synthetic event dispatch on socket close, auto-reconnect with backoff, ~#connectingPromise~ concurrency guard
+- ~qml-bridge.ts~: Handle ~socket_disconnected~ (route before window lookup), wake ~waitForEvent~, trigger reconnect
+- ~canvas.ts~: Event loop retry on reconnect, max-retry guard
+- Tests for all TS changes
+** Out of scope
+- Heartbeat protocol type + filtering (FEAT-315)
+- C++ daemon changes (BUG-156)
+- Spawn lock (BUG-158)
+- ~ping~ BridgeCommand (removed — no consumer, dead protocol per GAP-08)
+
+* Problem
+- ~qml-process.ts~ line 244-249: socket ~close~ handler only nulls the socket. No synthetic event dispatched to listeners. No reconnect attempt.
+- ~qml-bridge.ts~ ~waitForEvent~: listener waits for ~event~ or ~closed~ types. Socket death doesn't produce either — the promise hangs until the 600s timeout.
+- ~qml-bridge.ts~ ~#handleEvent~: routes events through window lookup (~this.#windows.get(event.id)~). A ~socket_disconnected~ event with system ID would fail the window lookup and be silently dropped. Must handle BEFORE the window lookup, same layer as stderr/state/hotkey checks (GAP-02).
+- Canvas tool event loop (~canvas.ts~ line 466): catches the eventual error and terminates silently. No recovery path.
+- ~qml-process.ts~ ~ensure()~: no async lock — multiple concurrent callers can race into ~#connectSocket~ or ~#spawnDaemon~ simultaneously (GAP-06).
+
+* Tests
+All tests in ~packages/qml/test/reconnect.test.ts~ unless noted:
+
+1. "dispatches socket_disconnected event on unexpected close" — fake daemon, connect, kill server, verify synthetic event dispatched to all listeners via ~addListener~.
+2. "auto-reconnects with backoff after socket close" — fake daemon, connect, kill server, start new server on same path, verify ~ensure()~ returns 'existing' after auto-reconnect completes.
+3. "waitForEvent resolves with empty array on socket_disconnected" — QmlBridge with window in #windows map, kill socket, verify waitForEvent promise resolves promptly (not hangs).
+4. "full disconnect-reconnect-resume cycle" (integration) — fake daemon sends state with one window, socket dies, new daemon starts, verify QmlBridge window map survives and state is restored (GAP-10).
+5. "concurrent ensure() calls during reconnect share a single connection" — call ~ensure()~ 5x via ~Promise.all~, verify fake daemon sees exactly one socket connection (GAP-12).
+6. "socket_disconnected does not mark windows as closed" — QmlBridge with windows, trigger socket_disconnected, verify all windows retain their pre-disconnect state (not 'closed').
+
+Canvas event loop tests in ~packages/coding-agent/test/tools/canvas-wm-close.test.ts~ or equivalent:
+7. "event loop retries after socket disconnect" — mock bridge that returns empty on first waitForEvent (simulating disconnect), then returns events on retry after ensure(). Verify event loop survives and delivers events.
+
+* Implementation
+
+** Add socket_disconnected to BridgeEvent
+:PROPERTIES:
+:CUSTOM_ID: BUG-157::protocol-types
+:END:
+- File: ~packages/qml/src/protocol.ts~
+  - Add ~| { type: "socket_disconnected"; id: "__socket__"; message: string }~ to ~BridgeEvent~ union
+
+** Write auto-reconnect tests (test-first)
+:PROPERTIES:
+:CUSTOM_ID: BUG-157::reconnect-tests
+:DEPENDS: BUG-157::protocol-types
+:END:
+- File: ~packages/qml/test/reconnect.test.ts~
+  - Tests 1-6 from Tests section above
+  - Use existing fake-daemon pattern (~net.createServer~ + socket path override)
+
+** QmlProcess: synthetic event dispatch + auto-reconnect
+:PROPERTIES:
+:CUSTOM_ID: BUG-157::qml-process-reconnect
+:DEPENDS: BUG-157::reconnect-tests
+:END:
+- File: ~packages/qml/src/qml-process.ts~
+  - Socket ~close~ handler: dispatch synthetic ~{ type: "socket_disconnected", id: "__socket__", message: "Daemon socket closed unexpectedly" }~ to all listeners via ~#dispatch~ (need to make it accept BridgeEvent, not just string). Actually: add a ~#dispatchEvent(event: BridgeEvent)~ method that iterates ~#listeners~ directly. Call it before setting ~#socket = null~.
+  - Socket ~close~ handler: after dispatching, start ~#autoReconnect()~ unless ~#stopping~.
+  - ~#autoReconnect()~: exponential backoff (100ms, 200ms, 400ms, 800ms, 1600ms — 5 attempts). Each attempt calls ~#connectSocket()~. On success, dispatch the buffered ~state~ event via ~#dispatchEvent~ to trigger QmlBridge ~reconnect()~. On failure after all attempts, log error and give up.
+  - ~#connectingPromise~: new field ~#connectingPromise: Promise<"existing" | "new"> | null = null~. In ~ensure()~: if ~#connectingPromise~ is set, return it. Otherwise, create it wrapping the connect/spawn logic, clear it in ~finally~ block. This prevents concurrent reconnect races (GAP-06).
+
+** QmlBridge: handle socket_disconnected + wake waitForEvent
+:PROPERTIES:
+:CUSTOM_ID: BUG-157::qml-bridge-disconnect
+:DEPENDS: BUG-157::qml-process-reconnect
+:END:
+- File: ~packages/qml/src/qml-bridge.ts~
+  - ~#handleEvent~: Add early-exit handler for ~socket_disconnected~ BEFORE the window lookup (same layer as stderr/state/hotkey — line 50-68). When received:
+    (a) Log warning
+    (b) Do NOT mark any window as closed — they survive on daemon side
+    (c) Push a synthetic ~{ name: "socket_disconnected", payload: { message } }~ into every active window's ~events~ queue — this wakes all pending ~waitForEvent~ listeners
+  - ~#handleEvent~: Add handler for ~state~ type that's received AFTER auto-reconnect: if ~#reconnected~ is true (not first connect), call ~reconnect()~ to rebuild window map from new state snapshot.
+  - ~waitForEvent~: The existing listener already resolves on any event pushed to the window's queue. The synthetic push from socket_disconnected handling is sufficient — no additional listener changes needed.
+
+** Canvas tool: event loop recovery
+:PROPERTIES:
+:CUSTOM_ID: BUG-157::canvas-event-loop
+:DEPENDS: BUG-157::qml-bridge-disconnect
+:END:
+- File: ~packages/coding-agent/src/tools/canvas.ts~
+  - ~#startEventLoop~: After ~waitForEvent~ returns, check if the events contain a ~socket_disconnected~ event. If so: wait 2s, then call ~getBridge()~ (which calls ~ensure()~ triggering auto-reconnect), and continue the loop instead of breaking. Add a ~reconnectAttempts~ counter: after 3 reconnect retries within the same loop iteration, break (daemon truly dead).
+  - Reset ~reconnectAttempts~ to 0 on any successful event delivery (non-disconnect).
+
+** Write canvas event loop recovery test
+:PROPERTIES:
+:CUSTOM_ID: BUG-157::canvas-loop-test
+:DEPENDS: BUG-157::protocol-types
+:END:
+- File: ~packages/coding-agent/test/tools/canvas-wm-close.test.ts~ (or new file)
+  - Test 7 from Tests section: mock bridge returning disconnect then recovery
+
+* Edge Cases
+- *Concurrent ensure() during reconnect*: ~#connectingPromise~ serializes all callers. Second caller gets the same promise.
+- *Auto-reconnect during dispose*: ~#stopping~ flag prevents reconnect after intentional shutdown.
+- *Rapid disconnect-reconnect*: socket_disconnected fires, auto-reconnect starts, new connection established, state event arrives, QmlBridge rebuilds window map. If another disconnect happens during reconnect, the backoff timer is reset.
+- *Daemon truly dead*: after 5 reconnect attempts fail, ~#autoReconnect~ gives up. ~ensure()~ on next tool call tries ~#spawnDaemon~. Canvas event loop breaks after 3 retries.
+- *In-flight waitFor during disconnect*: ~waitFor~ (not ~waitForEvent~) callers (e.g., ~launch~, ~close~, ~screenshot~) have a 10s timeout. They'll fail and propagate the error to the tool call. The tool can retry.
+- *Event loop re-entry after reconnect*: The canvas event loop's ~while (!signal.aborted)~ naturally re-enters ~waitForEvent~ after processing the disconnect event. ~getBridge()~ calls ~ensure()~ which either returns the auto-reconnected socket or triggers a new connection.
+
+* Acceptance Criteria
+- Socket closes during idle session → auto-reconnect within 5s, event loops resume transparently.
+- ~waitForEvent~ callers resolve promptly on socket death (not hang > 5s).
+- Windows are NOT marked as closed during disconnect — they survive for reconnect.
+- All existing tests pass: ~bun test packages/qml/test/reconnect.test.ts~
+- New tests cover: socket_disconnected dispatch, auto-reconnect, waitForEvent wake, full cycle, concurrent ensure, canvas loop recovery.
+- ~bun check:ts~ passes with new protocol types.

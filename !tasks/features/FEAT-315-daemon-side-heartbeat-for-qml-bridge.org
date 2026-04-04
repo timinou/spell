@@ -1,0 +1,99 @@
+#+TITLE: Daemon-side heartbeat for QML bridge
+#+STATE: DONE
+#+SESSION_ID: 14ad66157311f882
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-04T12-06-17-804Z_14ad66157311f882.jsonl]]
+#+CUSTOM_ID: FEAT-315-daemon-side-heartbeat-for-qml-bridge
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: qml
+#+DEPENDS: BUG-157-qml-bridge-daemon-socket-has-no-auto-rec
+
+NOTE [2026-04-04]: C++ QTimer heartbeat broadcast every 30s. broadcastEvent helper on SocketServer. TS: #lastDataReceived tracking, stale detection at 90s in ensure(), heartbeat early-exit in QmlBridge, classified silent in canvas-event-utils.
+
+Add periodic heartbeat from the C++ daemon to all connected clients so clients can detect stale connections before the next command attempt. Consolidates all heartbeat work: C++ broadcast, protocol type, TS filtering, and stale detection (per Metis GAP-07).
+
+* Scope
+** In scope
+- C++ daemon: QTimer-based heartbeat broadcast every 30s, ~broadcastEvent~ helper on SocketServer
+- ~protocol.ts~: Add ~heartbeat~ to ~BridgeEvent~ union
+- ~qml-process.ts~: ~#lastDataReceived~ timestamp tracking, stale detection at 90s
+- ~qml-bridge.ts~ ~#handleEvent~: Ignore heartbeat (before window lookup)
+- ~canvas-event-utils.ts~: Classify ~heartbeat~ as silent
+- Tests for heartbeat arrival, filtering, and stale detection
+** Out of scope
+- Auto-reconnect logic (BUG-157 — heartbeat detection triggers the reconnect that BUG-157 implements)
+- Socket-level reconnect mechanics (BUG-157)
+- ~ping~ BridgeCommand (removed — dead protocol, GAP-08)
+
+* Problem
+Currently clients only discover a dead connection when they try to ~send()~ a command or when the OS closes the socket. An idle client may sit with a dead socket for minutes. The 10-minute ~waitForEvent~ timeout is far too long for liveness detection.
+
+* Tests
+1. ~packages/qml/test/reconnect.test.ts~: "heartbeat events are received within 35s of daemon start" — fake daemon with QTimer-like interval, verify client receives heartbeat.
+2. ~packages/qml/test/reconnect.test.ts~: "heartbeat events are not pushed to window event queues" — QmlBridge with window, send heartbeat event, verify ~win.events~ unchanged.
+3. ~packages/qml/test/reconnect.test.ts~: "#lastDataReceived is updated on any socket data including heartbeats" — send heartbeat, verify timestamp updated.
+4. ~packages/coding-agent/test/tools/canvas-event-classification.test.ts~: "heartbeat classified as silent" — add test case for heartbeat event.
+
+* Implementation
+
+** Add heartbeat to BridgeEvent protocol
+:PROPERTIES:
+:CUSTOM_ID: FEAT-315::heartbeat-protocol
+:END:
+- File: ~packages/qml/src/protocol.ts~
+  - Add ~| { type: "heartbeat" }~ to ~BridgeEvent~ union (no ~id~ field — heartbeats are global, not window-scoped)
+
+** Write heartbeat tests (test-first)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-315::heartbeat-tests
+:DEPENDS: FEAT-315::heartbeat-protocol
+:END:
+- File: ~packages/qml/test/reconnect.test.ts~ — Tests 1-3 from Tests section
+- File: ~packages/coding-agent/test/tools/canvas-event-classification.test.ts~ — Test 4
+
+** C++ daemon heartbeat broadcast
+:PROPERTIES:
+:CUSTOM_ID: FEAT-315::cpp-heartbeat
+:DEPENDS: FEAT-315::heartbeat-tests
+:END:
+- File: ~packages/qml/bridge/socketserver.h~
+  - Add ~#include <QTimer>~
+  - Add ~void startHeartbeat(int intervalMs = 30000);~
+  - Add ~void broadcastEvent(const QJsonObject& event);~
+  - Add ~QTimer* m_heartbeatTimer = nullptr;~ member
+- File: ~packages/qml/bridge/socketserver.cpp~
+  - ~broadcastEvent~: iterate ~m_clients~, call ~writeEvent(client, event)~ for each
+  - ~startHeartbeat~: create ~QTimer~, connect ~timeout~ signal to lambda that broadcasts ~{"type":"heartbeat"}~, start timer
+- File: ~packages/qml/bridge/main.cpp~
+  - Call ~server->startHeartbeat()~ after ~server->listen()~ in daemon mode only
+
+** TS heartbeat filtering + stale detection
+:PROPERTIES:
+:CUSTOM_ID: FEAT-315::ts-heartbeat
+:DEPENDS: FEAT-315::heartbeat-tests
+:END:
+- File: ~packages/qml/src/qml-process.ts~
+  - Add ~#lastDataReceived: number = Date.now()~ field
+  - Socket ~data~ handler: update ~#lastDataReceived = Date.now()~ on every chunk
+  - Add ~HEARTBEAT_TIMEOUT_MS = 90_000~ constant (3x 30s interval)
+  - In auto-reconnect health check (from BUG-157): if ~Date.now() - #lastDataReceived > HEARTBEAT_TIMEOUT_MS~ and socket is connected, treat as stale and trigger reconnect
+- File: ~packages/qml/src/qml-bridge.ts~
+  - ~#handleEvent~: Add early-exit for ~heartbeat~ type BEFORE the window lookup (same layer as state/hotkey/systray). Just return — no action needed (the ~#lastDataReceived~ update happens at the socket data level, not the event level).
+- File: ~packages/coding-agent/src/tools/canvas-event-utils.ts~
+  - ~classifyEvent~: Add ~if (name === "heartbeat") return "silent";~ early in the function
+
+* Edge Cases
+- *No heartbeat in stdio mode*: ~startHeartbeat()~ is only called in daemon mode (main.cpp conditional).
+- *Client disconnects during heartbeat write*: ~writeEvent~ catches write failures and disconnects the client — this triggers the disconnect callback and orphan flow.
+- *Heartbeat arrives during reconnect*: It updates ~#lastDataReceived~ and is otherwise ignored. No interference with reconnect flow.
+- *Stale detection false positive*: 90s timeout (3 missed heartbeats) is conservative. System clock skew is a non-issue since we use ~Date.now()~ deltas.
+
+* Acceptance Criteria
+- Daemon sends ~{"type":"heartbeat"}~ every 30s to all clients when in daemon mode.
+- No heartbeat in stdio mode.
+- ~QmlProcess~ tracks last-data timestamp and detects stale connections.
+- Heartbeat events don't trigger agent turns (classified as silent, not pushed to window queues).
+- ~cd packages/qml && bun run build:bridge~ compiles without error.
+- ~bun test packages/qml/test/reconnect.test.ts~ passes.
+- ~bun test packages/coding-agent/test/tools/canvas-event-classification.test.ts~ passes.
+- ~bun check:ts~ passes.

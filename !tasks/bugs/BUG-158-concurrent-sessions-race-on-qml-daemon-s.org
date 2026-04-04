@@ -1,0 +1,47 @@
+#+TITLE: Concurrent sessions race on QML daemon spawn
+#+STATE: DONE
+#+SESSION_ID: 14ad66157311f882
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-04T12-06-17-804Z_14ad66157311f882.jsonl]]
+#+CUSTOM_ID: BUG-158-concurrent-sessions-race-on-qml-daemon-s
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: qml
+
+NOTE [2026-04-04]: mkdir-based filesystem lock in #spawnDaemon. Lock acquired before spawn, retries connect after contention, releases in finally. Stale lock detected after 10s. ENOENT handled gracefully.
+
+* Initial Message
+
+Session Info
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-ag
+ entmaker/2026-04-04T11-54-36-726Z_14ad6368cd808eee.jsonl
+ ID: 14ad6368cd808eee
+
+Why did the phoenix inspector close on that session?
+
+Multiple spell sessions running concurrently can each try to spawn ~spell-qml-bridge --daemon~. The daemon's ~SocketServer::listen()~ has a stale-socket check (~isSocketLive~), but there is no lock on the TS side. Two sessions calling ~#spawnDaemon()~ simultaneously can both pass the ~isSocketLive~ check before either daemon binds, causing one to fail or replace the other. This destabilizes the shared socket (observed: 5 unexpected socket closes in a 10-minute session).
+
+* Problem
+- ~qml-process.ts~ ~#spawnDaemon()~: Spawns ~[binary, "--daemon"]~ without acquiring a lock.
+- C++ ~socketserver.cpp~ ~listen()~: ~isSocketLive~ probes with a 500ms connect timeout. If the existing daemon is slow to respond, a new daemon may think the socket is stale and remove it.
+- ~ensure()~ tries ~#connectSocket()~ first (good), but falls through to ~#spawnDaemon()~ without rechecking after backoff.
+
+* Fix
+** Sub-outline: spawn lock (test-first)
+1. Test: ~packages/qml/test/reconnect.test.ts~ — add test "concurrent ensure() calls do not spawn multiple daemons" — two ~QmlProcess~ instances, override socketPath, both call ~ensure()~ concurrently, verify only one spawn attempt (or that the second connects to the first).
+
+** Sub-outline: implementation
+1. ~qml-process.ts~: Add ~static lockPath(): string~ method — returns ~QmlProcess.socketPath() + ".lock"~ (e.g. ~/run/user/1000/spell-qml-bridge.sock.lock~).
+2. ~qml-process.ts~: Import ~withFileLock~ from ~@oh-my-pi/pi-coding-agent/config/file-lock~ (or inline a simpler mkdir-based lock since ~pi-qml~ shouldn't depend on ~pi-coding-agent~).
+   - Actually: implement a lightweight lock inline in ~qml-process.ts~ using ~fs.mkdirSync~ + ~fs.rmdirSync~ (same pattern as ~file-lock.ts~ but without the dependency). Or better: extract the lock utility to ~@oh-my-pi/pi-utils~ first.
+   - Decision: inline a minimal lock in ~qml-process.ts~ — 3 retries, 200ms delay, 10s stale timeout. Don't add cross-package dependency for this.
+3. ~qml-process.ts~ ~#spawnDaemon()~: Wrap the spawn + connect-retry loop in the lock. Release lock after successful connect (or on failure).
+4. ~qml-process.ts~ ~ensure()~: After ~#spawnDaemon~ lock contention resolves, retry ~#connectSocket()~ one more time (the winner may have already started the daemon).
+
+* Acceptance criteria
+- Two concurrent ~ensure()~ calls from different ~QmlProcess~ instances result in exactly one daemon process.
+- Lock file is cleaned up on success and failure.
+- Stale lock (from crashed process) is detected and overridden after 10s.
+- Test covers the concurrent spawn race.
+- Existing tests pass: ~bun test packages/qml/test/reconnect.test.ts~

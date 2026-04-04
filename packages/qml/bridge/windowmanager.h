@@ -40,8 +40,17 @@ public:
      */
     void setEventWriter(std::function<void(QLocalSocket *, const QJsonObject &)> writer);
 
-    /// Returns state of windows owned by the given client (nullptr = all windows).
+    /// Returns state of windows owned by or orphaned for the given client.
+    /// In daemon mode, includes orphaned windows (owner == nullptr) with an "orphaned" flag.
+    /// When client is nullptr (stdio mode), returns all windows.
     QJsonArray getWindowStates(QLocalSocket *client) const;
+
+    /// Set owner to nullptr for all windows owned by the given (now-dead) client.
+    void orphanWindows(QLocalSocket *deadClient);
+
+    /// Claim orphaned windows (owner == nullptr) for a new client.
+    /// Only claims windows whose id is in windowIds. Pass empty list to claim all.
+    void claimOrphans(QLocalSocket *newClient, const QStringList &windowIds = {});
 
     struct WindowEntry {
         QQmlApplicationEngine *engine;
@@ -91,6 +100,8 @@ private:
 
     SystrayManager *m_systray = nullptr;
     HotkeyManager *m_hotkey = nullptr;
+    QLocalSocket *m_systrayOwner = nullptr;
+    QLocalSocket *m_hotkeyOwner = nullptr;
     std::function<void(QLocalSocket *, const QJsonObject &)> m_eventWriter;
     QHash<QString, WindowEntry> m_windows;
 };
