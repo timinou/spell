@@ -7,7 +7,7 @@ import { VirtualTerminal } from "./virtual-terminal";
 describe("Loader component", () => {
 	it("clamps rendered lines to terminal width", async () => {
 		const term = new VirtualTerminal(1, 4);
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		const loader = new Loader(
 			tui,
 			text => text,
@@ -18,7 +18,7 @@ describe("Loader component", () => {
 		tui.addChild(loader);
 
 		tui.start();
-		await Bun.sleep(0);
+		await new Promise<void>(r => setImmediate(r));
 		await term.flush();
 
 		for (const line of term.getViewport()) {

@@ -81,24 +81,29 @@ function longestBlankRun(lines: string[]): number {
 	return longest;
 }
 
+async function settle(term: VirtualTerminal): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	setImmediate(resolve);
+	await promise;
+	await term.flush();
+}
+
 describe("TUI overlays", () => {
 	it("does not scroll the terminal when an overlay is shown with a large historical working area", async () => {
 		const term = new VirtualTerminal(80, 24);
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 
 		tui.addChild(new LineComponent("base-", 5));
 
 		tui.start();
-		await Bun.sleep(0);
-		await term.flush();
+		await settle(term);
 
 		// Simulate a large historical working area (max lines ever rendered) without actually
 		// rendering that many lines in the current view.
 		(tui as unknown as { maxLinesRendered: number }).maxLinesRendered = 1500;
 
 		tui.showOverlay(new LineComponent("overlay-", 3), { anchor: "center" });
-		await Bun.sleep(0);
-		await term.flush();
+		await settle(term);
 
 		// The scroll buffer should stay small; we should not have printed hundreds/thousands of blank lines.
 		expect(term.getScrollBuffer().length).toBeLessThan(200);
@@ -109,17 +114,15 @@ describe("TUI overlays", () => {
 		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
 		await term.flush();
 
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		const component = new MutableContentComponent(["ui-0", "ui-1", "ui-2", "ui-3", "ui-4", "ui-5"]);
 		tui.addChild(component);
 
 		tui.start();
-		await Bun.sleep(0);
-		await term.flush();
+		await settle(term);
 
 		term.resize(39, 4);
-		await Bun.sleep(0);
-		await term.flush();
+		await settle(term);
 
 		const scrollback = term.getScrollBuffer().join("\n");
 		expect(scrollback.includes("shell-0")).toBeFalsy();
@@ -129,20 +132,18 @@ describe("TUI overlays", () => {
 
 	it("preserves rendered scrollback on forced redraw after startup", async () => {
 		const term = new VirtualTerminal(40, 4);
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		const component = new MutableContentComponent(buildRows(120));
 		tui.addChild(component);
 
 		tui.start();
-		await Bun.sleep(0);
-		await term.flush();
+		await settle(term);
 
 		const before = term.getScrollBuffer().join("\n");
 		expect(before.includes("row-0")).toBeTruthy();
 
 		tui.requestRender(true);
-		await Bun.sleep(0);
-		await term.flush();
+		await settle(term);
 
 		const after = term.getScrollBuffer().join("\n");
 		expect(after.includes("row-0")).toBeTruthy();
@@ -154,17 +155,15 @@ describe("TUI overlays", () => {
 		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
 		await term.flush();
 
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		const component = new MutableContentComponent(["ui-0", "ui-1", "ui-2", "ui-3"]);
 		tui.addChild(component);
 
 		tui.start();
-		await Bun.sleep(0);
-		await term.flush();
+		await settle(term);
 
 		term.resize(40, 8);
-		await Bun.sleep(0);
-		await term.flush();
+		await settle(term);
 
 		const viewport = term.getViewport().join("\n");
 		expect(viewport.includes("shell-")).toBeFalsy();
@@ -173,19 +172,17 @@ describe("TUI overlays", () => {
 	});
 	it("renders viewport-only on resize when content size is stable", async () => {
 		const term = new VirtualTerminal(60, 8);
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		const component = new MutableContentComponent(Array.from({ length: 140 }, (_v, i) => `row-${i}`));
 		tui.addChild(component);
 		try {
 			tui.start();
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 			const before = term.getScrollBuffer().length;
 
 			for (let i = 0; i < 8; i++) {
 				term.resize(i % 2 === 0 ? 59 : 60, i % 2 === 0 ? 9 : 8);
-				await Bun.sleep(0);
-				await term.flush();
+				await settle(term);
 			}
 
 			const after = term.getScrollBuffer().length;
@@ -197,17 +194,15 @@ describe("TUI overlays", () => {
 
 	it("renders a fresh viewport on resize when content grows before resize", async () => {
 		const term = new VirtualTerminal(60, 8);
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		const component = new MutableContentComponent(Array.from({ length: 8 }, (_v, i) => `row-${i}`));
 		tui.addChild(component);
 		try {
 			tui.start();
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 			component.setLines(Array.from({ length: 140 }, (_v, i) => `row-${i}`));
 			term.resize(59, 9);
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 			const viewport = term.getViewport();
 			expect(viewport.at(-1)?.includes("row-139")).toBeTruthy();
 		} finally {
@@ -219,15 +214,13 @@ describe("TUI overlays", () => {
 		const term = new VirtualTerminal(40, 4);
 		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\n");
 		await term.flush();
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		tui.addChild(new MutableContentComponent(["ui-0", "ui-1", "ui-2", "ui-3", "ui-4"]));
 		try {
 			tui.start();
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 			term.resize(39, 4);
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 			const scrollback = term.getScrollBuffer().join("\n");
 			expect(scrollback.includes("shell-0")).toBeFalsy();
 		} finally {
@@ -237,19 +230,17 @@ describe("TUI overlays", () => {
 
 	it("pushes overflow growth into scrollback during viewport repaint", async () => {
 		const term = new VirtualTerminal(40, 4);
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		const component = new MutableContentComponent(buildRows(4));
 		tui.addChild(component);
 		try {
 			tui.start();
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 
 			for (let count = 5; count <= 45; count++) {
 				component.setLines(buildRows(count));
 				term.resize(40, count % 2 === 0 ? 4 : 5);
-				await Bun.sleep(0);
-				await term.flush();
+				await settle(term);
 			}
 
 			const scrollbackLines = term.getScrollBuffer().map(line => line.trim());
@@ -264,24 +255,21 @@ describe("TUI overlays", () => {
 
 	it("stays anchored across shrink-grow cycles while overflowing viewport", async () => {
 		const term = new VirtualTerminal(30, 6);
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		const component = new MutableContentComponent(Array.from({ length: 120 }, (_v, i) => `row-${i}`));
 		tui.addChild(component);
 		try {
 			tui.start();
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 
 			for (let cycle = 0; cycle < 5; cycle++) {
 				component.setLines(Array.from({ length: 120 - cycle * 8 }, (_v, i) => `row-${i}`));
 				tui.requestRender();
-				await Bun.sleep(0);
-				await term.flush();
+				await settle(term);
 
 				component.setLines(Array.from({ length: 120 - cycle * 8 + 4 }, (_v, i) => `row-${i}`));
 				tui.requestRender();
-				await Bun.sleep(0);
-				await term.flush();
+				await settle(term);
 			}
 
 			const viewport = term.getViewport().map(line => line.trim());
@@ -296,20 +284,18 @@ describe("TUI overlays", () => {
 
 	it("updates hardware cursor without redrawing content", async () => {
 		const term = new VirtualTerminal(40, 6);
-		const tui = new TUI(term, true);
+		const tui = new TUI(term, { showHardwareCursor: true, minRenderInterval: 0 });
 		const component = new CursorOnlyComponent();
 		tui.addChild(component);
 		try {
 			tui.start();
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 			const before = term.getScrollBuffer().length;
 
 			for (let col = 0; col <= 10; col++) {
 				component.setCursorCol(col);
 				tui.requestRender();
-				await Bun.sleep(0);
-				await term.flush();
+				await settle(term);
 			}
 
 			const viewport = term.getViewport();
@@ -322,21 +308,19 @@ describe("TUI overlays", () => {
 
 	it("limits scrollback growth during resize oscillation with overflowing content", async () => {
 		const term = new VirtualTerminal(60, 10);
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		const component = new MutableContentComponent(buildRows(320));
 		tui.addChild(component);
 		try {
 			tui.start();
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 			const before = term.getScrollBuffer().length;
 
 			for (let i = 0; i < 80; i++) {
 				component.setLines(buildRows(280 + (i % 6) * 15));
 				term.resize(i % 2 === 0 ? 59 : 60, i % 3 === 0 ? 11 : 10);
 				tui.requestRender();
-				await Bun.sleep(0);
-				await term.flush();
+				await settle(term);
 				const viewportRows = viewportRowNumbers(term);
 				expect(viewportRows.length).toBeGreaterThan(0);
 			}
@@ -351,28 +335,24 @@ describe("TUI overlays", () => {
 
 	it("limits scrollback while toggling overlays over overflowing content", async () => {
 		const term = new VirtualTerminal(60, 10);
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		const component = new MutableContentComponent(buildRows(300));
 		tui.addChild(component);
 		try {
 			tui.start();
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 			const before = term.getScrollBuffer().length;
 
 			for (let i = 0; i < 50; i++) {
 				const handle = tui.showOverlay(new LineComponent(`overlay-${i}-`, 3), { anchor: "center" });
-				await Bun.sleep(0);
-				await term.flush();
+				await settle(term);
 				handle.hide();
-				await Bun.sleep(0);
-				await term.flush();
+				await settle(term);
 
 				if (i % 5 === 0) {
 					component.setLines(buildRows(280 + (i % 4) * 10));
 					tui.requestRender();
-					await Bun.sleep(0);
-					await term.flush();
+					await settle(term);
 				}
 
 				expect(viewportRowNumbers(term).length).toBeGreaterThan(0);
@@ -388,19 +368,17 @@ describe("TUI overlays", () => {
 
 	it("keeps scrollback bounded under rapid micro-resize oscillation", async () => {
 		const term = new VirtualTerminal(80, 12);
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		const component = new MutableContentComponent(buildRows(360));
 		tui.addChild(component);
 		try {
 			tui.start();
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 			const before = term.getScrollBuffer().length;
 
 			for (let i = 0; i < 120; i++) {
 				term.resize(i % 2 === 0 ? 79 : 80, i % 3 === 0 ? 11 : 12);
-				await Bun.sleep(0);
-				await term.flush();
+				await settle(term);
 				expect(viewportRowNumbers(term).length).toBeGreaterThan(0);
 			}
 
@@ -414,18 +392,16 @@ describe("TUI overlays", () => {
 
 	it("avoids scrollback growth on repeated no-op renders with overflowing content", async () => {
 		const term = new VirtualTerminal(70, 10);
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		tui.addChild(new MutableContentComponent(buildRows(260)));
 		try {
 			tui.start();
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 			const before = term.getScrollBuffer().length;
 
 			for (let i = 0; i < 80; i++) {
 				tui.requestRender();
-				await Bun.sleep(0);
-				await term.flush();
+				await settle(term);
 			}
 
 			const scrollback = term.getScrollBuffer();
@@ -436,21 +412,19 @@ describe("TUI overlays", () => {
 	});
 	it("stays stable with direct row-delta movement", async () => {
 		const term = new VirtualTerminal(50, 10);
-		const tui = new TUI(term);
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		const component = new MutableContentComponent(buildRows(260));
 		tui.addChild(component);
 		try {
 			tui.start();
-			await Bun.sleep(0);
-			await term.flush();
+			await settle(term);
 			const before = term.getScrollBuffer().length;
 
 			for (let i = 0; i < 60; i++) {
 				component.setLines(buildRows(220 + (i % 8) * 12));
 				term.resize(i % 2 === 0 ? 50 : 49, i % 3 === 0 ? 11 : 10);
 				tui.requestRender();
-				await Bun.sleep(0);
-				await term.flush();
+				await settle(term);
 				expect(viewportRowNumbers(term).length).toBeGreaterThan(0);
 			}
 

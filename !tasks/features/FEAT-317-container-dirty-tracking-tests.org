@@ -1,0 +1,59 @@
+#+TITLE: Container dirty tracking tests
+#+STATE: DONE
+#+SESSION_ID: 14ae9ad3a26f7ddc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-35-12-905Z_14ae9ad3a26f7ddc.jsonl]]
+#+CUSTOM_ID: FEAT-317-container-dirty-tracking-tests
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: tui
+
+* Initial Message
+
+text entry hangs when many subagents are working at the same time
+
+** Problem
+Container.render() re-renders ALL children on every frame, regardless of whether any child changed. This makes render cost O(all_components * render_cost) instead of O(dirty_components * render_cost).
+
+** Tests (test file: =packages/tui/test/container-dirty.test.ts=)
+
+Write tests BEFORE implementation. All tests should FAIL initially, then pass once Container is updated.
+
+*** Contract: dirty flag lifecycle
+- Container starts dirty (needs first render)
+- After render(width), Container is clean
+- addChild(c) marks dirty
+- removeChild(c) marks dirty
+- clear() marks dirty
+- invalidate() marks dirty and propagates to children
+- render(width) when clean returns SAME array reference (identity check via ===)
+- render(width) when clean but width changed re-renders (dirty on width mismatch)
+
+*** Contract: upward propagation via markDirty()
+- markDirty() on a child Container propagates to parent Container
+- markDirty() is idempotent (calling twice doesn't duplicate work)
+- Nested chain: grandchild.markDirty() → child dirty → parent dirty
+
+*** Contract: selective re-rendering
+- Two children in a Container, only one marked dirty: only the dirty child's render is called
+  - Use a spy component that counts render calls
+  - After initial render, both have count=1
+  - Modify one child → markDirty → render
+  - Unchanged child: count still 1 (returned cached)
+  - Changed child: count=2
+
+*** Contract: parent tracking
+- addChild sets parent reference on child Container
+- removeChild clears parent reference
+- clear() clears all children's parent references
+- Re-adding a child to a different parent updates the reference
+
+** Test helpers
+- =CountingComponent=: implements Component, increments a counter on each render() call
+- Use existing VirtualTerminal for integration-level tests if needed
+- Direct Container unit tests don't need VirtualTerminal
+
+** Acceptance
+- Test file exists at =packages/tui/test/container-dirty.test.ts=
+- All tests fail when run against current Container (no dirty tracking)
+- Tests cover all contracts listed above
+- No mocks — test real Container behavior

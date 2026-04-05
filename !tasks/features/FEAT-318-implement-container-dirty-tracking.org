@@ -1,0 +1,96 @@
+#+TITLE: Implement Container dirty tracking
+#+STATE: DONE
+#+SESSION_ID: 14ae9ad3a26f7ddc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-35-12-905Z_14ae9ad3a26f7ddc.jsonl]]
+#+CUSTOM_ID: FEAT-318-implement-container-dirty-tracking
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: tui
+#+DEPENDS: FEAT-317-container-dirty-tracking-tests
+
+* Initial Message
+
+text entry hangs when many subagents are working at the same time
+
+** Problem
+Container.render() unconditionally re-renders all children every frame. With a deep component tree (many tool executions, assistant messages), this is expensive and blocks the event loop.
+
+** Target file: =packages/tui/src/tui.ts= (Container class, lines 174-206)
+
+** Design
+
+Add to Container:
+- =#dirty: boolean = true= — starts dirty, needs first render
+- =#cachedLines: string[] = []= — cached render output
+- =#cachedWidth = -1= — width for which cache is valid
+- =#parent?: Container= — parent reference for upward propagation
+
+*** markDirty()
+#+begin_src typescript
+markDirty(): void {
+    if (this.#dirty) return; // idempotent guard
+    this.#dirty = true;
+    this.#parent?.markDirty();
+}
+#+end_src
+
+*** addChild(component)
+- Push to children array
+- If component has =markDirty= method (duck-type Container), set its =#parent= to this
+- Call =this.markDirty()=
+
+*** removeChild(component)
+- Splice from children array
+- If component has =#parent= pointing to this, clear it
+- Call =this.markDirty()=
+
+*** clear()
+- Clear parent references on all children that are Containers
+- Reset children array
+- Call =this.markDirty()=
+
+*** invalidate()
+- Call =this.markDirty()= (propagates up)
+- Propagate =invalidate()= to children (propagates down — existing behavior)
+
+*** render(width)
+#+begin_src typescript
+render(width: number): string[] {
+    width = Math.max(1, width);
+    if (!this.#dirty && this.#cachedWidth === width) {
+        return this.#cachedLines;
+    }
+    const lines: string[] = [];
+    for (const child of this.children) {
+        lines.push(...child.render(width));
+    }
+    this.#cachedLines = lines;
+    this.#cachedWidth = width;
+    this.#dirty = false;
+    return lines;
+}
+#+end_src
+
+** Edge cases
+- TUI extends Container — TUI.#doRender() calls this.render(width), so dirty tracking applies to the root
+- TUI.requestRender(force=true) already resets previousLines; no need to also mark dirty (render will be called regardless)
+- Components that call ui.requestRender() without invalidate/markDirty: still triggers render, but Container returns cached if clean. This is correct — if nothing changed, returning cached is the right behavior
+- Components that mutate internal state (like ToolExecutionComponent.#updateDisplay calling #contentBox.clear() + addChild): these ALREADY mark the contentBox dirty (via addChild/clear), which bubbles up. No changes needed in consumers.
+- Width change: dirty flag is irrelevant when width changes — cache key includes width, so width mismatch forces re-render
+
+** Parent reference design
+Use a public =setParent/clearParent= approach rather than checking instanceof:
+- =Container.addChild= calls =child.setParent?.(this)= if the method exists
+- This avoids instanceof checks and works with any Container subclass
+- =setParent= and =clearParent= are methods on Container, not on Component interface (leaf components don't need parent tracking)
+
+** What NOT to change
+- Do NOT change Component interface — dirty tracking is Container-internal
+- Do NOT add markDirty() to Component interface — leaf components (Text, etc.) don't need it
+- Do NOT modify any consuming code in coding-agent — the Container API is unchanged
+
+** Acceptance
+- All tests from FEAT-317 pass
+- =bun check:ts= passes
+- Existing TUI tests still pass: =bun test packages/tui/test/=
+- No visible rendering regressions (verify via existing render-regressions.test.ts)
