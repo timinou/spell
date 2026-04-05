@@ -1,0 +1,34 @@
+#+TITLE: Async stagger returns undefined violating Promise string contract
+#+STATE: DONE
+#+SESSION_ID: 14aea846b7f4794b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-33-58-623Z_14aea846b7f4794b.jsonl]]
+#+CUSTOM_ID: BUG-165-async-stagger-returns-undefined-violatin
+#+EFFORT: 10m
+#+LAYER: task
+
+NOTE [2026-04-05]: Fixed: replaced return undefined! with throw new Error to satisfy Promise<string> contract.
+
+* Initial Message
+
+no, you cucked up. i want the task and the smol to be separate from the subtask-fast and the subtask-slow
+
+Introduced in PLAN-141 (commit 134d9eeaf). In the async batch path (~task/index.ts~), ~return undefined!~ violates the ~() => Promise<string>~ callback contract of ~AsyncJobManager.register~. The job manager stores ~undefined~ as ~resultText~ (typed ~string~) and passes it through ~#enqueueDelivery~ to ~formatAsyncResultForFollowUp(result: string)~ in ~sdk.ts~, which calls ~result.length~ — a runtime TypeError on ~undefined~.
+
+In practice, this only fires when ~runSignal.aborted~ is true after stagger sleep. The abort path in the job manager checks ~job.status === \"cancelled\"~ first (line 125), so the ~undefined~ is stored but not delivered. However, this is fragile — any change to cancellation ordering surfaces the bug.
+
+* Implementation
+** Replace return undefined! with throw (packages/coding-agent/src/task/index.ts ~line 722)
+Replace:
+#+begin_src typescript
+if (runSignal.aborted) return undefined!;
+#+end_src
+With:
+#+begin_src typescript
+if (runSignal.aborted) throw new Error("Aborted during stagger delay");
+#+end_src
+The ~catch~ block already handles aborted signals correctly (line 814-825): it calls ~markTaskTerminal(logicalId, \"aborted\", ...)~ and ~abortPendingTasks()~.
+
+* Acceptance
+- ~bun check:ts~ passes
+- No ~undefined!~ in codebase
+- Abort during stagger in async path produces a clean \"aborted\" terminal state

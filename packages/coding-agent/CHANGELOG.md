@@ -42,6 +42,10 @@
 - `canvas_tasks` status line segment with TUI badge wired to `CanvasTaskManager.getActive()` count
 - Enriched `task_result` payloads: `model`, `tokens`, `durationMs`, `usage`, `retryable` fields
 - Subagent viewer (`Ctrl+Tab`) for drilling into running agents with full chat rendering, scroll, and agent switching
+- `subtask` model role for subagent sessions (configurable via `modelRoles.subtask`, defaults to `smol`)
+- Per-subagent cost display in TUI progress, results, batch summary, and subagent viewer footer
+- `task.cacheStaggerMs` setting (default 800ms) for prompt cache warming between sibling launches
+- `todo_write` tool now available to all subagents for self-organizing complex work
 
 ### Changed
 
@@ -51,6 +55,10 @@
 - Updated fluid agent panels to show dependency status and support expandable/collapsible details.
 - Unified wave orchestration: replaced `FluidOrchestrator`, `QueueScheduler`, and `coordinator-runner` with agent-session-driven execution using `todo_write` state and `FluidEvent` translation
 - `normalizeInProgressTask` allows multiple `in_progress` tasks when guarded by delegation metadata
+- `task.maxRecursionDepth` default reduced from 4 to 2 (main -> subagent -> sub-subagent max)
+- `task` agent spawns restricted from `*` to `explore, quick_task`
+- Compaction and context promotion disabled for all subagent sessions
+- Both `task` and `quick_task` agents now use `pi/subtask` model role
 
 ### Fixed
 

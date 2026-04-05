@@ -1060,7 +1060,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const allCustomTools = [...mcpProxyTools, ...(options.customTools ?? [])];
 			const enableMCP = !options.mcpManager;
 			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
-			const parentOwnedToolNames = new Set<string>();
 			const MAX_SUBMIT_RESULT_RETRIES = 3;
 			const fallbackAttempts: StartupFallbackAttempt[] = [];
 
@@ -1117,12 +1116,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						progress.sessionId = session.sessionId;
 						progress.transcriptPath = sessionFile ?? undefined;
 
-						const subagentToolNames = session.getActiveToolNames();
-						const filteredSubagentTools = subagentToolNames.filter(name => !parentOwnedToolNames.has(name));
-						if (filteredSubagentTools.length !== subagentToolNames.length) {
-							await session.setActiveToolsByName(filteredSubagentTools);
-						}
-
 						session.sessionManager.appendSessionInit({
 							systemPrompt: session.agent.state.systemPrompt,
 							task,
@@ -1164,8 +1157,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 									},
 									getActiveTools: () => session.getActiveToolNames(),
 									getAllTools: () => session.getAllToolNames(),
-									setActiveTools: (toolNames: string[]) =>
-										session.setActiveToolsByName(toolNames.filter(name => !parentOwnedToolNames.has(name))),
+									setActiveTools: (toolNames: string[]) => session.setActiveToolsByName(toolNames),
 									getCommands: () => [],
 									setModel: async model => {
 										const key = await session.modelRegistry.getApiKey(model);

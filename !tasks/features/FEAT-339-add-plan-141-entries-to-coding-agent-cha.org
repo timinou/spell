@@ -1,0 +1,37 @@
+#+TITLE: Add PLAN-141 entries to coding-agent CHANGELOG
+#+STATE: DONE
+#+SESSION_ID: 14aea846b7f4794b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-33-58-623Z_14aea846b7f4794b.jsonl]]
+#+CUSTOM_ID: FEAT-339-add-plan-141-entries-to-coding-agent-cha
+#+EFFORT: 10m
+#+LAYER: docs
+
+NOTE [2026-04-05]: Added PLAN-141 entries to coding-agent and utils CHANGELOGs under [Unreleased].
+
+* Initial Message
+
+no, you cucked up. i want the task and the smol to be separate from the subtask-fast and the subtask-slow
+
+PLAN-141 shipped significant user-facing changes with no CHANGELOG entries. Per repo convention, all changes must go under ~## [Unreleased]~.
+
+* Implementation
+** Add entries to coding-agent CHANGELOG (packages/coding-agent/CHANGELOG.md)
+Under ~## [Unreleased]~, add to ~### Added~ section:
+- ~subtask~ model role for subagent sessions (configurable via ~modelRoles.subtask~, defaults to ~smol~)
+- Per-subagent cost display in TUI progress, results, batch summary, and subagent viewer footer
+- ~task.cacheStaggerMs~ setting (default 800ms) for prompt cache warming between sibling launches
+- ~todo_write~ tool now available to all subagents for self-organizing complex work
+
+Under ~### Changed~ section (create if needed):
+- ~task.maxRecursionDepth~ default reduced from 4 to 2 (main -> subagent -> sub-subagent max)
+- ~task~ agent spawns restricted from ~*~ to ~explore, quick_task~
+- Compaction and context promotion disabled for all subagent sessions
+- Both ~task~ and ~quick_task~ agents now use ~pi/subtask~ model role
+
+** Add entry to utils CHANGELOG (packages/utils/CHANGELOG.md)
+Create file if missing. Under ~## [Unreleased]~ / ~### Added~:
+- ~formatCost()~ helper for dollar-amount display formatting
+
+* Acceptance
+- Both CHANGELOGs have entries under ~[Unreleased]~ reflecting PLAN-141 changes
+- No already-released version sections are modified

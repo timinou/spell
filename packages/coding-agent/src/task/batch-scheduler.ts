@@ -168,12 +168,6 @@ export async function scheduleBatch<T>(
 			if (!nextId || resultsById.has(nextId)) continue;
 			runningIds.add(nextId);
 			void (async () => {
-				// Stagger sibling launches for prompt cache warming
-				const myLaunchIndex = launchCount++;
-				if (staggerMs > 0 && myLaunchIndex > 0) {
-					await Bun.sleep(staggerMs * myLaunchIndex);
-					if (signal.aborted) return;
-				}
 				const taskIndex = graph.indexById.get(nextId);
 				if (taskIndex === undefined) {
 					runningIds.delete(nextId);
@@ -182,6 +176,12 @@ export async function scheduleBatch<T>(
 				}
 				const task = tasks[taskIndex];
 				try {
+					// Stagger sibling launches for prompt cache warming
+					const myLaunchIndex = launchCount++;
+					if (staggerMs > 0 && myLaunchIndex > 0) {
+						await Bun.sleep(staggerMs * myLaunchIndex);
+						if (signal.aborted) throw new Error("Aborted during stagger delay");
+					}
 					const result = await task.run(signal);
 					finishTask(nextId, { id: nextId, status: "completed", result });
 					if (!signal.aborted) {

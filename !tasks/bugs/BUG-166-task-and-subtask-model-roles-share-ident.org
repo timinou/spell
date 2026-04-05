@@ -1,0 +1,32 @@
+#+TITLE: Task and subtask model roles share identical display name
+#+STATE: DONE
+#+SESSION_ID: 14aea846b7f4794b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-33-58-623Z_14aea846b7f4794b.jsonl]]
+#+CUSTOM_ID: BUG-166-task-and-subtask-model-roles-share-ident
+#+EFFORT: 5m
+#+LAYER: task
+
+NOTE [2026-04-05]: Fixed: changed MODEL_ROLES.task.name from \"Subtask\" to \"Task\".
+
+* Initial Message
+
+no, you cucked up. i want the task and the smol to be separate from the subtask-fast and the subtask-slow
+
+Introduced in PLAN-141 (commit 134d9eeaf). ~MODEL_ROLES.task~ has ~name: \"Subtask\"~ and ~MODEL_ROLES.subtask~ has ~name: \"Subtask\"~. In the settings UI, these are indistinguishable. The ~task~ role predates the new ~subtask~ role and its name should be updated.
+
+* Implementation
+** Rename task role display name (packages/coding-agent/src/config/model-registry.ts ~line 66)
+Change:
+#+begin_src typescript
+task: { tag: "TASK", name: "Subtask", color: "muted" },
+#+end_src
+To:
+#+begin_src typescript
+task: { tag: "TASK", name: "Task", color: "muted" },
+#+end_src
+
+* Acceptance
+- ~bun check:ts~ passes
+- ~MODEL_ROLES.task.name~ is ~\"Task\"~
+- ~MODEL_ROLES.subtask.name~ is ~\"Subtask\"~
+- No duplicate display names in MODEL_ROLES
