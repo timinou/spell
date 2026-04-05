@@ -1,0 +1,77 @@
+#+TITLE: TUI render scheduling test polish
+#+STATE: DONE
+#+SESSION_ID: 14ae9f3312ef7de3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-54-19-211Z_14ae9f3312ef7de3.jsonl]]
+#+CUSTOM_ID: FEAT-329-tui-render-scheduling-test-polish
+#+EFFORT: 30m
+#+LAYER: tui
+
+
+
+
+NOTE [2026-04-05]: Started assigned test polish updates for render scheduling and dirty container casts.
+
+* Initial Message
+
+bro the real spell now does not show me the text that I'm typing
+
+* Problem
+
+Several test quality issues in the files created by PLAN-138:
+
+1. =render-scheduling.test.ts= settle uses =Bun.sleep(delayMs)= while other test files use =setImmediate=
+2. =render-scheduling.test.ts= uses unnecessary =as unknown as TUIConstructor= cast (TUI constructor now accepts options natively)
+3. =container-dirty.test.ts= uses unnecessary =DirtyContainer= cast (=markDirty()= is now public on Container)
+4. =render-scheduling.test.ts= stop test viewport comparison is fragile (=stop()= writes cursor movement + =\r
+=)
+
+* Fix
+
+** 1. Fix settle in render-scheduling.test.ts
+
+The =settle(term, delayMs)= function with =Bun.sleep= is needed for throttle-specific tests (waiting for real timeouts). But line 174 uses =settle(term)= (default 20ms) where =settleImmediate() + term.flush()= would suffice.
+
+Change: replace =await settle(term)= on line 174 with =await settleImmediate(); await term.flush();=. The =settle= function itself stays for throttle tests that need real delays.
+
+** 2. Remove TUIConstructor cast in render-scheduling.test.ts
+
+Remove:
+- =type TUIOptions= (lines 5-8)
+- =type TUIConstructor= (line 10)
+- =createTUI= function (lines 36-39)
+
+Replace all =createTUI(term, { minRenderInterval: N })= with =new TUI(term, { minRenderInterval: N })=.
+
+** 3. Remove DirtyContainer cast in container-dirty.test.ts
+
+Remove:
+- =type DirtyContainer= (lines 24-26)
+- =withDirtyApi= function (lines 28-30)
+
+Replace all =withDirtyApi(new Container())= with =new Container()=. All =child.markDirty()= calls work directly since markDirty is public.
+
+** 4. Fix fragile stop test
+
+The assertion =expect(visible(term)).toEqual(beforeStop)= compares viewport before/after =stop()=. But =stop()= writes cursor movement + =\r
+= which can shift viewport.
+
+Change assertion to verify "after stop" content does NOT appear:
+#+begin_src typescript
+expect(containsLine(term, "after stop")).toBe(false);
+#+end_src
+
+* Acceptance
+- =bun test packages/tui/test/render-scheduling.test.ts= all green
+- =bun test packages/tui/test/container-dirty.test.ts= all green
+- No =as unknown= casts in render-scheduling.test.ts
+- No =DirtyContainer= type in container-dirty.test.ts
+- =biome check packages/tui/= clean
+
+
+- Removed TUI/Container test casts and updated render scheduling assertions to use direct public APIs.
+
+
+- Completed assigned polish updates.
+- `packages/tui/test/render-scheduling.test.ts`: removed `createTUI`/constructor casts, switched minRenderInterval=0 same-tick settle to `settleImmediate()` + `term.flush()`, and hardened stop assertion to check absence of `after stop`.
+- `packages/tui/test/container-dirty.test.ts`: removed `DirtyContainer` cast helper and used `Container.markDirty()` directly.
+- Verification: `bun test packages/tui/test/render-scheduling.test.ts && bun test packages/tui/test/container-dirty.test.ts` passed.

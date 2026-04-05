@@ -21,14 +21,6 @@ class CountingComponent implements Component {
 	}
 }
 
-type DirtyContainer = Container & {
-	markDirty(): void;
-};
-
-function withDirtyApi(container: Container): DirtyContainer {
-	return container as DirtyContainer;
-}
-
 describe("Container dirty tracking", () => {
 	describe("dirty flag lifecycle", () => {
 		it("starts dirty (first render executes)", () => {
@@ -139,7 +131,7 @@ describe("Container dirty tracking", () => {
 		});
 
 		it("returns different array after markDirty", () => {
-			const container = withDirtyApi(new Container());
+			const container = new Container();
 			container.addChild(new CountingComponent(["alpha"]));
 
 			const first = container.render(80);
@@ -154,7 +146,7 @@ describe("Container dirty tracking", () => {
 	describe("upward propagation", () => {
 		it("markDirty propagates to parent", () => {
 			const parent = new Container();
-			const child = withDirtyApi(new Container());
+			const child = new Container();
 			const leaf = new CountingComponent(["alpha"]);
 			child.addChild(leaf);
 			parent.addChild(child);
@@ -170,7 +162,7 @@ describe("Container dirty tracking", () => {
 
 		it("markDirty is idempotent", () => {
 			const parent = new Container();
-			const child = withDirtyApi(new Container());
+			const child = new Container();
 			const leaf = new CountingComponent(["alpha"]);
 			child.addChild(leaf);
 			parent.addChild(child);
@@ -187,7 +179,7 @@ describe("Container dirty tracking", () => {
 		it("nested propagation: grandchild to parent", () => {
 			const root = new Container();
 			const middle = new Container();
-			const inner = withDirtyApi(new Container());
+			const inner = new Container();
 			const leaf = new CountingComponent(["alpha"]);
 			inner.addChild(leaf);
 			middle.addChild(inner);
@@ -206,7 +198,7 @@ describe("Container dirty tracking", () => {
 	describe("selective re-rendering", () => {
 		it("only dirty child re-renders", () => {
 			const parent = new Container();
-			const left = withDirtyApi(new Container());
+			const left = new Container();
 			const right = new Container();
 			const leftLeaf = new CountingComponent(["left"]);
 			const rightLeaf = new CountingComponent(["right"]);
@@ -231,7 +223,7 @@ describe("Container dirty tracking", () => {
 	describe("parent tracking", () => {
 		it("addChild sets parent on child Container", () => {
 			const parent = new Container();
-			const child = withDirtyApi(new Container());
+			const child = new Container();
 			const leaf = new CountingComponent(["alpha"]);
 			child.addChild(leaf);
 			parent.addChild(child);
@@ -245,7 +237,7 @@ describe("Container dirty tracking", () => {
 
 		it("removeChild clears parent", () => {
 			const parent = new Container();
-			const child = withDirtyApi(new Container());
+			const child = new Container();
 			const leaf = new CountingComponent(["alpha"]);
 			child.addChild(leaf);
 			parent.addChild(child);
@@ -261,8 +253,8 @@ describe("Container dirty tracking", () => {
 
 		it("clear clears all parent refs", () => {
 			const parent = new Container();
-			const firstChild = withDirtyApi(new Container());
-			const secondChild = withDirtyApi(new Container());
+			const firstChild = new Container();
+			const secondChild = new Container();
 			const firstLeaf = new CountingComponent(["first"]);
 			const secondLeaf = new CountingComponent(["second"]);
 			firstChild.addChild(firstLeaf);
@@ -284,7 +276,7 @@ describe("Container dirty tracking", () => {
 		it("re-adding to different parent updates ref", () => {
 			const parentA = new Container();
 			const parentB = new Container();
-			const child = withDirtyApi(new Container());
+			const child = new Container();
 			const leaf = new CountingComponent(["alpha"]);
 			child.addChild(leaf);
 			parentA.addChild(child);

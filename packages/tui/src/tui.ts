@@ -635,6 +635,7 @@ export class TUI extends Container {
 				clearTimeout(this.#throttleTimer);
 				this.#throttleTimer = undefined;
 			}
+			this.#renderRequested = false;
 		}
 		if (this.#renderRequested) return;
 		this.#renderRequested = true;

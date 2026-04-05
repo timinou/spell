@@ -2,13 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { type Component, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
-type TUIOptions = {
-	minRenderInterval?: number;
-	showHardwareCursor?: boolean;
-};
-
-type TUIConstructor = new (terminal: VirtualTerminal, options?: TUIOptions) => TUI;
-
 class StaticComponent implements Component {
 	#lines: string[];
 	#renderCount = 0;
@@ -31,11 +24,6 @@ class StaticComponent implements Component {
 		this.#renderCount += 1;
 		return this.#lines;
 	}
-}
-
-function createTUI(term: VirtualTerminal, options?: TUIOptions): TUI {
-	const TUIWithOptions = TUI as unknown as TUIConstructor;
-	return new TUIWithOptions(term, options);
 }
 
 async function settle(term: VirtualTerminal, delayMs = 20): Promise<void> {
@@ -72,7 +60,7 @@ describe("Render scheduling", () => {
 
 	it("render does not fire during process.nextTick phase", async () => {
 		const term = new VirtualTerminal(40, 10);
-		const tui = createTUI(term, { minRenderInterval: 0 });
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		activeTuis.push(tui);
 		const component = new StaticComponent(["scheduled render"]);
 		tui.addChild(component);
@@ -92,7 +80,7 @@ describe("Render scheduling", () => {
 
 	it("rapid requestRender calls within interval produce single render", async () => {
 		const term = new VirtualTerminal(40, 10);
-		const tui = createTUI(term, { minRenderInterval: 50 });
+		const tui = new TUI(term, { minRenderInterval: 50 });
 		activeTuis.push(tui);
 		const component = new StaticComponent(["first"]);
 		tui.addChild(component);
@@ -114,7 +102,7 @@ describe("Render scheduling", () => {
 
 	it("requestRender after interval fires normally", async () => {
 		const term = new VirtualTerminal(40, 10);
-		const tui = createTUI(term, { minRenderInterval: 50 });
+		const tui = new TUI(term, { minRenderInterval: 50 });
 		activeTuis.push(tui);
 		const component = new StaticComponent(["initial"]);
 		tui.addChild(component);
@@ -135,7 +123,7 @@ describe("Render scheduling", () => {
 
 	it("force=true bypasses throttle", async () => {
 		const term = new VirtualTerminal(40, 10);
-		const tui = createTUI(term, { minRenderInterval: 50 });
+		const tui = new TUI(term, { minRenderInterval: 50 });
 		activeTuis.push(tui);
 		const component = new StaticComponent(["initial"]);
 		tui.addChild(component);
@@ -154,9 +142,38 @@ describe("Render scheduling", () => {
 		expect(containsLine(term, "forced")).toBe(true);
 	});
 
+	it("force=true preempts pending throttle timer", async () => {
+		const term = new VirtualTerminal(40, 10);
+		const tui = new TUI(term, { minRenderInterval: 50 });
+		activeTuis.push(tui);
+		const component = new StaticComponent(["initial"]);
+		tui.addChild(component);
+
+		tui.start();
+		await settleImmediate();
+		await term.flush();
+
+		const baselineRenderCount = component.renderCount;
+
+		// Trigger a normal render to start throttle timer
+		component.setLines(["throttled"]);
+		tui.requestRender();
+		// Brief wait so throttle timer is ticking
+		await Bun.sleep(5);
+
+		// Force render should preempt the pending throttle
+		component.setLines(["forced"]);
+		tui.requestRender(true);
+
+		await settleImmediate();
+		await term.flush();
+		expect(containsLine(term, "forced")).toBe(true);
+		expect(component.renderCount).toBe(baselineRenderCount + 1);
+	});
+
 	it("multiple requestRender in same tick produce one render", async () => {
 		const term = new VirtualTerminal(40, 10);
-		const tui = createTUI(term, { minRenderInterval: 0 });
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		activeTuis.push(tui);
 		const component = new StaticComponent(["before"]);
 		tui.addChild(component);
@@ -171,14 +188,15 @@ describe("Render scheduling", () => {
 			tui.requestRender();
 		}
 
-		await settle(term);
+		await settleImmediate();
+		await term.flush();
 		expect(component.renderCount).toBe(baselineRenderCount + 1);
 		expect(containsLine(term, "same tick")).toBe(true);
 	});
 
 	it("TUI accepts minRenderInterval option", async () => {
 		const term = new VirtualTerminal(40, 10);
-		const tui = createTUI(term, { minRenderInterval: 0 });
+		const tui = new TUI(term, { minRenderInterval: 0 });
 		activeTuis.push(tui);
 		tui.addChild(new StaticComponent(["option accepted"]));
 
@@ -208,7 +226,7 @@ describe("Render scheduling", () => {
 
 	it("stop clears pending throttle timer", async () => {
 		const term = new VirtualTerminal(40, 10);
-		const tui = createTUI(term, { minRenderInterval: 50 });
+		const tui = new TUI(term, { minRenderInterval: 50 });
 		activeTuis.push(tui);
 		const component = new StaticComponent(["before stop"]);
 		tui.addChild(component);
@@ -216,7 +234,6 @@ describe("Render scheduling", () => {
 		tui.start();
 		await settleImmediate();
 		await term.flush();
-		const beforeStop = visible(term);
 
 		component.setLines(["after stop"]);
 		tui.requestRender();
@@ -224,6 +241,6 @@ describe("Render scheduling", () => {
 		activeTuis.pop();
 
 		await settle(term, 100);
-		expect(visible(term)).toEqual(beforeStop);
+		expect(containsLine(term, "after stop")).toBe(false);
 	});
 });
