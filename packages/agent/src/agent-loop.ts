@@ -10,6 +10,7 @@ import {
 	type ToolResultMessage,
 	validateToolArguments,
 } from "@oh-my-pi/pi-ai";
+import { logger } from "@oh-my-pi/pi-utils";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -47,7 +48,18 @@ export function agentLoop(
 			stream.push({ type: "message_end", message: prompt });
 		}
 
-		await runLoop(currentContext, newMessages, config, signal, stream, streamFn);
+		try {
+			await runLoop(currentContext, newMessages, config, signal, stream, streamFn);
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			logger.error("Agent loop failed", { error: msg, stack: error instanceof Error ? error.stack : undefined });
+			try {
+				stream.push({ type: "agent_end", messages: newMessages });
+				stream.end(newMessages);
+			} catch {
+				// stream may already be ended
+			}
+		}
 	})();
 
 	return stream;
@@ -84,7 +96,18 @@ export function agentLoopContinue(
 		stream.push({ type: "agent_start" });
 		stream.push({ type: "turn_start" });
 
-		await runLoop(currentContext, newMessages, config, signal, stream, streamFn);
+		try {
+			await runLoop(currentContext, newMessages, config, signal, stream, streamFn);
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			logger.error("Agent loop failed", { error: msg, stack: error instanceof Error ? error.stack : undefined });
+			try {
+				stream.push({ type: "agent_end", messages: newMessages });
+				stream.end(newMessages);
+			} catch {
+				// stream may already be ended
+			}
+		}
 	})();
 
 	return stream;

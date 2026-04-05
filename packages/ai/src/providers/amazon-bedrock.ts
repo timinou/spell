@@ -44,6 +44,7 @@ import { normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
+import { pushFallbackError } from "../utils/provider-error-boundary";
 import { transformMessages } from "./transform-messages";
 
 export interface BedrockOptions extends StreamOptions {
@@ -199,39 +200,47 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) {
-				delete (block as Block).index;
-				delete (block as Block).partialJson;
-			}
-			output.stopReason = options.signal?.aborted ? "aborted" : "error";
-			const baseMessage = error instanceof Error ? error.message : JSON.stringify(error);
-			// Enrich error with thinking block diagnostics for signature-related failures
-			let diagnostics = "";
-			if (baseMessage.includes("signature") || baseMessage.includes("thinking")) {
-				const thinkingBlocks = context.messages
-					.filter((m): m is AssistantMessage => m.role === "assistant")
-					.flatMap((m, mi) =>
-						m.content
-							.filter(b => b.type === "thinking")
-							.map((b, bi) => ({
-								msg: mi,
-								block: bi,
-								stop: m.stopReason,
-								sigLen: b.thinkingSignature?.length ?? -1,
-								thinkLen: b.thinking.length,
-							})),
-					);
-				if (thinkingBlocks.length > 0) {
-					diagnostics = `\n[thinking-diag] ${JSON.stringify(thinkingBlocks)}`;
+			try {
+				for (const block of output.content) {
+					delete (block as Block).index;
+					delete (block as Block).partialJson;
 				}
+				output.stopReason = options.signal?.aborted ? "aborted" : "error";
+				const baseMessage = error instanceof Error ? error.message : JSON.stringify(error);
+				// Enrich error with thinking block diagnostics for signature-related failures
+				let diagnostics = "";
+				if (baseMessage.includes("signature") || baseMessage.includes("thinking")) {
+					const thinkingBlocks = context.messages
+						.filter((m): m is AssistantMessage => m.role === "assistant")
+						.flatMap((m, mi) =>
+							m.content
+								.filter(b => b.type === "thinking")
+								.map((b, bi) => ({
+									msg: mi,
+									block: bi,
+									stop: m.stopReason,
+									sigLen: b.thinkingSignature?.length ?? -1,
+									thinkLen: b.thinking.length,
+								})),
+						);
+					if (thinkingBlocks.length > 0) {
+						diagnostics = `\n[thinking-diag] ${JSON.stringify(thinkingBlocks)}`;
+					}
+				}
+				output.errorMessage = await appendRawHttpRequestDumpFor400(
+					baseMessage + diagnostics,
+					error,
+					rawRequestDump,
+				);
+				output.duration = Date.now() - startTime;
+				if (firstTokenTime) output.ttft = firstTokenTime - startTime;
+				stream.push({ type: "error", reason: output.stopReason, error: output });
+				stream.end();
+			} catch (innerError) {
+				pushFallbackError(stream, model, innerError);
 			}
-			output.errorMessage = await appendRawHttpRequestDumpFor400(baseMessage + diagnostics, error, rawRequestDump);
-			output.duration = Date.now() - startTime;
-			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			stream.push({ type: "error", reason: output.stopReason, error: output });
-			stream.end();
 		}
-	})();
+	})().catch(err => pushFallbackError(stream, model, err));
 
 	return stream;
 };

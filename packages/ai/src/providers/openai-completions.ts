@@ -35,6 +35,7 @@ import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-ins
 import { getOpenAIStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { getKimiCommonHeaders } from "../utils/oauth/kimi";
+import { pushFallbackError } from "../utils/provider-error-boundary";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
 import { mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 import {
@@ -478,18 +479,22 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) delete (block as any).index;
-			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
-			// Some providers via OpenRouter include extra details here.
-			const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata?.raw;
-			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
-			output.duration = Date.now() - startTime;
-			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			stream.push({ type: "error", reason: output.stopReason, error: output });
-			stream.end();
+			try {
+				for (const block of output.content) delete (block as any).index;
+				output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+				output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
+				// Some providers via OpenRouter include extra details here.
+				const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata?.raw;
+				if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
+				output.duration = Date.now() - startTime;
+				if (firstTokenTime) output.ttft = firstTokenTime - startTime;
+				stream.push({ type: "error", reason: output.stopReason, error: output });
+				stream.end();
+			} catch (innerError) {
+				pushFallbackError(stream, model, innerError);
+			}
 		}
-	})();
+	})().catch(err => pushFallbackError(stream, model, err));
 
 	return stream;
 };

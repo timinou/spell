@@ -84,6 +84,7 @@ export interface Logger {
 	setStderrDebugEnabled(enabled: boolean): void;
 	time<T>(op: string, fn: () => T): T;
 	timeAsync<T>(op: string, fn: () => PromiseLike<T>): Promise<T>;
+	close(): Promise<void>;
 }
 
 /**
@@ -234,5 +235,25 @@ export async function timeAsync<R, A extends unknown[]>(
 		return await fn(...args);
 	} finally {
 		logTiming(op, performance.now() - start);
+	}
+}
+
+let closed = false;
+
+/**
+ * Close the logger, flushing all pending writes.
+ * After this call the logger is unusable — intended for process shutdown.
+ * Idempotent: subsequent calls resolve immediately.
+ */
+export async function close(): Promise<void> {
+	if (closed) return;
+	closed = true;
+	try {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		winstonLogger.on("finish", resolve);
+		winstonLogger.end();
+		await promise;
+	} catch {
+		// Silently ignore logger close failures
 	}
 }

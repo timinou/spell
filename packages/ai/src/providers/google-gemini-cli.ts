@@ -22,6 +22,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
 import { refreshAntigravityToken } from "../utils/oauth/google-antigravity";
 import { refreshGoogleCloudToken } from "../utils/oauth/google-gemini-cli";
+import { pushFallbackError } from "../utils/provider-error-boundary";
 import { extractHttpStatusFromError } from "../utils/retry";
 import { sanitizeSchemaForCCA } from "../utils/schema";
 import {
@@ -910,23 +911,27 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) {
-				if ("index" in block) {
-					delete (block as { index?: number }).index;
+			try {
+				for (const block of output.content) {
+					if ("index" in block) {
+						delete (block as { index?: number }).index;
+					}
 				}
+				output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+				output.errorMessage = await appendRawHttpRequestDumpFor400(
+					error instanceof Error ? error.message : JSON.stringify(error),
+					error,
+					rawRequestDump,
+				);
+				output.duration = Date.now() - startTime;
+				if (firstTokenTime) output.ttft = firstTokenTime - startTime;
+				stream.push({ type: "error", reason: output.stopReason, error: output });
+				stream.end();
+			} catch (innerError) {
+				pushFallbackError(stream, model, innerError);
 			}
-			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = await appendRawHttpRequestDumpFor400(
-				error instanceof Error ? error.message : JSON.stringify(error),
-				error,
-				rawRequestDump,
-			);
-			output.duration = Date.now() - startTime;
-			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			stream.push({ type: "error", reason: output.stopReason, error: output });
-			stream.end();
 		}
-	})();
+	})().catch(err => pushFallbackError(stream, model, err));
 
 	return stream;
 };

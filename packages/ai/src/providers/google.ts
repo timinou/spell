@@ -19,6 +19,7 @@ import type {
 } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
+import { pushFallbackError } from "../utils/provider-error-boundary";
 import type { GoogleThinkingLevel } from "./google-gemini-cli";
 import {
 	convertMessages,
@@ -273,20 +274,24 @@ export const streamGoogle: StreamFunction<"google-generative-ai"> = (
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			// Remove internal index property used during streaming
-			for (const block of output.content) {
-				if ("index" in block) {
-					delete (block as { index?: number }).index;
+			try {
+				// Remove internal index property used during streaming
+				for (const block of output.content) {
+					if ("index" in block) {
+						delete (block as { index?: number }).index;
+					}
 				}
+				output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+				output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
+				output.duration = Date.now() - startTime;
+				if (firstTokenTime) output.ttft = firstTokenTime - startTime;
+				stream.push({ type: "error", reason: output.stopReason, error: output });
+				stream.end();
+			} catch (innerError) {
+				pushFallbackError(stream, model, innerError);
 			}
-			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
-			output.duration = Date.now() - startTime;
-			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			stream.push({ type: "error", reason: output.stopReason, error: output });
-			stream.end();
 		}
-	})();
+	})().catch(err => pushFallbackError(stream, model, err));
 
 	return stream;
 };

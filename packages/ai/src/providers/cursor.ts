@@ -26,6 +26,7 @@ import type {
 } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
+import { pushFallbackError } from "../utils/provider-error-boundary";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import type { McpToolDefinition } from "./cursor/gen/agent_pb";
 import {
@@ -524,12 +525,16 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			});
 			stream.end();
 		} catch (error) {
-			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = formatErrorMessageWithRetryAfter(error);
-			output.duration = Date.now() - startTime;
-			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			stream.push({ type: "error", reason: output.stopReason, error: output });
-			stream.end();
+			try {
+				output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+				output.errorMessage = formatErrorMessageWithRetryAfter(error);
+				output.duration = Date.now() - startTime;
+				if (firstTokenTime) output.ttft = firstTokenTime - startTime;
+				stream.push({ type: "error", reason: output.stopReason, error: output });
+				stream.end();
+			} catch (innerError) {
+				pushFallbackError(stream, model, innerError);
+			}
 		} finally {
 			if (heartbeatTimer) {
 				clearInterval(heartbeatTimer);
@@ -538,7 +543,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			h2Request?.close();
 			h2Client?.close();
 		}
-	})();
+	})().catch(err => pushFallbackError(stream, model, err));
 
 	return stream;
 };

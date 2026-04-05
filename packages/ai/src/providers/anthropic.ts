@@ -35,6 +35,7 @@ import { isAnthropicOAuthToken, normalizeToolCallId, resolveCacheRetention } fro
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
+import { pushFallbackError } from "../utils/provider-error-boundary";
 import {
 	buildCopilotDynamicHeaders,
 	hasCopilotVisionInput,
@@ -838,15 +839,19 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) delete (block as any).index;
-			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
-			output.duration = Date.now() - startTime;
-			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			stream.push({ type: "error", reason: output.stopReason, error: output });
-			stream.end();
+			try {
+				for (const block of output.content) delete (block as any).index;
+				output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+				output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
+				output.duration = Date.now() - startTime;
+				if (firstTokenTime) output.ttft = firstTokenTime - startTime;
+				stream.push({ type: "error", reason: output.stopReason, error: output });
+				stream.end();
+			} catch (innerError) {
+				pushFallbackError(stream, model, innerError);
+			}
 		}
-	})();
+	})().catch(err => pushFallbackError(stream, model, err));
 
 	return stream;
 };

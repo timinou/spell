@@ -1,6 +1,7 @@
 import { ANTHROPIC_THINKING, mapAnthropicToolChoice } from "../stream";
 import type { Api, Context, Model, SimpleStreamOptions } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { pushFallbackError } from "../utils/provider-error-boundary";
 import { streamAnthropic } from "./anthropic";
 import type { OpenAICompletionsOptions } from "./openai-completions";
 import { streamOpenAICompletions } from "./openai-completions";
@@ -369,13 +370,17 @@ export function streamGitLabDuo(
 				stream.push(event);
 			}
 		} catch (err) {
-			stream.push({
-				type: "error",
-				reason: "error",
-				error: getErrorMessage(model, err),
-			});
+			try {
+				stream.push({
+					type: "error",
+					reason: "error",
+					error: getErrorMessage(model, err),
+				});
+			} catch (innerError) {
+				pushFallbackError(stream, model, innerError);
+			}
 		}
-	})();
+	})().catch(err => pushFallbackError(stream, model, err));
 
 	return stream;
 }
