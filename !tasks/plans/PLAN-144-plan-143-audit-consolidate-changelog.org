@@ -1,0 +1,63 @@
+#+TITLE: PLAN-143 audit consolidate CHANGELOG
+#+STATE: DONE
+#+SESSION_ID: 14aeaef685347954
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T12-03-11-508Z_14aeaef685347954.jsonl]]
+#+CUSTOM_ID: PLAN-144-plan-143-audit-consolidate-changelog
+
+NOTE [2026-04-05]: All wave-1 items complete. Single CHANGELOG edit verified against all three acceptance criteria.
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-041-audit-implementation:
+
+Good — clean removal. Here's the audit summary:
+
+---
+
+## Audit Findings
+
+### 1. Contradictory CHANGELOG entries under `[Unreleased]`
+
+- **What**: Line 52 says `task.maxRecursionDepth` was changed from 2→4. Line 58 (our addition) says it was reduced from 4→2. Both under `[Unreleased]` — the net effect is no change from the last release. A reader will see "increased then decreased" in the same release notes.
+- **Where**: `packages/coding-agent/CHANGELOG.md` lines 52 and 58
+- **Why**: Confusing release notes. A user reading `[Unreleased]` sees two contradictory entries about the same setting. The pre-existing entry (line 52) should be amended to only mention `DEFAULT_LOOP_DEPTH_LIMIT` (3→4, which is still net-changed), and our entry (line 58) should state the final value relative to the previous release (still 2, i.e., no entry needed for `maxRecursionDepth`).
+- **Effort**: `trivial`
+
+That's the only finding introduced by this plan. The five code changes are structurally correct:
+
+- **BUG-164**: Stagger block correctly moved inside `try`; `throw` instead of `return` routes through `catch`/`finally`. The pre-existing missing `pump()` in the `taskIndex === undefined` guard is unchanged and not in scope.
+- **BUG-165**: `throw` correctly replaces `return undefined!`. The pre-existing missing batch-scheduler cleanup (the throw at line 722 is outside the inner `try` at line 736, same as the old `return` was) is unchanged — not a regression.
+- **FEAT-338**: Clean removal, no remnants.
+- **BUG-166**: Correct, no duplicate names.
+- **FEAT-339**: Correct aside from the contradiction noted above.
+
+* Context
+
+Post-implementation audit of [[id:PLAN-143-plan-141-audit-polish]] found one actionable item: contradictory ~maxRecursionDepth~ CHANGELOG entries under ~[Unreleased]~. Line 52 says 2→4, line 58 says 4→2. Net effect is zero change from the previous release. The ~DEFAULT_LOOP_DEPTH_LIMIT~ 3→4 change on line 52 is real and should be preserved.
+
+Single trivial edit: amend line 52 to keep only the ~DEFAULT_LOOP_DEPTH_LIMIT~ entry, delete line 58 entirely.
+
+* Verification
+
+Manual check:
+- ~grep maxRecursionDepth packages/coding-agent/CHANGELOG.md~ returns zero matches in ~### Changed~ section
+- ~grep DEFAULT_LOOP_DEPTH_LIMIT packages/coding-agent/CHANGELOG.md~ returns exactly one match under ~### Changed~
+- No released version sections modified
+
+* Execution Manifest
+
+** Wave 1
+- [[id:BUG-167-consolidate-contradictory-maxrecursionde]] — 5m, packages/coding-agent/CHANGELOG.md only
+
+** Completion [2026-04-05]
+*** Verification
+- ~grep maxRecursionDepth packages/coding-agent/CHANGELOG.md~ — zero matches in ~### Changed~ under ~[Unreleased]~ (only hits in released sections at lines 230, 2480, 2489)
+- ~grep DEFAULT_LOOP_DEPTH_LIMIT packages/coding-agent/CHANGELOG.md~ — exactly one match at line 52 under ~### Changed~
+- No released version sections modified
+
+*** Artifacts
+- ~packages/coding-agent/CHANGELOG.md~ — line 52 amended, line 58 deleted
+
+*** Deviations
+None.
