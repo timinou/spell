@@ -1,0 +1,120 @@
+#+TITLE: requestRender forcetrue dropped when throttle timer pending
+#+STATE: DONE
+#+SESSION_ID: 14ae9f3312ef7de3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-54-19-211Z_14ae9f3312ef7de3.jsonl]]
+#+CUSTOM_ID: BUG-163-requestrender-forcetrue-dropped-when-thr
+#+EFFORT: 30m
+#+LAYER: tui
+
+
+NOTE [2026-04-05]: Completed delegated TUI render scheduling fix and regression coverage; targeted test file passes and the new test fails without the fix line.
+
+
+
+
+NOTE [2026-04-05]: Started delegated fix for requestRender(force=true) dropping when throttle timer is pending; updating TUI logic and adding regression test in render-scheduling.test.ts.
+
+* Initial Message
+
+bro the real spell now does not show me the text that I'm typing
+
+* Problem
+
+When a throttled render is pending (=#renderRequested = true=, throttle timer running), calling =requestRender(force=true)= clears the timer but then hits the =if (this.#renderRequested) return= guard — the force render is never scheduled. The cleared timer means NO render fires at all until the next =requestRender()= call.
+
+This causes screen corruption when resize occurs during subagent execution: niri overview toggle fires =requestRender(true)= which gets swallowed, leaving the screen stale.
+
+** Root cause
+
+=packages/tui/src/tui.ts= lines 625-660:
+
+#+begin_src typescript
+requestRender(force = false): void {
+    if (force) {
+        // ... resets state, clears throttle timer
+    }
+    if (this.#renderRequested) return; // <-- BUG: blocks force render
+    this.#renderRequested = true;
+    // ... scheduling
+}
+#+end_src
+
+The =force= block clears the timer but doesn't reset =#renderRequested=. The guard on the next line returns early.
+
+** Fix
+
+Add =#renderRequested = false= inside the =force= block, before the guard:
+
+#+begin_src typescript
+requestRender(force = false): void {
+    if (force) {
+        this.#previousLines = [];
+        this.#previousWidth = -1;
+        this.#cursorRow = 0;
+        this.#hardwareCursorRow = 0;
+        this.#viewportTopRow = 0;
+        this.#maxLinesRendered = 0;
+        if (this.#throttleTimer) {
+            clearTimeout(this.#throttleTimer);
+            this.#throttleTimer = undefined;
+        }
+        this.#renderRequested = false; // <-- FIX: allow force to reschedule
+    }
+    if (this.#renderRequested) return;
+    this.#renderRequested = true;
+    // ... rest unchanged
+}
+#+end_src
+
+** Test (test-first)
+
+Add to =packages/tui/test/render-scheduling.test.ts=:
+
+#+begin_src typescript
+it("force=true preempts pending throttle timer", async () => {
+    const term = new VirtualTerminal(40, 10);
+    const tui = createTUI(term, { minRenderInterval: 50 });
+    activeTuis.push(tui);
+    const component = new StaticComponent(["initial"]);
+    tui.addChild(component);
+
+    tui.start();
+    await settleImmediate();
+    await term.flush();
+
+    const baselineRenderCount = component.renderCount;
+
+    // Trigger a throttled render (within interval, creates setTimeout)
+    component.setLines(["throttled"]);
+    tui.requestRender();
+    // Now #renderRequested=true, throttle timer pending
+
+    // Force render should preempt
+    component.setLines(["forced"]);
+    tui.requestRender(true);
+
+    await settleImmediate();
+    await term.flush();
+    // Force render must have fired, showing "forced"
+    expect(containsLine(term, "forced")).toBe(true);
+    expect(component.renderCount).toBe(baselineRenderCount + 1);
+});
+#+end_src
+
+** Acceptance
+- New test fails before fix, passes after
+- =bun test packages/tui/test/render-scheduling.test.ts= all green
+- Existing tests unaffected
+
+
+- Added requestRender(force) fix in `packages/tui/src/tui.ts` to clear `#renderRequested` after canceling a pending throttle timer.
+- Added regression test `force=true preempts pending throttle timer` in `packages/tui/test/render-scheduling.test.ts` covering the broken force+pending-throttle combination.
+
+NOTE [2026-04-05]: Targeted test suite passes with the fix in place. Verifying regression by temporarily removing the new `#renderRequested = false` line and confirming the new test fails, then restoring the fix.
+
+
+Completion report:
+- Fixed `packages/tui/src/tui.ts` `requestRender(force)` so canceling a pending throttle timer also clears `#renderRequested`, allowing the forced render to reschedule immediately.
+- Added regression test `force=true preempts pending throttle timer` in `packages/tui/test/render-scheduling.test.ts`.
+- Verified necessity: temporarily removed the new line and confirmed `bun test packages/tui/test/render-scheduling.test.ts` fails at the new regression test (`Expected: true, Received: false` for forced content visibility), then restored the fix.
+- Final verification: `bun test packages/tui/test/render-scheduling.test.ts` passes (9 pass, 0 fail).

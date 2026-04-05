@@ -1,0 +1,66 @@
+#+TITLE: Fix TUI render scheduling audit findings
+#+STATE: DONE
+#+SESSION_ID: 14ae9f3312ef7de3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-54-19-211Z_14ae9f3312ef7de3.jsonl]]
+#+CUSTOM_ID: PLAN-140-fix-tui-render-scheduling-audit-findings
+
+
+* Initial Message
+
+bro the real spell now does not show me the text that I'm typing
+
+* Context
+
+Post-implementation audit of PLAN-138 (TUI input starvation fix) found a critical bug and several test quality issues.
+
+** Critical bug
+=requestRender(force=true)= is silently dropped when a throttle timer is pending. The =force= block clears the timer but doesn't reset =#renderRequested=, so the guard =if (this.#renderRequested) return= fires and no render is scheduled. This causes screen corruption on resize during subagent execution (the exact scenario PLAN-138 aimed to fix).
+
+** Test issues
+- =render-scheduling.test.ts=: settle uses =Bun.sleep(20)= default instead of =setImmediate=; unnecessary =as unknown as TUIConstructor= cast; fragile stop test viewport comparison
+- =container-dirty.test.ts=: unnecessary =DirtyContainer= type cast (=markDirty()= is public)
+- Missing test for force=true while throttle timer is pending (would have caught the bug)
+
+** Dead caching (deferred)
+=markTreeDirty()= in =#executeRender= marks all Containers dirty every frame, making the caching infrastructure dead code. This requires a design decision (remove vs enable via leaf signaling) and is tracked as [[id:FUP-039-container-dirty-tracking-caching-is-dead]].
+
+** Key files
+- =packages/tui/src/tui.ts= — requestRender fix (line 639)
+- =packages/tui/test/render-scheduling.test.ts= — settle, casts, new test, stop test
+- =packages/tui/test/container-dirty.test.ts= — DirtyContainer cast removal
+
+* Verification
+
+#+begin_src sh
+# All TUI tests pass
+bun test packages/tui/test/
+
+# Biome clean
+bunx biome check packages/tui/
+#+end_src
+
+* Execution Manifest
+
+Both items are independent and can execute in parallel.
+
+** Wave 1 (parallel)
+- [[id:BUG-163-requestrender-forcetrue-dropped-when-thr]] — Fix force render dropped bug + add regression test (30m)
+- [[id:FEAT-329-tui-render-scheduling-test-polish]] — Test polish: settle, casts, fragile assertion (30m)
+
+** Deferred
+- [[id:FUP-039-container-dirty-tracking-caching-is-dead]] — Container caching dead infrastructure (design decision needed)
+
+** Completion [2026-04-05]
+
+*** Verification
+- =bun test packages/tui/test/= — 319 pass, 0 fail across 19 files
+- =bunx biome check packages/tui/= — clean, 52 files checked, no errors
+- Regression test verified: temporarily removing =this.#renderRequested = false= causes the new test to fail (=Expected: true, Received: false=), confirming the fix is necessary
+
+*** Artifacts
+- =packages/tui/src/tui.ts= — Added =this.#renderRequested = false= in requestRender force block (line 638)
+- =packages/tui/test/render-scheduling.test.ts= — Added regression test; removed TUIConstructor/createTUI cast; fixed settle usage; fixed fragile stop assertion
+- =packages/tui/test/container-dirty.test.ts= — Removed DirtyContainer cast helper
+
+*** Deviations
+- [[id:FUP-039-container-dirty-tracking-caching-is-dead]] — Deferred as planned. Container caching infrastructure is dead code due to =markTreeDirty()= in =#executeRender=. Requires design decision (remove vs enable via leaf signaling).
