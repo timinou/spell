@@ -314,6 +314,9 @@
           case 'mode_change':
             parts.push('mode', entry.mode);
             break;
+          case 'crash':
+            parts.push('crash', entry.reason);
+            break;
         }
 
         return parts.join(' ').toLowerCase();
@@ -502,6 +505,8 @@
             return labelHtml + `<span class="tree-muted">[thinking: ${entry.thinkingLevel}]</span>`;
           case 'mode_change':
             return labelHtml + `<span class="tree-muted">[mode: ${escapeHtml(entry.mode)}]</span>`;
+          case 'crash':
+            return labelHtml + `<span class="tree-muted">[crash: ${escapeHtml(entry.reason)}]</span>`;
           default:
             return labelHtml + `<span class="tree-muted">[${entry.type}]</span>`;
         }

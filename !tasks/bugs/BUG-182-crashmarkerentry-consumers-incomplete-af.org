@@ -1,0 +1,173 @@
+#+TITLE: CrashMarkerEntry consumers incomplete after union type addition
+#+STATE: DONE
+#+SESSION_ID: 14aef11047939bea
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-51-59-390Z_14aef11047939bea.jsonl]]
+#+CUSTOM_ID: BUG-182-crashmarkerentry-consumers-incomplete-af
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-044-audit-implementation:
+
+Here are my findings:
+
+---
+
+**Finding 1**: Missing `crash` case in `tree-selector.ts` display switch
+- **Where**: `packages/coding-agent/src/modes/components/tree-selector.ts` lines ~549, ~362
+- **What**: Two `switch(entry.type)` statements don't handle `"crash"`. The display switch has `default: result = ""`, so crash entries render as empty strings in the session tree. The search-text switch falls through silently.
+- **Why**: If a session that crashed is inspected via the tree selector, crash markers show as blank lines. Low user impact (crash markers are rare and informational), but rendering `[crash: sighup]` would be more informative.
+- **Effort**: trivial
+
+**Finding 2**: Missing `crash` case in `compaction.ts` `findValidCutPoints`
+- **Where**: `packages/coding-agent/src/session/compaction/compaction.ts` line ~329
+- **What**: The switch doesn't handle `"crash"`. Falls through without adding a cut point.
+- **Why**: Correct behavior — crash entries should not be compaction cut points. But the missing case means TypeScript's `noImplicitReturns` or future exhaustiveness tooling won't catch it. Pre-existing pattern (also missing `service_tier_change`, `session_init`, `ttsr_injection`, `mode_change`).
+- **Effort**: trivial
+
+**Finding 3**: Missing `crash` case in `branch-summarization.ts` `getMessageFromEntry`
+- **Where**: `packages/coding-agent/src/session/compaction/branch-summarization.ts` line ~145
+- **What**: Switch doesn't handle `"crash"`. Returns `undefined` implicitly, which is correct (crash markers aren't messages). But this is a pre-existing completeness gap.
+- **Effort**: trivial
+
+**Finding 4**: `appendCrashMarker` uses `Snowflake.next()` instead of `generateId(this.#byId)`
+- **Where**: `packages/coding-agent/src/session/session-manager.ts` line ~2018
+- **What**: All other `appendXxx` methods use `generateId(this.#byId)` (short 8-char UUIDs). `appendCrashMarker` uses `Snowflake.next()` directly, producing longer IDs. Functionally equivalent but inconsistent.
+- **Why**: Minor inconsistency. If downstream code assumes all session entry IDs are 8-char hex, this could cause surprises.
+- **Effort**: trivial
+
+**Finding 5**: `appendCrashMarker` docstring claims "No-op if the session is already closed" but no closed-state check exists
+- **Where**: `packages/coding-agent/src/session/session-manager.ts` line ~2013
+- **What**: The JSDoc says "No-op if the session is already closed" but the method doesn't check any `#closed` flag. It relies on `#appendEntry` → `_persist` → `#ensurePersistWriter` eventually failing, caught by the try/catch. The docstring overpromises.
+- **Why**: Misleading documentation. The behavior is safe (try/catch catches all), but the comment suggests a check that doesn't exist.
+- **Effort**: trivial
+
+**Finding 6**: Logger-flush comment claims "runs last" but `Promise.allSettled` runs all callbacks concurrently
+- **Where**: `packages/utils/src/postmortem.ts` lines ~334-335
+- **What**: Comment says "Register logger flush as first callback so it runs last (callbacks run in reverse order)." While the `.map()` call order is reversed, `Promise.allSettled` starts all callbacks concurrently. Logger close and session-manager flush race.
+- **Why**: If session-manager's flush() emits async logger calls after `winstonLogger.end()` is called, those log entries could be dropped. Practically acceptable for crash-time best-effort, but the comment is misleading about execution order guarantees.
+- **Effort**: small (to fix would require sequential execution in `runCleanup`, which is a broader design change)
+
+**Finding 7**: HTML export template doesn't render `crash` entries meaningfully
+- **Where**: `packages/coding-agent/src/export/html/template.js` lines ~289, ~452
+- **What**: The two `switch(entry.type)` statements in the generated HTML template don't handle `"crash"`. Crash entries appear as empty items in exported session HTML.
+- **Why**: If a crashed session is exported, the crash marker is invisible. Low impact since this is an informational entry, but showing `[crash: reason]` would be better for post-incident review.
+- **Effort**: small (template is generated, need to find the source template and rebuild)
+
+* Problem
+~CrashMarkerEntry~ was added to the ~SessionEntry~ union type in ~session-manager.ts~ but six ~switch(entry.type)~ consumers were not updated. Additionally, ~appendCrashMarker~ has minor inconsistencies with other ~appendXxx~ methods, and two comments are misleading.
+
+* Design Decisions
+1. Crash entries in tree-selector should be searchable (search text includes ~"crash"~ and ~entry.reason~) and visible with error styling (~theme.fg("error", ...)~).
+2. Crash entries are NOT valid compaction cut points — add to the fall-through metadata group.
+3. Crash entries don't contribute to LLM conversation content — add ~case "crash":~ to the ~return undefined~ group.
+4. HTML export should render crash entries as ~[crash: reason]~ with error styling.
+5. ~appendCrashMarker~ should use ~generateId(this.#byId)~ like all other ~appendXxx~ methods.
+6. Comments/docstrings must accurately describe behavior.
+
+* Implementation
+
+** Switch statement updates
+
+*** ~packages/coding-agent/src/modes/components/tree-selector.ts~
+Two switches in this file:
+
+1. Search text switch (~#getSearchableText~, line ~362): Add before the closing ~}~ of the switch:
+#+begin_src typescript
+case "crash":
+    parts.push("crash", entry.reason);
+    break;
+#+end_src
+
+2. Display text switch (~#getEntryDisplayText~, line ~549): Add before the ~default:~ case:
+#+begin_src typescript
+case "crash":
+    result = theme.fg("error", `[crash: ${entry.reason}]`);
+    break;
+#+end_src
+
+*** ~packages/coding-agent/src/session/compaction/compaction.ts~
+~findValidCutPoints~ switch (line ~329): Add ~case "crash":~ to the existing metadata fall-through group. The group currently ends with ~case "label":~ at line ~352~. Add ~case "crash":~ after it (before the closing ~}~ of the switch).
+
+*** ~packages/coding-agent/src/session/compaction/branch-summarization.ts~
+~getMessageFromEntry~ switch (line ~145): Add ~case "crash":~ to the "don't contribute to conversation content" group, after ~case "label":~ at line ~171~:
+#+begin_src typescript
+case "thinking_level_change":
+case "model_change":
+case "custom":
+case "label":
+case "crash":
+    return undefined;
+#+end_src
+
+*** ~packages/coding-agent/src/export/html/template.js~
+Two switches in plain JavaScript:
+
+1. Search text switch (~getSearchableText~, line ~289): Add before the closing ~}~ of the switch:
+#+begin_src javascript
+case 'crash':
+    parts.push('crash', entry.reason);
+    break;
+#+end_src
+
+2. Display text switch (~getTreeNodeDisplayHtml~, line ~452): Add a case that renders crash entries. Follow the existing pattern for metadata entries (e.g., ~mode_change~). Add before the ~default:~ case:
+#+begin_src javascript
+case 'crash':
+    return labelHtml + `<span class="tree-muted">[crash: ${escapeHtml(entry.reason)}]</span>`;
+#+end_src
+
+After editing ~template.js~, regenerate the template:
+#+begin_src sh
+bun --cwd=packages/coding-agent run generate-template
+#+end_src
+If the above script name doesn't work, check ~packages/coding-agent/package.json~ for the correct script name, or run ~bun packages/coding-agent/scripts/generate-template.ts~ directly.
+
+** ~appendCrashMarker~ fixes — ~packages/coding-agent/src/session/session-manager.ts~
+
+1. Change ~id: Snowflake.next()~ to ~id: generateId(this.#byId)~ (line ~2018~) for consistency with all other ~appendXxx~ methods.
+
+2. Replace the JSDoc (lines ~2010-2014~):
+   FROM:
+#+begin_src typescript
+/**
+ * Append a crash marker as child of current leaf.
+ * Called during postmortem cleanup when the process is dying unexpectedly.
+ * No-op if the session is already closed.
+ */
+#+end_src
+   TO:
+#+begin_src typescript
+/**
+ * Append a crash marker as child of current leaf.
+ * Called during postmortem cleanup when the process is dying unexpectedly.
+ * Best-effort: failures are swallowed to avoid blocking other cleanup callbacks.
+ */
+#+end_src
+
+** Comment fix — ~packages/utils/src/postmortem.ts~
+
+Replace the logger-flush registration comment (lines ~334-335~):
+FROM:
+#+begin_src typescript
+// Register logger flush as first callback so it runs last (callbacks run in reverse order).
+// This ensures log entries from other cleanup callbacks are flushed before exit.
+#+end_src
+TO:
+#+begin_src typescript
+// Register logger flush as first callback so it is started last when callbacks are
+// iterated in reverse. Note: runCleanup uses Promise.allSettled, so all callbacks
+// execute concurrently — ordering only affects initiation sequence, not completion.
+#+end_src
+
+* Edge Cases
+- The ~findValidCutPoints~ switch uses fall-through groups with no body — ~crash~ joins this pattern. No break needed since the group has no action in the switch body (the post-switch ~if~ handles ~branch_summary~ and ~custom_message~ specifically).
+- The ~getMessageFromEntry~ switch returns ~undefined~ for non-content entries. ~crash~ joins this group. TypeScript will correctly narrow the union.
+- HTML template uses plain JavaScript, not TypeScript — no type checking. Pattern-match the existing cases exactly (single quotes, indent with spaces matching surrounding code).
+
+* Verification
+- ~bun check:ts~ — no new type errors
+- ~bun test packages/coding-agent/test/session/crash-marker.test.ts~ — existing crash marker tests still pass
+- Verify ~template.generated.ts~ was regenerated after template.js edit (check git diff includes changes in both files)
+- Manual: grep all ~switch.*entry\.type~ in ~packages/coding-agent/src/~ and confirm no switch is missing a ~crash~ case (except the HTML export ~template.generated.ts~ which mirrors ~template.js~)

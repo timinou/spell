@@ -331,8 +331,9 @@ if (isMainThread) {
 	});
 }
 
-// Register logger flush as first callback so it runs last (callbacks run in reverse order).
-// This ensures log entries from other cleanup callbacks are flushed before exit.
+// Register logger flush as first callback so it is started last when callbacks are
+// iterated in reverse. Note: runCleanup uses Promise.allSettled, so all callbacks
+// execute concurrently — ordering only affects initiation sequence, not completion.
 register("logger-flush", async () => {
 	try {
 		await Promise.race([logger.close(), Bun.sleep(2000)]);

@@ -411,6 +411,9 @@ class TreeList implements Component {
 			case "ttsr_injection":
 				parts.push("ttsr", ...entry.injectedRules);
 				break;
+			case "crash":
+				parts.push("crash", entry.reason);
+				break;
 		}
 
 		return parts.join(" ");
@@ -625,6 +628,9 @@ class TreeList implements Component {
 				break;
 			case "ttsr_injection":
 				result = theme.fg("dim", `[ttsr: ${entry.injectedRules.join(", ")}]`);
+				break;
+			case "crash":
+				result = theme.fg("error", `[crash: ${entry.reason}]`);
 				break;
 			default:
 				result = "";

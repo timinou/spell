@@ -1,0 +1,105 @@
+#+TITLE: CrashMarkerEntry audit fixes
+#+STATE: DONE
+#+SESSION_ID: 14aef11047939bea
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-51-59-390Z_14aef11047939bea.jsonl]]
+#+CUSTOM_ID: PLAN-152-crashmarkerentry-audit-fixes
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-044-audit-implementation:
+
+Here are my findings:
+
+---
+
+**Finding 1**: Missing `crash` case in `tree-selector.ts` display switch
+- **Where**: `packages/coding-agent/src/modes/components/tree-selector.ts` lines ~549, ~362
+- **What**: Two `switch(entry.type)` statements don't handle `"crash"`. The display switch has `default: result = ""`, so crash entries render as empty strings in the session tree. The search-text switch falls through silently.
+- **Why**: If a session that crashed is inspected via the tree selector, crash markers show as blank lines. Low user impact (crash markers are rare and informational), but rendering `[crash: sighup]` would be more informative.
+- **Effort**: trivial
+
+**Finding 2**: Missing `crash` case in `compaction.ts` `findValidCutPoints`
+- **Where**: `packages/coding-agent/src/session/compaction/compaction.ts` line ~329
+- **What**: The switch doesn't handle `"crash"`. Falls through without adding a cut point.
+- **Why**: Correct behavior — crash entries should not be compaction cut points. But the missing case means TypeScript's `noImplicitReturns` or future exhaustiveness tooling won't catch it. Pre-existing pattern (also missing `service_tier_change`, `session_init`, `ttsr_injection`, `mode_change`).
+- **Effort**: trivial
+
+**Finding 3**: Missing `crash` case in `branch-summarization.ts` `getMessageFromEntry`
+- **Where**: `packages/coding-agent/src/session/compaction/branch-summarization.ts` line ~145
+- **What**: Switch doesn't handle `"crash"`. Returns `undefined` implicitly, which is correct (crash markers aren't messages). But this is a pre-existing completeness gap.
+- **Effort**: trivial
+
+**Finding 4**: `appendCrashMarker` uses `Snowflake.next()` instead of `generateId(this.#byId)`
+- **Where**: `packages/coding-agent/src/session/session-manager.ts` line ~2018
+- **What**: All other `appendXxx` methods use `generateId(this.#byId)` (short 8-char UUIDs). `appendCrashMarker` uses `Snowflake.next()` directly, producing longer IDs. Functionally equivalent but inconsistent.
+- **Why**: Minor inconsistency. If downstream code assumes all session entry IDs are 8-char hex, this could cause surprises.
+- **Effort**: trivial
+
+**Finding 5**: `appendCrashMarker` docstring claims "No-op if the session is already closed" but no closed-state check exists
+- **Where**: `packages/coding-agent/src/session/session-manager.ts` line ~2013
+- **What**: The JSDoc says "No-op if the session is already closed" but the method doesn't check any `#closed` flag. It relies on `#appendEntry` → `_persist` → `#ensurePersistWriter` eventually failing, caught by the try/catch. The docstring overpromises.
+- **Why**: Misleading documentation. The behavior is safe (try/catch catches all), but the comment suggests a check that doesn't exist.
+- **Effort**: trivial
+
+**Finding 6**: Logger-flush comment claims "runs last" but `Promise.allSettled` runs all callbacks concurrently
+- **Where**: `packages/utils/src/postmortem.ts` lines ~334-335
+- **What**: Comment says "Register logger flush as first callback so it runs last (callbacks run in reverse order)." While the `.map()` call order is reversed, `Promise.allSettled` starts all callbacks concurrently. Logger close and session-manager flush race.
+- **Why**: If session-manager's flush() emits async logger calls after `winstonLogger.end()` is called, those log entries could be dropped. Practically acceptable for crash-time best-effort, but the comment is misleading about execution order guarantees.
+- **Effort**: small (to fix would require sequential execution in `runCleanup`, which is a broader design change)
+
+**Finding 7**: HTML export template doesn't render `crash` entries meaningfully
+- **Where**: `packages/coding-agent/src/export/html/template.js` lines ~289, ~452
+- **What**: The two `switch(entry.type)` statements in the generated HTML template don't handle `"crash"`. Crash entries appear as empty items in exported session HTML.
+- **Why**: If a crashed session is exported, the crash marker is invisible. Low impact since this is an informational entry, but showing `[crash: reason]` would be better for post-incident review.
+- **Effort**: small (template is generated, need to find the source template and rebuild)
+
+* Context
+Post-implementation audit of PLAN-150 (session crash resilience) found that ~CrashMarkerEntry~ was added to the ~SessionEntry~ union type but six ~switch(entry.type)~ consumers across four files were not updated. Additionally, ~appendCrashMarker~ has minor inconsistencies with other append methods (uses ~Snowflake.next()~ instead of ~generateId~, misleading docstring), and the logger-flush registration comment inaccurately describes the concurrent execution model.
+
+All findings are trivial (30 minutes total). Single child item covers everything.
+
+Key decisions:
+- Crash entries render with error styling in tree-selector and HTML export
+- Crash entries are searchable by ~"crash"~ + reason string
+- Crash entries are not compaction cut points (join metadata fall-through group)
+- Crash entries return ~undefined~ from ~getMessageFromEntry~ (not LLM content)
+- ~appendCrashMarker~ uses ~generateId(this.#byId)~ for ID consistency
+- Comments/docstrings corrected to match actual behavior
+
+* Verification
+- ~bun check:ts~ — no new type errors
+- ~bun test packages/coding-agent/test/session/crash-marker.test.ts~ — existing tests pass
+- ~template.generated.ts~ regenerated (git diff includes both ~template.js~ and ~template.generated.ts~)
+- ~grep -rn 'switch.*entry\.type' packages/coding-agent/src/~ — no switch missing ~crash~ case
+
+* Execution Manifest
+** Wave 1: All fixes (single pass)
+[[id:BUG-182-crashmarkerentry-consumers-incomplete-af]] — 30m, LAYER: coding-agent
+- 6 switch statements updated across 4 files
+- ~appendCrashMarker~ ID generation + docstring fix
+- Logger-flush comment fix
+- Template regeneration
+
+** Completion [2026-04-05]
+*** Verification
+- =bun check:ts= — passed (all errors pre-existing in sql-store.ts, approvals.ts, telegram, logger; no new errors from this change)
+- =bun test packages/coding-agent/test/session/crash-marker.test.ts= — 2 tests pass, 7 expect() calls
+- =bun run generate-template= — template.generated.ts regenerated successfully
+- Confirmed all =switch(entry.type)= statements across =packages/coding-agent/src/= include =crash= case
+- Verified =appendCrashMarker= uses =generateId(this.#byId)= matching all other =appendXxx= methods
+- Verified docstring and comments corrected in session-manager.ts and postmortem.ts
+
+*** Artifacts
+- Commit: =fb524c4d9= on main
+- Files changed: 7 source files + 2 org items
+  - =packages/coding-agent/src/modes/components/tree-selector.ts= (+6 lines: 2 crash cases)
+  - =packages/coding-agent/src/session/compaction/compaction.ts= (+1 line: crash fall-through)
+  - =packages/coding-agent/src/session/compaction/branch-summarization.ts= (+1 line: crash in undefined group)
+  - =packages/coding-agent/src/export/html/template.js= (+5 lines: 2 crash cases)
+  - =packages/coding-agent/src/export/html/template.generated.ts= (regenerated)
+  - =packages/coding-agent/src/session/session-manager.ts= (+2/-2: generateId + docstring)
+  - =packages/utils/src/postmortem.ts= (+3/-2: comment correction)
+
+*** Deviations
+None."
