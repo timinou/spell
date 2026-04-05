@@ -109,6 +109,28 @@ export function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRet
 	return "long";
 }
 
+export interface OpenAICacheParams {
+	prompt_cache_key?: string;
+	prompt_cache_retention?: "24h";
+}
+
+/**
+ * Resolve OpenAI-family prompt cache parameters from retention preference.
+ * Returns an empty object when caching is disabled or sessionId is missing.
+ * Maps "long" to 24h extended retention, "short" to in-memory (server default).
+ */
+export function resolveOpenAICacheParams(
+	cacheRetention: CacheRetention | undefined,
+	sessionId: string | undefined,
+): OpenAICacheParams {
+	const retention = resolveCacheRetention(cacheRetention);
+	if (retention === "none" || !sessionId) return {};
+	return {
+		prompt_cache_key: sessionId,
+		prompt_cache_retention: retention === "long" ? "24h" : undefined,
+	};
+}
+
 export function isAnthropicOAuthToken(key: string): boolean {
 	return key.includes("sk-ant-oat");
 }

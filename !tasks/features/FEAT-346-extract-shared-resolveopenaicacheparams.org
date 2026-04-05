@@ -1,0 +1,67 @@
+#+TITLE: Extract shared resolveOpenAICacheParams utility
+#+STATE: DONE
+#+SESSION_ID: 14aeea20d040b51f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-21-41-313Z_14aeea20d040b51f.jsonl]]
+#+CUSTOM_ID: FEAT-346-extract-shared-resolveopenaicacheparams
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: ai
+
+NOTE [2026-04-05]: Added resolveOpenAICacheParams + OpenAICacheParams to packages/ai/src/utils.ts
+
+* Initial Message
+
+Look at the recent commits around cache optimisation and tell me how well you've done that for Codex models. Here is the reference for optimising this: https://developers.openai.com/api/docs/guides/prompt-caching
+
+
+how can you cleanly (i.e. one overarching logic, or at least a shared library) implement caching?
+
+* Problem
+Three OpenAI Responses-family providers (openai-responses, openai-codex-responses, azure-openai-responses) each independently handle prompt cache parameter resolution. The openai-responses provider does it correctly; the other two have bugs:
+- Codex: sets =prompt_cache_key= unconditionally, never sets =prompt_cache_retention=
+- Azure: same as Codex
+
+This item extracts the shared logic into a single utility function.
+
+* Design
+
+** Function Signature
+Add to =packages/ai/src/utils.ts= alongside the existing =resolveCacheRetention=:
+
+#+begin_src typescript
+interface OpenAICacheParams {
+  prompt_cache_key?: string;
+  prompt_cache_retention?: "in_memory" | "24h";
+}
+
+export function resolveOpenAICacheParams(
+  cacheRetention: CacheRetention | undefined,
+  sessionId: string | undefined,
+): OpenAICacheParams {
+  const retention = resolveCacheRetention(cacheRetention);
+  if (retention === "none") return {};
+  if (!sessionId) return {};
+  return {
+    prompt_cache_key: sessionId,
+    prompt_cache_retention: retention === "long" ? "24h" : undefined,
+  };
+}
+#+end_src
+
+** Key decisions
+- No hostname gating: ="long"= always maps to ="24h"=. Per OpenAI docs, extended retention is supported by Codex models; for unsupported models the server falls back to in-memory silently.
+- No model-ID allowlist: the parameter is a hint, safe to send universally.
+- When =cacheRetention= resolves to ="none"=, return empty object (no cache key, no retention).
+- When =cacheRetention= resolves to ="short"=, return only =prompt_cache_key= (in-memory caching, which is the default server behavior when no retention is specified).
+
+** Files to modify
+- =packages/ai/src/utils.ts= — add =resolveOpenAICacheParams= function and export =OpenAICacheParams= type
+
+** Existing patterns
+- =resolveCacheRetention= is already in =utils.ts= at line ~105 — place the new function directly after it
+- The function already handles env var =PI_CACHE_RETENTION= fallback
+
+* Verification
+- =bun check:ts= passes
+- Grep confirms =resolveOpenAICacheParams= is exported from =packages/ai/src/utils.ts=
+- Grep confirms =OpenAICacheParams= type is exported

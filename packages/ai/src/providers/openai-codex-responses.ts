@@ -34,6 +34,7 @@ import {
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
 	normalizeResponsesToolCallId,
+	resolveOpenAICacheParams,
 } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
@@ -469,7 +470,7 @@ async function buildTransformedCodexRequestBody(
 		model: model.id,
 		input: [...convertMessages(model, context)],
 		stream: true,
-		prompt_cache_key: options?.sessionId,
+		...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId),
 	};
 
 	if (options?.maxTokens) {

@@ -18,6 +18,7 @@ import {
 	type Tool,
 	type ToolChoice,
 } from "../types";
+import { resolveOpenAICacheParams } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { getOpenAIStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
@@ -252,7 +253,7 @@ function buildParams(
 		model: deploymentName,
 		input: messages,
 		stream: true,
-		prompt_cache_key: options?.sessionId,
+		...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId),
 	};
 
 	if (options?.maxTokens) {

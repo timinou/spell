@@ -1,0 +1,94 @@
+#+TITLE: Migrate openai-responses provider to shared cache helper
+#+STATE: DONE
+#+SESSION_ID: 14aeea20d040b51f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-21-41-313Z_14aeea20d040b51f.jsonl]]
+#+CUSTOM_ID: FEAT-347-migrate-openai-responses-provider-to-sha
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: ai
+#+DEPENDS: FEAT-346-extract-shared-resolveopenaicacheparams
+
+NOTE [2026-04-05]: Removed getPromptCacheRetention, removed hostname gate, migrated to resolveOpenAICacheParams in openai-responses.ts
+
+* Initial Message
+
+Look at the recent commits around cache optimisation and tell me how well you've done that for Codex models. Here is the reference for optimising this: https://developers.openai.com/api/docs/guides/prompt-caching
+
+
+how can you cleanly (i.e. one overarching logic, or at least a shared library) implement caching?
+
+* Problem
+=packages/ai/src/providers/openai-responses.ts= has its own local =getPromptCacheRetention()= function (lines 53-61) that duplicates the logic now centralized in =resolveOpenAICacheParams=. It also includes a hostname gate (=baseUrl.includes("api.openai.com")=) that is no longer desired — per design decision, extended retention applies unconditionally.
+
+* Fix
+
+** File: =packages/ai/src/providers/openai-responses.ts=
+
+1. Remove the local =getPromptCacheRetention= function (lines 49-61):
+#+begin_src typescript
+// DELETE:
+/**
+ * Get prompt cache retention based on cacheRetention and base URL.
+ * Only applies to direct OpenAI API calls (api.openai.com).
+ */
+function getPromptCacheRetention(baseUrl: string, cacheRetention: CacheRetention): "24h" | undefined {
+    if (cacheRetention !== "long") {
+        return undefined;
+    }
+    if (baseUrl.includes("api.openai.com")) {
+        return "24h";
+    }
+    return undefined;
+}
+#+end_src
+
+2. Add =resolveOpenAICacheParams= to the existing import from ="../utils"=:
+#+begin_src typescript
+import {
+    createOpenAIResponsesHistoryPayload,
+    getOpenAIResponsesHistoryItems,
+    getOpenAIResponsesHistoryPayload,
+    resolveCacheRetention,  // can remove if no longer used directly
+    resolveOpenAICacheParams,
+} from "../utils";
+#+end_src
+
+3. Replace the manual cache resolution in the params construction (lines 264-271):
+
+Before:
+#+begin_src typescript
+const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+const promptCacheKey = cacheRetention === "none" ? undefined : options?.sessionId;
+const params: OpenAIResponsesSamplingParams = {
+    model: model.id,
+    input: messages,
+    stream: true,
+    prompt_cache_key: promptCacheKey,
+    prompt_cache_retention: promptCacheKey ? getPromptCacheRetention(model.baseUrl, cacheRetention) : undefined,
+    store: false,
+};
+#+end_src
+
+After:
+#+begin_src typescript
+const params: OpenAIResponsesSamplingParams = {
+    model: model.id,
+    input: messages,
+    stream: true,
+    ...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId),
+    store: false,
+};
+#+end_src
+
+4. Check if =resolveCacheRetention= is still used elsewhere in the file. If not, remove it from the import. If it is used elsewhere (e.g., for conditional logic outside params construction), keep the import.
+
+5. Remove =CacheRetention= from imports if no longer referenced. Check the =OpenAIResponsesSamplingParams= type — it extends =ResponseCreateParamsStreaming= which should already include =prompt_cache_retention=.
+
+** Key behavioral change
+This removes the =api.openai.com= hostname gate. Previously, only direct OpenAI API calls got ="24h"= retention. Now all OpenAI Responses providers get it when =cacheRetention= is ="long"=.
+
+* Verification
+- =bun check:ts= passes
+- Grep =getPromptCacheRetention= in =openai-responses.ts= — should return 0 results
+- Grep =resolveOpenAICacheParams= in =openai-responses.ts= — should appear in import and params construction
+- Grep =api.openai.com= in =openai-responses.ts= — should not appear in cache-related code (may still appear in other contexts like auth)

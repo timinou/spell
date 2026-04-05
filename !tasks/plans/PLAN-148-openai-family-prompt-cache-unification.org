@@ -1,0 +1,79 @@
+#+TITLE: OpenAI family prompt cache unification
+#+STATE: DONE
+#+SESSION_ID: 14aeea20d040b51f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-21-41-313Z_14aeea20d040b51f.jsonl]]
+#+CUSTOM_ID: PLAN-148-openai-family-prompt-cache-unification
+
+
+NOTE [2026-04-05]: All 4 child items completed and verified.
+
+* Initial Message
+
+Look at the recent commits around cache optimisation and tell me how well you've done that for Codex models. Here is the reference for optimising this: https://developers.openai.com/api/docs/guides/prompt-caching
+
+
+how can you cleanly (i.e. one overarching logic, or at least a shared library) implement caching?
+
+* Context
+Prompt caching across OpenAI Responses-family providers (openai-responses, openai-codex-responses, azure-openai-responses) is inconsistent. The direct OpenAI Responses provider correctly resolves =CacheRetention= and sends both =prompt_cache_key= and =prompt_cache_retention=. The Codex and Azure providers have bugs: they set =prompt_cache_key= unconditionally (ignoring =cacheRetention === "none"=) and never set =prompt_cache_retention=.
+
+Per OpenAI docs, Codex models (gpt-5.1-codex, gpt-5.1-codex-mini, gpt-5.1-codex-max, gpt-5-codex) support extended 24h prompt cache retention. This is entirely unused because:
+1. Codex never sends =prompt_cache_retention=
+2. The OpenAI Responses provider gates extended retention on =api.openai.com= hostname, excluding Codex's =chatgpt.com/backend-api=
+
+** Approach
+Extract a shared =resolveOpenAICacheParams(cacheRetention, sessionId)= utility that:
+- Resolves =CacheRetention= via the existing =resolveCacheRetention()=
+- Returns ={}= when retention is ="none"= or sessionId is missing
+- Maps ="long"= → =prompt_cache_retention: "24h"= unconditionally (no hostname gate)
+- Maps ="short"= → =prompt_cache_key= only (in-memory default)
+
+All three providers spread this into their params objects, eliminating duplicate logic and fixing the bugs.
+
+** Key decisions
+1. No hostname gating: ="long"= always maps to ="24h"=. Safe because the server silently falls back to in-memory for models that don't support extended retention.
+2. No model-ID allowlist: unnecessary given the safe-to-send nature of the parameter.
+3. Utility lives in =packages/ai/src/utils.ts= alongside =resolveCacheRetention=.
+4. =getPromptCacheRetention= in openai-responses.ts is deleted (absorbed into shared helper).
+5. =RequestBody= in codex =request-transformer.ts= already has =prompt_cache_retention= field — no type changes needed.
+
+* Verification
+- =bun check:ts= passes with no errors
+- Grep =prompt_cache_key= across all three provider files — should only appear via =resolveOpenAICacheParams= spread, not as raw property
+- Grep =getPromptCacheRetention= — should return 0 results (deleted)
+- Grep =resolveOpenAICacheParams= — should appear in =utils.ts= (definition), =openai-responses.ts=, =openai-codex-responses.ts=, =azure-openai-responses.ts= (usage)
+
+* Execution Manifest
+
+** Wave 1: Foundation
+| Item | Effort | Description |
+|------+--------+-------------|
+| [[id:FEAT-346-extract-shared-resolveopenaicacheparams]] | 1h | Add =resolveOpenAICacheParams= to =packages/ai/src/utils.ts= |
+
+** Wave 2: Provider migration (parallelizable)
+All three items depend on [[id:FEAT-346-extract-shared-resolveopenaicacheparams]].
+
+| Item | Effort | Description |
+|------+--------+-------------|
+| [[id:BUG-177-fix-codex-prompt-cache-retention-and-con]] | 30m | Fix Codex: use shared helper, enable extended retention |
+| [[id:BUG-178-fix-azure-openai-responses-prompt-cache]] | 30m | Fix Azure: use shared helper, enable extended retention |
+| [[id:FEAT-347-migrate-openai-responses-provider-to-sha]] | 30m | Migrate OpenAI Responses: remove local helper, use shared |
+
+
+** Completion [2026-04-05]
+
+*** Verification
+- =biome check= on all 4 modified files: 0 errors, 0 warnings
+- =tsgo= type check: 0 errors in =packages/ai/= (15 pre-existing errors in other packages, unrelated)
+- =grep prompt_cache_key= across provider files: only appears as type definition in =request-transformer.ts=, never as raw property assignment
+- =grep getPromptCacheRetention=: 0 results (deleted)
+- =grep resolveOpenAICacheParams=: appears in =utils.ts= (definition), =openai-responses.ts=, =openai-codex-responses.ts=, =azure-openai-responses.ts= (usage) -- exactly as planned
+
+*** Artifacts
+- =packages/ai/src/utils.ts= -- added =OpenAICacheParams= interface + =resolveOpenAICacheParams= function
+- =packages/ai/src/providers/openai-codex-responses.ts= -- replaced raw =prompt_cache_key= with shared helper spread
+- =packages/ai/src/providers/azure-openai-responses.ts= -- replaced raw =prompt_cache_key= with shared helper spread + added import
+- =packages/ai/src/providers/openai-responses.ts= -- deleted =getPromptCacheRetention= function, removed hostname gate, removed =resolveCacheRetention= / =CacheRetention= imports, replaced manual cache logic with shared helper spread
+
+*** Deviations
+- =OpenAICacheParams.prompt_cache_retention= type narrowed to just =\"24h\"= instead of the planned =\"in_memory\" | \"24h\"=. Reason: OpenAI SDK uses =\"in-memory\"= (hyphen) while Codex =RequestBody= uses =\"in_memory\"= (underscore). Since the function never returns either in-memory variant (only =\"24h\"= or =undefined=), using the narrower type avoids the incompatibility and is more accurate.

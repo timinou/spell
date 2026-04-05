@@ -1,0 +1,69 @@
+#+TITLE: Fix Azure OpenAI Responses prompt cache retention and conditional key
+#+STATE: DONE
+#+SESSION_ID: 14aeea20d040b51f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-21-41-313Z_14aeea20d040b51f.jsonl]]
+#+CUSTOM_ID: BUG-178-fix-azure-openai-responses-prompt-cache
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: ai
+#+DEPENDS: FEAT-346-extract-shared-resolveopenaicacheparams
+
+NOTE [2026-04-05]: Replaced raw prompt_cache_key with resolveOpenAICacheParams spread in azure-openai-responses.ts
+
+* Initial Message
+
+Look at the recent commits around cache optimisation and tell me how well you've done that for Codex models. Here is the reference for optimising this: https://developers.openai.com/api/docs/guides/prompt-caching
+
+
+how can you cleanly (i.e. one overarching logic, or at least a shared library) implement caching?
+
+* Problem
+=packages/ai/src/providers/azure-openai-responses.ts= has the same two caching bugs as the Codex provider:
+1. =prompt_cache_key= is set unconditionally to =options?.sessionId= (line 255) — ignores =cacheRetention === "none"=
+2. =prompt_cache_retention= is never set
+
+* Fix
+
+** File: =packages/ai/src/providers/azure-openai-responses.ts=
+In =buildParams= function (line ~243):
+
+1. Add import at top of file:
+#+begin_src typescript
+import { resolveOpenAICacheParams } from "../utils";
+#+end_src
+
+2. Replace the raw =prompt_cache_key= assignment in the params object (line 255):
+
+Before:
+#+begin_src typescript
+const params: AzureOpenAIResponsesSamplingParams = {
+    model: deploymentName,
+    input: messages,
+    stream: true,
+    prompt_cache_key: options?.sessionId,
+};
+#+end_src
+
+After:
+#+begin_src typescript
+const params: AzureOpenAIResponsesSamplingParams = {
+    model: deploymentName,
+    input: messages,
+    stream: true,
+    ...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId),
+};
+#+end_src
+
+3. Verify that =AzureOpenAIResponsesSamplingParams= type can accept =prompt_cache_retention=. Check the type definition — it likely extends =ResponseCreateParamsStreaming= or has an index signature. If it does not include =prompt_cache_retention=, add it:
+#+begin_src typescript
+prompt_cache_retention?: "in_memory" | "24h";
+#+end_src
+
+** Key decisions
+- Same shared helper as Codex and OpenAI Responses.
+- Azure may or may not support extended retention server-side; the parameter is safe to send (server ignores unsupported params).
+
+* Verification
+- =bun check:ts= passes
+- Grep =prompt_cache_key= in =azure-openai-responses.ts= — should NOT appear as a raw property
+- Grep =resolveOpenAICacheParams= in =azure-openai-responses.ts= — should appear in import and =buildParams=
