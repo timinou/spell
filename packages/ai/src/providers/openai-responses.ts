@@ -9,7 +9,6 @@ import { getEnvApiKey } from "../stream";
 import {
 	type Api,
 	type AssistantMessage,
-	type CacheRetention,
 	type Context,
 	isSpecialServiceTier,
 	type MessageAttribution,
@@ -24,7 +23,7 @@ import {
 	createOpenAIResponsesHistoryPayload,
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
-	resolveCacheRetention,
+	resolveOpenAICacheParams,
 } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
@@ -45,20 +44,6 @@ import {
 	processResponsesStream,
 } from "./openai-responses-shared";
 import { transformMessages } from "./transform-messages";
-
-/**
- * Get prompt cache retention based on cacheRetention and base URL.
- * Only applies to direct OpenAI API calls (api.openai.com).
- */
-function getPromptCacheRetention(baseUrl: string, cacheRetention: CacheRetention): "24h" | undefined {
-	if (cacheRetention !== "long") {
-		return undefined;
-	}
-	if (baseUrl.includes("api.openai.com")) {
-		return "24h";
-	}
-	return undefined;
-}
 
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
@@ -261,14 +246,11 @@ function buildParams(
 		});
 	}
 
-	const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-	const promptCacheKey = cacheRetention === "none" ? undefined : options?.sessionId;
 	const params: OpenAIResponsesSamplingParams = {
 		model: model.id,
 		input: messages,
 		stream: true,
-		prompt_cache_key: promptCacheKey,
-		prompt_cache_retention: promptCacheKey ? getPromptCacheRetention(model.baseUrl, cacheRetention) : undefined,
+		...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId),
 		store: false,
 	};
 

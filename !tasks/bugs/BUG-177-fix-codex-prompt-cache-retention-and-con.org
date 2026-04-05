@@ -1,0 +1,69 @@
+#+TITLE: Fix Codex prompt cache retention and conditional key
+#+STATE: DONE
+#+SESSION_ID: 14aeea20d040b51f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-21-41-313Z_14aeea20d040b51f.jsonl]]
+#+CUSTOM_ID: BUG-177-fix-codex-prompt-cache-retention-and-con
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: ai
+#+DEPENDS: FEAT-346-extract-shared-resolveopenaicacheparams
+
+NOTE [2026-04-05]: Replaced raw prompt_cache_key with resolveOpenAICacheParams spread in openai-codex-responses.ts
+
+* Initial Message
+
+Look at the recent commits around cache optimisation and tell me how well you've done that for Codex models. Here is the reference for optimising this: https://developers.openai.com/api/docs/guides/prompt-caching
+
+
+how can you cleanly (i.e. one overarching logic, or at least a shared library) implement caching?
+
+* Problem
+=packages/ai/src/providers/openai-codex-responses.ts= has two caching bugs:
+1. =prompt_cache_key= is set unconditionally to =options?.sessionId= — ignores =cacheRetention === "none"=
+2. =prompt_cache_retention= is never set despite the =RequestBody= interface supporting it (=request-transformer.ts= line 48)
+
+Per OpenAI docs, Codex models (gpt-5.1-codex, gpt-5.1-codex-mini, gpt-5.1-codex-max, gpt-5-codex) all support extended 24h prompt cache retention. This is entirely unused.
+
+* Fix
+
+** File: =packages/ai/src/providers/openai-codex-responses.ts=
+In =buildTransformedCodexRequestBody= (line ~463):
+
+1. Add import at top of file:
+#+begin_src typescript
+import { resolveOpenAICacheParams } from "../utils";
+#+end_src
+
+2. Replace the raw =prompt_cache_key= assignment (line 472):
+
+Before:
+#+begin_src typescript
+const params: RequestBody = {
+    model: model.id,
+    input: [...convertMessages(model, context)],
+    stream: true,
+    prompt_cache_key: options?.sessionId,
+};
+#+end_src
+
+After:
+#+begin_src typescript
+const params: RequestBody = {
+    model: model.id,
+    input: [...convertMessages(model, context)],
+    stream: true,
+    ...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId),
+};
+#+end_src
+
+** No changes to =request-transformer.ts=
+The =RequestBody= interface already has =prompt_cache_retention?: "in_memory" | "24h"= at line 48. No type changes needed.
+
+** Key decisions
+- No hostname gating: Codex base URL is =chatgpt.com/backend-api= but extended retention is supported per OpenAI docs.
+- =resolveOpenAICacheParams= handles the ="none"= check, ="long"= → ="24h"= mapping, and missing sessionId case.
+
+* Verification
+- =bun check:ts= passes
+- Grep =prompt_cache_key= in =openai-codex-responses.ts= — should NOT appear as a raw property; only via the spread of =resolveOpenAICacheParams=
+- Grep =resolveOpenAICacheParams= in =openai-codex-responses.ts= — should appear in the import and in =buildTransformedCodexRequestBody=
