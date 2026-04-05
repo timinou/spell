@@ -117,4 +117,46 @@ describe("generateOperatorActionHandler", () => {
 		expect(second.duplicate).toBe(false);
 		expect(second.triggeredGoals).toEqual([]);
 	});
+
+	it("propagates unexpected claimItem errors", async () => {
+		const engine = new WorkflowEngine();
+		const handler = generateOperatorActionHandler(operatorActions, engine);
+
+		// First call creates the item
+		await handler(makeRequest("approve-feed", "article-err", "req-1"));
+
+		// Sabotage claimItem to throw an unexpected error
+		const originalClaim = engine.claimItem.bind(engine);
+		engine.claimItem = () => {
+			throw new Error("database connection lost");
+		};
+
+		// Should propagate the unexpected error
+		expect(handler(makeRequest("reject", "article-err", "req-2"))).rejects.toThrow(
+			"database connection lost",
+		);
+
+		// Restore
+		engine.claimItem = originalClaim;
+	});
+
+	it("swallows 'already claimed' errors from claimItem", async () => {
+		const engine = new WorkflowEngine();
+		const handler = generateOperatorActionHandler(operatorActions, engine);
+
+		// First call creates the item
+		await handler(makeRequest("approve-feed", "article-claim", "req-1"));
+
+		// Override claimItem: perform the real claim, then throw "already claimed"
+		const originalClaim = engine.claimItem.bind(engine);
+		engine.claimItem = (input) => {
+			const item = originalClaim(input);
+			throw new Error("Workflow item wf-1 is already claimed by other-user");
+			return item; // unreachable, satisfies type
+		};
+
+		// Should NOT throw — the "already claimed" error is suppressed
+		const result = await handler(makeRequest("reject", "article-claim", "req-2"));
+		expect(result.workflowState).toBe("rejected");
+	});
 });

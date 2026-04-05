@@ -21,6 +21,8 @@ function normalizeManifest(manifest: AutonomyManifest) {
 		layouts: manifest.layouts,
 		syncCollections: manifest.syncCollections,
 		stateSchemas: manifest.stateSchemas,
+		toolModules: manifest.toolModules,
+		operatorActions: manifest.operatorActions,
 	};
 }
 
@@ -103,7 +105,9 @@ describe("parseManifestKdl", () => {
 	});
 
 	it("rejects invalid cron", async () => {
-		await expect(async () => parseManifestKdl(await readFixture("invalid-cron.kdl"))).toThrow(/Invalid value for minute/);
+		await expect(async () => parseManifestKdl(await readFixture("invalid-cron.kdl"))).toThrow(
+			/Invalid value for minute/,
+		);
 	});
 
 	it("rejects duplicate setup names", () => {
@@ -243,7 +247,13 @@ describe("parseManifestKdl", () => {
 			`name "layout"\nversion "1.0"\nsetup "a" { domain "coding" }\ngoal "g" {\n\tsetup "a"\n\tschedule type="cron" expression="0 1 * * *"\n\tprompt "ok"\n}\nlayout "review" {\n\tregion "main" panel="queue"\n\tregion "sidebar" panel="details"\n}\n`,
 		);
 		expect(manifest.layouts).toEqual([
-			{ id: "review", regions: [{ name: "main", panel: "queue" }, { name: "sidebar", panel: "details" }] },
+			{
+				id: "review",
+				regions: [
+					{ name: "main", panel: "queue" },
+					{ name: "sidebar", panel: "details" },
+				],
+			},
 		]);
 	});
 
