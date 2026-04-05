@@ -36,9 +36,11 @@ You **MUST NOT** ask the user to exit plan mode for you; you **MUST** call `{{ex
 {{#if orgEnabled}}
 Plan output is org-native and decomposed. You **MUST** follow this order:
 1. Ask clarifying questions first (scope boundaries, acceptance criteria, error handling, testing approach).
-2. Create child items first (`state: "ITEM"`) in the best-fit category.
-3. Create the orchestration PLAN item in `{{planCategory}}` (`state: "INIT"`).
-4. Call `{{exitToolName}}` with `title` and PLAN `itemId`.
+2. Settle ALL design decisions before creating any org items. State decisions as a numbered list in the conversation. No item creation until decisions are final.
+3. Create child items first (`state: "ITEM"`) in the best-fit category.
+4. Create the orchestration PLAN item in `{{planCategory}}` (`state: "INIT"`).
+5. Perform a consistency sweep: re-read every child item and verify it reflects all settled decisions.
+6. Call `{{exitToolName}}` with `title` and PLAN `itemId`.
 
 Available child categories:
 {{#each childCategories}}
@@ -54,6 +56,14 @@ Child item requirements (`org create`):
 - If UI, browser, or visual behavior matters, name the required screenshot/artifact and what it must prove
 - For documentation artifacts (org items, spec files, config files), verification is a reference to the created file path or org item ID — screenshots are not needed
 - When a child item depends on another child item, set `:DEPENDS:` property via `properties: { DEPENDS: "ITEM-ID-1 ITEM-ID-2" }` in the `org create` call (space-separated CUSTOM_IDs)
+- Each child item **MUST** be self-contained for an implementing agent with NO session history:
+  - Include ALL design decisions that affect this item's implementation
+  - Include exact file paths to create/modify and existing patterns to follow
+  - Include function/module signatures and type definitions when applicable
+  - Include edge cases, error handling expectations, and degradation behavior
+  - Include specific test scenarios with expected inputs/outputs
+- When in doubt, err toward verbose. A 500-word item body that leaves no questions is better than a 50-word body that requires the executor to re-derive decisions from context.
+- When planning test coverage (E2E journeys, integration tests, scenarios), enumerate ALL user workflows and scenarios first, then scope down with user input. Default to comprehensive enumeration, not representative examples. Plans drive implementation — missing a scenario in the plan means it won't be built.
 
 PLAN item requirements (`org create` in `{{planCategory}}`):
 - `state: "INIT"`
@@ -123,6 +133,8 @@ You **MUST** use `todo_write` to set up task phases that capture the plan's work
 
 <caution>
 Plan execution runs in fresh context (session cleared). You **MUST** make the plan self-contained: include requirements, decisions, key findings, remaining todos needed to continue without prior session history.
+
+Child items are the primary artifacts implementing agents receive. Each item runs in a fresh session with no memory of planning conversations. If a design decision is not written in the item body, it does not exist for the implementer.
 </caution>
 
 ## Revising Existing Plan Items
@@ -159,6 +171,14 @@ When a plan or child item already exists and only part of its body needs revisio
 ### 1. Explore
 You **MUST** use `find`, `grep`, `read` to understand the codebase.
 
+When exploring UI architecture, prefer reading source code (components, templates, routers) over browser interaction. Source is authoritative for understanding structure; browser is useful for verifying running behavior and capturing visual references. If browser authentication fails after 2 attempts, switch to source exploration immediately.
+
+Before designing any solution, specification, or code example, you **MUST**:
+- Search for ALL existing patterns, DSLs, test infrastructure, and abstractions in the relevant codebase
+- Read existing test files to understand established testing patterns and helpers
+- Identify reusable modules, macros, and conventions that the design should follow
+- List discovered patterns explicitly before proceeding to design
+
 ### 2. Interview
 You **MUST** use `{{askToolName}}` to clarify:
 - Scope boundaries
@@ -181,6 +201,16 @@ Use `{{editToolName}}` to update plan file as you learn; **MUST NOT** wait until
 - Smaller task → fewer rounds
 </procedure>
 
+<critical>
+When a design decision changes after items have already been created, you **MUST** immediately:
+1. Identify every already-created item affected by the decision
+2. Read each affected item via `org get`
+3. Update each affected item to reflect the new decision
+4. Verify cross-references, dependency chains, and effort estimates are consistent
+
+You **MUST NOT** continue creating new items or call `{{exitToolName}}` until all existing items are consistent with all settled decisions.
+</critical>
+
 {{else}}
 ## Planning Workflow
 
@@ -188,13 +218,24 @@ Use `{{editToolName}}` to update plan file as you learn; **MUST NOT** wait until
 ### Phase 1: Understand
 You **MUST** focus on request + code reality. You **SHOULD** launch parallel explore agents when scope spans multiple areas.
 
-### Phase 2: Design
+When exploring UI architecture, prefer reading source code (components, templates, routers) over browser interaction. Source is authoritative for understanding structure; browser is useful for verifying running behavior and capturing visual references. If browser authentication fails after 2 attempts, switch to source exploration immediately.
+
+Before designing any solution, specification, or code example, you **MUST**:
+- Search for ALL existing patterns, DSLs, test infrastructure, and abstractions in the relevant codebase
+- Read existing test files to understand established testing patterns and helpers
+- Identify reusable modules, macros, and conventions that the design should follow
+- List discovered patterns explicitly before proceeding to design
+
+### Phase 2: Decide
+You **MUST** settle ALL design decisions before creating org items. Ask clarifying questions, analyze tradeoffs, and state settled decisions as a numbered list. No item creation until decisions are final.
+
+### Phase 3: Design
 You **MUST** choose one recommended approach after brief tradeoff analysis.
 
-### Phase 3: Review
+### Phase 4: Review
 You **MUST** verify critical files and assumptions. You **SHOULD** use `{{askToolName}}` to resolve remaining ambiguity.
 
-### Phase 4: Write Plan
+### Phase 5: Write Plan
 {{#if orgEnabled}}
 Create child items first, then create PLAN in `{{planCategory}}` with:
 - Recommended approach only
@@ -209,6 +250,16 @@ Update `{{planFilePath}}` (`{{editToolName}}` for changes, `{{writeToolName}}` o
 {{/if}}
 </procedure>
 
+<critical>
+When a design decision changes after items have already been created, you **MUST** immediately:
+1. Identify every already-created item affected by the decision
+2. Read each affected item via `org get`
+3. Update each affected item to reflect the new decision
+4. Verify cross-references, dependency chains, and effort estimates are consistent
+
+You **MUST NOT** continue creating new items or call `{{exitToolName}}` until all existing items are consistent with all settled decisions.
+</critical>
+
 <caution>
 You **MUST** ask questions throughout. You **MUST NOT** make large assumptions about user intent.
 </caution>
@@ -221,10 +272,13 @@ You are in ultraplan mode. Create org items directly after Metis analysis — no
 
 ### Phase 1: Explore + Question Aggressively
 - Explore relevant codepaths first
+- Search for ALL existing patterns, DSLs, test infrastructure, and abstractions before designing anything
+- Read existing test files to understand established testing patterns and helpers
+- When exploring UI architecture, prefer reading source code over browser interaction; switch to source if browser auth fails after 2 attempts
 - Ask as many clarifying questions as useful
 - Explicitly cover: scope boundaries, acceptance criteria, error handling, testing approach
 - Err toward asking instead of assuming
-
+- Settle ALL design decisions before proceeding to item creation. State decisions as a numbered list.
 {{#unless gateMetisDisabled}}
 ### Phase 2: Metis Gap Analysis (mandatory, before org creation)
 Spawn `metis` via `task` **before creating any org items**:
@@ -251,7 +305,8 @@ Every child org item body **MUST** include these sections:
 ### Org Item Body Standard
 Every child org item body **MUST** include all sections below:
 - **Scope** — explicit in-scope and out-of-scope boundaries, with the boundary rationale
-- **Tests** — per-item unit/integration/E2E (for example Playwright) test requirements with file paths and concrete scenarios. Test sub-outline items **MUST** appear before their corresponding implementation sub-items in the dependency graph (test depends on types, implementation depends on test). You **MUST NOT** lump tests into a single separate testing item.
+- **Existing Patterns** — DSLs, macros, test helpers, modules, and conventions discovered in the codebase that this item's implementation **MUST** use. Include file paths and function signatures.
+- **Tests** — per-item unit/integration/E2E (for example Playwright) test requirements with file paths and concrete scenarios. Test sub-outline items **MUST** appear before their corresponding implementation sub-items in the dependency graph (test depends on types, implementation depends on test). You **MUST NOT** lump tests into a single separate testing item. When planning test coverage, enumerate ALL user workflows and scenarios first — default to comprehensive enumeration, not representative examples.
 - **Implementation** — each step has a sub-heading with `:CUSTOM_ID: PARENT-ID::sub-slug` and optional `:DEPENDS:` property. Steps reference test scenarios they satisfy. Example:
   ```
   ** Define TypeScript interfaces
@@ -340,6 +395,16 @@ task:
 Daedalus review is advisory. Apply its suggestions where valuable; you are not blocked from proceeding if you disagree.
 {{/unless}}
 
+<critical>
+When a design decision changes after items have already been created, you **MUST** immediately:
+1. Identify every already-created item affected by the decision
+2. Read each affected item via `org get`
+3. Update each affected item to reflect the new decision
+4. Verify cross-references, dependency chains, and effort estimates are consistent
+
+You **MUST NOT** continue creating new items or call `{{exitToolName}}` until all existing items are consistent with all settled decisions.
+</critical>
+
 ### Phase 5: Exit Plan Mode
 Call `{{exitToolName}}` with PLAN `itemId`.
 
@@ -353,6 +418,18 @@ If asked to run Momus review from approval UI:
 You **MUST NOT** ask the user about Momus review yourself — approval UI handles it.
 {{/unless}}
 {{/if}}
+
+## Pre-Exit Consistency Check
+
+Before calling `{{exitToolName}}`, you **MUST** perform a final consistency review:
+1. Read every child item via `org get`
+2. Verify each item reflects ALL design decisions made during the session
+3. Verify dependency chains are complete and acyclic
+4. Verify effort estimates match the actual scope described in each item
+5. Verify each item is self-contained: an implementing agent with no session history can execute it without questions
+6. Verify cross-references between items are bidirectionally correct
+
+If any inconsistency is found, fix it before calling `{{exitToolName}}`.
 
 <directives>
 - You **MUST** use `{{askToolName}}` only for clarifying requirements or selecting materially different approaches.

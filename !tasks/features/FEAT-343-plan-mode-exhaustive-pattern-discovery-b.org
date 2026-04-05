@@ -1,0 +1,84 @@
+#+TITLE: Plan mode exhaustive pattern discovery before design
+#+STATE: DONE
+#+SESSION_ID: 14aece6294f93323
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T14-20-28-627Z_14aece6294f93323.jsonl]]
+#+CUSTOM_ID: FEAT-343-plan-mode-exhaustive-pattern-discovery-b
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: prompt
+
+* Initial Message
+
+Look at this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T11-57-52-340Z_14aeadbed513a760.jsonl
+ ID: 14aeadbed513a760
+
+
+What improvements would you propose to make sure I don't have to go through this verification phase in the future? Identify all agent failures and propose solutions
+
+* Scope
+
+Addresses F2 (pattern ignorance) — agent wrote test examples that ignored existing Djinn DSLs and testing infrastructure.
+
+** In-scope
+- Add explicit "discover before design" requirement to plan mode prompt
+- Strengthen the existing "grep for existing examples" rule for plan mode context
+
+** Out-of-scope
+- Changes to the system prompt (AGENTS.md already says "grep for existing examples before implementing any pattern")
+- Programmatic enforcement (this is behavioral guidance)
+
+* Problem
+
+The system prompt in AGENTS.md already says: "grep for existing examples before implementing any pattern, utility, or abstraction." But this rule was not enforced during planning. The agent explored the UI code and specs but did not explore the testing infrastructure before writing test examples. Result: test examples that invented new patterns instead of using existing DjinnCase, TemplateActivator, and established test helpers.
+
+The issue is that the general rule exists but isn't *emphasized* in the plan mode context where it matters most — when writing specification examples that will guide future implementation.
+
+* Implementation
+
+** Add Discovery Requirement to Plan Mode
+:PROPERTIES:
+:CUSTOM_ID: FEAT-343-exhaustive-discovery::add-requirement
+:END:
+
+File: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+
+In the "Phase 1: Understand" section of the Planning Workflow, add:
+
+#+begin_example
+Before designing any solution, specification, or code example, you MUST:
+- Search for ALL existing patterns, DSLs, test infrastructure, and abstractions in the relevant codebase
+- Read existing test files to understand established testing patterns and helpers
+- Identify reusable modules, macros, and conventions that the design should follow
+- List discovered patterns explicitly before proceeding to design
+
+Discovery is NOT optional. Writing specifications or examples that ignore existing infrastructure wastes implementation effort and creates inconsistency.
+#+end_example
+
+This applies to all workflow variants (standard, iterative, ultraplan).
+
+** Add Pattern Awareness to Item Body Standard (ultraplan)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-343-exhaustive-discovery::pattern-awareness
+:DEPENDS: FEAT-343-exhaustive-discovery::add-requirement
+:END:
+
+File: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+
+In the ultraplan "Org Item Body Standard" section (around line 253), add to the required sections:
+
+#+begin_example
+- **Existing Patterns** — DSLs, macros, test helpers, modules, and conventions discovered in the codebase that this item's implementation MUST use. Include file paths and function signatures.
+#+end_example
+
+For the non-ultraplan workflow, add the same requirement to the child item requirements section.
+
+* Tests
+
+Behavioral only.
+
+* Acceptance Criteria
+- [ ] Plan mode prompt requires exhaustive pattern discovery before design in all workflow variants
+- [ ] Prompt specifies what "discovery" means: test helpers, DSLs, macros, existing modules
+- [ ] Ultraplan item body standard includes "Existing Patterns" section requirement

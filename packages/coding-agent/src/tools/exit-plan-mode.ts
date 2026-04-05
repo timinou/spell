@@ -143,16 +143,70 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 				);
 			}
 
+			const resolvedChildren = new Map<
+				string,
+				{ id: string; file: string; body: string; properties: Record<string, string> }
+			>();
 			const missingChildIds: string[] = [];
 			for (const childItemId of childItemIds) {
 				const childItem = await resolvePlanItem(this.session.settings, this.session.cwd, childItemId);
 				if (!childItem) {
 					missingChildIds.push(childItemId);
+				} else {
+					resolvedChildren.set(childItemId, childItem);
 				}
 			}
 			if (missingChildIds.length > 0) {
 				throw new ToolError(
 					`PLAN item "${params.itemId}" references missing child items: ${missingChildIds.join(", ")}.`,
+				);
+			}
+
+			// Validate child items have substantive bodies (min 100 chars)
+			const thinChildIds: string[] = [];
+			for (const [childItemId, childItem] of resolvedChildren) {
+				if (!childItem.body || childItem.body.trim().length < 100) {
+					thinChildIds.push(childItemId);
+				}
+			}
+			if (thinChildIds.length > 0) {
+				throw new ToolError(
+					`These child items have empty or minimal bodies (< 100 chars) and are not self-contained for implementing agents: ${thinChildIds.join(", ")}. Add implementation details, design decisions, file paths, and acceptance criteria before exiting.`,
+				);
+			}
+
+			// Validate child items have required properties
+			const missingProps: string[] = [];
+			for (const [childItemId, childItem] of resolvedChildren) {
+				const missing: string[] = [];
+				if (!childItem.properties.EFFORT) missing.push("EFFORT");
+				if (!childItem.properties.PRIORITY) missing.push("PRIORITY");
+				if (!childItem.properties.LAYER) missing.push("LAYER");
+				if (missing.length > 0) {
+					missingProps.push(`${childItemId} missing: ${missing.join(", ")}`);
+				}
+			}
+			if (missingProps.length > 0) {
+				throw new ToolError(
+					`Child items with missing required properties:\n${missingProps.join("\n")}\nSet EFFORT, PRIORITY, and LAYER on all child items before exiting.`,
+				);
+			}
+
+			// Validate DEPENDS references are within the plan's child set
+			const childIdSet = new Set(childItemIds);
+			const brokenDeps: string[] = [];
+			for (const [childItemId, childItem] of resolvedChildren) {
+				const depends = childItem.properties.DEPENDS;
+				if (!depends) continue;
+				for (const depId of depends.split(/\s+/).filter(Boolean)) {
+					if (!childIdSet.has(depId)) {
+						brokenDeps.push(`${childItemId} depends on ${depId} which is not in this plan`);
+					}
+				}
+			}
+			if (brokenDeps.length > 0) {
+				throw new ToolError(
+					`Broken dependency references:\n${brokenDeps.join("\n")}\nAll DEPENDS must reference items linked in this plan.`,
 				);
 			}
 

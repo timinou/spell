@@ -1,0 +1,205 @@
+#+TITLE: exit_plan_mode programmatic consistency validation
+#+STATE: DONE
+#+SESSION_ID: 14aece6294f93323
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T14-20-28-627Z_14aece6294f93323.jsonl]]
+#+CUSTOM_ID: FEAT-342-exit-plan-mode-programmatic-consistency
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: backend
+#+DEPENDS: FEAT-340-plan-mode-consistency-sweep-after-design
+
+* Initial Message
+
+Look at this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T11-57-52-340Z_14aeadbed513a760.jsonl
+ ID: 14aeadbed513a760
+
+
+What improvements would you propose to make sure I don't have to go through this verification phase in the future? Identify all agent failures and propose solutions
+
+* Scope
+
+Addresses F5 (premature exit) — agent called exit_plan_mode before plan was ready, twice.
+
+** In-scope
+- Add programmatic validation in ~ExitPlanModeTool.execute()~ before returning success
+- Validate child item bodies are non-trivial (minimum content thresholds)
+- Validate cross-references and dependency consistency
+- Return actionable error messages that tell the agent exactly what to fix
+
+** Out-of-scope
+- Semantic validation of item quality (that requires LLM review, handled by Momus/Daedalus gates)
+- Changes to the plan approval UI itself
+
+* Problem
+
+The current ~exit-plan-mode.ts~ validates:
+1. Plan mode is active
+2. Title is valid
+3. Plan item exists (if org enabled)
+4. Plan has at least one ~[[id:...]]~ child link
+5. All linked child items exist
+
+But it does NOT validate:
+- Child items have non-empty bodies
+- Dependency chains are acyclic and complete
+- DEPENDS properties reference items that actually exist in the plan
+- Child items have required properties (EFFORT, PRIORITY, LAYER)
+- The Execution Manifest references all child items (no orphans)
+
+In the observed session, the agent called exit_plan_mode with items that were stale, had wrong dependency chains, and missing required fields. The tool returned success, and the user had to manually catch the problems.
+
+* Implementation
+
+** Add body-presence validation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-342-exit-plan-validation::body-presence
+:END:
+
+File: ~packages/coding-agent/src/tools/exit-plan-mode.ts~
+
+After the existing child item existence check (around line 147-157), add:
+
+#+begin_src typescript
+// Validate child items have substantive bodies
+const thinChildIds: string[] = [];
+for (const childItemId of childItemIds) {
+    const childItem = await resolvePlanItem(this.session.settings, this.session.cwd, childItemId);
+    if (childItem && (!childItem.body || childItem.body.trim().length < 100)) {
+        thinChildIds.push(childItemId);
+    }
+}
+if (thinChildIds.length > 0) {
+    throw new ToolError(
+        `These child items have empty or minimal bodies (< 100 chars) and are not self-contained for implementing agents: ${thinChildIds.join(", ")}. Add implementation details, design decisions, file paths, and acceptance criteria before exiting.`
+    );
+}
+#+end_src
+
+The 100-char threshold is conservative — any real item with scope, implementation, and acceptance sections will exceed this easily.
+
+** Add property validation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-342-exit-plan-validation::property-validation
+:DEPENDS: FEAT-342-exit-plan-validation::body-presence
+:END:
+
+File: ~packages/coding-agent/src/tools/exit-plan-mode.ts~
+
+After body validation, check required properties:
+
+#+begin_src typescript
+// Validate child items have required properties
+const missingProps: string[] = [];
+for (const childItemId of childItemIds) {
+    const childItem = await resolvePlanItem(this.session.settings, this.session.cwd, childItemId);
+    if (!childItem) continue;
+    const props = childItem.properties;
+    const missing: string[] = [];
+    if (!props.EFFORT) missing.push("EFFORT");
+    if (!props.PRIORITY) missing.push("PRIORITY");
+    if (!props.LAYER) missing.push("LAYER");
+    if (missing.length > 0) {
+        missingProps.push(`${childItemId} missing: ${missing.join(", ")}`);
+    }
+}
+if (missingProps.length > 0) {
+    throw new ToolError(
+        `Child items with missing required properties:
+${missingProps.join("
+")}
+Set EFFORT, PRIORITY, and LAYER on all child items before exiting.`
+    );
+}
+#+end_src
+
+** Add dependency validation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-342-exit-plan-validation::dependency-validation
+:DEPENDS: FEAT-342-exit-plan-validation::property-validation
+:END:
+
+File: ~packages/coding-agent/src/tools/exit-plan-mode.ts~
+
+Validate DEPENDS references are within the plan's child set:
+
+#+begin_src typescript
+// Validate DEPENDS references are valid
+const childIdSet = new Set(childItemIds);
+const brokenDeps: string[] = [];
+for (const childItemId of childItemIds) {
+    const childItem = await resolvePlanItem(this.session.settings, this.session.cwd, childItemId);
+    if (!childItem) continue;
+    const depends = childItem.properties.DEPENDS;
+    if (!depends) continue;
+    const depIds = depends.split(/\s+/).filter(Boolean);
+    for (const depId of depIds) {
+        if (!childIdSet.has(depId)) {
+            brokenDeps.push(`${childItemId} depends on ${depId} which is not in this plan`);
+        }
+    }
+}
+if (brokenDeps.length > 0) {
+    throw new ToolError(
+        `Broken dependency references:
+${brokenDeps.join("
+")}
+All DEPENDS must reference items linked in this plan.`
+    );
+}
+#+end_src
+
+** Add orphan detection
+:PROPERTIES:
+:CUSTOM_ID: FEAT-342-exit-plan-validation::orphan-detection
+:DEPENDS: FEAT-342-exit-plan-validation::dependency-validation
+:END:
+
+File: ~packages/coding-agent/src/tools/exit-plan-mode.ts~
+
+If the plan body has an Execution Manifest section, verify it references all child items:
+
+#+begin_src typescript
+// Check for orphaned child items not in manifest
+const manifestRe = /\[\[id:([^\]]+)\]\]/g;
+const manifestIds = new Set<string>();
+let match;
+while ((match = manifestRe.exec(item.body)) !== null) {
+    manifestIds.add(match[1]);
+}
+const orphanedIds = childItemIds.filter(id => !manifestIds.has(id));
+// Warn but don't block — some items may be intentionally in the body outside the manifest
+if (orphanedIds.length > 0) {
+    // Include as warning in the response, not an error
+}
+#+end_src
+
+* Tests
+
+File: ~packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts~
+
+Test cases:
+- exit_plan_mode rejects when child item has empty body
+- exit_plan_mode rejects when child item has body < 100 chars
+- exit_plan_mode rejects when child item missing EFFORT property
+- exit_plan_mode rejects when child item missing PRIORITY property
+- exit_plan_mode rejects when child item missing LAYER property
+- exit_plan_mode rejects when DEPENDS references item not in plan
+- exit_plan_mode passes when all validations satisfied
+- exit_plan_mode warns (but passes) when child not in execution manifest
+
+Each test should set up minimal org files with the required structure, call the tool, and assert the ToolError message.
+
+* Edge Cases
+- Follow-up items (FUP-*) might legitimately have shorter bodies — consider whether 100 chars is too strict for FUP items
+- Some plans might have items that intentionally depend on items outside the plan (from a previous plan) — DEPENDS validation should only warn, not block, for cross-plan dependencies. Actually, for now keep it strict — cross-plan dependencies should be explicit in the item body, not assumed.
+- Items created by parallel task subagents might not have all properties set yet if the agent is still creating them — this is fine because exit_plan_mode is called after all items exist
+
+* Acceptance Criteria
+- [ ] exit_plan_mode rejects thin child items (< 100 char body)
+- [ ] exit_plan_mode rejects missing EFFORT/PRIORITY/LAYER properties
+- [ ] exit_plan_mode rejects broken DEPENDS references
+- [ ] Error messages are actionable (tell agent exactly what to fix)
+- [ ] All new validations have corresponding test cases
+- [ ] Existing exit_plan_mode behavior unchanged for valid plans

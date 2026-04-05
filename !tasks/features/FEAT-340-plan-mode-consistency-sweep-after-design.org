@@ -1,0 +1,121 @@
+#+TITLE: Plan mode consistency sweep after design decisions
+#+STATE: DONE
+#+SESSION_ID: 14aece6294f93323
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T14-20-28-627Z_14aece6294f93323.jsonl]]
+#+CUSTOM_ID: FEAT-340-plan-mode-consistency-sweep-after-design
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+* Initial Message
+
+Look at this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T11-57-52-340Z_14aeadbed513a760.jsonl
+ ID: 14aeadbed513a760
+
+
+What improvements would you propose to make sure I don't have to go through this verification phase in the future? Identify all agent failures and propose solutions
+
+* Scope
+
+Addresses F1 (stale artifact syndrome) and F7 (decisions after items) — the two most impactful failures from the session.
+
+** In-scope
+- Add explicit consistency sweep requirements to the plan mode prompt template
+- Restructure the planning workflow to separate decision-making from item creation
+- Add post-decision review obligation
+
+** Out-of-scope
+- Programmatic validation (handled by sibling FEAT for exit_plan_mode tool)
+- Changes to the exit_plan_mode tool itself
+
+* Problem
+
+The current plan mode workflow (in ~plan-mode-active.md~) instructs:
+1. Ask clarifying questions
+2. Create child items
+3. Create PLAN item
+4. Call exit_plan_mode
+
+This encourages creating items *before* all decisions are settled. In the observed session, the agent created FEAT-109 through FEAT-114 early, then through 8+ rounds of conversation made major decisions (pipeline-as-overlay, personality deduplication, tools tab, 5 tabs not 4, comprehensive E2E journeys). Each decision invalidated already-created items. The user had to manually trigger consistency reviews 4 separate times.
+
+* Implementation
+
+** Add Decision Checkpoint to Planning Workflow
+:PROPERTIES:
+:CUSTOM_ID: FEAT-117-plan-mode-consistency::add-decision-checkpoint
+:END:
+
+File: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+
+In the "Planning Workflow" procedure section (currently lines 187-210), restructure the phases:
+
+Current phases: Understand → Design → Review → Write Plan
+
+New phases:
+1. **Explore** — read code, run browser, research (existing Phase 1)
+2. **Decide** — ask all clarifying questions, settle ALL design decisions, document them explicitly in conversation before creating ANY org items. Must state decisions as a numbered list before proceeding.
+3. **Create** — create child items and PLAN only after decisions are settled
+4. **Verify** — mandatory self-review pass across all created items (new)
+
+The key addition is making decisions a *gate* before item creation, not interleaved with it.
+
+** Add Post-Decision Consistency Requirement
+:PROPERTIES:
+:CUSTOM_ID: FEAT-117-plan-mode-consistency::add-post-decision-consistency
+:DEPENDS: FEAT-117-plan-mode-consistency::add-decision-checkpoint
+:END:
+
+File: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+
+Add a new ~<critical>~ block after the Planning Workflow procedure:
+
+#+begin_example
+<critical>
+When a design decision changes after items have already been created, you MUST immediately:
+1. Identify every already-created item affected by the decision
+2. Read each affected item via `org get`
+3. Update each affected item to reflect the new decision
+4. Verify cross-references, dependency chains, and effort estimates are consistent
+
+You MUST NOT continue creating new items or call exit_plan_mode until all existing items are consistent with all settled decisions.
+</critical>
+#+end_example
+
+This also applies to the iterative and ultraplan workflow variants — add the same block in those sections.
+
+** Add Mandatory Pre-Exit Review
+:PROPERTIES:
+:CUSTOM_ID: FEAT-117-plan-mode-consistency::add-pre-exit-review
+:DEPENDS: FEAT-117-plan-mode-consistency::add-post-decision-consistency
+:END:
+
+File: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+
+Before the final ~<critical>~ block that says "Your turn ends ONLY by...", add:
+
+#+begin_example
+## Pre-Exit Consistency Check
+
+Before calling exit_plan_mode, you MUST perform a final consistency review:
+1. Read every child item via `org get`
+2. Verify each item reflects ALL design decisions made during the session
+3. Verify dependency chains are complete and acyclic
+4. Verify effort estimates match the actual scope described in each item
+5. Verify each item is self-contained: an implementing agent with no session history can execute it without questions
+6. Verify cross-references between items are bidirectionally correct
+
+If any inconsistency is found, fix it before calling exit_plan_mode.
+#+end_example
+
+* Tests
+
+No unit tests needed — this is a prompt template change. Verification is behavioral: run the same planning scenario and observe whether the agent maintains consistency without user intervention.
+
+* Acceptance Criteria
+- [ ] Plan mode prompt has explicit decision-before-creation workflow
+- [ ] Plan mode prompt has post-decision consistency sweep requirement
+- [ ] Plan mode prompt has mandatory pre-exit review checklist
+- [ ] All three workflow variants (standard, iterative, ultraplan) include the consistency requirements
+- [ ] The existing example flow in the prompt still works as documented

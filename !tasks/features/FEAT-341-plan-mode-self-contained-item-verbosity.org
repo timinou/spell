@@ -1,0 +1,92 @@
+#+TITLE: Plan mode self-contained item verbosity requirement
+#+STATE: DONE
+#+SESSION_ID: 14aece6294f93323
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T14-20-28-627Z_14aece6294f93323.jsonl]]
+#+CUSTOM_ID: FEAT-341-plan-mode-self-contained-item-verbosity
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+* Initial Message
+
+Look at this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T11-57-52-340Z_14aeadbed513a760.jsonl
+ ID: 14aeadbed513a760
+
+
+What improvements would you propose to make sure I don't have to go through this verification phase in the future? Identify all agent failures and propose solutions
+
+* Scope
+
+Addresses F4 (terse specifications) — items were too brief for executing agents.
+
+** In-scope
+- Strengthen the child item requirements in plan-mode-active.md
+- Add explicit "self-contained for fresh-context agent" requirement
+
+** Out-of-scope
+- Changes to ultraplan's "Org Item Body Standard" (it already has verbose requirements)
+- Programmatic validation of item length
+
+* Problem
+
+The current plan mode prompt says child items should:
+- Include EFFORT, PRIORITY, LAYER
+- Use concrete, executable acceptance criteria
+- Keep scopes non-overlapping
+- Include verification criteria
+
+But it does NOT say:
+- Items must be self-contained for agents with no session history
+- Items must include ALL design decisions that affect them
+- Items must include exact file paths, function signatures, and existing patterns
+- Items must be verbose enough that an implementing agent never needs to ask a question
+
+The ~<caution>~ about "plan execution runs in fresh context" applies to the PLAN item but not explicitly to each child item. In practice, child items are the primary artifacts subagents receive.
+
+* Implementation
+
+** Strengthen Child Item Requirements
+:PROPERTIES:
+:CUSTOM_ID: FEAT-341-self-contained-verbosity::strengthen-requirements
+:END:
+
+File: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+
+In the "Child item requirements" section (currently around lines 48-56), add after existing bullets:
+
+#+begin_example
+- Each child item MUST be self-contained for an implementing agent with NO session history:
+  - Include ALL design decisions that affect this item's implementation
+  - Include exact file paths to create/modify and existing patterns to follow
+  - Include function/module signatures and type definitions when applicable
+  - Include edge cases, error handling expectations, and degradation behavior
+  - Include specific test scenarios with expected inputs/outputs
+- When in doubt, err toward verbose. A 500-word item body that leaves no questions is better than a 50-word body that requires the executor to re-derive decisions from context.
+#+end_example
+
+** Add Fresh-Context Warning to Item Creation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-341-self-contained-verbosity::fresh-context-warning
+:DEPENDS: FEAT-341-self-contained-verbosity::strengthen-requirements
+:END:
+
+File: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+
+Add a ~<caution>~ block near the child item requirements:
+
+#+begin_example
+<caution>
+Child items are the primary artifacts implementing agents receive. Each item runs in a fresh session with no memory of planning conversations. If a design decision is not written in the item body, it does not exist for the implementer.
+</caution>
+#+end_example
+
+* Tests
+
+Behavioral only — verify that agents produce more verbose, self-contained items after the prompt change.
+
+* Acceptance Criteria
+- [ ] Plan mode prompt requires items to be self-contained for fresh-context agents
+- [ ] Prompt explicitly warns that child items are the primary execution artifacts
+- [ ] Requirements include: design decisions, file paths, signatures, edge cases, test scenarios

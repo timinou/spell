@@ -1,0 +1,109 @@
+#+TITLE: Plan mode verification elimination
+#+STATE: DONE
+#+SESSION_ID: 14aece6294f93323
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T14-20-28-627Z_14aece6294f93323.jsonl]]
+#+CUSTOM_ID: PLAN-147-plan-mode-verification-elimination
+
+
+* Initial Message
+
+Look at this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T11-57-52-340Z_14aeadbed513a760.jsonl
+ ID: 14aeadbed513a760
+
+
+What improvements would you propose to make sure I don't have to go through this verification phase in the future? Identify all agent failures and propose solutions
+
+* Context
+
+Analysis of session ~14aeadbed513a760~ (SalesOps Admin Redesign planning) revealed 7 distinct failure modes that required repeated user intervention during the plan verification phase. The user had to manually correct the agent's work 10+ times across 4 categories of failure:
+
+1. *Stale artifacts* (4 corrections) — Items created before decisions were settled, became inconsistent
+2. *Terse specifications* (2 corrections) — Items too brief for implementing agents
+3. *Premature exit* (2 corrections) — Called exit_plan_mode before plan was ready
+4. *Pattern ignorance* (1 correction) — Ignored existing test infrastructure
+5. *Minimal coverage* (1 correction) — Created 1 journey instead of comprehensive suite
+6. *Browser flailing* (1 self-correction) — Wasted time on authentication when source was available
+7. *Decisions after items* (systemic) — Created org items before settling design decisions
+
+** Approach
+
+Two-layer fix:
+
+*Prompt-level* (4 items): Restructure the planning workflow to gate item creation behind decision settlement, add consistency sweep obligations, strengthen verbosity requirements, and add pattern discovery mandate.
+
+*Programmatic* (1 item): Add validation to ~exit_plan_mode~ tool that rejects thin items, missing properties, and broken dependencies — catching at the tool level what prompt instructions alone might not enforce.
+
+** Key Decisions
+
+- Threshold for "thin" item body: 100 characters. Any real item with scope, implementation, and acceptance sections exceeds this easily. Conservative choice — we can tighten later.
+- DEPENDS validation: strict within the plan's child set. Cross-plan dependencies are blocked — they should be documented in the item body instead.
+- Orphan detection (items not in Execution Manifest): warn, don't block. Some items legitimately appear in the body outside the manifest.
+- Source-first guidance: lowest priority (C). The agent self-corrected on this one. The others required user intervention.
+
+* Verification
+
+** Prompt Changes
+- Read ~packages/coding-agent/src/prompts/system/plan-mode-active.md~ after all prompt items are complete
+- Verify the four new sections exist: decision checkpoint, consistency sweep, pre-exit review, pattern discovery
+- Verify all three workflow variants (standard, iterative, ultraplan) include the consistency requirements
+- Run ~bun check:ts~ to ensure no template syntax errors
+
+** Programmatic Changes
+- Run ~bun test packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts~ (new test file)
+- Verify exit_plan_mode rejects: thin bodies, missing properties, broken DEPENDS
+- Verify exit_plan_mode passes for valid plans
+- Run ~bun check:ts~ for type safety
+
+** Integration
+- Run ~bun check~ (full project check) at the end
+
+* Execution Manifest
+
+** Wave 0: Prompt Improvements                        :wave:
+- [[id:FEAT-340-plan-mode-consistency-sweep-after-design]] Consistency sweep and decision-gate workflow (2h)
+- [[id:FEAT-341-plan-mode-self-contained-item-verbosity]] Self-contained item verbosity requirement (1h)
+- [[id:FEAT-343-plan-mode-exhaustive-pattern-discovery-b]] Exhaustive pattern discovery before design (1h)
+- [[id:FEAT-344-plan-mode-comprehensive-first-coverage-d]] Comprehensive-first coverage default (30m)
+- [[id:FEAT-345-plan-mode-source-first-exploration-prefe]] Source-first exploration preference (30m)
+
+** Wave 1: Programmatic Validation                    :wave:
+- [[id:FEAT-342-exit-plan-mode-programmatic-consistency]] exit_plan_mode programmatic consistency validation (4h, depends FEAT-340)
+
+Total effort: ~9h
+
+** Completion [2026-04-05]
+
+*** Verification
+
+Prompt changes:
+- Read ~plan-mode-active.md~ and confirmed all 5 new sections present:
+  - Decision checkpoint gate (step 2 in workflow order, all 3 variants)
+  - Consistency sweep obligation (step 5 + critical block, all 3 variants)
+  - Pre-exit consistency check section (before final critical block)
+  - Self-contained item verbosity requirements (child item requirements section)
+  - Pattern discovery mandate (Phase 1 in all 3 variants + ultraplan body standard)
+  - Comprehensive-first coverage default (child item requirements + ultraplan tests section)
+  - Source-first exploration preference (Phase 1 in all 3 variants)
+- ~bun check:ts~: biome passed clean; tsgo errors all pre-existing (sql-store, approvals, telegram, logger)
+
+Programmatic validation:
+- ~bun test packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts~: 9/9 pass
+- Tests cover: empty body, thin body (<100 chars), missing EFFORT, missing PRIORITY, missing LAYER, all props missing at once, broken DEPENDS, valid plan passes, valid DEPENDS within plan
+- ~bun test packages/coding-agent/test/tools/exit-plan-mode.test.ts~: 7/7 pass (existing test updated with substantive body)
+- ~bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts~: 9/9 pass (unchanged, still passes)
+
+Integration:
+- ~bun check~: all checks pass (biome clean, tsgo only pre-existing errors, cargo clean)
+
+*** Artifacts
+
+- ~packages/coding-agent/src/prompts/system/plan-mode-active.md~ -- prompt changes (all 5 FEATs)
+- ~packages/coding-agent/src/tools/exit-plan-mode.ts~ -- programmatic validation (FEAT-342)
+- ~packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts~ -- new test file (FEAT-342)
+- ~packages/coding-agent/test/tools/exit-plan-mode.test.ts~ -- updated existing test body
+
+*** Deviations
+
+Orphan detection (FEAT-342) was specified as warn-only. Implementation was removed because ~extractIdLinks~ extracts ALL ~[[id:...]]~ links from the plan body -- the same set that defines ~childItemIds~. Distinguishing "manifest links" from "body links" would require section-specific parsing, which is out of proportion for a non-blocking warning. The three blocking validations (body, properties, DEPENDS) provide the high-value safety net.

@@ -1,0 +1,69 @@
+#+TITLE: Plan mode source-first exploration preference
+#+STATE: DONE
+#+SESSION_ID: 14aece6294f93323
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T14-20-28-627Z_14aece6294f93323.jsonl]]
+#+CUSTOM_ID: FEAT-345-plan-mode-source-first-exploration-prefe
+#+EFFORT: 30m
+#+PRIORITY: #C
+#+LAYER: prompt
+
+* Initial Message
+
+Look at this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T11-57-52-340Z_14aeadbed513a760.jsonl
+ ID: 14aeadbed513a760
+
+
+What improvements would you propose to make sure I don't have to go through this verification phase in the future? Identify all agent failures and propose solutions
+
+* Scope
+
+Addresses F6 (browser flailing) — agent wasted ~10 attempts trying to log into hotel admin instead of reading source.
+
+** In-scope
+- Add guidance to prefer source code exploration over browser interaction in plan mode
+- Applies specifically to understanding UI patterns and architecture during planning
+
+** Out-of-scope
+- Changes to puppeteer tool availability in plan mode
+- General browser interaction guidance
+
+* Problem
+
+The agent spent significant time:
+1. Trying to log into the hotel admin (wrong password, multiple attempts)
+2. Taking screenshots of pages it could have understood by reading the source
+3. Navigating through UI elements to understand component structure
+
+For *plan mode* (read-only design work), reading the source code for LiveView components and templates is almost always faster and more informative than browser interaction. The agent should have read ~HotelcommWeb.AdminComponents~ and the router source instead of trying to screenshot the running UI.
+
+Browser interaction is useful for:
+- Verifying running behavior when source is ambiguous
+- Capturing visual reference screenshots for design specs
+- Testing authentication/session flows
+
+But for understanding "what components exist and how they're structured," source is authoritative.
+
+* Implementation
+
+** Add Source-First Guidance
+:PROPERTIES:
+:CUSTOM_ID: FEAT-345-source-first::add-guidance
+:END:
+
+File: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+
+Add to the "Phase 1: Understand" section:
+
+#+begin_example
+When exploring UI architecture during planning, prefer reading source code (components, templates, routers) over browser interaction. Source is authoritative for understanding structure; browser is useful for verifying running behavior and capturing visual references. If browser authentication fails after 2 attempts, switch to source exploration immediately.
+#+end_example
+
+* Tests
+
+Behavioral only.
+
+* Acceptance Criteria
+- [ ] Plan mode prompt includes source-first exploration guidance
+- [ ] Guidance includes clear criteria for when browser IS appropriate (visual verification, running behavior)
