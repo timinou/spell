@@ -49,13 +49,12 @@
 
 ### Changed
 
-- Changed default `task.maxRecursionDepth` from `2` to `4`, and `DEFAULT_LOOP_DEPTH_LIMIT` from `3` to `4`.
+- Changed default `DEFAULT_LOOP_DEPTH_LIMIT` from `3` to `4`.
 - Moved fluid `plan_start` emission to the planning entrypoint so users see immediate planning feedback with streaming progress and elapsed time.
 - Extended fluid execution to thread `AbortSignal` through planner/agent runs and support scheduler resume with preset completed agent results.
 - Updated fluid agent panels to show dependency status and support expandable/collapsible details.
 - Unified wave orchestration: replaced `FluidOrchestrator`, `QueueScheduler`, and `coordinator-runner` with agent-session-driven execution using `todo_write` state and `FluidEvent` translation
 - `normalizeInProgressTask` allows multiple `in_progress` tasks when guarded by delegation metadata
-- `task.maxRecursionDepth` default reduced from 4 to 2 (main -> subagent -> sub-subagent max)
 - `task` agent spawns restricted from `*` to `explore, quick_task`
 - Compaction and context promotion disabled for all subagent sessions
 - Both `task` and `quick_task` agents now use `pi/subtask` model role
