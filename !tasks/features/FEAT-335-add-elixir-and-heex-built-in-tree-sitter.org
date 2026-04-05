@@ -1,0 +1,105 @@
+#+TITLE: Adopt treesit-auto recipe system for language support
+#+STATE: DONE
+#+SESSION_ID: 14aea8a22450ea7e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-35-32-241Z_14aea8a22450ea7e.jsonl]]
+#+CUSTOM_ID: FEAT-335-add-elixir-and-heex-built-in-tree-sitter
+#+EFFORT: 1h
+#+PRIORITY: B
+#+LAYER: packages/emacs
+
+NOTE [2026-04-05]: Recipe system implemented with 50 languages, pi-prelude.el and pi-treesit.el refactored, Elixir declaration support added.
+
+* Scope
+
+Replace the three separate hardcoded language tables in pi-emacs (grammar sources in pi-prelude.el, extension→lang and extension→mode in pi-treesit.el) with a unified recipe-based system adapted from [[https://github.com/renzmann/treesit-auto][treesit-auto]]. This immediately expands coverage from ~15 to 50+ languages (including Elixir, HEEx, Ruby, Java, Kotlin, Lua, Nix, Dockerfile, etc.) and makes adding new languages a single-line recipe entry.
+
+** In-scope
+- Create =pi-treesit-recipes.el= with recipe data structure adapted from treesit-auto
+- Replace =pi-prelude--sources= with recipe-driven grammar source list
+- Replace =pi-treesit--mode-for-file= hardcoded cond with recipe-driven lookup
+- Replace =pi-treesit--lang-for-file= hardcoded cond with recipe-driven lookup
+- Include dependency tracking (e.g. elixir requires heex, typescript requires tsx)
+- Include ABI14 revision support for Emacs 29 compatibility
+- Elixir/HEEx declaration extraction in pi-treesit.el (for outline support)
+** Out-of-scope
+- treesit-auto's auto-mode-alist or major-mode-remap logic (we handle files ourselves via pi-treesit-open-file)
+- treesit-auto's interactive install prompting (we compile on daemon start)
+- Vendoring treesit-auto.el itself — only the recipe data
+
+* Key Design Decisions
+** Why not vendor treesit-auto.el?
+treesit-auto provides three things: (1) a recipe list of grammar URLs + metadata, (2) auto-mode-alist manipulation for mode switching, and (3) automatic grammar installation prompting. We only need (1). Our daemon architecture handles (2) and (3) differently — files are opened via =pi-treesit-open-file= which creates parsers directly, and grammars are compiled on daemon startup via =pi-prelude--ensure-grammars=.
+
+** Recipe format
+Adapted from treesit-auto-recipe struct. Each recipe is a plist:
+#+begin_src elisp
+(LANG :ts-mode MODE :remap FALLBACK :url URL
+      :revision REV :abi14-revision ABI14-REV
+      :source-dir SRC :requires (DEPS...) :exts ("ext1" "ext2"))
+#+end_src
+
+:exts replaces treesit-auto's :ext regex with a simple string list (we match by file extension, not regex).
+
+** How recipes replace three tables
+1. =pi-prelude--sources= → derived from recipe :url/:revision/:source-dir at bootstrap
+2. =pi-treesit--lang-for-file= → ext lookup in recipe :exts
+3. =pi-treesit--mode-for-file= → mode lookup in recipe :ts-mode
+
+One recipe entry = one language, fully defined.
+
+* Implementation
+
+** New file: packages/emacs/elisp/pi-treesit-recipes.el
+
+Contains =pi-treesit-recipes= defvar with full recipe list adapted from treesit-auto's treesit-auto-recipe-list. Credit treesit-auto in header comment. GPLv3 compatible (same license).
+
+Provide three accessor functions:
+- =(pi-treesit-recipe-sources)= → returns list in =treesit-language-source-alist= format, respecting :abi14-revision when treesit ABI < 15
+- =(pi-treesit-recipe-lang-for-ext ext)= → returns lang symbol for file extension
+- =(pi-treesit-recipe-mode-for-ext ext)= → returns ts-mode symbol for file extension
+- =(pi-treesit-recipe-deps lang)= → returns list of required grammar symbols
+
+** File: packages/emacs/elisp/pi-prelude.el
+
+- Remove =pi-prelude--sources= hardcoded list
+- =(require 'pi-treesit-recipes)=
+- Replace in =pi-prelude--ensure-grammars=: use =(pi-treesit-recipe-sources)= merged with project config extras
+- Handle dependency ordering: install required grammars first (use =pi-treesit-recipe-deps=)
+
+** File: packages/emacs/elisp/pi-treesit.el
+
+- Remove hardcoded cond tables from =pi-treesit--mode-for-file= and =pi-treesit--lang-for-file=
+- =(require 'pi-treesit-recipes)=
+- Delegate to =(pi-treesit-recipe-lang-for-ext ext)= and =(pi-treesit-recipe-mode-for-ext ext)= after checking project-local maps
+
+** File: packages/emacs/elisp/pi-treesit.el (declaration support)
+
+Add Elixir AST node types to =pi-treesit-declaration-name= and =pi-treesit-declaration-kind=:
+- Elixir tree-sitter uses =call= nodes for def/defp/defmodule/defprotocol/defimpl/defmacro
+- Study test/corpus at https://github.com/elixir-lang/tree-sitter-elixir during implementation
+- The =do_block= pattern wraps function bodies
+
+* Sub-outline
+
+** define-recipes — Create pi-treesit-recipes.el
+Extract and adapt recipe data from treesit-auto's recipe list. Add accessor functions.
+
+** refactor-prelude — Wire pi-prelude.el to use recipes
+Remove hardcoded sources, use recipe-driven grammar list.
+
+** refactor-treesit — Wire pi-treesit.el to use recipes
+Remove hardcoded cond tables, delegate to recipe lookups.
+
+** add-elixir-decls — Add Elixir declaration extraction
+Study Elixir AST and add to pi-treesit-declaration-name/kind.
+
+** verify — Test language support
+Test outline/read on .ts, .rs, .ex, .heex files to verify no regression and new support works.
+
+* Verification
+- =emacs_code outline= on a sample .ex file returns recognized declarations (defmodule, def, defp)
+- =emacs_code outline= on existing .ts/.rs/.py files still works (no regression)
+- =emacs_code read= on a .heex file returns parsed content
+- Grammar compilation for elixir/heex succeeds in daemon logs
+- Recipe count is 50+ (vs current 15)
+- Adding a new language requires editing only pi-treesit-recipes.el

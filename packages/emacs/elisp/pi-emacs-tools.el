@@ -7,7 +7,7 @@
 (require 'pi-outline)
 (require 'pi-edit)
 (require 'pi-buffer)
-
+(require 'pi-treesit-recipes)
 ;; ---------------------------------------------------------------------------
 ;; code-read
 ;; ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@
              (warning . "no-outline")
              (message . ,(format
                           "No recognized top-level declarations in '%s'. \
-The outline extractor supports TS/JS/Rust/Go/Python/Elm. \
+The outline extractor supports 50+ languages via tree-sitter. \
 If this language is unsupported, use `emacs_code read` (resolution 1-2) as a fallback, \
 or add a tree-sitter grammar via .omp/treesitter.json."
                           (file-name-nondirectory file)))))))
@@ -177,6 +177,98 @@ or add a tree-sitter grammar via .omp/treesitter.json."
                       (column . ((type . "integer") (description . "1-indexed column number")))))
                   (required . ["file" "action"]))
   :function #'pi-navigate-handler))
+
+;; ---------------------------------------------------------------------------
+;; code-languages
+;; ---------------------------------------------------------------------------
+
+(defun pi-code-languages-handler (args)
+  "Handle code-languages tool call with ARGS."
+  (condition-case err
+      (let* ((installed-only (alist-get 'installed_only args))
+             (result '()))
+        (dolist (recipe pi-treesit-recipes)
+          (let* ((lang (car recipe))
+                 (installed (treesit-language-available-p lang))
+                 (url (pi-treesit--recipe-prop recipe :url))
+                 (exts (pi-treesit--recipe-prop recipe :exts))
+                 (mode (pi-treesit--recipe-prop recipe :ts-mode))
+                 (err-reason (pi-prelude-grammar-unavailable-p lang)))
+            (unless (and installed-only (not installed))
+              (push `((lang . ,(symbol-name lang))
+                      (installed . ,installed)
+                      (url . ,url)
+                      ,@(when exts `((extensions . ,exts)))
+                      ,@(when mode `((mode . ,(symbol-name mode))))
+                      ,@(when err-reason `((error . ,err-reason))))
+                    result))))
+        ;; Also include project-local grammars
+        (dolist (ext-lang pi-treesit--project-lang-map)
+          (let* ((lang (cdr ext-lang))
+                 (installed (treesit-language-available-p lang)))
+            (unless (assq lang (mapcar (lambda (r) (cons (car r) t)) pi-treesit-recipes))
+              (push `((lang . ,(symbol-name lang))
+                      (installed . ,installed)
+                      (source . "project"))
+                    result))))
+        (json-encode (nreverse result)))
+    (error (json-encode `((error . t) (message . ,(error-message-string err)))))))
+
+(mcp-server-register-tool
+ (make-mcp-server-tool
+  :name "code-languages"
+  :title "Code Languages"
+  :description "List available tree-sitter language grammars with installation status."
+  :input-schema '((type . "object")
+                  (properties
+                   . ((installed_only . ((type . "boolean") (description . "Only list installed grammars"))))))
+  :function #'pi-code-languages-handler))
+
+;; ---------------------------------------------------------------------------
+;; code-install-grammar
+;; ---------------------------------------------------------------------------
+
+(defun pi-code-install-grammar-handler (args)
+  "Handle code-install-grammar tool call with ARGS."
+  (condition-case err
+      (let* ((lang-str (alist-get 'lang args))
+             (lang (intern lang-str))
+             (url-override (alist-get 'url args))
+             (rev-override (alist-get 'revision args))
+             (src-override (alist-get 'source_dir args)))
+        ;; If custom URL provided, add/override in treesit-language-source-alist
+        (when url-override
+          (setq treesit-language-source-alist
+                (cons (list lang url-override rev-override src-override)
+                      (assq-delete-all lang treesit-language-source-alist))))
+        ;; If no URL and no recipe, error
+        (unless (or url-override (assq lang treesit-language-source-alist))
+          (error "No recipe or URL for grammar '%s'. Use the url parameter or add to treesitter.json" lang-str))
+        ;; Install
+        (message "[pi-emacs] Installing grammar for %s ..." lang)
+        (treesit-install-language-grammar lang pi-prelude--managed-dir)
+        (if (treesit-language-available-p lang)
+            (json-encode `((success . t) (lang . ,lang-str)))
+          (json-encode `((success . :json-false)
+                         (lang . ,lang-str)
+                         (error . "Compiled but not loadable — check logs")))))
+    (error (json-encode `((success . :json-false)
+                          (lang . ,(or (alist-get 'lang args) "unknown"))
+                          (error . ,(error-message-string err)))))))
+
+(mcp-server-register-tool
+ (make-mcp-server-tool
+  :name "code-install-grammar"
+  :title "Install Grammar"
+  :description "Install a tree-sitter grammar for a language. Uses built-in recipe URL or accepts a custom URL."
+  :input-schema '((type . "object")
+                  (properties
+                   . ((lang . ((type . "string") (description . "Language name (e.g. elixir, nix, ruby)")))
+                      (url . ((type . "string") (description . "Custom grammar URL (overrides recipe)")))
+                      (revision . ((type . "string") (description . "Git revision/tag (optional)")))
+                      (source_dir . ((type . "string") (description . "Subdirectory containing grammar source (optional)")))))
+                  (required . ["lang"]))
+  :function #'pi-code-install-grammar-handler))
 
 (provide 'pi-emacs-tools)
 ;;; pi-emacs-tools.el ends here

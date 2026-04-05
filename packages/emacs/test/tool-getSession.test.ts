@@ -2,7 +2,16 @@ import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as clientModule from "../src/client";
 import type { EmacsSession } from "../src/daemon";
 import { createEmacsTool } from "../src/tool";
-import type { BufferInfo, CodeEditOp, CodeEditResult, EmacsCodeClient, OutlineEntry, Resolution } from "../src/types";
+import type {
+	BufferInfo,
+	CodeEditOp,
+	CodeEditResult,
+	EmacsCodeClient,
+	InstallResult,
+	LanguageInfo,
+	OutlineEntry,
+	Resolution,
+} from "../src/types";
 
 function makeSession(isAlive: boolean): EmacsSession {
 	return {
@@ -35,6 +44,17 @@ function createClient(options?: {
 			throw new Error("not implemented in test");
 		},
 		async navigate(_file: string, _action: string, _line?: number, _column?: number): Promise<unknown> {
+			throw new Error("not implemented in test");
+		},
+		async languages(_installedOnly?: boolean): Promise<LanguageInfo[]> {
+			throw new Error("not implemented in test");
+		},
+		async installGrammar(
+			_lang: string,
+			_url?: string,
+			_revision?: string,
+			_sourceDir?: string,
+		): Promise<InstallResult> {
 			throw new Error("not implemented in test");
 		},
 		async callTool(_name: string, _args: Record<string, unknown>): Promise<unknown> {

@@ -1,0 +1,105 @@
+#+TITLE: Add languages and install_grammar commands to emacs_code
+#+STATE: DONE
+#+SESSION_ID: 14aea8a22450ea7e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-35-32-241Z_14aea8a22450ea7e.jsonl]]
+#+CUSTOM_ID: FEAT-336-add-languages-and-install-grammar-comman
+#+EFFORT: 1h30m
+#+PRIORITY: B
+#+LAYER: packages/emacs
+#+DEPENDS: FEAT-335-add-elixir-and-heex-built-in-tree-sitter
+
+NOTE [2026-04-05]: Elisp MCP tools (code-languages, code-install-grammar) registered. TypeScript client/types/tool wired. Schema updated.
+
+* Initial Message
+
+The 'Emacs Code' tool is underused. PLease:
+1. make it easier to add new langauges (through tree sitter etc. support at least elixir (+HEEx), rust, and typescript by default
+2. push it up the list
+3. improve its description
+4. explain how to make it more prominent
+5. try it yourself to see how it works
+6. audit its implementation to see if it has as great a management of the emacs daemon as the org tool
+
+* Scope
+
+Add two new subcommands to the emacs_code tool: =languages= (list installed/available tree-sitter grammars and their status) and =install_grammar= (install a tree-sitter grammar by language name or from a URL). These fill the introspection and management gaps — today there is no way to see what languages are available or install new ones at runtime.
+
+** In-scope
+- Elisp MCP tool registration for =code-languages= and =code-install-grammar=
+- TypeScript wiring: client method, tool.ts switch case, schema params
+- =languages= returns: lang name, installed (bool), grammar URL, file extensions, compilation error (if any)
+- =install_grammar= accepts: lang name (uses recipe URL) OR explicit URL; compiles and loads the grammar
+** Out-of-scope
+- Grammar removal/uninstall
+- Mode configuration
+- Changes to the recipe data structure (handled by FEAT-335)
+
+* Implementation
+
+** Elisp: packages/emacs/elisp/pi-emacs-tools.el
+
+*** code-languages tool
+Handler: iterate =pi-treesit-recipes=, for each recipe check =(treesit-language-available-p lang)= and =(pi-prelude-grammar-unavailable-p lang)=. Return JSON array of objects:
+
+#+begin_src json
+[
+  {"lang": "typescript", "installed": true, "url": "...", "extensions": ["ts"], "mode": "typescript-ts-mode"},
+  {"lang": "elixir", "installed": false, "url": "...", "extensions": ["ex", "exs"], "error": "compilation failed: ..."},
+]
+#+end_src
+
+Also include project-local grammars from =pi-treesit--project-lang-map=.
+
+Schema: no required params. Optional =installed_only= boolean filter.
+
+*** code-install-grammar tool
+Handler: accepts =lang= (string, e.g. "elixir") and optional =url= / =revision= / =source_dir= overrides. When only =lang= is given, looks up recipe. Calls =treesit-install-language-grammar= into =pi-prelude--managed-dir=. Returns success/error status with compilation output.
+
+Schema: =lang= required. =url=, =revision=, =source_dir= optional.
+
+** TypeScript: packages/emacs/src/client.ts
+
+Add methods:
+- =languages(installedOnly?: boolean): Promise<LanguageInfo[]>=
+- =installGrammar(lang: string, url?: string, revision?: string, sourceDir?: string): Promise<InstallResult>=
+
+** TypeScript: packages/emacs/src/types.ts
+
+Add types:
+#+begin_src typescript
+interface LanguageInfo {
+  lang: string;
+  installed: boolean;
+  url: string;
+  extensions: string[];
+  mode?: string;
+  error?: string;
+}
+
+interface InstallResult {
+  success: boolean;
+  lang: string;
+  error?: string;
+}
+#+end_src
+
+** TypeScript: packages/emacs/src/tool.ts
+
+Add switch cases for "languages" and "install_grammar" commands.
+
+** TypeScript: packages/coding-agent/src/tools/emacs.ts
+
+Add =languages= and =install_grammar= to the schema's command description string.
+
+* Sub-outline
+
+** define-types — Add LanguageInfo and InstallResult types
+** implement-elisp — Register code-languages and code-install-grammar MCP tools
+** implement-ts — Wire client, tool.ts, schema
+** verify — Test both commands
+
+* Verification
+- =emacs_code languages= returns 50+ language entries with correct installed status
+- =emacs_code install_grammar lang="elixir"= installs the grammar and subsequent =languages= shows installed=true
+- =emacs_code install_grammar lang="nonexistent"= returns an actionable error
+- No regression on existing commands

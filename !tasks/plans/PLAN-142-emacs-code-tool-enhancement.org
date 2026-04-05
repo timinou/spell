@@ -1,0 +1,119 @@
+#+TITLE: Emacs Code Tool Enhancement
+#+STATE: DONE
+#+SESSION_ID: 14aea8a22450ea7e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-35-32-241Z_14aea8a22450ea7e.jsonl]]
+#+CUSTOM_ID: PLAN-142-emacs-code-tool-enhancement
+
+NOTE [2026-04-05]: All three features implemented and verified. 50-language recipe system, languages/install_grammar commands, core tier promotion.
+
+
+* Initial Message
+
+The 'Emacs Code' tool is underused. PLease:
+1. make it easier to add new langauges (through tree sitter etc. support at least elixir (+HEEx), rust, and typescript by default
+2. push it up the list
+3. improve its description
+4. explain how to make it more prominent
+5. try it yourself to see how it works
+6. audit its implementation to see if it has as great a management of the emacs daemon as the org tool
+
+* Context
+
+The =emacs_code= tool provides structural code intelligence via an Emacs daemon running treesit + combobulate. It's a powerful complement to LSP — operating directly on AST structure for any tree-sitter supported language without needing a language server. However, it's currently underused due to several issues:
+
+1. *Limited built-in language coverage.* Only 15 languages are hardcoded across three separate tables (grammar sources in pi-prelude.el, extension→lang and extension→mode in pi-treesit.el). Adding a new language requires editing all three files.
+
+2. *No introspection or management commands.* There's no way to see what languages are available, which grammars are installed, or install new ones at runtime.
+
+3. *Low tool priority.* Classified as "standard" tier (same as fetch, web_search) and ordered near the bottom of the tool list, after org.
+
+4. *Sparse description.* The one-liner description doesn't convey capabilities or differentiation from LSP.
+
+** Approach
+
+Adopt a recipe-based language system adapted from [[https://github.com/renzmann/treesit-auto][treesit-auto]] (GPLv3, compatible with our license). This replaces three hardcoded tables with a single recipe list covering 50+ languages. We extract only the recipe data (grammar URLs, extensions, modes, dependencies, ABI compat revisions) — not treesit-auto's mode-remap or interactive installation logic, which our daemon architecture handles differently.
+
+Add =languages= and =install_grammar= subcommands so the agent can introspect and extend language support at runtime.
+
+Promote to core tier and improve the description.
+
+** Daemon management audit result
+Both emacs_code and org tools share the same daemon infrastructure: =EmacsSessionManager= (circuit breaker, lazy restart, concurrent-call coalescing) → =ManagedDaemon= (postmortem registration, health timer, graceful shutdown, socket probe). Two previous bugs (isAlive check, session recovery) are already DONE. The emacs_code daemon management is on par with the org tool. No gaps found.
+
+** How to make emacs_code more prominent (meta-information)
+The tool's prominence is controlled by several levers:
+- *Tier* (TOOL_TIERS in tools/index.ts): "core" tools get full descriptions; "standard" get full; "specialized" get compact one-liners. Promoting to "core" ensures the description is always shown.
+- *BUILTIN_TOOLS ordering* (tools/index.ts): Dict iteration order determines prompt ordering. Moving emacs_code earlier puts it closer to the top of the tool list the agent sees.
+- *Description quality* (tool.ts): The description string is what the agent reads in its system prompt. A better description = better tool selection by the agent.
+- *System prompt rules*: The AGENTS.md "Procedure" section and tool precedence rules can mention emacs_code. The current system prompt mentions LSP and ast_grep but not emacs_code.
+
+* Verification
+
+After all three features are implemented:
+
+#+begin_src bash
+bun check:ts
+#+end_src
+
+Manual verification:
+- =emacs_code languages= returns 50+ entries
+- =emacs_code outline= works on .ts, .rs, .py, .ex files
+- =emacs_code install_grammar lang="nix"= installs a new grammar
+- Tool appears in core tier in prompt output
+- No regression on existing emacs_code or org tool behavior
+
+* Execution Manifest
+
+All three features can be developed in parallel — they touch different layers with no cross-dependencies except that FEAT-336 (commands) depends on FEAT-335 (recipes) for the =languages= command to enumerate from recipes.
+
+| Wave | Item | Effort | Notes |
+|------+-----------+--------+-------|
+| 1    | [[id:FEAT-335-add-elixir-and-heex-built-in-tree-sitter]] | 1h | Foundation: recipe system, Elisp refactor |
+| 1    | [[id:FEAT-337-promote-emacs-code-tool-ordering-and-imp]] | 45m | Independent: TypeScript-only, no Elisp changes |
+| 2    | [[id:FEAT-336-add-languages-and-install-grammar-comman]] | 1h30m | Depends on FEAT-335 for recipe accessors |
+
+Total estimated effort: ~3h15m
+
+** Completion [2026-04-05]
+
+*** Verification
+
+All three child items completed successfully.
+
+**** Type checking
+- =bunx biome check= on all changed files: 0 errors
+- =bunx tsgo= on project: no new errors introduced (all errors are pre-existing in unrelated packages)
+
+**** Test suite
+- =bun test packages/emacs/test/ packages/coding-agent/test/tools/emacs.test.ts=: 29 pass, 3 skip, 0 fail
+
+**** Elisp parsing
+- =emacs --batch check-parens= on all 4 elisp files: all balanced
+- =(length pi-treesit-recipes)= returns 50 (up from 15)
+- Recipe accessors verified: =pi-treesit-recipe-lang-for-ext \"ts\"= -> =typescript=, =pi-treesit-recipe-mode-for-ext \"ex\"= -> =elixir-ts-mode=, =pi-treesit-recipe-deps 'elixir= -> =(heex)=
+- Mode lookups verified: =.ts= -> =typescript-ts-mode=, =.rs= -> =rust-ts-mode=, =.ex= -> =elixir-ts-mode=, =.heex= -> =heex-ts-mode=, =.el= -> =emacs-lisp-mode=, =.nix= -> =nix-ts-mode=, =.lua= -> =lua-ts-mode=
+
+**** Tool ordering
+- =emacs_code= appears immediately after =lsp= in BUILTIN_TOOLS
+- =emacs_code= tier is \"core\" in TOOL_TIERS
+
+*** Artifacts
+
+Files created:
+- =packages/emacs/elisp/pi-treesit-recipes.el= -- 50-language recipe system
+
+Files modified:
+- =packages/emacs/elisp/pi-prelude.el= -- removed hardcoded sources, uses recipe-driven grammars with dependency ordering
+- =packages/emacs/elisp/pi-treesit.el= -- recipe-driven lang/mode lookups, Elixir declaration support
+- =packages/emacs/elisp/pi-emacs-tools.el= -- code-languages and code-install-grammar MCP tools, updated outline warning
+- =packages/emacs/src/tool.ts= -- improved description, languages/install_grammar dispatch
+- =packages/emacs/src/client.ts= -- languages() and installGrammar() client methods
+- =packages/emacs/src/types.ts= -- LanguageInfo and InstallResult interfaces
+- =packages/coding-agent/src/tools/index.ts= -- emacs_code moved after lsp, promoted to core tier
+- =packages/coding-agent/src/tools/emacs.ts= -- updated schema and JSDoc
+- =packages/coding-agent/test/tools/emacs.test.ts= -- mock client updated for new interface
+- =packages/emacs/test/tool-getSession.test.ts= -- mock client updated for new interface
+
+*** Deviations
+
+None.

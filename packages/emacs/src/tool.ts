@@ -28,7 +28,7 @@ export function createEmacsTool(_projectRoot: string, deps: EmacsToolDependencie
 		name: "emacs_code",
 		description:
 			"Structural code intelligence via Emacs treesit + combobulate. " +
-			"Subcommands: read (resolution-aware), outline, edit, buffers, diff, navigate.",
+			"Subcommands: read (resolution-aware), outline, edit, buffers, diff, navigate, languages, install_grammar.",
 		async execute(args) {
 			const command = args.command as string | undefined;
 			if (!command) return { error: true, message: "Missing required field: command" };
@@ -70,6 +70,18 @@ export function createEmacsTool(_projectRoot: string, deps: EmacsToolDependencie
 						const line = args.line as number | undefined;
 						const column = args.column as number | undefined;
 						return await client.navigate(file, action, line, column);
+					}
+					case "languages": {
+						const installedOnly = args.installed_only as boolean | undefined;
+						return await client.languages(installedOnly);
+					}
+					case "install_grammar": {
+						const lang = args.lang as string;
+						const url = args.url as string | undefined;
+						const revision = args.revision as string | undefined;
+						const sourceDir = args.source_dir as string | undefined;
+						if (!lang) return { error: true, message: "Missing required field: lang" };
+						return await client.installGrammar(lang, url, revision, sourceDir);
 					}
 					default:
 						return { error: true, message: `Unknown command: ${command}` };

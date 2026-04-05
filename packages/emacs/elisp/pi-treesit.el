@@ -3,6 +3,7 @@
 ;;; Code:
 
 (require 'treesit)
+(require 'pi-treesit-recipes)
 
 ;; ---------------------------------------------------------------------------
 ;; Buffer helpers
@@ -53,22 +54,9 @@ Returns nil for file types without a treesit mode (e.g. .el)."
   (let* ((ext (file-name-extension file))
          (project-mode (cdr (assoc ext pi-treesit--project-mode-map))))
     (or project-mode
-        (cond
-         ((member ext '("ts"))              'typescript-ts-mode)
-         ((member ext '("tsx"))             'tsx-ts-mode)
-         ((member ext '("js" "jsx" "mjs")) 'js-ts-mode)
-         ((member ext '("py"))             'python-ts-mode)
-         ((member ext '("rs"))             'rust-ts-mode)
-         ((member ext '("go"))             'go-ts-mode)
-         ((member ext '("json"))           'json-ts-mode)
-         ((member ext '("css"))            'css-ts-mode)
-         ((member ext '("html" "htm"))     'html-ts-mode)
-         ((member ext '("yaml" "yml"))     'yaml-ts-mode)
-         ((member ext '("toml"))           'toml-ts-mode)
-         ((member ext '("bash" "sh"))      'bash-ts-mode)
-         ((member ext '("el"))             'emacs-lisp-mode)
-         ;; Elm: no built-in treesit mode, but parser activates via lang-for-file.
-         (t nil)))))
+        (pi-treesit-recipe-mode-for-ext ext)
+        ;; Non-treesit modes (no grammar needed)
+        (when (string= ext "el") 'emacs-lisp-mode))))
 
 (defun pi-treesit--activate-parser (file)
   "Try to activate an appropriate treesit parser for FILE."
@@ -82,21 +70,7 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
   (let* ((ext (file-name-extension file))
          (project-lang (cdr (assoc ext pi-treesit--project-lang-map))))
     (or project-lang
-        (cond
-         ((member ext '("ts"))              'typescript)
-         ((member ext '("tsx"))             'tsx)
-         ((member ext '("js" "jsx" "mjs")) 'javascript)
-         ((member ext '("py"))             'python)
-         ((member ext '("rs"))             'rust)
-         ((member ext '("go"))             'go)
-         ((member ext '("json"))           'json)
-         ((member ext '("css"))            'css)
-         ((member ext '("html" "htm"))     'html)
-         ((member ext '("yaml" "yml"))     'yaml)
-         ((member ext '("toml"))           'toml)
-         ((member ext '("bash" "sh"))      'bash)
-         ((member ext '("elm"))            'elm)
-         (t nil)))))
+        (pi-treesit-recipe-lang-for-ext ext))))
 
 ;; ---------------------------------------------------------------------------
 ;; Node helpers — treesit positions are 1-indexed buffer positions
@@ -207,6 +181,23 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
         (when fdl
           (let ((id (treesit-search-subtree fdl "lower_case_identifier" nil nil 1)))
             (when id (treesit-node-text id t))))))
+     ;; Elixir: def, defp, defmodule, etc. — all are `call` nodes in tree-sitter-elixir
+     ((string= type "call")
+      (let* ((target (treesit-node-child node 0))
+             (target-text (when target (treesit-node-text target t))))
+        (when (and target-text
+                   (member target-text
+                           '("def" "defp" "defmodule" "defprotocol" "defimpl"
+                             "defmacro" "defmacrop" "defguard" "defguardp"
+                             "defstruct" "defdelegate" "defexception")))
+          (let ((args-node (treesit-node-child-by-field-name node "arguments")))
+            (when args-node
+              (let ((first-arg (treesit-node-child args-node 0)))
+                (when first-arg
+                  (if (string= (treesit-node-type first-arg) "call")
+                      (let ((fn-name (treesit-node-child first-arg 0)))
+                        (when fn-name (treesit-node-text fn-name t)))
+                    (treesit-node-text first-arg t)))))))))
      (t nil))))
 
 (defun pi-treesit-declaration-kind (node)
@@ -246,6 +237,21 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
      ((string= type "value_declaration") "def")
      ((string= type "type_alias_declaration") "type alias")
      ((string= type "port_annotation") "port")
+     ;; Elixir
+     ((string= type "call")
+      (let* ((target (treesit-node-child node 0))
+             (target-text (when target (treesit-node-text target t))))
+        (cond
+         ((member target-text '("def" "defp")) "def")
+         ((string= target-text "defmodule") "defmodule")
+         ((string= target-text "defprotocol") "defprotocol")
+         ((string= target-text "defimpl") "defimpl")
+         ((member target-text '("defmacro" "defmacrop")) "defmacro")
+         ((member target-text '("defguard" "defguardp")) "defguard")
+         ((string= target-text "defstruct") "defstruct")
+         ((string= target-text "defdelegate") "defdelegate")
+         ((string= target-text "defexception") "defexception")
+         (t type))))
      (t type))))
 
 (provide 'pi-treesit)

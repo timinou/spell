@@ -1,0 +1,77 @@
+#+TITLE: Promote emacs_code tool ordering and improve description
+#+STATE: DONE
+#+SESSION_ID: 14aea8a22450ea7e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-35-32-241Z_14aea8a22450ea7e.jsonl]]
+#+CUSTOM_ID: FEAT-337-promote-emacs-code-tool-ordering-and-imp
+#+EFFORT: 45m
+#+PRIORITY: B
+#+LAYER: packages/coding-agent
+
+NOTE [2026-04-05]: Promoted to core tier, moved after lsp in BUILTIN_TOOLS, description improved.
+
+* Initial Message
+
+The 'Emacs Code' tool is underused. PLease:
+1. make it easier to add new langauges (through tree sitter etc. support at least elixir (+HEEx), rust, and typescript by default
+2. push it up the list
+3. improve its description
+4. explain how to make it more prominent
+5. try it yourself to see how it works
+6. audit its implementation to see if it has as great a management of the emacs daemon as the org tool
+
+* Scope
+
+Promote =emacs_code= to core tier, reorder it higher in the tool list, and improve its tool description to be more informative. The current description is a terse one-liner that doesn't convey when or why to use the tool.
+
+** In-scope
+- Reorder =emacs_code= in BUILTIN_TOOLS dict (packages/coding-agent/src/tools/index.ts) to right after =lsp=
+- Promote tier from "standard" to "core" in TOOL_TIERS
+- Improve tool description in packages/emacs/src/tool.ts
+- Update command description string in packages/coding-agent/src/tools/emacs.ts schema
+** Out-of-scope
+- System prompt changes (the tool description flows through automatically)
+- Changes to AGENTS.md (informational — covered in plan Context)
+
+* Implementation
+
+** File: packages/coding-agent/src/tools/index.ts
+
+In BUILTIN_TOOLS, move =emacs_code= entry from after =org= to right after =lsp=:
+#+begin_src typescript
+// Current order: ..., lsp, notebook, read, ..., org, emacs_code, ...
+// New order:     ..., lsp, emacs_code, notebook, read, ...
+#+end_src
+
+In TOOL_TIERS, change:
+#+begin_src typescript
+emacs_code: "core",  // was "standard"
+#+end_src
+
+** File: packages/emacs/src/tool.ts
+
+Replace the one-liner description with a more informative compact description. Key points to cover:
+- What it does: AST-aware code intelligence using Emacs treesit + combobulate
+- When to use it: resolution-aware reading (zooming from names-only to full source), structural outline extraction, AST-aware editing (splice, drag, envelope), in-file reference finding
+- What makes it different from LSP: operates on AST structure directly, works for any tree-sitter supported language without a language server, provides structural editing primitives
+- Supported languages: 50+ via tree-sitter grammars, auto-compiled on first use
+- New commands: languages (list available grammars), install_grammar (add new language support)
+
+Keep it compact — no XML tags, no examples. Aim for 3-5 sentences covering capability, differentiation, and coverage.
+
+** File: packages/coding-agent/src/tools/emacs.ts
+
+Update the schema's =command= field description to include the new subcommands:
+#+begin_src
+"Subcommand: read | outline | edit | buffers | diff | navigate | languages | install_grammar"
+#+end_src
+
+* Sub-outline
+** reorder — Move emacs_code in BUILTIN_TOOLS and promote tier
+** describe — Write improved tool description
+** verify — Confirm tool appears in correct position and description flows through
+
+* Verification
+- =emacs_code= appears in core tier tools list (same group as read/edit/grep/lsp)
+- =emacs_code= appears before =notebook= in the BUILTIN_TOOLS iteration order
+- Tool description is more than one sentence and mentions key capabilities
+- =bun check:ts= passes

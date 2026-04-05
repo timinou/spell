@@ -1,8 +1,10 @@
 /**
  * Emacs code intelligence tool — wraps @oh-my-pi/pi-emacs for use in coding-agent.
  *
- * Uses Emacs 29+ treesit + combobulate as a persistent code intelligence backend.
- * Resolution-aware reading, structural editing, outline extraction, and navigation.
+ * AST-aware code intelligence using Emacs 29+ treesit + combobulate as a persistent backend.
+ * Operates directly on tree-sitter parse trees for 50+ languages without requiring a language server.
+ * Provides resolution-aware reading (zoom from names-only to full source), structural outline extraction,
+ * AST-aware editing (splice, drag, envelope), in-file navigation, and runtime grammar management.
  */
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
@@ -20,7 +22,7 @@ import type { ToolSession } from ".";
 
 const emacsSchema = Type.Object({
 	command: Type.String({
-		description: "Subcommand: read | outline | edit | buffers | diff | navigate",
+		description: "Subcommand: read | outline | edit | buffers | diff | navigate | languages | install_grammar",
 	}),
 	file: Type.Optional(Type.String({ description: "Absolute or project-relative file path" })),
 	resolution: Type.Optional(Type.Integer({ description: "Zoom level 0-3 (default 2)" })),
@@ -45,6 +47,11 @@ const emacsSchema = Type.Object({
 	action: Type.Optional(Type.String({ description: "Navigate action: defun-at | parent | references-local" })),
 	line: Type.Optional(Type.Integer({ description: "1-indexed line for navigation" })),
 	column: Type.Optional(Type.Integer({ description: "1-indexed column for navigation" })),
+	lang: Type.Optional(Type.String({ description: "Language name for install_grammar (e.g. elixir, nix)" })),
+	installed_only: Type.Optional(
+		Type.Boolean({ description: "Filter to installed languages only (languages command)" }),
+	),
+	url: Type.Optional(Type.String({ description: "Custom grammar URL for install_grammar" })),
 });
 
 type EmacsParams = Static<typeof emacsSchema>;

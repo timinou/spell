@@ -44,6 +44,7 @@
 (require 'cl-lib)
 (require 'json)
 (require 'treesit)
+(require 'pi-treesit-recipes)
 
 ;; ---------------------------------------------------------------------------
 ;; Directories
@@ -64,32 +65,6 @@ Path: packages/emacs/elisp/vendor/tree-sitter/")
 ;; pi-project-root is set by the daemon spawn args before (require 'pi-prelude).
 (defvar pi-project-root nil
   "Absolute path to the project root, set by the Pi daemon before loading this file.")
-
-;; ---------------------------------------------------------------------------
-;; Built-in grammar sources
-;; Covers every language in pi-treesit--mode-for-file / pi-treesit--lang-for-file.
-;; Format matches treesit-language-source-alist: (LANG URL &optional REV SRC-DIR).
-;; ---------------------------------------------------------------------------
-
-(defvar pi-prelude--sources
-  '((typescript "https://github.com/tree-sitter/tree-sitter-typescript"
-                "master" "typescript/src")
-    (tsx        "https://github.com/tree-sitter/tree-sitter-typescript"
-                "master" "tsx/src")
-    (javascript "https://github.com/tree-sitter/tree-sitter-javascript")
-    (python     "https://github.com/tree-sitter/tree-sitter-python")
-    (rust       "https://github.com/tree-sitter/tree-sitter-rust")
-    (go         "https://github.com/tree-sitter/tree-sitter-go")
-    (json       "https://github.com/tree-sitter/tree-sitter-json")
-    (css        "https://github.com/tree-sitter/tree-sitter-css")
-    (html       "https://github.com/tree-sitter/tree-sitter-html")
-    (yaml       "https://github.com/ikatyang/tree-sitter-yaml")
-    (toml       "https://github.com/ikatyang/tree-sitter-toml")
-    (bash       "https://github.com/tree-sitter/tree-sitter-bash")
-    (c          "https://github.com/tree-sitter/tree-sitter-c")
-    (cpp        "https://github.com/tree-sitter/tree-sitter-cpp")
-    (elm        "https://github.com/elm-tooling/tree-sitter-elm"))
-  "Grammar sources for all languages built into pi-emacs code intelligence.")
 
 ;; ---------------------------------------------------------------------------
 ;; Failure tracking — read by pi-treesit.el for user-facing errors
@@ -194,6 +169,30 @@ Records failure in `pi-prelude--unavailable'."
        (message "[pi-prelude] WARNING: failed to compile grammar for %s: %s"
                 lang reason)))))
 
+
+(defun pi-prelude--sort-sources-by-deps (sources)
+  "Return SOURCES ordered so recipe dependencies are installed first."
+  (let ((sorted '())
+        (visiting '())
+        (visited '()))
+    (cl-labels
+        ((entry-for (lang)
+           (seq-find (lambda (entry) (eq (car entry) lang)) sources))
+         (visit (lang)
+           (unless (memq lang visited)
+             (unless (memq lang visiting)
+               (push lang visiting)
+               (dolist (dep (pi-treesit-recipe-deps lang))
+                 (when (entry-for dep)
+                   (visit dep)))
+               (setq visiting (delq lang visiting)))
+             (push lang visited)
+             (when-let ((entry (entry-for lang)))
+               (push entry sorted)))))
+      (dolist (entry sources)
+        (visit (car entry))))
+    (nreverse sorted)))
+
 ;; ---------------------------------------------------------------------------
 ;; Bootstrap (runs once at daemon init)
 ;; ---------------------------------------------------------------------------
@@ -231,9 +230,10 @@ The project config also populates `pi-treesit--project-lang-map' and
 
     ;; 3. Merge grammar sources: built-ins + project extras (project wins on conflict).
     (setq treesit-language-source-alist
-          (append extra-sources pi-prelude--sources))
+          (pi-prelude--sort-sources-by-deps
+           (append extra-sources (pi-treesit-recipe-sources))))
 
-    ;; 4. Compile any missing grammar.
+    ;; 4. Compile any missing grammar in dependency order.
     (dolist (entry treesit-language-source-alist)
       (let ((lang (car entry)))
         (unless (treesit-language-available-p lang)

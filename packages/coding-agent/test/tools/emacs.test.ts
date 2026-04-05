@@ -9,6 +9,8 @@ import {
 	type EmacsSession,
 	EmacsSessionManager,
 	type EmacsWarmupResult,
+	type InstallResult,
+	type LanguageInfo,
 	type OutlineEntry,
 	type Resolution,
 } from "@oh-my-pi/pi-emacs";
@@ -54,6 +56,17 @@ function createClient(buffersResult: BufferInfo[]): EmacsCodeClient & { calls: {
 			throw new Error("not implemented in test");
 		},
 		async navigate(_file: string, _action: string, _line?: number, _column?: number): Promise<unknown> {
+			throw new Error("not implemented in test");
+		},
+		async languages(_installedOnly?: boolean): Promise<LanguageInfo[]> {
+			throw new Error("not implemented in test");
+		},
+		async installGrammar(
+			_lang: string,
+			_url?: string,
+			_revision?: string,
+			_sourceDir?: string,
+		): Promise<InstallResult> {
 			throw new Error("not implemented in test");
 		},
 		async callTool(_name: string, _args: Record<string, unknown>): Promise<unknown> {
