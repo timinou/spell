@@ -2010,12 +2010,12 @@ export class SessionManager {
 	/**
 	 * Append a crash marker as child of current leaf.
 	 * Called during postmortem cleanup when the process is dying unexpectedly.
-	 * No-op if the session is already closed.
+	 * Best-effort: failures are swallowed to avoid blocking other cleanup callbacks.
 	 */
 	appendCrashMarker(reason: string): void {
 		const entry: CrashMarkerEntry = {
 			type: "crash",
-			id: Snowflake.next(),
+			id: generateId(this.#byId),
 			parentId: this.#leafId,
 			timestamp: new Date().toISOString(),
 			reason,
