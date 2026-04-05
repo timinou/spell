@@ -219,6 +219,8 @@ export interface ToolSession {
 	taskManager?: CanvasTaskManager;
 	/** Dispose session-owned resources (emacs daemon, QML remote server). */
 	dispose?(): Promise<void> | void;
+	/** Reset session-specific state while preserving long-lived resources (emacs, org daemons). */
+	softReset?(): Promise<void> | void;
 	/** Gateway client for managing .localhost service aliases */
 	gatewayClient?: GatewayClient;
 	/** Resolved task policies (project + mode merged). Cached per session. */

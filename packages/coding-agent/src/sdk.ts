@@ -1851,6 +1851,29 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	};
 
+	toolSession.softReset = async () => {
+		// Clean up session-specific QML server
+		if (toolSession.qmlRemoteServer) {
+			try {
+				const server = toolSession.qmlRemoteServer;
+				toolSession.qmlRemoteServer = undefined;
+				server.stop();
+			} catch (err) {
+				logger.warn("qmlRemoteServer stop failed (soft reset)", { error: String(err) });
+			}
+		}
+		// Clean up session-specific gateway aliases (keep client alive)
+		if (toolSession.gatewayClient) {
+			try {
+				const sid = toolSession.getSessionId?.();
+				if (sid) await toolSession.gatewayClient.cleanup(sid);
+			} catch (err) {
+				logger.warn("gatewayClient session cleanup failed (soft reset)", { error: String(err) });
+			}
+		}
+		// emacsSessionManager and orgSessionManager intentionally NOT touched
+	};
+
 	startMemoryStartupTask({
 		session,
 		settings,
