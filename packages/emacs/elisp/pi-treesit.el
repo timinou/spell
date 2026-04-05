@@ -55,6 +55,7 @@ Returns nil for file types without a treesit mode (e.g. .el)."
          (project-mode (cdr (assoc ext pi-treesit--project-mode-map))))
     (or project-mode
         (pi-treesit-recipe-mode-for-ext ext)
+        (pi-treesit-recipe-mode-for-filename (file-name-nondirectory file))
         ;; Non-treesit modes (no grammar needed)
         (when (string= ext "el") 'emacs-lisp-mode))))
 
@@ -70,7 +71,8 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
   (let* ((ext (file-name-extension file))
          (project-lang (cdr (assoc ext pi-treesit--project-lang-map))))
     (or project-lang
-        (pi-treesit-recipe-lang-for-ext ext))))
+        (pi-treesit-recipe-lang-for-ext ext)
+        (pi-treesit-recipe-lang-for-filename (file-name-nondirectory file)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Node helpers — treesit positions are 1-indexed buffer positions

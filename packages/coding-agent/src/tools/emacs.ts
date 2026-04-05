@@ -52,6 +52,8 @@ const emacsSchema = Type.Object({
 		Type.Boolean({ description: "Filter to installed languages only (languages command)" }),
 	),
 	url: Type.Optional(Type.String({ description: "Custom grammar URL for install_grammar" })),
+	revision: Type.Optional(Type.String({ description: "Git revision/tag to checkout before building the grammar" })),
+	source_dir: Type.Optional(Type.String({ description: "Subdirectory containing the grammar's src/ folder" })),
 });
 
 type EmacsParams = Static<typeof emacsSchema>;

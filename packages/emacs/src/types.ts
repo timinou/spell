@@ -53,7 +53,7 @@ export interface CodeEditResult {
 export interface LanguageInfo {
 	lang: string;
 	installed: boolean;
-	url: string;
+	url?: string;
 	extensions?: string[];
 	mode?: string;
 	error?: string;

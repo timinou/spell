@@ -61,7 +61,7 @@
     (dockerfile
      :ts-mode dockerfile-ts-mode
      :url "https://github.com/camdencheek/tree-sitter-dockerfile"
-     :exts ("Dockerfile" "Containerfile"))
+     :filenames ("Dockerfile" "Containerfile"))
     (elm
      :url "https://github.com/elm-tooling/tree-sitter-elm"
      :exts ("elm"))
@@ -126,7 +126,8 @@
     (make
      :ts-mode makefile-ts-mode
      :url "https://github.com/tree-sitter-grammars/tree-sitter-make"
-     :exts ("mk" "make" "Makefile" "makefile"))
+     :exts ("mk" "make")
+     :filenames ("Makefile" "makefile" "GNUmakefile"))
     (markdown
      :ts-mode markdown-ts-mode
      :url "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
@@ -165,7 +166,8 @@
     (ruby
      :ts-mode ruby-ts-mode
      :url "https://github.com/tree-sitter/tree-sitter-ruby"
-     :exts ("rb" "rbw" "rake" "gemspec" "ru" "thor" "jbuilder" "rabl" "podspec" "Gemfile" "Rakefile" "Capfile" "Thorfile" "Puppetfile" "Berksfile" "Brewfile" "Vagrantfile" "Guardfile" "Podfile"))
+     :exts ("rb" "rbw" "rake" "gemspec" "ru" "thor" "jbuilder" "rabl" "podspec")
+     :filenames ("Gemfile" "Rakefile" "Capfile" "Thorfile" "Puppetfile" "Berksfile" "Brewfile" "Vagrantfile" "Guardfile" "Podfile"))
     (rust
      :ts-mode rust-ts-mode
      :url "https://github.com/tree-sitter/tree-sitter-rust"
@@ -279,6 +281,23 @@ Respects :abi14-revision when treesit ABI < 15."
                            (cl-find-if
                             (lambda (entry)
                               (member ext (pi-treesit--recipe-prop entry :exts)))
+                            pi-treesit-recipes))))
+    (pi-treesit--recipe-prop recipe :ts-mode)))
+
+(defun pi-treesit-recipe-lang-for-filename (filename)
+  "Return lang symbol for bare FILENAME (no directory), or nil."
+  (when filename
+    (car (cl-find-if
+          (lambda (recipe)
+            (member filename (pi-treesit--recipe-prop recipe :filenames)))
+          pi-treesit-recipes))))
+
+(defun pi-treesit-recipe-mode-for-filename (filename)
+  "Return ts-mode for bare FILENAME, or nil."
+  (when-let* ((recipe (and filename
+                           (cl-find-if
+                            (lambda (entry)
+                              (member filename (pi-treesit--recipe-prop entry :filenames)))
                             pi-treesit-recipes))))
     (pi-treesit--recipe-prop recipe :ts-mode)))
 
