@@ -66,7 +66,7 @@ export interface InstallResult {
 	error?: string;
 }
 
-export interface EmacsCodeClient {
+export interface CodeClient {
 	read(file: string, resolution?: Resolution, offset?: number, limit?: number): Promise<string>;
 	outline(file: string, depth?: number): Promise<OutlineEntry[]>;
 	edit(op: CodeEditOp): Promise<CodeEditResult>;

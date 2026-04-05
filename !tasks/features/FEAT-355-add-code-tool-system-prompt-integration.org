@@ -1,0 +1,87 @@
+#+TITLE: Add Code tool system prompt integration and precedence guidance
+#+STATE: DONE
+#+SESSION_ID: 14af0ad97271e2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T18-44-38-985Z_14af0ad97271e2fa.jsonl]]
+#+CUSTOM_ID: FEAT-355-add-code-tool-system-prompt-integration
+#+EFFORT: 1h
+#+PRIORITY: A
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-349-rename-emacs-code-to-code-and-update-all FEAT-350-demote-read-edit-write-to-standard-tier FEAT-351-create-comprehensive-code-tool-prompt-de
+
+* Initial Message
+
+make Emacs Code a core tool and the Edit/Write/Read tools standard. Tell me what needs to be added to the Emacs Code tool to make it feature-complete. Remember it uses combobulate so even for files like .md there's https://github.com/tree-sitter-grammars/tree-sitter-markdown and for typst too and whatnot. Also rename it to Code, not Emacs Code. Tell me everything that needs to be done to make it the premiere way to read and edit code, and Edit/Write/Read become fallbacks
+
+* Context
+The system prompt in =packages/coding-agent/src/prompts/system/system-prompt.md= establishes tool precedence and usage patterns. Currently, it positions =read=, =edit=, =write= as the primary file tools and doesn't mention the Code tool at all. This needs to change:
+
+1. Code tool becomes the premiere source file tool
+2. =read=/=edit=/=write= become fallback tools with clear guidance on when each is appropriate
+3. The tool precedence hierarchy reflects the new tier structure
+
+* Scope
+
+** =packages/coding-agent/src/prompts/system/system-prompt.md=
+
+*** Precedence section (~line 168-183)
+Update to reflect new hierarchy:
+#+begin_example
+Pick the right tool for the job:
+1. **Structural**: `code` (source files), `lsp` (semantic queries), `grep` (text search), `find` (file discovery)
+2. **Fallback**: `read` (non-code files, URLs, images, dirs), `edit` (text-based edits), `write` (new files)
+3. **Python**: logic, loops, processing, display
+4. **Bash**: simple one-liners only
+#+end_example
+
+*** Add "Code first; text tools second" subsection
+After the existing "LSP knows; grep guesses" and "AST tools for structural code work" sections, add:
+
+#+begin_example
+### Code tool for source files
+
+`code` is the primary tool for reading and editing source files with tree-sitter support (50+ languages).
+
+- **Read code**: `code read` at resolution 0-2 for comprehension, resolution 3 for full source
+- **Map structure**: `code outline` to see declarations, classes, functions
+- **Edit structurally**: `code edit` for AST-aware modifications (replace, insert, kill, splice, drag)
+- **Navigate**: `code navigate` for finding enclosing functions, parent nodes, local references
+
+Fall back to text tools when:
+- File has no tree-sitter grammar (use `read` + `edit`)
+- Reading non-code resources: internal URLs, images, PDFs, directories (use `read`)
+- Creating brand-new files (use `write`)
+- Text-based find-and-replace edits (use `edit`)
+#+end_example
+
+*** Update "Search before you read" section (~line 237-244)
+Change the flow to prefer =code=:
+#+begin_example
+- `grep` to locate target
+- `find` to map it
+- `code read` with resolution 2 for structure, resolution 3 with offset/limit for detail
+- `read` for non-code files, URLs, images
+- `task` for investigate+edit in one pass
+#+end_example
+
+*** Update the =read= / =write= / =edit= reference lines (~line 178-179)
+Change from:
+=`read` not cat/open(); `write` not cat>/echo>; `grep` not bash grep/re; `find` not bash find/glob; `edit` not sed.=
+
+To include =code= as the primary for source files:
+=`code` for source files; `read` for non-code/URLs/images; `write` not cat>/echo>; `grep` not bash grep/re; `find` not bash find/glob; `edit` for text-based edits.=
+
+*** Handle Handlebars conditionals
+The system prompt uses ={{#has tools "read"}}= conditionals. Add ={{#has tools "code"}}= conditionals for the new sections. Ensure graceful degradation — if code tool is not available (excluded by domain policy), the old read/edit/write guidance still appears.
+
+* Edge Cases
+- When =code= is excluded (e.g., by domain policy excluding Emacs), the system prompt must still provide guidance for =read=/=edit=/=write=
+- The Handlebars template must not duplicate guidance for both =code= and =read= when both are present
+- The system prompt already has conditional sections using ={{#has tools "X"}}= — follow this pattern exactly
+
+* Acceptance Criteria
+- System prompt renders correctly when =code= tool is present
+- System prompt renders correctly when =code= tool is absent (fallback to read/edit/write guidance)
+- =code= appears in the tool precedence hierarchy
+- Clear fallback guidance for when to use =read=, =edit=, =write= instead of =code=
+- =bun check:ts= passes
+- No template rendering errors

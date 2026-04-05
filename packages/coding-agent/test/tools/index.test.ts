@@ -258,9 +258,15 @@ describe("TOOL_TIERS", () => {
 	});
 
 	it("assigns core tier to essential tools", () => {
-		const coreTier: string[] = ["read", "edit", "write", "grep", "find", "bash", "lsp", "task", "ask"];
+		const coreTier: string[] = ["grep", "find", "bash", "lsp", "task", "ask"];
 		for (const name of coreTier) {
 			expect(getToolTier(name)).toBe("core");
+		}
+	});
+
+	it("assigns standard tier to read/edit/write (demoted from core)", () => {
+		for (const name of ["read", "edit", "write"]) {
+			expect(getToolTier(name)).toBe("standard");
 		}
 	});
 

@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { CodeTool, createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
 	type BufferInfo,
+	type CodeClient,
 	type CodeEditOp,
 	type CodeEditResult,
-	type EmacsCodeClient,
+	type CodeWarmupResult,
 	type EmacsSession,
 	EmacsSessionManager,
-	type EmacsWarmupResult,
 	type InstallResult,
 	type LanguageInfo,
 	type OutlineEntry,
@@ -27,7 +27,7 @@ function makeSession(name: string, alive: boolean = true): EmacsSession {
 	};
 }
 
-function ready(session: EmacsSession): EmacsWarmupResult {
+function ready(session: EmacsSession): CodeWarmupResult {
 	return {
 		status: "ready",
 		version: "30.2",
@@ -35,7 +35,7 @@ function ready(session: EmacsSession): EmacsWarmupResult {
 	};
 }
 
-function createClient(buffersResult: BufferInfo[]): EmacsCodeClient & { calls: { buffers: number; close: number } } {
+function createClient(buffersResult: BufferInfo[]): CodeClient & { calls: { buffers: number; close: number } } {
 	const calls = { buffers: 0, close: 0 };
 	return {
 		calls,
@@ -89,7 +89,25 @@ function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	};
 }
 
-describe("coding-agent emacs tool wiring", () => {
+describe("coding-agent code tool wiring", () => {
+	it("enforces mode guard for edit operations before executing inner tool", async () => {
+		const tool = new CodeTool(
+			createSession({
+				getActiveModeState: () => ({
+					type: "user",
+					name: "readonly",
+					config: {} as any,
+					enabled: true,
+					readOnly: true,
+				}),
+			}),
+		);
+
+		await expect(tool.execute("tool", { command: "edit", file: "test.txt" })).rejects.toThrow(
+			'Read-only mode "readonly": file modifications are not allowed.',
+		);
+	});
+
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
@@ -116,9 +134,9 @@ describe("coding-agent emacs tool wiring", () => {
 		];
 		const client = createClient(buffersResult);
 		const createClientSpy = spyOn(clientModule, "createEmacsClient").mockResolvedValue(client);
-		const tools = await createTools(createSession({ emacsSessionManager: manager }), ["emacs_code"]);
-		const tool = tools.find(entry => entry.name === "emacs_code");
-		if (!tool) throw new Error("Missing emacs_code tool");
+		const tools = await createTools(createSession({ emacsSessionManager: manager }), ["code"]);
+		const tool = tools.find(entry => entry.name === "code");
+		if (!tool) throw new Error("Missing code tool");
 
 		const result = await tool.execute("emacs-recovery", { command: "buffers" });
 		const text = result.content.find(content => content.type === "text")?.text ?? "{}";

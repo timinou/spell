@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { EmacsSession } from "../src/daemon";
 import { EmacsSessionManager } from "../src/session-manager";
-import type { EmacsWarmupResult } from "../src/tool";
+import type { CodeWarmupResult } from "../src/tool";
 
 function makeSession(name: string, alive: boolean = true): EmacsSession {
 	let currentAlive = alive;
@@ -14,7 +14,7 @@ function makeSession(name: string, alive: boolean = true): EmacsSession {
 	};
 }
 
-function ready(session: EmacsSession): EmacsWarmupResult {
+function ready(session: EmacsSession): CodeWarmupResult {
 	return {
 		status: "ready",
 		version: "30.2",
@@ -22,7 +22,7 @@ function ready(session: EmacsSession): EmacsWarmupResult {
 	};
 }
 
-function startupError(message: string = "socket timeout"): EmacsWarmupResult {
+function startupError(message: string = "socket timeout"): CodeWarmupResult {
 	return {
 		status: "error",
 		error: message,
@@ -31,7 +31,7 @@ function startupError(message: string = "socket timeout"): EmacsWarmupResult {
 	};
 }
 
-function unavailable(error: string = "Emacs not found"): EmacsWarmupResult {
+function unavailable(error: string = "Emacs not found"): CodeWarmupResult {
 	return {
 		status: "unavailable",
 		error,

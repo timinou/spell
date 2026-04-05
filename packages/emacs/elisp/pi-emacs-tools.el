@@ -56,7 +56,7 @@
              (message . ,(format
                           "No recognized top-level declarations in '%s'. \
 The outline extractor supports 50+ languages via tree-sitter. \
-If this language is unsupported, use `emacs_code read` (resolution 1-2) as a fallback, \
+If this language is unsupported, use `code read` (resolution 1-2) as a fallback, \
 or add a tree-sitter grammar via .omp/treesitter.json."
                           (file-name-nondirectory file)))))))
     (error (json-encode `((error . t) (message . ,(error-message-string err)))))))

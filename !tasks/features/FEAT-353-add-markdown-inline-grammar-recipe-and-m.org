@@ -1,0 +1,83 @@
+#+TITLE: Add markdown-inline grammar recipe and missing grammar recipes
+#+STATE: DONE
+#+SESSION_ID: 14af0ad97271e2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T18-44-38-985Z_14af0ad97271e2fa.jsonl]]
+#+CUSTOM_ID: FEAT-353-add-markdown-inline-grammar-recipe-and-m
+#+EFFORT: 30m
+#+PRIORITY: B
+#+LAYER: emacs
+
+* Initial Message
+
+make Emacs Code a core tool and the Edit/Write/Read tools standard. Tell me what needs to be added to the Emacs Code tool to make it feature-complete. Remember it uses combobulate so even for files like .md there's https://github.com/tree-sitter-grammars/tree-sitter-markdown and for typst too and whatnot. Also rename it to Code, not Emacs Code. Tell me everything that needs to be done to make it the premiere way to read and edit code, and Edit/Write/Read become fallbacks
+
+* Context
+The =tree-sitter-grammars/tree-sitter-markdown= repository contains TWO grammars:
+1. Block structure: =tree-sitter-markdown/src= (already in recipes as =markdown=)
+2. Inline structure: =tree-sitter-markdown-inline/src= (MISSING)
+
+The inline grammar is needed for full markdown parsing fidelity — without it, inline elements (bold, italic, links, code spans) are opaque text blobs.
+
+Additionally, several commonly-used languages with available tree-sitter grammars are missing from the recipe list.
+
+* Scope
+
+** =packages/emacs/elisp/pi-treesit-recipes.el=
+
+*** Add markdown-inline grammar
+#+begin_src elisp
+(markdown-inline
+ :url "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+ :source-dir "tree-sitter-markdown-inline/src"
+ :requires markdown)
+#+end_src
+No =:exts= or =:ts-mode= — this grammar is injected into markdown buffers for inline ranges, not used standalone. The =:requires markdown= ensures markdown block grammar is compiled first.
+
+*** Add LaTeX grammar
+#+begin_src elisp
+(latex
+ :ts-mode latex-ts-mode
+ :url "https://github.com/latex-lsp/tree-sitter-latex"
+ :exts ("tex" "sty" "cls" "ltx"))
+#+end_src
+
+*** Add SCSS grammar
+#+begin_src elisp
+(scss
+ :ts-mode scss-ts-mode
+ :url "https://github.com/serenadeai/tree-sitter-scss"
+ :exts ("scss"))
+#+end_src
+
+*** Add Svelte grammar
+#+begin_src elisp
+(svelte
+ :ts-mode svelte-ts-mode
+ :url "https://github.com/tree-sitter-grammars/tree-sitter-svelte"
+ :exts ("svelte"))
+#+end_src
+
+*** Add Jinja/Jinja2 grammar
+#+begin_src elisp
+(jinja2
+ :url "https://github.com/dbt-labs/tree-sitter-jinja2"
+ :exts ("j2" "jinja" "jinja2"))
+#+end_src
+
+*** Add Just grammar
+#+begin_src elisp
+(just
+ :url "https://github.com/IndianBoy42/tree-sitter-just"
+ :filenames ("justfile" "Justfile" ".justfile"))
+#+end_src
+
+* Edge Cases
+- The =markdown-inline= grammar uses =:requires markdown= so it compiles after the block grammar. Do not add =:exts= — it's an injection grammar, not a standalone parser.
+- LaTeX grammar from =latex-lsp= — verify URL is valid before adding. If not, use =https://github.com/latex-lsp/tree-sitter-latex=.
+- Some grammars may fail to compile on certain platforms (missing C compiler). The existing =pi-prelude--install-grammar= handles this gracefully by recording in =pi-prelude--unavailable=.
+
+* Acceptance Criteria
+- =markdown-inline= appears in =pi-treesit-recipes= with correct source-dir and requires
+- LaTeX, SCSS, Svelte, Jinja2, Just recipes added
+- Emacs daemon starts without errors (grammar compilation may take longer on first run)
+- =code languages= shows the new grammars in the list

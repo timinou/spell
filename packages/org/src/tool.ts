@@ -12,7 +12,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type EmacsSession, EmacsSessionManager, type EmacsWarmupResult } from "@oh-my-pi/pi-emacs";
+import { type CodeWarmupResult, type EmacsSession, EmacsSessionManager } from "@oh-my-pi/pi-emacs";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { findCategory, findCategoryForId, resolveCategories } from "./categories";
 import type { OrgClient } from "./emacs/client";
@@ -796,7 +796,7 @@ export interface OrgToolDefinition {
 	dispose?(): Promise<void> | void;
 }
 
-function createWarmupResultFromFactory(factory: () => Promise<EmacsSession>): () => Promise<EmacsWarmupResult> {
+function createWarmupResultFromFactory(factory: () => Promise<EmacsSession>): () => Promise<CodeWarmupResult> {
 	return async () => {
 		try {
 			const session = await factory();

@@ -1,0 +1,68 @@
+#+TITLE: Rename emacs_code to code and update all references
+#+STATE: DONE
+#+SESSION_ID: 14af0ad97271e2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T18-44-38-985Z_14af0ad97271e2fa.jsonl]]
+#+CUSTOM_ID: FEAT-349-rename-emacs-code-to-code-and-update-all
+#+EFFORT: 2h
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+* Initial Message
+
+make Emacs Code a core tool and the Edit/Write/Read tools standard. Tell me what needs to be added to the Emacs Code tool to make it feature-complete. Remember it uses combobulate so even for files like .md there's https://github.com/tree-sitter-grammars/tree-sitter-markdown and for typst too and whatnot. Also rename it to Code, not Emacs Code. Tell me everything that needs to be done to make it the premiere way to read and edit code, and Edit/Write/Read become fallbacks
+
+* Context
+Rename the tool from =emacs_code= to =code= everywhere: internal tool name, display label, class name, factory function name, test references, changelog entries, and system prompt.
+
+The display label changes from "Emacs Code" to "Code".
+
+* Scope
+
+** packages/coding-agent (primary)
+- =src/tools/emacs.ts= → rename to =src/tools/code.ts=
+  - Class: =EmacsTool= → =CodeTool=
+  - =readonly name = "emacs_code"= → =readonly name = "code"=
+  - =readonly label = "Emacs Code"= → =readonly label = "Code"=
+  - Logger messages: ="emacs_code tool error"= → ="code tool error"=
+- =src/tools/index.ts=:
+  - Import: =import { EmacsTool } from "./emacs"= → =import { CodeTool } from "./code"=
+  - =BUILTIN_TOOLS= map: =emacs_code: s => new EmacsTool(s)= → =code: s => new CodeTool(s)=
+  - =TOOL_TIERS= map: =emacs_code: "core"= → =code: "core"=
+- =src/sdk.ts=:
+  - =requestedBuiltInToolNames.includes("emacs_code")= → =.includes("code")=
+- =test/tools/emacs.test.ts= → rename to =test/tools/code.test.ts=
+  - Update all =emacs_code= string references to =code=
+- =test/sdk-domain-policy.test.ts=:
+  - Update exclude list and assertion strings
+
+** packages/emacs (upstream)
+- =src/tool.ts=:
+  - =EmacsToolDefinition= → =CodeToolDefinition= (export rename)
+  - =EmacsToolDependencies= → =CodeToolDependencies= (export rename)
+  - =createEmacsTool= → =createCodeTool= (export rename)
+  - =name: "emacs_code"= → =name: "code"=
+  - =warmupEmacs= → =warmupCode= (export rename)
+  - =EmacsWarmupOptions= → =CodeWarmupOptions= (export rename)
+  - =EmacsWarmupResult= → =CodeWarmupResult= (export rename)
+- =src/client.ts=: No rename needed (internal, not exported as =EmacsClient= naming is implementation detail)
+- =src/daemon.ts=: No rename needed (internal)
+- =src/session-manager.ts=: =EmacsSessionManager= — this is used by coding-agent, rename to =CodeSessionManager=
+- =src/index.ts= (barrel): update re-exports
+- =src/types.ts=: =EmacsCodeClient= → =CodeClient=
+- =test/*.test.ts=: update =createEmacsTool= → =createCodeTool= references
+- =elisp/pi-emacs-tools.el=: Update the fallback message that says "use =emacs_code read=" → "use =code read="
+
+** packages/coding-agent SDK integration
+- =src/sdk.ts=: =emacsSessionManager= property name stays (it's internal plumbing, not user-facing). Only the tool name string changes.
+
+* Edge Cases
+- The CHANGELOG.md entry mentioning =emacs_code= in released versions MUST NOT be modified (immutable released sections)
+- Any =onConnecting?.("emacs-code")= callback strings are internal logging, rename to ="code"=
+- The =examples/extensions/plan-mode.ts= regex =/\b(vim?|nano|emacs|code|subl)\b/i= is about editor commands, NOT the tool — DO NOT change
+
+* Acceptance Criteria
+- =bun check:ts= passes
+- =bun test test/tools/code.test.ts= passes (renamed file)
+- =bun test test/sdk-domain-policy.test.ts= passes
+- =grep -rn "emacs_code" packages/coding-agent/src packages/emacs/src= returns zero matches (except CHANGELOG released sections)
+- No file named =emacs.ts= or =emacs.test.ts= remains in tool directories

@@ -1,0 +1,57 @@
+#+TITLE: Add mode guard enforcement to Code tool edit operations
+#+STATE: DONE
+#+SESSION_ID: 14af0ad97271e2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T18-44-38-985Z_14af0ad97271e2fa.jsonl]]
+#+CUSTOM_ID: FEAT-352-add-mode-guard-enforcement-to-code-tool
+#+EFFORT: 1h
+#+PRIORITY: A
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-349-rename-emacs-code-to-code-and-update-all
+
+* Initial Message
+
+make Emacs Code a core tool and the Edit/Write/Read tools standard. Tell me what needs to be added to the Emacs Code tool to make it feature-complete. Remember it uses combobulate so even for files like .md there's https://github.com/tree-sitter-grammars/tree-sitter-markdown and for typst too and whatnot. Also rename it to Code, not Emacs Code. Tell me everything that needs to be done to make it the premiere way to read and edit code, and Edit/Write/Read become fallbacks
+
+* Context
+The Code tool's edit operations currently have no mode guard enforcement. When plan mode or read-only mode is active, =code edit= operations must be blocked just like =edit= and =write= tool operations are.
+
+The =enforceModeWrite()= function in =packages/coding-agent/src/tools/mode-guard.ts= already handles this for edit/write tools. The Code tool needs to call it before executing any edit operation.
+
+* Scope
+
+** =packages/coding-agent/src/tools/code.ts= (renamed from emacs.ts)
+In the =execute()= method, before delegating to the inner tool's execute for edit commands:
+
+#+begin_src typescript
+async execute(toolCallId, params, signal, onUpdate, context) {
+  const args = params as Record<string, unknown>;
+  const command = args.command as string;
+
+  // Enforce mode guard for write operations
+  if (command === "edit") {
+    const file = args.file as string;
+    if (file) {
+      enforceModeWrite(this.session, file);
+    }
+  }
+
+  // ... rest of execution
+}
+#+end_src
+
+The =session= (=ToolSession=) is already available in the constructor. Store it as a private field for use in execute.
+
+** Operations that modify files
+Only the =edit= subcommand modifies files. The other subcommands (=read=, =outline=, =buffers=, =diff=, =navigate=, =languages=, =install_grammar=) are read-only and do NOT need mode guard enforcement.
+
+* Edge Cases
+- =edit= with =save: false= still modifies the Emacs buffer state, but doesn't write to disk. However, the mode guard should still block it in plan mode — the intent is to prevent any modification path.
+- If =file= parameter is missing for edit, let the inner tool handle the error (it already returns ={error: true, message: "Missing required field: file"}=)
+- The =install_grammar= command compiles grammars into =~/.local/share/omp/tree-sitter/=, not project files — this is NOT a project file write, so no mode guard needed.
+
+* Acceptance Criteria
+- In plan mode, =code edit= returns a =ToolError= about plan mode restrictions
+- In read-only user mode, =code edit= returns a =ToolError= about read-only restrictions
+- =code read=, =code outline=, =code navigate= continue to work in all modes
+- =bun check:ts= passes
+- Test: add a test case in =test/tools/code.test.ts= that verifies mode guard is enforced for edit operations

@@ -1,0 +1,53 @@
+#+TITLE: Update AGENTSmd and CHANGELOG for Code tool promotion
+#+STATE: DONE
+#+SESSION_ID: 14af0ad97271e2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T18-44-38-985Z_14af0ad97271e2fa.jsonl]]
+#+CUSTOM_ID: FEAT-357-update-agents-md-and-changelog-for-code
+#+EFFORT: 30m
+#+PRIORITY: B
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-349-rename-emacs-code-to-code-and-update-all FEAT-350-demote-read-edit-write-to-standard-tier
+
+* Initial Message
+
+make Emacs Code a core tool and the Edit/Write/Read tools standard. Tell me what needs to be added to the Emacs Code tool to make it feature-complete. Remember it uses combobulate so even for files like .md there's https://github.com/tree-sitter-grammars/tree-sitter-markdown and for typst too and whatnot. Also rename it to Code, not Emacs Code. Tell me everything that needs to be done to make it the premiere way to read and edit code, and Edit/Write/Read become fallbacks
+
+* Context
+The =AGENTS.md= file (project development rules) and package CHANGELOGs need to reflect the Code tool promotion and Read/Edit/Write demotion.
+
+* Scope
+
+** =AGENTS.md= (repo root)
+No changes needed — AGENTS.md doesn't reference specific tool names for tier assignments. It focuses on code quality, testing, and development patterns.
+
+** =packages/coding-agent/CHANGELOG.md=
+Add entries under =[Unreleased]=:
+
+#+begin_example
+### Changed
+- Renamed `emacs_code` tool to `code` (display name: "Code")
+- Promoted `code` to premiere source file tool; demoted `read`, `edit`, `write` to standard tier (fallback tools)
+
+### Added
+- Comprehensive `code` tool prompt description with usage examples for all subcommands
+- Mode guard enforcement for `code edit` operations (plan mode, read-only mode)
+- System prompt guidance for `code`-first workflow
+#+end_example
+
+** =packages/emacs/CHANGELOG.md=
+Add entries under =[Unreleased]=:
+
+#+begin_example
+### Changed
+- Renamed exports: `createEmacsTool` → `createCodeTool`, `EmacsToolDefinition` → `CodeToolDefinition`, etc.
+- Tool name in MCP protocol: `emacs_code` → `code`
+
+### Added
+- Markdown-inline, LaTeX, SCSS, Svelte, Jinja2, Just grammar recipes
+- Non-code language outline support (Markdown, YAML, TOML, JSON)
+#+end_example
+
+* Acceptance Criteria
+- CHANGELOG entries are under =[Unreleased]= section only
+- No modification to released version sections
+- Entries follow the established format with section headers (Added/Changed/Fixed)

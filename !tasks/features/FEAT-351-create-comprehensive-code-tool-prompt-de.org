@@ -1,0 +1,96 @@
+#+TITLE: Create comprehensive Code tool prompt description
+#+STATE: DONE
+#+SESSION_ID: 14af0ad97271e2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T18-44-38-985Z_14af0ad97271e2fa.jsonl]]
+#+CUSTOM_ID: FEAT-351-create-comprehensive-code-tool-prompt-de
+#+EFFORT: 2h
+#+PRIORITY: A
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-349-rename-emacs-code-to-code-and-update-all
+
+* Initial Message
+
+make Emacs Code a core tool and the Edit/Write/Read tools standard. Tell me what needs to be added to the Emacs Code tool to make it feature-complete. Remember it uses combobulate so even for files like .md there's https://github.com/tree-sitter-grammars/tree-sitter-markdown and for typst too and whatnot. Also rename it to Code, not Emacs Code. Tell me everything that needs to be done to make it the premiere way to read and edit code, and Edit/Write/Read become fallbacks
+
+* Context
+The Code tool currently has a one-line inline description: "Structural code intelligence via Emacs treesit + combobulate. Subcommands: read (resolution-aware), outline, edit, buffers, diff, navigate, languages, install_grammar."
+
+As the premiere code tool, it needs a comprehensive prompt description like =read.md=, =hashline.md=, and =ast-edit.md= have. This prompt must teach the agent how and when to use each subcommand, with examples and critical rules.
+
+* Scope
+
+** Create =packages/coding-agent/src/prompts/tools/code.md=
+Comprehensive description covering:
+
+*** Read subcommand
+- Resolution levels 0-3 with when to use each:
+  - 0 (names only): Quick scan of what's defined — use for orientation
+  - 1 (signatures): Function/type signatures without bodies — use for API understanding
+  - 2 (structure, default): Class members visible, method bodies stubbed — use for structural understanding
+  - 3 (full source): Complete file content with optional offset/limit — use when you need actual implementation
+- offset/limit for resolution 3 (like read tool's pagination)
+- Guidance: prefer resolution 2 for orientation, resolution 3 with offset/limit for targeted reading
+
+*** Outline subcommand
+- Returns structured JSON with name, type, line, end_line, exported, signature, children
+- Use for: understanding file structure, finding symbol locations, class member discovery
+- depth parameter for controlling nesting
+
+*** Edit subcommand
+- All 9 operations: replace, insert-before, insert-after, kill, splice, drag-up, drag-down, clone, envelope
+- Target specification: {line, node_type} — line is 1-indexed, node_type is optional treesit node type filter
+- content parameter for replace/insert operations
+- save parameter (default true for safety)
+- Examples for common operations:
+  - Replace a function body
+  - Insert a new import before existing imports
+  - Kill (delete) a function
+  - Drag a function up/down to reorder
+  - Splice: remove wrapper, promote children
+
+*** Navigate subcommand
+- defun-at: find enclosing function at a position
+- parent: find parent node at a position
+- references-local: find in-file references to symbol at point
+
+*** Buffers subcommand
+- List currently open managed buffers (useful for seeing what's been touched)
+
+*** Diff subcommand
+- Show unsaved changes in a buffer vs disk
+
+*** Languages subcommand
+- List available tree-sitter grammars with installation status
+- Use installed_only=true to filter
+
+*** Install Grammar subcommand
+- Install a missing grammar by name or custom URL
+- Use when a file's language isn't supported
+
+*** Instruction section
+- =code= is the primary tool for reading and editing source files with 50+ language support
+- Use =code read= (resolution 0-2) for code comprehension before editing
+- Use =code outline= to map file structure quickly
+- Use =code edit= for structural AST-aware edits
+- For non-code files (images, PDFs, internal URLs, directories), use =read= instead
+- For creating new files from scratch, use =write= instead
+- For text-based line edits (old_text/new_text), use =edit= instead
+
+*** Critical section
+- =code= operates on tree-sitter parse trees — files must have a supported grammar
+- For files without tree-sitter support, fall back to =read=/=edit= tools
+- The edit =target= requires an accurate =line= number; use =code outline= or =code read= first to find the right line
+- =save: true= writes to disk immediately — use =save: false= + =code diff= to preview changes before committing
+
+** Update =packages/coding-agent/src/tools/code.ts= (renamed from emacs.ts)
+- Import the prompt markdown: =import codeDescription from "../prompts/tools/code.md" with { type: "text" }=
+- Set =this.description = codeDescription= instead of =this.#inner.description=
+
+** Update =packages/emacs/src/tool.ts=
+- The =description= field in =createCodeTool= return value is no longer the source of truth for the agent-facing description (coding-agent overrides it). Keep it as a fallback/summary for MCP protocol clients.
+
+* Acceptance Criteria
+- File =packages/coding-agent/src/prompts/tools/code.md= exists with all sections above
+- =CodeTool.description= is sourced from the markdown file
+- =bun check:ts= passes
+- The prompt renders correctly in system prompt output (no template errors)
