@@ -1,0 +1,102 @@
+#+TITLE: Fix prompt_cache_retention rejected by Codex chatgptcom API
+#+STATE: DONE
+#+SESSION_ID: 14aefd586609b57d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T17-45-38-968Z_14aefd586609b57d.jsonl]]
+#+CUSTOM_ID: BUG-183-fix-prompt-cache-retention-rejected-by-c
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: ai
+
+NOTE [2026-04-05]: Fixed: added `delete body.prompt_cache_retention` in `transformRequestBody` (request-transformer.ts line ~156), following the existing delete-block pattern for max_output_tokens / max_completion_tokens. Test added in openai-codex.test.ts asserting retention is stripped while prompt_cache_key is preserved. bun test: 5/5 pass. packages/ai/ has 0 type errors.
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-org-work-setup/2026-04-05T17-41-06-316Z_14aefc4e23125900.jsonl
+ ID: 14aefc4e23125900
+
+
+Why did it "fail with an infrastructure error"?
+
+* Problem
+
+PLAN-148 / commit =fe63fe88f= (2026-04-05 17:37:19) introduced a regression: the shared =resolveOpenAICacheParams()= helper now sends =prompt_cache_retention: "24h"= to every OpenAI-family provider when =cacheRetention= resolves to ="long"= (the default). This works on =api.openai.com= (OpenAI Responses API), but the Codex API at =chatgpt.com/backend-api= rejects it:
+
+#+begin_example
+Codex error event: Unsupported parameter: prompt_cache_retention (code=invalid_request_error)
+#+end_example
+
+This error is classified as non-retryable (=invalid_request_error= is not in =CODEX_RETRYABLE_EVENT_CODES=), so every subagent that uses a Codex model (e.g. =openai-codex/gpt-5.3-codex-spark=) fails immediately with exit code 1.
+
+* Root Cause
+
+=buildTransformedCodexRequestBody= in =packages/ai/src/providers/openai-codex-responses.ts= spreads =resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId)= which returns:
+#+begin_src typescript
+{ prompt_cache_key: sessionId, prompt_cache_retention: "24h" }
+#+end_src
+
+The result flows through =transformRequestBody= in =packages/ai/src/providers/openai-codex/request-transformer.ts=, which normalizes the request for the chatgpt.com Codex endpoint. It already strips parameters not supported by that endpoint (=max_output_tokens=, =max_completion_tokens= — see lines 154-155). =prompt_cache_retention= needs the same treatment.
+
+The =RequestBody= TypeScript interface (line 48) already declares =prompt_cache_retention?: "in_memory" | "24h"= — the type is correct and should remain. Only the runtime value must be stripped before transmission.
+
+* Fix
+
+** File: =packages/ai/src/providers/openai-codex/request-transformer.ts=
+
+In =transformRequestBody= (line ~154), add one delete after the existing deletes:
+
+Before (current, lines 154-157):
+#+begin_src typescript
+delete body.max_output_tokens;
+delete body.max_completion_tokens;
+
+return body;
+#+end_src
+
+After:
+#+begin_src typescript
+delete body.max_output_tokens;
+delete body.max_completion_tokens;
+delete body.prompt_cache_retention; // chatgpt.com Codex API rejects this parameter
+
+return body;
+#+end_src
+
+No other files need to change. Do NOT modify:
+- =packages/ai/src/utils.ts= — =resolveOpenAICacheParams= is correct for api.openai.com
+- =packages/ai/src/providers/openai-codex-responses.ts= — the spread call is correct
+- =packages/ai/src/providers/openai-codex/request-transformer.ts= RequestBody interface — type stays, only runtime value stripped
+
+* Test
+
+** File: =packages/ai/test/openai-codex.test.ts=
+
+Add a test in the existing ="openai-codex request transformer"= describe block:
+
+#+begin_src typescript
+it("strips prompt_cache_retention from request body", async () => {
+    const body: RequestBody = {
+        model: "gpt-5.3-codex-spark",
+        input: [],
+        prompt_cache_key: "session-123",
+        prompt_cache_retention: "24h",
+    };
+
+    const transformed = await transformRequestBody(body, createCodexModel(body.model), {});
+
+    expect(transformed.prompt_cache_key).toBe("session-123");
+    expect(transformed.prompt_cache_retention).toBeUndefined();
+});
+#+end_src
+
+The test asserts that:
+1. =prompt_cache_retention= is stripped (the chatgpt.com API rejects it)
+2. =prompt_cache_key= is preserved (the chatgpt.com API accepts and benefits from it)
+
+* Verification
+
+- =bun test packages/ai/test/openai-codex.test.ts= — all tests pass, new test passes
+- =bun check:ts= — no type errors
+- Grep: =grep "prompt_cache_retention" packages/ai/src/providers/openai-codex/request-transformer.ts= — should still show the type definition (line 48) AND the new =delete= (in transformRequestBody)
+- Manual spot-check: after the fix, =transformRequestBody= called with =prompt_cache_retention: "24h"= in the body must return a body where that field is =undefined=

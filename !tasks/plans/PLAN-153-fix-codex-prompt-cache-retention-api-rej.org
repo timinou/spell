@@ -1,0 +1,55 @@
+#+TITLE: Fix Codex prompt_cache_retention API rejection regression
+#+STATE: DOING
+#+SESSION_ID: 14aefd586609b57d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T17-45-38-968Z_14aefd586609b57d.jsonl]]
+#+CUSTOM_ID: PLAN-153-fix-codex-prompt-cache-retention-api-rej
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-org-work-setup/2026-04-05T17-41-06-316Z_14aefc4e23125900.jsonl
+ ID: 14aefc4e23125900
+
+
+Why did it "fail with an infrastructure error"?
+
+* Context
+
+** Problem
+
+Commit =fe63fe88f= (2026-04-05 17:37:19, PLAN-148) introduced a regression. The shared =resolveOpenAICacheParams()= helper now sends =prompt_cache_retention: "24h"= to the Codex provider when =cacheRetention= defaults to ="long"=. The standard OpenAI Responses API (=api.openai.com=) accepts this parameter. The Codex API at =chatgpt.com/backend-api= does NOT:
+
+#+begin_example
+Codex error event: Unsupported parameter: prompt_cache_retention (code=invalid_request_error)
+#+end_example
+
+=invalid_request_error= is not in =CODEX_RETRYABLE_EVENT_CODES=, so the subagent exits immediately with code 1. Every =task= tool dispatch that resolves to a Codex model (e.g. =openai-codex/gpt-5.3-codex-spark=) fails — the subagent session completes in ~7 seconds with 0 tool calls.
+
+This was the exact failure mode observed in session =14aefc4e23125900= (2026-04-05 17:41:06): all three Wave 1 subagents + one retry all died within 7-8 seconds with the identical error.
+
+** Approach
+
+The existing Codex request normalizer (=transformRequestBody= in =request-transformer.ts=) already strips parameters that the chatgpt.com API does not support (=max_output_tokens=, =max_completion_tokens=, lines 154-155). The fix adds =delete body.prompt_cache_retention= to the same block. The TypeScript type definition stays; only the runtime value is stripped before transmission. =prompt_cache_key= is NOT stripped (the chatgpt.com API accepts and benefits from it).
+
+** Key Decisions
+
+1. Fix location: =packages/ai/src/providers/openai-codex/request-transformer.ts=, inside =transformRequestBody=, following the existing delete-block pattern.
+2. No change to =resolveOpenAICacheParams= in =utils.ts= — it is correct for api.openai.com callers.
+3. No change to =openai-codex-responses.ts= — the spread call is correct.
+4. The =RequestBody= type interface at line 48 keeps =prompt_cache_retention= — the type is accurate, only runtime stripping is needed.
+5. Test lives in =packages/ai/test/openai-codex.test.ts=, in the existing ="openai-codex request transformer"= describe block.
+
+* Verification
+
+- =bun test packages/ai/test/openai-codex.test.ts= — all tests pass including the new one
+- =bun check:ts= — 0 errors in =packages/ai/=
+- After fix: =transformRequestBody({ ..., prompt_cache_retention: "24h" }, ...)= returns an object with =prompt_cache_retention === undefined= and =prompt_cache_key= intact
+
+* Execution Manifest
+
+** Wave 1 — Single item
+
+| Item | Effort | Description |
+|---+---+---|
+| [[id:BUG-183-fix-prompt-cache-retention-rejected-by-c]] | 30m | Strip =prompt_cache_retention= in =transformRequestBody= + test |
