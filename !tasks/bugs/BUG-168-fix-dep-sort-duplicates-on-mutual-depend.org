@@ -1,0 +1,96 @@
+#+TITLE: Fix dep sort duplicates on mutual-dependency cycles
+#+STATE: DONE
+#+SESSION_ID: 14aeac935310ea85
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-52-45-644Z_14aeac935310ea85.jsonl]]
+#+CUSTOM_ID: BUG-168-fix-dep-sort-duplicates-on-mutual-depend
+#+EFFORT: 15m
+#+LAYER: packages/emacs
+
+NOTE [2026-04-05]: Fixed: moved (push lang visited) and (when-let/push entry sorted) inside the inner (unless (memq lang visiting) ...) block. Verified: (c cpp python) input produces 3 items, no duplicates.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-042-audit-implementation:
+
+Here are my findings:
+
+---
+
+**1. Dep sort emits duplicates on mutual-dependency cycles**
+- **Where**: `packages/emacs/elisp/pi-prelude.el` lines 173-194, `pi-prelude--sort-sources-by-deps`
+- **What**: Mutual deps (c↔cpp, go↔gomod, typescript↔tsx) cause the first language in each cycle to appear twice in the sorted output. Verified: `(c cpp c python)` from a `(c cpp python)` input.
+- **Why**: During bootstrap, `treesit-install-language-grammar` is called twice for `c`, `go`, and `typescript`. Not a crash (second call is a no-op), but wastes time on grammar compilation checks and produces confusing log output.
+- **Effort**: `small` — the `(push lang visited)` and `(push entry sorted)` lines on 189-191 need to be inside the `(unless (memq lang visiting) ...)` block, not outside it.
+
+**2. `installed` field encodes as JSON `null` instead of `false`**
+- **Where**: `packages/emacs/elisp/pi-emacs-tools.el` line 199, `pi-code-languages-handler`
+- **What**: `(treesit-language-available-p lang)` returns `nil` for uninstalled languages. `(installed . nil)` encodes as `{"installed": null}`, not `{"installed": false}`.
+- **Why**: TypeScript `LanguageInfo.installed` is typed `boolean` but receives `null`. The agent sees `"installed": null` which is semantically wrong and could break strict boolean checks.
+- **Effort**: `trivial` — change to `(installed . ,(if installed t :json-false))`.
+
+**3. Schema missing `revision` and `source_dir` for `install_grammar`**
+- **Where**: `packages/coding-agent/src/tools/emacs.ts` lines 50-55 (TypeBox schema)
+- **What**: The schema declares `lang` and `url` but omits `revision` and `source_dir`, even though `tool.ts` reads `args.revision` and `args.source_dir` and the Elisp handler accepts them.
+- **Why**: The agent won't know these parameters exist. With `lenientArgValidation = true` they'd pass through if the agent guesses, but they're invisible in the tool description. Low risk — these are advanced override parameters.
+- **Effort**: `trivial` — add two `Type.Optional(Type.String(...))` entries.
+
+**4. `LanguageInfo.url` typed as required `string` but absent for project-local grammars**
+- **Where**: `packages/emacs/src/types.ts` line 56, `packages/emacs/elisp/pi-emacs-tools.el` lines 210-213
+- **What**: The `LanguageInfo` interface declares `url: string` (required), but the Elisp handler omits `url` for project-local grammars. They only have `lang`, `installed`, and `source`.
+- **Why**: TypeScript code accessing `info.url` on a project-local grammar gets `undefined` despite the type saying it's always present.
+- **Effort**: `trivial` — change `url: string` to `url?: string` in types.ts.
+
+**5. Bare-filename recipe entries can never match**
+- **Where**: `packages/emacs/elisp/pi-treesit-recipes.el` — dockerfile (line 64), make (line 129), ruby (line 168)
+- **What**: Entries like `"Dockerfile"`, `"Containerfile"`, `"Makefile"`, `"Gemfile"` in `:exts` lists will never match because `file-name-extension` returns `nil` for extensionless filenames.
+- **Why**: Not a regression (these filenames were never matched by the old hardcoded tables either), but the recipe entries are misleading — they suggest coverage that doesn't exist. The `languages` command will advertise these extensions, giving the agent false expectations.
+- **Effort**: `small` — either remove bare filenames from `:exts` and document the limitation, or enhance the lookup to check `file-name-nondirectory` against a separate `:filenames` list.
+
+**6. `installed_only: false` treated as truthy in Elisp**
+- **Where**: `packages/emacs/elisp/pi-emacs-tools.el` line 188
+- **What**: JSON `false` decodes to `:json-false` in Elisp, which is non-nil, making `(and installed-only (not installed))` truthy and incorrectly filtering results.
+- **Why**: Low practical risk — the agent would normally omit the parameter rather than send `false`. But the behavior is incorrect if explicitly sent.
+- **Effort**: `trivial` — change to `(and (eq installed-only t) (not installed))`.
+
+* Problem
+
+=pi-prelude--sort-sources-by-deps= in =packages/emacs/elisp/pi-prelude.el= (lines 173-194) has a topological sort that mishandles mutual dependency cycles. Three pairs exist: c↔cpp, go↔gomod, typescript↔tsx.
+
+The =(push lang visited)= and =(push entry sorted)= statements are outside the cycle-guard =(unless (memq lang visiting) ...)= block, so when a cycle is detected and the inner block is skipped, the language still gets pushed to =sorted=. This causes duplicates: verified output =(c cpp c python)= from input =(c cpp python)=.
+
+Impact: =treesit-install-language-grammar= called twice for c, go, and typescript during bootstrap. Not a crash (second call is no-op) but wastes time and produces confusing log output.
+
+* Fix
+
+Move the =(push lang visited)= and =(when-let ((entry ...)) (push entry sorted))= lines inside the =(unless (memq lang visiting) ...)= block, after the recursive descent and the =(setq visiting (delq lang visiting))= cleanup:
+
+#+begin_src elisp
+(visit (lang)
+  (unless (memq lang visited)
+    (unless (memq lang visiting)
+      (push lang visiting)
+      (dolist (dep (pi-treesit-recipe-deps lang))
+        (when (entry-for dep)
+          (visit dep)))
+      (setq visiting (delq lang visiting))
+      ;; These two lines move INSIDE the inner unless:
+      (push lang visited)
+      (when-let ((entry (entry-for lang)))
+        (push entry sorted)))))
+#+end_src
+
+* Verification
+
+#+begin_src bash
+emacs --batch \
+  --eval '(setq load-path (cons "packages/emacs/elisp" load-path))' \
+  -l pi-treesit-recipes \
+  -l pi-prelude \
+  --eval '(let* ((test-sources (list (list (quote c) "url-c") (list (quote cpp) "url-cpp") (list (quote python) "url-py")))
+                 (sorted (pi-prelude--sort-sources-by-deps test-sources))
+                 (langs (mapcar (function car) sorted)))
+           (message "Sorted: %s (count: %d)" langs (length langs))
+           (unless (= (length langs) 3) (error "Expected 3, got %d" (length langs))))'
+#+end_src
+
+Expected: =Sorted: (c cpp python) (count: 3)= — no duplicates.
