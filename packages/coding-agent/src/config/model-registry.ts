@@ -63,7 +63,7 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	plan: { tag: "PLAN", name: "Architect", color: "muted" },
 	review: { tag: "REVIEW", name: "Review", color: "accent" },
 	commit: { tag: "COMMIT", name: "Commit", color: "dim" },
-	task: { tag: "TASK", name: "Subtask", color: "muted" },
+	task: { tag: "TASK", name: "Task", color: "muted" },
 	sniper: { tag: "SNIPER", name: "Sniper", color: "success" },
 	subtask: { tag: "SUBTASK", name: "Subtask", color: "warning" },
 };

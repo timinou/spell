@@ -1,0 +1,77 @@
+#+TITLE: PLAN-141 audit polish
+#+STATE: DONE
+#+SESSION_ID: 14aea846b7f4794b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-33-58-623Z_14aea846b7f4794b.jsonl]]
+#+CUSTOM_ID: PLAN-143-plan-141-audit-polish
+
+NOTE [2026-04-05]: All 5 items completed in parallel wave. Type check passes. No deviations.
+
+
+* Initial Message
+
+no, you cucked up. i want the task and the smol to be separate from the subtask-fast and the subtask-slow
+
+* Context
+
+Post-implementation audit of [[id:PLAN-141-subagent-token-optimization]] identified 6 findings. 5 are actionable, 1 is a noted design trade-off (multiplicative stagger delay — acceptable for typical batch sizes of 2-5, revisit if batch sizes grow).
+
+** Critical bugs (must fix)
+1. Stagger abort in batch scheduler leaks task in ~runningIds~, causing deadlock when ~scheduleBatch~ awaits completion
+2. Async stagger path returns ~undefined!~ violating ~Promise<string>~ contract, creating a latent runtime TypeError in ~formatAsyncResultForFollowUp~
+
+** Polish (should fix)
+3. ~parentOwnedToolNames~ is dead code after PLAN-141 cleared it — empty Set with 3 no-op filter sites
+4. ~task~ and ~subtask~ model roles share identical display name ~\"Subtask\"~ in settings UI
+5. CHANGELOG not updated for any PLAN-141 changes
+
+** Approach
+All fixes are independent, small, and low-risk. Execute in a single parallel wave.
+
+** Key decisions
+- Stagger abort: move stagger block inside ~try~ so ~finally~ always fires — simpler than adding separate cleanup before ~return~
+- Async stagger: ~throw new Error(...)~ instead of ~return~ lets the existing ~catch~ block handle abort correctly
+- Dead code: full removal, not commenting — the mechanism can be re-added if ever needed
+- Stagger delay formula (multiplicative): leave as-is; only suboptimal for 5+ siblings which is rare
+
+* Verification
+
+#+begin_src bash
+bun check:ts
+#+end_src
+
+Manual checks:
+- No ~parentOwnedToolNames~ in codebase after dead code removal
+- No ~undefined!~ in codebase after async fix
+- ~MODEL_ROLES.task.name~ is ~\"Task\"~, ~MODEL_ROLES.subtask.name~ is ~\"Subtask\"~
+- CHANGELOG ~[Unreleased]~ sections contain PLAN-141 entries
+
+* Execution Manifest
+
+** Wave 1 (parallel — all independent)
+- [[id:BUG-164-stagger-abort-leaks-task-in-batch-schedu]] — 15m, batch-scheduler.ts only
+- [[id:BUG-165-async-stagger-returns-undefined-violatin]] — 10m, task/index.ts only
+- [[id:FEAT-338-remove-dead-parentownedtoolnames-filteri]] — 15m, executor.ts only
+- [[id:BUG-166-task-and-subtask-model-roles-share-ident]] — 5m, model-registry.ts only
+- [[id:FEAT-339-add-plan-141-entries-to-coding-agent-cha]] — 10m, CHANGELOG.md files only
+
+
+** Completion [2026-04-05]
+
+*** Verification
+- ~bun check:ts~: tsgo type check passed. Biome reported 9 pre-existing import-order issues in unrelated files; 0 errors in modified files (~bunx biome check~ on 4 modified source files: clean).
+- No ~parentOwnedToolNames~ references remain in ~packages/coding-agent/src/~ (grep: 0 matches).
+- No ~undefined!~ in ~packages/coding-agent/src/task/index.ts~ (grep: 0 matches; one pre-existing ~undefined!~ in ~canvas.ts~ is unrelated).
+- ~MODEL_ROLES.task.name~ is ~\"Task\"~, ~MODEL_ROLES.subtask.name~ is ~\"Subtask\"~ — distinct display names confirmed.
+- ~packages/coding-agent/CHANGELOG.md~ has 4 Added entries and 4 Changed entries for PLAN-141 under ~[Unreleased]~.
+- ~packages/utils/CHANGELOG.md~ created with ~formatCost()~ entry under ~[Unreleased]~.
+
+*** Artifacts
+- Modified: ~packages/coding-agent/src/task/batch-scheduler.ts~ (stagger block moved inside try)
+- Modified: ~packages/coding-agent/src/task/index.ts~ (return undefined! -> throw)
+- Modified: ~packages/coding-agent/src/task/executor.ts~ (parentOwnedToolNames removed)
+- Modified: ~packages/coding-agent/src/config/model-registry.ts~ (task name: Subtask -> Task)
+- Modified: ~packages/coding-agent/CHANGELOG.md~ (PLAN-141 entries)
+- Created: ~packages/utils/CHANGELOG.md~ (formatCost entry)
+
+*** Deviations
+None.

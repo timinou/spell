@@ -719,7 +719,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							const myLaunchIndex = asyncLaunchCount++;
 							if (asyncStaggerMs > 0 && myLaunchIndex > 0) {
 								await Bun.sleep(asyncStaggerMs * myLaunchIndex);
-								if (runSignal.aborted) return undefined!;
+								if (runSignal.aborted) throw new Error("Aborted during stagger delay");
 							}
 							const startedAt = Date.now();
 							const progress = progressByTaskId.get(logicalId);

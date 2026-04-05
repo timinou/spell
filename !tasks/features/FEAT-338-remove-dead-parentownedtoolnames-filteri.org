@@ -1,0 +1,44 @@
+#+TITLE: Remove dead parentOwnedToolNames filtering
+#+STATE: DONE
+#+SESSION_ID: 14aea846b7f4794b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-33-58-623Z_14aea846b7f4794b.jsonl]]
+#+CUSTOM_ID: FEAT-338-remove-dead-parentownedtoolnames-filteri
+#+EFFORT: 15m
+#+LAYER: task
+
+NOTE [2026-04-05]: Removed: deleted empty Set declaration and 3 no-op filter sites.
+
+* Initial Message
+
+no, you cucked up. i want the task and the smol to be separate from the subtask-fast and the subtask-slow
+
+~parentOwnedToolNames~ was cleared to ~new Set<string>()~ in PLAN-141 (FEAT-333) to enable ~todo_write~ for subagents. The variable and its three filter sites are now dead code — the filter always passes through, the conditional branch at lines 1122-1123 is unreachable.
+
+* Implementation
+** Remove variable and all filter sites (packages/coding-agent/src/task/executor.ts)
+1. Delete ~const parentOwnedToolNames = new Set<string>();~ (~line 1063)
+2. Replace the filter+conditional block at lines 1120-1124:
+   #+begin_src typescript
+   // Before:
+   const subagentToolNames = session.getActiveToolNames();
+   const filteredSubagentTools = subagentToolNames.filter(name => !parentOwnedToolNames.has(name));
+   if (filteredSubagentTools.length !== subagentToolNames.length) {
+       await session.setActiveToolsByName(filteredSubagentTools);
+   }
+
+   // After: (delete entire block — no filtering needed)
+   #+end_src
+3. Simplify the ~setActiveTools~ callback at line 1168:
+   #+begin_src typescript
+   // Before:
+   setActiveTools: (toolNames: string[]) =>
+       session.setActiveToolsByName(toolNames.filter(name => !parentOwnedToolNames.has(name))),
+
+   // After:
+   setActiveTools: (toolNames: string[]) => session.setActiveToolsByName(toolNames),
+   #+end_src
+
+* Acceptance
+- ~bun check:ts~ passes
+- No references to ~parentOwnedToolNames~ in codebase
+- Subagent tool sets are unfiltered (same runtime behavior as before since Set was empty)

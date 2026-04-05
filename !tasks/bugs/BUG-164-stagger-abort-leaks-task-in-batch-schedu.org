@@ -1,0 +1,46 @@
+#+TITLE: Stagger abort leaks task in batch scheduler runningIds
+#+STATE: DONE
+#+SESSION_ID: 14aea846b7f4794b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-33-58-623Z_14aea846b7f4794b.jsonl]]
+#+CUSTOM_ID: BUG-164-stagger-abort-leaks-task-in-batch-schedu
+#+EFFORT: 15m
+#+LAYER: task
+
+NOTE [2026-04-05]: Fixed: moved stagger block inside try so finally always fires. Abort now throws instead of returning.
+
+* Initial Message
+
+no, you cucked up. i want the task and the smol to be separate from the subtask-fast and the subtask-slow
+
+Introduced in PLAN-141 (commit 134d9eeaf). When ~signal.aborted~ fires after ~Bun.sleep()~ in the stagger block, ~return~ exits the async IIFE but bypasses the ~try/catch/finally~ that manages ~runningIds~ and ~finishTask~. The task stays orphaned in ~runningIds~, blocking a concurrency slot. ~abortPendingTasks()~ skips it because it explicitly skips tasks in ~runningIds~. If this is the last unresolved task, ~scheduleBatch~ deadlocks.
+
+* Implementation
+** Move stagger block inside try (packages/coding-agent/src/task/batch-scheduler.ts)
+Move the stagger sleep + abort check inside the ~try~ block, after the ~taskIndex~ lookup but before ~task.run(signal)~:
+#+begin_src typescript
+void (async () => {
+    const taskIndex = graph.indexById.get(nextId);
+    if (taskIndex === undefined) {
+        runningIds.delete(nextId);
+        finishTask(nextId, { id: nextId, status: "failed", error: `...` });
+        return;
+    }
+    const task = tasks[taskIndex];
+    try {
+        // Stagger sibling launches for prompt cache warming
+        const myLaunchIndex = launchCount++;
+        if (staggerMs > 0 && myLaunchIndex > 0) {
+            await Bun.sleep(staggerMs * myLaunchIndex);
+            if (signal.aborted) throw new Error("Aborted during stagger delay");
+        }
+        const result = await task.run(signal);
+        // ... rest of try
+    } catch (error) { ... } finally { ... }
+})();
+#+end_src
+This ensures the ~finally~ block always runs and cleans up ~runningIds~ + calls ~pump()~.
+
+* Acceptance
+- ~bun check:ts~ passes
+- Stagger abort path exercises ~finally~ block: ~runningIds.delete~ and ~finishTask~ are called
+- No orphaned tasks in ~runningIds~ after batch abort
