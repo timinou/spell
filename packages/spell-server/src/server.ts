@@ -17,6 +17,7 @@ import { startHttpServer } from "./http/server";
 import { GoalScheduler } from "./scheduler/goal-scheduler";
 import { AutonomyLifecycle } from "./session/autonomy-lifecycle";
 import { SessionManager } from "./session/session-manager";
+import { SocketServer, SocketSessionRegistry } from "./socket";
 import { StateStoreManager } from "./state/store-manager";
 import { TelegramBotService, type TelegramBotServiceOptions } from "./telegram/service";
 import { WorkflowEngine } from "./workflow";
@@ -24,6 +25,7 @@ import { generateOperatorActionHandler } from "./workflow/operator-action-genera
 
 export interface SpellServer {
 	telegramBotActive: boolean;
+	sessionRegistry?: SocketSessionRegistry;
 	stop(): Promise<void>;
 }
 
@@ -150,6 +152,14 @@ export async function startSpellServer(
 		stateStoreManager,
 		workflowEngine,
 	});
+	let sessionRegistry: SocketSessionRegistry | undefined;
+	let socketServer: SocketServer | undefined;
+	if (config.server.socket) {
+		sessionRegistry = new SocketSessionRegistry();
+		socketServer = new SocketServer(config.server.socket.path, sessionRegistry);
+		await socketServer.start();
+	}
+
 	const createTelegramBotService =
 		dependencies.createTelegramBotService ?? (options => new TelegramBotService(options));
 	let telegramBot: Pick<TelegramBotService, "start" | "stop"> | null = null;
@@ -159,6 +169,8 @@ export async function startSpellServer(
 			telegramBot = createTelegramBotService({
 				config: config.channels.telegram,
 				operatorActionBridge: operatorActionHandler,
+				sessionRegistry,
+				notificationSender,
 			});
 			await telegramBot.start();
 			telegramBotActive = true;
@@ -177,10 +189,14 @@ export async function startSpellServer(
 
 		return {
 			telegramBotActive,
+			sessionRegistry,
 			async stop(): Promise<void> {
 				scheduler.stop();
 				httpServer.stop();
 				stateStoreManager.close();
+				if (socketServer) {
+					await socketServer.stop();
+				}
 
 				if (telegramBot) {
 					await telegramBot.stop();
@@ -208,11 +224,14 @@ export async function startSpellServer(
 		scheduler.stop();
 		httpServer.stop();
 		stateStoreManager.close();
-		if (telegramBot) {
-			await Promise.allSettled([telegramBot.stop(), sessionManager.killAll()]);
-		} else {
-			await sessionManager.killAll();
+		const cleanupTasks: Array<Promise<unknown>> = [sessionManager.killAll()];
+		if (socketServer) {
+			cleanupTasks.push(socketServer.stop());
 		}
+		if (telegramBot) {
+			cleanupTasks.push(telegramBot.stop());
+		}
+		await Promise.allSettled(cleanupTasks);
 		throw error;
 	}
 }

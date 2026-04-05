@@ -110,6 +110,14 @@ export function parseServerConfig(kdlText: string, env?: Record<string, string |
 		throw new Error("server.http.auth is required");
 	}
 
+	const socketNode = document.findNodeByName("socket");
+	const socketPathValue = socketNode?.getProperty("path") ?? "~/.spell/server.sock";
+	const socket = socketNode
+		? {
+				path: resolveEnvValue<string>(socketPathValue, "string", "server.socket.path", env),
+			}
+		: undefined;
+
 	return {
 		http: {
 			port,
@@ -117,5 +125,6 @@ export function parseServerConfig(kdlText: string, env?: Record<string, string |
 			webhookSecret,
 			goalTokens: Object.keys(goalTokens).length > 0 ? goalTokens : undefined,
 		},
+		socket,
 	};
 }

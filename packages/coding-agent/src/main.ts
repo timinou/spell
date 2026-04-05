@@ -35,6 +35,7 @@ import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
 import browseFindingsPrompt from "./prompts/agents/browse-findings.md" with { type: "text" };
 import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "./sdk";
+import { SessionBridgeClient } from "./session-bridge";
 import type { AgentSession } from "./session/agent-session";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
 import { resolvePromptInput } from "./system-prompt";
@@ -120,6 +121,22 @@ async function runInteractiveMode(
 	initialMessage?: string,
 	initialImages?: ImageContent[],
 ): Promise<void> {
+	let sessionBridge: SessionBridgeClient | undefined;
+	try {
+		const cwd = session.sessionManager.getCwd();
+		const bridgeClient = new SessionBridgeClient({
+			sessionId: session.sessionId || `tui-${process.pid}`,
+			pid: process.pid,
+			cwd,
+			mode: "interactive",
+			startedAt: Date.now(),
+			projectName: path.basename(cwd),
+		});
+		const connected = await bridgeClient.connect();
+		if (connected) {
+			sessionBridge = bridgeClient;
+		}
+	} catch {}
 	const mode = new InteractiveMode(
 		session,
 		version,
@@ -129,6 +146,7 @@ async function runInteractiveMode(
 		mcpManager,
 		taskManager,
 		eventBus,
+		sessionBridge,
 	);
 
 	await mode.init();

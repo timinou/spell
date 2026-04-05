@@ -45,6 +45,8 @@ import { getModeCommandDefs, registerModeCommands } from "../slash-commands/buil
 import { STTController, type SttState } from "../stt";
 import type { ExitPlanModeDetails } from "../tools";
 import { isDelegatedTask } from "../tools/todo-write";
+import { raceWithBridge } from "../session-bridge/race";
+import type { SessionBridgeClient } from "../session-bridge/client";
 import type { EventBus } from "../utils/event-bus";
 import { setTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
@@ -251,6 +253,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	mcpManager?: import("../mcp").MCPManager;
 	taskManager?: import("../orchestrators/canvas-task-manager").CanvasTaskManager;
 	eventBus?: EventBus;
+	sessionBridge?: SessionBridgeClient;
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 
 	readonly #btwController: BtwController;
@@ -280,6 +283,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		mcpManager?: import("../mcp").MCPManager,
 		taskManager?: import("../orchestrators/canvas-task-manager").CanvasTaskManager,
 		eventBus?: EventBus,
+		sessionBridge?: SessionBridgeClient,
 	) {
 		this.session = session;
 		this.sessionManager = session.sessionManager;
@@ -293,6 +297,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.mcpManager = mcpManager;
 		this.taskManager = taskManager;
 		this.eventBus = eventBus;
+		this.sessionBridge = sessionBridge;
 
 		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
 		this.ui.setClearOnShrink(settings.get("clearOnShrink"));
@@ -1374,7 +1379,23 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.isPendingApproval = true;
 		this.#niriListener?.();
-		const choice = await this.showHookSelector("Plan mode - next step", selectorOptions);
+		const { value: choice } = await raceWithBridge(
+			this.showHookSelector("Plan mode - next step", selectorOptions),
+			this.sessionBridge,
+			{
+				kind: "plan_approval",
+				title: details.title ?? "Plan",
+				itemId: details.itemId ?? "",
+				planSummary: planContent.slice(0, 2000),
+				selectorOptions,
+			},
+			response => {
+				if (response.kind === "plan_approval") {
+					return response.selectedOption;
+				}
+				return undefined;
+			},
+		);
 		this.isPendingApproval = false;
 		this.#niriListener?.();
 

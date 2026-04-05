@@ -1,0 +1,163 @@
+export type BlockingEventKind = "plan_approval" | "ask" | "pending_action" | "hook_selector" | "hook_input";
+
+interface SocketMessageBase {
+	type: string;
+	timestamp: number;
+}
+
+export interface RegisterSocketClientMessage extends SocketMessageBase {
+	type: "register";
+	sessionId: string;
+	pid: number;
+	cwd: string;
+	mode: string;
+	startedAt: number;
+	projectName: string;
+}
+
+export interface DeregisterSocketClientMessage extends SocketMessageBase {
+	type: "deregister";
+}
+
+export interface PlanApprovalBlockingEventPayload {
+	kind: "plan_approval";
+	eventId: string;
+	title: string;
+	itemId: string;
+	planSummary: string;
+	selectorOptions: string[];
+}
+
+export interface AskOption {
+	label: string;
+}
+
+export interface AskQuestion {
+	id: string;
+	question: string;
+	options: AskOption[];
+	recommended?: number;
+	multi?: boolean;
+}
+
+export interface AskBlockingEventPayload {
+	kind: "ask";
+	eventId: string;
+	questions: AskQuestion[];
+}
+
+export interface PendingActionBlockingEventPayload {
+	kind: "pending_action";
+	eventId: string;
+	actionType: string;
+	description: string;
+}
+
+export interface HookSelectorBlockingEventPayload {
+	kind: "hook_selector";
+	eventId: string;
+	title: string;
+	options: string[];
+}
+
+export interface HookInputBlockingEventPayload {
+	kind: "hook_input";
+	eventId: string;
+	title: string;
+	placeholder?: string;
+}
+
+export type BlockingEventPayload =
+	| PlanApprovalBlockingEventPayload
+	| AskBlockingEventPayload
+	| PendingActionBlockingEventPayload
+	| HookSelectorBlockingEventPayload
+	| HookInputBlockingEventPayload;
+
+export interface BlockingEventSocketClientMessage extends SocketMessageBase {
+	type: "blocking_event";
+	payload: BlockingEventPayload;
+}
+
+export interface HeartbeatSocketClientMessage extends SocketMessageBase {
+	type: "heartbeat";
+	status: string;
+}
+
+export interface EventResolvedSocketClientMessage extends SocketMessageBase {
+	type: "event_resolved";
+	eventId: string;
+}
+
+export type SocketClientMessage =
+	| RegisterSocketClientMessage
+	| DeregisterSocketClientMessage
+	| BlockingEventSocketClientMessage
+	| HeartbeatSocketClientMessage
+	| EventResolvedSocketClientMessage;
+
+export interface RegisteredSocketServerMessage extends SocketMessageBase {
+	type: "registered";
+	serverVersion: string;
+	registeredAt: number;
+}
+
+export interface PlanApprovalEventResponsePayload {
+	kind: "plan_approval";
+	selectedOption: string;
+}
+
+export interface AskAnswer {
+	questionId: string;
+	selectedIndices: number[];
+}
+
+export interface AskEventResponsePayload {
+	kind: "ask";
+	answers: AskAnswer[];
+}
+
+export interface HookSelectorEventResponsePayload {
+	kind: "hook_selector";
+	selectedIndex: number;
+}
+
+export interface HookInputEventResponsePayload {
+	kind: "hook_input";
+	value: string;
+}
+
+export type EventResponsePayload =
+	| PlanApprovalEventResponsePayload
+	| AskEventResponsePayload
+	| HookSelectorEventResponsePayload
+	| HookInputEventResponsePayload;
+
+export interface EventResponseSocketServerMessage extends SocketMessageBase {
+	type: "event_response";
+	eventId: string;
+	payload: EventResponsePayload;
+}
+
+export interface EventCancelledSocketServerMessage extends SocketMessageBase {
+	type: "event_cancelled";
+	eventId: string;
+	reason?: string;
+}
+
+export type SocketServerMessage =
+	| RegisteredSocketServerMessage
+	| EventResponseSocketServerMessage
+	| EventCancelledSocketServerMessage;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+export function isSocketClientMessage(value: unknown): value is SocketClientMessage {
+	if (!isRecord(value)) {
+		return false;
+	}
+
+	return typeof value.type === "string" && typeof value.timestamp === "number";
+}

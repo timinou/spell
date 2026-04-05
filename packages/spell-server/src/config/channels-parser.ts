@@ -1,6 +1,6 @@
 import * as path from "node:path";
+import { logger, isEnoent } from "@oh-my-pi/pi-utils";
 import { type Node, parse } from "@bgotink/kdl";
-import { isEnoent } from "@oh-my-pi/pi-utils";
 import { resolveEnvString } from "./env-resolver";
 import type {
 	ChannelsConfig,
@@ -17,7 +17,13 @@ import type {
 const DEFAULT_UPLOAD_DIR = "/tmp/spell-telegram-uploads";
 const DEFAULT_IDLE_TIMEOUT = 300; // 5 minutes
 const DEFAULT_MAX_SESSIONS = 10;
-
+const SESSION_NOTIFICATION_EVENT_KINDS = new Set([
+	"plan_approval",
+	"ask",
+	"pending_action",
+	"hook_selector",
+	"hook_input",
+]);
 export function parseChannelsConfig(
 	kdlText: string,
 	configDir?: string,
@@ -42,7 +48,7 @@ export function parseChannelsConfig(
 	const users: Record<string, TelegramUserConfig> = {};
 	let autoSendImages = true;
 	let voice: VoiceConfig | undefined;
-
+	let sessionNotifications: NonNullable<NonNullable<ChannelsConfig["telegram"]>["sessionNotifications"]> | undefined;
 	for (const child of telegramNode.children?.nodes ?? []) {
 		const name = child.getName();
 
@@ -151,6 +157,10 @@ export function parseChannelsConfig(
 		}
 		if (name === "voice") {
 			voice = parseVoiceNode(child, "channels.telegram.voice", env);
+			continue;
+		}
+		if (name === "session-notifications") {
+			sessionNotifications = parseSessionNotificationsNode(child);
 		}
 	}
 
@@ -191,6 +201,7 @@ export function parseChannelsConfig(
 			users,
 			autoSendImages,
 			voice,
+			sessionNotifications,
 		},
 	};
 }
@@ -295,6 +306,56 @@ function parseUserNode(node: Node, users: Record<string, TelegramUserConfig>): v
 		projects: userProjects,
 		voice: userVoice,
 	};
+}
+
+function parseSessionNotificationsNode(
+	node: Node,
+	context = "channels.telegram.session-notifications",
+): NonNullable<NonNullable<ChannelsConfig["telegram"]>["sessionNotifications"]> {
+	let events: string[] = [];
+	let notifyOwners = true;
+	const additionalChatIds: number[] = [];
+
+	for (const child of node.children?.nodes ?? []) {
+		const name = child.getName();
+
+		if (name === "events") {
+			const values = child.getArguments();
+			if (!values.every(value => typeof value === "string")) {
+				throw new Error(`${context}.events must contain only string event kinds`);
+			}
+
+			events = values.filter((value): value is string => typeof value === "string");
+			for (const event of events) {
+				if (!SESSION_NOTIFICATION_EVENT_KINDS.has(event)) {
+					logger.warn("Ignoring unknown telegram session notification event kind", {
+						eventKind: event,
+						context,
+					});
+				}
+			}
+			continue;
+		}
+
+		if (name === "notify-owners") {
+			const value = child.getArgument(0);
+			if (typeof value !== "boolean") {
+				throw new Error(`${context}.notify-owners must be a boolean`);
+			}
+			notifyOwners = value;
+			continue;
+		}
+
+		if (name === "notify-chat-id") {
+			const value = child.getArgument(0);
+			if (typeof value !== "number" || !Number.isFinite(value)) {
+				throw new Error(`${context}.notify-chat-id must be a number`);
+			}
+			additionalChatIds.push(value);
+		}
+	}
+
+	return { events, notifyOwners, additionalChatIds };
 }
 
 const VALID_STT_PROVIDERS = new Set(["deepgram", "openai"]);

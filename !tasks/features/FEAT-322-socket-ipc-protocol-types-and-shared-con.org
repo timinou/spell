@@ -1,0 +1,55 @@
+#+TITLE: Socket IPC protocol types and shared contract
+#+STATE: DONE
+#+SESSION_ID: 14aea191293deb6d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-04-39-844Z_14aea191293deb6d.jsonl]]
+#+CUSTOM_ID: FEAT-322-socket-ipc-protocol-types-and-shared-con
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: shared
+
+* Initial Message
+
+my friend, imagine I have a local telegram server to manage my sessions. is there a way in spell taht enables the telegram bot (i.e. the spell server) to see spell sessions currently running and to get notifications e.g. when another session on the computer is ready to tell me that a plan is ready to be approv? and then it shows me that 'plan waiting for approval' through the easiest way you can think of? This is a design question. Maybe look at howother pi codign agent forks and ;odules and extensions do it. Let's come up ith a solution
+
+Define the JSON-lines IPC protocol types shared between spell-server (socket server) and coding-agent (bridge client). These types define the contract for session registration, blocking event notification, and remote response routing over a Unix domain socket.
+
+* Protocol Design
+
+Messages are newline-delimited JSON objects. Each message has a =type= field discriminating the union.
+
+** Client -> Server Messages
+
+- =register= — session announces itself on connect (sessionId, pid, cwd, mode, startedAt, projectName)
+- =deregister= — clean session shutdown
+- =blocking_event= — session entered a blocking state (kind: plan_approval | ask | pending_action | hook_selector | hook_input). Payload varies by kind:
+  - plan_approval: title, itemId, childItemIds, planContent (summary), waves
+  - ask: questions array with id, question, options, recommended, multi
+  - pending_action: actionType, description
+  - hook_selector: title, options
+  - hook_input: title, placeholder
+- =heartbeat= — periodic keepalive with session status
+
+** Server -> Client Messages
+
+- =registered= — ack after successful registration
+- =event_response= — response to a blocking_event (eventId, response payload matching the event kind)
+- =event_cancelled= — server cannot route the response (no Telegram user responded, timeout)
+
+** Design Constraints
+
+- Protocol types live in =packages/spell-server/src/socket/types.ts= — coding-agent imports them via relative path or re-export. No circular package dependency.
+- Message IDs use the existing Snowflake generator for correlation.
+- Events use a =eventId= for request-response correlation.
+- The =blocking_event= payload for plan_approval mirrors =ExitPlanModeDetails= from coding-agent — reuse the shape, don't duplicate the type. Reference the fields by name in the protocol type.
+- All messages include a =timestamp= field (epoch ms).
+
+* Files
+
+- Create: =packages/spell-server/src/socket/types.ts=
+- Pattern: Follow =packages/spell-server/src/rpc/types.ts= for type organization (discriminated unions, clean interfaces)
+
+* Verification
+
+- Types compile cleanly with =bun check:ts=
+- No circular imports between packages
+- All message types have corresponding test assertions in =packages/spell-server/test/socket/types.test.ts= that verify discriminant narrowing works (type-level tests using =expectTypeOf= or similar)
