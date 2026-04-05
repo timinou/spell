@@ -1,5 +1,14 @@
 import { logger } from "@oh-my-pi/pi-utils";
-import type { BufferInfo, CodeEditOp, CodeEditResult, EmacsCodeClient, OutlineEntry, Resolution } from "./types";
+import type {
+	BufferInfo,
+	CodeEditOp,
+	CodeEditResult,
+	EmacsCodeClient,
+	InstallResult,
+	LanguageInfo,
+	OutlineEntry,
+	Resolution,
+} from "./types";
 
 // ---------------------------------------------------------------------------
 // Re-export interface so callers can import it from this module too.
@@ -68,6 +77,21 @@ export async function createEmacsClient(socketPath: string, socatPath?: string):
 				...(line !== undefined ? { line } : {}),
 				...(column !== undefined ? { column } : {}),
 			});
+		},
+
+		async languages(installedOnly?: boolean): Promise<LanguageInfo[]> {
+			return callToolOnce(socat, socketPath, "code-languages", {
+				...(installedOnly !== undefined ? { installed_only: installedOnly } : {}),
+			}) as Promise<LanguageInfo[]>;
+		},
+
+		async installGrammar(lang: string, url?: string, revision?: string, sourceDir?: string): Promise<InstallResult> {
+			return callToolOnce(socat, socketPath, "code-install-grammar", {
+				lang,
+				...(url !== undefined ? { url } : {}),
+				...(revision !== undefined ? { revision } : {}),
+				...(sourceDir !== undefined ? { source_dir: sourceDir } : {}),
+			}) as Promise<InstallResult>;
 		},
 
 		async close(): Promise<void> {

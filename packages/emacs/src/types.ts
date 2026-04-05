@@ -50,6 +50,22 @@ export interface CodeEditResult {
 	error?: string;
 }
 
+export interface LanguageInfo {
+	lang: string;
+	installed: boolean;
+	url: string;
+	extensions?: string[];
+	mode?: string;
+	error?: string;
+	source?: string;
+}
+
+export interface InstallResult {
+	success: boolean;
+	lang: string;
+	error?: string;
+}
+
 export interface EmacsCodeClient {
 	read(file: string, resolution?: Resolution, offset?: number, limit?: number): Promise<string>;
 	outline(file: string, depth?: number): Promise<OutlineEntry[]>;
@@ -57,6 +73,8 @@ export interface EmacsCodeClient {
 	buffers(): Promise<BufferInfo[]>;
 	bufferDiff(file: string): Promise<string>;
 	navigate(file: string, action: string, line?: number, column?: number): Promise<unknown>;
+	languages(installedOnly?: boolean): Promise<LanguageInfo[]>;
+	installGrammar(lang: string, url?: string, revision?: string, sourceDir?: string): Promise<InstallResult>;
 	callTool(name: string, args: Record<string, unknown>): Promise<unknown>;
 	close(): Promise<void>;
 }
