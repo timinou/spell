@@ -40,6 +40,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { getOpenAIStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
+import { pushFallbackError } from "../utils/provider-error-boundary";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
 import {
 	CODEX_BASE_URL,
@@ -1321,37 +1322,41 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			stream.push({ type: "done", reason: message.stopReason as "stop" | "length" | "toolUse", message });
 			stream.end();
 		} catch (error) {
-			const failureContext =
-				processingContext ??
-				({
-					model,
-					output,
-					stream,
-					options,
-					requestSetup,
-					requestContext: {
-						apiKey: "",
-						accountId: "",
-						baseUrl: model.baseUrl || CODEX_BASE_URL,
-						url: "",
-						requestHeaders: {},
-						transformedBody: { model: model.id },
-						rawRequestDump: {
-							provider: model.provider,
-							api: output.api,
-							model: model.id,
-							method: "POST",
+			try {
+				const failureContext =
+					processingContext ??
+					({
+						model,
+						output,
+						stream,
+						options,
+						requestSetup,
+						requestContext: {
+							apiKey: "",
+							accountId: "",
+							baseUrl: model.baseUrl || CODEX_BASE_URL,
 							url: "",
-							body: { model: model.id },
+							requestHeaders: {},
+							transformedBody: { model: model.id },
+							rawRequestDump: {
+								provider: model.provider,
+								api: output.api,
+								model: model.id,
+								method: "POST",
+								url: "",
+								body: { model: model.id },
+							},
 						},
-					},
-					startTime,
-				} satisfies CodexStreamProcessingContext);
-			const failure = await handleCodexStreamFailure(failureContext, error);
-			stream.push({ type: "error", reason: failure.stopReason as "error" | "aborted", error: failure });
-			stream.end();
+						startTime,
+					} satisfies CodexStreamProcessingContext);
+				const failure = await handleCodexStreamFailure(failureContext, error);
+				stream.push({ type: "error", reason: failure.stopReason as "error" | "aborted", error: failure });
+				stream.end();
+			} catch (innerError) {
+				pushFallbackError(stream, model, innerError);
+			}
 		}
-	})();
+	})().catch(err => pushFallbackError(stream, model, err));
 
 	return stream;
 };

@@ -194,6 +194,12 @@ export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
 	attribution?: MessageAttribution;
 }
 
+/** Crash marker entry - written to session JSONL when the process dies unexpectedly. */
+export interface CrashMarkerEntry extends SessionEntryBase {
+	type: "crash";
+	reason: string;
+}
+
 /** Session entry - has id/parentId for tree structure (returned by "read" methods in SessionManager) */
 export type SessionEntry =
 	| SessionMessageEntry
@@ -207,7 +213,8 @@ export type SessionEntry =
 	| LabelEntry
 	| TtsrInjectionEntry
 	| SessionInitEntry
-	| ModeChangeEntry;
+	| ModeChangeEntry
+	| CrashMarkerEntry;
 
 /** Raw file entry (includes header) */
 export type FileEntry = SessionHeader | SessionEntry;
@@ -1998,6 +2005,26 @@ export class SessionManager {
 		};
 		this.#appendEntry(entry);
 		return entry.id;
+	}
+
+	/**
+	 * Append a crash marker as child of current leaf.
+	 * Called during postmortem cleanup when the process is dying unexpectedly.
+	 * No-op if the session is already closed.
+	 */
+	appendCrashMarker(reason: string): void {
+		const entry: CrashMarkerEntry = {
+			type: "crash",
+			id: Snowflake.next(),
+			parentId: this.#leafId,
+			timestamp: new Date().toISOString(),
+			reason,
+		};
+		try {
+			this.#appendEntry(entry);
+		} catch {
+			// Best-effort: don't let crash marker failures prevent other cleanup
+		}
 	}
 
 	/**

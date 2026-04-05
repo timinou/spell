@@ -928,3 +928,120 @@ describe("agentLoopContinue with AgentMessage", () => {
 		expect(messages[0].role).toBe("assistant");
 	});
 });
+
+describe("agent loop error boundaries", () => {
+	it("emits agent_end when streamFn throws unrecoverably", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+
+		const userPrompt: AgentMessage = createUserMessage("Hello");
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		// streamFn that always throws a non-retryable error
+		const streamFn = () => {
+			throw new Error("Provider connection exploded");
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([userPrompt], context, config, undefined, streamFn);
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const eventTypes = events.map(e => e.type);
+		expect(eventTypes).toContain("agent_start");
+		expect(eventTypes).toContain("agent_end");
+
+		// Stream should complete cleanly (no unhandled rejection)
+		const messages = await stream.result();
+		// Only the user prompt should be in messages (no assistant response was generated)
+		expect(messages.length).toBe(1);
+		expect(messages[0].role).toBe("user");
+	});
+
+	it("emits agent_end when streamFn returns a stream that errors during iteration", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+
+		const userPrompt: AgentMessage = createUserMessage("Hello");
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		// streamFn that returns a stream which emits an error during processing
+		const streamFn = () => {
+			const inner = new MockAssistantStream();
+			queueMicrotask(() => {
+				// Push an error event (simulating provider error)
+				const errorMsg = createAssistantMessage([], "error");
+				errorMsg.errorMessage = "API rate limited";
+				inner.push({ type: "error", reason: "error", error: errorMsg });
+			});
+			return inner;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([userPrompt], context, config, undefined, streamFn);
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const eventTypes = events.map(e => e.type);
+		expect(eventTypes).toContain("agent_start");
+		expect(eventTypes).toContain("agent_end");
+
+		const messages = await stream.result();
+		// Should have user message + the error assistant message
+		expect(messages.length).toBe(2);
+		expect(messages[1].role).toBe("assistant");
+		if (messages[1].role === "assistant") {
+			expect(messages[1].stopReason).toBe("error");
+		}
+	});
+
+	it("agentLoopContinue emits agent_end when streamFn throws", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [createUserMessage("Hello")],
+			tools: [],
+		};
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		const streamFn = () => {
+			throw new Error("Provider connection exploded");
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoopContinue(context, config, undefined, streamFn);
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const eventTypes = events.map(e => e.type);
+		expect(eventTypes).toContain("agent_start");
+		expect(eventTypes).toContain("agent_end");
+
+		// Stream should complete cleanly
+		const messages = await stream.result();
+		expect(messages.length).toBe(0); // No new messages generated
+	});
+});

@@ -1,0 +1,137 @@
+#+TITLE: Crash diagnostics lost on SIGHUP and logger never flushes
+#+STATE: DONE
+#+SESSION_ID: 14aee9d600539be3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-20-24-705Z_14aee9d600539be3.jsonl]]
+#+CUSTOM_ID: BUG-180-crash-diagnostics-lost-on-sighup-and-log
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: utils
+#+DEPENDS: BUG-179-provider-iife-catch-block-can-produce-un
+
+NOTE [2026-04-05]: All three mechanisms implemented:\n1. Crash reports for SIGHUP/SIGTERM/SIGINT via widened writeCrashReport\n2. Logger flush via logger.close() with 2-second timeout in postmortem cleanup\n3. CrashMarkerEntry in session JSONL via appendCrashMarker wired into interactive-mode cleanup\nAll tests pass.
+
+* Initial Message
+
+this session just crashed:
+
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T15-51-56-633Z_14
+ aee351f66ef5e7.jsonl
+ ID: 14aee351f66ef5e7
+
+
+Can you tell me why?
+
+* Problem
+Three gaps in crash diagnostics cause 0-byte log files and no crash report when the process dies:
+
+1. *SIGHUP/SIGTERM don't write crash reports*: ~writeCrashReport()~ is only called for ~uncaughtException~ and ~unhandledRejection~. When the terminal dies (SIGHUP), no crash report JSON is written to ~~/.spell/reports/~.
+
+2. *Logger never flushes before exit*: Winston uses async file transport. The postmortem handler calls ~logger.error()~ then ~process.exit()~ — buffered log entries are lost. The logger has no ~flush()~ or ~close()~ method exposed.
+
+3. *No session crash marker*: When the agent dies mid-turn, the session JSONL ends with a tool result and no assistant response. There's no entry to distinguish "crashed" from "still generating." The existing ~postmortem.register("session-manager-flush", ...)~ callback only flushes pending writes but doesn't write a crash marker.
+
+* Design Decisions
+1. *Crash reports for all fatal signals*: Extend ~writeCrashReport~ to accept signal reasons (SIGHUP, SIGTERM, SIGINT). Create a synthetic ~Error("Process received SIGHUP")~ to keep one crash report format. Call ~writeCrashReport~ in the SIGHUP, SIGTERM, and SIGINT handlers.
+
+2. *Logger flush via ~winstonLogger.close()~*: Add a ~close()~ export to the logger module that calls ~winstonLogger.close()~ (returns a Promise). Call it in the postmortem ~runCleanup~ chain with a 2-second timeout. After close, the logger is unusable — this is fine since we're about to ~process.exit()~.
+
+3. *Session crash marker entry*: Add a new ~CrashMarkerEntry~ type to session-manager. Extend the existing ~"session-manager-flush"~ cleanup callback in ~interactive-mode.ts~ to write a crash marker entry before flushing, but only for crash reasons (not normal EXIT). The marker is: ~{ type: "crash", id: <snowflake>, parentId: <lastLeafId>, timestamp: <iso>, reason: "sighup" | "sigterm" | "uncaught_exception" | "unhandled_rejection" }~.
+
+* Files to Modify
+
+** ~packages/utils/src/postmortem.ts~
+- Extend SIGHUP handler to call ~writeCrashReport(Reason.SIGHUP, new Error("Process received SIGHUP"))~
+- Extend SIGTERM handler to call ~writeCrashReport(Reason.SIGTERM, new Error("Process received SIGTERM"))~
+- Extend SIGINT handler to call ~writeCrashReport(Reason.SIGINT, new Error("Process received SIGINT"))~
+- Widen ~writeCrashReport~ signature to accept all ~Reason~ values (currently restricted to ~Reason.UNCAUGHT_EXCEPTION | Reason.UNHANDLED_REJECTION~)
+- Register a cleanup callback that calls ~logger.close()~ with a 2-second timeout:
+#+begin_src typescript
+register("logger-flush", async () => {
+  try {
+    await Promise.race([logger.close(), Bun.sleep(2000)]);
+  } catch { /* ignore flush failures */ }
+});
+#+end_src
+This must be registered early (before other callbacks) so it runs last (callbacks run in reverse order).
+
+** ~packages/utils/src/logger.ts~
+- Add and export a ~close()~ function:
+#+begin_src typescript
+export async function close(): Promise<void> {
+  try {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    winstonLogger.on("finish", resolve);
+    winstonLogger.end();
+    await promise;
+  } catch {
+    // Silently ignore logger close failures
+  }
+}
+#+end_src
+- Add ~close~ to the ~Logger~ interface
+
+** ~packages/coding-agent/src/session/session-manager.ts~
+- Add a new entry type:
+#+begin_src typescript
+export interface CrashMarkerEntry extends SessionEntryBase {
+  type: "crash";
+  reason: string;
+}
+#+end_src
+- Add ~CrashMarkerEntry~ to the ~SessionEntry~ union type
+- Add a public method ~appendCrashMarker(reason: string): void~ that creates and persists a ~CrashMarkerEntry~
+- The method should use ~Snowflake.next()~ for id, the current leaf id for parentId, and ISO timestamp
+
+** ~packages/coding-agent/src/modes/interactive-mode.ts~
+- Modify the existing cleanup callback registration (line 381):
+#+begin_src typescript
+this.#cleanupUnsubscribe = postmortem.register("session-manager-flush", (reason) => {
+  const crashReasons = new Set([
+    postmortem.Reason.UNCAUGHT_EXCEPTION,
+    postmortem.Reason.UNHANDLED_REJECTION,
+    postmortem.Reason.SIGHUP,
+    postmortem.Reason.SIGTERM,
+    postmortem.Reason.SIGINT,
+  ]);
+  if (crashReasons.has(reason)) {
+    this.sessionManager.appendCrashMarker(reason);
+  }
+  return this.sessionManager.flush();
+});
+#+end_src
+
+* Edge Cases
+- Logger ~close()~ called when logger was never used: winstonLogger.end() is idempotent
+- ~close()~ called twice: should be idempotent (winstonLogger.end() is safe to call multiple times)
+- ~appendCrashMarker~ called when session manager is closed: check ~this.#closed~ and no-op if true
+- ~appendCrashMarker~ called when no session file exists: _persist will no-op (checks ~this.persist && this.#sessionFile~)
+- SIGINT during normal exit (user presses Ctrl+C): writes a crash report and marker, which is slightly noisy but not harmful. The marker is informational.
+- ~writeCrashReport~ failure: already wrapped in try/catch, no change needed
+- Session file already has entries from the current turn: crash marker should have parentId pointing to the last entry written
+
+* Tests
+** File: ~packages/utils/test/postmortem-crash-report.test.ts~ (new)
+Test: "writeCrashReport accepts SIGHUP reason"
+- Call ~writeCrashReport~ with ~Reason.SIGHUP~ and a synthetic error
+- Verify the JSON file is written to the reports dir
+- Verify the JSON structure matches the CrashReport interface
+
+** File: ~packages/utils/test/logger-close.test.ts~ (new)
+Test: "logger.close() resolves without error"
+- Call ~logger.close()~
+- Verify it resolves (doesn't hang or throw)
+
+** File: ~packages/coding-agent/test/session/crash-marker.test.ts~ (new)
+Test: "appendCrashMarker writes crash entry to session JSONL"
+- Create a SessionManager with a temp session file
+- Append some messages, then call ~appendCrashMarker("sighup")~
+- Read the session file and verify the last entry is ~{ type: "crash", reason: "sighup" }~
+
+* Verification
+- ~bun check:ts~ passes
+- ~bun test packages/utils/test/postmortem-crash-report.test.ts~ passes
+- ~bun test packages/utils/test/logger-close.test.ts~ passes
+- ~bun test packages/coding-agent/test/session/crash-marker.test.ts~ passes
+- Manual: kill spell with SIGHUP, verify crash report appears in ~~/.spell/reports/~, log file has entries, session JSONL has crash marker

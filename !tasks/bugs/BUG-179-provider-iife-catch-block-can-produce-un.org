@@ -1,0 +1,125 @@
+#+TITLE: Provider IIFE catch-block can produce unhandled rejections
+#+STATE: DONE
+#+SESSION_ID: 14aee9d600539be3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-20-24-705Z_14aee9d600539be3.jsonl]]
+#+CUSTOM_ID: BUG-179-provider-iife-catch-block-can-produce-un
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: ai
+
+NOTE [2026-04-05]: All 13 provider IIFE catch blocks hardened with nested try/catch + .catch() defense-in-depth. Agent-loop IIFEs hardened with try/catch around runLoop(). Shared helper pushFallbackError created. Tests pass.
+
+* Initial Message
+
+this session just crashed:
+
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T15-51-56-633Z_14
+ aee351f66ef5e7.jsonl
+ ID: 14aee351f66ef5e7
+
+
+Can you tell me why?
+
+* Problem
+All 13 LLM provider stream functions use an async IIFE pattern:
+#+begin_src typescript
+(async () => {
+  try {
+    // ... stream processing ...
+    stream.push({ type: "done", ... });
+    stream.end();
+  } catch (error) {
+    const failure = await handleCodexStreamFailure(failureContext, error);
+    stream.push({ type: "error", ... });
+    stream.end();
+  }
+})();
+#+end_src
+
+If ~handleCodexStreamFailure~ (which calls ~await finalizeErrorMessage()~) throws, or if ~stream.push()~ / ~stream.end()~ throw in the catch block, the error escapes the IIFE as an unhandled rejection, crashing the process silently.
+
+Additionally, ~agentLoop()~ and ~agentLoopContinue()~ in ~packages/agent/src/agent-loop.ts~ kick off ~runLoop()~ in an unguarded ~(async () => { await runLoop(...) })()~. If the provider error propagates through ~streamAssistantResponse()~, it becomes an unhandled rejection.
+
+This is the root cause of session crashes where the process dies silently after writing a tool result but before the model responds.
+
+* Design Decisions
+1. Add a nested try/catch inside each provider's catch block so that ~handleCodexStreamFailure~ / ~finalizeErrorMessage~ failures don't escape
+2. Add a ~.catch()~ on each provider's IIFE for defense-in-depth — if anything escapes the try/catch, push an error event to the stream and end it
+3. Add try/catch wrapping around ~await runLoop()~ in the agent-loop IIFEs, pushing an ~agent_end~ event with error details to the stream
+4. The ~.catch()~ handler should create a minimal error message (just the error string) and push ~{ type: "error", reason: "error", error: <minimal AssistantMessage> }~ followed by ~stream.end()~
+
+* Files to Modify
+** ~packages/ai/src/providers/~ — 13 files with IIFE pattern
+All of these files: ~amazon-bedrock.ts~, ~anthropic.ts~, ~azure-openai-responses.ts~, ~cursor.ts~, ~gitlab-duo.ts~, ~google-gemini-cli.ts~, ~google-vertex.ts~, ~google.ts~, ~kimi.ts~, ~openai-codex-responses.ts~, ~openai-completions.ts~, ~openai-responses.ts~, ~synthetic.ts~
+
+For each provider:
+1. Wrap the catch block's internals (~handleXxxStreamFailure~, ~stream.push~, ~stream.end~) in a nested try/catch
+2. In the nested catch, create a minimal error AssistantMessage and push/end the stream
+3. This prevents errors from the error-handling path from becoming unhandled rejections
+
+Pattern for each provider catch block:
+#+begin_src typescript
+} catch (error) {
+  try {
+    // existing error handling...
+    const failure = await handleXxxStreamFailure(failureContext, error);
+    stream.push({ type: "error", reason: failure.stopReason as "error" | "aborted", error: failure });
+    stream.end();
+  } catch (innerError) {
+    // Last resort: push minimal error and end stream
+    try {
+      const msg = innerError instanceof Error ? innerError.message : String(innerError);
+      const fallback = createAssistantOutput(model);
+      fallback.stopReason = "error";
+      fallback.errorMessage = `Provider error handling failed: ${msg}`;
+      stream.push({ type: "error", reason: "error", error: fallback });
+    } catch { /* truly nothing we can do */ }
+    try { stream.end(); } catch { /* stream may already be ended */ }
+  }
+}
+#+end_src
+
+** ~packages/agent/src/agent-loop.ts~ — 2 IIFEs (~agentLoop~ and ~agentLoopContinue~)
+Wrap ~await runLoop(...)~ in try/catch. On error:
+#+begin_src typescript
+(async () => {
+  // ... setup ...
+  try {
+    await runLoop(currentContext, newMessages, config, signal, stream, streamFn);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    stream.push({ type: "agent_end", messages: newMessages });
+    stream.end(newMessages);
+    logger.error("Agent loop failed", { error: msg, stack: error instanceof Error ? error.stack : undefined });
+  }
+})();
+#+end_src
+
+Import ~logger~ from ~@oh-my-pi/pi-utils~ (check if already imported).
+
+* Edge Cases
+- ~stream.push()~ may no-op if ~stream.done~ is already true — this is safe (the push method checks ~if (this.done) return~)
+- ~stream.end()~ may be called twice — this is safe (it just sets ~done = true~ and notifies waiters)
+- ~createAssistantOutput~ may not exist in every provider — each provider has its own output creation helper. Use the provider-specific one. For the ~.catch()~ fallback, create a minimal object inline.
+- Some providers don't use ~finalizeErrorMessage~ (sync-only error handling) — still add the nested try/catch for consistency
+
+* Tests
+** File: ~packages/ai/test/openai-codex-stream.test.ts~
+Add test: "pushes error event when catch-block error handler itself throws"
+- Mock ~finalizeErrorMessage~ to throw
+- Verify stream emits an error event (not an unhandled rejection)
+- Verify stream ends cleanly
+
+** File: ~packages/agent/test/agent-loop.test.ts~
+Add test: "pushes agent_end when streamAssistantResponse throws unrecoverably"
+- Create a mock streamFn that throws a non-retryable error
+- Verify the agent loop emits ~agent_end~ event
+- Verify no unhandled rejection
+
+* Verification
+- ~bun check:ts~ passes
+- ~bun test packages/ai/test/openai-codex-stream.test.ts~ passes
+- ~bun test packages/agent/test/agent-loop.test.ts~ passes
+- Manual: no new lint/type errors

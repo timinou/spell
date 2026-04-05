@@ -378,7 +378,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.keybindings = await logger.timeAsync("InteractiveMode.init:keybindings", () => KeybindingsManager.create());
 
 		// Register session manager flush for signal handlers (SIGINT, SIGTERM, SIGHUP)
-		this.#cleanupUnsubscribe = postmortem.register("session-manager-flush", () => this.sessionManager.flush());
+		// On crash, write a crash marker entry before flushing so the JSONL records the abnormal exit.
+		const crashReasons = new Set<postmortem.Reason>([
+			postmortem.Reason.UNCAUGHT_EXCEPTION,
+			postmortem.Reason.UNHANDLED_REJECTION,
+			postmortem.Reason.SIGHUP,
+			postmortem.Reason.SIGTERM,
+			postmortem.Reason.SIGINT,
+		]);
+		this.#cleanupUnsubscribe = postmortem.register("session-manager-flush", reason => {
+			if (crashReasons.has(reason)) {
+				this.sessionManager.appendCrashMarker(reason);
+			}
+			return this.sessionManager.flush();
+		});
 
 		await logger.timeAsync("InteractiveMode.init:slashCommands", () =>
 			this.refreshSlashCommandState(getProjectDir()),

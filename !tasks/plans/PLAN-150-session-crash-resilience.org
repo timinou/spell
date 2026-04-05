@@ -1,0 +1,95 @@
+#+TITLE: Session Crash Resilience
+#+STATE: DOING
+#+SESSION_ID: 14aee9d600539be3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-20-24-705Z_14aee9d600539be3.jsonl]]
+#+CUSTOM_ID: PLAN-150-session-crash-resilience
+
+
+* Initial Message
+
+this session just crashed:
+
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T15-51-56-633Z_14
+ aee351f66ef5e7.jsonl
+ ID: 14aee351f66ef5e7
+
+
+Can you tell me why?
+
+* Context
+A session using ~gpt-5.3-codex~ via the ~openai-codex-responses~ websocket provider crashed silently mid-turn. The process died after writing a tool result to the session JSONL but before the model could respond. Investigation revealed:
+
+1. No crash report was written (SIGHUP handler doesn't call ~writeCrashReport~)
+2. Log files for the period were 0 bytes (Winston async transport lost buffered entries on exit)
+3. No session crash marker (JSONL just ends mid-turn with no indication of crash)
+
+Root cause analysis found two classes of issues:
+
+*Error handling gaps in providers and agent loop:* All 13 LLM provider stream functions have an async IIFE with a catch block that can itself throw (via ~await finalizeErrorMessage()~ or ~stream.push()~), producing an unhandled rejection. The agent-loop IIFE (~agentLoop()~) has no error boundary around ~runLoop()~, so provider errors propagate as unhandled rejections.
+
+*Missing crash diagnostics:* ~postmortem.ts~ only writes crash reports for ~uncaughtException~ / ~unhandledRejection~, not for SIGHUP/SIGTERM. The logger has no flush mechanism. Session JSONL gets no crash marker.
+
+Key decisions:
+- Harden all 13 provider IIFEs (not just codex) with nested try/catch in catch blocks + defense-in-depth ~.catch()~
+- Harden agent-loop IIFEs with try/catch around ~runLoop()~
+- Write crash reports for all fatal signals (SIGHUP, SIGTERM, SIGINT) using synthetic errors
+- Add ~logger.close()~ via ~winstonLogger.end()~ with 2-second timeout in postmortem cleanup
+- Add ~CrashMarkerEntry~ type to session JSONL, written by the existing cleanup callback
+
+* Verification
+- ~bun check:ts~ — no type errors across all packages
+- ~bun test packages/ai/test/openai-codex-stream.test.ts~ — provider error handling tests pass
+- ~bun test packages/agent/test/agent-loop.test.ts~ — agent loop error handling tests pass
+- ~bun test packages/utils/test/postmortem-crash-report.test.ts~ — crash report tests pass
+- ~bun test packages/utils/test/logger-close.test.ts~ — logger close tests pass
+- ~bun test packages/coding-agent/test/session/crash-marker.test.ts~ — crash marker tests pass
+
+* Execution Manifest
+** Wave 1: Provider and agent-loop error boundary hardening
+[[id:BUG-179-provider-iife-catch-block-can-produce-un]] — 2h, LAYER: ai
+- Harden all 13 provider IIFE catch blocks
+- Harden agent-loop IIFEs
+- Add tests for error-in-error-handler scenarios
+
+** Wave 2: Crash diagnostics (depends on Wave 1)
+[[id:BUG-180-crash-diagnostics-lost-on-sighup-and-log]] — 2h, LAYER: utils
+- DEPENDS: BUG-179 (crash reports are more useful once provider errors are properly surfaced)
+- Crash reports for SIGHUP/SIGTERM/SIGINT
+- Logger flush-on-exit
+- Session crash marker entry
+- Tests for all three mechanisms
+
+** Completion [2026-04-05]
+*** Verification
+- ~bun check:ts~ -- biome check and tsgo pass (all errors pre-existing in sql-store.ts, approvals.ts, tool-progress.ts, logger.ts:110)
+- ~bun test packages/ai/test/provider-error-boundary.test.ts~ -- 4 pass
+- ~bun test packages/agent/test/agent-loop.test.ts~ -- 16 pass (3 new + 13 existing)
+- ~bun test packages/utils/test/postmortem-crash-report.test.ts~ -- 4 pass
+- ~bun test packages/utils/test/logger-close.test.ts~ -- 1 pass
+- ~bun test packages/coding-agent/test/session/crash-marker.test.ts~ -- 2 pass
+- Total: 27 tests, 120 assertions, 0 failures
+
+*** Artifacts
+**** Wave 1: Provider & Agent-Loop Error Boundaries
+- ~packages/ai/src/utils/provider-error-boundary.ts~ -- shared ~pushFallbackError~ helper
+- 13 provider files hardened with nested try/catch + ~.catch()~ defense-in-depth:
+  ~amazon-bedrock.ts~, ~anthropic.ts~, ~azure-openai-responses.ts~, ~cursor.ts~,
+  ~gitlab-duo.ts~, ~google-gemini-cli.ts~, ~google-vertex.ts~, ~google.ts~,
+  ~kimi.ts~, ~openai-codex-responses.ts~, ~openai-completions.ts~, ~openai-responses.ts~, ~synthetic.ts~
+- ~packages/agent/src/agent-loop.ts~ -- both IIFEs (~agentLoop~ and ~agentLoopContinue~) hardened with try/catch around ~runLoop~
+- ~packages/ai/test/provider-error-boundary.test.ts~ -- new test file
+- ~packages/agent/test/agent-loop.test.ts~ -- 3 new tests appended
+
+**** Wave 2: Crash Diagnostics
+- ~packages/utils/src/logger.ts~ -- added ~close()~ export with idempotent winstonLogger.end()
+- ~packages/utils/src/postmortem.ts~ -- widened ~writeCrashReport~ to accept all ~Reason~ values, added crash reports for SIGHUP/SIGTERM/SIGINT, registered logger-flush cleanup callback
+- ~packages/coding-agent/src/session/session-manager.ts~ -- added ~CrashMarkerEntry~ type and ~appendCrashMarker~ method
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ -- wired crash marker into session-manager-flush cleanup callback
+- ~packages/utils/test/postmortem-crash-report.test.ts~ -- new test file
+- ~packages/utils/test/logger-close.test.ts~ -- new test file
+- ~packages/coding-agent/test/session/crash-marker.test.ts~ -- new test file
+
+*** Deviations
+None.

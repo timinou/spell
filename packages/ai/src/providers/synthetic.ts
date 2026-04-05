@@ -11,6 +11,7 @@
 import { ANTHROPIC_THINKING } from "../stream";
 import type { Api, Context, Model, SimpleStreamOptions } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { pushFallbackError } from "../utils/provider-error-boundary";
 import { streamAnthropic } from "./anthropic";
 import { streamOpenAICompletions } from "./openai-completions";
 
@@ -115,13 +116,17 @@ export function streamSynthetic(
 				}
 			}
 		} catch (err) {
-			stream.push({
-				type: "error",
-				reason: "error",
-				error: createErrorMessage(model, err),
-			});
+			try {
+				stream.push({
+					type: "error",
+					reason: "error",
+					error: createErrorMessage(model, err),
+				});
+			} catch (innerError) {
+				pushFallbackError(stream, model, innerError);
+			}
 		}
-	})();
+	})().catch(err => pushFallbackError(stream, model, err));
 
 	return stream;
 }

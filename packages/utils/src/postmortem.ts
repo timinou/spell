@@ -68,7 +68,7 @@ interface CrashSystemInfo {
 
 interface CrashReport {
 	timestamp: string;
-	reason: Reason.UNCAUGHT_EXCEPTION | Reason.UNHANDLED_REJECTION;
+	reason: Reason;
 	pid: number;
 	uptimeSeconds: number;
 	logPath: string;
@@ -238,11 +238,7 @@ function formatFatalError(label: string, err: Error): string {
 	return `\n[${label}] ${name}: ${message}${formattedStack}\n`;
 }
 
-function writeCrashReport(
-	reason: Reason.UNCAUGHT_EXCEPTION | Reason.UNHANDLED_REJECTION,
-	err: Error,
-	raw?: unknown,
-): string | undefined {
+export function writeCrashReport(reason: Reason, err: Error, raw?: unknown): string | undefined {
 	try {
 		const reportsDir = getReportsDir();
 		fs.mkdirSync(reportsDir, { recursive: true });
@@ -286,6 +282,7 @@ let inspectorOpened = false;
 if (isMainThread) {
 	process
 		.on("SIGINT", async () => {
+			writeCrashReport(Reason.SIGINT, new Error("Process received SIGINT"));
 			await runCleanup(Reason.SIGINT);
 			process.exit(130); // 128 + SIGINT (2)
 		})
@@ -315,10 +312,12 @@ if (isMainThread) {
 			void runCleanup(Reason.EXIT); // fire and forget (exit imminent)
 		})
 		.on("SIGTERM", async () => {
+			writeCrashReport(Reason.SIGTERM, new Error("Process received SIGTERM"));
 			await runCleanup(Reason.SIGTERM);
 			process.exit(143); // 128 + SIGTERM (15)
 		})
 		.on("SIGHUP", async () => {
+			writeCrashReport(Reason.SIGHUP, new Error("Process received SIGHUP"));
 			await runCleanup(Reason.SIGHUP);
 			process.exit(129); // 128 + SIGHUP (1)
 		});
@@ -331,6 +330,16 @@ if (isMainThread) {
 		void runCleanup(Reason.EXIT);
 	});
 }
+
+// Register logger flush as first callback so it runs last (callbacks run in reverse order).
+// This ensures log entries from other cleanup callbacks are flushed before exit.
+register("logger-flush", async () => {
+	try {
+		await Promise.race([logger.close(), Bun.sleep(2000)]);
+	} catch {
+		// Ignore flush failures during shutdown
+	}
+});
 
 /**
  * Register a process cleanup callback, to be run on shutdown, signal, or fatal error.
