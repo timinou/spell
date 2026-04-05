@@ -13,16 +13,19 @@
 
 import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
 import type { FormatSummaryOptions, TodoItem, TodoPhase, TodoStatus } from "../../src/tools/todo-write";
 import {
+	applyOps,
 	formatSummary,
 	getLatestTodoPhasesFromEntries,
 	hasGate,
 	hasRequiredGate,
 	hasUnresolvedBlockers,
 	isTaskBlocked,
+	todoWriteToolRenderer,
 } from "../../src/tools/todo-write";
 
 // =============================================================================
@@ -748,5 +751,183 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 
 		const acceptedSummary = accepted.content.find(part => part.type === "text")?.text ?? "";
 		expect(acceptedSummary).toContain("Gate Requirements");
+	});
+});
+
+describe("gate_failed status behavior", () => {
+	test("applyOps with gate_failed transitions in_progress task", async () => {
+		const tool = new TodoWriteTool(createSession());
+		await tool.execute("call-1", {
+			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Build feature" }] }] }],
+		});
+		await tool.execute("call-2", {
+			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
+		});
+		const result = await tool.execute("call-3", {
+			ops: [{ op: "update", id: "task-1", status: "gate_failed" }],
+		});
+		expect(result.details?.phases[0]?.tasks[0]?.status).toBe("gate_failed");
+		const summary = result.content.find(part => part.type === "text")?.text ?? "";
+		expect(summary).toContain("--- Gate Failures ---");
+	});
+
+	test("applyOps keeps phase incomplete when gate_failed exists", () => {
+		const file = {
+			nextTaskId: 3,
+			nextPhaseId: 2,
+			phases: [
+				{
+					id: "phase-1",
+					name: "Work",
+					tasks: [
+						{ id: "task-1", content: "Done", status: "completed" as TodoStatus },
+						{ id: "task-2", content: "Gate failed", status: "gate_failed" as TodoStatus },
+					],
+				},
+			],
+		};
+		const result = applyOps(file, [], file.phases, []);
+		expect(result.completedPhaseIds).toEqual([]);
+	});
+
+	test("applyOps still marks completed phase without gate_failed", () => {
+		const file = {
+			nextTaskId: 3,
+			nextPhaseId: 2,
+			phases: [
+				{
+					id: "phase-1",
+					name: "Work",
+					tasks: [
+						{ id: "task-1", content: "Done", status: "completed" as TodoStatus },
+						{ id: "task-2", content: "Deferred", status: "abandoned" as TodoStatus },
+					],
+				},
+			],
+		};
+		const previousPhases = [
+			{
+				id: "phase-1",
+				name: "Work",
+				tasks: [
+					{ id: "task-1", content: "Done", status: "pending" as TodoStatus },
+					{ id: "task-2", content: "Deferred", status: "pending" as TodoStatus },
+				],
+			},
+		];
+		const result = applyOps(file, [], previousPhases, []);
+		expect(result.completedPhaseIds).toEqual(["phase-1"]);
+	});
+
+	test("normalizeInProgressTask does not auto-promote past gate_failed", () => {
+		const file = {
+			nextTaskId: 3,
+			nextPhaseId: 2,
+			phases: [
+				{
+					id: "phase-1",
+					name: "Work",
+					tasks: [
+						{ id: "task-1", content: "Done", status: "completed" as TodoStatus },
+						{ id: "task-2", content: "Gate failed", status: "gate_failed" as TodoStatus },
+						{ id: "task-3", content: "Pending", status: "pending" as TodoStatus },
+					],
+				},
+			],
+		};
+		const result = applyOps(file, [], file.phases, []);
+		expect(result.file.phases[0].tasks[2]?.status).toBe("pending");
+	});
+
+	test("normalizeInProgressTask still auto-promotes without gate_failed", () => {
+		const file = {
+			nextTaskId: 3,
+			nextPhaseId: 2,
+			phases: [
+				{
+					id: "phase-1",
+					name: "Work",
+					tasks: [
+						{ id: "task-1", content: "Done", status: "completed" as TodoStatus },
+						{ id: "task-2", content: "Pending", status: "pending" as TodoStatus },
+					],
+				},
+			],
+		};
+		const result = applyOps(file, [], file.phases, []);
+		expect(result.file.phases[0].tasks[1]?.status).toBe("in_progress");
+	});
+
+	test("hasUnresolvedBlockers treats gate_failed blocker as unresolved", () => {
+		const blocker = makeTask({ id: "task-1", content: "Gate failed", status: "gate_failed" });
+		const task = makeTask({ id: "task-2", content: "Dependent", status: "pending", blockers: ["task-1"] });
+		expect(hasUnresolvedBlockers(task, [blocker, task])).toBe(true);
+		const completedBlocker = makeTask({ id: "task-1", content: "Done", status: "completed" });
+		expect(hasUnresolvedBlockers(task, [completedBlocker, task])).toBe(false);
+	});
+
+	test("formatSummary lists gate failures section", () => {
+		const task = makeTask({
+			id: "task-1",
+			content: "Build feature",
+			status: "gate_failed",
+			delegation: {
+				sessionId: "sess-1",
+				result: {
+					gateFailures: [
+						{ gate: "gateCmd", expected: "bun test", detail: "not detected in subagent bash history" },
+						{ gate: "gateArtifact", expected: "dist/out.json", detail: "artifact missing" },
+					],
+				},
+			},
+		});
+		const summary = formatSummary({
+			phases: [makePhase("phase-1", "Work", [task])],
+			errors: [],
+			completedPhaseIds: [],
+			completedGatedTasks: [],
+			pendingVerificationTasks: [],
+			pendingDeferralTasks: [],
+		});
+		expect(summary).toContain("--- Gate Failures ---");
+		expect(summary).toContain(
+			'gate_failed: task-1 "Build feature" — gateCmd not satisfied: expected `bun test`, not detected in subagent bash history',
+		);
+		expect(summary).toContain("gateArtifact not satisfied: expected `dist/out.json`, artifact missing");
+	});
+
+	test("formatSummary omits gate failures section when absent", () => {
+		const summary = formatSummary({
+			phases: [
+				makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Build feature", status: "pending" })]),
+			],
+			errors: [],
+			completedPhaseIds: [],
+			completedGatedTasks: [],
+			pendingVerificationTasks: [],
+			pendingDeferralTasks: [],
+		});
+		expect(summary).not.toContain("--- Gate Failures ---");
+	});
+
+	test("formatTodoLine renders gate_failed badge", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const rendered = todoWriteToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "" }],
+				details: {
+					phases: [
+						makePhase("phase-1", "Work", [
+							makeTask({ id: "task-1", content: "Build feature", status: "gate_failed" }),
+						]),
+					],
+				},
+			} as never,
+			{ expanded: true, isPartial: false },
+			uiTheme,
+		);
+		expect(rendered.render(80).join("\n")).toContain("[gate failed]");
 	});
 });

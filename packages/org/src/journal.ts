@@ -27,7 +27,7 @@ import { atomicWrite } from "./atomic-write";
 export interface JournalTodoItem {
 	id: string;
 	content: string;
-	status: "pending" | "in_progress" | "completed" | "abandoned" | "failed";
+	status: "pending" | "in_progress" | "completed" | "abandoned" | "failed" | "gate_failed";
 	notes?: string;
 	details?: string;
 	gateCommit?: boolean;
@@ -57,6 +57,7 @@ const STATUS_TO_ORG: Record<string, string> = {
 	completed: "DONE",
 	abandoned: "BLOCKED",
 	failed: "BLOCKED",
+	gate_failed: "BLOCKED",
 };
 
 // =============================================================================

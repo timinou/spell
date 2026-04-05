@@ -45,6 +45,7 @@ const TODO_ICONS: Record<TodoItemSnapshot["status"], string> = {
 	completed: "✓",
 	abandoned: "✗",
 	failed: "!",
+	gate_failed: "!",
 };
 
 function renderTodoItem(item: TodoItemSnapshot, indent: string, maxWidth?: number): string[] {

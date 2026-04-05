@@ -42,6 +42,7 @@ Create a todo list when:
 |`completed`|Fully done|
 |`abandoned`|Deferred with follow-up — requires `deferralFupId` linking to a FUP org item|
 |`failed`|Delegated work failed and needs operator attention before dependent work can continue|
+|`gate_failed`|Delegated work completed but required verification gates were not satisfied|
 
 ## Rules
 - You **MUST** mark `in_progress` **before** starting direct work, not after

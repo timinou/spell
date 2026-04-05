@@ -1,0 +1,131 @@
+#+TITLE: Bash subprocess tool handler
+#+STATE: DONE
+#+SESSION_ID: 14af1830f0e2d7e6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T19-42-56-451Z_14af1830f0e2d7e6.jsonl]]
+#+CUSTOM_ID: FEAT-360-bash-subprocess-tool-handler
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: agent
+
+* Initial Message
+
+ilures, there are two systematic issues the subagents keep
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T18-49-31-134Z_14af0bf6bfbf7c88.jsonl
+ ID: 14af0bf6bfbf7c88
+
+
+
+Why did the GraphRAGModules fail?
+
+* Goal
+Register a =SubprocessToolHandler= for the ="bash"= tool so the parent task dispatcher tracks all bash commands executed by subagents. This data feeds into gate verification.
+
+* Design Decisions
+- The handler extracts ={ command, exitCode }= from each bash tool execution event.
+- Extracted data is stored in =progress.extractedToolData["bash"]= as an array of ={ command: string, exitCode: number }=.
+- The handler does NOT terminate the session (=shouldTerminate= returns =false= or is omitted).
+- The handler reads =command= from =event.args.command= and =exitCode= from the =event.result=.
+- For bash tool results: successful commands return =result.content[0].text= (output). Failed commands have =event.isError = true=. The exit code is NOT directly in the result details (=BashToolDetails= has no exitCode field). We infer: =isError ? 1 : 0=.
+- The handler is registered via side-effect import in =executor.ts= (same pattern as =import "../tools/review"=).
+
+* Files
+- *Create*: =packages/coding-agent/src/task/bash-subprocess-handler.ts=
+- *Create*: =packages/coding-agent/test/task/bash-subprocess-handler.test.ts=
+- *Modify*: =packages/coding-agent/src/task/executor.ts= — add =import "./bash-subprocess-handler";= (side-effect import, same pattern as line that imports =../tools/review=)
+
+* Existing Pattern to Follow
+The =submit_result= handler registration (=packages/coding-agent/src/tools/submit-result.ts= lines ~206-216):
+#+begin_src typescript
+subprocessToolRegistry.register<SubmitResultDetails>("submit_result", {
+  extractData: event => {
+    const details = event.result?.details;
+    if (!details || typeof details !== "object") return undefined;
+    // ... extract data
+    return { data, status, error };
+  },
+  shouldTerminate: event => !event.isError,
+});
+#+end_src
+
+Also =report_finding= handler (=packages/coding-agent/src/tools/review.ts= line ~200).
+
+The =SubprocessToolHandler= interface (=packages/coding-agent/src/task/subprocess-tool-registry.ts=):
+#+begin_src typescript
+export interface SubprocessToolEvent {
+  toolName: string;
+  toolCallId: string;
+  args: Record<string, unknown>;
+  result: any;
+  isError?: boolean;
+}
+
+export interface SubprocessToolHandler<TData = unknown> {
+  extractData?: (event: SubprocessToolEvent) => TData | undefined;
+  shouldTerminate?: (event: SubprocessToolEvent) => boolean;
+}
+#+end_src
+
+* Type for Extracted Data
+#+begin_src typescript
+export interface TrackedBashExecution {
+  command: string;
+  exitCode: number;
+}
+#+end_src
+
+Note: this =TrackedBashExecution= type is the same as in =gate-verification.ts= (FEAT-358). Import it from there, or if this item is implemented first, define it here and have FEAT-358 import from here. Prefer defining it in =gate-verification.ts= since that's the consumer. If FEAT-358 is not yet implemented when this runs, define it locally and the integration item (FEAT-361) will reconcile.
+
+* Implementation
+#+begin_src typescript
+// packages/coding-agent/src/task/bash-subprocess-handler.ts
+import { subprocessToolRegistry } from "./subprocess-tool-registry";
+
+interface TrackedBashExecution {
+  command: string;
+  exitCode: number;
+}
+
+subprocessToolRegistry.register<TrackedBashExecution>("bash", {
+  extractData: (event) => {
+    const command = typeof event.args?.command === "string" ? event.args.command : undefined;
+    if (!command) return undefined;
+    // Bash tool throws ToolError on non-zero exit, so isError means non-zero exit
+    const exitCode = event.isError ? 1 : 0;
+    return { command, exitCode };
+  },
+  // Do NOT terminate session on bash completion
+});
+#+end_src
+
+* Test Scenarios (write FIRST, then implement)
+
+Test file: =packages/coding-agent/test/task/bash-subprocess-handler.test.ts=
+
+** extractData
+1. Event with =args.command = "bun test"=, =isError: false= → returns ={ command: "bun test", exitCode: 0 }=
+2. Event with =args.command = "bun test"=, =isError: true= → returns ={ command: "bun test", exitCode: 1 }=
+3. Event with no =command= in args → returns =undefined=
+4. Event with =args.command= not a string → returns =undefined=
+5. Event with =args.command = ""= → returns =undefined= (empty command)
+
+** shouldTerminate
+1. Handler should NOT define =shouldTerminate= (or it returns =false=) — bash execution should never terminate the subagent session
+
+** Registration
+1. After importing the module, =subprocessToolRegistry.hasHandler("bash")= returns =true=
+2. =subprocessToolRegistry.getHandler("bash")= returns a handler with =extractData= defined
+
+* Testing Approach
+The tests import =subprocessToolRegistry= directly and test the registered handler's =extractData= function by constructing mock =SubprocessToolEvent= objects. This is the same pattern used for testing the =submit_result= and =report_finding= handlers.
+
+Important: since the handler is registered via side-effect import, the test must =import "./bash-subprocess-handler"= (or =import "../../src/task/bash-subprocess-handler"=) before checking the registry. Use =beforeAll= or top-level import.
+
+* Verification
+Run: =bun test packages/coding-agent/test/task/bash-subprocess-handler.test.ts=
+
+* Edge Cases
+- If =event.args= is undefined or null, handler returns =undefined= (no crash).
+- If =event.result= is undefined (shouldn't happen, but defensive), handler still works since it only checks =isError=.
