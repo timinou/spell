@@ -110,25 +110,71 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
     (if body
         (concat
          (buffer-substring-no-properties
-          (treesit-node-start node)
-          (treesit-node-start body))
+           (treesit-node-start node)
+           (treesit-node-start body))
          stub)
       (treesit-node-text node t))))
+
+(defun pi-treesit--heading-level-from-text (text)
+  "Return the markdown heading level from TEXT.
+
+Return nil when no leading # marker is present."
+  (when (string-match "\\`[[:space:]]*\\(#+\\)" text)
+    (length (match-string 1 text))))
+
+(defun pi-treesit--strip-markdown-heading-markers (text)
+  "Strip ATX heading markers from TEXT.
+
+Used for both heading start and trailing markers.
+This keeps only the core heading content.
+"
+  (let ((trimmed (string-trim text)))
+    (setq trimmed (replace-regexp-in-string "\\`[[:space:]]*#+[[:space:]]*" "" trimmed))
+    (string-trim-right (replace-regexp-in-string "[[:space:]]*#+[[:space:]]*\\'" "" trimmed))))
+
+(defun pi-treesit--unquote-string (text)
+  "Strip matching outer quotes from TEXT.
+
+Used for keys that are represented as quoted literals.
+"
+  (if (string-match "\\`[\"']\\(.*\\)[\"']\\'" text)
+      (match-string 1 text)
+    text))
+
+(defun pi-treesit--top-level-nodes-children (node)
+  "Collect top-level declaration-like children for NODE.
+
+Some tree-sitter grammars wrap statements in implicit container nodes,
+including markdown/yaml/json documents. Unwrap known wrappers so callers get
+actual declaration nodes.
+"
+  (let* ((type (treesit-node-type node))
+         (child (treesit-node-child node 0))
+         (out '()))
+    (cond
+      ((member type '("document" "stream" "block_mapping" "object"))
+       (while child
+         (setq out (append out (pi-treesit--top-level-nodes-children child)))
+         (setq child (treesit-node-next-sibling child))))
+      (t
+       (push node out)))
+    (nreverse out)))
 
 (defun pi-treesit-top-level-nodes ()
   "Return top-level declaration nodes from the current buffer's parse tree."
   (let ((root (treesit-buffer-root-node)))
     (when root
-      (let ((children '()))
-        (let ((n (treesit-node-child root 0)))
-          (while n
-            (push n children)
-            (setq n (treesit-node-next-sibling n))))
-        (nreverse children)))))
+      (let ((children '())
+            (n (treesit-node-child root 0)))
+        (while n
+          (setq children (append children (pi-treesit--top-level-nodes-children n)))
+          (setq n (treesit-node-next-sibling n)))
+        children))))
 
 (defun pi-treesit-declaration-name (node)
   "Return the declared name of NODE, or nil if not a named declaration."
-  (let ((type (treesit-node-type node)))
+  (let ((type (treesit-node-type node))
+        (parent (treesit-node-parent node)))
     (cond
      ;; TypeScript / JavaScript top-level declarations
      ((member type '("function_declaration" "class_declaration"
@@ -183,6 +229,59 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
         (when fdl
           (let ((id (treesit-search-subtree fdl "lower_case_identifier" nil nil 1)))
             (when id (treesit-node-text id t))))))
+     ;; Markdown: atx_heading
+     ((string= type "atx_heading")
+      (let* ((full-text (pi-treesit-node-text node))
+             (heading-level (or (pi-treesit--heading-level-from-text full-text) 1))
+             (content-node (or (treesit-node-child-by-field-name node "heading_content")
+                               (let ((child (treesit-node-child node 0))
+                                     (candidate nil))
+                                 (while (and child
+                                             (not candidate))
+                                   (unless (member (treesit-node-type child)
+                                                   '("atx_h1_marker" "atx_h2_marker"
+                                                     "atx_h3_marker" "atx_h4_marker"
+                                                     "atx_h5_marker" "atx_h6_marker"))
+                                     (setq candidate child))
+                                   (setq child (treesit-node-next-sibling child)))
+                                 candidate)))
+             (text (if content-node
+                       (treesit-node-text content-node t)
+                     (pi-treesit--strip-markdown-heading-markers full-text))))
+        (setq text (string-trim text))
+        (when (> (length text) 0)
+          (format "h%d: %s" heading-level text))))
+     ;; YAML: top-level block mapping pairs
+     ((string= type "block_mapping_pair")
+      (let ((grandparent (and parent (treesit-node-parent parent)))
+            (key-node (treesit-node-child-by-field-name node "key")))
+        (when (and key-node
+                   (string= (treesit-node-type parent) "block_mapping")
+                   (member (and grandparent (treesit-node-type grandparent))
+                           '("document" "stream")))
+          (let ((text (treesit-node-text key-node t)))
+            (unless (string-prefix-p "&" (string-trim text))
+              text)))))
+     ((string= type "pair")
+      (let* ((parent-type (and parent (treesit-node-type parent)))
+             (grandparent-type (and parent (treesit-node-parent parent)
+                                    (treesit-node-type (treesit-node-parent parent))))
+             (key-node (treesit-node-child-by-field-name node "key")))
+        (when (and key-node
+                   (or
+                    ;; JSON: top-level pair in root object
+                    (and (string= parent-type "object")
+                         (member grandparent-type '("document" "stream")))
+                    ;; TOML: top-level pair under document/table context
+                    (and (member parent-type '("table" "document" "stream"))
+                         (not (string= grandparent-type "table")))))
+          (let ((raw (treesit-node-text key-node t)))
+            (if (string= parent-type "object")
+                (pi-treesit--unquote-string raw)
+              raw))))
+     ;; Markdown / TOML tables
+     ((string= type "table")
+      (string-trim (treesit-node-text node t)))
      ;; Elixir: def, defp, defmodule, etc. — all are `call` nodes in tree-sitter-elixir
      ((string= type "call")
       (let* ((target (treesit-node-child node 0))
@@ -200,7 +299,8 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
                       (let ((fn-name (treesit-node-child first-arg 0)))
                         (when fn-name (treesit-node-text fn-name t)))
                     (treesit-node-text first-arg t)))))))))
-     (t nil))))
+    
+     (t nil)))))
 
 (defun pi-treesit-declaration-kind (node)
   "Return a short kind string for NODE: function, class, interface, type, const, etc."
@@ -215,6 +315,10 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
      ((string= type "interface_declaration") "interface")
      ((string= type "type_alias_declaration") "type")
      ((string= type "enum_declaration") "enum")
+     ((string= type "atx_heading") "heading")
+     ((string= type "block_mapping_pair") "key")
+     ((string= type "pair") "key")
+     ((string= type "table") "table")
      ((string= type "lexical_declaration") "const")
      ((string= type "method_definition") "method")
      ;; Rust
@@ -253,8 +357,8 @@ Checks the project-local lang map (from treesitter.json) before the built-in tab
          ((string= target-text "defstruct") "defstruct")
          ((string= target-text "defdelegate") "defdelegate")
          ((string= target-text "defexception") "defexception")
-         (t type))))
-     (t type))))
+         (t type)))
+     (t type)))))
 
 (provide 'pi-treesit)
 ;;; pi-treesit.el ends here

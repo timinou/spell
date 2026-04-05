@@ -1,0 +1,86 @@
+#+TITLE: Improve Code tool outline and read for non-traditional languages
+#+STATE: DONE
+#+SESSION_ID: 14af0ad97271e2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T18-44-38-985Z_14af0ad97271e2fa.jsonl]]
+#+CUSTOM_ID: FEAT-354-improve-code-tool-outline-and-read-for-n
+#+EFFORT: 2h
+#+PRIORITY: B
+#+LAYER: emacs
+#+DEPENDS: FEAT-353-add-markdown-inline-grammar-recipe-and-m
+
+* Initial Message
+
+make Emacs Code a core tool and the Edit/Write/Read tools standard. Tell me what needs to be added to the Emacs Code tool to make it feature-complete. Remember it uses combobulate so even for files like .md there's https://github.com/tree-sitter-grammars/tree-sitter-markdown and for typst too and whatnot. Also rename it to Code, not Emacs Code. Tell me everything that needs to be done to make it the premiere way to read and edit code, and Edit/Write/Read become fallbacks
+
+* Context
+The Code tool's outline and resolution reading are optimized for programming languages (TypeScript, Rust, Python, Go, Elixir, Elm). For markup and document languages (Markdown, Typst, LaTeX, YAML, TOML, JSON), the outline extractor returns nothing useful because it looks for =function_declaration=, =class_declaration=, etc.
+
+For Code to be the premiere tool, it needs to handle non-traditional languages gracefully:
+- Markdown: sections (headings), code blocks
+- Typst: headings, functions, let bindings
+- YAML: top-level keys
+- TOML: tables, top-level keys
+- JSON: top-level keys
+
+* Scope
+
+** =packages/emacs/elisp/pi-outline.el=
+Extend =pi-outline--entry= and =pi-treesit-declaration-name/kind= to handle non-code languages.
+
+*** Markdown outline
+Headings in =tree-sitter-markdown= have node type =atx_heading= with a child =atx_h1_marker= / =atx_h2_marker= etc., and a =heading_content= child containing the text.
+#+begin_src elisp
+;; Markdown: atx_heading → heading level + content
+((string= type "atx_heading")
+ (let* ((content (treesit-node-child-by-field-name node "heading_content"))
+        (marker (seq-find (lambda (c) (string-match-p "^atx_h[1-6]_marker$"
+                                                       (treesit-node-type c)))
+                          (treesit-node-children node)))
+        (level (when marker (length (treesit-node-text marker t)))))
+   (when content
+     (format "h%d: %s" (or level 1) (string-trim (treesit-node-text content t))))))
+#+end_src
+
+*** Typst outline
+Typst headings use =heading= node type with child nodes for the marker (=) and content.
+
+*** YAML outline
+Top-level =block_mapping_pair= nodes have a =key= child. The outline shows top-level keys.
+
+*** TOML outline
+=table= nodes contain bracket-enclosed keys. Top-level =pair= nodes have keys.
+
+*** JSON outline
+Top-level =pair= nodes (inside the root =object=) have a =key= child.
+
+** =packages/emacs/elisp/pi-treesit.el=
+Extend =pi-treesit-declaration-name= and =pi-treesit-declaration-kind= with cases for:
+- Markdown: =atx_heading= → kind "heading", name from content
+- YAML: =block_mapping_pair= → kind "key", name from key child
+- TOML: =table= → kind "table", =pair= → kind "key"
+- JSON: =pair= → kind "key"
+- Typst: =heading= → kind "heading"
+
+** =packages/emacs/elisp/pi-resolution.el=
+For non-code languages, resolution 0-2 may not be meaningful. The fallback should be:
+- Resolution 0: top-level structure names (headings, keys)
+- Resolution 1: same as 0 for non-code (no "signatures" concept)
+- Resolution 2: same as 1 for non-code
+- Resolution 3: full source (already works)
+
+This is graceful degradation — non-code languages get outline support but resolution zoom isn't as differentiated.
+
+* Edge Cases
+- Files with no tree-sitter grammar at all should still fall back gracefully (they already do — =pi-treesit-open-file= errors with actionable message)
+- Markdown fenced code blocks should NOT appear as outline entries (they're content, not structure)
+- YAML anchors (=&anchor=) are not declarations — skip them
+- JSON arrays at top level have no keys — outline returns empty (acceptable)
+
+* Acceptance Criteria
+- =code outline= on a Markdown file returns headings with levels
+- =code outline= on a YAML file returns top-level keys
+- =code outline= on a JSON file returns top-level object keys
+- =code outline= on a TOML file returns tables and top-level keys
+- =code read= at resolution 0-2 on Markdown returns heading structure
+- Existing programming language outline behavior is unchanged
+- =bun check:ts= passes (TypeScript types are unchanged)

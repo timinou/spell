@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { detectEmacs } from "../src/detection";
-import { createEmacsTool } from "../src/tool";
+import { createCodeTool } from "../src/tool";
 
 let emacsAvailable = false;
 
@@ -16,9 +16,9 @@ describe.skipIf(!emacsAvailable)("outline (requires Emacs)", () => {
 });
 
 describe("outline types", () => {
-	it("createEmacsTool factory is a function", () => {
+	it("createCodeTool factory is a function", () => {
 		// The type system enforces the OutlineEntry contract at compile time.
 		// At runtime, verify the factory function is exported and callable.
-		expect(typeof createEmacsTool).toBe("function");
+		expect(typeof createCodeTool).toBe("function");
 	});
 });

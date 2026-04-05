@@ -1,9 +1,9 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type {
 	BufferInfo,
+	CodeClient,
 	CodeEditOp,
 	CodeEditResult,
-	EmacsCodeClient,
 	InstallResult,
 	LanguageInfo,
 	OutlineEntry,
@@ -14,10 +14,10 @@ import type {
 // Re-export interface so callers can import it from this module too.
 // ---------------------------------------------------------------------------
 
-export type { EmacsCodeClient };
+export type { CodeClient };
 
 /**
- * Create an EmacsCodeClient that speaks raw JSON-RPC over a socat stdio bridge.
+ * Create a CodeClient that speaks raw JSON-RPC over a socat stdio bridge.
  *
  * Returns null when socat is unavailable, logging a warning so callers can
  * degrade gracefully rather than crashing.
@@ -25,7 +25,7 @@ export type { EmacsCodeClient };
  * @param socketPath - Path to the Emacs MCP Unix socket.
  * @param socatPath  - Optional explicit path to the socat binary (falls back to PATH).
  */
-export async function createEmacsClient(socketPath: string, socatPath?: string): Promise<EmacsCodeClient | null> {
+export async function createEmacsClient(socketPath: string, socatPath?: string): Promise<CodeClient | null> {
 	const socat = socatPath ?? Bun.which("socat");
 	if (!socat) {
 		logger.warn("[emacs-client] socat not found — JSON-RPC transport unavailable", { socketPath });

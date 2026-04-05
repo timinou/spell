@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed `emacs_code` tool to `code` (display name: "Code")
+- Promoted `code` to premiere source file tool; demoted `read`, `edit`, `write` from core to standard tier (fallback tools)
+
+### Added
+
+- Comprehensive `code` tool prompt description with usage examples for all subcommands
+- Mode guard enforcement for `code edit` operations (plan mode, read-only mode)
+- System prompt guidance for `code`-first workflow with fallback guidance for `read`/`edit`/`write`
+- Tree-sitter grammar recipes: markdown-inline, LaTeX, SCSS, Svelte, Jinja2, Just
+- Non-code language outline support: Markdown headings, YAML keys, TOML tables, JSON keys
+- Improved `code` tool result rendering with tab sanitization, code cells, and truncation
+
 ### Breaking Changes
 
 - Removed `loop_start` tool; replaced with `loop_prepare` + `loop_launch` two-step flow

@@ -107,10 +107,16 @@
      :revision "master"
      :source-dir "src"
      :exts ("js" "jsx" "mjs"))
+    (jinja2
+     :url "https://github.com/dbt-labs/tree-sitter-jinja2"
+     :exts ("j2" "jinja" "jinja2"))
     (json
      :ts-mode json-ts-mode
      :url "https://github.com/tree-sitter/tree-sitter-json"
      :exts ("json"))
+    (just
+     :url "https://github.com/IndianBoy42/tree-sitter-just"
+     :filenames ("justfile" "Justfile" ".justfile"))
     (julia
      :ts-mode julia-ts-mode
      :url "https://github.com/tree-sitter/tree-sitter-julia"
@@ -119,6 +125,10 @@
      :ts-mode kotlin-ts-mode
      :url "https://github.com/fwcd/tree-sitter-kotlin"
      :exts ("kt" "kts"))
+    (latex
+     :ts-mode latex-ts-mode
+     :url "https://github.com/latex-lsp/tree-sitter-latex"
+     :exts ("tex" "sty" "cls" "ltx"))
     (lua
      :ts-mode lua-ts-mode
      :url "https://github.com/tree-sitter-grammars/tree-sitter-lua"
@@ -133,6 +143,10 @@
      :url "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
      :source-dir "tree-sitter-markdown/src"
      :exts ("md"))
+    (markdown-inline
+     :url "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+     :source-dir "tree-sitter-markdown-inline/src"
+     :requires markdown)
     (nix
      :ts-mode nix-ts-mode
      :url "https://github.com/nix-community/tree-sitter-nix"
@@ -176,6 +190,10 @@
      :ts-mode scala-ts-mode
      :url "https://github.com/tree-sitter/tree-sitter-scala"
      :exts ("scala" "sbt"))
+    (scss
+     :ts-mode scss-ts-mode
+     :url "https://github.com/serenadeai/tree-sitter-scss"
+     :exts ("scss"))
     (sql
      :ts-mode sql-ts-mode
      :url "https://github.com/DerekStride/tree-sitter-sql"
@@ -184,6 +202,10 @@
     (surface
      :ts-mode surface-ts-mode
      :url "https://github.com/connorlay/tree-sitter-surface")
+    (svelte
+     :ts-mode svelte-ts-mode
+     :url "https://github.com/tree-sitter-grammars/tree-sitter-svelte"
+     :exts ("svelte"))
     (swift
      :ts-mode swift-ts-mode
      :url "https://github.com/alex-pinkus/tree-sitter-swift")

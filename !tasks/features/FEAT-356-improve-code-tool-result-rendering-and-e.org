@@ -1,0 +1,60 @@
+#+TITLE: Improve Code tool result rendering and error reporting
+#+STATE: DONE
+#+SESSION_ID: 14af0ad97271e2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T18-44-38-985Z_14af0ad97271e2fa.jsonl]]
+#+CUSTOM_ID: FEAT-356-improve-code-tool-result-rendering-and-e
+#+EFFORT: 1h
+#+PRIORITY: B
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-349-rename-emacs-code-to-code-and-update-all
+
+* Initial Message
+
+make Emacs Code a core tool and the Edit/Write/Read tools standard. Tell me what needs to be added to the Emacs Code tool to make it feature-complete. Remember it uses combobulate so even for files like .md there's https://github.com/tree-sitter-grammars/tree-sitter-markdown and for typst too and whatnot. Also rename it to Code, not Emacs Code. Tell me everything that needs to be done to make it the premiere way to read and edit code, and Edit/Write/Read become fallbacks
+
+* Context
+The Code tool's =renderResult()= method currently truncates output at 500 chars with a naive =text.slice(0, 500)=. This is inadequate for a premiere tool:
+1. 500 chars is too short for outline results or full file reads
+2. No syntax highlighting, no code cell rendering
+3. No truncation warnings or "full output available at artifact://..." guidance
+4. Error results don't distinguish precondition failures from runtime errors
+
+Compare with the =read= tool which has sophisticated rendering: code cells with syntax highlighting, truncation warnings, output metadata, streamed line counting.
+
+* Scope
+
+** =packages/coding-agent/src/tools/code.ts=
+
+*** Improve renderResult
+- For =read= command results: render as a code cell with syntax highlighting (using =renderCodeCell= from =../tui=)
+- For =outline= results: render as structured text (name, type, line range)
+- For =edit= results: render the diff (if present) as a diff code cell
+- For =diff= results: render as diff code cell
+- For error results: render the error message with context
+
+*** Improve execute result
+- For =read= at resolution 3: include output metadata (total lines, truncation info) similar to how =read= tool does
+- For =edit= operations: include the diff of what changed
+- For all operations: structured error codes to distinguish "no grammar" vs "daemon unavailable" vs "node not found"
+
+*** TUI rendering
+Use existing TUI utilities:
+- =renderCodeCell= for code output
+- =renderStatusLine= for metadata
+- =CachedOutputBlock= for output caching
+- =replaceTabs()= for tab sanitization (per TUI rendering rules in AGENTS.md)
+- =truncateToWidth()= for line truncation
+
+* Edge Cases
+- Large outline results (hundreds of symbols) should be truncated with a count message
+- The =read= at resolution 3 can return very large text — apply same truncation limits as =read= tool (=DEFAULT_MAX_LINES=, =DEFAULT_MAX_BYTES=)
+- =diff= output is often empty (no changes) — render a "no unsaved changes" message
+- Error rendering must sanitize file content in error messages (tabs, long lines)
+
+* Acceptance Criteria
+- =code read= results render with syntax highlighting in TUI
+- =code outline= results render as structured text
+- =code edit= results show the diff of changes
+- Large outputs are truncated with warnings
+- Error messages are clear and actionable
+- =bun check:ts= passes

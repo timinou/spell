@@ -36,7 +36,7 @@ import { CancelJobTool } from "./cancel-job";
 import { CanvasTool } from "./canvas";
 import { CanvasCastTool } from "./canvas-cast";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
-import { EmacsTool } from "./emacs";
+import { CodeTool } from "./code";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
 import { FindTool } from "./find";
@@ -83,7 +83,7 @@ export * from "./cancel-job";
 export * from "./canvas";
 export * from "./canvas-cast";
 export * from "./checkpoint";
-export * from "./emacs";
+export * from "./code";
 export * from "./exit-plan-mode";
 export * from "./fetch";
 export * from "./find";
@@ -240,7 +240,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	find: s => new FindTool(s),
 	grep: s => new GrepTool(s),
 	lsp: LspTool.createIf,
-	emacs_code: s => new EmacsTool(s),
+	code: s => new CodeTool(s),
 	notebook: s => new NotebookTool(s),
 	read: s => new ReadTool(s),
 	inspect_image: s => new InspectImageTool(s),
@@ -271,18 +271,18 @@ export type ToolTier = "core" | "standard" | "specialized";
 
 export const TOOL_TIERS: Record<string, ToolTier> = {
 	// Core — always loaded, essential for any task
-	read: "core",
-	edit: "core",
-	write: "core",
 	grep: "core",
 	find: "core",
 	bash: "core",
 	lsp: "core",
-	emacs_code: "core",
+	code: "core",
 	task: "core",
 	ask: "core",
 
 	// Standard — loaded by default, common development tools
+	read: "standard",
+	edit: "standard",
+	write: "standard",
 	ast_grep: "standard",
 	ast_edit: "standard",
 	todo_write: "standard",

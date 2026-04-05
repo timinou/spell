@@ -8,6 +8,18 @@
 (defconst test-outline--ts-source
   "export function standalone(): void {}\n\nexport class Widget {\n  label: string;\n  render(): string { return this.label; }\n  update(val: string): void { this.label = val; }\n}\n")
 
+(defconst test-outline--md-source
+  "# Intro\n\n## Background\n\n```elisp\n(print \"hello\")\n```\n")
+
+(defconst test-outline--yaml-source
+  "foo: 1\nbar: 2\n")
+
+(defconst test-outline--toml-source
+  "[table]\nitem = \"value\"\nother = 1\n")
+
+(defconst test-outline--json-source
+  "{\"name\": \"app\", \"version\": \"1.0\"}\n")
+
 (defun test-outline--with-tmp-file (source suffix fn)
   (let ((tmp (make-temp-file "pi-emacs-test" nil suffix)))
     (unwind-protect
@@ -49,7 +61,62 @@
       (let ((entries (pi-outline-get file)))
         (dolist (entry entries)
           (should (numberp (alist-get 'line entry)))
-          (should (> (alist-get 'line entry) 0)))))))
+          (should (> (alist-get 'line entry) 0))))))
+
+(ert-deftest test-outline-markdown-headings ()
+  "Outline includes markdown headings with level prefixes."
+  (skip-unless (treesit-language-available-p 'markdown))
+  (test-outline--with-tmp-file test-outline--md-source ".md"
+    (lambda (file)
+      (let ((entries (pi-outline-get file))
+            (names (mapcar (lambda (entry) (alist-get 'name entry)) entries)))
+        (should (member "h1: Intro" names))
+        (should (member "h2: Background" names))
+        (should-not (member "print" names))
+        (should (string= (alist-get 'type (car entries)) "heading"))
+        (should (eq (alist-get 'line (cadr entries)) 3)))))))
+
+(ert-deftest test-outline-yaml-entries ()
+  "Outline includes top-level YAML mapping keys."
+  (skip-unless (treesit-language-available-p 'yaml))
+  (test-outline--with-tmp-file test-outline--yaml-source ".yaml"
+    (lambda (file)
+      (let ((entries (pi-outline-get file))
+            (names (mapcar (lambda (entry) (alist-get 'name entry)) entries))
+            (types (mapcar (lambda (entry) (alist-get 'type entry)) entries)))
+        (should (member "foo" names))
+        (should (member "bar" names))
+        (should (member "key" types))
+        (should-not (member "heading" types))
+        ))))
+
+(ert-deftest test-outline-toml-entries ()
+  "Outline includes TOML table and key pairs."
+  (skip-unless (treesit-language-available-p 'toml))
+  (test-outline--with-tmp-file test-outline--toml-source ".toml"
+    (lambda (file)
+      (let ((names (mapcar (lambda (entry) (alist-get 'name entry))
+                          (pi-outline-get file)))
+            (types (mapcar (lambda (entry) (alist-get 'type entry))
+                          (pi-outline-get file))))
+        (should (member "[table]" names))
+        (should (member "item" names))
+        (should (member "other" names))
+        (should (member "table" types))
+        (should (member "key" types))))))
+
+(ert-deftest test-outline-json-entries ()
+  "Outline includes top-level JSON object key pairs."
+  (skip-unless (treesit-language-available-p 'json))
+  (test-outline--with-tmp-file test-outline--json-source ".json"
+    (lambda (file)
+      (let* ((entries (pi-outline-get file))
+             (names (mapcar (lambda (entry) (alist-get 'name entry)) entries))
+             (types (mapcar (lambda (entry) (alist-get 'type entry)) entries)))
+        (should (member "name" names))
+        (should (member "version" names))
+        (should (member "key" types))))
+    ))
 
 (provide 'test-outline)
 ;;; test-outline.el ends here

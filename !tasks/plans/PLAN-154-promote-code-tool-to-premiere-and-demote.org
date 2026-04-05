@@ -1,0 +1,105 @@
+#+TITLE: Promote Code tool to premiere and demote Read Edit Write
+#+STATE: DONE
+#+SESSION_ID: 14af0ad97271e2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T18-44-38-985Z_14af0ad97271e2fa.jsonl]]
+#+CUSTOM_ID: PLAN-154-promote-code-tool-to-premiere-and-demote
+
+
+* Initial Message
+
+make Emacs Code a core tool and the Edit/Write/Read tools standard. Tell me what needs to be added to the Emacs Code tool to make it feature-complete. Remember it uses combobulate so even for files like .md there's https://github.com/tree-sitter-grammars/tree-sitter-markdown and for typst too and whatnot. Also rename it to Code, not Emacs Code. Tell me everything that needs to be done to make it the premiere way to read and edit code, and Edit/Write/Read become fallbacks
+
+* Context
+Promote the =emacs_code= tool to be the premiere way to read and edit source code, renamed to =code=. Demote =read=, =edit=, =write= tools from core tier to standard tier — they become fallback tools for non-code resources, text-based edits, and new file creation.
+
+** Key Design Decisions
+1. *Hybrid scope*: Code owns reading + editing source files via AST. Write stays for new file creation. Read stays for internal URLs, images, PDFs, directory listings.
+2. *AST-only editing*: Code uses tree-sitter targeting exclusively. Edit tool stays for text-based changes (old_text/new_text, hashline anchors).
+3. *Mode guard*: Code's edit operations enforce =enforceModeWrite()= same as edit/write tools.
+4. *Full rename*: =emacs_code= → =code= everywhere (tool name, class name, exports, tests).
+5. *Tier changes*: Code stays =core=; Read, Edit, Write move to =standard=.
+6. *Grammar expansion*: Add markdown-inline, LaTeX, SCSS, Svelte, Jinja2, Just grammars.
+7. *Non-code language support*: Outline/read support for Markdown headings, YAML keys, TOML tables, JSON keys.
+
+** Architecture
+The Code tool wraps an Emacs daemon running tree-sitter + combobulate via MCP protocol over Unix socket. It provides:
+- Resolution-aware reading (0=names, 1=signatures, 2=structure, 3=full source)
+- Structural outline extraction
+- AST-aware editing (9 operations including combobulate splice/drag/envelope)
+- In-file navigation
+- Grammar management
+
+Fallback path: When a file has no tree-sitter grammar, the agent falls back to =read= + =edit= tools.
+
+* Verification
+#+begin_src bash
+# Type checking
+bun check:ts
+
+# Tool tier assertions
+bun test test/tools/index.test.ts
+
+# Code tool tests (renamed)
+bun test test/tools/code.test.ts
+
+# SDK domain policy tests
+bun test test/sdk-domain-policy.test.ts
+
+# Emacs package tests
+cd packages/emacs && bun test
+
+# Verify no stale references
+grep -rn "emacs_code" packages/coding-agent/src packages/emacs/src
+# Should return zero matches (except CHANGELOG released sections)
+
+# Verify system prompt renders
+# Manual: check that code tool appears in rendered system prompt
+#+end_src
+
+* Execution Manifest
+
+** Wave 1: Foundation (parallel)
+- [[id:FEAT-349-rename-emacs-code-to-code-and-update-all]] — Rename emacs_code to code (2h, P:A)
+- [[id:FEAT-353-add-markdown-inline-grammar-recipe-and-m]] — Add grammar recipes (30m, P:B)
+
+** Wave 2: Core features (parallel, depends on Wave 1)
+- [[id:FEAT-350-demote-read-edit-write-to-standard-tier]] — Demote Read/Edit/Write to standard (1h, P:A) — depends on FEAT-349
+- [[id:FEAT-351-create-comprehensive-code-tool-prompt-de]] — Create Code tool prompt (2h, P:A) — depends on FEAT-349
+- [[id:FEAT-352-add-mode-guard-enforcement-to-code-tool]] — Add mode guard enforcement (1h, P:A) — depends on FEAT-349
+- [[id:FEAT-354-improve-code-tool-outline-and-read-for-n]] — Non-code language support (2h, P:B) — depends on FEAT-353
+
+** Wave 3: Integration (depends on Wave 2)
+- [[id:FEAT-355-add-code-tool-system-prompt-integration]] — System prompt integration (1h, P:A) — depends on FEAT-349, FEAT-350, FEAT-351
+- [[id:FEAT-356-improve-code-tool-result-rendering-and-e]] — Result rendering improvements (1h, P:B) — depends on FEAT-349
+
+** Wave 4: Documentation (depends on Wave 3)
+- [[id:FEAT-357-update-agents-md-and-changelog-for-code]] — CHANGELOG updates (30m, P:B) — depends on FEAT-349, FEAT-350
+
+Total estimated effort: ~11.5h
+
+** Completion [2026-04-05]
+
+*** Verification
+- =bun check:ts=: Biome lint passes clean; tsgo reports only pre-existing errors in unrelated files (autonomy-state/sql-store.ts, spell-server/approvals.ts, utils/logger.ts)
+- =bun test packages/coding-agent/test/tools/code.test.ts=: 2 pass, 0 fail
+- =bun test packages/coding-agent/test/tools/index.test.ts=: 35 pass, 0 fail
+- =bun test packages/coding-agent/test/sdk-domain-policy.test.ts=: 4 pass, 0 fail
+- =bun test packages/emacs/test/=: 28 pass, 3 skip, 0 fail
+- =grep -rn 'emacs_code' packages/coding-agent/src packages/emacs/src=: zero matches
+- =grep -rn 'EmacsWarmupResult|createEmacsTool|warmupEmacs|EmacsCodeClient' packages/=: zero matches
+- Old files =emacs.ts= and =emacs.test.ts= confirmed removed from tools directories
+- Elisp files (pi-treesit.el, pi-outline.el, test-outline.el) load without parse errors via =emacs --batch=
+- System prompt renders with code-first guidance when code tool is present
+
+*** Artifacts
+- =packages/coding-agent/src/tools/code.ts= — renamed CodeTool class
+- =packages/coding-agent/src/prompts/tools/code.md= — comprehensive tool prompt
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — updated precedence hierarchy
+- =packages/emacs/elisp/pi-treesit-recipes.el= — 6 new grammar recipes
+- =packages/emacs/elisp/pi-treesit.el= — non-code language support (Markdown, YAML, TOML, JSON)
+- =packages/emacs/elisp/pi-outline.el= — non-code outline extraction
+- =packages/emacs/test/elisp/test-outline.el= — Markdown/YAML/TOML/JSON outline tests
+- =packages/coding-agent/CHANGELOG.md= — unreleased entries added
+
+*** Deviations
+None.

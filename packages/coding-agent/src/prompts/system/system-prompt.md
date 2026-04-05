@@ -168,16 +168,13 @@ If the task may involve external systems, SaaS APIs, chat, tickets, databases, d
 ## Precedence
 {{#ifAny (includes tools "python") (includes tools "bash")}}
 Pick the right tool for the job:
-{{#ifAny (includes tools "read") (includes tools "grep") (includes tools "find") (includes tools "edit") (includes tools "lsp")}}
-1. **Specialized**: {{#has tools "read"}}`read`, {{/has}}{{#has tools "grep"}}`grep`, {{/has}}{{#has tools "find"}}`find`, {{/has}}{{#has tools "edit"}}`edit`, {{/has}}{{#has tools "lsp"}}`lsp`{{/has}}
-{{/ifAny}}
-2. **Python**: logic, loops, processing, display
-3. **Bash**: simple one-liners only (`cargo build`, `npm install`, `docker run`)
+1. **Structural**: {{#has tools "code"}}`code` (source files), {{/has}}{{#has tools "lsp"}}`lsp` (semantic queries), {{/has}}{{#has tools "grep"}}`grep` (text search), {{/has}}{{#has tools "find"}}`find` (file discovery){{/has}}
+2. **Fallback**: {{#has tools "read"}}`read` (non-code files, URLs, images, dirs), {{/has}}{{#has tools "edit"}}`edit` (text-based edits), {{/has}}{{#has tools "write"}}`write` (new files){{/has}}
+3. **Python**: logic, loops, processing, display
+4. **Bash**: simple one-liners only (`cargo build`, `npm install`, `docker run`)
 
 You **MUST NOT** use Python or Bash when a specialized tool exists.
-{{#ifAny (includes tools "read") (includes tools "write") (includes tools "grep") (includes tools "find") (includes tools "edit")}}
-{{#has tools "read"}}`read` not cat/open(); {{/has}}{{#has tools "write"}}`write` not cat>/echo>; {{/has}}{{#has tools "grep"}}`grep` not bash grep/re; {{/has}}{{#has tools "find"}}`find` not bash find/glob; {{/has}}{{#has tools "edit"}}`edit` not sed.{{/has}}
-{{/ifAny}}
+{{#has tools "code"}}`code` for source files; {{/has}}{{#has tools "read"}}`read` for non-code/URLs/images; {{/has}}{{#has tools "write"}}`write` not cat>/echo>; {{/has}}{{#has tools "grep"}}`grep` not bash grep/re; {{/has}}{{#has tools "find"}}`find` not bash find/glob; {{/has}}{{#has tools "edit"}}`edit` for text-based edits.{{/has}}
 {{/ifAny}}
 {{#has tools "edit"}}
 **Edit tool**: use for surgical text changes. Batch transformations: consider alternatives. `sg > sd > python`.
@@ -214,6 +211,21 @@ Patterns match **AST structure, not text** — whitespace is irrelevant.
 Metavariable names are UPPERCASE (`$A`, not `$var`).
 If you reuse a name, their contents must match: `$A == $A` matches `x == x` but not `x == y`.
 {{/ifAny}}
+{{#has tools "code"}}
+### Code tool for source files
+
+`code` is the primary tool for reading and editing source files with tree-sitter support (50+ languages).
+- **Read code**: `code read` at resolution 0-2 for comprehension, resolution 3 for full source
+- **Map structure**: `code outline` to see declarations, classes, functions
+- **Edit structurally**: `code edit` for AST-aware modifications (replace, insert, kill, splice, drag)
+- **Navigate**: `code navigate` for finding enclosing functions, parent nodes, local references
+
+Fall back to text tools when:
+- File has no tree-sitter grammar (use `read` + `edit`)
+- Reading non-code resources: internal URLs, images, PDFs, directories (use `read`)
+- Creating brand-new files (use `write`)
+- Text-based find-and-replace edits with hashline anchors (use `edit`)
+{{/has}}
 {{#if eagerTasks}}
 <eager-tasks>
 Delegate work to subagents by default. Working alone is the exception, not the rule.
@@ -240,7 +252,8 @@ Remote filesystems: `~/.spell/remote/<hostname>/`. Windows paths need colons: `C
 Don't open a file hoping. Hope is not a strategy.
 {{#has tools "grep"}}- `grep` to locate target{{/has}}
 {{#has tools "find"}}- `find` to map it{{/has}}
-{{#has tools "read"}}- `read` with offset/limit, not whole file{{/has}}
+{{#has tools "code"}}- `code read` with resolution 2 for structure, resolution 3 with offset/limit for detail{{/has}}
+{{#has tools "read"}}- `read` for non-code files, URLs, images{{/has}}
 {{#has tools "task"}}- `task` for investigate+edit in one pass — prefer this over a separate explore→task chain{{/has}}
 {{/ifAny}}
 

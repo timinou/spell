@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { createEmacsClient } from "../src/client";
 import { detectEmacs } from "../src/detection";
-import { createEmacsTool } from "../src/tool";
+import { createCodeTool } from "../src/tool";
 
 let emacsAvailable = false;
 
@@ -27,7 +27,7 @@ describe("resolution module exports", () => {
 		expect(typeof createEmacsClient).toBe("function");
 	});
 
-	it("exports createEmacsTool from tool module", () => {
-		expect(typeof createEmacsTool).toBe("function");
+	it("exports createCodeTool from tool module", () => {
+		expect(typeof createCodeTool).toBe("function");
 	});
 });

@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as clientModule from "../src/client";
 import type { EmacsSession } from "../src/daemon";
-import { createEmacsTool } from "../src/tool";
+import { createCodeTool } from "../src/tool";
 import type {
 	BufferInfo,
+	CodeClient,
 	CodeEditOp,
 	CodeEditResult,
-	EmacsCodeClient,
 	InstallResult,
 	LanguageInfo,
 	OutlineEntry,
@@ -23,7 +23,7 @@ function makeSession(isAlive: boolean): EmacsSession {
 
 function createClient(options?: {
 	buffersResult?: BufferInfo[];
-}): EmacsCodeClient & { calls: { buffers: number; close: number } } {
+}): CodeClient & { calls: { buffers: number; close: number } } {
 	const calls = { buffers: 0, close: 0 };
 	return {
 		calls,
@@ -66,14 +66,14 @@ function createClient(options?: {
 	};
 }
 
-describe("createEmacsTool getSession behavior", () => {
+describe("createCodeTool getSession behavior", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
 
 	it("returns daemon unavailable when getSession resolves null", async () => {
 		const createClientSpy = spyOn(clientModule, "createEmacsClient");
-		const tool = createEmacsTool("/tmp/project", {
+		const tool = createCodeTool("/tmp/project", {
 			getSession: async () => null,
 		});
 
@@ -85,7 +85,7 @@ describe("createEmacsTool getSession behavior", () => {
 
 	it("returns daemon unavailable when getSession resolves a dead session", async () => {
 		const createClientSpy = spyOn(clientModule, "createEmacsClient");
-		const tool = createEmacsTool("/tmp/project", {
+		const tool = createCodeTool("/tmp/project", {
 			getSession: async () => makeSession(false),
 		});
 
@@ -107,7 +107,7 @@ describe("createEmacsTool getSession behavior", () => {
 		];
 		const client = createClient({ buffersResult });
 		const createClientSpy = spyOn(clientModule, "createEmacsClient").mockResolvedValue(client);
-		const tool = createEmacsTool("/tmp/project", {
+		const tool = createCodeTool("/tmp/project", {
 			getSession: async () => makeSession(true),
 		});
 

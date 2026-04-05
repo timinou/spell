@@ -66,6 +66,13 @@ Mirrors pi-treesit-declaration-name but returns the node rather than its text."
      ((string= type "type_declaration")
       (let ((spec (treesit-node-child node 0)))
         (when spec (treesit-node-child-by-field-name spec "name"))))
+     ((string= type "atx_heading")
+      (let ((named-child (treesit-node-child-by-field-name node "heading_content")))
+        (or named-child (treesit-node-child node 0))))
+     ((string= type "block_mapping_pair")
+      (treesit-node-child-by-field-name node "key"))
+     ((string= type "pair")
+      (treesit-node-child-by-field-name node "key"))
      (t nil))))
 
 (defun pi-outline--class-members (body-node)

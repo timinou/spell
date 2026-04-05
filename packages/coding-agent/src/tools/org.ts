@@ -12,7 +12,7 @@ import type {
 	AgentToolUpdateCallback,
 	RenderResultOptions,
 } from "@oh-my-pi/pi-agent-core";
-import { EmacsSessionManager, type EmacsWarmupResult, startEmacsSession } from "@oh-my-pi/pi-emacs";
+import { type CodeWarmupResult, EmacsSessionManager, startEmacsSession } from "@oh-my-pi/pi-emacs";
 import type { OrgConfig, OrgItem, OrgSessionContext, OrgToolDefinition } from "@oh-my-pi/pi-org";
 import { createOrgTool, DEFAULT_ORG_CONFIG, detectEmacs } from "@oh-my-pi/pi-org";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -178,7 +178,7 @@ export async function warmupOrgEmacs(
 	emacsPath: string | undefined,
 	projectRoot: string,
 	sessionId: string,
-): Promise<EmacsWarmupResult> {
+): Promise<CodeWarmupResult> {
 	const detection = await detectEmacs(emacsPath);
 	if (!detection.found || !detection.meetsMinimum || !detection.socatFound) {
 		const errors =

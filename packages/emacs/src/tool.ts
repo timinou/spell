@@ -9,23 +9,23 @@ import type { CodeEditOp, Resolution } from "./types";
 // Resolves relative to this file: packages/emacs/src/tool.ts
 const EMACS_ELISP_DIR = path.resolve(import.meta.dir, "../elisp");
 
-export interface EmacsToolDependencies {
+export interface CodeToolDependencies {
 	getSession(): Promise<EmacsSession | null>;
 }
 
-export interface EmacsToolDefinition {
+export interface CodeToolDefinition {
 	name: string;
 	description: string;
 	execute(args: Record<string, unknown>): Promise<unknown>;
 }
 
 /**
- * Factory that creates an emacs_code tool definition.
+ * Factory that creates a code tool definition.
  * Takes projectRoot + optional session factory (for testing / custom config).
  */
-export function createEmacsTool(_projectRoot: string, deps: EmacsToolDependencies): EmacsToolDefinition {
+export function createCodeTool(_projectRoot: string, deps: CodeToolDependencies): CodeToolDefinition {
 	return {
-		name: "emacs_code",
+		name: "code",
 		description:
 			"Structural code intelligence via Emacs treesit + combobulate. " +
 			"Subcommands: read (resolution-aware), outline, edit, buffers, diff, navigate, languages, install_grammar.",
@@ -97,7 +97,7 @@ export function createEmacsTool(_projectRoot: string, deps: EmacsToolDependencie
 // Warmup pipeline — mirrors warmupLspServers in packages/coding-agent/src/lsp
 // =============================================================================
 
-export interface EmacsWarmupOptions {
+export interface CodeWarmupOptions {
 	/**
 	 * Called immediately before the daemon is started, so the caller can display
 	 * a progress message without waiting for the full startup.
@@ -107,7 +107,7 @@ export interface EmacsWarmupOptions {
 	emacsPath?: string;
 }
 
-export interface EmacsWarmupResult {
+export interface CodeWarmupResult {
 	/** "ready"   — daemon started and socket is live.
 	 *  "error"    — daemon was attempted but failed; details in `error`.
 	 *  "unavailable" — Emacs / socat / treesit prerequisites are missing.
@@ -132,11 +132,11 @@ export interface EmacsWarmupResult {
  * @param sessionId   - Opaque session identifier (e.g. Pi session UUID).
  * @param options     - Optional callbacks and overrides.
  */
-export async function warmupEmacs(
+export async function warmupCode(
 	projectRoot: string,
 	sessionId: string,
-	options?: EmacsWarmupOptions,
-): Promise<EmacsWarmupResult> {
+	options?: CodeWarmupOptions,
+): Promise<CodeWarmupResult> {
 	const detection = await detectEmacs(options?.emacsPath);
 
 	// Surface detection failures as "unavailable" — these are environment issues,
@@ -146,7 +146,7 @@ export async function warmupEmacs(
 		if (!detection.treesitAvailable && detection.found && detection.meetsMinimum) {
 			reasons.push(`Emacs ${detection.version} is missing treesit support (built without --with-tree-sitter)`);
 		}
-		logger.debug("[emacs-warmup] prerequisites not met", { reasons });
+		logger.debug("[code-warmup] prerequisites not met", { reasons });
 		return {
 			status: "unavailable",
 			error: reasons.join("; "),
@@ -156,15 +156,15 @@ export async function warmupEmacs(
 	}
 
 	// Notify caller before blocking — same contract as warmupLspServers onConnecting.
-	options?.onConnecting?.("emacs-code");
+	options?.onConnecting?.("code");
 
 	try {
 		const session = await startEmacsSession(detection.path!, projectRoot, sessionId, EMACS_ELISP_DIR);
-		logger.debug("[emacs-warmup] daemon ready", { version: detection.version, projectRoot });
+		logger.debug("[code-warmup] daemon ready", { version: detection.version, projectRoot });
 		return { status: "ready", version: detection.version ?? undefined, session };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		logger.warn("[emacs-warmup] daemon startup failed", { error: msg, projectRoot });
+		logger.warn("[code-warmup] daemon startup failed", { error: msg, projectRoot });
 		return { status: "error", error: msg, version: detection.version ?? undefined, session: null };
 	}
 }

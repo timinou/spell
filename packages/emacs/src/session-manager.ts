@@ -1,18 +1,18 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { EmacsSession } from "./daemon";
-import type { EmacsWarmupResult } from "./tool";
+import type { CodeWarmupResult } from "./tool";
 
 const DEFAULT_FAILURE_THRESHOLD = 3;
 const DEFAULT_COOLDOWN_MS = 60_000;
 
 export interface EmacsSessionManagerOptions {
-	startSession: () => Promise<EmacsWarmupResult>;
+	startSession: () => Promise<CodeWarmupResult>;
 	failureThreshold?: number;
 	cooldownMs?: number;
 }
 
 export class EmacsSessionManager {
-	readonly #startSession: () => Promise<EmacsWarmupResult>;
+	readonly #startSession: () => Promise<CodeWarmupResult>;
 	readonly #failureThreshold: number;
 	readonly #cooldownMs: number;
 
@@ -64,7 +64,7 @@ export class EmacsSessionManager {
 		this.#session = null;
 	}
 
-	recordWarmupResult(result: EmacsWarmupResult | undefined): void {
+	recordWarmupResult(result: CodeWarmupResult | undefined): void {
 		if (!result) return;
 		const session = this.#applyWarmupResult(result);
 		if (this.#disposed && session) {
@@ -115,7 +115,7 @@ export class EmacsSessionManager {
 		logger.debug("[emacs-session-manager] Emacs marked permanently unavailable", { reason });
 	}
 
-	#applyWarmupResult(result: EmacsWarmupResult): EmacsSession | null {
+	#applyWarmupResult(result: CodeWarmupResult): EmacsSession | null {
 		switch (result.status) {
 			case "ready":
 				if (result.session?.isAlive()) {
