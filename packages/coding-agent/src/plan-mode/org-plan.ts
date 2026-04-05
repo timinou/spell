@@ -37,14 +37,20 @@ export function buildOrgConfig(settings: Settings) {
  * Mark an approved PLAN item as active by transitioning INIT -> DOING.
  *
  * Optionally prepends the first user message to the existing plan body.
- * Returns the plan item's CUSTOM_ID on success, or null when org is disabled.
+ * Returns the plan item's CUSTOM_ID and planning transcript path on success,
+ * or null when org is disabled.
  */
+export interface ApprovePlanResult {
+	id: string;
+	transcriptPath?: string;
+}
+
 export async function approvePlanItem(
 	settings: Settings,
 	projectRoot: string,
 	planItem: OrgPlanRef,
 	initialMessage?: string,
-): Promise<string | null> {
+): Promise<ApprovePlanResult | null> {
 	if (!settings.get("org.enabled")) return null;
 
 	const config = buildOrgConfig(settings);
@@ -70,8 +76,13 @@ export async function approvePlanItem(
 		throw new Error(`Failed to transition plan item "${planItem.id}" to DOING.`);
 	}
 
+	// Extract planning transcript path from the org file's #+TRANSCRIPT_PATH keyword.
+	// The value is stored as an org file link: [[file:/path/to/transcript.jsonl]]
+	const rawTranscript = item.properties.TRANSCRIPT_PATH;
+	const transcriptPath = rawTranscript?.match(/\[\[file:(.+?)\]\]/)?.[1];
+
 	logger.debug("org-plan: approved plan", { planId: planItem.id, planFilePath: planItem.file });
-	return planItem.id;
+	return { id: planItem.id, transcriptPath };
 }
 
 const COMPLETABLE_CHILD_STATES = new Set(["ITEM", ...ACTIVE_STATES]);

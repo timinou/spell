@@ -91,6 +91,10 @@ Before your final turn, you **MUST**:
 
 {{planContent}}
 
+{{#if planningTranscriptPath}}
+The planning session transcript is available at `{{planningTranscriptPath}}`. You can use `jq` to look up design decisions, Q&A, or other details from the planning conversation. For example: `jq -r '.message.content[]? | select(.type == "text") | .text' {{planningTranscriptPath}} | head -100`.
+{{/if}}
+
 {{#if modeExecutionInstructions}}
 ## Mode Execution Instructions
 

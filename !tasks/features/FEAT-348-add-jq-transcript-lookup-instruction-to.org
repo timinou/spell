@@ -1,0 +1,70 @@
+#+TITLE: Add jq transcript lookup instruction to plan execution prompt
+#+STATE: DONE
+#+SESSION_ID: 14aeeb53d7ac5ee2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-26-55-710Z_14aeeb53d7ac5ee2.jsonl]]
+#+CUSTOM_ID: FEAT-348-add-jq-transcript-lookup-instruction-to
+#+EFFORT: XS
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+NOTE [2026-04-05]: Implemented: captured planningTranscriptPath before session rotation, threaded it to template, added conditional jq instruction in plan-mode-approved.md.
+
+* Initial Message
+
+Below the "Initial message" part of plans, add an instruction to say that they can use jq to look up information in the planning session transcript
+
+* Goal
+
+When a plan is approved and the execution session starts, the executing agent should be told it can use =jq= to look up information in the planning session transcript. This enables the executor to recover design decisions, Q&A, or other context from the planning conversation without that information needing to be exhaustively copied into the plan body.
+
+* Design Decisions
+
+- The planning session transcript path is captured from =sessionManager.getSessionFile()= *before* =handleClearCommand()= rotates the session in =#approvePlan=.
+- The path is passed as a Handlebars template variable =planningTranscriptPath= to the =planModeApprovedPrompt= template.
+- The instruction is rendered conditionally in the template (={{#if planningTranscriptPath}}=) below =={{planContent}}== (which contains the =* Initial message= heading).
+- The path is NOT stored in the org item body — it is ephemeral and session-specific.
+- If persist is disabled and no session file exists, the instruction is omitted.
+
+* Implementation
+
+** File 1: =packages/coding-agent/src/modes/interactive-mode.ts=
+
+In the =#approvePlan= method, *before* the =handleClearCommand()= call (line ~1191), capture the current session file path:
+
+#+begin_src typescript
+const planningTranscriptPath = this.sessionManager.getSessionFile();
+#+end_src
+
+Then in the =renderPromptTemplate= call (line ~1261), add it to the template variables:
+
+#+begin_src typescript
+const prompt = renderPromptTemplate(planModeApprovedPrompt, {
+    planContent: orgToMarkdown(planContent),
+    finalPlanFilePath: planReferencePath,
+    orgItemId: approvedOrgItemId,
+    orgItemArtifactsDir: approvedOrgItemArtifactsDir,
+    planningTranscriptPath,  // <-- ADD THIS
+    waves: autoInitialized ? undefined : options.waves,
+    modeExecutionInstructions: modeConfig?.sections.instructions,
+    autoInitialized,
+    taskPolicies: hasTaskPolicies ? mergedPolicies : undefined,
+    taskPolicyList: hasTaskPolicies ? mergedPolicies.policies : undefined,
+});
+#+end_src
+
+** File 2: =packages/coding-agent/src/prompts/system/plan-mode-approved.md=
+
+After the =={{planContent}}== line (line ~92), add:
+
+#+begin_src markdown
+{{#if planningTranscriptPath}}
+
+The planning session transcript is available at `{{planningTranscriptPath}}`. You can use `jq` to look up design decisions, Q&A, or other details from the planning conversation. For example: `jq -r '.message.content[]? | select(.type == "text") | .text' {{planningTranscriptPath}} | head -100`.
+{{/if}}
+#+end_src
+
+* Verification
+
+- Run =bun check:ts= to confirm no type errors
+- Grep the two changed files to confirm the variable is threaded correctly
+- The instruction should appear in execution prompts only when a planning transcript exists

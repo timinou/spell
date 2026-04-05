@@ -40,8 +40,8 @@ describe("approvePlanItem", () => {
 		const planFile = await writePlanItem(planId, "* Context\nExisting plan body");
 		const settings = Settings.isolated();
 
-		const approvedId = await approvePlanItem(settings, tmpDir, { id: planId, file: planFile });
-		expect(approvedId).toBe(planId);
+		const approved = await approvePlanItem(settings, tmpDir, { id: planId, file: planFile });
+		expect(approved).toEqual({ id: planId, transcriptPath: undefined });
 
 		const updated = await Bun.file(planFile).text();
 		expect(updated).toContain("#+STATE: DOING");
@@ -58,6 +58,28 @@ describe("approvePlanItem", () => {
 		const updated = await Bun.file(planFile).text();
 		expect(updated).toContain("* Initial message\n\nUser asked for strict auth checks");
 		expect(updated).toContain("* Context\nOriginal body");
+	});
+
+	it("extracts transcript path from org file", async () => {
+		const planId = "PLAN-004-transcript-test";
+		const plansDir = path.join(tmpDir, "!tasks", "plans");
+		await fs.mkdir(plansDir, { recursive: true });
+		const planFile = path.join(plansDir, `${planId}.org`);
+		const content = [
+			`#+TITLE: ${planId}`,
+			`#+CUSTOM_ID: ${planId}`,
+			"#+STATE: INIT",
+			"#+TRANSCRIPT_PATH: [[file:/tmp/session.jsonl]]",
+			"",
+			"* Context",
+			"Plan body",
+			"",
+		].join("\n");
+		await Bun.write(planFile, content);
+		const settings = Settings.isolated();
+
+		const approved = await approvePlanItem(settings, tmpDir, { id: planId, file: planFile });
+		expect(approved).toEqual({ id: planId, transcriptPath: "/tmp/session.jsonl" });
 	});
 
 	it("returns null when org is disabled", async () => {

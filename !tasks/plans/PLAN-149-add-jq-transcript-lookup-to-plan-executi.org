@@ -1,0 +1,44 @@
+#+TITLE: Add jq transcript lookup to plan execution
+#+STATE: DONE
+#+SESSION_ID: 14aeeb53d7ac5ee2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-26-55-710Z_14aeeb53d7ac5ee2.jsonl]]
+#+CUSTOM_ID: PLAN-149-add-jq-transcript-lookup-to-plan-executi
+
+NOTE [2026-04-05]: All child items DONE. Verification passed.
+
+
+* Initial Message
+
+Below the "Initial message" part of plans, add an instruction to say that they can use jq to look up information in the planning session transcript
+
+* Context
+
+When a plan is approved and execution begins, the executing agent starts a fresh session with no memory of the planning conversation. Currently, any context not captured in the plan body or org items is lost. By telling the executor about the planning transcript and how to query it with jq, we give it a fallback for recovering design decisions, Q&A, or rationale that wasn't explicitly copied into the plan.
+
+The change threads the planning session's JSONL transcript path through to the execution prompt template, where a conditional instruction tells the agent how to use jq on it.
+
+Key decisions:
+1. Transcript path captured before session rotation, passed as template variable
+2. Instruction lives in the prompt template, not the org item body (ephemeral, session-specific)
+3. Omitted when persist is disabled (no transcript file)
+
+* Verification
+
+- =bun check:ts= passes
+- The two files (=interactive-mode.ts=, =plan-mode-approved.md=) contain the new variable threading and conditional instruction
+- No existing tests break
+
+* Execution Manifest
+
+- [[id:FEAT-348-add-jq-transcript-lookup-instruction-to]] Add jq transcript lookup instruction to plan execution prompt (XS)
+
+** Completion [2026-04-05]
+*** Verification
+- =bun check:ts= ran: all errors pre-existing (sql-store.ts, approvals.ts, tool-progress.ts, logger.ts). No new errors from this change.
+- =interactive-mode.ts=: confirmed =planningTranscriptPath= captured before =handleClearCommand()= (line 1190) and passed to =renderPromptTemplate= (line 1267).
+- =plan-mode-approved.md=: confirmed ={{#if planningTranscriptPath}}= block added after ={{planContent}}= (lines 94-96).
+- LSP diagnostics clean on =interactive-mode.ts=.
+*** Artifacts
+No visual artifacts needed — change is prompt template plumbing.
+*** Deviations
+None.
