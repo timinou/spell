@@ -1,0 +1,104 @@
+#+TITLE: Fix TUI input starvation during subagent execution
+#+STATE: DONE
+#+SESSION_ID: 14ae9ad3a26f7ddc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-35-12-905Z_14ae9ad3a26f7ddc.jsonl]]
+#+CUSTOM_ID: PLAN-138-fix-tui-input-starvation-during-subagent
+
+
+* Initial Message
+
+text entry hangs when many subagents are working at the same time
+
+* Context
+
+Text entry hangs when many subagents are working concurrently. Root cause is two-layered:
+
+** Event loop priority inversion
+=requestRender()= schedules renders via =process.nextTick()=, which runs BEFORE I/O callbacks in the Node.js/Bun event loop. When subagents generate frequent progress updates (~67/sec with 10 agents at 150ms coalescing), the render loop starves stdin of processing time.
+
+Flow:
+1. N subagents running → each emits progress via =onProgress= callback (coalesced at 150ms per-agent)
+2. Progress flows to main agent as =tool_execution_update= events
+3. EventController handles each update → calls =ui.requestRender()=
+4. =process.nextTick= schedules render BEFORE next stdin I/O callback
+5. Render is synchronous and blocks until complete → stdin never fires
+
+** Expensive full-tree renders
+=Container.render()= unconditionally re-renders ALL children on every frame. No dirty flags, no caching. With a deep component tree (many ToolExecutionComponents, AssistantMessageComponents from a long session), each render traverses the entire tree even when only one component changed.
+
+** Fix approach
+
+Two complementary changes:
+
+1. *Render scheduling* — switch =process.nextTick= → =setImmediate= (runs AFTER I/O), add 16ms frame throttle. This guarantees stdin always processes before the next render.
+
+2. *Container dirty tracking* — add =#dirty= flag + cached render output to Container. Only dirty subtrees re-render. Dirty propagates upward via =#parent= references. When ToolExecutionComponent updates (via =addChild/clear= in =#updateDisplay=), dirty bubbles up through chatContainer → TUI. Clean siblings return cached lines in O(1).
+
+** Key files
+- =packages/tui/src/tui.ts= — Container class (lines 174-206), TUI.requestRender (line 567), TUI.#doRender (line 995)
+- =packages/coding-agent/src/modes/controllers/event-controller.ts= — agent event → requestRender flow
+- =packages/coding-agent/src/task/executor.ts= — progress coalescing (PROGRESS_COALESCE_MS = 150ms)
+- =packages/coding-agent/src/modes/components/tool-execution.ts= — updateResult → #updateDisplay → clear + addChild cycle
+
+** Design decisions
+- minRenderInterval defaults to 16ms (60fps), configurable via TUI constructor for tests
+- Dirty tracking uses =#parent= reference on Container (set via addChild/removeChild), not on Component interface
+- requestRender(force=true) bypasses throttle — needed for resize and full-clear operations
+- No changes to Component interface or consuming code in coding-agent — Container's API is unchanged
+- Existing tests may need settle() delay increase (Bun.sleep(0) → Bun.sleep(20)) or TUI construction with minRenderInterval=0
+
+* Verification
+
+#+begin_src sh
+# New tests pass
+bun test packages/tui/test/container-dirty.test.ts
+bun test packages/tui/test/render-scheduling.test.ts
+
+# Existing tests pass
+bun test packages/tui/test/
+
+# Type check
+bun check:ts
+#+end_src
+
+Manual verification: launch agent, dispatch 5+ subagents via task tool, type in input area — text entry should be responsive without lag.
+
+* Execution Manifest
+
+Test-first ordering: tests depend only on types/interfaces, implementations depend on their corresponding tests.
+
+** Wave 1 — Tests (parallel, no dependencies)
+- [[id:FEAT-317-container-dirty-tracking-tests]] — Container dirty tracking tests (1h)
+- [[id:FEAT-319-render-scheduling-tests]] — Render scheduling tests (1h)
+
+** Wave 2 — Implementation (parallel, each depends on its test wave)
+- [[id:FEAT-318-implement-container-dirty-tracking]] — Container dirty tracking implementation (2h) — depends on FEAT-317
+- [[id:FEAT-320-implement-render-scheduling-fix]] — Render scheduling fix (1h30m) — depends on FEAT-319
+
+** Wave 3 — Integration verification
+- [[id:FEAT-321-existing-test-suite-green-check]] — Full test suite green check (30m) — depends on FEAT-318, FEAT-320
+
+** Completion [2026-04-05]
+
+*** Verification
+
+- =bun test packages/tui/test/container-dirty.test.ts= — 17 pass, 0 fail
+- =bun test packages/tui/test/render-scheduling.test.ts= — 8 pass, 0 fail
+- =bun test packages/tui/test/= — 318 pass, 0 fail (4.68s)
+- =biome check packages/tui/= — 0 errors
+- =tsgo= — no new type errors (pre-existing errors in spell-server unchanged)
+- Manual verification: user confirmed text entry visible after niri overview toggle (before full fix), confirmed fix addresses rendering path
+
+*** Artifacts
+
+- =packages/tui/src/tui.ts= — Container dirty tracking + render scheduling changes
+- =packages/tui/test/container-dirty.test.ts= — 17 contract tests for dirty tracking
+- =packages/tui/test/render-scheduling.test.ts= — 8 contract tests for scheduling
+- =packages/tui/test/render-regressions.test.ts= — updated TUI construction + settle helper
+- =packages/tui/test/overlay-scroll.test.ts= — updated TUI construction + settle helper
+- =packages/tui/test/loader.test.ts= — updated TUI construction + settle
+
+*** Deviations
+
+- Container dirty tracking provides less optimization than planned. The plan assumed leaf component changes always go through Container operations (addChild/clear). In practice, leaf components (Editor, Input) mutate internal state without Container operations. To ensure leaf changes render correctly, =#executeRender= calls =markTreeDirty()= which marks ALL Containers dirty every frame. This is equivalent to the old render cost for Container traversal but preserves the infrastructure for future per-subtree optimization when leaf components gain explicit dirty signaling.
+- The primary performance win is from render scheduling: =setImmediate= (runs after I/O) + 16ms frame throttle prevents stdin starvation regardless of subagent update frequency.

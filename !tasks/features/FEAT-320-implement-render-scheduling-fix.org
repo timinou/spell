@@ -1,0 +1,98 @@
+#+TITLE: Implement render scheduling fix
+#+STATE: DONE
+#+SESSION_ID: 14ae9ad3a26f7ddc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-35-12-905Z_14ae9ad3a26f7ddc.jsonl]]
+#+CUSTOM_ID: FEAT-320-implement-render-scheduling-fix
+#+EFFORT: 1h30m
+#+PRIORITY: #A
+#+LAYER: tui
+#+DEPENDS: FEAT-319-render-scheduling-tests
+
+* Initial Message
+
+text entry hangs when many subagents are working at the same time
+
+** Problem
+=process.nextTick= in =requestRender()= runs BEFORE stdin I/O callbacks, starving text input when many subagents generate frequent render triggers. Combined with synchronous full-tree rendering, this causes text entry to hang.
+
+** Target file: =packages/tui/src/tui.ts= (TUI class)
+
+** Design
+
+*** 1. Switch process.nextTick to setImmediate
+=setImmediate= runs in the check phase, AFTER I/O callbacks. This guarantees stdin data is processed before the next render.
+
+*** 2. Add render throttle (16ms default)
+Track =performance.now()= of last render. If a render is requested before the minimum interval has elapsed, schedule it via =setTimeout= for the remaining delay.
+
+#+begin_src typescript
+// New fields on TUI
+#lastRenderTime = 0;
+#minRenderInterval: number; // default 16, configurable via constructor
+#throttleTimer?: ReturnType<typeof setTimeout>;
+
+requestRender(force = false): void {
+    if (force) {
+        this.#previousLines = [];
+        this.#previousWidth = -1;
+        this.#cursorRow = 0;
+        this.#hardwareCursorRow = 0;
+        this.#viewportTopRow = 0;
+        this.#maxLinesRendered = 0;
+    }
+    if (this.#renderRequested) return;
+    this.#renderRequested = true;
+
+    if (force || this.#minRenderInterval <= 0) {
+        // No throttle: schedule after I/O
+        setImmediate(() => this.#executeRender());
+        return;
+    }
+
+    const elapsed = performance.now() - this.#lastRenderTime;
+    if (elapsed >= this.#minRenderInterval) {
+        // Enough time passed: schedule after I/O
+        setImmediate(() => this.#executeRender());
+    } else {
+        // Throttle: wait for remaining interval
+        const remaining = this.#minRenderInterval - elapsed;
+        this.#throttleTimer = setTimeout(() => {
+            this.#throttleTimer = undefined;
+            this.#executeRender();
+        }, remaining);
+    }
+}
+
+#executeRender(): void {
+    this.#renderRequested = false;
+    this.#lastRenderTime = performance.now();
+    this.#doRender();
+}
+#+end_src
+
+*** 3. Configurable minimum interval
+Add optional =minRenderInterval= to TUI constructor (second or options parameter). Default: 16. Tests pass 0 for instant settling.
+
+*** 4. Cleanup throttle timer on stop
+=stop()= must clear any pending throttle timer to prevent post-dispose renders.
+
+** Backward compatibility for existing tests
+Existing tests use =await Bun.sleep(0)= to settle renders (works with process.nextTick). With setImmediate:
+- =Bun.sleep(0)= resolves via setTimeout(0) which runs in the timer phase AFTER setImmediate, so it still works
+- Tests that don't construct TUI directly are unaffected
+- Tests that construct TUI with default throttle (16ms) need =Bun.sleep(16)= to settle — OR pass minRenderInterval=0
+
+Option: have existing render-regressions tests construct TUI with minRenderInterval=0 so settle() still works. OR update settle() to use Bun.sleep(20). The second is simpler and avoids modifying test code.
+
+** Edge cases
+- requestRender(force=true) during throttle window: clears throttle timer, schedules immediate render
+- stop() during pending throttle: clears timer, no render fires
+- Multiple requestRender calls during throttle: coalescing flag prevents duplicates
+- First render after start: no throttle (lastRenderTime=0, elapsed is large)
+
+** Acceptance
+- All tests from FEAT-319 pass
+- =bun check:ts= passes
+- Existing TUI tests pass: =bun test packages/tui/test/=
+  - Update =settle()= in render-regressions.test.ts if needed (Bun.sleep(20) instead of Bun.sleep(0))
+- Text input responsiveness measurably improved during subagent execution (manual verification)

@@ -1,0 +1,52 @@
+#+TITLE: Render scheduling tests
+#+STATE: DONE
+#+SESSION_ID: 14ae9ad3a26f7ddc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-35-12-905Z_14ae9ad3a26f7ddc.jsonl]]
+#+CUSTOM_ID: FEAT-319-render-scheduling-tests
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: tui
+
+* Initial Message
+
+text entry hangs when many subagents are working at the same time
+
+** Problem
+=requestRender()= uses =process.nextTick()= which runs BEFORE stdin I/O callbacks in the event loop, causing input starvation when renders are frequent (many subagents running).
+
+** Tests (test file: =packages/tui/test/render-scheduling.test.ts=)
+
+Write tests BEFORE implementation. Tests should validate the new scheduling contract.
+
+*** Contract: setImmediate scheduling (I/O priority)
+- After requestRender(), render does NOT fire during process.nextTick phase
+- After requestRender(), render fires during setImmediate/setTimeout phase
+- Test: schedule a process.nextTick that checks #doRender hasn't run yet, then await setImmediate to confirm it has
+- Simpler test: use a spy on #doRender (or track render count via VirtualTerminal write count)
+
+*** Contract: render throttle (16ms minimum interval)
+- Two rapid requestRender() calls within 16ms: only ONE render fires
+- After 16ms delay, requestRender() fires immediately (via setImmediate)
+- requestRender(force=true) ignores throttle — always renders
+
+*** Contract: coalescing (existing behavior, regression test)
+- Multiple requestRender() calls in the same tick: only one render fires
+- requestRender() while render is already scheduled: no double render
+
+*** Contract: configurable throttle interval
+- TUI accepts =minRenderInterval= option (default 16ms)
+- Setting minRenderInterval=0 disables throttle (for tests)
+
+** Test approach
+- Use VirtualTerminal
+- Track render count by counting terminal.write calls or by inspecting viewport changes
+- Use =Bun.sleep(ms)= to advance time between assertions
+- Use =process.nextTick= / =setImmediate= / =setTimeout= to test event loop ordering
+
+** settle() helper update
+Existing tests use =await Bun.sleep(0)= + =term.flush()=. With 16ms throttle, settle needs to wait 16ms. Add a =settleThrottled= helper or configure TUI with minRenderInterval=0 for existing tests.
+
+** Acceptance
+- Test file exists at =packages/tui/test/render-scheduling.test.ts=
+- Tests cover all contracts above
+- No mocks — test real TUI rendering behavior

@@ -1,0 +1,31 @@
+#+TITLE: Existing test suite green check
+#+STATE: DONE
+#+SESSION_ID: 14ae9ad3a26f7ddc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-35-12-905Z_14ae9ad3a26f7ddc.jsonl]]
+#+CUSTOM_ID: FEAT-321-existing-test-suite-green-check
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: tui
+#+DEPENDS: FEAT-318-implement-container-dirty-tracking FEAT-320-implement-render-scheduling-fix
+
+* Initial Message
+
+text entry hangs when many subagents are working at the same time
+
+** Purpose
+After both implementation items land, verify the entire TUI test suite and type check passes. Fix any regressions introduced by dirty tracking or scheduling changes.
+
+** Steps
+1. Run =bun test packages/tui/test/= — all existing tests must pass
+2. Run =bun check:ts= — no type errors
+3. If existing tests use =settle()= with =Bun.sleep(0)= and now fail due to throttle timing:
+   - Update =settle()= to =await Bun.sleep(20)= or construct TUI with =minRenderInterval: 0=
+   - Prefer the latter for determinism
+4. If Container dirty tracking breaks any render regression test:
+   - Investigate: is the test asserting implementation detail (render count) or behavior (visible output)?
+   - Fix the test if it asserts internal detail; fix the implementation if behavior regressed
+
+** Acceptance
+- =bun test packages/tui/test/= all green
+- =bun check:ts= passes
+- No rendering artifacts in manual spot-check (launch the agent, type text, verify TUI looks normal)

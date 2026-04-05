@@ -25,7 +25,9 @@ function rows(prefix: string, count: number): string[] {
 }
 
 async function settle(term: VirtualTerminal): Promise<void> {
-	await Bun.sleep(0);
+	const { promise, resolve } = Promise.withResolvers<void>();
+	setImmediate(resolve);
+	await promise;
 	await term.flush();
 }
 
@@ -45,7 +47,7 @@ describe("TUI terminal-state regressions", () => {
 	describe("cursor + differential stability", () => {
 		it("keeps stable output across repeated no-op renders", async () => {
 			const term = new VirtualTerminal(40, 10);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const component = new MutableLinesComponent(["hello", "world", "stable"]);
 			tui.addChild(component);
 
@@ -67,7 +69,7 @@ describe("TUI terminal-state regressions", () => {
 
 		it("updates only changed middle line without corrupting neighbors", async () => {
 			const term = new VirtualTerminal(40, 10);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const component = new MutableLinesComponent(["AAA", "BBB", "CCC", "DDD", "EEE"]);
 			tui.addChild(component);
 
@@ -93,7 +95,7 @@ describe("TUI terminal-state regressions", () => {
 
 		it("clears removed tail lines after shrink", async () => {
 			const term = new VirtualTerminal(40, 10);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const component = new MutableLinesComponent(["A", "B", "C", "D", "E"]);
 			tui.setClearOnShrink(true);
 			tui.addChild(component);
@@ -119,7 +121,7 @@ describe("TUI terminal-state regressions", () => {
 
 		it("clears row 0 when content shrinks to empty without clearOnShrink", async () => {
 			const term = new VirtualTerminal(40, 10);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const component = new MutableLinesComponent(["A"]);
 			tui.setClearOnShrink(false);
 			tui.addChild(component);
@@ -146,7 +148,7 @@ describe("TUI terminal-state regressions", () => {
 			term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
 			await settle(term);
 
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const component = new MutableLinesComponent(rows("ui-", 8));
 			tui.addChild(component);
 
@@ -166,7 +168,7 @@ describe("TUI terminal-state regressions", () => {
 
 		it("resizing width truncates visible lines without ghost wrap rows", async () => {
 			const term = new VirtualTerminal(30, 6);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const component = new MutableLinesComponent([
 				"012345678901234567890123456789012345",
 				"ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
@@ -191,7 +193,7 @@ describe("TUI terminal-state regressions", () => {
 
 		it("maintains exact viewport rows across repeated width reflow on sparse mixed content", async () => {
 			const term = new VirtualTerminal(80, 18);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const lines = [
 				"doesnt matter",
 				"",
@@ -255,7 +257,7 @@ describe("TUI terminal-state regressions", () => {
 		});
 		it("aggressive resize storm does not duplicate viewport content", async () => {
 			const term = new VirtualTerminal(80, 18);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const lines = [
 				"doesnt matter",
 				"",
@@ -324,7 +326,7 @@ describe("TUI terminal-state regressions", () => {
 		});
 		it("height-only resize recovers from cursor drift without duplicate rows", async () => {
 			const term = new VirtualTerminal(80, 18);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const lines = [
 				"doesnt matter",
 				"",
@@ -390,7 +392,7 @@ describe("TUI terminal-state regressions", () => {
 		});
 		it("streaming content under aggressive resize keeps a single consistent viewport", async () => {
 			const term = new VirtualTerminal(80, 18);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const source = [
 				"doesnt matter",
 				"",
@@ -477,7 +479,7 @@ describe("TUI terminal-state regressions", () => {
 		});
 		it("forced renders during resize storm stay stable under cursor relocation", async () => {
 			const term = new VirtualTerminal(80, 18);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const lines = Array.from({ length: 40 }, (_v, i) => `row-${i}`);
 			const component = new MutableLinesComponent(lines);
 			tui.addChild(component);
@@ -512,7 +514,7 @@ describe("TUI terminal-state regressions", () => {
 		});
 		it("shrink then grow keeps tail anchored to latest rows", async () => {
 			const term = new VirtualTerminal(24, 6);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const component = new MutableLinesComponent(rows("row-", 30));
 			tui.addChild(component);
 
@@ -538,7 +540,7 @@ describe("TUI terminal-state regressions", () => {
 		});
 		it("mixed width/height resize storm keeps scrollback bounded for static content", async () => {
 			const term = new VirtualTerminal(80, 18);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const lines = [
 				"doesnt matter",
 				"",
@@ -609,7 +611,7 @@ describe("TUI terminal-state regressions", () => {
 	describe("scrollback integrity", () => {
 		it("overflow content appears once across buffer without duplicate row IDs", async () => {
 			const term = new VirtualTerminal(32, 5);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const component = new MutableLinesComponent(rows("line-", 10));
 			tui.addChild(component);
 
@@ -629,7 +631,7 @@ describe("TUI terminal-state regressions", () => {
 
 		it("appending lines during aggressive resize does not duplicate history rows", async () => {
 			const term = new VirtualTerminal(80, 18);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const lines: string[] = [];
 			const component = new MutableLinesComponent(lines);
 			tui.addChild(component);
@@ -664,7 +666,7 @@ describe("TUI terminal-state regressions", () => {
 
 		it("retains append history when offscreen header changes during overflow growth", async () => {
 			const term = new VirtualTerminal(32, 6);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const logLines = rows("line-", 6);
 			let tick = 0;
 			const component = new MutableLinesComponent([`status-${tick}`, ...logLines]);
@@ -703,7 +705,7 @@ describe("TUI terminal-state regressions", () => {
 		});
 		it("updates visible tail line when appending during overflow", async () => {
 			const term = new VirtualTerminal(32, 5);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const lines = [...rows("line-", 7), "tail-0"];
 			const component = new MutableLinesComponent(lines);
 			tui.addChild(component);
@@ -729,7 +731,7 @@ describe("TUI terminal-state regressions", () => {
 		});
 		it("forced full redraws do not duplicate persistent content", async () => {
 			const term = new VirtualTerminal(40, 5);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const component = new MutableLinesComponent(["alpha", "beta", "gamma"]);
 			tui.addChild(component);
 
@@ -755,7 +757,7 @@ describe("TUI terminal-state regressions", () => {
 	describe("overlay compositing", () => {
 		it("overlay show/hide restores underlying content", async () => {
 			const term = new VirtualTerminal(40, 8);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const base = new MutableLinesComponent(rows("base-", 8));
 			tui.addChild(base);
 
@@ -788,7 +790,7 @@ describe("TUI terminal-state regressions", () => {
 	describe("stress scenarios", () => {
 		it("rapid content mutations converge to final expected screen", async () => {
 			const term = new VirtualTerminal(30, 8);
-			const tui = new TUI(term);
+			const tui = new TUI(term, { minRenderInterval: 0 });
 			const component = new MutableLinesComponent(["init"]);
 			tui.addChild(component);
 

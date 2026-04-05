@@ -173,23 +173,60 @@ export interface OverlayHandle {
  */
 export class Container implements Component {
 	children: Component[] = [];
+	#dirty = true;
+	#cachedLines: string[] = [];
+	#cachedWidth = -1;
+	#parent?: Container;
+
+	markDirty(): void {
+		if (this.#dirty) return;
+		this.#dirty = true;
+		this.#parent?.markDirty();
+	}
+
+	/** Mark this Container and all descendant Containers dirty.
+	 *  Unlike invalidate(), does NOT call Component.invalidate() on leaf
+	 *  components (avoids expensive cache clears like Markdown). */
+	markTreeDirty(): void {
+		this.#dirty = true;
+		for (const child of this.children) {
+			if (child instanceof Container) {
+				child.markTreeDirty();
+			}
+		}
+	}
 
 	addChild(component: Component): void {
 		this.children.push(component);
+		if (component instanceof Container) {
+			component.#parent = this;
+		}
+		this.markDirty();
 	}
 
 	removeChild(component: Component): void {
 		const index = this.children.indexOf(component);
 		if (index !== -1) {
 			this.children.splice(index, 1);
+			if (component instanceof Container && component.#parent === this) {
+				component.#parent = undefined;
+			}
+			this.markDirty();
 		}
 	}
 
 	clear(): void {
+		for (const child of this.children) {
+			if (child instanceof Container && child.#parent === this) {
+				child.#parent = undefined;
+			}
+		}
 		this.children = [];
+		this.markDirty();
 	}
 
 	invalidate(): void {
+		this.markDirty();
 		for (const child of this.children) {
 			child.invalidate?.();
 		}
@@ -197,10 +234,16 @@ export class Container implements Component {
 
 	render(width: number): string[] {
 		width = Math.max(1, width);
+		if (!this.#dirty && this.#cachedWidth === width) {
+			return this.#cachedLines;
+		}
 		const lines: string[] = [];
 		for (const child of this.children) {
 			lines.push(...child.render(width));
 		}
+		this.#cachedLines = lines;
+		this.#cachedWidth = width;
+		this.#dirty = false;
 		return lines;
 	}
 }
@@ -218,6 +261,9 @@ export class TUI extends Container {
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	onDebug?: () => void;
 	#renderRequested = false;
+	#lastRenderTime = 0;
+	#minRenderInterval: number;
+	#throttleTimer?: NodeJS.Timeout;
 	#cursorRow = 0; // Logical cursor row (end of rendered content)
 	#hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
 	#viewportTopRow = 0; // Content row currently mapped to screen row 0
@@ -242,11 +288,18 @@ export class TUI extends Container {
 		hidden: boolean;
 	}[] = [];
 
-	constructor(terminal: Terminal, showHardwareCursor?: boolean) {
+	constructor(terminal: Terminal, options?: boolean | { showHardwareCursor?: boolean; minRenderInterval?: number }) {
 		super();
 		this.terminal = terminal;
-		if (showHardwareCursor !== undefined) {
-			this.#showHardwareCursor = showHardwareCursor;
+		if (typeof options === "boolean") {
+			// Backward compat: constructor(terminal, showHardwareCursor)
+			this.#showHardwareCursor = options;
+			this.#minRenderInterval = 16;
+		} else {
+			if (options?.showHardwareCursor !== undefined) {
+				this.#showHardwareCursor = options.showHardwareCursor;
+			}
+			this.#minRenderInterval = options?.minRenderInterval ?? 16;
 		}
 	}
 
@@ -548,6 +601,11 @@ export class TUI extends Container {
 	stop(): void {
 		this.#clearSixelProbeState();
 		this.#stopped = true;
+		// Cancel pending throttle timer
+		if (this.#throttleTimer) {
+			clearTimeout(this.#throttleTimer);
+			this.#throttleTimer = undefined;
+		}
 		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
 		if (this.#previousLines.length > 0) {
 			const targetRow = this.#previousLines.length; // Line after the last content
@@ -572,13 +630,43 @@ export class TUI extends Container {
 			this.#hardwareCursorRow = 0;
 			this.#viewportTopRow = 0;
 			this.#maxLinesRendered = 0;
+			// Cancel pending throttle timer — force takes priority
+			if (this.#throttleTimer) {
+				clearTimeout(this.#throttleTimer);
+				this.#throttleTimer = undefined;
+			}
 		}
 		if (this.#renderRequested) return;
 		this.#renderRequested = true;
-		process.nextTick(() => {
-			this.#renderRequested = false;
-			this.#doRender();
-		});
+
+		if (force || this.#minRenderInterval <= 0) {
+			// No throttle: schedule after I/O callbacks
+			setImmediate(() => this.#executeRender());
+			return;
+		}
+
+		const elapsed = performance.now() - this.#lastRenderTime;
+		if (elapsed >= this.#minRenderInterval) {
+			// Enough time since last render: schedule after I/O callbacks
+			setImmediate(() => this.#executeRender());
+		} else {
+			// Throttle: wait for remaining interval
+			const remaining = this.#minRenderInterval - elapsed;
+			this.#throttleTimer = setTimeout(() => {
+				this.#throttleTimer = undefined;
+				this.#executeRender();
+			}, remaining);
+		}
+	}
+
+	#executeRender(): void {
+		this.#renderRequested = false;
+		this.#lastRenderTime = performance.now();
+		// Mark all Containers dirty so leaf component changes are picked up.
+		// This is O(n_containers) but avoids calling Component.invalidate()
+		// on leaf components (which can be expensive, e.g. Markdown cache clear).
+		this.markTreeDirty();
+		this.#doRender();
 	}
 
 	#handleInput(data: string): void {
