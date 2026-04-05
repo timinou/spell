@@ -53,8 +53,8 @@ import {
 	type StateSchemaTable,
 	type StateSchemaTableColumn,
 	type SyncCollection,
-	type ToolModule,
 	type TelegramHook,
+	type ToolModule,
 	type WebhookHook,
 	type WebhookSchedule,
 } from "./types";

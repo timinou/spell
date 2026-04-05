@@ -132,7 +132,7 @@ describe("generateOperatorActionHandler", () => {
 		};
 
 		// Should propagate the unexpected error
-		expect(handler(makeRequest("reject", "article-err", "req-2"))).rejects.toThrow(
+		await expect(handler(makeRequest("reject", "article-err", "req-2"))).rejects.toThrow(
 			"database connection lost",
 		);
 
@@ -152,7 +152,6 @@ describe("generateOperatorActionHandler", () => {
 		engine.claimItem = (input) => {
 			const item = originalClaim(input);
 			throw new Error("Workflow item wf-1 is already claimed by other-user");
-			return item; // unreachable, satisfies type
 		};
 
 		// Should NOT throw — the "already claimed" error is suppressed
