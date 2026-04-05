@@ -1,0 +1,107 @@
+#+TITLE: TodoStatus gate_failed extension
+#+STATE: DONE
+#+SESSION_ID: 14af1830f0e2d7e6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T19-42-56-451Z_14af1830f0e2d7e6.jsonl]]
+#+CUSTOM_ID: FEAT-359-todostatus-gate-failed-extension
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: agent
+
+* Initial Message
+
+ilures, there are two systematic issues the subagents keep
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T18-49-31-134Z_14af0bf6bfbf7c88.jsonl
+ ID: 14af0bf6bfbf7c88
+
+
+
+Why did the GraphRAGModules fail?
+
+* Goal
+Add =gate_failed= as a new =TodoStatus= literal. Update all status-dependent logic: =StatusEnum=, =isPhaseComplete=, =normalizeInProgressTask=, =hasUnresolvedBlockers=, =formatSummary=, =formatTodoLine= (TUI), and the =todo-write.md= prompt.
+
+Also extend =TodoDelegationResult= with a =gateFailures= field to carry structured gate failure information.
+
+* Design Decisions
+- =gate_failed= is a *terminal, blocking* status. It means: "subagent completed, but required gates were not satisfied."
+- =isPhaseComplete=: =gate_failed= does NOT count as complete (same as =failed=).
+- =normalizeInProgressTask=: =gate_failed= stops auto-promotion (same as =failed=). Add it alongside the =hasFailedTask= check.
+- =hasUnresolvedBlockers=: =gate_failed= does NOT count as resolved — dependents stay blocked (blocker must be =completed= or =abandoned=).
+- =formatSummary=: new =--- Gate Failures ---= section listing each =gate_failed= task and its =gateFailures= detail.
+- TUI: =gate_failed= renders in ="warning"= color with =[gate failed]= suffix (distinct from ="error"= used by =failed=).
+- =gate_failed= is system-only: only =finalizeTodoRef= (in a later item) will set it. The LLM agent cannot set it directly via =todo_write= ops. However, the =StatusEnum= TypeBox schema must include it so the =update= op accepts it (the task dispatcher calls =todo_write= internally). Alternative: we could skip adding it to StatusEnum and have the task dispatcher bypass the schema, but that's worse. Include it in StatusEnum.
+- Prompt =todo-write.md=: add =gate_failed= to the status table with description "Delegated work completed but required verification gates were not satisfied".
+
+* Files
+- *Modify*: =packages/coding-agent/src/tools/todo-write.ts=
+- *Modify*: =packages/coding-agent/test/tools/todo-write-gates.test.ts= (extend existing)
+- *Modify*: =packages/coding-agent/src/prompts/tools/todo-write.md=
+
+* Type Changes
+#+begin_src typescript
+// Before:
+export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned" | "failed";
+
+// After:
+export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned" | "failed" | "gate_failed";
+
+// StatusEnum (line 86):
+const StatusEnum = StringEnum(
+  ["pending", "in_progress", "completed", "abandoned", "failed", "gate_failed"] as const,
+  { description: "Task status" },
+);
+
+// TodoDelegationResult — add gateFailures field:
+export interface TodoDelegationResult {
+  output?: string;
+  error?: string;
+  outputPath?: string;
+  gateFailures?: Array<{ gate: string; expected: string; detail: string }>;
+}
+#+end_src
+
+* Test Scenarios (write FIRST, then implement)
+
+Test file: =packages/coding-agent/test/tools/todo-write-gates.test.ts= — add new describe blocks.
+
+** isPhaseComplete with gate_failed
+1. Phase with one =gate_failed= task → =isPhaseComplete= returns =false=
+2. Phase with =completed= + =gate_failed= → =isPhaseComplete= returns =false=
+3. Phase with all =completed= → still returns =true= (regression check)
+
+** normalizeInProgressTask with gate_failed
+1. When a =gate_failed= task exists, auto-promotion does NOT happen (same as =failed=)
+2. When only =completed= and =pending= tasks exist (no =gate_failed= or =failed=), auto-promotion still works
+
+** hasUnresolvedBlockers with gate_failed
+1. Task with blocker in =gate_failed= status → =hasUnresolvedBlockers= returns =true=
+2. Task with blocker in =completed= status → =hasUnresolvedBlockers= returns =false= (regression)
+
+** formatSummary with gate_failed
+1. Task in =gate_failed= with =delegation.result.gateFailures= → summary includes =--- Gate Failures ---= section
+2. =gate_failed= task with gateCmd failure → summary shows "gate_failed: task-1 ... gateCmd not satisfied: expected `bun test`, not detected in subagent bash history"
+3. Multiple gate failures on one task → all listed
+4. No =gate_failed= tasks → no Gate Failures section
+
+** formatTodoLine (TUI) with gate_failed
+1. =gate_failed= task → rendered in =warning= color with =[gate failed]= suffix
+2. =failed= task → still rendered in =error= color (regression check)
+
+** applyOps with gate_failed
+1. Transition =in_progress= → =gate_failed= via update op → succeeds
+2. =gate_failed= status accepted by =applyOps=
+3. Two-phase verification: =gate_failed= is NOT subject to the =hasRequiredGate= check (it's not ="completed"=)
+
+* Verification
+Run: =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts=
+
+* Implementation Notes
+- =isPhaseComplete= (line ~499): currently checks =completed= or =abandoned=. No change needed — =gate_failed= is already excluded since it's neither.
+- =normalizeInProgressTask= (line ~460): the check =const hasFailedTask = orderedTasks.some(task => task.status === "failed")= must also include =gate_failed=. Change to: =const hasTerminalFailure = orderedTasks.some(task => task.status === "failed" || task.status === "gate_failed")=.
+- =hasUnresolvedBlockers= (line ~425): checks =blocker.status !== "completed" && blocker.status !== "abandoned"=. =gate_failed= is already excluded from resolution — no change needed.
+- =formatTodoLine= (line ~951): add =case "gate_failed":= before the =default= case.
+- =formatSummary=: detect =gate_failed= tasks and render a new section. Gate failure details come from =task.delegation?.result?.gateFailures=.
+- Prompt: add row to status table in =todo-write.md= after the =failed= row.

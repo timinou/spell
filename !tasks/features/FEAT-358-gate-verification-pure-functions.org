@@ -1,0 +1,154 @@
+#+TITLE: Gate verification pure functions
+#+STATE: DONE
+#+SESSION_ID: 14af1830f0e2d7e6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T19-42-56-451Z_14af1830f0e2d7e6.jsonl]]
+#+CUSTOM_ID: FEAT-358-gate-verification-pure-functions
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: agent
+
+* Initial Message
+
+ilures, there are two systematic issues the subagents keep
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T18-49-31-134Z_14af0bf6bfbf7c88.jsonl
+ ID: 14af0bf6bfbf7c88
+
+
+
+Why did the GraphRAGModules fail?
+
+* Goal
+Implement pure functions for verifying whether a subagent satisfied its gate requirements based on tracked bash command history.
+
+* Design Decisions
+- Command matching is normalized: strip =cd DIR &&= / =cd DIR ;= prefixes, trim whitespace, then check if gateCmd appears as a substring of any executed command.
+- =gateCommit= detection: check if any executed command contains =git commit= (but NOT =git commit --amend --no-edit= used for rebase fixups? No — any =git commit= counts).
+- =gateArtifact= is a filesystem check (async) — verify file exists at the given path relative to cwd.
+- All functions are pure except =verifyGateArtifact= which is async I/O.
+- The =GateFailure= type carries: =gate= (which gate), =expected= (the gate value), =detail= (human-readable explanation).
+
+* Files
+- *Create*: =packages/coding-agent/src/task/gate-verification.ts=
+- *Create*: =packages/coding-agent/test/task/gate-verification.test.ts=
+
+* Types
+#+begin_src typescript
+/** Which gate was checked */
+export type GateType = "gateCmd" | "gateCommit" | "gateArtifact";
+
+/** A single gate check failure */
+export interface GateFailure {
+  gate: GateType;
+  expected: string;
+  detail: string;
+}
+
+/** Tracked bash execution from subprocess tool handler */
+export interface TrackedBashExecution {
+  command: string;
+  exitCode: number;
+}
+
+/** Result of verifying all gates for a task */
+export interface GateVerificationResult {
+  passed: boolean;
+  failures: GateFailure[];
+}
+#+end_src
+
+* Function Signatures
+#+begin_src typescript
+/**
+ * Strip cd/pushd prefixes and trim whitespace from a bash command.
+ * "cd /app && bun test foo.test.ts" → "bun test foo.test.ts"
+ * "  bun test  " → "bun test"
+ */
+export function normalizeCommand(command: string): string;
+
+/**
+ * Check if gateCmd appears (normalized) as substring of any executed command.
+ * Only considers commands that exited with code 0.
+ */
+export function matchesGateCmd(gateCmd: string, executions: TrackedBashExecution[]): boolean;
+
+/**
+ * Check if any executed command contains "git commit".
+ */
+export function detectGitCommit(executions: TrackedBashExecution[]): boolean;
+
+/**
+ * Check if a file exists at the given path.
+ */
+export function verifyGateArtifact(artifactPath: string, cwd: string): Promise<boolean>;
+
+/**
+ * Verify all applicable gates for a task. Returns passed: true if all gates satisfied.
+ * Only call when the subagent completed successfully (exitCode 0).
+ */
+export async function verifyGates(opts: {
+  gateCmd?: string;
+  gateCommit?: boolean;
+  gateArtifact?: string;
+  executions: TrackedBashExecution[];
+  cwd: string;
+}): Promise<GateVerificationResult>;
+#+end_src
+
+* Test Scenarios (write FIRST, then implement)
+
+Test file: =packages/coding-agent/test/task/gate-verification.test.ts=
+
+** normalizeCommand
+1. Passthrough: ="bun test test/foo.test.ts"= → ="bun test test/foo.test.ts"=
+2. Trims whitespace: ="  bun test  "= → ="bun test"=
+3. Strips =cd DIR &&=: ="cd /app && bun test foo.ts"= → ="bun test foo.ts"=
+4. Strips =cd DIR ;=: ="cd /app ; bun test"= → ="bun test"=
+5. Strips =pushd DIR &&=: ="pushd /app && bun test"= → ="bun test"=
+6. Multiple cd prefixes: ="cd /app && cd sub && bun test"= → ="bun test"=
+7. Preserves cd when it's not a prefix: ="echo cd /app && bun test"= stays as-is (cd not at start)
+8. Empty string → empty string
+
+** matchesGateCmd
+1. Exact match in successful execution → true
+2. gateCmd as substring of longer command (with cd prefix) → true
+3. No match in any execution → false
+4. Empty executions array → false
+5. Command matches but exitCode non-zero → false (gate not satisfied if command failed)
+6. Case-sensitive match (=Bun Test= does not match =bun test=)
+
+** detectGitCommit
+1. ="git commit -m 'fix'"= present → true
+2. ="git commit --amend"= present → true
+3. Only ="git add ."= present → false
+4. Empty array → false
+5. ="cd repo && git commit -m fix"= → true (contains =git commit=)
+6. ="git-commit"= (hyphenated) → false (not a real git commit)
+
+** verifyGateArtifact
+1. File exists → true
+2. File does not exist → false
+3. Path is relative, resolved against cwd
+
+** verifyGates (integration of above)
+1. No gates → =passed: true=, empty failures
+2. gateCmd satisfied → =passed: true=
+3. gateCmd not satisfied → =passed: false=, one failure with =gate: "gateCmd"=
+4. gateCommit required and detected → =passed: true=
+5. gateCommit required but not detected → =passed: false=, failure with =gate: "gateCommit"=
+6. gateArtifact required and file exists → =passed: true=
+7. gateArtifact required but file missing → =passed: false=, failure with =gate: "gateArtifact"=
+8. Multiple gates: all pass → =passed: true=
+9. Multiple gates: one fails → =passed: false= with that failure listed
+
+* Verification
+Run: =bun test packages/coding-agent/test/task/gate-verification.test.ts=
+
+* Implementation Notes
+- Follow existing patterns in =packages/coding-agent/src/task/= for module structure.
+- =normalizeCommand= regex: strip =^(cd|pushd)\s+\S+\s*[;&]+\s*= repeatedly.
+- =verifyGateArtifact= uses =import * as fs from "node:fs/promises"= with =fs.stat= + =isEnoent= for error handling.
+- Use =import { isEnoent } from "@oh-my-pi/pi-utils"= for ENOENT detection (project convention).
+- Export all types and functions from the new module.

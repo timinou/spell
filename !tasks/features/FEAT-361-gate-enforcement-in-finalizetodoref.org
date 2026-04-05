@@ -1,0 +1,156 @@
+#+TITLE: Gate enforcement in finalizeTodoRef
+#+STATE: DONE
+#+SESSION_ID: 14af1830f0e2d7e6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T19-42-56-451Z_14af1830f0e2d7e6.jsonl]]
+#+CUSTOM_ID: FEAT-361-gate-enforcement-in-finalizetodoref
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: agent
+#+DEPENDS: FEAT-358-gate-verification-pure-functions FEAT-359-todostatus-gate-failed-extension FEAT-360-bash-subprocess-tool-handler
+
+* Initial Message
+
+ilures, there are two systematic issues the subagents keep
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T18-49-31-134Z_14af0bf6bfbf7c88.jsonl
+ ID: 14af0bf6bfbf7c88
+
+
+
+Why did the GraphRAGModules fail?
+
+* Goal
+Wire gate verification into the task completion path. When a subagent completes (exitCode 0) and its linked todo has gates, run the gate verification functions. If any gate fails, set status to =gate_failed= instead of =completed=, and populate =TodoDelegationResult.gateFailures=.
+
+* Design Decisions
+- Gate verification ONLY runs when =result.exitCode === 0= and the task has a =todoRef=. Failed/aborted subagents skip gate checks.
+- The =TrackedBashExecution[]= data comes from =result.extractedToolData?.["bash"]= (populated by FEAT-360).
+- The cwd for =gateArtifact= verification is =this.session.cwd= (parent's cwd, since the artifact should be in the workspace).
+- For isolated (worktree) execution: the cwd should be the worktree path if the subagent ran in isolation. However, artifacts are expected in the main workspace. Use =this.session.cwd= as default.
+- Gate info (=gateCmd=, =gateCommit=, =gateArtifact=) is read from the linked =TodoItem= via =findTask(phases, todoRef)=.
+- The =gate_failed= status is set via =this.#applyTodoRefStatus(todoRef, "gate_failed")= which internally calls =TodoWriteTool.execute=.
+- The =gateFailures= array is stored in the =TodoDelegationResult= via =this.#mergeTodoRefDelegation=.
+
+* Files
+- *Modify*: =packages/coding-agent/src/task/index.ts= — modify =#finalizeTodoRef= and =#buildTodoResultSummary=
+- *Create*: =packages/coding-agent/test/task/gate-enforcement.test.ts=
+
+* Current Code (to be modified)
+=#finalizeTodoRef= in =packages/coding-agent/src/task/index.ts= lines 472-484:
+#+begin_src typescript
+async #finalizeTodoRef(task: TaskItem, result: SingleResult): Promise<void> {
+  if (!task.todoRef) return;
+  const delegation = this.#buildTodoDelegation(result.agent, result.sessionId, result.transcriptPath);
+  const status: TodoStatus = result.exitCode === 0 && !(result.aborted ?? false) ? "completed" : "failed";
+  await this.#queueTodoRefMutation(async () => {
+    if (delegation) this.#mergeTodoRefDelegation(task.todoRef!, delegation);
+    if (result.todoPhases !== undefined) {
+      this.#mergeTodoRefDelegation(task.todoRef!, { childPhases: result.todoPhases });
+    }
+    this.#mergeTodoRefDelegation(task.todoRef!, { result: this.#buildTodoResultSummary(result) });
+    await this.#applyTodoRefStatus(task.todoRef!, status);
+  });
+}
+#+end_src
+
+* Modified Logic (pseudocode)
+#+begin_src typescript
+async #finalizeTodoRef(task: TaskItem, result: SingleResult): Promise<void> {
+  if (!task.todoRef) return;
+  const delegation = this.#buildTodoDelegation(result.agent, result.sessionId, result.transcriptPath);
+
+  let status: TodoStatus;
+  let gateFailures: GateFailure[] | undefined;
+
+  if (result.exitCode === 0 && !(result.aborted ?? false)) {
+    // Subagent succeeded — check gates
+    const gateResult = await this.#verifyTaskGates(task.todoRef, result);
+    if (gateResult && !gateResult.passed) {
+      status = "gate_failed";
+      gateFailures = gateResult.failures;
+    } else {
+      status = "completed";
+    }
+  } else {
+    status = "failed";
+  }
+
+  const resultSummary = this.#buildTodoResultSummary(result);
+  if (gateFailures?.length) {
+    resultSummary.gateFailures = gateFailures;
+  }
+
+  await this.#queueTodoRefMutation(async () => {
+    if (delegation) this.#mergeTodoRefDelegation(task.todoRef!, delegation);
+    if (result.todoPhases !== undefined) {
+      this.#mergeTodoRefDelegation(task.todoRef!, { childPhases: result.todoPhases });
+    }
+    this.#mergeTodoRefDelegation(task.todoRef!, { result: resultSummary });
+    await this.#applyTodoRefStatus(task.todoRef!, status);
+  });
+}
+
+async #verifyTaskGates(todoRef: string, result: SingleResult): Promise<GateVerificationResult | undefined> {
+  const phases = this.session.getTodoPhases?.();
+  if (!phases) return undefined;
+  const todo = findTask(phases, todoRef);
+  if (!todo) return undefined;
+  if (!hasRequiredGate(todo)) return undefined;
+
+  const executions = (result.extractedToolData?.["bash"] as TrackedBashExecution[] | undefined) ?? [];
+  return verifyGates({
+    gateCmd: todo.gateCmd,
+    gateCommit: todo.gateCommit,
+    gateArtifact: todo.gateArtifact,
+    executions,
+    cwd: this.session.cwd,
+  });
+}
+#+end_src
+
+* New Imports Needed in task/index.ts
+#+begin_src typescript
+import { type GateFailure, type GateVerificationResult, type TrackedBashExecution, verifyGates } from "./gate-verification";
+import { hasRequiredGate } from "../tools/todo-write";
+#+end_src
+
+Note: =hasRequiredGate= is already exported from =todo-write.ts= but not imported in =task/index.ts=. Add the import.
+
+* Test Scenarios (write FIRST, then implement)
+
+Test file: =packages/coding-agent/test/task/gate-enforcement.test.ts=
+
+Follow the pattern in =packages/coding-agent/test/task/todo-ref-lifecycle.test.ts=: mock =discoverAgents= and =runSubprocess=, create a session with =getTodoPhases=/=setTodoPhases=, and verify the final todo status.
+
+** Happy Path
+1. Subagent completes (exitCode 0), gateCmd satisfied (bash history contains matching command) → todo status =completed=
+2. Subagent completes, no gates on todo → todo status =completed= (unchanged behavior)
+
+** Gate Failures
+3. Subagent completes (exitCode 0), gateCmd NOT satisfied → todo status =gate_failed=, =delegation.result.gateFailures= contains =gate: "gateCmd"=
+4. Subagent completes, gateCommit required but no =git commit= in bash history → status =gate_failed=
+5. Subagent completes, gateArtifact required but file doesn't exist → status =gate_failed=
+6. Multiple gates: gateCmd passes but gateCommit fails → status =gate_failed=, only =gateCommit= in failures
+
+** Non-Gate Cases (regression)
+7. Subagent fails (exitCode 1), has gates → status =failed= (NOT =gate_failed=, gates not checked)
+8. Subagent aborted → status =failed= (gates not checked)
+9. Task with no todoRef → no gate checking, no crash
+
+** Edge Cases
+10. =extractedToolData= is undefined (subagent used no bash) → =gate_failed= if gates required
+11. =extractedToolData["bash"]= is empty array → =gate_failed= if gateCmd required
+
+* Verification
+Run: =bun test packages/coding-agent/test/task/gate-enforcement.test.ts=
+Then: =bun test packages/coding-agent/test/task/todo-ref-lifecycle.test.ts= (regression)
+
+* Implementation Notes
+- The =#verifyTaskGates= method is a new private method on =TaskTool=.
+- Import =verifyGates=, =GateVerificationResult=, =TrackedBashExecution=, =GateFailure= from =./gate-verification=.
+- Import =hasRequiredGate= from =../tools/todo-write=.
+- =#buildTodoResultSummary= (line ~370) returns =TodoDelegationResult=. The =gateFailures= field is set AFTER building the summary, so no change to =#buildTodoResultSummary= itself — just add the field to the returned object in =#finalizeTodoRef=.
+- For the side-effect import of bash handler: add =import "./bash-subprocess-handler";= near line 52 of =executor.ts= (next to the existing =import "../tools/review";=).
+- Make sure the =TrackedBashExecution= type is imported from =gate-verification.ts= (or defined there if FEAT-358 ran first).

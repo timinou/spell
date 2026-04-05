@@ -28,12 +28,13 @@ import { PREVIEW_LIMITS } from "./render-utils";
 // Types
 // =============================================================================
 
-export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned" | "failed";
+export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned" | "failed" | "gate_failed";
 
 export interface TodoDelegationResult {
 	output?: string;
 	error?: string;
 	outputPath?: string;
+	gateFailures?: Array<{ gate: string; expected: string; detail: string }>;
 }
 
 export interface TodoDelegation {
@@ -83,7 +84,7 @@ export interface TodoWriteToolDetails {
 // Schema
 // =============================================================================
 
-const StatusEnum = StringEnum(["pending", "in_progress", "completed", "abandoned", "failed"] as const, {
+const StatusEnum = StringEnum(["pending", "in_progress", "completed", "abandoned", "failed", "gate_failed"] as const, {
 	description: "Task status",
 });
 
@@ -457,8 +458,8 @@ function normalizeInProgressTask(phases: TodoPhase[]): void {
 	const hasDirectInProgress = orderedTasks.some(task => task.status === "in_progress" && !isDelegatedTask(task));
 	if (hasDirectInProgress) return;
 
-	const hasFailedTask = orderedTasks.some(task => task.status === "failed");
-	if (hasFailedTask) return;
+	const hasTerminalFailure = orderedTasks.some(task => task.status === "failed" || task.status === "gate_failed");
+	if (hasTerminalFailure) return;
 
 	const firstPendingDirectTask = orderedTasks.find(
 		task => task.status === "pending" && !isDelegatedTask(task) && !isTaskBlocked(task, orderedTasks),
@@ -710,7 +711,11 @@ export function formatSummary({
 		.map(phase => ({
 			name: phase.name,
 			tasks: phase.tasks.filter(
-				task => task.status === "pending" || task.status === "in_progress" || task.status === "failed",
+				task =>
+					task.status === "pending" ||
+					task.status === "in_progress" ||
+					task.status === "failed" ||
+					task.status === "gate_failed",
 			),
 		}))
 		.filter(phase => phase.tasks.length > 0);
@@ -718,7 +723,10 @@ export function formatSummary({
 
 	// Find current phase
 	let currentIdx = phases.findIndex(p =>
-		p.tasks.some(t => t.status === "pending" || t.status === "in_progress" || t.status === "failed"),
+		p.tasks.some(
+			t =>
+				t.status === "pending" || t.status === "in_progress" || t.status === "failed" || t.status === "gate_failed",
+		),
 	);
 	if (currentIdx === -1) currentIdx = phases.length - 1;
 	const current = phases[currentIdx];
@@ -739,7 +747,10 @@ export function formatSummary({
 			lines.push(
 				`  - ${task.id} ${formatTaskContent(task)} [${task.status}]${layerLabel}${blockerLabel} (${task.phase})`,
 			);
-			if ((task.status === "in_progress" || task.status === "failed") && task.details) {
+			if (
+				(task.status === "in_progress" || task.status === "failed" || task.status === "gate_failed") &&
+				task.details
+			) {
 				for (const line of task.details.split("\n")) lines.push(`      ${line}`);
 			}
 		}
@@ -768,11 +779,11 @@ export function formatSummary({
 						? "\u2192"
 						: task.status === "abandoned"
 							? "\u2717"
-							: task.status === "failed"
+							: task.status === "failed" || task.status === "gate_failed"
 								? "!"
 								: blocked
-									? "\u26D4"
-									: "\u25CB";
+									? "⛔"
+									: "○";
 			lines.push(`    ${sym} ${task.id} ${formatTaskContent(task)}`);
 		}
 	}
@@ -784,6 +795,24 @@ export function formatSummary({
 		for (const task of completedGatedTasks) {
 			for (const directive of gateDirectivesForTask(task)) {
 				lines.push(directive);
+			}
+		}
+	}
+
+	if (remainingTasks.some(task => task.status === "gate_failed")) {
+		lines.push("");
+		lines.push("--- Gate Failures ---");
+		for (const task of remainingTasks) {
+			if (task.status !== "gate_failed") continue;
+			const gateFailures = task.delegation?.result?.gateFailures ?? [];
+			if (gateFailures.length === 0) {
+				lines.push(`gate_failed: ${task.id} "${task.content}" — verification gates were not satisfied`);
+				continue;
+			}
+			for (const failure of gateFailures) {
+				lines.push(
+					`gate_failed: ${task.id} "${task.content}" — ${failure.gate} not satisfied: expected \`${failure.expected}\`, ${failure.detail}`,
+				);
 			}
 		}
 	}
@@ -971,6 +1000,8 @@ function formatTodoLine(item: TodoItem, uiTheme: Theme, prefix: string, allTasks
 			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(content)}`) + badges;
 		case "failed":
 			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${content}`) + badges;
+		case "gate_failed":
+			return uiTheme.fg("warning", `${prefix}${checkbox.unchecked} ${content} [gate failed]`) + badges;
 		default:
 			return uiTheme.fg("dim", `${prefix}${checkbox.unchecked} ${content}`) + badges;
 	}

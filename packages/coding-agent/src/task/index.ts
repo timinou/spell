@@ -32,6 +32,7 @@ import {
 	cloneTodoPhases,
 	findTask,
 	getNextTodoIds,
+	hasRequiredGate,
 	queueTodoMutation,
 	type TodoDelegation,
 	type TodoDelegationResult,
@@ -45,6 +46,12 @@ import { generateCommitMessage } from "../utils/commit-message-generator";
 import { type BatchGraph, buildBatchGraph, scheduleBatch } from "./batch-scheduler";
 import { discoverAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
+import {
+	type GateFailure,
+	type GateVerificationResult,
+	type TrackedBashExecution,
+	verifyGates,
+} from "./gate-verification";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
 import { renderCall, renderResult } from "./render";
@@ -441,9 +448,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		this.session.eventBus?.emit("todo:change", { phases: nextPhases });
 	}
 
-	async #applyTodoRefStatus(todoRef: string, status: TodoStatus): Promise<void> {
+	async #applyTodoRefStatus(todoRef: string, status: TodoStatus, verified?: boolean): Promise<void> {
 		const result = await new TodoWriteTool(this.session).execute("task-todo-ref", {
-			ops: [{ op: "update", id: todoRef, status }],
+			ops: [{ op: "update", id: todoRef, status, verified }],
 		});
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
 		if (summary.startsWith("Errors:")) {
@@ -472,14 +479,55 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	async #finalizeTodoRef(task: TaskItem, result: SingleResult): Promise<void> {
 		if (!task.todoRef) return;
 		const delegation = this.#buildTodoDelegation(result.agent, result.sessionId, result.transcriptPath);
-		const status: TodoStatus = result.exitCode === 0 && !(result.aborted ?? false) ? "completed" : "failed";
+
+		let status: TodoStatus;
+		let gateFailures: GateFailure[] | undefined;
+		// Track whether gate verification ran and passed, so we can bypass two-phase verification
+		let gatesVerified = false;
+
+		if (result.exitCode === 0 && !(result.aborted ?? false)) {
+			const gateResult = await this.#verifyTaskGates(task.todoRef, result);
+			if (gateResult && !gateResult.passed) {
+				status = "gate_failed";
+				gateFailures = gateResult.failures;
+			} else {
+				status = "completed";
+				// If gate verification ran and passed, mark as verified
+				gatesVerified = gateResult !== undefined;
+			}
+		} else {
+			status = "failed";
+		}
+
+		const resultSummary = this.#buildTodoResultSummary(result);
+		if (gateFailures?.length) {
+			resultSummary.gateFailures = gateFailures;
+		}
+
 		await this.#queueTodoRefMutation(async () => {
 			if (delegation) this.#mergeTodoRefDelegation(task.todoRef!, delegation);
 			if (result.todoPhases !== undefined) {
 				this.#mergeTodoRefDelegation(task.todoRef!, { childPhases: result.todoPhases });
 			}
-			this.#mergeTodoRefDelegation(task.todoRef!, { result: this.#buildTodoResultSummary(result) });
-			await this.#applyTodoRefStatus(task.todoRef!, status);
+			this.#mergeTodoRefDelegation(task.todoRef!, { result: resultSummary });
+			await this.#applyTodoRefStatus(task.todoRef!, status, gatesVerified || undefined);
+		});
+	}
+
+	async #verifyTaskGates(todoRef: string, result: SingleResult): Promise<GateVerificationResult | undefined> {
+		const phases = this.session.getTodoPhases?.();
+		if (!phases) return undefined;
+		const todo = findTask(phases, todoRef);
+		if (!todo) return undefined;
+		if (!hasRequiredGate(todo)) return undefined;
+
+		const executions = (result.extractedToolData?.bash as TrackedBashExecution[] | undefined) ?? [];
+		return verifyGates({
+			gateCmd: todo.gateCmd,
+			gateCommit: todo.gateCommit,
+			gateArtifact: todo.gateArtifact,
+			executions,
+			cwd: this.session.cwd,
 		});
 	}
 

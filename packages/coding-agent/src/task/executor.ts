@@ -29,6 +29,8 @@ import { cloneTodoPhases, type TodoPhase } from "../tools/todo-write";
 import { ToolAbortError } from "../tools/tool-errors";
 import { type EventBus, Priority } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
+// Import bash subprocess handler for side effects (tracks bash commands for gate verification)
+import "./bash-subprocess-handler";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
 	type AgentDefinition,

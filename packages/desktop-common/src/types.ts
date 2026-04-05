@@ -12,7 +12,7 @@ export type AgentStatus =
 export interface TodoItemView {
 	id: string;
 	content: string;
-	status: "pending" | "in_progress" | "completed" | "abandoned" | "failed";
+	status: "pending" | "in_progress" | "completed" | "abandoned" | "failed" | "gate_failed";
 	blockers?: string[];
 	gateCommit?: boolean;
 	gateArtifact?: string;
@@ -34,7 +34,7 @@ export interface TodoPhaseView {
 export interface TodoItemSnapshot {
 	id: string;
 	content: string;
-	status: "pending" | "in_progress" | "completed" | "abandoned" | "failed";
+	status: "pending" | "in_progress" | "completed" | "abandoned" | "failed" | "gate_failed";
 	blocked: boolean;
 	blockerLabels?: string[];
 	gateBadges?: string[];

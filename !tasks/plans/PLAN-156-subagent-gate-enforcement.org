@@ -1,0 +1,117 @@
+#+TITLE: Subagent gate enforcement
+#+STATE: DONE
+#+SESSION_ID: 14af1830f0e2d7e6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T19-42-56-451Z_14af1830f0e2d7e6.jsonl]]
+#+CUSTOM_ID: PLAN-156-subagent-gate-enforcement
+
+
+* Initial Message
+
+ilures, there are two systematic issues the subagents keep
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T18-49-31-134Z_14af0bf6bfbf7c88.jsonl
+ ID: 14af0bf6bfbf7c88
+
+
+
+Why did the GraphRAGModules fail?
+
+* Context
+
+Subagents dispatched via the =task= tool can complete (exitCode 0) without actually satisfying their gate requirements (=gateCmd=, =gateCommit=, =gateArtifact=). The current system injects gate instructions as advisory text into the subagent's assignment, but =finalizeTodoRef= determines status solely from =exitCode=. There is no enforcement.
+
+This was observed in a real failure: GraphRAG subagents yielded code that compiled with warnings, hallucinated APIs, and incorrect Elixir patterns — all because the subagent ignored =gateCmd= (=mix compile --warnings-as-errors=) and no enforcement existed.
+
+** Approach
+1. Register a =SubprocessToolHandler= for the ="bash"= tool to track all bash commands executed by subagents (command string + exit code).
+2. Implement pure gate verification functions: normalized command matching, git commit detection, artifact file existence.
+3. Add =gate_failed= as a new =TodoStatus= — distinct from =failed= (which means the subagent itself errored). =gate_failed= means "subagent completed but didn't satisfy gates."
+4. Wire gate verification into =#finalizeTodoRef=: after subagent succeeds, check gates before marking =completed=. If any gate fails, mark =gate_failed= and populate =gateFailures= on the delegation result.
+
+** Key Decisions
+- =gate_failed= is a new =TodoStatus= literal (not a flag on =failed=).
+- =gate_failed= is terminal and blocking — dependents cannot proceed, phase is not complete.
+- Command matching is normalized: strip =cd DIR &&= prefixes, trim whitespace, substring match.
+- Gate checks only run when subagent exitCode is 0 (no point checking gates on a crashed subagent).
+- =gateCmd=: verified via normalized substring match against bash history (only successful commands count).
+- =gateCommit=: verified by detecting =git commit= in any bash command.
+- =gateArtifact=: verified by checking file existence at the specified path.
+- All work is fully TDD — tests written before implementation for every item.
+
+* Verification
+
+#+begin_src bash
+# Unit tests for gate verification pure functions
+bun test packages/coding-agent/test/task/gate-verification.test.ts
+
+# Unit tests for gate_failed TodoStatus behavior
+bun test packages/coding-agent/test/tools/todo-write-gates.test.ts
+
+# Unit tests for bash subprocess handler
+bun test packages/coding-agent/test/task/bash-subprocess-handler.test.ts
+
+# Integration tests for gate enforcement in finalizeTodoRef
+bun test packages/coding-agent/test/task/gate-enforcement.test.ts
+
+# Regression: existing todo-ref lifecycle tests still pass
+bun test packages/coding-agent/test/task/todo-ref-lifecycle.test.ts
+
+# Type check
+bun check:ts
+#+end_src
+
+* Execution Manifest
+
+** Wave 1 (parallel, no dependencies)
+- [[id:FEAT-358-gate-verification-pure-functions]] — Pure gate verification functions + tests (S)
+- [[id:FEAT-359-todostatus-gate-failed-extension]] — TodoStatus =gate_failed= + formatSummary + TUI + prompt (M)
+- [[id:FEAT-360-bash-subprocess-tool-handler]] — Bash subprocess tool handler registration + tests (S)
+
+** Wave 2 (depends on all of Wave 1)
+- [[id:FEAT-361-gate-enforcement-in-finalizetodoref]] — Integration: wire gate verification into =#finalizeTodoRef= + tests (M)
+
+** Completion [2026-04-05]
+
+*** Verification
+
+All verification commands pass:
+
+#+begin_src
+bun test packages/coding-agent/test/task/gate-verification.test.ts    # 32 pass
+bun test packages/coding-agent/test/tools/todo-write-gates.test.ts    # 63 pass
+bun test packages/coding-agent/test/task/bash-subprocess-handler.test.ts # 7 pass
+bun test packages/coding-agent/test/task/gate-enforcement.test.ts     # 10 pass
+bun test packages/coding-agent/test/task/todo-ref-lifecycle.test.ts   # 2 pass (regression)
+bun check:ts  # 0 new type errors (15 pre-existing in unrelated files)
+bun lint:ts   # clean
+#+end_src
+
+Total: 114 tests across 5 files, 0 failures.
+
+*** Artifacts
+
+Source files created:
+- =packages/coding-agent/src/task/gate-verification.ts= — pure gate verification functions + types
+- =packages/coding-agent/src/task/bash-subprocess-handler.ts= — subprocess tool handler for bash command tracking
+
+Source files modified:
+- =packages/coding-agent/src/task/index.ts= — gate enforcement in =#finalizeTodoRef=, new =#verifyTaskGates= method
+- =packages/coding-agent/src/task/executor.ts= ��� side-effect import for bash handler
+- =packages/coding-agent/src/tools/todo-write.ts= — =gate_failed= status, =gateFailures= in =TodoDelegationResult=, =formatSummary=, =formatTodoLine=, =normalizeInProgressTask=
+- =packages/coding-agent/src/prompts/tools/todo-write.md= — =gate_failed= in status table
+- =packages/desktop-common/src/types.ts= — =gate_failed= in =TodoItemView= and =TodoItemSnapshot=
+- =packages/niri/src/overview-component.ts= — =gate_failed= in TODO_ICONS
+- =packages/org/src/journal.ts= — =gate_failed= in =JournalTodoItem= and =STATUS_TO_ORG=
+
+Test files created:
+- =packages/coding-agent/test/task/gate-verification.test.ts= — 32 tests for pure functions
+- =packages/coding-agent/test/task/bash-subprocess-handler.test.ts= — 7 tests for handler registration
+- =packages/coding-agent/test/task/gate-enforcement.test.ts= — 10 integration tests for =#finalizeTodoRef=
+- =packages/coding-agent/test/tools/todo-write-gates.test.ts= — 181 lines added (new describe blocks for gate_failed behavior)
+
+Commit: =1acb69ff6=
+
+*** Deviations
+None.
