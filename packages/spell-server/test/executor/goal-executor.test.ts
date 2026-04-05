@@ -111,6 +111,8 @@ function createManifest(
 		layouts: [],
 		syncCollections: [],
 		stateSchemas: [],
+		toolModules: [],
+		operatorActions: [],
 	};
 }
 

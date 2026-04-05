@@ -104,6 +104,8 @@ export interface RpcSpawnOptions {
 	sandboxPolicyPath?: string;
 	/** Whether to skip session persistence */
 	noSession?: boolean;
+	/** Additional environment variables for the spawned process */
+	env?: Record<string, string>;
 }
 
 /** Delivery metadata from send_file tool result */

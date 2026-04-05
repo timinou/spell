@@ -632,8 +632,18 @@ function parseReviewPolicyNode(node: Node, pathLabel: string, options: ParseMani
 		const childName = getNodeName(child);
 		if (childName === "state") {
 			const name = expectStringArgument(child, `${pathLabel}.state.${states.length}.name`, 0, options);
-			const initial = resolveOptionalBooleanProperty(child, "initial", `${pathLabel}.state.${states.length}`, options);
-			const terminal = resolveOptionalBooleanProperty(child, "terminal", `${pathLabel}.state.${states.length}`, options);
+			const initial = resolveOptionalBooleanProperty(
+				child,
+				"initial",
+				`${pathLabel}.state.${states.length}`,
+				options,
+			);
+			const terminal = resolveOptionalBooleanProperty(
+				child,
+				"terminal",
+				`${pathLabel}.state.${states.length}`,
+				options,
+			);
 			states.push({
 				name,
 				...(initial !== undefined ? { initial } : {}),
@@ -777,6 +787,49 @@ function parseStateSchemaNode(node: Node, pathLabel: string, options: ParseManif
 	return { id, backend, tables } satisfies StateSchema;
 }
 
+function parseToolModuleNode(node: Node, pathLabel: string, options: ParseManifestOptions): import("./types").ToolModule {
+	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
+	const modulePath = resolveOptionalStringProperty(node, "path", pathLabel, options);
+	if (!modulePath) {
+		throw new Error(`${pathLabel}.path is required`);
+	}
+	return { id, path: modulePath };
+}
+
+function parseOperatorActionNode(node: Node, pathLabel: string, options: ParseManifestOptions): import("./types").OperatorAction {
+	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
+	const transitions: import("./types").OperatorActionTransition[] = [];
+	let triggerGoal: string | undefined;
+	let downstreamJob: { kind: string } | undefined;
+	for (const child of node.children?.nodes ?? []) {
+		const childName = getNodeName(child);
+		if (childName === "transition") {
+			const from = resolveOptionalStringProperty(child, "from", `${pathLabel}.transition`, options);
+			const to = resolveOptionalStringProperty(child, "to", `${pathLabel}.transition`, options);
+			if (!from || !to) {
+				throw new Error(`${pathLabel}.transition requires from and to properties`);
+			}
+			transitions.push({ from, to });
+		} else if (childName === "trigger-goal") {
+			triggerGoal = expectStringArgument(child, `${pathLabel}.trigger-goal`, 0, options);
+		} else if (childName === "downstream-job") {
+			const kind = resolveOptionalStringProperty(child, "kind", `${pathLabel}.downstream-job`, options);
+			if (!kind) {
+				throw new Error(`${pathLabel}.downstream-job.kind is required`);
+			}
+			downstreamJob = { kind };
+		}
+	}
+	if (transitions.length === 0) {
+		throw new Error(`${pathLabel} requires at least one transition`);
+	}
+	return {
+		id,
+		transitions,
+		...(triggerGoal !== undefined ? { triggerGoal } : {}),
+		...(downstreamJob !== undefined ? { downstreamJob } : {}),
+	};
+}
 
 export function parseManifestModuleDocument(
 	document: Document,
@@ -797,6 +850,8 @@ export function parseManifestModuleDocument(
 	const panels: Panel[] = [];
 	const layouts: Layout[] = [];
 	const syncCollections: SyncCollection[] = [];
+	const toolModules: import("./types").ToolModule[] = [];
+	const operatorActions: import("./types").OperatorAction[] = [];
 	const stateSchemas: StateSchema[] = [];
 
 	for (const [index, node] of document.nodes.entries()) {
@@ -872,13 +927,27 @@ export function parseManifestModuleDocument(
 				continue;
 			}
 			if (nodeName === "sync-collection") {
-				syncCollections.push(
-					parseSyncCollectionNode(node, `sync-collection.${syncCollections.length}`, options),
-				);
+				syncCollections.push(parseSyncCollectionNode(node, `sync-collection.${syncCollections.length}`, options));
 				continue;
 			}
 			if (nodeName === "state-schema") {
 				stateSchemas.push(parseStateSchemaNode(node, `state-schema.${stateSchemas.length}`, options));
+				continue;
+			}
+			if (nodeName === "tool-module") {
+				const tm = parseToolModuleNode(node, `tool-module.${toolModules.length}`, options);
+				if (toolModules.some(existing => existing.id === tm.id)) {
+					throw new Error(`Duplicate tool-module "${tm.id}"`);
+				}
+				toolModules.push(tm);
+				continue;
+			}
+			if (nodeName === "operator-action") {
+				const oa = parseOperatorActionNode(node, `operator-action.${operatorActions.length}`, options);
+				if (operatorActions.some(existing => existing.id === oa.id)) {
+					throw new Error(`Duplicate operator-action "${oa.id}"`);
+				}
+				operatorActions.push(oa);
 				continue;
 			}
 			throw new Error(`Unsupported top-level node "${nodeName}" at index ${index}`);
@@ -907,6 +976,8 @@ export function parseManifestModuleDocument(
 		layouts,
 		syncCollections,
 		stateSchemas,
+		toolModules,
+		operatorActions,
 	};
 }
 
@@ -930,6 +1001,8 @@ function hydrateManifest(manifestModule: ParsedManifestModule): AutonomyManifest
 		layouts: manifestModule.layouts,
 		syncCollections: manifestModule.syncCollections,
 		stateSchemas: manifestModule.stateSchemas,
+		toolModules: manifestModule.toolModules,
+		operatorActions: manifestModule.operatorActions,
 	};
 }
 

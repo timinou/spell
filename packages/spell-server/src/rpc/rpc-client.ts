@@ -89,6 +89,7 @@ export class RpcClient {
 				stdin: "pipe",
 				stdout: "pipe",
 				stderr: "pipe",
+				...(this.#options.env ? { env: { ...process.env, ...this.#options.env } } : {}),
 			});
 		} catch (error) {
 			if (isEnoent(error)) {

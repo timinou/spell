@@ -65,6 +65,8 @@ function createManifest(): AutonomyManifest {
 		layouts: [],
 		syncCollections: [],
 		stateSchemas: [],
+		toolModules: [],
+		operatorActions: [],
 	};
 }
 

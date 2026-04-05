@@ -14,12 +14,13 @@ import type { HookExecutor } from "./hooks/types";
 import { WebhookHookExecutor } from "./hooks/webhook";
 import type { OperatorActionHandler } from "./http/routes/operator-actions";
 import { startHttpServer } from "./http/server";
-import { StateStoreManager } from "./state/store-manager";
 import { GoalScheduler } from "./scheduler/goal-scheduler";
 import { AutonomyLifecycle } from "./session/autonomy-lifecycle";
 import { SessionManager } from "./session/session-manager";
+import { StateStoreManager } from "./state/store-manager";
 import { TelegramBotService, type TelegramBotServiceOptions } from "./telegram/service";
 import { WorkflowEngine } from "./workflow";
+import { generateOperatorActionHandler } from "./workflow/operator-action-generator";
 
 export interface SpellServer {
 	telegramBotActive: boolean;
@@ -68,7 +69,7 @@ export async function startSpellServer(
 	cwd: string,
 	dependencies: SpellServerStartDependencies = {},
 ): Promise<SpellServer> {
-	const lifecycle = new AutonomyLifecycle();
+	const lifecycle = new AutonomyLifecycle(config.manifest);
 	const sessionManager = new SessionManager<string>({
 		lifecycle,
 		keyToString: key => key,
@@ -128,7 +129,11 @@ export async function startSpellServer(
 
 	const workflowEngine = new WorkflowEngine();
 	const stateStoreManager = new StateStoreManager(config.manifest, cwd);
-	const operatorActionHandler = dependencies.operatorActionHandler ?? (await loadProjectOperatorActionHandler(cwd));
+	const operatorActionHandler =
+		dependencies.operatorActionHandler ??
+		(config.manifest.operatorActions.length > 0
+			? generateOperatorActionHandler(config.manifest.operatorActions, workflowEngine)
+			: await loadProjectOperatorActionHandler(cwd));
 	const startHttpServerImpl = dependencies.startHttpServer ?? startHttpServer;
 	const httpServer = startHttpServerImpl({
 		executor,
