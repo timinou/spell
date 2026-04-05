@@ -18,6 +18,7 @@ import {
 	type ManifestSetupPatch,
 	type NamedStateStore,
 	type NotificationRoute,
+	type OperatorAction,
 	type Panel,
 	type RetryConfig,
 	type ReviewPolicy,
@@ -25,6 +26,7 @@ import {
 	type StateConfig,
 	type StateSchema,
 	type SyncCollection,
+	type ToolModule,
 } from "./types";
 import { validateManifest } from "./validator";
 
@@ -46,6 +48,8 @@ interface ResolvedManifestModule {
 	layouts: Layout[];
 	syncCollections: SyncCollection[];
 	stateSchemas: StateSchema[];
+	toolModules: ToolModule[];
+	operatorActions: OperatorAction[];
 }
 
 interface ResolveContext {
@@ -319,7 +323,11 @@ function appendPrefixedItems<T extends { id: string }>(
 	}
 }
 
-function appendItems<T extends { id: string }>(target: T[], items: T[], collisionMessage: (id: string) => string): void {
+function appendItems<T extends { id: string }>(
+	target: T[],
+	items: T[],
+	collisionMessage: (id: string) => string,
+): void {
 	for (const item of items) {
 		if (target.some(existing => existing.id === item.id)) {
 			throw new Error(collisionMessage(item.id));
@@ -375,6 +383,8 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 			layouts: cloneArray(cached.layouts),
 			syncCollections: cloneArray(cached.syncCollections),
 			stateSchemas: cloneArray(cached.stateSchemas),
+			toolModules: cloneArray(cached.toolModules),
+			operatorActions: cloneArray(cached.operatorActions),
 		};
 	}
 	if (context.stack.includes(absolutePath)) {
@@ -404,6 +414,8 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 	const layouts: Layout[] = [];
 	const syncCollections: SyncCollection[] = [];
 	const stateSchemas: StateSchema[] = [];
+	const toolModules: ToolModule[] = [];
+	const operatorActions: OperatorAction[] = [];
 	const aliasSet = new Set<string>();
 
 	for (const manifestImport of manifestModule.imports) {
@@ -425,15 +437,30 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 			prefixGoalSymbols(manifestImport.alias, imported.goals, imported.setups),
 			name => `Imported goal collision for ${name}`,
 		);
-		appendPrefixedItems(exportTargets, imported.exportTargets, manifestImport.alias, id => `Imported export-target collision for ${id}`);
+		appendPrefixedItems(
+			exportTargets,
+			imported.exportTargets,
+			manifestImport.alias,
+			id => `Imported export-target collision for ${id}`,
+		);
 		appendPrefixedItems(
 			notificationRoutes,
 			imported.notificationRoutes,
 			manifestImport.alias,
 			id => `Imported notification-route collision for ${id}`,
 		);
-		appendPrefixedItems(reviewPolicies, imported.reviewPolicies, manifestImport.alias, id => `Imported review-policy collision for ${id}`);
-		appendPrefixedItems(checkpoints, imported.checkpoints, manifestImport.alias, id => `Imported checkpoint collision for ${id}`);
+		appendPrefixedItems(
+			reviewPolicies,
+			imported.reviewPolicies,
+			manifestImport.alias,
+			id => `Imported review-policy collision for ${id}`,
+		);
+		appendPrefixedItems(
+			checkpoints,
+			imported.checkpoints,
+			manifestImport.alias,
+			id => `Imported checkpoint collision for ${id}`,
+		);
 		appendPrefixedItems(panels, imported.panels, manifestImport.alias, id => `Imported panel collision for ${id}`);
 		appendPrefixedItems(layouts, imported.layouts, manifestImport.alias, id => `Imported layout collision for ${id}`);
 		appendPrefixedItems(
@@ -442,7 +469,24 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 			manifestImport.alias,
 			id => `Imported sync-collection collision for ${id}`,
 		);
-		appendPrefixedItems(stateSchemas, imported.stateSchemas, manifestImport.alias, id => `Imported state-schema collision for ${id}`);
+		appendPrefixedItems(
+			stateSchemas,
+			imported.stateSchemas,
+			manifestImport.alias,
+			id => `Imported state-schema collision for ${id}`,
+		);
+		appendPrefixedItems(
+			toolModules,
+			imported.toolModules,
+			manifestImport.alias,
+			id => `Imported tool-module collision for ${id}`,
+		);
+		appendPrefixedItems(
+			operatorActions,
+			imported.operatorActions,
+			manifestImport.alias,
+			id => `Imported operator-action collision for ${id}`,
+		);
 	}
 
 	mergePrefixedSymbols(setups, manifestModule.setups, name => `Duplicate setup "${name}"`);
@@ -455,6 +499,8 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 	appendItems(layouts, manifestModule.layouts, id => `Duplicate layout "${id}"`);
 	appendItems(syncCollections, manifestModule.syncCollections, id => `Duplicate sync-collection "${id}"`);
 	appendItems(stateSchemas, manifestModule.stateSchemas, id => `Duplicate state-schema "${id}"`);
+	appendItems(toolModules, manifestModule.toolModules, id => `Duplicate tool-module "${id}"`);
+	appendItems(operatorActions, manifestModule.operatorActions, id => `Duplicate operator-action "${id}"`);
 
 	for (const [index, override] of manifestModule.overrides.entries()) {
 		if (override.kind === "setup") {
@@ -495,6 +541,8 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 		layouts,
 		syncCollections,
 		stateSchemas,
+		toolModules,
+		operatorActions,
 	};
 	context.cache.set(absolutePath, {
 		name: resolved.name,
@@ -509,6 +557,8 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 		layouts: cloneArray(resolved.layouts),
 		syncCollections: cloneArray(resolved.syncCollections),
 		stateSchemas: cloneArray(resolved.stateSchemas),
+		toolModules: cloneArray(resolved.toolModules),
+		operatorActions: cloneArray(resolved.operatorActions),
 	});
 	return resolved;
 }
@@ -543,6 +593,8 @@ export async function loadManifestFromFile(
 		layouts: resolved.layouts,
 		syncCollections: resolved.syncCollections,
 		stateSchemas: resolved.stateSchemas,
+		toolModules: resolved.toolModules,
+		operatorActions: resolved.operatorActions,
 	};
 	await hydratePromptFileContents(manifest);
 	if (!isValidManifest(manifest)) {

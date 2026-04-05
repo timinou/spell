@@ -52,6 +52,8 @@ export function createManifest(goals: Map<string, ManifestGoal>): AutonomyManife
 		layouts: [],
 		syncCollections: [],
 		stateSchemas: [],
+		toolModules: [],
+		operatorActions: [],
 	};
 }
 

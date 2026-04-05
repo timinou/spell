@@ -13,6 +13,8 @@ export interface AutonomyManifest {
 	layouts: Layout[];
 	syncCollections: SyncCollection[];
 	stateSchemas: StateSchema[];
+	toolModules: ToolModule[];
+	operatorActions: OperatorAction[];
 }
 
 export interface ManifestImport {
@@ -38,6 +40,8 @@ export interface ParsedManifestModule {
 	layouts: Layout[];
 	syncCollections: SyncCollection[];
 	stateSchemas: StateSchema[];
+	toolModules: ToolModule[];
+	operatorActions: OperatorAction[];
 }
 
 export type ManifestOverride = SetupOverride | GoalOverride;
@@ -277,6 +281,22 @@ export interface StateSchemaTableColumn {
 	primary?: boolean;
 }
 
+export interface ToolModule {
+	id: string;
+	path: string;
+}
+
+export interface OperatorAction {
+	id: string;
+	transitions: OperatorActionTransition[];
+	triggerGoal?: string;
+	downstreamJob?: { kind: string };
+}
+
+export interface OperatorActionTransition {
+	from: string;
+	to: string;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -488,7 +508,9 @@ export function isValidCheckpoint(value: unknown): value is Checkpoint {
 
 export function isValidPanelColumn(value: unknown): value is PanelColumn {
 	if (!isRecord(value)) return false;
-	return typeof value.name === "string" && value.name.length > 0 && typeof value.type === "string" && value.type.length > 0;
+	return (
+		typeof value.name === "string" && value.name.length > 0 && typeof value.type === "string" && value.type.length > 0
+	);
 }
 
 export function isValidPanelAction(value: unknown): value is PanelAction {
@@ -517,7 +539,12 @@ export function isValidPanel(value: unknown): value is Panel {
 
 export function isValidLayoutRegion(value: unknown): value is LayoutRegion {
 	if (!isRecord(value)) return false;
-	return typeof value.name === "string" && value.name.length > 0 && typeof value.panel === "string" && value.panel.length > 0;
+	return (
+		typeof value.name === "string" &&
+		value.name.length > 0 &&
+		typeof value.panel === "string" &&
+		value.panel.length > 0
+	);
 }
 
 export function isValidLayout(value: unknown): value is Layout {
@@ -573,7 +600,6 @@ export function isValidStateSchema(value: unknown): value is StateSchema {
 		value.tables.every(table => isValidStateSchemaTable(table))
 	);
 }
-
 
 function isValidState(value: unknown): value is StateConfig {
 	if (!isRecord(value) || typeof value.persist !== "boolean") return false;
@@ -640,6 +666,8 @@ export function isValidManifest(value: unknown): value is AutonomyManifest {
 		Array.isArray(value.layouts) &&
 		Array.isArray(value.syncCollections) &&
 		Array.isArray(value.stateSchemas) &&
+		Array.isArray(value.toolModules) &&
+		Array.isArray(value.operatorActions) &&
 		[...value.setups.entries()].every(([name, setup]) => typeof name === "string" && isValidSetup(setup)) &&
 		[...value.goals.entries()].every(([name, goal]) => typeof name === "string" && isValidGoal(goal)) &&
 		value.exportTargets.every(target => isValidExportTarget(target)) &&

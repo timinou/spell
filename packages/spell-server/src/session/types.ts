@@ -13,6 +13,8 @@ export interface BaseSpawnOptions {
 	appendSystemPrompt?: string;
 	sessionDir?: string;
 	sandboxPolicyPath?: string;
+	/** Environment variables passed from manifest state-store declarations */
+	env?: Record<string, string>;
 }
 
 export interface SessionEntry<K> {

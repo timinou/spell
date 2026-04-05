@@ -55,6 +55,8 @@ function createManifest(): AutonomyManifest {
 		layouts: [],
 		syncCollections: [],
 		stateSchemas: [],
+		toolModules: [],
+		operatorActions: [],
 	};
 }
 
@@ -151,6 +153,8 @@ describe("HTTP frontend", () => {
 			layouts: [],
 			syncCollections: [],
 			stateSchemas: [],
+			toolModules: [],
+			operatorActions: [],
 		});
 	});
 });

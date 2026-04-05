@@ -12,6 +12,7 @@ import type {
 	ManifestSetup,
 	NamedStateStore,
 	NotificationRoute,
+	OperatorAction,
 	Panel,
 	RetryConfig,
 	ReviewPolicy,
@@ -19,6 +20,7 @@ import type {
 	StateConfig,
 	StateSchema,
 	SyncCollection,
+	ToolModule,
 } from "./types";
 
 function createNode(name: string): Node {
@@ -378,6 +380,36 @@ function createStateSchemaNode(schema: StateSchema): Node {
 	return node;
 }
 
+function createToolModuleNode(toolModule: ToolModule): Node {
+	const node = createNode("tool-module");
+	node.addArgument(toolModule.id);
+	node.setProperty("path", toolModule.path);
+	return node;
+}
+
+function createOperatorActionNode(action: OperatorAction): Node {
+	const node = createNode("operator-action");
+	node.addArgument(action.id);
+	node.children = new Document();
+	for (const transition of action.transitions) {
+		const transitionNode = createNode("transition");
+		transitionNode.setProperty("from", transition.from);
+		transitionNode.setProperty("to", transition.to);
+		node.children.appendNode(transitionNode);
+	}
+	if (action.triggerGoal) {
+		const triggerNode = createNode("trigger-goal");
+		triggerNode.addArgument(action.triggerGoal);
+		node.children.appendNode(triggerNode);
+	}
+	if (action.downstreamJob) {
+		const jobNode = createNode("downstream-job");
+		jobNode.setProperty("kind", action.downstreamJob.kind);
+		node.children.appendNode(jobNode);
+	}
+	return node;
+}
+
 export function serializeManifestKdl(manifest: AutonomyManifest): string {
 	const document = new Document();
 	const nameNode = createNode("name");
@@ -400,5 +432,7 @@ export function serializeManifestKdl(manifest: AutonomyManifest): string {
 	for (const layout of manifest.layouts) document.appendNode(createLayoutNode(layout));
 	for (const sync of manifest.syncCollections) document.appendNode(createSyncCollectionNode(sync));
 	for (const schema of manifest.stateSchemas) document.appendNode(createStateSchemaNode(schema));
+	for (const tm of manifest.toolModules) document.appendNode(createToolModuleNode(tm));
+	for (const oa of manifest.operatorActions) document.appendNode(createOperatorActionNode(oa));
 	return format(document);
 }

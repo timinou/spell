@@ -22,6 +22,16 @@ export interface AutonomyStateResult {
 	metadata?: RunMetadata;
 	error?: string;
 	meta?: OutputMeta;
+	/** SQL query result rows */
+	rows?: Record<string, unknown>[];
+	/** SQL query total row count (before LIMIT) */
+	rowCount?: number;
+	/** SQL mutate affected row count */
+	affectedRows?: number;
+	/** list_tables result */
+	tables?: string[];
+	/** describe_table result */
+	columns?: Array<{ name: string; type: string; primary?: boolean }>;
 }
 
 export interface StateSchemaColumn {
