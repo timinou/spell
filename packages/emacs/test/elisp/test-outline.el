@@ -61,11 +61,12 @@
       (let ((entries (pi-outline-get file)))
         (dolist (entry entries)
           (should (numberp (alist-get 'line entry)))
-          (should (> (alist-get 'line entry) 0))))))
+          (should (> (alist-get 'line entry) 0)))))))
 
 (ert-deftest test-outline-markdown-headings ()
   "Outline includes markdown headings with level prefixes."
-  (skip-unless (treesit-language-available-p 'markdown))
+  (skip-unless (and (treesit-language-available-p 'markdown)
+                    (fboundp 'markdown-ts-mode)))
   (test-outline--with-tmp-file test-outline--md-source ".md"
     (lambda (file)
       (let ((entries (pi-outline-get file))
@@ -74,7 +75,7 @@
         (should (member "h2: Background" names))
         (should-not (member "print" names))
         (should (string= (alist-get 'type (car entries)) "heading"))
-        (should (eq (alist-get 'line (cadr entries)) 3)))))))
+        (should (eq (alist-get 'line (cadr entries)) 3))))))
 
 (ert-deftest test-outline-yaml-entries ()
   "Outline includes top-level YAML mapping keys."

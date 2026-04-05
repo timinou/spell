@@ -1,0 +1,177 @@
+#+TITLE: Fix code tool promotion audit findings
+#+STATE: DONE
+#+SESSION_ID: 14af0fd1cab1e304
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T19-06-21-866Z_14af0fd1cab1e304.jsonl]]
+#+CUSTOM_ID: PLAN-155-fix-code-tool-promotion-audit-findings
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-045-audit-implementation:
+
+After line 64, depth drops to 1 (should drop to 0). Then line 65 (blank line) still depth 1. Line 66 goes to depth 2. After line 77 drops to 0. That means line 56-64 (the `test-outline-line-numbers` test) starts at depth 1 and ends at depth 1 — it's missing one close paren at its end.
+
+Wait — line 55 is depth 0, line 56 goes to depth 1 (opening the deftest). Line 64 is depth 5. Line 65 drops to depth 1. But it should be depth 0.
+
+The prior test (`test-outline-class-members`, lines 42-54) goes from depth 1 → 0, so it's fine. But `test-outline-line-numbers` (lines 56-64) goes from 1 → 1. Missing one closing paren.
+
+Let me look at line 64:
+
+```
+(should (> (alist-get 'line entry) 0))))))
+```
+
+That has 6 closing parens. Let me count the opens in this function:
+- `(ert-deftest` — depth 1
+- `(skip-unless` — 2, closes → 1
+- `(test-outline--with-tmp-file` — 2
+- `(lambda (file)` — 3
+- `(let ((entries (pi-outline-get file)))` — let:4, bindings:5, binding:6, pi-outline:7 → close 3: 4
+- `(dolist (entry entries)` — 5
+- `(should (numberp ...))` — self-contained at 5
+- `(should (> (alist-get 'line entry) 0))))))` — should:6, >:7, alist-get:8, close `entry)`:7, `0)`:6, `)`:5 for should... and then `)` for dolist, `)` for let, `)` for lambda, `)` for with-tmp-file = 1. Missing `)` for ert-deftest.
+
+So the `test-outline-line-numbers` test at line 56-64 is also missing one closing paren. But wait — we already verified `check-parens` passes. How?
+
+Because the markdown test at line 66-77 has an EXTRA closing paren (I added `)))))))` at line 77), which compensates for the missing one in the prior test. The net balance is correct but the nesting structure is wrong — `test-outline-markdown-headings` is nested INSIDE `test-outline-line-numbers`.
+
+This is the real bug: the paren fix I applied to line 77 (adding one more `)`) patched the symptom (total count) but didn't fix the root cause (line 64 missing one `)`). The correct fix is to add `)` at line 64 and remove the extra `)` from line 77.
+
+Now let me check the `code` tool's `renderResult` for the double JSON.parse:
+
+Looking at lines 141-158 of code.ts:
+```typescript
+const isJson = (() => {
+    try { JSON.parse(text); return true; } catch { return false; }
+})();
+let parsed: unknown;
+if (isJson) {
+    try { parsed = JSON.parse(text); } catch { parsed = text; }
+} else {
+    parsed = text;
+}
+```
+
+This parses the JSON twice when it's valid JSON — once to check, once to actually parse. A simple try-catch with a single parse would suffice.
+
+Also line 139: `const safeText = replaceTabs(text)` is computed but only used in the error path at line 171. The `toRender` helper at line 161 also calls `replaceTabs(value)`, meaning for the error path at line 171 (`safeText` is already tab-replaced text which then goes through `toRender` which calls `replaceTabs` again — double sanitization).
+
+Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. Markdown outline will not work: `section` node missing from unwrap list
+- **What**: `pi-treesit--top-level-nodes-children` unwraps `document`, `stream`, `block_mapping`, `object` — but tree-sitter-markdown wraps `atx_heading` inside `section` nodes. Without `section` in the unwrap list, heading nodes are never reached by the outline function.
+- **Where**: `packages/emacs/elisp/pi-treesit.el` ~line 155
+- **Why**: Markdown outline (`code outline` on .md files) will return empty results. The feature's primary use case doesn't work. The test is gated by `skip-unless` AND has a nesting bug that prevents execution, so this was never caught.
+- **Effort**: `trivial` — add `"section"` to the unwrap list at line 155.
+
+### 2. Elisp test nesting bug: `test-outline-markdown-headings` is inside `test-outline-line-numbers`
+- **What**: `test-outline-line-numbers` (line 56-64) is missing one closing paren. The next test (`test-outline-markdown-headings`) is nested inside it. The paren I added at line 77 compensated the total count but didn't fix the structural nesting.
+- **Where**: `packages/emacs/test/elisp/test-outline.el` line 64 (needs one more `)`) and line 77 (has one extra `)`)
+- **Why**: The markdown test is never registered as an ERT test (confirmed: `ert-test-unbound`). If/when grammars become available, these tests silently don't run.
+- **Effort**: `trivial` — add `)` at line 64, remove one from line 77.
+
+### 3. Core tier test missing `"code"` assertion
+- **What**: The core tier test at `test/tools/index.test.ts` line 261 asserts core tier for `["grep", "find", "bash", "lsp", "task", "ask"]` but omits `"code"`.
+- **Where**: `packages/coding-agent/test/tools/index.test.ts` line 261
+- **Why**: The most important assertion of this plan — that `code` is core tier — is not tested. The test would still pass if someone accidentally moved `code` to standard.
+- **Effort**: `trivial` — add `"code"` to the array.
+
+### 4. TOML `table` name returns full node text including all children
+- **What**: The `table` case in `pi-treesit-declaration-name` (line 283-284) returns `(string-trim (treesit-node-text node t))` which includes the entire table content (`[table]\nitem = "value"\nother = 1`), not just the header `[table]`.
+- **Where**: `packages/emacs/elisp/pi-treesit.el` line 284
+- **Why**: TOML table outline entries will have multi-line names containing all key-value pairs under the table. The test asserts `(member "[table]" names)` but the actual name would be the full table text. When TOML grammar becomes available, this test will fail.
+- **Effort**: `small` — extract just the table header line, or use the first child node (the `[table]` bracket header).
+
+### 5. `pair` clause crashes on nil grandparent-type
+- **What**: In the TOML path of the `pair` handler (line 277), `(not (string= grandparent-type "table"))` calls `string=` on potentially nil `grandparent-type`, which signals a wrong-type-argument error in Elisp.
+- **Where**: `packages/emacs/elisp/pi-treesit.el` line 277
+- **Why**: If a `pair` node's grandparent is nil (unlikely but possible for malformed documents), this crashes. Fix: use `(not (equal grandparent-type "table"))` or guard with `(and grandparent-type ...)`.
+- **Effort**: `trivial`
+
+### 6. Double JSON.parse in renderResult
+- **What**: `renderResult` calls `JSON.parse(text)` twice — once to check if it's JSON (lines 142-148), then again to actually parse (lines 151-155). Also, `safeText` (line 139) calls `replaceTabs` on the full text but is only used in one branch; the `toRender` helper (line 161) also calls `replaceTabs`, causing double sanitization in the error path.
+- **Where**: `packages/coding-agent/src/tools/code.ts` lines 139-171
+- **Why**: Minor perf waste (parse twice) and double-sanitization (cosmetic). Not a correctness bug.
+- **Effort**: `trivial` — single try-catch parse; remove `safeText` and use `toRender(text)` directly.
+
+### 7. No `emacs` → `code` rename in `packages/emacs` CHANGELOG
+- **What**: The plan specified CHANGELOG entries for both `packages/coding-agent/CHANGELOG.md` and `packages/emacs/CHANGELOG.md`. The emacs package has no CHANGELOG file, so the planned entries (renamed exports, tool name, grammar recipes) were not documented.
+- **Where**: `packages/emacs/` — missing `CHANGELOG.md`
+- **Why**: Low impact — the emacs package is internal. But the plan explicitly specified this documentation.
+- **Effort**: `small` — create the file if the package should have one, or note in the plan that it was intentionally skipped.
+
+### 8. `RenderResultOptions` import may be unnecessary
+- **What**: `code.ts` imports `RenderResultOptions` from `../extensibility/custom-tools/types` but the parameter is just prefixed with `_` and never used.
+- **Where**: `packages/coding-agent/src/tools/code.ts` line 17, 130
+- **Why**: Dead import. Minor lint noise. The type is needed for the method signature to satisfy the `AgentTool` interface, so the import is technically required even if `_options` is unused.
+- **Effort**: N/A — needed for type compliance.
+
+* Context
+Post-implementation audit of PLAN-154 (promote code tool to premiere) found 6 actionable issues:
+1. Markdown outline broken — =section= node missing from tree-sitter unwrap list
+2. Elisp test paren nesting bug — markdown test nested inside prior test, never runs
+3. Core tier test missing ="code"= assertion
+4. TOML table name returns full multi-line content instead of header
+5. Nil-safety crash in =pair= clause =grandparent-type= check
+6. Double JSON.parse and dead =safeText= in =renderResult=
+
+All fixes are in a single item since they're trivial, independent, and span only 4 files.
+
+** Key Decisions
+1. Add ="section"= to unwrap list (not a new function — minimal change)
+2. Fix parens at lines 64/77, not rewrite the test structure
+3. Use =equal= instead of =string== for nil-safe comparison
+4. Extract TOML table header via =(car (split-string ... "
+"))=
+5. Collapse double JSON.parse to single try-catch; remove =safeText= and =isJson=
+6. Skip emacs CHANGELOG — package is internal and has never had one
+
+* Verification
+#+begin_src bash
+# Elisp files load
+emacs --batch -L packages/emacs/elisp --eval '(progn (require (quote pi-outline)) (message "ok"))'
+
+# ERT tests all run (including markdown)
+emacs --batch -L packages/emacs/elisp -L packages/emacs/test/elisp -l test-outline --eval '(ert-run-tests-batch t)'
+
+# TypeScript tests
+bun test packages/coding-agent/test/tools/index.test.ts
+bun test packages/coding-agent/test/tools/code.test.ts
+
+# Lint
+bun check:ts
+
+# Dead code removed
+grep -n 'safeText\|isJson' packages/coding-agent/src/tools/code.ts
+# Should return zero matches
+#+end_src
+
+* Execution Manifest
+
+** Wave 1 (single item — all fixes are independent and trivial)
+- [[id:BUG-184-fix-audit-findings-from-code-tool-promot]] — Fix all 6 audit findings (30m, P:A)
+
+** Completion [2026-04-05]
+
+*** Verification
+- =emacs --batch -L packages/emacs/elisp --eval '(progn (require (quote pi-outline)) (message \"ok\"))'= — passed (output: =ok=)
+- =emacs --batch ... -l test-outline --eval '(ert-run-tests-batch t)'= — 7 tests found (was 6 before paren fix), 0 unexpected failures, 7 skipped (grammars/modes not available in batch). Confirms =test-outline-markdown-headings= is now properly registered as its own ERT test.
+- =bun test packages/coding-agent/test/tools/index.test.ts= — 35 pass, 0 fail
+- =bun test packages/coding-agent/test/tools/code.test.ts= — 2 pass, 0 fail
+- =bun check:ts= — Biome check passed (0 issues). Pre-existing tsgo errors in unrelated files (sql-store.ts, approvals.ts, tool-progress.ts, logger.ts) — none in files touched by this plan.
+- =grep -n 'safeText\\|isJson' packages/coding-agent/src/tools/code.ts= — zero matches (dead code confirmed removed)
+
+*** Artifacts
+Files modified:
+- =packages/emacs/elisp/pi-treesit.el= — findings 1 (section unwrap), 4 (TOML table name), 5 (nil-safe equal) + hardening (defvar defaults, fboundp guard)
+- =packages/emacs/test/elisp/test-outline.el= — finding 2 (paren nesting fix) + fboundp skip-unless guard
+- =packages/coding-agent/test/tools/index.test.ts= — finding 3 (code in core tier)
+- =packages/coding-agent/src/tools/code.ts= — finding 6 (single JSON.parse, removed safeText/isJson)
+
+*** Deviations
+- Paren nesting fix (finding 2) unmasked two pre-existing issues: (a) =pi-treesit--project-mode-map= was defined in =pi-prelude.el= but used in =pi-treesit.el= without a =defvar= default — added safe defaults. (b) =pi-treesit-open-file= called =funcall= on a mode symbol without checking =fboundp= — added guard. These are hardening fixes not in the original 6 findings.
+- Markdown test now properly skips (=fboundp= guard added) rather than failing on missing =markdown-ts-mode=. When the mode becomes available, the test will exercise the full outline path including the section unwrap fix.
