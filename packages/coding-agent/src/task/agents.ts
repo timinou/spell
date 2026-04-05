@@ -53,8 +53,8 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 		frontmatter: {
 			name: "task",
 			description: "General-purpose subagent with full capabilities for delegated multi-step tasks",
-			spawns: "*",
-			model: "pi/task",
+			spawns: "explore, quick_task",
+			model: "pi/subtask",
 			thinkingLevel: Effort.Medium,
 		},
 		template: taskMd,
@@ -64,7 +64,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 		frontmatter: {
 			name: "quick_task",
 			description: "Low-reasoning agent for strictly mechanical updates or data collection only",
-			model: "pi/smol",
+			model: "pi/subtask",
 			thinkingLevel: Effort.Minimal,
 			roster: false,
 		},

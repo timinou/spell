@@ -675,7 +675,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		};
 
 		const maxConcurrency = this.session.settings.get("task.maxConcurrency");
-
+		const asyncStaggerMs = this.session.settings.get("task.cacheStaggerMs") ?? 800;
+		let asyncLaunchCount = 0;
 		const emitCompletionIfDone = (): void => {
 			if (completedJobs !== taskItems.length) return;
 			const failed = failedJobs > 0;
@@ -714,6 +715,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						"task",
 						label,
 						async ({ signal: runSignal, reportProgress }) => {
+							// Stagger sibling launches for prompt cache warming
+							const myLaunchIndex = asyncLaunchCount++;
+							if (asyncStaggerMs > 0 && myLaunchIndex > 0) {
+								await Bun.sleep(asyncStaggerMs * myLaunchIndex);
+								if (runSignal.aborted) return undefined!;
+							}
 							const startedAt = Date.now();
 							const progress = progressByTaskId.get(logicalId);
 							if (progress) {
@@ -903,6 +910,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const mergeMode = this.session.settings.get("task.isolation.merge");
 		const commitStyle = this.session.settings.get("task.isolation.commits");
 		const maxConcurrency = this.session.settings.get("task.maxConcurrency");
+		const cacheStaggerMs = this.session.settings.get("task.cacheStaggerMs") ?? 800;
 		const taskDepth = this.session.taskDepth ?? 0;
 
 		if (isolationMode === "none" && "isolated" in params) {
@@ -1370,7 +1378,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					blockers: taskExecution.blockers,
 					run: runSignal => runTask(taskExecution, index, runSignal),
 				})),
-				{ maxConcurrency, signal },
+				{ maxConcurrency, signal, staggerMs: cacheStaggerMs },
 			);
 			const results: SingleResult[] = batchResults.map((batchResult, index) => {
 				if (batchResult.status === "completed" && batchResult.result) {

@@ -1,0 +1,73 @@
+#+TITLE: Subtask model roles with no-compact fail-to-parent semantics
+#+STATE: DONE
+#+SESSION_ID: 14ae9ae908b4793b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-35-34-818Z_14ae9ae908b4793b.jsonl]]
+#+CUSTOM_ID: FEAT-331-subtask-model-roles-with-no-compact-fail
+#+EFFORT: 4h
+#+PRIORITY: A
+#+LAYER: task
+
+NOTE [2026-04-05]: Added single 'subtask' model role (falls back to smol). Both task and quick_task agents use pi/subtask. Compaction and context promotion disabled for all subagents via createSubagentSettings. Simplified from original two-role design to single fast subtask role per user direction.
+
+* Initial Message
+
+look at the jsonl of the sessions (use jq) and find instances of subagents spinning their own subagents and having their TodoWrite orchestrate stuff. Please.
+
+Create two new model roles for subagents: ~pi/subtask~ (fast, small context, no compaction — 90% of tasks) and ~pi/subtask-slow~ (large context, no compaction — complex analysis). When a subagent hits context overflow, it fails back to parent with instructions to look at what was done and break things down further.
+
+* Current State
+- ~task~ agent uses ~pi/task~ which inherits the session model (falls through to default)
+- ~quick_task~ uses ~pi/smol~ with ~Effort.Minimal~
+- Compaction settings are inherited from parent via ~createSubagentSettings~ (line 463 in executor.ts)
+- Compaction is NOT disabled for subagents — they get the same settings as the parent
+- On context overflow, subagents attempt promotion then compaction (same as main session)
+- No way to make a subagent fail cleanly on overflow
+
+* Design Decision
+- 90% of subtasks should use the fast model (~pi/smol~ equivalent) to enforce clear task definitions
+- ~pi/subtask~ → maps to ~smol~ role model by default, ~Effort.Minimal~, compaction disabled
+- ~pi/subtask-slow~ → maps to ~task~ role model, ~Effort.Medium~, compaction disabled
+- On overflow: disable compaction + context promotion for subagents; let the error bubble up as a failed result with the partial work summary
+
+* Implementation
+** Add new model roles (packages/coding-agent/src/config/model-registry.ts)
+- Add ~subtask~ and ~subtask-slow~ to ~ModelRole~ type
+- Add entries to ~MODEL_ROLES~ and ~MODEL_ROLE_IDS~
+- ~subtask~ defaults to smol model, ~subtask-slow~ defaults to task model
+
+** Update embedded agent definitions (packages/coding-agent/src/task/agents.ts)
+- Change ~task~ agent from ~model: "pi/task"~ to ~model: "pi/subtask-slow"~
+- Change ~quick_task~ agent from ~model: "pi/smol"~ to ~model: "pi/subtask"~
+
+** Disable compaction for subagents (packages/coding-agent/src/task/executor.ts)
+- In ~createSubagentSettings~, override compaction settings:
+  #+begin_src typescript
+  return Settings.isolated({
+    ...snapshot,
+    "async.enabled": false,
+    "compaction.enabled": false,
+    "compaction.strategy": "off",
+    "contextPromotion.enabled": false,
+  });
+  #+end_src
+- Note: subagents using ~AgentSession~ will still hit ~#checkCompaction~ but it will early-return because ~compaction.enabled~ is false
+
+** Fail-to-parent on overflow (packages/coding-agent/src/task/executor.ts)
+- In ~processEvent~ for ~message_end~, after usage extraction:
+  - Check if the assistant message has ~stopReason === "error"~ and ~isContextOverflow~
+  - If so, construct a partial result summary from ~recentOutputTail~ and ~progress~
+  - Call ~requestAbort("terminate")~ with an error message containing:
+    - What was accomplished (tool count, last intent, partial output)
+    - Instruction to parent: "Subagent exceeded context. Review partial work and decompose into smaller tasks."
+
+** Update model resolver (packages/coding-agent/src/config/model-resolver.ts)
+- Add ~pi/subtask~ and ~pi/subtask-slow~ to alias resolution
+- ~isSessionInheritedAgentPattern~ should NOT include ~pi/subtask~ or ~pi/subtask-slow~ (they should use their own configured models, not inherit the session model)
+
+* Acceptance
+- ~bun check:ts~ passes
+- ~task~ agent uses ~pi/subtask-slow~ role
+- ~quick_task~ agent uses ~pi/subtask~ role
+- Subagent sessions have compaction disabled
+- Context overflow in a subagent returns a failed result with partial work summary
+- Model roles configurable via ~modelRoles~ settings (user can override what model ~subtask~ maps to)

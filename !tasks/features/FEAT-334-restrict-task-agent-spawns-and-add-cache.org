@@ -1,0 +1,75 @@
+#+TITLE: Restrict task agent spawns and add cache stagger
+#+STATE: DONE
+#+SESSION_ID: 14ae9ae908b4793b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-35-34-818Z_14ae9ae908b4793b.jsonl]]
+#+CUSTOM_ID: FEAT-334-restrict-task-agent-spawns-and-add-cache
+#+EFFORT: 3h
+#+PRIORITY: B
+#+LAYER: task
+#+DEPENDS: FEAT-332-reduce-max-recursion-depth-to-2-levels
+
+NOTE [2026-04-05]: Task agent spawns restricted to explore,quick_task. Added task.cacheStaggerMs setting (default 800ms). Stagger applied in both sync and async batch paths.
+
+* Initial Message
+
+look at the jsonl of the sessions (use jq) and find instances of subagents spinning their own subagents and having their TodoWrite orchestrate stuff. Please.
+
+Restrict ~task~ agent ~spawns~ from ~*~ to ~explore, quick_task~ to prevent deep task chains. Add ~1s stagger~ between sibling subagent launches within a batch to enable Anthropic prompt cache hits on shared system+tools prefix.
+
+* Current State
+- ~task~ agent has ~spawns: "*"~ (agents.ts line 56) — can spawn any agent type including other ~task~ agents
+- ~quick_task~ has no ~spawns~ field → task tool is not added (executor.ts line 559)
+- Batch scheduler pumps all ready tasks immediately (batch-scheduler.ts line 162)
+- Anthropic prompt caching requires 100% identical prefixes for cache hits
+- Sibling subagents share: same system prompt template, same tool definitions, same agent prompt
+- Cache breakpoints: tools → system → penultimate user → last user
+- First sibling creates the cache; subsequent siblings hit it IF launched after the first response arrives
+
+* Implementation
+** Restrict task agent spawns (packages/coding-agent/src/task/agents.ts)
+- Change ~task~ agent from ~spawns: "*"~ to ~spawns: "explore, quick_task"~
+- This prevents task agents from spawning other task agents, breaking deep chains
+- ~explore~ has no ~spawns~ so it can't spawn anything
+- ~quick_task~ has no ~spawns~ so it can't spawn anything
+- Net effect: max depth is main → task → explore/quick_task (no further nesting possible)
+
+** Add stagger delay to batch scheduler (packages/coding-agent/src/task/batch-scheduler.ts)
+- Add optional ~staggerMs?: number~ to ~BatchSchedulerOptions~
+- In ~pump()~, add a delay between launching sibling tasks:
+  #+begin_src typescript
+  const pump = (): void => {
+    let launchCount = 0;
+    while (!signal.aborted && runningIds.size < limit && readyQueue.length > 0) {
+      const nextId = readyQueue.shift();
+      if (!nextId || resultsById.has(nextId)) continue;
+      runningIds.add(nextId);
+      const staggerDelay = staggerMs && launchCount > 0 ? staggerMs * launchCount : 0;
+      launchCount++;
+      void (async () => {
+        if (staggerDelay > 0) await Bun.sleep(staggerDelay);
+        // ... rest of task execution
+      })();
+    }
+    // ...
+  };
+  #+end_src
+
+** Wire stagger setting (packages/coding-agent/src/config/settings-schema.ts)
+- Add ~task.cacheStaggerMs~ setting, type number, default 800
+- Description: "Delay between launching sibling subagents to improve prompt cache hits (ms). Set 0 to disable."
+
+** Pass stagger to scheduler (packages/coding-agent/src/task/index.ts)
+- Read ~settings.get("task.cacheStaggerMs")~ and pass to ~scheduleBatch~ as ~staggerMs~
+
+* Expected Impact
+- ~spawns: "explore, quick_task"~ prevents the 6 cases of task agents spawning other task agents (the most expensive sub-subagent pattern)
+- 800ms stagger gives the first subagent enough time for its first response to warm the Anthropic cache
+- System prompt + tools (typically 15-25k tokens) get cached; subsequent siblings pay 10% of that cost
+- ~14% estimated savings on input tokens for batches of 3+ siblings
+
+* Acceptance
+- ~bun check:ts~ passes
+- ~task~ agent's ~spawns~ field is ~["explore", "quick_task"]~ (verify via loadBundledAgents)
+- Batch scheduler respects ~staggerMs~ option
+- Second+ subagent in a batch launches after the configured delay
+- ~task.cacheStaggerMs~ setting available with default 800

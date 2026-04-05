@@ -335,9 +335,15 @@ function normalizeModelPatternList(value: string | string[] | undefined): string
 	return patterns.map(pattern => pattern.trim()).filter(Boolean);
 }
 
+/** Roles that inherit the active session model when not explicitly configured. */
 function isSessionInheritedAgentPattern(value: string): boolean {
 	return value === DEFAULT_MODEL_ROLE || value === `${PREFIX_MODEL_ROLE}${DEFAULT_MODEL_ROLE}` || value === "pi/task";
 }
+
+/** When a role is not configured, fall back to this role's configuration. */
+const ROLE_FALLBACK: Partial<Record<ModelRole, ModelRole>> = {
+	subtask: "smol",
+};
 
 function resolveConfiguredRolePattern(value: string, settings?: Settings): string | undefined {
 	const normalized = value.trim();
@@ -351,7 +357,15 @@ function resolveConfiguredRolePattern(value: string, settings?: Settings): strin
 	if (!role) return normalized;
 
 	const configured = settings?.getModelRole(role)?.trim();
-	if (!configured) return undefined;
+	if (!configured) {
+		// Try fallback role (e.g. subtask -> smol)
+		const fallbackRole = ROLE_FALLBACK[role];
+		if (fallbackRole) {
+			const fallbackConfigured = settings?.getModelRole(fallbackRole)?.trim();
+			if (fallbackConfigured) return thinkingLevel ? `${fallbackConfigured}:${thinkingLevel}` : fallbackConfigured;
+		}
+		return undefined;
+	}
 	return thinkingLevel ? `${configured}:${thinkingLevel}` : configured;
 }
 

@@ -1,0 +1,64 @@
+#+TITLE: Enable todo_write for subagents with per-session journal isolation
+#+STATE: DONE
+#+SESSION_ID: 14ae9ae908b4793b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-35-34-818Z_14ae9ae908b4793b.jsonl]]
+#+CUSTOM_ID: FEAT-333-enable-todo-write-for-subagents-with-per
+#+EFFORT: 4h
+#+PRIORITY: A
+#+LAYER: task
+
+NOTE [2026-04-05]: Removed todo_write from parentOwnedToolNames. Updated subagent system prompt to allow todo_write usage. Journal isolation already exists per-session.
+
+* Initial Message
+
+look at the jsonl of the sessions (use jq) and find instances of subagents spinning their own subagents and having their TodoWrite orchestrate stuff. Please.
+
+Give all ~task~-type subagents access to ~todo_write~ so they can self-organize complex work into steps and execute sequentially instead of spawning sub-subagents. Each subagent gets its own session-scoped todo state and journal file.
+
+* Current State
+- ~parentOwnedToolNames = new Set(["todo_write"])~ (executor.ts line 1054) strips todo_write from ALL subagents
+- Subagent system prompt says "No TODO tracking, no progress updates" (subagent-system-prompt.md line 18)
+- Each subagent gets its own ~AgentSession~ with independent ~#todoPhases~ (empty array)
+- Journal writes use ~sessionId~ for file naming (~.local/!journal/todos/YYYY-MM-DD-{hash}.org~)
+- ~#shouldAutoCreateRoster~ returns false at depth > 0 (task/index.ts line 276) — this prevents auto-roster for nested dispatch
+- ~todo_write~ event handling already exists in executor (line 860-864) capturing child phases for delegation
+- Eager todo prelude checks ~#toolRegistry.has("todo_write")~ — will auto-enable for subagents when the tool is present
+
+* Design
+- Remove ~todo_write~ from ~parentOwnedToolNames~ — all subagents get it
+- Update subagent-system-prompt.md to remove "No TODO tracking" and instead encourage planning
+- Journal files are already per-session (keyed by ~sessionId~) so isolation is automatic
+- Parent's delegation system already syncs child todo phases via ~#syncTodoRefChildPhases~
+- No auto-roster creation at depth > 0 (keep this guard) — subagents create their own todos, they don't create parent roster entries
+- Eager todo enforcement: let it apply to subagents if ~todo.eager~ is enabled
+
+* Implementation
+** Remove todo_write from parentOwnedToolNames (packages/coding-agent/src/task/executor.ts line 1054)
+- Change ~const parentOwnedToolNames = new Set(["todo_write"])~ to ~const parentOwnedToolNames = new Set<string>()~
+- The tool filtering at lines 1111-1114 still runs but now passes through todo_write
+- Alternatively: keep parentOwnedToolNames as a construct but remove "todo_write" from it
+
+** Update subagent system prompt (packages/coding-agent/src/prompts/system/subagent-system-prompt.md)
+- Replace line 18: "No TODO tracking, no progress updates. Execute, call ~submit_result~, done."
+- New text: "You **MAY** use ~todo_write~ to plan complex work into steps. When finished, you **MUST** call ~submit_result~ exactly once."
+
+** Update setActiveTools filter in executor (packages/coding-agent/src/task/executor.ts line 1159)
+- The ~setActiveTools~ callback at line 1159 filters out ~parentOwnedToolNames~ — verify this no longer blocks todo_write
+
+** Verify child phase syncing still works
+- ~executor.ts~ line 860: ~if (event.toolName === "todo_write")~ — already captures phases
+- ~task/index.ts~ line 465: ~#syncTodoRefChildPhases~ — already syncs to parent delegation
+- No changes needed here
+
+** Verify journal isolation
+- Each subagent session gets a unique ~sessionId~ (line 1108 in executor.ts)
+- ~writeJournal(projectRoot, sessionId, phases)~ already produces unique files
+- No changes needed
+
+* Acceptance
+- ~bun check:ts~ passes
+- Subagent sessions include ~todo_write~ in their active tools
+- Subagent system prompt no longer says "No TODO tracking"
+- Subagent todo phases are synced to parent's delegation.childPhases
+- Journal files are written per-session (verify by checking ~.local/!journal/todos/~ after a subagent run)
+- Parent auto-roster creation still blocked at depth > 0 (line 276 guard preserved)

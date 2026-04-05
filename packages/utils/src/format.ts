@@ -104,3 +104,10 @@ export function pluralize(label: string, count: number): string {
 export function formatPercent(ratio: number): string {
 	return `${(ratio * 100).toFixed(1)}%`;
 }
+
+/** Format a dollar cost for display. Shows $0.0012 for tiny values, $0.123 for sub-dollar, $1.23 for larger. */
+export function formatCost(n: number): string {
+	if (n < 0.01) return `$${n.toFixed(4)}`;
+	if (n < 1) return `$${n.toFixed(3)}`;
+	return `$${n.toFixed(2)}`;
+}

@@ -8,7 +8,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
+import { formatCost, formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 import type { AgentProgress } from "../../../task/types";
 import { TASK_SUBAGENT_EVENT_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../../../task/types";
 import type { EventBus } from "../../../utils/event-bus";
@@ -303,7 +303,8 @@ export class SubagentViewerComponent implements Component {
 			const tools = `${selectedAgent.toolCount} tools`;
 			const tokens = `${formatNumber(selectedAgent.tokens)} tokens`;
 			const duration = formatDuration(selectedAgent.durationMs);
-			stats = ` ${tools}  ${tokens}  ${duration}`;
+			const cost = selectedAgent.usage?.cost ? `  ${formatCost(selectedAgent.usage.cost)}` : "";
+			stats = ` ${tools}  ${tokens}  ${duration}${cost}`;
 		}
 
 		const scrollInfo = this.#autoFollow
