@@ -5,6 +5,12 @@
 (require 'treesit)
 (require 'pi-treesit-recipes)
 
+;; Declare project-local extension maps (populated by pi-prelude from
+;; treesitter.json).  The defvar ensures a safe default when pi-prelude has
+;; not yet loaded — e.g. in isolated ERT test runs.
+(defvar pi-treesit--project-mode-map '())
+(defvar pi-treesit--project-lang-map '())
+
 ;; ---------------------------------------------------------------------------
 ;; Buffer helpers
 ;; ---------------------------------------------------------------------------
@@ -19,7 +25,7 @@ look for installation details."
     (with-current-buffer buf
       (insert-file-contents file)
       (let ((mode (pi-treesit--mode-for-file file)))
-        (when mode (funcall mode)))
+        (when (and mode (fboundp mode)) (funcall mode)))
       (unless (treesit-parser-list)
         (pi-treesit--activate-parser file))
       ;; After best-effort activation, check whether a parser is actually running.
@@ -152,7 +158,7 @@ actual declaration nodes.
          (child (treesit-node-child node 0))
          (out '()))
     (cond
-      ((member type '("document" "stream" "block_mapping" "object"))
+      ((member type '("document" "stream" "block_mapping" "object" "section"))
        (while child
          (setq out (append out (pi-treesit--top-level-nodes-children child)))
          (setq child (treesit-node-next-sibling child))))
@@ -274,14 +280,14 @@ actual declaration nodes.
                          (member grandparent-type '("document" "stream")))
                     ;; TOML: top-level pair under document/table context
                     (and (member parent-type '("table" "document" "stream"))
-                         (not (string= grandparent-type "table")))))
+                         (not (equal grandparent-type "table")))))
           (let ((raw (treesit-node-text key-node t)))
             (if (string= parent-type "object")
                 (pi-treesit--unquote-string raw)
               raw))))
      ;; Markdown / TOML tables
      ((string= type "table")
-      (string-trim (treesit-node-text node t)))
+      (string-trim (car (split-string (treesit-node-text node t) "\n"))))
      ;; Elixir: def, defp, defmodule, etc. — all are `call` nodes in tree-sitter-elixir
      ((string= type "call")
       (let* ((target (treesit-node-child node 0))

@@ -136,24 +136,11 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			.join("");
 		const uiTheme = theme as Theme;
 
-		const safeText = replaceTabs(text);
 		const maxChars = 2000;
-		const isJson = (() => {
-			try {
-				JSON.parse(text);
-				return true;
-			} catch {
-				return false;
-			}
-		})();
 		let parsed: unknown;
-		if (isJson) {
-			try {
-				parsed = JSON.parse(text);
-			} catch {
-				parsed = text;
-			}
-		} else {
+		try {
+			parsed = JSON.parse(text);
+		} catch {
 			parsed = text;
 		}
 
@@ -168,7 +155,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				const message = String((parsed as { message?: unknown }).message ?? "Unknown error");
 				return new Text(toRender(message), 0, 0);
 			}
-			return new Text(toRender(isJson ? safeText : String(text)), 0, 0);
+			return new Text(toRender(text), 0, 0);
 		}
 
 		if (typeof parsed === "string") {
