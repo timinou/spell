@@ -1,3 +1,5 @@
+import * as os from "node:os";
+import * as path from "node:path";
 import type { Node } from "@bgotink/kdl";
 import { parse } from "@bgotink/kdl";
 import { resolveEnvValue } from "./env-resolver";
@@ -111,7 +113,7 @@ export function parseServerConfig(kdlText: string, env?: Record<string, string |
 	}
 
 	const socketNode = document.findNodeByName("socket");
-	const socketPathValue = socketNode?.getProperty("path") ?? "~/.spell/server.sock";
+	const socketPathValue = socketNode?.getProperty("path") ?? path.join(os.homedir(), ".spell", "server.sock");
 	const socket = socketNode
 		? {
 				path: resolveEnvValue<string>(socketPathValue, "string", "server.socket.path", env),

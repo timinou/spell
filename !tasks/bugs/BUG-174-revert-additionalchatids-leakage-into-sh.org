@@ -1,0 +1,132 @@
+#+TITLE: Revert additionalChatIds leakage into shared NotificationSender
+#+STATE: DONE
+#+SESSION_ID: 14aea7e3cc1b142c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-32-17-328Z_14aea7e3cc1b142c.jsonl]]
+#+CUSTOM_ID: BUG-174-revert-additionalchatids-leakage-into-sh
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: server
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-043-audit-implementation:
+
+This means `TelegramHookExecutor` also calls `sendMessage` with arbitrary `chatId` values. With the change, those chat IDs now include `additionalChatIds` from session notifications — meaning these hook targets would now bypass the owner gate too if they happen to match an `additionalChatId`.
+
+This is a design concern, though in practice it's unlikely to cause issues since `additionalChatIds` and hook targets come from the same admin config.
+
+Here's my audit summary:
+
+---
+
+## Audit Findings
+
+### 1. Socket path tilde expansion mismatch
+- **What**: Server-side default socket path `~/.spell/server.sock` is stored as a literal string (no tilde expansion). The coding-agent client uses `os.homedir() + ".spell/server.sock"`, resolving correctly. These paths won't match.
+- **Where**: `packages/spell-server/src/config/server-parser.ts:114` — default value `"~/.spell/server.sock"` passed to `resolveEnvValue` which doesn't expand `~`.
+- **Why**: If a user adds a `socket` node without an explicit `path=` property, or uses the default, the server will try to listen on a literal `~/.spell/server.sock` path. The client will look at `/home/<user>/.spell/server.sock`. They will never connect. This effectively breaks the feature for the default config.
+- **Effort**: `trivial` — replace `"~/.spell/server.sock"` with `path.join(os.homedir(), ".spell/server.sock")` in the parser, or use `os.homedir()` at the point where the socket path is consumed (in `server.ts`).
+
+### 2. `connection.write()` without destroyed check in registry
+- **What**: `resolveEvent()` and `cancelEvent()` call `entry.connection.write()` without checking `entry.connection.destroyed`. If the socket is closing concurrently, this throws an uncaught error.
+- **Where**: `packages/spell-server/src/socket/session-registry.ts:96,112`
+- **Why**: If a Telegram user taps "Approve" on an inline keyboard at the exact moment a TUI session disconnects, the write will throw. The error propagates to the callback handler and crashes the callback query. Low probability but real in production.
+- **Effort**: `trivial` — add `if (entry.connection.destroyed) return;` before the write, or wrap in try/catch.
+
+### 3. `isSocketClientMessage` type guard is overly permissive
+- **What**: The guard only checks for `type` (string) and `timestamp` (number), treating any object with those two fields as a valid `SocketClientMessage`. It doesn't validate that `type` is one of the known message types.
+- **Where**: `packages/spell-server/src/socket/types.ts:157-163`
+- **Why**: Any JSON object like `{"type":"garbage","timestamp":0}` passes validation and reaches the switch in `#handleLine`. The switch has a `default` case that returns `sessionId`, so it's silently ignored — but the type assertion is a lie. Low practical risk since the server controls the socket.
+- **Effort**: `small` — add a check against a set of known type strings.
+
+### 4. Malformed JSON test is a no-op
+- **What**: The test accesses `_socket` via type erasure, but the `TestSocketClient` class uses `#socket` (private). The optional chaining `?.write()` silently does nothing, so garbage is never sent. The test proves nothing about malformed JSON handling.
+- **Where**: `packages/spell-server/test/socket/integration.test.ts:489`
+- **Why**: False confidence — the test name suggests coverage that doesn't exist. If the server's malformed JSON handling regresses, this test won't catch it.
+- **Effort**: `trivial` — expose a `rawWrite(data: string)` method on `TestSocketClient` or access the socket correctly.
+
+### 5. `NotificationSender` owner set widened with `additionalChatIds`
+- **What**: `createNotificationSender` now adds `sessionNotifications.additionalChatIds` to the `authorizedChatIds` set. This widens the sender's authorization scope beyond owners for ALL callers — not just session notifications.
+- **Where**: `packages/spell-server/src/hooks/notification-sender.ts:132-137`
+- **Why**: `TelegramHookExecutor` and any other code using the shared `notificationSender` can now send messages to `additionalChatIds` that were previously blocked. This is an unintended authorization expansion. Low practical risk (admin-controlled config), but breaks the principle that the owner set should only contain owners.
+- **Effort**: `small` — either create a separate `NotificationSender` for session notifications without the owner gate, or pass `additionalChatIds` through a different mechanism that doesn't widen the shared sender's scope.
+
+### 6. `race.ts` not exported from barrel
+- **What**: `packages/coding-agent/src/session-bridge/index.ts` exports `client` and `types` but not `race`. The `raceWithBridge` function is imported via direct path `../session-bridge/race` from `interactive-mode.ts`.
+- **Where**: `packages/coding-agent/src/session-bridge/index.ts`
+- **Why**: Minor inconsistency — if other code (e.g., future ask tool integration) needs the race helper, it would bypass the barrel. This is acceptable if the race helper is considered internal.
+- **Effort**: `trivial`
+
+### 7. Bridge client not disposed on process exit
+- **What**: `SessionBridgeClient` is created in `runInteractiveMode()` but never explicitly disposed. The function runs in an infinite `while(true)` loop. When the process exits (SIGINT), the socket drops — the server handles cleanup — but the heartbeat interval keeps the process alive briefly.
+- **Where**: `packages/coding-agent/src/main.ts:124-149`
+- **Why**: The heartbeat `setInterval` is never cleared on process exit. In practice, the process terminates via signal anyway, but the interval prevents clean GC if the mode exits without kill. The socket `close` event on the server side handles deregistration, so this is cosmetic.
+- **Effort**: `small` — call `sessionBridge.dispose()` in `mode.stop()` or in the process signal handler.
+
+### 8. No `eventId` validation in `resolveEvent`/`cancelEvent`
+- **What**: `resolveEvent` and `cancelEvent` don't verify that the provided `eventId` matches `entry.currentBlockingEvent?.eventId`. They send a response to the client and clear the blocking event regardless.
+- **Where**: `packages/spell-server/src/socket/session-registry.ts:84-114`
+- **Why**: If called with a stale `eventId`, the response would carry the wrong `eventId` and the client would not find it in its `#pendingEvents` map — so the response is silently dropped. The blocking event is still cleared though, which is incorrect if a newer event replaced it.
+- **Effort**: `small` — add `if (entry.currentBlockingEvent?.eventId !== eventId) return;` guard.
+
+The =createNotificationSender()= function in =notification-sender.ts= was modified to merge =sessionNotifications.additionalChatIds= into the =authorizedChatIds= set passed to =TelegramNotificationSender=. This widens the authorization scope for ALL callers of the shared sender — including =TelegramHookExecutor= — not just session notifications.
+
+Fix: revert =createNotificationSender()= to only use =telegramConfig.owners=. Instead, pass the session notification chat IDs directly to =setupSessionNotifications()=, which already has access to the config and can build its own target list.
+
+* Files
+
+- Modify: =packages/spell-server/src/hooks/notification-sender.ts=
+- Modify: =packages/spell-server/src/telegram/session-notifications.ts=
+
+* Implementation
+
+1. In =notification-sender.ts=, revert =createNotificationSender()= to:
+   #+begin_src typescript
+   return new TelegramNotificationSender(telegramConfig.botToken, new Set(telegramConfig.owners), options);
+   #+end_src
+   Remove the =additionalChatIds= merging loop.
+
+2. In =session-notifications.ts=, =setupSessionNotifications()= already builds its own =chatIds= set from =notificationConfig.notifyOwners= + =notificationConfig.additionalChatIds=. The =NotificationSender.sendMessage()= call will now be blocked for =additionalChatIds= that aren't owners.
+
+   Fix: the notification handler should bypass the sender's owner check for session notifications. Two approaches:
+   a. Add an =allowedChatIds= parameter to =TelegramNotificationSender= that supplements =owners= — too invasive.
+   b. Better: make =setupSessionNotifications= use a dedicated =TelegramNotificationSender= instance that includes the additional IDs in its owner set (local scope, not shared). Create it inline:
+   #+begin_src typescript
+   const sessionSender = new TelegramNotificationSender(
+     config.botToken,
+     new Set([...config.owners, ...notificationConfig.additionalChatIds]),
+     // Note: this is separate from the shared sender
+   );
+   #+end_src
+   But =TelegramNotificationSenderOptions= requires =apiBaseUrl= etc. Since the service already passes =notificationSender= from the shared instance, the cleanest fix:
+
+   Actually the simplest approach: in =setupSessionNotifications=, instead of using the passed =notificationSender=, create a local =TelegramNotificationSender= with the combined set. But that requires the bot token.
+
+   Simplest real fix: revert =createNotificationSender= to owners-only, and pass the notification sender options (or just the bot token) into =setupSessionNotifications= so it can create its own expanded sender. OR: export =TelegramNotificationSender= and construct a session-specific one in =service.ts= where the config is available.
+
+   Best approach: in =service.ts= =start()= method, create a session-specific sender:
+   #+begin_src typescript
+   if (this.#sessionRegistry && this.#config.sessionNotifications) {
+     const sessionSenderChatIds = new Set(this.#config.owners);
+     for (const id of this.#config.sessionNotifications.additionalChatIds) {
+       sessionSenderChatIds.add(id);
+     }
+     const sessionSender = new TelegramNotificationSender(
+       this.#config.botToken, sessionSenderChatIds,
+     );
+     this.#cleanupSessionNotifications = setupSessionNotifications(
+       this.#sessionRegistry, sessionSender, this.#config,
+     );
+   }
+   #+end_src
+   This keeps the shared sender pure (owners-only) while giving session notifications their expanded scope.
+
+* Files (revised)
+
+- Modify: =packages/spell-server/src/hooks/notification-sender.ts= — revert to owners-only
+- Modify: =packages/spell-server/src/telegram/service.ts= — create dedicated session sender with expanded chat IDs
+
+* Verification
+
+- =bun test packages/spell-server/test/socket/session-notifications.test.ts= — update test to use a sender that includes additional IDs
+- =bun test packages/spell-server/test/hooks/notification-sender.test.ts= — verify shared sender only accepts owners

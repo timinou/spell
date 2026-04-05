@@ -1,0 +1,153 @@
+#+TITLE: Session bridge audit polish
+#+STATE: DONE
+#+SESSION_ID: 14aea7e3cc1b142c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-32-17-328Z_14aea7e3cc1b142c.jsonl]]
+#+CUSTOM_ID: PLAN-146-session-bridge-audit-polish
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-043-audit-implementation:
+
+This means `TelegramHookExecutor` also calls `sendMessage` with arbitrary `chatId` values. With the change, those chat IDs now include `additionalChatIds` from session notifications — meaning these hook targets would now bypass the owner gate too if they happen to match an `additionalChatId`.
+
+This is a design concern, though in practice it's unlikely to cause issues since `additionalChatIds` and hook targets come from the same admin config.
+
+Here's my audit summary:
+
+---
+
+## Audit Findings
+
+### 1. Socket path tilde expansion mismatch
+- **What**: Server-side default socket path `~/.spell/server.sock` is stored as a literal string (no tilde expansion). The coding-agent client uses `os.homedir() + ".spell/server.sock"`, resolving correctly. These paths won't match.
+- **Where**: `packages/spell-server/src/config/server-parser.ts:114` — default value `"~/.spell/server.sock"` passed to `resolveEnvValue` which doesn't expand `~`.
+- **Why**: If a user adds a `socket` node without an explicit `path=` property, or uses the default, the server will try to listen on a literal `~/.spell/server.sock` path. The client will look at `/home/<user>/.spell/server.sock`. They will never connect. This effectively breaks the feature for the default config.
+- **Effort**: `trivial` — replace `"~/.spell/server.sock"` with `path.join(os.homedir(), ".spell/server.sock")` in the parser, or use `os.homedir()` at the point where the socket path is consumed (in `server.ts`).
+
+### 2. `connection.write()` without destroyed check in registry
+- **What**: `resolveEvent()` and `cancelEvent()` call `entry.connection.write()` without checking `entry.connection.destroyed`. If the socket is closing concurrently, this throws an uncaught error.
+- **Where**: `packages/spell-server/src/socket/session-registry.ts:96,112`
+- **Why**: If a Telegram user taps "Approve" on an inline keyboard at the exact moment a TUI session disconnects, the write will throw. The error propagates to the callback handler and crashes the callback query. Low probability but real in production.
+- **Effort**: `trivial` — add `if (entry.connection.destroyed) return;` before the write, or wrap in try/catch.
+
+### 3. `isSocketClientMessage` type guard is overly permissive
+- **What**: The guard only checks for `type` (string) and `timestamp` (number), treating any object with those two fields as a valid `SocketClientMessage`. It doesn't validate that `type` is one of the known message types.
+- **Where**: `packages/spell-server/src/socket/types.ts:157-163`
+- **Why**: Any JSON object like `{"type":"garbage","timestamp":0}` passes validation and reaches the switch in `#handleLine`. The switch has a `default` case that returns `sessionId`, so it's silently ignored — but the type assertion is a lie. Low practical risk since the server controls the socket.
+- **Effort**: `small` — add a check against a set of known type strings.
+
+### 4. Malformed JSON test is a no-op
+- **What**: The test accesses `_socket` via type erasure, but the `TestSocketClient` class uses `#socket` (private). The optional chaining `?.write()` silently does nothing, so garbage is never sent. The test proves nothing about malformed JSON handling.
+- **Where**: `packages/spell-server/test/socket/integration.test.ts:489`
+- **Why**: False confidence — the test name suggests coverage that doesn't exist. If the server's malformed JSON handling regresses, this test won't catch it.
+- **Effort**: `trivial` — expose a `rawWrite(data: string)` method on `TestSocketClient` or access the socket correctly.
+
+### 5. `NotificationSender` owner set widened with `additionalChatIds`
+- **What**: `createNotificationSender` now adds `sessionNotifications.additionalChatIds` to the `authorizedChatIds` set. This widens the sender's authorization scope beyond owners for ALL callers — not just session notifications.
+- **Where**: `packages/spell-server/src/hooks/notification-sender.ts:132-137`
+- **Why**: `TelegramHookExecutor` and any other code using the shared `notificationSender` can now send messages to `additionalChatIds` that were previously blocked. This is an unintended authorization expansion. Low practical risk (admin-controlled config), but breaks the principle that the owner set should only contain owners.
+- **Effort**: `small` — either create a separate `NotificationSender` for session notifications without the owner gate, or pass `additionalChatIds` through a different mechanism that doesn't widen the shared sender's scope.
+
+### 6. `race.ts` not exported from barrel
+- **What**: `packages/coding-agent/src/session-bridge/index.ts` exports `client` and `types` but not `race`. The `raceWithBridge` function is imported via direct path `../session-bridge/race` from `interactive-mode.ts`.
+- **Where**: `packages/coding-agent/src/session-bridge/index.ts`
+- **Why**: Minor inconsistency — if other code (e.g., future ask tool integration) needs the race helper, it would bypass the barrel. This is acceptable if the race helper is considered internal.
+- **Effort**: `trivial`
+
+### 7. Bridge client not disposed on process exit
+- **What**: `SessionBridgeClient` is created in `runInteractiveMode()` but never explicitly disposed. The function runs in an infinite `while(true)` loop. When the process exits (SIGINT), the socket drops — the server handles cleanup — but the heartbeat interval keeps the process alive briefly.
+- **Where**: `packages/coding-agent/src/main.ts:124-149`
+- **Why**: The heartbeat `setInterval` is never cleared on process exit. In practice, the process terminates via signal anyway, but the interval prevents clean GC if the mode exits without kill. The socket `close` event on the server side handles deregistration, so this is cosmetic.
+- **Effort**: `small` — call `sessionBridge.dispose()` in `mode.stop()` or in the process signal handler.
+
+### 8. No `eventId` validation in `resolveEvent`/`cancelEvent`
+- **What**: `resolveEvent` and `cancelEvent` don't verify that the provided `eventId` matches `entry.currentBlockingEvent?.eventId`. They send a response to the client and clear the blocking event regardless.
+- **Where**: `packages/spell-server/src/socket/session-registry.ts:84-114`
+- **Why**: If called with a stale `eventId`, the response would carry the wrong `eventId` and the client would not find it in its `#pendingEvents` map — so the response is silently dropped. The blocking event is still cleared though, which is incorrect if a newer event replaced it.
+- **Effort**: `small` — add `if (entry.currentBlockingEvent?.eventId !== eventId) return;` guard.
+
+* Context
+
+** Problem
+
+The PLAN-139 session bridge implementation has eight audit findings ranging from a functional bug (socket path tilde mismatch that prevents default-config connections) to test quality and authorization scope issues. All are trivial-to-small effort fixes.
+
+** Approach
+
+Five bug-fix items covering all eight findings. Grouped by logical proximity to minimize file-touching overhead:
+1. Socket path tilde expansion (critical — breaks default config)
+2. Registry write guards + eventId validation (crash prevention)
+3. NotificationSender authorization scope (security principle)
+4. Type guard tightening + test fix (quality)
+5. Bridge disposal + barrel export (cleanup)
+
+** Key Decisions
+
+- For the NotificationSender authorization fix: create a dedicated =TelegramNotificationSender= instance in =service.ts= for session notifications, rather than widening the shared sender's scope. Revert the shared sender to owners-only.
+- For the type guard: add a known-types set rather than full schema validation (the switch default already handles unknown types gracefully).
+- All fixes are backward-compatible — no protocol or config schema changes.
+
+* Verification
+
+- =bun test packages/spell-server/test/socket/= — all socket tests pass (integration + session-notifications)
+- =bun test packages/spell-server/test/config/= — parser tests pass
+- =bun test packages/spell-server/test/hooks/notification-sender.test.ts= — sender tests pass
+- =bun test packages/coding-agent/test/session-bridge/= — race tests pass
+- =bun check:ts= — no new errors in modified files
+- Manual: verify =parseServerConfig= with =socket= node produces expanded home path
+
+* Execution Manifest
+
+** wave-1-critical :wave:
+- [[id:BUG-172-fix-socket-path-tilde-expansion-mismatch]] Fix socket path tilde expansion (S)
+- [[id:BUG-173-guard-socket-writes-in-session-registry]] Guard socket writes + eventId validation (S)
+
+** wave-2-hardening :wave:
+- [[id:BUG-174-revert-additionalchatids-leakage-into-sh]] Revert NotificationSender auth scope (S)
+- [[id:BUG-175-fix-malformed-json-test-and-tighten-type]] Fix test + tighten type guard (S)
+- [[id:BUG-176-dispose-session-bridge-client-on-interac]] Dispose bridge + barrel export (S)
+
+** Completion [2026-04-05]
+
+*** Verification
+
+All eight audit findings implemented:
+
+1. Socket path tilde expansion: =server-parser.ts= default changed from literal =~/.spell/server.sock= to =path.join(os.homedir(), \".spell\", \"server.sock\")=
+2. Socket write guards: =resolveEvent()= and =cancelEvent()= now check =entry.connection.destroyed= before writing
+3. EventId validation: Both methods now guard =entry.currentBlockingEvent?.eventId !== eventId=, preventing stale event clearing
+4. NotificationSender auth scope: Reverted =createNotificationSender()= to owners-only; =service.ts= creates a dedicated =TelegramNotificationSender= with expanded chat IDs for session notifications only
+5. Type guard tightened: =isSocketClientMessage()= now checks against =SOCKET_CLIENT_MESSAGE_TYPES= set
+6. Malformed JSON test fixed: Added =rawWrite()= method to =TestSocketClient=; test now actually writes to the underlying socket
+7. Bridge disposal: =InteractiveMode.stop()= now calls =sessionBridge?.dispose()= and clears the reference
+8. Barrel export: =session-bridge/index.ts= now exports =race.ts=
+
+Dead code cleanup:
+- Removed =notificationSender= field, constructor assignment, and option from =TelegramBotService= (no longer needed after dedicated session sender)
+- Removed =notificationSender= pass-through from =server.ts= bot service options
+
+Test runs:
+- =bun test packages/spell-server/test/socket/= -- 21 pass, 0 fail
+- =bun test packages/spell-server/test/hooks/notification-sender.test.ts= -- 4 pass, 0 fail
+- =bun test packages/spell-server/test/config/= -- 98 pass, 0 fail
+- =bun test packages/coding-agent/test/session-bridge/= -- 6 pass, 0 fail
+- =bun check:ts= -- no new type errors in modified files (pre-existing errors in unrelated files only)
+- =bun fix:ts= -- import ordering auto-fixed
+
+*** Artifacts
+
+Modified files:
+- =packages/spell-server/src/config/server-parser.ts= -- tilde expansion fix
+- =packages/spell-server/src/socket/session-registry.ts= -- write guards + eventId validation
+- =packages/spell-server/src/socket/types.ts= -- tightened type guard
+- =packages/spell-server/src/hooks/notification-sender.ts= -- reverted to owners-only
+- =packages/spell-server/src/telegram/service.ts= -- dedicated session sender, dead code cleanup
+- =packages/spell-server/src/server.ts= -- removed dead notificationSender pass-through
+- =packages/spell-server/test/socket/integration.test.ts= -- fixed malformed JSON test with rawWrite
+- =packages/coding-agent/src/modes/interactive-mode.ts= -- bridge disposal in stop()
+- =packages/coding-agent/src/session-bridge/index.ts= -- barrel export for race
+
+*** Deviations
+
+None.

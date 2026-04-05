@@ -170,7 +170,6 @@ export async function startSpellServer(
 				config: config.channels.telegram,
 				operatorActionBridge: operatorActionHandler,
 				sessionRegistry,
-				notificationSender,
 			});
 			await telegramBot.start();
 			telegramBotActive = true;

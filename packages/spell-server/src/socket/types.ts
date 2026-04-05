@@ -154,10 +154,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
+const SOCKET_CLIENT_MESSAGE_TYPES = new Set([
+	"register",
+	"deregister",
+	"blocking_event",
+	"heartbeat",
+	"event_resolved",
+]);
+
 export function isSocketClientMessage(value: unknown): value is SocketClientMessage {
 	if (!isRecord(value)) {
 		return false;
 	}
 
-	return typeof value.type === "string" && typeof value.timestamp === "number";
+	return (
+		typeof value.type === "string" &&
+		typeof value.timestamp === "number" &&
+		SOCKET_CLIENT_MESSAGE_TYPES.has(value.type)
+	);
 }
