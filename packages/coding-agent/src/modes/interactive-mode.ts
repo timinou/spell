@@ -1187,29 +1187,33 @@ export class InteractiveMode implements InteractiveModeContext {
 				// Non-fatal
 			}
 		}
+		// Capture transcript path before session rotation — fallback for non-org plans.
+		const fallbackTranscriptPath = this.sessionManager.getSessionFile() ?? undefined;
 		await this.#exitPlanMode({ silent: true, paused: false });
 		await this.handleClearCommand();
 		let approvedOrgItemId = "";
 		let approvedOrgItemArtifactsDir: string | undefined;
 		let planReferencePath = options.finalPlanFilePath;
+		let planningTranscriptPath = fallbackTranscriptPath;
 		if (orgPlanItem) {
-			const approvedPlanItemId = await approvePlanItem(
+			const approved = await approvePlanItem(
 				this.settings,
 				this.sessionManager.getCwd(),
 				orgPlanItem,
 				this.#getFirstUserMessageText() || undefined,
 			);
-			if (!approvedPlanItemId) {
+			if (!approved) {
 				throw new Error("Failed to approve org PLAN item.");
 			}
-			approvedOrgItemId = approvedPlanItemId;
-			const orgItemArtifactsDir = path.join(path.dirname(orgPlanItem.file), "plan-artifacts", approvedPlanItemId);
+			approvedOrgItemId = approved.id;
+			planningTranscriptPath = approved.transcriptPath ?? fallbackTranscriptPath;
+			const orgItemArtifactsDir = path.join(path.dirname(orgPlanItem.file), "plan-artifacts", approved.id);
 			const relativeOrgItemArtifactsDir = path.relative(this.sessionManager.getCwd(), orgItemArtifactsDir);
 			approvedOrgItemArtifactsDir =
 				relativeOrgItemArtifactsDir && !relativeOrgItemArtifactsDir.startsWith("..")
 					? relativeOrgItemArtifactsDir
 					: orgItemArtifactsDir;
-			planReferencePath = `org://${approvedPlanItemId}`;
+			planReferencePath = `org://${approved.id}`;
 		} else {
 			// For file-backed plans (org disabled), persist the approved plan in the new
 			// session local:// root so `local://<title>.md` resolves correctly.
@@ -1263,6 +1267,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			finalPlanFilePath: planReferencePath,
 			orgItemId: approvedOrgItemId,
 			orgItemArtifactsDir: approvedOrgItemArtifactsDir,
+			planningTranscriptPath,
 			waves: autoInitialized ? undefined : options.waves,
 			modeExecutionInstructions: modeConfig?.sections.instructions,
 			autoInitialized,
