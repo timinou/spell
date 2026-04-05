@@ -1,0 +1,139 @@
+#+TITLE: Telegram session listing and blocking event notifications
+#+STATE: DONE
+#+SESSION_ID: 14aea191293deb6d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-04-39-844Z_14aea191293deb6d.jsonl]]
+#+CUSTOM_ID: FEAT-326-telegram-session-listing-and-blocking-ev
+#+EFFORT: L
+#+PRIORITY: #A
+#+LAYER: server
+#+DEPENDS: FEAT-323-unix-domain-socket-server-in-spell-serve
+
+* Initial Message
+
+my friend, imagine I have a local telegram server to manage my sessions. is there a way in spell taht enables the telegram bot (i.e. the spell server) to see spell sessions currently running and to get notifications e.g. when another session on the computer is ready to tell me that a plan is ready to be approv? and then it shows me that 'plan waiting for approval' through the easiest way you can think of? This is a design question. Maybe look at howother pi codign agent forks and ;odules and extensions do it. Let's come up ith a solution
+
+Add Telegram commands and notifications for session discovery and blocking event handling. This is the user-facing Telegram UX for the session bridge.
+
+* Session Listing: =/sessions= Command
+
+** Behavior
+
+- List all active sessions: both Telegram-spawned (from ProcessManager) and local TUI sessions (from SocketSessionRegistry)
+- Output format per session:
+  #+begin_example
+  Sessions (3 active)
+
+  [TUI] spell @ /home/user/code/project
+    Mode: interactive | Up: 2h 15m
+    Status: Plan approval pending
+
+  [TUI] spell @ /home/user/code/other
+    Mode: interactive | Up: 45m
+    Status: Active
+
+  [TG] @username @ spell-project
+    Mode: telegram-full | Up: 10m
+    Status: Active
+  #+end_example
+- Distinguish TUI vs Telegram sessions with prefix tags
+- Show blocking status if a session has a pending event
+
+** Files
+
+- Create: =packages/spell-server/src/telegram/commands/sessions.ts=
+- Modify: =packages/spell-server/src/telegram/commands/index.ts= — register =/sessions= command, add to COMMANDS array
+
+* Blocking Event Notifications
+
+** Notification Flow
+
+1. Socket server's session registry emits =onBlockingEvent=
+2. Telegram notification handler subscribes to this emitter
+3. For each blocking event, format a Telegram message and send to configured owners
+4. Include inline keyboard buttons for actionable events
+
+** Plan Approval Notification
+
+Message format:
+#+begin_example
+Plan Approval Required
+
+Title: AUTH_REFACTOR
+Session: /home/user/code/spell
+Items: 5 linked children, 3 waves
+
+[Approve] [View Summary] [Refine] [Dismiss]
+#+end_example
+
+Inline keyboard buttons:
+- *Approve*: callback =session_event:<sessionId>:<eventId>:approve=
+- *View Summary*: callback =session_event:<sessionId>:<eventId>:view= — replies with truncated plan content
+- *Refine*: callback =session_event:<sessionId>:<eventId>:refine= — prompts user for refinement text
+- *Dismiss*: callback =session_event:<sessionId>:<eventId>:dismiss= — sends =event_cancelled= back to session
+
+** Ask Notification
+
+Message format:
+#+begin_example
+Agent Question
+
+Session: /home/user/code/spell
+Q: Which authentication method should this API use?
+
+[1] JWT (Recommended)
+[2] OAuth2
+[3] Session cookies
+#+end_example
+
+Inline keyboard: one button per option, callback =session_event:<sessionId>:<eventId>:answer:<optionIndex>=
+
+** Generic Blocking Event Notification
+
+For pending_action and other types:
+#+begin_example
+Action Required
+
+Session: /home/user/code/spell
+Type: pending_action
+Description: Preview changes need resolution
+
+[Go to terminal]
+#+end_example
+
+Simple notification, no actionable buttons (these require TUI interaction).
+
+** Response Routing
+
+When user taps an inline keyboard button:
+1. Parse callback data to extract sessionId, eventId, action
+2. Look up session in registry
+3. Format response per event kind
+4. Call =registry.resolveEvent(sessionId, eventId, response)=
+5. Edit the Telegram message to show the chosen action (prevent double-tap)
+
+For Refine action:
+1. Bot replies "Type your refinement:" 
+2. Listen for next message from that chat
+3. Route the refinement text as response
+
+** Files
+
+- Create: =packages/spell-server/src/telegram/session-notifications.ts= — notification formatting, inline keyboard builders
+- Create: =packages/spell-server/src/telegram/commands/session-event-callbacks.ts= — callback query handlers for session event buttons
+- Modify: =packages/spell-server/src/telegram/service.ts= — subscribe to session registry events, wire notification sender
+- Modify: =packages/spell-server/src/telegram/commands/index.ts= — register callback handlers, add COMMANDS entry
+
+* Edge Cases
+
+- Callback data exceeds Telegram's 64-byte limit: use compact encoding (same pattern as existing approval callbacks in =commands/approval.ts=)
+- Session disconnects between notification and user response: edit message to "Session ended" when disconnect detected
+- Plan content exceeds Telegram's 4096-char message limit: truncate with "... (truncated)" suffix, offer View Summary button that sends in chunks
+- Multiple owners: send notification to all configured owners, first response wins
+- User taps button for an already-resolved event: reply with "Already handled"
+
+* Verification
+
+- =bun test packages/spell-server/test/telegram/session-notifications.test.ts= — tests notification formatting, callback data encoding/decoding
+- =bun test packages/spell-server/test/telegram/commands/sessions.test.ts= — tests =/sessions= output formatting
+- =bun check:ts= passes
+- Manual test: start spell-server with Telegram, trigger a plan approval in a TUI session, verify notification appears with buttons, tap Approve, verify plan approval resolves in TUI

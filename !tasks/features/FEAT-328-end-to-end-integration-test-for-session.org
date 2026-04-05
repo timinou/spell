@@ -1,0 +1,72 @@
+#+TITLE: End-to-end integration test for session bridge
+#+STATE: DONE
+#+SESSION_ID: 14aea191293deb6d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-04-39-844Z_14aea191293deb6d.jsonl]]
+#+CUSTOM_ID: FEAT-328-end-to-end-integration-test-for-session
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: integration
+#+DEPENDS: FEAT-325-blocking-event-emission-from-interactive FEAT-326-telegram-session-listing-and-blocking-ev
+
+* Initial Message
+
+my friend, imagine I have a local telegram server to manage my sessions. is there a way in spell taht enables the telegram bot (i.e. the spell server) to see spell sessions currently running and to get notifications e.g. when another session on the computer is ready to tell me that a plan is ready to be approv? and then it shows me that 'plan waiting for approval' through the easiest way you can think of? This is a design question. Maybe look at howother pi codign agent forks and ;odules and extensions do it. Let's come up ith a solution
+
+Integration test verifying the full round-trip: coding-agent emits plan approval event -> socket server receives -> session registry tracks -> mock Telegram handler sends response -> socket server routes back -> coding-agent resolves the blocking selector.
+
+* Test Scenarios
+
+** Happy Path: Plan Approval via Remote
+
+1. Start socket server on a temp socket path
+2. Create bridge client, connect, register session
+3. Emit =plan_approval= blocking event from client
+4. Verify server registry shows session as blocked
+5. Simulate Telegram response: resolve the event with "Approve and execute"
+6. Verify client receives the response and promise resolves
+7. Verify server registry shows session as unblocked
+
+** Happy Path: Ask via Remote
+
+1. Emit =ask= blocking event with multi-choice question
+2. Simulate response with selected option index
+3. Verify client receives correct option mapping
+
+** Local Wins Race
+
+1. Emit blocking event to bridge
+2. Resolve the local promise first (simulating user acting in TUI)
+3. Verify the bridge event is cancelled
+4. Verify server registry clears the blocked state
+
+** Server Disconnect
+
+1. Client connected and registered
+2. Kill the socket server
+3. Verify client detects disconnection
+4. Verify client =emitBlockingEvent= returns null (graceful degradation)
+
+** Client Disconnect
+
+1. Client connected and registered
+2. Kill the client
+3. Verify server registry removes the session
+4. Verify pending blocking events are cleaned up
+
+** Session Listing
+
+1. Register two sessions with different metadata
+2. Query registry =getActive()=
+3. Verify both sessions returned with correct metadata
+4. Disconnect one session
+5. Verify only one session remains
+
+* Files
+
+- Create: =packages/spell-server/test/socket/integration.test.ts=
+
+* Verification
+
+- =bun test packages/spell-server/test/socket/integration.test.ts= passes
+- All scenarios exercise the real socket server and client (no mocks for IPC layer)
+- Telegram notification layer may be mocked (no real Bot API calls in tests)

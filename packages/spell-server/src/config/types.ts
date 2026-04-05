@@ -8,6 +8,9 @@ export interface SpellServerConfig {
 		webhookSecret?: string;
 		goalTokens?: Record<string, string>;
 	};
+	socket?: {
+		path: string;
+	};
 }
 
 // -- Voice configuration types --
@@ -83,6 +86,12 @@ export interface TelegramChannelConfig {
 	autoSendImages: boolean;
 	/** Voice configuration (STT/TTS) */
 	voice?: VoiceConfig;
+	/** Optional local session event notifications routed to Telegram targets. */
+	sessionNotifications?: {
+		events: string[];
+		notifyOwners: boolean;
+		additionalChatIds: number[];
+	};
 }
 
 export interface ChannelsConfig {

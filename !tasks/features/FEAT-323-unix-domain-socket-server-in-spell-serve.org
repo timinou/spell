@@ -1,0 +1,78 @@
+#+TITLE: Unix domain socket server in spell-server
+#+STATE: DONE
+#+SESSION_ID: 14aea191293deb6d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-04-39-844Z_14aea191293deb6d.jsonl]]
+#+CUSTOM_ID: FEAT-323-unix-domain-socket-server-in-spell-serve
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: server
+#+DEPENDS: FEAT-322-socket-ipc-protocol-types-and-shared-con
+
+* Initial Message
+
+my friend, imagine I have a local telegram server to manage my sessions. is there a way in spell taht enables the telegram bot (i.e. the spell server) to see spell sessions currently running and to get notifications e.g. when another session on the computer is ready to tell me that a plan is ready to be approv? and then it shows me that 'plan waiting for approval' through the easiest way you can think of? This is a design question. Maybe look at howother pi codign agent forks and ;odules and extensions do it. Let's come up ith a solution
+
+Implement a Unix domain socket server in spell-server that accepts connections from local coding-agent sessions. The server maintains a session registry and routes blocking events to the notification system.
+
+* Architecture
+
+** Socket Server (=src/socket/server.ts=)
+
+- Listen on configurable path (default: =~/.spell/server.sock=)
+- On startup: remove stale socket file if exists (check PID liveness or just unlink)
+- Accept connections, each connection is one coding-agent session
+- Parse JSON lines from each connection using the protocol types from FEAT-322
+- On =register=: add session to registry, respond with =registered=
+- On =blocking_event=: forward to registered event handlers (the Telegram notification layer will subscribe)
+- On =deregister= or connection close: remove session from registry
+- On =heartbeat=: update last-seen timestamp in registry
+- Graceful shutdown: close all connections, remove socket file
+
+** Session Registry (=src/socket/session-registry.ts=)
+
+- In-memory =Map<sessionId, SessionRegistryEntry>= tracking:
+  - Session metadata (pid, cwd, mode, project, startedAt)
+  - Connection handle (for sending responses back)
+  - Last heartbeat timestamp
+  - Current blocking event (if any)
+- Methods:
+  - =register(sessionId, metadata, connection)=
+  - =deregister(sessionId)=
+  - =getActive(): SessionRegistryEntry[]=
+  - =getBlocked(): SessionRegistryEntry[]= — sessions with pending blocking events
+  - =resolveEvent(sessionId, eventId, response)= — send response back to session
+  - =cancelEvent(sessionId, eventId)= — send cancellation back
+- Stale session cleanup: periodic sweep removing entries where PID is no longer running (=process.kill(pid, 0)= check)
+- Event emitter pattern: =onBlockingEvent(handler)= / =onSessionChange(handler)= so Telegram can subscribe
+
+** Integration with spell-server
+
+- Initialize socket server in =src/server.ts= =startSpellServer()=
+- Pass session registry to Telegram service (for =/sessions= and notifications)
+- Shut down socket server in the =stop()= method
+- Socket path from server config (parsed from =server.kdl=)
+
+* Files
+
+- Create: =packages/spell-server/src/socket/server.ts=
+- Create: =packages/spell-server/src/socket/session-registry.ts=
+- Create: =packages/spell-server/src/socket/index.ts= (barrel)
+- Modify: =packages/spell-server/src/server.ts= — initialize socket server, pass registry
+
+* Edge Cases
+
+- Socket file left behind from crashed server: unlink before bind, with PID-liveness check to avoid stomping a running server
+- Client sends malformed JSON: log warning, ignore the line, don't close connection
+- Client disconnects without =deregister=: connection close event handles cleanup
+- Multiple sessions from same PID (e.g., nested task agents): each has unique sessionId, all tracked independently
+- Socket dir (=~/.spell/=) doesn't exist: create it
+
+* Sequencing Note
+
+Infrastructure (socket server, registry) must exist before tests can exercise the full IPC path. Unit tests for the registry are independent and should be written first. Integration tests for the socket server require the registry.
+
+* Verification
+
+- =bun test packages/spell-server/test/socket/server.test.ts= — tests socket lifecycle (start, accept connection, register, deregister, stop)
+- =bun test packages/spell-server/test/socket/session-registry.test.ts= — tests registry CRUD, stale cleanup, event routing
+- =bun check:ts= passes

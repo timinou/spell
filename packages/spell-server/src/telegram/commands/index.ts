@@ -1,5 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { OperatorActionHandler } from "../../http/routes/operator-actions";
+import type { SocketSessionRegistry } from "../../socket";
 import type { AuthContext } from "../bot/auth";
 import type { TelegramBot } from "../bot/bot";
 import type { ProcessManager } from "../process-manager";
@@ -8,6 +9,8 @@ import type { SttProvider, TtsProvider } from "../voice";
 import { registerApprovalCallbacks } from "./approval";
 import { registerModeCallbacks } from "./mode";
 import { registerProjectCallbacks } from "./project";
+import { registerSessionEventCallbacks } from "./session-event-callbacks";
+import { handleSessionsCommand } from "./sessions";
 import { registerUnlockLockCallbacks } from "./unlock-lock";
 
 export interface CommandContext {
@@ -15,6 +18,7 @@ export interface CommandContext {
 	processManager: ProcessManager;
 	telegramPrompt: string;
 	operatorActionBridge?: OperatorActionHandler;
+	sessionRegistry?: SocketSessionRegistry;
 	sttProvider?: SttProvider;
 	ttsProvider?: TtsProvider;
 }
@@ -31,6 +35,7 @@ export const COMMANDS = [
 	{ command: "think", description: "Toggle thinking visibility" },
 	{ command: "clear", description: "Start new session" },
 	{ command: "status", description: "Show session status" },
+	{ command: "sessions", description: "List active sessions" },
 	{ command: "btw", description: "One-off question without session context" },
 	{ command: "voice", description: "Toggle voice reply mode" },
 ] as const;
@@ -159,6 +164,11 @@ export function registerCommands(bot: TelegramBot, cmdCtx: CommandContext): void
 	registerProjectCallbacks(bot, cmdCtx);
 	registerModeCallbacks(bot, cmdCtx);
 	registerApprovalCallbacks(bot, cmdCtx);
+	registerSessionEventCallbacks(bot, cmdCtx.sessionRegistry);
+
+	bot.command("sessions", async ctx => {
+		await handleSessionsCommand(ctx, cmdCtx.sessionRegistry, cmdCtx.processManager);
+	});
 
 	void bot.api.setMyCommands(COMMANDS).catch(error => {
 		logger.warn("Failed to register Telegram bot commands", { error: String(error) });

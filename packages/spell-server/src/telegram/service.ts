@@ -1,6 +1,8 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { Bot } from "grammy";
+import type { NotificationSender } from "../hooks/notification-sender";
 import type { OperatorActionHandler } from "../http/routes/operator-actions";
+import type { SocketSessionRegistry } from "../socket";
 import type { AuthContext } from "./bot/auth";
 import { authMiddleware } from "./bot/auth";
 import { createCommandRouter, createMessageHandler, type TelegramBot } from "./bot/bot";
@@ -8,12 +10,15 @@ import { TokenStore } from "./bot/tokens";
 import { type CommandContext, registerCommands } from "./commands";
 import { startLogViewer } from "./log-viewer/server";
 import { ProcessManager } from "./process-manager";
+import { setupSessionNotifications } from "./session-notifications";
 import type { TelegramBridgeConfig } from "./types";
 import { createSttProvider, createTtsProvider, type SttProvider, type TtsProvider } from "./voice";
 
 export interface TelegramBotServiceOptions {
 	config: TelegramBridgeConfig;
 	operatorActionBridge?: OperatorActionHandler;
+	sessionRegistry?: SocketSessionRegistry;
+	notificationSender?: NotificationSender;
 }
 
 interface TelegramBotServiceDependencies {
@@ -36,13 +41,17 @@ export class TelegramBotService {
 	#started = false;
 	#createBot: (token: string) => TelegramBot;
 	#operatorActionBridge?: OperatorActionHandler;
-
+	#sessionRegistry?: SocketSessionRegistry;
+	#notificationSender?: NotificationSender;
+	#cleanupSessionNotifications: (() => void) | null = null;
 	constructor(options: TelegramBotServiceOptions, dependencies: TelegramBotServiceDependencies = {}) {
 		this.#config = options.config;
 		this.#processManager = new ProcessManager(this.#config);
 		this.#tokenStore = new TokenStore();
 		this.#createBot = dependencies.createBot ?? (token => new Bot<AuthContext>(token));
 		this.#operatorActionBridge = options.operatorActionBridge;
+		this.#sessionRegistry = options.sessionRegistry;
+		this.#notificationSender = options.notificationSender;
 	}
 
 	get processManager(): ProcessManager {
@@ -86,12 +95,20 @@ export class TelegramBotService {
 				processManager: this.#processManager,
 				telegramPrompt,
 				operatorActionBridge: this.#operatorActionBridge,
+				sessionRegistry: this.#sessionRegistry,
 				sttProvider,
 				ttsProvider,
 			};
 
 			bot.use(authMiddleware(this.#config, this.#tokenStore));
 			registerCommands(bot, cmdCtx);
+			if (this.#sessionRegistry && this.#notificationSender) {
+				this.#cleanupSessionNotifications = setupSessionNotifications(
+					this.#sessionRegistry,
+					this.#notificationSender,
+					this.#config,
+				);
+			}
 			bot.use(createCommandRouter(this.#tokenStore, botUsername, cmdCtx));
 			bot.use(createMessageHandler(cmdCtx));
 
@@ -155,6 +172,11 @@ export class TelegramBotService {
 			await pollingTask;
 		}
 
+		if (this.#cleanupSessionNotifications) {
+			this.#cleanupSessionNotifications();
+			this.#cleanupSessionNotifications = null;
+		}
+
 		if (this.#logViewerServer) {
 			this.#logViewerServer.stop();
 			this.#logViewerServer = null;
@@ -182,6 +204,10 @@ export class TelegramBotService {
 		this.#pollingTask = null;
 		if (pollingTask) {
 			await pollingTask;
+		}
+		if (this.#cleanupSessionNotifications) {
+			this.#cleanupSessionNotifications();
+			this.#cleanupSessionNotifications = null;
 		}
 		if (this.#logViewerServer) {
 			this.#logViewerServer.stop();

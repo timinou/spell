@@ -1,0 +1,87 @@
+#+TITLE: KDL config extensions for session bridge
+#+STATE: DONE
+#+SESSION_ID: 14aea191293deb6d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-04-39-844Z_14aea191293deb6d.jsonl]]
+#+CUSTOM_ID: FEAT-327-kdl-config-extensions-for-session-bridge
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: server
+#+DEPENDS: FEAT-323-unix-domain-socket-server-in-spell-serve
+
+* Initial Message
+
+my friend, imagine I have a local telegram server to manage my sessions. is there a way in spell taht enables the telegram bot (i.e. the spell server) to see spell sessions currently running and to get notifications e.g. when another session on the computer is ready to tell me that a plan is ready to be approv? and then it shows me that 'plan waiting for approval' through the easiest way you can think of? This is a design question. Maybe look at howother pi codign agent forks and ;odules and extensions do it. Let's come up ith a solution
+
+Extend the KDL configuration schema to support session bridge socket configuration and Telegram notification routing for blocking events.
+
+* server.kdl Changes
+
+Add a =socket= node at the top level:
+
+#+begin_src kdl
+socket path="~/.spell/server.sock"
+#+end_src
+
+- =path= (string, optional, default =~/.spell/server.sock=): Unix domain socket path
+- If omitted entirely, socket server is disabled
+
+** Parser Changes
+
+- Modify =packages/spell-server/src/config/server-parser.ts=: parse =socket= node
+- Modify =packages/spell-server/src/config/types.ts=: add =socket= config to =SpellServerConfig=:
+  #+begin_src typescript
+  socket?: {
+    path: string;
+  };
+  #+end_src
+- Supports =env(...)= resolution for the path
+
+* channels.kdl Changes
+
+Add a =session-notifications= block under =telegram=:
+
+#+begin_src kdl
+telegram {
+  // ... existing config ...
+  session-notifications {
+    events "plan_approval" "ask" "pending_action"
+    notify-owners #true
+    notify-chat-id 123456789
+  }
+}
+#+end_src
+
+- =events= (string list, required): which blocking event kinds trigger notifications. Valid values: =plan_approval=, =ask=, =pending_action=, =hook_selector=, =hook_input=
+- =notify-owners= (boolean, default =#true=): send notifications to all configured owners
+- =notify-chat-id= (number, optional, repeatable): additional chat IDs to notify
+- If =session-notifications= block is omitted, no notifications are sent for local session events
+
+** Parser Changes
+
+- Modify =packages/spell-server/src/config/channels-parser.ts=: parse =session-notifications= block
+- Modify =packages/spell-server/src/config/types.ts=: add to =TelegramChannelConfig=:
+  #+begin_src typescript
+  sessionNotifications?: {
+    events: string[];
+    notifyOwners: boolean;
+    additionalChatIds: number[];
+  };
+  #+end_src
+
+* Documentation
+
+- Modify =packages/spell-server/docs/kdl-schema-reference.md=: add =socket= section under =server.kdl=, add =session-notifications= section under =channels.kdl=
+
+* Files
+
+- Modify: =packages/spell-server/src/config/server-parser.ts=
+- Modify: =packages/spell-server/src/config/channels-parser.ts=
+- Modify: =packages/spell-server/src/config/types.ts=
+- Modify: =packages/spell-server/docs/kdl-schema-reference.md=
+
+* Verification
+
+- =bun test packages/spell-server/test/config/server-parser.test.ts= — tests socket node parsing (present, absent, with env ref)
+- =bun test packages/spell-server/test/config/channels-parser.test.ts= — tests session-notifications parsing
+- =bun check:ts= passes
+- Verify =docs/kdl-schema-reference.md= includes the new sections

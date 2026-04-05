@@ -1,0 +1,65 @@
+#+TITLE: Session bridge client in coding-agent
+#+STATE: DONE
+#+SESSION_ID: 14aea191293deb6d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-04-39-844Z_14aea191293deb6d.jsonl]]
+#+CUSTOM_ID: FEAT-324-session-bridge-client-in-coding-agent
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: agent
+#+DEPENDS: FEAT-322-socket-ipc-protocol-types-and-shared-con
+
+* Initial Message
+
+my friend, imagine I have a local telegram server to manage my sessions. is there a way in spell taht enables the telegram bot (i.e. the spell server) to see spell sessions currently running and to get notifications e.g. when another session on the computer is ready to tell me that a plan is ready to be approv? and then it shows me that 'plan waiting for approval' through the easiest way you can think of? This is a design question. Maybe look at howother pi codign agent forks and ;odules and extensions do it. Let's come up ith a solution
+
+Implement a session bridge client in coding-agent that connects to the spell-server's Unix domain socket and enables remote interaction with blocking events.
+
+* Architecture
+
+** Bridge Client (=src/session-bridge/client.ts=)
+
+- Connect to =~/.spell/server.sock= on startup (best-effort — if socket doesn't exist, bridge is disabled)
+- Send =register= message with session metadata
+- Expose methods:
+  - =emitBlockingEvent(kind, payload): Promise<EventResponse | null>= — sends blocking_event, returns promise that resolves when server sends event_response or event_cancelled. Returns null if bridge is not connected.
+  - =dispose()= — sends =deregister=, closes connection
+  - =isConnected(): boolean=
+- Reconnection: if connection drops, attempt reconnect with backoff (max 3 attempts, 1s/2s/4s). Don't block session startup on this.
+- Heartbeat: send periodic heartbeat every 30s while connected.
+- Event response routing: maintain a =Map<eventId, PromiseResolver>= for pending blocking events. When =event_response= arrives, resolve the matching promise. When =event_cancelled= arrives, resolve with null.
+
+** Integration Points
+
+- Initialize in =src/main.ts= or =src/domain/startup.ts= after session is created
+- Pass bridge instance to interactive mode via session or mode options
+- Bridge is optional — sessions work normally without it (existing TUI-only behavior)
+- On session shutdown, call =bridge.dispose()=
+
+** Response Injection
+
+The bridge client needs to be able to resolve blocking selectors/inputs in the interactive mode. Two approaches:
+
+1. *Race pattern*: When =showHookSelector= is called AND a blocking event is emitted, the interactive mode races local input vs bridge response. First to resolve wins.
+2. *Callback injection*: The bridge client holds a reference to the active selector's resolve function and can call it directly.
+
+Recommended: Race pattern. The bridge client exposes a =waitForRemoteResponse(eventId): Promise<response>= that the interactive mode races against the local selector. This keeps the bridge decoupled from UI internals.
+
+* Files
+
+- Create: =packages/coding-agent/src/session-bridge/client.ts=
+- Create: =packages/coding-agent/src/session-bridge/index.ts= (barrel)
+- Modify: =packages/coding-agent/src/main.ts= or =src/domain/startup.ts= — initialize bridge
+- Modify: =packages/coding-agent/src/modes/interactive-mode.ts= (constructor or options) — accept bridge instance
+
+* Edge Cases
+
+- Socket doesn't exist (server not running): bridge silently disabled, all methods return null/noop
+- Socket exists but connection refused: same as above
+- Server restarts while client is connected: client detects disconnect, attempts reconnect, re-registers
+- Bridge emits event but server never responds (Telegram user ignores it): the local TUI input still works, user can act locally. The bridge promise is cancelled when the local input resolves first.
+- Multiple concurrent blocking events: each has unique eventId, all tracked independently
+
+* Verification
+
+- =bun test packages/coding-agent/test/session-bridge/client.test.ts= — tests connect, register, emit, receive response, disconnect, reconnect
+- =bun check:ts= passes

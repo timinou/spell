@@ -28,6 +28,24 @@ Properties and children:
 - `goal-token "<goal>" "<token>"` optional, repeatable
 - `auth { username "<string>"; password "<string>" }` required
 
+### `socket` node
+
+Enable the local JSON-lines session bridge socket by adding a top-level sibling node to `http`. Omit the node entirely to disable the socket server.
+
+```kdl
+socket path="~/.spell/server.sock"
+socket path="env(SPELL_SOCKET_PATH)"
+```
+
+| Property | Type | Required | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `path` | string | No | `~/.spell/server.sock` | Supports `env(...)` resolution. |
+
+Notes:
+
+- The socket node is a document-root sibling of `http`, not a child of it.
+- The bridge protocol is newline-delimited JSON; the configured socket path is where the daemon listens for local clients.
+
 ## `channels.kdl`
 
 `channels.kdl` remains transport-focused. It does not carry workflow definitions.
@@ -56,6 +74,32 @@ Important rules:
 - Omit the whole `telegram` node to disable Telegram.
 - `default-model`, `owners`, and either `bot-token` or `bot-token-file` are required when `telegram` is present.
 - Use `#null`, not bare `null`, for nullable values such as `idle-timeout #null`.
+
+### `session-notifications`
+
+Forward selected local session bridge events to Telegram chats.
+
+```kdl
+telegram {
+  session-notifications {
+    events "plan_approval" "ask" "pending_action"
+    notify-owners #true
+    notify-chat-id 123456789
+    notify-chat-id 987654321
+  }
+}
+```
+
+| Child node | Type | Required | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `events` | string list | No | empty list | Known blocking kinds: `plan_approval`, `ask`, `pending_action`, `hook_selector`, `hook_input`. Unknown values are ignored with a warning for forward compatibility. |
+| `notify-owners` | boolean | No | `#true` | When true, send notifications to configured Telegram owners. |
+| `notify-chat-id` | number | No | none | Repeatable; each occurrence appends one additional target chat ID. |
+
+Notes:
+
+- Omit the block to disable Telegram notifications for local session events.
+- `notify-chat-id` may appear multiple times and all values are collected.
 
 ## `autonomy.kdl`
 

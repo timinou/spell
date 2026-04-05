@@ -129,5 +129,11 @@ export function createNotificationSender(
 	if (!telegramConfig) {
 		return new NoopNotificationSender();
 	}
-	return new TelegramNotificationSender(telegramConfig.botToken, new Set(telegramConfig.owners), options);
+
+	const authorizedChatIds = new Set<number>(telegramConfig.owners);
+	for (const chatId of telegramConfig.sessionNotifications?.additionalChatIds ?? []) {
+		authorizedChatIds.add(chatId);
+	}
+
+	return new TelegramNotificationSender(telegramConfig.botToken, authorizedChatIds, options);
 }

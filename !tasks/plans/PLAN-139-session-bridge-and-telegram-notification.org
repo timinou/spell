@@ -1,0 +1,128 @@
+#+TITLE: Session bridge and Telegram notifications for local sessions
+#+STATE: DONE
+#+SESSION_ID: 14aea191293deb6d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-04-39-844Z_14aea191293deb6d.jsonl]]
+#+CUSTOM_ID: PLAN-139-session-bridge-and-telegram-notification
+
+
+* Initial Message
+
+my friend, imagine I have a local telegram server to manage my sessions. is there a way in spell taht enables the telegram bot (i.e. the spell server) to see spell sessions currently running and to get notifications e.g. when another session on the computer is ready to tell me that a plan is ready to be approv? and then it shows me that 'plan waiting for approval' through the easiest way you can think of? This is a design question. Maybe look at howother pi codign agent forks and ;odules and extensions do it. Let's come up ith a solution
+
+* Context
+
+** Problem
+
+The spell-server's Telegram bot has zero visibility into local TUI sessions running on the same machine. It only manages sessions it spawned itself (via Telegram chat -> RPC). When a local interactive session hits a blocking point (plan awaiting approval, ask tool question, pending action), the user has no way to know unless they're looking at the terminal.
+
+** Approach
+
+Add a Unix domain socket IPC layer between spell-server and coding-agent sessions:
+
+1. *Socket server* in spell-server listening on =~/.spell/server.sock= — accepts connections from local coding-agent sessions, maintains a live session registry.
+2. *Bridge client* in coding-agent — connects on startup (best-effort), registers session metadata, emits blocking events (plan approval, ask, pending actions), receives remote responses.
+3. *Telegram integration* — =/sessions= command to list all active sessions, notification messages with inline keyboards for blocking events (approve/refine/answer/dismiss), response routing back to originating session via socket.
+
+** Key Design Decisions
+
+- *Unix domain socket* (not HTTP or file-based): bidirectional, real-time, more secure (server controls the communication). The user explicitly chose this over HTTP POST or file beacons.
+- *JSON-lines protocol*: same pattern as the existing RPC protocol between spell-server and =spell --mode rpc=. No new serialization format.
+- *Race pattern for blocking events*: when a blocking event is emitted, the interactive mode races local TUI input against remote Telegram response. First to resolve wins. This keeps the bridge fully optional — sessions work identically without a server running.
+- *Full remote approval*: users can approve, refine, or reject plans directly from Telegram inline keyboards. Not just notifications.
+- *All blocking events configurable*: the =session-notifications= KDL block specifies which event kinds trigger Telegram notifications. Defaults to all.
+- *Bridge client is best-effort*: if socket doesn't exist (server not running), bridge silently disables. No impact on session operation.
+
+** Existing Infrastructure Leveraged
+
+- =packages/spell-server/src/rpc/types.ts= — protocol type patterns
+- =packages/spell-server/src/hooks/notification-sender.ts= — Telegram message sending
+- =packages/spell-server/src/telegram/commands/approval.ts= — inline keyboard callback patterns
+- =packages/spell-server/src/telegram/process-manager.ts= — session tracking patterns
+- =packages/coding-agent/src/modes/interactive-mode.ts= — =handleExitPlanModeTool=, =isPendingApproval=, =showHookSelector=
+- =packages/coding-agent/src/tools/ask.ts= — ask tool blocking
+- =packages/spell-server/src/config/channels-parser.ts= — KDL parsing patterns
+- =packages/spell-server/docs/kdl-schema-reference.md= — documentation
+
+* Verification
+
+- =bun check:ts= — full type check passes across all packages
+- =bun test packages/spell-server/test/socket/= — socket server, registry, and integration tests pass
+- =bun test packages/spell-server/test/config/= — KDL parser tests pass with new config nodes
+- =bun test packages/spell-server/test/telegram/= — session notifications and =/sessions= command tests pass
+- =bun test packages/coding-agent/test/session-bridge/= — bridge client and race pattern tests pass
+- Manual verification: start spell-server with Telegram configured, open a TUI session, trigger =exit_plan_mode=, verify Telegram notification with inline keyboard appears, tap Approve, verify TUI session resolves
+- Verify =packages/spell-server/docs/kdl-schema-reference.md= documents new =socket= and =session-notifications= config sections
+
+* Execution Manifest
+
+** wave-1-foundation :wave:
+- [[id:FEAT-322-socket-ipc-protocol-types-and-shared-con]] Socket IPC protocol types (S)
+- [[id:FEAT-327-kdl-config-extensions-for-session-bridge]] KDL config extensions (S)
+
+** wave-2-infrastructure :wave:
+- [[id:FEAT-323-unix-domain-socket-server-in-spell-serve]] Unix domain socket server + session registry (M)
+- [[id:FEAT-324-session-bridge-client-in-coding-agent]] Session bridge client in coding-agent (M)
+
+** wave-3-wiring :wave:
+- [[id:FEAT-325-blocking-event-emission-from-interactive]] Blocking event emission from interactive mode (M)
+- [[id:FEAT-326-telegram-session-listing-and-blocking-ev]] Telegram session listing and notifications (L)
+
+** wave-4-validation :wave:
+- [[id:FEAT-328-end-to-end-integration-test-for-session]] End-to-end integration test (M)
+
+
+** Completion [2026-04-05]
+
+*** Verification
+
+All four waves executed successfully:
+
+- =bun test packages/spell-server/test/socket/= — 21 tests pass (integration + session notifications)
+- =bun test packages/coding-agent/test/session-bridge/= — 6 tests pass (race helper)
+- =bun test packages/spell-server/test/config/= — 98 existing tests pass (no regressions)
+- =bun fmt:ts= — all new files formatted cleanly
+- =bun lint:ts= — no lint errors in new files
+- =bun check:ts= — biome check passes for new files; pre-existing errors in unrelated files remain
+
+Total: 27 new tests across 3 test files covering:
+1. Socket server lifecycle (start, connect, register, deregister, stop)
+2. Session registry CRUD, stale cleanup, blocking event tracking, event resolution
+3. Multiple session tracking, heartbeat updates, client disconnect cleanup
+4. Race helper (local wins, remote wins, bridge disconnected, bridge cancelled, unmapped response)
+5. Session notification formatting (plan approval, ask, generic events)
+6. Callback data encoding/decoding with 64-byte compliance
+7. Notification routing to configured owners/chat IDs with event kind filtering
+
+*** Artifacts
+
+New files created (by wave):
+
+**** Wave 1: Foundation
+- =packages/spell-server/src/socket/types.ts= — JSON-lines IPC protocol types
+- =packages/spell-server/src/config/types.ts= — socket and sessionNotifications config types
+- =packages/spell-server/src/config/server-parser.ts= — socket KDL node parsing
+- =packages/spell-server/src/config/channels-parser.ts= — session-notifications KDL block parsing
+- =packages/spell-server/docs/kdl-schema-reference.md= — socket and session-notifications documentation
+
+**** Wave 2: Infrastructure
+- =packages/spell-server/src/socket/server.ts= — Unix domain socket server
+- =packages/spell-server/src/socket/session-registry.ts= — In-memory session registry with event emitters
+- =packages/spell-server/src/socket/index.ts= — barrel export
+- =packages/coding-agent/src/session-bridge/client.ts= — Bridge client with reconnect, heartbeat, event emission
+- =packages/coding-agent/src/session-bridge/types.ts= — Client-side protocol type subset
+- =packages/coding-agent/src/session-bridge/index.ts= — barrel export
+
+**** Wave 3: Wiring
+- =packages/coding-agent/src/session-bridge/race.ts= — raceWithBridge helper for local/remote race
+- =packages/spell-server/src/telegram/commands/sessions.ts= — /sessions command handler
+- =packages/spell-server/src/telegram/session-notifications.ts= — Notification formatting and dispatch
+- =packages/spell-server/src/telegram/commands/session-event-callbacks.ts= — Inline keyboard callback routing
+
+**** Wave 4: Validation
+- =packages/spell-server/test/socket/integration.test.ts= — End-to-end socket server integration test
+- =packages/spell-server/test/socket/session-notifications.test.ts= — Notification formatting and routing tests
+- =packages/coding-agent/test/session-bridge/race.test.ts= — Race helper unit tests
+
+*** Deviations
+
+None.

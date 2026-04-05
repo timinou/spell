@@ -1,0 +1,84 @@
+#+TITLE: Blocking event emission from interactive mode
+#+STATE: DONE
+#+SESSION_ID: 14aea191293deb6d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T11-04-39-844Z_14aea191293deb6d.jsonl]]
+#+CUSTOM_ID: FEAT-325-blocking-event-emission-from-interactive
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: agent
+#+DEPENDS: FEAT-324-session-bridge-client-in-coding-agent
+
+* Initial Message
+
+my friend, imagine I have a local telegram server to manage my sessions. is there a way in spell taht enables the telegram bot (i.e. the spell server) to see spell sessions currently running and to get notifications e.g. when another session on the computer is ready to tell me that a plan is ready to be approv? and then it shows me that 'plan waiting for approval' through the easiest way you can think of? This is a design question. Maybe look at howother pi codign agent forks and ;odules and extensions do it. Let's come up ith a solution
+
+Wire the interactive mode's blocking points to emit events via the session bridge client, and race remote responses against local TUI input.
+
+* Blocking Points to Instrument
+
+** Plan Approval (=handleExitPlanModeTool=)
+
+In =interactive-mode.ts= line ~1375, after =isPendingApproval = true= and before the selector:
+
+1. Emit =blocking_event= with kind =plan_approval= to bridge
+2. Payload: title, itemId, childItemIds, planContent (truncated summary), waves, selectorOptions
+3. Race the =showHookSelector= call against the bridge's =waitForRemoteResponse()=
+4. If remote response arrives first: use the chosen option, skip local selector
+5. If local input resolves first: cancel the bridge event
+
+** Ask Tool
+
+The ask tool in =src/tools/ask.ts= blocks on user input. When bridge is connected:
+
+1. Emit =blocking_event= with kind =ask= before blocking
+2. Payload: questions array (id, question, options, recommended, multi)
+3. Race local input vs remote response
+4. Remote response format: array of {questionId, selectedOptionIndices} matching the ask tool's response format
+
+** Hook Selectors and Inputs
+
+The generic =showHookSelector= and =showHookInput= in =extension-ui-controller.ts= are used by various features. Only instrument the ones that represent genuine user-facing blocking states, not incidental UI:
+
+- Plan approval selector (already covered above)
+- Audit completion selector (=handleExitPlanModeTool= path)
+- Any selector where =isPendingApproval= is true
+
+Do NOT instrument every selector — most are transient UI choices during agent operation.
+
+* Race Pattern Implementation
+
+Create a helper =raceWithBridge= in =src/session-bridge/race.ts=:
+
+#+begin_src typescript
+async function raceWithBridge<T>(
+  localPromise: Promise<T>,
+  bridge: SessionBridgeClient | undefined,
+  eventKind: BlockingEventKind,
+  payload: unknown,
+): Promise<{ source: "local" | "remote"; value: T }>;
+#+end_src
+
+- If bridge is undefined or not connected, just await localPromise
+- Otherwise, emit blocking event and race the two promises
+- When one resolves, cancel the other (abort the bridge event or resolve/ignore the selector)
+- Return the result with source annotation for logging
+
+* Files
+
+- Create: =packages/coding-agent/src/session-bridge/race.ts=
+- Modify: =packages/coding-agent/src/modes/interactive-mode.ts= — instrument =handleExitPlanModeTool=, add bridge to constructor/options
+- Modify: =packages/coding-agent/src/tools/ask.ts= — instrument blocking path
+- Modify: =packages/coding-agent/src/modes/controllers/extension-ui-controller.ts= — optional bridge-aware selector
+
+* Edge Cases
+
+- Remote response arrives for a selector that was already resolved locally: ignore (event was cancelled)
+- Bridge disconnects while event is pending: local input takes over seamlessly
+- Plan content too large for Telegram (4096 char limit): truncate to summary in the blocking_event payload. Full plan viewable via a follow-up Telegram command.
+- Multiple blocking events in quick succession (e.g., ask followed by plan): each tracked independently by eventId
+
+* Verification
+
+- =bun test packages/coding-agent/test/session-bridge/race.test.ts= — tests race pattern (local wins, remote wins, bridge disconnected, bridge undefined)
+- =bun check:ts= passes
+- Manual test: start interactive session, trigger plan approval, verify event emission logged. If server is running, verify Telegram notification received.
