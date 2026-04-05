@@ -1,0 +1,28 @@
+#+TITLE: Reduce max recursion depth to 2 levels
+#+STATE: DONE
+#+SESSION_ID: 14ae9ae908b4793b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-35-34-818Z_14ae9ae908b4793b.jsonl]]
+#+CUSTOM_ID: FEAT-332-reduce-max-recursion-depth-to-2-levels
+#+EFFORT: 30m
+#+PRIORITY: A
+#+LAYER: task
+
+NOTE [2026-04-05]: Default changed from 4 to 2 in settings-schema.ts. Fallback defaults updated in executor.ts and tools/index.ts.
+
+* Initial Message
+
+look at the jsonl of the sessions (use jq) and find instances of subagents spinning their own subagents and having their TodoWrite orchestrate stuff. Please.
+
+Reduce ~task.maxRecursionDepth~ default from 4 to 2. Data shows only 0.9% of subagents spawn children, and those cost 5x more than regular subagents. Depth 2 allows: main session → subagent → sub-subagent (one level of nesting). Deeper chains have never produced value proportional to their cost.
+
+* Implementation
+** Change default (packages/coding-agent/src/config/settings-schema.ts line 1248)
+- Change ~default: 4~ to ~default: 2~
+
+** Update description (packages/coding-agent/src/config/settings-schema.ts line 1252)
+- Update description to reflect the new default and rationale
+
+* Acceptance
+- ~bun check:ts~ passes
+- ~settings.get("task.maxRecursionDepth")~ returns 2 by default
+- Users can still override to higher values via settings

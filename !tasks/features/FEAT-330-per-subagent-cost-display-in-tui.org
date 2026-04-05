@@ -1,0 +1,50 @@
+#+TITLE: Per-subagent cost display in TUI
+#+STATE: DONE
+#+SESSION_ID: 14ae9ae908b4793b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-35-34-818Z_14ae9ae908b4793b.jsonl]]
+#+CUSTOM_ID: FEAT-330-per-subagent-cost-display-in-tui
+#+EFFORT: 2h
+#+PRIORITY: B
+#+LAYER: tui
+
+NOTE [2026-04-05]: Added formatCost to utils. Added usage.cost to AgentProgress. Cost shown in progress, result, batch summary, and viewer footer.
+
+* Initial Message
+
+look at the jsonl of the sessions (use jq) and find instances of subagents spinning their own subagents and having their TodoWrite orchestrate stuff. Please.
+
+Show per-subagent cost breakdown in both progress (streaming) and result rendering, plus batch-total cost in the summary line.
+
+* Current State
+- ~SingleResult.usage~ exists with full cost breakdown (input/output/cacheRead/cacheWrite/total) but is never rendered
+- ~AgentProgress.tokens~ is displayed but ~AgentProgress~ has no cost/usage field
+- Batch-level ~TaskToolDetails.usage~ is aggregated but never displayed
+- Footer shows session-wide cost via ~$totalCost.toFixed(3)~ but no per-task breakdown
+
+* Implementation
+** Add ~usage~ field to ~AgentProgress~ (packages/coding-agent/src/task/types.ts)
+- Add ~usage?: { cost: number }~ to ~AgentProgress~ interface
+- Populate from ~accumulatedUsage.cost.total~ in executor event handler (packages/coding-agent/src/task/executor.ts ~message_end~ handler around line 920)
+
+** Add cost formatting helper (packages/utils/src/format.ts)
+- Add ~formatCost(n: number): string~ — returns ~$0.12~ for values > $0.01, ~<$0.01~ for tiny values
+
+** Display per-subagent cost in progress rendering (packages/coding-agent/src/task/render.ts ~renderAgentProgress~)
+- After tokens display (~line 534~), add cost: ~${theme.fg("dim", formatCost(progress.usage?.cost ?? 0))}~
+- Only show when cost > 0
+
+** Display per-subagent cost in result rendering (packages/coding-agent/src/task/render.ts ~renderAgentResult~)
+- After tokens display (~line 780~), add cost from ~result.usage?.cost.total~
+
+** Display batch total cost in summary line (packages/coding-agent/src/task/render.ts ~line 960~)
+- After duration, add ~details.usage?.cost.total~ if available
+
+** Display cost in subagent viewer footer (packages/coding-agent/src/modes/components/subagent-viewer/viewer-component.ts ~line 303~)
+- Add ~formatCost(selectedAgent.usage?.cost ?? 0)~ after tokens
+
+* Acceptance
+- ~bun check:ts~ passes
+- Per-subagent cost visible during streaming progress (when cost > 0)
+- Per-subagent cost visible in completed task results
+- Batch total cost visible in summary line
+- Subagent viewer footer shows cost for selected agent

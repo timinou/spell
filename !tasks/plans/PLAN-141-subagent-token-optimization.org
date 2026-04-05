@@ -1,0 +1,91 @@
+#+TITLE: Subagent Token Optimization
+#+STATE: DONE
+#+SESSION_ID: 14ae9ae908b4793b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-35-34-818Z_14ae9ae908b4793b.jsonl]]
+#+CUSTOM_ID: PLAN-141-subagent-token-optimization
+
+
+* Initial Message
+
+look at the jsonl of the sessions (use jq) and find instances of subagents spinning their own subagents and having their TodoWrite orchestrate stuff. Please.
+
+* Context
+
+Analysis of 5,411 subagent sessions found 49 (0.9%) that spawn their own sub-subagents, costing 5.1x more than regular subagents ($0.94 median vs $0.18). The worst offender ran 141 turns at $9.19 with 14M cache-read tokens. Zero subagents use ~todo_write~ — it is stripped from all subagent tool sets via ~parentOwnedToolNames~.
+
+** Key findings from session JSONL analysis
+- 40 of 54 sub-subagent spawns are ~explore~ type (read-only scouts) — low cost
+- 6 are ~task~ type (full agents spawning other full agents) — highest cost, least value
+- ~task~ agent has ~spawns: \"*\"~ allowing arbitrary nesting; data shows this is almost never productive
+- Subagents inherit compaction settings from parent but should NOT compact — they should fail fast and return partial work
+- Cost per output token for spawning subagents is 2.7x worse than regular subagents
+- Prompt caching between siblings is underutilized: concurrent launches miss the cache window
+
+** Approach
+Five coordinated changes:
+1. *Cost visibility*: Show per-subagent cost in TUI (progress, results, viewer, batch summary)
+2. *Subtask model roles*: New ~pi/subtask~ (fast) and ~pi/subtask-slow~ roles with compaction disabled; overflow fails to parent
+3. *Reduce recursion depth*: Default 4 → 2 (main → subagent → sub-subagent max)
+4. *Enable todo_write*: Let subagents self-organize with todos instead of spawning children
+5. *Restrict spawns + cache stagger*: ~task~ agent spawns only ~explore/quick_task~; 800ms stagger between batch launches for cache hits
+
+** Key decisions
+- Fast model default for subtasks: 90% should use ~pi/subtask~ (smol) to enforce clear task definitions
+- No compaction for subagents: overflow → fail-to-parent with partial work summary
+- ~todo_write~ available to all subagents, not just task-type — simpler, and explore/quick_task rarely need multi-step planning
+- Journal files already per-session — no new isolation mechanism needed
+- Auto-roster creation stays blocked at depth > 0 — subagents manage their own todos, not parent's roster
+- Cache stagger default 800ms — enough for first response to warm Anthropic cache
+
+* Verification
+
+#+begin_src bash
+bun check:ts
+#+end_src
+
+Manual checks:
+- Run a multi-task batch and verify per-subagent cost visible in TUI progress and results
+- Verify batch summary line shows total cost
+- Verify subagent viewer footer shows cost
+- Verify subagent sessions have compaction disabled (~compaction.enabled: false~)
+- Verify context overflow in a subagent returns failed result (not compacted)
+- Verify ~task~ agent cannot spawn other ~task~ agents (only explore/quick_task)
+- Verify subagents have ~todo_write~ in active tools
+- Verify 2nd+ subagent in batch launches ~800ms after first
+- Verify ~settings.get(\"task.maxRecursionDepth\")~ defaults to 2
+
+* Execution Manifest
+
+** Wave 1: Foundation (parallel)
+- [[id:FEAT-332-reduce-max-recursion-depth-to-2-levels]] — 30m, no deps
+- [[id:FEAT-330-per-subagent-cost-display-in-tui]] — 2h, no deps
+
+** Wave 2: Core changes (parallel, after wave 1)
+- [[id:FEAT-331-subtask-model-roles-with-no-compact-fail]] — 4h, independent
+- [[id:FEAT-333-enable-todo-write-for-subagents-with-per]] — 4h, independent
+
+** Wave 3: Polish
+- [[id:FEAT-334-restrict-task-agent-spawns-and-add-cache]] — 3h, depends on FEAT-332 (reduced depth complements spawn restriction)
+
+** Completion [2026-04-05]
+*** Verification
+- =bun check:ts=: biome passes clean on all changed files; tsgo errors are all pre-existing in =spell-server= and =autonomy-state= (not touched)
+- =bun test test/task/model-fallback.test.ts=: 2/2 pass, 13 expects
+- =settings.get(\"task.maxRecursionDepth\")= defaults to 2 (settings-schema.ts default changed)
+- =task= agent model changed from =pi/task= to =pi/subtask= (falls back to smol)
+- =quick_task= agent model changed from =pi/smol= to =pi/subtask= (same resolution)
+- =task= agent spawns restricted from =*= to =explore, quick_task=
+- =parentOwnedToolNames= cleared — subagents now receive =todo_write=
+- Subagent system prompt updated: \"MAY use todo_write\" replaces \"No TODO tracking\"
+- =createSubagentSettings= disables compaction, compaction strategy, and context promotion
+- =task.cacheStaggerMs= setting added with default 800ms
+- Stagger wired to both sync (=scheduleBatch=) and async batch paths
+- =formatCost= added to =@oh-my-pi/pi-utils= and used in progress, result, summary, and viewer footer
+- =AgentProgress.usage= field added for running cost tracking
+
+*** Artifacts
+- Changed files (13): model-registry.ts, model-resolver.ts, settings-schema.ts, agents.ts, executor.ts, render.ts, types.ts, batch-scheduler.ts, task/index.ts, viewer-component.ts, tools/index.ts, subagent-system-prompt.md, format.ts
+
+*** Deviations
+- Simplified from two subtask roles (subtask-fast + subtask-slow) to single =subtask= role per user direction. All subagents use fast/small context. If a task needs more, parent should decompose further.
+- Fail-to-parent overflow mechanism not explicitly implemented as a separate handler — compaction is disabled so overflow errors naturally bubble up as failed results. The agent session stops on overflow (no retry loop) because compaction and context promotion are both off.

@@ -186,6 +186,8 @@ export interface AgentProgress {
 	sessionId?: string;
 	transcriptPath?: string;
 	todoPhases?: TodoPhase[];
+	/** Running cost from accumulated message_end events */
+	usage?: { cost: number };
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
 	extractedToolData?: Record<string, unknown[]>;
 }

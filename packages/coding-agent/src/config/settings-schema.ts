@@ -1245,11 +1245,11 @@ export const SETTINGS_SCHEMA = {
 
 	"task.maxRecursionDepth": {
 		type: "number",
-		default: 4,
+		default: 2,
 		ui: {
 			tab: "tasks",
 			label: "Max Task Recursion",
-			description: "How many levels deep subagents can spawn their own subagents",
+			description: "Max nesting depth for subagent spawns (2 = main -> subagent -> sub-subagent)",
 			submenu: true,
 		},
 	},
@@ -1261,6 +1261,17 @@ export const SETTINGS_SCHEMA = {
 			tab: "tasks",
 			label: "Max Tool Calls per Subagent",
 			description: "Maximum tool calls per subagent before forced termination. Set 0 to disable.",
+			submenu: true,
+		},
+	},
+
+	"task.cacheStaggerMs": {
+		type: "number",
+		default: 800,
+		ui: {
+			tab: "tasks",
+			label: "Cache Stagger Delay (ms)",
+			description: "Delay between launching sibling subagents for prompt cache hits. Set 0 to disable.",
 			submenu: true,
 		},
 	},

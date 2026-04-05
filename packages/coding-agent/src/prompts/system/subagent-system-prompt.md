@@ -15,7 +15,7 @@ If you need additional information, you can find your conversation with the user
 {{/if}}
 
 {{SECTION_SEPERATOR "Closure"}}
-No TODO tracking, no progress updates. Execute, call `submit_result`, done.
+You **MAY** use `todo_write` to plan complex work into steps. For 3+ step tasks, planning first improves reliability.
 
 When finished, you **MUST** call `submit_result` exactly once. This is like writing to a ticket, provide what is required, and close it.
 

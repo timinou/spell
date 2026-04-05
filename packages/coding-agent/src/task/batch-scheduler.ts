@@ -14,6 +14,8 @@ export interface BatchTaskResult<T> {
 export interface BatchSchedulerOptions {
 	maxConcurrency: number;
 	signal?: AbortSignal;
+	/** Delay between sibling launches for prompt cache warming (ms). 0 to disable. */
+	staggerMs?: number;
 }
 
 export interface BatchGraph {
@@ -108,11 +110,13 @@ export async function scheduleBatch<T>(
 	const graph = buildBatchGraph(tasks);
 	const limit = clampConcurrency(options.maxConcurrency, tasks.length);
 	const signal = options.signal ?? new AbortController().signal;
+	const staggerMs = options.staggerMs ?? 0;
 	const runningIds = new Set<string>();
 	const resultsById = new Map<string, BatchTaskResult<T>>();
 	const remainingBlockers = new Map<string, number>();
 	const readyQueue: string[] = [];
 	const { promise, resolve } = Promise.withResolvers<void>();
+	let launchCount = 0;
 
 	for (const task of tasks) {
 		const blockers = graph.blockersById.get(task.id) ?? [];
@@ -164,6 +168,12 @@ export async function scheduleBatch<T>(
 			if (!nextId || resultsById.has(nextId)) continue;
 			runningIds.add(nextId);
 			void (async () => {
+				// Stagger sibling launches for prompt cache warming
+				const myLaunchIndex = launchCount++;
+				if (staggerMs > 0 && myLaunchIndex > 0) {
+					await Bun.sleep(staggerMs * myLaunchIndex);
+					if (signal.aborted) return;
+				}
 				const taskIndex = graph.indexById.get(nextId);
 				if (taskIndex === undefined) {
 					runningIds.delete(nextId);

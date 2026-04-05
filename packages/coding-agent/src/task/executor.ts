@@ -9,7 +9,7 @@ import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import Ajv, { type ValidateFunction } from "ajv";
 import { ModelRegistry } from "../config/model-registry";
-import { resolveModelCandidates, resolveModelOverride } from "../config/model-resolver";
+import { resolveModelCandidates } from "../config/model-resolver";
 import { type PromptTemplate, renderPromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
@@ -465,7 +465,13 @@ function createSubagentSettings(baseSettings: Settings): Settings {
 	for (const key of Object.keys(SETTINGS_SCHEMA) as SettingPath[]) {
 		snapshot[key] = baseSettings.get(key);
 	}
-	return Settings.isolated({ ...snapshot, "async.enabled": false });
+	return Settings.isolated({
+		...snapshot,
+		"async.enabled": false,
+		"compaction.enabled": false,
+		"compaction.strategy": "off",
+		"contextPromotion.enabled": false,
+	});
 }
 
 /**
@@ -539,7 +545,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	const settings = options.settings ?? Settings.isolated();
 	const subagentSettings = createSubagentSettings(settings);
-	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 4;
+	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 2;
 	const maxToolCalls = settings.get("task.maxToolCalls") ?? 200;
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;
@@ -933,8 +939,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							accumulatedUsage.cost.total += getNumberField(costRecord, "total") ?? 0;
 						}
 					}
-					// Accumulate tokens for progress display
+					// Accumulate tokens and cost for progress display
 					progress.tokens += getUsageTokens(messageUsage);
+					if (accumulatedUsage.cost.total > 0) {
+						progress.usage = { cost: accumulatedUsage.cost.total };
+					}
 				}
 				break;
 			}
@@ -1051,7 +1060,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const allCustomTools = [...mcpProxyTools, ...(options.customTools ?? [])];
 			const enableMCP = !options.mcpManager;
 			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
-			const parentOwnedToolNames = new Set(["todo_write"]);
+			const parentOwnedToolNames = new Set<string>();
 			const MAX_SUBMIT_RESULT_RETRIES = 3;
 			const fallbackAttempts: StartupFallbackAttempt[] = [];
 

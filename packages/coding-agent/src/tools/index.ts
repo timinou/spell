@@ -484,7 +484,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
 		if (name === "task") {
-			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 4;
+			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
 			const currentDepth = session.taskDepth ?? 0;
 			return maxDepth < 0 || currentDepth < maxDepth;
 		}

@@ -7,7 +7,7 @@
 import path from "node:path";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Container, Text } from "@oh-my-pi/pi-tui";
-import { formatNumber } from "@oh-my-pi/pi-utils";
+import { formatCost, formatNumber } from "@oh-my-pi/pi-utils";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import {
@@ -533,12 +533,18 @@ function renderAgentProgress(
 		if (progress.tokens > 0) {
 			statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(progress.tokens)} tokens`)}`;
 		}
+		if (progress.usage && progress.usage.cost > 0) {
+			statusLine += `${theme.sep.dot}${theme.fg("dim", formatCost(progress.usage.cost))}`;
+		}
 	} else if (progress.status === "completed") {
 		if (progress.toolCount > 0) {
 			statusLine += `${theme.sep.dot}${theme.fg("dim", `${progress.toolCount} tools`)}`;
 		}
 		if (progress.tokens > 0) {
 			statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(progress.tokens)} tokens`)}`;
+		}
+		if (progress.usage && progress.usage.cost > 0) {
+			statusLine += `${theme.sep.dot}${theme.fg("dim", formatCost(progress.usage.cost))}`;
 		}
 	}
 
@@ -779,6 +785,9 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 	if (result.tokens > 0) {
 		statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(result.tokens)} tokens`)}`;
 	}
+	if (result.usage?.cost?.total && result.usage.cost.total > 0) {
+		statusLine += `${theme.sep.dot}${theme.fg("dim", formatCost(result.usage.cost.total))}`;
+	}
 	statusLine += `${theme.sep.dot}${theme.fg("dim", formatDuration(result.durationMs))}`;
 
 	if (result.truncated) {
@@ -958,6 +967,9 @@ export function renderResult(
 					summary += theme.fg("error", `${failCount} failed`);
 				}
 				summary += `${theme.sep.dot}${theme.fg("dim", formatDuration(details.totalDurationMs))}`;
+				if (details.usage?.cost?.total && details.usage.cost.total > 0) {
+					summary += `${theme.sep.dot}${theme.fg("dim", formatCost(details.usage.cost.total))}`;
+				}
 				lines.push(summary);
 			}
 
