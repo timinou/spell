@@ -1,0 +1,59 @@
+#+TITLE: Plan mode comprehensive-first coverage default
+#+STATE: DONE
+#+SESSION_ID: 14aece6294f93323
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T14-20-28-627Z_14aece6294f93323.jsonl]]
+#+CUSTOM_ID: FEAT-344-plan-mode-comprehensive-first-coverage-d
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: prompt
+
+* Initial Message
+
+Look at this session:
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T11-57-52-340Z_14aeadbed513a760.jsonl
+ ID: 14aeadbed513a760
+
+
+What improvements would you propose to make sure I don't have to go through this verification phase in the future? Identify all agent failures and propose solutions
+
+* Scope
+
+Addresses F3 (minimal coverage default) — agent created 1 small E2E journey instead of comprehensive suite.
+
+** In-scope
+- Add guidance that plan mode should default to comprehensive coverage, not minimal examples
+- Applies specifically to test planning and journey/scenario enumeration
+
+** Out-of-scope
+- General testing philosophy changes (AGENTS.md testing guidance is separate)
+- Programmatic enforcement
+
+* Problem
+
+When asked to plan E2E journey tests, the agent created a single 7-step onboarding journey. The user expected exhaustive coverage of every SalesOps workflow. The agent's default instinct was "write one representative example" when the task required "enumerate all scenarios."
+
+This is a planning-specific failure: during implementation, minimal is sometimes right (ship the simplest thing). During *planning*, you need comprehensive enumeration because the plan drives what gets built. An underspecified plan produces underspecified implementations.
+
+* Implementation
+
+** Add Coverage Requirement
+:PROPERTIES:
+:CUSTOM_ID: FEAT-344-comprehensive-coverage::add-requirement
+:END:
+
+File: ~packages/coding-agent/src/prompts/system/plan-mode-active.md~
+
+Add to the child item requirements section:
+
+#+begin_example
+- When planning test coverage (E2E journeys, integration tests, scenarios), enumerate ALL user workflows and scenarios first, then scope down with user input. Default to comprehensive enumeration, not representative examples. Plans drive implementation — missing a scenario in the plan means it won't be built.
+#+end_example
+
+* Tests
+
+Behavioral only.
+
+* Acceptance Criteria
+- [ ] Plan mode prompt requires comprehensive-first test coverage enumeration
+- [ ] Prompt explicitly states that planning ≠ implementation: plans should be exhaustive

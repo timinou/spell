@@ -106,7 +106,11 @@ describe("ExitPlanModeTool", () => {
 	});
 
 	it("returns org plan details with validated child ids", async () => {
-		await writeOrgItem("features", "FEAT-001-auth-api", "* Scope\nImplement auth API");
+		await writeOrgItem(
+			"features",
+			"FEAT-001-auth-api",
+			"* Scope\nImplement the authentication API with JWT tokens and session management.\n\n* Implementation\nModify src/auth.ts to add login endpoint using existing middleware patterns.\n\n* Acceptance Criteria\n- POST /api/auth/login returns valid JWT",
+		);
 		await writeOrgItem(
 			"plans",
 			"PLAN-001-auth-initiative",
