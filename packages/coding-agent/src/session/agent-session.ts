@@ -479,7 +479,7 @@ export class AgentSession {
 	#promptInFlightCount = 0;
 	#obfuscator: SecretObfuscator | undefined;
 	#pendingActionStore: PendingActionStore | undefined;
-	#toolSession?: { dispose?(): Promise<void> | void };
+	#toolSession?: { dispose?(): Promise<void> | void; softReset?(): Promise<void> | void };
 	#loopManager: LoopManager | undefined;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
@@ -1609,9 +1609,10 @@ export class AgentSession {
 	}
 
 	/**
-	 * Dispose all tools that have a dispose method.
+	 * Dispose tools. "soft" preserves long-lived daemons; "hard" tears down everything.
 	 */
-	async #disposeTools(): Promise<void> {
+	async #disposeTools(mode: "soft" | "hard" = "hard"): Promise<void> {
+		// Step 1: Always dispose individual tool instances (browser tabs, canvas bridges, etc.)
 		const disposables = Array.from(this.#toolRegistry.values()).filter(
 			(tool): tool is typeof tool & { dispose(): Promise<void> | void } =>
 				tool != null && typeof tool.dispose === "function",
@@ -1624,10 +1625,15 @@ export class AgentSession {
 				}
 			}
 		}
+		// Step 2: Tool session lifecycle — soft preserves daemons, hard destroys everything
 		try {
-			await this.#toolSession?.dispose?.();
+			if (mode === "soft") {
+				await this.#toolSession?.softReset?.();
+			} else {
+				await this.#toolSession?.dispose?.();
+			}
 		} catch (err) {
-			logger.warn("ToolSession dispose failed", { error: String(err) });
+			logger.warn("ToolSession lifecycle failed", { mode, error: String(err) });
 		}
 	}
 
@@ -3047,7 +3053,7 @@ export class AgentSession {
 
 		this.#disconnectFromAgent();
 		await this.abort();
-		await this.#disposeTools();
+		await this.#disposeTools("soft");
 		this.#asyncJobManager?.cancelAll();
 		this.agent.reset();
 		await this.sessionManager.flush();
@@ -3146,7 +3152,7 @@ export class AgentSession {
 			});
 		}
 
-		await this.#disposeTools();
+		await this.#disposeTools("soft");
 
 		return true;
 	}
@@ -5229,7 +5235,7 @@ export class AgentSession {
 
 		this.#disconnectFromAgent();
 		await this.abort();
-		await this.#disposeTools();
+		await this.#disposeTools("soft");
 		this.#steeringMessages = [];
 		this.#followUpMessages = [];
 		this.#pendingNextTurnMessages = [];

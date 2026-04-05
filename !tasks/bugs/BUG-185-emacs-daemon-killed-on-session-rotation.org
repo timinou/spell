@@ -1,0 +1,169 @@
+#+TITLE: Emacs daemon killed on session rotation never restarted
+#+STATE: DONE
+#+SESSION_ID: 14af30a8af27477c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T21-29-50-524Z_14af30a8af27477c.jsonl]]
+#+CUSTOM_ID: BUG-185-emacs-daemon-killed-on-session-rotation
+#+EFFORT: 2h
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+NOTE [2026-04-05]: Fix implemented: softReset() on ToolSession interface preserves emacs/org daemon managers during session rotation. Three call sites (newSession, fork, switchSession) now use soft mode; only full dispose() uses hard mode.
+
+* Initial Message
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-djinn/2026-04-05T21-28-59-657Z_14af307702742a3f.jsonl
+ ID: 14af307702742a3f
+
+
+
+Why is code saying 
+
+ Code
+ {
+   "error": true,
+   "message": "Emacs daemon unavailable"
+ }
+
+
+
+This is fucked up. the daemon process manager should have caught that.
+
+* Problem
+
+When a session rotates (plan approval, /clear, fork, switch), ~#disposeTools()~ in
+~agent-session.ts~ calls ~toolSession.dispose()~ which calls ~emacsSessionManager.dispose()~.
+This permanently sets ~#disposed = true~ on the EmacsSessionManager and kills the daemon.
+The same tool instances remain registered (no recreation), so every subsequent ~code~ tool
+call hits ~getSession()~ → ~#disposed = true~ → return null → "Emacs daemon unavailable".
+
+The daemon process manager is working correctly — the daemon was intentionally killed.
+The bug is that the lifecycle boundary is wrong: session rotation should not destroy
+process-scoped daemon resources.
+
+The same issue affects ~orgSessionManager~.
+
+** Affected call sites
+
+| Line | Method | Expected behavior |
+|------|--------|-------------------|
+| 1640 | ~dispose()~ | Full teardown — CORRECT to destroy everything |
+| 3050 | ~newSession()~ | Rotation — SHOULD preserve daemons |
+| 3149 | ~fork()~ | Rotation — SHOULD preserve daemons |
+| 5232 | ~switchSession()~ | Rotation — SHOULD preserve daemons |
+
+* Design Decisions
+
+1. Add ~softReset?(): Promise<void> | void~ to ~ToolSession~ interface alongside existing ~dispose~
+2. ~softReset()~ cleans up session-specific state but preserves long-lived daemon managers
+3. ~#disposeTools()~ takes a ~soft: boolean~ parameter; when soft=true it calls ~softReset~ instead of ~dispose~
+4. ~newSession()~, ~fork()~, ~switchSession()~ pass ~soft: true~
+5. Only ~AgentSession.dispose()~ passes ~soft: false~ (full teardown)
+
+** What survives rotation (softReset)
+- ~emacsSessionManager~ — daemon per project root, ~10s startup cost
+- ~orgSessionManager~ — same daemon model
+
+** What gets cleaned up on rotation (softReset handles)
+- ~qmlRemoteServer~ — stopped, field cleared (session-specific)
+- ~gatewayClient~ — session alias cleanup only (client itself preserved)
+
+** What gets fully destroyed on dispose only
+- ~emacsSessionManager~ — daemon killed, manager disposed
+- ~orgSessionManager~ — daemon killed, manager disposed
+- ~gatewayClient~ — fully disposed
+- ~qmlRemoteServer~ — stopped (same as soft, no further action needed)
+
+* Implementation
+
+** File: ~packages/coding-agent/src/tools/index.ts~
+
+Add to ~ToolSession~ interface:
+#+begin_src typescript
+/** Reset session-specific state while preserving long-lived resources (emacs, org daemons). */
+softReset?(): Promise<void> | void;
+#+end_src
+
+** File: ~packages/coding-agent/src/sdk.ts~
+
+Implement ~softReset()~ on the toolSession object (near line 1815):
+#+begin_src typescript
+toolSession.softReset = async () => {
+    // Clean up session-specific QML server
+    if (toolSession.qmlRemoteServer) {
+        try {
+            const server = toolSession.qmlRemoteServer;
+            toolSession.qmlRemoteServer = undefined;
+            server.stop();
+        } catch (err) {
+            logger.warn("qmlRemoteServer stop failed (soft reset)", { error: String(err) });
+        }
+    }
+    // Clean up session-specific gateway aliases (keep client alive)
+    if (toolSession.gatewayClient) {
+        try {
+            const sid = toolSession.getSessionId?.();
+            if (sid) await toolSession.gatewayClient.cleanup(sid);
+        } catch (err) {
+            logger.warn("gatewayClient session cleanup failed (soft reset)", { error: String(err) });
+        }
+    }
+    // emacsSessionManager and orgSessionManager intentionally NOT touched
+};
+#+end_src
+
+~dispose()~ stays as-is (full teardown).
+
+** File: ~packages/coding-agent/src/session/agent-session.ts~
+
+Rename/refactor ~#disposeTools~ to accept a mode:
+
+#+begin_src typescript
+async #disposeTools(mode: "soft" | "hard" = "hard"): Promise<void> {
+    // Step 1: Always dispose individual tool instances (browser tabs, canvas bridges, etc.)
+    const disposables = Array.from(this.#toolRegistry.values()).filter(
+        (tool): tool is typeof tool & { dispose(): Promise<void> | void } =>
+            tool != null && typeof tool.dispose === "function",
+    );
+    if (disposables.length > 0) {
+        const results = await Promise.allSettled(disposables.map(t => t.dispose()));
+        for (const r of results) {
+            if (r.status === "rejected") {
+                logger.warn("Tool dispose failed", { error: String(r.reason) });
+            }
+        }
+    }
+    // Step 2: Tool session lifecycle — soft preserves daemons, hard destroys everything
+    try {
+        if (mode === "soft") {
+            await this.#toolSession?.softReset?.();
+        } else {
+            await this.#toolSession?.dispose?.();
+        }
+    } catch (err) {
+        logger.warn("ToolSession lifecycle failed", { mode, error: String(err) });
+    }
+}
+#+end_src
+
+Update call sites:
+- Line 3050 (~newSession~): ~await this.#disposeTools("soft")~
+- Line 3149 (~fork~): ~await this.#disposeTools("soft")~
+- Line 5232 (~switchSession~): ~await this.#disposeTools("soft")~
+- Line 1640 (~dispose~): ~await this.#disposeTools("hard")~ (or just ~await this.#disposeTools()~ since default is "hard")
+
+* Verification
+
+- Type check: ~bun check:ts~ passes
+- Run existing emacs session manager tests: ~bun test packages/emacs/test/~
+- Manual scenario: start a plan-mode session, approve the plan, verify that ~code~ tool works in the execution session (daemon reuse)
+- Confirm ~toolSession.emacsSessionManager.#disposed~ remains false after ~newSession()~
+
+* Edge Cases
+
+- If ~softReset~ throws, it must not prevent subsequent tool calls from working.
+  The try/catch in ~#disposeTools~ handles this.
+- If a tool's individual ~dispose()~ is slow or hangs, it blocks the rotation.
+  This is pre-existing and not addressed by this fix.
+- The ~gatewayClient.cleanup()~ may fail if the session ID is already gone.
+  The existing error handling (try/catch with warn) covers this — the log at 22:28:59.633
+  confirms this path already fires harmlessly.

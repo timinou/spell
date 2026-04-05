@@ -1,0 +1,75 @@
+#+TITLE: Fix emacs daemon killed on session rotation
+#+STATE: DONE
+#+SESSION_ID: 14af30a8af27477c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T21-29-50-524Z_14af30a8af27477c.jsonl]]
+#+CUSTOM_ID: PLAN-157-fix-emacs-daemon-killed-on-session-rotat
+
+
+* Initial Message
+
+File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-djinn/2026-04-05T21-28-59-657Z_14af307702742a3f.jsonl
+ ID: 14af307702742a3f
+
+
+
+Why is code saying 
+
+ Code
+ {
+   "error": true,
+   "message": "Emacs daemon unavailable"
+ }
+
+
+
+This is fucked up. the daemon process manager should have caught that.
+
+* Context
+
+Session rotation (plan approval, /clear, fork, switch) calls ~#disposeTools()~ which
+permanently kills the ~EmacsSessionManager~ and ~OrgSessionManager~. The same tool
+instances remain registered and reference the disposed managers, causing every subsequent
+~code~ tool call to return "Emacs daemon unavailable".
+
+The fix splits ~toolSession~ lifecycle into ~softReset()~ (preserves daemons) and
+~dispose()~ (full teardown). Session rotation uses soft reset; only process shutdown
+uses full dispose.
+
+Key decisions:
+1. ~softReset?()~ added to ~ToolSession~ interface
+2. ~#disposeTools(mode)~ accepts "soft" | "hard"
+3. ~newSession~, ~fork~, ~switchSession~ use "soft"; ~dispose~ uses "hard"
+4. Individual tool ~dispose()~ still runs on all rotations (browser tabs, canvas bridges should clean up)
+5. ~emacsSessionManager~ and ~orgSessionManager~ survive rotation
+6. ~qmlRemoteServer~ stopped on rotation, ~gatewayClient~ gets session cleanup only
+
+* Verification
+
+- ~bun check:ts~ passes (type check across all packages)
+- ~bun test packages/emacs/test/~ passes (existing daemon/session-manager tests)
+- ~bun test packages/coding-agent/test/tools/code.test.ts~ if it exists
+- Manual: plan approval → code tool works in execution session
+
+* Execution Manifest
+
+All changes in one item — single bug fix across 3 files:
+
+1. [[id:BUG-185-emacs-daemon-killed-on-session-rotation]] (2h, P:A)
+   - ~packages/coding-agent/src/tools/index.ts~ — add ~softReset~ to interface
+   - ~packages/coding-agent/src/sdk.ts~ — implement ~softReset~
+   - ~packages/coding-agent/src/session/agent-session.ts~ — split ~#disposeTools~ into soft/hard modes
+
+** Completion [2026-04-05]
+*** Verification
+- =bun check:ts= — passes (0 errors in changed files; pre-existing errors in sql-store.ts, approvals.ts, telegram/tool-progress.ts, logger.ts unrelated)
+- =bun test packages/emacs/test/= — 28 pass, 3 skip, 0 fail
+- =bun test packages/coding-agent/test/tools/code.test.ts= — 2 pass, 0 fail
+- All 4 call sites verified: dispose() uses hard (default), newSession/fork/switchSession use soft
+
+*** Artifacts
+- =packages/coding-agent/src/tools/index.ts= — added =softReset?()= to =ToolSession= interface
+- =packages/coding-agent/src/sdk.ts= — implemented =softReset()= on toolSession (cleans QML/gateway, preserves emacs/org daemons)
+- =packages/coding-agent/src/session/agent-session.ts= — =#disposeTools(mode)= accepts \"soft\" | \"hard\"; 3 rotation call sites use \"soft\"
+
+*** Deviations
+None.
