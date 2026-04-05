@@ -1,0 +1,65 @@
+#+TITLE: Phoenix inspector socket disconnect resilience
+#+STATE: DONE
+#+SESSION_ID: 14aeea8d3d508761
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-23-32-341Z_14aeea8d3d508761.jsonl]]
+#+CUSTOM_ID: PLAN-151-phoenix-inspector-socket-disconnect-resi
+
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T16-20-42-626Z_14aee9e78092a5f9.jsonl
+ ID: 14aee9e78092a5f9
+
+
+
+Bro problem. The phoenix inspector crashed, I think when the model went from codex spark to codex. please trace and tell me what the root cause is
+
+* Context
+
+The phoenix inspector QML window freezes when the daemon socket closes unexpectedly during
+concurrent session races or daemon restarts. The QML bridge correctly delivers ~socket_disconnected~
+events to callers, but the inspector's ~startBridgeEventLoop~ silently discards them because it only
+checks ~event.payload~ (not ~event.name~) before routing to ~handleBridgePayload~. The canvas tool
+already handles this correctly with a detect-sleep-retry pattern. This plan applies the same pattern
+to the inspector extension.
+
+Key findings:
+- ~QmlBridge.waitForEvent~ correctly wakes on ~socket_disconnected~ (line 269) — bridge-level code is correct
+- ~QmlProcess.autoReconnect~ runs in background with exponential backoff (100-1600ms, ~3.1s total)
+- The canvas tool (~packages/coding-agent/src/tools/canvas.ts~ lines 406-417) checks ~raw.some(e => e.name === "socket_disconnected")~ before iterating payloads
+- The inspector extension doesn't check ~event.name~ at all — goes straight to ~handleBridgePayload(event.payload)~
+- No changes needed in ~packages/qml/~ — the bridge, process, and daemon code all work correctly
+
+Approach: single bug fix in the phoenix inspector extension (~index.ts~ + ~index.test.ts~), matching the existing canvas.ts disconnect handling pattern.
+
+* Verification
+
+- ~bun test /home/user/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/index.test.ts~
+  All existing tests pass, new disconnect/reconnect tests pass.
+- Manual check: kill QML daemon while inspector is open, observe notification and recovery.
+
+* Execution Manifest
+
+| Wave | Item | Effort | Depends |
+|------+------+--------+---------|
+|    1 | [[id:BUG-181-phoenix-inspector-event-loop-ignores-soc]] | S | none |
+
+Single-item plan. The bug fix modifies two files in the hotelcomm project extension directory:
+- ~/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/index.ts~ (add disconnect detection to ~startBridgeEventLoop~)
+- ~/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/index.test.ts~ (add ~emitNamed~ to MockBridge, add logger stub, add disconnect/reconnect tests)
+
+** Completion [2026-04-05]
+*** Verification
+- =bun test /home/user/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/index.test.ts= — 30 pass, 0 fail, 52 expect() calls (10.39s)
+- New test: \"detects socket_disconnected events and breaks after max retries\" — emits 4 disconnect events, verifies warning notification on first, error notification after max retries, no replies forwarded to bridge
+- New test: \"recovers from socket_disconnected when normal events resume\" — verifies loop survives disconnect, processes normal events after reconnect, resets reconnect counter
+- All 28 existing tests pass without regression
+
+*** Artifacts
+- Modified: =/home/user/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/index.ts= — added disconnect detection to =startBridgeEventLoop= (+22 lines)
+- Modified: =/home/user/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/index.test.ts= — added =emitNamed=, =waitUntilReady= to MockBridge, =logger= stub to pi mock, 2 new test cases (+92 lines)
+
+*** Deviations
+None.

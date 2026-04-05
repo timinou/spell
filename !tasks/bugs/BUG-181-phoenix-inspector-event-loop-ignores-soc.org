@@ -1,0 +1,140 @@
+#+TITLE: Phoenix inspector event loop ignores socket disconnect events
+#+STATE: DONE
+#+SESSION_ID: 14aeea8d3d508761
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-23-32-341Z_14aeea8d3d508761.jsonl]]
+#+CUSTOM_ID: BUG-181-phoenix-inspector-event-loop-ignores-soc
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: extension
+
+NOTE [2026-04-05]: Fix applied: startBridgeEventLoop now checks event.name === \"socket_disconnected\" before iterating payloads. Matches canvas.ts pattern: sleep 2s for auto-reconnect, max 3 retries, user notifications. All 30 tests pass including 2 new disconnect tests.
+
+* Initial Message
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-05T16-20-42-626Z_14aee9e78092a5f9.jsonl
+ ID: 14aee9e78092a5f9
+
+
+
+Bro problem. The phoenix inspector crashed, I think when the model went from codex spark to codex. please trace and tell me what the root cause is
+
+* Problem
+
+When the QML daemon socket closes unexpectedly (concurrent session race, daemon restart, etc.),
+the bridge delivers ~socket_disconnected~ events to the phoenix inspector's event loop. The event
+loop receives them — ~waitForEvent~ correctly wakes and returns events with ~name: "socket_disconnected"~.
+However, ~startBridgeEventLoop~ iterates the events and passes only ~event.payload~ to ~handleBridgePayload~,
+never checking ~event.name~. The payload ~{ message: "Daemon socket closed unexpectedly" }~ has no ~action~,
+~_tier~, or ~_tool~ field, so ~handleBridgePayload~ falls through to ~if (!action) return~ at line 326 and
+silently discards the disconnect signal. The loop then calls ~waitForEvent~ again — if ~QmlProcess.autoReconnect~
+succeeds in the background (within ~3.1s), events resume. If it fails after 5 attempts, ~waitForEvent~ blocks
+for the full 10-minute timeout, making the inspector appear frozen.
+
+The canvas tool (~packages/coding-agent/src/tools/canvas.ts~ lines 406-417) already handles this correctly:
+it checks ~raw.some(e => e.name === "socket_disconnected")~ BEFORE iterating payloads, then sleeps 2s for
+autoReconnect and retries up to 3 times. The inspector must adopt the same pattern.
+
+* Root Cause Analysis
+
+Event flow on socket disconnect:
+1. ~QmlProcess~ socket close handler dispatches ~{ type: "socket_disconnected", id: "__socket__", message: "..." }~
+2. ~QmlBridge.#handleEvent~ pushes ~{ name: "socket_disconnected", payload: { message } }~ to all active window event queues
+3. ~waitForEvent~ listener wakes (line 269: ~event.type === "socket_disconnected" && win.events.length > 0~) — events delivered
+4. ~startBridgeEventLoop~ iterates events: ~for (const event of events) { await handleBridgePayload(event.payload, ...) }~
+5. ~handleBridgePayload~ sees payload ~{ message: "..." }~ — no action/tier/tool → ~if (!action) return~ at line 326
+6. Loop re-calls ~waitForEvent~ — if autoReconnect failed, hangs for 10 minutes
+
+The canvas tool intercepts at step 4, before payload iteration. The inspector doesn't.
+
+* Design Decisions
+
+1. Do NOT call ~bridge.reconnect()~ explicitly — ~QmlProcess.autoReconnect~ runs in background automatically. Canvas relies on this same pattern.
+2. Use ~Bun.sleep(2000)~ to wait for autoReconnect, matching canvas.ts pattern. AutoReconnect delays total ~3.1s, so 2s sleep with up to 3 retries (6s total) gives adequate coverage.
+3. Show toast notification via ~activeContext?.ui.notify("Phoenix inspector bridge reconnecting...", "warning")~ on first disconnect.
+4. Show error notification via ~activeContext?.ui.notify("Phoenix inspector disconnected: bridge reconnect failed.", "error")~ when max retries exceeded.
+5. Log via ~pi.logger.warn~ for debugging.
+6. Max 3 reconnect attempts, matching canvas.ts.
+7. Reset reconnect counter on successful event delivery (any non-disconnect batch).
+8. Do NOT add ~reconnect()~ to ~QmlBridgeLike~ interface — not needed since autoReconnect handles it. Keeps the change minimal.
+
+* Files to Modify
+
+** ~/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/index.ts
+
+*** ~startBridgeEventLoop~ (lines 348-372)
+Add disconnect detection before the event iteration loop. The pattern:
+
+#+begin_src typescript
+let reconnectAttempts = 0;
+// ... inside while loop, after waitForEvent:
+const hasDisconnect = events.some(e => e.name === "socket_disconnected");
+if (hasDisconnect) {
+    reconnectAttempts++;
+    if (reconnectAttempts === 1) {
+        activeContext?.ui.notify("Phoenix inspector bridge reconnecting...", "warning");
+    }
+    if (reconnectAttempts > 3) {
+        pi.logger.warn("Phoenix inspector event loop: max reconnect retries reached");
+        activeContext?.ui.notify("Phoenix inspector disconnected: bridge reconnect failed.", "error");
+        break;
+    }
+    pi.logger.warn("Phoenix inspector: socket disconnected, waiting for auto-reconnect", {
+        attempt: reconnectAttempts,
+    });
+    await Bun.sleep(2000);
+    continue;
+}
+reconnectAttempts = 0; // Reset on successful event delivery
+#+end_src
+
+** ~/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/index.test.ts
+
+*** MockBridge: add ~emitNamed~ method
+Add a method that resolves waitForEvent with events that include the ~name~ field:
+#+begin_src typescript
+emitNamed(name: string, payload: Record<string, unknown>): void {
+    const resolve = this.#nextResolver;
+    this.#nextResolver = undefined;
+    if (!resolve) throw new Error("No pending bridge waitForEvent call.");
+    resolve([{ name, payload }]);
+}
+#+end_src
+
+*** Mock pi: add logger stub
+The test mock ~pi~ object (line 254) needs a ~logger~ field:
+#+begin_src typescript
+logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+#+end_src
+
+*** New test: socket_disconnected event handling
+Add test verifying:
+1. When ~bridge.emitNamed("socket_disconnected", { message: "..." })~ is called, the event loop does NOT pass it to ~handleBridgePayload~ (no reply sent to bridge)
+2. Notification is shown via ~ctx.ui.notify~ with "warning" severity
+3. After max retries, the loop breaks and shows error notification
+
+*** New test: reconnect recovery
+Add test verifying:
+1. First emit is ~socket_disconnected~ → loop waits
+2. Second emit is a normal payload → handleBridgePayload processes it
+3. reconnectAttempts counter resets
+
+* Edge Cases
+
+- ~activeContext~ may be null during disconnect (session already shutting down) → use optional chaining ~activeContext?.ui.notify~
+- Multiple rapid disconnects should not stack notifications — only notify on first attempt (~reconnectAttempts === 1~)
+- If ~waitForEvent~ returns a batch containing BOTH disconnect and regular events, the disconnect takes priority (~continue~ skips regular events in that batch, matching canvas.ts behavior)
+- ~pi.logger~ is available on ~ExtensionAPI~ but was not used before — no import needed, access via ~pi.logger.warn~
+- ~Bun.sleep~ is available globally in Bun runtime — no import needed
+
+* Verification
+
+- Run: ~bun test ~/code/ora/hotelcomm/.spell/extensions/phoenix-inspector/index.test.ts~
+- All existing tests pass (no regressions)
+- New disconnect test passes
+- New reconnect recovery test passes
+- Manual: if possible, force a socket disconnect by killing the QML daemon while inspector is open, observe:
+  - Toast notification "Phoenix inspector bridge reconnecting..." appears
+  - Inspector resumes after daemon restarts
+  - If daemon doesn't restart within ~6s, error notification appears
