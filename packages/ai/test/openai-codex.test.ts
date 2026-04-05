@@ -62,6 +62,20 @@ describe("openai-codex request transformer", () => {
 		const orphaned = input.find(item => item.type === "message" && item.role === "assistant");
 		expect(orphaned?.content).toMatch(/Previous tool result/);
 	});
+
+	it("strips prompt_cache_retention but preserves prompt_cache_key", async () => {
+		const body: RequestBody = {
+			model: "gpt-5.3-codex-spark",
+			input: [],
+			prompt_cache_key: "session-123",
+			prompt_cache_retention: "24h",
+		};
+
+		const transformed = await transformRequestBody(body, createCodexModel(body.model), {});
+
+		expect(transformed.prompt_cache_key).toBe("session-123");
+		expect(transformed.prompt_cache_retention).toBeUndefined();
+	});
 });
 
 describe("openai-codex reasoning effort validation", () => {

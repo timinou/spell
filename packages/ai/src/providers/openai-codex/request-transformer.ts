@@ -153,6 +153,7 @@ export async function transformRequestBody(
 
 	delete body.max_output_tokens;
 	delete body.max_completion_tokens;
+	delete body.prompt_cache_retention; // chatgpt.com Codex API rejects this parameter
 
 	return body;
 }
