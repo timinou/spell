@@ -1,10 +1,10 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { SocketSessionRegistry } from "../../src/socket/session-registry";
 import { SocketServer } from "../../src/socket/server";
+import { SocketSessionRegistry } from "../../src/socket/session-registry";
 import type {
 	BlockingEventPayload,
 	EventResponsePayload,
@@ -77,6 +77,11 @@ class TestSocketClient {
 	destroy(): void {
 		this.#socket?.destroy();
 		this.#socket = null;
+	}
+
+	rawWrite(data: string): void {
+		if (!this.#socket) throw new Error("Not connected");
+		this.#socket.write(data);
 	}
 }
 
@@ -485,8 +490,8 @@ describe("socket server integration", () => {
 		const client = createClient();
 		await client.connect(socketPath);
 
-		// Send garbage
-		(client as unknown as { _socket: net.Socket })._socket?.write("not json\n");
+		// Send garbage via rawWrite — this actually writes to the underlying socket
+		client.rawWrite("not json\n");
 
 		// The client should still be functional - register after the bad line
 		client.send({

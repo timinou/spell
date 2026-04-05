@@ -41,12 +41,12 @@ import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
 import { formatExitTokenSummary } from "../session/token-summary";
+import type { SessionBridgeClient } from "../session-bridge/client";
+import { raceWithBridge } from "../session-bridge/race";
 import { getModeCommandDefs, registerModeCommands } from "../slash-commands/builtin-registry";
 import { STTController, type SttState } from "../stt";
 import type { ExitPlanModeDetails } from "../tools";
 import { isDelegatedTask } from "../tools/todo-write";
-import { raceWithBridge } from "../session-bridge/race";
-import type { SessionBridgeClient } from "../session-bridge/client";
 import type { EventBus } from "../utils/event-bus";
 import { setTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
@@ -1476,6 +1476,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#cleanupUnsubscribe();
 		}
 		this.#niriController?.destroy();
+		this.sessionBridge?.dispose();
+		this.sessionBridge = undefined;
 		if (this.isInitialized) {
 			this.ui.stop();
 			this.isInitialized = false;

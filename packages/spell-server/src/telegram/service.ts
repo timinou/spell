@@ -1,6 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { Bot } from "grammy";
-import type { NotificationSender } from "../hooks/notification-sender";
+import { TelegramNotificationSender } from "../hooks/notification-sender";
 import type { OperatorActionHandler } from "../http/routes/operator-actions";
 import type { SocketSessionRegistry } from "../socket";
 import type { AuthContext } from "./bot/auth";
@@ -18,7 +18,6 @@ export interface TelegramBotServiceOptions {
 	config: TelegramBridgeConfig;
 	operatorActionBridge?: OperatorActionHandler;
 	sessionRegistry?: SocketSessionRegistry;
-	notificationSender?: NotificationSender;
 }
 
 interface TelegramBotServiceDependencies {
@@ -42,7 +41,6 @@ export class TelegramBotService {
 	#createBot: (token: string) => TelegramBot;
 	#operatorActionBridge?: OperatorActionHandler;
 	#sessionRegistry?: SocketSessionRegistry;
-	#notificationSender?: NotificationSender;
 	#cleanupSessionNotifications: (() => void) | null = null;
 	constructor(options: TelegramBotServiceOptions, dependencies: TelegramBotServiceDependencies = {}) {
 		this.#config = options.config;
@@ -51,7 +49,6 @@ export class TelegramBotService {
 		this.#createBot = dependencies.createBot ?? (token => new Bot<AuthContext>(token));
 		this.#operatorActionBridge = options.operatorActionBridge;
 		this.#sessionRegistry = options.sessionRegistry;
-		this.#notificationSender = options.notificationSender;
 	}
 
 	get processManager(): ProcessManager {
@@ -102,10 +99,17 @@ export class TelegramBotService {
 
 			bot.use(authMiddleware(this.#config, this.#tokenStore));
 			registerCommands(bot, cmdCtx);
-			if (this.#sessionRegistry && this.#notificationSender) {
+			if (this.#sessionRegistry && this.#config.sessionNotifications) {
+				// Create a dedicated sender for session notifications that includes
+				// additionalChatIds without widening the shared sender's owner scope.
+				const sessionChatIds = new Set(this.#config.owners);
+				for (const id of this.#config.sessionNotifications.additionalChatIds) {
+					sessionChatIds.add(id);
+				}
+				const sessionSender = new TelegramNotificationSender(this.#config.botToken, sessionChatIds);
 				this.#cleanupSessionNotifications = setupSessionNotifications(
 					this.#sessionRegistry,
-					this.#notificationSender,
+					sessionSender,
 					this.#config,
 				);
 			}

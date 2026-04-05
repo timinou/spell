@@ -83,9 +83,9 @@ export class SocketSessionRegistry {
 
 	resolveEvent(sessionId: string, eventId: string, payload: EventResponsePayload): void {
 		const entry = this.#sessions.get(sessionId);
-		if (!entry) {
-			return;
-		}
+		if (!entry) return;
+		if (entry.currentBlockingEvent?.eventId !== eventId) return;
+		if (entry.connection.destroyed) return;
 
 		const message: SocketServerMessage = {
 			type: "event_response",
@@ -99,9 +99,9 @@ export class SocketSessionRegistry {
 
 	cancelEvent(sessionId: string, eventId: string, reason?: string): void {
 		const entry = this.#sessions.get(sessionId);
-		if (!entry) {
-			return;
-		}
+		if (!entry) return;
+		if (entry.currentBlockingEvent?.eventId !== eventId) return;
+		if (entry.connection.destroyed) return;
 
 		const message: SocketServerMessage = {
 			type: "event_cancelled",
