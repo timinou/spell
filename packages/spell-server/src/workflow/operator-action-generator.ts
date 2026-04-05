@@ -53,7 +53,6 @@ export function generateOperatorActionHandler(
 		}
 
 		// Get or create the approval item for this article
-		const itemId = `article:${request.articleId}`;
 		let item = workflowEngine.listItems({ workflowId: WORKFLOW_ID }).find(i => i.targetId === request.articleId);
 
 		if (!item) {
@@ -79,15 +78,6 @@ export function generateOperatorActionHandler(
 			};
 		}
 
-		// Build a temporary action definition with the correct toState for this specific transition
-		const actionDef: WorkflowActionDefinition = {
-			id: request.action,
-			label: request.action,
-			fromStates: action.transitions.map(t => t.from),
-			toState: targetState,
-			...(action.downstreamJob ? { downstreamJobs: [{ kind: action.downstreamJob.kind }] } : {}),
-		};
-
 		// Ensure the item has this action defined with the right toState
 		const existingAction = item.actions.find(a => a.id === request.action);
 		if (existingAction) {
@@ -104,8 +94,11 @@ export function generateOperatorActionHandler(
 				},
 				requestId: request.requestId,
 			});
-		} catch {
-			// Already claimed by same actor or we can proceed with force
+		} catch (error) {
+			// Only suppress "already claimed" — propagate unexpected failures
+			if (!(error instanceof Error && error.message.includes("is already claimed by"))) {
+				throw error;
+			}
 		}
 
 		const result = await workflowEngine.applyAction({
@@ -130,8 +123,8 @@ export function generateOperatorActionHandler(
 			duplicate: result.duplicate,
 			downstreamJobs: result.queuedJobs.map(job => ({
 				jobId: job.id,
-				kind: job.kind as "feed-delivery" | "publication-export",
-				status: job.status as "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED",
+				kind: job.kind,
+				status: job.status,
 				retryEligible: job.retryEligible,
 			})),
 		};

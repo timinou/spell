@@ -282,4 +282,64 @@ describe("autonomy_state SQL ops", () => {
 			}
 		});
 	});
+
+	describe("env var validation", () => {
+		it("rejects SPELL_AUTONOMY_STATE_STORES when not a JSON object", async () => {
+			const prev = Bun.env.SPELL_AUTONOMY_STATE_STORES;
+			try {
+				Bun.env.SPELL_AUTONOMY_STATE_STORES = JSON.stringify(["not", "an", "object"]);
+				const tool = new AutonomyStateTool();
+				const result = await exec(tool, { op: "list_tables", store: "test" });
+				expect(result.success).toBe(false);
+				expect(result.error).toContain("SPELL_AUTONOMY_STATE_STORES");
+			} finally {
+				Bun.env.SPELL_AUTONOMY_STATE_STORES = prev;
+			}
+		});
+
+		it("rejects SPELL_AUTONOMY_STATE_STORES with non-string values", async () => {
+			const prev = Bun.env.SPELL_AUTONOMY_STATE_STORES;
+			try {
+				Bun.env.SPELL_AUTONOMY_STATE_STORES = JSON.stringify({ bad: 123 });
+				const tool = new AutonomyStateTool();
+				const result = await exec(tool, { op: "list_tables", store: "test" });
+				expect(result.success).toBe(false);
+				expect(result.error).toContain("SPELL_AUTONOMY_STATE_STORES");
+			} finally {
+				Bun.env.SPELL_AUTONOMY_STATE_STORES = prev;
+			}
+		});
+
+		it("rejects SPELL_AUTONOMY_STATE_SCHEMAS without tables array", async () => {
+			const prevStores = Bun.env.SPELL_AUTONOMY_STATE_STORES;
+			const prevSchemas = Bun.env.SPELL_AUTONOMY_STATE_SCHEMAS;
+			try {
+				Bun.env.SPELL_AUTONOMY_STATE_STORES = JSON.stringify({ test: testDbPath });
+				Bun.env.SPELL_AUTONOMY_STATE_SCHEMAS = JSON.stringify({ test: { notTables: [] } });
+				const tool = new AutonomyStateTool();
+				const result = await exec(tool, { op: "list_tables", store: "test" });
+				expect(result.success).toBe(false);
+				expect(result.error).toContain("SPELL_AUTONOMY_STATE_SCHEMAS");
+			} finally {
+				Bun.env.SPELL_AUTONOMY_STATE_STORES = prevStores;
+				Bun.env.SPELL_AUTONOMY_STATE_SCHEMAS = prevSchemas;
+			}
+		});
+
+		it("rejects SPELL_AUTONOMY_STATE_SCHEMAS when not a JSON object", async () => {
+			const prevStores = Bun.env.SPELL_AUTONOMY_STATE_STORES;
+			const prevSchemas = Bun.env.SPELL_AUTONOMY_STATE_SCHEMAS;
+			try {
+				Bun.env.SPELL_AUTONOMY_STATE_STORES = JSON.stringify({ test: testDbPath });
+				Bun.env.SPELL_AUTONOMY_STATE_SCHEMAS = JSON.stringify("a string");
+				const tool = new AutonomyStateTool();
+				const result = await exec(tool, { op: "list_tables", store: "test" });
+				expect(result.success).toBe(false);
+				expect(result.error).toContain("SPELL_AUTONOMY_STATE_SCHEMAS");
+			} finally {
+				Bun.env.SPELL_AUTONOMY_STATE_STORES = prevStores;
+				Bun.env.SPELL_AUTONOMY_STATE_SCHEMAS = prevSchemas;
+			}
+		});
+	});
 });

@@ -26,7 +26,7 @@ export type OperatorActionRequest =
 
 export interface OperatorActionDownstreamJob {
 	jobId: string;
-	kind: "feed-delivery" | "publication-export";
+	kind: string;
 	status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
 	retryEligible: boolean;
 }

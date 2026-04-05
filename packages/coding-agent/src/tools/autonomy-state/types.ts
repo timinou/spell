@@ -1,12 +1,5 @@
 import type { OutputMeta } from "../output-meta";
 
-export type AutonomyStateOperation =
-	| { op: "get"; key: string }
-	| { op: "set"; key: string; value: unknown }
-	| { op: "list" }
-	| { op: "delete"; key: string }
-	| { op: "get_metadata" };
-
 export interface RunMetadata {
 	runId: string;
 	startedAt: string;

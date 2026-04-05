@@ -62,3 +62,17 @@ state-schema "content-db" backend="sqlite" {
 		column "decision" type="text"
 	}
 }
+
+
+tool-module "custom-tools" path="./tools/custom.ts"
+
+operator-action "approve-feed" {
+	transition from="pending" to="approved-feed"
+	trigger-goal "feed-delivery-goal"
+	downstream-job kind="feed-delivery"
+}
+
+operator-action "reject" {
+	transition from="pending" to="rejected"
+	transition from="approved-feed" to="rejected"
+}

@@ -87,14 +87,40 @@ function parseSchema(schemaJson: string | undefined): StateSchemaColumn[] | unde
 
 function parseStoreSchemas(json: string | undefined): Map<string, SqlStoreSchema> {
 	if (!json) return new Map();
-	const parsed = JSON.parse(json) as Record<string, SqlStoreSchema>;
-	return new Map(Object.entries(parsed));
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(json);
+	} catch {
+		throw new ToolError("SPELL_AUTONOMY_STATE_SCHEMAS is not valid JSON.");
+	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new ToolError("SPELL_AUTONOMY_STATE_SCHEMAS must be a JSON object mapping store names to schemas.");
+	}
+	for (const [key, value] of Object.entries(parsed)) {
+		if (typeof value !== "object" || value === null || !Array.isArray((value as Record<string, unknown>).tables)) {
+			throw new ToolError(`SPELL_AUTONOMY_STATE_SCHEMAS["${key}"] must have a "tables" array.`);
+		}
+	}
+	return new Map(Object.entries(parsed as Record<string, SqlStoreSchema>));
 }
 
 function parseStorePaths(json: string | undefined): Map<string, string> {
 	if (!json) return new Map();
-	const parsed = JSON.parse(json) as Record<string, string>;
-	return new Map(Object.entries(parsed));
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(json);
+	} catch {
+		throw new ToolError("SPELL_AUTONOMY_STATE_STORES is not valid JSON.");
+	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new ToolError("SPELL_AUTONOMY_STATE_STORES must be a JSON object mapping store names to file paths.");
+	}
+	for (const [key, value] of Object.entries(parsed)) {
+		if (typeof value !== "string") {
+			throw new ToolError(`SPELL_AUTONOMY_STATE_STORES["${key}"] must be a string file path.`);
+		}
+	}
+	return new Map(Object.entries(parsed as Record<string, string>));
 }
 
 export class AutonomyStateTool implements AgentTool<typeof autonomyStateSchema, AutonomyStateResult> {

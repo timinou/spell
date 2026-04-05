@@ -34,6 +34,8 @@ import {
 	type ManifestSetupPatch,
 	type NamedStateStore,
 	type NotificationRoute,
+	type OperatorAction,
+	type OperatorActionTransition,
 	type OrgHook,
 	type Panel,
 	type PanelAction,
@@ -51,6 +53,7 @@ import {
 	type StateSchemaTable,
 	type StateSchemaTableColumn,
 	type SyncCollection,
+	type ToolModule,
 	type TelegramHook,
 	type WebhookHook,
 	type WebhookSchedule,
@@ -787,7 +790,7 @@ function parseStateSchemaNode(node: Node, pathLabel: string, options: ParseManif
 	return { id, backend, tables } satisfies StateSchema;
 }
 
-function parseToolModuleNode(node: Node, pathLabel: string, options: ParseManifestOptions): import("./types").ToolModule {
+function parseToolModuleNode(node: Node, pathLabel: string, options: ParseManifestOptions): ToolModule {
 	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
 	const modulePath = resolveOptionalStringProperty(node, "path", pathLabel, options);
 	if (!modulePath) {
@@ -796,9 +799,9 @@ function parseToolModuleNode(node: Node, pathLabel: string, options: ParseManife
 	return { id, path: modulePath };
 }
 
-function parseOperatorActionNode(node: Node, pathLabel: string, options: ParseManifestOptions): import("./types").OperatorAction {
+function parseOperatorActionNode(node: Node, pathLabel: string, options: ParseManifestOptions): OperatorAction {
 	const id = expectStringArgument(node, `${pathLabel}.id`, 0, options);
-	const transitions: import("./types").OperatorActionTransition[] = [];
+	const transitions: OperatorActionTransition[] = [];
 	let triggerGoal: string | undefined;
 	let downstreamJob: { kind: string } | undefined;
 	for (const child of node.children?.nodes ?? []) {
@@ -850,8 +853,8 @@ export function parseManifestModuleDocument(
 	const panels: Panel[] = [];
 	const layouts: Layout[] = [];
 	const syncCollections: SyncCollection[] = [];
-	const toolModules: import("./types").ToolModule[] = [];
-	const operatorActions: import("./types").OperatorAction[] = [];
+	const toolModules: ToolModule[] = [];
+	const operatorActions: OperatorAction[] = [];
 	const stateSchemas: StateSchema[] = [];
 
 	for (const [index, node] of document.nodes.entries()) {

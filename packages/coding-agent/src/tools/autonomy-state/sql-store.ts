@@ -87,14 +87,14 @@ export class SqlStore {
 			sql += ` WHERE ${clauses.join(" AND ")}`;
 		}
 
-		if (orderBy) {
-			sql += ` ORDER BY ${escapeIdentifier(orderBy)} ${orderDir === "desc" ? "DESC" : "ASC"}`;
-		}
-
-		// Count query (same WHERE, no LIMIT/OFFSET)
+		// Count query (same WHERE, no ORDER BY or LIMIT/OFFSET)
 		const countSql = sql.replace(/^SELECT \* FROM/, "SELECT count(*) as count FROM");
 		const countRow = this.#db.prepare(countSql).get(...params) as { count: number } | null;
 		const rowCount = countRow?.count ?? 0;
+
+		if (orderBy) {
+			sql += ` ORDER BY ${escapeIdentifier(orderBy)} ${orderDir === "desc" ? "DESC" : "ASC"}`;
+		}
 
 		if (limit !== undefined) {
 			sql += " LIMIT ?";
