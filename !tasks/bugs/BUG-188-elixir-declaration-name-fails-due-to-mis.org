@@ -1,0 +1,157 @@
+#+TITLE: Fix Elixir outline: paren mismatch in declaration-kind and arguments lookup in declaration-name
+#+STATE: DONE
+#+SESSION_ID: 14b01e7e57087421
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T14-48-57-436Z_14b01e7e57087421.jsonl]]
+#+CUSTOM_ID: BUG-188-elixir-declaration-name-fails-due-to-mis
+#+EFFORT: 30m
+#+PRIORITY: A
+#+LAYER: emacs
+#+DEPENDS: BUG-187-paren-mismatch-in-pi-treesit-declaration
+
+NOTE [2026-04-06]: Fixed 3 paren mismatches: pair branch in declaration-name, call branch in declaration-kind. Fixed arguments lookup via treesit-search-subtree. Added Elixir branch to declaration-name-node. Fixed YAML block_node unwrap, TOML table keep+unwrap, TOML pair key fallback.
+
+* Problem
+
+Two bugs in ~packages/emacs/elisp/pi-treesit.el~ prevent Elixir outline from working:
+
+1. *Paren mismatch in ~pi-treesit-declaration-kind~* (lines 353-367): The outer =cond='s
+   catch-all ~(t type)~ is inside the =call= clause body instead of being a separate clause.
+   When the =call= branch matches, Emacs evaluates ~(t type)~ as a function call, crashing
+   with =Symbol's function definition is void: t=.
+
+2. *Arguments field lookup in ~pi-treesit-declaration-name~* (line ~300): Uses
+   ~(treesit-node-child-by-field-name node "arguments")~ but tree-sitter-elixir does NOT
+   assign the field name ="arguments"= to the arguments child (it has =field=nil=). This
+   causes ~declaration-name~ to return ~nil~ for all Elixir nodes, producing empty outlines.
+
+A related gap exists in ~pi-outline--declaration-name-node~ in
+~packages/emacs/elisp/pi-outline.el~ — it has no Elixir =call= branch, so outline entries
+for Elixir nodes lack the =column= field.
+
+* Tree-sitter-elixir Node Structure
+
+A =call= node (e.g. ~defmodule MyApp.HelloController do ... end~) has:
+- child 0: type=identifier, field="target", text="defmodule"
+- child 1: type=arguments, field=nil (NOT field="arguments"!), text="MyApp.HelloController"
+- child 2: type=do_block, field=nil
+
+A =def= call (e.g. ~def index(conn, _params) do ... end~) has:
+- child 0: type=identifier, field="target", text="def"
+- child 1: type=arguments, field=nil — first child is type=call, text="index(conn, _params)"
+- child 2: type=do_block, field=nil
+
+* Fix 1: Paren mismatch in pi-treesit-declaration-kind
+
+File: ~packages/emacs/elisp/pi-treesit.el~, function ~pi-treesit-declaration-kind~
+
+Line 366: change ~(t type)))~ to ~(t type))))~ (add one close paren — closes the =call= clause)
+Line 367: change ~(t type)))))~ to ~(t type))))~ (remove one close paren — now this IS the outer catch-all)
+
+Before:
+#+begin_src elisp
+         (t type)))
+     (t type)))))
+#+end_src
+
+After:
+#+begin_src elisp
+         (t type))))
+     (t type))))
+#+end_src
+
+* Fix 2: Arguments lookup in pi-treesit-declaration-name
+
+File: ~packages/emacs/elisp/pi-treesit.el~, function ~pi-treesit-declaration-name~,
+Elixir =call= branch (around line 292-307).
+
+Replace the field-name lookup ~(treesit-node-child-by-field-name node "arguments")~ with a
+type-based search. Use ~treesit-search-subtree~ with depth 1 to find the =arguments= child
+by node type:
+
+#+begin_src elisp
+(let ((args-node (treesit-search-subtree node "arguments" nil nil 1)))
+  (when args-node
+    (let ((first-arg (treesit-node-child args-node 0)))
+      (when first-arg
+        (if (string= (treesit-node-type first-arg) "call")
+            (let ((fn-name (treesit-node-child first-arg 0)))
+              (when fn-name (treesit-node-text fn-name t)))
+          (treesit-node-text first-arg t))))))
+#+end_src
+
+Note: ~treesit-search-subtree~ with depth 1 searches direct children matching the given
+node type string. This is safe because =call= nodes always have at most one =arguments=
+child node.
+
+* Fix 3: Add Elixir branch to pi-outline--declaration-name-node
+
+File: ~packages/emacs/elisp/pi-outline.el~, function ~pi-outline--declaration-name-node~
+(around line 35-76).
+
+Add a =call= branch before the final =(t nil)= catch-all, mirroring the logic from
+~pi-treesit-declaration-name~ but returning the *node* instead of text:
+
+#+begin_src elisp
+     ;; Elixir call nodes
+     ((string= type "call")
+      (let ((args-node (treesit-search-subtree node "arguments" nil nil 1)))
+        (when args-node
+          (let ((first-arg (treesit-node-child args-node 0)))
+            (when first-arg
+              (if (string= (treesit-node-type first-arg) "call")
+                  (treesit-node-child first-arg 0)
+                first-arg))))))
+#+end_src
+
+This enables the =column= field in outline entries for Elixir declarations.
+
+* Verification
+
+The regression tests from BUG-187 (test-first item) must all pass after this fix:
+- ~test-treesit-elixir-declaration-kind~ → PASS (was: void-function t)
+- ~test-treesit-elixir-declaration-name~ → PASS (was: nil names)
+- ~test-outline-elixir-entries~ → PASS (was: void-function t)
+
+Run via emacsclient against the spell daemon. IMPORTANT: reload the modified files first:
+#+begin_src sh
+emacsclient --socket-name=spell-emacs-XXXX --eval '
+(progn
+  ;; Reload modified source files
+  (load (expand-file-name "packages/emacs/elisp/pi-treesit.el" "/home/user/code/ora/spell") nil t)
+  (load (expand-file-name "packages/emacs/elisp/pi-outline.el" "/home/user/code/ora/spell") nil t)
+  ;; Reload test files
+  (add-to-list (quote load-path) (expand-file-name "packages/emacs/test/elisp" "/home/user/code/ora/spell"))
+  (load "test-treesit" nil t)
+  (load "test-outline" nil t)
+  ;; Run regression tests
+  (let ((pass 0) (fail 0))
+    (dolist (name (quote (test-treesit-elixir-declaration-kind
+                          test-treesit-elixir-declaration-name
+                          test-outline-elixir-entries)))
+      (let ((result (ert-run-test (ert-get-test name))))
+        (if (ert-test-passed-p result) (setq pass (1+ pass)) (setq fail (1+ fail)))))
+    (format "pass=%d fail=%d" pass fail)))'
+#+end_src
+
+Expected: =pass=3 fail=0=
+
+Also verify existing tests still pass (no regression):
+#+begin_src sh
+emacsclient --socket-name=spell-emacs-XXXX --eval '
+(progn
+  (load (expand-file-name "packages/emacs/elisp/pi-treesit.el" "/home/user/code/ora/spell") nil t)
+  (load (expand-file-name "packages/emacs/elisp/pi-outline.el" "/home/user/code/ora/spell") nil t)
+  (add-to-list (quote load-path) (expand-file-name "packages/emacs/test/elisp" "/home/user/code/ora/spell"))
+  (load "test-treesit" nil t)
+  (load "test-outline" nil t)
+  (let ((pass 0) (fail 0))
+    (dolist (name (quote (test-treesit-top-level-nodes test-treesit-declaration-name test-treesit-find-body
+                          test-outline-top-level-entries test-outline-class-members test-outline-line-numbers)))
+      (let ((result (ert-run-test (ert-get-test name))))
+        (if (ert-test-passed-p result) (setq pass (1+ pass)) (setq fail (1+ fail)))))
+    (format "existing tests: pass=%d fail=%d" pass fail)))'
+#+end_src
+
+Expected: =existing tests: pass=6 fail=0=
+
+Also run ~bun check~ for TypeScript-level regressions.

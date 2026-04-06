@@ -158,10 +158,17 @@ actual declaration nodes.
          (child (treesit-node-child node 0))
          (out '()))
     (cond
-      ((member type '("document" "stream" "block_mapping" "object" "section"))
+      ((member type '("document" "stream" "block_mapping" "block_node" "object" "section"))
        (while child
          (setq out (append out (pi-treesit--top-level-nodes-children child)))
          (setq child (treesit-node-next-sibling child))))
+      ;; TOML table: keep the table header node AND recurse into children
+      ((string= type "table")
+       (push node out)
+       (let ((named-child (treesit-node-child node 0 t)))
+         (while named-child
+           (setq out (append out (pi-treesit--top-level-nodes-children named-child)))
+           (setq named-child (treesit-node-next-sibling named-child t)))))
       (t
        (push node out)))
     (nreverse out)))
@@ -264,7 +271,7 @@ actual declaration nodes.
         (when (and key-node
                    (string= (treesit-node-type parent) "block_mapping")
                    (member (and grandparent (treesit-node-type grandparent))
-                           '("document" "stream")))
+                           '("document" "stream" "block_node")))
           (let ((text (treesit-node-text key-node t)))
             (unless (string-prefix-p "&" (string-trim text))
               text)))))
@@ -272,7 +279,8 @@ actual declaration nodes.
       (let* ((parent-type (and parent (treesit-node-type parent)))
              (grandparent-type (and parent (treesit-node-parent parent)
                                     (treesit-node-type (treesit-node-parent parent))))
-             (key-node (treesit-node-child-by-field-name node "key")))
+             (key-node (or (treesit-node-child-by-field-name node "key")
+                          (treesit-node-child node 0 t))))
         (when (and key-node
                    (or
                     ;; JSON: top-level pair in root object
@@ -284,7 +292,7 @@ actual declaration nodes.
           (let ((raw (treesit-node-text key-node t)))
             (if (string= parent-type "object")
                 (pi-treesit--unquote-string raw)
-              raw))))
+              raw)))))
      ;; Markdown / TOML tables
      ((string= type "table")
       (string-trim (car (split-string (treesit-node-text node t) "\n"))))
@@ -297,7 +305,7 @@ actual declaration nodes.
                            '("def" "defp" "defmodule" "defprotocol" "defimpl"
                              "defmacro" "defmacrop" "defguard" "defguardp"
                              "defstruct" "defdelegate" "defexception")))
-          (let ((args-node (treesit-node-child-by-field-name node "arguments")))
+          (let ((args-node (treesit-search-subtree node "^arguments$" nil nil 1)))
             (when args-node
               (let ((first-arg (treesit-node-child args-node 0)))
                 (when first-arg
@@ -306,7 +314,7 @@ actual declaration nodes.
                         (when fn-name (treesit-node-text fn-name t)))
                     (treesit-node-text first-arg t)))))))))
     
-     (t nil)))))
+     (t nil))))
 
 (defun pi-treesit-declaration-kind (node)
   "Return a short kind string for NODE: function, class, interface, type, const, etc."
@@ -363,8 +371,8 @@ actual declaration nodes.
          ((string= target-text "defstruct") "defstruct")
          ((string= target-text "defdelegate") "defdelegate")
          ((string= target-text "defexception") "defexception")
-         (t type)))
-     (t type)))))
+         (t type))))
+     (t type))))
 
 (provide 'pi-treesit)
 ;;; pi-treesit.el ends here

@@ -1,0 +1,174 @@
+#+TITLE: Elixir outline ERT regression tests and test-outline let-scoping fix
+#+STATE: DONE
+#+SESSION_ID: 14b01e7e57087421
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T14-48-57-436Z_14b01e7e57087421.jsonl]]
+#+CUSTOM_ID: BUG-187-paren-mismatch-in-pi-treesit-declaration
+#+EFFORT: 30m
+#+PRIORITY: A
+#+LAYER: emacs
+
+NOTE [2026-04-06]: Added 3 Elixir ERT tests. Fixed let->let* scoping in yaml/toml/markdown tests. Fixed toml double-call test pattern.
+
+* Problem
+
+The =code outline= tool crashes on Elixir (.ex/.exs) files with =Symbol's function definition
+is void: t=. There are no ERT tests covering Elixir outline behavior, so these bugs shipped
+undetected. Additionally, 3 existing outline tests (yaml, toml, json) fail due to a =let= vs
+=let*= scoping bug in =test-outline.el=.
+
+This item adds regression tests that will fail until the implementation fix lands (BUG-188),
+and fixes the pre-existing test scoping bug.
+
+* Files to Modify
+
+1. ~packages/emacs/test/elisp/test-treesit.el~ — add Elixir tests
+2. ~packages/emacs/test/elisp/test-outline.el~ — add Elixir tests + fix =let= scoping
+
+* Pre-existing Test Bug: let vs let*
+
+In ~test-outline.el~, the yaml/toml/json tests use ~let~ where they need ~let*~:
+
+#+begin_src elisp
+;; BAD: `let` binds in parallel — `names` cannot reference `entries`
+(let ((entries (pi-outline-get file))
+      (names (mapcar (lambda (entry) (alist-get 'name entry)) entries))
+      (types (mapcar (lambda (entry) (alist-get 'type entry)) entries)))
+#+end_src
+
+Fix: change =let= to =let*= in these three tests:
+- ~test-outline-yaml-entries~ (line ~85)
+- ~test-outline-toml-entries~ (same pattern)
+- ~test-outline-json-entries~ (same pattern)
+
+* Elixir Test Constants
+
+Add to ~test-treesit.el~:
+#+begin_src elisp
+(defconst test-treesit--elixir-source
+  "defmodule MyApp.HelloController do
+  use MyAppWeb, :controller
+
+  def index(conn, _params) do
+    text(conn, \"Hello, World!\")
+  end
+
+  defp helper do
+    :ok
+  end
+end
+"
+  "Elixir source for testing.")
+#+end_src
+
+Add helper (or reuse ~test-outline--with-tmp-file~ for outline tests):
+#+begin_src elisp
+(defun test-treesit--make-elixir-buffer (source)
+  "Create a temp buffer with SOURCE in elixir-ts-mode."
+  (let ((buf (generate-new-buffer " *test-treesit-elixir*")))
+    (with-current-buffer buf
+      (insert source)
+      (when (treesit-language-available-p 'elixir)
+        (elixir-ts-mode)))
+    buf))
+#+end_src
+
+* ERT Tests to Add
+
+** In test-treesit.el
+
+1. ~test-treesit-elixir-declaration-kind~ — verifies ~pi-treesit-declaration-kind~ returns
+   correct strings for Elixir =call= nodes. This is the direct regression test for the paren
+   bug (=void-function t=).
+
+   #+begin_src elisp
+   (ert-deftest test-treesit-elixir-declaration-kind ()
+     "Declaration kind is correctly returned for Elixir call nodes."
+     (skip-unless (treesit-language-available-p 'elixir))
+     (let ((buf (test-treesit--make-elixir-buffer test-treesit--elixir-source)))
+       (unwind-protect
+           (with-current-buffer buf
+             (let* ((nodes (pi-treesit-top-level-nodes))
+                    (kinds (mapcar #'pi-treesit-declaration-kind nodes)))
+               (should (member "defmodule" kinds))))
+         (kill-buffer buf))))
+   #+end_src
+
+2. ~test-treesit-elixir-declaration-name~ — verifies ~pi-treesit-declaration-name~ returns
+   the module name. This is the regression test for the arguments field lookup bug.
+
+   #+begin_src elisp
+   (ert-deftest test-treesit-elixir-declaration-name ()
+     "Declaration name is correctly extracted for Elixir call nodes."
+     (skip-unless (treesit-language-available-p 'elixir))
+     (let ((buf (test-treesit--make-elixir-buffer test-treesit--elixir-source)))
+       (unwind-protect
+           (with-current-buffer buf
+             (let* ((nodes (pi-treesit-top-level-nodes))
+                    (names (delq nil (mapcar #'pi-treesit-declaration-name nodes))))
+               (should (member "MyApp.HelloController" names))))
+         (kill-buffer buf))))
+   #+end_src
+
+** In test-outline.el
+
+3. ~test-outline-elixir-entries~ — end-to-end regression test using ~pi-outline-get~ on an
+   Elixir file. Add an Elixir source constant to test-outline.el as well.
+
+   #+begin_src elisp
+   (defconst test-outline--elixir-source
+     "defmodule MyApp.HelloController do
+  use MyAppWeb, :controller
+
+  def index(conn, _params) do
+    text(conn, \"Hello, World!\")
+  end
+
+  defp helper do
+    :ok
+  end
+end
+")
+
+   (ert-deftest test-outline-elixir-entries ()
+     "Outline returns entries for Elixir defmodule."
+     (skip-unless (treesit-language-available-p 'elixir))
+     (test-outline--with-tmp-file test-outline--elixir-source ".ex"
+       (lambda (file)
+         (let* ((entries (pi-outline-get file))
+                (names (mapcar (lambda (e) (alist-get 'name e)) entries))
+                (types (mapcar (lambda (e) (alist-get 'type e)) entries)))
+           (should (listp entries))
+           (should (>= (length entries) 1))
+           (should (member "MyApp.HelloController" names))
+           (should (member "defmodule" types))))))
+   #+end_src
+
+* Verification
+
+All these tests should FAIL before the implementation fix (BUG-188) is applied:
+- ~test-treesit-elixir-declaration-kind~ → =void-function t=
+- ~test-treesit-elixir-declaration-name~ → returns nil (empty names list)
+- ~test-outline-elixir-entries~ → =void-function t= (via declaration-kind in outline--entry)
+
+After BUG-188 is applied, all should PASS. Run via emacsclient against the spell daemon:
+#+begin_src sh
+emacsclient --socket-name=spell-emacs-XXXX --eval '
+(progn
+  (add-to-list (quote load-path) (expand-file-name "packages/emacs/test/elisp" "/home/user/code/ora/spell"))
+  (load "test-treesit" nil t)
+  (load "test-outline" nil t)
+  ;; Run all Elixir tests + the fixed let* tests
+  (let ((pass 0) (fail 0))
+    (dolist (name (quote (test-treesit-elixir-declaration-kind
+                          test-treesit-elixir-declaration-name
+                          test-outline-elixir-entries
+                          test-outline-yaml-entries
+                          test-outline-toml-entries
+                          test-outline-json-entries)))
+      (let ((result (ert-run-test (ert-get-test name))))
+        (if (ert-test-passed-p result) (setq pass (1+ pass)) (setq fail (1+ fail)))))
+    (format "pass=%d fail=%d" pass fail)))'
+#+end_src
+
+After implementation fix: expect =pass=6 fail=0=.
+After test-only commit (before impl fix): expect Elixir tests to FAIL, yaml/toml/json to PASS.
