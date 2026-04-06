@@ -1,0 +1,13 @@
+#+TITLE: Session 14aed25452393324 Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Finalize
+
+** DONE Full project check and org lifecycle
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+bun check, update all org items to DONE, commit

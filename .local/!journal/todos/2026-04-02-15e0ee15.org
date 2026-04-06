@@ -1,0 +1,29 @@
+#+TITLE: Session 14ab3f8a599bfcfd Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Wire growth domain as default canvas in main.ts
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+In main.ts, when parsedArgs.canvas is the sentinel: override the domain to 'growth', reload domainManifest, clear canvas so startup route uses interactive-qml
+
+** DONE Update formatUnknownCanvasMessage with new behavior
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Update help/error message in main.ts to reflect that bare --canvas launches growth domain
+
+** DONE Verify behavior
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+Run bun check:ts to verify type correctness

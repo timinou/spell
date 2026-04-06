@@ -17,9 +17,15 @@ export interface Logger {
     error(message: string, context?: Record<string, unknown>): void;
     warn(message: string, context?: Record<string, unknown>): void;
     debug(message: string, context?: Record<string, unknown>): void;
+    setStderrDebugEnabled(enabled: boolean): void;
     time<T>(op: string, fn: () => T): T;
     timeAsync<T>(op: string, fn: () => PromiseLike<T>): Promise<T>;
 }
+/**
+ * Enable or disable mirroring logger output to stderr.
+ * File rotation remains active regardless of this setting.
+ */
+export declare function setStderrDebugEnabled(enabled: boolean): void;
 /**
  * Log an error message.
  * @param message - The message to log.

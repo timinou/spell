@@ -117,6 +117,7 @@ describe("org session manager wiring", () => {
 						id: itemId,
 						file: path.join(tmpDir, "!tasks", "plans", `${itemId}.org`),
 						body: "* Context\nAuth rollout\n\n* Execution Manifest\n** foundation :wave:\n- [[id:FEAT-001-auth-api]] Implement auth API",
+						properties: {},
 					};
 				}
 				if (itemId === "FEAT-001-auth-api") {
@@ -124,6 +125,7 @@ describe("org session manager wiring", () => {
 						id: itemId,
 						file: path.join(tmpDir, "!tasks", "features", `${itemId}.org`),
 						body: "* Scope\nImplement auth API",
+						properties: {},
 					};
 				}
 				return null;

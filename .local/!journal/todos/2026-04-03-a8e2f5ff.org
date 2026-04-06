@@ -1,0 +1,25 @@
+#+TITLE: Session 14ac03cb9be4ae24 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 2: Add typing indicator
+
+** DONE Add typing indicator keep-alive to ResponseStreamer
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:GATE_CMD: bun test packages/spell-server/test/telegram/bridge.test.ts
+:DEPENDS: task-1
+:END:
+
+Add replyWithChatAction('typing') interval, clear on first draft or finalize/cancel, add test coverage
+
+* Verification
+
+** DONE Type check and final verification
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:DEPENDS: task-2
+:END:

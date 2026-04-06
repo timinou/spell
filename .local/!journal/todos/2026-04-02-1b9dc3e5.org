@@ -1,0 +1,12 @@
+#+TITLE: Session 14ab37ff395346f9 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run tests and close org lifecycle
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:DEPENDS: task-2
+:END:

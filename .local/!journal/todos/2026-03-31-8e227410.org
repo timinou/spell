@@ -1,0 +1,29 @@
+#+TITLE: Session 14a867925829cb68 Todos
+#+DATE: 2026-03-31
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execute
+
+** DONE FEAT-134: Restructure Phase 3 in plan-mode-active.md
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Move Org Item Body Standard before Phase 3, rewrite Phase 3 to require full detail, add anti-pattern caution
+
+** DONE FEAT-135: Update Daedalus validation criteria
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+Expand input spec, add criteria 7+8, update output format tags
+
+** DONE Verify and close org items
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Run bun check:ts, verify prompt content, update org items, commit

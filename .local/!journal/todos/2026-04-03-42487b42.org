@@ -1,0 +1,23 @@
+#+TITLE: Session 14ab5933cab1e881 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Key files
+
+** DONE Trace screenshot data flow in quick-fix dispatch
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Check if runSubprocess is a real extension API
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Audit quick-fix test coverage
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

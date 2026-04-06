@@ -1,0 +1,100 @@
+#+TITLE: Polish canvas task audit findings
+#+STATE: DONE
+#+SESSION_ID: 14ac0da79abe51b8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-01-27-786Z_14ac0da79abe51b8.jsonl]]
+#+CUSTOM_ID: PLAN-114-polish-canvas-task-audit-findings
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-027-audit-implementation:
+
+The CHANGELOG was not updated. This is a finding per AGENTS.md rules.
+
+Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. CHANGELOG not updated
+- **What**: `packages/coding-agent/CHANGELOG.md` has no entries under `[Unreleased]` for this plan's changes.
+- **Where**: `packages/coding-agent/CHANGELOG.md`, under `## [Unreleased]`
+- **Why**: AGENTS.md requires changelog entries for all changes. This is a 4-item plan with user-facing features (new model role, new status line segment, enriched payloads). Missing entries make the next release opaque.
+- **Effort**: `trivial`
+
+### 2. `setCanvasTaskCount()` has no callers — TUI badge is invisible
+- **What**: `StatusLineComponent.setCanvasTaskCount()` is defined but nothing calls it. The `canvas_tasks` status line segment always shows `canvasTaskCount: 0` and remains hidden.
+- **Where**: `packages/coding-agent/src/modes/components/status-line.ts` line 97
+- **Why**: The FEAT-252 acceptance criterion says "TUI shows a badge/indicator when canvas tasks are active" — this is not satisfied. The infrastructure is in place but the glue (calling `setCanvasTaskCount(manager.getActive().length)` from the render/event cycle) is missing. Note: the pre-existing `setSubagentCount()` has the same pattern — also never called — so this is consistent with existing code, but the feature intent is unmet.
+- **Effort**: `small`
+
+### 3. Theme icon type cast is fragile
+- **What**: `canvasTasksSegment` uses `(theme.icon as typeof theme.icon & { canvas?: string }).canvas ?? ""` to access a `canvas` icon that doesn't exist in the theme type.
+- **Where**: `packages/coding-agent/src/modes/components/status-line/segments.ts` line 194
+- **Why**: The cast silently resolves to `""` (empty string), so the segment renders without an icon. This works but obscures the fact that no canvas icon exists. If a `canvas` icon is later added to the theme, this cast will need to be cleaned up. Minor maintenance cost.
+- **Effort**: `trivial`
+
+### 4. Split imports from same module
+- **What**: `canvas-task-manager.ts` lines 16–17 split type and value imports from `"../task/types"` into two separate import statements. Same pattern in the test file lines 18–19.
+- **Where**: `packages/coding-agent/src/orchestrators/canvas-task-manager.ts` lines 16–17; `test/tools/canvas-task-tier.test.ts` lines 18–19
+- **Why**: Could be a single import: `import { TASK_SUBAGENT_PROGRESS_CHANNEL, type AgentDefinition, type AgentProgress, type SingleResult } from "../task/types"`. Biome didn't flag it, so this is purely cosmetic.
+- **Effort**: `trivial`
+
+### 5. Duplicate `durationMs` computation on success path
+- **What**: `Date.now() - startTime` is computed once for the logger call (line 210) and again for the bridge message (line 222), ~12 lines apart. These will differ slightly.
+- **Where**: `packages/coding-agent/src/orchestrators/canvas-task-manager.ts` lines 210, 222
+- **Why**: The logger and bridge message will report slightly different durations for the same task. Trivial in practice (microsecond difference), but could be a `const durationMs = Date.now() - startTime` once.
+- **Effort**: `trivial`
+
+* Context
+
+Post-implementation audit of PLAN-109 (fix and polish Phoenix Inspector quick task) found five
+mechanical issues: missing CHANGELOG entries, unwired TUI badge setter, fragile theme icon cast,
+split imports, and duplicate =durationMs= computation. All are trivial-to-small fixes in the
+coding-agent package.
+
+Key decisions:
+- Wire =setCanvasTaskCount= by piggybacking on existing =statusLine.invalidate()= calls in
+  event-controller, reading count from =taskManager.getActive().length=.
+- Remove theme icon cast entirely (no canvas icon exists; bare empty string is correct).
+- Single child item since all fixes are mechanical and non-overlapping.
+
+* Verification
+
+#+begin_src bash
+# Type checks
+bun check:ts
+
+# Canvas task tier tests
+bun test packages/coding-agent/test/tools/canvas-task-tier.test.ts
+
+# Verify CHANGELOG
+grep -A 2 'pi/sniper' packages/coding-agent/CHANGELOG.md
+#+end_src
+
+* Execution Manifest
+
+| Wave | Item | Effort | Depends |
+|------+------+--------+---------|
+|    1 | [[id:BUG-136-polish-canvas-task-audit-findings-change]] | 30m | - |
+
+Single wave, single item. All five fixes are independent and can be applied in one pass.
+
+** Completion [2026-04-03]
+*** Verification
+- =bun check:ts=: all coding-agent files pass; pre-existing errors only in spell-server/utils packages
+- =bun test packages/coding-agent/test/tools/canvas-task-tier.test.ts=: 17/17 pass, 60 expects
+- CHANGELOG entries confirmed under =[Unreleased]=: =pi/sniper= entry, canvas task timeout, QML ack, progress streaming, status line segment, enriched payloads, silent hang fix
+- Import sort fixed via =bun fix:ts= (biome auto-organize)
+*** Artifacts
+- packages/coding-agent/CHANGELOG.md: 7 new entries (6 Added, 1 Fixed)
+- packages/coding-agent/src/modes/types.ts: =taskManager?= field on =InteractiveModeContext=
+- packages/coding-agent/src/modes/interactive-mode.ts: =taskManager= threaded via constructor
+- packages/coding-agent/src/main.ts: =taskManager= destructured from =createAgentSession= and passed to =InteractiveMode=
+- packages/coding-agent/src/modes/controllers/event-controller.ts: =setCanvasTaskCount= wired before =invalidate()= in =handleEvent=
+- packages/coding-agent/src/modes/components/status-line/segments.ts: fragile type cast removed
+- packages/coding-agent/src/orchestrators/canvas-task-manager.ts: imports merged, =durationMs= deduplicated
+- packages/coding-agent/test/tools/canvas-task-tier.test.ts: imports merged
+*** Deviations
+None.

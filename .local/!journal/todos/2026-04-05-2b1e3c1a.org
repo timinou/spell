@@ -1,0 +1,14 @@
+#+TITLE: Session 14af23ef4422d7f2 Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run all tests and type check
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:DEPENDS: task-4
+:END:
+
+Run gate-verification, todo-write-gates, bash-subprocess-handler, gate-enforcement, todo-ref-lifecycle tests + bun check:ts

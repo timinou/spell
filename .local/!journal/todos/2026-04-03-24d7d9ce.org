@@ -1,0 +1,17 @@
+#+TITLE: Session 14ac0ccc942812b6 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Key clues
+
+** DONE Read the raw HTTP error log
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Find how images are converted to API format
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

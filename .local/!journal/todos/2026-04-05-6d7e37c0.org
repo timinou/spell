@@ -1,0 +1,26 @@
+#+TITLE: Session 14aeeda122ac5ee4 Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Thread planningTranscriptPath and add conditional instruction
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+1. Capture transcript path in interactive-mode.ts#approvePlan before handleClearCommand
+2. Pass it to renderPromptTemplate
+3. Add conditional block in plan-mode-approved.md
+
+* Verification
+
+** DONE Run bun check:ts and verify changes
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+bun check:ts ran — all errors are pre-existing (sql-store.ts, approvals.ts, tool-progress.ts, logger.ts). No new errors from changes.

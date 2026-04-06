@@ -1,0 +1,14 @@
+#+TITLE: Session 14aea65e296f7dee Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run full TUI tests + biome check + commit
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:DEPENDS: task-1 task-2
+:END:
+
+bun test packages/tui/test/ && bunx biome check packages/tui/

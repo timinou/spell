@@ -1,0 +1,123 @@
+#+TITLE: Session 14abfa0b7722d2aa Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* trivial-wave
+
+** DONE Audit duplicate workflow requests
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:VERIFY_CMD: bun test packages/spell-server/test/workflow/idempotency.test.ts
+:ORG_ITEM_ID: BUG-122-audit-duplicate-workflow-requests
+:END:
+
+Updated packages/spell-server/src/workflow/engine.ts and packages/spell-server/test/workflow/idempotency.test.ts; verified with bun test packages/spell-server/test/workflow/idempotency.test.ts
+
+Completed via delegated task and included in commit 9453bf361.
+
+* small-fixes-wave
+
+** DONE Fix Telegram replay stale claims
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:VERIFY_CMD: bun test packages/spell-server/test/telegram/approval-callbacks.test.ts
+:ORG_ITEM_ID: BUG-123-fix-telegram-quick-action-replay-leaving
+:END:
+
+Updated packages/spell-server/src/telegram/workflow-inbox.ts and packages/spell-server/test/telegram/approval-callbacks.test.ts; verified with bun test packages/spell-server/test/telegram/approval-callbacks.test.ts
+
+Completed via delegated task and included in commit 9453bf361.
+
+** DONE Add growth action parameter schemas
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:VERIFY_CMD: bun test packages/spell-growth/test/action-registration.test.ts
+:ORG_ITEM_ID: BUG-124-add-typed-parameter-schemas-to-growth-ac
+:END:
+
+Updated packages/spell-growth/src/index.ts, packages/spell-growth/src/actions/types.ts, and packages/spell-growth/test/action-registration.test.ts; verified with bun test packages/spell-growth/test/action-registration.test.ts
+
+Completed via delegated task and included in commit 9453bf361.
+
+** DONE Fix JSON action parameter round-trip
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:VERIFY_CMD: bun test packages/spell-server/test/manifest/action-registry.test.ts
+:ORG_ITEM_ID: BUG-125-fix-json-action-parameter-round-trip-los
+:END:
+
+Updated packages/spell-server/src/actions/types.ts, packages/spell-server/src/actions/registry.ts, packages/spell-server/src/manifest/parser.ts, packages/spell-server/src/manifest/serializer.ts, packages/spell-server/src/manifest/types.ts, and packages/spell-server/test/manifest/action-registry.test.ts; verified with bun test packages/spell-server/test/manifest/action-registry.test.ts
+
+Completed via delegated task and included in commit 9453bf361.
+
+** DONE Validate nested approvals payloads
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:VERIFY_CMD: bun test packages/spell-server/test/http/approvals-api.test.ts
+:ORG_ITEM_ID: BUG-126-validate-nested-approvals-api-payloads-b
+:END:
+
+Updated packages/spell-server/src/http/routes/approvals.ts and packages/spell-server/test/http/approvals-api.test.ts; verified with bun test packages/spell-server/test/http/approvals-api.test.ts
+
+Completed via delegated task and included in commit 9453bf361.
+
+** DONE Fix feed digest approval targeting
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:VERIFY_CMD: bun test packages/spell-growth/test/feed-action.test.ts
+:ORG_ITEM_ID: BUG-127-fix-feed-digest-approval-button-targetin
+:END:
+
+Updated packages/spell-growth/src/actions/feed-send.ts and packages/spell-growth/test/feed-action.test.ts; verified with bun test packages/spell-growth/test/feed-action.test.ts
+
+Completed via delegated task and included in commit 9453bf361.
+
+* cross-package-wave
+
+** DONE Replace spell-growth relative imports
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:VERIFY_CMD: bun test packages/spell-growth/test/action-registration.test.ts
+:DEPENDS: task-3
+:ORG_ITEM_ID: PROJ-025-replace-spell-growth-relative-imports-wi
+:END:
+
+Updated packages/spell-growth/src/index.ts, packages/spell-growth/src/actions/discovery.ts, packages/spell-growth/src/actions/types.ts, and packages/spell-growth/src/workflow/presets.ts; verified with grep 'spell-server/src/' packages/spell-growth/src/ and bun test packages/spell-growth/test/action-registration.test.ts
+
+Completed via delegated task and included in commit 9453bf361.
+
+* execution-wave
+
+** DONE Implement action-only goal execution
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:VERIFY_CMD: bun test packages/spell-server/test/executor/goal-executor.test.ts
+:DEPENDS: task-3 task-7
+:ORG_ITEM_ID: PROJ-026-implement-action-only-goal-execution-in
+:END:
+
+Updated packages/spell-server/src/executor/goal-executor.ts, added packages/spell-server/src/executor/action-goal-prompt.md, and updated packages/spell-server/test/executor/goal-executor.test.ts; verified with bun test packages/spell-server/test/executor/goal-executor.test.ts and grep 'does not execute yet' packages/spell-server/src/executor/goal-executor.ts
+
+Completed via delegated task and included in commit 9453bf361.
+
+* tools-wave
+
+** DONE Register goals and approvals tools
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/goals-tool.test.ts packages/coding-agent/test/tools/approvals-tool.test.ts
+:ORG_ITEM_ID: FEAT-243-register-goals-and-approvals-as-coding-a
+:END:
+
+Updated packages/coding-agent/src/tools/approvals-tool.ts, packages/coding-agent/src/tools/goals-tool.ts, packages/coding-agent/src/tools/index.ts, and focused tests; verified with bun test packages/coding-agent/test/tools/goals-tool.test.ts packages/coding-agent/test/tools/approvals-tool.test.ts
+
+Completed via delegated task and included in commit 9453bf361.

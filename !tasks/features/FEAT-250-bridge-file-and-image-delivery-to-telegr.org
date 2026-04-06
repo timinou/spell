@@ -1,5 +1,5 @@
 #+TITLE: Bridge file and image delivery to Telegram users
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ac069b96bbdfba
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-30-40-474Z_14ac069b96bbdfba.jsonl]]
 #+CUSTOM_ID: FEAT-250-bridge-file-and-image-delivery-to-telegr

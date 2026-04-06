@@ -1,0 +1,19 @@
+#+TITLE: Session 14aacabc8416dc84 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run type checks and all tests
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+** DONE Close org lifecycle and commit
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:GATE_COMMIT: true
+:END:

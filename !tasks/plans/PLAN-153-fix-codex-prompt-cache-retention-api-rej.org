@@ -1,8 +1,9 @@
 #+TITLE: Fix Codex prompt_cache_retention API rejection regression
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14aefd586609b57d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T17-45-38-968Z_14aefd586609b57d.jsonl]]
 #+CUSTOM_ID: PLAN-153-fix-codex-prompt-cache-retention-api-rej
+
 
 * Initial Message
 
@@ -53,3 +54,25 @@ The existing Codex request normalizer (=transformRequestBody= in =request-transf
 | Item | Effort | Description |
 |---+---+---|
 | [[id:BUG-183-fix-prompt-cache-retention-rejected-by-c]] | 30m | Strip =prompt_cache_retention= in =transformRequestBody= + test |
+
+** Completion [2026-04-05]
+
+*** Verification
+
+- =bun test packages/ai/test/openai-codex.test.ts= — 5/5 tests pass (4 pre-existing + 1 new)
+- =bun check:ts= scoped to =packages/ai/= — 0 errors (pre-existing errors in unrelated packages are unchanged)
+- Manual spot-check: =transformRequestBody= called with =prompt_cache_retention: "24h"= returns body where that field is =undefined= and =prompt_cache_key= is intact
+
+*** Artifacts
+
+No visual artifacts required (pure logic fix verified by automated tests).
+
+Changed files:
+- =packages/ai/src/providers/openai-codex/request-transformer.ts= — added =delete body.prompt_cache_retention= after the existing delete block
+- =packages/ai/test/openai-codex.test.ts= — added test "strips prompt_cache_retention but preserves prompt_cache_key"
+
+Commit: =77d0a132d= — =fix(ai): strip prompt_cache_retention in Codex request transformer=
+
+*** Deviations
+
+None.

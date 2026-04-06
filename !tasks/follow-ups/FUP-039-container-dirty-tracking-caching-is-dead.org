@@ -1,0 +1,32 @@
+#+TITLE: Container dirty tracking caching is dead infrastructure
+#+STATE: ITEM
+#+SESSION_ID: 14ae9f3312ef7de3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T10-54-19-211Z_14ae9f3312ef7de3.jsonl]]
+#+CUSTOM_ID: FUP-039-container-dirty-tracking-caching-is-dead
+#+EFFORT: 2h
+#+LAYER: tui
+
+* Initial Message
+
+bro the real spell now does not show me the text that I'm typing
+
+* Problem
+
+=#executeRender()= calls =markTreeDirty()= every frame, marking ALL Containers dirty. The =#dirty= / =#cachedLines= / =#cachedWidth= caching logic in =Container.render()= never returns cached because everything is always dirty when render executes. ~20 lines of caching infrastructure that never activates.
+
+This was a deliberate compromise in PLAN-138: leaf components (Editor, Input) mutate internal state without Container operations, so the tree must be fully dirtied to ensure their changes render. The caching was kept as scaffolding.
+
+* Options
+
+** Option A: Remove dead caching (simplify)
+Remove =#cachedLines=, =#cachedWidth=, cache check from =render()=, =markTreeDirty()= call from =#executeRender=. Keep =markDirty()= / =#parent= as public API. Update container-dirty tests that assert cache identity (=== same reference).
+
+** Option B: Enable caching via leaf dirty signaling (full fix)
+Add an optional =onDirty= callback mechanism: Container sets it on children during =addChild()=, leaf components call it when state changes. This lets specific subtrees stay clean when only one leaf changed. Requires touching Component interface or adding a convention for leaf components.
+
+* Decision needed
+Option A is simpler but loses the infrastructure. Option B delivers the original optimization but requires Component interface changes across coding-agent.
+
+* Related
+- PLAN-138 completion report documents this deviation
+- Audit AUD-039 finding #5

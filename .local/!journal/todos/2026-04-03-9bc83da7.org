@@ -1,0 +1,13 @@
+#+TITLE: Session 14ac7a38a249b21a Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Fix org sub-item resolution
+
+** DONE Verify the fix
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+Run org get with a :: sub-item ID to confirm resolution works

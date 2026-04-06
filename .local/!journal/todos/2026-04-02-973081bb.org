@@ -1,0 +1,16 @@
+#+TITLE: Session 14ab2753d85bac57 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run live Telegram verification
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:ORG_ITEM_ID: PLAN-092-fix-telegram-bot-empty-response-on-error
+:END:
+
+Verified with `bun /tmp/plan092-live-verify.ts /home/user/code/ora/growth/.spell hi`, `TMP_HOME=$(mktemp -d); HOME="$TMP_HOME" ANTHROPIC_API_KEY=invalid bun /tmp/plan092-live-verify.ts /home/user/code/ora/growth/.spell hi`, `bun test packages/spell-server/test/`, and `bun check:ts`. Closed FUP-031 and PLAN-092 truthfully.
+
+Completed with the real growth config after correcting ../growth/.spell/channels.kdl to use claude-sonnet-4-20250514 and fixing ResponseStreamer to ignore non-assistant message_end events. Verified both normal replies and invalid-key error replies through the full Telegram middleware stack.

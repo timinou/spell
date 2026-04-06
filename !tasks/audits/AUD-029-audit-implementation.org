@@ -1,0 +1,24 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-029-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Here's the breakdown:
+
+| Fix | Test needed? | Reason |
+|---|---|---|
+| 1. CHANGELOG | No | Documentation, no runtime contract |
+| 2. Wire `setCanvasTaskCount` | No | TUI plumbing in `EventController` which has zero existing unit tests — it requires a full `InteractiveModeContext` (TUI, containers, editor). The call is a one-liner setter before an existing `invalidate()`. No observable contract changed beyond "badge shows count." |
+| 3. Remove icon cast | No | Pure simplification. `""` → `""`. Identical output. |
+| 4. Merge imports | No | Cosmetic. Zero behavior change. |
+| 5. Deduplicate `durationMs` | **Already covered.** | Line 255: `expect(typeof bridge.sent[0].payload.durationMs).toBe("number")`. The test asserts `durationMs` is present and numeric. The fix doesn't change the contract — it makes both usages consistent. |
+
+The existing `canvas-task-tier.test.ts` (17 tests, 60 expects) already covers the `task_result` payload shape including `durationMs`, `model`, `tokens`, `ok`, `output`, and timeout behavior. The audit fixes were mechanical cleanups, not contract changes. Adding tests for "import order" or "badge setter gets called" would be placeholder tests per AGENTS.md guidance.
+
+The one arguable gap: no test proves `setCanvasTaskCount` is actually called during event processing. But `EventController` is untested infrastructure — its "test" is the running TUI. Adding a mock-heavy unit test for a one-liner setter call would be testing wiring, not a contract.

@@ -136,9 +136,7 @@ export class AutonomyStateTool implements AgentTool<typeof autonomyStateSchema, 
 	#sqlSchemas: Map<string, SqlStoreSchema> | undefined;
 
 	static createIf(_session: ToolSession): AutonomyStateTool | null {
-		return Bun.env.SPELL_AUTONOMY_STATE_DB || Bun.env.SPELL_AUTONOMY_STATE_STORES
-			? new AutonomyStateTool()
-			: null;
+		return Bun.env.SPELL_AUTONOMY_STATE_DB || Bun.env.SPELL_AUTONOMY_STATE_STORES ? new AutonomyStateTool() : null;
 	}
 
 	async execute(

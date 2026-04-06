@@ -1,0 +1,23 @@
+#+TITLE: Session 14aea8a22450ea7e Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Key Questions
+
+** DONE Find and summarize emacs_code tool implementation
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Find and summarize org tool's Emacs daemon management
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Find where tool ordering and descriptions are configured
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

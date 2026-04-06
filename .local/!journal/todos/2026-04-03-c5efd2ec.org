@@ -1,0 +1,23 @@
+#+TITLE: Session 14ac0d19f5a01fa2 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Investigation
+
+** DONE Map the existing Telegram bridge code
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Map existing STT and voice agent capabilities
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Research TTS options for voice responses
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

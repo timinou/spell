@@ -1,0 +1,54 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-040-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+So our commit did remove `resolveModelOverride` from the import. But the parent commit `e23920170` must have added it. This is fine — it was unused, and our commit cleaned it up incidentally. Not a bug.
+
+Let me now summarize findings.
+
+---
+
+## Audit Findings
+
+### 1. Stagger abort leaks task in `runningIds` (batch-scheduler)
+- **What**: When `signal.aborted` after the stagger sleep, `return` exits the async IIFE but the task remains in `runningIds` — never removed, never finished. The `finally` block at line 213 doesn't run because the `return` is outside the `try/catch/finally`.
+- **Where**: `packages/coding-agent/src/task/batch-scheduler.ts` line 175
+- **Why**: Orphaned task in `runningIds` blocks a concurrency slot. If this is the last task preventing batch completion, `scheduleBatch` hangs forever. In practice, this only triggers when the parent aborts mid-stagger, so `abortPendingTasks` handles *other* tasks, but this one stays orphaned.
+- **Effort**: `trivial` — move the stagger block inside the `try`, or add `runningIds.delete(nextId); finishTask(...)` before the `return`.
+
+### 2. Async stagger returns `undefined!` violating `Promise<string>` contract
+- **What**: `return undefined!` in the async job callback when aborted after stagger violates the `() => Promise<string>` signature. The job manager stores this as `resultText` (typed `string`), silently becoming `undefined` at runtime.
+- **Where**: `packages/coding-agent/src/task/index.ts` line 722
+- **Why**: Runtime type violation. The job manager's completion path stores `undefined` as a string. No crash currently because the abort path checks `job.status === "cancelled"` first, but it's fragile — any refactor that touches the cancellation order could surface this.
+- **Effort**: `trivial` — `return "Aborted during stagger delay"` or throw an error to let the catch handle it.
+
+### 3. `parentOwnedToolNames` is now dead code
+- **What**: `parentOwnedToolNames` is an empty `Set<string>()`. All three usage sites (lines 1063, 1121, 1168) do `.has()` or `.filter()` that always pass through. The variable, both filter operations, and the conditional branch at 1122-1123 are dead.
+- **Where**: `packages/coding-agent/src/task/executor.ts` lines 1063, 1121-1123, 1168
+- **Why**: Maintenance confusion. A reader expects filtering is happening. If we want to reserve the mechanism for future use, it should be commented. If not, remove it.
+- **Effort**: `small` — delete the variable and simplify the three call sites.
+
+### 4. `task` and `subtask` model roles share identical display name `"Subtask"`
+- **What**: `MODEL_ROLES.task` has `name: "Subtask"` and `MODEL_ROLES.subtask` has `name: "Subtask"`. In the settings UI, these are indistinguishable.
+- **Where**: `packages/coding-agent/src/config/model-registry.ts` lines 66-68
+- **Why**: User confusion in the settings UI — two roles with the same display name. The `task` role's name should probably be `"Task"` now that `subtask` exists.
+- **Effort**: `trivial` — rename `task.name` from `"Subtask"` to `"Task"`.
+
+### 5. CHANGELOG not updated
+- **What**: No entries added under `## [Unreleased]` in `packages/coding-agent/CHANGELOG.md` or `packages/utils/CHANGELOG.md` despite significant user-facing changes (new setting, changed default, new model role, spawn restriction, cost display).
+- **Where**: `packages/coding-agent/CHANGELOG.md`, `packages/utils/CHANGELOG.md`
+- **Why**: Violates repo convention (AGENTS.md: "New entries ALWAYS go under `## [Unreleased]` section"). Users won't know about the default change or new settings until they discover them.
+- **Effort**: `small`
+
+### 6. Stagger delay is multiplicative, not sequential
+- **What**: Stagger delay is `staggerMs * myLaunchIndex` (0, 800, 1600, 2400, ...) rather than a fixed gap between launches. With 8 concurrent tasks, the last one waits 5.6 seconds before starting.
+- **Where**: `packages/coding-agent/src/task/batch-scheduler.ts` line 174, `packages/coding-agent/src/task/index.ts` line 721
+- **Why**: For large batches this may over-stagger. A fixed inter-launch delay (each waits only `staggerMs` after the previous one starts) would keep total stagger bounded. But since pump launches all ready tasks synchronously and the delays are async, a fixed gap would require tracking the *actual* launch time of the previous task rather than a simple counter. Current approach works but is suboptimal for 5+ siblings.
+- **Effort**: `medium` — requires redesigning pump to track last-launch time rather than using index multiplication.

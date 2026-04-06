@@ -1,0 +1,17 @@
+#+TITLE: Session 14ac0e3466e812bd Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Trace image flow from RPC to Anthropic API
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Check what Content-Type Telegram returns for photos
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:

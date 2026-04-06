@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { WorkflowEngine } from "../../../spell-server/src/workflow";
-import { createApprovalInput } from "../../../spell-server/test/workflow/test-helpers";
 import { startWorkflowHttpServer } from "../../../spell-server/test/http/workflow-test-helpers";
+import { createApprovalInput } from "../../../spell-server/test/workflow/test-helpers";
 import { Settings } from "../../src/config/settings";
 import { createTools, type ToolSession } from "../../src/tools";
 import { fetchApprovalsToolView } from "../../src/tools/approvals-tool";

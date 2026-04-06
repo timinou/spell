@@ -1,0 +1,21 @@
+#+TITLE: Session 14ab27e96ef48f5c Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Closeout
+
+** DONE Run final verification and close plan
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_CMD: bun check:ts && bun test packages/spell-server/
+:GATE_LLM: Completion report lists exact verification, artifacts, and deviations; linked child items are reconciled truthfully; plan is moved to DONE only if verification passes.
+:VERIFY_CMD: bun check:ts && bun test packages/spell-server/
+:ORG_ITEM_ID: PLAN-093-harden-telegram-bridge-merge-aud-021
+:ORG_ITEM_CLOSING_ID: PLAN-093-harden-telegram-bridge-merge-aud-021
+:END:
+
+Run bun check:ts, bun test packages/spell-server/, and plan grep/doc checks. Update org child items and plan item with completion report, then commit only plan-related changes.
+
+Verification completed (`bun check:ts`, `bun test packages/spell-server/`, focused greps/tests). Child org items were moved to DONE, the plan item was updated with a completion report and moved to DONE, and commit `fbeefac93` records the implementation.

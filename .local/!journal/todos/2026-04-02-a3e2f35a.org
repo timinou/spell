@@ -1,0 +1,29 @@
+#+TITLE: Session 14ab1aa0b4b48f2e Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Full file inventory of telegram-bridge package
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Full file inventory of spell-server package
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Find all consumers of telegram-bridge outside the two packages
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Read channels KDL parser and example configs
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

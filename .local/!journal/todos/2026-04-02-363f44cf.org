@@ -1,0 +1,18 @@
+#+TITLE: Session 14aad70321e4d513 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Finalization
+
+** DONE Reverify and finalize PLAN-081
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:GATE_LLM: Plan record truthfully states that bun check:ts now passes and closure is final.
+:ORG_ITEM_ID: PLAN-081-enforce-tdd-ordering-in-plan-mode-prompt
+:END:
+
+Run repo-wide bun check:ts to confirm the previous blocker is resolved. If it passes, append that verification evidence to PLAN-081, keep child items/plan DONE, and commit only the corresponding org files if they changed.
+
+Verified: bun check:ts now passes in /home/user/code/ora/spell. PLAN-081 includes closure verification stating the blocker is resolved and the plan is fully verified. Final org update committed.

@@ -1,0 +1,15 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-030-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+- **What:** `runQuickFixTask()` still dereferences `pi.pi` before the runtime guard, so a missing `pi.pi` namespace throws a raw TypeError instead of the intended descriptive failure.
+  **Where:** `.spell/extensions/phoenix-inspector/index.ts`, `runQuickFixTask()` around the `const runtime = pi.pi as ...` / `runtime.runSubprocess` guard.
+  **Why:** The hardening only covers a missing `runSubprocess` method, not a missing `pi.pi` object. If the host runtime shape regresses further, Quick Fix will fail cryptically again and bypass the user-facing error path.
+  **Effort:** small

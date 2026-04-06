@@ -1,0 +1,81 @@
+#+TITLE: Session 14ac8e691fd97376 Todos
+#+DATE: 2026-04-04
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Design & Implementation
+
+** DOING Update task-policies loader to support KDL
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: in_progress
+:END:
+
+Modify loadTaskPolicies in task-policies.ts to try .kdl first, fall back to .yml. Single source of truth — no dual-format support at runtime.
+
+** ITEM Create spell init command
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: pending
+:END:
+
+New command: packages/coding-agent/src/commands/init.ts. Scaffolds .spell/ directory with task-policies.kdl template. Interactive layer/policy selection.
+
+** ITEM Create init CLI handler
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: pending
+:END:
+
+packages/coding-agent/src/cli/init-cli.ts — interactive onboarding flow that detects project type and generates appropriate KDL policies.
+
+** ITEM Register init command in CLI
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: pending
+:END:
+
+Add init command entry to packages/coding-agent/src/cli.ts
+
+** ITEM Add tests for KDL parser
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: pending
+:END:
+
+Test file: packages/coding-agent/test/config/task-policies-kdl.test.ts
+
+** ITEM Update existing policy tests for KDL format
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: pending
+:END:
+
+Update todo-write-policies.test.ts to use KDL format
+
+** ITEM Verify build and tests pass
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: pending
+:END:
+
+Run bun check:ts and the specific test files
+
+* Repo root: /home/user/code/ora/spell
+
+** DONE Assess partial implementation state
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: completed
+:END:
+
+** DONE Study KDL patterns in the codebase for design inspiration
+:PROPERTIES:
+:TASK_ID: task-12
+:STATUS: completed
+:END:
+
+** DONE Understand the discovery/config loading system
+:PROPERTIES:
+:TASK_ID: task-13
+:STATUS: completed
+:END:

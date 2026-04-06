@@ -1,0 +1,17 @@
+#+TITLE: Session 14ad78a42951f88e Todos
+#+DATE: 2026-04-04
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tests + Verification
+
+** DONE Full verification pass
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:DEPENDS: task-7
+:END:
+
+bun run build:bridge, bun test reconnect + classification, bun check:ts
+
+All gates passed. Committed as 20462b4fd.

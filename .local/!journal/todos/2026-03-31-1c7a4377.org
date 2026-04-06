@@ -1,0 +1,31 @@
+#+TITLE: Session 14a86e34ff16ec47 Todos
+#+DATE: 2026-03-31
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 2: Add completed count tracking and rendering
+
+** DONE Update niri types, controller, and overview component
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:DEPENDS: task-3
+:ORG_ITEM_ID: BUG-046-completed-tasks-vanish-from-niri-overvie
+:END:
+
+types.ts: add completedCount to TodoPhaseSnapshot
+controller.ts: build snapshot with completed counts, add phantom phases
+overview-component.ts: render completed counts in phase headers
+
+** DONE Wire getClearedCompletedCounts in interactive mode niri context
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:DEPENDS: task-5
+:ORG_ITEM_ID: BUG-046-completed-tasks-vanish-from-niri-overvie
+:ORG_ITEM_CLOSING_ID: BUG-046-completed-tasks-vanish-from-niri-overvie
+:END:
+
+interactive-mode.ts: add getClearedCompletedCounts to niri context
+
+bun check:ts passes. All 24 existing overview-component tests pass. getClearedCompletedCounts wired through interactive-mode → niri context → controller → overview.

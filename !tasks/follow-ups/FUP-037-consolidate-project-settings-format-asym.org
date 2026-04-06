@@ -1,0 +1,55 @@
+#+TITLE: Consolidate project settings format asymmetry
+#+STATE: ITEM
+#+SESSION_ID: 14ac7279914b4cdb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T18-21-57-189Z_14ac7279914b4cdb.jsonl]]
+#+CUSTOM_ID: FUP-037-consolidate-project-settings-format-asym
+#+EFFORT: 4h
+#+PRIORITY: #C
+#+LAYER: coding-agent
+#+DEPENDS: BUG-149-project-level-config-yml-not-loaded-by-s
+
+* Initial Message
+
+But wait — I'm in plan mode. I can't write files. I can only create org items and the plan. Let me focus on that.
+
+ Let me first research the Marketing Messages API since the user specifically asked for it, and check the existing webhook/media infrastructure.
+
+ Now I'm realizing the constraints: the workspace is read-only except for the plan file, and plan output needs to be org-native. So I'll structure this as org items across four phases, with each phase
+ containing its own projects and features—starting with template CRUD completion, moving through template composition and real-time status tracking, and finishing with AI strategist and analytics capabilities.
+ Looking at this scope, I realize I need to organize it more strategically. The user wants me to move forward with creating the plan, so let me group these into logical projects with features underneath rather
+ than listing everything flat. I should also quickly verify the Marketing Messages API details before finalizing the structure, but I'll start organizing the major work streams now.
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-hotelcomm-ecosystem-agentmaker/2026-04-03T18-04-03-154Z_14ac6e60b4b69f94.jsonl
+ ID: 14ac6e60b4b69f94
+
+
+
+
+my friend, the allowedFolders of the config does not seem to be registered by plan modes. Why?
+
+* Scope
+
+Currently project-level settings can come from multiple formats and locations:
+- =.spell/settings.json= (JSON, builtin provider)
+- =.spell/agent/config.yml= (YAML, builtin provider — added by BUG-149)
+- =.claude/settings.json= (JSON, claude provider)
+
+After BUG-149, the immediate pain point is fixed: project =config.yml= is read. But the broader design question remains: should there be a single canonical project settings format?
+
+** Potential consolidation
+- Deprecate =.spell/settings.json= in favor of =.spell/agent/config.yml= (matching global convention)
+- Add migration path (read =settings.json=, write =config.yml=, rename =settings.json= to =.bak=)
+- Update =Settings.#saveNow()= to optionally persist project-level changes to =.spell/agent/config.yml=
+- Update documentation and =spell init= to create =config.yml= not =settings.json=
+
+** Not urgent because
+- BUG-149 makes both formats work
+- Deep merge handles coexistence gracefully
+- No user-facing confusion after BUG-149 since the expected path works
+
+* Acceptance Criteria
+- Single canonical project settings file path documented
+- Migration from old format is automatic and non-destructive
+- =bun check:ts= passes

@@ -1,0 +1,60 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-036-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Good — `Node` is type-only import, `Document`/`format`/`parse` are value imports. All used correctly.
+
+Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. Silent degradation on malformed spell.kdl
+- **What**: If `spell.kdl` exists but has invalid KDL syntax, `loadSpellKdl` returns `undefined`, causing both `loadTaskPolicies` and `detectDomain` to silently fall through to legacy config files. The user's primary config file is broken but they get stale policies from `.spell/task-policies.kdl` or `.spell/task-policies.yml` without any obvious signal.
+- **Where**: `packages/coding-agent/src/config/spell-kdl.ts:127-128` — `parseSpellKdl` returns `undefined` for parse errors, which `loadSpellKdl` returns to callers as indistinguishable from "file doesn't exist"
+- **Why**: User writes `spell.kdl`, makes a typo, and silently gets old config. The warning goes to the log file, but the session behavior changes without explanation. Distinguishing "file absent" from "file broken" at the return boundary would let callers decide whether to fall through.
+- **Effort**: small
+
+### 2. Stale module docstring in task-policies.ts
+- **What**: Module-level JSDoc still says "Projects declare their layer vocabulary in `.spell/task-policies.kdl` (preferred) or `.spell/task-policies.yml`" — should now mention `spell.kdl` as the preferred/primary source.
+- **Where**: `packages/coding-agent/src/config/task-policies.ts:4-6`
+- **Why**: Misleads the next reader about where to configure policies.
+- **Effort**: trivial
+
+### 3. Duplicated `getStringArgument` helper
+- **What**: Identical `getStringArgument(node, index)` function exists in both `spell-kdl.ts:26` and `task-policies-kdl.ts:7`. Same signature, same body.
+- **Where**: `packages/coding-agent/src/config/spell-kdl.ts:26-29` and `packages/coding-agent/src/config/task-policies-kdl.ts:7-10`
+- **Why**: DRY violation. Two copies to maintain. Extract to a shared KDL utility or have `spell-kdl.ts` import the helpers from `task-policies-kdl.ts` (would require exporting them).
+- **Effort**: trivial
+
+### 4. `detectProject` swallows malformed package.json without checking other languages
+- **What**: When `package.json` exists but is malformed JSON, the catch branch returns `createUnknownProject(cwd)` immediately without checking for `Cargo.toml`, `go.mod`, etc. A project with both a broken `package.json` (e.g. leftover from `npm init`) and a `Cargo.toml` is detected as "unknown" rather than "rust".
+- **Where**: `packages/coding-agent/src/config/project-detection.ts:209-212`
+- **Why**: Edge case, but real in monorepos or projects that evolved from one language to another. The fix would be to `continue` to the next detection step instead of returning early.
+- **Effort**: small
+
+### 5. No test for arbitrary `--domain` value (non-growth)
+- **What**: Tests cover `--domain growth` and default `coding`, but not an arbitrary custom domain like `--domain ops`. The `selectTemplate` function returns `LANGUAGE_TEMPLATES[project.language]` for non-growth domains, so `spell init --domain ops` would produce `domain "ops"` with a language-specific import (e.g. `import "spell.coding.typescript"`), which is valid but potentially surprising.
+- **Where**: `packages/coding-agent/test/cli/init-command.test.ts`
+- **Why**: Untested behavior path. If someone passes `--domain marketing`, they'd get coding-language templates injected, which may not be what they want. At minimum, the behavior should be documented by a test.
+- **Effort**: trivial
+
+### 6. `loadSpellKdl` docstring incomplete
+- **What**: Docstring says "Returns undefined if the file doesn't exist" but it also returns undefined for I/O errors and for invalid KDL (via `parseSpellKdl` returning undefined). The contract is broader than documented.
+- **Where**: `packages/coding-agent/src/config/spell-kdl.ts:120-123`
+- **Why**: Callers can't distinguish "no file" from "broken file" — see finding #1. At minimum the doc should be truthful about all undefined paths.
+- **Effort**: trivial
+
+### 7. `generateAgentsMd` produces empty "## Development" section for unknown projects
+- **What**: When no toolchain commands are detected (unknown project), the AGENTS.md contains `## Development\n` with nothing under it, followed by `## Conventions`.
+- **Where**: `packages/coding-agent/src/cli/init-cli.ts:133-153`
+- **Why**: Minor polish — an empty section looks unfinished. Either omit it when there are no commands or add a placeholder comment.
+- **Effort**: trivial

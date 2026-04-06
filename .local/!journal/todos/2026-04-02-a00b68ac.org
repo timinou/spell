@@ -1,0 +1,16 @@
+#+TITLE: Session 14ab347017d5f8c3 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Create PLAN item and handoff
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:DEPENDS: task-2
+:END:
+
+Write self-contained PLAN item in plans category using org headings and child [[id:...]] links, then call exit_plan_mode.
+
+Created PLAN-094-channels-kdl-null-guidance with linked child items BUG-105, BUG-106, and BUG-107. Plan records the strict-KDL root cause, recommended no-compat approach, verification commands, and ordered execution waves.

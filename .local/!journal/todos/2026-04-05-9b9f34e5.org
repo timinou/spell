@@ -1,0 +1,35 @@
+#+TITLE: Session 14aea7e3cc1b142c Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Investigation
+
+** DONE Read server-parser.ts socket path default
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Read session-registry.ts write paths
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Read notification-sender.ts authorization change
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Read types.ts guard and integration test
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Read main.ts bridge init and barrel
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:

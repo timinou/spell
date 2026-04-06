@@ -1,0 +1,73 @@
+#+TITLE: Dashboard KDL schema for declarative panel layout
+#+STATE: ITEM
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-273-dashboard-kdl-schema-for-declarative-pan
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: config
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+The spell server frontend is hardcoded HTML. Every project using spell-server gets the same goal-status table regardless of what workflows, data, or operator actions it declares. There is no mechanism for a project's KDL config to influence what the dashboard shows.
+
+* Approach
+Add a =dashboard= block to the autonomy KDL schema that declares panels the frontend should render. The manifest parser learns to parse this block and the =/api/manifest= response includes it, so the frontend can auto-layout panels from config.
+
+** KDL Schema Addition
+
+#+begin_src kdl
+dashboard {
+  panel "approval-queue" type="approval-queue" {
+    title "Article Review Queue"
+    empty-message "No articles pending review"
+  }
+  panel "pipeline" type="status-table" {
+    title "Article Pipeline"
+    source "approvals"
+    columns "state" "title" "updatedAt" "linkedGoal"
+    group-by "state"
+  }
+  panel "downstream" type="job-tracker" {
+    title "Export & Delivery Jobs"
+    source "downstream-jobs"
+    group-by "kind"
+  }
+  panel "personas" type="data-card" {
+    title "Audience Personas"
+    source "personas"
+    fields "name" "summary" "goal" "challenge"
+  }
+  panel "sources" type="data-card" {
+    title "Content Sources"
+    source "sources"
+    fields "label" "kind" "value" "priority"
+  }
+}
+#+end_src
+
+** Manifest Types Extension
+- Add =DashboardConfig= and =DashboardPanel= types to =manifest/types.ts=
+- Add parsing in =manifest/parser.ts= for =dashboard= block
+- Serialize dashboard config into =/api/manifest= response
+- The frontend reads =manifest.dashboard.panels= and renders them
+
+** Sub-outline
+1. Define =DashboardConfig= / =DashboardPanel= types in =manifest/types.ts=
+2. Add =parseDashboardNode= to =manifest/parser.ts=
+3. Wire dashboard into =AutonomyManifest= and =toManifestJson=
+4. Add panel parsing for each supported panel type
+5. Test: manifest with dashboard block parses without error and serializes correctly
+
+** Scope
+- Files: =packages/spell-server/src/manifest/types.ts=, =packages/spell-server/src/manifest/parser.ts=, =packages/spell-server/src/http/routes/goals.ts=
+- Does NOT include frontend rendering (that is a separate item)
+- Does NOT include growth-specific KDL changes (that is a separate item)
+
+** Acceptance
+- =parseDashboardNode= correctly parses all panel types from KDL
+- =/api/manifest= response includes =dashboard= object with panels array
+- Unit test proves round-trip: KDL -> parse -> serialize -> panels match

@@ -1,0 +1,22 @@
+#+TITLE: Session 14ac5fb7fd936841 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execute
+
+** DONE Add unexpected event order to retry regex
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_CMD: bun test packages/ai/test/anthropic-retry.test.ts
+:END:
+
+packages/ai/src/providers/anthropic.ts line 539 — extend isTransientStreamParseError regex
+
+** DONE Add test case for event order error
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+packages/ai/test/anthropic-retry.test.ts — new test verifying the error is classified as transient

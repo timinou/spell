@@ -1,5 +1,5 @@
-import * as path from "node:path";
 import { Database } from "bun:sqlite";
+import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AutonomyManifest, NamedStateStore, StateSchema, StateSchemaTable } from "../manifest/types";
 

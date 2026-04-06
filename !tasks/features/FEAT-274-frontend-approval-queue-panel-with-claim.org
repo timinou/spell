@@ -1,0 +1,50 @@
+#+TITLE: Frontend approval queue panel with claim-based review
+#+STATE: ITEM
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-274-frontend-approval-queue-panel-with-claim
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: frontend
+#+DEPENDS: FEAT-273-dashboard-kdl-schema-for-declarative-pan
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+The spell server has a full approval workflow API (=/api/approvals=, claim/release/apply actions) but the web dashboard shows none of it. Operators must use Telegram or QML to review and approve articles. The web dashboard is the most accessible surface — it should be the primary operator tool.
+
+* Usefulness
+- Operators can review pending articles with title, summary, persona scores, and source provenance directly in the browser
+- Claim-based concurrency prevents two operators from approving the same item simultaneously
+- Available actions (approve-feed, approve-publication, reject, defer) are rendered as buttons per item
+- Audit trail (who did what when) is visible per approval item
+- Artifact attachments are linked
+- No Telegram or QML dependency for basic operations
+
+* Approach
+Add an ApprovalQueue component to the frontend SPA that polls =/api/approvals=, shows pending items, allows claim/release, and submits actions.
+
+** Sub-outline
+1. Add =fetchApprovals= and =fetchApprovalDetail= helpers to the frontend JS
+2. Build =ApprovalQueue= component: table of approval items with state badges, action buttons
+3. Build =ApprovalDetailView= component: full item detail with metadata, artifacts, audit log, action form
+4. Wire claim/release flow: claim on open, release on navigate away, visual indicator of claimed-by
+5. Wire action submission: POST to =/api/approvals/:id/actions= with actionId, actor, reason
+6. Add approval count badge to the main navigation/header
+7. Poll approvals alongside goals on the 10s interval
+8. Test: screenshot of approval queue with pending items, screenshot after applying an action
+
+** Scope
+- File: =packages/spell-server/src/http/frontend/index.html= (the single-file Preact SPA)
+- Uses existing API endpoints only (=/api/approvals=, =/api/approvals/:id=, claim, release, actions)
+- Does NOT modify any backend code
+- Does NOT add new API endpoints
+
+** Acceptance
+- Approval queue panel renders in the dashboard with correct item list
+- Clicking an approval shows detail view with metadata, artifacts, audit entries
+- Action buttons call the correct API endpoints and refresh state
+- Claimed items show visual indicator
+- Screenshot of approval queue view with at least one pending item

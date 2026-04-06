@@ -1,0 +1,23 @@
+#+TITLE: Session 14a9b7e5a8d61ac8 Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification and closeout
+
+** DONE Run verification and close plan
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_ARTIFACT: !tasks/plans/plan-artifacts/PLAN-067-consistent-domain-entry-contract/domain-growth-entry.png
+:GATE_CMD: bun check:ts
+:GATE_LLM: Verification section records exact commands and outcomes, required artifact exists, linked child items are reconciled truthfully, and only plan-related files are committed.
+:VERIFY_CMD: bun test packages/coding-agent/test/ && bun check:ts
+:DEPENDS: task-2
+:ORG_ITEM_ID: PLAN-067-consistent-domain-entry-contract
+:ORG_ITEM_CLOSING_ID: PLAN-067-consistent-domain-entry-contract
+:END:
+
+Run focused and required broader verification, collect required manual/UI evidence artifacts, update org completion report, reconcile linked org states, commit only plan-related files, and truthfully close PLAN-067-consistent-domain-entry-contract if all checks pass.
+
+Verified focused startup/CLI tests, bun check:ts, and full packages/coding-agent test suite; captured required growth UI artifacts; updated BUG-058, FEAT-178, and PLAN-067 org items to DONE with completion report; committed staged plan files as 688c02c80 (fix(coding-agent): unify domain startup entry contract).

@@ -1,0 +1,39 @@
+#+TITLE: Thread images through ExecutorOptions to task agent sessions
+#+STATE: ITEM
+#+SESSION_ID: 14ab5933cab1e881
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T21-53-03-274Z_14ab5933cab1e881.jsonl]]
+#+CUSTOM_ID: FUP-035-thread-images-through-executoroptions-to
+#+EFFORT: 2h
+#+PRIORITY: B
+#+LAYER: Runtime
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-028-audit-implementation:
+
+1. **What:** Quick Fix captures screenshots, but the backend discards them.
+   **Where:** `.spell/extensions/phoenix-inspector/inspector.qml` in `dispatchQuickFix()` and `.spell/extensions/phoenix-inspector/index.ts` in `runQuickFixTask()`.
+   **Why:** The “Include screenshot” affordance becomes misleading, and the task agent loses visual context for UI fixes.
+   **Effort:** small
+
+2. **What:** The new quick-fix backend depends on a non-contract `pi.pi.runSubprocess` API.
+   **Where:** `.spell/extensions/phoenix-inspector/index.ts` in `runQuickFixTask()` / task-tier handling.
+   **Why:** The focused tests pass because the harness stubs this method, but a real launch can fail if the host does not inject that exact runtime hook. That makes Quick Fix brittle outside the test harness.
+   **Effort:** medium
+
+3. **What:** Quick-fix error handling is not regression-tested.
+   **Where:** `.spell/extensions/phoenix-inspector/index.test.ts`, the new `dispatches canonical quick-fix tasks...` case only covers success.
+   **Why:** A failed task result could regress to stale or incorrect UI messaging without any test catching it.
+   **Effort:** small
+
+* Context
+~ExecutorOptions~ in ~packages/coding-agent/src/task/executor.ts~ has no ~images~ field. ~CanvasTaskManager~ and the Phoenix Inspector extension both receive screenshot images from QML windows but can only reference them as text notes in the assignment. The agent session itself supports images via ~prompt(text, { images })~, but the executor never passes them.
+
+* Scope
+- Add an optional ~images?: ImageContent[]~ field to ~ExecutorOptions~.
+- Thread images through to the initial ~session.prompt()~ call in ~runSubprocess~.
+- Update ~CanvasTaskManager~ to forward actual image data instead of appending a text note.
+
+* Acceptance
+- A task subagent launched with images receives them as image content blocks in its first prompt.
+- The Phoenix Inspector quick-fix dispatch can pass element screenshots to the task agent for visual context.

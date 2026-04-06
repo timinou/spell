@@ -1,0 +1,51 @@
+#+TITLE: Session 14ab6894eaa2d281 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Org authoring
+
+** DONE Create orchestration plan item
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+Create plans item with Context, Verification, and Execution Manifest sections using [[id:...]] links.
+
+Created PLAN-101-spell-growth-config-native-cutover with Context, Verification, and wave-based Execution Manifest. Incorporated advisory review feedback by making canonical goal API ownership explicit in PROJ-021 and first-party action registration explicit in PROJ-022.
+
+* Exit
+
+** DOING Run advisory review and exit
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: in_progress
+:END:
+
+Perform advisory review if possible, then call exit_plan_mode with the PLAN item id.
+
+Advisory review rerun after revisions; verdict is execution-ready with only non-blocking polish. Exiting plan mode next.
+
+* MetisGapAnalysis
+
+** BLOCKED Review cutover plan gaps
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: failed
+:END:
+
+* MetisGapAnalysisRetry
+
+** BLOCKED Return actionable planning gaps
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: failed
+:END:
+
+* DaedalusAdvisoryReview
+
+** DONE Review revised plan DAG
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: completed
+:END:

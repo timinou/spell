@@ -1,0 +1,25 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-022-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+- **What**: Owner IDs that appear in `owners` but not in a matching `user` block inherit an arbitrary non-owner user policy  
+  **Where**: `packages/spell-server/src/telegram/bot/auth.ts`, around `resolveFallbackUserConfig()` and `configuredUser ?? resolveFallbackUserConfig(config)`  
+  **Why**: The auth fix corrected `isOwner`, but an owner without an explicit `user` entry still gets the first configured user's `defaultMode` and `projects`. That makes owner behavior depend on unrelated map insertion order and can silently restrict or distort owner access. The new tests only assert `isOwner`, not the resolved config for this case.  
+  **Effort**: small
+
+- **What**: Local `.spell` discovery now suppresses all `fs.stat` failures instead of only falling back on “not found”  
+  **Where**: `packages/coding-agent/src/commands/server.ts`, `resolveDefaultConfigDir()` catch block  
+  **Why**: The planned contract was “fall back when `./.spell/` is absent”. The implementation also falls back on permission errors, transient I/O errors, and other unexpected stat failures, which can hide a broken project-local config and make `spell server` load the wrong config directory without telling the caller.  
+  **Effort**: trivial
+
+- **What**: The deferred ProcessManager-to-SessionManager unification is not truthfully recorded in the plan closeout artifacts  
+  **Where**: `!tasks/plans/PLAN-093-harden-telegram-bridge-merge-aud-021.org`, `** Completion [2026-04-02]` → `*** Deviations`; related follow-up `!tasks/follow-ups/FUP-030-unify-processmanager-onto-sessionmanager.org` was left outside the committed plan set  
+  **Why**: The completion report says `None.` under deviations even though the plan explicitly deferred `FUP-030`. That weakens audit traceability: a validator reading the committed plan record cannot reliably see which work was intentionally left outstanding.  
+  **Effort**: trivial

@@ -1,0 +1,23 @@
+#+TITLE: Session 14ac8c492f78e848 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Stack trace
+
+** DONE Trace handleAuditCommand and its prompt() call
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Trace slash command execution path and busy handling
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Understand steer() and followUp() APIs
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

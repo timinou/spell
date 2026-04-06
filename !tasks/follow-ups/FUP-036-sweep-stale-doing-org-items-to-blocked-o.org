@@ -1,0 +1,32 @@
+#+TITLE: Sweep stale DOING org items to BLOCKED or DONE
+#+STATE: ITEM
+#+SESSION_ID: 14ac498659bebe1a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-23-02-374Z_14ac498659bebe1a.jsonl]]
+#+CUSTOM_ID: FUP-036-sweep-stale-doing-org-items-to-blocked-o
+#+EFFORT: 30m
+#+PRIORITY: #C
+#+LAYER: backend
+
+* Initial Message
+
+the org get and search tools provide wrong ITEMs and not well ordered. PLease try the tool and tell me the querying improvements you'd make
+
+* Problem
+~40 PLAN-001/PLAN-002 items and 32 AUD-* items are stuck in DOING state permanently
+(zombie items from sessions that were never completed). These clutter every DOING
+query and dashboard inProgress list. They represent ~60% of DOING items (75 of 112).
+
+* Approach
+After the query improvements land (sub-heading filtering, sorting), do a one-time
+data sweep:
+1. Query =todo:DOING category:plans= with the new level=0 default
+2. Identify items older than 2 weeks with no SESSION_ID matching an active session
+3. Move ancient PLAN-001/PLAN-002 items to DONE (they were superseded)
+4. Move stale AUD-* items to DONE
+
+This is a data hygiene task, not a code change. Could also add a =stale= command
+or recency filter, but the one-time sweep is more practical.
+
+* Verification
+- =org dashboard= DOING count drops from ~112 to ~35-40 active items
+- No PLAN-001 or PLAN-002 items appear in DOING queries

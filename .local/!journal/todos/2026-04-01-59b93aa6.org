@@ -1,0 +1,20 @@
+#+TITLE: Session 14a99b0c44161ac1 Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification and closeout
+
+** DONE Run plan verification and close
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_CMD: bun check:ts && bun test packages/coding-agent/test/
+:GATE_LLM: Completion report truthfully lists verification, artifacts, and deviations; linked child items moved to DONE unless BLOCKED; plan moved to DONE only after evidence exists.
+:ORG_ITEM_ID: PLAN-064-growth-domain-boot-wiring
+:ORG_ITEM_CLOSING_ID: PLAN-064-growth-domain-boot-wiring
+:END:
+
+Fix post-verification regressions in domain startup behavior, re-run focused tests/manual checks, keep the plan/org record truthful, and only close if all required gates are actually green.
+
+Final verification is now green. `bun check:ts` passed, `bun test packages/coding-agent/test/` passed, the plan org item was updated with a final completion report and moved to DONE, and closeout changes were committed as `3db6b60b9 fix(coding-agent): finalize growth domain verification` after the earlier implementation commits.

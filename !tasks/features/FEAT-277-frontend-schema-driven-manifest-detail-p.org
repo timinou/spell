@@ -1,0 +1,48 @@
+#+TITLE: Frontend schema-driven manifest detail panel
+#+STATE: ITEM
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-277-frontend-schema-driven-manifest-detail-p
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: frontend
+#+DEPENDS: FEAT-273-dashboard-kdl-schema-for-declarative-pan
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+The manifest panel currently shows only "name, version, N setups, M goals" as a one-liner. The full manifest data (personas, sources, action descriptors, state stores, sandbox config, tool permissions) is already fetched but discarded. Operators and developers have no visibility into what the system is configured to do.
+
+* Usefulness
+- Shows configured personas with their goals, challenges, and keywords — operators understand who the audience is
+- Shows content sources with priorities — operators know where articles come from
+- Shows action descriptors — developers see what actions are registered
+- Shows setup details: domain, mode, timeout, tool permissions, sandbox write paths, state stores
+- Shows goal details: schedule expressions, next fire times, retry config, hooks
+- Makes the KDL configuration tangible without reading raw config files
+- When the dashboard KDL schema (FEAT-273) is available, this panel auto-adapts to declared panel types
+
+* Approach
+Replace the =ManifestPanel= one-liner with an expandable manifest detail view. Parse the existing manifest JSON response and render sections for each data category. When =dashboard= config exists in the manifest, use it to determine panel layout; otherwise fall back to a default layout derived from the manifest shape.
+
+** Sub-outline
+1. Build =ManifestDetailView= component with collapsible sections
+2. Render personas section: card per persona with goal/challenge/keywords
+3. Render sources section: table with label/kind/value/priority
+4. Render setups section: card per setup with domain, mode, timeout, tools, sandbox paths, state stores
+5. Render goals section: enhanced table with schedule, hooks, retry config, action descriptor
+6. Add action descriptors section if present
+7. If =manifest.dashboard= is present, use panel declarations to drive layout
+8. Test: screenshot of expanded manifest view showing all sections
+
+** Scope
+- File: =packages/spell-server/src/http/frontend/index.html=
+- Reads from existing =/api/manifest= response
+- Does NOT modify backend
+
+** Acceptance
+- Manifest panel expands to show all configured data sections
+- Each section renders structured data (not raw JSON dumps)
+- Collapsible sections default to collapsed except active/relevant ones

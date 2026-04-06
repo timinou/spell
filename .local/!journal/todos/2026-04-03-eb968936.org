@@ -1,0 +1,29 @@
+#+TITLE: Session 14ac791f73fb92d2 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Get exact types and interfaces needed
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Check if TUI has scrollable viewport primitives
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Get exact keybinding registration pattern
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Get ToolExecutionComponent constructor and ToolExecutionHandle interface
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

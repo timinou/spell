@@ -1,5 +1,5 @@
-import * as net from "node:net";
 import { afterAll, describe, expect, it } from "bun:test";
+import * as net from "node:net";
 import type { TelegramChannelConfig } from "../../src/config/types";
 import { SocketSessionRegistry } from "../../src/socket/session-registry";
 import type { BlockingEventPayload } from "../../src/socket/types";

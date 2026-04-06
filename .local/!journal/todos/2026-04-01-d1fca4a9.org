@@ -1,0 +1,41 @@
+#+TITLE: Session 14aa0b566674b0dd Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Investigation
+
+** DONE Inspect hanging session artifacts
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Read the referenced session JSONL files and nearby runtime logs to identify where execution stopped and whether tool calls or event streaming stalled.
+
+Reviewed all three referenced session transcripts plus delegated subagent session artifacts. Confirmed multiple delegated jobs reported model quota/usage-limit failures while parent sessions remained in async waiting state.
+
+* Diagnosis
+
+** DONE Trace hang cause in code
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:DEPENDS: task-1
+:END:
+
+Mapped session evidence to task async execution, await, async job manager, agent loop, and codex provider code. Parent task jobs are registered through AsyncJobManager; `await` only returns terminal statuses for completed/failed/cancelled jobs. In failing sessions, subagent children on the smol backend returned provider errors (`usage_limit_reached`) or stream termination without terminal completion, then submit_result reminder/retry logic retried, but the outer registered task never surfaced a clean failure and stayed visible as running.
+
+Confirmed root trigger was delegated subagents exhausting model quota (`usage_limit_reached`). Parent async jobs remained `running` because the failed subagent path did not cleanly transition the registered background task to a terminal failed state visible to `await`, so the parent kept reporting Still Running until the outer session was aborted.
+
+* Response
+
+** DONE Summarize cause with evidence
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:DEPENDS: task-2
+:END:
+
+Answered with concrete evidence from the parent sessions, delegated child session artifacts, and coding-agent async/task/provider code paths.
+
+User-facing explanation delivered: quota exhaustion on the smol backend was the trigger; the observed hang came from async delegated task failure not being surfaced as a terminal failed job, so `await` kept showing Still Running until abort.

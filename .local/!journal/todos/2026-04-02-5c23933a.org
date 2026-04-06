@@ -1,0 +1,17 @@
+#+TITLE: Session 14ab3808fd15f8c4 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 2
+
+** DONE Correct growth config and prove startup
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:VERIFY_CMD: spell server
+:ORG_ITEM_ID: BUG-107-correct-growth-channels-kdl-null-syntax
+:END:
+
+Update /home/user/code/ora/growth/.spell/channels.kdl to use #null, then prove startup from /home/user/code/ora/growth with spell server or the documented fallback, capture transcript artifact, and reconcile plan/org state.
+
+Growth channels.kdl was already at idle-timeout #null when inspected. Verified no bare null remained, found an existing spell server already running from /home/user/code/ora/growth on port 8787, and captured a non-destructive startup proof note plus duplicate-launch EADDRINUSE evidence showing channels.kdl no longer blocks startup.

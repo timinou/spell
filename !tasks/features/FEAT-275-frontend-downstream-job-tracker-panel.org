@@ -1,0 +1,45 @@
+#+TITLE: Frontend downstream job tracker panel
+#+STATE: ITEM
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-275-frontend-downstream-job-tracker-panel
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: frontend
+#+DEPENDS: FEAT-273-dashboard-kdl-schema-for-declarative-pan
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+After an article is approved, downstream jobs (feed delivery, CMS export, web repo export) are queued and executed asynchronously. Their status is available via =/api/downstream-jobs= but the frontend shows nothing about them. Operators have no way to know if a delivery failed, whether a retry is eligible, or what error occurred.
+
+* Usefulness
+- Operators see all downstream jobs grouped by kind (feed-delivery, publication-export)
+- Each job shows: status (QUEUED/RUNNING/SUCCEEDED/FAILED), linked approval item, retry eligibility
+- Failed jobs show error message from the last attempt
+- Attempt history is expandable per job (started, finished, error, artifact path)
+- Operators can visually confirm that approved articles actually got delivered/exported
+- Makes the "truthful execution" story from the growth README tangible in the UI
+
+* Approach
+Add a DownstreamJobs component that polls =/api/downstream-jobs=, groups by kind, shows status badges, and links back to approval items.
+
+** Sub-outline
+1. Add =fetchDownstreamJobs= helper
+2. Build =DownstreamJobsPanel= component: grouped table with status badges
+3. Build =DownstreamJobDetail= component: attempt history, error display, artifact links
+4. Link from approval detail view to related downstream jobs
+5. Test: screenshot showing job list with mixed statuses
+
+** Scope
+- File: =packages/spell-server/src/http/frontend/index.html=
+- Uses existing =/api/downstream-jobs= and =/api/downstream-jobs/:id= endpoints
+- Does NOT modify backend code
+
+** Acceptance
+- Downstream jobs panel renders with correct grouping by kind
+- Status badges use existing CSS classes (badge-success, badge-failed, badge-running, badge-pending)
+- Failed jobs show error text from last attempt
+- Attempt history is expandable

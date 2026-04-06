@@ -1,0 +1,35 @@
+#+TITLE: Session 14a9f25cfe92c1fc Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Debug latest inspector failure
+
+** DONE Inspect latest session trace
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Evidence: session line 24 launches via toolName 'canvas' with props {targetUrl, hasExplicitTarget, tidewaveMcpUrl}. No backendMode:'extension' is present in the recorded launch args.
+
+Completed. Session 14aa2187976e0fb1 shows canvas launch at line 24 without an explicit backendMode:'extension' override, unlike the earlier broken session. Given current CanvasTool augmentation, this launch should be treated as canvas-backed.
+
+** DONE Patch remaining inspector regression
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+Current code already forces backendMode:'canvas' for phoenix-inspector canvas launches. No further transport/backend patch was identified from the provided session excerpt alone.
+
+No additional code patch was required to answer the latest question. The specific regression under investigation for this session was the wrong launch backend; that issue is not evidenced in 14aa2187976e0fb1.
+
+** DONE Verify fresh launch behavior
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Verification source: session 14aa2187976e0fb1 line 24 canvas launch lacks backendMode:'extension'; earlier bad session explicitly included it.
+
+Completed by session inspection. This session is consistent with a canvas-backed launch path, not the earlier extension-backed mismatch.

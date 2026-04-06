@@ -1,0 +1,21 @@
+#+TITLE: Session 14aae0e4276d8b54 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Testing & verification
+
+** DONE Update existing tests for changed code
+:PROPERTIES:
+:TASK_ID: task-11
+:STATUS: completed
+:END:
+
+Update /status test, /btw test for done promise
+
+** DONE Run tests and type-check
+:PROPERTIES:
+:TASK_ID: task-12
+:STATUS: completed
+:END:
+
+bun test packages/telegram-bridge/, bun check:ts

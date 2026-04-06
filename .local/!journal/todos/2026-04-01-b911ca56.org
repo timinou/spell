@@ -1,0 +1,29 @@
+#+TITLE: Session 14a9c412e2dd6791 Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* integration
+
+** DONE Forward predecessor results
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/task/ && bun check:ts
+:ORG_ITEM_ID: FEAT-185-result-forwarding-to-dependent-task-suba
+:END:
+
+Implement FEAT-185 so completed predecessor results are included in dependent subagent task context.
+
+Completed predecessor blocker results now persist on delegated todo metadata and are injected into dependent subagent assignments through a dedicated prompt template. Verified with task tests and typecheck.
+
+** DONE Converge canvas fluid mode
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/integration/fluid-mode-display-guard.test.ts packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts && bun check:ts
+:ORG_ITEM_ID: FEAT-184-canvas-fluid-mode-convergence-with-unifi
+:END:
+
+Implement FEAT-184 by making canvas fluid mode emit canonical PlanWave todos and removing old execution-engine assumptions.
+
+Canvas fluid mode now uses the same canonical wave-based todo materialization and unified execution prompt path, with stale queue/coordinator wording removed. Verified with focused fluid-mode, prompt, and plan-to-todos tests plus typecheck.

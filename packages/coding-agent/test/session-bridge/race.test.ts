@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { raceWithBridge, type RaceResult } from "../../src/session-bridge/race";
 import type { SessionBridgeClient } from "../../src/session-bridge/client";
+import { raceWithBridge } from "../../src/session-bridge/race";
 import type { EventResponsePayload } from "../../src/session-bridge/types";
 
 /** Stub bridge client for testing */

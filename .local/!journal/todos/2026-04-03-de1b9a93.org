@@ -1,0 +1,23 @@
+#+TITLE: Session 14ac84f2a5326403 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Focus areas
+
+** DONE Map the mode system architecture
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Study plan mode as reference implementation
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Understand tool restriction mechanism
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

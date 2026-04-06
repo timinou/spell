@@ -1,0 +1,27 @@
+#+TITLE: Session 14ab40f1e1297c0f Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Design
+
+** DONE Define fix scope and acceptance
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+Non-overlapping child items defined for (1) intermediate Telegram stream restoration, (2) transcript persistence/log viewer integration, and (3) debug-terminal logging.
+
+Recommended approach chosen: spell-server-owned JSONL event transcript, not coding-agent session files, because only the server-owned event stream can preserve message_update/tool_execution_update history. Debug-terminal logging will be opt-in via --debug while preserving file logging.
+
+* Write Plan
+
+** DONE Create org child items and plan
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Plan body includes Context, Verification, and Execution Manifest with child links and dependency ordering.
+
+Created child items BUG-113-restore-telegram-intermediate-stream-eve, FEAT-241-persist-telegram-session-event-transcrip, FEAT-242-expose-spell-server-debug-logs-on-termin, and orchestration plan PLAN-097-restore-telegram-streaming-and-transcrip.

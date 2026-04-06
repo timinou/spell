@@ -1,0 +1,70 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-038-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+That confirms it. Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. Duplicate `#include` block in `socketserver.h`
+- **What**: Lines 2-9 and 10-15 are exact duplicates — `QJsonObject`, `QList`, `QLocalServer`, `QLocalSocket`, `QObject`, `functional` all appear twice. The `QTimer` include at line 8 is only in the first block, but the others are duplicated.
+- **Where**: `packages/qml/bridge/socketserver.h` lines 2-15
+- **Why**: Harmless at compile time (`#pragma once` protects the header itself, and compiler deduplicates includes), but it's messy — the next reader will wonder if something subtle is going on. Easy to confuse an edit tool that tries to insert new includes.
+- **Effort**: `trivial`
+
+### 2. Stale detection in `ensure()` fires `socket_disconnected` event + auto-reconnect as a side effect
+- **What**: When `ensure()` detects a stale socket (line 110: `this.#socket.destroy()`), the socket's `close` handler fires asynchronously. Since `#stopping` is false at that point, `wasUnexpected` is `true`, causing a `socket_disconnected` event to be dispatched to all listeners AND triggering `#autoReconnect`. This is double-reconnect: the `ensure()` caller is about to reconnect via `#doEnsure()`, while `#autoReconnect` also starts reconnecting.
+- **Where**: `packages/qml/src/qml-process.ts` lines 108-112 (stale path) vs lines 340-358 (close handler)
+- **Why**: Race condition. Two concurrent reconnection paths (`#doEnsure` from the `ensure()` call + `#autoReconnect` from the close handler) compete to create new sockets. The `#connectingPromise` guard only covers `ensure()` calls, not `#autoReconnect`. This could lead to multiple sockets being created, or the `#autoReconnect` succeeding and then `#doEnsure` overwriting the socket reference. In practice the `#connectingPromise` guard would cause `#doEnsure` to dedup if `ensure()` is called again, but the first stale-triggered `ensure()` has already entered `#doEnsure` before `#autoReconnect` starts.
+- **Effort**: `small` — set `this.#stopping = true` temporarily or add a `#staleDisconnect` flag so the close handler skips auto-reconnect when the disconnect was initiated by stale detection.
+
+### 3. `kill()` method doesn't abort in-flight auto-reconnect
+- **What**: `kill()` sets `#stopping = true` and destroys the socket, but doesn't abort `#reconnectAbort` or await `#reconnectPromise`. If auto-reconnect is running when `kill()` is called, it will continue attempting to reconnect in the background.
+- **Where**: `packages/qml/src/qml-process.ts` lines 595-606
+- **Why**: Resource leak after `killDaemon()`. Not severe since `#stopping` prevents new connections, but the reconnect loop remains active with timers. Same pattern as the `dispose()` fix but missing from `kill()`.
+- **Effort**: `trivial`
+
+### 4. `destroy_systray` doesn't clear `m_systrayOwner`
+- **What**: When `destroy_systray` command is dispatched, the systray is destroyed and `m_systray` nulled, but `m_systrayOwner` retains the client pointer. If the systray is later re-created by a different client, `m_systrayOwner` still holds the old client.
+- **Where**: `packages/qml/bridge/windowmanager.cpp` lines 152-157
+- **Why**: Low impact — `create_systray` sets `m_systrayOwner` when `!m_systray`, so re-creation resets it. But the stale pointer is technically dangling if the old client disconnects between destroy and re-create. Same applies to unregister_hotkey vs `m_hotkeyOwner`.
+- **Effort**: `trivial`
+
+### 5. `lockPath()` and `#releaseSpawnLock()` use `QmlProcess.socketPath()` (static) while `#connectSocket` uses `#resolvedSocketPath`
+- **What**: The spawn lock acquires/releases using `QmlProcess.lockPath()` which reads `QmlProcess.socketPath()` — the same static method that tests override. If the static method is overridden between acquire and release, the lock is orphaned. The instance-cached `#resolvedSocketPath` was added to fix this exact class of bug for connections, but the lock path still reads from the static method.
+- **Where**: `packages/qml/src/qml-process.ts` lines 94-96 (lockPath), 472 (acquire), 508 (release)
+- **Why**: In production this is not an issue (socketPath doesn't change). But it's an inconsistency in the test safety design — lock files in test tmpDirs can be orphaned if the override is restored between acquire and release. Since `#spawnDaemon` acquires and releases in a try/finally before the override is restored, this is not currently triggerable. Defensive improvement.
+- **Effort**: `small`
+
+### 6. `#dispatchEvent` is a near-exact duplicate of the loop in `#dispatch`
+- **What**: `#dispatchEvent` (lines 438-445) is identical to the listener loop in `#dispatch` (lines 428-434) except for the error log message string. The only reason `#dispatch` exists separately is to parse JSON first.
+- **Where**: `packages/qml/src/qml-process.ts` lines 420-445
+- **Why**: Maintenance cost — any change to listener dispatch semantics (e.g., adding a guard, changing iteration order) must be applied to both. Could be refactored so `#dispatch` calls `#dispatchEvent` after parsing.
+- **Effort**: `trivial`
+
+### 7. `#spawnDaemon` retry loop uses `Bun.sleep` (ref'd) while `#autoReconnect` uses `unrefSleep`
+- **What**: The spawn daemon retry delays (line 181: `await Bun.sleep(delay)`) use standard `Bun.sleep` which keeps the event loop alive. This is intentional since `#spawnDaemon` is always called from an explicit `ensure()` call (the caller is waiting). However, if `#spawnDaemon` throws and the test process tries to exit, these sleeps would delay exit for up to 1.2s. The same issue that caused the daemon-stderr test isolation problem.
+- **Where**: `packages/qml/src/qml-process.ts` line 181
+- **Why**: Minor — the daemon stderr tests were already moved to a separate file for this reason. But if new code paths call `#spawnDaemon` in a background context, it could resurface.
+- **Effort**: `trivial`
+
+### 8. No test for auto-reconnect success path
+- **What**: The tests cover socket_disconnected dispatch and concurrent ensure, but no test verifies that auto-reconnect actually succeeds in re-establishing a connection (the plan's test #2: "auto-reconnects with backoff after socket close — verify ensure() returns 'existing' after auto-reconnect completes").
+- **Where**: `packages/qml/test/reconnect.test.ts`
+- **Why**: The auto-reconnect success path is the most critical new behavior. Without a test, a regression (e.g., the reconnect loop silently failing) would go undetected. The current disconnect test only verifies the synthetic event is dispatched, not that the reconnection succeeds.
+- **Effort**: `medium` — requires a fake daemon that restarts on a new socket or the same path after disconnect, and verification that `ensure()` returns `"existing"` after reconnect.
+
+### 9. No test for stale detection triggering reconnect
+- **What**: The 90s heartbeat staleness check in `ensure()` (line 108) has no test coverage. If someone changes `HEARTBEAT_TIMEOUT_MS` or breaks the `#lastDataReceived` update, there's no safety net.
+- **Where**: `packages/qml/test/reconnect.test.ts`
+- **Why**: The stale detection path is the primary consumer of the heartbeat feature — it's how the system detects a zombie socket. Without a test, the heartbeat feature has no end-to-end verification of its purpose.
+- **Effort**: `small` — can be tested by constructing a QmlProcess, connecting, manually setting `#lastDataReceived` to the past (or just sleeping > HEARTBEAT_TIMEOUT_MS with a short override), and verifying `ensure()` creates a new connection.

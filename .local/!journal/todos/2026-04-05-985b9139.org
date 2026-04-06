@@ -1,0 +1,13 @@
+#+TITLE: Session 14af0fd1cab1e304 Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification & Commit
+
+** DONE Run all verification checks and commit
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: completed
+:END:
+
+Type check, tests, grep for stale references, org lifecycle

@@ -1,0 +1,34 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-037-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+`Document` is correctly a type-only import and used only in a type annotation for a `let` declaration. Good — no issue here.
+
+---
+
+Here are my audit findings:
+
+### 1. `parseSpellKdl` return type is stale — promises `undefined` it never delivers
+* **What**: `parseSpellKdl` signature declares `SpellProjectConfig | undefined` but no code path returns `undefined` anymore. The catch block was changed to return an empty config, and the happy path always returns a populated config. The `| undefined` is dead type surface.
+* **Where**: `packages/coding-agent/src/config/spell-kdl.ts:32`
+* **Why**: Contract lie. Callers use `!` non-null assertions and `?.` optional chaining on a value that's never nullable. The next reader sees `| undefined` in the type and either (a) adds defensive checks for a case that can't happen, or (b) misunderstands the function's guarantees. In `detection.ts:60`, `spellConfig?.domain` operates under false uncertainty.
+* **Effort**: `trivial` — remove `| undefined` from the return type; callers only become simpler (less `!`, less `?.`). `loadSpellKdl`'s own `| undefined` stays correct since it has its own `return undefined` paths.
+
+### 2. `parseSpellKdl` JSDoc does not document the new empty-config-on-error behavior
+* **What**: The JSDoc (lines 26-31) describes import resolution and merge semantics but says nothing about what happens on parse failure. The `loadSpellKdl` JSDoc was correctly updated to document both outcomes, but `parseSpellKdl`'s JSDoc was not. Since `parseSpellKdl` is the function whose behavior actually changed, this is a gap.
+* **Where**: `packages/coding-agent/src/config/spell-kdl.ts:26-31`
+* **Why**: A reader looking at `parseSpellKdl`'s doc to understand its contract gets no indication that invalid KDL returns an empty config rather than `undefined` (especially confusing given the stale `| undefined` in the return type).
+* **Effort**: `trivial`
+
+### 3. `detectDomain` double-parses KDL content with no explanatory comment
+* **What**: `detectDomain` calls `parse(spellKdlContent)` (line 54) to pre-validate syntax, then calls `parseSpellKdl(spellKdlContent)` (line 59) which internally calls `parse()` again. The pre-check exists to distinguish "broken KDL" (return "coding") from "valid KDL with no domain" (fall through to domain.json), which is a legitimate distinction. But there's no comment explaining *why* this double-parse is necessary.
+* **Where**: `packages/coding-agent/src/domain/detection.ts:52-60`
+* **Why**: Without a comment, the next reader sees two `parse()` calls on the same content and either (a) removes the "redundant" pre-check (reintroducing the bug), or (b) wastes time understanding the subtlety. A two-line comment would make the intent survivable.
+* **Effort**: `trivial`

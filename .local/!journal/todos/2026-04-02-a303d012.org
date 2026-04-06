@@ -1,0 +1,35 @@
+#+TITLE: Session 14aac41d9c96dc71 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Goal\nUpdate 5 BUG org items for PLAN-078 to ultraplan standard. Each subagent updates one item via `org update` with full body replacement.\n\n## Constraints\n- Use `org update` with `body` param to replace entire body\n- Strip all duplicated audit dump from bodies\n- For BUG-078 and BUG-080: also clear DEPENDS property via `org set` with property DEPENDS value empty string\n- Bodies use org-mode syntax: `*` headings, `~code~` for inline code, `#+begin_src` blocks\n- Sub-outline IDs use `PARENT-ID::sub-slug` format in PROPERTIES drawers
+
+** DONE Rebuild BUG-077 body to ultraplan standard
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Rebuild BUG-078 body and clear DEPENDS
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Rebuild BUG-079 body to ultraplan standard
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Rebuild BUG-080 body and clear DEPENDS
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Rebuild BUG-081 body to ultraplan standard
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:

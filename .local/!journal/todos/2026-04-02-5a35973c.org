@@ -1,0 +1,14 @@
+#+TITLE: Session 14aaceaf5904723a Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run tests and type check
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+98 tests pass. biome check clean. tsgo shows only pre-existing errors (sdk.ts:2141 null/undefined, spellcast/discovery.ts:41 Dirent).

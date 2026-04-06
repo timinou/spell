@@ -1,0 +1,37 @@
+#+TITLE: Growth project dashboard KDL configuration
+#+STATE: ITEM
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-279-growth-project-dashboard-kdl-configurati
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: config
+#+DEPENDS: FEAT-273-dashboard-kdl-schema-for-declarative-pan
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+The growth project's KDL config has placeholder files for QML layouts, panels, and sync (=.spell/qml/layouts.kdl=, =.spell/qml/panels.kdl=, =.spell/qml/sync.kdl=) but no dashboard configuration. Once the dashboard KDL schema exists, growth should declare its desired dashboard layout.
+
+* Usefulness
+- Growth project gets a tailored dashboard showing its specific panels: article review queue, persona breakdown, source list, export tracker
+- Other projects using spell-server can declare different dashboards
+- Dashboard configuration is version-controlled alongside the workflow config
+
+* Approach
+Add =dashboard= block to growth's =.spell/autonomy.kdl= (or a new =.spell/dashboard.kdl= imported by autonomy) that declares panels specific to the growth workflow.
+
+** Sub-outline
+1. Add =dashboard= block declaring: approval-queue, downstream jobs, personas data-card, sources data-card
+2. Import from autonomy.kdl if in a separate file
+3. Test: spell server starts and manifest includes dashboard config
+
+** Scope
+- Files: =../growth/.spell/autonomy.kdl= (or new =../growth/.spell/dashboard.kdl=)
+- Does NOT modify spell-server code
+
+** Acceptance
+- Growth KDL contains dashboard block with panel declarations
+- Manifest endpoint returns dashboard config when server runs against growth project

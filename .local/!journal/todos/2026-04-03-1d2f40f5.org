@@ -1,0 +1,17 @@
+#+TITLE: Session 14abfd6c4ce4ae1f Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Find all Telegram-related files and code
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Research grammY typing indicators and streaming
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:

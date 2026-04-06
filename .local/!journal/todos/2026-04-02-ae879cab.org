@@ -1,0 +1,11 @@
+#+TITLE: Session 14ab1285ae9bac4d Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Investigation
+
+** DONE Map RPC event types and streamer consumption
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:

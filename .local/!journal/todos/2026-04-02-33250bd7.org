@@ -1,0 +1,20 @@
+#+TITLE: Session 14ab43ea16297c10 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Finish
+
+** DONE Verify close org and commit
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_LLM: Plan completion report truthfully records verification, artifacts, and deviations; linked org items are reconciled before marking the plan done.
+:VERIFY_CMD: bun test packages/spell-server/test/telegram/bridge.test.ts && bun test packages/spell-server/test/telegram/process-manager.test.ts && bun test packages/spell-server/test/telegram/log-viewer.test.ts && bun test packages/coding-agent/test/server-command.test.ts
+:DEPENDS: task-1 task-2 task-3
+:ORG_ITEM_ID: PLAN-097-restore-telegram-streaming-and-transcrip
+:END:
+
+Run required focused tests, collect artifacts/evidence, append plan completion report, reconcile org states, and commit only plan-related changes.
+
+Ran the full focused verification sweep, captured plan artifacts, reconciled org item states to DONE, and committed the plan changes as `fix(spell-server): restore telegram streaming transcripts`.

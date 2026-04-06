@@ -1,0 +1,13 @@
+#+TITLE: Session 14ad5689fa8d89bc Todos
+#+DATE: 2026-04-04
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run all verification tests and type check
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:DEPENDS: task-1 task-2 task-3
+:END:

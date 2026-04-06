@@ -1,0 +1,17 @@
+#+TITLE: Session 14af1c375c996e80 Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Fix audit findings
+
+** DONE Fix all 6 audit findings across 4 files
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+1. pi-treesit.el: add section to unwrap, fix TOML table name, nil-safe pair clause
+2. test-outline.el: fix paren nesting
+3. index.test.ts: add code to core tier
+4. code.ts: collapse double JSON.parse, remove safeText

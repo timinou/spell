@@ -1,0 +1,24 @@
+#+TITLE: Session 14ad78a6941973a3 Todos
+#+DATE: 2026-04-04
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Fix parseSpellKdl return type, JSDoc, and detection.ts comment
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+1. spell-kdl.ts: remove `| undefined` from return type, update JSDoc
+2. detection.ts: add double-parse comment, change `?.` to `.`
+3. Test files: remove `!` and `toBeDefined()` in parseSpellKdl tests
+
+** DONE Verify all tests and type checks pass
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+Run bun check:ts and all specified test files

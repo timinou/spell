@@ -1,0 +1,56 @@
+#+TITLE: Session 14aa280ba5c21ae8 Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Implement foundation schema changes
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:DEPENDS: task-1
+:END:
+
+Verified with `bun test packages/coding-agent/test/task/schema-extensions.test.ts` and `bun test packages/coding-agent/test/discovery/agent-fields.test.ts`. `bun check:ts` currently fails outside the modified foundation files.
+
+Completed FEAT-196 foundation changes: task schemas now expose blockers/phase, AgentDefinition and frontmatter parsing expose roster, quick_task defaults roster=false, bundled agent frontmatter template and agent export preserve roster=false, and task tool prompt documents phase/blockers. Focused verification passed. Repo-wide `bun check:ts` is currently blocked by pre-existing unrelated issues in packages/coding-agent/src/sdk.ts, packages/coding-agent/src/spellcast/tarball.ts, and packages/ai/src/utils/oauth/index.ts.
+
+** DOING Implement scheduler and settings
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: in_progress
+:DEPENDS: task-2
+:END:
+
+Add a DAG-aware batch scheduler, wire it into sync/async task execution, add task.autoRoster settings and prompt-context plumbing, and keep suppression logic aligned with the upcoming auto-roster bridge.
+
+Starting FEAT-199/FEAT-200. Proceeding sequentially because scheduler, suppression, and later auto-roster bridge all converge in TaskTool.execute; parallel edits would overlap on the same execution path and increase rework risk. I will still isolate reusable pieces where file scopes permit.
+
+** ITEM Implement task auto-roster bridge
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: pending
+:DEPENDS: task-3
+:END:
+
+Wire task dispatch to auto-create delegated todo entries, add lifecycle/cancellation handling, and integrate session-level serialization.
+
+** ITEM Update prompts and docs wiring
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: pending
+:DEPENDS: task-4
+:END:
+
+Adjust plan/task prompts or guidance to use task-first auto-roster flow without manual todoRef ceremony.
+
+* Verification
+
+** ITEM Run focused verification and close plan
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: pending
+:DEPENDS: task-5
+:END:
+
+Execute planned tests and manual verification, update org completion report and child states, stage only plan files, and commit truthfully.

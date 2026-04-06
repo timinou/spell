@@ -1,0 +1,23 @@
+#+TITLE: Session 14aee9d600539be3 Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Background
+
+** DONE Map all error propagation paths in the codex websocket provider
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Investigate crash logging and process exit handling
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Trace how API errors propagate through the agent session loop
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

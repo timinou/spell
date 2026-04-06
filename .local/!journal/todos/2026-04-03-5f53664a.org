@@ -1,0 +1,17 @@
+#+TITLE: Session 14abf9347ccc8ab5 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Trace how canvas tool handles QML bridge messages
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Trace the extension's event loop and message handling in phoenix-inspector index.ts
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:

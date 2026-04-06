@@ -1,0 +1,13 @@
+#+TITLE: Session 14ac1e06b73b8ca4 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Create org items for spell-deploy plan
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Create FEAT items for each component, then PLAN item with execution manifest

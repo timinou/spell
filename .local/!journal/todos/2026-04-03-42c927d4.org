@@ -1,0 +1,23 @@
+#+TITLE: Session 14ac30ed20bb8cd1 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Read push.ts, pull.ts, ssh.ts, rsync.ts, watcher.ts
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Read barrel, cli/types, bundle/types, secrets/push, service/lifecycle, service/systemd
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Read existing tests that cover the affected functions
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

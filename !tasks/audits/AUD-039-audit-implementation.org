@@ -1,0 +1,58 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-039-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Found a bug. Here's the audit:
+
+---
+
+## Audit Findings
+
+### 1. BUG: `requestRender(force=true)` silently dropped when throttle timer is pending
+- **What**: When a throttled render is pending (`#renderRequested = true`, throttle timer running), calling `requestRender(force=true)` clears the timer but then hits `if (this.#renderRequested) return` on line 639 — the force render is never scheduled. The cleared timer means NO render fires at all until the next `requestRender` call.
+- **Where**: `packages/tui/src/tui.ts` line 639
+- **Why**: Resize during subagent execution (the exact scenario in the plan) can lose a frame entirely. This is likely what the user is seeing — the niri overview toggle triggers a resize → `requestRender(true)` → dropped because a throttled render was pending → screen corruption until next event.
+- **Effort**: `trivial` — move `if (this.#renderRequested) return` BEFORE the `if (force)` block, or reset `#renderRequested = false` inside the force block before the guard.
+
+### 2. `render-scheduling.test.ts` settle still uses `Bun.sleep(delayMs)` with default 20ms
+- **What**: The settle function in render-scheduling.test.ts uses `Bun.sleep(delayMs)` (default 20ms) while render-regressions and overlay-scroll were properly converted to setImmediate-based settle. This is the exact pattern the user called out as shoddy.
+- **Where**: `packages/tui/test/render-scheduling.test.ts` line 41-44
+- **Why**: Flaky tests, inconsistency across test files, unnecessary wall-clock delay.
+- **Effort**: `trivial`
+
+### 3. `render-scheduling.test.ts` uses unnecessary `as unknown as TUIConstructor` cast
+- **What**: `createTUI()` casts `TUI as unknown as TUIConstructor` to pass the options object. The TUI constructor now accepts `boolean | { ... }` natively, making the cast dead code.
+- **Where**: `packages/tui/test/render-scheduling.test.ts` lines 5-10, 36-39
+- **Why**: Type safety bypassed unnecessarily; the `TUIOptions` type and `TUIConstructor` type are dead declarations.
+- **Effort**: `trivial`
+
+### 4. `container-dirty.test.ts` uses unnecessary `DirtyContainer` cast
+- **What**: `withDirtyApi()` casts Container to `DirtyContainer` to access `markDirty()`. But `markDirty()` is a public method on Container now — no cast needed.
+- **Where**: `packages/tui/test/container-dirty.test.ts` lines 24-30
+- **Why**: Dead type declarations, unnecessary indirection in test code.
+- **Effort**: `trivial`
+
+### 5. `markTreeDirty()` makes Container caching dead infrastructure
+- **What**: `#executeRender()` calls `markTreeDirty()` every frame, marking ALL Containers dirty. The `#dirty`/`#cachedLines`/`#cachedWidth` caching logic in `Container.render()` never returns cached because everything is always dirty when render executes. The caching fields and logic are dead weight.
+- **Where**: `packages/tui/src/tui.ts` lines 176-178, 236-247
+- **Why**: ~20 lines of caching infrastructure that never activates. Increases cognitive load for next maintainer who expects caching to work. The deviation is documented, but the code doesn't earn its keep currently.
+- **Effort**: `small` — either remove the caching (simplify) or add leaf-component dirty signaling to actually enable it (medium).
+
+### 6. No test for force=true while throttle timer pending
+- **What**: The "force=true bypasses throttle" test calls force immediately after initial render, but doesn't test the specific scenario where a non-force `requestRender()` already has a throttle timer running and then `requestRender(true)` arrives. This is the exact path with the bug in finding #1.
+- **Where**: `packages/tui/test/render-scheduling.test.ts` (missing test)
+- **Why**: The bug in finding #1 would have been caught by this test.
+- **Effort**: `small`
+
+### 7. `stop()` test viewport comparison is fragile
+- **What**: "stop clears pending throttle timer" compares `visible(term)` before and after `stop()`. But `stop()` writes cursor movement + `\r\n` + show cursor escape sequences to the terminal, which can shift viewport content.
+- **Where**: `packages/tui/test/render-scheduling.test.ts` lines 219-227
+- **Why**: The test passes now but could break if stop's cursor-positioning logic changes. The assertion should check that "after stop" content does NOT appear, not that the viewport is identical.
+- **Effort**: `trivial`

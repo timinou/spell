@@ -1,0 +1,15 @@
+#+TITLE: Session 14ac218d4e10850d Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Full verification and org lifecycle
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:DEPENDS: task-4
+:END:
+
+Run all tests, bun check:ts, update org items, commit

@@ -1,0 +1,20 @@
+#+TITLE: Session 14aad8a43944723f Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* VerificationAndCloseout
+
+** DONE Run focused verification and close org items
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_CMD: bun test packages/coding-agent/test/task/ && bun check:ts
+:GATE_LLM: Completion report must list exact commands, outcomes, artifacts or file references, and deviations truthfully before closing org items.
+:VERIFY_CMD: bun test packages/coding-agent/test/task/ && bun check:ts
+:ORG_ITEM_ID: PLAN-083-harden-auto-roster-sanitization-after-pl
+:END:
+
+Run task-focused tests and bun check:ts, update BUG-085, BUG-086, PLAN-079, and PLAN-083 org items truthfully, then commit only plan-related files.
+
+Required gate rerun passed: `bun test packages/coding-agent/test/task/ && bun check:ts`. PLAN-083 updated from BLOCKED to DONE with final verification update, then committed as `chore(tasks): close PLAN-083 after verification` (8847fc2d9).

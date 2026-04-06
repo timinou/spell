@@ -1,0 +1,16 @@
+#+TITLE: Session 14ac87c7ba72640a Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Create explore MODE.md and wire builtin mode loading
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+1. Create packages/coding-agent/src/modes/builtins/explore/MODE.md with frontmatter (name, readOnly, command)
+2. Modify packages/coding-agent/src/discovery/builtin.ts to scan builtins dir
+3. Verify bun check:ts passes

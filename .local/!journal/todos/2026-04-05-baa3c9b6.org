@@ -1,0 +1,11 @@
+#+TITLE: Session 14ae9ae908b4793b Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Investigate journal/roster file structure for per-agent isolation
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:

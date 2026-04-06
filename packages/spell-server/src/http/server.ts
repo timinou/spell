@@ -1,8 +1,8 @@
 import { logger } from "@oh-my-pi/pi-utils";
-import type { StateStoreManager } from "../state/store-manager";
 import type { GoalExecutionController } from "../executor/goal-executor";
 import type { AutonomyManifest } from "../manifest/types";
 import type { GoalScheduler } from "../scheduler/goal-scheduler";
+import type { StateStoreManager } from "../state/store-manager";
 import type { WorkflowEngine } from "../workflow/engine";
 import { verifyBasicAuth } from "./auth";
 import frontendHtml from "./frontend/index.html" with { type: "text" };
@@ -116,7 +116,14 @@ async function handleApiRoute(request: Request, path: string, deps: SpellServerD
 		if (segments.length === 5 && tableSegment === "tables" && request.method === "GET" && storeName && tableName) {
 			return handleQueryTable(storeName, tableName, request, stateStoreManager);
 		}
-		if (segments.length === 6 && tableSegment === "tables" && action === "count" && request.method === "GET" && storeName && tableName) {
+		if (
+			segments.length === 6 &&
+			tableSegment === "tables" &&
+			action === "count" &&
+			request.method === "GET" &&
+			storeName &&
+			tableName
+		) {
 			return handleTableCount(storeName, tableName, stateStoreManager);
 		}
 		return Response.json({ error: "Not found" }, { status: 404 });

@@ -1,0 +1,17 @@
+#+TITLE: Session 14ac7279914b4cdb Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Key paths
+
+** DONE Find existing settings and plan-mode-guard tests
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Trace the full Settings.init() flow
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:

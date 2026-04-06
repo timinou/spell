@@ -1,9 +1,9 @@
-import type { OperatorAction } from "../manifest/types";
 import type {
 	OperatorActionHandler,
 	OperatorActionRequest,
 	OperatorActionResult,
 } from "../http/routes/operator-actions";
+import type { OperatorAction } from "../manifest/types";
 import type { WorkflowEngine } from "./engine";
 import type { WorkflowActionDefinition } from "./types";
 

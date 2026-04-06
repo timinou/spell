@@ -1,0 +1,35 @@
+#+TITLE: Session 14a9910ffe5df734 Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Verify org wave failure design
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Read packages/emacs/src/daemon.ts, packages/coding-agent/src/tools/org.ts, packages/coding-agent/src/tools/exit-plan-mode.ts, packages/org/src/tool.ts, packages/org/test/tool-wave-graph.test.ts, packages/org/elisp test files.
+
+Confirmed direct repro in this session. Direct socat call against reused spell-emacs socket returned `Tool not found: org-next-wave`, proving session-cache collision. Also verified existing TS wave tests encode buggy category->directory contract and existing plan prompt expects category-level wave support.
+
+** DONE Create bug child items
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+BUG-053 covers daemon cache identity. BUG-054 covers dedicated org EmacsSessionManager wiring including exit-plan-mode. BUG-055 covers wave/graph category contract repair with TS + new ERT coverage.
+
+Created BUG-053, BUG-054, and BUG-055 with dependencies and concrete verification.
+
+** DOING Create plan and exit
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: in_progress
+:END:
+
+Plan references BUG-053/054/055, captures verified root cause, key design decisions, verification commands, and manual proof requirements.
+
+Created PLAN-063-org-wave-graph-daemon-recovery and preparing approval handoff.
