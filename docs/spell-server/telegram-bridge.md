@@ -6,7 +6,7 @@ The Telegram bridge turns a standard Telegram bot into an interactive agent inte
 
 spell-server connects to Telegram using a bot token and routes each authorized chat to a dedicated RPC subprocess. Sessions persist across restarts and are killed after an idle timeout. Owners configure which users can interact, what projects they can access, and which tool modes are available.
 
-Configuration lives in `channels.kdl` alongside `spell-server.kdl`. See [Configuration Reference](configuration.md) for the full server config.
+Configuration lives in `channels.kdl` alongside `server.kdl`. See [KDL Schema Reference](kdl-schema-reference.md) for the full config reference.
 
 ---
 
@@ -72,7 +72,7 @@ Sessions are killed after a period of inactivity. The default is 300 seconds (5 
 
 - Channel-level default set with `idle-timeout`.
 - Per-user override set inside a `user` block.
-- Setting `idle-timeout null` for a user disables the timeout (suitable for owners).
+- Setting `idle-timeout #null` for a user disables the timeout (suitable for owners).
 
 ### Max Sessions
 
@@ -119,12 +119,12 @@ telegram {
 
     voice {
         stt-provider "deepgram"
-        stt-api-key "env:DEEPGRAM_API_KEY"
+        stt-api-key "env(DEEPGRAM_API_KEY)"
         stt-model "nova-2"
         stt-language "en"
 
         tts-provider "elevenlabs"
-        tts-api-key "env:ELEVENLABS_API_KEY"
+        tts-api-key "env(ELEVENLABS_API_KEY)"
         tts-voice "Rachel"
 
         reply-mode "mirror"
@@ -159,7 +159,7 @@ When an agent calls `generate_image`, the generated image is automatically sent 
 
 ```kdl
 telegram {
-    auto-send-images false
+    auto-send-images #false
 }
 ```
 
@@ -195,7 +195,7 @@ telegram {
 
     session-notifications {
         events "plan_approval" "ask" "pending_action"
-        notify-owners true
+        notify-owners #true
         notify-chat-id 987654321
     }
 }
@@ -286,7 +286,7 @@ A complete `channels.kdl` example with multiple projects and per-user access con
 
 ```kdl
 telegram {
-    bot-token "env:TELEGRAM_BOT_TOKEN"
+    bot-token "env(TELEGRAM_BOT_TOKEN)"
     owners 111111111 222222222
 
     default-model "claude-opus-4-5"
@@ -298,7 +298,7 @@ telegram {
     upload-dir "/var/spell/uploads"
     log-viewer-port 9090
 
-    auto-send-images true
+    auto-send-images #true
 
     project "main" "/home/user/code/my-app"
     project "infra" "/home/user/code/infra"
@@ -306,23 +306,23 @@ telegram {
 
     voice {
         stt-provider "deepgram"
-        stt-api-key "env:DEEPGRAM_API_KEY"
+        stt-api-key "env(DEEPGRAM_API_KEY)"
         stt-language "en"
         tts-provider "elevenlabs"
-        tts-api-key "env:ELEVENLABS_API_KEY"
+        tts-api-key "env(ELEVENLABS_API_KEY)"
         reply-mode "mirror"
     }
 
     session-notifications {
         events "plan_approval" "ask"
-        notify-owners true
+        notify-owners #true
     }
 
     // Owner with full access, no idle timeout
     user 111111111 {
         modes "telegram-readonly" "telegram-full"
         default-mode "telegram-readonly"
-        idle-timeout null
+        idle-timeout #null
     }
 
     // Contractor limited to one project and read-only

@@ -307,7 +307,7 @@ curl -X POST \
 
 ### Bearer token authentication
 
-For goals that need simpler token-based auth instead of HMAC, use `auth="token"` in the schedule and declare a matching `goal-token` in `server.kdl`:
+For goals that need simpler token-based auth instead of HMAC, use `auth="bearer"` in the schedule and declare a matching `goal-token` in `server.kdl`:
 
 ```kdl
 // server.kdl
@@ -325,7 +325,7 @@ http {
 // autonomy.kdl
 goal "ci-run" {
   setup "test-runner"
-  schedule type="webhook" path="ci-run" auth="token"
+  schedule type="webhook" path="ci-run" auth="bearer"
   prompt "Run the test suite now and report the result."
 }
 ```

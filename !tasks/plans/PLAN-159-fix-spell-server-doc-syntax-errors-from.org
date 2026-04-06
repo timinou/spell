@@ -1,0 +1,108 @@
+#+TITLE: Fix spell-server doc syntax errors from audit
+#+STATE: DONE
+#+SESSION_ID: 14aff50756f59a40
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T11-47-47-675Z_14aff50756f59a40.jsonl]]
+#+CUSTOM_ID: PLAN-159-fix-spell-server-doc-syntax-errors-from
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-046-audit-implementation:
+
+So `port` is parsed as a **child node** (line 89: `child.getName() === "port"`), not a property. The KDL schema reference example uses `http port=8787 webhook-secret=...` which is **property syntax** — this won't work because the parser iterates over `httpNode.children.nodes`. However, the KDL schema reference was pre-existing content (it was there before this plan), so it's out of scope for this audit. The getting-started.md correctly uses the child-node syntax in its newly-written examples (lines 66-73).
+
+Actually, wait — the kdl-schema-reference.md at lines 15-19 still shows the pre-existing property syntax (`http port=8787 ...`). But that was pre-existing, not introduced by this plan. The new getting-started.md examples correctly use child-node syntax. The KDL syntax inconsistency between those two is pre-existing.
+
+Let me compile my findings:
+
+---
+
+## Audit Findings
+
+### 1. Wrong `env:` syntax in telegram-bridge.md (should be `env()`)
+- **What**: telegram-bridge.md uses `"env:DEEPGRAM_API_KEY"` in KDL examples instead of the correct `"env(DEEPGRAM_API_KEY)"` syntax
+- **Where**: `docs/spell-server/telegram-bridge.md` — lines 122, 127, 289, 309, 312
+- **Why**: Users copying these examples will get runtime errors — the `resolveEnvString` function only recognizes `env()` syntax. This is the primary interactive use case doc.
+- **Effort**: `trivial`
+
+### 2. Broken cross-reference link in telegram-bridge.md
+- **What**: Links to `configuration.md` which doesn't exist; also references `spell-server.kdl` which isn't a real file
+- **Where**: `docs/spell-server/telegram-bridge.md` — line 9: `See [Configuration Reference](configuration.md)` and `alongside spell-server.kdl`
+- **Why**: Broken link in the Overview section. Should link to `kdl-schema-reference.md` and reference `server.kdl`.
+- **Effort**: `trivial`
+
+### 3. Wrong `auth="token"` in getting-started.md (should be `auth="bearer"`)
+- **What**: Bearer auth example uses `auth="token"` in the schedule block but the manifest parser only accepts `"hmac"` or `"bearer"` — `"token"` throws a parse error
+- **Where**: `docs/spell-server/getting-started.md` — lines 310, 328
+- **Why**: User who copies this config gets a manifest parse error at startup. The description text says "token" but the actual value must be `"bearer"`.
+- **Effort**: `trivial`
+
+### 4. Non-canonical KDL boolean/null syntax in telegram-bridge.md
+- **What**: Uses bare `true`, `false`, `null` instead of canonical `#true`, `#false`, `#null` in KDL examples
+- **Where**: `docs/spell-server/telegram-bridge.md` — lines 75, 162, 198, 301, 318, 325
+- **Why**: While the parser may accept bare forms, the kdl-schema-reference.md explicitly documents `#null` as canonical and the getting-started.md uses `#true`/`#null` consistently. Inconsistency between docs is confusing for users following both.
+- **Effort**: `trivial`
+
+### 5. `auto-send-images #true` default mismatch in telegram-bridge.md examples
+- **What**: Multi-project example shows `auto-send-images true` (bare boolean) while kdl-schema-reference.md documents it as `auto-send-images #true`
+- **Where**: `docs/spell-server/telegram-bridge.md` — line 301
+- **Why**: Same consistency issue as finding #4 — bare vs canonical KDL syntax.
+- **Effort**: `trivial` (covered by fix for finding #4)
+
+* Context
+
+PLAN-158 delivered four spell-server docs and a setup wizard skill. A post-implementation audit (AUD-046) found five trivial text-level errors across two doc files:
+
+1. =telegram-bridge.md= uses =env:VAR= syntax in KDL examples — the parser only recognizes =env(VAR)=. Users copying these examples get runtime errors.
+2. =telegram-bridge.md= links to nonexistent =configuration.md= and references =spell-server.kdl= (correct name: =server.kdl=).
+3. =getting-started.md= uses =auth=\"token\"= in a bearer auth example — parser only accepts =\"hmac\"= or =\"bearer\"=. Config would fail to load.
+4. =telegram-bridge.md= uses bare =true=/=false=/=null= instead of canonical =#true=/=#false=/=#null= in KDL examples, inconsistent with the other three docs.
+5. Same as #4 for =auto-send-images= — subsumed by the boolean fix.
+
+All five are search-and-replace fixes in two files, followed by a docs-index regeneration.
+
+** Approach
+
+Single child item [[id:BUG-186-fix-syntax-errors-and-broken-links-in-sp]] covers all fixes. The item contains exact line numbers and replacement strings for every change.
+
+** Key decisions
+
+- No code changes — docs only
+- Regenerate =docs-index.generated.ts= after fixes to embed corrected content
+- No test changes needed (these are markdown files)
+
+* Verification
+
+1. =grep -c 'env:' docs/spell-server/telegram-bridge.md= returns 0
+2. =grep -c 'configuration.md' docs/spell-server/telegram-bridge.md= returns 0
+3. =grep -c 'auth=\"token\"' docs/spell-server/getting-started.md= returns 0
+4. No bare = true=, = false=, = null= at end of lines in KDL code blocks in =telegram-bridge.md=
+5. =bun packages/coding-agent/scripts/generate-docs-index.ts= succeeds
+6. =bun check:ts= shows no new errors (pre-existing errors in unrelated files are expected)
+
+* Execution Manifest
+
+** Wave 1 (single item)
+- [[id:BUG-186-fix-syntax-errors-and-broken-links-in-sp]] — Fix all five syntax/link issues in telegram-bridge.md and getting-started.md, regenerate docs index (S)
+
+** Completion [2026-04-06]
+
+*** Verification
+
+1. ~grep 'env:' docs/spell-server/telegram-bridge.md~ — 0 matches (all converted to ~env()~ syntax)
+2. ~grep 'configuration.md' docs/spell-server/telegram-bridge.md~ — 0 matches (link updated to ~kdl-schema-reference.md~)
+3. ~grep 'spell-server.kdl' docs/spell-server/telegram-bridge.md~ — 0 matches (changed to ~server.kdl~)
+4. ~grep 'auth=\"token\"' docs/spell-server/getting-started.md~ — 0 matches (changed to ~auth=\"bearer\"~)
+5. ~grep '[^#](true|false|null)' docs/spell-server/telegram-bridge.md~ — 0 bare boolean/null matches (all prefixed with ~#~)
+6. ~bun packages/coding-agent/scripts/generate-docs-index.ts~ — succeeded, 54 docs generated
+7. ~bun check:ts~ — no new type errors (15 pre-existing errors in unrelated files: sql-store.ts, approvals.ts, tool-progress.ts, logger.ts)
+
+*** Artifacts
+
+- ~docs/spell-server/telegram-bridge.md~ — 12 line replacements (env syntax ×5, broken link ×1, bare booleans ×6)
+- ~docs/spell-server/getting-started.md~ — 2 line replacements (auth=\"token\" → auth=\"bearer\")
+- ~packages/coding-agent/src/internal-urls/docs-index.generated.ts~ — regenerated with corrected doc content
+
+*** Deviations
+
+None.
