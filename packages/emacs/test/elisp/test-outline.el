@@ -130,7 +130,9 @@
              (names (mapcar (lambda (e) (alist-get 'name e)) entries)))
         (should (listp entries))
         (should (>= (length entries) 1))
-        (should (member "MyApp.Greeter" names))))))
+        (should (member "MyApp.Greeter" names))
+        (should (string= (alist-get 'type (car entries)) "defmodule"))
+        (should (numberp (alist-get 'column (car entries))))))))
 
 (provide 'test-outline)
 ;;; test-outline.el ends here

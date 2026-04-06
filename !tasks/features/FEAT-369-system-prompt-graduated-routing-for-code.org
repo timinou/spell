@@ -1,0 +1,116 @@
+#+TITLE: System prompt graduated routing for code tool
+#+STATE: DONE
+#+SESSION_ID: 14b02881a8559742
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T15-32-42-273Z_14b02881a8559742.jsonl]]
+#+CUSTOM_ID: FEAT-369-system-prompt-graduated-routing-for-code
+#+EFFORT: 1h
+#+PRIORITY: A
+#+LAYER: prompts
+#+DEPENDS: FEAT-367-combobulate-backend-new-navigate-actions
+
+* Initial Message
+
+Use jq on recent spell transcripts and tlel me how often the code read tool is used vs. the other code tools. Look at the usages of combobulate and tell me how you'd restructrure the tool to nudge towards more refined usages of combobulate so that the AI is smarter thanks
+
+* Goal
+Update the system prompt's tool routing section to create graduated routing that nudges toward =code= as the default for source files, with decision mapping like the LSP section has.
+
+* Problem
+Current system prompt (=system-prompt.md=) has two issues:
+1. The "Code tool for source files" section is a bullet list with no workflow — it says what's available but not when to use what
+2. The fallback clause "Text-based find-and-replace edits with hashline anchors (use =edit=)" routes 100% of editing away from =code edit= since nearly all edits fit that description
+3. "Search before you read" lists =code read= as one option among peers, not as the default for source files
+
+* File to modify
+=packages/coding-agent/src/prompts/system/system-prompt.md=
+
+This is a Handlebars template. All code tool content is gated by ={{#has tools "code"}}...{{/has}}=. Maintain this gating.
+
+* Changes
+
+** Section: "Code tool for source files" (lines 214-228)
+
+Replace the current flat bullet list with graduated workflow + decision mapping.
+
+Current (lines 217-227):
+#+begin_example
+`code` is the primary tool for reading and editing source files with tree-sitter support (50+ languages).
+- **Read code**: `code read` at resolution 0-2 for comprehension, resolution 3 for full source
+- **Map structure**: `code outline` to see declarations, classes, functions
+- **Edit structurally**: `code edit` for AST-aware modifications (replace, insert, kill, splice, drag)
+- **Navigate**: `code navigate` for finding enclosing functions, parent nodes, local references
+
+Fall back to text tools when:
+- File has no tree-sitter grammar (use `read` + `edit`)
+- Reading non-code resources: internal URLs, images, PDFs, directories (use `read`)
+- Creating brand-new files (use `write`)
+- Text-based find-and-replace edits with hashline anchors (use `edit`)
+#+end_example
+
+Replace with:
+#+begin_example
+`code` is the default tool for source files. Prefer it over `read`/`edit` for any file with tree-sitter support.
+
+**Reading workflow** (graduated):
+1. `code outline` — fastest orientation: names, types, line numbers
+2. `code read` resolution 2 — signatures + structure (START HERE)
+3. `code read` resolution 3 + `offset`/`limit` — specific function body only when needed
+
+**Before editing**: `code navigate { action: "node-at" }` to verify your target.
+
+**Structural edits** — prefer `code edit` over text `edit` for:
+- Deleting declarations → `kill`
+- Reordering → `drag-up`/`drag-down` (use `navigate siblings` first)
+- Unwrapping → `splice`
+- Duplicating → `clone`
+
+Fall back to text `edit` only for: fine-grained text changes inside strings/comments, files without tree-sitter grammar.
+Fall back to `read` only for: non-code files, internal URLs, images, PDFs, directories.
+#+end_example
+
+Key changes:
+- "primary" → "default" (stronger)
+- Reading is a graduated workflow, not a flat list
+- "Before editing" creates a mandatory pre-step
+- Structural edits get decision mapping (task → operation)
+- The escape hatch "text-based line edits → use edit" is removed and replaced with narrow scope ("fine-grained text inside strings/comments")
+- Creating new files → keep using `write` (unchanged, doesn't need explicit mention since it's obvious)
+
+** Section: "Search before you read" (lines 249-258)
+
+Current line 255:
+#+begin_example
+{{#has tools "code"}}- `code read` with resolution 2 for structure, resolution 3 with offset/limit for detail{{/has}}
+#+end_example
+
+Replace with:
+#+begin_example
+{{#has tools "code"}}- `code outline` to map file structure, then `code read` resolution 2 for structure, resolution 3 only for the specific function{{/has}}
+#+end_example
+
+This puts =outline= first in the search workflow and frames resolution 3 as targeted, not default.
+
+** Section: Precedence (lines 171-172)
+
+Current:
+#+begin_example
+1. **Structural**: `code` (source files), `lsp` (semantic queries), `grep` (text search), `find` (file discovery)
+2. **Fallback**: `read` (non-code files, URLs, images, dirs), `edit` (text-based edits), `write` (new files)
+#+end_example
+
+Add "(preferred for source)" to =code=:
+#+begin_example
+1. **Structural**: `code` (source files — preferred over read/edit), `lsp` (semantic queries), `grep` (text search), `find` (file discovery)
+#+end_example
+
+* Edge cases
+- The Handlebars conditionals (={{#has tools "code"}}=) must be preserved exactly
+- Other tools sections (LSP, AST, SSH, etc.) must not be affected
+- The system prompt is a template rendered per session — changes affect all agents
+
+* Verification
+- =bun check:ts= passes
+- Grep the rendered output for the old escape hatch "Text-based find-and-replace" — must not appear
+- Grep for "preferred over read/edit" in Precedence section — must appear
+- Grep for "code outline" in "Search before you read" — must appear
+- The Handlebars ={{#has tools "code"}}= gates are intact

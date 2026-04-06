@@ -1,0 +1,76 @@
+#+TITLE: Code tool combobulate restructure
+#+STATE: DONE
+#+SESSION_ID: 14b02881a8559742
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T15-32-42-273Z_14b02881a8559742.jsonl]]
+#+CUSTOM_ID: PLAN-161-code-tool-combobulate-restructure
+
+
+* Initial Message
+
+Use jq on recent spell transcripts and tlel me how often the code read tool is used vs. the other code tools. Look at the usages of combobulate and tell me how you'd restructrure the tool to nudge towards more refined usages of combobulate so that the AI is smarter thanks
+
+* Context
+
+Transcript analysis of 2754 sessions over 14 days reveals the =code= tool is massively underutilized:
+- =read= tool: 76,807 calls. =code= tool: 298 calls (0.4% of file reading).
+- Of 298 =code= calls: 85% are =read= at resolution 3 (just =cat= through Emacs), 10% =outline=, 0% =edit=, 0% =navigate=.
+- =code read= resolution 3 (full source) is 81% of reads. Resolution 0-2 (the intelligent modes) account for only 19%.
+- The text =edit= tool handles 100% of editing (9,123 calls). =code edit= has zero calls despite exposing 9 operations.
+
+Root causes identified:
+1. Tool prompt is a flat reference, not a behavioral guide — no decision trees, no workflow patterns, no examples for edit/navigate
+2. System prompt routes away: "text-based line edits → use =edit=" captures ~all edits
+3. No "look before you edit" capability — the AI can't preview what node an edit would target
+4. Combobulate's reorder/splice/clone capabilities lack corresponding navigate actions (siblings list, node inspection)
+
+Approach: three parallel changes targeting different files.
+
+** Key decisions
+1. Expand =navigate= with 3 new actions (=node-at=, =siblings=, =children=) and =edit= with 3 new operations (=splice-self=, =splice-down=, =transpose=) — all in elisp, zero TS logic changes
+2. Rewrite =code.md= as task-oriented cookbook: decision tree at top, compressed examples (task→call, no prose), workflow patterns (explore→edit, reorder, preview)
+3. System prompt graduated routing: =code= is "default" not "primary", outline-first reading workflow, narrow the text =edit= escape hatch to "strings/comments only"
+4. No schema changes — =operation= and =action= are free strings, new capabilities are purely additive
+
+* Verification
+- =bun check:ts= passes after all changes
+- =bun test packages/coding-agent/test/tools/code.test.ts= — existing tests pass
+- Grep =system-prompt.md= for removed escape hatch "Text-based find-and-replace" — must not appear
+- Read final =code.md= — decision tree is first thing after description line, examples are compressed (no prose paragraphs)
+- Read final =pi-edit.el= — =node-at=, =siblings=, =children= in navigate dispatch; =splice-self=, =splice-down=, =transpose= in edit dispatch
+
+* Execution Manifest
+
+All three items are parallelizable (different files):
+
+1. [[id:FEAT-367-combobulate-backend-new-navigate-actions]] — Elisp backend: 3 navigate actions + 3 edit ops + description string updates (3h)
+2. [[id:FEAT-368-code-tool-prompt-cookbook-with-decision]] — code.md rewrite with decision trees and compressed examples (2h, depends on FEAT-367 for capability list)
+3. [[id:FEAT-369-system-prompt-graduated-routing-for-code]] — system-prompt.md graduated routing (1h, depends on FEAT-367 for capability list)
+
+FEAT-368 and FEAT-369 depend on FEAT-367 only for knowing the final capability names — the item bodies already contain the full specs, so an implementing agent can work from the body without waiting. The dependency is soft: prompt items document capabilities that FEAT-367 implements, but they edit different files and can execute in parallel if FEAT-367's spec is trusted as-written.
+
+** Completion [2026-04-06]
+
+*** Verification
+- =bun check:ts=: PASS — no new type errors introduced. All pre-existing errors are in unrelated packages (sql-store.ts, approvals.ts, logger.ts)
+- =bun test packages/coding-agent/test/tools/code.test.ts=: 2/2 tests pass
+- Grep =system-prompt.md= for \"Text-based find-and-replace\": NOT FOUND (escape hatch removed)
+- =code.md= decision tree: verified at line 4, first content inside =<instruction>=
+- =pi-edit.el= navigate dispatch: =node-at= (line 144), =siblings= (line 160), =children= (line 193)
+- =pi-edit.el= edit dispatch: =splice-self= (line 96), =splice-down= (line 97), =transpose= (line 98)
+- =pi-edit.el= combobulate gate: all 8 operations in the =or= pattern (line 71)
+- =pi-emacs-tools.el= description strings: all new ops/actions included
+- =code.ts= description strings: all new ops/actions included
+- =system-prompt.md= precedence: \"preferred over read/edit\" present (line 171)
+- =system-prompt.md= code section: \"default\" not \"primary\", graduated reading workflow, outline-first
+- =system-prompt.md= search section: =code outline= mentioned first (line 262)
+- Handlebars gates: all intact (={{#has tools \"code\"}}= / ={{/has}}=)
+
+*** Artifacts
+- =packages/emacs/elisp/pi-edit.el= — 3 navigate actions + 3 edit operations + combobulate gate update
+- =packages/emacs/elisp/pi-emacs-tools.el= — description string updates (4 locations)
+- =packages/coding-agent/src/tools/code.ts= — description string updates (2 locations) + trailing comma fix
+- =packages/coding-agent/src/prompts/tools/code.md= — full rewrite as task-oriented cookbook
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — graduated routing in 3 sections
+
+*** Deviations
+None."

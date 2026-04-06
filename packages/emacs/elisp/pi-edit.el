@@ -68,7 +68,7 @@ SAVE non-nil means save after edit."
              (when save (pi-buffer-save file))
              `((success . t)))
             ;; Combobulate-backed operations
-            ((or "splice" "drag-up" "drag-down" "clone" "envelope")
+            ((or "splice" "splice-self" "splice-down" "drag-up" "drag-down" "clone" "envelope" "transpose")
              (if (and (boundp 'pi-emacs-combobulate-available)
                       pi-emacs-combobulate-available)
                  (pi-edit--combobulate-op buf node operation content envelope save)
@@ -92,7 +92,10 @@ SAVE non-nil means save after edit."
       ("clone" (combobulate-clone-node-dwim))
       ("envelope"
        (when envelope
-         (combobulate-envelope-wrap-dwim))))
+         (combobulate-envelope-wrap-dwim)))
+      ("splice-self" (combobulate-splice-self))
+      ("splice-down" (combobulate-splice-down))
+      ("transpose" (combobulate-transpose-sexps)))
     (when save (pi-buffer-save (buffer-file-name buf)))
     `((success . t))))
 
@@ -138,6 +141,79 @@ SAVE non-nil means save after edit."
                     nil)
                   nil t 100))
                `((name . ,name) (references . ,(vconcat (nreverse refs))))))
+            ("node-at"
+             (let* ((pos (point))
+                    (node (treesit-node-at pos))
+                    (parent (when node (treesit-node-parent node)))
+                    (text (when node
+                            (let ((full (treesit-node-text node t)))
+                              (car (split-string full "\n"))))))
+               (if node
+                   `((type . ,(treesit-node-type node))
+                     (text . ,(if (> (length text) 80) (substring text 0 80) text))
+                     (line . ,(line-number-at-pos (treesit-node-start node)))
+                     (end_line . ,(line-number-at-pos (treesit-node-end node)))
+                     ,@(when parent
+                         `((parent . ((type . ,(treesit-node-type parent))
+                                      (line . ,(line-number-at-pos (treesit-node-start parent))))))))
+                 `((error . t) (message . "No node at position")))))
+            ("siblings"
+             (let* ((pos (point))
+                    (node (treesit-node-at pos))
+                    ;; Walk up past leaf/punctuation to nearest named node
+                    (named (when node
+                             (if (treesit-node-check node 'named)
+                                 node
+                               (treesit-node-parent node))))
+                    (parent (when named (treesit-node-parent named)))
+                    (children (when parent
+                                (let ((kids '())
+                                      (count (treesit-node-child-count parent t)))
+                                  (dotimes (i count)
+                                    (let ((child (treesit-node-child parent i t)))
+                                      (push child kids)))
+                                  (nreverse kids))))
+                    (current-idx nil)
+                    (sibling-list '()))
+               (if (not children)
+                   `((error . t) (message . "No siblings found"))
+                 (let ((idx 0))
+                   (dolist (child children)
+                     (let ((entry `((type . ,(treesit-node-type child))
+                                    (name . ,(or (pi-treesit-declaration-name child) ""))
+                                    (line . ,(line-number-at-pos (treesit-node-start child)))
+                                    (end_line . ,(line-number-at-pos (treesit-node-end child))))))
+                       (when (and named (eq child named))
+                         (setq current-idx idx)
+                         (setq entry (append entry '((current . t)))))
+                       (push entry sibling-list)
+                       (setq idx (1+ idx)))))
+                 `((current_index . ,(or current-idx -1))
+                   (siblings . ,(vconcat (nreverse sibling-list)))))))
+            ("children"
+             (let* ((pos (point))
+                    (node (treesit-node-at pos))
+                    ;; Walk up to a node that has a body
+                    (structural (when node
+                                  (let ((n node))
+                                    (while (and n (not (pi-treesit-find-body n)))
+                                      (setq n (treesit-node-parent n)))
+                                    n)))
+                    (body (when structural (pi-treesit-find-body structural)))
+                    (child-list '()))
+               (if (not body)
+                   `((error . t) (message . "Node has no children"))
+                 (let ((count (treesit-node-child-count body t)))
+                   (dotimes (i count)
+                     (let ((child (treesit-node-child body i t)))
+                       (push `((type . ,(treesit-node-type child))
+                               (name . ,(or (pi-treesit-declaration-name child) ""))
+                               (line . ,(line-number-at-pos (treesit-node-start child)))
+                               (end_line . ,(line-number-at-pos (treesit-node-end child))))
+                             child-list))))
+                 `((parent_type . ,(treesit-node-type structural))
+                   (parent_name . ,(or (pi-treesit-declaration-name structural) ""))
+                   (children . ,(vconcat (nreverse child-list)))))))
             (_ `((error . t) (message . ,(format "Unknown action: %s" action))))))
       (kill-buffer buf))))
 

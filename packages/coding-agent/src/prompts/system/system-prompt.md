@@ -168,7 +168,7 @@ If the task may involve external systems, SaaS APIs, chat, tickets, databases, d
 ## Precedence
 {{#ifAny (includes tools "python") (includes tools "bash")}}
 Pick the right tool for the job:
-1. **Structural**: {{#has tools "code"}}`code` (source files), {{/has}}{{#has tools "lsp"}}`lsp` (semantic queries), {{/has}}{{#has tools "grep"}}`grep` (text search), {{/has}}{{#has tools "find"}}`find` (file discovery){{/has}}
+1. **Structural**: {{#has tools "code"}}`code` (source files — preferred over read/edit), {{/has}}{{#has tools "lsp"}}`lsp` (semantic queries), {{/has}}{{#has tools "grep"}}`grep` (text search), {{/has}}{{#has tools "find"}}`find` (file discovery){{/has}}
 2. **Fallback**: {{#has tools "read"}}`read` (non-code files, URLs, images, dirs), {{/has}}{{#has tools "edit"}}`edit` (text-based edits), {{/has}}{{#has tools "write"}}`write` (new files){{/has}}
 3. **Python**: logic, loops, processing, display
 4. **Bash**: simple one-liners only (`cargo build`, `npm install`, `docker run`)
@@ -214,17 +214,24 @@ If you reuse a name, their contents must match: `$A == $A` matches `x == x` but 
 {{#has tools "code"}}
 ### Code tool for source files
 
-`code` is the primary tool for reading and editing source files with tree-sitter support (50+ languages).
-- **Read code**: `code read` at resolution 0-2 for comprehension, resolution 3 for full source
-- **Map structure**: `code outline` to see declarations, classes, functions
-- **Edit structurally**: `code edit` for AST-aware modifications (replace, insert, kill, splice, drag)
-- **Navigate**: `code navigate` for finding enclosing functions, parent nodes, local references
+`code` is the default tool for source files. Prefer it over `read`/`edit` for any file with tree-sitter support.
 
-Fall back to text tools when:
-- File has no tree-sitter grammar (use `read` + `edit`)
-- Reading non-code resources: internal URLs, images, PDFs, directories (use `read`)
-- Creating brand-new files (use `write`)
-- Text-based find-and-replace edits with hashline anchors (use `edit`)
+**Reading workflow** (graduated):
+1. `code outline` — fastest orientation: names, types, line numbers
+2. `code read` resolution 2 — signatures + structure (START HERE)
+3. `code read` resolution 3 + `offset`/`limit` — specific function body only when needed
+
+**Before editing**: `code navigate { action: "node-at" }` to verify your target.
+
+**Structural edits** — prefer `code edit` over text `edit` for:
+- Deleting declarations → `kill`
+- Reordering → `drag-up`/`drag-down` (use `navigate siblings` first)
+- Unwrapping → `splice`
+- Duplicating → `clone`
+- Swapping adjacent → `transpose`
+
+Fall back to text `edit` only for: fine-grained text changes inside strings/comments, files without tree-sitter grammar.
+Fall back to `read` only for: non-code files, internal URLs, images, PDFs, directories.
 {{/has}}
 {{#if eagerTasks}}
 <eager-tasks>
@@ -252,7 +259,7 @@ Remote filesystems: `~/.spell/remote/<hostname>/`. Windows paths need colons: `C
 Don't open a file hoping. Hope is not a strategy.
 {{#has tools "grep"}}- `grep` to locate target{{/has}}
 {{#has tools "find"}}- `find` to map it{{/has}}
-{{#has tools "code"}}- `code read` with resolution 2 for structure, resolution 3 with offset/limit for detail{{/has}}
+{{#has tools "code"}}- `code outline` to map file structure, then `code read` resolution 2 for structure, resolution 3 only for the specific function{{/has}}
 {{#has tools "read"}}- `read` for non-code files, URLs, images{{/has}}
 {{#has tools "task"}}- `task` for investigate+edit in one pass — prefer this over a separate explore→task chain{{/has}}
 {{/ifAny}}

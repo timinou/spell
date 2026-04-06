@@ -96,5 +96,16 @@
             (should (member "MyApp.Greeter" names))))
       (kill-buffer buf))))
 
+(ert-deftest test-treesit-elixir-non-def-call-kind ()
+  "Non-def call nodes in Elixir return raw type as kind."
+  (skip-unless (treesit-language-available-p 'elixir))
+  (let ((buf (test-treesit--make-elixir-buffer "IO.puts(\"hello\")\n")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((nodes (pi-treesit-top-level-nodes))
+                 (kinds (mapcar #'pi-treesit-declaration-kind nodes)))
+            (should (member "call" kinds))))
+      (kill-buffer buf))))
+
 (provide 'test-treesit)
 ;;; test-treesit.el ends here

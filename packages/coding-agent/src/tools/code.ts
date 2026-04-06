@@ -38,7 +38,7 @@ const codeSchema = Type.Object({
 	operation: Type.Optional(
 		Type.String({
 			description:
-				"Edit operation: replace | insert-before | insert-after | splice | drag-up | drag-down | clone | kill | envelope",
+				"Edit operation: replace | insert-before | insert-after | splice | splice-self | splice-down | drag-up | drag-down | clone | kill | envelope | transpose",
 		}),
 	),
 	target: Type.Optional(
@@ -50,7 +50,11 @@ const codeSchema = Type.Object({
 	content: Type.Optional(Type.String({ description: "Replacement/insertion content" })),
 	envelope: Type.Optional(Type.String({ description: "Template name for envelope operation" })),
 	save: Type.Optional(Type.Boolean({ description: "Save buffer after edit (default true)" })),
-	action: Type.Optional(Type.String({ description: "Navigate action: defun-at | parent | references-local" })),
+	action: Type.Optional(
+		Type.String({
+			description: "Navigate action: defun-at | parent | references-local | node-at | siblings | children",
+		}),
+	),
 	line: Type.Optional(Type.Integer({ description: "1-indexed line for navigation" })),
 	column: Type.Optional(Type.Integer({ description: "1-indexed column for navigation" })),
 	lang: Type.Optional(Type.String({ description: "Language name for install_grammar (e.g. elixir, nix)" })),

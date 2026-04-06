@@ -11,6 +11,12 @@
 (defvar pi-treesit--project-mode-map '())
 (defvar pi-treesit--project-lang-map '())
 
+(defconst pi-treesit--elixir-def-keywords
+  '("def" "defp" "defmodule" "defprotocol" "defimpl"
+    "defmacro" "defmacrop" "defguard" "defguardp"
+    "defstruct" "defdelegate" "defexception")
+  "Elixir definition keywords that map to `call' nodes in tree-sitter-elixir.")
+
 ;; ---------------------------------------------------------------------------
 ;; Buffer helpers
 ;; ---------------------------------------------------------------------------
@@ -301,10 +307,7 @@ actual declaration nodes.
       (let* ((target (treesit-node-child node 0))
              (target-text (when target (treesit-node-text target t))))
         (when (and target-text
-                   (member target-text
-                           '("def" "defp" "defmodule" "defprotocol" "defimpl"
-                             "defmacro" "defmacrop" "defguard" "defguardp"
-                             "defstruct" "defdelegate" "defexception")))
+                   (member target-text pi-treesit--elixir-def-keywords))
           (let ((args-node (treesit-search-subtree node "^arguments$" nil nil 1)))
             (when args-node
               (let ((first-arg (treesit-node-child args-node 0)))
@@ -361,17 +364,19 @@ actual declaration nodes.
      ((string= type "call")
       (let* ((target (treesit-node-child node 0))
              (target-text (when target (treesit-node-text target t))))
-        (cond
-         ((member target-text '("def" "defp")) "def")
-         ((string= target-text "defmodule") "defmodule")
-         ((string= target-text "defprotocol") "defprotocol")
-         ((string= target-text "defimpl") "defimpl")
-         ((member target-text '("defmacro" "defmacrop")) "defmacro")
-         ((member target-text '("defguard" "defguardp")) "defguard")
-         ((string= target-text "defstruct") "defstruct")
-         ((string= target-text "defdelegate") "defdelegate")
-         ((string= target-text "defexception") "defexception")
-         (t type))))
+        (if (member target-text pi-treesit--elixir-def-keywords)
+            (cond
+             ((member target-text '("def" "defp")) "def")
+             ((string= target-text "defmodule") "defmodule")
+             ((string= target-text "defprotocol") "defprotocol")
+             ((string= target-text "defimpl") "defimpl")
+             ((member target-text '("defmacro" "defmacrop")) "defmacro")
+             ((member target-text '("defguard" "defguardp")) "defguard")
+             ((string= target-text "defstruct") "defstruct")
+             ((string= target-text "defdelegate") "defdelegate")
+             ((string= target-text "defexception") "defexception")
+             (t target-text))
+          type)))
      (t type))))
 
 (provide 'pi-treesit)

@@ -93,11 +93,11 @@ or add a tree-sitter grammar via .omp/treesitter.json."
  (make-mcp-server-tool
   :name "code-edit"
   :title "Code Edit"
-  :description "Perform structural edits on a source file. Supports replace, insert-before, insert-after, kill, splice, drag-up, drag-down, clone, and envelope operations."
+  :description "Perform structural edits on a source file. Supports replace, insert-before, insert-after, kill, splice, splice-self, splice-down, drag-up, drag-down, clone, envelope, and transpose operations."
   :input-schema '((type . "object")
                   (properties
                    . ((file . ((type . "string") (description . "Absolute or project-relative path")))
-                      (operation . ((type . "string") (description . "Edit operation: replace, insert-before, insert-after, kill, splice, drag-up, drag-down, clone, envelope")))
+                      (operation . ((type . "string") (description . "Edit operation: replace, insert-before, insert-after, kill, splice, splice-self, splice-down, drag-up, drag-down, clone, envelope, transpose")))
                       (target . ((type . "object")
                                  (description . "Target node selector")
                                  (properties
@@ -168,11 +168,11 @@ or add a tree-sitter grammar via .omp/treesitter.json."
  (make-mcp-server-tool
   :name "code-navigate"
   :title "Code Navigate"
-  :description "Navigate the treesit parse tree at a given position. Actions: defun-at (enclosing function), parent (parent node), references-local (in-file references to symbol at point)."
+  :description "Navigate the treesit parse tree at a given position. Actions: defun-at (enclosing function), parent (parent node), references-local (in-file references), node-at (inspect node), siblings (list siblings), children (list child nodes)."
   :input-schema '((type . "object")
                   (properties
                    . ((file . ((type . "string") (description . "Absolute or project-relative path")))
-                      (action . ((type . "string") (description . "Navigation action: defun-at, parent, references-local")))
+                      (action . ((type . "string") (description . "Navigation action: defun-at, parent, references-local, node-at, siblings, children")))
                       (line . ((type . "integer") (description . "1-indexed line number")))
                       (column . ((type . "integer") (description . "1-indexed column number")))))
                   (required . ["file" "action"]))
