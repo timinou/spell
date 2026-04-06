@@ -57,6 +57,7 @@
         "spell": "src/cli.ts",
       },
       "dependencies": {
+        "@bgotink/kdl": "^0.4",
         "@mozilla/readability": "^0.6",
         "@oh-my-pi/pi-agent-core": "workspace:*",
         "@oh-my-pi/pi-ai": "workspace:*",
