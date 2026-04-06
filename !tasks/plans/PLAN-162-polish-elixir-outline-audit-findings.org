@@ -1,0 +1,66 @@
+#+TITLE: Polish Elixir outline audit findings
+#+STATE: DONE
+#+SESSION_ID: 14b0246ee1487422
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T15-14-54-469Z_14b0246ee1487422.jsonl]]
+#+CUSTOM_ID: PLAN-162-polish-elixir-outline-audit-findings
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-06]: All 3 findings addressed. 13/13 ERT tests pass. Defconst extracted, keyword lists deduplicated, test coverage added for type/column fields and catch-all regression.
+
+
+* Initial Message
+
+continue
+
+* Context
+
+Audit of the Elixir outline implementation (PLAN-160) identified 6 findings. After triage, 3 are worth fixing (all trivial/small):
+
+1. *DRY keyword list*: The Elixir keyword list is duplicated in 3 functions. Extract to a ~defconst~.
+2. *Missing test assertions*: ~test-outline-elixir-entries~ doesn't assert ~type~ or ~column~ fields, leaving the ~declaration-name-node~ Elixir branch with no regression coverage.
+3. *No catch-all regression test*: The ~declaration-kind~ catch-all for non-Elixir ~call~ nodes — the exact path the original paren bug broke — has no test.
+
+Skipped findings:
+- Finding 1 (unused ~child~ in table branch): Not worth touching — the binding is used by 6+ node types in the first cond branch, and the pattern is clear.
+- Finding 3 (~defstruct~ name garbage): ~defstruct~ is never top-level in real Elixir code. No user-facing risk.
+- Finding 5 (yaml test formatting): Cosmetic only.
+
+** Approach
+
+Single item touching the same 4 files already modified by PLAN-160. Extract defconst, add 3 test assertions, add 1 new test.
+
+** Key Decisions
+
+1. ~defconst pi-treesit--elixir-def-keywords~ placed near top of ~pi-treesit.el~ after existing ~defvar~ declarations.
+2. ~declaration-kind~ restructured: ~if (member ... keywords)~ guard with inner cond for kind mapping, else branch returns raw type. Makes control flow explicit.
+3. New test ~test-treesit-elixir-non-def-call-kind~ uses bare ~IO.puts(\"hello\")~ as source.
+4. Elixir outline test gets ~type~ and ~column~ assertions on ~(car entries)~.
+* Verification
+
+Run 13 ERT tests via emacsclient (12 existing + 1 new). Expected: ~pass=13 fail=0~.
+
+Grep for ~pi-treesit--elixir-def-keywords~ across both Elisp files. Expected: 4 matches (1 defconst + 3 usage sites).
+
+* Execution Manifest
+
+** Wave 1
+- [[id:FUP-040-polish-elixir-outline-dry-keywords-test]] (15m, priority C)
+  - Extract defconst, replace 3 keyword lists, add test assertions, add catch-all test
+  - Files: ~pi-treesit.el~, ~pi-outline.el~, ~test-treesit.el~, ~test-outline.el~
+
+
+** Completion [2026-04-06]
+
+*** Verification
+- ERT tests via emacsclient: ~pass=13 fail=0 skip=0~ (all grammars available)
+  - Tests: ~test-treesit-elixir-declaration-kind~, ~test-treesit-elixir-declaration-name~, ~test-treesit-elixir-non-def-call-kind~ (NEW), ~test-outline-elixir-entries~ (ENHANCED), plus 9 existing tests
+- ~grep pi-treesit--elixir-def-keywords~: 4 matches (1 defconst + 2 in pi-treesit.el + 1 in pi-outline.el)
+
+*** Artifacts
+- ~packages/emacs/elisp/pi-treesit.el~: Added ~defconst pi-treesit--elixir-def-keywords~ (line 14), replaced inline keyword lists in ~declaration-name~ (line 310) and ~declaration-kind~ (line 367), restructured catch-all to explicit ~if~ guard
+- ~packages/emacs/elisp/pi-outline.el~: Replaced inline keyword list in ~declaration-name-node~ (line 83) with defconst reference
+- ~packages/emacs/test/elisp/test-treesit.el~: Added ~test-treesit-elixir-non-def-call-kind~ test (lines 99-109)
+- ~packages/emacs/test/elisp/test-outline.el~: Added ~type~ and ~column~ assertions to ~test-outline-elixir-entries~ (lines 134-135)
+
+*** Deviations
+None.
