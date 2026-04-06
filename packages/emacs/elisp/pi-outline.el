@@ -72,7 +72,24 @@ Mirrors pi-treesit-declaration-name but returns the node rather than its text."
      ((string= type "block_mapping_pair")
       (treesit-node-child-by-field-name node "key"))
      ((string= type "pair")
-      (treesit-node-child-by-field-name node "key"))
+      (or (treesit-node-child-by-field-name node "key")
+          (treesit-node-child node 0 t)))
+     ;; Elixir: call nodes for def/defmodule/etc. — return the name node
+     ((string= type "call")
+      (let* ((target (treesit-node-child node 0))
+             (target-text (when target (treesit-node-text target t))))
+        (when (and target-text
+                   (member target-text
+                           '("def" "defp" "defmodule" "defprotocol" "defimpl"
+                             "defmacro" "defmacrop" "defguard" "defguardp"
+                             "defstruct" "defdelegate" "defexception")))
+          (let ((args-node (treesit-search-subtree node "^arguments$" nil nil 1)))
+            (when args-node
+              (let ((first-arg (treesit-node-child args-node 0)))
+                (when first-arg
+                  (if (string= (treesit-node-type first-arg) "call")
+                      (treesit-node-child first-arg 0)
+                    first-arg))))))))
      (t nil))))
 
 (defun pi-outline--class-members (body-node)

@@ -58,5 +58,43 @@
                             '("statement_block" "class_body" "block")))))
       (kill-buffer buf))))
 
+;; Sample Elixir source used across tests.
+(defconst test-treesit--elixir-source
+  "defmodule MyApp.Greeter do\n  def greet(name) do\n    \"Hello, \\\\ #{name}!\"\n  end\n\n  defp helper do\n    :ok\n  end\nend\n"
+  "Simple Elixir source for testing.")
+
+(defun test-treesit--make-elixir-buffer (source)
+  "Create a temp buffer with SOURCE in elixir-ts-mode."
+  (let ((buf (generate-new-buffer " *test-treesit-elixir*")))
+    (with-current-buffer buf
+      (insert source)
+      (when (treesit-language-available-p 'elixir)
+        (elixir-ts-mode)))
+    buf))
+
+(ert-deftest test-treesit-elixir-declaration-kind ()
+  "Declaration kinds for Elixir call nodes are correctly classified."
+  (skip-unless (treesit-language-available-p 'elixir))
+  (let ((buf (test-treesit--make-elixir-buffer test-treesit--elixir-source)))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((nodes (pi-treesit-top-level-nodes))
+                 (kinds (mapcar #'pi-treesit-declaration-kind nodes)))
+            ;; The top-level defmodule should produce \"defmodule\" kind
+            (should (member "defmodule" kinds))))
+      (kill-buffer buf))))
+
+(ert-deftest test-treesit-elixir-declaration-name ()
+  "Declaration names for Elixir call nodes are correctly extracted."
+  (skip-unless (treesit-language-available-p 'elixir))
+  (let ((buf (test-treesit--make-elixir-buffer test-treesit--elixir-source)))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((nodes (pi-treesit-top-level-nodes))
+                 (names (delq nil (mapcar #'pi-treesit-declaration-name nodes))))
+            ;; Must find the module name
+            (should (member "MyApp.Greeter" names))))
+      (kill-buffer buf))))
+
 (provide 'test-treesit)
 ;;; test-treesit.el ends here

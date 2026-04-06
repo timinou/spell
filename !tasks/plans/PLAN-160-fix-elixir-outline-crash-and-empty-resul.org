@@ -1,0 +1,132 @@
+#+TITLE: Fix Elixir outline crash and empty results
+#+STATE: DONE
+#+SESSION_ID: 14b01e7e57087421
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T14-48-57-436Z_14b01e7e57087421.jsonl]]
+#+CUSTOM_ID: PLAN-160-fix-elixir-outline-crash-and-empty-resul
+
+NOTE [2026-04-06]: All 12 ERT tests pass. All child items closed.
+
+
+* Context
+
+The =code outline= tool crashes with =Symbol's function definition is void: t= on any
+Elixir (.ex/.exs) file. Two separate bugs in ~packages/emacs/elisp/pi-treesit.el~:
+
+1. *Paren mismatch* in ~pi-treesit-declaration-kind~ (lines 366-367):
+   The outer cond catch-all ~(t type)~ is accidentally inside the =call= clause body.
+   When the =call= branch matches (all Elixir files), it evaluates ~(t type)~ as a
+   function call, crashing because =t= has no function definition.
+
+2. *Arguments field lookup* in ~pi-treesit-declaration-name~ (~line 300):
+   Uses ~treesit-node-child-by-field-name node \"arguments\"~ but tree-sitter-elixir does
+   not assign a field name to the =arguments= child (it has =field=nil=). Returns nil
+   for all Elixir nodes, producing empty outlines even after the paren fix.
+
+Additionally, 3 pre-existing ERT tests (yaml, toml, json) in ~test-outline.el~ fail due
+to ~let~ vs ~let*~ scoping — they reference a binding before it's available.
+
+** Approach: TDD
+
+Test-first ordering: write ERT regression tests that fail on the current code, then apply
+the implementation fixes. This ensures the bugs are captured as failing tests before
+any code changes, providing proper regression prevention.
+
+** Key Decisions
+
+- Use ~treesit-search-subtree~ with depth 1 to find =arguments= child by node type
+- Add Elixir branch to ~pi-outline--declaration-name-node~ for column info
+- Fix pre-existing ~let~ -> ~let*~ bug in test-outline.el yaml/toml/json tests
+- Tests run via emacsclient into the spell daemon (grammars only available there)
+- ERT tests follow existing patterns in ~test-treesit.el~ and ~test-outline.el~
+
+* Verification
+
+Run via emacsclient against the spell Emacs daemon (which has tree-sitter grammars):
+
+#+begin_src sh
+emacsclient --socket-name=spell-emacs-XXXX --eval '
+(progn
+  (load ".../pi-treesit.el" nil t)
+  (load ".../pi-outline.el" nil t)
+  (add-to-list (quote load-path) ".../packages/emacs/test/elisp")
+  (load "test-treesit" nil t)
+  (load "test-outline" nil t)
+  (let ((pass 0) (fail 0))
+    (dolist (name (quote (test-treesit-elixir-declaration-kind
+                          test-treesit-elixir-declaration-name
+                          test-outline-elixir-entries
+                          test-outline-yaml-entries
+                          test-outline-toml-entries
+                          test-outline-json-entries
+                          test-treesit-top-level-nodes
+                          test-treesit-declaration-name
+                          test-treesit-find-body
+                          test-outline-top-level-entries
+                          test-outline-class-members
+                          test-outline-line-numbers)))
+      (let ((result (ert-run-test (ert-get-test name))))
+        (if (ert-test-passed-p result) (setq pass (1+ pass)) (setq fail (1+ fail)))))
+    (format "pass=%d fail=%d" pass fail)))'
+#+end_src
+
+Expected: =pass=12 fail=0= (3 new Elixir + 3 fixed scoping + 6 existing)
+
+Also run ~bun check~ for TypeScript regressions.
+
+* Execution Manifest
+
+** Wave 1: Write failing regression tests (test-first)
+- [[id:BUG-187-paren-mismatch-in-pi-treesit-declaration]] (30m, priority A)
+  - Add 3 new ERT tests for Elixir outline (declaration-kind, declaration-name, outline-get)
+  - Fix pre-existing let->let* scoping in yaml/toml/json tests
+  - Files: ~packages/emacs/test/elisp/test-treesit.el~, ~packages/emacs/test/elisp/test-outline.el~
+
+** Wave 2: Fix implementation (depends on wave 1 tests)
+- [[id:BUG-188-elixir-declaration-name-fails-due-to-mis]] (30m, priority A, depends on BUG-187)
+  - Fix paren mismatch in ~pi-treesit-declaration-kind~ (lines 366-367)
+  - Fix arguments lookup in ~pi-treesit-declaration-name~ (~line 300)
+  - Add Elixir branch to ~pi-outline--declaration-name-node~
+  - Files: ~packages/emacs/elisp/pi-treesit.el~, ~packages/emacs/elisp/pi-outline.el~
+
+
+
+** Completion [2026-04-06]
+
+*** Verification
+
+ERT tests via emacsclient against spell daemon:
+
+#+begin_example
+PASS test-treesit-elixir-declaration-kind
+PASS test-treesit-elixir-declaration-name
+PASS test-outline-elixir-entries
+PASS test-outline-yaml-entries
+PASS test-outline-toml-entries
+PASS test-outline-json-entries
+PASS test-treesit-top-level-nodes
+PASS test-treesit-declaration-name
+PASS test-treesit-find-body
+PASS test-outline-top-level-entries
+PASS test-outline-class-members
+PASS test-outline-line-numbers
+pass=12 fail=0
+#+end_example
+
+~bun check:ts~: pre-existing errors in ~sql-store.ts~ and ~approvals.ts~ only; no regressions from this change.
+
+*** Artifacts
+
+Modified files:
+- ~packages/emacs/elisp/pi-treesit.el~ — 3 paren fixes, arguments lookup fix, block_node/table unwrap, TOML pair key fallback
+- ~packages/emacs/elisp/pi-outline.el~ — Elixir branch in declaration-name-node, TOML pair key fallback
+- ~packages/emacs/test/elisp/test-treesit.el~ — 3 new Elixir ERT tests
+- ~packages/emacs/test/elisp/test-outline.el~ — 1 new Elixir ERT test, let->let* fixes, elixir source constant
+
+*** Deviations
+
+Additional bugs discovered and fixed during implementation:
+1. *Paren mismatch in pair branch* (pi-treesit-declaration-name line 287): The =pair= cond clause was missing its closing paren, causing =table=, =call=, and catch-all branches to be parsed as part of the =pair= body. This was the root cause of declaration-name returning nil for ALL non-pair types that follow the pair branch (including Elixir call nodes). Fixed by adding the missing close paren.
+2. *YAML block_node not in unwrap list* (pi-treesit--top-level-nodes-children): YAML =block_mapping_pair= nodes are inside =block_node= which wasn't being unwrapped. Added =block_node= to the unwrap list and to the allowed grandparent types in the =block_mapping_pair= name check.
+3. *TOML table children not returned*: Table node was returned but its child =pair= nodes were not. Added a keep-and-unwrap mode for =table= nodes using named children only.
+4. *TOML pair key field missing*: tree-sitter-toml =pair= nodes have no =key= field name (unlike JSON). Added fallback to first named child.
+5. *Markdown let/let* scoping*: Same let->let* bug existed in the markdown test.

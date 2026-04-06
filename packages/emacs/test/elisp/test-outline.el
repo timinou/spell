@@ -20,6 +20,9 @@
 (defconst test-outline--json-source
   "{\"name\": \"app\", \"version\": \"1.0\"}\n")
 
+(defconst test-outline--elixir-source
+  "defmodule MyApp.Greeter do\n  def greet(name) do\n    \"Hello, \\\\ #{name}!\"\n  end\n\n  defp helper do\n    :ok\n  end\nend\n")
+
 (defun test-outline--with-tmp-file (source suffix fn)
   (let ((tmp (make-temp-file "pi-emacs-test" nil suffix)))
     (unwind-protect
@@ -69,8 +72,8 @@
                     (fboundp 'markdown-ts-mode)))
   (test-outline--with-tmp-file test-outline--md-source ".md"
     (lambda (file)
-      (let ((entries (pi-outline-get file))
-            (names (mapcar (lambda (entry) (alist-get 'name entry)) entries)))
+      (let* ((entries (pi-outline-get file))
+             (names (mapcar (lambda (entry) (alist-get 'name entry)) entries)))
         (should (member "h1: Intro" names))
         (should (member "h2: Background" names))
         (should-not (member "print" names))
@@ -82,9 +85,9 @@
   (skip-unless (treesit-language-available-p 'yaml))
   (test-outline--with-tmp-file test-outline--yaml-source ".yaml"
     (lambda (file)
-      (let ((entries (pi-outline-get file))
-            (names (mapcar (lambda (entry) (alist-get 'name entry)) entries))
-            (types (mapcar (lambda (entry) (alist-get 'type entry)) entries)))
+      (let* ((entries (pi-outline-get file))
+             (names (mapcar (lambda (entry) (alist-get 'name entry)) entries))
+             (types (mapcar (lambda (entry) (alist-get 'type entry)) entries)))
         (should (member "foo" names))
         (should (member "bar" names))
         (should (member "key" types))
@@ -96,10 +99,9 @@
   (skip-unless (treesit-language-available-p 'toml))
   (test-outline--with-tmp-file test-outline--toml-source ".toml"
     (lambda (file)
-      (let ((names (mapcar (lambda (entry) (alist-get 'name entry))
-                          (pi-outline-get file)))
-            (types (mapcar (lambda (entry) (alist-get 'type entry))
-                          (pi-outline-get file))))
+      (let* ((entries (pi-outline-get file))
+             (names (mapcar (lambda (entry) (alist-get 'name entry)) entries))
+             (types (mapcar (lambda (entry) (alist-get 'type entry)) entries)))
         (should (member "[table]" names))
         (should (member "item" names))
         (should (member "other" names))
@@ -118,6 +120,17 @@
         (should (member "version" names))
         (should (member "key" types))))
     ))
+
+(ert-deftest test-outline-elixir-entries ()
+  "Outline returns entries for Elixir declarations."
+  (skip-unless (treesit-language-available-p 'elixir))
+  (test-outline--with-tmp-file test-outline--elixir-source ".ex"
+    (lambda (file)
+      (let* ((entries (pi-outline-get file))
+             (names (mapcar (lambda (e) (alist-get 'name e)) entries)))
+        (should (listp entries))
+        (should (>= (length entries) 1))
+        (should (member "MyApp.Greeter" names))))))
 
 (provide 'test-outline)
 ;;; test-outline.el ends here
