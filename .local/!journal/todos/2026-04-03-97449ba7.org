@@ -1,0 +1,17 @@
+#+TITLE: Session 14ac0da79abe51b8 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run type checks and all relevant tests
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:GATE_CMD: cd /home/user/code/ora/spell && bun check:ts
+:DEPENDS: task-4
+:END:
+
+bun check:ts, run canvas task tier tests, canvas agent tier tests, model resolver tests
+
+bun check:ts passes for coding-agent package (9 pre-existing errors in spell-server/utils only). All 21 canvas tier tests pass, 49 model resolver tests pass, 1 status line test passes.

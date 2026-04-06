@@ -1,0 +1,17 @@
+#+TITLE: Session 14ac498659bebe1a Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Read the elisp MCP tools available for org operations
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Research org-ql capabilities for sorting and advanced queries
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:

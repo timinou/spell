@@ -1,0 +1,23 @@
+#+TITLE: Session 14ae9ad3a26f7ddc Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Investigation
+
+** DONE Trace TUI input event loop and text entry handling
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Trace how subagent output triggers TUI re-renders
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Trace the differential rendering pipeline for blocking operations
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

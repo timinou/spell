@@ -1,0 +1,21 @@
+#+TITLE: Session 14aa11ec2af4b0df Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** BLOCKED ~~Run focused checks and close plan~~
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: abandoned
+:GATE_COMMIT: true
+:VERIFY_CMD: bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts packages/coding-agent/test/task/async-progress.test.ts packages/coding-agent/test/task/render-report-finding.test.ts
+:DEPENDS: task-2
+:ORG_ITEM_ID: BUG-076-async-task-errors-not-surfaced-to-user-d
+:ORG_ITEM_CLOSING_ID: PLAN-076-fix-subagent-hang-on-provider-quota-exha
+:DEFERRED_TO: FUP-019-follow-up-clear-spellcast-verification-b
+:END:
+
+Deferred after capturing verification evidence, updating BUG-076 to BLOCKED, moving PLAN-076 to BLOCKED, appending the completion report, and creating follow-up [[id:FUP-019-follow-up-clear-spellcast-verification-b]] for the unrelated spellcast verification baseline failures.
+
+Focused regression tests and file-scoped Biome checks passed, and the implementation was committed in 0b166390b. Plan closure is deferred because repo-wide `bun check:ts` is blocked by unrelated spellcast workspace failures captured in FUP-019-follow-up-clear-spellcast-verification-b.

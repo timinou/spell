@@ -1,0 +1,152 @@
+#+TITLE: Polish canvas task audit findings changelog TUI badge wiring importcode cleanup
+#+STATE: DONE
+#+SESSION_ID: 14ac0da79abe51b8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T11-01-27-786Z_14ac0da79abe51b8.jsonl]]
+#+CUSTOM_ID: BUG-136-polish-canvas-task-audit-findings-change
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: runtime
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-027-audit-implementation:
+
+The CHANGELOG was not updated. This is a finding per AGENTS.md rules.
+
+Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. CHANGELOG not updated
+- **What**: `packages/coding-agent/CHANGELOG.md` has no entries under `[Unreleased]` for this plan's changes.
+- **Where**: `packages/coding-agent/CHANGELOG.md`, under `## [Unreleased]`
+- **Why**: AGENTS.md requires changelog entries for all changes. This is a 4-item plan with user-facing features (new model role, new status line segment, enriched payloads). Missing entries make the next release opaque.
+- **Effort**: `trivial`
+
+### 2. `setCanvasTaskCount()` has no callers — TUI badge is invisible
+- **What**: `StatusLineComponent.setCanvasTaskCount()` is defined but nothing calls it. The `canvas_tasks` status line segment always shows `canvasTaskCount: 0` and remains hidden.
+- **Where**: `packages/coding-agent/src/modes/components/status-line.ts` line 97
+- **Why**: The FEAT-252 acceptance criterion says "TUI shows a badge/indicator when canvas tasks are active" — this is not satisfied. The infrastructure is in place but the glue (calling `setCanvasTaskCount(manager.getActive().length)` from the render/event cycle) is missing. Note: the pre-existing `setSubagentCount()` has the same pattern — also never called — so this is consistent with existing code, but the feature intent is unmet.
+- **Effort**: `small`
+
+### 3. Theme icon type cast is fragile
+- **What**: `canvasTasksSegment` uses `(theme.icon as typeof theme.icon & { canvas?: string }).canvas ?? ""` to access a `canvas` icon that doesn't exist in the theme type.
+- **Where**: `packages/coding-agent/src/modes/components/status-line/segments.ts` line 194
+- **Why**: The cast silently resolves to `""` (empty string), so the segment renders without an icon. This works but obscures the fact that no canvas icon exists. If a `canvas` icon is later added to the theme, this cast will need to be cleaned up. Minor maintenance cost.
+- **Effort**: `trivial`
+
+### 4. Split imports from same module
+- **What**: `canvas-task-manager.ts` lines 16–17 split type and value imports from `"../task/types"` into two separate import statements. Same pattern in the test file lines 18–19.
+- **Where**: `packages/coding-agent/src/orchestrators/canvas-task-manager.ts` lines 16–17; `test/tools/canvas-task-tier.test.ts` lines 18–19
+- **Why**: Could be a single import: `import { TASK_SUBAGENT_PROGRESS_CHANNEL, type AgentDefinition, type AgentProgress, type SingleResult } from "../task/types"`. Biome didn't flag it, so this is purely cosmetic.
+- **Effort**: `trivial`
+
+### 5. Duplicate `durationMs` computation on success path
+- **What**: `Date.now() - startTime` is computed once for the logger call (line 210) and again for the bridge message (line 222), ~12 lines apart. These will differ slightly.
+- **Where**: `packages/coding-agent/src/orchestrators/canvas-task-manager.ts` lines 210, 222
+- **Why**: The logger and bridge message will report slightly different durations for the same task. Trivial in practice (microsecond difference), but could be a `const durationMs = Date.now() - startTime` once.
+- **Effort**: `trivial`
+
+Five mechanical fixes from the PLAN-109 audit.
+
+* Scope
+
+** 1. Add CHANGELOG entries [trivial]
+File: =packages/coding-agent/CHANGELOG.md=
+
+Under =## [Unreleased] / ### Added=, append:
+#+begin_example
+- `pi/sniper` model role for canvas quick-task with `gpt-5.3-codex-spark` primary and codex/smol fallback chain
+- Canvas task timeout (120s default, configurable) with `AbortSignal.any` guard
+- Immediate QML acknowledgment (`task_ack`) and `_rid`-based reply callback for canvas task tier
+- Canvas task progress streaming to QML via `task_progress` bridge messages
+- `canvas_tasks` status line segment for TUI badge (infrastructure; wiring deferred)
+- Enriched `task_result` payloads: `model`, `tokens`, `durationMs`, `usage`, `retryable` fields
+#+end_example
+
+Under =## [Unreleased] / ### Fixed=, append:
+#+begin_example
+- Canvas task subagent silent hang: tasks now timeout instead of hanging indefinitely
+#+end_example
+
+** 2. Wire setCanvasTaskCount in event-controller [small]
+Files:
+- =packages/coding-agent/src/modes/types.ts= — add =taskManager?= to =InteractiveModeContext=
+- =packages/coding-agent/src/modes/interactive-mode.ts= — pass =taskManager= into context
+- =packages/coding-agent/src/modes/controllers/event-controller.ts= — on =statusLine.invalidate()= calls, also update canvas task count
+
+The =taskManager= lives on the =ToolSessionResult= returned by =createAgentSession()= in sdk.ts.
+The TUI =InteractiveModeContext= needs a reference to it so the event-controller can call:
+=ctx.statusLine.setCanvasTaskCount(ctx.taskManager?.getActive().length ?? 0)=
+
+The simplest wiring: on each =statusLine.invalidate()= in event-controller, also update the canvas task count. This piggybacks on existing invalidation triggers (turn start, turn end, message update) which is frequent enough.
+
+Alternative (lighter): subscribe to =CANVAS_TASK_CHANNEL= and =CANVAS_EVENTS_CHANNEL= from event-controller and update on task start/stop only. But this duplicates subscription logic already in CanvasTaskManager. Prefer the invalidate piggyback.
+
+** 3. Remove theme icon type cast [trivial]
+File: =packages/coding-agent/src/modes/components/status-line/segments.ts= line 194
+
+Replace:
+#+begin_src typescript
+const canvasIcon = (theme.icon as typeof theme.icon & { canvas?: string }).canvas ?? "";
+const content = withIcon(canvasIcon, label);
+#+end_src
+
+With just:
+#+begin_src typescript
+const content = withIcon("", label);
+#+end_src
+
+No canvas icon exists in the theme. The cast resolves to ="" anyway. Remove the dead indirection.
+If/when a canvas icon is added to the theme type, the segment can reference it directly.
+
+** 4. Merge split imports [trivial]
+File: =packages/coding-agent/src/orchestrators/canvas-task-manager.ts= lines 16-17
+
+Merge:
+#+begin_src typescript
+import type { AgentDefinition, AgentProgress, SingleResult } from "../task/types";
+import { TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
+#+end_src
+Into:
+#+begin_src typescript
+import { TASK_SUBAGENT_PROGRESS_CHANNEL, type AgentDefinition, type AgentProgress, type SingleResult } from "../task/types";
+#+end_src
+
+Same for test file =packages/coding-agent/test/tools/canvas-task-tier.test.ts= lines 18-19:
+#+begin_src typescript
+import type { AgentProgress, SingleResult } from "../../src/task/types";
+import { TASK_SUBAGENT_PROGRESS_CHANNEL } from "../../src/task/types";
+#+end_src
+Into:
+#+begin_src typescript
+import { TASK_SUBAGENT_PROGRESS_CHANNEL, type AgentProgress, type SingleResult } from "../../src/task/types";
+#+end_src
+
+** 5. Deduplicate durationMs on success path [trivial]
+File: =packages/coding-agent/src/orchestrators/canvas-task-manager.ts= lines 207-222
+
+Compute =durationMs= once before logger + bridge:
+#+begin_src typescript
+const durationMs = Date.now() - startTime;
+logger.debug("Canvas task completed", { windowId, id: executorOptions.id, durationMs });
+// ... bridge.sendMessage uses durationMs
+#+end_src
+
+* Sub-outline
+** Add CHANGELOG entries
+** Wire setCanvasTaskCount via InteractiveModeContext + event-controller
+** Remove theme icon cast to bare empty string
+** Merge split imports in canvas-task-manager.ts and test
+** Deduplicate durationMs computation
+
+* Acceptance
+- CHANGELOG has entries for all PLAN-109 features/fixes under =[Unreleased]=
+- =canvas_tasks= status line segment shows non-zero count when canvas tasks run (verified by the existing =canvasTaskCount= field plumbing into the segment)
+- No type cast in =canvasTasksSegment= render
+- Single import from ="../task/types"= in canvas-task-manager.ts and test
+- Single =durationMs= local in success branch of =#handleRequest=
+- =bun check:ts= passes for coding-agent (same pre-existing errors in other packages)
+- =bun test test/tools/canvas-task-tier.test.ts= still passes

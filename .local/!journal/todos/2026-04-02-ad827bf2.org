@@ -1,0 +1,61 @@
+#+TITLE: Session 14ab6894eaa2d281 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Design
+
+** DONE Run gap analysis
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Perform mandatory pre-org gap analysis equivalent before item creation, then resolve remaining open questions.
+
+Completed Metis-style gap analysis using a generic task agent. Resolved remaining design choices: dedicated workflow KDL family imported by autonomy.kdl, separate approval-item and checkpoint-item types with shared base contract, schema-aware single-record/non-overlapping writeback auto-merge, server-global worker pool with per-kind/global caps, and HTTP-canonical tool integration with optional shared helpers.
+
+* Org authoring
+
+** DOING Create child org items
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: in_progress
+:END:
+
+Create non-overlapping child items with explicit tests, implementation sub-outline IDs, and dependencies.
+
+Org authoring in progress with decomposition grounded in repo evidence and Metis-style gap analysis.
+
+** ITEM Create orchestration plan item
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: pending
+:END:
+
+Create plans item with Context, Verification, and Execution Manifest sections using [[id:...]] links.
+
+* Exit
+
+** ITEM Run advisory review and exit
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: pending
+:END:
+
+Perform advisory review if possible, then call exit_plan_mode with the PLAN item id.
+
+* MetisGapAnalysis
+
+** BLOCKED Review cutover plan gaps
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: failed
+:END:
+
+* MetisGapAnalysisRetry
+
+** BLOCKED Return actionable planning gaps
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: failed
+:END:

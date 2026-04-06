@@ -1,0 +1,13 @@
+#+TITLE: Session 14a988995f409bb6 Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Verify and close plan
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Run bun check:ts, verify org states, verify grep, update PLAN org item, commit.

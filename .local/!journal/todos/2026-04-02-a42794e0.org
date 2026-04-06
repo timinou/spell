@@ -1,0 +1,41 @@
+#+TITLE: Session 14aac3ad63d8f8fa Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Goal\nUpdate the DEPENDS properties on org items that need cross-references to items created in the parallel batch. All items exist now.\n\n## Item ID Registry\n- FEAT-215-kdl-manifest-schema-and-parser (KDL Manifest)\n- PROJ-019-generalized-sessionmanager-for-spell-ser (SessionManager)\n- FEAT-216-sandbox-path-write-and-bash-command-enfo (Sandbox)\n- FEAT-217-autonomy-state-builtin-tool (State Tool)\n- FEAT-218-cron-scheduler-engine (Scheduler)\n- FEAT-219-goal-executor-with-retry-and-escalation (Executor)\n- FEAT-220-spell-server-start-cli-entrypoint (CLI)\n- FEAT-221-unified-http-api-router-and-endpoints (HTTP API)\n- FEAT-222-post-completion-hooks-for-autonomy-goals (Hooks)\n- FEAT-223-preact-mini-frontend-dashboard (Frontend)\n- FEAT-224-autonomy-system-documentation (Docs)"
+
+** DONE Set DEPENDS on executor to SessionManager + Sandbox + Scheduler + Manifest
+:PROPERTIES:
+:TASK_ID: task-11
+:STATUS: completed
+:END:
+
+** DONE Set DEPENDS on hooks to Executor + Manifest
+:PROPERTIES:
+:TASK_ID: task-12
+:STATUS: completed
+:END:
+
+** DONE Set DEPENDS on HTTP API to Executor + Scheduler + Hooks
+:PROPERTIES:
+:TASK_ID: task-13
+:STATUS: completed
+:END:
+
+** DONE Set DEPENDS on frontend to HTTP API
+:PROPERTIES:
+:TASK_ID: task-14
+:STATUS: completed
+:END:
+
+** DONE Set DEPENDS on CLI to all main FEATs
+:PROPERTIES:
+:TASK_ID: task-15
+:STATUS: completed
+:END:
+
+** DONE Set DEPENDS on docs to CLI (everything must be done)
+:PROPERTIES:
+:TASK_ID: task-16
+:STATUS: completed
+:END:

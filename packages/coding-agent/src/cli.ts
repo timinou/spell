@@ -51,6 +51,7 @@ const commands: CommandEntry[] = [
 	{ name: "domain", load: () => import("./commands/domain").then(m => m.default) },
 	{ name: "gateway", load: () => import("./commands/gateway").then(m => m.default), aliases: ["gw"] },
 	{ name: "grep", load: () => import("./commands/grep").then(m => m.default) },
+	{ name: "init", load: () => import("./commands/init").then(m => m.default) },
 	{ name: "growth", load: () => import("./commands/growth").then(m => m.default) },
 	{ name: "jupyter", load: () => import("./commands/jupyter").then(m => m.default) },
 	{ name: "plugin", load: () => import("./commands/plugin").then(m => m.default) },

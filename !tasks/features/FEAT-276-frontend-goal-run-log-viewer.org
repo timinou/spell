@@ -1,0 +1,39 @@
+#+TITLE: Frontend goal run log viewer
+#+STATE: ITEM
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-276-frontend-goal-run-log-viewer
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: frontend
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+The API exposes =/api/goals/:name/logs= but the frontend only shows run history as a table of timestamps and statuses. When a goal run fails, operators have no way to see what happened without checking server logs.
+
+* Usefulness
+- Operators can click a run to see its output/logs inline
+- Failed runs show the error message prominently
+- Eliminates the need to SSH into the server to debug a failed discovery or delivery run
+
+* Approach
+Extend the =GoalDetailView= component to fetch and display logs for each run. Render log output in a =<pre>= block with scroll.
+
+** Sub-outline
+1. Add =fetchGoalLogs= helper using =/api/goals/:name/logs=
+2. Extend =GoalDetailView= with expandable log section per run
+3. Style log output with existing =pre= class, add max-height with overflow scroll
+4. Test: screenshot of goal detail with expanded log viewer
+
+** Scope
+- File: =packages/spell-server/src/http/frontend/index.html=
+- Uses existing =/api/goals/:name/logs= endpoint
+- Does NOT modify backend
+
+** Acceptance
+- Goal detail view shows expandable logs per run
+- Log content renders in monospace with scroll container
+- Error runs visually highlighted

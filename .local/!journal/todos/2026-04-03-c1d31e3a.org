@@ -1,0 +1,14 @@
+#+TITLE: Session 14ac8e488bb8e84f Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Fix streaming guard in handleAuditCommand
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+Add isStreaming check in interactive-mode.ts handleAuditCommand() before state mutation

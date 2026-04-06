@@ -1,8 +1,8 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type Static, Type } from "@sinclair/typebox";
+import type { ToolSession } from ".";
 import type { SpellSurfaceClientOptions } from "./goals-tool";
 import { resolveSpellSurfaceClientOptions } from "./goals-tool";
-import type { ToolSession } from ".";
 import { toolResult } from "./tool-result";
 
 const approvalsSchema = Type.Object({});

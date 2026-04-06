@@ -1,0 +1,23 @@
+#+TITLE: Session 14abf8daee6f2d2b Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Understand how autonomy.kdl goals map to Spell runtime
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Check how Spell tools relate to growth functionality
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Check if WorkflowEngine is used by anything besides growth
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

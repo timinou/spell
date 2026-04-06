@@ -1,5 +1,5 @@
 #+TITLE: send_file tool for agent-to-user file delivery
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ac069b96bbdfba
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-30-40-474Z_14ac069b96bbdfba.jsonl]]
 #+CUSTOM_ID: FEAT-249-send-file-tool-for-agent-to-user-file-de

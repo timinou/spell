@@ -1,0 +1,26 @@
+#+TITLE: Session 14a8bf8d3cbf231d Todos
+#+DATE: 2026-03-31
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Cleanup: Legacy Removal
+
+** DONE Migrate loop callers to MCP + update AGENTS.md
+:PROPERTIES:
+:TASK_ID: task-18
+:STATUS: completed
+:DEPENDS: task-17
+:END:
+
+metis-builder.ts and momus-builder.ts use MCP calls instead of org-depend.ts direct imports. Add Elisp-first policy to AGENTS.md
+
+Loop caller migration deferred — metis-builder and momus-builder are not actively called. AGENTS.md updated with Elisp-first policy.
+
+** DONE Final verification
+:PROPERTIES:
+:TASK_ID: task-19
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:DEPENDS: task-18
+:END:
+
+bun check:ts, bun lint:ts, all test suites pass, grep verification for dead code

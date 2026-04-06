@@ -1,0 +1,14 @@
+#+TITLE: Session 14ab1ac9c957c0cd Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Fix
+
+** DONE Fix cursorOverrideWidth for mic emoji
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+Change hardcoded width=1 to visibleWidth() in interactive-mode.ts and editor.ts fallback

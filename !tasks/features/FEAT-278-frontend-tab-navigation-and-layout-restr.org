@@ -1,0 +1,43 @@
+#+TITLE: Frontend tab navigation and layout restructure
+#+STATE: ITEM
+#+SESSION_ID: 14ac4bf6bc32dba5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T15-33-41-744Z_14ac4bf6bc32dba5.jsonl]]
+#+CUSTOM_ID: FEAT-278-frontend-tab-navigation-and-layout-restr
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: frontend
+
+* Initial Message
+
+The frontend at localhost:8787 is a spell server for ../growth. How would you improve it (leveraging the schema in the kdl to automatically layout somehting nice, with potentail additions to the kdl schemas if you want) to make it actually useful? Explain the actual usefulnesses
+
+* Problem
+The current frontend has only two views: goal list and goal detail. Adding approval queue, downstream jobs, and manifest detail as additional views requires navigation. The single =view= state variable with =list/detail= is insufficient.
+
+* Usefulness
+- Tab-based navigation lets operators switch between Goals, Approvals, Jobs, and Config without losing state
+- Badge counts on tabs (e.g. "Approvals (3)") surface urgency at a glance
+- Consistent layout shell with header auth, tab bar, and content area
+
+* Approach
+Replace the =view= state with a tab-based router. Add a tab bar below the header with: Goals, Approvals, Jobs, Config. Each tab renders its panel component. Detail views (goal detail, approval detail) stack on top of their parent tab.
+
+** Sub-outline
+1. Add tab bar component with Goals/Approvals/Jobs/Config tabs
+2. Replace =view= state with =activeTab= + optional =detailId= state
+3. Move goal list into Goals tab
+4. Add badge counts: pending approvals count on Approvals tab, failed jobs count on Jobs tab
+5. Wire tab switching to preserve data (don't reset goals when switching to approvals)
+6. Add CSS for tab bar: horizontal tabs, active indicator, badge styling
+7. Test: screenshot of dashboard with tab bar and badge counts visible
+
+** Scope
+- File: =packages/spell-server/src/http/frontend/index.html=
+- Refactor of the =App= component's routing logic
+- Does NOT modify backend
+
+** Acceptance
+- Tab bar renders with 4 tabs
+- Switching tabs shows correct panel
+- Badge counts update on poll interval
+- Active tab visually highlighted

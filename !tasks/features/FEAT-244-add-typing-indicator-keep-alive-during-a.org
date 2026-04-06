@@ -1,0 +1,40 @@
+#+TITLE: Add typing indicator keep-alive during agent processing
+#+STATE: DONE
+#+SESSION_ID: 14abfd6c4ce4ae1f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-50-32-755Z_14abfd6c4ce4ae1f.jsonl]]
+#+CUSTOM_ID: FEAT-244-add-typing-indicator-keep-alive-during-a
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: integration
+#+DEPENDS: BUG-129-fix-silent-sendmessagedraft-failure-use
+
+* Initial Message
+
+Look up online and in grammy. explain why i still only get the final message in telegram and I don't see any typing or streaming indicator. There was supposed to be a whole system to be made aware of the work as it was being done.
+
+* Problem
+
+There is no ~sendChatAction('typing')~ call anywhere in the Telegram message handler. When the agent is processing (thinking, running tools, before any text is generated), the user sees no indication that work is happening. Even with working drafts, there's a gap between message receipt and the first text content where no feedback is visible.
+
+Telegram's typing indicator expires after 5 seconds and must be refreshed. The ~@grammyjs/auto-chat-action~ plugin handles this, but a manual interval is simpler and avoids adding a dependency for one call.
+
+* Scope
+
+** Files to change
+- =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts= — Add a typing indicator interval to ~ResponseStreamer~ that starts on construction and stops when the first draft is sent or on finalization
+- =packages/spell-server/test/telegram/bridge.test.ts= — Add test that typing action is sent, verify cleanup
+
+** Sub-outline
+1. Add ~#typingInterval~ field to ~ResponseStreamer~ (type ~NodeJS.Timeout | null~)
+2. In constructor (after resolving chatId): call ~ctx.replyWithChatAction("typing")~ immediately, then start a ~setInterval~ at 4000ms that calls ~ctx.replyWithChatAction("typing")~. Catch and log errors (best-effort).
+3. In ~#flushDraft()~: on first successful draft send, clear the typing interval (drafts provide their own visual feedback)
+4. In ~#finalize()~ and ~cancel()~: clear the typing interval
+5. Add ~replyWithChatAction~ mock to ~MockAuthContext~ in tests
+6. Add test: verify typing action is called at least once before finalization
+
+* Acceptance
+- ~replyWithChatAction("typing")~ is called immediately when a ~ResponseStreamer~ is created with a valid chatId
+- Typing interval is cleared when the first draft is successfully sent
+- Typing interval is cleared on finalize/cancel (no leaked intervals)
+- ~bun test packages/spell-server/test/telegram/bridge.test.ts~ passes
+- No ~@grammyjs/auto-chat-action~ dependency added

@@ -1,0 +1,36 @@
+#+TITLE: Fix silent sendMessageDraft failure  use grammY native API
+#+STATE: DONE
+#+SESSION_ID: 14abfd6c4ce4ae1f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-50-32-755Z_14abfd6c4ce4ae1f.jsonl]]
+#+CUSTOM_ID: BUG-129-fix-silent-sendmessagedraft-failure-use
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: integration
+
+* Initial Message
+
+Look up online and in grammy. explain why i still only get the final message in telegram and I don't see any typing or streaming indicator. There was supposed to be a whole system to be made aware of the work as it was being done.
+
+* Problem
+
+~sendDraft()~ in =rpc-to-telegram.ts= casts ~ctx.api~ to a speculative ~DraftCapableApi~ type and checks ~ctx.api.raw.sendMessageDraft~. This property does *not exist* on grammY's ~Api~ class. grammY 1.41.1 (installed) exposes ~sendMessageDraft~ as a first-class method on ~ctx.api~ and provides ~ctx.replyWithDraft()~ as a context alias. The check on line 22 (~if (!rawApi?.sendMessageDraft)~) always returns early, silently discarding every draft update. The ~ResponseStreamer~ accumulates text, thinking status, and tool progress correctly, schedules ~#flushDraft()~ every 334ms — but every flush hits the silent return and is discarded.
+
+* Scope
+
+** Files to change
+- =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts= — Replace ~sendDraft()~ function with ~ctx.replyWithDraft()~; remove ~DraftCapableApi~ / ~DraftApiRaw~ interface hack
+- =packages/spell-server/test/telegram/bridge.test.ts= — Update mock to expose ~replyWithDraft~ on the context instead of ~api.raw.sendMessageDraft~
+
+** Sub-outline
+1. Remove ~DraftApiRaw~ interface (lines 11-13)
+2. Remove ~DraftCapableApi~ interface (lines 15-17)
+3. Rewrite ~sendDraft()~ to call ~ctx.replyWithDraft(text)~ inside a try/catch that *logs* errors via ~logger.warn~ instead of silently swallowing them
+4. Update ~MockAuthContext~ in bridge.test.ts: replace ~api.raw.sendMessageDraft~ with a ~replyWithDraft~ mock method
+5. Verify existing tests still pass with the new mock shape
+
+* Acceptance
+- ~sendDraft~ calls ~ctx.replyWithDraft(text)~ with no type casts
+- ~DraftCapableApi~ / ~DraftApiRaw~ types are deleted
+- Draft send errors are logged at warn level, not silently swallowed
+- ~bun test packages/spell-server/test/telegram/bridge.test.ts~ passes
+- No ~as unknown as~ casts related to draft API remain

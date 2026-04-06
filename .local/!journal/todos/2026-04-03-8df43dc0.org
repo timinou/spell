@@ -1,0 +1,36 @@
+#+TITLE: Session 14ac7ba7549c54db Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Foundation (Tests)
+
+** DONE Write tests for project-level config.yml loading
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_CMD: bun test packages/coding-agent/test/settings-manager.test.ts
+:END:
+
+Add tests to settings-manager.test.ts: YAML merge, merge precedence, JSON+YAML coexistence
+
+** DONE Implement YAML loading in builtin loadSettings
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:GATE_CMD: bun test packages/coding-agent/test/settings-manager.test.ts
+:END:
+
+Modify builtin.ts loadSettings() to load .spell/agent/config.yml alongside settings.json
+
+Implementation was done alongside tests - both tests and impl committed together
+
+* Verification
+
+** DONE Type check and final verification
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+Run bun check:ts, verify no regressions

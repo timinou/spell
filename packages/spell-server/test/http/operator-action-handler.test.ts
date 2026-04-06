@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import type { OperatorAction } from "../../src/manifest/types";
 import type { OperatorActionRequest } from "../../src/http/routes/operator-actions";
-import { generateOperatorActionHandler } from "../../src/workflow/operator-action-generator";
+import type { OperatorAction } from "../../src/manifest/types";
 import { WorkflowEngine } from "../../src/workflow";
+import { generateOperatorActionHandler } from "../../src/workflow/operator-action-generator";
 
 const operatorActions: OperatorAction[] = [
 	{
@@ -132,9 +132,7 @@ describe("generateOperatorActionHandler", () => {
 		};
 
 		// Should propagate the unexpected error
-		await expect(handler(makeRequest("reject", "article-err", "req-2"))).rejects.toThrow(
-			"database connection lost",
-		);
+		await expect(handler(makeRequest("reject", "article-err", "req-2"))).rejects.toThrow("database connection lost");
 
 		// Restore
 		engine.claimItem = originalClaim;
@@ -149,8 +147,8 @@ describe("generateOperatorActionHandler", () => {
 
 		// Override claimItem: perform the real claim, then throw "already claimed"
 		const originalClaim = engine.claimItem.bind(engine);
-		engine.claimItem = (input) => {
-			const item = originalClaim(input);
+		engine.claimItem = input => {
+			const _item = originalClaim(input);
 			throw new Error("Workflow item wf-1 is already claimed by other-user");
 		};
 

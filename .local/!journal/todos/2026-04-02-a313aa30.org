@@ -1,0 +1,41 @@
+#+TITLE: Session 14ab381826140ae8 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Investigation
+
+** DONE Inspect growth spell-server setup
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Verified from packages/coding-agent/src/domain/detection.ts that only .spell/domain.json is consulted (not domain.json.bak), and from packages/spell-server/src/telegram/commands/index.ts that telegram-readonly omits edit/write/bash/task while telegram-full includes them. Growth config pointed at /home/user/code/ora/growth but only had .spell/domain.json.bak and default-mode telegram-readonly.
+
+Root cause was configuration, not code: the growth workspace had no active .spell/domain.json, so Spell defaulted to the coding domain; channels.kdl also defaulted the Telegram user to telegram-readonly, which blocks acting on the pipeline.
+
+* Implementation
+
+** DONE Wire growth-specific context
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+Created ../growth/.spell/domain.json with {"domain":"growth"} and changed ../growth/.spell/channels.kdl user 801343188 default-mode to telegram-full.
+
+Restored the active domain override and switched the configured Telegram default mode to full access.
+
+* Verification
+
+** DONE Verify pipeline-aware behavior
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Executed:
+1) bun -e 'import { detectDomain } from "./packages/coding-agent/src/domain/detection.ts"; const domain = await detectDomain("/home/user/code/ora/growth"); console.log(domain);' -> growth
+2) bun -e 'import * as fs from "node:fs/promises"; import { parseChannelsConfig } from "./packages/spell-server/src/config/channels-parser.ts"; const text = await fs.readFile("/home/user/code/ora/growth/.spell/channels.kdl", "utf8"); const cfg = parseChannelsConfig(text, "/home/user/code/ora/growth/.spell"); console.log(JSON.stringify(cfg.telegram?.users?.["801343188"], null, 2));' -> defaultMode telegram-full
+
+Verified the two settings that matter for your complaint: domain detection now resolves growth for ../growth, and the Telegram config parses with defaultMode=telegram-full.

@@ -1,5 +1,5 @@
 #+TITLE: Session Crash Resilience
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14aee9d600539be3
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-05T16-20-24-705Z_14aee9d600539be3.jsonl]]
 #+CUSTOM_ID: PLAN-150-session-crash-resilience

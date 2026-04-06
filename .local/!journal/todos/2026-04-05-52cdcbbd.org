@@ -1,0 +1,23 @@
+#+TITLE: Session 14aeea8d3d508761 Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Repo
+
+** DONE Find BridgeEvent type definition and all event types
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Find existing QML bridge/process test patterns
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Find QmlBridge.reconnect() and claimOrphans usage
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

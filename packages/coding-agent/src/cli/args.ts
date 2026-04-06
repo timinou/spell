@@ -192,7 +192,7 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			if (next && !next.startsWith("-")) {
 				result.canvas = args[++i];
 			} else {
-				result.canvas = "fluid";
+				result.canvas = "";
 			}
 		} else if (arg === "--export" && i + 1 < args.length) {
 			result.export = args[++i];

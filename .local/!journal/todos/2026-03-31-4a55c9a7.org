@@ -1,0 +1,15 @@
+#+TITLE: Session 14a87251ce16ec48 Todos
+#+DATE: 2026-03-31
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run checks and commit
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:DEPENDS: task-5
+:END:
+
+bun check:ts, bun test, grep verification, commit

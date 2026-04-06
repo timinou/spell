@@ -1,0 +1,13 @@
+#+TITLE: Session 14ac15e4932812c3 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Verify type checks and test suite
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Run bun check:ts and bun test packages/spell-server/test/telegram/bridge.test.ts

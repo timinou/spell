@@ -1,0 +1,54 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-034-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Each `beforeEach` creates a new `SubagentViewerComponent` that subscribes to the EventBus. But there's no `afterEach` that calls `viewer.dispose()`. Since `beforeEach` also creates a new `EventBus` each time, the old viewer's subscriptions are on the old bus which is GC'd — so this doesn't actually leak. But it's inconsistent with good practice.
+
+Now my findings:
+
+---
+
+## Audit Findings
+
+### 1. EventBus subscription leak on non-Escape close paths
+- **What**: `SubagentViewerComponent.dispose()` is only called when the user presses Escape. If the viewer is removed by another selector opening (e.g., `Ctrl+L` for model selector) or by `showSelector`'s `done()` path being called externally, `dispose()` is never called and EventBus subscriptions remain active.
+- **Where**: `viewer-component.ts:140-143` (dispose only in escape handler); `selector-controller.ts:68-78` (showSelector has no component lifecycle hooks)
+- **Why**: Leaked EventBus subscriptions will continue firing the viewer's progress/event handlers on a detached component, causing wasted CPU and potential undefined behavior if the component's internal state is accessed after removal.
+- **Effort**: `small` — call `viewer.dispose()` in the `onClose` callback or restructure so `done` calls `dispose` before restoring the editor.
+
+### 2. `#renderHeader` calls `truncateToWidth()` twice on the same content
+- **What**: Line 292 computes `truncateToWidth(headerContent, innerWidth)` twice — once to emit the truncated string, once inside `visibleWidth()` for padding. Redundant computation.
+- **Where**: `viewer-component.ts:292`
+- **Why**: Minor performance waste (called on every render), but more importantly the line is 200+ characters and hard to read/maintain. Using `#frameLine()` or storing the intermediate would fix both issues.
+- **Effort**: `trivial`
+
+### 3. Dead `_makeToolEvent` function in viewer-component.test.ts
+- **What**: `_makeToolEvent` (lines 53-62) is a biome-auto-prefixed unused function that was originally `makeToolEvent`. It's dead code.
+- **Where**: `test/modes/components/subagent-viewer/viewer-component.test.ts:53-62`
+- **Why**: Test clutter. No behavioral impact.
+- **Effort**: `trivial`
+
+### 4. `#terminalRows` captured once at construction, not responsive to resize
+- **What**: Terminal row count is snapshot at construction time. If the terminal is resized while the viewer is open, `#bodyHeight()` returns a stale value.
+- **Where**: `viewer-component.ts:46,63,269`
+- **Why**: The scroll viewport height would be wrong after a terminal resize — content could overflow or underflow the frame. This matches the `DebugLogViewerComponent` pattern (same issue), so it's a known limitation across all selectors, not a regression.
+- **Effort**: `small` — read `this.#ui.terminal.rows` in `#bodyHeight()` instead of the captured value.
+
+### 5. Payload interfaces are incomplete relative to actual emitted shape
+- **What**: `SubagentEventPayload` and `SubagentProgressPayload` omit fields the executor actually emits (`agentSource`, `task`, `assignment`). While unused fields don't cause bugs, the interfaces are typed assertions (`as SubagentEventPayload`) that could silently drop information a future consumer expects.
+- **Where**: `viewer-component.ts:20-31`
+- **Why**: If someone adds rendering of `task` or `assignment` to the viewer header, they'd see the data is actually there at runtime but missing from the type. Low risk, but imprecise.
+- **Effort**: `trivial`
+
+### 6. No test coverage for `tool_execution_start`/`tool_execution_end` flowing through the viewer
+- **What**: Viewer-component tests exercise assistant messages but never emit `tool_execution_start`/`tool_execution_end` through the EventBus to verify end-to-end tool rendering within the viewer. The event-handler tests cover this at the handler level, but the viewer's event filtering and forwarding path for tool events is untested.
+- **Where**: `test/modes/components/subagent-viewer/viewer-component.test.ts`
+- **Why**: A regression in the event forwarding or filtering path for tool events would not be caught by existing tests.
+- **Effort**: `small`

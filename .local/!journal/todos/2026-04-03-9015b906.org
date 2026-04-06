@@ -1,0 +1,35 @@
+#+TITLE: Session 14ab788ccb62d28c Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Investigation
+
+** DONE Read goal executor and action dispatch
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Read workflow engine duplicate and claim logic
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Read coding-agent tool registration and surface modules
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Read growth action registration and manifest parser
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Read approvals API validation and feed-send chunking
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:

@@ -1,0 +1,40 @@
+#+TITLE: Session 14af34a1a927477d Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Add softReset to ToolSession interface
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+packages/coding-agent/src/tools/index.ts — add softReset?(): Promise<void> | void
+
+** DONE Implement softReset on toolSession in sdk.ts
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+packages/coding-agent/src/sdk.ts — softReset cleans QML/gateway but preserves emacs/org managers
+
+** DONE Split #disposeTools into soft/hard modes
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+packages/coding-agent/src/session/agent-session.ts — accept mode param, update 4 call sites
+
+* Verification
+
+** DONE Type check and test
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+bun check:ts, bun test packages/emacs/test/, verify code tool works

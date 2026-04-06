@@ -1,0 +1,15 @@
+#+TITLE: Session 14aa280ba5c21ae8 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run focused verification and close plan
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+Verification completed with focused evidence. Remaining blocker is external to PLAN-077 ownership: pre-existing `bun check:ts` failures in packages/coding-agent/src/spellcast/, packages/coding-agent/src/tools/canvas-cast.ts, packages/coding-agent/src/tools/index.ts, and packages/ai/src/utils/oauth/index.ts. Deferred follow-up FUP-020 remains open by design.
+
+Focused verification and closeout work completed. `bun test` focused suite passed (114/114), commit `ed11f7c66` captured the plan-owned changes, child org items FEAT-196/197/198/199/200 were moved to DONE, and the PLAN completion report was appended. The parent PLAN remains DOING truthfully because repo-wide `bun check:ts` is still blocked by unrelated pre-existing files outside this change set.

@@ -1,0 +1,27 @@
+#+TITLE: Session 14ac0d8bf8ef2d3e Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Fix all three audit findings
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_CMD: bun test packages/spell-server/test/manifest/action-registry.test.ts
+:END:
+
+1. Hoist validTypes to module-level ACTION_PARAM_TYPES in parser.ts
+2. Register action descriptors in parseManifestKdl before validation
+3. Add test for parseManifestKdl + action-descriptor
+
+* Verification
+
+** DONE Run full verification suite
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:DEPENDS: task-1
+:END:
+
+Run parser tests, action-registry tests, and bun check:ts

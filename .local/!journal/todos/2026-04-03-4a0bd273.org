@@ -1,0 +1,14 @@
+#+TITLE: Session 14ac1d9f06601fb8 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implement all 10 findings
+
+** DONE Verify: type check and all tests
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:GATE_CMD: bun check:ts && bun test packages/spell-server/test/config/voice-config-parser.test.ts packages/spell-server/test/telegram/voice-stt.test.ts packages/spell-server/test/telegram/voice-tts.test.ts packages/spell-server/test/telegram/voice-command.test.ts packages/spell-server/test/telegram/voice-incoming.test.ts packages/spell-server/test/telegram/voice-reply.test.ts packages/spell-server/test/telegram/bridge.test.ts packages/spell-server/test/telegram/bot.test.ts packages/spell-server/test/telegram/service.test.ts packages/spell-server/test/telegram/commands.test.ts
+:END:
+
+All voice tests pass (57+78). Type errors in approvals.ts/tool-progress.ts/logger.ts are pre-existing (biome errors in baseline hide them). Finding 1 (continues) reversed by linter — noUselessContinue rule.

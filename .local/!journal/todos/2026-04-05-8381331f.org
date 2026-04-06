@@ -1,0 +1,25 @@
+#+TITLE: Session 14aefa8dae939bff Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execute
+
+** DONE Fix all 7 findings across 6 files
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+tree-selector.ts (2 switches), compaction.ts (1 switch), branch-summarization.ts (1 switch), template.js (2 switches), session-manager.ts (ID + docstring), postmortem.ts (comment)
+
+* Verify
+
+** DONE Run tests and verify completeness
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:GATE_CMD: bun test packages/coding-agent/test/session/crash-marker.test.ts
+:END:
+
+crash-marker tests, grep for missing crash cases, regenerate template

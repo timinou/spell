@@ -1,9 +1,10 @@
 #+TITLE: Telegram file delivery
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ac069b96bbdfba
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T10-30-40-474Z_14ac069b96bbdfba.jsonl]]
 #+CUSTOM_ID: PLAN-106-telegram-file-delivery
 #+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
 
 * Initial Message
 
@@ -66,3 +67,25 @@ Agent calls generate_image(...)
 - [[id:FEAT-250-bridge-file-and-image-delivery-to-telegr]] — Bridge delivery + KDL config in spell-server (M effort)
 
 Both items are in separate packages and can be implemented in parallel. FEAT-249 defines the tool result shape; FEAT-250 consumes it. The interface contract (=FileDelivery= type in =details.delivery=) is specified in both items.
+
+** Completion [2026-04-03]
+*** Verification
+- =bun test packages/coding-agent/test/tools/send-file.test.ts= — 9 pass, 0 fail (16 expect calls)
+- =bun test packages/spell-server/test/config/channels-parser.test.ts packages/spell-server/test/telegram/bridge.test.ts= — 47 pass, 0 fail (98 expect calls)
+- =bun test= across all 9 affected test files — 99 pass, 0 fail (230 expect calls)
+- =bun lint:ts= — clean (1728 files, no fixes)
+- =bun check:ts= — no new type errors (3 pre-existing errors in approvals.ts, tool-progress.ts, logger.ts are unrelated)
+
+*** Artifacts
+- =packages/coding-agent/src/tools/send-file.ts= — SendFileTool class with FileDelivery type
+- =packages/coding-agent/src/prompts/tools/send-file.md= — tool description prompt
+- =packages/coding-agent/test/tools/send-file.test.ts= — 9 test cases covering MIME, validation, errors
+- =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts= — ResponseStreamer delivery methods
+- =packages/spell-server/src/rpc/types.ts= — FileDelivery interface
+- =packages/spell-server/src/config/types.ts= — autoSendImages field
+- =packages/spell-server/src/config/channels-parser.ts= — auto-send-images KDL parsing
+- =packages/spell-server/test/telegram/bridge.test.ts= — 7 new file delivery tests
+- =packages/spell-server/test/config/channels-parser.test.ts= — 3 new config tests
+
+*** Deviations
+None.

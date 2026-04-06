@@ -1,0 +1,14 @@
+#+TITLE: Session 14aa0d7085143278 Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run verification and close org lifecycle
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:DEPENDS: task-1 task-2 task-3
+:END:
+
+Run all checks, verify grep returns no matches, update org items

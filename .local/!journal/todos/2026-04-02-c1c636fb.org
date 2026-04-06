@@ -1,0 +1,33 @@
+#+TITLE: Session 14ab47d2ff14f0bd Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Add failing tests for Telegram file upload behavior
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:VERIFY_CMD: bun test packages/spell-server/test/telegram/bridge.test.ts
+:END:
+
+Update packages/spell-server/test/telegram/bridge.test.ts with contract tests for document-only and binary/oversized attachment upload handling in prompt payload.
+
+** DONE Implement Telegram attachment upload handling in bridge
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:DEPENDS: task-1
+:END:
+
+Update packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts to convert supported uploads into prompt context reliably, including non-text fallback metadata.
+
+** DONE Run focused Telegram bridge tests and finalize
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:VERIFY_CMD: bun test packages/spell-server/test/telegram/bridge.test.ts
+:DEPENDS: task-2
+:END:
+
+Execute bridge test file and ensure new contracts pass without regressions.

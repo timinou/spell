@@ -1,0 +1,23 @@
+#+TITLE: Session 14ac873c4f4d89a3 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Explore mode policy gap and loadTaskPolicies caching
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Explore removed comments and injectPolicyGates
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Explore prompt template and test gaps
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

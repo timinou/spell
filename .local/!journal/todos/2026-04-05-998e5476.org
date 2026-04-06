@@ -1,0 +1,29 @@
+#+TITLE: Session 14af0ad97271e2fa Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Investigation
+
+** DONE Explore the Emacs Code tool implementation
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Explore the tool tier/priority system
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Explore Edit/Write/Read tool implementations
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Explore the Emacs MCP bridge and combobulate integration
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

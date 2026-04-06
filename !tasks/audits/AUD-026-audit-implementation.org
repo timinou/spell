@@ -1,0 +1,56 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-026-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Here are my findings:
+
+---
+
+### Finding 1: `/btw` command ignores `autoSendImages` config
+
+- **What**: The `/btw` command's `ResponseStreamer` is constructed with only 2 args, defaulting `autoSendImages` to `true` regardless of the KDL config setting.
+- **Where**: `packages/spell-server/src/telegram/commands/btw.ts` line 57
+- **Why**: If a user sets `auto-send-images false` in `channels.kdl`, the main message handler respects it but `/btw` does not — `generate_image` results in `/btw` will always auto-send. Config promise broken in one code path.
+- **Effort**: `trivial` — pass `cmdCtx.config.autoSendImages` as the third arg in the default factory, and update the `BtwDependencies.createStreamer` interface to accept 3 params.
+
+### Finding 2: Duplicate `FileDelivery` interface across packages
+
+- **What**: `FileDelivery` is defined identically in `coding-agent/src/tools/send-file.ts` and `spell-server/src/rpc/types.ts` with no shared source of truth.
+- **Where**: Both files, lines 47 and 110 respectively.
+- **Why**: Intentional per plan design (separate packages, no cross-dependency), but the two copies can drift silently. If a field is added to one but not the other, the bridge will silently ignore the new data. Low risk today, growing risk over time.
+- **Effort**: `small` — add a code comment in both files referencing the other as the counterpart, or extract to a shared types package in the future.
+
+### Finding 3: Empty string `caption` is silently dropped
+
+- **What**: `...(params.caption ? { caption: params.caption } : {})` uses truthiness, so `caption: ""` is silently stripped from the delivery payload.
+- **Where**: `packages/coding-agent/src/tools/send-file.ts` line 120
+- **Why**: Minor — empty caption is semantically meaningless, and the schema marks it optional. But the conditional spread hides the intent. Using `params.caption != null` would be more precise if the intent is "only include if provided."
+- **Effort**: `trivial`
+
+### Finding 4: No test for directory path error
+
+- **What**: `stat.isFile()` check at line 105 throws `ToolError("Not a file: ...")` when given a directory, but no test covers this branch.
+- **Where**: `packages/coding-agent/test/tools/send-file.test.ts` — missing test case
+- **Why**: Untested error path. If someone refactors the stat logic, this branch could regress without detection.
+- **Effort**: `trivial` — 5-line test: `mkdir` a dir, call execute, `expect(...).rejects.toThrow(/not a file/i)`.
+
+### Finding 5: No test for invalid `auto-send-images` KDL value
+
+- **What**: The parser throws `"must be a boolean"` when `auto-send-images` receives a non-boolean (e.g., string `"yes"`), but no test covers this error path.
+- **Where**: `packages/spell-server/test/config/channels-parser.test.ts` — missing test case
+- **Why**: Parser validation exists but is unverified. Low risk since KDL typing naturally constrains arguments, but regressions in validation would go undetected.
+- **Effort**: `trivial`
+
+### Finding 6: SVG files classified as `type: "photo"` 
+
+- **What**: SVG (`image/svg+xml`) matches `isImageMime()` and gets `type: "photo"`, but Telegram's `replyWithPhoto()` does not support SVG. The bridge's try-catch handles the failure gracefully, but the agent sees "File queued for delivery" while the user receives nothing.
+- **Where**: `packages/coding-agent/src/tools/send-file.ts` line 66 (`isImageMime` function)
+- **Why**: User confusion — agent reports success, user sees no file. The bridge logs a warning, but the agent has no feedback mechanism to know delivery failed. Low frequency (SVG sends are rare in Telegram context).
+- **Effort**: `small` — exclude `image/svg+xml` from the photo classification, or send SVGs as documents.

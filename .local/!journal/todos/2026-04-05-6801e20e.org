@@ -1,0 +1,41 @@
+#+TITLE: Session 14af01ff7b89b57e Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Strip prompt_cache_retention in transformRequestBody + test
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+packages/ai/src/providers/openai-codex/request-transformer.ts + packages/ai/test/openai-codex.test.ts
+
+* Verification
+
+** DONE Run bun test openai-codex.test.ts
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:GATE_CMD: bun test packages/ai/test/openai-codex.test.ts
+:END:
+
+5/5 pass: bun test packages/ai/test/openai-codex.test.ts
+
+** DONE Run bun check:ts
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+0 errors in packages/ai/ from bun check:ts
+
+* Finalization
+
+** DONE Update org items and commit changes
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

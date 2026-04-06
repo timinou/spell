@@ -1,0 +1,23 @@
+#+TITLE: Session 14aae3865f74957d Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Explore existing Elisp file-level parsing patterns
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Characterize file-level item format
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Investigate timeout behavior and org-element cost
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

@@ -1,0 +1,31 @@
+#+TITLE: Session 14aae5f52eed8b59 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* wave-1
+
+** DONE Fix respawn prompt propagation and media guard
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:VERIFY_CMD: bun test packages/telegram-bridge/test/commands.test.ts packages/telegram-bridge/test/bot.test.ts
+:DEPENDS: task-1
+:ORG_ITEM_ID: BUG-091-system-prompt-missing-from-respawned-ses
+:END:
+
+Target BUG-091 in packages/telegram-bridge/src/bot/bot.ts, src/commands/index.ts, and tests. Add failing tests first, implement, then rerun focused telegram-bridge tests.
+
+Added failing respawn prompt tests in commands.test, then moved telegramPrompt into CommandContext, respawned sessions now forward appendSystemPrompt, and message handler now accepts photo/document messages while remaining exportable for direct tests.
+
+* wave-2
+
+** DOING Add main message flow regression coverage
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: in_progress
+:VERIFY_CMD: bun test packages/telegram-bridge/test/bot.test.ts
+:DEPENDS: task-2
+:ORG_ITEM_ID: BUG-092-main-message-flow-lacks-regression-test
+:END:
+
+Target BUG-092 in packages/telegram-bridge/test/bot.test.ts and supporting telegram-bridge files only if required by the test. Verify new integration coverage and final focused package verification.

@@ -1,0 +1,11 @@
+#+TITLE: Session 14ac7cd4e228b35c Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Get exact .spell/ config loading infrastructure
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

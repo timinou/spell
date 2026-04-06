@@ -192,10 +192,7 @@ export class SqlStore {
 		return schema.tables.map(t => t.name);
 	}
 
-	describeTable(
-		tableName: string,
-		schema: SqlStoreSchema,
-	): SqlStoreColumnSchema[] {
+	describeTable(tableName: string, schema: SqlStoreSchema): SqlStoreColumnSchema[] {
 		const table = findTable(schema, tableName);
 		if (!table) {
 			throw new Error(

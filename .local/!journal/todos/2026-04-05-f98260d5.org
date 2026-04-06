@@ -1,0 +1,15 @@
+#+TITLE: Session 14ae9f3312ef7de3 Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 3 — Verification
+
+** DONE Full test suite green + type check
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:GATE_CMD: bun test packages/tui/test/
+:DEPENDS: task-3 task-4
+:END:
+
+bun test packages/tui/test/ + bun check:ts

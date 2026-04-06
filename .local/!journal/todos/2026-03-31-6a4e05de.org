@@ -1,0 +1,15 @@
+#+TITLE: Session 14a8627de86ca187 Todos
+#+DATE: 2026-03-31
+#+TODO: ITEM DOING | DONE
+
+* docs-and-verify
+
+** DONE Run verification suite
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:GATE_CMD: bun check:ts && bun test packages/coding-agent/test/tools/todo-write-deferral.test.ts && bun test packages/coding-agent/test/tools/todo-write.test.ts && bun test packages/coding-agent/test/tools/todo-write-gates.test.ts
+:DEPENDS: task-5 task-6
+:ORG_ITEM_ID: FEAT-133-deferral-gate-enforcement-and-tracking
+:ORG_ITEM_CLOSING_ID: FEAT-133-deferral-gate-enforcement-and-tracking
+:END:

@@ -1,0 +1,15 @@
+#+TITLE: Session 14a9914f2fc537b0 Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run type checks and all tests
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:END:
+
+Verified bun check:ts, qmllint for macOS QML, desktop-common/niri/macos package tests, and setup hammerspoon --check behavior.
+
+Local verification complete; macOS manual verification handed off to Reda per user instruction.

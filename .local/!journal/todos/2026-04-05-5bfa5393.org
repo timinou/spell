@@ -1,0 +1,41 @@
+#+TITLE: Session 14aeea20d040b51f Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Audit caching in codex-responses provider
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Audit caching in openai-responses provider
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Find CacheRetention type and resolveCacheRetention
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Audit caching in Anthropic and Bedrock providers
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Check Azure OpenAI responses for caching
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+** DONE Check OpenRouter (openai-completions) caching for Anthropic models
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:

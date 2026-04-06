@@ -1,0 +1,15 @@
+#+TITLE: Session 14ab3a534ed05f14 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Write decomposed fix plan
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+Create child org items with non-overlapping scopes, dependencies, and verification, then author the PLAN item and hand off via exit_plan_mode.
+
+Created child org items BUG-114, BUG-115, BUG-116 and orchestration plan PLAN-098 with explicit dependencies, verification, and replay proof requirements.

@@ -1,0 +1,14 @@
+#+TITLE: Session 14a97c0e0c7f2340 Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run all checks and tests
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:DEPENDS: task-6
+:END:
+
+bun check:ts, bun lint:ts, bun test orchestrator and exit-plan-mode tests

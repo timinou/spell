@@ -1,0 +1,21 @@
+#+TITLE: Session 14aebf62e1f4795f Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execute
+
+** DONE Consolidate CHANGELOG entries
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Edit packages/coding-agent/CHANGELOG.md: amend line 52, delete line 58
+
+* Verify & Close
+
+** DONE Verify and close org items
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:

@@ -42,6 +42,8 @@ const fileTransport = new DailyRotateFile({
     maxFiles: 5,
     zippedArchive: true,
 });
+const STDERR_DEBUG_LEVELS = ["debug", "warn", "error"];
+let stderrTransport = null;
 /** The winston logger instance */
 const winstonLogger = winston.createLogger({
     level: "debug",
@@ -50,6 +52,33 @@ const winstonLogger = winston.createLogger({
     // Don't exit on error - logging failures shouldn't crash the app
     exitOnError: false,
 });
+/**
+ * Enable or disable mirroring logger output to stderr.
+ * File rotation remains active regardless of this setting.
+ */
+export function setStderrDebugEnabled(enabled) {
+    try {
+        if (enabled) {
+            if (stderrTransport !== null) {
+                return;
+            }
+            stderrTransport = new winston.transports.Console({
+                stderrLevels: STDERR_DEBUG_LEVELS,
+            });
+            winstonLogger.add(stderrTransport);
+            return;
+        }
+        if (stderrTransport === null) {
+            return;
+        }
+        winstonLogger.remove(stderrTransport);
+        stderrTransport.close();
+        stderrTransport = null;
+    }
+    catch {
+        // Silently ignore logging failures
+    }
+}
 /**
  * Log an error message.
  * @param message - The message to log.

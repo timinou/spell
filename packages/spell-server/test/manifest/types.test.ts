@@ -63,8 +63,8 @@ describe("manifest type guards", () => {
 				layouts: [],
 				syncCollections: [],
 				stateSchemas: [],
-		toolModules: [],
-		operatorActions: [],
+				toolModules: [],
+				operatorActions: [],
 			}),
 		).toBe(true);
 	});

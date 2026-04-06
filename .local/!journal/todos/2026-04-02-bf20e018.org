@@ -1,0 +1,17 @@
+#+TITLE: Session 14ab0f819997c0c6 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Read TUI width check code around line 1224
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Read render utility functions for truncation
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

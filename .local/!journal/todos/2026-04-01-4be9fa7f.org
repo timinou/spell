@@ -1,0 +1,22 @@
+#+TITLE: Session 14a9972b25ddf741 Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Completion
+
+** DONE Run end-to-end verification and close plan
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_CMD: bun check:ts
+:GATE_LLM: All plan verification steps pass; same-session org wave and org graph succeed after emacscode usage; org plan and child items record completion truthfully.
+:VERIFY_CMD: bun check:ts
+:DEPENDS: task-2 task-3
+:ORG_ITEM_ID: PLAN-063-org-wave-graph-daemon-recovery
+:ORG_ITEM_CLOSING_ID: PLAN-063-org-wave-graph-daemon-recovery
+:END:
+
+Run focused automated checks, perform manual same-session org/emacscode repro, update org items and plan completion report, commit only plan files, and close org lifecycle truthfully.
+
+Focused automated checks, ERT coverage, same-session manual proof, org completion reporting, child/plan state reconciliation, and commit c1280de96 are complete.

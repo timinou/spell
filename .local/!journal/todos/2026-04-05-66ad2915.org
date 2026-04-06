@@ -1,0 +1,11 @@
+#+TITLE: Session 14af1830f0e2d7e6 Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Test whether backslash escaping is actually lost in task dispatch
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

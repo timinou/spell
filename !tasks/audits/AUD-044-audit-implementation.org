@@ -1,0 +1,55 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-044-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Here are my findings:
+
+---
+
+**Finding 1**: Missing `crash` case in `tree-selector.ts` display switch
+- **Where**: `packages/coding-agent/src/modes/components/tree-selector.ts` lines ~549, ~362
+- **What**: Two `switch(entry.type)` statements don't handle `"crash"`. The display switch has `default: result = ""`, so crash entries render as empty strings in the session tree. The search-text switch falls through silently.
+- **Why**: If a session that crashed is inspected via the tree selector, crash markers show as blank lines. Low user impact (crash markers are rare and informational), but rendering `[crash: sighup]` would be more informative.
+- **Effort**: trivial
+
+**Finding 2**: Missing `crash` case in `compaction.ts` `findValidCutPoints`
+- **Where**: `packages/coding-agent/src/session/compaction/compaction.ts` line ~329
+- **What**: The switch doesn't handle `"crash"`. Falls through without adding a cut point.
+- **Why**: Correct behavior — crash entries should not be compaction cut points. But the missing case means TypeScript's `noImplicitReturns` or future exhaustiveness tooling won't catch it. Pre-existing pattern (also missing `service_tier_change`, `session_init`, `ttsr_injection`, `mode_change`).
+- **Effort**: trivial
+
+**Finding 3**: Missing `crash` case in `branch-summarization.ts` `getMessageFromEntry`
+- **Where**: `packages/coding-agent/src/session/compaction/branch-summarization.ts` line ~145
+- **What**: Switch doesn't handle `"crash"`. Returns `undefined` implicitly, which is correct (crash markers aren't messages). But this is a pre-existing completeness gap.
+- **Effort**: trivial
+
+**Finding 4**: `appendCrashMarker` uses `Snowflake.next()` instead of `generateId(this.#byId)`
+- **Where**: `packages/coding-agent/src/session/session-manager.ts` line ~2018
+- **What**: All other `appendXxx` methods use `generateId(this.#byId)` (short 8-char UUIDs). `appendCrashMarker` uses `Snowflake.next()` directly, producing longer IDs. Functionally equivalent but inconsistent.
+- **Why**: Minor inconsistency. If downstream code assumes all session entry IDs are 8-char hex, this could cause surprises.
+- **Effort**: trivial
+
+**Finding 5**: `appendCrashMarker` docstring claims "No-op if the session is already closed" but no closed-state check exists
+- **Where**: `packages/coding-agent/src/session/session-manager.ts` line ~2013
+- **What**: The JSDoc says "No-op if the session is already closed" but the method doesn't check any `#closed` flag. It relies on `#appendEntry` → `_persist` → `#ensurePersistWriter` eventually failing, caught by the try/catch. The docstring overpromises.
+- **Why**: Misleading documentation. The behavior is safe (try/catch catches all), but the comment suggests a check that doesn't exist.
+- **Effort**: trivial
+
+**Finding 6**: Logger-flush comment claims "runs last" but `Promise.allSettled` runs all callbacks concurrently
+- **Where**: `packages/utils/src/postmortem.ts` lines ~334-335
+- **What**: Comment says "Register logger flush as first callback so it runs last (callbacks run in reverse order)." While the `.map()` call order is reversed, `Promise.allSettled` starts all callbacks concurrently. Logger close and session-manager flush race.
+- **Why**: If session-manager's flush() emits async logger calls after `winstonLogger.end()` is called, those log entries could be dropped. Practically acceptable for crash-time best-effort, but the comment is misleading about execution order guarantees.
+- **Effort**: small (to fix would require sequential execution in `runCleanup`, which is a broader design change)
+
+**Finding 7**: HTML export template doesn't render `crash` entries meaningfully
+- **Where**: `packages/coding-agent/src/export/html/template.js` lines ~289, ~452
+- **What**: The two `switch(entry.type)` statements in the generated HTML template don't handle `"crash"`. Crash entries appear as empty items in exported session HTML.
+- **Why**: If a crashed session is exported, the crash marker is invisible. Low impact since this is an informational entry, but showing `[crash: reason]` would be better for post-incident review.
+- **Effort**: small (template is generated, need to find the source template and rebuild)

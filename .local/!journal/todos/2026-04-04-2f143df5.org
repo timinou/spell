@@ -1,0 +1,29 @@
+#+TITLE: Session 14ad6124c099738d Todos
+#+DATE: 2026-04-04
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Read spell-kdl.ts and task-policies-kdl.ts for shared helpers and return types
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Read project-detection.ts error handling and init-cli.ts generation
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Read existing test files for coverage gaps
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Read stale docstrings
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

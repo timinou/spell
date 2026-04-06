@@ -1,0 +1,29 @@
+#+TITLE: Session 14aae4092b4b141e Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Read hooks module: org.ts, telegram.ts, notification-sender.ts, dispatcher.ts, and test files
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Read server composition root, main.ts, and shutdown logic
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Read dashboard HTML and tool registration
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Read sandbox writer and executor for cleanup patterns
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

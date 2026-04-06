@@ -1,0 +1,31 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-041-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Good — clean removal. Here's the audit summary:
+
+---
+
+## Audit Findings
+
+### 1. Contradictory CHANGELOG entries under `[Unreleased]`
+
+- **What**: Line 52 says `task.maxRecursionDepth` was changed from 2→4. Line 58 (our addition) says it was reduced from 4→2. Both under `[Unreleased]` — the net effect is no change from the last release. A reader will see "increased then decreased" in the same release notes.
+- **Where**: `packages/coding-agent/CHANGELOG.md` lines 52 and 58
+- **Why**: Confusing release notes. A user reading `[Unreleased]` sees two contradictory entries about the same setting. The pre-existing entry (line 52) should be amended to only mention `DEFAULT_LOOP_DEPTH_LIMIT` (3→4, which is still net-changed), and our entry (line 58) should state the final value relative to the previous release (still 2, i.e., no entry needed for `maxRecursionDepth`).
+- **Effort**: `trivial`
+
+That's the only finding introduced by this plan. The five code changes are structurally correct:
+
+- **BUG-164**: Stagger block correctly moved inside `try`; `throw` instead of `return` routes through `catch`/`finally`. The pre-existing missing `pump()` in the `taskIndex === undefined` guard is unchanged and not in scope.
+- **BUG-165**: `throw` correctly replaces `return undefined!`. The pre-existing missing batch-scheduler cleanup (the throw at line 722 is outside the inner `try` at line 736, same as the old `return` was) is unchanged — not a regression.
+- **FEAT-338**: Clean removal, no remnants.
+- **BUG-166**: Correct, no duplicate names.
+- **FEAT-339**: Correct aside from the contradiction noted above.

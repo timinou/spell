@@ -1,0 +1,35 @@
+#+TITLE: Session 14ac5caee772dbc3 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Repo
+
+** DONE Understand manifest serialization and nested Map issue
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Audit StateStoreManager for all issues
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Audit frontend HTML for issues
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Check broken test expectations
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Check test patterns for state store tests
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:

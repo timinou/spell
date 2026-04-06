@@ -1,0 +1,29 @@
+#+TITLE: Session 14ab35957e1346f0 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Investigation
+
+** DONE Find RPC stdout closed error origin
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Map RPC communication architecture
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Understand spell server mode
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Find processMessage and message handling
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

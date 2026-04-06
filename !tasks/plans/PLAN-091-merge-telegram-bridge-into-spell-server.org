@@ -1,8 +1,9 @@
 #+TITLE: Merge telegram-bridge into spell-server
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ab1aa0b4b48f2e
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T17-19-39-730Z_14ab1aa0b4b48f2e.jsonl]]
 #+CUSTOM_ID: PLAN-091-merge-telegram-bridge-into-spell-server
+
 
 * Initial Message
 
@@ -94,3 +95,35 @@ Execution order is strictly sequential due to cascading dependencies:
 
 ** Wave 5: Cleanup
 - [[id:FEAT-237-delete-telegram-bridge-package-and-clean]] — Delete telegram-bridge package, clean workspace refs [S effort, depends on W4]
+
+** Completion [2026-04-02]
+
+*** Verification
+- =bun check:ts= — passes (0 errors across 1665 files)
+- =bun test packages/spell-server/= — 174 tests pass, 0 fail, 405 expect() calls
+- =grep -r '@oh-my-pi/telegram-bridge'= — zero results in source files
+- =grep -r 'telegram.yaml'= — zero results in source files
+- =packages/telegram-bridge/= directory — deleted
+- =spell server --help= — prints usage correctly
+- =spell --help= — lists =server= subcommand
+- Commit: =0bce91bb6= =refactor(spell-server): merge telegram-bridge into spell-server=
+
+*** Artifacts
+- New files created:
+  - =packages/spell-server/src/rpc/= — RPC layer (rpc-client, types, state, bridge-types, index)
+  - =packages/spell-server/src/telegram/= — bot, bridge, commands, log-viewer, process-manager, service, types, utils
+  - =packages/spell-server/src/telegram/service.ts= — TelegramBotService lifecycle wrapper
+  - =packages/coding-agent/src/commands/server.ts= — =spell server= CLI subcommand
+  - =packages/spell-server/test/rpc/= — moved RPC client tests
+  - =packages/spell-server/test/telegram/= — moved telegram tests (auth, bot, bridge, commands, log-viewer, markdown-html, message-splitter, process-manager)
+- Modified config:
+  - =packages/spell-server/src/config/types.ts= — extended with TelegramChannelConfig, TelegramUserConfig
+  - =packages/spell-server/src/config/channels-parser.ts= — full telegram KDL parsing (users, projects, bot-token-file, idle-timeout, etc.)
+  - =packages/spell-server/src/server.ts= — conditional TelegramBotService startup
+- Deleted:
+  - =packages/telegram-bridge/= — entire package removed
+  - =tsconfig.base.json= — removed telegram-bridge path aliases
+  - =yaml= dependency dropped from workspace
+
+*** Deviations
+None."

@@ -1,0 +1,39 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-025-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+I've completed a thorough read of all changed files. Here are my findings:
+
+---
+
+### Finding 1: `parseManifestKdl` silently drops action descriptors
+
+- **What**: `parseManifestKdl()` parses `action-descriptor` nodes into `manifestModule.actionDescriptors` but never registers them in the registry. Only the `loadManifestFromFile` path (via import-resolver) performs registration.
+- **Where**: `packages/spell-server/src/manifest/parser.ts:801-816`
+- **Why**: If someone calls `parseManifestKdl()` with a self-contained KDL string that has both `action-descriptor` and a goal referencing it, validation will fail with "Unknown action id" — the descriptors are parsed but silently discarded. This is a contract inconsistency: the function accepts the nodes without error but doesn't honor them. The round-trip tests (which use `parseManifestKdl` + `serializeManifestKdl`) won't hit this because they only test manifests with pre-registered actions.
+- **Effort**: `small` — add 3 lines mirroring the import-resolver's registration loop before the `validateManifest` call.
+
+---
+
+### Finding 2: `validTypes` Set allocated inside loop body
+
+- **What**: The `validTypes` Set is recreated on every `param` child iteration inside `parseActionDescriptorNode`.
+- **Where**: `packages/spell-server/src/manifest/parser.ts:504-512` (inside the `for` loop starting at line 496)
+- **Why**: Inconsistent with existing codebase pattern — the file already defines module-level constants for this exact purpose (`STATE_SCHEMA_TYPES`, `WEBHOOK_AUTH_TYPES`, `WEBHOOK_METHODS` at lines 160-163). Not a bug, but it's a repeated allocation on a hot-ish path and a readability miss.
+- **Effort**: `trivial` — hoist to module-level `const ACTION_PARAM_TYPES = new Set<ActionParameterType>([...])`.
+
+---
+
+### Finding 3: No test for `parseManifestKdl` + `action-descriptor` behavior
+
+- **What**: All new action-descriptor tests use `loadManifestFromFile`. There's no test documenting the expected behavior of `parseManifestKdl` when `action-descriptor` nodes are present.
+- **Where**: `packages/spell-server/test/manifest/action-registry.test.ts`
+- **Why**: The gap from Finding 1 means this path will silently break for anyone who uses the direct-parse API. A test would either (a) prove it works after Finding 1 is fixed, or (b) document that it intentionally doesn't support action-descriptors and throws a clear error (parallel to the existing `"Imports and overrides require loadManifestFromFile()"` guard at line 804).
+- **Effort**: `trivial` — one test case, either asserting success or the expected rejection.

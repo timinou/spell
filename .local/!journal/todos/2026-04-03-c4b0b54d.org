@@ -1,0 +1,29 @@
+#+TITLE: Session 14ac4bf6bc32dba5 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Check growth.sqlite schema and data
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE How state stores are accessed at runtime in spell-server
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Check workflow engine and its SQLite backend
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Check who imports/uses the data parser and types
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

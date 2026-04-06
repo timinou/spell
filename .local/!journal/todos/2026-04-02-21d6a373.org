@@ -1,0 +1,21 @@
+#+TITLE: Session 14ab38c4bff48f60 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 2: Process fix and closeout
+
+** DONE Correct PLAN-093 deviations record
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_CMD: bun check:ts
+:GATE_LLM: Completion report must include verification commands, outcomes, artifacts or file references, and deviations. PLAN-093 deviations must reference [[id:FUP-030-unify-processmanager-onto-sessionmanager]].
+:VERIFY_CMD: grep "FUP-030" !tasks/plans/PLAN-093-harden-telegram-bridge-merge-aud-021.org && git status --short
+:ORG_ITEM_ID: BUG-110-plan-093-closeout-deviations-section-omi
+:ORG_ITEM_CLOSING_ID: PLAN-095-fix-plan-093-audit-findings-aud-022
+:END:
+
+Update !tasks/plans/PLAN-093-harden-telegram-bridge-merge-aud-021.org completion report to reference deferred FUP-030, ensure !tasks/follow-ups/FUP-030-unify-processmanager-onto-sessionmanager.org is tracked, then run focused verification plus final repo checks. Reconcile org states, append PLAN-095 completion report, and commit only plan-related files.
+
+Corrected PLAN-093 deviations to reference FUP-030, staged and committed the follow-up/org files with the code changes, and captured completion evidence in PLAN-095. Verification: bun test packages/spell-server/test/telegram/auth.test.ts, bun test packages/coding-agent/test/server-command.test.ts, grep FUP-030 on PLAN-093, bun check:ts, git status --short, git commit c48d956bb.

@@ -1,0 +1,22 @@
+#+TITLE: Session 14a8626c39c41591 Todos
+#+DATE: 2026-03-31
+#+TODO: ITEM DOING | DONE
+
+* Research & Design
+
+** DOING Write comprehensive specs in domain/growth/specs/
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: in_progress
+:END:
+
+Create all org files: needs.org, stakeholders.org, features-list.org, screens.org, usecases.org, tickets.org, thoughts.org, and deep-dive/ org files for Typst integration, QML canvas, scraping, and domain architecture
+
+* Follow-up Questions
+
+** ITEM Present design to user for feedback and decisions
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: pending
+:DEPENDS: task-1
+:END:

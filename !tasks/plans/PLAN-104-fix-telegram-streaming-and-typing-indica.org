@@ -1,0 +1,89 @@
+#+TITLE: Fix Telegram streaming and typing indicators
+#+STATE: DONE
+#+SESSION_ID: 14abfd6c4ce4ae1f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T09-50-32-755Z_14abfd6c4ce4ae1f.jsonl]]
+#+CUSTOM_ID: PLAN-104-fix-telegram-streaming-and-typing-indica
+
+
+* Initial Message
+
+Look up online and in grammy. explain why i still only get the final message in telegram and I don't see any typing or streaming indicator. There was supposed to be a whole system to be made aware of the work as it was being done.
+
+* Context
+
+Users only see the final message from the Telegram bot — no typing indicator, no streaming text, no tool progress — despite the =ResponseStreamer= correctly accumulating and scheduling draft updates every 334ms.
+
+** Root cause
+
+The =sendDraft()= function in =rpc-to-telegram.ts= casts ~ctx.api~ to a speculative ~DraftCapableApi~ and checks ~ctx.api.raw.sendMessageDraft~. This property does not exist. grammY 1.41.1 (installed) exposes =sendMessageDraft= as a first-class method:
+
+- ~ctx.api.sendMessageDraft(chatId, draftId, text)~ — direct API
+- ~ctx.replyWithDraft(text)~ — context alias (auto-fills =chat_id= from context, =draft_id= from =update_id=)
+
+The check ~if (!rawApi?.sendMessageDraft)~ at line 22 always returns early, silently discarding all drafts. There is also no =sendChatAction('typing')= anywhere in the handler, so the user gets zero feedback.
+
+** Approach
+
+1. Replace the =DraftCapableApi= / =raw.sendMessageDraft= hack with ~ctx.replyWithDraft(text)~. This uses grammY's native API: auto-fills =chat_id= and uses =update_id= as =draft_id= (same ID → animated transitions).
+2. Add a typing indicator (=sendChatAction('typing')=) that fires immediately on message receipt and refreshes every 4s. Clear it when the first draft succeeds or on finalization. This covers the gap before text content is available (thinking, tool execution).
+3. Log draft send errors at warn level instead of silently swallowing them.
+
+** Key decisions
+- Use ~ctx.replyWithDraft()~ (not raw API) — simplest, grammY handles =chat_id=, =draft_id=, and topic threading
+- Manual 4s typing interval (not =@grammyjs/auto-chat-action= plugin) — avoids dependency for one =setInterval= call
+- Typing indicator stops on first successful draft — drafts provide their own visual feedback via the "typing bubble" mechanism
+
+** Key file: =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts=
+Lines 11-29 (=DraftCapableApi= hack + =sendDraft()= function) are the core problem. The =ResponseStreamer= class (lines 108-365) is otherwise correct — its draft scheduling, text accumulation, and finalization logic all work. Only the =sendDraft= call at line 321 needs to change.
+
+* Verification
+
+- ~bun test packages/spell-server/test/telegram/bridge.test.ts~ — all existing draft tests pass with new mock shape
+- ~bun check:ts~ — no type errors
+- Manual: send a message to the bot → observe typing indicator appears immediately, draft text streams, final message renders in HTML
+
+* Execution Manifest
+
+** Wave 1: Fix silent draft failure
+[[id:BUG-129-fix-silent-sendmessagedraft-failure-use]] (2h, #A)
+- Replace =sendDraft()= with =ctx.replyWithDraft(text)=
+- Remove =DraftCapableApi= / =DraftApiRaw= interfaces
+- Log errors instead of swallowing
+- Update test mock from =api.raw.sendMessageDraft= to =replyWithDraft=
+
+** Wave 2: Add typing indicator (depends on Wave 1)
+[[id:FEAT-244-add-typing-indicator-keep-alive-during-a]] (1h, #A, depends on BUG-129)
+- Add =replyWithChatAction('typing')= interval to =ResponseStreamer=
+- Clear on first successful draft or finalization
+- Add =replyWithChatAction= mock and test coverage
+
+
+** Completion [2026-04-03]
+
+*** Verification
+
+- =bun test packages/spell-server/test/telegram/bridge.test.ts= — 25/25 pass (23 original + 2 new typing indicator tests)
+- =bunx biome check= on both changed files — clean, no errors
+- =lsp diagnostics= on =rpc-to-telegram.ts= — no type errors
+
+*** Changes
+
+**** Wave 1: Fix silent draft failure (BUG-129)
+- Removed =DraftApiRaw= and =DraftCapableApi= interfaces (the speculative type hack)
+- Replaced =sendDraft()= to call =ctx.replyWithDraft(text)= — grammY's native context alias that auto-fills =chat_id= and =draft_id=
+- Draft send errors now logged via =logger.warn= instead of silently swallowed
+- Updated test mock: =replyWithDraft= on context object instead of =api.raw.sendMessageDraft=
+
+**** Wave 2: Add typing indicator (FEAT-244)
+- Added =replyWithChatAction(\"typing\")= fired immediately on =ResponseStreamer= construction
+- Added 4-second =setInterval= refresh (Telegram typing expires after 5s)
+- Typing interval cleared on: (1) first successful draft send, (2) finalize, (3) cancel
+- Errors in typing action are logged and do not interrupt processing
+- Added 2 tests: typing fires on construction, interval cleared on cancel
+
+*** Artifacts
+- =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts= — source changes
+- =packages/spell-server/test/telegram/bridge.test.ts= — test changes
+
+*** Deviations
+None.

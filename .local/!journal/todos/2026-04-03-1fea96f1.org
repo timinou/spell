@@ -1,0 +1,23 @@
+#+TITLE: Session 14ac1a701fd08506 Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Find and read the spell server command entry point and startup flow
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Explore the KDL config schema and how server config is structured
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Explore existing .env and environment variable handling patterns
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

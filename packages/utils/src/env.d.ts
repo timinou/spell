@@ -1,4 +1,11 @@
 /**
+ * Parses a .env file synchronously and extracts key-value string pairs.
+ * Ignores lines that are empty or start with '#'. Trims whitespace.
+ * Allows values to be quoted with single or double quotes.
+ * Returns an object of key-value pairs.
+ */
+export declare function parseEnvFile(filePath: string): Record<string, string>;
+/**
  * Intentional re-export of Bun.env.
  *
  * All users should import this env module (import { $env } from "@oh-my-pi/pi-utils")

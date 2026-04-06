@@ -1,0 +1,29 @@
+#+TITLE: Session 14ab2067d6748f3d Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Files to read
+
+** DONE Read channels parser defaults and auth.ts
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Read service.ts, server.ts, and CLI command
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Read ProcessManager, TelegramLifecycle, and session barrel
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Read KDL schema docs and existing parser tests
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

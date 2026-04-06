@@ -1,0 +1,11 @@
+#+TITLE: Session 14aac2bfa1d2ab39 Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Create Org Items
+
+** DONE Exit plan mode
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: completed
+:END:

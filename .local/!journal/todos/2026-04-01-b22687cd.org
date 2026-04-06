@@ -1,0 +1,14 @@
+#+TITLE: Session 14aa01d03d543273 Todos
+#+DATE: 2026-04-01
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run type checks and all tests
+:PROPERTIES:
+:TASK_ID: task-11
+:STATUS: completed
+:DEPENDS: task-5 task-8 task-10
+:END:
+
+bun check:ts, run all new tests, verify no regressions

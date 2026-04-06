@@ -1,0 +1,11 @@
+#+TITLE: Session 14aebf5850db144f Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run all tests and type check
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:

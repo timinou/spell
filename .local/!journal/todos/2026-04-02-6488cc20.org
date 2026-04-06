@@ -1,0 +1,14 @@
+#+TITLE: Session 14aade0471dc2e9b Todos
+#+DATE: 2026-04-02
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Fix
+
+** DONE Fix all three check:ts failures
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+sdk.ts null→undefined, discovery.ts Dirent annotation, log-viewer.test.ts unused var

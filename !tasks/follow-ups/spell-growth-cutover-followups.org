@@ -1,0 +1,60 @@
+#+TITLE: Sandboxed External Action Package Support
+#+STATE: ITEM
+#+SESSION_ID: 14ab6894eaa2d281
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T23-00-14-890Z_14ab6894eaa2d281.jsonl]]
+#+CUSTOM_ID: FUP-032-sandboxed-external-action-package-suppor
+#+EFFORT: 12h
+#+LAYER: backend
+#+PRIORITY: #B
+#+DEPENDS: PROJ-020-spell-manifest-foundation-for-config-nat::implement-registry PROJ-021-spell-workflow-engine-for-generic-approv::implement-engine
+
+* Scope
+** In scope
+- Design and implement post-v1 support for sandboxed external action packages beyond first-party Spell packages.
+- Revisit the v1 first-party action registry abstraction and extend it with a safe external plugin boundary.
+** Out of scope
+- Any v1 cutover-critical behavior. External packages are explicitly deferred from the main cutover plan.
+** Boundary rationale
+- The user wants external package support eventually, but unsafe plugin loading from prior growth implementations must not block or compromise the v1 cutover.
+
+* Tests
+- `packages/spell-server/test/plugins/external-registry.test.ts`
+  - Explicit package declarations load or fail deterministically.
+- `packages/spell-server/test/plugins/sandbox-boundary.test.ts`
+  - External packages cannot escape typed state/artifact/provider/channel APIs.
+- `packages/spell-server/test/plugins/process-isolation.test.ts`
+  - Out-of-process plugin execution preserves typed RPC contracts and failure reporting.
+
+* Implementation
+** Define external plugin threat model
+:PROPERTIES:
+:CUSTOM_ID: FUP-032-sandboxed-external-action-package-suppor::threat-model
+:END:
+- Files: `packages/spell-server/docs/plugin-sandboxing.md`, `packages/spell-server/src/actions/registry.ts`
+- Document the trust boundary, forbidden capabilities, and package declaration format.
+
+** Write plugin boundary tests
+:PROPERTIES:
+:CUSTOM_ID: FUP-032-sandboxed-external-action-package-suppor::plugin-tests
+:DEPENDS: FUP-032-sandboxed-external-action-package-suppor::threat-model
+:END:
+- Files: `packages/spell-server/test/plugins/external-registry.test.ts`, `packages/spell-server/test/plugins/sandbox-boundary.test.ts`, `packages/spell-server/test/plugins/process-isolation.test.ts`
+- Encode the threat model as failing tests before implementation.
+
+** Implement sandboxed external package runner
+:PROPERTIES:
+:CUSTOM_ID: FUP-032-sandboxed-external-action-package-suppor::plugin-runner
+:DEPENDS: FUP-032-sandboxed-external-action-package-suppor::plugin-tests
+:END:
+- Files: `packages/spell-server/src/actions/external-runner.ts`, `packages/spell-server/src/actions/registry.ts`
+- Add explicit package declarations, out-of-process execution, and typed RPC boundaries.
+
+* Edge Cases
+- External packages must not gain arbitrary filesystem, network, DB, or process-spawn access by default.
+- Failure reporting must preserve truthful plugin stderr/stdout and typed error shapes.
+- Package reload/restart policy must be explicit; hot-reload is not assumed.
+
+* Acceptance Criteria
+- External action packages remain outside the v1 cutover path.
+- A later implementation can load explicitly declared external packages through a sandboxed out-of-process runner with typed boundaries.
+- Verification: `bun test packages/spell-server/test/plugins/external-registry.test.ts packages/spell-server/test/plugins/sandbox-boundary.test.ts packages/spell-server/test/plugins/process-isolation.test.ts` passes.

@@ -1,0 +1,23 @@
+#+TITLE: Session 14ad8f3b7f11f890 Todos
+#+DATE: 2026-04-04
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 4: Test coverage
+
+** DONE FEAT-316: Auto-reconnect, stale detection, full cycle tests
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:DEPENDS: task-2 task-3
+:END:
+
+reconnect.test.ts: 3 new test cases.
+
+* Verification
+
+** DONE Run all verification commands and close org items
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:DEPENDS: task-4
+:END:

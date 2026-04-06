@@ -1,8 +1,9 @@
 #+TITLE: Subagent Viewer
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ac791f73fb92d2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-03T18-50-59-919Z_14ac791f73fb92d2.jsonl]]
 #+CUSTOM_ID: PLAN-127-subagent-viewer
+
 
 * Initial Message
 
@@ -85,3 +86,23 @@ These are independent: FEAT-298 touches config/keybinding/mode files; FEAT-299 c
 ** Wave 3: Polish
 - [[id:FEAT-301-subagent-viewer-integration-testing-and]] -- edge cases, integration test, changelog (S)
   Depends on FEAT-300.
+
+** Completion [2026-04-03]
+*** Verification
+- =bun check:ts=: All type errors in our files pass cleanly. 9 pre-existing errors in =spell-server= and =utils= are unrelated.
+- =bun lint:ts=: 1 pre-existing warning in a file not touched by this plan. All plan files pass.
+- =bun test packages/coding-agent/test/modes/components/subagent-viewer/=: 23 tests pass across 2 files (12 event-handler tests + 11 viewer-component tests). 0 failures.
+- =bun test packages/coding-agent/test/modes/controllers/command-controller-hotkeys.test.ts=: 1 test passes (validates hotkeys markdown includes subagentViewerKey).
+- Commit: =eabd74df9= on =main=.
+
+*** Artifacts
+- =packages/coding-agent/src/modes/components/subagent-viewer/types.ts= -- SubagentViewerContext interface (4-field facade)
+- =packages/coding-agent/src/modes/components/subagent-viewer/event-handler.ts= -- SubagentViewerEventHandler (148 lines, 6 event types)
+- =packages/coding-agent/src/modes/components/subagent-viewer/viewer-component.ts= -- SubagentViewerComponent (332 lines: modal, scroll, agent picker, keyboard)
+- =packages/coding-agent/src/modes/components/subagent-viewer/index.ts= -- barrel re-exports
+- =packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts= -- 12 unit tests
+- =packages/coding-agent/test/modes/components/subagent-viewer/viewer-component.test.ts= -- 11 unit tests
+- =packages/coding-agent/CHANGELOG.md= -- entry under [Unreleased] / Added
+
+*** Deviations
+None.

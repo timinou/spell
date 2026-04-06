@@ -1,0 +1,35 @@
+#+TITLE: Session 14aef11047939bea Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Explore tree-selector.ts switch statements
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Explore compaction.ts and branch-summarization.ts switches
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Explore session-manager appendCrashMarker and generateId
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Explore postmortem logger-flush comment
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Explore HTML export template source
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:

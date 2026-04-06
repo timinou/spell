@@ -1,0 +1,111 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-045-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+After line 64, depth drops to 1 (should drop to 0). Then line 65 (blank line) still depth 1. Line 66 goes to depth 2. After line 77 drops to 0. That means line 56-64 (the `test-outline-line-numbers` test) starts at depth 1 and ends at depth 1 — it's missing one close paren at its end.
+
+Wait — line 55 is depth 0, line 56 goes to depth 1 (opening the deftest). Line 64 is depth 5. Line 65 drops to depth 1. But it should be depth 0.
+
+The prior test (`test-outline-class-members`, lines 42-54) goes from depth 1 → 0, so it's fine. But `test-outline-line-numbers` (lines 56-64) goes from 1 → 1. Missing one closing paren.
+
+Let me look at line 64:
+
+```
+(should (> (alist-get 'line entry) 0))))))
+```
+
+That has 6 closing parens. Let me count the opens in this function:
+- `(ert-deftest` — depth 1
+- `(skip-unless` — 2, closes → 1
+- `(test-outline--with-tmp-file` — 2
+- `(lambda (file)` — 3
+- `(let ((entries (pi-outline-get file)))` — let:4, bindings:5, binding:6, pi-outline:7 → close 3: 4
+- `(dolist (entry entries)` — 5
+- `(should (numberp ...))` — self-contained at 5
+- `(should (> (alist-get 'line entry) 0))))))` — should:6, >:7, alist-get:8, close `entry)`:7, `0)`:6, `)`:5 for should... and then `)` for dolist, `)` for let, `)` for lambda, `)` for with-tmp-file = 1. Missing `)` for ert-deftest.
+
+So the `test-outline-line-numbers` test at line 56-64 is also missing one closing paren. But wait — we already verified `check-parens` passes. How?
+
+Because the markdown test at line 66-77 has an EXTRA closing paren (I added `)))))))` at line 77), which compensates for the missing one in the prior test. The net balance is correct but the nesting structure is wrong — `test-outline-markdown-headings` is nested INSIDE `test-outline-line-numbers`.
+
+This is the real bug: the paren fix I applied to line 77 (adding one more `)`) patched the symptom (total count) but didn't fix the root cause (line 64 missing one `)`). The correct fix is to add `)` at line 64 and remove the extra `)` from line 77.
+
+Now let me check the `code` tool's `renderResult` for the double JSON.parse:
+
+Looking at lines 141-158 of code.ts:
+```typescript
+const isJson = (() => {
+    try { JSON.parse(text); return true; } catch { return false; }
+})();
+let parsed: unknown;
+if (isJson) {
+    try { parsed = JSON.parse(text); } catch { parsed = text; }
+} else {
+    parsed = text;
+}
+```
+
+This parses the JSON twice when it's valid JSON — once to check, once to actually parse. A simple try-catch with a single parse would suffice.
+
+Also line 139: `const safeText = replaceTabs(text)` is computed but only used in the error path at line 171. The `toRender` helper at line 161 also calls `replaceTabs(value)`, meaning for the error path at line 171 (`safeText` is already tab-replaced text which then goes through `toRender` which calls `replaceTabs` again — double sanitization).
+
+Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. Markdown outline will not work: `section` node missing from unwrap list
+- **What**: `pi-treesit--top-level-nodes-children` unwraps `document`, `stream`, `block_mapping`, `object` — but tree-sitter-markdown wraps `atx_heading` inside `section` nodes. Without `section` in the unwrap list, heading nodes are never reached by the outline function.
+- **Where**: `packages/emacs/elisp/pi-treesit.el` ~line 155
+- **Why**: Markdown outline (`code outline` on .md files) will return empty results. The feature's primary use case doesn't work. The test is gated by `skip-unless` AND has a nesting bug that prevents execution, so this was never caught.
+- **Effort**: `trivial` — add `"section"` to the unwrap list at line 155.
+
+### 2. Elisp test nesting bug: `test-outline-markdown-headings` is inside `test-outline-line-numbers`
+- **What**: `test-outline-line-numbers` (line 56-64) is missing one closing paren. The next test (`test-outline-markdown-headings`) is nested inside it. The paren I added at line 77 compensated the total count but didn't fix the structural nesting.
+- **Where**: `packages/emacs/test/elisp/test-outline.el` line 64 (needs one more `)`) and line 77 (has one extra `)`)
+- **Why**: The markdown test is never registered as an ERT test (confirmed: `ert-test-unbound`). If/when grammars become available, these tests silently don't run.
+- **Effort**: `trivial` — add `)` at line 64, remove one from line 77.
+
+### 3. Core tier test missing `"code"` assertion
+- **What**: The core tier test at `test/tools/index.test.ts` line 261 asserts core tier for `["grep", "find", "bash", "lsp", "task", "ask"]` but omits `"code"`.
+- **Where**: `packages/coding-agent/test/tools/index.test.ts` line 261
+- **Why**: The most important assertion of this plan — that `code` is core tier — is not tested. The test would still pass if someone accidentally moved `code` to standard.
+- **Effort**: `trivial` — add `"code"` to the array.
+
+### 4. TOML `table` name returns full node text including all children
+- **What**: The `table` case in `pi-treesit-declaration-name` (line 283-284) returns `(string-trim (treesit-node-text node t))` which includes the entire table content (`[table]\nitem = "value"\nother = 1`), not just the header `[table]`.
+- **Where**: `packages/emacs/elisp/pi-treesit.el` line 284
+- **Why**: TOML table outline entries will have multi-line names containing all key-value pairs under the table. The test asserts `(member "[table]" names)` but the actual name would be the full table text. When TOML grammar becomes available, this test will fail.
+- **Effort**: `small` — extract just the table header line, or use the first child node (the `[table]` bracket header).
+
+### 5. `pair` clause crashes on nil grandparent-type
+- **What**: In the TOML path of the `pair` handler (line 277), `(not (string= grandparent-type "table"))` calls `string=` on potentially nil `grandparent-type`, which signals a wrong-type-argument error in Elisp.
+- **Where**: `packages/emacs/elisp/pi-treesit.el` line 277
+- **Why**: If a `pair` node's grandparent is nil (unlikely but possible for malformed documents), this crashes. Fix: use `(not (equal grandparent-type "table"))` or guard with `(and grandparent-type ...)`.
+- **Effort**: `trivial`
+
+### 6. Double JSON.parse in renderResult
+- **What**: `renderResult` calls `JSON.parse(text)` twice — once to check if it's JSON (lines 142-148), then again to actually parse (lines 151-155). Also, `safeText` (line 139) calls `replaceTabs` on the full text but is only used in one branch; the `toRender` helper (line 161) also calls `replaceTabs`, causing double sanitization in the error path.
+- **Where**: `packages/coding-agent/src/tools/code.ts` lines 139-171
+- **Why**: Minor perf waste (parse twice) and double-sanitization (cosmetic). Not a correctness bug.
+- **Effort**: `trivial` — single try-catch parse; remove `safeText` and use `toRender(text)` directly.
+
+### 7. No `emacs` → `code` rename in `packages/emacs` CHANGELOG
+- **What**: The plan specified CHANGELOG entries for both `packages/coding-agent/CHANGELOG.md` and `packages/emacs/CHANGELOG.md`. The emacs package has no CHANGELOG file, so the planned entries (renamed exports, tool name, grammar recipes) were not documented.
+- **Where**: `packages/emacs/` — missing `CHANGELOG.md`
+- **Why**: Low impact — the emacs package is internal. But the plan explicitly specified this documentation.
+- **Effort**: `small` — create the file if the package should have one, or note in the plan that it was intentionally skipped.
+
+### 8. `RenderResultOptions` import may be unnecessary
+- **What**: `code.ts` imports `RenderResultOptions` from `../extensibility/custom-tools/types` but the parameter is just prefixed with `_` and never used.
+- **Where**: `packages/coding-agent/src/tools/code.ts` line 17, 130
+- **Why**: Dead import. Minor lint noise. The type is needed for the method signature to satisfy the `AgentTool` interface, so the import is technically required even if `_options` is unused.
+- **Effort**: N/A — needed for type compliance.

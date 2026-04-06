@@ -1,0 +1,14 @@
+#+TITLE: Session 14aebf5bda10ea8c Todos
+#+DATE: 2026-04-05
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run all verification checks
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:DEPENDS: task-1 task-2 task-3 task-4
+:END:
+
+bun check:ts, elisp parse checks, dep sort test, filename matching test, existing tests

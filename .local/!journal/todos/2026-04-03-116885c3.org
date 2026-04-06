@@ -1,0 +1,24 @@
+#+TITLE: Session 14ac6aaacb7cbf0d Todos
+#+DATE: 2026-04-03
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 4: CLI + Watch
+
+** DONE Update CLI commands and watch for sqlite3-rsync
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:GATE_CMD: bun test packages/spell-deploy/test/cli/commands.test.ts packages/spell-deploy/test/sync/watch.test.ts
+:ORG_ITEM_ID: FEAT-296-update-cli-commands-and-watch-for-new-sq
+:END:
+
+Binary check at startup, update dry-run output, thread through watch orchestrator, update tests
+
+* Verification
+
+** DONE Run full test suite and type check
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:GATE_CMD: bun test packages/spell-deploy/
+:END:

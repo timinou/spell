@@ -1,0 +1,11 @@
+#+TITLE: Session 14ad66157311f882 Todos
+#+DATE: 2026-04-04
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Codebase reality (verified during exploration)
+
+** DONE Metis gap analysis on QML bridge stability plan
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
