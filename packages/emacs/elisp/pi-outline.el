@@ -80,9 +80,7 @@ Mirrors pi-treesit-declaration-name but returns the node rather than its text."
              (target-text (when target (treesit-node-text target t))))
         (when (and target-text
                    (member target-text
-                           '("def" "defp" "defmodule" "defprotocol" "defimpl"
-                             "defmacro" "defmacrop" "defguard" "defguardp"
-                             "defstruct" "defdelegate" "defexception")))
+                           pi-treesit--elixir-def-keywords))
           (let ((args-node (treesit-search-subtree node "^arguments$" nil nil 1)))
             (when args-node
               (let ((first-arg (treesit-node-child args-node 0)))

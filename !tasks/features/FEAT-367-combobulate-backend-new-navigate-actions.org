@@ -1,0 +1,172 @@
+#+TITLE: Combobulate backend new navigate actions and edit operations
+#+STATE: DONE
+#+SESSION_ID: 14b02881a8559742
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T15-32-42-273Z_14b02881a8559742.jsonl]]
+#+CUSTOM_ID: FEAT-367-combobulate-backend-new-navigate-actions
+#+EFFORT: 3h
+#+PRIORITY: A
+#+LAYER: emacs
+
+* Initial Message
+
+Use jq on recent spell transcripts and tlel me how often the code read tool is used vs. the other code tools. Look at the usages of combobulate and tell me how you'd restructrure the tool to nudge towards more refined usages of combobulate so that the AI is smarter thanks
+
+* Goal
+Expose more combobulate/treesit capabilities through the existing code tool pass-through architecture. Add 3 navigate actions and 3 edit operations to the elisp backend. Zero TypeScript logic changes — only description strings updated.
+
+* Context
+The code tool's navigate and edit subcommands are pass-through: TypeScript dispatches based on =command= string, the elisp MCP handler dispatches based on =action=/=operation= string. Adding new capabilities requires only:
+1. New cases in =pi-navigate-execute= (pi-edit.el)
+2. New cases in =pi-edit--combobulate-op= (pi-edit.el)
+3. Updated description strings in =pi-emacs-tools.el= and =code.ts=
+
+The pass-through chain:
+- =code.ts= → =tool.ts createCodeTool= → =client.ts navigate()/edit()= → =callToolOnce("code-navigate"/\"code-edit")= → elisp MCP handler → =pi-navigate-execute= / =pi-edit-execute=
+
+* Navigate actions to add
+
+** =node-at= — Inspect target node before editing
+Return the node at a given position with enough context to verify targeting.
+
+Input: =file=, =line=, optional =column=
+Output alist:
+#+begin_src elisp
+'((type . "function_declaration")
+  (text . "function foo(a: string, b: number) {")  ;; first line only, truncated at 80 chars
+  (line . 42)
+  (end_line . 65)
+  (parent . ((type . "export_statement") (line . 42))))
+#+end_src
+
+Implementation in =pi-navigate-execute=:
+#+begin_src elisp
+("node-at"
+ (let* ((pos (point))
+        (node (treesit-node-at pos))
+        (parent (when node (treesit-node-parent node)))
+        (text (when node
+                (let ((full (treesit-node-text node t)))
+                  (car (split-string full "
+"))))))
+   (if node
+       `((type . ,(treesit-node-type node))
+         (text . ,(if (> (length text) 80) (substring text 0 80) text))
+         (line . ,(line-number-at-pos (treesit-node-start node)))
+         (end_line . ,(line-number-at-pos (treesit-node-end node)))
+         ,@(when parent
+             `((parent . ((type . ,(treesit-node-type parent))
+                          (line . ,(line-number-at-pos (treesit-node-start parent))))))))
+     `((error . t) (message . "No node at position")))))
+#+end_src
+
+** =siblings= — List siblings for drag/reorder context
+Find the node at position, get its parent, list all the parent's named children.
+
+Input: =file=, =line=
+Output:
+#+begin_src json
+{
+  "current_index": 1,
+  "siblings": [
+    { "type": "function_declaration", "name": "foo", "line": 3, "end_line": 20 },
+    { "type": "function_declaration", "name": "bar", "line": 22, "end_line": 40, "current": true },
+    { "type": "class_declaration", "name": "Baz", "line": 42, "end_line": 80 }
+  ]
+}
+#+end_src
+
+Implementation notes:
+- Find node at line via =treesit-node-at=
+- Walk up to nearest "navigable" parent (skip punctuation nodes like ={ } , ;=)
+- List parent's named children, marking which one contains the cursor position
+- Use =pi-treesit-declaration-name= to get names where possible
+- Filter out pure-punctuation children (type is single char or in a skip-list)
+
+** =children= — List child nodes of structural node at point
+Find the nearest structural node (class, function, block) at line, list its children.
+
+Input: =file=, =line=
+Output:
+#+begin_src json
+{
+  "parent_type": "class_declaration",
+  "parent_name": "MyService",
+  "children": [
+    { "type": "public_field_definition", "name": "logger", "line": 5, "end_line": 5 },
+    { "type": "method_definition", "name": "execute", "line": 7, "end_line": 25 },
+    { "type": "method_definition", "name": "cleanup", "line": 27, "end_line": 35 }
+  ]
+}
+#+end_src
+
+Implementation notes:
+- Find node at line, walk up to nearest node that has a body (use =pi-treesit-find-body=)
+- List children of the body node
+- Filter out punctuation (={ } ( ) , ;=)
+- Use =pi-treesit-declaration-name= and =pi-treesit-declaration-kind= for child metadata
+
+* Edit operations to add
+
+All three go in the =pi-edit--combobulate-op= function (the =(pcase operation ...)= dispatch).
+
+** =splice-self= — Unwrap, keep only self
+Calls =combobulate-splice-self=. Removes wrapper + siblings, keeps only the targeted node's content.
+
+Use case: "Keep only the if-body, remove the if-wrapper and else-branch."
+
+** =splice-down= — Unwrap, keep self + before
+Calls =combobulate-splice-down=. Removes wrapper + siblings after, keeps self + siblings before.
+
+Use case: "Remove the else branch and unwrap the if."
+
+** =transpose= — Swap with next sibling
+Calls =combobulate-transpose-sexps=. Swaps the node at point with its next sibling.
+
+Use case: "Swap these two function arguments" or "swap these two class methods."
+
+Implementation for all three — add to the =pcase= in =pi-edit--combobulate-op=:
+#+begin_src elisp
+("splice-self" (combobulate-splice-self))
+("splice-down" (combobulate-splice-down))
+("transpose" (combobulate-transpose-sexps))
+#+end_src
+
+* Description string updates
+
+** =pi-emacs-tools.el= line 100 (code-edit description)
+Change operation list from:
+: "replace, insert-before, insert-after, kill, splice, drag-up, drag-down, clone, envelope"
+To:
+: "replace, insert-before, insert-after, kill, splice, splice-self, splice-down, drag-up, drag-down, clone, envelope, transpose"
+
+** =pi-emacs-tools.el= line 175 (code-navigate description)
+Change action list from:
+: "defun-at, parent, references-local"
+To:
+: "defun-at, parent, references-local, node-at, siblings, children"
+
+** =code.ts= line 55 (operation description)
+Update the =operation= TypeScript description string to include =splice-self=, =splice-down=, =transpose=.
+
+** =code.ts= line 62 (action description)
+Update the =action= TypeScript description string to include =node-at=, =siblings=, =children=.
+
+* Files to modify
+- =packages/emacs/elisp/pi-edit.el= — Add navigate actions + edit operations
+- =packages/emacs/elisp/pi-emacs-tools.el= — Update description strings (lines ~100 and ~175)
+- =packages/coding-agent/src/tools/code.ts= — Update description strings (lines ~55 and ~62)
+
+* Edge cases
+- =node-at= with =line= pointing at whitespace/comment: return nearest node, not error
+- =siblings= where parent is root (program node): return top-level declarations
+- =siblings= on a punctuation node (={=, =,=): walk up to nearest named parent first
+- =children= on a leaf node (no body): return error with message "Node has no children"
+- =transpose= at last sibling: combobulate handles this (error or no-op)
+- All combobulate ops: check =pi-emacs-combobulate-available= before calling, return error if not available (matches existing pattern on line 72-75 of pi-edit.el)
+
+* Verification
+- =bun check:ts= passes (description string changes don't break types)
+- Manual test: open a TypeScript file, call each new navigate action, verify JSON output
+- Manual test: call splice-self, splice-down, transpose on a sample file, verify diff output
+- Existing test =packages/emacs/test/tool-getSession.test.ts= still passes (no logic changes)
+- Existing test =packages/coding-agent/test/tools/code.test.ts= still passes

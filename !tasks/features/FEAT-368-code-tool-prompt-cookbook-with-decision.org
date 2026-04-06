@@ -1,0 +1,97 @@
+#+TITLE: Code tool prompt cookbook with decision trees
+#+STATE: DONE
+#+SESSION_ID: 14b02881a8559742
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T15-32-42-273Z_14b02881a8559742.jsonl]]
+#+CUSTOM_ID: FEAT-368-code-tool-prompt-cookbook-with-decision
+#+EFFORT: 2h
+#+PRIORITY: A
+#+LAYER: prompts
+#+DEPENDS: FEAT-367-combobulate-backend-new-navigate-actions
+
+* Initial Message
+
+Use jq on recent spell transcripts and tlel me how often the code read tool is used vs. the other code tools. Look at the usages of combobulate and tell me how you'd restructrure the tool to nudge towards more refined usages of combobulate so that the AI is smarter thanks
+
+* Goal
+Rewrite =packages/coding-agent/src/prompts/tools/code.md= from a flat reference manual into a task-oriented cookbook with decision trees and compressed examples. This is the highest-impact change: the tool description IS the behavioral contract the AI follows.
+
+* Problem
+Current prompt (59 lines) lists subcommands flat. Result: 298 code tool calls in 14 days vs 76,807 read calls. Of 298 code calls, 85% are =read= at resolution 3 (just =cat= through Emacs). Zero =edit= calls. Zero =navigate= calls. The AI has no reason to choose code over simpler tools.
+
+* Design
+
+** Structure (top to bottom)
+1. One-line description (keep existing)
+2. Decision tree: "what are you doing?" → subcommand
+3. Workflow patterns (2-3 lines each)
+4. Compressed examples organized by task type
+5. Output reference (terse)
+6. Critical section (constraints/fallbacks)
+
+** Decision tree (top of prompt, inside =<instruction>=)
+
+Format: task → tool call pattern. Dense, no prose.
+
+#+begin_example
+Orientation on unknown file → code outline { file }
+Understand API surface → code read { file, resolution: 1 }
+Understand structure → code read { file, resolution: 2 }  [DEFAULT]
+Read specific implementation → code read { file, resolution: 3, offset, limit }
+Verify edit target before committing → code navigate { file, action: "node-at", line }
+See what's around a node (for drag) → code navigate { file, action: "siblings", line }
+Find enclosing function → code navigate { file, action: "defun-at", line }
+Find in-file references → code navigate { file, action: "references-local", line }
+Delete a declaration → code edit { operation: "kill", target: { line, node_type } }
+Replace node content → code edit { operation: "replace", target: { line }, content }
+Reorder siblings → code edit { operation: "drag-up" | "drag-down", target: { line } }
+Unwrap a wrapper → code edit { operation: "splice", target: { line } }
+Duplicate a node → code edit { operation: "clone", target: { line } }
+Insert adjacent → code edit { operation: "insert-before" | "insert-after", target, content }
+Swap adjacent siblings → code edit { operation: "transpose", target: { line } }
+Preview before saving → code edit { ..., save: false } then code diff { file }
+Non-code file → use read tool instead
+#+end_example
+
+** Workflow patterns
+Three named patterns, 2-3 lines each:
+
+1. *Explore-then-edit*: =outline= → find line → =navigate node-at= → =edit=
+2. *Reorder*: =navigate siblings= → identify positions → =edit drag-up/drag-down=
+3. *Preview*: =edit { save: false }= → =diff= → =edit { save: true }= or discard
+
+** Compressed examples
+Each example: one descriptive comment + one JSON call. No prose explanation. Group by task.
+
+10-12 examples covering:
+- outline (basic, with depth)
+- read at resolution 0, 1, 2 (default), 3 with offset/limit
+- navigate: node-at, siblings, defun-at, references-local
+- edit: kill, replace, drag-down, splice, clone, insert-after, transpose
+- preview: edit with save:false + diff
+
+Example format:
+#+begin_example
+<!-- Delete a function -->
+{ command: "edit", file: "src/api.ts", operation: "kill", target: { line: 42, node_type: "function_declaration" } }
+
+<!-- Reorder: move method up -->
+{ command: "edit", file: "src/api.ts", operation: "drag-up", target: { line: 55, node_type: "method_definition" } }
+#+end_example
+
+** Anti-patterns (in =<critical>=)
+- Do NOT default to resolution 3. Start at resolution 2; use 3 only when you need a specific function body.
+- Do NOT use =read= for source files when =code= is available — =code read= understands structure.
+- Do NOT skip =navigate node-at= before a destructive edit — verify your target first.
+- The edit =target= requires an accurate =line= number; use =code outline= first.
+
+* File to modify
+=packages/coding-agent/src/prompts/tools/code.md= — complete rewrite
+
+* Current file structure
+The file is a Markdown prompt with XML-like tags: =<instruction>=, =<operations>=, =<output>=, =<critical>=. Maintain this structure but restructure content within.
+
+* Verification
+- =bun check:ts= passes (the file is imported with =with { type: "text" }=, no parse)
+- The description string appears verbatim in the tool definition sent to the AI model
+- Verify the file is imported at =packages/coding-agent/src/tools/code.ts= line 20: =import codeDescription from "../prompts/tools/code.md" with { type: "text" }=
+- Read the final file and confirm: decision tree is at top, examples are compressed (no prose paragraphs around examples), anti-patterns are explicit
