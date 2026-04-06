@@ -1,0 +1,108 @@
+#+TITLE: Update getting-startedmd for telegram bridge first-class usage
+#+STATE: DONE
+#+SESSION_ID: 14afee2ae0359a29
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T11-17-49-056Z_14afee2ae0359a29.jsonl]]
+#+CUSTOM_ID: FEAT-364-update-getting-started-md-for-telegram-b
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: docs
+#+DEPENDS: FEAT-362-move-spell-server-docs-to-docs-spell-ser
+
+NOTE [2026-04-06]: Updated getting-started.md. Added Usage Paths section, expanded channels.kdl example, added socket bridge config, expanded API route table, added bearer token auth, renamed Telegram section, added overlap protection (409).
+
+* Initial Message
+
+what documentation exists around spell-server and its local usage as a telegram bridge? is there a quickstart? is there something accessible through a resource, so that any spell session can call that link or resource and know what's up (setting it up, getting hte kdl schema refernce, etc.)?
+
+* Goal
+
+Update =docs/spell-server/getting-started.md= (moved from =packages/spell-server/docs/= by FEAT-362) to foreground the Telegram bridge as a primary use case, not just "optional notifications." Add missing config sections and fix stale content.
+
+* Current state of the doc
+
+The doc is ~92% accurate for what it covers, but scoped too narrowly to autonomy goals. Telegram is treated as an afterthought (section titled "Optional Telegram Notifications" with just a hook config). The actual primary use case — interactive Telegram sessions — isn't mentioned.
+
+* Changes required
+
+** 1. Restructure to show two primary use cases
+After the "Configuration Files" section, the doc should present two usage paths:
+- *Autonomous goals*: scheduled/webhook-triggered work (current focus, keep as-is)
+- *Interactive Telegram sessions*: conversational agent access via Telegram (new, link to telegram-bridge.md)
+
+** 2. Expand the channels.kdl section (currently section "3. Optionally create .spell/channels.kdl")
+Current example is minimal. Replace with a more complete example showing:
+- =bot-token-file= (prefer file over inline for secrets)
+- =owners=
+- =default-model=
+- =upload-dir=
+- =idle-timeout=
+- =max-sessions=
+- =project= nodes (at least one)
+- =default-project=
+- =user= block with modes, default-mode, idle-timeout
+
+Add a note: "For interactive Telegram sessions, =channels.kdl= is the primary configuration file. See [[pi://spell-server/telegram-bridge.md][Telegram Bridge Guide]] for full feature documentation."
+
+** 3. Add socket bridge config section
+After the channels.kdl section, add a brief section about the =socket= node in =server.kdl=:
+
+#+begin_src kdl
+socket path="~/.spell/server.sock"
+#+end_src
+
+Explain: "The socket bridge enables local =spell= CLI sessions to forward blocking events (plan approvals, agent questions) to the server. When combined with Telegram session-notifications, operators can respond to agent questions from their phone."
+
+** 4. Update API route listing
+In the "Verifying the Server" section, the doc only mentions =/api/goals= and =/api/manifest=. Add:
+- =/api/goals/:goalName/runs= (already partially mentioned)
+- =/api/state/*= (state store inspection)
+- =/api/approvals/*= (workflow approvals)
+- =/api/downstream-jobs/*= (workflow downstream jobs)
+- =/api/operator-actions= (operator action queue)
+
+** 5. Add bearer token auth mention
+In the "Manual Webhook Trigger" section, the doc shows HMAC auth. Add a note that =auth="bearer"= is also supported, using goal tokens configured in =server.kdl=:
+
+#+begin_src kdl
+http port=8787 {
+  auth username="admin" password="change-me-now" // pragma: allowlist secret
+  goal-token "manual-test-run" "my-secret-token" // pragma: allowlist secret
+}
+#+end_src
+
+Then trigger with:
+#+begin_src bash
+curl -X POST \
+  -H "Authorization: Bearer my-secret-token" \
+  http://127.0.0.1:8787/trigger/manual-test-run
+#+end_src
+
+** 6. Rename "Optional Telegram Notifications" section
+Rename to "Telegram Integration" and restructure:
+- Keep the hook target example (for goal result notifications)
+- Add a paragraph explaining that Telegram is more than just notifications — it provides interactive sessions
+- Link to =telegram-bridge.md= for the full guide
+
+** 7. Fix overlap protection mention
+Add a note somewhere (near the webhook trigger section or the goal section): "If a goal is already running when triggered again, the server returns HTTP 409. Concurrent executions of the same goal are not allowed."
+
+* Files to modify
+
+- =docs/spell-server/getting-started.md= (the already-moved file from FEAT-362)
+
+* Source files to reference
+
+- =packages/spell-server/src/config/server-parser.ts= — for socket node and goal-token parsing
+- =packages/spell-server/src/http/server.ts= — for current API route listing
+- =packages/spell-server/src/http/routes/triggers.ts= — for bearer auth and 409 behavior
+- =packages/spell-server/src/config/channels-parser.ts= — for channels.kdl field reference
+
+* Verification
+
+1. The doc has a section that introduces Telegram interactive sessions (not just notifications)
+2. channels.kdl example includes project, user block, and upload-dir
+3. Socket bridge config documented
+4. Bearer token auth example present
+5. API route listing includes /api/state/*, /api/approvals/*
+6. Overlap protection (409) mentioned
+7. Links to =telegram-bridge.md= present

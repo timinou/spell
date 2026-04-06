@@ -61,10 +61,15 @@ telegram {
   log-viewer-port 4312
   project "spell" "../spell"
   default-project "spell"
+  auto-send-images #true
   user 123456789 {
     modes "telegram-readonly" "coding"
     default-mode "coding"
     projects "spell"
+    voice {
+      reply-mode "always"
+      tts-voice "Rachel"
+    }
   }
 }
 ```
@@ -73,7 +78,9 @@ Important rules:
 
 - Omit the whole `telegram` node to disable Telegram.
 - `default-model`, `owners`, and either `bot-token` or `bot-token-file` are required when `telegram` is present.
-- Use `#null`, not bare `null`, for nullable values such as `idle-timeout #null`.
+- `bot-token` supports `env(...)` resolution (e.g. `bot-token "env(TELEGRAM_BOT_TOKEN)"`). `bot-token` and `bot-token-file` are mutually exclusive.
+- `auto-send-images` is an optional boolean (default `#true`). When `#true`, images generated during a session are automatically sent to the chat.
+- Use `#null` (canonical KDL null) for nullable values such as `idle-timeout #null`. Bare `null` is also accepted by the parser but `#null` is canonical.
 
 ### `session-notifications`
 
@@ -101,6 +108,64 @@ Notes:
 - Omit the block to disable Telegram notifications for local session events.
 - `notify-chat-id` may appear multiple times and all values are collected.
 
+
+### `voice`
+
+Configure speech-to-text (STT) and text-to-speech (TTS) for voice interactions. All fields are flat children of the `voice` block.
+
+```kdl
+telegram {
+  // ...other fields...
+  voice {
+    stt-provider "deepgram"
+    stt-api-key "env(DEEPGRAM_API_KEY)"
+    stt-model "nova-2"
+    stt-language "en"
+    tts-provider "elevenlabs"
+    tts-api-key "env(ELEVENLABS_API_KEY)"
+    tts-model "eleven_turbo_v2"
+    tts-voice "Rachel"
+    reply-mode "mirror"
+  }
+}
+```
+
+| Child node | Type | Required | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `stt-provider` | string | No | none | One of `deepgram`, `openai`. Required when `stt-api-key` is set. |
+| `stt-api-key` | string | No | none | Supports `env(...)` resolution. Required when `stt-provider` is set. |
+| `stt-model` | string | No | provider default | Model identifier passed to the STT provider. |
+| `stt-language` | string | No | `en` | BCP-47 language code. |
+| `tts-provider` | string | No | none | One of `elevenlabs`, `deepgram`. Required when `tts-api-key` is set. |
+| `tts-api-key` | string | No | none | Supports `env(...)` resolution. Required when `tts-provider` is set. |
+| `tts-model` | string | No | provider default | Model identifier passed to the TTS provider. |
+| `tts-voice` | string | No | provider default | Voice ID or name. |
+| `reply-mode` | string | No | `mirror` | One of `mirror`, `always`, `never`. `mirror` replies with voice when the user sent a voice message. |
+
+Notes:
+
+- `stt-provider` and `stt-api-key` must both be present or both absent.
+- `tts-provider` and `tts-api-key` must both be present or both absent.
+- Omitting the entire `voice` block disables voice for the channel.
+
+### Per-user `voice` overrides
+
+Per-user voice settings override channel-level voice defaults.
+
+```kdl
+user 123456789 {
+  modes "coding"
+  voice {
+    reply-mode "always"
+    tts-voice "Rachel"
+  }
+}
+```
+
+| Child node | Type | Required | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `reply-mode` | string | No | inherits channel | One of `mirror`, `always`, `never`. |
+| `tts-voice` | string | No | inherits channel | Overrides the channel-level `tts-voice` for this user. |
 ## `autonomy.kdl`
 
 `autonomy.kdl` is the canonical workflow manifest. It may import other KDL files.

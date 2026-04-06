@@ -15,8 +15,13 @@ The package is structured around a few cooperating subsystems:
 - `executor/` runs a goal, tracks its state machine, applies retry policy, and writes sandbox policy files.
 - `hooks/` delivers run results to webhook, Telegram, or org executors.
 - `http/` serves the JSON API, trigger routes, and browser dashboard.
+- `workflow/` implements the approval engine, downstream jobs, and checkpoint gates.
+- `socket/` provides the JSON-lines session bridge for blocking events between local CLI sessions and the server.
+- `state/` manages named state stores with SQLite backends and exposes them via HTTP API.
+- `actions/` hosts the action descriptor registry and validation.
+- `telegram/voice/` integrates STT/TTS providers (Deepgram, OpenAI, ElevenLabs) for voice message handling.
 
-The missing piece is the CLI entrypoint that wires these modules together: load config from `.spell/`, build dependencies, start the HTTP server and scheduler, and handle process shutdown.
+The CLI entrypoint (`src/main.ts`) wires these modules together: loads config from `.spell/`, builds dependencies, starts the HTTP server and scheduler, and handles process shutdown.
 
 ## Component Diagram
 

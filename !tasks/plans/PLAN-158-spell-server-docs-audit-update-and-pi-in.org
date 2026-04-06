@@ -1,0 +1,98 @@
+#+TITLE: Spell server docs pi integration and setup wizard
+#+STATE: DONE
+#+SESSION_ID: 14afee2ae0359a29
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T11-17-49-056Z_14afee2ae0359a29.jsonl]]
+#+CUSTOM_ID: PLAN-158-spell-server-docs-audit-update-and-pi-in
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+* Initial Message
+
+what documentation exists around spell-server and its local usage as a telegram bridge? is there a quickstart? is there something accessible through a resource, so that any spell session can call that link or resource and know what's up (setting it up, getting hte kdl schema refernce, etc.)?
+
+* Context
+
+Spell-server has three documentation files in =packages/spell-server/docs/= (getting-started.md, architecture.md, kdl-schema-reference.md). An audit found:
+
+- *architecture.md*: 4 major subsystems missing (workflow, socket, state, actions), stale "missing CLI entrypoint" claim
+- *getting-started.md*: accurate but scoped narrowly to autonomy goals; telegram bridge (the primary interactive use case) treated as "optional notifications"
+- *kdl-schema-reference.md*: 95% accurate but missing voice config block, auto-send-images, bot-token env() support, wrong socket default
+- *telegram bridge*: 12 commands, voice, session management, file delivery, approvals — zero documentation
+
+None of these docs are accessible through =pi://= internal URLs. The existing generator at =packages/coding-agent/scripts/generate-docs-index.ts= scans =docs/**/*.md= recursively, so placing files at =docs/spell-server/*.md= makes them accessible as =pi://spell-server/getting-started.md= etc. with zero code changes.
+
+Additionally, there is no interactive way for a new user to bootstrap a spell-server setup. Two sibling projects (=../growth/.spell/= and =../founder-sidekick/.spell/=) demonstrate mature, modular KDL configurations with imports, state stores, memory systems, and workflow pipelines — but this knowledge is locked in those repos with no way for a new user to replicate the patterns.
+
+** Approach
+1. Move docs from =packages/spell-server/docs/= to =docs/spell-server/= (single source of truth)
+2. Fix architecture.md stale claims during the move (minimal scope)
+3. Create new =telegram-bridge.md= with comprehensive operator guide
+4. Update =getting-started.md= to foreground telegram bridge usage
+5. Update =kdl-schema-reference.md= with missing fields (voice, auto-send-images, env(), defaults)
+6. Regenerate =docs-index.generated.ts= to embed the new docs
+7. Create an interactive setup wizard skill (=.spell/skills/spell-server-setup/SKILL.md=) that bootstraps a properly modularized =.spell/= directory with presets inspired by growth and founder-sidekick projects
+
+** Key decisions
+- No generator or protocol handler code changes needed (=**/*.md= glob already recurses)
+- Operator/self-setup audience, not contributor audience
+- architecture.md gets minimal fixes only (remove stale claim, list new subsystems)
+- All doc content must be sourced from actual implementation files, not invented
+- Setup wizard offers three presets + free-form: assistant (memory+context+decay), workflow (approval pipeline+exports), minimal (telegram+server), other (adaptive combination)
+- Adaptive generation: wizard asks about the project, then generates real goals with real prompts tailored to answers
+- Secrets via .env + .env.example with .gitignore update
+- Wizard references pi:// docs (depends on doc items being done first)
+- Verification summary includes non-technical Telegram test steps + developer curl commands + pi:// doc links
+* Verification
+
+1. =pi://= lists =spell-server/getting-started.md=, =spell-server/architecture.md=, =spell-server/kdl-schema-reference.md=, =spell-server/telegram-bridge.md=
+2. =packages/spell-server/docs/= directory deleted
+3. =bun packages/coding-agent/scripts/generate-docs-index.ts= succeeds
+4. Generated file contains all 4 =spell-server/*= keys
+5. =bun check:ts= passes (generated file is valid TypeScript)
+6. =.spell/skills/spell-server-setup/SKILL.md= exists with valid frontmatter
+7. Skill covers all three presets (assistant, workflow, minimal) plus free-form "other"
+8. Skill includes inline KDL reference examples for imports, goals, memory tiers, state stores
+9. Skill includes feature matrix table for adaptive preset selection
+10. Skill references pi:// docs for ongoing reading
+* Execution Manifest
+
+** Wave 1: Move and integrate (foundation)
+- [[id:FEAT-362-move-spell-server-docs-to-docs-spell-ser]] — Move files, fix architecture.md stale claims, regenerate index (S)
+
+** Wave 2: Content updates + skill (parallel, all depend on Wave 1)
+- [[id:FEAT-363-create-telegram-bridge-operator-guide]] — New telegram-bridge.md with commands, voice, sessions, notifications (L)
+- [[id:FEAT-364-update-getting-started-md-for-telegram-b]] — Foreground telegram, add socket/bearer/routes (M)
+- [[id:FEAT-365-update-kdl-schema-reference-md-with-miss]] — Add voice config, auto-send-images, fix defaults (M)
+- [[id:FEAT-366-create-spell-server-setup-interactive-sk]] — Interactive setup wizard skill with presets (assistant/workflow/minimal/other), memory system, modular KDL generation (XL). Depends on FEAT-362 and FEAT-363 (references pi:// docs).
+
+** Final: Regenerate index
+After all content changes, re-run =bun packages/coding-agent/scripts/generate-docs-index.ts= to embed final content. This is included in the Wave 1 item but should be re-run after Wave 2 completes to capture updated content.
+
+
+** Completion [2026-04-06]
+
+*** Verification
+
+1. ~pi://~ index contains all 4 spell-server keys: =spell-server/architecture.md=, =spell-server/getting-started.md=, =spell-server/kdl-schema-reference.md=, =spell-server/telegram-bridge.md= — verified via grep on generated file.
+2. =packages/spell-server/docs/= directory deleted — verified via filesystem check.
+3. =bun packages/coding-agent/scripts/generate-docs-index.ts= succeeds — generated 54 docs (53 + new telegram-bridge.md).
+4. Generated file contains all 4 spell-server keys — confirmed via grep.
+5. =bun check:ts= passes for generated file — biome lint clean, all tsgo errors are pre-existing in unrelated files (sql-store.ts, approvals.ts, tool-progress.ts, logger.ts).
+6. =.spell/skills/spell-server-setup/SKILL.md= exists (23KB) with valid frontmatter (name, description, version).
+7. Skill covers all 3 presets (assistant, workflow, minimal) plus free-form other with adaptive feature matrix.
+8. Skill includes inline KDL reference examples for imports, goals, memory tiers (episodic/semantic), significance levels (landmark/inflection/routine), state stores, consolidation config.
+9. Skill includes feature matrix table (14 features x 4 presets).
+10. Skill references pi:// docs for ongoing reading (4 links).
+
+*** Artifacts
+
+- =docs/spell-server/architecture.md= — Fixed stale CLI claim, added 5 missing subsystems (223 lines)
+- =docs/spell-server/getting-started.md= — Foregrounded Telegram, added socket/bearer/routes/409 (400 lines)
+- =docs/spell-server/kdl-schema-reference.md= — Added voice, auto-send-images, env(), per-user voice (479 lines)
+- =docs/spell-server/telegram-bridge.md= — New comprehensive operator guide (349 lines)
+- =.spell/skills/spell-server-setup/SKILL.md= — Interactive setup wizard skill (23KB)
+- =packages/coding-agent/src/internal-urls/docs-index.generated.ts= — Regenerated with 54 docs
+
+*** Deviations
+
+None.

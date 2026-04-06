@@ -1,0 +1,236 @@
+#+TITLE: Create spell-server-setup interactive skill
+#+STATE: DONE
+#+SESSION_ID: 14afee2ae0359a29
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T11-17-49-056Z_14afee2ae0359a29.jsonl]]
+#+CUSTOM_ID: FEAT-366-create-spell-server-setup-interactive-sk
+#+EFFORT: XL
+#+PRIORITY: #A
+#+LAYER: skills
+#+DEPENDS: FEAT-362-move-spell-server-docs-to-docs-spell-ser FEAT-363-create-telegram-bridge-operator-guide
+
+NOTE [2026-04-06]: Created .spell/skills/spell-server-setup/SKILL.md (23KB). 3 presets + adaptive other. Full inline KDL reference for memory tiers, state stores, imports, goals, significance levels. Feature matrix for adaptive mode. pi:// doc references. .env/.gitignore instructions. Verification summary template.
+
+* Initial Message
+
+what documentation exists around spell-server and its local usage as a telegram bridge? is there a quickstart? is there something accessible through a resource, so that any spell session can call that link or resource and know what's up (setting it up, getting hte kdl schema refernce, etc.)?
+
+* Goal
+
+Create =.spell/skills/spell-server-setup/SKILL.md= — an interactive setup wizard skill that bootstraps a fully modular =.spell/= directory in whatever CWD the user runs it from. The skill guides the agent through an interactive flow: ask questions about the project, select a preset, collect secrets, generate a properly structured set of KDL files with imports, and produce a verification summary.
+
+Target audience: a non-technical cofounder who wants spell-server + Telegram running on their project.
+
+* File to create
+
+=.spell/skills/spell-server-setup/SKILL.md=
+
+* Skill frontmatter
+
+#+begin_src yaml
+---
+name: spell-server-setup
+description: Interactive wizard to bootstrap a .spell/ directory with spell-server configuration, Telegram bridge, autonomy goals, state stores, and optional memory system. Run in any project directory.
+version: 1.0.0
+---
+#+end_src
+
+* Skill content structure
+
+The SKILL.md should guide the agent through a multi-phase interactive flow. It is a prompt document — it tells the agent what to do, what questions to ask, and what files to generate. The agent executes the flow using its normal tools (ask, write, bash for .gitignore, etc.).
+
+** Phase 1: Project Discovery
+
+Instruct the agent to ask the user:
+1. "What does this project do?" (free text — used to tailor goal prompts)
+2. "What's the primary purpose of the spell-server setup?" with preset options:
+   - *Assistant* — Autonomous agent with memory, context tracking, and scheduled intelligence (like a founder sidekick). Features: two-tier episodic/semantic memory with decay, context database (people, decisions, commitments), scheduled consolidation, morning briefs, weekly synthesis.
+   - *Workflow* — Content or data pipeline with approval states, operator actions, scheduled processing, and export targets (like a growth engine). Features: approval state machine, operator actions via Telegram, artifact export, checkpoint gates, audit logging.
+   - *Minimal* — Just spell-server with Telegram interactive sessions and a simple scheduled goal. Features: server + telegram + one example cron goal.
+   - *Other* — Describe what you want. The agent combines features from the presets adaptively based on the description.
+3. Port number (default 8787)
+4. Telegram bot token (or "I'll add it later")
+5. Owner Telegram user ID (or "I'll add it later")
+6. Default model (default "claude-sonnet-4-20250514")
+7. If voice is wanted: STT/TTS provider preferences and API keys
+
+For the "Other" option, the SKILL.md must include a feature matrix that explains what each preset includes so the agent can decide which features to combine:
+
+| Feature | Assistant | Workflow | Minimal |
+|---------|-----------|----------|---------|
+| server.kdl (HTTP + auth) | yes | yes | yes |
+| channels.kdl (Telegram) | yes | yes | yes |
+| autonomy.kdl (goals) | yes | yes | yes |
+| Modular imports | yes | yes | no (inline) |
+| workflows/base-*.kdl (setup) | yes | yes | no |
+| states/ (SQLite schemas) | yes (memory + context) | yes (workflow + audit) | no |
+| memory.kdl (two-tier decay) | yes | no | no |
+| Consolidation goals | yes | no | no |
+| Approval state machine | no | yes | no |
+| Operator actions | no | yes | no |
+| Export targets | no | yes | no |
+| Checkpoint gates | no | yes | no |
+| Audit logging | no | yes | no |
+| .env + .env.example | yes | yes | yes |
+| Voice config | optional | optional | optional |
+| Session notifications | yes | yes | no |
+
+** Phase 2: File Generation
+
+Generate all files into =.spell/= under the user's CWD. The agent MUST use the =write= tool for each file.
+
+*** Always generated:
+
+1. =.spell/server.kdl= — HTTP config with env() references:
+#+begin_src kdl
+http port=8787 webhook-secret="env(SPELL_WEBHOOK_SECRET)" { // pragma: allowlist secret
+  auth username="spell" password="env(SPELL_AUTH_PASSWORD)" // pragma: allowlist secret
+}
+socket path="~/.spell/server.sock"
+#+end_src
+
+2. =.spell/channels.kdl= — Telegram config:
+#+begin_src kdl
+telegram {
+  bot-token "env(TELEGRAM_BOT_TOKEN)"
+  owners env(TELEGRAM_OWNER_ID)
+  default-model "claude-sonnet-4-20250514"
+  upload-dir ".spell/data/telegram-uploads"
+  idle-timeout 300
+  max-sessions 5
+  project "<project-name>" "."
+  default-project "<project-name>"
+  user env(TELEGRAM_OWNER_ID) {
+    modes "telegram-readonly" "telegram-full"
+    default-mode "telegram-readonly"
+    idle-timeout #null
+  }
+  session-notifications {
+    events "plan_approval" "ask" "pending_action"
+    notify-owners #true
+  }
+}
+#+end_src
+(Add voice block if requested.)
+
+3. =.env.example= — Template with all needed vars:
+#+begin_src
+SPELL_AUTH_PASSWORD=change-me
+SPELL_WEBHOOK_SECRET=generate-a-long-random-string
+TELEGRAM_BOT_TOKEN=your-bot-token-from-botfather
+TELEGRAM_OWNER_ID=your-telegram-user-id
+TELEGRAM_CHAT_ID=your-chat-id-for-notifications
+# Optional voice
+# DEEPGRAM_API_KEY=your-deepgram-key
+# ELEVENLABS_API_KEY=your-elevenlabs-key
+#+end_src
+
+4. =.env= — Populated with values the user provided (leave placeholders for "I'll add later" answers).
+
+5. =.gitignore= — Append =.env= and =.spell/data/= if not already present.
+
+6. =.spell/AGENTS.md= — Brief project description + verification commands.
+
+*** Assistant preset additionally generates:
+
+7. =.spell/workflows/base-assistant.kdl= — Setup with domain, mode, tools, timeout, state stores referencing memory + context databases.
+
+8. =.spell/memory.kdl= — Two-tier memory system. Follow the exact pattern from =../founder-sidekick/.spell/memory.kdl=:
+   - =memory-tier "episodic"= with decay-factor 0.85, boost-on-retrieval 0.10, review-threshold 0.50, archive-threshold 0.20, max-input-age-days 90
+   - =memory-tier "semantic"= with decay-factor 0.97, boost-on-retrieval 0.05, review-threshold 0.40, archive-threshold 0.15
+   - Three significance levels: landmark (0.95, floor 0.60, age-exempt), inflection (0.85, floor 0.40), routine (0.70, no floor)
+   - Consolidation config with cross-goal-patterns, semantic-extraction, contradiction-detection, 100k token budget
+   - SQLite schema: memories table, FTS5 search, retrievals, consolidation_runs, reviews
+   - Org integration pointing to MEMORY.org
+
+9. =.spell/states/context-db.kdl= — Context database schema. Adapt from founder-sidekick pattern but tailor tables to the user's project description.
+
+10. =.spell/autonomy.kdl= — Main manifest with imports and goals:
+    - Import =./workflows/base-assistant.kdl= as "workflow"
+    - Import =./memory.kdl= as "memory" (if the parser supports it — otherwise inline)
+    - Import =./states/context-db.kdl= as "context"
+    - Goals tailored to the project: morning-context (7am), memory-maintenance (3am nightly), weekly-synthesis (Sunday), plus 1-2 project-specific webhook goals
+
+*** Workflow preset additionally generates:
+
+7. =.spell/workflows/base-worker.kdl= — Setup with domain=coding, tools, timeout, state stores.
+8. =.spell/workflows/notifications.kdl= — Notification routes.
+9. =.spell/workflows/review-policy.kdl= — Approval state machine (pending → approved/rejected/needs-revision).
+10. =.spell/workflows/checkpoints.kdl= — Gate definitions.
+11. =.spell/workflows/exports.kdl= — Export targets.
+12. =.spell/states/workflow-db.kdl= — SQLite schema tailored to the project's workflow.
+13. =.spell/states/audit-db.kdl= — Audit log schema.
+14. =.spell/autonomy.kdl= — Main manifest importing all workflow modules with cron/webhook goals tailored to the project.
+
+*** Minimal preset generates:
+
+7. =.spell/autonomy.kdl= — Inline (no imports), single setup + single example cron goal.
+
+** Phase 3: Verification Summary
+
+After generating all files, the agent MUST produce a comprehensive summary. The summary must include:
+
+*** For operators (non-technical):
+- "Open Telegram and search for your bot (@YourBotName). Send /start"
+- "Send a message — the bot should respond"
+- "Try /help to see available commands"
+- "Try /status to check your session"
+
+*** For developers:
+- curl commands to test each API endpoint:
+  - =curl -u spell:<password> http://localhost:<port>/api/goals=
+  - =curl -u spell:<password> http://localhost:<port>/api/manifest=
+  - =curl http://localhost:<port>/= (dashboard)
+- How to start: =spell server start= or =bun run packages/spell-server/src/main.ts=
+
+*** Links for further reading:
+- =pi://spell-server/getting-started.md= — Full getting started guide
+- =pi://spell-server/telegram-bridge.md= — Telegram bot commands and features
+- =pi://spell-server/kdl-schema-reference.md= — Complete KDL config reference
+
+*** What was generated:
+- List every file created with a one-line description
+- Note which preset was used
+- Highlight any TODOs or placeholders left for the user
+
+* Reference implementations
+
+The agent MUST read these files as reference when generating KDL content (the skill should instruct the agent to do so):
+
+- =../founder-sidekick/.spell/= — Complete assistant preset reference (memory.kdl, autonomy.kdl, workflows/, states/)
+- =../growth/.spell/= — Complete workflow preset reference (autonomy.kdl, workflows/, states/, qml/)
+- If those paths are not accessible, the skill MUST include enough inline examples for the agent to generate correct KDL.
+
+The skill MUST include condensed inline examples of the key KDL patterns (memory.kdl structure, autonomy.kdl import syntax, state store schemas) so the agent can generate correct output even without access to sibling repos.
+
+* Key KDL patterns to include inline in the skill
+
+The SKILL.md must include enough KDL reference material inline that an agent can generate valid configs without external references. Include:
+
+1. Import syntax: =import "./workflows/base-worker.kdl" as="workflow"=
+2. Override syntax: =override "setup" "worker" from="workflow.base" strategy="merge" { ... }=
+3. Goal structure with setup reference, schedule, prompt, hooks
+4. State store declaration: =state-store "name" backend="sqlite" path="./data/name.sqlite" schema="name"=
+5. Memory tier structure (episodic + semantic)
+6. Significance level structure
+7. Consolidation config
+8. channels.kdl env() patterns
+9. server.kdl structure
+
+* Style
+
+- Conversational, helpful tone in the skill instructions (this is for a non-technical cofounder)
+- Technical precision in the generated KDL (must parse correctly)
+- The skill instructs the agent, not the user directly. The agent mediates.
+- Use =ask= tool for multi-choice questions during setup
+
+* Verification
+
+1. File exists at =.spell/skills/spell-server-setup/SKILL.md=
+2. Skill has valid YAML frontmatter with name, description, version
+3. Skill content covers all three presets + "other" option
+4. Skill includes inline KDL examples for all patterns (imports, goals, memory tiers, state stores)
+5. Skill includes the feature matrix table for "other" mode
+6. Skill includes verification summary template with non-technical and developer sections
+7. Skill references pi:// docs for further reading
+8. Skill instructs the agent to generate .env.example and .env
+9. Skill instructs the agent to update .gitignore

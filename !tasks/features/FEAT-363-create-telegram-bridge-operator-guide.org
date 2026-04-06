@@ -1,0 +1,204 @@
+#+TITLE: Create telegram bridge operator guide
+#+STATE: DONE
+#+SESSION_ID: 14afee2ae0359a29
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T11-17-49-056Z_14afee2ae0359a29.jsonl]]
+#+CUSTOM_ID: FEAT-363-create-telegram-bridge-operator-guide
+#+EFFORT: L
+#+PRIORITY: #B
+#+LAYER: docs
+#+DEPENDS: FEAT-362-move-spell-server-docs-to-docs-spell-ser
+
+NOTE [2026-04-06]: Created docs/spell-server/telegram-bridge.md (349 lines). All 12+ bot commands documented. Tool modes with exact tool lists from source. Voice, sessions, notifications, log viewer, inbound media, multi-project config all covered.
+
+* Initial Message
+
+what documentation exists around spell-server and its local usage as a telegram bridge? is there a quickstart? is there something accessible through a resource, so that any spell session can call that link or resource and know what's up (setting it up, getting hte kdl schema refernce, etc.)?
+
+* Goal
+
+Create =docs/spell-server/telegram-bridge.md= — a comprehensive operator guide for using spell-server as a Telegram interactive session bridge. This is the primary gap in current documentation: the telegram subsystem has 12 commands, voice capabilities, session management, file delivery, and approval flows, and none of it is documented for operators.
+
+Target audience: someone who has spell-server running (per getting-started.md) and wants to understand what the Telegram bot can do and how to configure it.
+
+* File to create
+
+=docs/spell-server/telegram-bridge.md=
+
+* Content outline
+
+The doc should cover these sections, sourced from the actual implementation:
+
+** 1. Overview
+Brief description: spell-server includes a full Telegram bot that creates interactive agent sessions per chat. Each chat gets its own RPC session with configurable tools, project, and mode.
+
+** 2. Bot Commands
+All 12 commands from =packages/spell-server/src/telegram/commands/index.ts=:
+
+| Command | Description | Notes |
+|---------|-------------|-------|
+| =/start= | Authorize with bot | Owners auto-authorized; others need invite token |
+| =/help= | List available commands | |
+| =/unlock= | Switch to full tool access | Owner only. Changes mode to =telegram-full= |
+| =/lock= | Switch back to read-only | Changes mode to =telegram-readonly= |
+| =/project= | Switch active project | Shows inline buttons for configured projects |
+| =/mode= | Switch tool mode | Shows inline buttons for allowed modes |
+| =/think= | Toggle thinking visibility | Shows/hides model thinking in responses |
+| =/clear= | Start new session | Kills current RPC session, creates fresh one |
+| =/status= | Show session info | Project, mode, uptime, thinking, voice settings |
+| =/sessions= | List active sessions | Shows all active chat sessions |
+| =/btw <question>= | One-off stateless query | No persistent session context; disposable |
+| =/voice= | Toggle voice reply mode | Cycles: never → mirror → always |
+| =/invite= | Generate invite token | Owner only. Creates temporary auth token |
+
+** 3. Tool Modes
+Document the two built-in modes from =packages/spell-server/src/telegram/commands/index.ts=:
+
+=telegram-readonly= tools: read, grep, find, lsp, ast_grep, web_search, fetch, org, calc, code_search, send_file
+
+=telegram-full= tools: all of readonly plus edit, write, bash, ast_edit, task, todo_write, emacs_code, notebook, generate_image, send_file
+
+Custom modes can be defined per-user in =channels.kdl= via the =user= block's =modes= list.
+
+** 4. Session Management
+Source: =packages/spell-server/src/telegram/process-manager.ts=
+
+- One RPC session per chat (identified by chatId)
+- Sessions created on first message, reused on subsequent messages
+- Idle timeout: configurable globally (=idle-timeout= in channels.kdl, default 300s) and per-user (=idle-timeout= in user block, =#null= for no timeout)
+- Max concurrent sessions enforced (=max-sessions=, default 10)
+- Sessions persist across server restarts via =bridge-state.json= in upload directory
+- Each session has a transcript (JSONL file in upload directory)
+- =/clear= destroys current session and creates a new one
+
+** 5. Voice Setup
+Source: =packages/spell-server/src/config/types.ts= and =packages/spell-server/src/telegram/voice/=
+
+KDL config example (goes inside =telegram { ... }= in channels.kdl):
+
+#+begin_src kdl
+voice {
+  stt {
+    provider "deepgram"
+    api-key "env(DEEPGRAM_API_KEY)"
+    model "nova-2"
+    language "en"
+  }
+  tts {
+    provider "elevenlabs"
+    api-key "env(ELEVENLABS_API_KEY)"
+    model "eleven_turbo_v2_5"
+    voice "Rachel"
+  }
+  reply-mode "mirror"
+}
+#+end_src
+
+STT providers: =deepgram=, =openai=
+TTS providers: =elevenlabs=, =deepgram=
+Reply modes:
+- =never= — always respond with text
+- =mirror= — respond with voice only when input was voice (default)
+- =always= — always respond with voice
+
+Per-user voice overrides in =user= block: =reply-mode= and =tts-voice=.
+
+** 6. File and Image Delivery
+Source: =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts=
+
+- Agent can use =send_file= tool → file delivered as Telegram document
+- Agent can use =generate_image= tool → image sent as Telegram photo
+- =auto-send-images= config (default =true=): when true, generated images auto-send; when false, only sent via explicit =send_file=
+- Inbound: photos, documents, voice messages, video notes, and audio are all accepted and forwarded to the agent session
+
+** 7. Session Notifications (Socket Bridge Events)
+Source: =packages/spell-server/src/telegram/session-notifications.ts=
+
+When the socket bridge is enabled (=socket= node in server.kdl), local =spell= CLI sessions can emit blocking events (plan_approval, ask, pending_action, hook_selector, hook_input). These can be forwarded to Telegram.
+
+Config in channels.kdl:
+#+begin_src kdl
+telegram {
+  session-notifications {
+    events "plan_approval" "ask" "pending_action"
+    notify-owners #true
+    notify-chat-id 123456789
+  }
+}
+#+end_src
+
+Events arrive as rich messages with inline action buttons. Operators can approve plans, answer agent questions, and resolve pending actions directly from Telegram.
+
+** 8. Log Viewer
+Source: =packages/spell-server/src/telegram/log-viewer/server.ts=
+
+Optional embedded HTTP server for viewing session transcripts:
+- Enabled by setting =log-viewer-port= in channels.kdl (e.g., =log-viewer-port 4312=)
+- Access via =http://localhost:4312/transcript/:chatId=
+- Returns raw JSONL event stream for the session
+- No authentication on this endpoint (bind to localhost only in production)
+
+** 9. Inbound Media Handling
+Source: =packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts=
+
+- Text messages → forwarded as user prompt
+- Photos → downloaded, converted to base64, sent as image content
+- Documents → downloaded, validated as text (UTF-8 check), content included in prompt
+- Voice messages → transcribed via STT if configured, text included in prompt
+- Video notes → audio extracted, transcribed via STT
+- Audio files → transcribed via STT
+- Size limits enforced; unsupported media types rejected with user-facing error
+
+** 10. Multi-Project Setup
+Show a complete channels.kdl example with multiple projects:
+#+begin_src kdl
+telegram {
+  bot-token-file "secrets/bot-token.txt"
+  owners 123456789
+  default-model "claude-sonnet-4-5"
+  upload-dir "/tmp/spell-telegram"
+  max-sessions 5
+
+  project "myapp" "/home/user/code/myapp"
+  project "infra" "/home/user/code/infra"
+  default-project "myapp"
+
+  user 123456789 {
+    modes "telegram-readonly" "telegram-full"
+    default-mode "telegram-readonly"
+    idle-timeout #null
+    projects "myapp" "infra"
+  }
+}
+#+end_src
+
+* Source files to read during implementation
+
+All content must be sourced from these implementation files — do not invent features:
+
+- =packages/spell-server/src/telegram/commands/index.ts= — command list, MODE_TOOLS
+- =packages/spell-server/src/telegram/commands/*.ts= — individual command implementations
+- =packages/spell-server/src/telegram/process-manager.ts= — session lifecycle
+- =packages/spell-server/src/telegram/bridge/telegram-to-rpc.ts= — inbound media handling
+- =packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts= — outbound streaming, file/image delivery
+- =packages/spell-server/src/telegram/session-notifications.ts= — socket event forwarding
+- =packages/spell-server/src/telegram/log-viewer/server.ts= — log viewer HTTP server
+- =packages/spell-server/src/telegram/voice/= — STT/TTS providers
+- =packages/spell-server/src/config/types.ts= — VoiceConfig, TelegramUserConfig, TelegramChannelConfig
+- =packages/spell-server/src/config/channels-parser.ts= — voice and user block parsing
+
+* Style
+
+- Technical, concise prose. No fluff.
+- Include KDL config examples for every configurable feature.
+- Use tables for structured data (commands, modes, providers).
+- Cross-reference getting-started.md for initial setup and kdl-schema-reference.md for full field reference.
+
+* Verification
+
+1. File exists at =docs/spell-server/telegram-bridge.md=
+2. All 12 bot commands documented
+3. Both built-in tool modes (telegram-readonly, telegram-full) documented with tool lists
+4. Voice config example with STT + TTS shown
+5. Session notification config example shown
+6. Multi-project config example shown
+7. No invented features — everything matches source files listed above
