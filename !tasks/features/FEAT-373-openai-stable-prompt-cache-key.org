@@ -1,0 +1,135 @@
+#+TITLE: OpenAI stable prompt cache key
+#+STATE: DONE
+#+SESSION_ID: 14b0268ae0a0c701
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T15-24-07-426Z_14b0268ae0a0c701.jsonl]]
+#+CUSTOM_ID: FEAT-373-openai-stable-prompt-cache-key
+#+EFFORT: S
+#+LAYER: ai
+#+PRIORITY: #B
+#+DEPENDS: FEAT-370-systempromptblock-types-and-helper-utili
+
+NOTE [2026-04-06]: resolveOpenAICacheParams now hashes stable prefix via Bun.hash() for cross-session cache key. Falls back to sessionId when no stable prefix. 6 new tests passing.
+
+* Initial Message
+
+is the cache control at the system level prompt? as in, is there a way to make the system prompt a cache checkpoint so that i re-use cache when I start a new session (or a new planning session for example)? do you understand me?
+
+* Goal
+Derive the OpenAI =prompt_cache_key= from a hash of the stable system prompt content instead of =sessionId= alone. This enables cross-session cache reuse for OpenAI-family providers by ensuring that sessions with identical stable prompts share the same cache key.
+
+* Design Decisions
+- Hash the stable block text (via =systemPromptStablePrefix()=) using =Bun.hash()=
+- Combine with sessionId: =prompt_cache_key= becomes ={stableHash}-{sessionId}= when stable prefix exists, or ={sessionId}= when no stable prefix (backward compat)
+- Actually, OpenAI docs say: "Use the prompt_cache_key parameter consistently across requests that share common prefixes." So we should use ONLY the stable hash for cross-session sharing. Within a session, the conversation prefix is automatically cached by OpenAI's prefix matching.
+- Final design: =prompt_cache_key= = hash of stable system prompt text. If no stable blocks, fall back to sessionId.
+- This means different sessions with the same stable system prompt share a cache key, enabling OpenAI server routing to warm cache nodes.
+
+* Files to Modify
+
+** =packages/ai/src/utils.ts= — Update =resolveOpenAICacheParams=
+
+Current signature:
+#+begin_src typescript
+export function resolveOpenAICacheParams(
+  cacheRetention: CacheRetention | undefined,
+  sessionId: string | undefined,
+): OpenAICacheParams
+#+end_src
+
+New signature — add optional =systemPrompt= parameter:
+#+begin_src typescript
+import type { SystemPrompt } from "./types";
+
+export function resolveOpenAICacheParams(
+  cacheRetention: CacheRetention | undefined,
+  sessionId: string | undefined,
+  systemPrompt?: SystemPrompt,
+): OpenAICacheParams {
+  const retention = resolveCacheRetention(cacheRetention);
+  if (retention === "none") return {};
+
+  // Derive cache key from stable prompt content for cross-session reuse
+  let cacheKey: string | undefined;
+  const stableText = systemPromptStablePrefix(systemPrompt);
+  if (stableText) {
+    // Bun.hash returns bigint; convert to hex string for a compact, deterministic key
+    cacheKey = Bun.hash(stableText).toString(16);
+  } else if (sessionId) {
+    cacheKey = sessionId;
+  }
+
+  if (!cacheKey) return {};
+
+  return {
+    prompt_cache_key: cacheKey,
+    prompt_cache_retention: retention === "long" ? "24h" : undefined,
+  };
+}
+#+end_src
+
+** =packages/ai/src/providers/openai-responses.ts= (line ~258)
+Pass =context.systemPrompt= to =resolveOpenAICacheParams=:
+#+begin_src typescript
+...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId, context.systemPrompt),
+#+end_src
+
+** =packages/ai/src/providers/azure-openai-responses.ts= (line ~261)
+Same change — pass =context.systemPrompt= as third argument.
+
+** =packages/ai/src/providers/openai-codex-responses.ts= (line ~474)
+Same change — pass =context.systemPrompt= as third argument.
+
+* Tests
+
+** Update =packages/ai/test/= — unit test for resolveOpenAICacheParams
+
+*** Test: stable prompt hash used as cache key
+#+begin_src typescript
+const result = resolveOpenAICacheParams("long", "session-123", [
+  { text: "stable content", stable: true },
+  { text: "dynamic content", stable: false },
+]);
+expect(result.prompt_cache_key).toBe(Bun.hash("stable content").toString(16));
+expect(result.prompt_cache_retention).toBe("24h");
+#+end_src
+
+*** Test: same stable content → same cache key across sessions
+#+begin_src typescript
+const key1 = resolveOpenAICacheParams("long", "session-A", [{ text: "same prompt", stable: true }]);
+const key2 = resolveOpenAICacheParams("long", "session-B", [{ text: "same prompt", stable: true }]);
+expect(key1.prompt_cache_key).toBe(key2.prompt_cache_key);
+#+end_src
+
+*** Test: no stable blocks → falls back to sessionId
+#+begin_src typescript
+const result = resolveOpenAICacheParams("long", "session-123", [{ text: "all dynamic", stable: false }]);
+expect(result.prompt_cache_key).toBe("session-123");
+#+end_src
+
+*** Test: string systemPrompt → treated as stable
+#+begin_src typescript
+const result = resolveOpenAICacheParams("long", "session-123", "hello world");
+expect(result.prompt_cache_key).toBe(Bun.hash("hello world").toString(16));
+#+end_src
+
+*** Test: undefined systemPrompt → sessionId fallback
+#+begin_src typescript
+const result = resolveOpenAICacheParams("long", "session-123");
+expect(result.prompt_cache_key).toBe("session-123");
+#+end_src
+
+*** Test: retention "none" → empty params regardless of prompt
+#+begin_src typescript
+const result = resolveOpenAICacheParams("none", "session-123", "some prompt");
+expect(result).toEqual({});
+#+end_src
+
+* Verification
+- Unit tests pass
+- =bun check:ts= passes
+
+* Edge Cases
+- Very long stable prompt: =Bun.hash()= handles arbitrary length input efficiently
+- Empty stable text: =systemPromptStablePrefix= returns undefined → falls back to sessionId
+- =sessionId= is undefined AND no stable blocks: returns empty object (no caching)
+- Codex API: =prompt_cache_retention= is deleted by request transformer (line 156) but =prompt_cache_key= is preserved — verified in existing code

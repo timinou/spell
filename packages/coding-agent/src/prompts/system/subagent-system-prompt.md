@@ -1,7 +1,7 @@
-{{base}}
-
+{{#if agent}}
 {{SECTION_SEPERATOR "Acting as"}}
 {{agent}}
+{{/if}}
 
 {{SECTION_SEPERATOR "Job"}}
 You are operating on a delegated sub-task.

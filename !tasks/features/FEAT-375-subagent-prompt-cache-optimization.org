@@ -1,0 +1,209 @@
+#+TITLE: Subagent prompt cache optimization
+#+STATE: DONE
+#+SESSION_ID: 14b0268ae0a0c701
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T15-24-07-426Z_14b0268ae0a0c701.jsonl]]
+#+CUSTOM_ID: FEAT-375-subagent-prompt-cache-optimization
+#+EFFORT: M
+#+LAYER: coding-agent
+#+PRIORITY: #B
+#+DEPENDS: FEAT-370-systempromptblock-types-and-helper-utili FEAT-372-system-prompt-template-reordering-and-bl
+
+NOTE [2026-04-06]: Subagent template removed {{base}} inline rendering. Executor callback now receives SystemPromptBlock[], preserves stable prefix blocks, and merges dynamic content + overlay into single dynamic block. Sibling subagents share stable prefix for cache reuse.
+
+* Initial Message
+
+is the cache control at the system level prompt? as in, is there a way to make the system prompt a cache checkpoint so that i re-use cache when I start a new session (or a new planning session for example)? do you understand me?
+
+* Goal
+Ensure subagent sessions benefit from the multi-block system prompt caching. Sibling subagents share the same stable system prompt prefix, so the first subagent's cache write benefits all subsequent siblings. The existing stagger delay (=task.cacheStaggerMs=, default 800ms) already spaces launches to allow cache warming.
+
+* Design Decisions
+- Subagent system prompt assembly in =executor.ts= wraps the base system prompt (already =SystemPromptBlock[]=) with subagent-specific overlays
+- The subagent system prompt template (=subagent-system-prompt.md=) prepends the base prompt and appends Acting as / Job / Closure / Giving Up sections
+- The base prompt's stable block should remain the first block, so the cached prefix is shared across siblings
+- Subagent-specific content (agent override, worktree, outputSchema, contextFile) goes in a separate dynamic block
+- The =systemPrompt= callback in =createAgentSession= must return =SystemPromptBlock[]= instead of a string
+
+* Architecture
+
+Current subagent prompt assembly (=executor.ts= line ~1098):
+#+begin_src typescript
+systemPrompt: defaultPrompt =>
+  renderPromptTemplate(subagentSystemPromptTemplate, {
+    base: defaultPrompt,
+    agent: agent.systemPrompt,
+    worktree: worktree ?? "",
+    outputSchema: normalizedOutputSchema,
+    contextFile: options.contextFile,
+  }),
+#+end_src
+
+The =defaultPrompt= is the full default system prompt (from =rebuildSystemPrompt=). With the block changes, =defaultPrompt= will be =SystemPromptBlock[]= (or the joined string, depending on how the callback works).
+
+The key insight: the subagent system prompt template takes the base prompt and wraps it:
+#+begin_example
+{{base}}
+
+═══════════Acting as═══════════
+{{agent}}
+
+═══════════Job═══════════
+...worktree, contextFile...
+
+═══════════Closure═══════════
+...submit_result requirements...
+
+═══════════Giving Up═══════════
+...
+#+end_example
+
+For caching, we want the FIRST block to be the stable prefix from the base prompt. Then the rest (Acting as, Job, Closure, subagent-specific) is a second dynamic block.
+
+* Files to Modify
+
+** =packages/coding-agent/src/task/executor.ts= — Update systemPrompt callback
+
+The =systemPrompt= callback currently receives =defaultPrompt: string= and returns =string=. After FEAT-372, =rebuildSystemPrompt= returns =SystemPromptBlock[]=, so the callback signature needs updating.
+
+Check how =createAgentSession= handles the systemPrompt callback in =packages/coding-agent/src/sdk.ts=. The callback receives the default prompt and returns the final prompt. With blocks:
+
+#+begin_src typescript
+// In executor.ts, the systemPrompt callback:
+systemPrompt: (defaultBlocks: SystemPromptBlock[]) => {
+  // Separate stable and dynamic blocks from the base prompt
+  const stableBlocks = defaultBlocks.filter(b => b.stable !== false);
+  const dynamicBlocks = defaultBlocks.filter(b => b.stable === false);
+
+  // Render subagent-specific overlay
+  const subagentOverlay = renderPromptTemplate(subagentSystemPromptTemplate, {
+    base: "", // base is handled separately as blocks
+    agent: agent.systemPrompt,
+    worktree: worktree ?? "",
+    outputSchema: normalizedOutputSchema,
+    contextFile: options.contextFile,
+  });
+
+  // Return blocks: stable base prefix → dynamic base suffix + subagent overlay
+  return [
+    ...stableBlocks,
+    {
+      text: [
+        ...dynamicBlocks.map(b => b.text),
+        subagentOverlay,
+      ].join("
+"),
+      stable: false,
+    },
+  ];
+}
+#+end_src
+
+Wait — this changes the subagent template because =base= is no longer rendered inline. The template currently has ={{base}}= at the top. If we separate the base into blocks, we need to either:
+
+**Option A**: Keep the template as-is, render with =base= as the joined text of all base blocks, then split the result. But this loses block boundaries.
+
+**Option B**: Change the subagent template to NOT include ={{base}}=. Instead, the callback constructs the blocks array directly: base stable blocks first, then a dynamic block with the subagent-specific text.
+
+**Choose Option B** — it's cleaner and preserves the stable/dynamic split:
+
+*** Update =subagent-system-prompt.md= template
+Remove ={{base}}= from the template. The template now renders ONLY the subagent-specific overlay:
+
+#+begin_example
+{{#if agent}}
+{{SECTION_SEPERATOR "Acting as"}}
+{{agent}}
+{{/if}}
+
+{{SECTION_SEPERATOR "Job"}}
+You are operating on a delegated sub-task.
+...rest of template...
+#+end_example
+
+*** Update =executor.ts= callback
+#+begin_src typescript
+import type { SystemPromptBlock } from "@oh-my-pi/pi-ai";
+import { systemPromptText } from "@oh-my-pi/pi-ai";
+
+// In the systemPrompt callback:
+systemPrompt: (defaultBlocks: SystemPromptBlock[]) => {
+  // Render subagent overlay (without base — it's in the blocks)
+  const overlay = renderPromptTemplate(subagentSystemPromptTemplate, {
+    agent: agent.systemPrompt ?? "",
+    worktree: worktree ?? "",
+    outputSchema: normalizedOutputSchema,
+    contextFile: options.contextFile,
+  });
+
+  // Stable base blocks stay as-is for cache reuse across siblings
+  const stableBlocks = defaultBlocks.filter(b => b.stable !== false);
+
+  // Dynamic = base dynamic blocks + subagent overlay
+  const dynamicTexts = defaultBlocks
+    .filter(b => b.stable === false)
+    .map(b => b.text);
+  dynamicTexts.push(overlay);
+
+  const result: SystemPromptBlock[] = [...stableBlocks];
+  if (dynamicTexts.length > 0) {
+    result.push({ text: dynamicTexts.join("
+"), stable: false });
+  }
+  return result;
+}
+#+end_src
+
+** =packages/coding-agent/src/sdk.ts= — Update systemPrompt callback types
+
+The =systemPrompt= option in =createAgentSession= needs to support the new block-based callback. Check the current type in the agent-session creation code and update:
+- Callback signature: =(defaultBlocks: SystemPromptBlock[]) => SystemPromptBlock[] | Promise<SystemPromptBlock[]>=
+- Backward compat: if callback returns string, wrap in single block
+
+** =packages/coding-agent/src/task/template.ts= — No changes needed
+The template module renders user prompts, not system prompts. No impact.
+
+* Tests
+
+** Test: Subagent prompt preserves stable prefix from base
+#+begin_src typescript
+const baseBlocks: SystemPromptBlock[] = [
+  { text: "stable base content", stable: true },
+  { text: "dynamic base content", stable: false },
+];
+// Simulate the callback
+const result = buildSubagentPrompt(baseBlocks, { agent: "You are a task agent." });
+expect(result[0].stable).toBe(true);
+expect(result[0].text).toBe("stable base content");
+expect(result[1].stable).toBe(false);
+expect(result[1].text).toContain("dynamic base content");
+expect(result[1].text).toContain("You are a task agent");
+expect(result[1].text).toContain("Closure");
+#+end_src
+
+** Test: Sibling subagents have identical stable blocks
+#+begin_src typescript
+const result1 = buildSubagentPrompt(baseBlocks, { agent: "Agent A" });
+const result2 = buildSubagentPrompt(baseBlocks, { agent: "Agent B" });
+// Stable blocks are identical (same base)
+expect(result1[0].text).toBe(result2[0].text);
+// Dynamic blocks differ (different agent overlays)
+expect(result1[1].text).not.toBe(result2[1].text);
+#+end_src
+
+** Test: Stagger delay still functions
+No changes to the stagger mechanism — verify =task.cacheStaggerMs= setting still applies in =batch-scheduler.ts=.
+
+* Verification
+- =bun check:ts= passes
+- Subagent prompt tests pass
+- Manual: Launch a batch of subagents (via task tool), verify in logs that:
+  - First subagent has high =cacheWrite= tokens
+  - Subsequent subagents have high =cacheRead= tokens
+  - The stagger delay is visible in launch timing
+
+* Edge Cases
+- Subagent with no agent.systemPrompt: overlay still includes Job/Closure/GivingUp sections
+- Subagent with worktree: worktree path appears in dynamic block
+- Subagent with outputSchema: TypeScript interface rendering appears in dynamic block
+- Base prompt has no stable blocks (all dynamic): all content goes into one dynamic block
+- Custom systemPrompt (string function): backward compat — joined text passed, result wrapped in blocks

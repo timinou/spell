@@ -1,5 +1,7 @@
 import * as path from "node:path";
 import type { AgentState } from "@oh-my-pi/pi-agent-core";
+import type { SystemPrompt } from "@oh-my-pi/pi-ai";
+import { systemPromptText } from "@oh-my-pi/pi-ai";
 import { APP_NAME, isEnoent } from "@oh-my-pi/pi-utils";
 import { getResolvedThemeColors, getThemeExportColors } from "../../modes/theme/theme";
 import { type SessionEntry, type SessionHeader, SessionManager } from "../../session/session-manager";
@@ -94,14 +96,19 @@ interface SessionData {
 	header: SessionHeader | null;
 	entries: SessionEntry[];
 	leafId: string | null;
-	systemPrompt?: string;
+	systemPrompt?: SystemPrompt;
 	tools?: { name: string; description: string }[];
 }
 
 /** Generate HTML from bundled template with runtime substitutions. */
 async function generateHtml(sessionData: SessionData, themeName?: string): Promise<string> {
 	const themeVars = await generateThemeVars(themeName);
-	const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toBase64();
+	const sessionDataBase64 = Buffer.from(
+		JSON.stringify({
+			...sessionData,
+			systemPrompt: systemPromptText(sessionData.systemPrompt),
+		}),
+	).toBase64();
 
 	return TEMPLATE.replace("<theme-vars/>", `<style>:root { ${themeVars} }</style>`).replace(
 		"{{SESSION_DATA}}",

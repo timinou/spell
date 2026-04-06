@@ -6,11 +6,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { SystemPromptBlock } from "@oh-my-pi/pi-ai";
 import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
-import { renderPromptTemplate } from "./config/prompt-templates";
+import { CACHE_BOUNDARY_MARKER, renderPromptTemplate } from "./config/prompt-templates";
 import type { SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
 import { loadSkills, type Skill } from "./extensibility/skills";
@@ -377,9 +378,9 @@ export interface BuildSystemPromptOptions {
 }
 
 /** Build the system prompt with tools, guidelines, and context */
-export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<string> {
+export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<SystemPromptBlock[]> {
 	if ($env.NULL_PROMPT === "true") {
-		return "";
+		return [{ text: "", stable: true }];
 	}
 
 	const {
@@ -540,5 +541,19 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		specializedToolNames,
 		hasSpecializedTools: specializedToolNames.length > 0,
 	};
-	return renderPromptTemplate(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
+	const rendered = renderPromptTemplate(
+		resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate,
+		data,
+	);
+	const boundaryIndex = rendered.indexOf(CACHE_BOUNDARY_MARKER);
+	if (boundaryIndex === -1) {
+		return [{ text: rendered, stable: true }];
+	}
+	const stablePrefix = rendered.slice(0, boundaryIndex);
+	const dynamicSuffix = rendered.slice(boundaryIndex + CACHE_BOUNDARY_MARKER.length);
+	const blocks: SystemPromptBlock[] = [{ text: stablePrefix, stable: true }];
+	if (dynamicSuffix.trim().length > 0) {
+		blocks.push({ text: dynamicSuffix, stable: false });
+	}
+	return blocks;
 }

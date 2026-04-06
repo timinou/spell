@@ -9,7 +9,7 @@ import {
 	INTENT_FIELD,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
-import type { Message, Model } from "@oh-my-pi/pi-ai";
+import type { Message, Model, SystemPromptBlock } from "@oh-my-pi/pi-ai";
 import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { GatewayClient } from "@oh-my-pi/pi-gateway";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -172,8 +172,8 @@ export interface CreateAgentSessionOptions {
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
-	/** System prompt. String replaces default, function receives default and returns final. */
-	systemPrompt?: string | ((defaultPrompt: string) => string);
+	/** System prompt. String replaces default, function receives default blocks and returns final prompt. */
+	systemPrompt?: string | ((defaultBlocks: SystemPromptBlock[]) => SystemPromptBlock[] | string);
 
 	/** Custom tools to register (in addition to built-in tools). Accepts both CustomTool and ToolDefinition. */
 	customTools?: (CustomTool | ToolDefinition)[];
@@ -412,7 +412,7 @@ export interface BuildSystemPromptOptions {
 /**
  * Build the default system prompt.
  */
-export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<string> {
+export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<SystemPromptBlock[]> {
 	return await buildSystemPromptInternal({
 		cwd: options.cwd,
 		skills: options.skills,
@@ -1384,7 +1384,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const repeatToolDescriptions = settings.get("repeatToolDescriptions");
 	const eagerTasks = settings.get("task.eager");
 	const intentField = settings.get("tools.intentTracing") || $env.PI_INTENT_TRACING === "1" ? INTENT_FIELD : undefined;
-	const rebuildSystemPrompt = async (toolNames: string[], tools: Map<string, AgentTool>): Promise<string> => {
+	const rebuildSystemPrompt = async (
+		toolNames: string[],
+		tools: Map<string, AgentTool>,
+	): Promise<SystemPromptBlock[]> => {
 		toolContextStore.setToolNames(toolNames);
 		const discoverableMCPTools = mcpDiscoveryEnabled ? collectDiscoverableMCPTools(tools.values()) : [];
 		const discoverableMCPSummary = summarizeDiscoverableMCPTools(discoverableMCPTools);
@@ -1482,7 +1485,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				autoRosterEnabled,
 			});
 		}
-		return options.systemPrompt(defaultPrompt);
+		const result = options.systemPrompt(defaultPrompt);
+		if (typeof result === "string") {
+			return [{ text: result, stable: true }];
+		}
+		return result;
 	};
 
 	const toolNamesFromRegistry = Array.from(toolRegistry.keys());

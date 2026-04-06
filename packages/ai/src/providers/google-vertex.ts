@@ -18,6 +18,7 @@ import type {
 	ThinkingContent,
 	ToolCall,
 } from "../types";
+import { systemPromptText } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { pushFallbackError } from "../utils/provider-error-boundary";
@@ -398,9 +399,10 @@ function buildParams(
 		generationConfig.repetitionPenalty = options.repetitionPenalty;
 	}
 
+	const spText = systemPromptText(context.systemPrompt);
 	const config: GenerateContentConfig = {
 		...(Object.keys(generationConfig).length > 0 && generationConfig),
-		...(context.systemPrompt && { systemInstruction: context.systemPrompt.toWellFormed() }),
+		...(spText && { systemInstruction: spText.toWellFormed() }),
 		...(context.tools && context.tools.length > 0 && { tools: convertTools(context.tools, model) }),
 	};
 

@@ -18,6 +18,7 @@ import type {
 	ThinkingContent,
 	ToolCall,
 } from "../types";
+import { systemPromptText } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
 import { refreshAntigravityToken } from "../utils/oauth/google-antigravity";
@@ -1074,9 +1075,10 @@ export function buildRequest(
 	}
 
 	// System instruction must be object with parts, not plain string
-	if (context.systemPrompt) {
+	const spText = systemPromptText(context.systemPrompt);
+	if (spText) {
 		request.systemInstruction = {
-			parts: [{ text: context.systemPrompt.toWellFormed() }],
+			parts: [{ text: spText.toWellFormed() }],
 		};
 	}
 

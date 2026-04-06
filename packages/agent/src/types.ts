@@ -6,6 +6,7 @@ import type {
 	Message,
 	Model,
 	SimpleStreamOptions,
+	SystemPrompt,
 	streamSimple,
 	TextContent,
 	Tool,
@@ -183,7 +184,7 @@ export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessag
  * Agent state containing all configuration and conversation data.
  */
 export interface AgentState {
-	systemPrompt: string;
+	systemPrompt: SystemPrompt;
 	model: Model;
 	thinkingLevel?: Effort;
 	tools: AgentTool<any>[];
@@ -272,7 +273,7 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 
 // AgentContext is like Context but uses AgentTool
 export interface AgentContext {
-	systemPrompt: string;
+	systemPrompt: SystemPrompt;
 	messages: AgentMessage[];
 	tools?: AgentTool<any>[];
 }

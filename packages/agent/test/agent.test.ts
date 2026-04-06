@@ -4,6 +4,7 @@ import {
 	type AssistantMessage,
 	getBundledModel,
 	type SimpleStreamOptions,
+	systemPromptText,
 	type ThinkingBudgets,
 	type Usage,
 } from "@oh-my-pi/pi-ai";
@@ -313,7 +314,7 @@ describe("Agent", () => {
 			},
 			streamFn: (_model, context) => {
 				callContexts.push({
-					systemPrompt: context.systemPrompt ?? "",
+					systemPrompt: systemPromptText(context.systemPrompt) ?? "",
 					toolNames: (context.tools ?? []).map(tool => tool.name),
 				});
 				const stream = new MockAssistantStream();

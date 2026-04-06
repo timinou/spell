@@ -1,0 +1,195 @@
+#+TITLE: System prompt template reordering and block assembly
+#+STATE: DONE
+#+SESSION_ID: 14b0268ae0a0c701
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T15-24-07-426Z_14b0268ae0a0c701.jsonl]]
+#+CUSTOM_ID: FEAT-372-system-prompt-template-reordering-and-bl
+#+EFFORT: L
+#+LAYER: coding-agent
+#+PRIORITY: #A
+#+DEPENDS: FEAT-370-systempromptblock-types-and-helper-utili
+
+NOTE [2026-04-06]: Reordered template: appendPrompt moved after Rules/Now. CACHE_BOUNDARY Handlebars helper splits rendered output into stable prefix (~90%) and dynamic suffix. buildSystemPrompt returns SystemPromptBlock[]. SDK callback updated to pass blocks.
+
+* Initial Message
+
+is the cache control at the system level prompt? as in, is there a way to make the system prompt a cache checkpoint so that i re-use cache when I start a new session (or a new planning session for example)? do you understand me?
+
+* Goal
+Reorder the system prompt template so stable content forms a maximal prefix, and change =buildSystemPrompt()= to return =SystemPromptBlock[]= instead of a single string. This is the core change that enables cross-session cache reuse.
+
+* Design Decisions
+- Maximum stable prefix: Preamble + Workspace + Context files + Identity + Environment (tools/skills/rules) + Rules/Contract = ~90% of prompt
+- Dynamic suffix: Now section (cwd, date) + append prompt (memory, MCP instructions, services)
+- The =appendPrompt= currently sits between Context and Identity sections in the template. It must move to the end (after Rules, inside or adjacent to the Now section)
+- =buildSystemPrompt= returns =SystemPromptBlock[]= with two blocks: =[{ text: stablePrefix, stable: true }, { text: dynamicSuffix, stable: false }]=
+- Agent layer (=AgentState=, =AgentContext=) accepts =SystemPrompt= union type (changed in FEAT-370)
+- A =CACHE_BOUNDARY= Handlebars helper emits a unique marker. After rendering, the output is split at this marker to produce two blocks
+- The marker must not appear in any dynamic content (use a UUID-like string)
+
+* Files to Modify
+
+** =packages/coding-agent/src/prompts/system/system-prompt.md= — Template Reordering
+
+Current section order:
+1. Preamble (RFC 2119, XML tags)
+2. =SECTION: Workspace= — ={{environment}}= (machine info)
+3. =<context>= — ={{contextFiles}}=, ={{agentsMdSearch}}=
+4. ={{appendPrompt}}= — **MOVE THIS** (memory, MCP, services)
+5. =SECTION: Identity= — static role/behavior/stakes
+6. =SECTION: Environment= — tools, skills, rules, precedence docs
+7. =SECTION: Rules= — contract, design integrity, procedure
+8. =SECTION: Now= — ={{cwd}}=, ={{date}}=
+
+New section order:
+1. Preamble (RFC 2119, XML tags) — stable
+2. =SECTION: Workspace= — ={{environment}}= — stable (machine-stable)
+3. =<context>= — ={{contextFiles}}=, ={{agentsMdSearch}}= — stable (project-stable)
+4. =SECTION: Identity= — static role/behavior/stakes — stable
+5. =SECTION: Environment= — tools, skills, rules, precedence docs — stable (config-stable)
+6. =SECTION: Rules= — contract, design integrity, procedure — stable
+7. ={{CACHE_BOUNDARY}}= — **INSERT MARKER HERE**
+8. =SECTION: Now= — ={{cwd}}=, ={{date}}= — dynamic
+9. ={{appendPrompt}}= — dynamic (memory, MCP, services) — **MOVED HERE**
+
+Changes:
+- Remove ={{#if appendPrompt}}= / ={{appendPrompt}}= / ={{/if}}= from its current position (between context and Identity)
+- Add ={{CACHE_BOUNDARY}}= between Rules and Now sections
+- Add ={{#if appendPrompt}}= / ={{appendPrompt}}= / ={{/if}}= after the Now section's critical block, before the final closing
+
+** =packages/coding-agent/src/config/prompt-templates.ts= — Register CACHE_BOUNDARY helper
+
+Add a new Handlebars helper that emits a unique boundary marker:
+#+begin_src typescript
+const CACHE_BOUNDARY_MARKER = "
+
+<!-- §CACHE_BOUNDARY§ -->
+
+";
+
+handlebars.registerHelper("CACHE_BOUNDARY", (): string => CACHE_BOUNDARY_MARKER);
+
+export { CACHE_BOUNDARY_MARKER };
+#+end_src
+
+** =packages/coding-agent/src/system-prompt.ts= — Return SystemPromptBlock[]
+
+*** Change =buildSystemPrompt= return type
+From: =Promise<string>= → =Promise<SystemPromptBlock[]>=
+
+After =renderPromptTemplate()= returns the rendered string, split at the cache boundary marker:
+
+#+begin_src typescript
+import type { SystemPromptBlock } from "@oh-my-pi/pi-ai";
+import { CACHE_BOUNDARY_MARKER } from "./config/prompt-templates";
+
+// At the end of buildSystemPrompt, instead of:
+//   return renderPromptTemplate(template, data);
+// Do:
+const rendered = renderPromptTemplate(template, data);
+const boundaryIndex = rendered.indexOf(CACHE_BOUNDARY_MARKER);
+if (boundaryIndex === -1) {
+  // No boundary found (custom prompt template or NULL_PROMPT)
+  return [{ text: rendered, stable: true }];
+}
+const stablePrefix = rendered.slice(0, boundaryIndex);
+const dynamicSuffix = rendered.slice(boundaryIndex + CACHE_BOUNDARY_MARKER.length);
+const blocks: SystemPromptBlock[] = [{ text: stablePrefix, stable: true }];
+if (dynamicSuffix.trim().length > 0) {
+  blocks.push({ text: dynamicSuffix, stable: false });
+}
+return blocks;
+#+end_src
+
+*** Handle custom prompt template path
+The =customSystemPromptTemplate= path (when =resolvedCustomPrompt= is set) also needs the same split logic. If the custom template doesn't contain ={{CACHE_BOUNDARY}}=, the entire prompt is a single stable block (backward compat).
+
+** =packages/coding-agent/src/sdk.ts= — Update callers
+
+*** =rebuildSystemPrompt= (line ~1387)
+Return type changes from =Promise<string>= to =Promise<SystemPromptBlock[]>=. All callers that receive the result must handle blocks.
+
+*** =systemPrompt= callback in =createAgentSession= call (line ~1459)
+The =systemPrompt= option currently accepts =string | ((defaultPrompt: string) => string | Promise<string>)=. This needs to accept blocks:
+- When =options.systemPrompt= is =undefined=: return blocks from =buildSystemPromptInternal=
+- When =options.systemPrompt= is a string: return blocks (use custom prompt template)
+- When =options.systemPrompt= is a function: call with =systemPromptText(defaultBlocks)= for backward compat, wrap result in blocks
+
+** =packages/agent/src/agent.ts= — Handle SystemPrompt union type
+
+The agent stores =this.#state.systemPrompt= and reads it in several places. With the union type, ensure:
+- =agent.systemPrompt= setter accepts =SystemPrompt=
+- The value flows through to =AgentContext.systemPrompt= → =Context.systemPrompt= without conversion
+- Any place that reads systemPrompt as a string (for logging, display) uses =systemPromptText()=
+
+Search for all references to =this.#state.systemPrompt= and =context.systemPrompt= in =agent.ts= and =agent-loop.ts=. Key locations:
+- =agent.ts= line ~443: setter
+- =agent.ts= line ~707: building context
+- =agent.ts= line ~764: setting context
+- =agent-loop.ts= line ~347: copying to LLM context
+
+Most of these just pass the value through, so the union type propagates naturally.
+
+** =packages/coding-agent/src/prompts/system/custom-system-prompt.md= — Optional
+If this template should also support cache boundary, add ={{CACHE_BOUNDARY}}= before the final dynamic section. If not, the entire custom prompt is treated as a single stable block.
+
+* Tests
+
+** Test: Template boundary marker is present
+Read the rendered system prompt template output and verify it contains the =CACHE_BOUNDARY_MARKER=:
+#+begin_src typescript
+const blocks = await buildSystemPrompt({ tools: mockTools });
+expect(blocks.length).toBe(2);
+expect(blocks[0].stable).toBe(true);
+expect(blocks[1].stable).toBe(false);
+#+end_src
+
+** Test: Stable block does not contain dynamic content
+Verify the stable block does NOT contain the current date or cwd:
+#+begin_src typescript
+expect(blocks[0].text).not.toContain(new Date().toISOString().slice(0, 10));
+expect(blocks[0].text).not.toContain(process.cwd());
+#+end_src
+
+** Test: Dynamic block contains date and cwd
+#+begin_src typescript
+expect(blocks[1].text).toContain(new Date().toISOString().slice(0, 10));
+#+end_src
+
+** Test: appendPrompt ends up in dynamic block
+#+begin_src typescript
+const blocks = await buildSystemPrompt({ appendSystemPrompt: "MEMORY_INSTRUCTIONS" });
+expect(blocks[0].text).not.toContain("MEMORY_INSTRUCTIONS");
+expect(blocks[1].text).toContain("MEMORY_INSTRUCTIONS");
+#+end_src
+
+** Test: Custom prompt without boundary returns single block
+#+begin_src typescript
+const blocks = await buildSystemPrompt({ customPrompt: "Be helpful." });
+expect(blocks.length).toBe(1);
+expect(blocks[0].stable).toBe(true);
+#+end_src
+
+** Test: Backward compat — joined text equals full prompt
+#+begin_src typescript
+import { systemPromptText } from "@oh-my-pi/pi-ai";
+const blocks = await buildSystemPrompt({ tools: mockTools });
+const joined = systemPromptText(blocks);
+// Should contain all sections
+expect(joined).toContain("MUST");
+expect(joined).toContain("Identity");
+expect(joined).toContain("Rules");
+#+end_src
+
+* Verification
+- =bun check:ts= passes
+- System prompt rendering tests pass
+- Manual: Start a session, verify the system prompt is well-formed (no missing sections, no boundary marker artifacts visible to the model)
+
+* Sequencing Note
+Tests for =buildSystemPrompt= require the function to exist with its full dependency tree (tools, skills, context files). These are integration-level tests that need the infrastructure in place first, so implementation precedes test writing. The template reordering is a pure file edit that can be verified by inspection.
+
+* Edge Cases
+- =NULL_PROMPT=true= env var: returns =[""]= as single block (backward compat)
+- Template without ={{CACHE_BOUNDARY}}=: returns single stable block (backward compat for custom templates)
+- Empty dynamic section (no date, no append): single stable block returned (no empty dynamic block)
+- Timeout during prompt prep: falls back to minimal prompt — still returns blocks (single stable block with minimal content)

@@ -1,0 +1,132 @@
+#+TITLE: SystemPromptBlock types and helper utilities
+#+STATE: DONE
+#+SESSION_ID: 14b0268ae0a0c701
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T15-24-07-426Z_14b0268ae0a0c701.jsonl]]
+#+CUSTOM_ID: FEAT-370-systempromptblock-types-and-helper-utili
+#+EFFORT: S
+#+LAYER: ai
+#+PRIORITY: #A
+
+NOTE [2026-04-06]: Implemented SystemPromptBlock interface, SystemPrompt union type, and three helper utilities (systemPromptText, systemPromptBlocks, systemPromptStablePrefix). Updated Context, AgentState, AgentContext types. 12 tests passing.
+
+* Initial Message
+
+is the cache control at the system level prompt? as in, is there a way to make the system prompt a cache checkpoint so that i re-use cache when I start a new session (or a new planning session for example)? do you understand me?
+
+* Goal
+Add =SystemPromptBlock= type and =SystemPrompt= union type to the AI package, plus helper utilities for converting between string and block representations. This is the foundation type that all other caching work depends on.
+
+* Design Decisions
+- =SystemPromptBlock= has two fields: =text: string= and optional =stable?: boolean=
+- =stable: true= means the block's content is identical across sessions and should receive explicit cache breakpoints (Anthropic/Bedrock) or contribute to a stable cache key (OpenAI)
+- =SystemPrompt = string | SystemPromptBlock[]= — backward compatible union type
+- When =systemPrompt= is a plain string, providers treat it as a single block with =stable: true= (backward compat = current behavior)
+- Three helper functions in utils.ts for conversions
+
+* Files to Modify
+
+** =packages/ai/src/types.ts=
+Add after the existing =CacheRetention= type (around line 149):
+#+begin_src typescript
+export interface SystemPromptBlock {
+  text: string;
+  /** When true, this block's content is stable across sessions and should be cached. Default: true for backward compat. */
+  stable?: boolean;
+}
+
+/** System prompt as a plain string or structured blocks with cache hints. */
+export type SystemPrompt = string | SystemPromptBlock[];
+#+end_src
+
+Update the =Context= interface (line ~402):
+#+begin_src typescript
+export interface Context {
+  systemPrompt?: SystemPrompt;
+  messages: Message[];
+  tools?: Tool[];
+}
+#+end_src
+
+** =packages/agent/src/types.ts=
+Update =AgentState= (line ~186) =systemPrompt= from =string= to =SystemPrompt=.
+Update =AgentContext= (line ~275) =systemPrompt= from =string= to =SystemPrompt=.
+Add import: =import type { SystemPrompt } from "@oh-my-pi/pi-ai";=
+
+** =packages/ai/src/utils.ts=
+Add three helper functions:
+
+#+begin_src typescript
+import type { SystemPrompt, SystemPromptBlock } from "./types";
+
+/** Join system prompt blocks into a single string. */
+export function systemPromptText(sp: SystemPrompt | undefined): string | undefined {
+  if (sp == null) return undefined;
+  if (typeof sp === "string") return sp;
+  if (sp.length === 0) return undefined;
+  return sp.map(b => b.text).join("
+");
+}
+
+/** Normalize a system prompt to block array. A plain string becomes a single stable block. */
+export function systemPromptBlocks(sp: SystemPrompt | undefined): SystemPromptBlock[] {
+  if (sp == null) return [];
+  if (typeof sp === "string") return sp.length > 0 ? [{ text: sp, stable: true }] : [];
+  return sp;
+}
+
+/** Extract the text of stable blocks only, joined. Returns undefined if no stable blocks. */
+export function systemPromptStablePrefix(sp: SystemPrompt | undefined): string | undefined {
+  const blocks = systemPromptBlocks(sp);
+  const stable = blocks.filter(b => b.stable !== false);
+  if (stable.length === 0) return undefined;
+  return stable.map(b => b.text).join("
+");
+}
+#+end_src
+
+* Tests
+Create =packages/ai/test/system-prompt-utils.test.ts=:
+
+** Test: systemPromptText with string input
+- Input: ="Hello world"=
+- Expected: ="Hello world"=
+
+** Test: systemPromptText with blocks
+- Input: =[{ text: "block1", stable: true }, { text: "block2" }]=
+- Expected: ="block1
+block2"=
+
+** Test: systemPromptText with undefined/empty
+- Input: =undefined=, =[]= 
+- Expected: =undefined= for both
+
+** Test: systemPromptBlocks normalizes string to single stable block
+- Input: ="Hello"=
+- Expected: =[{ text: "Hello", stable: true }]=
+
+** Test: systemPromptBlocks passes array through
+- Input: =[{ text: "a" }, { text: "b", stable: false }]=
+- Expected: same array
+
+** Test: systemPromptStablePrefix filters to stable blocks
+- Input: =[{ text: "stable1", stable: true }, { text: "dynamic", stable: false }, { text: "stable2" }]=
+- Expected: ="stable1
+stable2"= (note: absent =stable= defaults to true/included)
+
+** Test: systemPromptStablePrefix with plain string
+- Input: ="all stable"=
+- Expected: ="all stable"=
+
+** Test: systemPromptStablePrefix returns undefined when all blocks are unstable
+- Input: =[{ text: "dynamic", stable: false }]=
+- Expected: =undefined=
+
+* Verification
+- =bun test packages/ai/test/system-prompt-utils.test.ts= passes
+- =bun check:ts= passes (no type errors from Context/AgentState changes)
+
+* Edge Cases
+- Empty string systemPrompt: =systemPromptText("")= returns ="= (empty string is truthy-ish but empty — just preserve it)
+  Actually: =systemPromptBlocks("")= returns =[]= (empty string → no blocks), and =systemPromptText(undefined)= returns =undefined=
+- Blocks with empty text: preserve them (they may be intentional separators)
+- The =stable= field defaults to =true= when absent — this preserves backward compat since existing string prompts are treated as fully cacheable (matching current behavior where the whole system prompt gets cache_control)

@@ -30,6 +30,7 @@ import {
 	type ToolChoice,
 	type ToolResultMessage,
 } from "../types";
+import { systemPromptText } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { getOpenAIStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
@@ -800,10 +801,11 @@ export function convertMessages(
 		return generateFallbackToolCallId(seed);
 	};
 
-	if (context.systemPrompt) {
+	const spText = systemPromptText(context.systemPrompt);
+	if (spText) {
 		const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
 		const role = useDeveloperRole ? "developer" : "system";
-		params.push({ role: role, content: context.systemPrompt.toWellFormed() });
+		params.push({ role: role, content: spText.toWellFormed() });
 	}
 
 	let lastRole: string | null = null;

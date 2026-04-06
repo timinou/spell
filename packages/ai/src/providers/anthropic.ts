@@ -25,13 +25,20 @@ import type {
 	StopReason,
 	StreamFunction,
 	StreamOptions,
+	SystemPrompt,
 	TextContent,
 	ThinkingContent,
 	Tool,
 	ToolCall,
 	ToolResultMessage,
 } from "../types";
-import { isAnthropicOAuthToken, normalizeToolCallId, resolveCacheRetention } from "../utils";
+import {
+	isAnthropicOAuthToken,
+	normalizeToolCallId,
+	resolveCacheRetention,
+	systemPromptBlocks,
+	systemPromptText,
+} from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
@@ -869,18 +876,19 @@ type SystemBlockOptions = {
 };
 
 export function buildAnthropicSystemBlocks(
-	systemPrompt: string | undefined,
+	systemPrompt: SystemPrompt | undefined,
 	options: SystemBlockOptions = {},
 ): AnthropicSystemBlock[] | undefined {
 	const { includeClaudeCodeInstruction = false, extraInstructions = [], billingPayload, cacheControl } = options;
 	const blocks: AnthropicSystemBlock[] = [];
-	const sanitizedPrompt = systemPrompt ? systemPrompt.toWellFormed() : "";
+	const fullText = systemPromptText(systemPrompt);
+	const sanitizedFullText = fullText ? fullText.toWellFormed() : "";
 	const trimmedInstructions = extraInstructions.map(instruction => instruction.trim()).filter(Boolean);
-	const hasBillingHeader = sanitizedPrompt.includes(CLAUDE_BILLING_HEADER_PREFIX);
+	const hasBillingHeader = sanitizedFullText.includes(CLAUDE_BILLING_HEADER_PREFIX);
 
 	if (includeClaudeCodeInstruction && !hasBillingHeader) {
 		const payloadSeed = billingPayload ?? {
-			system: sanitizedPrompt,
+			system: sanitizedFullText,
 			extraInstructions: trimmedInstructions,
 		};
 		blocks.push(
@@ -900,11 +908,13 @@ export function buildAnthropicSystemBlocks(
 		});
 	}
 
-	if (systemPrompt) {
+	const promptBlocks = systemPromptBlocks(systemPrompt);
+	for (const block of promptBlocks) {
+		const isStable = block.stable !== false;
 		blocks.push({
 			type: "text",
-			text: sanitizedPrompt,
-			...(cacheControl ? { cache_control: cacheControl } : {}),
+			text: block.text.toWellFormed(),
+			...(isStable && cacheControl ? { cache_control: cacheControl } : {}),
 		});
 	}
 
@@ -1068,7 +1078,12 @@ function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?:
 	if (cacheBreakpointsUsed >= MAX_CACHE_BREAKPOINTS) return;
 
 	if (params.system && Array.isArray(params.system) && params.system.length > 0) {
-		applyCacheControlToLastBlock(params.system, cacheControl);
+		const hasExistingCacheControl = (params.system as Array<{ cache_control?: unknown }>).some(
+			block => block.cache_control != null,
+		);
+		if (!hasExistingCacheControl) {
+			applyCacheControlToLastBlock(params.system, cacheControl);
+		}
 		cacheBreakpointsUsed++;
 	}
 
@@ -1319,7 +1334,7 @@ function buildParams(
 	const billingPayload = shouldInjectClaudeCodeInstruction
 		? {
 				...params,
-				...(context.systemPrompt ? { system: context.systemPrompt.toWellFormed() } : {}),
+				...(context.systemPrompt ? { system: systemPromptText(context.systemPrompt)?.toWellFormed() } : {}),
 			}
 		: undefined;
 	const systemBlocks = buildAnthropicSystemBlocks(context.systemPrompt, {

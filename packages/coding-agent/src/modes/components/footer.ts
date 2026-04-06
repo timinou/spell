@@ -181,6 +181,12 @@ export class FooterComponent implements Component {
 		if (totalCacheRead) statsParts.push(`R${formatNumber(totalCacheRead)}`);
 		if (totalCacheWrite) statsParts.push(`W${formatNumber(totalCacheWrite)}`);
 
+		const totalPromptTokens = totalInput + totalCacheRead;
+		if (totalCacheRead > 0 && totalPromptTokens > 0) {
+			const cacheRate = ((totalCacheRead / totalPromptTokens) * 100).toFixed(0);
+			statsParts.push(`C:${cacheRate}%`);
+		}
+
 		// Show billing summary with subscription and premium-request indicators
 		const usingSubscription = state.model ? this.session.modelRegistry.isUsingOAuth(state.model) : false;
 		const normalizedPremiumRequests = Math.round((totalPremiumRequests + Number.EPSILON) * 100) / 100;

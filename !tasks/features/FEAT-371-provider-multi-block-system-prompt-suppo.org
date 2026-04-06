@@ -1,0 +1,210 @@
+#+TITLE: Provider multi-block system prompt support
+#+STATE: DONE
+#+SESSION_ID: 14b0268ae0a0c701
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T15-24-07-426Z_14b0268ae0a0c701.jsonl]]
+#+CUSTOM_ID: FEAT-371-provider-multi-block-system-prompt-suppo
+#+EFFORT: M
+#+LAYER: ai
+#+PRIORITY: #A
+#+DEPENDS: FEAT-370-systempromptblock-types-and-helper-utili
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-06]: Updated all 10 providers. Anthropic/Bedrock use block-aware caching (stable blocks get cache_control, dynamic don't). Other providers join blocks via systemPromptText(). 27 alignment tests passing.
+
+* Initial Message
+
+is the cache control at the system level prompt? as in, is there a way to make the system prompt a cache checkpoint so that i re-use cache when I start a new session (or a new planning session for example)? do you understand me?
+
+* Goal
+Update all LLM provider implementations to handle =SystemPrompt= (string | SystemPromptBlock[]) from =Context.systemPrompt=. Providers that support multi-block system prompts (Anthropic, Bedrock) place cache breakpoints only on stable blocks. Other providers join blocks to a single string.
+
+* Design Decisions
+- Import and use helper utilities from =packages/ai/src/utils.ts=: =systemPromptText()=, =systemPromptBlocks()=
+- Anthropic: stable blocks → =cache_control: { type: "ephemeral", ttl }=, dynamic blocks → no cache_control
+- Bedrock: stable blocks → cache point appended, dynamic blocks → no cache point
+- All other providers: use =systemPromptText(context.systemPrompt)= to join blocks, then proceed as before
+- The existing =applyPromptCaching()= function in Anthropic still runs but should detect pre-placed =cache_control= from stable blocks and skip re-applying (it already does this — line 1052-1056 checks for existing cache_control)
+- OpenAI stable cache key is a SEPARATE item (FEAT for cache key), this item just handles the text joining
+
+* Files to Modify
+
+
+** =packages/ai/src/providers/anthropic.ts= — CRITICAL CHANGES
+
+*** =buildAnthropicSystemBlocks= (line ~871)
+Currently takes =systemPrompt: string | undefined=. Change to accept =SystemPrompt | undefined=:
+
+#+begin_src typescript
+export function buildAnthropicSystemBlocks(
+  systemPrompt: SystemPrompt | undefined,
+  options: SystemBlockOptions = {},
+): AnthropicSystemBlock[] | undefined {
+  const { includeClaudeCodeInstruction = false, extraInstructions = [], billingPayload, cacheControl } = options;
+
+  const blocks: AnthropicSystemBlock[] = [];
+
+  // Claude Code billing header (uncached — must come first for billing)
+  const promptBlocks = systemPromptBlocks(systemPrompt);
+  const fullText = systemPromptText(systemPrompt);
+  const sanitizedFullText = fullText ? fullText.toWellFormed() : "";
+  const hasBillingHeader = sanitizedFullText.includes(CLAUDE_BILLING_HEADER_PREFIX);
+
+  if (includeClaudeCodeInstruction && !hasBillingHeader) {
+    const payloadSeed = billingPayload ?? { system: sanitizedFullText, extraInstructions: extraInstructions.map(i => i.trim()).filter(Boolean) };
+    blocks.push(
+      { type: "text", text: createClaudeBillingHeader(payloadSeed) },
+      { type: "text", text: claudeCodeSystemInstruction },
+    );
+  }
+
+  // Extra instructions (cached)
+  for (const instruction of extraInstructions.map(i => i.trim()).filter(Boolean)) {
+    blocks.push({
+      type: "text", text: instruction,
+      ...(cacheControl ? { cache_control: cacheControl } : {}),
+    });
+  }
+
+  // System prompt blocks — respect stable/dynamic distinction
+  if (promptBlocks.length > 0) {
+    for (const block of promptBlocks) {
+      const isStable = block.stable !== false; // default true
+      blocks.push({
+        type: "text",
+        text: block.text.toWellFormed(),
+        // Only apply cache_control to stable blocks
+        ...(isStable && cacheControl ? { cache_control: cacheControl } : {}),
+      });
+    }
+  }
+
+  return blocks.length > 0 ? blocks : undefined;
+}
+#+end_src
+
+*** =buildParams= (line ~1253)
+The =context.systemPrompt= reference in the billing payload computation needs updating. Use =systemPromptText(context.systemPrompt)= for the billing payload seed:
+#+begin_src typescript
+const billingPayload = shouldInjectClaudeCodeInstruction
+  ? { ...params, ...(context.systemPrompt ? { system: systemPromptText(context.systemPrompt)?.toWellFormed() } : {}) }
+  : undefined;
+#+end_src
+
+*** =applyPromptCaching= (line ~1049) — IMPORTANT FIX
+
+The function currently unconditionally adds =cache_control= to the last system block (around line 1069-1072):
+#+begin_src typescript
+if (params.system && Array.isArray(params.system) && params.system.length > 0) {
+  applyCacheControlToLastBlock(params.system, cacheControl);
+  cacheBreakpointsUsed++;
+}
+#+end_src
+
+This is WRONG when multi-block caching is active because the last system block is the DYNAMIC block (=stable: false=) — we don't want it cached.
+
+**Fix**: Skip the system block step when any system block already has =cache_control= (indicating =buildAnthropicSystemBlocks= already placed breakpoints on stable blocks):
+
+#+begin_src typescript
+if (params.system && Array.isArray(params.system) && params.system.length > 0) {
+  // Skip if stable blocks already have cache_control from buildAnthropicSystemBlocks
+  const hasExistingCacheControl = params.system.some(
+    (block: AnthropicSystemBlock & CacheControlBlock) => block.cache_control != null
+  );
+  if (!hasExistingCacheControl) {
+    applyCacheControlToLastBlock(params.system, cacheControl);
+  }
+  // Count existing cache_control breakpoints in system blocks toward the limit
+  const systemCachePoints = params.system.filter(
+    (block: AnthropicSystemBlock & CacheControlBlock) => block.cache_control != null
+  ).length;
+  cacheBreakpointsUsed += systemCachePoints || 1; // at least 1 if we just added
+}
+#+end_src
+
+This ensures:
+- When =SystemPromptBlock[]= with stable/dynamic split is used: =buildAnthropicSystemBlocks= places =cache_control= on stable blocks, =applyPromptCaching= detects them and skips the system step
+- When plain string is used (backward compat): no pre-existing =cache_control=, so =applyPromptCaching= adds one to the last block as before
+
+** =packages/ai/src/providers/amazon-bedrock.ts= — CRITICAL CHANGES
+
+*** =buildSystemPrompt= (line ~397)
+Change signature to accept =SystemPrompt | undefined=:
+#+begin_src typescript
+function buildSystemPrompt(
+  systemPrompt: SystemPrompt | undefined,
+  model: Model<"bedrock-converse-stream">,
+  cacheRetention: CacheRetention,
+): SystemContentBlock[] | undefined {
+  const blocks = systemPromptBlocks(systemPrompt);
+  if (blocks.length === 0) return undefined;
+
+  const result: SystemContentBlock[] = [];
+  const supportsCache = cacheRetention !== "none" && supportsPromptCaching(model);
+
+  for (const block of blocks) {
+    result.push({ text: block.text.toWellFormed() });
+    // Add cache point only after stable blocks
+    if (supportsCache && block.stable !== false) {
+      result.push({
+        cachePoint: { type: CachePointType.DEFAULT, ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}) },
+      });
+    }
+  }
+
+  return result;
+}
+#+end_src
+
+** Other providers — use =systemPromptText()= for backward-compat join
+
+Each of these files reads =context.systemPrompt= as a string. Replace with =systemPromptText(context.systemPrompt)=:
+
+*** =packages/ai/src/providers/openai-completions.ts= (line ~803)
+Replace: =context.systemPrompt.toWellFormed()= → =systemPromptText(context.systemPrompt)?.toWellFormed()=
+
+*** =packages/ai/src/providers/openai-responses.ts= (line ~246)
+Replace: =context.systemPrompt= → =systemPromptText(context.systemPrompt)=
+
+*** =packages/ai/src/providers/azure-openai-responses.ts= (line ~337)
+Replace: =context.systemPrompt= → =systemPromptText(context.systemPrompt)=
+
+*** =packages/ai/src/providers/openai-codex-responses.ts= (line ~511)
+Replace: =context.systemPrompt= → =systemPromptText(context.systemPrompt)=
+
+*** =packages/ai/src/providers/google.ts= (line ~347)
+Replace: =context.systemPrompt= → =systemPromptText(context.systemPrompt)=
+
+*** =packages/ai/src/providers/google-vertex.ts= (line ~403)
+Replace: =context.systemPrompt= → =systemPromptText(context.systemPrompt)=
+
+*** =packages/ai/src/providers/google-gemini-cli.ts= (line ~1077)
+Replace: =context.systemPrompt= → =systemPromptText(context.systemPrompt)=
+
+*** =packages/ai/src/providers/cursor.ts= (line ~2004)
+Replace: =context.systemPrompt= → =systemPromptText(context.systemPrompt)=. The cursor provider JSON-serializes the prompt, so string conversion is required.
+
+*** =packages/ai/src/providers/gitlab-duo.ts=
+Search for =context.systemPrompt= references and replace with =systemPromptText(context.systemPrompt)=.
+* Tests
+
+** Existing test: =packages/ai/test/anthropic-alignment.test.ts=
+Update the =buildAnthropicSystemBlocks= tests:
+- Existing tests pass string → should still work (backward compat)
+- Add test: blocks with stable=true get cache_control, blocks with stable=false do not
+  - Input: =[{ text: "stable part", stable: true }, { text: "dynamic part", stable: false }]= with =cacheControl: { type: "ephemeral" }=
+  - Expected: first block has cache_control, second block does not
+
+** New test: =packages/ai/test/provider-systemprompt-blocks.test.ts=
+- Test =systemPromptText= integration: pass =SystemPromptBlock[]= through each provider's message builder and verify the system prompt text is correctly joined
+- Focus on Anthropic and Bedrock (block-level tests)
+
+* Verification
+- =bun test packages/ai/test/anthropic-alignment.test.ts= passes
+- =bun test packages/ai/test/provider-systemprompt-blocks.test.ts= passes (new test)
+- =bun check:ts= passes
+
+* Edge Cases
+- Empty blocks array: =buildAnthropicSystemBlocks([])= returns =undefined= (same as =undefined= input)
+- Single block with stable=false: still emits the text, just without cache_control
+- String input (backward compat): treated as single stable block, same behavior as before
+- Provider that doesn't support blocks: =systemPromptText()= joins and returns string, provider code unchanged
