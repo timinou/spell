@@ -243,11 +243,17 @@ handlebars.registerHelper("jsonStringify", (value: unknown): string => JSON.stri
  *  Name
  * ═══════════════════════════════
  */
+export const CACHE_BOUNDARY_MARKER = "\n<!-- §CACHE_BOUNDARY§ -->\n";
+
 export function sectionSeparator(name: string): string {
 	return `\n\n═══════════${name}═══════════\n`;
 }
 
 handlebars.registerHelper("SECTION_SEPERATOR", (name: unknown): string => sectionSeparator(String(name)));
+handlebars.registerHelper(
+	"CACHE_BOUNDARY",
+	(): Handlebars.SafeString => new Handlebars.SafeString(CACHE_BOUNDARY_MARKER),
+);
 
 function formatHashlineRef(lineNum: unknown, content: unknown): { num: number; text: string; ref: string } {
 	const num = typeof lineNum === "number" ? lineNum : Number.parseInt(String(lineNum), 10);

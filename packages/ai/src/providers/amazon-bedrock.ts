@@ -33,6 +33,7 @@ import type {
 	StopReason,
 	StreamFunction,
 	StreamOptions,
+	SystemPrompt,
 	TextContent,
 	ThinkingBudgets,
 	ThinkingContent,
@@ -40,7 +41,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types";
-import { normalizeToolCallId, resolveCacheRetention } from "../utils";
+import { normalizeToolCallId, resolveCacheRetention, systemPromptBlocks } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
 import { parseStreamingJson } from "../utils/json-parse";
@@ -395,22 +396,29 @@ function supportsThinkingSignature(model: Model<"bedrock-converse-stream">): boo
 }
 
 function buildSystemPrompt(
-	systemPrompt: string | undefined,
+	systemPrompt: SystemPrompt | undefined,
 	model: Model<"bedrock-converse-stream">,
 	cacheRetention: CacheRetention,
 ): SystemContentBlock[] | undefined {
-	if (!systemPrompt) return undefined;
+	const blocks = systemPromptBlocks(systemPrompt);
+	if (blocks.length === 0) return undefined;
 
-	const blocks: SystemContentBlock[] = [{ text: systemPrompt.toWellFormed() }];
+	const result: SystemContentBlock[] = [];
+	const supportsCache = cacheRetention !== "none" && supportsPromptCaching(model);
 
-	// Add cache point for supported Claude models
-	if (cacheRetention !== "none" && supportsPromptCaching(model)) {
-		blocks.push({
-			cachePoint: { type: CachePointType.DEFAULT, ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}) },
-		});
+	for (const block of blocks) {
+		result.push({ text: block.text.toWellFormed() });
+		if (supportsCache && block.stable !== false) {
+			result.push({
+				cachePoint: {
+					type: CachePointType.DEFAULT,
+					...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
+				},
+			});
+		}
 	}
 
-	return blocks;
+	return result;
 }
 
 function convertMessages(

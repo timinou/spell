@@ -148,6 +148,15 @@ export type ToolChoice =
 // Base options all providers share
 export type CacheRetention = "none" | "short" | "long";
 
+export interface SystemPromptBlock {
+	text: string;
+	/** When true, this block's content is stable across sessions and should be cached. Default: true for backward compat. */
+	stable?: boolean;
+}
+
+/** System prompt as a plain string or structured blocks with cache hints. */
+export type SystemPrompt = string | SystemPromptBlock[];
+
 /** OpenAI service tier for processing priority. Only applies to OpenAI-compatible APIs. */
 export type ServiceTier = "auto" | "default" | "flex" | "scale" | "priority";
 
@@ -400,7 +409,7 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 }
 
 export interface Context {
-	systemPrompt?: string;
+	systemPrompt?: SystemPrompt;
 	messages: Message[];
 	tools?: Tool[];
 }

@@ -5,6 +5,7 @@
  */
 import path from "node:path";
 import type { AgentEvent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { type SystemPromptBlock, systemPromptText } from "@oh-my-pi/pi-ai";
 import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import Ajv, { type ValidateFunction } from "ajv";
@@ -1095,14 +1096,25 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							contextFiles: options.contextFiles,
 							skills: options.skills,
 							promptTemplates: options.promptTemplates,
-							systemPrompt: defaultPrompt =>
-								renderPromptTemplate(subagentSystemPromptTemplate, {
-									base: defaultPrompt,
-									agent: agent.systemPrompt,
+							systemPrompt: (defaultBlocks: SystemPromptBlock[]) => {
+								const overlay = renderPromptTemplate(subagentSystemPromptTemplate, {
+									agent: agent.systemPrompt ?? "",
 									worktree: worktree ?? "",
 									outputSchema: normalizedOutputSchema,
 									contextFile: options.contextFile,
-								}),
+								});
+								const stableBlocks = defaultBlocks.filter(block => block.stable !== false);
+								const dynamicTexts = defaultBlocks
+									.filter(block => block.stable === false)
+									.map(block => block.text);
+								dynamicTexts.push(overlay);
+
+								const result: SystemPromptBlock[] = [...stableBlocks];
+								if (dynamicTexts.length > 0) {
+									result.push({ text: dynamicTexts.join("\n"), stable: false });
+								}
+								return result;
+							},
 							sessionManager,
 							hasUI: false,
 							spawns: spawnsEnv,
@@ -1119,7 +1131,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						progress.transcriptPath = sessionFile ?? undefined;
 
 						session.sessionManager.appendSessionInit({
-							systemPrompt: session.agent.state.systemPrompt,
+							systemPrompt: systemPromptText(session.agent.state.systemPrompt) ?? "",
 							task,
 							tools: session.getActiveToolNames(),
 							outputSchema,

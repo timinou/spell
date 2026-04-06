@@ -1,5 +1,11 @@
 import { $env } from "@oh-my-pi/pi-utils";
-import type { CacheRetention, OpenAIResponsesHistoryPayload, ProviderPayload } from "./types";
+import type {
+	CacheRetention,
+	OpenAIResponsesHistoryPayload,
+	ProviderPayload,
+	SystemPrompt,
+	SystemPromptBlock,
+} from "./types";
 
 export { isRecord } from "@oh-my-pi/pi-utils";
 
@@ -116,19 +122,54 @@ export interface OpenAICacheParams {
 
 /**
  * Resolve OpenAI-family prompt cache parameters from retention preference.
- * Returns an empty object when caching is disabled or sessionId is missing.
+ * Derives cache key from stable prompt content when available for cross-session reuse.
  * Maps "long" to 24h extended retention, "short" to in-memory (server default).
  */
 export function resolveOpenAICacheParams(
 	cacheRetention: CacheRetention | undefined,
 	sessionId: string | undefined,
+	systemPrompt?: SystemPrompt,
 ): OpenAICacheParams {
 	const retention = resolveCacheRetention(cacheRetention);
-	if (retention === "none" || !sessionId) return {};
+	if (retention === "none") return {};
+
+	let cacheKey: string | undefined;
+	const stableText = systemPromptStablePrefix(systemPrompt);
+	if (stableText) {
+		cacheKey = Bun.hash(stableText).toString(16);
+	} else if (sessionId) {
+		cacheKey = sessionId;
+	}
+
+	if (!cacheKey) return {};
+
 	return {
-		prompt_cache_key: sessionId,
+		prompt_cache_key: cacheKey,
 		prompt_cache_retention: retention === "long" ? "24h" : undefined,
 	};
+}
+
+/** Join system prompt blocks into a single string. */
+export function systemPromptText(sp: SystemPrompt | undefined): string | undefined {
+	if (sp == null) return undefined;
+	if (typeof sp === "string") return sp;
+	if (sp.length === 0) return undefined;
+	return sp.map(b => b.text).join("\n");
+}
+
+/** Normalize a system prompt to block array. A plain string becomes a single stable block. */
+export function systemPromptBlocks(sp: SystemPrompt | undefined): SystemPromptBlock[] {
+	if (sp == null) return [];
+	if (typeof sp === "string") return sp.length > 0 ? [{ text: sp, stable: true }] : [];
+	return sp;
+}
+
+/** Extract the text of stable blocks only, joined. Returns undefined if no stable blocks. */
+export function systemPromptStablePrefix(sp: SystemPrompt | undefined): string | undefined {
+	const blocks = systemPromptBlocks(sp);
+	const stable = blocks.filter(b => b.stable !== false);
+	if (stable.length === 0) return undefined;
+	return stable.map(b => b.text).join("\n");
 }
 
 export function isAnthropicOAuthToken(key: string): boolean {

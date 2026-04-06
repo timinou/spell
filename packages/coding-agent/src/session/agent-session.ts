@@ -35,6 +35,7 @@ import type {
 	ProviderSessionState,
 	ServiceTier,
 	SimpleStreamOptions,
+	SystemPrompt,
 	TextContent,
 	ToolCall,
 	ToolChoice,
@@ -47,6 +48,7 @@ import {
 	isContextOverflow,
 	modelsAreEqual,
 	parseRateLimitReason,
+	systemPromptText,
 } from "@oh-my-pi/pi-ai";
 import { orgToMarkdown, resolveCategories } from "@oh-my-pi/pi-org";
 import { abortableSleep, getAgentDbPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
@@ -225,7 +227,7 @@ export interface AgentSessionConfig {
 	/** Current session message-to-LLM conversion pipeline */
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	/** System prompt builder that can consider tool availability */
-	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<string>;
+	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<SystemPrompt>;
 	/** Enable hidden-by-default MCP tool discovery for this session. */
 	mcpDiscoveryEnabled?: boolean;
 	/** MCP tool names previously selected via discovery in this session. */
@@ -453,8 +455,8 @@ export class AgentSession {
 	#transformContext: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
-	#rebuildSystemPrompt: ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<string>) | undefined;
-	#baseSystemPrompt: string;
+	#rebuildSystemPrompt: ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<SystemPrompt>) | undefined;
+	#baseSystemPrompt: SystemPrompt;
 	#mcpDiscoveryEnabled = false;
 	#discoverableMCPTools = new Map<string, DiscoverableMCPTool>();
 	#discoverableMCPSearchIndex: DiscoverableMCPSearchIndex | null = null;
@@ -1708,7 +1710,8 @@ export class AgentSession {
 	}
 	/** Current effective system prompt (includes any per-turn extension modifications) */
 	get systemPrompt(): string {
-		return this.agent.state.systemPrompt;
+		const sp = this.agent.state.systemPrompt;
+		return typeof sp === "string" ? sp : (systemPromptText(sp) ?? "");
 	}
 
 	/** Extract text content from the first user message in the conversation. */
@@ -2495,7 +2498,7 @@ export class AgentSession {
 				const result = await this.#extensionRunner.emitBeforeAgentStart(
 					expandedText,
 					options?.images,
-					this.#baseSystemPrompt,
+					systemPromptText(this.#baseSystemPrompt) ?? "",
 				);
 				if (result?.messages) {
 					const promptAttribution: "user" | "agent" | undefined =
@@ -2532,7 +2535,9 @@ export class AgentSession {
 						domainNames: building.domainNames,
 					});
 					const current = this.agent.state.systemPrompt;
-					this.agent.setSystemPrompt(`${current}\n\n${rendered}`);
+					this.agent.setSystemPrompt(
+						`${typeof current === "string" ? current : (systemPromptText(current) ?? "")}\n\n${rendered}`,
+					);
 				}
 			}
 
@@ -3576,7 +3581,11 @@ export class AgentSession {
 					apiKey,
 					customInstructions,
 					this.#compactionAbortController.signal,
-					{ promptOverride: hookPrompt, extraContext: hookContext, remoteInstructions: this.#baseSystemPrompt },
+					{
+						promptOverride: hookPrompt,
+						extraContext: hookContext,
+						remoteInstructions: systemPromptText(this.#baseSystemPrompt) ?? "",
+					},
 				);
 				summary = result.summary;
 				shortSummary = result.shortSummary;
@@ -4542,7 +4551,7 @@ export class AgentSession {
 							compactResult = await compact(preparation, candidate, apiKey, undefined, autoCompactionSignal, {
 								promptOverride: hookPrompt,
 								extraContext: hookContext,
-								remoteInstructions: this.#baseSystemPrompt,
+								remoteInstructions: systemPromptText(this.#baseSystemPrompt) ?? "",
 								initiatorOverride: "agent",
 							});
 							break;
@@ -5803,9 +5812,10 @@ export class AgentSession {
 		// Include system prompt at the beginning
 		const systemPrompt = this.agent.state.systemPrompt;
 		if (systemPrompt) {
-			lines.push("## System Prompt\n");
-			lines.push(systemPrompt);
-			lines.push("\n");
+			lines.push("## System Prompt\\n");
+			const spText = typeof systemPrompt === "string" ? systemPrompt : (systemPromptText(systemPrompt) ?? "");
+			lines.push(spText);
+			lines.push("\\n");
 		}
 
 		// Include model and thinking level

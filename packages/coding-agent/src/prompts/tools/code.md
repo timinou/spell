@@ -19,7 +19,7 @@ What are you doing? → subcommand:
 - Swap adjacent siblings → `code edit { operation: "transpose", target: { line } }`
 - Duplicate a node → `code edit { operation: "clone", target: { line } }`
 - Insert adjacent → `code edit { operation: "insert-before" | "insert-after", target, content }`
-- Preview before saving → `code edit { ..., save: false }` then `code diff { file }`
+- Preview before saving → `code edit { …, save: false }` then `code diff { file }`
 - Non-code file → use `read` tool instead
 
 **Workflow patterns**:

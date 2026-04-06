@@ -18,7 +18,7 @@ import {
 	type Tool,
 	type ToolChoice,
 } from "../types";
-import { resolveOpenAICacheParams } from "../utils";
+import { resolveOpenAICacheParams, systemPromptText } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { getOpenAIStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
@@ -258,7 +258,7 @@ function buildParams(
 		model: deploymentName,
 		input: messages,
 		stream: true,
-		...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId),
+		...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId, context.systemPrompt),
 	};
 
 	if (options?.maxTokens) {
@@ -334,11 +334,12 @@ function convertMessages(
 	const transformedMessages = transformMessages(context.messages, model, normalizeResponsesToolCallIdForTransform);
 	const knownCallIds = new Set<string>();
 
-	if (context.systemPrompt) {
+	const spText = systemPromptText(context.systemPrompt);
+	if (spText) {
 		const role = model.reasoning ? "developer" : "system";
 		messages.push({
 			role,
-			content: context.systemPrompt.toWellFormed(),
+			content: spText.toWellFormed(),
 		});
 	}
 

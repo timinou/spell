@@ -13,6 +13,7 @@ import {
 	type ProviderSessionState,
 	type ServiceTier,
 	type SimpleStreamOptions,
+	type SystemPrompt,
 	streamSimple,
 	type TextContent,
 	type ThinkingBudgets,
@@ -439,7 +440,7 @@ export class Agent {
 	}
 
 	// State mutators
-	setSystemPrompt(v: string) {
+	setSystemPrompt(v: SystemPrompt) {
 		this.#state.systemPrompt = v;
 	}
 

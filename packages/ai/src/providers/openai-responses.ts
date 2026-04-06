@@ -24,6 +24,7 @@ import {
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
 	resolveOpenAICacheParams,
+	systemPromptText,
 } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
@@ -243,11 +244,12 @@ function buildParams(
 	const conversationMessages = convertConversationMessages(model, context, strictResponsesPairing);
 	const messages: ResponseInput = [...conversationMessages];
 
-	if (context.systemPrompt) {
+	const spText = systemPromptText(context.systemPrompt);
+	if (spText) {
 		const role = model.reasoning ? "developer" : "system";
 		messages.unshift({
 			role,
-			content: context.systemPrompt.toWellFormed(),
+			content: spText.toWellFormed(),
 		});
 	}
 
@@ -255,7 +257,7 @@ function buildParams(
 		model: model.id,
 		input: messages,
 		stream: true,
-		...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId),
+		...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId, context.systemPrompt),
 		store: false,
 	};
 

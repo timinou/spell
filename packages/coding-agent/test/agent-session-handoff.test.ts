@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, systemPromptText } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -467,7 +467,7 @@ describe("AgentSession handoff", () => {
 				messages: [],
 			},
 			streamFn: (_model, context) => {
-				observedSystemPrompts.push(context.systemPrompt ?? "");
+				observedSystemPrompts.push(systemPromptText(context.systemPrompt) ?? "");
 				streamCallCount++;
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {

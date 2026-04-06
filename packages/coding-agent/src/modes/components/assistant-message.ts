@@ -196,7 +196,9 @@ export class AssistantMessageComponent extends Container {
 			parts.push(`${theme.icon.input} ${formatNumber(totalInput)}`);
 			parts.push(`${theme.icon.output} ${formatNumber(usage.output)}`);
 			if (usage.cacheRead > 0) {
-				parts.push(`cache: ${formatNumber(usage.cacheRead)}`);
+				const totalPrompt = usage.input + usage.cacheRead;
+				const cachePercent = totalPrompt > 0 ? ((usage.cacheRead / totalPrompt) * 100).toFixed(0) : "0";
+				parts.push(`cache: ${formatNumber(usage.cacheRead)} (${cachePercent}%)`);
 			}
 			this.#contentContainer.addChild(new Spacer(1));
 			this.#contentContainer.addChild(new Text(theme.fg("dim", parts.join("  ")), 1, 0));

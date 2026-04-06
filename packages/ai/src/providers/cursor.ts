@@ -24,6 +24,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types";
+import { systemPromptText } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
 import { pushFallbackError } from "../utils/provider-error-boundary";
@@ -2003,7 +2004,7 @@ function buildGrpcRequest(
 
 	const systemPromptJson = JSON.stringify({
 		role: "system",
-		content: context.systemPrompt || "You are a helpful assistant.",
+		content: systemPromptText(context.systemPrompt) || "You are a helpful assistant.",
 	});
 	const systemPromptBytes = new TextEncoder().encode(systemPromptJson);
 	const systemPromptId = createBlobId(systemPromptBytes);

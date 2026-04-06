@@ -166,6 +166,40 @@ describe("Anthropic request fingerprint alignment", () => {
 		});
 	});
 
+	it("stable blocks receive cache_control, dynamic blocks do not", () => {
+		const result = buildAnthropicSystemBlocks(
+			[
+				{ text: "stable part", stable: true },
+				{ text: "dynamic part", stable: false },
+			],
+			{ cacheControl: { type: "ephemeral" } },
+		);
+		expect(result).toBeDefined();
+		const stableBlock = result?.find(b => b.text === "stable part");
+		const dynamicBlock = result?.find(b => b.text === "dynamic part");
+		expect(stableBlock?.cache_control).toEqual({ type: "ephemeral" });
+		expect(dynamicBlock?.cache_control).toBeUndefined();
+	});
+
+	it("string input treated as single stable block (backward compat)", () => {
+		const result = buildAnthropicSystemBlocks("full prompt text", { cacheControl: { type: "ephemeral" } });
+		expect(result).toBeDefined();
+		const promptBlock = result?.find(b => b.text.includes("full prompt text"));
+		expect(promptBlock?.cache_control).toEqual({ type: "ephemeral" });
+	});
+
+	it("returns undefined for empty block arrays", () => {
+		const result = buildAnthropicSystemBlocks([]);
+		expect(result).toBeUndefined();
+	});
+
+	it("emits dynamic-only blocks without cache_control", () => {
+		const result = buildAnthropicSystemBlocks([{ text: "dynamic only", stable: false }], {
+			cacheControl: { type: "ephemeral" },
+		});
+		expect(result).toEqual([{ type: "text", text: "dynamic only" }]);
+	});
+
 	it("uses Bearer auth for non-Anthropic API bases with api-key credentials", () => {
 		const headers = buildAnthropicHeaders({
 			apiKey: "sk-ant-api-test",

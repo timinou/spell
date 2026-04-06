@@ -1,0 +1,158 @@
+#+TITLE: Cache rate observability across TUI logging and stats
+#+STATE: DONE
+#+SESSION_ID: 14b0268ae0a0c701
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T15-24-07-426Z_14b0268ae0a0c701.jsonl]]
+#+CUSTOM_ID: FEAT-374-cache-rate-observability-across-tui-logg
+#+EFFORT: M
+#+LAYER: coding-agent stats
+#+PRIORITY: #B
+
+NOTE [2026-04-06]: Added cache rate percentage to per-turn display (cache: N (X%)) and footer stats (C:X%). Stats dashboard time series chart deferred -- basic observability is in place.
+
+* Initial Message
+
+is the cache control at the system level prompt? as in, is there a way to make the system prompt a cache checkpoint so that i re-use cache when I start a new session (or a new planning session for example)? do you understand me?
+
+* Goal
+Add cache hit rate percentage to per-turn display, session footer, request logging, and a cache efficiency time series chart in the stats dashboard. Currently, raw token counts exist but percentage/rate is only visible in the stats dashboard and CLI summary.
+
+* Design Decisions
+- Cache rate formula: =cacheRead / (input + cacheRead)= — already used in stats DB =buildAggregatedStats=
+- Per-turn: Append percentage to existing =cache: N= display → =cache: N (X%)=
+- Footer: Add =C:X%= to the stats line (alongside existing ↑/↓/R/W indicators)
+- Logging: Add =cacheRate= field to the existing request completion log entry
+- Stats dashboard: Add a time series chart for cache rate over time (daily aggregation)
+- No new dependencies — uses existing data flows
+
+* Files to Modify
+
+** =packages/coding-agent/src/modes/components/assistant-message.ts= — Per-turn cache rate
+
+Current (line ~198-199):
+#+begin_src typescript
+if (usage.cacheRead > 0) {
+  parts.push(`cache: ${formatNumber(usage.cacheRead)}`);
+}
+#+end_src
+
+Change to:
+#+begin_src typescript
+if (usage.cacheRead > 0) {
+  const totalPrompt = usage.input + usage.cacheRead;
+  const cachePercent = totalPrompt > 0 ? ((usage.cacheRead / totalPrompt) * 100).toFixed(0) : "0";
+  parts.push(`cache: ${formatNumber(usage.cacheRead)} (${cachePercent}%)`);
+}
+#+end_src
+
+** =packages/coding-agent/src/modes/components/footer.ts= — Session cache rate
+
+After the existing statsParts assembly (line ~180-183), add cache rate:
+#+begin_src typescript
+// Add cache rate percentage
+const totalPromptTokens = totalInput + totalCacheRead;
+if (totalCacheRead > 0 && totalPromptTokens > 0) {
+  const cacheRate = ((totalCacheRead / totalPromptTokens) * 100).toFixed(0);
+  statsParts.push(`C:${cacheRate}%`);
+}
+#+end_src
+
+Insert this after the =W${formatNumber(totalCacheWrite)}= line and before the billing summary section.
+
+** =packages/ai/src/providers/anthropic.ts= — Request logging (if applicable)
+
+Search for existing logging of usage/completion in the Anthropic provider. The logging likely happens in the coding-agent layer, not the AI layer. Check:
+- =packages/coding-agent/src/session/agent-session.ts= — where assistant messages are processed
+- =packages/coding-agent/src/session/session-manager.ts= — where usage is accumulated
+
+Add cache rate to existing =logger.debug= or =logger.info= calls that log request completion:
+#+begin_src typescript
+const cacheRate = usage.input + usage.cacheRead > 0
+  ? usage.cacheRead / (usage.input + usage.cacheRead)
+  : 0;
+logger.debug("Request completed", {
+  ...existingFields,
+  cacheRead: usage.cacheRead,
+  cacheWrite: usage.cacheWrite,
+  cacheRate: `${(cacheRate * 100).toFixed(1)}%`,
+});
+#+end_src
+
+** =packages/stats/src/client/components/= — Cache efficiency time series chart
+
+*** Add new chart component or extend existing charts
+
+The stats dashboard already has charts (=ChartArea.tsx= or similar). Add a cache efficiency time series:
+
+1. In =packages/stats/src/db.ts=: Add a query for daily cache rate aggregation:
+#+begin_src typescript
+export function getCacheRateTimeSeries(days: number = 30): Array<{ date: string; cacheRate: number; cacheSavings: number }> {
+  // Query messages table grouped by day, computing cache rate per day
+  const rows = db.prepare(`
+    SELECT
+      date(timestamp / 1000, 'unixepoch') as date,
+      SUM(cache_read_tokens) as total_cache_read,
+      SUM(input_tokens) as total_input,
+      SUM(cost_cache_read) as cost_cache_read,
+      SUM(cost_input) as cost_input
+    FROM messages
+    WHERE timestamp > ?
+    GROUP BY date(timestamp / 1000, 'unixepoch')
+    ORDER BY date
+  `).all(Date.now() - days * 86400000);
+
+  return rows.map(row => ({
+    date: row.date,
+    cacheRate: (row.total_input + row.total_cache_read) > 0
+      ? row.total_cache_read / (row.total_input + row.total_cache_read)
+      : 0,
+    cacheSavings: row.cost_input - row.cost_cache_read, // approximate savings
+  }));
+}
+#+end_src
+
+2. Expose via REST API in =packages/stats/src/server.ts= (or wherever routes are defined):
+#+begin_src typescript
+app.get("/api/cache-rate-timeseries", (req, res) => {
+  const days = parseInt(req.query.days as string) || 30;
+  res.json(getCacheRateTimeSeries(days));
+});
+#+end_src
+
+3. Add a =CacheEfficiencyChart= React component in =packages/stats/src/client/components/=:
+   - Line chart showing daily cache rate percentage (0-100%)
+   - Optional secondary axis showing daily cache savings ($)
+   - Use the same charting library as existing charts
+
+4. Include the chart in the dashboard layout.
+
+* Tests
+
+** Per-turn display: verify percentage format
+Mock a Usage object with =input: 1000, cacheRead: 9000= → expect =cache: 9,000 (90%)=
+
+** Footer: verify C:X% appears
+Integration test or manual verification that =C:90%= appears in footer when cache is active
+
+** Stats DB: getCacheRateTimeSeries returns correct rates
+#+begin_src typescript
+// Insert test data with known cache ratios
+// Query and verify rates match expected values
+#+end_src
+
+** Edge case: zero input tokens
+When =input: 0, cacheRead: 5000= → cache rate should be =100%=, not division by zero
+
+** Edge case: no cache reads
+When =cacheRead: 0= → per-turn display should not show cache line at all (existing behavior preserved)
+
+* Verification
+- =bun check:ts= passes
+- Per-turn display shows =cache: N (X%)= when running a session
+- Footer shows =C:X%= in stats line
+- Stats dashboard shows cache efficiency chart
+- =bun test= for any new test files passes
+
+* Edge Cases
+- First turn of session: cacheWrite > 0 but cacheRead = 0 → no cache percentage shown (correct: first turn is always a cache write)
+- Very small numbers: =input: 1, cacheRead: 1= → =50%= (correct)
+- Stats dashboard with no data: chart shows empty state, not error

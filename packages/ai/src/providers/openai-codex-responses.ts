@@ -35,6 +35,7 @@ import {
 	getOpenAIResponsesHistoryPayload,
 	normalizeResponsesToolCallId,
 	resolveOpenAICacheParams,
+	systemPromptText,
 } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
@@ -471,7 +472,7 @@ async function buildTransformedCodexRequestBody(
 		model: model.id,
 		input: [...convertMessages(model, context)],
 		stream: true,
-		...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId),
+		...resolveOpenAICacheParams(options?.cacheRetention, options?.sessionId, context.systemPrompt),
 	};
 
 	if (options?.maxTokens) {
@@ -508,7 +509,7 @@ async function buildTransformedCodexRequestBody(
 		}
 	}
 
-	const systemPrompt = buildCodexSystemPrompt({ userSystemPrompt: context.systemPrompt });
+	const systemPrompt = buildCodexSystemPrompt({ userSystemPrompt: systemPromptText(context.systemPrompt) });
 	params.instructions = systemPrompt.instructions;
 
 	const codexOptions: CodexRequestOptions = {
