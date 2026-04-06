@@ -1,1 +1,8 @@
 detect-secrets-hook --baseline .secrets.baseline $(git diff --cached --name-only)
+
+# Reject stale lockfile: if any package.json changed, bun.lock must too
+staged=$(git diff --cached --name-only)
+if echo "$staged" | grep -q 'package.json' && ! echo "$staged" | grep -q 'bun.lock'; then
+  echo 'error: package.json changed without bun.lock — run bun install and stage bun.lock'
+  exit 1
+fi
