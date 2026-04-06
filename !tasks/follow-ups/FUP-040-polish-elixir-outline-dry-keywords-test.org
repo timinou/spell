@@ -1,0 +1,119 @@
+#+TITLE: Polish Elixir outline DRY keywords test assertions catch-all regression
+#+STATE: DONE
+#+SESSION_ID: 14b0246ee1487422
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-06T15-14-54-469Z_14b0246ee1487422.jsonl]]
+#+CUSTOM_ID: FUP-040-polish-elixir-outline-dry-keywords-test
+#+EFFORT: 15m
+#+PRIORITY: C
+#+LAYER: emacs
+
+NOTE [2026-04-06]: All 3 findings addressed: defconst extracted (4 refs across 2 files), type/column assertions added, catch-all regression test added. 13/13 ERT tests pass.
+
+* Initial Message
+
+continue
+
+* Problem
+
+Three audit findings from the Elixir outline implementation ([[id:PLAN-160-fix-elixir-outline-crash-and-empty-resul]]):
+
+1. The Elixir keyword list ~("def" "defp" "defmodule" ...)~ is duplicated identically in 3 places. Adding a keyword requires updating all three.
+2. ~test-outline-elixir-entries~ doesn't assert ~type~ or ~column~ fields, so the ~pi-outline--declaration-name-node~ Elixir branch (which exists specifically for column info) has no regression coverage.
+3. No test covers the ~declaration-kind~ catch-all ~(t type)~ for non-Elixir ~call~ nodes — the exact code path the original paren bug affected.
+
+* Design Decisions
+
+1. Extract ~defconst pi-treesit--elixir-def-keywords~ in ~pi-treesit.el~ near the top of the file (after the existing ~defvar~ declarations, around line 12-13). Reference it from ~declaration-name~ (line 304) and ~declaration-kind~ (line 365). In ~pi-outline.el~, ~(require 'pi-treesit)~ is already present on line 5, so reference the same defconst in the ~declaration-name-node~ Elixir branch (line 82).
+2. In ~test-outline-elixir-entries~ (test-outline.el line 124), add after the existing ~(should (member "MyApp.Greeter" names))~:
+   #+begin_src elisp
+   (should (string= (alist-get 'type (car entries)) "defmodule"))
+   (should (numberp (alist-get 'column (car entries))))
+   #+end_src
+3. In ~test-treesit.el~, add a new test ~test-treesit-elixir-non-def-call-kind~ that creates a buffer with a bare non-keyword Elixir call at top level and asserts its kind is ~"call"~ (the catch-all):
+   #+begin_src elisp
+   (ert-deftest test-treesit-elixir-non-def-call-kind ()
+     "Non-def call nodes in Elixir return raw type as kind."
+     (skip-unless (treesit-language-available-p 'elixir))
+     (let ((buf (test-treesit--make-elixir-buffer "IO.puts(\"hello\")
+")))
+       (unwind-protect
+           (with-current-buffer buf
+             (let* ((nodes (pi-treesit-top-level-nodes))
+                    (kinds (mapcar #'pi-treesit-declaration-kind nodes)))
+               (should (member "call" kinds))))
+         (kill-buffer buf))))
+   #+end_src
+
+* Implementation
+
+** Sub-outline
+
+1. Extract ~pi-treesit--elixir-def-keywords~ defconst in ~pi-treesit.el~
+2. Replace 3 inline keyword lists with the defconst reference
+3. Add type/column assertions to ~test-outline-elixir-entries~
+4. Add ~test-treesit-elixir-non-def-call-kind~ test
+
+** Files to modify
+
+- ~packages/emacs/elisp/pi-treesit.el~: Add defconst near line 12. Replace the ~'("def" "defp" ...)~ list on line 304 with ~pi-treesit--elixir-def-keywords~. Replace the individual ~string=~ / ~member~ checks in ~declaration-kind~ (lines 365-373) with a ~(member target-text pi-treesit--elixir-def-keywords)~ guard, keeping the inner cond for mapping to kind strings.
+- ~packages/emacs/elisp/pi-outline.el~: Replace the ~'("def" "defp" ...)~ list on line 83 with ~pi-treesit--elixir-def-keywords~.
+- ~packages/emacs/test/elisp/test-outline.el~: Add 2 assertions in ~test-outline-elixir-entries~ (after line 133).
+- ~packages/emacs/test/elisp/test-treesit.el~: Add ~test-treesit-elixir-non-def-call-kind~ test (before the ~(provide ...)~ form).
+
+** Important: declaration-kind keyword guard
+
+In ~pi-treesit-declaration-kind~, the inner cond maps each keyword to a kind string. The defconst replaces the guard check (is this an Elixir def keyword?), NOT the individual kind mappings. Structure after the change:
+
+#+begin_src elisp
+((string= type "call")
+ (let* ((target (treesit-node-child node 0))
+        (target-text (when target (treesit-node-text target t))))
+   (if (member target-text pi-treesit--elixir-def-keywords)
+       (cond
+        ((member target-text '("def" "defp")) "def")
+        ((string= target-text "defmodule") "defmodule")
+        ;; ... rest of kind mappings ...
+        (t target-text))  ;; fallback within known keywords
+     type)))  ;; non-keyword call node → raw type
+#+end_src
+
+Note the restructure: the catch-all ~(t type)~ that was previously inside the inner cond now becomes the else branch of the ~if~, making the control flow explicit: known keyword → map to kind, unknown call → return raw type string.
+
+* Acceptance Criteria
+
+Run ERT tests via emacsclient against the spell Emacs daemon. All 13 tests must pass (12 existing + 1 new ~test-treesit-elixir-non-def-call-kind~):
+
+#+begin_src sh
+emacsclient --socket-name=spell-emacs-XXXX --eval '
+(progn
+  (load ".../pi-treesit.el" nil t)
+  (load ".../pi-outline.el" nil t)
+  (add-to-list (quote load-path) ".../packages/emacs/test/elisp")
+  (load "test-treesit" nil t)
+  (load "test-outline" nil t)
+  (let ((pass 0) (fail 0))
+    (dolist (name (quote (test-treesit-elixir-declaration-kind
+                          test-treesit-elixir-declaration-name
+                          test-treesit-elixir-non-def-call-kind
+                          test-outline-elixir-entries
+                          test-outline-yaml-entries
+                          test-outline-toml-entries
+                          test-outline-json-entries
+                          test-treesit-top-level-nodes
+                          test-treesit-declaration-name
+                          test-treesit-find-body
+                          test-outline-top-level-entries
+                          test-outline-class-members
+                          test-outline-line-numbers)))
+      (let ((result (ert-run-test (ert-get-test name))))
+        (if (ert-test-passed-p result) (setq pass (1+ pass)) (setq fail (1+ fail)))))
+    (format "pass=%d fail=%d" pass fail)))'
+#+end_src
+
+Expected: ~pass=13 fail=0~
+
+Verify ~pi-treesit--elixir-def-keywords~ is used in all 3 call sites via grep:
+#+begin_src sh
+grep -n "pi-treesit--elixir-def-keywords" packages/emacs/elisp/pi-treesit.el packages/emacs/elisp/pi-outline.el
+#+end_src
+Expected: 4 matches (1 defconst + 2 in pi-treesit.el + 1 in pi-outline.el).
