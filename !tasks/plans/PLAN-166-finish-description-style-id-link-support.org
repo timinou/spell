@@ -1,0 +1,169 @@
+#+TITLE: Finish description-style id link support in plan tools
+#+STATE: DONE
+#+SESSION_ID: 14b2a36f727c9802
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-08T13-46-45-065Z_14b2a36f727c9802.jsonl]]
+#+CUSTOM_ID: PLAN-166-finish-description-style-id-link-support
+
+
+* Initial Message
+
+Audit AUD-048-audit-implementation reviewed the PLAN-164 implementation
+(description-style org id link support) and flagged five findings:
+
+1. =extractPlanWaves= regex hard-codes the double close bracket — same
+   root-cause bug as PLAN-164 but in a third location that was missed.
+   Wave entries using description-form links are silently discarded,
+   producing empty wave phases in todo auto-init.
+2. No description-form test coverage in =exit-plan-mode-waves.test.ts=
+   (regression gap).
+3. Missing blank line before new test in =id-links.test.ts=.
+4. Missing blank line before new test in =spec-ingestion.test.ts=.
+5. =String.fromCharCode(10)= in spec-ingestion test is needlessly
+   opaque.
+
+Implement all five.
+
+* Context
+
+PLAN-164 fixed two =[[id:...]]= regex extractors (strict in
+=packages/org/src/id-links.ts=, loose in
+=packages/coding-agent/src/loop/ingestion/parser.ts=) to accept the org
+description form =[[id:TARGET][DESCRIPTION]]=. The post-implementation
+audit (AUD-048) discovered a third regex with the same bug in
+=extractPlanWaves= and several cosmetic nits in the test files touched
+by PLAN-164.
+
+** Root cause (finding #1)
+
+=packages/coding-agent/src/tools/exit-plan-mode.ts= line 65 contains a
+wave-entry parser regex that also hard-codes the double close bracket
+after the target:
+
+#+begin_src typescript
+const entryRe = /^\s*-\s+\[\[id:([^\]]+)\]\]\s+(.+)$/;
+#+end_src
+
+This regex is used by =extractPlanWaves= to parse Execution Manifest
+wave entries into structured =PlanWave[]= data consumed by todo
+auto-init. Description-form entries never match, so all wave entries
+are silently dropped when the plan author uses description links. The
+=extractIdLinks= path still recognises the child references (that was
+PLAN-164's fix), so plan validation passes — but the waves structure
+ends up with zero entries per wave, producing hollow todo phases at
+execution time.
+
+** Scope
+
+- Correctness fix for =extractPlanWaves= with TDD-first tests
+  (addresses findings #1 and #2) — tracked in the child BUG item.
+- Cosmetic cleanup in two test files from PLAN-164 (addresses findings
+  #3, #4, #5) — tracked in the child FUP item.
+
+** Approach
+
+Same pattern as PLAN-164:
+- Regex EXTENSION (not rewrite) with an optional non-capturing
+  description segment: the pattern =(?:\[[^\]]*\])?= inserted between
+  the target's closing bracket and the link's final bracket.
+- Capture group shape preserved exactly: group 1 = orgItemId, group 2
+  = step text after the link.
+- TDD: failing tests first, then regex edit, then verify.
+- Writer (=formatWaveManifest=) stays plain-form only. Reader
+  (=extractPlanWaves=) becomes lenient. Postel's law.
+
+** Key decisions
+
+1. Split into two child items by concern:
+   - BUG (=#A=, 30m) for correctness + TDD tests (findings #1, #2)
+   - FUP (=#C=, 10m) for cosmetic cleanup (findings #3, #4, #5)
+   No DEPENDS — the two children touch disjoint files and can run in
+   any order or in parallel.
+
+2. Regex EXTENSION (not rewrite) preserves the capture shape and keeps
+   all 7 pre-existing =extractPlanWaves= tests green unchanged.
+
+3. Do NOT unify the three id-link extractors (=extractIdLinks=,
+   loop-ingestion =parser.ts= regex, =extractPlanWaves= =entryRe=).
+   They have different target grammars and different tail requirements
+   (global flag vs anchored line parse with step capture).
+
+4. Do NOT touch =formatWaveManifest= or
+   =packages/org/test/wave-manifest.test.ts=. The writer still emits
+   plain-form only; that test documents the WRITER contract. Only the
+   READER gets lenient.
+
+5. TDD order: 3 new failing tests in =exit-plan-mode-waves.test.ts= →
+   verify failures → single-line regex edit in =exit-plan-mode.ts=
+   line 65 → verify all 10 tests pass → =bun check:ts= clean (no new
+   type errors; pre-existing errors in unrelated files documented in
+   PLAN-164 stay unchanged).
+
+6. Cosmetic FUP: three targeted edits. Two blank-line insertions and
+   one string-literal simplification. No semantic changes. File bytes
+   written to disk in the spec-ingestion test MUST stay byte-identical
+   across the Finding #5 edit.
+
+Note: this PLAN body intentionally uses plain-form =[[id:...]]= links
+only (no description form) in its Execution Manifest. Rationale: the
+=extractPlanWaves= bug this plan fixes is currently present in =main=,
+so if this plan itself used description-form wave entries, its wave
+extraction at =exit_plan_mode= time would fail. Since this plan uses a
+flat manifest (no =:wave:= headings), =extractPlanWaves= returns
+=undefined= anyway and =extractIdLinks= handles child reference
+extraction (PLAN-164 already made that path description-form-aware).
+Using plain form in the manifest is robust regardless.
+
+* Verification
+
+- =bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts=
+  — 10 tests pass (7 pre-existing + 3 new description-form cases).
+- =bun test packages/org/test/id-links.test.ts= — 9 tests pass
+  (unchanged from PLAN-164 end state; blank-line edit is
+  whitespace-only).
+- =bun test packages/coding-agent/test/loop/spec-ingestion.test.ts= — 3
+  tests pass (unchanged from PLAN-164 end state; blank-line and
+  string-literal edits produce byte-identical file content on disk).
+- =bun check:ts= — no new type errors vs current =main=. Pre-existing
+  errors in =sql-store.ts=, =approvals.ts=, =tool-progress.ts=,
+  =logger.ts= remain unchanged (documented in PLAN-164 completion
+  report).
+- Manual sanity check: blank-line spacing between sibling test blocks
+  in the two modified test files matches the rest-of-file convention.
+- No other test file should be touched. No regression run of unrelated
+  suites required.
+
+* Execution Manifest
+
+- [[id:BUG-192-fix-extractplanwaves-regex-rejecting-des]] Fix
+  extractPlanWaves regex rejecting description-style id links (TDD,
+  30m)
+- [[id:FUP-042-polish-test-files-from-plan-164-descript]] Polish test
+  files from PLAN-164 description-link fix (10m)
+
+"** Completion [2026-04-08]
+
+*** Verification
+
+All required checks passed:
+
+- =bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts= — 10 tests pass (7 pre-existing + 3 new description-form cases). Before regex fix: 3 fail, 7 pass. After: 10 pass.
+- =bun test packages/org/test/id-links.test.ts= — 9 tests pass (blank-line edit only; semantics unchanged).
+- =bun test packages/coding-agent/test/loop/spec-ingestion.test.ts= — 3 tests pass (blank-line + string-literal edit; semantics unchanged).
+- Combined run: =bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts packages/org/test/id-links.test.ts packages/coding-agent/test/loop/spec-ingestion.test.ts= — 22 tests pass, 0 fail.
+- =bun check:ts= — no new type errors. Pre-existing errors in =sql-store.ts=, =approvals.ts=, =tool-progress.ts=, =logger.ts= remain unchanged (documented in PLAN-164).
+- Manual inspection: blank-line spacing between sibling test blocks in both modified test files matches rest-of-file convention.
+
+*** Artifacts
+
+Commit: =335be0e8d= — fix(coding-agent): extend extractPlanWaves to accept description-style id links
+
+Files modified:
+- =packages/coding-agent/src/tools/exit-plan-mode.ts= — line 65 regex extended with =(?:\[[^\]]*\])?= optional description segment
+- =packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts= — 3 new description-form test cases (TDD-first)
+- =packages/org/test/id-links.test.ts= — blank line added before description-style test (finding #3)
+- =packages/coding-agent/test/loop/spec-ingestion.test.ts= — blank line added + =String.fromCharCode(10)= replaced with =
+= literal (findings #4, #5)
+
+*** Deviations
+
+None."
