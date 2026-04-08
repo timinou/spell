@@ -1,0 +1,278 @@
+#+TITLE: Fix extractPlanWaves regex rejecting description-style id links
+#+STATE: DONE
+#+SESSION_ID: 14b2a36f727c9802
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-08T13-46-45-065Z_14b2a36f727c9802.jsonl]]
+#+CUSTOM_ID: BUG-192-fix-extractplanwaves-regex-rejecting-des
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: packages/coding-agent
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-048-audit-implementation:
+
+Now I have a complete picture. Here are my findings:
+
+---
+
+## Findings
+
+### 1. `extractPlanWaves` has the same bug — it was not fixed
+
+**What:** `exit-plan-mode.ts` line 65 has a third `[[id:...]]` regex with the same root cause: `\]\]` immediately after the target with no allowance for description form.
+
+```typescript
+const entryRe = /^\s*-\s+\[\[id:([^\]]+)\]\]\s+(.+)$/;
+```
+
+**Where:** `packages/coding-agent/src/tools/exit-plan-mode.ts`, line 65, inside `extractPlanWaves()`
+
+**Why:** A PLAN whose wave entries use description-form links (the exact form this fix was supposed to make work) would pass the child-reference validation (`extractIdLinks` was fixed), but `extractPlanWaves` would silently discard every wave entry. The resulting `waves` array would be populated but all entries empty — todo auto-init would produce hollow phases. The user symptom: plan is accepted, execution starts, but no wave tasks are materialized.
+
+The required fix is the same pattern already applied to the other two: `\[\[id:([^\]]+)\](?:\[[^\]]*\])?\]\s+(.+)$`.
+
+**Effort:** trivial
+
+---
+
+### 2. `exit-plan-mode-waves.test.ts` has no description-form coverage
+
+**What:** The wave-extraction test suite exercises six scenarios, all using plain-form links. No test covers `- [[id:X][DESC]] step`.
+
+**Where:** `packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts` — missing test case
+
+**Why:** Without a test, the `extractPlanWaves` regex fix (once applied) has no guard against future regression. Given that the same pattern was missed in the current fix, this gap is high-risk.
+
+**Effort:** trivial
+
+---
+
+### 3. Missing blank line before first new test in `id-links.test.ts`
+
+**What:** The new `test("extracts id from description-style link ...")` block at line 34 immediately follows the closing `});` of the previous test at line 33, with no blank line separator. Every other test pair in the file is separated by a blank line.
+
+**Where:** `packages/org/test/id-links.test.ts`, between lines 33 and 34
+
+**Why:** Cosmetic inconsistency; no bug risk.
+
+**Effort:** trivial
+
+---
+
+### 4. Missing blank line before new test in `spec-ingestion.test.ts`
+
+**What:** Same formatting issue — the new `it("recognises description-style id links...")` at line 47 starts immediately after `});` at line 46, while existing test pairs are separated by blank lines.
+
+**Where:** `packages/coding-agent/test/loop/spec-ingestion.test.ts`, between lines 46 and 47
+
+**Why:** Cosmetic inconsistency; no bug risk.
+
+**Effort:** trivial
+
+---
+
+### 5. `String.fromCharCode(10)` in spec-ingestion test is needlessly opaque
+
+**What:** The new test constructs the newline constant as `String.fromCharCode(10)` instead of `"\n"`. The BUG item's spec suggested this to avoid "fragile multi-line string literals", but the existing test in the same file (line 28) already uses `"\n"` inline without issue.
+
+**Where:** `packages/coding-agent/test/loop/spec-ingestion.test.ts`, line 49
+
+**Why:** Slightly harder to read than `"\n"`, inconsistent with the file's established style. Not a correctness issue.
+
+**Effort:** trivial
+
+* Problem
+
+=extractPlanWaves= in =exit-plan-mode.ts= silently drops wave entries whose
+links use the org description form =[[id:TARGET][DESCRIPTION]]=. A PLAN
+that uses description-style links in its =* Execution Manifest= passes the
+child-reference validation gate (PLAN-164 fixed =extractIdLinks= to accept
+description links), but the wave-based todo auto-init then produces phases
+with zero entries. User symptom: plan is accepted, execution starts, but
+the todo roster has hollow wave phases.
+
+Flagged by audit AUD-048-audit-implementation as findings #1 and #2:
+- #1: =extractPlanWaves= has the same root-cause bug PLAN-164 fixed in two
+  other extractors; it was missed.
+- #2: =exit-plan-mode-waves.test.ts= has no description-form coverage, so
+  the bug went undetected and has no regression guard.
+
+* Root cause
+
+=packages/coding-agent/src/tools/exit-plan-mode.ts= line 65 currently reads:
+
+#+begin_src typescript
+const entryRe = /^\s*-\s+\[\[id:([^\]]+)\]\]\s+(.+)$/;
+#+end_src
+
+This regex requires =\]\]= (two close brackets) immediately after the
+captured target, so an entry like
+=- [[id:FEAT-072-webhook][FEAT-072]] Webhook health= never matches. The
+capture shape (group 1 = orgItemId, group 2 = step text AFTER the link)
+is correct and MUST be preserved.
+
+This is the same class of bug PLAN-164 fixed in
+=packages/org/src/id-links.ts= (line 7) and
+=packages/coding-agent/src/loop/ingestion/parser.ts= (line 35).
+
+* Fix
+
+Extend the regex with an optional non-capturing description segment
+between the target's closing bracket and the link's final bracket. The
+capture groups stay identical in shape:
+
+#+begin_src typescript
+const entryRe = /^\s*-\s+\[\[id:([^\]]+)\](?:\[[^\]]*\])?\]\s+(.+)$/;
+#+end_src
+
+Trace against =- [[id:FEAT-072-webhook][FEAT-072]] Webhook health=:
+- =^\s*-\s+= matches =- =
+- =\[\[id:= matches =[[id:=
+- =([^\]]+)= captures =FEAT-072-webhook=
+- =\]= matches the first =]= after the target
+- =(?:\[[^\]]*\])?= matches =[FEAT-072]=
+- =\]= matches the link's final =]=
+- =\s+= matches = =
+- =(.+)$= captures =Webhook health=
+
+Description text is intentionally NOT captured. Only =orgItemId= and
+=step= (text after the full link) matter for wave materialization.
+
+* Files to modify
+
+- =packages/coding-agent/src/tools/exit-plan-mode.ts= — line 65 regex only;
+  no other changes in the file.
+- =packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts= — append
+  3 failing tests first (TDD) inside the existing =describe("extractPlanWaves", ...)=
+  block, before its closing =});= on line 142.
+
+* TDD ordering (strict — follow in this order)
+
+** Phase 1: Add failing tests
+
+Inside =describe("extractPlanWaves", ...)= in
+=packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts=, append
+these three tests immediately before the closing =});= of the describe
+block. All three MUST fail before any implementation edit.
+
+#+begin_src typescript
+test("extracts wave entries written in description-style link form", () => {
+    const body = `* Execution Manifest
+** foundation                                      :wave:
+- [[id:FEAT-072-webhook-health-pill-and-status-poller-vi][FEAT-072]] Webhook health visibility`;
+
+    const waves = extractPlanWaves(body);
+    expect(waves).toBeDefined();
+    expect(waves).toHaveLength(1);
+    expect(waves![0].name).toBe("foundation");
+    expect(waves![0].entries).toHaveLength(1);
+    expect(waves![0].entries[0]).toEqual({
+        id: "FEAT-072-webhook-health-pill-and-status-poller-vi",
+        orgItemId: "FEAT-072-webhook-health-pill-and-status-poller-vi",
+        step: "Webhook health visibility",
+    });
+});
+
+test("extracts mixed plain and description-style entries in same wave", () => {
+    const body = `* Execution Manifest
+** foundation                                      :wave:
+- [[id:FEAT-001::define-types]] Define TypeScript interfaces
+- [[id:FEAT-002-add-parser][FEAT-002]] Parser implementation`;
+
+    const waves = extractPlanWaves(body);
+    expect(waves).toBeDefined();
+    expect(waves).toHaveLength(1);
+    expect(waves![0].entries).toHaveLength(2);
+    expect(waves![0].entries[0].orgItemId).toBe("FEAT-001::define-types");
+    expect(waves![0].entries[0].step).toBe("Define TypeScript interfaces");
+    expect(waves![0].entries[1].orgItemId).toBe("FEAT-002-add-parser");
+    expect(waves![0].entries[1].step).toBe("Parser implementation");
+});
+
+test("extracts sub-outline id from description-style wave entry", () => {
+    const body = `* Execution Manifest
+** verify                                          :wave:
+- [[id:FEAT-001::write-tests][tests]] Write parser tests`;
+
+    const waves = extractPlanWaves(body);
+    expect(waves).toBeDefined();
+    expect(waves).toHaveLength(1);
+    expect(waves![0].entries).toHaveLength(1);
+    expect(waves![0].entries[0].orgItemId).toBe("FEAT-001::write-tests");
+    expect(waves![0].entries[0].step).toBe("Write parser tests");
+});
+#+end_src
+
+Run: =bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts=.
+Confirm all three new tests fail. The 7 pre-existing tests in the file
+MUST stay green.
+
+** Phase 2: Apply the regex fix
+
+Edit =packages/coding-agent/src/tools/exit-plan-mode.ts= line 65 exactly:
+
+- From: =const entryRe = /^\s*-\s+\[\[id:([^\]]+)\]\]\s+(.+)$/;=
+- To:   =const entryRe = /^\s*-\s+\[\[id:([^\]]+)\](?:\[[^\]]*\])?\]\s+(.+)$/;=
+
+Do not touch anything else in the file.
+
+Re-run the wave test file. All 10 tests (7 pre-existing + 3 new) MUST pass.
+
+** Phase 3: Full type check
+
+Run =bun check:ts=. The regex edit is TS-only and introduces no new type
+errors. Note: the repository has pre-existing type errors in unrelated
+files (=sql-store.ts=, =approvals.ts=, =tool-progress.ts=, =logger.ts=)
+documented in PLAN-164's completion report. Those errors MUST NOT change
+— do not fix them in this scope. The success criterion is "no NEW errors
+appear that were not present on =main= before this change".
+
+* Edge cases to preserve
+
+- Plain-form wave entries (=- [[id:X]] step=) MUST continue to work. The 7
+  pre-existing wave tests cover this.
+- Sub-outline ids in both plain and description form MUST work. Existing
+  plain top-level test covers plain top-level; the new mixed test covers
+  plain sub-outline + description top-level; the new sub-outline-description
+  test covers description sub-outline.
+- Entries before a wave heading MUST still be discarded (existing test
+  =entries before any wave heading are ignored= covers this).
+- Non-wave headings MUST still reset the active wave section (existing
+  test covers this).
+- Empty wave headings MUST still produce empty waves (existing test
+  covers this).
+- Wave entries with step text containing parentheses, brackets, or other
+  punctuation MUST still work — the =(.+)$= tail is greedy and captures
+  everything to end of line.
+- Description text inside the optional group is intentionally NOT
+  captured or validated. Only orgItemId and step are exposed to callers.
+
+* Verification
+
+- =bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts=
+  — 10 tests pass (7 pre-existing + 3 new). Before regex fix: 3 new fail,
+  7 existing pass. After regex fix: all 10 pass.
+- =bun check:ts= — no new type errors introduced. Pre-existing errors in
+  =sql-store.ts=, =approvals.ts=, =tool-progress.ts=, =logger.ts= remain
+  unchanged.
+- No other test file should be touched. Running the full loop-ingestion
+  and id-links suites is optional; nothing in this change path affects
+  them.
+
+* Out of scope
+
+- Do NOT touch =packages/org/test/wave-manifest.test.ts=. That file
+  documents the WRITER contract for =formatWaveManifest=, which still
+  emits plain form only; it does not need to accept description form.
+  Per Postel's law: writer stays strict, reader becomes lenient.
+- Do NOT unify =extractPlanWaves='s =entryRe= with =extractIdLinks= (strict)
+  or the loop-ingestion =parser.ts= regex (loose). They have different
+  jobs (wave line parsing vs free-form id extraction) and different tail
+  requirements (=\s+(.+)$= vs bare =/g= global match).
+- Do NOT refactor =extractPlanWaves= beyond the single-line regex change.
+  Do NOT extract a shared helper. Do NOT change capture group structure.
+- Do NOT change =formatWaveManifest= to emit description-form entries.
+  Writer stays plain.
+- Do NOT fix the pre-existing type errors in unrelated files. Those are
+  out of scope and were explicitly documented in PLAN-164 completion.
+- Do NOT touch any other regex or parser in =exit-plan-mode.ts=.

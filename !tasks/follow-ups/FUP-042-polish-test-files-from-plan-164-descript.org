@@ -1,0 +1,258 @@
+#+TITLE: Polish test files from PLAN-164 description-link fix
+#+STATE: DONE
+#+SESSION_ID: 14b2a36f727c9802
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-08T13-46-45-065Z_14b2a36f727c9802.jsonl]]
+#+CUSTOM_ID: FUP-042-polish-test-files-from-plan-164-descript
+#+EFFORT: 10m
+#+PRIORITY: #C
+#+LAYER: packages/coding-agent
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-048-audit-implementation:
+
+Now I have a complete picture. Here are my findings:
+
+---
+
+## Findings
+
+### 1. `extractPlanWaves` has the same bug — it was not fixed
+
+**What:** `exit-plan-mode.ts` line 65 has a third `[[id:...]]` regex with the same root cause: `\]\]` immediately after the target with no allowance for description form.
+
+```typescript
+const entryRe = /^\s*-\s+\[\[id:([^\]]+)\]\]\s+(.+)$/;
+```
+
+**Where:** `packages/coding-agent/src/tools/exit-plan-mode.ts`, line 65, inside `extractPlanWaves()`
+
+**Why:** A PLAN whose wave entries use description-form links (the exact form this fix was supposed to make work) would pass the child-reference validation (`extractIdLinks` was fixed), but `extractPlanWaves` would silently discard every wave entry. The resulting `waves` array would be populated but all entries empty — todo auto-init would produce hollow phases. The user symptom: plan is accepted, execution starts, but no wave tasks are materialized.
+
+The required fix is the same pattern already applied to the other two: `\[\[id:([^\]]+)\](?:\[[^\]]*\])?\]\s+(.+)$`.
+
+**Effort:** trivial
+
+---
+
+### 2. `exit-plan-mode-waves.test.ts` has no description-form coverage
+
+**What:** The wave-extraction test suite exercises six scenarios, all using plain-form links. No test covers `- [[id:X][DESC]] step`.
+
+**Where:** `packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts` — missing test case
+
+**Why:** Without a test, the `extractPlanWaves` regex fix (once applied) has no guard against future regression. Given that the same pattern was missed in the current fix, this gap is high-risk.
+
+**Effort:** trivial
+
+---
+
+### 3. Missing blank line before first new test in `id-links.test.ts`
+
+**What:** The new `test("extracts id from description-style link ...")` block at line 34 immediately follows the closing `});` of the previous test at line 33, with no blank line separator. Every other test pair in the file is separated by a blank line.
+
+**Where:** `packages/org/test/id-links.test.ts`, between lines 33 and 34
+
+**Why:** Cosmetic inconsistency; no bug risk.
+
+**Effort:** trivial
+
+---
+
+### 4. Missing blank line before new test in `spec-ingestion.test.ts`
+
+**What:** Same formatting issue — the new `it("recognises description-style id links...")` at line 47 starts immediately after `});` at line 46, while existing test pairs are separated by blank lines.
+
+**Where:** `packages/coding-agent/test/loop/spec-ingestion.test.ts`, between lines 46 and 47
+
+**Why:** Cosmetic inconsistency; no bug risk.
+
+**Effort:** trivial
+
+---
+
+### 5. `String.fromCharCode(10)` in spec-ingestion test is needlessly opaque
+
+**What:** The new test constructs the newline constant as `String.fromCharCode(10)` instead of `"\n"`. The BUG item's spec suggested this to avoid "fragile multi-line string literals", but the existing test in the same file (line 28) already uses `"\n"` inline without issue.
+
+**Where:** `packages/coding-agent/test/loop/spec-ingestion.test.ts`, line 49
+
+**Why:** Slightly harder to read than `"\n"`, inconsistent with the file's established style. Not a correctness issue.
+
+**Effort:** trivial
+
+* Context
+
+Audit AUD-048-audit-implementation flagged three cosmetic inconsistencies
+in test files touched by PLAN-164 (the description-style id link support
+change). This item addresses audit findings #3, #4, and #5.
+
+None of these are correctness issues. They are style/consistency polish
+bundled into one FUP because each is a single-line edit. The correctness
+fix for finding #1 (=extractPlanWaves= regex) is tracked separately in the
+sibling BUG item and does not depend on these edits.
+
+Independent of the sibling BUG — no file overlap:
+- This FUP touches =packages/org/test/id-links.test.ts= and
+  =packages/coding-agent/test/loop/spec-ingestion.test.ts=.
+- The sibling BUG touches =packages/coding-agent/src/tools/exit-plan-mode.ts=
+  and =packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts=.
+
+* Changes
+
+** Finding #3: Add blank line before new test in id-links.test.ts
+
+In =packages/org/test/id-links.test.ts=, insert a blank line between the
+closing =});= of =test("deduplicates duplicate links", ...)= and the
+opening of =test("extracts id from description-style link...", ...)=.
+
+Current state (lines 33-34):
+#+begin_example
+	});
+	test("extracts id from description-style link [[id:TARGET][DESCRIPTION]]", () => {
+#+end_example
+
+Desired state:
+#+begin_example
+	});
+
+	test("extracts id from description-style link [[id:TARGET][DESCRIPTION]]", () => {
+#+end_example
+
+Every other test pair in the file is separated by a blank line (lines
+7→9, 11→13, 18→20, 28→30). The new test was appended without matching
+this convention.
+
+** Finding #4: Add blank line before new test in spec-ingestion.test.ts
+
+In =packages/coding-agent/test/loop/spec-ingestion.test.ts=, insert a
+blank line between the closing =});= of =it("flags missing ids, broken
+links, ...")= and the opening of =it("recognises description-style id
+links...")=.
+
+Current state (lines 46-47):
+#+begin_example
+	});
+	it("recognises description-style id links as valid cross-references", async () => {
+#+end_example
+
+Desired state:
+#+begin_example
+	});
+
+	it("recognises description-style id links as valid cross-references", async () => {
+#+end_example
+
+Same rationale as #3 — the other test pair in the file (lines 34→36) is
+separated by a blank line.
+
+** Finding #5: Replace String.fromCharCode(10) with a single-line string literal
+
+In =packages/coding-agent/test/loop/spec-ingestion.test.ts=, the new
+test constructs its file content via =String.fromCharCode(10)= and an
+array join. This is unnecessarily indirect. The neighbour test
+=imports valid org specs and preserves id links= (at line 28 of the
+same file) already writes its content as a single-line double-quoted
+string literal using standard TypeScript backslash-n escape
+sequences. Match that neighbour's style.
+
+*** Reference template
+
+Before editing, open line 28 of the same file and read the existing
+=imports valid org specs= test. Line 28 is a single-line double-quoted
+string literal whose content is the same shape as the replacement
+required here: it starts with =#+TITLE:=, contains multiple logical
+lines separated by the standard TypeScript newline escape (the
+two-character sequence of backslash followed by lowercase n), and ends
+with a trailing newline escape. Copy that form exactly.
+
+*** Source to REMOVE (lines 49-56 before this edit, numbered relative to the file AFTER Finding #4 inserts a blank line above)
+
+#+begin_src typescript
+const NL = String.fromCharCode(10);
+const content = [
+    "#+TITLE: Spec",
+    "#+CUSTOM_ID: SPEC-001-demo",
+    "",
+    "See [[id:SPEC-001-demo][the demo]]",
+    "",
+].join(NL);
+#+end_src
+
+*** Replacement to INSERT
+
+A single statement that assigns to =const content= a double-quoted
+string literal containing these four logical lines of content in this
+order, each separated by one TypeScript newline escape (backslash + n),
+and with a trailing newline escape after the fourth line:
+
+1. =#+TITLE: Spec=
+2. =#+CUSTOM_ID: SPEC-001-demo=
+3. (empty line — produced by TWO consecutive newline escapes between
+    the =SPEC-001-demo= line and the =See= line)
+4. =See [[id:SPEC-001-demo][the demo]]=
+5. (trailing newline escape after the fourth line)
+
+The structural shape is identical to the string on line 28 of the
+same file — copy that line's form, changing only the content bytes
+between the quotes.
+
+Delete the =NL= local const — after the replacement it is no longer
+referenced.
+
+*** Byte-equivalence proof
+
+The array form joined on =String.fromCharCode(10)= produces the byte
+sequence =#+TITLE: Spec<LF>#+CUSTOM_ID: SPEC-001-demo<LF><LF>See [[id:SPEC-001-demo][the demo]]<LF>=,
+where =<LF>= denotes one LINE FEED character (U+000A). The replacement
+double-quoted literal, when the TypeScript compiler resolves each
+backslash-n escape sequence into a LINE FEED character, produces the
+identical byte sequence. Bytes written to disk by the
+=Bun.write(file, content)= call are byte-identical — only the source
+form of how the =content= value is constructed changes.
+
+*** Note on PLAN-164's prior justification
+
+BUG-189 chose the array-join approach "to avoid fragile multi-line
+string literals". A single-line double-quoted string that uses
+backslash-n escape sequences is NOT a multi-line string literal —
+that term refers to backtick template literals that span multiple
+source lines. The original concern is satisfied equally by either
+form; the =String.fromCharCode(10)= was unnecessary obfuscation.
+* Verification
+
+- =bun test packages/org/test/id-links.test.ts= — 9 tests pass (unchanged
+  from PLAN-164 end state). Blank-line edit is whitespace-only and has no
+  semantic effect.
+- =bun test packages/coding-agent/test/loop/spec-ingestion.test.ts= — 3
+  tests pass (unchanged from PLAN-164 end state). The new
+  description-style test MUST still capture =SPEC-001-demo= and report
+  zero validation issues after the string-literal rewrite.
+- Visual: after edits, spacing between test blocks in both files matches
+  the rest-of-file convention (blank line between sibling =test(...)= or
+  =it(...)= blocks).
+- =bun check:ts= run is optional — whitespace and string-literal edits
+  cannot introduce type errors, and running it would only observe the
+  same pre-existing unrelated errors documented in PLAN-164.
+
+* Out of scope
+
+- Do NOT modify any source file (=id-links.ts=, =parser.ts=,
+  =exit-plan-mode.ts=). This FUP is test-files-only.
+- Do NOT add, rename, reorder, or remove any test. Only formatting/style
+  edits to the specific lines listed above.
+- Do NOT run the biome formatter across the repo. These are targeted
+  manual edits on specific lines.
+- Do NOT touch the sibling BUG's files (=exit-plan-mode.ts=,
+  =exit-plan-mode-waves.test.ts=).
+- Do NOT alter test semantics, assertions, setup, or teardown. The byte
+  sequence that the description-style test writes to =spec.org= MUST be
+  identical before and after the Finding #5 edit. The exact expected
+  byte sequence is specified in the Finding #5 "Byte-equivalence proof"
+  subsection above, using the =<LF>= prose marker. Verify byte equality
+  by observation: if the =parseSpecDirectory= + =validateParsedSpecs=
+  assertions in the test still pass, the test's link-extraction contract
+  is intact, but this alone does NOT prove the disk bytes are identical.
+  For byte-level certainty, inspect the temporary file during a test run
+  or add a debug =Bun.file(file).text()= inspection before the cleanup.
