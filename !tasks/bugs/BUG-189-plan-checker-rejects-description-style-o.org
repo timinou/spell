@@ -1,0 +1,224 @@
+#+TITLE: Plan checker rejects description-style org id links
+#+STATE: DONE
+#+SESSION_ID: 14b29fdb2afc9801
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-08T13-31-06-795Z_14b29fdb2afc9801.jsonl]]
+#+CUSTOM_ID: BUG-189-plan-checker-rejects-description-style-o
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: packages/org
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Problem
+
+=exit_plan_mode= rejects valid org description-style id links. A PLAN body that
+contains only links like:
+
+#+begin_example
+- [[id:FEAT-072-webhook-health-pill-and-status-poller-vi][FEAT-072]] — Webhook health + poller visibility (2h)
+#+end_example
+
+fails with:
+
+#+begin_example
+PLAN item "PLAN-018-ubikom-survey-ops-excellence" must include at least one child reference using [[id:...]] links in its body.
+#+end_example
+
+even though description-form links are valid org syntax and render correctly in
+Emacs, the elisp =org-fluid-plan--extract-plan-child-ids= extractor, and
+anywhere else the user writes them.
+
+* Root cause
+
+Two independent TypeScript extractors both hard-code the trailing double-close-bracket
+with no allowance for the org description form =[[target][description]]=:
+
+1. =packages/org/src/id-links.ts= — canonical strict extractor used by
+   =exit_plan_mode= via =extractIdLinks=. Current regex (see file, line 7):
+
+   - literal =[[id:=
+   - capture: =[A-Z]+-\d+(?:-[a-z0-9-]+)?(?:::[a-z0-9-]+)?=
+   - literal =]]=
+   - flag =g=
+
+2. =packages/coding-agent/src/loop/ingestion/parser.ts= — loose extractor
+   used by loop-ingestion validator to cross-reference =[[id:...]]=
+   references against discovered CUSTOM_IDs. Current regex (see file, line
+   35):
+
+   - literal =[[id:=
+   - capture: one-or-more non-close-bracket characters
+   - literal =]]=
+   - flag =g=
+
+Both regexes require the captured target to be followed immediately by two
+close brackets, so =[[id:X][desc]]= never matches. The elisp side
+(=packages/org/elisp/tools/org-fluid-plan.el=,
+=org-fluid-plan--extract-plan-child-ids=) already uses a single trailing
+close bracket and handles both forms correctly — no elisp change needed.
+
+Symptoms today:
+- =exit_plan_mode= rejects PLANs whose manifest uses description links (user
+  reproduction).
+- =spec-ingestion= =validateParsedSpecs= silently flags description-form
+  references as broken =[[id:]]= links because they are never extracted into
+  =file.links=.
+
+* Fix
+
+Extend each regex to accept an optional non-capturing description segment
+between the target's closing bracket and the link's final bracket:
+
+- after the captured target, match one close bracket
+- optionally match =[=, zero-or-more non-close-bracket characters, =]=
+- then match the final close bracket
+
+This preserves each extractor's capture group exactly — the strict extractor
+keeps its strict CUSTOM_ID grammar, the loose extractor keeps its loose
+any-non-close-bracket grammar. Neither is loosened; only the terminator is
+extended to tolerate a description segment.
+
+1. =packages/org/src/id-links.ts= line 7 — new regex (ASCII-only
+   description to avoid any tooling escape issues; in the source file it is a
+   single JavaScript regex literal):
+
+   - literal =[[id:=
+   - capture group: =[A-Z]+-\d+(?:-[a-z0-9-]+)?(?:::[a-z0-9-]+)?=
+   - literal =]=
+   - optional group: =(?:\[[^\]]*\])?=
+   - literal =]=
+   - flag =g=
+
+2. =packages/coding-agent/src/loop/ingestion/parser.ts= line 35 — new regex:
+
+   - literal =[[id:=
+   - capture group: =[^\]]+=
+   - literal =]=
+   - optional group: =(?:\[[^\]]*\])?=
+   - literal =]=
+   - flag =g=
+
+Do not introduce a new shared helper; the two callers have different
+strictness by design and should not be unified as part of this fix.
+
+* Files to modify
+- =packages/org/src/id-links.ts= — fix canonical regex (line 7).
+- =packages/org/test/id-links.test.ts= — add failing tests for
+  description-form links first (TDD).
+- =packages/coding-agent/src/loop/ingestion/parser.ts= — fix loop-ingestion
+  regex (line 35).
+- =packages/coding-agent/test/loop/spec-ingestion.test.ts= — add failing test
+  first (TDD) asserting that a description-form link is captured and not
+  reported as broken.
+
+* TDD ordering (strict — follow in this order)
+
+** Phase 1: Add failing tests in id-links.test.ts
+
+Inside the existing =describe("extractIdLinks", ...)= block in
+=packages/org/test/id-links.test.ts=, append these four tests. All four MUST
+fail before any implementation edit.
+
+#+begin_src typescript
+test("extracts id from description-style link [[id:TARGET][DESCRIPTION]]", () => {
+    expect(
+        extractIdLinks("- [[id:FEAT-072-webhook-health-pill-and-status-poller-vi][FEAT-072]] — item"),
+    ).toEqual(["FEAT-072-webhook-health-pill-and-status-poller-vi"]);
+});
+
+test("extracts ids from mixed plain and description-style links", () => {
+    const body = "[[id:PROJ-001-platform]] then [[id:BUG-003-fix-timeout][BUG-003]]";
+    expect(extractIdLinks(body)).toEqual(["PROJ-001-platform", "BUG-003-fix-timeout"]);
+});
+
+test("extracts sub-outline id from description-style link", () => {
+    expect(extractIdLinks("[[id:FEAT-001::define-types][subtask]]")).toEqual([
+        "FEAT-001::define-types",
+    ]);
+});
+
+test("deduplicates across plain and description forms of the same id", () => {
+    const body = "[[id:FEAT-001-auth]] and [[id:FEAT-001-auth][auth]]";
+    expect(extractIdLinks(body)).toEqual(["FEAT-001-auth"]);
+});
+#+end_src
+
+Run: =bun test packages/org/test/id-links.test.ts=. Confirm all four fail.
+Existing negative cases in =ignores malformed links and non-id links= MUST
+stay green — the fix must not accept =[[id:feat-001-lowercase][x]]= etc.
+
+** Phase 2: Add failing test in spec-ingestion.test.ts
+
+Append an =it= block inside the existing =describe("spec ingestion", ...)= in
+=packages/coding-agent/test/loop/spec-ingestion.test.ts=. The spec content is
+constructed with an array =.join= over a newline constant so the test file
+contains no fragile multi-line string literals:
+
+#+begin_src typescript
+it("recognises description-style id links as valid cross-references", async () => {
+    const file = path.join(specDir, "spec.org");
+    const NL = String.fromCharCode(10);
+    const content = [
+        "#+TITLE: Spec",
+        "#+CUSTOM_ID: SPEC-001-demo",
+        "",
+        "See [[id:SPEC-001-demo][the demo]]",
+        "",
+    ].join(NL);
+    await Bun.write(file, content);
+    const parsed = await parseSpecDirectory(specDir);
+    expect(parsed[0]?.links).toEqual(["SPEC-001-demo"]);
+    expect(validateParsedSpecs(parsed)).toEqual([]);
+});
+#+end_src
+
+Run: =bun test packages/coding-agent/test/loop/spec-ingestion.test.ts=.
+Confirm the new test fails (link not captured → validator reports broken link
+or empty link list).
+
+** Phase 3: Apply the regex fixes
+
+Edit =packages/org/src/id-links.ts= line 7 and
+=packages/coding-agent/src/loop/ingestion/parser.ts= line 35 as described in
+the *Fix* section above.
+
+Re-run both test files. All previously failing tests MUST pass. No pre-existing
+test in either file may regress.
+
+** Phase 4: Full type check
+
+Run =bun check:ts=. Must finish clean — regex edits are TS-only and must not
+touch any types.
+
+* Edge cases to preserve
+- Strict extractor MUST continue to reject: lowercase prefixes, missing numeric
+  segment, uppercase slug characters, =[[file:README.md]]=. Use the existing
+  =ignores malformed links and non-id links= test as the guard; it MUST stay
+  green after the fix. If the described link form accidentally loosens those,
+  the fix is wrong.
+- Both extractors MUST continue to deduplicate; the new dedup test in Phase 1
+  enforces this across plain and description forms of the same id.
+- Sub-outline ids (=FEAT-001::define-types=) MUST still work in both plain and
+  description forms; the strict test case in Phase 1 covers this.
+- Loop-ingestion =importedParsedSpecs= round-trip test
+  (=imports valid org specs and preserves id links=) MUST stay green — it
+  writes a plain-form =[[id:SPEC-001-demo]]= and asserts the written file still
+  contains it, and a loose regex change must not affect that path.
+
+* Verification
+- =bun test packages/org/test/id-links.test.ts= — all tests green, including
+  four new cases.
+- =bun test packages/coding-agent/test/loop/spec-ingestion.test.ts= — all tests
+  green, including the new description-link case.
+- =bun check:ts= — clean.
+- Manual repro: create a scratch PLAN body containing only a description-form
+  link (e.g. the =FEAT-072= example above) and run =exit_plan_mode= against it
+  in a test session; validation must pass the "at least one child reference"
+  gate. No screenshot required — this is a text-layer validator.
+
+* Out of scope
+- Do NOT touch =packages/org/elisp/tools/org-fluid-plan.el=; its regex already
+  handles description links.
+- Do NOT unify the canonical and loop-ingestion extractors into a shared
+  helper; they intentionally have different target grammars.
+- Do NOT update prompt files or plan-mode docs; current wording
+  (="[[id:…]] links"=) does not claim only the plain form is valid.

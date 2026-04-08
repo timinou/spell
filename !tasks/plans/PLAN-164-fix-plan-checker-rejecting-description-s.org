@@ -1,0 +1,108 @@
+#+TITLE: Fix plan checker rejecting description-style id links
+#+STATE: DONE
+#+SESSION_ID: 14b29fdb2afc9801
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-08T13-31-06-795Z_14b29fdb2afc9801.jsonl]]
+#+CUSTOM_ID: PLAN-164-fix-plan-checker-rejecting-description-s
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+* Initial Message
+
+Links like this aren't recognised by the plan checker in org mode:
+
+- [[id:FEAT-072-webhook-health-pill-and-status-poller-vi][FEAT-072]] — Webhook health + poller visibility (2h)
+
+
+PLAN item "PLAN-018-ubikom-survey-ops-excellence" must include at least one chi…
+
+
+Fix it (TDD)
+
+* Context
+
+=exit_plan_mode= and =spec-ingestion= both fail to recognise org's valid
+description-style id link syntax — the form with two bracket pairs where the
+second pair holds a description. A PLAN whose =* Execution Manifest= uses
+that form is rejected with "PLAN item ... must include at least one child
+reference" even though description links are valid org and render correctly
+in Emacs and elsewhere.
+
+Root cause: two TypeScript id-link extractors hard-code the trailing
+double-close-bracket with no allowance for the description form.
+
+- =packages/org/src/id-links.ts= (canonical strict, used by =exit_plan_mode=
+  via =extractIdLinks=) — requires two close brackets immediately after the
+  strict CUSTOM_ID capture group.
+- =packages/coding-agent/src/loop/ingestion/parser.ts= (loose, used by
+  loop-ingestion validator) — requires two close brackets immediately after
+  the loose target capture group.
+
+The elisp extractor =org-fluid-plan--extract-plan-child-ids= already uses a
+single trailing close bracket and correctly handles both forms, so no elisp
+change is needed.
+
+Approach: extend each regex with an optional non-capturing description
+segment between the target's closing bracket and the link's final bracket.
+The strict extractor's CUSTOM_ID grammar stays unchanged (lowercase and
+malformed ids still rejected); the loop extractor's loose grammar stays
+unchanged. TDD: add failing tests in both packages first, then apply both
+regex fixes together. Do NOT unify the two extractors — they intentionally
+have different target grammars.
+
+Key decisions:
+1. Fix both extractors in one change (same root cause, partial fix would
+   leave loop ingestion silently dropping description links).
+2. Regex extension, not rewrite — preserves existing negative test cases and
+   sub-outline-id handling.
+3. No elisp edit. No prompt or doc edit.
+4. TDD order: Phase 1 tests fail, Phase 2 test fails, Phase 3 both regexes
+   patched, Phase 4 =bun check:ts= clean.
+
+Note: this PLAN body intentionally avoids writing any literal
+description-form id link in its prose so that the (fixed) extractor cannot
+mistake illustrative text for child references. The concrete failing example
+and the expected regex shapes live in the child item
+=BUG-189-plan-checker-rejects-description-style-o=.
+* Verification
+- =bun test packages/org/test/id-links.test.ts= — all tests green, including
+  the four new description-form cases (single, mixed-with-plain, sub-outline,
+  dedup-across-forms).
+- =bun test packages/coding-agent/test/loop/spec-ingestion.test.ts= — all
+  tests green, including the new description-link ingestion case.
+- =bun check:ts= — clean.
+- Existing negative case =ignores malformed links and non-id links= in
+  =id-links.test.ts= MUST stay green: the fix must not loosen strict
+  CUSTOM_ID validation.
+- Manual repro: write a throw-away PLAN body whose only manifest entry uses
+  the description form (two bracket pairs, second pair = description), run
+  =exit_plan_mode= against it in a test session, and confirm validation
+  passes the "at least one child reference" gate. See the child item
+  =BUG-189-plan-checker-rejects-description-style-o= Problem section for a
+  concrete sample of the failing form.
+* Execution Manifest
+
+- [[id:BUG-189-plan-checker-rejects-description-style-o]] Fix both id-link
+  extractors (canonical + loop ingestion) with TDD ordering (30m)
+
+** Completion [2026-04-08]
+
+*** Verification
+
+- =bun test packages/org/test/id-links.test.ts= — 9/9 pass (4 new description-form cases + 5 pre-existing, including =ignores malformed links and non-id links= which stayed green)
+- =bun test packages/coding-agent/test/loop/spec-ingestion.test.ts= — 3/3 pass (1 new description-link case + 2 pre-existing)
+- =bun test packages/org/test/id-links.test.ts packages/coding-agent/test/loop/spec-ingestion.test.ts= — 12/12 pass combined
+- =bun check:ts= — no new type errors introduced; pre-existing errors in =sql-store.ts=, =approvals.ts=, =tool-progress.ts=, =logger.ts= confirmed present on =main= before this change (verified via =git stash=)
+
+*** Artifacts
+
+No UI artifacts — text-layer validator fix, no visual output to capture.
+
+Changed files:
+- =packages/org/src/id-links.ts= line 7: regex extended with optional =(?:\[[^\]]*\])?= before the final =\]= to accept =[[id:TARGET][DESCRIPTION]]= form
+- =packages/coding-agent/src/loop/ingestion/parser.ts= line 35: same extension applied to the loose extractor regex
+- =packages/org/test/id-links.test.ts=: 4 new tests covering single description form, mixed plain+description, sub-outline description form, and dedup across both forms
+- =packages/coding-agent/test/loop/spec-ingestion.test.ts=: 1 new test asserting description-form links are captured and not reported as broken
+
+*** Deviations
+
+None.
