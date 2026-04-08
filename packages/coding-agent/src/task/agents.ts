@@ -64,6 +64,9 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 		frontmatter: {
 			name: "quick_task",
 			description: "Low-reasoning agent for strictly mechanical updates or data collection only",
+			// Explicit narrow tool list: excludes todo_write to keep quick_task strictly mechanical.
+			// submit_result is injected automatically by parseAgentFields.
+			tools: ["read", "grep", "find", "edit", "write", "bash"],
 			model: "pi/subtask",
 			thinkingLevel: Effort.Minimal,
 			roster: false,

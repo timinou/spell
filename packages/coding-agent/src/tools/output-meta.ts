@@ -17,7 +17,7 @@ import { formatGroupedDiagnosticMessages } from "../lsp/utils";
 import type { Theme } from "../modes/theme/theme";
 import { type OutputSummary, type TruncationResult, truncateTail } from "../session/streaming-output";
 import { formatBytes, wrapBrackets } from "./render-utils";
-import { renderError } from "./tool-errors";
+import { renderError, ToolAbortError, ToolError } from "./tool-errors";
 
 /**
  * Truncation metadata for the output notice.
@@ -570,7 +570,9 @@ async function wrappedExecute(
 		}
 		return result;
 	} catch (e) {
-		// Re-throw with formatted message so agent-loop sets isError flag
+		if (e instanceof ToolAbortError) throw e;
+		if (e instanceof ToolError) throw new ToolError(renderError(e), e.context);
+		// Re-throw with formatted message so agent-loop sets isError flag.
 		throw new Error(renderError(e));
 	}
 }

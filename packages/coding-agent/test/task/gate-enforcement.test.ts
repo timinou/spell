@@ -14,6 +14,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { $ } from "bun";
 import * as discoveryModule from "../../src/task/discovery";
 import * as executorModule from "../../src/task/executor";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../src/task/types";
@@ -155,7 +156,7 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		mockRunSubprocess(transcriptPath, {
-			extractedToolData: { bash: [{ command: "bun test", exitCode: 0 }] },
+			extractedToolData: { bash: [{ command: "bun test", exitCode: 0, cwd: tempDir }] },
 		});
 
 		const { TaskTool } = await import("../../src/task/index");
@@ -419,7 +420,7 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		mockRunSubprocess(transcriptPath, {
 			extractedToolData: {
 				bash: [
-					{ command: "bun test", exitCode: 0 },
+					{ command: "bun test", exitCode: 0, cwd: tempDir },
 					{ command: "git commit -m 'done'", exitCode: 0 },
 				],
 			},
@@ -437,5 +438,109 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 
 		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
 		expect(finalTask?.status).toBe("completed");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Isolated worktree gate verification
+// ---------------------------------------------------------------------------
+describe("Gate enforcement: isolated worktree", () => {
+	let repoDir: string;
+
+	// Create a minimal real git repo so HEAD-moved checks have something to inspect.
+	beforeEach(async () => {
+		repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "task-gate-worktree-"));
+		await $`git init`.cwd(repoDir).quiet();
+		await $`git config user.email test@test.com`.cwd(repoDir).quiet();
+		await $`git config user.name Test`.cwd(repoDir).quiet();
+		await fs.writeFile(path.join(repoDir, "init.txt"), "init");
+		await $`git add .`.cwd(repoDir).quiet();
+		await $`git commit -m init`.cwd(repoDir).quiet();
+	});
+
+	afterEach(async () => {
+		await fs.rm(repoDir, { recursive: true, force: true });
+	});
+
+	// Direct unit tests for the underlying gate-verification helpers.
+
+	it("detectGitCommitInWorktree returns false when HEAD has not moved", async () => {
+		const { detectGitCommitInWorktree } = await import("../../src/task/gate-verification");
+		const baseline = (await $`git rev-parse HEAD`.cwd(repoDir).quiet().text()).trim();
+		expect(await detectGitCommitInWorktree(repoDir, baseline)).toBe(false);
+	});
+
+	it("detectGitCommitInWorktree returns true after a new commit", async () => {
+		const { detectGitCommitInWorktree } = await import("../../src/task/gate-verification");
+		const baseline = (await $`git rev-parse HEAD`.cwd(repoDir).quiet().text()).trim();
+		await fs.writeFile(path.join(repoDir, "new.txt"), "change");
+		await $`git add .`.cwd(repoDir).quiet();
+		await $`git commit -m add-file`.cwd(repoDir).quiet();
+		expect(await detectGitCommitInWorktree(repoDir, baseline)).toBe(true);
+	});
+
+	it("verifyGates: gateCommit passes via HEAD-moved check in worktree mode", async () => {
+		const { verifyGates } = await import("../../src/task/gate-verification");
+		const baseline = (await $`git rev-parse HEAD`.cwd(repoDir).quiet().text()).trim();
+		await fs.writeFile(path.join(repoDir, "new.txt"), "change");
+		await $`git add .`.cwd(repoDir).quiet();
+		await $`git commit -m add-file`.cwd(repoDir).quiet();
+		// No bash history — would fail with non-worktree mode.
+		const result = await verifyGates({
+			gateCommit: true,
+			executions: [],
+			cwd: "/irrelevant",
+			worktreeDir: repoDir,
+			baselineHeadCommit: baseline,
+		});
+		expect(result.passed).toBe(true);
+	});
+
+	it("verifyGates: gateCommit fails when HEAD has not moved in worktree mode", async () => {
+		const { verifyGates } = await import("../../src/task/gate-verification");
+		const baseline = (await $`git rev-parse HEAD`.cwd(repoDir).quiet().text()).trim();
+		// bash history has git commit — should be ignored in worktree mode
+		const result = await verifyGates({
+			gateCommit: true,
+			executions: [{ command: "git commit -m fake", exitCode: 0 }],
+			cwd: "/irrelevant",
+			worktreeDir: repoDir,
+			baselineHeadCommit: baseline,
+		});
+		expect(result.passed).toBe(false);
+		expect(result.failures[0]?.gate).toBe("gateCommit");
+		expect(result.failures[0]?.detail).toMatch(/HEAD did not advance/);
+	});
+
+	it("verifyGates: gateArtifact resolves relative to worktreeDir, not parent cwd", async () => {
+		const { verifyGates } = await import("../../src/task/gate-verification");
+		const baseline = (await $`git rev-parse HEAD`.cwd(repoDir).quiet().text()).trim();
+		// File exists in the worktree dir but NOT in the (different) parent cwd.
+		await fs.writeFile(path.join(repoDir, "dist", "output.json").replace("/dist/", "/"), "placeholder");
+		await fs.mkdir(path.join(repoDir, "dist"), { recursive: true });
+		await fs.writeFile(path.join(repoDir, "dist", "output.json"), "{}");
+		const result = await verifyGates({
+			gateArtifact: "dist/output.json",
+			executions: [],
+			// Parent cwd deliberately does not contain the file.
+			cwd: os.tmpdir(),
+			worktreeDir: repoDir,
+			baselineHeadCommit: baseline,
+		});
+		expect(result.passed).toBe(true);
+	});
+
+	it("verifyGates: gateArtifact fails when file absent from worktree (not fooled by parent cwd)", async () => {
+		const { verifyGates } = await import("../../src/task/gate-verification");
+		const baseline = (await $`git rev-parse HEAD`.cwd(repoDir).quiet().text()).trim();
+		const result = await verifyGates({
+			gateArtifact: "dist/output.json",
+			executions: [],
+			cwd: os.tmpdir(),
+			worktreeDir: repoDir,
+			baselineHeadCommit: baseline,
+		});
+		expect(result.passed).toBe(false);
+		expect(result.failures[0]?.gate).toBe("gateArtifact");
 	});
 });

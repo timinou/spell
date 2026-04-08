@@ -476,7 +476,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		});
 	}
 
-	async #finalizeTodoRef(task: TaskItem, result: SingleResult): Promise<void> {
+	async #finalizeTodoRef(
+		task: TaskItem,
+		result: SingleResult,
+		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+	): Promise<void> {
 		if (!task.todoRef) return;
 		const delegation = this.#buildTodoDelegation(result.agent, result.sessionId, result.transcriptPath);
 
@@ -486,10 +490,16 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		let gatesVerified = false;
 
 		if (result.exitCode === 0 && !(result.aborted ?? false)) {
-			const gateResult = await this.#verifyTaskGates(task.todoRef, result);
+			const gateResult = await this.#verifyTaskGates(task.todoRef, result, isolationContext);
+			const childGateFailures = result.todoPhases
+				? await this.#verifyChildTodoGates(result.todoPhases, result, isolationContext)
+				: undefined;
 			if (gateResult && !gateResult.passed) {
 				status = "gate_failed";
 				gateFailures = gateResult.failures;
+			} else if (childGateFailures && childGateFailures.length > 0) {
+				status = "gate_failed";
+				gateFailures = childGateFailures;
 			} else {
 				status = "completed";
 				// If gate verification ran and passed, mark as verified
@@ -514,7 +524,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		});
 	}
 
-	async #verifyTaskGates(todoRef: string, result: SingleResult): Promise<GateVerificationResult | undefined> {
+	async #verifyTaskGates(
+		todoRef: string,
+		result: SingleResult,
+		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+	): Promise<GateVerificationResult | undefined> {
 		const phases = this.session.getTodoPhases?.();
 		if (!phases) return undefined;
 		const todo = findTask(phases, todoRef);
@@ -528,7 +542,49 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			gateArtifact: todo.gateArtifact,
 			executions,
 			cwd: this.session.cwd,
+			// When an isolation worktree is active, resolve artifact paths and gateCommit
+			// against the worktree rather than the parent session cwd / bash history.
+			worktreeDir: isolationContext?.isolationDir,
+			baselineHeadCommit: isolationContext?.baselineHeadCommit,
 		});
+	}
+
+	async #verifyChildTodoGates(
+		childPhases: TodoPhase[],
+		result: SingleResult,
+		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+	): Promise<Array<GateFailure & { taskId: string }> | undefined> {
+		const executions = (result.extractedToolData?.bash as TrackedBashExecution[] | undefined) ?? [];
+		const failures: Array<GateFailure & { taskId: string }> = [];
+		for (const phase of childPhases) {
+			for (const child of phase.tasks) {
+				if (child.status === "gate_failed") {
+					for (const failure of child.delegation?.result?.gateFailures ?? []) {
+						failures.push({
+							taskId: failure.taskId ?? child.id,
+							gate: failure.gate as GateFailure["gate"],
+							expected: failure.expected,
+							detail: failure.detail,
+						});
+					}
+					continue;
+				}
+				if (child.status !== "completed" || !hasRequiredGate(child)) continue;
+				const gateResult = await verifyGates({
+					gateCmd: child.gateCmd,
+					gateCommit: child.gateCommit,
+					gateArtifact: child.gateArtifact,
+					executions,
+					cwd: this.session.cwd,
+					worktreeDir: isolationContext?.isolationDir,
+					baselineHeadCommit: isolationContext?.baselineHeadCommit,
+				});
+				if (!gateResult.passed) {
+					failures.push(...gateResult.failures.map(failure => ({ taskId: child.id, ...failure })));
+				}
+			}
+		}
+		return failures.length > 0 ? failures : undefined;
 	}
 
 	async execute(
@@ -1247,8 +1303,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				runSignal: AbortSignal,
 			) => {
 				const originalTask = tasks[index]!;
-				const returnWithTodoRef = async (result: SingleResult): Promise<SingleResult> => {
-					await this.#finalizeTodoRef(originalTask, result);
+				const returnWithTodoRef = async (
+					result: SingleResult,
+					isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+				): Promise<SingleResult> => {
+					await this.#finalizeTodoRef(originalTask, result, isolationContext);
 					return result;
 				};
 				const updateProgress = (progress: AgentProgress): void => {
@@ -1309,6 +1368,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						isolationDir = await ensureWorktree(repoRoot, taskExecution.executionId);
 						await applyBaseline(isolationDir, taskBaseline);
 					}
+					// Build context for gate verification against this worktree, not the parent cwd.
+					const isolationContext = { isolationDir, baselineHeadCommit: taskBaseline.root.headCommit };
 
 					const result = await runSubprocess({
 						cwd: this.session.cwd,
@@ -1359,17 +1420,20 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								taskExecution.description,
 								commitMsg,
 							);
-							return returnWithTodoRef({
-								...result,
-								branchName: commitResult?.branchName,
-								nestedPatches: commitResult?.nestedPatches,
-							});
+							return returnWithTodoRef(
+								{
+									...result,
+									branchName: commitResult?.branchName,
+									nestedPatches: commitResult?.nestedPatches,
+								},
+								isolationContext,
+							);
 						} catch (mergeErr) {
 							// Agent succeeded but branch commit failed — clean up stale branch
 							const branchName = `spell/task/${taskExecution.executionId}`;
 							await $`git branch -D ${branchName}`.cwd(repoRoot).quiet().nothrow();
 							const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
-							return returnWithTodoRef({ ...result, error: `Merge failed: ${msg}` });
+							return returnWithTodoRef({ ...result, error: `Merge failed: ${msg}` }, isolationContext);
 						}
 					}
 					if (result.exitCode === 0) {
@@ -1377,17 +1441,20 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							const delta = await captureDeltaPatch(isolationDir, taskBaseline);
 							const patchPath = path.join(effectiveArtifactsDir, `${taskExecution.executionId}.patch`);
 							await Bun.write(patchPath, delta.rootPatch);
-							return returnWithTodoRef({
-								...result,
-								patchPath,
-								nestedPatches: delta.nestedPatches,
-							});
+							return returnWithTodoRef(
+								{
+									...result,
+									patchPath,
+									nestedPatches: delta.nestedPatches,
+								},
+								isolationContext,
+							);
 						} catch (patchErr) {
 							const msg = patchErr instanceof Error ? patchErr.message : String(patchErr);
-							return returnWithTodoRef({ ...result, error: `Patch capture failed: ${msg}` });
+							return returnWithTodoRef({ ...result, error: `Patch capture failed: ${msg}` }, isolationContext);
 						}
 					}
-					return returnWithTodoRef(result);
+					return returnWithTodoRef(result, isolationContext);
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
 					return returnWithTodoRef({

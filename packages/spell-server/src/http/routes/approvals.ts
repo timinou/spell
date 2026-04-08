@@ -1,5 +1,8 @@
 import type { WorkflowEngine } from "../../workflow/engine";
 import type {
+	CheckpointEffect,
+	SpawnApprovalTemplate,
+	WorkflowActionDefinition,
 	WorkflowActor,
 	WorkflowApplyActionInput,
 	WorkflowClaimInput,
@@ -213,7 +216,7 @@ function parseDownstreamJobs(value: unknown, message: string) {
 	});
 }
 
-function parseCheckpointEffect(value: unknown, message: string) {
+function parseCheckpointEffect(value: unknown, message: string): CheckpointEffect | undefined {
 	if (value === undefined) {
 		return undefined;
 	}
@@ -236,7 +239,7 @@ function parseCheckpointEffect(value: unknown, message: string) {
 	return invalidPayload(`${message}.type is invalid`);
 }
 
-function parseActionDefinition(value: unknown, message: string) {
+function parseActionDefinition(value: unknown, message: string): WorkflowActionDefinition {
 	if (!isRecord(value)) {
 		return invalidPayload(`${message} must be an object`);
 	}
@@ -264,14 +267,14 @@ function parseActionDefinition(value: unknown, message: string) {
 	};
 }
 
-function parseActions(value: unknown, message: string) {
+function parseActions(value: unknown, message: string): WorkflowActionDefinition[] {
 	if (!Array.isArray(value)) {
 		return invalidPayload(`${message} must be an array`);
 	}
 	return value.map((action, index) => parseActionDefinition(action, `${message}[${index}]`));
 }
 
-function parseSpawnApprovalTemplate(value: Record<string, unknown>, message: string) {
+function parseSpawnApprovalTemplate(value: Record<string, unknown>, message: string): SpawnApprovalTemplate {
 	const summary = parseOptionalString(value.summary, `${message}.summary must be a string`);
 	const metadata = parseMetadata(value.metadata, `${message}.metadata must be an object`);
 	const artifacts = parseArtifacts(value.artifacts, `${message}.artifacts`);
@@ -342,11 +345,12 @@ function parseCreatePayload(value: unknown): WorkflowCreatePayload {
 		value.linkedCheckpointId,
 		"Invalid create payload: linkedCheckpointId must be a string",
 	);
-	const kind = parseString(value.kind, "Invalid create payload: kind must be a string");
-	if (kind !== "approval" && kind !== "checkpoint") {
+	const rawKind = parseString(value.kind, "Invalid create payload: kind must be a string");
+	if (rawKind !== "approval" && rawKind !== "checkpoint") {
 		return invalidPayload('Invalid create payload: kind must be "approval" or "checkpoint"');
 	}
-	const basePayload = {
+	const kind: WorkflowCreatePayload["kind"] = rawKind;
+	const basePayload: WorkflowCreateItemInput & { kind: WorkflowCreatePayload["kind"] } = {
 		kind,
 		workflowId: parseString(value.workflowId, "Invalid create payload: workflowId must be a string"),
 		targetId: parseString(value.targetId, "Invalid create payload: targetId must be a string"),

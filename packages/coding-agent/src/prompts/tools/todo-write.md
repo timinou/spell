@@ -96,7 +96,7 @@ task-3 and task-4 both depend on task-1 (schema). task-5 depends on both task-3 
 - `gateCommit`: Set `true` when the task requires a git commit before proceeding.
 - `gateArtifact`: Path to an artifact that must exist after completion (screenshot, build output, etc.).
 - `gateCmd`: Command that must pass to verify the task (e.g., `bun test test/foo.test.ts`).
-- `gateLlm`: Acceptance criteria the AI should self-review against.
+- `gateLlm`: Advisory self-review criteria. This does not trigger enforced two-phase verification.
 - `verifyCmd`: Recommended (not required) verification command.
 - `layer`: Layer for policy-based gate injection (e.g., `frontend`, `api`). When set and project task policies are active, matching policy gates are auto-injected. Explicit gates take precedence over policy defaults.
 - `orgItemId`: Org item ID for lineage tracking. Non-gating — does not trigger verification protocol.
@@ -108,12 +108,11 @@ When implementing plan items, set gate fields to track required deliverables. Th
 
 ## Verification Protocol
 
-Tasks with **required gates** (`gateCommit`, `gateArtifact`, `gateCmd`, `gateLlm`, or `orgItemClosingId`) use two-phase completion:
-1. **First attempt**: marking a gated task `completed` without `verified: true` is **rejected**. The tool returns a verification checklist showing each gate requirement.
+Tasks with **required gates** (`gateCommit`, `gateArtifact`, `gateCmd`, or `orgItemClosingId`) use two-phase completion:
+1. **First attempt**: marking a gated task `completed` without `verified: true` is **rejected**. The tool returns a verification checklist showing each required gate.
 2. **After verification**: re-submit the update with `verified: true` to complete the task.
 
-This ensures gates are checked before the task is marked done — not after.
-
+`gateLlm` remains advisory and may appear in reminders or summaries, but it does **not** trigger two-phase verification.
 `verifyCmd` alone does **not** trigger two-phase (it is advisory, not required).
 <avoid>
 - Single-step tasks — act directly

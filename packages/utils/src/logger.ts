@@ -107,7 +107,7 @@ export function setStderrDebugEnabled(enabled: boolean): void {
 			return;
 		}
 		winstonLogger.remove(stderrTransport);
-		stderrTransport.close();
+		stderrTransport.close?.();
 		stderrTransport = null;
 	} catch {
 		// Silently ignore logging failures

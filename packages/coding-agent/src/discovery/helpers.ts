@@ -225,6 +225,11 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		tools = [...tools, "submit_result"];
 	}
 
+	// Subagents implicitly gain todo_write unless they are quick_task (which must stay narrow)
+	if (tools && name !== "quick_task" && !tools.includes("todo_write")) {
+		tools = [...tools, "todo_write"];
+	}
+
 	// Parse spawns field (array, "*", or CSV)
 	let spawns: string[] | "*" | undefined;
 	if (frontmatter.spawns === "*") {

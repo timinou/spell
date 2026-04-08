@@ -20,7 +20,9 @@ import type { Theme } from "../modes/theme/theme";
 import { buildOrgConfig } from "../plan-mode/org-plan";
 import todoWriteDescription from "../prompts/tools/todo-write.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
+import type { GitBaseline } from "../session/git-baseline";
 import type { SessionEntry } from "../session/session-manager";
+import { type GateFailure, verifyGates } from "../task/gate-verification";
 import { renderStatusLine, renderTreeList } from "../tui";
 import { PREVIEW_LIMITS } from "./render-utils";
 
@@ -34,7 +36,7 @@ export interface TodoDelegationResult {
 	output?: string;
 	error?: string;
 	outputPath?: string;
-	gateFailures?: Array<{ gate: string; expected: string; detail: string }>;
+	gateFailures?: Array<{ taskId?: string; gate: string; expected: string; detail: string }>;
 }
 
 export interface TodoDelegation {
@@ -63,6 +65,8 @@ export interface TodoItem {
 	orgItemClosingId?: string;
 	/** FUP org item ID. Required when status=abandoned (deferral tracking). */
 	deferralFupId?: string;
+	/** Baseline captured when a direct gated task enters in_progress; used for later gateCommit verification. */
+	gitBaseline?: GitBaseline | null;
 	/** Delegated subagent metadata. Delegated tasks may remain in_progress alongside one direct task. */
 	delegation?: TodoDelegation;
 	/** Layer for policy-based gate injection. When set, matching policy gates are auto-injected. */
@@ -497,6 +501,50 @@ interface ApplyOpsResult {
 	pendingDeferralTasks: TodoItem[];
 }
 
+interface GateVerificationFailure {
+	task: TodoItem;
+	previousStatus: TodoStatus | undefined;
+	failures: GateFailure[];
+}
+
+function buildPreviousStatusMap(phases: TodoPhase[]): Map<string, TodoStatus> {
+	const previousStatus = new Map<string, TodoStatus>();
+	for (const phase of phases) {
+		for (const task of phase.tasks) previousStatus.set(task.id, task.status);
+	}
+	return previousStatus;
+}
+
+function collectCompletedPhaseIds(previousPhases: TodoPhase[], nextPhases: TodoPhase[]): string[] {
+	const wasComplete = new Map<string, boolean>();
+	for (const phase of previousPhases) {
+		wasComplete.set(phase.id, isPhaseComplete(phase));
+	}
+
+	const completedPhaseIds: string[] = [];
+	for (const phase of nextPhases) {
+		if (isPhaseComplete(phase) && !wasComplete.get(phase.id)) completedPhaseIds.push(phase.id);
+	}
+	return completedPhaseIds;
+}
+
+function collectCompletedGatedTasks(previousPhases: TodoPhase[], nextPhases: TodoPhase[]): TodoItem[] {
+	const previousStatus = buildPreviousStatusMap(previousPhases);
+	const completedGatedTasks: TodoItem[] = [];
+	for (const phase of nextPhases) {
+		for (const task of phase.tasks) {
+			if (
+				task.status === "completed" &&
+				previousStatus.get(task.id) !== "completed" &&
+				(hasGate(task) || task.orgItemClosingId)
+			) {
+				completedGatedTasks.push(task);
+			}
+		}
+	}
+	return completedGatedTasks;
+}
+
 function isPhaseComplete(phase: TodoPhase): boolean {
 	return phase.tasks.length > 0 && phase.tasks.every(t => t.status === "completed" || t.status === "abandoned");
 }
@@ -507,7 +555,7 @@ export function hasGate(task: TodoItem): boolean {
 
 /** Returns true when the task has gates that require two-phase verified completion. */
 export function hasRequiredGate(task: TodoItem): boolean {
-	return !!(task.gateCommit || task.gateArtifact || task.gateCmd || task.gateLlm || task.orgItemClosingId);
+	return !!(task.gateCommit || task.gateArtifact || task.gateCmd || task.orgItemClosingId);
 }
 
 export function applyOps(
@@ -703,7 +751,7 @@ function gateDirectivesForTask(task: TodoItem): string[] {
 	if (task.gateCommit) lines.push(`REQUIRED: Commit your changes for ${task.id} (${task.content}) before proceeding.`);
 	if (task.gateArtifact) lines.push(`REQUIRED: Verify artifact exists at ${task.gateArtifact} for ${task.id}.`);
 	if (task.gateCmd) lines.push(`REQUIRED: Run \`${task.gateCmd}\` to verify ${task.id}.`);
-	if (task.gateLlm) lines.push(`REQUIRED: Review ${task.id} against acceptance criteria: ${task.gateLlm}`);
+	if (task.gateLlm) lines.push(`ADVISORY: Review ${task.id} against acceptance criteria: ${task.gateLlm}`);
 	if (task.verifyCmd) lines.push(`RECOMMENDED: Run \`${task.verifyCmd}\` to verify ${task.id}.`);
 	return lines;
 }
@@ -715,6 +763,8 @@ export interface FormatSummaryOptions {
 	completedGatedTasks: TodoItem[];
 	/** Tasks whose completion was rejected pending verification. */
 	pendingVerificationTasks: TodoItem[];
+	/** Tasks whose verified completion failed against observed session evidence. */
+	gateVerificationFailures?: GateVerificationFailure[];
 	/** Tasks whose abandonment was rejected pending deferral follow-up. */
 	pendingDeferralTasks: TodoItem[];
 }
@@ -728,6 +778,7 @@ export function formatSummary({
 	completedPhaseIds,
 	completedGatedTasks,
 	pendingVerificationTasks,
+	gateVerificationFailures = [],
 	pendingDeferralTasks,
 }: FormatSummaryOptions): string {
 	const allTasks = phases.flatMap(p => p.tasks);
@@ -836,8 +887,9 @@ export function formatSummary({
 				continue;
 			}
 			for (const failure of gateFailures) {
+				const childPrefix = failure.taskId ? `child ${failure.taskId}: ` : "";
 				lines.push(
-					`gate_failed: ${task.id} "${task.content}" — ${failure.gate} not satisfied: expected \`${failure.expected}\`, ${failure.detail}`,
+					`gate_failed: ${task.id} "${task.content}" — ${childPrefix}${failure.gate} not satisfied: expected \`${failure.expected}\`, ${failure.detail}`,
 				);
 			}
 		}
@@ -872,12 +924,26 @@ export function formatSummary({
 			if (task.gateCmd) lines.push(`  [ ] Run \`${task.gateCmd}\` (gateCmd)`);
 			if (task.gateArtifact) lines.push(`  [ ] Verify artifact at ${task.gateArtifact} (gateArtifact)`);
 			if (task.gateCommit) lines.push(`  [ ] Commit changes (gateCommit)`);
-			if (task.gateLlm) lines.push(`  [ ] Review against: ${task.gateLlm} (gateLlm)`);
+			if (task.gateLlm) lines.push(`  [i] Advisory review: ${task.gateLlm} (gateLlm)`);
 			if (task.orgItemClosingId)
 				lines.push(`  [i] Verified completion will auto-close org item ${task.orgItemClosingId}.`);
 			lines.push("");
 			lines.push(
 				`Complete these steps, then call todo_write with {op: "update", id: "${task.id}", status: "completed", verified: true}.`,
+			);
+		}
+	}
+
+	if (gateVerificationFailures.length > 0) {
+		lines.push("");
+		lines.push("--- Gate Verification Failed ---");
+		for (const failure of gateVerificationFailures) {
+			lines.push(`${failure.task.id} "${failure.task.content}" could not be verified:`);
+			for (const gateFailure of failure.failures) {
+				lines.push(`  - ${gateFailure.gate}: expected \`${gateFailure.expected}\`, ${gateFailure.detail}`);
+			}
+			lines.push(
+				`  Status remains ${failure.previousStatus ?? "pending"}. Fix the missing evidence, then retry with verified: true.`,
 			);
 		}
 	}
@@ -910,6 +976,109 @@ export function formatSummary({
 	return lines.join("\n");
 }
 
+async function captureDirectWorkBaselines(
+	session: ToolSession,
+	previousPhases: TodoPhase[],
+	nextPhases: TodoPhase[],
+): Promise<void> {
+	const previousStatuses = buildPreviousStatusMap(previousPhases);
+	for (const phase of nextPhases) {
+		for (const task of phase.tasks) {
+			if (isDelegatedTask(task)) continue;
+			if (!task.gateCommit || task.status !== "in_progress") continue;
+			if (previousStatuses.get(task.id) === "in_progress") continue;
+			task.gitBaseline = session.captureGitBaseline ? await session.captureGitBaseline() : null;
+		}
+	}
+}
+
+async function verifyDirectWorkCompletions(
+	session: ToolSession,
+	ops: TodoWriteParams["ops"],
+	previousPhases: TodoPhase[],
+	nextPhases: TodoPhase[],
+): Promise<GateVerificationFailure[]> {
+	const gateVerificationFailures: GateVerificationFailure[] = [];
+	const executions = [...(session.getBashHistory?.() ?? [])];
+	const currentStatuses = buildPreviousStatusMap(previousPhases);
+
+	for (const op of ops) {
+		if (op.op !== "update") continue;
+		const task = findTask(nextPhases, op.id);
+		if (!task) continue;
+		if (isDelegatedTask(task)) {
+			if (op.status !== undefined) currentStatuses.set(task.id, task.status);
+			continue;
+		}
+
+		if (op.status === "in_progress") {
+			currentStatuses.set(task.id, "in_progress");
+			continue;
+		}
+
+		if (op.status === "completed" && op.verified && hasRequiredGate(task)) {
+			const failures = [
+				...(
+					await verifyGates({
+						gateCmd: task.gateCmd,
+						gateArtifact: task.gateArtifact,
+						executions,
+						cwd: session.cwd,
+					})
+				).failures,
+			] as GateFailure[];
+
+			if (task.gateCommit) {
+				if (task.gitBaseline === undefined) {
+					failures.push({
+						gate: "gateCommit",
+						expected: "git commit",
+						detail: "Git baseline was not captured when the task entered in_progress.",
+					});
+				} else if (task.gitBaseline === null) {
+					failures.push({
+						gate: "gateCommit",
+						expected: "git commit",
+						detail: "Git baseline could not be captured for this task.",
+					});
+				} else if (!session.compareGitBaseline) {
+					failures.push({
+						gate: "gateCommit",
+						expected: "git commit",
+						detail: "Current git state is unavailable for verification.",
+					});
+				} else {
+					const diff = await session.compareGitBaseline(task.gitBaseline);
+					if (!diff) {
+						failures.push({
+							gate: "gateCommit",
+							expected: "git commit",
+							detail: "Current git state is unavailable for verification.",
+						});
+					} else if (!diff.headAdvanced) {
+						failures.push({
+							gate: "gateCommit",
+							expected: "git commit",
+							detail: "HEAD did not move after the task entered in_progress.",
+						});
+					}
+				}
+			}
+
+			if (failures.length > 0) {
+				const previousStatus = currentStatuses.get(task.id);
+				task.status = previousStatus ?? "pending";
+				gateVerificationFailures.push({ task, previousStatus, failures });
+				continue;
+			}
+		}
+
+		if (op.status !== undefined) currentStatuses.set(task.id, task.status);
+	}
+
+	return gateVerificationFailures;
+}
+
 // =============================================================================
 // Tool Class
 // =============================================================================
@@ -940,11 +1109,18 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 			const {
 				file: updated,
 				errors,
-				completedPhaseIds,
-				completedGatedTasks,
 				pendingVerificationTasks,
 				pendingDeferralTasks,
 			} = applyOps(current, params.ops, previousPhases, activePolicies);
+			await captureDirectWorkBaselines(this.session, previousPhases, updated.phases);
+			const gateVerificationFailures = await verifyDirectWorkCompletions(
+				this.session,
+				params.ops,
+				previousPhases,
+				updated.phases,
+			);
+			const completedPhaseIds = collectCompletedPhaseIds(previousPhases, updated.phases);
+			const completedGatedTasks = collectCompletedGatedTasks(previousPhases, updated.phases);
 			const hasReplace = params.ops.some(op => op.op === "replace");
 			this.session.setTodoPhases?.(updated.phases, hasReplace ? { reset: true } : undefined);
 			const orgLifecycleNotices = await applyOrgLifecycleHooks(this.session, previousPhases, updated.phases);
@@ -963,6 +1139,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 				completedPhaseIds,
 				completedGatedTasks,
 				pendingVerificationTasks,
+				gateVerificationFailures,
 				pendingDeferralTasks,
 			});
 			const text = orgLifecycleNotices.length > 0 ? `${summary}\n${orgLifecycleNotices.join("\n")}` : summary;

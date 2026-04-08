@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 
 export interface SqlStoreSchema {
 	tables: SqlStoreTableSchema[];
@@ -77,11 +77,11 @@ export class SqlStore {
 		}
 
 		let sql = `SELECT * FROM ${escapeIdentifier(tableName)}`;
-		const params: unknown[] = [];
+		const params: SQLQueryBindings[] = [];
 
 		if (whereKeys.length > 0) {
 			const clauses = whereKeys.map(key => {
-				params.push(where![key]);
+				params.push(serializeValue(where![key]));
 				return `${escapeIdentifier(key)} = ?`;
 			});
 			sql += ` WHERE ${clauses.join(" AND ")}`;
@@ -133,7 +133,7 @@ export class SqlStore {
 			const cols = Object.keys(values);
 			const placeholders = cols.map(() => "?").join(", ");
 			const sql = `INSERT INTO ${escapeIdentifier(tableName)} (${cols.map(escapeIdentifier).join(", ")}) VALUES (${placeholders})`;
-			const params = cols.map(c => serializeValue(values[c]));
+			const params: SQLQueryBindings[] = cols.map(c => serializeValue(values[c]));
 			const result = this.#db.prepare(sql).run(...params);
 			return { affectedRows: result.changes };
 		}
@@ -152,12 +152,12 @@ export class SqlStore {
 			}
 
 			const setClauses = Object.keys(values).map(c => `${escapeIdentifier(c)} = ?`);
-			const params: unknown[] = Object.keys(values).map(c => serializeValue(values[c]));
+			const params: SQLQueryBindings[] = Object.keys(values).map(c => serializeValue(values[c]));
 
 			let sql = `UPDATE ${escapeIdentifier(tableName)} SET ${setClauses.join(", ")}`;
 			if (whereKeys.length > 0) {
 				const whereClauses = whereKeys.map(k => {
-					params.push(where![k]);
+					params.push(serializeValue(where![k]));
 					return `${escapeIdentifier(k)} = ?`;
 				});
 				sql += ` WHERE ${whereClauses.join(" AND ")}`;
@@ -175,10 +175,10 @@ export class SqlStore {
 		}
 
 		let sql = `DELETE FROM ${escapeIdentifier(tableName)}`;
-		const params: unknown[] = [];
+		const params: SQLQueryBindings[] = [];
 		if (whereKeys.length > 0) {
 			const clauses = whereKeys.map(k => {
-				params.push(where![k]);
+				params.push(serializeValue(where![k]));
 				return `${escapeIdentifier(k)} = ?`;
 			});
 			sql += ` WHERE ${clauses.join(" AND ")}`;
@@ -207,8 +207,8 @@ export class SqlStore {
 	}
 }
 
-function serializeValue(value: unknown): unknown {
+function serializeValue(value: unknown): SQLQueryBindings {
 	if (value === null || value === undefined) return null;
 	if (typeof value === "object") return JSON.stringify(value);
-	return value;
+	return value as SQLQueryBindings;
 }

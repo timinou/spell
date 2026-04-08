@@ -452,7 +452,8 @@ function b() {
 			const result = await bashTool.execute("test-call-8", { command: "echo 'test output'" });
 
 			expect(getTextOutput(result)).toContain("test output");
-			expect(result.details).toBeUndefined();
+			expect(result.details?.exitCode).toBe(0);
+			expect(result.details?.cwd).toBe(testDir);
 		});
 
 		it("should expose env values without shell re-parsing", async () => {
