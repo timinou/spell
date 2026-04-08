@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **BUG-190**: Todo auto-clear now checks blocker references before removing a completed task. A completed task that is still listed in another task's `blockers` array is preserved until no task references it, preventing premature removal of tasks the pipeline depends on for ordering context.
+
 ### Changed
 
 - Renamed `emacs_code` tool to `code` (display name: "Code")
@@ -75,6 +79,7 @@
 
 ### Fixed
 
+- Fixed (BUG-191) `applyOps` blocker validation now scoped to tasks whose blockers were set in the current ops batch; pre-existing stale blocker refs are silently pruned rather than surfaced as errors.
 - Fixed fluid canvas stuck states by consolidating plan error routing and returning to input after cancellation.
 - Fixed fluid agent state propagation to include failure error text plus start/completion timestamps for accurate UI status.
 - Fixed `emacs_code` daemon recovery by adding lazy restart through `EmacsSessionManager`, including dead-session detection and startup backoff.

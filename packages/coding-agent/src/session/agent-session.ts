@@ -317,6 +317,19 @@ interface HandoffOptions {
 
 const AUTO_HANDOFF_THRESHOLD_FOCUS = renderPromptTemplate(autoHandoffThresholdFocusPrompt);
 
+/** Collect all task IDs referenced in any task's blockers array across all phases. */
+function collectBlockerRefs(phases: TodoPhase[]): Set<string> {
+	const refs = new Set<string>();
+	for (const phase of phases) {
+		for (const task of phase.tasks) {
+			for (const blockerId of task.blockers ?? []) {
+				refs.add(blockerId);
+			}
+		}
+	}
+	return refs;
+}
+
 function describePlanChildCategory(name: string): string {
 	switch (name) {
 		case "projects":
@@ -2935,9 +2948,11 @@ export class AgentSession {
 
 	#syncTodoPhasesFromBranch(): void {
 		const phases = getLatestTodoPhasesFromEntries(this.sessionManager.getBranch());
-		// Strip completed tasks — abandoned tasks are preserved for deferral audit trail.
+		// Strip completed tasks unless another task still references them via blockers.
+		// Abandoned tasks are preserved for deferral audit trail.
+		const referencedIds = collectBlockerRefs(phases);
 		for (const phase of phases) {
-			phase.tasks = phase.tasks.filter(t => t.status !== "completed");
+			phase.tasks = phase.tasks.filter(t => t.status !== "completed" || referencedIds.has(t.id));
 		}
 		this.setTodoPhases(
 			phases.filter(p => p.tasks.length > 0),
@@ -2954,10 +2969,12 @@ export class AgentSession {
 		const delaySec = this.settings.get("tasks.todoClearDelay") ?? 60;
 		if (delaySec < 0) return; // "Never" — no auto-clear
 		const delayMs = delaySec * 1000;
+		const referencedIds = collectBlockerRefs(phases);
 		const doneTaskIds = new Set<string>();
 		for (const phase of phases) {
 			for (const task of phase.tasks) {
-				if (task.status === "completed") {
+				// Only schedule tasks that are completed AND not referenced by any other task's blockers.
+				if (task.status === "completed" && !referencedIds.has(task.id)) {
 					doneTaskIds.add(task.id);
 				}
 			}
@@ -2991,7 +3008,11 @@ export class AgentSession {
 		let removed = false;
 		for (const phase of this.#todoPhases) {
 			const idx = phase.tasks.findIndex(t => t.id === taskId);
-			if (idx !== -1 && phase.tasks[idx].status === "completed") {
+			if (
+				idx !== -1 &&
+				phase.tasks[idx]!.status === "completed" &&
+				!collectBlockerRefs(this.#todoPhases).has(taskId)
+			) {
 				// Track the cleared task count for this phase before removing.
 				const entry = this.#clearedCompletedCounts.get(phase.id);
 				if (entry) {
@@ -3006,8 +3027,9 @@ export class AgentSession {
 		}
 		if (!removed) return;
 
-		// Remove empty phases
+		// Remove empty phases, then re-evaluate newly eligible completed tasks.
 		this.#todoPhases = this.#todoPhases.filter(p => p.tasks.length > 0);
+		this.#scheduleTodoAutoClear(this.#todoPhases);
 		this.#emit({ type: "todo_auto_clear" });
 	}
 

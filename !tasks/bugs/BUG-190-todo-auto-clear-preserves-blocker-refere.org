@@ -1,0 +1,167 @@
+#+TITLE: todo auto-clear preserves blocker-referenced completed tasks
+#+STATE: DONE
+#+SESSION_ID: 14b2a424b816138e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-08T13-49-50-688Z_14b2a424b816138e.jsonl]]
+#+CUSTOM_ID: BUG-190-todo-auto-clear-preserves-blocker-refere
+#+EFFORT: 1h
+#+PRIORITY: A
+#+LAYER: session
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-08]: Implemented reference-aware auto-clear preservation in AgentSession, added cascade and branch-sync regression coverage, and verified with `bun test packages/coding-agent/test/agent-session-todo-auto-clear.test.ts` plus related session regressions.
+
+* Initial Message
+
+I'm noticing that when tasks get marked complete, they're being removed from the roster entirely, which breaks any references to them. So task-4 disappeared, leaving task-7's blocker dangling and causing that
+ error about the non-existent reference. Task-4 got completely removed from the system after being marked complete, which broke all the blocker references pointing to it — tasks 7, 8, 9, 10, and 13 are all now
+ flagging errors because they depend on a non-existent task. The tracker is letting these warnings slide without blocking progress, so I'll just push forward and wait for task-2 to finish rather than trying to
+ manually clean up all the dangling references.
+
+in 
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo/2026-04-08T13-33-33-763Z_14b2a06ab0efe245.jsonl
+ ID: 14b2a06ab0efe245
+
+
+
+
+^^^^ explain the root cause and fix my friend
+
+* Problem
+
+When a task is marked =completed= via =todo_write=, =AgentSession.setTodoPhases= schedules an auto-clear timer via =#scheduleTodoAutoClear= (default delay: =tasks.todoClearDelay= = 60 seconds). After the delay, =#runTodoAutoClear(taskId)= physically removes the task from =#todoPhases= via =phase.tasks.splice(idx, 1)= and drops empty phases. The auto-clear path has *zero awareness of the blocker graph*.
+
+Any task still carrying =blockers: ["task-X"]= now references a dead id. The functional behavior is salvaged because =hasUnresolvedBlockers= treats missing refs as resolved (=todo-write.ts:430=), but the post-snapshot validator in =applyOps= at =todo-write.ts:640-649= reports =`${task.id} references non-existent blocker ${blockerId}`= on every subsequent =todo_write= call until the session dies.
+
+The same hazard exists on session resume: =#syncTodoPhasesFromBranch= at =agent-session.ts:2936-2946= unconditionally strips every =completed= task via =phase.tasks.filter(t => t.status !== "completed")=. A resumed session can boot into the dangling-ref state before the first =todo_write= runs.
+
+* Scope
+
+This item fixes the *auto-clear side* of the problem (prevention of new dangling refs). The *applyOps validator + pruning* side (handling existing dangling refs and relocating validation to per-op) is covered by the sibling bug [[id:BUG-191-applyops-validates-blockers-per-op-and-p][BUG-191 applyOps validates blockers per-op and prunes dangling refs]]. Both items are needed together for the complete fix but touch disjoint files and can be implemented in parallel.
+* Design decisions
+
+1. An auto-clear *eligible* task is a task with =status === "completed"= AND whose =id= is NOT present in any other remaining task's =blockers= array.
+2. Eligibility is re-evaluated on *every* =setTodoPhases= call (and at the end of =#runTodoAutoClear=) rather than baked in at schedule time. This ensures that as dependents themselves become eligible and clear, formerly-protected blocker targets become eligible in turn.
+3. Timer cancellation policy:
+   - Cancel any existing timer whose target is no longer =completed= (status reverted). [Already implemented.]
+   - Cancel any existing timer whose target is now referenced (a newer task added a blocker pointing at it).
+4. =#runTodoAutoClear= performs a last-ditch re-check of the reference set before splicing, as defense in depth against the race where a timer fires between the reference check in =#scheduleTodoAutoClear= and the mutation.
+5. After a successful splice in =#runTodoAutoClear=, call =#scheduleTodoAutoClear(this.#todoPhases)= to re-evaluate eligibility for the remaining tasks. This is the mechanism by which protected blocker targets become eligible once their dependents are cleared.
+6. =#syncTodoPhasesFromBranch= uses the same reference-aware filter: a completed task survives the sync if its id is referenced by any remaining task (of any status). The existing comment ("abandoned tasks are preserved for deferral audit trail") still holds; this change only extends the preservation rule to referenced completed tasks.
+7. Phase-level rule: a phase with only blocker-protected completed tasks (no pending/in_progress/failed/abandoned) still survives because the phase's tasks array is non-empty. The existing =this.#todoPhases.filter(p => p.tasks.length > 0)= continues to drop phases that are truly empty. No change needed.
+
+* Implementation
+
+Files to modify:
+
+- =packages/coding-agent/src/session/agent-session.ts= — edit =#scheduleTodoAutoClear= (lines ~2953-2986), =#runTodoAutoClear= (lines ~2989-3012), and =#syncTodoPhasesFromBranch= (lines ~2936-2946).
+
+** #scheduleTodoAutoClear
+
+Current behavior (lines 2953-2986):
+- Compute =doneTaskIds= = set of =completed= task ids.
+- Cancel timers for ids no longer in =doneTaskIds=.
+- For each id in =doneTaskIds= without an existing timer, arm a new timer.
+
+New behavior:
+1. Compute =referencedIds= = union of =blockers= across every task in =phases= (all statuses — a blocker ref on a pending, in_progress, failed, gate_failed, or abandoned task all count as "still holding a reference"; abandoned tasks eventually drop out of scope only when the user manually clears them).
+2. Compute =eligibleIds= = ids of =completed= tasks whose id is NOT in =referencedIds=.
+3. Cancel timers for ids that are either (a) no longer =completed= OR (b) now in =referencedIds= OR (c) no longer in =eligibleIds=. (The three collapse to: cancel any timer whose id is not in =eligibleIds=.)
+4. For each id in =eligibleIds= without an existing timer, arm a new timer with the existing instant/delayed logic.
+
+** #runTodoAutoClear
+
+Current behavior (lines 2989-3012):
+- Delete the timer entry.
+- Iterate phases, find the task, splice if found and still =completed=.
+- Drop empty phases.
+- Emit =todo_auto_clear=.
+
+New behavior:
+1. Delete the timer entry.
+2. Recompute =referencedIds= from the current =#todoPhases=.
+3. If the target id is in =referencedIds=, skip the splice entirely and DO NOT emit. Do not re-arm the timer here — rely on the next =setTodoPhases= or =#runTodoAutoClear= call to reschedule.
+4. Otherwise, splice as before, drop empty phases, emit =todo_auto_clear=.
+5. After a successful splice, call =this.#scheduleTodoAutoClear(this.#todoPhases)= so any task that was previously protected by the just-cleared task's reference (there is none in this case since we verified the target was unreferenced, but this also handles the case where another task's auto-clear becomes eligible via side effects) gets its timer armed.
+
+Note: In the current implementation, =#runTodoAutoClear= splicing the target task does NOT directly unblock any other completed task, because the target was required to be unreferenced in the first place. However, the splice can drop an empty phase, and the re-schedule call is cheap. Keep it for robustness and future-proofing.
+
+** #syncTodoPhasesFromBranch
+
+Current behavior (lines 2936-2946):
+#+begin_src typescript
+#syncTodoPhasesFromBranch(): void {
+    const phases = getLatestTodoPhasesFromEntries(this.sessionManager.getBranch());
+    // Strip completed tasks — abandoned tasks are preserved for deferral audit trail.
+    for (const phase of phases) {
+        phase.tasks = phase.tasks.filter(t => t.status !== "completed");
+    }
+    this.setTodoPhases(
+        phases.filter(p => p.tasks.length > 0),
+        { reset: true },
+    );
+}
+#+end_src
+
+New behavior:
+1. Compute =referencedIds= from the *source* =phases= (post-=getLatestTodoPhasesFromEntries=) before filtering — this is the full set of blocker refs present in the branch snapshot.
+2. Replace the filter with: keep any task that is NOT =completed=, OR is =completed= AND referenced in =referencedIds=.
+3. Everything else unchanged.
+
+Rationale: the branch snapshot is the most recent =todo_write= result, which =applyOps= wrote with all referenced blocker targets intact. The sync should preserve that invariant.
+
+* Edge cases
+
+- *Empty blockers array* on every task → =referencedIds= is empty → eligibility set equals =doneTaskIds= → behavior is identical to current. No regression.
+- *Single completed task referenced by single pending task* → completed task is protected. Pending task never transitions to completed (user marks abandoned instead) → completed task stays forever? Yes, and that is correct: we preserve the reference chain for audit. If the user truly wants to drop it, they can =update= the pending task to clear its =blockers=.
+- *Two completed tasks referencing each other* in =blockers= (meaningless but possible after rewrites) → both have each other in =referencedIds= → both stuck forever. Acceptable; this is a user-authored cycle on already-complete work and the correct cleanup is a manual =update= to clear one side.
+- *Abandoned task blocks a completed task* → the abandoned task's id is in =referencedIds= via no route. Wait — we compute =referencedIds= as a union of =blockers= arrays. An abandoned task's =blockers= array is still scanned. So if abandoned =task-7.blockers = ["task-4"]=, task-4 stays protected until task-7 is physically removed. Abandoned tasks are never auto-cleared, so task-4 is effectively stuck. Acceptable: the user explicitly abandoned task-7 with a FUP, and the audit trail should include what it was waiting on.
+- *Timer fires while applyOps is mid-call* → =queueTodoMutation= serializes =todo_write= ops, but timers are outside the queue. If a timer fires mid-apply, it mutates =#todoPhases= directly. The subsequent =setTodoPhases(updated.phases)= inside =applyOps='s caller then overwrites =#todoPhases= with the =applyOps= result, which was cloned from =previousPhases= *before* the timer ran. Net effect: the timer's splice is undone. This is a pre-existing, benign race — the scheduler re-runs anyway. No new risk introduced by this change.
+
+* Tests
+
+Create new file: =packages/coding-agent/test/agent-session-todo-auto-clear.test.ts=. Use the existing =AgentSession= test setup pattern from files like =agent-session-new-session-todos.test.ts= or =agent-session-eager-todo.test.ts=.
+
+Required test cases:
+
+1. *Completed blocker is preserved while dependent is pending*.
+   - Setup: session with =tasks.todoClearDelay= set to 0 (instant auto-clear).
+   - Write phases: =[{ name: "Work", tasks: [{ content: "A" }, { content: "B", blockers: ["task-1"] }] }]=.
+   - Mark task-1 completed via =todo_write=.
+   - Await a microtask tick so the instant timer fires.
+   - Assert: task-1 is *still present* in =session.getTodoPhases()= with status =completed=. Assert task-2 is =in_progress= (auto-promoted by =normalizeInProgressTask=).
+
+2. *Dependent clears, then blocker target becomes eligible*.
+   - Extend scenario 1. Mark task-2 completed.
+   - Await two ticks (one for task-2 splice, one for re-scheduled task-1 splice).
+   - Assert: both tasks removed from =session.getTodoPhases()= (phases empty or phase dropped).
+
+3. *Reference from abandoned task preserves the blocker target indefinitely*.
+   - Create task-1 (content "A"), task-2 (blockers =["task-1"]=).
+   - Mark task-1 completed, then mark task-2 abandoned with a FUP ref.
+   - Await ticks.
+   - Assert: task-1 is still present (task-2 is abandoned but still in phases and still references task-1). Document this as intentional.
+
+4. *Unreferenced completed task clears normally*.
+   - Create task-1 and task-2 with no blockers.
+   - Mark both completed.
+   - Await ticks.
+   - Assert: both removed.
+
+5. *syncTodoPhasesFromBranch preserves referenced completed on resume*.
+   - Hard to test at the unit level because it depends on =sessionManager.getBranch()= returning a specific shape. Approach: construct a mock =SessionEntry[]= where the latest =todo_write= result contains a completed blocker referenced by a pending dependent. Call =getLatestTodoPhasesFromEntries= directly (it is exported from =todo-write.ts=). Then call a helper that replicates =#syncTodoPhasesFromBranch='s filter logic — but =#syncTodoPhasesFromBranch= is private. Alternative: expose the filter logic as a pure helper in =agent-session.ts= (e.g., =filterSyncedPhases(phases: TodoPhase[]): TodoPhase[]=) or add the logic inline to =getLatestTodoPhasesFromEntries= as an optional flag. *Decision*: factor the filter into a private top-level helper =filterSyncedTodoPhases(phases: TodoPhase[]): TodoPhase[]= in =agent-session.ts= (not exported, but testable via integration-level AgentSession test that triggers the sync path through =newSession= or =sessionManager.getBranch()= mocking). If that's too invasive, write the test as an AgentSession-level black box: populate the branch with a mock message containing the target phases, call one of the sync triggers (see =#syncTodoPhasesFromBranch= callers at lines 539, 3484, 3614, 3828, 4650, 5272, 5358, 5528), and assert the post-sync phases via =session.getTodoPhases()=. Prefer the black-box approach.
+
+6. *=tasks.todoClearDelay= = -1 (never) skips scheduling entirely*. Verify this branch (line 2955) still returns early with the new code.
+
+* Verification
+
+- Run: =bun test packages/coding-agent/test/agent-session-todo-auto-clear.test.ts=
+- Run: =bun test packages/coding-agent/test/tools/todo-write.test.ts= (regression — ensure existing tests still pass with the new scheduler invariant).
+- Run: =bun check:ts=
+- Manual: start a dev session, mark a blocker-referenced task complete with default 60s delay, confirm the task is NOT removed and that no "references non-existent blocker" errors appear in the next =todo_write= output. (Acceptance artifact: a session log demonstrating the absence of the error message.)
+
+* Files touched
+
+- =packages/coding-agent/src/session/agent-session.ts= (modify)
+- =packages/coding-agent/test/agent-session-todo-auto-clear.test.ts= (new)

@@ -1,0 +1,60 @@
+{
+  "addTaskSummary": "Remaining items (2):\n  - task-2 Dependent [in_progress] (Work)\n  - task-3 Follow-up [pending] (Work)\nPhase 1/1 \"Work\" — 1/3 tasks complete\n  Work:\n    ✓ task-1 Root blocker\n    → task-2 Dependent\n    ○ task-3 Follow-up",
+  "afterProtectedWait": [
+    {
+      "id": "phase-1",
+      "name": "Work",
+      "tasks": [
+        {
+          "id": "task-1",
+          "content": "Root blocker",
+          "status": "completed"
+        },
+        {
+          "id": "task-2",
+          "content": "Dependent",
+          "status": "in_progress",
+          "blockers": [
+            "task-1"
+          ]
+        },
+        {
+          "id": "task-3",
+          "content": "Follow-up",
+          "status": "pending"
+        }
+      ]
+    }
+  ],
+  "afterFirstClear": [
+    {
+      "id": "phase-1",
+      "name": "Work",
+      "tasks": [
+        {
+          "id": "task-1",
+          "content": "Root blocker",
+          "status": "completed"
+        },
+        {
+          "id": "task-3",
+          "content": "Follow-up",
+          "status": "in_progress"
+        }
+      ]
+    }
+  ],
+  "afterSecondClear": [
+    {
+      "id": "phase-1",
+      "name": "Work",
+      "tasks": [
+        {
+          "id": "task-3",
+          "content": "Follow-up",
+          "status": "in_progress"
+        }
+      ]
+    }
+  ]
+}

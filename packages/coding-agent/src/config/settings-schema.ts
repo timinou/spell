@@ -1292,7 +1292,8 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "tasks",
 			label: "Todo auto-clear delay",
-			description: "How long to wait before removing completed/abandoned tasks from the list",
+			description:
+				"How long to wait (in seconds) before removing completed tasks from the list. Abandoned tasks are not auto-cleared.",
 			submenu: true,
 		},
 	},

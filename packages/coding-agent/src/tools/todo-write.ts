@@ -519,6 +519,9 @@ export function applyOps(
 	const errors: string[] = [];
 	const pendingVerificationTasks: TodoItem[] = [];
 	const pendingDeferralTasks: TodoItem[] = [];
+	// Task IDs whose blockers were explicitly set by an op in this batch.
+	// Only these tasks are validated for dangling refs; pre-existing stale refs are pruned silently.
+	const batchBlockerTaskIds = new Set<string>();
 
 	const wasComplete = new Map<string, boolean>();
 	for (const phase of previousPhases) {
@@ -541,6 +544,10 @@ export function applyOps(
 					next.nextTaskId = nextTaskId;
 				}
 				file = next;
+				// All tasks in a replace op have their blockers set by this batch.
+				for (const phase of next.phases) {
+					for (const task of phase.tasks) batchBlockerTaskIds.add(task.id);
+				}
 				break;
 			}
 			case "add_phase": {
@@ -548,6 +555,8 @@ export function applyOps(
 				const { phase, nextTaskId } = buildPhaseFromInput(op, phaseId, file.nextTaskId, policies);
 				file.phases.push(phase);
 				file.nextTaskId = nextTaskId;
+				// All tasks in an add_phase op have their blockers set by this batch.
+				for (const task of phase.tasks) batchBlockerTaskIds.add(task.id);
 				break;
 			}
 			case "add_task": {
@@ -575,6 +584,8 @@ export function applyOps(
 				};
 				injectPolicyGates(task, policies);
 				target.tasks.push(task);
+				// Blockers for this task were set by this batch.
+				batchBlockerTaskIds.add(task.id);
 				break;
 			}
 			case "update": {
@@ -592,7 +603,11 @@ export function applyOps(
 				if (op.gateCmd !== undefined) task.gateCmd = op.gateCmd;
 				if (op.gateLlm !== undefined) task.gateLlm = op.gateLlm;
 				if (op.verifyCmd !== undefined) task.verifyCmd = op.verifyCmd;
-				if (op.blockers !== undefined) task.blockers = op.blockers;
+				if (op.blockers !== undefined) {
+					task.blockers = op.blockers;
+					// Blockers were explicitly set by this batch op.
+					batchBlockerTaskIds.add(task.id);
+				}
 				if (op.orgItemId !== undefined) task.orgItemId = op.orgItemId;
 				if (op.orgItemClosingId !== undefined) task.orgItemClosingId = op.orgItemClosingId;
 				if (op.delegation !== undefined) task.delegation = cloneTodoDelegation(op.delegation);
@@ -637,14 +652,25 @@ export function applyOps(
 
 	normalizeInProgressTask(file.phases);
 
-	// Validate dangling blocker refs — warn but don't change behavior (missing = resolved)
+	// Validate dangling blocker refs only for tasks whose blockers were set in this batch.
+	// Pre-existing stale refs are pruned silently below.
 	const allTaskIds = new Set(file.phases.flatMap(p => p.tasks.map(t => t.id)));
 	for (const phase of file.phases) {
 		for (const task of phase.tasks) {
 			if (!task.blockers?.length) continue;
-			for (const blockerId of task.blockers) {
-				if (!allTaskIds.has(blockerId)) errors.push(`${task.id} references non-existent blocker ${blockerId}`);
+			if (batchBlockerTaskIds.has(task.id)) {
+				for (const blockerId of task.blockers) {
+					if (!allTaskIds.has(blockerId)) errors.push(`${task.id} references non-existent blocker ${blockerId}`);
+				}
 			}
+		}
+	}
+	// Prune dangling blocker refs from all tasks so stale refs do not affect blocker gating.
+	for (const phase of file.phases) {
+		for (const task of phase.tasks) {
+			if (!task.blockers?.length) continue;
+			const pruned = task.blockers.filter(id => allTaskIds.has(id));
+			if (pruned.length !== task.blockers.length) task.blockers = pruned.length > 0 ? pruned : undefined;
 		}
 	}
 
