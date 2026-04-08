@@ -44,16 +44,16 @@ describe("spec ingestion", () => {
 		expect(readiness.ok).toBe(false);
 		expect(readiness.required.find(check => check.name === "review-model")?.ok).toBe(false);
 	});
+
 	it("recognises description-style id links as valid cross-references", async () => {
 		const file = path.join(specDir, "spec.org");
-		const NL = String.fromCharCode(10);
 		const content = [
 			"#+TITLE: Spec",
 			"#+CUSTOM_ID: SPEC-001-demo",
 			"",
 			"See [[id:SPEC-001-demo][the demo]]",
 			"",
-		].join(NL);
+		].join("\n");
 		await Bun.write(file, content);
 		const parsed = await parseSpecDirectory(specDir);
 		expect(parsed[0]?.links).toEqual(["SPEC-001-demo"]);

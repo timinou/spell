@@ -62,7 +62,7 @@ export interface ExitPlanModeDetails {
 export function extractPlanWaves(body: string): PlanWave[] | undefined {
 	const waveRe = /^\s*\*\*\s+(.+?)\s+:wave:\s*$/;
 	const subheadingRe = /^\s*\*\*\s+/;
-	const entryRe = /^\s*-\s+\[\[id:([^\]]+)\]\]\s+(.+)$/;
+	const entryRe = /^\s*-\s+\[\[id:([^\]]+)\](?:\[[^\]]*\])?\]\s+(.+)$/;
 	const lines = body.split("\n");
 	const waves: PlanWave[] = [];
 	let current: PlanWave | null = null;
