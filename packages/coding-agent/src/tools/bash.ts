@@ -75,6 +75,8 @@ export interface BashToolInput {
 
 export interface BashToolDetails {
 	meta?: OutputMeta;
+	exitCode?: number;
+	cwd?: string;
 	async?: {
 		state: "running" | "completed" | "failed";
 		jobId: string;
@@ -238,18 +240,26 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		return outputText;
 	}
 
-	#buildResultText(result: BashResult | BashInteractiveResult, timeoutSec: number, outputText: string): string {
+	#buildResultText(
+		result: BashResult | BashInteractiveResult,
+		timeoutSec: number,
+		outputText: string,
+		cwd: string,
+	): string {
 		if (result.cancelled) {
-			throw new ToolError(normalizeResultOutput(result) || "Command aborted");
+			throw new ToolError(normalizeResultOutput(result) || "Command aborted", { cwd });
 		}
 		if (isInteractiveResult(result) && result.timedOut) {
-			throw new ToolError(normalizeResultOutput(result) || `Command timed out after ${timeoutSec} seconds`);
+			throw new ToolError(normalizeResultOutput(result) || `Command timed out after ${timeoutSec} seconds`, { cwd });
 		}
 		if (result.exitCode === undefined) {
-			throw new ToolError(`${outputText}\n\nCommand failed: missing exit status`);
+			throw new ToolError(`${outputText}\n\nCommand failed: missing exit status`, { cwd });
 		}
 		if (result.exitCode !== 0) {
-			throw new ToolError(`${outputText}\n\nCommand exited with code ${result.exitCode}`);
+			throw new ToolError(`${outputText}\n\nCommand exited with code ${result.exitCode}`, {
+				exitCode: result.exitCode,
+				cwd,
+			});
 		}
 		return outputText;
 	}
@@ -376,7 +386,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 							},
 						});
 						const outputText = this.#formatResultOutput(result, headLines, tailLines);
-						const finalText = this.#buildResultText(result, timeoutSec, outputText);
+						const finalText = this.#buildResultText(result, timeoutSec, outputText, commandCwd);
 						await reportProgress(finalText, { async: { state: "completed", jobId, type: "bash" } });
 						return finalText;
 					} catch (error) {
@@ -436,20 +446,25 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			if (signal?.aborted) {
 				throw new ToolAbortError(normalizeResultOutput(result) || "Command aborted");
 			}
-			throw new ToolError(normalizeResultOutput(result) || "Command aborted");
+			throw new ToolError(normalizeResultOutput(result) || "Command aborted", { cwd: commandCwd });
 		}
 		if (isInteractiveResult(result) && result.timedOut) {
-			throw new ToolError(normalizeResultOutput(result) || `Command timed out after ${timeoutSec} seconds`);
+			throw new ToolError(normalizeResultOutput(result) || `Command timed out after ${timeoutSec} seconds`, {
+				cwd: commandCwd,
+			});
 		}
 
 		const outputText = this.#formatResultOutput(result, headLines, tailLines);
-		const details: BashToolDetails = {};
+		const details: BashToolDetails = { exitCode: result.exitCode, cwd: commandCwd };
 		const resultBuilder = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" });
 		if (result.exitCode === undefined) {
-			throw new ToolError(`${outputText}\n\nCommand failed: missing exit status`);
+			throw new ToolError(`${outputText}\n\nCommand failed: missing exit status`, { cwd: commandCwd });
 		}
 		if (result.exitCode !== 0 && result.exitCode !== undefined) {
-			throw new ToolError(`${outputText}\n\nCommand exited with code ${result.exitCode}`);
+			throw new ToolError(`${outputText}\n\nCommand exited with code ${result.exitCode}`, {
+				exitCode: result.exitCode,
+				cwd: commandCwd,
+			});
 		}
 
 		return resultBuilder.done();

@@ -38,6 +38,35 @@ describe("bash-subprocess-handler", () => {
 		expect(handler?.extractData?.(event)).toEqual({ command: "bun test", exitCode: 1 });
 	});
 
+	it("extracts real exit code and cwd from bash tool details", () => {
+		const event: SubprocessToolEvent = {
+			toolName: "bash",
+			toolCallId: "call-1",
+			args: { command: "bun test" },
+			result: {
+				content: [{ type: "text", text: "Command exited with code 7" }],
+				details: { exitCode: 7, cwd: "/tmp/worktree" },
+			},
+			isError: true,
+		};
+
+		const handler = subprocessToolRegistry.getHandler("bash");
+		expect(handler?.extractData?.(event)).toEqual({ command: "bun test", exitCode: 7, cwd: "/tmp/worktree" });
+	});
+
+	it("falls back to parsing the rendered error when details are absent", () => {
+		const event: SubprocessToolEvent = {
+			toolName: "bash",
+			toolCallId: "call-1",
+			args: { command: "bun test" },
+			result: { content: [{ type: "text", text: "stderr\n\nCommand exited with code 23" }] },
+			isError: true,
+		};
+
+		const handler = subprocessToolRegistry.getHandler("bash");
+		expect(handler?.extractData?.(event)).toEqual({ command: "bun test", exitCode: 23 });
+	});
+
 	it("returns undefined when command is missing", () => {
 		const event: SubprocessToolEvent = {
 			toolName: "bash",

@@ -1047,6 +1047,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return cached;
 			};
 		})(),
+		getBashHistory: () => session.getBashHistory(),
+		captureGitBaseline: () => session.captureGitBaseline(),
+		compareGitBaseline: baseline => session.compareGitBaseline(baseline),
 	};
 
 	// Initialize internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, local://)

@@ -18,7 +18,7 @@ function extractToolContentText(value: unknown): string {
 	return value
 		.filter(isRecord)
 		.filter(block => block.type === "text" && typeof block.text === "string")
-		.map(block => block.text?.trim() ?? "")
+		.map(block => (typeof block.text === "string" ? block.text.trim() : ""))
 		.filter(Boolean)
 		.join("\n\n");
 }

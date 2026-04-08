@@ -225,6 +225,14 @@ export interface ToolSession {
 	gatewayClient?: GatewayClient;
 	/** Resolved task policies (project + mode merged). Cached per session. */
 	getResolvedTaskPolicies?: () => TaskPolicy[];
+	/** Get accumulated bash tool execution history for this session. */
+	getBashHistory?: () => ReadonlyArray<import("../task/gate-verification").TrackedBashExecution>;
+	/** Capture a git baseline for the session cwd. Returns null outside a git repo. */
+	captureGitBaseline?: () => Promise<import("../session/git-baseline").GitBaseline | null>;
+	/** Compare current working-tree against a previously captured baseline. Returns null when evidence is unavailable. */
+	compareGitBaseline?: (
+		baseline: import("../session/git-baseline").GitBaseline,
+	) => Promise<import("../session/git-baseline").GitBaselineDiff | null>;
 }
 
 type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;

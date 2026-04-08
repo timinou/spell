@@ -9,6 +9,7 @@ import type {
 } from "@oh-my-pi/pi-agent-core";
 import type { CursorMcpCall, CursorExecHandlers as ICursorExecHandlers, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { resolveToCwd } from "./tools/path-utils";
+import { ToolError } from "./tools/tool-errors";
 
 interface CursorExecBridgeOptions {
 	cwd: string;
@@ -34,10 +35,10 @@ function createToolResultMessage(
 	};
 }
 
-function buildToolErrorResult(message: string): AgentToolResult<unknown> {
+function buildToolErrorResult(message: string, details: Record<string, unknown> = {}): AgentToolResult<unknown> {
 	return {
 		content: [{ type: "text", text: message }],
-		details: {},
+		details,
 	};
 }
 
@@ -80,7 +81,8 @@ async function executeTool(
 		);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		result = buildToolErrorResult(message);
+		const details = error instanceof ToolError && error.context ? error.context : {};
+		result = buildToolErrorResult(message, details);
 		isError = true;
 	}
 

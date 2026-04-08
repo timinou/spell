@@ -50,6 +50,16 @@ describe("gate verification", () => {
 			expect(normalizeCommand("cd /app && cd sub && bun test")).toBe("bun test");
 		});
 
+		it("unwraps leading env assignments", () => {
+			expect(normalizeCommand("env CI=1 bun test")).toBe("bun test");
+			expect(normalizeCommand("CI=1 FOO=bar bun test")).toBe("bun test");
+		});
+
+		it("unwraps shell -c wrappers", () => {
+			expect(normalizeCommand('sh -c "bun test"')).toBe("bun test");
+			expect(normalizeCommand("bash -lc 'bun test foo.ts'")).toBe("bun test foo.ts");
+		});
+
 		it("preserves bare cd commands", () => {
 			expect(normalizeCommand("cd /app")).toBe("cd /app");
 		});
@@ -60,33 +70,55 @@ describe("gate verification", () => {
 	});
 
 	describe("matchesGateCmd", () => {
-		it("matches exact successful execution", () => {
-			const executions: TrackedBashExecution[] = [{ command: "bun test", exitCode: 0 }];
-			expect(matchesGateCmd("bun test", executions)).toBe(true);
+		it("matches exact successful execution in the expected cwd", () => {
+			const executions: TrackedBashExecution[] = [{ command: "bun test", exitCode: 0, cwd: "/app" }];
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
 		});
 
-		it("matches substring after normalization", () => {
-			const executions: TrackedBashExecution[] = [{ command: "cd /app && bun test foo.ts", exitCode: 0 }];
-			expect(matchesGateCmd("bun test foo.ts", executions)).toBe(true);
+		it("matches exact command after normalization and cwd resolution", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "cd /app && bun test foo.ts", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("bun test foo.ts", executions, "/app")).toBe(true);
+		});
+
+		it("matches transparent env wrappers", () => {
+			const executions: TrackedBashExecution[] = [{ command: "env CI=1 bun test", exitCode: 0, cwd: "/app" }];
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
+		});
+
+		it("matches transparent shell wrappers", () => {
+			const executions: TrackedBashExecution[] = [{ command: 'sh -c "bun test"', exitCode: 0, cwd: "/app" }];
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
+		});
+
+		it("returns false when only a substring matches", () => {
+			const executions: TrackedBashExecution[] = [{ command: "bun test foo.ts", exitCode: 0, cwd: "/app" }];
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(false);
+		});
+
+		it("returns false when the cwd does not match", () => {
+			const executions: TrackedBashExecution[] = [{ command: "bun test", exitCode: 0, cwd: "/other" }];
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(false);
 		});
 
 		it("returns false when no command matches", () => {
-			const executions: TrackedBashExecution[] = [{ command: "bun lint", exitCode: 0 }];
-			expect(matchesGateCmd("bun test", executions)).toBe(false);
+			const executions: TrackedBashExecution[] = [{ command: "bun lint", exitCode: 0, cwd: "/app" }];
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(false);
 		});
 
 		it("returns false for empty executions", () => {
-			expect(matchesGateCmd("bun test", [])).toBe(false);
+			expect(matchesGateCmd("bun test", [], "/app")).toBe(false);
 		});
 
 		it("ignores failed executions", () => {
-			const executions: TrackedBashExecution[] = [{ command: "bun test", exitCode: 1 }];
-			expect(matchesGateCmd("bun test", executions)).toBe(false);
+			const executions: TrackedBashExecution[] = [{ command: "bun test", exitCode: 1, cwd: "/app" }];
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(false);
 		});
 
 		it("is case sensitive", () => {
-			const executions: TrackedBashExecution[] = [{ command: "BUN TEST", exitCode: 0 }];
-			expect(matchesGateCmd("bun test", executions)).toBe(false);
+			const executions: TrackedBashExecution[] = [{ command: "BUN TEST", exitCode: 0, cwd: "/app" }];
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(false);
 		});
 	});
 
@@ -153,18 +185,30 @@ describe("gate verification", () => {
 		it("passes when gateCmd is satisfied", async () => {
 			const result = await verifyGates({
 				gateCmd: "bun test",
-				executions: [{ command: "cd /app && bun test foo.ts", exitCode: 0 }],
-				cwd: os.tmpdir(),
+				executions: [{ command: 'sh -c "bun test"', exitCode: 0, cwd: "/app" }],
+				cwd: "/app",
 			});
 			expect(result.passed).toBe(true);
 			expect(result.failures).toEqual([]);
 		});
 
+		it("fails when gateCmd is run from the wrong cwd", async () => {
+			const result = await verifyGates({
+				gateCmd: "bun test",
+				executions: [{ command: "bun test", exitCode: 0, cwd: "/other" }],
+				cwd: "/app",
+			});
+			expect(result.passed).toBe(false);
+			expect(result.failures).toEqual([
+				{ gate: "gateCmd", expected: "bun test", detail: "No successful execution matched the gate command." },
+			]);
+		});
+
 		it("fails when gateCmd is not satisfied", async () => {
 			const result = await verifyGates({
 				gateCmd: "bun test",
-				executions: [{ command: "bun lint", exitCode: 0 }],
-				cwd: os.tmpdir(),
+				executions: [{ command: "bun lint", exitCode: 0, cwd: "/app" }],
+				cwd: "/app",
 			});
 			expect(result.passed).toBe(false);
 			expect(result.failures).toEqual([
@@ -215,7 +259,7 @@ describe("gate verification", () => {
 					gateCommit: true,
 					gateArtifact: artifact,
 					executions: [
-						{ command: "cd /app && bun test", exitCode: 0 },
+						{ command: "env CI=1 bun test", exitCode: 0, cwd: dir },
 						{ command: "git commit -m fix", exitCode: 0 },
 					],
 					cwd: dir,
@@ -233,7 +277,7 @@ describe("gate verification", () => {
 					gateCommit: true,
 					gateArtifact: artifact,
 					executions: [
-						{ command: "bun lint", exitCode: 0 },
+						{ command: "pnpm test", exitCode: 0, cwd: dir },
 						{ command: "git commit -m fix", exitCode: 0 },
 					],
 					cwd: dir,

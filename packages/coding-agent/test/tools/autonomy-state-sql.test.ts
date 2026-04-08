@@ -69,7 +69,7 @@ function createTestDb() {
 
 async function exec(tool: AutonomyStateTool, input: Record<string, unknown>) {
 	const result = await tool.execute("test-call", input as never);
-	return result.details as Record<string, unknown>;
+	return result.details as unknown as Record<string, unknown>;
 }
 
 describe("autonomy_state SQL ops", () => {

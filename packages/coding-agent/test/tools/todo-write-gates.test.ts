@@ -214,7 +214,7 @@ describe("formatSummary gate directives", () => {
 		expect(result).toContain("REQUIRED: Commit your changes for task-1 (Full gates) before proceeding.");
 		expect(result).toContain("REQUIRED: Verify artifact exists at dist/out.json for task-1.");
 		expect(result).toContain("REQUIRED: Run `bun test` to verify task-1.");
-		expect(result).toContain("REQUIRED: Review task-1 against acceptance criteria: check acceptance");
+		expect(result).toContain("ADVISORY: Review task-1 against acceptance criteria: check acceptance");
 		expect(result).toContain("RECOMMENDED: Run `bun check` to verify task-1.");
 	});
 
@@ -446,8 +446,8 @@ describe("hasRequiredGate", () => {
 		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", gateCmd: "bun test" }))).toBe(true);
 	});
 
-	test("returns true for gateLlm", () => {
-		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", gateLlm: "check criteria" }))).toBe(true);
+	test("returns false for gateLlm-only tasks", () => {
+		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", gateLlm: "check criteria" }))).toBe(false);
 	});
 
 	test("returns false for orgItemId (non-gating lineage)", () => {
@@ -579,18 +579,20 @@ describe("two-phase gated completion via formatSummary", () => {
 		expect(result).not.toContain("orgItemId");
 	});
 
-	test("verification checklist includes gateLlm", () => {
+	test("verification checklist keeps gateLlm as advisory text alongside required gates", () => {
 		const task = makeTask({
 			id: "task-1",
 			content: "Review task",
 			status: "in_progress",
+			gateCommit: true,
 			gateLlm: "check acceptance criteria",
 		});
 		const result = callFormatSummary({
 			phases: [makePhase("phase-1", "Work", [task])],
 			pendingVerificationTasks: [task],
 		});
-		expect(result).toContain("[ ] Review against: check acceptance criteria (gateLlm)");
+		expect(result).toContain("[ ] Commit changes (gateCommit)");
+		expect(result).toContain("[i] Advisory review: check acceptance criteria (gateLlm)");
 	});
 });
 
@@ -598,7 +600,7 @@ describe("two-phase gated completion via formatSummary", () => {
 // Two-phase gated completion via TodoWriteTool.execute
 // =============================================================================
 
-function createSession(initialPhases: TodoPhase[] = []): ToolSession {
+function createSession(initialPhases: TodoPhase[] = [], overrides: Partial<ToolSession> = {}): ToolSession {
 	let phases = initialPhases;
 	return {
 		cwd: "/tmp/test",
@@ -610,6 +612,7 @@ function createSession(initialPhases: TodoPhase[] = []): ToolSession {
 		setTodoPhases: next => {
 			phases = next;
 		},
+		...overrides,
 	};
 }
 
@@ -649,7 +652,9 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 	});
 
 	test("completing a gated task with verified: true succeeds", async () => {
-		const tool = new TodoWriteTool(createSession());
+		const tool = new TodoWriteTool(
+			createSession([], { getBashHistory: () => [{ command: "bun test", exitCode: 0, cwd: "/tmp/test" }] }),
+		);
 		await tool.execute("call-1", {
 			ops: [
 				{
@@ -708,6 +713,38 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(summary).not.toContain("Verification Required");
+	});
+
+	test("gateLlm-only task completes without verified", async () => {
+		const tool = new TodoWriteTool(createSession());
+		await tool.execute("call-1", {
+			ops: [
+				{
+					op: "replace",
+					phases: [
+						{
+							name: "Work",
+							tasks: [{ content: "Review task", gateLlm: "check acceptance criteria" }],
+						},
+					],
+				},
+			],
+		});
+
+		await tool.execute("call-2", {
+			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
+		});
+
+		const result = await tool.execute("call-3", {
+			ops: [{ op: "update", id: "task-1", status: "completed" }],
+		});
+
+		const tasks = result.details?.phases[0]?.tasks ?? [];
+		expect(tasks[0]?.status).toBe("completed");
+
+		const summary = result.content.find(part => part.type === "text")?.text ?? "";
+		expect(summary).not.toContain("Verification Required");
+		expect(summary).toContain("ADVISORY: Review task-1 against acceptance criteria: check acceptance criteria");
 	});
 
 	test("orgItemClosingId-only task triggers two-phase completion", async () => {
