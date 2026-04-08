@@ -32,7 +32,7 @@ export async function parseSpecDirectory(rootDir: string): Promise<ParsedSpecFil
 		const customIds = Array.from(content.matchAll(/CUSTOM_ID:\s*([A-Za-z0-9_-]+)/g))
 			.map(match => match[1] ?? "")
 			.filter(Boolean);
-		const links = Array.from(content.matchAll(/\[\[id:([^\]]+)\]\]/g))
+		const links = Array.from(content.matchAll(/\[\[id:([^\]]+)\](?:\[[^\]]*\])?\]/g))
 			.map(match => match[1] ?? "")
 			.filter(Boolean);
 		parsed.push({ path: filePath, content, customIds, links });
