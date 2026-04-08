@@ -31,6 +31,7 @@ describe("extractIdLinks", () => {
 		const body = "[[id:FEAT-001-add-auth]] [[id:FEAT-001-add-auth]] [[id:BUG-002-fix-refresh]]";
 		expect(extractIdLinks(body)).toEqual(["FEAT-001-add-auth", "BUG-002-fix-refresh"]);
 	});
+
 	test("extracts id from description-style link [[id:TARGET][DESCRIPTION]]", () => {
 		expect(extractIdLinks("- [[id:FEAT-072-webhook-health-pill-and-status-poller-vi][FEAT-072]] — item")).toEqual([
 			"FEAT-072-webhook-health-pill-and-status-poller-vi",
