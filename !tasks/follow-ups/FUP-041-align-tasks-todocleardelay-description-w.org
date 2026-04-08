@@ -1,0 +1,74 @@
+#+TITLE: Align taskstodoClearDelay description with actual behavior
+#+STATE: DONE
+#+SESSION_ID: 14b2a424b816138e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-08T13-49-50-688Z_14b2a424b816138e.jsonl]]
+#+CUSTOM_ID: FUP-041-align-tasks-todocleardelay-description-w
+#+EFFORT: 5m
+#+PRIORITY: C
+#+LAYER: config
+
+NOTE [2026-04-08]: Updated `tasks.todoClearDelay` description to match runtime behavior and verified the schema text now says abandoned tasks are not auto-cleared.
+
+* Initial Message
+
+I'm noticing that when tasks get marked complete, they're being removed from the roster entirely, which breaks any references to them. So task-4 disappeared, leaving task-7's blocker dangling and causing that
+ error about the non-existent reference. Task-4 got completely removed from the system after being marked complete, which broke all the blocker references pointing to it — tasks 7, 8, 9, 10, and 13 are all now
+ flagging errors because they depend on a non-existent task. The tracker is letting these warnings slide without blocking progress, so I'll just push forward and wait for task-2 to finish rather than trying to
+ manually clean up all the dangling references.
+
+in 
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo/2026-04-08T13-33-33-763Z_14b2a06ab0efe245.jsonl
+ ID: 14b2a06ab0efe245
+
+
+
+
+^^^^ explain the root cause and fix my friend
+
+* Problem
+
+=tasks.todoClearDelay= setting description in =packages/coding-agent/src/config/settings-schema.ts:1295= reads:
+
+#+begin_quote
+How long to wait before removing completed/abandoned tasks from the list
+#+end_quote
+
+The implementation in =AgentSession.#scheduleTodoAutoClear= (=agent-session.ts:2957-2964=) only tracks =completed= tasks:
+
+#+begin_src typescript
+const doneTaskIds = new Set<string>();
+for (const phase of phases) {
+    for (const task of phase.tasks) {
+        if (task.status === "completed") {
+            doneTaskIds.add(task.id);
+        }
+    }
+}
+#+end_src
+
+Abandoned tasks are explicitly preserved for audit trail (see the comment at =agent-session.ts:2938=: "abandoned tasks are preserved for deferral audit trail"). The description is stale and misleads users into thinking abandoned tasks will be auto-removed.
+
+* Fix
+
+Edit =packages/coding-agent/src/config/settings-schema.ts:1295=. Change the description string from:
+
+#+begin_src typescript
+description: "How long to wait before removing completed/abandoned tasks from the list",
+#+end_src
+
+to:
+
+#+begin_src typescript
+description: "How long to wait before removing completed tasks from the list (abandoned tasks are preserved for audit)",
+#+end_src
+
+* Verification
+
+- Run: =bun check:ts=
+- Manual: open the settings pane in the dev session, confirm the updated description appears.
+
+* Files touched
+
+- =packages/coding-agent/src/config/settings-schema.ts= (single line)

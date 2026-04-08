@@ -1,0 +1,126 @@
+#+TITLE: Fix todo auto-clear breaking blocker references
+#+STATE: BLOCKED
+#+SESSION_ID: 14b2a424b816138e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-08T13-49-50-688Z_14b2a424b816138e.jsonl]]
+#+CUSTOM_ID: PLAN-165-fix-todo-auto-clear-breaking-blocker-ref
+
+
+NOTE [2026-04-08]: Implementation and focused regressions are complete, but the required `bun check` gate still fails on unrelated pre-existing TypeScript errors outside this plan’s files.
+
+* Initial Message
+
+I'm noticing that when tasks get marked complete, they're being removed from the roster entirely, which breaks any references to them. So task-4 disappeared, leaving task-7's blocker dangling and causing that
+ error about the non-existent reference. Task-4 got completely removed from the system after being marked complete, which broke all the blocker references pointing to it — tasks 7, 8, 9, 10, and 13 are all now
+ flagging errors because they depend on a non-existent task. The tracker is letting these warnings slide without blocking progress, so I'll just push forward and wait for task-2 to finish rather than trying to
+ manually clean up all the dangling references.
+
+in 
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo/2026-04-08T13-33-33-763Z_14b2a06ab0efe245.jsonl
+ ID: 14b2a06ab0efe245
+
+
+
+
+^^^^ explain the root cause and fix my friend
+
+* Context
+
+** Symptom
+
+User session 14b2a06ab0efe245 hit the bug: task-4 was marked completed, vanished from the roster ~60s later, and every subsequent =todo_write= call reports =task-7 references non-existent blocker task-4= (plus the same error for tasks 8, 9, 10, 13). The tracker treats the errors as non-blocking, so work continues, but the noise is misleading and the state can never self-heal.
+
+** Root cause
+
+Two-part defect in the todo subsystem:
+
+1. *Auto-clear is blocker-graph-blind.* =AgentSession.#scheduleTodoAutoClear= (=packages/coding-agent/src/session/agent-session.ts:2953-2986=) arms a =setTimeout= per =completed= task id with delay =tasks.todoClearDelay= (default 60s). When the timer fires, =#runTodoAutoClear= (=lines 2989-3012=) does =phase.tasks.splice(idx, 1)= — physically deletes the task from =#todoPhases= — regardless of whether any other task in the roster still references it via =blockers=. The same hazard exists on session resume in =#syncTodoPhasesFromBranch= (=lines 2936-2946=), which unconditionally strips every =completed= task from the branch snapshot.
+
+2. *applyOps validator is too broad.* =applyOps= in =packages/coding-agent/src/tools/todo-write.ts:640-649= does a post-snapshot sweep over every task's =blockers= array on every call, re-reporting dangling refs that were introduced by the auto-clear timer (step 1). Because =hasUnresolvedBlockers= (=line 430=) treats missing refs as resolved, the functional behavior is already correct — the validator is pure noise.
+
+** Approach
+
+Two independent fixes, landed together, plus a tiny docs fix.
+
+1. *Prevent new dangling refs.* Make auto-clear aware of the blocker graph: a completed task is only eligible for removal when no remaining task's =blockers= array references its id. Re-evaluate on every =setTodoPhases= and at the end of each clear pass. Apply the same invariant to the resume path.
+
+2. *Heal existing dangling refs + suppress false alarms.* Relocate blocker validation from the post-snapshot sweep to per-op (only tasks whose =blockers= were set in the current ops batch are validated). After validation, silently prune every task's =blockers= array to drop any id that no longer resolves. The resulting state is always clean, and legitimate user errors still surface at the moment they are introduced.
+
+3. *Align settings description.* =tasks.todoClearDelay= description currently says "completed/abandoned tasks" but the code only clears =completed= tasks (abandoned are preserved for audit trail). One-line doc fix.
+
+** Key decisions
+
+- *Referenced completed tasks are preserved indefinitely*, even when the reference comes from an abandoned task. Rationale: audit trail integrity. If the user wants to drop the ref, they can =update= the dependent's =blockers=.
+- *Blocker pruning is silent, not logged.* A dangling blocker id carries no information the system needs to preserve — it always means "resolved". Logging every prune would be noise.
+- *Per-op validation only flags tasks touched in the current ops batch.* Pre-existing dangling refs (from past auto-clears or external mutations) are never flagged — they are just quietly cleaned.
+- *Forward-refs within the same =replace= op are valid.* The finalize step runs after all tasks in the batch are built, so task-1 can reference task-2 and vice versa.
+- *The existing test =`dangling blocker ref produces warning`= passes unchanged* because the new per-op validator emits the same error string for the same user input (=blockers: ["task-99"]= on a fresh =replace=).
+- *Settings description*: the FUP aligns the stale text. Not gating.
+
+* Verification
+
+** Per-child verification
+- [[id:BUG-190-todo-auto-clear-preserves-blocker-refere][BUG-190]]: =bun test packages/coding-agent/test/agent-session-todo-auto-clear.test.ts= (new file, 6 test cases).
+- [[id:BUG-191-applyops-validates-blockers-per-op-and-p][BUG-191]]: =bun test packages/coding-agent/test/tools/todo-write.test.ts= (new tests + the existing dangling-ref test must still pass).
+- [[id:FUP-041-align-tasks-todocleardelay-description-w][FUP-041]]: visual check in settings pane.
+
+** Global gates
+
+After all three items land:
+
+1. =bun check= (TypeScript + Rust full check).
+2. =bun test packages/coding-agent/test/tools/todo-write.test.ts= (regression for the tool layer).
+3. =bun test packages/coding-agent/test/agent-session-todo-auto-clear.test.ts= (new file).
+4. =bun test packages/coding-agent/test/agent-session-eager-todo.test.ts= and =agent-session-new-session-todos.test.ts= (regression for related AgentSession behavior).
+
+** Manual acceptance
+
+1. In a dev session with default =tasks.todoClearDelay= (60s), create a phase with two tasks where task-2 has =blockers: ["task-1"]=. Mark task-1 completed.
+2. Wait 90 seconds. Call =todo_write add_task= to add a third task.
+3. Assert: the returned summary does NOT contain =references non-existent blocker=. Task-1 is still visible in the roster with status =completed=.
+4. Mark task-2 completed. Wait 90 seconds.
+5. Assert: both task-1 and task-2 are removed, phase is empty (or dropped).
+
+** Acceptance artifact
+
+A =.spell= session log demonstrating steps 1-5 above (or a captured =todo_write= result JSON). Store under =packages/coding-agent/test/fixtures/= if needed as a regression fixture, or reference the manual test steps in the PR description.
+
+** Changelog
+
+Add entries to =packages/coding-agent/CHANGELOG.md= under =[Unreleased]= → =### Fixed=:
+
+- Todo auto-clear no longer removes completed tasks that are still referenced by other tasks' =blockers=, preventing the cascade of "references non-existent blocker" errors. ([session reference])
+- =todo_write= silently prunes dangling blocker ids and only validates blockers for tasks touched in the current ops batch.
+
+* Execution Manifest
+
+Three children. Ordering is suggested, not strict — the two BUG items touch disjoint files and can run in parallel. The FUP is independent.
+
+** Wave 1 (parallel, both required for the complete fix)
+- [[id:BUG-190-todo-auto-clear-preserves-blocker-refere][BUG-190]] todo auto-clear preserves blocker-referenced completed tasks — =session= layer, effort 1h, priority A. Modifies =agent-session.ts=, adds =agent-session-todo-auto-clear.test.ts=.
+- [[id:BUG-191-applyops-validates-blockers-per-op-and-p][BUG-191]] applyOps validates blockers per-op and prunes dangling refs — =tools= layer, effort 1h, priority A. Modifies =todo-write.ts= and =test/tools/todo-write.test.ts=.
+
+** Wave 2 (trivial, can land any time)
+- [[id:FUP-041-align-tasks-todocleardelay-description-w][FUP-041]] Align =tasks.todoClearDelay= description with actual behavior — =config= layer, effort 5m, priority C. Single-line edit in =settings-schema.ts=.
+
+** Total effort
+
+~2h 5m (mostly the two BUG items running in parallel).
+
+
+** Completion [2026-04-08]
+*** Verification
+- `bun test packages/coding-agent/test/agent-session-todo-auto-clear.test.ts` — passed (7 pass, 0 fail).
+- `bun test packages/coding-agent/test/tools/todo-write.test.ts` — passed (23 pass, 0 fail).
+- `bun test packages/coding-agent/test/agent-session-eager-todo.test.ts` — passed (2 pass, 0 fail).
+- `bun test packages/coding-agent/test/agent-session-new-session-todos.test.ts` — passed (2 pass, 0 fail).
+- `bun check` — failed on unrelated existing TypeScript errors in `packages/coding-agent/src/tools/autonomy-state/sql-store.ts`, `packages/coding-agent/test/tools/autonomy-state-sql.test.ts`, `packages/spell-server/src/http/routes/approvals.ts`, `packages/spell-server/src/telegram/tool-progress.ts`, and `packages/utils/src/logger.ts`. No `bun check` failures referenced the files changed by this plan.
+- `packages/coding-agent/src/config/settings-schema.ts` inspected directly to confirm `tasks.todoClearDelay` now says abandoned tasks are not auto-cleared.
+
+*** Artifacts
+- Manual acceptance scenario JSON: [[file:!tasks/plans/plan-artifacts/PLAN-165-fix-todo-auto-clear-breaking-blocker-ref/manual-acceptance-todo-auto-clear.json]]
+
+*** Deviations
+- Required global gate `bun check` is still blocked by unrelated pre-existing TypeScript errors outside this plan’s files, so the PLAN cannot be marked `DONE` truthfully.
+- The planned settings-pane visual check was not run; source inspection of `packages/coding-agent/src/config/settings-schema.ts` was used instead.

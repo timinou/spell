@@ -1,0 +1,177 @@
+#+TITLE: applyOps validates blockers per-op and prunes dangling refs
+#+STATE: DONE
+#+SESSION_ID: 14b2a424b816138e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-08T13-49-50-688Z_14b2a424b816138e.jsonl]]
+#+CUSTOM_ID: BUG-191-applyops-validates-blockers-per-op-and-p
+#+EFFORT: 1h
+#+PRIORITY: A
+#+LAYER: tools
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-08]: Scoped blocker validation to tasks touched in the current ops batch, pruned stale blocker ids silently, and verified with `bun test packages/coding-agent/test/tools/todo-write.test.ts`.
+
+* Initial Message
+
+I'm noticing that when tasks get marked complete, they're being removed from the roster entirely, which breaks any references to them. So task-4 disappeared, leaving task-7's blocker dangling and causing that
+ error about the non-existent reference. Task-4 got completely removed from the system after being marked complete, which broke all the blocker references pointing to it — tasks 7, 8, 9, 10, and 13 are all now
+ flagging errors because they depend on a non-existent task. The tracker is letting these warnings slide without blocking progress, so I'll just push forward and wait for task-2 to finish rather than trying to
+ manually clean up all the dangling references.
+
+in 
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo/2026-04-08T13-33-33-763Z_14b2a06ab0efe245.jsonl
+ ID: 14b2a06ab0efe245
+
+
+
+
+^^^^ explain the root cause and fix my friend
+
+* Problem
+
+=applyOps= in =packages/coding-agent/src/tools/todo-write.ts= validates blocker references via a post-snapshot sweep (lines 640-649):
+
+#+begin_src typescript
+// Validate dangling blocker refs — warn but don't change behavior (missing = resolved)
+const allTaskIds = new Set(file.phases.flatMap(p => p.tasks.map(t => t.id)));
+for (const phase of file.phases) {
+    for (const task of phase.tasks) {
+        if (!task.blockers?.length) continue;
+        for (const blockerId of task.blockers) {
+            if (!allTaskIds.has(blockerId)) errors.push(`${task.id} references non-existent blocker ${blockerId}`);
+        }
+    }
+}
+#+end_src
+
+This runs on every =todo_write= call regardless of whether the current op touched blockers. When =AgentSession='s auto-clear timer (see sibling bug [[id:BUG-190-todo-auto-clear-preserves-blocker-refere][BUG-190 todo auto-clear preserves blocker-referenced completed tasks]]) physically removes a completed blocker target, every dependent's =blockers= array retains the stale id. Each subsequent =todo_write= call emits one error per dangling ref, forever, until the session dies.
+
+The functional behavior is already correct — =hasUnresolvedBlockers= at line 430 treats missing refs as resolved — but the validator noise is misleading: it frames a legitimate post-clear state as a data integrity failure.
+* Scope
+
+This item fixes the *validator + self-healing* side of the problem. The *auto-clear prevention* side is covered by the sibling bug [[id:BUG-190-todo-auto-clear-preserves-blocker-refere][BUG-190 todo auto-clear preserves blocker-referenced completed tasks]]. Both items are needed together. They touch disjoint files and can be implemented in parallel.
+* Design decisions
+
+1. *Validation is per-op, not per-snapshot*. An error is produced only when the current =ops= batch creates or updates a task with a blocker id that does not resolve in the final state. Pre-existing dangling refs (from auto-clear fallout or external mutations) are never flagged.
+2. *Silent self-healing*. After validation, every remaining task's =blockers= array is rewritten to drop any id that no longer resolves to a task in the final state. This is silent — no error, no warning, no log entry. The rationale: the intended behavior of a completed/removed blocker is exactly "resolved", and a dangling id carries no information the system needs to preserve.
+3. *Validation order*. Validate FIRST (so a user-supplied bad ref in the current op surfaces), then prune (so the resulting file is always clean). This means a user who submits =update id=task-7 blockers=["task-99"]= in the same batch that also has pre-existing dangling refs on task-8 will see exactly one error for task-7, and task-8's blockers will be pruned silently.
+4. *Tracking which tasks to validate*. Maintain a =validateBlockersFor: Set<string>= inside =applyOps=. Populate from the ops:
+   - =replace=: every new task id whose =blockers= is non-empty.
+   - =add_phase=: every new task id whose =blockers= is non-empty.
+   - =add_task=: the new task id if =blockers= is non-empty.
+   - =update=: the task id iff =op.blockers !== undefined=.
+5. *Error message format stays identical*. The existing test =`dangling blocker ref produces warning`= at =test/tools/todo-write.test.ts:357-375= asserts =`task-1 references non-existent blocker task-99`=. The new per-op validator must produce the same string for the same input.
+6. *Pruning applies to every task*, not just tasks in =validateBlockersFor=. Non-touched tasks with pre-existing dangling refs also get cleaned. This is the whole point of self-healing.
+
+* Implementation
+
+Files to modify:
+
+- =packages/coding-agent/src/tools/todo-write.ts= — edit =applyOps= (lines 513-672).
+- =packages/coding-agent/test/tools/todo-write.test.ts= — add new tests, keep existing test.
+
+** applyOps changes
+
+1. Add =const validateBlockersFor = new Set<string>();= near the top of =applyOps=, next to =errors=, =pendingVerificationTasks=, etc. (around line 521).
+
+2. Inside the ops loop, populate =validateBlockersFor=:
+
+   - In the =replace= case, after each phase is built (around line 540), iterate the new phase's tasks: for each task where =task.blockers && task.blockers.length > 0=, add =task.id=.
+   - In the =add_phase= case (around line 549), same pattern.
+   - In the =add_task= case (around line 578), if the new task's =blockers= is non-empty, add the new task id.
+   - In the =update= case (around line 595), if =op.blockers !== undefined= (regardless of whether the new value is empty — the user explicitly set the field), add =op.id=.
+
+3. Delete the post-snapshot validation loop at lines 640-649.
+
+4. Replace it with a two-step finalize (after =normalizeInProgressTask(file.phases)= at line 638):
+
+   #+begin_src typescript
+   // Validate blockers only for tasks whose blockers were set in this ops batch.
+   const allTaskIds = new Set(file.phases.flatMap(p => p.tasks.map(t => t.id)));
+   for (const phase of file.phases) {
+       for (const task of phase.tasks) {
+           if (!validateBlockersFor.has(task.id)) continue;
+           if (!task.blockers?.length) continue;
+           for (const blockerId of task.blockers) {
+               if (!allTaskIds.has(blockerId)) {
+                   errors.push(`${task.id} references non-existent blocker ${blockerId}`);
+               }
+           }
+       }
+   }
+
+   // Prune dangling blocker refs across ALL tasks (self-healing).
+   for (const phase of file.phases) {
+       for (const task of phase.tasks) {
+           if (!task.blockers?.length) continue;
+           const cleaned = task.blockers.filter(id => allTaskIds.has(id));
+           if (cleaned.length !== task.blockers.length) {
+               task.blockers = cleaned;
+           }
+       }
+   }
+   #+end_src
+
+5. Verify the existing test still passes: the test issues =op: "replace", phases: [{ tasks: [{ content: "Build API", blockers: ["task-99"] }] }]=. Under the new validator, the replace op adds the new task's id (task-1) to =validateBlockersFor=. The finalize step validates task-1's blockers, sees =["task-99"]=, finds task-99 not in =allTaskIds= (only task-1 exists), pushes the error, then prunes task-1's blockers to =[]=. The test asserts the error string is present in the summary — unchanged.
+
+* Edge cases
+
+- *User sets =blockers= to empty array in =update=*. =op.blockers !== undefined= → task id added to =validateBlockersFor= → validator loop sees =!task.blockers?.length= and skips. No false positive. Good.
+- *User sets =blockers= to an array containing only already-resolved ids*. Validator passes (ids exist), prune is a no-op (all ids exist). No behavior change.
+- *User sets =blockers= to a mix of valid + invalid ids*. Validator emits errors for the invalid ones. Prune then strips the invalid ones from the final state. The net effect: the user sees the error AND the valid blockers are preserved. Intentional: the user gets told, and the state stays clean.
+- *Replace op with cross-references*. =replace= creates tasks sequentially with ids task-1, task-2, etc. A task-2 with =blockers: ["task-1"]= is valid because task-1 is already in the phase tasks array by the time task-2 is built. The finalize step runs after ALL replace phases are built, so the =allTaskIds= set contains every id. No issue. Contrast: a task-1 with =blockers: ["task-2"]= (forward ref within same replace) is also valid because finalize runs post-build.
+- *Prune order*. Prune is idempotent — running it twice produces the same result. Running it once per =applyOps= call is sufficient.
+
+* Tests
+
+File: =packages/coding-agent/test/tools/todo-write.test.ts=.
+
+Add new tests:
+
+1. *Existing test still passes*.
+   - =`dangling blocker ref produces warning`= at lines 357-375 — should pass unchanged. Do not delete or modify. Re-run to confirm.
+
+2. *Pre-existing dangling ref is silently pruned, not flagged*.
+   - Setup: first =todo_write= call creates tasks 1, 2, 3 where task-3 has =blockers: ["task-1"]=.
+   - Externally mutate the session's phases via =session.setTodoPhases= to remove task-1 (simulating what the auto-clear timer does). This requires a test helper or direct session manipulation — document how to access this in the existing test infra (=createSession()= at the top of the file).
+   - Second =todo_write= call: any op (e.g., =update id=task-2 status=completed= if it has no gates, or =add_task= on the same phase).
+   - Assert: =result.content= text does NOT contain "references non-existent blocker".
+   - Assert: =result.details?.phases= shows task-3's =blockers= is =[]= (pruned).
+
+3. *Bad blocker id in =add_task= produces error*.
+   - First call creates task-1 in phase-1.
+   - Second call: =add_task phase=phase-1 content="X" blockers=["task-99"]=.
+   - Assert: summary contains =task-2 references non-existent blocker task-99=.
+   - Assert: task-2 exists and its =blockers= is =[]= (pruned after validation).
+
+4. *Bad blocker id in =update= produces error*.
+   - First call creates task-1 and task-2.
+   - Second call: =update id=task-2 blockers=["task-99"]=.
+   - Assert: summary contains =task-2 references non-existent blocker task-99=.
+   - Assert: task-2.blockers is =[]= (pruned).
+
+5. *=update= clearing blockers to empty array does not error*.
+   - First call creates task-1 and task-2 with task-2 blocked by task-1.
+   - Second call: =update id=task-2 blockers=[]=.
+   - Assert: no error in summary. Task-2 blockers is =[]=.
+
+6. *Forward-ref in same replace batch is valid*.
+   - Single call: =replace phases=[{ tasks: [{ content: "A", blockers: ["task-2"] }, { content: "B" }] }]=.
+   - Assert: no error. Task-1 has blockers =["task-2"]=. Task-2 exists.
+
+7. *Multiple dangling refs across multiple tasks are all pruned*.
+   - Setup: task-1 blockers=["task-99"], task-2 blockers=["task-88", "task-77"]. Construct via =replace= (errors expected).
+   - Then: =update id=task-1 status=completed= (no gates, should succeed).
+   - Actually simpler: after the =replace= that errors, the tasks still exist. Do another =add_task= (no blockers). Assert the add_task succeeds and no dangling errors appear for task-1 or task-2 — they were already flagged on the replace call, not re-flagged.
+
+* Verification
+
+- Run: =bun test packages/coding-agent/test/tools/todo-write.test.ts=
+- Run: =bun check:ts=
+- Manual: reproduce the user's original bug — mark a blocker-referenced task complete, trigger auto-clear (either via short =todoClearDelay= or direct =session.setTodoPhases=), then call =todo_write= again. Confirm no "references non-existent blocker" in the result.
+
+* Files touched
+
+- =packages/coding-agent/src/tools/todo-write.ts= (modify =applyOps= only)
+- =packages/coding-agent/test/tools/todo-write.test.ts= (add tests)
