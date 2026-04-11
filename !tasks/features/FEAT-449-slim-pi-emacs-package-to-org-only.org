@@ -1,11 +1,12 @@
 #+TITLE: Slim pi-emacs package to org-only
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14b6d50334ba84c7
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-57-16-882Z_14b6d50334ba84c7.jsonl]]
 #+CUSTOM_ID: FEAT-449-slim-pi-emacs-package-to-org-only
 #+EFFORT: 2h
 #+LAYER: emacs
 #+DEPENDS: FEAT-448-remove-code-warmup-and-emacssessionmanag
+#+PRIORITY: #B
 
 * Initial Message
 

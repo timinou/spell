@@ -1,4 +1,4 @@
-Structural code intelligence via Emacs treesit + combobulate plus native cross-file code graph queries. Subcommands: read, outline, edit, buffers, diff, navigate, languages, install_grammar, index, status, context, impact, deps, flow, dead_code, clusters, search.
+Structural code intelligence via native tree-sitter engine plus cross-file code graph queries. Subcommands: read, outline, edit, buffers, diff, navigate, languages, undo, redo, save, index, status, context, impact, deps, flow, dead_code, clusters, search.
 
 <instruction>
 What are you doing? → subcommand:
@@ -10,7 +10,7 @@ What are you doing? → subcommand:
 - See what's around → `code navigate { file, action: "siblings", line }`
 - Inspect children of a class/block → `code navigate { file, action: "children", line }`
 - Find enclosing function → `code navigate { file, action: "defun-at", line }`
-- Find in-file references → `code navigate { file, action: "references-local", line, symbol }`
+- Find in-file references → `code navigate { file, action: "references", line, symbol }`
 - Delete a declaration → `code edit { operation: "kill", target: { line, node_type } }`
 - Replace node content → `code edit { operation: "replace", target: { line }, content }`
 - Preview before saving → `code edit { …, save: false }` then `code diff { file }`
@@ -26,7 +26,7 @@ What are you doing? → subcommand:
 - Non-code file → use `read` tool instead
 
 Workflow:
-1. File-local structural work stays on Emacs-backed commands (`read`, `outline`, `navigate`, `edit`).
+1. File-local structural work stays on file-local commands (`read`, `outline`, `navigate`, `edit`).
 2. Cross-file reasoning uses graph commands (`context`, `impact`, `deps`, `flow`, `dead_code`, `clusters`, `search`).
 3. If graph results look stale or missing, run `code index` first.
 </instruction>
@@ -42,8 +42,10 @@ Workflow:
 - `navigate`: In-file navigation helpers
 - `buffers`: Open managed buffers
 - `diff`: Unsaved buffer diff
-- `languages`: Installed tree-sitter grammars
-- `install_grammar`: Install a missing grammar
+- `languages`: Built-in language profiles (TypeScript, Rust, Python, Elixir)
+- `undo`: Undo last edit
+- `redo`: Redo last undo
+- `save`: Save buffer to disk
 - `index`: Build and persist the native project graph under `.spell/graph/`
 - `status`: Report graph cache state, counts, and language coverage
 - `context`: Callers, callees, references, imports, and inheritance around one symbol
@@ -56,7 +58,7 @@ Workflow:
 </operations>
 
 <output>
-- File-scoped commands return structured JSON or diffs from the Emacs backend
+- File-scoped commands return structured JSON or diffs from the native engine
 - Graph commands return compact text optimized for agent reading with grouped sections and “Next:” hints
 </output>
 

@@ -1,6 +1,7 @@
 export * from "./appearance";
 export * from "./ast";
 export * from "./clipboard";
+export * from "./code-buffer";
 export * from "./code-graph";
 export * from "./glob";
 export * from "./grep";

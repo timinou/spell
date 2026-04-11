@@ -1,14 +1,12 @@
 /**
- * Code intelligence tool — wraps @oh-my-pi/pi-emacs and native graph queries for use in coding-agent.
+ * Code intelligence tool — wraps native pi-code-engine and graph queries for use in coding-agent.
  *
- * File-scoped structural operations stay on Emacs 29+ treesit + combobulate.
+ * File-scoped structural operations use the native tree-sitter engine (pi-code-engine).
  * Cross-file graph operations route to the native code graph engine.
  */
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { CodeToolDefinition } from "@oh-my-pi/pi-emacs";
-import { createCodeTool } from "@oh-my-pi/pi-emacs";
-import { executeCodeGraph } from "@oh-my-pi/pi-natives";
+import { type CodeBufferOptions, executeCodeBuffer, executeCodeGraph } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
@@ -40,7 +38,7 @@ const GRAPH_COMMANDS = new Set([
 const codeSchema = Type.Object({
 	command: Type.String({
 		description:
-			"Subcommand: read | outline | edit | buffers | diff | navigate | languages | install_grammar | index | status | context | impact | deps | flow | dead_code | clusters | search",
+			"Subcommand: read | outline | edit | buffers | diff | navigate | languages | undo | redo | save | index | status | context | impact | deps | flow | dead_code | clusters | search",
 	}),
 	file: Type.Optional(Type.String({ description: "Absolute or project-relative file path" })),
 	symbol: Type.Optional(Type.String({ description: "Symbol name for graph commands like context | impact | flow" })),
@@ -58,26 +56,17 @@ const codeSchema = Type.Object({
 	target: Type.Optional(
 		Type.Object({
 			line: Type.Integer({ description: "1-indexed line number" }),
-			node_type: Type.Optional(Type.String({ description: "treesit node type to match" })),
+			node_type: Type.Optional(Type.String({ description: "tree-sitter node type to match" })),
 		}),
 	),
 	content: Type.Optional(Type.String({ description: "Replacement/insertion content" })),
-	envelope: Type.Optional(Type.String({ description: "Template name for envelope operation" })),
-	save: Type.Optional(Type.Boolean({ description: "Save buffer after edit (default true)" })),
 	action: Type.Optional(
 		Type.String({
-			description: "Navigate action: defun-at | parent | references-local | node-at | siblings | children",
+			description: "Navigate action: defun-at | parent | references | node-at | siblings | children",
 		}),
 	),
 	line: Type.Optional(Type.Integer({ description: "1-indexed line for navigation" })),
 	column: Type.Optional(Type.Integer({ description: "1-indexed column for navigation" })),
-	lang: Type.Optional(Type.String({ description: "Language name for install_grammar (e.g. elixir, nix)" })),
-	installed_only: Type.Optional(
-		Type.Boolean({ description: "Filter to installed languages only (languages command)" }),
-	),
-	url: Type.Optional(Type.String({ description: "Custom grammar URL for install_grammar" })),
-	revision: Type.Optional(Type.String({ description: "Git revision/tag to checkout before building the grammar" })),
-	source_dir: Type.Optional(Type.String({ description: "Subdirectory containing the grammar's src/ folder" })),
 });
 
 type CodeParams = Static<typeof codeSchema>;
@@ -94,14 +83,9 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 	readonly lenientArgValidation = true;
 
 	#session: ToolSession;
-	#inner: CodeToolDefinition;
 
 	constructor(session: ToolSession) {
 		this.#session = session;
-		const projectRoot = session.cwd ?? getProjectDir();
-		this.#inner = createCodeTool(projectRoot, {
-			getSession: () => session.emacsSessionManager?.getSession() ?? Promise.resolve(null),
-		});
 		this.description = codeDescription;
 	}
 
@@ -112,13 +96,11 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 		_onUpdate?: AgentToolUpdateCallback,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult> {
-		const args = params as Record<string, unknown>;
-		const command = String(args.command ?? "");
+		const command = params.command ?? "";
 
-		if (command === "edit") {
-			const file = args.file as string | undefined;
-			if (file) {
-				enforceModeWrite(this.#session, file);
+		if (command === "edit" || command === "save") {
+			if (params.file) {
+				enforceModeWrite(this.#session, params.file);
 			}
 		}
 
@@ -126,16 +108,55 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			if (GRAPH_COMMANDS.has(command)) {
 				return await this.#executeGraphCommand(params, _signal);
 			}
-			const result = await this.#inner.execute(args);
-			const text = JSON.stringify(result, null, 2);
-			const isError =
-				typeof result === "object" &&
-				result !== null &&
-				"error" in result &&
-				(result as Record<string, unknown>).error === true;
+
+			if (command === "install_grammar") {
+				return {
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({
+								error: true,
+								message:
+									"install_grammar is no longer supported. Grammars for TypeScript, Rust, Python, and Elixir are built-in.",
+							}),
+						},
+					],
+					details: { error: true, command },
+				};
+			}
+
+			// Map agent-facing names to NAPI commands
+			const nativeCommand = command === "buffers" ? "list" : command;
+			const options: CodeBufferOptions = { command: nativeCommand };
+
+			// Copy relevant params from the typed schema
+			if (params.file) options.file = params.file;
+			if (params.resolution !== undefined) options.resolution = params.resolution;
+			if (params.offset !== undefined) options.offset = params.offset;
+			if (params.limit !== undefined) options.limit = params.limit;
+			if (params.line !== undefined) options.line = params.line;
+			if (params.column !== undefined) options.column = params.column;
+			if (params.symbol) options.symbol = params.symbol;
+			if (params.depth !== undefined) options.depth = params.depth;
+			if (params.operation) options.operation = params.operation;
+			if (params.content !== undefined) options.content = params.content;
+
+			// Flatten target into top-level fields for NAPI
+			if (params.target) {
+				if (params.target.line !== undefined) options.line = params.target.line;
+				if (params.target.node_type) options.node_type = params.target.node_type;
+			}
+
+			// Map navigate action: references-local → references (backward compat)
+			if (command === "navigate" && params.action) {
+				options.action = params.action === "references-local" ? "references" : params.action;
+			}
+
+			const result = executeCodeBuffer(options);
+			const text = JSON.stringify(result.output, null, 2);
 			return {
 				content: [{ type: "text", text }],
-				details: isError ? { error: true, command } : { command },
+				details: result.error ? { error: true, command } : { command },
 			};
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);

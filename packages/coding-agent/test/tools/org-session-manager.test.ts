@@ -88,11 +88,9 @@ describe("org session manager wiring", () => {
 		}));
 
 		const { OrgTool } = await import("@oh-my-pi/pi-coding-agent/tools/org");
-		const codeManager = makeSessionManager("/tmp/code.sock");
 		const orgManager = makeSessionManager("/tmp/org.sock");
 		const tool = new OrgTool(
 			createSession({
-				emacsSessionManager: codeManager.manager,
 				orgSessionManager: orgManager.manager,
 			}),
 		);
@@ -132,12 +130,10 @@ describe("org session manager wiring", () => {
 			},
 		);
 
-		const codeManager = makeSessionManager("/tmp/code.sock");
 		const orgManager = makeSessionManager("/tmp/org.sock");
 		const createOrgClientSpy = spyOn(orgModule, "createOrgClient");
 		const tool = new ExitPlanModeTool(
 			createSession({
-				emacsSessionManager: codeManager.manager,
 				orgSessionManager: orgManager.manager,
 			}),
 		);
@@ -148,7 +144,6 @@ describe("org session manager wiring", () => {
 		});
 
 		expect(resolvePlanItemSpy).toHaveBeenCalled();
-		expect(codeManager.getSession).not.toHaveBeenCalled();
 		expect(orgManager.getSession).not.toHaveBeenCalled();
 		expect(createOrgClientSpy).not.toHaveBeenCalled();
 		expect(result.details?.waves).toEqual([

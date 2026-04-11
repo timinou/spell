@@ -206,8 +206,6 @@ export interface ToolSession {
 	getCheckpointState?: () => CheckpointState | undefined;
 	/** Set or clear active checkpoint state. */
 	setCheckpointState?: (state: CheckpointState | null) => void;
-	/** Emacs daemon lifecycle manager for code-intelligence tools. */
-	emacsSessionManager?: EmacsSessionManager;
 	/** Dedicated org-mode daemon lifecycle manager for org MCP callers. */
 	orgSessionManager?: EmacsSessionManager;
 	/** Active QML remote server; when set, CanvasTool routes panels to the Android client. */
