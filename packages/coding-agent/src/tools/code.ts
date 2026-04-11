@@ -5,6 +5,7 @@
  * Cross-file graph operations route to the native code graph engine.
  */
 
+import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type CodeBufferOptions, executeCodeBuffer, executeCodeGraph } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -50,7 +51,7 @@ const codeSchema = Type.Object({
 	operation: Type.Optional(
 		Type.String({
 			description:
-				"Edit operation: replace | insert-before | insert-after | splice | splice-self | splice-down | drag-up | drag-down | clone | kill | envelope | transpose",
+				"Edit operation: replace | insert-before | insert-after | splice | drag-up | drag-down | clone | kill | transpose",
 		}),
 	),
 	target: Type.Optional(
@@ -60,6 +61,7 @@ const codeSchema = Type.Object({
 		}),
 	),
 	content: Type.Optional(Type.String({ description: "Replacement/insertion content" })),
+	mode: Type.Optional(Type.String({ description: "Splice mode: self | up | down (default: self)" })),
 	action: Type.Optional(
 		Type.String({
 			description: "Navigate action: defun-at | parent | references | node-at | siblings | children",
@@ -128,35 +130,40 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			// Map agent-facing names to NAPI commands
 			const nativeCommand = command === "buffers" ? "list" : command;
 			const options: CodeBufferOptions = { command: nativeCommand };
-
+			const sessionCwd = this.#session.cwd ?? getProjectDir();
+			const resolveFile = (file: string): string => (path.isAbsolute(file) ? file : path.resolve(sessionCwd, file));
 			// Copy relevant params from the typed schema
-			if (params.file) options.file = params.file;
+			if (params.file) options.file = resolveFile(params.file);
 			if (params.resolution !== undefined) options.resolution = params.resolution;
 			if (params.offset !== undefined) options.offset = params.offset;
 			if (params.limit !== undefined) options.limit = params.limit;
 			if (params.line !== undefined) options.line = params.line;
 			if (params.column !== undefined) options.column = params.column;
 			if (params.symbol) options.symbol = params.symbol;
-			if (params.depth !== undefined) options.depth = params.depth;
 			if (params.operation) options.operation = params.operation;
 			if (params.content !== undefined) options.content = params.content;
-
+			if (params.mode) options.mode = params.mode;
 			// Flatten target into top-level fields for NAPI
 			if (params.target) {
 				if (params.target.line !== undefined) options.line = params.target.line;
 				if (params.target.node_type) options.node_type = params.target.node_type;
 			}
-
 			// Map navigate action: references-local → references (backward compat)
 			if (command === "navigate" && params.action) {
 				options.action = params.action === "references-local" ? "references" : params.action;
 			}
-
 			const result = executeCodeBuffer(options);
+			if (result.error) {
+				const message = typeof result.output === "string" ? result.output : JSON.stringify(result.output);
+				return {
+					content: [{ type: "text", text: JSON.stringify({ error: true, message }) }],
+					details: { error: true, command },
+				};
+			}
 			const text = JSON.stringify(result.output, null, 2);
 			return {
 				content: [{ type: "text", text }],
-				details: result.error ? { error: true, command } : { command },
+				details: { command },
 			};
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);

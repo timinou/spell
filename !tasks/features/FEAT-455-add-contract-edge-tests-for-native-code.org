@@ -1,0 +1,202 @@
+#+TITLE: Add contract-edge tests for native code tool
+#+STATE: DONE
+#+SESSION_ID: 14b6e2caaae063a2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-57-29-004Z_14b6e2caaae063a2.jsonl]]
+#+CUSTOM_ID: FEAT-455-add-contract-edge-tests-for-native-code
+#+EFFORT: 45m
+#+PRIORITY: #A
+#+LAYER: coding-agent
+#+DEPENDS: BUG-206-fix-codetool-error-envelope-mode-forward
+
+NOTE [2026-04-11]: Completed in PLAN-187. Added contract tests for thrown native failures, in-band native error envelopes, splice mode forwarding, session.cwd path rebasing, absolute path passthrough, and file-local depth exclusion.
+
+NOTE [2026-04-11]: Execution started under PLAN-187 after BUG-206 implementation. Adding contract-edge coverage for mode forwarding, path resolution, depth exclusion, and in-band native errors.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-057-audit-implementation:
+
+1. **What**: File-local native failures are flattened into plain output and lose their `error` bit  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `CodeTool.execute()` right after `executeCodeBuffer(options)`  
+   **Why**: The tool serializes `result.output` instead of the full native envelope. If the native layer returns `{ error: true, output: "..." }`, the model only sees the string payload, not a verifiable failure marker. Unsupported-language and bad-command responses can look like normal output.  
+   **Effort**: `small`
+
+2. **What**: Splice direction is no longer expressible, while the schema still advertises unsupported edit operations  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `codeSchema` + native option mapping; `crates/pi-natives/src/code_buffer.rs`, `edit_operation()`  
+   **Why**: The native engine expects `operation: "splice"` plus `mode`, but the code tool no longer exposes `mode`. At the same time, the schema description still mentions `splice-self`, `splice-down`, and `envelope`. That leaves callers with an advertised API they cannot actually use, and some values now fail with native “Unknown edit operation” errors.  
+   **Effort**: `small`
+
+3. **What**: The code-tool prompt still documents the removed `save: false` edit flag  
+   **Where**: `packages/coding-agent/src/prompts/tools/code.md`, “Preview before saving” example around line 16  
+   **Why**: The native engine uses an explicit `save` command, but the prompt still teaches the old Emacs-era edit contract. Agents can send dead arguments and misunderstand when edits are persisted.  
+   **Effort**: `trivial`
+
+4. **What**: `depth` is still accepted for file-local calls but ignored by the native buffer engine  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, option construction for `params.depth`; `crates/pi-natives/src/code_buffer.rs`, `outline` branch  
+   **Why**: Callers can ask for depth-limited file-local output and silently receive the full structure. That is a contract violation: input is accepted, then discarded with no signal.  
+   **Effort**: `small`
+
+5. **What**: Relative file paths are passed through without rebasing against `session.cwd`  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, file-local option construction for `params.file`  
+   **Why**: Graph commands already root themselves at `session.cwd`, but file-local commands hand the raw path to the native engine. If the process cwd and session cwd diverge, `code read/outline/edit/save` can resolve the wrong file or fail unexpectedly.  
+   **Effort**: `small`
+
+6. **What**: `startEmacsSession` lost its default code-daemon bootstrap, but daemon docs/comments still describe the removed default path  
+   **Where**: `packages/emacs/src/daemon.ts`, around the default eval handling in the Emacs arg builder  
+   **Why**: The implementation no longer loads `pi-prelude` / `pi-emacs-mcp`, but the surrounding source still implies that a default bootstrap exists. That is a rough edge for remaining maintainers and any caller still relying on the exported `startEmacsSession` API.  
+   **Effort**: `small`
+
+7. **What**: The new code-tool tests do not lock in the tricky contract edges introduced by the migration  
+   **Where**: `packages/coding-agent/test/tools/code.test.ts`  
+   **Why**: The suite covers routing and thrown exceptions, but not the native in-band error envelope, ignored `depth`, missing splice `mode`, or relative-path resolution against `session.cwd`. Those are the regressions most likely to ship silently.  
+   **Effort**: `small`
+
+* Context
+
+The code tool test suite (=packages/coding-agent/test/tools/code.test.ts=) covers basic routing and thrown exceptions, but does not cover the contract edges introduced by the native migration. Specifically, the following behaviors are untested:
+
+1. In-band error envelope: when =executeCodeBuffer= returns ={ error: true, output: "..." }=, the content text must contain ={"error": true, "message": "..."}= (not the bare output string).
+2. Splice mode forwarding: edit with =operation: "splice"= and =mode: "up"= must forward both to NAPI options.
+3. Relative path resolution: a relative file path like ="src/main.ts"= must be resolved against =session.cwd= before reaching the native engine.
+4. Depth NOT forwarded: =depth= must NOT appear in NAPI options for file-local commands (it's only for graph commands).
+
+These tests depend on the fixes in [[id:BUG-206-fix-codetool-error-envelope-mode-forward]].
+
+* Design Decisions
+
+- All tests mock =executeCodeBuffer= from =@oh-my-pi/pi-natives= (same pattern as existing tests)
+- Use the existing =createSession= helper
+- Each test asserts one specific contract edge
+- Follow the existing test file's patterns: =spyOn=, =mockReturnValue=, =expect.objectContaining=
+
+* Implementation
+
+** File: =packages/coding-agent/test/tools/code.test.ts=
+
+Add these tests inside the existing =describe("coding-agent code tool wiring", ...)= block:
+
+*** Test 1: In-band error envelope
+
+#+begin_src typescript
+it("wraps in-band native errors with error metadata in content", async () => {
+    spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+        output: "Unknown command: bogus",
+        error: true,
+    });
+    const tool = new CodeTool(createSession());
+    const result = await tool.execute("tool", { command: "bogus" });
+    const text = result.content.find(c => c.type === "text")?.text ?? "";
+    const parsed = JSON.parse(text);
+
+    expect(parsed.error).toBe(true);
+    expect(parsed.message).toBe("Unknown command: bogus");
+    expect(result.details).toEqual({ error: true, command: "bogus" });
+});
+#+end_src
+
+Note: This replaces or updates the existing ="handles error flag from executeCodeBuffer response"= test which currently only checks =result.details= and does NOT assert the content text format. After the fix, the content text wraps the output in an error envelope.
+
+*** Test 2: Splice mode forwarding
+
+#+begin_src typescript
+it("forwards mode field for splice edit operations", async () => {
+    const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+        output: [{ version: 3 }],
+        error: false,
+    });
+    const tool = new CodeTool(createSession());
+    await tool.execute("tool", {
+        command: "edit",
+        file: "/tmp/test/src/main.ts",
+        operation: "splice",
+        target: { line: 10 },
+        mode: "up",
+    });
+
+    expect(bufferSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+            command: "edit",
+            operation: "splice",
+            mode: "up",
+            line: 10,
+        }),
+    );
+});
+#+end_src
+
+*** Test 3: Relative path resolution
+
+#+begin_src typescript
+it("resolves relative file paths against session.cwd", async () => {
+    const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+        output: "resolved content",
+        error: false,
+    });
+    const tool = new CodeTool(createSession({ cwd: "/home/user/project" }));
+    await tool.execute("tool", {
+        command: "read",
+        file: "src/main.ts",
+    });
+
+    expect(bufferSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+            command: "read",
+            file: "/home/user/project/src/main.ts",
+        }),
+    );
+});
+#+end_src
+
+*** Test 4: Absolute paths pass through unchanged
+
+#+begin_src typescript
+it("passes absolute file paths through unchanged", async () => {
+    const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+        output: "content",
+        error: false,
+    });
+    const tool = new CodeTool(createSession({ cwd: "/home/user/project" }));
+    await tool.execute("tool", {
+        command: "read",
+        file: "/absolute/path/main.ts",
+    });
+
+    expect(bufferSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+            command: "read",
+            file: "/absolute/path/main.ts",
+        }),
+    );
+});
+#+end_src
+
+*** Test 5: Depth not forwarded to file-local commands
+
+#+begin_src typescript
+it("does not forward depth to file-local commands", async () => {
+    const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+        output: [{ name: "function" }],
+        error: false,
+    });
+    const tool = new CodeTool(createSession());
+    await tool.execute("tool", {
+        command: "outline",
+        file: "/tmp/test/src/main.ts",
+        depth: 2,
+    });
+
+    const calledWith = bufferSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(calledWith).not.toHaveProperty("depth");
+});
+#+end_src
+
+* Edge Cases
+
+- The existing test ="handles error flag from executeCodeBuffer response"= should be updated or replaced by test 1, since the behavior changes (content now includes error wrapper). If keeping both, update the existing test to match new behavior.
+- For the relative path test, use a specific =cwd= that does NOT match the test runner's actual CWD to ensure the resolution is actually happening.
+- The =mode= field test sends =mode: "up"= which is a valid TypeBox schema value after BUG-206 adds the field.
+
+* Verification
+
+- =bun test packages/coding-agent/test/tools/code.test.ts= — all tests pass including the new ones
+- The new tests exercise: error envelope wrapping, splice mode forwarding, relative/absolute path handling, and depth exclusion

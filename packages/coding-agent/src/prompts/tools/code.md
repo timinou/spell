@@ -13,7 +13,7 @@ What are you doing? → subcommand:
 - Find in-file references → `code navigate { file, action: "references", line, symbol }`
 - Delete a declaration → `code edit { operation: "kill", target: { line, node_type } }`
 - Replace node content → `code edit { operation: "replace", target: { line }, content }`
-- Preview before saving → `code edit { …, save: false }` then `code diff { file }`
+- Preview before saving → `code edit { … }` then `code diff { file }` (edits stay in-memory until `code save { file }`)
 - Build or rebuild the project graph → `code index`
 - Check graph cache/index health → `code status`
 - Ask how a symbol is connected → `code context { symbol }`
