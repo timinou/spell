@@ -12,6 +12,10 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
+[features]
+default = []
+semantic = ["pi-code-vectors"]
+
 [dependencies]
 pi-code-engine = { path = "../pi-code-engine" }
 arc-swap = "1.7"
@@ -27,3 +31,4 @@ tree-sitter-elixir = "0.3"
 tree-sitter-heex = "0.8"
 tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
+pi-code-vectors = { path = "../pi-code-vectors", optional = true }

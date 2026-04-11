@@ -8,6 +8,7 @@ use std::{
 };
 
 pub use elixir::{ElixirExtractor, ElixirImportResolver};
+use pi_code_engine::language::LanguageRegistry as EngineRegistry;
 use serde::{Deserialize, Serialize};
 pub use typescript::{TypeScriptExtractor, TypeScriptImportResolver};
 
@@ -15,8 +16,6 @@ use crate::{
 	error::{CodeGraphError, Result},
 	model::SymbolKind,
 };
-
-use pi_code_engine::language::LanguageRegistry as EngineRegistry;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SupportedLanguage(pub String);
@@ -30,7 +29,10 @@ impl SupportedLanguage {
 		&self.0
 	}
 
-	pub fn engine_profile<'a>(&self, registry: &'a EngineRegistry) -> Option<&'a pi_code_engine::language::LanguageProfile> {
+	pub fn engine_profile<'a>(
+		&self,
+		registry: &'a EngineRegistry,
+	) -> Option<&'a pi_code_engine::language::LanguageProfile> {
 		registry.get(&pi_code_engine::language::LanguageId::new(self.as_str()))
 	}
 }

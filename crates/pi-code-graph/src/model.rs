@@ -76,12 +76,19 @@ pub struct PersistedCodeGraph {
 pub struct CodeGraph {
 	persisted:    PersistedCodeGraph,
 	search_index: SearchIndex,
+	#[cfg(feature = "semantic")]
+	vector_index: Option<pi_code_vectors::VectorIndex>,
 }
 
 impl CodeGraph {
 	pub fn new(persisted: PersistedCodeGraph) -> Self {
 		let search_index = SearchIndex::build(&persisted);
-		Self { persisted, search_index }
+		Self {
+			persisted,
+			search_index,
+			#[cfg(feature = "semantic")]
+			vector_index: None,
+		}
 	}
 
 	pub const fn persisted(&self) -> &PersistedCodeGraph {
@@ -127,6 +134,22 @@ impl CodeGraph {
 			.edge_references()
 			.filter(|edge| *edge.weight() == kind)
 			.count()
+	}
+
+	/// Construct with a pre-built vector index for hybrid search.
+	#[cfg(feature = "semantic")]
+	pub fn with_vectors(
+		persisted: PersistedCodeGraph,
+		vectors: pi_code_vectors::VectorIndex,
+	) -> Self {
+		let search_index = SearchIndex::build(&persisted);
+		Self { persisted, search_index, vector_index: Some(vectors) }
+	}
+
+	/// Access the vector index if available.
+	#[cfg(feature = "semantic")]
+	pub const fn vector_index(&self) -> Option<&pi_code_vectors::VectorIndex> {
+		self.vector_index.as_ref()
 	}
 }
 

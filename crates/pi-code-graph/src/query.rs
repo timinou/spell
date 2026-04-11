@@ -104,7 +104,32 @@ impl CodeGraph {
 		}
 	}
 
-	pub fn graph_search(&self, query: &str, limit: usize) -> Vec<GraphSearchMatch> {
+	pub fn graph_search(
+		&self,
+		query: &str,
+		query_vector: Option<&[f32]>,
+		limit: usize,
+	) -> Vec<GraphSearchMatch> {
+		// When semantic feature is enabled and vectors are available, use hybrid
+		// search.
+		#[cfg(feature = "semantic")]
+		if let (Some(vector_index), Some(qv)) = (self.vector_index(), query_vector) {
+			let bm25_hits = self.search_index().search(query, limit * 2);
+			let vector_hits = vector_index.search(qv, limit * 2);
+			let hybrid = crate::hybrid::reciprocal_rank_fusion(&bm25_hits, &vector_hits, self, limit);
+			let graph = self.graph();
+			return hybrid
+				.into_iter()
+				.filter_map(|hit| {
+					let node_index = graph.from_index(hit.node_index);
+					summary_for_node(graph, node_index)
+						.map(|summary| GraphSearchMatch { score: hit.score, summary })
+				})
+				.collect();
+		}
+		// Suppress unused variable warning when semantic feature is disabled.
+		let _ = query_vector;
+		// Fallback: BM25 only.
 		let graph = self.graph();
 		self
 			.search_index()
@@ -197,13 +222,27 @@ impl CodeGraph {
 				{
 					return None;
 				}
-				let has_inbound_usage = graph
-					.edges_directed(node_index, Direction::Incoming)
-					.any(|edge| matches!(edge.weight(), EdgeKind::Calls | EdgeKind::References | EdgeKind::Inherits | EdgeKind::Renders));
+				let has_inbound_usage =
+					graph
+						.edges_directed(node_index, Direction::Incoming)
+						.any(|edge| {
+							matches!(
+								edge.weight(),
+								EdgeKind::Calls
+									| EdgeKind::References
+									| EdgeKind::Inherits
+									| EdgeKind::Renders
+							)
+						});
 				if has_inbound_usage {
 					return None;
 				}
-				let confidence = if symbol.file.file_name().and_then(|name| name.to_str()).is_some_and(|name| matches!(name, "index.ts" | "index.js" | "mod.rs" | "lib.rs")) {
+				let confidence = if symbol
+					.file
+					.file_name()
+					.and_then(|name| name.to_str())
+					.is_some_and(|name| matches!(name, "index.ts" | "index.js" | "mod.rs" | "lib.rs"))
+				{
 					"low"
 				} else if symbol.kind == SymbolKind::Function || symbol.kind == SymbolKind::Class {
 					"high"
@@ -211,13 +250,17 @@ impl CodeGraph {
 					"medium"
 				};
 				Some(GraphDeadCodeItem {
-					symbol: summary_for_node(graph, node_index)?,
-					reason: "no inbound semantic references".into(),
+					symbol:     summary_for_node(graph, node_index)?,
+					reason:     "no inbound semantic references".into(),
 					confidence: confidence.into(),
 				})
 			})
 			.collect::<Vec<_>>();
-		items.sort_by(|left, right| confidence_rank(&right.confidence).cmp(&confidence_rank(&left.confidence)).then_with(|| left.symbol.label.cmp(&right.symbol.label)));
+		items.sort_by(|left, right| {
+			confidence_rank(&right.confidence)
+				.cmp(&confidence_rank(&left.confidence))
+				.then_with(|| left.symbol.label.cmp(&right.symbol.label))
+		});
 		items.truncate(50);
 		items
 	}
@@ -258,13 +301,28 @@ impl CodeGraph {
 			if files.len() < 2 {
 				continue;
 			}
-			let symbol_count = component.iter().filter(|node_index| matches!(graph.node_weight(**node_index), Some(GraphNode::Symbol(_)))).count();
+			let symbol_count = component
+				.iter()
+				.filter(|node_index| {
+					matches!(graph.node_weight(**node_index), Some(GraphNode::Symbol(_)))
+				})
+				.count();
 			let name = common_path_prefix(&files);
 			clusters.push((name, files, symbol_count));
 		}
-		clusters.sort_by(|left, right| right.1.len().cmp(&left.1.len()).then_with(|| left.0.cmp(&right.0)));
+		clusters.sort_by(|left, right| {
+			right
+				.1
+				.len()
+				.cmp(&left.1.len())
+				.then_with(|| left.0.cmp(&right.0))
+		});
 		clusters.truncate(20);
-		clusters.into_iter().enumerate().map(|(id, (name, files, symbol_count))| GraphCluster { id, name, files, symbol_count }).collect()
+		clusters
+			.into_iter()
+			.enumerate()
+			.map(|(id, (name, files, symbol_count))| GraphCluster { id, name, files, symbol_count })
+			.collect()
 	}
 }
 
@@ -281,7 +339,7 @@ fn resolve_symbol(
 		});
 	exact.or_else(|| {
 		code_graph
-			.graph_search(query, 10)
+			.graph_search(query, None, 10)
 			.into_iter()
 			.filter(|hit| hit.summary.kind != "file")
 			.find_map(|hit| {
@@ -340,7 +398,9 @@ fn neighbors_by_kind(
 		} else {
 			edge.target()
 		};
-		if seen.insert(other.index()) && let Some(summary) = summary_for_node(graph, other) {
+		if seen.insert(other.index())
+			&& let Some(summary) = summary_for_node(graph, other)
+		{
 			result.push(summary);
 		}
 	}
@@ -421,11 +481,17 @@ fn summary_for_node(
 			column:   symbol.column,
 		}),
 	}
-	}
+}
 
 fn is_test_path(path: &Path) -> bool {
 	let path_str = path.to_string_lossy();
-	path_str.contains("/test/") || path_str.contains("/spec/") || path_str.contains("/__tests__/") || path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.contains(".test.") || name.contains(".spec."))
+	path_str.contains("/test/")
+		|| path_str.contains("/spec/")
+		|| path_str.contains("/__tests__/")
+		|| path
+			.file_name()
+			.and_then(|name| name.to_str())
+			.is_some_and(|name| name.contains(".test.") || name.contains(".spec."))
 }
 
 fn is_entry_point_symbol(symbol: &crate::model::SymbolNode) -> bool {
@@ -462,7 +528,6 @@ fn common_path_prefix(files: &[GraphNodeSummary]) -> String {
 	}
 	PathBuf::from_iter(parts).to_string_lossy().to_string()
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -695,7 +760,7 @@ mod tests {
 	#[test]
 	fn queries_search_dead_code_and_clusters_work() {
 		let graph = build_query_graph();
-		let search = graph.graph_search("caller", 5);
+		let search = graph.graph_search("caller", None, 5);
 		assert!(
 			search
 				.iter()
