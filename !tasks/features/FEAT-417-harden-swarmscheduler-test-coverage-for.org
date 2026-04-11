@@ -1,0 +1,57 @@
+#+TITLE: Harden SwarmScheduler test coverage for live DAG mutation
+#+STATE: DONE
+#+SESSION_ID: 14b66a7ab4f1eac0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-11-49-843Z_14b66a7ab4f1eac0.jsonl]]
+#+CUSTOM_ID: FEAT-417-harden-swarmscheduler-test-coverage-for
+#+EFFORT: S
+#+PRIORITY: A
+#+LAYER: agent-runtime
+
+NOTE [2026-04-11]: Completed in PLAN-176: added live DAG mutation and cascade coverage to SwarmScheduler tests and verified the scheduler suite.
+
+* Initial Message
+
+bro write a proper todowrite sheet with todoRef support showing all tasks
+
+* Context
+
+PLAN-173 delivered =SwarmScheduler= with 6 test cases, but three critical scenarios lack coverage: dynamic node mutation during an active pump cycle, multi-level failure cascade, and concurrent abort with active tasks. These are the scheduler's most novel contracts and the most likely to regress.
+
+Current test cases in =packages/coding-agent/test/task/swarm-scheduler.test.ts=:
+1. Static DAG pump
+2. Multi-entry readiness + dynamic node mutation (but not DURING pump)
+3. Data node satisfaction + single-level failure cascade
+4. File overlap serialization
+5. Opaque work serialization (no filesDeps)
+6. Abort signal
+
+** Design Decisions
+
+1. Tests use the existing =NodeLike= interface and =SwarmScheduler= constructor from the test file.
+2. For "during active pump" tests, use =Promise.withResolvers()= gates inside the =runNode= callback to hold tasks in-flight while mutations are applied externally.
+3. Failure cascade test uses a 3-node chain: A→B→C. Fail A, assert B and C both receive =failed= status.
+4. Dynamic removeNode test: while A is running, remove B (depends on A). After A completes, verify B's dependents (if any) were cascade-removed or orphaned.
+5. Dynamic addNode test: while A is running, add D (depends on A). After A completes, verify D becomes ready and is dispatched.
+
+** Files to Modify
+
+- =packages/coding-agent/test/task/swarm-scheduler.test.ts=: add 3 new test cases
+
+** Existing Patterns to Follow
+- Existing test "does not parallelize opaque work under isolation when filesDeps are missing" uses =Promise.withResolvers()= gate pattern
+- =SwarmScheduler.markCompleted(id)= and =SwarmScheduler.markFailed(id)= are the completion callbacks
+- =SwarmScheduler.addNode(id, data, deps?)= and =SwarmScheduler.removeNode(id)= are the mutation API
+
+* Verification
+- =bun test packages/coding-agent/test/task/swarm-scheduler.test.ts= passes (9 tests total: 6 existing + 3 new)
+
+* Sub-outline (test-only item)
+
+** FEAT-XXX::live-addnode-test
+Test: while task A is running via pump(), call =scheduler.addNode("D", node(), ["A"])=. After A completes, verify D is dispatched. Uses gate to hold A in-flight.
+
+** FEAT-XXX::live-removenode-cascade-test
+Test: DAG A→B→C. Start pump. While A runs (held by gate), call =scheduler.removeNode("B", "cascade")=. Resolve gate. Verify A completes, C was cascade-failed/removed, pump terminates cleanly.
+
+** FEAT-XXX::multi-level-cascade-test
+Test: DAG A→B→C. Pump starts A. Fail A via =scheduler.markFailed("A")=. Assert B.status === "failed" and C.status === "failed". Neither B nor C should ever be dispatched to runNode.

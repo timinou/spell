@@ -1,4 +1,4 @@
-import { promoteReadyTasks, type TodoItem, type TodoPhase } from "../../tools/todo-write";
+import { promoteReadyTasks, type TodoGroup, type TodoItem } from "../../tools/todo-write";
 import { splitIntoComponents, topologicalOrder } from "./dag";
 import type { FluidAgentNode, FluidPlan } from "./types";
 
@@ -18,12 +18,12 @@ export interface PlanWave {
 }
 
 export interface FluidTodoPlan {
-	phases: TodoPhase[];
+	groups: TodoGroup[];
 	taskIdByAgentId: Map<string, string>;
 }
 
 interface MaterializedPlanWaves {
-	phases: TodoPhase[];
+	groups: TodoGroup[];
 	taskIdByEntryId: Map<string, string>;
 }
 
@@ -106,8 +106,8 @@ function materializePlanWaves(waves: PlanWave[]): MaterializedPlanWaves {
 		}
 	}
 
-	const phases: TodoPhase[] = [];
-	let nextPhaseNumber = 1;
+	const groups: TodoGroup[] = [];
+	let nextGroupNumber = 1;
 	for (const wave of waves) {
 		const visibleWaveEntries = wave.entries.filter(entry => !entry.deferred);
 		if (visibleWaveEntries.length === 0) {
@@ -137,29 +137,29 @@ function materializePlanWaves(waves: PlanWave[]): MaterializedPlanWaves {
 			return item;
 		});
 
-		phases.push({
-			id: `phase-${nextPhaseNumber++}`,
+		groups.push({
+			id: `group-${nextGroupNumber++}`,
 			name: wave.name,
 			tasks,
 		});
 	}
 
-	promoteReadyTasks(phases, false);
-	return { phases, taskIdByEntryId };
+	promoteReadyTasks(groups, false);
+	return { groups, taskIdByEntryId };
 }
 
-export function planWavesToTodoPhases(waves: PlanWave[]): TodoPhase[] {
-	return materializePlanWaves(waves).phases;
+export function planWavesToTodoGroups(waves: PlanWave[]): TodoGroup[] {
+	return materializePlanWaves(waves).groups;
 }
 
 export function materializeFluidPlanToTodos(plan: FluidPlan): FluidTodoPlan {
 	const materialized = materializePlanWaves(computeWaveLayers(plan));
 	return {
-		phases: materialized.phases,
+		groups: materialized.groups,
 		taskIdByAgentId: materialized.taskIdByEntryId,
 	};
 }
 
-export function fluidPlanToTodoPhases(plan: FluidPlan): TodoPhase[] {
-	return materializeFluidPlanToTodos(plan).phases;
+export function fluidPlanToTodoGroups(plan: FluidPlan): TodoGroup[] {
+	return materializeFluidPlanToTodos(plan).groups;
 }

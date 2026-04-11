@@ -30,7 +30,7 @@ import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensibil
 import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
-import { type PlanWave, planWavesToTodoPhases } from "../orchestrators/fluid";
+import { type PlanWave, planWavesToTodoGroups } from "../orchestrators/fluid";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
 import { approvePlanItem, buildOrgConfig, type OrgPlanRef, resolvePlanItem } from "../plan-mode/org-plan";
 import type { UserModeState } from "../plan-mode/state";
@@ -81,7 +81,7 @@ import {
 	onThemeChange,
 	theme,
 } from "./theme/theme";
-import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoItem, TodoPhase } from "./types";
+import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoGroup, TodoItem } from "./types";
 import { UiHelpers } from "./utils/ui-helpers";
 
 /**
@@ -195,7 +195,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#auditDepth = 0;
 	#auditMaxDepth = 2;
 	#isAuditEscalation = false;
-	todoPhases: TodoPhase[] = [];
+	todoGroups: TodoGroup[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
 	compactionQueuedMessages: CompactionQueuedMessage[] = [];
@@ -555,7 +555,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				},
 				sessionManager: this.sessionManager,
 				get todoPhases() {
-					return ctx.session.getTodoPhases();
+					return ctx.session.getTodoGroups();
 				},
 				getClearedCompletedCounts() {
 					return ctx.session.getClearedCompletedCounts();
@@ -847,15 +847,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.renderSessionContext(context);
 	}
 
-	#renderChildTodoPhases(todo: TodoItem, prefix: string): string[] {
-		const childPhases = todo.delegation?.childPhases?.filter(phase => phase.tasks.length > 0) ?? [];
-		if (childPhases.length === 0) return [];
+	#renderChildTodoGroups(todo: TodoItem, prefix: string): string[] {
+		const childGroups = todo.delegation?.childGroups?.filter(group => group.tasks.length > 0) ?? [];
+		if (childGroups.length === 0) return [];
 		const lines: string[] = [];
-		for (const phase of childPhases) {
-			lines.push(theme.fg("muted", `${prefix}\u21B3 ${phase.name}`));
-			for (const child of phase.tasks) {
+		for (const group of childGroups) {
+			lines.push(theme.fg("muted", `${prefix}↳ ${group.name}`));
+			for (const child of group.tasks) {
 				const nestedChild = child.delegation
-					? { ...child, delegation: { ...child.delegation, childPhases: undefined } }
+					? { ...child, delegation: { ...child.delegation, childGroups: undefined } }
 					: child;
 				lines.push(this.#formatTodoLine(nestedChild, `${prefix}  `));
 			}
@@ -866,7 +866,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#formatTodoLine(todo: TodoItem, prefix: string): string {
 		const checkbox = theme.checkbox;
 		const content = isDelegatedTask(todo) ? `${todo.content} [delegated]` : todo.content;
-		const childLines = this.#renderChildTodoPhases(todo, `${prefix}  `);
+		const childLines = this.#renderChildTodoGroups(todo, `${prefix}  `);
 		switch (todo.status) {
 			case "completed":
 				return [
@@ -893,10 +893,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	#getActivePhase(phases: TodoPhase[]): TodoPhase | undefined {
-		const nonEmpty = phases.filter(phase => phase.tasks.length > 0);
-		const active = nonEmpty.find(phase =>
-			phase.tasks.some(
+	#getActiveGroup(groups: TodoGroup[]): TodoGroup | undefined {
+		const nonEmpty = groups.filter(group => group.tasks.length > 0);
+		const active = nonEmpty.find(group =>
+			group.tasks.some(
 				task => task.status === "pending" || task.status === "in_progress" || task.status === "failed",
 			),
 		);
@@ -905,8 +905,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#renderTodoList(): void {
 		this.todoContainer.clear();
-		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
-		if (phases.length === 0) {
+		const groups = this.todoGroups.filter(group => group.tasks.length > 0);
+		if (groups.length === 0) {
 			return;
 		}
 
@@ -915,25 +915,25 @@ export class InteractiveMode implements InteractiveModeContext {
 		const lines = ["", indent + theme.bold(theme.fg("accent", "Todos"))];
 
 		if (!this.todoExpanded) {
-			const activePhase = this.#getActivePhase(phases);
-			if (!activePhase) return;
-			lines.push(`${indent}${theme.fg("accent", `${hook} ${activePhase.name}`)}`);
-			const visibleTasks = activePhase.tasks.slice(0, 5);
+			const activeGroup = this.#getActiveGroup(groups);
+			if (!activeGroup) return;
+			lines.push(`${indent}${theme.fg("accent", `${hook} ${activeGroup.name}`)}`);
+			const visibleTasks = activeGroup.tasks.slice(0, 5);
 			visibleTasks.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
 				lines.push(this.#formatTodoLine(todo, prefix));
 			});
-			if (visibleTasks.length < activePhase.tasks.length) {
-				const remaining = activePhase.tasks.length - visibleTasks.length;
+			if (visibleTasks.length < activeGroup.tasks.length) {
+				const remaining = activeGroup.tasks.length - visibleTasks.length;
 				lines.push(theme.fg("muted", `${indent}  ${hook} +${remaining} more (Ctrl+T to expand)`));
 			}
 			this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
 			return;
 		}
 
-		for (const phase of phases) {
-			lines.push(`${indent}${theme.fg("accent", `${hook} ${phase.name}`)}`);
-			phase.tasks.forEach((todo, index) => {
+		for (const group of groups) {
+			lines.push(`${indent}${theme.fg("accent", `${hook} ${group.name}`)}`);
+			group.tasks.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
 				lines.push(this.#formatTodoLine(todo, prefix));
 			});
@@ -943,7 +943,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #loadTodoList(): Promise<void> {
-		this.todoPhases = this.session.getTodoPhases();
+		this.todoGroups = this.session.getTodoGroups();
 		this.#renderTodoList();
 	}
 
@@ -1268,9 +1268,9 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		let autoInitialized = false;
 		if ((options.waves?.length ?? 0) > 0) {
-			const phases = planWavesToTodoPhases(options.waves ?? []);
-			if (phases.length > 0) {
-				this.session.setTodoPhases(phases, { reset: true });
+			const groups = planWavesToTodoGroups(options.waves ?? []);
+			if (groups.length > 0) {
+				this.session.setTodoGroups(groups, { reset: true });
 				autoInitialized = true;
 			}
 		}
@@ -2001,11 +2001,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	setTodos(todos: TodoItem[] | TodoPhase[]): void {
+	setTodos(todos: TodoItem[] | TodoGroup[]): void {
 		if (todos.length > 0 && "tasks" in todos[0]) {
-			this.todoPhases = todos as TodoPhase[];
+			this.todoGroups = todos as TodoGroup[];
 		} else {
-			this.todoPhases = [
+			this.todoGroups = [
 				{
 					id: "default",
 					name: "Todos",

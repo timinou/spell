@@ -126,7 +126,7 @@ import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
 import { resolveToCwd } from "../tools/path-utils";
 import type { PendingActionStore } from "../tools/pending-action";
-import { cloneTodoPhases, getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo-write";
+import { cloneTodoGroups, getLatestTodoGroupsFromEntries, type TodoGroup, type TodoItem } from "../tools/todo-write";
 import { clampTimeout } from "../tools/tool-timeouts";
 import { parseCommandArgs } from "../utils/command-args";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
@@ -320,11 +320,11 @@ interface HandoffOptions {
 
 const AUTO_HANDOFF_THRESHOLD_FOCUS = renderPromptTemplate(autoHandoffThresholdFocusPrompt);
 
-/** Collect all task IDs referenced in any task's blockers array across all phases. */
-function collectBlockerRefs(phases: TodoPhase[]): Set<string> {
+/** Collect all task IDs referenced in any task's blockers array across all groups. */
+function collectBlockerRefs(groups: TodoGroup[]): Set<string> {
 	const refs = new Set<string>();
-	for (const phase of phases) {
-		for (const task of phase.tasks) {
+	for (const group of groups) {
+		for (const task of group.tasks) {
 			for (const blockerId of task.blockers ?? []) {
 				refs.add(blockerId);
 			}
@@ -435,9 +435,9 @@ export class AgentSession {
 
 	// Todo completion reminder state
 	#todoReminderCount = 0;
-	#todoPhases: TodoPhase[] = [];
+	#todoGroups: TodoGroup[] = [];
 	#todoClearTimers = new Map<string, Timer>();
-	/** Tracks how many completed tasks have been auto-cleared per phase. */
+	/** Tracks how many completed tasks have been auto-cleared per group. */
 	#clearedCompletedCounts = new Map<string, { name: string; count: number }>();
 	#nextToolChoiceOverride: ToolChoice | undefined = undefined;
 
@@ -554,7 +554,7 @@ export class AgentSession {
 				timestamp: Date.now(),
 			});
 		});
-		this.#syncTodoPhasesFromBranch();
+		this.#syncTodoGroupsFromBranch();
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
@@ -836,7 +836,13 @@ export class AgentSession {
 			if (event.message.role === "toolResult") {
 				const { toolName, details, isError, content } = event.message as {
 					toolName?: string;
-					details?: { path?: string; phases?: TodoPhase[]; report?: string; startedAt?: string };
+					details?: {
+						path?: string;
+						groups?: TodoGroup[];
+						phases?: TodoGroup[];
+						report?: string;
+						startedAt?: string;
+					};
 					isError?: boolean;
 					content?: Array<TextContent | ImageContent>;
 				};
@@ -844,8 +850,9 @@ export class AgentSession {
 				if (toolName === "edit" && details?.path) {
 					this.#invalidateFileCacheForPath(details.path);
 				}
-				if (toolName === "todo_write" && !isError && Array.isArray(details?.phases)) {
-					this.setTodoPhases(details.phases);
+				const todoGroups = details?.groups ?? details?.phases;
+				if (toolName === "todo_write" && !isError && Array.isArray(todoGroups)) {
+					this.setTodoGroups(todoGroups);
 				}
 				if (toolName === "todo_write" && isError) {
 					const errorText = content?.find(part => part.type === "text")?.text;
@@ -2952,49 +2959,49 @@ export class AgentSession {
 		return this.#skillWarnings;
 	}
 
-	getTodoPhases(): TodoPhase[] {
-		return this.#cloneTodoPhases(this.#todoPhases);
+	getTodoGroups(): TodoGroup[] {
+		return this.#cloneTodoGroups(this.#todoGroups);
 	}
 
 	getClearedCompletedCounts(): ReadonlyMap<string, { name: string; count: number }> {
 		return this.#clearedCompletedCounts;
 	}
 
-	setTodoPhases(phases: TodoPhase[], options?: { reset?: boolean }): void {
-		this.#todoPhases = this.#cloneTodoPhases(phases);
+	setTodoGroups(groups: TodoGroup[], options?: { reset?: boolean }): void {
+		this.#todoGroups = this.#cloneTodoGroups(groups);
 		if (options?.reset) {
 			this.#clearedCompletedCounts.clear();
 		}
-		this.#scheduleTodoAutoClear(phases);
+		this.#scheduleTodoAutoClear(groups);
 	}
 
-	#syncTodoPhasesFromBranch(): void {
-		const phases = getLatestTodoPhasesFromEntries(this.sessionManager.getBranch());
+	#syncTodoGroupsFromBranch(): void {
+		const groups = getLatestTodoGroupsFromEntries(this.sessionManager.getBranch());
 		// Strip completed tasks unless another task still references them via blockers.
 		// Abandoned tasks are preserved for deferral audit trail.
-		const referencedIds = collectBlockerRefs(phases);
-		for (const phase of phases) {
-			phase.tasks = phase.tasks.filter(t => t.status !== "completed" || referencedIds.has(t.id));
+		const referencedIds = collectBlockerRefs(groups);
+		for (const group of groups) {
+			group.tasks = group.tasks.filter(task => task.status !== "completed" || referencedIds.has(task.id));
 		}
-		this.setTodoPhases(
-			phases.filter(p => p.tasks.length > 0),
+		this.setTodoGroups(
+			groups.filter(group => group.tasks.length > 0),
 			{ reset: true },
 		);
 	}
 
-	#cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
-		return cloneTodoPhases(phases);
+	#cloneTodoGroups(groups: TodoGroup[]): TodoGroup[] {
+		return cloneTodoGroups(groups);
 	}
 
 	/** Schedule auto-removal of completed tasks after a delay. */
-	#scheduleTodoAutoClear(phases: TodoPhase[]): void {
+	#scheduleTodoAutoClear(groups: TodoGroup[]): void {
 		const delaySec = this.settings.get("tasks.todoClearDelay") ?? 60;
 		if (delaySec < 0) return; // "Never" — no auto-clear
 		const delayMs = delaySec * 1000;
-		const referencedIds = collectBlockerRefs(phases);
+		const referencedIds = collectBlockerRefs(groups);
 		const doneTaskIds = new Set<string>();
-		for (const phase of phases) {
-			for (const task of phase.tasks) {
+		for (const group of groups) {
+			for (const task of group.tasks) {
 				// Only schedule tasks that are completed AND not referenced by any other task's blockers.
 				if (task.status === "completed" && !referencedIds.has(task.id)) {
 					doneTaskIds.add(task.id);
@@ -3028,30 +3035,30 @@ export class AgentSession {
 	#runTodoAutoClear(taskId: string): void {
 		this.#todoClearTimers.delete(taskId);
 		let removed = false;
-		for (const phase of this.#todoPhases) {
-			const idx = phase.tasks.findIndex(t => t.id === taskId);
+		for (const group of this.#todoGroups) {
+			const idx = group.tasks.findIndex(t => t.id === taskId);
 			if (
 				idx !== -1 &&
-				phase.tasks[idx]!.status === "completed" &&
-				!collectBlockerRefs(this.#todoPhases).has(taskId)
+				group.tasks[idx]!.status === "completed" &&
+				!collectBlockerRefs(this.#todoGroups).has(taskId)
 			) {
-				// Track the cleared task count for this phase before removing.
-				const entry = this.#clearedCompletedCounts.get(phase.id);
+				// Track the cleared task count for this group before removing.
+				const entry = this.#clearedCompletedCounts.get(group.id);
 				if (entry) {
 					entry.count++;
 				} else {
-					this.#clearedCompletedCounts.set(phase.id, { name: phase.name, count: 1 });
+					this.#clearedCompletedCounts.set(group.id, { name: group.name, count: 1 });
 				}
-				phase.tasks.splice(idx, 1);
+				group.tasks.splice(idx, 1);
 				removed = true;
 				break;
 			}
 		}
 		if (!removed) return;
 
-		// Remove empty phases, then re-evaluate newly eligible completed tasks.
-		this.#todoPhases = this.#todoPhases.filter(p => p.tasks.length > 0);
-		this.#scheduleTodoAutoClear(this.#todoPhases);
+		// Remove empty groups, then re-evaluate newly eligible completed tasks.
+		this.#todoGroups = this.#todoGroups.filter(group => group.tasks.length > 0);
+		this.#scheduleTodoAutoClear(this.#todoGroups);
 		this.#emit({ type: "todo_auto_clear" });
 	}
 
@@ -3109,7 +3116,7 @@ export class AgentSession {
 		this.#bashToolArgsByCallId.clear();
 		await this.sessionManager.flush();
 		await this.sessionManager.newSession(options);
-		this.setTodoPhases([], { reset: true });
+		this.setTodoGroups([], { reset: true });
 		this.agent.sessionId = this.sessionManager.getSessionId();
 		this.#steeringMessages = [];
 		this.#followUpMessages = [];
@@ -3527,7 +3534,7 @@ export class AgentSession {
 		await this.sessionManager.rewriteEntries();
 		const sessionContext = this.sessionManager.buildSessionContext();
 		this.agent.replaceMessages(sessionContext.messages);
-		this.#syncTodoPhasesFromBranch();
+		this.#syncTodoGroupsFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 		return result;
 	}
@@ -3657,7 +3664,7 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
-			this.#syncTodoPhasesFromBranch();
+			this.#syncTodoGroupsFromBranch();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
 
 			// Get the saved compaction entry for the hook
@@ -3871,7 +3878,7 @@ export class AgentSession {
 			// Rebuild agent messages from session
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
-			this.#syncTodoPhasesFromBranch();
+			this.#syncTodoGroupsFromBranch();
 
 			return { document: handoffText, savedPath };
 		} finally {
@@ -4072,7 +4079,7 @@ export class AgentSession {
 		if (this.#planModeState?.enabled) {
 			return undefined;
 		}
-		if (this.getTodoPhases().length > 0) {
+		if (this.getTodoGroups().length > 0) {
 			return undefined;
 		}
 
@@ -4124,24 +4131,24 @@ export class AgentSession {
 			return false;
 		}
 
-		const phases = this.getTodoPhases();
-		if (phases.length === 0) {
+		const groups = this.getTodoGroups();
+		if (groups.length === 0) {
 			this.#todoReminderCount = 0;
 			return false;
 		}
 
-		const incompleteByPhase = phases
-			.map(phase => ({
-				name: phase.name,
-				tasks: phase.tasks
+		const incompleteByGroup = groups
+			.map(group => ({
+				name: group.name,
+				tasks: group.tasks
 					.filter(
 						(task): task is TodoItem & { status: "pending" | "in_progress" } =>
 							task.status === "pending" || task.status === "in_progress",
 					)
 					.map(task => ({ id: task.id, content: task.content, status: task.status })),
 			}))
-			.filter(phase => phase.tasks.length > 0);
-		const incomplete = incompleteByPhase.flatMap(phase => phase.tasks);
+			.filter(group => group.tasks.length > 0);
+		const incomplete = incompleteByGroup.flatMap(group => group.tasks);
 		if (incomplete.length === 0) {
 			this.#todoReminderCount = 0;
 			return false;
@@ -4149,8 +4156,8 @@ export class AgentSession {
 
 		// Build reminder message
 		this.#todoReminderCount++;
-		const todoList = incompleteByPhase
-			.map(phase => `- ${phase.name}\n${phase.tasks.map(task => `  - ${task.content}`).join("\n")}`)
+		const todoList = incompleteByGroup
+			.map(group => `- ${group.name}\n${group.tasks.map(task => `  - ${task.content}`).join("\n")}`)
 			.join("\n");
 		const reminder =
 			`<system-reminder>\n` +
@@ -4693,7 +4700,7 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
-			this.#syncTodoPhasesFromBranch();
+			this.#syncTodoGroupsFromBranch();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
 
 			// Get the saved compaction entry for the hook
@@ -5342,7 +5349,7 @@ export class AgentSession {
 		}
 
 		this.agent.replaceMessages(sessionContext.messages);
-		this.#syncTodoPhasesFromBranch();
+		this.#syncTodoGroupsFromBranch();
 
 		// Restore model if saved
 		const defaultModelStr = sessionContext.models.default;
@@ -5430,7 +5437,7 @@ export class AgentSession {
 		} else {
 			this.sessionManager.createBranchedSession(selectedEntry.parentId);
 		}
-		this.#syncTodoPhasesFromBranch();
+		this.#syncTodoGroupsFromBranch();
 		this.agent.sessionId = this.sessionManager.getSessionId();
 
 		// Reload messages from entries (works for both file and in-memory mode)
@@ -5602,7 +5609,7 @@ export class AgentSession {
 		this.agent.replaceMessages(sessionContext.messages);
 		this.#trackedBashToolExecutions = [];
 		this.#bashToolArgsByCallId.clear();
-		this.#syncTodoPhasesFromBranch();
+		this.#syncTodoGroupsFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 
 		// Emit session_tree event

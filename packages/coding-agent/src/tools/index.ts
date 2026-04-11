@@ -19,6 +19,7 @@ import type { CanvasTaskManager } from "../orchestrators/canvas-task-manager";
 import { EditTool } from "../patch";
 import type { ActiveModeState, PlanModeState } from "../plan-mode/state";
 import type { SandboxPolicy } from "../sandbox";
+import type { ArtifactRef } from "../session/artifacts";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
 import type { EventBus } from "../utils/event-bus";
@@ -56,7 +57,7 @@ import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { SendFileTool } from "./send-file";
 import { loadSshTool } from "./ssh";
 import { SubmitResultTool } from "./submit-result";
-import { type TodoPhase, TodoWriteTool } from "./todo-write";
+import { type TodoGroup, TodoWriteTool } from "./todo-write";
 import { WriteTool } from "./write";
 
 // Exa MCP tools (22 tools)
@@ -155,8 +156,8 @@ export interface ToolSession {
 	getFirstUserMessage?: () => string | undefined;
 	/** Get artifacts directory for artifact:// URLs */
 	getArtifactsDir?: () => string | null;
-	/** Allocate a new artifact path and ID for session-scoped truncated output. */
-	allocateOutputArtifact?: (toolType: string) => Promise<{ id?: string; path?: string }>;
+	/** Allocate a new artifact path, URI, and ID for session-scoped output. */
+	allocateOutputArtifact?: (toolType: string, extension?: string) => Promise<ArtifactRef | undefined>;
 	/** Get session spawns */
 	getSessionSpawns: () => string | null;
 	/** Get resolved model string if explicitly set for this session */
@@ -185,10 +186,10 @@ export interface ToolSession {
 	isAgentIdle?: () => boolean;
 	/** Get compact conversation context for subagents (excludes tool results, system prompts) */
 	getCompactContext?: () => string;
-	/** Get cached todo phases for this session. */
-	getTodoPhases?: () => TodoPhase[];
-	/** Replace cached todo phases for this session. */
-	setTodoPhases?: (phases: TodoPhase[], options?: { reset?: boolean }) => void;
+	/** Get cached todo groups for this session. */
+	getTodoGroups?: () => TodoGroup[];
+	/** Replace cached todo groups for this session. */
+	setTodoGroups?: (groups: TodoGroup[], options?: { reset?: boolean }) => void;
 	/** Whether MCP tool discovery is active for this session. */
 	isMCPDiscoveryEnabled?: () => boolean;
 	/** Get hidden-but-discoverable MCP tools for search_tool_bm25 prompts and fallbacks. */

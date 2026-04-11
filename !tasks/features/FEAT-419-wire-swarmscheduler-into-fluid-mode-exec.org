@@ -1,0 +1,100 @@
+#+TITLE: Wire SwarmScheduler into fluid-mode execution
+#+STATE: DONE
+#+SESSION_ID: 14b66a7ab4f1eac0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-11-49-843Z_14b66a7ab4f1eac0.jsonl]]
+#+CUSTOM_ID: FEAT-419-wire-swarmscheduler-into-fluid-mode-exec
+#+EFFORT: L
+#+PRIORITY: A
+#+LAYER: agent-runtime
+#+DEPENDS: FEAT-418-thread-resolved-context-through-blocker FEAT-417-harden-swarmscheduler-test-coverage-for
+
+NOTE [2026-04-11]: Completed in PLAN-176: non-simple fluid plans now run through SwarmScheduler + SwarmBlackboard with verified event-pipeline and shell agent tests.
+
+* Initial Message
+
+bro write a proper todowrite sheet with todoRef support showing all tasks
+
+* Context
+
+PLAN-173 built =SwarmScheduler=, swarm tools (handoff/spawn-successor), and the =swarmContext= plumbing in =executor.ts=, but no code path actually populates =swarmContext= or uses the scheduler for execution. Fluid mode currently uses a single-agent prompt chain (=session.prompt()=) that manages todo progression manually. The scheduler, blackboard, and swarm tools are inert.
+
+Current execution flow in =executeFluidPlan()= (~line 288 in fluid-mode.ts):
+1. Materialize plan into todo groups via =materializeFluidPlanToTodos()=
+2. Call =promoteFirstRunnableTask(phases)= to mark initial ready tasks
+3. Set todo groups on session
+4. Call =session.prompt()= with a single execution prompt
+5. The single agent handles all tasks sequentially via todo_write tool calls
+
+Target execution flow:
+1. Materialize plan into todo groups
+2. Create =SwarmBlackboard= for the swarm run
+3. Create =SwarmScheduler= from the materialized DAG
+4. Scheduler pump loop dispatches each ready task to =runSubprocess()= with populated =swarmContext=
+5. Each subprocess agent receives swarm tools (handoff, spawn-successor)
+6. On task completion, scheduler marks done and dispatches next ready batch
+7. QML bridge events are preserved throughout
+
+** Design Decisions
+
+1. Keep the single-agent path (=session.prompt()=) for plans with =isSimple= flag (≤2 tasks). This is the existing behavior and works well for simple plans.
+2. For multi-task plans, replace =session.prompt()= with a =SwarmScheduler.pump()= loop. Each ready task is dispatched via =runSubprocess()= from =task/executor.ts=.
+3. Create =SwarmBlackboard= at the start of =executeFluidPlan()=. Pass it through =swarmContext=. The blackboard persists swarm state as org items under a =swarm= category (this is the existing blackboard API).
+4. The =swarmContext= passed to each =runSubprocess()= call includes: =active: true=, =agent= derived from the plan node, =sessionId= from the current session, =currentTaskUri= for the specific task being dispatched, =blackboard= (shared), =scheduler= (shared).
+5. The =syncRuntimeStates()= callback (currently used for QML state sync) must be called after each scheduler cycle to update the QML bridge with current DAG state.
+6. Error handling: if a task subprocess fails, =scheduler.markFailed(taskUri)= triggers cascade failure. The QML bridge must receive failure events for display.
+7. The execution prompt for each subprocess is built from the plan node's task description plus the swarm system prompt (which the executor already injects when =swarmContext.active= is true).
+8. Abort signal handling: the scheduler's pump accepts an =AbortSignal=. Wire the existing =signal= from =executeFluidPlan= through to the scheduler.
+
+** Files to Modify
+
+*** Primary
+- =packages/coding-agent/src/modes/fluid-mode.ts=:
+  - Import =SwarmScheduler=, =SwarmBlackboard=
+  - Refactor =executeFluidPlan()= to use scheduler pump for non-simple plans
+  - Replace =promoteFirstRunnableTask()= usage with scheduler-driven promotion
+  - Wire =swarmContext= into subprocess dispatch
+  - Preserve QML bridge event routing via =syncRuntimeStates= callback
+
+*** Supporting (may need minor adjustments)
+- =packages/coding-agent/src/task/executor.ts=: verify =runSubprocess= accepts the populated =swarmContext= correctly (should already work from PLAN-173)
+- =packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts=: may need to expose the =MutableDag= alongside the materialized groups for scheduler construction
+
+** Files Unchanged
+- =packages/coding-agent/src/task/swarm-scheduler.ts= — already implemented
+- =packages/coding-agent/src/swarm/blackboard.ts= — already implemented
+- =packages/coding-agent/src/swarm/handoff-tool.ts= / =spawn-successor-tool.ts= — already implemented
+
+** Edge Cases
+- Plans with deferred agents should not be added to the scheduler DAG.
+- If the QML bridge disconnects mid-execution, the scheduler should continue (event routing is best-effort).
+- If all tasks fail, the scheduler pump terminates cleanly and the execution snapshot reflects failure state.
+- Retry state: the existing retry mechanism (=processFluidEvents= retry loop) must reconstruct the scheduler from persisted todo state, not the original plan.
+- The =buildExecutionPrompt()= function currently builds a single prompt for all tasks. For scheduler-driven execution, each subprocess needs a per-task prompt derived from the plan node.
+
+** Existing Patterns to Follow
+- =SwarmScheduler.pump(runNode, signal?)= is the async dispatch loop
+- =runSubprocess(options: ExecutorOptions)= in =task/executor.ts= is the subprocess launcher
+- =FluidExecutionResult= is the return type for =executeFluidPlan=
+- =materializeFluidPlanToTodos(plan)= produces ={ groups: TodoGroup[], taskIdByAgentId: Map }=
+- =SwarmBlackboard= constructor takes ={ projectRoot, orgConfig, eventBus }=
+
+* Verification
+- =bun check:ts= passes
+- =bun test packages/coding-agent/test/task/swarm-scheduler.test.ts= passes
+- =bun test packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts= passes
+- Manual: construct a 3-task fluid plan and verify concurrent dispatch (tasks with independent filesDeps should start simultaneously)
+- Manual: verify QML bridge receives task status events during scheduler execution
+
+* Sub-outline
+
+** FEAT-XXX::plan-to-dag-bridge
+Expose a helper that converts materialized todo groups into a =MutableDag<TodoItem>= suitable for =SwarmScheduler= construction. This bridges =plan-to-todos.ts= output to scheduler input.
+
+** FEAT-XXX::scheduler-pump-integration
+Depends on: FEAT-XXX::plan-to-dag-bridge. Refactor =executeFluidPlan()= to create =SwarmBlackboard= + =SwarmScheduler= and use =pump()= for non-simple plans. Wire =swarmContext= into each =runSubprocess= call. Preserve QML bridge event routing.
+
+** FEAT-XXX::retry-state-reconstruction
+Depends on: FEAT-XXX::scheduler-pump-integration. Ensure the retry path (=retryState= in =executeFluidPlan=) reconstructs a scheduler from persisted todo state.
+
+** FEAT-XXX::verify-e2e
+Depends on: FEAT-XXX::retry-state-reconstruction. Run verification suite and manual checks.

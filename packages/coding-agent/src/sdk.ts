@@ -191,7 +191,10 @@ export interface CreateAgentSessionOptions {
 	 */
 	preloadedExtensions?: LoadExtensionsResult;
 
-	/** Shared event bus for tool/extension communication. Default: creates new bus. */
+	/** Shared event bus for tool/extension communication. Default: creates new bus.
+	 * Kept untyped because the session bus carries non-swarm channels and must remain
+	 * open to all modules. Swarm-specific typing is applied only at local call sites.
+	 */
 	eventBus?: EventBus;
 
 	/** Skills. Default: discovered from multiple locations */
@@ -1015,8 +1018,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		getActiveModeState: () => session?.getActiveModeState(),
 		isAgentIdle: () => !session.isStreaming,
 		getCompactContext: () => session.formatCompactContext(),
-		getTodoPhases: () => session.getTodoPhases(),
-		setTodoPhases: (phases, options) => session.setTodoPhases(phases, options),
+		getTodoGroups: () => session.getTodoGroups(),
+		setTodoGroups: (groups, options) => session.setTodoGroups(groups, options),
 		isMCPDiscoveryEnabled: () => session.isMCPDiscoveryEnabled(),
 		getDiscoverableMCPTools: () => session.getDiscoverableMCPTools(),
 		getDiscoverableMCPSearchIndex: () => session.getDiscoverableMCPSearchIndex(),

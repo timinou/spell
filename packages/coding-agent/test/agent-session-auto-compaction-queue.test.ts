@@ -1,15 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+
 import * as fs from "node:fs";
+
 import * as path from "node:path";
+
 import { Agent } from "@oh-my-pi/pi-agent-core";
+
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
+
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+
 import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+
 import { getProjectAgentDir, TempDir, withTimeout } from "@oh-my-pi/pi-utils";
 
 const runtimeSignalStoreKey = "__ompRuntimeSignals";
@@ -17,17 +29,16 @@ const runtimeSignalStoreKey = "__ompRuntimeSignals";
 type RuntimeSignalGlobal = typeof globalThis & { [runtimeSignalStoreKey]?: string[] };
 
 function getRuntimeSignals(): string[] {
-	const globalWithSignals = globalThis as RuntimeSignalGlobal;
-	if (!globalWithSignals[runtimeSignalStoreKey]) {
-		globalWithSignals[runtimeSignalStoreKey] = [];
-	}
-	return globalWithSignals[runtimeSignalStoreKey];
+	const store = globalThis as RuntimeSignalGlobal;
+	if (!store[runtimeSignalStoreKey]) store[runtimeSignalStoreKey] = [];
+	return store[runtimeSignalStoreKey]!;
 }
 
 /**
  * Regression test: auto-compaction completion should resume the agent loop when
  * there are queued agent-level messages (follow-up/steering/custom).
  */
+
 describe("AgentSession auto-compaction queue resume", () => {
 	let tempDir: TempDir;
 	let session: AgentSession;
@@ -39,8 +50,6 @@ describe("AgentSession auto-compaction queue resume", () => {
 		tempDir = TempDir.createSync("@pi-auto-compaction-queue-");
 		vi.useFakeTimers();
 
-		// Provide an extension that short-circuits compaction so the test doesn't
-		// make any LLM calls.
 		const extensionsDir = path.join(getProjectAgentDir(tempDir.path()), "extensions");
 		fs.mkdirSync(extensionsDir, { recursive: true });
 		const extensionPath = path.join(extensionsDir, "compaction-short-circuit.ts");
@@ -91,25 +100,11 @@ describe("AgentSession auto-compaction queue resume", () => {
 		);
 
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected built-in anthropic model to exist");
-		}
+		if (!model) throw new Error("Expected built-in anthropic model to exist");
 
-		const agent = new Agent({
-			initialState: {
-				model,
-				systemPrompt: "Test",
-				tools: [],
-				messages: [],
-			},
-		});
+		const agent = new Agent({ initialState: { model, systemPrompt: "Test", tools: [], messages: [] } });
 
-		// Seed a minimal session branch so prepareCompaction() returns a preparation.
-		sessionManager.appendMessage({
-			role: "user",
-			content: "hello",
-			timestamp: Date.now(),
-		});
+		sessionManager.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
 
 		session = new AgentSession({
 			agent,
@@ -141,19 +136,14 @@ describe("AgentSession auto-compaction queue resume", () => {
 			display: false,
 			timestamp: Date.now(),
 		});
-
 		expect(session.agent.hasQueuedMessages()).toBe(true);
 
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
-
-		// Wait for auto_compaction_end event to know when the async handler is done
 		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
 		session.subscribe(event => {
 			if (event.type === "auto_compaction_end") onCompactionDone();
 		});
 
-		// Build a fake AssistantMessage with high token usage to trigger threshold
-		// compaction (contextWindow=200000, threshold ~80%).
 		const assistantMsg = {
 			role: "assistant" as const,
 			content: [],
@@ -171,14 +161,9 @@ describe("AgentSession auto-compaction queue resume", () => {
 			},
 			timestamp: Date.now(),
 		};
-
-		// Drive auto-compaction through the event flow:
-		// message_end → stores #lastAssistantMessage
-		// agent_end   → #checkCompaction → shouldCompact → #runAutoCompaction
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
 
-		// Wait for compaction completion, then verify waitForIdle blocks on queued continuation.
 		await compactionDone;
 		await Promise.resolve();
 		const idlePromise = session.waitForIdle();
@@ -200,7 +185,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 	it("forwards todo reminder lifecycle signals to extensions", async () => {
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 
-		session.setTodoPhases([
+		session.setTodoGroups([
 			{
 				id: "phase-1",
 				name: "Execution",
@@ -230,7 +215,6 @@ describe("AgentSession auto-compaction queue resume", () => {
 			},
 			timestamp: Date.now(),
 		};
-
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
 

@@ -47,7 +47,7 @@ export interface TodoDelegation {
 	sessionId: string;
 	transcriptPath?: string;
 	agent?: string;
-	childPhases?: TodoPhase[];
+	childGroups?: TodoGroup[];
 	result?: TodoDelegationResult;
 }
 
@@ -83,19 +83,15 @@ export interface TodoItem {
 	layer?: string;
 }
 
-/**
- * Cosmetic grouping only. Ordering comes from blockers/DAG edges, not group position.
- * The legacy name is retained temporarily because session/UI plumbing still references `phases`.
- */
-export interface TodoPhase {
+/** Cosmetic grouping only. Ordering comes from blockers/DAG edges, not group position. */
+export interface TodoGroup {
 	id: string;
 	name: string;
 	tasks: TodoItem[];
 }
 
 export interface TodoWriteToolDetails {
-	phases: TodoPhase[];
-	groups?: TodoPhase[];
+	groups: TodoGroup[];
 	storage: "session" | "memory";
 }
 
@@ -150,7 +146,7 @@ const InputTask = Type.Object({
 	layer: Type.Optional(Type.String({ description: "Layer for policy-based gate injection" })),
 });
 
-const InputPhase = Type.Object({
+const InputGroup = Type.Object({
 	name: Type.String({ description: "Group name" }),
 	tasks: Type.Optional(Type.Array(InputTask)),
 });
@@ -160,11 +156,12 @@ const todoWriteSchema = Type.Object({
 		Type.Union([
 			Type.Object({
 				op: Type.Literal("replace"),
-				phases: Type.Array(InputPhase),
+				groups: Type.Optional(Type.Array(InputGroup)),
+				phases: Type.Optional(Type.Array(InputGroup)),
 			}),
 			Type.Object({
 				op: Type.Literal("add_phase"),
-				name: Type.String({ description: "Group name" }),
+				name: Type.String({ description: "Legacy group name alias" }),
 				tasks: Type.Optional(Type.Array(InputTask)),
 			}),
 			Type.Object({
@@ -174,7 +171,8 @@ const todoWriteSchema = Type.Object({
 			}),
 			Type.Object({
 				op: Type.Literal("add_task"),
-				phase: Type.String({ description: "Group ID, e.g. phase-1" }),
+				group: Type.Optional(Type.String({ description: "Group ID, e.g. group-1" })),
+				phase: Type.Optional(Type.String({ description: "Legacy group ID alias" })),
 				slug: Type.Optional(Type.String({ description: "Stable slug/ID for the task. Defaults to task-N." })),
 				uri: Type.Optional(Type.String({ description: "Canonical task:// or data:// URI for the task" })),
 				kind: Type.Optional(KindEnum),
@@ -237,9 +235,9 @@ type TodoWriteParams = Static<typeof todoWriteSchema>;
 // =============================================================================
 
 interface TodoFile {
-	phases: TodoPhase[];
+	groups: TodoGroup[];
 	nextTaskId: number;
-	nextPhaseId: number;
+	nextGroupId: number;
 }
 
 // =============================================================================
@@ -247,12 +245,12 @@ interface TodoFile {
 // =============================================================================
 
 function makeEmptyFile(): TodoFile {
-	return { phases: [], nextTaskId: 1, nextPhaseId: 1 };
+	return { groups: [], nextTaskId: 1, nextGroupId: 1 };
 }
 
-export function findTask(phases: TodoPhase[], id: string): TodoItem | undefined {
-	for (const phase of phases) {
-		const task = phase.tasks.find(t => t.id === id || t.uri === id);
+export function findTask(groups: TodoGroup[], id: string): TodoItem | undefined {
+	for (const group of groups) {
+		const task = group.tasks.find(t => t.id === id || t.uri === id);
 		if (task) return task;
 	}
 	return undefined;
@@ -311,13 +309,13 @@ function isSatisfiedDataNode(task: TodoItem): boolean {
 	return Boolean(task.dataContent || task.artifactPath || task.delegation?.result?.outputPath);
 }
 
-function buildPhaseFromInput(
+function buildGroupFromInput(
 	input: { name: string; tasks?: Array<Static<typeof InputTask>> },
-	phaseId: string,
+	groupId: string,
 	nextTaskId: number,
 	policies: TaskPolicy[],
 	context: ResolvedTodoContext,
-): { phase: TodoPhase; nextTaskId: number } {
+): { group: TodoGroup; nextTaskId: number } {
 	const tasks: TodoItem[] = [];
 	let tid = nextTaskId;
 	for (const t of input.tasks ?? []) {
@@ -350,21 +348,21 @@ function buildPhaseFromInput(
 		injectPolicyGates(task, policies);
 		tasks.push(task);
 	}
-	return { phase: { id: phaseId, name: input.name, tasks }, nextTaskId: tid };
+	return { group: { id: groupId, name: input.name, tasks }, nextTaskId: tid };
 }
 
-export function getNextTodoIds(phases: TodoPhase[]): { nextTaskId: number; nextPhaseId: number } {
+export function getNextTodoIds(groups: TodoGroup[]): { nextTaskId: number; nextGroupId: number } {
 	let maxTaskId = 0;
-	let maxPhaseId = 0;
+	let maxGroupId = 0;
 
-	for (const phase of phases) {
-		const phaseMatch = /^phase-(\d+)$/.exec(phase.id);
-		if (phaseMatch) {
-			const value = Number.parseInt(phaseMatch[1], 10);
-			if (Number.isFinite(value) && value > maxPhaseId) maxPhaseId = value;
+	for (const group of groups) {
+		const groupMatch = /^group-(\d+)$/.exec(group.id);
+		if (groupMatch) {
+			const value = Number.parseInt(groupMatch[1], 10);
+			if (Number.isFinite(value) && value > maxGroupId) maxGroupId = value;
 		}
 
-		for (const task of phase.tasks) {
+		for (const task of group.tasks) {
 			const taskMatch = /^task-(\d+)$/.exec(task.id);
 			if (!taskMatch) continue;
 			const value = Number.parseInt(taskMatch[1], 10);
@@ -372,19 +370,19 @@ export function getNextTodoIds(phases: TodoPhase[]): { nextTaskId: number; nextP
 		}
 	}
 
-	return { nextTaskId: maxTaskId + 1, nextPhaseId: maxPhaseId + 1 };
+	return { nextTaskId: maxTaskId + 1, nextGroupId: maxGroupId + 1 };
 }
 
-function fileFromPhases(phases: TodoPhase[]): TodoFile {
-	const { nextTaskId, nextPhaseId } = getNextTodoIds(phases);
-	return { phases, nextTaskId, nextPhaseId };
+function fileFromGroups(groups: TodoGroup[]): TodoFile {
+	const { nextTaskId, nextGroupId } = getNextTodoIds(groups);
+	return { groups, nextTaskId, nextGroupId };
 }
 
 function cloneTodoDelegation(delegation: TodoDelegation | undefined): TodoDelegation | undefined {
 	if (!delegation) return undefined;
 	return {
 		...delegation,
-		childPhases: delegation.childPhases ? cloneTodoPhases(delegation.childPhases) : undefined,
+		childGroups: delegation.childGroups ? cloneTodoGroups(delegation.childGroups) : undefined,
 		result: delegation.result ? { ...delegation.result } : undefined,
 	};
 }
@@ -399,8 +397,8 @@ function cloneTodoTask(task: TodoItem): TodoItem {
 	};
 }
 
-export function cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
-	return phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => cloneTodoTask(task)) }));
+export function cloneTodoGroups(groups: TodoGroup[]): TodoGroup[] {
+	return groups.map(group => ({ ...group, tasks: group.tasks.map(task => cloneTodoTask(task)) }));
 }
 
 export function injectPolicyGates(task: TodoItem, policies: TaskPolicy[]): void {
@@ -449,8 +447,8 @@ export function isDelegatedTask(task: TodoItem): boolean {
 const ORG_DOING_OR_LATER_STATES = new Set(["DOING", "REVIEW", "DONE", "BLOCKED"]);
 const ORG_DONE_OR_LATER_STATES = new Set(["DONE", "BLOCKED"]);
 
-function flattenTasks(phases: TodoPhase[]): TodoItem[] {
-	return phases.flatMap(phase => phase.tasks);
+function flattenTasks(groups: TodoGroup[]): TodoItem[] {
+	return groups.flatMap(group => group.tasks);
 }
 
 type OrgTransitionResult = "transitioned" | "not-found" | "skipped";
@@ -487,17 +485,17 @@ async function transitionOrgItemIfNeeded(
 
 async function applyOrgLifecycleHooks(
 	session: ToolSession,
-	previousPhases: TodoPhase[],
-	nextPhases: TodoPhase[],
+	previousGroups: TodoGroup[],
+	nextGroups: TodoGroup[],
 ): Promise<string[]> {
 	if (!session.settings.get("org.enabled")) {
 		return [];
 	}
 	const projectRoot = session.cwd ?? getProjectDir();
 	const todoKeywords = [...buildOrgConfig(session.settings).todoKeywords];
-	const previousStatus = new Map(flattenTasks(previousPhases).map(task => [task.id, task.status]));
+	const previousStatus = new Map(flattenTasks(previousGroups).map(task => [task.id, task.status]));
 	const notices: string[] = [];
-	for (const task of flattenTasks(nextPhases)) {
+	for (const task of flattenTasks(nextGroups)) {
 		const oldStatus = previousStatus.get(task.id);
 		if (task.status === "in_progress" && oldStatus !== "in_progress" && task.orgItemId) {
 			try {
@@ -547,8 +545,8 @@ function resolveTaskRef(ref: string, allTasks: TodoItem[], context: ResolvedTodo
 	return allTasks.find(task => task.uri === canonical || task.id === resolved.slug);
 }
 
-function hydrateTasks(phases: TodoPhase[], context: ResolvedTodoContext): TodoItem[] {
-	const tasks = flattenTasks(phases);
+function hydrateTasks(groups: TodoGroup[], context: ResolvedTodoContext): TodoItem[] {
+	const tasks = flattenTasks(groups);
 	for (const task of tasks) {
 		task.kind ??= "work";
 		task.uri = buildTodoUri(task, context);
@@ -562,8 +560,8 @@ function hydrateTasks(phases: TodoPhase[], context: ResolvedTodoContext): TodoIt
 	return tasks;
 }
 
-function buildTodoDag(phases: TodoPhase[], context: ResolvedTodoContext): MutableDag<TodoItem> {
-	const tasks = hydrateTasks(phases, context);
+function buildTodoDag(groups: TodoGroup[], context: ResolvedTodoContext): MutableDag<TodoItem> {
+	const tasks = hydrateTasks(groups, context);
 	const entries = tasks.map(
 		task =>
 			[
@@ -581,8 +579,11 @@ function buildTodoDag(phases: TodoPhase[], context: ResolvedTodoContext): Mutabl
  * Check if a task has any blocker that is not yet completed or abandoned.
  * Missing refs are treated as resolved for scheduling, but surfaced separately as warnings.
  */
-export function hasUnresolvedBlockers(task: TodoItem, allTasks: TodoItem[]): boolean {
-	const context: ResolvedTodoContext = { currentSessionId: "current", currentAgentName: "main" };
+export function hasUnresolvedBlockers(
+	task: TodoItem,
+	allTasks: TodoItem[],
+	context: ResolvedTodoContext = { currentSessionId: "current", currentAgentName: "main" },
+): boolean {
 	if (!task.blockers?.length) return false;
 	return task.blockers.some(blockerRef => {
 		const blocker =
@@ -594,17 +595,21 @@ export function hasUnresolvedBlockers(task: TodoItem, allTasks: TodoItem[]): boo
 }
 
 /** Check if a task is blocked by unresolved dependencies (pending tasks only). */
-export function isTaskBlocked(task: TodoItem, allTasks: TodoItem[]): boolean {
+export function isTaskBlocked(
+	task: TodoItem,
+	allTasks: TodoItem[],
+	context: ResolvedTodoContext = { currentSessionId: "current", currentAgentName: "main" },
+): boolean {
 	if (task.status !== "pending") return false;
-	return hasUnresolvedBlockers(task, allTasks);
+	return hasUnresolvedBlockers(task, allTasks, context);
 }
 
 export function promoteReadyTasks(
-	phases: TodoPhase[],
+	groups: TodoGroup[],
 	isolationMode: boolean,
 	context: ResolvedTodoContext = { currentSessionId: "current", currentAgentName: "main" },
 ): void {
-	const tasks = hydrateTasks(phases, context);
+	const tasks = hydrateTasks(groups, context);
 	if (tasks.length === 0) return;
 
 	for (const task of tasks) {
@@ -619,7 +624,7 @@ export function promoteReadyTasks(
 	}
 
 	for (const task of tasks) {
-		if (task.status === "in_progress" && hasUnresolvedBlockers(task, tasks)) {
+		if (task.status === "in_progress" && hasUnresolvedBlockers(task, tasks, context)) {
 			task.status = "pending";
 		}
 	}
@@ -648,7 +653,7 @@ export function promoteReadyTasks(
 	}
 	if (!isolationMode && tasks.some(task => task.status === "failed" || task.status === "gate_failed")) return;
 
-	const dag = buildTodoDag(phases, context);
+	const dag = buildTodoDag(groups, context);
 	const completed = new Set(
 		tasks.filter(task => task.status === "completed" || task.status === "abandoned").map(task => task.uri!),
 	);
@@ -680,8 +685,8 @@ export function promoteReadyTasks(
 	}
 }
 
-function collectBlockerGraphWarnings(phases: TodoPhase[], context: ResolvedTodoContext): string[] {
-	const allTasks = hydrateTasks(phases, context);
+function collectBlockerGraphWarnings(groups: TodoGroup[], context: ResolvedTodoContext): string[] {
+	const allTasks = hydrateTasks(groups, context);
 	const warnings: string[] = [];
 	for (const task of allTasks) {
 		for (const blockerRef of task.blockers ?? []) {
@@ -721,7 +726,7 @@ function collectBlockerGraphWarnings(phases: TodoPhase[], context: ResolvedTodoC
 	return [...new Set(warnings)];
 }
 
-export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPhase[] {
+export function getLatestTodoGroupsFromEntries(entries: SessionEntry[]): TodoGroup[] {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
 		if (entry.type !== "message") continue;
@@ -729,10 +734,11 @@ export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPha
 		const message = entry.message as { role?: string; toolName?: string; details?: unknown; isError?: boolean };
 		if (message.role !== "toolResult" || message.toolName !== "todo_write" || message.isError) continue;
 
-		const details = message.details as { phases?: unknown } | undefined;
-		if (!details || !Array.isArray(details.phases)) continue;
+		const details = message.details as { groups?: unknown; phases?: unknown } | undefined;
+		const storedGroups = details?.groups ?? details?.phases;
+		if (!Array.isArray(storedGroups)) continue;
 
-		return cloneTodoPhases(details.phases as TodoPhase[]);
+		return cloneTodoGroups(storedGroups as TodoGroup[]);
 	}
 
 	return [];
@@ -742,8 +748,8 @@ interface ApplyOpsResult {
 	file: TodoFile;
 	errors: string[];
 	warnings: string[];
-	/** Phase IDs that became fully completed in this call. */
-	completedPhaseIds: string[];
+	/** Group IDs that became fully completed in this call. */
+	completedGroupIds: string[];
 	/** Tasks that transitioned to completed and have gate fields. */
 	completedGatedTasks: TodoItem[];
 	/** Tasks whose completion was rejected pending verification. */
@@ -758,32 +764,32 @@ interface GateVerificationFailure {
 	failures: GateFailure[];
 }
 
-function buildPreviousStatusMap(phases: TodoPhase[]): Map<string, TodoStatus> {
+function buildPreviousStatusMap(groups: TodoGroup[]): Map<string, TodoStatus> {
 	const previousStatus = new Map<string, TodoStatus>();
-	for (const phase of phases) {
-		for (const task of phase.tasks) previousStatus.set(task.id, task.status);
+	for (const group of groups) {
+		for (const task of group.tasks) previousStatus.set(task.id, task.status);
 	}
 	return previousStatus;
 }
 
-function collectCompletedPhaseIds(previousPhases: TodoPhase[], nextPhases: TodoPhase[]): string[] {
+function collectCompletedGroupIds(previousGroups: TodoGroup[], nextGroups: TodoGroup[]): string[] {
 	const wasComplete = new Map<string, boolean>();
-	for (const phase of previousPhases) {
-		wasComplete.set(phase.id, isPhaseComplete(phase));
+	for (const group of previousGroups) {
+		wasComplete.set(group.id, isGroupComplete(group));
 	}
 
-	const completedPhaseIds: string[] = [];
-	for (const phase of nextPhases) {
-		if (isPhaseComplete(phase) && !wasComplete.get(phase.id)) completedPhaseIds.push(phase.id);
+	const completedGroupIds: string[] = [];
+	for (const group of nextGroups) {
+		if (isGroupComplete(group) && !wasComplete.get(group.id)) completedGroupIds.push(group.id);
 	}
-	return completedPhaseIds;
+	return completedGroupIds;
 }
 
-function collectCompletedGatedTasks(previousPhases: TodoPhase[], nextPhases: TodoPhase[]): TodoItem[] {
-	const previousStatus = buildPreviousStatusMap(previousPhases);
+function collectCompletedGatedTasks(previousGroups: TodoGroup[], nextGroups: TodoGroup[]): TodoItem[] {
+	const previousStatus = buildPreviousStatusMap(previousGroups);
 	const completedGatedTasks: TodoItem[] = [];
-	for (const phase of nextPhases) {
-		for (const task of phase.tasks) {
+	for (const group of nextGroups) {
+		for (const task of group.tasks) {
 			if (
 				task.status === "completed" &&
 				previousStatus.get(task.id) !== "completed" &&
@@ -796,8 +802,8 @@ function collectCompletedGatedTasks(previousPhases: TodoPhase[], nextPhases: Tod
 	return completedGatedTasks;
 }
 
-function isPhaseComplete(phase: TodoPhase): boolean {
-	return phase.tasks.length > 0 && phase.tasks.every(t => t.status === "completed" || t.status === "abandoned");
+function isGroupComplete(group: TodoGroup): boolean {
+	return group.tasks.length > 0 && group.tasks.every(t => t.status === "completed" || t.status === "abandoned");
 }
 
 export function hasGate(task: TodoItem): boolean {
@@ -812,7 +818,7 @@ export function hasRequiredGate(task: TodoItem): boolean {
 export function applyOps(
 	file: TodoFile,
 	ops: TodoWriteParams["ops"],
-	previousPhases: TodoPhase[],
+	previousGroups: TodoGroup[],
 	policies: TaskPolicy[],
 	context: ResolvedTodoContext = { currentSessionId: "current", currentAgentName: "main" },
 	isolationMode: boolean = false,
@@ -825,17 +831,22 @@ export function applyOps(
 	for (const op of ops) {
 		switch (op.op) {
 			case "replace": {
+				const inputGroups = op.groups ?? op.phases;
+				if (!inputGroups) {
+					errors.push("Replace op requires groups.");
+					break;
+				}
 				const next = makeEmptyFile();
-				for (const inputPhase of op.phases) {
-					const phaseId = `phase-${next.nextPhaseId++}`;
-					const { phase, nextTaskId } = buildPhaseFromInput(
-						inputPhase,
-						phaseId,
+				for (const inputGroup of inputGroups) {
+					const groupId = `group-${next.nextGroupId++}`;
+					const { group, nextTaskId } = buildGroupFromInput(
+						inputGroup,
+						groupId,
 						next.nextTaskId,
 						policies,
 						context,
 					);
-					next.phases.push(phase);
+					next.groups.push(group);
 					next.nextTaskId = nextTaskId;
 				}
 				file = next;
@@ -843,16 +854,21 @@ export function applyOps(
 			}
 			case "add_phase":
 			case "add_group": {
-				const phaseId = `phase-${file.nextPhaseId++}`;
-				const { phase, nextTaskId } = buildPhaseFromInput(op, phaseId, file.nextTaskId, policies, context);
-				file.phases.push(phase);
+				const groupId = `group-${file.nextGroupId++}`;
+				const { group, nextTaskId } = buildGroupFromInput(op, groupId, file.nextTaskId, policies, context);
+				file.groups.push(group);
 				file.nextTaskId = nextTaskId;
 				break;
 			}
 			case "add_task": {
-				const target = file.phases.find(p => p.id === op.phase);
+				const groupId = op.group ?? op.phase;
+				if (!groupId) {
+					errors.push("Group ID is required for add_task.");
+					break;
+				}
+				const target = file.groups.find(group => group.id === groupId);
 				if (!target) {
-					errors.push(`Phase "${op.phase}" not found`);
+					errors.push(`Group "${groupId}" not found`);
 					break;
 				}
 				const id = op.slug ?? `task-${file.nextTaskId++}`;
@@ -886,7 +902,7 @@ export function applyOps(
 				break;
 			}
 			case "update": {
-				const task = findTask(file.phases, op.id);
+				const task = findTask(file.groups, op.id);
 				if (!task) {
 					errors.push(`Task "${op.id}" not found`);
 					break;
@@ -911,8 +927,8 @@ export function applyOps(
 					injectPolicyGates(task, policies);
 				}
 				if (op.status === "in_progress") {
-					const allTasks = hydrateTasks(file.phases, context);
-					if (hasUnresolvedBlockers(task, allTasks)) {
+					const allTasks = hydrateTasks(file.groups, context);
+					if (hasUnresolvedBlockers(task, allTasks, context)) {
 						const unresolved = (task.blockers ?? [])
 							.map(blockerRef => {
 								const blocker = resolveTaskRef(blockerRef, allTasks, context);
@@ -943,12 +959,12 @@ export function applyOps(
 	}
 
 	try {
-		promoteReadyTasks(file.phases, isolationMode, context);
+		promoteReadyTasks(file.groups, isolationMode, context);
 	} catch (error) {
 		errors.push(error instanceof Error ? error.message : String(error));
 	}
-	warnings.push(...collectBlockerGraphWarnings(file.phases, context));
-	const hydratedTasks = hydrateTasks(file.phases, context);
+	warnings.push(...collectBlockerGraphWarnings(file.groups, context));
+	const hydratedTasks = hydrateTasks(file.groups, context);
 	for (const task of hydratedTasks) {
 		if (!task.blockers?.length) continue;
 		const pruned = task.blockers.filter(
@@ -957,14 +973,14 @@ export function applyOps(
 		if (pruned.length !== task.blockers.length) task.blockers = pruned.length > 0 ? pruned : undefined;
 	}
 
-	const completedPhaseIds = collectCompletedPhaseIds(previousPhases, file.phases);
-	const completedGatedTasks = collectCompletedGatedTasks(previousPhases, file.phases);
+	const completedGroupIds = collectCompletedGroupIds(previousGroups, file.groups);
+	const completedGatedTasks = collectCompletedGatedTasks(previousGroups, file.groups);
 
 	return {
 		file,
 		errors,
 		warnings,
-		completedPhaseIds,
+		completedGroupIds,
 		completedGatedTasks,
 		pendingVerificationTasks,
 		pendingDeferralTasks,
@@ -983,10 +999,10 @@ function gateDirectivesForTask(task: TodoItem): string[] {
 }
 
 export interface FormatSummaryOptions {
-	phases: TodoPhase[];
+	groups: TodoGroup[];
 	errors: string[];
 	warnings?: string[];
-	completedPhaseIds: string[];
+	completedGroupIds: string[];
 	completedGatedTasks: TodoItem[];
 	/** Tasks whose completion was rejected pending verification. */
 	pendingVerificationTasks: TodoItem[];
@@ -999,28 +1015,30 @@ export interface FormatSummaryOptions {
 function formatTaskContent(task: TodoItem): string {
 	return isDelegatedTask(task) ? `${task.content} [delegated]` : task.content;
 }
+
 export function formatSummary({
-	phases,
+	groups,
 	errors,
 	warnings = [],
-	completedPhaseIds,
+	completedGroupIds,
 	completedGatedTasks,
 	pendingVerificationTasks,
 	gateVerificationFailures = [],
 	pendingDeferralTasks,
 }: FormatSummaryOptions): string {
-	const allTasks = phases.flatMap(p => p.tasks);
-	if (allTasks.length === 0)
+	const allTasks = groups.flatMap(group => group.tasks);
+	if (allTasks.length === 0) {
 		return [
 			errors.length > 0 ? `Errors: ${errors.join("; ")}` : "Todo list cleared.",
-			...warnings.map(w => `Warnings: ${w}`),
+			...warnings.map(warning => `Warnings: ${warning}`),
 		]
 			.filter(Boolean)
 			.join("\n");
-	const remainingByPhase = phases
-		.map(phase => ({
-			name: phase.name,
-			tasks: phase.tasks.filter(
+	}
+	const remainingByGroup = groups
+		.map(group => ({
+			name: group.name,
+			tasks: group.tasks.filter(
 				task =>
 					task.status === "pending" ||
 					task.status === "in_progress" ||
@@ -1028,19 +1046,21 @@ export function formatSummary({
 					task.status === "gate_failed",
 			),
 		}))
-		.filter(phase => phase.tasks.length > 0);
-	const remainingTasks = remainingByPhase.flatMap(phase => phase.tasks.map(task => ({ ...task, phase: phase.name })));
+		.filter(group => group.tasks.length > 0);
+	const remainingTasks = remainingByGroup.flatMap(group => group.tasks.map(task => ({ ...task, group: group.name })));
 
-	// Find current phase
-	let currentIdx = phases.findIndex(p =>
-		p.tasks.some(
-			t =>
-				t.status === "pending" || t.status === "in_progress" || t.status === "failed" || t.status === "gate_failed",
+	let currentIdx = groups.findIndex(group =>
+		group.tasks.some(
+			task =>
+				task.status === "pending" ||
+				task.status === "in_progress" ||
+				task.status === "failed" ||
+				task.status === "gate_failed",
 		),
 	);
-	if (currentIdx === -1) currentIdx = phases.length - 1;
-	const current = phases[currentIdx];
-	const done = current.tasks.filter(t => t.status === "completed" || t.status === "abandoned").length;
+	if (currentIdx === -1) currentIdx = groups.length - 1;
+	const current = groups[currentIdx];
+	const done = current.tasks.filter(task => task.status === "completed" || task.status === "abandoned").length;
 
 	const lines: string[] = [];
 	if (errors.length > 0) lines.push(`Errors: ${errors.join("; ")}`);
@@ -1048,7 +1068,7 @@ export function formatSummary({
 	if (remainingTasks.length === 0) {
 		lines.push("Remaining items: none.");
 	} else {
-		const blockedCount = remainingTasks.filter(t => isTaskBlocked(t, allTasks)).length;
+		const blockedCount = remainingTasks.filter(task => isTaskBlocked(task, allTasks)).length;
 		const blockedSuffix = blockedCount > 0 ? `, ${blockedCount} blocked` : "";
 		lines.push(`Remaining items (${remainingTasks.length}${blockedSuffix}):`);
 		for (const task of remainingTasks) {
@@ -1056,7 +1076,7 @@ export function formatSummary({
 			const blockerLabel = blocked ? " [blocked]" : "";
 			const layerLabel = task.layer ? ` [${task.layer}]` : "";
 			lines.push(
-				`  - ${task.id} ${formatTaskContent(task)} [${task.status}]${layerLabel}${blockerLabel} (${task.phase})`,
+				`  - ${task.id} ${formatTaskContent(task)} [${task.status}]${layerLabel}${blockerLabel} (${task.group})`,
 			);
 			if (
 				(task.status === "in_progress" || task.status === "failed" || task.status === "gate_failed") &&
@@ -1066,30 +1086,29 @@ export function formatSummary({
 			}
 		}
 	}
-	// Deadlock warning: all remaining tasks are blocked and none in_progress
-	const hasInProgress = allTasks.some(t => t.status === "in_progress");
-	if (!hasInProgress && remainingTasks.length > 0 && remainingTasks.every(t => isTaskBlocked(t, allTasks))) {
+	const hasInProgress = allTasks.some(task => task.status === "in_progress");
+	if (!hasInProgress && remainingTasks.length > 0 && remainingTasks.every(task => isTaskBlocked(task, allTasks))) {
 		lines.push(
 			"WARNING: All remaining tasks are blocked. No task can be started. Review blockers or complete/abandon a blocking task.",
 		);
 	}
 
-	const blockedInPhase = current.tasks.filter(t => isTaskBlocked(t, allTasks)).length;
-	const phaseBlockedSuffix = blockedInPhase > 0 ? `, ${blockedInPhase} blocked` : "";
+	const blockedInGroup = current.tasks.filter(task => isTaskBlocked(task, allTasks)).length;
+	const groupBlockedSuffix = blockedInGroup > 0 ? `, ${blockedInGroup} blocked` : "";
 	lines.push(
-		`Phase ${currentIdx + 1}/${phases.length} "${current.name}" \u2014 ${done}/${current.tasks.length} tasks complete${phaseBlockedSuffix}`,
+		`Group ${currentIdx + 1}/${groups.length} "${current.name}" — ${done}/${current.tasks.length} tasks complete${groupBlockedSuffix}`,
 	);
-	for (const phase of phases) {
-		lines.push(`  ${phase.name}:`);
-		for (const task of phase.tasks) {
+	for (const group of groups) {
+		lines.push(`  ${group.name}:`);
+		for (const task of group.tasks) {
 			const blocked = isTaskBlocked(task, allTasks);
 			const sym =
 				task.status === "completed"
-					? "\u2713"
+					? "✓"
 					: task.status === "in_progress"
-						? "\u2192"
+						? "→"
 						: task.status === "abandoned"
-							? "\u2717"
+							? "✗"
 							: task.status === "failed" || task.status === "gate_failed"
 								? "!"
 								: blocked
@@ -1099,7 +1118,6 @@ export function formatSummary({
 		}
 	}
 
-	// Gate directives for tasks that just completed with gates
 	if (completedGatedTasks.length > 0) {
 		lines.push("");
 		lines.push("--- Gate Requirements ---");
@@ -1129,27 +1147,25 @@ export function formatSummary({
 		}
 	}
 
-	// Phase completion aggregate directives
-	if (completedPhaseIds.length > 0) {
-		for (const phaseId of completedPhaseIds) {
-			const phase = phases.find(p => p.id === phaseId);
-			if (!phase) continue;
-			const gatedInPhase = phase.tasks.filter(t => hasGate(t) || t.orgItemClosingId);
-			if (gatedInPhase.length === 0) continue;
+	if (completedGroupIds.length > 0) {
+		for (const groupId of completedGroupIds) {
+			const group = groups.find(candidate => candidate.id === groupId);
+			if (!group) continue;
+			const gatedInGroup = group.tasks.filter(task => hasGate(task) || task.orgItemClosingId);
+			if (gatedInGroup.length === 0) continue;
 			const actions: string[] = [];
-			if (gatedInPhase.some(t => t.gateCommit)) actions.push("Commit changes.");
-			if (gatedInPhase.some(t => t.gateArtifact)) actions.push("Verify artifacts.");
-			if (gatedInPhase.some(t => t.gateCmd || t.verifyCmd)) actions.push("Run verification commands.");
-			lines.push(`\nPhase "${phase.name}" complete. ${actions.join(" ")}`);
-			const deferredInPhase = phase.tasks.filter(t => t.status === "abandoned" && t.deferralFupId);
-			if (deferredInPhase.length > 0) {
-				const fupRefs = deferredInPhase.map(t => `${t.id} -> ${t.deferralFupId}`).join(", ");
-				lines.push(`WARNING: Phase "${phase.name}" has deferred tasks: ${fupRefs}`);
+			if (gatedInGroup.some(task => task.gateCommit)) actions.push("Commit changes.");
+			if (gatedInGroup.some(task => task.gateArtifact)) actions.push("Verify artifacts.");
+			if (gatedInGroup.some(task => task.gateCmd || task.verifyCmd)) actions.push("Run verification commands.");
+			lines.push(`\nGroup "${group.name}" complete. ${actions.join(" ")}`);
+			const deferredInGroup = group.tasks.filter(task => task.status === "abandoned" && task.deferralFupId);
+			if (deferredInGroup.length > 0) {
+				const fupRefs = deferredInGroup.map(task => `${task.id} -> ${task.deferralFupId}`).join(", ");
+				lines.push(`WARNING: Group "${group.name}" has deferred tasks: ${fupRefs}`);
 			}
 		}
 	}
 
-	// Two-phase verification checklist for tasks that need verification before completion
 	if (pendingVerificationTasks.length > 0) {
 		lines.push("");
 		lines.push("--- Verification Required ---");
@@ -1182,7 +1198,6 @@ export function formatSummary({
 		}
 	}
 
-	// Deferral rejection: tasks that need a FUP before abandonment
 	if (pendingDeferralTasks.length > 0) {
 		lines.push("");
 		lines.push("--- Deferral Required ---");
@@ -1194,10 +1209,11 @@ export function formatSummary({
 			const bodyLines = [`Deferred from ${task.id}: ${task.content}`];
 			if (task.details) bodyLines.push(`\nOriginal details:\n${task.details}`);
 			if (task.orgItemId) bodyLines.push(`\nSource org item: [[id:${task.orgItemId}]]`);
-			if (task.orgItemClosingId)
+			if (task.orgItemClosingId) {
 				bodyLines.push(
 					`\nWARNING: This task has orgItemClosingId=${task.orgItemClosingId}. The lifecycle obligation transfers to the FUP.`,
 				);
+			}
 			lines.push(`  org create category=followups title="${suggestedTitle}" body="${bodyLines.join("\n")}"`);
 			lines.push("");
 			lines.push("Step 2: Abandon with the FUP ID:");
@@ -1212,12 +1228,12 @@ export function formatSummary({
 
 async function captureDirectWorkBaselines(
 	session: ToolSession,
-	previousPhases: TodoPhase[],
-	nextPhases: TodoPhase[],
+	previousGroups: TodoGroup[],
+	nextGroups: TodoGroup[],
 ): Promise<void> {
-	const previousStatuses = buildPreviousStatusMap(previousPhases);
-	for (const phase of nextPhases) {
-		for (const task of phase.tasks) {
+	const previousStatuses = buildPreviousStatusMap(previousGroups);
+	for (const group of nextGroups) {
+		for (const task of group.tasks) {
 			if (isDelegatedTask(task)) continue;
 			if (!task.gateCommit || task.status !== "in_progress") continue;
 			if (previousStatuses.get(task.id) === "in_progress") continue;
@@ -1229,16 +1245,16 @@ async function captureDirectWorkBaselines(
 async function verifyDirectWorkCompletions(
 	session: ToolSession,
 	ops: TodoWriteParams["ops"],
-	previousPhases: TodoPhase[],
-	nextPhases: TodoPhase[],
+	previousGroups: TodoGroup[],
+	nextGroups: TodoGroup[],
 ): Promise<GateVerificationFailure[]> {
 	const gateVerificationFailures: GateVerificationFailure[] = [];
 	const executions = [...(session.getBashHistory?.() ?? [])];
-	const currentStatuses = buildPreviousStatusMap(previousPhases);
+	const currentStatuses = buildPreviousStatusMap(previousGroups);
 
 	for (const op of ops) {
 		if (op.op !== "update") continue;
-		const task = findTask(nextPhases, op.id);
+		const task = findTask(nextGroups, op.id);
 		if (!task) continue;
 		if (isDelegatedTask(task)) {
 			if (op.status !== undefined) currentStatuses.set(task.id, task.status);
@@ -1328,14 +1344,14 @@ function firstUnresolvedBlockerUri(
 
 function emitTodoGraphEvents(
 	session: ToolSession,
-	previousPhases: TodoPhase[],
-	nextPhases: TodoPhase[],
+	previousGroups: TodoGroup[],
+	nextGroups: TodoGroup[],
 	context: ResolvedTodoContext,
 ): void {
 	const eventBus = session.eventBus;
 	if (!eventBus) return;
-	const previousTasks = hydrateTasks(cloneTodoPhases(previousPhases), context);
-	const nextTasks = hydrateTasks(cloneTodoPhases(nextPhases), context);
+	const previousTasks = hydrateTasks(cloneTodoGroups(previousGroups), context);
+	const nextTasks = hydrateTasks(cloneTodoGroups(nextGroups), context);
 	const previousByUri = new Map(previousTasks.map(task => [task.uri!, task] as const));
 	for (const task of nextTasks) {
 		const previousTask = previousByUri.get(task.uri!);
@@ -1389,8 +1405,8 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<TodoWriteToolDetails>> {
 		return await queueTodoMutation(this.session, async () => {
-			const previousPhases = cloneTodoPhases(this.session.getTodoPhases?.() ?? []);
-			const current = fileFromPhases(cloneTodoPhases(previousPhases));
+			const previousGroups = cloneTodoGroups(this.session.getTodoGroups?.() ?? []);
+			const current = fileFromGroups(cloneTodoGroups(previousGroups));
 			const activePolicies = this.session.getResolvedTaskPolicies?.() ?? [];
 			const context = resolveTodoContext(this.session);
 			const isolationMode = Boolean(this.session.settings.get("task.isolation.mode"));
@@ -1400,32 +1416,32 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 				warnings,
 				pendingVerificationTasks,
 				pendingDeferralTasks,
-			} = applyOps(current, params.ops, previousPhases, activePolicies, context, isolationMode);
-			await captureDirectWorkBaselines(this.session, previousPhases, updated.phases);
+			} = applyOps(current, params.ops, previousGroups, activePolicies, context, isolationMode);
+			await captureDirectWorkBaselines(this.session, previousGroups, updated.groups);
 			const gateVerificationFailures = await verifyDirectWorkCompletions(
 				this.session,
 				params.ops,
-				previousPhases,
-				updated.phases,
+				previousGroups,
+				updated.groups,
 			);
-			const completedPhaseIds = collectCompletedPhaseIds(previousPhases, updated.phases);
-			const completedGatedTasks = collectCompletedGatedTasks(previousPhases, updated.phases);
+			const completedGroupIds = collectCompletedGroupIds(previousGroups, updated.groups);
+			const completedGatedTasks = collectCompletedGatedTasks(previousGroups, updated.groups);
 			const hasReplace = params.ops.some(op => op.op === "replace");
-			this.session.setTodoPhases?.(updated.phases, hasReplace ? { reset: true } : undefined);
-			const orgLifecycleNotices = await applyOrgLifecycleHooks(this.session, previousPhases, updated.phases);
-			emitTodoGraphEvents(this.session, previousPhases, updated.phases, context);
-			this.session.eventBus?.emit("todo:change", { phases: updated.phases, groups: updated.phases });
+			this.session.setTodoGroups?.(updated.groups, hasReplace ? { reset: true } : undefined);
+			const orgLifecycleNotices = await applyOrgLifecycleHooks(this.session, previousGroups, updated.groups);
+			emitTodoGraphEvents(this.session, previousGroups, updated.groups, context);
+			this.session.eventBus?.emit("todo:change", { groups: updated.groups });
 			const storage = this.session.getSessionFile() ? "session" : "memory";
 
 			const sessionId = this.session.getSessionId?.() ?? "default";
 			const projectRoot = this.session.cwd ?? getProjectDir();
-			void writeJournal(projectRoot, sessionId, updated.phases);
+			void writeJournal(projectRoot, sessionId, updated.groups);
 
 			const summary = formatSummary({
-				phases: updated.phases,
+				groups: updated.groups,
 				errors,
 				warnings,
-				completedPhaseIds,
+				completedGroupIds,
 				completedGatedTasks,
 				pendingVerificationTasks,
 				gateVerificationFailures,
@@ -1440,7 +1456,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 						text,
 					},
 				],
-				details: { phases: updated.phases, groups: updated.phases, storage },
+				details: { groups: updated.groups, storage },
 			};
 		});
 	}
@@ -1474,7 +1490,6 @@ function formatTodoLine(item: TodoItem, uiTheme: Theme, prefix: string, allTasks
 	const badges = renderGateBadges(item, uiTheme);
 	const content = formatTaskContent(item);
 
-	// Check blocked state (computed, not stored)
 	if (allTasks && isTaskBlocked(item, allTasks)) {
 		return uiTheme.fg("warning", `${prefix}${checkbox.unchecked} ${content} [blocked]`) + badges;
 	}
@@ -1485,7 +1500,7 @@ function formatTodoLine(item: TodoItem, uiTheme: Theme, prefix: string, allTasks
 		case "in_progress": {
 			const main = uiTheme.fg("accent", `${prefix}${checkbox.unchecked} ${content}`) + badges;
 			if (!item.details) return main;
-			const detailLines = item.details.split("\n").map(l => uiTheme.fg("dim", `${prefix}  ${l}`));
+			const detailLines = item.details.split("\n").map(line => uiTheme.fg("dim", `${prefix}  ${line}`));
 			return [main, ...detailLines].join("\n");
 		}
 		case "abandoned":
@@ -1513,26 +1528,27 @@ export const todoWriteToolRenderer = {
 		uiTheme: Theme,
 		_args?: TodoWriteRenderArgs,
 	): Component {
-		const phases = (result.details?.phases ?? []).filter(p => p.tasks.length > 0);
-		const allTasks = phases.flatMap(p => p.tasks);
+		const detailGroups = result.details as { groups?: TodoGroup[]; phases?: TodoGroup[] } | undefined;
+		const groups = (detailGroups?.groups ?? detailGroups?.phases ?? []).filter(group => group.tasks.length > 0);
+		const allTasks = groups.flatMap(group => group.tasks);
 		const header = renderStatusLine(
 			{ icon: "success", title: "Todo Write", meta: [`${allTasks.length} tasks`] },
 			uiTheme,
 		);
 		if (allTasks.length === 0) {
-			const fallback = result.content?.find(c => c.type === "text")?.text ?? "No todos";
+			const fallback = result.content?.find(part => part.type === "text")?.text ?? "No todos";
 			return new Text(`${header}\n${uiTheme.fg("dim", fallback)}`, 0, 0);
 		}
 
 		const { expanded } = options;
 		const lines: string[] = [header];
-		for (const phase of phases) {
-			if (phases.length > 1) {
-				lines.push(uiTheme.fg("accent", `  ${uiTheme.tree.hook} ${phase.name}`));
+		for (const group of groups) {
+			if (groups.length > 1) {
+				lines.push(uiTheme.fg("accent", `  ${uiTheme.tree.hook} ${group.name}`));
 			}
 			const treeLines = renderTreeList(
 				{
-					items: phase.tasks,
+					items: group.tasks,
 					expanded,
 					maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
 					itemType: "todo",

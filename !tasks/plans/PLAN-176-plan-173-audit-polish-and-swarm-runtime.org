@@ -1,0 +1,93 @@
+#+TITLE: PLAN-173 audit polish and swarm runtime cutover
+#+STATE: DONE
+#+SESSION_ID: 14b66a7ab4f1eac0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-11-49-843Z_14b66a7ab4f1eac0.jsonl]]
+#+CUSTOM_ID: PLAN-176-plan-173-audit-polish-and-swarm-runtime
+
+
+NOTE [2026-04-11]: Execution completed with verification evidence recorded in the completion section; linked child items reconciled to DONE.
+
+* Initial Message
+
+bro write a proper todowrite sheet with todoRef support showing all tasks
+
+* Context
+
+Audit AUD-052 of PLAN-173 (unified swarm architecture) identified 7 findings. One (#1 native loader) was already resolved. The remaining 6 are addressed by this plan:
+
+| # | Finding | Effort | Item |
+|---|---------|--------|------|
+| 2 | Duplicate SwarmEventMap, untyped session bus, unsafe executor cast | trivial | [[id:FEAT-415-consolidate-swarmeventmap-and-clean-even]] |
+| 3 | Deferred fluid-mode cutover not tracked | trivial | Resolved by including #5 in this plan |
+| 4 | Blocker resolution hard-codes current/main context | small | [[id:FEAT-418-thread-resolved-context-through-blocker]] |
+| 5 | Fluid-mode does not execute through SwarmScheduler | medium | [[id:FEAT-419-wire-swarmscheduler-into-fluid-mode-exec]] |
+| 6 | Dual phases/groups terminology, "Phase" user-visible strings | small-medium | [[id:PROJ-028-full-phase-to-group-naming-cutover]] |
+| 7 | Scheduler test coverage thin around live DAG mutation | small | [[id:FEAT-417-harden-swarmscheduler-test-coverage-for]] |
+
+** Key Decisions
+
+1. The shared session EventBus stays untyped. SwarmEventMap is consolidated to one canonical definition. Swarm consumers get typed buses through dependency injection, not through typing the global bus.
+2. Phase→Group is a full rename using LSP + ast_edit, touching ~25 source files and ~12 test files. Schema keeps =phases= as a backward-compat alias.
+3. Blocker resolution gets an optional context parameter with backward-compatible default.
+4. Fluid-mode gets a SwarmScheduler pump loop for multi-task plans. Simple plans (≤2 tasks) keep the single-agent prompt chain.
+5. Scheduler tests add 3 cases for live mutation and multi-level cascade.
+
+* Verification
+- =bun check:ts= passes
+- All focused test suites pass:
+  - =bun test packages/coding-agent/test/utils/typed-event-bus.test.ts=
+  - =bun test packages/coding-agent/test/utils/event-bus.test.ts=
+  - =bun test packages/coding-agent/test/swarm/blackboard.test.ts=
+  - =bun test packages/coding-agent/test/swarm/handoff-tool.test.ts=
+  - =bun test packages/coding-agent/test/swarm/spawn-successor-tool.test.ts=
+  - =bun test packages/coding-agent/test/task/swarm-scheduler.test.ts= (9 tests: 6 existing + 3 new)
+  - =bun test packages/coding-agent/test/tools/todo-write.test.ts=
+  - =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts=
+  - =bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts=
+  - =bun test packages/coding-agent/test/tools/todo-promote-ready.test.ts=
+  - =bun test packages/coding-agent/test/tools/todo-apply-ops-dag.test.ts=
+  - =bun test packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts=
+- Grep: zero occurrences of =TodoPhase= in =packages/coding-agent/src/= (except schema compat alias comment)
+- Grep: exactly one =SwarmEventMap= definition in the codebase
+
+* Execution Manifest
+
+** foundation wave
+- [[id:FEAT-415-consolidate-swarmeventmap-and-clean-even]] Consolidate SwarmEventMap + clean event bus typing (S)
+- [[id:FEAT-417-harden-swarmscheduler-test-coverage-for]] Harden SwarmScheduler test coverage (S)
+
+** rename wave
+- [[id:PROJ-028-full-phase-to-group-naming-cutover]] Full Phase→Group naming cutover (M, depends FEAT-415)
+
+** context wave
+- [[id:FEAT-418-thread-resolved-context-through-blocker]] Thread blocker resolution context (S, depends PROJ-028)
+
+** integration wave
+- [[id:FEAT-419-wire-swarmscheduler-into-fluid-mode-exec]] Wire SwarmScheduler into fluid-mode execution (L, depends FEAT-418 + FEAT-417)
+
+
+** Completion [2026-04-11]
+*** Verification
+- `bun test packages/coding-agent/test/utils/typed-event-bus.test.ts` -> 3 pass
+- `bun test packages/coding-agent/test/utils/event-bus.test.ts` -> 17 pass
+- `bun test packages/coding-agent/test/swarm/blackboard.test.ts` -> 3 pass
+- `bun test packages/coding-agent/test/swarm/handoff-tool.test.ts` -> 2 pass
+- `bun test packages/coding-agent/test/swarm/spawn-successor-tool.test.ts` -> 4 pass
+- `bun test packages/coding-agent/test/task/swarm-scheduler.test.ts` -> 9 pass
+- `bun test packages/coding-agent/test/tools/todo-write.test.ts` -> 24 pass
+- `bun test packages/coding-agent/test/tools/todo-write-gates.test.ts` -> 65 pass
+- `bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts` -> 4 pass
+- `bun test packages/coding-agent/test/tools/todo-promote-ready.test.ts` -> 6 pass
+- `bun test packages/coding-agent/test/tools/todo-apply-ops-dag.test.ts` -> 5 pass
+- `bun test packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts` -> 3 pass
+- `bun test packages/coding-agent/test/orchestrators/fluid-retry.test.ts` -> 6 pass
+- `bun test packages/coding-agent/test/integration/fluid-event-pipeline.test.ts` -> 8 pass
+- `bun test packages/coding-agent/test/integration/fluid-shell-agents.test.ts packages/coding-agent/test/integration/fluid-shell-states.test.ts` -> 17 pass
+- `bun check:ts` -> pass
+- `grep -n "\\bTodoPhase\\b" packages/coding-agent/src/**/*.ts` -> no matches
+- `grep -n "interface\\s+SwarmEventMap" packages/coding-agent/{src,test}/**/*.ts` -> one definition in `packages/coding-agent/src/utils/typed-event-map.ts`
+*** Artifacts
+- Updated plan/org records: [[file:!tasks/plans/PLAN-176-plan-173-audit-polish-and-swarm-runtime.org]], [[file:!tasks/features/FEAT-415-consolidate-swarmeventmap-and-clean-even.org]], [[file:!tasks/features/FEAT-417-harden-swarmscheduler-test-coverage-for.org]], [[file:!tasks/features/FEAT-418-thread-resolved-context-through-blocker.org]], [[file:!tasks/features/FEAT-419-wire-swarmscheduler-into-fluid-mode-exec.org]], [[file:!tasks/projects/PROJ-028-full-phase-to-group-naming-cutover.org]]
+- No screenshot artifacts were required.
+*** Deviations
+- None.

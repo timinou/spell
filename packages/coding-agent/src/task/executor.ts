@@ -27,13 +27,12 @@ import type { AuthStorage } from "../session/auth-storage";
 import { SessionManager } from "../session/session-manager";
 import { createHandoffTool } from "../swarm/handoff-tool";
 import { createSpawnSuccessorTool } from "../swarm/spawn-successor-tool";
-import type { SwarmEventMap } from "../swarm/types";
 import type { SwarmNodeLike } from "../task/swarm-scheduler";
 import { type ContextFileEntry, truncateTail } from "../tools";
 import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
-import { cloneTodoPhases, type TodoPhase } from "../tools/todo-write";
+import { cloneTodoGroups, type TodoGroup } from "../tools/todo-write";
 import { ToolAbortError } from "../tools/tool-errors";
-import { EventBus, type EventBus as EventBusType, Priority } from "../utils/event-bus";
+import { EventBus, Priority } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 // Import bash subprocess handler for side effects (tracks bash commands for gate verification)
 import "./bash-subprocess-handler";
@@ -881,9 +880,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					}
 				}
 				if (event.toolName === "todo_write") {
-					const todoResult = event.result as { details?: { phases?: unknown } } | undefined;
-					if (Array.isArray(todoResult?.details?.phases)) {
-						progress.todoPhases = cloneTodoPhases(todoResult.details.phases as TodoPhase[]);
+					const todoResult = event.result as { details?: { groups?: unknown; phases?: unknown } } | undefined;
+					const todoGroups = todoResult?.details?.groups ?? todoResult?.details?.phases;
+					if (Array.isArray(todoGroups)) {
+						progress.todoGroups = cloneTodoGroups(todoGroups as TodoGroup[]);
 					}
 				}
 				flushProgress = true;
@@ -1083,7 +1083,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								sessionId: options.swarmContext.sessionId,
 								currentTaskUri: options.swarmContext.currentTaskUri,
 								blackboard: options.swarmContext.blackboard,
-								eventBus: (options.eventBus ?? new EventBus()) as EventBusType<SwarmEventMap>,
+								eventBus: options.eventBus ?? new EventBus(),
 							}),
 							createSpawnSuccessorTool({
 								active: true,
@@ -1538,7 +1538,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		abortReason: finalAbortReason,
 		sessionId: progress.sessionId,
 		transcriptPath: progress.transcriptPath,
-		todoPhases: progress.todoPhases ? cloneTodoPhases(progress.todoPhases) : undefined,
+		todoGroups: progress.todoGroups ? cloneTodoGroups(progress.todoGroups) : undefined,
 		usage: hasUsage ? accumulatedUsage : undefined,
 		outputPath,
 		extractedToolData: progress.extractedToolData,

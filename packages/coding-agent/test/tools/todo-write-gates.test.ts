@@ -15,11 +15,11 @@ import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "../../src/tools";
-import type { FormatSummaryOptions, TodoItem, TodoPhase, TodoStatus } from "../../src/tools/todo-write";
+import type { FormatSummaryOptions, TodoGroup, TodoItem, TodoStatus } from "../../src/tools/todo-write";
 import {
 	applyOps,
 	formatSummary,
-	getLatestTodoPhasesFromEntries,
+	getLatestTodoGroupsFromEntries,
 	hasGate,
 	hasRequiredGate,
 	hasUnresolvedBlockers,
@@ -39,7 +39,7 @@ function makeTask(overrides: Partial<TodoItem> & { id: string; content: string }
 	};
 }
 
-function makePhase(id: string, name: string, tasks: TodoItem[]): TodoPhase {
+function makePhase(id: string, name: string, tasks: TodoItem[]): TodoGroup {
 	return { id, name, tasks };
 }
 
@@ -60,8 +60,8 @@ describe("TodoItem gate fields", () => {
 		expect(hasGate(makeTask({ id: "t1", content: "a" }))).toBe(false);
 	});
 
-	test("gate fields survive clonePhases (via getLatestTodoPhasesFromEntries)", () => {
-		const phases: TodoPhase[] = [
+	test("gate fields survive cloneTodoGroups (via getLatestTodoGroupsFromEntries)", () => {
+		const _groups: TodoGroup[] = [
 			makePhase("phase-1", "Work", [
 				makeTask({
 					id: "task-1",
@@ -86,12 +86,12 @@ describe("TodoItem gate fields", () => {
 					role: "toolResult",
 					toolName: "todo_write",
 					isError: false,
-					details: { phases },
+					details: { groups: _groups },
 				},
 			},
 		];
 
-		const restored = getLatestTodoPhasesFromEntries(entries as any);
+		const restored = getLatestTodoGroupsFromEntries(entries as any);
 		expect(restored.length).toBe(1);
 		const task = restored[0].tasks[0];
 		expect(task.details).toBe("Step 1");
@@ -177,9 +177,9 @@ describe("isTaskBlocked", () => {
 describe("formatSummary gate directives", () => {
 	function callFormatSummary(overrides: Partial<FormatSummaryOptions> = {}): string {
 		return formatSummary({
-			phases: overrides.phases ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
+			groups: overrides.groups ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
 			errors: overrides.errors ?? [],
-			completedPhaseIds: overrides.completedPhaseIds ?? [],
+			completedGroupIds: overrides.completedGroupIds ?? [],
 			completedGatedTasks: overrides.completedGatedTasks ?? [],
 			pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
 			pendingDeferralTasks: overrides.pendingDeferralTasks ?? [],
@@ -189,7 +189,7 @@ describe("formatSummary gate directives", () => {
 	test("completing a gated task injects Gate Requirements section", () => {
 		const task = makeTask({ id: "task-1", content: "Build it", status: "completed", gateCommit: true });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
+			groups: [makePhase("phase-1", "Work", [task])],
 			completedGatedTasks: [task],
 		});
 		expect(result).toContain("--- Gate Requirements ---");
@@ -208,7 +208,7 @@ describe("formatSummary gate directives", () => {
 			verifyCmd: "bun check",
 		});
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
+			groups: [makePhase("phase-1", "Work", [task])],
 			completedGatedTasks: [task],
 		});
 		expect(result).toContain("REQUIRED: Commit your changes for task-1 (Full gates) before proceeding.");
@@ -221,7 +221,7 @@ describe("formatSummary gate directives", () => {
 	test("no gate directives when completing non-gated task", () => {
 		const task = makeTask({ id: "task-1", content: "Simple", status: "completed" });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
+			groups: [makePhase("phase-1", "Work", [task])],
 			completedGatedTasks: [],
 		});
 		expect(result).not.toContain("--- Gate Requirements ---");
@@ -238,10 +238,10 @@ describe("formatSummary gate directives", () => {
 			gateCmd: "bun test",
 		});
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Build", [task])],
-			completedPhaseIds: ["phase-1"],
+			groups: [makePhase("phase-1", "Build", [task])],
+			completedGroupIds: ["phase-1"],
 		});
-		expect(result).toContain('Phase "Build" complete.');
+		expect(result).toContain('Group "Build" complete.');
 		expect(result).toContain("Commit changes.");
 		expect(result).toContain("Run verification commands.");
 	});
@@ -250,7 +250,7 @@ describe("formatSummary gate directives", () => {
 		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
 		const blocked = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [blocker, blocked])],
+			groups: [makePhase("phase-1", "Work", [blocker, blocked])],
 		});
 		expect(result).toContain("task-2 Second [pending] [blocked]");
 	});
@@ -259,7 +259,7 @@ describe("formatSummary gate directives", () => {
 		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
 		const blocked = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [blocker, blocked])],
+			groups: [makePhase("phase-1", "Work", [blocker, blocked])],
 		});
 		// ⛔ is the blocked symbol in phase tree rendering
 		expect(result).toContain("\u26D4 task-2");
@@ -317,6 +317,31 @@ describe("hasUnresolvedBlockers", () => {
 		expect(hasUnresolvedBlockers(completed, [blocker, completed])).toBe(true);
 		expect(isTaskBlocked(completed, [blocker, completed])).toBe(false);
 	});
+
+	test("resolves current-session blocker URIs against the provided context", () => {
+		const blocker = makeTask({
+			id: "task-1",
+			uri: "task://sess-review/reviewer/review-contract",
+			content: "Review contract",
+			status: "pending",
+		});
+		const dependent = makeTask({
+			id: "task-2",
+			content: "Implement follow-up",
+			status: "pending",
+			blockers: ["task://current/reviewer/review-contract"],
+		});
+		expect(hasUnresolvedBlockers(dependent, [blocker, dependent])).toBe(false);
+		expect(
+			hasUnresolvedBlockers(dependent, [blocker, dependent], {
+				currentSessionId: "sess-review",
+				currentAgentName: "main",
+			}),
+		).toBe(true);
+		expect(
+			isTaskBlocked(dependent, [blocker, dependent], { currentSessionId: "sess-review", currentAgentName: "main" }),
+		).toBe(true);
+	});
 });
 
 // =============================================================================
@@ -326,9 +351,9 @@ describe("hasUnresolvedBlockers", () => {
 describe("formatSummary blocked visibility", () => {
 	function callFormatSummary(overrides: Partial<FormatSummaryOptions> = {}): string {
 		return formatSummary({
-			phases: overrides.phases ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
+			groups: overrides.groups ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
 			errors: overrides.errors ?? [],
-			completedPhaseIds: overrides.completedPhaseIds ?? [],
+			completedGroupIds: overrides.completedGroupIds ?? [],
 			completedGatedTasks: overrides.completedGatedTasks ?? [],
 			pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
 			pendingDeferralTasks: overrides.pendingDeferralTasks ?? [],
@@ -340,7 +365,7 @@ describe("formatSummary blocked visibility", () => {
 		const blocked1 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
 		const blocked2 = makeTask({ id: "task-3", content: "Third", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [blocker, blocked1, blocked2])],
+			groups: [makePhase("phase-1", "Work", [blocker, blocked1, blocked2])],
 		});
 		expect(result).toContain("Remaining items (3, 2 blocked):");
 	});
@@ -349,7 +374,7 @@ describe("formatSummary blocked visibility", () => {
 		const task1 = makeTask({ id: "task-1", content: "First", status: "pending" });
 		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending" });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task1, task2])],
+			groups: [makePhase("phase-1", "Work", [task1, task2])],
 		});
 		expect(result).toContain("Remaining items (2):");
 		expect(result).not.toContain("blocked");
@@ -359,7 +384,7 @@ describe("formatSummary blocked visibility", () => {
 		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
 		const blocked = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [blocker, blocked])],
+			groups: [makePhase("phase-1", "Work", [blocker, blocked])],
 		});
 		expect(result).toContain("Remaining items (2, 1 blocked):");
 	});
@@ -367,7 +392,7 @@ describe("formatSummary blocked visibility", () => {
 	test("all tasks completed: header unchanged", () => {
 		const task = makeTask({ id: "task-1", content: "Done", status: "completed" });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
+			groups: [makePhase("phase-1", "Work", [task])],
 		});
 		expect(result).toContain("Remaining items: none.");
 	});
@@ -376,20 +401,20 @@ describe("formatSummary blocked visibility", () => {
 		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
 		const blocked = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [blocker, blocked])],
+			groups: [makePhase("phase-1", "Work", [blocker, blocked])],
 		});
 		expect(result).toContain("1 blocked");
-		expect(result).toMatch(/Phase 1\/1 .* \u2014 0\/2 tasks complete, 1 blocked/);
+		expect(result).toMatch(/Group 1\/1 .* \u2014 0\/2 tasks complete, 1 blocked/);
 	});
 
 	test("phase progress omits blocked count when zero", () => {
 		const task1 = makeTask({ id: "task-1", content: "First", status: "pending" });
 		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending" });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task1, task2])],
+			groups: [makePhase("phase-1", "Work", [task1, task2])],
 		});
 		// Should not have "blocked" in the phase progress line
-		const phaseLine = result.split("\n").find(l => l.includes("Phase 1/1"))!;
+		const phaseLine = result.split("\n").find(l => l.includes("Group 1/1"))!;
 		expect(phaseLine).not.toContain("blocked");
 	});
 
@@ -397,7 +422,7 @@ describe("formatSummary blocked visibility", () => {
 		const task1 = makeTask({ id: "task-1", content: "A", status: "pending", blockers: ["task-2"] });
 		const task2 = makeTask({ id: "task-2", content: "B", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task1, task2])],
+			groups: [makePhase("phase-1", "Work", [task1, task2])],
 		});
 		expect(result).toContain("WARNING: All remaining tasks are blocked.");
 	});
@@ -406,7 +431,7 @@ describe("formatSummary blocked visibility", () => {
 		const task1 = makeTask({ id: "task-1", content: "A", status: "in_progress" });
 		const task2 = makeTask({ id: "task-2", content: "B", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task1, task2])],
+			groups: [makePhase("phase-1", "Work", [task1, task2])],
 		});
 		expect(result).not.toContain("WARNING");
 	});
@@ -414,7 +439,7 @@ describe("formatSummary blocked visibility", () => {
 	test("no deadlock warning when no tasks are blocked", () => {
 		const task1 = makeTask({ id: "task-1", content: "A", status: "pending" });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task1])],
+			groups: [makePhase("phase-1", "Work", [task1])],
 		});
 		expect(result).not.toContain("WARNING");
 	});
@@ -423,7 +448,7 @@ describe("formatSummary blocked visibility", () => {
 		const blocker = makeTask({ id: "task-1", content: "Schema", status: "pending" });
 		const dependent = makeTask({ id: "task-2", content: "API", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Foundation", [blocker]), makePhase("phase-2", "Features", [dependent])],
+			groups: [makePhase("phase-1", "Foundation", [blocker]), makePhase("phase-2", "Features", [dependent])],
 		});
 		expect(result).toContain("Remaining items (2, 1 blocked):");
 	});
@@ -468,8 +493,8 @@ describe("hasRequiredGate", () => {
 });
 
 describe("orgItemId field", () => {
-	test("orgItemId survives clonePhases (via getLatestTodoPhasesFromEntries)", () => {
-		const phases: TodoPhase[] = [
+	test("orgItemId survives cloneTodoGroups (via getLatestTodoGroupsFromEntries)", () => {
+		const _groups: TodoGroup[] = [
 			makePhase("phase-1", "Work", [
 				makeTask({
 					id: "task-1",
@@ -488,12 +513,12 @@ describe("orgItemId field", () => {
 					role: "toolResult",
 					toolName: "todo_write",
 					isError: false,
-					details: { phases },
+					details: { groups: _groups },
 				},
 			},
 		];
 
-		const restored = getLatestTodoPhasesFromEntries(entries as any);
+		const restored = getLatestTodoGroupsFromEntries(entries as any);
 		expect(restored[0].tasks[0].orgItemId).toBe("FEAT-001-add-auth");
 	});
 
@@ -511,9 +536,9 @@ describe("orgItemId field", () => {
 			orgItemId: "FEAT-001-add-auth",
 		});
 		const result = formatSummary({
-			phases: [makePhase("phase-1", "Work", [closingTask, lineageTask])],
+			groups: [makePhase("phase-1", "Work", [closingTask, lineageTask])],
 			errors: [],
-			completedPhaseIds: [],
+			completedGroupIds: [],
 			completedGatedTasks: [closingTask, lineageTask],
 			pendingVerificationTasks: [],
 			pendingDeferralTasks: [],
@@ -526,9 +551,9 @@ describe("orgItemId field", () => {
 describe("two-phase gated completion via formatSummary", () => {
 	function callFormatSummary(overrides: Partial<FormatSummaryOptions> = {}): string {
 		return formatSummary({
-			phases: overrides.phases ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
+			groups: overrides.groups ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
 			errors: overrides.errors ?? [],
-			completedPhaseIds: overrides.completedPhaseIds ?? [],
+			completedGroupIds: overrides.completedGroupIds ?? [],
 			completedGatedTasks: overrides.completedGatedTasks ?? [],
 			pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
 			pendingDeferralTasks: overrides.pendingDeferralTasks ?? [],
@@ -546,7 +571,7 @@ describe("two-phase gated completion via formatSummary", () => {
 			orgItemClosingId: "FEAT-001-add-auth",
 		});
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
+			groups: [makePhase("phase-1", "Work", [task])],
 			pendingVerificationTasks: [task],
 		});
 		expect(result).toContain("--- Verification Required ---");
@@ -571,7 +596,7 @@ describe("two-phase gated completion via formatSummary", () => {
 			gateCommit: true,
 		});
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
+			groups: [makePhase("phase-1", "Work", [task])],
 			pendingVerificationTasks: [task],
 		});
 		expect(result).toContain("--- Verification Required ---");
@@ -588,7 +613,7 @@ describe("two-phase gated completion via formatSummary", () => {
 			gateLlm: "check acceptance criteria",
 		});
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
+			groups: [makePhase("phase-1", "Work", [task])],
 			pendingVerificationTasks: [task],
 		});
 		expect(result).toContain("[ ] Commit changes (gateCommit)");
@@ -600,17 +625,17 @@ describe("two-phase gated completion via formatSummary", () => {
 // Two-phase gated completion via TodoWriteTool.execute
 // =============================================================================
 
-function createSession(initialPhases: TodoPhase[] = [], overrides: Partial<ToolSession> = {}): ToolSession {
-	let phases = initialPhases;
+function createSession(initialGroups: TodoGroup[] = [], overrides: Partial<ToolSession> = {}): ToolSession {
+	let groups = initialGroups;
 	return {
 		cwd: "/tmp/test",
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated(),
-		getTodoPhases: () => phases,
-		setTodoPhases: next => {
-			phases = next;
+		getTodoGroups: () => groups,
+		setTodoGroups: next => {
+			groups = next;
 		},
 		...overrides,
 	};
@@ -623,7 +648,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Run tests", gateCmd: "bun test" }],
@@ -643,7 +668,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 			ops: [{ op: "update", id: "task-1", status: "completed" }],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0]?.status).toBe("in_progress");
 
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
@@ -659,7 +684,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Run tests", gateCmd: "bun test" }],
@@ -677,7 +702,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 			ops: [{ op: "update", id: "task-1", status: "completed", verified: true }],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0]?.status).toBe("completed");
 
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
@@ -690,7 +715,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Simple task" }],
@@ -708,7 +733,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 			ops: [{ op: "update", id: "task-1", status: "completed" }],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0]?.status).toBe("completed");
 
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
@@ -721,7 +746,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Review task", gateLlm: "check acceptance criteria" }],
@@ -739,7 +764,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 			ops: [{ op: "update", id: "task-1", status: "completed" }],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0]?.status).toBe("completed");
 
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
@@ -753,7 +778,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Auth feature", orgItemClosingId: "FEAT-001-auth" }],
@@ -772,7 +797,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 			ops: [{ op: "update", id: "task-1", status: "completed" }],
 		});
 
-		const rejectedTasks = rejected.details?.phases[0]?.tasks ?? [];
+		const rejectedTasks = rejected.details?.groups[0]?.tasks ?? [];
 		expect(rejectedTasks[0]?.status).toBe("in_progress");
 
 		const rejectedSummary = rejected.content.find(part => part.type === "text")?.text ?? "";
@@ -783,7 +808,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 			ops: [{ op: "update", id: "task-1", status: "completed", verified: true }],
 		});
 
-		const acceptedTasks = accepted.details?.phases[0]?.tasks ?? [];
+		const acceptedTasks = accepted.details?.groups[0]?.tasks ?? [];
 		expect(acceptedTasks[0]?.status).toBe("completed");
 
 		const acceptedSummary = accepted.content.find(part => part.type === "text")?.text ?? "";
@@ -795,7 +820,7 @@ describe("gate_failed status behavior", () => {
 	test("applyOps with gate_failed transitions in_progress task", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Build feature" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Build feature" }] }] }],
 		});
 		await tool.execute("call-2", {
 			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
@@ -803,7 +828,7 @@ describe("gate_failed status behavior", () => {
 		const result = await tool.execute("call-3", {
 			ops: [{ op: "update", id: "task-1", status: "gate_failed" }],
 		});
-		expect(result.details?.phases[0]?.tasks[0]?.status).toBe("gate_failed");
+		expect(result.details?.groups[0]?.tasks[0]?.status).toBe("gate_failed");
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(summary).toContain("--- Gate Failures ---");
 	});
@@ -811,8 +836,8 @@ describe("gate_failed status behavior", () => {
 	test("applyOps keeps phase incomplete when gate_failed exists", () => {
 		const file = {
 			nextTaskId: 3,
-			nextPhaseId: 2,
-			phases: [
+			nextGroupId: 2,
+			groups: [
 				{
 					id: "phase-1",
 					name: "Work",
@@ -823,15 +848,15 @@ describe("gate_failed status behavior", () => {
 				},
 			],
 		};
-		const result = applyOps(file, [], file.phases, []);
-		expect(result.completedPhaseIds).toEqual([]);
+		const result = applyOps(file, [], file.groups, []);
+		expect(result.completedGroupIds).toEqual([]);
 	});
 
 	test("applyOps still marks completed phase without gate_failed", () => {
 		const file = {
 			nextTaskId: 3,
-			nextPhaseId: 2,
-			phases: [
+			nextGroupId: 2,
+			groups: [
 				{
 					id: "phase-1",
 					name: "Work",
@@ -853,14 +878,14 @@ describe("gate_failed status behavior", () => {
 			},
 		];
 		const result = applyOps(file, [], previousPhases, []);
-		expect(result.completedPhaseIds).toEqual(["phase-1"]);
+		expect(result.completedGroupIds).toEqual(["phase-1"]);
 	});
 
 	test("normalizeInProgressTask does not auto-promote past gate_failed", () => {
 		const file = {
 			nextTaskId: 3,
-			nextPhaseId: 2,
-			phases: [
+			nextGroupId: 2,
+			groups: [
 				{
 					id: "phase-1",
 					name: "Work",
@@ -872,15 +897,15 @@ describe("gate_failed status behavior", () => {
 				},
 			],
 		};
-		const result = applyOps(file, [], file.phases, []);
-		expect(result.file.phases[0].tasks[2]?.status).toBe("pending");
+		const result = applyOps(file, [], file.groups, []);
+		expect(result.file.groups[0].tasks[2]?.status).toBe("pending");
 	});
 
 	test("normalizeInProgressTask still auto-promotes without gate_failed", () => {
 		const file = {
 			nextTaskId: 3,
-			nextPhaseId: 2,
-			phases: [
+			nextGroupId: 2,
+			groups: [
 				{
 					id: "phase-1",
 					name: "Work",
@@ -891,8 +916,8 @@ describe("gate_failed status behavior", () => {
 				},
 			],
 		};
-		const result = applyOps(file, [], file.phases, []);
-		expect(result.file.phases[0].tasks[1]?.status).toBe("in_progress");
+		const result = applyOps(file, [], file.groups, []);
+		expect(result.file.groups[0].tasks[1]?.status).toBe("in_progress");
 	});
 
 	test("hasUnresolvedBlockers treats gate_failed blocker as unresolved", () => {
@@ -919,9 +944,9 @@ describe("gate_failed status behavior", () => {
 			},
 		});
 		const summary = formatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
+			groups: [makePhase("phase-1", "Work", [task])],
 			errors: [],
-			completedPhaseIds: [],
+			completedGroupIds: [],
 			completedGatedTasks: [],
 			pendingVerificationTasks: [],
 			pendingDeferralTasks: [],
@@ -935,11 +960,11 @@ describe("gate_failed status behavior", () => {
 
 	test("formatSummary omits gate failures section when absent", () => {
 		const summary = formatSummary({
-			phases: [
+			groups: [
 				makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Build feature", status: "pending" })]),
 			],
 			errors: [],
-			completedPhaseIds: [],
+			completedGroupIds: [],
 			completedGatedTasks: [],
 			pendingVerificationTasks: [],
 			pendingDeferralTasks: [],
@@ -955,7 +980,7 @@ describe("gate_failed status behavior", () => {
 			{
 				content: [{ type: "text", text: "" }],
 				details: {
-					phases: [
+					groups: [
 						makePhase("phase-1", "Work", [
 							makeTask({ id: "task-1", content: "Build feature", status: "gate_failed" }),
 						]),

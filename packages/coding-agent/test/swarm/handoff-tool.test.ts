@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
+
 import * as fs from "node:fs/promises";
+
 import * as os from "node:os";
+
 import * as path from "node:path";
+
 import { SwarmBlackboard } from "../../src/swarm/blackboard";
+
 import { createHandoffTool } from "../../src/swarm/handoff-tool";
-import type { SwarmEventMap } from "../../src/swarm/types";
 import { FakeEventBus } from "../../src/utils/fake-event-bus";
+import type { SwarmEventMap } from "../../src/utils/typed-event-map";
 
 function makeOrgConfig() {
 	return {

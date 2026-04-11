@@ -29,14 +29,14 @@ import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "tex
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
 import { formatBytes, formatDuration } from "../tools/render-utils";
 import {
-	cloneTodoPhases,
+	cloneTodoGroups,
 	findTask,
 	getNextTodoIds,
 	hasRequiredGate,
 	queueTodoMutation,
 	type TodoDelegation,
 	type TodoDelegationResult,
-	type TodoPhase,
+	type TodoGroup,
 	type TodoStatus,
 	TodoWriteTool,
 } from "../tools/todo-write";
@@ -214,14 +214,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 	/** Augment each task's assignment with todoRef-derived execution context. */
 	async #injectVerificationContext(tasks: TaskItem[]): Promise<TaskItem[]> {
-		const phases = this.session.getTodoPhases?.();
-		if (!phases || phases.length === 0) return tasks;
+		const groups = this.session.getTodoGroups?.();
+		if (!groups || groups.length === 0) return tasks;
 		const activePolicies = this.session.getResolvedTaskPolicies?.() ?? [];
 		return tasks.map(task => {
 			if (!task.todoRef) return task;
 			const blocks = [
-				resolvePredecessorResultsContext(task.todoRef, phases),
-				resolveVerificationContext(task.todoRef, phases, activePolicies),
+				resolvePredecessorResultsContext(task.todoRef, groups),
+				resolveVerificationContext(task.todoRef, groups, activePolicies),
 			].filter((block): block is string => Boolean(block));
 			if (blocks.length === 0) return task;
 			return { ...task, assignment: `${task.assignment.trim()}\n\n${blocks.join("\n\n")}` };
@@ -279,7 +279,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 	#shouldAutoCreateRoster(agent: AgentDefinition | undefined, tasks: TaskItem[]): boolean {
 		if (!agent || tasks.length === 0) return false;
-		if (!this.session.getTodoPhases || !this.session.setTodoPhases) return false;
+		if (!this.session.getTodoGroups || !this.session.setTodoGroups) return false;
 		if ((this.session.taskDepth ?? 0) > 0) return false;
 		if (!this.session.settings.get("todo.enabled")) return false;
 		if (!this.session.settings.get("task.autoRoster")) return false;
@@ -299,8 +299,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const agentName = agent?.name ?? params.agent;
 		const phaseName = this.#deriveAutoRosterPhaseName(params);
 		const createdTodoRefs = await queueTodoMutation(this.session, async () => {
-			const phases = cloneTodoPhases(this.session.getTodoPhases?.() ?? []);
-			const { nextTaskId } = getNextTodoIds(phases);
+			const groups = cloneTodoGroups(this.session.getTodoGroups?.() ?? []);
+			const { nextTaskId } = getNextTodoIds(groups);
 			const predictedTodoRefByTaskId = new Map<string, string>();
 			for (const task of taskItems) {
 				if (task.todoRef) predictedTodoRefByTaskId.set(task.id, task.todoRef);
@@ -337,14 +337,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			if (summary.startsWith("Errors:")) {
 				logger.warn("task auto-roster creation reported todo_write errors", { summary });
 			}
-			const createdPhase = result.details?.phases.at(-1);
+			const createdGroup = result.details?.groups.at(-1);
 			const mapping = new Map<string, string>();
-			if (!createdPhase) {
-				logger.warn("task auto-roster creation missing created phase", { phaseName });
+			if (!createdGroup) {
+				logger.warn("task auto-roster creation missing created group", { phaseName });
 				return mapping;
 			}
 			for (let index = 0; index < tasksToCreate.length; index++) {
-				const todo = createdPhase.tasks[index];
+				const todo = createdGroup.tasks[index];
 				const task = tasksToCreate[index];
 				if (!todo || !task) {
 					logger.warn("task auto-roster creation missing mapped todo", { phaseName, index });
@@ -419,33 +419,33 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	}
 
 	#mergeTodoRefDelegation(todoRef: string, patch: Partial<TodoDelegation>): void {
-		const phases = this.session.getTodoPhases?.();
-		if (!phases) return;
-		const nextPhases = cloneTodoPhases(phases);
-		const todo = findTask(nextPhases, todoRef);
+		const groups = this.session.getTodoGroups?.();
+		if (!groups) return;
+		const nextGroups = cloneTodoGroups(groups);
+		const todo = findTask(nextGroups, todoRef);
 		if (!todo) {
 			logger.warn("task todoRef delegation update skipped: todo not found", { todoRef });
 			return;
 		}
-		const nextChildPhases = patch.childPhases
-			? cloneTodoPhases(patch.childPhases).map(phase => ({
-					...phase,
-					tasks: phase.tasks.map(child => ({
+		const nextChildGroups = patch.childGroups
+			? cloneTodoGroups(patch.childGroups).map(group => ({
+					...group,
+					tasks: group.tasks.map(child => ({
 						...child,
-						delegation: child.delegation ? { ...child.delegation, childPhases: undefined } : child.delegation,
+						delegation: child.delegation ? { ...child.delegation, childGroups: undefined } : child.delegation,
 					})),
 				}))
-			: todo.delegation?.childPhases;
+			: todo.delegation?.childGroups;
 		const sessionId = patch.sessionId ?? todo.delegation?.sessionId;
 		if (!sessionId) return;
 		todo.delegation = {
 			...todo.delegation,
 			...patch,
 			sessionId,
-			childPhases: nextChildPhases,
+			childGroups: nextChildGroups,
 		};
-		this.session.setTodoPhases?.(nextPhases);
-		this.session.eventBus?.emit("todo:change", { phases: nextPhases });
+		this.session.setTodoGroups?.(nextGroups);
+		this.session.eventBus?.emit("todo:change", { groups: nextGroups });
 	}
 
 	async #applyTodoRefStatus(todoRef: string, status: TodoStatus, verified?: boolean): Promise<void> {
@@ -469,10 +469,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		});
 	}
 
-	#syncTodoRefChildPhases(task: TaskItem, childPhases: TodoPhase[] | undefined): void {
-		if (!task.todoRef || childPhases === undefined) return;
+	#syncTodoRefChildPhases(task: TaskItem, childGroups: TodoGroup[] | undefined): void {
+		if (!task.todoRef || childGroups === undefined) return;
 		void this.#queueTodoRefMutation(async () => {
-			this.#mergeTodoRefDelegation(task.todoRef!, { childPhases });
+			this.#mergeTodoRefDelegation(task.todoRef!, { childGroups });
 		});
 	}
 
@@ -491,8 +491,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		if (result.exitCode === 0 && !(result.aborted ?? false)) {
 			const gateResult = await this.#verifyTaskGates(task.todoRef, result, isolationContext);
-			const childGateFailures = result.todoPhases
-				? await this.#verifyChildTodoGates(result.todoPhases, result, isolationContext)
+			const childGateFailures = result.todoGroups
+				? await this.#verifyChildTodoGates(result.todoGroups, result, isolationContext)
 				: undefined;
 			if (gateResult && !gateResult.passed) {
 				status = "gate_failed";
@@ -516,8 +516,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 		await this.#queueTodoRefMutation(async () => {
 			if (delegation) this.#mergeTodoRefDelegation(task.todoRef!, delegation);
-			if (result.todoPhases !== undefined) {
-				this.#mergeTodoRefDelegation(task.todoRef!, { childPhases: result.todoPhases });
+			if (result.todoGroups !== undefined) {
+				this.#mergeTodoRefDelegation(task.todoRef!, { childGroups: result.todoGroups });
 			}
 			this.#mergeTodoRefDelegation(task.todoRef!, { result: resultSummary });
 			await this.#applyTodoRefStatus(task.todoRef!, status, gatesVerified || undefined);
@@ -529,9 +529,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		result: SingleResult,
 		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
 	): Promise<GateVerificationResult | undefined> {
-		const phases = this.session.getTodoPhases?.();
-		if (!phases) return undefined;
-		const todo = findTask(phases, todoRef);
+		const groups = this.session.getTodoGroups?.();
+		if (!groups) return undefined;
+		const todo = findTask(groups, todoRef);
 		if (!todo) return undefined;
 		if (!hasRequiredGate(todo)) return undefined;
 
@@ -550,14 +550,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	}
 
 	async #verifyChildTodoGates(
-		childPhases: TodoPhase[],
+		childGroups: TodoGroup[],
 		result: SingleResult,
 		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
 	): Promise<Array<GateFailure & { taskId: string }> | undefined> {
 		const executions = (result.extractedToolData?.bash as TrackedBashExecution[] | undefined) ?? [];
 		const failures: Array<GateFailure & { taskId: string }> = [];
-		for (const phase of childPhases) {
-			for (const child of phase.tasks) {
+		for (const group of childGroups) {
+			for (const child of group.tasks) {
 				if (child.status === "gate_failed") {
 					for (const failure of child.delegation?.result?.gateFailures ?? []) {
 						failures.push({
@@ -1317,7 +1317,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						id: taskExecution.logicalId,
 					});
 					this.#markTodoRefStarted(originalTask, progress, startedTodoRefs);
-					this.#syncTodoRefChildPhases(originalTask, progress.todoPhases);
+					this.#syncTodoRefChildPhases(originalTask, progress.todoGroups);
 					emitProgress();
 				};
 				if (!isIsolated) {

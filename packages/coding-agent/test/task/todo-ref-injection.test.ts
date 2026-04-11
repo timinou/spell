@@ -11,25 +11,27 @@
  */
 
 import { describe, expect, test } from "bun:test";
+
 import {
 	renderTemplate,
 	resolvePredecessorResultsContext,
 	resolveVerificationContext,
 } from "@oh-my-pi/pi-coding-agent/task/template";
-import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo-write";
+
+import type { TodoGroup, TodoItem } from "@oh-my-pi/pi-coding-agent/tools/todo-write";
 
 function makeTask(overrides: Partial<TodoItem> & { id: string; content: string }): TodoItem {
 	return { status: "in_progress", ...overrides };
 }
 
-function makePhase(id: string, name: string, tasks: TodoItem[]): TodoPhase {
+function makeGroup(id: string, name: string, tasks: TodoItem[]): TodoGroup {
 	return { id, name, tasks };
 }
 
 describe("resolveVerificationContext", () => {
 	test("returns correct block for a todo with all gates set", () => {
-		const phases = [
-			makePhase("phase-1", "Work", [
+		const groups = [
+			makeGroup("phase-1", "Work", [
 				makeTask({
 					id: "task-1",
 					content: "Build feature",
@@ -43,7 +45,7 @@ describe("resolveVerificationContext", () => {
 				}),
 			]),
 		];
-		const result = resolveVerificationContext("task-1", phases)!;
+		const result = resolveVerificationContext("task-1", groups)!;
 		expect(result).toContain("--- Verification Requirements (from task-1) ---");
 		expect(result).toContain("You MUST run: `bun test test/foo.test.ts` and verify it passes.");
 		expect(result).toContain("You MUST produce artifact at: screenshots/auth-flow.png");
@@ -54,23 +56,23 @@ describe("resolveVerificationContext", () => {
 	});
 
 	test("returns undefined for non-existent todoRef", () => {
-		const phases = [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Exists" })])];
-		expect(resolveVerificationContext("task-99", phases)).toBeUndefined();
+		const groups = [makeGroup("phase-1", "Work", [makeTask({ id: "task-1", content: "Exists" })])];
+		expect(resolveVerificationContext("task-99", groups)).toBeUndefined();
 	});
 
 	test("returns undefined for gateless todo", () => {
-		const phases = [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "No gates" })])];
-		expect(resolveVerificationContext("task-1", phases)).toBeUndefined();
+		const groups = [makeGroup("phase-1", "Work", [makeTask({ id: "task-1", content: "No gates" })])];
+		expect(resolveVerificationContext("task-1", groups)).toBeUndefined();
 	});
 
-	test("returns undefined for empty phases", () => {
+	test("returns undefined for empty groups", () => {
 		expect(resolveVerificationContext("task-1", [])).toBeUndefined();
 	});
 
-	test("resolves across multiple phases", () => {
-		const phases = [
-			makePhase("phase-1", "Foundation", [makeTask({ id: "task-1", content: "Schema" })]),
-			makePhase("phase-2", "Features", [
+	test("resolves across multiple groups", () => {
+		const groups = [
+			makeGroup("phase-1", "Foundation", [makeTask({ id: "task-1", content: "Schema" })]),
+			makeGroup("phase-2", "Features", [
 				makeTask({
 					id: "task-2",
 					content: "API",
@@ -78,26 +80,26 @@ describe("resolveVerificationContext", () => {
 				}),
 			]),
 		];
-		const result = resolveVerificationContext("task-2", phases)!;
+		const result = resolveVerificationContext("task-2", groups)!;
 		expect(result).toContain("You MUST run: `bun test`");
 	});
 
 	test("orgItemId-only todo produces context", () => {
-		const phases = [
-			makePhase("phase-1", "Work", [
+		const groups = [
+			makeGroup("phase-1", "Work", [
 				makeTask({ id: "task-1", content: "Org linked", orgItemId: "FEAT-005-refactor" }),
 			]),
 		];
-		const result = resolveVerificationContext("task-1", phases)!;
+		const result = resolveVerificationContext("task-1", groups)!;
 		expect(result).toContain("FEAT-005-refactor");
 		expect(result).toContain("--- Verification Requirements (from task-1) ---");
 	});
 
 	test("verifyCmd alone produces advisory context", () => {
-		const phases = [
-			makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Advisory", verifyCmd: "bun lint" })]),
+		const groups = [
+			makeGroup("phase-1", "Work", [makeTask({ id: "task-1", content: "Advisory", verifyCmd: "bun lint" })]),
 		];
-		const result = resolveVerificationContext("task-1", phases)!;
+		const result = resolveVerificationContext("task-1", groups)!;
 		expect(result).toContain("You SHOULD run: `bun lint` to verify.");
 		expect(result).not.toContain("You MUST");
 	});
@@ -105,8 +107,8 @@ describe("resolveVerificationContext", () => {
 
 describe("resolvePredecessorResultsContext", () => {
 	test("renders completed blocker outputs for dependent tasks", () => {
-		const phases = [
-			makePhase("phase-1", "Work", [
+		const groups = [
+			makeGroup("phase-1", "Work", [
 				makeTask({
 					id: "task-1",
 					content: "Build schema",
@@ -123,7 +125,7 @@ describe("resolvePredecessorResultsContext", () => {
 				makeTask({ id: "task-2", content: "Build API", blockers: ["task-1"] }),
 			]),
 		];
-		const result = resolvePredecessorResultsContext("task-2", phases)!;
+		const result = resolvePredecessorResultsContext("task-2", groups)!;
 		expect(result).toContain("--- Predecessor Results (from task-2 blockers) ---");
 		expect(result).toContain("### task-1 — Build schema");
 		expect(result).toContain("Output artifact: /tmp/child.md");
@@ -131,13 +133,13 @@ describe("resolvePredecessorResultsContext", () => {
 	});
 
 	test("returns undefined when blockers have no completed result data", () => {
-		const phases = [
-			makePhase("phase-1", "Work", [
+		const groups = [
+			makeGroup("phase-1", "Work", [
 				makeTask({ id: "task-1", content: "Build schema", status: "completed" }),
 				makeTask({ id: "task-2", content: "Build API", blockers: ["task-1"] }),
 			]),
 		];
-		expect(resolvePredecessorResultsContext("task-2", phases)).toBeUndefined();
+		expect(resolvePredecessorResultsContext("task-2", groups)).toBeUndefined();
 	});
 });
 

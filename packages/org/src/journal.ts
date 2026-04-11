@@ -41,7 +41,7 @@ export interface JournalTodoItem {
 	deferralFupId?: string;
 }
 
-export interface JournalTodoPhase {
+export interface JournalTodoGroup {
 	id: string;
 	name: string;
 	tasks: JournalTodoItem[];
@@ -64,7 +64,7 @@ const STATUS_TO_ORG: Record<string, string> = {
 // Serialization
 // =============================================================================
 
-function serializeJournalOrg(phases: JournalTodoPhase[], sessionId: string, date: string): string {
+function serializeJournalOrg(groups: JournalTodoGroup[], sessionId: string, date: string): string {
 	const lines: string[] = [
 		`#+TITLE: Session ${sessionId} Todos`,
 		`#+DATE: ${date}`,
@@ -72,11 +72,11 @@ function serializeJournalOrg(phases: JournalTodoPhase[], sessionId: string, date
 		"",
 	];
 
-	for (const phase of phases) {
-		lines.push(`* ${phase.name}`);
+	for (const group of groups) {
+		lines.push(`* ${group.name}`);
 		lines.push("");
 
-		for (const task of phase.tasks) {
+		for (const task of group.tasks) {
 			const keyword = STATUS_TO_ORG[task.status] ?? "ITEM";
 			const title = task.status === "abandoned" ? `~~${task.content}~~` : task.content;
 
@@ -129,19 +129,19 @@ export function journalFilePath(projectRoot: string, sessionId: string): string 
 }
 
 /**
- * Write the current todo phases to the journal org file.
+ * Write the current todo groups to the journal org file.
  *
  * Best-effort: errors are logged but not thrown. Callers should not block on
  * this write — it's informational persistence, not a critical write path.
  */
-export async function writeJournal(projectRoot: string, sessionId: string, phases: JournalTodoPhase[]): Promise<void> {
+export async function writeJournal(projectRoot: string, sessionId: string, groups: JournalTodoGroup[]): Promise<void> {
 	const filePath = journalFilePath(projectRoot, sessionId);
 	const date = new Date().toISOString().slice(0, 10);
 
 	try {
-		const content = serializeJournalOrg(phases, sessionId, date);
+		const content = serializeJournalOrg(groups, sessionId, date);
 		await atomicWrite(filePath, content);
-		logger.debug("org:journal written", { filePath, phases: phases.length });
+		logger.debug("org:journal written", { filePath, groups: groups.length });
 	} catch (err) {
 		// Non-fatal — journal writes fail silently to avoid disrupting todo_write
 		logger.warn("org:journal write failed", {

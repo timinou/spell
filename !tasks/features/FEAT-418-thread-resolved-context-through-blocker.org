@@ -1,0 +1,82 @@
+#+TITLE: Thread resolved context through blocker resolution helpers
+#+STATE: DONE
+#+SESSION_ID: 14b66a7ab4f1eac0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-11-49-843Z_14b66a7ab4f1eac0.jsonl]]
+#+CUSTOM_ID: FEAT-418-thread-resolved-context-through-blocker
+#+EFFORT: S
+#+PRIORITY: A
+#+LAYER: agent-runtime
+#+DEPENDS: PROJ-028-full-phase-to-group-naming-cutover
+
+NOTE [2026-04-11]: Completed in PLAN-176: blocker resolution now accepts optional runtime context and focused gates/promote-ready/apply-dag checks pass.
+
+* Initial Message
+
+bro write a proper todowrite sheet with todoRef support showing all tasks
+
+* Context
+
+=hasUnresolvedBlockers()= and =isTaskBlocked()= in =todo-write.ts= hard-code a dummy context ={ currentSessionId: "current", currentAgentName: "main" }= instead of accepting the actual session/agent context. This means blocker refs that use session-scoped or agent-scoped URIs (e.g., =task://abc123/reviewer/task-1=) are evaluated against the wrong URI namespace, potentially making subagent tasks appear ready or blocked incorrectly.
+
+Current signatures (post-rename, these will use =TodoGroup= after PROJ-028):
+#+begin_src typescript
+export function hasUnresolvedBlockers(task: TodoItem, allTasks: TodoItem[]): boolean {
+    const context: ResolvedTodoContext = { currentSessionId: "current", currentAgentName: "main" };
+    // ...
+}
+export function isTaskBlocked(task: TodoItem, allTasks: TodoItem[]): boolean {
+    if (task.status !== "pending") return false;
+    return hasUnresolvedBlockers(task, allTasks);
+}
+#+end_src
+
+** Design Decisions
+
+1. Add an optional third parameter =context?: ResolvedTodoContext= to both functions. Default to ={ currentSessionId: "current", currentAgentName: "main" }= for backward compatibility.
+2. Update internal callers that already have a real context to pass it through:
+   - =applyOps()= has =context: ResolvedTodoContext= param → pass to blocker check in update case
+   - =promoteReadyTasks()= has =context= param → pass to blocker check
+   - =collectBlockerGraphWarnings()= has =context= param → pass to blocker check
+3. External callers that don't have session context keep using the default:
+   - =formatSummary()= — rendering only, no session available
+   - =TodoWriteTool.renderResult()= / =formatTodoLine()= — TUI rendering
+   - =deriveAgentState()= in fluid-mode.ts — uses =hasUnresolvedBlockers= for state derivation
+4. The =isTaskBlocked= function passes its context through to =hasUnresolvedBlockers=.
+
+** Files to Modify
+
+- =packages/coding-agent/src/tools/todo-write.ts=:
+  - =hasUnresolvedBlockers(task, allTasks, context?)= — add param, remove hard-coded context
+  - =isTaskBlocked(task, allTasks, context?)= — add param, pass through
+  - Update callers inside =applyOps=, =promoteReadyTasks=, =collectBlockerGraphWarnings=
+
+** Files Unchanged (callers using default)
+- =packages/coding-agent/src/modes/fluid-mode.ts= — =deriveAgentState()= uses =hasUnresolvedBlockers= without session context, which is acceptable since fluid mode currently operates as main agent.
+- =packages/coding-agent/src/tools/todo-write.ts= — =formatSummary()= path (rendering only).
+
+** Edge Cases
+- When =context= is omitted, behavior is identical to current code. No external API breakage.
+- A subagent with =agentName: "reviewer"= and blockers referencing =task://current/reviewer/define-contract= will now resolve correctly when context is provided, instead of falling back to the =main= namespace.
+- The fallback lookup in =hasUnresolvedBlockers= (=allTasks.find(t => t.id === blockerRef || t.uri === blockerRef)=) remains as a safety net for refs that don't need URI resolution.
+
+** Existing Patterns to Follow
+- =resolveTaskRef(ref, allTasks, context)= is the existing helper for context-aware resolution
+- =ResolvedTodoContext= extends =TaskUriContext= from =swarm/uri.ts=
+
+* Verification
+- =bun check:ts= passes
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-promote-ready.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-apply-ops-dag.test.ts= passes
+- Add one focused test: create tasks with agent-scoped URIs, verify =hasUnresolvedBlockers= resolves correctly with proper context vs incorrectly with default context.
+
+* Sub-outline
+
+** FEAT-XXX::context-param-tests
+Write a test in =todo-promote-ready.test.ts= or =todo-apply-ops-dag.test.ts= that creates tasks with non-main agent URIs and verifies blocker resolution uses the provided context.
+
+** FEAT-XXX::context-param-impl
+Depends on: FEAT-XXX::context-param-tests. Add the optional =context= parameter to both exported functions. Update internal callers.
+
+** FEAT-XXX::context-verify
+Depends on: FEAT-XXX::context-param-impl. Run verification suite.

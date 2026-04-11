@@ -1,5 +1,3 @@
-import type { EventMap } from "../utils/typed-event-map";
-
 export type SwarmBlackboardEntryType = "artifact" | "contract" | "finding" | "lifecycle" | "progress";
 
 export interface SwarmBlackboardRunContext {
@@ -31,9 +29,4 @@ export interface SwarmArtifactEvent {
 	agent: string;
 	dataUri: string;
 	type: SwarmBlackboardEntryType;
-}
-
-export interface SwarmEventMap extends EventMap {
-	"swarm:artifact": SwarmArtifactEvent;
-	"swarm:handoff": { fromAgent: string; toAgent?: string; context: string };
 }

@@ -8,7 +8,7 @@ import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
-import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
+import type { InteractiveModeContext, TodoGroup } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import type { ExitPlanModeDetails } from "../../tools";
 import { formatBytes } from "../../tools/render-utils";
@@ -345,7 +345,7 @@ export class EventController {
 						this.#backgroundToolCallIds.delete(event.toolCallId);
 					}
 					if (event.toolName === "task") {
-						this.ctx.setTodos(this.ctx.session.getTodoPhases());
+						this.ctx.setTodos(this.ctx.session.getTodoGroups());
 					}
 					this.ctx.ui.requestRender();
 				}
@@ -412,16 +412,17 @@ export class EventController {
 							this.#backgroundToolCallIds.delete(event.toolCallId);
 						}
 						if (event.toolName === "task") {
-							this.ctx.setTodos(this.ctx.session.getTodoPhases());
+							this.ctx.setTodos(this.ctx.session.getTodoGroups());
 						}
 						this.ctx.ui.requestRender();
 					}
 				}
 				// Update todo display when todo_write tool completes
 				if (event.toolName === "todo_write" && !event.isError) {
-					const details = event.result.details as { phases?: TodoPhase[] } | undefined;
-					if (details?.phases) {
-						this.ctx.setTodos(details.phases);
+					const details = event.result.details as { groups?: TodoGroup[]; phases?: TodoGroup[] } | undefined;
+					const groups = details?.groups ?? details?.phases;
+					if (groups) {
+						this.ctx.setTodos(groups);
 					}
 				} else if (event.toolName === "todo_write" && event.isError) {
 					const textContent = event.result.content.find(

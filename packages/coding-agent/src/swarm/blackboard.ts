@@ -3,20 +3,17 @@ import type { OrgConfig } from "@oh-my-pi/pi-org";
 import { appendItemToFile, readCategory } from "@oh-my-pi/pi-org";
 
 import { EventBus } from "../utils/event-bus";
-
-import type {
-	SwarmBlackboardEntry,
-	SwarmBlackboardEntryInput,
-	SwarmBlackboardRunContext,
-	SwarmEventMap,
-} from "./types";
+import type { SwarmEventMap } from "../utils/typed-event-map";
+import type { SwarmBlackboardEntry, SwarmBlackboardEntryInput, SwarmBlackboardRunContext } from "./types";
 
 import { isDataUri } from "./uri";
+
+type SwarmEventSink = Pick<EventBus<SwarmEventMap>, "emit">;
 
 export interface SwarmBlackboardOptions {
 	projectRoot: string;
 	orgConfig: OrgConfig;
-	eventBus?: EventBus<SwarmEventMap>;
+	eventBus?: SwarmEventSink;
 }
 
 export interface SwarmBlackboardFilter {
@@ -27,7 +24,7 @@ export interface SwarmBlackboardFilter {
 export class SwarmBlackboard {
 	readonly #projectRoot: string;
 	readonly #orgConfig: OrgConfig;
-	readonly #eventBus: EventBus<SwarmEventMap>;
+	readonly #eventBus: SwarmEventSink;
 	#run: SwarmBlackboardRunContext | null = null;
 	#runId: string | null = null;
 	#runFile: string | null = null;

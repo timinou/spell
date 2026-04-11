@@ -4,7 +4,7 @@ import subagentPredecessorResultsTemplate from "../prompts/system/subagent-prede
 	type: "text",
 };
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
-import { findTask, type TodoPhase } from "../tools/todo-write";
+import { findTask, type TodoGroup } from "../tools/todo-write";
 import type { TaskItem } from "./types";
 
 interface RenderResult {
@@ -38,16 +38,16 @@ export function renderTemplate(context: string | undefined, task: TaskItem): Ren
 }
 
 /**
- * Resolve a todoRef against the current todo phases and build a verification
+ * Resolve a todoRef against the current todo groups and build a verification
  * requirements section for the subagent. Returns undefined if the ref is
  * unresolvable or the todo has no gates worth injecting.
  */
 export function resolveVerificationContext(
 	todoRef: string,
-	phases: TodoPhase[],
+	groups: TodoGroup[],
 	policies?: TaskPolicy[],
 ): string | undefined {
-	const task = findTask(phases, todoRef);
+	const task = findTask(groups, todoRef);
 	if (!task) return undefined;
 
 	const lines: string[] = [];
@@ -79,12 +79,12 @@ export function resolveVerificationContext(
 	return `--- Verification Requirements (from ${todoRef}) ---\n${lines.join("\n")}`;
 }
 
-export function resolvePredecessorResultsContext(todoRef: string, phases: TodoPhase[]): string | undefined {
-	const task = findTask(phases, todoRef);
+export function resolvePredecessorResultsContext(todoRef: string, groups: TodoGroup[]): string | undefined {
+	const task = findTask(groups, todoRef);
 	if (!task?.blockers?.length) return undefined;
 
 	const predecessors = task.blockers
-		.map(blockerId => findTask(phases, blockerId))
+		.map(blockerId => findTask(groups, blockerId))
 		.filter((blocker): blocker is NonNullable<typeof blocker> => blocker !== undefined)
 		.filter(blocker => blocker.status === "completed" && blocker.delegation?.result !== undefined)
 		.map(blocker => ({

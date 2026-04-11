@@ -1,0 +1,65 @@
+#+TITLE: Consolidate SwarmEventMap and clean event bus typing
+#+STATE: DONE
+#+SESSION_ID: 14b66a7ab4f1eac0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-11-49-843Z_14b66a7ab4f1eac0.jsonl]]
+#+CUSTOM_ID: FEAT-415-consolidate-swarmeventmap-and-clean-even
+#+EFFORT: S
+#+PRIORITY: A
+#+LAYER: agent-runtime
+
+NOTE [2026-04-11]: Completed in PLAN-176: canonicalized SwarmEventMap, removed duplicate definition/cast, and verified event-bus + swarm tests.
+
+* Initial Message
+
+bro write a proper todowrite sheet with todoRef support showing all tasks
+
+* Context
+
+PLAN-173 introduced a typed =EventBus<TEventMap>= and a =SwarmEventMap= interface, but the implementation left two competing definitions and inconsistent typing at integration boundaries.
+
+Current state:
+- =utils/typed-event-map.ts= defines =SwarmEventMap= with 9 channels (canonical, complete)
+- =swarm/types.ts= defines =SwarmEventMap= with 2 channels (=swarm:artifact=, =swarm:handoff= only)
+- =blackboard.ts= imports from =swarm/types.ts= (the subset)
+- =executor.ts= line 1086 uses an unsafe cast: =as EventBusType<SwarmEventMap>=
+- =sdk.ts:676= and =loader.ts:300= instantiate =new EventBus()= without type argument
+
+** Design Decisions
+
+1. Delete =SwarmEventMap= from =swarm/types.ts=. The canonical definition lives in =utils/typed-event-map.ts=.
+2. Update =blackboard.ts= to import =SwarmEventMap= from =../utils/typed-event-map=.
+3. Remove the =as EventBusType<SwarmEventMap>= cast in =executor.ts= line 1086. The swarm tools receive the bus through =swarmContext=; the cast is unnecessary because the handoff tool's context already accepts an =EventBus<SwarmEventMap>=.
+4. The shared session bus in =sdk.ts= stays =EventBus()= (untyped). Reason: it carries both swarm events and legacy events (=todo:change=, =bridge:outbound=, fluid events). Typing it with =SwarmEventMap= would restrict channels via the =EventChannel= conditional type and break existing callers. Add a JSDoc comment documenting this decision.
+5. =loader.ts= stays untyped since extensions have their own event contracts.
+
+** Files to Modify
+
+- =packages/coding-agent/src/swarm/types.ts=: remove =SwarmEventMap= interface (keep other types like =SwarmArtifactEvent=, =BlackboardEntry= etc.)
+- =packages/coding-agent/src/swarm/blackboard.ts=: change import source for =SwarmEventMap= from =./types= to =../utils/typed-event-map=
+- =packages/coding-agent/src/task/executor.ts=: remove the =as EventBusType<SwarmEventMap>= cast at line 1086, thread bus through swarm context properly
+- =packages/coding-agent/src/sdk.ts=: add JSDoc comment explaining untyped bus decision
+
+** Existing Patterns to Follow
+- =utils/event-bus.ts=: =EventBus<TEventMap extends EventMap = EventMap>=
+- =utils/typed-event-map.ts=: =EventChannel=, =EventPayload= conditional types
+- =utils/fake-event-bus.ts=: test helper that accepts generic =FakeEventBus<E extends EventMap>=
+
+* Verification
+- =bun check:ts= passes
+- =bun test packages/coding-agent/test/utils/typed-event-bus.test.ts= passes
+- =bun test packages/coding-agent/test/utils/event-bus.test.ts= passes
+- =bun test packages/coding-agent/test/swarm/blackboard.test.ts= passes
+- =bun test packages/coding-agent/test/swarm/handoff-tool.test.ts= passes
+- Grep confirms exactly one =SwarmEventMap= definition in the codebase
+- No =as EventBusType<SwarmEventMap>= cast remains in executor.ts
+
+* Sub-outline
+
+** FEAT-XXX::consolidate-event-map
+Remove duplicate SwarmEventMap from swarm/types.ts, update blackboard import.
+
+** FEAT-XXX::clean-executor-cast
+Depends on: FEAT-XXX::consolidate-event-map. Remove cast in executor.ts, document session bus decision in sdk.ts.
+
+** FEAT-XXX::verify-no-regressions
+Depends on: FEAT-XXX::clean-executor-cast. Run all verification commands.

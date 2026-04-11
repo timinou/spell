@@ -12,18 +12,23 @@ import { FluidEventRouter, materializeFluidPlanToTodos, validatePlan } from "../
 import { fluidPlanSchema } from "../orchestrators/fluid/plan-schema";
 import type { AgentRuntime, FluidEvent, FluidPlan } from "../orchestrators/fluid/types";
 import { FLUID_EVENT_CHANNEL } from "../orchestrators/fluid/types";
+import { buildOrgConfig } from "../plan-mode/org-plan";
 import fluidPlannerPrompt from "../prompts/agents/fluid-planner.md" with { type: "text" };
 import fluidPlannerRetryPrompt from "../prompts/agents/fluid-planner-retry.md" with { type: "text" };
 import executionPromptTemplate from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
+import { SwarmBlackboard } from "../swarm/blackboard";
+import { buildTaskUri } from "../swarm/uri";
+import { discoverAgents, getAgent } from "../task/discovery";
 import { runSubprocess } from "../task/executor";
+import { type SwarmNodeLike, SwarmScheduler } from "../task/swarm-scheduler";
 import type { AgentDefinition } from "../task/types";
 import {
-	cloneTodoPhases,
+	cloneTodoGroups,
 	findTask,
 	hasUnresolvedBlockers,
 	promoteReadyTasks,
-	type TodoPhase,
+	type TodoGroup,
 } from "../tools/todo-write";
 import { type EventBus, Priority } from "../utils/event-bus";
 
@@ -41,8 +46,101 @@ interface FluidExecutionResult {
 interface ExecutionSnapshot {
 	plan: FluidPlan;
 	results: Map<string, AgentRuntime>;
-	phases: TodoPhase[];
+	groups: TodoGroup[];
 	taskIdByAgentId: Map<string, string>;
+}
+
+interface FluidSwarmNode extends SwarmNodeLike {
+	agentId: string;
+	taskId: string;
+	taskUri: string;
+	taskText: string;
+	assignment?: string;
+}
+
+function buildFluidTaskUri(sessionId: string, agentId: string, taskId: string): string {
+	return buildTaskUri({ scheme: "task", sessionId, agentName: agentId, slug: taskId });
+}
+
+function buildFluidScheduler(
+	plan: FluidPlan,
+	groups: TodoGroup[],
+	taskIdByAgentId: Map<string, string>,
+	sessionId: string,
+): { scheduler: SwarmScheduler<FluidSwarmNode>; taskUriByTaskId: Map<string, string> } {
+	const taskUriByTaskId = new Map<string, string>();
+	for (const agent of plan.agents) {
+		if (agent.deferred) continue;
+		const taskId = taskIdByAgentId.get(agent.id);
+		if (!taskId) continue;
+		taskUriByTaskId.set(taskId, buildFluidTaskUri(sessionId, agent.id, taskId));
+	}
+	for (const group of groups) {
+		for (const task of group.tasks) {
+			const taskUri = taskUriByTaskId.get(task.id);
+			if (taskUri) task.uri = taskUri;
+		}
+	}
+	const entries: Array<[string, FluidSwarmNode, string[]?]> = [];
+	for (const agent of plan.agents) {
+		if (agent.deferred) continue;
+		const taskId = taskIdByAgentId.get(agent.id);
+		const taskUri = taskId ? taskUriByTaskId.get(taskId) : undefined;
+		if (!taskId || !taskUri) continue;
+		const task = findTask(groups, taskId);
+		if (!task) continue;
+		const deps = (task.blockers ?? [])
+			.map(blockerId => taskUriByTaskId.get(blockerId))
+			.filter((value): value is string => value !== undefined);
+		entries.push([
+			taskUri,
+			{
+				agentId: agent.id,
+				taskId,
+				taskUri,
+				taskText: agent.task,
+				assignment: agent.body?.trim() || agent.task,
+				kind: "work",
+				status: task.status,
+			},
+			deps.length > 0 ? deps : undefined,
+		]);
+	}
+	const maxConcurrency = Settings.instance.get("task.maxConcurrency") ?? 1;
+	const isolationMode = (Settings.instance.get("task.isolation.mode") ?? "none") !== "none";
+	return {
+		scheduler: new SwarmScheduler(entries, { maxConcurrency, isolationMode }),
+		taskUriByTaskId,
+	};
+}
+
+function syncGroupsFromScheduler(
+	groups: TodoGroup[],
+	scheduler: SwarmScheduler<FluidSwarmNode>,
+	taskUriByTaskId: Map<string, string>,
+): void {
+	for (const group of groups) {
+		for (const task of group.tasks) {
+			const taskUri = taskUriByTaskId.get(task.id);
+			if (!taskUri) continue;
+			const node = scheduler.dag.getNode(taskUri);
+			if (!node) continue;
+			if (node.status === "completed") {
+				task.status = "completed";
+			} else if (
+				node.status === "failed" ||
+				node.status === "gate_failed" ||
+				node.status === "abandoned" ||
+				node.status === "aborted"
+			) {
+				task.status = "failed";
+			} else if (node.status === "in_progress") {
+				task.status = "in_progress";
+			} else if (node.status === "pending") {
+				task.status = "pending";
+			}
+		}
+	}
 }
 
 const PLAN_VALIDATION_RETRY_FALLBACK =
@@ -163,15 +261,15 @@ async function executePlan(
 		}
 
 		await stopPlanningDrainTimer();
-		const execResult = await executeFluidPlan(session, eventBus, plan, signal);
+		const execResult = await executeFluidPlan(session, eventBus, plan, cwd, signal);
 		if (!execResult) {
 			return undefined;
 		}
-		const finalPhases = cloneTodoPhases(session.getTodoPhases());
+		const finalGroups = cloneTodoGroups(session.getTodoGroups());
 		return {
 			plan,
 			results: execResult.runtimes,
-			phases: finalPhases,
+			groups: finalGroups,
 			taskIdByAgentId: execResult.taskIdByAgentId,
 		};
 	} finally {
@@ -246,22 +344,22 @@ async function validateAndRefinePlan(
 	return undefined;
 }
 
-function promoteFirstRunnableTask(phases: TodoPhase[]): void {
-	promoteReadyTasks(phases, false);
+function promoteFirstRunnableTask(groups: TodoGroup[]): void {
+	promoteReadyTasks(groups, false);
 }
 
-function isTodoTerminal(phases: TodoPhase[]): boolean {
-	const tasks = phases.flatMap(phase => phase.tasks);
+function isTodoTerminal(groups: TodoGroup[]): boolean {
+	const tasks = groups.flatMap(group => group.tasks);
 	return (
 		tasks.length > 0 &&
 		tasks.every(task => task.status === "completed" || task.status === "abandoned" || task.status === "failed")
 	);
 }
 
-function deriveAgentState(taskId: string, phases: TodoPhase[]): AgentRuntime["state"] {
-	const task = findTask(phases, taskId);
+function deriveAgentState(taskId: string, groups: TodoGroup[]): AgentRuntime["state"] {
+	const task = findTask(groups, taskId);
 	if (!task) return "failed";
-	const allTasks = phases.flatMap(phase => phase.tasks);
+	const allTasks = groups.flatMap(group => group.tasks);
 	if (task.status === "completed") return "completed";
 	if (task.status === "abandoned" || task.status === "failed") return "failed";
 	if (task.status === "in_progress") return "running";
@@ -289,24 +387,25 @@ async function executeFluidPlan(
 	session: AgentSession,
 	eventBus: EventBus,
 	plan: FluidPlan,
+	cwd: string,
 	signal?: AbortSignal,
-	retryState?: { phases: TodoPhase[]; taskIdByAgentId: Map<string, string> },
+	retryState?: { groups: TodoGroup[]; taskIdByAgentId: Map<string, string> },
 ): Promise<FluidExecutionResult | undefined> {
 	let taskIdByAgentId: Map<string, string>;
-	let phases: TodoPhase[];
+	let groups: TodoGroup[];
 	if (retryState) {
 		taskIdByAgentId = retryState.taskIdByAgentId;
-		phases = retryState.phases;
+		groups = retryState.groups;
 	} else {
 		const todoPlan = materializeFluidPlanToTodos(plan);
 		taskIdByAgentId = todoPlan.taskIdByAgentId;
-		phases = cloneTodoPhases(todoPlan.phases);
-		promoteFirstRunnableTask(phases);
+		groups = cloneTodoGroups(todoPlan.groups);
+		promoteFirstRunnableTask(groups);
 	}
 	const runtimes = new Map<string, AgentRuntime>(
 		plan.agents.map(agent => {
 			const taskId = taskIdByAgentId.get(agent.id);
-			const task = taskId ? findTask(phases, taskId) : undefined;
+			const task = taskId ? findTask(groups, taskId) : undefined;
 			const isCompleted = task?.status === "completed";
 			return [
 				agent.id,
@@ -319,11 +418,11 @@ async function executeFluidPlan(
 		}),
 	);
 	let executionCompleteEmitted = false;
-	const syncRuntimeStates = (nextPhases: TodoPhase[]): void => {
+	const syncRuntimeStates = (nextGroups: TodoGroup[]): void => {
 		for (const [agentId, taskId] of taskIdByAgentId) {
 			const runtime = runtimes.get(agentId);
 			if (!runtime) continue;
-			const nextState = deriveAgentState(taskId, nextPhases);
+			const nextState = deriveAgentState(taskId, nextGroups);
 			if (runtime.state === nextState) continue;
 			const timestamp = Date.now();
 			const nextRuntime: AgentRuntime = { ...runtime, state: nextState };
@@ -348,15 +447,16 @@ async function executeFluidPlan(
 				Priority.P1,
 			);
 		}
-		if (!executionCompleteEmitted && isTodoTerminal(nextPhases)) {
+		if (!executionCompleteEmitted && isTodoTerminal(nextGroups)) {
 			executionCompleteEmitted = true;
 			eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "execution_complete", results: new Map(runtimes) }, Priority.P1);
 		}
 	};
 	const unsubscribeTodo = eventBus.subscribe("todo:change", raw => {
-		const nextPhases = (raw as { phases?: TodoPhase[] }).phases;
-		if (!nextPhases) return;
-		syncRuntimeStates(cloneTodoPhases(nextPhases));
+		const nextGroups =
+			(raw as { groups?: TodoGroup[]; phases?: TodoGroup[] }).groups ?? (raw as { phases?: TodoGroup[] }).phases;
+		if (!nextGroups) return;
+		syncRuntimeStates(cloneTodoGroups(nextGroups));
 	});
 	const abortExecution = (): void => {
 		void session.abort().catch(error => {
@@ -366,17 +466,115 @@ async function executeFluidPlan(
 	if (signal) {
 		signal.addEventListener("abort", abortExecution, { once: true });
 	}
+	let blackboard: SwarmBlackboard | undefined;
 	try {
 		eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "plan_complete", plan }, Priority.P1);
-		session.setTodoPhases(phases, { reset: true });
-		eventBus.emit("todo:change", { phases });
-		await session.prompt(buildExecutionPrompt(plan), { synthetic: true });
-		if (signal?.aborted) {
-			emitExecutionCancelled(eventBus, signal);
-			return undefined;
+		session.setTodoGroups(groups, { reset: true });
+		eventBus.emit("todo:change", { groups });
+		const visibleAgentCount = plan.agents.filter(agent => !agent.deferred).length;
+		if (visibleAgentCount <= 2) {
+			await session.prompt(buildExecutionPrompt(plan), { synthetic: true });
+			if (signal?.aborted) {
+				emitExecutionCancelled(eventBus, signal);
+				return undefined;
+			}
+			const latestGroups = cloneTodoGroups(session.getTodoGroups());
+			syncRuntimeStates(latestGroups);
+			if (!executionCompleteEmitted) {
+				eventBus.enqueue(
+					FLUID_EVENT_CHANNEL,
+					{ type: "execution_complete", results: new Map(runtimes) },
+					Priority.P1,
+				);
+			}
+			await eventBus.drain();
+			return { runtimes: new Map(runtimes), taskIdByAgentId };
 		}
-		const latestPhases = cloneTodoPhases(session.getTodoPhases());
-		syncRuntimeStates(latestPhases);
+
+		const { agents } = await discoverAgents(cwd);
+		const taskAgent = getAgent(agents, "task");
+		if (!taskAgent) {
+			throw new Error("Fluid execution requires the bundled task agent");
+		}
+		const workerTools = session.agent.state.tools.map(tool => tool.name).filter(name => name !== "todo_write");
+		const workerAgent: AgentDefinition = { ...taskAgent, name: "fluid-task", tools: workerTools };
+		const sessionId = session.sessionId;
+		const { scheduler, taskUriByTaskId } = buildFluidScheduler(plan, groups, taskIdByAgentId, sessionId);
+		const publishGroups = (): void => {
+			syncGroupsFromScheduler(groups, scheduler, taskUriByTaskId);
+			session.setTodoGroups(groups);
+			eventBus.emit("todo:change", { groups });
+		};
+		blackboard = new SwarmBlackboard({
+			projectRoot: cwd,
+			orgConfig: buildOrgConfig(session.settings),
+			eventBus,
+		});
+		await blackboard.open({
+			sessionId,
+			agent: "main",
+			title: "Fluid swarm execution",
+			category: "swarm",
+		});
+		publishGroups();
+		const agentIndexById = new Map(plan.agents.map((agent, index) => [agent.id, index]));
+		await scheduler.pump(async (taskUri, node, runSignal) => {
+			const currentNode = scheduler.dag.getNode(taskUri);
+			if (currentNode) {
+				scheduler.setNode(taskUri, { ...currentNode, status: "in_progress" });
+			}
+			publishGroups();
+			let lastIntent = "";
+			const result = await runSubprocess({
+				cwd,
+				agent: workerAgent,
+				task: node.taskText,
+				assignment: node.assignment,
+				index: agentIndexById.get(node.agentId) ?? 0,
+				id: `fluid-${node.agentId}`,
+				taskDepth: 1,
+				signal: runSignal,
+				eventBus,
+				settings: session.settings,
+				swarmContext: {
+					active: true,
+					agent: node.agentId,
+					sessionId,
+					currentTaskUri: node.taskUri,
+					blackboard,
+					scheduler,
+				},
+				onProgress: progress => {
+					if (!progress.lastIntent || progress.lastIntent === lastIntent) {
+						return;
+					}
+					lastIntent = progress.lastIntent;
+					eventBus.enqueue(
+						FLUID_EVENT_CHANNEL,
+						{ type: "agent_stream", agentId: node.agentId, text: progress.lastIntent },
+						Priority.P2,
+						`stream:${node.agentId}`,
+					);
+				},
+			});
+			const runtime = runtimes.get(node.agentId);
+			if (runtime) {
+				runtimes.set(node.agentId, {
+					...runtime,
+					result,
+					error: result.error,
+				});
+			}
+			if (result.exitCode === 0 && !(result.aborted ?? false)) {
+				scheduler.markCompleted(taskUri);
+				publishGroups();
+				return;
+			}
+			scheduler.markFailed(taskUri);
+			publishGroups();
+			throw new Error(result.error ?? `Subagent exited with code ${result.exitCode}`);
+		}, signal);
+		publishGroups();
 		if (!executionCompleteEmitted) {
 			eventBus.enqueue(FLUID_EVENT_CHANNEL, { type: "execution_complete", results: new Map(runtimes) }, Priority.P1);
 		}
@@ -391,6 +589,15 @@ async function executeFluidPlan(
 		emitPlanError(eventBus, err);
 		return undefined;
 	} finally {
+		if (blackboard) {
+			try {
+				await blackboard.close(
+					signal?.aborted ? "Fluid swarm execution cancelled" : "Fluid swarm execution complete",
+				);
+			} catch (error) {
+				logger.warn("Failed to close fluid swarm blackboard", { error: String(error) });
+			}
+		}
 		unsubscribeTodo();
 		if (signal) {
 			signal.removeEventListener("abort", abortExecution);
@@ -495,7 +702,7 @@ async function processFluidEvents(
 	let activeExecution: Promise<void> | null = null;
 	let lastPlan: FluidPlan | undefined;
 	let lastRuntimes: Map<string, AgentRuntime> | undefined;
-	let lastPhases: TodoPhase[] | undefined;
+	let lastGroups: TodoGroup[] | undefined;
 	let lastTaskIdByAgentId: Map<string, string> | undefined;
 
 	const startExecution = (prompt: string): void => {
@@ -511,7 +718,7 @@ async function processFluidEvents(
 				}
 				lastPlan = snapshot.plan;
 				lastRuntimes = snapshot.results;
-				lastPhases = snapshot.phases;
+				lastGroups = snapshot.groups;
 				lastTaskIdByAgentId = snapshot.taskIdByAgentId;
 			})
 			.catch(err => {
@@ -530,7 +737,7 @@ async function processFluidEvents(
 		if (activeExecution) {
 			return;
 		}
-		if (!lastPlan || !lastRuntimes || !lastPhases || !lastTaskIdByAgentId) {
+		if (!lastPlan || !lastRuntimes || !lastGroups || !lastTaskIdByAgentId) {
 			emitPlanError(eventBus, "No prior fluid execution to retry");
 			return;
 		}
@@ -549,23 +756,23 @@ async function processFluidEvents(
 		}
 
 		// Compute full retry set: failed tasks + downstream dependents
-		const retryTaskIds = computeRetryTaskIds(lastPhases, failedTaskIds);
+		const retryTaskIds = computeRetryTaskIds(lastGroups, failedTaskIds);
 
-		// Patch captured phases: reset retry tasks to pending, keep completed as-is
-		const patchedPhases = cloneTodoPhases(lastPhases);
-		for (const phase of patchedPhases) {
-			for (const task of phase.tasks) {
+		// Patch captured groups: reset retry tasks to pending, keep completed as-is
+		const patchedGroups = cloneTodoGroups(lastGroups);
+		for (const group of patchedGroups) {
+			for (const task of group.tasks) {
 				if (retryTaskIds.has(task.id)) {
 					task.status = "pending";
 				}
 			}
 		}
-		promoteFirstRunnableTask(patchedPhases);
+		promoteFirstRunnableTask(patchedGroups);
 
 		const controller = new AbortController();
 		activeController = controller;
-		activeExecution = executeFluidPlan(session, eventBus, lastPlan, controller.signal, {
-			phases: patchedPhases,
+		activeExecution = executeFluidPlan(session, eventBus, lastPlan, cwd, controller.signal, {
+			groups: patchedGroups,
 			taskIdByAgentId: lastTaskIdByAgentId,
 		})
 			.then(execResult => {
@@ -573,7 +780,7 @@ async function processFluidEvents(
 					return;
 				}
 				lastRuntimes = execResult.runtimes;
-				lastPhases = cloneTodoPhases(session.getTodoPhases());
+				lastGroups = cloneTodoGroups(session.getTodoGroups());
 				lastTaskIdByAgentId = execResult.taskIdByAgentId;
 			})
 			.catch(err => {
@@ -661,9 +868,9 @@ function resolveRetryRoots(runtimes: Map<string, AgentRuntime>, requestedAgentId
  * Given a set of failed task IDs, compute the full set of tasks that need to be
  * retried: the failed tasks plus all transitive dependents (tasks blocked by them).
  */
-export function computeRetryTaskIds(phases: TodoPhase[], failedTaskIds: Set<string>): Set<string> {
+export function computeRetryTaskIds(groups: TodoGroup[], failedTaskIds: Set<string>): Set<string> {
 	const retrySet = new Set(failedTaskIds);
-	const allTasks = phases.flatMap(phase => phase.tasks);
+	const allTasks = groups.flatMap(group => group.tasks);
 	const queue = [...failedTaskIds];
 	while (queue.length > 0) {
 		const current = queue.shift()!;
