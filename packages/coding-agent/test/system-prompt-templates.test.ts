@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { renderPromptTemplate, type TemplateContext } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import Handlebars from "handlebars";
+import { buildSystemPrompt } from "../src/system-prompt";
 
 const systemPromptsDir = path.resolve(import.meta.dir, "../src/prompts/system");
 
@@ -65,6 +67,19 @@ async function loadSystemPromptTemplates(): Promise<Map<string, string>> {
 	}
 
 	return templates;
+}
+
+async function renderBuiltSystemPrompt(settings: Settings): Promise<string> {
+	const blocks = await buildSystemPrompt({
+		contextFiles: [],
+		cwd: import.meta.dir,
+		rules: [],
+		settings,
+		skills: [],
+		toolNames: [],
+	});
+
+	return blocks.map(block => block.text).join("\n");
 }
 
 describe("system Handlebars prompt templates", () => {
@@ -226,6 +241,20 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).not.toContain("<thinking-mode>");
 	});
 
+	test("system-prompt omits thinking instructions when caveman thinking is disabled", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+
+		const rendered = renderPromptTemplate(template, {
+			...baseRenderContext,
+			cavemanActive: true,
+			cavemanThinking: false,
+		});
+
+		expect(rendered).not.toContain("<thinking-mode>");
+		expect(rendered).not.toContain("EVERY thinking block MUST");
+	});
+
 	test("caveman template does not contain thinking instructions", async () => {
 		const templatePath = path.join(systemPromptsDir, "caveman.md");
 		const template = await Bun.file(templatePath).text();
@@ -238,6 +267,37 @@ describe("system Handlebars prompt templates", () => {
 
 		expect(rendered).not.toContain("thinking-mode");
 		expect(rendered).toContain("CAVEMAN MODE");
+	});
+});
+
+describe("caveman prompt composition", () => {
+	test("buildSystemPrompt omits thinking instructions when caveman thinking mode is normal", async () => {
+		const rendered = await renderBuiltSystemPrompt(
+			Settings.isolated({
+				"caveman.defaultLevel": "full",
+				"caveman.thinkingMode": "normal",
+			}),
+		);
+
+		expect(rendered).toContain("IMPORTANT: You are in CAVEMAN MODE.");
+		expect(rendered).not.toContain("<thinking-mode>");
+		expect(rendered).not.toContain("EVERY thinking block MUST");
+	});
+
+	test("buildSystemPrompt keeps caveman prompt free of thinking instructions", async () => {
+		const rendered = await renderBuiltSystemPrompt(
+			Settings.isolated({
+				"caveman.defaultLevel": "full",
+				"caveman.thinkingMode": "caveman",
+			}),
+		);
+
+		expect(rendered).toContain("IMPORTANT: You are in CAVEMAN MODE.");
+		expect(rendered).toContain("<thinking-mode>");
+		expect(rendered.indexOf("<thinking-mode>")).toBeLessThan(rendered.indexOf("IMPORTANT: You are in CAVEMAN MODE."));
+		expect(rendered.indexOf("EVERY thinking block MUST")).toBeLessThan(
+			rendered.indexOf("IMPORTANT: You are in CAVEMAN MODE."),
+		);
 	});
 });
 
