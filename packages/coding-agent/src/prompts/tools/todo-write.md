@@ -6,6 +6,14 @@ Task dispatches may auto-create phases and delegated items in this same roster. 
 {{else}}
 Use `todo_write` when you want roster tracking, gates, or blockers before delegating work.
 {{/if}}
+{{#if swarmEnabled}}
+{{SECTION_SEPERATOR "Swarm-aware roster entries"}}
+- Use URI-shaped identifiers when the task is part of a swarm DAG: `task://` for executable work, `data://` for passive artifacts, and `::` for structured sub-outline refs that materialize to those URIs.
+- Put the canonical URI in `blockers` when a dependency is already known; do not restate it only in prose.
+- Record blackboard artifacts and successor context with concrete `data://` pointers so later agents can satisfy or inspect them without guessing.
+- If a dependency or artifact URI is not yet known, leave the field empty or mark the task blocked truthfully rather than inventing a placeholder.
+{{/if}}
+
 
 <critical>
 You **MUST** call this tool twice per direct task you execute yourself:

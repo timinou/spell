@@ -20,6 +20,7 @@
  * ```
  */
 
+export * from "../swarm/uri-protocol";
 export * from "./agent-protocol";
 export * from "./artifact-protocol";
 export * from "./canvas-protocol";

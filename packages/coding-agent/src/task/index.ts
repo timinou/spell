@@ -311,7 +311,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			const result = await new TodoWriteTool(this.session).execute("task-auto-roster-create", {
 				ops: [
 					{
-						op: "add_phase",
+						op: "add_group",
 						name: phaseName,
 						tasks: tasksToCreate.map(task => {
 							const blockerTodoRefs = (task.blockers ?? [])

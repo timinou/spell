@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { type TodoPhase, TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
+import type { ToolSession } from "../../src/tools";
+import { type TodoPhase, TodoWriteTool } from "../../src/tools/todo-write";
 
 function createSession(initialPhases: TodoPhase[] = []): ToolSession {
 	let phases = initialPhases;
@@ -371,7 +371,9 @@ describe("TodoWriteTool smart gate enforcement", () => {
 		});
 
 		const summary = result.content.find(part => part.type === "text")!.text!;
-		expect(summary).toContain("task-1 references non-existent blocker task-99");
+		expect(summary).toContain(
+			"task-1 references non-existent blocker task-99 (dangling blocker is ignored for execution)",
+		);
 	});
 
 	it("replace with in_progress blocked task demotes to pending", async () => {
@@ -501,7 +503,9 @@ describe("TodoWriteTool blocker validation scope (BUG-191)", () => {
 			],
 		});
 		const summary = result.content.find(part => part.type === "text")!.text!;
-		expect(summary).toContain("task-1 references non-existent blocker task-99");
+		expect(summary).toContain(
+			"task-1 references non-existent blocker task-99 (dangling blocker is ignored for execution)",
+		);
 	});
 
 	it("pre-existing dangling blocker is silently pruned without warning", async () => {
@@ -569,7 +573,9 @@ describe("TodoWriteTool blocker validation scope (BUG-191)", () => {
 		});
 
 		const summary = result.content.find(part => part.type === "text")!.text!;
-		expect(summary).not.toContain("references non-existent blocker");
+		expect(summary).toContain(
+			"task-2 references non-existent blocker task-99 (dangling blocker is ignored for execution)",
+		);
 		// task-99 should be removed from task-2's blockers
 		const task2 = result.details?.phases[0]?.tasks[1];
 		expect(task2?.blockers).toBeUndefined();
@@ -615,6 +621,30 @@ describe("TodoWriteTool blocker validation scope (BUG-191)", () => {
 			ops: [{ op: "update", id: "task-2", blockers: ["task-99"] }],
 		});
 		const summary = result.content.find(part => part.type === "text")!.text!;
-		expect(summary).toContain("task-2 references non-existent blocker task-99");
+		expect(summary).toContain(
+			"task-2 references non-existent blocker task-99 (dangling blocker is ignored for execution)",
+		);
+	});
+
+	it("reports circular blocker dependencies", async () => {
+		const tool = new TodoWriteTool(createSession());
+		const result = await tool.execute("call-cycle", {
+			ops: [
+				{
+					op: "replace",
+					phases: [
+						{
+							name: "Work",
+							tasks: [
+								{ content: "A", blockers: ["task-2"] },
+								{ content: "B", blockers: ["task-1"] },
+							],
+						},
+					],
+				},
+			],
+		});
+		const summary = result.content.find(part => part.type === "text")!.text!;
+		expect(summary).toContain("Warnings: Circular blockers detected: task-1 -> task-2 -> task-1");
 	});
 });

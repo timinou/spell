@@ -1,0 +1,109 @@
+#+TITLE: Unified Swarm Architecture with DAG-Native Todos
+#+STATE: DONE
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: PLAN-173-unified-swarm-architecture-with-dag-nati
+
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Context
+
+Spell's task dispatch and todo systems were designed for independent parallel tasks with a flat phase-based ordering model. Interconnected agent swarms require fundamentally different primitives: mutable DAGs, URI-addressable tasks, live inter-agent communication, dynamic graph mutation, and isolation-gated concurrency.
+
+** Problem
+1. Static DAGs: =batch-scheduler.ts= builds an immutable graph. No runtime mutation.
+2. Phase-as-barrier: =TodoPhase= imposes sequential ordering that the DAG doesn't enforce. Phases lie about the execution model.
+3. Opaque task IDs: =task-3= carries no context about ownership, session, or scope.
+4. No inter-agent data flow: subagents are fully isolated. No shared state, no live notifications.
+5. Underused =::= sub-outlines: plan mode documents the =PARENT-ID::sub-slug= pattern but plans rarely use it, preventing =org wave= from computing execution order.
+
+** Approach
+Converge the todo system, event bus, and DAG scheduler into a unified architecture:
+- *Phases eliminated.* Flat task list with explicit DAG edges. Cosmetic groups (like org headings) for human readability, no scheduling semantics.
+- *URI addressing.* =task://= for executable work, =data://= for passive data. =artifact://= remains physical storage. Short slugs resolve contextually.
+- *Same DAG, different node types.* =task://= and =data://= participate in one =MutableDag=. Scheduler dispatches work nodes, satisfies data nodes on artifact arrival.
+- *80/20 events + LOGBOOK.* Keep =applyOps()= state machine. Emit fine-grained typed events. Org LOGBOOK for timeline reconstruction. Event types future-proofed for later event-sourcing.
+- *Typed EventBus.* Generic =EventBus<E>= with compile-time channel/payload safety. =FakeEventBus= for testing.
+- *Isolation-gated concurrency.* Multiple direct tasks in_progress when isolation active + no file overlap.
+- *Dual agent tools.* =handoff= (transfer control) and =spawn_successor= (extend DAG) for dynamic swarm execution.
+- *Org blackboard.* Separate persistent store. Bridges to =data://= nodes via event bus.
+- *Plan =::= enforcement.* Prompts require structured sub-outlines. ERT + TypeScript tests harden the dependency graph.
+
+** Key Decisions (settled during planning)
+1. Phases are purely cosmetic (=TodoGroup=), DAG is sole ordering authority.
+2. URI scheme: =task://<session>/<agent>/<slug>=, =data://<session>/<agent>/<slug>=. Short slugs as tool input, full URIs canonical.
+3. =task://= and =data://= in same DAG, different node =kind= field. Scheduler behavior varies by kind.
+4. 80/20 event model: state machine + fine-grained typed events + org LOGBOOK. Not full event-sourcing yet.
+5. Typed EventBus with =EventMap= generic. =FakeEventBus= for TDD.
+6. Isolation-gated concurrency: multiple in_progress when =task.isolation.mode= active AND independent DAG components AND no =filesDeps= overlap.
+7. Handoff = agent transfer (ends current), spawn_successor = DAG extension (continues current).
+8. Blackboard separate from DAG. =data://= nodes bridge via =swarm:artifact= events.
+9. Plan prompts require =PARENT-ID::sub-slug= sub-outlines with =:DEPENDS:= properties.
+10. ERT tests for org graph algorithms. TypeScript tests for blocker resolution (dangling refs, cycles).
+
+* Verification
+- =bun check:ts= passes
+- =bun test packages/coding-agent/test/utils/typed-event-bus.test.ts= passes
+- =bun test packages/coding-agent/test/utils/event-bus.test.ts= passes (backward compat)
+- =bun test packages/coding-agent/test/task/mutable-dag.test.ts= passes
+- =bun test packages/coding-agent/test/swarm/uri.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= passes (refactored)
+- =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-promote-ready.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-apply-ops-dag.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-write-blockers.test.ts= passes
+- =bun test packages/coding-agent/test/task/swarm-scheduler.test.ts= passes
+- =bun test packages/coding-agent/test/task/batch-scheduler.test.ts= passes (backward compat)
+- =bun test packages/coding-agent/test/swarm/blackboard.test.ts= passes
+- =bun test packages/coding-agent/test/swarm/handoff-tool.test.ts= passes
+- =bun test packages/coding-agent/test/swarm/spawn-successor-tool.test.ts= passes
+- ERT tests for =org-fluid-plan= / =org wave= pass
+- Manual: swarm execution with 3+ concurrent agents completes with correct DAG ordering
+
+* Execution Manifest
+** foundation                                        :wave:
+- [[id:FEAT-389-typed-eventbus-with-generic-channel-defi]] Typed EventBus with generic channel definitions (M)
+- [[id:FEAT-390-mutabledag-generic-data-structure]] MutableDag generic data structure (M)
+- [[id:FEAT-391-task-uri-types-and-resolution-protocol]] Task URI types and resolution protocol (M)
+- [[id:FEAT-395-plan-mode-sub-outline-enforcement-and-de]] Plan mode sub-outline enforcement and depends hardening (M)
+** core                                              :wave:
+- [[id:PROJ-027-todoitem-data-model-refactor-to-dag-nati]] TodoItem data model refactor to DAG-native URIs (XL, depends FEAT-389 + FEAT-390 + FEAT-391)
+** scheduling                                        :wave:
+- [[id:FEAT-392-swarmscheduler-with-multi-entry-dag-exec]] SwarmScheduler with multi-entry DAG execution (L, depends PROJ-027)
+- [[id:FEAT-393-org-blackboard-with-data-node-bridging]] Org blackboard with data node bridging (M, depends FEAT-389 + FEAT-391)
+** tools                                             :wave:
+- [[id:FEAT-394-handoff-and-spawn-successor-swarm-tools]] Handoff and spawn successor swarm tools (L, depends FEAT-392 + FEAT-393)
+** prompts                                           :wave:
+- [[id:FEAT-396-swarm-agent-system-prompt-and-execution]] Swarm agent system prompt and execution mode (S, depends FEAT-394)
+
+
+** Completion [2026-04-11]
+*** Verification
+- `bun check:ts` — passed.
+- Individually passed focused Bun tests:
+  - `bun test packages/coding-agent/test/utils/typed-event-bus.test.ts`
+  - `bun test packages/coding-agent/test/utils/event-bus.test.ts`
+  - `bun test packages/coding-agent/test/task/mutable-dag.test.ts`
+  - `bun test packages/coding-agent/test/swarm/uri.test.ts`
+  - `bun test packages/coding-agent/test/tools/todo-write.test.ts`
+  - `bun test packages/coding-agent/test/tools/todo-write-gates.test.ts`
+  - `bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts`
+  - `bun test packages/coding-agent/test/tools/todo-promote-ready.test.ts`
+  - `bun test packages/coding-agent/test/tools/todo-apply-ops-dag.test.ts`
+  - `bun test packages/coding-agent/test/task/swarm-scheduler.test.ts`
+  - `bun test packages/coding-agent/test/task/batch-scheduler.test.ts`
+  - `bun test packages/coding-agent/test/swarm/blackboard.test.ts`
+  - `bun test packages/coding-agent/test/swarm/handoff-tool.test.ts`
+  - `bun test packages/coding-agent/test/swarm/spawn-successor-tool.test.ts`
+- ERT suites passed:
+  - `cd packages/org && emacs --batch -l elisp/org-tasks.el -l elisp/mcp-server-tools.el -l elisp/tools/org-mcp-common.el -l elisp/tools/org-dependency-graph.el -l elisp/tools/org-next-wave.el -l elisp/tools/org-compute-waves.el -l elisp/test/org-wave-graph-test.el -f ert-run-tests-batch-and-exit`
+  - `cd packages/org && emacs --batch -l elisp/org-tasks.el -l elisp/mcp-server-tools.el -l elisp/tools/org-mcp-common.el -l elisp/tools/org-fluid-plan.el -l elisp/test/test-org-fluid-plan.el -f ert-run-tests-batch-and-exit`
+- Manual scheduler scenario passed via `bun -e` using a 3-root + 1-dependent `SwarmScheduler` graph. Observed start order: `task://sess/main/a`, `task://sess/main/b`, `task://sess/main/c`, then `task://sess/main/merge`; observed `maxRunning: 3`.
+*** Artifacts
+- None. No screenshots were required; verification evidence is the command output above and the modified source/org files.
+*** Deviations
+- `packages/coding-agent/src/modes/fluid-mode.ts` now consumes DAG-native todo promotion/materialization, but it does not yet execute the runtime loop through `SwarmScheduler` directly. Scheduler behavior is verified independently through focused tests and the manual concurrency scenario. No separate FUP item was created in this execution.

@@ -1,0 +1,115 @@
+#+TITLE: MutableDag Generic Data Structure
+#+STATE: DONE
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-390-mutabledag-generic-data-structure
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: agent-runtime
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Narrative
+
+The swarm scheduler needs a DAG that can mutate at runtime: agents spawn successors, handoffs inject new nodes, artifacts satisfy data dependencies dynamically. The existing =buildBatchGraph()= in =batch-scheduler.ts= builds an immutable graph once. The existing =splitIntoComponents()= in =orchestrators/fluid/dag.ts= operates on immutable =FluidPlan= structures.
+
+This item creates a generic =MutableDag<T>= class that both the swarm scheduler and the refactored todo system will use. It is a pure data structure with no coupling to todos, events, or scheduling. The only domain concept it knows is "nodes with payloads connected by directed edges."
+
+* Design Decisions
+
+1. =MutableDag<T>= is parameterized by node payload type =T=.
+2. Nodes are identified by string IDs (will be URI segments in practice, but the DAG doesn't care).
+3. Mutations: =addNode(id, payload, deps?)=, =removeNode(id, mode)=, =addEdge(from, to)=, =removeEdge(from, to)=.
+4. Every mutation runs cycle detection (Kahn's algorithm) before committing. If a mutation would create a cycle, it throws and the DAG is unchanged (transactional).
+5. =getReady(completed, running)= returns nodes whose deps are all in =completed= and that are not in =running=. This is the core primitive the scheduler calls.
+6. =splitComponents()= uses union-find (same algorithm as existing =splitIntoComponents= in =dag.ts=).
+7. Optional file-dep overlap: =setFilesDeps(id, files)= and =hasFileOverlap(a, b)=. Stored separately from the graph topology. Used by the scheduler for isolation-gated concurrency.
+8. The class is not thread-safe. Callers must serialize mutations (the scheduler owns the mutation lock).
+
+* Files to Create
+
+** =packages/coding-agent/src/task/mutable-dag.ts=
+
+API surface:
+#+begin_src typescript
+export class MutableDag<T> {
+  addNode(id: string, payload: T, deps?: string[]): void;
+  removeNode(id: string, mode: "cascade" | "orphan"): string[];
+  addEdge(from: string, to: string): void;
+  removeEdge(from: string, to: string): void;
+  has(id: string): boolean;
+  get(id: string): T | undefined;
+  set(id: string, payload: T): void;
+  getReady(completed: ReadonlySet<string>, running?: ReadonlySet<string>): string[];
+  getDependents(id: string): readonly string[];
+  getBlockers(id: string): readonly string[];
+  topologicalOrder(): string[];
+  splitComponents(): MutableDag<T>[];
+  get size(): number;
+  get roots(): string[];
+  get nodeIds(): string[];
+  
+  // File-dep overlap (optional layer)
+  setFilesDeps(id: string, files: string[]): void;
+  getFilesDeps(id: string): readonly string[];
+  hasFileOverlap(a: string, b: string): boolean;
+}
+#+end_src
+
+* Existing Patterns to Follow
+- =buildBatchGraph()= (=batch-scheduler.ts= lines 43-102): Kahn's algorithm for topological sort, remaining-blockers counting
+- =splitIntoComponents()= (=orchestrators/fluid/dag.ts= lines 172-245): union-find with path compression and rank
+- =BatchGraph= interface (=batch-scheduler.ts=): =order=, =indexById=, =blockersById=, =dependentsById= -- similar internal structure
+
+* Sub-outline (test-first)
+
+** FEAT-390::dag-tests
+File: =packages/coding-agent/test/task/mutable-dag.test.ts=
+
+*** addNode
+- Empty DAG: =dag.addNode("a", {label: "A"})= => =dag.has("a") === true=, =dag.size === 1=, =dag.roots === ["a"]=
+- With deps: =dag.addNode("b", {}, ["a"])= => =dag.getBlockers("b") === ["a"]=, =dag.getDependents("a") === ["b"]=
+- Duplicate: =dag.addNode("a", {})= twice => throws ="Node a already exists"=
+- Self-dep: =dag.addNode("b", {}, ["b"])= => throws ="Self-dependency: b"=
+- Missing dep: =dag.addNode("b", {}, ["nonexistent"])= => throws ="Dependency nonexistent not found"=
+- Diamond: a->{b,c}->d. =dag.addNode("d", {}, ["b","c"])= succeeds.
+
+*** addEdge / cycle detection
+- a->b->c exists. =dag.addEdge("c", "a")= => throws ="Cycle detected"=
+- a->b exists. =dag.addEdge("a", "c")= where c exists => succeeds, =dag.getDependents("a")= includes both b and c
+
+*** removeNode
+- cascade: b depends on a. =dag.removeNode("a", "cascade")= => returns =["a", "b"]=, dag empty (or only other nodes)
+- orphan: b depends on a. =dag.removeNode("a", "orphan")= => returns =["a"]=, =dag.getBlockers("b") === []=
+- not found: =dag.removeNode("x", "cascade")= => throws ="Node x not found"=
+- deep cascade: a->b->c->d. remove a cascade => returns ["a","b","c","d"]
+
+*** getReady
+- DAG: a(root), b(dep:a), c(root). completed={}, running={} => returns ["a","c"]
+- completed={"a"}, running={} => returns ["b","c"]
+- completed={"a"}, running={"c"} => returns ["b"] only
+- All completed => returns []
+
+*** splitComponents
+- Two pairs: a->b, c->d => 2 components
+- Single chain: a->b->c => 1 component
+- Singleton: just a => 1 component with 1 node
+
+*** topologicalOrder
+- Diamond: a->{b,c}->d => starts with a, ends with d
+- Verify determinism: same DAG produces same order on repeated calls
+
+*** filesDeps overlap
+- Same file: =setFilesDeps("a", ["src/x.ts"]); setFilesDeps("b", ["src/x.ts"])= => =hasFileOverlap("a","b") === true=
+- Different files: => false
+- Empty: =setFilesDeps("a", [])= => =hasFileOverlap("a","b") === false=
+- Undefined: node without setFilesDeps => no overlap with anything
+
+** FEAT-390::dag-impl
+Depends on: FEAT-390::dag-tests
+
+* Verification
+- =bun test packages/coding-agent/test/task/mutable-dag.test.ts= passes
+- =bun check:ts= passes

@@ -1,4 +1,5 @@
 import { logger } from "@oh-my-pi/pi-utils";
+import type { EventChannel, EventMap, EventPayload } from "./typed-event-map";
 
 /** Priority levels for event dispatch. */
 export enum Priority {
@@ -26,10 +27,10 @@ interface SubscribeOptions {
 	minPriority?: Priority;
 }
 
-type EventHandler = (data: unknown) => void | Promise<void>;
+type EventHandler<TData> = (data: TData) => void | Promise<void>;
 
-interface Subscription {
-	handler: EventHandler;
+interface Subscription<TData> {
+	handler: EventHandler<TData>;
 	options?: SubscribeOptions;
 }
 
@@ -50,8 +51,8 @@ const DEFAULT_BOUNDS = {
  * - drain(): Processes queued events (called from agent loop between turns).
  * - depth(): Returns live queue metrics for the "surface is truth" principle.
  */
-export class EventBus {
-	readonly #listeners = new Map<string, Set<Subscription>>();
+export class EventBus<TEventMap extends EventMap = EventMap> {
+	readonly #listeners = new Map<string, Set<Subscription<unknown>>>();
 	readonly #queue: QueueEntry[] = [];
 	readonly #bounds: Record<Priority.P1 | Priority.P2 | Priority.P3, number>;
 
@@ -63,29 +64,24 @@ export class EventBus {
 		};
 	}
 
-	/**
-	 * Synchronous dispatch. Calls all handlers inline.
-	 * This is the P0 fast path — armed tools and other latency-critical events use this.
-	 */
-	emit(channel: string, data: unknown): void {
+	emit<TChannel extends EventChannel<TEventMap>>(channel: TChannel, data: EventPayload<TEventMap, TChannel>): void {
 		const subs = this.#listeners.get(channel);
 		if (!subs) return;
 		for (const sub of subs) {
 			try {
-				sub.handler(data);
+				(sub.handler as EventHandler<EventPayload<TEventMap, TChannel>>)(data);
 			} catch (err) {
 				logger.error("EventBus emit handler error", { channel, error: String(err) });
 			}
 		}
 	}
 
-	/**
-	 * Enqueue an event for async processing via drain().
-	 * P1: FIFO, blocks if full (returns false when queue is at capacity).
-	 * P2: coalesces on channel+key (latest wins). Drops on overflow.
-	 * P3: drops oldest on overflow.
-	 */
-	enqueue(channel: string, data: unknown, priority: Priority, key?: string): boolean {
+	enqueue<TChannel extends EventChannel<TEventMap>>(
+		channel: TChannel,
+		data: EventPayload<TEventMap, TChannel>,
+		priority: Priority,
+		key?: string,
+	): boolean {
 		if (priority === Priority.P0) {
 			this.emit(channel, data);
 			return true;
@@ -96,7 +92,6 @@ export class EventBus {
 		const count = this.#countByPriority(queuePriority);
 
 		if (priority === Priority.P2 && key) {
-			// Coalesce: replace existing entry with same channel+key
 			const idx = this.#queue.findIndex(e => e.priority === Priority.P2 && e.channel === channel && e.key === key);
 			if (idx >= 0) {
 				this.#queue[idx] = { channel, data, priority, key, timestamp: Date.now() };
@@ -106,19 +101,16 @@ export class EventBus {
 
 		if (count >= bound) {
 			if (priority === Priority.P3) {
-				// Drop oldest P3
 				const oldestIdx = this.#queue.findIndex(e => e.priority === Priority.P3);
 				if (oldestIdx >= 0) {
 					this.#queue.splice(oldestIdx, 1);
 				}
 			} else if (priority === Priority.P2) {
-				// Drop oldest P2
 				const oldestIdx = this.#queue.findIndex(e => e.priority === Priority.P2);
 				if (oldestIdx >= 0) {
 					this.#queue.splice(oldestIdx, 1);
 				}
 			} else {
-				// P1 at capacity — signal backpressure
 				return false;
 			}
 		}
@@ -127,34 +119,30 @@ export class EventBus {
 		return true;
 	}
 
-	/**
-	 * Subscribe to a channel. Returns an unsubscribe function.
-	 * Handlers receive events from both emit() and drain().
-	 */
-	subscribe(channel: string, handler: EventHandler, options?: SubscribeOptions): () => void {
+	subscribe<TChannel extends EventChannel<TEventMap>>(
+		channel: TChannel,
+		handler: EventHandler<EventPayload<TEventMap, TChannel>>,
+		options?: SubscribeOptions,
+	): () => void {
 		if (!this.#listeners.has(channel)) {
 			this.#listeners.set(channel, new Set());
 		}
-		const sub: Subscription = { handler, options };
+		const sub: Subscription<unknown> = { handler: handler as EventHandler<unknown>, options };
 		this.#listeners.get(channel)!.add(sub);
 		return () => this.#listeners.get(channel)?.delete(sub);
 	}
 
-	/** @deprecated Use subscribe() instead. Kept for backward compatibility during migration. */
-	on(channel: string, handler: EventHandler): () => void {
+	on<TChannel extends EventChannel<TEventMap>>(
+		channel: TChannel,
+		handler: EventHandler<EventPayload<TEventMap, TChannel>>,
+	): () => void {
 		return this.subscribe(channel, handler);
 	}
 
-	/**
-	 * Process queued events. Called from the agent loop between turns.
-	 * Processes in priority order (P1 first, then P2, then P3).
-	 * Returns the number of events processed.
-	 */
 	async drain(maxItems = 50): Promise<number> {
 		let processed = 0;
 
 		while (processed < maxItems && this.#queue.length > 0) {
-			// Sort by priority (ascending = highest priority first), then by timestamp
 			this.#queue.sort((a, b) => a.priority - b.priority || a.timestamp - b.timestamp);
 
 			const entry = this.#queue.shift()!;
@@ -165,7 +153,7 @@ export class EventBus {
 						continue;
 					}
 					try {
-						await sub.handler(entry.data);
+						await (sub.handler as EventHandler<unknown>)(entry.data);
 					} catch (err) {
 						logger.error("EventBus drain handler error", {
 							channel: entry.channel,
@@ -181,7 +169,6 @@ export class EventBus {
 		return processed;
 	}
 
-	/** Returns live queue depth by priority level. */
 	depth(): { p1: number; p2: number; p3: number } {
 		return {
 			p1: this.#countByPriority(Priority.P1),
@@ -190,7 +177,6 @@ export class EventBus {
 		};
 	}
 
-	/** Clear all listeners and queued events. */
 	clear(): void {
 		this.#listeners.clear();
 		this.#queue.length = 0;

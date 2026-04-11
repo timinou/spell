@@ -1,0 +1,92 @@
+#+TITLE: SwarmScheduler with Multi-Entry DAG Execution
+#+STATE: DONE
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-392-swarmscheduler-with-multi-entry-dag-exec
+#+EFFORT: L
+#+PRIORITY: A
+#+LAYER: agent-runtime
+#+DEPENDS: PROJ-027-todoitem-data-model-refactor-to-dag-nati
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Narrative
+
+With =MutableDag= providing the graph primitives and =TodoItem= refactored to URI-based DAG nodes, the system needs a scheduler that ties them together: dispatching agents for =task://= work nodes, watching for =data://= node satisfaction, handling dynamic mutations (from handoff/spawn_successor tools), and respecting isolation-gated concurrency.
+
+The existing =scheduleBatch()= is a static batch runner. The existing =executeFluidPlan()= runs a single agent session against a todo list. Neither supports multi-entry concurrent execution with dynamic graph mutation.
+
+=SwarmScheduler= replaces both as the unified execution engine. =scheduleBatch()= becomes a thin wrapper. =executeFluidPlan()= delegates to =SwarmScheduler=.
+
+* Design Decisions
+
+1. =SwarmScheduler= wraps =MutableDag<TodoItem>= and =EventBus<SwarmEventMap>=.
+2. The pump loop: on each cycle, call =dag.getReady(completed, running)=, dispatch ready work nodes to agents, check ready data nodes for artifact existence.
+3. Dynamic mutations: =addNode()= and =removeNode()= are queued and applied between pump cycles (not during a running task's callback). A mutation queue serializes changes.
+4. Concurrency: =maxConcurrency= limits total running tasks. Isolation-gated: when isolation mode is active, independent components run in parallel. When off, single-task serialization (backward compat with existing =normalizeInProgressTask= behavior).
+5. Stagger delay for prompt cache warming preserved.
+6. Cascade failure: if a task fails, all transitive dependents fail with ="Predecessor X failed"=.
+7. =scheduleBatch()= creates a =SwarmScheduler= with isolation off, adds all tasks, runs to completion. Return type unchanged.
+8. Event emission: =todo:task:status= on every status change, =todo:dag:node_added= on dynamic mutations, =swarm:artifact= when data nodes are satisfied.
+
+* Files to Create
+
+** =packages/coding-agent/src/task/swarm-scheduler.ts=
+See PROJ-027 for =MutableDag= and =TodoItem= types it depends on.
+
+* Files to Modify
+
+** =packages/coding-agent/src/task/batch-scheduler.ts=
+=scheduleBatch()= delegates to =SwarmScheduler= internally.
+
+** =packages/coding-agent/src/modes/fluid-mode.ts=
+=executeFluidPlan()= uses =SwarmScheduler= instead of bespoke todo-based execution loop.
+
+* Sub-outline (test-first)
+
+** FEAT-392::scheduler-tests
+File: =packages/coding-agent/test/task/swarm-scheduler.test.ts=
+
+*** Static DAG backward compat
+- 3 independent tasks => all complete, results map has 3 entries.
+
+*** Linear chain ordering
+- a->b->c. b starts only after a completes.
+
+*** Multi-entry parallel
+- 3 roots, maxConcurrency=3, isolation=true => all 3 start (verify via deferred promises).
+
+*** Dynamic addNode
+- While a runs, add b (deps:[a]). After a completes, b starts.
+- Add node with already-completed dep => starts immediately.
+
+*** Dynamic removeNode
+- a->b->c. Remove b while a runs => c cascade-fails.
+
+*** File overlap serialization
+- a and b both have filesDeps=["x.ts"], isolation=true => NOT concurrent.
+
+*** Data node satisfaction
+- data node d, work node w (deps:[d]). Write artifact for d => w starts.
+
+*** Abort signal
+- 3 running, abort => pending aborted, running receive signal.
+
+*** Cascade failure
+- a fails => b (dep:a) fails => c (dep:b) fails.
+
+** FEAT-392::scheduler-impl
+Depends on: FEAT-392::scheduler-tests
+
+** FEAT-392::batch-wrapper
+Refactor =scheduleBatch= to wrap =SwarmScheduler=. Existing =batch-scheduler.test.ts= must pass unchanged.
+
+** FEAT-392::fluid-integration
+Wire =executeFluidPlan= to use =SwarmScheduler=.
+
+* Verification
+- =bun test packages/coding-agent/test/task/swarm-scheduler.test.ts= passes
+- =bun test packages/coding-agent/test/task/batch-scheduler.test.ts= passes (zero changes)
+- =bun check:ts= passes

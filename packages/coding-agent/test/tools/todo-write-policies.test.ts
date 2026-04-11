@@ -3,9 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { type TodoPhase, TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
 import type { TaskPolicy } from "../../src/config/task-policies";
+import type { ToolSession } from "../../src/tools";
 import {
 	applyOps,
 	type FormatSummaryOptions,
@@ -13,7 +12,9 @@ import {
 	getNextTodoIds,
 	injectPolicyGates,
 	type TodoItem,
+	type TodoPhase,
 	type TodoStatus,
+	TodoWriteTool,
 } from "../../src/tools/todo-write";
 
 function makeTask(overrides: Partial<TodoItem> & { id: string; content: string }): TodoItem {

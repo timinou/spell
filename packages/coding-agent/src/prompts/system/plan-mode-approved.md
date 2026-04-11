@@ -65,6 +65,9 @@ Before your final turn, you **MUST**:
 2. Capture verification evidence:
    - Run the focused tests, checks, and manual verification required by the plan and linked child items.
    - If UI, browser, or visual behavior matters, capture screenshots with `puppeteer` `action: "screenshot"` and save them under `{{orgItemArtifactsDir}}/`.
+	- Screenshots and generated images automatically produce `artifact://` URIs (for example `artifact://14b64b/main/screenshot/3.png`). Reference these URIs in the completion report's `*** Artifacts` section.
+	- To persist a session artifact into the plan record, copy it into `{{orgItemArtifactsDir}}/` using `cp`; `artifact://` URIs resolve to filesystem paths in bash.
+	- Subagent artifacts use the format `artifact://<session-id>/<subagent-name>/<tool>/<file>` and are resolvable from the main session.
    - Use artifact filenames that explain what each file proves.
    - For documentation artifacts (org items, spec files, config files), reference the file path or org heading in the completion report — do not screenshot text-based files.
 3. Update org item `{{orgItemId}}` with a completion report via `org update`:
@@ -72,6 +75,7 @@ Before your final turn, you **MUST**:
    - Include `*** Verification`, `*** Artifacts`, and `*** Deviations` subsections
    - Record exact commands/checks, outcomes, and saved artifact paths
    - When referencing saved artifacts in the report, use org-mode file links such as `[[file:{{orgItemArtifactsDir}}/name.png]]` so they render inline
+   - For session-scoped artifacts not yet copied into `{{orgItemArtifactsDir}}/`, reference them as `artifact://<session-id>/<agent>/<tool>/<file>.<ext>` in the report
    - If any tasks were deferred (abandoned with `deferralFupId`), list all FUP references using `[[id:FUP-xxx]]` org links in the Deviations subsection so they are traceable in the plan record
    - If there were no deviations, write `None.`
 4. Close org lifecycle state truthfully:
@@ -129,15 +133,16 @@ Your todo list has been pre-populated from the plan's execution structure.
 Before execution, you **SHOULD** initialize todos with `todo_write` only when you need gates, org links, or a manually curated roster before dispatch.
 
 {{#if waves}}
-### Wave-based Task Dispatch
-The plan's Execution Manifest uses wave structure. Prefer dispatching work through `task` batches and let auto-roster create the visible phases/items:
-1. **Set `phase` to the wave name** — for example `foundation`, `core`, or `verify`
-2. **One task per wave entry** — carry the execution-manifest item into the `task.tasks[]` array
-3. **Use `blockers` for intra-batch dependencies** — express DAG edges with logical task IDs inside the batch
-4. **Omit `todoRef` for new work** — task dispatch auto-creates the roster entries
-5. **Use `todoRef` only to link to pre-existing manual todo items** — for example when you created gated/org-linked items via `todo_write` first
-6. **Use `todo_write` after dispatch when you need to add gates, org links, or notes to the auto-created roster**
+### Wave-based Todo Initialization
+The plan's Execution Manifest uses wave structure. Create one todo phase per wave, with tasks from each wave entry:
+1. **One phase per wave** — name each phase after the wave (e.g., `foundation`, `core`, `verify`)
+2. **One task per wave entry** — each `[[id:…]]` entry in a wave becomes a task in that phase
+3. **`orgItemId` on ALL tasks** — set to the parent org item's CUSTOM_ID (the part before `::`) for lineage tracking. This is non-gating.
+4. **`orgItemClosingId` ONLY on the LAST wave task per org item** — set to the parent org item's CUSTOM_ID. This triggers two-phase verification on completion.
+5. **Cross-wave blockers** — if an org item has tasks in wave N and wave N+1, the wave N+1 task must block on the wave N task
+6. **Intra-wave parallelism** — tasks within the same wave have no blockers between them (they are parallelizable via `task` subagents with `todoRef`)
 7. **Read child org items** — use `org get` on each child item's CUSTOM_ID to populate task `details` from matching sub-outline steps when you need richer execution context
+8. **Mirror dependencies structurally** — every child item must also declare `:DEPENDS:` and `::` sub-outline IDs in org; prose-only dependency descriptions are not sufficient.
 
 Example:
 ```
@@ -151,42 +156,8 @@ task {
 }
 ```
 {{else}}
-When the plan's execution manifest specifies dependencies between items (via `[[id:…]` links or `:DEPENDS:` properties), express these as `blockers` in the `task` batch so the dependency gate enforces correct execution order. Set `phase` to name the auto-created roster phase. Use `todo_write` only when you need pre-structured gates or org links; otherwise omit `todoRef` and let auto-roster create the tracking items.
+When the plan's execution manifest specifies dependencies between items (via `[[id:…]]` links or `:DEPENDS:` properties), express these as `blockers` in your `todo_write` task list so the dependency gate enforces correct execution order. Set `phase` to name the auto-created roster phase. Use `todo_write` only when you need pre-structured gates or org links; otherwise omit `todoRef` and let auto-roster create the tracking items.
 {{/if}}
-After each completed step, you **MUST** immediately update `todo_write` if you are using it so progress stays visible.
-{{else}}
-Before execution, you **MUST** initialize todo tracking for this plan with `todo_write`.
-
-{{#if waves}}
-### Wave-based Todo Initialization
-The plan's Execution Manifest uses wave structure. Create one todo phase per wave, with tasks from each wave entry:
-1. **One phase per wave** — name each phase after the wave (e.g., `foundation`, `core`, `verify`)
-2. **One task per wave entry** — each `[[id:…]]` entry in a wave becomes a task in that phase
-3. **`orgItemId` on ALL tasks** — set to the parent org item's CUSTOM_ID (the part before `::`) for lineage tracking. This is non-gating.
-4. **`orgItemClosingId` ONLY on the LAST wave task per org item** — set to the parent org item's CUSTOM_ID. This triggers two-phase verification on completion.
-5. **Cross-wave blockers** — if an org item has tasks in wave N and wave N+1, the wave N+1 task must block on the wave N task
-6. **Intra-wave parallelism** — tasks within the same wave have no blockers between them (they are parallelizable via `task` subagents with `todoRef`)
-7. **Read child org items** — use `org get` on each child item's CUSTOM_ID to populate task `details` from matching sub-outline steps
-
-Example:
-```
-ops: [{op: "replace", phases: [
-  {name: "foundation", tasks: [
-    {content: "Define type interfaces", orgItemId: "FEAT-001", details: "Sub-outline FEAT-001::define-types"},
-    {content: "Define parser schema", orgItemId: "FEAT-002", details: "Sub-outline FEAT-002::define-schema"}
-  ]},
-  {name: "core", tasks: [
-    {content: "Implement parser", orgItemId: "FEAT-001", blockers: ["task-1"], details: "Sub-outline FEAT-001::implement-parser"},
-    {content: "Implement validator", orgItemId: "FEAT-002", blockers: ["task-2"], details: "Sub-outline FEAT-002::implement-validator"}
-  ]},
-  {name: "verify", tasks: [
-    {content: "Write parser tests", orgItemId: "FEAT-001", orgItemClosingId: "FEAT-001", blockers: ["task-3"], gateCmd: "bun test test/parser.test.ts"},
-    {content: "Write validator tests", orgItemId: "FEAT-002", orgItemClosingId: "FEAT-002", blockers: ["task-4"], gateCmd: "bun test test/validator.test.ts"}
-  ]}
-]}]
-```
-{{else}}
-When the plan's execution manifest specifies dependencies between items (via `[[id:…]` links or `:DEPENDS:` properties), express these as `blockers` in your `todo_write` task list so the dependency gate enforces correct execution order.
 When creating todos from plan execution manifest items, set `orgItemId` on each task to the corresponding child item's CUSTOM_ID (e.g., `FEAT-001-add-auth`). For the final task of each org item, also set `orgItemClosingId` to trigger the verification protocol on completion.
 {{/if}}
 When spawning task subagents to work on a todo item, set `todoRef` on the task to the todo item's ID (e.g., `task-3`) so verification requirements are automatically injected into the subagent's context.

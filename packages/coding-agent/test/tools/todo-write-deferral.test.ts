@@ -15,10 +15,9 @@
 
 import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
+import type { ToolSession } from "../../src/tools";
 import type { FormatSummaryOptions, TodoItem, TodoPhase, TodoStatus } from "../../src/tools/todo-write";
-import { formatSummary } from "../../src/tools/todo-write";
+import { formatSummary, TodoWriteTool } from "../../src/tools/todo-write";
 
 // =============================================================================
 // Helpers

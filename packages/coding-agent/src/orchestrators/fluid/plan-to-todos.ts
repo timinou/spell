@@ -1,4 +1,4 @@
-import type { TodoItem, TodoPhase } from "../../tools/todo-write";
+import { promoteReadyTasks, type TodoItem, type TodoPhase } from "../../tools/todo-write";
 import { splitIntoComponents, topologicalOrder } from "./dag";
 import type { FluidAgentNode, FluidPlan } from "./types";
 
@@ -108,7 +108,6 @@ function materializePlanWaves(waves: PlanWave[]): MaterializedPlanWaves {
 
 	const phases: TodoPhase[] = [];
 	let nextPhaseNumber = 1;
-	let previousWaveTaskIds: string[] = [];
 	for (const wave of waves) {
 		const visibleWaveEntries = wave.entries.filter(entry => !entry.deferred);
 		if (visibleWaveEntries.length === 0) {
@@ -120,11 +119,9 @@ function materializePlanWaves(waves: PlanWave[]): MaterializedPlanWaves {
 			if (!taskId) {
 				throw new Error(`Missing generated task ID for wave entry ${entry.id}`);
 			}
-			const blockers = entry.dependsOn?.length
-				? entry.dependsOn
-						.map(depId => taskIdByEntryId.get(depId))
-						.filter((blockerId): blockerId is string => blockerId !== undefined)
-				: previousWaveTaskIds;
+			const blockers = (entry.dependsOn ?? [])
+				.map(depId => taskIdByEntryId.get(depId))
+				.filter((blockerId): blockerId is string => blockerId !== undefined);
 			const item: TodoItem = {
 				id: taskId,
 				content: entry.step,
@@ -145,18 +142,9 @@ function materializePlanWaves(waves: PlanWave[]): MaterializedPlanWaves {
 			name: wave.name,
 			tasks,
 		});
-		previousWaveTaskIds = tasks.map(task => task.id);
 	}
 
-	for (const phase of phases) {
-		for (const task of phase.tasks) {
-			if (!task.blockers || task.blockers.length === 0) {
-				task.status = "in_progress";
-				return { phases, taskIdByEntryId };
-			}
-		}
-	}
-
+	promoteReadyTasks(phases, false);
 	return { phases, taskIdByEntryId };
 }
 
