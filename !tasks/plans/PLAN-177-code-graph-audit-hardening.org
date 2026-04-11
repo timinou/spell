@@ -1,8 +1,9 @@
 #+TITLE: Code graph audit hardening
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14b66f75e39d597b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-33-35-630Z_14b66f75e39d597b.jsonl]]
 #+CUSTOM_ID: PLAN-177-code-graph-audit-hardening
+
 
 * Initial Message
 
@@ -102,3 +103,21 @@ All fixes are in the Rust code graph crate (=crates/pi-code-graph/=) and its NAP
 - [[id:FEAT-422-precise-heritage-extraction-with-typepar]] [3h] — EdgeKind::TypeParameterOf for heritage precision (depends on FEAT-421)
 - [[id:FEAT-423-eliminate-symbol-name-collisions-in-inde]] [3h] — Drop bare-name keys, scan-based resolution (depends on FEAT-421)
 - [[id:FEAT-424-fix-constructor-dead-code-false-positive]] [3h] — Constructor synthetic edge + dead_code filter + resolve_symbol fix (depends on FEAT-421)
+
+
+** Completion [2026-04-11]
+*** Verification
+- `cargo test -p pi-code-graph` — passed (31 tests).
+- `cargo check -p pi-natives` — passed.
+- `bun check:ts` — passed (`biome check . && tsgo -p tsconfig.json`).
+- `bun check:rs` — passed (`cargo fmt --all -- --check` and `cargo clippy --workspace -- -D warnings`).
+- `bun --cwd=packages/natives run build:native` — passed; rebuilt the native addon used for smoke verification.
+- Manual smoke via `packages/natives/src/code-graph/index.ts` at repo root after touching `.tmp/plan-177-graph-smoke.md`:
+  - `status` returned `fresh`
+  - `context` for `CodeTool` did not include `codeSchema` in the `Inherits` section
+  - `dead_code` output did not include `*.constructor`
+  - `context` for `nonexistent` failed with `Error: No symbol found for context query: nonexistent`
+*** Artifacts
+- No standalone artifacts. Verification evidence is the command output recorded in this completion section; no screenshots were required.
+*** Deviations
+- None.

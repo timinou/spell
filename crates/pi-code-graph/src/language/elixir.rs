@@ -51,21 +51,19 @@ impl ImportResolver for ElixirImportResolver {
 
 	fn resolve(&self, request: ResolveRequest<'_>) -> Result<Option<PathBuf>> {
 		let base_path = module_name_to_path(request.specifier);
-		let candidates = [
-			request
-				.project_root
-				.join(base_path.clone())
-				.with_extension("ex"),
-			request
-				.project_root
-				.join(base_path.clone())
-				.with_extension("exs"),
-			request
-				.project_root
-				.join(base_path.clone())
-				.join("index.ex"),
-			request.project_root.join(base_path).join("index.exs"),
-		];
+		let mut candidates = Vec::with_capacity(8);
+		if request.project_root.join("mix.exs").is_file() {
+			let lib_base = request.project_root.join("lib").join(&base_path);
+			candidates.push(lib_base.with_extension("ex"));
+			candidates.push(lib_base.with_extension("exs"));
+			candidates.push(lib_base.join("index.ex"));
+			candidates.push(lib_base.join("index.exs"));
+		}
+		let root_base = request.project_root.join(&base_path);
+		candidates.push(root_base.with_extension("ex"));
+		candidates.push(root_base.with_extension("exs"));
+		candidates.push(root_base.join("index.ex"));
+		candidates.push(root_base.join("index.exs"));
 		Ok(candidates
 			.into_iter()
 			.find(|candidate| candidate.is_file())
@@ -396,18 +394,67 @@ end
 	}
 
 	#[test]
-	fn elixir_builder_resolves_module_paths() {
+	fn elixir_resolver_finds_modules_under_lib() {
+		let root =
+			std::env::temp_dir().join(format!("pi-code-graph-elixir-lib-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&root);
+		std::fs::create_dir_all(root.join("lib/my_app/tools")).expect("lib directory should exist");
+		std::fs::write(root.join("mix.exs"), "defmodule MyApp.MixProject do end")
+			.expect("mix file should be written");
+		std::fs::write(
+			root.join("lib/my_app/tools/helper.ex"),
+			"defmodule MyApp.Tools.Helper do\nend\n",
+		)
+		.expect("helper file should be written");
+
+		let resolver = ElixirImportResolver;
+		let resolved = resolver
+			.resolve(ResolveRequest {
+				project_root: &root,
+				from_file:    Path::new("lib/main.ex"),
+				specifier:    "MyApp.Tools.Helper",
+			})
+			.expect("resolve should succeed");
+		assert_eq!(resolved, Some(PathBuf::from("lib/my_app/tools/helper.ex")));
+		let _ = std::fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn elixir_resolver_falls_back_to_root_without_mix() {
+		let root =
+			std::env::temp_dir().join(format!("pi-code-graph-elixir-root-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&root);
+		std::fs::create_dir_all(root.join("my_app/tools")).expect("root directory should exist");
+		std::fs::write(root.join("my_app/tools/helper.ex"), "defmodule MyApp.Tools.Helper do\nend\n")
+			.expect("helper file should be written");
+
+		let resolver = ElixirImportResolver;
+		let resolved = resolver
+			.resolve(ResolveRequest {
+				project_root: &root,
+				from_file:    Path::new("main.ex"),
+				specifier:    "MyApp.Tools.Helper",
+			})
+			.expect("resolve should succeed");
+		assert_eq!(resolved, Some(PathBuf::from("my_app/tools/helper.ex")));
+		let _ = std::fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn elixir_builder_resolves_lib_layout() {
 		let root = std::env::temp_dir().join(format!("pi-code-graph-elixir-{}", std::process::id()));
 		let _ = std::fs::remove_dir_all(&root);
-		std::fs::create_dir_all(root.join("my_app/tools")).expect("directory should exist");
+		std::fs::create_dir_all(root.join("lib/my_app/tools")).expect("directory should exist");
+		std::fs::write(root.join("mix.exs"), "defmodule MyApp.MixProject do end")
+			.expect("mix file should be written");
 		std::fs::write(
-			root.join("main.ex"),
+			root.join("lib/main.ex"),
 			"defmodule MyApp.Runner do\n  alias MyApp.Tools.Helper, as: Helper\n\n  def run do\n    \
 			 Helper.work()\n  end\nend\n",
 		)
 		.expect("main file should be written");
 		std::fs::write(
-			root.join("my_app/tools/helper.ex"),
+			root.join("lib/my_app/tools/helper.ex"),
 			"defmodule MyApp.Tools.Helper do\n  def work, do: :ok\nend\n",
 		)
 		.expect("helper file should be written");

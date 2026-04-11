@@ -1,5 +1,5 @@
 #+TITLE: Fix constructor dead-code false positives and symbol resolution fallback
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14b66f75e39d597b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-33-35-630Z_14b66f75e39d597b.jsonl]]
 #+CUSTOM_ID: FEAT-424-fix-constructor-dead-code-false-positive
@@ -7,6 +7,8 @@
 #+PRIORITY: #A
 #+LAYER: backend
 #+DEPENDS: FEAT-421-distinguish-type-only-imports-with-edgek
+
+NOTE [2026-04-11]: Implemented constructor/reference/symbol fallback fixes and verified with targeted query and TypeScript tests plus cargo checks.
 
 * Initial Message
 

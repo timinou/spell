@@ -149,7 +149,15 @@ impl CodeGraph {
 			graph,
 			start,
 			Direction::Incoming,
-			&[EdgeKind::Calls, EdgeKind::References, EdgeKind::Inherits, EdgeKind::Imports],
+			[
+				EdgeKind::Calls,
+				EdgeKind::References,
+				EdgeKind::Inherits,
+				EdgeKind::Imports,
+				EdgeKind::TypeImports,
+				EdgeKind::TypeParameterOf,
+			]
+			.as_slice(),
 			max_depth,
 		);
 		Some(GraphImpactResult { target: summary_for_node(graph, start)?, levels })
@@ -180,7 +188,10 @@ impl CodeGraph {
 				let GraphNode::Symbol(symbol) = graph.node_weight(node_index)? else {
 					return None;
 				};
-				if symbol.exported || matches!(symbol.kind, SymbolKind::Module | SymbolKind::Template) {
+				if symbol.exported
+					|| matches!(symbol.kind, SymbolKind::Module | SymbolKind::Template)
+					|| (symbol.kind == SymbolKind::Method && symbol.name == "constructor")
+				{
 					return None;
 				}
 				let has_inbound_usage =
@@ -251,7 +262,14 @@ fn resolve_symbol(
 		code_graph
 			.graph_search(query, 10)
 			.into_iter()
-			.find_map(|hit| find_node_by_summary(graph, &hit.summary))
+			.filter(|hit| hit.summary.kind != "file")
+			.find_map(|hit| {
+				let node_index = find_node_by_summary(graph, &hit.summary)?;
+				match graph.node_weight(node_index) {
+					Some(GraphNode::Symbol(symbol)) if symbol.name.contains(query) => Some(node_index),
+					_ => None,
+				}
+			})
 	})
 }
 
@@ -419,24 +437,50 @@ mod tests {
 				.file_stem()
 				.and_then(|stem| stem.to_str())
 				.unwrap_or("entry");
-			let mut imports = Vec::new();
-			let references = match name {
-				"caller" => {
-					imports.push(ExtractedImport {
+			if name == "constructor_holder" {
+				return Ok(ExtractedFile {
+					path:     path.to_path_buf(),
+					language: self.language(),
+					symbols:  vec![ExtractedSymbol {
+						name:           "constructor".into(),
+						qualified_name: format!("{}::constructor", path.display()),
+						kind:           SymbolKind::Method,
+						exported:       false,
+						line:           1,
+						column:         1,
+						detail:         None,
+						references:     Vec::new(),
+					}],
+					imports:  Vec::new(),
+				});
+			}
+			let (imports, references) = match name {
+				"caller" => (
+					vec![ExtractedImport {
 						specifier:    "./callee.query".into(),
 						bindings:     vec![ExtractedImportBinding {
 							imported_name: "callee".into(),
 							local_name:    "callee".into(),
 						}],
 						is_type_only: false,
-					});
+					}],
 					vec![ExtractedReference {
 						target_name: "callee".into(),
 						edge_kind:   EdgeKind::Calls,
-					}]
-				},
-				"orphan" => Vec::new(),
-				_ => Vec::new(),
+					}],
+				),
+				"type_consumer" => (
+					vec![ExtractedImport {
+						specifier:    "./type_only.query".into(),
+						bindings:     vec![ExtractedImportBinding {
+							imported_name: "type_only".into(),
+							local_name:    "type_only".into(),
+						}],
+						is_type_only: true,
+					}],
+					Vec::new(),
+				),
+				_ => (Vec::new(), Vec::new()),
 			};
 			Ok(ExtractedFile {
 				path: path.to_path_buf(),
@@ -467,6 +511,7 @@ mod tests {
 		fn resolve(&self, request: ResolveRequest<'_>) -> crate::Result<Option<PathBuf>> {
 			Ok(match request.specifier {
 				"./callee.query" => Some(PathBuf::from("callee.query")),
+				"./type_only.query" => Some(PathBuf::from("type_only.query")),
 				_ => None,
 			})
 		}
@@ -481,7 +526,14 @@ mod tests {
 			.join(format!("pi-code-graph-queries-{}-{unique}", std::process::id()));
 		let _ = std::fs::remove_dir_all(&root);
 		std::fs::create_dir_all(&root).expect("query graph temp dir should exist");
-		for file in ["caller.query", "callee.query", "orphan.query"] {
+		for file in [
+			"caller.query",
+			"callee.query",
+			"orphan.query",
+			"type_consumer.query",
+			"type_only.query",
+			"constructor_holder.query",
+		] {
 			std::fs::write(root.join(file), file).expect("query fixture should be written");
 		}
 		let mut registry = LanguageRegistry::new();
@@ -535,6 +587,49 @@ mod tests {
 				.iter()
 				.any(|node| node.label.ends_with("callee.query::callee"))
 		}));
+	}
+
+	#[test]
+	fn queries_impact_includes_type_only_dependents() {
+		let graph = build_query_graph();
+		let impact = graph
+			.graph_impact("type_only", 4)
+			.expect("type-only impact should exist");
+		assert!(impact.levels.iter().any(|level| {
+			level
+				.nodes
+				.iter()
+				.any(|node| node.label.ends_with("type_consumer.query"))
+		}));
+	}
+
+	#[test]
+	fn dead_code_ignores_type_only_references() {
+		let graph = build_query_graph();
+		let dead_code = graph.graph_dead_code();
+		assert!(
+			dead_code
+				.iter()
+				.any(|item| item.symbol.label.ends_with("type_only.query::type_only"))
+		);
+	}
+
+	#[test]
+	fn dead_code_excludes_constructors() {
+		let graph = build_query_graph();
+		let dead_code = graph.graph_dead_code();
+		assert!(!dead_code.iter().any(|item| {
+			item
+				.symbol
+				.label
+				.ends_with("constructor_holder.query::constructor")
+		}));
+	}
+
+	#[test]
+	fn resolve_symbol_does_not_match_files() {
+		let graph = build_query_graph();
+		assert!(graph.graph_context("caller.query").is_none());
 	}
 
 	#[test]

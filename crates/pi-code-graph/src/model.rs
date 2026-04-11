@@ -51,6 +51,8 @@ pub enum EdgeKind {
 	References,
 	Inherits,
 	Renders,
+	TypeImports,
+	TypeParameterOf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
