@@ -1,5 +1,9 @@
 #+TITLE: Org Blackboard for Swarm State
+<<<<<<< HEAD
 #+STATE: DONE
+=======
+#+STATE: ITEM
+>>>>>>> origin/main
 #+SESSION_ID: 14b659b76a31eab8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
 #+CUSTOM_ID: FEAT-383-org-blackboard-for-swarm-state
@@ -8,8 +12,11 @@
 #+LAYER: agent-runtime
 #+DEPENDS: FEAT-382-mutable-dag-scheduler-swarmscheduler
 
+<<<<<<< HEAD
 NOTE [2026-04-11]: Superseded by unified swarm plan.
 
+=======
+>>>>>>> origin/main
 * Narrative
 
 In the current architecture, subagents are fully isolated: they receive a static assignment at launch and return a single result at completion. There is no way for a running agent to share intermediate findings with peers, announce that it discovered a dependency another agent needs, or leave structured state that survives beyond its session.

@@ -1,5 +1,9 @@
 #+TITLE: Handoff Tool for Peer Agent Transfer
+<<<<<<< HEAD
 #+STATE: DONE
+=======
+#+STATE: ITEM
+>>>>>>> origin/main
 #+SESSION_ID: 14b659b76a31eab8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
 #+CUSTOM_ID: FEAT-386-handoff-tool-for-peer-agent-transfer
@@ -8,8 +12,11 @@
 #+LAYER: agent-runtime
 #+DEPENDS: FEAT-383-org-blackboard-for-swarm-state FEAT-385-swarm-event-bus-channels-and-artifact-no
 
+<<<<<<< HEAD
 NOTE [2026-04-11]: Superseded by unified swarm plan.
 
+=======
+>>>>>>> origin/main
 * Initial Message
 
 show me the task tool and todo write tool system prompts

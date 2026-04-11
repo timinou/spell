@@ -4,8 +4,20 @@
 
 * Tasks
 
-** DONE Read all org items and spec, verify consistency
+** DONE Find existing test patterns for config code
 :PROPERTIES:
-:TASK_ID: task-1
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Map the @bgotink/kdl library API for round-trip editing
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Map all consumers of Settings.get/set
+:PROPERTIES:
+:TASK_ID: task-4
 :STATUS: completed
 :END:

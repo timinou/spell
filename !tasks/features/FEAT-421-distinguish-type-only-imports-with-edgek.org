@@ -1,11 +1,13 @@
 #+TITLE: Distinguish type-only imports with EdgeKind TypeImports
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14b66f75e39d597b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-33-35-630Z_14b66f75e39d597b.jsonl]]
 #+CUSTOM_ID: FEAT-421-distinguish-type-only-imports-with-edgek
 #+EFFORT: 3h
 #+PRIORITY: #A
 #+LAYER: backend
+
+NOTE [2026-04-11]: Implemented EdgeKind::TypeImports across model/indexer/query/typescript tests. Verified with cargo test -p pi-code-graph type_only && cargo test -p pi-code-graph queries && cargo check -p pi-code-graph && cargo check -p pi-natives.
 
 * Initial Message
 
