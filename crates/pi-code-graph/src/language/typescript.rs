@@ -483,9 +483,21 @@ fn collect_references(node: Node<'_>, source: &str) -> Vec<ExtractedReference> {
 	let mut refs = Vec::new();
 	visit_named(node, &mut |child| match child.kind() {
 		"call_expression" | "new_expression" => {
-			if let Some(target) = child.child_by_field_name("function") {
+			if let Some(target) = child
+				.child_by_field_name("function")
+				.or_else(|| child.child_by_field_name("constructor"))
+			{
 				for name in collect_target_names(target, source) {
-					refs.push(ExtractedReference { target_name: name, edge_kind: EdgeKind::Calls });
+					refs.push(ExtractedReference {
+						target_name: name.clone(),
+						edge_kind:   EdgeKind::Calls,
+					});
+					if child.kind() == "new_expression" {
+						refs.push(ExtractedReference {
+							target_name: format!("{name}.constructor"),
+							edge_kind:   EdgeKind::Calls,
+						});
+					}
 				}
 			}
 		},
@@ -497,13 +509,46 @@ fn collect_references(node: Node<'_>, source: &str) -> Vec<ExtractedReference> {
 fn collect_heritage_references(node: Node<'_>, source: &str) -> Vec<ExtractedReference> {
 	let mut refs = Vec::new();
 	visit_named(node, &mut |child| {
-		if matches!(child.kind(), "extends_clause" | "implements_clause" | "extends_type_clause") {
-			for name in collect_identifier_names(child, source) {
-				refs.push(ExtractedReference { target_name: name, edge_kind: EdgeKind::Inherits });
-			}
+		if !matches!(child.kind(), "extends_clause" | "implements_clause" | "extends_type_clause") {
+			return;
+		}
+		let mut clause_cursor = child.walk();
+		for clause_child in child.named_children(&mut clause_cursor) {
+			collect_heritage_from_type(clause_child, source, &mut refs);
 		}
 	});
 	dedupe_references(refs)
+}
+
+fn collect_heritage_from_type(node: Node<'_>, source: &str, refs: &mut Vec<ExtractedReference>) {
+	match node.kind() {
+		"type_identifier" | "identifier" | "nested_type_identifier" => {
+			let target_name = node_text(node, source);
+			if !target_name.is_empty() {
+				refs.push(ExtractedReference { target_name, edge_kind: EdgeKind::Inherits });
+			}
+		},
+		"type_arguments" | "type_parameters" => {
+			for name in collect_identifier_names(node, source) {
+				refs.push(ExtractedReference {
+					target_name: name,
+					edge_kind:   EdgeKind::TypeParameterOf,
+				});
+			}
+		},
+		"generic_type" => {
+			let mut cursor = node.walk();
+			for child in node.named_children(&mut cursor) {
+				collect_heritage_from_type(child, source, refs);
+			}
+		},
+		_ => {
+			let mut cursor = node.walk();
+			for child in node.named_children(&mut cursor) {
+				collect_heritage_from_type(child, source, refs);
+			}
+		},
+	}
 }
 
 fn collect_target_names(node: Node<'_>, source: &str) -> Vec<String> {
@@ -529,16 +574,35 @@ fn collect_target_names(node: Node<'_>, source: &str) -> Vec<String> {
 
 fn collect_identifier_names(node: Node<'_>, source: &str) -> Vec<String> {
 	let mut names = Vec::new();
-	visit_named(node, &mut |child| {
-		if matches!(child.kind(), "identifier" | "property_identifier" | "type_identifier") {
-			names.push(node_text(child, source));
-		}
-	});
+	collect_identifier_names_into(node, source, &mut names);
 	let mut seen = BTreeSet::new();
 	names
 		.into_iter()
 		.filter(|name| seen.insert(name.clone()))
 		.collect()
+}
+
+fn collect_identifier_names_into(node: Node<'_>, source: &str, names: &mut Vec<String>) {
+	match node.kind() {
+		"nested_type_identifier" => {
+			let name = node_text(node, source);
+			if !name.is_empty() {
+				names.push(name);
+			}
+		},
+		"identifier" | "property_identifier" | "type_identifier" => {
+			let name = node_text(node, source);
+			if !name.is_empty() {
+				names.push(name);
+			}
+		},
+		_ => {
+			let mut cursor = node.walk();
+			for child in node.named_children(&mut cursor) {
+				collect_identifier_names_into(child, source, names);
+			}
+		},
+	}
 }
 
 fn visit_named(node: Node<'_>, visitor: &mut impl FnMut(Node<'_>)) {
@@ -705,6 +769,143 @@ export class Runner implements AgentTool<typeof schema> {
 				&& symbol.references.iter().any(|reference| {
 					reference.target_name == "AgentTool" && reference.edge_kind == EdgeKind::Inherits
 				})
+		}));
+	}
+
+	#[test]
+	fn typescript_extractor_marks_type_only_imports() {
+		let extractor = TypeScriptExtractor;
+		let file = extractor
+			.extract(
+				Path::new("imports.ts"),
+				r#"
+				import type { Foo } from "./foo";
+				import { Bar } from "./bar";
+				"#,
+			)
+			.expect("extract should succeed");
+
+		assert!(
+			file
+				.imports
+				.iter()
+				.any(|import| import.specifier == "./foo" && import.is_type_only)
+		);
+		assert!(
+			file
+				.imports
+				.iter()
+				.any(|import| import.specifier == "./bar" && !import.is_type_only)
+		);
+	}
+
+	#[test]
+	fn heritage_distinguishes_base_from_type_param() {
+		let extractor = TypeScriptExtractor;
+		let file = extractor
+			.extract(
+				Path::new("heritage.ts"),
+				r#"
+				import { Bar, Baz, Qux } from "./dep";
+				export class Foo extends Bar<Baz> implements Qux {}
+				"#,
+			)
+			.expect("extract should succeed");
+		let foo = file
+			.symbols
+			.iter()
+			.find(|symbol| symbol.name == "Foo")
+			.expect("Foo symbol should exist");
+
+		assert!(foo.references.iter().any(|reference| {
+			reference.target_name == "Bar" && reference.edge_kind == EdgeKind::Inherits
+		}));
+		assert!(foo.references.iter().any(|reference| {
+			reference.target_name == "Qux" && reference.edge_kind == EdgeKind::Inherits
+		}));
+		assert!(foo.references.iter().any(|reference| {
+			reference.target_name == "Baz" && reference.edge_kind == EdgeKind::TypeParameterOf
+		}));
+		assert!(!foo.references.iter().any(|reference| {
+			reference.target_name == "Baz" && reference.edge_kind == EdgeKind::Inherits
+		}));
+	}
+
+	#[test]
+	fn heritage_handles_plain_extends_without_generics() {
+		let extractor = TypeScriptExtractor;
+		let file = extractor
+			.extract(Path::new("plain.ts"), r#"export class Child extends Parent {}"#)
+			.expect("extract should succeed");
+		let child = file
+			.symbols
+			.iter()
+			.find(|symbol| symbol.name == "Child")
+			.expect("Child symbol should exist");
+
+		assert!(child.references.iter().any(|reference| {
+			reference.target_name == "Parent" && reference.edge_kind == EdgeKind::Inherits
+		}));
+		assert!(
+			!child
+				.references
+				.iter()
+				.any(|reference| { reference.edge_kind == EdgeKind::TypeParameterOf })
+		);
+	}
+
+	#[test]
+	fn interface_extends_type_clause_separates_params() {
+		let extractor = TypeScriptExtractor;
+		let file = extractor
+			.extract(
+				Path::new("wrapper.ts"),
+				r#"export interface Wrapper<T> extends Base<T, string> {}"#,
+			)
+			.expect("extract should succeed");
+		let wrapper = file
+			.symbols
+			.iter()
+			.find(|symbol| symbol.name == "Wrapper")
+			.expect("Wrapper symbol should exist");
+
+		assert!(wrapper.references.iter().any(|reference| {
+			reference.target_name == "Base" && reference.edge_kind == EdgeKind::Inherits
+		}));
+		assert!(wrapper.references.iter().any(|reference| {
+			reference.target_name == "T" && reference.edge_kind == EdgeKind::TypeParameterOf
+		}));
+		assert!(
+			!wrapper
+				.references
+				.iter()
+				.any(|reference| reference.target_name == "string")
+		);
+	}
+
+	#[test]
+	fn new_expression_creates_constructor_reference() {
+		let extractor = TypeScriptExtractor;
+		let file = extractor
+			.extract(
+				Path::new("new-expression.ts"),
+				r#"
+				class Runner { constructor() {} }
+				function run() { return new Runner(); }
+				"#,
+			)
+			.expect("extract should succeed");
+		let run = file
+			.symbols
+			.iter()
+			.find(|symbol| symbol.name == "run")
+			.expect("run symbol should exist");
+
+		assert!(run.references.iter().any(|reference| {
+			reference.target_name == "Runner" && reference.edge_kind == EdgeKind::Calls
+		}));
+		assert!(run.references.iter().any(|reference| {
+			reference.target_name == "Runner.constructor" && reference.edge_kind == EdgeKind::Calls
 		}));
 	}
 

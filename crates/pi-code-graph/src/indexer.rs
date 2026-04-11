@@ -93,10 +93,13 @@ impl CodeGraphBuilder {
 				continue;
 			}
 			let absolute_path = entry.into_path();
+			let relative_path = relative_to_root(&root, &absolute_path)?;
+			if relative_path.starts_with(".spell") {
+				continue;
+			}
 			let Some(registered) = self.registry.match_path(&absolute_path) else {
 				continue;
 			};
-			let relative_path = relative_to_root(&root, &absolute_path)?;
 			let source = fs::read_to_string(&absolute_path)?;
 			let metadata = fs::metadata(&absolute_path)?;
 			files.insert(relative_path.clone(), FileFingerprint::from_metadata(&metadata)?);
@@ -123,7 +126,6 @@ impl CodeGraphBuilder {
 					detail:         symbol.detail,
 				}));
 				graph.add_edge(file_index, symbol_index, EdgeKind::Defines);
-				symbol_nodes.insert((relative_path.clone(), symbol.name.clone()), symbol_index);
 				symbol_nodes
 					.insert((relative_path.clone(), symbol.qualified_name.clone()), symbol_index);
 				symbol_refs.push((graph.to_index(symbol_index), symbol.references));
@@ -149,17 +151,27 @@ impl CodeGraphBuilder {
 				let Some(target) = resolved else {
 					continue;
 				};
+				let file_edge = if import.is_type_only {
+					EdgeKind::TypeImports
+				} else {
+					EdgeKind::Imports
+				};
+				let symbol_edge = if import.is_type_only {
+					EdgeKind::TypeImports
+				} else {
+					EdgeKind::References
+				};
 				if let Some(&to_index) = file_nodes.get(&target) {
-					graph.add_edge(from_index, to_index, EdgeKind::Imports);
+					graph.add_edge(from_index, to_index, file_edge);
 					for ExtractedImportBinding { imported_name, local_name } in &import.bindings {
 						import_bindings
 							.entry(path.clone())
 							.or_default()
 							.insert(local_name.clone(), (target.clone(), imported_name.clone()));
-						if let Some(&symbol_index) =
-							symbol_nodes.get(&(target.clone(), imported_name.clone()))
+						if let Some(symbol_index) =
+							unique_symbol_match_in_file(&graph, &symbol_nodes, &target, imported_name)
 						{
-							graph.add_edge(from_index, symbol_index, EdgeKind::References);
+							graph.add_edge(from_index, symbol_index, symbol_edge);
 						}
 					}
 				}
@@ -174,6 +186,7 @@ impl CodeGraphBuilder {
 			};
 			for reference in references {
 				if let Some(to_index) = resolve_reference_target(
+					&graph,
 					&symbol_nodes,
 					&import_bindings,
 					&from_file,
@@ -207,6 +220,7 @@ impl CodeGraphBuilder {
 	reason = "Expanded branches keep dotted target resolution readable"
 )]
 fn resolve_reference_target(
+	graph: &StableGraph<GraphNode, EdgeKind>,
 	symbol_nodes: &BTreeMap<(PathBuf, String), petgraph::stable_graph::NodeIndex>,
 	import_bindings: &ImportBindingMap,
 	from_file: &Path,
@@ -217,12 +231,19 @@ fn resolve_reference_target(
 	{
 		return Some(target_index);
 	}
+	if let Some(target_index) =
+		unique_symbol_match_in_file(graph, symbol_nodes, from_file, target_name)
+	{
+		return Some(target_index);
+	}
 	if let Some((namespace, member)) = target_name.split_once('.')
 		&& let Some((target_file, _imported_name)) = import_bindings
 			.get(from_file)
 			.and_then(|bindings| bindings.get(namespace))
 	{
-		if let Some(&target_index) = symbol_nodes.get(&(target_file.clone(), member.to_string())) {
+		if let Some(target_index) =
+			unique_symbol_match_in_file(graph, symbol_nodes, target_file, member)
+		{
 			return Some(target_index);
 		}
 	}
@@ -230,10 +251,28 @@ fn resolve_reference_target(
 		.get(from_file)
 		.and_then(|bindings| bindings.get(target_name))
 		.and_then(|(target_file, imported_name)| {
-			symbol_nodes
-				.get(&(target_file.clone(), imported_name.clone()))
-				.copied()
+			unique_symbol_match_in_file(graph, symbol_nodes, target_file, imported_name)
 		})
+}
+
+fn unique_symbol_match_in_file(
+	graph: &StableGraph<GraphNode, EdgeKind>,
+	symbol_nodes: &BTreeMap<(PathBuf, String), petgraph::stable_graph::NodeIndex>,
+	file: &Path,
+	target_name: &str,
+) -> Option<petgraph::stable_graph::NodeIndex> {
+	let mut matches = symbol_nodes
+		.range((file.to_path_buf(), String::new())..)
+		.take_while(|((path, _), _)| path == file)
+		.filter_map(|((..), &index)| match graph.node_weight(index) {
+			Some(GraphNode::Symbol(symbol)) if symbol.name == target_name => Some(index),
+			_ => None,
+		});
+	let first = matches.next()?;
+	if matches.next().is_some() {
+		return None;
+	}
+	Some(first)
 }
 
 fn build_stats(graph: &StableGraph<GraphNode, EdgeKind>) -> GraphStats {
@@ -297,37 +336,114 @@ mod tests {
 				.file_stem()
 				.and_then(|stem| stem.to_str())
 				.unwrap_or("entry");
-			let mut imports = Vec::new();
-			let mut references = Vec::new();
-			if name == "caller" {
-				imports.push(ExtractedImport {
-					specifier:    "./callee.fake".into(),
-					bindings:     vec![ExtractedImportBinding {
-						imported_name: "callee".into(),
-						local_name:    "calleeAlias".into(),
-					}],
-					is_type_only: false,
-				});
-				references.push(ExtractedReference {
-					target_name: "calleeAlias".into(),
-					edge_kind:   EdgeKind::Calls,
-				});
-			}
-			Ok(ExtractedFile {
-				path: path.to_path_buf(),
-				language: self.language(),
-				symbols: vec![ExtractedSymbol {
-					name: name.into(),
-					qualified_name: format!("{}::{name}", path.display()),
-					kind: SymbolKind::Function,
-					exported: true,
-					line: 1,
-					column: 1,
-					detail: None,
-					references,
-				}],
-				imports,
-			})
+			let file = match name {
+				"dupes" => ExtractedFile {
+					path:     path.to_path_buf(),
+					language: self.language(),
+					symbols:  vec![
+						ExtractedSymbol {
+							name:           "process".into(),
+							qualified_name: format!("{}::Alpha.process", path.display()),
+							kind:           SymbolKind::Method,
+							exported:       false,
+							line:           1,
+							column:         1,
+							detail:         None,
+							references:     vec![ExtractedReference {
+								target_name: "process".into(),
+								edge_kind:   EdgeKind::Calls,
+							}],
+						},
+						ExtractedSymbol {
+							name:           "process".into(),
+							qualified_name: format!("{}::Beta.process", path.display()),
+							kind:           SymbolKind::Method,
+							exported:       false,
+							line:           2,
+							column:         1,
+							detail:         None,
+							references:     Vec::new(),
+						},
+					],
+					imports:  Vec::new(),
+				},
+				"unique" => ExtractedFile {
+					path:     path.to_path_buf(),
+					language: self.language(),
+					symbols:  vec![
+						ExtractedSymbol {
+							name:           "caller".into(),
+							qualified_name: format!("{}::caller", path.display()),
+							kind:           SymbolKind::Function,
+							exported:       true,
+							line:           1,
+							column:         1,
+							detail:         None,
+							references:     vec![ExtractedReference {
+								target_name: "unique_fn".into(),
+								edge_kind:   EdgeKind::Calls,
+							}],
+						},
+						ExtractedSymbol {
+							name:           "unique_fn".into(),
+							qualified_name: format!("{}::unique_fn", path.display()),
+							kind:           SymbolKind::Function,
+							exported:       true,
+							line:           2,
+							column:         1,
+							detail:         None,
+							references:     Vec::new(),
+						},
+					],
+					imports:  Vec::new(),
+				},
+				_ => {
+					let (imports, references) = match name {
+						"caller" => (
+							vec![ExtractedImport {
+								specifier:    "./callee.fake".into(),
+								bindings:     vec![ExtractedImportBinding {
+									imported_name: "callee".into(),
+									local_name:    "calleeAlias".into(),
+								}],
+								is_type_only: false,
+							}],
+							vec![ExtractedReference {
+								target_name: "calleeAlias".into(),
+								edge_kind:   EdgeKind::Calls,
+							}],
+						),
+						"type_caller" => (
+							vec![ExtractedImport {
+								specifier:    "./callee.fake".into(),
+								bindings:     vec![ExtractedImportBinding {
+									imported_name: "callee".into(),
+									local_name:    "calleeAlias".into(),
+								}],
+								is_type_only: true,
+							}],
+							Vec::new(),
+						),
+						_ => (Vec::new(), Vec::new()),
+					};
+					ExtractedFile {
+						path: path.to_path_buf(),
+						language: self.language(),
+						symbols: vec![ExtractedSymbol {
+							name: name.into(),
+							qualified_name: format!("{}::{name}", path.display()),
+							kind: SymbolKind::Function,
+							exported: true,
+							line: 1,
+							column: 1,
+							detail: None,
+							references,
+						}],
+						imports,
+					}
+				},
+			};
+			Ok(file)
 		}
 	}
 
@@ -368,6 +484,119 @@ mod tests {
 		assert_eq!(outcome.graph.stats().symbol_count, 2);
 		assert_eq!(outcome.graph.count_edges(EdgeKind::Imports), 1);
 		assert_eq!(outcome.graph.count_edges(EdgeKind::Calls), 1);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn type_only_imports_use_type_imports_edge() {
+		let root =
+			std::env::temp_dir().join(format!("pi-code-graph-type-imports-{}", std::process::id()));
+		let cache_dir = root.join("cache");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&root).expect("temp dir should be created");
+		fs::write(root.join("type_caller.fake"), "type caller")
+			.expect("type caller file should be written");
+		fs::write(root.join("callee.fake"), "callee").expect("callee file should be written");
+
+		let mut registry = LanguageRegistry::new();
+		registry
+			.register(Arc::new(FakeExtractor), Arc::new(FakeResolver))
+			.expect("registration should succeed");
+		let builder = CodeGraphBuilder::new(registry, CacheStore::new(cache_dir));
+		let outcome = builder
+			.build(&BuildGraphOptions::new(&root))
+			.expect("build should succeed");
+
+		assert_eq!(outcome.graph.count_edges(EdgeKind::TypeImports), 2);
+		assert_eq!(outcome.graph.count_edges(EdgeKind::Imports), 0);
+		assert_eq!(outcome.graph.count_edges(EdgeKind::References), 0);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn duplicate_method_names_do_not_collide() {
+		let root = std::env::temp_dir()
+			.join(format!("pi-code-graph-duplicate-symbols-{}", std::process::id()));
+		let cache_dir = root.join("cache");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&root).expect("temp dir should be created");
+		fs::write(root.join("dupes.fake"), "dupes").expect("fixture file should be written");
+
+		let mut registry = LanguageRegistry::new();
+		registry
+			.register(Arc::new(FakeExtractor), Arc::new(FakeResolver))
+			.expect("registration should succeed");
+		let builder = CodeGraphBuilder::new(registry, CacheStore::new(cache_dir));
+		let outcome = builder
+			.build(&BuildGraphOptions::new(&root))
+			.expect("build should succeed");
+
+		assert!(
+			outcome
+				.graph
+				.symbol_names()
+				.iter()
+				.any(|name| name.ends_with("dupes.fake::Alpha.process"))
+		);
+		assert!(
+			outcome
+				.graph
+				.symbol_names()
+				.iter()
+				.any(|name| name.ends_with("dupes.fake::Beta.process"))
+		);
+		assert_eq!(outcome.graph.count_edges(EdgeKind::Calls), 0);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn unique_bare_name_still_resolves() {
+		let root =
+			std::env::temp_dir().join(format!("pi-code-graph-unique-symbol-{}", std::process::id()));
+		let cache_dir = root.join("cache");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&root).expect("temp dir should be created");
+		fs::write(root.join("unique.fake"), "unique").expect("fixture file should be written");
+
+		let mut registry = LanguageRegistry::new();
+		registry
+			.register(Arc::new(FakeExtractor), Arc::new(FakeResolver))
+			.expect("registration should succeed");
+		let builder = CodeGraphBuilder::new(registry, CacheStore::new(cache_dir));
+		let outcome = builder
+			.build(&BuildGraphOptions::new(&root))
+			.expect("build should succeed");
+
+		assert_eq!(outcome.graph.count_edges(EdgeKind::Calls), 1);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn builder_cache_status_ignores_spell_sources() {
+		let root =
+			std::env::temp_dir().join(format!("pi-code-graph-spell-sources-{}", std::process::id()));
+		let cache_dir = root.join("cache");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join(".spell")).expect("spell directory should be created");
+		fs::write(root.join("visible.fake"), "visible").expect("visible file should be written");
+		fs::write(root.join(".spell/hidden.fake"), "hidden").expect("hidden file should be written");
+
+		let mut registry = LanguageRegistry::new();
+		registry
+			.register(Arc::new(FakeExtractor), Arc::new(FakeResolver))
+			.expect("registration should succeed");
+		let builder = CodeGraphBuilder::new(registry, CacheStore::new(cache_dir));
+		builder
+			.build(&BuildGraphOptions::new(&root))
+			.expect("build should succeed");
+
+		fs::write(root.join(".spell/hidden.fake"), "updated hidden")
+			.expect("hidden file should be updated");
+
+		let status = builder
+			.cache_status(&root)
+			.expect("cache status should succeed");
+		assert_eq!(status, CacheStatus::Fresh);
 		let _ = fs::remove_dir_all(root);
 	}
 }
