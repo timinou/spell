@@ -7,10 +7,10 @@ use crate::{buffer::CodeBuffer, error::{CodeEngineError, Result}, language::{Dec
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavigateAction { NodeAt, DefunAt, Parent, Siblings, Children, References }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct NavigateItem { pub node_type: String, pub text: String, pub line: u32, pub end_line: u32 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct NavigateResult { pub node_type: String, pub text: String, pub line: u32, pub end_line: u32, pub column: u32, pub parent_type: Option<String>, pub name: Option<String>, pub kind: Option<String>, pub items: Vec<NavigateItem>, pub references: Vec<u32> }
 
 pub fn navigate(buffer: &CodeBuffer, profile: &LanguageProfile, action: NavigateAction, line: u32, column: Option<u32>, symbol: Option<&str>) -> Result<NavigateResult> {
@@ -22,7 +22,7 @@ fn node_at(buffer: &CodeBuffer, line: u32, column: Option<u32>) -> Result<Node<'
 	let source = buffer.source();
 	let total_lines = source.lines().count() as u32;
 	if line == 0 || line > total_lines { return Err(CodeEngineError::Buffer("line out of range".into())); }
-	let byte = source.lines().take((line - 1) as usize).map(|l| l.len() + 1).sum::<usize>() + column.unwrap_or(0) as usize;
+	let byte = buffer.rope().line_to_byte_idx((line - 1) as usize, ropey::LineType::LF_CR) + column.unwrap_or(0) as usize;
 	let mut node = buffer.tree().root_node().descendant_for_byte_range(byte, byte).ok_or_else(|| CodeEngineError::Buffer("node not found".into()))?;
 	while !node.is_named() || node.is_extra() { if let Some(parent) = node.parent() { node = parent; } else { break; } }
 	Ok(node)

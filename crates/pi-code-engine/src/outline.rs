@@ -51,8 +51,8 @@ fn declaration_for<'a>(profile: &'a LanguageProfile, node: Node<'_>) -> Option<&
 
 fn signature_text(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> String {
 	let end_byte = decl.body_field.as_ref().and_then(|field| node.child_by_field_name(field).map(|body| body.start_byte())).unwrap_or_else(|| node.end_byte());
-	let header = source.get(node.start_byte()..end_byte).unwrap_or("").lines().next().unwrap_or("").trim();
-	truncate(header, 200)
+	let header = source.get(node.start_byte()..end_byte).unwrap_or("").lines().map(str::trim).collect::<Vec<_>>().join(" ");
+	truncate(&header, 200)
 }
 
 fn truncate(text: &str, max_chars: usize) -> String { text.chars().take(max_chars).collect() }

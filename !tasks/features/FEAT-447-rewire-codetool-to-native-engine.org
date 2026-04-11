@@ -1,0 +1,219 @@
+#+TITLE: Rewire CodeTool to native engine
+#+STATE: ITEM
+#+SESSION_ID: 14b6d50334ba84c7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-57-16-882Z_14b6d50334ba84c7.jsonl]]
+#+CUSTOM_ID: FEAT-447-rewire-codetool-to-native-engine
+#+EFFORT: 3h
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-446-native-code-buffer-typescript-wrapper-in
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+Emacs (spell-emacs-a09f6243d02d): installing tree-sitter grammars on first run, may take ~60s...
+
+
+do we even need that anymore? look at the recent commits in the crates
+
+* Context
+
+The =CodeTool= class in =packages/coding-agent/src/tools/code.ts= currently delegates all file-local commands to an Emacs daemon via =createCodeTool= from =@oh-my-pi/pi-emacs=. The native =pi-code-engine= (Rust) now provides all these capabilities via the =executeCodeBuffer= NAPI binding in =@oh-my-pi/pi-natives=.
+
+This item rewires CodeTool to call the native engine directly, eliminating the Emacs dependency for code intelligence.
+
+* Design Decisions
+
+- Synchronous NAPI call via =executeCodeBuffer= from =@oh-my-pi/pi-natives=
+- Auto-open semantics: the NAPI layer auto-opens buffers on first access (implemented in FEAT-446). CodeTool does NOT need to manage buffer lifecycle.
+- Command mapping:
+  - =buffers= agent command → =list= NAPI command
+  - =references-local= navigate action → =references= (the Rust engine uses =references=; the old Emacs name is dropped)
+  - =install_grammar= → removed entirely (grammars are compiled into the binary)
+  - =languages= → new NAPI command (read-only, lists built-in profiles)
+  - All other commands pass through: =read=, =outline=, =navigate=, =edit=, =undo=, =redo=, =diff=, =save=
+- Graph commands (=index=, =status=, =context=, =impact=, =deps=, =flow=, =dead_code=, =clusters=, =search=) continue routing to =executeCodeGraph= — unchanged
+- No Emacs fallback: if the native engine returns an error (unsupported language, parse failure), surface it directly
+- The =getSession= / =EmacsSessionManager= dependency is removed from CodeTool
+
+* Implementation
+
+** Modify =packages/coding-agent/src/tools/code.ts=
+
+*** Remove imports:
+- Remove =import type { CodeToolDefinition } from "@oh-my-pi/pi-emacs"=
+- Remove =import { createCodeTool } from "@oh-my-pi/pi-emacs"=
+
+*** Add imports:
+- Add =import { executeCodeBuffer } from "@oh-my-pi/pi-natives"= (also import =type { CodeBufferOptions }=)
+  (=executeCodeGraph= is already imported from here)
+
+*** Update =codeSchema= TypeBox definition:
+
+The schema defines what parameters the agent can send. Update it for the native engine:
+
+1. Update =command= description:
+   - Old: includes =install_grammar=
+   - New: ="Subcommand: read | outline | edit | buffers | diff | navigate | languages | undo | redo | save | index | status | context | impact | deps | flow | dead_code | clusters | search"=
+
+2. Update =action= description:
+   - Old: ="Navigate action: defun-at | parent | references-local | node-at | siblings | children"=
+   - New: ="Navigate action: defun-at | parent | references | node-at | siblings | children"=
+
+3. Update =target.node_type= description:
+   - Old: ="treesit node type to match"=
+   - New: ="tree-sitter node type to match"=
+
+4. Remove these fields entirely (install_grammar specific):
+   - =lang= (="Language name for install_grammar"=)
+   - =url= (="Custom grammar URL for install_grammar"=)
+   - =revision= (="Git revision/tag to checkout before building the grammar"=)
+   - =source_dir= (="Subdirectory containing the grammar's src/ folder"=)
+
+5. Remove =installed_only= field (native =languages= always returns all profiles)
+
+6. Remove =envelope= field (native engine does not support envelope operation)
+
+7. Remove =save= field (it was a flag on Emacs edit; native engine uses explicit =save= command instead)
+
+*** Rewrite CodeTool class:
+
+Remove =#inner: CodeToolDefinition= field. Remove the =getSession= dependency from constructor.
+
+Constructor becomes:
+#+begin_src typescript
+constructor(session: ToolSession) {
+    this.#session = session;
+    this.description = codeDescription;
+}
+#+end_src
+
+Rewrite =execute= method. The structure should be:
+1. Check if graph command → route to =#executeGraphCommand= (unchanged)
+2. Handle =install_grammar= → return error "install_grammar is no longer supported; grammars are built-in"
+3. Build NAPI options object from params
+4. Handle command mapping:
+   - =buffers= → ={"command": "list"}=
+   - For =navigate= with =action: "references-local"= → map action to ="references"=
+5. Call =executeCodeBuffer(options)= synchronously
+6. Check =result.error= flag and return appropriate =AgentToolResult=
+
+The key implementation:
+#+begin_src typescript
+async execute(
+    _toolCallId: string,
+    params: CodeParams,
+    _signal?: AbortSignal,
+    _onUpdate?: AgentToolUpdateCallback,
+    _context?: AgentToolContext,
+): Promise<AgentToolResult> {
+    const args = params as Record<string, unknown>;
+    const command = String(args.command ?? "");
+
+    if (command === "edit" || command === "save") {
+        const file = args.file as string | undefined;
+        if (file) enforceModeWrite(this.#session, file);
+    }
+
+    try {
+        if (GRAPH_COMMANDS.has(command)) {
+            return await this.#executeGraphCommand(params, _signal);
+        }
+
+        if (command === "install_grammar") {
+            return {
+                content: [{ type: "text", text: JSON.stringify({ error: true, message: "install_grammar is no longer supported. Grammars for TypeScript, Rust, Python, and Elixir are built-in." }) }],
+                details: { error: true, command },
+            };
+        }
+
+        // Build NAPI options
+        const nativeCommand = command === "buffers" ? "list" : command;
+        const options: Record<string, unknown> = { command: nativeCommand };
+
+        // Copy relevant params
+        if (args.file) options.file = args.file;
+        if (args.resolution !== undefined) options.resolution = args.resolution;
+        if (args.offset !== undefined) options.offset = args.offset;
+        if (args.limit !== undefined) options.limit = args.limit;
+        if (args.line !== undefined) options.line = args.line;
+        if (args.column !== undefined) options.column = args.column;
+        if (args.symbol) options.symbol = args.symbol;
+        if (args.depth !== undefined) options.depth = args.depth;
+        if (args.operation) options.operation = args.operation;
+        if (args.content !== undefined) options.content = args.content;
+        if (args.node_type) options.node_type = args.node_type;
+
+        // Map navigate action: references-local → references
+        if (command === "navigate" && args.action) {
+            options.action = args.action === "references-local" ? "references" : args.action;
+        }
+
+        const result = executeCodeBuffer(options as CodeBufferOptions);
+        const text = JSON.stringify(result.output, null, 2);
+        return {
+            content: [{ type: "text", text }],
+            details: result.error ? { error: true, command } : { command },
+        };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error("code tool error", { error: msg, command });
+        return {
+            content: [{ type: "text", text: JSON.stringify({ error: true, message: msg }) }],
+            details: { error: true, command },
+        };
+    }
+}
+#+end_src
+
+Note: =executeCodeBuffer= is synchronous but =execute= returns =Promise<AgentToolResult>= (the interface requires it). This is fine — the sync call completes immediately.
+
+*** Mode guard update:
+Currently mode guard only checks =edit= command. Expand to also guard =save= since it writes to disk.
+
+** Update tests: =packages/coding-agent/test/tools/code.test.ts=
+
+Rewrite tests to mock =executeCodeBuffer= instead of =createCodeTool=:
+
+1. Test file-local commands route to =executeCodeBuffer=:
+   - =read= with resolution/offset/limit
+   - =outline=
+   - =navigate= with each action
+   - =edit= operations
+   - =buffers= maps to =list= command
+   - =languages=
+   - =diff=, =undo=, =redo=, =save=
+
+2. Test graph commands still route to =executeCodeGraph= (keep existing test)
+
+3. Test =install_grammar= returns error message
+
+4. Test =navigate= with =references-local= maps to =references=
+
+5. Test mode guard enforces write check for =edit= and =save=
+
+6. Test error handling: when =executeCodeBuffer= throws, return error result
+
+Mock setup:
+#+begin_src typescript
+import * as nativesModule from "@oh-my-pi/pi-natives";
+
+// Mock executeCodeBuffer
+const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+    output: { /* command-specific output */ },
+    error: false,
+});
+#+end_src
+* Edge Cases
+
+- =references-local= must map to =references= (backward compat with agent prompts during transition)
+- =buffers= must map to NAPI =list= (agent-facing name differs from NAPI command name)
+- =save= command writes to disk — must be mode-guarded same as =edit=
+- File paths should be resolved relative to =session.cwd= if not absolute (check current behavior)
+- Commands with no =file= parameter (=buffers=, =languages=) must work without file
+- =executeCodeBuffer= is sync — wrapping in try/catch is critical since NAPI throws on errors
+
+* Verification
+
+- =bun check:ts= passes
+- =bun test packages/coding-agent/test/tools/code.test.ts= — all tests pass
+- Manual: invoke =code read= on a .ts file — returns resolution-aware content, NOT "Emacs daemon unavailable"

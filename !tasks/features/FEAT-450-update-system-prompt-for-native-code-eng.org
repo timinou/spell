@@ -1,0 +1,72 @@
+#+TITLE: Update system prompt for native code engine
+#+STATE: ITEM
+#+SESSION_ID: 14b6d50334ba84c7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-57-16-882Z_14b6d50334ba84c7.jsonl]]
+#+CUSTOM_ID: FEAT-450-update-system-prompt-for-native-code-eng
+#+EFFORT: 30m
+#+LAYER: coding-agent
+
+* Initial Message
+
+Emacs (spell-emacs-a09f6243d02d): installing tree-sitter grammars on first run, may take ~60s...
+
+
+do we even need that anymore? look at the recent commits in the crates
+
+* Context
+
+The code tool system prompt at =packages/coding-agent/src/prompts/tools/code.md= describes the code tool as "Emacs treesit + combobulate" and references =references-local=, =install_grammar=, and =languages= (with the old semantics of installed/installable grammars). After the migration to the native Rust engine, these descriptions are inaccurate.
+
+This item can be executed in parallel with other items (no code dependencies).
+
+* Design Decisions
+
+- =references-local= navigate action → rename to =references= throughout the prompt
+- Remove =install_grammar= from the subcommand list and all references
+- Update =languages= description: now lists built-in language profiles (read-only, no installation)
+- Replace "Emacs treesit + combobulate" with accurate description of native engine
+- Keep the prompt structure and style consistent with existing conventions
+- The prompt uses Handlebars-compatible static markdown format
+
+* Implementation
+
+** Modify =packages/coding-agent/src/prompts/tools/code.md=
+
+1. Update the tool description line:
+   - Old: "Structural code intelligence via Emacs treesit + combobulate plus native cross-file code graph queries"
+   - New: "Structural code intelligence via native tree-sitter engine plus cross-file code graph queries"
+
+2. Update subcommand list:
+   - Remove =install_grammar= from the list
+   - Update =languages= description: "Installed tree-sitter grammars" → "Built-in language profiles"
+   - Ensure =undo=, =redo=, =save= are listed if not already present
+
+3. Update navigate action descriptions:
+   - Change =references-local= → =references= everywhere
+   - Update description: "in-file references" stays accurate
+
+4. Remove any mentions of:
+   - "treesit" or "combobulate"
+   - Grammar installation or =.omp/treesitter.json=
+   - Emacs daemon availability or requirements
+   - =install_grammar= parameters (=lang=, =url=, =revision=, =source_dir=)
+
+5. Add/update command descriptions for native-specific behavior:
+   - =languages= - "Built-in language profiles (TypeScript, Rust, Python, Elixir)"
+   - Make clear that unsupported languages return an error (use =read= tool instead)
+
+* Edge Cases
+
+- The prompt may reference Emacs in instructional sections (e.g., "Requires running... Emacs") — remove those
+- Check for references to =socat= or =JSON-RPC= — remove
+- If the prompt has examples using =install_grammar=, remove them
+- Check for =treesit= in error message examples — update
+
+* Verification
+
+- =bun check:ts= passes (prompt is imported as text, no type issues)
+- grep for =references-local= in =packages/coding-agent/src/prompts/= returns zero hits
+- grep for =install_grammar= in =packages/coding-agent/src/prompts/= returns zero hits
+- grep for =treesit= in =packages/coding-agent/src/prompts/= returns zero hits
+- grep for =combobulate= in =packages/coding-agent/src/prompts/= returns zero hits
+- The prompt still accurately describes all supported commands: read, outline, navigate, edit, buffers, diff, undo, redo, save, languages, and graph commands

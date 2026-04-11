@@ -1,0 +1,214 @@
+#+TITLE: spell recover command with niri workspace restoration
+#+STATE: DOING
+#+SESSION_ID: 14b6d9b181b3cb2d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-17-43-942Z_14b6d9b181b3cb2d.jsonl]]
+#+CUSTOM_ID: FEAT-444-spell-recover-command-with-niri-workspac
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: cli
+#+DEPENDS: FEAT-442-extend-status-file-with-session-recovery
+
+* Initial Message
+
+give me the commands to relaunch all the spell sessions that were on before my computer ran out of battery, then make the feature to recover that. Bonus if it brings back the niri workspaces too
+
+* Goal
+
+Add a ~spell recover~ CLI subcommand that detects crashed sessions from status files, shows a summary, and restores them by opening ghostty windows in the correct niri workspaces.
+
+* Context
+
+After a crash or power loss, status files in ~/.spell/status/ survive with dead PIDs. With FEAT-442, these files now contain sessionId, sessionFile, cwd, and workspaceName — everything needed to resume sessions and recreate the workspace layout.
+
+* Design Decisions
+
+- New CLI subcommand: ~spell recover~ (registered in cli.ts)
+- Uses ~StatusFileReader.readCrashed()~ from FEAT-442 to find crashed sessions
+- Groups sessions by workspaceName for niri workspace restoration
+- For each workspace group: creates/focuses named workspace, then spawns ghostty windows
+- Ghostty spawn: ~ghostty +new-window --working-directory=<cwd> -e spell -r <sessionId>~
+- Niri workspace creation: ~niri msg action focus-workspace <name>~ (creates if doesn't exist) + ~niri msg action set-workspace-name <name>~
+- After all sessions are spawned, clean up the recovered status files
+- If no crashed sessions found, prints "No crashed sessions to recover."
+- If no sessionId/sessionFile in status file (old format), skip with warning
+- Graceful degradation: if niri not available, skip workspace management; if ghostty not available, print resume commands as fallback
+
+* Implementation
+
+** Sub-outline
+
+*** 1. Create command file (packages/coding-agent/src/commands/recover.ts)
+
+Follow existing command patterns (see config.ts, server.ts). Extends ~Command~ from pi-utils.
+
+#+begin_src typescript
+import { Command } from "@oh-my-pi/pi-utils";
+import { StatusFileReader } from "@oh-my-pi/pi-desktop-common";
+import type { SessionStatusFile } from "@oh-my-pi/pi-desktop-common";
+
+export default class RecoverCommand extends Command {
+  static description = "Recover crashed spell sessions";
+  static flags = {
+    "dry-run": { type: "boolean" as const, description: "Print commands without executing" },
+    "no-workspace": { type: "boolean" as const, description: "Skip niri workspace restoration" },
+  };
+
+  async run() {
+    const { flags } = this.parse();
+    const reader = new StatusFileReader();
+    const crashed = await reader.readCrashed();
+
+    if (crashed.length === 0) {
+      console.log("No crashed sessions to recover.");
+      return;
+    }
+
+    // Filter to sessions with recovery metadata
+    const recoverable = crashed.filter(s => s.sessionId && s.cwd);
+    const unrecoverable = crashed.filter(s => !s.sessionId || !s.cwd);
+
+    if (unrecoverable.length > 0) {
+      console.log(`${unrecoverable.length} session(s) missing recovery metadata (old format), skipping.`);
+    }
+
+    if (recoverable.length === 0) {
+      console.log("No recoverable sessions found.");
+      return;
+    }
+
+    // Display summary
+    this.printSummary(recoverable);
+
+    // Check for dry-run
+    if (flags["dry-run"]) {
+      this.printCommands(recoverable);
+      return;
+    }
+
+    // Recover
+    await this.recoverSessions(recoverable, !flags["no-workspace"]);
+  }
+}
+#+end_src
+
+*** 2. Summary display
+
+Print a table showing workspace, project, title, status for each crashed session:
+
+#+begin_example
+Crashed sessions detected:
+
+  Workspace   Project          Title                                      Status
+  ─────────   ───────          ─────                                      ──────
+  spell-dev   spell            Customizing Agent System Prompt Format      running
+  spell-dev   spell            Code-Specific Vector Embeddings Research    needs_input
+  ubikom      ubikom           (untitled)                                  needs_input
+  (unnamed)   spell_kdl-config (untitled)                                  running
+#+end_example
+
+*** 3. Recovery flow implementation
+
+#+begin_src typescript
+async recoverSessions(sessions: SessionStatusFile[], useWorkspaces: boolean): Promise<void> {
+  const hasNiri = await this.checkNiri();
+  const hasGhostty = await this.checkGhostty();
+
+  if (!hasGhostty) {
+    console.log("ghostty not found. Printing resume commands instead:");
+    this.printCommands(sessions);
+    return;
+  }
+
+  // Group by workspace
+  const groups = this.groupByWorkspace(sessions);
+
+  for (const [workspaceName, group] of groups) {
+    // Create/focus workspace if niri available and workspaces enabled
+    if (hasNiri && useWorkspaces && workspaceName) {
+      await $\`niri msg action focus-workspace ${workspaceName}\`.quiet().nothrow();
+      // Small delay to let workspace activate
+      await Bun.sleep(200);
+    }
+
+    for (const session of group) {
+      console.log(\`Recovering: \${session.projectName} - \${session.sessionTitle || "(untitled)"}\`);
+      await $\`ghostty +new-window --working-directory=\${session.cwd} -e spell -r \${session.sessionId}\`.quiet().nothrow();
+      await Bun.sleep(300); // Brief pause between window spawns
+    }
+  }
+
+  // Clean up status files
+  await this.cleanupRecoveredFiles(sessions);
+  console.log(\`Recovered \${sessions.length} session(s).\`);
+}
+#+end_src
+
+*** 4. Workspace grouping
+
+#+begin_src typescript
+groupByWorkspace(sessions: SessionStatusFile[]): Map<string | null, SessionStatusFile[]> {
+  const groups = new Map<string | null, SessionStatusFile[]>();
+  for (const s of sessions) {
+    const key = s.workspaceName ?? null;
+    const list = groups.get(key) ?? [];
+    list.push(s);
+    groups.set(key, list);
+  }
+  return groups;
+}
+#+end_src
+
+*** 5. Status file cleanup
+
+After successful recovery, delete the status files for recovered sessions:
+#+begin_src typescript
+async cleanupRecoveredFiles(sessions: SessionStatusFile[]): Promise<void> {
+  for (const s of sessions) {
+    const filePath = path.join(STATUS_DIR, \`\${s.windowId}.json\`);
+    await fs.rm(filePath, { force: true }).catch(() => {});
+  }
+}
+#+end_src
+
+*** 6. Fallback command printing
+
+When ghostty isn't available or --dry-run is set:
+#+begin_src typescript
+printCommands(sessions: SessionStatusFile[]): void {
+  for (const s of sessions) {
+    const title = s.sessionTitle || "(untitled)";
+    console.log(\`# \${s.projectName}: \${title}\`);
+    console.log(\`cd \${s.cwd} && spell -r \${s.sessionId}\`);
+    console.log();
+  }
+}
+#+end_src
+
+*** 7. Register command (packages/coding-agent/src/cli.ts)
+
+Add to commands array:
+#+begin_src typescript
+{ name: "recover", load: () => import("./commands/recover").then(m => m.default) },
+#+end_src
+
+* Verification
+
+- ~bun check:ts~ passes
+- Manual test: kill -9 a spell session, run ~spell recover --dry-run~, verify output shows the killed session with correct cwd and session ID
+- Manual test: run ~spell recover~ with niri running, verify workspace is created and ghostty window opens with the session resumed
+- Manual test: run ~spell recover~ when no crashed sessions, verify "No crashed sessions" message
+
+* Files to Create
+- packages/coding-agent/src/commands/recover.ts
+
+* Files to Modify
+- packages/coding-agent/src/cli.ts (add command entry)
+
+* Edge Cases
+- No crashed sessions: clean exit message
+- Old status files without sessionId: skip with warning, don't crash
+- No ghostty installed: fall back to printing commands
+- No niri (X11, another compositor): skip workspace creation, still spawn windows
+- Session file deleted since crash: still attempt ~spell -r <id>~, it will show an error in the new window
+- Very old status files from days ago: still show them, let user decide
+- workspaceName is null: group in "(unnamed)" workspace, don't attempt workspace creation for that group

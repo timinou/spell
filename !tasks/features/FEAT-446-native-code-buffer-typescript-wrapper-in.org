@@ -1,0 +1,134 @@
+#+TITLE: Native code-buffer TypeScript wrapper in pi-natives
+#+STATE: ITEM
+#+SESSION_ID: 14b6d50334ba84c7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-57-16-882Z_14b6d50334ba84c7.jsonl]]
+#+CUSTOM_ID: FEAT-446-native-code-buffer-typescript-wrapper-in
+#+EFFORT: 2h
+#+LAYER: natives
+
+* Initial Message
+
+Emacs (spell-emacs-a09f6243d02d): installing tree-sitter grammars on first run, may take ~60s...
+
+
+do we even need that anymore? look at the recent commits in the crates
+
+* Context
+
+The Rust crate =pi-code-engine= provides file-local code intelligence (outline, read, navigate, edit, diff, undo/redo) with tree-sitter grammars compiled into the binary. The NAPI binding =executeCodeBuffer= already exists in =crates/pi-natives/src/code_buffer.rs= and is registered as a module in =lib.rs= (=pub mod code_buffer=).
+
+However, the TypeScript side has no wrapper — =executeCodeBuffer= is not exported from =@oh-my-pi/pi-natives=, has no type declarations, and is not validated in =validateNative=.
+
+This item creates the TypeScript wrapper following the exact pattern used by =code-graph=.
+
+* Design Decisions
+
+- Synchronous NAPI call (no worker thread) — =executeCodeBuffer= is already sync in Rust
+- All commands return ={output, error}= envelope (matches existing Rust implementation)
+- Add =languages= command to Rust NAPI (returns built-in profile names + extensions)
+- Add =get_or_open= semantics to Rust NAPI: commands that operate on a buffer (=outline=, =read=, =navigate=, =edit=, =undo=, =redo=, =diff=, =save=) auto-open the buffer if not already open, preserving existing buffers. This prevents re-reading from disk and discarding unsaved edits.
+
+* Implementation
+
+** Rust changes: =crates/pi-natives/src/code_buffer.rs=
+
+1. Add =languages= command to =execute_code_buffer= match:
+   #+begin_src rust
+   "languages" => {
+       let reg = language_registry();
+       let langs: Vec<Value> = reg.languages().iter().map(|id| {
+           let profile = reg.get(id).unwrap();
+           json!({ "id": id.to_string(), "extensions": profile.extensions })
+       }).collect();
+       Ok(json_response(json!({ "languages": langs }), false))
+   }
+   #+end_src
+
+2. Change the buffer-operation commands to auto-open instead of erroring:
+   Replace:
+   #+begin_src rust
+   let buffer = guard.get_mut(&path).ok_or_else(|| json_err(format!("Buffer not open for {}", path.display())))?;
+   #+end_src
+   With:
+   #+begin_src rust
+   if guard.get(&path).is_none() {
+       guard.open(&path).map_err(engine_err)?;
+   }
+   let buffer = guard.get_mut(&path).unwrap();
+   #+end_src
+   This ensures that =open= is only called when the buffer doesn't already exist, preserving unsaved edits for already-open buffers.
+
+** TypeScript wrapper: =packages/natives/src/code-buffer/=
+
+Follow the =code-graph= pattern exactly:
+
+*** =packages/natives/src/code-buffer/types.ts=:
+#+begin_src typescript
+export interface CodeBufferOptions {
+    command: string;
+    file?: string;
+    resolution?: number;
+    offset?: number;
+    limit?: number;
+    action?: string;
+    line?: number;
+    column?: number;
+    symbol?: string;
+    operation?: string;
+    content?: string;
+    node_type?: string;
+    mode?: string;
+    depth?: number;
+    installed_only?: boolean;
+}
+
+export interface CodeBufferResult {
+    output: unknown;
+    error: boolean;
+}
+
+declare module "../bindings" {
+    interface NativeBindings {
+        executeCodeBuffer(options: CodeBufferOptions): CodeBufferResult;
+    }
+}
+#+end_src
+
+Note: =executeCodeBuffer= is synchronous (returns =CodeBufferResult= not =Promise=). This matches the Rust =#[napi]= annotation (no =async=).
+
+*** =packages/natives/src/code-buffer/index.ts=:
+#+begin_src typescript
+import { native } from "../native";
+import type { CodeBufferOptions, CodeBufferResult } from "./types";
+
+export type { CodeBufferOptions, CodeBufferResult } from "./types";
+
+export function executeCodeBuffer(options: CodeBufferOptions): CodeBufferResult {
+    return native.executeCodeBuffer(options);
+}
+#+end_src
+
+** Wire into pi-natives package:
+
+*** =packages/natives/src/native.ts=:
+- Add =import "./code-buffer/types"= alongside other type imports
+- Add =checkFn("executeCodeBuffer")= in =validateNative=
+
+*** =packages/natives/src/index.ts=:
+- Add =export * from "./code-buffer"=
+
+* Edge Cases
+
+- =executeCodeBuffer= is synchronous — the TypeScript type must NOT return a Promise
+- =languages= command needs no =file= parameter — it queries the global registry
+- Auto-open must handle: binary files (engine returns error), files >100MB (engine returns error), unknown language (engine returns error for missing profile)
+- Existing =code-graph= async function returns =Promise<CodeGraphResult>= — do NOT follow that pattern for code-buffer since the Rust function is sync
+
+* Verification
+
+- =bun check:ts= passes with new types
+- =bun check:rs= passes with Rust changes (=cargo clippy=, =cargo fmt=)
+- =cargo test -p pi-code-engine= passes (existing 32 tests)
+- =cargo test -p pi-natives= passes (if applicable)
+- Manual verification: =import { executeCodeBuffer } from "@oh-my-pi/pi-natives"= resolves correctly
+- The =languages= command returns at least 4 languages: typescript, rust, python, elixir

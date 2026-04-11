@@ -1,0 +1,97 @@
+#+TITLE: Replace Emacs code intelligence with native engine
+#+STATE: INIT
+#+SESSION_ID: 14b6d50334ba84c7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-57-16-882Z_14b6d50334ba84c7.jsonl]]
+#+CUSTOM_ID: PLAN-183-replace-emacs-code-intelligence-with-nat
+
+* Initial Message
+
+Emacs (spell-emacs-a09f6243d02d): installing tree-sitter grammars on first run, may take ~60s...
+
+
+do we even need that anymore? look at the recent commits in the crates
+
+* Context
+
+The =code= tool currently delegates all file-local code intelligence (read, outline, navigate, edit, diff) to an Emacs 29+ daemon running tree-sitter + combobulate, communicating via JSON-RPC over socat. This requires:
+- Emacs 29+ with =--with-tree-sitter= build flag
+- =socat= binary for JSON-RPC transport
+- Tree-sitter grammar compilation on first run (~60s startup delay)
+- A long-lived daemon process with circuit-breaker lifecycle management
+
+The new Rust crate =pi-code-engine= provides a complete native replacement:
+- Tree-sitter grammars for TypeScript, Rust, Python, Elixir compiled into the binary
+- Rope-based buffer management with undo/redo history
+- All file-local operations: outline, resolution-aware read, navigate (node-at, defun-at, parent, siblings, children, references), structural edits (replace, insert, kill, splice, drag, clone, transpose), diff, save
+- NAPI binding =executeCodeBuffer= already exists in =pi-natives=
+
+The org tool runs a separate Emacs daemon for org-mode operations — it is unaffected by this migration.
+
+** Key Decisions
+
+1. *Thin sync wrapper*: Direct NAPI call from CodeTool, no worker thread. Typical parse is <10ms.
+2. *Auto-open buffers*: NAPI layer auto-opens on first access via =get_or_open= semantics. Agent never calls open/close.
+3. *No Emacs fallback*: Unsupported languages return error. Agent uses =read= tool for non-TS/Rust/Python/Elixir files.
+4. *Remove code warmup*: No =emacsSessionManager=, no =warmupCode=, no daemon lifecycle for code tool. Native engine is instant.
+5. *Clean pi-emacs*: Delete code-intel exports (client.ts, types.ts, createCodeTool, warmupCode). Keep daemon/detection/session-manager for org.
+6. *Rename =references-local= to =references=*: Update system prompt and CodeTool wrapper.
+7. *Drop =install_grammar=*: Grammars are compiled in. Keep read-only =languages= command listing built-in profiles.
+8. *Buffer lifecycle*: Native BufferRegistry persists buffers across calls. Agent sees =buffers=, =diff=, =undo=, =redo=, =save=.
+
+* Verification
+
+** Type check
+#+begin_src sh
+bun check:ts
+#+end_src
+
+** Rust check
+#+begin_src sh
+bun check:rs
+#+end_src
+
+** Unit tests
+#+begin_src sh
+bun test packages/coding-agent/test/tools/code.test.ts
+bun test packages/emacs/test/session-manager.test.ts
+bun test packages/emacs/test/daemon-survival.test.ts
+bun test packages/emacs/test/detection.test.ts
+#+end_src
+
+** Rust tests
+#+begin_src sh
+cargo test -p pi-code-engine
+cargo test -p pi-natives
+#+end_src
+
+** Absence checks
+- =grep -r "createCodeTool" packages/coding-agent/src/= returns zero hits
+- =grep -r "warmupCode" packages/coding-agent/src/= returns zero hits
+- =grep -r "emacsSessionManager" packages/coding-agent/src/= returns zero hits
+- =grep -r "references-local" packages/coding-agent/src/prompts/= returns zero hits
+- =grep -r "install_grammar" packages/coding-agent/src/prompts/= returns zero hits
+
+** Org tool sanity
+- Org tool still works: org daemon starts independently, org MCP operations unaffected
+
+* Execution Manifest
+
+** Wave 1 — Foundation (parallel)
+
+- [[id:FEAT-446-native-code-buffer-typescript-wrapper-in]] — Create =code-buffer= TypeScript wrapper in pi-natives + add =languages= command and auto-open to Rust NAPI (2h)
+- [[id:FEAT-450-update-system-prompt-for-native-code-eng]] — Update code tool system prompt: =references-local= → =references=, remove Emacs references, drop =install_grammar= (30m)
+
+** Wave 2 — Rewire (depends on Wave 1)
+
+- [[id:FEAT-447-rewire-codetool-to-native-engine]] — Rewire CodeTool to call =executeCodeBuffer= instead of Emacs, rewrite tests (3h). Depends on FEAT-446.
+
+** Wave 3 — Cleanup (depends on Wave 2, parallel within wave)
+
+- [[id:FEAT-448-remove-code-warmup-and-emacssessionmanag]] — Remove code warmup from sdk.ts, remove =emacsSessionManager= from ToolSession (1h). Depends on FEAT-447.
+- [[id:FEAT-449-slim-pi-emacs-package-to-org-only]] — Delete code-intel exports from pi-emacs, remove dead tests (2h). Depends on FEAT-448.
+
+** Wave 4 — Deferred
+
+- [[id:FUP-045-clean-up-dead-elisp-code-intelligence-fi]] — Remove dead Elisp files (1h). Depends on FEAT-449.
+
+** Total effort: ~9.5h

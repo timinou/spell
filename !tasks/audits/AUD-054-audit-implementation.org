@@ -1,0 +1,100 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-054-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Now I have a thorough understanding. Here are my findings:
+
+---
+
+## Audit Findings
+
+### 1. Procedure module is dead code — not compiled, tests never run
+- **What**: `crates/pi-code-engine/src/procedure/` exists on disk (4 files, ~230 lines) but `lib.rs` has no `pub mod procedure;`. The module is never compiled. The 7 tests the subagent reported passing are actually not included in the test binary — `cargo test -- procedure` finds 0 tests.
+- **Where**: `crates/pi-code-engine/src/lib.rs` (missing declaration), `src/procedure/` (orphaned files)
+- **Why**: A major feature of the spec (Procedure DSL) is completely dead. The edit operations don't use it either — they do simple tree walks instead. If anyone assumes procedure tests are running, they'll miss regressions.
+- **Effort**: `small` — add `pub mod procedure;` to `lib.rs`, verify the 7 tests actually compile and pass
+
+### 2. `clone_node` is not exported from the `edit` module; NAPI duplicates it
+- **What**: `edit/clone.rs` defines `pub fn clone_node` but `edit/mod.rs` doesn't re-export it. The NAPI bindings in `code_buffer.rs` duplicate the entire clone logic locally as `clone_edit()` plus a local `node_at_line()` helper. This creates two divergent implementations.
+- **Where**: `crates/pi-code-engine/src/edit/mod.rs` (missing `pub use clone::clone_node;`), `crates/pi-natives/src/code_buffer.rs:42-47` (duplicated helpers)
+- **Why**: Bug risk — fixes to clone logic must be applied in two places. The NAPI version also uses a different error type (`napi::Result` vs `engine::Result`), so its behavior will diverge over time.
+- **Effort**: `trivial` — add the re-export, remove the duplication in NAPI
+
+### 3. CRDT operations silently discarded — loro errors swallowed
+- **What**: `buffer.rs` lines 165, 232-233 use `let _ =` on `text.insert()` and `text.delete()` calls. If the loro CRDT operation fails (e.g., position out of range), the error is silently swallowed while the rope and tree-sitter are already mutated, leaving the CRDT permanently out of sync with the rope.
+- **Where**: `crates/pi-code-engine/src/buffer.rs:165,232-233`
+- **Why**: Silent CRDT desync means multi-agent merge will produce corrupt text. The rope says one thing, the CRDT says another. Since the entire point of the CRDT is correct concurrent editing, this defeats its purpose.
+- **Effort**: `small` — propagate the errors (map to `CodeEngineError::Buffer`) and return `Result`
+
+### 4. `edit_batch` applies each edit through `self.edit()` which records individual undo — batch should be atomic
+- **What**: `edit_batch()` calls `self.edit()` for each item, recording N separate history revisions. Undoing a batch requires N separate undo calls. The spec and org item say batch edits should be a single undo unit.
+- **Where**: `crates/pi-code-engine/src/buffer.rs:192-197`
+- **Why**: User does a structural edit (splice produces 2 TextEdits), then calls undo — only the last TextEdit is reversed, leaving the buffer in an intermediate state that was never visible to the user.
+- **Effort**: `medium` — group batch edits into a single history revision
+
+### 5. `transpose_nodes` emits overlapping TextEdits when nodes are adjacent
+- **What**: `transpose.rs` returns two TextEdits: one replacing left's range with right's text, another replacing right's range with left's text. If `left.end_byte() >= right.start_byte()` (overlapping or adjacent nodes), these edits have overlapping byte ranges. When `edit_batch` applies them high-to-low, the second edit operates on stale byte offsets.
+- **Where**: `crates/pi-code-engine/src/edit/transpose.rs:14`
+- **Why**: Transpose of adjacent tokens silently produces garbage output. The drag operation handles this correctly by sorting high-to-low, but transpose doesn't check for overlap.
+- **Effort**: `small` — validate that left and right don't overlap, or combine into a single edit
+
+### 6. `navigate::node_at` computes byte offset by summing line lengths — incorrect for Windows line endings
+- **What**: `node_at()` computes byte offset as `lines.take(n).map(|l| l.len() + 1).sum()`, hard-coding `+1` for `\n`. On files with `\r\n` endings, this is wrong — each line is 2 bytes shorter than reality.
+- **Where**: `crates/pi-code-engine/src/navigate.rs:25`
+- **Why**: On Windows-ending files (common in repos), navigate points to wrong positions. The rope has `line_to_byte_idx` which handles this correctly — it should be used instead.
+- **Effort**: `trivial` — use `buffer.rope().line_to_byte_idx(line - 1, LineType::LF_CR) + column`
+
+### 7. `adjust_indent` only handles target_col >= original_col (no dedent)
+- **What**: `adjust_indent` uses `target_col.saturating_sub(original_col)` which clamps to 0 when target < original. De-indenting (splice up, moving code out of a nested block) produces no indentation change instead of reducing it.
+- **Where**: `crates/pi-code-engine/src/edit/indent.rs:22`
+- **Why**: Splice operations that move code to a less-indented context produce incorrectly indented output.
+- **Effort**: `small` — handle the negative case by stripping leading whitespace from each line
+
+### 8. `splice_node` doesn't use indentation adjustment at all
+- **What**: `splice_node` concatenates children text and replaces the parent range, but never calls `adjust_indent()` to fix the indentation of the kept children relative to the parent's position.
+- **Where**: `crates/pi-code-engine/src/edit/splice.rs:19-21`
+- **Why**: Splicing out a containing block leaves the kept statements at their original (deeper) indentation level, producing incorrectly indented code.
+- **Effort**: `small` — apply `adjust_indent(kept, node_indent, parent_indent)` to the kept text
+
+### 9. `diff_from_disk` creates a fake `BufferSnapshot` with the current tree, not the disk version's tree
+- **What**: `diff_from_disk()` creates a `BufferSnapshot` with `tree: Arc::new(self.tree.clone())` — the *current* buffer's tree, not the disk content's tree. This is semantically wrong (the snapshot claims to represent the disk state but has the wrong tree), though it doesn't affect diff output since `diff_from` only uses the rope.
+- **Where**: `crates/pi-code-engine/src/buffer.rs:251-258`
+- **Why**: Minor — the tree in the snapshot is a lie, but `diff_from()` doesn't use it. Still, any future consumer of the snapshot tree would get wrong data. The snapshot abstraction is leaking.
+- **Effort**: `trivial` — `diff_from_disk()` should call `diff_lines()` directly instead of constructing a fake snapshot
+
+### 10. No tests for edit operations
+- **What**: The `edit/` module has zero `#[test]` functions across all 6 files. The edit operations (drag, clone, splice, transpose, replace, kill) are only tested indirectly through the NAPI bindings (which themselves have no tests).
+- **Where**: `crates/pi-code-engine/src/edit/` (all files)
+- **Why**: Zero coverage on the most complex structural operations in the engine. The org item FEAT-433 specified 17 tests. A regression in drag, splice, or transpose will be invisible until a user hits it.
+- **Effort**: `medium` — write tests using the `edit_target.ts` fixture that's already present
+
+### 11. `outline::signature_text` only takes the first line of the header
+- **What**: `signature_text()` takes text from `node.start_byte()..body.start_byte()`, then calls `.lines().next()` — discarding all lines after the first. Multi-line function signatures (common in TypeScript and Rust) are truncated to one line.
+- **Where**: `crates/pi-code-engine/src/outline.rs:54`
+- **Why**: User sees `function processRequest(` instead of the full parameter list and return type. This is a regression from the Emacs version which showed the complete header.
+- **Effort**: `trivial` — join all header lines (with space) before truncating to 200 chars
+
+### 12. `NavigateResult` and `NavigateItem` don't implement `Serialize`
+- **What**: The navigate types are returned to the NAPI layer, but the NAPI bindings manually construct JSON via `json!()` macros instead of using `serde_json::to_value()`. The types themselves lack `#[derive(Serialize)]`, so they can't be serialized by downstream consumers.
+- **Where**: `crates/pi-code-engine/src/navigate.rs:10-14`
+- **Why**: Any future consumer (integration tests, other tools) that needs to serialize navigate results must duplicate the manual JSON construction. The outline types *do* derive Serialize, so this is inconsistent.
+- **Effort**: `trivial` — add `#[derive(serde::Serialize)]` to `NavigateResult` and `NavigateItem`
+
+### 13. `dead_code` confidence is never "high"
+- **What**: The confidence logic assigns "low" for index/entry-point files and "medium" for everything else. The "high" confidence case (spec says: unexported + no refs + not in test file) is never produced, yet `confidence_rank()` handles it.
+- **Where**: `crates/pi-code-graph/src/query.rs:206-210`
+- **Why**: The dead_code output lacks a "high confidence" tier, making it harder for users to prioritize true dead code vs. possibly-dead code.
+- **Effort**: `trivial` — add the "high" case (symbols not in index/entry files already excluded test paths)
+
+### 14. `edit` module blanket `#[allow(dead_code)]` masks real dead code
+- **What**: `edit/mod.rs` line 1 has `#![allow(dead_code, reason = "edit helpers are invoked through the dispatcher and via tests")]` — but there are no tests, and `clone_node` isn't exported. This blanket allow suppresses legitimate dead code warnings that would catch the `clone_node` export omission.
+- **Where**: `crates/pi-code-engine/src/edit/mod.rs:1`
+- **Why**: Masks the clone_node export bug (finding #2) and any future dead code additions. Remove the blanket allow once the real exports/tests are in place.
+- **Effort**: `trivial` — remove after fixing exports

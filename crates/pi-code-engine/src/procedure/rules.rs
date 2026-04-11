@@ -8,7 +8,7 @@ pub enum RuleExpr {
 	Rule(String),
 	InverseRule(String),
 	Regex(String),
-	Exclude { include: Box<RuleExpr>, exclude: Box<RuleExpr> },
+	Exclude { include: Box<Self>, exclude: Box<Self> },
 	All,
 }
 
@@ -32,16 +32,33 @@ pub fn exclude(include: RuleExpr, exclude: RuleExpr) -> RuleExpr {
 	RuleExpr::Exclude { include: Box::new(include), exclude: Box::new(exclude) }
 }
 
-pub fn matches_rule_expr(expr: &RuleExpr, node: &tree_sitter::Node<'_>, profile: &LanguageProfile) -> bool {
+pub fn matches_rule_expr(
+	expr: &RuleExpr,
+	node: &tree_sitter::Node<'_>,
+	profile: &LanguageProfile,
+) -> bool {
 	match expr {
 		RuleExpr::Types(names) => names.iter().any(|name| name == node.kind()),
-		RuleExpr::Rule(name) => profile
-			.production_rules
+		RuleExpr::Rule(name) => {
+			profile.production_rules.get(name).is_some_and(|rule| {
+				rule
+					.unnamed_children
+					.iter()
+					.any(|child| child == node.kind())
+					|| rule
+						.fields
+						.values()
+						.any(|children| children.iter().any(|child| child == node.kind()))
+			}) || name == node.kind()
+		},
+		RuleExpr::InverseRule(name) => profile
+			.inverse_rules
 			.get(name)
-			.is_some_and(|rule| rule.unnamed_children.iter().any(|child| child == node.kind()) || rule.fields.values().any(|children| children.iter().any(|child| child == node.kind()))),
-		RuleExpr::InverseRule(name) => profile.inverse_rules.get(name).is_some_and(|parents| parents.iter().any(|parent| parent == node.kind())),
+			.is_some_and(|parents| parents.iter().any(|parent| parent == node.kind())),
 		RuleExpr::Regex(pattern) => Regex::new(pattern).is_ok_and(|re| re.is_match(node.kind())),
-		RuleExpr::Exclude { include, exclude } => matches_rule_expr(include, node, profile) && !matches_rule_expr(exclude, node, profile),
+		RuleExpr::Exclude { include, exclude } => {
+			matches_rule_expr(include, node, profile) && !matches_rule_expr(exclude, node, profile)
+		},
 		RuleExpr::All => true,
 	}
 }

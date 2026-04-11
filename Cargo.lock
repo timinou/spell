@@ -2624,6 +2624,7 @@ version = "13.12.8"
 dependencies = [
  "imara-diff",
  "loro",
+ "regex",
  "ropey",
  "serde",
  "serde_json",
