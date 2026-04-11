@@ -1,0 +1,103 @@
+#+TITLE: Task URI Types and Resolution Protocol
+#+STATE: DONE
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-391-task-uri-types-and-resolution-protocol
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: agent-runtime
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Narrative
+
+Today, todo items are identified by auto-incremented numeric IDs (=task-1=, =task-2=) scoped to a single session. These IDs are opaque -- they carry no information about which agent owns the task, which session it belongs to, or how it relates to org items.
+
+The swarm architecture needs addressable tasks: a subagent must reference its own tasks, its parent's tasks, and its siblings' tasks. Cross-session references are needed for persistent plans. The org system already has =CUSTOM_ID= with =::= sub-slugs for intra-file scoping.
+
+This item defines the =task://= and =data://= URI schemes, a resolution protocol that converts short slugs to canonical URIs based on context, and a =TaskUri= parser/builder.
+
+The URI scheme follows the same structural pattern as the existing =artifact://= protocol (=artifact://<session>/<agent>/<path>=), making the internal URL system consistent.
+
+* Design Decisions
+
+1. URI format: =task://<session>/<agent>/<slug>= and =data://<session>/<agent>/<slug>=.
+2. =<session>= is either a hex snowflake session ID or the literal =current=.
+3. =<agent>= is either =main= (parent agent) or a subagent name/ID.
+4. =<slug>= is a kebab-case identifier. The =::= separator from org is used for sub-slug scoping within a slug: =define-types::interface-a=.
+5. Short-form resolution: within a =todo_write= call, agents use bare slugs (=define-types=). The tool resolves them to full URIs using the current session + agent context.
+6. Relative references: =../sibling-agent/its-task= resolves relative to the current agent's position.
+7. The =task-N= numeric scheme is preserved as a compatibility layer. Internally, =task-3= resolves to =task://current/main/task-3=. New tasks created with slug names use the slug directly.
+8. =TaskUri= is a value object: parse, build, resolve, compare. Immutable.
+
+* Files to Create
+
+** =packages/coding-agent/src/swarm/uri.ts=
+#+begin_src typescript
+export type UriScheme = "task" | "data";
+
+export interface TaskUri {
+  readonly scheme: UriScheme;
+  readonly session: string;  // "current" or hex ID
+  readonly agent: string;    // "main" or agent name
+  readonly slug: string;     // kebab-case, may contain ::
+  readonly raw: string;      // original URI string
+}
+
+export function parseTaskUri(uri: string): TaskUri;
+export function buildTaskUri(scheme: UriScheme, session: string, agent: string, slug: string): string;
+export function resolveTaskUri(shortRef: string, context: { session: string; agent: string }): TaskUri;
+export function isTaskUri(value: string): boolean;
+export function isDataUri(value: string): boolean;
+export function canonicalize(uri: TaskUri, sessionId: string): TaskUri; // resolve "current" to actual ID
+#+end_src
+
+** =packages/coding-agent/src/swarm/uri-protocol.ts=
+=ProtocolHandler= implementation for =task://= and =data://= that integrates with the existing =InternalUrlRouter= (=internal-urls/router.ts=). Resolves task URIs to task content (status, details, assignment).
+
+* Existing Patterns to Follow
+- =artifact-protocol.ts= (=internal-urls/=): URI parsing, session ID extraction, =ProtocolHandler= interface
+- =agent-protocol.ts= (=internal-urls/=): =InternalUrl= type, =resolve()= method
+- =InternalUrlRouter= (=internal-urls/router.ts=): =register()= / =canHandle()= / =resolve()= API
+
+* Sub-outline (test-first)
+
+** FEAT-391::uri-tests
+File: =packages/coding-agent/test/swarm/uri.test.ts=
+
+*** parseTaskUri
+- =parseTaskUri("task://current/main/define-types")= => ={ scheme: "task", session: "current", agent: "main", slug: "define-types" }=
+- =parseTaskUri("data://abc123/agent-a/api-contract")= => ={ scheme: "data", session: "abc123", agent: "agent-a", slug: "api-contract" }=
+- =parseTaskUri("task://current/main/parent::child")= => slug is ="parent::child"=
+- =parseTaskUri("not-a-uri")= => throws ="Invalid task URI"=
+- =parseTaskUri("http://example.com")= => throws (wrong scheme)
+
+*** buildTaskUri
+- =buildTaskUri("task", "current", "main", "define-types")= => ="task://current/main/define-types"=
+
+*** resolveTaskUri (context-dependent)
+- =resolveTaskUri("define-types", { session: "current", agent: "main" })= => full URI =task://current/main/define-types=
+- =resolveTaskUri("task-3", { session: "current", agent: "main" })= => =task://current/main/task-3= (numeric compat)
+- =resolveTaskUri("task://current/main/define-types", ...)= => returns as-is (already full URI)
+- =resolveTaskUri("data://current/agent-a/contract", ...)= => returns as-is (data scheme)
+
+*** canonicalize
+- =canonicalize(parsed, "abc123")= where session="current" => session becomes "abc123"
+- Already canonical => unchanged
+
+*** isTaskUri / isDataUri
+- =isTaskUri("task://current/main/x")= => true
+- =isTaskUri("data://current/main/x")= => false
+- =isDataUri("data://current/main/x")= => true
+
+** FEAT-391::uri-impl
+Depends on: FEAT-391::uri-tests
+
+** FEAT-391::uri-protocol
+Depends on: FEAT-391::uri-impl. Integrate with =InternalUrlRouter=.
+
+* Verification
+- =bun test packages/coding-agent/test/swarm/uri.test.ts= passes
+- =bun check:ts= passes

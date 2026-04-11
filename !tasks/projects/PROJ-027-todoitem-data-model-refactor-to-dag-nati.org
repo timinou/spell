@@ -1,0 +1,163 @@
+#+TITLE: TodoItem Data Model Refactor to DAG-native URIs
+#+STATE: DONE
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: PROJ-027-todoitem-data-model-refactor-to-dag-nati
+#+EFFORT: XL
+#+PRIORITY: A
+#+LAYER: agent-runtime
+#+DEPENDS: FEAT-389-typed-eventbus-with-generic-channel-defi FEAT-390-mutabledag-generic-data-structure FEAT-391-task-uri-types-and-resolution-protocol
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Narrative
+
+This is the central refactor. Today =TodoItem= has a numeric =id= (=task-3=), belongs to a =TodoPhase= (execution barrier), and uses a flat =blockers: string[]= for DAG edges. Phases dictate ordering: "complete phases in order" is a prompt-enforced rule, not a code-enforced DAG property.
+
+After this refactor:
+- =TodoPhase= is eliminated as an execution barrier. It becomes an optional cosmetic label (like an org heading) with no scheduling semantics.
+- =TodoItem.id= becomes a URI slug (=define-types=) that resolves to a full =task://= or =data://= URI via context.
+- =TodoItem.kind= distinguishes work nodes (dispatched to agents) from data nodes (satisfied when content exists).
+- The =MutableDag= is the sole authority on ordering. =blockers= are edges in the DAG. =normalizeInProgressTask= is replaced by DAG =getReady()=.
+- Fine-grained typed events are emitted on every mutation via the typed =EventBus=.
+- Branch-scoped views: a subagent's =todo_write= defaults to showing its own branch. It can query parent/sibling state via =task://= URIs.
+
+This is the largest item in the plan. The sub-outline decomposes it into independently testable pieces.
+
+* Design Decisions
+
+1. =TodoPhase= interface survives as =TodoGroup= -- a cosmetic label. =TodoGroup.tasks= is a flat list. Groups have no scheduling semantics.
+2. =TodoItem= gains: =kind: "work" | "data"=, =uri: string= (canonical task:// or data:// URI), =filesDeps?: string[]=, =children?: TodoItem[]=.
+3. =TodoItem.id= is the slug portion of the URI. Backward-compat: =task-3= slugs still work.
+4. =TodoItem.blockers= references URI slugs (resolved via context) or full URIs.
+5. The internal state is a =MutableDag<TodoItem>=. =applyOps()= mutates the DAG. =getTodoState()= returns a view (groups + flat task list) derived from the DAG.
+6. =normalizeInProgressTask= is replaced by a new =promoteReadyTasks(dag, isolationMode)= function that uses =dag.getReady()= and file-dep overlap checking.
+7. Fine-grained events emitted after each op: =todo:task:created=, =todo:task:status=, =todo:task:blocked=, =todo:task:unblocked=. The coarse =todo:change= event is still emitted for backward compat (derived from fine-grained events).
+8. The =todo_write= tool schema changes: =replace= op takes a flat task list with explicit =blockers= instead of phases. =add_phase= becomes =add_group= (cosmetic). =add_task= works on the flat DAG.
+9. SMOL model optionally names categories from the DAG structure post-hoc. This is a rendering concern, not a data model concern.
+
+* Files to Modify
+
+** =packages/coding-agent/src/tools/todo-write.ts= (major refactor)
+- Replace =TodoPhase= with =TodoGroup= (optional label)
+- Add =kind=, =uri=, =filesDeps=, =children= to =TodoItem=
+- Replace =normalizeInProgressTask= with =promoteReadyTasks=
+- Refactor =applyOps= to mutate =MutableDag<TodoItem>= instead of flat arrays
+- Emit fine-grained typed events via =EventBus<SwarmEventMap>=
+- Keep =todo:change= emission for backward compat
+- Update schema: =replace= takes flat task list, =add_group= replaces =add_phase=
+
+** =packages/coding-agent/src/prompts/tools/todo-write.md=
+- Document new =kind= field, URI addressing, =add_group= op
+- Remove phase-as-execution-barrier language
+- Add branch-scoped view documentation
+- Keep =filesDeps= documentation
+
+** =packages/coding-agent/src/task/index.ts= (TaskTool)
+- Auto-roster: generate URI slugs instead of =task-N= numeric IDs
+- =predictedTodoRefByTaskId=: predict URI slugs
+- TodoRef lifecycle: use URI resolution
+
+** =packages/coding-agent/src/task/template.ts=
+- =resolvePredecessorResultsContext=: resolve URI-based blockers
+- =resolveVerificationContext=: resolve URI-based todoRefs
+
+** =packages/coding-agent/src/modes/fluid-mode.ts=
+- =planWavesToTodoPhases= becomes =planWavesToTodoGroups=
+- Wave materialization uses =MutableDag= instead of flat phase arrays
+
+** =packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts=
+- Output =TodoGroup[]= instead of =TodoPhase[]=
+- Build =MutableDag<TodoItem>= from waves
+
+* Existing Patterns to Follow
+- Current =applyOps= (=todo-write.ts= line 561): mutation loop, error collection, normalization
+- Current =normalizeInProgressTask= (line 445): concurrency enforcement
+- =MutableDag.getReady()= (from FEAT-390): DAG-native readiness
+- =EventBus<SwarmEventMap>= (from FEAT-389): typed event emission
+- =resolveTaskUri= (from FEAT-391): slug-to-URI resolution
+
+* Sub-outline (test-first except for integration wiring)
+
+** PROJ-027::new-todo-types
+Define new =TodoGroup=, updated =TodoItem= with =kind=, =uri=, =filesDeps=, =children=. Pure types.
+
+** PROJ-027::promote-ready-tests
+File: =packages/coding-agent/test/tools/todo-promote-ready.test.ts=
+
+*** Isolation off: single task promoted
+- DAG: a(pending), b(pending, blocks:[a]). isolationMode=false.
+- =promoteReadyTasks(dag, false)= => a becomes in_progress, b stays pending.
+
+*** Isolation on: multiple independent tasks promoted
+- DAG: a(pending, files:["x.ts"]), b(pending, files:["y.ts"]). No edges. isolation=true.
+- => Both become in_progress.
+
+*** Isolation on, file overlap: serialized
+- DAG: a(pending, files:["x.ts"]), b(pending, files:["x.ts"]). isolation=true.
+- => Only a becomes in_progress.
+
+*** Delegated tasks: excluded from promotion logic
+- a(in_progress, delegated), b(pending). isolation=false.
+- => b becomes in_progress (delegated a doesn't count).
+
+*** Blocker resolution
+- a(completed), b(pending, blocks:[a]). => b promoted.
+
+*** Data nodes: satisfied when content exists
+- data node d(pending, kind:"data"), work node w(pending, blocks:[d]).
+- d has content => d auto-satisfied, w becomes ready.
+
+** PROJ-027::promote-ready-impl
+Depends on: PROJ-027::promote-ready-tests
+
+** PROJ-027::apply-ops-dag-tests
+File: =packages/coding-agent/test/tools/todo-apply-ops-dag.test.ts=
+
+*** Replace op creates DAG from flat list
+- =ops: [{op: "replace", tasks: [{slug: "a"}, {slug: "b", blockers: ["a"]}]}]=
+- => DAG has 2 nodes, edge a->b.
+
+*** Add_group is cosmetic
+- =ops: [{op: "add_group", name: "foundation", tasks: [...]}]=
+- => Group exists with label. Tasks are in DAG. Group has no scheduling effect.
+
+*** Update status emits fine-grained event
+- =ops: [{op: "update", id: "a", status: "in_progress"}]=
+- => =todo:task:status= event emitted with ={from: "pending", to: "in_progress"}=.
+
+*** Backward compat: numeric IDs resolve
+- =ops: [{op: "replace", tasks: [{slug: "task-1"}, {slug: "task-2"}]}]=
+- Both resolve. =task-1= and =task-2= are valid slugs.
+
+*** Gate verification unchanged
+- Gated task completed without =verified: true= => rejected (existing behavior).
+
+** PROJ-027::apply-ops-dag-impl
+Depends on: PROJ-027::apply-ops-dag-tests, PROJ-027::promote-ready-impl.
+Note on sequencing: this is integration/orchestration code. The implementation requires the DAG infrastructure (FEAT-390) and promotion logic to exist before the full =applyOps= rewrite can run. Tests are written first but may need the promotion implementation as a collaborator.
+
+** PROJ-027::update-prompt
+Update =todo-write.md= with new schema, =kind= field, URI addressing, =add_group=.
+
+** PROJ-027::update-task-tool
+Modify =TaskTool= auto-roster, todoRef lifecycle, URI slug generation.
+
+** PROJ-027::update-fluid-mode
+Modify =plan-to-todos.ts= and =fluid-mode.ts= for =TodoGroup= output.
+
+** PROJ-027::regression-suite
+Run ALL existing todo-write tests. Fix any failures from the refactor. Every existing test must either pass unchanged or be updated with equivalent assertions.
+* Verification
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= passes (updated)
+- =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-write-failed.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-write-deferral.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-promote-ready.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-apply-ops-dag.test.ts= passes
+- =bun test packages/coding-agent/test/task/batch-scheduler.test.ts= passes
+- =bun check:ts= passes

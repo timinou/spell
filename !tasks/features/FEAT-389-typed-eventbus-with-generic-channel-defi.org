@@ -1,0 +1,118 @@
+#+TITLE: Typed EventBus with Generic Channel Definitions
+#+STATE: DONE
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-389-typed-eventbus-with-generic-channel-defi
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: agent-runtime
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Narrative
+
+Spell's =EventBus= (=utils/event-bus.ts=) uses =string= channel names and =unknown= payloads. Every subscriber must cast =data= to the expected type. There is zero compile-time safety: you can subscribe to ="todo:change"= and treat the payload as a string, and TypeScript won't complain.
+
+For the swarm architecture, the event bus becomes the central nervous system -- todo state changes, artifact notifications, handoff signals, and scheduler commands all flow through it. Without type safety, this is a runtime bug factory.
+
+The blessed pattern in the TypeScript ecosystem is a *typed event map*: a single interface mapping channel names to payload types, with generic =emit<K>()= and =subscribe<K>()= methods that constrain the payload type per channel. This is the pattern used by =ts-bus=, =typed-event-bus=, and recommended by DDD practitioners (Khalil Stemmler, Event-Driven.io).
+
+This item extends the existing =EventBus= with generic type parameters while preserving full backward compatibility. Existing untyped callers continue to work. New callers get compile-time safety.
+
+* Design Decisions
+
+1. The existing =EventBus= class gains a generic parameter: =EventBus<E extends EventMap = Record<string, unknown>>=. Default =Record<string, unknown>= preserves backward compat.
+2. =EventMap= is an interface mapping channel name strings to payload types.
+3. =emit()=, =enqueue()=, =subscribe()= become generic over =K extends keyof E=. Payload type is inferred from the channel name.
+4. A =FakeEventBus= test helper is created that records all emitted/enqueued events for assertion. This replaces ad-hoc mock patterns in tests.
+5. Runtime behavior is unchanged. Type safety is compile-time only. No runtime validation of payloads (that would break perf for P0 sync emit).
+6. Existing callers that use string literals for channels get automatic type inference when the =EventMap= is properly typed. Callers using dynamic channel strings fall back to =unknown=.
+
+* Files to Create
+
+** =packages/coding-agent/src/utils/typed-event-map.ts=
+#+begin_src typescript
+/** Base constraint for event maps. Channel name -> payload type. */
+export type EventMap = Record<string, unknown>;
+
+/** Extract payload type for a channel from an event map. */
+export type EventPayload<E extends EventMap, K extends keyof E> = E[K];
+
+/** Core swarm event map. Extended by consumers. */
+export interface SwarmEventMap {
+  "todo:task:created": { taskUri: string; kind: "work" | "data"; slug: string };
+  "todo:task:status": { taskUri: string; from: string; to: string };
+  "todo:task:blocked": { taskUri: string; blockerUri: string };
+  "todo:task:unblocked": { taskUri: string };
+  "todo:dag:node_added": { nodeUri: string; deps: string[] };
+  "todo:dag:node_removed": { nodeUri: string; cascade: string[] };
+  "swarm:artifact": { agentId: string; dataUri: string; storagePath?: string };
+  "swarm:handoff": { fromAgent: string; toAgent?: string; context: string };
+  "swarm:progress": { agentId: string; progress: number; total: number; label: string };
+}
+#+end_src
+
+** =packages/coding-agent/src/utils/fake-event-bus.ts=
+#+begin_src typescript
+/** Test helper that records all events for assertion. */
+export class FakeEventBus<E extends EventMap = Record<string, unknown>> {
+  readonly published: Array<{ channel: string; data: unknown; priority?: Priority }> = [];
+  
+  emit<K extends keyof E & string>(channel: K, data: E[K]): void;
+  enqueue<K extends keyof E & string>(channel: K, data: E[K], priority: Priority, key?: string): boolean;
+  subscribe<K extends keyof E & string>(channel: K, handler: (data: E[K]) => void): () => void;
+  
+  /** Assert helpers */
+  getEvents<K extends keyof E & string>(channel: K): E[K][];
+  getEventCount(channel?: string): number;
+  clear(): void;
+}
+#+end_src
+
+* Files to Modify
+
+** =packages/coding-agent/src/utils/event-bus.ts=
+Add generic parameter to =EventBus= class. Update =emit=, =enqueue=, =subscribe= signatures. Keep runtime implementation identical. The existing =EventHandler = (data: unknown) => void | Promise<void>= becomes =EventHandler<T> = (data: T) => void | Promise<void>=.
+
+* Existing Patterns to Follow
+- Current =EventBus= class (=utils/event-bus.ts=): Priority enum, queue entries, subscribe/emit/enqueue/drain API
+- Current =event-bus.test.ts=: test structure, Bun test runner, assertion patterns
+- =FluidEvent= union type (=orchestrators/fluid/types.ts=): existing approach to typed events (but using a union rather than a map)
+
+* Sub-outline (test-first)
+
+** FEAT-389::define-types
+Define =EventMap=, =SwarmEventMap=, =EventPayload= types. Pure types, no logic.
+
+** FEAT-389::typed-bus-tests
+Write tests for typed EventBus.
+File: =packages/coding-agent/test/utils/typed-event-bus.test.ts=
+
+*** Type inference test
+- Create =EventBus<SwarmEventMap>=.
+- =bus.subscribe("todo:task:created", (data) => { ... })= -- verify =data= is typed as ={ taskUri: string; kind: string; slug: string }= (compile-time, use =expectTypeOf= or =satisfies=).
+- =bus.emit("todo:task:created", { taskUri: "task://current/main/define-types", kind: "work", slug: "define-types" })= compiles.
+- =bus.emit("todo:task:created", { wrong: true })= should fail type-check (verify via =@ts-expect-error= comment).
+
+*** Backward compat test
+- Create untyped =EventBus()= (default generic). All existing test scenarios from =event-bus.test.ts= pass unchanged.
+
+*** FakeEventBus tests
+- =fake.emit("todo:task:status", { taskUri: "...", from: "pending", to: "in_progress" })=
+- =fake.getEvents("todo:task:status")= returns array with the emitted event.
+- =fake.getEventCount()= returns total across all channels.
+- =fake.getEventCount("todo:task:status")= returns 1.
+- =fake.clear()= resets.
+
+** FEAT-389::implement-typed-bus
+Depends on: FEAT-389::typed-bus-tests
+
+** FEAT-389::implement-fake-bus
+Depends on: FEAT-389::typed-bus-tests
+
+* Verification
+- =bun test packages/coding-agent/test/utils/typed-event-bus.test.ts= passes
+- =bun test packages/coding-agent/test/utils/event-bus.test.ts= passes (zero changes to existing tests)
+- =bun check:ts= passes

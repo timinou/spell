@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
+import type { ToolSession } from "../../src/tools";
 import type { FormatSummaryOptions, TodoDelegation, TodoItem, TodoPhase, TodoStatus } from "../../src/tools/todo-write";
-import { cloneTodoPhases, formatSummary } from "../../src/tools/todo-write";
+import { cloneTodoPhases, formatSummary, TodoWriteTool } from "../../src/tools/todo-write";
 
 function createSession(initialPhases: TodoPhase[] = []): ToolSession {
 	let phases = initialPhases;

@@ -66,6 +66,7 @@ import {
 	AgentProtocolHandler,
 	ArtifactProtocolHandler,
 	CanvasProtocolHandler,
+	createTaskUriProtocolHandlers,
 	InternalUrlRouter,
 	JobsProtocolHandler,
 	LocalProtocolHandler,
@@ -912,10 +913,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		const preview = `${result.slice(0, ASYNC_PREVIEW_MAX_CHARS)}\n\n[Output truncated. Showing first ${ASYNC_PREVIEW_MAX_CHARS.toLocaleString()} characters.]`;
 		try {
-			const { path: artifactPath, id: artifactId } = await sessionManager.allocateArtifactPath("async");
-			if (artifactPath && artifactId) {
-				await Bun.write(artifactPath, result);
-				return `${preview}\nFull output: artifact://${artifactId}`;
+			const artifact = await sessionManager.allocateArtifactPath("async");
+			if (artifact?.path) {
+				await Bun.write(artifact.path, result);
+				return `${preview}\nFull output: ${artifact.uri}`;
 			}
 		} catch (error) {
 			logger.warn("Failed to persist async follow-up artifact", {
@@ -1023,11 +1024,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		activateDiscoveredMCPTools: toolNames => session.activateDiscoveredMCPTools(toolNames),
 		getCheckpointState: () => session.getCheckpointState(),
 		setCheckpointState: state => session.setCheckpointState(state ?? undefined),
-		allocateOutputArtifact: async toolType => {
+		allocateOutputArtifact: async (toolType, extension) => {
 			try {
-				return await sessionManager.allocateArtifactPath(toolType);
+				return await sessionManager.allocateArtifactPath(toolType, extension);
 			} catch {
-				return {};
+				return undefined;
 			}
 		},
 		settings,
@@ -1059,7 +1060,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		compareGitBaseline: baseline => session.compareGitBaseline(baseline),
 	};
 
-	// Initialize internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, local://)
+	// Initialize internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, local://, task://, data://)
 	const internalRouter = new InternalUrlRouter();
 	const getArtifactsDir = () => sessionManager.getArtifactsDir();
 	internalRouter.register(new AgentProtocolHandler({ getArtifactsDir }));
@@ -1088,6 +1089,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	internalRouter.register(new PiProtocolHandler());
 	internalRouter.register(new JobsProtocolHandler({ getAsyncJobManager: () => asyncJobManager }));
 	internalRouter.register(new McpProtocolHandler({ getMcpManager: () => mcpManager }));
+	for (const handler of createTaskUriProtocolHandlers({ getCurrentSessionId: () => sessionManager.getSessionId() })) {
+		internalRouter.register(handler);
+	}
 	internalRouter.register(
 		new OrgProtocolHandler({
 			getSettings: () => settings,

@@ -8,7 +8,7 @@ import {
 import type { FluidPlan } from "../../src/orchestrators/fluid/types";
 
 describe("planWavesToTodoPhases", () => {
-	test("maps extracted plan waves into sequential todo phases", () => {
+	test("maps extracted plan waves without inventing implicit cross-wave blockers", () => {
 		const waves: PlanWave[] = [
 			{
 				name: "foundation",
@@ -33,7 +33,7 @@ describe("planWavesToTodoPhases", () => {
 			orgItemId: "FEAT-001",
 		});
 		expect(phases[0]?.tasks[0]?.orgItemClosingId).toBeUndefined();
-		expect(phases[1]?.tasks.map(task => task.blockers)).toEqual([["task-1"], ["task-1"]]);
+		expect(phases[1]?.tasks.map(task => task.blockers)).toEqual([undefined, undefined]);
 		expect(phases[1]?.tasks[0]?.orgItemClosingId).toBe("FEAT-001");
 		expect(phases[1]?.tasks[1]?.orgItemClosingId).toBe("FEAT-002");
 	});

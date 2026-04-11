@@ -1,0 +1,53 @@
+#+TITLE: Org Blackboard with Data Node Bridging
+#+STATE: DONE
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-393-org-blackboard-with-data-node-bridging
+#+EFFORT: M
+#+PRIORITY: B
+#+LAYER: agent-runtime
+#+DEPENDS: FEAT-389-typed-eventbus-with-generic-channel-defi FEAT-391-task-uri-types-and-resolution-protocol
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Narrative
+
+Tasks and data live in the DAG. But agents need durable shared state that persists beyond a single session and is human-readable. Org items serve this role: the blackboard. Agents write findings, contracts, and progress to org items. The event bus bridges blackboard writes to =data://= node satisfaction in the DAG.
+
+The blackboard is *separate* from the DAG. It is the persistent storage layer. =data://= nodes in the DAG are the logical references. When a blackboard entry matches a =data://= node's expected content, the event bus fires =swarm:artifact= and the scheduler satisfies that node.
+
+* Design Decisions
+
+1. Blackboard entries are org items in a =swarm= category. Prefix: =SWARM=.
+2. Each swarm run creates a parent item. Agent writes are children.
+3. Entries have PROPERTIES: =:AGENT:=, =:TYPE:= (artifact/finding/handoff/progress/contract), =:DATA_URI:= (optional, links to a =data://= node).
+4. =SwarmBlackboard= wraps =OrgClient= calls. On write, if =DATA_URI= is set, emits =swarm:artifact= event. The scheduler picks this up and satisfies the corresponding =data://= node.
+5. LOGBOOK entries on the parent item record swarm lifecycle events (start/complete/fail per agent).
+6. Agents interact via existing MCP org tools. =SwarmBlackboard= is a convenience layer for the scheduler/runtime, not a new tool for agents.
+
+* Files to Create
+- =packages/coding-agent/src/swarm/blackboard.ts= -- =SwarmBlackboard= class
+- =packages/coding-agent/src/swarm/types.ts= -- =BlackboardEntry=, =SwarmRunMetadata=
+
+* Sub-outline (test-first)
+
+** FEAT-393::bb-types
+Define types.
+
+** FEAT-393::bb-tests
+File: =packages/coding-agent/test/swarm/blackboard.test.ts=
+- init creates parent SWARM org item
+- write creates child with correct properties
+- write with DATA_URI emits =swarm:artifact= event (use FakeEventBus)
+- write without DATA_URI does NOT emit artifact event
+- read filters by agent/type
+- logEvent appends org note to parent
+
+** FEAT-393::bb-impl
+Depends on: FEAT-393::bb-tests
+
+* Verification
+- =bun test packages/coding-agent/test/swarm/blackboard.test.ts= passes
+- =bun check:ts= passes

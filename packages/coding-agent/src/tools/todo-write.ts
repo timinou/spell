@@ -20,9 +20,12 @@ import type { Theme } from "../modes/theme/theme";
 import { buildOrgConfig } from "../plan-mode/org-plan";
 import todoWriteDescription from "../prompts/tools/todo-write.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
+import { resolveArtifactScopeFromArtifactsDir, resolveArtifactScopeFromSessionFile } from "../session/artifacts";
 import type { GitBaseline } from "../session/git-baseline";
 import type { SessionEntry } from "../session/session-manager";
+import { buildTaskUri, resolveTaskUri, type TaskUriContext } from "../swarm/uri";
 import { type GateFailure, verifyGates } from "../task/gate-verification";
+import { MutableDag } from "../task/mutable-dag";
 import { renderStatusLine, renderTreeList } from "../tui";
 import { PREVIEW_LIMITS } from "./render-utils";
 
@@ -31,6 +34,7 @@ import { PREVIEW_LIMITS } from "./render-utils";
 // =============================================================================
 
 export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned" | "failed" | "gate_failed";
+export type TodoKind = "work" | "data";
 
 export interface TodoDelegationResult {
 	output?: string;
@@ -49,10 +53,16 @@ export interface TodoDelegation {
 
 export interface TodoItem {
 	id: string;
+	uri?: string;
+	kind?: TodoKind;
 	content: string;
 	status: TodoStatus;
 	notes?: string;
 	details?: string;
+	filesDeps?: string[];
+	dataContent?: string;
+	artifactPath?: string;
+	children?: TodoItem[];
 	gateCommit?: boolean;
 	gateArtifact?: string;
 	gateCmd?: string;
@@ -73,6 +83,10 @@ export interface TodoItem {
 	layer?: string;
 }
 
+/**
+ * Cosmetic grouping only. Ordering comes from blockers/DAG edges, not group position.
+ * The legacy name is retained temporarily because session/UI plumbing still references `phases`.
+ */
 export interface TodoPhase {
 	id: string;
 	name: string;
@@ -81,6 +95,7 @@ export interface TodoPhase {
 
 export interface TodoWriteToolDetails {
 	phases: TodoPhase[];
+	groups?: TodoPhase[];
 	storage: "session" | "memory";
 }
 
@@ -92,6 +107,10 @@ const StatusEnum = StringEnum(["pending", "in_progress", "completed", "abandoned
 	description: "Task status",
 });
 
+const KindEnum = StringEnum(["work", "data"] as const, {
+	description: "Todo node kind",
+});
+
 const DelegationSchema = Type.Object({
 	sessionId: Type.String({ description: "Delegated subagent session ID" }),
 	transcriptPath: Type.Optional(Type.String({ description: "Transcript path for the delegated subagent session" })),
@@ -99,17 +118,30 @@ const DelegationSchema = Type.Object({
 });
 
 const InputTask = Type.Object({
+	slug: Type.Optional(Type.String({ description: "Stable slug/ID for the task. Defaults to task-N." })),
+	uri: Type.Optional(
+		Type.String({
+			description:
+				"Canonical task:// or data:// URI. When omitted, todo_write builds one from the current session context.",
+		}),
+	),
+	kind: Type.Optional(KindEnum),
 	content: Type.String({ description: "Task description" }),
 	notes: Type.Optional(Type.String({ description: "Additional context or notes" })),
 	details: Type.Optional(
 		Type.String({ description: "Implementation details, file paths, and specifics (shown only when active)" }),
 	),
+	filesDeps: Type.Optional(
+		Type.Array(Type.String({ description: "Files this task mutates; used for isolation overlap checks" })),
+	),
+	dataContent: Type.Optional(Type.String({ description: "Inline content that satisfies a data node" })),
+	artifactPath: Type.Optional(Type.String({ description: "Artifact path that satisfies a data node" })),
 	gateCommit: Type.Optional(Type.Boolean({ description: "Require commit after completing this task" })),
 	gateArtifact: Type.Optional(Type.String({ description: "Path to artifact that must exist after completion" })),
 	gateCmd: Type.Optional(Type.String({ description: "Command to run for verification" })),
 	gateLlm: Type.Optional(Type.String({ description: "LLM review criteria" })),
 	verifyCmd: Type.Optional(Type.String({ description: "Recommended verification command" })),
-	blockers: Type.Optional(Type.Array(Type.String({ description: "Task ID that blocks this task" }))),
+	blockers: Type.Optional(Type.Array(Type.String({ description: "Task ID, slug, or URI that blocks this task" }))),
 	orgItemId: Type.Optional(Type.String({ description: "Org item ID for lineage tracking (non-gating)" })),
 	orgItemClosingId: Type.Optional(
 		Type.String({ description: "Org item ID that triggers two-phase verified completion" }),
@@ -119,7 +151,7 @@ const InputTask = Type.Object({
 });
 
 const InputPhase = Type.Object({
-	name: Type.String({ description: "Phase name" }),
+	name: Type.String({ description: "Group name" }),
 	tasks: Type.Optional(Type.Array(InputTask)),
 });
 
@@ -132,15 +164,26 @@ const todoWriteSchema = Type.Object({
 			}),
 			Type.Object({
 				op: Type.Literal("add_phase"),
-				name: Type.String({ description: "Phase name" }),
+				name: Type.String({ description: "Group name" }),
+				tasks: Type.Optional(Type.Array(InputTask)),
+			}),
+			Type.Object({
+				op: Type.Literal("add_group"),
+				name: Type.String({ description: "Group name" }),
 				tasks: Type.Optional(Type.Array(InputTask)),
 			}),
 			Type.Object({
 				op: Type.Literal("add_task"),
-				phase: Type.String({ description: "Phase ID, e.g. phase-1" }),
+				phase: Type.String({ description: "Group ID, e.g. phase-1" }),
+				slug: Type.Optional(Type.String({ description: "Stable slug/ID for the task. Defaults to task-N." })),
+				uri: Type.Optional(Type.String({ description: "Canonical task:// or data:// URI for the task" })),
+				kind: Type.Optional(KindEnum),
 				content: Type.String({ description: "Task description" }),
 				notes: Type.Optional(Type.String({ description: "Additional context or notes" })),
 				details: Type.Optional(Type.String({ description: "Implementation details, file paths, and specifics" })),
+				filesDeps: Type.Optional(Type.Array(Type.String())),
+				dataContent: Type.Optional(Type.String()),
+				artifactPath: Type.Optional(Type.String()),
 				gateCommit: Type.Optional(Type.Boolean()),
 				gateArtifact: Type.Optional(Type.String()),
 				gateCmd: Type.Optional(Type.String()),
@@ -154,11 +197,14 @@ const todoWriteSchema = Type.Object({
 			}),
 			Type.Object({
 				op: Type.Literal("update"),
-				id: Type.String({ description: "Task ID, e.g. task-3" }),
+				id: Type.String({ description: "Task ID, slug, or URI" }),
 				status: Type.Optional(StatusEnum),
 				content: Type.Optional(Type.String({ description: "Updated task description" })),
 				notes: Type.Optional(Type.String({ description: "Additional context or notes" })),
 				details: Type.Optional(Type.String({ description: "Updated details" })),
+				filesDeps: Type.Optional(Type.Array(Type.String())),
+				dataContent: Type.Optional(Type.String()),
+				artifactPath: Type.Optional(Type.String()),
 				gateCommit: Type.Optional(Type.Boolean()),
 				gateArtifact: Type.Optional(Type.String()),
 				gateCmd: Type.Optional(Type.String()),
@@ -206,10 +252,63 @@ function makeEmptyFile(): TodoFile {
 
 export function findTask(phases: TodoPhase[], id: string): TodoItem | undefined {
 	for (const phase of phases) {
-		const task = phase.tasks.find(t => t.id === id);
+		const task = phase.tasks.find(t => t.id === id || t.uri === id);
 		if (task) return task;
 	}
 	return undefined;
+}
+
+interface ResolvedTodoContext extends TaskUriContext {
+	currentSessionId: string;
+	currentAgentName: string;
+}
+
+function resolveTodoContext(
+	session: Pick<ToolSession, "getSessionFile" | "getSessionId" | "getArtifactsDir">,
+): ResolvedTodoContext {
+	const artifactsDir = session.getArtifactsDir?.() ?? undefined;
+	if (artifactsDir) {
+		const scope = resolveArtifactScopeFromArtifactsDir(artifactsDir);
+		return {
+			currentSessionId: scope.sessionId ?? session.getSessionId?.() ?? "current",
+			currentAgentName: scope.agentName,
+		};
+	}
+	const sessionFile = session.getSessionFile();
+	if (sessionFile) {
+		const scope = resolveArtifactScopeFromSessionFile(sessionFile, session.getSessionId?.() ?? undefined);
+		return { currentSessionId: scope.sessionId, currentAgentName: scope.agentName };
+	}
+	return { currentSessionId: session.getSessionId?.() ?? "current", currentAgentName: "main" };
+}
+
+function buildTodoUri(task: Pick<TodoItem, "id" | "kind" | "uri">, context: ResolvedTodoContext): string {
+	if (task.uri) return task.uri;
+	return buildTaskUri({
+		scheme: task.kind === "data" ? "data" : "task",
+		sessionId: context.currentSessionId,
+		agentName: context.currentAgentName,
+		slug: task.id,
+	});
+}
+
+function hydrateTodoItem(task: TodoItem, context: ResolvedTodoContext): TodoItem {
+	const hydrated: TodoItem = {
+		...task,
+		kind: task.kind ?? "work",
+		uri: buildTodoUri(task, context),
+		filesDeps: task.filesDeps ? [...task.filesDeps] : undefined,
+		blockers: task.blockers ? [...task.blockers] : undefined,
+		children: task.children ? task.children.map(child => hydrateTodoItem(child, context)) : undefined,
+		delegation: cloneTodoDelegation(task.delegation),
+	};
+	return hydrated;
+}
+
+function isSatisfiedDataNode(task: TodoItem): boolean {
+	if ((task.kind ?? "work") !== "data") return false;
+	if (task.status === "completed") return true;
+	return Boolean(task.dataContent || task.artifactPath || task.delegation?.result?.outputPath);
 }
 
 function buildPhaseFromInput(
@@ -217,27 +316,37 @@ function buildPhaseFromInput(
 	phaseId: string,
 	nextTaskId: number,
 	policies: TaskPolicy[],
+	context: ResolvedTodoContext,
 ): { phase: TodoPhase; nextTaskId: number } {
 	const tasks: TodoItem[] = [];
 	let tid = nextTaskId;
 	for (const t of input.tasks ?? []) {
-		const task: TodoItem = {
-			id: `task-${tid++}`,
-			content: t.content,
-			status: "pending",
-			notes: t.notes,
-			details: t.details,
-			gateCommit: t.gateCommit,
-			gateArtifact: t.gateArtifact,
-			gateCmd: t.gateCmd,
-			gateLlm: t.gateLlm,
-			verifyCmd: t.verifyCmd,
-			blockers: t.blockers,
-			orgItemId: t.orgItemId,
-			orgItemClosingId: t.orgItemClosingId,
-			delegation: cloneTodoDelegation(t.delegation),
-			layer: t.layer,
-		};
+		const id = t.slug ?? `task-${tid++}`;
+		const task: TodoItem = hydrateTodoItem(
+			{
+				id,
+				uri: t.uri,
+				kind: t.kind,
+				content: t.content,
+				status: "pending",
+				notes: t.notes,
+				details: t.details,
+				filesDeps: t.filesDeps,
+				dataContent: t.dataContent,
+				artifactPath: t.artifactPath,
+				gateCommit: t.gateCommit,
+				gateArtifact: t.gateArtifact,
+				gateCmd: t.gateCmd,
+				gateLlm: t.gateLlm,
+				verifyCmd: t.verifyCmd,
+				blockers: t.blockers,
+				orgItemId: t.orgItemId,
+				orgItemClosingId: t.orgItemClosingId,
+				delegation: cloneTodoDelegation(t.delegation),
+				layer: t.layer,
+			},
+			context,
+		);
 		injectPolicyGates(task, policies);
 		tasks.push(task);
 	}
@@ -281,7 +390,13 @@ function cloneTodoDelegation(delegation: TodoDelegation | undefined): TodoDelega
 }
 
 function cloneTodoTask(task: TodoItem): TodoItem {
-	return { ...task, delegation: cloneTodoDelegation(task.delegation) };
+	return {
+		...task,
+		blockers: task.blockers ? [...task.blockers] : undefined,
+		filesDeps: task.filesDeps ? [...task.filesDeps] : undefined,
+		children: task.children ? task.children.map(child => cloneTodoTask(child)) : undefined,
+		delegation: cloneTodoDelegation(task.delegation),
+	};
 }
 
 export function cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
@@ -422,15 +537,57 @@ async function applyOrgLifecycleHooks(
 	return notices;
 }
 
+/** Resolve a blocker ref against the current todo state, supporting bare slugs and full URIs. */
+function resolveTaskRef(ref: string, allTasks: TodoItem[], context: ResolvedTodoContext): TodoItem | undefined {
+	const direct = allTasks.find(task => task.id === ref || task.uri === ref);
+	if (direct) return direct;
+	const resolved = resolveTaskUri(ref, context);
+	if (!resolved) return undefined;
+	const canonical = buildTaskUri(resolved);
+	return allTasks.find(task => task.uri === canonical || task.id === resolved.slug);
+}
+
+function hydrateTasks(phases: TodoPhase[], context: ResolvedTodoContext): TodoItem[] {
+	const tasks = flattenTasks(phases);
+	for (const task of tasks) {
+		task.kind ??= "work";
+		task.uri = buildTodoUri(task, context);
+		if (task.children?.length) {
+			for (const child of task.children) {
+				child.kind ??= "work";
+				child.uri = buildTodoUri(child, context);
+			}
+		}
+	}
+	return tasks;
+}
+
+function buildTodoDag(phases: TodoPhase[], context: ResolvedTodoContext): MutableDag<TodoItem> {
+	const tasks = hydrateTasks(phases, context);
+	const entries = tasks.map(
+		task =>
+			[
+				task.uri!,
+				task,
+				(task.blockers ?? [])
+					.map(ref => resolveTaskRef(ref, tasks, context)?.uri)
+					.filter((uri): uri is string => uri !== undefined),
+			] as [string, TodoItem, string[]],
+	);
+	return new MutableDag(entries);
+}
+
 /**
  * Check if a task has any blocker that is not yet completed or abandoned.
- * Unlike isTaskBlocked, this does NOT guard on the task's own status —
- * it purely evaluates the blocker graph. Missing refs are treated as resolved.
+ * Missing refs are treated as resolved for scheduling, but surfaced separately as warnings.
  */
 export function hasUnresolvedBlockers(task: TodoItem, allTasks: TodoItem[]): boolean {
+	const context: ResolvedTodoContext = { currentSessionId: "current", currentAgentName: "main" };
 	if (!task.blockers?.length) return false;
-	return task.blockers.some(blockerId => {
-		const blocker = allTasks.find(t => t.id === blockerId);
+	return task.blockers.some(blockerRef => {
+		const blocker =
+			resolveTaskRef(blockerRef, allTasks, context) ??
+			allTasks.find(t => t.id === blockerRef || t.uri === blockerRef);
 		if (!blocker) return false;
 		return blocker.status !== "completed" && blocker.status !== "abandoned";
 	});
@@ -442,33 +599,126 @@ export function isTaskBlocked(task: TodoItem, allTasks: TodoItem[]): boolean {
 	return hasUnresolvedBlockers(task, allTasks);
 }
 
-function normalizeInProgressTask(phases: TodoPhase[]): void {
-	const orderedTasks = phases.flatMap(phase => phase.tasks);
-	if (orderedTasks.length === 0) return;
+export function promoteReadyTasks(
+	phases: TodoPhase[],
+	isolationMode: boolean,
+	context: ResolvedTodoContext = { currentSessionId: "current", currentAgentName: "main" },
+): void {
+	const tasks = hydrateTasks(phases, context);
+	if (tasks.length === 0) return;
 
-	for (const task of orderedTasks) {
-		if (task.status === "in_progress" && hasUnresolvedBlockers(task, orderedTasks)) {
+	for (const task of tasks) {
+		if (
+			isSatisfiedDataNode(task) &&
+			task.status !== "abandoned" &&
+			task.status !== "failed" &&
+			task.status !== "gate_failed"
+		) {
+			task.status = "completed";
+		}
+	}
+
+	for (const task of tasks) {
+		if (task.status === "in_progress" && hasUnresolvedBlockers(task, tasks)) {
 			task.status = "pending";
 		}
 	}
 
-	const directInProgressTasks = orderedTasks.filter(task => task.status === "in_progress" && !isDelegatedTask(task));
-	if (directInProgressTasks.length > 1) {
-		for (const task of directInProgressTasks.slice(1)) {
-			task.status = "pending";
-		}
-	}
+	const filesConflict = (left: TodoItem, right: TodoItem): boolean => {
+		const leftFiles = left.filesDeps ?? [];
+		const rightFiles = right.filesDeps ?? [];
+		if (leftFiles.length === 0 || rightFiles.length === 0) return true;
+		const rightSet = new Set(rightFiles);
+		return leftFiles.some(file => rightSet.has(file));
+	};
 
-	const hasDirectInProgress = orderedTasks.some(task => task.status === "in_progress" && !isDelegatedTask(task));
-	if (hasDirectInProgress) return;
-
-	const hasTerminalFailure = orderedTasks.some(task => task.status === "failed" || task.status === "gate_failed");
-	if (hasTerminalFailure) return;
-
-	const firstPendingDirectTask = orderedTasks.find(
-		task => task.status === "pending" && !isDelegatedTask(task) && !isTaskBlocked(task, orderedTasks),
+	const initialDirectRunning = tasks.filter(
+		task => task.status === "in_progress" && !isDelegatedTask(task) && (task.kind ?? "work") === "work",
 	);
-	if (firstPendingDirectTask) firstPendingDirectTask.status = "in_progress";
+	const keptRunning: TodoItem[] = [];
+	for (const task of initialDirectRunning) {
+		const canKeep =
+			keptRunning.length === 0 ||
+			(isolationMode && task.filesDeps?.length && keptRunning.every(activeTask => !filesConflict(task, activeTask)));
+		if (canKeep) {
+			keptRunning.push(task);
+			continue;
+		}
+		task.status = "pending";
+	}
+	if (!isolationMode && tasks.some(task => task.status === "failed" || task.status === "gate_failed")) return;
+
+	const dag = buildTodoDag(phases, context);
+	const completed = new Set(
+		tasks.filter(task => task.status === "completed" || task.status === "abandoned").map(task => task.uri!),
+	);
+	const activeUris = new Set(
+		tasks.filter(task => task.status === "in_progress" && !isDelegatedTask(task)).map(task => task.uri!),
+	);
+
+	const readyUris = dag.getReadyNodeIds(completed).filter(uri => !activeUris.has(uri));
+	if (!isolationMode && keptRunning.length > 0) return;
+
+	for (const readyUri of readyUris) {
+		const task = tasks.find(candidate => candidate.uri === readyUri);
+		if (!task) continue;
+		if (task.status !== "pending" || isDelegatedTask(task) || (task.kind ?? "work") !== "work") continue;
+		if (isolationMode) {
+			const candidateFiles = task.filesDeps ?? [];
+			const activeTasks = [...activeUris]
+				.map(activeUri => tasks.find(candidate => candidate.uri === activeUri))
+				.filter((activeTask): activeTask is TodoItem => activeTask !== undefined);
+			const hasOpaqueConflict =
+				activeTasks.length > 0 &&
+				(candidateFiles.length === 0 || activeTasks.some(activeTask => (activeTask.filesDeps?.length ?? 0) === 0));
+			const overlaps = activeTasks.some(activeTask => dag.hasFileOverlap(readyUri, activeTask.uri!));
+			if (hasOpaqueConflict || overlaps) continue;
+		}
+		task.status = "in_progress";
+		activeUris.add(readyUri);
+		if (!isolationMode) return;
+	}
+}
+
+function collectBlockerGraphWarnings(phases: TodoPhase[], context: ResolvedTodoContext): string[] {
+	const allTasks = hydrateTasks(phases, context);
+	const warnings: string[] = [];
+	for (const task of allTasks) {
+		for (const blockerRef of task.blockers ?? []) {
+			if (!resolveTaskRef(blockerRef, allTasks, context)) {
+				warnings.push(
+					`${task.id} references non-existent blocker ${blockerRef} (dangling blocker is ignored for execution)`,
+				);
+			}
+		}
+	}
+
+	const visiting = new Set<string>();
+	const visited = new Set<string>();
+	const stack: string[] = [];
+	const cycleMessages = new Set<string>();
+	const visit = (task: TodoItem): void => {
+		if (visited.has(task.id)) return;
+		if (visiting.has(task.id)) {
+			const start = stack.indexOf(task.id);
+			if (start >= 0) {
+				cycleMessages.add(`Circular blockers detected: ${[...stack.slice(start), task.id].join(" -> ")}`);
+			}
+			return;
+		}
+		visiting.add(task.id);
+		stack.push(task.id);
+		for (const blockerRef of task.blockers ?? []) {
+			const blocker = resolveTaskRef(blockerRef, allTasks, context);
+			if (blocker) visit(blocker);
+		}
+		stack.pop();
+		visiting.delete(task.id);
+		visited.add(task.id);
+	};
+	for (const task of allTasks) visit(task);
+	warnings.push(...cycleMessages);
+	return [...new Set(warnings)];
 }
 
 export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPhase[] {
@@ -491,6 +741,7 @@ export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPha
 interface ApplyOpsResult {
 	file: TodoFile;
 	errors: string[];
+	warnings: string[];
 	/** Phase IDs that became fully completed in this call. */
 	completedPhaseIds: string[];
 	/** Tasks that transitioned to completed and have gate fields. */
@@ -563,23 +814,13 @@ export function applyOps(
 	ops: TodoWriteParams["ops"],
 	previousPhases: TodoPhase[],
 	policies: TaskPolicy[],
+	context: ResolvedTodoContext = { currentSessionId: "current", currentAgentName: "main" },
+	isolationMode: boolean = false,
 ): ApplyOpsResult {
 	const errors: string[] = [];
+	const warnings: string[] = [];
 	const pendingVerificationTasks: TodoItem[] = [];
 	const pendingDeferralTasks: TodoItem[] = [];
-	// Task IDs whose blockers were explicitly set by an op in this batch.
-	// Only these tasks are validated for dangling refs; pre-existing stale refs are pruned silently.
-	const batchBlockerTaskIds = new Set<string>();
-
-	const wasComplete = new Map<string, boolean>();
-	for (const phase of previousPhases) {
-		wasComplete.set(phase.id, isPhaseComplete(phase));
-	}
-
-	const previousStatus = new Map<string, TodoStatus>();
-	for (const phase of previousPhases) {
-		for (const task of phase.tasks) previousStatus.set(task.id, task.status);
-	}
 
 	for (const op of ops) {
 		switch (op.op) {
@@ -587,24 +828,25 @@ export function applyOps(
 				const next = makeEmptyFile();
 				for (const inputPhase of op.phases) {
 					const phaseId = `phase-${next.nextPhaseId++}`;
-					const { phase, nextTaskId } = buildPhaseFromInput(inputPhase, phaseId, next.nextTaskId, policies);
+					const { phase, nextTaskId } = buildPhaseFromInput(
+						inputPhase,
+						phaseId,
+						next.nextTaskId,
+						policies,
+						context,
+					);
 					next.phases.push(phase);
 					next.nextTaskId = nextTaskId;
 				}
 				file = next;
-				// All tasks in a replace op have their blockers set by this batch.
-				for (const phase of next.phases) {
-					for (const task of phase.tasks) batchBlockerTaskIds.add(task.id);
-				}
 				break;
 			}
-			case "add_phase": {
+			case "add_phase":
+			case "add_group": {
 				const phaseId = `phase-${file.nextPhaseId++}`;
-				const { phase, nextTaskId } = buildPhaseFromInput(op, phaseId, file.nextTaskId, policies);
+				const { phase, nextTaskId } = buildPhaseFromInput(op, phaseId, file.nextTaskId, policies, context);
 				file.phases.push(phase);
 				file.nextTaskId = nextTaskId;
-				// All tasks in an add_phase op have their blockers set by this batch.
-				for (const task of phase.tasks) batchBlockerTaskIds.add(task.id);
 				break;
 			}
 			case "add_task": {
@@ -613,27 +855,34 @@ export function applyOps(
 					errors.push(`Phase "${op.phase}" not found`);
 					break;
 				}
-				const task: TodoItem = {
-					id: `task-${file.nextTaskId++}`,
-					content: op.content,
-					status: "pending",
-					notes: op.notes,
-					details: op.details,
-					gateCommit: op.gateCommit,
-					gateArtifact: op.gateArtifact,
-					gateCmd: op.gateCmd,
-					gateLlm: op.gateLlm,
-					verifyCmd: op.verifyCmd,
-					blockers: op.blockers,
-					orgItemId: op.orgItemId,
-					orgItemClosingId: op.orgItemClosingId,
-					delegation: cloneTodoDelegation(op.delegation),
-					layer: op.layer,
-				};
+				const id = op.slug ?? `task-${file.nextTaskId++}`;
+				const task = hydrateTodoItem(
+					{
+						id,
+						uri: op.uri,
+						kind: op.kind,
+						content: op.content,
+						status: "pending",
+						notes: op.notes,
+						details: op.details,
+						filesDeps: op.filesDeps,
+						dataContent: op.dataContent,
+						artifactPath: op.artifactPath,
+						gateCommit: op.gateCommit,
+						gateArtifact: op.gateArtifact,
+						gateCmd: op.gateCmd,
+						gateLlm: op.gateLlm,
+						verifyCmd: op.verifyCmd,
+						blockers: op.blockers,
+						orgItemId: op.orgItemId,
+						orgItemClosingId: op.orgItemClosingId,
+						delegation: cloneTodoDelegation(op.delegation),
+						layer: op.layer,
+					},
+					context,
+				);
 				injectPolicyGates(task, policies);
 				target.tasks.push(task);
-				// Blockers for this task were set by this batch.
-				batchBlockerTaskIds.add(task.id);
 				break;
 			}
 			case "update": {
@@ -642,51 +891,46 @@ export function applyOps(
 					errors.push(`Task "${op.id}" not found`);
 					break;
 				}
-				// Apply non-status fields first (preserved even if gate rejects status transition)
 				if (op.content !== undefined) task.content = op.content;
 				if (op.notes !== undefined) task.notes = op.notes;
 				if (op.details !== undefined) task.details = op.details;
+				if (op.filesDeps !== undefined) task.filesDeps = [...op.filesDeps];
+				if (op.dataContent !== undefined) task.dataContent = op.dataContent;
+				if (op.artifactPath !== undefined) task.artifactPath = op.artifactPath;
 				if (op.gateCommit !== undefined) task.gateCommit = op.gateCommit;
 				if (op.gateArtifact !== undefined) task.gateArtifact = op.gateArtifact;
 				if (op.gateCmd !== undefined) task.gateCmd = op.gateCmd;
 				if (op.gateLlm !== undefined) task.gateLlm = op.gateLlm;
 				if (op.verifyCmd !== undefined) task.verifyCmd = op.verifyCmd;
-				if (op.blockers !== undefined) {
-					task.blockers = op.blockers;
-					// Blockers were explicitly set by this batch op.
-					batchBlockerTaskIds.add(task.id);
-				}
+				if (op.blockers !== undefined) task.blockers = [...op.blockers];
 				if (op.orgItemId !== undefined) task.orgItemId = op.orgItemId;
 				if (op.orgItemClosingId !== undefined) task.orgItemClosingId = op.orgItemClosingId;
 				if (op.delegation !== undefined) task.delegation = cloneTodoDelegation(op.delegation);
-				// Policy gates: inject when layer is set via update
 				if (op.layer !== undefined) {
 					task.layer = op.layer;
 					injectPolicyGates(task, policies);
 				}
-				// Smart gate: reject in_progress transition when task has unresolved blockers
-				if (op.status === "in_progress" && task.blockers?.length) {
-					const allTasks = file.phases.flatMap(p => p.tasks);
+				if (op.status === "in_progress") {
+					const allTasks = hydrateTasks(file.phases, context);
 					if (hasUnresolvedBlockers(task, allTasks)) {
-						const unresolvedDetails = task.blockers
-							.map(id => {
-								const blocker = allTasks.find(t => t.id === id);
-								return blocker && blocker.status !== "completed" && blocker.status !== "abandoned"
-									? `${id} (${blocker.status})`
+						const unresolved = (task.blockers ?? [])
+							.map(blockerRef => {
+								const blocker = resolveTaskRef(blockerRef, allTasks, context);
+								if (!blocker) return null;
+								return blocker.status !== "completed" && blocker.status !== "abandoned"
+									? `${blocker.id} (${blocker.status})`
 									: null;
 							})
-							.filter(Boolean)
+							.filter((value): value is string => value !== null)
 							.join(", ");
-						errors.push(`Cannot start ${op.id}: blocked by ${unresolvedDetails}`);
+						errors.push(`Cannot start ${op.id}: blocked by ${unresolved}`);
 						break;
 					}
 				}
-				// Two-phase gated completion: reject completion without verification
 				if (op.status === "completed" && hasRequiredGate(task) && !op.verified) {
 					pendingVerificationTasks.push(task);
 					break;
 				}
-				// Deferral gate: abandoned requires deferralFupId
 				if (op.status === "abandoned" && (!op.deferralFupId || op.deferralFupId.trim() === "")) {
 					pendingDeferralTasks.push(task);
 					break;
@@ -698,51 +942,33 @@ export function applyOps(
 		}
 	}
 
-	normalizeInProgressTask(file.phases);
-
-	// Validate dangling blocker refs only for tasks whose blockers were set in this batch.
-	// Pre-existing stale refs are pruned silently below.
-	const allTaskIds = new Set(file.phases.flatMap(p => p.tasks.map(t => t.id)));
-	for (const phase of file.phases) {
-		for (const task of phase.tasks) {
-			if (!task.blockers?.length) continue;
-			if (batchBlockerTaskIds.has(task.id)) {
-				for (const blockerId of task.blockers) {
-					if (!allTaskIds.has(blockerId)) errors.push(`${task.id} references non-existent blocker ${blockerId}`);
-				}
-			}
-		}
+	try {
+		promoteReadyTasks(file.phases, isolationMode, context);
+	} catch (error) {
+		errors.push(error instanceof Error ? error.message : String(error));
 	}
-	// Prune dangling blocker refs from all tasks so stale refs do not affect blocker gating.
-	for (const phase of file.phases) {
-		for (const task of phase.tasks) {
-			if (!task.blockers?.length) continue;
-			const pruned = task.blockers.filter(id => allTaskIds.has(id));
-			if (pruned.length !== task.blockers.length) task.blockers = pruned.length > 0 ? pruned : undefined;
-		}
+	warnings.push(...collectBlockerGraphWarnings(file.phases, context));
+	const hydratedTasks = hydrateTasks(file.phases, context);
+	for (const task of hydratedTasks) {
+		if (!task.blockers?.length) continue;
+		const pruned = task.blockers.filter(
+			blockerRef => resolveTaskRef(blockerRef, hydratedTasks, context) !== undefined,
+		);
+		if (pruned.length !== task.blockers.length) task.blockers = pruned.length > 0 ? pruned : undefined;
 	}
 
-	// Detect newly completed phases
-	const completedPhaseIds: string[] = [];
-	for (const phase of file.phases) {
-		if (isPhaseComplete(phase) && !wasComplete.get(phase.id)) completedPhaseIds.push(phase.id);
-	}
+	const completedPhaseIds = collectCompletedPhaseIds(previousPhases, file.phases);
+	const completedGatedTasks = collectCompletedGatedTasks(previousPhases, file.phases);
 
-	// Detect tasks that transitioned to completed and have gates
-	const completedGatedTasks: TodoItem[] = [];
-	for (const phase of file.phases) {
-		for (const task of phase.tasks) {
-			if (
-				task.status === "completed" &&
-				previousStatus.get(task.id) !== "completed" &&
-				(hasGate(task) || task.orgItemClosingId)
-			) {
-				completedGatedTasks.push(task);
-			}
-		}
-	}
-
-	return { file, errors, completedPhaseIds, completedGatedTasks, pendingVerificationTasks, pendingDeferralTasks };
+	return {
+		file,
+		errors,
+		warnings,
+		completedPhaseIds,
+		completedGatedTasks,
+		pendingVerificationTasks,
+		pendingDeferralTasks,
+	};
 }
 
 /** Build gate directive lines for a single task. */
@@ -759,6 +985,7 @@ function gateDirectivesForTask(task: TodoItem): string[] {
 export interface FormatSummaryOptions {
 	phases: TodoPhase[];
 	errors: string[];
+	warnings?: string[];
 	completedPhaseIds: string[];
 	completedGatedTasks: TodoItem[];
 	/** Tasks whose completion was rejected pending verification. */
@@ -775,6 +1002,7 @@ function formatTaskContent(task: TodoItem): string {
 export function formatSummary({
 	phases,
 	errors,
+	warnings = [],
 	completedPhaseIds,
 	completedGatedTasks,
 	pendingVerificationTasks,
@@ -782,8 +1010,13 @@ export function formatSummary({
 	pendingDeferralTasks,
 }: FormatSummaryOptions): string {
 	const allTasks = phases.flatMap(p => p.tasks);
-	if (allTasks.length === 0) return errors.length > 0 ? `Errors: ${errors.join("; ")}` : "Todo list cleared.";
-
+	if (allTasks.length === 0)
+		return [
+			errors.length > 0 ? `Errors: ${errors.join("; ")}` : "Todo list cleared.",
+			...warnings.map(w => `Warnings: ${w}`),
+		]
+			.filter(Boolean)
+			.join("\n");
 	const remainingByPhase = phases
 		.map(phase => ({
 			name: phase.name,
@@ -811,6 +1044,7 @@ export function formatSummary({
 
 	const lines: string[] = [];
 	if (errors.length > 0) lines.push(`Errors: ${errors.join("; ")}`);
+	for (const warning of warnings) lines.push(`Warnings: ${warning}`);
 	if (remainingTasks.length === 0) {
 		lines.push("Remaining items: none.");
 	} else {
@@ -1079,6 +1313,58 @@ async function verifyDirectWorkCompletions(
 	return gateVerificationFailures;
 }
 
+function firstUnresolvedBlockerUri(
+	task: TodoItem,
+	allTasks: TodoItem[],
+	context: ResolvedTodoContext,
+): string | undefined {
+	for (const blockerRef of task.blockers ?? []) {
+		const blocker = resolveTaskRef(blockerRef, allTasks, context);
+		if (!blocker) continue;
+		if (blocker.status !== "completed" && blocker.status !== "abandoned") return blocker.uri;
+	}
+	return undefined;
+}
+
+function emitTodoGraphEvents(
+	session: ToolSession,
+	previousPhases: TodoPhase[],
+	nextPhases: TodoPhase[],
+	context: ResolvedTodoContext,
+): void {
+	const eventBus = session.eventBus;
+	if (!eventBus) return;
+	const previousTasks = hydrateTasks(cloneTodoPhases(previousPhases), context);
+	const nextTasks = hydrateTasks(cloneTodoPhases(nextPhases), context);
+	const previousByUri = new Map(previousTasks.map(task => [task.uri!, task] as const));
+	for (const task of nextTasks) {
+		const previousTask = previousByUri.get(task.uri!);
+		if (!previousTask) {
+			eventBus.emit("todo:task:created", { taskUri: task.uri!, kind: task.kind ?? "work", slug: task.id });
+			eventBus.emit("todo:dag:node_added", {
+				nodeUri: task.uri!,
+				deps: (task.blockers ?? [])
+					.map(ref => resolveTaskRef(ref, nextTasks, context)?.uri)
+					.filter((uri): uri is string => uri !== undefined),
+			});
+			if (task.status !== "pending") {
+				eventBus.emit("todo:task:status", { taskUri: task.uri!, from: "pending", to: task.status });
+			}
+			continue;
+		}
+		if (previousTask.status !== task.status) {
+			eventBus.emit("todo:task:status", { taskUri: task.uri!, from: previousTask.status, to: task.status });
+		}
+		const wasBlocked = firstUnresolvedBlockerUri(previousTask, previousTasks, context);
+		const isBlocked = firstUnresolvedBlockerUri(task, nextTasks, context);
+		if (!wasBlocked && isBlocked) {
+			eventBus.emit("todo:task:blocked", { taskUri: task.uri!, blockerUri: isBlocked });
+		} else if (wasBlocked && !isBlocked) {
+			eventBus.emit("todo:task:unblocked", { taskUri: task.uri! });
+		}
+	}
+}
+
 // =============================================================================
 // Tool Class
 // =============================================================================
@@ -1106,12 +1392,15 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 			const previousPhases = cloneTodoPhases(this.session.getTodoPhases?.() ?? []);
 			const current = fileFromPhases(cloneTodoPhases(previousPhases));
 			const activePolicies = this.session.getResolvedTaskPolicies?.() ?? [];
+			const context = resolveTodoContext(this.session);
+			const isolationMode = Boolean(this.session.settings.get("task.isolation.mode"));
 			const {
 				file: updated,
 				errors,
+				warnings,
 				pendingVerificationTasks,
 				pendingDeferralTasks,
-			} = applyOps(current, params.ops, previousPhases, activePolicies);
+			} = applyOps(current, params.ops, previousPhases, activePolicies, context, isolationMode);
 			await captureDirectWorkBaselines(this.session, previousPhases, updated.phases);
 			const gateVerificationFailures = await verifyDirectWorkCompletions(
 				this.session,
@@ -1124,11 +1413,10 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 			const hasReplace = params.ops.some(op => op.op === "replace");
 			this.session.setTodoPhases?.(updated.phases, hasReplace ? { reset: true } : undefined);
 			const orgLifecycleNotices = await applyOrgLifecycleHooks(this.session, previousPhases, updated.phases);
-			// Notify dashboard bridge of todo state change
-			this.session.eventBus?.emit("todo:change", { phases: updated.phases });
+			emitTodoGraphEvents(this.session, previousPhases, updated.phases, context);
+			this.session.eventBus?.emit("todo:change", { phases: updated.phases, groups: updated.phases });
 			const storage = this.session.getSessionFile() ? "session" : "memory";
 
-			// Best-effort journal write to .local/!journal/todos/
 			const sessionId = this.session.getSessionId?.() ?? "default";
 			const projectRoot = this.session.cwd ?? getProjectDir();
 			void writeJournal(projectRoot, sessionId, updated.phases);
@@ -1136,6 +1424,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 			const summary = formatSummary({
 				phases: updated.phases,
 				errors,
+				warnings,
 				completedPhaseIds,
 				completedGatedTasks,
 				pendingVerificationTasks,
@@ -1151,7 +1440,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 						text,
 					},
 				],
-				details: { phases: updated.phases, storage },
+				details: { phases: updated.phases, groups: updated.phases, storage },
 			};
 		});
 	}

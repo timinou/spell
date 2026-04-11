@@ -1,0 +1,78 @@
+#+TITLE: Handoff and Spawn Successor Swarm Tools
+#+STATE: DONE
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-394-handoff-and-spawn-successor-swarm-tools
+#+EFFORT: L
+#+PRIORITY: B
+#+LAYER: agent-runtime
+#+DEPENDS: FEAT-392-swarmscheduler-with-multi-entry-dag-exec FEAT-393-org-blackboard-with-data-node-bridging
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Narrative
+
+Two tools let agents dynamically reshape the DAG at runtime:
+
+*Handoff*: an agent says "I'm done, someone else continue from here." It writes a =HandoffRecord= to the blackboard, emits =swarm:handoff=, and calls =submit_result=. The scheduler creates a new =task://= node in the DAG with a dependency on the handoff source.
+
+*Spawn successor*: an agent says "I need more work done in parallel or after me." It adds a new node to the live DAG without ending its own session. Unlike handoff, the spawner continues.
+
+Both tools use =task://= URIs for the new nodes and =MutableDag.addNode()= for graph mutation. Both are only available in swarm execution mode.
+
+* Design Decisions
+
+1. =handoff= tool: params ={ targetAgent?, context, partialResult?, reason }=. Writes to blackboard. Emits event. Agent must call =submit_result= afterward.
+2. =spawn_successor= tool: params ={ task, dependsOn?, agentType?, filesDeps?, metadata? }=. Adds node to DAG. Returns new node URI. Agent continues executing.
+3. Default =dependsOn= for spawn_successor is =[currentAgentUri]= (successor waits for spawner).
+4. Empty =dependsOn= (=[]=) means immediate start.
+5. Both validate dependencies (exist in DAG, no cycle) before committing.
+6. Both tools are =AgentTool= implementations injected into subagent tool sets when swarm mode is active.
+
+* Files to Create
+- =packages/coding-agent/src/swarm/handoff-tool.ts=
+- =packages/coding-agent/src/swarm/spawn-successor-tool.ts=
+- =packages/coding-agent/src/prompts/tools/handoff.md=
+- =packages/coding-agent/src/prompts/tools/spawn-successor.md=
+
+* Files to Modify
+- =packages/coding-agent/src/task/executor.ts= -- inject tools in swarm mode
+
+* Sub-outline (test-first)
+
+** FEAT-394::handoff-tests
+File: =packages/coding-agent/test/swarm/handoff-tool.test.ts=
+- Successful handoff: blackboard write + event emitted + success message
+- Handoff without target: =toAgent= undefined, scheduler decides
+- Handoff with partial result: included in blackboard body
+- Handoff outside swarm mode: returns error
+- Scheduler creates new node on handoff event: dep on source agent
+
+** FEAT-394::spawn-tests
+File: =packages/coding-agent/test/swarm/spawn-successor-tool.test.ts=
+- Spawn with default deps: new node depends on spawner
+- Spawn with explicit deps: new node depends on specified agents
+- Spawn with empty deps: immediate start
+- Spawn with invalid dep: error
+- Spawn creating cycle: error
+- Spawn with filesDeps: propagated to DAG node
+- Spawn outside swarm mode: error
+
+** FEAT-394::handoff-impl
+Depends on: FEAT-394::handoff-tests
+
+** FEAT-394::spawn-impl
+Depends on: FEAT-394::spawn-tests
+
+** FEAT-394::prompts
+Write =handoff.md= and =spawn-successor.md=.
+
+** FEAT-394::executor-wiring
+Inject tools into swarm subagent tool set.
+
+* Verification
+- =bun test packages/coding-agent/test/swarm/handoff-tool.test.ts= passes
+- =bun test packages/coding-agent/test/swarm/spawn-successor-tool.test.ts= passes
+- =bun check:ts= passes

@@ -151,6 +151,7 @@ function selectEmbeddedAddonFile(): { filename: string; filePath: string } | nul
 	}
 	return embeddedAddon.files.find(file => file.variant === "baseline") ?? null;
 }
+
 function maybeExtractEmbeddedAddon(errors: string[]): string | null {
 	if (!isCompiledBinary || !embeddedAddon) return null;
 	if (embeddedAddon.platformTag !== platformTag || embeddedAddon.version !== packageVersion) return null;
@@ -181,6 +182,7 @@ function maybeExtractEmbeddedAddon(errors: string[]): string | null {
 		return null;
 	}
 }
+
 function loadNative(): NativeBindings {
 	const errors: string[] = [];
 	const embeddedCandidate = logger.time("native:maybeExtractEmbeddedAddon", () => maybeExtractEmbeddedAddon(errors));
@@ -203,7 +205,7 @@ function loadNative(): NativeBindings {
 			errors.push(`${candidate}: ${message}`);
 		}
 	}
-	// Check if this is an unsupported platform
+
 	if (!SUPPORTED_PLATFORMS.includes(platformTag)) {
 		throw new Error(
 			`Unsupported platform: ${platformTag}\n` +
@@ -234,6 +236,7 @@ function loadNative(): NativeBindings {
 
 	throw new Error(`Failed to load pi_natives native addon for ${addonLabel}.\n\nTried:\n${details}\n\n${helpMessage}`);
 }
+
 function validateNative(bindings: NativeBindings, source: string): void {
 	const missing: string[] = [];
 	const checkFn = (name: keyof NativeBindings) => {
@@ -285,4 +288,5 @@ function validateNative(bindings: NativeBindings, source: string): void {
 		);
 	}
 }
+
 export const native = logger.time("native:loadNative", () => loadNative());

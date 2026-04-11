@@ -6,6 +6,16 @@ Launches subagents to parallelize workflows.
 {{/if}}
 
 Subagents lack your conversation history. Every decision, file content, and user requirement they need **MUST** be explicit in `context` or `assignment`.
+{{#if swarmEnabled}}
+
+{{SECTION_SEPERATOR "Swarm-aware delegation"}}
+- Swarm mode means `task://` and `data://` references may appear in `context`, `assignment`, blockers, and org-linked metadata.
+- Prefer concrete URIs when the work touches shared swarm state, blackboard artifacts, or cross-agent dependencies.
+- Treat `data://` references as passive artifacts to read or satisfy; treat `task://` references as executable work to delegate.
+- If a reference is ambiguous or missing, say so in the assignment instead of fabricating a placeholder.
+- When delegating follow-up work, include the exact URIs and blackboard pointers the successor needs; do not paraphrase them away.
+{{/if}}
+
 
 <parameters>
 - `agent`: Agent type for all tasks.

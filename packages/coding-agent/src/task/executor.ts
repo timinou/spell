@@ -20,15 +20,20 @@ import { callTool } from "../mcp/client";
 import type { MCPManager } from "../mcp/manager";
 import submitReminderTemplate from "../prompts/system/subagent-submit-reminder.md" with { type: "text" };
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
+import swarmAgentSystemPromptTemplate from "../prompts/system/swarm-agent-system-prompt.md" with { type: "text" };
 import { createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { AuthStorage } from "../session/auth-storage";
 import { SessionManager } from "../session/session-manager";
+import { createHandoffTool } from "../swarm/handoff-tool";
+import { createSpawnSuccessorTool } from "../swarm/spawn-successor-tool";
+import type { SwarmEventMap } from "../swarm/types";
+import type { SwarmNodeLike } from "../task/swarm-scheduler";
 import { type ContextFileEntry, truncateTail } from "../tools";
 import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
 import { cloneTodoPhases, type TodoPhase } from "../tools/todo-write";
 import { ToolAbortError } from "../tools/tool-errors";
-import { type EventBus, Priority } from "../utils/event-bus";
+import { EventBus, type EventBus as EventBusType, Priority } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 // Import bash subprocess handler for side effects (tracks bash commands for gate verification)
 import "./bash-subprocess-handler";
@@ -187,6 +192,15 @@ export interface ExecutorOptions {
 	settings?: Settings;
 	/** Additional custom tools injected by the caller (e.g., orchestrator escalate). */
 	customTools?: CustomTool[];
+	/** Swarm runtime context; when absent, swarm tools stay unavailable. */
+	swarmContext?: {
+		active: boolean;
+		agent: string;
+		sessionId: string;
+		currentTaskUri?: string;
+		blackboard?: import("../swarm/blackboard").SwarmBlackboard;
+		scheduler?: import("../task/swarm-scheduler").SwarmScheduler<SwarmNodeLike>;
+	};
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -1060,7 +1074,27 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					? resolvedCandidates
 					: [{ model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, pattern: "" }];
 			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
-			const allCustomTools = [...mcpProxyTools, ...(options.customTools ?? [])];
+			const swarmTools =
+				options.swarmContext?.active && options.swarmContext.blackboard && options.swarmContext.scheduler
+					? ([
+							createHandoffTool({
+								active: true,
+								agent: options.swarmContext.agent,
+								sessionId: options.swarmContext.sessionId,
+								currentTaskUri: options.swarmContext.currentTaskUri,
+								blackboard: options.swarmContext.blackboard,
+								eventBus: (options.eventBus ?? new EventBus()) as EventBusType<SwarmEventMap>,
+							}),
+							createSpawnSuccessorTool({
+								active: true,
+								agent: options.swarmContext.agent,
+								sessionId: options.swarmContext.sessionId,
+								currentTaskUri: options.swarmContext.currentTaskUri ?? "",
+								scheduler: options.swarmContext.scheduler,
+							}),
+						] as CustomTool[])
+					: [];
+			const allCustomTools = [...mcpProxyTools, ...swarmTools, ...(options.customTools ?? [])];
 			const enableMCP = !options.mcpManager;
 			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
 			const MAX_SUBMIT_RESULT_RETRIES = 3;
@@ -1097,17 +1131,32 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							skills: options.skills,
 							promptTemplates: options.promptTemplates,
 							systemPrompt: (defaultBlocks: SystemPromptBlock[]) => {
-								const overlay = renderPromptTemplate(subagentSystemPromptTemplate, {
+								const overlayParts: string[] = [];
+								const subagentOverlay = renderPromptTemplate(subagentSystemPromptTemplate, {
 									agent: agent.systemPrompt ?? "",
 									worktree: worktree ?? "",
 									outputSchema: normalizedOutputSchema,
 									contextFile: options.contextFile,
 								});
+								overlayParts.push(subagentOverlay);
+								if (
+									options.swarmContext?.active &&
+									options.swarmContext.blackboard &&
+									options.swarmContext.scheduler
+								) {
+									const swarmOverlay = renderPromptTemplate(swarmAgentSystemPromptTemplate, {
+										swarmEnabled: true,
+										handoffEnabled: true,
+										spawnSuccessorEnabled: true,
+										currentTaskUri: options.swarmContext.currentTaskUri ?? "",
+									});
+									overlayParts.push(swarmOverlay);
+								}
 								const stableBlocks = defaultBlocks.filter(block => block.stable !== false);
 								const dynamicTexts = defaultBlocks
 									.filter(block => block.stable === false)
 									.map(block => block.text);
-								dynamicTexts.push(overlay);
+								dynamicTexts.push(...overlayParts);
 
 								const result: SystemPromptBlock[] = [...stableBlocks];
 								if (dynamicTexts.length > 0) {

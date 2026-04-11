@@ -1,0 +1,54 @@
+#+TITLE: Swarm Agent System Prompt and Execution Mode
+#+STATE: DONE
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-396-swarm-agent-system-prompt-and-execution
+#+EFFORT: S
+#+PRIORITY: B
+#+LAYER: prompt
+#+DEPENDS: FEAT-394-handoff-and-spawn-successor-swarm-tools
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Narrative
+
+Agents participating in a swarm need a distinct system prompt that teaches them how to use the blackboard, handoff, spawn_successor, and URI-based task references. The existing =subagent-system-prompt.md= only covers delegated sub-tasks. A swarm-aware prompt layer adds:
+
+- Blackboard read/write instructions (via org MCP tools)
+- Handoff tool usage (when to use, what context to include)
+- Spawn successor tool usage (when to extend the DAG)
+- Artifact publication protocol (how to satisfy =data://= nodes)
+- Inter-agent communication norms (what to share, how to reference peers)
+- Branch-scoped awareness (how to query parent/sibling state)
+
+* Design Decisions
+
+1. New =swarm-agent-system-prompt.md= template, injected when swarm mode is active (alongside existing subagent prompt).
+2. Swarm mode is activated by a setting or by the SwarmScheduler being the execution context.
+3. The prompt uses Handlebars for conditional sections (available tools vary).
+4. Existing =task.md= and =todo-write.md= get small conditional sections (=~{{#if swarmEnabled}}=) for swarm-aware guidance.
+
+* Files to Create
+- =packages/coding-agent/src/prompts/system/swarm-agent-system-prompt.md=
+
+* Files to Modify
+- =packages/coding-agent/src/task/executor.ts= -- inject swarm prompt when swarm mode active
+- =packages/coding-agent/src/prompts/tools/task.md= -- conditional swarm guidance
+- =packages/coding-agent/src/prompts/tools/todo-write.md= -- conditional URI/DAG guidance
+
+* Sub-outline
+
+** FEAT-396::write-swarm-prompt
+Create =swarm-agent-system-prompt.md= with all sections above.
+
+** FEAT-396::inject-swarm-prompt
+Wire into =executor.ts= prompt composition.
+
+** FEAT-396::update-existing-prompts
+Add conditional swarm sections to =task.md= and =todo-write.md=.
+
+* Verification
+- =bun check:ts= passes
+- Manual: inspect rendered prompt for a swarm subagent, verify all sections present

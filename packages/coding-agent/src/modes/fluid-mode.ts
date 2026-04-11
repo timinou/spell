@@ -18,7 +18,13 @@ import executionPromptTemplate from "../prompts/system/plan-mode-approved.md" wi
 import type { AgentSession } from "../session/agent-session";
 import { runSubprocess } from "../task/executor";
 import type { AgentDefinition } from "../task/types";
-import { cloneTodoPhases, findTask, hasUnresolvedBlockers, type TodoPhase } from "../tools/todo-write";
+import {
+	cloneTodoPhases,
+	findTask,
+	hasUnresolvedBlockers,
+	promoteReadyTasks,
+	type TodoPhase,
+} from "../tools/todo-write";
 import { type EventBus, Priority } from "../utils/event-bus";
 
 export interface FluidModeOptions {
@@ -241,19 +247,7 @@ async function validateAndRefinePlan(
 }
 
 function promoteFirstRunnableTask(phases: TodoPhase[]): void {
-	const tasks = phases.flatMap(phase => phase.tasks);
-	for (const task of tasks) {
-		task.status =
-			task.status === "completed" || task.status === "abandoned" || task.status === "failed"
-				? task.status
-				: "pending";
-	}
-	for (const task of tasks) {
-		if (!hasUnresolvedBlockers(task, tasks)) {
-			task.status = "in_progress";
-			return;
-		}
-	}
+	promoteReadyTasks(phases, false);
 }
 
 function isTodoTerminal(phases: TodoPhase[]): boolean {

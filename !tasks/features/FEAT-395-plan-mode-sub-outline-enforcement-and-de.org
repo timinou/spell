@@ -1,0 +1,82 @@
+#+TITLE: Plan Mode Sub-Outline Enforcement and Depends Hardening
+#+STATE: DONE
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-395-plan-mode-sub-outline-enforcement-and-de
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: prompt
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Narrative
+
+The =plan-mode-active.md= prompt already documents the =PARENT-ID::sub-slug= pattern for sub-outline items with =:DEPENDS:= properties. But plans are underusing it: many items have a =Sub-outline= section with prose dependency descriptions instead of structured =CUSTOM_ID= / =:DEPENDS:= properties. This means =org wave= cannot compute execution order from the dependency graph -- it requires manual wave assignment.
+
+Additionally, the =:DEPENDS:= property and =blockers= mechanism in =todo_write= need hardening: there are no ERT tests for the org-side dependency graph algorithms (=org-fluid-plan=, =org wave=), and the TypeScript-side blocker resolution has gaps (dangling refs silently pruned, no cycle detection at the todo level).
+
+This item has two parts:
+1. *Prompt changes*: Strengthen plan-mode prompts to require =::= sub-outline items with =:DEPENDS:= properties. Make plan execution prompts consume =org wave= output.
+2. *Testing*: Write comprehensive ERT tests for org graph algorithms AND TypeScript tests for blocker resolution edge cases.
+
+* Design Decisions
+
+1. Plan-mode-active prompt: every org item body MUST use =PARENT-ID::sub-slug= sub-headings with =:CUSTOM_ID:= and =:DEPENDS:= properties. Prose-only sub-outlines are prohibited.
+2. Plan execution prompt: after plan approval, the executor reads =org wave= output to determine execution order instead of manually parsing wave headings.
+3. =org wave= Elisp tool: must be tested with ERT for topological sort correctness, cycle detection, multi-component handling, and wave layer computation.
+4. TypeScript blocker resolution: =hasUnresolvedBlockers= must detect and report dangling refs (currently silently pruned). =applyOps= must detect cycles in blocker graphs at the todo level.
+5. The =todo_write= prompt must document that =blockers= are DAG edges and show examples of =::= sub-outline IDs as blocker references.
+
+* Files to Modify
+
+** =packages/coding-agent/src/prompts/system/plan-mode-active.md=
+- Strengthen sub-outline requirements: MUST use =::= CUSTOM_IDs and =:DEPENDS:= properties
+- Add explicit prohibition of prose-only sub-outlines
+- Add example showing =org wave= integration
+
+** =packages/coding-agent/src/prompts/system/plan-mode-approved.md=
+- Update executor to consume =org wave= output for wave ordering
+- Show how =::= sub-outline IDs map to =todo_write= task slugs
+
+** =packages/coding-agent/src/prompts/tools/todo-write.md=
+- Document =blockers= as DAG edges
+- Show =::= sub-outline IDs as valid blocker references
+- Document cycle detection behavior
+
+** =packages/coding-agent/src/tools/todo-write.ts=
+- =hasUnresolvedBlockers=: warn on dangling refs instead of silently pruning
+- =applyOps=: add cycle detection when blockers create a cycle
+- Add =validateBlockerGraph(phases)= helper
+
+* Sub-outline (test-first)
+
+** FEAT-395::ert-org-wave-tests
+ERT tests for =org-fluid-plan= and =org wave= Elisp functions.
+- Simple chain: a->b->c => 3 waves of 1
+- Diamond: a->{b,c}->d => wave 1: [a], wave 2: [b,c], wave 3: [d]
+- Disconnected: a->b, c->d => 2 components, each with 2 waves
+- Cycle detection: a->b->c->a => error
+- Missing dep: a depends on nonexistent => error
+- Self-dep: a depends on a => error
+
+** FEAT-395::ts-blocker-tests
+File: =packages/coding-agent/test/tools/todo-write-blockers.test.ts=
+- Dangling ref: task blocks on nonexistent ID => warning logged, treated as resolved
+- Cycle detection: a blocks on b, b blocks on a => error in applyOps
+- Three-node cycle: a->b->c->a => error
+- Valid complex graph: diamond with no cycles => accepted
+- =validateBlockerGraph=: returns list of issues (dangling, cycles)
+
+** FEAT-395::ts-blocker-impl
+Depends on: FEAT-395::ts-blocker-tests
+
+** FEAT-395::prompt-updates
+Depends on: FEAT-395::ts-blocker-impl (prompts document actual behavior)
+
+* Verification
+- ERT tests pass (run via Emacs MCP)
+- =bun test packages/coding-agent/test/tools/todo-write-blockers.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= passes (no regressions)
+- =bun check:ts= passes

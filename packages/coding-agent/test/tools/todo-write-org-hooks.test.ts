@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, test, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { type TodoPhase, TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
 import * as orgModule from "@oh-my-pi/pi-org";
+import type { ToolSession } from "../../src/tools";
+import { type TodoPhase, TodoWriteTool } from "../../src/tools/todo-write";
 
 interface MockItem {
 	id: string;
