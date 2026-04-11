@@ -983,7 +983,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const projectTaskPolicies = await loadTaskPolicies(cwd);
 
 	const toolSession: ToolSession = {
-		cwd,
+		get cwd() {
+			return sessionManager.getCwd();
+		},
 		hasUI: options.hasUI ?? false,
 		enableLsp,
 		sandboxPolicy: options.sandboxPolicy,

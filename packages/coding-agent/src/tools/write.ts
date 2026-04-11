@@ -79,15 +79,12 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	readonly strict = true;
 	readonly concurrency = "exclusive";
 
-	readonly #writethrough: WritethroughCallback;
+	#writethrough: WritethroughCallback;
+	#writethroughCwd: string;
 
 	constructor(private readonly session: ToolSession) {
-		const enableLsp = session.enableLsp ?? true;
-		const enableFormat = enableLsp && session.settings.get("lsp.formatOnWrite");
-		const enableDiagnostics = enableLsp && session.settings.get("lsp.diagnosticsOnWrite");
-		this.#writethrough = enableLsp
-			? createLspWritethrough(session.cwd, { enableFormat, enableDiagnostics })
-			: writethroughNoop;
+		this.#writethroughCwd = session.cwd;
+		this.#writethrough = this.#createWritethrough(this.#writethroughCwd);
 		this.description = renderPromptTemplate(writeDescription);
 	}
 
@@ -104,8 +101,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (sandboxError) throw new Error(sandboxError);
 			const absolutePath = resolvePlanPath(this.session, path);
 			const batchRequest = getLspBatchRequest(context?.toolCall);
+			const writethrough = this.#getWritethrough();
 
-			const diagnostics = await this.#writethrough(absolutePath, content, signal, undefined, batchRequest);
+			const diagnostics = await writethrough(absolutePath, content, signal, undefined, batchRequest);
 			invalidateFsScanAfterWrite(absolutePath);
 
 			const resultText = `Successfully wrote ${content.length} bytes to ${path}`;
@@ -126,6 +124,22 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				},
 			};
 		});
+	}
+
+	#createWritethrough(cwd: string): WritethroughCallback {
+		const enableLsp = this.session.enableLsp ?? true;
+		const enableFormat = enableLsp && this.session.settings.get("lsp.formatOnWrite");
+		const enableDiagnostics = enableLsp && this.session.settings.get("lsp.diagnosticsOnWrite");
+		return enableLsp ? createLspWritethrough(cwd, { enableFormat, enableDiagnostics }) : writethroughNoop;
+	}
+
+	#getWritethrough(): WritethroughCallback {
+		const cwd = this.session.cwd;
+		if (cwd !== this.#writethroughCwd) {
+			this.#writethroughCwd = cwd;
+			this.#writethrough = this.#createWritethrough(cwd);
+		}
+		return this.#writethrough;
 	}
 }
 

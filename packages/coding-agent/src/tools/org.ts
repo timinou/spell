@@ -99,22 +99,23 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 	readonly parameters = orgSchema;
 	readonly lenientArgValidation = true;
 
+	#session: ToolSession;
+	#projectRoot: string;
+	#orgSessionManager: EmacsSessionManager;
+	#ownsOrgSessionManager: boolean;
 	#inner: OrgToolDefinition;
 
 	constructor(session: ToolSession) {
-		const projectRoot = session.cwd ?? getProjectDir();
-		const config = loadOrgConfig(session);
+		this.#session = session;
+		this.#projectRoot = session.cwd ?? getProjectDir();
 
 		const emacsPathSetting = session.settings.get("org.emacsPath") as string | undefined;
 		const emacsPath = emacsPathSetting || undefined;
 		const sessionId = session.getSessionId?.() ?? "default";
-		const orgSessionManager = session.orgSessionManager ?? createOrgSessionManager(emacsPath, projectRoot, sessionId);
-
-		this.#inner = createOrgTool(projectRoot, config, {
-			emacsSessionManager: orgSessionManager,
-			ownsSessionManager: !session.orgSessionManager,
-			getSessionContext: () => buildSessionContext(session),
-		});
+		this.#orgSessionManager =
+			session.orgSessionManager ?? createOrgSessionManager(emacsPath, this.#projectRoot, sessionId);
+		this.#ownsOrgSessionManager = !session.orgSessionManager;
+		this.#inner = this.#createInner(this.#projectRoot);
 		this.description = this.#inner.description;
 	}
 
@@ -136,6 +137,7 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 	): Promise<AgentToolResult> {
 		const args = params as Record<string, unknown>;
 		try {
+			await this.#ensureInner();
 			const result = await this.#inner.execute(args);
 			const text = formatOrgResult(result);
 			const isError =
@@ -167,6 +169,23 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 
 	async dispose(): Promise<void> {
 		await this.#inner.dispose?.();
+	}
+
+	#createInner(projectRoot: string): OrgToolDefinition {
+		const config = loadOrgConfig(this.#session);
+		return createOrgTool(projectRoot, config, {
+			emacsSessionManager: this.#orgSessionManager,
+			ownsSessionManager: this.#ownsOrgSessionManager,
+			getSessionContext: () => buildSessionContext(this.#session),
+		});
+	}
+
+	async #ensureInner(): Promise<void> {
+		const projectRoot = this.#session.cwd ?? getProjectDir();
+		if (projectRoot === this.#projectRoot) return;
+		await this.#inner.dispose?.();
+		this.#projectRoot = projectRoot;
+		this.#inner = this.#createInner(projectRoot);
 	}
 }
 

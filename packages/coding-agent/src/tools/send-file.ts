@@ -81,11 +81,7 @@ export class SendFileTool implements AgentTool<typeof sendFileSchema, SendFileDe
 	readonly parameters = sendFileSchema;
 	readonly strict = true;
 
-	#cwd: string;
-
-	constructor(session: ToolSession) {
-		this.#cwd = session.cwd;
-	}
+	constructor(private readonly session: ToolSession) {}
 
 	async execute(
 		_toolCallId: string,
@@ -94,7 +90,7 @@ export class SendFileTool implements AgentTool<typeof sendFileSchema, SendFileDe
 		_onUpdate?: AgentToolUpdateCallback<SendFileDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<SendFileDetails>> {
-		const absolutePath = resolveToCwd(params.path, this.#cwd);
+		const absolutePath = resolveToCwd(params.path, this.session.cwd);
 
 		const stat = await fs.stat(absolutePath).catch((error: unknown) => {
 			if (isEnoent(error)) {

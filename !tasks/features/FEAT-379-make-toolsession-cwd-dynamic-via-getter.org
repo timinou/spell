@@ -1,0 +1,71 @@
+#+TITLE: Make toolSessioncwd dynamic via getter
+#+STATE: DONE
+#+SESSION_ID: 14b6536bf19da158
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-31-05-414Z_14b6536bf19da158.jsonl]]
+#+CUSTOM_ID: FEAT-379-make-toolsession-cwd-dynamic-via-getter
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: agent-core
+
+NOTE [2026-04-11]: Implemented in packages/coding-agent/src/sdk.ts with focused bash /move verification.
+
+* Initial Message
+
+the /move command should also move where tools liek the Org tool save their files
+
+* Problem
+~toolSession.cwd~ is set as a static string value at construction time in ~createAgentSession()~ (sdk.ts line ~985). After ~/move~, ~sessionManager.cwd~ is updated but ~toolSession.cwd~ remains stale. Every tool that reads ~this.session.cwd~ at runtime gets the wrong directory.
+
+* Approach
+Change the ~cwd~ property on the ~toolSession~ object from a static value to a getter backed by ~sessionManager.getCwd()~.
+
+TypeScript note: a getter on an object literal satisfies a ~cwd: string~ interface declaration — no ~ToolSession~ interface change needed.
+
+* Implementation
+
+** File: ~packages/coding-agent/src/sdk.ts~
+
+In the ~toolSession~ object literal (around line 985), change:
+#+begin_src typescript
+const toolSession: ToolSession = {
+    cwd,
+    // ...
+};
+#+end_src
+
+To:
+#+begin_src typescript
+const toolSession: ToolSession = {
+    get cwd() { return sessionManager.getCwd(); },
+    // ...
+};
+#+end_src
+
+The ~sessionManager.getCwd()~ method already returns the live cwd — it is updated by ~sessionManager.moveTo()~ which ~/move~ calls.
+
+** Verify these tools are auto-fixed (read ~session.cwd~ at runtime, not construction):
+- BashTool (~tools/bash.ts~ line 343)
+- PythonTool (~tools/python.ts~ line 200)
+- FindTool (~tools/find.ts~ line 103, 111)
+- GrepTool (~tools/grep.ts~ line 118, 138)
+- AstGrepTool (~tools/ast-grep.ts~ line 97, 117)
+- AstEditTool (~tools/ast-edit.ts~ line 109, 129)
+- ReadTool (~tools/read.ts~ line 410)
+- BrowserTool (~tools/browser.ts~ line 1363)
+- CanvasTool (~tools/canvas.ts~ line 261, 285)
+- CanvasCastTool (~tools/canvas-cast.ts~ line 69, 77)
+- NotebookTool (~tools/notebook.ts~ line 81)
+- ExitPlanModeTool (~tools/exit-plan-mode.ts~ line 132, 152)
+- InspectImageTool (~tools/inspect-image.ts~ line 112)
+- ModeGuard (~tools/mode-guard.ts~ line 19)
+- WriteTool (execute-time reads in ~tools/write.ts~ line 104)
+
+* Edge Cases
+- Multiple rapid ~/move~ calls: each call updates ~sessionManager.cwd~, getter always returns latest.
+- ~sessionManager.getCwd()~ returns the resolved absolute path — same contract as the old static ~cwd~.
+- Tests that construct ~ToolSession~ with ~cwd: "/some/dir"~ still work — getters and plain properties both satisfy the interface.
+
+* Verification
+- ~bun check:ts~ passes — getter satisfies ~cwd: string~ on ~ToolSession~
+- Add a unit test: create toolSession with getter, verify reading ~.cwd~ returns the dynamic value
+- Manual: ~/move /tmp/test~ then run a bash tool call — verify it runs in ~/tmp/test~
