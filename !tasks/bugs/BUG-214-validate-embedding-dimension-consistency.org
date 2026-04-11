@@ -1,0 +1,82 @@
+#+TITLE: Validate embedding dimension consistency in build_semantic_index
+#+STATE: DONE
+#+SESSION_ID: 14b6f114040c82c2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-59-54-128Z_14b6f114040c82c2.jsonl]]
+#+CUSTOM_ID: BUG-214-validate-embedding-dimension-consistency
+#+EFFORT: 30m
+#+PRIORITY: B
+#+LAYER: native
+
+NOTE [2026-04-11]: Hardened `build_semantic_index()` with empty-output, dimension-mismatch, and count-mismatch validation in `crates/pi-natives/src/code_graph.rs`. Verified with `cargo check -p pi-natives`.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-060-audit-implementation:
+
+- **What**: Atomic vector-cache writes still use a shared fixed temp filename instead of a per-write unique temp path  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `save_vector_cache()`  
+  **Why**: `workspace-vectors.bin.tmp` is safe against partial writes from one process, but not against two concurrent semantic-index runs. Concurrent writers can clobber the same temp file or fail during rename, which reintroduces a race in the cache persistence path.  
+  **Effort**: small
+
+- **What**: Auto-degrade semantic search paths are untested  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `"search"` branch and `code_graph::tests`  
+  **Why**: Current tests cover `semantic: true` hard failure with no vector cache and status reporting for a corrupt cache, but they do not verify the new auto mode behavior that should return BM25 results plus a degradation hint for stale/corrupt vectors or query-embedding failures. A regression here would silently revive the original “plausible results, hidden semantic failure” problem.  
+  **Effort**: small
+
+- **What**: The actual JS/N-API boundary for `semanticStatus` is still unverified  
+  **Where**: `crates/pi-natives/src/code_graph.rs` export path and `packages/natives` / `packages/coding-agent/test/tools/code.test.ts`  
+  **Why**: Rust tests call internal `run_code_graph()`, while TS tests mock `executeCodeGraph()`. That leaves the real N-API marshalling path untested, so a field-name/export mismatch on `semanticStatus` could ship without a failing test.  
+  **Effort**: medium
+
+- **What**: Tool docs mention `semantic?` for `search` but not for `index`  
+  **Where**: `packages/coding-agent/src/prompts/tools/code.md`  
+  **Why**: Users are now told, via runtime errors, to rebuild with `code index` and `semantic: true`, but the prompt surface does not document that `index` accepts the flag. That makes the new contract harder to discover and debug from the public interface alone.  
+  **Effort**: trivial
+
+- **What**: Semantic indexing derives dimensions from the first embedding but does not validate the rest of the batch  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `build_semantic_index()`  
+  **Why**: This removes the hardcoded `768`, but it still assumes every returned vector matches the first. If fastembed or model configuration changes produce inconsistent dimensions, the cache can be built from malformed data and fail later in a less obvious place. Early validation would make indexing fail truthfully at the source.  
+  **Effort**: small
+
+* Problem
+
+=build_semantic_index()= in =crates/pi-natives/src/code_graph.rs= derives the embedding dimension from the first vector: =vectors.first().map_or(768, Vec::len)=. It then builds the =VectorIndex= using that dimension. But it never validates that all other vectors in the batch match. If fastembed or a future model change produces inconsistent dimensions, the cache gets built from malformed data, and search later silently returns empty results (=VectorIndex::search= returns =Vec::new()= on dimension mismatch, which is correct but opaque).
+
+The fix is to validate immediately after the batch returns and before building the index.
+
+* Design Decision
+
+After deriving =dimensions= from the first vector, check that all vectors match. This is a single pass over the batch — acceptable cost since we just completed an O(n * 768) embedding operation.
+
+Use an early-return error with a clear message naming the offending index and length, so the user can diagnose whether the model configuration changed.
+
+* Files to Modify
+
+** =crates/pi-natives/src/code_graph.rs=, =build_semantic_index()= (~line 372)
+
+After:
+#+begin_src rust
+let dimensions = vectors.first().map_or(768, Vec::len);
+#+end_src
+
+Add:
+#+begin_src rust
+if let Some((i, bad)) = vectors.iter().enumerate().find(|(_, v)| v.len() != dimensions) {
+    return Err(Error::from_reason(format!(
+        "Embedding dimension mismatch: expected {dimensions} but vector {i} has {} dimensions",
+        bad.len()
+    )));
+}
+#+end_src
+
+* Verification
+
+- =cargo check -p pi-natives= compiles
+- =bun check:rs= passes (fmt + clippy)
+- Existing =cargo test -p pi-natives code_graph::tests::= passes (no regression)
+- No new test needed: this guard catches a model/runtime bug, not a code logic path. The error message is descriptive enough to diagnose without a dedicated test. Adding a test would require mocking the embedding engine, which is not worthwhile for a guard clause.
+
+* Sub-Outline
+
+1. Add dimension validation after =vectors.first().map_or(768, Vec::len)=
+2. Run verification commands

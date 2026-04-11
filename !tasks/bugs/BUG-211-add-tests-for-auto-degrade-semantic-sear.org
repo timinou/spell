@@ -1,0 +1,157 @@
+#+TITLE: Add tests for auto-degrade semantic search paths
+#+STATE: DONE
+#+SESSION_ID: 14b6f114040c82c2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-59-54-128Z_14b6f114040c82c2.jsonl]]
+#+CUSTOM_ID: BUG-211-add-tests-for-auto-degrade-semantic-sear
+#+EFFORT: 1h
+#+PRIORITY: A
+#+LAYER: native
+#+DEPENDS: BUG-210-use-unique-temp-filename-in-save-vector
+
+NOTE [2026-04-11]: Added stale/corrupt auto-degrade search tests in `crates/pi-natives/src/code_graph.rs`. Verified with `cargo test -p pi-natives code_graph::tests::`.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-060-audit-implementation:
+
+- **What**: Atomic vector-cache writes still use a shared fixed temp filename instead of a per-write unique temp path  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `save_vector_cache()`  
+  **Why**: `workspace-vectors.bin.tmp` is safe against partial writes from one process, but not against two concurrent semantic-index runs. Concurrent writers can clobber the same temp file or fail during rename, which reintroduces a race in the cache persistence path.  
+  **Effort**: small
+
+- **What**: Auto-degrade semantic search paths are untested  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `"search"` branch and `code_graph::tests`  
+  **Why**: Current tests cover `semantic: true` hard failure with no vector cache and status reporting for a corrupt cache, but they do not verify the new auto mode behavior that should return BM25 results plus a degradation hint for stale/corrupt vectors or query-embedding failures. A regression here would silently revive the original “plausible results, hidden semantic failure” problem.  
+  **Effort**: small
+
+- **What**: The actual JS/N-API boundary for `semanticStatus` is still unverified  
+  **Where**: `crates/pi-natives/src/code_graph.rs` export path and `packages/natives` / `packages/coding-agent/test/tools/code.test.ts`  
+  **Why**: Rust tests call internal `run_code_graph()`, while TS tests mock `executeCodeGraph()`. That leaves the real N-API marshalling path untested, so a field-name/export mismatch on `semanticStatus` could ship without a failing test.  
+  **Effort**: medium
+
+- **What**: Tool docs mention `semantic?` for `search` but not for `index`  
+  **Where**: `packages/coding-agent/src/prompts/tools/code.md`  
+  **Why**: Users are now told, via runtime errors, to rebuild with `code index` and `semantic: true`, but the prompt surface does not document that `index` accepts the flag. That makes the new contract harder to discover and debug from the public interface alone.  
+  **Effort**: trivial
+
+- **What**: Semantic indexing derives dimensions from the first embedding but does not validate the rest of the batch  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `build_semantic_index()`  
+  **Why**: This removes the hardcoded `768`, but it still assumes every returned vector matches the first. If fastembed or model configuration changes produce inconsistent dimensions, the cache can be built from malformed data and fail later in a less obvious place. Early validation would make indexing fail truthfully at the source.  
+  **Effort**: small
+
+* Problem
+
+PLAN-190 added tri-state semantic search handling (=Some(true)= / =Some(false)= / =None=). The =None= (auto-detect) path is the most common caller mode and has the most complex behavior — it should silently degrade to BM25 and attach a hint. But no test covers this path. A regression here would silently revive the original "plausible results, hidden semantic failure" problem that the audit was designed to fix.
+
+Existing tests cover:
+- =semantic: true= hard failure when vectors are missing → error
+- =status= with corrupt cache → reports corruption
+- =semantic: None= plain index → no vector cache created
+
+Missing tests:
+- =semantic: None= search with stale vector cache → BM25 results + degradation hint
+- =semantic: None= search with corrupt vector cache → BM25 results + degradation hint
+
+* Design Decisions
+
+1. Add two tests to the existing =code_graph::tests= module in =crates/pi-natives/src/code_graph.rs=.
+2. Reuse the existing =fixture_root()= and =run_fixture_command()= test helpers.
+3. Stale test: build a graph index, write a valid-but-stale vector cache (valid bincode with wrong fingerprint hash), then search with =semantic: None=.
+4. Corrupt test: build a graph index, write garbage bytes to =workspace-vectors.bin=, then search with =semantic: None=.
+5. Both tests assert: (a) search succeeds (=Ok=), (b) output contains BM25 results, (c) output contains the degradation hint =(Semantic search unavailable:=, (d) =semantic_status= is =Some("unavailable: ...")=.
+
+* Files to Modify
+
+** =crates/pi-natives/src/code_graph.rs=, =mod tests= (~line 612)
+
+Add two tests after the existing =status_reports_vector_cache_presence_when_file_exists= test:
+
+*** Test 1: =auto_search_with_stale_vectors_degrades_to_bm25=
+
+#+begin_src rust
+#[test]
+fn auto_search_with_stale_vectors_degrades_to_bm25() {
+    let root = fixture_root("stale-auto-search");
+    run_fixture_command(&root, "index", None, None).expect("graph index should succeed");
+    let graph_dir = root.join(".spell/graph");
+
+    // Write a valid-but-stale vector cache: valid bincode, wrong fingerprint hash.
+    let stale_index = pi_code_vectors::VectorIndex::new(
+        vec![pi_code_vectors::VectorEntry { node_index: 0, vector: vec![1.0, 0.0] }],
+        2,
+    );
+    let stale_persisted = stale_index.to_persisted("test-model", 999999); // hash won't match
+    let final_path = graph_dir.join("workspace-vectors.bin");
+    let file = fs::File::create(&final_path).expect("create stale cache");
+    pi_code_vectors::serialize_index(std::io::BufWriter::new(file), &stale_persisted)
+        .expect("write stale cache");
+
+    // Auto-detect search should degrade gracefully.
+    let result = run_fixture_command(&root, "search", Some("limit"), None)
+        .expect("auto search should succeed even with stale vectors");
+    assert!(
+        result.output.contains("Search"),
+        "output should contain BM25 results: {}",
+        result.output
+    );
+    assert!(
+        result.output.contains("(Semantic search unavailable:"),
+        "output should contain degradation hint: {}",
+        result.output
+    );
+    assert!(
+        result.semantic_status.as_deref().is_some_and(|s| s.starts_with("unavailable:")),
+        "semantic_status should indicate unavailability: {:?}",
+        result.semantic_status
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+#+end_src
+
+*** Test 2: =auto_search_with_corrupt_vectors_degrades_to_bm25=
+
+#+begin_src rust
+#[test]
+fn auto_search_with_corrupt_vectors_degrades_to_bm25() {
+    let root = fixture_root("corrupt-auto-search");
+    run_fixture_command(&root, "index", None, None).expect("graph index should succeed");
+    let graph_dir = root.join(".spell/graph");
+    fs::write(graph_dir.join("workspace-vectors.bin"), [0xFF, 0xFE, 0x00, 0x01])
+        .expect("write corrupt cache");
+
+    let result = run_fixture_command(&root, "search", Some("limit"), None)
+        .expect("auto search should succeed even with corrupt vectors");
+    assert!(
+        result.output.contains("Search"),
+        "output should contain BM25 results: {}",
+        result.output
+    );
+    assert!(
+        result.output.contains("(Semantic search unavailable:"),
+        "output should contain degradation hint: {}",
+        result.output
+    );
+    assert!(
+        result.semantic_status.as_deref().is_some_and(|s| s.starts_with("unavailable:")),
+        "semantic_status should indicate unavailability: {:?}",
+        result.semantic_status
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+#+end_src
+
+Note: these tests require =use std::io::BufWriter;= which is already imported as =use std::io::{BufReader, BufWriter};= at the top of the file. However, the test module currently only imports =use std::{fs, path::PathBuf};= from super — so the test will use =std::io::BufWriter= fully qualified, or add the import. The existing =super::*= import already brings =BufWriter= into scope since it is used in the parent module.
+
+* Verification
+
+- =cargo test -p pi-natives code_graph::tests::auto_search= — 2 new tests pass
+- =cargo test -p pi-natives code_graph::tests::= — all 5 tests pass (3 existing + 2 new)
+- =bun check:rs= passes
+
+* Sub-Outline
+
+1. Add =auto_search_with_stale_vectors_degrades_to_bm25= test
+2. Add =auto_search_with_corrupt_vectors_degrades_to_bm25= test
+3. Run verification commands

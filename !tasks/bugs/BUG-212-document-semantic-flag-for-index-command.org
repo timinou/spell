@@ -1,0 +1,78 @@
+#+TITLE: Document semantic flag for index command in tool prompt
+#+STATE: DONE
+#+SESSION_ID: 14b6f114040c82c2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-59-54-128Z_14b6f114040c82c2.jsonl]]
+#+CUSTOM_ID: BUG-212-document-semantic-flag-for-index-command
+#+EFFORT: 15m
+#+PRIORITY: B
+#+LAYER: frontend
+
+NOTE [2026-04-11]: Updated `packages/coding-agent/src/prompts/tools/code.md` so `index` documents `semantic?` in the instruction, operations, and critical guidance sections. Verified by rereading the prompt file.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-060-audit-implementation:
+
+- **What**: Atomic vector-cache writes still use a shared fixed temp filename instead of a per-write unique temp path  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `save_vector_cache()`  
+  **Why**: `workspace-vectors.bin.tmp` is safe against partial writes from one process, but not against two concurrent semantic-index runs. Concurrent writers can clobber the same temp file or fail during rename, which reintroduces a race in the cache persistence path.  
+  **Effort**: small
+
+- **What**: Auto-degrade semantic search paths are untested  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `"search"` branch and `code_graph::tests`  
+  **Why**: Current tests cover `semantic: true` hard failure with no vector cache and status reporting for a corrupt cache, but they do not verify the new auto mode behavior that should return BM25 results plus a degradation hint for stale/corrupt vectors or query-embedding failures. A regression here would silently revive the original “plausible results, hidden semantic failure” problem.  
+  **Effort**: small
+
+- **What**: The actual JS/N-API boundary for `semanticStatus` is still unverified  
+  **Where**: `crates/pi-natives/src/code_graph.rs` export path and `packages/natives` / `packages/coding-agent/test/tools/code.test.ts`  
+  **Why**: Rust tests call internal `run_code_graph()`, while TS tests mock `executeCodeGraph()`. That leaves the real N-API marshalling path untested, so a field-name/export mismatch on `semanticStatus` could ship without a failing test.  
+  **Effort**: medium
+
+- **What**: Tool docs mention `semantic?` for `search` but not for `index`  
+  **Where**: `packages/coding-agent/src/prompts/tools/code.md`  
+  **Why**: Users are now told, via runtime errors, to rebuild with `code index` and `semantic: true`, but the prompt surface does not document that `index` accepts the flag. That makes the new contract harder to discover and debug from the public interface alone.  
+  **Effort**: trivial
+
+- **What**: Semantic indexing derives dimensions from the first embedding but does not validate the rest of the batch  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `build_semantic_index()`  
+  **Why**: This removes the hardcoded `768`, but it still assumes every returned vector matches the first. If fastembed or model configuration changes produce inconsistent dimensions, the cache can be built from malformed data and fail later in a less obvious place. Early validation would make indexing fail truthfully at the source.  
+  **Effort**: small
+
+* Problem
+
+=packages/coding-agent/src/prompts/tools/code.md= documents =semantic?= for the =search= command but not for =index=. The runtime error messages tell users to run =code index= with =semantic: true=, but the prompt surface does not document that =index= accepts the flag. This makes the new contract harder to discover and debug.
+
+* Design Decision
+
+Update two locations in =code.md=:
+1. The instruction list (line 17): change the =index= entry to mention =semantic?=.
+2. The operations list (line 49): update the =index= description to mention semantic vector building.
+
+* Files to Modify
+
+** =packages/coding-agent/src/prompts/tools/code.md=
+
+*** Instruction list (~line 17)
+Replace:
+: - Build or rebuild the project graph → `code index`
+
+With:
+: - Build or rebuild the project graph → `code index { semantic? }`
+
+*** Operations list (~line 49)
+Replace:
+: - `index`: Build and persist the native project graph under `.spell/graph/`
+
+With:
+: - `index`: Build and persist the native project graph under `.spell/graph/`; pass `semantic: true` to also build the vector index for hybrid search
+
+* Verification
+
+- =bun check:ts= passes (biome + tsgo)
+- Manual: read the prompt file and confirm both locations mention =semantic=
+
+* Sub-Outline
+
+1. Update instruction list entry for =index=
+2. Update operations list entry for =index=
+3. Run =bun check:ts=
