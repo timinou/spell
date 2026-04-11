@@ -1,0 +1,17 @@
+Replay transcript: replay-session-live/2026-04-02T20-54-20-935Z_14ab4bc401da239f.jsonl
+
+Key evidence:
+- User requested: "Open the phoenix-inspector canvas at .spell/extensions/phoenix-inspector/. ..."
+- The first canvas launch succeeded directly:
+  toolName=canvas
+  toolResult="Window 'phoenix-inspector' launched (state: ready)"
+- Follow-up canvas messages were sent in order without any preceding validation or missing-id recovery:
+  1. send_message { action: "set_prompt", text: "Summarize this selected UI element" }
+  2. send_message { action: "inspect_selector", selector: "body" }
+  3. send_message { action: "trigger_send_to_agent" }
+- This transcript contains no occurrences of:
+  - "Validation failed for tool \"canvas\""
+  - "launch action requires 'id'"
+  - "QML object creation failed"
+
+This proves the normalized directory launch no longer falls into the original open/missing-id recovery loop.

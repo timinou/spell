@@ -369,7 +369,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				"bash",
 				label,
 				async ({ jobId, signal: runSignal, reportProgress }) => {
-					const { path: artifactPath, id: artifactId } =
+					const { path: artifactPath, uri: artifactUri } =
 						(await this.session.allocateOutputArtifact?.("bash")) ?? {};
 					try {
 						const result = await executeBash(command, {
@@ -379,7 +379,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 							signal: runSignal,
 							env: resolvedEnv,
 							artifactPath,
-							artifactId,
+							artifactUri,
 							onChunk: chunk => {
 								tailBuffer.append(chunk);
 								void reportProgress(tailBuffer.text(), { async: { state: "running", jobId, type: "bash" } });
@@ -411,7 +411,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
 
 		// Allocate artifact for truncated output storage
-		const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("bash")) ?? {};
+		const { path: artifactPath, uri: artifactUri } = (await this.session.allocateOutputArtifact?.("bash")) ?? {};
 
 		const usePty = pty && $env.PI_NO_PTY !== "1" && ctx?.hasUI === true && ctx.ui !== undefined;
 		const result: BashResult | BashInteractiveResult = usePty
@@ -422,7 +422,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					signal,
 					env: resolvedEnv,
 					artifactPath,
-					artifactId,
+					artifactUri,
 				})
 			: await executeBash(command, {
 					cwd: commandCwd,
@@ -431,7 +431,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					signal,
 					env: resolvedEnv,
 					artifactPath,
-					artifactId,
+					artifactUri,
 					onChunk: chunk => {
 						tailBuffer.append(chunk);
 						if (onUpdate) {

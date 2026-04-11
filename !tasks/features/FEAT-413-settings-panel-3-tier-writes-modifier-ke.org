@@ -1,0 +1,115 @@
+#+TITLE: Settings Panel 3-Tier Writes  Modifier Key Support
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-413-settings-panel-3-tier-writes-modifier-ke
+#+EFFORT: 3h
+#+LAYER: ui
+#+PRIORITY: #B
+#+DEPENDS: FEAT-410-settings-singleton-replace-yaml-backend
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Section 4.13 for the complete design.
+
+* Context
+With KDL-backed settings and the new =WriteTier= parameter on =Settings.set()=, the settings panel UI needs modifier key support: Enter = session (default), Shift+Enter = project, Ctrl+Shift+Enter = user. This changes flow through three layers: TUI SettingsList → coding-agent settings-selector → selector-controller.
+
+* Design Decisions
+- =SettingsList= (=packages/tui/src/components/settings-list.ts=) propagates modifier key info through its =onChange= callback
+- =SettingsCallbacks.onChange= (=packages/coding-agent/src/modes/components/settings-selector.ts=) gains =tier?: WriteTier= parameter
+- =SelectorController.handleSettingChange= (=packages/coding-agent/src/modes/controllers/selector-controller.ts=) passes tier to =settings.set()=
+- Footer hint shows: "Enter: session | Shift+Enter: project | Ctrl+Shift+Enter: user"
+
+* Implementation
+
+** Part A: TUI SettingsList Modifier Support
+
+File: =packages/tui/src/components/settings-list.ts=
+
+The =onChange= callback currently has signature: =(id: string, value: string) => void=
+
+Add a third parameter: =(id: string, value: string, modifier?: "shift" | "ctrl+shift") => void=
+
+In =handleInput()=, when detecting Enter key:
+#+begin_src typescript
+// Current:
+if (matchesKey(key, "return")) {
+  this.#onSelect(item.id, selectedValue);
+}
+
+// New: detect Shift+Enter and Ctrl+Shift+Enter
+if (matchesKey(key, "return")) {
+  let modifier: "shift" | "ctrl+shift" | undefined;
+  if (key.shift && key.ctrl) modifier = "ctrl+shift";
+  else if (key.shift) modifier = "shift";
+  this.#onSelect(item.id, selectedValue, modifier);
+}
+#+end_src
+
+Check how =matchesKey= and the key event object work in =packages/tui/src/keys.ts=. The key event from stdin has =.shift= and =.ctrl= boolean fields. =matchesKey= checks the base key name; modifiers are separate properties.
+
+** Part B: Settings Selector Callbacks
+
+File: =packages/coding-agent/src/modes/components/settings-selector.ts=
+
+Update =SettingsCallbacks= interface:
+#+begin_src typescript
+export interface SettingsCallbacks {
+  onChange: (path: SettingPath, value: string, tier?: WriteTier) => void;
+  // ... other callbacks unchanged
+}
+#+end_src
+
+Import =WriteTier= from =../../config/settings=.
+
+In the SettingsSelectorComponent where SettingsList onChange is wired:
+#+begin_src typescript
+// Map modifier to tier
+const tier = modifier === "ctrl+shift" ? "user" : modifier === "shift" ? "project" : "session";
+this.callbacks.onChange(settingPath, value, tier);
+#+end_src
+
+** Part C: Selector Controller
+
+File: =packages/coding-agent/src/modes/controllers/selector-controller.ts=
+
+Update =handleSettingChange=:
+#+begin_src typescript
+// BEFORE:
+handleSettingChange(path: SettingPath, value: string): void {
+  // ... parse value ...
+  settings.set(path, parsedValue);
+}
+
+// AFTER:
+handleSettingChange(path: SettingPath, value: string, tier?: WriteTier): void {
+  // ... parse value (unchanged) ...
+  settings.set(path, parsedValue, tier);
+}
+#+end_src
+
+** Part D: Footer hint
+In the settings selector footer (if one exists), or in the component's render method, add a hint line:
+=Enter: this session | Shift+Enter: project | Ctrl+Shift+Enter: user=
+
+* Testing
+- Manual: open settings panel (/settings), change a setting with Enter → verify NOT persisted to file (session only)
+- Manual: change with Shift+Enter → verify written to ./spell.kdl
+- Manual: change with Ctrl+Shift+Enter → verify written to ~/.spell/spell.kdl
+- Unit test: =SettingsList= with mocked =onChange= → verify modifier propagation
+- No existing tests for SettingsSelectorComponent (none in test suite). This is UI-tested manually.
+
+* Edge Cases
+- Terminals that don't report shift/ctrl modifiers correctly → falls back to Enter (session tier), which is safe
+- Some terminal emulators map Shift+Enter to plain Enter → same fallback
+- Ctrl+Shift+Enter may not be reliably detected in all terminals → degrade gracefully to session tier
+- The TUI =matchesKey= function handles raw key events — verify it exposes modifier booleans
+
+* Verification
+- =bun check:ts= passes
+- =bun lint:ts= passes
+- Manual test: settings panel opens, all tabs render, modifier keys work in supported terminals

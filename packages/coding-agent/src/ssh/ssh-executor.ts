@@ -14,9 +14,9 @@ export interface SSHExecutorOptions {
 	remotePath?: string;
 	/** Wrap commands in a POSIX shell for compat mode */
 	compatEnabled?: boolean;
-	/** Artifact path/id for full output storage */
+	/** Artifact path/URI for full output storage */
 	artifactPath?: string;
-	artifactId?: string;
+	artifactUri?: string;
 }
 
 export interface SSHResult {
@@ -36,8 +36,8 @@ export interface SSHResult {
 	outputLines: number;
 	/** Number of bytes included in the output text */
 	outputBytes: number;
-	/** Artifact ID if full output was saved to artifact storage */
-	artifactId?: string;
+	/** Artifact URI if full output was saved to artifact storage */
+	artifactUri?: string;
 }
 
 function quoteForCompatShell(command: string): string {
@@ -86,7 +86,7 @@ export async function executeSSH(
 	const sink = new OutputSink({
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
-		artifactId: options?.artifactId,
+		artifactUri: options?.artifactUri,
 	});
 
 	const streams = [child.stdout.pipeTo(sink.createInput())];

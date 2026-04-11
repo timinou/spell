@@ -255,10 +255,10 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 			};
 
 			const sessionFile = this.session.getSessionFile?.() ?? undefined;
-			const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("python")) ?? {};
+			const { path: artifactPath, uri: artifactUri } = (await this.session.allocateOutputArtifact?.("python")) ?? {};
 			outputSink = new OutputSink({
 				artifactPath,
-				artifactId,
+				artifactUri,
 				onChunk: chunk => {
 					appendTail(chunk);
 					pushUpdate();
@@ -372,7 +372,7 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 						totalBytes: outputBytes + missingBytes,
 						outputLines,
 						outputBytes,
-						artifactId: rawSummary.artifactId,
+						artifactUri: rawSummary.artifactUri,
 					};
 
 					const details: PythonToolDetails = {
@@ -419,7 +419,7 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 						totalBytes: outputBytes + missingBytes,
 						outputLines,
 						outputBytes,
-						artifactId: rawSummary.artifactId,
+						artifactUri: rawSummary.artifactUri,
 					};
 
 					const details: PythonToolDetails = {
@@ -462,7 +462,7 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 				totalBytes: outputBytes + missingBytes,
 				outputLines,
 				outputBytes,
-				artifactId: rawSummary.artifactId,
+				artifactUri: rawSummary.artifactUri,
 			};
 
 			const details: PythonToolDetails = {
@@ -517,7 +517,7 @@ function formatStatusEvent(event: PythonStatusEvent, theme: Theme): string {
 		// Navigation/Directory
 		ls: "icon.folder",
 		cd: "icon.folder",
-		pwd: "icon.folder",
+		pwd: "icon.folder", // pragma: allowlist secret
 		mkdir: "icon.folder",
 		tree: "icon.folder",
 		stat: "icon.folder",

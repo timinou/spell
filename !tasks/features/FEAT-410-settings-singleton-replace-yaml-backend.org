@@ -1,0 +1,231 @@
+#+TITLE: Settings Singleton  Replace YAML Backend with KDL
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-410-settings-singleton-replace-yaml-backend
+#+EFFORT: 6h
+#+LAYER: core
+#+PRIORITY: #A
+#+DEPENDS: FEAT-405-kdl-reader-parse-kdl-documents-to-rawset FEAT-406-kdl-writer-round-trip-format-preserving FEAT-409-expand-spell-kdl-ts-all-blocks-file-impo
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Sections 4.8 and 3.1 for the complete design. This is the highest-risk item in the plan.
+
+* Context
+The Settings singleton (=packages/coding-agent/src/config/settings.ts=) manages all ~139 settings with a 3-tier merge (global + project + overrides). Currently it loads from =~/.spell/agent/config.yml= (YAML) and persists via =YAML.stringify=. This item replaces the YAML backend with KDL.
+
+CRITICAL: This item changes ONLY the persistence layer. The =Settings.get()= / =Settings.set()= API, =SETTINGS_SCHEMA=, =SettingPath=, =SettingValue<P>=, and =SETTING_HOOKS= are all UNCHANGED. The ~67 files that import settings see no interface change.
+
+* Design Decisions
+- =Settings.set()= gains an optional =tier= parameter: =WriteTier = "session" | "project" | "user"=
+- Default tier changes from "user" (current — writes to config.yml) to "session" (in-memory). See spec Section 4.8 for rationale.
+- =#load()= reads =~/.spell/spell.kdl= (user) + =./spell.kdl= (project) instead of =config.yml=
+- =#saveNow()= writes KDL via =writeKdlSettings()= instead of =YAML.stringify()=
+- =Settings.#configPath= (string to config.yml) replaced by =Settings.#userKdlPath= and =Settings.#projectKdlPath=
+- =YAML= import from ="bun"= removed
+- =#loadYaml()= private method deleted
+- Capability-based project settings loading (=.claude/settings.json= etc. via =loadCapability=) remains UNCHANGED — those are a separate project-settings overlay, not related to KDL
+- =Settings.isolated()= continues to work with in-memory overrides (no KDL involved)
+- =_resetSettingsForTest()= continues to work
+- =flush()= method stays, now flushes KDL writes
+- =AgentStorage= integration (=getStorage()=) stays unchanged
+
+* Implementation
+** Step 1: Add =WriteTier= type and update =set()= signature
+Export from settings.ts:
+#+begin_src typescript
+export type WriteTier = "session" | "project" | "user";
+#+end_src
+
+Current =set()=:
+#+begin_src typescript
+set<P extends SettingPath>(path: P, value: SettingValue<P>): void {
+  const prev = this.get(path);
+  const segments = parsePath(path);
+  setByPath(this.#global, segments, value);  // Always writes to #global
+  this.#modified.add(path);
+  this.#rebuildMerged();
+  this.#queueSave();
+  // ... hooks
+}
+#+end_src
+
+New =set()=:
+#+begin_src typescript
+set<P extends SettingPath>(path: P, value: SettingValue<P>, tier: WriteTier = "session"): void {
+  const prev = this.get(path);
+  const segments = parsePath(path);
+  switch (tier) {
+    case "session":
+      setByPath(this.#overrides, segments, value);
+      break;
+    case "project":
+      setByPath(this.#project, segments, value);
+      this.#projectModified.add(path);
+      this.#queueSave("project");
+      break;
+    case "user":
+      setByPath(this.#global, segments, value);
+      this.#globalModified.add(path);
+      this.#queueSave("user");
+      break;
+  }
+  this.#rebuildMerged();
+  const hook = SETTING_HOOKS[path];
+  if (hook) hook(value, prev);
+}
+#+end_src
+
+** Step 2: Replace file path fields
+#+begin_src typescript
+// REMOVE:
+// #configPath: string | null;
+
+// ADD:
+#userKdlPath: string | null;
+#projectKdlPath: string | null;
+#globalModified = new Set<string>();
+#projectModified = new Set<string>();
+#+end_src
+
+In constructor:
+#+begin_src typescript
+this.#userKdlPath = options.inMemory ? null : path.join(this.#agentDir, "..", "spell.kdl");
+// The user KDL path is ~/.spell/spell.kdl, which is one level up from ~/.spell/agent/
+// More precisely: path.join(getConfigRootDir(), "spell.kdl")
+this.#projectKdlPath = options.inMemory ? null : path.join(this.#cwd, "spell.kdl");
+#+end_src
+
+** Step 3: Replace =#load()=
+Current loads YAML. New loads KDL:
+#+begin_src typescript
+async #load(): Promise<Settings> {
+  if (this.#persist) {
+    this.#storage = await AgentStorage.open(getAgentDbPath(this.#agentDir));
+    // No more #migrateFromLegacy() — old formats ignored
+    
+    // Load user-global settings from ~/.spell/spell.kdl
+    if (this.#userKdlPath) {
+      this.#global = await loadKdlSettings(this.#userKdlPath);
+    }
+    
+    // Load project-level settings from ./spell.kdl
+    if (this.#projectKdlPath) {
+      this.#project = await loadKdlSettings(this.#projectKdlPath);
+    }
+    
+    // Also load project settings from capability system (unchanged)
+    const capSettings = await this.#loadProjectSettings();
+    if (capSettings) {
+      this.#project = this.#deepMerge(this.#project, capSettings);
+    }
+  }
+  this.#rebuildMerged();
+  this.#fireAllHooks();
+  return this;
+}
+#+end_src
+
+Import =loadKdlSettings= from =./kdl-reader=.
+
+** Step 4: Replace =#saveNow()=
+Current writes YAML with file lock. New writes KDL:
+#+begin_src typescript
+async #saveNow(target: "user" | "project"): Promise<void> {
+  const filePath = target === "user" ? this.#userKdlPath : this.#projectKdlPath;
+  if (!filePath) return;
+  
+  const modified = target === "user" ? this.#globalModified : this.#projectModified;
+  const source = target === "user" ? this.#global : this.#project;
+  
+  const changes = new Map<string, unknown>();
+  for (const modPath of modified) {
+    changes.set(modPath, getByPath(source, parsePath(modPath)));
+  }
+  modified.clear();
+  
+  await writeKdlSettings(filePath, changes);
+}
+#+end_src
+
+Import =writeKdlSettings= from =./kdl-writer=.
+
+** Step 5: Update =#queueSave()=
+Current has single debounce timer. New needs per-target:
+#+begin_src typescript
+#userSaveTimer?: NodeJS.Timeout;
+#projectSaveTimer?: NodeJS.Timeout;
+
+#queueSave(target: "user" | "project"): void {
+  if (!this.#persist) return;
+  const timerField = target === "user" ? "#userSaveTimer" : "#projectSaveTimer";
+  // ... debounce logic per target ...
+}
+#+end_src
+
+** Step 6: Update =flush()=
+#+begin_src typescript
+async flush(): Promise<void> {
+  // Clear timers
+  if (this.#userSaveTimer) { clearTimeout(this.#userSaveTimer); this.#userSaveTimer = undefined; }
+  if (this.#projectSaveTimer) { clearTimeout(this.#projectSaveTimer); this.#projectSaveTimer = undefined; }
+  // Await pending saves
+  if (this.#userSavePromise) await this.#userSavePromise;
+  if (this.#projectSavePromise) await this.#projectSavePromise;
+  // Flush remaining
+  if (this.#globalModified.size > 0) await this.#saveNow("user");
+  if (this.#projectModified.size > 0) await this.#saveNow("project");
+}
+#+end_src
+
+** Step 7: Clean up deleted code
+- Remove =import { YAML } from "bun"=
+- Remove =#loadYaml()= method
+- Remove =#migrateFromLegacy()= method (if exists)
+- Remove the old single =#modified=, =#saveTimer=, =#savePromise= fields
+
+** Step 8: Update tests
+File: =packages/coding-agent/test/settings-manager.test.ts= (UPDATE existing)
+
+Existing tests write =config.yml= fixtures. Update to write =spell.kdl= fixtures instead:
+#+begin_src typescript
+// BEFORE:
+await Bun.write(path.join(agentDir, "config.yml"), YAML.stringify({ theme: { dark: "titanium" } }));
+// AFTER:
+await Bun.write(path.join(testDir, "spell.kdl"), 'appearance {
+    theme dark="titanium"
+}
+');
+#+end_src
+
+The =agentDir= for settings is =~/.spell/agent/=, but user KDL path is =~/.spell/spell.kdl= (one level up). Adjust test paths accordingly: write spell.kdl to =testDir= (which represents =~/.spell/=), not =agentDir= (which is =~/.spell/agent/=).
+
+New test scenarios:
+- =set(path, value, "user")= → persisted to user spell.kdl
+- =set(path, value, "project")= → persisted to project spell.kdl
+- =set(path, value, "session")= → NOT persisted (in-memory only)
+- =set(path, value)= → defaults to "session" (NOT persisted)
+- Round-trip: init → set → flush → re-init → get = same value
+- KDL file with comments preserved after set + flush
+
+Also add: =packages/coding-agent/test/config/settings-kdl-integration.test.ts= for the full lifecycle test.
+
+* Edge Cases
+- =Settings.isolated()= with =inMemory: true= sets both KDL paths to null → no file I/O, works exactly as before
+- Constructor with custom =agentDir= → derive user KDL path from parent of agentDir (=path.dirname(agentDir)=)
+- Concurrent =set()= calls to different tiers → each tier has independent debounce
+- =flush()= must await BOTH user and project saves
+- =set()= with default tier is now "session" (in-memory) instead of the old behavior that wrote to config.yml. This is intentional and documented in the spec. Callers that explicitly need persistence must pass "user" or "project".
+- The =spell config set= CLI command (=config-cli.ts=) must be updated in a separate item to pass =tier: "user"= to maintain current behavior.
+
+* Verification
+- =bun test packages/coding-agent/test/settings-manager.test.ts= passes (updated tests)
+- =bun test packages/coding-agent/test/config/settings-kdl-integration.test.ts= passes (new)
+- =bun test packages/coding-agent/test/task/auto-roster-settings.test.ts= passes (uses Settings.isolated, should be unchanged)
+- =bun test packages/coding-agent/test/config/review-model-role.test.ts= passes (uses Settings.isolated)
+- =bun check:ts= passes
+- No regression in =bun test packages/coding-agent/test/autocomplete-max-visible.test.ts= (update fixture format)

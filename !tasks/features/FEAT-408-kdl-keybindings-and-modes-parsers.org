@@ -1,0 +1,166 @@
+#+TITLE: KDL Keybindings and Modes Parsers
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-408-kdl-keybindings-and-modes-parsers
+#+EFFORT: 3h
+#+LAYER: core
+#+PRIORITY: #B
+#+DEPENDS: FEAT-403-kdl-helpers-extract-and-extend-shared-ac
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Sections 4.6, 4.7, and 4.9 for the complete design.
+
+* Context
+This item creates three small parsers: (1) keybindings block parser, (2) mode block parser, and (3) KDL frontmatter support for MODE.md files. These are independent modules consumed by later wave items.
+
+* Design Decisions
+- New files: =packages/coding-agent/src/config/kdl-keybindings.ts=, =packages/coding-agent/src/config/kdl-modes.ts=
+- Modified file: =packages/coding-agent/src/utils/frontmatter.ts= (add KDL frontmatter)
+- Keybindings parser returns =KeybindingsConfig= (same type used by current JSON loading)
+- Mode parser returns =Array<{ name: string; config: ModeConfigFrontmatter; instructionsPath?: string }>=
+- KDL frontmatter uses =---kdl ... ---= delimiters
+- =ModeConfigFrontmatter= type (in =packages/coding-agent/src/capability/mode.ts=) stays unchanged
+- The KDL frontmatter parser produces the same =Record<string, unknown>= output as YAML, so =parseFrontmatter= consumers don't change
+
+* Implementation
+
+** Part A: kdl-keybindings.ts
+
+*** Tests FIRST
+File: =packages/coding-agent/test/config/kdl-keybindings.test.ts=
+
+Scenarios:
+- Parse keybindings block with all standard actions → correct KeybindingsConfig
+- Parse keybindings with custom overrides → overrides present
+- Missing keybindings block → undefined (callers use defaults)
+- Unknown action names ignored silently
+- Multiple key values for one action: =interrupt "escape" "ctrl+c"= → array
+
+*** Implementation
+#+begin_src typescript
+import type { Document } from "@bgotink/kdl";
+import { getDocumentNode, getStringArguments, getStringArgument } from "./kdl-helpers";
+
+export function parseKeybindingsBlock(doc: Document): Record<string, string | string[]> | undefined {
+  const node = getDocumentNode(doc, "keybindings");
+  if (!node?.children) return undefined;
+  
+  const config: Record<string, string | string[]> = {};
+  for (const child of node.children.nodes) {
+    const action = child.getName();
+    const keys = getStringArguments(child);
+    if (keys.length === 1) {
+      config[action] = keys[0];
+    } else if (keys.length > 1) {
+      config[action] = keys;
+    }
+  }
+  return config;
+}
+#+end_src
+
+** Part B: kdl-modes.ts
+
+*** Tests FIRST
+File: =packages/coding-agent/test/config/kdl-modes.test.ts=
+
+Scenarios:
+- Parse single mode block → name, command, readOnly, extends, tools, contextPolicy, instructions
+- Parse mode with tools allow list → =tools.allow= array
+- Parse mode with tools deny list → =tools.deny= array
+- Parse mode with categories → categories array
+- Parse mode with gates block → decomposition
+- Parse mode with model override → model string
+- Parse multiple mode blocks → array with all modes
+- No mode blocks → empty array
+- Mode without instructions path → instructionsPath undefined
+
+*** Implementation
+#+begin_src typescript
+import type { Document } from "@bgotink/kdl";
+import type { ModeConfigFrontmatter } from "../capability/mode";
+
+export function parseModeBlocks(doc: Document): Array<{
+  name: string;
+  config: ModeConfigFrontmatter;
+  instructionsPath?: string;
+}>;
+#+end_src
+
+Map KDL node properties/children to ModeConfigFrontmatter fields:
+- =mode "plan"= → name
+- =extends "base"= child → extends
+- =command "/plan"= child → command
+- =read-only #true= child → readOnly
+- =context-policy "fresh"= child → contextPolicy
+- =instructions "./path.md"= child → instructionsPath (not in ModeConfigFrontmatter, returned separately)
+- =model "anthropic/..."= child → model
+- =tools { allow "read" "grep" }= child → tools.allow array
+- =tools { deny "write" "edit" }= child → tools.deny array
+- =categories "features" "bugs"= child → categories array
+- =gates { decomposition #true }= child → gates.decomposition
+
+** Part C: KDL Frontmatter in frontmatter.ts
+
+*** Tests FIRST
+File: =packages/coding-agent/test/utils/frontmatter-kdl.test.ts=
+
+Scenarios:
+- =---kdl
+mode "explore" {
+  read-only #true
+  command "/explore"
+}
+---
+
+# Body= → frontmatter has readOnly=true, command="/explore"; body starts with "# Body"
+- Standard YAML frontmatter still works (regression)
+- Mixed: KDL frontmatter followed by markdown body
+- No frontmatter → fallback values + full body
+- =---kdl
+---= (empty KDL) → fallback values + empty body marker
+- KDL frontmatter with nested children (tools block)
+
+*** Implementation
+In =packages/coding-agent/src/utils/frontmatter.ts=, modify =parseFrontmatter()=:
+
+#+begin_src typescript
+// At the top of parseFrontmatter(), before YAML detection:
+if (normalized.startsWith("---kdl
+") || normalized.startsWith("---kdl\r
+")) {
+  const markerLen = normalized.startsWith("---kdl\r
+") ? 8 : 7;
+  const endIndex = normalized.indexOf("
+---", markerLen);
+  if (endIndex !== -1) {
+    const kdlContent = normalized.slice(markerLen, endIndex);
+    const body = normalized.slice(endIndex + 4).replace(/^\r?
+/, "");
+    const parsed = parseKdlFrontmatterContent(kdlContent);
+    return { frontmatter: normalizeKeys({ ...fallback, ...parsed }), body };
+  }
+}
+#+end_src
+
+The =parseKdlFrontmatterContent= helper parses the KDL fragment. For MODE.md, it expects a single =mode= node with children. It flattens the mode's children into a flat =Record<string, unknown>=, matching the shape YAML frontmatter produces.
+
+Import =parse= from =@bgotink/kdl= in frontmatter.ts (new dependency for this file).
+
+* Edge Cases
+- Keybindings: KDL node names use kebab-case (=toggle-plan=) while KeybindingsConfig uses camelCase (=togglePlan=). Convert kebab-case → camelCase during parsing.
+- Modes: =tools= child can be a node with allow/deny children, or absent (no tool restrictions). Both shapes must be handled.
+- Frontmatter: =normalizeKeys= already converts kebab-case to camelCase (=read-only= → =readOnly=). Verify this works for KDL-produced keys too.
+- MODE.md with KDL frontmatter must produce the SAME ModeConfigFrontmatter as YAML frontmatter for the same logical config. Downstream consumers (mode-helpers.ts resolveModeConfig) must not need changes.
+
+* Verification
+- =bun test packages/coding-agent/test/config/kdl-keybindings.test.ts= passes
+- =bun test packages/coding-agent/test/config/kdl-modes.test.ts= passes
+- =bun test packages/coding-agent/test/utils/frontmatter-kdl.test.ts= passes
+- =bun check:ts= passes
+- Existing frontmatter tests still pass (regression check)

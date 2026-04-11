@@ -1,0 +1,45 @@
+#+TITLE: Session 14b6553b97bc977e Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Update caveman prompt templates
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:ORG_ITEM_ID: BUG-194-caveman-thinking-instructions-ineffectiv
+:END:
+
+Modify packages/coding-agent/src/prompts/system/system-prompt.md and packages/coding-agent/src/prompts/system/caveman.md per PLAN-169/BUG-194. Move caveman thinking instructions into system-prompt stable section after </behavior>; remove thinking block from caveman.md while preserving communication-level rules.
+
+Moved caveman thinking instructions into system-prompt.md immediately after </behavior> and deleted the duplicate thinking block from caveman.md.
+
+** DONE Add prompt template regression tests
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:DEPENDS: task-1
+:ORG_ITEM_ID: BUG-194-caveman-thinking-instructions-ineffectiv
+:END:
+
+Update packages/coding-agent/test/system-prompt-templates.test.ts with stable-section placement, omission when inactive, and caveman template exclusion assertions.
+
+Added regression coverage for stable-section thinking-mode placement, omission when inactive, and caveman template exclusion.
+
+** DONE Verify and close plan
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_CMD: bun check:ts
+:GATE_LLM: Ensure prompt instructions are in stable section before CACHE_BOUNDARY and caveman append prompt no longer includes thinking block.
+:VERIFY_CMD: bun test packages/coding-agent/test/system-prompt-templates.test.ts
+:DEPENDS: task-2
+:ORG_ITEM_ID: BUG-194-caveman-thinking-instructions-ineffectiv
+:ORG_ITEM_CLOSING_ID: PLAN-169-caveman-thinking-prompt-positioning-fix
+:END:
+
+Run bun test packages/coding-agent/test/system-prompt-templates.test.ts and bun check:ts. Update BUG and PLAN org items with completion notes, reconcile org states, and commit only plan-related files.
+
+Verification passed (`bun test packages/coding-agent/test/system-prompt-templates.test.ts`, `bun check:ts`, manual render probe). Updated BUG and PLAN org items to DONE and committed as `cd59bbb63 fix(coding-agent): reposition caveman thinking prompt`.

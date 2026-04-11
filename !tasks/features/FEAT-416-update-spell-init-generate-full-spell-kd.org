@@ -1,0 +1,85 @@
+#+TITLE: Update spell init  Generate Full spellkdl with All Blocks
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-416-update-spell-init-generate-full-spell-kd
+#+EFFORT: 2h
+#+LAYER: cli
+#+PRIORITY: #B
+#+DEPENDS: FEAT-409-expand-spell-kdl-ts-all-blocks-file-impo
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Section 2.1 for the full KDL grammar.
+
+* Context
+The =spell init= command (=packages/coding-agent/src/cli/init-cli.ts=) generates a =spell.kdl= file with =domain= and =import= nodes. After the KDL migration, it should generate a more complete spell.kdl that shows the available config blocks with sensible defaults and comments explaining each section.
+
+* Design Decisions
+- Update =generateSpellKdl()= in =init-cli.ts= to produce expanded template
+- Include commented-out examples of each block (appearance, model, tools, etc.)
+- Active content: =domain= + =import= (as before)
+- Commented sections: =appearance=, =model=, =keybindings= etc. with defaults shown as comments
+- Keep it concise — show 2-3 settings per block as examples, not all 139
+
+* Implementation
+Update =packages/coding-agent/src/cli/init-cli.ts= =generateSpellKdl()=:
+
+The function currently builds KDL text with template literals. Expand it:
+
+#+begin_src typescript
+function generateSpellKdl(domain: string, templateNs: string | undefined, testCmd: string | undefined): string {
+  let kdl = `domain "${domain}"
+`;
+  if (templateNs) kdl += `import "${templateNs}"
+`;
+  kdl += `
+`;
+  kdl += `// Uncomment and customize sections below.
+`;
+  kdl += `// Full reference: https://github.com/can1357/oh-my-pi/blob/main/specs/kdl-config-migration.md
+`;
+  kdl += `
+`;
+  kdl += `// appearance {
+`;
+  kdl += `//     theme dark="titanium" light="light"
+`;
+  kdl += `//     symbols "unicode"
+`;
+  kdl += `// }
+`;
+  kdl += `
+`;
+  kdl += `// model {
+`;
+  kdl += `//     thinking "high"
+`;
+  kdl += `// }
+`;
+  kdl += `
+`;
+  kdl += `// keybindings {
+`;
+  kdl += `//     cycle-model "ctrl+p"
+`;
+  kdl += `// }
+`;
+  return kdl;
+}
+#+end_src
+
+Keep the existing policy override logic (replacing test commands based on detected project).
+
+* Testing
+Update =packages/coding-agent/test/cli/init-command.test.ts=:
+- Existing tests verify domain and import are present → keep
+- Add: verify commented appearance/model/keybindings sections are present
+- Verify =parseSpellKdl()= still works on the generated content (comments are valid KDL)
+
+* Verification
+- =bun test packages/coding-agent/test/cli/init-command.test.ts= passes
+- =bun check:ts= passes

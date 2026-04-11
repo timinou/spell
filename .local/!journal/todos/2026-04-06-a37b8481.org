@@ -1,0 +1,22 @@
+#+TITLE: Session 14b0323d9f559744 Todos
+#+DATE: 2026-04-06
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run bun check:ts and test suite
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+bun check:ts: no new errors (all pre-existing in other packages). bun test code.test.ts: 2/2 pass.
+
+** DONE Verify all changes match plan specs
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:
+
+All spec items verified: navigate actions (node-at, siblings, children) in pi-edit.el dispatch; edit ops (splice-self, splice-down, transpose) in combobulate-op dispatch + gate; description strings updated in pi-emacs-tools.el and code.ts; code.md has decision tree first, 3 workflow patterns, 12 edit ops, 6 navigate actions, anti-patterns; system-prompt.md has graduated routing, no escape hatch, outline-first search.

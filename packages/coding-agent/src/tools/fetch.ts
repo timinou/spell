@@ -1129,7 +1129,7 @@ export class FetchTool implements AgentTool<typeof fetchSchema, FetchToolDetails
 			maxLines: FETCH_DEFAULT_MAX_LINES,
 		});
 		const needsArtifact = truncation.truncated;
-		let artifactId: string | undefined;
+		let artifactUri: string | undefined;
 
 		const buildOutput = (content: string): string => {
 			let output = "";
@@ -1145,10 +1145,10 @@ export class FetchTool implements AgentTool<typeof fetchSchema, FetchToolDetails
 		};
 
 		if (needsArtifact) {
-			const { path: artifactPath, id } = (await this.session.allocateOutputArtifact?.("fetch")) ?? {};
-			if (artifactPath) {
-				await Bun.write(artifactPath, buildOutput(result.content));
-				artifactId = id;
+			const artifact = await this.session.allocateOutputArtifact?.("fetch");
+			if (artifact?.path) {
+				await Bun.write(artifact.path, buildOutput(result.content));
+				artifactUri = artifact.uri;
 			}
 		}
 
@@ -1170,7 +1170,7 @@ export class FetchTool implements AgentTool<typeof fetchSchema, FetchToolDetails
 
 		const resultBuilder = toolResult(details).content(contentBlocks).sourceUrl(result.finalUrl);
 		if (needsArtifact) {
-			resultBuilder.truncation(truncation, { direction: "head", artifactId });
+			resultBuilder.truncation(truncation, { direction: "head", artifactUri });
 		} else if (result.truncated) {
 			const outputLines = result.content.split("\n").length;
 			const outputBytes = Buffer.byteLength(result.content, "utf-8");
@@ -1262,7 +1262,7 @@ export function renderFetchResult(
 	metadataLines.push(`${uiTheme.fg("muted", "Chars:")} ${charCount}`);
 	if (truncated) {
 		metadataLines.push(uiTheme.fg("warning", `${uiTheme.status.warning} Output truncated`));
-		if (truncation?.artifactId) metadataLines.push(formatStyledArtifactReference(truncation.artifactId, uiTheme));
+		if (truncation?.artifactUri) metadataLines.push(formatStyledArtifactReference(truncation.artifactUri, uiTheme));
 	}
 	if (hasNotes) {
 		metadataLines.push(`${uiTheme.fg("muted", "Notes:")} ${details.notes.join("; ")}`);

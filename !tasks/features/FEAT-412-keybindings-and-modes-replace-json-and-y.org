@@ -1,0 +1,136 @@
+#+TITLE: Keybindings and Modes  Replace JSON and YAML with KDL
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-412-keybindings-and-modes-replace-json-and-y
+#+EFFORT: 3h
+#+LAYER: core
+#+PRIORITY: #B
+#+DEPENDS: FEAT-408-kdl-keybindings-and-modes-parsers FEAT-409-expand-spell-kdl-ts-all-blocks-file-impo
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Sections 4.11 and 4.9, and the mode blocks in Section 2.1.
+
+* Context
+Two peripheral config consumers need updating: (1) =KeybindingsManager= loads from =keybindings.json= — switch to KDL, (2) Mode discovery supports YAML frontmatter — add KDL frontmatter support. Also: remove YAML fallback from task-policies loading and domain.json fallback from detection.
+
+* Design Decisions
+- =KeybindingsManager.create()= reads from user + project =spell.kdl= keybindings blocks
+- =KeybindingsManager.#loadFromFile()= (JSON-specific) deleted
+- Modes defined in =spell.kdl= =mode= blocks are merged with MODE.md-discovered modes
+- MODE.md files can use =---kdl ... ---= frontmatter OR =--- YAML ---= frontmatter (both supported)
+- =task-policies.ts=: remove Step 3 YAML fallback (=.spell/task-policies.yml=)
+- =detection.ts=: remove =domain.json= fallback
+
+* Implementation
+
+** Part A: KeybindingsManager
+
+Update =packages/coding-agent/src/config/keybindings.ts=:
+
+#+begin_src typescript
+// BEFORE:
+static async create(agentDir: string = getAgentDir()): Promise<KeybindingsManager> {
+  const configPath = path.join(agentDir, "keybindings.json");
+  const config = await KeybindingsManager.#loadFromFile(configPath);
+  // ...
+}
+
+// AFTER:
+static async create(
+  userKdlPath?: string,
+  projectKdlPath?: string,
+): Promise<KeybindingsManager> {
+  // Load from user spell.kdl keybindings block
+  let userConfig: Record<string, string | string[]> = {};
+  if (userKdlPath) {
+    try {
+      const doc = parse(await Bun.file(userKdlPath).text());
+      userConfig = parseKeybindingsBlock(doc) ?? {};
+    } catch { /* ENOENT ok */ }
+  }
+  
+  // Load from project spell.kdl keybindings block
+  let projectConfig: Record<string, string | string[]> = {};
+  if (projectKdlPath) {
+    try {
+      const doc = parse(await Bun.file(projectKdlPath).text());
+      projectConfig = parseKeybindingsBlock(doc) ?? {};
+    } catch { /* ENOENT ok */ }
+  }
+  
+  // Merge: project overrides user
+  const merged = { ...userConfig, ...projectConfig };
+  // ... build KeybindingsConfig from merged, same logic as before
+}
+#+end_src
+
+Update caller in =interactive-mode.ts= line ~378:
+#+begin_src typescript
+// BEFORE:
+this.keybindings = await KeybindingsManager.create();
+// AFTER:
+this.keybindings = await KeybindingsManager.create(
+  path.join(getConfigRootDir(), "spell.kdl"),
+  path.join(getProjectDir(), "spell.kdl"),
+);
+#+end_src
+
+Delete: =#loadFromFile()= private method, JSON parsing code.
+
+Tests: Update =packages/coding-agent/test/keybindings-display.test.ts=. Uses =KeybindingsManager.inMemory()= which doesn't touch files — should be unchanged.
+
+** Part B: Mode KDL Frontmatter in Discovery
+
+Update =packages/coding-agent/src/discovery/builtin.ts= =loadModes()=:
+The function already calls =parseFrontmatter()= on MODE.md files. Since we updated =parseFrontmatter()= in FEAT-408 to handle KDL frontmatter, the builtin discovery gets KDL support automatically.
+
+Additionally, merge =mode= blocks from =spell.kdl= into the discovered modes. In =sdk.ts= where modes are loaded:
+#+begin_src typescript
+// After loading modes from MODE.md files:
+const kdlModes = projectConfig?.modes ?? [];
+for (const kdlMode of kdlModes) {
+  // Add or override mode by name
+  // Load instructions content from kdlMode.instructionsPath if present
+}
+#+end_src
+
+** Part C: Remove YAML Task Policies Fallback
+
+Update =packages/coding-agent/src/config/task-policies.ts= =loadTaskPolicies()=:
+- Remove Step 3 (=.spell/task-policies.yml= YAML loading)
+- Remove =parseTaskPolicies()= function (YAML parser)
+- Remove =import { YAML } from "bun"=
+- Keep Step 1 (spell.kdl) and Step 2 (.spell/task-policies.kdl)
+
+Update =packages/coding-agent/test/config/config-loading-hierarchy.test.ts=:
+- Remove or update the "falls back to .spell/task-policies.yml" test
+- Add test: "no YAML fallback: .spell/task-policies.yml ignored when no KDL present"
+
+** Part D: Remove domain.json Fallback
+
+Update =packages/coding-agent/src/domain/detection.ts=:
+- Remove =domain.json= reading (Step 3 in current detection order)
+- Keep spell.kdl domain detection (Step 2) and CLI override (Step 1)
+- Keep default "coding" fallback
+
+Update =packages/coding-agent/test/config/config-loading-hierarchy.test.ts=:
+- Remove "falls back to domain.json" tests
+- Update "malformed spell.kdl" test — should still return "coding" default
+
+* Edge Cases
+- Keybindings: kebab-case KDL names (=toggle-plan=) must convert to camelCase (=togglePlan=) for =KeybindingsConfig=
+- Keybindings: =KeybindingsManager.inMemory()= bypasses file loading — unchanged
+- Modes: if same mode name appears in both spell.kdl and MODE.md, spell.kdl takes precedence
+- Task policies: projects with only =.spell/task-policies.yml= (no KDL) will lose their policies. The =spell migrate= command (separate item) handles this.
+- Domain: projects with only =.spell/domain.json= lose domain detection. =spell migrate= handles this.
+
+* Verification
+- =bun test packages/coding-agent/test/keybindings-display.test.ts= passes
+- =bun test packages/coding-agent/test/config/config-loading-hierarchy.test.ts= passes (updated)
+- =bun check:ts= passes
+- No =keybindings.json=, =domain.json=, =task-policies.yml= references remain in production code

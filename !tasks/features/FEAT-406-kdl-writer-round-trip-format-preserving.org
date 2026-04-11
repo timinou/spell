@@ -1,0 +1,165 @@
+#+TITLE: KDL Writer  Round-Trip Format-Preserving Settings Writer
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-406-kdl-writer-round-trip-format-preserving
+#+EFFORT: 4h
+#+LAYER: core
+#+PRIORITY: #A
+#+DEPENDS: FEAT-403-kdl-helpers-extract-and-extend-shared-ac FEAT-404-kdl-settings-map-bidirectional-settingpa
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Section 4.4 for the complete design.
+
+* Context
+When a user changes a setting (via settings panel or =spell config set=), the change must be persisted back to spell.kdl WITHOUT destroying comments, formatting, or unrelated content. This module implements round-trip KDL editing using =@bgotink/kdl= 0.4.0's format-preserving API.
+
+* Design Decisions
+- New file: =packages/coding-agent/src/config/kdl-writer.ts=
+- Uses =@bgotink/kdl= =parse()= → mutate → =format()= round-trip (preserves whitespace/comments in parsed representation)
+- Uses =KDL_SETTINGS_MAP= to find the correct KDL location for each setting
+- Creates missing blocks/nodes on-demand (e.g., if =appearance= block doesn't exist yet, creates it)
+- Uses =withFileLock()= from =./file-lock.ts= for concurrent write safety
+- Creates parent directories via =Bun.write()= (auto-creates dirs)
+
+* Implementation
+** Step 1: Write tests FIRST
+File: =packages/coding-agent/test/config/kdl-writer.test.ts=
+
+Test scenarios:
+- Round-trip preservation: parse → apply no changes → format = identical output
+- Update existing value: change =theme dark="old"= to =dark="new"=, verify other content unchanged
+- Create new node in existing block: add =symbols "nerd"= to appearance block that doesn't have it
+- Create new block: if =appearance= doesn't exist, create it with the new node
+- Create nested node: add =compaction enabled=#true= inside =model= block
+- Multiple changes in one call: update 3 settings across 2 blocks
+- Comments preserved: KDL file with comments before/after/between nodes stays intact
+- Empty document: writing to empty/nonexistent file creates correct KDL
+- Boolean values: =#true= / =#false= written correctly (not ="true"=)
+- Number values: integers and floats written correctly
+- String values: quoted properly
+- File not found (ENOENT): creates new file with just the changed settings
+- Concurrent writes: two writeKdlSettings calls don't corrupt file (withFileLock)
+
+For round-trip test:
+#+begin_src typescript
+const original = `// My config
+appearance {
+    theme dark="titanium"
+    // keep this comment
+    symbols "unicode"
+}
+`;
+const doc = parse(original);
+applySettingsToKdl(doc, new Map([["theme.dark", "monokai"]]));
+const output = format(doc);
+expect(output).toContain('dark="monokai"');
+expect(output).toContain("// My config");
+expect(output).toContain("// keep this comment");
+expect(output).toContain('symbols "unicode"');
+#+end_src
+
+** Step 2: Implement =applySettingsToKdl=
+#+begin_src typescript
+import { type Document, type Node, parse, format } from "@bgotink/kdl";
+import { KDL_SETTINGS_MAP, type KdlSettingMapping } from "./kdl-settings-map";
+import { getDocumentNode, getChildNode, createStringNode, createBooleanNode, createNumberNode } from "./kdl-helpers";
+
+export function applySettingsToKdl(doc: Document, changes: Map<string, unknown>): Document {
+  for (const [settingPath, value] of changes) {
+    const mapping = KDL_SETTINGS_MAP[settingPath];
+    if (!mapping) continue;
+
+    // Find or create the block node
+    let blockNode = getDocumentNode(doc, mapping.block);
+    if (!blockNode) {
+      blockNode = Node.create(mapping.block);
+      blockNode.children = new Document();
+      doc.appendNode(blockNode);
+    }
+
+    // Navigate to or create the target node within the block
+    let parent = blockNode;
+    const pathParts = mapping.nodePath.split(".");
+    for (let i = 0; i < pathParts.length - 1; i++) {
+      let child = getChildNode(parent, pathParts[i]);
+      if (!child) {
+        child = Node.create(pathParts[i]);
+        child.children = new Document();
+        if (!parent.children) parent.children = new Document();
+        parent.children.appendNode(child);
+      }
+      parent = child;
+    }
+
+    const leafName = pathParts[pathParts.length - 1];
+    let targetNode = getChildNode(parent, leafName);
+
+    if (mapping.accessor === "argument") {
+      if (!targetNode) {
+        // Create new node with value as argument
+        targetNode = createNodeForValue(leafName, value);
+        if (!parent.children) parent.children = new Document();
+        parent.children.appendNode(targetNode);
+      } else {
+        // Update existing argument
+        if (targetNode.hasArgument(mapping.argumentIndex ?? 0)) {
+          targetNode.removeArgument(mapping.argumentIndex ?? 0);
+        }
+        targetNode.addArgument(value as string | number | boolean, undefined, mapping.argumentIndex ?? 0);
+      }
+    } else {
+      // Property accessor
+      if (!targetNode) {
+        targetNode = Node.create(leafName);
+        targetNode.setProperty(mapping.propertyName!, value as string | number | boolean);
+        if (!parent.children) parent.children = new Document();
+        parent.children.appendNode(targetNode);
+      } else {
+        targetNode.setProperty(mapping.propertyName!, value as string | number | boolean);
+      }
+    }
+  }
+  return doc;
+}
+#+end_src
+
+** Step 3: Implement =writeKdlSettings=
+#+begin_src typescript
+import { isEnoent } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "./file-lock";
+
+export async function writeKdlSettings(filePath: string, changes: Map<string, unknown>): Promise<void> {
+  await withFileLock(filePath, async () => {
+    let doc: Document;
+    try {
+      const content = await Bun.file(filePath).text();
+      doc = parse(content);
+    } catch (err) {
+      if (isEnoent(err)) {
+        doc = new Document();
+      } else {
+        throw err;
+      }
+    }
+
+    applySettingsToKdl(doc, changes);
+    await Bun.write(filePath, format(doc));
+  });
+}
+#+end_src
+
+* Edge Cases
+- =Node.create()= produces nodes without formatting metadata → =format()= will use default formatting for new nodes (2-space indent). This is acceptable since new nodes blend with any existing indentation style.
+- =clearFormat()= from =@bgotink/kdl= can normalize formatting if needed, but we DON'T call it — we preserve original formatting.
+- Property update via =setProperty()= replaces the existing property entry, preserving its position in the entries array.
+- Argument update: must remove then add at same index to avoid duplicates.
+- Nested node path with missing intermediates (e.g., writing =compaction.enabled= when =model= exists but =compaction= child doesn't) requires creating intermediate nodes with children blocks.
+
+* Verification
+- =bun test packages/coding-agent/test/config/kdl-writer.test.ts= passes
+- =bun check:ts= passes

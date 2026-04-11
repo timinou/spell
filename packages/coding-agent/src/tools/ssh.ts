@@ -160,14 +160,14 @@ export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 		const timeoutMs = timeoutSec * 1000;
 
 		const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
-		const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("ssh")) ?? {};
+		const { path: artifactPath, uri: artifactUri } = (await this.session.allocateOutputArtifact?.("ssh")) ?? {};
 
 		const result = await executeSSH(hostConfig, remoteCommand, {
 			timeout: timeoutMs,
 			signal,
 			compatEnabled: hostInfo.compatEnabled,
 			artifactPath,
-			artifactId,
+			artifactUri,
 			onChunk: chunk => {
 				tailBuffer.append(chunk);
 				if (onUpdate) {

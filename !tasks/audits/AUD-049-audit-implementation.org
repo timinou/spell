@@ -1,0 +1,35 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-049-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+1. **What**: `/caveman` can report success even when the prompt refresh failed  
+   **Where**: `packages/coding-agent/src/extensibility/extensions/caveman.ts`, around `refreshPrompt()` and its callers (`applyRuntimeLevel`, `restoreFromSession`, `updatePersistedSetting`)  
+   **Why**: `refreshPrompt()` catches and logs refresh failures, but callers still update status/session state and notify success. That can leave UI saying caveman mode is active while the actual system prompt stayed unchanged.  
+   **Effort**: small
+
+2. **What**: Fire animation timer starts even when no UI exists  
+   **Where**: `packages/coding-agent/src/extensibility/extensions/caveman.ts`, around `syncStatus()`  
+   **Why**: subagents, print mode, and RPC mode use no-op UI contexts, but `syncStatus()` still creates a live `setInterval()` when caveman is active. That wastes work in non-interactive sessions and is especially noisy when `caveman.affectSubagents` is true.  
+   **Effort**: trivial
+
+3. **What**: Config dialog ignores the UI theme passed by `ui.custom()` and uses the global imported theme instead  
+   **Where**: `packages/coding-agent/src/extensibility/extensions/caveman.ts`, `CavemanSettingsDialog` constructor / `openConfig()` factory  
+   **Why**: dialog styling is coupled to global theme initialization rather than the actual active UI theme. That risks incorrect styling in themed sessions and makes the dialog harder to exercise outside the full TUI bootstrap path.  
+   **Effort**: trivial
+
+4. **What**: Regression coverage is not checked into the package test suite  
+   **Where**: behavior added in `packages/coding-agent/src/system-prompt.ts` and `packages/coding-agent/src/extensibility/extensions/caveman.ts`; verification currently lives only in `!tasks/plans/plan-artifacts/PLAN-167-caveman-mode-for-spell/verify-caveman.ts`  
+   **Why**: CI will not catch regressions in prompt injection, subagent propagation, runtime toggling, or session restore because the only focused verification is an untracked plan artifact script, not a committed test.  
+   **Effort**: medium
+
+5. **What**: No changelog entry for the new built-in feature  
+   **Where**: `packages/coding-agent/CHANGELOG.md`, `## [Unreleased]`  
+   **Why**: feature ships without release-note visibility or discoverability, which increases release-process drift and makes user-facing changes harder to track.  
+   **Effort**: small

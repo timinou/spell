@@ -1,0 +1,235 @@
+#+TITLE: CLI  spell migrate Command and Legacy File Warning
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-414-cli-spell-migrate-command-and-legacy-fil
+#+EFFORT: 4h
+#+LAYER: cli
+#+PRIORITY: #B
+#+DEPENDS: FEAT-410-settings-singleton-replace-yaml-backend FEAT-411-model-registry-replace-configfile-typebo
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Sections 4.14 and 4.15 for the complete design.
+
+* Context
+Users with existing config.yml, models.json, and keybindings.json need a migration path to spell.kdl. This item creates the =spell migrate= CLI command and adds a startup warning when legacy files are detected.
+
+* Design Decisions
+- New files: =packages/coding-agent/src/cli/migrate-cli.ts=, =packages/coding-agent/src/commands/migrate.ts=
+- Modified: =packages/coding-agent/src/cli.ts= (register command), =packages/coding-agent/src/main.ts= (startup warning)
+- =spell migrate= converts YAML/JSON config files to KDL and writes =~/.spell/spell.kdl=
+- Does NOT delete legacy files — user verifies then deletes manually
+- Startup warning uses =logger.warn= (goes to log file, not TUI)
+- =spell migrate --dry-run= shows what would be generated without writing
+
+* Implementation
+
+** Part A: migrate-cli.ts
+File: =packages/coding-agent/src/cli/migrate-cli.ts=
+
+#+begin_src typescript
+import { parse as parseKdl, format as formatKdl, Document, Node } from "@bgotink/kdl";
+import { YAML } from "bun";
+import * as path from "node:path";
+import { getAgentDir, getConfigRootDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import chalk from "chalk";
+
+export interface MigrateCommandArgs {
+  flags: { dryRun?: boolean };
+}
+
+export async function runMigrateCommand(args: MigrateCommandArgs): Promise<void> {
+  const agentDir = getAgentDir();
+  const configRoot = getConfigRootDir();
+  const outputPath = path.join(configRoot, "spell.kdl");
+
+  // Check if already migrated
+  const exists = await Bun.file(outputPath).exists();
+  if (exists && !args.flags.dryRun) {
+    process.stdout.write(chalk.yellow(`${outputPath} already exists. Use --force to overwrite.
+`));
+    return;
+  }
+
+  // Detect legacy files
+  const configYml = await tryLoadYaml(path.join(agentDir, "config.yml"));
+  const modelsJson = await tryLoadJson(path.join(agentDir, "models.json"));
+  const keybindingsJson = await tryLoadJson(path.join(agentDir, "keybindings.json"));
+
+  if (!configYml && !modelsJson && !keybindingsJson) {
+    process.stdout.write(chalk.green("No legacy config files found. Nothing to migrate.
+"));
+    return;
+  }
+
+  // Generate KDL
+  let kdl = "// Migrated from legacy config files by `spell migrate`
+
+";
+  if (configYml) kdl += settingsToKdl(configYml) + "
+";
+  if (modelsJson) kdl += modelsConfigToKdl(modelsJson) + "
+";
+  if (keybindingsJson) kdl += keybindingsToKdl(keybindingsJson) + "
+";
+
+  if (args.flags.dryRun) {
+    process.stdout.write(chalk.dim("--- dry run: would write to ") + outputPath + chalk.dim(" ---
+"));
+    process.stdout.write(kdl);
+    return;
+  }
+
+  await Bun.write(outputPath, kdl);
+  process.stdout.write(chalk.green(`Migrated to ${outputPath}
+`));
+  process.stdout.write(chalk.dim("Legacy files kept as backup. Delete them after verifying.
+"));
+}
+#+end_src
+
+Converter functions:
+- =settingsToKdl(rawSettings)=: Group settings by KDL block using =KDL_SETTINGS_MAP=. Generate block nodes with child value nodes.
+- =modelsConfigToKdl(modelsConfig)=: Generate =providers { ... }= block from JSON provider configs.
+- =keybindingsToKdl(keybindingsConfig)=: Generate =keybindings { ... }= block from JSON keybindings.
+
+These converters produce KDL TEXT (not Document objects) — simpler to implement and debug. Use string templates, not programmatic AST construction.
+
+Helper:
+#+begin_src typescript
+async function tryLoadYaml(filePath: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    return YAML.parse(await Bun.file(filePath).text()) as Record<string, unknown>;
+  } catch { return undefined; }
+}
+
+async function tryLoadJson(filePath: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    return await Bun.file(filePath).json();
+  } catch { return undefined; }
+}
+#+end_src
+
+** Part B: commands/migrate.ts
+File: =packages/coding-agent/src/commands/migrate.ts=
+
+Follow existing command pattern (see =commands/config.ts= for reference):
+#+begin_src typescript
+import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { runMigrateCommand } from "../cli/migrate-cli";
+
+export default class MigrateCommand extends Command {
+  static override description = "Migrate legacy config files to spell.kdl";
+  static override flags = {
+    "dry-run": Flags.boolean({ description: "Preview without writing" }),
+    force: Flags.boolean({ description: "Overwrite existing spell.kdl" }),
+  };
+
+  async run(): Promise<void> {
+    await runMigrateCommand({
+      flags: { dryRun: this.flags["dry-run"], force: this.flags.force },
+    });
+  }
+}
+#+end_src
+
+** Part C: Register in cli.ts
+File: =packages/coding-agent/src/cli.ts=
+
+Add to the commands array:
+#+begin_src typescript
+{ id: "migrate", module: () => import("./commands/migrate"), description: "Migrate legacy config to spell.kdl" },
+#+end_src
+
+Follow the pattern of existing command entries in the file.
+
+** Part D: Startup warning in main.ts
+File: =packages/coding-agent/src/main.ts=
+
+After =Settings.init()= (around line 580):
+#+begin_src typescript
+// Detect legacy config files and warn
+const legacyFiles = await detectLegacyConfigFiles();
+if (legacyFiles.length > 0) {
+  logger.warn("Legacy config files detected. Run `spell migrate` to convert.", {
+    files: legacyFiles,
+  });
+}
+
+async function detectLegacyConfigFiles(): Promise<string[]> {
+  const agentDir = getAgentDir();
+  const files = ["config.yml", "models.json", "keybindings.json"];
+  const found: string[] = [];
+  for (const file of files) {
+    try {
+      const exists = await Bun.file(path.join(agentDir, file)).exists();
+      if (exists) found.push(file);
+    } catch { /* ignore */ }
+  }
+  return found;
+}
+#+end_src
+
+** Part E: Update =spell config= CLI
+File: =packages/coding-agent/src/cli/config-cli.ts=
+
+The =handleSet= function calls =settings.set(path, value)=. With the new default tier being "session", this would not persist. Update to use "user" tier:
+#+begin_src typescript
+// BEFORE:
+settings.set(path, parsedValue as SettingValue<typeof path>);
+// AFTER:
+settings.set(path, parsedValue as SettingValue<typeof path>, "user");
+#+end_src
+
+Same for =handleReset=:
+#+begin_src typescript
+settings.set(path, defaultValue as SettingValue<typeof path>, "user");
+#+end_src
+
+Update =handlePath()= to show KDL file path instead of agent dir:
+#+begin_src typescript
+// BEFORE:
+console.log(getAgentDir());
+// AFTER:
+console.log(path.join(getConfigRootDir(), "spell.kdl"));
+#+end_src
+
+* Testing
+** Tests FIRST
+File: =packages/coding-agent/test/cli/migrate-command.test.ts=
+
+Scenarios:
+- Migrate config.yml only → correct KDL output with settings blocks
+- Migrate models.json only → correct KDL with providers block
+- Migrate keybindings.json only → correct KDL with keybindings block
+- Migrate all three → combined KDL output
+- No legacy files → "Nothing to migrate" message
+- Existing spell.kdl without --force → warning, no overwrite
+- --dry-run → output to stdout, no file written
+- Empty config.yml → empty settings blocks
+- Config.yml with nested settings → correct KDL nesting
+
+File: =packages/coding-agent/test/config/legacy-detection.test.ts=
+
+Scenarios:
+- No legacy files → empty array
+- Only config.yml exists → ["config.yml"]
+- All three exist → all three in array
+- Files exist but are empty → still detected (existence check only)
+
+* Edge Cases
+- config.yml with settings that don't have KDL mappings → skip with warning
+- models.json with TypeBox-specific format → convert to KDL provider syntax
+- keybindings.json with arrays (multiple keys per action) → KDL node with multiple arguments
+- Unicode in config values → preserved in KDL strings
+- File permissions: ~/.spell/spell.kdl might need parent dir creation → =Bun.write()= handles this
+
+* Verification
+- =bun test packages/coding-agent/test/cli/migrate-command.test.ts= passes
+- =bun test packages/coding-agent/test/config/legacy-detection.test.ts= passes
+- =bun check:ts= passes
+- Manual: =spell migrate --dry-run= with existing config.yml shows correct KDL output

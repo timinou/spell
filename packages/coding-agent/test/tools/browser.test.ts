@@ -6,23 +6,37 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BrowserTool } from "@oh-my-pi/pi-coding-agent/tools/browser";
 
-function createSession(cwd: string): ToolSession {
+function createSession(cwd: string, artifactsDir: string): ToolSession {
+	let nextArtifactId = 0;
 	return {
 		cwd,
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated({ "browser.headless": true }),
+		allocateOutputArtifact: async (toolType, extension) => {
+			const id = String(nextArtifactId++);
+			const ext = extension ?? "txt";
+			const dir = path.join(artifactsDir, toolType);
+			await fs.mkdir(dir, { recursive: true });
+			return {
+				id,
+				path: path.join(dir, `${id}.${ext}`),
+				uri: `artifact://test/main/${toolType}/${id}.${ext}`,
+			};
+		},
 	};
 }
 
 describe("BrowserTool screenshot artifacts", () => {
 	let tmpDir: string;
+	let artifactsDir: string;
 	let tool: BrowserTool;
 
 	beforeEach(async () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "browser-tool-"));
-		tool = new BrowserTool(createSession(tmpDir));
+		artifactsDir = path.join(tmpDir, "session-artifacts");
+		tool = new BrowserTool(createSession(tmpDir, artifactsDir));
 	});
 
 	afterEach(async () => {
@@ -48,20 +62,39 @@ describe("BrowserTool screenshot artifacts", () => {
 		await tool.execute("goto-page", { action: "goto", url });
 	}
 
-	it("writes screenshots to the requested path relative to cwd", async () => {
+	it("stores screenshots in the artifact directory when no explicit path is provided", async () => {
+		await openFixturePage();
+
+		const result = await tool.execute("capture-artifact-shot", {
+			action: "screenshot",
+		});
+		const artifactPath = path.join(artifactsDir, "screenshot", "0.png");
+		const bytes = await Bun.file(artifactPath).bytes();
+
+		expect(result.details?.screenshotPath).toBe(artifactPath);
+		expect(result.details?.artifactUri).toBe("artifact://test/main/screenshot/0.png");
+		expect(result.details?.mimeType).toBe("image/png");
+		expect(result.details?.bytes).toBe(bytes.length);
+		expect(Array.from(bytes.slice(0, 8))).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+	});
+
+	it("writes screenshots to both the requested path and the artifact directory", async () => {
 		await openFixturePage();
 
 		const result = await tool.execute("capture-shot", {
 			action: "screenshot",
 			path: "plan-artifacts/PLAN-001-proof/landing.png",
 		});
-		const expectedPath = path.join(tmpDir, "plan-artifacts", "PLAN-001-proof", "landing.png");
-		const bytes = await Bun.file(expectedPath).bytes();
+		const requestedPath = path.join(tmpDir, "plan-artifacts", "PLAN-001-proof", "landing.png");
+		const artifactPath = path.join(artifactsDir, "screenshot", "0.png");
+		const requestedBytes = await Bun.file(requestedPath).bytes();
+		const artifactBytes = await Bun.file(artifactPath).bytes();
 
-		expect(result.details?.screenshotPath).toBe(expectedPath);
+		expect(result.details?.screenshotPath).toBe(requestedPath);
+		expect(result.details?.artifactUri).toBe("artifact://test/main/screenshot/0.png");
 		expect(result.details?.mimeType).toBe("image/png");
-		expect(result.details?.bytes).toBe(bytes.length);
-		expect(Array.from(bytes.slice(0, 8))).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+		expect(result.details?.bytes).toBe(requestedBytes.length);
+		expect(artifactBytes).toEqual(requestedBytes);
 	});
 
 	it("rejects requested paths with a non-png extension", async () => {

@@ -1,0 +1,17 @@
+#+TITLE: Session 14b6536bf19da158 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Find and trace the /move command implementation
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Find how Org tool determines its save directory
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:

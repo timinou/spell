@@ -1,0 +1,164 @@
+#+TITLE: Org Blackboard for Swarm State
+#+STATE: DONE
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-383-org-blackboard-for-swarm-state
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: agent-runtime
+#+DEPENDS: FEAT-382-mutable-dag-scheduler-swarmscheduler
+
+NOTE [2026-04-11]: Superseded by unified swarm plan.
+
+* Narrative
+
+In the current architecture, subagents are fully isolated: they receive a static assignment at launch and return a single result at completion. There is no way for a running agent to share intermediate findings with peers, announce that it discovered a dependency another agent needs, or leave structured state that survives beyond its session.
+
+This is the "shared nothing" problem. It works for independent parallel tasks but breaks down for *interconnected swarms* where agents must collaborate: agent A discovers an API contract that agent B needs before it can generate callers; agent C finds a failing test that agent D should prioritize; agent E produces an artifact that agents F and G both consume.
+
+The blackboard pattern solves this: a shared knowledge base where agents post entries (findings, artifacts, handoff records, progress) and query entries from peers. Other agents -- or the scheduler -- monitor the blackboard to make routing decisions.
+
+We use *org items* as the blackboard substrate because:
+- Org items are already the canonical state representation in Spell (plans, features, bugs all live in org).
+- =OrgClient.callTool()= via MCP is already available to subagents.
+- Org items are human-readable, persistent across sessions, queryable via =org query=, and support structured PROPERTIES + freeform body.
+- Journal/NOTE entries provide append-only audit trails naturally.
+- The =OrgFluidBridge= already demonstrates org-backed agent state lifecycle (ITEM->DOING->DONE).
+
+Each swarm run creates a parent org item (=SWARM-<run-id>=). Agent-written entries are children of that parent. The blackboard is scoped to a single run; querying is fast because it's filtered by parent ID.
+
+* Design Decisions
+
+1. Blackboard entries are org items in a =swarm= category. Prefix: =SWARM=.
+2. Each run creates one parent item: =SWARM-<run-id>-<slug>=. State: =DOING= while swarm runs, =DONE= when complete.
+3. Agent writes create child items under the parent. Each child has PROPERTIES:
+   - =:AGENT:= -- the agent ID that wrote it
+   - =:TYPE:= -- one of: =artifact=, =finding=, =handoff=, =progress=, =contract=
+   - =:TIMESTAMP:= -- ISO 8601 write time
+   - =:ARTIFACT_PATH:= -- (optional) file path if the entry references an on-disk artifact
+4. Body contains the payload: text, JSON code blocks, or org-structured content.
+5. Agents interact via the existing MCP org tools: =org create= (write), =org update= / =org note= (amend), =org query= (read), =org get= (read single).
+6. =SwarmBlackboard= is a thin TypeScript class that wraps these calls with typed helpers. It does NOT duplicate org logic -- it builds the correct =org create= / =org query= calls.
+7. Swarm lifecycle events (agent start, completion, handoff, failure) are logged as =org note= entries on the parent item, providing an audit trail.
+
+* Files to Create
+
+** =packages/coding-agent/src/swarm/types.ts=
+#+begin_src typescript
+export type BlackboardEntryType = "artifact" | "finding" | "handoff" | "progress" | "contract";
+
+export interface BlackboardEntry {
+  id: string;           // org CUSTOM_ID
+  agentId: string;
+  type: BlackboardEntryType;
+  timestamp: string;    // ISO 8601
+  title: string;
+  body: string;
+  artifactPath?: string;
+}
+
+export interface SwarmRunMetadata {
+  runId: string;
+  parentOrgId: string;  // CUSTOM_ID of parent SWARM item
+  startedAt: string;
+  prompt: string;       // original user prompt
+}
+
+export interface HandoffRecord {
+  fromAgent: string;
+  toAgent?: string;     // hint; scheduler may override
+  context: string;      // what the receiving agent needs to know
+  partialResult?: string;
+  reason: string;       // why handoff is happening
+}
+
+export interface ArtifactRecord {
+  agentId: string;
+  path: string;         // on-disk path
+  description: string;
+  mimeType?: string;
+}
+#+end_src
+
+** =packages/coding-agent/src/swarm/blackboard.ts=
+#+begin_src typescript
+class SwarmBlackboard {
+  constructor(private orgClient: OrgClient, private runMeta: SwarmRunMetadata) {}
+
+  /** Initialize: create parent SWARM org item */
+  static async init(orgClient: OrgClient, runId: string, prompt: string): Promise<SwarmBlackboard>;
+
+  /** Write a new entry to the blackboard */
+  async write(agentId: string, type: BlackboardEntryType, title: string, body: string, artifactPath?: string): Promise<string>;
+
+  /** Read all entries, optionally filtered */
+  async read(filter?: { agentId?: string; type?: BlackboardEntryType }): Promise<BlackboardEntry[]>;
+
+  /** Read a single entry by ID */
+  async get(entryId: string): Promise<BlackboardEntry | undefined>;
+
+  /** Append a note to an existing entry */
+  async annotate(entryId: string, note: string): Promise<void>;
+
+  /** Log a swarm lifecycle event on the parent item */
+  async logEvent(event: string): Promise<void>;
+
+  /** Mark swarm run complete */
+  async complete(): Promise<void>;
+}
+#+end_src
+
+* Files to Modify
+
+** Org configuration
+Add =swarm= category to =spell.kdl= org categories block. Prefix =SWARM=. This is a one-line config addition.
+
+* Existing Patterns to Follow
+- =OrgFluidBridge= (referenced in memory summary) for org-backed agent state lifecycle
+- =OrgClient.callTool()= invocation pattern (see existing MCP tool usage in coding-agent)
+- Journal =NOTE= entries: existing org tooling appends timestamped notes via =org note= command
+- =queueTodoMutation= pattern (=tools/todo-write.ts= line ~379) for serializing concurrent writes
+
+* Sub-outline (test-first)
+
+** 1. Define types
+Create =swarm/types.ts= with all interfaces above. Pure type definitions, no logic.
+
+** 2. Write SwarmBlackboard tests
+File: =packages/coding-agent/test/swarm/blackboard.test.ts=
+
+*** init
+- =SwarmBlackboard.init(orgClient, "run-001", "refactor auth")= => calls =org create= with category=swarm, title containing "run-001", state=DOING. Returns =SwarmBlackboard= instance with =runMeta.parentOrgId= set to the created item's CUSTOM_ID.
+- Verify parent item has PROPERTIES: =:RUN_ID: run-001=, =:PROMPT:= truncated to 200 chars.
+
+*** write
+- =bb.write("agent-a", "finding", "API contract", "Users endpoint returns 404")= => calls =org create= with:
+  - title: "API contract"
+  - body: "Users endpoint returns 404"
+  - properties: { AGENT: "agent-a", TYPE: "finding", TIMESTAMP: (ISO string) }
+  - Returns the new item's CUSTOM_ID
+- =bb.write("agent-b", "artifact", "Patch file", "diff content", "/tmp/patch.diff")= => properties include =ARTIFACT_PATH: /tmp/patch.diff=
+
+*** read
+- After 3 writes (agent-a finding, agent-b artifact, agent-a progress), =bb.read()= returns all 3 entries sorted by timestamp.
+- =bb.read({ agentId: "agent-a" })= returns only 2 entries.
+- =bb.read({ type: "artifact" })= returns only 1 entry.
+- =bb.read({ agentId: "agent-c" })= returns empty array.
+
+*** logEvent
+- =bb.logEvent("Agent agent-a started")= => calls =org note= on the parent item. Note text includes timestamp.
+
+*** complete
+- =bb.complete()= => calls =org update= on parent item, state=DONE.
+
+** 3. Implement SwarmBlackboard
+Depends on: tests from step 2.
+
+** 4. Add swarm category to org config
+Single-line addition to =spell.kdl=. Verify with =org query category=swarm= returning empty results (no items yet, but category recognized).
+
+* Verification
+- =bun test packages/coding-agent/test/swarm/blackboard.test.ts= passes
+- =bun check:ts= passes
+- =org query category=swarm= returns valid (empty) results after config change
+- =org create category=swarm title="test"= creates an item with =SWARM-= prefix

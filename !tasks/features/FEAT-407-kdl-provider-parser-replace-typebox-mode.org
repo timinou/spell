@@ -1,0 +1,141 @@
+#+TITLE: KDL Provider Parser  Replace TypeBox Models Config
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-407-kdl-provider-parser-replace-typebox-mode
+#+EFFORT: 4h
+#+LAYER: core
+#+PRIORITY: #A
+#+DEPENDS: FEAT-403-kdl-helpers-extract-and-extend-shared-ac
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Sections 4.5 and 4.10 for the complete design.
+
+* Context
+The model registry currently loads provider/model configs from =models.json= via =ConfigFile<ModelsConfig>= with TypeBox schema validation (~100+ =Type.*= references). This item creates a KDL parser for the =providers= block that produces the same runtime types, validated by the existing =validateProviderConfiguration()= function.
+
+* Design Decisions
+- New file: =packages/coding-agent/src/config/kdl-providers.ts=
+- Parser output types (=KdlProviderConfig=, =KdlModelConfig=) are structurally compatible with what =ModelRegistry.#parseModels()= consumes
+- =validateProviderConfiguration()= stays in =model-registry.ts= — called by both KDL parser and =registerProvider()=
+- =resolveConfigValue()= still handles =$ENV= and =!command= prefixes in string values — called during API key resolution, NOT during parse
+- Discovery protocols (Ollama, LM Studio, llama.cpp) config moves from hardcoded JS to KDL =discovery= child nodes
+- The =providers= block is NOT part of the settings mapping (=kdl-settings-map.ts=) — it has its own dedicated parser because provider config is structurally different from flat settings
+
+* Implementation
+** Step 1: Define types
+File: =packages/coding-agent/src/config/kdl-providers.ts=
+
+#+begin_src typescript
+export interface KdlProviderConfig {
+  baseUrl?: string;
+  apiKey?: string;
+  api?: string;  // Api enum value
+  auth?: string;  // "none" | "apiKey" | "oauth"
+  headers?: Record<string, string>;
+  compat?: Record<string, unknown>;
+  discovery?: { type: string };
+  models?: KdlModelConfig[];
+  modelOverrides?: Record<string, unknown>;
+  optional?: boolean;
+}
+
+export interface KdlModelConfig {
+  id: string;
+  api?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+}
+
+export interface ParsedProvidersBlock {
+  providers: Record<string, KdlProviderConfig>;
+  webSearch?: string;
+  codeSearch?: string;
+  image?: string;
+}
+#+end_src
+
+** Step 2: Write tests FIRST
+File: =packages/coding-agent/test/config/kdl-providers.test.ts=
+
+Test scenarios:
+- Parse provider with api-key and base-url only
+- Parse provider with custom models (id, api, contextWindow, maxTokens, reasoning)
+- Parse provider with discovery config (type="ollama")
+- Parse provider with headers block
+- Parse provider with compat block (supports-store, max-tokens-field)
+- Parse provider with auth="none"
+- Parse provider with api-key using $ENV reference (value preserved as literal — resolution happens later)
+- Parse provider with api-key using !command reference
+- Parse web-search, code-search, image top-level arguments
+- Parse multiple providers in one block
+- Empty providers block → empty result
+- Provider with no children → minimal config (just name)
+- Validation: provider without baseUrl but with models → error
+- Validation: provider without apiKey and auth not "none" with models → error
+- Validation: provider with discovery but no api → error
+
+KDL fixture example:
+#+begin_src kdl
+providers {
+    web-search "auto"
+    provider "my-proxy" {
+        base-url "https://ai.company.com/v1"
+        api "openai-completions"
+        api-key "$MY_KEY"
+        headers {
+            X-Team "eng"
+        }
+        compat {
+            supports-store #false
+        }
+        model "gpt-4" {
+            context-window 128000
+            max-tokens 8192
+        }
+    }
+}
+#+end_src
+
+** Step 3: Implement parser
+Follow the existing pattern from =task-policies-kdl.ts=:
+- Use =getDocumentNode(doc, "providers")= to find the block
+- Iterate =node.children.nodes= for =provider= child nodes
+- Use =getStringArgument= for provider name, =getStringProperty= for base-url, api-key etc.
+- Use =getChildNode= for headers, compat, discovery, model sub-blocks
+- For headers: iterate child nodes, each node name is the header key, string argument is the value
+- For compat: iterate child nodes, each is a property
+- For model: string argument is id, properties are config fields
+
+** Step 4: Implement validation
+Reuse =validateProviderConfiguration()= from =model-registry.ts=. Call it after parsing each provider:
+#+begin_src typescript
+import { validateProviderConfiguration } from "./model-registry";
+// After parsing:
+validateProviderConfiguration(providerName, {
+  baseUrl: config.baseUrl,
+  apiKey: config.apiKey,
+  api: config.api,
+  auth: config.auth,
+  models: config.models ?? [],
+  // ...
+}, "models-config");
+#+end_src
+
+* Edge Cases
+- Provider name is the string argument to the =provider= node: =provider "anthropic" { ... }=
+- Headers can have non-standard casing (e.g., =X-Team=) — preserve case exactly
+- Compat values can be boolean or string — use appropriate accessor
+- Discovery =type= is a string property: =discovery type="ollama"=
+- Model =reasoning= is boolean argument or property — check both patterns
+- A provider block with ONLY modelOverrides and no models is valid (just overrides built-in models)
+- =optional #true= on a provider means discovery failures are non-fatal
+
+* Verification
+- =bun test packages/coding-agent/test/config/kdl-providers.test.ts= passes
+- =bun check:ts= passes

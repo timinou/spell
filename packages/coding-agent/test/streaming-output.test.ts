@@ -274,7 +274,7 @@ describe("OutputSink", () => {
 		const artifactPath = path.join(dir, "output.log");
 		const sink = new OutputSink({
 			artifactPath,
-			artifactId: "artifact-1",
+			artifactUri: "artifact://artifact-1",
 			spillThreshold: 5,
 		});
 
@@ -284,7 +284,7 @@ describe("OutputSink", () => {
 		const artifactText = await Bun.file(artifactPath).text();
 
 		expect(dumped.truncated).toBe(true);
-		expect(dumped.artifactId).toBe("artifact-1");
+		expect(dumped.artifactUri).toBe("artifact://artifact-1");
 		expect(artifactText).toBe("abcdef");
 		expect(dumped.output).toBe("bcdef");
 	});

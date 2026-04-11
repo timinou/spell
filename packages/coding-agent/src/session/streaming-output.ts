@@ -23,13 +23,13 @@ export interface OutputSummary {
 	totalBytes: number;
 	outputLines: number;
 	outputBytes: number;
-	/** Artifact ID for internal URL access (artifact://<id>) when truncated */
-	artifactId?: string;
+	/** Artifact URI for internal URL access when truncated */
+	artifactUri?: string;
 }
 
 export interface OutputSinkOptions {
 	artifactPath?: string;
-	artifactId?: string;
+	artifactUri?: string;
 	spillThreshold?: number;
 	onChunk?: (chunk: string) => void;
 }
@@ -524,19 +524,19 @@ export class OutputSink {
 
 	#file?: {
 		path: string;
-		artifactId?: string;
+		artifactUri?: string;
 		sink: Bun.FileSink;
 	};
 
 	readonly #artifactPath?: string;
-	readonly #artifactId?: string;
+	readonly #artifactUri?: string;
 	readonly #spillThreshold: number;
 	readonly #onChunk?: (chunk: string) => void;
 
 	constructor(options?: OutputSinkOptions) {
-		const { artifactPath, artifactId, spillThreshold = DEFAULT_MAX_BYTES, onChunk } = options ?? {};
+		const { artifactPath, artifactUri, spillThreshold = DEFAULT_MAX_BYTES, onChunk } = options ?? {};
 		this.#artifactPath = artifactPath;
-		this.#artifactId = artifactId;
+		this.#artifactUri = artifactUri;
 		this.#spillThreshold = spillThreshold;
 		this.#onChunk = onChunk;
 	}
@@ -617,7 +617,7 @@ export class OutputSink {
 			totalBytes: this.#totalBytes,
 			outputLines,
 			outputBytes: this.#bufferBytes,
-			artifactId: this.#file?.artifactId,
+			artifactUri: this.#file?.artifactUri,
 		};
 	}
 
@@ -629,7 +629,7 @@ export class OutputSink {
 
 		try {
 			const sink = Bun.file(this.#artifactPath).writer();
-			this.#file = { path: this.#artifactPath, artifactId: this.#artifactId, sink };
+			this.#file = { path: this.#artifactPath, artifactUri: this.#artifactUri, sink };
 
 			// Flush existing buffer to file BEFORE it gets trimmed further.
 			if (this.#buffer.length > 0) {

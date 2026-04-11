@@ -1,0 +1,14 @@
+#+TITLE: Session 14aff50756f59a40 Todos
+#+DATE: 2026-04-06
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Finalize
+
+** DONE Verify, commit, close org lifecycle
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:DEPENDS: task-6
+:END:
+
+Run bun check:ts, verify pi:// access, commit all changes

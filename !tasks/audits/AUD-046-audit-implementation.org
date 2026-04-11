@@ -1,0 +1,50 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-046-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+So `port` is parsed as a **child node** (line 89: `child.getName() === "port"`), not a property. The KDL schema reference example uses `http port=8787 webhook-secret=...` which is **property syntax** — this won't work because the parser iterates over `httpNode.children.nodes`. However, the KDL schema reference was pre-existing content (it was there before this plan), so it's out of scope for this audit. The getting-started.md correctly uses the child-node syntax in its newly-written examples (lines 66-73).
+
+Actually, wait — the kdl-schema-reference.md at lines 15-19 still shows the pre-existing property syntax (`http port=8787 ...`). But that was pre-existing, not introduced by this plan. The new getting-started.md examples correctly use child-node syntax. The KDL syntax inconsistency between those two is pre-existing.
+
+Let me compile my findings:
+
+---
+
+## Audit Findings
+
+### 1. Wrong `env:` syntax in telegram-bridge.md (should be `env()`)
+- **What**: telegram-bridge.md uses `"env:DEEPGRAM_API_KEY"` in KDL examples instead of the correct `"env(DEEPGRAM_API_KEY)"` syntax
+- **Where**: `docs/spell-server/telegram-bridge.md` — lines 122, 127, 289, 309, 312
+- **Why**: Users copying these examples will get runtime errors — the `resolveEnvString` function only recognizes `env()` syntax. This is the primary interactive use case doc.
+- **Effort**: `trivial`
+
+### 2. Broken cross-reference link in telegram-bridge.md
+- **What**: Links to `configuration.md` which doesn't exist; also references `spell-server.kdl` which isn't a real file
+- **Where**: `docs/spell-server/telegram-bridge.md` — line 9: `See [Configuration Reference](configuration.md)` and `alongside spell-server.kdl`
+- **Why**: Broken link in the Overview section. Should link to `kdl-schema-reference.md` and reference `server.kdl`.
+- **Effort**: `trivial`
+
+### 3. Wrong `auth="token"` in getting-started.md (should be `auth="bearer"`)
+- **What**: Bearer auth example uses `auth="token"` in the schedule block but the manifest parser only accepts `"hmac"` or `"bearer"` — `"token"` throws a parse error
+- **Where**: `docs/spell-server/getting-started.md` — lines 310, 328
+- **Why**: User who copies this config gets a manifest parse error at startup. The description text says "token" but the actual value must be `"bearer"`.
+- **Effort**: `trivial`
+
+### 4. Non-canonical KDL boolean/null syntax in telegram-bridge.md
+- **What**: Uses bare `true`, `false`, `null` instead of canonical `#true`, `#false`, `#null` in KDL examples
+- **Where**: `docs/spell-server/telegram-bridge.md` — lines 75, 162, 198, 301, 318, 325
+- **Why**: While the parser may accept bare forms, the kdl-schema-reference.md explicitly documents `#null` as canonical and the getting-started.md uses `#true`/`#null` consistently. Inconsistency between docs is confusing for users following both.
+- **Effort**: `trivial`
+
+### 5. `auto-send-images #true` default mismatch in telegram-bridge.md examples
+- **What**: Multi-project example shows `auto-send-images true` (bare boolean) while kdl-schema-reference.md documents it as `auto-send-images #true`
+- **Where**: `docs/spell-server/telegram-bridge.md` — line 301
+- **Why**: Same consistency issue as finding #4 — bare vs canonical KDL syntax.
+- **Effort**: `trivial` (covered by fix for finding #4)

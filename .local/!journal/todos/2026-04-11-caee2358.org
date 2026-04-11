@@ -1,0 +1,148 @@
+#+TITLE: Session 14b68456bcf1eae0 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* foundation
+
+** DONE Consolidate swarm event map
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/utils/typed-event-bus.test.ts && bun test packages/coding-agent/test/utils/event-bus.test.ts && bun test packages/coding-agent/test/swarm/blackboard.test.ts && bun test packages/coding-agent/test/swarm/handoff-tool.test.ts && bun test packages/coding-agent/test/swarm/spawn-successor-tool.test.ts
+:ORG_ITEM_ID: FEAT-415-consolidate-swarmeventmap-and-clean-even
+:END:
+
+Implement FEAT-415 in packages/coding-agent swarm/task/utils files. Consolidate SwarmEventMap to one canonical definition, keep shared session EventBus untyped, remove unsafe executor cast paths, then run focused event-bus/swarm tests.
+
+** DONE Harden swarm scheduler tests
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/task/swarm-scheduler.test.ts
+:ORG_ITEM_ID: FEAT-417-harden-swarmscheduler-test-coverage-for
+:END:
+
+Implement FEAT-417 in packages/coding-agent/test/task/swarm-scheduler.test.ts by adding live DAG mutation and multi-level cascade coverage, then run the swarm scheduler test file.
+
+* rename
+
+** DONE Cut over phase to group naming
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/todo-write.test.ts && bun test packages/coding-agent/test/tools/todo-write-gates.test.ts && bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts && bun test packages/coding-agent/test/tools/todo-promote-ready.test.ts && bun test packages/coding-agent/test/tools/todo-apply-ops-dag.test.ts && bun test packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts && bun test packages/coding-agent/test/orchestrators/fluid-retry.test.ts && bun check:ts
+:DEPENDS: task-1
+:ORG_ITEM_ID: PROJ-028-full-phase-to-group-naming-cutover
+:END:
+
+Canonicalized TodoGroup/groups/getTodoGroups/setTodoGroups/cloneTodoGroups across coding-agent runtime, prompt docs, org journal mirror, and focused tests. Kept replace.phases, add_phase, add_task.phase, and stored details.phases only as compatibility boundaries.
+
+Completed PROJ-028. Renamed todo runtime contracts to Group terminology, updated consumers/tests, preserved explicit compatibility aliases, and verified focused rename-wave suites plus bun check:ts.
+
+* context
+
+** DONE Thread blocker resolution context
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/todo-write.test.ts && bun test packages/coding-agent/test/tools/todo-promote-ready.test.ts && bun test packages/coding-agent/test/tools/todo-apply-ops-dag.test.ts && bun test packages/coding-agent/test/tools/todo-write-gates.test.ts && bun check:ts
+:DEPENDS: task-3
+:ORG_ITEM_ID: FEAT-418-thread-resolved-context-through-blocker
+:END:
+
+Updated hasUnresolvedBlockers/isTaskBlocked to accept optional context, threaded the live context through todo-write internal callers, and added a gates regression test proving current-session URIs resolve only when the correct context is supplied.
+
+Completed FEAT-418 by adding optional blocker-resolution context parameters and a regression test for session-scoped blocker URIs.
+
+* integration
+
+** DONE Wire scheduler into fluid mode
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/task/swarm-scheduler.test.ts && bun test packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts && bun test packages/coding-agent/test/integration/fluid-event-pipeline.test.ts && bun test packages/coding-agent/test/integration/fluid-shell-agents.test.ts packages/coding-agent/test/integration/fluid-shell-states.test.ts && bun check:ts
+:DEPENDS: task-2 task-4
+:ORG_ITEM_ID: FEAT-419-wire-swarmscheduler-into-fluid-mode-exec
+:END:
+
+Integrated SwarmScheduler into executeFluidPlan for non-simple plans, discovered the task agent for worker execution, injected swarmContext into runSubprocess, synchronized group state from scheduler status changes, filtered worker tools to avoid child todo_write state collisions, and preserved bridge event routing/simple-plan behavior.
+
+Completed FEAT-419. Multi-task fluid plans now execute through SwarmScheduler + SwarmBlackboard, simple plans keep the prompt-chain fast path, and fluid event/QML state paths remain verified.
+
+* Rename
+
+** DONE Rename core todo-write contract
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+Superseded by the completed rename-wave implementation in task-3.
+
+Original delegated attempt failed, but the core contract work was completed directly during PROJ-028.
+
+** DONE Rename session and task API consumers
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:DEPENDS: task-6
+:END:
+
+Superseded by the completed rename-wave implementation in task-3.
+
+Completed directly during the rename-wave cutover.
+
+** DONE Rename mode and orchestrator consumers
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:DEPENDS: task-6
+:END:
+
+Superseded by the completed rename-wave implementation in task-3.
+
+Completed directly during the rename-wave cutover.
+
+** DONE Rename execution bridge consumers
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: completed
+:DEPENDS: task-6
+:END:
+
+Superseded by the completed rename-wave implementation in task-3.
+
+Completed directly during the rename-wave cutover.
+
+** DONE Rename primary todo tests
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: completed
+:DEPENDS: task-6 task-7 task-8 task-9
+:END:
+
+Superseded by the completed rename-wave implementation in task-3.
+
+Completed directly during the rename-wave cutover.
+
+* RenameTests
+
+** DONE Update primary todo tool tests
+:PROPERTIES:
+:TASK_ID: task-14
+:STATUS: completed
+:END:
+
+Superseded by the completed rename-wave implementation in task-3.
+
+Original delegated attempt failed, but the follow-up fixes were completed directly.
+
+** DONE Update secondary todo tool tests
+:PROPERTIES:
+:TASK_ID: task-15
+:STATUS: completed
+:END:
+
+Superseded by the completed rename-wave implementation in task-3.
+
+Original delegated attempt failed, but the follow-up fixes were completed directly.

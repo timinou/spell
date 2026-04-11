@@ -1,0 +1,85 @@
+#+TITLE: Artifact URI extensions and image storage
+#+STATE: BLOCKED
+#+SESSION_ID: 14b64b9276f08680
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T09-56-47-707Z_14b64b9276f08680.jsonl]]
+#+CUSTOM_ID: PLAN-075-artifact-uri-extensions-and-image-storag
+
+
+NOTE [2026-04-11]: Execution finished for scoped changes, but the required full-package verification gate is blocked by unrelated existing test failures.
+
+* Context
+
+The artifact:// URI system currently uses bare numeric IDs (=artifact://5=) and stores all
+artifacts as flat files (={id}.{toolType}.log=) in the session directory. Screenshots and
+generated images bypass the artifact system entirely, saving to tmpdir. Subagent artifacts
+are not addressable from the main agent.
+
+This plan introduces four changes:
+1. *Session-scoped URIs with extensions*: =artifact://<session-id>/<agent-name>/<tool>/<number>.<ext>=
+2. *Image artifact integration*: Screenshots and generated images stored in artifact dir
+3. *URI everywhere*: All tool output truncation notices use full artifact:// URIs
+4. *Prompt documentation*: Plan mode prompts reference artifact:// for verification evidence
+
+** Key decisions
+
+- URI format: =artifact://<session-id>/<agent-name>/<tool>/<number>.<ext>=
+  - Example: =artifact://14b64b9276f08680/main/bash/0.txt=
+  - Example: =artifact://14b64b9276f08680/0-FindArtifactFiles/screenshot/1.png=
+- Session ID: Snowflake hex string (no timestamp)
+- Agent name: =main= for main agent, task prefix (e.g., =0-FindArtifactFiles=) for subagents
+- Default extension: =txt=; screenshots: =png=; generated images: mime-derived
+- Monotonic ID counter per ArtifactManager instance (per agent scope)
+- Backward compat: old =artifact://{id}= URIs still resolve via current-session root scan
+- Cross-session resolution: resolver scans =~/.spell/agent/sessions/= across project repos
+- =InternalResource.contentType= stays text-only union; binary artifacts return =sourcePath=
+- Plan artifact recording: prompt-guided only (no automatic tracking)
+
+** Target repo
+
+All implementation in =/home/user/code/ora/spell/packages/coding-agent/=.
+Run tests from =/home/user/code/ora/spell/=.
+
+* Verification
+
+#+begin_src bash
+cd /home/user/code/ora/spell
+bun test packages/coding-agent
+#+end_src
+
+Additional checks:
+- =grep -rn 'artifact://\${' packages/coding-agent/src/= returns zero code matches
+- New test files exist:
+  - =packages/coding-agent/test/session/artifacts.test.ts=
+  - =packages/coding-agent/test/internal-urls/artifact-protocol.test.ts=
+
+* Execution Manifest
+
+** Wave 1: Foundation
+
+- [[id:FEAT-165-artifact-uri-extension-and-subdirectory]] — Storage layout, protocol handler, session-scoped URIs, ArtifactManager, resolver (M)
+
+** Wave 2: Consumers (parallel, depend on Wave 1)
+
+- [[id:FEAT-167-show-artifact-uri-everywhere-and-update]] — Update all emission points to use =uri= field (S)
+  - Depends on: FEAT-165
+- [[id:FEAT-166-store-screenshots-and-generated-images-a]] — Screenshots + images → artifact storage (M)
+  - Depends on: FEAT-165
+
+** Wave 3: Documentation (depends on Wave 2)
+
+- [[id:FEAT-169-document-artifact-uri-pattern-in-plan-mo]] — Plan mode prompt updates (S)
+  - Depends on: FEAT-165, FEAT-166
+
+
+** Completion [2026-04-11]
+*** Verification
+- `bun test packages/coding-agent/test/session/artifacts.test.ts packages/coding-agent/test/internal-urls/artifact-protocol.test.ts` — passed (`7 pass`, `0 fail`).
+- `bun test packages/coding-agent/test/tools/browser.test.ts packages/coding-agent/test/tools/gemini-image-artifacts.test.ts packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts packages/coding-agent/test/tools.test.ts packages/coding-agent/test/streaming-output.test.ts packages/coding-agent/test/core/python-executor.test.ts` — passed (`104 pass`, `1 skip`, `0 fail`).
+- `bun test packages/coding-agent/test/session-manager/move-to.test.ts packages/coding-agent/test/task/bash-exit-code-tracking.test.ts` — passed (`15 pass`, `0 fail`).
+- `grep(pattern="artifact://\\$\\{", path="packages/coding-agent/src/", glob="**/*.ts")` — no matches.
+- `bun test packages/coding-agent` — failed. The package suite currently times out or fails in existing unrelated tests (`sdk-model-selection.test.ts`, `sdk-skills.test.ts`, `agent-session-tool-dispose.test.ts`, `agent-session-auto-compaction-x-initiator.test.ts`, `agent-session-mcp-discovery.test.ts`, `sdk-session-isolation.test.ts`, `cli-domain-command-routing.test.ts`, `server-command.test.ts`). Plan state remains blocked until that gate is green.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-075-artifact-uri-extensions-and-image-storag/manual-browser-screenshot-proof.png]] — manual screenshot proving the plan artifact capture path is populated.
+- Code/test changes: `packages/coding-agent/src/session/artifacts.ts`, `packages/coding-agent/src/internal-urls/artifact-protocol.ts`, `packages/coding-agent/src/tools/browser.ts`, `packages/coding-agent/src/tools/canvas.ts`, `packages/coding-agent/src/tools/gemini-image.ts`, `packages/coding-agent/src/prompts/system/plan-mode-approved.md`, `packages/coding-agent/test/session/artifacts.test.ts`, `packages/coding-agent/test/internal-urls/artifact-protocol.test.ts`, `packages/coding-agent/test/tools/browser.test.ts`, `packages/coding-agent/test/tools/gemini-image-artifacts.test.ts`.
+*** Deviations
+- Full package verification remains blocked by unrelated existing test failures listed above. No follow-up item was created because the blocker predates this plan’s scoped changes.

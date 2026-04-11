@@ -1,0 +1,156 @@
+#+TITLE: Fix constructor dead-code false positives and symbol resolution fallback
+#+STATE: ITEM
+#+SESSION_ID: 14b66f75e39d597b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-33-35-630Z_14b66f75e39d597b.jsonl]]
+#+CUSTOM_ID: FEAT-424-fix-constructor-dead-code-false-positive
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+#+DEPENDS: FEAT-421-distinguish-type-only-imports-with-edgek
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-053-audit-implementation:
+
+Audit findings, highest effort-to-impact first:
+
+1. **What**: Cache fingerprinting is too broad and likely self-invalidates the graph cache
+   - **Where**: `crates/pi-code-graph/src/cache.rs`, `CacheStore::fingerprint_root()`
+   - **Why**: It fingerprints every file under the root, including non-source files and likely `.spell/graph` itself. That means the cache can become stale because of its own output or unrelated docs/artifacts changes, forcing unnecessary rebuilds and making `status`/lazy indexing less trustworthy.
+   - **Effort**: `small`
+
+2. **What**: Graph commands bypass read-only mode even though `index`/auto-index writes `.spell/graph`
+   - **Where**: `packages/coding-agent/src/tools/code.ts`, graph command routing in `execute()` / `#executeGraphCommand()`
+   - **Why**: `context`, `impact`, `deps`, etc. can trigger an implicit rebuild and write cache files, but only `edit` is guarded as a write. In a read-only session this violates the tool’s contract and mutates the workspace unexpectedly.
+   - **Effort**: `small`
+
+3. **What**: Type-only imports are parsed, then silently discarded by the graph pipeline
+   - **Where**: `crates/pi-code-graph/src/language.rs` (`ExtractedImport.is_type_only`) and `crates/pi-code-graph/src/indexer.rs` import edge construction
+   - **Why**: The extractor preserves `is_type_only`, but the builder never uses it. That means callers cannot tell whether a dependency is runtime or type-only, and dead-code / impact / deps results can over-report usage while hiding that distinction.
+   - **Effort**: `small`
+
+4. **What**: Symbol-only commands can silently fall back to file hits
+   - **Where**: `crates/pi-code-graph/src/query.rs`, `resolve_symbol()`
+   - **Why**: If exact symbol lookup fails, `resolve_symbol()` falls back to graph search over both symbols and files. `context`/`flow` therefore can return plausible output for a file when the caller asked for a symbol, which is a contract violation and hard to detect from the output.
+   - **Effort**: `small`
+
+5. **What**: TypeScript inheritance extraction produces false `inherits` edges
+   - **Where**: `crates/pi-code-graph/src/language/typescript.rs`, `collect_heritage_references()`
+   - **Why**: It walks identifiers inside `extends`/`implements` clauses too broadly. In practice this already surfaced as `CodeTool` appearing to “inherit” `codeSchema`, which is not a real inheritance relationship. That pollutes `context`/`impact` results with misleading edges.
+   - **Effort**: `small`
+
+6. **What**: Bare-name symbol indexing collides when multiple symbols in one file share the same name
+   - **Where**: `crates/pi-code-graph/src/indexer.rs`, `symbol_nodes` map population and `resolve_reference_target()`
+   - **Why**: The map is keyed by `(file, symbol.name)`, so duplicate method/function names within one file overwrite each other. References then resolve to whichever symbol was inserted last, making context, flow, impact, and dead-code results incorrect in common class-heavy files.
+   - **Effort**: `medium`
+
+7. **What**: `dead_code` has obvious false positives for constructors and some methods
+   - **Where**: `crates/pi-code-graph/src/query.rs`, `graph_dead_code()`; root cause also in `crates/pi-code-graph/src/language/typescript.rs` reference extraction for `new_expression`
+   - **Why**: `new Foo()` links to `Foo`, not `Foo.constructor`, so constructor symbols tend to look unused. The smoke output already showed entries like `ProxyMessageEventStream.constructor` as dead. A noisy dead-code report will quickly lose user trust.
+   - **Effort**: `medium`
+
+8. **What**: Elixir module resolution does not cover common Mix/Phoenix layouts
+   - **Where**: `crates/pi-code-graph/src/language/elixir.rs`, `ElixirImportResolver::resolve()` / `module_name_to_path()`
+   - **Why**: It maps `MyApp.Tools.Helper` directly to `my_app/tools/helper.ex`, but real projects commonly place modules under `lib/`, umbrella app roots, or other Mix-managed layouts. On typical Elixir repos, aliases/imports will fail to resolve and graph quality will drop sharply.
+   - **Effort**: `medium`
+
+Deferred work check:
+- I did not find abandoned tasks or missing FUP links in the plan closure path.
+
+* Context
+Two related query-layer issues in =crates/pi-code-graph/src/query.rs=:
+
+** Constructor dead-code false positives
+=new Foo()= creates a =Calls= edge to the class symbol =Foo=, but NOT to =Foo.constructor= (the method symbol). Since =Foo.constructor= has no inbound edges, =graph_dead_code()= reports it as dead — even when the class is actively instantiated. The smoke output already showed =ProxyMessageEventStream.constructor= flagged as dead.
+
+Fix: two-pronged approach:
+1. In the TypeScript extractor, when processing =new_expression=, also emit a synthetic reference to =ClassName.constructor= (so the edge exists in the graph).
+2. In =graph_dead_code()=, additionally exclude =Method= symbols named ="constructor"= as a safety net (handles cases where the synthetic edge doesn't resolve, e.g., the class is imported from another file).
+
+** Symbol resolution silently falls back to files
+=resolve_symbol()= in =query.rs= tries exact symbol name match, then falls back to =graph_search()= which searches ALL nodes (symbols AND files). If a user asks for =context { symbol: "code.ts" }=, the exact match fails (no symbol named "code.ts"), then graph_search returns the file node — and the query silently returns file-level context instead of an error.
+
+Fix: the fuzzy fallback in =resolve_symbol()= must filter to =GraphNode::Symbol= only. The explicit =resolve_symbol_or_file()= (used by =impact=) keeps its current behavior for commands that legitimately accept either.
+
+* Design Decisions
+1. In =collect_references()= in =typescript.rs=, when handling =new_expression=, emit TWO references: one to the class name (=EdgeKind::Calls=, as today), and one to ="{class_name}.constructor"= (=EdgeKind::Calls=). The constructor reference may or may not resolve — if the class isn't in the same file, the indexer won't find the qualified name, but that's OK because decision 2 provides the safety net.
+2. In =graph_dead_code()= in =query.rs=, add a filter: skip symbols where =kind == SymbolKind::Method && name == "constructor"=. This handles constructors from imported classes where the synthetic edge didn't resolve.
+3. In =resolve_symbol()= in =query.rs=, the fuzzy fallback via =graph_search()= must filter results to only those whose summary =kind != "file"=.
+4. No new =SymbolKind::Constructor= variant. Constructors remain =SymbolKind::Method= — adding a new kind would change the extractor, model, serialization, and dead_code filter for no additional benefit beyond what a name check achieves.
+
+* Dependency
+This item depends on [[id:FEAT-421-distinguish-type-only-imports-with-edgek]] because both modify =graph_dead_code()= in =query.rs=. Sequential execution avoids merge conflicts in the same function.
+
+* Files to Modify
+- =crates/pi-code-graph/src/language/typescript.rs=: Modify =collect_references()= to emit synthetic constructor reference for =new_expression=
+- =crates/pi-code-graph/src/query.rs=: Modify =graph_dead_code()= to exclude constructor methods; modify =resolve_symbol()= to filter fuzzy fallback
+
+* Implementation
+
+** Tests (write first)
+Add to =language/typescript.rs= =mod tests=:
+- =new_expression_creates_constructor_reference=: Parse:
+  #+begin_src typescript
+  class Runner { constructor() {} }
+  const r = new Runner();
+  #+end_src
+  Assert the =r= variable symbol's references include both ="Runner"= (EdgeKind::Calls) and ="Runner.constructor"= (EdgeKind::Calls).
+
+Add to =query.rs= =mod tests=:
+- =dead_code_excludes_constructors=: Extend the query test fixture (=QueryExtractor=) to emit a symbol with =name: "constructor", kind: Method= that has no inbound edges. Build graph. Assert the constructor does NOT appear in =graph_dead_code()=.
+
+- =resolve_symbol_does_not_match_files=: Build the standard query graph. Call =graph_context("caller.query")= (this matches a file path, not a symbol name). Assert it returns =None= (no symbol found), NOT file-level context.
+
+** Implementation
+1. *typescript.rs* — In =collect_references()=, change the =new_expression= handling:
+   #+begin_src rust
+   "call_expression" | "new_expression" => {
+       if let Some(target) = child.child_by_field_name("function") {
+           for name in collect_target_names(target, source) {
+               refs.push(ExtractedReference { target_name: name.clone(), edge_kind: EdgeKind::Calls });
+               // For new expressions, also reference the constructor method
+               if child.kind() == "new_expression" {
+                   refs.push(ExtractedReference {
+                       target_name: format!("{name}.constructor"),
+                       edge_kind: EdgeKind::Calls,
+                   });
+               }
+           }
+       }
+   }
+   #+end_src
+
+2. *query.rs* — In =graph_dead_code()=, add constructor exclusion after the =exported= / =Module= / =Template= check:
+   #+begin_src rust
+   if symbol.exported
+       || matches!(symbol.kind, SymbolKind::Module | SymbolKind::Template)
+       || (symbol.kind == SymbolKind::Method && symbol.name == "constructor")
+   {
+       return None;
+   }
+   #+end_src
+   Note: =SymbolKind= must derive =PartialEq= (it already does).
+
+3. *query.rs* — In =resolve_symbol()=, filter the fuzzy fallback to symbol nodes:
+   #+begin_src rust
+   exact.or_else(|| {
+       code_graph
+           .graph_search(query, 10)
+           .into_iter()
+           .filter(|hit| hit.summary.kind != "file")
+           .find_map(|hit| find_node_by_summary(graph, &hit.summary))
+   })
+   #+end_src
+   The =summary.kind= field is a string set to ="file"= for file nodes in =summary_for_node()=.
+
+* Edge Cases
+- =new SomeModule.SomeClass()=: The =collect_target_names= for member expressions extracts the property name (=SomeClass=), so the constructor reference becomes ="SomeClass.constructor"=. This matches if the class and constructor are in the same file.
+- =new (getClass())()=: Dynamic constructor — =collect_target_names= returns empty for complex expressions. No synthetic edge emitted. This is acceptable.
+- Constructors in inherited classes: If =Child extends Parent= and =new Child()= is called, we get edges to =Child= and =Child.constructor=. =Parent.constructor= is not referenced — this is correct (it's =Child='s constructor that's called).
+- Symbol with name "constructor" that isn't a TS constructor: Unlikely but possible in other languages. The dead_code filter is TS-specific in practice; Elixir doesn't produce Method symbols named "constructor". Safe.
+
+* Acceptance Criteria
+- =cargo test -p pi-code-graph= passes including 3 new tests
+- =cargo check -p pi-code-graph= and =cargo check -p pi-natives= pass
+- =bun check:rs= passes
+- Manual: run =code { command: "dead_code" }= on the Spell repo and verify =ProxyMessageEventStream.constructor= no longer appears

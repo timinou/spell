@@ -291,10 +291,10 @@ export async function runInteractiveBashPty(
 		signal?: AbortSignal;
 		env?: Record<string, string>;
 		artifactPath?: string;
-		artifactId?: string;
+		artifactUri?: string;
 	},
 ): Promise<BashInteractiveResult> {
-	const sink = new OutputSink({ artifactPath: options.artifactPath, artifactId: options.artifactId });
+	const sink = new OutputSink({ artifactPath: options.artifactPath, artifactUri: options.artifactUri });
 	let pendingChunks = Promise.resolve();
 	const result = await ui.custom<BashInteractiveResult>(
 		(tui, uiTheme, _keybindings, done) => {

@@ -1,0 +1,625 @@
+#+TITLE: Artifact URI with session scoping, agent name, and extensions
+#+STATE: DONE
+#+SESSION_ID: 14b64b9276f08680
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-11T09-56-47-707Z_14b64b9276f08680.jsonl]]
+#+CUSTOM_ID: FEAT-165-artifact-uri-extension-and-subdirectory
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: sdk
+
+NOTE [2026-04-11]: Implemented session-scoped artifact storage, cross-session artifact:// resolution, binary artifact handling, and focused foundation tests.
+
+* Context
+
+All implementation in =/home/user/code/ora/spell/packages/coding-agent/=.
+
+Change artifact:// URI format from =artifact://{id}= to:
+
+=artifact://<session-id>/<agent-name>/<tool>/<number>.<ext>=
+
+Where:
+- =<session-id>= is the Snowflake hex ID of the ROOT session (e.g., =14b64b9276f08680=)
+- =<agent-name>= is =main= for the main agent, or the task prefix for subagents (e.g., =0-FindArtifactFiles=)
+- =<tool>= is the tool type (=bash=, =screenshot=, =generate_image=, etc.)
+- =<number>.<ext>= is sequential ID + file extension (=0.txt=, =1.png=, etc.)
+
+URI examples:
+- =artifact://14b64b9276f08680/main/bash/0.txt=
+- =artifact://14b64b9276f08680/main/screenshot/3.png=
+- =artifact://14b64b9276f08680/0-FindArtifactFiles/bash/0.txt=
+- =artifact://14b64b9276f08680/1-UpdateCallers/fetch/2.txt=
+
+On-disk, each agent stores artifacts in its own session's artifact dir as ={tool}/{number}.{ext}=.
+
+Backward compatibility: old =artifact://{id}= URIs (numeric-only host, no path) fall back
+to scanning current session's root artifacts dir for ={id}.*= files.
+
+** Decision: Extension mapping
+
+Default extension is =txt=. Tool-specific overrides:
+- =screenshot= → =png=
+- =generate_image= → =png= (or mime-derived at save time)
+- All text tool outputs (bash, python, ssh, fetch, grep, find, read, render_mermaid, async) → =txt=
+
+** Decision: ID allocation
+
+Global monotonic counter per ArtifactManager instance. IDs are unique within an agent's
+scope (main or subagent), not globally across the session tree.
+
+** Decision: Session/agent identity
+
+- Main agent: =rootSessionId= = own session ID, =agentName= = ="main"=
+- Subagent: =rootSessionId= = parent's session ID (from =parentSession= header field or
+  passed via task executor), =agentName= = =parentTaskPrefix= (e.g., ="0-FindArtifactFiles"=)
+
+The =ArtifactManager= constructor needs these two new parameters.
+
+** Decision: URI parsing
+
+URL =artifact://14b64b9276f08680/main/bash/0.txt= parses as:
+- =rawHost= = =14b64b9276f08680= (session ID)
+- =pathname= = =/main/bash/0.txt=
+- Protocol handler splits pathname: =agentName=main=, =tool=bash=, =filename=0.txt=
+
+Legacy URL =artifact://5=:
+- =rawHost= = =5= (numeric) → legacy fallback in current session
+
+** Decision: Cross-session resolution
+
+Sessions root: =~/.spell/agent/sessions/= contains per-project subdirs.
+Resolver scans all project subdirs for a session file matching =*_{sessionId}.jsonl=.
+Artifact dir = session file path minus =.jsonl= extension.
+
+For the current session + current agent: direct lookup (no scan).
+For subagents of current session: session manager tracks spawned session IDs + paths.
+For other sessions: filesystem scan across session repos.
+
+The resolver result SHOULD be cached for the lifetime of a protocol handler instance.
+
+* Implementation
+
+** Sequencing note
+
+Implementation and tests should be written in the same pass. The =ArtifactManager= and
+=ArtifactProtocolHandler= are infrastructure that tests exercise.
+
+** Files to modify
+
+*** =src/session/artifacts.ts= (ArtifactManager)
+
+Current constructor: =constructor(sessionFile: string)=
+
+New constructor:
+#+begin_src typescript
+constructor(sessionFile: string, options?: {
+  rootSessionId?: string;
+  agentName?: string;
+}) {
+  this.#dir = sessionFile.slice(0, -6);
+  this.#rootSessionId = options?.rootSessionId ?? "";
+  this.#agentName = options?.agentName ?? "main";
+}
+#+end_src
+
+Add private fields:
+#+begin_src typescript
+readonly #rootSessionId: string;
+readonly #agentName: string;
+#+end_src
+
+Add getter:
+#+begin_src typescript
+get rootSessionId(): string { return this.#rootSessionId; }
+get agentName(): string { return this.#agentName; }
+#+end_src
+
+1. Change =allocatePath(toolType: string, ext: string = "txt")= signature:
+   - Return ={ id: string; path: string; uri: string }=
+   - URI: =artifact://${this.#rootSessionId}/${this.#agentName}/${toolType}/${id}.${ext}=
+   - Storage path: ={this.#dir}/{toolType}/{id}.{ext}=
+   - Create subdirectory lazily: =await fs.mkdir(path.join(this.#dir, toolType), { recursive: true })=
+
+2. Change =save(content, toolType, ext?)= similarly — delegates to =allocatePath= then writes.
+
+3. Update =#scanExistingIds()= to scan tool subdirectories:
+   #+begin_src typescript
+   async #scanExistingIds(): Promise<void> {
+     let maxId = -1;
+     try {
+       const entries = await fs.readdir(this.#dir, { withFileTypes: true });
+       for (const entry of entries) {
+         if (entry.isDirectory()) {
+           const subFiles = await fs.readdir(path.join(this.#dir, entry.name));
+           for (const f of subFiles) {
+             const match = f.match(/^(\d+)\./);
+             if (match) maxId = Math.max(maxId, parseInt(match[1], 10));
+           }
+         } else {
+           // Legacy root files ({id}.{toolType}.log)
+           const match = entry.name.match(/^(\d+)\./);
+           if (match) maxId = Math.max(maxId, parseInt(match[1], 10));
+         }
+       }
+     } catch { /* dir doesn't exist yet */ }
+     this.#nextId = maxId + 1;
+   }
+   #+end_src
+
+4. Update =listFiles()= to return relative paths including subdirectory.
+
+5. Update =getPath(id)= and =exists(id)= to handle both new (=bash/5.txt=) and
+   legacy (numeric =5=) formats.
+
+*** =src/internal-urls/artifact-protocol.ts= (ArtifactProtocolHandler)
+
+New options interface:
+#+begin_src typescript
+export interface ArtifactProtocolOptions {
+  getArtifactsDir: () => string | null;
+  getSessionId: () => string | null;
+  getAgentName: () => string;
+  getSessionsRoot: () => string | null;
+  resolveSpawnedSessionDir?: (sessionId: string) => string | null;
+}
+#+end_src
+
+Resolution logic in =resolve()=:
+#+begin_src typescript
+async resolve(url: InternalUrl): Promise<InternalResource> {
+  const host = url.rawHost || url.hostname;
+  if (!host) throw new Error("artifact:// URL requires a session ID or numeric ID");
+
+  // Legacy format: artifact://5 (numeric host)
+  if (/^\d+$/.test(host)) {
+    return this.#resolveLegacy(host);
+  }
+
+  // New format: artifact://sessionId/agentName/tool/number.ext
+  const pathParts = (url.rawPathname || url.pathname)
+    .replace(/^\//, "")
+    .split("/");
+
+  if (pathParts.length < 3) {
+    throw new Error(
+      `artifact:// URL must be artifact://<session-id>/<agent>/<tool>/<file>. Got: ${url.href}`
+    );
+  }
+
+  const [agentName, tool, ...fileParts] = pathParts;
+  const filename = fileParts.join("/");
+  const sessionId = host;
+
+  // Resolve artifact directory for this session + agent
+  const artifactsDir = await this.#resolveArtifactsDir(sessionId, agentName);
+  if (!artifactsDir) {
+    throw new Error(`Cannot resolve session ${sessionId} for artifact lookup`);
+  }
+
+  const filePath = path.join(artifactsDir, tool, filename);
+  // Security: prevent path traversal
+  if (!filePath.startsWith(artifactsDir)) {
+    throw new Error("artifact:// path traversal denied");
+  }
+
+  try {
+    const content = await Bun.file(filePath).text();
+    return {
+      url: url.href,
+      content,
+      contentType: contentTypeFromExt(path.extname(filePath)),
+      size: Buffer.byteLength(content, "utf-8"),
+      sourcePath: filePath,
+    };
+  } catch (err) {
+    if (isEnoent(err)) {
+      const available = await listAvailableArtifacts(artifactsDir);
+      throw new Error(`Artifact not found: ${tool}/${filename}. Available: ${available.join(", ") || "none"}`);
+    }
+    throw err;
+  }
+}
+#+end_src
+
+Private resolver:
+#+begin_src typescript
+async #resolveArtifactsDir(sessionId: string, agentName: string): Promise<string | null> {
+  const currentSessionId = this.options.getSessionId();
+  const currentAgentName = this.options.getAgentName();
+
+  // Current session + current agent → direct
+  if (sessionId === currentSessionId && agentName === currentAgentName) {
+    return this.options.getArtifactsDir();
+  }
+
+  // Spawned subagent of current session → ask session manager
+  if (sessionId === currentSessionId && this.options.resolveSpawnedSessionDir) {
+    // agentName is the task prefix; session manager maps it to a session dir
+    const dir = this.options.resolveSpawnedSessionDir(agentName);
+    if (dir) return dir;
+  }
+
+  // Cross-session: scan sessions root
+  const sessionsRoot = this.options.getSessionsRoot();
+  if (!sessionsRoot) return null;
+  return this.#scanForSession(sessionsRoot, sessionId);
+}
+#+end_src
+
+Cross-repo scanner (cached):
+#+begin_src typescript
+#sessionDirCache = new Map<string, string>();
+
+async #scanForSession(sessionsRoot: string, sessionId: string): Promise<string | null> {
+  if (this.#sessionDirCache.has(sessionId)) return this.#sessionDirCache.get(sessionId)!;
+
+  // Scan all project subdirectories
+  const repoDirs = await fs.readdir(sessionsRoot, { withFileTypes: true });
+  for (const repo of repoDirs) {
+    if (!repo.isDirectory()) continue;
+    const repoPath = path.join(sessionsRoot, repo.name);
+    const files = await fs.readdir(repoPath);
+    const match = files.find(f => f.endsWith(`_${sessionId}.jsonl`));
+    if (match) {
+      const artifactsDir = path.join(repoPath, match.slice(0, -6)); // remove .jsonl
+      this.#sessionDirCache.set(sessionId, artifactsDir);
+      return artifactsDir;
+    }
+  }
+  return null;
+}
+#+end_src
+
+Add =contentTypeFromExt= helper:
+#+begin_src typescript
+function contentTypeFromExt(ext: string): InternalResource["contentType"] {
+  switch (ext.toLowerCase()) {
+    case ".json": return "application/json";
+    case ".md": return "text/markdown";
+    case ".org": return "text/x-org";
+    default: return "text/plain";
+  }
+}
+#+end_src
+
+Update =listAvailableArtifacts()= to walk tool subdirectories:
+#+begin_src typescript
+async function listAvailableArtifacts(artifactsDir: string): Promise<string[]> {
+  try {
+    const result: string[] = [];
+    const entries = await fs.readdir(artifactsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const subFiles = await fs.readdir(path.join(artifactsDir, entry.name));
+        for (const f of subFiles) {
+          if (/^\d+\./.test(f)) result.push(`${entry.name}/${f}`);
+        }
+      } else if (/^\d+\./.test(entry.name)) {
+        result.push(entry.name.split(".")[0]); // legacy bare ID
+      }
+    }
+    return result.sort();
+  } catch { return []; }
+}
+#+end_src
+
+*** =src/tools/index.ts=
+
+Update =ToolSession= interface:
+#+begin_src typescript
+allocateOutputArtifact?: (toolType: string, ext?: string) => Promise<{ id?: string; path?: string; uri?: string }>;
+#+end_src
+
+*** =src/session/session-manager.ts=
+
+1. Update =allocateArtifactPath= to pass through =ext=:
+   #+begin_src typescript
+   async allocateArtifactPath(toolType: string, ext?: string) {
+     // ...
+     return manager.allocatePath(toolType, ext);
+   }
+   #+end_src
+
+2. When creating =ArtifactManager=, pass =rootSessionId= and =agentName=:
+   #+begin_src typescript
+   new ArtifactManager(this.#sessionFile, {
+     rootSessionId: this.#rootSessionId ?? this.#sessionId,
+     agentName: this.#agentName ?? "main",
+   });
+   #+end_src
+
+3. Add =rootSessionId= and =agentName= fields, set from SDK options or session init:
+   - Main session: =rootSessionId= = own session ID, =agentName= = ="main"=
+   - Subagent: =rootSessionId= = parent session ID, =agentName= = =parentTaskPrefix=
+
+4. Expose =getSessionsRoot()= for the protocol handler (the directory above the project-specific sessions dir).
+
+5. Add =resolveSpawnedSessionDir(agentName: string): string | null= that looks up
+   spawned task sessions by their task prefix. This uses the existing spawn tracking.
+
+*** =src/sdk.ts=
+
+1. Update =allocateOutputArtifact= to pass =ext=:
+   #+begin_src typescript
+   allocateOutputArtifact: async (toolType, ext) => {
+     try {
+       return await sessionManager.allocateArtifactPath(toolType, ext);
+     } catch { return {}; }
+   },
+   #+end_src
+
+2. When creating the session manager for subagents, propagate =rootSessionId= and =agentName=
+   from =options.parentTaskPrefix=:
+   #+begin_src typescript
+   // In SDK init, if parentTaskPrefix is set → subagent
+   const rootSessionId = options.parentTaskPrefix ? parentSessionId : undefined;
+   const agentName = options.parentTaskPrefix ?? "main";
+   #+end_src
+
+   Note: =parentSessionId= needs to be passed from the task executor.
+   Check =options= for the parent session's ID — look at =sdk.ts= options type.
+
+3. When registering the =ArtifactProtocolHandler=, pass new options:
+   #+begin_src typescript
+   new ArtifactProtocolHandler({
+     getArtifactsDir: () => sessionManager.getArtifactsDir(),
+     getSessionId: () => sessionManager.getSessionId(),
+     getAgentName: () => sessionManager.getAgentName(),
+     getSessionsRoot: () => sessionManager.getSessionsRoot(),
+     resolveSpawnedSessionDir: (name) => sessionManager.resolveSpawnedSessionDir(name),
+   })
+   #+end_src
+
+*** =src/task/executor.ts=
+
+When spawning subagent sessions, pass the parent session ID:
+#+begin_src typescript
+// Already has: parentTaskPrefix: id
+// Add: parentSessionId: sessionManager.getSessionId() (or rootSessionId)
+#+end_src
+
+Check the SDK options type — may need to add =parentSessionId= field.
+
+* Tests
+
+** Test file: =test/session/artifacts.test.ts= (NEW)
+
+#+begin_src typescript
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { ArtifactManager } from "../../src/session/artifacts";
+
+describe("ArtifactManager", () => {
+  let tmpDir: string;
+  let sessionFile: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "artifact-test-"));
+    sessionFile = path.join(tmpDir, "session.jsonl");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("includes session ID and agent name in URI", async () => {
+    const mgr = new ArtifactManager(sessionFile, {
+      rootSessionId: "abc123",
+      agentName: "main",
+    });
+    const r = await mgr.allocatePath("bash", "txt");
+    expect(r.uri).toBe("artifact://abc123/main/bash/0.txt");
+    expect(r.path).toBe(path.join(tmpDir, "session", "bash", "0.txt"));
+  });
+
+  it("uses subagent name in URI", async () => {
+    const mgr = new ArtifactManager(sessionFile, {
+      rootSessionId: "abc123",
+      agentName: "0-FindArtifactFiles",
+    });
+    const r = await mgr.allocatePath("bash", "txt");
+    expect(r.uri).toBe("artifact://abc123/0-FindArtifactFiles/bash/0.txt");
+  });
+
+  it("defaults extension to txt", async () => {
+    const mgr = new ArtifactManager(sessionFile, {
+      rootSessionId: "abc123",
+      agentName: "main",
+    });
+    const r = await mgr.allocatePath("fetch");
+    expect(r.uri).toBe("artifact://abc123/main/fetch/0.txt");
+  });
+
+  it("supports png extension for screenshots", async () => {
+    const mgr = new ArtifactManager(sessionFile, {
+      rootSessionId: "abc123",
+      agentName: "main",
+    });
+    const r = await mgr.allocatePath("screenshot", "png");
+    expect(r.uri).toBe("artifact://abc123/main/screenshot/0.png");
+  });
+
+  it("maintains monotonic IDs across tool types", async () => {
+    const mgr = new ArtifactManager(sessionFile, {
+      rootSessionId: "s1",
+      agentName: "main",
+    });
+    const r1 = await mgr.allocatePath("bash", "txt");
+    const r2 = await mgr.allocatePath("screenshot", "png");
+    expect(r1.id).toBe("0");
+    expect(r2.id).toBe("1");
+  });
+
+  it("creates tool subdirectory on first allocation", async () => {
+    const mgr = new ArtifactManager(sessionFile, {
+      rootSessionId: "s1",
+      agentName: "main",
+    });
+    await mgr.allocatePath("bash", "txt");
+    const stat = await fs.stat(path.join(tmpDir, "session", "bash"));
+    expect(stat.isDirectory()).toBe(true);
+  });
+
+  it("scans existing tool subdirectories on resume", async () => {
+    const artDir = path.join(tmpDir, "session");
+    await fs.mkdir(path.join(artDir, "bash"), { recursive: true });
+    await Bun.write(path.join(artDir, "bash", "7.txt"), "data");
+    const mgr = new ArtifactManager(sessionFile, {
+      rootSessionId: "s1",
+      agentName: "main",
+    });
+    const r = await mgr.allocatePath("fetch", "txt");
+    expect(parseInt(r.id)).toBe(8);
+  });
+
+  it("scans legacy root-level artifacts on resume", async () => {
+    const artDir = path.join(tmpDir, "session");
+    await fs.mkdir(artDir, { recursive: true });
+    await Bun.write(path.join(artDir, "5.bash.log"), "legacy");
+    const mgr = new ArtifactManager(sessionFile, {
+      rootSessionId: "s1",
+      agentName: "main",
+    });
+    const r = await mgr.allocatePath("fetch", "txt");
+    expect(parseInt(r.id)).toBe(6);
+  });
+
+  it("save writes content to tool subdir", async () => {
+    const mgr = new ArtifactManager(sessionFile, {
+      rootSessionId: "s1",
+      agentName: "main",
+    });
+    await mgr.save("hello", "bash", "txt");
+    const content = await Bun.file(path.join(tmpDir, "session", "bash", "0.txt")).text();
+    expect(content).toBe("hello");
+  });
+
+  it("falls back to empty strings when no options", async () => {
+    const mgr = new ArtifactManager(sessionFile);
+    const r = await mgr.allocatePath("bash", "txt");
+    expect(r.uri).toBe("artifact:///main/bash/0.txt");
+  });
+});
+#+end_src
+
+** Test file: =test/internal-urls/artifact-protocol.test.ts= (NEW)
+
+#+begin_src typescript
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { ArtifactProtocolHandler } from "../../src/internal-urls/artifact-protocol";
+import { InternalUrlRouter } from "../../src/internal-urls/router";
+
+describe("ArtifactProtocolHandler", () => {
+  let tmpDir: string;
+  let artifactsDir: string;
+  let sessionsRoot: string;
+  let router: InternalUrlRouter;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "artifact-proto-test-"));
+    sessionsRoot = path.join(tmpDir, "sessions");
+    const projectDir = path.join(sessionsRoot, "-code-project");
+    await fs.mkdir(projectDir, { recursive: true });
+
+    // Create a session file to establish the artifact dir
+    const sessionFile = path.join(projectDir, "2026-01-01T00-00-00-000Z_abc123.jsonl");
+    await Bun.write(sessionFile, "");
+    artifactsDir = path.join(projectDir, "2026-01-01T00-00-00-000Z_abc123");
+    await fs.mkdir(artifactsDir, { recursive: true });
+
+    const handler = new ArtifactProtocolHandler({
+      getArtifactsDir: () => artifactsDir,
+      getSessionId: () => "abc123",
+      getAgentName: () => "main",
+      getSessionsRoot: () => sessionsRoot,
+    });
+    router = new InternalUrlRouter();
+    router.register(handler);
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("resolves current session main agent artifact", async () => {
+    await fs.mkdir(path.join(artifactsDir, "bash"), { recursive: true });
+    await Bun.write(path.join(artifactsDir, "bash", "5.txt"), "hello");
+    const result = await router.resolve("artifact://abc123/main/bash/5.txt");
+    expect(result.content).toBe("hello");
+    expect(result.sourcePath).toBe(path.join(artifactsDir, "bash", "5.txt"));
+  });
+
+  it("resolves cross-session artifact via scan", async () => {
+    // Create another session in a different project repo
+    const otherProject = path.join(sessionsRoot, "-code-other");
+    await fs.mkdir(otherProject, { recursive: true });
+    const otherSessionFile = path.join(otherProject, "2026-02-01T00-00-00-000Z_def456.jsonl");
+    await Bun.write(otherSessionFile, "");
+    const otherArtDir = path.join(otherProject, "2026-02-01T00-00-00-000Z_def456");
+    await fs.mkdir(path.join(otherArtDir, "fetch"), { recursive: true });
+    await Bun.write(path.join(otherArtDir, "fetch", "0.txt"), "cross-session");
+
+    const result = await router.resolve("artifact://def456/main/fetch/0.txt");
+    expect(result.content).toBe("cross-session");
+  });
+
+  it("resolves legacy format artifact://5", async () => {
+    await Bun.write(path.join(artifactsDir, "5.bash.log"), "legacy");
+    const result = await router.resolve("artifact://5");
+    expect(result.content).toBe("legacy");
+  });
+
+  it("returns text/plain for .txt", async () => {
+    await fs.mkdir(path.join(artifactsDir, "bash"), { recursive: true });
+    await Bun.write(path.join(artifactsDir, "bash", "0.txt"), "data");
+    const result = await router.resolve("artifact://abc123/main/bash/0.txt");
+    expect(result.contentType).toBe("text/plain");
+  });
+
+  it("returns sourcePath for image artifacts", async () => {
+    await fs.mkdir(path.join(artifactsDir, "screenshot"), { recursive: true });
+    await Bun.write(path.join(artifactsDir, "screenshot", "1.png"), "fake-png");
+    const result = await router.resolve("artifact://abc123/main/screenshot/1.png");
+    expect(result.sourcePath).toEndWith("/screenshot/1.png");
+  });
+
+  it("throws for non-existent artifact", async () => {
+    await expect(router.resolve("artifact://abc123/main/bash/999.txt"))
+      .rejects.toThrow(/not found/i);
+  });
+
+  it("throws for unknown session", async () => {
+    await expect(router.resolve("artifact://unknown999/main/bash/0.txt"))
+      .rejects.toThrow(/cannot resolve/i);
+  });
+
+  it("prevents path traversal", async () => {
+    await expect(router.resolve("artifact://abc123/main/../../../etc/0.txt"))
+      .rejects.toThrow(/traversal/i);
+  });
+});
+#+end_src
+
+** Update existing test: =test/tools/grep-internal-urls.test.ts=
+
+Update artifact file creation and URI references:
+- Create artifacts in ={artifactsDir}/bash/5.txt= instead of ={artifactsDir}/5.bash.log=
+- Update handler options to include =getSessionId=, =getAgentName=, =getSessionsRoot=
+- Change =artifact://5= to =artifact://test-session/main/bash/5.txt= in test assertions
+
+* Acceptance Criteria
+
+- [ ] =artifact://abc123/main/bash/0.txt= resolves to correct file on disk
+- [ ] =artifact://abc123/0-FindArtifactFiles/bash/0.txt= resolves subagent artifact
+- [ ] Cross-session-repo resolution works (different project session dirs)
+- [ ] Legacy =artifact://5= still resolves (backward compat)
+- [ ] IDs monotonic within each agent's scope
+- [ ] Path traversal blocked
+- [ ] Session dir scan result cached
+- [ ] Existing =grep-internal-urls.test.ts= updated and passes
+- [ ] New tests =test/session/artifacts.test.ts= and =test/internal-urls/artifact-protocol.test.ts= pass
+- [ ] =cd /home/user/code/ora/spell && bun test packages/coding-agent= passes

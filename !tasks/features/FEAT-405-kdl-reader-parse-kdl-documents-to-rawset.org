@@ -1,0 +1,146 @@
+#+TITLE: KDL Reader  Parse KDL Documents to RawSettings
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-405-kdl-reader-parse-kdl-documents-to-rawset
+#+EFFORT: 3h
+#+LAYER: core
+#+PRIORITY: #A
+#+DEPENDS: FEAT-403-kdl-helpers-extract-and-extend-shared-ac FEAT-404-kdl-settings-map-bidirectional-settingpa
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Section 4.3 for the complete design.
+
+* Context
+This module parses a KDL document (from spell.kdl) into a =RawSettings= object — the same nested dict format that the Settings singleton uses internally. It replaces the YAML loading path (=YAML.parse(content)=) with KDL-based loading.
+
+* Design Decisions
+- New file: =packages/coding-agent/src/config/kdl-reader.ts=
+- Uses =KDL_SETTINGS_MAP= from =kdl-settings-map.ts= to know where each setting lives in the KDL tree
+- Uses helpers from =kdl-helpers.ts= for node access
+- Unknown KDL nodes are silently ignored (forward compatibility)
+- Parse errors in individual blocks log warnings (via =logger=) but don't fail the whole load — returns partial results
+- Returns =RawSettings= (same type as =Settings.#global= / =Settings.#project=)
+- The =RawSettings= type is =Record<string, unknown>= with nested objects for dot-path segments (e.g., ={compaction: {enabled: true}}= for =compaction.enabled=)
+
+* Implementation
+** Step 1: Write tests FIRST
+File: =packages/coding-agent/test/config/kdl-reader.test.ts=
+
+Test scenarios:
+- Parse minimal document (just =domain "coding"=) → empty RawSettings (domain handled elsewhere)
+- Parse appearance block → correct theme.dark, theme.light, symbolPreset values in RawSettings
+- Parse model block → correct defaultThinkingLevel, compaction.*, retry.* values
+- Parse interaction block → correct steeringMode, caveman.* values
+- Parse tools block → correct browser.headless, org.enabled values
+- Parse tasks block → correct task.maxRecursionDepth, todo.enabled values
+- Parse keybindings block → (keybindings NOT in RawSettings — handled by separate keybindings parser)
+- Parse full document with all blocks → all settings present in RawSettings
+- Unknown nodes ignored: =foobar "test"= doesn't throw
+- Malformed block (e.g., appearance with wrong value types) → logs warning, returns partial result
+- Empty file → empty RawSettings
+- =loadKdlSettings= with nonexistent file → empty RawSettings (ENOENT handled)
+- =loadKdlSettings= with malformed KDL syntax → empty RawSettings + warning logged
+
+Use =import { parse } from "@bgotink/kdl"= to create test documents, or write KDL strings:
+#+begin_src typescript
+const settings = kdlDocumentToSettings(parse(`
+  appearance {
+    theme dark="titanium" light="light"
+    symbols "unicode"
+  }
+  model {
+    thinking "high"
+    compaction enabled=#true threshold=0.7
+  }
+`));
+expect(settings.theme?.dark).toBe("titanium");
+expect(settings.defaultThinkingLevel).toBe("high");
+expect(settings.compaction?.enabled).toBe(true);
+#+end_src
+
+** Step 2: Implement =kdlDocumentToSettings=
+File: =packages/coding-agent/src/config/kdl-reader.ts=
+
+#+begin_src typescript
+import { type Document, parse } from "@bgotink/kdl";
+import { logger } from "@oh-my-pi/pi-utils";
+import type { RawSettings } from "./settings";
+import { KDL_SETTINGS_MAP } from "./kdl-settings-map";
+import { getStringArgument, getBooleanArgument, getNumberArgument, getStringProperty, getBooleanProperty, getNumberProperty, getDocumentNode, getChildNode } from "./kdl-helpers";
+
+export function kdlDocumentToSettings(doc: Document): RawSettings {
+  const result: RawSettings = {};
+
+  for (const [settingPath, mapping] of Object.entries(KDL_SETTINGS_MAP)) {
+    try {
+      const blockNode = getDocumentNode(doc, mapping.block);
+      if (!blockNode) continue;
+
+      // Navigate to the target node within the block
+      let targetNode = blockNode;
+      if (mapping.nodePath) {
+        const parts = mapping.nodePath.split(".");
+        for (const part of parts) {
+          const child = getChildNode(targetNode, part);
+          if (!child) { targetNode = null; break; }
+          targetNode = child;
+        }
+      }
+      if (!targetNode) continue;
+
+      // Extract value based on accessor type
+      let value: unknown;
+      if (mapping.accessor === "argument") {
+        value = targetNode.getArgument(mapping.argumentIndex ?? 0);
+      } else {
+        value = targetNode.getProperty(mapping.propertyName!);
+      }
+
+      if (value === undefined) continue;
+
+      // Set in RawSettings using dot-path segments
+      setByPath(result, settingPath.split("."), value);
+    } catch (err) {
+      logger.warn("kdl-reader: error reading setting", { path: settingPath, error: err });
+    }
+  }
+
+  return result;
+}
+#+end_src
+
+** Step 3: Implement =loadKdlSettings=
+#+begin_src typescript
+import { isEnoent } from "@oh-my-pi/pi-utils";
+
+export async function loadKdlSettings(filePath: string): Promise<RawSettings> {
+  try {
+    const content = await Bun.file(filePath).text();
+    const doc = parse(content);
+    return kdlDocumentToSettings(doc);
+  } catch (err) {
+    if (isEnoent(err)) return {};
+    logger.warn("kdl-reader: failed to load", { filePath, error: err instanceof Error ? err.message : String(err) });
+    return {};
+  }
+}
+#+end_src
+
+Note: Import =setByPath= from settings.ts or extract it to a shared utility. Currently it's a module-private function in settings.ts — you'll need to either export it or duplicate the simple logic (it's ~10 lines of nested object creation).
+
+* Edge Cases
+- KDL boolean =#true= / =#false= maps directly to JS boolean — no coercion needed
+- KDL numbers map directly to JS numbers
+- KDL strings map directly to JS strings
+- KDL null maps to JS null — treat as "unset" (skip, don't write to RawSettings)
+- Nested blocks (e.g., =appearance { status-line { left "pi" "model" } }=) require multi-level child navigation
+- Settings with multiple string arguments (e.g., status-line segments) need special handling via =getStringArguments()=
+
+* Verification
+- =bun test packages/coding-agent/test/config/kdl-reader.test.ts= passes
+- =bun check:ts= passes

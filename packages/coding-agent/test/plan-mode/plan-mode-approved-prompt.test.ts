@@ -31,6 +31,9 @@ describe("plan-mode-approved prompt", () => {
 		expect(rendered).toContain(
 			"[[file:!tasks/plans/plan-artifacts/PLAN-003-plan-completion-artifacts-and-lifecycle/name.png]]",
 		);
+		expect(rendered).toContain("artifact://14b64b/main/screenshot/3.png");
+		expect(rendered).toContain("artifact://<session-id>/<subagent-name>/<tool>/<file>");
+		expect(rendered).toContain("artifact://<session-id>/<agent>/<tool>/<file>.<ext>");
 		expect(rendered).toContain("5. Commit the changes:");
 		expect(rendered).toContain("Stage the org-mode files from `!tasks/`");
 		expect(rendered.indexOf("4. Close org lifecycle state truthfully:")).toBeLessThan(

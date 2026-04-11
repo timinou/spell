@@ -77,7 +77,11 @@ impl CacheStore {
 		Ok(())
 	}
 
-	pub fn fingerprint_root(&self, root: &Path) -> Result<GraphFingerprint> {
+	pub fn fingerprint_root(
+		&self,
+		root: &Path,
+		matches_source: &dyn Fn(&Path) -> bool,
+	) -> Result<GraphFingerprint> {
 		if !root.is_dir() {
 			return Err(CodeGraphError::InvalidRoot(root.to_path_buf()));
 		}
@@ -101,17 +105,25 @@ impl CacheStore {
 				.strip_prefix(root)
 				.unwrap_or(path.as_path())
 				.to_path_buf();
+			if relative.starts_with(".spell") || !matches_source(&path) {
+				continue;
+			}
 			let metadata = fs::metadata(&path)?;
 			files.insert(relative, FileFingerprint::from_metadata(&metadata)?);
 		}
 		Ok(GraphFingerprint { root: root.to_path_buf(), git_head: read_git_head(root), files })
 	}
 
-	pub fn status(&self, name: &str, root: &Path) -> Result<CacheStatus> {
+	pub fn status(
+		&self,
+		name: &str,
+		root: &Path,
+		matches_source: &dyn Fn(&Path) -> bool,
+	) -> Result<CacheStatus> {
 		let Some(entry) = self.load(name)? else {
 			return Ok(CacheStatus::Missing);
 		};
-		let current = self.fingerprint_root(root)?;
+		let current = self.fingerprint_root(root, matches_source)?;
 		if entry.fingerprint.git_head != current.git_head {
 			return Ok(CacheStatus::Stale { reason: "git HEAD changed".into() });
 		}
@@ -156,17 +168,24 @@ impl GraphCacheEntry {
 
 #[cfg(test)]
 mod tests {
-	use std::path::PathBuf;
+	use std::path::{Path, PathBuf};
 
 	use petgraph::stable_graph::StableGraph;
 
 	use super::*;
-	use crate::model::{EdgeKind, GraphNode, GraphStats};
+	use crate::model::{EdgeKind, GraphNode, GraphStats, PersistedCodeGraph};
+
+	fn temp_dir(name: &str) -> PathBuf {
+		std::env::temp_dir().join(format!("pi-code-graph-{name}-{}", std::process::id()))
+	}
+
+	fn is_typescript_source(path: &Path) -> bool {
+		path.extension().and_then(|extension| extension.to_str()) == Some("ts")
+	}
 
 	#[test]
 	fn cache_round_trip_preserves_graph() {
-		let temp_dir =
-			std::env::temp_dir().join(format!("pi-code-graph-cache-{}", std::process::id()));
+		let temp_dir = temp_dir("cache");
 		let _ = fs::remove_dir_all(&temp_dir);
 		fs::create_dir_all(&temp_dir).expect("temp dir should be created");
 
@@ -193,5 +212,57 @@ mod tests {
 			.expect("entry should exist");
 		assert_eq!(loaded.graph.generated_at_ms, 42);
 		let _ = fs::remove_dir_all(temp_dir);
+	}
+
+	#[test]
+	fn cache_fingerprint_excludes_non_source_files() {
+		let root = temp_dir("cache-fingerprint-root");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join(".spell/graph")).expect("cache dir should be created");
+		fs::write(root.join("foo.ts"), "export const foo = 1;")
+			.expect("source file should be written");
+		fs::write(root.join("README.md"), "docs").expect("markdown file should be written");
+		fs::write(root.join(".spell/graph/workspace.bin"), "cache")
+			.expect("cache file should be written");
+
+		let store = CacheStore::new(root.join(".spell/graph"));
+		let fingerprint = store
+			.fingerprint_root(&root, &is_typescript_source)
+			.expect("fingerprint should succeed");
+		let files = fingerprint.files.keys().cloned().collect::<Vec<_>>();
+		assert_eq!(files, vec![PathBuf::from("foo.ts")]);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn cache_status_ignores_non_source_changes() {
+		let root = temp_dir("cache-status-root");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join(".spell/graph")).expect("cache dir should be created");
+		fs::write(root.join("foo.ts"), "export const foo = 1;")
+			.expect("source file should be written");
+
+		let store = CacheStore::new(root.join(".spell/graph"));
+		let fingerprint = store
+			.fingerprint_root(&root, &is_typescript_source)
+			.expect("fingerprint should succeed");
+		let graph = CodeGraph::from(PersistedCodeGraph {
+			root:            root.clone(),
+			graph:           StableGraph::<GraphNode, EdgeKind>::new(),
+			stats:           GraphStats::default(),
+			generated_at_ms: 1,
+			git_head:        fingerprint.git_head.clone(),
+		});
+		store
+			.save("workspace", &GraphCacheEntry::new(graph, fingerprint))
+			.expect("cache save should succeed");
+
+		fs::write(root.join("README.md"), "docs change").expect("markdown file should be written");
+
+		let status = store
+			.status("workspace", &root, &is_typescript_source)
+			.expect("status should succeed");
+		assert_eq!(status, CacheStatus::Fresh);
+		let _ = fs::remove_dir_all(root);
 	}
 }

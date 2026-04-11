@@ -1,0 +1,117 @@
+#+TITLE: KDL Helpers  Extract and Extend Shared Accessors
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-403-kdl-helpers-extract-and-extend-shared-ac
+#+EFFORT: 2h
+#+LAYER: core
+#+PRIORITY: #A
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Section 4.1 for the complete design.
+
+* Context
+The KDL migration (=specs/kdl-config-migration.md=) requires shared accessor/mutator helpers for KDL nodes. Currently, =task-policies-kdl.ts= exports =getStringArgument=, =getBooleanArgument=, =getStringProperty= — but the expanded spell.kdl needs number accessors, boolean property accessors, child node navigation, and node creation helpers for the writer.
+
+This item extracts existing helpers into a shared module and adds the missing ones.
+
+* Design Decisions
+- New file: =packages/coding-agent/src/config/kdl-helpers.ts=
+- Move =getStringArgument=, =getBooleanArgument=, =getStringProperty= from =task-policies-kdl.ts= to =kdl-helpers.ts=
+- Update =task-policies-kdl.ts= and =spell-kdl.ts= to import from =kdl-helpers.ts= instead
+- Add new helpers: =getNumberArgument=, =getNumberProperty=, =getBooleanProperty=, =getStringArguments=, =getChildNode=, =getChildNodes=, =getDocumentNode=, =createStringNode=, =createBooleanNode=, =createNumberNode=, =createPropertyNode=
+- All helpers use =@bgotink/kdl= 0.4.0 API: =Node.getArgument()=, =Node.getProperty()=, =Node.getName()=, =node.children?.nodes=, =Node.create()=, =Entry.createArgument()=, =Entry.createProperty()=
+- Type imports: =import type { Node, Document } from "@bgotink/kdl"=, =import { Node, Entry, Document } from "@bgotink/kdl"= for runtime
+
+* Implementation
+** Step 1: Create =kdl-helpers.ts= with types and function signatures
+File: =packages/coding-agent/src/config/kdl-helpers.ts=
+
+Signatures (see spec Section 4.1 for full list):
+#+begin_src typescript
+import type { Node, Document } from "@bgotink/kdl";
+import { Node as NodeClass, Entry, Document as DocumentClass } from "@bgotink/kdl";
+
+// Extracted from task-policies-kdl.ts (same logic, new home)
+export function getStringArgument(node: Node, index = 0): string | undefined;
+export function getBooleanArgument(node: Node, index = 0): boolean | undefined;
+export function getStringProperty(node: Node, name: string): string | undefined;
+
+// New
+export function getNumberArgument(node: Node, index = 0): number | undefined;
+export function getNumberProperty(node: Node, name: string): number | undefined;
+export function getBooleanProperty(node: Node, name: string): boolean | undefined;
+export function getStringArguments(node: Node): string[];
+export function getChildNode(node: Node, name: string): Node | undefined;
+export function getChildNodes(node: Node, name?: string): Node[];
+export function getDocumentNode(doc: Document, name: string): Node | undefined;
+
+// Writer helpers
+export function createStringNode(name: string, value: string): Node;
+export function createBooleanNode(name: string, value: boolean): Node;
+export function createNumberNode(name: string, value: number): Node;
+export function createPropertyNode(name: string, props: Record<string, string | number | boolean>): Node;
+#+end_src
+
+** Step 2: Write tests FIRST
+File: =packages/coding-agent/test/config/kdl-helpers.test.ts=
+
+Test scenarios:
+- =getStringArgument=: returns string at index 0, returns undefined for missing, returns undefined for non-string
+- =getBooleanArgument=: returns boolean, undefined for missing
+- =getNumberArgument=: returns number, undefined for missing, undefined for non-number
+- =getStringProperty=: returns named property value, undefined for missing
+- =getNumberProperty=: returns number property, undefined for non-number
+- =getBooleanProperty=: returns boolean property, undefined for missing
+- =getStringArguments=: returns all string arguments as array, empty array when none
+- =getChildNode=: finds child by name, returns undefined when not found, returns undefined when no children block
+- =getChildNodes=: returns all children, filters by name, returns empty array when no children
+- =getDocumentNode=: finds top-level node by name, returns undefined when not found
+- =createStringNode=: creates node with string argument, verifiable via =format()=
+- =createBooleanNode=: creates node with boolean argument
+- =createNumberNode=: creates node with number argument
+- =createPropertyNode=: creates node with named properties
+
+Use =parse()= from =@bgotink/kdl= to create test fixtures:
+#+begin_src typescript
+import { parse } from "@bgotink/kdl";
+const doc = parse('node "value" key="prop" { child "inner" }');
+const node = doc.nodes[0];
+#+end_src
+
+** Step 3: Implement helpers
+Implement all functions. Pattern for accessors:
+#+begin_src typescript
+export function getNumberArgument(node: Node, index = 0): number | undefined {
+  const value = node.getArgument(index);
+  return typeof value === "number" ? value : undefined;
+}
+#+end_src
+
+Pattern for node creation:
+#+begin_src typescript
+export function createStringNode(name: string, value: string): Node {
+  const node = NodeClass.create(name);
+  node.addArgument(value);
+  return node;
+}
+#+end_src
+
+** Step 4: Update importers
+- =packages/coding-agent/src/config/task-policies-kdl.ts=: Remove =getStringArgument=, =getBooleanArgument=, =getStringProperty= function bodies. Import from =./kdl-helpers= instead. Keep =parseTaskPoliciesKdl= and policy-specific helpers.
+- =packages/coding-agent/src/config/spell-kdl.ts=: Change import from =./task-policies-kdl= to =./kdl-helpers= for =getStringArgument=.
+
+* Edge Cases
+- =Node.getArgument(index)= returns =undefined= for out-of-bounds index — our wrappers already handle this
+- =node.children= can be =null= (no children block) — =getChildNode/getChildNodes= must check for null
+- =Node.create()= returns a node with empty entries — must call =addArgument()= or =addProperty()= after
+- KDL values can be =null= (the KDL null literal) — number/string/boolean accessors should return =undefined= for null values
+
+* Verification
+- =bun test packages/coding-agent/test/config/kdl-helpers.test.ts= passes
+- =bun check:ts= passes
+- Existing tests still pass: =bun test packages/coding-agent/test/config/task-policies-kdl.test.ts= and =bun test packages/coding-agent/test/config/spell-kdl.test.ts=
