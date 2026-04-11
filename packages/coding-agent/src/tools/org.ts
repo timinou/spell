@@ -2,8 +2,7 @@
  * Org tool adapter — wraps the @oh-my-pi/pi-org tool for use in coding-agent.
  *
  * Reads org config from settings + project-local .spell/config.yml, resolves
- * categories relative to the project root, and optionally starts an Emacs
- * daemon for advanced operations.
+ * categories relative to the project root.
  */
 import type {
 	AgentTool,
@@ -12,9 +11,8 @@ import type {
 	AgentToolUpdateCallback,
 	RenderResultOptions,
 } from "@oh-my-pi/pi-agent-core";
-import { type CodeWarmupResult, EmacsSessionManager, startEmacsSession } from "@oh-my-pi/pi-emacs";
-import type { OrgConfig, OrgItem, OrgSessionContext, OrgToolDefinition } from "@oh-my-pi/pi-org";
-import { createOrgTool, DEFAULT_ORG_CONFIG, detectEmacs } from "@oh-my-pi/pi-org";
+import type { OrgConfig, OrgItem, OrgToolDefinition } from "@oh-my-pi/pi-org";
+import { createOrgTool, DEFAULT_ORG_CONFIG } from "@oh-my-pi/pi-org";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
@@ -25,20 +23,11 @@ import type { ToolSession } from ".";
 import { formatOrgQueryResult, renderItemOrg } from "./org-format";
 import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "./render-utils";
 
-// Path to the elisp directory shipped with the pi-org package.
-// import.meta.dir = packages/coding-agent/src/tools — navigate to workspace root then pi-org
-const ELISP_DIR = new URL("../../../org/elisp", import.meta.url).pathname;
-
-// =============================================================================
-// Schema
-// =============================================================================
-
 const orgSchema = Type.Object({
 	command: Type.String({
 		description:
 			"Subcommand: init | create | query | get | update | note | set | validate | dashboard | wave | graph | archive",
 	}),
-	// create/update params
 	title: Type.Optional(Type.String({ description: "Item title (create, or update to rename)" })),
 	category: Type.Optional(
 		Type.String({ description: "Category name or prefix (defaults to first configured category on create)" }),
@@ -48,22 +37,19 @@ const orgSchema = Type.Object({
 	body: Type.Optional(Type.String({ description: "Body text -- create: initial body; update: full replacement" })),
 	append: Type.Optional(Type.String({ description: "Text to append to item body (update)" })),
 	section: Type.Optional(
-		Type.String({
-			description: "Target heading (:raw-value) for section-scoped update (requires body or append)",
-		}),
+		Type.String({ description: "Target heading (:raw-value) for section-scoped update (requires body or append)" }),
 	),
 	file: Type.Optional(
 		Type.String({
 			description: "Target file basename (create), or absolute path hint to skip scan (update/note/set)",
 		}),
 	),
-	// query params
 	dir: Type.Optional(Type.String({ description: "Org dir filter" })),
 	priority: Type.Optional(Type.String({ description: "Priority filter (#A/#B/#C)" })),
 	layer: Type.Optional(Type.String({ description: "Layer filter" })),
 	agent: Type.Optional(Type.String({ description: "Agent filter" })),
 	query: Type.Optional(Type.String({ description: "Keyword query syntax: 'todo:DOING tags:auth priority:>=B'" })),
-	ql: Type.Optional(Type.String({ description: "Raw org-ql sexp for advanced queries (e.g. '(effort >= \"2h\")')" })),
+	ql: Type.Optional(Type.String({ description: "Raw org-ql sexp for advanced queries (e.g. '(effort >= \"2h\")' )" })),
 	includeBody: Type.Optional(Type.Boolean({ description: "Include body text in query results" })),
 	sort: Type.Optional(
 		Type.String({
@@ -72,7 +58,6 @@ const orgSchema = Type.Object({
 	),
 	limit: Type.Optional(Type.Number({ description: "Max items to return" })),
 	offset: Type.Optional(Type.Number({ description: "Number of items to skip before returning" })),
-	// get/update/set/note params
 	id: Type.Optional(Type.String({ description: "Task CUSTOM_ID" })),
 	note: Type.Optional(Type.String({ description: "Dated note text (note cmd, or appended on state change)" })),
 	property: Type.Optional(Type.String({ description: "Property name (set)" })),
@@ -85,10 +70,6 @@ interface OrgCallPreview {
 	description: string;
 	meta: string[];
 }
-
-// =============================================================================
-// Tool class
-// =============================================================================
 
 type OrgToolDetails = { error?: boolean };
 
@@ -103,30 +84,24 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 
 	#session: ToolSession;
 	#projectRoot: string;
-	#orgSessionManager: EmacsSessionManager;
-	#ownsOrgSessionManager: boolean;
 	#inner: OrgToolDefinition;
 
 	constructor(session: ToolSession) {
 		this.#session = session;
 		this.#projectRoot = session.cwd ?? getProjectDir();
-
-		const emacsPathSetting = session.settings.get("org.emacsPath") as string | undefined;
-		const emacsPath = emacsPathSetting || undefined;
-		const sessionId = session.getSessionId?.() ?? "default";
-		this.#orgSessionManager =
-			session.orgSessionManager ?? createOrgSessionManager(emacsPath, this.#projectRoot, sessionId);
-		this.#ownsOrgSessionManager = !session.orgSessionManager;
 		this.#inner = this.#createInner(this.#projectRoot);
 	}
 
 	renderCall(args: OrgParams, _options: RenderResultOptions, theme: Theme): Component {
 		const preview = buildOrgCallPreview(args as Record<string, unknown>);
-		const text = renderStatusLine(
-			{ icon: "pending", title: "Org", description: preview.description, meta: preview.meta },
-			theme,
+		return new Text(
+			renderStatusLine(
+				{ icon: "pending", title: "Org", description: preview.description, meta: preview.meta },
+				theme,
+			),
+			0,
+			0,
 		);
-		return new Text(text, 0, 0);
 	}
 
 	async execute(
@@ -136,20 +111,16 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 		_onUpdate?: AgentToolUpdateCallback,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult> {
-		const args = params as Record<string, unknown>;
 		try {
 			await this.#ensureInner();
-			const result = await this.#inner.execute(args);
+			const result = await this.#inner.execute(params as Record<string, unknown>);
 			const text = formatOrgResult(result);
 			const isError =
 				typeof result === "object" &&
 				result !== null &&
 				"error" in result &&
 				(result as Record<string, unknown>).error === true;
-			return {
-				content: [{ type: "text", text }],
-				details: isError ? { error: true } : undefined,
-			};
+			return { content: [{ type: "text", text }], details: isError ? { error: true } : undefined };
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			logger.error("org tool error", { error: msg });
@@ -174,11 +145,7 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 
 	#createInner(projectRoot: string): OrgToolDefinition {
 		const config = loadOrgConfig(this.#session);
-		return createOrgTool(projectRoot, config, {
-			emacsSessionManager: this.#orgSessionManager,
-			ownsSessionManager: this.#ownsOrgSessionManager,
-			getSessionContext: () => buildSessionContext(this.#session),
-		});
+		return createOrgTool(projectRoot, config, { getSessionContext: () => buildSessionContext(this.#session) });
 	}
 
 	async #ensureInner(): Promise<void> {
@@ -192,68 +159,16 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 	}
 }
 
-// =============================================================================
-// Helpers
-// =============================================================================
-
-export async function warmupOrgEmacs(
-	emacsPath: string | undefined,
-	projectRoot: string,
-	sessionId: string,
-): Promise<CodeWarmupResult> {
-	const detection = await detectEmacs(emacsPath);
-	if (!detection.found || !detection.meetsMinimum || !detection.socatFound) {
-		const errors =
-			detection.errors.length > 0 ? detection.errors.join("; ") : "Emacs not found or does not meet minimum version";
-		return {
-			status: "unavailable",
-			error: `org: Emacs not available — ${errors}`,
-			version: detection.version ?? undefined,
-			session: null,
-		};
-	}
-
-	try {
-		const session = await startEmacsSession(detection.path!, projectRoot, sessionId, ELISP_DIR, {
-			socketPrefix: "spell-org-",
-			startupTimeoutMs: 30_000,
-			tryReattach: false,
-			emacsFlags: [], // org daemon does not skip user init
-			evalExpressions: ["(require 'org-tasks-mcp)"],
-		});
-		return { status: "ready", version: detection.version ?? undefined, session };
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err);
-		logger.warn("[org-emacs-warmup] daemon startup failed", { error: msg, projectRoot });
-		return { status: "error", error: msg, version: detection.version ?? undefined, session: null };
-	}
-}
-
-export function createOrgSessionManager(
-	emacsPath: string | undefined,
-	projectRoot: string,
-	sessionId: string,
-): EmacsSessionManager {
-	return new EmacsSessionManager({
-		startSession: () => warmupOrgEmacs(emacsPath, projectRoot, sessionId),
-	});
-}
-
 function loadOrgConfig(session: ToolSession): OrgConfig {
 	const rawKeywords = session.settings.get("org.todoKeywords") as readonly string[] | string[] | undefined;
 	const todoKeywords = rawKeywords ? [...rawKeywords] : undefined;
-
 	return {
 		...DEFAULT_ORG_CONFIG,
 		todoKeywords: todoKeywords && todoKeywords.length > 0 ? todoKeywords : [...DEFAULT_ORG_CONFIG.todoKeywords],
 	};
 }
 
-// =============================================================================
-// Session context builder
-// =============================================================================
-
-function buildSessionContext(session: ToolSession): OrgSessionContext {
+function buildSessionContext(session: ToolSession) {
 	return {
 		sessionId: session.getSessionId?.() ?? undefined,
 		transcriptPath: session.getSessionFile() ?? undefined,
@@ -264,7 +179,6 @@ function buildSessionContext(session: ToolSession): OrgSessionContext {
 function buildOrgCallPreview(args: Record<string, unknown>): OrgCallPreview {
 	const description = previewArgValue(args.command, TRUNCATE_LENGTHS.SHORT) ?? "request";
 	const meta: string[] = [];
-
 	switch (description) {
 		case "create":
 			pushMeta(meta, "category", args.category, TRUNCATE_LENGTHS.SHORT);
@@ -303,9 +217,7 @@ function buildOrgCallPreview(args: Record<string, unknown>): OrgCallPreview {
 			pushMeta(meta, "id", args.id);
 			const property = previewArgValue(args.property, TRUNCATE_LENGTHS.SHORT);
 			const value = previewArgValue(args.value, TRUNCATE_LENGTHS.SHORT);
-			if (property && value) {
-				meta.push(truncateToWidth(`${property}=${value}`, TRUNCATE_LENGTHS.CONTENT));
-			}
+			if (property && value) meta.push(truncateToWidth(`${property}=${value}`, TRUNCATE_LENGTHS.CONTENT));
 			break;
 		}
 		case "init":
@@ -324,7 +236,6 @@ function buildOrgCallPreview(args: Record<string, unknown>): OrgCallPreview {
 			pushMeta(meta, "ql", args.ql);
 			break;
 	}
-
 	return { description, meta };
 }
 
@@ -333,12 +244,10 @@ function pushMeta(meta: string[], label: string, value: unknown, width: number =
 	if (!preview) return;
 	meta.push(truncateToWidth(`${label}:${preview}`, width));
 }
-
 function pushPathMeta(meta: string[], value: unknown): void {
 	if (typeof value !== "string" || value.trim().length === 0) return;
 	meta.push(truncateToWidth(`file:${shortenPath(value.trim())}`, TRUNCATE_LENGTHS.CONTENT));
 }
-
 function previewArgValue(value: unknown, width: number = TRUNCATE_LENGTHS.CONTENT): string | undefined {
 	if (typeof value === "string") {
 		const clean = replaceTabs(value).trim();
@@ -349,28 +258,13 @@ function previewArgValue(value: unknown, width: number = TRUNCATE_LENGTHS.CONTEN
 		if (parts.length === 0) return undefined;
 		return truncateToWidth(parts.join(","), width);
 	}
-	if (typeof value === "number" || typeof value === "boolean") {
-		return String(value);
-	}
+	if (typeof value === "number" || typeof value === "boolean") return String(value);
 	return undefined;
 }
 
-// =============================================================================
-// Output formatter
-// =============================================================================
-
-/**
- * Convert an inner org tool result to a string suitable for the LLM.
- *
- * - Query results ({ items, total }): org-mode text with byte budget.
- * - Section update results with `fileContent`: full org file text.
- * - Single-item get results ({ item }): org-mode text, no budget.
- * - Everything else (create, update, dashboard, etc.): JSON.
- */
 export function formatOrgResult(result: unknown): string {
 	const isObjectResult = typeof result === "object" && result !== null;
 	const record = isObjectResult ? (result as Record<string, unknown>) : null;
-
 	if (record && "wave_number" in record && Array.isArray(record.items)) {
 		const items = record.items as Array<Record<string, unknown>>;
 		const blockedItems = Array.isArray(record.blocked_items) ? record.blocked_items.length : 0;
@@ -380,14 +274,12 @@ export function formatOrgResult(result: unknown): string {
 			`blocked: ${blockedItems}`,
 			`completed: ${String(record.completed_count ?? 0)}/${String(record.total_count ?? items.length)}`,
 		];
-		for (const item of items) {
-			const id = typeof item.custom_id === "string" ? item.custom_id : "unknown";
-			const title = typeof item.title === "string" ? item.title : "";
-			lines.push(`- ${id}${title ? ` ${title}` : ""}`);
-		}
+		for (const item of items)
+			lines.push(
+				`- ${typeof item.custom_id === "string" ? item.custom_id : "unknown"}${typeof item.title === "string" && item.title ? ` ${item.title}` : ""}`,
+			);
 		return lines.join("\n");
 	}
-
 	if (record && "items" in record && Array.isArray(record.items)) {
 		const firstItem = record.items[0];
 		if (typeof firstItem === "object" && firstItem !== null && "id" in firstItem && "properties" in firstItem) {
@@ -395,17 +287,9 @@ export function formatOrgResult(result: unknown): string {
 			return formatOrgQueryResult(r.items, r.total ?? r.items.length);
 		}
 	}
-
-	if (record && "fileContent" in record && typeof record.fileContent === "string") {
-		return record.fileContent;
-	}
-
-	if (record && "item" in record && typeof record.item === "object" && record.item !== null) {
-		const item = record.item as OrgItem;
-		return renderItemOrg(item, true, Infinity);
-	}
-
-	// Mutation results (create, update, set, note)
+	if (record && "fileContent" in record && typeof record.fileContent === "string") return record.fileContent;
+	if (record && "item" in record && typeof record.item === "object" && record.item !== null)
+		return renderItemOrg(record.item as OrgItem, true, Infinity);
 	if (record && "success" in record) {
 		const parts: string[] = [];
 		if (record.success) parts.push("success");
@@ -417,11 +301,7 @@ export function formatOrgResult(result: unknown): string {
 		if (typeof record.category === "string") parts.push(`category: ${record.category}`);
 		return parts.join("\n");
 	}
-
-	// Error results
-	if (record && "error" in record) {
+	if (record && "error" in record)
 		return `error: ${record.message ?? "unknown"}${record.code ? ` (${record.code})` : ""}`;
-	}
-
 	return JSON.stringify(result, null, 2);
 }

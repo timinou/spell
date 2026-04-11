@@ -144,7 +144,6 @@ import {
 } from "./tools/canvas";
 import { ToolContextStore } from "./tools/context";
 import { getGeminiImageTools } from "./tools/gemini-image";
-import { createOrgSessionManager } from "./tools/org";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { PendingActionStore } from "./tools/pending-action";
 import { EventBus } from "./utils/event-bus";
@@ -954,8 +953,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		: undefined;
 
 	const pendingActionStore = new PendingActionStore();
-	const orgEmacsPath = settings.get("org.emacsPath") as string | undefined;
-	const orgSessionManager = createOrgSessionManager(orgEmacsPath, cwd, sessionId);
 
 	const loopManager = new LoopManager({
 		cwd,
@@ -1027,7 +1024,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRegistry,
 		asyncJobManager,
 		pendingActionStore,
-		orgSessionManager,
 		loopManager,
 		gatewayClient,
 		getResolvedTaskPolicies: (() => {
@@ -1802,60 +1798,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	toolSession.dispose = async () => {
-		if (toolSession.orgSessionManager) {
-			try {
-				await toolSession.orgSessionManager.dispose();
-			} catch (err) {
-				logger.warn("orgSessionManager dispose failed", { error: String(err) });
-			}
-		}
 		if (toolSession.qmlRemoteServer) {
 			try {
-				const server = toolSession.qmlRemoteServer;
-				toolSession.qmlRemoteServer = undefined;
-				server.stop();
+				toolSession.qmlRemoteServer.stop();
 			} catch (err) {
 				logger.warn("qmlRemoteServer stop failed", { error: String(err) });
 			}
 		}
-		if (toolSession.gatewayClient) {
-			try {
-				const sid = toolSession.getSessionId?.();
-				if (sid) await toolSession.gatewayClient.cleanup(sid);
-			} catch (err) {
-				logger.warn("gatewayClient cleanup failed", { error: String(err) });
-			}
-			try {
-				await toolSession.gatewayClient.dispose();
-			} catch (err) {
-				logger.warn("gatewayClient dispose failed", { error: String(err) });
-			}
-		}
 	};
-
-	toolSession.softReset = async () => {
-		// Clean up session-specific QML server
-		if (toolSession.qmlRemoteServer) {
-			try {
-				const server = toolSession.qmlRemoteServer;
-				toolSession.qmlRemoteServer = undefined;
-				server.stop();
-			} catch (err) {
-				logger.warn("qmlRemoteServer stop failed (soft reset)", { error: String(err) });
-			}
-		}
-		// Clean up session-specific gateway aliases (keep client alive)
-		if (toolSession.gatewayClient) {
-			try {
-				const sid = toolSession.getSessionId?.();
-				if (sid) await toolSession.gatewayClient.cleanup(sid);
-			} catch (err) {
-				logger.warn("gatewayClient session cleanup failed (soft reset)", { error: String(err) });
-			}
-		}
-		// orgSessionManager intentionally NOT touched
-	};
-
 	startMemoryStartupTask({
 		session,
 		settings,

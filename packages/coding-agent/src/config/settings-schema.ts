@@ -1595,17 +1595,10 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: { tab: "tools", label: "Enable Org", description: "Enable the org tool for project management" },
 	},
-	"emacs.path": {
-		type: "string",
-		default: undefined,
-	},
-	"org.emacsPath": {
-		type: "string",
-		default: undefined,
-	},
 	"org.todoKeywords": {
 		type: "array",
-		default: ["INIT", "ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"],
+		items: { type: "string" },
+		default: ["ITEM", "DOING", "DONE", "BLOCKED", "CANCELLED", "REVIEW"],
 	},
 	"org.planDraftCategory": {
 		type: "string",
