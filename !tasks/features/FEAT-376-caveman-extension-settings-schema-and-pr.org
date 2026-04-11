@@ -1,0 +1,187 @@
+#+TITLE: Caveman extension - settings schema and prompt template
+#+STATE: DONE
+#+SESSION_ID: 14b63dbcbdabe383
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T08-56-20-983Z_14b63dbcbdabe383.jsonl]]
+#+CUSTOM_ID: FEAT-376-caveman-extension-settings-schema-and-pr
+#+EFFORT: 2h
+#+PRIORITY: B
+#+LAYER: core
+
+NOTE [2026-04-11]: Implemented during PLAN-167 execution.
+
+* Context
+
+Add caveman configuration to Spell's settings schema and create the prompt template file.
+This item provides the foundation that the extension module and buildSystemPrompt injection depend on.
+
+Caveman mode cuts ~75% of output tokens while keeping full technical accuracy.
+Based on [[https://github.com/JuliusBrussee/caveman][caveman]] and [[https://github.com/jonjonrankin/pi-caveman][pi-caveman]].
+
+* Design Decisions
+
+1. Config lives in =SETTINGS_SCHEMA= (spell.kdl), NOT a separate JSON file
+2. Prompt content lives in =caveman.md= (Handlebars template), NOT inline strings
+3. Four settings: =caveman.defaultLevel= (enum), =caveman.showStatus= (boolean), =caveman.thinkingMode= (enum), =caveman.affectSubagents= (boolean, default true)
+4. Thinking mode is binary: ="caveman"= (PhD-caveman notation DSL for thinking) or ="normal"= (verbose thinking). Independent from output level.
+5. 7 levels: off, lite, full, ultra, wenyan-lite, wenyan, wenyan-ultra
+6. Prompt injection happens in =buildSystemPrompt= (system-prompt.ts) so it works for BOTH main session AND subagents
+7. Runtime toggle via =/caveman= uses =settings.override()= (in-memory, not persisted). Config dialog uses =settings.set()= (persists to kdl).
+
+* Files to Create
+
+** =packages/coding-agent/src/prompts/system/caveman.md=
+
+Handlebars template with variables: =level=, =thinkingMode=
+
+Template must include PhD-caveman thinking notation DSL when thinkingMode="caveman":
+
+*** PhD-Caveman Thinking Notation
+
+Symbol vocabulary for compressed reasoning:
+
+| Category | Symbols | Meaning |
+|----------|---------|---------|
+| Flow | → ← ↔ ⇒ ⇐ | leads to, caused by, bidirectional, therefore, because |
+| Logic | ∧ ∨ ¬ ∀ ∃ ∄ | and, or, not, for all, exists, doesn't exist |
+| Judgment | ✓ ✗ ? ! ~ | correct, wrong, uncertain, important, approximately |
+| Compare | > < ≈ ≠ = ≡ | better, worse, similar, different, equals, identical |
+| Sets | ∈ ∉ ⊂ ∅ |X| | member of, not in, subset, empty, count of |
+| Quant | ∞ ≪ ≫ ± | unbounded, much less, much more, tradeoff |
+
+Structural markers: =Q:= (question), =A:= (approach), =Alt:= (alternative), =Risk:= (danger), =∴= (conclusion), =NB:= (important note)
+
+Domain abbreviations: fn=function, impl=implementation, cfg=config, dep=dependency, req=requires, ret=returns, inv=invariant, sig=signature
+
+Rules:
+- Symbols replace grammar, not meaning
+- Structure (bullets, labels) replaces narrative transitions
+- Code stays code — NEVER compress identifiers, paths, types
+- Escalate to terse English when logic notation can't capture nuance
+- Think deeply, not shallowly — compression ≠ simplification
+
+Example:
+#+begin_example
+Normal: "I need to decide between three approaches. Option A is simple but doesn't
+handle the mid-session toggle case."
+
+PhD-caveman: "3 approaches:
+A: simple, ✗ mid-session toggle
+B: export getter, ✗ couples executor↔caveman
+C: inject buildSystemPrompt, ✓ main ∧ subagents
+∴ C — no coupling, ∀ paths covered"
+#+end_example
+
+*** Template structure
+
+#+begin_example
+{{#if cavemanActive}}
+IMPORTANT: You are in CAVEMAN MODE. Respond terse like smart caveman.
+All technical substance stay. Only fluff die.
+
+Rules:
+- Drop articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries, hedging
+- Fragments OK. Short synonyms preferred. Technical terms exact
+- Code blocks unchanged. Errors quoted exact
+- Pattern: [thing] [action] [reason]. [next step].
+
+Bad: "Sure! I'd be happy to help you with that. The issue you're experiencing is likely caused by..."
+Good: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
+
+{{#if cavemanLite}}
+Level: LITE — No filler/hedging. Keep articles + full sentences. Professional but tight.
+Example: "Your component re-renders because you create a new object reference each render."
+{{/if}}
+... (one block per level with example)
+
+{{#if cavemanThinking}}
+THINKING MODE — PhD-CAVEMAN:
+Your internal reasoning/thinking blocks MUST use compressed notation.
+(full notation DSL table and examples here)
+NEVER compress code. Only compress natural language reasoning.
+Think deeply — compression ≠ simplification. Be terse but cunning.
+{{/if}}
+
+Auto-clarity: drop caveman for security warnings, irreversible action confirmations,
+or when user is confused. Resume after.
+Boundaries: write normal code. Only compress explanations.
+{{/if}}
+#+end_example
+
+Note: The implementer MUST check existing Handlebars helpers in the codebase.
+=renderPromptTemplate= is in =packages/coding-agent/src/prompts/=. Verify available helpers.
+Pre-compute boolean flags (=cavemanActive=, =cavemanLite=, =cavemanThinking=, etc.) in the
+=buildSystemPrompt= call site rather than relying on helpers that may not exist.
+
+** Files to Modify
+
+*** =packages/coding-agent/src/config/settings-schema.ts=
+
+Add four settings in the "Interaction" section (near =steeringMode=):
+
+#+begin_src typescript
+"caveman.defaultLevel": {
+    type: "enum",
+    values: ["off", "lite", "full", "ultra", "wenyan-lite", "wenyan", "wenyan-ultra"] as const,
+    default: "off",
+    ui: {
+        tab: "agent",
+        label: "Caveman Default Level",
+        description: "Token-saving communication level applied on new sessions (off = disabled)",
+    },
+},
+
+"caveman.showStatus": {
+    type: "boolean",
+    default: true,
+    ui: {
+        tab: "agent",
+        label: "Caveman Status Bar",
+        description: "Show animated campfire status indicator when caveman mode is active",
+    },
+},
+
+"caveman.thinkingMode": {
+    type: "enum",
+    values: ["caveman", "normal"] as const,
+    default: "caveman",
+    ui: {
+        tab: "agent",
+        label: "Caveman Thinking Mode",
+        description: "Whether thinking uses PhD-caveman notation (caveman) or stays verbose (normal)",
+    },
+},
+
+"caveman.affectSubagents": {
+    type: "boolean",
+    default: true,
+    ui: {
+        tab: "agent",
+        label: "Caveman Subagents",
+        description: "Apply caveman mode to delegated subagents (task tool)",
+    },
+},
+#+end_src
+
+Also add =CavemanSettings= interface to the typed group definitions:
+#+begin_src typescript
+export interface CavemanSettings {
+    defaultLevel: SettingValue<"caveman.defaultLevel">;
+    showStatus: boolean;
+    thinkingMode: SettingValue<"caveman.thinkingMode">;
+    affectSubagents: boolean;
+}
+#+end_src
+
+And add to =GroupTypeMap=:
+#+begin_src typescript
+caveman: CavemanSettings;
+#+end_src
+
+* Acceptance Criteria
+
+1. =bun check:ts= passes with new settings added
+2. =settings-schema.ts= exports =CavemanSettings= interface with 4 fields
+3. =caveman.md= exists at =packages/coding-agent/src/prompts/system/caveman.md=
+4. Template includes full PhD-caveman thinking notation DSL with symbol table and examples
+5. Template uses only Handlebars helpers that exist in the codebase (verify first)
+6. Settings appear under "agent" tab in UI metadata

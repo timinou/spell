@@ -360,6 +360,9 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				getContextUsage: () => session.getContextUsage(),
 				getSystemPrompt: () => session.systemPrompt,
 				getFirstUserMessage: () => session.getFirstUserMessage(),
+				refreshBaseSystemPrompt: async () => {
+					await session.refreshBaseSystemPrompt();
+				},
 				compact: async instructionsOrOptions => {
 					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
 					const options =
@@ -395,6 +398,9 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				},
 				reload: async () => {
 					await session.reload();
+				},
+				refreshBaseSystemPrompt: async () => {
+					await session.refreshBaseSystemPrompt();
 				},
 				compact: async instructionsOrOptions => {
 					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;

@@ -12,9 +12,10 @@ import { $ } from "bun";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { CACHE_BOUNDARY_MARKER, renderPromptTemplate } from "./config/prompt-templates";
-import type { SkillsSettings } from "./config/settings";
+import type { Settings, SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
 import { loadSkills, type Skill } from "./extensibility/skills";
+import cavemanPromptTemplate from "./prompts/system/caveman.md" with { type: "text" };
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 
@@ -355,6 +356,10 @@ export interface BuildSystemPromptOptions {
 	repeatToolDescriptions?: boolean;
 	/** Skills settings for discovery. */
 	skillsSettings?: SkillsSettings;
+	/** Settings instance for feature-driven prompt sections. */
+	settings?: Settings;
+	/** Whether this prompt is being built for a delegated subagent session. */
+	isSubagent?: boolean;
 	/** Working directory. Default: getProjectDir() */
 	cwd?: string;
 	/** Pre-loaded context files (skips discovery if provided). */
@@ -389,6 +394,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		appendSystemPrompt,
 		repeatToolDescriptions = false,
 		skillsSettings,
+		settings,
+		isSubagent = false,
 		toolNames: providedToolNames,
 		cwd,
 		contextFiles: providedContextFiles,
@@ -490,6 +497,26 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const dateTime = date;
 	const promptCwd = resolvedCwd.replace(/\\/g, "/");
 
+	const cavemanLevel = settings?.get("caveman.defaultLevel") ?? "off";
+	const cavemanThinkingMode = settings?.get("caveman.thinkingMode") ?? "caveman";
+	const cavemanAffectSubagents = settings?.get("caveman.affectSubagents") ?? true;
+	const cavemanActive = cavemanLevel !== "off" && (!isSubagent || cavemanAffectSubagents);
+	const cavemanPromptData = {
+		cavemanActive,
+		cavemanLevel,
+		cavemanLite: cavemanLevel === "lite",
+		cavemanFull: cavemanLevel === "full",
+		cavemanUltra: cavemanLevel === "ultra",
+		cavemanWenyanLite: cavemanLevel === "wenyan-lite",
+		cavemanWenyan: cavemanLevel === "wenyan",
+		cavemanWenyanUltra: cavemanLevel === "wenyan-ultra",
+		cavemanThinking: cavemanThinkingMode === "caveman" && cavemanActive,
+	};
+	const cavemanPrompt = cavemanActive ? renderPromptTemplate(cavemanPromptTemplate, cavemanPromptData) : "";
+	const appendPromptParts = [resolvedAppendPrompt, cavemanPrompt].filter(
+		(section): section is string => typeof section === "string" && section.trim().length > 0,
+	);
+
 	// Build tool metadata for system prompt rendering
 	// Priority: explicit list > tools map > defaults
 	// Default includes both bash and python; actual availability determined by settings in createTools
@@ -519,7 +546,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const data = {
 		systemPromptCustomization: systemPromptCustomization ?? "",
 		customPrompt: resolvedCustomPrompt,
-		appendPrompt: resolvedAppendPrompt ?? "",
+		appendPrompt: appendPromptParts.join("\n\n"),
 		tools: toolNames,
 		toolInfo,
 		repeatToolDescriptions,
@@ -540,6 +567,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		autoRosterEnabled,
 		specializedToolNames,
 		hasSpecializedTools: specializedToolNames.length > 0,
+		...cavemanPromptData,
 	};
 	const rendered = renderPromptTemplate(
 		resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate,

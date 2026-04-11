@@ -1,0 +1,74 @@
+#+TITLE: Caveman mode for Spell
+#+STATE: DONE
+#+SESSION_ID: 14b63dbcbdabe383
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T08-56-20-983Z_14b63dbcbdabe383.jsonl]]
+#+CUSTOM_ID: PLAN-167-caveman-mode-for-spell
+
+NOTE [2026-04-11]: Execution completed with recorded verification evidence.
+
+
+* Initial Message
+
+Speak in caveman in this session adn get inspired from https://github.com/jonjonrankin/pi-caveman to tell me how you'd implement it in spell
+
+* Context
+
+Implement built-in caveman mode for Spell — token-saving communication that cuts ~75% of output tokens
+while keeping full technical accuracy. Inspired by [[https://github.com/JuliusBrussee/caveman][caveman]]
+and [[https://github.com/jonjonrankin/pi-caveman][pi-caveman]].
+
+** Key Decisions
+
+1. *Two-part architecture*: prompt injection in =buildSystemPrompt= (covers main + subagents) + inline extension (=/caveman= command, fire status, config dialog)
+2. *Config in spell.kdl* via =SETTINGS_SCHEMA=: =caveman.defaultLevel=, =caveman.showStatus=, =caveman.thinkingMode=, =caveman.affectSubagents=
+3. *PhD-caveman thinking notation*: a formal reasoning DSL using math/logic symbols (→ ∧ ∨ ¬ ∀ ∃), structural markers (Q: A: Alt: Risk: ∴), and domain abbreviations. Binary mode: caveman or normal. Independent from output level.
+4. *Runtime toggle*: =/caveman [level]= uses =settings.override()= (in-memory). Config dialog uses =settings.set()= (persists to kdl). Session entries for resume.
+5. *Subagents affected by default*: =caveman.affectSubagents= (default true) controls it. =createSubagentSettings= snapshots all settings including overrides, so mid-session toggles propagate.
+6. *7 output levels*: off, lite, full, ultra, wenyan-lite, wenyan, wenyan-ultra
+7. *Animated fire status bar*: braille chars + 256-color ANSI fire palette, speed varies by level
+
+** Technical Approach
+
+- =system-prompt.ts=: =buildSystemPrompt()= reads caveman settings, renders =caveman.md= template, appends to dynamic prompt blocks
+- =caveman.ts=: extension factory wired into =sdk.ts= via =inlineExtensions.push()=
+- =caveman.md=: Handlebars template with pre-computed boolean flags
+- =settings-schema.ts=: 4 new settings with UI metadata
+
+* Verification
+
+#+begin_src sh
+bun check:ts
+#+end_src
+
+Manual verification:
+1. Start spell, run =/caveman= — verify status bar fire animation appears and output becomes terse
+2. Run =/caveman ultra= — verify maximum compression, faster animation
+3. Run =/caveman config= — verify 4-option settings dialog
+4. Change default level in config, restart — verify it applies
+5. Set =caveman.affectSubagents: false= in kdl, spawn a task — verify subagent output is normal
+6. Set =caveman.affectSubagents: true=, spawn task — verify subagent output is compressed
+7. Toggle =/caveman off= — verify status bar clears and output returns to normal
+8. Resume a session where caveman was active — verify level restores
+
+* Execution Manifest
+
+** Wave 1 — Foundation (no dependencies)
+- [[id:FEAT-376-caveman-extension-settings-schema-and-pr]] — Settings schema + prompt template (2h)
+
+** Wave 2 — Extension + wiring (depends on Wave 1)
+- [[id:FEAT-377-caveman-extension-module-and-sdk-wiring]] — Extension module + buildSystemPrompt injection + SDK wiring (4h)
+
+Total estimated effort: 6h
+
+
+** Completion [2026-04-11]
+*** Verification
+- `bun check:ts` — passed.
+- `bun !tasks/plans/plan-artifacts/PLAN-167-caveman-mode-for-spell/verify-caveman.ts` — passed. Verified prompt injection, subagent gating (`affectSubagents` true/false), `/caveman` runtime toggle, config dialog rendering, and session restore behavior.
+*** Artifacts
+- Verification script: [[file:!tasks/plans/plan-artifacts/PLAN-167-caveman-mode-for-spell/verify-caveman.ts]]
+- Prompt template implemented at `packages/coding-agent/src/prompts/system/caveman.md`
+- Extension implemented at `packages/coding-agent/src/extensibility/extensions/caveman.ts`
+*** Deviations
+- No browser screenshots captured. Feature is terminal/TUI-only, so verification used the focused Bun script above instead of browser automation.
+- The original manual checklist was partially replaced by automated verification; the script exercised prompt generation, subagent propagation, command behavior, dialog rendering, and session restore without a live terminal walkthrough.

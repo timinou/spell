@@ -173,6 +173,7 @@ export class ExtensionRunner {
 	#navigateTreeHandler: NavigateTreeHandler = async () => ({ cancelled: false });
 	#switchSessionHandler: SwitchSessionHandler = async () => ({ cancelled: false });
 	#reloadHandler: () => Promise<void> = async () => {};
+	#refreshBaseSystemPromptHandler: () => Promise<void> = async () => {};
 	#shutdownHandler: ShutdownHandler = () => {};
 	#commandDiagnostics: Array<{ type: string; message: string; path: string }> = [];
 
@@ -212,6 +213,7 @@ export class ExtensionRunner {
 		this.#shutdownHandler = contextActions.shutdown;
 		this.#getSystemPromptFn = contextActions.getSystemPrompt;
 		this.#getFirstUserMessageFn = contextActions.getFirstUserMessage;
+		this.#refreshBaseSystemPromptHandler = contextActions.refreshBaseSystemPrompt;
 
 		// Command context actions (optional, only for interactive mode)
 		if (commandContextActions) {
@@ -221,6 +223,7 @@ export class ExtensionRunner {
 			this.#navigateTreeHandler = commandContextActions.navigateTree;
 			this.#switchSessionHandler = commandContextActions.switchSession;
 			this.#reloadHandler = commandContextActions.reload;
+			this.#refreshBaseSystemPromptHandler = commandContextActions.refreshBaseSystemPrompt;
 			this.#getContextUsageFn = commandContextActions.getContextUsage;
 			this.#compactFn = commandContextActions.compact;
 		}
@@ -395,6 +398,7 @@ export class ExtensionRunner {
 			shutdown: () => this.#shutdownHandler(),
 			getSystemPrompt: () => this.#getSystemPromptFn(),
 			getFirstUserMessage: () => this.#getFirstUserMessageFn(),
+			refreshBaseSystemPrompt: () => this.#refreshBaseSystemPromptHandler(),
 			hasQueuedMessages: () => this.#hasPendingMessagesFn(), // deprecated alias
 		};
 	}
@@ -416,6 +420,7 @@ export class ExtensionRunner {
 			navigateTree: (targetId, options) => this.#navigateTreeHandler(targetId, options),
 			switchSession: sessionPath => this.#switchSessionHandler(sessionPath),
 			reload: () => this.#reloadHandler(),
+			refreshBaseSystemPrompt: () => this.#refreshBaseSystemPromptHandler(),
 			compact: instructionsOrOptions => this.#compactFn(instructionsOrOptions),
 		};
 	}

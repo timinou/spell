@@ -1,0 +1,201 @@
+#+TITLE: Caveman extension module and SDK wiring
+#+STATE: DONE
+#+SESSION_ID: 14b63dbcbdabe383
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T08-56-20-983Z_14b63dbcbdabe383.jsonl]]
+#+CUSTOM_ID: FEAT-377-caveman-extension-module-and-sdk-wiring
+#+EFFORT: 4h
+#+PRIORITY: B
+#+LAYER: core
+#+DEPENDS: FEAT-376-caveman-extension-settings-schema-and-pr
+
+NOTE [2026-04-11]: Implemented during PLAN-167 execution.
+
+* Context
+
+Implement caveman as two parts:
+1. Prompt injection in =buildSystemPrompt= (system-prompt.ts) — works for main session AND subagents
+2. Built-in inline extension for =/caveman= command, animated fire status bar, config dialog, session persistence
+
+Depends on settings schema and prompt template from [[id:FEAT-376-caveman-extension-settings-schema-and-pr]].
+
+* Design Decisions
+
+1. Prompt injection in =buildSystemPrompt= based on settings — NOT in =before_agent_start= hook. This ensures subagents get caveman prompt too.
+2. =caveman.affectSubagents= setting controls whether subagents get the prompt. Main session always gets it if level ≠ off.
+3. Extension factory in =packages/coding-agent/src/extensibility/extensions/caveman.ts=, wired via =inlineExtensions.push()= in =sdk.ts=
+4. Runtime =/caveman= toggle uses =settings.override("caveman.defaultLevel", level)= — in-memory only, not persisted to kdl
+5. Config dialog uses =settings.set()= — persists to kdl
+6. Session persistence via =appendEntry("caveman-level", { level })= — on resume, extension calls =settings.override()= to restore
+7. =thinkingMode= is independent from output level. Binary: caveman (PhD-caveman notation) or normal.
+
+* Part 1: Prompt Injection in buildSystemPrompt
+
+** File to Modify: =packages/coding-agent/src/system-prompt.ts=
+
+In =buildSystemPrompt()= (around line 381-559):
+
+1. Read settings for caveman:
+   #+begin_src typescript
+   const cavemanLevel = options.settings?.get("caveman.defaultLevel") ?? "off";
+   const cavemanThinkingMode = options.settings?.get("caveman.thinkingMode") ?? "caveman";
+   const cavemanAffectSubagents = options.settings?.get("caveman.affectSubagents") ?? true;
+   #+end_src
+
+2. Determine if caveman should be active for this prompt build:
+   - If =isSubagent= flag (check how to detect — look at existing patterns): only apply if =cavemanAffectSubagents= is true
+   - Otherwise always apply if level ≠ off
+
+3. Add to the template data object (around line 530):
+   #+begin_src typescript
+   cavemanActive: cavemanLevel !== "off" && (!isSubagent || cavemanAffectSubagents),
+   cavemanLevel,
+   cavemanLite: cavemanLevel === "lite",
+   cavemanFull: cavemanLevel === "full",
+   cavemanUltra: cavemanLevel === "ultra",
+   cavemanWenyanLite: cavemanLevel === "wenyan-lite",
+   cavemanWenyan: cavemanLevel === "wenyan",
+   cavemanWenyanUltra: cavemanLevel === "wenyan-ultra",
+   cavemanThinking: cavemanThinkingMode === "caveman" && cavemanLevel !== "off",
+   #+end_src
+
+4. Import and render the caveman template, append to dynamic blocks if active
+
+5. Add =settings= to =BuildSystemPromptOptions= interface if not already present. Check if it's passed through or available. The function currently reads settings indirectly — the implementer must check how settings flow and decide the cleanest way to access them (import singleton vs pass as option).
+
+** Subagent detection
+
+Check =BuildSystemPromptOptions= for existing subagent/depth indicators. If none exists, add a boolean =isSubagent= option. The task executor passes this as =true= when building subagent prompts. Check how =createAgentSession= in =sdk.ts= passes options to =buildSystemPrompt=.
+
+* Part 2: Extension Module
+
+** File to Create: =packages/coding-agent/src/extensibility/extensions/caveman.ts=
+
+Structure:
+
+#+begin_src typescript
+import type { Settings } from "../../config/settings";
+import type { ExtensionFactory } from "./types";
+
+const LEVELS = ["off", "lite", "full", "ultra", "wenyan-lite", "wenyan", "wenyan-ultra"] as const;
+type Level = (typeof LEVELS)[number];
+
+// Animation: 8 braille frames, 256-color ANSI fire palette
+// Colors: R=196, O=208, Y=220, W=230, E=52
+// Frames cycle color pairs on braille chars: ⠠⠄, ⠔⠂, ⠊⠑, etc.
+// Speed: lite=300ms, full=200ms, ultra=100ms
+// Timer type: NodeJS.Timeout (not ReturnType<>)
+
+// Label map: lite→LITE, full→CAVEMAN, ultra→ULTRA, wenyan→文言文, etc.
+
+export function createCavemanExtension(settings: Settings): ExtensionFactory {
+    return (pi) => {
+        let level: Level = "off";
+        let timer: NodeJS.Timeout | undefined;
+
+        // session_start:
+        //   1. Check session entries for "caveman-level" (resume case) — use LAST entry
+        //   2. If resuming: settings.override("caveman.defaultLevel", sessionLevel)
+        //   3. If new session: read settings.get("caveman.defaultLevel")
+        //   4. Set local level variable
+        //   5. syncStatus(ctx)
+
+        // session_shutdown:
+        //   clearInterval(timer)
+
+        // /caveman command:
+        //   No args → toggle off ↔ full
+        //   "config" → open config dialog
+        //   Valid level → set it
+        //   Invalid → ctx.ui.notify error
+        //   On change:
+        //     settings.override("caveman.defaultLevel", level) — in-memory only
+        //     appendEntry("caveman-level", { level }) — for session resume
+        //     syncStatus(ctx)
+        //     ctx.ui.notify
+
+        // /caveman config:
+        //   ctx.ui.custom() with SettingsList
+        //   4 settings: defaultLevel, showStatus, thinkingMode, affectSubagents
+        //   On change: settings.set() — persists to kdl
+        //   Follow pattern from modes/components/plugin-settings.ts
+
+        // Status bar animation:
+        //   syncStatus reads settings.get("caveman.showStatus")
+        //   If off or level=off: ui.setStatus("caveman", "") to clear
+        //   If on: setInterval with fire frames, ui.setStatus("caveman", frame + label)
+    };
+}
+#+end_src
+
+** File to Modify: =packages/coding-agent/src/sdk.ts=
+
+Near line 1191 (where inlineExtensions built):
+
+#+begin_src typescript
+import { createCavemanExtension } from "./extensibility/extensions/caveman";
+
+// After settings is available, before extensions are loaded:
+inlineExtensions.push(createCavemanExtension(settings));
+#+end_src
+
+The =settings= object is available in scope at that point (verify by reading context around line 1191).
+
+* Animated Fire Status Bar
+
+Use =ui.setStatus("caveman", text)= where text includes ANSI-colored braille frames.
+
+Color palette (256-color ANSI escape codes):
+- Red: =\x1b[38;5;196m=
+- Orange: =\x1b[38;5;208m=
+- Yellow: =\x1b[38;5;220m=
+- White-hot: =\x1b[38;5;230m=
+- Ember: =\x1b[38;5;52m=
+- Reset: =\x1b[0m=
+
+8 braille frames cycling through color pairs.
+
+Animation speed per level:
+| Level | Interval | Label |
+|-------------|----------|---------|
+| lite | 300ms | LITE |
+| full | 200ms | CAVEMAN |
+| ultra | 100ms | ULTRA |
+| wenyan-lite | 300ms | 文言 |
+| wenyan | 200ms | 文言文 |
+| wenyan-ultra | 100ms | 文言文極 |
+
+* Config Dialog
+
+Uses =ctx.ui.custom()= pattern from =packages/coding-agent/src/modes/components/plugin-settings.ts=.
+
+Four settings shown:
+1. Default level for new sessions (enum picker) — =settings.set("caveman.defaultLevel", ...)=
+2. Show animated status bar (on/off) — =settings.set("caveman.showStatus", ...)=
+3. Thinking mode (caveman/normal) — =settings.set("caveman.thinkingMode", ...)=
+4. Affect subagents (on/off) — =settings.set("caveman.affectSubagents", ...)=
+
+* Edge Cases
+
+1. Session resume: if session has =caveman-level= entries, use the LAST one (most recent), call =settings.override()= to restore
+2. Multiple rapid toggles: always clear timer before setting new one
+3. =buildSystemPrompt= with caveman level "off": template renders nothing (=cavemanActive= is false)
+4. Subagent with =caveman.affectSubagents= false: =cavemanActive= is false in subagent prompt
+5. =settings.override= is in-memory only, does NOT survive process restart — session entries handle that
+6. Timer cleanup: =session_shutdown= MUST clear interval
+7. Config dialog changes =settings.set()= which also updates in-memory state, so =buildSystemPrompt= sees changes immediately
+
+* Acceptance Criteria
+
+1. =bun check:ts= passes
+2. =/caveman= command toggles between off and full
+3. =/caveman lite=, =/caveman ultra=, etc. set specific levels
+4. =/caveman config= opens settings dialog with 4 options
+5. Animated fire appears in status bar when active
+6. Level persists across agent turns within session (via settings.override)
+7. Level restores on session resume (session entry → settings.override)
+8. Default level from spell.kdl applies on new session
+9. System prompt includes caveman rules when active — verify by checking rendered prompt
+10. Thinking mode "caveman" includes full PhD-caveman notation DSL in prompt
+11. Subagents get caveman prompt when =caveman.affectSubagents= is true
+12. Subagents do NOT get caveman prompt when =caveman.affectSubagents= is false
+13. =/caveman config= changes persist to kdl (verified by restarting and checking defaults)

@@ -59,6 +59,7 @@ import {
 	type ToolDefinition,
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
+import { createCavemanExtension } from "./extensibility/extensions/caveman";
 import { loadSkills as loadSkillsInternal, type Skill, type SkillWarning } from "./extensibility/skills";
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
 import {
@@ -407,6 +408,8 @@ export interface BuildSystemPromptOptions {
 	appendPrompt?: string;
 	repeatToolDescriptions?: boolean;
 	autoRosterEnabled?: boolean;
+	settings?: Settings;
+	isSubagent?: boolean;
 }
 
 /**
@@ -420,6 +423,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		appendSystemPrompt: options.appendPrompt,
 		repeatToolDescriptions: options.repeatToolDescriptions,
 		autoRosterEnabled: options.autoRosterEnabled,
+		settings: options.settings,
+		isSubagent: options.isSubagent,
 	});
 }
 
@@ -1189,6 +1194,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	const inlineExtensions: ExtensionFactory[] = options.extensions ? [...options.extensions] : [];
+	inlineExtensions.push(createCavemanExtension(settings));
 	if (customTools.length > 0) {
 		inlineExtensions.push(createCustomToolsExtension(customTools));
 	}
@@ -1460,6 +1466,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
 			eagerTasks,
 			autoRosterEnabled,
+			settings,
+			isSubagent: taskDepth > 0,
 		});
 
 		if (options.systemPrompt === undefined) {
@@ -1486,6 +1494,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				mcpDiscoveryServerSummaries: discoverableMCPSummary.servers.map(formatDiscoverableMCPToolServerSummary),
 				eagerTasks,
 				autoRosterEnabled,
+				settings,
+				isSubagent: taskDepth > 0,
 			});
 		}
 		const result = options.systemPrompt(defaultPrompt);
