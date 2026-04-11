@@ -1,0 +1,154 @@
+#+TITLE: Fix atomicity of OrgTool and WriteTool cwd rebuild
+#+STATE: DONE
+#+SESSION_ID: 14b657c2ac5da15f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-50-02-801Z_14b657c2ac5da15f.jsonl]]
+#+CUSTOM_ID: BUG-195-fix-atomicity-of-orgtool-and-writetool-c
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: agent-tools
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-050-audit-implementation:
+
+- **What**: `OrgTool` marks the new cwd as active before the replacement inner tool is safely constructed  
+  **Where**: `packages/coding-agent/src/tools/org.ts`, `#ensureInner()` around lines 183–188  
+  **Why**: If `loadOrgConfig()` or `createOrgTool()` throws during a post-`/move` refresh, `#projectRoot` is still advanced and the old `#inner` has already been disposed. Subsequent calls will think the tool is up to date and keep using a disposed inner tool instead of retrying recovery.  
+  **Effort**: small
+
+- **What**: `WriteTool` updates its tracked cwd before the replacement writethrough is successfully created  
+  **Where**: `packages/coding-agent/src/tools/write.ts`, `#getWritethrough()` around lines 136–141  
+  **Why**: If `createLspWritethrough()` fails for the moved project, `#writethroughCwd` is already updated, so later writes will stop retrying and may keep using the old writethrough bound to the previous cwd. That can hide formatting/diagnostic misrouting after `/move`.  
+  **Effort**: small
+
+- **What**: The completion report claims `bun check:ts` passed, but that pass depended on additional unstaged workspace changes outside the plan commit  
+  **Where**: `!tasks/plans/PLAN-170-move-command-updates-tool-working-direct.org`, `** Completion [2026-04-11]` / `*** Verification`  
+  **Why**: Validation of commit `456a411b6` is not reproducible from the recorded plan artifact alone. The audit run showed repo-wide typecheck only went green after extra uncommitted edits in other files, so a reviewer checking out the commit may not be able to reproduce the reported verification result.  
+  **Effort**: medium
+
+- **What**: `OrgTool` does not refresh its outward-facing description after rebuilding the inner tool for a new cwd  
+  **Where**: `packages/coding-agent/src/tools/org.ts`, constructor vs. `#ensureInner()`  
+  **Why**: The constructor copies `this.#inner.description` once, but the refresh path recreates `#inner` without updating `description`. If per-project org config changes the description/help text, the tool can present stale guidance after `/move`.  
+  **Effort**: trivial
+
+- **What**: Automated coverage exercises mocked cwd mutation, not the real `/move` session lifecycle for `send_file` and `write`  
+  **Where**: `packages/coding-agent/test/tools/org-cwd-change.test.ts`  
+  **Why**: The new test proves the tools react to a changing `session.cwd`, but it does not cover the real `SessionManager.moveTo()` integration path for `send_file`/`write`. A regression in the move wiring or tool-session construction could slip through while the unit test still passes.  
+  **Effort**: medium
+
+* Problem
+
+When ~OrgTool#ensureInner()~ detects a cwd change (after ~/move~), it disposes the old inner tool and updates ~#projectRoot~ BEFORE constructing the replacement. If ~#createInner()~ throws, the tool is stuck: ~#projectRoot~ matches the new cwd so no retry happens, but ~#inner~ was already disposed.
+
+Same pattern in ~WriteTool#getWritethrough()~: ~#writethroughCwd~ is updated before ~#createWritethrough()~ runs. If it throws, subsequent calls see matching cwd and skip rebuild.
+
+Additionally, ~OrgTool#ensureInner()~ does not refresh ~this.description~ after a successful rebuild, so stale description text persists if the new project has different org config.
+
+All three functions involved (~loadOrgConfig~, ~createOrgTool~, ~createLspWritethrough~) are synchronous calls that can throw.
+
+* Implementation
+
+** Sub-outline
+
+*** Types/interfaces: none (no new types)
+*** Tests: error recovery regression tests (implement FIRST)
+*** Code: OrgTool atomicity fix
+*** Code: WriteTool atomicity fix
+*** Code: OrgTool description refresh
+
+** File: ~packages/coding-agent/src/tools/org.ts~, method ~#ensureInner()~ (around line 183)
+
+Current (broken):
+#+begin_src typescript
+async #ensureInner(): Promise<void> {
+    const projectRoot = this.#session.cwd ?? getProjectDir();
+    if (projectRoot === this.#projectRoot) return;
+    await this.#inner.dispose?.();
+    this.#projectRoot = projectRoot;
+    this.#inner = this.#createInner(projectRoot);
+}
+#+end_src
+
+Fixed (construct-then-swap):
+#+begin_src typescript
+async #ensureInner(): Promise<void> {
+    const projectRoot = this.#session.cwd ?? getProjectDir();
+    if (projectRoot === this.#projectRoot) return;
+    const newInner = this.#createInner(projectRoot);
+    await this.#inner.dispose?.();
+    this.#inner = newInner;
+    this.#projectRoot = projectRoot;
+    this.description = this.#inner.description;
+}
+#+end_src
+
+Key changes:
+1. ~#createInner(projectRoot)~ runs first while old ~#inner~ is still alive.
+2. Only after success: dispose old, swap references, update ~#projectRoot~ and ~description~.
+3. If ~#createInner~ throws, ~#projectRoot~ stays at old value, ~#inner~ stays alive, next call retries.
+
+** File: ~packages/coding-agent/src/tools/write.ts~, method ~#getWritethrough()~ (around line 136)
+
+Current (broken):
+#+begin_src typescript
+#getWritethrough(): WritethroughCallback {
+    const cwd = this.session.cwd;
+    if (cwd !== this.#writethroughCwd) {
+        this.#writethroughCwd = cwd;
+        this.#writethrough = this.#createWritethrough(cwd);
+    }
+    return this.#writethrough;
+}
+#+end_src
+
+Fixed (construct-then-swap):
+#+begin_src typescript
+#getWritethrough(): WritethroughCallback {
+    const cwd = this.session.cwd;
+    if (cwd !== this.#writethroughCwd) {
+        const newWritethrough = this.#createWritethrough(cwd);
+        this.#writethroughCwd = cwd;
+        this.#writethrough = newWritethrough;
+    }
+    return this.#writethrough;
+}
+#+end_src
+
+Key changes:
+1. ~#createWritethrough(cwd)~ runs first while old writethrough is still set.
+2. Only after success: update ~#writethroughCwd~ and ~#writethrough~.
+3. If ~#createWritethrough~ throws, old writethrough remains usable and next call retries.
+
+** File: ~packages/coding-agent/test/tools/org-cwd-change.test.ts~
+
+Add two new test cases to the existing ~describe("tool cwd changes after move")~ block:
+
+*** Test: "OrgTool retries inner tool rebuild after a transient error"
+1. Use existing ~mock.module("@oh-my-pi/pi-org")~ and ~createOrgToolMock~ pattern already in the file.
+2. Make ~createOrgToolMock~ throw on its SECOND invocation (first call = constructor, second = post-cwd-change rebuild).
+3. Mutate ~cwdState.current~ to ~secondProject~.
+4. First ~execute()~ after cwd change should propagate the error (caught by OrgTool's try/catch, returns error result).
+5. Verify ~#projectRoot~ was NOT advanced: call ~execute()~ again — ~createOrgToolMock~ should be called again with ~secondProject~ (retry).
+6. This third creation succeeds. Verify the tool now operates with ~secondProject~.
+7. Verify the old inner (instances[0]) was NOT disposed during the failed rebuild (since new inner must be constructed before old is disposed).
+
+Expected call pattern: createOrgTool called 3 times total (constructor + failed rebuild + successful retry).
+
+*** Test: "WriteTool retries writethrough rebuild after a transient error"
+1. Use existing ~vi.spyOn(lspModule, "createLspWritethrough")~ pattern already in the file.
+2. Make the spy throw on its SECOND invocation (first = constructor, second = post-cwd-change rebuild).
+3. Mutate ~cwdState.current~ to ~secondProject~.
+4. First ~execute()~ after cwd change should propagate the error from ~#getWritethrough()~.
+5. Call ~execute()~ again — ~createLspWritethrough~ should be called again with ~secondProject~ (retry).
+6. This third creation succeeds. Verify the tool writes to the correct directory.
+7. Verify total spy call count is 3 (constructor + failed rebuild + successful retry).
+
+* Edge Cases
+- ~#createInner~ is synchronous, so the dispose-then-construct window is eliminated by reordering.
+- Both old and new inner tools reference the same ~EmacsSessionManager~; having two alive briefly is safe.
+- ~createLspWritethrough~ returns a closure; no resource leak from a briefly coexisting old closure.
+
+* Verification
+- ~bun check:ts~ passes
+- ~bun test packages/coding-agent/test/tools/org-cwd-change.test.ts~ passes (existing + 2 new tests)
+- Total test count in file increases from 3 to 5
