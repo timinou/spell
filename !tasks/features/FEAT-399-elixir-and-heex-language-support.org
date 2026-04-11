@@ -1,0 +1,433 @@
+#+TITLE: Elixir and HEEx Language Support
+#+STATE: DONE
+#+SESSION_ID: 14b666b62d9d5979
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T11-55-22-166Z_14b666b62d9d5979.jsonl]]
+#+CUSTOM_ID: FEAT-399-elixir-and-heex-language-support
+#+EFFORT: 3d
+#+PRIORITY: A
+#+LAYER: rust
+#+DEPENDS: FEAT-397-core-graph-engine-and-trait-interfaces
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-11]: Completed in PLAN-174 with Elixir/HEEx extraction, module resolution, and focused builder tests.
+
+* Initial Message
+
+Look up GitNexus and other code graph tools, and tell me how you'd integrate that to the code tool. Emacs optional, I just want the cleanest implementation. Needs to be as ergonomic as possible for your usage. Think deeply. Ask me questions, let's challenge each other. Only settle decisions after my validation
+
+* Context — Why This Exists
+Elixir is one of two Phase 1 languages (alongside TypeScript) for the pi-code-graph engine. The user specifically requested Elixir as first priority with full HEEx template parsing.
+
+This item implements =LanguageExtractor= and =ImportResolver= for Elixir (.ex, .exs) and HEEx (.heex) files, as defined by the trait interfaces in [[id:FEAT-397-core-graph-engine-and-trait-interfaces]].
+
+** What This Enables
+After this item, running =code index= on a Phoenix/Elixir project produces a graph with:
+- Every module, function (def/defp), macro (defmacro), struct, protocol, behaviour as symbol nodes
+- =alias=, =import=, =use=, =require= directives resolved to target modules
+- Function call edges between modules (=UserService.find_user(query)= → edge to =UserService.find_user=)
+- HEEx template component references (=<.button>=, =<Components.Modal.show>=) linked to defining modules
+- Phoenix LiveView associations (LiveView module ↔ HEEx template)
+
+** Elixir Module Resolution Rules
+Elixir modules are globally namespaced. Resolution is convention-based:
+1. Module =MyApp.Users.User= → file =lib/my_app/users/user.ex= (CamelCase module → snake_case path under =lib/=)
+2. Test modules → =test/= directory with =_test.exs= suffix
+3. Project name comes from =mix.exs= → =project()= function → =:app= key
+4. Dependencies live in =deps/= — treat as =ExternalPackage= nodes
+5. Elixir/Erlang standard library (=Enum=, =Map=, =GenServer=, etc.) → =Builtin= nodes
+6. No path aliases like tsconfig — module names ARE the canonical identifiers
+
+** Elixir Dependency Directives
+- =alias MyApp.Users.User= → creates a shorthand. Edge type: =Uses= (alias reference)
+- =alias MyApp.Users.{User, Admin}= → multi-alias expansion. One edge per aliased module.
+- =import Enum, only: [map: 2]= → imports functions into scope. Edge type: =Uses= (import)
+- =use GenServer= → invokes =__using__/1= macro. Edge type: =Uses= (use). Opaque — treat as strong dependency.
+- =require Logger= → compile-time dependency for macros. Edge type: =Uses= (require)
+
+** HEEx Template Rules
+HEEx templates are Elixir's HTML template engine, used in Phoenix LiveView:
+- =<.button>= → function component from the same module (=button/1= function)
+- =<.button />= → same, self-closing
+- =<Components.Modal.show>= → cross-module function component reference
+- ={@assign_name}= → references a LiveView assign (useful for data flow tracking)
+- ={Module.function(args)}= → Elixir expression, creates a =Calls= edge
+- HEEx files are typically co-located: =lib/my_app_web/live/user_live.html.heex= is owned by =UserLive= module
+
+** Key Design Decisions
+1. Elixir grammar: =tree-sitter-elixir = "0.3"= (already in pi-natives dependencies)
+2. HEEx grammar: =tree-sitter-heex = "0.8"= (https://github.com/phoenixframework/tree-sitter-heex, MIT, 26k downloads). This is the official Phoenix grammar with proper AST node types for components, expressions, slots, and directives. Do NOT use =tree-sitter-html= — HEEx has its own grammar.
+3. Module-to-file mapping: parse =mix.exs= for project name, then CamelCase → snake_case conversion
+4. Standard library detection: maintain a static list of known Elixir/Erlang stdlib modules (=Enum=, =Map=, =String=, =GenServer=, =Supervisor=, =Agent=, =Task=, etc.)
+5. Phoenix conventions: detect =use Phoenix.LiveView=, =use Phoenix.Component= to classify modules
+** Reference: Elixir tree-sitter Node Types
+Key tree-sitter-elixir node types for extraction:
+- =call= with target =defmodule= → module definition
+- =call= with target =def=, =defp= → function definition (pub/private)
+- =call= with target =defmacro=, =defmacrop= → macro definition
+- =call= with target =defstruct= → struct definition
+- =call= with target =defprotocol= → protocol
+- =call= with target =defimpl= → protocol implementation
+- =call= with target =alias=, =import=, =use=, =require= → dependency directives
+- =call= with target =@behaviour= → behaviour declaration
+- =call= with dot notation =Module.function()= → cross-module call
+
+* TDD Sub-Outline
+
+** 1. Test fixtures — create sample Elixir project
+Create =crates/pi-code-graph/tests/fixtures/elixir/= mimicking a Phoenix project:
+
+=mix.exs=:
+#+begin_src elixir
+defmodule MyApp.MixProject do
+  use Mix.Project
+
+  def project do
+    [app: :my_app, version: "0.1.0"]
+  end
+end
+#+end_src
+
+=lib/my_app/users/user.ex=:
+#+begin_src elixir
+defmodule MyApp.Users.User do
+  @moduledoc "User schema"
+
+  defstruct [:id, :name, :email]
+
+  def new(attrs) do
+    struct(__MODULE__, attrs)
+  end
+
+  def validate(%__MODULE__{} = user) do
+    if user.name && user.email, do: {:ok, user}, else: {:error, :invalid}
+  end
+end
+#+end_src
+
+=lib/my_app/users/user_service.ex=:
+#+begin_src elixir
+defmodule MyApp.Users.UserService do
+  alias MyApp.Users.User
+
+  require Logger
+
+  def find_user(id) do
+    Logger.info("Finding user #{id}")
+    User.new(%{id: id, name: "Test", email: "test@example.com"})
+  end
+
+  def create_user(attrs) do
+    case User.validate(User.new(attrs)) do
+      {:ok, user} -> {:ok, user}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+end
+#+end_src
+
+=lib/my_app_web/live/user_live.ex=:
+#+begin_src elixir
+defmodule MyAppWeb.UserLive do
+  use Phoenix.LiveView
+
+  alias MyApp.Users.UserService
+
+  def mount(_params, _session, socket) do
+    {:ok, assign(socket, :users, [])}
+  end
+
+  def handle_event("search", %{"query" => query}, socket) do
+    user = UserService.find_user(query)
+    {:noreply, assign(socket, :user, user)}
+  end
+end
+#+end_src
+
+=lib/my_app_web/live/user_live.html.heex=:
+#+begin_src html
+<div>
+  <.header>Users</.header>
+  <.table id="users" rows={@users}>
+    <:col :let={user} label="Name">{user.name}</:col>
+  </.table>
+  <.button phx-click="search">Search</.button>
+  <MyAppWeb.Components.Modal.show title="Details">
+    <p>{@user.name}</p>
+  </MyAppWeb.Components.Modal.show>
+</div>
+#+end_src
+
+=lib/my_app_web/components/modal.ex=:
+#+begin_src elixir
+defmodule MyAppWeb.Components.Modal do
+  use Phoenix.Component
+
+  def show(assigns) do
+    ~H"""
+    <div class="modal">{render_slot(@inner_block)}</div>
+    """
+  end
+end
+#+end_src
+
+** 2. Elixir symbol extraction tests
+#+begin_src rust
+#[test]
+fn extracts_module_definition() {
+    let source = include_bytes!("fixtures/elixir/lib/my_app/users/user.ex");
+    let ext = ElixirExtractor;
+    let tree = parse(ext.ts_language(), source);
+    let result = ext.extract(&tree, source, Path::new("lib/my_app/users/user.ex"));
+    let module = result.symbols.iter().find(|s| s.name == "MyApp.Users.User").unwrap();
+    assert_eq!(module.kind, SymbolKind::Module);
+}
+
+#[test]
+fn extracts_public_and_private_functions() {
+    // From user.ex: "new" is def (public), "validate" is def (public)
+    // Verify both extracted with correct visibility
+    // If there were defp functions, they'd have Visibility::Private
+}
+
+#[test]
+fn extracts_struct_definition() {
+    // From user.ex: defstruct [:id, :name, :email]
+    // → SymbolDef { name: "MyApp.Users.User", kind: SymbolKind::Struct }
+    // Or as a property of the module — design choice: struct as child symbol of module
+}
+
+#[test]
+fn extracts_phoenix_liveview_module() {
+    // From user_live.ex: "use Phoenix.LiveView" → module classified with decorator "Phoenix.LiveView"
+    // Functions: mount, handle_event
+}
+
+#[test]
+fn extracts_phoenix_component_module() {
+    // From modal.ex: "use Phoenix.Component" → module with decorator "Phoenix.Component"
+    // Function: show
+}
+#+end_src
+
+** 3. Elixir symbol extraction implementation
+Walk tree-sitter AST:
+- Root =call= nodes with =defmodule= → extract module name from first argument (may be dotted: =MyApp.Users.User=)
+- Within module body, find =call= nodes:
+  - =def= → public function, name from first argument
+  - =defp= → private function
+  - =defmacro= / =defmacrop= → macro
+  - =defstruct= → struct definition
+  - =defprotocol= → protocol
+  - =defimpl= → protocol implementation (extract =for:= target)
+- =@behaviour= attribute → store as decorator on module
+- =use= calls → store as decorator (=use Phoenix.LiveView= → decorator "Phoenix.LiveView")
+
+** 4. Elixir import extraction tests
+#+begin_src rust
+#[test]
+fn extracts_alias_directive() {
+    // From user_service.ex: alias MyApp.Users.User
+    // → ImportRef { specifier: "MyApp.Users.User", kind: ElixirAlias, names: [{ name: "User" }] }
+}
+
+#[test]
+fn extracts_multi_alias() {
+    // alias MyApp.Users.{User, Admin}
+    // → Two ImportRef entries or one with multiple names
+}
+
+#[test]
+fn extracts_import_directive() {
+    // import Enum, only: [map: 2]
+    // → ImportRef { specifier: "Enum", kind: ElixirImport, names: [{ name: "map" }] }
+}
+
+#[test]
+fn extracts_use_directive() {
+    // use Phoenix.LiveView
+    // → ImportRef { specifier: "Phoenix.LiveView", kind: ElixirUse }
+}
+
+#[test]
+fn extracts_require_directive() {
+    // require Logger
+    // → ImportRef { specifier: "Logger", kind: ElixirRequire }
+}
+#+end_src
+
+** 5. Elixir import extraction implementation
+
+** 6. Elixir relationship extraction tests
+#+begin_src rust
+#[test]
+fn extracts_cross_module_function_call() {
+    // In user_service.ex: User.new(%{...}) → Calls from "find_user" to "User.new"
+    // User.validate(User.new(attrs)) → Calls from "create_user" to "User.validate" and "User.new"
+}
+
+#[test]
+fn extracts_aliased_module_call() {
+    // After "alias MyApp.Users.User", call to "User.new" should record as call to "MyApp.Users.User.new"
+    // (The relationship uses the short name "User.new"; resolution to full path happens at graph build time)
+}
+
+#[test]
+fn extracts_liveview_service_call() {
+    // In user_live.ex: UserService.find_user(query) → Calls edge
+}
+#+end_src
+
+** 7. Elixir relationship extraction implementation
+
+** 8. HEEx extraction tests
+#+begin_src rust
+#[test]
+fn extracts_local_function_component_ref() {
+    // From user_live.html.heex: <.header>, <.table>, <.button>
+    // → ImportRef or Relationship: references to "header", "table", "button" function components
+    // These are local to the owning LiveView's component module
+}
+
+#[test]
+fn extracts_cross_module_component_ref() {
+    // <MyAppWeb.Components.Modal.show> → reference to "MyAppWeb.Components.Modal.show"
+}
+
+#[test]
+fn extracts_assign_references() {
+    // {@users}, {@user.name} → references to assigns "users", "user"
+    // These create data flow edges (optional/lower priority, but extract the names)
+}
+
+#[test]
+fn extracts_elixir_expression_calls() {
+    // {user.name} in expression context — if it's a function call like {Module.func()}, extract it
+}
+#+end_src
+
+** 9. HEEx extraction implementation
+Parse HEEx files using =tree-sitter-heex= (NOT =tree-sitter-html=). The HEEx grammar provides proper AST node types:
+
+*** tree-sitter-heex Node Types Reference
+- =fragment= — root node
+- =component= → contains =start_component= / =self_closing_component= / =end_component=
+  - =component_name= → children: =module= (optional) + =function=
+    - =<.button>= → =component_name= has only =function= child (text: "button")
+    - =<MyApp.Modal.show>= → =component_name= has =module= (text: "MyApp.Modal") + =function= (text: "show")
+- =expression= → contains =expression_value= (the Elixir code between ={= and =}=)
+  - ={@users}= → =expression_value= text: "@users"
+  - ={Module.func()}= → =expression_value= text: "Module.func()"
+- =slot= → =<:col>...</:col>= named slots
+- =directive= → ={#if}=, ={/if}=, ={#for}= control flow
+- =tag= → regular HTML tags (=<div>=, =<p>=, etc.)
+
+*** Extraction Logic
+- Walk all =component= nodes in the tree:
+  - Get =component_name= → check for =module= + =function= children
+  - If =function= only (no =module=) → local component ref (e.g., "header", "button", "table")
+  - If =module= + =function= → cross-module ref (e.g., "MyAppWeb.Components.Modal.show")
+  - Create =Relationship { from_symbol: "<heex-file>", to_symbol: component_name, kind: Calls }=
+- Walk all =expression= nodes:
+  - Extract =expression_value= text
+  - If starts with =@= → assign reference (e.g., "@users", "@user")
+  - If matches =ModuleName.function(= pattern → cross-module call
+  - Store as relationships on the HEEx file node
+
+*** HEEx ↔ LiveView Association
+- HEEx file =user_live.html.heex= → find companion =user_live.ex= in same directory
+- Create a =Contains= edge from the LiveView module's file node to the HEEx file node
+- Local component refs (=<.button>=) resolve to functions in the LiveView's module or its imported component module
+** 10. Mix resolver tests
+#+begin_src rust
+#[test]
+fn resolves_module_to_file_path() {
+    // Project root has mix.exs with app: :my_app
+    // Resolve "MyApp.Users.User" from any file → lib/my_app/users/user.ex
+}
+
+#[test]
+fn resolves_stdlib_module_as_builtin() {
+    // Resolve "Enum" → Resolution::Builtin("Enum")
+    // Resolve "GenServer" → Resolution::Builtin("GenServer")
+    // Resolve "Logger" → Resolution::Builtin("Logger")
+}
+
+#[test]
+fn resolves_phoenix_module_as_external() {
+    // Resolve "Phoenix.LiveView" → Resolution::ExternalPackage { name: "phoenix_live_view" }
+    // (Phoenix modules are deps, not local code)
+}
+
+#[test]
+fn resolves_local_module_with_snake_case_conversion() {
+    // "MyAppWeb.UserLive" → lib/my_app_web/live/user_live.ex
+    // CamelCase to snake_case: MyApp → my_app, UserLive → user_live
+}
+
+#[test]
+fn handles_umbrella_apps() {
+    // apps/app_a/lib/... and apps/app_b/lib/... → resolve based on app name prefix
+}
+
+#[test]
+fn heex_file_resolves_to_owning_liveview() {
+    // user_live.html.heex → owned by UserLive module in user_live.ex (same directory, same base name)
+}
+#+end_src
+
+** 11. Mix resolver implementation
+=MixResolver= struct:
+- =init(project_root)=: parse =mix.exs= to extract app name, detect umbrella vs flat project, build module prefix → lib path mapping
+- =resolve(specifier, from_file)=:
+  1. Check stdlib list → =Builtin=
+  2. Check if module prefix matches project app → compute snake_case path under =lib/=
+  3. Check known Phoenix/Ecto deps → =ExternalPackage=
+  4. Otherwise → =Unresolved=
+
+CamelCase → snake_case conversion:
+- =MyApp= → =my_app=
+- =UserLive= → =user_live=
+- =HTMLParser= → =html_parser= (consecutive caps: split before last cap of a run)
+- Algorithm: insert =_= before each uppercase letter that follows a lowercase, then lowercase all
+
+** 12. Integration test — full Elixir pipeline
+#+begin_src rust
+#[test]
+fn indexes_elixir_project_end_to_end() {
+    // Create temp dir with the fixture files
+    // Register Elixir language
+    // Run pipeline::index()
+    // Verify:
+    //   - File nodes: user.ex, user_service.ex, user_live.ex, modal.ex, user_live.html.heex
+    //   - Module symbols: MyApp.Users.User, MyApp.Users.UserService, MyAppWeb.UserLive, MyAppWeb.Components.Modal
+    //   - Function symbols: new, validate, find_user, create_user, mount, handle_event, show
+    //   - ResolvedImport: user_service.ex → user.ex (via alias MyApp.Users.User)
+    //   - Calls: find_user → User.new, create_user → User.validate, create_user → User.new
+    //   - Builtin: Logger
+    //   - ExternalPackage: Phoenix.LiveView, Phoenix.Component
+    //   - HEEx: component refs to header, table, button (local), MyAppWeb.Components.Modal.show (cross-module)
+}
+#+end_src
+
+* Elixir Stdlib Module List (for Builtin detection)
+Maintain a static =phf::Set= or =HashSet= of known stdlib modules:
+=Enum=, =Map=, =List=, =String=, =Integer=, =Float=, =Atom=, =Tuple=, =Keyword=, =MapSet=, =Range=, =Stream=, =IO=, =File=, =Path=, =System=, =Process=, =Agent=, =Task=, =GenServer=, =Supervisor=, =DynamicSupervisor=, =Registry=, =ETS=, =Logger=, =Config=, =Application=, =Code=, =Macro=, =Module=, =Kernel=, =Kernel.SpecialForms=, =DateTime=, =NaiveDateTime=, =Date=, =Time=, =Calendar=, =URI=, =Base=, =Regex=, =Inspect=, =Protocol=, =Collectable=, =Enumerable=, =Access=, =Behaviour= (deprecated but still seen), =Exception=, =OptionParser=, =Port=, =Node=, =StringIO=
+
+* Error Handling
+- =mix.exs= not found → fall back to inferring project structure from directory layout
+- Malformed Elixir files → tree-sitter produces partial tree, extract what's possible
+- HEEx files without owning LiveView module → still extract component refs, mark as orphaned
+- Multi-line alias blocks → handle =alias MyApp.{Sub1, Sub2}= correctly
+- Elixir metaprogramming (=unquote=, =quote=) → can't resolve statically, skip
+- Umbrella projects → detect =apps/= directory structure, resolve per-app
+
+* Cargo.toml Additions
+#+begin_src toml
+tree-sitter-elixir = "0.3"
+tree-sitter-heex = "0.8"       # Official Phoenix HEEx grammar — NOT tree-sitter-html
+phf = { version = "0.13", features = ["macros"] }  # for stdlib set
+#+end_src
+* Verification
+- All tests from steps 2, 4, 6, 8, 10, 12 pass
+- =cargo test -p pi-code-graph -- elixir= runs all Elixir-specific tests
+- Integration test proves: Elixir project on disk → graph with modules, functions, alias edges, call edges, HEEx component references

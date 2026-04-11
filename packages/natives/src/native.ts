@@ -14,6 +14,7 @@ import { embeddedAddon } from "./embedded-addon";
 import "./appearance/types";
 import "./ast/types";
 import "./clipboard/types";
+import "./code-graph/types";
 import "./glob/types";
 import "./grep/types";
 import "./highlight/types";
@@ -263,6 +264,7 @@ function validateNative(bindings: NativeBindings, source: string): void {
 	checkFn("extractSegments");
 	checkFn("matchesKittySequence");
 	checkFn("executeShell");
+	checkFn("executeCodeGraph");
 	checkFn("PtySession");
 	checkFn("Shell");
 	checkFn("parseKey");

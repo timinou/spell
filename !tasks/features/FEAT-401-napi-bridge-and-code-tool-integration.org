@@ -1,0 +1,240 @@
+#+TITLE: NAPI Bridge and Code Tool Integration
+#+STATE: DONE
+#+SESSION_ID: 14b666b62d9d5979
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T11-55-22-166Z_14b666b62d9d5979.jsonl]]
+#+CUSTOM_ID: FEAT-401-napi-bridge-and-code-tool-integration
+#+EFFORT: 2d
+#+PRIORITY: A
+#+LAYER: typescript
+#+DEPENDS: FEAT-397-core-graph-engine-and-trait-interfaces FEAT-400-graph-query-engine
+
+NOTE [2026-04-11]: Completed in PLAN-174 with pi-natives bridge, TS wrappers, code tool routing, prompt/schema updates, and tool tests.
+
+* Initial Message
+
+Look up GitNexus and other code graph tools, and tell me how you'd integrate that to the code tool. Emacs optional, I just want the cleanest implementation. Needs to be as ergonomic as possible for your usage. Think deeply. Ask me questions, let's challenge each other. Only settle decisions after my validation
+
+* Context — Why This Exists
+This item wires the Rust graph engine into the Spell agent's =code= tool. It has two parts:
+1. *NAPI bridge* — expose pi-code-graph functions from Rust to TypeScript via pi-natives' NAPI bindings
+2. *Code tool integration* — add new commands to the =code= tool schema, route graph commands to the NAPI bridge, format results for agent consumption, render in TUI
+
+After this item, the agent (me) can run:
+#+begin_example
+code { command: "index" }
+code { command: "context", symbol: "UserService" }
+code { command: "impact", symbol: "validate", depth: 3 }
+code { command: "deps", file: "src/auth/index.ts" }
+code { command: "flow", symbol: "handleRequest" }
+code { command: "dead_code" }
+code { command: "clusters" }
+code { command: "search", query: "authentication" }
+code { command: "status" }
+#+end_example
+
+** Existing Architecture To Integrate With
+- =packages/coding-agent/src/tools/code.ts= — the =CodeTool= class, wraps =CodeToolDefinition= from =@oh-my-pi/pi-emacs=
+- =packages/emacs/src/tool.ts= — =createCodeTool()= factory, routes commands to Emacs via JSON-RPC
+- =packages/natives/= — the NPM package wrapping pi-natives Rust NAPI bindings
+- =packages/coding-agent/src/prompts/tools/code.md= — the tool description (prompt engineering)
+
+Currently: =CodeTool.execute()= → =this.#inner.execute(args)= → Emacs daemon via JSON-RPC.
+After: =CodeTool.execute()= routes file-scoped commands to Emacs, codebase-scoped commands to NAPI graph bridge.
+
+** Key Design Decisions
+1. Add pi-code-graph as dependency of pi-natives (Rust side). NAPI functions exposed from =crates/pi-natives/src/code_graph.rs=.
+2. The =packages/natives= package re-exports graph functions alongside existing ast/grep functions.
+3. =CodeTool= gains a =GraphBackend= that holds the =GraphStore= (via NAPI). Initialized lazily on first graph command.
+4. File-scoped commands (read, outline, edit, navigate, etc.) → Emacs (unchanged).
+5. Graph commands (index, context, impact, deps, flow, dead_code, clusters, search, status) → NAPI.
+6. Graph results formatted as structured text for agent consumption. Agent-optimized: compact, depth-grouped, with "Next:" hints.
+7. TUI rendering: graph results use =renderCodeCell= with language "text" for now. Future: custom renderer.
+
+* TDD Sub-Outline
+
+** 1. NAPI function signatures (Rust side)
+File: =crates/pi-natives/src/code_graph.rs=
+
+Define NAPI-exported functions. Each takes JSON args, returns JSON result.
+#+begin_src rust
+use napi_derive::napi;
+
+#[napi]
+pub fn code_graph_index(project_root: String) -> napi::Result<String> {
+    // Calls pi_code_graph::pipeline::index + cache::save
+    // Returns JSON: { "files": N, "symbols": N, "edges": N, "duration_ms": N }
+}
+
+#[napi]
+pub fn code_graph_query(project_root: String, command: String, args_json: String) -> napi::Result<String> {
+    // Dispatches to query::context, query::impact, etc. based on command
+    // Returns JSON result
+}
+
+#[napi]
+pub fn code_graph_status(project_root: String) -> napi::Result<String> {
+    // Returns JSON: { "indexed": bool, "stale": bool, "files": N, "symbols": N, "last_indexed": timestamp }
+}
+#+end_src
+
+** 2. NAPI integration test
+#+begin_src typescript
+// In packages/natives or as a manual test
+import { codeGraphIndex, codeGraphQuery, codeGraphStatus } from "@oh-my-pi/pi-natives";
+
+// Test with a known fixture project
+const indexResult = codeGraphIndex("/path/to/fixtures/ts");
+const parsed = JSON.parse(indexResult);
+assert(parsed.files > 0);
+assert(parsed.symbols > 0);
+
+const contextResult = codeGraphQuery("/path/to/fixtures/ts", "context", '{"symbol":"AppController"}');
+const context = JSON.parse(contextResult);
+assert(context.symbol.name === "AppController");
+#+end_src
+
+** 3. Code tool schema extension
+File: =packages/coding-agent/src/tools/code.ts=
+
+Add to =codeSchema=:
+#+begin_src typescript
+// New optional params for graph commands
+symbol: Type.Optional(Type.String({ description: "Symbol name for context/impact/flow queries" })),
+query: Type.Optional(Type.String({ description: "Search query for graph search" })),
+depth: Type.Optional(Type.Integer({ description: "Max traversal depth for impact/flow (default 3)" })),
+// Note: "file" already exists in schema — reused for deps command
+#+end_src
+
+** 4. Command routing in CodeTool
+File: =packages/coding-agent/src/tools/code.ts=
+
+In =CodeTool.execute()=, add graph command routing BEFORE the Emacs delegation:
+#+begin_src typescript
+const GRAPH_COMMANDS = new Set(["index", "context", "impact", "deps", "flow", "dead_code", "clusters", "search", "status"]);
+
+if (GRAPH_COMMANDS.has(command)) {
+    return this.#executeGraphCommand(command, params);
+}
+// ... existing Emacs delegation
+#+end_src
+
+=executeGraphCommand= method:
+- Lazy-init graph backend on first call
+- Call appropriate NAPI function
+- Parse JSON result
+- Format as agent-readable text
+- Return AgentToolResult
+
+** 5. Result formatting for agent consumption
+Each query result formatted as compact, structured text. Examples:
+
+*Context output:*
+#+begin_example
+Symbol: UserService (Class)
+File: src/services/user.ts:5-25
+Signature: export class UserService
+
+Callers (3):
+  → handleRequest  src/controllers/app.ts:12
+  → createUser     src/routes/users.ts:8
+  → seedDatabase   test/seed.ts:15
+
+Callees (2):
+  → findUser       src/db/queries.ts:20
+  → validateEmail  src/utils/validate.ts:3
+
+Type References (1):
+  → User            src/models/user.ts:1
+
+Heritage:
+  extends BaseService  src/services/base.ts:1
+
+Imported by (2):
+  → src/controllers/app.ts
+  → src/routes/users.ts
+
+Next: Use impact("UserService") to see full blast radius.
+#+end_example
+
+*Impact output:*
+#+begin_example
+Impact: UserService (Class)
+File: src/services/user.ts:5-25
+
+Depth 1 — Direct callers (will break):
+  → handleRequest  src/controllers/app.ts:12
+  → createUser     src/routes/users.ts:8
+
+Depth 2 — Indirect (may break):
+  → routeHandler   src/routes/index.ts:5
+  → appInit        src/app.ts:20
+
+Depth 3 — Transitive (review):
+  → main           src/index.ts:1
+
+Total affected: 5 symbols across 4 files
+#+end_example
+
+** 6. Prompt doc update
+File: =packages/coding-agent/src/prompts/tools/code.md=
+
+Add to the =<operations>= section:
+#+begin_example
+- `context`: 360° view of a symbol — callers, callees, type refs, heritage, importing files
+  - `symbol` (required): Symbol name to inspect
+  - Use to understand how a symbol is connected before making changes
+- `impact`: Transitive blast radius of changing a symbol, grouped by depth
+  - `symbol` (required): Symbol to analyze
+  - `depth` (optional, default 3): Max traversal depth (1-10)
+  - Use before modifying any function, type, or class to understand what breaks
+- `deps`: Import dependency graph for a file
+  - `file` (required): File path to analyze
+  - Shows what the file imports and what imports it
+- `flow`: Execution flow trace from an entry point
+  - `symbol` (required): Entry point symbol name
+  - Traces downstream through call chain to leaf functions
+- `dead_code`: Find unreachable symbols across the codebase
+  - No arguments — scans entire indexed graph
+- `clusters`: Discover architectural communities in the codebase
+  - No arguments — analyzes file-level import graph
+- `search`: Search symbols by name across the codebase
+  - `query` (required): Search term (supports fuzzy matching)
+- `index`: Build or rebuild the code graph index
+  - Run explicitly when codebase has changed significantly
+  - Auto-runs on first graph query if stale
+- `status`: Check code graph index freshness and stats
+#+end_example
+
+Add to =<instruction>= section:
+#+begin_example
+- Before modifying a symbol → `code { command: "impact", symbol: "name" }` to see blast radius
+- Understanding connections → `code { command: "context", symbol: "name" }` for 360° view
+- Exploring architecture → `code { command: "clusters" }` then `code { command: "deps", file: "..." }`
+#+end_example
+
+** 7. TUI rendering
+In =CodeTool.renderResult()=, handle graph command results:
+- Use =renderCodeCell= with language ="text"= for now
+- Apply =replaceTabs()= and =toRender()= sanitization (existing pattern)
+- Future: custom renderer with collapsible depth groups
+
+** 8. Mode guard
+Graph commands are read-only (except =index= which writes to =.spell/graph/=). No mode guard needed for queries. =index= writes to =.spell/= which is outside project source — no mode guard needed either.
+
+* Files To Create/Modify
+| File | Action |
+|------+--------|
+| =crates/pi-natives/src/code_graph.rs= | Create: NAPI bridge functions |
+| =crates/pi-natives/src/lib.rs= | Modify: add =mod code_graph;= |
+| =crates/pi-natives/Cargo.toml= | Modify: add =pi-code-graph= dependency |
+| =packages/coding-agent/src/tools/code.ts= | Modify: add graph command routing, schema params |
+| =packages/coding-agent/src/prompts/tools/code.md= | Modify: add graph command docs |
+
+* Verification
+- =cargo check -p pi-natives= compiles with pi-code-graph linked
+- NAPI functions callable from TypeScript
+- =code { command: "status" }= returns valid JSON from agent context
+- =code { command: "index" }= indexes project and returns stats
+- =code { command: "context", symbol: "CodeTool" }= returns formatted context for a known symbol in the Spell codebase
+- Existing code tool commands (read, outline, edit, navigate) still work unchanged
+- Prompt doc accurately describes all new commands

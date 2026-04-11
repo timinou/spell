@@ -1,0 +1,37 @@
+Command: bun -e manual CodeTool smoke script
+
+Observed output excerpts:
+
+--- status ---
+Code graph cache: missing
+Root: /home/user/code/ora/spell
+No index present.
+
+--- index ---
+Code graph status
+Root: /home/user/code/ora/spell
+Cache: missing
+Rebuilt: yes
+Files: 2292
+Symbols: 17922
+Edges: 45618
+Git HEAD: 607a3c6098b85cbf1e6ba2bd82ec656a6320c58e
+Languages: typescript=2292
+
+--- search ---
+Search
+- 8.42 packages/coding-agent/src/tools/code.ts::CodeTool
+- 7.93 packages/coding-agent/src/tools/code.ts::CodeTool.#executeGraphCommand
+- 7.93 packages/coding-agent/src/tools/code.ts::CodeTool.constructor
+
+--- context ---
+Context target resolved for CodeTool with references/imports from packages/coding-agent/src/tools/index.ts.
+
+--- impact ---
+Impact target resolved for AgentTool with depth-grouped reverse dependencies.
+
+--- deps ---
+Dependencies target resolved for packages/coding-agent/src/tools/code.ts with incoming/outgoing imports.
+
+--- dead_code ---
+Dead code returned multiple unreferenced symbols.

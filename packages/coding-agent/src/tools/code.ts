@@ -1,15 +1,14 @@
 /**
- * Code intelligence tool — wraps @oh-my-pi/pi-emacs for use in coding-agent.
+ * Code intelligence tool — wraps @oh-my-pi/pi-emacs and native graph queries for use in coding-agent.
  *
- * AST-aware code intelligence using Emacs 29+ treesit + combobulate as a persistent backend.
- * Operates directly on tree-sitter parse trees for 50+ languages without requiring a language server.
- * Provides resolution-aware reading (zoom from names-only to full source), structural outline extraction,
- * AST-aware editing (splice, drag, envelope), in-file navigation, and runtime grammar management.
+ * File-scoped structural operations stay on Emacs 29+ treesit + combobulate.
+ * Cross-file graph operations route to the native code graph engine.
  */
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { CodeToolDefinition } from "@oh-my-pi/pi-emacs";
 import { createCodeTool } from "@oh-my-pi/pi-emacs";
+import { executeCodeGraph } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
@@ -22,19 +21,34 @@ import type { ToolSession } from ".";
 import { enforceModeWrite } from "./mode-guard";
 import { replaceTabs } from "./render-utils";
 
+const GRAPH_COMMANDS = new Set([
+	"index",
+	"status",
+	"context",
+	"impact",
+	"deps",
+	"flow",
+	"dead_code",
+	"clusters",
+	"search",
+]);
+
 // =============================================================================
 // Schema
 // =============================================================================
 
 const codeSchema = Type.Object({
 	command: Type.String({
-		description: "Subcommand: read | outline | edit | buffers | diff | navigate | languages | install_grammar",
+		description:
+			"Subcommand: read | outline | edit | buffers | diff | navigate | languages | install_grammar | index | status | context | impact | deps | flow | dead_code | clusters | search",
 	}),
 	file: Type.Optional(Type.String({ description: "Absolute or project-relative file path" })),
+	symbol: Type.Optional(Type.String({ description: "Symbol name for graph commands like context | impact | flow" })),
+	query: Type.Optional(Type.String({ description: "Search query for graph search" })),
 	resolution: Type.Optional(Type.Integer({ description: "Zoom level 0-3 (default 2)" })),
 	offset: Type.Optional(Type.Integer({ description: "Start line 1-indexed (resolution 3 only)" })),
-	limit: Type.Optional(Type.Integer({ description: "Max lines (resolution 3 only)" })),
-	depth: Type.Optional(Type.Integer({ description: "Max nesting depth for outline" })),
+	limit: Type.Optional(Type.Integer({ description: "Max results or lines" })),
+	depth: Type.Optional(Type.Integer({ description: "Max nesting or traversal depth" })),
 	operation: Type.Optional(
 		Type.String({
 			description:
@@ -85,7 +99,6 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 	constructor(session: ToolSession) {
 		this.#session = session;
 		const projectRoot = session.cwd ?? getProjectDir();
-		// Use Pi's session manager so dead daemons can be restarted lazily after init.
 		this.#inner = createCodeTool(projectRoot, {
 			getSession: () => session.emacsSessionManager?.getSession() ?? Promise.resolve(null),
 		});
@@ -100,9 +113,9 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult> {
 		const args = params as Record<string, unknown>;
+		const command = String(args.command ?? "");
 
-		// Enforce mode guard for write operations (before try/catch so ToolError propagates)
-		if ((args.command as string) === "edit") {
+		if (command === "edit") {
 			const file = args.file as string | undefined;
 			if (file) {
 				enforceModeWrite(this.#session, file);
@@ -110,6 +123,9 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 		}
 
 		try {
+			if (GRAPH_COMMANDS.has(command)) {
+				return await this.#executeGraphCommand(params, _signal);
+			}
 			const result = await this.#inner.execute(args);
 			const text = JSON.stringify(result, null, 2);
 			const isError =
@@ -119,16 +135,38 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				(result as Record<string, unknown>).error === true;
 			return {
 				content: [{ type: "text", text }],
-				details: isError ? { error: true, command: args.command } : { command: args.command },
+				details: isError ? { error: true, command } : { command },
 			};
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			logger.error("code tool error", { error: msg });
+			logger.error("code tool error", { error: msg, command });
 			return {
 				content: [{ type: "text", text: JSON.stringify({ error: true, message: msg }) }],
-				details: { error: true, command: args.command },
+				details: { error: true, command },
 			};
 		}
+	}
+
+	async #executeGraphCommand(params: CodeParams, signal?: AbortSignal): Promise<AgentToolResult> {
+		const result = await executeCodeGraph({
+			command: params.command,
+			root: this.#session.cwd ?? getProjectDir(),
+			file: params.file,
+			symbol: params.symbol,
+			query: params.query,
+			depth: params.depth,
+			limit: params.limit,
+			signal,
+		});
+		return {
+			content: [{ type: "text", text: result.output }],
+			details: {
+				command: params.command,
+				cacheStatus: result.cacheStatus,
+				rebuilt: result.rebuilt,
+				graph: true,
+			},
+		};
 	}
 
 	renderResult(result: AgentToolResult, _options: RenderResultOptions, theme: unknown): Component {

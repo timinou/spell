@@ -1,0 +1,245 @@
+#+TITLE: Core Graph Engine and Trait Interfaces
+#+STATE: DONE
+#+SESSION_ID: 14b666b62d9d5979
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T11-55-22-166Z_14b666b62d9d5979.jsonl]]
+#+CUSTOM_ID: FEAT-397-core-graph-engine-and-trait-interfaces
+#+EFFORT: 3d
+#+PRIORITY: A
+#+LAYER: rust
+
+NOTE [2026-04-11]: Completed in PLAN-174 with new pi-code-graph crate foundation, cache/store pipeline, and tests.
+
+* Context — Why This Exists
+We are adding cross-file code intelligence to the Spell coding agent. Today the agent has:
+- =code= tool (Emacs treesit): single-file AST operations (read, outline, navigate, edit)
+- =lsp= tool: 1-hop cross-file semantics (references, definitions)
+- =ast_grep=: pattern-based structural search
+
+What's missing: transitive call graphs, impact analysis ("change X → what breaks?"), cross-file dependency maps, dead code detection, execution flow tracing, architectural clustering. These require a *code graph* — a persistent, queryable representation of how symbols and files relate across the entire codebase.
+
+This item builds the Rust foundation crate that everything else depends on.
+
+** Prior Art Studied
+- *GitNexus* (26k★): PolyForm Noncommercial license, can't use. Architecture: tree-sitter → LadybugDB graph → MCP tools.
+- *Axon* (653★): Python, KuzuDB. No license. Architecture: tree-sitter → graph DB → MCP.
+- *code-graph-cli* (5★, MIT): Rust, petgraph + tree-sitter + oxc_resolver. Good reference architecture. https://github.com/MonsieurBarti/code-graph-ai
+- *tree-sitter-stack-graphs*: Abandoned by GitHub. Overkill for our needs.
+- All converge on: tree-sitter parsing → petgraph/graph-DB → typed edges → BFS traversal queries.
+
+** Key Design Decisions
+1. New workspace crate =crates/pi-code-graph= (lib, not cdylib). pi-natives depends on it for NAPI exposure.
+2. =petgraph::stable_graph::StableGraph<GraphNode, EdgeKind, Directed>= — StableGraph keeps NodeIndex stable across removals (needed for incremental updates).
+3. O(1) lookup indexes: =HashMap<PathBuf, NodeIndex>= (files), =HashMap<String, Vec<NodeIndex>>= (symbols by name).
+4. Bincode serialization to =.spell/graph/= for persistence. BM25 search index is transient (rebuilt after deserialization).
+5. Concurrency: =Arc<CodeGraph>= snapshot via =arc-swap= crate. Readers get immutable snapshot, writer builds new graph and atomically swaps.
+6. Two-trait language interface: =LanguageExtractor= (per-file, stateless AST extraction) + =ImportResolver= (project-level, holds config state). Adding a language = implement both traits + register.
+7. Indexing pipeline: Walk (=ignore= crate, respects .gitignore) → Parse (rayon parallel) → Resolve (per-language resolvers) → Build graph → Cache.
+
+** Existing Codebase Patterns To Follow
+- Workspace root: =Cargo.toml= at repo root lists =members=. Add =crates/pi-code-graph= to members.
+- pi-natives =Cargo.toml= already depends on =tree-sitter = "0.25"=, =rayon = "1"=, =ignore = "0.4"=. Match versions.
+- pi-natives uses =napi= / =napi-derive= for NAPI bindings. pi-code-graph does NOT have NAPI — it's a pure Rust lib.
+- Rust style: no =pub(crate)= unless necessary, use =pub= for crate API, private for internals.
+
+* TDD Sub-Outline
+
+Items ordered for test-first development. Types come first (compile-time contracts), then tests, then implementation.
+
+** 1. Crate scaffold + types
+Create the crate, define all types. No logic yet — just data structures and trait signatures.
+
+Files to create:
+- =crates/pi-code-graph/Cargo.toml=
+- =crates/pi-code-graph/src/lib.rs=
+- =crates/pi-code-graph/src/graph/mod.rs= — =CodeGraph= struct
+- =crates/pi-code-graph/src/graph/node.rs= — =GraphNode=, =SymbolDef=, =SymbolKind=, =FileInfo=, =Span=, =Visibility=
+- =crates/pi-code-graph/src/graph/edge.rs= — =EdgeKind= enum
+- =crates/pi-code-graph/src/lang/mod.rs= — re-exports
+- =crates/pi-code-graph/src/lang/traits.rs= — =LanguageExtractor=, =ImportResolver=, =FileExtraction=, =ImportRef=, =ImportKind=, =ExportDef=, =Relationship=, =RelKind=, =Resolution=, =ImportedName=
+- =crates/pi-code-graph/src/lang/registry.rs= — =LanguageRegistry= struct (empty impl stubs)
+- =crates/pi-code-graph/src/pipeline.rs= — function signatures only
+- =crates/pi-code-graph/src/cache.rs= — function signatures only
+- =crates/pi-code-graph/src/store.rs= — =GraphStore= struct signature
+
+Gate: =cargo check -p pi-code-graph= compiles with no errors.
+
+** 2. Graph construction tests
+Write tests BEFORE implementing graph methods. Tests define the contract.
+
+File: =crates/pi-code-graph/src/graph/mod.rs= (inline tests) or =tests/graph_tests.rs=
+
+Test scenarios:
+#+begin_src rust
+#[test]
+fn add_file_returns_node_index_and_is_idempotent() {
+    let mut g = CodeGraph::new();
+    let idx1 = g.add_file(PathBuf::from("src/main.ts"), "typescript");
+    let idx2 = g.add_file(PathBuf::from("src/main.ts"), "typescript");
+    assert_eq!(idx1, idx2); // same file = same index
+    assert_eq!(g.file_count(), 1);
+}
+
+#[test]
+fn add_symbol_creates_contains_edge_from_file() {
+    let mut g = CodeGraph::new();
+    let file_idx = g.add_file(PathBuf::from("src/main.ts"), "typescript");
+    let sym = SymbolDef { name: "greet".into(), kind: SymbolKind::Function, ..Default::default() };
+    let sym_idx = g.add_symbol(file_idx, sym);
+    // Verify Contains edge exists from file to symbol
+    assert!(g.graph.edges(file_idx).any(|e| e.target() == sym_idx && matches!(e.weight(), EdgeKind::Contains)));
+}
+
+#[test]
+fn add_child_symbol_creates_child_of_edge() {
+    let mut g = CodeGraph::new();
+    let file_idx = g.add_file(PathBuf::from("src/main.ts"), "typescript");
+    let class_sym = SymbolDef { name: "User".into(), kind: SymbolKind::Class, ..Default::default() };
+    let class_idx = g.add_symbol(file_idx, class_sym);
+    let method_sym = SymbolDef { name: "validate".into(), kind: SymbolKind::Method, parent: Some("User".into()), ..Default::default() };
+    let method_idx = g.add_child_symbol(class_idx, method_sym);
+    // ChildOf edge goes from child → parent
+    assert!(g.graph.edges(method_idx).any(|e| e.target() == class_idx && matches!(e.weight(), EdgeKind::ChildOf)));
+}
+
+#[test]
+fn symbol_index_allows_multiple_symbols_with_same_name() {
+    let mut g = CodeGraph::new();
+    let f1 = g.add_file(PathBuf::from("a.ts"), "typescript");
+    let f2 = g.add_file(PathBuf::from("b.ts"), "typescript");
+    g.add_symbol(f1, SymbolDef { name: "Config".into(), kind: SymbolKind::Interface, ..Default::default() });
+    g.add_symbol(f2, SymbolDef { name: "Config".into(), kind: SymbolKind::Class, ..Default::default() });
+    assert_eq!(g.symbol_index.get("Config").unwrap().len(), 2);
+}
+
+#[test]
+fn remove_file_cleans_up_symbols_and_edges() {
+    let mut g = CodeGraph::new();
+    let file_idx = g.add_file(PathBuf::from("src/main.ts"), "typescript");
+    let sym = SymbolDef { name: "foo".into(), kind: SymbolKind::Function, ..Default::default() };
+    g.add_symbol(file_idx, sym);
+    assert_eq!(g.file_count(), 1);
+    assert_eq!(g.symbol_index.get("foo").unwrap().len(), 1);
+    g.remove_file(Path::new("src/main.ts"));
+    assert_eq!(g.file_count(), 0);
+    assert!(g.symbol_index.get("foo").map_or(true, |v| v.is_empty()));
+}
+
+#[test]
+fn resolved_import_edge_connects_files() {
+    let mut g = CodeGraph::new();
+    let f1 = g.add_file(PathBuf::from("a.ts"), "typescript");
+    let f2 = g.add_file(PathBuf::from("b.ts"), "typescript");
+    g.add_resolved_import(f1, f2, "./b");
+    assert!(g.graph.edges(f1).any(|e| e.target() == f2));
+}
+
+#[test]
+fn external_package_nodes_are_deduplicated() {
+    let mut g = CodeGraph::new();
+    let f1 = g.add_file(PathBuf::from("a.ts"), "typescript");
+    let f2 = g.add_file(PathBuf::from("b.ts"), "typescript");
+    let pkg1 = g.add_external_package(f1, "react", "react");
+    let pkg2 = g.add_external_package(f2, "react", "react");
+    assert_eq!(pkg1, pkg2); // same package name = same node
+}
+#+end_src
+
+** 3. Graph construction implementation
+Implement =CodeGraph= methods to make tests from step 2 pass.
+
+** 4. Serialization tests
+#+begin_src rust
+#[test]
+fn roundtrip_serialization_preserves_graph() {
+    let mut g = CodeGraph::new();
+    let f = g.add_file(PathBuf::from("main.ts"), "typescript");
+    let s = g.add_symbol(f, SymbolDef { name: "main".into(), kind: SymbolKind::Function, ..Default::default() });
+    g.add_resolved_import(f, f, "./self"); // self-import edge
+    let dir = tempfile::tempdir().unwrap();
+    cache::save(&g, dir.path()).unwrap();
+    let loaded = cache::load(dir.path()).unwrap();
+    assert_eq!(loaded.file_count(), 1);
+    assert_eq!(loaded.symbol_index.get("main").unwrap().len(), 1);
+}
+#+end_src
+
+** 5. Serialization implementation
+Implement =cache::save= and =cache::load= using bincode.
+
+** 6. Registry tests
+#+begin_src rust
+#[test]
+fn registry_routes_by_extension() {
+    let mut reg = LanguageRegistry::new();
+    // Use a DummyExtractor that handles ["test"]
+    reg.register_extractor(Arc::new(DummyExtractor));
+    reg.register_resolver(Arc::new(DummyResolver));
+    assert!(reg.extractor_for(Path::new("foo.test")).is_some());
+    assert!(reg.extractor_for(Path::new("foo.unknown")).is_none());
+}
+#+end_src
+
+** 7. Registry implementation
+
+** 8. Pipeline tests (using mock language)
+Create a =DummyExtractor= and =DummyResolver= that return hardcoded results. Index a temp directory with two files. Verify the resulting graph has correct structure.
+
+#+begin_src rust
+#[test]
+fn pipeline_indexes_directory_with_mock_language() {
+    // Create temp dir with two files: a.test, b.test
+    // DummyExtractor returns: one symbol "foo" in a.test, one import "./b" from a.test
+    // DummyResolver resolves "./b" → b.test
+    // Verify: graph has 2 file nodes, 1+ symbol nodes, 1 ResolvedImport edge from a → b
+}
+#+end_src
+
+** 9. Pipeline implementation
+
+** 10. Store / concurrency tests
+#+begin_src rust
+#[test]
+fn store_ensure_fresh_triggers_rebuild_when_stale() { ... }
+
+#[test]
+fn store_get_returns_snapshot_unaffected_by_rebuild() {
+    // Get snapshot, then rebuild, verify snapshot still has old data
+}
+#+end_src
+
+** 11. Store implementation
+
+* Error Handling
+- Tree-sitter parse returns =None= for malformed files → skip file, log warning, continue
+- File read errors → skip file, log warning
+- Resolver init fails (e.g., invalid tsconfig) → log error, resolver returns =Unresolved= for all specifiers
+- Bincode deserialization fails (corrupt cache) → rebuild from scratch
+- Empty project (no supported files) → return empty graph, not error
+
+* Cargo.toml
+#+begin_src toml
+[package]
+name = "pi-code-graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+petgraph = { version = "0.6", features = ["stable_graph", "serde-1"] }
+bincode = { version = "2", features = ["serde"] }
+tree-sitter = "0.25"
+serde = { version = "1", features = ["derive"] }
+rayon = "1"
+ignore = "0.4"
+anyhow = "1"
+arc-swap = "1"
+
+[dev-dependencies]
+tempfile = "3"
+#+end_src
+
+* Verification
+- =cargo check -p pi-code-graph= passes
+- =cargo test -p pi-code-graph= passes — all tests from steps 2, 4, 6, 8, 10
+- A =DummyExtractor= + =DummyResolver= can be registered and used to index a temp directory
+- Graph persists to disk and loads back identically (minus transient BM25 index)

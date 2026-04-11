@@ -1,0 +1,197 @@
+#+TITLE: Auto-indexing and Persistence
+#+STATE: DONE
+#+SESSION_ID: 14b666b62d9d5979
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T11-55-22-166Z_14b666b62d9d5979.jsonl]]
+#+CUSTOM_ID: FEAT-402-auto-indexing-and-persistence
+#+EFFORT: 1d
+#+PRIORITY: B
+#+LAYER: rust
+#+DEPENDS: FEAT-397-core-graph-engine-and-trait-interfaces FEAT-401-napi-bridge-and-code-tool-integration
+
+NOTE [2026-04-11]: Completed in PLAN-174 with cache status detection, lazy rebuilds, persistence under .spell/graph, manual smoke verification, and artifact capture.
+
+* Initial Message
+
+Look up GitNexus and other code graph tools, and tell me how you'd integrate that to the code tool. Emacs optional, I just want the cleanest implementation. Needs to be as ergonomic as possible for your usage. Think deeply. Ask me questions, let's challenge each other. Only settle decisions after my validation
+
+* Context — Why This Exists
+The graph engine can build and query graphs. This item makes it *automatic* — the agent never needs to think about whether the graph is fresh. On first graph query, the system checks staleness and rebuilds if needed. The graph persists to disk for instant reload across sessions.
+
+This is the "last mile" that makes the experience seamless. Without it, the agent would need to remember to run =code index= before every graph query, defeating the purpose.
+
+Depends on [[id:FEAT-397-core-graph-engine-and-trait-interfaces]] for graph/cache types and [[id:FEAT-401-napi-bridge-and-code-tool-integration]] for the NAPI entry point that triggers ensure_fresh.
+
+** Key Design Decisions
+1. Staleness detection: compare stored git HEAD hash + file count against current state. If either differs, graph is stale.
+2. Lazy rebuild: first graph query calls =GraphStore::ensure_fresh()=. If stale, rebuilds synchronously (user waits). Future: background rebuild with progress.
+3. Cache location: =.spell/graph/graph.bin= (bincode) + =.spell/graph/meta.json= (IndexMeta).
+4. =.spell/graph/= added to =.gitignore= template.
+5. No file watcher in Phase 1. Explicit =code index= for manual refresh. Staleness check is cheap (one git command + stat).
+
+* TDD Sub-Outline
+
+** 1. IndexMeta type
+#+begin_src rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexMeta {
+    pub git_head: String,           // SHA of HEAD when indexed
+    pub file_count: usize,          // number of files in graph
+    pub symbol_count: usize,        // number of symbols
+    pub edge_count: usize,          // number of edges
+    pub timestamp: u64,             // Unix timestamp of indexing
+    pub duration_ms: u64,           // how long indexing took
+    pub languages: Vec<String>,     // languages found
+}
+#+end_src
+
+** 2. Staleness detection tests
+#+begin_src rust
+#[test]
+fn detects_stale_when_git_head_differs() {
+    // Save meta with git_head = "abc123"
+    // Mock current git HEAD = "def456"
+    // → is_stale returns true
+}
+
+#[test]
+fn detects_fresh_when_git_head_matches() {
+    // Save meta matching current state
+    // → is_stale returns false
+}
+
+#[test]
+fn detects_stale_when_no_cache_exists() {
+    // Empty .spell/graph/ directory
+    // → is_stale returns true (triggers initial index)
+}
+
+#[test]
+fn detects_stale_when_meta_corrupt() {
+    // Write garbage to meta.json
+    // → is_stale returns true (safe fallback: rebuild)
+}
+#+end_src
+
+** 3. Staleness implementation
+#+begin_src rust
+pub fn is_stale(project_root: &Path) -> Result<bool> {
+    let meta_path = project_root.join(".spell/graph/meta.json");
+    let meta: IndexMeta = match std::fs::read_to_string(&meta_path) {
+        Ok(json) => serde_json::from_str(&json)?,
+        Err(_) => return Ok(true), // no cache = stale
+    };
+    let current_head = git_head(project_root)?;
+    Ok(meta.git_head != current_head)
+}
+
+fn git_head(project_root: &Path) -> Result<String> {
+    // Read .git/HEAD, resolve ref to SHA
+    // Or run: git -C project_root rev-parse HEAD
+}
+#+end_src
+
+** 4. Cache save/load tests
+#+begin_src rust
+#[test]
+fn save_creates_graph_bin_and_meta_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let g = build_test_graph();
+    let meta = IndexMeta { git_head: "abc".into(), file_count: 3, ..Default::default() };
+    cache::save(&g, &meta, dir.path()).unwrap();
+    assert!(dir.path().join(".spell/graph/graph.bin").exists());
+    assert!(dir.path().join(".spell/graph/meta.json").exists());
+}
+
+#[test]
+fn load_restores_graph_and_rebuilds_bm25() {
+    let dir = tempfile::tempdir().unwrap();
+    let g = build_test_graph();
+    cache::save(&g, &default_meta(), dir.path()).unwrap();
+    let loaded = cache::load(dir.path()).unwrap();
+    assert_eq!(loaded.file_count(), g.file_count());
+    assert!(loaded.bm25_index.is_some()); // rebuilt after load
+}
+
+#[test]
+fn load_returns_none_when_no_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(cache::load(dir.path()).is_none());
+}
+
+#[test]
+fn load_returns_none_when_cache_corrupt() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = dir.path().join(".spell/graph");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::write(cache_dir.join("graph.bin"), b"not valid bincode").unwrap();
+    assert!(cache::load(dir.path()).is_none()); // corrupt = treat as missing
+}
+#+end_src
+
+** 5. Cache implementation
+
+** 6. GraphStore ensure_fresh tests
+#+begin_src rust
+#[test]
+fn ensure_fresh_loads_cached_graph_when_fresh() {
+    // Pre-populate cache with matching git HEAD
+    // ensure_fresh should load from cache, not rebuild
+    // Verify: no re-indexing occurred (check timing or mock)
+}
+
+#[test]
+fn ensure_fresh_rebuilds_when_stale() {
+    // Pre-populate cache with old git HEAD
+    // ensure_fresh should rebuild
+    // Verify: new graph has current state
+}
+
+#[test]
+fn ensure_fresh_builds_from_scratch_when_no_cache() {
+    // No .spell/graph/ directory
+    // ensure_fresh should index from scratch
+}
+
+#[test]
+fn concurrent_reads_during_rebuild_see_old_snapshot() {
+    // Get snapshot Arc
+    // Start rebuild (which swaps the Arc)
+    // Old snapshot still valid, has old data
+}
+#+end_src
+
+** 7. GraphStore implementation
+Wire =ensure_fresh()= into the NAPI bridge. When =code_graph_query= is called:
+1. =GraphStore::ensure_fresh()= — checks staleness, rebuilds if needed, returns Arc<CodeGraph>
+2. Dispatch to query function
+3. Return result
+
+** 8. Git HEAD reading
+Prefer reading =.git/HEAD= directly (no subprocess):
+#+begin_src rust
+fn git_head(project_root: &Path) -> Result<String> {
+    let head_path = project_root.join(".git/HEAD");
+    let content = std::fs::read_to_string(&head_path)?;
+    if let Some(ref_path) = content.strip_prefix("ref: ") {
+        let ref_path = ref_path.trim();
+        let sha_path = project_root.join(".git").join(ref_path);
+        Ok(std::fs::read_to_string(sha_path)?.trim().to_owned())
+    } else {
+        Ok(content.trim().to_owned()) // detached HEAD = direct SHA
+    }
+}
+#+end_src
+
+* Error Handling
+- =.git/= not found → always stale (can't detect changes, rebuild every time)
+- Bincode version mismatch after upgrade → =load= returns None, rebuild from scratch
+- Disk full on save → log error, graph works in-memory only for this session
+- Concurrent rebuilds → =arc-swap= handles this safely; last writer wins
+
+* Verification
+- All tests from steps 2, 4, 6 pass
+- =cargo test -p pi-code-graph -- cache= and =-- store= pass
+- Agent can call =code status= and see fresh/stale status
+- Agent calls =code context= on unindexed project → auto-indexes, then returns context
+- Subsequent =code context= on same project → loads from cache (fast, no rebuild)
+- After git commit, =code context= → detects staleness, rebuilds, returns fresh data

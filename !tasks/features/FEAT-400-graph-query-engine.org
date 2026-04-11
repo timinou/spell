@@ -1,0 +1,317 @@
+#+TITLE: Graph Query Engine
+#+STATE: DONE
+#+SESSION_ID: 14b666b62d9d5979
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T11-55-22-166Z_14b666b62d9d5979.jsonl]]
+#+CUSTOM_ID: FEAT-400-graph-query-engine
+#+EFFORT: 2d
+#+PRIORITY: A
+#+LAYER: rust
+#+DEPENDS: FEAT-397-core-graph-engine-and-trait-interfaces
+
+NOTE [2026-04-11]: Completed in PLAN-174 with status/context/impact/deps/flow/dead-code/cluster/search query APIs and tests.
+
+* Initial Message
+
+Look up GitNexus and other code graph tools, and tell me how you'd integrate that to the code tool. Emacs optional, I just want the cleanest implementation. Needs to be as ergonomic as possible for your usage. Think deeply. Ask me questions, let's challenge each other. Only settle decisions after my validation
+
+* Context — Why This Exists
+The graph engine ([[id:FEAT-397-core-graph-engine-and-trait-interfaces]]) builds and stores the code graph. This item provides the *query layer* — the algorithms that traverse the graph to answer questions the agent asks.
+
+These queries are what the agent actually calls. When the agent runs =code impact { symbol: "UserService" }=, the code tool delegates to the NAPI bridge, which calls the Rust query engine, which runs a BFS traversal on the petgraph and returns depth-grouped results.
+
+This item is *language-agnostic* — it operates purely on the =CodeGraph= data structure. It can be developed in parallel with [[id:FEAT-398-typescript-javascript-language-support]] and [[id:FEAT-399-elixir-and-heex-language-support]] since it only needs a populated graph (and we test with manually-constructed graphs).
+
+** Queries To Implement
+| Command | What It Does | Algorithm |
+|---------+--------------+-----------|
+| =context= | 360° view of a symbol: callers, callees, type refs, heritage, file | Incoming/outgoing edge traversal, 1-hop |
+| =impact= | Blast radius if symbol changes, grouped by depth | BFS upstream through Calls/TypeRef edges, depth-limited |
+| =deps= | Import graph for a file or module | Outgoing ResolvedImport + incoming ResolvedImport edges |
+| =flow= | Execution flow from entry point to leaf | BFS downstream through Calls edges |
+| =dead_code= | Unreachable symbols (no incoming Calls edges) | Filter symbols with zero incoming Calls, exclude entry points |
+| =clusters= | Architectural community detection | Connected components on file-level import subgraph |
+| =search= | Keyword/fuzzy search over symbol names | BM25 index lookup + trigram fuzzy fallback |
+
+** Key Design Decision: Output Format
+Query functions return structured Rust types, not formatted strings. The NAPI bridge serializes to JSON, and the TypeScript code tool formats for the TUI. This keeps the query engine pure — no presentation logic in Rust.
+
+* TDD Sub-Outline
+
+** 1. Query result types (=src/query/types.rs=)
+Define return types for each query. These are the contracts.
+#+begin_src rust
+/// 360° symbol context
+pub struct ContextResult {
+    pub symbol: SymbolSummary,      // name, kind, file, span, signature
+    pub callers: Vec<SymbolRef>,    // who calls this symbol
+    pub callees: Vec<SymbolRef>,    // what this symbol calls
+    pub type_refs: Vec<SymbolRef>,  // type references from this symbol
+    pub heritage: Vec<HeritageRef>, // extends/implements relationships
+    pub importers: Vec<PathBuf>,    // files that import this symbol's file
+}
+
+pub struct SymbolSummary {
+    pub name: String,
+    pub kind: SymbolKind,
+    pub file: PathBuf,
+    pub span: Span,
+    pub signature: Option<String>,
+    pub is_exported: bool,
+}
+
+pub struct SymbolRef {
+    pub name: String,
+    pub kind: SymbolKind,
+    pub file: PathBuf,
+    pub line: u32,
+}
+
+/// Blast radius grouped by depth
+pub struct ImpactResult {
+    pub target: SymbolSummary,
+    pub layers: Vec<ImpactLayer>,
+    pub total_affected: usize,
+}
+
+pub struct ImpactLayer {
+    pub depth: u32,
+    pub label: String,          // "Direct callers (will break)", "Indirect (may break)", "Transitive (review)"
+    pub symbols: Vec<SymbolRef>,
+}
+
+/// File dependency view
+pub struct DepsResult {
+    pub file: PathBuf,
+    pub imports: Vec<DepRef>,     // files this file imports
+    pub importers: Vec<DepRef>,   // files that import this file
+    pub external: Vec<String>,    // external packages imported
+}
+
+pub struct DepRef {
+    pub file: PathBuf,
+    pub specifiers: Vec<String>,  // import specifiers used
+}
+
+/// Execution flow trace
+pub struct FlowResult {
+    pub entry: SymbolSummary,
+    pub steps: Vec<FlowStep>,
+}
+
+pub struct FlowStep {
+    pub depth: u32,
+    pub symbol: SymbolRef,
+}
+
+/// Dead code report
+pub struct DeadCodeResult {
+    pub unreachable_symbols: Vec<SymbolRef>,
+    pub unreachable_files: Vec<PathBuf>,
+    pub total_symbols: usize,
+    pub dead_count: usize,
+}
+
+/// Architectural clusters
+pub struct ClustersResult {
+    pub clusters: Vec<Cluster>,
+}
+
+pub struct Cluster {
+    pub id: usize,
+    pub files: Vec<PathBuf>,
+    pub key_symbols: Vec<String>,   // most-connected symbols in cluster
+}
+
+/// Search results
+pub struct SearchResult {
+    pub matches: Vec<SearchMatch>,
+}
+
+pub struct SearchMatch {
+    pub symbol: SymbolRef,
+    pub score: f32,
+}
+#+end_src
+
+** 2. Build test graph helper
+Create a helper function that builds a known graph for testing. This graph represents a small project with clear relationships.
+#+begin_src rust
+/// Build a test graph:
+///   files: a.ts, b.ts, c.ts
+///   symbols: A::foo (calls B::bar), B::bar (calls C::baz), C::baz (leaf)
+///   A::Config (interface), B::Service extends A::Config (type ref)
+///   imports: a.ts → b.ts, b.ts → c.ts
+///   c.ts has no callers to make dead_code detectable (except baz is called by bar)
+///   d.ts has function "orphan" with zero callers → dead code
+fn build_test_graph() -> CodeGraph { ... }
+#+end_src
+
+** 3. Context query tests
+#+begin_src rust
+#[test]
+fn context_returns_callers_and_callees() {
+    let g = build_test_graph();
+    let result = query::context(&g, "bar").unwrap();
+    assert_eq!(result.symbol.name, "bar");
+    assert!(result.callers.iter().any(|c| c.name == "foo")); // foo calls bar
+    assert!(result.callees.iter().any(|c| c.name == "baz")); // bar calls baz
+}
+
+#[test]
+fn context_returns_heritage() {
+    let g = build_test_graph();
+    let result = query::context(&g, "Service").unwrap();
+    assert!(result.heritage.iter().any(|h| h.name == "Config"));
+}
+
+#[test]
+fn context_symbol_not_found_returns_error() {
+    let g = build_test_graph();
+    assert!(query::context(&g, "nonexistent").is_err());
+}
+
+#[test]
+fn context_ambiguous_symbol_returns_all_candidates() {
+    // If multiple symbols named "Config" exist, context should disambiguate or return candidates
+}
+#+end_src
+
+** 4. Context query implementation
+- Resolve symbol name to NodeIndex via =symbol_index=
+- If ambiguous (multiple indices), prefer exported, then most-connected
+- Incoming Calls edges → callers
+- Outgoing Calls edges → callees
+- Outgoing TypeRef edges → type references
+- Outgoing Extends/Implements edges → heritage
+- File node → incoming ResolvedImport edges → importers
+
+** 5. Impact query tests
+#+begin_src rust
+#[test]
+fn impact_shows_direct_callers_at_depth_1() {
+    let g = build_test_graph();
+    let result = query::impact(&g, "baz", 3).unwrap();
+    assert_eq!(result.layers[0].depth, 1);
+    assert!(result.layers[0].symbols.iter().any(|s| s.name == "bar")); // bar calls baz
+}
+
+#[test]
+fn impact_shows_transitive_callers_at_depth_2() {
+    let g = build_test_graph();
+    let result = query::impact(&g, "baz", 3).unwrap();
+    assert_eq!(result.layers[1].depth, 2);
+    assert!(result.layers[1].symbols.iter().any(|s| s.name == "foo")); // foo → bar → baz
+}
+
+#[test]
+fn impact_respects_depth_limit() {
+    let g = build_test_graph();
+    let result = query::impact(&g, "baz", 1).unwrap();
+    assert_eq!(result.layers.len(), 1); // only depth 1
+}
+
+#[test]
+fn impact_handles_cycles_without_infinite_loop() {
+    // Build a graph with cycle: a calls b, b calls a
+    // Impact on a should include b at depth 1, and NOT loop forever
+}
+#+end_src
+
+** 6. Impact query implementation
+BFS upstream through reverse Calls edges, tracking visited set and depth. Group by depth. Cap at max_depth (default 3, max 10).
+
+** 7. Deps query tests
+#+begin_src rust
+#[test]
+fn deps_shows_imports_and_importers() {
+    let g = build_test_graph();
+    let result = query::deps(&g, Path::new("b.ts")).unwrap();
+    assert!(result.imports.iter().any(|d| d.file == PathBuf::from("c.ts")));
+    assert!(result.importers.iter().any(|d| d.file == PathBuf::from("a.ts")));
+}
+#+end_src
+
+** 8. Deps implementation
+
+** 9. Flow query tests
+#+begin_src rust
+#[test]
+fn flow_traces_call_chain_from_entry() {
+    let g = build_test_graph();
+    let result = query::flow(&g, "foo").unwrap();
+    // foo → bar → baz
+    assert_eq!(result.steps.len(), 2);
+    assert_eq!(result.steps[0].symbol.name, "bar");
+    assert_eq!(result.steps[1].symbol.name, "baz");
+}
+#+end_src
+
+** 10. Flow implementation
+BFS downstream through Calls edges from entry point. Track visited set.
+
+** 11. Dead code tests
+#+begin_src rust
+#[test]
+fn dead_code_finds_unreferenced_symbols() {
+    let g = build_test_graph(); // has "orphan" with zero callers
+    let result = query::dead_code(&g);
+    assert!(result.unreachable_symbols.iter().any(|s| s.name == "orphan"));
+    // "foo" should NOT be dead (it's an entry point or has callers)
+}
+
+#[test]
+fn dead_code_excludes_entry_points() {
+    // Functions named "main", "mount", "handle_event", exported functions → not dead
+}
+#+end_src
+
+** 12. Dead code implementation
+For each symbol node: check if any incoming Calls edges exist. If none AND the symbol is not in the entry-point exclusion list (exported, named "main"/"mount"/"handler*", has decorator marking it as entry point), flag as dead.
+
+** 13. Clusters tests
+#+begin_src rust
+#[test]
+fn clusters_groups_connected_files() {
+    // Build graph with two disconnected file groups:
+    // Group 1: a.ts → b.ts, b.ts → c.ts
+    // Group 2: x.ts → y.ts
+    // Clusters should return 2 clusters
+    let result = query::clusters(&g);
+    assert_eq!(result.clusters.len(), 2);
+}
+#+end_src
+
+** 14. Clusters implementation
+Build undirected file-level subgraph (only File nodes + ResolvedImport edges). Run connected components algorithm (petgraph has =connected_components= or use Tarjan).
+
+** 15. Search tests
+#+begin_src rust
+#[test]
+fn search_finds_exact_match() {
+    let g = build_test_graph_with_bm25();
+    let result = query::search(&g, "bar");
+    assert!(result.matches.iter().any(|m| m.symbol.name == "bar"));
+}
+
+#[test]
+fn search_handles_fuzzy_match() {
+    let result = query::search(&g, "bra"); // typo for "bar"
+    // Should find "bar" via fuzzy matching (Levenshtein or trigram)
+}
+#+end_src
+
+** 16. Search implementation
+1. Try BM25 index lookup
+2. If no results, fall back to trigram similarity over symbol names
+3. Sort by score descending
+
+* Error Handling
+- Symbol not found → return descriptive error with "did you mean?" suggestions (closest names by edit distance)
+- Ambiguous symbol (multiple with same name) → return all candidates with file paths
+- Empty graph → return empty results, not error
+- Cycles → BFS visited set prevents infinite loops
+
+* Verification
+- All tests from steps 3, 5, 7, 9, 11, 13, 15 pass
+- =cargo test -p pi-code-graph -- query= runs all query tests
+- All queries handle cycles, empty graphs, and missing symbols gracefully
