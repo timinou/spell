@@ -1,0 +1,240 @@
+#+TITLE: Eliminate unnecessary String allocation in navigate line validation
+#+STATE: DONE
+#+SESSION_ID: 14b6ff95b1033d24
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-03-16-932Z_14b6ff95b1033d24.jsonl]]
+#+CUSTOM_ID: BUG-215-eliminate-unnecessary-string-allocation
+#+EFFORT: 15min
+#+PRIORITY: B
+#+LAYER: pi-code-engine
+#+DEPENDS: BUG-213-fix-target-line-zero-value-override-in-c
+
+NOTE [2026-04-11]: Completed in PLAN-193: navigate.rs now uses rope-native line counting without allocating the full source string, and a regression test covers last-content-line navigation when the file ends with a trailing newline.
+
+* Initial Message
+
+Here’s exactly what I tried on
+ 03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ.
+
+ Successful calls
+
+ 1. code languages
+ ```json
+   {
+     "command": "languages"
+   }
+ ```
+
+ Result included:
+
+ ```json
+   {
+     "id": "typst",
+     "extensions": ["typ"]
+   }
+ ```
+
+ 2. code outline
+ ```json
+   {
+     "_i": "Outlining Typst file",
+     "command": "outline",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "symbol": "",
+     "query": "",
+     "resolution": 2,
+     "offset": 0,
+     "limit": 200,
+     "semantic": false,
+     "depth": 0,
+     "operation": "",
+     "target": { "line": 0, "node_type": "" },
+     "content": "",
+     "mode": "",
+     "action": "",
+     "line": 0,
+     "column": 0
+   }
+ ```
+
+ This succeeded and returned top-level let bindings like:
+ - teal-primary
+ - section-title(num, title)
+ - callout-box(body, color: teal-primary)
+ - info-box(title, body)
+ - endpoint-card(method, route, desc, notes: none)
+
+ 3. code read at full-source slice
+ ```json
+   {
+     "_i": "Reading helper block",
+     "command": "read",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "symbol": "",
+     "query": "",
+     "resolution": 3,
+     "offset": 55,
+     "limit": 80,
+     "semantic": false,
+     "depth": 0,
+     "operation": "",
+     "target": { "line": 0, "node_type": "" },
+     "content": "",
+     "mode": "",
+     "action": "",
+     "line": 0,
+     "column": 0
+   }
+ ```
+
+ This succeeded and returned the helper block around lines 55–134.
+
+ Failing calls
+
+ 4. code navigate → node-at on a valid-looking Typst line
+ ```json
+   {
+     "_i": "Inspecting Typst node",
+     "command": "navigate",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "symbol": "",
+     "query": "",
+     "resolution": 2,
+     "offset": 0,
+     "limit": 50,
+     "semantic": false,
+     "depth": 0,
+     "operation": "",
+     "target": { "line": 0, "node_type": "" },
+     "content": "",
+     "mode": "",
+     "action": "node-at",
+     "line": 57,
+     "column": 1
+   }
+ ```
+
+ Error:
+
+ ```json
+   {"error":true,"message":"buffer error: line out of range"}
+ ```
+
+ 5. Retried on an earlier line
+ ```json
+   {
+     "_i": "Inspecting Typst node",
+     "command": "navigate",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "symbol": "",
+     "query": "",
+     "resolution": 2,
+     "offset": 0,
+     "limit": 50,
+     "semantic": false,
+     "depth": 0,
+     "operation": "",
+     "target": { "line": 0, "node_type": "" },
+     "content": "",
+     "mode": "",
+     "action": "node-at",
+     "line": 10,
+     "column": 1
+   }
+ ```
+
+ Same error:
+
+ ```json
+   {"error":true,"message":"buffer error: line out of range"}
+ ```
+
+ What that suggests
+ - Typst parsing is active enough for outline and read.
+ - navigate seems to be computing line bounds from the wrong buffer state, or not loading the Typst file
+ into the navigation path correctly.
+ - Since even line 10 fails, this is not just an off-by-one around the helper block.
+ - The likely bug is in navigate/buffer coordination for Typst, not in Typst language registration itself.
+
+* Problem
+
+In =crates/pi-code-engine/src/navigate.rs= line 65-66, =node_at()= allocates the entire rope to a String (=buffer.source()=) solely to call =.lines().count()= for line validation:
+
+#+begin_src rust
+let source = buffer.source();  // allocates entire file as String
+let total_lines = source.lines().count() as u32;
+#+end_src
+
+This is wasteful: the String is not used for anything else (the byte offset comes from =buffer.rope().line_to_byte_idx()= on the next line).
+
+Additionally, =str::lines().count()= and =rope.len_lines()= can disagree by 1 for files ending with a trailing newline:
+- =str::lines()= on ="a
+b
+"= yields =["a", "b"]= -> count 2
+- =rope.len_lines(LF_CR)= on ="a
+b
+"= returns 3
+
+=buffer.info().line_count= uses =rope.len_lines()=, so navigate and info disagree on the total line count for such files. This is a latent off-by-one that would only manifest as an unreachable-last-line bug for files ending with a newline.
+
+* Fix
+
+** File: =crates/pi-code-engine/src/navigate.rs=
+
+Replace the allocation-based count with a rope-based count. Since =rope.len_lines()= includes a trailing empty "line" for files ending with =
+=, subtract 1 when the rope ends with a line terminator to maintain correct 1-indexed semantics:
+
+#+begin_src rust
+fn node_at(buffer: &CodeBuffer, line: u32, column: Option<u32>) -> Result<Node<'_>> {
+    let rope = buffer.rope();
+    let raw_lines = rope.len_lines(ropey::LineType::LF_CR);
+    // Ropey counts the trailing empty segment after a final newline as a line;
+    // adjust so total_lines matches the number of content lines (1-indexed).
+    let total_lines = if raw_lines > 1 {
+        let last = rope.byte(rope.len_bytes() - 1);
+        if last == b'
+' || last == b'\r' {
+            raw_lines - 1
+        } else {
+            raw_lines
+        }
+    } else {
+        raw_lines
+    } as u32;
+    if line == 0 || line > total_lines {
+        return Err(CodeEngineError::Buffer("line out of range".into()));
+    }
+    let byte = rope
+        .line_to_byte_idx((line - 1) as usize, ropey::LineType::LF_CR)
+        + column.unwrap_or(0) as usize;
+    // ... rest unchanged
+}
+#+end_src
+
+** Test: =crates/pi-code-engine/src/navigate.rs= (in =mod tests=)
+
+Add a test verifying that navigating to the last line of a file ending with =
+= works correctly:
+
+#+begin_src rust
+#[test]
+fn test_navigate_node_at_last_line_trailing_newline() {
+    // hello.ts ends with a newline; verify last content line is reachable
+    let buf = buffer("hello.ts", "typescript");
+    let p = profile("typescript");
+    let source = buf.source();
+    let last_content_line = source.lines().count() as u32;
+    // Navigate to last content line should succeed
+    assert!(navigate(&buf, &p, NavigateAction::NodeAt, last_content_line, Some(1), None).is_ok());
+    // One past last content line should fail
+    assert!(navigate(&buf, &p, NavigateAction::NodeAt, last_content_line + 1, Some(1), None).is_err());
+}
+#+end_src
+
+** Also consider: =crates/pi-code-engine/src/edit/mod.rs= line 179
+
+The test =test_transpose_same_node_errors= uses =source.lines().count()= -- this is test code and lower priority, but should be updated for consistency if convenient. Not blocking.
+
+* Verification
+
+- =cargo test -p pi-code-engine= passes
+- =bun check:rs= passes

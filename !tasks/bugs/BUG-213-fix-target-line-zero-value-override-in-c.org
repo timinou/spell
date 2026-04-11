@@ -1,0 +1,244 @@
+#+TITLE: Fix targetline zero-value override in code tool argument handling
+#+STATE: DONE
+#+SESSION_ID: 14b6ff95b1033d24
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-03-16-932Z_14b6ff95b1033d24.jsonl]]
+#+CUSTOM_ID: BUG-213-fix-target-line-zero-value-override-in-c
+#+EFFORT: 20min
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+NOTE [2026-04-11]: Completed in PLAN-193: code.ts now ignores zero-value target.line overrides, test coverage added in packages/coding-agent/test/tools/code.test.ts, and manual code navigate no longer returns line-out-of-range for target.line = 0.
+
+* Initial Message
+
+Here’s exactly what I tried on
+ 03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ.
+
+ Successful calls
+
+ 1. code languages
+ ```json
+   {
+     "command": "languages"
+   }
+ ```
+
+ Result included:
+
+ ```json
+   {
+     "id": "typst",
+     "extensions": ["typ"]
+   }
+ ```
+
+ 2. code outline
+ ```json
+   {
+     "_i": "Outlining Typst file",
+     "command": "outline",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "symbol": "",
+     "query": "",
+     "resolution": 2,
+     "offset": 0,
+     "limit": 200,
+     "semantic": false,
+     "depth": 0,
+     "operation": "",
+     "target": { "line": 0, "node_type": "" },
+     "content": "",
+     "mode": "",
+     "action": "",
+     "line": 0,
+     "column": 0
+   }
+ ```
+
+ This succeeded and returned top-level let bindings like:
+ - teal-primary
+ - section-title(num, title)
+ - callout-box(body, color: teal-primary)
+ - info-box(title, body)
+ - endpoint-card(method, route, desc, notes: none)
+
+ 3. code read at full-source slice
+ ```json
+   {
+     "_i": "Reading helper block",
+     "command": "read",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "symbol": "",
+     "query": "",
+     "resolution": 3,
+     "offset": 55,
+     "limit": 80,
+     "semantic": false,
+     "depth": 0,
+     "operation": "",
+     "target": { "line": 0, "node_type": "" },
+     "content": "",
+     "mode": "",
+     "action": "",
+     "line": 0,
+     "column": 0
+   }
+ ```
+
+ This succeeded and returned the helper block around lines 55–134.
+
+ Failing calls
+
+ 4. code navigate → node-at on a valid-looking Typst line
+ ```json
+   {
+     "_i": "Inspecting Typst node",
+     "command": "navigate",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "symbol": "",
+     "query": "",
+     "resolution": 2,
+     "offset": 0,
+     "limit": 50,
+     "semantic": false,
+     "depth": 0,
+     "operation": "",
+     "target": { "line": 0, "node_type": "" },
+     "content": "",
+     "mode": "",
+     "action": "node-at",
+     "line": 57,
+     "column": 1
+   }
+ ```
+
+ Error:
+
+ ```json
+   {"error":true,"message":"buffer error: line out of range"}
+ ```
+
+ 5. Retried on an earlier line
+ ```json
+   {
+     "_i": "Inspecting Typst node",
+     "command": "navigate",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "symbol": "",
+     "query": "",
+     "resolution": 2,
+     "offset": 0,
+     "limit": 50,
+     "semantic": false,
+     "depth": 0,
+     "operation": "",
+     "target": { "line": 0, "node_type": "" },
+     "content": "",
+     "mode": "",
+     "action": "node-at",
+     "line": 10,
+     "column": 1
+   }
+ ```
+
+ Same error:
+
+ ```json
+   {"error":true,"message":"buffer error: line out of range"}
+ ```
+
+ What that suggests
+ - Typst parsing is active enough for outline and read.
+ - navigate seems to be computing line bounds from the wrong buffer state, or not loading the Typst file
+ into the navigation path correctly.
+ - Since even line 10 fails, this is not just an off-by-one around the helper block.
+ - The likely bug is in navigate/buffer coordination for Typst, not in Typst language registration itself.
+
+* Problem
+
+When the LLM invokes the =code navigate= tool and passes both =line: N= (top-level) and =target: { line: 0 }= (from schema defaults), the target flattening in =code.ts= overwrites =options.line= with =0=.
+
+In the NAPI bridge, =value_to_u32(options.get("line"), 1)= returns =0= (not the default =1=, since the value exists). Rust's =node_at()= checks =if line == 0= and returns ="line out of range"=.
+
+This is NOT Typst-specific -- it affects every language when the model fills in default zero values for =target.line=.
+
+** Root cause
+
+In =packages/coding-agent/src/tools/code.ts= around line 148-150:
+
+#+begin_src typescript
+// Flatten target into top-level fields for NAPI
+if (params.target) {
+    if (params.target.line !== undefined) options.line = params.target.line;
+    if (params.target.node_type) options.node_type = params.target.node_type;
+}
+#+end_src
+
+=params.target.line !== undefined= is =true= for =0=, so it overrides the top-level =params.line=. The =node_type= guard uses truthiness (=if (params.target.node_type)=), which correctly skips empty string. The =line= guard should use the same pattern.
+
+** Reproduction
+
+#+begin_src json
+{
+    "command": "navigate",
+    "file": "any-file.ts",
+    "action": "node-at",
+    "line": 57,
+    "target": { "line": 0, "node_type": "" }
+}
+#+end_src
+
+Result: ="buffer error: line out of range"= even though line 57 exists.
+
+* Fix
+
+** File: =packages/coding-agent/src/tools/code.ts=
+
+Change line 149 from:
+#+begin_src typescript
+if (params.target.line !== undefined) options.line = params.target.line;
+#+end_src
+
+To:
+#+begin_src typescript
+if (params.target.line) options.line = params.target.line;
+#+end_src
+
+Since line is 1-indexed, =0= is never valid. Truthiness check correctly skips =0=, =undefined=, and =null=, matching the pattern already used for =node_type=.
+
+** File: =packages/coding-agent/test/tools/code.test.ts=
+
+Add test: when navigate is called with =line: 10= and =target: { line: 0 }=, the NAPI call receives =line: 10= (not =0=).
+
+The existing test "flattens target into top-level fields for edit" covers the positive case (target.line = 5). The new test covers the zero-value case.
+
+#+begin_src typescript
+it("does not override navigate line with zero-value target.line", async () => {
+    const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+        output: { node_type: "identifier", text: "foo", line: 10, end_line: 10 },
+        error: false,
+    });
+    const tool = new CodeTool(createSession());
+    await tool.execute("tool", {
+        command: "navigate",
+        file: "/tmp/test/src/main.ts",
+        action: "node-at",
+        line: 10,
+        target: { line: 0 },
+    });
+
+    expect(bufferSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+            command: "navigate",
+            action: "node-at",
+            line: 10,
+        }),
+    );
+});
+#+end_src
+
+* Verification
+
+- =bun test packages/coding-agent/test/tools/code.test.ts= passes
+- =bun check:ts= passes
+- Manually confirm: =code navigate= with =line: N= and =target: { line: 0 }= no longer returns "line out of range"

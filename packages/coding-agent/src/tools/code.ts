@@ -146,7 +146,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			if (params.mode) options.mode = params.mode;
 			// Flatten target into top-level fields for NAPI
 			if (params.target) {
-				if (params.target.line !== undefined) options.line = params.target.line;
+				if (params.target.line) options.line = params.target.line;
 				if (params.target.node_type) options.node_type = params.target.node_type;
 			}
 			// Map navigate action: references-local → references (backward compat)

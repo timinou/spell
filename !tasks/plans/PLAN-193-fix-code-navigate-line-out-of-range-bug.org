@@ -1,0 +1,204 @@
+#+TITLE: Fix code navigate line-out-of-range bug
+#+STATE: DONE
+#+SESSION_ID: 14b6ff95b1033d24
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-03-16-932Z_14b6ff95b1033d24.jsonl]]
+#+CUSTOM_ID: PLAN-193-fix-code-navigate-line-out-of-range-bug
+
+NOTE [2026-04-11]: Completed with verified TypeScript and pi-code-engine checks plus manual reproduction. Workspace-wide bun check:rs remains blocked by the pre-existing tree-sitter-org rustfmt/clippy conflict documented in the completion report.
+
+
+* Initial Message
+
+Here’s exactly what I tried on
+ 03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ.
+
+ Successful calls
+
+ 1. code languages
+ ```json
+   {
+     "command": "languages"
+   }
+ ```
+
+ Result included:
+
+ ```json
+   {
+     "id": "typst",
+     "extensions": ["typ"]
+   }
+ ```
+
+ 2. code outline
+ ```json
+   {
+     "_i": "Outlining Typst file",
+     "command": "outline",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "symbol": "",
+     "query": "",
+     "resolution": 2,
+     "offset": 0,
+     "limit": 200,
+     "semantic": false,
+     "depth": 0,
+     "operation": "",
+     "target": { "line": 0, "node_type": "" },
+     "content": "",
+     "mode": "",
+     "action": "",
+     "line": 0,
+     "column": 0
+   }
+ ```
+
+ This succeeded and returned top-level let bindings like:
+ - teal-primary
+ - section-title(num, title)
+ - callout-box(body, color: teal-primary)
+ - info-box(title, body)
+ - endpoint-card(method, route, desc, notes: none)
+
+ 3. code read at full-source slice
+ ```json
+   {
+     "_i": "Reading helper block",
+     "command": "read",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "symbol": "",
+     "query": "",
+     "resolution": 3,
+     "offset": 55,
+     "limit": 80,
+     "semantic": false,
+     "depth": 0,
+     "operation": "",
+     "target": { "line": 0, "node_type": "" },
+     "content": "",
+     "mode": "",
+     "action": "",
+     "line": 0,
+     "column": 0
+   }
+ ```
+
+ This succeeded and returned the helper block around lines 55–134.
+
+ Failing calls
+
+ 4. code navigate → node-at on a valid-looking Typst line
+ ```json
+   {
+     "_i": "Inspecting Typst node",
+     "command": "navigate",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "symbol": "",
+     "query": "",
+     "resolution": 2,
+     "offset": 0,
+     "limit": 50,
+     "semantic": false,
+     "depth": 0,
+     "operation": "",
+     "target": { "line": 0, "node_type": "" },
+     "content": "",
+     "mode": "",
+     "action": "node-at",
+     "line": 57,
+     "column": 1
+   }
+ ```
+
+ Error:
+
+ ```json
+   {"error":true,"message":"buffer error: line out of range"}
+ ```
+
+ 5. Retried on an earlier line
+ ```json
+   {
+     "_i": "Inspecting Typst node",
+     "command": "navigate",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "symbol": "",
+     "query": "",
+     "resolution": 2,
+     "offset": 0,
+     "limit": 50,
+     "semantic": false,
+     "depth": 0,
+     "operation": "",
+     "target": { "line": 0, "node_type": "" },
+     "content": "",
+     "mode": "",
+     "action": "node-at",
+     "line": 10,
+     "column": 1
+   }
+ ```
+
+ Same error:
+
+ ```json
+   {"error":true,"message":"buffer error: line out of range"}
+ ```
+
+ What that suggests
+ - Typst parsing is active enough for outline and read.
+ - navigate seems to be computing line bounds from the wrong buffer state, or not loading the Typst file
+ into the navigation path correctly.
+ - Since even line 10 fails, this is not just an off-by-one around the helper block.
+ - The likely bug is in navigate/buffer coordination for Typst, not in Typst language registration itself.
+
+* Context
+
+The =code navigate= command fails with "buffer error: line out of range" when the LLM passes both =line: N= (top-level) and =target: { line: 0 }= (schema-default fill). This was initially observed on Typst files but affects all languages.
+
+** Root cause
+
+The TypeScript code tool's argument flattening unconditionally overwrites =options.line= with =params.target.line= when the value is =0= (because =0 !== undefined= is =true=). The Rust =node_at()= function then rejects line =0= as out-of-range.
+
+** Approach
+
+Two fixes, ordered by priority:
+
+1. Guard =target.line= flattening in =code.ts= to skip zero values (truthiness check, matching =node_type= pattern)
+2. Replace wasteful =buffer.source().lines().count()= in =navigate.rs= with =rope.len_lines()=, eliminating an unnecessary full-file String allocation and fixing a latent off-by-one for trailing-newline files
+
+** Key decisions
+
+- Use truthiness check (=if (params.target.line)=) rather than explicit => 0= comparison -- matches the existing =node_type= pattern and is sufficient since line is 1-indexed
+- Adjust =rope.len_lines()= result for trailing newlines rather than using =str::lines().count()= -- avoids O(n) allocation, makes navigate consistent with =buffer.info().line_count=
+
+* Verification
+
+- =bun test packages/coding-agent/test/tools/code.test.ts= -- confirm new target.line=0 test passes
+- =cargo test -p pi-code-engine= -- confirm navigate line counting tests pass
+- =bun check:ts= and =bun check:rs= clean
+- Manual: invoke =code navigate { action: "node-at", line: 10, target: { line: 0 } }= on any file and confirm it resolves correctly
+
+* Execution Manifest
+
+| Wave | Item | Effort |
+|------+------+--------|
+|    1 | [[id:BUG-213-fix-target-line-zero-value-override-in-c][Fix target.line zero-value override]] | 20min |
+|    2 | [[id:BUG-215-eliminate-unnecessary-string-allocation][Eliminate String allocation in navigate]] | 15min |
+
+Wave 2 depends on Wave 1 (dependency set via =:DEPENDS:= property on BUG-215). Total effort: ~35min.
+
+
+** Completion [2026-04-11]
+*** Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts` -> passed (`17 pass, 0 fail`), including the new regression that preserves top-level `line` when `target.line = 0`.
+- `bun check:ts` -> passed (`biome check . && tsgo -p tsconfig.json`).
+- `cargo test -p pi-code-engine` -> passed (`56 passed, 0 failed`), including the new trailing-newline navigation regression.
+- `cargo clippy -p pi-code-engine -- -D warnings` -> passed.
+- `cargo fmt -p pi-code-engine -- --check` -> passed.
+- Manual verification: `code navigate` on `packages/coding-agent/src/tools/code.ts` with `action = "node-at"`, `line = 10`, and `target = { line: 0 }` returned an `import_statement` result instead of `buffer error: line out of range`.
+- `bun check:rs` -> failed for a pre-existing workspace issue outside this plan's scope: `crates/tree-sitter-org/src/lib.rs` is in a rustfmt/clippy contradiction where `cargo fmt --check` wants tab-indented doc-example continuation lines and `cargo clippy --workspace -D warnings` rejects those same tabs via `clippy::tabs_in_doc_comments`.
+*** Artifacts
+- None.
+*** Deviations
+- Workspace-wide `bun check:rs` could not be made green within this plan because of the pre-existing `tree-sitter-org` rustfmt/clippy conflict described above. I verified the affected Rust package directly with `cargo fmt -p pi-code-engine -- --check` and `cargo clippy -p pi-code-engine -- -D warnings` instead.
