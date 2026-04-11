@@ -1,0 +1,168 @@
+#+TITLE: Typst authoring skill
+#+STATE: DONE
+#+SESSION_ID: 14b6e1b08a8dfb55
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-52-40-106Z_14b6e1b08a8dfb55.jsonl]]
+#+CUSTOM_ID: FEAT-460-typst-authoring-skill
+#+EFFORT: 1h
+#+PRIORITY: A
+#+LAYER: skills
+
+NOTE [2026-04-11]: Created the auto-discovered Typst skill with globs for **/*.typ and repo-grounded guidance for brand-aware, component-driven, data-hydrated document authoring and compilation.
+
+NOTE [2026-04-11]: Execution started from PLAN-189; authoring Typst skill.
+
+* Initial Message
+
+Look at the way we use typst in ~/code, especially the branding and the way we built our last .typ files in BackDesk-C, and make typst first-class in the code tools. make it genuinely useful to make excellent typst documents with ease
+
+* Context
+
+A skill teaches the coding agent specialized domain knowledge. The Typst skill must make the agent genuinely fluent in writing excellent Typst documents — not just syntactically correct but well-structured, component-driven, data-aware, and brand-compliant.
+
+Three real Typst document styles exist in the codebase to draw patterns from:
+1. *Pitch decks* (=~/code/backdesk/.local/pitch-deck.typ=) — slide-based (1280x720pt), dark themes, gradient effects, custom components (stat-box, team-member), inline SVG icons
+2. *Professional reports* (=~/code/ora/sothema/rapport-technique.typ=) — A4 format, custom section headers, colored callouts, structured data tables
+3. *Research reports* (=~/code/ora/growth/morocco_tech_ecosystem_report.typ=) — academic-style with numbered headings, =@preview= packages, simple tables
+4. *Brand library templates* (=domain/growth/templates/=) — modular brand system with =lib.typ= entrypoint, reusable components, YAML data hydration
+
+The skill MUST be loaded for any session where .typ files are present.
+
+* Design Decisions
+
+** Skill frontmatter
+#+begin_src yaml
+---
+name: typst
+description: Write and compile excellent Typst documents — brand-aware, component-driven, data-hydrated
+globs: ["**/*.typ"]
+---
+#+end_src
+
+The =globs= field ensures the skill auto-loads when .typ files exist in the project.
+
+** Structure
+The skill has four sections:
+1. *When to use* — triggers for skill activation
+2. *Typst fundamentals* — language reference, idioms, patterns that the agent needs to write correct Typst
+3. *Brand & templates* — how brand libraries work, template patterns, component-driven authoring
+4. *Compilation workflow* — how to compile to PDF, preview, send to user
+
+** Content approach
+- Language fundamentals must be concise but complete — enough for the agent to write Typst without external reference
+- Brand section teaches the PATTERN (discover brand library → import lib.typ → use components → stay on palette) rather than hardcoding specific brand values
+- Template section teaches data-driven document patterns (=sys.inputs=, =yaml()= / =json()=, =.at("key", default: fallback)=)
+- Compilation section teaches the bash workflow with =typst compile=
+
+* Implementation
+
+** File: .spell/skills/typst/SKILL.md
+Create the skill file with the following content structure:
+
+*** Frontmatter
+=name: typst=, =description= as above, =globs: ["**/*.typ"]=.
+
+*** When to Use
+- Creating or editing .typ files
+- Generating PDFs, slides, reports, proposals
+- Working with Typst brand libraries and templates
+- Designing document layouts and components
+
+*** Typst Language Reference (concise)
+Cover these constructs with compact examples:
+- *Modes*: markup (default), code (=#=), math (=$=)
+- *Bindings*: =#let name = value=, =#let func(params) = body=
+- *Imports*: =#import "path": *=, =#import "path": name1, name2=, =#import "@preview/pkg:version"=
+- *Set rules*: =#set page(paper: "a4")=, =#set text(font: "Inter", size: 11pt)=
+- *Show rules*: =#show heading: set text(fill: red)=, =#show heading.where(level: 1): it => text(...)[#it.body]=
+- *Flow control*: =#if cond [content]=, =#for item in list [content]=, =#while cond [content]=
+- *Content blocks*: =[inline content]=, =block(fill: color, inset: 12pt)[content]=
+- *Functions*: =text()=, =grid()=, =table()=, =block()=, =box()=, =stack()=, =align()=, =pad()=, =place()=, =image()=, =line()=, =circle()=, =rect()=, =ellipse()=
+- *Data access*: =dict.at("key", default: fallback)=, =array.map()=, =array.filter()=, =.join()=, =.flatten()=
+- *Spacing*: =#v(12pt)=, =#h(6pt)=, =~= (non-breaking space), paragraph breaks via blank lines
+- *Colors*: =rgb("#hex")=, =luma(percent)=, =color.lighten()=, =color.transparentize()=, =gradient.linear()=, =gradient.radial()=
+- *Page setup*: =#set page(paper, margin, header, footer, fill, numbering)=
+- *Document metadata*: =#set document(title, author)=
+
+*** Component Design Patterns
+Teach component authoring patterns drawn from the real codebase:
+- Reusable components as =#let= functions accepting content or data
+- Named optional parameters with defaults: =#let comp(required, optional: default) = ...=
+- Nested grid/block composition for complex layouts
+- Table patterns with header styling and alternating row fills
+- Card/box patterns with fill, stroke, radius, inset
+- SVG inline embedding via =image.decode(...)=
+
+*** Brand Library Pattern
+The pattern for brand-compliant documents:
+1. Look for a brand library (=branding/*/lib.typ= or similar =lib.typ= aggregator)
+2. Import it: =#import "../branding/brand-name/lib.typ": *=
+3. Use named colors (=brand-primary=, =brand-dark=) instead of hex literals
+4. Use brand components (section-header, stat-cell, callout-box, etc.)
+5. Use brand typography (heading-font, body-font, font sizes)
+6. Use brand layouts (report-page, cover-page)
+7. NEVER use off-palette colors — if a color isn't in the brand library, add it there first
+
+Example brand library structure:
+#+begin_example
+branding/spell-brand/
+  lib.typ          — single import entrypoint
+  colors.typ       — #let spell-purple = rgb("#7C3AED"), etc.
+  typography.typ   — #let heading-font = ("Inter", ...)
+  components.typ   — #let section-header(title) = ...
+  layout.typ       — #let report-page(title) = { set page(...) ... }
+#+end_example
+
+*** Data-Driven Templates
+Pattern for templates that accept external data:
+#+begin_example
+#let data = if sys.inputs.at("data", default: none) != none {
+  yaml("data.yaml")  // or json("data.json")
+} else {
+  (key: "[Placeholder]", ...)
+}
+// Then use: data.at("key", default: "[Fallback]")
+#+end_example
+
+*** Document Type Recipes
+Brief patterns for common document types:
+- *Report/proposal*: A4, report-page layout, section-header + content + tables
+- *Pitch deck/slides*: wide page (1280x720pt or 16:9), page-per-slide with =#page(fill: bg)[...]=, gradient orbs, stat-boxes
+- *Academic/research*: numbered headings, bibliography, table of contents via =#outline()=
+
+*** Compilation Workflow
+#+begin_example
+# Compile to PDF
+typst compile input.typ output.pdf
+
+# Compile with custom fonts directory
+typst compile --font-path ./fonts input.typ output.pdf
+
+# Compile with input data
+typst compile --input data=data.yaml input.typ output.pdf
+#+end_example
+After compiling, use =send_file output.pdf= to show the user the result.
+
+For iterative editing, compile after each significant change.
+
+*** Quality Checklist
+Before finalizing a Typst document:
+1. All text uses =body-font= / =heading-font= variables (not hardcoded font names) when a brand library exists
+2. All colors use named variables from the brand palette
+3. Spacing is consistent (use =v()= and =h()= with consistent increments)
+4. Tables have header styling and readable column widths
+5. Document compiles without warnings
+6. No orphaned pages or overflowing content
+
+* Sub-outline
+
+** write-skill — Create .spell/skills/typst/SKILL.md
+Write the full skill file following the content structure above. Keep it concise but complete — aim for ~200-300 lines. Every section should have working code examples.
+
+** verify — Test skill loading
+Verify the skill loads by checking that =code languages= in a session with .typ files shows typst-related information, and the skill appears in system prompt rendering.
+
+* Verification
+- =.spell/skills/typst/SKILL.md= exists with valid frontmatter (name, description, globs)
+- The skill content covers: language fundamentals, brand patterns, template patterns, compilation workflow
+- All code examples in the skill are valid Typst (compile without errors)
+- The skill auto-loads when =**/*.typ= glob matches (verify via =globs= field in frontmatter)

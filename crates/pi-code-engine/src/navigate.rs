@@ -107,19 +107,14 @@ fn defun_at(
 	mut node: Node<'_>,
 ) -> Result<NavigateResult> {
 	loop {
-		if node.kind() == "export_statement"
-			&& let Some(child) = unwrap_export(profile, node)
-		{
+		if let Some(target) = declaration_node(profile, node) {
 			return Ok(declaration_result(
 				buffer,
-				child,
-				declaration_for(profile, child).expect("decl"),
+				target,
+				declaration_for(profile, target).expect("decl"),
 			));
 		}
 		if let Some(parent) = node.parent() {
-			if let Some(decl) = declaration_for(profile, parent) {
-				return Ok(declaration_result(buffer, parent, decl));
-			}
 			node = parent;
 		} else {
 			return Err(CodeEngineError::Buffer("no enclosing function".into()));
@@ -127,11 +122,28 @@ fn defun_at(
 	}
 }
 
+fn declaration_node<'a>(profile: &'a LanguageProfile, node: Node<'a>) -> Option<Node<'a>> {
+	if declaration_for(profile, node).is_some() {
+		return Some(node);
+	}
+	if node.kind() == "export_statement" {
+		return unwrap_export(profile, node);
+	}
+	sole_named_child(node).and_then(|child| declaration_node(profile, child))
+}
+
 fn unwrap_export<'a>(profile: &'a LanguageProfile, node: Node<'a>) -> Option<Node<'a>> {
 	let mut cursor = node.walk();
 	node
 		.named_children(&mut cursor)
-		.find(|child| declaration_for(profile, *child).is_some())
+		.find_map(|child| declaration_node(profile, child))
+}
+
+fn sole_named_child(node: Node<'_>) -> Option<Node<'_>> {
+	let mut cursor = node.walk();
+	let mut children = node.named_children(&mut cursor);
+	let child = children.next()?;
+	(children.next().is_none()).then_some(child)
 }
 fn declaration_result(
 	buffer: &CodeBuffer,
@@ -229,9 +241,9 @@ fn collect_references(
 	symbol: &str,
 	out: &mut BTreeSet<u32>,
 ) {
-	if node.kind() == "identifier"
+	if let Some(pattern) = reference_pattern_for(profile, node)
 		&& node_text(buffer, node) == symbol
-		&& !excluded(node, profile.references.first())
+		&& !excluded(node, Some(pattern))
 	{
 		out.insert((node.start_position().row + 1) as u32);
 	}
@@ -265,6 +277,16 @@ fn declaration_for<'a>(
 		.declarations
 		.iter()
 		.find(|decl| decl.node_types.iter().any(|kind| kind == node.kind()))
+}
+
+fn reference_pattern_for<'a>(
+	profile: &'a LanguageProfile,
+	node: Node<'_>,
+) -> Option<&'a ReferencePattern> {
+	profile
+		.references
+		.iter()
+		.find(|pattern| pattern.node_type == node.kind())
 }
 fn name_text(buffer: &CodeBuffer, node: Node<'_>, decl: &DeclarationPattern) -> Option<String> {
 	node
@@ -310,22 +332,25 @@ mod tests {
 		language::{LanguageId, LanguageRegistry},
 	};
 
-	fn fixture_path() -> String {
-		format!("{}/tests/fixtures/sources/hello.ts", env!("CARGO_MANIFEST_DIR"))
-	}
 	fn registry() -> Arc<LanguageRegistry> {
 		Arc::new(LanguageRegistry::with_builtins().expect("registry"))
 	}
-	fn profile() -> LanguageProfile {
+
+	fn fixture_path(name: &str) -> String {
+		format!("{}/tests/fixtures/sources/{name}", env!("CARGO_MANIFEST_DIR"))
+	}
+
+	fn profile(language: &str) -> LanguageProfile {
 		registry()
-			.get(&LanguageId::new("typescript"))
+			.get(&LanguageId::new(language))
 			.expect("profile")
 			.clone()
 	}
-	fn buffer() -> CodeBuffer {
+
+	fn buffer(name: &str, language: &str) -> CodeBuffer {
 		CodeBuffer::from_str(
-			&fs::read_to_string(fixture_path()).expect("fixture"),
-			LanguageId::new("typescript"),
+			&fs::read_to_string(fixture_path(name)).expect("fixture"),
+			LanguageId::new(language),
 			registry(),
 		)
 		.expect("buffer")
@@ -333,38 +358,60 @@ mod tests {
 
 	#[test]
 	fn test_navigate_node_at() {
-		let buf = buffer();
-		let p = profile();
+		let buf = buffer("hello.ts", "typescript");
+		let p = profile("typescript");
 		let r = navigate(&buf, &p, NavigateAction::NodeAt, 1, Some(1), None).expect("nav");
 		assert_eq!(r.node_type, "export_statement");
 	}
+
 	#[test]
 	fn test_navigate_node_at_whitespace() {
-		let buf = buffer();
-		let p = profile();
+		let buf = buffer("hello.ts", "typescript");
+		let p = profile("typescript");
 		assert!(navigate(&buf, &p, NavigateAction::NodeAt, 2, Some(0), None).is_ok());
 	}
+
 	#[test]
 	fn test_navigate_defun_at() {
-		let buf = buffer();
-		let p = profile();
+		let buf = buffer("hello.ts", "typescript");
+		let p = profile("typescript");
 		let r = navigate(&buf, &p, NavigateAction::DefunAt, 1, Some(1), None).expect("nav");
 		assert_eq!(r.name.as_deref(), Some("greet"));
 	}
+
+	#[test]
+	fn test_navigate_typst_defun_at_code_wrapper() {
+		let buf = buffer("hello.typ", "typst");
+		let p = profile("typst");
+		let r = navigate(&buf, &p, NavigateAction::DefunAt, 2, Some(5), None).expect("nav");
+		assert_eq!(r.name.as_deref(), Some("title"));
+		assert_eq!(r.kind.as_deref(), Some("let"));
+	}
+
 	#[test]
 	fn test_navigate_siblings() {
-		let buf = buffer();
-		let p = profile();
+		let buf = buffer("hello.ts", "typescript");
+		let p = profile("typescript");
 		let r = navigate(&buf, &p, NavigateAction::Siblings, 3, Some(1), None).expect("nav");
 		assert!(r.items.len() >= 2);
 	}
+
 	#[test]
 	fn test_navigate_references() {
-		let buf = buffer();
-		let p = profile();
+		let buf = buffer("hello.ts", "typescript");
+		let p = profile("typescript");
 		let r =
 			navigate(&buf, &p, NavigateAction::References, 1, Some(1), Some("greet")).expect("nav");
 		assert!(r.references.contains(&1));
 		assert!(r.references.contains(&3));
+	}
+
+	#[test]
+	fn test_navigate_typst_references() {
+		let buf = buffer("hello.typ", "typst");
+		let p = profile("typst");
+		let r =
+			navigate(&buf, &p, NavigateAction::References, 2, Some(5), Some("title")).expect("nav");
+		assert_eq!(r.references, vec![2, 5]);
 	}
 }

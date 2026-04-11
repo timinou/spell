@@ -40,12 +40,13 @@ impl LanguageRegistry {
 	}
 
 	/// Create a registry with all built-in profiles (TypeScript, Rust, Python,
-	/// Elixir).
+	/// Typst, Elixir).
 	pub fn with_builtins() -> Result<Self> {
 		let mut reg = Self::new();
 		reg.register(typescript_profile())?;
 		reg.register(rust_profile())?;
 		reg.register(python_profile())?;
+		reg.register(typst_profile())?;
 		reg.register(elixir_profile())?;
 		Ok(reg)
 	}
@@ -359,6 +360,54 @@ fn python_profile() -> LanguageProfile {
 	}
 }
 
+fn typst_profile() -> LanguageProfile {
+	let gd = generated::typst::grammar();
+	LanguageProfile {
+		id:               LanguageId::new("typst"),
+		extensions:       vec!["typ".into()],
+		declarations:     vec![
+			DeclarationPattern {
+				node_types: vec!["let".into()],
+				name_field: "pattern".into(),
+				kind:       "let".into(),
+				body_field: Some("value".into()),
+				visibility: None,
+			},
+			DeclarationPattern {
+				node_types: vec!["import".into()],
+				name_field: "import".into(),
+				kind:       "import".into(),
+				body_field: None,
+				visibility: None,
+			},
+			DeclarationPattern {
+				node_types: vec!["show".into()],
+				name_field: "pattern".into(),
+				kind:       "show".into(),
+				body_field: Some("value".into()),
+				visibility: None,
+			},
+		],
+		class_like:       vec![],
+		imports:          vec![ImportPattern {
+			node_type:       "import".into(),
+			specifier_field: "import".into(),
+			is_type_only:    false,
+		}],
+		exports:          vec![],
+		references:       vec![ReferencePattern {
+			node_type:            "ident".into(),
+			exclude_parent_types: vec!["comment".into(), "string".into()],
+		}],
+		separators:       vec![",".into()],
+		production_rules: gd.production_rules,
+		inverse_rules:    gd.inverse_rules,
+		all_types:        gd.all_types,
+		supertypes:       gd.supertypes,
+		ts_language:      codebook_tree_sitter_typst::LANGUAGE.into(),
+	}
+}
+
 fn elixir_profile() -> LanguageProfile {
 	let gd = generated::elixir::grammar();
 	LanguageProfile {
@@ -396,11 +445,12 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn registry_with_builtins_loads_all_four_languages() {
+	fn registry_with_builtins_loads_all_five_languages() {
 		let reg = LanguageRegistry::with_builtins().expect("builtins should load");
 		assert!(reg.get(&LanguageId::new("typescript")).is_some());
 		assert!(reg.get(&LanguageId::new("rust")).is_some());
 		assert!(reg.get(&LanguageId::new("python")).is_some());
+		assert!(reg.get(&LanguageId::new("typst")).is_some());
 		assert!(reg.get(&LanguageId::new("elixir")).is_some());
 		assert!(reg.get(&LanguageId::new("haskell")).is_none());
 	}
@@ -451,9 +501,12 @@ mod tests {
 	fn generated_production_rules_nonempty() {
 		let reg = LanguageRegistry::with_builtins().unwrap();
 		let ts = reg.get(&LanguageId::new("typescript")).unwrap();
+		let typst = reg.get(&LanguageId::new("typst")).unwrap();
 
 		assert!(!ts.production_rules.is_empty(), "TypeScript production rules should not be empty");
 		assert!(!ts.all_types.is_empty(), "TypeScript all_types should not be empty");
+		assert!(!typst.production_rules.is_empty(), "Typst production rules should not be empty");
+		assert!(!typst.all_types.is_empty(), "Typst all_types should not be empty");
 
 		// Specific rule: if_statement should have condition and consequence fields
 		let if_rule = ts.production_rules.get("if_statement");
@@ -486,6 +539,36 @@ mod tests {
 		let ts = reg.get(&LanguageId::new("typescript")).unwrap();
 
 		assert!(!ts.inverse_rules.is_empty(), "TypeScript inverse rules should not be empty");
+	}
+
+	#[test]
+	fn typst_profile_has_expected_declarations_and_paths() {
+		let reg = LanguageRegistry::with_builtins().unwrap();
+		let typst = reg.get(&LanguageId::new("typst")).unwrap();
+
+		let kinds: Vec<&str> = typst.declarations.iter().map(|d| d.kind.as_str()).collect();
+		assert!(kinds.contains(&"let"), "should have let declarations");
+		assert!(kinds.contains(&"import"), "should have import declarations");
+		assert!(kinds.contains(&"show"), "should have show declarations");
+
+		let show_decl = typst
+			.declarations
+			.iter()
+			.find(|decl| decl.kind == "show")
+			.expect("show declaration pattern");
+		assert_eq!(show_decl.name_field, "pattern");
+		assert_eq!(show_decl.body_field.as_deref(), Some("value"));
+		assert_eq!(
+			typst
+				.references
+				.first()
+				.map(|pattern| pattern.node_type.as_str()),
+			Some("ident")
+		);
+
+		assert_eq!(reg.match_path(Path::new("doc.typ")).unwrap().id.as_str(), "typst");
+		assert_eq!(typst.ts_language, codebook_tree_sitter_typst::LANGUAGE.into());
+		assert!(!typst.production_rules.is_empty(), "Typst production rules should not be empty");
 	}
 
 	#[test]

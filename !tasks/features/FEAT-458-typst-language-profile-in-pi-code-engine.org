@@ -1,0 +1,179 @@
+#+TITLE: Typst language profile in pi-code-engine
+#+STATE: DONE
+#+SESSION_ID: 14b6e1b08a8dfb55
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-52-40-106Z_14b6e1b08a8dfb55.jsonl]]
+#+CUSTOM_ID: FEAT-458-typst-language-profile-in-pi-code-engine
+#+EFFORT: 2h
+#+PRIORITY: A
+#+LAYER: crates/pi-code-engine
+
+NOTE [2026-04-11]: Implemented Typst as a built-in pi-code-engine language, added generated grammar wiring, wrapper-aware outline/navigate support, Typst fixture coverage, and passed cargo check/test verification.
+
+NOTE [2026-04-11]: Execution started from PLAN-189; implementing Typst language profile in pi-code-engine.
+
+* Initial Message
+
+Look at the way we use typst in ~/code, especially the branding and the way we built our last .typ files in BackDesk-C, and make typst first-class in the code tools. make it genuinely useful to make excellent typst documents with ease
+
+* Context
+
+Typst is used across the codebase for professional documents — pitch decks, reports, brand libraries, client proposals. The Rust pi-code-engine currently supports 4 built-in languages (TypeScript, Rust, Python, Elixir). Typst must be added as a 5th built-in language so that =code outline=, =code read=, =code navigate=, and =code edit= work on .typ files.
+
+Typst is Rust-native, and the =codebook-tree-sitter-typst= crate (v0.12.1) is the published crates.io version of uben0/tree-sitter-typst grammar.
+
+The Emacs code layer is being deprecated; this MUST go into the Rust engine exclusively.
+
+* Key Design Decisions
+
+** Crate: codebook-tree-sitter-typst
+Published on crates.io as =codebook-tree-sitter-typst= v0.12.1. Provides =LANGUAGE= constant for =tree_sitter::Language=.
+
+** Tree-sitter-typst AST node types
+Key named nodes in tree-sitter-typst (from uben0/tree-sitter-typst):
+- =let= — fields: =pattern= (ident | call | assign), =value= (any expression). Represents =#let name = value= and =#let name(params) = body=.
+- =import= — field: =import= (as | ident | string). Represents =#import "path": items=.
+- =show= — fields: =pattern= (selector), =value= (transformation). Represents =#show selector: transform=.
+- =set= — field: =condition= (optional), child: =call=. Represents =#set func(params)=.
+- =heading= — no named fields (children are content nodes). Markup-level, not code-level.
+- =ident= — leaf node for identifiers.
+- =call= — field: =item= (ident | field | call | content). Function calls.
+- =lambda= — fields: =pattern=, =value=. Anonymous functions.
+- =comment= — line/block comments (=//= or =/* */=).
+- =string= — string literals.
+
+** Declaration patterns
+Three declaration types:
+1. =let= — kind "let", name_field "pattern", body_field "value". For =#let x = 5= the pattern is =ident("x")=. For =#let f(a, b) = body= the pattern is the call node =f(a, b)= — the text includes the signature, which is informative for outline.
+2. =import= — kind "import", name_field "import", no body_field. The =import= field contains the path string.
+3. =show= — kind "show", name_field "pattern", body_field "value". The pattern is the selector being styled (e.g., =heading=, =heading.where(level: 1)=).
+
+=set= and =heading= are excluded from declarations — =set= is configuration (no stable name to extract), =heading= has no named fields and is content-level not code-level.
+
+** Reference pattern
+=ident= node, excluding parent types: =comment=, =string=.
+
+** Separators
+=","= only (Typst does not use =;= as a separator).
+
+* Implementation
+
+** File: crates/pi-code-engine/Cargo.toml
+Add dependency:
+#+begin_src toml
+[dependencies]
+codebook-tree-sitter-typst = "0.12"
+#+end_src
+
+** File: crates/pi-code-engine/build.rs
+Add to the =GRAMMARS= array:
+#+begin_src rust
+GrammarSource {
+    name:           "typst",
+    package_prefix: "codebook-tree-sitter-typst-",
+    json_subpath:   "src/node-types.json",
+},
+#+end_src
+
+The build script scans the cargo registry for crates matching =package_prefix=, extracts =node-types.json=, and generates production rules and inverse rules into =grammar_typst.rs=.
+
+** File: crates/pi-code-engine/src/language/mod.rs
+Add =typst_profile()= function following the pattern of existing profiles (=typescript_profile()=, =rust_profile()=, etc.):
+
+#+begin_src rust
+fn typst_profile() -> LanguageProfile {
+    let gd = generated::typst::grammar();
+    LanguageProfile {
+        id:               LanguageId::new("typst"),
+        extensions:       vec!["typ".into()],
+        declarations:     vec![
+            DeclarationPattern {
+                node_types: vec!["let".into()],
+                name_field: "pattern".into(),
+                kind:       "let".into(),
+                body_field: Some("value".into()),
+                visibility: None,
+            },
+            DeclarationPattern {
+                node_types: vec!["import".into()],
+                name_field: "import".into(),
+                kind:       "import".into(),
+                body_field: None,
+                visibility: None,
+            },
+            DeclarationPattern {
+                node_types: vec!["show".into()],
+                name_field: "pattern".into(),
+                kind:       "show".into(),
+                body_field: Some("value".into()),
+                visibility: None,
+            },
+        ],
+        class_like:       vec![],
+        imports:          vec![ImportPattern {
+            node_type:       "import".into(),
+            specifier_field: "import".into(),
+            is_type_only:    false,
+        }],
+        exports:          vec![],
+        references:       vec![ReferencePattern {
+            node_type:            "ident".into(),
+            exclude_parent_types: vec!["comment".into(), "string".into()],
+        }],
+        separators:       vec![",".into()],
+        production_rules: gd.production_rules,
+        inverse_rules:    gd.inverse_rules,
+        all_types:        gd.all_types,
+        supertypes:       gd.supertypes,
+        ts_language:      codebook_tree_sitter_typst::LANGUAGE.into(),
+    }
+}
+#+end_src
+
+Register in =with_builtins()=:
+#+begin_src rust
+pub fn with_builtins() -> Result<Self> {
+    let mut reg = Self::new();
+    reg.register(typescript_profile())?;
+    reg.register(rust_profile())?;
+    reg.register(python_profile())?;
+    reg.register(elixir_profile())?;
+    reg.register(typst_profile())?;
+    Ok(reg)
+}
+#+end_src
+
+Update the doc comment from "TypeScript, Rust, Python, Elixir" to "TypeScript, Rust, Python, Elixir, Typst".
+
+** Note on codebook-tree-sitter-typst API
+Check the crate's actual export name for the Language constant. It may be =LANGUAGE=, =language()=, or =LANGUAGE_TYPST=. Look at =codebook_tree_sitter_typst= in the crate source or docs. The build.rs =package_prefix= also needs to match the crate directory name as it appears in the cargo registry cache (e.g., =codebook-tree-sitter-typst-0.12.1=).
+
+* Sub-outline
+
+** add-cargo-dep — Add codebook-tree-sitter-typst to Cargo.toml
+Add the crate dependency. Run =cargo check= to verify it resolves.
+
+** add-build-grammar — Add Typst grammar to build.rs
+Add =GrammarSource= entry for Typst. Verify the =package_prefix= and =json_subpath= match the crate's directory structure. The =json_subpath= should point to the =src/node-types.json= file inside the crate.
+
+** add-typst-profile — Create typst_profile() and register it
+Implement the function in =mod.rs= following the pattern of existing profiles. Register in =with_builtins()=. Update the doc comment.
+
+** add-tests — Add tests for Typst profile
+Add tests following the existing test patterns:
+1. =registry_with_builtins_loads_all_five_languages= — update existing test to check for "typst"
+2. =typst_match_path= — verify =.typ= extension resolves to "typst"
+3. =typst_profile_has_expected_declarations= — verify let/import/show kinds exist
+4. =typst_production_rules_nonempty= — verify generated rules are populated
+5. =all_builtin_profiles_can_create_parser= — already covers new profiles via loop
+
+** verify — Build and test
+Run =cargo build= and =cargo test= in the pi-code-engine crate to verify everything compiles and tests pass.
+
+* Verification
+- =cargo check --package pi-code-engine= passes
+- =cargo test --package pi-code-engine= passes
+- The test =registry_with_builtins_loads_all_five_languages= (or updated name) verifies "typst" is registered
+- =.typ= extension resolves to "typst" profile
+- Declaration patterns (let, import, show) are present in the profile
+- Production rules are generated (non-empty)
+- Parser can be created from the Typst language constant

@@ -1,0 +1,3 @@
+```typc
+let title = text;
+```

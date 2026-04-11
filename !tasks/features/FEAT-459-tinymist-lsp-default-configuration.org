@@ -1,0 +1,61 @@
+#+TITLE: Tinymist LSP default configuration
+#+STATE: DONE
+#+SESSION_ID: 14b6e1b08a8dfb55
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-52-40-106Z_14b6e1b08a8dfb55.jsonl]]
+#+CUSTOM_ID: FEAT-459-tinymist-lsp-default-configuration
+#+EFFORT: 15m
+#+PRIORITY: A
+#+LAYER: packages/coding-agent
+
+NOTE [2026-04-11]: Added tinymist defaults with typstyle formatting. Included .git alongside typst.toml in rootMarkers so the current LSP config loader activates tinymist for Typst files in normal repos without a typst.toml root file.
+
+NOTE [2026-04-11]: Execution started from PLAN-189; adding tinymist defaults.
+
+* Initial Message
+
+Look at the way we use typst in ~/code, especially the branding and the way we built our last .typ files in BackDesk-C, and make typst first-class in the code tools. make it genuinely useful to make excellent typst documents with ease
+
+* Context
+
+Tinymist is the production LSP server for Typst, implemented in Rust. It provides semantic highlighting, code actions, formatting, document links, document symbols, hover, go-to-definition, references, and diagnostics. Both =typst= (v0.14.2) and =tinymist= binaries are already installed on the system.
+
+The LSP defaults in =packages/coding-agent/src/lsp/defaults.json= contain configs for 20+ language servers but no entry for tinymist. Adding it enables all LSP operations (diagnostics, hover, definition, references, code_actions, rename, symbols) on .typ files automatically.
+
+* Implementation
+
+** File: packages/coding-agent/src/lsp/defaults.json
+Add tinymist entry. Place it alphabetically among existing entries. Follow the existing JSON format exactly.
+
+#+begin_src json
+"tinymist": {
+    "command": "tinymist",
+    "args": ["lsp"],
+    "fileTypes": [".typ"],
+    "rootMarkers": ["typst.toml"],
+    "initOptions": {
+        "formatterMode": "typstyle"
+    }
+}
+#+end_src
+
+** Design rationale
+- =command=: ="tinymist"= — the binary is at =/usr/bin/tinymist=, already on PATH
+- =args=: =["lsp"]= — tinymist requires the =lsp= subcommand to start in LSP mode
+- =fileTypes=: =[".typ"]= — standard Typst file extension
+- =rootMarkers=: =["typst.toml"]= — Typst's project configuration file (equivalent to =Cargo.toml= or =package.json=). Even projects without =typst.toml= will work since LSP falls back to directory detection.
+- =initOptions.formatterMode=: ="typstyle"= — tinymist supports both =typstfmt= and =typstyle= formatters; =typstyle= is the more modern option
+- No =settings= needed — tinymist defaults are sensible
+- No special =capabilities= needed — tinymist advertises its own capabilities via LSP initialization
+
+* Verification
+- The LSP tool shows tinymist as active when a .typ file is targeted: =lsp status= after opening any .typ file
+- =lsp hover= on a Typst symbol returns type/documentation info
+- =lsp diagnostics= on a .typ file with an error returns the diagnostic
+- The defaults.json file is valid JSON (no syntax errors)
+
+* Sub-outline
+** add-tinymist-config — Add tinymist entry to defaults.json
+Single file edit. Insert the tinymist config object in alphabetical position among existing server entries.
+
+** verify — Test LSP integration
+Run =lsp hover= and =lsp diagnostics= on a sample .typ file to verify tinymist starts and responds.

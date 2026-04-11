@@ -1,0 +1,88 @@
+#+TITLE: Typst first-class in code tools
+#+STATE: DONE
+#+SESSION_ID: 14b6e1b08a8dfb55
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-52-40-106Z_14b6e1b08a8dfb55.jsonl]]
+#+CUSTOM_ID: PLAN-189-typst-first-class-in-code-tools
+
+NOTE [2026-04-11]: Completed implementation, verification, artifact capture, and commit preparation for first-class Typst support.
+
+
+* Initial Message
+
+Look at the way we use typst in ~/code, especially the branding and the way we built our last .typ files in BackDesk-C, and make typst first-class in the code tools. make it genuinely useful to make excellent typst documents with ease
+
+* Context
+
+Typst is used across multiple projects for professional documents — pitch decks, technical reports, client proposals, research reports, and brand-compliant deliverables. The Spell coding agent currently has no first-class Typst support: the code tool cannot outline .typ files, the LSP has no tinymist integration, and no skill teaches Typst authoring.
+
+This plan adds Typst as a fully supported language at three levels:
+1. *Code intelligence* — Rust pi-code-engine language profile enabling outline, navigate, read, and edit operations on .typ files
+2. *Language server* — Tinymist LSP integration for diagnostics, hover, go-to-definition, references, and formatting
+3. *Domain knowledge* — A comprehensive authoring skill teaching Typst fundamentals, brand library patterns, template authoring, and compilation workflow
+
+** Key decisions
+- Typst profile goes into the Rust pi-code-engine only (Emacs code layer is being deprecated)
+- Uses =codebook-tree-sitter-typst= crate (v0.12.1, published on crates.io) for tree-sitter grammar
+- Declaration patterns: =let= (functions/variables), =import= (modules), =show= (styling rules)
+- Tinymist LSP with =typstyle= formatter
+- Skill covers general Typst fluency + brand library awareness pattern + compilation workflow
+- Compilation via existing =bash= tool (=typst compile=) + =send_file= — no dedicated tool needed
+
+** Existing infrastructure
+- tree-sitter-typst grammar already installed in Emacs daemon (but not used for outline)
+- =typst= binary v0.14.2 at =/usr/bin/typst=
+- =tinymist= binary at =/usr/bin/tinymist=
+- Brand library at =domain/growth/branding/spell-brand/= (colors, typography, components, layout)
+- Templates at =domain/growth/templates/= (campaign-brief, client-proposal, competitive-analysis, weekly-digest)
+
+* Verification
+
+After all items are complete:
+
+#+begin_example
+# Rust engine
+cargo check --package pi-code-engine
+cargo test --package pi-code-engine
+
+# TypeScript checks (verify no regressions)
+bun check:ts
+
+# Functional verification
+# 1. code outline on a .typ file shows let/import/show declarations
+# 2. lsp hover on a Typst symbol returns type info
+# 3. lsp diagnostics on a .typ file with errors reports them
+# 4. typst skill loads automatically when .typ files present
+#+end_example
+
+* Execution Manifest
+
+All three items are independent and can execute in parallel (no cross-dependencies):
+
+| Wave | Item | Effort | Notes |
+|------+------+--------+-------|
+| 1 | [[id:FEAT-458-typst-language-profile-in-pi-code-engine]] | 2h | Cargo dep + build.rs + profile + tests |
+| 1 | [[id:FEAT-459-tinymist-lsp-default-configuration]] | 15m | Single file edit in defaults.json |
+| 1 | [[id:FEAT-460-typst-authoring-skill]] | 1h | Skill SKILL.md creation |
+
+
+** Completion [2026-04-11]
+*** Verification
+- `cargo check -p pi-code-engine` -> passed.
+- `cargo test -p pi-code-engine` -> passed, including new Typst outline/navigate coverage (`55 passed`).
+- `bun check:ts` -> passed.
+- `bun run build:native` -> rebuilt `pi-natives` against the updated Rust engine.
+- `bun --eval 'import { executeCodeBuffer } from "./packages/natives/src/code-buffer/index.ts"; ... executeCodeBuffer({ command: "outline", file: ".../hello.typ" })'` -> returned three top-level declarations for the Typst fixture: import, let, show. Saved at [[file:!tasks/plans/plan-artifacts/PLAN-189-typst-first-class-in-code-tools/code-outline-hello-typ.json]].
+- `bun --eval 'import { Settings } from "./packages/coding-agent/src/config/settings.ts"; import { LspTool } from "./packages/coding-agent/src/lsp/index.ts"; ... execute hover on hello.typ/title'` -> Tinymist hover returned Typst type info (`let title = text;`). Saved at [[file:!tasks/plans/plan-artifacts/PLAN-189-typst-first-class-in-code-tools/lsp-hover-hello-typ.txt]].
+- `bun --eval 'import { Settings } from "./packages/coding-agent/src/config/settings.ts"; import { LspTool } from "./packages/coding-agent/src/lsp/index.ts"; ... execute diagnostics on /tmp/plan-189-typst-diagnostics.typ'` -> Tinymist diagnostics reported the intentional parse error (`expected expression`). Saved at [[file:!tasks/plans/plan-artifacts/PLAN-189-typst-first-class-in-code-tools/lsp-diagnostics-invalid-typ.txt]].
+- `bun --eval 'import { loadConfig, getServerForFile } from "./packages/coding-agent/src/lsp/config.ts"; ...'` -> current source config selects `tinymist` for `.typ` files with `formatterMode: "typstyle"`. Saved at [[file:!tasks/plans/plan-artifacts/PLAN-189-typst-first-class-in-code-tools/tinymist-selection.json]].
+- `bun --eval 'import { discoverSkills } from "./packages/coding-agent/src/sdk.ts"; ...'` -> skill discovery includes `typst` from `.spell/skills/typst/SKILL.md`. Saved at [[file:!tasks/plans/plan-artifacts/PLAN-189-typst-first-class-in-code-tools/skill-discovery-typst.json]].
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-189-typst-first-class-in-code-tools/code-outline-hello-typ.json]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-189-typst-first-class-in-code-tools/lsp-hover-hello-typ.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-189-typst-first-class-in-code-tools/lsp-diagnostics-invalid-typ.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-189-typst-first-class-in-code-tools/tinymist-selection.json]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-189-typst-first-class-in-code-tools/skill-discovery-typst.json]]
+- Skill source: [[file:.spell/skills/typst/SKILL.md]]
+*** Deviations
+- Added `.git` alongside `typst.toml` in Tinymist `rootMarkers`. The approved plan assumed Tinymist would still activate without `typst.toml`, but the current `loadConfig()` implementation only enables defaults whose root markers match. Without `.git`, Typst LSP would remain unavailable in this repo and other normal repos containing `.typ` files.
+- Functional verification used source-backed `bun --eval` invocations of `executeCodeBuffer` and `LspTool` after rebuilding `pi-natives`, because the long-lived session tool instances do not hot-reload changed native modules/default config during the same agent session.

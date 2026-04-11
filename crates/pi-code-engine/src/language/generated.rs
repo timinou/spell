@@ -33,4 +33,5 @@ macro_rules! include_grammar {
 include_grammar!(typescript, "grammar_typescript.rs");
 include_grammar!(rust_lang, "grammar_rust.rs");
 include_grammar!(python, "grammar_python.rs");
+include_grammar!(typst, "grammar_typst.rs");
 include_grammar!(elixir, "grammar_elixir.rs");
