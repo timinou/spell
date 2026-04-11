@@ -1,0 +1,186 @@
+#+TITLE: Mutable DAG Scheduler SwarmScheduler
+#+STATE: ITEM
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-382-mutable-dag-scheduler-swarmscheduler
+#+EFFORT: L
+#+PRIORITY: A
+#+LAYER: agent-runtime
+
+* Narrative
+
+Spell's current task dispatch system uses =batch-scheduler.ts=: a static DAG built once from a flat list of tasks with =blockers=, then executed via a pump loop. This works for single-batch dispatch but cannot support interconnected agent swarms because:
+
+1. *The graph is immutable.* Once =buildBatchGraph()= runs, no new nodes or edges can be added. A running agent cannot spawn a successor task or dynamically extend the plan.
+2. *Entry points are implicit.* All tasks with zero blockers start together, but there is no concept of "multiple independent sub-DAGs" at the scheduler level -- the scheduler treats the batch as one flat graph.
+3. *Readiness is binary.* A task is ready when all its blockers complete. There is no support for artifact-based triggers (e.g., "start when file X exists") or file-dependency overlap detection (e.g., "don't run concurrently with task Y because both modify =parser.ts=").
+
+This item creates the foundational data structure (=MutableDag=) and scheduler (=SwarmScheduler=) that replace the static batch model. Every subsequent swarm feature -- blackboard, handoff, spawn_successor, live result passing -- depends on this scheduler being able to accept mutations at runtime.
+
+The existing =scheduleBatch()= API is preserved as a thin wrapper so all current callers (=TaskTool.#executeSync=, async dispatch) continue working without changes.
+
+* Design Decisions
+
+1. TypeScript owns runtime scheduling (pump loop, concurrency, result collection). Elisp owns persistent graph validation (via =org-fluid-plan= for plans that use org items).
+2. =MutableDag<T>= is a generic class parameterized by node payload type =T=. It stores adjacency (=dependentsOf=, =blockersOf=) and supports =addNode()=, =removeNode()=, =addEdge()=, =removeEdge()=. Every mutation runs cycle detection before committing.
+3. =SwarmScheduler= wraps =MutableDag= with a pump loop. It exposes =mutate(mutation)= for external callers to inject changes mid-execution. Mutations are queued and applied between pump cycles (not during a running task's callback).
+4. Concurrency is isolation-gated: the scheduler accepts an =isolationMode= flag. When active, independent DAG components (detected via union-find from =MutableDag.splitComponents()=) may run concurrently up to =maxConcurrency=. When inactive, only one non-delegated task runs at a time (existing behavior).
+5. File-dependency overlap: nodes carry an optional =filesDeps: string[]= field. Two nodes with intersecting =filesDeps= are never concurrently ready, even if they are in different components.
+6. Cascade failure propagates to all transitive dependents (existing behavior). Dynamic nodes added after a failure of their dependency are immediately failed.
+7. Stagger delay for prompt cache warming is preserved. Applied per launch within a superstep.
+
+* Files to Create
+
+** =packages/coding-agent/src/task/mutable-dag.ts=
+The =MutableDag<T>= class. Key API:
+#+begin_src typescript
+class MutableDag<T> {
+  addNode(id: string, payload: T, deps?: string[]): void;
+  removeNode(id: string, mode: "cascade" | "orphan"): string[]; // returns affected IDs
+  addEdge(from: string, to: string): void;
+  removeEdge(from: string, to: string): void;
+  has(id: string): boolean;
+  getPayload(id: string): T | undefined;
+  getReady(completed: ReadonlySet<string>, running: ReadonlySet<string>): string[];
+  getDependents(id: string): string[];
+  getBlockers(id: string): string[];
+  topologicalOrder(): string[];
+  splitComponents(): MutableDag<T>[];
+  get size(): number;
+  get roots(): string[]; // nodes with zero in-degree
+  // For file-dep overlap:
+  setFilesDeps(id: string, files: string[]): void;
+  getFilesDeps(id: string): string[];
+  hasFileOverlap(idA: string, idB: string): boolean;
+}
+#+end_src
+Cycle detection uses Kahn's algorithm (same as existing =runTopologicalSort= in =dag.ts=). =splitComponents= uses union-find (same algorithm as =splitIntoComponents= in =dag.ts=).
+
+** =packages/coding-agent/src/task/swarm-scheduler.ts=
+The =SwarmScheduler= class. Key API:
+#+begin_src typescript
+interface SwarmSchedulerOptions {
+  maxConcurrency: number;
+  signal?: AbortSignal;
+  staggerMs?: number;
+  isolationMode: boolean;
+}
+
+interface SwarmNode<T> {
+  id: string;
+  payload: T;
+  deps?: string[];
+  filesDeps?: string[];
+  run: (signal: AbortSignal) => Promise<T>;
+}
+
+class SwarmScheduler<T> {
+  constructor(options: SwarmSchedulerOptions);
+  addNode(node: SwarmNode<T>): void; // can be called before or during run
+  removeNode(id: string): void;
+  run(): Promise<Map<string, SwarmTaskResult<T>>>;
+}
+#+end_src
+
+* Files to Modify
+
+** =packages/coding-agent/src/task/batch-scheduler.ts=
+Refactor =scheduleBatch()= to create a =SwarmScheduler= internally, add all tasks as nodes, then call =run()=. The function signature and return type remain identical. =buildBatchGraph()= remains exported for callers that only need the graph structure.
+
+** =packages/coding-agent/src/task/types.ts=
+Add =SwarmTaskResult<T>= type and re-export from =batch-scheduler.ts= for backward compat.
+
+* Existing Patterns to Follow
+- =buildBatchGraph()= in =batch-scheduler.ts= (line 43-102): topological sort via Kahn's algorithm with remaining-blockers counting
+- =scheduleBatch()= pump loop (line 104-248): readyQueue, remainingBlockers map, finishTask/failDependents callbacks, stagger delay, abort handling
+- =splitIntoComponents()= in =orchestrators/fluid/dag.ts= (line 172-245): union-find for component detection
+- =BatchTask<T>= / =BatchTaskResult<T>= interface shape (batch-scheduler.ts line 1-26)
+
+* Sub-outline (test-first, strictly ordered)
+
+** 1. Define types
+Create =SwarmTaskResult<T>=, =SwarmNode<T>=, =SwarmSchedulerOptions= in =types.ts=. No logic, pure type definitions.
+
+** 2. Write MutableDag tests
+File: =packages/coding-agent/test/task/mutable-dag.test.ts=
+
+Each test specifies exact input and expected output:
+
+*** addNode
+- =dag.addNode("a", {})= on empty DAG => =dag.has("a") === true=, =dag.size === 1=, =dag.roots === ["a"]=
+- =dag.addNode("b", {}, ["a"])= => =dag.getBlockers("b") === ["a"]=, =dag.getDependents("a") === ["b"]=
+- =dag.addNode("a", {})= when "a" exists => throws =Error("Node a already exists")=
+- =dag.addNode("b", {}, ["b"])= (self-dep) => throws =Error("Self-dependency: b")=
+- =dag.addNode("c", {}, ["b"]); dag.addNode("d", {}, ["c"]); dag.addNode("e", {}, ["d", "a"])= => forms diamond, no error
+
+*** addNode cycle detection
+- Given a->b->c, =dag.addNode("d", {}, ["c"])= then =dag.addEdge("d", "a")= => throws =Error("Cycle detected")=
+- Given a->b, =dag.addNode("c", {}, ["b", "a"])= => no cycle, =topologicalOrder() === ["a", "b", "c"]=
+
+*** removeNode
+- =dag.removeNode("a", "cascade")= where b depends on a => returns =["a", "b"]=, =dag.has("a") === false=, =dag.has("b") === false=
+- =dag.removeNode("a", "orphan")= where b depends on a => returns =["a"]=, =dag.getBlockers("b") === []=
+- =dag.removeNode("x", "cascade")= where x doesn't exist => throws =Error("Node x not found")=
+
+*** getReady
+- DAG: a(no deps), b(deps: [a]), c(no deps). completed={}, running={} => =getReady() === ["a", "c"]= (both roots)
+- completed={"a"}, running={} => =getReady() === ["b", "c"]=
+- completed={"a"}, running={"c"} => =getReady() === ["b"]= (c excluded because running)
+
+*** splitComponents
+- DAG: a->b, c->d (two disconnected pairs) => =splitComponents()= returns 2 DAGs, one with {a,b}, one with {c,d}
+- DAG: a->b->c (single chain) => =splitComponents()= returns 1 DAG with {a,b,c}
+
+*** filesDeps overlap
+- =dag.setFilesDeps("a", ["src/parser.ts"]); dag.setFilesDeps("b", ["src/parser.ts"])= => =dag.hasFileOverlap("a", "b") === true=
+- =dag.setFilesDeps("a", ["src/parser.ts"]); dag.setFilesDeps("b", ["src/lexer.ts"])= => =dag.hasFileOverlap("a", "b") === false=
+- =dag.setFilesDeps("a", [])= => =dag.hasFileOverlap("a", "b") === false= (empty treated as no constraint)
+
+*** topologicalOrder
+- Diamond: a->{b,c}->d => order starts with "a", ends with "d", b and c in middle (either order)
+- Already tested indirectly above, but verify determinism: same DAG always produces same order
+
+** 3. Implement MutableDag
+Depends on: tests from step 2 must exist on disk before implementation begins.
+
+** 4. Write SwarmScheduler tests
+File: =packages/coding-agent/test/task/swarm-scheduler.test.ts=
+
+*** Static DAG (backward compat)
+- 3 independent tasks => all complete, results map has 3 entries with status "completed"
+- Linear chain a->b->c => b starts only after a completes (verify via timestamps or event ordering)
+
+*** Multi-entry
+- 3 roots (a, b, c) with no deps, maxConcurrency=3, isolation=true => all 3 start within stagger delay window
+- Verify all 3 running simultaneously (use deferred promises, resolve after confirming all started)
+
+*** Dynamic addNode
+- Start with a(no deps). While a is running, call =scheduler.addNode({id:"b", deps:["a"], ...})=. After a completes, b starts. Verify b receives correct result.
+- Add node with already-completed dep => starts immediately in next pump cycle
+
+*** Dynamic removeNode
+- DAG: a->b->c. Remove b while a is running => c cascade-fails with error "Predecessor b removed"
+- Remove running node => current run completes but result is discarded, dependents cascade-fail
+
+*** File overlap serialization
+- Tasks a and b both have =filesDeps: ["src/x.ts"]=, isolation=true, maxConcurrency=2. Verify they do NOT run concurrently (b waits for a to complete).
+- Tasks a (files: ["src/x.ts"]) and c (files: ["src/y.ts"]), isolation=true => run concurrently
+
+*** Abort
+- 3 tasks running, signal.abort() => pending tasks get status "aborted", running tasks receive abort signal
+
+*** Cascade failure
+- a fails, b depends on a => b gets status "failed" with error "Predecessor a failed"
+- a fails, b depends on a, c depends on b => both b and c fail transitively
+
+** 5. Implement SwarmScheduler
+Depends on: tests from step 4.
+
+** 6. Refactor scheduleBatch wrapper
+Depends on: SwarmScheduler passing all tests. Modify =scheduleBatch()= to internally create a =SwarmScheduler= with =isolationMode: false= (preserving existing non-isolated behavior). All existing =batch-scheduler.test.ts= tests must pass without modification.
+
+* Verification
+- =bun test packages/coding-agent/test/task/mutable-dag.test.ts= passes
+- =bun test packages/coding-agent/test/task/swarm-scheduler.test.ts= passes
+- =bun test packages/coding-agent/test/task/batch-scheduler.test.ts= passes (zero changes to existing tests)
+- =bun check:ts= passes

@@ -30,7 +30,7 @@ function sanitizeRenderConfig(config: MermaidAsciiRenderOptions | undefined): Me
 	};
 }
 export interface RenderMermaidToolDetails {
-	artifactId?: string;
+	artifactUri?: string;
 }
 
 export class RenderMermaidTool implements AgentTool<typeof renderMermaidSchema, RenderMermaidToolDetails> {
@@ -52,16 +52,15 @@ export class RenderMermaidTool implements AgentTool<typeof renderMermaidSchema, 
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<RenderMermaidToolDetails>> {
 		const ascii = renderMermaidAscii(params.mermaid, sanitizeRenderConfig(params.config));
-		const { path: artifactPath, id: artifactId } =
-			(await this.session.allocateOutputArtifact?.("render_mermaid")) ?? {};
-		if (artifactPath) {
-			await Bun.write(artifactPath, ascii);
+		const artifact = await this.session.allocateOutputArtifact?.("render_mermaid");
+		if (artifact?.path) {
+			await Bun.write(artifact.path, ascii);
 		}
 
-		const artifactLine = artifactId ? `\n\nSaved artifact: artifact://${artifactId}` : "";
+		const artifactLine = artifact?.uri ? `\n\nSaved artifact: ${artifact.uri}` : "";
 		return {
 			content: [{ type: "text", text: `${ascii}${artifactLine}` }],
-			details: { artifactId },
+			details: { artifactUri: artifact?.uri },
 		};
 	}
 }

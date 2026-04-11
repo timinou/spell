@@ -1,0 +1,80 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-048-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Now I have a complete picture. Here are my findings:
+
+---
+
+## Findings
+
+### 1. `extractPlanWaves` has the same bug — it was not fixed
+
+**What:** `exit-plan-mode.ts` line 65 has a third `[[id:...]]` regex with the same root cause: `\]\]` immediately after the target with no allowance for description form.
+
+```typescript
+const entryRe = /^\s*-\s+\[\[id:([^\]]+)\]\]\s+(.+)$/;
+```
+
+**Where:** `packages/coding-agent/src/tools/exit-plan-mode.ts`, line 65, inside `extractPlanWaves()`
+
+**Why:** A PLAN whose wave entries use description-form links (the exact form this fix was supposed to make work) would pass the child-reference validation (`extractIdLinks` was fixed), but `extractPlanWaves` would silently discard every wave entry. The resulting `waves` array would be populated but all entries empty — todo auto-init would produce hollow phases. The user symptom: plan is accepted, execution starts, but no wave tasks are materialized.
+
+The required fix is the same pattern already applied to the other two: `\[\[id:([^\]]+)\](?:\[[^\]]*\])?\]\s+(.+)$`.
+
+**Effort:** trivial
+
+---
+
+### 2. `exit-plan-mode-waves.test.ts` has no description-form coverage
+
+**What:** The wave-extraction test suite exercises six scenarios, all using plain-form links. No test covers `- [[id:X][DESC]] step`.
+
+**Where:** `packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts` — missing test case
+
+**Why:** Without a test, the `extractPlanWaves` regex fix (once applied) has no guard against future regression. Given that the same pattern was missed in the current fix, this gap is high-risk.
+
+**Effort:** trivial
+
+---
+
+### 3. Missing blank line before first new test in `id-links.test.ts`
+
+**What:** The new `test("extracts id from description-style link ...")` block at line 34 immediately follows the closing `});` of the previous test at line 33, with no blank line separator. Every other test pair in the file is separated by a blank line.
+
+**Where:** `packages/org/test/id-links.test.ts`, between lines 33 and 34
+
+**Why:** Cosmetic inconsistency; no bug risk.
+
+**Effort:** trivial
+
+---
+
+### 4. Missing blank line before new test in `spec-ingestion.test.ts`
+
+**What:** Same formatting issue — the new `it("recognises description-style id links...")` at line 47 starts immediately after `});` at line 46, while existing test pairs are separated by blank lines.
+
+**Where:** `packages/coding-agent/test/loop/spec-ingestion.test.ts`, between lines 46 and 47
+
+**Why:** Cosmetic inconsistency; no bug risk.
+
+**Effort:** trivial
+
+---
+
+### 5. `String.fromCharCode(10)` in spec-ingestion test is needlessly opaque
+
+**What:** The new test constructs the newline constant as `String.fromCharCode(10)` instead of `"\n"`. The BUG item's spec suggested this to avoid "fragile multi-line string literals", but the existing test in the same file (line 28) already uses `"\n"` inline without issue.
+
+**Where:** `packages/coding-agent/test/loop/spec-ingestion.test.ts`, line 49
+
+**Why:** Slightly harder to read than `"\n"`, inconsistent with the file's established style. Not a correctness issue.
+
+**Effort:** trivial

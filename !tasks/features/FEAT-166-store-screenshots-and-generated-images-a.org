@@ -1,0 +1,164 @@
+#+TITLE: Store screenshots and generated images as artifacts
+#+STATE: DONE
+#+SESSION_ID: 14b64b9276f08680
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-11T09-56-47-707Z_14b64b9276f08680.jsonl]]
+#+CUSTOM_ID: FEAT-166-store-screenshots-and-generated-images-a
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: sdk
+#+DEPENDS: FEAT-165-artifact-uri-extension-and-subdirectory
+
+NOTE [2026-04-11]: Screenshots and generated images now persist through artifact storage with surfaced artifact URIs and focused tests.
+
+* Context
+
+All implementation in =/home/user/code/ora/spell/packages/coding-agent/=.
+
+Currently screenshots save to =/tmp/spell-sshots-{snowflake}.png= or user-specified path.
+Generated images save to =/tmp/spell-image-{snowflake}.{ext}=. Neither integrates with
+the artifact:// system.
+
+After [[id:FEAT-165-artifact-uri-extension-and-subdirectory]], =allocateOutputArtifact=
+accepts =(toolType, ext?)= and returns ={ id, path, uri }= where =uri= is the full
+session-scoped artifact URI like =artifact://14b64b/main/screenshot/0.png=.
+
+Change both tools to save into the session artifact directory and emit artifact:// URIs.
+
+** Decision: Screenshot storage
+
+When no user-specified path (=params.path= is empty/absent):
+- Allocate artifact path via =this.session.allocateOutputArtifact("screenshot", "png")=
+- Save full-resolution PNG to artifact dir
+- Include URI in tool result text (e.g., =Artifact: artifact://14b64b/main/screenshot/0.png=)
+- Continue sending compressed image to model as before
+
+When user specifies a path:
+- Save to user-specified path as before
+- ALSO save to artifact dir
+- Tool result includes both paths + artifact URI
+
+** Decision: Generated image storage
+
+For each generated image:
+- Determine extension from MIME type (=getExtensionForMime= exists in gemini-image.ts)
+- Allocate artifact path via =allocateOutputArtifact("generate_image", ext)=
+- Save to artifact dir instead of tmpdir
+- Include URI in response summary
+- Keep returning images to model as before
+
+* Implementation
+
+** Files to modify
+
+*** =src/tools/browser.ts=
+
+In the =screenshot= case (~line 1360), after capturing buffer:
+
+#+begin_src typescript
+// Allocate artifact
+const { path: artPath, uri: artUri } =
+  (await this.session.allocateOutputArtifact?.("screenshot", "png")) ?? {};
+
+// Save full-res to artifact dir
+if (artPath) await Bun.write(artPath, buffer);
+
+// If user also specified path, save there too (existing behavior)
+const screenshotPath = resolveScreenshotArtifactPath(params.path, this.session.cwd);
+if (params.path?.trim()) {
+  await Bun.write(screenshotPath, buffer);
+}
+
+// Use artifact path as primary when no user path
+const primaryPath = params.path?.trim() ? screenshotPath : (artPath ?? screenshotPath);
+details.screenshotPath = primaryPath;
+
+// Add artifact URI to output
+if (artUri) lines.push(`Artifact: ${artUri}`);
+#+end_src
+
+Note: keep =resolveScreenshotArtifactPath= for user-specified paths. When no path given AND
+no artifact allocation available, fall back to tmpdir as before.
+
+*** =src/tools/gemini-image.ts=
+
+1. Add =saveImageAsArtifact= helper:
+#+begin_src typescript
+async function saveImageAsArtifact(
+  image: InlineImageData,
+  allocate?: (toolType: string, ext?: string) => Promise<{ id?: string; path?: string; uri?: string }>
+): Promise<{ path: string; uri?: string }> {
+  const ext = getExtensionForMime(image.mimeType);
+  if (allocate) {
+    try {
+      const { path: artPath, uri } = await allocate("generate_image", ext);
+      if (artPath) {
+        await Bun.write(artPath, Buffer.from(image.data, "base64"));
+        return { path: artPath, uri };
+      }
+    } catch { /* fall through to tmpdir */ }
+  }
+  return { path: await saveImageToTemp(image) };
+}
+#+end_src
+
+2. Update all three provider paths to use =saveImageAsArtifact= instead of =saveImagesToTemp=.
+   Pass =ctx.sessionManager?.allocateArtifactPath?.bind(ctx.sessionManager)= as allocator.
+
+3. Update =buildResponseSummary= to accept =Array<{ path: string; uri?: string }>= and
+   display URIs when available.
+
+4. Add =imageUris?: string[]= to =GeminiImageToolDetails= for backward compat (keep =imagePaths=).
+
+5. Keep =saveImageToTemp= as private fallback.
+
+* Tests
+
+Browser screenshot and gemini image tests are hard to unit test in isolation (they need
+browser instances or API mocking). The implementer should:
+
+1. Verify via existing screenshot tests if they exist (search =test/= for screenshot tests)
+2. Add a focused test for =saveImageAsArtifact= in =test/tools/gemini-image-artifacts.test.ts=:
+
+#+begin_src typescript
+describe("saveImageAsArtifact", () => {
+  it("saves to artifact dir when allocator provided", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "img-art-"));
+    const artDir = path.join(tmpDir, "generate_image");
+
+    const allocate = async (tool: string, ext?: string) => {
+      await fs.mkdir(path.join(tmpDir, tool), { recursive: true });
+      return {
+        id: "0",
+        path: path.join(tmpDir, tool, `0.${ext ?? "txt"}`),
+        uri: `artifact://test/main/${tool}/0.${ext ?? "txt"}`,
+      };
+    };
+
+    const image = { data: Buffer.from("fake-png").toString("base64"), mimeType: "image/png" };
+    const result = await saveImageAsArtifact(image, allocate);
+
+    expect(result.uri).toBe("artifact://test/main/generate_image/0.png");
+    expect(await Bun.file(result.path).exists()).toBe(true);
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("falls back to tmpdir when no allocator", async () => {
+    const image = { data: Buffer.from("fake").toString("base64"), mimeType: "image/png" };
+    const result = await saveImageAsArtifact(image);
+    expect(result.uri).toBeUndefined();
+    expect(result.path).toContain(os.tmpdir());
+  });
+});
+#+end_src
+
+Note: =saveImageAsArtifact= must be exported (or made testable) for this test.
+
+* Acceptance Criteria
+
+- [ ] Screenshots without user path → saved to =artifacts/screenshot/{id}.png=
+- [ ] Screenshots with user path → saved to both locations
+- [ ] Tool result text includes =artifact://sessionId/main/screenshot/{id}.png=
+- [ ] Generated images → saved to =artifacts/generate_image/{id}.{ext}=
+- [ ] Response summary includes artifact:// URIs
+- [ ] Fallback to tmpdir when artifact system unavailable
+- [ ] =cd /home/user/code/ora/spell && bun test packages/coding-agent= passes

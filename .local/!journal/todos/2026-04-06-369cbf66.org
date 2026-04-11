@@ -1,0 +1,21 @@
+#+TITLE: Session 14affa2e78f59a47 Todos
+#+DATE: 2026-04-06
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execute
+
+** DONE Fix all five doc syntax/link issues
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+BUG-186: telegram-bridge.md env syntax, broken link, bare booleans; getting-started.md auth token value. Regenerate docs index.
+
+** DONE Verify all fixes and close org lifecycle
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+Run grep checks, regenerate docs index, bun check:ts, update org items, commit.

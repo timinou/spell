@@ -1,0 +1,132 @@
+#+TITLE: Handoff Tool for Peer Agent Transfer
+#+STATE: ITEM
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-386-handoff-tool-for-peer-agent-transfer
+#+EFFORT: M
+#+PRIORITY: B
+#+LAYER: agent-runtime
+#+DEPENDS: FEAT-383-org-blackboard-for-swarm-state FEAT-385-swarm-event-bus-channels-and-artifact-no
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Narrative
+
+In the current system, agent control flow is strictly hierarchical: a parent agent dispatches subagents via the =task= tool, and subagents return results to the parent via =submit_result=. There is no way for a running subagent to say "I've done what I can; agent X should take over from here with this context."
+
+This matters for swarms because agents discover things at runtime that change what should happen next:
+- A code analysis agent finds that the fix requires database schema changes. It cannot do that work, but it has assembled the exact context a schema-migration agent would need.
+- A test-writing agent finishes writing tests and wants to hand off to an implementation agent with the test file paths and failing assertions as structured input.
+- An agent hits an unexpected API boundary and needs to hand off to a specialist (e.g., from a TypeScript agent to a Rust agent for crate changes).
+
+The handoff tool lets a running agent transfer control to another agent (or a scheduler-selected agent) by writing a structured =HandoffRecord= to the blackboard and signaling the scheduler via the event bus. The current agent's session ends (it calls =submit_result= with the handoff details), and the scheduler creates a new task node in the live DAG for the receiving agent.
+
+This is distinct from =spawn_successor= (FEAT-387): handoff *replaces* the current agent (it's done), while spawn_successor *extends* the DAG (the current agent continues).
+
+* Design Decisions
+
+1. The handoff tool is a new =AgentTool= available to subagents in swarm mode. Name: =handoff=.
+2. Parameters:
+   - =targetAgent?: string= -- suggested agent type. Scheduler may override. If omitted, scheduler picks.
+   - =context: string= -- structured context for the receiving agent (what was done, what needs doing, key files).
+   - =partialResult?: string= -- any intermediate output the receiving agent should have.
+   - =reason: string= -- why the handoff is happening (for audit/blackboard).
+3. When a subagent calls =handoff=:
+   a. A =HandoffRecord= is written to the blackboard (=SwarmBlackboard.write= with type=handoff).
+   b. A =SwarmHandoffEvent= is enqueued on =SWARM_HANDOFF_CHANNEL=.
+   c. The tool returns a success message, and the agent MUST call =submit_result= immediately after.
+   d. The scheduler receives the event and creates a new node in the =MutableDag= with a dependency on the current agent and the handoff context injected into the assignment.
+4. If =targetAgent= is specified and the agent type exists, the scheduler uses it. Otherwise, the scheduler selects based on the handoff context (or asks the parent agent to decide).
+5. The receiving agent's assignment includes the handoff context, the partial result, and a reference to the blackboard entry (for querying additional state).
+6. Handoff is optional: agents that don't need it simply call =submit_result= as usual. The tool is only available in swarm execution mode.
+
+* Files to Create
+
+** =packages/coding-agent/src/swarm/handoff-tool.ts=
+#+begin_src typescript
+export class HandoffTool implements AgentTool<HandoffSchema> {
+  readonly name = "handoff";
+  readonly label = "Handoff";
+  readonly strict = true;
+  // ...
+  async execute(toolCallId: string, params: HandoffParams): Promise<AgentToolResult>;
+}
+#+end_src
+
+** =packages/coding-agent/src/prompts/tools/handoff.md=
+Prompt documentation for the handoff tool. Explains when to use it, what context to include, and the requirement to call =submit_result= afterward.
+
+* Files to Modify
+
+** =packages/coding-agent/src/task/executor.ts=
+When in swarm mode, include =handoff= in the subagent's tool set (alongside =submit_result=).
+
+** =packages/coding-agent/src/task/swarm-scheduler.ts=
+Subscribe to =SWARM_HANDOFF_CHANNEL=. On handoff event:
+1. Resolve target agent type (from event or auto-select).
+2. Create new =MutableDag= node with dependency on the handoff source agent.
+3. Set the new node's assignment to include handoff context + partial result.
+4. Node enters the ready queue once the source agent completes.
+
+** =packages/coding-agent/src/swarm/blackboard.ts=
+No structural changes needed -- =write()= with =type=handoff= already supported. Just verify =HandoffRecord= fields are stored correctly.
+
+* Existing Patterns to Follow
+- =AgentTool= interface in =packages/agent/src/types.ts=: name, label, parameters, execute, description
+- Existing tool implementations (e.g., =todo-write.ts=, =task/index.ts=) for tool lifecycle
+- =submit_result= tool pattern in subagent system prompt
+- =SwarmHandoffEvent= type from FEAT-385
+
+* Sub-outline (test-first)
+
+** 1. Write handoff tool tests
+File: =packages/coding-agent/test/swarm/handoff-tool.test.ts=
+
+*** Successful handoff
+- Create HandoffTool with mock blackboard and eventBus.
+- Call =execute(toolCallId, { targetAgent: "schema-agent", context: "Need DB migration for users table", reason: "API change requires schema update" })=.
+- Assert: =blackboard.write= called with type=handoff, body contains context.
+- Assert: =eventBus.enqueue= called with =SWARM_HANDOFF_CHANNEL= and payload ={ fromAgent: currentAgentId, toAgent: "schema-agent", context: ..., reason: ... }=.
+- Assert: tool returns success message instructing agent to call =submit_result=.
+
+*** Handoff without target agent
+- Call =execute(toolCallId, { context: "...", reason: "..." })= (no targetAgent).
+- Assert: =SwarmHandoffEvent.toAgent= is undefined. Scheduler will decide.
+
+*** Handoff with partial result
+- Call with =partialResult: "Found 3 affected endpoints: /users, /auth, /profile"=.
+- Assert: blackboard entry body includes the partial result text.
+
+*** Handoff outside swarm mode
+- HandoffTool created without blackboard (non-swarm session).
+- Call execute => returns error: "Handoff is only available in swarm execution mode."
+
+** 2. Write scheduler handoff integration tests
+File: =packages/coding-agent/test/swarm/scheduler-handoff.test.ts=
+
+*** Scheduler creates node on handoff event
+- Start SwarmScheduler with single node "agent-a".
+- Emit =SwarmHandoffEvent= with fromAgent="agent-a", toAgent="agent-b".
+- Assert: new node "agent-b-handoff-<id>" appears in DAG with dep on "agent-a".
+
+*** Handoff node receives injected context
+- Verify the new node's assignment includes the handoff context and partial result.
+
+** 3. Implement HandoffTool
+Depends on: tests from step 1.
+
+** 4. Implement scheduler handoff handler
+Depends on: tests from step 2.
+
+** 5. Write handoff prompt (handoff.md)
+Depends on: implementation (documents actual behavior).
+
+** 6. Wire HandoffTool into swarm subagent tool set
+Modify executor.ts to inject the tool when swarm mode is active.
+
+* Verification
+- =bun test packages/coding-agent/test/swarm/handoff-tool.test.ts= passes
+- =bun test packages/coding-agent/test/swarm/scheduler-handoff.test.ts= passes
+- =bun check:ts= passes

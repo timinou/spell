@@ -140,11 +140,11 @@ describe("executePythonWithKernel", () => {
 
 		const result = await executePythonWithKernel(kernel, "print('big')", {
 			artifactPath,
-			artifactId: "0",
+			artifactUri: "artifact://test/main/python/0.txt",
 		});
 
 		expect(result.truncated).toBe(true);
-		expect(result.artifactId).toBe("0");
+		expect(result.artifactUri).toBe("artifact://test/main/python/0.txt");
 		expect(result.output).toContain("TAIL");
 
 		const fullText = await Bun.file(artifactPath).text();

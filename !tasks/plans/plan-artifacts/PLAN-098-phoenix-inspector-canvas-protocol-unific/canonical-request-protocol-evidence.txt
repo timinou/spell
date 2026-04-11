@@ -1,0 +1,22 @@
+Canonical protocol evidence
+
+Automated verification:
+1. bun test packages/coding-agent/test/tools/canvas-launch-normalization.test.ts
+   - Passed
+   - Covers open/directory normalization into a canonical launch request with derived id/path.
+2. bun test ./.spell/extensions/phoenix-inspector/index.test.ts
+   - Passed
+   - Covers canonical Phoenix Inspector request envelopes:
+     - agent handoff via { _tier: "agent", _rid, _assignment, context }
+     - source excerpt via { _tool: "read", _rid, path, offset, limit }
+
+Relevant source/test shapes after the fix:
+- .spell/extensions/phoenix-inspector/inspector.qml sends:
+  - bridge.send({ _tier: "agent", _rid: pendingAgentHandoffRid, _assignment: assignment, context: handoffContext })
+  - invokeArmedTool("read", pendingReadRid, { path, offset: startLine, limit: 21 })
+- .spell/extensions/phoenix-inspector/index.ts handles:
+  - tier === "agent" by forwarding the request through pi.sendUserMessage(...)
+  - tool === "read" by resolving the file and replying with the excerpt window
+- packages/coding-agent/src/tools/canvas.ts forwards canonical agent requests with optional reply callbacks and marks Phoenix Inspector launches with taskTierSupported=true.
+
+This proves the runtime no longer depends on separate extension-vs-canvas action names like send_to_agent/read_source_excerpt/tidewave_get_docs.

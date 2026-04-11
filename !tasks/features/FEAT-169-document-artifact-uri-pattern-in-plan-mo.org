@@ -1,0 +1,53 @@
+#+TITLE: Document artifact URI pattern in plan mode prompts
+#+STATE: BLOCKED
+#+SESSION_ID: 14b64b9276f08680
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T09-56-47-707Z_14b64b9276f08680.jsonl]]
+#+CUSTOM_ID: FEAT-169-document-artifact-uri-pattern-in-plan-mo
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: sdk
+#+DEPENDS: FEAT-165-artifact-uri-extension-and-subdirectory FEAT-166-store-screenshots-and-generated-images-a
+
+NOTE [2026-04-11]: Prompt updates are implemented, but plan acceptance is blocked because `bun test packages/coding-agent` currently fails in unrelated existing suites.
+
+* Context
+
+All implementation in =/home/user/code/ora/spell/packages/coding-agent/=.
+
+After FEAT-165 (session-scoped URIs) and FEAT-166 (screenshots/images as artifacts),
+artifact:// URIs are the canonical way to reference tool-produced files. Update plan
+mode execution prompt to guide agents on the new URI format and plan-artifact workflow.
+
+** Decision: Scope
+
+Only update =plan-mode-approved.md= (execution-phase prompt). Prompt should:
+1. Explain that screenshots/images produce artifact:// URIs automatically
+2. Show the URI format: =artifact://<session-id>/<agent>/<tool>/<number>.<ext>=
+3. Guide referencing artifact:// URIs in completion reports
+4. Guide copying artifact files to =plan-artifacts/= for plan records
+
+* Implementation
+
+** File to modify: =src/prompts/system/plan-mode-approved.md=
+
+In the "Capture verification evidence" section, after the screenshot bullet, add:
+
+#+begin_example
+   - Screenshots and generated images automatically produce `artifact://` URIs (e.g., `artifact://14b64b/main/screenshot/3.png`). Reference these URIs in the completion report's `*** Artifacts` section.
+   - To persist an artifact for the plan record, copy it from the session artifact dir to `{{orgItemArtifactsDir}}/` using `cp` (the `artifact://` URI resolves to a filesystem path in bash).
+   - Subagent artifacts use the format `artifact://<session-id>/<subagent-name>/<tool>/<file>` and are also resolvable from the main session.
+#+end_example
+
+In the "Record exact commands/checks" section, update artifact reference guidance:
+
+#+begin_example
+   - When referencing saved artifacts in the report, use org-mode file links such as `[[file:{{orgItemArtifactsDir}}/name.png]]` so they render inline
+   - For session-scoped artifacts not yet copied to plan-artifacts, reference them as `artifact://session-id/agent/tool/file.ext` in the report
+#+end_example
+
+* Acceptance Criteria
+
+- [ ] =plan-mode-approved.md= mentions =artifact://= URI format with session scoping
+- [ ] Prompt explains subagent artifact URIs
+- [ ] No existing template variables (={{...}}=) broken
+- [ ] =cd /home/user/code/ora/spell && bun test packages/coding-agent= passes

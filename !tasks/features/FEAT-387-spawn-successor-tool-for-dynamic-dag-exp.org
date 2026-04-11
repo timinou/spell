@@ -1,0 +1,145 @@
+#+TITLE: Spawn Successor Tool for Dynamic DAG Expansion
+#+STATE: ITEM
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-387-spawn-successor-tool-for-dynamic-dag-exp
+#+EFFORT: M
+#+PRIORITY: B
+#+LAYER: agent-runtime
+#+DEPENDS: FEAT-382-mutable-dag-scheduler-swarmscheduler FEAT-383-org-blackboard-for-swarm-state FEAT-385-swarm-event-bus-channels-and-artifact-no
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Narrative
+
+In the current system, the shape of the task DAG is fixed at dispatch time. When the parent agent calls the =task= tool, it declares all tasks and their blockers upfront. If a subagent discovers mid-execution that additional work is needed -- a new module to create, a discovered dependency to investigate, a test suite to write for code it just generated -- it has no way to express this. It can only include the finding in its =submit_result= output and hope the parent agent reads it and dispatches a follow-up.
+
+This is the "closed world" problem: the DAG assumes all required work is known in advance. Real-world coding tasks are inherently open-ended -- agents discover scope during execution.
+
+=spawn_successor= lets a running agent dynamically add a new node to the live DAG. Unlike =handoff= (which ends the current agent), =spawn_successor= extends the graph: the current agent continues working while the new node waits for its dependencies to be satisfied. The current agent can declare itself as a dependency (meaning the successor waits for it to finish) or declare other agents as dependencies (meaning the successor starts as soon as those agents complete, potentially before the spawner finishes).
+
+This is the dual mechanism to handoff: handoff is "I'm done, someone else continue." Spawn_successor is "I need more work done in parallel or after me."
+
+* Design Decisions
+
+1. The spawn_successor tool is a new =AgentTool= available to subagents in swarm mode. Name: =spawn_successor=.
+2. Parameters:
+   - =task: string= -- the assignment for the new agent (what it should do).
+   - =dependsOn?: string[]= -- agent IDs the successor depends on. Defaults to =[currentAgentId]= (waits for spawner to complete).
+   - =agentType?: string= -- suggested agent type. Defaults to same type as spawner.
+   - =filesDeps?: string[]= -- file paths the successor will modify (for overlap detection).
+   - =metadata?: Record<string, unknown>= -- arbitrary structured data passed to the successor's context.
+3. When a subagent calls =spawn_successor=:
+   a. The tool validates dependencies (all referenced agents must exist in the DAG).
+   b. A new =FluidAgentNode= is created with a generated ID: =<spawnerAgentId>-successor-<n>=.
+   c. The node is added to the =MutableDag= via =dag.addNode()=. Cycle detection runs.
+   d. An =ArtifactRecord= is optionally written to the blackboard documenting the spawned task.
+   e. The tool returns the new node's ID to the spawning agent (so it can reference it in subsequent calls or its =submit_result=).
+   f. The scheduler's pump loop picks up the new node once its dependencies are satisfied.
+4. The spawner agent does NOT stop -- it continues executing. The successor is a new, independent task.
+5. If =dependsOn= is empty (=[]=), the successor starts immediately if concurrency allows (useful for parallel work).
+6. The successor's assignment includes: the =task= text, any =metadata= as structured context, and predecessor results from its dependencies (via existing =resolvePredecessorResultsContext= mechanism).
+7. The tool is only available in swarm execution mode. Calling it outside swarm mode returns an error.
+
+* Files to Create
+
+** =packages/coding-agent/src/swarm/spawn-successor-tool.ts=
+#+begin_src typescript
+export class SpawnSuccessorTool implements AgentTool<SpawnSuccessorSchema> {
+  readonly name = "spawn_successor";
+  readonly label = "Spawn Successor";
+  readonly strict = true;
+  // ...
+  async execute(toolCallId: string, params: SpawnSuccessorParams): Promise<AgentToolResult>;
+}
+#+end_src
+
+** =packages/coding-agent/src/prompts/tools/spawn-successor.md=
+Prompt documentation: when to use it, how it differs from handoff, dependency semantics, examples.
+
+* Files to Modify
+
+** =packages/coding-agent/src/task/executor.ts=
+Include =spawn_successor= in swarm subagent tool set.
+
+** =packages/coding-agent/src/task/swarm-scheduler.ts=
+Expose a =addDynamicNode(node: SwarmNode)= method that the SpawnSuccessorTool can call. The scheduler validates the mutation, adds the node to the MutableDag, and pumps the ready queue.
+
+** =packages/coding-agent/src/task/mutable-dag.ts= (from FEAT-382)
+No changes expected -- =addNode()= already supports this. But verify that adding a node mid-execution while the pump is running is safe (mutations queued between pump cycles).
+
+* Existing Patterns to Follow
+- =AgentTool= interface for tool implementation
+- =HandoffTool= (FEAT-386) for swarm-mode tool pattern
+- =MutableDag.addNode()= (FEAT-382) for DAG mutation
+- =resolvePredecessorResultsContext= (task/template.ts) for result injection into successors
+
+* Sub-outline (test-first)
+
+** 1. Write spawn_successor tool tests
+File: =packages/coding-agent/test/swarm/spawn-successor-tool.test.ts=
+
+*** Successful spawn with default deps
+- Agent "agent-a" calls =spawn_successor({ task: "Write tests for parser" })=.
+- Assert: =dag.addNode= called with id matching /^agent-a-successor-/, deps=["agent-a"].
+- Assert: tool returns ={ nodeId: "agent-a-successor-1" }=.
+
+*** Spawn with explicit deps
+- Agent "agent-a" calls =spawn_successor({ task: "...", dependsOn: ["agent-b", "agent-c"] })=.
+- Assert: new node has deps=["agent-b", "agent-c"] (NOT agent-a).
+
+*** Spawn with empty deps (immediate start)
+- =spawn_successor({ task: "...", dependsOn: [] })=.
+- Assert: new node has no deps, enters ready queue immediately.
+
+*** Spawn with invalid dep (missing agent)
+- =spawn_successor({ task: "...", dependsOn: ["nonexistent"] })=.
+- Assert: returns error "Dependency nonexistent not found in DAG".
+
+*** Spawn creating cycle
+- Agent "agent-a" depends on "agent-b". Agent "b" calls =spawn_successor({ task: "...", dependsOn: ["agent-a"] })=.
+- This would create a->b->successor->a cycle. Assert: error "Cycle detected".
+  (Actually: successor depends on agent-a which depends on agent-b which is the spawner. The cycle is: if successor also had agent-b as a dep. The test should construct the exact scenario.)
+
+*** Spawn with filesDeps
+- =spawn_successor({ task: "...", filesDeps: ["src/parser.ts"] })=.
+- Assert: new node in DAG has filesDeps set.
+
+*** Spawn with metadata
+- =spawn_successor({ task: "...", metadata: { testFiles: ["test/parser.test.ts"], failingAssertions: 3 } })=.
+- Assert: new node's assignment includes metadata as structured context.
+
+*** Spawn outside swarm mode
+- Returns error: "spawn_successor is only available in swarm execution mode."
+
+** 2. Write scheduler dynamic-node integration tests
+File: =packages/coding-agent/test/swarm/scheduler-spawn.test.ts=
+
+*** Dynamic node picked up by pump
+- Start scheduler with agent-a (no deps). While agent-a runs, add agent-a-successor-1 (deps: [agent-a]).
+- Agent-a completes. Assert: successor starts in next pump cycle.
+
+*** Multiple dynamic nodes
+- Agent-a spawns 2 successors. Both depend on agent-a. After agent-a completes, both start (concurrency permitting).
+
+*** Dynamic node with immediate start
+- Agent-a spawns successor with deps=[]. Assert: successor starts immediately (same pump cycle if concurrency allows).
+
+** 3. Implement SpawnSuccessorTool
+Depends on: tests from step 1.
+
+** 4. Implement scheduler addDynamicNode
+Depends on: tests from step 2.
+
+** 5. Write prompt (spawn-successor.md)
+Depends on: implementation.
+
+** 6. Wire SpawnSuccessorTool into swarm subagent tool set
+Modify executor.ts.
+
+* Verification
+- =bun test packages/coding-agent/test/swarm/spawn-successor-tool.test.ts= passes
+- =bun test packages/coding-agent/test/swarm/scheduler-spawn.test.ts= passes
+- =bun check:ts= passes

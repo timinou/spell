@@ -19,10 +19,13 @@ function createTestToolSession(cwd: string, settings: Settings = Settings.isolat
 		getSessionFile: () => sessionFile,
 		getSessionSpawns: () => "*",
 		getArtifactsDir: () => sessionDir,
-		allocateOutputArtifact: async (toolType: string) => {
-			fs.mkdirSync(sessionDir, { recursive: true });
-			const id = `artifact-${++artifactCounter}`;
-			return { id, path: path.join(sessionDir, `${id}.${toolType}.log`) };
+		allocateOutputArtifact: async (toolType: string, extension?: string) => {
+			const id = String(artifactCounter++);
+			const ext = extension ?? "txt";
+			const artifactDir = path.join(sessionDir, "main", toolType);
+			fs.mkdirSync(artifactDir, { recursive: true });
+			const artifactPath = path.join(artifactDir, `${id}.${ext}`);
+			return { id, uri: `artifact://test-session/main/${toolType}/${id}.${ext}`, path: artifactPath };
 		},
 		settings,
 	};

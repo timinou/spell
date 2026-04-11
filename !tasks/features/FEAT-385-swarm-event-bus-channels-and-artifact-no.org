@@ -1,0 +1,148 @@
+#+TITLE: Swarm Event Bus Channels and Artifact Notifications
+#+STATE: ITEM
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-385-swarm-event-bus-channels-and-artifact-no
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: agent-runtime
+#+DEPENDS: FEAT-382-mutable-dag-scheduler-swarmscheduler FEAT-383-org-blackboard-for-swarm-state
+
+* Initial Message
+
+show me the task tool and todo write tool system prompts
+
+* Narrative
+
+In the current system, the only mechanism for inter-agent data flow is the =resolvePredecessorResultsContext= function (=task/template.ts=): when a task has blockers via =todoRef=, the completed blocker's =delegation.result.output= is injected into the dependent task's assignment at launch time. This is *post-hoc*: the dependent task cannot start processing until the predecessor finishes entirely.
+
+For interconnected swarms, agents need *live* communication:
+- Agent A writes an artifact (e.g., a type definition file). Agent B, running concurrently, needs to know the artifact exists so it can read and use it -- without waiting for A to fully complete.
+- Agent C discovers a constraint that affects Agent D's approach. C publishes a "finding" to the blackboard. D (already running) should receive a notification and adapt.
+- The scheduler needs to know when artifacts are available so it can unblock artifact-dependent tasks (not just task-completion-dependent).
+
+The EventBus (=utils/event-bus.ts=) already provides prioritized async event dispatch. Subagent progress events already flow through it (=TASK_SUBAGENT_EVENT_CHANNEL=). This item extends the EventBus with swarm-specific channels and introduces an artifact notification system that bridges file-system events and the blackboard.
+
+* Design Decisions
+
+1. New EventBus channels:
+   - =swarm:artifact= -- fired when an agent writes an artifact (file or blackboard entry). Payload: ={ agentId, artifactPath?, entryId?, type, metadata }=
+   - =swarm:finding= -- fired when an agent publishes a finding to the blackboard. Payload: ={ agentId, entryId, title, summary }=
+   - =swarm:handoff= -- fired when an agent initiates a handoff. Payload: ={ fromAgent, toAgent?, context, reason }=
+   - =swarm:progress= -- fired when an agent reports structured progress. Payload: ={ agentId, progress: number, total: number, label: string }=
+2. Artifact notifications are triggered by =SwarmBlackboard.write()= when =type === "artifact"=. The blackboard write method enqueues an event on =swarm:artifact= after the org item is created.
+3. For file-based artifacts (outside the blackboard), a =SwarmArtifactWatcher= watches the swarm artifacts directory (=artifacts/<run-id>/=) and fires =swarm:artifact= events when files appear or change.
+4. The scheduler subscribes to =swarm:artifact= to check if any pending tasks have artifact-based readiness triggers (new field on =SwarmNode=: =artifactDeps?: string[]=).
+5. Typed objects on the event bus: events carry structured JSON payloads (not just strings). The existing =EventBus= already supports =unknown= payloads; we add TypeScript interfaces for each channel's payload shape.
+6. Agents receive notifications by subscribing to channels. In practice, the scheduler is the primary subscriber; agents receive notifications indirectly via injected context or blackboard queries.
+
+* Files to Create
+
+** =packages/coding-agent/src/swarm/events.ts=
+Channel constants and payload type definitions:
+#+begin_src typescript
+export const SWARM_ARTIFACT_CHANNEL = "swarm:artifact";
+export const SWARM_FINDING_CHANNEL = "swarm:finding";
+export const SWARM_HANDOFF_CHANNEL = "swarm:handoff";
+export const SWARM_PROGRESS_CHANNEL = "swarm:progress";
+
+export interface SwarmArtifactEvent {
+  agentId: string;
+  artifactPath?: string;
+  entryId?: string;
+  type: "file" | "blackboard";
+  metadata?: Record<string, unknown>;
+}
+
+export interface SwarmFindingEvent {
+  agentId: string;
+  entryId: string;
+  title: string;
+  summary: string;
+}
+
+export interface SwarmHandoffEvent {
+  fromAgent: string;
+  toAgent?: string;
+  context: string;
+  reason: string;
+}
+
+export interface SwarmProgressEvent {
+  agentId: string;
+  progress: number;
+  total: number;
+  label: string;
+}
+#+end_src
+
+** =packages/coding-agent/src/swarm/artifact-watcher.ts=
+#+begin_src typescript
+class SwarmArtifactWatcher {
+  constructor(private watchDir: string, private eventBus: EventBus) {}
+  start(): void;  // begins file watching
+  stop(): void;   // stops watching, cleans up
+}
+#+end_src
+Uses =node:fs= watch API (=fs.watch= with =recursive: true=). Debounces rapid changes (100ms). Fires =SWARM_ARTIFACT_CHANNEL= events.
+
+* Files to Modify
+
+** =packages/coding-agent/src/swarm/blackboard.ts=
+Inject =EventBus= into =SwarmBlackboard= constructor. After =write()= succeeds:
+- If =type === "artifact"=: enqueue =SwarmArtifactEvent= on =SWARM_ARTIFACT_CHANNEL=
+- If =type === "finding"=: enqueue =SwarmFindingEvent= on =SWARM_FINDING_CHANNEL=
+
+** =packages/coding-agent/src/task/swarm-scheduler.ts= (from FEAT-382)
+Subscribe to =SWARM_ARTIFACT_CHANNEL=. When an artifact event matches a pending node's =artifactDeps=, check if all artifact deps are now satisfied and promote to ready queue.
+
+* Existing Patterns to Follow
+- =EventBus= (=utils/event-bus.ts=): Priority.P0 (sync), P1 (FIFO), P2 (coalescing), P3 (drop-oldest)
+- =TASK_SUBAGENT_EVENT_CHANNEL= / =TASK_SUBAGENT_PROGRESS_CHANNEL= for event naming convention
+- =FLUID_EVENT_CHANNEL= and =FluidEvent= union type for typed event payloads
+- =FluidEventRouter= for event subscription patterns
+
+* Sub-outline (test-first)
+
+** 1. Define event types
+Create =swarm/events.ts=. Pure type definitions + channel constants.
+
+** 2. Write event integration tests
+File: =packages/coding-agent/test/swarm/events.test.ts=
+
+*** Blackboard write triggers artifact event
+- Create =SwarmBlackboard= with mock =EventBus=.
+- Call =bb.write("agent-a", "artifact", "Schema file", "...", "/tmp/schema.ts")=.
+- Assert: =eventBus.enqueue= called with channel =SWARM_ARTIFACT_CHANNEL= and payload matching ={ agentId: "agent-a", artifactPath: "/tmp/schema.ts", type: "blackboard" }=.
+
+*** Blackboard write triggers finding event
+- Call =bb.write("agent-b", "finding", "Missing index", "No index on users table")=.
+- Assert: =eventBus.enqueue= called with channel =SWARM_FINDING_CHANNEL= and payload matching ={ agentId: "agent-b", title: "Missing index" }=.
+
+*** Non-artifact write does NOT trigger artifact event
+- Call =bb.write("agent-c", "progress", "50% done", "...")=.
+- Assert: =eventBus.enqueue= NOT called with =SWARM_ARTIFACT_CHANNEL=.
+
+*** ArtifactWatcher fires on file creation
+- Create temp dir, start =SwarmArtifactWatcher=.
+- Write file to watched dir.
+- Assert: =SwarmArtifactEvent= enqueued with =type: "file"= and correct path.
+- Stop watcher, verify no leaks.
+
+*** ArtifactWatcher debounces rapid writes
+- Write 5 files rapidly (<50ms apart).
+- Assert: at most 5 events (one per file), not 50 (from multiple fs events per write).
+
+** 3. Implement event types and watcher
+Depends on: tests from step 2.
+
+** 4. Wire blackboard to EventBus
+Modify =SwarmBlackboard= constructor and =write()= method.
+
+** 5. Wire scheduler to artifact events
+Add =artifactDeps= support to =SwarmScheduler= (extends FEAT-382). Subscribe to =SWARM_ARTIFACT_CHANNEL= and unblock matching nodes.
+
+* Verification
+- =bun test packages/coding-agent/test/swarm/events.test.ts= passes
+- =bun test packages/coding-agent/test/swarm/blackboard.test.ts= still passes (no regressions from EventBus integration)
+- =bun check:ts= passes

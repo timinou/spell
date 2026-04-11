@@ -1,0 +1,20 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-051-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+- **What**: No regression test covers the `cavemanActive=true` + `cavemanThinking=false` path in the full system prompt render
+  - **Where**: `packages/coding-agent/test/system-prompt-templates.test.ts`, new caveman prompt tests near the added block after the main `describe("system Handlebars prompt templates")`
+  - **Why**: The implementation only tests the fully-on case and a fully-off case. If future template logic accidentally keys the `<thinking-mode>` block off `cavemanActive` instead of `cavemanThinking`, the current suite would miss it and reintroduce the original prompt-positioning bug in one valid configuration.
+  - **Effort**: trivial
+
+- **What**: The audit/manual verification proved placement and presence, but not that the final appended caveman prompt cannot still reintroduce thinking instructions through composition changes
+  - **Where**: `packages/coding-agent/test/system-prompt-templates.test.ts`, around the new `"caveman template does not contain thinking instructions"` test
+  - **Why**: The file-level test for `caveman.md` is useful, but it is not an end-to-end assertion over the final composed prompt path that originally caused the bug. If prompt assembly changes later, a composition-level regression could slip through even while the isolated template tests still pass.
+  - **Effort**: small

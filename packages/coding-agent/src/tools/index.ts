@@ -19,6 +19,7 @@ import type { CanvasTaskManager } from "../orchestrators/canvas-task-manager";
 import { EditTool } from "../patch";
 import type { ActiveModeState, PlanModeState } from "../plan-mode/state";
 import type { SandboxPolicy } from "../sandbox";
+import type { ArtifactRef } from "../session/artifacts";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
 import type { EventBus } from "../utils/event-bus";
@@ -155,8 +156,8 @@ export interface ToolSession {
 	getFirstUserMessage?: () => string | undefined;
 	/** Get artifacts directory for artifact:// URLs */
 	getArtifactsDir?: () => string | null;
-	/** Allocate a new artifact path and ID for session-scoped truncated output. */
-	allocateOutputArtifact?: (toolType: string) => Promise<{ id?: string; path?: string }>;
+	/** Allocate a new artifact path, URI, and ID for session-scoped output. */
+	allocateOutputArtifact?: (toolType: string, extension?: string) => Promise<ArtifactRef | undefined>;
 	/** Get session spawns */
 	getSessionSpawns: () => string | null;
 	/** Get resolved model string if explicitly set for this session */

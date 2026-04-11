@@ -1,0 +1,47 @@
+#+TITLE: Session 14b64aae2a2be386 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1 Hardening
+
+** DONE Fix caveman extension hardening
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:ORG_ITEM_ID: BUG-193-caveman-extension-hardening-refresh-fail
+:END:
+
+Verified with bun check:ts after the caveman extension changes. No new files touched in Wave 1.
+
+Completed. packages/coding-agent/src/extensibility/extensions/caveman.ts now propagates prompt refresh failure via boolean result, avoids starting animation timers when ctx.hasUI is false, and themes the config dialog from ui.custom()'s dialog theme.
+
+* Wave 2 Tests And Docs
+
+** DONE Add caveman regression tests and changelog
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:DEPENDS: task-1
+:ORG_ITEM_ID: FEAT-378-caveman-mode-committed-test-suite-and-ch
+:END:
+
+Verified with bun test packages/coding-agent/test/caveman.test.ts and manual readback of the first Unreleased/Added section in packages/coding-agent/CHANGELOG.md.
+
+Completed. Added packages/coding-agent/test/caveman.test.ts covering refresh-failure warnings, non-interactive animation guard, and ui.custom theme usage. Added changelog entry under the first Unreleased/Added section in packages/coding-agent/CHANGELOG.md.
+
+* Wave 3 Verification And Closeout
+
+** DONE Verify org updates and commit
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_CMD: bun check:ts
+:VERIFY_CMD: bun test packages/coding-agent/test/caveman.test.ts
+:DEPENDS: task-2
+:ORG_ITEM_ID: PLAN-168-caveman-mode-audit-remediation
+:END:
+
+Executed bun test packages/coding-agent/test/caveman.test.ts and bun check:ts successfully, confirmed the changelog entry placement, closed BUG-193 and FEAT-378 as DONE, marked PLAN-168 DONE with a completion report, and committed the staged code/test/changelog/org files via fix(coding-agent): remediate caveman audit findings.
+
+Completed. Verification passed, linked org items closed, PLAN-168 appended with completion evidence, and commit 7a772b4a3 recorded.

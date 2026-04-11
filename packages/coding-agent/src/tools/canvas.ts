@@ -61,6 +61,8 @@ export interface CanvasToolDetails {
 	error?: string;
 	lintWarnings?: number;
 	lintErrors?: number;
+	screenshotPath?: string;
+	artifactUri?: string;
 	meta?: OutputMeta;
 }
 
@@ -854,15 +856,37 @@ export class CanvasTool implements AgentTool<typeof canvasSchema, CanvasToolDeta
 			case "screenshot": {
 				const id = params.id;
 				if (!id) throw new ToolError("screenshot action requires 'id'");
-				const savePath = params.path ?? `/tmp/spell-qml/screenshot-${id}-${Date.now()}.png`;
+				const requestedPath =
+					typeof params.path === "string" && params.path.trim().length > 0
+						? path.resolve(this.session.cwd, params.path)
+						: undefined;
+
+				const artifact = await this.session.allocateOutputArtifact?.("screenshot", "png");
+
+				const savePath = requestedPath ?? artifact?.path ?? `/tmp/spell-qml/screenshot-${id}-${Date.now()}.png`;
 				const bridge = this.#ensureBridge();
 				const resultPath = await bridge.screenshot(id, savePath);
-				const pngBuffer = await Bun.file(resultPath).arrayBuffer();
+				const pngBuffer = await Bun.file(resultPath).bytes();
+				if (requestedPath && artifact?.path && artifact.path !== resultPath) {
+					await Bun.write(artifact.path, pngBuffer);
+				}
 				const data = Buffer.from(pngBuffer).toString("base64");
-				const details: CanvasToolDetails = { action: "screenshot", windowId: id };
+				const details: CanvasToolDetails = {
+					action: "screenshot",
+					windowId: id,
+					screenshotPath: requestedPath ?? artifact?.path ?? resultPath,
+					artifactUri: artifact?.uri,
+				};
+				const lines = [`Screenshot saved: ${details.screenshotPath}`];
+				if (requestedPath && artifact?.path) {
+					lines.push(`Artifact path: ${artifact.path}`);
+				}
+				if (artifact?.uri) {
+					lines.push(`Artifact: ${artifact.uri}`);
+				}
 				return toolResult(details)
 					.content([
-						{ type: "text", text: `Screenshot saved: ${resultPath}` },
+						{ type: "text", text: lines.join("\n") },
 						{ type: "image", data, mimeType: "image/png" },
 					])
 					.done();

@@ -136,8 +136,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	#getWritethrough(): WritethroughCallback {
 		const cwd = this.session.cwd;
 		if (cwd !== this.#writethroughCwd) {
+			const nextWritethrough = this.#createWritethrough(cwd);
+			this.#writethrough = nextWritethrough;
 			this.#writethroughCwd = cwd;
-			this.#writethrough = this.#createWritethrough(cwd);
 		}
 		return this.#writethrough;
 	}

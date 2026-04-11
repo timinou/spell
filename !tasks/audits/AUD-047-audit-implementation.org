@@ -1,0 +1,50 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-047-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Here are my findings:
+
+---
+
+**Finding 1: `child` variable computed but unused in `table` branch**
+- **Where**: `packages/emacs/elisp/pi-treesit.el` line 158
+- **What**: The `child` binding `(treesit-node-child node 0)` is computed eagerly in `let*` but only used by the first `cond` branch (line 162). The `table` branch (line 166) creates its own `named-child` binding. For `table` nodes, the `child` computation is wasted.
+- **Why**: Negligible performance cost (one extra tree-sitter call per `table` node). Not a bug — `cond` doesn't fall through. But it's slightly misleading to read. A future editor might think `child` is used in the table branch.
+- **Effort**: `trivial` — could use `let` instead of `let*` and move `child` into the first cond branch, but the pattern is inherited from pre-existing code and works correctly.
+
+**Finding 2: Duplicated Elixir keyword list across 3 functions**
+- **Where**: `packages/emacs/elisp/pi-treesit.el` lines 305-307 (`declaration-name`), lines 365-373 (`declaration-kind`), and `packages/emacs/elisp/pi-outline.el` lines 83-85 (`declaration-name-node`)
+- **What**: The list `("def" "defp" "defmodule" "defprotocol" "defimpl" "defmacro" "defmacrop" "defguard" "defguardp" "defstruct" "defdelegate" "defexception")` appears identically in three places. Adding a new Elixir keyword requires updating all three.
+- **Why**: Maintenance cost — a future contributor adding e.g. `defoverridable` would need to find all three and keep them in sync. Not a bug today, but a DRY violation at count 3.
+- **Effort**: `small` — extract a `defconst pi-treesit--elixir-def-keywords` and reference it from all three sites.
+
+**Finding 3: Elixir `defstruct` returns the do-block or struct body as the name, not the struct name**
+- **Where**: `packages/emacs/elisp/pi-treesit.el` line 300-315 (`declaration-name` call branch)
+- **What**: `defstruct` in Elixir is typically `defstruct [:field1, :field2]` inside a `defmodule`. The arguments child's first child would be a list literal, not a name identifier. The code returns whatever `treesit-node-text first-arg t` gives, which could be `[:field1, :field2]` — not a meaningful declaration name.
+- **Why**: Low severity — `defstruct` calls are almost always inside a `defmodule` body (not top-level), so `pi-treesit-top-level-nodes` wouldn't return them. But if someone writes a bare `defstruct` or a grammar puts it at top level, the name would be garbage. Same concern applies to `defexception`.
+- **Effort**: `small` — would require Elixir-specific logic to skip or handle these differently, but the risk is minimal since they're virtually never top-level.
+
+**Finding 4: `test-outline-elixir-entries` doesn't assert `type`/`kind` or `column` for Elixir entries**
+- **Where**: `packages/emacs/test/elisp/test-outline.el` lines 124-133
+- **What**: The Elixir outline test checks that `MyApp.Greeter` appears in names and that at least 1 entry exists, but doesn't check that the `type` field is `"defmodule"` or that the `column` field is present (the whole point of adding the `pi-outline--declaration-name-node` Elixir branch was column info).
+- **Why**: The Elixir `declaration-name-node` branch we added is exercised (column gets populated) but never asserted. A regression that breaks column extraction for Elixir would not be caught by any test.
+- **Effort**: `trivial` — add `(should (numberp (alist-get 'column (car entries))))` and `(should (string= (alist-get 'type (car entries)) "defmodule"))`.
+
+**Finding 5: Trailing whitespace / empty `))))` formatting in yaml test**
+- **Where**: `packages/emacs/test/elisp/test-outline.el` lines 94-95
+- **What**: The yaml test body ends with `(should-not (member "heading" types))\n        ))))` — there's a bare `))))` on a line with leading whitespace, which is inherited from the original code but inconsistent with the other tests that close on the same line as the last assertion.
+- **Why**: Cosmetic only. Not a bug or maintenance hazard.
+- **Effort**: `trivial`
+
+**Finding 6: No test for `call` nodes that are NOT Elixir keywords**
+- **Where**: `packages/emacs/test/elisp/test-treesit.el`
+- **What**: The `declaration-kind` Elixir branch has a catch-all `(t type)` that returns the raw type string `"call"` for non-Elixir call nodes (e.g., a plain function call `IO.puts("hello")` at the top level in Elixir). There's no test verifying this fall-through returns `"call"` rather than crashing.
+- **Why**: Low risk — the fall-through is simple. But it covers the exact code path that was previously broken (the paren bug), so a regression test specifically for the catch-all behavior would be valuable.
+- **Effort**: `trivial`

@@ -225,8 +225,9 @@ describe("SessionManager.moveTo", () => {
 	it("moves artifact dir independently when session file does not exist", async () => {
 		const session = SessionManager.create(cwdA);
 		// Allocate an artifact — creates dir via ArtifactManager
-		const { path: artifactPath } = await session.allocateArtifactPath("bash");
-		if (!artifactPath) throw new Error("Expected artifact path");
+		const artifact = await session.allocateArtifactPath("bash");
+		if (!artifact) throw new Error("Expected artifact path");
+		const artifactPath = artifact.path;
 
 		const oldArtifactDir = path.dirname(artifactPath);
 		expect(fs.existsSync(oldArtifactDir)).toBe(true);

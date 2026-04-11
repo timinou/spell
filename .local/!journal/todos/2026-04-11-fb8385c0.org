@@ -1,0 +1,20 @@
+#+TITLE: Session 14b6650d6cbc977f Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Update caveman prompt tests
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_CMD: bun test packages/coding-agent/test/system-prompt-templates.test.ts && bun check:ts
+:GATE_LLM: Verify the new tests exercise the full composed prompt path and the cavemanActive=true plus cavemanThinking=false case without asserting incidental formatting.
+:ORG_ITEM_ID: BUG-197-caveman-thinking-test-gaps-from-aud-051
+:ORG_ITEM_CLOSING_ID: BUG-197-caveman-thinking-test-gaps-from-aud-051
+:END:
+
+Modified packages/coding-agent/test/system-prompt-templates.test.ts to add the three planned regression tests covering cavemanActive/cavemanThinking flag isolation and buildSystemPrompt composition behavior.
+
+Added the template-level cavemanThinking=false regression and two buildSystemPrompt composition tests. Verified with the focused test file and bun check:ts; committed as 63acf843a.
