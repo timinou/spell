@@ -1,11 +1,12 @@
 #+TITLE: Remove code warmup and emacsSessionManager from SDK
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14b6d50334ba84c7
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-57-16-882Z_14b6d50334ba84c7.jsonl]]
 #+CUSTOM_ID: FEAT-448-remove-code-warmup-and-emacssessionmanag
 #+EFFORT: 1h
 #+LAYER: coding-agent
 #+DEPENDS: FEAT-447-rewire-codetool-to-native-engine
+#+PRIORITY: #A
 
 * Initial Message
 

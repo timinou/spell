@@ -302,8 +302,9 @@ function buildEvalArgs(elispDir: string, projectRoot: string, sock: string, eval
 			args.push("--eval", expr);
 		}
 	} else {
-		// Default: load pi-prelude (tree-sitter bootstrap) and pi-emacs-mcp (MCP server).
-		args.push("--eval", `(require 'pi-prelude)`, "--eval", `(require 'pi-emacs-mcp)`);
+		// No default evals — callers must provide evalExpressions.
+		// The code-intelligence daemon (pi-prelude, pi-emacs-mcp) has been removed;
+		// the org daemon passes its own evalExpressions.
 	}
 
 	args.push("--eval", `(mcp-server-start-unix nil "${sock}")`);

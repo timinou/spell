@@ -1,5 +1,5 @@
 #+TITLE: Rewire CodeTool to native engine
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14b6d50334ba84c7
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-57-16-882Z_14b6d50334ba84c7.jsonl]]
 #+CUSTOM_ID: FEAT-447-rewire-codetool-to-native-engine
@@ -7,6 +7,7 @@
 #+LAYER: coding-agent
 #+DEPENDS: FEAT-446-native-code-buffer-typescript-wrapper-in
 #+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+#+PRIORITY: #A
 
 * Initial Message
 

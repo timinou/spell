@@ -1,83 +1,7 @@
-import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { CodeTool, createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import {
-	type BufferInfo,
-	type CodeClient,
-	type CodeEditOp,
-	type CodeEditResult,
-	type CodeWarmupResult,
-	type EmacsSession,
-	EmacsSessionManager,
-	type InstallResult,
-	type LanguageInfo,
-	type OutlineEntry,
-	type Resolution,
-} from "@oh-my-pi/pi-emacs";
-import * as clientModule from "@oh-my-pi/pi-emacs/client";
+import { CodeTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import * as nativesModule from "@oh-my-pi/pi-natives";
-
-function makeSession(name: string, alive: boolean = true): EmacsSession {
-	let currentAlive = alive;
-	return {
-		socketPath: `/tmp/${name}.sock`,
-		isAlive: () => currentAlive,
-		stop: async () => {
-			currentAlive = false;
-		},
-	};
-}
-
-function ready(session: EmacsSession): CodeWarmupResult {
-	return {
-		status: "ready",
-		version: "30.2",
-		session,
-	};
-}
-
-function createClient(buffersResult: BufferInfo[]): CodeClient & { calls: { buffers: number; close: number } } {
-	const calls = { buffers: 0, close: 0 };
-	return {
-		calls,
-		async read(_file: string, _resolution?: Resolution, _offset?: number, _limit?: number): Promise<string> {
-			throw new Error("not implemented in test");
-		},
-		async outline(_file: string, _depth?: number): Promise<OutlineEntry[]> {
-			throw new Error("not implemented in test");
-		},
-		async edit(_op: CodeEditOp): Promise<CodeEditResult> {
-			throw new Error("not implemented in test");
-		},
-		async buffers(): Promise<BufferInfo[]> {
-			calls.buffers += 1;
-			return buffersResult;
-		},
-		async bufferDiff(_file: string): Promise<string> {
-			throw new Error("not implemented in test");
-		},
-		async navigate(_file: string, _action: string, _line?: number, _column?: number): Promise<unknown> {
-			throw new Error("not implemented in test");
-		},
-		async languages(_installedOnly?: boolean): Promise<LanguageInfo[]> {
-			throw new Error("not implemented in test");
-		},
-		async installGrammar(
-			_lang: string,
-			_url?: string,
-			_revision?: string,
-			_sourceDir?: string,
-		): Promise<InstallResult> {
-			throw new Error("not implemented in test");
-		},
-		async callTool(_name: string, _args: Record<string, unknown>): Promise<unknown> {
-			throw new Error("not implemented in test");
-		},
-		async close(): Promise<void> {
-			calls.close += 1;
-		},
-	};
-}
 
 function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -91,7 +15,16 @@ function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 }
 
 describe("coding-agent code tool wiring", () => {
-	it("enforces mode guard for edit operations before executing inner tool", async () => {
+	afterEach(() => {
+		try {
+			(spyOn(nativesModule, "executeCodeBuffer") as any).mockRestore?.();
+		} catch {}
+		try {
+			(spyOn(nativesModule, "executeCodeGraph") as any).mockRestore?.();
+		} catch {}
+	});
+
+	it("enforces mode guard for edit operations", async () => {
 		const tool = new CodeTool(
 			createSession({
 				getActiveModeState: () => ({
@@ -109,8 +42,22 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
-	afterEach(() => {
-		vi.restoreAllMocks();
+	it("enforces mode guard for save operations", async () => {
+		const tool = new CodeTool(
+			createSession({
+				getActiveModeState: () => ({
+					type: "user",
+					name: "readonly",
+					config: {} as any,
+					enabled: true,
+					readOnly: true,
+				}),
+			}),
+		);
+
+		await expect(tool.execute("tool", { command: "save", file: "test.txt" })).rejects.toThrow(
+			'Read-only mode "readonly": file modifications are not allowed.',
+		);
 	});
 
 	it("routes graph commands to the native graph backend", async () => {
@@ -135,39 +82,140 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
-	it("uses the session manager to recover from a dead cached daemon", async () => {
-		const replacement = makeSession("replacement");
-		let starts = 0;
-		const manager = new EmacsSessionManager({
-			startSession: async () => {
-				starts += 1;
-				return ready(replacement);
-			},
+	it("routes file-local commands to executeCodeBuffer", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { result: "outline data" },
+			error: false,
 		});
-		manager.setSession(makeSession("dead", false));
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", { command: "outline", file: "/tmp/test/src/main.ts" });
+		const text = result.content.find(c => c.type === "text")?.text ?? "";
 
-		const buffersResult: BufferInfo[] = [
-			{
-				file: "src/recovered.ts",
-				modified: false,
-				size: 64,
-				language: "typescript",
-				lastAccessed: 1700000000000,
-			},
-		];
-		const client = createClient(buffersResult);
-		const createClientSpy = spyOn(clientModule, "createEmacsClient").mockResolvedValue(client);
-		const tools = await createTools(createSession({ emacsSessionManager: manager }), ["code"]);
-		const tool = tools.find(entry => entry.name === "code");
-		if (!tool) throw new Error("Missing code tool");
+		expect(JSON.parse(text)).toEqual({ result: "outline data" });
+		expect(bufferSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				command: "outline",
+				file: "/tmp/test/src/main.ts",
+			}),
+		);
+	});
 
-		const result = await tool.execute("emacs-recovery", { command: "buffers" });
-		const text = result.content.find(content => content.type === "text")?.text ?? "{}";
+	it("maps 'buffers' command to 'list' for NAPI", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: [{ path: "src/main.ts", dirty: false }],
+			error: false,
+		});
+		const tool = new CodeTool(createSession());
+		await tool.execute("tool", { command: "buffers" });
 
-		expect(JSON.parse(text)).toEqual(buffersResult);
-		expect(starts).toBe(1);
-		expect(createClientSpy).toHaveBeenCalledTimes(1);
-		expect(client.calls.buffers).toBe(1);
-		expect(client.calls.close).toBe(1);
+		expect(bufferSpy).toHaveBeenCalledWith(expect.objectContaining({ command: "list" }));
+	});
+
+	it("maps 'references-local' navigate action to 'references'", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { references: [] },
+			error: false,
+		});
+		const tool = new CodeTool(createSession());
+		await tool.execute("tool", {
+			command: "navigate",
+			file: "/tmp/test/src/main.ts",
+			action: "references-local",
+			line: 10,
+		});
+
+		expect(bufferSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				command: "navigate",
+				action: "references",
+				file: "/tmp/test/src/main.ts",
+				line: 10,
+			}),
+		);
+	});
+
+	it("returns error for install_grammar command", async () => {
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", { command: "install_grammar" });
+		const text = result.content.find(c => c.type === "text")?.text ?? "";
+		const parsed = JSON.parse(text);
+
+		expect(parsed.error).toBe(true);
+		expect(parsed.message).toContain("install_grammar is no longer supported");
+		expect(result.details).toEqual({ error: true, command: "install_grammar" });
+	});
+
+	it("passes through read params (resolution, offset, limit)", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: "file content",
+			error: false,
+		});
+		const tool = new CodeTool(createSession());
+		await tool.execute("tool", {
+			command: "read",
+			file: "/tmp/test/src/main.ts",
+			resolution: 2,
+			offset: 10,
+			limit: 50,
+		});
+
+		expect(bufferSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				command: "read",
+				file: "/tmp/test/src/main.ts",
+				resolution: 2,
+				offset: 10,
+				limit: 50,
+			}),
+		);
+	});
+
+	it("flattens target into top-level fields for edit", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: [{ version: 2 }],
+			error: false,
+		});
+		const tool = new CodeTool(createSession());
+		await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			operation: "kill",
+			target: { line: 5, node_type: "function_declaration" },
+		});
+
+		expect(bufferSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				command: "edit",
+				file: "/tmp/test/src/main.ts",
+				operation: "kill",
+				line: 5,
+				node_type: "function_declaration",
+			}),
+		);
+	});
+
+	it("surfaces NAPI errors as tool error results", async () => {
+		spyOn(nativesModule, "executeCodeBuffer").mockImplementation(() => {
+			throw new Error("Language profile not found for /tmp/test/foo.go");
+		});
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", { command: "outline", file: "/tmp/test/foo.go" });
+		const text = result.content.find(c => c.type === "text")?.text ?? "";
+		const parsed = JSON.parse(text);
+
+		expect(parsed.error).toBe(true);
+		expect(parsed.message).toContain("Language profile not found");
+		expect(result.details).toEqual({ error: true, command: "outline" });
+	});
+
+	it("handles error flag from executeCodeBuffer response", async () => {
+		spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: "Unknown command: bogus",
+			error: true,
+		});
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", { command: "bogus" });
+
+		expect(result.details).toEqual({ error: true, command: "bogus" });
 	});
 });

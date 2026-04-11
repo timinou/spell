@@ -30,7 +30,6 @@ import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import { resolveModeConfig } from "./discovery/mode-helpers";
 import "./discovery";
-import { type CodeWarmupResult, EmacsSessionManager, warmupCode } from "@oh-my-pi/pi-emacs";
 import { buildServicePromptSection } from "./browser/service-prompt-section";
 import { resolveConfigValue } from "./config/resolve-config-value";
 import { loadTaskPolicies, mergePolicies, type TaskPolicy } from "./config/task-policies";
@@ -262,8 +261,6 @@ export interface CreateAgentSessionResult {
 	spellcastingWarning?: string;
 	/** LSP servers that were warmed up at startup */
 	lspServers?: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>;
-	/** Emacs daemon warmup result (undefined when Emacs is disabled or not attempted). */
-	emacsResult?: CodeWarmupResult;
 	/** EventBus instance for inter-module communication */
 	eventBus?: EventBus;
 	/** Canvas orchestrator manager (undefined if no canvas support) */
@@ -957,16 +954,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		: undefined;
 
 	const pendingActionStore = new PendingActionStore();
-	const emacsPath = settings.get("emacs.path") as string | undefined;
 	const orgEmacsPath = settings.get("org.emacsPath") as string | undefined;
-	const startCodeWarmup = (onConnecting?: (name: string) => void): Promise<CodeWarmupResult> =>
-		warmupCode(cwd, sessionId, {
-			emacsPath,
-			onConnecting,
-		});
-	const emacsSessionManager = new EmacsSessionManager({
-		startSession: () => startCodeWarmup(),
-	});
 	const orgSessionManager = createOrgSessionManager(orgEmacsPath, cwd, sessionId);
 
 	const loopManager = new LoopManager({
@@ -1039,7 +1027,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRegistry,
 		asyncJobManager,
 		pendingActionStore,
-		emacsSessionManager,
 		orgSessionManager,
 		loopManager,
 		gatewayClient,
@@ -1114,19 +1101,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		getArtifactsDir,
 		options.parentTaskPrefix ? { parentPrefix: options.parentTaskPrefix } : undefined,
 	);
-
-	// Fire Emacs daemon startup now so it runs in the background during MCP/Gemini/Exa init.
-	// It will be awaited alongside the LSP warmup before the session is returned.
-	const shouldStartCode = requestedBuiltInToolNames.includes("code");
-	const codeWarmupPromise: Promise<CodeWarmupResult | undefined> = shouldStartCode
-		? logger.timeAsync("warmupCode", () =>
-				startCodeWarmup(name => {
-					if (options.hasUI) {
-						process.stderr.write(chalk.gray(`Starting ${name}…\n`));
-					}
-				}),
-			)
-		: Promise.resolve(undefined);
 
 	// Create built-in tools (already wrapped with meta notice formatting)
 	const builtinTools = await logger.timeAsync("createAllTools", () =>
@@ -1827,28 +1801,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	}
 
-	// Collect Emacs warmup result (daemon may have already started during the above async work).
-	let emacsResult: CodeWarmupResult | undefined;
-	if (shouldStartCode) {
-		emacsResult = await codeWarmupPromise;
-		if (emacsResult) {
-			toolSession.emacsSessionManager?.recordWarmupResult(emacsResult);
-			if (emacsResult.status === "error") {
-				logger.warn("[code-warmup] daemon startup failed", { error: emacsResult.error });
-			} else if (emacsResult.status === "ready") {
-				logger.debug("[code-warmup] daemon ready", { version: emacsResult.version });
-			}
-		}
-	}
-
 	toolSession.dispose = async () => {
-		if (toolSession.emacsSessionManager) {
-			try {
-				await toolSession.emacsSessionManager.dispose();
-			} catch (err) {
-				logger.warn("emacsSessionManager dispose failed", { error: String(err) });
-			}
-		}
 		if (toolSession.orgSessionManager) {
 			try {
 				await toolSession.orgSessionManager.dispose();
@@ -1900,7 +1853,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				logger.warn("gatewayClient session cleanup failed (soft reset)", { error: String(err) });
 			}
 		}
-		// emacsSessionManager and orgSessionManager intentionally NOT touched
+		// orgSessionManager intentionally NOT touched
 	};
 
 	startMemoryStartupTask({
@@ -2248,8 +2201,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		spellcastingWarning: spellcastingWarning ?? undefined,
 
 		lspServers,
-
-		emacsResult,
 
 		eventBus,
 

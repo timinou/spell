@@ -1,11 +1,12 @@
 #+TITLE: Clean up dead Elisp code intelligence files
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14b6d50334ba84c7
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-57-16-882Z_14b6d50334ba84c7.jsonl]]
 #+CUSTOM_ID: FUP-045-clean-up-dead-elisp-code-intelligence-fi
 #+EFFORT: 1h
 #+LAYER: emacs
 #+DEPENDS: FEAT-449-slim-pi-emacs-package-to-org-only
+#+PRIORITY: #C
 
 * Initial Message
 
