@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { logger } from "@oh-my-pi/pi-utils";
 import { StatusFileReader, StatusFileWriter } from "../src/status-file";
 
 const TEST_DIR = path.join(os.tmpdir(), `spell-test-status-${process.pid}`);
@@ -11,6 +12,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	await fs.rm(TEST_DIR, { recursive: true, force: true });
 });
 
@@ -57,6 +59,48 @@ describe("StatusFileWriter", () => {
 		expect(data.workspaceName).toBe("workspace-dev");
 	});
 
+	it("re-writes when recovery metadata is set after the initial write", async () => {
+		const writer = new StatusFileWriter(TEST_DIR);
+		writer.setWindowId(50);
+
+		writer.writeIfChanged("running", "myapp", "session-1");
+		await Bun.sleep(50);
+
+		let data = await Bun.file(path.join(TEST_DIR, "50.json")).json();
+		expect(data.sessionId).toBeUndefined();
+		expect(data.cwd).toBeUndefined();
+
+		writer.setSessionInfo({
+			sessionId: "sess-50",
+			sessionFile: "/tmp/sess-50.jsonl",
+			cwd: "/work/myapp",
+		});
+		writer.writeIfChanged("running", "myapp", "session-1");
+		await Bun.sleep(50);
+
+		data = await Bun.file(path.join(TEST_DIR, "50.json")).json();
+		expect(data.sessionId).toBe("sess-50");
+		expect(data.cwd).toBe("/work/myapp");
+	});
+
+	it("re-writes when workspace name is set after the initial write", async () => {
+		const writer = new StatusFileWriter(TEST_DIR);
+		writer.setWindowId(51);
+
+		writer.writeIfChanged("running", "myapp", "session-1");
+		await Bun.sleep(50);
+
+		let data = await Bun.file(path.join(TEST_DIR, "51.json")).json();
+		expect(data.workspaceName).toBeUndefined();
+
+		writer.setWorkspaceName("ws-dev");
+		writer.writeIfChanged("running", "myapp", "session-1");
+		await Bun.sleep(50);
+
+		data = await Bun.file(path.join(TEST_DIR, "51.json")).json();
+		expect(data.workspaceName).toBe("ws-dev");
+	});
+
 	it("writes when status changes", async () => {
 		const writer = new StatusFileWriter(TEST_DIR);
 		writer.setWindowId(99);
@@ -81,6 +125,44 @@ describe("StatusFileWriter", () => {
 		await writer.cleanup();
 		const exists = await Bun.file(path.join(TEST_DIR, "77.json")).exists();
 		expect(exists).toBe(false);
+	});
+	it("logs write failures instead of swallowing them", async () => {
+		const writer = new StatusFileWriter(TEST_DIR);
+		writer.setWindowId(88);
+		const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
+		spyOn(Bun, "write").mockImplementation(() => Promise.reject(new Error("disk full")));
+
+		writer.writeIfChanged("running", "myapp", "session-1");
+		await Bun.sleep(0);
+
+		expect(warnSpy).toHaveBeenCalledWith(
+			"StatusFileWriter: write failed",
+			expect.objectContaining({
+				path: path.join(TEST_DIR, "88.json"),
+				err: "Error: disk full",
+			}),
+		);
+	});
+
+	it("logs cleanup failures instead of swallowing them", async () => {
+		const writer = new StatusFileWriter(TEST_DIR);
+		writer.setWindowId(89);
+		const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
+		spyOn(fs, "rm").mockImplementation(async targetPath => {
+			if (String(targetPath) === path.join(TEST_DIR, "89.json")) {
+				throw new Error("permission denied");
+			}
+		});
+
+		await writer.cleanup();
+
+		expect(warnSpy).toHaveBeenCalledWith(
+			"StatusFileWriter: cleanup failed",
+			expect.objectContaining({
+				path: path.join(TEST_DIR, "89.json"),
+				err: "Error: permission denied",
+			}),
+		);
 	});
 });
 

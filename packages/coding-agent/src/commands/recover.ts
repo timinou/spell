@@ -154,6 +154,11 @@ export default class RecoverCommand extends Command {
 				? "planned recovery commands"
 				: "manual fallback commands (ghostty not found)";
 			process.stdout.write(`Dry run — showing ${spawnMode}:\n`);
+			if (flags["no-workspace"]) {
+				process.stdout.write("(--no-workspace: workspace commands omitted)\n");
+			} else if (!niriAvailable) {
+				process.stdout.write("(niri not found: workspace commands omitted)\n");
+			}
 			for (const group of groups) {
 				if (group.workspaceName && niriAvailable) {
 					process.stdout.write(`${formatWorkspaceCommand(group.workspaceName)}\n`);

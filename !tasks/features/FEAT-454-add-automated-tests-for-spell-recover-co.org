@@ -1,0 +1,161 @@
+#+TITLE: Add automated tests for spell recover command and crash notification
+#+STATE: DONE
+#+SESSION_ID: 14b6df35f173cb3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-41-50-277Z_14b6df35f173cb3c.jsonl]]
+#+CUSTOM_ID: FEAT-454-add-automated-tests-for-spell-recover-co
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: cli
+#+DEPENDS: BUG-202-fix-status-file-dedup-key-to-include-rec BUG-204-fix-niri-controller-test-isolation-resto BUG-205-show-explicit-workspace-skip-reason-in-s
+
+NOTE [2026-04-11]: Implemented in PLAN-186. Verification: bun test packages/coding-agent/test/recover-command.test.ts
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-056-audit-implementation:
+
+- **What**: Recovery metadata dedup ignores `sessionId`, `sessionFile`, `cwd`, and `workspaceName`
+  - **Where**: `packages/desktop-common/src/status-file.ts`, `StatusFileWriter.writeIfChanged()` dedup key
+  - **Why**: If the first write happens before workspace lookup succeeds or before recovery metadata is fully available, later writes with the same status/title are skipped. That leaves status files permanently incomplete, so `spell recover` may skip a crashed session or restore it without its workspace.
+  - **Effort**: small
+
+- **What**: Status-file persistence still hides write failures behind fire-and-forget `Bun.write(...).catch(() => {})`
+  - **Where**: `packages/desktop-common/src/status-file.ts`, `StatusFileWriter.writeIfChanged()`
+  - **Why**: Crash recovery now depends on these files. If the write fails due to permissions, disk issues, or shutdown timing, callers get no signal and the user later sees missing or stale recoverable sessions with no explanation.
+  - **Effort**: medium
+
+- **What**: `spell recover` and startup crash notification have no automated coverage
+  - **Where**: `packages/coding-agent/src/commands/recover.ts`, `packages/coding-agent/src/main.ts`
+  - **Why**: The highest-risk behaviors are only manually verified right now: dry-run output, ghostty-missing fallback, niri-unavailable behavior, cleanup of only successfully recovered status files, and notification suppression for `--resume`/`--continue`/`--no-session`. These are easy to regress silently.
+  - **Effort**: small
+
+- **What**: Relevant test suites are not isolation-safe when run together
+  - **Where**: `packages/niri/test/controller.test.ts`, around the mock/teardown for process-liveness behavior
+  - **Why**: Running `packages/desktop-common/test/status-file.test.ts` and `packages/niri/test/controller.test.ts` in one `bun test` invocation fails because global state leaks across files. That weakens confidence in grouped verification and can hide future regressions behind test-order sensitivity.
+  - **Effort**: trivial
+
+- **What**: Dry-run output silently omits workspace restoration when niri is unavailable or `--no-workspace` is used
+  - **Where**: `packages/coding-agent/src/commands/recover.ts`, `--dry-run` branch
+  - **Why**: Dry-run is the main operator-facing preview. When workspace commands are absent, the output does not explicitly say whether workspaces are being skipped by user choice, lack of niri, or missing metadata, which makes troubleshooting harder after a crash.
+  - **Effort**: trivial
+
+* Goal
+
+Add automated test coverage for ~spell recover~ and the startup crash notification so the highest-risk behaviors cannot regress silently.
+
+* Context
+
+Currently all verification is manual (isolated temp-HOME with stub binaries). The established pattern for CLI command tests is ~Bun.spawnSync~ with isolated ~HOME~ — see ~packages/coding-agent/test/cli-domain-command-routing.test.ts~.
+
+The recover command uses ~Bun.which()~ to detect ghostty/niri availability, and ~Bun.spawn~ to invoke them. In tests we control this via ~PATH~ — if the stub binaries are not on PATH, ~Bun.which()~ returns null.
+
+* Design Decisions
+
+- Test file: ~packages/coding-agent/test/recover-command.test.ts~
+- Use subprocess-based testing (~Bun.spawnSync~) with isolated HOME/PATH, matching the ~cli-domain-command-routing.test.ts~ pattern. This tests the actual CLI entry, not mocked internals.
+- Create stub binaries in a temp directory and add to PATH when ghostty/niri should be "available".
+- Status files are written to ~<HOME>/.spell/status/~ with dead PIDs (999999).
+- Test the notification by running ~spell --no-session --print hello~ and checking stderr (the API error is expected and ignored — we only check for the presence/absence of the notification line).
+
+* Test Scenarios
+
+** Recovery command scenarios
+
+1. *No crashed sessions*: empty status dir → stdout contains "No crashed sessions to recover." → exit 0.
+2. *Dry-run with ghostty+niri available*: 2 sessions in different workspaces → stdout contains ~ghostty +new-window~ commands and ~niri msg action focus-workspace~ → exit 0 → status files still exist.
+3. *Dry-run without ghostty*: same sessions → stdout contains ~cd ... && spell -r ...~ fallback commands → stdout contains "manual fallback commands (ghostty not found)" → exit 0.
+4. *Old-format status files skipped*: session missing sessionId → stderr contains "recovery metadata is incomplete" → exit 0.
+5. *Full recovery with ghostty stub*: stub ghostty exits 0 → stdout contains "Recovered" → status files deleted.
+6. *Partial failure*: stub ghostty exits 1 for one session → stderr contains "failed to recover" → only the successful session's status file is deleted.
+7. *--no-workspace flag*: sessions with workspaceName → niri commands omitted from output (even if niri stub exists on PATH).
+
+** Startup notification scenarios
+
+8. *Notification shown*: recoverable crashed sessions exist → stderr contains "crashed session(s) detected. Run 'spell recover'" (exit code is non-zero due to API error, but notification presence is what matters).
+9. *Notification suppressed with --no-session*: same status files → stderr does NOT contain "crashed session(s) detected".
+10. *No recoverable sessions*: only old-format status files → stderr does NOT contain "crashed session(s) detected".
+
+* Implementation
+
+** File: ~packages/coding-agent/test/recover-command.test.ts~
+
+*** Test infrastructure (beforeAll/beforeEach/afterEach)
+
+#+begin_src typescript
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+
+const CLI_PATH = path.resolve(import.meta.dir, "../src/cli.ts");
+const decoder = new TextDecoder();
+
+interface CliRunResult {
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+}
+
+function runRecover(args: string[], homeDir: string, extraPath = ""): CliRunResult {
+    const result = Bun.spawnSync([process.execPath, CLI_PATH, "recover", ...args], {
+        cwd: os.tmpdir(),
+        env: {
+            HOME: homeDir,
+            NO_COLOR: "1",
+            PATH: extraPath ? `${extraPath}:${process.env.PATH ?? ""}` : process.env.PATH ?? "",
+            TERM: "dumb",
+        },
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+    });
+    return {
+        exitCode: result.exitCode,
+        stdout: decoder.decode(result.stdout),
+        stderr: decoder.decode(result.stderr),
+    };
+}
+
+function runLaunch(args: string[], homeDir: string): CliRunResult {
+    const result = Bun.spawnSync([process.execPath, CLI_PATH, ...args], {
+        cwd: os.tmpdir(),
+        env: {
+            HOME: homeDir,
+            NO_COLOR: "1",
+            PATH: process.env.PATH ?? "",
+            TERM: "dumb",
+        },
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+    });
+    return {
+        exitCode: result.exitCode,
+        stdout: decoder.decode(result.stdout),
+        stderr: decoder.decode(result.stderr),
+    };
+}
+#+end_src
+
+*** Stub binary creation
+
+Create executable shell scripts in a temp ~bin/~ directory that log args and exit 0 (or exit 1 for failure scenarios). Use ~Bun.write~ + ~fs.chmod~.
+
+*** Status file creation
+
+Write JSON files to ~<HOME>/.spell/status/<windowId>.json~ with dead PID (999999), various combinations of metadata present/absent.
+
+*** Test assertions
+
+Each test checks stdout/stderr content via ~.toContain()~ / ~.not.toContain()~ and exit codes. For file deletion assertions, check ~Bun.file(statusPath).exists()~ after subprocess exits.
+
+* Verification
+
+- ~bun test packages/coding-agent/test/recover-command.test.ts~ passes all 10 scenarios
+- ~bun check:ts~ passes
+
+* Edge Cases
+
+- Test must tolerate the "No models available" / API errors that appear on stdout/stderr when launching without credentials — assert only on the recovery-specific output.
+- PID 999999 must not collide with a real process in CI — this is extremely unlikely on Linux but worth noting.
+- Stub binaries must be created with mode 0o755.

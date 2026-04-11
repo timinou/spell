@@ -1,0 +1,97 @@
+#+TITLE: Log status-file write failures instead of silently swallowing
+#+STATE: DONE
+#+SESSION_ID: 14b6df35f173cb3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-41-50-277Z_14b6df35f173cb3c.jsonl]]
+#+CUSTOM_ID: BUG-203-log-status-file-write-failures-instead-o
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: desktop
+#+DEPENDS: BUG-202-fix-status-file-dedup-key-to-include-rec
+
+NOTE [2026-04-11]: Implemented in PLAN-186. Verification: bun test packages/desktop-common/test/status-file.test.ts
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-056-audit-implementation:
+
+- **What**: Recovery metadata dedup ignores `sessionId`, `sessionFile`, `cwd`, and `workspaceName`
+  - **Where**: `packages/desktop-common/src/status-file.ts`, `StatusFileWriter.writeIfChanged()` dedup key
+  - **Why**: If the first write happens before workspace lookup succeeds or before recovery metadata is fully available, later writes with the same status/title are skipped. That leaves status files permanently incomplete, so `spell recover` may skip a crashed session or restore it without its workspace.
+  - **Effort**: small
+
+- **What**: Status-file persistence still hides write failures behind fire-and-forget `Bun.write(...).catch(() => {})`
+  - **Where**: `packages/desktop-common/src/status-file.ts`, `StatusFileWriter.writeIfChanged()`
+  - **Why**: Crash recovery now depends on these files. If the write fails due to permissions, disk issues, or shutdown timing, callers get no signal and the user later sees missing or stale recoverable sessions with no explanation.
+  - **Effort**: medium
+
+- **What**: `spell recover` and startup crash notification have no automated coverage
+  - **Where**: `packages/coding-agent/src/commands/recover.ts`, `packages/coding-agent/src/main.ts`
+  - **Why**: The highest-risk behaviors are only manually verified right now: dry-run output, ghostty-missing fallback, niri-unavailable behavior, cleanup of only successfully recovered status files, and notification suppression for `--resume`/`--continue`/`--no-session`. These are easy to regress silently.
+  - **Effort**: small
+
+- **What**: Relevant test suites are not isolation-safe when run together
+  - **Where**: `packages/niri/test/controller.test.ts`, around the mock/teardown for process-liveness behavior
+  - **Why**: Running `packages/desktop-common/test/status-file.test.ts` and `packages/niri/test/controller.test.ts` in one `bun test` invocation fails because global state leaks across files. That weakens confidence in grouped verification and can hide future regressions behind test-order sensitivity.
+  - **Effort**: trivial
+
+- **What**: Dry-run output silently omits workspace restoration when niri is unavailable or `--no-workspace` is used
+  - **Where**: `packages/coding-agent/src/commands/recover.ts`, `--dry-run` branch
+  - **Why**: Dry-run is the main operator-facing preview. When workspace commands are absent, the output does not explicitly say whether workspaces are being skipped by user choice, lack of niri, or missing metadata, which makes troubleshooting harder after a crash.
+  - **Effort**: trivial
+
+* Goal
+
+Replace silent ~.catch(() => {})~ error swallowing on status-file write and cleanup paths with ~logger.warn()~ calls so that write failures are observable in spell logs.
+
+* Context
+
+~StatusFileWriter.writeIfChanged()~ persists the recovery snapshot that ~spell recover~ depends on. The current ~Bun.write(filePath, ...).catch(() => {})~ silently discards all write failures (permissions, disk full, shutdown timing). When recovery metadata fails to persist, the user sees missing or stale sessions in ~spell recover~ with no explanation.
+
+The method must stay synchronous (fire-and-forget) because callers invoke it on every session state change from a synchronous context. The fix is to log failures, not to make the method async.
+
+* Design Decision
+
+- Replace ~.catch(() => {})~ with ~.catch(err => logger.warn("StatusFileWriter: write failed", { path: filePath, err: String(err) }))~ on the ~Bun.write~ call in ~writeIfChanged()~.
+- Replace ~.catch(() => {})~ with ~.catch(err => logger.warn("StatusFileWriter: cleanup failed", { path: filePath, err: String(err) }))~ on the ~fs.rm~ call in ~cleanup()~.
+- The ~logger~ import already exists in ~status-file.ts~ (used by ~StatusFileReader~).
+
+* Implementation
+
+** File: ~packages/desktop-common/src/status-file.ts~
+
+*** 1. Update writeIfChanged (line 78)
+
+Change:
+#+begin_src typescript
+Bun.write(filePath, JSON.stringify(payload)).catch(() => {});
+#+end_src
+To:
+#+begin_src typescript
+Bun.write(filePath, JSON.stringify(payload)).catch(err => {
+    logger.warn("StatusFileWriter: write failed", { path: filePath, err: String(err) });
+});
+#+end_src
+
+*** 2. Update cleanup (line 85)
+
+Change:
+#+begin_src typescript
+await fs.rm(filePath, { force: true }).catch(() => {});
+#+end_src
+To:
+#+begin_src typescript
+await fs.rm(filePath, { force: true }).catch(err => {
+    logger.warn("StatusFileWriter: cleanup failed", { path: filePath, err: String(err) });
+});
+#+end_src
+
+* Verification
+
+- ~bun test packages/desktop-common/test/status-file.test.ts~ passes
+- ~bun check:ts~ passes
+- Visual inspection: the ~logger.warn~ calls reference ~StatusFileWriter~ for grep-ability
+
+* Edge Cases
+
+- During graceful shutdown the logger may already be closed. The ~logger.warn~ call itself should not throw — it swallows its own errors. Verify this does not change shutdown behavior.
+- Normal operation should produce zero warn lines — this path only fires on actual I/O failures.

@@ -15,7 +15,7 @@ export const STATUS_DIR = path.join(os.homedir(), ".spell", "status");
 
 /**
  * Writes the current session status to a JSON file in STATUS_DIR.
- * Deduplicates writes — only writes when the status or session title changes.
+ * Deduplicates writes — only writes when the status, session title, or recovery metadata changes.
  */
 export class StatusFileWriter {
 	#statusDir: string;
@@ -23,6 +23,7 @@ export class StatusFileWriter {
 	#lastWrittenDedup: string | null = null;
 	#sessionInfo: SessionRecoveryInfo | null = null;
 	#workspaceName: string | null | undefined;
+	#metadataVersion = 0;
 
 	constructor(statusDir = STATUS_DIR) {
 		this.#statusDir = statusDir;
@@ -35,10 +36,12 @@ export class StatusFileWriter {
 
 	setSessionInfo(info: SessionRecoveryInfo): void {
 		this.#sessionInfo = info;
+		this.#metadataVersion += 1;
 	}
 
 	setWorkspaceName(name: string | null): void {
 		this.#workspaceName = name;
+		this.#metadataVersion += 1;
 	}
 
 	get windowId(): number | string | null {
@@ -60,7 +63,7 @@ export class StatusFileWriter {
 	 */
 	writeIfChanged(status: AgentStatus, projectName: string, sessionTitle: string, pid = process.pid): void {
 		if (this.#windowId === null) return;
-		const dedup = `${status}\0${sessionTitle}`;
+		const dedup = `${status}\0${sessionTitle}\0${this.#metadataVersion}`;
 		if (dedup === this.#lastWrittenDedup) return;
 		this.#lastWrittenDedup = dedup;
 
@@ -75,14 +78,18 @@ export class StatusFileWriter {
 			...(this.#workspaceName !== undefined ? { workspaceName: this.#workspaceName } : {}),
 		};
 		const filePath = path.join(this.#statusDir, `${this.#windowId}.json`);
-		Bun.write(filePath, JSON.stringify(payload)).catch(() => {});
+		Bun.write(filePath, JSON.stringify(payload)).catch(err => {
+			logger.warn("StatusFileWriter: write failed", { path: filePath, err: String(err) });
+		});
 	}
 
 	/** Remove the status file on shutdown. */
 	async cleanup(): Promise<void> {
 		if (this.#windowId === null) return;
 		const filePath = path.join(this.#statusDir, `${this.#windowId}.json`);
-		await fs.rm(filePath, { force: true }).catch(() => {});
+		await fs.rm(filePath, { force: true }).catch(err => {
+			logger.warn("StatusFileWriter: cleanup failed", { path: filePath, err: String(err) });
+		});
 		this.#windowId = null;
 	}
 }
