@@ -1,0 +1,93 @@
+#+TITLE: Fix cavemantestts assertions broken by terse mode rewrite
+#+STATE: DONE
+#+SESSION_ID: 14b6e0427a429389
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-46-25-257Z_14b6e0427a429389.jsonl]]
+#+CUSTOM_ID: BUG-201-fix-caveman-test-ts-assertions-broken-by
+#+EFFORT: 15m
+#+LAYER: core
+#+PRIORITY: #A
+
+NOTE [2026-04-11]: All 9 assertions updated: 5 broken toContain fixed, 4 vacuous not.toContain fixed. 8/8 tests pass.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-055-audit-implementation:
+
+That confirms it. The `not.toContain` assertions happen to still pass (the strings are gone), but the `toContain` assertions fail. Here's the full audit:
+
+---
+
+## Audit Findings
+
+### Finding 1 — `caveman.test.ts` not updated: 2 tests broken, 9 stale assertions
+
+- **What**: `packages/coding-agent/test/caveman.test.ts` was not part of the plan's test update scope (FEAT-443 only targeted `system-prompt-templates.test.ts`). It contains 5 positive assertions referencing removed strings that now fail, plus 4 negative assertions that pass by accident (the string they negate no longer exists, so they prove nothing useful).
+- **Where**: `packages/coding-agent/test/caveman.test.ts`, lines 159–217 (two test cases: `"renders caveman prompt sections only when the active level enables them"` and `"gates caveman prompt injection for subagents based on settings"`)
+- **Why**: The committed code ships with **2 test failures** in `bun test packages/coding-agent/test/caveman.test.ts`. This breaks CI. The 4 negative assertions also need updating — they currently pass vacuously (checking `.not.toContain("CAVEMAN MODE")` when "CAVEMAN MODE" no longer exists in any template is a tautology that doesn't verify the template is absent for that config).
+- **Effort**: `small` — mechanical string replacements mirroring the work done in `system-prompt-templates.test.ts`:
+  - `"IMPORTANT: You are in CAVEMAN MODE."` → `"Terse mode active"`
+  - `"PhD-CAVEMAN"` → `"Think in notation"` (for thinking-active cases) — note the original `"PhD-CAVEMAN"` was already case-mismatched with the old template's `"PhD-caveman"`, so this was a latent bug masked by the earlier assertion failing first
+  - `"CAVEMAN MODE"` → `"Terse mode active"` (in both positive and negative assertions)
+
+**Affected assertions** (all in `caveman.test.ts`):
+
+| Line | Current | Broken? | Fix |
+|------|---------|---------|-----|
+| 166 | `.toContain("IMPORTANT: You are in CAVEMAN MODE.")` | Yes | `.toContain("Terse mode active")` |
+| 168 | `.toContain("PhD-CAVEMAN")` | Yes (was also pre-existing case bug) | `.toContain("Think in notation")` |
+| 176 | `.toContain("IMPORTANT: You are in CAVEMAN MODE.")` | Yes | `.toContain("Terse mode active")` |
+| 178 | `.not.toContain("PhD-CAVEMAN")` | No (vacuously passes) | `.not.toContain("Think in notation")` |
+| 186 | `.not.toContain("CAVEMAN MODE")` | No (vacuously passes) | `.not.toContain("Terse mode active")` |
+| 187 | `.not.toContain("PhD-CAVEMAN")` | No (vacuously passes) | `.not.toContain("Think in notation")` |
+| 198 | `.not.toContain("CAVEMAN MODE")` | No (vacuously passes) | `.not.toContain("Terse mode active")` |
+| 207 | `.toContain("CAVEMAN MODE")` | Yes | `.toContain("Terse mode active")` |
+| 216 | `.toContain("CAVEMAN MODE")` | Yes | `.toContain("Terse mode active")` |
+
+* Context
+
+PLAN-181 rewrote prompt templates to replace "PhD-caveman" branding with terse-mode framing.
+=system-prompt-templates.test.ts= was updated, but =caveman.test.ts= was missed. Two tests
+now fail with 5 broken positive assertions and 4 vacuously-passing negative assertions.
+
+The template changes that broke these tests:
+- =caveman.md= opening: ="IMPORTANT: You are in CAVEMAN MODE."= → ="Terse mode active"=
+- =system-prompt.md= thinking block: ="PhD-caveman"= → ="Think in notation"=
+
+* File to Modify
+
+** =packages/coding-agent/test/caveman.test.ts=
+
+*** Test: "renders caveman prompt sections only when the active level enables them" (line 159)
+
+| Line | Current | Replacement |
+|------+---------+-------------|
+| 166 | =expect(fullCaveman).toContain("IMPORTANT: You are in CAVEMAN MODE.");= | =expect(fullCaveman).toContain("Terse mode active");= |
+| 168 | =expect(fullCaveman).toContain("PhD-CAVEMAN");= | =expect(fullCaveman).toContain("Think in notation");= |
+| 176 | =expect(fullNormalThinking).toContain("IMPORTANT: You are in CAVEMAN MODE.");= | =expect(fullNormalThinking).toContain("Terse mode active");= |
+| 178 | =expect(fullNormalThinking).not.toContain("PhD-CAVEMAN");= | =expect(fullNormalThinking).not.toContain("Think in notation");= |
+| 186 | =expect(offPrompt).not.toContain("CAVEMAN MODE");= | =expect(offPrompt).not.toContain("Terse mode active");= |
+| 187 | =expect(offPrompt).not.toContain("PhD-CAVEMAN");= | =expect(offPrompt).not.toContain("Think in notation");= |
+
+*** Test: "gates caveman prompt injection for subagents based on settings" (line 190)
+
+| Line | Current | Replacement |
+|------+---------+-------------|
+| 198 | =expect(subagentSuppressed).not.toContain("CAVEMAN MODE");= | =expect(subagentSuppressed).not.toContain("Terse mode active");= |
+| 207 | =expect(subagentEnabled).toContain("CAVEMAN MODE");= | =expect(subagentEnabled).toContain("Terse mode active");= |
+| 216 | =expect(rootSession).toContain("CAVEMAN MODE");= | =expect(rootSession).toContain("Terse mode active");= |
+
+*** Assertions NOT changed
+
+- Line 167: =expect(fullCaveman).toContain("Level: FULL");= — still valid, level descriptions unchanged
+- Line 177: =expect(fullNormalThinking).toContain("Level: FULL");= — same
+
+* Edge Cases
+
+- The old =PhD-CAVEMAN= (uppercase CAVEMAN) in the test was already case-mismatched with the template's =PhD-caveman= (lowercase). This was a latent bug masked by the earlier assertion failing first. The new =Think in notation= replacement is an exact case match with the template.
+- No other tests in the repository reference the removed strings (verified by =grep -r "CAVEMAN MODE\|PhD-CAVEMAN\|IMPORTANT: You are in" packages/coding-agent/test/= — only =caveman.test.ts= matched).
+
+* Acceptance Criteria
+
+1. =bun test packages/coding-agent/test/caveman.test.ts= passes with 0 failures
+2. =grep -E "PhD-CAVEMAN|CAVEMAN MODE|IMPORTANT: You are in" packages/coding-agent/test/caveman.test.ts= returns 0 hits
+3. No assertion in caveman.test.ts references any removed template string
